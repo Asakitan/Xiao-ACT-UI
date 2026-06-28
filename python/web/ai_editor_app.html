@@ -3250,6 +3250,37 @@ pre.code-block { overflow:visible; }
   color:var(--fg); border-color:color-mix(in srgb,var(--fg-accent) 42%,transparent);
   background:color-mix(in srgb,var(--fg-accent) 7%,transparent);
 }
+.settings-vscode-calm .settings-nav-workbench {
+  display:grid; gap:5px; padding:0 8px 9px 0; margin:0 0 8px;
+  border-bottom:1px solid color-mix(in srgb,var(--border) 54%,transparent);
+}
+.settings-vscode-calm .settings-nav-workbench-title {
+  display:flex; align-items:center; justify-content:space-between; gap:8px;
+  min-height:20px; color:var(--fg); font:600 12px var(--sans);
+}
+.settings-vscode-calm .settings-nav-workbench-title span:last-child {
+  color:var(--fg-dim); font:10px var(--mono); text-transform:uppercase;
+}
+.settings-vscode-calm .settings-nav-workbench-line {
+  display:grid; grid-template-columns:minmax(0,1fr) auto; gap:8px;
+  color:var(--fg-dim); font:11px var(--sans); line-height:1.35;
+}
+.settings-vscode-calm .settings-nav-workbench-line strong {
+  color:var(--fg); font-weight:500; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;
+}
+.settings-vscode-calm .settings-nav-workbench-badges {
+  display:grid; grid-template-columns:1fr 1fr; gap:3px; margin-top:2px;
+}
+.settings-vscode-calm .settings-nav-workbench-badge {
+  display:flex; align-items:center; justify-content:space-between; gap:6px;
+  min-height:23px; padding:2px 6px; border:1px solid transparent; border-radius:2px;
+  background:color-mix(in srgb,var(--bg2) 45%,transparent); color:var(--fg-dim);
+  font:11px var(--mono);
+}
+.settings-vscode-calm .settings-nav-workbench-badge strong { color:var(--fg); font-weight:600; }
+.settings-vscode-calm .settings-nav-workbench-badge.modified strong,
+.settings-vscode-calm .settings-nav-workbench-badge.active strong { color:var(--fg-accent); }
+.settings-vscode-calm .settings-nav-workbench-badge.error strong { color:var(--fg-error); }
 .settings-row-action:disabled { opacity:.35; cursor:default; }
 .settings-row-action-menu { display:none; position:absolute; top:26px; right:0; min-width:174px; padding:4px;
   border:1px solid var(--border); border-radius:4px; background:var(--bg2); box-shadow:var(--shadow); }
@@ -29232,6 +29263,12 @@ function renderSettingsNav(){
     searchbar.dataset.settingsPlacement='sidebar';
     nav.appendChild(searchbar);
   }
+  const workbench=document.createElement('div');
+  workbench.className='settings-nav-workbench';
+  workbench.id='settings-nav-workbench-summary';
+  workbench.dataset.settingsNavWorkbench='1';
+  workbench.setAttribute('aria-label','Settings workbench summary');
+  nav.appendChild(workbench);
   const commandbar=document.createElement('div');
   commandbar.className='settings-nav-commandbar';
   commandbar.id='settings-nav-commandbar';
@@ -29380,6 +29417,56 @@ function renderSettingsNav(){
   setActiveSettingsNav(first?first.dataset.settingsId:'');
   settingsFilterNavCategories(_settingsNavFilterValue,{preserveInput:true,preserveFocus:true});
   settingsUpdateNavTreeMetadata();
+}
+function renderSettingsNavWorkbenchSummary(parsed,visible,total,state,tokens){
+  const host=$('settings-nav-workbench-summary');
+  if(!host)return;
+  parsed=parsed||{};
+  state=state||{};
+  tokens=Array.isArray(tokens)?tokens:[];
+  const query=String(($('settings-search')||{}).value||'').trim();
+  const target=settingsTargetDisplayName(currentSettingsTarget);
+  const section=typeof settingsActiveSectionTitle==='function'?settingsActiveSectionTitle():'';
+  const modified=(state.modified||[]).length;
+  const errors=(state.errors||[]).length;
+  const overrides=(state.overrides||[]).length;
+  host.dataset.settingsNavWorkbench='1';
+  host.dataset.settingsNavTarget=currentSettingsTarget;
+  host.dataset.settingsNavQuery=query;
+  host.dataset.settingsNavActiveSection=section||'';
+  host.dataset.settingsNavVisible=String(Number(visible)||0);
+  host.dataset.settingsNavTotal=String(Number(total)||0);
+  host.dataset.settingsNavModified=String(modified);
+  host.dataset.settingsNavErrors=String(errors);
+  host.dataset.settingsNavOverrides=String(overrides);
+  host.dataset.settingsNavFilterTokens=String(tokens.length);
+  host.innerHTML='';
+  const title=document.createElement('div');
+  title.className='settings-nav-workbench-title';
+  const label=document.createElement('span');label.textContent=target+' Settings';
+  const mode=document.createElement('span');mode.textContent='Workbench';
+  title.appendChild(label);title.appendChild(mode);host.appendChild(title);
+  const queryLine=document.createElement('div');queryLine.className='settings-nav-workbench-line';
+  const queryName=document.createElement('span');queryName.textContent='Search';
+  const queryValue=document.createElement('strong');queryValue.textContent=query||'All settings';
+  queryLine.appendChild(queryName);queryLine.appendChild(queryValue);host.appendChild(queryLine);
+  const sectionLine=document.createElement('div');sectionLine.className='settings-nav-workbench-line';
+  const sectionName=document.createElement('span');sectionName.textContent='Section';
+  const sectionValue=document.createElement('strong');sectionValue.textContent=section||'Overview';
+  sectionLine.appendChild(sectionName);sectionLine.appendChild(sectionValue);host.appendChild(sectionLine);
+  const badges=document.createElement('div');badges.className='settings-nav-workbench-badges';
+  const addBadge=(name,value,cls)=>{
+    const badge=document.createElement('span');
+    badge.className='settings-nav-workbench-badge'+(cls?' '+cls:'');
+    const n=document.createElement('span');n.textContent=name;
+    const v=document.createElement('strong');v.textContent=String(value);
+    badge.appendChild(n);badge.appendChild(v);badges.appendChild(badge);
+  };
+  addBadge('Visible',String(Number(visible)||0)+'/'+String(Number(total)||0),'');
+  addBadge('Modified',modified,modified?'modified':'');
+  addBadge('Errors',errors,errors?'error':'');
+  addBadge('Filters',tokens.length,tokens.length?'active':'');
+  host.appendChild(badges);
 }
 function updateSettingsNavCounts(){
   const nav=$('settings-nav');if(!nav)return;
@@ -29648,6 +29735,7 @@ function settingsUiSelfCheckSnapshot(){
   const topQuickFilters=$('settings-quick-filters');
   const topActiveFilters=$('settings-active-filters');
   const navStatus=$('settings-nav-status');
+  const navWorkbench=$('settings-nav-workbench-summary');
   const navActiveFilters=$('settings-nav-active-filters');
   const navReview=$('settings-nav-review');
   const navReviewButtons=navReview?Array.from(navReview.querySelectorAll('[data-settings-nav-review-action]')):[];
@@ -29703,6 +29791,8 @@ function settingsUiSelfCheckSnapshot(){
     hasSidebarSettingsCommands:!!(quickNav&&quickNav.dataset.settingsCommandSurface==='sidebar'&&quickLabels.includes('Details')&&quickLabels.includes('Keyboard Shortcuts')&&quickLabels.includes('Settings JSON')),
     hasSidebarSettingsCommandActions:quickActions.includes('details')&&quickActions.includes('settings-json')&&quickActions.includes('keyboard-shortcuts'),
     hasSidebarSettingsCommandbar:!!(commandbar&&commandbar.dataset.settingsCommandSurface==='sidebar'&&commandLabels.includes('Settings JSON{}')&&commandLabels.includes('Keyboard Shortcuts⌘')&&commandLabels.includes('Details⋯')),
+    hasSidebarWorkbenchSummary:!!(navWorkbench&&navWorkbench.dataset.settingsNavWorkbench==='1'&&navWorkbench.dataset.settingsNavTarget&&navWorkbench.querySelector('.settings-nav-workbench-title')&&navWorkbench.querySelector('.settings-nav-workbench-badges')),
+    hasSidebarWorkbenchSearchState:!!(navWorkbench&&navWorkbench.dataset.settingsNavQuery!==undefined&&navWorkbench.dataset.settingsNavActiveSection!==undefined&&navWorkbench.dataset.settingsNavVisible!==undefined),
     hasNoVisibleTopSettingsBar:!!(settingsFrame&&settingsFrame.classList.contains('settings-vscode-calm')&&(!settingsTitlebar||String(getComputedStyle(settingsTitlebar).display)==='none')&&(!topSearchbar||String(getComputedStyle(topSearchbar).display)==='none')),
     hasCompactSearchScopeStack:!!(searchRow&&scopeControl&&String(getComputedStyle(searchRow).gridTemplateColumns||'').split(' ').filter(Boolean).length<=1&&String(getComputedStyle(scopeControl).justifySelf||'')==='start'),
     hasDefaultHiddenTopScope:topScopeHidden,
@@ -30813,6 +30903,7 @@ function renderSettingsNavStatus(parsed,visible,total){
   const review=$('settings-nav-review');
   const state=typeof settingsComputeReviewState==='function'?settingsComputeReviewState():{modified:[],overrides:[],errors:[],visible:Number(visible)||0,target:settingsTargetDisplayName(currentSettingsTarget)};
   const tokens=[...new Set((parsed&&parsed.tokens)||[])];
+  renderSettingsNavWorkbenchSummary(parsed,visible,total,state,tokens);
   if(status){
     status.innerHTML='';
     status.dataset.settingsNavStatus='1';
@@ -36688,6 +36779,17 @@ function extensionRuntimeSurfaceRows(data){
       (Array.isArray(item.portMapping)?item.portMapping:[]));
     evidence.localResourceRootCount=Number(evidence.localResourceRootCount||evidence.localResourceRootsCount||localResourceRoots.length)||0;
     evidence.portMappingCount=Number(evidence.portMappingCount||evidence.portMappingsCount||portMappings.length)||0;
+    evidence.resourceMapReady=!!(evidence.resourceMapReady||evidence.resourceMapAvailable||Number(evidence.resourceMapHitCount||0));
+    evidence.resourceEndpointReady=!!(evidence.resourceEndpointReady||evidence.resourceEndpointBaseAvailable||Number(evidence.resourceEndpointRewriteCount||0));
+    evidence.asWebviewUriSupported=!!(evidence.asWebviewUriSupported||evidence.localResourceRootCount||evidence.resourceMapReady||evidence.resourceEndpointReady);
+    evidence.asWebviewUriReady=!!(evidence.asWebviewUriReady||((Number(evidence.resourceRewriteCount||0)||evidence.resourceMapReady||evidence.resourceEndpointReady)&&evidence.asWebviewUriSupported));
+    evidence.resourceRewriteBreakdown=[
+      evidence.resourceMapHitCount,
+      evidence.resourceEndpointRewriteCount,
+      evidence.resourcePortMappingRewriteCount,
+      evidence.resourceCssRewriteCount,
+      evidence.resourceAttributeRewriteCount,
+    ].map(n=>String(Number(n)||0)).join('/');
     const evidenceText=[
       evidence.htmlAvailable||item.htmlAvailable?'html':'no-html',
       htmlLength?'htmlLength:'+htmlLength:'',
@@ -36705,6 +36807,10 @@ function extensionRuntimeSurfaceRows(data){
       evidence.droppedMessageCount?'dropped:'+evidence.droppedMessageCount:'',
       evidence.lastDroppedReason?'drop:'+evidence.lastDroppedReason:'',
       evidence.resourceRewriteCount?'resources:'+evidence.resourceRewriteCount:'',
+      evidence.asWebviewUriSupported?'aswebviewuri-supported':'',
+      evidence.asWebviewUriReady?'aswebviewuri-ready':'',
+      evidence.resourceEndpointReady?'endpoint-ready':'',
+      evidence.resourceMapReady?'map-ready':'',
       evidence.localResourceRootCount?'roots:'+evidence.localResourceRootCount:'',
       evidence.portMappingCount?'ports:'+evidence.portMappingCount:'',
       evidence.resourceMapHitCount?'map:'+evidence.resourceMapHitCount:'',
@@ -37104,6 +37210,11 @@ function renderExtensionRuntimeSurfacePanel(data){
       el.dataset.webviewResourcePortMappingRewriteCount=String(row.webviewEvidence&&row.webviewEvidence.resourcePortMappingRewriteCount||0);
       el.dataset.webviewResourceCssRewriteCount=String(row.webviewEvidence&&row.webviewEvidence.resourceCssRewriteCount||0);
       el.dataset.webviewResourceAttributeRewriteCount=String(row.webviewEvidence&&row.webviewEvidence.resourceAttributeRewriteCount||0);
+      el.dataset.webviewResourceMapReady=row.webviewEvidence&&row.webviewEvidence.resourceMapReady?'1':'0';
+      el.dataset.webviewResourceEndpointReady=row.webviewEvidence&&row.webviewEvidence.resourceEndpointReady?'1':'0';
+      el.dataset.webviewAsWebviewUriSupported=row.webviewEvidence&&row.webviewEvidence.asWebviewUriSupported?'1':'0';
+      el.dataset.webviewAsWebviewUriReady=row.webviewEvidence&&row.webviewEvidence.asWebviewUriReady?'1':'0';
+      el.dataset.webviewResourceRewriteBreakdown=String(row.webviewEvidence&&row.webviewEvidence.resourceRewriteBreakdown||'0/0/0/0/0');
       el.dataset.webviewLastResourceRewriteKind=String(row.webviewEvidence&&row.webviewEvidence.lastResourceRewriteKind||'');
       el.dataset.focusable=row.focusable?'1':'0';
       el.dataset.refreshable=row.refreshable?'1':'0';
@@ -37145,6 +37256,10 @@ function renderExtensionRuntimeSurfacePanel(data){
       ev.portMappingCount?{text:'ports '+ev.portMappingCount}:null,
       ev.resourceMapHitCount?{text:'map '+ev.resourceMapHitCount}:null,
       ev.resourceEndpointRewriteCount?{text:'endpoint '+ev.resourceEndpointRewriteCount}:null,
+      ev.asWebviewUriReady?{text:'asWebviewUri ready'}:null,
+      !ev.asWebviewUriReady&&ev.asWebviewUriSupported?{text:'asWebviewUri support'}:null,
+      ev.resourceEndpointReady?{text:'endpoint ready'}:null,
+      ev.resourceMapReady?{text:'map ready'}:null,
       ev.resourceCssRewriteCount?{text:'css '+ev.resourceCssRewriteCount}:null,
       ev.resourceAttributeRewriteCount?{text:'attr '+ev.resourceAttributeRewriteCount}:null,
       ].filter(Boolean);
@@ -38227,6 +38342,18 @@ function extensionWebviewViewEvidence(view,state,html){
   const portMappings=Array.isArray(ev.portMapping)?ev.portMapping:
     (Array.isArray(options.portMapping)?options.portMapping:[]);
   const status=htmlAvailable?'rendered':(visible||retain||state.kind||stateKeys.length?'partial':'missing');
+  const resourceRewriteCount=Number(ev.resourceRewriteCount||0)||0;
+  const localResourceRootCount=Number(ev.localResourceRootCount||ev.localResourceRootsCount||localResourceRoots.length)||0;
+  const portMappingCount=Number(ev.portMappingCount||ev.portMappingsCount||portMappings.length)||0;
+  const resourceMapHitCount=Number(ev.resourceMapHitCount||0)||0;
+  const resourceEndpointRewriteCount=Number(ev.resourceEndpointRewriteCount||0)||0;
+  const resourcePortMappingRewriteCount=Number(ev.resourcePortMappingRewriteCount||0)||0;
+  const resourceCssRewriteCount=Number(ev.resourceCssRewriteCount||0)||0;
+  const resourceAttributeRewriteCount=Number(ev.resourceAttributeRewriteCount||0)||0;
+  const resourceMapReady=!!(ev.resourceMapReady||ev.resourceMapAvailable||resourceMapHitCount);
+  const resourceEndpointReady=!!(ev.resourceEndpointReady||ev.resourceEndpointBaseAvailable||resourceEndpointRewriteCount);
+  const asWebviewUriSupported=!!(ev.asWebviewUriSupported||localResourceRootCount||resourceMapReady||resourceEndpointReady);
+  const asWebviewUriReady=!!(ev.asWebviewUriReady||((resourceMapReady||resourceEndpointReady||resourceRewriteCount)&&asWebviewUriSupported));
   return {
     viewId,
     status,
@@ -38250,14 +38377,19 @@ function extensionWebviewViewEvidence(view,state,html){
     lastQueueReason:String(ev.lastQueueReason||''),
     lastFlushReason:String(ev.lastFlushReason||''),
     lastDeliveredMessageSeq:Number(ev.lastDeliveredMessageSeq||0)||0,
-    resourceRewriteCount:Number(ev.resourceRewriteCount||0)||0,
-    localResourceRootCount:Number(ev.localResourceRootCount||ev.localResourceRootsCount||localResourceRoots.length)||0,
-    portMappingCount:Number(ev.portMappingCount||ev.portMappingsCount||portMappings.length)||0,
-    resourceMapHitCount:Number(ev.resourceMapHitCount||0)||0,
-    resourceEndpointRewriteCount:Number(ev.resourceEndpointRewriteCount||0)||0,
-    resourcePortMappingRewriteCount:Number(ev.resourcePortMappingRewriteCount||0)||0,
-    resourceCssRewriteCount:Number(ev.resourceCssRewriteCount||0)||0,
-    resourceAttributeRewriteCount:Number(ev.resourceAttributeRewriteCount||0)||0,
+    resourceRewriteCount,
+    localResourceRootCount,
+    portMappingCount,
+    resourceMapHitCount,
+    resourceEndpointRewriteCount,
+    resourcePortMappingRewriteCount,
+    resourceCssRewriteCount,
+    resourceAttributeRewriteCount,
+    resourceMapReady,
+    resourceEndpointReady,
+    asWebviewUriSupported,
+    asWebviewUriReady,
+    resourceRewriteBreakdown:[resourceMapHitCount,resourceEndpointRewriteCount,resourcePortMappingRewriteCount,resourceCssRewriteCount,resourceAttributeRewriteCount].map(n=>String(n||0)).join('/'),
     lastResourceRewriteKind:String(ev.lastResourceRewriteKind||'')
   };
 }
@@ -38276,9 +38408,12 @@ function extensionWebviewViewSummaryText(view,state,evidence){
     'Command URIs: '+String(evidence.enableCommandUris),
     'Messages: '+String(evidence.messageCount)+' / queued '+String(evidence.queuedMessageCount||evidence.pendingMessageCount)+' / dropped '+String(evidence.droppedMessageCount),
     'Resources: '+String(evidence.resourceRewriteCount),
+    'asWebviewUri: '+(evidence.asWebviewUriReady?'ready':(evidence.asWebviewUriSupported?'supported':'not configured')),
+    'Resource endpoint: '+(evidence.resourceEndpointReady?'ready':'missing'),
+    'Resource map: '+(evidence.resourceMapReady?'ready':'missing'),
     'Resource roots: '+String(evidence.localResourceRootCount),
     'Port mappings: '+String(evidence.portMappingCount),
-    'Map/Endpoint/CSS/Attr: '+[evidence.resourceMapHitCount,evidence.resourceEndpointRewriteCount,evidence.resourceCssRewriteCount,evidence.resourceAttributeRewriteCount].map(n=>String(n||0)).join('/'),
+    'Map/Endpoint/Ports/CSS/Attr: '+String(evidence.resourceRewriteBreakdown||'0/0/0/0/0'),
     'Last resource: '+String(evidence.lastResourceRewriteKind||'-')
   ].join('\n');
 }
@@ -38304,6 +38439,11 @@ function applyExtensionWebviewViewDataset(target,evidence){
   target.dataset.webviewResourceEndpointRewriteCount=String(evidence.resourceEndpointRewriteCount||0);
   target.dataset.webviewResourceCssRewriteCount=String(evidence.resourceCssRewriteCount||0);
   target.dataset.webviewResourceAttributeRewriteCount=String(evidence.resourceAttributeRewriteCount||0);
+  target.dataset.webviewResourceMapReady=evidence.resourceMapReady?'1':'0';
+  target.dataset.webviewResourceEndpointReady=evidence.resourceEndpointReady?'1':'0';
+  target.dataset.webviewAsWebviewUriSupported=evidence.asWebviewUriSupported?'1':'0';
+  target.dataset.webviewAsWebviewUriReady=evidence.asWebviewUriReady?'1':'0';
+  target.dataset.webviewResourceRewriteBreakdown=String(evidence.resourceRewriteBreakdown||'0/0/0/0/0');
   target.dataset.webviewLastResourceRewriteKind=String(evidence.lastResourceRewriteKind||'');
 }
 function appendExtensionWebviewViewStatus(body,view,state,evidence){
@@ -38338,6 +38478,10 @@ function appendExtensionWebviewViewStatus(body,view,state,evidence){
   if(evidence.localResourceRootCount)addChip('roots '+evidence.localResourceRootCount,'accent');
   if(evidence.portMappingCount)addChip('ports '+evidence.portMappingCount,'accent');
   if(evidence.resourceRewriteCount)addChip('resources '+evidence.resourceRewriteCount,'accent');
+  if(evidence.asWebviewUriReady)addChip('asWebviewUri ready','accent');
+  else if(evidence.asWebviewUriSupported)addChip('asWebviewUri support','');
+  if(evidence.resourceEndpointReady)addChip('endpoint ready','accent');
+  if(evidence.resourceMapReady)addChip('map ready','accent');
   if(evidence.resourceMapHitCount)addChip('map '+evidence.resourceMapHitCount,'accent');
   if(evidence.resourceEndpointRewriteCount)addChip('endpoint '+evidence.resourceEndpointRewriteCount,'accent');
   if(evidence.resourceCssRewriteCount)addChip('css '+evidence.resourceCssRewriteCount,'accent');
@@ -39004,6 +39148,9 @@ function extensionRuntimeDomSelfCheckSnapshot(){
       webviewResourceMapDataset:!!root.querySelector('[data-webview-view-id="selftest.dynamic.webview"][data-webview-resource-map-hit-count="2"]'),
       webviewResourceEndpointDataset:!!root.querySelector('[data-webview-view-id="selftest.dynamic.webview"][data-webview-resource-endpoint-rewrite-count="2"]'),
       webviewResourceCssDataset:!!root.querySelector('[data-webview-view-id="selftest.dynamic.webview"][data-webview-resource-css-rewrite-count="2"]'),
+      webviewAsWebviewUriReadyDataset:!!root.querySelector('[data-webview-view-id="selftest.dynamic.webview"][data-webview-as-webview-uri-ready="1"]'),
+      webviewResourceEndpointReadyDataset:!!root.querySelector('[data-webview-view-id="selftest.dynamic.webview"][data-webview-resource-endpoint-ready="1"]'),
+      webviewResourceMapReadyDataset:!!root.querySelector('[data-webview-view-id="selftest.dynamic.webview"][data-webview-resource-map-ready="1"]'),
       webviewEmptyState:!!root.querySelector('.extension-webview-view-empty strong'),
       manifestGroup:!!manifest,
       manifestHidden:manifest?manifest.dataset.runtimeVisible:'',
@@ -39038,6 +39185,9 @@ function extensionRuntimeDomSelfCheckSnapshot(){
       runtimeWebviewResourceRootRows:runtimeList?Array.from(runtimeList.querySelectorAll('.extension-runtime-row')).filter(row=>Number(row.dataset.webviewLocalResourceRootCount)||0).length:0,
       runtimeWebviewPortMappingRows:runtimeList?Array.from(runtimeList.querySelectorAll('.extension-runtime-row')).filter(row=>Number(row.dataset.webviewPortMappingCount)||0).length:0,
       runtimeWebviewResourceMapRows:runtimeList?Array.from(runtimeList.querySelectorAll('.extension-runtime-row')).filter(row=>Number(row.dataset.webviewResourceMapHitCount)||0).length:0,
+      runtimeWebviewAsWebviewUriReadyRows:runtimeList?Array.from(runtimeList.querySelectorAll('.extension-runtime-row')).filter(row=>row.dataset.webviewAsWebviewUriReady==='1').length:0,
+      runtimeWebviewResourceEndpointReadyRows:runtimeList?Array.from(runtimeList.querySelectorAll('.extension-runtime-row')).filter(row=>row.dataset.webviewResourceEndpointReady==='1').length:0,
+      runtimeWebviewResourceMapReadyRows:runtimeList?Array.from(runtimeList.querySelectorAll('.extension-runtime-row')).filter(row=>row.dataset.webviewResourceMapReady==='1').length:0,
       runtimeWebviewLastDropReasons:runtimeList?Array.from(runtimeList.querySelectorAll('.extension-runtime-row')).map(row=>row.dataset.webviewLastDroppedReason||'').filter(Boolean):[],
       runtimeWebviewSeqRows:runtimeList?Array.from(runtimeList.querySelectorAll('.extension-runtime-row')).filter(row=>Number(row.dataset.webviewLastDeliveredMessageSeq)||0).length:0,
       runtimeEvidencePills:runtimeList?runtimeList.querySelectorAll('.extension-runtime-evidence').length:0,
@@ -39095,6 +39245,8 @@ function extensionRuntimeDomSelfCheckSnapshot(){
       && snapshot.webviewHtmlDataset&&snapshot.webviewPendingDataset&&snapshot.webviewStatusChips>=10
       && snapshot.webviewViewActions>=6&&['Open','Refresh','Copy'].every(label=>snapshot.webviewActionLabels.includes(label))&&snapshot.webviewEmptyState
       && snapshot.webviewResourceRootDataset&&snapshot.webviewPortMappingDataset&&snapshot.webviewResourceMapDataset&&snapshot.webviewResourceEndpointDataset&&snapshot.webviewResourceCssDataset
+      && snapshot.webviewAsWebviewUriReadyDataset&&snapshot.webviewResourceEndpointReadyDataset&&snapshot.webviewResourceMapReadyDataset
+      && snapshot.runtimeWebviewAsWebviewUriReadyRows>=1&&snapshot.runtimeWebviewResourceEndpointReadyRows>=1&&snapshot.runtimeWebviewResourceMapReadyRows>=1
       && snapshot.manifestGroup&&snapshot.manifestHidden==='false'&&snapshot.welcomeRegions>=1&&snapshot.welcomeCommands>=1&&snapshot.welcomeExternalLinks>=1
       && snapshot.activityRole==='button'&&snapshot.activityTabIndex===0&&snapshot.activityLabel.includes('Selftest Extensions')&&snapshot.activityPanel==='ext-vc-selftest.dynamic.container'
       && snapshot.customPlaceholder&&snapshot.customDataset.viewType==='selftest.customEditor'&&snapshot.customCapabilities

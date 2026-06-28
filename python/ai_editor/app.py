@@ -531,6 +531,13 @@ def _as_list(value: Any) -> List[Any]:
     return list(value) if isinstance(value, list) else []
 
 
+def _json_safe(value: Any) -> Any:
+    try:
+        return json.loads(json.dumps(value, ensure_ascii=False, default=str))
+    except Exception:
+        return str(value)
+
+
 def _as_float(value: Any, default: float) -> float:
     try:
         number = float(value)
@@ -11950,6 +11957,25 @@ class AIEditorAPI:
             int(_as_dict(item.get("webviewEvidence")).get(
                 "droppedMessageCount") or 0)
             for item in webview_views)
+        webview_resource_roots = sum(
+            int(_as_dict(item.get("webviewEvidence")).get(
+                "localResourceRootCount") or 0)
+            for item in webview_views)
+        webview_resource_endpoints = sum(
+            1 for item in webview_views
+            if _as_dict(item.get("webviewEvidence")).get(
+                "resourceEndpointReady"))
+        webview_resource_maps = sum(
+            1 for item in webview_views
+            if _as_dict(item.get("webviewEvidence")).get("resourceMapReady"))
+        webview_as_webview_uri_supported = sum(
+            1 for item in webview_views
+            if _as_dict(item.get("webviewEvidence")).get(
+                "asWebviewUriSupported"))
+        webview_as_webview_uri_ready = sum(
+            1 for item in webview_views
+            if _as_dict(item.get("webviewEvidence")).get(
+                "asWebviewUriReady"))
         runtime_only_surfaces = sum(
             1 for item in views if item.get("runtimeOnly"))
         manifest_backed_surfaces = sum(
@@ -11989,6 +12015,11 @@ class AIEditorAPI:
                 "webviewVisible": webview_visible,
                 "webviewPendingMessages": webview_pending_messages,
                 "webviewDroppedMessages": webview_dropped_messages,
+                "webviewResourceRoots": webview_resource_roots,
+                "webviewResourceEndpoints": webview_resource_endpoints,
+                "webviewResourceMaps": webview_resource_maps,
+                "webviewAsWebviewUriSupported": webview_as_webview_uri_supported,
+                "webviewAsWebviewUriReady": webview_as_webview_uri_ready,
                 "runtimeOnlySurfaces": runtime_only_surfaces,
                 "manifestBackedSurfaces": manifest_backed_surfaces,
                 "manifestRuntimeSurfaces": manifest_runtime_surfaces,
@@ -13913,9 +13944,18 @@ class AIEditorAPI:
         html = str(state.get("html") or "")
         view_state = state.get("state")
         options = _as_dict(state.get("options"))
+        local_resource_roots = options.get("localResourceRoots")
+        if not isinstance(local_resource_roots, list):
+            local_resource_roots = []
+        port_mapping = options.get("portMapping")
+        if not isinstance(port_mapping, list):
+            port_mapping = []
         state_keys: List[str] = []
         if isinstance(view_state, dict):
             state_keys = sorted(str(key) for key in view_state.keys())[:12]
+        local_resource_root_count = len(local_resource_roots)
+        port_mapping_count = len(port_mapping)
+        as_webview_uri_supported = bool(local_resource_root_count)
         return {
             "viewId": str(view_id or ""),
             "htmlAvailable": bool(html),
@@ -13925,6 +13965,15 @@ class AIEditorAPI:
             "enableScripts": bool(options.get("enableScripts", True)),
             "enableForms": bool(options.get("enableForms", True)),
             "enableCommandUris": bool(options.get("enableCommandUris", False)),
+            "localResourceRoots": _json_safe(local_resource_roots),
+            "portMapping": _json_safe(port_mapping),
+            "localResourceRootCount": local_resource_root_count,
+            "portMappingCount": port_mapping_count,
+            "asWebviewUriSupported": as_webview_uri_supported,
+            "asWebviewUriReady": False,
+            "resourceEndpointReady": False,
+            "resourceMapReady": False,
+            "resourceRewriteBreakdown": "0/0/0/0/0",
             "retainContextWhenHidden": bool(state.get("retainContextWhenHidden")),
             "visible": bool(state.get("visible")),
             "hasBadge": state.get("badge") is not None,

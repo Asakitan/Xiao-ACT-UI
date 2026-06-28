@@ -10174,6 +10174,11 @@ console.log("frontend word separator behavior ok");
             and "function installSettingsKeyboardHandlers()" in html
             and "installSettingsKeyboardHandlers();" in html
             and "settings-nav-summary" in html
+            and "settings-nav-workbench-summary" in html
+            and "function renderSettingsNavWorkbenchSummary(parsed,visible,total,state,tokens)" in html
+            and "settings-nav-workbench-title" in html
+            and "settings-nav-workbench-badges" in html
+            and "host.dataset.settingsNavActiveSection=section||'';" in html
             and "settings-nav-heading" in html
             and "settings-nav-badge" in html
             and "settings-nav-text" in html
@@ -10288,6 +10293,8 @@ console.log("frontend word separator behavior ok");
             and "function settingsCopyLanguageOverrideJson(language)" in html
             and "function settingsResetCurrentLanguageOverride()" in html
             and "hasExtensionInsightActions" in html
+            and "hasSidebarWorkbenchSummary" in html
+            and "hasSidebarWorkbenchSearchState" in html
             and "hasExtensionSchemaDetails" in html
             and "hasExtensionStructuredHints" in html
             and "hasExtensionEnumActions" in html
@@ -11371,6 +11378,10 @@ console.log("frontend word separator behavior ok");
            and "['Port Mappings',rows.reduce((n,row)=>n+(row.kind==='WebviewView'?(Number(row.webviewEvidence&&row.webviewEvidence.portMappingCount)||0):0),0)]" in html
            and "el.dataset.webviewLocalResourceRootCount=String(row.webviewEvidence&&row.webviewEvidence.localResourceRootCount||0);" in html
            and "el.dataset.webviewPortMappingCount=String(row.webviewEvidence&&row.webviewEvidence.portMappingCount||0);" in html
+           and "el.dataset.webviewAsWebviewUriReady=row.webviewEvidence&&row.webviewEvidence.asWebviewUriReady?'1':'0';" in html
+           and "el.dataset.webviewResourceEndpointReady=row.webviewEvidence&&row.webviewEvidence.resourceEndpointReady?'1':'0';" in html
+           and "evidence.asWebviewUriReady?'aswebviewuri-ready':''" in html
+           and "ev.asWebviewUriReady?{text:'asWebviewUri ready'}:null" in html
            and "extension-runtime-tag webview-evidence" in html
            and "snapshot.runtimeWebviewEvidenceRows>=6" in html
            and "snapshot.runtimeMissingEvidenceRows>=1" in html
@@ -11414,6 +11425,11 @@ console.log("frontend word separator behavior ok");
            and "\"providerBackedWebviews\": provider_backed_webviews" in app_source
            and "\"webviewPendingMessages\": webview_pending_messages" in app_source
            and "\"webviewDroppedMessages\": webview_dropped_messages" in app_source
+           and "\"webviewResourceRoots\": webview_resource_roots" in app_source
+           and "\"webviewAsWebviewUriSupported\": webview_as_webview_uri_supported" in app_source
+           and "\"webviewAsWebviewUriReady\": webview_as_webview_uri_ready" in app_source
+           and "\"localResourceRootCount\": local_resource_root_count" in app_source
+           and "\"asWebviewUriSupported\": as_webview_uri_supported" in app_source
            and "payload.setdefault(\"summary\", {})[\"cacheHit\"] = True" in app_source
            and "\"cacheHit\": False" in app_source
            and "if len(self._extension_runtime_surface_cache) > 12:" in app_source)
@@ -13523,11 +13539,18 @@ console.log("extension setting schema helpers ok");
            and "extension-webview-view-status" in html
            and "extension-webview-view-action" in html
            and "extension-webview-view-empty" in html
-           and "localResourceRootCount:Number(ev.localResourceRootCount||ev.localResourceRootsCount||localResourceRoots.length)||0" in html
+           and "const localResourceRootCount=Number(ev.localResourceRootCount||ev.localResourceRootsCount||localResourceRoots.length)||0;" in html
            and "target.dataset.webviewLocalResourceRootCount=String(evidence.localResourceRootCount||0);" in html
            and "target.dataset.webviewPortMappingCount=String(evidence.portMappingCount||0);" in html
            and "target.dataset.webviewResourceEndpointRewriteCount=String(evidence.resourceEndpointRewriteCount||0);" in html
+           and "target.dataset.webviewAsWebviewUriReady=evidence.asWebviewUriReady?'1':'0';" in html
+           and "target.dataset.webviewResourceEndpointReady=evidence.resourceEndpointReady?'1':'0';" in html
+           and "target.dataset.webviewResourceMapReady=evidence.resourceMapReady?'1':'0';" in html
+           and "target.dataset.webviewResourceRewriteBreakdown=String(evidence.resourceRewriteBreakdown||'0/0/0/0/0');" in html
            and "addChip('roots '+evidence.localResourceRootCount,'accent')" in html
+           and "addChip('asWebviewUri ready','accent')" in html
+           and "addChip('endpoint ready','accent')" in html
+           and "addChip('map ready','accent')" in html
            and "addChip('endpoint '+evidence.resourceEndpointRewriteCount,'accent')" in html
            and "_injectWebviewHtml(frameHost,extensionRuntimeViewId(view,state),html,state.state)" in html
             and "renderExtensionContainerContent(item)" in html
@@ -13586,11 +13609,17 @@ console.log("extension setting schema helpers ok");
            and "webviewResourceRootDataset:!!root.querySelector('[data-webview-view-id=\"selftest.dynamic.webview\"][data-webview-local-resource-root-count=\"1\"]')" in html
            and "webviewPortMappingDataset:!!root.querySelector('[data-webview-view-id=\"selftest.dynamic.webview\"][data-webview-port-mapping-count=\"1\"]')" in html
            and "webviewResourceEndpointDataset:!!root.querySelector('[data-webview-view-id=\"selftest.dynamic.webview\"][data-webview-resource-endpoint-rewrite-count=\"2\"]')" in html
+           and "webviewAsWebviewUriReadyDataset:!!root.querySelector('[data-webview-view-id=\"selftest.dynamic.webview\"][data-webview-as-webview-uri-ready=\"1\"]')" in html
+           and "webviewResourceEndpointReadyDataset:!!root.querySelector('[data-webview-view-id=\"selftest.dynamic.webview\"][data-webview-resource-endpoint-ready=\"1\"]')" in html
+           and "webviewResourceMapReadyDataset:!!root.querySelector('[data-webview-view-id=\"selftest.dynamic.webview\"][data-webview-resource-map-ready=\"1\"]')" in html
            and "runtimeWebviewResourceRootRows:runtimeList?Array.from(runtimeList.querySelectorAll('.extension-runtime-row')).filter(row=>Number(row.dataset.webviewLocalResourceRootCount)||0).length:0" in html
            and "runtimeWebviewPortMappingRows:runtimeList?Array.from(runtimeList.querySelectorAll('.extension-runtime-row')).filter(row=>Number(row.dataset.webviewPortMappingCount)||0).length:0" in html
+           and "runtimeWebviewAsWebviewUriReadyRows:runtimeList?Array.from(runtimeList.querySelectorAll('.extension-runtime-row')).filter(row=>row.dataset.webviewAsWebviewUriReady==='1').length:0" in html
            and "snapshot.webviewStatusBars>=2" in html
            and "snapshot.webviewHtmlDataset&&snapshot.webviewPendingDataset" in html
            and "snapshot.webviewResourceRootDataset&&snapshot.webviewPortMappingDataset&&snapshot.webviewResourceMapDataset&&snapshot.webviewResourceEndpointDataset&&snapshot.webviewResourceCssDataset" in html
+           and "snapshot.webviewAsWebviewUriReadyDataset&&snapshot.webviewResourceEndpointReadyDataset&&snapshot.webviewResourceMapReadyDataset" in html
+           and "snapshot.runtimeWebviewAsWebviewUriReadyRows>=1&&snapshot.runtimeWebviewResourceEndpointReadyRows>=1&&snapshot.runtimeWebviewResourceMapReadyRows>=1" in html
            and "['Open','Refresh','Copy'].every(label=>snapshot.webviewActionLabels.includes(label))" in html
            and "snapshot.customPlaceholder&&snapshot.customDataset.viewType==='selftest.customEditor'" in html
            and "snapshot.notebookOutputItems===3" in html
