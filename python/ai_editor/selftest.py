@@ -14557,9 +14557,24 @@ console.log("command palette quick access helpers ok");
            and "editor-dirty-diff-action open" in html
            and "Open side-by-side diff" in html
            and ".editor-dirty-diff-line.removed" in html
+           and ".editor-dirty-diff-line.active-hunk" in html
+           and ".editor-dirty-diff-ruler-marker" in html
+           and "dataset.dirtyDiffHunk" in html
+           and "let _editorDirtyDiffActiveHunkIndex=0;" in html
+           and "toolbar.dataset.dirtyDiffAdded" in html
+           and "toolbar.dataset.dirtyDiffActiveHunk" in html
            and "function renderEditorDirtyDiffDecorations(layer,ta,metrics)" in html
            and "updateEditorLanguageFeatureState('diff'" in html
            and "setActiveEditorBaselineContent" in html
+           and "function editorDiffLineClassMaps(originalContent,modifiedContent)" in html
+           and "function renderDiffPane(parent,title,content,role,lineClasses)" in html
+           and ".editor-diff-row.added" in html
+           and "host.dataset.diffAddedLines" in html
+           and "hasToolbar" in html
+           and "toolbarDatasetOk" in html
+           and "activeHunkRows" in html
+           and "rulerMarkers" in html
+           and "diffDatasetsOk" in html
            and "featureDiffTotal" in html
            and "featureDiffHunks" in html
            and "window.editorDirtyDiffSelfCheckSnapshot=editorDirtyDiffSelfCheckSnapshot" in html

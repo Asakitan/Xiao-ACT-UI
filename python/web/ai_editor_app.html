@@ -359,10 +359,18 @@ body.window-resizing * { cursor:inherit !important; }
 .editor-dirty-diff-line.modified { background:color-mix(in srgb,var(--fg-accent) 9%,transparent); }
 .editor-dirty-diff-line.added { background:color-mix(in srgb,var(--fg-success) 10%,transparent); }
 .editor-dirty-diff-line.removed { height:3px !important; background:color-mix(in srgb,var(--fg-error) 36%,transparent); }
+.editor-dirty-diff-line.active-hunk { box-shadow:inset 0 0 0 1px color-mix(in srgb,var(--border-focus) 38%,transparent); opacity:.96; }
 .editor-dirty-diff-gutter { position:absolute; left:-47px; width:4px; border-radius:2px; pointer-events:none; }
 .editor-dirty-diff-gutter.modified { background:var(--fg-accent); }
 .editor-dirty-diff-gutter.added { background:var(--fg-success); }
 .editor-dirty-diff-gutter.removed { height:3px !important; background:var(--fg-error); box-shadow:0 0 0 1px color-mix(in srgb,var(--fg-error) 28%,transparent); }
+.editor-dirty-diff-gutter.active-hunk { width:6px; left:-48px; box-shadow:0 0 0 1px color-mix(in srgb,var(--border-focus) 42%,transparent); }
+.editor-dirty-diff-ruler { position:absolute; right:2px; top:32px; bottom:8px; width:7px; z-index:6; pointer-events:none; }
+.editor-dirty-diff-ruler-marker { position:absolute; left:1px; right:1px; min-height:3px; border-radius:2px; opacity:.9; }
+.editor-dirty-diff-ruler-marker.modified { background:var(--fg-accent); }
+.editor-dirty-diff-ruler-marker.added { background:var(--fg-success); }
+.editor-dirty-diff-ruler-marker.removed { background:var(--fg-error); }
+.editor-dirty-diff-ruler-marker.active-hunk { left:0; right:0; min-height:6px; box-shadow:0 0 0 1px var(--border-focus); }
 .editor-dirty-diff-summary { position:absolute; right:8px; top:6px; display:none; }
 .editor-dirty-diff-toolbar { position:absolute; right:8px; top:6px; z-index:7; display:flex; align-items:center; gap:4px;
   padding:3px 5px; border:1px solid color-mix(in srgb,var(--border) 72%,transparent);
@@ -526,6 +534,21 @@ body.window-resizing * { cursor:inherit !important; }
   color:var(--fg-dim); font:11px var(--mono); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .editor-diff-text { flex:1; min-height:0; margin:0; padding:10px 12px; overflow:auto; white-space:pre;
   color:var(--fg-code); background:var(--bg-editor); font:12px/1.5 var(--mono); tab-size:2; }
+.editor-diff-summary { display:flex; align-items:center; gap:5px; color:var(--fg-dim); font:10px var(--mono); }
+.editor-diff-chip { min-height:18px; display:inline-flex; align-items:center; padding:0 6px; border:1px solid var(--border);
+  border-radius:3px; background:color-mix(in srgb,var(--bg3) 80%,transparent); }
+.editor-diff-chip.added { color:var(--fg-success); border-color:color-mix(in srgb,var(--fg-success) 42%,var(--border)); }
+.editor-diff-chip.modified { color:var(--fg-accent); border-color:color-mix(in srgb,var(--fg-accent) 42%,var(--border)); }
+.editor-diff-chip.removed { color:var(--fg-error); border-color:color-mix(in srgb,var(--fg-error) 50%,var(--border)); }
+.editor-diff-lines { flex:1; min-height:0; overflow:auto; background:var(--bg-editor); font:12px/1.5 var(--mono); tab-size:2; }
+.editor-diff-row { min-height:18px; display:grid; grid-template-columns:54px minmax(0,1fr); align-items:start;
+  border-bottom:1px solid color-mix(in srgb,var(--border) 18%,transparent); }
+.editor-diff-row.added { background:color-mix(in srgb,var(--fg-success) 10%,transparent); }
+.editor-diff-row.modified { background:color-mix(in srgb,var(--fg-accent) 9%,transparent); }
+.editor-diff-row.removed { background:color-mix(in srgb,var(--fg-error) 13%,transparent); }
+.editor-diff-line-no { padding:0 8px; color:var(--fg-dim); text-align:right; user-select:none;
+  border-right:1px solid color-mix(in srgb,var(--border) 42%,transparent); }
+.editor-diff-line-text { min-width:0; padding:0 10px; color:var(--fg-code); white-space:pre; }
 .editor-container.custom-editor .line-numbers,
 .editor-container.custom-editor .editor-textarea,
 .editor-container.custom-editor .editor-syntax-layer,
@@ -12334,6 +12357,7 @@ const EDITOR_SUGGEST_MEMORY_KEY='sao.aiEditor.suggestMemory.v1';
 
 let _prevLineCount=1;
 let _editorDirtyDiffCache={key:'',decorations:[],summary:null};
+let _editorDirtyDiffActiveHunkIndex=0;
 function updateLineNums(){
   scheduleEditorSyntaxHighlight();
   const lines=$('editor-text').value.split('\n').length;
@@ -12387,6 +12411,7 @@ function setActiveEditorBaselineContent(content){
   const tab=activeEditorTab();
   if(tab)tab.originalContent=String(content||'');
   _editorDirtyDiffCache={key:'',decorations:[],summary:null};
+  _editorDirtyDiffActiveHunkIndex=0;
   if(typeof renderEditorVisualDecorations==='function')renderEditorVisualDecorations();
 }
 function editorDiffContentSignature(value){
@@ -12471,6 +12496,8 @@ function editorDirtyDiffState(){
   if(_editorDirtyDiffCache.key===key)return _editorDirtyDiffCache;
   const computed=computeEditorDirtyDiff(base,value);
   _editorDirtyDiffCache={key,decorations:computed.decorations,summary:computed.summary};
+  const hunks=editorDirtyDiffHunks(_editorDirtyDiffCache.decorations||[]);
+  _editorDirtyDiffActiveHunkIndex=Math.max(0,Math.min(_editorDirtyDiffActiveHunkIndex,hunks.length?hunks.length-1:0));
   return _editorDirtyDiffCache;
 }
 function editorDirtyDiffHunks(decorations){
@@ -12507,6 +12534,7 @@ function editorDirtyDiffNavigate(direction){
     target=hunks.find(h=>h.line>current)||hunks[0];
   }
   editorSetCursorLine(target.line);
+  _editorDirtyDiffActiveHunkIndex=Math.max(0,hunks.indexOf(target));
   setStatus('Diff hunk '+(hunks.indexOf(target)+1)+'/'+hunks.length+' · Ln '+(target.line+1));
   renderEditorVisualDecorations();
   return true;
@@ -12534,6 +12562,14 @@ function renderEditorDirtyDiffToolbar(layer,state){
   toolbar.setAttribute('role','toolbar');
   toolbar.setAttribute('aria-label','Unsaved editor diff');
   toolbar.title='Unsaved diff: '+(summary.added||0)+' added, '+(summary.modified||0)+' modified, '+(summary.removed||0)+' removed';
+  const hunks=editorDirtyDiffHunks((state&&state.decorations)||[]);
+  const activeHunk=hunks.length?Math.max(0,Math.min(_editorDirtyDiffActiveHunkIndex,hunks.length-1)):0;
+  toolbar.dataset.dirtyDiffAdded=String(summary.added||0);
+  toolbar.dataset.dirtyDiffModified=String(summary.modified||0);
+  toolbar.dataset.dirtyDiffRemoved=String(summary.removed||0);
+  toolbar.dataset.dirtyDiffTotal=String(summary.total||0);
+  toolbar.dataset.dirtyDiffHunks=String(hunks.length);
+  toolbar.dataset.dirtyDiffActiveHunk=hunks.length?String(activeHunk+1):'0';
   const total=document.createElement('span');
   total.className='editor-dirty-diff-total';
   total.textContent=String(summary.total||0);
@@ -12544,8 +12580,15 @@ function renderEditorDirtyDiffToolbar(layer,state){
     chip.className='editor-dirty-diff-count '+key;
     chip.textContent=label+(summary[key]||0);
     chip.title=key+' lines';
+    chip.setAttribute('aria-label',String(summary[key]||0)+' '+key+' lines');
     toolbar.appendChild(chip);
   });
+  const hunkChip=document.createElement('span');
+  hunkChip.className='editor-dirty-diff-count total';
+  hunkChip.textContent=hunks.length?('H '+String(activeHunk+1)+'/'+String(hunks.length)):'H 0/0';
+  hunkChip.title='Active diff hunk';
+  hunkChip.setAttribute('aria-label','Active diff hunk '+hunkChip.textContent.replace(/^H\s*/,''));
+  toolbar.appendChild(hunkChip);
   [['prev','↑','Previous change',-1],['next','↓','Next change',1]].forEach(([cls,label,title,dir])=>{
     const btn=document.createElement('button');
     btn.type='button';btn.className='editor-dirty-diff-action '+cls;btn.textContent=label;btn.title=title;btn.setAttribute('aria-label',title);
@@ -12564,24 +12607,29 @@ function renderEditorDirtyDiffDecorations(layer,ta,metrics){
   const state=editorDirtyDiffState();
   const decorations=state.decorations||[];
   const visibleHeight=ta.clientHeight||($('editor-container')&&$('editor-container').clientHeight)||100000;
+  const hunks=editorDirtyDiffHunks(decorations);
+  const activeHunk=hunks.length?hunks[Math.max(0,Math.min(_editorDirtyDiffActiveHunkIndex,hunks.length-1))]:null;
+  const activeHunkIndex=activeHunk?hunks.indexOf(activeHunk):-1;
   decorations.forEach(dec=>{
     const line=Math.max(0,Number(dec.line)||0);
     const top=metrics.paddingTop+line*metrics.lineHeight-ta.scrollTop;
     if(top<-metrics.lineHeight||top>visibleHeight+metrics.lineHeight)return;
+    const inActive=!!(activeHunk&&line>=activeHunk.line&&line<=activeHunk.endLine);
     const gutter=document.createElement('div');
-    gutter.className='editor-dirty-diff-gutter '+dec.type;
+    gutter.className='editor-dirty-diff-gutter '+dec.type+(inActive?' active-hunk':'');
+    gutter.dataset.dirtyDiffHunk=String(inActive?activeHunkIndex+1:'');
     gutter.style.top=(top+(dec.type==='removed'?Math.max(1,metrics.lineHeight/2):0))+'px';
     gutter.style.height=metrics.lineHeight+'px';
     layer.appendChild(gutter);
     const row=document.createElement('div');
-    row.className='editor-dirty-diff-line '+dec.type;
+    row.className='editor-dirty-diff-line '+dec.type+(inActive?' active-hunk':'');
+    row.dataset.dirtyDiffHunk=String(inActive?activeHunkIndex+1:'');
     row.style.top=(top+(dec.type==='removed'?Math.max(1,metrics.lineHeight/2):0))+'px';
     row.style.height=metrics.lineHeight+'px';
     row.style.left=(-ta.scrollLeft)+'px';
     layer.appendChild(row);
   });
   const summary=state.summary||{};
-  const hunks=editorDirtyDiffHunks(decorations);
   if(typeof updateEditorLanguageFeatureState==='function')updateEditorLanguageFeatureState('diff',summary.total?'ready':'empty',{
     mode:'dirty',
     added:summary.added||0,
@@ -12593,6 +12641,21 @@ function renderEditorDirtyDiffDecorations(layer,ta,metrics){
     message:summary.total?('Diff: '+editorDirtyDiffSummaryLabel(summary)+' · '+hunks.length+' hunk'+(hunks.length===1?'':'s')):'Diff: clean'
   });
   if(summary.total){
+    const ruler=document.createElement('div');
+    ruler.className='editor-dirty-diff-ruler';
+    ruler.dataset.dirtyDiffRuler='1';
+    const totalLines=Math.max(1,($('editor-text')&&$('editor-text').value||'').split('\n').length-1);
+    hunks.forEach((hunk,index)=>{
+      const marker=document.createElement('div');
+      const type=hunk.types.added?'added':hunk.types.removed?'removed':'modified';
+      marker.className='editor-dirty-diff-ruler-marker '+type+(index===activeHunkIndex?' active-hunk':'');
+      marker.dataset.dirtyDiffHunk=String(index+1);
+      marker.title='Hunk '+String(index+1)+' at line '+String(hunk.line+1);
+      marker.style.top=Math.max(0,Math.min(100,(hunk.line/totalLines)*100))+'%';
+      marker.style.height=Math.max(3,Math.min(24,(Math.max(1,hunk.endLine-hunk.line+1)/Math.max(1,totalLines+1))*100))+'%';
+      ruler.appendChild(marker);
+    });
+    layer.appendChild(ruler);
     const badge=document.createElement('div');
     badge.className='editor-dirty-diff-summary';
     badge.textContent=editorDirtyDiffSummaryLabel(summary);
@@ -25168,18 +25231,53 @@ function diffResourceLabel(resource,fallback){
   if(!text)return 'resource';
   return text.split(/[\\/]/).filter(Boolean).pop()||text;
 }
-function renderDiffPane(parent,title,content){
+function editorDiffLineClassMaps(originalContent,modifiedContent){
+  const computed=computeEditorDirtyDiff(originalContent,modifiedContent);
+  const original={},modified={};
+  (computed.decorations||[]).forEach(dec=>{
+    const line=Math.max(0,Number(dec.line)||0);
+    const type=String(dec.type||'modified');
+    if(type==='added'){
+      modified[line]='added';
+    }else if(type==='removed'){
+      original[line]='removed';
+    }else{
+      original[line]='modified';
+      modified[line]='modified';
+    }
+  });
+  return {original,modified,summary:computed.summary||{added:0,modified:0,removed:0,total:0}};
+}
+function renderDiffPane(parent,title,content,role,lineClasses){
   const pane=document.createElement('div');
   pane.className='editor-diff-pane';
+  pane.dataset.diffPaneRole=role||'';
   const head=document.createElement('div');
   head.className='editor-diff-pane-title';
   head.textContent=title;
   head.title=title;
-  const pre=document.createElement('pre');
-  pre.className='editor-diff-text';
-  pre.textContent=String(content||'');
+  const lines=document.createElement('div');
+  lines.className='editor-diff-lines';
+  const source=String(content||'').split('\n');
+  source.forEach((line,index)=>{
+    const row=document.createElement('div');
+    const cls=lineClasses&&lineClasses[index]?String(lineClasses[index]):'';
+    row.className='editor-diff-row'+(cls?' '+cls:'');
+    row.dataset.diffLine=String(index+1);
+    row.dataset.diffRole=role||'';
+    if(cls)row.dataset.diffChange=cls;
+    const lineNo=document.createElement('span');
+    lineNo.className='editor-diff-line-no';
+    lineNo.textContent=String(index+1);
+    const text=document.createElement('span');
+    text.className='editor-diff-line-text';
+    text.textContent=line;
+    row.appendChild(lineNo);
+    row.appendChild(text);
+    lines.appendChild(row);
+  });
   pane.appendChild(head);
-  pane.appendChild(pre);
+  pane.appendChild(lines);
   parent.appendChild(pane);
 }
 function showDiffEditorSurface(tab){
@@ -25195,19 +25293,28 @@ function showDiffEditorSurface(tab){
   const original=diff.original||{},modified=diff.modified||{};
   const originalLines=String(original.content||'').split('\n').length;
   const modifiedLines=String(modified.content||'').split('\n').length;
+  const lineMaps=editorDiffLineClassMaps(String(original.content||''),String(modified.content||''));
+  const summary=lineMaps.summary||{};
   host.innerHTML='';
   host.dataset.diffTitle=String(diff.title||tab.name||'Diff');
   host.dataset.originalLines=String(originalLines);
   host.dataset.modifiedLines=String(modifiedLines);
+  host.dataset.diffAddedLines=String(summary.added||0);
+  host.dataset.diffModifiedLines=String(summary.modified||0);
+  host.dataset.diffRemovedLines=String(summary.removed||0);
+  host.dataset.diffHunks=String(editorDirtyDiffHunks(computeEditorDirtyDiff(String(original.content||''),String(modified.content||'')).decorations||[]).length);
+  host.dataset.diffAlgorithm=String(summary.algorithm||'');
   if(typeof updateEditorLanguageFeatureState==='function')updateEditorLanguageFeatureState('diff','ready',{
     mode:'editor',
     originalLines,
     modifiedLines,
-    total:Math.abs(modifiedLines-originalLines),
-    added:Math.max(0,modifiedLines-originalLines),
-    modified:0,
-    removed:Math.max(0,originalLines-modifiedLines),
-    message:'Diff editor: '+originalLines+' ↔ '+modifiedLines+' lines'
+    total:summary.total||0,
+    added:summary.added||0,
+    modified:summary.modified||0,
+    removed:summary.removed||0,
+    hunks:Number(host.dataset.diffHunks)||0,
+    algorithm:summary.algorithm||'',
+    message:'Diff editor: '+editorDirtyDiffSummaryLabel(summary)+' · '+originalLines+' ↔ '+modifiedLines+' lines'
   });
   const header=document.createElement('div');
   header.className='editor-diff-header';
@@ -25216,17 +25323,30 @@ function showDiffEditorSurface(tab){
   title.textContent=String(diff.title||tab.name||'Diff');
   title.title=String((original.uri||original.path||'')+' ↔ '+(modified.uri||modified.path||''));
   header.appendChild(title);
+  const summaryEl=document.createElement('div');
+  summaryEl.className='editor-diff-summary';
+  [['added','+'],['modified','~'],['removed','-']].forEach(([key,label])=>{
+    const chip=document.createElement('span');
+    chip.className='editor-diff-chip '+key;
+    chip.textContent=label+String(summary[key]||0);
+    chip.title=key+' lines';
+    summaryEl.appendChild(chip);
+  });
+  header.appendChild(summaryEl);
   host.appendChild(header);
   const grid=document.createElement('div');
   grid.className='editor-diff-grid';
-  renderDiffPane(grid,String(diff.originalLabel||'Original')+' · '+diffResourceLabel(original,'Original'),original.content);
-  renderDiffPane(grid,String(diff.modifiedLabel||'Current')+' · '+diffResourceLabel(modified,'Current'),modified.content);
+  renderDiffPane(grid,String(diff.originalLabel||'Original')+' · '+diffResourceLabel(original,'Original'),original.content,'original',lineMaps.original);
+  renderDiffPane(grid,String(diff.modifiedLabel||'Current')+' · '+diffResourceLabel(modified,'Current'),modified.content,'modified',lineMaps.modified);
   host.appendChild(grid);
 }
 function hideDiffEditorSurface(){
   const container=$('editor-container'),host=$('editor-diff-host');
   if(container)container.classList.remove('diff-editor');
-  if(host){host.classList.remove('active');host.innerHTML='';delete host.dataset.diffTitle;delete host.dataset.originalLines;delete host.dataset.modifiedLines}
+  if(host){
+    host.classList.remove('active');host.innerHTML='';
+    ['diffTitle','originalLines','modifiedLines','diffAddedLines','diffModifiedLines','diffRemovedLines','diffHunks','diffAlgorithm'].forEach(key=>delete host.dataset[key]);
+  }
 }
 function showCustomEditorSurface(tab){
   const container=$('editor-container'),host=$('editor-custom-webview-host');
@@ -41834,6 +41954,16 @@ function editorDirtyDiffSelfCheckSnapshot(){
     const actionCount=document.querySelectorAll('#editor-visual-layer .editor-dirty-diff-action').length;
     const removedRows=document.querySelectorAll('#editor-visual-layer .editor-dirty-diff-line.removed').length;
     const hunkCount=editorDirtyDiffHunks(dirty.decorations||[]).length;
+    editorDirtyDiffNavigate(1);
+    const activeHunkRows=document.querySelectorAll('#editor-visual-layer .editor-dirty-diff-line.active-hunk').length;
+    const activeHunkGutters=document.querySelectorAll('#editor-visual-layer .editor-dirty-diff-gutter.active-hunk').length;
+    const rulerMarkers=document.querySelectorAll('#editor-visual-layer .editor-dirty-diff-ruler-marker').length;
+    const toolbarDatasetOk=!!(toolbar&&toolbar.dataset.dirtyDiffAdded!==undefined&&toolbar.dataset.dirtyDiffHunks!==undefined&&toolbar.dataset.dirtyDiffActiveHunk!==undefined);
+    const openedDiff=openActiveEditorDirtyDiff();
+    const diffHost=$('editor-diff-host');
+    const diffRows=diffHost?diffHost.querySelectorAll('.editor-diff-row.added,.editor-diff-row.modified,.editor-diff-row.removed').length:0;
+    const diffSummary=diffHost?diffHost.querySelectorAll('.editor-diff-chip.added,.editor-diff-chip.modified,.editor-diff-chip.removed').length:0;
+    const diffDatasetsOk=!!(diffHost&&diffHost.classList.contains('active')&&diffHost.dataset.diffAddedLines!==undefined&&diffHost.dataset.diffModifiedLines!==undefined&&diffHost.dataset.diffRemovedLines!==undefined&&diffHost.dataset.diffHunks!==undefined);
     const featureState=editorLanguageFeatureStateSnapshot();
     setActiveEditorBaselineContent(ed.value);
     let reset=editorDirtyDiffState();
@@ -41847,8 +41977,16 @@ function editorDirtyDiffSelfCheckSnapshot(){
       hunkCount,
       hasToolbar:!!toolbar,
       toolbarText:toolbar?toolbar.textContent:'',
+      toolbarDatasetOk,
       actionCount,
       removedRows,
+      activeHunkRows,
+      activeHunkGutters,
+      rulerMarkers,
+      openedDiff,
+      diffRows,
+      diffSummary,
+      diffDatasetsOk,
       featureDiffTotal:featureState.features&&featureState.features.diff&&featureState.features.diff.total||0,
       featureDiffHunks:featureState.features&&featureState.features.diff&&featureState.features.diff.hunks||0,
       featureDiffMessage:featureState.features&&featureState.features.diff&&featureState.features.diff.message||'',
@@ -41856,6 +41994,8 @@ function editorDirtyDiffSelfCheckSnapshot(){
       pass:(clean.summary&&clean.summary.total||0)===0&&
         (dirty.summary&&dirty.summary.total||0)>0&&markerCount>0&&
         hunkCount>0&&!!toolbar&&toolbar.textContent.includes('Diff')&&actionCount>=3&&
+        toolbarDatasetOk&&activeHunkRows>0&&activeHunkGutters>0&&rulerMarkers>0&&
+        openedDiff&&diffRows>0&&diffSummary>=3&&diffDatasetsOk&&
         ((featureState.features&&featureState.features.diff&&featureState.features.diff.total)||0)>0&&
         ((featureState.features&&featureState.features.diff&&featureState.features.diff.hunks)||0)>0&&
         (reset.summary&&reset.summary.total||0)===0
