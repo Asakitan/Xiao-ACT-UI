@@ -5009,6 +5009,7 @@ function currentWorkspaceRoot(){
   return normalizeWorkspaceRootPath(ws.resolved_root||ws.root||ws.last_root||(typeof explorerRoot!=='undefined'?explorerRoot:'')||'');
 }
 let _lastTerminalWorkspaceRoot='';
+let _lastTerminalWorkspaceSync={root:'',previousRoot:'',followed:0,protected:0,preserved:0,defaultFollowed:false,activeRunning:false,decisions:[]};
 const quickInputViews=Object.create(null);
 let activeQuickInputId='';
 let quickInputPreviousFocus=null;
@@ -23940,18 +23941,46 @@ function syncTerminalWorkspaceState(){
   const root=currentWorkspaceRoot();
   const previousRoot=_lastTerminalWorkspaceRoot||root;
   const out=$('terminal-output');
-  if(out&&root&&terminalCwdShouldFollowWorkspace(out.dataset.lastCwd,previousRoot))out.dataset.lastCwd=root;
+  const sync={root,previousRoot,followed:0,protected:0,preserved:0,defaultFollowed:false,activeRunning:false,decisions:[]};
+  const defaultRun=out?(_terminalCurrentRun(out)):null;
+  if(defaultRun&&!defaultRun.cancelled){
+    sync.protected++;
+    sync.activeRunning=_activeTermId===null;
+    sync.decisions.push({id:'default',decision:'protected-running',cwd:out.dataset.runningCwd||out.dataset.lastCwd||''});
+  }else if(out&&root&&terminalCwdShouldFollowWorkspace(out.dataset.lastCwd,previousRoot)){
+    out.dataset.lastCwd=root;
+    sync.defaultFollowed=true;
+    sync.followed++;
+    sync.decisions.push({id:'default',decision:'followed',cwd:root});
+  }else if(out&&out.dataset.lastCwd){
+    sync.preserved++;
+    sync.decisions.push({id:'default',decision:'preserved',cwd:out.dataset.lastCwd});
+  }
   if(typeof renderTerminalProfileSelector==='function')renderTerminalProfileSelector();
-  try{if(!Array.isArray(_terminals))return}catch(_e){return}
+  try{if(!Array.isArray(_terminals)){_lastTerminalWorkspaceSync=sync;return}}catch(_e){_lastTerminalWorkspaceSync=sync;return}
   _terminals.forEach(term=>{
     const profile=(term.metadata&&term.metadata.profile)||currentTerminalProfile();
     const currentCwd=term.lastCwd||term.metadata&&term.metadata.cwd||'';
     const running=String(term.lastState||'').toLowerCase()==='running'||(term.outputEl&&term.outputEl.dataset&&term.outputEl.dataset.terminalRunId);
-    const nextCwd=!running&&root&&terminalCwdShouldFollowWorkspace(currentCwd,previousRoot)?root:currentCwd;
+    if(running){
+      sync.protected++;
+      sync.activeRunning=sync.activeRunning||term.id===_activeTermId;
+      sync.decisions.push({id:String(term.id),name:term.name||'',decision:'protected-running',cwd:currentCwd});
+    }
+    const follows=!running&&root&&terminalCwdShouldFollowWorkspace(currentCwd,previousRoot);
+    const nextCwd=follows?root:currentCwd;
+    if(follows){
+      sync.followed++;
+      sync.decisions.push({id:String(term.id),name:term.name||'',decision:'followed',cwd:nextCwd});
+    }else if(!running){
+      sync.preserved++;
+      sync.decisions.push({id:String(term.id),name:term.name||'',decision:'preserved',cwd:currentCwd});
+    }
     term.metadata={...terminalProfileMetadata(profile),...(term.metadata||{}),cwd:nextCwd||root};
     if(nextCwd)term.lastCwd=nextCwd;
   });
   _lastTerminalWorkspaceRoot=root;
+  _lastTerminalWorkspaceSync=sync;
   _renderTermTabs();
   _updateTerminalStatusLine();
 }
@@ -23974,7 +24003,13 @@ function terminalWorkspaceSyncSnapshot(){
     contextWorkspaceCwd:context?context.dataset.workspaceCwd:'',
     diagnosticsWorkspaceCwd:diagnostics?diagnostics.dataset.workspaceCwd:'',
     activeTerminalId:term?String(term.id||''):'',
-    activeTerminalState:term?String(term.lastState||'idle'):(out&&out.dataset.terminalState)||'idle'
+    activeTerminalState:term?String(term.lastState||'idle'):(out&&out.dataset.terminalState)||'idle',
+    syncFollowed:Number((_lastTerminalWorkspaceSync&&_lastTerminalWorkspaceSync.followed)||0),
+    syncProtected:Number((_lastTerminalWorkspaceSync&&_lastTerminalWorkspaceSync.protected)||0),
+    syncPreserved:Number((_lastTerminalWorkspaceSync&&_lastTerminalWorkspaceSync.preserved)||0),
+    syncDefaultFollowed:!!(_lastTerminalWorkspaceSync&&_lastTerminalWorkspaceSync.defaultFollowed),
+    syncActiveRunning:!!(_lastTerminalWorkspaceSync&&_lastTerminalWorkspaceSync.activeRunning),
+    syncDecisions:Array.isArray(_lastTerminalWorkspaceSync&&_lastTerminalWorkspaceSync.decisions)?_lastTerminalWorkspaceSync.decisions.slice():[]
   };
 }
 function updateWorkspaceChrome(info){
@@ -24056,6 +24091,7 @@ function workspaceUiSelfCheckSnapshot(){
   const oldExplorerRoot=explorerRoot,oldExplorerRootName=explorerRootName,oldExplorerSelectedPath=explorerSelectedPath;
   const input=$('workspace-switcher-input'),oldInput=input?input.value:'';
   const oldLastTerminalWorkspaceRoot=_lastTerminalWorkspaceRoot;
+  const oldLastTerminalWorkspaceSync={...(_lastTerminalWorkspaceSync||{}),decisions:Array.isArray(_lastTerminalWorkspaceSync&&_lastTerminalWorkspaceSync.decisions)?_lastTerminalWorkspaceSync.decisions.slice():[]};
   const defaultOut=$('terminal-output');
   const oldDefaultOutDataset=defaultOut?{...defaultOut.dataset}:null;
   try{
@@ -24136,6 +24172,7 @@ function workspaceUiSelfCheckSnapshot(){
     explorerRoot=oldExplorerRoot;explorerRootName=oldExplorerRootName;explorerSelectedPath=oldExplorerSelectedPath;
     if(input)input.value=oldInput;
     _lastTerminalWorkspaceRoot=oldLastTerminalWorkspaceRoot;
+    _lastTerminalWorkspaceSync=oldLastTerminalWorkspaceSync;
     if(defaultOut&&oldDefaultOutDataset){
       Object.keys(defaultOut.dataset).forEach(k=>delete defaultOut.dataset[k]);
       Object.assign(defaultOut.dataset,oldDefaultOutDataset);
@@ -44913,6 +44950,11 @@ function _updateTerminalDiagnostics(meta,state){
   strip.dataset.cancelledBlocks=String(stats.cancelled);
   strip.dataset.historyCount=String(historyCount);
   strip.dataset.truncated=truncation?'1':'0';
+  strip.dataset.health=finalState==='error'?'error':(finalState==='cancelled'||finalState==='timeout'||!workspaceCwd?'warn':(run&&!run.cancelled?'running':'ok'));
+  strip.dataset.runnable=workspaceCwd&&profile?'1':'0';
+  strip.dataset.workspaceSyncFollowed=String((_lastTerminalWorkspaceSync&&_lastTerminalWorkspaceSync.followed)||0);
+  strip.dataset.workspaceSyncProtected=String((_lastTerminalWorkspaceSync&&_lastTerminalWorkspaceSync.protected)||0);
+  strip.dataset.workspaceSyncPreserved=String((_lastTerminalWorkspaceSync&&_lastTerminalWorkspaceSync.preserved)||0);
   _setTerminalDiagnosticPill(strip,'run','run',runningValue,run&&!run.cancelled?'running':(finalState==='error'?'error':finalState==='done'?'ok':finalState==='cancelled'||finalState==='timeout'?'warn':''),run&&run.command?run.command:'Terminal state');
   _setTerminalDiagnosticPill(strip,'job','job',jobId?String(jobId).slice(0,8):'-',jobId?'running':'',jobId||'No active terminal job');
   _setTerminalDiagnosticPill(strip,'cwd','cwd',_terminalWorkspaceLabel(cwd),workspaceCwd?'ok':'warn',cwd);
@@ -45256,6 +45298,88 @@ function _updateTerminalActionButtons(){
   const restart=document.querySelector('[data-terminal-action="restart"]');
   if(stop)stop.classList.toggle('disabled',!(run&&!run.cancelled));
   if(restart)restart.classList.toggle('disabled',!hasCommand);
+  if(stop){
+    stop.dataset.enabled=run&&!run.cancelled?'1':'0';
+    stop.setAttribute('aria-disabled',run&&!run.cancelled?'false':'true');
+  }
+  if(restart){
+    restart.dataset.enabled=hasCommand?'1':'0';
+    restart.setAttribute('aria-disabled',hasCommand?'false':'true');
+  }
+}
+function terminalRuntimeSnapshot(){
+  const term=_getActiveTerminalRecord();
+  const out=_getActiveTermOutput();
+  const status=$('terminal-status-line');
+  const context=$('terminal-context-bar');
+  const diagnostics=$('terminal-diagnostics-strip');
+  const run=_terminalCurrentRun(out);
+  const stats=_terminalOutputStats(out);
+  const cwd=terminalCurrentCwd();
+  const stop=document.querySelector('[data-terminal-action="stop"]');
+  const restart=document.querySelector('[data-terminal-action="restart"]');
+  const blocks=out?Array.from(out.querySelectorAll('.terminal-command-block')):[];
+  const activeMeta=term?{...(term.metadata||{}),...(term.lastTerminalMeta||{})}:{};
+  const runtime=_terminalRuntimeFields({
+    ...activeMeta,
+    jobId:status&&status.dataset?status.dataset.jobId:'',
+    processId:status&&status.dataset?status.dataset.processId:'',
+    sessionId:status&&status.dataset?status.dataset.sessionId:'',
+    cwdSource:status&&status.dataset?status.dataset.cwdSource:'',
+    profileSource:status&&status.dataset?status.dataset.profileSource:'',
+    shellIntegrationStatus:status&&status.dataset?status.dataset.shellIntegrationStatus:'',
+    encoding:status&&status.dataset?status.dataset.encoding:''
+  },null);
+  const history=_terminalActiveHistory().filter(Boolean);
+  return {
+    workspaceRoot:currentWorkspaceRoot(),
+    workspaceSource:_terminalWorkspaceSource(),
+    workspaceAutoDetected:!!(workspaceSettings().auto_detected||workspaceSettings().auto_detect),
+    cwd,
+    cwdMatchesWorkspace:_terminalCwdMatchesWorkspace(cwd),
+    activeTerminalId:term?String(term.id):'',
+    activeTerminalName:term?String(term.name||''):'',
+    activeOutputId:out?String(out.id||''):'',
+    terminalCount:Array.isArray(_terminals)?_terminals.length:0,
+    profile:status&&status.dataset&&status.dataset.profile?status.dataset.profile:_terminalProfileLabel(activeMeta),
+    shellKind:status&&status.dataset&&status.dataset.shellKind?status.dataset.shellKind:String(activeMeta.shellKind||''),
+    state:status&&status.dataset&&status.dataset.state?status.dataset.state:(term&&term.lastState)||'idle',
+    running:!!(run&&!run.cancelled),
+    canWriteStdin:diagnostics&&diagnostics.dataset?diagnostics.dataset.canWriteStdin==='1':!!(run&&run.jobId&&!run.cancelled),
+    jobId:run&&run.jobId?run.jobId:runtime.sessionId,
+    processId:runtime.pid,
+    sessionId:runtime.sessionId,
+    cwdSource:runtime.cwdSource,
+    profileSource:runtime.profileSource,
+    shellIntegrationStatus:runtime.shellIntegrationStatus,
+    encoding:runtime.encoding,
+    commandBlocks:stats.blocks,
+    runningBlocks:stats.running,
+    errorBlocks:stats.errors,
+    cancelledBlocks:stats.cancelled,
+    outputLines:Number(diagnostics&&diagnostics.dataset&&diagnostics.dataset.outputLines||stats.lines)||0,
+    outputBytes:Number(diagnostics&&diagnostics.dataset&&diagnostics.dataset.outputBytes||stats.bytes)||0,
+    historyCount:history.length,
+    recentCommands:history.slice(-5),
+    lastCommand:term?String(term.lastCommand||''):(out&&out.dataset?String(out.dataset.lastCommand||''):''),
+    lastExitCode:status&&status.dataset?String(status.dataset.exitCode||''):'',
+    lastDurationMs:status&&status.dataset?String(status.dataset.durationMs||''):'',
+    health:diagnostics&&diagnostics.dataset?String(diagnostics.dataset.health||''):'',
+    runnable:diagnostics&&diagnostics.dataset?diagnostics.dataset.runnable==='1':_terminalCwdMatchesWorkspace(cwd),
+    stopEnabled:stop?stop.dataset.enabled==='1':false,
+    restartEnabled:restart?restart.dataset.enabled==='1':false,
+    workspaceSync:{...(_lastTerminalWorkspaceSync||{}),decisions:Array.isArray(_lastTerminalWorkspaceSync&&_lastTerminalWorkspaceSync.decisions)?_lastTerminalWorkspaceSync.decisions.slice():[]},
+    blocks:blocks.map(block=>({
+      command:block.dataset.command||'',
+      state:Array.from(block.classList).filter(cls=>['running','done','error','cancelled','timeout'].includes(cls))[0]||'',
+      cwd:block.dataset.cwd||'',
+      profile:block.dataset.profile||'',
+      jobId:block.dataset.jobId||'',
+      processId:block.dataset.processId||'',
+      sessionId:block.dataset.sessionId||'',
+      workspaceSource:block.dataset.workspaceSource||''
+    }))
+  };
 }
 async function stopTerminalCommand(){
   const out=_activeTerminalRunOutput();
@@ -45484,6 +45608,7 @@ window.terminalCurrentCwd=terminalCurrentCwd;
 window._updateTerminalContextBar=_updateTerminalContextBar;
 window.stopTerminalCommand=stopTerminalCommand;
 window.restartTerminalCommand=restartTerminalCommand;
+window.terminalRuntimeSnapshot=terminalRuntimeSnapshot;
 window.sendTerminalInput=sendTerminalInput;
 window.renderTerminalRecentCommands=renderTerminalRecentCommands;
 window._terminalRememberCommand=_terminalRememberCommand;
@@ -45561,6 +45686,8 @@ async function terminalUiSelfCheckSnapshot(){
   const oldTermInputValue=$('term-input')?$('term-input').value:'';
   const oldWorkspace=config.workspace;
   const oldTerminal=config.terminal;
+  const oldLastTerminalWorkspaceRoot=_lastTerminalWorkspaceRoot;
+  const oldLastTerminalWorkspaceSync={...(_lastTerminalWorkspaceSync||{}),decisions:Array.isArray(_lastTerminalWorkspaceSync&&_lastTerminalWorkspaceSync.decisions)?_lastTerminalWorkspaceSync.decisions.slice():[]};
   try{
     _activeTermId=null;
     config.workspace={root:'E:/VC/SAO-UI/sao_auto',root_name:'sao_auto',source:'selfcheck'};
@@ -45599,6 +45726,13 @@ async function terminalUiSelfCheckSnapshot(){
     };
     const slowPromise=runTerminalCommand('slow-command',{skipConfirm:true,out:defaultOut});
     await new Promise(resolve=>setTimeout(resolve,20));
+    const oldSyncRoot=_lastTerminalWorkspaceRoot;
+    _lastTerminalWorkspaceRoot='E:/VC/SAO-UI';
+    const beforeProtectedRun=_terminalCurrentRun(defaultOut);
+    config.workspace={root:'E:/VC/SAO-UI/sao_auto',root_name:'sao_auto',source:'selfcheck',auto_detected:true,auto_detect:true};
+    syncTerminalWorkspaceState();
+    const protectedSync=terminalWorkspaceSyncSnapshot();
+    _lastTerminalWorkspaceRoot=oldSyncRoot;
     const wrote=await sendTerminalInput('hello stdin\n',{out:defaultOut});
     const closed=await sendTerminalInput('',{out:defaultOut,closeStdin:true});
     const stopped=await stopTerminalCommand();
@@ -45616,6 +45750,7 @@ async function terminalUiSelfCheckSnapshot(){
     const diagnosticPills=diagnostics?Array.from(diagnostics.querySelectorAll('.terminal-diagnostic-pill')):[];
     const diagnosticKinds=diagnosticPills.map(pill=>pill.dataset.terminalDiagnostic||'');
     const diagnosticValues=diagnosticPills.map(pill=>pill.dataset.value||'');
+    const runtimeSnapshot=terminalRuntimeSnapshot();
     const snapshot={
       okExit:ok&&ok.exitCode,
       badExit:bad&&bad.exitCode,
@@ -45681,8 +45816,15 @@ async function terminalUiSelfCheckSnapshot(){
       diagnosticsBlocks:diagnostics?Number(diagnostics.dataset.commandBlocks||0):0,
       diagnosticsHistoryCount:diagnostics?Number(diagnostics.dataset.historyCount||0):0,
       diagnosticsTruncated:diagnostics?diagnostics.dataset.truncated:'',
+      diagnosticsHealth:diagnostics?diagnostics.dataset.health:'',
+      diagnosticsRunnable:diagnostics?diagnostics.dataset.runnable:'',
+      diagnosticsSyncProtected:diagnostics?Number(diagnostics.dataset.workspaceSyncProtected||0):0,
       diagnosticKinds,
       diagnosticValues,
+      protectedSyncProtected:protectedSync.syncProtected,
+      protectedSyncActiveRunning:protectedSync.syncActiveRunning,
+      protectedSyncDecision:(protectedSync.syncDecisions&&protectedSync.syncDecisions[0]&&protectedSync.syncDecisions[0].decision)||'',
+      protectedRunningCwd:beforeProtectedRun&&beforeProtectedRun.cwd,
       promptText:prompt?prompt.textContent:'',
       promptTitle:prompt?prompt.title:'',
       statusAfterBad,
@@ -45735,14 +45877,17 @@ async function terminalUiSelfCheckSnapshot(){
       writeBytes:wrote&&wrote.writtenBytes,
       closeStdinPayload:(payloads.find(p=>p&&p.mode==='write'&&p.closeStdin)||{}).closeStdin,
       closeStdinEcho:defaultOut?defaultOut.textContent.includes('[stdin closed]'):false,
-      closeStdinResult:closed&&closed.stdinClosed
+      closeStdinResult:closed&&closed.stdinClosed,
+      runtimeSnapshot
     };
-    snapshot.pass=snapshot.okExit===0&&snapshot.badExit===7&&snapshot.stopped&&snapshot.slowIgnored&&snapshot.blockCount>=3&&snapshot.hasDone&&snapshot.hasError&&snapshot.hasCancelled&&snapshot.hasTruncatedNote&&snapshot.hasInputEcho&&snapshot.statusState==='cancelled'&&snapshot.statusWorkspace==='sao_auto'&&snapshot.statusWorkspaceCwd==='1'&&snapshot.statusWorkspaceSource==='selfcheck'&&snapshot.statusWorkspaceAutoDetected==='1'&&snapshot.statusProfile==='Windows PowerShell'&&snapshot.statusShellKind==='powershell'&&snapshot.statusJobId==='job-slow'&&snapshot.statusProcessId==='4321'&&snapshot.statusSessionId==='job-slow'&&snapshot.statusCwdSource==='workspace'&&snapshot.statusProfileSource==='configured'&&snapshot.statusShellIntegrationStatus==='process'&&snapshot.statusEncoding==='utf-8'&&snapshot.statusStdinBytes==='12'&&snapshot.statusStdinClosed==='1'&&snapshot.statusExitCode===''&&snapshot.statusDurationMs==='7'&&snapshot.statusStdoutTruncated==='0'&&snapshot.statusStderrTruncated==='0'&&snapshot.statusFinishedAt==='2026-06-27T00:00:02Z'&&snapshot.contextReady&&snapshot.contextWorkspace==='sao_auto'&&snapshot.contextCwd==='E:/VC/SAO-UI/sao_auto'&&snapshot.contextSource==='selfcheck'&&snapshot.contextAutoDetected==='1'&&snapshot.contextWorkspaceCwd==='1'&&snapshot.contextProfile==='Windows PowerShell'&&snapshot.contextShellKind==='powershell'&&snapshot.contextText.includes('Selfcheck')&&snapshot.contextActions.includes('switch-workspace')&&snapshot.contextActions.includes('copy-cwd')&&snapshot.contextActions.includes('reuse-cwd')&&snapshot.diagnosticsReady&&snapshot.diagnosticsState==='cancelled'&&snapshot.diagnosticsWorkspaceCwd==='1'&&snapshot.diagnosticsProfile==='Windows PowerShell'&&snapshot.diagnosticsShellKind==='powershell'&&snapshot.diagnosticsJobId==='job-slow'&&snapshot.diagnosticsProcessId==='4321'&&snapshot.diagnosticsSessionId==='job-slow'&&snapshot.diagnosticsCwdSource==='workspace'&&snapshot.diagnosticsProfileSource==='configured'&&snapshot.diagnosticsShellIntegrationStatus==='process'&&snapshot.diagnosticsEncoding==='utf-8'&&snapshot.diagnosticsStdinBytes===12&&snapshot.diagnosticsStdinClosed==='1'&&snapshot.diagnosticsCanWriteStdin==='0'&&snapshot.diagnosticsOutputLines>=3&&snapshot.diagnosticsOutputBytes>0&&snapshot.diagnosticsBlocks>=3&&snapshot.diagnosticsHistoryCount>=3&&snapshot.diagnosticsTruncated==='1'&&['run','job','cwd','profile','shell','pid','session','cwd-source','profile-source','shell-integration','encoding','exit','stdin','output','history'].every(kind=>snapshot.diagnosticKinds.includes(kind))&&snapshot.diagnosticValues.some(value=>String(value).includes('lines'))&&snapshot.promptText.includes('sao_auto')&&snapshot.promptTitle.includes('Windows PowerShell')&&snapshot.statusAfterBad.state==='error'&&snapshot.statusAfterBad.exitCode==='7'&&snapshot.statusAfterBad.durationMs==='9'&&snapshot.statusAfterBad.stderrTruncated==='1'&&String(snapshot.statusAfterBad.flags||'').includes('stderr truncated')&&snapshot.recentCount>=3&&snapshot.recentLabels.includes('slow-command')&&snapshot.recentInputValue==='echo terminal-ok'&&snapshot.commandActionCount>=15&&snapshot.commandActionLabels.includes('▶')&&snapshot.commandActionTypes.includes('copy-command')&&snapshot.commandActionTypes.includes('copy-output')&&snapshot.commandActionTypes.includes('copy-cwd')&&snapshot.commandMetaCount>=36&&snapshot.commandMetaText.some(text=>text.includes('Windows PowerShell')&&text.includes('sao_auto'))&&snapshot.commandMetaText.some(text=>text.includes('exit 7')&&text.includes('stderr truncated'))&&snapshot.commandMetaText.some(text=>text.includes('pid 4321')&&text.includes('session job'))&&snapshot.commandMetaText.some(text=>text.includes('cwd workspace')&&text.includes('profile configured'))&&snapshot.commandMetaText.some(text=>text.includes('si process')&&text.includes('enc utf-8'))&&snapshot.commandMetaText.some(text=>text.includes('stdin bytes'))&&snapshot.commandDataset.includes('bad-command')&&snapshot.commandCwdDataset.includes('E:/VC/SAO-UI/sao_auto')&&snapshot.commandProfileDataset.includes('Windows PowerShell')&&snapshot.commandWorkspaceSourceDataset.includes('selfcheck')&&snapshot.commandJobDataset.includes('job-slow')&&snapshot.commandProcessDataset.includes('4321')&&snapshot.commandSessionDataset.includes('job-slow')&&snapshot.commandCwdSourceDataset.includes('workspace')&&snapshot.commandProfileSourceDataset.includes('configured')&&snapshot.commandShellIntegrationDataset.includes('process')&&snapshot.commandEncodingDataset.includes('utf-8')&&snapshot.commandStdinDataset.includes('12')&&snapshot.commandExitCodeDataset.includes('7')&&snapshot.commandDurationDataset.includes('9')&&String(snapshot.commandCopyOutputCandidate||'').includes('bad')&&snapshot.selectorValue==='Windows PowerShell'&&snapshot.createdTermProfile==='Windows PowerShell'&&snapshot.lastCommand==='slow-command'&&snapshot.lastCwd==='E:/VC/SAO-UI/sao_auto'&&snapshot.lastProfile==='Windows PowerShell'&&snapshot.lastShellKind==='powershell'&&snapshot.lastJobId==='job-slow'&&snapshot.lastProcessId==='4321'&&snapshot.lastSessionId==='job-slow'&&snapshot.lastCwdSource==='workspace'&&snapshot.lastProfileSource==='configured'&&snapshot.lastShellIntegrationStatus==='process'&&snapshot.lastEncoding==='utf-8'&&snapshot.lastStdinBytes==='12'&&snapshot.lastStdinClosed==='1'&&Number(snapshot.lastOutputLines)>=3&&Number(snapshot.lastOutputBytes)>0&&snapshot.lastDurationMs==='7'&&snapshot.lastStdoutTruncated==='0'&&snapshot.lastStderrTruncated==='0'&&snapshot.payloadCwd==='E:/VC/SAO-UI/sao_auto'&&snapshot.payloadProfile==='Windows PowerShell'&&snapshot.writePayloadData==='hello stdin\n'&&snapshot.writeBytes===12&&snapshot.closeStdinPayload===true&&snapshot.closeStdinEcho&&snapshot.closeStdinResult===true;
+    snapshot.pass=snapshot.okExit===0&&snapshot.badExit===7&&snapshot.stopped&&snapshot.slowIgnored&&snapshot.blockCount>=3&&snapshot.hasDone&&snapshot.hasError&&snapshot.hasCancelled&&snapshot.hasTruncatedNote&&snapshot.hasInputEcho&&snapshot.statusState==='cancelled'&&snapshot.statusWorkspace==='sao_auto'&&snapshot.statusWorkspaceCwd==='1'&&snapshot.statusWorkspaceSource==='selfcheck'&&snapshot.statusWorkspaceAutoDetected==='1'&&snapshot.statusProfile==='Windows PowerShell'&&snapshot.statusShellKind==='powershell'&&snapshot.statusJobId==='job-slow'&&snapshot.statusProcessId==='4321'&&snapshot.statusSessionId==='job-slow'&&snapshot.statusCwdSource==='workspace'&&snapshot.statusProfileSource==='configured'&&snapshot.statusShellIntegrationStatus==='process'&&snapshot.statusEncoding==='utf-8'&&snapshot.statusStdinBytes==='12'&&snapshot.statusStdinClosed==='1'&&snapshot.statusExitCode===''&&snapshot.statusDurationMs==='7'&&snapshot.statusStdoutTruncated==='0'&&snapshot.statusStderrTruncated==='0'&&snapshot.statusFinishedAt==='2026-06-27T00:00:02Z'&&snapshot.contextReady&&snapshot.contextWorkspace==='sao_auto'&&snapshot.contextCwd==='E:/VC/SAO-UI/sao_auto'&&snapshot.contextSource==='selfcheck'&&snapshot.contextAutoDetected==='1'&&snapshot.contextWorkspaceCwd==='1'&&snapshot.contextProfile==='Windows PowerShell'&&snapshot.contextShellKind==='powershell'&&snapshot.contextText.includes('Selfcheck')&&snapshot.contextActions.includes('switch-workspace')&&snapshot.contextActions.includes('copy-cwd')&&snapshot.contextActions.includes('reuse-cwd')&&snapshot.diagnosticsReady&&snapshot.diagnosticsState==='cancelled'&&snapshot.diagnosticsWorkspaceCwd==='1'&&snapshot.diagnosticsProfile==='Windows PowerShell'&&snapshot.diagnosticsShellKind==='powershell'&&snapshot.diagnosticsJobId==='job-slow'&&snapshot.diagnosticsProcessId==='4321'&&snapshot.diagnosticsSessionId==='job-slow'&&snapshot.diagnosticsCwdSource==='workspace'&&snapshot.diagnosticsProfileSource==='configured'&&snapshot.diagnosticsShellIntegrationStatus==='process'&&snapshot.diagnosticsEncoding==='utf-8'&&snapshot.diagnosticsStdinBytes===12&&snapshot.diagnosticsStdinClosed==='1'&&snapshot.diagnosticsCanWriteStdin==='0'&&snapshot.diagnosticsOutputLines>=3&&snapshot.diagnosticsOutputBytes>0&&snapshot.diagnosticsBlocks>=3&&snapshot.diagnosticsHistoryCount>=3&&snapshot.diagnosticsTruncated==='1'&&snapshot.diagnosticsHealth==='warn'&&snapshot.diagnosticsRunnable==='1'&&snapshot.diagnosticsSyncProtected>=1&&snapshot.protectedSyncProtected>=1&&snapshot.protectedSyncActiveRunning&&snapshot.protectedSyncDecision==='protected-running'&&snapshot.protectedRunningCwd==='E:/VC/SAO-UI/sao_auto'&&['run','job','cwd','profile','shell','pid','session','cwd-source','profile-source','shell-integration','encoding','exit','stdin','output','history'].every(kind=>snapshot.diagnosticKinds.includes(kind))&&snapshot.diagnosticValues.some(value=>String(value).includes('lines'))&&snapshot.promptText.includes('sao_auto')&&snapshot.promptTitle.includes('Windows PowerShell')&&snapshot.statusAfterBad.state==='error'&&snapshot.statusAfterBad.exitCode==='7'&&snapshot.statusAfterBad.durationMs==='9'&&snapshot.statusAfterBad.stderrTruncated==='1'&&String(snapshot.statusAfterBad.flags||'').includes('stderr truncated')&&snapshot.recentCount>=3&&snapshot.recentLabels.includes('slow-command')&&snapshot.recentInputValue==='echo terminal-ok'&&snapshot.commandActionCount>=15&&snapshot.commandActionLabels.includes('▶')&&snapshot.commandActionTypes.includes('copy-command')&&snapshot.commandActionTypes.includes('copy-output')&&snapshot.commandActionTypes.includes('copy-cwd')&&snapshot.commandMetaCount>=36&&snapshot.commandMetaText.some(text=>text.includes('Windows PowerShell')&&text.includes('sao_auto'))&&snapshot.commandMetaText.some(text=>text.includes('exit 7')&&text.includes('stderr truncated'))&&snapshot.commandMetaText.some(text=>text.includes('pid 4321')&&text.includes('session job'))&&snapshot.commandMetaText.some(text=>text.includes('cwd workspace')&&text.includes('profile configured'))&&snapshot.commandMetaText.some(text=>text.includes('si process')&&text.includes('enc utf-8'))&&snapshot.commandMetaText.some(text=>text.includes('stdin bytes'))&&snapshot.commandDataset.includes('bad-command')&&snapshot.commandCwdDataset.includes('E:/VC/SAO-UI/sao_auto')&&snapshot.commandProfileDataset.includes('Windows PowerShell')&&snapshot.commandWorkspaceSourceDataset.includes('selfcheck')&&snapshot.commandJobDataset.includes('job-slow')&&snapshot.commandProcessDataset.includes('4321')&&snapshot.commandSessionDataset.includes('job-slow')&&snapshot.commandCwdSourceDataset.includes('workspace')&&snapshot.commandProfileSourceDataset.includes('configured')&&snapshot.commandShellIntegrationDataset.includes('process')&&snapshot.commandEncodingDataset.includes('utf-8')&&snapshot.commandStdinDataset.includes('12')&&snapshot.commandExitCodeDataset.includes('7')&&snapshot.commandDurationDataset.includes('9')&&String(snapshot.commandCopyOutputCandidate||'').includes('bad')&&snapshot.selectorValue==='Windows PowerShell'&&snapshot.createdTermProfile==='Windows PowerShell'&&snapshot.lastCommand==='slow-command'&&snapshot.lastCwd==='E:/VC/SAO-UI/sao_auto'&&snapshot.lastProfile==='Windows PowerShell'&&snapshot.lastShellKind==='powershell'&&snapshot.lastJobId==='job-slow'&&snapshot.lastProcessId==='4321'&&snapshot.lastSessionId==='job-slow'&&snapshot.lastCwdSource==='workspace'&&snapshot.lastProfileSource==='configured'&&snapshot.lastShellIntegrationStatus==='process'&&snapshot.lastEncoding==='utf-8'&&snapshot.lastStdinBytes==='12'&&snapshot.lastStdinClosed==='1'&&Number(snapshot.lastOutputLines)>=3&&Number(snapshot.lastOutputBytes)>0&&snapshot.lastDurationMs==='7'&&snapshot.lastStdoutTruncated==='0'&&snapshot.lastStderrTruncated==='0'&&snapshot.payloadCwd==='E:/VC/SAO-UI/sao_auto'&&snapshot.payloadProfile==='Windows PowerShell'&&snapshot.writePayloadData==='hello stdin\n'&&snapshot.writeBytes===12&&snapshot.closeStdinPayload===true&&snapshot.closeStdinEcho&&snapshot.closeStdinResult===true&&snapshot.runtimeSnapshot&&snapshot.runtimeSnapshot.cwdMatchesWorkspace&&snapshot.runtimeSnapshot.health==='warn'&&snapshot.runtimeSnapshot.runnable&&snapshot.runtimeSnapshot.stopEnabled===false&&snapshot.runtimeSnapshot.restartEnabled===true&&snapshot.runtimeSnapshot.commandBlocks>=3&&snapshot.runtimeSnapshot.workspaceSync.protected>=1&&snapshot.runtimeSnapshot.blocks.some(block=>block.command==='slow-command'&&block.state==='cancelled');
     return snapshot;
   }finally{
     call=oldCall;
     config.workspace=oldWorkspace;
     config.terminal=oldTerminal;
+    _lastTerminalWorkspaceRoot=oldLastTerminalWorkspaceRoot;
+    _lastTerminalWorkspaceSync=oldLastTerminalWorkspaceSync;
     renderTerminalProfileSelector();
     _activeTermId=oldActive;
     if(defaultOut){

@@ -15329,9 +15329,11 @@ console.log("command palette quick access helpers ok");
            and "data-terminal-diagnostic=\"shell-integration\"" in html
            and "data-terminal-diagnostic=\"encoding\"" in html
            and "function _terminalWorkspaceSource()" in html
-           and "function _terminalRuntimeFields(result,block)" in html
-           and "function _terminalContextMeta(meta)" in html
-           and "function _updateTerminalContextBar(meta,state)" in html
+            and "function _terminalRuntimeFields(result,block)" in html
+            and "function terminalRuntimeSnapshot()" in html
+            and "window.terminalRuntimeSnapshot=terminalRuntimeSnapshot" in html
+            and "function _terminalContextMeta(meta)" in html
+            and "function _updateTerminalContextBar(meta,state)" in html
            and "function _terminalOutputStats(out)" in html
            and "function _setTerminalDiagnosticPill(host,kind,label,value,state,title)" in html
            and "function _updateTerminalDiagnostics(meta,state)" in html
@@ -15346,9 +15348,12 @@ console.log("command palette quick access helpers ok");
            and "strip.dataset.shellIntegrationStatus=runtime.shellIntegrationStatus;" in html
            and "strip.dataset.encoding=runtime.encoding;" in html
            and "strip.dataset.commandBlocks=String(stats.blocks);" in html
-           and "strip.dataset.historyCount=String(historyCount);" in html
-           and "strip.dataset.truncated=truncation?'1':'0';" in html
-           and "function terminalCurrentCwd()" in html
+            and "strip.dataset.historyCount=String(historyCount);" in html
+            and "strip.dataset.truncated=truncation?'1':'0';" in html
+            and "strip.dataset.health=finalState==='error'?'error'" in html
+            and "strip.dataset.runnable=workspaceCwd&&profile?'1':'0';" in html
+            and "strip.dataset.workspaceSyncProtected=String" in html
+            and "function terminalCurrentCwd()" in html
             and "function copyTerminalCwd()" in html
             and "function useTerminalCwdAsWorkspace()" in html
             and "data-terminal-status=\"workspace\"" in html
@@ -15406,6 +15411,9 @@ console.log("command palette quick access helpers ok");
             and "window.copyTerminalCwd=copyTerminalCwd;" in html
             and "window.useTerminalCwdAsWorkspace=useTerminalCwdAsWorkspace;" in html
             and "window._updateTerminalContextBar=_updateTerminalContextBar;" in html
+            and "stop.dataset.enabled=run&&!run.cancelled?'1':'0';" in html
+            and "restart.dataset.enabled=hasCommand?'1':'0';" in html
+            and "stop.setAttribute('aria-disabled'" in html
             and "block.dataset.command=cmd;" in html
             and "view.block.dataset.cwd=cwd;" in html
             and "view.block.dataset.profile=profile;" in html
@@ -15423,6 +15431,11 @@ console.log("command palette quick access helpers ok");
             and "diagnosticsOutputLines" in html
             and "diagnosticsHistoryCount" in html
             and "diagnosticsTruncated==='1'" in html
+            and "diagnosticsHealth==='warn'" in html
+            and "diagnosticsRunnable==='1'" in html
+            and "protectedSyncDecision==='protected-running'" in html
+            and "runtimeSnapshot.workspaceSync.protected>=1" in html
+            and "runtimeSnapshot.blocks.some(block=>block.command==='slow-command'" in html
             and "['run','job','cwd','profile','shell','pid','session','cwd-source','profile-source','shell-integration','encoding','exit','stdin','output','history'].every" in html
             and "commandCwdDataset.includes('E:/VC/SAO-UI/sao_auto')" in html
             and "commandActionCount>=15" in html
@@ -15815,6 +15828,10 @@ console.log("frontend built-in language fallback behavior ok");
            and "workspace-switcher-source" in html
            and "dataset.workspaceSource" in html
            and "_lastTerminalWorkspaceRoot" in html
+           and "_lastTerminalWorkspaceSync" in html
+           and "decision:'protected-running'" in html
+           and "syncProtected:Number" in html
+           and "syncDecisions:Array.isArray" in html
            and "terminalSyncCwd" in html
            and "terminalSyncStatusWorkspaceCwd" in html
            and "terminalSyncContextWorkspaceCwd" in html
