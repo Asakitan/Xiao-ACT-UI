@@ -4581,9 +4581,9 @@ def test_phase1_ai_editor_regressions() -> None:
            'class="modal settings-modal preferences-workbench settings-vscode-calm"' in html
            and 'data-panel="settings" data-i18n-title="settings" title="Settings"' in html
            and 'data-settings-manage-icon="gear"' in html
-           and 'fill="none" data-settings-manage-icon="gear"' in html
-           and 'stroke-linejoin="round"' in html
-           and '<circle cx="10" cy="10" r="2.85"' in html
+           and 'data-settings-manage-style="codicon-gear"' in html
+           and 'viewBox="0 0 16 16" fill="currentColor"' in html
+           and 'fill-rule="evenodd"' in html
            and 'id="settings-details-toggle" data-settings-icon-action="1"' in html
            and "const SETTINGS_DETAILS_STORAGE_KEY='sao.aiEditor.settings.details.v1';" in html
            and "function settingsApplyDetails(open)" in html
@@ -4805,9 +4805,10 @@ def test_phase1_ai_editor_regressions() -> None:
            'class="ab-icon activity-manage" data-panel="settings"' in html
            and 'title="Settings"' in html
            and 'data-settings-manage-icon="gear"' in html
-           and 'fill="none" data-settings-manage-icon="gear"' in html
-           and 'stroke-linejoin="round"' in html
-           and '<circle cx="10" cy="10" r="2.85"' in html
+           and 'data-settings-manage-style="codicon-gear"' in html
+           and 'viewBox="0 0 16 16" fill="currentColor"' in html
+           and 'fill-rule="evenodd"' in html
+           and '<circle cx="10" cy="10" r="2.85"' not in html
            and 'class="ab-icon theme-toggle"' not in html
            and 'title="Toggle Theme" onclick="toggleTheme()"' not in html
            and "function toggleTheme()" in html
