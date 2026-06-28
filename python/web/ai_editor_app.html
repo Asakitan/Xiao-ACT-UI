@@ -2485,6 +2485,13 @@ pre.code-block { overflow:visible; }
 .ext-settings-active-filters button:hover { color:var(--fg); border-color:var(--fg-accent); }
 .ext-settings-empty { display:none; grid-column:1 / -1; color:var(--fg-dim); font-size:11px; padding:3px 0 1px; }
 .ext-settings-result-summary { grid-column:1 / -1; color:var(--fg-dim); font:11px var(--mono); min-height:16px; }
+.ext-settings-virtual-summary { grid-column:1 / -1; display:none; align-items:center; gap:6px; flex-wrap:wrap;
+  color:var(--fg-dim); font:10px var(--mono); min-height:20px; }
+.ext-settings-virtual-summary.open { display:flex; }
+.ext-settings-virtual-summary .virtual-chip { display:inline-flex; align-items:center; max-width:260px; min-height:18px;
+  padding:1px 6px; border:1px solid var(--border); border-radius:999px; background:var(--bg3); color:var(--fg-dim);
+  overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.ext-settings-virtual-summary .virtual-chip.pending { color:var(--fg-warning); border-color:color-mix(in srgb,var(--fg-warning) 52%,var(--border)); }
 .ext-settings-insight { grid-column:1 / -1; display:flex; flex-wrap:wrap; gap:5px; margin-top:-2px; }
 .ext-settings-insight-chip { display:inline-flex; align-items:center; min-height:20px; max-width:260px; padding:1px 7px;
   border:1px solid var(--border); background:var(--bg3); color:var(--fg-dim); border-radius:999px;
@@ -25762,6 +25769,8 @@ function settingsUiSelfCheckSnapshot(){
     hasExtensionStructuredHints:!!document.querySelector('.ext-setting-structured-hint'),
     hasExtensionEnumActions:!!document.querySelector('.ext-setting-enum-choice-actions button[data-enum-choice-action]'),
     hasExtensionPerformanceStatus:!!$('ext-settings-perf'),
+    hasExtensionVirtualSummary:!!$('ext-settings-virtual-summary'),
+    hasExtensionVirtualActions:!!($('ext-settings-load-visible')&&$('ext-settings-load-all')),
     extensionPerformance:typeof extensionSettingRenderStats==='function'?extensionSettingRenderStats():{},
     extensionVirtualization:typeof extensionSettingVirtualizationStats==='function'?extensionSettingVirtualizationStats($('ext-settings-container')):{},
     hasExtensionAutoVirtualization:!!(main&&main.dataset&&main.dataset.extSettingsVirtualScroll==='1'),
@@ -25815,6 +25824,9 @@ window.settingsHasReviewFilter=settingsHasReviewFilter;
 window.extensionSettingRenderStats=extensionSettingRenderStats;
 window.scheduleExtensionSettingsFilter=scheduleExtensionSettingsFilter;
 window.extensionSettingPreheatLazyRows=extensionSettingPreheatLazyRows;
+window.extensionSettingLoadVisiblePendingRows=extensionSettingLoadVisiblePendingRows;
+window.extensionSettingLoadAllPendingRows=extensionSettingLoadAllPendingRows;
+window.renderExtensionSettingVirtualSummary=renderExtensionSettingVirtualSummary;
 const SETTINGS_SCOPE_FILTERS={
   editor:['editor','format','formatter','suggest','hover','minimap','folding','sticky scroll','diff','diagnostic','language override'],
   files:['files','save','auto save','trim trailing','final newline'],
@@ -29825,11 +29837,13 @@ function renderExtensionSettingPerformanceStatus(){
   const lazy=Number(stats.lazyControls||0),hydrated=Number(stats.hydratedControls||0);
   const totalRows=Number(stats.totalRows||rows),pendingRows=Number(stats.pendingRows||0);
   el.textContent=rows+(totalRows&&totalRows!==rows?'/'+totalRows:'')+' rows · '+sections+' sections · render '+renderMs+'ms'+(filterMs?' · filter '+filterMs+'ms':'')+(pendingRows?' · pending '+pendingRows:'')+(lazy?' · lazy '+hydrated+'/'+lazy:'');
-  el.title='Extension Settings render and filter timing';
+  const virtual=Number(stats.virtualSections||0);
+  el.title='Extension Settings render and filter timing'+(virtual?' · '+virtual+' virtualized section'+(virtual===1?'':'s'):'');
 }
 function extensionSettingSetRenderStats(stats){
   _extensionSettingRenderStats=Object.assign({},_extensionSettingRenderStats||{},stats||{});
   renderExtensionSettingPerformanceStatus();
+  if(typeof renderExtensionSettingVirtualSummary==='function')renderExtensionSettingVirtualSummary();
 }
 function extensionSettingVirtualizationStats(container){
   const root=container||$('ext-settings-container');
@@ -29852,6 +29866,7 @@ function extensionSettingUpdateVirtualStats(container){
     pendingRows:stats.pendingRows,
     virtualSections:stats.virtualSections,
   });
+  if(typeof renderExtensionSettingVirtualSummary==='function')renderExtensionSettingVirtualSummary();
   return stats;
 }
 function extensionSettingInsertBeforeMore(inner,row){
@@ -29906,6 +29921,27 @@ function extensionSettingAppendPendingSectionRows(container,anchor,count){
   }
   if(!section)return 0;
   return extensionSettingAppendVirtualRows(section,count||EXTENSION_SETTINGS_SECTION_ROW_BATCH);
+}
+function extensionSettingAppendVisibleSectionRows(container,countPerSection){
+  const root=container||$('ext-settings-container');
+  const sections=extensionSettingVisibleVirtualSections(root);
+  let added=0;
+  sections.forEach(section=>{added+=extensionSettingAppendVirtualRows(section,countPerSection||EXTENSION_SETTINGS_SECTION_ROW_BATCH)});
+  return added;
+}
+function extensionSettingLoadVisiblePendingRows(){
+  const container=$('ext-settings-container');
+  const added=extensionSettingAppendVisibleSectionRows(container,EXTENSION_SETTINGS_SECTION_ROW_BATCH);
+  if(added)applyExtensionSettingsFilter();
+  else renderExtensionSettingVirtualSummary();
+  return added;
+}
+function extensionSettingLoadAllPendingRows(){
+  const container=$('ext-settings-container');
+  const added=extensionSettingEnsureAllRowsRendered(container);
+  if(added)applyExtensionSettingsFilter();
+  else renderExtensionSettingVirtualSummary();
+  return added;
 }
 function extensionSettingNearScrollEnd(scroller,threshold){
   if(!scroller)return false;
@@ -29962,6 +29998,27 @@ function extensionSettingInstallSectionVirtualRows(section,inner,rowFactories){
     inner.appendChild(more);
   }
   extensionSettingAppendVirtualRows(section,factories.length>EXTENSION_SETTINGS_INITIAL_SECTION_ROWS?EXTENSION_SETTINGS_INITIAL_SECTION_ROWS:factories.length);
+}
+function renderExtensionSettingVirtualSummary(){
+  const host=$('ext-settings-virtual-summary');if(!host)return;
+  const stats=extensionSettingVirtualizationStats($('ext-settings-container'));
+  host.innerHTML='';
+  const pending=Number(stats.pendingRows||0);
+  host.classList.toggle('open',!!(stats.totalRows||stats.renderedRows));
+  if(!host.classList.contains('open'))return;
+  const add=(label,value,cls)=>{
+    const chip=document.createElement('span');
+    chip.className='virtual-chip'+(cls?' '+cls:'');
+    chip.textContent=label+': '+value;
+    host.appendChild(chip);
+  };
+  add('Rendered',String(stats.renderedRows||0)+' / '+String(stats.totalRows||0),pending?'pending':'');
+  add('Pending',String(pending),pending?'pending':'');
+  add('Virtual sections',String(stats.virtualSections||0),'');
+  add('Batch',String(EXTENSION_SETTINGS_SECTION_ROW_BATCH),'');
+  host.title=pending
+    ? 'Extension Settings are partially materialized. Use Load More or Load All to render pending rows.'
+    : 'All extension Settings rows are materialized.';
 }
 function extensionSettingDynamicSuggestionCache(container){
   if(_extensionSettingDynamicSuggestionCache&&_extensionSettingDynamicSuggestionCache.container===container)return _extensionSettingDynamicSuggestionCache;
@@ -30103,10 +30160,12 @@ function updateExtensionSettingSectionSummary(section,stats){
   const visible=Number(data.visible||0),total=Number(data.total||0);
   const modified=Number(data.modified||0),invalid=Number(data.invalid||0);
   const hidden=Number(data.hidden||0);
+  const pending=extensionSettingVirtualSectionPending(section);
   const extras=[];
   if(modified)extras.push(modified+' modified');
   if(invalid)extras.push(invalid+' invalid');
   if(hidden)extras.push(hidden+' hidden');
+  if(pending)extras.push(pending+' pending');
   summary.textContent=base+(total?' · '+visible+'/'+total:'')+(extras.length?' · '+extras.join(' · '):'');
 }
 function extensionSettingCurrentFilterToken(query){
@@ -30392,10 +30451,16 @@ function renderExtensionSettingFilterState(visibleRows,totalRows,stats){
   }
   const summary=$('ext-settings-result-summary');
   if(summary)summary.textContent=extensionSettingResultSummary(visibleRows,totalRows,stats);
+  renderExtensionSettingVirtualSummary();
   renderExtensionSettingInsight(stats);
   ['ext-settings-prev-result','ext-settings-next-result'].forEach(id=>{const btn=$(id);if(btn)btn.disabled=!visibleRows});
   const modifiedBtn=$('ext-settings-first-modified');if(modifiedBtn)modifiedBtn.disabled=!(Number(stats.modifiedVisible)||0);
   const errorBtn=$('ext-settings-first-error');if(errorBtn)errorBtn.disabled=!(Number(stats.invalidVisible)||0);
+  const virtualStats=extensionSettingVirtualizationStats($('ext-settings-container'));
+  const pending=Number(virtualStats.pendingRows||0);
+  const visiblePending=extensionSettingVisibleVirtualSections($('ext-settings-container')).length;
+  const loadVisible=$('ext-settings-load-visible');if(loadVisible)loadVisible.disabled=!pending||!visiblePending;
+  const loadAll=$('ext-settings-load-all');if(loadAll)loadAll.disabled=!pending;
   const resetBtn=$('ext-settings-reset-visible');if(resetBtn)resetBtn.disabled=!(Number(stats.resettableVisible)||0);
 }
 function extensionSettingsQuery(){
@@ -30941,6 +31006,7 @@ async function renderExtensionSettings(){
   const perf=document.createElement('span');perf.className='ext-settings-perf';perf.id='ext-settings-perf';
   const activeFilters=document.createElement('div');activeFilters.className='ext-settings-active-filters';activeFilters.id='ext-settings-active-filters';
   const resultSummary=document.createElement('div');resultSummary.className='ext-settings-result-summary';resultSummary.id='ext-settings-result-summary';
+  const virtualSummary=document.createElement('div');virtualSummary.className='ext-settings-virtual-summary';virtualSummary.id='ext-settings-virtual-summary';
   const resultInsight=document.createElement('div');resultInsight.className='ext-settings-insight';resultInsight.id='ext-settings-insight';
   const resultActions=document.createElement('div');resultActions.className='ext-settings-filter-actions';resultActions.id='ext-settings-filter-actions';
   const addResultAction=(id,label,title,handler)=>{
@@ -30950,12 +31016,20 @@ async function renderExtensionSettings(){
   addResultAction('ext-settings-next-result','Next','Focus next visible extension setting',()=>extensionSettingFocusVisibleRow(1));
   addResultAction('ext-settings-first-modified','First Modified','Focus first visible modified extension setting',()=>extensionSettingFocusFirstModifiedSetting());
   addResultAction('ext-settings-first-error','First Error','Focus first visible invalid extension setting',()=>extensionSettingFocusFirstInvalidSetting());
+  addResultAction('ext-settings-load-visible','Load More','Render the next batch in each visible virtualized Settings section',()=>{
+    const added=extensionSettingLoadVisiblePendingRows();
+    if(added)showToast('Loaded '+added+' extension setting row'+(added===1?'':'s'),'info',1400);
+  });
+  addResultAction('ext-settings-load-all','Load All','Render all pending extension Settings rows',()=>{
+    const added=extensionSettingLoadAllPendingRows();
+    if(added)showToast('Loaded '+added+' pending extension setting row'+(added===1?'':'s'),'info',1600);
+  });
   addResultAction('ext-settings-reset-visible','Reset Visible Modified','Reset modified extension settings currently visible after filtering',async()=>{
     const count=await extensionSettingResetVisibleModifiedSettings();
     if(count)showToast('Reset '+count+' visible modified extension setting'+(count===1?'':'s'),'info');
   });
   const emptyState=document.createElement('div');emptyState.className='ext-settings-empty';emptyState.id='ext-settings-empty';
-  filter.appendChild(categorySelect);filter.appendChild(scopeSelect);filter.appendChild(targetSelect);filter.appendChild(modifiedLabel);filter.appendChild(hiddenLabel);filter.appendChild(filterButton);filter.appendChild(clearButton);filter.appendChild(count);filter.appendChild(perf);filter.appendChild(filterMenu);filter.appendChild(activeFilters);filter.appendChild(resultSummary);filter.appendChild(resultInsight);filter.appendChild(resultActions);filter.appendChild(emptyState);
+  filter.appendChild(categorySelect);filter.appendChild(scopeSelect);filter.appendChild(targetSelect);filter.appendChild(modifiedLabel);filter.appendChild(hiddenLabel);filter.appendChild(filterButton);filter.appendChild(clearButton);filter.appendChild(count);filter.appendChild(perf);filter.appendChild(filterMenu);filter.appendChild(activeFilters);filter.appendChild(resultSummary);filter.appendChild(virtualSummary);filter.appendChild(resultInsight);filter.appendChild(resultActions);filter.appendChild(emptyState);
   fragment.appendChild(filter);
   const seenCategories=new Set();
   const orderedConfigs=configs.slice().sort((a,b)=>{

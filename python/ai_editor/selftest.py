@@ -9897,6 +9897,8 @@ console.log("frontend word separator behavior ok");
             and "result.snapshot.hasActiveNavRail" in settings_smoke_source
             and "result.snapshot.hasBuiltSettingHead" in settings_smoke_source
             and "result.snapshot.hasOnDemandSettingValueDetails" in settings_smoke_source
+            and "result.snapshot.hasExtensionVirtualSummary" in settings_smoke_source
+            and "result.snapshot.hasExtensionVirtualActions" in settings_smoke_source
             and "result.snapshot.hasDetailValueActions" in settings_smoke_source
             and "result.snapshot.hasReviewFilterActions" in settings_smoke_source
             and "result.snapshot.hasOverridesFilterToken" in settings_smoke_source
@@ -10124,13 +10126,22 @@ console.log("frontend word separator behavior ok");
             and "const EXTENSION_SETTINGS_AUTO_APPEND_THRESHOLD=420;" in html
             and "function extensionSettingInstallSectionVirtualRows(section,inner,rowFactories)" in html
             and "function extensionSettingAppendVirtualRows(section,count)" in html
+            and "function extensionSettingAppendVisibleSectionRows(container,countPerSection)" in html
+            and "function extensionSettingLoadVisiblePendingRows()" in html
+            and "function extensionSettingLoadAllPendingRows()" in html
+            and "function renderExtensionSettingVirtualSummary()" in html
             and "function extensionSettingAutoAppendPendingRows(container,reason)" in html
             and "function extensionSettingInstallAutoVirtualization(container)" in html
             and "function extensionSettingEnsureAllRowsRendered(container)" in html
             and "extensionSettingEnsureAllRowsRendered(container)" in html
             and "extensionSettingInstallAutoVirtualization(container);" in html
             and "hasExtensionAutoVirtualization" in html
+            and "hasExtensionVirtualSummary" in html
+            and "hasExtensionVirtualActions" in html
             and ".ext-settings-more" in html
+            and "ext-settings-load-visible" in html
+            and "ext-settings-load-all" in html
+            and "ext-settings-virtual-summary" in html
             and "function appendExtensionSettingEnumChoiceItems(wrap,schema,type,defaultValue,input)" in html
             and "ext-settings-perf" in html
             and "ext-setting-lazy-details" in html
@@ -10139,6 +10150,9 @@ console.log("frontend word separator behavior ok");
             and "window.extensionSettingRenderStats=extensionSettingRenderStats;" in html
             and "window.scheduleExtensionSettingsFilter=scheduleExtensionSettingsFilter;" in html
             and "window.extensionSettingPreheatLazyRows=extensionSettingPreheatLazyRows;" in html
+            and "window.extensionSettingLoadVisiblePendingRows=extensionSettingLoadVisiblePendingRows;" in html
+            and "window.extensionSettingLoadAllPendingRows=extensionSettingLoadAllPendingRows;" in html
+            and "window.renderExtensionSettingVirtualSummary=renderExtensionSettingVirtualSummary;" in html
             and "window.appendExtensionSettingStructuredAssist=appendExtensionSettingStructuredAssist;" in html
             and "window.appendExtensionSettingSchemaDetails=appendExtensionSettingSchemaDetails;" in html
             and "window.appendExtensionSettingEnumChoices=appendExtensionSettingEnumChoices;" in html
@@ -10593,6 +10607,7 @@ console.log("frontend word separator behavior ok");
             "extensionSettingVirtualSectionPending",
             "extensionSettingVisibleVirtualSections",
             "extensionSettingAppendPendingSectionRows",
+            "extensionSettingAppendVisibleSectionRows",
             "extensionSettingNearScrollEnd",
             "extensionSettingAutoAppendPendingRows",
             "extensionSettingScheduleAutoAppend",
@@ -11605,6 +11620,50 @@ assert(extensionSettingRenderStats().rows === 4
        && extensionSettingRenderStats().sections === 1
        && extensionSettingRenderStats().yields === 2,
        "settings extension render stats expose row count sections and yields");
+function makeVirtualSection(count, rendered, visible){
+  const section = {
+    dataset: { extVirtualTotal: String(count), extVirtualRendered: String(rendered || 0) },
+    style: { display: visible === false ? "none" : "" },
+    rows: [],
+    _extSettingRowFactories: [],
+    _extSettingInner: null,
+    querySelector(selector){
+      if(selector === ":scope > summary")return this.summary;
+      return null;
+    },
+  };
+  section.summary = { textContent: "Selftest Extension (0)", dataset: {} };
+  section._extSettingInner = {
+    children: section.rows,
+    appendChild(row){ section.rows.push(row); return row; },
+    insertBefore(row){ section.rows.push(row); return row; },
+    querySelector(){ return null; },
+  };
+  for(let i=0;i<count;i+=1){
+    section._extSettingRowFactories.push(() => makeSettingRow("virtual."+section.rows.length, {}));
+  }
+  return section;
+}
+const virtualSummaryA = makeVirtualSection(6, 0, true);
+const virtualSummaryB = makeVirtualSection(4, 0, false);
+const virtualSummaryContainer = {
+  querySelectorAll(selector){ return selector === "details[data-ext-settings-section]" ? [virtualSummaryA, virtualSummaryB] : []; }
+};
+assert(extensionSettingVirtualizationStats(virtualSummaryContainer).pendingRows === 10,
+       "settings virtualization stats count pending rows across sections");
+assert(extensionSettingAppendVirtualRows(virtualSummaryA, 2) === 2
+       && Number(virtualSummaryA.dataset.extVirtualRendered) === 2
+       && extensionSettingVirtualSectionPending(virtualSummaryA) === 4,
+       "settings virtualization appends a bounded section batch");
+assert(extensionSettingAppendVisibleSectionRows(virtualSummaryContainer, 2) === 2
+       && Number(virtualSummaryA.dataset.extVirtualRendered) === 4
+       && Number(virtualSummaryB.dataset.extVirtualRendered) === 0,
+       "settings virtualization appends only visible section batches");
+updateExtensionSettingSectionSummary(virtualSummaryA,{visible:4,total:6,modified:1,invalid:0,hidden:0});
+assert(virtualSummaryA.summary.textContent.indexOf("4/6") >= 0
+       && virtualSummaryA.summary.textContent.indexOf("1 modified") >= 0
+       && virtualSummaryA.summary.textContent.indexOf("2 pending") >= 0,
+       "settings section summary exposes pending virtual rows");
 assert(extensionSettingFocusFirstModifiedSetting() && focusedRow === "alpha.setting",
        "settings navigation focuses first visible modified row");
 assert(extensionSettingFocusFirstInvalidSetting() && focusedRow === "beta.setting",

@@ -264,6 +264,9 @@ async function main() {
   if (!result.snapshot.hasBuiltSettingHead || !result.snapshot.hasOnDemandSettingValueDetails) {
     throw new Error("Settings selfcheck missing row hierarchy affordances: " + JSON.stringify(result.snapshot));
   }
+  if (!result.snapshot.hasExtensionVirtualSummary || !result.snapshot.hasExtensionVirtualActions) {
+    throw new Error("Settings selfcheck missing extension virtualization controls: " + JSON.stringify(result.snapshot));
+  }
   if (!result.snapshot.hasDetailValueActions) {
     throw new Error("Settings selfcheck missing row value actions: " + JSON.stringify(result.snapshot));
   }
