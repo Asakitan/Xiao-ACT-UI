@@ -1697,6 +1697,9 @@ pre.code-block code .type { color:var(--fg-type); }
   border-color:color-mix(in srgb,var(--fg-accent) 48%,var(--border)); }
 .settings-experience-bar .experience-chip.warning { color:var(--fg-warning);
   border-color:color-mix(in srgb,var(--fg-warning) 48%,var(--border)); }
+.settings-experience-bar .experience-chip.dirty { color:var(--fg-accent);
+  border-color:color-mix(in srgb,var(--fg-accent) 52%,var(--border));
+  background:color-mix(in srgb,var(--fg-accent) 7%,var(--bg3)); }
 .settings-experience-bar .experience-actions { margin-left:auto; display:inline-flex; gap:4px; }
 .settings-experience-bar button { height:22px; padding:1px 7px; border:1px solid var(--border);
   border-radius:4px; background:var(--bg3); color:var(--fg-dim); font:11px var(--sans); cursor:pointer; }
@@ -1727,6 +1730,12 @@ pre.code-block code .type { color:var(--fg-type); }
 .settings-current-detail .detail-chip.value-state.edited { color:var(--fg-accent); border-color:color-mix(in srgb,var(--fg-accent) 48%,var(--border)); }
 .settings-current-detail .detail-chip.value-state.default { color:var(--fg-success); border-color:color-mix(in srgb,var(--fg-success) 42%,var(--border)); }
 .settings-current-detail .detail-chip.value-state.override { color:var(--fg-warning); border-color:color-mix(in srgb,var(--fg-warning) 48%,var(--border)); }
+.settings-current-detail .detail-target-note { display:grid; gap:3px; padding:6px 7px; border:1px solid var(--border);
+  border-radius:5px; background:color-mix(in srgb,var(--bg3) 62%,transparent); line-height:1.35; }
+.settings-current-detail .detail-target-note strong { font-size:11px; }
+.settings-current-detail .detail-target-note span { color:var(--fg-dim); }
+.settings-current-detail .detail-target-note.warning { border-color:color-mix(in srgb,var(--fg-warning) 45%,var(--border)); }
+.settings-current-detail .detail-target-note.active { border-color:color-mix(in srgb,var(--fg-accent) 45%,var(--border)); }
 .settings-current-detail .detail-matrix { display:grid; gap:1px; padding:3px; border:1px solid var(--border);
   border-radius:5px; background:color-mix(in srgb,var(--bg) 42%,transparent); }
 .settings-current-detail .detail-value-row { display:grid; grid-template-columns:76px minmax(0,1fr) auto; align-items:center;
@@ -4358,6 +4367,31 @@ function settingsApplyRowValue(row,mode){
   showToast((mode==='default'?'Default':'Inherited')+' applied: '+(info.meta.key||info.inputId),'info',1400);
   return true;
 }
+function settingsRevertRowValue(row){
+  row=row||settingsCurrentRow();
+  const info=settingsMetaForRow(row);
+  if(!(info&&info.input&&info.meta))return false;
+  const value=settingsPersistedValueForTarget(info.meta,currentSettingsTarget);
+  setSettingsInputValue(info.input,info.meta,value);
+  row.classList.add('highlight');
+  setTimeout(()=>row.classList.remove('highlight'),720);
+  markSettingsModified();
+  scheduleFilterSettings(0);
+  settingsShowRowDetails(row);
+  showToast('Reverted '+(info.meta.key||info.inputId)+' to persisted '+settingsTargetDisplayName(currentSettingsTarget)+' value','info',1700);
+  return true;
+}
+async function settingsSaveFocusedRow(row){
+  row=row||settingsCurrentRow();
+  if(!row)return false;
+  settingsHighlightRow(row);
+  const key=settingsRowKey(row)||settingsReviewRowLabel(row);
+  const status=$('settings-current-detail-status');
+  if(status)status.textContent='Saving '+(key||'selected setting')+'...';
+  await saveSettings();
+  if(status)status.textContent='Saved '+(key||'selected setting');
+  return true;
+}
 function settingsOpenJsonView(){
   const snapshot=JSON.stringify(config||{},null,2);
   if(typeof addTab==='function'){
@@ -4418,6 +4452,42 @@ function settingsMetaForRow(row){
     if(found)meta=found[1];
   }
   return {key,input,inputId,meta};
+}
+function settingsCurrentRow(){
+  return document.querySelector('.settings-field.settings-current,.ext-setting-row.settings-current');
+}
+function settingsPersistedValueForTarget(meta,target){
+  if(!meta)return '';
+  const targetName=settingsBackendTargetName(target);
+  if(targetName==='global')return settingsValueAtPath(config,meta.path,settingDefaultValue(meta));
+  return settingValueForTarget(meta,target);
+}
+function settingsSelectedTargetDescription(row,info,valueState){
+  const target=settingsTargetDisplayName(currentSettingsTarget);
+  if(row&&row.classList&&row.classList.contains('ext-setting-row')){
+    const ext=String((row.dataset&&row.dataset.extSettingExtension)||'Extension').trim();
+    return {title:'Extension setting',body:ext+' contributes this setting dynamically. Changes stay in the extension target view.',cls:'active'};
+  }
+  if(!(info&&info.meta))return {title:'Local setting',body:'This row is visible in '+target+' settings.',cls:''};
+  if(currentSettingsTarget==='workspace')return {title:'Editing Workspace',body:'This value overrides User settings for the active workspace. Revert restores the persisted workspace value.',cls:'warning'};
+  if(currentSettingsTarget==='extensions')return {title:'Viewing Extensions',body:'Extension-contributed rows are discovered at runtime; built-in User settings are hidden in this target.',cls:'active'};
+  if(valueState&&valueState.state==='edited')return {title:'Unsaved User edit',body:'Save writes this value to User settings. Revert restores the last persisted User value.',cls:'active'};
+  return {title:'Editing User',body:'This is the default target. Workspace values can inherit from this setting.',cls:''};
+}
+function settingsAppendTargetNote(host,row,info,valueState){
+  if(!host)return null;
+  const desc=settingsSelectedTargetDescription(row,info,valueState);
+  const note=document.createElement('div');
+  note.className='detail-target-note'+(desc.cls?' '+desc.cls:'');
+  note.dataset.settingsDetailTargetNote='1';
+  const title=document.createElement('strong');
+  title.textContent=desc.title;
+  const body=document.createElement('span');
+  body.textContent=desc.body;
+  note.appendChild(title);
+  note.appendChild(body);
+  host.appendChild(note);
+  return note;
 }
 function settingsDetailValueMatrix(row,info,current,inherited,def,key){
   const matrix=document.createElement('div');
@@ -4512,6 +4582,7 @@ function settingsShowRowDetails(row){
   const sourceChip=document.createElement('span');sourceChip.className='detail-chip';sourceChip.textContent='Source: '+settingsRowSourceLabel(row,info,valueState);host.appendChild(sourceChip);
   const scopeChip=document.createElement('span');scopeChip.className='detail-chip';scopeChip.textContent='Scope: '+scope;host.appendChild(scopeChip);
   const currentChip=document.createElement('span');currentChip.className='detail-chip';currentChip.textContent='Current: '+settingCompactDisplayValue(current,56);host.appendChild(currentChip);
+  settingsAppendTargetNote(host,row,info,valueState);
   if(info.meta){
     const inheritedChip=document.createElement('span');inheritedChip.className='detail-chip';inheritedChip.textContent='Inherited: '+settingCompactDisplayValue(inherited,44);host.appendChild(inheritedChip);
     const defaultChip=document.createElement('span');defaultChip.className='detail-chip';defaultChip.textContent='Default: '+settingCompactDisplayValue(def,44);host.appendChild(defaultChip);
@@ -4533,11 +4604,18 @@ function settingsShowRowDetails(row){
   addAction('Copy Link','Copy a direct setting link',()=>settingsCopyRowUrl(row));
   addAction('Copy Value','Copy the current setting value',()=>settingsCopyRowValue(row));
   addAction('Copy JSON','Copy this setting and current value as JSON',()=>settingsCopyRowJson(row));
+  addAction('Save Setting','Save Settings with this row selected',()=>settingsSaveFocusedRow(row),!(info&&info.input&&info.meta));
+  addAction('Revert Setting','Revert this row to the persisted value for the active target',()=>settingsRevertRowValue(row),!(info&&info.input&&info.meta));
   addAction('Use Default','Apply the default value to this setting',()=>settingsApplyRowValue(row,'default'),!(info&&info.input&&info.meta));
   addAction('Use Inherited','Apply the inherited value for the active target',()=>settingsApplyRowValue(row,'inherited'),!(info&&info.input&&info.meta));
   addAction('Clear Override','Clear this target override',()=>settingsClearRowTargetOverride(row,info.meta,info.inputId),!(info&&info.meta&&info.inputId&&settingHasTargetValue(info.meta,currentSettingsTarget)));
   addAction('JSON','Open settings.json and copy this setting id',()=>settingsConfigureRowInJson(row,key));
   host.appendChild(actions);
+  const status=document.createElement('span');
+  status.id='settings-current-detail-status';
+  status.className='detail-chip';
+  status.textContent='Ready in '+settingsTargetDisplayName(currentSettingsTarget);
+  host.appendChild(status);
 }
 function settingsHighlightRow(row){
   if(!row)return;
@@ -4586,6 +4664,8 @@ function settingsAddRowActions(row,opts){
   }
   if(opts.key&&opts.searchable)addButton('⌕','Filter to this setting',()=>settingsSearchForKey(opts.key,opts.target||currentSettingsTarget));
   if(opts.meta&&opts.inputId)addMenuItem('Use Default','Apply default value',()=>{const el=$(opts.inputId);if(el){setSettingsInputValue(el,opts.meta,settingDefaultValue(opts.meta));markSettingsModified();scheduleFilterSettings(0);showToast('Default applied: '+(opts.meta.key||opts.inputId),'info',1400)}});
+  if(opts.meta&&opts.inputId)addMenuItem('Save Setting','Save Settings with this row selected',()=>settingsSaveFocusedRow(row));
+  if(opts.meta&&opts.inputId)addMenuItem('Revert Setting','Revert this row to the persisted value for the active target',()=>settingsRevertRowValue(row));
   if(opts.meta&&opts.inputId)addMenuItem('Copy JSON','Copy JSON setting entry',()=>{
     const el=$(opts.inputId);
     const value=el?settingsInputValue(el,opts.meta):settingDefaultValue(opts.meta);
@@ -26916,6 +26996,16 @@ function installSettingsKeyboardHandlers(){
       if(key){ev.preventDefault();settingsCopyText(key,'Setting ID');}
       return;
     }
+    if(row&&(ev.ctrlKey||ev.metaKey)&&ev.key==='Enter'){
+      ev.preventDefault();
+      settingsSaveFocusedRow(row);
+      return;
+    }
+    if(row&&(ev.ctrlKey||ev.metaKey)&&ev.key==='Backspace'){
+      ev.preventDefault();
+      settingsRevertRowValue(row);
+      return;
+    }
     if(row&&ev.key==='Enter'&&ev.target===row){
       const input=row.querySelector('[data-ext-setting-input="1"],input,select,textarea,button');
       if(input){ev.preventDefault();input.focus&&input.focus();}
@@ -26929,6 +27019,7 @@ function settingsUiSelfCheckSnapshot(){
   const navItems=nav?Array.from(nav.querySelectorAll('.settings-nav-item')):[];
   const detail=$('settings-current-detail');
   const detailMatrix=detail?detail.querySelector('.detail-matrix'):null;
+  const detailTargetNote=detail?detail.querySelector('[data-settings-detail-target-note="1"]'):null;
   const builtHead=document.querySelector('.settings-built-head');
   const originalLabel=document.querySelector('.settings-field.builtin-setting > label.settings-original-label');
   const idleCurrentChip=Array.from(document.querySelectorAll('.settings-built-chip.current'))
@@ -26980,11 +27071,15 @@ function settingsUiSelfCheckSnapshot(){
     hasDetailValueMatrix:!!(detailMatrix&&detailMatrix.querySelector('[data-settings-detail-value-row="current"]')),
     hasDetailValueMatrixRows:!!(detailMatrix&&detailMatrix.querySelector('[data-settings-detail-value-row="inherited"]')&&detailMatrix.querySelector('[data-settings-detail-value-row="default"]')&&detailMatrix.querySelector('[data-settings-detail-value-row="json"]')),
     hasDetailValueMatrixActions:!!(detailMatrix&&Array.from(detailMatrix.querySelectorAll('button')).some(btn=>String(btn.textContent||'')==='Use')&&Array.from(detailMatrix.querySelectorAll('button')).some(btn=>String(btn.textContent||'')==='Copy')),
+    hasDetailTargetNote:!!(detailTargetNote&&/Editing|Extension|Local|Viewing/.test(detailTargetNote.textContent||'')),
     hasDetailValueActions:['Copy Value','Copy JSON','Use Default','Use Inherited','Clear Override'].every(label=>detailActionLabels.includes(label)),
+    hasDetailSaveRevertActions:['Save Setting','Revert Setting'].every(label=>detailActionLabels.includes(label)),
     hasDetailCopyLinkAction:detailActionLabels.includes('Copy Link'),
     hasExperienceBar:!!(experienceBar&&experienceBar.querySelector('.experience-chip')&&experienceBar.querySelector('.experience-actions button')),
     hasExperienceScopeChip:!!(experienceBar&&/User|Workspace|Extensions/.test(experienceBar.textContent||'')),
+    hasExperienceDirtyChip:!!(experienceBar&&experienceBar.querySelector('.experience-chip.dirty,.experience-chip.warning')),
     hasRowImpactSummary:!!(rowImpact&&rowImpact.querySelector('.impact-chip')),
+    hasRowSaveRevertMenu:!!Array.from(document.querySelectorAll('.settings-row-action-menu button')).find(btn=>String(btn.textContent||'')==='Save Setting')&&!!Array.from(document.querySelectorAll('.settings-row-action-menu button')).find(btn=>String(btn.textContent||'')==='Revert Setting'),
     hasSuggestedMatchesHost:!!$('settings-suggested-matches'),
     hasReviewFilterActions:['Show Modified','Show Overrides','Show Errors','Clear Review'].every(label=>reviewActionLabels.includes(label)),
     hasOverridesFilterToken:!!document.querySelector('[data-settings-filter-token="@overrides"]'),
@@ -27025,6 +27120,9 @@ window.settingsCopyRowValue=settingsCopyRowValue;
 window.settingsCopyRowJson=settingsCopyRowJson;
 window.settingsCopyRowUrl=settingsCopyRowUrl;
 window.settingsApplyRowValue=settingsApplyRowValue;
+window.settingsRevertRowValue=settingsRevertRowValue;
+window.settingsSaveFocusedRow=settingsSaveFocusedRow;
+window.settingsPersistedValueForTarget=settingsPersistedValueForTarget;
 window.settingsFocusVisibleRow=settingsFocusVisibleRow;
 window.settingsFocusBoundaryRow=settingsFocusBoundaryRow;
 window.settingsFocusPagedRow=settingsFocusPagedRow;
@@ -27484,7 +27582,15 @@ function renderSettingsExperienceBar(parsed,visible,total,stats){
   else add(String(visible)+' / '+String(total)+' groups','');
   if(stats&&stats.modified)add(String(stats.modified)+' modified','active');
   if(stats&&stats.overrides)add(String(stats.overrides)+' overrides','warning');
+  const currentRow=settingsCurrentRow();
   const current=settingsExperienceActiveRowLabel();
+  if(currentRow){
+    const info=settingsMetaForRow(currentRow);
+    const currentValue=info&&info.input&&info.meta?settingsInputValue(info.input,info.meta):settingsRowCurrentValue(currentRow);
+    const state=info&&info.meta?settingValueState(info.meta,currentValue,currentSettingsTarget):null;
+    if(state&&state.state==='edited')add('Focused row has unsaved edit','dirty');
+    else if(state&&state.state==='override')add('Focused row overrides '+settingsTargetDisplayName(currentSettingsTarget),'warning');
+  }
   if(current)add('Focused: '+current,'active');
   const actions=document.createElement('span');
   actions.className='experience-actions';

@@ -246,7 +246,7 @@ async function main() {
   await page.screenshot({ path: shotPath, fullPage: false });
   await browser.close();
 
-  const requiredActions = ["Prev", "Next", "Section", "Filter", "Copy ID", "Copy Link", "Copy Value", "Copy JSON", "Use Default", "Use Inherited", "Clear Override", "JSON"];
+  const requiredActions = ["Prev", "Next", "Section", "Filter", "Copy ID", "Copy Link", "Copy Value", "Copy JSON", "Save Setting", "Revert Setting", "Use Default", "Use Inherited", "Clear Override", "JSON"];
   const missingDetail = requiredActions.filter(action => !result.detailActions.includes(action));
   const requiredReview = ["Show Modified", "Show Overrides", "Show Errors", "Clear Review"];
   const missingReview = requiredReview.filter(action => !result.reviewActions.includes(action));
@@ -279,7 +279,7 @@ async function main() {
   if (!result.snapshot.hasExtensionQuickFilters || !result.snapshot.hasExtensionQueryHistory || !result.snapshot.hasExtensionSortControl || !result.snapshot.hasExtensionSectionActions) {
     throw new Error("Settings selfcheck missing extension interaction controls: " + JSON.stringify(result.snapshot));
   }
-  if (!result.snapshot.hasDetailValueActions || !result.snapshot.hasDetailValueMatrix || !result.snapshot.hasDetailValueMatrixRows || !result.snapshot.hasDetailValueMatrixActions) {
+  if (!result.snapshot.hasDetailValueActions || !result.snapshot.hasDetailSaveRevertActions || !result.snapshot.hasDetailTargetNote || !result.snapshot.hasDetailValueMatrix || !result.snapshot.hasDetailValueMatrixRows || !result.snapshot.hasDetailValueMatrixActions) {
     throw new Error("Settings selfcheck missing row value actions: " + JSON.stringify(result.snapshot));
   }
   if (!result.snapshot.hasDetailCopyLinkAction || !result.snapshot.hasExperienceBar || !result.snapshot.hasExperienceScopeChip || !result.snapshot.hasRowImpactSummary || !result.snapshot.hasSuggestedMatchesHost) {

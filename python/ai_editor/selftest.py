@@ -9874,11 +9874,19 @@ console.log("frontend word separator behavior ok");
             and "function settingsCopyRowJson(row)" in html
             and "function settingsApplyRowValue(row,mode)" in html
             and "function settingsDetailValueMatrix(row,info,current,inherited,def,key)" in html
+            and "function settingsPersistedValueForTarget(meta,target)" in html
+            and "function settingsRevertRowValue(row)" in html
+            and "async function settingsSaveFocusedRow(row)" in html
+            and "function settingsAppendTargetNote(host,row,info,valueState)" in html
             and "data-settings-detail-value-row" in html
+            and "data-settings-detail-target-note" in html
             and ".settings-current-detail .detail-matrix" in html
+            and ".settings-current-detail .detail-target-note" in html
             and ".settings-current-detail .detail-value-row" in html
             and "Copy Value','Copy the current setting value" in html
             and "Copy JSON','Copy this setting and current value as JSON" in html
+            and "Save Setting','Save Settings with this row selected" in html
+            and "Revert Setting','Revert this row to the persisted value for the active target" in html
             and "Use Default','Apply the default value to this setting" in html
             and "Use Inherited','Apply the inherited value for the active target" in html
             and "Clear Override','Clear this target override" in html
@@ -9998,7 +10006,11 @@ console.log("frontend word separator behavior ok");
              and "hasDetailValueMatrix" in html
              and "hasDetailValueMatrixRows" in html
              and "hasDetailValueMatrixActions" in html
+             and "hasDetailTargetNote" in html
+             and "hasDetailSaveRevertActions" in html
+             and "hasRowSaveRevertMenu" in html
              and "settings-experience-bar" in html
+             and "experience-chip.dirty" in html
              and "function renderSettingsExperienceBar(parsed,visible,total,stats)" in html
              and "function renderSettingsSuggestedMatches(parsed)" in html
              and "function renderSettingsRowImpactSummaries()" in html
@@ -10017,6 +10029,9 @@ console.log("frontend word separator behavior ok");
              and "window.settingsFilterNavCategories=settingsFilterNavCategories;" in html
              and "window.settingsUiSelfCheckSnapshot=settingsUiSelfCheckSnapshot;" in html
              and "window.settingsCopyRowUrl=settingsCopyRowUrl;" in html
+             and "window.settingsRevertRowValue=settingsRevertRowValue;" in html
+             and "window.settingsSaveFocusedRow=settingsSaveFocusedRow;" in html
+             and "window.settingsPersistedValueForTarget=settingsPersistedValueForTarget;" in html
              and "window.renderSettingsRowImpactSummaries=renderSettingsRowImpactSummaries;" in html
              and "window.renderSettingsExperienceBar=renderSettingsExperienceBar;" in html
              and "window.settingsApplyReviewFilter=settingsApplyReviewFilter;" in html
@@ -10066,6 +10081,8 @@ console.log("frontend word separator behavior ok");
             and "result.snapshot.hasExtensionSortControl" in settings_smoke_source
             and "result.snapshot.hasExtensionSectionActions" in settings_smoke_source
             and "result.snapshot.hasDetailValueActions" in settings_smoke_source
+            and "result.snapshot.hasDetailSaveRevertActions" in settings_smoke_source
+            and "result.snapshot.hasDetailTargetNote" in settings_smoke_source
             and "result.snapshot.hasDetailValueMatrix" in settings_smoke_source
             and "result.snapshot.hasDetailValueMatrixRows" in settings_smoke_source
             and "result.snapshot.hasDetailValueMatrixActions" in settings_smoke_source
@@ -10082,6 +10099,8 @@ console.log("frontend word separator behavior ok");
             and "window.settingsClearReviewFilters()" in settings_smoke_source
             and "window.settingsSearchModifiedLanguageOverride(" in settings_smoke_source
             and "\"Copy Value\"" in settings_smoke_source
+            and "\"Save Setting\"" in settings_smoke_source
+            and "\"Revert Setting\"" in settings_smoke_source
             and "\"Use Inherited\"" in settings_smoke_source
            and "settings.png" in settings_smoke_source
            and "channel: \"msedge\"" in settings_smoke_source
