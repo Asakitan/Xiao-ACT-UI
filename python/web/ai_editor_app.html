@@ -23400,21 +23400,49 @@ function workspaceSourceLabel(source){
   const raw=String(source||'').replace(/_/g,' ').trim();
   return raw?raw.replace(/\b\w/g,ch=>ch.toUpperCase()):'Workspace';
 }
-function workspaceRecentRoots(){
+function workspaceCandidateEntries(){
   const ws=workspaceSettings();
   const seen=new Set(),items=[];
-  [ws.resolved_root,ws.root,ws.configured_root,ws.last_root,...(Array.isArray(ws.recent_roots)?ws.recent_roots:[]),...(Array.isArray(ws.roots)?ws.roots:[])]
-    .forEach(root=>{
-      const value=normalizeWorkspaceRootPath(root);
-      const key=value.toLowerCase();
-      if(value&&!seen.has(key)){seen.add(key);items.push(value)}
+  const push=(root,source,label,extra)=>{
+    const value=normalizeWorkspaceRootPath(root);
+    const key=value.toLowerCase();
+    if(!value||seen.has(key))return;
+    seen.add(key);
+    items.push({
+      root:value,
+      name:pathBaseName(value),
+      source:String(source||'recent'),
+      source_label:String(label||workspaceSourceLabel(source||'recent')),
+      active:normalizeWorkspaceRootPath(currentWorkspaceRoot()).toLowerCase()===key,
+      auto_detected:!!(extra&&extra.auto_detected)
     });
+  };
+  if(Array.isArray(ws.candidates)){
+    ws.candidates.forEach(item=>{
+      if(!item||typeof item!=='object')return;
+      push(item.root,item.source,item.source_label,item);
+    });
+  }
+  [ws.resolved_root||ws.root,ws.configured_root,ws.last_root,...(Array.isArray(ws.recent_roots)?ws.recent_roots:[]),...(Array.isArray(ws.roots)?ws.roots:[])]
+    .forEach(root=>push(root,workspaceRootSourceFor(root),''));
   return items.slice(0,10);
+}
+function workspaceRecentRoots(){
+  return workspaceCandidateEntries().map(item=>item.root);
 }
 function workspaceRootSourceFor(root){
   const ws=workspaceSettings();
   const target=normalizeWorkspaceRootPath(root).toLowerCase();
   if(!target)return '';
+  if(Array.isArray(ws.candidates)){
+    const match=ws.candidates.find(item=>normalizeWorkspaceRootPath(item&&item.root).toLowerCase()===target);
+    if(match)return match.source_label||workspaceSourceLabel(match.source||'workspace');
+  }
+  if(ws.candidate_sources&&typeof ws.candidate_sources==='object'){
+    for(const [path,source] of Object.entries(ws.candidate_sources)){
+      if(normalizeWorkspaceRootPath(path).toLowerCase()===target)return workspaceSourceLabel(source);
+    }
+  }
   if(normalizeWorkspaceRootPath(ws.resolved_root||ws.root).toLowerCase()===target)return workspaceSourceLabel(ws.source||'active');
   if(normalizeWorkspaceRootPath(ws.configured_root).toLowerCase()===target)return 'Configured';
   if(normalizeWorkspaceRootPath(ws.last_root).toLowerCase()===target)return 'Last';
@@ -23484,6 +23512,8 @@ function updateWorkspaceChrome(info){
     bar.dataset.workspaceRoot=root||'';
     bar.dataset.workspaceSource=source||'';
     bar.dataset.workspaceAutoDetected=payload.auto_detected?'1':'0';
+    bar.dataset.workspaceCandidateCount=String(Array.isArray(payload.candidates)?payload.candidates.length:workspaceCandidateEntries().length);
+    bar.dataset.workspaceSelectionReason=String(payload.selection_reason||'');
     bar.title=[root,source?('Source: '+workspaceSourceLabel(source)):''].filter(Boolean).join('\n');
   }
   if(nameEl)nameEl.textContent=explorerRootName||'workspace';
@@ -23494,18 +23524,22 @@ function updateWorkspaceChrome(info){
 }
 function renderWorkspaceSwitcherList(){
   const list=$('workspace-switcher-list');if(!list)return;
-  const roots=workspaceRecentRoots();
+  const entries=workspaceCandidateEntries();
   list.innerHTML='';
-  if(!roots.length){
+  if(!entries.length){
     list.innerHTML='<div class="workspace-switcher-empty">No recent workspace roots.</div>';
     return;
   }
-  roots.forEach(root=>{
+  entries.forEach(entry=>{
+    const root=entry.root;
     const btn=document.createElement('button');
-    const active=normalizeWorkspaceRootPath(root).toLowerCase()===normalizeWorkspaceRootPath(currentWorkspaceRoot()).toLowerCase();
+    const active=!!entry.active||normalizeWorkspaceRootPath(root).toLowerCase()===normalizeWorkspaceRootPath(currentWorkspaceRoot()).toLowerCase();
     btn.type='button';btn.className='workspace-switcher-item'+(active?' active':'');
     btn.title=root;
-    btn.innerHTML=esc(root)+'<span class="workspace-switcher-source">'+esc(workspaceRootSourceFor(root))+'</span>';
+    btn.dataset.workspaceRoot=root;
+    btn.dataset.workspaceSource=entry.source||'';
+    btn.dataset.workspaceAutoDetected=entry.auto_detected?'1':'0';
+    btn.innerHTML=esc(root)+'<span class="workspace-switcher-source">'+esc(entry.source_label||workspaceRootSourceFor(root))+'</span>';
     btn.setAttribute('aria-current',active?'true':'false');
     btn.onclick=()=>setWorkspaceRoot(root);
     list.appendChild(btn);
@@ -23558,7 +23592,15 @@ function workspaceUiSelfCheckSnapshot(){
       remember_last:true,
       last_root:'E:/VC/SAO-UI',
       recent_roots:['E:/VC/SAO-UI/sao_auto/','E:/VC/SAO-UI','E:/VC/SAO-UI/sao_auto'],
-      roots:['E:/VC/vscode']
+      roots:['E:/VC/vscode'],
+      candidates:[
+        {root:'E:/VC/SAO-UI/sao_auto',name:'sao_auto',source:'active_file_git',source_label:'Active File Git',active:true,auto_detected:true},
+        {root:'E:/VC/SAO-UI',name:'SAO-UI',source:'last_root',source_label:'Last Root',active:false,auto_detected:false},
+        {root:'E:/VC/vscode',name:'vscode',source:'configured',source_label:'Configured',active:false,auto_detected:false}
+      ],
+      candidate_roots:['E:/VC/SAO-UI/sao_auto','E:/VC/SAO-UI','E:/VC/vscode'],
+      candidate_sources:{'E:/VC/SAO-UI/sao_auto':'active_file_git','E:/VC/SAO-UI':'last_root','E:/VC/vscode':'configured'},
+      selection_reason:'Active File Git: E:/VC/SAO-UI/sao_auto'
     };
     updateWorkspaceChrome(config.workspace);
     renderWorkspaceSwitcherList();
@@ -23574,9 +23616,13 @@ function workspaceUiSelfCheckSnapshot(){
       activeText:activeItem?activeItem.textContent:'',
       source:bar?bar.dataset.workspaceSource:'',
       autoDetected:bar?bar.dataset.workspaceAutoDetected:'',
+      candidateCount:bar?bar.dataset.workspaceCandidateCount:'',
+      selectionReason:bar?bar.dataset.workspaceSelectionReason:'',
       pathText:pathEl?pathEl.textContent:'',
       settingsRoot:readInputValue('s-workspace-root'),
       sourceLabel:workspaceSourceLabel('active_file_git'),
+      switcherSources:Array.from(document.querySelectorAll('#workspace-switcher-list .workspace-switcher-item')).map(btn=>btn.dataset.workspaceSource||''),
+      switcherAutoFlags:Array.from(document.querySelectorAll('#workspace-switcher-list .workspace-switcher-item')).map(btn=>btn.dataset.workspaceAutoDetected||''),
       terminalSyncRoot:terminalSync.workspaceRoot,
       terminalSyncCwd:terminalSync.terminalCwd,
       terminalSyncMatches:terminalSync.cwdMatchesWorkspace,
@@ -23590,9 +23636,14 @@ function workspaceUiSelfCheckSnapshot(){
       &&snapshot.activeText.includes('Active File Git')
       &&snapshot.source==='active_file_git'
       &&snapshot.autoDetected==='1'
+      &&snapshot.candidateCount==='3'
+      &&snapshot.selectionReason.includes('Active File Git')
       &&snapshot.pathText.includes('Active File Git')
       &&snapshot.settingsRoot===''
       &&snapshot.sourceLabel==='Active File Git'
+      &&snapshot.switcherSources[0]==='active_file_git'
+      &&snapshot.switcherSources.includes('configured')
+      &&snapshot.switcherAutoFlags[0]==='1'
       &&snapshot.terminalSyncRoot==='E:/VC/SAO-UI/sao_auto'
       &&snapshot.terminalSyncCwd==='E:/VC/SAO-UI/sao_auto'
       &&snapshot.terminalSyncMatches

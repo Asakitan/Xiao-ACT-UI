@@ -3627,6 +3627,15 @@ def test_app_settings_parity() -> None:
                and workspace_info.get("configured_root") == workspace_info.get("root")
                and workspace_info.get("recent_roots", [None])[0]
                == workspace_info.get("root")
+               and workspace_info.get("candidate_roots", [None])[0]
+               == workspace_info.get("root")
+               and workspace_info.get("candidates", [{}])[0].get("source")
+               == "configured"
+               and workspace_info.get("candidates", [{}])[0].get("active")
+               is True
+               and workspace_info.get("folders", [{}])[0].get("path")
+               == workspace_info.get("root")
+               and "Configured:" in workspace_info.get("selection_reason", "")
                and workspace_config.get("root") == workspace_info.get("root")
                and workspace_config.get("root_name") == workspace_info.get("root_name")
                and workspace_config.get("source_label") == "Configured")
@@ -3655,13 +3664,40 @@ def test_app_settings_parity() -> None:
                    and auto_info.get("source") == "active_file_git"
                    and auto_info.get("auto_detected") is True
                    and auto_info.get("configured_root") == ""
-                   and len(auto_info.get("recent_roots", [])) == 1
+                   and auto_info.get("recent_roots", [None])[0]
+                   == auto_info.get("root")
+                   and auto_info.get("recent_roots", []).count(
+                       auto_info.get("root")) == 1
+                   and auto_info.get("candidates", [{}])[0].get("source")
+                   == "active_file_git"
+                   and auto_info.get("candidates", [{}])[0].get("auto_detected")
+                   is True
+                   and any(item.get("source") == "process_cwd"
+                           for item in auto_info.get("candidates", []))
                    and opened_auto.get("workspace", {}).get("source")
                    == "active_file_git"
                    and opened_auto.get("workspace", {}).get("resolved_root")
                    == auto_info.get("root"),
                    json.dumps({"info": auto_info, "opened": opened_auto},
                               ensure_ascii=False))
+        with tempfile.TemporaryDirectory() as host_tmp:
+            os.makedirs(os.path.join(host_tmp, ".git"), exist_ok=True)
+
+            class _WorkspaceHost:
+                workspace_root = host_tmp
+
+            host_api = AIEditorAPI(_WorkspaceHost())
+            host_api.current_file = ""
+            host_info = host_api._workspace_info()
+            _check("workspace auto-detect prefers host workspace without empty active-file false positive",
+                   os.path.normcase(host_info.get("root", ""))
+                   == os.path.normcase(os.path.abspath(host_tmp))
+                   and host_info.get("source") == "host_workspace"
+                   and host_info.get("candidates", [{}])[0].get("source")
+                   == "host_workspace"
+                   and all(item.get("source") != "active_file_git"
+                           for item in host_info.get("candidates", [])),
+                   json.dumps(host_info, ensure_ascii=False))
         with tempfile.TemporaryDirectory() as env_tmp, tempfile.TemporaryDirectory() as stale_tmp:
             os.makedirs(os.path.join(env_tmp, ".git"), exist_ok=True)
             os.makedirs(os.path.join(stale_tmp, ".git"), exist_ok=True)

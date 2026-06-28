@@ -3775,8 +3775,10 @@ class AIEditorAPI:
         configured_root = self._usable_workspace_root(cfg.get("root"))
         last_root = self._usable_workspace_root(cfg.get("last_root"))
         roots = _dedupe_workspace_roots(cfg.get("roots") or [], 16)
+        candidates = self._workspace_candidate_entries(root)
         recent_roots = _dedupe_workspace_roots(
             [root, cfg.get("root"), cfg.get("last_root")]
+            + [item.get("root", "") for item in candidates]
             + list(cfg.get("recent_roots") or [])
             + list(cfg.get("roots") or []),
             10)
@@ -3787,9 +3789,24 @@ class AIEditorAPI:
             "last_root": last_root,
             "roots": roots,
             "recent_roots": recent_roots,
+            "candidate_roots": [item.get("root", "") for item in candidates],
+            "candidate_sources": {
+                item.get("root", ""): item.get("source", "")
+                for item in candidates if item.get("root")
+            },
+            "candidates": candidates,
             "root_name": os.path.basename(root.rstrip("\\/")) or root,
             "source": source,
             "source_label": source.replace("_", " ").title(),
+            "selection_reason": (
+                f"{source.replace('_', ' ').title()}: {root}" if root else ""),
+            "folders": ([{
+                "uri": f"file:///{root.replace(os.sep, '/')}",
+                "name": os.path.basename(root.rstrip("\\/")) or root,
+                "path": root,
+                "index": 0,
+                "source": source,
+            }] if root else []),
             "auto_detect": _as_bool(cfg.get("auto_detect"), True),
             "remember_last": _as_bool(cfg.get("remember_last"), True),
             "auto_detected": source not in {"configured", "last_root"},
@@ -3810,6 +3827,21 @@ class AIEditorAPI:
         expanded = os.path.abspath(os.path.expandvars(
             os.path.expanduser(path.strip().strip('"').strip("'"))))
         return expanded if os.path.isdir(expanded) else ""
+
+    @staticmethod
+    def _candidate_source_label(source: str) -> str:
+        text = str(source or "workspace").replace("_", " ").strip()
+        return text.title() if text else "Workspace"
+
+    @staticmethod
+    def _path_attr_value(owner: Any, attr: str) -> str:
+        try:
+            value = getattr(owner, attr, "")
+        except Exception:
+            return ""
+        if callable(value):
+            return ""
+        return str(value or "")
 
     @staticmethod
     def _git_root_from(path: str) -> str:
@@ -3842,13 +3874,24 @@ class AIEditorAPI:
                 env_root = self._usable_workspace_root(os.environ.get(env_name))
                 if env_root:
                     candidates.append((env_root, "environment"))
-            for attr in ("_last_opened_path", "editorFileName", "current_file"):
-                root = self._usable_workspace_root(str(getattr(self, attr, "") or ""))
+            host = self._gui_ref
+            for attr in ("workspace_root", "workspaceRoot", "project_root",
+                         "root_dir", "workspace_dir"):
+                root = self._usable_workspace_root(
+                    self._path_attr_value(host, attr))
+                if root:
+                    candidates.append((root, "host_workspace"))
+            for attr in ("_last_opened_path", "editorFileName", "current_file",
+                         "currentFile"):
+                value = self._path_attr_value(self, attr) or self._path_attr_value(
+                    host, attr)
+                root = self._usable_workspace_root(value)
                 if root:
                     candidates.append((root, "active_file"))
-                git_root = self._git_root_from(str(getattr(self, attr, "") or ""))
-                if git_root:
-                    candidates.append((git_root, "active_file_git"))
+                if value.strip():
+                    git_root = self._git_root_from(value)
+                    if git_root:
+                        candidates.append((git_root, "active_file_git"))
             for path, source in (
                     (os.getcwd(), "process_cwd"),
                     (self._repo_fallback_workspace_root(), "repo_git")):
@@ -3863,6 +3906,39 @@ class AIEditorAPI:
                 if root:
                     candidates.append((root, "configured"))
         return candidates
+
+    def _workspace_candidate_entries(self, active_root: str = "") -> List[Dict[str, Any]]:
+        entries: List[Dict[str, Any]] = []
+        seen: Set[str] = set()
+        active_norm = os.path.normcase(os.path.realpath(active_root)) if active_root else ""
+        for root, source in self._workspace_candidates():
+            if not root:
+                continue
+            norm = os.path.normcase(os.path.realpath(root))
+            if norm in seen:
+                continue
+            seen.add(norm)
+            entries.append({
+                "root": root,
+                "name": os.path.basename(root.rstrip("\\/")) or root,
+                "source": source,
+                "source_label": self._candidate_source_label(source),
+                "exists": os.path.isdir(root),
+                "active": bool(active_norm and norm == active_norm),
+                "auto_detected": source not in {"configured", "last_root"},
+            })
+        if active_root and not any(item.get("active") for item in entries):
+            entries.insert(0, {
+                "root": active_root,
+                "name": os.path.basename(active_root.rstrip("\\/")) or active_root,
+                "source": getattr(self, "_workspace_root_source", "") or "fallback",
+                "source_label": self._candidate_source_label(
+                    getattr(self, "_workspace_root_source", "") or "fallback"),
+                "exists": os.path.isdir(active_root),
+                "active": True,
+                "auto_detected": True,
+            })
+        return entries
 
     def _resolve_workspace_root(self) -> str:
         seen: Set[str] = set()
