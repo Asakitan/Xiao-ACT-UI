@@ -3317,6 +3317,12 @@ pre.code-block { overflow:visible; }
 .terminal-command-actions button:hover,.terminal-command-actions button:focus { color:var(--fg); border-color:var(--border-focus); outline:none; }
 .terminal-command-block.running .terminal-command-status { color:var(--fg-accent); }
 .terminal-command-block.error .terminal-command-status { color:var(--fg-error); }
+.terminal-command-meta { display:flex; align-items:center; flex-wrap:wrap; gap:4px; margin:2px 0 4px; color:var(--fg-dim);
+  font:10px/16px var(--mono); }
+.terminal-command-meta-chip { max-width:240px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;
+  padding:0 5px; border:1px solid color-mix(in srgb, var(--border) 78%, transparent); border-radius:999px;
+  background:color-mix(in srgb, var(--bg3) 62%, transparent); }
+.terminal-command-meta-chip.warn { color:var(--fg-warning); border-color:color-mix(in srgb, var(--fg-warning) 44%, var(--border)); }
 .terminal-command-body { color:var(--fg); white-space:pre-wrap; }
 .terminal-stdin-line { color:var(--fg-dim); }
 .terminal-stdin-line::before { content:"> "; color:var(--fg-accent); }
@@ -41696,6 +41702,79 @@ function useTerminalCwdAsWorkspace(){
   setWorkspaceRoot(cwd);
   return true;
 }
+function _terminalCommandBlockFromButton(button){
+  return button&&button.closest?button.closest('.terminal-command-block'):null;
+}
+function _terminalCommandBodyText(block){
+  const body=block&&block.querySelector?block.querySelector('.terminal-command-body'):null;
+  return body?body.textContent:'';
+}
+function copyTerminalCommandFromBlock(button){
+  const block=_terminalCommandBlockFromButton(button);
+  const cmd=block?String(block.dataset.command||''):'';
+  if(!cmd){showToast('No terminal command available.','info',1400);return false}
+  settingsCopyText(cmd,'Terminal command');
+  return true;
+}
+function copyTerminalOutputFromBlock(button){
+  const block=_terminalCommandBlockFromButton(button);
+  const text=_terminalCommandBodyText(block);
+  if(!text){showToast('No terminal output available.','info',1400);return false}
+  settingsCopyText(text,'Terminal output');
+  return true;
+}
+function copyTerminalCwdFromBlock(button){
+  const block=_terminalCommandBlockFromButton(button);
+  const cwd=block?String(block.dataset.cwd||''):'';
+  if(!cwd){showToast('No terminal cwd available.','info',1400);return false}
+  settingsCopyText(cwd,'Terminal cwd');
+  return true;
+}
+function _terminalCommandMetaItems(block,result,durationMs,state){
+  result=result&&typeof result==='object'?result:{};
+  const cwd=String(result.cwd||block&&block.dataset.cwd||currentWorkspaceRoot()||'');
+  const profile=_terminalProfileLabel(result.terminal&&typeof result.terminal==='object'?result.terminal:{profile:block&&block.dataset.profile||currentTerminalProfile()});
+  const exitCode=result.exitCode===null||result.exitCode===undefined?'':String(result.exitCode);
+  const duration=durationMs===null||durationMs===undefined?'':_formatTerminalDuration(durationMs);
+  const shellKind=String(result.terminal&&result.terminal.shellKind||'');
+  const source=String(block&&block.dataset.workspaceSource||_terminalWorkspaceSource()||'');
+  const flags=_terminalTruncationLabel(!!result.stdoutTruncated,!!result.stderrTruncated);
+  const items=[
+    ['profile',profile],
+    ['cwd',cwd],
+    ['exit',state==='running'?'running':exitCode?('exit '+exitCode):(state==='cancelled'?'cancelled':'')],
+    ['time',duration],
+    ['source',source?_terminalWorkspaceSourceLabel():'']
+  ];
+  if(shellKind)items.push(['shell',shellKind]);
+  if(flags)items.push(['flags',flags,'warn']);
+  return items.filter(item=>item[1]);
+}
+function renderTerminalCommandMeta(block,result,durationMs,state){
+  if(!block)return;
+  let meta=block.querySelector('.terminal-command-meta');
+  if(!meta){
+    meta=document.createElement('div');
+    meta.className='terminal-command-meta';
+    const head=block.querySelector('.terminal-command-head');
+    if(head&&head.nextSibling)block.insertBefore(meta,head.nextSibling);
+    else block.appendChild(meta);
+  }
+  const items=_terminalCommandMetaItems(block,result,durationMs,state);
+  meta.innerHTML='';
+  items.forEach(([kind,value,extra])=>{
+    const chip=document.createElement('span');
+    chip.className='terminal-command-meta-chip '+(extra||'');
+    chip.dataset.terminalCommandMeta=kind;
+    chip.textContent=value;
+    chip.title=kind+': '+value;
+    meta.appendChild(chip);
+  });
+  block.dataset.exitCode=result&&result.exitCode!==undefined&&result.exitCode!==null?String(result.exitCode):'';
+  block.dataset.durationMs=durationMs===null||durationMs===undefined?'':String(durationMs);
+  block.dataset.stdoutTruncated=result&&result.stdoutTruncated?'1':'0';
+  block.dataset.stderrTruncated=result&&result.stderrTruncated?'1':'0';
+}
 function _setTerminalStatus(state,text,detail,meta){
   const line=$('terminal-status-line');if(!line)return;
   meta=meta&&typeof meta==='object'?meta:{};
@@ -41783,16 +41862,19 @@ function _appendTerminalCommandBlock(out,cmd){
   line.title=cmd;
   const status=document.createElement('span');status.className='terminal-command-status';status.textContent='running';
   const actions=document.createElement('span');actions.className='terminal-command-actions';
-  const addAction=(label,title,handler)=>{
+  const addAction=(label,title,action,handler)=>{
     const btn=document.createElement('button');btn.type='button';btn.textContent=label;btn.title=title;
+    btn.dataset.terminalCommandAction=action;
     btn.onclick=ev=>{ev.preventDefault();ev.stopPropagation();handler&&handler()};
     actions.appendChild(btn);
   };
-  addAction('⧉','Copy command',()=>settingsCopyText(cmd,'Terminal command'));
-  addAction('↩','Use command in input',()=>_terminalUseRecentCommand(cmd,false));
-  addAction('▶','Run command again',()=>runTerminalCommand(cmd,{skipConfirm:true,out:_getActiveTermOutput()}));
+  addAction('⧉','Copy command','copy-command',()=>copyTerminalCommandFromBlock(actions));
+  addAction('▤','Copy output','copy-output',()=>copyTerminalOutputFromBlock(actions));
+  addAction('cwd','Copy cwd','copy-cwd',()=>copyTerminalCwdFromBlock(actions));
+  addAction('↩','Use command in input','use-command',()=>_terminalUseRecentCommand(cmd,false));
+  addAction('▶','Run command again','rerun',()=>runTerminalCommand(cmd,{skipConfirm:true,out:_getActiveTermOutput()}));
   const body=document.createElement('div');body.className='terminal-command-body';
-  head.appendChild(line);head.appendChild(status);head.appendChild(actions);block.appendChild(head);block.appendChild(body);
+  head.appendChild(line);head.appendChild(status);head.appendChild(actions);block.appendChild(head);renderTerminalCommandMeta(block,{exitCode:null},null,'running');block.appendChild(body);
   out.appendChild(block);_trimTerminalScrollback(out);out.scrollTop=out.scrollHeight;
   return {block,status,body};
 }
@@ -41888,6 +41970,7 @@ async function stopTerminalCommand(){
     block.className='terminal-command-block cancelled';
     const status=block.querySelector('.terminal-command-status');
     if(status)status.textContent='cancelled';
+    renderTerminalCommandMeta(block,{...stopResult,cwd:stopResult.cwd||run.cwd,terminal:{profile:run.profile||currentTerminalProfile()}},stopResult.durationMs,'cancelled');
   }
   _updateTerminalRecordForRun(run.command,'cancelled',{...stopResult,cwd:stopResult.cwd||run.cwd},stopResult.durationMs);
   return {cancelled:true,runId:run.id};
@@ -41959,13 +42042,14 @@ async function _pollTerminalJob(runId,jobId,out,view,started,cmd,cwd){
   for(;;){
     await new Promise(resolve=>setTimeout(resolve,120));
     const activeRun=_terminalCurrentRun(out);
+    const runProfile=(activeRun&&activeRun.profile)||currentTerminalProfile();
     if(!activeRun||activeRun.id!==runId||activeRun.cancelled){
       if(activeRun&&activeRun.id===runId)_setTerminalRun(out,null);
       view.block.className='terminal-command-block cancelled';
       view.status.textContent='cancelled';
+      renderTerminalCommandMeta(view.block,{exitCode:null,cwd,terminal:terminalProfileMetadata(runProfile)},null,'cancelled');
       return {cancelled:true,ignored:true,runId,jobId};
     }
-    const runProfile=(activeRun&&activeRun.profile)||currentTerminalProfile();
     const rawStatus=await call('execute_tool','runTerminal',JSON.stringify({command:cmd,mode:'status',jobId,sinceSeq:seq,profile:runProfile}),true);
     const status=_terminalResultValue(rawStatus);
     if(status.error&&!status.jobId)throw new Error(status.error);
@@ -41982,6 +42066,7 @@ async function _pollTerminalJob(runId,jobId,out,view,started,cmd,cwd){
       const finalState=_terminalStateForResult({...result,state});
       view.block.className='terminal-command-block '+finalState;
       view.status.textContent=[finalState==='cancelled'?'cancelled':(finalState==='timeout'?'timeout':'exit '+result.exitCode),_formatTerminalDuration(elapsed),result.cwd?('cwd '+result.cwd):cwd?('cwd '+cwd):'',_terminalTruncationLabel(result.stdoutTruncated,result.stderrTruncated)].filter(Boolean).join('  ');
+      renderTerminalCommandMeta(view.block,{...result,cwd:result.cwd||cwd},elapsed,finalState);
       _updateTerminalRecordForRun(cmd,finalState,{...result,cwd:result.cwd||cwd},elapsed);
       out.scrollTop=out.scrollHeight;
       return {...result,durationMs:elapsed,state:finalState,jobId};
@@ -42005,6 +42090,7 @@ async function runTerminalCommand(cmd,options){
       const cancelled=_appendTerminalCommandBlock(out,cmd);
       cancelled.block.className='terminal-command-block cancelled';
       cancelled.status.textContent='cancelled';
+      renderTerminalCommandMeta(cancelled.block,{exitCode:null,cwd:currentWorkspaceRoot(),terminal:terminalProfileMetadata(currentTerminalProfile())},null,'cancelled');
       _updateTerminalRecordForRun(cmd,'cancelled',{exitCode:null},null);
       return {cancelled:true};
     }
@@ -42018,6 +42104,7 @@ async function runTerminalCommand(cmd,options){
   view.block.dataset.workspaceSource=_terminalWorkspaceSource();
   view.block.dataset.workspaceCwd=_terminalCwdMatchesWorkspace(cwd)?'1':'0';
   view.block.title=['Terminal command: '+cmd,cwd?('cwd: '+cwd):'',profile?('profile: '+profile):''].filter(Boolean).join('\n');
+  renderTerminalCommandMeta(view.block,{exitCode:null,cwd,terminal:terminalProfileMetadata(profile)},null,'running');
   const runId='term-run-'+(++_terminalRunSeq);
   _setTerminalRun(out,{id:runId,command:cmd,cwd,profile,cancelled:false});
   _updateTerminalRecordForRun(cmd,'running',{exitCode:null,cwd,terminal:terminalProfileMetadata(profile)},null);
@@ -42030,6 +42117,7 @@ async function runTerminalCommand(cmd,options){
       if(activeRun&&activeRun.id===runId)_setTerminalRun(out,null);
       view.block.className='terminal-command-block cancelled';
       view.status.textContent='cancelled';
+      renderTerminalCommandMeta(view.block,{exitCode:null,cwd,terminal:terminalProfileMetadata(profile)},null,'cancelled');
       return {cancelled:true,ignored:true,runId};
     }
     const startStatus=_terminalResultValue(raw);
@@ -42047,6 +42135,7 @@ async function runTerminalCommand(cmd,options){
     const state=_terminalStateForResult(result);
     view.block.className='terminal-command-block '+state;
     view.status.textContent=[state==='timeout'?'timeout':'exit '+result.exitCode,_formatTerminalDuration(elapsed),result.cwd?('cwd '+result.cwd):'',_terminalTruncationLabel(result.stdoutTruncated,result.stderrTruncated)].filter(Boolean).join('  ');
+    renderTerminalCommandMeta(view.block,{...result,cwd:result.cwd||cwd},elapsed,state);
     _updateTerminalRecordForRun(cmd,state,result,elapsed);
     out.scrollTop=out.scrollHeight;
     return {...result,durationMs:elapsed,state};
@@ -42057,6 +42146,7 @@ async function runTerminalCommand(cmd,options){
       if(activeRun&&activeRun.id===runId)_setTerminalRun(out,null);
       view.block.className='terminal-command-block cancelled';
       view.status.textContent='cancelled';
+      renderTerminalCommandMeta(view.block,{exitCode:null,cwd,terminal:terminalProfileMetadata(profile)},elapsed,'cancelled');
       return {cancelled:true,ignored:true,runId};
     }
     _setTerminalRun(out,null);
@@ -42064,7 +42154,8 @@ async function runTerminalCommand(cmd,options){
     _appendTerminalHtml(view.body,ansiToHtml(msg)+'\n');
     view.block.className='terminal-command-block error';
     view.status.textContent='error  '+_formatTerminalDuration(elapsed);
-    const result={stdout:'',stderr:'',error:msg,exitCode:1,durationMs:elapsed,state:'error'};
+    const result={stdout:'',stderr:'',error:msg,exitCode:1,durationMs:elapsed,state:'error',cwd,terminal:terminalProfileMetadata(profile)};
+    renderTerminalCommandMeta(view.block,result,elapsed,'error');
     _updateTerminalRecordForRun(cmd,'error',result,elapsed);
     return result;
   }
@@ -42073,6 +42164,10 @@ clearTerminal=function(){const el=_getActiveTermOutput();if(el)el.innerHTML=''};
 window.clearTerminal=clearTerminal;
 window.runTerminalCommand=runTerminalCommand;
 window.copyTerminalCwd=copyTerminalCwd;
+window.copyTerminalCommandFromBlock=copyTerminalCommandFromBlock;
+window.copyTerminalOutputFromBlock=copyTerminalOutputFromBlock;
+window.copyTerminalCwdFromBlock=copyTerminalCwdFromBlock;
+window.renderTerminalCommandMeta=renderTerminalCommandMeta;
 window.useTerminalCwdAsWorkspace=useTerminalCwdAsWorkspace;
 window.terminalCurrentCwd=terminalCurrentCwd;
 window._updateTerminalContextBar=_updateTerminalContextBar;
@@ -42199,6 +42294,9 @@ async function terminalUiSelfCheckSnapshot(){
     const recentInputValue=$('term-input')?$('term-input').value:'';
     const prompt=document.querySelector('.terminal-input-prompt');
     const actionButtons=blocks.flatMap(block=>Array.from(block.querySelectorAll('.terminal-command-actions button')).map(btn=>btn.textContent));
+    const commandActionTypes=blocks.flatMap(block=>Array.from(block.querySelectorAll('.terminal-command-actions button')).map(btn=>btn.dataset.terminalCommandAction||''));
+    const commandMetaRows=blocks.map(block=>Array.from(block.querySelectorAll('.terminal-command-meta-chip')).map(chip=>({kind:chip.dataset.terminalCommandMeta||'',text:chip.textContent||''})));
+    const commandMetaText=commandMetaRows.map(row=>row.map(chip=>chip.text).join(' '));
     const contextActions=Array.from(document.querySelectorAll('#terminal-context-bar [data-terminal-context-action]')).map(btn=>btn.dataset.terminalContextAction||'');
     const snapshot={
       okExit:ok&&ok.exitCode,
@@ -42242,10 +42340,16 @@ async function terminalUiSelfCheckSnapshot(){
       recentInputValue,
       commandActionCount:actionButtons.length,
       commandActionLabels:actionButtons,
+      commandActionTypes,
+      commandMetaCount:commandMetaRows.reduce((n,row)=>n+row.length,0),
+      commandMetaText,
       commandDataset:blocks.map(block=>block.dataset.command||''),
       commandCwdDataset:blocks.map(block=>block.dataset.cwd||''),
       commandProfileDataset:blocks.map(block=>block.dataset.profile||''),
       commandWorkspaceSourceDataset:blocks.map(block=>block.dataset.workspaceSource||''),
+      commandExitCodeDataset:blocks.map(block=>block.dataset.exitCode||''),
+      commandDurationDataset:blocks.map(block=>block.dataset.durationMs||''),
+      commandCopyOutputCandidate:_terminalCommandBodyText(blocks.find(block=>(block.dataset.command||'')==='bad-command')),
       selectorValue:$('terminal-profile-select')?$('terminal-profile-select').value:'',
       createdTermProfile:selfTerm&&selfTerm.metadata?selfTerm.metadata.profile:'',
       lastCommand:defaultOut?defaultOut.dataset.lastCommand:'',
@@ -42263,7 +42367,7 @@ async function terminalUiSelfCheckSnapshot(){
       closeStdinEcho:defaultOut?defaultOut.textContent.includes('[stdin closed]'):false,
       closeStdinResult:closed&&closed.stdinClosed
     };
-    snapshot.pass=snapshot.okExit===0&&snapshot.badExit===7&&snapshot.stopped&&snapshot.slowIgnored&&snapshot.blockCount>=3&&snapshot.hasDone&&snapshot.hasError&&snapshot.hasCancelled&&snapshot.hasTruncatedNote&&snapshot.hasInputEcho&&snapshot.statusState==='cancelled'&&snapshot.statusWorkspace==='sao_auto'&&snapshot.statusWorkspaceCwd==='1'&&snapshot.statusWorkspaceSource==='selfcheck'&&snapshot.statusWorkspaceAutoDetected==='1'&&snapshot.statusProfile==='Windows PowerShell'&&snapshot.statusShellKind==='powershell'&&snapshot.statusExitCode===''&&snapshot.statusDurationMs==='7'&&snapshot.statusStdoutTruncated==='0'&&snapshot.statusStderrTruncated==='0'&&snapshot.statusFinishedAt==='2026-06-27T00:00:02Z'&&snapshot.contextReady&&snapshot.contextWorkspace==='sao_auto'&&snapshot.contextCwd==='E:/VC/SAO-UI/sao_auto'&&snapshot.contextSource==='selfcheck'&&snapshot.contextAutoDetected==='1'&&snapshot.contextWorkspaceCwd==='1'&&snapshot.contextProfile==='Windows PowerShell'&&snapshot.contextShellKind==='powershell'&&snapshot.contextText.includes('Selfcheck')&&snapshot.contextActions.includes('switch-workspace')&&snapshot.contextActions.includes('copy-cwd')&&snapshot.contextActions.includes('reuse-cwd')&&snapshot.promptText.includes('sao_auto')&&snapshot.promptTitle.includes('Windows PowerShell')&&snapshot.statusAfterBad.state==='error'&&snapshot.statusAfterBad.exitCode==='7'&&snapshot.statusAfterBad.durationMs==='9'&&snapshot.statusAfterBad.stderrTruncated==='1'&&String(snapshot.statusAfterBad.flags||'').includes('stderr truncated')&&snapshot.recentCount>=3&&snapshot.recentLabels.includes('slow-command')&&snapshot.recentInputValue==='echo terminal-ok'&&snapshot.commandActionCount>=9&&snapshot.commandActionLabels.includes('▶')&&snapshot.commandDataset.includes('bad-command')&&snapshot.commandCwdDataset.includes('E:/VC/SAO-UI/sao_auto')&&snapshot.commandProfileDataset.includes('Windows PowerShell')&&snapshot.commandWorkspaceSourceDataset.includes('selfcheck')&&snapshot.selectorValue==='Windows PowerShell'&&snapshot.createdTermProfile==='Windows PowerShell'&&snapshot.lastCommand==='slow-command'&&snapshot.lastCwd==='E:/VC/SAO-UI/sao_auto'&&snapshot.lastProfile==='Windows PowerShell'&&snapshot.lastShellKind==='powershell'&&snapshot.lastDurationMs==='7'&&snapshot.lastStdoutTruncated==='0'&&snapshot.lastStderrTruncated==='0'&&snapshot.payloadCwd==='E:/VC/SAO-UI/sao_auto'&&snapshot.payloadProfile==='Windows PowerShell'&&snapshot.writePayloadData==='hello stdin\n'&&snapshot.writeBytes===12&&snapshot.closeStdinPayload===true&&snapshot.closeStdinEcho&&snapshot.closeStdinResult===true;
+    snapshot.pass=snapshot.okExit===0&&snapshot.badExit===7&&snapshot.stopped&&snapshot.slowIgnored&&snapshot.blockCount>=3&&snapshot.hasDone&&snapshot.hasError&&snapshot.hasCancelled&&snapshot.hasTruncatedNote&&snapshot.hasInputEcho&&snapshot.statusState==='cancelled'&&snapshot.statusWorkspace==='sao_auto'&&snapshot.statusWorkspaceCwd==='1'&&snapshot.statusWorkspaceSource==='selfcheck'&&snapshot.statusWorkspaceAutoDetected==='1'&&snapshot.statusProfile==='Windows PowerShell'&&snapshot.statusShellKind==='powershell'&&snapshot.statusExitCode===''&&snapshot.statusDurationMs==='7'&&snapshot.statusStdoutTruncated==='0'&&snapshot.statusStderrTruncated==='0'&&snapshot.statusFinishedAt==='2026-06-27T00:00:02Z'&&snapshot.contextReady&&snapshot.contextWorkspace==='sao_auto'&&snapshot.contextCwd==='E:/VC/SAO-UI/sao_auto'&&snapshot.contextSource==='selfcheck'&&snapshot.contextAutoDetected==='1'&&snapshot.contextWorkspaceCwd==='1'&&snapshot.contextProfile==='Windows PowerShell'&&snapshot.contextShellKind==='powershell'&&snapshot.contextText.includes('Selfcheck')&&snapshot.contextActions.includes('switch-workspace')&&snapshot.contextActions.includes('copy-cwd')&&snapshot.contextActions.includes('reuse-cwd')&&snapshot.promptText.includes('sao_auto')&&snapshot.promptTitle.includes('Windows PowerShell')&&snapshot.statusAfterBad.state==='error'&&snapshot.statusAfterBad.exitCode==='7'&&snapshot.statusAfterBad.durationMs==='9'&&snapshot.statusAfterBad.stderrTruncated==='1'&&String(snapshot.statusAfterBad.flags||'').includes('stderr truncated')&&snapshot.recentCount>=3&&snapshot.recentLabels.includes('slow-command')&&snapshot.recentInputValue==='echo terminal-ok'&&snapshot.commandActionCount>=15&&snapshot.commandActionLabels.includes('▶')&&snapshot.commandActionTypes.includes('copy-command')&&snapshot.commandActionTypes.includes('copy-output')&&snapshot.commandActionTypes.includes('copy-cwd')&&snapshot.commandMetaCount>=15&&snapshot.commandMetaText.some(text=>text.includes('Windows PowerShell')&&text.includes('sao_auto'))&&snapshot.commandMetaText.some(text=>text.includes('exit 7')&&text.includes('stderr truncated'))&&snapshot.commandDataset.includes('bad-command')&&snapshot.commandCwdDataset.includes('E:/VC/SAO-UI/sao_auto')&&snapshot.commandProfileDataset.includes('Windows PowerShell')&&snapshot.commandWorkspaceSourceDataset.includes('selfcheck')&&snapshot.commandExitCodeDataset.includes('7')&&snapshot.commandDurationDataset.includes('9')&&String(snapshot.commandCopyOutputCandidate||'').includes('bad')&&snapshot.selectorValue==='Windows PowerShell'&&snapshot.createdTermProfile==='Windows PowerShell'&&snapshot.lastCommand==='slow-command'&&snapshot.lastCwd==='E:/VC/SAO-UI/sao_auto'&&snapshot.lastProfile==='Windows PowerShell'&&snapshot.lastShellKind==='powershell'&&snapshot.lastDurationMs==='7'&&snapshot.lastStdoutTruncated==='0'&&snapshot.lastStderrTruncated==='0'&&snapshot.payloadCwd==='E:/VC/SAO-UI/sao_auto'&&snapshot.payloadProfile==='Windows PowerShell'&&snapshot.writePayloadData==='hello stdin\n'&&snapshot.writeBytes===12&&snapshot.closeStdinPayload===true&&snapshot.closeStdinEcho&&snapshot.closeStdinResult===true;
     return snapshot;
   }finally{
     call=oldCall;

@@ -14498,12 +14498,18 @@ console.log("command palette quick access helpers ok");
     _check("terminal command UI reports state, exit code, and selfcheck",
            "terminal-status-line" in html
            and "terminal-recent-bar" in html
-           and "terminal-command-actions" in html
-           and "terminal-command-block" in html
-           and "async function runTerminalCommand(cmd,options)" in html
-           and "function stopTerminalCommand()" in html
-           and "function restartTerminalCommand()" in html
-           and "async function sendTerminalInput(text,options)" in html
+            and "terminal-command-actions" in html
+            and "terminal-command-meta" in html
+            and "terminal-command-meta-chip" in html
+            and "terminal-command-block" in html
+            and "async function runTerminalCommand(cmd,options)" in html
+            and "function copyTerminalCommandFromBlock(button)" in html
+            and "function copyTerminalOutputFromBlock(button)" in html
+            and "function copyTerminalCwdFromBlock(button)" in html
+            and "function renderTerminalCommandMeta(block,result,durationMs,state)" in html
+            and "function stopTerminalCommand()" in html
+            and "function restartTerminalCommand()" in html
+            and "async function sendTerminalInput(text,options)" in html
            and "async function _pollTerminalJob(" in html
            and "terminal-profile-select" in html
            and "terminal-stdin-line" in html
@@ -14512,9 +14518,13 @@ console.log("command palette quick access helpers ok");
            and "async function selectTerminalProfile(profile,opts)" in html
            and "window.sendTerminalInput=sendTerminalInput" in html
            and "window.selectTerminalProfile=selectTerminalProfile" in html
-           and "data-terminal-action=\"stop\"" in html
-           and "data-terminal-action=\"restart\"" in html
-           and "mode:'start'" in html
+            and "data-terminal-action=\"stop\"" in html
+            and "data-terminal-action=\"restart\"" in html
+            and "btn.dataset.terminalCommandAction=action" in html
+            and "'copy-command'" in html
+            and "'copy-output'" in html
+            and "'copy-cwd'" in html
+            and "mode:'start'" in html
            and "mode:'status'" in html
            and "mode:'write'" in html
            and "mode:'stop'" in html
@@ -14529,8 +14539,12 @@ console.log("command palette quick access helpers ok");
              and "function _terminalProfileLabel(meta)" in html
              and "function _terminalCwdMatchesWorkspace(cwd)" in html
              and "function renderTerminalRecentCommands()" in html
-             and "function _terminalRememberCommand(cmd)" in html
-             and "function _updateTerminalPrompt(meta)" in html
+            and "function _terminalRememberCommand(cmd)" in html
+              and "window.copyTerminalCommandFromBlock=copyTerminalCommandFromBlock" in html
+              and "window.copyTerminalOutputFromBlock=copyTerminalOutputFromBlock" in html
+              and "window.copyTerminalCwdFromBlock=copyTerminalCwdFromBlock" in html
+              and "window.renderTerminalCommandMeta=renderTerminalCommandMeta" in html
+              and "function _updateTerminalPrompt(meta)" in html
              and "function _terminalStateLabel(state)" in html
             and "function _terminalTruncationLabel(stdoutTruncated,stderrTruncated)" in html
             and "function _updateTerminalRecordForRun(cmd,state,result,durationMs)" in html
@@ -14596,7 +14610,7 @@ console.log("command palette quick access helpers ok");
             and "contextReady" in html
             and "contextActions.includes('copy-cwd')" in html
             and "commandCwdDataset.includes('E:/VC/SAO-UI/sao_auto')" in html
-            and "commandActionCount>=9" in html
+            and "commandActionCount>=15" in html
             and "selectorValue" in html
             and "statusAfterBad" in html
             and "statusAfterBad.stderrTruncated==='1'" in html
