@@ -4321,7 +4321,7 @@ def test_phase1_ai_editor_regressions() -> None:
            and ".settings-vscode-calm .settings-nav-summary { display:none; }" in html
            and ".settings-vscode-calm .settings-nav-memory { display:block;" in html
            and ".settings-vscode-calm .settings-control-status { display:none; }" in html
-           and ".settings-vscode-calm .settings-field.builtin-setting { grid-template-columns:minmax(320px,.76fr) minmax(360px,1fr);" in html
+           and ".settings-vscode-calm .settings-field.builtin-setting { grid-template-columns:minmax(0,1fr);" in html
            and ".settings-vscode-calm:not(.settings-details-open) .settings-secondary-action { display:none; }" in html
            and ".settings-vscode-calm .settings-main .sb-group { margin:18px 0 7px !important;" in html
            and ".settings-vscode-calm:not(.settings-details-open) .settings-inspector .settings-focus-deck { display:none; }" in html
@@ -4332,9 +4332,9 @@ def test_phase1_ai_editor_regressions() -> None:
            and ".settings-vscode-calm .settings-result-nav button { width:24px; min-width:24px;" in html
            and "aria-label=\"Previous visible setting\"" in html
            and "aria-label=\"Next visible setting\"" in html
-           and ".settings-vscode-calm .settings-shell { grid-template-columns:280px minmax(0,1fr);" in html
+           and ".settings-vscode-calm .settings-shell { grid-template-columns:300px minmax(0,1fr);" in html
            and ".settings-vscode-calm .settings-field.builtin-setting.settings-current:not(.modified)" in html
-           and ".settings-vscode-calm .settings-control-frame { max-width:560px;" in html
+           and ".settings-vscode-calm .settings-control-frame { max-width:620px;" in html
            and 'onkeydown="settingsHandleTargetTabKeydown(event)"' in html
            and "function settingsHandleTargetTabKeydown(ev)" in html
            and "function settingsMoveTargetTab(delta)" in html
@@ -9819,6 +9819,8 @@ console.log("frontend word separator behavior ok");
              and "function settingsDecorateCheckboxControl(el)" in html
              and "function settingsEnsureControlFrame(wrap,el,meta,inputId)" in html
              and "function settingsUpdateControlFrame(wrap,meta,value)" in html
+             and "function settingsCategoryLabelForKey(meta,inputId)" in html
+             and "function settingsFocusRowControl(row)" in html
              and "frame.dataset.controlKind=settingsControlKind(el,meta)" in html
              and "settingsUpdateControlFrame(wrap,meta,settingsInputValue(el,meta));" in html
              and "status.textContent=invalid?'Invalid':kindLabel+' · '+state.label+' · '+targetLabel;" in html
@@ -9885,6 +9887,9 @@ console.log("frontend word separator behavior ok");
            and "class=\"settings-main\" id=\"settings-main\"" in html
            and "data-settings-title=\"AI / Endpoint\"" in html
            and "data-settings-title=\"Editor / Files\"" in html
+           and "head.dataset.settingsRowHead='1';" in html
+           and "category.dataset.settingsCategoryLabel='1';" in html
+           and "settings-built-head-category" in html
             and "function renderSettingsNav()" in html
             and "function scrollToSettingsSection(id)" in html
             and "function settingsFocusActiveSection()" in html
@@ -9951,6 +9956,7 @@ console.log("frontend word separator behavior ok");
            and "function settingsVisibleRows()" in html
            and "function settingsFocusVisibleRow(direction)" in html
            and "function refreshSettingsDirtySummary(modifiedCount,errorCount)" in html
+           and "pill.dataset.settingsState=errorCount?'error':(modifiedCount?'modified':'clean');" in html
            and "settings-built-chip current" in html
            and "settings-built-foot" in html
            and "target.dataset.settingFootTarget='1'" in html
@@ -10192,7 +10198,7 @@ console.log("frontend word separator behavior ok");
             and "function settingsOriginalLabelText(wrap)" in html
             and "originalLabel.classList.add('settings-original-label')" in html
             and "title.textContent=settingsOriginalLabelText(wrap)||settingFriendlyName(meta,inputId)" in html
-            and "grid-template-columns:minmax(120px,auto) minmax(0,1fr) auto" in html
+            and "grid-template-columns:auto minmax(120px,auto) minmax(0,1fr) auto" in html
             and "settingsTargetDisplayName(target)+': '+String(Number(safeStats[target]||0))" in html
             and "hasResultCount" in html
             and "hasNavTreeRole" in html
@@ -10427,6 +10433,10 @@ console.log("frontend word separator behavior ok");
             and "result.snapshot.hasCalmDefaultSettingsMode" in settings_smoke_source
             and "result.snapshot.hasVsCodeWideCategoryNav" in settings_smoke_source
             and "result.snapshot.hasMoreComfortableSettingControls" in settings_smoke_source
+            and "result.snapshot.hasVsCodeListSettingFlow" in settings_smoke_source
+            and "result.snapshot.hasSettingCategoryPrefix" in settings_smoke_source
+            and "result.snapshot.hasRowHeadControlActivation" in settings_smoke_source
+            and "result.snapshot.hasQuietCleanDirtyState" in settings_smoke_source
             and "result.snapshot.hasExtensionVirtualSummary" in settings_smoke_source
             and "result.snapshot.hasExtensionVirtualActions" in settings_smoke_source
             and "result.snapshot.hasExtensionQuickFilters" in settings_smoke_source

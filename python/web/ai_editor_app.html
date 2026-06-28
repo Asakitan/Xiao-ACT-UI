@@ -2538,8 +2538,9 @@ pre.code-block { overflow:visible; }
 .settings-field.builtin-setting > label:first-child,
 .settings-field.builtin-setting > .settings-check:first-child { margin-top:0; }
 .settings-field.builtin-setting > label.settings-original-label { display:none; }
-.settings-built-head { display:grid; grid-template-columns:minmax(120px,auto) minmax(0,1fr) auto;
+.settings-built-head { display:grid; grid-template-columns:auto minmax(120px,auto) minmax(0,1fr) auto;
   align-items:center; gap:8px; min-height:22px; margin:0 0 2px; }
+.settings-built-head-category { color:var(--fg-dim); font:10px var(--mono); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .settings-built-head-title { min-width:0; color:var(--fg); font-weight:600; font-size:12px;
   overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .settings-built-head code { user-select:all; color:var(--fg-dim); background:transparent;
@@ -2671,15 +2672,16 @@ pre.code-block { overflow:visible; }
 .settings-row-action:hover,.settings-row-action:focus { color:var(--fg); border-color:var(--border-focus); outline:none; background:var(--bg-hover); }
 
 /* VS Code-style Settings editor calm mode */
-.modal.settings-modal.settings-vscode-calm { width:min(1400px, calc(100vw - 44px)); background:var(--bg); }
+.modal.settings-modal.settings-vscode-calm { width:min(1520px, calc(100vw - 44px)); background:var(--bg); }
 .settings-vscode-calm .settings-titlebar,
 .settings-vscode-calm .settings-searchbar,
-.settings-vscode-calm .settings-shell { width:min(1400px,100%); align-self:center; box-sizing:border-box; }
+.settings-vscode-calm .settings-shell { width:min(1520px,100%); align-self:center; box-sizing:border-box; }
 .settings-vscode-calm .settings-titlebar { min-height:30px; padding:5px 24px 2px; background:var(--bg); border-bottom:0; }
 .settings-vscode-calm .settings-titlebar h2 { font-size:14px; }
 .settings-vscode-calm .settings-titlebar h2::before { display:none; }
 .settings-vscode-calm .settings-title-sub { display:none; }
 .settings-vscode-calm .settings-title-route { display:none; }
+.settings-vscode-calm #settings-dirty-summary[data-settings-state="clean"] { display:none; }
 .settings-vscode-calm .settings-searchbar { position:relative; padding:5px 24px 0; gap:0; border-bottom:0; background:var(--bg); }
 .settings-vscode-calm .settings-search-row { grid-template-columns:minmax(600px,1fr) minmax(260px,auto); align-items:end; padding-bottom:8px; border-bottom:1px solid var(--border); }
 .settings-vscode-calm .settings-query-box { border-radius:2px; min-height:34px; background:var(--bg-input); }
@@ -2716,8 +2718,8 @@ pre.code-block { overflow:visible; }
 .settings-vscode-calm .settings-target-tabs button { height:30px; min-width:76px; border:0; border-bottom:1px solid transparent; border-radius:0; background:transparent; }
 .settings-vscode-calm .settings-target-tabs button.active { color:var(--fg); background:transparent; border-bottom-color:var(--fg-accent); }
 .settings-vscode-calm .settings-target-tab-count { background:transparent; border:0; padding:0; min-width:auto; }
-.settings-vscode-calm .settings-shell { grid-template-columns:280px minmax(0,1fr); background:var(--bg); border-top:0; }
-.settings-vscode-calm .settings-shell.inspecting { grid-template-columns:280px minmax(0,1fr) minmax(300px,340px); background:var(--bg); }
+.settings-vscode-calm .settings-shell { grid-template-columns:300px minmax(0,1fr); background:var(--bg); border-top:0; }
+.settings-vscode-calm .settings-shell.inspecting { grid-template-columns:300px minmax(0,1fr) minmax(300px,340px); background:var(--bg); }
 .settings-vscode-calm .settings-nav { padding:10px 8px 12px 0; border-right:1px solid var(--border); background:var(--bg); }
 .settings-vscode-calm .settings-nav-summary { display:none; }
 .settings-vscode-calm .settings-nav-memory { display:block; margin:0; padding:6px 8px 8px;
@@ -2739,18 +2741,18 @@ pre.code-block { overflow:visible; }
 .settings-vscode-calm .settings-nav-item:focus .count { color:var(--fg); }
 .settings-vscode-calm .settings-nav-item .settings-nav-meta { display:none; }
 .settings-vscode-calm .settings-nav-item .count::before { display:none; }
-.settings-vscode-calm .settings-main { padding:8px 32px 22px; }
+.settings-vscode-calm .settings-main { padding:8px 38px 22px; }
 .settings-vscode-calm .settings-main > .settings-section,
 .settings-vscode-calm .settings-main > details.settings-section,
-.settings-vscode-calm #ext-settings-container { max-width:940px; width:100%; padding:0 0 16px; border-top:0; }
+.settings-vscode-calm #ext-settings-container { max-width:1040px; width:100%; padding:0 0 16px; border-top:0; }
 .settings-vscode-calm .settings-section-overview { position:relative; top:auto; z-index:1; margin:0 0 8px; padding:15px 0 7px;
   border:0; border-bottom:1px solid color-mix(in srgb,var(--border) 62%,transparent); border-radius:0; background:transparent; backdrop-filter:none; }
 .settings-vscode-calm .settings-section-overview-title { font-size:13px; }
 .settings-vscode-calm .settings-section-overview-desc { white-space:normal; }
 .settings-vscode-calm .settings-section-overview-stats { display:none; }
 .settings-vscode-calm.settings-details-open .settings-section-overview-stats { display:flex; }
-.settings-vscode-calm .settings-field.builtin-setting { grid-template-columns:minmax(320px,.76fr) minmax(360px,1fr);
-  gap:4px 26px; min-height:56px; padding:10px 64px 10px 0; margin:0; border-left:0;
+.settings-vscode-calm .settings-field.builtin-setting { grid-template-columns:minmax(0,1fr);
+  gap:3px; min-height:58px; padding:10px 64px 10px 0; margin:0; border-left:0;
   border-bottom-color:color-mix(in srgb,var(--border) 54%,transparent); border-radius:0; cursor:default; }
 .settings-vscode-calm .settings-field.builtin-setting.modified { box-shadow:inset 2px 0 0 var(--fg-accent); padding-left:8px; background:transparent; }
 .settings-vscode-calm .settings-field.builtin-setting:hover,
@@ -2763,7 +2765,9 @@ pre.code-block { overflow:visible; }
   box-shadow:inset 2px 0 0 color-mix(in srgb,var(--border-focus) 75%,var(--fg-accent)); }
 .settings-vscode-calm .settings-field.builtin-setting:focus-visible {
   outline:1px solid color-mix(in srgb,var(--border-focus) 72%,transparent); outline-offset:-1px; }
-.settings-vscode-calm .settings-built-head { grid-template-columns:minmax(0,1fr) auto; gap:8px; }
+.settings-vscode-calm .settings-built-head { grid-template-columns:auto minmax(180px,auto) minmax(0,1fr) auto; gap:7px; cursor:default; }
+.settings-vscode-calm .settings-built-head-category { display:inline-flex; align-items:center; min-height:17px;
+  color:var(--fg-dim); font:10px var(--mono); }
 .settings-vscode-calm .settings-built-head-title { font-size:13px; }
 .settings-vscode-calm .settings-built-head code { display:none; }
 .settings-vscode-calm.settings-details-open .settings-built-head code,
@@ -2782,7 +2786,8 @@ pre.code-block { overflow:visible; }
 .settings-vscode-calm .settings-field.settings-current > .settings-row-impact,
 .settings-vscode-calm .settings-field:hover > .settings-row-impact,
 .settings-vscode-calm .settings-field:focus-within > .settings-row-impact { display:flex; }
-.settings-vscode-calm .settings-control-frame { max-width:560px; min-height:30px; border-radius:2px; padding:3px 6px; background:var(--bg-input); }
+.settings-vscode-calm .settings-field.builtin-setting > .settings-control-frame { grid-column:1; grid-row:auto; }
+.settings-vscode-calm .settings-control-frame { max-width:620px; min-height:30px; border-radius:2px; padding:3px 6px; background:var(--bg-input); }
 .settings-vscode-calm .settings-field.builtin-setting[data-setting-control-kind="textarea"] > .settings-control-frame,
 .settings-vscode-calm .settings-field.builtin-setting[data-setting-control-kind="json"] > .settings-control-frame { max-width:none; }
 .settings-vscode-calm .settings-control-status { display:none; }
@@ -5397,6 +5402,26 @@ function settingsControlKind(el,meta){
   if(el.type==='password')return 'secret';
   return 'input';
 }
+function settingsCategoryLabelForKey(meta,inputId){
+  const key=String((meta&&(meta.key||meta.path))||inputId||'');
+  const first=key.split('.')[0]||'settings';
+  const labels={
+    aiEditor:'AI',workbench:'Workbench',editor:'Editor',files:'Files',
+    terminal:'Terminal',extensions:'Extensions',mcp:'MCP',claude_code:'Claude',
+    codex:'Codex',workspace:'Workspace',customization:'Customize'
+  };
+  return labels[first]||first.replace(/[_-]+/g,' ').replace(/\b\w/g,ch=>ch.toUpperCase());
+}
+function settingsFocusRowControl(row){
+  if(!row)return false;
+  const control=row.querySelector('[data-ext-setting-input="1"],.settings-control-frame input,.settings-control-frame select,.settings-control-frame textarea,input,select,textarea');
+  if(control&&control.focus){
+    try{control.focus({preventScroll:true})}catch(e){try{control.focus()}catch(_e){}}
+    return true;
+  }
+  settingsShowRowDetails(row);
+  return false;
+}
 function settingsControlTarget(el){
   if(!el)return null;
   return el.closest('label.settings-check')||el;
@@ -5469,6 +5494,13 @@ function wrapSettingsField(inputId){
   wrap.setAttribute('aria-label',(meta.key||meta.path||inputId)+' setting');
   if(!wrap.querySelector('.settings-built-head')){
     const head=document.createElement('div');head.className='settings-built-head';
+    head.dataset.settingsRowHead='1';
+    head.title='Focus this setting value';
+    head.onclick=ev=>{if(!(ev.target&&ev.target.closest&&ev.target.closest('button,a,code')))settingsFocusRowControl(wrap)};
+    const category=document.createElement('span');category.className='settings-built-head-category';
+    category.dataset.settingsCategoryLabel='1';
+    category.textContent=settingsCategoryLabelForKey(meta,inputId);
+    head.appendChild(category);
     const title=document.createElement('span');title.className='settings-built-head-title';
     title.textContent=settingsOriginalLabelText(wrap)||settingFriendlyName(meta,inputId);head.appendChild(title);
     const key=document.createElement('code');key.textContent=meta.key||meta.path||inputId;head.appendChild(key);
@@ -5592,6 +5624,9 @@ function refreshSettingsDirtySummary(modifiedCount,errorCount){
   if(pill){
     pill.classList.toggle('modified',modifiedCount>0&&errorCount===0);
     pill.classList.toggle('error',errorCount>0);
+    pill.dataset.settingsState=errorCount?'error':(modifiedCount?'modified':'clean');
+    pill.dataset.settingsModifiedCount=String(modifiedCount);
+    pill.dataset.settingsErrorCount=String(errorCount);
     pill.textContent=label;
   }
   const footer=$('settings-footer-summary');
@@ -28379,6 +28414,9 @@ function settingsUiSelfCheckSnapshot(){
   const iconActions=Array.from(document.querySelectorAll('.settings-title-actions [data-settings-icon-action="1"]'));
   const toolbarButtons=Array.from(document.querySelectorAll('.settings-toolbar-strip .settings-top-action'));
   const hiddenToolbarButtons=toolbarButtons.filter(btn=>String(getComputedStyle(btn).display)==='none');
+  const rowHead=document.querySelector('[data-settings-row-head="1"]');
+  const rowCategory=document.querySelector('[data-settings-category-label="1"]');
+  const dirtySummary=$('settings-dirty-summary');
   return {
     pass:!!(modal&&nav&&main&&inspector&&$('settings-nav-filter')&&$('settings-density-toggle')&&detail
       &&typeof settingsFilterNavCategories==='function'
@@ -28441,6 +28479,10 @@ function settingsUiSelfCheckSnapshot(){
     hasLeanSettingControls:!!(controlFrame&&parseFloat(getComputedStyle(controlFrame).borderRadius||'0')<=3),
     hasBoundedSettingControlWidth:!!(controlFrame&&parseFloat(getComputedStyle(controlFrame).maxWidth||'0')>=500),
     hasMoreComfortableSettingControls:!!(controlFrame&&parseFloat(getComputedStyle(controlFrame).maxWidth||'0')>=560&&parseFloat(getComputedStyle(controlFrame).minHeight||'0')>=30),
+    hasVsCodeListSettingFlow:!!(builtHead&&controlFrame&&String(getComputedStyle(builtHead).gridTemplateColumns||'').split(' ').length>=3&&String(getComputedStyle(controlFrame).gridColumnStart||'')==='1'),
+    hasSettingCategoryPrefix:!!(rowCategory&&rowCategory.textContent&&typeof settingsCategoryLabelForKey==='function'),
+    hasRowHeadControlActivation:!!rowHead&&String(rowHead.dataset.settingsRowHead)==='1'&&typeof settingsFocusRowControl==='function',
+    hasQuietCleanDirtyState:!!(dirtySummary&&dirtySummary.dataset.settingsState!==undefined),
     hasReducedSettingsTitleNoise:!!$('settings-title-sub')&&String(getComputedStyle($('settings-title-sub')).display)==='none',
     hasHumanizedSaveAffordance:!!(footerSave&&String(getComputedStyle(footerSave).minWidth||'0')&&parseFloat(getComputedStyle(footerSave).minWidth||'0')>=60),
     hasQuietInspectorFocusDeck:!!(focusDeck&&String(getComputedStyle(focusDeck).display)==='none'),
