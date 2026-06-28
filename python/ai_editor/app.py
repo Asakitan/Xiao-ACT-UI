@@ -17102,6 +17102,7 @@ _launch_lock = threading.Lock()
 _launch_inflight_started_at = 0.0
 _LAUNCH_INFLIGHT_TTL_SECONDS = 8.0
 _LAUNCH_CHILD_GRACE_SECONDS = 90.0
+_LAUNCH_CHILD_WINDOW_GRACE_SECONDS = 12.0
 _LAUNCH_STATE_FILE = os.path.join(os.path.expanduser("~"), ".sao", "ai_editor_launch.json")
 
 
@@ -17324,12 +17325,25 @@ def _clear_launch_state_for_pid(pid: int) -> None:
 
 def _recent_child_launch_alive() -> bool:
     global _running_child_process
+    def _child_has_window_or_grace(pid: int, age: float) -> bool:
+        if age <= _LAUNCH_CHILD_WINDOW_GRACE_SECONDS:
+            return True
+        if _find_ai_editor_window(skip_current_process=True):
+            return True
+        _append_ai_editor_log(
+            f"recent child pid={pid} alive but no usable window after {age:.1f}s; allowing relaunch")
+        return False
     try:
         proc = _running_child_process
         if proc is not None and proc.poll() is None:
-            _append_ai_editor_log(
-                f"launch request ignored; child process alive pid={proc.pid}")
-            return True
+            state = _read_launch_state()
+            started_at = float(state.get("started_at") or 0.0)
+            age = max(0.0, time.time() - started_at) if started_at else 0.0
+            if _child_has_window_or_grace(int(proc.pid), age):
+                _append_ai_editor_log(
+                    f"launch request ignored; child process alive pid={proc.pid} age={age:.1f}s")
+                return True
+            return False
         _running_child_process = None
     except Exception:
         _running_child_process = None
@@ -17338,7 +17352,7 @@ def _recent_child_launch_alive() -> bool:
     started_at = float(state.get("started_at") or 0.0)
     if pid and _process_alive(pid):
         age = max(0.0, time.time() - started_at) if started_at else 0.0
-        if age <= _LAUNCH_CHILD_GRACE_SECONDS:
+        if age <= _LAUNCH_CHILD_GRACE_SECONDS and _child_has_window_or_grace(pid, age):
             _append_ai_editor_log(
                 f"launch request ignored; recent child process alive pid={pid} age={age:.1f}s")
             return True

@@ -3281,6 +3281,26 @@ pre.code-block { overflow:visible; }
 .settings-vscode-calm .settings-nav-workbench-badge.modified strong,
 .settings-vscode-calm .settings-nav-workbench-badge.active strong { color:var(--fg-accent); }
 .settings-vscode-calm .settings-nav-workbench-badge.error strong { color:var(--fg-error); }
+.settings-vscode-calm .settings-nav-result-groups {
+  display:grid; gap:3px; padding:0 8px 9px 0; margin:0 0 8px;
+  border-bottom:1px solid color-mix(in srgb,var(--border) 54%,transparent);
+}
+.settings-vscode-calm .settings-nav-result-title {
+  padding:0 0 4px; color:var(--fg-dim); font:10px var(--mono); text-transform:uppercase;
+}
+.settings-vscode-calm .settings-nav-result-group {
+  display:grid; grid-template-columns:minmax(0,1fr) auto; align-items:center; gap:8px;
+  min-height:24px; padding:3px 7px; border:1px solid transparent; border-radius:2px;
+  background:transparent; color:var(--fg-dim); text-align:left; font:11px var(--sans); cursor:pointer;
+}
+.settings-vscode-calm .settings-nav-result-group:hover:not(:disabled),
+.settings-vscode-calm .settings-nav-result-group:focus:not(:disabled) {
+  color:var(--fg); border-color:var(--border-focus); background:var(--bg-hover); outline:none;
+}
+.settings-vscode-calm .settings-nav-result-group.active { color:var(--fg-accent); }
+.settings-vscode-calm .settings-nav-result-group.error { color:var(--fg-error); }
+.settings-vscode-calm .settings-nav-result-group:disabled { opacity:.45; cursor:default; }
+.settings-vscode-calm .settings-nav-result-group strong { color:var(--fg); font:600 11px var(--mono); }
 .settings-row-action:disabled { opacity:.35; cursor:default; }
 .settings-row-action-menu { display:none; position:absolute; top:26px; right:0; min-width:174px; padding:4px;
   border:1px solid var(--border); border-radius:4px; background:var(--bg2); box-shadow:var(--shadow); }
@@ -29269,6 +29289,12 @@ function renderSettingsNav(){
   workbench.dataset.settingsNavWorkbench='1';
   workbench.setAttribute('aria-label','Settings workbench summary');
   nav.appendChild(workbench);
+  const resultGroups=document.createElement('div');
+  resultGroups.className='settings-nav-result-groups';
+  resultGroups.id='settings-nav-result-groups';
+  resultGroups.dataset.settingsNavResultGroups='1';
+  resultGroups.setAttribute('aria-label','Settings result groups');
+  nav.appendChild(resultGroups);
   const commandbar=document.createElement('div');
   commandbar.className='settings-nav-commandbar';
   commandbar.id='settings-nav-commandbar';
@@ -29467,6 +29493,70 @@ function renderSettingsNavWorkbenchSummary(parsed,visible,total,state,tokens){
   addBadge('Errors',errors,errors?'error':'');
   addBadge('Filters',tokens.length,tokens.length?'active':'');
   host.appendChild(badges);
+}
+function settingsResultGroupRows(kind){
+  const rows=settingsVisibleRows();
+  kind=String(kind||'').toLowerCase();
+  if(kind==='common'){
+    const keys=new Set(SETTINGS_COMMONLY_USED_KEYS.map(key=>String(key).toLowerCase()));
+    return rows.filter(row=>keys.has(settingsRowKey(row).toLowerCase()));
+  }
+  if(kind==='modified')return settingsReviewRows('modified');
+  if(kind==='errors')return settingsReviewRows('error');
+  if(kind==='overrides')return settingsReviewRows('override');
+  if(kind==='extensions')return rows.filter(row=>row.dataset&&row.dataset.extSettingKey);
+  if(kind==='json')return rows.filter(row=>settingsRowFilterText(row).includes('json'));
+  return rows;
+}
+function settingsApplyResultGroup(kind){
+  kind=String(kind||'').toLowerCase();
+  if(kind==='all'){settingsClearSearch();return true}
+  if(kind==='common'){settingsUseSearchHint('@common');return true}
+  if(kind==='modified'||kind==='errors'||kind==='overrides'){
+    return settingsApplyReviewFilter(kind==='errors'?'error':kind);
+  }
+  if(kind==='extensions'){selectSettingsTarget('extensions',{preserveSearch:true,focusSearch:true});return true}
+  if(kind==='json'){settingsUseSearchHint('@tag:json');return true}
+  if(kind==='keybindings'){settingsCloseThen(openKeybindings);return true}
+  return false;
+}
+function renderSettingsResultGroups(parsed,visible,total,state){
+  const host=$('settings-nav-result-groups');
+  if(!host)return;
+  state=state||{};
+  const rows=settingsVisibleRows();
+  const groups=[
+    {kind:'all',label:'All Results',count:rows.length,cls:''},
+    {kind:'common',label:'Commonly Used',count:settingsResultGroupRows('common').length,cls:''},
+    {kind:'modified',label:'Modified',count:(state.modified||settingsReviewRows('modified')).length,cls:'active'},
+    {kind:'errors',label:'Errors',count:(state.errors||settingsReviewRows('error')).length,cls:'error'},
+    {kind:'overrides',label:'Overrides',count:(state.overrides||settingsReviewRows('override')).length,cls:'active'},
+    {kind:'extensions',label:'Extension Settings',count:settingsResultGroupRows('extensions').length,cls:currentSettingsTarget==='extensions'?'active':''},
+    {kind:'json',label:'JSON Settings',count:settingsResultGroupRows('json').length,cls:''},
+    {kind:'keybindings',label:'Keyboard Shortcuts',count:0,cls:''},
+  ];
+  host.innerHTML='';
+  host.dataset.settingsNavResultGroups='1';
+  host.dataset.settingsNavResultVisible=String(rows.length);
+  host.dataset.settingsNavResultTotal=String(Number(total)||0);
+  host.dataset.settingsNavResultActive=parsed&&parsed.active?'1':'0';
+  host.dataset.settingsNavResultKinds=groups.map(item=>item.kind).join(',');
+  const title=document.createElement('div');
+  title.className='settings-nav-result-title';
+  title.textContent='Results';
+  host.appendChild(title);
+  groups.forEach(item=>{
+    const btn=document.createElement('button');
+    btn.type='button';
+    btn.className='settings-nav-result-group'+(item.cls?' '+item.cls:'');
+    btn.dataset.settingsResultGroup=item.kind;
+    btn.disabled=item.kind!=='keybindings'&&item.kind!=='all'&&Number(item.count||0)===0;
+    btn.title=item.kind==='keybindings'?'Open keyboard shortcuts':'Show '+item.label.toLowerCase();
+    btn.onclick=ev=>{ev.preventDefault();if(!btn.disabled)settingsApplyResultGroup(item.kind)};
+    const label=document.createElement('span');label.textContent=item.label;
+    const count=document.createElement('strong');count.textContent=item.kind==='keybindings'?'⌘':String(item.count||0);
+    btn.appendChild(label);btn.appendChild(count);host.appendChild(btn);
+  });
 }
 function updateSettingsNavCounts(){
   const nav=$('settings-nav');if(!nav)return;
@@ -29736,6 +29826,8 @@ function settingsUiSelfCheckSnapshot(){
   const topActiveFilters=$('settings-active-filters');
   const navStatus=$('settings-nav-status');
   const navWorkbench=$('settings-nav-workbench-summary');
+  const navResultGroups=$('settings-nav-result-groups');
+  const navResultButtons=navResultGroups?Array.from(navResultGroups.querySelectorAll('[data-settings-result-group]')):[];
   const navActiveFilters=$('settings-nav-active-filters');
   const navReview=$('settings-nav-review');
   const navReviewButtons=navReview?Array.from(navReview.querySelectorAll('[data-settings-nav-review-action]')):[];
@@ -29793,6 +29885,8 @@ function settingsUiSelfCheckSnapshot(){
     hasSidebarSettingsCommandbar:!!(commandbar&&commandbar.dataset.settingsCommandSurface==='sidebar'&&commandLabels.includes('Settings JSON{}')&&commandLabels.includes('Keyboard Shortcuts⌘')&&commandLabels.includes('Details⋯')),
     hasSidebarWorkbenchSummary:!!(navWorkbench&&navWorkbench.dataset.settingsNavWorkbench==='1'&&navWorkbench.dataset.settingsNavTarget&&navWorkbench.querySelector('.settings-nav-workbench-title')&&navWorkbench.querySelector('.settings-nav-workbench-badges')),
     hasSidebarWorkbenchSearchState:!!(navWorkbench&&navWorkbench.dataset.settingsNavQuery!==undefined&&navWorkbench.dataset.settingsNavActiveSection!==undefined&&navWorkbench.dataset.settingsNavVisible!==undefined),
+    hasSidebarResultGroups:!!(navResultGroups&&navResultGroups.dataset.settingsNavResultGroups==='1'&&navResultGroups.dataset.settingsNavResultKinds&&navResultButtons.length>=7),
+    hasSidebarResultGroupActions:navResultButtons.some(btn=>btn.dataset.settingsResultGroup==='modified')&&navResultButtons.some(btn=>btn.dataset.settingsResultGroup==='keybindings')&&navResultButtons.some(btn=>btn.dataset.settingsResultGroup==='json'),
     hasNoVisibleTopSettingsBar:!!(settingsFrame&&settingsFrame.classList.contains('settings-vscode-calm')&&(!settingsTitlebar||String(getComputedStyle(settingsTitlebar).display)==='none')&&(!topSearchbar||String(getComputedStyle(topSearchbar).display)==='none')),
     hasCompactSearchScopeStack:!!(searchRow&&scopeControl&&String(getComputedStyle(searchRow).gridTemplateColumns||'').split(' ').filter(Boolean).length<=1&&String(getComputedStyle(scopeControl).justifySelf||'')==='start'),
     hasDefaultHiddenTopScope:topScopeHidden,
@@ -30078,6 +30172,9 @@ window.renderSettingsReviewBar=renderSettingsReviewBar;
 window.settingsToggleSavePreview=settingsToggleSavePreview;
 window.settingsFocusFirstReviewRow=settingsFocusFirstReviewRow;
 window.settingsFocusReviewRow=settingsFocusReviewRow;
+window.settingsApplyResultGroup=settingsApplyResultGroup;
+window.settingsResultGroupRows=settingsResultGroupRows;
+window.renderSettingsResultGroups=renderSettingsResultGroups;
 window.settingsGroupSavePreviewItems=settingsGroupSavePreviewItems;
 window.settingsApplyReviewFilter=settingsApplyReviewFilter;
 window.settingsClearReviewFilters=settingsClearReviewFilters;
@@ -30904,6 +31001,7 @@ function renderSettingsNavStatus(parsed,visible,total){
   const state=typeof settingsComputeReviewState==='function'?settingsComputeReviewState():{modified:[],overrides:[],errors:[],visible:Number(visible)||0,target:settingsTargetDisplayName(currentSettingsTarget)};
   const tokens=[...new Set((parsed&&parsed.tokens)||[])];
   renderSettingsNavWorkbenchSummary(parsed,visible,total,state,tokens);
+  renderSettingsResultGroups(parsed,visible,total,state);
   if(status){
     status.innerHTML='';
     status.dataset.settingsNavStatus='1';
@@ -41584,9 +41682,34 @@ function clearTransientInteractionBlockers(reason){
     overlay.classList.remove('active');
     overlay.dataset.lastClearedReason=String(reason||'pointer');
   }
-  if(document.body.classList.contains('window-closing')&&['startup','focus','pointer','dragend','drop','escape','close-fallback','watchdog'].includes(String(reason||''))){
+  if(document.body.classList.contains('window-closing')&&['startup','focus','pointer','pointermove','wheel','visibility','pywebviewready','dragend','drop','escape','close-fallback','watchdog'].includes(String(reason||''))){
     document.body.classList.remove('window-closing');
   }
+}
+function aiEditorInteractionHealthSnapshot(){
+  const overlay=$('drag-overlay');
+  const bodyStyle=getComputedStyle(document.body);
+  const overlayStyle=overlay?getComputedStyle(overlay):null;
+  const frames=Array.from(document.querySelectorAll('iframe.provider-webview-frame,.extension-webview-view-host iframe'));
+  const centerX=Math.max(0,Math.floor((window.innerWidth||0)/2));
+  const centerY=Math.max(0,Math.floor((window.innerHeight||0)/2));
+  const topEl=document.elementFromPoint?document.elementFromPoint(centerX,centerY):null;
+  const snapshot={
+    bodyWindowClosing:document.body.classList.contains('window-closing'),
+    bodyPointerEvents:String(bodyStyle.pointerEvents||''),
+    dragOverlayActive:!!(overlay&&overlay.classList.contains('active')),
+    dragOverlayPointerEvents:overlayStyle?String(overlayStyle.pointerEvents||''):'',
+    bootMode:String(document.body.dataset.aiEditorBootMode||''),
+    pywebviewReady:!!window.pywebview,
+    apiReady:!!api(),
+    topElement:topEl?String((topEl.id?('#'+topEl.id):topEl.tagName)||'').toLowerCase():'',
+    providerFrameCount:frames.length,
+    providerFramesClickable:frames.every(frame=>String(getComputedStyle(frame).pointerEvents||'')!=='none'),
+    activeElement:String((document.activeElement&&(document.activeElement.id||document.activeElement.tagName))||'').toLowerCase(),
+    lastClearedReason:overlay?String(overlay.dataset.lastClearedReason||''):'',
+  };
+  snapshot.clickable=!snapshot.bodyWindowClosing&&!snapshot.dragOverlayActive&&snapshot.bodyPointerEvents!=='none'&&snapshot.providerFramesClickable;
+  return snapshot;
 }
 function scheduleTransientInteractionBlockerWatchdog(reason){
   const stamp=Date.now();
@@ -41601,11 +41724,21 @@ function scheduleTransientInteractionBlockerWatchdog(reason){
 }
 document.addEventListener('pointerdown',e=>{
   const overlay=$('drag-overlay');
-  if(overlay&&overlay.classList.contains('active')){
+  if((overlay&&overlay.classList.contains('active'))||document.body.classList.contains('window-closing')){
     clearTransientInteractionBlockers('pointer');
   }
 },true);
+document.addEventListener('pointermove',()=>{
+  const overlay=$('drag-overlay');
+  if((overlay&&overlay.classList.contains('active'))||document.body.classList.contains('window-closing'))clearTransientInteractionBlockers('pointermove');
+},true);
+document.addEventListener('wheel',()=>{
+  const overlay=$('drag-overlay');
+  if((overlay&&overlay.classList.contains('active'))||document.body.classList.contains('window-closing'))clearTransientInteractionBlockers('wheel');
+},true);
 window.addEventListener('focus',()=>clearTransientInteractionBlockers('focus'));
+window.addEventListener('visibilitychange',()=>{if(document.visibilityState==='visible')clearTransientInteractionBlockers('visibility')});
+window.addEventListener('pywebviewready',()=>clearTransientInteractionBlockers('pywebviewready'));
 window.addEventListener('pageshow',()=>clearTransientInteractionBlockers('startup'));
 window.addEventListener('load',()=>clearTransientInteractionBlockers('startup'));
 document.addEventListener('DOMContentLoaded',()=>clearTransientInteractionBlockers('startup'));
@@ -43860,12 +43993,15 @@ window.toggleMinimap=toggleMinimap;
 window.refreshExplorer=refreshExplorer;window.refreshPremiumGuide=refreshPremiumGuide;
 window.closeFindBar=closeFindBar;window.doReplace=doReplace;window.doReplaceAll=doReplaceAll;
 window.toggleExtInstall=toggleExtInstall;
+window.aiEditorInteractionHealthSnapshot=aiEditorInteractionHealthSnapshot;
 
 let _aiEditorBootStarted=false;
 function bootAiEditorUi(reason){
   if(_aiEditorBootStarted)return;
   _aiEditorBootStarted=true;
   try{document.body.dataset.aiEditorBootMode=reason||'pywebview'}catch(_e){}
+  clearTransientInteractionBlockers(reason||'startup');
+  scheduleTransientInteractionBlockerWatchdog('watchdog');
   init().catch(e=>{
     console.error('[init]',e);
     setStatus('AI Editor startup failed: '+(e&&e.message?e.message:e));

@@ -985,6 +985,8 @@ def test_app_settings_parity() -> None:
     from ai_editor.app import (
         AIEditorAPI,
         _AI_EDITOR_WORKSPACE_ROOT_ENV,
+        _LAUNCH_CHILD_WINDOW_GRACE_SECONDS,
+        _recent_child_launch_alive,
         _activate_window_handle,
         _normalize_window_geometry,
         _window_client_area_ok,
@@ -2204,6 +2206,28 @@ def test_app_settings_parity() -> None:
         _check("AI Editor activation rejects unresponsive existing window",
                _window_handle_responding(123, _FakeHungUser32()) is False
                and _window_handle_responding(123, _FakeResponsiveUser32()) is True)
+    old_launch_state = {
+        "pid": 424242,
+        "started_at": time.time() - (_LAUNCH_CHILD_WINDOW_GRACE_SECONDS + 8),
+    }
+    young_launch_state = {
+        "pid": 424242,
+        "started_at": time.time() - 1,
+    }
+    with patch("ai_editor.app._running_child_process", None), \
+            patch("ai_editor.app._process_alive", return_value=True), \
+            patch("ai_editor.app._find_ai_editor_window", return_value=0), \
+            patch("ai_editor.app._read_launch_state",
+                  return_value=old_launch_state):
+        _check("AI Editor relaunches when child is alive but no usable window appears",
+               _recent_child_launch_alive() is False)
+    with patch("ai_editor.app._running_child_process", None), \
+            patch("ai_editor.app._process_alive", return_value=True), \
+            patch("ai_editor.app._find_ai_editor_window", return_value=0), \
+            patch("ai_editor.app._read_launch_state",
+                  return_value=young_launch_state):
+        _check("AI Editor keeps short child launch grace before duplicate spawn",
+               _recent_child_launch_alive() is True)
     root_dir = os.path.dirname(os.path.dirname(__file__))
     panels_path = os.path.join(root_dir, "gui_modules", "sao_gui_panels_mixin.py")
     with open(panels_path, "r", encoding="utf-8") as fh:
@@ -2240,6 +2264,8 @@ def test_app_settings_parity() -> None:
             and "_launch_lock = threading.Lock()" in app_src
             and "_LAUNCH_INFLIGHT_TTL_SECONDS" in app_src
             and "_LAUNCH_CHILD_GRACE_SECONDS" in app_src
+            and "_LAUNCH_CHILD_WINDOW_GRACE_SECONDS" in app_src
+            and "recent child pid={pid} alive but no usable window" in app_src
             and "_LAUNCH_STATE_FILE" in app_src
             and "def _process_alive(pid: int)" in app_src
             and "def _recent_child_launch_alive()" in app_src
@@ -4530,6 +4556,8 @@ def test_phase1_ai_editor_regressions() -> None:
             and "hasSingleSearchTopBand" in html
             and "hasSearchOnlyTopWorkbench" in html
             and "hasSidebarSettingsCommandbar" in html
+            and "hasSidebarResultGroups" in html
+            and "hasSidebarResultGroupActions" in html
             and "hasNoVisibleTopSettingsBar" in html
             and "className='settings-nav-commandbar'" in html
             and "commandbar.dataset.settingsCommandSurface='sidebar';" in html
@@ -4537,6 +4565,13 @@ def test_phase1_ai_editor_regressions() -> None:
             and ".settings-vscode-calm > .settings-titlebar," in html
             and ".settings-vscode-calm > .settings-searchbar" in html
             and ".settings-vscode-calm .settings-nav-commandbar" in html
+            and ".settings-vscode-calm .settings-nav-result-groups" in html
+            and "function settingsResultGroupRows(kind)" in html
+            and "function settingsApplyResultGroup(kind)" in html
+            and "function renderSettingsResultGroups(parsed,visible,total,state)" in html
+            and "resultGroups.id='settings-nav-result-groups';" in html
+            and "btn.dataset.settingsResultGroup=item.kind;" in html
+            and "window.settingsApplyResultGroup=settingsApplyResultGroup;" in html
             and 'id="settings-searchbar"' in html
             and "searchbar.dataset.settingsPlacement='sidebar'" in html
            and ".settings-vscode-calm .settings-nav > .settings-searchbar" in html
@@ -4589,6 +4624,9 @@ def test_phase1_ai_editor_regressions() -> None:
            and ".settings-vscode-calm.settings-details-open .settings-search-row { grid-template-columns:minmax(520px,760px);" in html
            and ".drag-overlay:not(.active) { pointer-events:none; }" in html
            and "function clearTransientInteractionBlockers(reason)" in html
+           and "function aiEditorInteractionHealthSnapshot()" in html
+           and "window.aiEditorInteractionHealthSnapshot=aiEditorInteractionHealthSnapshot;" in html
+           and "snapshot.clickable=!snapshot.bodyWindowClosing&&!snapshot.dragOverlayActive" in html
            and "function scheduleTransientInteractionBlockerWatchdog(reason)" in html
            and "document.body.dataset.interactionBlockerWatchdog=String(stamp);" in html
            and "clearTransientInteractionBlockers(reason||'watchdog')" in html
@@ -4596,9 +4634,13 @@ def test_phase1_ai_editor_regressions() -> None:
            and "clearTransientInteractionBlockers('close-fallback');" in html
            and "window.addEventListener('pageshow',()=>clearTransientInteractionBlockers('startup'))" in html
            and "window.addEventListener('load',()=>clearTransientInteractionBlockers('startup'))" in html
+           and "window.addEventListener('visibilitychange',()=>{if(document.visibilityState==='visible')clearTransientInteractionBlockers('visibility')})" in html
+           and "window.addEventListener('pywebviewready',()=>clearTransientInteractionBlockers('pywebviewready'))" in html
            and "window.addEventListener('pageshow',()=>scheduleTransientInteractionBlockerWatchdog('watchdog'))" in html
            and "window.addEventListener('load',()=>scheduleTransientInteractionBlockerWatchdog('watchdog'))" in html
            and "document.addEventListener('dragend',()=>clearTransientInteractionBlockers('dragend'),true)" in html
+           and "document.addEventListener('pointermove',()=>{" in html
+           and "document.addEventListener('wheel',()=>{" in html
            and "if(e&&e.key==='Escape')clearTransientInteractionBlockers('escape');" in html
            and "e.preventDefault();clearTransientInteractionBlockers('drop');" in html)
     _check("frontend Settings row actions are keyboard accessible",
