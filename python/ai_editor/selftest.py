@@ -4724,9 +4724,9 @@ def test_phase1_ai_editor_regressions() -> None:
            and 'data-settings-manage-icon="gear"' in html
            and 'data-settings-manage-style="codicon-gear"' in html
            and 'data-settings-manage-shape="codicon-settings-gear"' in html
-           and 'class="settings-gear-icon" width="20" height="20" viewBox="0 0 16 16" fill="currentColor"' in html
-           and 'data-settings-manage-visual="solid-gear"' in html
-           and 'data-settings-manage-gear-path="codicon-settings-gear"' in html
+           and 'class="settings-gear-icon" width="20" height="20" viewBox="0 0 20 20" fill="none" stroke="currentColor"' in html
+           and 'data-settings-manage-visual="outline-gear"' in html
+           and 'data-settings-manage-gear-center="codicon-settings-gear"' in html
            and 'data-settings-manage-gear-teeth="codicon-settings-gear"' in html
            and 'id="settings-details-toggle" data-settings-icon-action="1"' in html
            and "const SETTINGS_DETAILS_STORAGE_KEY='sao.aiEditor.settings.details.v1';" in html
@@ -4973,13 +4973,12 @@ def test_phase1_ai_editor_regressions() -> None:
            and 'data-settings-manage-icon="gear"' in html
            and 'data-settings-manage-style="codicon-gear"' in html
            and 'data-settings-manage-shape="codicon-settings-gear"' in html
-           and 'class="settings-gear-icon" width="20" height="20" viewBox="0 0 16 16" fill="currentColor"' in html
-           and 'data-settings-manage-visual="solid-gear"' in html
-           and 'data-settings-manage-gear-path="codicon-settings-gear"' in html
+           and 'class="settings-gear-icon" width="20" height="20" viewBox="0 0 20 20" fill="none" stroke="currentColor"' in html
+           and 'data-settings-manage-visual="outline-gear"' in html
+           and 'data-settings-manage-gear-center="codicon-settings-gear"' in html
            and 'data-settings-manage-gear-teeth="codicon-settings-gear"' in html
-           and 'M8 10.93a2.929 2.929 0 1 0 0-5.858' in html
+           and '<circle data-settings-manage-gear-center="codicon-settings-gear" cx="10" cy="10.6" r="2.45"' in html
            and 'M10 2v2.5M10 15.5V18' not in html
-           and '<circle cx="10" cy="10"' not in html
            and 'class="ab-icon theme-toggle"' not in html
            and 'title="Toggle Theme" onclick="toggleTheme()"' not in html
            and "function toggleTheme()" in html
@@ -11774,6 +11773,10 @@ console.log("frontend word separator behavior ok");
            and "function prepareExtensionRuntimeAssistantPrompt(row,prompt,statusText)" in html
            and "function openExtensionRuntimeTerminalProfile(row)" in html
            and "function attachExtensionRuntimeChatContext(row)" in html
+           and "function languageStatusSnapshot()" in html
+           and "window.languageStatusSnapshot=languageStatusSnapshot;" in html
+           and "function extensionRuntimeStatusBarRows(data)" in html
+           and "function extensionRuntimeLanguageStatusRows(data)" in html
            and "function extensionRuntimeSurfaceRows(data)" in html
            and "function extensionRuntimeFilterState()" in html
            and "function extensionRuntimeRowMatchesFilter(row,filter)" in html
@@ -11966,11 +11969,24 @@ console.log("frontend word separator behavior ok");
            and "(data.languageModelProviders||[]).slice(0,8).forEach(item=>push('LMProvider'" in html
            and "(data.chatParticipants||[]).slice(0,8).forEach(item=>push('ChatParticipant'" in html
            and "(data.chatContextProviders||[]).slice(0,8).forEach(item=>push('ChatContext'" in html
+           and "extensionRuntimeStatusBarRows(data).slice(0,12).forEach(item=>push('StatusBarItem'" in html
+           and "extensionRuntimeLanguageStatusRows(data).slice(0,12).forEach(item=>push('LanguageStatus'" in html
            and "['Terminal',summary.terminalProfiles||0]" in html
            and "['LM Tool',summary.languageModelTools||0]" in html
            and "['LM Provider',summary.languageModelProviders||0]" in html
            and "['Chat',summary.chatParticipants||0]" in html
            and "['Context',summary.chatContextProviders||0]" in html
+           and "['Status Bar',summary.statusBarItems||" in html
+           and "['Status Commands',summary.statusBarCommands||" in html
+           and "['Language Status',summary.languageStatusItems||" in html
+           and "['Language Busy',summary.languageStatusBusy||" in html
+           and "['Language Warnings',summary.languageStatusWarnings||" in html
+           and "el.dataset.surfaceStatusBarAlignment=String(row.surfaceEvidence&&row.surfaceEvidence.alignmentName||row.alignmentName||'');" in html
+           and "el.dataset.surfaceLanguageSeverityName=String(row.surfaceEvidence&&row.surfaceEvidence.severityName||'');" in html
+           and "runtimeStatusBarRows" in html
+           and "runtimeLanguageStatusRows" in html
+           and "snapshot.runtimeStatusBarRows>=1" in html
+           and "snapshot.runtimeLanguageStatusRows>=1" in html
            and "TreeView" in html
            and "WebviewView" in html
            and "CustomEditor" in html
@@ -11981,7 +11997,9 @@ console.log("frontend word separator behavior ok");
            and "LMTool" in html
            and "LMProvider" in html
            and "ChatParticipant" in html
-           and "ChatContext" in html)
+           and "ChatContext" in html
+           and "StatusBarItem" in html
+           and "LanguageStatus" in html)
     _check("backend extension runtime surfaces use bounded refresh cache",
            "self._extension_runtime_surface_cache: Dict[str, Tuple[float, Dict[str, Any]]] = {}" in app_source
            and "self._extension_runtime_surface_cache_ttl = 0.35" in app_source
@@ -11990,6 +12008,13 @@ console.log("frontend word separator behavior ok");
            and "\"webviewPanels\": webview_panel_keys()" in app_source
            and "def _extension_surface_webview_panels(" in app_source
            and "\"webviewPanels\": webview_panels" in app_source
+           and "def _extension_surface_status_bar_items(" in app_source
+           and "def _extension_surface_language_status_items(" in app_source
+           and "\"languageStatus\": language_status_keys()" in app_source
+           and "\"statusBarItems\": status_bar_items" in app_source
+           and "\"languageStatusItems\": language_status_items" in app_source
+           and "\"statusBarCommands\": status_bar_commands" in app_source
+           and "\"languageStatusWarnings\": language_status_warnings" in app_source
            and "def _webview_runtime_evidence(" in app_source
            and "view_record[\"webviewEvidence\"] = webview_evidence" in app_source
            and "\"webviewHtmlAvailable\": webview_html_available" in app_source
@@ -14262,8 +14287,8 @@ console.log("extension setting schema helpers ok");
            and "['Open','Refresh','Copy'].every(label=>snapshot.webviewActionLabels.includes(label))" in html
            and "snapshot.customPlaceholder&&snapshot.customDataset.viewType==='selftest.customEditor'" in html
            and "snapshot.notebookOutputItems===3" in html
-           and "snapshot.runtimeRows>=12" in html
-           and "snapshot.runtimeChips>=15" in html
+           and "snapshot.runtimeRows>=14" in html
+           and "snapshot.runtimeChips>=21" in html
            and "snapshot.runtimeHealthCards===5" in html
            and "snapshot.runtimeHealthWarnings>=2" in html
            and "snapshot.runtimeHealthErrors>=1" in html
@@ -14271,7 +14296,7 @@ console.log("extension setting schema helpers ok");
            and "['bridge-warning','resource-warning','failures'].every(filter=>snapshot.runtimeHealthFilters.includes(filter))" in html
            and "['queued','dropped','message-stalled'].some(filter=>snapshot.runtimeHealthFilters.includes(filter))" in html
            and "snapshot.runtimeOpenableRows===snapshot.runtimeRows" in html
-           and "snapshot.runtimeOpenableRows>=12" in html
+           and "snapshot.runtimeOpenableRows>=14" in html
            and "snapshot.runtimeActionButtons===snapshot.runtimeRows" in html
            and "snapshot.runtimeRowKeys===snapshot.runtimeRows" in html
            and "snapshot.runtimeContainerRows>=2" in html
@@ -14293,8 +14318,10 @@ console.log("extension setting schema helpers ok");
            and "runtimeKindFilterVisible:runtimeKindFilterResult?runtimeKindFilterResult.visible:0" in html
            and "runtimeSelectedRows:runtimeList?runtimeList.querySelectorAll('.extension-runtime-row.selected[aria-selected=\"true\"]').length:0" in html
            and "snapshot.runtimeListRole==='list'" in html
-           and "snapshot.runtimeStatusText.includes('12 visible of 12 rows')" in html
+           and "snapshot.runtimeStatusText.includes('14 visible of 14 rows')" in html
            and "snapshot.runtimeFilterKinds.includes('LMTool')" in html
+           and "snapshot.runtimeFilterKinds.includes('StatusBarItem')" in html
+           and "snapshot.runtimeFilterKinds.includes('LanguageStatus')" in html
            and "snapshot.runtimeKindFilterVisible===1" in html
            and "snapshot.runtimeRenderedEvidenceFilterVisible===1" in html
            and "snapshot.runtimeMissingEvidenceFilterVisible===1" in html
@@ -14309,7 +14336,7 @@ console.log("extension setting schema helpers ok");
            and "snapshot.runtimeActionSmoke.contextAttached===true" in html
            and "snapshot.runtimeActionSmoke.lastAction==='attach-chat-context'" in html
            and "snapshot.runtimeActionSmoke.lastActionOk==='1'" in html
-           and "['TerminalProfile','LMTool','LMProvider','ChatParticipant','ChatContext'].every(kind=>snapshot.runtimeKinds.includes(kind))" in html
+           and "['TerminalProfile','LMTool','LMProvider','ChatParticipant','ChatContext','StatusBarItem','LanguageStatus'].every(kind=>snapshot.runtimeKinds.includes(kind))" in html
            and "window._onEditorEvent('render_webview_panel',{view_id:lifecycleViewId" in html
            and "window._onEditorEvent('update_webview_panel_title',{view_id:lifecycleViewId" in html
            and "window._onEditorEvent('update_webview_panel_icon',{view_id:lifecycleViewId" in html

@@ -3884,7 +3884,7 @@ pre.code-block { overflow:visible; }
     <div class="ab-icon" data-panel="premium" data-i18n-title="premium" title="Premium"><svg width="20" height="20" viewBox="0 0 20 20" fill="none"><rect x="4" y="8" width="12" height="9" rx="1.5" stroke="currentColor" stroke-width="1.5"/><path d="M7 8V5.5a3 3 0 016 0V8" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/><circle cx="10" cy="13" r="1.2" fill="currentColor"/></svg></div>
     <div id="ext-actbar-items"></div>
     <div class="ab-spacer"></div>
-    <div class="ab-icon activity-manage" data-panel="settings" data-i18n-title="settings" title="Settings"><svg class="settings-gear-icon" width="20" height="20" viewBox="0 0 16 16" fill="currentColor" data-settings-manage-icon="gear" data-settings-manage-style="codicon-gear" data-settings-manage-shape="codicon-settings-gear" data-settings-manage-visual="solid-gear" aria-hidden="true"><path data-settings-manage-gear-teeth="codicon-settings-gear" d="M9.405 1.05c-.413-1.4-2.397-1.4-2.81 0l-.1.34a1.464 1.464 0 0 1-2.105.872l-.31-.17C2.797 1.394 1.394 2.797 2.093 4.08l.169.31a1.464 1.464 0 0 1-.872 2.105l-.34.1c-1.4.413-1.4 2.397 0 2.81l.34.1a1.464 1.464 0 0 1 .872 2.105l-.17.31c-.698 1.283.705 2.686 1.987 1.987l.311-.169a1.464 1.464 0 0 1 2.105.872l.1.34c.413 1.4 2.397 1.4 2.81 0l.1-.34a1.464 1.464 0 0 1 2.105-.872l.31.17c1.283.698 2.686-.705 1.987-1.987l-.169-.311a1.464 1.464 0 0 1 .872-2.105l.34-.1c1.4-.413 1.4-2.397 0-2.81l-.34-.1a1.464 1.464 0 0 1-.872-2.105l.17-.31c.698-1.283-.705-2.686-1.987-1.987l-.311.169a1.464 1.464 0 0 1-2.105-.872l-.1-.34z"/><path data-settings-manage-gear-path="codicon-settings-gear" d="M8 10.93a2.929 2.929 0 1 0 0-5.858 2.929 2.929 0 0 0 0 5.858z"/></svg></div>
+    <div class="ab-icon activity-manage" data-panel="settings" data-i18n-title="settings" title="Settings"><svg class="settings-gear-icon" width="20" height="20" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.55" stroke-linecap="round" stroke-linejoin="round" data-settings-manage-icon="gear" data-settings-manage-style="codicon-gear" data-settings-manage-shape="codicon-settings-gear" data-settings-manage-visual="outline-gear" aria-hidden="true"><path data-settings-manage-gear-teeth="codicon-settings-gear" d="M8.7 2.5h2.6l.45 2.15c.42.12.83.29 1.21.51l1.84-1.2 1.84 1.84-1.2 1.84c.22.38.39.79.51 1.21l2.15.45v2.6l-2.15.45c-.12.42-.29.83-.51 1.21l1.2 1.84-1.84 1.84-1.84-1.2c-.38.22-.79.39-1.21.51l-.45 2.15H8.7l-.45-2.15a6.1 6.1 0 0 1-1.21-.51l-1.84 1.2-1.84-1.84 1.2-1.84a6.1 6.1 0 0 1-.51-1.21L1.9 11.9V9.3l2.15-.45c.12-.42.29-.83.51-1.21L3.36 5.8 5.2 3.96l1.84 1.2c.38-.22.79-.39 1.21-.51L8.7 2.5z"/><circle data-settings-manage-gear-center="codicon-settings-gear" cx="10" cy="10.6" r="2.45"/></svg></div>
   </div>
 
   <!-- Sidebar -->
@@ -34209,6 +34209,38 @@ function _removeLanguageStatusItem(id){
   if(el)el.remove();
   delete _languageStatusItems[key];
 }
+function languageStatusSnapshot(){
+  const domItems=Array.from(document.querySelectorAll('.language-status-item'));
+  const items=Object.entries(_languageStatusItems).map(([id,item])=>{
+    const el=document.getElementById('sb-lang-status-'+id);
+    return {
+      ...(item||{}),
+      id,
+      visible:!!el,
+      text:el?el.textContent:String(item&&item.text||item&&item.label||''),
+      source:el?String(el.dataset.source||''):String(item&&item.source||item&&item.extensionId||''),
+      severity:Number(el?el.dataset.severity:item&&item.severity)||0,
+      busy:el?el.dataset.busy==='true':!!(item&&item.busy),
+      hasCommand:!!(item&&item.command)
+    };
+  });
+  return {
+    total:items.length,
+    visible:items.filter(item=>item.visible).length,
+    busy:items.filter(item=>item.busy).length,
+    warnings:items.filter(item=>Number(item.severity)===1).length,
+    errors:items.filter(item=>Number(item.severity)>=2).length,
+    dom:domItems.map(el=>({
+      id:el.id.replace('sb-lang-status-',''),
+      text:el.textContent,
+      source:el.dataset.source||'',
+      severity:Number(el.dataset.severity)||0,
+      busy:el.dataset.busy==='true'
+    })),
+    items
+  };
+}
+window.languageStatusSnapshot=languageStatusSnapshot;
 
 // ── Mode & Permissions ──
 let currentMode='agent';
@@ -38022,13 +38054,15 @@ function extensionRuntimeSurfaceResourceUri(item){
   return '';
 }
 function extensionRuntimeSurfaceAction(kind,item,row){
-  const command=String((item&&item.command)||row.command||'').trim();
+  const rawCommand=(item&&item.command)||row.command||'';
+  const command=String(typeof rawCommand==='object'?(rawCommand.command||''):rawCommand).trim();
   const id=String(row.id||'').trim();
   const container=String(row.container||'').trim();
   const uri=String(row.resourceUri||'').trim();
   if(kind==='TreeView'&&id)return {type:'open-view',label:'Open',title:'Open dynamic TreeView',target:id,container};
   if(kind==='WebviewView'&&id)return {type:'open-webview',label:'Open',title:'Open dynamic WebviewView',target:id,container};
   if((kind==='Command'||kind==='Menu')&&command)return {type:'run-command',label:'Run',title:'Run extension command',target:command};
+  if((kind==='StatusBarItem'||kind==='LanguageStatus')&&command)return {type:'run-command',label:'Run',title:'Run extension surface command',target:command};
   if((kind==='CustomEditor'||kind==='Notebook')&&uri)return {type:'open-file',label:'Open',title:'Open contributed editor resource',target:uri};
   if(kind==='TerminalProfile'&&id)return {type:'open-terminal-profile',label:'Open',title:'Open extension terminal profile',target:id};
   if(kind==='LMTool'&&id)return {type:'prepare-lm-tool',label:'Use',title:'Prepare this language-model tool in Assistant',target:id};
@@ -38112,6 +38146,46 @@ function attachExtensionRuntimeChatContext(row){
   if(status)status.textContent=attached?'Attached chat context '+label+'.':'Unable to attach chat context '+label+'.';
   return !!attached;
 }
+function extensionRuntimeStatusBarRows(data){
+  const backend=Array.isArray(data&&data.statusBarItems)?data.statusBarItems:[];
+  const snapshot=typeof extensionStatusBarSnapshot==='function'?extensionStatusBarSnapshot():{items:[]};
+  const liveById=new Map((snapshot.items||[]).map(item=>[String(item.id||''),item]));
+  const seen=new Set();
+  const rows=backend.map(item=>{
+    const id=String(item&&item.id||'');
+    seen.add(id);
+    const live=liveById.get(id)||{};
+    const evidence={...((item&&item.surfaceEvidence)||{}),liveVisible:live.visible===true,liveDisposed:live.disposed===true,liveCommand:live.command||'',codicons:Number(live.codicons)||0,domOrder:[...(snapshot.left||[]),...(snapshot.right||[])].indexOf(id)};
+    return {...item,...(live.visible!==undefined?{visible:live.visible,disposed:live.disposed,text:live.text||item.text,command:live.command||item.command}:{}),surfaceEvidence:evidence,frontendSnapshot:live,source:live.visible?'manifest+runtime':(item.source||'manifest')};
+  });
+  (snapshot.items||[]).forEach(live=>{
+    const id=String(live&&live.id||'');
+    if(!id||seen.has(id))return;
+    rows.push({id,name:live.name||id,text:live.text||'',tooltip:live.tooltip||'',command:live.command||'',extensionId:live.source||'',alignment:live.alignment,alignmentName:live.alignment===1?'left':'right',priority:live.priority||0,runtimeAvailable:true,runtimeOnly:true,source:'runtime-only',visible:live.visible,disposed:live.disposed,surfaceEvidence:{kind:'statusBarItem',liveVisible:live.visible===true,liveDisposed:live.disposed===true,hasCommand:!!live.command,codicons:Number(live.codicons)||0,alignmentName:live.alignment===1?'left':'right',priority:live.priority||0,readiness:live.visible?'ready':'hidden',readinessScore:live.visible?100:70,readinessIssues:live.visible?[]:['hidden']},frontendSnapshot:live});
+  });
+  return rows;
+}
+function extensionRuntimeLanguageStatusRows(data){
+  const backend=Array.isArray(data&&data.languageStatusItems)?data.languageStatusItems:[];
+  const snapshot=typeof languageStatusSnapshot==='function'?languageStatusSnapshot():{items:[]};
+  const liveById=new Map((snapshot.items||[]).map(item=>[String(item.id||''),item]));
+  const seen=new Set();
+  const rows=backend.map(item=>{
+    const id=String(item&&item.id||'');
+    seen.add(id);
+    const live=liveById.get(id)||{};
+    const severity=Number(live.severity!==undefined?live.severity:item.severity)||0;
+    const evidence={...((item&&item.surfaceEvidence)||{}),liveVisible:live.visible===true,severity,severityName:severity>=2?'error':severity===1?'warning':'info',busy:live.busy!==undefined?!!live.busy:!!item.busy,hasCommand:!!(live.command||item.command)};
+    return {...item,...(live.visible!==undefined?{visible:live.visible,text:live.text||item.text||item.label,busy:live.busy,severity}:{}),surfaceEvidence:evidence,frontendSnapshot:live,source:live.visible?'runtime-only':'runtime-only'};
+  });
+  (snapshot.items||[]).forEach(live=>{
+    const id=String(live&&live.id||'');
+    if(!id||seen.has(id))return;
+    const severity=Number(live.severity)||0;
+    rows.push({id,name:live.text||id,label:live.text||id,text:live.text||'',source:'runtime-only',extensionId:live.source||'',runtimeAvailable:true,runtimeOnly:true,visible:live.visible,busy:live.busy,severity,command:live.command||'',surfaceEvidence:{kind:'languageStatus',liveVisible:live.visible===true,severity,severityName:severity>=2?'error':severity===1?'warning':'info',busy:!!live.busy,hasCommand:!!live.command,readiness:live.visible?'ready':'hidden',readinessScore:live.visible?100:70,readinessIssues:live.visible?[]:['hidden']},frontendSnapshot:live});
+  });
+  return rows;
+}
 function extensionRuntimeSurfaceRows(data){
   data=data||{};
   const rows=[];
@@ -38119,6 +38193,8 @@ function extensionRuntimeSurfaceRows(data){
     const runtime=ready!==false;
     const extensionId=String(item.extensionId||item.extension_id||item._extensionId||'');
     const resourceUri=extensionRuntimeSurfaceResourceUri(item);
+    const rawCommand=item&&item.command;
+    const commandId=String(rawCommand&&typeof rawCommand==='object'?(rawCommand.command||''):(rawCommand||''));
     const surfaceEvidence=(item&&item.surfaceEvidence&&typeof item.surfaceEvidence==='object')
       ? item.surfaceEvidence
       : (item&&item.evidence&&typeof item.evidence==='object'?item.evidence:{});
@@ -38350,7 +38426,7 @@ function extensionRuntimeSurfaceRows(data){
       dynamicSource,
       providerBacked,
       ready:runtime,
-      command:String(item.command||''),
+      command:commandId,
       id:String(item.id||item.profileId||item.profile_id||item.viewType||item.type||item.vendor||item.kind||item.name||item.command||''),
       webviewEvidence:evidence,
       surfaceEvidence,
@@ -38385,6 +38461,8 @@ function extensionRuntimeSurfaceRows(data){
   (data.languageModelProviders||[]).slice(0,8).forEach(item=>push('LMProvider',item,item.name||item.vendor||item.id,(item.vendor||item.id)+' · models '+(item.modelCount||0),item.runtimeAvailable!==false));
   (data.chatParticipants||[]).slice(0,8).forEach(item=>push('ChatParticipant',item,item.name||item.id,item.id,item.runtimeAvailable!==false));
   (data.chatContextProviders||[]).slice(0,8).forEach(item=>push('ChatContext',item,item.id||item.kind,item.kind+(item.selector?' · selector':''),item.runtimeAvailable!==false));
+  extensionRuntimeStatusBarRows(data).slice(0,12).forEach(item=>push('StatusBarItem',item,item.text||item.name||item.id,(item.alignmentName||'status')+' · '+(item.extensionId||item.id),item.runtimeAvailable!==false));
+  extensionRuntimeLanguageStatusRows(data).slice(0,12).forEach(item=>push('LanguageStatus',item,item.label||item.text||item.name||item.id,(item.source||item.extensionId||'runtime')+' · severity '+(item.severity||0),item.runtimeAvailable!==false));
   return rows.sort((a,b)=>{
     if(a.ready!==b.ready)return a.ready?-1:1;
     const kind=String(a.kind).localeCompare(String(b.kind));
@@ -38566,6 +38644,7 @@ async function copyExtensionRuntimeSurfaceSummary(rowOrKey){
     'Visible: '+(row.webviewEvidence&&row.webviewEvidence.domVisible?'yes':'no'),
     'Queue: '+String(row.webviewEvidence&&row.webviewEvidence.pendingMessageCount||0)+' pending, '+String(row.webviewEvidence&&row.webviewEvidence.droppedMessageCount||0)+' dropped',
     'Seq: out '+String(row.webviewEvidence&&row.webviewEvidence.lastOutboundMessageSeq||0)+' / in '+String(row.webviewEvidence&&row.webviewEvidence.lastInboundMessageSeq||0)+' / delivered '+String(row.webviewEvidence&&row.webviewEvidence.lastDeliveredMessageSeq||0),
+    'Surface: '+String(row.surfaceReadiness||'-')+' '+String(row.surfaceEvidence&&row.surfaceEvidence.severityName||row.surfaceEvidence&&row.surfaceEvidence.alignmentName||''),
     'Meta: '+(row.meta||'-')
   ].join('\n');
   try{await navigator.clipboard.writeText(text);setStatus('Runtime surface summary copied')}
@@ -38746,6 +38825,12 @@ function renderExtensionRuntimeSurfacePanel(data){
     ['LM Provider',summary.languageModelProviders||0],
     ['Chat',summary.chatParticipants||0],
     ['Context',summary.chatContextProviders||0],
+    ['Status Bar',summary.statusBarItems||rows.filter(row=>row.kind==='StatusBarItem').length],
+    ['Status Commands',summary.statusBarCommands||rows.filter(row=>row.kind==='StatusBarItem'&&row.command).length],
+    ['Language Status',summary.languageStatusItems||rows.filter(row=>row.kind==='LanguageStatus').length],
+    ['Language Busy',summary.languageStatusBusy||rows.filter(row=>row.kind==='LanguageStatus'&&row.surfaceEvidence&&row.surfaceEvidence.busy).length],
+    ['Language Warnings',summary.languageStatusWarnings||rows.filter(row=>row.kind==='LanguageStatus'&&row.surfaceEvidence&&Number(row.surfaceEvidence.severity)===1).length],
+    ['Language Errors',summary.languageStatusErrors||rows.filter(row=>row.kind==='LanguageStatus'&&row.surfaceEvidence&&Number(row.surfaceEvidence.severity)>=2).length],
     ['Webview HTML',summary.webviewHtmlAvailable||0],
     ['Missing Webview HTML',rows.filter(row=>row.kind==='WebviewView'&&!row.htmlAvailable).length],
     ['Retained Webview',summary.webviewRetained||0],
@@ -38785,13 +38870,13 @@ function renderExtensionRuntimeSurfacePanel(data){
   chips.forEach(([label,value])=>{
     const chip=document.createElement('span');chip.className='extension-runtime-chip';
     chip.innerHTML='<strong>'+esc(String(value))+'</strong>'+esc(label);
-    if(['TreeView','WebviewView','CustomEditor','Notebook','Custom Ready','Custom Warnings','Custom Dirty','Notebook Ready','Notebook Warnings','Notebook Kernels','Notebook Status','Command','Menu','Terminal','LM Tool','LM Provider','Chat','Context','Runtime','Manifest','Manifest + Runtime','Runtime Only','Provider Webview','Webview HTML','Missing Webview HTML','Retained Webview','Evidence Ready','Iframe Mounted','Iframe Missing','DOM Visible','Resource Rewrites','Resource Roots','Port Mappings','Webview Messages','Binary Webview','Queued Webview','Dropped Webview','Bridge Ready','Bridge Warnings','Message Stalled','Resource Warnings','Webview Failures','Webview Ready','Webview Warnings'].includes(label)){
+    if(['TreeView','WebviewView','CustomEditor','Notebook','Custom Ready','Custom Warnings','Custom Dirty','Notebook Ready','Notebook Warnings','Notebook Kernels','Notebook Status','Command','Menu','Terminal','LM Tool','LM Provider','Chat','Context','Status Bar','Status Commands','Language Status','Language Busy','Language Warnings','Language Errors','Runtime','Manifest','Manifest + Runtime','Runtime Only','Provider Webview','Webview HTML','Missing Webview HTML','Retained Webview','Evidence Ready','Iframe Mounted','Iframe Missing','DOM Visible','Resource Rewrites','Resource Roots','Port Mappings','Webview Messages','Binary Webview','Queued Webview','Dropped Webview','Bridge Ready','Bridge Warnings','Message Stalled','Resource Warnings','Webview Failures','Webview Ready','Webview Warnings'].includes(label)){
       chip.classList.add('filterable');
       chip.tabIndex=0;
       chip.setAttribute('role','button');
       chip.dataset.filterLabel=label;
       chip.onclick=()=>{
-        const kindMap={'Terminal':'TerminalProfile','LM Tool':'LMTool','LM Provider':'LMProvider','Chat':'ChatParticipant','Context':'ChatContext'};
+        const kindMap={'Terminal':'TerminalProfile','LM Tool':'LMTool','LM Provider':'LMProvider','Chat':'ChatParticipant','Context':'ChatContext','Status Bar':'StatusBarItem','Status Commands':'StatusBarItem','Language Status':'LanguageStatus','Language Busy':'LanguageStatus','Language Warnings':'LanguageStatus','Language Errors':'LanguageStatus'};
         const sourceMap={Runtime:'manifest+runtime',Manifest:'manifest','Manifest + Runtime':'manifest+runtime','Runtime Only':'runtime-only'};
         const evidenceMap={'Webview HTML':'rendered','Missing Webview HTML':'missing','Retained Webview':'retained','Evidence Ready':'rendered','Iframe Mounted':'iframe-mounted','Iframe Missing':'iframe-missing','DOM Visible':'dom-visible','Resource Rewrites':'resources','Resource Roots':'resources','Port Mappings':'resources','Webview Messages':'messages','Binary Webview':'binary','Queued Webview':'queued','Dropped Webview':'dropped','Bridge Ready':'bridge-ready','Bridge Warnings':'bridge-warning','Message Stalled':'message-stalled','Resource Warnings':'resource-warning','Webview Failures':'failures','Provider Webview':'rendered'};
         const kindSel=$('extension-runtime-filter-kind'),sourceSel=$('extension-runtime-filter-source'),evidenceSel=$('extension-runtime-filter-evidence');
@@ -38900,6 +38985,15 @@ function renderExtensionRuntimeSurfacePanel(data){
       el.dataset.surfaceControllerCount=String(row.surfaceEvidence&&row.surfaceEvidence.controllerCount||0);
       el.dataset.surfaceStatusBarProviderCount=String(row.surfaceEvidence&&row.surfaceEvidence.statusBarProviderCount||0);
       el.dataset.surfaceDetectionTaskCount=String(row.surfaceEvidence&&row.surfaceEvidence.detectionTaskCount||0);
+      el.dataset.surfaceStatusBarAlignment=String(row.surfaceEvidence&&row.surfaceEvidence.alignmentName||row.alignmentName||'');
+      el.dataset.surfaceStatusBarPriority=String(row.surfaceEvidence&&row.surfaceEvidence.priority||row.priority||0);
+      el.dataset.surfaceHasCommand=row.command?'1':(row.surfaceEvidence&&row.surfaceEvidence.hasCommand?'1':'0');
+      el.dataset.surfaceLiveVisible=row.surfaceEvidence&&row.surfaceEvidence.liveVisible?'1':'0';
+      el.dataset.surfaceLiveDisposed=row.surfaceEvidence&&row.surfaceEvidence.liveDisposed?'1':'0';
+      el.dataset.surfaceCodiconCount=String(row.surfaceEvidence&&row.surfaceEvidence.codicons||0);
+      el.dataset.surfaceLanguageSeverity=String(row.surfaceEvidence&&row.surfaceEvidence.severity||row.severity||0);
+      el.dataset.surfaceLanguageSeverityName=String(row.surfaceEvidence&&row.surfaceEvidence.severityName||'');
+      el.dataset.surfaceLanguageBusy=row.surfaceEvidence&&row.surfaceEvidence.busy?'1':'0';
       el.dataset.webviewResourceRewriteBreakdown=String(row.webviewEvidence&&row.webviewEvidence.resourceRewriteBreakdown||'0/0/0/0/0');
       el.dataset.webviewLastResourceRewriteKind=String(row.webviewEvidence&&row.webviewEvidence.lastResourceRewriteKind||'');
       el.dataset.webviewLastResourceOriginal=String(row.webviewEvidence&&row.webviewEvidence.lastResourceOriginal||'');
@@ -39001,6 +39095,38 @@ function renderExtensionRuntimeSurfacePanel(data){
           Array.isArray(ev.controllerIds)&&ev.controllerIds.length?{text:'id '+ev.controllerIds[0]}:null,
         ].filter(Boolean);
         chips.forEach(item=>{
+          const chip=document.createElement('span');
+          chip.className='extension-runtime-tag surface-evidence'+(item.missing?' missing':'');
+          chip.textContent=item.text;
+          meta.appendChild(chip);
+        });
+      }else if(row.kind==='StatusBarItem'){
+        const ev=row.surfaceEvidence||{};
+        [
+          ev.alignmentName?{text:ev.alignmentName}:null,
+          ev.priority?{text:'priority '+ev.priority}:null,
+          row.command?{text:'command'}:null,
+          ev.liveVisible?{text:'visible'}:{text:'not visible',missing:true},
+          ev.liveDisposed?{text:'disposed',missing:true}:null,
+          ev.codicons?{text:'icons '+ev.codicons}:null,
+          ev.hasColor?{text:'color'}:null,
+          ev.hasBackgroundColor?{text:'background'}:null,
+        ].filter(Boolean).forEach(item=>{
+          const chip=document.createElement('span');
+          chip.className='extension-runtime-tag surface-evidence'+(item.missing?' missing':'');
+          chip.textContent=item.text;
+          meta.appendChild(chip);
+        });
+      }else if(row.kind==='LanguageStatus'){
+        const ev=row.surfaceEvidence||{};
+        [
+          ev.severityName?{text:ev.severityName,missing:['warning','error'].includes(ev.severityName)}:null,
+          ev.busy?{text:'busy'}:null,
+          row.command||ev.hasCommand?{text:'command'}:null,
+          ev.liveVisible?{text:'visible'}:{text:'not visible',missing:true},
+          ev.hasSelector?{text:'selector'}:null,
+          ev.hasDetail?{text:'detail'}:null,
+        ].filter(Boolean).forEach(item=>{
           const chip=document.createElement('span');
           chip.className='extension-runtime-tag surface-evidence'+(item.missing?' missing':'');
           chip.textContent=item.text;
@@ -40911,7 +41037,7 @@ function extensionRuntimeDomSelfCheckSnapshot(){
     root.appendChild(notebookOutputHost);
 
     const runtimeData={
-      summary:{treeViews:1,webviewViews:2,webviewHtmlAvailable:1,webviewRetained:1,webviewVisible:1,webviewBridgeReady:1,webviewBridgeWarnings:1,webviewMessageStalled:1,webviewResourceWarnings:1,webviewFailureCount:1,customEditors:1,customEditorReady:1,customEditorDirtyStates:1,notebooks:1,notebookReady:1,notebookControllers:1,notebookStatusBarProviders:1,commands:1,menus:1,terminalProfiles:1,languageModelTools:1,languageModelProviders:1,chatParticipants:1,chatContextProviders:1,dynamicSurfaces:12},
+      summary:{treeViews:1,webviewViews:2,webviewHtmlAvailable:1,webviewRetained:1,webviewVisible:1,webviewBridgeReady:1,webviewBridgeWarnings:1,webviewMessageStalled:1,webviewResourceWarnings:1,webviewFailureCount:1,customEditors:1,customEditorReady:1,customEditorDirtyStates:1,notebooks:1,notebookReady:1,notebookControllers:1,notebookStatusBarProviders:1,commands:1,menus:1,terminalProfiles:1,languageModelTools:1,languageModelProviders:1,chatParticipants:1,chatContextProviders:1,statusBarItems:1,statusBarCommands:1,languageStatusItems:1,languageStatusWarnings:1,dynamicSurfaces:14},
       viewContainers:[fixtureItem],
       treeViews:[{id:'selftest.dynamic.tree',name:'Runtime Tree',container:'selftest.dynamic.container',extensionId:'selftest.extension',runtimeAvailable:true}],
       webviewViews:[
@@ -40926,7 +41052,9 @@ function extensionRuntimeDomSelfCheckSnapshot(){
       languageModelTools:[{name:'selftest.lmTool',description:'LM tool fixture',extensionId:'selftest.extension',runtimeAvailable:true}],
       languageModelProviders:[{vendor:'selftest.vendor',name:'Selftest LM Provider',modelCount:1,extensionId:'selftest.extension',runtimeAvailable:true}],
       chatParticipants:[{id:'selftest.chat',name:'Selftest Chat',extensionId:'selftest.extension',runtimeAvailable:true}],
-      chatContextProviders:[{id:'selftest.context',kind:'explicit',extensionId:'selftest.extension',runtimeAvailable:true}]
+      chatContextProviders:[{id:'selftest.context',kind:'explicit',extensionId:'selftest.extension',runtimeAvailable:true}],
+      statusBarItems:[{id:'manifest:selftest.extension:selftest.status',manifestId:'selftest.status',name:'Selftest Status',text:'$(check) Status',tooltip:'Status tooltip',command:{command:'selftest.run',arguments:[]},alignment:1,alignmentName:'left',priority:10,extensionId:'selftest.extension',runtimeAvailable:true,source:'manifest',surfaceEvidence:{kind:'statusBarItem',alignmentName:'left',priority:10,hasCommand:true,readiness:'ready',readinessScore:100,readinessIssues:[]}}],
+      languageStatusItems:[{id:'selftest.extension/selftest.languageStatus',name:'Selftest Language',label:'Lang status',text:'Lang status',severity:1,busy:true,command:{command:'selftest.run',arguments:[]},extensionId:'selftest.extension',runtimeAvailable:true,source:'runtime-only',surfaceEvidence:{kind:'languageStatus',severity:1,severityName:'warning',busy:true,hasCommand:true,readiness:'ready',readinessScore:100,readinessIssues:[]}}]
     };
     if(runtimeIds.every(id=>!!$(id)))renderExtensionRuntimeSurfacePanel(runtimeData);
     const runtimeKindFilter=$('extension-runtime-filter-kind');
@@ -41221,6 +41349,12 @@ function extensionRuntimeDomSelfCheckSnapshot(){
       runtimeCustomStateRows:runtimeList?Array.from(runtimeList.querySelectorAll('.extension-runtime-row')).filter(row=>Number(row.dataset.surfaceStateCount)||0).length:0,
       runtimeNotebookControllerRows:runtimeList?Array.from(runtimeList.querySelectorAll('.extension-runtime-row')).filter(row=>Number(row.dataset.surfaceControllerCount)||0).length:0,
       runtimeNotebookStatusRows:runtimeList?Array.from(runtimeList.querySelectorAll('.extension-runtime-row')).filter(row=>Number(row.dataset.surfaceStatusBarProviderCount)||0).length:0,
+      runtimeStatusBarRows:runtimeList?Array.from(runtimeList.querySelectorAll('.extension-runtime-row')).filter(row=>row.dataset.kind==='StatusBarItem').length:0,
+      runtimeStatusBarCommandRows:runtimeList?Array.from(runtimeList.querySelectorAll('.extension-runtime-row')).filter(row=>row.dataset.kind==='StatusBarItem'&&row.dataset.surfaceHasCommand==='1').length:0,
+      runtimeStatusBarLeftRows:runtimeList?Array.from(runtimeList.querySelectorAll('.extension-runtime-row')).filter(row=>row.dataset.kind==='StatusBarItem'&&row.dataset.surfaceStatusBarAlignment==='left').length:0,
+      runtimeLanguageStatusRows:runtimeList?Array.from(runtimeList.querySelectorAll('.extension-runtime-row')).filter(row=>row.dataset.kind==='LanguageStatus').length:0,
+      runtimeLanguageBusyRows:runtimeList?Array.from(runtimeList.querySelectorAll('.extension-runtime-row')).filter(row=>row.dataset.kind==='LanguageStatus'&&row.dataset.surfaceLanguageBusy==='1').length:0,
+      runtimeLanguageWarningRows:runtimeList?Array.from(runtimeList.querySelectorAll('.extension-runtime-row')).filter(row=>row.dataset.kind==='LanguageStatus'&&row.dataset.surfaceLanguageSeverityName==='warning').length:0,
       runtimeWebviewLastDropReasons:runtimeList?Array.from(runtimeList.querySelectorAll('.extension-runtime-row')).map(row=>row.dataset.webviewLastDroppedReason||'').filter(Boolean):[],
       runtimeWebviewSeqRows:runtimeList?Array.from(runtimeList.querySelectorAll('.extension-runtime-row')).filter(row=>Number(row.dataset.webviewLastDeliveredMessageSeq)||0).length:0,
       runtimeEvidencePills:runtimeList?runtimeList.querySelectorAll('.extension-runtime-evidence').length:0,
@@ -41301,7 +41435,7 @@ function extensionRuntimeDomSelfCheckSnapshot(){
       && snapshot.activityRole==='button'&&snapshot.activityTabIndex===0&&snapshot.activityLabel.includes('Selftest Extensions')&&snapshot.activityPanel==='ext-vc-selftest.dynamic.container'
       && snapshot.customPlaceholder&&snapshot.customDataset.viewType==='selftest.customEditor'&&snapshot.customCapabilities
       && snapshot.notebookOutputItems===3&&snapshot.notebookHtmlFrame&&snapshot.notebookImage&&snapshot.notebookText
-      && snapshot.runtimeRows>=12&&snapshot.runtimeReadyRows>=11&&snapshot.runtimeChips>=15
+      && snapshot.runtimeRows>=14&&snapshot.runtimeReadyRows>=13&&snapshot.runtimeChips>=21
       && snapshot.runtimeWebviewEvidenceRows>=6&&snapshot.runtimeHtmlEvidenceRows>=1&&snapshot.runtimeMissingEvidenceRows>=1&&snapshot.runtimeWebviewRetainedRows>=1
       && snapshot.runtimeWebviewMessageRows>=1&&snapshot.runtimeWebviewBinaryRows>=1&&snapshot.runtimeWebviewBinaryTypes.some(value=>value.includes('Uint8Array'))&&snapshot.runtimeWebviewQueuedRows>=2&&snapshot.runtimeWebviewDroppedRows>=1&&snapshot.runtimeWebviewSeqRows>=1&&snapshot.runtimeWebviewLastDropReasons.includes('disposed-queue')
       && snapshot.runtimeWebviewBridgeReadyRows>=1&&snapshot.runtimeWebviewBridgeWarningRows>=1&&snapshot.runtimeWebviewMessageStalledRows>=1
@@ -41311,6 +41445,8 @@ function extensionRuntimeDomSelfCheckSnapshot(){
       && snapshot.runtimeWebviewReadyRows>=1&&snapshot.runtimeWebviewWarningRows>=1&&snapshot.runtimeWebviewReadinessIssues.some(value=>value.includes('waiting-html'))
       && snapshot.runtimeSurfaceEvidenceRows>=8&&snapshot.runtimeSurfaceReadyRows>=2&&snapshot.runtimeCustomDirtyRows>=1&&snapshot.runtimeCustomStateRows>=1
       && snapshot.runtimeNotebookControllerRows>=1&&snapshot.runtimeNotebookStatusRows>=1
+      && snapshot.runtimeStatusBarRows>=1&&snapshot.runtimeStatusBarCommandRows>=1&&snapshot.runtimeStatusBarLeftRows>=1
+      && snapshot.runtimeLanguageStatusRows>=1&&snapshot.runtimeLanguageBusyRows>=1&&snapshot.runtimeLanguageWarningRows>=1
       && snapshot.runtimeEvidencePills===snapshot.runtimeRows&&snapshot.runtimeEvidenceStatuses.includes('rendered')&&snapshot.runtimeEvidenceStatuses.includes('missing')
       && snapshot.runtimeMiniActionButtons>=snapshot.runtimeRows*3&&snapshot.runtimeFocusableRows>=4&&snapshot.runtimeRefreshableRows>=4
       && snapshot.runtimeHealthCards===5&&snapshot.runtimeHealthWarnings>=2&&snapshot.runtimeHealthErrors>=1&&snapshot.runtimeHealthFilterVisible>=1
@@ -41318,17 +41454,17 @@ function extensionRuntimeDomSelfCheckSnapshot(){
       && ['queued','dropped','message-stalled'].some(filter=>snapshot.runtimeHealthFilters.includes(filter))
       && snapshot.runtimeHealthStates.includes('warning')&&snapshot.runtimeHealthStates.includes('error')
       && snapshot.runtimeListRole==='list'&&snapshot.runtimeListItems===snapshot.runtimeRows
-      && snapshot.runtimeDatasetReady===snapshot.runtimeReadyRows&&snapshot.runtimePanelCount==='12'
-      && snapshot.runtimeOpenableRows===snapshot.runtimeRows&&snapshot.runtimeOpenableRows>=12&&snapshot.runtimeActionButtons===snapshot.runtimeRows
+      && snapshot.runtimeDatasetReady===snapshot.runtimeReadyRows&&snapshot.runtimePanelCount==='14'
+      && snapshot.runtimeOpenableRows===snapshot.runtimeRows&&snapshot.runtimeOpenableRows>=14&&snapshot.runtimeActionButtons===snapshot.runtimeRows
       && snapshot.runtimeRowKeys===snapshot.runtimeRows&&snapshot.runtimeContainerRows>=2
       && ['Open','Run','Use','Chat','Attach'].every(label=>snapshot.runtimeActionButtonLabels.includes(label))
       && ['open-view','open-webview','open-file','run-command','open-terminal-profile','prepare-lm-tool','prepare-lm-provider','open-chat-participant','attach-chat-context'].every(kind=>snapshot.runtimeActionTypes.includes(kind))
       && snapshot.runtimeActionTargets.includes('selftest.dynamic.tree')&&snapshot.runtimeActionTargets.includes('selftest.dynamic.webview')&&snapshot.runtimeActionTargets.includes('selftest.run')
       && snapshot.runtimeActionTargets.includes('selftest.terminalProfile')&&snapshot.runtimeActionTargets.includes('selftest.lmTool')&&snapshot.runtimeActionTargets.includes('selftest.vendor')&&snapshot.runtimeActionTargets.includes('selftest.chat')&&snapshot.runtimeActionTargets.includes('selftest.context')
-      && snapshot.runtimePanelVisibleCount==='12'&&snapshot.runtimePanelTotalCount==='12'
-      && snapshot.runtimeDatasetSources.includes('runtime')&&snapshot.runtimeStatusText.includes('12 visible of 12 rows')
-      && snapshot.runtimeFilterKinds.includes('LMTool')&&snapshot.runtimeFilterBefore.visible===12
-      && snapshot.runtimeKindFilterVisible===1&&snapshot.runtimeSourceFilterVisible===12&&snapshot.runtimeRenderedEvidenceFilterVisible===1&&snapshot.runtimeMissingEvidenceFilterVisible===1&&snapshot.runtimeBinaryEvidenceFilterVisible>=1
+      && snapshot.runtimePanelVisibleCount==='14'&&snapshot.runtimePanelTotalCount==='14'
+      && snapshot.runtimeDatasetSources.includes('runtime-only')&&snapshot.runtimeStatusText.includes('14 visible of 14 rows')
+      && snapshot.runtimeFilterKinds.includes('LMTool')&&snapshot.runtimeFilterKinds.includes('StatusBarItem')&&snapshot.runtimeFilterKinds.includes('LanguageStatus')&&snapshot.runtimeFilterBefore.visible===14
+      && snapshot.runtimeKindFilterVisible===1&&snapshot.runtimeSourceFilterVisible===14&&snapshot.runtimeRenderedEvidenceFilterVisible===1&&snapshot.runtimeMissingEvidenceFilterVisible===1&&snapshot.runtimeBinaryEvidenceFilterVisible>=1
       && snapshot.runtimeMessageEvidenceFilterVisible>=1&&snapshot.runtimeQueuedEvidenceFilterVisible>=2&&snapshot.runtimeDroppedEvidenceFilterVisible>=1&&snapshot.runtimeTextFilterVisible===1
       && snapshot.runtimeBridgeReadyFilterVisible>=1&&snapshot.runtimeBridgeWarningFilterVisible>=1&&snapshot.runtimeMessageStalledFilterVisible>=1&&snapshot.runtimeResourceWarningFilterVisible>=1&&snapshot.runtimeFailuresFilterVisible>=1
       && snapshot.runtimePortHitFilterVisible>=1&&snapshot.runtimeQueueStaleFilterVisible>=1&&snapshot.runtimeLifecycleFilterVisible>=2
@@ -41342,7 +41478,7 @@ function extensionRuntimeDomSelfCheckSnapshot(){
       && snapshot.runtimeActionSmoke.contextAttached===true
       && snapshot.runtimeActionSmoke.lastAction==='attach-chat-context'
       && snapshot.runtimeActionSmoke.lastActionOk==='1'
-      && ['TerminalProfile','LMTool','LMProvider','ChatParticipant','ChatContext'].every(kind=>snapshot.runtimeKinds.includes(kind))
+      && ['TerminalProfile','LMTool','LMProvider','ChatParticipant','ChatContext','StatusBarItem','LanguageStatus'].every(kind=>snapshot.runtimeKinds.includes(kind))
       && snapshot.menuRole==='menu'&&snapshot.menuItems===2&&snapshot.menuDisabled===1&&snapshot.menuMetadata.includes('selftest.dynamic.tree')
       && snapshot.webviewLifecycle.rendered&&snapshot.webviewLifecycle.seq>=4
       && snapshot.webviewLifecycle.title==='Lifecycle Updated'

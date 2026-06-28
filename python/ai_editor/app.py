@@ -12235,6 +12235,109 @@ class AIEditorAPI:
             })
         return result
 
+    def _extension_surface_status_bar_items(
+            self, contributions: Dict[str, Any]) -> List[Dict[str, Any]]:
+        items = contributions.get("statusBarItems", []) if isinstance(
+            contributions, dict) else []
+        result: List[Dict[str, Any]] = []
+        for index, item in enumerate(items if isinstance(items, list) else []):
+            if not isinstance(item, dict):
+                continue
+            payload = self._manifest_status_bar_payload(item)
+            item_id = str(payload.get("id") or payload.get("manifestId") or "")
+            alignment = int(payload.get("alignment") or 2)
+            evidence = {
+                "kind": "statusBarItem",
+                "alignment": alignment,
+                "alignmentName": "left" if alignment == 1 else "right",
+                "priority": int(payload.get("priority") or 0),
+                "hasCommand": bool(payload.get("command")),
+                "hasText": bool(str(payload.get("text") or "")),
+                "hasTooltip": bool(str(payload.get("tooltip") or "")),
+                "hasColor": bool(payload.get("color")),
+                "hasBackgroundColor": bool(payload.get("backgroundColor")),
+                "readiness": "ready" if item_id else "missing-id",
+                "readinessScore": 100 if item_id else 40,
+                "readinessIssues": [] if item_id else ["missing-id"],
+            }
+            result.append({
+                "id": item_id,
+                "manifestId": str(payload.get("manifestId") or ""),
+                "name": str(payload.get("name") or item_id),
+                "text": str(payload.get("text") or ""),
+                "tooltip": str(payload.get("tooltip") or ""),
+                "extensionId": str(payload.get("extensionId") or ""),
+                "command": payload.get("command") or "",
+                "alignment": alignment,
+                "alignmentName": evidence["alignmentName"],
+                "priority": evidence["priority"],
+                "color": payload.get("color", ""),
+                "backgroundColor": payload.get("backgroundColor", ""),
+                "accessibilityInformation": (
+                    payload.get("accessibilityInformation") or {}),
+                "runtimeAvailable": True,
+                "source": "manifest",
+                "index": index,
+                "surfaceEvidence": evidence,
+                "readiness": evidence["readiness"],
+                "readinessScore": evidence["readinessScore"],
+                "readinessIssues": evidence["readinessIssues"],
+            })
+        result.sort(key=lambda row: (
+            int(row.get("alignment") or 2),
+            -int(row.get("priority") or 0),
+            str(row.get("extensionId") or ""),
+            str(row.get("id") or "")))
+        return result
+
+    def _extension_surface_language_status_items(self) -> List[Dict[str, Any]]:
+        host = getattr(self, "_node_ext_host", None)
+        host_running = bool(host is not None and getattr(host, "is_running", False))
+        raw_items = host.list_language_status_items() if (
+            host_running and hasattr(host, "list_language_status_items")) else []
+        result: List[Dict[str, Any]] = []
+        for item in raw_items if isinstance(raw_items, list) else []:
+            if not isinstance(item, dict):
+                continue
+            item_id = str(item.get("id") or "").strip()
+            severity = int(item.get("severity") or 0)
+            evidence = {
+                "kind": "languageStatus",
+                "severity": severity,
+                "severityName": (
+                    "error" if severity >= 2 else
+                    "warning" if severity == 1 else "info"),
+                "busy": bool(item.get("busy")),
+                "hasCommand": bool(item.get("command")),
+                "hasSelector": bool(item.get("selector")),
+                "hasDetail": bool(item.get("detail")),
+                "readiness": "ready" if item_id else "missing-id",
+                "readinessScore": 100 if item_id else 40,
+                "readinessIssues": [] if item_id else ["missing-id"],
+            }
+            record = dict(item)
+            record.update({
+                "id": item_id,
+                "name": str(
+                    item.get("name") or item.get("label")
+                    or item.get("text") or item_id),
+                "label": str(item.get("label") or item.get("text") or item_id),
+                "extensionId": str(item.get("extensionId") or ""),
+                "runtimeAvailable": True,
+                "nodeHostRunning": host_running,
+                "source": "runtime",
+                "surfaceEvidence": evidence,
+                "readiness": evidence["readiness"],
+                "readinessScore": evidence["readinessScore"],
+                "readinessIssues": evidence["readinessIssues"],
+            })
+            result.append(record)
+        result.sort(key=lambda row: (
+            -int(row.get("severity") or 0),
+            str(row.get("source") or ""),
+            str(row.get("id") or "")))
+        return result
+
     def _extension_runtime_surface_cache_key(
             self, context: Any, contributions: Dict[str, Any]) -> str:
         vscode_ns = getattr(self, "_vscode_ns", None)
@@ -12274,6 +12377,24 @@ class AIEditorAPI:
                     ]))
             return sorted(result)
 
+        def language_status_keys() -> List[str]:
+            if not host_running or not hasattr(host, "list_language_status_items"):
+                return []
+            result: List[str] = []
+            try:
+                for item in host.list_language_status_items():
+                    if not isinstance(item, dict):
+                        continue
+                    result.append(":".join([
+                        str(item.get("id") or ""),
+                        str(item.get("severity") or 0),
+                        "1" if item.get("busy") else "0",
+                        str(item.get("label") or item.get("text") or ""),
+                    ]))
+            except Exception:
+                return []
+            return sorted(result)
+
         payload = {
             "context": context if isinstance(context, dict) else {},
             "contributionKeys": {
@@ -12293,6 +12414,7 @@ class AIEditorAPI:
                 "registeredTools": keys(getattr(vscode_ns, "registered_tools", {})),
                 "chatParticipants": keys(
                     getattr(vscode_ns, "chat_participants", {})),
+                "languageStatus": language_status_keys(),
                 "nodeHostRunning": host_running,
             },
         }
@@ -12469,6 +12591,8 @@ class AIEditorAPI:
         chat_participants = self._extension_surface_chat_participants(
             contributions)
         chat_context_providers = self._extension_surface_chat_context_providers()
+        status_bar_items = self._extension_surface_status_bar_items(contributions)
+        language_status_items = self._extension_surface_language_status_items()
         webview_panels = self._extension_surface_webview_panels()
         webview_views = [
             item for item in views
@@ -12628,6 +12752,20 @@ class AIEditorAPI:
         notebook_selected_controllers = sum(
             int(item.get("selectionCount") or 0)
             for item in notebooks)
+        status_bar_commands = sum(
+            1 for item in status_bar_items if item.get("command"))
+        status_bar_left = sum(
+            1 for item in status_bar_items
+            if int(item.get("alignment") or 2) == 1)
+        status_bar_right = len(status_bar_items) - status_bar_left
+        language_status_busy = sum(
+            1 for item in language_status_items if item.get("busy"))
+        language_status_warnings = sum(
+            1 for item in language_status_items
+            if int(item.get("severity") or 0) == 1)
+        language_status_errors = sum(
+            1 for item in language_status_items
+            if int(item.get("severity") or 0) >= 2)
         payload = json.loads(json.dumps({
             "ok": True,
             "views": views,
@@ -12644,6 +12782,8 @@ class AIEditorAPI:
             "languageModelProviders": language_model_providers,
             "chatParticipants": chat_participants,
             "chatContextProviders": chat_context_providers,
+            "statusBarItems": status_bar_items,
+            "languageStatusItems": language_status_items,
             "summary": {
                 "views": len(views),
                 "treeViews": len(tree_views),
@@ -12712,6 +12852,14 @@ class AIEditorAPI:
                 "languageModelProviders": len(language_model_providers),
                 "chatParticipants": len(chat_participants),
                 "chatContextProviders": len(chat_context_providers),
+                "statusBarItems": len(status_bar_items),
+                "statusBarCommands": status_bar_commands,
+                "statusBarLeft": status_bar_left,
+                "statusBarRight": status_bar_right,
+                "languageStatusItems": len(language_status_items),
+                "languageStatusBusy": language_status_busy,
+                "languageStatusWarnings": language_status_warnings,
+                "languageStatusErrors": language_status_errors,
                 "cacheHit": False,
                 "dynamicSurfaces": (
                     len(tree_views) + len(webview_views) + len(webview_panels)
@@ -12719,7 +12867,8 @@ class AIEditorAPI:
                     + len(commands) + len(menus)
                     + len(terminal_profiles) + len(language_model_tools)
                     + len(language_model_providers) + len(chat_participants)
-                    + len(chat_context_providers)),
+                    + len(chat_context_providers) + len(status_bar_items)
+                    + len(language_status_items)),
             },
         }, ensure_ascii=False, default=str))
         self._extension_runtime_surface_cache[cache_key] = (now, payload)
