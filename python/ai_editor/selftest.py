@@ -21328,6 +21328,11 @@ def test_app_extension_runtime_support() -> None:
 
             def __init__(self) -> None:
                 self.messages = []
+                self.settings_syncs = []
+                self.diagnostics_enabled = None
+
+            def set_diagnostics_enabled(self, enabled):
+                self.diagnostics_enabled = bool(enabled)
 
             def send_settings_changed(
                     self, section, key, value=None, remove=False):
@@ -21338,6 +21343,20 @@ def test_app_extension_runtime_support() -> None:
                     "remove": remove,
                 })
                 return True
+
+            def send_settings_sync(self, settings):
+                self.settings_syncs.append(json.loads(json.dumps(
+                    settings, ensure_ascii=False, default=str)))
+                return True
+
+            def diagnostics_snapshot(self):
+                return {
+                    "enabled": bool(self.diagnostics_enabled),
+                    "running": self.is_running,
+                    "activated": 0,
+                    "pending": {},
+                    "categories": {},
+                }
 
         previous_settings_node_host = api._node_ext_host
         settings_node_host = _SettingsChangedNodeHost()
@@ -21375,6 +21394,12 @@ def test_app_extension_runtime_support() -> None:
                and settings_node_host.messages[-1].get("section") == "selftest"
                and settings_node_host.messages[-1].get("key") == "flag"
                and settings_node_host.messages[-1].get("remove") is True)
+        api._sync_settings_to_node_host()
+        _check("extension settings sync applies optional diagnostics mode",
+               settings_node_host.diagnostics_enabled is False
+               and settings_node_host.settings_syncs
+               and isinstance(settings_node_host.settings_syncs[-1].get(
+                   "ai_editor"), dict))
         target_set = api.set_extension_setting(
             "selftest.flag", True, "global")
         workspace_target_set = api.set_extension_setting(

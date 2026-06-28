@@ -3071,6 +3071,21 @@ class AIEditorAPI:
             isinstance(ext_cfg, dict)
             and ext_cfg.get("diagnostics_enabled") is True)
 
+    def _set_node_diagnostics_enabled(
+            self, host: Any = None, enabled: Optional[bool] = None) -> bool:
+        """Apply diagnostics mode when the host supports the optional API."""
+        target = host if host is not None else getattr(
+            self, "_node_ext_host", None)
+        if target is None:
+            return False
+        setter = getattr(target, "set_diagnostics_enabled", None)
+        if not callable(setter):
+            return False
+        setter(
+            self._extension_diagnostics_enabled()
+            if enabled is None else bool(enabled))
+        return True
+
     def _save_config_patch(self, data: Dict[str, Any]) -> Dict[str, Any]:
         settings = _resolve_settings(self._gui_ref)
         current = settings.get("ai_editor", {}) if settings else self.load_config()
@@ -8799,8 +8814,7 @@ class AIEditorAPI:
             return
         existing_host = getattr(self, "_node_ext_host", None)
         if existing_host is not None and existing_host.is_running:
-            existing_host.set_diagnostics_enabled(
-                self._extension_diagnostics_enabled())
+            self._set_node_diagnostics_enabled(existing_host)
             existing_host.set_command_service(self._ext_host.commands)
             self._install_node_runtime_event_bridge(existing_host)
             self._vscode_ns.set_language_provider_request_callback(
@@ -8851,7 +8865,7 @@ class AIEditorAPI:
             ui_bridge=ui_bridge,
             workspace_root=self._workspace_root(),
         )
-        host.set_diagnostics_enabled(self._extension_diagnostics_enabled())
+        self._set_node_diagnostics_enabled(host)
         host.set_command_service(self._ext_host.commands)
         self._install_node_runtime_event_bridge(host)
 
@@ -9310,7 +9324,10 @@ class AIEditorAPI:
         if not settings:
             return
         try:
-            host.set_diagnostics_enabled(self._extension_diagnostics_enabled())
+            self._set_node_diagnostics_enabled(host)
+            sender = getattr(host, "send_settings_sync", None)
+            if not callable(sender):
+                return
             # Build a flat section dict from all known settings
             raw: Dict[str, Any] = {}
             # Expose the full ai_editor config as a section
@@ -9335,7 +9352,7 @@ class AIEditorAPI:
                     if (key_str.startswith("[") and key_str.endswith("]")
                             and isinstance(value, dict)):
                         raw[key_str] = dict(value)
-            host.send_settings_sync(raw)
+            sender(raw)
         except Exception as exc:
             print(f"[NodeExtHost] Failed to sync settings: {exc}")
 
@@ -12549,8 +12566,24 @@ class AIEditorAPI:
                 "categories": {},
             }
         if reset:
-            host.reset_diagnostics()
-        return host.diagnostics_snapshot()
+            resetter = getattr(host, "reset_diagnostics", None)
+            if callable(resetter):
+                resetter()
+        snapshot = getattr(host, "diagnostics_snapshot", None)
+        if callable(snapshot):
+            return snapshot()
+        return {
+            "enabled": self._extension_diagnostics_enabled(),
+            "running": bool(getattr(host, "is_running", False)),
+            "activated": 0,
+            "pending": {
+                "commands": 0,
+                "tree": 0,
+                "language": 0,
+                "customEditors": 0,
+            },
+            "categories": {},
+        }
 
     def set_extension_host_diagnostics(self, enabled: bool) -> Dict:
         """Persist and apply the default-off Node extension diagnostics flag."""
@@ -12561,8 +12594,7 @@ class AIEditorAPI:
         ext_cfg["diagnostics_enabled"] = bool(enabled)
         merged = self._save_config_patch({"extensions": ext_cfg})
         host = getattr(self, "_node_ext_host", None)
-        if host is not None:
-            host.set_diagnostics_enabled(bool(enabled))
+        self._set_node_diagnostics_enabled(host, bool(enabled))
         return {
             "ok": True,
             "enabled": bool(enabled),
