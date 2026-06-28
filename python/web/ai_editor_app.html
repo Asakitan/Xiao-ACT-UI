@@ -2500,6 +2500,7 @@ pre.code-block { overflow:visible; }
 .drag-overlay { position:fixed; inset:0; background:var(--bg);opacity:0.9; z-index:500;
   display:none; align-items:center; justify-content:center; flex-direction:column;
   border:3px dashed var(--fg-accent); border-radius:8px; margin:16px; }
+.drag-overlay:not(.active) { pointer-events:none; }
 .drag-overlay.active { display:flex; }
 .drag-overlay .icon { font-size:48px; margin-bottom:12px; }
 .drag-overlay .text { font-size:16px; color:var(--fg-accent); }
@@ -2950,10 +2951,10 @@ pre.code-block { overflow:visible; }
 .settings-vscode-calm .settings-searchbar,
 .settings-vscode-calm .settings-shell { width:100%; }
 .settings-vscode-calm .settings-titlebar { display:none; padding:7px 32px 3px; border-bottom:1px solid transparent; }
-.settings-vscode-calm.settings-details-open .settings-titlebar { display:flex; }
+.settings-vscode-calm.settings-details-open .settings-titlebar { display:none; }
 .settings-vscode-calm .settings-title-actions { gap:3px; }
 .settings-vscode-calm:not(.settings-details-open) .settings-toolbar-strip { display:none; }
-.settings-vscode-calm.settings-details-open .settings-toolbar-strip { display:inline-flex; }
+.settings-vscode-calm.settings-details-open .settings-toolbar-strip { display:none; }
 .settings-vscode-calm .settings-searchbar { padding:4px 32px 0; }
 .settings-vscode-calm .settings-search-row { grid-template-columns:minmax(520px,760px);
   justify-content:start; gap:6px; align-items:start; }
@@ -2994,8 +2995,10 @@ pre.code-block { overflow:visible; }
 .settings-vscode-calm .settings-nav-item.active { box-shadow:inset 2px 0 0 var(--fg-accent);
   background:color-mix(in srgb,var(--bg-hover) 78%,transparent); padding-left:8px; }
 .settings-vscode-calm:not(.settings-details-open) .settings-scope-control { display:none; }
-.settings-vscode-calm.settings-details-open .settings-scope-control { display:inline-flex; }
+.settings-vscode-calm.settings-details-open .settings-scope-control { display:none; }
 .settings-vscode-calm:not(.settings-details-open) .settings-search-row { grid-template-columns:minmax(520px,760px);
+  padding-bottom:6px; border-bottom:0; }
+.settings-vscode-calm.settings-details-open .settings-search-row { grid-template-columns:minmax(520px,760px);
   padding-bottom:6px; border-bottom:0; }
 .settings-vscode-calm .settings-nav-scope { padding:0 8px 10px 0; margin:0 0 8px;
   border-bottom:1px solid color-mix(in srgb,var(--border) 54%,transparent); }
@@ -40634,6 +40637,25 @@ $('chat-messages').addEventListener('contextmenu',function(e){
 
 // ── File drag-and-drop attachments ──
 let attachments=[];
+
+function clearTransientInteractionBlockers(reason){
+  const overlay=$('drag-overlay');
+  if(overlay&&overlay.classList.contains('active')){
+    overlay.classList.remove('active');
+    overlay.dataset.lastClearedReason=String(reason||'pointer');
+  }
+  if(document.body.classList.contains('window-closing')&&reason==='startup'){
+    document.body.classList.remove('window-closing');
+  }
+}
+document.addEventListener('pointerdown',e=>{
+  const overlay=$('drag-overlay');
+  if(overlay&&overlay.classList.contains('active')){
+    clearTransientInteractionBlockers('pointer');
+  }
+},true);
+window.addEventListener('focus',()=>clearTransientInteractionBlockers('focus'));
+window.addEventListener('pageshow',()=>clearTransientInteractionBlockers('startup'));
 
 document.addEventListener('dragenter',e=>{e.preventDefault();$('drag-overlay').classList.add('active')});
 document.addEventListener('dragleave',e=>{if(e.target.id==='drag-overlay')$('drag-overlay').classList.remove('active')});

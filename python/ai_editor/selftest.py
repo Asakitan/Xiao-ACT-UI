@@ -2208,13 +2208,24 @@ def test_app_settings_parity() -> None:
     with open(panels_path, "r", encoding="utf-8") as fh:
         panels_src = fh.read()
     _check("AI Editor menu launch stops fisheye overlay",
-           "self._stop_fisheye_overlay()" in panels_src)
+           "self._stop_fisheye_overlay()" in panels_src
+           and "self._destroy_fisheye_hit_layer()" in panels_src
+           and "self._release_fisheye_input_zorder(" in panels_src
+           and "_fisheye_close_suppress_until" in panels_src)
     app_path = os.path.join(root_dir, "ai_editor", "app.py")
     with open(app_path, "r", encoding="utf-8") as fh:
         app_src = fh.read()
     _check("AI Editor activation does not block webview.start",
            "threading.Thread(target=_activate_ai_editor_window_with_retry" in app_src
            and "webview.start(debug=False)" in app_src)
+    _check("AI Editor menu launch is async and single-flight",
+           "def _launch_subprocess_async()" in app_src
+           and "name=\"sao-ai-editor-launch\"" in app_src
+           and "_launch_lock = threading.Lock()" in app_src
+           and "_LAUNCH_INFLIGHT_TTL_SECONDS" in app_src
+           and "launch request ignored; launcher already running" in app_src
+           and "launch request ignored; launch recently started" in app_src
+           and "_launch_subprocess_async()" in app_src)
     _check("AI Editor existing window activation verifies visibility before reuse",
            "def _window_handle_visible_after_activation(" in app_src
            and "def _window_handle_responding(" in app_src
@@ -4352,8 +4363,9 @@ def test_phase1_ai_editor_regressions() -> None:
             and ".settings-vscode-calm .settings-field.builtin-setting.settings-current:not(.modified)" in html
             and ".settings-vscode-calm .settings-control-frame { max-width:680px;" in html
             and ".settings-vscode-calm .settings-titlebar { display:none;" in html
-            and ".settings-vscode-calm.settings-details-open .settings-titlebar { display:flex; }" in html
+            and ".settings-vscode-calm.settings-details-open .settings-titlebar { display:none; }" in html
             and ".settings-vscode-calm:not(.settings-details-open) .settings-scope-control { display:none; }" in html
+            and ".settings-vscode-calm.settings-details-open .settings-scope-control { display:none; }" in html
             and ".settings-vscode-calm .settings-nav-scope" in html
             and ".settings-vscode-calm .settings-nav-scope-tabs" in html
             and ".settings-vscode-calm .settings-active-filters," in html
@@ -4463,7 +4475,12 @@ def test_phase1_ai_editor_regressions() -> None:
            and "hasSettingsWorkbenchStatus" in html
            and "hasFullBleedSettingsWorkbench" in html
            and "hasVsCodeWorkbenchSearchWidth" in html
-           and "hasVsCodeHumanSettingControls" in html)
+           and "hasVsCodeHumanSettingControls" in html
+           and ".settings-vscode-calm.settings-details-open .settings-toolbar-strip { display:none; }" in html
+           and ".settings-vscode-calm.settings-details-open .settings-search-row { grid-template-columns:minmax(520px,760px);" in html
+           and ".drag-overlay:not(.active) { pointer-events:none; }" in html
+           and "function clearTransientInteractionBlockers(reason)" in html
+           and "window.addEventListener('pageshow',()=>clearTransientInteractionBlockers('startup'))" in html)
     _check("frontend Settings row actions are keyboard accessible",
            "btn.setAttribute('aria-label',title||label);" in html
            and "const more=addButton('⋯','More setting actions',null,false);" in html

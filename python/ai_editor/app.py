@@ -16998,6 +16998,9 @@ class _DummyGui:
 
 _running_window = None
 _running_thread = None
+_launch_lock = threading.Lock()
+_launch_inflight_started_at = 0.0
+_LAUNCH_INFLIGHT_TTL_SECONDS = 8.0
 
 
 def _html_path() -> str:
@@ -17037,9 +17040,38 @@ def launch(gui_ref: Any = None, blocking: bool = False) -> None:
         _launch_webview_blocking(gui_ref)
         return
 
-    # Non-blocking: pywebview.start() needs main thread. If a Tk mainloop
-    # already owns the main thread, spawn a subprocess instead.
-    _launch_subprocess()
+    # Non-blocking: keep Tk/menu click handlers responsive. Window probing and
+    # process creation may touch Win32 APIs, so run them outside the UI thread.
+    _launch_subprocess_async()
+
+
+def _launch_subprocess_async() -> None:
+    """Start or reuse one background launcher for click-driven opens."""
+    global _running_thread, _launch_inflight_started_at
+    now = time.monotonic()
+    with _launch_lock:
+        if _running_thread is not None and _running_thread.is_alive():
+            _append_ai_editor_log("launch request ignored; launcher already running")
+            return
+        if now - _launch_inflight_started_at < _LAUNCH_INFLIGHT_TTL_SECONDS:
+            _append_ai_editor_log("launch request ignored; launch recently started")
+            return
+        _launch_inflight_started_at = now
+        _running_thread = threading.Thread(
+            target=_launch_subprocess_worker,
+            name="sao-ai-editor-launch",
+            daemon=True,
+        )
+        _running_thread.start()
+
+
+def _launch_subprocess_worker() -> None:
+    global _running_thread
+    try:
+        _launch_subprocess()
+    finally:
+        with _launch_lock:
+            _running_thread = None
 
 
 def _launch_subprocess() -> None:

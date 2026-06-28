@@ -71,6 +71,18 @@ class SAOPlayerGUIPanelsMixin:
         """启动独立 AI Editor GUI 窗口 (pywebview)."""
         self._dismiss_sao_menu_for_panel()
         try:
+            self._fisheye_close_suppress_until = time.time() + 1.4
+        except Exception:
+            pass
+        try:
+            self._destroy_fisheye_hit_layer()
+        except Exception:
+            pass
+        try:
+            self._release_fisheye_input_zorder(getattr(self, '_fisheye_ov', None))
+        except Exception:
+            pass
+        try:
             self._stop_fisheye_overlay()
         except Exception:
             pass
