@@ -920,6 +920,26 @@ class _FakeNodeCustomEditorHost:
             return []
         return [task]
 
+    def notebook_cell_status_bar_providers(self):
+        return [{
+            "notebookType": "selftest.notebook",
+            "extensionId": "selftest.notebookExt",
+        }]
+
+    def notebook_controller_selections(self):
+        return [{
+            "notebookType": "selftest.notebook",
+            "controllerId": "selftest.notebookController",
+            "selected": True,
+        }]
+
+    def notebook_controller_affinities(self):
+        return [{
+            "notebookType": "selftest.notebook",
+            "controllerId": "selftest.notebookController",
+            "affinity": 2,
+        }]
+
     def select_notebook_controller_result(
             self, uri, notebook, view_type="", handle=None, controller_id="",
             selected=True, default=None, timeout=3.0):
@@ -4050,10 +4070,26 @@ def test_app_settings_parity() -> None:
                runtime_surfaces.get("ok") is True
                and runtime_surfaces.get("summary", {}).get("customEditors") == 1
                and runtime_surfaces.get("summary", {}).get("notebooks") == 1
+               and runtime_surfaces.get("summary", {}).get("customEditorReady") == 1
+               and runtime_surfaces.get("summary", {}).get("customEditorWarnings") == 0
+               and runtime_surfaces.get("summary", {}).get("customEditorStates") == 1
+               and runtime_surfaces.get("summary", {}).get("customEditorSelectors") == 1
+               and runtime_surfaces.get("summary", {}).get("notebookReady") == 0
+               and runtime_surfaces.get("summary", {}).get("notebookWarnings") == 1
+               and runtime_surfaces.get("summary", {}).get("notebookStatusBarProviders") == 1
+               and runtime_surfaces.get("summary", {}).get("notebookDetectionTasks") == 1
+               and runtime_surfaces.get("summary", {}).get("notebookSelectedControllers") == 1
                and custom_surface.get("selftest.customNbt", {}).get(
                    "runtimeAvailable") is True
                and custom_surface.get("selftest.customNbt", {}).get(
                    "stateCount") == 1
+               and custom_surface.get("selftest.customNbt", {}).get(
+                   "readiness") == "ready"
+               and custom_surface.get("selftest.customNbt", {}).get(
+                   "surfaceEvidence", {}).get("selectorCount") == 1
+               and custom_surface.get("selftest.customNbt", {}).get(
+                   "surfaceEvidence", {}).get("capabilities", {}).get(
+                       "hasSave") is True
                and notebook_surface.get("selftest.notebook", {}).get(
                    "runtimeAvailable") is True
                and notebook_surface.get("selftest.notebook", {}).get(
@@ -4061,7 +4097,14 @@ def test_app_settings_parity() -> None:
                and notebook_surface.get("selftest.notebook", {}).get(
                    "controllerCount") == 1
                and notebook_surface.get("selftest.notebook", {}).get(
-                   "detectionTaskCount") == 1,
+                   "detectionTaskCount") == 1
+               and notebook_surface.get("selftest.notebook", {}).get(
+                   "readiness") == "detecting"
+               and notebook_surface.get("selftest.notebook", {}).get(
+                   "statusBarProviderCount") == 1
+               and notebook_surface.get("selftest.notebook", {}).get(
+                   "surfaceEvidence", {}).get("controllerIds", [])
+               == ["selftest.notebookController"],
                json.dumps(runtime_surfaces, ensure_ascii=False, default=str))
         save_notebook = tree_api.save_workspace_notebook(
             "assets/demo.selfnb",
@@ -11649,9 +11692,19 @@ console.log("frontend word separator behavior ok");
            and "['Webview HTML',summary.webviewHtmlAvailable||0]" in html
            and "['Webview Ready',rows.filter(row=>row.kind==='WebviewView'&&row.webviewReadiness==='ready').length]" in html
            and "['Webview Warnings',rows.filter(row=>row.kind==='WebviewView'&&row.webviewReadiness&&row.webviewReadiness!=='ready').length]" in html
+           and "['Custom Ready',summary.customEditorReady||rows.filter(row=>row.kind==='CustomEditor'" in html
+           and "['Notebook Status',summary.notebookStatusBarProviders||rows.reduce" in html
            and "webviewEvidence:evidence" in html
+           and "const surfaceEvidence=(item&&item.surfaceEvidence&&typeof item.surfaceEvidence==='object')" in html
+           and "surfaceEvidence.stateCount?'states:'+surfaceEvidence.stateCount:''" in html
+           and "surfaceReadiness:evidence.readiness||readiness.kind" in html
            and "webviewReadiness:evidence.readiness||readiness.kind" in html
            and "el.dataset.webviewHtmlAvailable=row.htmlAvailable?'1':'0';" in html
+           and "el.dataset.surfaceReadiness=row.surfaceReadiness||row.surfaceEvidence&&row.surfaceEvidence.readiness||'';" in html
+           and "el.dataset.surfaceStateCount=String(row.surfaceEvidence&&row.surfaceEvidence.stateCount||0);" in html
+           and "el.dataset.surfaceDirtyStateCount=String(row.surfaceEvidence&&row.surfaceEvidence.dirtyStateCount||0);" in html
+           and "el.dataset.surfaceControllerCount=String(row.surfaceEvidence&&row.surfaceEvidence.controllerCount||0);" in html
+           and "el.dataset.surfaceStatusBarProviderCount=String(row.surfaceEvidence&&row.surfaceEvidence.statusBarProviderCount||0);" in html
            and "['Resource Roots',rows.reduce((n,row)=>n+(row.kind==='WebviewView'?(Number(row.webviewEvidence&&row.webviewEvidence.localResourceRootCount)||0):0),0)]" in html
            and "['Port Mappings',rows.reduce((n,row)=>n+(row.kind==='WebviewView'?(Number(row.webviewEvidence&&row.webviewEvidence.portMappingCount)||0):0),0)]" in html
            and "el.dataset.webviewLocalResourceRootCount=String(row.webviewEvidence&&row.webviewEvidence.localResourceRootCount||0);" in html
@@ -11665,7 +11718,11 @@ console.log("frontend word separator behavior ok");
            and "row.webviewReadiness?{text:'readiness '+row.webviewReadiness" in html
            and "runtimeWebviewReadyRows" in html
            and "runtimeWebviewWarningRows" in html
+           and "runtimeSurfaceEvidenceRows" in html
+           and "runtimeCustomDirtyRows" in html
+           and "runtimeNotebookStatusRows" in html
            and "extension-runtime-tag webview-evidence" in html
+           and "extension-runtime-tag surface-evidence" in html
            and "snapshot.runtimeWebviewEvidenceRows>=6" in html
            and "snapshot.runtimeMissingEvidenceRows>=1" in html
            and "snapshot.runtimeMiniActionButtons>=snapshot.runtimeRows*3" in html
@@ -11720,6 +11777,17 @@ console.log("frontend word separator behavior ok");
            and "\"webviewReadinessIssues\": webview_readiness_issues[:12]" in app_source
            and "\"localResourceRootCount\": local_resource_root_count" in app_source
            and "\"asWebviewUriSupported\": as_webview_uri_supported" in app_source
+           and "def _custom_editor_surface_evidence(" in app_source
+           and "def _notebook_surface_evidence(" in app_source
+           and "\"surfaceEvidence\": evidence" in app_source
+           and "\"customEditorReady\": custom_editor_ready" in app_source
+           and "\"customEditorWarnings\": custom_editor_warnings" in app_source
+           and "\"customEditorDirtyStates\": custom_editor_dirty_states" in app_source
+           and "\"customEditorSelectors\": custom_editor_selectors" in app_source
+           and "\"notebookReady\": notebook_ready" in app_source
+           and "\"notebookWarnings\": notebook_warnings" in app_source
+           and "\"notebookStatusBarProviders\": notebook_status_bar_providers" in app_source
+           and "\"notebookSelectedControllers\": notebook_selected_controllers" in app_source
            and "payload.setdefault(\"summary\", {})[\"cacheHit\"] = True" in app_source
            and "\"cacheHit\": False" in app_source
            and "if len(self._extension_runtime_surface_cache) > 12:" in app_source)

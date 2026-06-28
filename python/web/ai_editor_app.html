@@ -37476,11 +37476,14 @@ function extensionRuntimeSurfaceRows(data){
     const runtime=ready!==false;
     const extensionId=String(item.extensionId||item.extension_id||item._extensionId||'');
     const resourceUri=extensionRuntimeSurfaceResourceUri(item);
-    const evidence=(item&&item.webviewEvidence&&typeof item.webviewEvidence==='object')
+    const surfaceEvidence=(item&&item.surfaceEvidence&&typeof item.surfaceEvidence==='object')
+      ? item.surfaceEvidence
+      : (item&&item.evidence&&typeof item.evidence==='object'?item.evidence:{});
+    const evidence=kind==='WebviewView'?(item&&item.webviewEvidence&&typeof item.webviewEvidence==='object')
       ? item.webviewEvidence
       : (item&&item.runtimeState&&item.runtimeState.webviewEvidence&&typeof item.runtimeState.webviewEvidence==='object'
         ? item.runtimeState.webviewEvidence
-        : {});
+        : {}):{...surfaceEvidence};
     const webviewId=String(item.id||item.viewId||item.view_id||item.webviewId||item.webview_id||'').trim();
     const cachedRuntime=kind==='WebviewView'&&webviewId?(webviewRuntimeCache[webviewId]||{}):{};
     if(kind==='WebviewView'&&cachedRuntime&&Object.keys(cachedRuntime).length){
@@ -37539,7 +37542,11 @@ function extensionRuntimeSurfaceRows(data){
       resourceRewriteCount:Number(evidence.resourceRewriteCount||0)||0,
       resourceEndpointReady:!!evidence.resourceEndpointReady,
       resourceMapReady:!!evidence.resourceMapReady
-    }):{kind:'n/a',score:0,issues:[]};
+    }):{
+      kind:String(surfaceEvidence.readiness||item.readiness||(runtime?'ready':'pending')),
+      score:Number(surfaceEvidence.readinessScore||item.readinessScore||(runtime?100:0))||0,
+      issues:Array.isArray(surfaceEvidence.readinessIssues)?surfaceEvidence.readinessIssues:(Array.isArray(item.readinessIssues)?item.readinessIssues:[])
+    };
     evidence.readiness=evidence.readiness||readiness.kind;
     evidence.readinessScore=Number(evidence.readinessScore||readiness.score)||0;
     evidence.readinessIssues=Array.isArray(evidence.readinessIssues)?evidence.readinessIssues:readiness.issues;
@@ -37580,6 +37587,14 @@ function extensionRuntimeSurfaceRows(data){
       evidence.lastResourceRewriteKind?'resource-kind:'+evidence.lastResourceRewriteKind:'',
       evidence.readiness?'readiness:'+evidence.readiness:'',
       evidence.readinessScore?'readiness-score:'+evidence.readinessScore:'',
+      surfaceEvidence.stateCount?'states:'+surfaceEvidence.stateCount:'',
+      surfaceEvidence.dirtyStateCount?'dirty:'+surfaceEvidence.dirtyStateCount:'',
+      surfaceEvidence.selectorCount?'selectors:'+surfaceEvidence.selectorCount:'',
+      surfaceEvidence.serializerCount?'serializers:'+surfaceEvidence.serializerCount:'',
+      surfaceEvidence.controllerCount?'controllers:'+surfaceEvidence.controllerCount:'',
+      surfaceEvidence.statusBarProviderCount?'statusbar:'+surfaceEvidence.statusBarProviderCount:'',
+      Array.isArray(surfaceEvidence.controllerIds)?surfaceEvidence.controllerIds.join(' '):'',
+      Array.isArray(surfaceEvidence.supportedLanguages)?surfaceEvidence.supportedLanguages.join(' '):'',
       Array.isArray(evidence.readinessIssues)?evidence.readinessIssues.join(' '):'',
     ].filter(Boolean).join(' ');
     const row={
@@ -37596,6 +37611,10 @@ function extensionRuntimeSurfaceRows(data){
       command:String(item.command||''),
       id:String(item.id||item.profileId||item.profile_id||item.viewType||item.type||item.vendor||item.kind||item.name||item.command||''),
       webviewEvidence:evidence,
+      surfaceEvidence,
+      surfaceReadiness:evidence.readiness||readiness.kind,
+      surfaceReadinessScore:Number(evidence.readinessScore||readiness.score)||0,
+      surfaceReadinessIssues:Array.isArray(evidence.readinessIssues)?evidence.readinessIssues.slice():[],
       webviewReadiness:evidence.readiness||readiness.kind,
       webviewReadinessScore:Number(evidence.readinessScore||readiness.score)||0,
       webviewReadinessIssues:Array.isArray(evidence.readinessIssues)?evidence.readinessIssues.slice():[],
@@ -37610,7 +37629,7 @@ function extensionRuntimeSurfaceRows(data){
     row.focusable=row.kind==='WebviewView'||row.kind==='TreeView'||row.kind==='CustomEditor'||row.kind==='Notebook';
     row.refreshable=row.kind==='WebviewView'||row.kind==='TreeView'||row.kind==='CustomEditor'||row.kind==='Notebook';
     row.key=[row.kind,row.id,row.command,row.extensionId,row.source,row.container,row.resourceUri].join('|');
-      row.searchText=[row.kind,row.label,row.meta,row.extensionId,row.container,row.resourceUri,row.source,row.dynamicSource,row.providerBacked?'provider-backed':'',row.command,row.id,row.action&&row.action.type,row.evidenceText,row.evidenceStatus,row.webviewReadiness,(row.webviewReadinessIssues||[]).join(' ')].join(' ').toLowerCase();
+      row.searchText=[row.kind,row.label,row.meta,row.extensionId,row.container,row.resourceUri,row.source,row.dynamicSource,row.providerBacked?'provider-backed':'',row.command,row.id,row.action&&row.action.type,row.evidenceText,row.evidenceStatus,row.surfaceReadiness,(row.surfaceReadinessIssues||[]).join(' ')].join(' ').toLowerCase();
     rows.push(row);
   };
   (data.treeViews||[]).slice(0,8).forEach(item=>push('TreeView',item,item.name||item.id,item.id+' · '+(item.container||'runtime'),item.runtimeAvailable!==false));
@@ -37877,6 +37896,13 @@ function renderExtensionRuntimeSurfacePanel(data){
     ['WebviewView',summary.webviewViews||0],
     ['CustomEditor',summary.customEditors||0],
     ['Notebook',summary.notebooks||0],
+    ['Custom Ready',summary.customEditorReady||rows.filter(row=>row.kind==='CustomEditor'&&['ready','dirty'].includes(row.surfaceReadiness)).length],
+    ['Custom Warnings',summary.customEditorWarnings||rows.filter(row=>row.kind==='CustomEditor'&&row.surfaceReadiness&&!['ready','dirty'].includes(row.surfaceReadiness)).length],
+    ['Custom Dirty',summary.customEditorDirtyStates||rows.reduce((n,row)=>n+(row.kind==='CustomEditor'?(Number(row.surfaceEvidence&&row.surfaceEvidence.dirtyStateCount)||0):0),0)],
+    ['Notebook Ready',summary.notebookReady||rows.filter(row=>row.kind==='Notebook'&&row.surfaceReadiness==='ready').length],
+    ['Notebook Warnings',summary.notebookWarnings||rows.filter(row=>row.kind==='Notebook'&&row.surfaceReadiness&&row.surfaceReadiness!=='ready').length],
+    ['Notebook Kernels',summary.notebookControllers||rows.reduce((n,row)=>n+(row.kind==='Notebook'?(Number(row.surfaceEvidence&&row.surfaceEvidence.controllerCount)||0):0),0)],
+    ['Notebook Status',summary.notebookStatusBarProviders||rows.reduce((n,row)=>n+(row.kind==='Notebook'?(Number(row.surfaceEvidence&&row.surfaceEvidence.statusBarProviderCount)||0):0),0)],
     ['Command',summary.commands||0],
     ['Menu',summary.menus||0],
     ['Terminal',summary.terminalProfiles||0],
@@ -37913,7 +37939,7 @@ function renderExtensionRuntimeSurfacePanel(data){
   chips.forEach(([label,value])=>{
     const chip=document.createElement('span');chip.className='extension-runtime-chip';
     chip.innerHTML='<strong>'+esc(String(value))+'</strong>'+esc(label);
-    if(['TreeView','WebviewView','CustomEditor','Notebook','Command','Menu','Terminal','LM Tool','LM Provider','Chat','Context','Runtime','Manifest','Manifest + Runtime','Runtime Only','Provider Webview','Webview HTML','Missing Webview HTML','Retained Webview','Evidence Ready','Resource Rewrites','Resource Roots','Port Mappings','Webview Messages','Queued Webview','Dropped Webview','Webview Ready','Webview Warnings'].includes(label)){
+    if(['TreeView','WebviewView','CustomEditor','Notebook','Custom Ready','Custom Warnings','Custom Dirty','Notebook Ready','Notebook Warnings','Notebook Kernels','Notebook Status','Command','Menu','Terminal','LM Tool','LM Provider','Chat','Context','Runtime','Manifest','Manifest + Runtime','Runtime Only','Provider Webview','Webview HTML','Missing Webview HTML','Retained Webview','Evidence Ready','Resource Rewrites','Resource Roots','Port Mappings','Webview Messages','Queued Webview','Dropped Webview','Webview Ready','Webview Warnings'].includes(label)){
       chip.classList.add('filterable');
       chip.tabIndex=0;
       chip.setAttribute('role','button');
@@ -37926,7 +37952,7 @@ function renderExtensionRuntimeSurfacePanel(data){
         if(sourceMap[label]&&sourceSel)sourceSel.value=sourceMap[label];
         else if(evidenceMap[label]&&evidenceSel)evidenceSel.value=evidenceMap[label];
         else if(kindSel){
-          const next=kindMap[label]||label;
+          const next=kindMap[label]||label.replace(/ .*/,'');
           if(Array.from(kindSel.options).some(opt=>opt.value===next))kindSel.value=next;
         }
         applyExtensionRuntimeSurfaceFilter();
@@ -37985,6 +38011,17 @@ function renderExtensionRuntimeSurfacePanel(data){
       el.dataset.webviewReadiness=row.webviewReadiness||row.webviewEvidence&&row.webviewEvidence.readiness||'';
       el.dataset.webviewReadinessScore=String(row.webviewReadinessScore||row.webviewEvidence&&row.webviewEvidence.readinessScore||0);
       el.dataset.webviewReadinessIssues=(row.webviewReadinessIssues||row.webviewEvidence&&row.webviewEvidence.readinessIssues||[]).join(',');
+      el.dataset.surfaceEvidenceKind=String(row.surfaceEvidence&&row.surfaceEvidence.kind||row.kind||'');
+      el.dataset.surfaceReadiness=row.surfaceReadiness||row.surfaceEvidence&&row.surfaceEvidence.readiness||'';
+      el.dataset.surfaceReadinessScore=String(row.surfaceReadinessScore||row.surfaceEvidence&&row.surfaceEvidence.readinessScore||0);
+      el.dataset.surfaceReadinessIssues=(row.surfaceReadinessIssues||row.surfaceEvidence&&row.surfaceEvidence.readinessIssues||[]).join(',');
+      el.dataset.surfaceSelectorCount=String(row.surfaceEvidence&&row.surfaceEvidence.selectorCount||0);
+      el.dataset.surfaceStateCount=String(row.surfaceEvidence&&row.surfaceEvidence.stateCount||0);
+      el.dataset.surfaceDirtyStateCount=String(row.surfaceEvidence&&row.surfaceEvidence.dirtyStateCount||0);
+      el.dataset.surfaceSerializerCount=String(row.surfaceEvidence&&row.surfaceEvidence.serializerCount||0);
+      el.dataset.surfaceControllerCount=String(row.surfaceEvidence&&row.surfaceEvidence.controllerCount||0);
+      el.dataset.surfaceStatusBarProviderCount=String(row.surfaceEvidence&&row.surfaceEvidence.statusBarProviderCount||0);
+      el.dataset.surfaceDetectionTaskCount=String(row.surfaceEvidence&&row.surfaceEvidence.detectionTaskCount||0);
       el.dataset.webviewResourceRewriteBreakdown=String(row.webviewEvidence&&row.webviewEvidence.resourceRewriteBreakdown||'0/0/0/0/0');
       el.dataset.webviewLastResourceRewriteKind=String(row.webviewEvidence&&row.webviewEvidence.lastResourceRewriteKind||'');
       el.dataset.focusable=row.focusable?'1':'0';
@@ -38039,6 +38076,27 @@ function renderExtensionRuntimeSurfacePanel(data){
         chips.forEach(item=>{
           const chip=document.createElement('span');
           chip.className='extension-runtime-tag webview-evidence'+(item.missing?' missing':'');
+          chip.textContent=item.text;
+          meta.appendChild(chip);
+        });
+      }else if(row.kind==='CustomEditor'||row.kind==='Notebook'){
+        const ev=row.surfaceEvidence||{};
+        const chips=[
+          row.surfaceReadiness?{text:'readiness '+row.surfaceReadiness+(row.surfaceReadinessScore?(' '+row.surfaceReadinessScore):''),missing:!['ready','dirty'].includes(row.surfaceReadiness)}:null,
+          ...(row.surfaceReadinessIssues||[]).slice(0,2).map(issue=>({text:issue,missing:true})),
+          ev.selectorCount?{text:'selectors '+ev.selectorCount}:null,
+          ev.stateCount?{text:'states '+ev.stateCount}:null,
+          ev.dirtyStateCount?{text:'dirty '+ev.dirtyStateCount,missing:true}:null,
+          ev.canUndoStateCount?{text:'undo '+ev.canUndoStateCount}:null,
+          ev.serializerCount?{text:'serializers '+ev.serializerCount}:null,
+          ev.controllerCount?{text:'kernels '+ev.controllerCount}:null,
+          ev.statusBarProviderCount?{text:'status '+ev.statusBarProviderCount}:null,
+          ev.detectionTaskCount?{text:'detect '+ev.detectionTaskCount,missing:true}:null,
+          Array.isArray(ev.controllerIds)&&ev.controllerIds.length?{text:'id '+ev.controllerIds[0]}:null,
+        ].filter(Boolean);
+        chips.forEach(item=>{
+          const chip=document.createElement('span');
+          chip.className='extension-runtime-tag surface-evidence'+(item.missing?' missing':'');
           chip.textContent=item.text;
           meta.appendChild(chip);
         });
@@ -39776,15 +39834,15 @@ function extensionRuntimeDomSelfCheckSnapshot(){
     root.appendChild(notebookOutputHost);
 
     const runtimeData={
-      summary:{treeViews:1,webviewViews:2,webviewHtmlAvailable:1,webviewRetained:1,webviewVisible:1,customEditors:1,notebooks:1,commands:1,menus:1,terminalProfiles:1,languageModelTools:1,languageModelProviders:1,chatParticipants:1,chatContextProviders:1,dynamicSurfaces:12},
+      summary:{treeViews:1,webviewViews:2,webviewHtmlAvailable:1,webviewRetained:1,webviewVisible:1,customEditors:1,customEditorReady:1,customEditorDirtyStates:1,notebooks:1,notebookReady:1,notebookControllers:1,notebookStatusBarProviders:1,commands:1,menus:1,terminalProfiles:1,languageModelTools:1,languageModelProviders:1,chatParticipants:1,chatContextProviders:1,dynamicSurfaces:12},
       viewContainers:[fixtureItem],
       treeViews:[{id:'selftest.dynamic.tree',name:'Runtime Tree',container:'selftest.dynamic.container',extensionId:'selftest.extension',runtimeAvailable:true}],
       webviewViews:[
         {id:'selftest.dynamic.webview',name:'Runtime Webview',container:'selftest.dynamic.container',extensionId:'selftest.extension',runtimeAvailable:true,htmlAvailable:true,htmlLength:61,webviewEvidence:{htmlAvailable:true,htmlLength:61,stateKind:'dict',stateKeys:['ready'],enableScripts:true,enableForms:true,enableCommandUris:false,retainContextWhenHidden:true,visible:true,messageCount:3,messagesToWebview:2,messagesFromWebview:1,queuedMessageCount:1,flushedMessageCount:1,lastDeliveredMessageSeq:2,lastQueuedMessageSeq:1,lastFlushedMessageSeq:1,lastQueueReason:'missing-frame',lastFlushReason:'webview-ready:selftest',resourceRewriteCount:7,localResourceRootCount:1,portMappingCount:1,resourceMapHitCount:2,resourceEndpointRewriteCount:2,resourceCssRewriteCount:2,resourceAttributeRewriteCount:1,lastResourceRewriteKind:'css'}},
         {id:'selftest.dynamic.webview.pending',name:'Pending Runtime Webview',container:'selftest.dynamic.container',extensionId:'selftest.extension',runtimeAvailable:true,htmlAvailable:false,htmlLength:0,webviewEvidence:{htmlAvailable:false,stateKind:'dict',stateKeys:['pending'],enableScripts:true,enableForms:true,retainContextWhenHidden:false,visible:false,pendingMessageCount:1,queuedMessageCount:1,droppedMessageCount:1,lastDroppedReason:'disposed-queue',lastQueueReason:'missing-frame'}}
       ],
-      customEditors:[{viewType:'selftest.customEditor',displayName:'Custom Fixture',extensionId:'selftest.extension',stateCount:1,states:[{uri:'custom.fixture'}],runtimeAvailable:true}],
-      notebooks:[{type:'selftest-notebook',displayName:'Selftest Notebook',extensionId:'selftest.extension',serializerCount:1,controllerCount:1,uri:'selftest.notebook',runtimeAvailable:true}],
+      customEditors:[{viewType:'selftest.customEditor',displayName:'Custom Fixture',extensionId:'selftest.extension',selectorCount:1,stateCount:1,dirtyStateCount:1,states:[{uri:'custom.fixture',dirty:true,canUndo:true}],runtimeAvailable:true,readiness:'dirty',readinessScore:100,readinessIssues:[],surfaceEvidence:{kind:'customEditor',viewType:'selftest.customEditor',selectorCount:1,stateCount:1,dirtyStateCount:1,canUndoStateCount:1,resourceUris:['custom.fixture'],capabilities:{supportsMultipleEditorsPerDocument:true,hasSave:true,hasSaveAs:true,hasRevert:true,hasBackup:true},readiness:'dirty',readinessScore:100,readinessIssues:[]}}],
+      notebooks:[{type:'selftest-notebook',displayName:'Selftest Notebook',extensionId:'selftest.extension',selectorCount:1,serializerCount:1,controllerCount:1,statusBarProviderCount:1,detectionTaskCount:0,controllerIds:['selftest.notebookController'],uri:'selftest.notebook',runtimeAvailable:true,readiness:'ready',readinessScore:100,readinessIssues:[],surfaceEvidence:{kind:'notebook',type:'selftest-notebook',selectorCount:1,serializerCount:1,controllerCount:1,statusBarProviderCount:1,detectionTaskCount:0,controllerIds:['selftest.notebookController'],supportedLanguages:['python'],readiness:'ready',readinessScore:100,readinessIssues:[]}}],
       commands:[{command:'selftest.run',title:'Run Fixture',source:'extension',extensionId:'selftest.extension',disabled:false}],
       menus:[{menu:'view/title',command:'selftest.run',when:'view == selftest.dynamic.tree',extensionId:'selftest.extension'}],
       terminalProfiles:[{id:'selftest.terminalProfile',extensionId:'selftest.extension',runtimeAvailable:true}],
@@ -40049,6 +40107,13 @@ function extensionRuntimeDomSelfCheckSnapshot(){
       runtimeWebviewReadyRows:runtimeList?Array.from(runtimeList.querySelectorAll('.extension-runtime-row')).filter(row=>row.dataset.webviewReadiness==='ready').length:0,
       runtimeWebviewWarningRows:runtimeList?Array.from(runtimeList.querySelectorAll('.extension-runtime-row')).filter(row=>row.dataset.webviewReadiness&&row.dataset.webviewReadiness!=='ready').length:0,
       runtimeWebviewReadinessIssues:runtimeList?Array.from(runtimeList.querySelectorAll('.extension-runtime-row')).map(row=>row.dataset.webviewReadinessIssues||'').filter(Boolean):[],
+      runtimeSurfaceEvidenceRows:runtimeList?runtimeList.querySelectorAll('.extension-runtime-tag.surface-evidence').length:0,
+      runtimeSurfaceReadyRows:runtimeList?Array.from(runtimeList.querySelectorAll('.extension-runtime-row')).filter(row=>row.dataset.surfaceReadiness==='ready'||row.dataset.surfaceReadiness==='dirty').length:0,
+      runtimeSurfaceWarningRows:runtimeList?Array.from(runtimeList.querySelectorAll('.extension-runtime-row')).filter(row=>row.dataset.surfaceReadiness&&row.dataset.surfaceReadiness!=='ready'&&row.dataset.surfaceReadiness!=='dirty').length:0,
+      runtimeCustomDirtyRows:runtimeList?Array.from(runtimeList.querySelectorAll('.extension-runtime-row')).filter(row=>Number(row.dataset.surfaceDirtyStateCount)||0).length:0,
+      runtimeCustomStateRows:runtimeList?Array.from(runtimeList.querySelectorAll('.extension-runtime-row')).filter(row=>Number(row.dataset.surfaceStateCount)||0).length:0,
+      runtimeNotebookControllerRows:runtimeList?Array.from(runtimeList.querySelectorAll('.extension-runtime-row')).filter(row=>Number(row.dataset.surfaceControllerCount)||0).length:0,
+      runtimeNotebookStatusRows:runtimeList?Array.from(runtimeList.querySelectorAll('.extension-runtime-row')).filter(row=>Number(row.dataset.surfaceStatusBarProviderCount)||0).length:0,
       runtimeWebviewLastDropReasons:runtimeList?Array.from(runtimeList.querySelectorAll('.extension-runtime-row')).map(row=>row.dataset.webviewLastDroppedReason||'').filter(Boolean):[],
       runtimeWebviewSeqRows:runtimeList?Array.from(runtimeList.querySelectorAll('.extension-runtime-row')).filter(row=>Number(row.dataset.webviewLastDeliveredMessageSeq)||0).length:0,
       runtimeEvidencePills:runtimeList?runtimeList.querySelectorAll('.extension-runtime-evidence').length:0,
@@ -40118,6 +40183,8 @@ function extensionRuntimeDomSelfCheckSnapshot(){
       && snapshot.runtimeWebviewMessageRows>=1&&snapshot.runtimeWebviewQueuedRows>=2&&snapshot.runtimeWebviewDroppedRows>=1&&snapshot.runtimeWebviewSeqRows>=1&&snapshot.runtimeWebviewLastDropReasons.includes('disposed-queue')
       && snapshot.runtimeWebviewResourceRootRows>=1&&snapshot.runtimeWebviewPortMappingRows>=1&&snapshot.runtimeWebviewResourceMapRows>=1
       && snapshot.runtimeWebviewReadyRows>=1&&snapshot.runtimeWebviewWarningRows>=1&&snapshot.runtimeWebviewReadinessIssues.some(value=>value.includes('waiting-html'))
+      && snapshot.runtimeSurfaceEvidenceRows>=8&&snapshot.runtimeSurfaceReadyRows>=2&&snapshot.runtimeCustomDirtyRows>=1&&snapshot.runtimeCustomStateRows>=1
+      && snapshot.runtimeNotebookControllerRows>=1&&snapshot.runtimeNotebookStatusRows>=1
       && snapshot.runtimeEvidencePills===snapshot.runtimeRows&&snapshot.runtimeEvidenceStatuses.includes('rendered')&&snapshot.runtimeEvidenceStatuses.includes('missing')
       && snapshot.runtimeMiniActionButtons>=snapshot.runtimeRows*3&&snapshot.runtimeFocusableRows>=4&&snapshot.runtimeRefreshableRows>=4
       && snapshot.runtimeListRole==='list'&&snapshot.runtimeListItems===snapshot.runtimeRows

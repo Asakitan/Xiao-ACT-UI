@@ -11556,6 +11556,10 @@ class AIEditorAPI:
                 if str(state.get("viewType") or state.get("view_type") or "")
                 == view_type
             ]
+            selector_summary = self._extension_surface_selector_summary(
+                item.get("selector", []))
+            evidence = self._custom_editor_surface_evidence(
+                item, matching_states, host_running, selector_summary)
             result.append({
                 "viewType": view_type,
                 "displayName": str(
@@ -11564,13 +11568,138 @@ class AIEditorAPI:
                     or view_type),
                 "extensionId": self._extension_surface_extension_id(item),
                 "selector": item.get("selector", []),
+                "selectorCount": selector_summary["count"],
+                "selectorSchemes": selector_summary["schemes"],
+                "selectorPatterns": selector_summary["patterns"],
                 "priority": str(item.get("priority") or ""),
                 "runtimeAvailable": bool(host_running and matching_states),
                 "nodeHostRunning": host_running,
                 "stateCount": len(matching_states),
+                "dirtyStateCount": int(evidence.get("dirtyStateCount") or 0),
+                "canUndoStateCount": int(evidence.get("canUndoStateCount") or 0),
+                "canRedoStateCount": int(evidence.get("canRedoStateCount") or 0),
+                "resourceUris": evidence.get("resourceUris", []),
+                "capabilities": evidence.get("capabilities", {}),
+                "surfaceEvidence": evidence,
+                "readiness": evidence.get("readiness", ""),
+                "readinessScore": evidence.get("readinessScore", 0),
+                "readinessIssues": evidence.get("readinessIssues", []),
                 "states": matching_states,
             })
         return result
+
+    @staticmethod
+    def _extension_surface_selector_summary(selector: Any) -> Dict[str, Any]:
+        selectors = selector if isinstance(selector, list) else []
+        schemes: List[str] = []
+        patterns: List[str] = []
+        languages: List[str] = []
+        for entry in selectors:
+            if not isinstance(entry, dict):
+                continue
+            scheme = str(entry.get("scheme") or "").strip()
+            if scheme:
+                schemes.append(scheme)
+            pattern = str(
+                entry.get("filenamePattern")
+                or entry.get("pattern")
+                or entry.get("globPattern")
+                or "").strip()
+            if pattern:
+                patterns.append(pattern)
+            language = str(entry.get("language") or "").strip()
+            if language:
+                languages.append(language)
+        return {
+            "count": len(selectors),
+            "schemes": sorted(set(schemes))[:12],
+            "patterns": patterns[:12],
+            "languages": sorted(set(languages))[:12],
+        }
+
+    @staticmethod
+    def _custom_editor_state_uri(state: Dict[str, Any]) -> str:
+        return str(
+            state.get("resourceUri")
+            or state.get("resource_uri")
+            or state.get("uri")
+            or state.get("path")
+            or state.get("filePath")
+            or state.get("file_path")
+            or "").strip()
+
+    @classmethod
+    def _custom_editor_surface_evidence(
+            cls,
+            item: Dict[str, Any],
+            states: List[Dict[str, Any]],
+            host_running: bool,
+            selector_summary: Dict[str, Any]) -> Dict[str, Any]:
+        capabilities = _as_dict(item.get("capabilities"))
+        multiple = bool(
+            capabilities.get("supportsMultipleEditorsPerDocument")
+            or capabilities.get("supportsMultipleEditors")
+            or item.get("supportsMultipleEditorsPerDocument")
+            or item.get("supportsMultipleEditors"))
+        dirty_count = sum(1 for state in states if state.get("dirty"))
+        can_undo_count = sum(1 for state in states if state.get("canUndo"))
+        can_redo_count = sum(1 for state in states if state.get("canRedo"))
+        view_ids = [
+            str(state.get("viewId") or state.get("view_id") or "").strip()
+            for state in states
+            if str(state.get("viewId") or state.get("view_id") or "").strip()
+        ][:12]
+        resource_uris = [
+            uri for uri in (cls._custom_editor_state_uri(state) for state in states)
+            if uri
+        ][:12]
+        issues: List[str] = []
+        score = 100
+        if not host_running:
+            issues.append("node-host-stopped")
+            score -= 55
+        if not states:
+            issues.append("waiting-state")
+            score -= 28
+        if not selector_summary.get("count"):
+            issues.append("missing-selector")
+            score -= 8
+        readiness = "ready"
+        if not host_running:
+            readiness = "missing-runtime"
+        elif not states:
+            readiness = "waiting-state"
+        elif dirty_count:
+            readiness = "dirty"
+        score = max(0, min(100, int(round(score))))
+        return {
+            "kind": "customEditor",
+            "viewType": str(item.get("viewType") or ""),
+            "hostRunning": bool(host_running),
+            "runtimeAvailable": bool(host_running and states),
+            "selectorCount": int(selector_summary.get("count") or 0),
+            "selectorSchemes": selector_summary.get("schemes", []),
+            "selectorPatterns": selector_summary.get("patterns", []),
+            "selectorLanguages": selector_summary.get("languages", []),
+            "priority": str(item.get("priority") or ""),
+            "stateCount": len(states),
+            "dirtyStateCount": dirty_count,
+            "canUndoStateCount": can_undo_count,
+            "canRedoStateCount": can_redo_count,
+            "resourceUris": resource_uris,
+            "viewIds": view_ids,
+            "capabilities": {
+                "supportsMultipleEditorsPerDocument": multiple,
+                "hasSave": bool(states),
+                "hasSaveAs": bool(states),
+                "hasRevert": bool(states),
+                "hasBackup": bool(states),
+                **capabilities,
+            },
+            "readiness": readiness,
+            "readinessScore": score,
+            "readinessIssues": issues,
+        }
 
     def _extension_surface_notebooks(
             self,
@@ -11595,6 +11724,29 @@ class AIEditorAPI:
         detection_tasks = [
             dict(item) for item in detection_tasks if isinstance(item, dict)
         ]
+        status_bar_providers = (
+            host.notebook_cell_status_bar_providers()
+            if host_running
+            and hasattr(host, "notebook_cell_status_bar_providers")
+            else [])
+        selections = (
+            host.notebook_controller_selections()
+            if host_running and hasattr(host, "notebook_controller_selections")
+            else [])
+        affinities = (
+            host.notebook_controller_affinities()
+            if host_running and hasattr(host, "notebook_controller_affinities")
+            else [])
+        status_bar_providers = [
+            dict(item) for item in status_bar_providers
+            if isinstance(item, dict)
+        ]
+        selections = [
+            dict(item) for item in selections if isinstance(item, dict)
+        ]
+        affinities = [
+            dict(item) for item in affinities if isinstance(item, dict)
+        ]
         result: List[Dict[str, Any]] = []
         for item in contributions.get("notebooks", []):
             if not isinstance(item, dict):
@@ -11616,6 +11768,30 @@ class AIEditorAPI:
                 task for task in detection_tasks
                 if str(task.get("notebookType") or "") == notebook_type
             ]
+            matching_status_bar = [
+                provider for provider in status_bar_providers
+                if str(provider.get("notebookType") or "") == notebook_type
+            ]
+            matching_selections = [
+                selection for selection in selections
+                if str(selection.get("notebookType") or "") == notebook_type
+            ]
+            matching_affinities = [
+                affinity for affinity in affinities
+                if str(affinity.get("notebookType") or "") == notebook_type
+            ]
+            selector_summary = self._extension_surface_selector_summary(
+                item.get("selector", []))
+            evidence = self._notebook_surface_evidence(
+                item,
+                matching_serializers,
+                matching_controllers,
+                matching_detection,
+                matching_status_bar,
+                matching_selections,
+                matching_affinities,
+                host_running,
+                selector_summary)
             result.append({
                 "type": notebook_type,
                 "displayName": str(
@@ -11624,16 +11800,118 @@ class AIEditorAPI:
                     or notebook_type),
                 "extensionId": self._extension_surface_extension_id(item),
                 "selector": item.get("selector", []),
+                "selectorCount": selector_summary["count"],
+                "selectorSchemes": selector_summary["schemes"],
+                "selectorPatterns": selector_summary["patterns"],
                 "runtimeAvailable": bool(matching_serializers),
                 "nodeHostRunning": host_running,
                 "serializerCount": len(matching_serializers),
                 "controllerCount": len(matching_controllers),
                 "detectionTaskCount": len(matching_detection),
+                "statusBarProviderCount": len(matching_status_bar),
+                "selectionCount": len(matching_selections),
+                "affinityCount": len(matching_affinities),
+                "controllerIds": evidence.get("controllerIds", []),
+                "selectedControllerIds": evidence.get(
+                    "selectedControllerIds", []),
+                "surfaceEvidence": evidence,
+                "readiness": evidence.get("readiness", ""),
+                "readinessScore": evidence.get("readinessScore", 0),
+                "readinessIssues": evidence.get("readinessIssues", []),
                 "serializers": matching_serializers,
                 "controllers": matching_controllers,
                 "detectionTasks": matching_detection,
+                "statusBarProviders": matching_status_bar,
             })
         return result
+
+    @staticmethod
+    def _notebook_surface_evidence(
+            item: Dict[str, Any],
+            serializers: List[Dict[str, Any]],
+            controllers: List[Dict[str, Any]],
+            detection_tasks: List[Dict[str, Any]],
+            status_bar_providers: List[Dict[str, Any]],
+            selections: List[Dict[str, Any]],
+            affinities: List[Dict[str, Any]],
+            host_running: bool,
+            selector_summary: Dict[str, Any]) -> Dict[str, Any]:
+        controller_ids = [
+            str(controller.get("id") or controller.get("handle") or "").strip()
+            for controller in controllers
+            if str(controller.get("id") or controller.get("handle") or "").strip()
+        ][:12]
+        selected_ids = [
+            str(
+                selection.get("controllerId")
+                or selection.get("id")
+                or selection.get("handle")
+                or "").strip()
+            for selection in selections
+            if str(
+                selection.get("controllerId")
+                or selection.get("id")
+                or selection.get("handle")
+                or "").strip()
+        ][:12]
+        supported_languages = sorted({
+            str(language)
+            for controller in controllers
+            for language in (
+                controller.get("supportedLanguages")
+                if isinstance(controller.get("supportedLanguages"), list)
+                else [])
+            if str(language or "").strip()
+        })[:12]
+        issues: List[str] = []
+        score = 100
+        if not host_running:
+            issues.append("node-host-stopped")
+            score -= 55
+        if not serializers:
+            issues.append("missing-serializer")
+            score -= 34
+        if not controllers:
+            issues.append("missing-controller")
+            score -= 18
+        if detection_tasks:
+            issues.append("detection-running")
+            score -= 6
+        if not selector_summary.get("count"):
+            issues.append("missing-selector")
+            score -= 6
+        readiness = "ready"
+        if not host_running:
+            readiness = "missing-runtime"
+        elif not serializers:
+            readiness = "missing-serializer"
+        elif not controllers:
+            readiness = "missing-controller"
+        elif detection_tasks:
+            readiness = "detecting"
+        score = max(0, min(100, int(round(score))))
+        return {
+            "kind": "notebook",
+            "type": str(item.get("type") or item.get("viewType") or ""),
+            "hostRunning": bool(host_running),
+            "runtimeAvailable": bool(serializers),
+            "selectorCount": int(selector_summary.get("count") or 0),
+            "selectorSchemes": selector_summary.get("schemes", []),
+            "selectorPatterns": selector_summary.get("patterns", []),
+            "selectorLanguages": selector_summary.get("languages", []),
+            "serializerCount": len(serializers),
+            "controllerCount": len(controllers),
+            "detectionTaskCount": len(detection_tasks),
+            "statusBarProviderCount": len(status_bar_providers),
+            "selectionCount": len(selections),
+            "affinityCount": len(affinities),
+            "controllerIds": controller_ids,
+            "selectedControllerIds": selected_ids,
+            "supportedLanguages": supported_languages,
+            "readiness": readiness,
+            "readinessScore": score,
+            "readinessIssues": issues,
+        }
 
     def _extension_surface_terminal_profiles(
             self, contributions: Dict[str, Any]) -> List[Dict[str, Any]]:
@@ -12090,6 +12368,41 @@ class AIEditorAPI:
             item for item in views
             if str(item.get("kind") or "").lower() == "treeview"
         ]
+        custom_editor_ready = sum(
+            1 for item in custom_editors
+            if str(item.get("readiness") or "") in ("ready", "dirty"))
+        custom_editor_warnings = sum(
+            1 for item in custom_editors
+            if item.get("readiness")
+            and str(item.get("readiness") or "") not in ("ready", "dirty"))
+        custom_editor_dirty_states = sum(
+            int(item.get("dirtyStateCount") or 0)
+            for item in custom_editors)
+        custom_editor_undo_states = sum(
+            int(item.get("canUndoStateCount") or 0)
+            for item in custom_editors)
+        custom_editor_selectors = sum(
+            int(item.get("selectorCount") or 0)
+            for item in custom_editors)
+        notebook_ready = sum(
+            1 for item in notebooks
+            if str(item.get("readiness") or "") == "ready")
+        notebook_warnings = sum(
+            1 for item in notebooks
+            if item.get("readiness")
+            and str(item.get("readiness") or "") != "ready")
+        notebook_status_bar_providers = sum(
+            int(item.get("statusBarProviderCount") or 0)
+            for item in notebooks)
+        notebook_detection_tasks = sum(
+            int(item.get("detectionTaskCount") or 0)
+            for item in notebooks)
+        notebook_selectors = sum(
+            int(item.get("selectorCount") or 0)
+            for item in notebooks)
+        notebook_selected_controllers = sum(
+            int(item.get("selectionCount") or 0)
+            for item in notebooks)
         payload = json.loads(json.dumps({
             "ok": True,
             "views": views,
@@ -12132,6 +12445,11 @@ class AIEditorAPI:
                 "customEditorStates": sum(
                     int(item.get("stateCount", 0))
                     for item in custom_editors),
+                "customEditorReady": custom_editor_ready,
+                "customEditorWarnings": custom_editor_warnings,
+                "customEditorDirtyStates": custom_editor_dirty_states,
+                "customEditorUndoStates": custom_editor_undo_states,
+                "customEditorSelectors": custom_editor_selectors,
                 "notebooks": len(notebooks),
                 "notebookSerializers": sum(
                     int(item.get("serializerCount", 0))
@@ -12139,6 +12457,12 @@ class AIEditorAPI:
                 "notebookControllers": sum(
                     int(item.get("controllerCount", 0))
                     for item in notebooks),
+                "notebookReady": notebook_ready,
+                "notebookWarnings": notebook_warnings,
+                "notebookStatusBarProviders": notebook_status_bar_providers,
+                "notebookDetectionTasks": notebook_detection_tasks,
+                "notebookSelectors": notebook_selectors,
+                "notebookSelectedControllers": notebook_selected_controllers,
                 "commands": len(commands),
                 "runtimeCommands": sum(
                     1 for item in commands
