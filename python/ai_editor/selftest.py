@@ -4537,8 +4537,8 @@ def test_phase1_ai_editor_regressions() -> None:
     _check("frontend Settings defaults to calmer VS Code workbench UX",
            'class="modal settings-modal preferences-workbench settings-vscode-calm"' in html
            and 'data-panel="settings" data-i18n-title="settings" title="Settings"' in html
-           and 'M8.4 2.75h3.2l.42 2.02' in html
-           and '<circle cx="10" cy="10" r="2.35"' in html
+           and 'data-settings-manage-icon="gear"' in html
+           and 'M10.95 2.5H9.05l-.48 2.25' in html
            and 'id="settings-details-toggle" data-settings-icon-action="1"' in html
            and "const SETTINGS_DETAILS_STORAGE_KEY='sao.aiEditor.settings.details.v1';" in html
            and "function settingsApplyDetails(open)" in html
@@ -4759,6 +4759,8 @@ def test_phase1_ai_editor_regressions() -> None:
     _check("frontend activity bar uses VS Code manage gear for Settings",
            'class="ab-icon activity-manage" data-panel="settings"' in html
            and 'title="Settings"' in html
+           and 'data-settings-manage-icon="gear"' in html
+           and 'M10.95 2.5H9.05l-.48 2.25' in html
            and 'class="ab-icon theme-toggle"' not in html
            and 'title="Toggle Theme" onclick="toggleTheme()"' not in html
            and "function toggleTheme()" in html
