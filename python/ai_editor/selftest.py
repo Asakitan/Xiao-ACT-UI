@@ -4272,13 +4272,26 @@ def test_phase1_ai_editor_regressions() -> None:
            and "function revealExtensionWebviewPanel(data)" in html
            and "event==='reveal_webview_panel'" in html
            and "webview_panel_view_state" in html
-           and 'getState:function(){return _state}' in html)
+           and 'getState:function(){return _state}' in html
+           and "el.dataset.webviewPendingMessageCount=String(Array.isArray(data.pendingMessages)?data.pendingMessages.length:0);" in html
+           and "el.dataset.webviewQueuedMessageCount=String(Number(data.queuedMessageCount)||0);" in html
+           and "el.dataset.webviewFlushedMessageCount=String(Number(data.flushedMessageCount)||0);" in html
+           and "el.dataset.webviewFrameLoaded=data.frameLoaded?'true':'false';" in html
+           and "el.dataset.webviewIframeLoadedAt=String(Number(data.iframeLoadedAt)||0);" in html
+           and "iframe.dataset.webviewFrameLoaded='false';" in html
+           and "iframe.dataset.webviewFrameLoaded='true';" in html
+           and "patchWebviewRuntimeLifecycle(viewId,{frameLoaded:true,iframeLoadedAt:webviewRuntimeNow()});" in html)
     _check("provider webviews queue extension messages until iframe mounts",
            "function queueWebviewMessage(viewId,msg)" in html
            and "function flushPendingWebviewMessages(viewId,iframe)" in html
            and "pendingMessages" in html
            and "queueWebviewMessage(viewId,msg)" in html
-           and "flushPendingWebviewMessages(viewId,iframe)" in html)
+           and "flushPendingWebviewMessages(viewId,iframe)" in html
+           and "queuedMessageCount:(Number(cached.queuedMessageCount)||0)+1" in html
+           and "const after=webviewRuntimeCache[id]||cached;" in html
+           and "flushedMessageCount:(Number(after.flushedMessageCount)||0)+flushed" in html
+           and "lastQueuedAt:webviewRuntimeNow()" in html
+           and "lastFlushAt:webviewRuntimeNow()" in html)
     _check("frontend accepts provider webview pushes",
            "const providerId=String(viewId).startsWith('provider.')?String(viewId).slice(9):''" in html
             and "isNativeCliProvider" not in html
@@ -6117,12 +6130,27 @@ def test_phase1_ai_editor_regressions() -> None:
             and "el.dataset.webviewLifecycleSeq=String(Number(data.lifecycleSeq)||0);" in html
             and "el.dataset.webviewMessageCount=String(Number(data.messageCount)||0);" in html
             and "el.dataset.webviewViewStateCount=String(Number(data.viewStateCount)||0);" in html
+            and "el.dataset.webviewPendingMessageCount=String(Array.isArray(data.pendingMessages)?data.pendingMessages.length:0);" in html
+            and "el.dataset.webviewQueuedMessageCount=String(Number(data.queuedMessageCount)||0);" in html
+            and "el.dataset.webviewFlushedMessageCount=String(Number(data.flushedMessageCount)||0);" in html
+            and "el.dataset.webviewFrameLoaded=data.frameLoaded?'true':'false';" in html
+            and "el.dataset.webviewIframeLoadedAt=String(Number(data.iframeLoadedAt)||0);" in html
             and "panel.dataset.webviewOptions=JSON.stringify" in html
             and "tab.hidden=!visible;" in html
             and "panel.hidden=!visible;" in html
             and "applyWebviewRuntimeChrome(id,webviewRuntimeCache[id]);" in html
             and "applyExtensionProviderElementState(tab,panel,p,providerPrimaryViewId(p));" in html
             and "switchRightTab('chat')" in html)
+    _check("frontend webview bridge rewrites VS Code-like resource attributes",
+            "var _urlAttrs={src:1,href:1,poster:1,data:1,action:1,formaction:1};" in html
+            and "_patchUrlProperty(window.HTMLVideoElement&&HTMLVideoElement.prototype,\"poster\",_rewriteResourceUrl);" in html
+            and "_patchUrlProperty(window.HTMLMediaElement&&HTMLMediaElement.prototype,\"src\",_rewriteResourceUrl);" in html
+            and "_patchUrlProperty(window.HTMLTrackElement&&HTMLTrackElement.prototype,\"src\",_rewriteResourceUrl);" in html
+            and "_patchUrlProperty(window.HTMLEmbedElement&&HTMLEmbedElement.prototype,\"src\",_rewriteResourceUrl);" in html
+            and "_patchUrlProperty(window.HTMLObjectElement&&HTMLObjectElement.prototype,\"data\",_rewriteResourceUrl);" in html
+            and "_patchUrlProperty(window.HTMLFormElement&&HTMLFormElement.prototype,\"action\",_rewriteResourceUrl);" in html
+            and "[src],[href],[poster],[data],[action],[formaction],[srcset]" in html
+            and "attributeFilter:[\"src\",\"href\",\"poster\",\"data\",\"action\",\"formaction\",\"srcset\"]" in html)
     _check("frontend custom editor placeholder exposes extension metadata",
             "class=\"provider-empty custom-editor-placeholder\"" in html
             and "host.dataset.viewType=viewType||'';" in html
@@ -9879,11 +9907,18 @@ console.log("frontend word separator behavior ok");
             and "id='settings-nav-filter-empty'" in html
             and "id=\"settings-nav-filter-count\"" in html
             and "Filter categories" in html
-            and "Alt+N categories" in html
+            and "String(rows.length)+' settings'" in html
+            and "String(modified)+' modified'" in html
+            and "String(errors)+' errors'" in html
             and "No matching categories for" in html
             and "className='section-actions'" in html
             and "Prev Section" in html
             and "Next Section" in html
+            and "#settings-modal.open" in html
+            and "width:min(1360px, calc(100vw - 56px))" in html
+            and "grid-template-columns:264px minmax(0,1fr)" in html
+            and "grid-template-columns:minmax(150px,260px) minmax(0,1fr) auto" in html
+            and "settingsTargetDisplayName(target)+': '+String(Number(safeStats[target]||0))" in html
             and "hasResultCount" in html
             and "hasNavFilterCount" in html
             and "hasSectionContextActions" in html
@@ -9895,6 +9930,14 @@ console.log("frontend word separator behavior ok");
              and "settings-built-head" in html
              and "settings-built-head-state" in html
              and "hasBuiltSettingHead" in html
+             and "hasWorkspaceSizedModal" in html
+             and "hasWideSettingsEditor" in html
+             and "hasSettingsEditorShell" in html
+             and "hasWideCategoryNav" in html
+             and "hasBuiltSettingGridHead" in html
+             and "hasBuiltSettingRowDivider" in html
+             and "hasTargetCountChips" in html
+             and "hasTargetSummaryScopeCounts" in html
              and "hasOnDemandSettingValueDetails" in html
              and "hasDetailValueActions" in html
              and "hasReviewFilterActions" in html
@@ -9931,6 +9974,14 @@ console.log("frontend word separator behavior ok");
            and "result.snapshot.hasScopeControl" in settings_smoke_source
             and "result.snapshot.hasActiveNavRail" in settings_smoke_source
             and "result.snapshot.hasBuiltSettingHead" in settings_smoke_source
+            and "result.snapshot.hasWorkspaceSizedModal" in settings_smoke_source
+            and "result.snapshot.hasWideSettingsEditor" in settings_smoke_source
+            and "result.snapshot.hasSettingsEditorShell" in settings_smoke_source
+            and "result.snapshot.hasWideCategoryNav" in settings_smoke_source
+            and "result.snapshot.hasBuiltSettingGridHead" in settings_smoke_source
+            and "result.snapshot.hasBuiltSettingRowDivider" in settings_smoke_source
+            and "result.snapshot.hasTargetCountChips" in settings_smoke_source
+            and "result.snapshot.hasTargetSummaryScopeCounts" in settings_smoke_source
             and "result.snapshot.hasOnDemandSettingValueDetails" in settings_smoke_source
             and "result.snapshot.hasExtensionVirtualSummary" in settings_smoke_source
             and "result.snapshot.hasExtensionVirtualActions" in settings_smoke_source
