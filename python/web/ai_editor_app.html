@@ -23771,8 +23771,18 @@ function applyWebviewRuntimeDataset(el,viewId,runtime){
   el.dataset.webviewPendingMessageCount=String(Array.isArray(data.pendingMessages)?data.pendingMessages.length:0);
   el.dataset.webviewQueuedMessageCount=String(Number(data.queuedMessageCount)||0);
   el.dataset.webviewFlushedMessageCount=String(Number(data.flushedMessageCount)||0);
+  el.dataset.webviewMessagesToCount=String(Number(data.messagesToWebview)||0);
+  el.dataset.webviewMessagesFromCount=String(Number(data.messagesFromWebview)||0);
+  el.dataset.webviewStateUpdateCount=String(Number(data.stateUpdateCount)||0);
   el.dataset.webviewFrameLoaded=data.frameLoaded?'true':'false';
   el.dataset.webviewIframeLoadedAt=String(Number(data.iframeLoadedAt)||0);
+  el.dataset.webviewApiReady=data.apiReady?'true':'false';
+  el.dataset.webviewReadyCount=String(Number(data.readyCount)||0);
+  el.dataset.webviewApiAcquired=data.apiAcquired?'true':'false';
+  el.dataset.webviewApiAcquireCount=String(Number(data.apiAcquireCount)||0);
+  el.dataset.webviewApiCallCount=String(Number(data.apiCallCount)||0);
+  el.dataset.webviewLastApiCallKind=String(data.lastApiCallKind||'');
+  el.dataset.webviewVisibilityState=String(data.visibilityState||'');
   el.dataset.webviewVisible=data.viewState&&data.viewState.visible!==undefined?(data.viewState.visible?'true':'false'):(data.visible===false?'false':'true');
   el.dataset.webviewActive=data.viewState&&data.viewState.active?'true':'false';
   if(data.title||data.name)el.dataset.webviewTitle=String(data.title||data.name);
@@ -25263,6 +25273,8 @@ function _injectWebviewHtml(container,viewId,html,initialState){
   iframe.style.cssText='border:none;width:100%;height:100%;flex:1;background:var(--bg)';
   iframe.setAttribute('sandbox',webviewIframeSandbox(runtime));
   iframe.dataset.webviewFrameLoaded='false';
+  iframe.dataset.webviewApiReady='false';
+  iframe.dataset.webviewApiAcquired='false';
   iframe.dataset.webviewEnableScripts=webviewRuntimeOptionEnabled(runtime,'enableScripts',true)?'true':'false';
   iframe.dataset.webviewEnableForms=webviewRuntimeOptionEnabled(runtime,'enableForms',true)?'true':'false';
   iframe.dataset.webviewEnableCommandUris=webviewRuntimeOption(runtime,'enableCommandUris',false)?'true':'false';
@@ -25332,7 +25344,10 @@ function _injectWebviewHtml(container,viewId,html,initialState){
     +'function _commandPayloadFromHref(href){var raw=String(href||"");if(raw.indexOf("command:")!==0)return{command:"",arguments:[]};raw=raw.slice(8);var qi=raw.indexOf("?"),cmd=qi>=0?raw.slice(0,qi):raw,q=qi>=0?raw.slice(qi+1):"";try{cmd=decodeURIComponent(cmd);}catch(e){}var args=[];if(q){try{var parsed=JSON.parse(decodeURIComponent(q));args=Array.isArray(parsed)?parsed:[parsed];}catch(e){args=[];}}return{command:String(cmd||"").trim(),arguments:args};}'
     +'function _commandUriAllowed(cmd){var allowed=_optionValue("enableCommandUris",false);if(allowed===true||allowed==="true")return true;if(Array.isArray(allowed))return allowed.map(String).indexOf(String(cmd||""))>=0;if(typeof allowed==="string")return allowed.split(/[,\\s]+/).filter(Boolean).indexOf(String(cmd||""))>=0;return false;}'
     +'function _readVsCodeContext(target){var ctx={};for(var n=target;n&&n.nodeType===1;n=n.parentElement){var raw=n.getAttribute&&n.getAttribute("data-vscode-context");if(!raw)continue;try{var parsed=JSON.parse(raw);if(parsed&&typeof parsed==="object"){Object.keys(parsed).forEach(function(k){ctx[k]=parsed[k];});}}catch(e){}}return ctx;}'
+    +'var _apiAcquired=false;var _apiAcquireCount=0;'
     +'function _postHostEvent(type,payload){try{payload=payload||{};payload.type=type;payload.viewId='+JSON.stringify(viewId)+';payload.token=_token;window.parent.postMessage(payload,"*");}catch(e){}}'
+    +'function _postApiTelemetry(kind,extra){extra=extra||{};extra.apiKind=kind;extra.apiAcquired=_apiAcquired;extra.apiAcquireCount=_apiAcquireCount;_postHostEvent("webview-api-call",extra);}'
+    +'function _notifyReady(phase){_postHostEvent("webview-ready",{phase:phase,apiAcquired:_apiAcquired,apiAcquireCount:_apiAcquireCount,visibilityState:document.visibilityState||""});}'
     +'document.addEventListener("click",function(ev){var a=ev.target&&ev.target.closest&&ev.target.closest("a[href]");if(!a)return;var href=a.getAttribute("href")||"";if(href.indexOf("command:")!==0)return;var payload=_commandPayloadFromHref(href);if(!_commandUriAllowed(payload.command))return;ev.preventDefault();_postHostEvent("webview-command-uri",{href:href,command:payload.command,arguments:payload.arguments});},true);'
     +'document.addEventListener("contextmenu",function(ev){var ctx=_readVsCodeContext(ev.target);_postHostEvent("webview-context-menu",{clientX:ev.clientX,clientY:ev.clientY,context:ctx});if(!ctx.preventDefaultContextMenuItems)ev.preventDefault();},true);'
     +'window.addEventListener("focus",function(){_postHostEvent("webview-focus",{focused:true});},true);'
@@ -25340,10 +25355,14 @@ function _injectWebviewHtml(container,viewId,html,initialState){
     +'document.addEventListener("focusin",function(){_postHostEvent("webview-focus",{focused:true});},true);'
     +'document.addEventListener("keydown",function(ev){_postHostEvent("webview-key",{eventType:"keydown",key:ev.key,code:ev.code,ctrlKey:!!ev.ctrlKey,shiftKey:!!ev.shiftKey,altKey:!!ev.altKey,metaKey:!!ev.metaKey,repeat:!!ev.repeat});},true);'
     +'document.addEventListener("keyup",function(ev){_postHostEvent("webview-key",{eventType:"keyup",key:ev.key,code:ev.code,ctrlKey:!!ev.ctrlKey,shiftKey:!!ev.shiftKey,altKey:!!ev.altKey,metaKey:!!ev.metaKey,repeat:!!ev.repeat});},true);'
-    +'var _vscodeApi={postMessage:function(msg){try{window.parent.postMessage({type:"webview-message",viewId:'+JSON.stringify(viewId)+',token:_token,message:msg},"*")}catch(e){}},'
-    +'setState:function(s){_state=s;try{window.parent.postMessage({type:"webview-set-state",viewId:'+JSON.stringify(viewId)+',token:_token,state:s},"*")}catch(e){}return s;},'
-    +'getState:function(){return _state}};'
-    +'window.acquireVsCodeApi=function(){return _vscodeApi};'
+    +'document.addEventListener("visibilitychange",function(){_postHostEvent("webview-visibility",{visibilityState:document.visibilityState||""});},true);'
+    +'document.addEventListener("readystatechange",function(){if(document.readyState==="interactive"||document.readyState==="complete")_notifyReady(document.readyState);},true);'
+    +'window.addEventListener("pageshow",function(){_notifyReady("pageshow");},true);'
+    +'var _vscodeApi=Object.freeze({postMessage:function(msg){_postApiTelemetry("postMessage");try{window.parent.postMessage({type:"webview-message",viewId:'+JSON.stringify(viewId)+',token:_token,message:msg},"*")}catch(e){}},'
+    +'setState:function(s){_state=s;_postApiTelemetry("setState");try{window.parent.postMessage({type:"webview-set-state",viewId:'+JSON.stringify(viewId)+',token:_token,state:s},"*")}catch(e){}return s;},'
+    +'getState:function(){_postApiTelemetry("getState");return _state}});'
+    +'Object.defineProperty(window,"acquireVsCodeApi",{configurable:false,enumerable:false,value:function(){_apiAcquireCount++;if(_apiAcquired){_postApiTelemetry("acquire-duplicate",{duplicate:true});return _vscodeApi;}_apiAcquired=true;_postApiTelemetry("acquire");return _vscodeApi;}});'
+    +'setTimeout(function(){_notifyReady("bridge");},0);'
     +'})();'
     +'<\/script>';
   // Inject bridge + extension HTML into the iframe via srcdoc
@@ -25363,7 +25382,12 @@ window.addEventListener('message',function(e){
     const viewId=e.data.viewId,msg=e.data.message,tok=e.data.token;
     if(!viewId||!tok||_webviewTokens[viewId]!==tok)return;
     const cached=webviewRuntimeCache[viewId]||{};
-    patchWebviewRuntimeLifecycle(viewId,{messageCount:(Number(cached.messageCount)||0)+1,lastMessageAt:webviewRuntimeNow(),lastMessageDirection:'from-webview'});
+    patchWebviewRuntimeLifecycle(viewId,{
+      messageCount:(Number(cached.messageCount)||0)+1,
+      messagesFromWebview:(Number(cached.messagesFromWebview)||0)+1,
+      lastMessageAt:webviewRuntimeNow(),
+      lastMessageDirection:'from-webview'
+    });
     if(window.pywebview&&window.pywebview.api&&window.pywebview.api.webview_post_message){
       window.pywebview.api.webview_post_message(viewId,msg);
     }
@@ -25372,7 +25396,12 @@ window.addEventListener('message',function(e){
   if(e.data.type==='webview-set-state'){
     const viewId=e.data.viewId,tok=e.data.token;
     if(!viewId||!tok||_webviewTokens[viewId]!==tok)return;
-    patchWebviewRuntimeLifecycle(viewId,{state:e.data.state,lastStateAt:webviewRuntimeNow()});
+    const cached=webviewRuntimeCache[viewId]||{};
+    patchWebviewRuntimeLifecycle(viewId,{
+      state:e.data.state,
+      stateUpdateCount:(Number(cached.stateUpdateCount)||0)+1,
+      lastStateAt:webviewRuntimeNow()
+    });
     if(window.pywebview&&window.pywebview.api&&window.pywebview.api.webview_set_state){
       window.pywebview.api.webview_set_state(viewId,e.data.state);
     }
@@ -25400,6 +25429,51 @@ window.addEventListener('message',function(e){
     const viewId=e.data.viewId,tok=e.data.token;
     if(!viewId||!tok||_webviewTokens[viewId]!==tok)return;
     dispatchWebviewKeyboardEvent(viewId,e.data);
+    return;
+  }
+  if(e.data.type==='webview-ready'){
+    const viewId=e.data.viewId,tok=e.data.token;
+    if(!viewId||!tok||_webviewTokens[viewId]!==tok)return;
+    const cached=webviewRuntimeCache[viewId]||{};
+    const iframe=document.getElementById('webview-frame-'+providerDomKey(viewId));
+    if(iframe){
+      iframe.dataset.webviewApiReady='true';
+      iframe.dataset.webviewApiAcquired=e.data.apiAcquired?'true':'false';
+    }
+    patchWebviewRuntimeLifecycle(viewId,{
+      apiReady:true,
+      readyAt:webviewRuntimeNow(),
+      readyCount:(Number(cached.readyCount)||0)+1,
+      readyPhase:String(e.data.phase||''),
+      apiAcquired:!!e.data.apiAcquired,
+      apiAcquireCount:Math.max(Number(cached.apiAcquireCount)||0,Number(e.data.apiAcquireCount)||0),
+      visibilityState:String(e.data.visibilityState||cached.visibilityState||'')
+    });
+    flushPendingWebviewMessages(viewId,iframe);
+    return;
+  }
+  if(e.data.type==='webview-api-call'){
+    const viewId=e.data.viewId,tok=e.data.token;
+    if(!viewId||!tok||_webviewTokens[viewId]!==tok)return;
+    const cached=webviewRuntimeCache[viewId]||{};
+    const kind=String(e.data.apiKind||'');
+    const patch={
+      apiCallCount:(Number(cached.apiCallCount)||0)+1,
+      lastApiCallKind:kind,
+      lastApiCallAt:webviewRuntimeNow(),
+      apiAcquired:!!e.data.apiAcquired||!!cached.apiAcquired,
+      apiAcquireCount:Math.max(Number(cached.apiAcquireCount)||0,Number(e.data.apiAcquireCount)||0)
+    };
+    if(kind==='postMessage')patch.apiPostMessageCount=(Number(cached.apiPostMessageCount)||0)+1;
+    if(kind==='setState')patch.apiSetStateCount=(Number(cached.apiSetStateCount)||0)+1;
+    if(kind==='getState')patch.apiGetStateCount=(Number(cached.apiGetStateCount)||0)+1;
+    patchWebviewRuntimeLifecycle(viewId,patch);
+    return;
+  }
+  if(e.data.type==='webview-visibility'){
+    const viewId=e.data.viewId,tok=e.data.token;
+    if(!viewId||!tok||_webviewTokens[viewId]!==tok)return;
+    patchWebviewRuntimeLifecycle(viewId,{visibilityState:String(e.data.visibilityState||''),visibilityAt:webviewRuntimeNow()});
   }
 });
 async function renderProviderTabs(){
@@ -25604,7 +25678,12 @@ function postExtensionMessageToWebview(iframe,msg){
   if(cacheId){
     const cached=webviewRuntimeCache[cacheId]||{};
     if(cached.disposed)return;
-    patchWebviewRuntimeLifecycle(cacheId,{messageCount:(Number(cached.messageCount)||0)+1,lastMessageAt:webviewRuntimeNow(),lastMessageDirection:'to-webview'});
+    patchWebviewRuntimeLifecycle(cacheId,{
+      messageCount:(Number(cached.messageCount)||0)+1,
+      messagesToWebview:(Number(cached.messagesToWebview)||0)+1,
+      lastMessageAt:webviewRuntimeNow(),
+      lastMessageDirection:'to-webview'
+    });
   }
   try{iframe.contentWindow.postMessage(msg,'*')}catch(e){}
   const alreadyWrapped=msg&&typeof msg==='object'&&msg.type==='webview-extension-message'&&Object.prototype.hasOwnProperty.call(msg,'message');
@@ -35414,6 +35493,14 @@ function extensionRuntimeDomSelfCheckSnapshot(){
     window._onEditorEvent('update_webview_panel_icon',{view_id:lifecycleViewId,icon_path:{id:'beaker'},view_type:'selftest.lifecycle'});
     window._onEditorEvent('update_webview_panel_options',{view_id:lifecycleViewId,options:{retainContextWhenHidden:true,enableScripts:true}});
     window._onEditorEvent('reveal_webview_panel',{view_id:lifecycleViewId,provider_id:lifecycleProviderId,title:'Lifecycle Updated',preserveFocus:true});
+    const lifecycleToken=_webviewTokens[lifecycleViewId]||'';
+    if(lifecycleToken){
+      window.dispatchEvent(new MessageEvent('message',{data:{type:'webview-ready',viewId:lifecycleViewId,token:lifecycleToken,phase:'selftest',apiAcquired:true,apiAcquireCount:1,visibilityState:'visible'}}));
+      window.dispatchEvent(new MessageEvent('message',{data:{type:'webview-api-call',viewId:lifecycleViewId,token:lifecycleToken,apiKind:'acquire',apiAcquired:true,apiAcquireCount:1}}));
+      window.dispatchEvent(new MessageEvent('message',{data:{type:'webview-set-state',viewId:lifecycleViewId,token:lifecycleToken,state:{phase:'state'}}}));
+      window.dispatchEvent(new MessageEvent('message',{data:{type:'webview-message',viewId:lifecycleViewId,token:lifecycleToken,message:{kind:'from-webview'}}}));
+      window.dispatchEvent(new MessageEvent('message',{data:{type:'webview-visibility',viewId:lifecycleViewId,token:lifecycleToken,visibilityState:'visible'}}));
+    }
     window._onEditorEvent('webview_message',{view_id:lifecycleViewId,message:{kind:'ping'}});
     const lifecyclePanel=$(providerElId('rp',lifecycleProviderId));
     const lifecycleTab=providerTabElement(lifecycleProviderId);
@@ -35432,8 +35519,20 @@ function extensionRuntimeDomSelfCheckSnapshot(){
       visible:lifecyclePanel?lifecyclePanel.dataset.webviewVisible:'',
       tabTitle:lifecycleTab?lifecycleTab.title:'',
       frame:!!lifecycleFrame,
+      frameApiReady:lifecycleFrame?lifecycleFrame.dataset.webviewApiReady:'',
+      frameApiAcquired:lifecycleFrame?lifecycleFrame.dataset.webviewApiAcquired:'',
       messageCount:Number(lifecycleBeforeDispose.messageCount)||0,
+      messagesTo:Number(lifecycleBeforeDispose.messagesToWebview)||0,
+      messagesFrom:Number(lifecycleBeforeDispose.messagesFromWebview)||0,
       viewStateCount:Number(lifecycleBeforeDispose.viewStateCount)||0,
+      stateUpdateCount:Number(lifecycleBeforeDispose.stateUpdateCount)||0,
+      apiReady:lifecycleBeforeDispose.apiReady===true,
+      readyCount:Number(lifecycleBeforeDispose.readyCount)||0,
+      apiAcquired:lifecycleBeforeDispose.apiAcquired===true,
+      apiAcquireCount:Number(lifecycleBeforeDispose.apiAcquireCount)||0,
+      apiCallCount:Number(lifecycleBeforeDispose.apiCallCount)||0,
+      lastApiCallKind:String(lifecycleBeforeDispose.lastApiCallKind||''),
+      visibilityState:String(lifecycleBeforeDispose.visibilityState||''),
       disposed:lifecycleAfterDispose.disposed===true&&lifecycleAfterDispose.lifecycleState==='disposed',
       disposedSeq:Number(lifecycleAfterDispose.lifecycleSeq)||0,
       panelRemoved:!$(providerElId('rp',lifecycleProviderId)),
@@ -35580,8 +35679,20 @@ function extensionRuntimeDomSelfCheckSnapshot(){
       && snapshot.webviewLifecycle.options.includes('enableScripts')
       && snapshot.webviewLifecycle.visible==='true'
       && snapshot.webviewLifecycle.frame
+      && snapshot.webviewLifecycle.frameApiReady==='true'
+      && snapshot.webviewLifecycle.frameApiAcquired==='true'
       && snapshot.webviewLifecycle.messageCount>=1
+      && snapshot.webviewLifecycle.messagesTo>=1
+      && snapshot.webviewLifecycle.messagesFrom>=1
       && snapshot.webviewLifecycle.viewStateCount>=1
+      && snapshot.webviewLifecycle.stateUpdateCount>=1
+      && snapshot.webviewLifecycle.apiReady
+      && snapshot.webviewLifecycle.readyCount>=1
+      && snapshot.webviewLifecycle.apiAcquired
+      && snapshot.webviewLifecycle.apiAcquireCount>=1
+      && snapshot.webviewLifecycle.apiCallCount>=1
+      && snapshot.webviewLifecycle.lastApiCallKind==='acquire'
+      && snapshot.webviewLifecycle.visibilityState==='visible'
       && snapshot.webviewLifecycle.disposed&&snapshot.webviewLifecycle.disposedSeq>snapshot.webviewLifecycle.seq
       && snapshot.webviewLifecycle.panelRemoved&&snapshot.webviewLifecycle.tabRemoved;
     return snapshot;

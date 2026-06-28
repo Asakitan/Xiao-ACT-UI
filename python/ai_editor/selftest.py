@@ -4306,7 +4306,7 @@ def test_phase1_ai_editor_regressions() -> None:
            and "function revealExtensionWebviewPanel(data)" in html
            and "event==='reveal_webview_panel'" in html
            and "webview_panel_view_state" in html
-           and 'getState:function(){return _state}' in html
+           and 'getState:function(){_postApiTelemetry("getState");return _state}' in html
            and "el.dataset.webviewPendingMessageCount=String(Array.isArray(data.pendingMessages)?data.pendingMessages.length:0);" in html
            and "el.dataset.webviewQueuedMessageCount=String(Number(data.queuedMessageCount)||0);" in html
            and "el.dataset.webviewFlushedMessageCount=String(Number(data.flushedMessageCount)||0);" in html
@@ -6174,8 +6174,16 @@ def test_phase1_ai_editor_regressions() -> None:
             and "el.dataset.webviewPendingMessageCount=String(Array.isArray(data.pendingMessages)?data.pendingMessages.length:0);" in html
             and "el.dataset.webviewQueuedMessageCount=String(Number(data.queuedMessageCount)||0);" in html
             and "el.dataset.webviewFlushedMessageCount=String(Number(data.flushedMessageCount)||0);" in html
+            and "el.dataset.webviewMessagesToCount=String(Number(data.messagesToWebview)||0);" in html
+            and "el.dataset.webviewMessagesFromCount=String(Number(data.messagesFromWebview)||0);" in html
+            and "el.dataset.webviewStateUpdateCount=String(Number(data.stateUpdateCount)||0);" in html
             and "el.dataset.webviewFrameLoaded=data.frameLoaded?'true':'false';" in html
             and "el.dataset.webviewIframeLoadedAt=String(Number(data.iframeLoadedAt)||0);" in html
+            and "el.dataset.webviewApiReady=data.apiReady?'true':'false';" in html
+            and "el.dataset.webviewReadyCount=String(Number(data.readyCount)||0);" in html
+            and "el.dataset.webviewApiAcquired=data.apiAcquired?'true':'false';" in html
+            and "el.dataset.webviewApiAcquireCount=String(Number(data.apiAcquireCount)||0);" in html
+            and "el.dataset.webviewApiCallCount=String(Number(data.apiCallCount)||0);" in html
             and "panel.dataset.webviewOptions=JSON.stringify" in html
             and "tab.hidden=!visible;" in html
             and "panel.hidden=!visible;" in html
@@ -12956,9 +12964,26 @@ console.log("extension setting schema helpers ok");
            and "window._onEditorEvent('update_webview_panel_icon',{view_id:lifecycleViewId" in html
            and "window._onEditorEvent('update_webview_panel_options',{view_id:lifecycleViewId" in html
            and "window._onEditorEvent('reveal_webview_panel',{view_id:lifecycleViewId" in html
+           and "window.dispatchEvent(new MessageEvent('message',{data:{type:'webview-ready'" in html
+           and "window.dispatchEvent(new MessageEvent('message',{data:{type:'webview-api-call'" in html
+           and "window.dispatchEvent(new MessageEvent('message',{data:{type:'webview-set-state'" in html
+           and "window.dispatchEvent(new MessageEvent('message',{data:{type:'webview-message'" in html
+           and "window.dispatchEvent(new MessageEvent('message',{data:{type:'webview-visibility'" in html
            and "window._onEditorEvent('dispose_webview_panel',{view_id:lifecycleViewId" in html
            and "webviewLifecycle:lifecycleSnapshot" in html
            and "snapshot.webviewLifecycle.disposed&&snapshot.webviewLifecycle.disposedSeq>snapshot.webviewLifecycle.seq" in html
+           and "snapshot.webviewLifecycle.frameApiReady==='true'" in html
+           and "snapshot.webviewLifecycle.frameApiAcquired==='true'" in html
+           and "snapshot.webviewLifecycle.messagesTo>=1" in html
+           and "snapshot.webviewLifecycle.messagesFrom>=1" in html
+           and "snapshot.webviewLifecycle.stateUpdateCount>=1" in html
+           and "snapshot.webviewLifecycle.apiReady" in html
+           and "snapshot.webviewLifecycle.readyCount>=1" in html
+           and "snapshot.webviewLifecycle.apiAcquired" in html
+           and "snapshot.webviewLifecycle.apiAcquireCount>=1" in html
+           and "snapshot.webviewLifecycle.apiCallCount>=1" in html
+           and "snapshot.webviewLifecycle.lastApiCallKind==='acquire'" in html
+           and "snapshot.webviewLifecycle.visibilityState==='visible'" in html
            and "snapshot.menuRole==='menu'" in html)
     _check("frontend renders extension QuickInput dynamically",
            "id=\"quick-input-host\"" in html
@@ -13460,8 +13485,25 @@ console.log("command palette quick access helpers ok");
     _check("webview bridge preserves raw and falsy messages",
             "postExtensionMessageToWebview(iframe,msg)" in html
             and "iframe.contentWindow.postMessage(msg,'*')" in html
+            and "messagesToWebview:(Number(cached.messagesToWebview)||0)+1" in html
+            and "messagesFromWebview:(Number(cached.messagesFromWebview)||0)+1" in html
             and "if(!viewId||!tok||_webviewTokens[viewId]!==tok)return;" in html
             and "if(!viewId||!msg||!tok" not in html)
+    _check("webview bridge reports VS Code API readiness and usage",
+           "Object.freeze({postMessage:function(msg)" in html
+            and "Object.defineProperty(window,\"acquireVsCodeApi\"" in html
+            and "webview-ready" in html
+            and "webview-api-call" in html
+            and "webview-visibility" in html
+            and "_postApiTelemetry(\"postMessage\")" in html
+            and "_postApiTelemetry(\"setState\")" in html
+            and "_postApiTelemetry(\"getState\")" in html
+            and "_postApiTelemetry(\"acquire\")" in html
+            and "apiReady:true" in html
+            and "readyCount:(Number(cached.readyCount)||0)+1" in html
+            and "apiCallCount:(Number(cached.apiCallCount)||0)+1" in html
+            and "stateUpdateCount:(Number(cached.stateUpdateCount)||0)+1" in html
+            and "flushPendingWebviewMessages(viewId,iframe);" in html)
     _check("non-webview provider panels use backend provider callbacks",
            "function _buildChatProviderPanel(panel,p)" in html
            and "send.onclick=()=>providerSend(pid)" in html
