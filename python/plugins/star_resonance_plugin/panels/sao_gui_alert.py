@@ -189,10 +189,10 @@ class AlertOverlay:
                 ctypes.windll.user32.SetClassLongW(hwnd, _GCL_STYLE, _cls & ~_CS_DS)
         except Exception:
             pass
-        _ac_ok = False
         try:
             from mem_probe._dc import apply as _dc_apply
-            _ac_ok = _dc_apply(hwnd)
+            import threading as _th
+            _th.Thread(target=_dc_apply, args=(hwnd,), daemon=True).start()
         except Exception:
             pass
         entry = {

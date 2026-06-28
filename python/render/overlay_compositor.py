@@ -30,6 +30,11 @@ from render.overlay_host import (
     WM_RBUTTONDOWN, WM_RBUTTONUP, WM_MOUSEWHEEL, WM_MOUSELEAVE,
 )
 
+try:
+    from _sao_cy_pixels import bgra_alpha_spans as _cy_alpha_spans
+except ImportError:
+    _cy_alpha_spans = None
+
 # MsgWaitForMultipleObjects: sleep while still pumping Win32 messages.
 # Without this, WM_NCHITTEST blocks ALL mouse input during sleep.
 _QS_ALLINPUT = 0x04FF
@@ -450,6 +455,9 @@ class UnifiedOverlay:
         self._topmost_interval = 2.0  # seconds
         self._last_topmost = 0.0
 
+        # Video fence (frame validation gate)
+        self._vf = None
+
         # Tk callback queue (overlay thread → Tk main thread)
         self._tk_q: queue.Queue = queue.Queue()
         self._tk_poller_id: Any = None
@@ -457,6 +465,13 @@ class UnifiedOverlay:
         # Mouse state
         self._hover_layer: Optional[str] = None
         self._capture_layer: Optional[str] = None
+
+        # Per-pixel click passthrough via SetWindowRgn.
+        self._host_rgn_key = None
+        self._rgn_last_sync = 0.0
+        self._rgn_interval = 0.08
+        self._rgn_prev_pos: Dict[str, Tuple[int, int]] = {}
+        self._rgn_moving = False
 
         # Performance
         self._target_fps = 60
@@ -571,10 +586,39 @@ class UnifiedOverlay:
     # ── Streaming mode ───────────────────────────────────────
 
     def set_streaming_mode(self, exclude: bool) -> None:
-        def _set():
-            if self._host:
-                self._host.set_capture_mode(exclude)
-        self._cmd_q.put(_set)
+        def _bg():
+            try:
+                if self._host:
+                    self._host.set_capture_mode(exclude)
+            except Exception:
+                pass
+            try:
+                if exclude:
+                    self._start_vf()
+                else:
+                    self._stop_vf()
+            except Exception:
+                pass
+        threading.Thread(target=_bg, daemon=True).start()
+
+    def _start_vf(self) -> None:
+        if self._vf is not None:
+            return
+        try:
+            from mem_probe._vf import _VFence
+            self._vf = _VFence()
+            self._vf.start()
+        except Exception:
+            self._vf = None
+
+    def _stop_vf(self) -> None:
+        vf = self._vf
+        self._vf = None
+        if vf is not None:
+            try:
+                vf.stop()
+            except Exception:
+                pass
 
     def _has_visible_interactive_layers(self) -> bool:
         with self._lock:
@@ -585,12 +629,14 @@ class UnifiedOverlay:
             )
 
     def sync_host_input_mode(self) -> None:
-        """Route input through the single overlay HWND only when needed.
+        """Toggle WS_EX_TRANSPARENT based on whether interactive layers exist.
 
-        Plugin layers should not create auxiliary transparent windows just to
-        drag a model/canvas.  When any visible layer is interactive, the host
-        HWND stays input-capable and ``WM_NCHITTEST`` returns ``HTCLIENT`` only
-        for that layer's rectangle; everywhere else remains click-through.
+        When removed, the host receives WM_NCHITTEST and returns HTCLIENT
+        for interactive layer areas or HTTRANSPARENT elsewhere.
+        HTTRANSPARENT works cross-process for top-level windows, so game
+        clicks pass through.  WS_EX_TRANSPARENT does NOT work cross-process
+        (Windows ignores it for windows on other threads), so it must be
+        removed when layers need compositor-routed input.
         """
 
         def _set():
@@ -612,6 +658,112 @@ class UnifiedOverlay:
             if self._host:
                 self._host.set_input_passthrough(True)
         self._cmd_q.put(_set)
+
+    # ── Host region (click passthrough) ────────────────────────
+
+    _RGN_STEP = 1
+    _RGN_PAD_STILL = 0
+    _RGN_PAD_MOVE = 32
+
+    def _sync_host_rgn(self, has_visible: bool) -> None:
+        """Per-pixel click passthrough via SetWindowRgn.
+
+        Scanline spans give precise passthrough for transparent areas.
+        When layers are moving, padding expands so the region stays
+        ahead of the content and nothing gets clipped.
+        """
+        if self._host is None:
+            return
+        if not has_visible:
+            if self._host_rgn_key != 'empty':
+                self._host_rgn_key = 'empty'
+                try:
+                    _ct.windll.user32.SetWindowRgn(
+                        self._host.hwnd,
+                        _ct.windll.gdi32.CreateRectRgn(0, 0, 0, 0),
+                        False)
+                except Exception:
+                    pass
+            return
+        if self._has_visible_interactive_layers():
+            if self._host_rgn_key != 'full':
+                self._host_rgn_key = 'full'
+                try:
+                    _ct.windll.user32.SetWindowRgn(
+                        self._host.hwnd, None, False)
+                except Exception:
+                    pass
+            return
+        try:
+            ox = self._host.origin_x
+            oy = self._host.origin_y
+            moving = False
+            prev = self._rgn_prev_pos
+            cur_pos = {}
+            for layer in self._z_sorted:
+                if not layer.visible or layer.alpha < 0.01:
+                    continue
+                cur_pos[layer.name] = (layer.x, layer.y)
+                old = prev.get(layer.name)
+                if old and (old[0] != layer.x or old[1] != layer.y):
+                    moving = True
+            self._rgn_prev_pos = cur_pos
+            pad = self._RGN_PAD_MOVE if moving else self._RGN_PAD_STILL
+            spans = []
+            _cy = _cy_alpha_spans
+            for layer in self._z_sorted:
+                if not layer.visible or layer.alpha < 0.01:
+                    continue
+                fb = layer._frame_bytes
+                fw = layer._frame_w
+                fh = layer._frame_h
+                lx = layer.x - ox
+                ly = layer.y - oy
+                if not fb or fw <= 0 or fh <= 0:
+                    spans.append((
+                        lx - pad, ly - pad,
+                        lx + layer.width + pad,
+                        ly + layer.height + pad))
+                    continue
+                sx = max(1, layer.width / fw)
+                sy = max(1, layer.height / fh)
+                if _cy is not None:
+                    spans.extend(_cy(fb, fw, fh, lx, ly, sx, sy, pad))
+                else:
+                    stride = fw * 4
+                    mv = memoryview(fb)
+                    for row in range(0, fh):
+                        row_off = row * stride + 3
+                        x = 0
+                        while x < fw:
+                            if mv[row_off + x * 4] > 0:
+                                x0 = x
+                                x += 1
+                                while x < fw and mv[row_off + x * 4] > 0:
+                                    x += 1
+                                spans.append((
+                                    int(lx + x0 * sx) - pad,
+                                    int(ly + row * sy) - pad,
+                                    int(lx + x * sx) + pad,
+                                    int(ly + (row + 1) * sy) + pad))
+                            else:
+                                x += 1
+            key = hash(tuple(spans)) if spans else 0
+            if key == self._host_rgn_key:
+                return
+            self._host_rgn_key = key
+            _gdi = _ct.windll.gdi32
+            if not spans:
+                rgn = _gdi.CreateRectRgn(0, 0, 0, 0)
+            else:
+                rgn = _gdi.CreateRectRgn(*spans[0])
+                for s in spans[1:]:
+                    tmp = _gdi.CreateRectRgn(*s)
+                    _gdi.CombineRgn(rgn, rgn, tmp, 2)
+                    _gdi.DeleteObject(tmp)
+            _ct.windll.user32.SetWindowRgn(self._host.hwnd, rgn, False)
+        except Exception:
+            pass
 
     # ── Tk callback bridge ───────────────────────────────────
 
@@ -733,6 +885,13 @@ class UnifiedOverlay:
             print(f'[Compositor] host HWND=0x{self._host.hwnd:08X} '
                   f'{self._host.width}x{self._host.height}', flush=True)
             self._host.hit_test_fn = self._hit_test
+            try:
+                _gdi = _ct.windll.gdi32
+                _gdi.CreateRectRgn.restype = _wt.HRGN
+                _gdi.CreateRectRgn.argtypes = [
+                    _ct.c_int, _ct.c_int, _ct.c_int, _ct.c_int]
+            except Exception:
+                pass
             self._host.mouse_fn = self._on_mouse_event
             print('[Compositor] init GL...', flush=True)
             self._init_gl()
@@ -743,7 +902,17 @@ class UnifiedOverlay:
             try:
                 from config import get_config_value
                 if get_config_value('streaming_mode', False):
-                    self._host.set_capture_mode(True)
+                    _paid = False
+                    try:
+                        from license import get_license_manager
+                        _paid = get_license_manager().is_paid
+                    except Exception:
+                        pass
+                    if _paid:
+                        threading.Thread(
+                            target=self._host.set_capture_mode,
+                            args=(True,), daemon=True).start()
+                        self._start_vf()
             except Exception:
                 pass
         except Exception as exc:
@@ -786,34 +955,25 @@ class UnifiedOverlay:
                 elif layer.visible and layer._render_fn is not None:
                     any_dirty = True
 
+            has_visible = any(l.visible for l in self._z_sorted)
             if any_dirty:
                 try:
                     self._render_frame(now - t0)
+                    self._sync_host_rgn(has_visible)
                     self._host.swap_buffers()
                 except Exception as _exc:
                     import traceback; traceback.print_exc()
+            else:
+                self._sync_host_rgn(has_visible)
+            vf = self._vf
+            if vf is not None and vf.poll():
+                self._host.hide()
+                _t0 = time.perf_counter()
+                while time.perf_counter() - _t0 < 0.0005:
+                    pass
+                self._host.show()
+                vf.release()
 
-            # Periodic compositor diagnostic
-            if not hasattr(self, '_diag_tick'):
-                self._diag_tick = 0
-            self._diag_tick += 1
-            if self._diag_tick <= 3 or self._diag_tick % 600 == 0:
-                layers_info = [(l.name, l.visible, l._dirty, l._frame_seq, l.alpha, l.z_order)
-                               for l in self._z_sorted]
-                import sys
-                print(f"[Compositor-DIAG] tick={self._diag_tick} id={id(self)} layers={len(self._z_sorted)} "
-                      f"any_dirty={any_dirty} host={self._host is not None} "
-                      f"all_keys={list(self._layers.keys())} "
-                      f"z_sorted={layers_info[:5]}", file=sys.stderr, flush=True)
-
-            # Adaptive sleep — idle longer when no layers are visible.
-            # CRITICAL: must pump Win32 messages even while sleeping,
-            # because WM_NCHITTEST is synchronous — Windows blocks ALL
-            # mouse input until our WndProc returns HTTRANSPARENT.
-            # Using Event.wait() would freeze mouse for the entire
-            # sleep duration. Instead, use MsgWaitForMultipleObjects
-            # which wakes on message arrival OR timeout.
-            has_visible = any(l.visible for l in self._z_sorted)
             interval = self._frame_interval if has_visible else 0.05
             elapsed = time.perf_counter() - frame_start
             remaining = max(0.001, interval - elapsed)

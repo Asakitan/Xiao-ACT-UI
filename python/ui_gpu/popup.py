@@ -1338,6 +1338,8 @@ class SAOPopUpMenu:
         """Drop the popup below topmost and make it click-through while closing."""
         if sys.platform != 'win32' or self._gpu_win is None:
             return
+        if getattr(self._gpu_win, '_unified', False):
+            return
         hwnd = int(getattr(self._gpu_win, '_hwnd', 0) or 0)
         if not hwnd:
             return

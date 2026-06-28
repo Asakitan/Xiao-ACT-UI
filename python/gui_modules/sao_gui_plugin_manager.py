@@ -200,7 +200,6 @@ class PluginManagerPanel:
         header = tk.Frame(win, bg=header_bg, height=44)
         header.pack(fill='x')
         header.pack_propagate(False)
-        _bind_panel_drag(win, header)
         hdr_inner = tk.Frame(header, bg=header_bg)
         hdr_inner.pack(fill='both', expand=True, padx=12)
         tk.Label(hdr_inner, text='⬢', bg=header_bg, fg=gold,
@@ -216,6 +215,7 @@ class PluginManagerPanel:
         close_btn.bind('<Button-1>', lambda e: self.hide())
         close_btn.bind('<Enter>', lambda e: close_btn.configure(fg=_pc('danger', '#ff707a')))
         close_btn.bind('<Leave>', lambda e: close_btn.configure(fg=label_fg))
+        _bind_panel_drag(header, close_btn)
         tk.Frame(win, bg=border, height=1).pack(fill='x')
 
         body = tk.Frame(win, bg=body_bg)
@@ -536,6 +536,21 @@ class PluginManagerPanel:
                      anchor='w', justify='left', wraplength=320,
                      font=get_cjk_font(8), padx=6, pady=2).pack(fill='x', pady=(SP_XS, 0))
 
+    def _deferred_refresh(self) -> None:
+        """Schedule refresh for the next event-loop tick.
+
+        Action callbacks (enable / disable / reload …) run inside a Canvas
+        ``<Button-1>`` handler.  Calling ``refresh()`` synchronously destroys
+        the clicked widget mid-event, which can cause Tk to dispatch residual
+        ``<B1-Motion>`` events to the header drag handler — moving the window
+        to the mouse position.  Deferring by one tick lets the click handler
+        finish cleanly before any widget is destroyed.
+        """
+        try:
+            self.root.after(1, self.refresh)
+        except Exception:
+            self.refresh()
+
     def _import_plugin(self) -> None:
         try:
             path = filedialog.askopenfilename(
@@ -557,7 +572,7 @@ class PluginManagerPanel:
         except Exception as exc:
             result = {"ok": False, "message": str(exc)}
         self._status_var.set(str(result.get('message') or ('已导入' if result.get('ok') else '导入失败')))
-        self.refresh()
+        self._deferred_refresh()
 
     def _uninstall(self, plugin_id: str) -> None:
         # 卸载移除已安装插件、不可撤销 → 二次确认 (与 web plugin_manager 的
@@ -580,7 +595,7 @@ class PluginManagerPanel:
         except Exception as exc:
             result = {"ok": False, "message": str(exc)}
         self._status_var.set(str(result.get('message') or ('已卸载' if result.get('ok') else '卸载失败')))
-        self.refresh()
+        self._deferred_refresh()
 
     def _reload_all(self) -> None:
         result = act_plugin_reload(self.owner)
@@ -588,7 +603,7 @@ class PluginManagerPanel:
             self._status_var.set(str(result.get('message') or 'Reload failed'))
         else:
             self._status_var.set('插件已重载')
-        self.refresh()
+        self._deferred_refresh()
 
     def _reload(self, plugin_id: str) -> None:
         result = act_plugin_reload(self.owner, plugin_id)
@@ -596,7 +611,7 @@ class PluginManagerPanel:
             self._status_var.set(str(result.get('message') or 'Reload failed'))
         else:
             self._status_var.set(f'{plugin_id} reloaded')
-        self.refresh()
+        self._deferred_refresh()
 
     def _enable(self, plugin_id: str) -> None:
         result = act_plugin_enable(self.owner, plugin_id)
@@ -604,7 +619,7 @@ class PluginManagerPanel:
             self._status_var.set(str(result.get('message') or 'Enable failed'))
         else:
             self._status_var.set(f'{plugin_id} enabled')
-        self.refresh()
+        self._deferred_refresh()
 
     def _disable(self, plugin_id: str) -> None:
         result = act_plugin_disable(self.owner, plugin_id)
@@ -612,7 +627,7 @@ class PluginManagerPanel:
             self._status_var.set(str(result.get('message') or 'Disable failed'))
         else:
             self._status_var.set(f'{plugin_id} disabled')
-        self.refresh()
+        self._deferred_refresh()
 
     def _pin(self, plugin_id: str, pinned: bool) -> None:
         result = act_plugin_pin(self.owner, plugin_id, pinned)
@@ -620,7 +635,7 @@ class PluginManagerPanel:
             self._status_var.set(str(result.get('message') or 'Pin failed'))
         else:
             self._status_var.set(f'{plugin_id} pinned' if pinned else f'{plugin_id} unpinned')
-        self.refresh()
+        self._deferred_refresh()
         # Reflect the new pin order in the SAO menu if it is open.
         refresh_menu = getattr(self.owner, '_refresh_menu_if_open', None)
         if callable(refresh_menu):

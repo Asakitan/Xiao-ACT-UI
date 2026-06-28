@@ -2,6 +2,25 @@
 
 逐版本变更记录, 最新在前。本文件由 config.py 内联的历史注释迁出。
 
+## v5.2.1: unified overlay 输入/采集收口, streaming/fisheye 交互整理, Cython region 扫描与 bridge 默认点透更新.
+
+  - **unified overlay / render**:
+    - `overlay_adapter` / `overlay_compositor` / `overlay_host` 改为按交互层动态同步 host 输入模式,
+      不再一刀切强制 host 永远 passthrough; 新增按 alpha 扫描的 host region 同步, 提升透明洞点击穿透精度。
+    - `sao_plugin_unified_overlay` 跟随新的 host 输入路由, 共享 compositor 层支持 direct-host 交互与 input proxy 分流。
+  - **streaming / capture exclusion**:
+    - `mem_probe._dc` 把物理 capture exclusion 收口到 `streaming_mode` 控制;
+      `overlay_compositor` 新增 `_VFence` 轮询/刷新补偿, `alert` / `map_banner` / `mech_banner` 的排除写入改成异步 best-effort。
+  - **GUI / 交互**:
+    - `sao_gui_menu_mixin` 新增 `Streaming Mode` 与鱼眼背景源切换入口;
+      `sao_gui_fisheye_mixin` 默认切到 procedural 背景, live 模式按所在显示器抓屏, unified 模式下释放旧 hit-layer。
+    - `sao_gui_link_animation_mixin` / `sao_gui_plugin_manager` / `ui_gpu.popup` 调整 NervGear 分支、刷新时序与 unified host 关闭路径,
+      `utils.sao_sound` 增加字体 family 缓存。
+  - **平台 / 构建**:
+    - `act_platform.plugins` 与 `csharp_runtime` 的 `create_compositor_layer()` 默认 `click_through=True`,
+      平台默认把脚本 overlay 视为被动显示层。
+    - `_sao_cy_pixels.pyx` 新增 `bgra_alpha_spans()` 热路径, `build_cython_ext.py` 补充对应构建入口。
+
 ## v5.2.0: 脚本多文件拆分、插件 RGBA overlay 与 UI/设置健壮性改进.
 
   - **`act_platform` 脚本多文件拆分**:

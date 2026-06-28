@@ -93,15 +93,19 @@ class SAOPlayerGUILinkAnimationMixin:
             pass
         _float_x = int(sw * _offset_pct)
         _float_y = sh - self._fh
-        if saved_x is not None and saved_y is not None:
-            fx_final = max(0, min(int(saved_x), sw - self._fw))
-            fy_final = max(0, min(int(saved_y), sh - self._fh))
-        else:
-            fx_final = _float_x
-            fy_final = _float_y
         # 起始位置: 屏幕正中央 (LinkStart 动画中心)
         fx_start = sw // 2 - self._fw // 2
         fy_start = sh // 2 + 80   # 略低于中心 (文字下方)
+        nervgear_on = bool(self.settings.get('nervgear_mode', True))
+        if not nervgear_on:
+            fx_final = fx_start
+            fy_final = fy_start
+        elif saved_x is not None and saved_y is not None:
+            fx_final = max(0, min(int(saved_x), sw - self._fw))
+            fy_final = max(0, min(int(saved_y), sh - self._fh))
+        else:
+            fx_final = fx_start
+            fy_final = fy_start
 
         try:
             from render.gpu_overlay_window import (
@@ -899,12 +903,17 @@ void main() {
         wins = []
         seen = set()
 
-        try:
-            focus_x = self._float.winfo_x() + self._fw // 2
-            focus_y = self._float.winfo_y() + self._fh // 2
-        except Exception:
+        nervgear_on = bool(self.settings.get('nervgear_mode', True))
+        if not nervgear_on:
             focus_x = self.root.winfo_screenwidth() // 2
             focus_y = self.root.winfo_screenheight() // 2
+        else:
+            try:
+                focus_x = self._float.winfo_x() + self._fw // 2
+                focus_y = self._float.winfo_y() + self._fh // 2
+            except Exception:
+                focus_x = self.root.winfo_screenwidth() // 2
+                focus_y = self.root.winfo_screenheight() // 2
 
         def _profile(x, y, role, order):
             dx = x - focus_x

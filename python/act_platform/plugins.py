@@ -1229,7 +1229,7 @@ class PluginContext:
     def create_compositor_layer(
         self, name: str, width: int, height: int,
         x: int = 0, y: int = 0, z: int = 140,
-        click_through: bool = False,
+        click_through: bool = True,
     ) -> dict[str, Any]:
         """Create a compositor layer owned by this plugin for direct BGRA frame upload."""
         import sys

@@ -521,22 +521,33 @@ def _tk_font_query_ready():
         return False
 
 
+_resolved_sao_family: str = ''
+_resolved_cjk_family: str = ''
+
+
 def get_sao_font(size: int = 12, bold: bool = False):
     """获取 SAO 字体族名 (回退到 Segoe UI)"""
+    global _resolved_sao_family
     load_sao_fonts()
-    if not _tk_font_query_ready() and os.path.exists(os.path.join(_FONTS, 'SAOUI.ttf')):
+    if _resolved_sao_family:
+        family = _resolved_sao_family
+    elif not _tk_font_query_ready() and os.path.exists(os.path.join(_FONTS, 'SAOUI.ttf')):
         family = _SAO_FONT_FAMILY
     else:
         family = _SAO_FONT_FAMILY if _font_available(_SAO_FONT_FAMILY) else (
                  'SAOUI' if _font_available('SAOUI') else 'Segoe UI')
+        _resolved_sao_family = family
     weight = 'bold' if bold else ''
     return (family, size, weight) if weight else (family, size)
 
 
 def get_cjk_font(size: int = 10, bold: bool = False):
     """获取中文圆体字体 (回退到 Microsoft YaHei UI)"""
+    global _resolved_cjk_family
     load_sao_fonts()
-    if not _tk_font_query_ready() and os.path.exists(os.path.join(_FONTS, 'ZhuZiAYuanJWD.ttf')):
+    if _resolved_cjk_family:
+        family = _resolved_cjk_family
+    elif not _tk_font_query_ready() and os.path.exists(os.path.join(_FONTS, 'ZhuZiAYuanJWD.ttf')):
         family = _CJK_FONT_FAMILY
     else:
         for name in [_CJK_FONT_FAMILY, '方正FW筑紫A圆 简 D', 'ZhuZiAYuanJWD', 'Microsoft YaHei UI']:
@@ -545,5 +556,6 @@ def get_cjk_font(size: int = 10, bold: bool = False):
                 break
         else:
             family = 'Microsoft YaHei UI'
+        _resolved_cjk_family = family
     weight = 'bold' if bold else ''
     return (family, size, weight) if weight else (family, size)

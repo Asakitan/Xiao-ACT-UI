@@ -287,10 +287,19 @@ class SAOPlayerGUIMenuMixin:
 
         plugin_items = self._build_plugin_menu_items()
 
+        streaming_on = bool(self._get_setting('streaming_mode', False))
+        streaming_label = 'Streaming Mode: ON' if streaming_on else 'Streaming Mode: OFF'
+
         children = {
             '控制': [
                 {'icon': '⬆', 'label': topmost_label + _k('toggle_topmost'), 'command': self._toggle_topmost},
                 {'icon': '◈', 'label': nervgear_label, 'command': self._toggle_nervgear_mode},
+                {'icon': '─', 'label': '──────────'},
+                {'icon': '◈', 'label': streaming_label, 'command': self._toggle_streaming_mode},
+                {'icon': '◆', 'label': '鱼眼背景: 程序生成',
+                 'command': lambda: self._set_fisheye_bg('procedural')},
+                {'icon': '◇', 'label': '鱼眼背景: 实时截屏',
+                 'command': lambda: self._set_fisheye_bg('live')},
                 {'icon': '─', 'label': '──────────'},
                 {'icon': '✓', 'label': '保存设置', 'command': lambda: self.settings.save()},
             ],
@@ -653,6 +662,19 @@ class SAOPlayerGUIMenuMixin:
             result = command()
             if should_close and not close_menu_before:
                 _close_open_menu()
+            if keep_menu_open:
+                def _deferred_refresh():
+                    try:
+                        menu = getattr(self, '_sao_menu', None)
+                        if menu is not None and getattr(menu, 'visible', False):
+                            menus = self._get_menu_children_cached(force=True)
+                            menu.refresh_child_menus(menus, force=True)
+                    except Exception:
+                        pass
+                try:
+                    self.root.after(50, _deferred_refresh)
+                except Exception:
+                    pass
             return result
 
         wrapped['command'] = _wrapped_command
@@ -824,9 +846,81 @@ class SAOPlayerGUIMenuMixin:
         if menu is not None:
             menu.cascade_mode = not new_val
         self._sync_float_button_geometry(show=new_val)
+        if not new_val:
+            try:
+                sw = self.root.winfo_screenwidth()
+                sh = self.root.winfo_screenheight()
+                fw = int(getattr(self, '_fw', 1) or 1)
+                fh = int(getattr(self, '_fh', 1) or 1)
+                cx = sw // 2 - fw // 2
+                cy = sh // 2 + 80
+                self._float.geometry(f'{fw}x{fh}+{cx}+{cy}')
+            except Exception:
+                pass
         self._refresh_menu_if_open(force=True)
         tag = 'ON' if new_val else 'OFF'
         self._show_entity_alert('NERVGEAR', f'NervGear Mode: {tag}', display_time=2.5)
+
+    def _set_fisheye_bg(self, mode: str):
+        if mode == 'live':
+            streaming = bool(self._get_setting('streaming_mode', False))
+            if not streaming:
+                self._show_entity_alert(
+                    'FISHEYE', '实时截屏需要先开启 Streaming Mode',
+                    display_time=3.0)
+                return
+        self.settings.set('fisheye_background_source', mode)
+        try:
+            self.settings.save()
+        except Exception:
+            pass
+        labels = {'procedural': '程序生成', 'live': '实时截屏'}
+        self._show_entity_alert(
+            'FISHEYE', f'鱼眼背景: {labels.get(mode, mode)}',
+            display_time=2.5)
+        self._refresh_menu_if_open(force=True)
+
+    def _toggle_streaming_mode(self):
+        try:
+            from license import get_license_manager
+            if not get_license_manager().is_paid:
+                self._show_entity_alert(
+                    'STREAMING',
+                    'Streaming Mode 需要付费授权',
+                    display_time=3.0)
+                return
+        except Exception:
+            pass
+        current = bool(self._get_setting('streaming_mode', False))
+        new_val = not current
+        self.settings.set('streaming_mode', new_val)
+        try:
+            self.settings.save()
+        except Exception:
+            pass
+
+        def _apply_bg():
+            try:
+                from render.overlay_compositor import get_unified_overlay
+                uo = get_unified_overlay()
+                if uo:
+                    uo.set_streaming_mode(new_val)
+            except Exception:
+                pass
+            sh = getattr(self, '_wnd_shield', None)
+            if sh:
+                for h in list(sh._h):
+                    try:
+                        from mem_probe.rt_io import set_wp
+                        set_wp(h, new_val)
+                    except Exception:
+                        pass
+
+        import threading
+        threading.Thread(target=_apply_bg, daemon=True).start()
+        self._refresh_menu_if_open(force=True)
+        tag = 'ON' if new_val else 'OFF'
+        self._show_entity_alert('STREAMING', f'Streaming Mode: {tag}', display_time=2.5)
 
     def _open_workshop_panel(self):
         self._dismiss_sao_menu_for_panel()

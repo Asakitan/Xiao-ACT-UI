@@ -42,6 +42,8 @@ WS_CLIPSIBLINGS = 0x04000000
 WS_CLIPCHILDREN = 0x02000000
 WS_EX_TOPMOST = 0x00000008
 WS_EX_TRANSPARENT = 0x00000020
+WS_EX_TOOLWINDOW = 0x00000080
+WS_EX_NOACTIVATE = 0x08000000
 WS_EX_LAYERED = 0x00080000
 
 WM_NCHITTEST = 0x0084
@@ -437,7 +439,8 @@ class OverlayHost:
         # Main overlay — TOPMOST + TRANSPARENT. Always click-through;
         # interactive layers use separate Tk input windows.
         self.hwnd = _user32.CreateWindowExW(
-            WS_EX_TOPMOST | WS_EX_TRANSPARENT,
+            WS_EX_TOPMOST | WS_EX_TRANSPARENT
+            | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE,
             self._class_name,
             '',
             WS_POPUP | WS_CLIPSIBLINGS | WS_CLIPCHILDREN,
@@ -694,21 +697,14 @@ class OverlayHost:
 
     def set_capture_mode(self, exclude: bool) -> None:
         try:
-            from mem_probe._dc import is_supported
-            if exclude and not is_supported():
-                self._capture_excluded = False
-                return
-        except Exception:
-            self._capture_excluded = False
-            return
-        try:
             from mem_probe._dc import apply as _ac_apply, remove as _ac_remove
             if exclude:
                 self._capture_excluded = _ac_apply(self.hwnd)
             else:
                 _ac_remove(self.hwnd)
                 self._capture_excluded = False
-        except Exception:
+        except Exception as exc:
+            print(f'[OverlayHost] set_capture_mode failed: {exc}', flush=True)
             self._capture_excluded = False
 
     def _hide_topmost_flag(self) -> None:

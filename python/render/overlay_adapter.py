@@ -107,7 +107,7 @@ class CompositorOverlayWindow:
         self._layer.sync_input_proxy()
         if not was_visible:
             try:
-                self._compositor.force_host_input_passthrough()
+                self._compositor.sync_host_input_mode()
             except Exception:
                 pass
         try:
@@ -172,7 +172,7 @@ class CompositorOverlayWindow:
         self._layer.click_through = ct
         self._layer.sync_input_proxy()
         try:
-            self._compositor.force_host_input_passthrough()
+            self._compositor.sync_host_input_mode()
         except Exception:
             pass
 

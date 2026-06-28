@@ -1373,3 +1373,57 @@ cpdef double percentile_slice_f32(object arr,
         return buf[k - 1]
     cdef double frac = rank - <double>low
     return buf[low] + frac * (buf[low + 1] - buf[low])
+
+
+# ───────────────────────────────────────────────
+#  Per-pixel alpha → SetWindowRgn scanline spans
+# ───────────────────────────────────────────────
+#
+# overlay_compositor scans each layer's BGRA frame_bytes alpha channel
+# to build (x0, y0, x1, y1) rectangle spans for SetWindowRgn.
+# In pure Python this is O(w*h) byte-indexing per layer per tick —
+# ~5-10 ms for a 384x576 layer. The Cython kernel runs the same scan
+# in < 0.1 ms with typed memoryview + nogil.
+
+
+cpdef list bgra_alpha_spans(const unsigned char[:] bgra,
+                            Py_ssize_t fw, Py_ssize_t fh,
+                            int lx, int ly,
+                            double sx, double sy,
+                            int pad):
+    """Scan BGRA buffer alpha channel and return opaque scanline spans.
+
+    Each span is a (x0, y0, x1, y1) tuple in screen coordinates,
+    with ``pad`` pixels of padding on all sides.
+
+    ``bgra`` is a flat BGRA byte buffer of size ``fw * fh * 4``.
+    ``(lx, ly)`` is the layer's top-left screen position.
+    ``(sx, sy)`` is the framebuffer→screen scale factor.
+    """
+    cdef Py_ssize_t row, x, x0
+    cdef Py_ssize_t stride = fw * 4
+    cdef Py_ssize_t row_off
+    cdef list spans = []
+
+    if fw <= 0 or fh <= 0:
+        return spans
+
+    with nogil:
+        for row in range(fh):
+            row_off = row * stride + 3
+            x = 0
+            while x < fw:
+                if bgra[row_off + x * 4] > 0:
+                    x0 = x
+                    x += 1
+                    while x < fw and bgra[row_off + x * 4] > 0:
+                        x += 1
+                    with gil:
+                        spans.append((
+                            <int>(lx + x0 * sx) - pad,
+                            <int>(ly + row * sy) - pad,
+                            <int>(lx + x * sx) + pad,
+                            <int>(ly + (row + 1) * sy) + pad))
+                else:
+                    x += 1
+    return spans

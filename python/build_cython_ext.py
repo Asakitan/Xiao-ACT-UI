@@ -85,12 +85,17 @@ except Exception as exc:  # noqa: BLE001
 
 
 _wnd_src = os.path.join(HERE, '_sao_cy_wnd.pyx')
+_pixels_src = os.path.join(HERE, '_sao_cy_pixels.pyx')
 
 extensions = [
     # ── Platform helpers (build output drops next to this script) ──
     Extension(
         name='_sao_cy_uihelpers',
         sources=[os.path.join(HERE, '_sao_cy_uihelpers.pyx')],
+    ),
+    Extension(
+        name='_sao_cy_pixels',
+        sources=[_pixels_src],
     ),
     # mem_probe: AVX2 accelerated memory scan/pattern search for the
     # mem_probe tools that import ``mem_probe.cy_memscan``.

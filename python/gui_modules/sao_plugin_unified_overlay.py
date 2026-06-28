@@ -572,13 +572,6 @@ class PluginUnifiedOverlayHost:
         overlay = self._overlay
         if overlay is None:
             return
-        if any(
-            bool(state.get("visible", False))
-            and bool(state.get("draggable", False))
-            for state in self._layers.values()
-        ):
-            if self._force_real_host_passthrough(overlay):
-                return
         fn = getattr(overlay, "sync_host_input_mode", None)
         if not callable(fn):
             fn = getattr(overlay, "force_host_input_passthrough", None)

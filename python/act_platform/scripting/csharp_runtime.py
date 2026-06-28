@@ -659,7 +659,7 @@ class _CSharpProxy:
         self._ctx.clear_overlay(str(surface) if surface else None)
 
     def create_compositor_layer(self, name, width, height,
-                                x=0, y=0, z=140, click_through=False):
+                                x=0, y=0, z=140, click_through=True):
         return self._ctx.create_compositor_layer(
             str(name), int(width), int(height),
             x=int(x), y=int(y), z=int(z),

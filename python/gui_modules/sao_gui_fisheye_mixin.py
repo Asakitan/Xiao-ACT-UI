@@ -49,6 +49,15 @@ except Exception:
 from utils.perf_probe import probe as _probe, gauge as _perf_gauge, phase as _phase_trace
 
 
+def _mss_monitor_for_point(sct, x: int, y: int):
+    """Return the mss monitor dict that contains (x, y)."""
+    for mon in sct.monitors[1:]:
+        if (mon['left'] <= x < mon['left'] + mon['width']
+                and mon['top'] <= y < mon['top'] + mon['height']):
+            return mon
+    return sct.monitors[1] if len(sct.monitors) > 1 else sct.monitors[0]
+
+
 class SAOPlayerGUIFisheyeMixin:
     """Mixin providing the persistent GPU fisheye overlay lifecycle.
 
@@ -277,9 +286,19 @@ class SAOPlayerGUIFisheyeMixin:
         # Keep the transparent hit layer interactive while panels are open:
         # clicks on the backdrop should dismiss the fisheye, but panel windows
         # are raised above it by _raise_panel_window and remain clickable.
+        #
+        # Unified mode: all panels are compositor layers on the shared host
+        # HWND — the Tk hit layer would block all clicks to the game and
+        # non-compositor windows.  Destroy it; panels have their own close
+        # controls.
+        ov = getattr(self, '_fisheye_ov', None)
+        gpu_win = getattr(ov, 'gpu_win', None) if ov is not None else None
+        if gpu_win is not None and getattr(gpu_win, '_unified', False):
+            self._destroy_fisheye_hit_layer()
+            return
         self._set_fisheye_hit_layer_clickthrough(False)
         try:
-            self._release_fisheye_input_zorder(getattr(self, '_fisheye_ov', None))
+            self._release_fisheye_input_zorder(ov)
         except Exception:
             pass
 
@@ -475,6 +494,16 @@ class SAOPlayerGUIFisheyeMixin:
 
         sw = self.root.winfo_screenwidth()
         sh = self.root.winfo_screenheight()
+        try:
+            import mss as _mss_init
+            with _mss_init.mss() as _sct_init:
+                _init_rx = int(self.root.winfo_rootx()) + sw // 2
+                _init_ry = int(self.root.winfo_rooty()) + sh // 2
+                _init_mon = _mss_monitor_for_point(_sct_init, _init_rx, _init_ry)
+                sw = _init_mon['width']
+                sh = _init_mon['height']
+        except Exception:
+            pass
         hw, hh = int(sw * 0.85), int(sh * 0.85)   # 85% 分辨率 (清晰度提升)
 
         # Fisheye is render-only. A separate transparent Tk hit layer owns
@@ -842,16 +871,6 @@ class SAOPlayerGUIFisheyeMixin:
                                     col += vec3(0.10, 0.42, 0.50) * ring * (0.12 + 0.26 * edge);
                                     col += vec3(0.28, 0.20, 0.06) * ring2 * 0.05;
 
-                                    float hud = 0.0;
-                                    hud += line_band(v_uv.y, 0.08) * step(0.05, v_uv.x) * step(v_uv.x, 0.95);
-                                    hud += line_band(v_uv.y, 0.15) * step(0.05, v_uv.x) * step(v_uv.x, 0.95);
-                                    hud += line_band(v_uv.y, 0.85) * step(0.05, v_uv.x) * step(v_uv.x, 0.95);
-                                    hud += line_band(v_uv.y, 0.92) * step(0.05, v_uv.x) * step(v_uv.x, 0.95);
-                                    hud += (1.0 - smoothstep(0.0, 0.006, abs(v_uv.x - 0.5)))
-                                           * step(0.42, v_uv.y) * step(v_uv.y, 0.47);
-                                    hud += (1.0 - smoothstep(0.0, 0.006, abs(v_uv.y - 0.5)))
-                                           * step(0.42, v_uv.x) * step(v_uv.x, 0.47);
-                                    col += vec3(0.18, 0.48, 0.56) * min(hud, 1.0) * (0.16 + 0.08 * pulse);
                                     fragColor = vec4(col * u_alpha, u_alpha);
                                 }
                             ''')
@@ -1153,36 +1172,59 @@ class SAOPlayerGUIFisheyeMixin:
             self._stop_fisheye_overlay()
             return
 
+        # Monitor center point for mss — computed on main thread (Tk
+        # methods are not thread-safe), captured by worker closure.
+        _mon_cx = int(self.root.winfo_rootx()) + sw // 2
+        _mon_cy = int(self.root.winfo_rooty()) + sh // 2
+
         # ── Pre-capture: grab one frame synchronously so the first
         # _tick immediately starts the fade-in instead of waiting
         # 50-150 ms for the worker thread to deliver its first frame.
         # The pre-captured frame is undistorted — at alpha ≈0.05 the
         # difference is imperceptible, and by the time alpha reaches
         # ~0.2 the worker has delivered a distorted replacement.
-        try:
-            import mss as _mss_pre
-            with _mss_pre.mss() as _sct_pre:
-                _mon_pre = (_sct_pre.monitors[1]
-                            if len(_sct_pre.monitors) > 1
-                            else _sct_pre.monitors[0])
-                _s_pre = _sct_pre.grab(_mon_pre)
-                _pre_img = Image.frombytes('RGB', _s_pre.size, _s_pre.rgb)
-                _pre_rgb = _pre_img.tobytes()
-                _pre_w, _pre_h = _s_pre.size.width, _s_pre.size.height
-                presenter.set_frame(_pre_rgb, _pre_w, _pre_h)
-                _frame_seq[0] = 1
-                _latest_frame[0] = (1, _pre_rgb, _pre_w, _pre_h)
-        except Exception:
-            pass
+        # Procedural mode generates frames entirely on the GPU —
+        # no screenshot needed; the worker will deliver frame #1.
+        _fisheye_src_main = str(self._get_setting(
+            'fisheye_background_source', '') or 'procedural').strip()
+        _is_procedural_main = (_fisheye_src_main == 'procedural')
+        _pre_comp_hwnd = 0
+        if not _is_procedural_main:
+            try:
+                from render.overlay_compositor import get_unified_overlay as _pre_uo
+                _pre_comp_hwnd = _pre_uo().hwnd
+            except Exception:
+                pass
+            try:
+                import mss as _mss_pre
+                with _mss_pre.mss() as _sct_pre:
+                    _mon_pre = _mss_monitor_for_point(_sct_pre, _mon_cx, _mon_cy)
+                    if _pre_comp_hwnd:
+                        import ctypes as _ct_pre
+                        _ct_pre.windll.user32.ShowWindow(_pre_comp_hwnd, 0)
+                    try:
+                        _s_pre = _sct_pre.grab(_mon_pre)
+                    finally:
+                        if _pre_comp_hwnd:
+                            _ct_pre.windll.user32.ShowWindow(_pre_comp_hwnd, 8)
+                    _pre_img = Image.frombytes('RGB', _s_pre.size, _s_pre.rgb)
+                    _pre_rgb = _pre_img.tobytes()
+                    _pre_w, _pre_h = _s_pre.size.width, _s_pre.size.height
+                    presenter.set_frame(_pre_rgb, _pre_w, _pre_h)
+                    _frame_seq[0] = 1
+                    _latest_frame[0] = (1, _pre_rgb, _pre_w, _pre_h)
+            except Exception:
+                pass
 
         self.root.after(50, _tick)
 
         # ── 后台 worker: 截屏 + 畸变 + 缩放 + HUD 合成 → BGRA bytes ──
         def _worker():
             """后台线程: 全部重活在此, 主线程仅 set_frame/set_alpha."""
+            import ctypes as _ctw
             import time as _time
             try:
-                ctypes.windll.ole32.CoInitializeEx(0, 0)
+                _ctw.windll.ole32.CoInitializeEx(0, 0)
             except Exception:
                 pass
             # WGL driver serialization: this worker owns a private moderngl
@@ -1227,13 +1269,23 @@ class SAOPlayerGUIFisheyeMixin:
                 except Exception:
                     return None
 
-            # ── 鱼眼背景源: desktop(默认)/image:<path>/color:<hex> ──
-            _fisheye_src = str(self._get_setting('fisheye_background_source', '') or 'desktop').strip()
+            # ── 鱼眼背景源 ──
+            # procedural (默认): GL 生成 SAO 风格动态背景
+            # live:              mss 截屏 (需 streaming_mode 排除 compositor)
+            # image:<path>:      静态图片
+            # color:<hex>:       纯色
+            _fisheye_src = str(self._get_setting(
+                'fisheye_background_source', '') or 'procedural').strip()
             _static_frame = None
-            if _fisheye_src.startswith('image:'):
+            _procedural = False
+
+            if _fisheye_src == 'procedural':
+                _procedural = True
+            elif _fisheye_src.startswith('image:'):
                 _img_path = _fisheye_src[6:].strip()
                 try:
-                    _src_img = Image.open(_img_path).convert('RGB').resize((sw, sh), Image.LANCZOS)
+                    _src_img = Image.open(_img_path).convert('RGB').resize(
+                        (sw, sh), Image.LANCZOS)
                     _static_frame = _src_img
                 except Exception:
                     _static_frame = None
@@ -1247,28 +1299,30 @@ class SAOPlayerGUIFisheyeMixin:
 
             _cap_fn = None
             _cap_source = ''
-            if _static_frame is not None:
+
+            if _procedural:
+                # GL procedural 背景: 在下面 moderngl init 里设置
+                _cap_source = 'procedural'
+            elif _static_frame is not None:
                 _frozen = _static_frame
                 def _cap_static():
                     return _frozen
                 _cap_fn = _cap_static
                 _cap_source = 'static'
-
-            # ── 优先显示器快速截屏 (DXGI), fallback ImageGrab ──
-            # DXGI via windows_capture pyo3 不可靠(Nuitka 下 COM/线程问题),
-            # 直接用 mss (同样走 DXGI Desktop Duplication, 纯 ctypes 实现)。
-            try:
-                import mss as _mss_mod
-                _sct = _mss_mod.mss()
-                _primary = _sct.monitors[1] if len(_sct.monitors) > 1 else _sct.monitors[0]
-                def _cap_mss():
-                    s = _sct.grab(_primary)
-                    return Image.frombytes('RGB', s.size, s.rgb)
-                _cap_fn = _cap_mss
-                _cap_source = 'mss'
-            except Exception:
-                pass
-            if _cap_fn is None:
+            elif _fisheye_src == 'live':
+                # live 模式: mss 截屏 (streaming_mode 下 compositor 不可截)
+                try:
+                    import mss as _mss_mod
+                    _sct = _mss_mod.mss()
+                    _primary = _mss_monitor_for_point(_sct, _mon_cx, _mon_cy)
+                    def _cap_mss():
+                        s = _sct.grab(_primary)
+                        return Image.frombytes('RGB', s.size, s.rgb)
+                    _cap_fn = _cap_mss
+                    _cap_source = 'mss'
+                except Exception:
+                    pass
+            if _cap_fn is None and not _procedural:
                 def _cap_ig():
                     for _g in (
                         lambda: ImageGrab.grab(bbox=(0, 0, sw, sh),
@@ -1284,68 +1338,192 @@ class SAOPlayerGUIFisheyeMixin:
 
             _set_fisheye_capture_excluded(True)
 
-            # ── moderngl 桶形畸变 (worker 私有 standalone context) ──
+            # ── moderngl 桶形畸变 / procedural 背景 (worker 私有 standalone context) ──
             _gl_ok = False
             _ctx = _prog = _vbo = _vao = _tex = _fbo = None
+            _proc_prog = _proc_vao = _proc_vbo = None
             try:
-                if _shader_gpu:
+                if _shader_gpu and not _procedural:
                     raise RuntimeError('final-window shader path active')
                 import moderngl
                 import contextlib as _ctxlib
-                # v2.3.15: use _wgl_lock only for context init, then
-                # release it. The standalone context runs independently
-                # of the GLFW pump after creation. Per-context locking
-                # avoids blocking the pump for the entire GL distortion
-                # pass (~2-5ms per frame).
                 _init_cm = (_wgl_lock if _wgl_lock is not None
                             else _ctxlib.nullcontext())
                 with _init_cm:
                     _ctx = moderngl.create_standalone_context()
-                    _prog = _ctx.program(
-                        vertex_shader='''
-                            #version 330
-                            in vec2 in_pos;
-                            out vec2 uv;
-                            void main() {
-                                gl_Position = vec4(in_pos, 0.0, 1.0);
-                                uv = in_pos * 0.5 + 0.5;
-                            }
-                        ''',
-                        fragment_shader='''
-                            #version 330
-                            uniform sampler2D tex;
-                            uniform float strength;
-                            in vec2 uv;
-                            out vec4 fragColor;
-                            void main() {
-                                vec2 c = uv - 0.5;
-                                float r2 = dot(c, c);
-                                vec2 d = uv + c * strength * r2;
-                                fragColor = texture(tex, d);
-                            }
-                        '''
-                    )
-                    import numpy as _np
-                    _verts = _np.array([-1, -1, 3, -1, -1, 3], dtype='f4')
-                    _vbo = _ctx.buffer(_verts)
-                    _vao = _ctx.simple_vertex_array(_prog, _vbo, 'in_pos')
-                    # v2.3.15: input texture starts at (hw, hh) but is
-                    # dynamically reallocated to match the actual screenshot
-                    # size on first capture. This avoids the PIL resize
-                    # bottleneck — GPU bilinear sampling handles the
-                    # downscale/upscale to the FBO output size (hw×hh)
-                    # automatically. The texture is rebuilt only when the
-                    # screenshot resolution changes (rare — usually only
-                    # on display resolution switch).
-                    _tex_w, _tex_h = hw, hh  # initial; updated on first frame
-                    _tex = _ctx.texture((hw, hh), 3)
-                    _tex.filter = (moderngl.LINEAR, moderngl.LINEAR)
-                    _fbo = _ctx.framebuffer(
-                        color_attachments=[_ctx.texture((hw, hh), 3)])
-                    _prog['strength'].value = 0.55
-                    _prog['tex'].value = 0
-                    _gl_ok = True
-            except Exception:
+                    if _procedural:
+                        _proc_prog = _ctx.program(
+                            vertex_shader='''
+                                #version 330
+                                in vec2 in_pos;
+                                out vec2 v_uv;
+                                void main() {
+                                    v_uv = in_pos * 0.5 + 0.5;
+                                    gl_Position = vec4(in_pos, 0.0, 1.0);
+                                }
+                            ''',
+                            fragment_shader='''
+                                #version 330
+                                uniform float u_time;
+                                uniform vec2  u_res;
+                                in vec2 v_uv;
+                                out vec4 fragColor;
+
+                                float hash(vec2 p) {
+                                    return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453);
+                                }
+
+                                void main() {
+                                    float t = u_time;
+                                    vec2 uv = v_uv;
+                                    float ar = u_res.x / u_res.y;
+                                    vec2 cuv = (uv - 0.5) * vec2(ar, 1.0);
+                                    float cr = length(cuv);
+                                    float ca = atan(cuv.y, cuv.x);
+
+                                    // ── bright base ──
+                                    vec3 col = vec3(0.92, 0.92, 0.93);
+
+                                    // ── matrix rain: classic style ──
+                                    // 40 columns, each with own speed/length/phase.
+                                    // Characters = grid of cells; brightness wave
+                                    // scrolls down revealing them.
+                                    float ncols = 40.0;
+                                    float nrows = 30.0;
+                                    float ci = floor(uv.x * ncols);
+                                    float ri = floor(uv.y * nrows);
+                                    vec2 cf = fract(vec2(uv.x * ncols, uv.y * nrows));
+
+                                    // column properties
+                                    float c_seed = hash(vec2(ci, 0.0));
+                                    float c_spd = 0.3 + c_seed * 1.5;
+                                    float c_phase = hash(vec2(ci, 1.0));
+                                    float c_len = 0.08 + hash(vec2(ci, 2.0)) * 0.35;
+
+                                    // brightness wave
+                                    float wave = fract(uv.y + t * c_spd * 0.05 + c_phase);
+                                    float body = smoothstep(c_len, c_len * 0.8, wave)
+                                               * smoothstep(0.0, 0.01, wave);
+                                    float head = exp(-10.0 * wave) * body;
+                                    float trail = (1.0 - wave / c_len) * body;
+
+                                    // character: 3x5 bitmap, flips over time
+                                    float ch_t = floor(t * (1.5 + c_seed * 4.0));
+                                    float ch_seed = hash(vec2(ci + ch_t, ri));
+                                    int bits = int(ch_seed * 32768.0);
+                                    int px = int(cf.x * 3.0);
+                                    int py = int(cf.y * 5.0);
+                                    float pixel = float((bits >> (py * 3 + px)) & 1);
+
+                                    // cell margin
+                                    float margin = step(0.10, cf.x) * step(cf.x, 0.90)
+                                                 * step(0.05, cf.y) * step(cf.y, 0.95);
+
+                                    // column on/off
+                                    float c_on = step(0.25, c_seed);
+
+                                    // darken: characters visible as dark marks on bright bg
+                                    float char_alpha = body * pixel * margin * c_on;
+                                    col -= vec3(0.30, 0.31, 0.34) * char_alpha * 0.35;
+                                    // bright head highlight
+                                    col -= vec3(0.15) * head * margin * c_on;
+
+                                    // second layer: sparser, different speed
+                                    float ci2 = floor(uv.x * 25.0);
+                                    float ri2 = floor(uv.y * 20.0);
+                                    vec2 cf2 = fract(vec2(uv.x * 25.0, uv.y * 20.0));
+                                    float c2_seed = hash(vec2(ci2, 10.0));
+                                    float c2_spd = 0.2 + c2_seed * 1.0;
+                                    float wave2 = fract(uv.y + t * c2_spd * 0.04 + hash(vec2(ci2, 11.0)));
+                                    float c2_len = 0.12 + hash(vec2(ci2, 12.0)) * 0.30;
+                                    float body2 = smoothstep(c2_len, c2_len * 0.8, wave2)
+                                                * smoothstep(0.0, 0.01, wave2);
+                                    float ch2_t = floor(t * (1.0 + c2_seed * 2.0));
+                                    int bits2 = int(hash(vec2(ci2 + ch2_t, ri2)) * 32768.0);
+                                    float pixel2 = float((bits2 >> (int(cf2.y * 5.0) * 3 + int(cf2.x * 3.0))) & 1);
+                                    float margin2 = step(0.12, cf2.x) * step(cf2.x, 0.88)
+                                                  * step(0.06, cf2.y) * step(cf2.y, 0.94);
+                                    float c2_on = step(0.40, c2_seed);
+                                    col -= vec3(0.22, 0.23, 0.26) * body2 * pixel2 * margin2 * c2_on * 0.20;
+
+                                    // ── concentric rings ──
+                                    for (int i = 0; i < 3; i++) {
+                                        float fi = float(i);
+                                        float r = 0.12 + fi * 0.14;
+                                        float ring = smoothstep(0.003, 0.0, abs(cr - r));
+                                        float seg = smoothstep(0.0, 0.02, abs(sin(ca * (8.0 + fi * 3.0) + t * (0.2 + fi * 0.1))));
+                                        float p = 0.5 + 0.5 * sin(t * (0.5 + fi * 0.3) + fi * 1.57);
+                                        col -= vec3(0.18) * ring * seg * p;
+                                        col -= vec3(0.06) * smoothstep(0.025, 0.0, abs(cr - r)) * p;
+                                    }
+
+                                    // ── scanning beam ──
+                                    float beam_a = t * 0.25;
+                                    float bda = mod(ca - beam_a + 6.2832, 6.2832);
+                                    float beam = smoothstep(0.2, 0.0, bda) * exp(-bda * 3.0);
+                                    beam *= smoothstep(0.45, 0.03, cr);
+                                    col += vec3(0.96, 0.97, 0.98) * beam * 0.08;
+
+                                    // ── subtle scan lines ──
+                                    col *= 0.985 + 0.015 * sin(uv.y * u_res.y * 1.5);
+
+                                    // ── gentle vignette ──
+                                    col *= clamp(1.0 - cr * cr * 0.12, 0.84, 1.0);
+
+                                    fragColor = vec4(clamp(col, 0.0, 1.0), 1.0);
+                                }
+                            '''
+                        )
+                        import numpy as _np
+                        _verts = _np.array([-1, -1, 3, -1, -1, 3], dtype='f4')
+                        _proc_vbo = _ctx.buffer(_verts)
+                        _proc_vao = _ctx.simple_vertex_array(
+                            _proc_prog, _proc_vbo, 'in_pos')
+                        _proc_prog['u_res'].value = (float(hw), float(hh))
+                        _fbo = _ctx.framebuffer(
+                            color_attachments=[_ctx.texture((hw, hh), 3)])
+                        _gl_ok = True
+                    else:
+                        # Screenshot barrel distortion shader (non-procedural).
+                        _prog = _ctx.program(
+                            vertex_shader='''
+                                #version 330
+                                in vec2 in_pos;
+                                out vec2 uv;
+                                void main() {
+                                    gl_Position = vec4(in_pos, 0.0, 1.0);
+                                    uv = in_pos * 0.5 + 0.5;
+                                }
+                            ''',
+                            fragment_shader='''
+                                #version 330
+                                uniform sampler2D tex;
+                                uniform float strength;
+                                in vec2 uv;
+                                out vec4 fragColor;
+                                void main() {
+                                    vec2 c = uv - 0.5;
+                                    float r2 = dot(c, c);
+                                    vec2 d = uv + c * strength * r2;
+                                    fragColor = texture(tex, d);
+                                }
+                            '''
+                        )
+                        import numpy as _np
+                        _verts = _np.array([-1, -1, 3, -1, -1, 3], dtype='f4')
+                        _vbo = _ctx.buffer(_verts)
+                        _vao = _ctx.simple_vertex_array(_prog, _vbo, 'in_pos')
+                        _tex_w, _tex_h = hw, hh
+                        _tex = _ctx.texture((hw, hh), 3)
+                        _tex.filter = (moderngl.LINEAR, moderngl.LINEAR)
+                        _fbo = _ctx.framebuffer(
+                            color_attachments=[_ctx.texture((hw, hh), 3)])
+                        _prog['strength'].value = 0.55
+                        _prog['tex'].value = 0
+                        _gl_ok = True
+            except Exception as _gl_init_err:
+                print(f'[SAO-UI] fisheye GL init failed: {_gl_init_err}', flush=True)
+                import traceback; traceback.print_exc()
                 _ctx = None
 
             # ── numpy 后备 ──
@@ -1440,8 +1618,72 @@ class SAOPlayerGUIFisheyeMixin:
                 pass
 
             _fisheye_diag_logged = [False]
+            _proc_t0 = _time.time()
             while _running[0]:
                 _t_start = _time.time()
+                # ── Procedural mode: render animated background on GPU ──
+                if _procedural and _gl_ok and _proc_prog is not None:
+                    if not _fisheye_diag_logged[0]:
+                        _fisheye_diag_logged[0] = True
+                        print(f'[SAO-UI] fisheye worker: procedural, '
+                              f'fbo=({hw},{hh})')
+                    try:
+                        _elapsed_t = _time.time() - _proc_t0
+                        if _wgl_lock is not None:
+                            _acquired = False
+                            for _retry in range(3):
+                                if _wgl_lock.acquire(blocking=False):
+                                    _acquired = True
+                                    break
+                                _time.sleep(0.002)
+                            if not _acquired:
+                                _time.sleep(0.006)
+                                continue
+                            try:
+                                _proc_prog['u_time'].value = float(_elapsed_t)
+                                _fbo.use()
+                                _ctx.clear()
+                                _proc_vao.render(moderngl.TRIANGLES)
+                                raw = _fbo.color_attachments[0].read()
+                            finally:
+                                try:
+                                    _wgl_lock.release()
+                                except Exception:
+                                    pass
+                        else:
+                            _proc_prog['u_time'].value = float(_elapsed_t)
+                            _fbo.use()
+                            _ctx.clear()
+                            _proc_vao.render(moderngl.TRIANGLES)
+                            raw = _fbo.color_attachments[0].read()
+                        dist = Image.frombytes('RGB', (hw, hh), raw)
+                    except Exception as _proc_err:
+                        if not getattr(self, '_fisheye_err_logged', False):
+                            self._fisheye_err_logged = True
+                            print(f'[SAO-UI] fisheye procedural error: {_proc_err}')
+                            import traceback as _tb
+                            _tb.print_exc()
+                        _time.sleep(0.02)
+                        continue
+                    if not _running[0]:
+                        break
+                    _frame_seq[0] += 1
+                    _rgb_bytes = raw
+                    _latest_frame[0] = (_frame_seq[0], _rgb_bytes, out_w, out_h)
+                    try:
+                        presenter.set_frame(_rgb_bytes, out_w, out_h)
+                        gpu_win.request_redraw()
+                    except Exception:
+                        pass
+                    _elapsed = _time.time() - _t_start
+                    _perf_gauge('fisheye.worker.frame_ms', _elapsed * 1000.0)
+                    _sleep = max(0.001, _frame_interval - _elapsed)
+                    _time.sleep(_sleep)
+                    continue
+                # ── Screenshot-based capture mode ──
+                if _cap_fn is None:
+                    _time.sleep(0.05)
+                    continue
                 shot = _cap_fn()
                 if shot is None or not _running[0]:
                     _time.sleep(0.05)
@@ -1594,6 +1836,10 @@ class SAOPlayerGUIFisheyeMixin:
                 _sleep = max(0.001, _frame_interval - _elapsed)
                 _time.sleep(_sleep)
 
+            for _gl_obj in (_proc_vao, _proc_vbo, _proc_prog, _vao, _vbo, _tex, _fbo, _prog):
+                if _gl_obj is not None:
+                    try: _gl_obj.release()
+                    except Exception: pass
             if _ctx:
                 try: _ctx.release()
                 except Exception: pass
