@@ -9765,6 +9765,10 @@ console.log("frontend word separator behavior ok");
             and "function settingsSearchModifiedLanguageOverride(language)" in html
             and "function settingsCopyLanguageOverrideJson(language)" in html
             and "function settingsResetCurrentLanguageOverride()" in html
+            and "hasExtensionInsightActions" in html
+            and "hasExtensionSchemaDetails" in html
+            and "hasExtensionStructuredHints" in html
+            and "hasExtensionEnumActions" in html
             and "window.settingsFocusCurrentLanguageOverride=settingsFocusCurrentLanguageOverride;" in html
             and "String(ev.key||'').toLowerCase()==='g'" in html
             and "function settingsRecordSearch(query,parsed)" in html
@@ -10068,7 +10072,7 @@ console.log("frontend word separator behavior ok");
             and "function extensionSettingHasEnumOptions(schema)" in html
             and "function extensionSettingEnumEntries(schema,defaultValue)" in html
             and "function appendExtensionSettingEnumOptions(input,schema,defaultValue)" in html
-            and "function appendExtensionSettingEnumChoices(row,schema,type,defaultValue)" in html
+            and "function appendExtensionSettingEnumChoices(row,schema,type,defaultValue,input)" in html
             and "function extensionSettingArrayEnumSuggestions(schema,items,currentIndex)" in html
             and "function extensionSettingObjectKeySuggestions(schema,keys)" in html
             and "function extensionSettingSchemaForObjectKey(schema,key)" in html
@@ -10082,10 +10086,22 @@ console.log("frontend word separator behavior ok");
             and "function extensionSettingCreateInlineControl(schema,value,onChange)" in html
             and "function appendExtensionSettingStructuredInlineEditor(wrap,input,schema,type,value)" in html
             and "function appendExtensionSettingStructuredAssist(row,input,schema,type,defaultValue)" in html
+            and "function extensionSettingSchemaHintItems(schema,type)" in html
+            and "function appendExtensionSettingSchemaHints(wrap,schema,type)" in html
+            and "function extensionSettingQuotedFilterValue(value)" in html
+            and "function extensionSettingInsightCounts(rows)" in html
+            and "function extensionSettingInsightToken(kind,value)" in html
             and "window.appendExtensionSettingStructuredAssist=appendExtensionSettingStructuredAssist;" in html
+            and "window.appendExtensionSettingSchemaDetails=appendExtensionSettingSchemaDetails;" in html
+            and "window.appendExtensionSettingEnumChoices=appendExtensionSettingEnumChoices;" in html
+            and "window.renderExtensionSettingInsight=renderExtensionSettingInsight;" in html
             and "ext-setting-structured-assist" in html
             and "ext-setting-structured-status" in html
             and "ext-setting-structured-editor" in html
+            and "ext-setting-structured-hints" in html
+            and "ext-setting-schema-details summary" in html
+            and "ext-setting-enum-choice-actions" in html
+            and "dataset.extSettingsInsightToken" in html
             and "dataset.extStructuredInline='1'" in html
             and "Format JSON" in html
             and "Sort Keys" in html
@@ -10487,6 +10503,8 @@ console.log("frontend word separator behavior ok");
             "extensionSettingApplyStructuredInputValue",
             "extensionSettingSortedObject",
             "extensionSettingStructuredStatus",
+            "extensionSettingSchemaHintItems",
+            "appendExtensionSettingSchemaHints",
             "extensionSettingArrayItemSchema",
             "extensionSettingInlineValueType",
             "extensionSettingReadInlineControl",
@@ -10519,6 +10537,10 @@ console.log("frontend word separator behavior ok");
             "extensionSettingFilterSuggestions",
             "renderExtensionSettingSuggestions",
             "extensionSettingTopCounts",
+            "extensionSettingQuotedFilterValue",
+            "extensionSettingInsightCounts",
+            "extensionSettingInsightToken",
+            "extensionSettingInsightText",
             "renderExtensionSettingInsight",
             "extensionSettingSearchTokenValue",
             "extensionSettingSetSearchTokenValue",
@@ -10898,12 +10920,15 @@ let arrayAssistChanges = 0;
 arrayAssistInput.addEventListener("change", () => { arrayAssistChanges++; });
 const arrayAssist = appendExtensionSettingStructuredAssist(arrayAssistRow, arrayAssistInput, arraySuggestionSchema, "array");
 let arrayAssistButtons = nodeFindAll(arrayAssist, node => node.tagName === "BUTTON");
+const arrayHintLabels = nodeFindAll(arrayAssist, node => node.className === "ext-setting-structured-hint").map(nodeTreeText);
 assert(arrayAssistRow.children.includes(arrayAssist)
        && arrayAssist.className === "ext-setting-structured-assist"
        && nodeTreeText(arrayAssist).indexOf("Array") >= 0
        && arrayAssistButtons.some(btn => btn.textContent === "Format JSON")
        && arrayAssistButtons.some(btn => btn.textContent === "Add Item")
-       && arrayAssistButtons.some(btn => btn.textContent === "Gamma"),
+       && arrayAssistButtons.some(btn => btn.textContent === "Gamma")
+       && arrayHintLabels.some(text => text.indexOf("Items:") >= 0)
+       && arrayHintLabels.some(text => text.indexOf("Unique:") >= 0),
        "structured array assist renders status utilities and unique enum add action");
 arrayAssistButtons.find(btn => btn.textContent === "Gamma").onclick({ preventDefault(){}, stopPropagation(){} });
 assert(JSON.parse(arrayAssistInput.value).join(",") === "alpha,beta,gamma"
@@ -10917,13 +10942,16 @@ let objectAssistChanges = 0;
 objectAssistInput.addEventListener("change", () => { objectAssistChanges++; });
 const objectAssist = appendExtensionSettingStructuredAssist(objectAssistRow, objectAssistInput, objectSuggestionSchema, "object");
 let objectAssistButtons = nodeFindAll(objectAssist, node => node.tagName === "BUTTON");
+const objectHintLabels = nodeFindAll(objectAssist, node => node.className === "ext-setting-structured-hint").map(nodeTreeText);
 assert(objectAssistRow.children.includes(objectAssist)
        && nodeTreeText(objectAssist).indexOf("Object") >= 0
        && objectAssistButtons.some(btn => btn.textContent === "Sort Keys")
        && objectAssistButtons.some(btn => btn.textContent === "Add Property")
        && objectAssistButtons.some(btn => btn.textContent === "level" && btn.title === "Level")
        && objectAssistButtons.some(btn => btn.textContent === "mode")
-       && !objectAssistButtons.some(btn => btn.textContent === "enabled"),
+       && !objectAssistButtons.some(btn => btn.textContent === "enabled")
+       && objectHintLabels.some(text => text.indexOf("Known keys:") >= 0)
+       && objectHintLabels.some(text => text.indexOf("Pattern keys:") >= 0),
        "structured object assist renders status utilities and missing property actions");
 objectAssistButtons.find(btn => btn.textContent === "level").onclick({ preventDefault(){}, stopPropagation(){} });
 let objectAssistValue = JSON.parse(objectAssistInput.value);
@@ -11107,9 +11135,41 @@ assert(agentsDetails.some(item => item.label === "Agents Window"
 const schemaDetailHost = makeNode("div");
 appendExtensionSettingSchemaDetails(schemaDetailHost, conditionalSchema, "object", {});
 assert(schemaDetailHost.children.some(n => n.className === "ext-setting-schema-details"
+       && n.tagName === "DETAILS"
+       && n.children.some(child => child.tagName === "SUMMARY" && child.textContent.indexOf("Schema details") >= 0)
        && n.children.some(chip => chip.className === "ext-setting-schema-chip"
          && chip.dataset.schemaTag === "conditional")),
-       "schema detail chips rendered with tags");
+       "schema detail chips render in collapsible details with tags");
+const schemaHints = extensionSettingSchemaHintItems(objectSuggestionSchema, "object");
+assert(schemaHints.some(item => item.label === "Known keys")
+       && schemaHints.some(item => item.label === "Pattern keys")
+       && schemaHints.some(item => item.label === "Additional keys"),
+       "schema hints summarize structured object editing constraints");
+const schemaHintHost = makeNode("div");
+appendExtensionSettingSchemaHints(schemaHintHost, objectSuggestionSchema, "object");
+assert(schemaHintHost.children.some(node => node.className === "ext-setting-structured-hints"
+       && node.children.some(chip => chip.className === "ext-setting-structured-hint")),
+       "schema hints render compact structured chips");
+const enumChoiceHost = makeNode("div");
+const enumChoiceSelect = makeNode("select");
+appendExtensionSettingEnumOptions(enumChoiceSelect, searchSchema, "always");
+let enumChoiceChanged = 0;
+enumChoiceSelect.addEventListener("change", () => { enumChoiceChanged++; });
+appendExtensionSettingEnumChoices(enumChoiceHost, searchSchema, "string", "always", enumChoiceSelect);
+const enumChoiceActions = nodeFindAll(enumChoiceHost, node => node.tagName === "BUTTON");
+assert(enumChoiceActions.some(btn => btn.textContent === "Use" && btn.dataset.enumChoiceAction === "use")
+       && enumChoiceActions.some(btn => btn.textContent === "Filter" && btn.dataset.enumChoiceAction === "filter"),
+       "enum choices render use and filter actions");
+enumChoiceActions.find(btn => btn.textContent === "Use").onclick({ preventDefault(){}, stopPropagation(){} });
+assert(enumChoiceSelect.selectedIndex >= 0 && enumChoiceChanged === 1,
+       "enum choice use action selects a value and dispatches change");
+fakeSearch.value = "render";
+enumChoiceActions.find(btn => btn.textContent === "Filter").onclick({ preventDefault(){}, stopPropagation(){} });
+assert(fakeSearch.value.indexOf("@value:") >= 0 && filterApplyCount > 0,
+       "enum choice filter action appends value filter token");
+assert(extensionSettingQuotedFilterValue("auto mode") === '"auto mode"'
+       && extensionSettingQuotedFilterValue("auto") === "auto",
+       "settings filter token values quote whitespace only when needed");
 assert(extensionSettingSchemaSummary(tupleArraySchema, "array").indexOf("tuple items: 2") >= 0
        && extensionSettingSchemaSummary(tupleArraySchema, "array").indexOf("no additional items") >= 0
        && extensionSettingSchemaSummary(containsCountSchema, "array").indexOf("min 2") >= 0
@@ -11283,6 +11343,33 @@ assert(extensionSettingResultSummary(3,4).indexOf("3 visible of 4 extension sett
        "settings result summary includes visible modified and invalid counts");
 assert(extensionSettingResultSummary(3,4,{visibleRows:[],modifiedVisible:1,invalidVisible:1}).indexOf("1 modified") >= 0,
        "settings result summary accepts precomputed filter stats");
+const insightRows = [
+  makeSettingRow("one", {}),
+  makeSettingRow("two", {}),
+  makeSettingRow("three", {}),
+];
+insightRows[0].dataset.extSettingExtensionId = "sample.ext";
+insightRows[0].dataset.extSettingLanguage = "python";
+insightRows[0].dataset.extSettingType = "boolean";
+insightRows[0].dataset.extSettingScope = "resource";
+insightRows[0].dataset.extSettingTarget = "workspace";
+insightRows[1].dataset.extSettingExtensionId = "sample.ext";
+insightRows[1].dataset.extSettingLanguage = "python";
+insightRows[1].dataset.extSettingType = "string";
+insightRows[1].dataset.extSettingScope = "resource";
+insightRows[1].dataset.extSettingTarget = "global";
+insightRows[2].dataset.extSettingExtensionId = "other.ext";
+insightRows[2].dataset.extSettingType = "string";
+insightRows[2].dataset.extSettingScope = "window";
+insightRows[2].dataset.extSettingTarget = "workspace";
+const insightCounts = extensionSettingInsightCounts(insightRows);
+assert(insightCounts.extensions[0].value === "sample.ext"
+       && insightCounts.extensions[0].count === 2
+       && insightCounts.languages[0].value === "python"
+       && extensionSettingInsightToken("Extension", "sample.ext") === "@ext:sample.ext"
+       && extensionSettingInsightToken("Language", "python") === "@lang:python"
+       && extensionSettingInsightText(insightCounts.types).indexOf("string 2") >= 0,
+       "settings insight counts summarize extension language type scope and target groups");
 assert(extensionSettingFocusFirstModifiedSetting() && focusedRow === "alpha.setting",
        "settings navigation focuses first visible modified row");
 assert(extensionSettingFocusFirstInvalidSetting() && focusedRow === "beta.setting",

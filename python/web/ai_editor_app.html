@@ -2342,9 +2342,13 @@ pre.code-block { overflow:visible; }
 .ext-setting-desc { font-size:11px; color:var(--fg-dim); line-height:1.35; margin-bottom:4px; }
 .ext-setting-enum-desc { font-size:11px; color:var(--fg-dim); line-height:1.35; margin-top:4px; }
 .ext-setting-enum-choices { display:grid; gap:3px; margin:4px 0 5px; color:var(--fg-dim); font-size:10px; }
-.ext-setting-enum-choice { display:grid; grid-template-columns:minmax(96px, max-content) 1fr; gap:6px; align-items:start; }
+.ext-setting-enum-choice { display:grid; grid-template-columns:minmax(96px, max-content) 1fr auto; gap:6px; align-items:start; }
 .ext-setting-enum-choice-name { color:var(--fg); font-weight:600; overflow:hidden; text-overflow:ellipsis; }
 .ext-setting-enum-choice-desc { overflow:hidden; text-overflow:ellipsis; }
+.ext-setting-enum-choice-actions { display:inline-flex; align-items:center; gap:3px; }
+.ext-setting-enum-choice-actions button { height:20px; padding:0 6px; border:1px solid var(--border); background:var(--bg3);
+  color:var(--fg-dim); border-radius:3px; font:10px var(--sans); }
+.ext-setting-enum-choice-actions button:hover { color:var(--fg); border-color:var(--fg-accent); background:var(--bg-hover); }
 .ext-setting-structured-assist { display:flex; flex-wrap:wrap; gap:4px; margin:4px 0 5px; align-items:center; }
 .ext-setting-structured-assist-label { color:var(--fg-dim); font-size:10px; margin-right:2px; }
 .ext-setting-structured-status { display:inline-flex; align-items:center; height:20px; padding:0 6px; border-radius:999px;
@@ -2364,6 +2368,11 @@ pre.code-block { overflow:visible; }
 .ext-setting-structured-row input[type="checkbox"] { width:auto; height:auto; justify-self:start; }
 .ext-setting-structured-row button { width:22px; min-width:22px; padding:0; }
 .ext-setting-structured-note { color:var(--fg-dim); font:10px var(--mono); }
+.ext-setting-structured-hints { flex:1 0 100%; display:flex; flex-wrap:wrap; gap:4px; margin-top:1px; }
+.ext-setting-structured-hint { display:inline-flex; align-items:center; gap:3px; max-width:220px; padding:1px 6px;
+  border:1px solid var(--border); border-radius:999px; background:var(--bg3); color:var(--fg-dim);
+  font:10px/16px var(--mono); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.ext-setting-structured-hint strong { color:var(--fg); font-family:var(--sans); font-weight:600; }
 .ext-setting-default-badge { display:inline-flex; align-items:center; padding:1px 5px; border-radius:999px;
   border:1px solid color-mix(in srgb,var(--fg-accent) 36%,transparent); color:var(--fg-accent); font:10px var(--sans); }
 .ext-setting-markdown-block { margin:0 0 4px; }
@@ -2389,6 +2398,11 @@ pre.code-block { overflow:visible; }
 .ext-setting-desc em,.ext-setting-enum-desc em,.ext-setting-deprecated em,.ext-setting-enum-choices em { color:var(--fg); font-style:italic; }
 .ext-setting-schema { font-size:10px; color:var(--fg-dim); font-family:var(--mono); margin-bottom:4px; }
 .ext-setting-schema-details { display:flex; flex-wrap:wrap; gap:4px; margin:0 0 5px; }
+.ext-setting-schema-details summary { flex:1 0 100%; cursor:pointer; color:var(--fg-dim); font:10px var(--mono);
+  list-style:none; user-select:none; }
+.ext-setting-schema-details summary::-webkit-details-marker { display:none; }
+.ext-setting-schema-details summary::before { content:'›'; display:inline-block; width:11px; color:var(--fg-accent); }
+.ext-setting-schema-details[open] summary::before { transform:rotate(90deg); }
 .ext-setting-schema-chip { display:inline-flex; align-items:center; max-width:100%; gap:3px; padding:1px 5px;
   border:1px solid var(--border); border-radius:3px; background:var(--bg3); color:var(--fg-dim);
   font:10px/15px var(--mono); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
@@ -2421,6 +2435,8 @@ pre.code-block { overflow:visible; }
 .ext-settings-insight-chip { display:inline-flex; align-items:center; min-height:20px; max-width:260px; padding:1px 7px;
   border:1px solid var(--border); background:var(--bg3); color:var(--fg-dim); border-radius:999px;
   font:10px/16px var(--mono); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.ext-settings-insight button.ext-settings-insight-chip { cursor:pointer; }
+.ext-settings-insight button.ext-settings-insight-chip:hover { color:var(--fg); border-color:var(--fg-accent); background:var(--bg-hover); }
 .ext-settings-insight-chip strong { color:var(--fg); font-family:var(--sans); font-weight:600; margin-right:4px; }
 .ext-settings-filter-actions { grid-column:1 / -1; display:flex; align-items:center; gap:5px; flex-wrap:wrap; }
 .ext-settings-filter-actions button { height:22px; padding:1px 7px; border:1px solid var(--border); background:var(--bg3); color:var(--fg-dim); border-radius:3px; }
@@ -25666,6 +25682,10 @@ function settingsUiSelfCheckSnapshot(){
     hasOverridesFilterToken:!!document.querySelector('[data-settings-filter-token="@overrides"]'),
     hasLanguageSuggestions:!!document.querySelector('#settings-language-suggestions [data-settings-language-suggestion]'),
     hasLanguageModifiedSearch:!!document.querySelector('#settings-language-suggestions [data-settings-language-modified="1"]'),
+    hasExtensionInsightActions:!!document.querySelector('#ext-settings-insight [data-ext-settings-insight-token]'),
+    hasExtensionSchemaDetails:!!document.querySelector('.ext-setting-schema-details summary'),
+    hasExtensionStructuredHints:!!document.querySelector('.ext-setting-structured-hint'),
+    hasExtensionEnumActions:!!document.querySelector('.ext-setting-enum-choice-actions button[data-enum-choice-action]'),
     density:settingsReadDensity(),
     currentTarget:currentSettingsTarget,
     navItems:navItems.length,
@@ -28356,10 +28376,58 @@ function extensionSettingSchemaDetailItems(schema,type,defaultValue){
   if(Object.prototype.hasOwnProperty.call(schema,'default'))push('Schema default',extensionSettingJson(defaultValue,type).replace(/\s+/g,' ').trim(),'default');
   return details;
 }
+function extensionSettingSchemaHintItems(schema,type){
+  schema=(schema&&typeof schema==='object')?schema:{};
+  const hints=[];
+  const push=(label,text)=>{
+    text=String(text||'').trim();
+    if(text)hints.push({label:String(label||''),text});
+  };
+  if(type==='array'){
+    if(schema.items&&typeof schema.items==='object'&&!Array.isArray(schema.items))push('Items',extensionSettingType(schema.items));
+    if(Array.isArray(schema.items))push('Tuple',String(schema.items.length)+' items');
+    if(typeof schema.minItems==='number'||typeof schema.maxItems==='number'){
+      push('Length',(typeof schema.minItems==='number'?'min '+schema.minItems:'')+
+        (typeof schema.minItems==='number'&&typeof schema.maxItems==='number'?' / ':'')+
+        (typeof schema.maxItems==='number'?'max '+schema.maxItems:''));
+    }
+    if(schema.uniqueItems===true)push('Unique','required');
+    if(schema.contains&&typeof schema.contains==='object')push('Contains',extensionSettingType(schema.contains));
+  }
+  if(type==='object'){
+    if(Array.isArray(schema.required)&&schema.required.length)push('Required',schema.required.slice(0,4).join(', ')+(schema.required.length>4?' +'+(schema.required.length-4):''));
+    if(schema.properties&&typeof schema.properties==='object')push('Known keys',String(Object.keys(schema.properties).length));
+    if(schema.additionalProperties===false)push('Additional keys','blocked');
+    else if(schema.additionalProperties&&typeof schema.additionalProperties==='object')push('Additional keys',extensionSettingType(schema.additionalProperties));
+    if(schema.patternProperties&&typeof schema.patternProperties==='object')push('Pattern keys',Object.keys(schema.patternProperties).slice(0,3).join(', '));
+    if(schema.dependencies||schema.dependentRequired||schema.dependentSchemas)push('Dependencies','configured');
+  }
+  const constraints=extensionSettingConstraintSummary(schema,type);
+  if(constraints&&!hints.some(item=>item.text===constraints))push('Rules',constraints);
+  return hints.slice(0,6);
+}
+function appendExtensionSettingSchemaHints(wrap,schema,type){
+  const hints=extensionSettingSchemaHintItems(schema,type);
+  if(!wrap||!hints.length)return null;
+  const host=document.createElement('div');host.className='ext-setting-structured-hints';
+  hints.forEach(hint=>{
+    const chip=document.createElement('span');chip.className='ext-setting-structured-hint';
+    const label=document.createElement('strong');label.textContent=hint.label+':';
+    chip.appendChild(label);
+    chip.appendChild(document.createTextNode(' '+hint.text));
+    chip.title=hint.label+': '+hint.text;
+    host.appendChild(chip);
+  });
+  wrap.appendChild(host);
+  return host;
+}
 function appendExtensionSettingSchemaDetails(row,schema,type,defaultValue){
   const details=extensionSettingSchemaDetailItems(schema,type,defaultValue);
   if(!row||!details.length)return;
-  const wrap=document.createElement('div');wrap.className='ext-setting-schema-details';
+  const wrap=document.createElement('details');wrap.className='ext-setting-schema-details';
+  const summary=document.createElement('summary');summary.textContent='Schema details · '+details.length;
+  summary.title='Show detailed schema metadata';
+  wrap.appendChild(summary);
   details.slice(0,8).forEach(detail=>{
     const chip=document.createElement('span');chip.className='ext-setting-schema-chip';
     chip.dataset.schemaTag=detail.tag||'schema';
@@ -28369,6 +28437,11 @@ function appendExtensionSettingSchemaDetails(row,schema,type,defaultValue){
     chip.title=detail.label+': '+detail.text;
     wrap.appendChild(chip);
   });
+  if(details.length>8){
+    const chip=document.createElement('span');chip.className='ext-setting-schema-chip';
+    chip.textContent='+'+(details.length-8)+' more';
+    wrap.appendChild(chip);
+  }
   row.appendChild(wrap);
 }
 function extensionSettingDeprecationText(schema){
@@ -28505,7 +28578,13 @@ function renderExtensionSettingEnumDescription(el,schema,input){
   }
   else el.style.display='none';
 }
-function appendExtensionSettingEnumChoices(row,schema,type,defaultValue){
+function extensionSettingQuotedFilterValue(value){
+  const text=String(value??'').trim();
+  if(!text)return '""';
+  const needsQuote=Array.from(text).some(ch=>ch===' '||ch==='\t'||ch==='\n'||ch==='\r'||ch===','||ch==='"');
+  return needsQuote?JSON.stringify(text):text;
+}
+function appendExtensionSettingEnumChoices(row,schema,type,defaultValue,input){
   if(!row||!schema||!extensionSettingHasEnumOptions(schema))return;
   const wrap=document.createElement('div');wrap.className='ext-setting-enum-choices';
   const entries=extensionSettingEnumEntries(schema,defaultValue);
@@ -28530,7 +28609,24 @@ function appendExtensionSettingEnumChoices(row,schema,type,defaultValue){
     }
     const markdown=extensionSettingEnumDescription(schema,index);
     if(markdown)appendExtensionSettingMarkdown(desc,markdown);
-    choice.appendChild(name);choice.appendChild(desc);wrap.appendChild(choice);
+    const actions=document.createElement('span');actions.className='ext-setting-enum-choice-actions';
+    const use=document.createElement('button');use.type='button';use.textContent='Use';use.title='Use this enum value';
+    use.dataset.enumChoiceAction='use';
+    use.onclick=ev=>{
+      if(ev){ev.preventDefault();ev.stopPropagation()}
+      if(input){
+        setExtensionSettingInputValue(input,schema,type,value);
+        try{input.dispatchEvent(new Event('change',{bubbles:true}))}catch(e){try{input.dispatchEvent({type:'change'})}catch(_e){}}
+      }
+    };
+    const filter=document.createElement('button');filter.type='button';filter.textContent='Filter';filter.title='Filter settings using this enum value';
+    filter.dataset.enumChoiceAction='filter';
+    filter.onclick=ev=>{
+      if(ev){ev.preventDefault();ev.stopPropagation()}
+      if(typeof extensionSettingAppendFilterToken==='function')extensionSettingAppendFilterToken('@value:'+extensionSettingQuotedFilterValue(raw));
+    };
+    actions.appendChild(use);actions.appendChild(filter);
+    choice.appendChild(name);choice.appendChild(desc);choice.appendChild(actions);wrap.appendChild(choice);
   });
   if(entries.length>8){
     const more=document.createElement('div');more.className='ext-setting-note';
@@ -28788,6 +28884,7 @@ function appendExtensionSettingStructuredAssist(row,input,schema,type,defaultVal
     statusEl.textContent=status.text;
     statusEl.title=status.title||'Structured setting JSON status';
     wrap.appendChild(statusEl);
+    appendExtensionSettingSchemaHints(wrap,schema,type);
     const utilityActions=[];
     if(status.valid&&value!=null){
       utilityActions.push({label:'Format JSON',title:'Format and resize this JSON value',apply:()=>extensionSettingApplyStructuredInputValue(input,type,value)});
@@ -28861,6 +28958,10 @@ function appendExtensionSettingStructuredAssist(row,input,schema,type,defaultVal
   return wrap;
 }
 window.appendExtensionSettingStructuredAssist=appendExtensionSettingStructuredAssist;
+window.appendExtensionSettingSchemaDetails=appendExtensionSettingSchemaDetails;
+window.appendExtensionSettingSchemaHints=appendExtensionSettingSchemaHints;
+window.appendExtensionSettingEnumChoices=appendExtensionSettingEnumChoices;
+window.appendExtensionSettingEnumOptions=appendExtensionSettingEnumOptions;
 function extensionSettingSearchText(key,schema,type,description,deprecation,schemaSummary){
   schema=(schema&&typeof schema==='object')?schema:{};
   const schemaTags=extensionSettingSchemaFeatureTags(schema,type);
@@ -29766,30 +29867,63 @@ function extensionSettingTopCounts(rows,readValue,limit){
   });
   return Array.from(counts.entries()).sort((a,b)=>b[1]-a[1]||a[0].localeCompare(b[0])).slice(0,limit||3);
 }
+function extensionSettingInsightCounts(rows){
+  rows=Array.isArray(rows)?rows:[];
+  const count=(reader,limit)=>extensionSettingTopCounts(rows,reader,limit).map(item=>({value:item[0],count:item[1]}));
+  return {
+    sections:new Set(rows.map(row=>row.closest&&row.closest('details[data-ext-settings-section]')).filter(Boolean)).size,
+    extensions:count(row=>row.dataset.extSettingExtensionId||String(row.dataset.extSettingExtension||'').split(/\s+/)[0],3),
+    languages:count(row=>row.dataset.extSettingLanguage,3),
+    types:count(row=>row.dataset.extSettingType,4),
+    scopes:count(row=>row.dataset.extSettingScope,3),
+    targets:count(row=>row.dataset.extSettingTarget,3),
+  };
+}
+function extensionSettingInsightToken(kind,value){
+  value=String(value||'').trim();
+  if(!value)return '';
+  if(kind==='Extension')return '@ext:'+extensionSettingQuotedFilterValue(value);
+  if(kind==='Language')return '@lang:'+extensionSettingQuotedFilterValue(value);
+  if(kind==='Type')return '@type:'+extensionSettingQuotedFilterValue(value);
+  if(kind==='Scope')return '@scope:'+extensionSettingQuotedFilterValue(value);
+  if(kind==='Target')return '@target:'+extensionSettingQuotedFilterValue(value);
+  return '';
+}
+function extensionSettingInsightText(items){
+  return (items||[]).map(item=>item.value+' '+item.count).join(', ');
+}
 function renderExtensionSettingInsight(stats){
   const el=$('ext-settings-insight');if(!el)return;
   const rows=stats&&Array.isArray(stats.visibleRows)?stats.visibleRows:[];
   el.innerHTML='';
   if(!rows.length){el.style.display='none';return}
-  const add=(label,value,title)=>{
+  const add=(label,value,title,token)=>{
     if(value==null||String(value).trim()==='')return;
-    const chip=document.createElement('span');chip.className='ext-settings-insight-chip';
+    const chip=token?document.createElement('button'):document.createElement('span');
+    chip.className='ext-settings-insight-chip';
+    if(token){
+      chip.type='button';
+      chip.dataset.extSettingsInsightToken=token;
+      chip.onclick=ev=>{if(ev){ev.preventDefault();ev.stopPropagation()}extensionSettingAppendFilterToken(token)};
+    }
     const strong=document.createElement('strong');strong.textContent=label;
     chip.appendChild(strong);
     chip.appendChild(document.createTextNode(String(value)));
-    if(title)chip.title=title;
+    chip.title=title||(token?'Filter by '+token:'');
     el.appendChild(chip);
   };
-  add('Sections',String(Number(stats.visibleSections||0)||new Set(rows.map(row=>row.closest('details[data-ext-settings-section]')).filter(Boolean)).size));
-  const extensions=extensionSettingTopCounts(rows,row=>row.dataset.extSettingExtensionId||String(row.dataset.extSettingExtension||'').split(/\s+/)[0],2);
-  if(extensions.length)add('Extension',extensions.map(item=>item[0]+' '+item[1]).join(', '));
-  const types=extensionSettingTopCounts(rows,row=>row.dataset.extSettingType,4);
-  if(types.length)add('Types',types.map(item=>item[0]+' '+item[1]).join(', '));
-  const scopes=extensionSettingTopCounts(rows,row=>row.dataset.extSettingScope,3);
-  if(scopes.length)add('Scopes',scopes.map(item=>item[0]+' '+item[1]).join(', '));
+  const counts=extensionSettingInsightCounts(rows);
+  add('Sections',String(Number(stats.visibleSections||0)||counts.sections),'Visible Settings sections');
+  [['Extension',counts.extensions],['Language',counts.languages],['Type',counts.types],['Scope',counts.scopes],['Target',counts.targets]].forEach(item=>{
+    const entries=item[1];if(!entries.length)return;
+    add(item[0],extensionSettingInsightText(entries),null,extensionSettingInsightToken(item[0],entries[0].value));
+  });
   if(Number(stats.hiddenVisible||0))add('Hidden',String(stats.hiddenVisible));
   el.style.display=el.children.length?'':'none';
 }
+window.extensionSettingInsightCounts=extensionSettingInsightCounts;
+window.extensionSettingInsightToken=extensionSettingInsightToken;
+window.renderExtensionSettingInsight=renderExtensionSettingInsight;
 function renderExtensionSettingFilterState(visibleRows,totalRows,stats){
   stats=stats&&typeof stats==='object'?stats:{};
   if(!Array.isArray(stats.visibleRows)){
@@ -30156,7 +30290,7 @@ function renderExtensionLanguageDefaults(languageDefaults,container,categorySele
         if(extensionSettingEnumEntries(schema,defaultValue).some(entry=>!entry.createdDefault&&extensionSettingEnumDescription(schema,entry.index))){
           enumHelp=document.createElement('div');enumHelp.className='ext-setting-enum-desc';row.appendChild(enumHelp);
         }
-        appendExtensionSettingEnumChoices(row,schema,type,defaultValue);
+        appendExtensionSettingEnumChoices(row,schema,type,defaultValue,input);
       }else if(type==='number'||type==='integer'){
         input=document.createElement('input');input.type='number';
         if(type==='integer')input.step='1';
@@ -30601,7 +30735,7 @@ async function renderExtensionSettings(){
         if(extensionSettingEnumEntries(schema,defaultVal).some(entry=>!entry.createdDefault&&extensionSettingEnumDescription(schema,entry.index))){
           enumHelp=document.createElement('div');enumHelp.className='ext-setting-enum-desc';row.appendChild(enumHelp);
         }
-        appendExtensionSettingEnumChoices(row,schema,type,defaultVal);
+        appendExtensionSettingEnumChoices(row,schema,type,defaultVal,input);
       } else if(type==='number'||type==='integer'){
         input=document.createElement('input');input.type='number';
         if(type==='integer')input.step='1';

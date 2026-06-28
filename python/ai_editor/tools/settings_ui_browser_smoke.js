@@ -83,6 +83,70 @@ async function main() {
         enabled_contributions: ["commands", "views", "customEditors", "webviews"]
       }
     };
+    const extensionSettingsFixture = {
+      configurations: [{
+        extension_id: "selftest.settings-pack",
+        display_name: "Selftest Settings",
+        title: "Selftest",
+        id: "selftest.settings",
+        properties: {
+          "selftest.mode": {
+            type: "string",
+            title: "Selftest Mode",
+            enum: ["auto", "manual"],
+            enumItemLabels: ["Auto", "Manual"],
+            markdownEnumDescriptions: ["Use automatic behavior.", "Use manual behavior."],
+            default: "auto",
+            scope: "resource",
+            tags: ["preview"]
+          },
+          "selftest.options": {
+            type: "object",
+            title: "Selftest Options",
+            default: { enabled: true },
+            required: ["level"],
+            properties: {
+              enabled: { type: "boolean", default: true, description: "Enabled" },
+              level: { type: "integer", default: 2, minimum: 1, maximum: 5, description: "Level" }
+            },
+            additionalProperties: false,
+            scope: "resource"
+          }
+        },
+        defaults: {
+          "selftest.mode": "auto",
+          "selftest.options": { enabled: true }
+        },
+        values: {
+          "selftest.mode": "manual",
+          "selftest.options": { enabled: true, level: 2 }
+        },
+        modified: {
+          "selftest.mode": true,
+          "selftest.options": true
+        },
+        targets: {
+          "selftest.mode": "workspace",
+          "selftest.options": "workspace"
+        },
+        targetScopedValues: {
+          "selftest.mode": { workspace: "manual" },
+          "selftest.options": { workspace: { enabled: true, level: 2 } }
+        }
+      }],
+      languageDefaults: [{
+        extension_id: "selftest.settings-pack",
+        display_name: "Selftest Settings",
+        language: "python",
+        override: "[python]",
+        defaults: { "editor.formatOnSave": true },
+        values: { "editor.formatOnSave": false },
+        modified: { "editor.formatOnSave": true },
+        schemas: { "editor.formatOnSave": { type: "boolean", title: "Format On Save", scope: "language-overridable" } },
+        targets: { "editor.formatOnSave": "workspace" },
+        targetScopedValues: { "editor.formatOnSave": { workspace: false } }
+      }]
+    };
     const apiTarget = {
       load_config: () => ok(config),
       list_tools: () => ok({ tools: [] }),
@@ -91,11 +155,15 @@ async function main() {
       list_provider_models: () => ok({ models: [{ id: "gpt-4o-mini", name: "gpt-4o-mini" }], default_model: "gpt-4o-mini" }),
       list_editor_languages: () => ok({ languages: [{ id: "python", name: "Python" }, { id: "javascript", name: "JavaScript" }] }),
       list_editor_themes: () => ok({ themes: [] }),
-      list_extension_settings: () => ok({ sections: [], settings: [] }),
+      list_extension_settings: () => ok(extensionSettingsFixture),
       list_extension_runtime_surfaces: () => ok({ surfaces: [] }),
       list_mcp_servers: () => ok({ servers: [] }),
       get_runtime_support_summary: () => ok({ ok: true, diagnostics: [] }),
-      get_model_info: () => ok({ max_input: 128000, max_output: 4096, compact_at: 115200 })
+      get_model_info: () => ok({ max_input: 128000, max_output: 4096, compact_at: 115200 }),
+      set_extension_setting: () => ok({ ok: true, target: "workspace", targetScopedValues: {} }),
+      reset_extension_setting: () => ok({ ok: true, target: "workspace", targetScopedValues: {} }),
+      set_extension_language_setting: () => ok({ ok: true, target: "workspace", targetScopedValues: {} }),
+      reset_extension_language_setting: () => ok({ ok: true, target: "workspace", targetScopedValues: {} })
     };
     window.pywebview = {
       api: new Proxy(apiTarget, {
@@ -133,6 +201,15 @@ async function main() {
     const reviewCleared = window.settingsClearReviewFilters ? window.settingsClearReviewFilters() : false;
     const languageSearchApplied = window.settingsSearchModifiedLanguageOverride ? window.settingsSearchModifiedLanguageOverride("python") : false;
     if (window.settingsClearFilters) window.settingsClearFilters();
+    const insightButton = document.querySelector("#ext-settings-insight [data-ext-settings-insight-token]");
+    if (insightButton) insightButton.click();
+    const enumFilterButton = Array.from(document.querySelectorAll(".ext-setting-enum-choice-actions button")).find(btn => btn.textContent === "Filter");
+    const enumUseButton = Array.from(document.querySelectorAll(".ext-setting-enum-choice-actions button")).find(btn => btn.textContent === "Use");
+    const structuredHint = document.querySelector(".ext-setting-structured-hint");
+    const schemaDetails = document.querySelector(".ext-setting-schema-details summary");
+    if (enumFilterButton) enumFilterButton.click();
+    if (enumUseButton) enumUseButton.click();
+    if (schemaDetails) schemaDetails.click();
     const snapshot = window.settingsUiSelfCheckSnapshot();
     const modal = document.querySelector("#settings-modal .settings-modal");
     const rect = modal ? modal.getBoundingClientRect() : null;
@@ -147,6 +224,11 @@ async function main() {
       detailActions: Array.from(document.querySelectorAll("#settings-current-detail .detail-actions button")).map(btn => btn.textContent),
       reviewActions: Array.from(document.querySelectorAll("#settings-review-bar .review-actions button")).map(btn => btn.textContent),
       languageSuggestions: Array.from(document.querySelectorAll("#settings-language-suggestions [data-settings-language-suggestion]")).map(btn => btn.dataset.settingsLanguageSuggestion),
+      extensionInsightTokens: Array.from(document.querySelectorAll("#ext-settings-insight [data-ext-settings-insight-token]")).map(btn => btn.dataset.extSettingsInsightToken),
+      extensionEnumActions: Array.from(document.querySelectorAll(".ext-setting-enum-choice-actions button")).map(btn => btn.textContent),
+      hasStructuredHints: !!structuredHint,
+      hasSchemaDetails: !!schemaDetails,
+      extensionSearchValue: (document.querySelector("#settings-search") || {}).value || "",
       sectionActions: Array.from(document.querySelectorAll("#settings-section-context .section-actions button")).map(btn => btn.textContent),
       reviewApplied,
       reviewCleared,
@@ -182,6 +264,12 @@ async function main() {
   }
   if (!result.snapshot.hasLanguageSuggestions || !result.snapshot.hasLanguageModifiedSearch || !result.languageSearchApplied || !result.languageSuggestions.length) {
     throw new Error("Settings selfcheck missing language override affordances: " + JSON.stringify(result));
+  }
+  if (!result.extensionInsightTokens.length || !result.extensionEnumActions.includes("Use") || !result.extensionEnumActions.includes("Filter") || !result.hasStructuredHints || !result.hasSchemaDetails) {
+    throw new Error("Settings extension affordances missing: " + JSON.stringify(result));
+  }
+  if (result.extensionSearchValue.indexOf("@value:") < 0) {
+    throw new Error("Settings extension enum filter did not update search: " + JSON.stringify(result));
   }
   if (!result.navFiltered || result.navFiltered.visible < 1 || !result.navCleared || result.navCleared.visible < result.navFiltered.visible) {
     throw new Error("Settings category filter did not behave as expected: " + JSON.stringify(result));
