@@ -1648,6 +1648,10 @@ pre.code-block code .type { color:var(--fg-type); }
 .settings-searchbar input#settings-search { width:100%; height:32px; box-sizing:border-box; background:transparent;
   color:var(--fg); border:0; border-radius:4px; padding:5px 10px;
   font:13px var(--sans); outline:none; }
+.settings-query-clear { width:22px; height:22px; margin-right:3px; border:0; border-radius:3px; background:transparent;
+  color:var(--fg-dim); font:14px var(--sans); line-height:1; cursor:pointer; opacity:.72; }
+.settings-query-clear:hover,.settings-query-clear:focus { color:var(--fg); background:var(--bg-hover); outline:none; opacity:1; }
+.settings-query-clear:disabled { opacity:0; pointer-events:none; }
 .settings-search-primary { display:grid; gap:3px; min-width:0; }
 .settings-search-caption { display:flex; align-items:center; justify-content:space-between; gap:10px; color:var(--fg-dim); font:10px var(--mono); }
 .settings-search-caption strong { color:var(--fg); font-weight:600; }
@@ -3761,6 +3765,7 @@ pre.code-block { overflow:visible; }
           <div class="settings-query-box">
             <input id="settings-search" list="settings-filter-suggestions" placeholder="Search settings..." oninput="scheduleFilterSettings()" aria-label="Search settings">
             <datalist id="settings-filter-suggestions"></datalist>
+            <button type="button" id="settings-clear-search" class="settings-query-clear" title="Clear settings search" aria-label="Clear settings search" onclick="settingsClearSearch()">×</button>
             <div class="settings-result-nav" aria-label="Settings results navigation">
               <button type="button" id="settings-prev-result" title="Previous visible setting" aria-label="Previous visible setting" onclick="settingsFocusVisibleRow(-1)">&#8593;</button>
               <button type="button" id="settings-next-result" title="Next visible setting" aria-label="Next visible setting" onclick="settingsFocusVisibleRow(1)">&#8595;</button>
@@ -5558,7 +5563,12 @@ function refreshSettingsDirtySummary(modifiedCount,errorCount){
   if(save){
     save.dataset.modifiedCount=String(modifiedCount);
     save.disabled=errorCount>0;
-    save.title=errorCount?'Fix validation errors before saving':'Save Settings';
+    save.textContent=errorCount?'Fix Errors':(modifiedCount?'Save '+String(modifiedCount):'Save');
+    save.title=errorCount
+      ? 'Fix validation errors before saving'
+      : modifiedCount
+        ? 'Save '+String(modifiedCount)+' modified setting'+(modifiedCount===1?'':'s')+' to '+settingsTargetDisplayName(currentSettingsTarget)
+        : 'Save Settings';
   }
 }
 
@@ -28083,6 +28093,11 @@ function installSettingsKeyboardHandlers(){
         closeSettingsRowActionMenus();
         return;
       }
+      if(settingsHasActiveSearch()){
+        ev.preventDefault();
+        settingsClearSearch();
+        return;
+      }
       ev.preventDefault();
       closeSettings();
       return;
@@ -28197,6 +28212,18 @@ function settingsUiSelfCheckSnapshot(){
     hasWorkbenchHeaderContext:!!(route&&route.textContent&&typeof renderSettingsWorkbenchHeader==='function'&&typeof settingsWorkbenchContextLabel==='function'),
     hasSettingsToolbarStrip:!!document.querySelector('.settings-toolbar-strip .settings-top-action.primary'),
     hasSearchPrimaryCaption:!!(caption&&document.querySelector('.settings-search-primary .settings-query-box #settings-search')),
+    hasSearchClearButton:!!($('settings-clear-search')&&document.querySelector('.settings-query-box .settings-query-clear')),
+    hasSearchClearBehavior:typeof settingsClearSearch==='function'
+      &&typeof settingsUpdateSearchClearButton==='function'
+      &&String(settingsClearSearch).includes("input.value=''"),
+    hasEscapeSearchClearFirst:typeof installSettingsKeyboardHandlers==='function'
+      &&String(installSettingsKeyboardHandlers).includes('settingsHasActiveSearch()')
+      &&String(installSettingsKeyboardHandlers).includes('settingsClearSearch();'),
+    hasBackdropFocusesSearch:typeof settingsHandleBackdropClick==='function'
+      &&String(settingsHandleBackdropClick).includes('focusSettingsSearch()')
+      &&!String(settingsHandleBackdropClick).includes('closeSettings()'),
+    hasSaveCountLabel:typeof refreshSettingsDirtySummary==='function'
+      &&String(refreshSettingsDirtySummary).includes("save.textContent=errorCount?'Fix Errors':(modifiedCount?'Save '+String(modifiedCount):'Save')"),
     hasHumanizedResultCount:typeof settingsResultCountLabel==='function'
       && settingsResultCountLabel(3,12)==='3 of 12'
       && settingsResultCountLabel(0,12)==='12 Settings'
@@ -28330,6 +28357,7 @@ window.focusSettingsNavFilter=focusSettingsNavFilter;
 window.settingsOpenJsonView=settingsOpenJsonView;
 window.settingsUseSearchHint=settingsUseSearchHint;
 window.settingsSearchHintKeydown=settingsSearchHintKeydown;
+window.settingsClearSearch=settingsClearSearch;
 window.resetVisibleModifiedSettings=resetVisibleModifiedSettings;
 window.selectSettingsTarget=selectSettingsTarget;
 window.scrollToSettingsSection=scrollToSettingsSection;
@@ -28691,13 +28719,34 @@ function settingsToggleFilterToken(token){
   input.focus&&input.focus();
   scheduleFilterSettings(0);
 }
-function settingsClearFilters(){
+function settingsHasActiveSearch(){
   const input=$('settings-search');
-  if(input)input.value='';
+  if(input&&String(input.value||'').trim())return true;
+  return ['ext-settings-modified','ext-settings-hidden'].some(id=>{const cb=$(id);return !!(cb&&cb.checked)})
+    || ['ext-settings-category','ext-settings-scope','ext-settings-target'].some(id=>{const select=$(id);return !!(select&&String(select.value||'').trim())});
+}
+function settingsUpdateSearchClearButton(){
+  const btn=$('settings-clear-search');
+  if(!btn)return;
+  const active=settingsHasActiveSearch();
+  btn.disabled=!active;
+  btn.setAttribute('aria-hidden',active?'false':'true');
+  btn.title=active?'Clear settings search and filters':'No settings search to clear';
+}
+function settingsClearSearch(){
+  const input=$('settings-search');
+  if(input){
+    input.value='';
+    try{input.focus({preventScroll:true})}catch(e){try{input.focus()}catch(_e){}}
+  }
   ['ext-settings-modified','ext-settings-hidden'].forEach(id=>{const cb=$(id);if(cb)cb.checked=false});
   ['ext-settings-category','ext-settings-scope','ext-settings-target'].forEach(id=>{const select=$(id);if(select)select.value=''});
   scheduleFilterSettings(0);
   if(typeof applyExtensionSettingsFilter==='function')applyExtensionSettingsFilter();
+  settingsUpdateSearchClearButton();
+}
+function settingsClearFilters(){
+  settingsClearSearch();
 }
 function renderSettingsQuickFilters(parsed){
   const host=$('settings-quick-filters');if(!host)return;
@@ -29617,6 +29666,7 @@ function filterSettings(){
   updateSettingsNavCounts();
   updateSettingsTitleStatus(visible,total);
   renderSettingsSectionContext(visible,total);
+  settingsUpdateSearchClearButton();
   persistSettingsViewState({target:currentSettingsTarget,search:q});
 }
 let _settingsFilterTimer=0;
@@ -34613,7 +34663,12 @@ async function addMcpServer(){
 }
 window.addMcpServer=addMcpServer;
 
-$('settings-modal').onclick=e=>{if(e.target.id==='settings-modal')closeSettings()};
+function settingsHandleBackdropClick(ev){
+  if(!(ev&&ev.target&&ev.target.id==='settings-modal'))return;
+  focusSettingsSearch();
+  if(typeof showToast==='function')showToast('Settings stays open. Use Cancel or Esc to close.','info',1200);
+}
+$('settings-modal').onclick=settingsHandleBackdropClick;
 
 // ── Ready ──
 // ── Extensions marketplace ──

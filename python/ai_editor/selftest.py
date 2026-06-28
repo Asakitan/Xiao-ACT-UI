@@ -4337,9 +4337,19 @@ def test_phase1_ai_editor_regressions() -> None:
            and ".settings-vscode-calm .settings-control-frame { max-width:520px;" in html
            and "function settingsResultCountLabel(current,total)" in html
            and "return String(current)+' of '+String(total);" in html
+           and 'id="settings-clear-search" class="settings-query-clear"' in html
+           and "function settingsClearSearch()" in html
+           and "function settingsHandleBackdropClick(ev)" in html
+           and "settingsHasActiveSearch()" in html
+           and "save.textContent=errorCount?'Fix Errors':(modifiedCount?'Save '+String(modifiedCount):'Save')" in html
            and "window.settingsResultCountLabel=settingsResultCountLabel;" in html
+           and "window.settingsClearSearch=settingsClearSearch;" in html
            and "hasHumanizedResultCount" in html
            and "hasIconResultNavigation" in html
+           and "hasSearchClearButton" in html
+           and "hasEscapeSearchClearFirst" in html
+           and "hasBackdropFocusesSearch" in html
+           and "hasSaveCountLabel" in html
            and "hasMoreReadableCategoryNav" in html
            and "hasReducedSettingsTitleNoise" in html
            and "hasHumanizedSaveAffordance" in html)
