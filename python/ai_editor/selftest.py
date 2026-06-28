@@ -9769,6 +9769,8 @@ console.log("frontend word separator behavior ok");
             and "hasExtensionSchemaDetails" in html
             and "hasExtensionStructuredHints" in html
             and "hasExtensionEnumActions" in html
+            and "hasExtensionPerformanceStatus" in html
+            and "extensionPerformance:typeof extensionSettingRenderStats==='function'?extensionSettingRenderStats():{}" in html
             and "window.settingsFocusCurrentLanguageOverride=settingsFocusCurrentLanguageOverride;" in html
             and "String(ev.key||'').toLowerCase()==='g'" in html
             and "function settingsRecordSearch(query,parsed)" in html
@@ -10091,6 +10093,13 @@ console.log("frontend word separator behavior ok");
             and "function extensionSettingQuotedFilterValue(value)" in html
             and "function extensionSettingInsightCounts(rows)" in html
             and "function extensionSettingInsightToken(kind,value)" in html
+            and "function extensionSettingDynamicSuggestionCache(container)" in html
+            and "function extensionSettingRenderStats()" in html
+            and "function scheduleExtensionSettingsFilter(delay)" in html
+            and "ext-settings-perf" in html
+            and "await extensionSettingYieldToBrowser();" in html
+            and "window.extensionSettingRenderStats=extensionSettingRenderStats;" in html
+            and "window.scheduleExtensionSettingsFilter=scheduleExtensionSettingsFilter;" in html
             and "window.appendExtensionSettingStructuredAssist=appendExtensionSettingStructuredAssist;" in html
             and "window.appendExtensionSettingSchemaDetails=appendExtensionSettingSchemaDetails;" in html
             and "window.appendExtensionSettingEnumChoices=appendExtensionSettingEnumChoices;" in html
@@ -10520,6 +10529,12 @@ console.log("frontend word separator behavior ok");
             "extensionSettingFilterMenuTokenActive",
             "extensionSettingLanguageFilterMatches",
             "extensionSettingStorage",
+            "invalidateExtensionSettingFilterDomCache",
+            "extensionSettingFilterDomCache",
+            "extensionSettingDynamicSuggestionCache",
+            "extensionSettingRenderStats",
+            "renderExtensionSettingPerformanceStatus",
+            "extensionSettingSetRenderStats",
             "extensionSettingReadFilterState",
             "extensionSettingWriteFilterState",
             "extensionSettingWriteFilterStateDeferred",
@@ -10590,6 +10605,9 @@ console.log("frontend word separator behavior ok");
 function assert(ok,label){ if(!ok){ throw new Error(label); } }
 const EXTENSION_SETTINGS_FILTER_STATE_KEY='sao-ai-ext-settings-filter-v1';
 globalThis.window = { location: { href: "https://example.invalid/settings" } };
+let _extensionSettingFilterDomCache = null;
+let _extensionSettingDynamicSuggestionCache = null;
+let _extensionSettingRenderStats = { rows: 0, sections: 0, renderMs: 0, yields: 0, filteredAt: 0, filterMs: 0 };
 const fakeStorageData = {};
 globalThis.localStorage = {
   getItem(key){ return Object.prototype.hasOwnProperty.call(fakeStorageData,key) ? fakeStorageData[key] : null; },
@@ -11370,6 +11388,27 @@ assert(insightCounts.extensions[0].value === "sample.ext"
        && extensionSettingInsightToken("Language", "python") === "@lang:python"
        && extensionSettingInsightText(insightCounts.types).indexOf("string 2") >= 0,
        "settings insight counts summarize extension language type scope and target groups");
+const extSuggestionRows = insightRows.concat([makeSettingRow("four", {})]);
+extSuggestionRows[3].dataset.extSettingTags = "preview\nusesonlineservices";
+extSuggestionRows[3].dataset.extSettingPolicy = "selftestpolicy";
+extSuggestionRows[3].dataset.extSettingExperiment = "selftestexperiment";
+extSuggestionRows[3].dataset.extSettingAgentsWindow = "selftestagent";
+const extSuggestionSection = { querySelectorAll(sel){ return sel === ".ext-setting-row" ? extSuggestionRows : []; } };
+const extSuggestionContainer = { querySelectorAll(sel){ return sel === "details[data-ext-settings-section]" ? [extSuggestionSection] : []; } };
+if (typeof invalidateExtensionSettingFilterDomCache === "function") invalidateExtensionSettingFilterDomCache();
+const extSuggestionCacheA = extensionSettingDynamicSuggestionCache(extSuggestionContainer);
+const extSuggestionCacheB = extensionSettingDynamicSuggestionCache(extSuggestionContainer);
+assert(extSuggestionCacheA === extSuggestionCacheB
+       && extSuggestionCacheA.dynamic.ext.has("sample.ext")
+       && extSuggestionCacheA.dynamic.tag.has("preview")
+       && extSuggestionCacheA.dynamic.policy.has("selftestpolicy")
+       && extensionSettingFilterSuggestions(extSuggestionContainer, "@ext:").some(item => item.indexOf("@ext:sample.ext") >= 0),
+       "settings dynamic filter suggestions cache row metadata");
+extensionSettingSetRenderStats({ rows: 4, sections: 1, renderMs: 12.4, filterMs: 3.7, yields: 2 });
+assert(extensionSettingRenderStats().rows === 4
+       && extensionSettingRenderStats().sections === 1
+       && extensionSettingRenderStats().yields === 2,
+       "settings extension render stats expose row count sections and yields");
 assert(extensionSettingFocusFirstModifiedSetting() && focusedRow === "alpha.setting",
        "settings navigation focuses first visible modified row");
 assert(extensionSettingFocusFirstInvalidSetting() && focusedRow === "beta.setting",
@@ -11530,7 +11569,8 @@ const suggestionRows = [
     extSettingTags: "stable\nconfigured-target:global",
   } },
 ];
-const suggestionContainer = { querySelectorAll(){ return suggestionRows; } };
+const suggestionSection = { querySelectorAll(sel){ return sel === ".ext-setting-row" ? suggestionRows : []; } };
+const suggestionContainer = { querySelectorAll(sel){ return sel === "details[data-ext-settings-section]" ? [suggestionSection] : []; } };
 const extSuggestions = extensionSettingFilterSuggestions(suggestionContainer, "font @ext:");
 assert(extSuggestions.includes("font @ext:selftest.settings-pack ")
        && extSuggestions.includes("font @ext:selftest.theme-pack ")

@@ -228,6 +228,7 @@ async function main() {
       extensionEnumActions: Array.from(document.querySelectorAll(".ext-setting-enum-choice-actions button")).map(btn => btn.textContent),
       hasStructuredHints: !!structuredHint,
       hasSchemaDetails: !!schemaDetails,
+      performanceStatus: (document.querySelector("#ext-settings-perf") || {}).textContent || "",
       extensionSearchValue: (document.querySelector("#settings-search") || {}).value || "",
       sectionActions: Array.from(document.querySelectorAll("#settings-section-context .section-actions button")).map(btn => btn.textContent),
       reviewApplied,
@@ -267,6 +268,9 @@ async function main() {
   }
   if (!result.extensionInsightTokens.length || !result.extensionEnumActions.includes("Use") || !result.extensionEnumActions.includes("Filter") || !result.hasStructuredHints || !result.hasSchemaDetails) {
     throw new Error("Settings extension affordances missing: " + JSON.stringify(result));
+  }
+  if (!result.snapshot.hasExtensionPerformanceStatus || !result.snapshot.extensionPerformance || !result.snapshot.extensionPerformance.rows || !result.performanceStatus) {
+    throw new Error("Settings extension performance status missing: " + JSON.stringify(result));
   }
   if (result.extensionSearchValue.indexOf("@value:") < 0) {
     throw new Error("Settings extension enum filter did not update search: " + JSON.stringify(result));
