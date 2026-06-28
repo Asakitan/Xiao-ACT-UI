@@ -4449,12 +4449,15 @@ def test_phase1_ai_editor_regressions() -> None:
            and "hasDetailsOnlyNavQuickFilters" in html
             and "hasVsCodePolishedSettingControls" in html
             and "hasIconOnlySettingsToolbar" in html
-            and "hasInlineDetailsToggle" in html
-            and "hasHiddenDefaultTitlebar" in html
-            and "hasPrimaryJsonOnlyDefaultToolbar" in html
+           and "hasInlineDetailsToggle" in html
+           and "hasDefaultHiddenInlineDetailsToggle" in html
+           and "hasHiddenDefaultTitlebar" in html
+           and "hasPrimaryJsonOnlyDefaultToolbar" in html
            and "hasQuietDefaultSettingsToolbar" in html
            and "hasDetailsOnlyJumpbar" in html
            and "hasSidebarQuickSettingsActions" in html
+           and "hasSidebarSettingsCommands" in html
+           and "hasSidebarSettingsCommandActions" in html
            and "hasCompactSearchScopeStack" in html
            and "hasCalmDefaultSettingsMode" in html
            and "hasMoreComfortableSettingControls" in html
@@ -4466,6 +4469,8 @@ def test_phase1_ai_editor_regressions() -> None:
            and "hasNoTopSettingsBands" in html
            and "hasSingleSearchTopBand" in html
            and "hasSearchOnlyTopWorkbench" in html
+           and "hasMinimalTopSearchControls" in html
+           and "hasSearchResultTextOnlyDefault" in html
            and "hasHiddenTopSearchCaption" in html
            and "hasWideSingleSettingsSearch" in html
            and "visibleSearchbarChildren.length===1&&visibleSearchbarChildren[0]===searchRow" in html
@@ -4490,6 +4495,9 @@ def test_phase1_ai_editor_regressions() -> None:
            and ".settings-vscode-calm .settings-search-row { grid-template-columns:minmax(520px,760px);" in html
            and ".settings-vscode-calm .settings-scope-control { justify-self:start;" in html
            and "addQuick('Settings JSON','','Open Settings JSON',()=>settingsOpenJsonView());" in html
+           and "quick.dataset.settingsCommandSurface='sidebar';" in html
+           and "addQuick('Details','','Toggle settings details',()=>settingsToggleDetails());" in html
+           and "addQuick('Keyboard Shortcuts','','Open keyboard shortcuts',()=>settingsCloseThen(openKeybindings));" in html
            and ".settings-vscode-calm .settings-shell { grid-template-columns:286px minmax(0,1fr);" in html
            and ".settings-vscode-calm .settings-field.builtin-setting { padding:13px 96px 13px 0;" in html
            and ".settings-vscode-calm .settings-control-frame { max-width:720px; min-height:32px; }" in html
@@ -4499,6 +4507,9 @@ def test_phase1_ai_editor_regressions() -> None:
            and "hasVsCodeWorkbenchSearchWidth" in html
            and "hasVsCodeHumanSettingControls" in html
            and ".settings-vscode-calm.settings-details-open .settings-toolbar-strip { display:none; }" in html
+           and ".settings-vscode-calm:not(.settings-details-open) .settings-query-box #settings-details-toggle," in html
+           and ".settings-vscode-calm:not(.settings-details-open) .settings-result-nav button { display:none; }" in html
+           and ".settings-vscode-calm .settings-nav-quick[data-settings-command-surface=\"sidebar\"] { grid-template-columns:1fr; }" in html
            and ".settings-vscode-calm.settings-details-open .settings-search-row { grid-template-columns:minmax(520px,760px);" in html
            and ".drag-overlay:not(.active) { pointer-events:none; }" in html
            and "function clearTransientInteractionBlockers(reason)" in html

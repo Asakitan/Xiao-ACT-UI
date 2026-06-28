@@ -3175,6 +3175,17 @@ pre.code-block { overflow:visible; }
 .settings-vscode-calm .settings-field.settings-current .settings-row-actions,
 .settings-vscode-calm .settings-row-actions:focus-within { opacity:1; transform:none; }
 .settings-vscode-calm .modal-btns { padding-left:32px; padding-right:32px; }
+.settings-vscode-calm:not(.settings-details-open) .settings-query-box #settings-details-toggle,
+.settings-vscode-calm:not(.settings-details-open) .settings-result-nav button { display:none; }
+.settings-vscode-calm:not(.settings-details-open) .settings-result-nav { padding-right:6px; }
+.settings-vscode-calm:not(.settings-details-open) .settings-result-count { min-width:64px; text-align:right; color:var(--fg-dim); }
+.settings-vscode-calm:not(.settings-details-open) .settings-query-box {
+  grid-template-columns:24px minmax(0,1fr) auto auto;
+}
+.settings-vscode-calm .settings-nav-quick[data-settings-command-surface="sidebar"] { grid-template-columns:1fr; }
+.settings-vscode-calm .settings-nav-quick[data-settings-command-surface="sidebar"] button {
+  justify-content:space-between; text-align:left; padding:3px 7px;
+}
 .settings-row-action:disabled { opacity:.35; cursor:default; }
 .settings-row-action-menu { display:none; position:absolute; top:26px; right:0; min-width:174px; padding:4px;
   border:1px solid var(--border); border-radius:4px; background:var(--bg2); box-shadow:var(--shadow); }
@@ -29110,6 +29121,7 @@ function renderSettingsNav(){
   const quick=document.createElement('div');
   quick.className='settings-nav-quick';
   quick.id='settings-nav-quick';
+  quick.dataset.settingsCommandSurface='sidebar';
   const addQuick=(label,token,title,handler)=>{
     const btn=document.createElement('button');
     btn.type='button';
@@ -29126,7 +29138,9 @@ function renderSettingsNav(){
   addQuick('Errors','@error','Show invalid settings');
   addQuick('Overrides','@overrides','Show target override settings');
   addQuick('Extensions','@extensions','Open extension settings',()=>selectSettingsTarget('extensions',{preserveSearch:true,focusSearch:true}));
+  addQuick('Details','','Toggle settings details',()=>settingsToggleDetails());
   addQuick('Settings JSON','','Open Settings JSON',()=>settingsOpenJsonView());
+  addQuick('Keyboard Shortcuts','','Open keyboard shortcuts',()=>settingsCloseThen(openKeybindings));
   nav.appendChild(quick);
   const heading=document.createElement('div');
   heading.className='settings-nav-heading';
@@ -29408,12 +29422,15 @@ function settingsUiSelfCheckSnapshot(){
   const iconActions=Array.from(document.querySelectorAll('.settings-title-actions [data-settings-icon-action="1"]'));
   const toolbarButtons=Array.from(document.querySelectorAll('.settings-toolbar-strip .settings-top-action'));
   const hiddenToolbarButtons=toolbarButtons.filter(btn=>String(getComputedStyle(btn).display)==='none');
+  const resultNavButtons=Array.from(document.querySelectorAll('.settings-result-nav button'));
+  const hiddenResultNavButtons=resultNavButtons.filter(btn=>String(getComputedStyle(btn).display)==='none');
   const rowHead=document.querySelector('[data-settings-row-head="1"]');
   const rowCategory=document.querySelector('[data-settings-category-label="1"]');
   const dirtySummary=$('settings-dirty-summary');
   const jumpbar=$('settings-jumpbar');
   const jumpButtons=jumpbar?Array.from(jumpbar.querySelectorAll('[data-settings-jump-action]')):[];
   const quickLabels=quickNav?Array.from(quickNav.querySelectorAll('button')).map(btn=>String(btn.textContent||'').trim()):[];
+  const quickActions=quickNav?Array.from(quickNav.querySelectorAll('[data-settings-quick-action]')).map(btn=>String(btn.dataset.settingsQuickAction||'')): [];
   const searchRow=document.querySelector('.settings-search-row');
   const scopeControl=document.querySelector('.settings-scope-control');
   const navScope=$('settings-nav-scope');
@@ -29452,6 +29469,7 @@ function settingsUiSelfCheckSnapshot(){
     hasSettingsToolbarStrip:!!document.querySelector('.settings-toolbar-strip .settings-top-action.primary'),
     hasIconOnlySettingsToolbar:iconActions.length>=3&&iconActions.every(btn=>btn.getAttribute('aria-label')&&btn.title&&String(btn.textContent||'').trim().length<=2),
     hasInlineDetailsToggle:!!(inlineDetailsToggle&&inlineDetailsToggle.getAttribute('aria-label')==='Toggle settings details'),
+    hasDefaultHiddenInlineDetailsToggle:!!(settingsFrame&&settingsFrame.classList.contains('settings-vscode-calm')&&!settingsFrame.classList.contains('settings-details-open')&&inlineDetailsToggle&&String(getComputedStyle(inlineDetailsToggle).display)==='none'),
     hasHiddenDefaultTitlebar:!!(settingsTitlebar&&settingsFrame&&settingsFrame.classList.contains('settings-vscode-calm')&&!settingsFrame.classList.contains('settings-details-open')&&String(getComputedStyle(settingsTitlebar).display)==='none'),
     hasSettingsJumpbar:!!(jumpbar&&jumpbar.getAttribute('role')==='toolbar'&&jumpButtons.length>=7),
     hasSettingsWorkbenchStatus:!!(workbenchStatus&&workbenchStatus.dataset.settingsWorkbenchStatus==='1'
@@ -29472,6 +29490,8 @@ function settingsUiSelfCheckSnapshot(){
     hasQuietDefaultSettingsToolbar:!!(settingsFrame&&settingsFrame.classList.contains('settings-vscode-calm')&&!settingsFrame.classList.contains('settings-details-open')&&document.querySelector('.settings-toolbar-strip')&&String(getComputedStyle(document.querySelector('.settings-toolbar-strip')).display)==='none'),
     hasDetailsOnlyJumpbar:!!(jumpbar&&settingsFrame&&settingsFrame.classList.contains('settings-vscode-calm')&&!settingsFrame.classList.contains('settings-details-open')&&String(getComputedStyle(jumpbar).display)==='none'),
     hasSidebarQuickSettingsActions:!!(quickNav&&String(getComputedStyle(quickNav).display)!=='none'&&quickLabels.includes('Commonly Used')&&quickLabels.includes('Extensions')&&quickLabels.includes('Settings JSON')),
+    hasSidebarSettingsCommands:!!(quickNav&&quickNav.dataset.settingsCommandSurface==='sidebar'&&quickLabels.includes('Details')&&quickLabels.includes('Keyboard Shortcuts')&&quickLabels.includes('Settings JSON')),
+    hasSidebarSettingsCommandActions:quickActions.includes('details')&&quickActions.includes('settings-json')&&quickActions.includes('keyboard-shortcuts'),
     hasCompactSearchScopeStack:!!(searchRow&&scopeControl&&String(getComputedStyle(searchRow).gridTemplateColumns||'').split(' ').filter(Boolean).length<=1&&String(getComputedStyle(scopeControl).justifySelf||'')==='start'),
     hasDefaultHiddenTopScope:topScopeHidden,
     hasSidebarScopeControl:!!(navScope&&navScopeTabs&&navScopeButtons.length>=3&&String(getComputedStyle(navScope).display)!=='none'),
@@ -29484,6 +29504,8 @@ function settingsUiSelfCheckSnapshot(){
     hasSearchOnlyTopWorkbench:visibleSearchbarChildren.length===1&&visibleSearchbarChildren[0]===searchRow,
     hasHiddenTopSearchCaption:!!(searchCaption&&String(getComputedStyle(searchCaption).display)==='none'),
     hasWideSingleSettingsSearch:!!(searchRow&&searchRowWidth>=700&&String(getComputedStyle(searchRow).gridTemplateColumns||'').split(' ').filter(Boolean).length<=1),
+    hasMinimalTopSearchControls:!!(settingsFrame&&settingsFrame.classList.contains('settings-vscode-calm')&&!settingsFrame.classList.contains('settings-details-open')&&hiddenResultNavButtons.length===resultNavButtons.length&&inlineDetailsToggle&&String(getComputedStyle(inlineDetailsToggle).display)==='none'),
+    hasSearchResultTextOnlyDefault:!!(settingsFrame&&settingsFrame.classList.contains('settings-vscode-calm')&&!settingsFrame.classList.contains('settings-details-open')&&$('settings-result-count')&&String(getComputedStyle($('settings-result-count')).display)!=='none'),
     hasSidebarStatusPanel:!!(navStatus&&navStatus.dataset.settingsNavStatus==='1'&&navStatus.querySelector('.settings-nav-status-grid')&&navStatus.dataset.settingsNavTarget),
     hasSidebarActiveFiltersPanel:!!(navActiveFilters&&navActiveFilters.dataset.settingsNavActiveFilters!==undefined),
     hasSidebarReviewPanel:!!(navReview&&navReview.dataset.settingsNavReview==='1'&&navReviewButtons.some(btn=>btn.dataset.settingsNavReviewAction==='modified')&&navReviewButtons.some(btn=>btn.dataset.settingsNavReviewAction==='preview')),
