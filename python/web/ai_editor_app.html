@@ -4113,6 +4113,12 @@ pre.code-block { overflow:visible; }
           <span class="terminal-diagnostic-pill" data-terminal-diagnostic="cwd">cwd <strong>workspace</strong></span>
           <span class="terminal-diagnostic-pill" data-terminal-diagnostic="profile">profile <strong>System Shell</strong></span>
           <span class="terminal-diagnostic-pill" data-terminal-diagnostic="shell">shell <strong>system</strong></span>
+          <span class="terminal-diagnostic-pill" data-terminal-diagnostic="pid">pid <strong>-</strong></span>
+          <span class="terminal-diagnostic-pill" data-terminal-diagnostic="session">session <strong>-</strong></span>
+          <span class="terminal-diagnostic-pill" data-terminal-diagnostic="cwd-source">cwd <strong>workspace</strong></span>
+          <span class="terminal-diagnostic-pill" data-terminal-diagnostic="profile-source">profile <strong>default</strong></span>
+          <span class="terminal-diagnostic-pill" data-terminal-diagnostic="shell-integration">si <strong>-</strong></span>
+          <span class="terminal-diagnostic-pill" data-terminal-diagnostic="encoding">enc <strong>utf-8</strong></span>
           <span class="terminal-diagnostic-pill" data-terminal-diagnostic="exit">exit <strong>-</strong></span>
           <span class="terminal-diagnostic-pill" data-terminal-diagnostic="stdin">stdin <strong>open</strong></span>
           <span class="terminal-diagnostic-pill" data-terminal-diagnostic="output">output <strong>0 lines</strong></span>
@@ -44217,11 +44223,17 @@ function _terminalNormalizeResult(raw){
   const startedAt=String(data.startedAt||data.started_at||'');
   const finishedAt=String(data.finishedAt||data.finished_at||'');
   const jobId=String(data.jobId||data.job_id||'');
+  const processId=String(data.processId||data.pid||terminal.processId||terminal.pid||'');
+  const sessionId=String(data.sessionId||data.terminalSessionId||terminal.sessionId||terminal.terminalSessionId||jobId||'');
+  const cwdSource=String(data.cwdSource||data.cwd_source||terminal.cwdSource||'');
+  const profileSource=String(data.profileSource||data.profile_source||terminal.profileSource||'');
+  const shellIntegrationStatus=String(data.shellIntegrationStatus||data.shell_integration_status||terminal.shellIntegrationStatus||'');
+  const encoding=String(data.encoding||terminal.encoding||'utf-8');
   const sequence=Number(data.sequence||0)||0;
   const stdinBytes=Number(data.stdinBytes||data.stdin_bytes||0)||0;
   const outputBytes=Number(data.outputBytes||data.output_bytes||stdout.length+stderr.length)||0;
   const outputLines=Number(data.outputLines||data.output_lines||((stdout||stderr)?(stdout+stderr).split(/\r?\n/).filter(Boolean).length:0))||0;
-  return {stdout,stderr,error,exitCode,durationMs,cwd,terminal,startedAt,finishedAt,stdoutTruncated,stderrTruncated,jobId,sequence,stdinBytes,stdinClosed:!!data.stdinClosed,canWriteStdin:data.canWriteStdin!==false,stdinAvailable:data.stdinAvailable!==false,outputBytes,outputLines,shellArgs:Array.isArray(data.shellArgs)?data.shellArgs:[],workspaceCwd:data.workspaceCwd,workspaceRoot:String(data.workspaceRoot||''),raw:data};
+  return {stdout,stderr,error,exitCode,durationMs,cwd,terminal,startedAt,finishedAt,stdoutTruncated,stderrTruncated,jobId,processId,sessionId,cwdSource,profileSource,shellIntegrationStatus,encoding,sequence,stdinBytes,stdinClosed:!!data.stdinClosed,canWriteStdin:data.canWriteStdin!==false,stdinAvailable:data.stdinAvailable!==false,outputBytes,outputLines,shellArgs:Array.isArray(data.shellArgs)?data.shellArgs:[],workspaceCwd:data.workspaceCwd,workspaceRoot:String(data.workspaceRoot||''),raw:data};
 }
 function _terminalStateForResult(result){
   const raw=result&&result.raw&&typeof result.raw==='object'?result.raw:{};
@@ -44259,6 +44271,24 @@ function _terminalWorkspaceLabel(cwd){
 function _terminalProfileLabel(meta){
   meta=meta&&typeof meta==='object'?meta:{};
   return String(meta.profile||meta.shellKind||meta.shellPath||'System Shell');
+}
+function _terminalRuntimeFields(result,block){
+  result=result&&typeof result==='object'?result:{};
+  const terminal=result.terminal&&typeof result.terminal==='object'?result.terminal:{};
+  const blockData=block&&block.dataset?block.dataset:{};
+  const pick=(...values)=>{
+    for(const value of values){
+      if(value!==undefined&&value!==null&&value!=='')return String(value);
+    }
+    return '';
+  };
+  const pid=pick(result.processId,result.pid,terminal.processId,terminal.pid,blockData.processId);
+  const sessionId=pick(result.sessionId,result.terminalSessionId,terminal.sessionId,terminal.terminalSessionId,result.jobId,blockData.sessionId,blockData.jobId);
+  const cwdSource=pick(result.cwdSource,terminal.cwdSource,blockData.cwdSource,terminal.workspaceCwd===false?'explicit':'workspace');
+  const profileSource=pick(result.profileSource,terminal.profileSource,terminal.profileResolved?'resolved':terminal.profileFallback?'fallback':terminal.profileShellMissing?'missing':blockData.profileSource,'default');
+  const shellIntegrationStatus=pick(result.shellIntegrationStatus,terminal.shellIntegrationStatus,terminal.shellIntegration?'available':blockData.shellIntegrationStatus,'none');
+  const encoding=pick(result.encoding,terminal.encoding,blockData.encoding,'utf-8');
+  return {pid,sessionId,cwdSource,profileSource,shellIntegrationStatus,encoding};
 }
 function _terminalActiveHistory(){
   const term=_getActiveTermHistory&&_getActiveTermHistory();
@@ -44407,10 +44437,17 @@ function _updateTerminalDiagnostics(meta,state){
   const outputBytes=Number(meta.outputBytes||stats.bytes)||0;
   const outputValue=outputLines+' lines · '+outputBytes+' chars';
   const truncation=!!(stats.truncated||meta.stdoutTruncated||meta.stderrTruncated);
+  const runtime=_terminalRuntimeFields(meta,null);
   strip.dataset.terminalDiagnostics='1';
   strip.dataset.state=finalState;
   strip.dataset.running=run&&!run.cancelled?'1':'0';
   strip.dataset.jobId=jobId;
+  strip.dataset.processId=runtime.pid;
+  strip.dataset.sessionId=runtime.sessionId;
+  strip.dataset.cwdSource=runtime.cwdSource;
+  strip.dataset.profileSource=runtime.profileSource;
+  strip.dataset.shellIntegrationStatus=runtime.shellIntegrationStatus;
+  strip.dataset.encoding=runtime.encoding;
   strip.dataset.cwd=cwd;
   strip.dataset.workspaceCwd=workspaceCwd?'1':'0';
   strip.dataset.profile=profile;
@@ -44432,6 +44469,12 @@ function _updateTerminalDiagnostics(meta,state){
   _setTerminalDiagnosticPill(strip,'cwd','cwd',_terminalWorkspaceLabel(cwd),workspaceCwd?'ok':'warn',cwd);
   _setTerminalDiagnosticPill(strip,'profile','profile',profile,'',profile);
   _setTerminalDiagnosticPill(strip,'shell','shell',shellKind||'system','',shellKind||'System shell');
+  _setTerminalDiagnosticPill(strip,'pid','pid',runtime.pid?runtime.pid:'-',runtime.pid?'ok':'','Process ID');
+  _setTerminalDiagnosticPill(strip,'session','session',runtime.sessionId?runtime.sessionId.slice(0,8):'-',runtime.sessionId?'ok':'','Terminal session id');
+  _setTerminalDiagnosticPill(strip,'cwd-source','cwd',runtime.cwdSource||'workspace',runtime.cwdSource==='explicit'?'warn':'ok','CWD source');
+  _setTerminalDiagnosticPill(strip,'profile-source','profile',runtime.profileSource||'default',runtime.profileSource==='fallback'||runtime.profileSource==='missing'?'warn':'ok','Terminal profile source');
+  _setTerminalDiagnosticPill(strip,'shell-integration','si',runtime.shellIntegrationStatus||'none',runtime.shellIntegrationStatus&&runtime.shellIntegrationStatus!=='none'?'ok':'','Shell integration status');
+  _setTerminalDiagnosticPill(strip,'encoding','enc',runtime.encoding||'utf-8',(runtime.encoding||'utf-8').toLowerCase()==='utf-8'?'ok':'warn','Terminal text encoding');
   _setTerminalDiagnosticPill(strip,'exit','exit',exitCode===''?'-':exitCode,exitCode===''?'':Number(exitCode)===0?'ok':'error','Last exit code');
   _setTerminalDiagnosticPill(strip,'stdin','stdin',stdinClosed?'closed':(canWriteStdin?'open':(stdinBytes?stdinBytes+' bytes':'-')),stdinClosed?'warn':canWriteStdin?'ok':'',stdinBytes?('stdin bytes: '+stdinBytes):'Terminal stdin');
   _setTerminalDiagnosticPill(strip,'output','output',outputValue,truncation?'warn':'',truncation?'Output was truncated':'Terminal output size');
@@ -44493,10 +44536,17 @@ function _terminalCommandMetaItems(block,result,durationMs,state){
   const stdinBytes=Number(result.stdinBytes||block&&block.dataset.stdinBytes||0)||0;
   const source=String(block&&block.dataset.workspaceSource||_terminalWorkspaceSource()||'');
   const flags=_terminalTruncationLabel(!!result.stdoutTruncated,!!result.stderrTruncated);
+  const runtime=_terminalRuntimeFields(result,block);
   const items=[
     ['profile',profile],
     ['cwd',cwd],
     ['job',jobId?jobId.slice(0,8):''],
+    ['pid',runtime.pid?('pid '+runtime.pid):''],
+    ['session',runtime.sessionId?('session '+runtime.sessionId.slice(0,8)):''],
+    ['cwd-source',runtime.cwdSource?('cwd '+runtime.cwdSource):''],
+    ['profile-source',runtime.profileSource?('profile '+runtime.profileSource):''],
+    ['si',runtime.shellIntegrationStatus?('si '+runtime.shellIntegrationStatus):''],
+    ['encoding',runtime.encoding?('enc '+runtime.encoding):''],
     ['exit',state==='running'?'running':exitCode?('exit '+exitCode):(state==='cancelled'?'cancelled':'')],
     ['time',duration],
     ['source',source?_terminalWorkspaceSourceLabel():'']
@@ -44531,6 +44581,13 @@ function renderTerminalCommandMeta(block,result,durationMs,state){
   block.dataset.stdoutTruncated=result&&result.stdoutTruncated?'1':'0';
   block.dataset.stderrTruncated=result&&result.stderrTruncated?'1':'0';
   block.dataset.jobId=result&&result.jobId?String(result.jobId):block.dataset.jobId||'';
+  const runtime=_terminalRuntimeFields(result,block);
+  block.dataset.processId=runtime.pid;
+  block.dataset.sessionId=runtime.sessionId;
+  block.dataset.cwdSource=runtime.cwdSource;
+  block.dataset.profileSource=runtime.profileSource;
+  block.dataset.shellIntegrationStatus=runtime.shellIntegrationStatus;
+  block.dataset.encoding=runtime.encoding;
   block.dataset.sequence=result&&result.sequence!==undefined&&result.sequence!==null?String(result.sequence):block.dataset.sequence||'';
   block.dataset.stdinBytes=result&&result.stdinBytes!==undefined&&result.stdinBytes!==null?String(result.stdinBytes):block.dataset.stdinBytes||'0';
   block.dataset.stdinClosed=result&&result.stdinClosed?'1':'0';
@@ -44551,6 +44608,7 @@ function _setTerminalStatus(state,text,detail,meta){
   const stdinBytes=Number(meta.stdinBytes||0)||0;
   const stdinClosed=!!meta.stdinClosed;
   const flags=_terminalTruncationLabel(stdoutTruncated,stderrTruncated)||String(meta.flags||'');
+  const runtime=_terminalRuntimeFields(meta,null);
   line.className='terminal-status-line '+(state||'idle');
   line.dataset.state=state||'idle';
   line.dataset.cwd=cwd;
@@ -44558,6 +44616,12 @@ function _setTerminalStatus(state,text,detail,meta){
   line.dataset.profile=profile;
   line.dataset.shellKind=String(meta.shellKind||'');
   line.dataset.jobId=jobId;
+  line.dataset.processId=runtime.pid;
+  line.dataset.sessionId=runtime.sessionId;
+  line.dataset.cwdSource=runtime.cwdSource;
+  line.dataset.profileSource=runtime.profileSource;
+  line.dataset.shellIntegrationStatus=runtime.shellIntegrationStatus;
+  line.dataset.encoding=runtime.encoding;
   line.dataset.stdinBytes=String(stdinBytes);
   line.dataset.stdinClosed=stdinClosed?'1':'0';
   line.dataset.exitCode=exitCode;
@@ -44618,7 +44682,7 @@ function _updateTerminalStatusLine(){
   const exit=out&&out.dataset.lastExitCode!==undefined&&out.dataset.lastExitCode!==''?('exit '+out.dataset.lastExitCode):'';
   const cwd=out&&out.dataset.lastCwd?('cwd '+out.dataset.lastCwd):'';
   const flags=_terminalTruncationLabel(out&&out.dataset.lastStdoutTruncated==='1',out&&out.dataset.lastStderrTruncated==='1');
-  const meta={cwd:out&&out.dataset.lastCwd?out.dataset.lastCwd:currentWorkspaceRoot(),profile:out&&out.dataset.lastProfile?out.dataset.lastProfile:'System Shell',shellKind:out&&out.dataset.lastShellKind?out.dataset.lastShellKind:'',jobId:out&&out.dataset.lastJobId?out.dataset.lastJobId:'',sequence:out&&out.dataset.lastSequence?Number(out.dataset.lastSequence):0,stdinBytes:out&&out.dataset.lastStdinBytes?Number(out.dataset.lastStdinBytes):0,stdinClosed:out&&out.dataset.lastStdinClosed==='1',canWriteStdin:out&&out.dataset.lastCanWriteStdin==='1',outputLines:out&&out.dataset.lastOutputLines?Number(out.dataset.lastOutputLines):0,outputBytes:out&&out.dataset.lastOutputBytes?Number(out.dataset.lastOutputBytes):0,exitCode:out&&out.dataset.lastExitCode?out.dataset.lastExitCode:null,durationMs:out&&out.dataset.lastDurationMs?Number(out.dataset.lastDurationMs):null,stdoutTruncated:out&&out.dataset.lastStdoutTruncated==='1',stderrTruncated:out&&out.dataset.lastStderrTruncated==='1',lastCommand:out&&out.dataset.lastCommand?out.dataset.lastCommand:'',startedAt:out&&out.dataset.lastStartedAt?out.dataset.lastStartedAt:'',finishedAt:out&&out.dataset.lastFinishedAt?out.dataset.lastFinishedAt:''};
+  const meta={cwd:out&&out.dataset.lastCwd?out.dataset.lastCwd:currentWorkspaceRoot(),profile:out&&out.dataset.lastProfile?out.dataset.lastProfile:'System Shell',shellKind:out&&out.dataset.lastShellKind?out.dataset.lastShellKind:'',jobId:out&&out.dataset.lastJobId?out.dataset.lastJobId:'',processId:out&&out.dataset.lastProcessId?out.dataset.lastProcessId:'',sessionId:out&&out.dataset.lastSessionId?out.dataset.lastSessionId:'',cwdSource:out&&out.dataset.lastCwdSource?out.dataset.lastCwdSource:'',profileSource:out&&out.dataset.lastProfileSource?out.dataset.lastProfileSource:'',shellIntegrationStatus:out&&out.dataset.lastShellIntegrationStatus?out.dataset.lastShellIntegrationStatus:'',encoding:out&&out.dataset.lastEncoding?out.dataset.lastEncoding:'',sequence:out&&out.dataset.lastSequence?Number(out.dataset.lastSequence):0,stdinBytes:out&&out.dataset.lastStdinBytes?Number(out.dataset.lastStdinBytes):0,stdinClosed:out&&out.dataset.lastStdinClosed==='1',canWriteStdin:out&&out.dataset.lastCanWriteStdin==='1',outputLines:out&&out.dataset.lastOutputLines?Number(out.dataset.lastOutputLines):0,outputBytes:out&&out.dataset.lastOutputBytes?Number(out.dataset.lastOutputBytes):0,exitCode:out&&out.dataset.lastExitCode?out.dataset.lastExitCode:null,durationMs:out&&out.dataset.lastDurationMs?Number(out.dataset.lastDurationMs):null,stdoutTruncated:out&&out.dataset.lastStdoutTruncated==='1',stderrTruncated:out&&out.dataset.lastStderrTruncated==='1',lastCommand:out&&out.dataset.lastCommand?out.dataset.lastCommand:'',startedAt:out&&out.dataset.lastStartedAt?out.dataset.lastStartedAt:'',finishedAt:out&&out.dataset.lastFinishedAt?out.dataset.lastFinishedAt:''};
   _setTerminalStatus(state,_terminalStateLabel(state),[cmd,exit,cwd,flags].filter(Boolean).join('  '),meta);
   _updateTerminalActionButtons();
 }
@@ -44663,10 +44727,11 @@ function _updateTerminalRecordForRun(cmd,state,result,durationMs){
   const outputBytes=Number(result&&result.outputBytes||0)||0;
   const stdoutTruncated=!!(result&&result.stdoutTruncated);
   const stderrTruncated=!!(result&&result.stderrTruncated);
+  const runtime=_terminalRuntimeFields(result,null);
   if(term){
     term.lastCommand=cmd;term.lastState=state;term.lastExitCode=exitCode;term.lastDurationMs=durationMs;
     term.lastCwd=cwd||term.lastCwd||'';
-    term.lastTerminalMeta={...terminalMeta,cwd:cwd||terminalMeta.cwd||term.lastCwd||'',jobId,sequence,stdinBytes,stdinClosed,canWriteStdin,outputLines,outputBytes,stdoutTruncated,stderrTruncated};
+    term.lastTerminalMeta={...terminalMeta,cwd:cwd||terminalMeta.cwd||term.lastCwd||'',jobId,processId:runtime.pid,sessionId:runtime.sessionId,cwdSource:runtime.cwdSource,profileSource:runtime.profileSource,shellIntegrationStatus:runtime.shellIntegrationStatus,encoding:runtime.encoding,sequence,stdinBytes,stdinClosed,canWriteStdin,outputLines,outputBytes,stdoutTruncated,stderrTruncated};
     term.lastStartedAt=startedAt;
     term.lastFinishedAt=finishedAt;
     term.lastStdoutTruncated=stdoutTruncated;
@@ -44683,6 +44748,12 @@ function _updateTerminalRecordForRun(cmd,state,result,durationMs){
       out.dataset.lastProfile=_terminalProfileLabel(terminalMeta);
       out.dataset.lastShellKind=String(terminalMeta.shellKind||'');
       out.dataset.lastJobId=jobId;
+      out.dataset.lastProcessId=runtime.pid;
+      out.dataset.lastSessionId=runtime.sessionId;
+      out.dataset.lastCwdSource=runtime.cwdSource;
+      out.dataset.lastProfileSource=runtime.profileSource;
+      out.dataset.lastShellIntegrationStatus=runtime.shellIntegrationStatus;
+      out.dataset.lastEncoding=runtime.encoding;
       out.dataset.lastSequence=sequence;
       out.dataset.lastStdinBytes=String(stdinBytes);
       out.dataset.lastStdinClosed=stdinClosed?'1':'0';
@@ -45056,14 +45127,15 @@ async function terminalUiSelfCheckSnapshot(){
       payloads.push(data);
       const cmd=String(data.command||''),jobId=cmd.includes('bad')?'job-bad':cmd.includes('slow')?'job-slow':'job-ok';
       const profile=String(data.profile||'Windows PowerShell');
-      if(data.mode==='start')return JSON.stringify({jobId,state:'running',running:true,canWriteStdin:true,stdinAvailable:true,sequence:0,cwd:'E:/VC/SAO-UI/sao_auto',startedAt:'2026-06-27T00:00:00Z',outputLines:0,outputBytes:0,terminal:{cwd:'E:/VC/SAO-UI/sao_auto',profile,shellKind:'powershell',shellPath:'powershell',shellArgs:['-NoLogo','-NoProfile'],workspaceCwd:true,workspaceRoot:'E:/VC/SAO-UI/sao_auto'}});
-      if(data.mode==='write')return JSON.stringify({jobId:data.jobId,state:'running',running:true,canWriteStdin:!data.closeStdin,stdinAvailable:true,writtenBytes:String(data.data||'').length,stdinBytes:String(data.data||'').length,stdinClosed:!!data.closeStdin,sequence:4,cwd:'E:/VC/SAO-UI/sao_auto',outputLines:1,outputBytes:2,terminal:{cwd:'E:/VC/SAO-UI/sao_auto',profile,shellKind:'powershell',workspaceCwd:true,workspaceRoot:'E:/VC/SAO-UI/sao_auto'},chunks:[{seq:4,stream:'stdin',text:String(data.data||'')||'[stdin closed]\n'}]});
-      if(data.mode==='stop'){stoppedJobs.add(String(data.jobId||''));return JSON.stringify({jobId:data.jobId,state:'cancelled',running:false,canWriteStdin:false,exitCode:null,durationMs:7,cwd:'E:/VC/SAO-UI/sao_auto',startedAt:'2026-06-27T00:00:00Z',finishedAt:'2026-06-27T00:00:02Z',stdinBytes:12,stdinClosed:true,outputLines:3,outputBytes:24,terminal:{cwd:'E:/VC/SAO-UI/sao_auto',profile,shellKind:'powershell',workspaceCwd:true,workspaceRoot:'E:/VC/SAO-UI/sao_auto'}})}
+      const runtimeMeta={processId:4321,pid:4321,sessionId:jobId,cwdSource:'workspace',profileSource:'configured',shellIntegrationStatus:'process',encoding:'utf-8'};
+      if(data.mode==='start')return JSON.stringify({jobId,state:'running',running:true,canWriteStdin:true,stdinAvailable:true,sequence:0,cwd:'E:/VC/SAO-UI/sao_auto',startedAt:'2026-06-27T00:00:00Z',outputLines:0,outputBytes:0,...runtimeMeta,terminal:{cwd:'E:/VC/SAO-UI/sao_auto',profile,shellKind:'powershell',shellPath:'powershell',shellArgs:['-NoLogo','-NoProfile'],workspaceCwd:true,workspaceRoot:'E:/VC/SAO-UI/sao_auto',...runtimeMeta}});
+      if(data.mode==='write')return JSON.stringify({jobId:data.jobId,state:'running',running:true,canWriteStdin:!data.closeStdin,stdinAvailable:true,writtenBytes:String(data.data||'').length,stdinBytes:String(data.data||'').length,stdinClosed:!!data.closeStdin,sequence:4,cwd:'E:/VC/SAO-UI/sao_auto',outputLines:1,outputBytes:2,...runtimeMeta,terminal:{cwd:'E:/VC/SAO-UI/sao_auto',profile,shellKind:'powershell',workspaceCwd:true,workspaceRoot:'E:/VC/SAO-UI/sao_auto',...runtimeMeta},chunks:[{seq:4,stream:'stdin',text:String(data.data||'')||'[stdin closed]\n'}]});
+      if(data.mode==='stop'){stoppedJobs.add(String(data.jobId||''));return JSON.stringify({jobId:data.jobId,state:'cancelled',running:false,canWriteStdin:false,exitCode:null,durationMs:7,cwd:'E:/VC/SAO-UI/sao_auto',startedAt:'2026-06-27T00:00:00Z',finishedAt:'2026-06-27T00:00:02Z',stdinBytes:12,stdinClosed:true,outputLines:3,outputBytes:24,...runtimeMeta,sessionId:data.jobId,terminal:{cwd:'E:/VC/SAO-UI/sao_auto',profile,shellKind:'powershell',workspaceCwd:true,workspaceRoot:'E:/VC/SAO-UI/sao_auto',...runtimeMeta,sessionId:data.jobId}})}
       if(data.mode==='status'){
-        const termMeta={cwd:'E:/VC/SAO-UI/sao_auto',profile,shellKind:'powershell',shellPath:'powershell',shellArgs:['-NoLogo','-NoProfile'],workspaceCwd:true,workspaceRoot:'E:/VC/SAO-UI/sao_auto'};
-        if(stoppedJobs.has(String(data.jobId||'')))return JSON.stringify({jobId:data.jobId,state:'cancelled',running:false,canWriteStdin:false,exitCode:null,durationMs:20,cwd:'E:/VC/SAO-UI/sao_auto',startedAt:'2026-06-27T00:00:00Z',finishedAt:'2026-06-27T00:00:02Z',terminal:termMeta,sequence:3,stdinBytes:12,stdinClosed:true,outputLines:3,outputBytes:24,chunks:[]});
-        if(String(data.jobId||'')==='job-bad')return JSON.stringify({jobId,state:'error',running:false,canWriteStdin:false,stderr:'bad\n',exitCode:7,durationMs:9,cwd:'E:/VC/SAO-UI/sao_auto',startedAt:'2026-06-27T00:00:00Z',finishedAt:'2026-06-27T00:00:01Z',terminal:termMeta,stderrTruncated:true,sequence:2,stdinBytes:0,stdinClosed:false,outputLines:1,outputBytes:4,chunks:[{seq:2,stream:'stderr',text:'bad\n'}]});
-        return JSON.stringify({jobId,state:'done',running:false,canWriteStdin:false,stdout:'ok\n',exitCode:0,durationMs:12,cwd:'E:/VC/SAO-UI/sao_auto',startedAt:'2026-06-27T00:00:00Z',finishedAt:'2026-06-27T00:00:01Z',terminal:termMeta,sequence:1,stdinBytes:0,stdinClosed:false,outputLines:1,outputBytes:3,chunks:[{seq:1,stream:'stdout',text:'ok\n'}]});
+        const termMeta={cwd:'E:/VC/SAO-UI/sao_auto',profile,shellKind:'powershell',shellPath:'powershell',shellArgs:['-NoLogo','-NoProfile'],workspaceCwd:true,workspaceRoot:'E:/VC/SAO-UI/sao_auto',...runtimeMeta,sessionId:data.jobId};
+        if(stoppedJobs.has(String(data.jobId||'')))return JSON.stringify({jobId:data.jobId,state:'cancelled',running:false,canWriteStdin:false,exitCode:null,durationMs:20,cwd:'E:/VC/SAO-UI/sao_auto',startedAt:'2026-06-27T00:00:00Z',finishedAt:'2026-06-27T00:00:02Z',terminal:termMeta,sequence:3,stdinBytes:12,stdinClosed:true,outputLines:3,outputBytes:24,...runtimeMeta,sessionId:data.jobId,chunks:[]});
+        if(String(data.jobId||'')==='job-bad')return JSON.stringify({jobId,state:'error',running:false,canWriteStdin:false,stderr:'bad\n',exitCode:7,durationMs:9,cwd:'E:/VC/SAO-UI/sao_auto',startedAt:'2026-06-27T00:00:00Z',finishedAt:'2026-06-27T00:00:01Z',terminal:termMeta,stderrTruncated:true,sequence:2,stdinBytes:0,stdinClosed:false,outputLines:1,outputBytes:4,...runtimeMeta,sessionId:data.jobId,chunks:[{seq:2,stream:'stderr',text:'bad\n'}]});
+        return JSON.stringify({jobId,state:'done',running:false,canWriteStdin:false,stdout:'ok\n',exitCode:0,durationMs:12,cwd:'E:/VC/SAO-UI/sao_auto',startedAt:'2026-06-27T00:00:00Z',finishedAt:'2026-06-27T00:00:01Z',terminal:termMeta,sequence:1,stdinBytes:0,stdinClosed:false,outputLines:1,outputBytes:3,...runtimeMeta,sessionId:data.jobId,chunks:[{seq:1,stream:'stdout',text:'ok\n'}]});
       }
       return JSON.stringify({stdout:'legacy\n',exitCode:0,durationMs:1,cwd:'E:/VC/SAO-UI/sao_auto'});
     };
@@ -45111,6 +45183,12 @@ async function terminalUiSelfCheckSnapshot(){
       statusProfile:status?status.dataset.profile:'',
       statusShellKind:status?status.dataset.shellKind:'',
       statusJobId:status?status.dataset.jobId:'',
+      statusProcessId:status?status.dataset.processId:'',
+      statusSessionId:status?status.dataset.sessionId:'',
+      statusCwdSource:status?status.dataset.cwdSource:'',
+      statusProfileSource:status?status.dataset.profileSource:'',
+      statusShellIntegrationStatus:status?status.dataset.shellIntegrationStatus:'',
+      statusEncoding:status?status.dataset.encoding:'',
       statusStdinBytes:status?status.dataset.stdinBytes:'',
       statusStdinClosed:status?status.dataset.stdinClosed:'',
       statusExitCode:status?status.dataset.exitCode:'',
@@ -45136,6 +45214,12 @@ async function terminalUiSelfCheckSnapshot(){
       diagnosticsState:diagnostics?diagnostics.dataset.state:'',
       diagnosticsRunning:diagnostics?diagnostics.dataset.running:'',
       diagnosticsJobId:diagnostics?diagnostics.dataset.jobId:'',
+      diagnosticsProcessId:diagnostics?diagnostics.dataset.processId:'',
+      diagnosticsSessionId:diagnostics?diagnostics.dataset.sessionId:'',
+      diagnosticsCwdSource:diagnostics?diagnostics.dataset.cwdSource:'',
+      diagnosticsProfileSource:diagnostics?diagnostics.dataset.profileSource:'',
+      diagnosticsShellIntegrationStatus:diagnostics?diagnostics.dataset.shellIntegrationStatus:'',
+      diagnosticsEncoding:diagnostics?diagnostics.dataset.encoding:'',
       diagnosticsWorkspaceCwd:diagnostics?diagnostics.dataset.workspaceCwd:'',
       diagnosticsProfile:diagnostics?diagnostics.dataset.profile:'',
       diagnosticsShellKind:diagnostics?diagnostics.dataset.shellKind:'',
@@ -45166,6 +45250,12 @@ async function terminalUiSelfCheckSnapshot(){
       commandProfileDataset:blocks.map(block=>block.dataset.profile||''),
       commandWorkspaceSourceDataset:blocks.map(block=>block.dataset.workspaceSource||''),
       commandJobDataset:blocks.map(block=>block.dataset.jobId||''),
+      commandProcessDataset:blocks.map(block=>block.dataset.processId||''),
+      commandSessionDataset:blocks.map(block=>block.dataset.sessionId||''),
+      commandCwdSourceDataset:blocks.map(block=>block.dataset.cwdSource||''),
+      commandProfileSourceDataset:blocks.map(block=>block.dataset.profileSource||''),
+      commandShellIntegrationDataset:blocks.map(block=>block.dataset.shellIntegrationStatus||''),
+      commandEncodingDataset:blocks.map(block=>block.dataset.encoding||''),
       commandStdinDataset:blocks.map(block=>block.dataset.stdinBytes||''),
       commandExitCodeDataset:blocks.map(block=>block.dataset.exitCode||''),
       commandDurationDataset:blocks.map(block=>block.dataset.durationMs||''),
@@ -45177,6 +45267,12 @@ async function terminalUiSelfCheckSnapshot(){
       lastProfile:defaultOut?defaultOut.dataset.lastProfile:'',
       lastShellKind:defaultOut?defaultOut.dataset.lastShellKind:'',
       lastJobId:defaultOut?defaultOut.dataset.lastJobId:'',
+      lastProcessId:defaultOut?defaultOut.dataset.lastProcessId:'',
+      lastSessionId:defaultOut?defaultOut.dataset.lastSessionId:'',
+      lastCwdSource:defaultOut?defaultOut.dataset.lastCwdSource:'',
+      lastProfileSource:defaultOut?defaultOut.dataset.lastProfileSource:'',
+      lastShellIntegrationStatus:defaultOut?defaultOut.dataset.lastShellIntegrationStatus:'',
+      lastEncoding:defaultOut?defaultOut.dataset.lastEncoding:'',
       lastStdinBytes:defaultOut?defaultOut.dataset.lastStdinBytes:'',
       lastStdinClosed:defaultOut?defaultOut.dataset.lastStdinClosed:'',
       lastOutputLines:defaultOut?defaultOut.dataset.lastOutputLines:'',
@@ -45192,7 +45288,7 @@ async function terminalUiSelfCheckSnapshot(){
       closeStdinEcho:defaultOut?defaultOut.textContent.includes('[stdin closed]'):false,
       closeStdinResult:closed&&closed.stdinClosed
     };
-    snapshot.pass=snapshot.okExit===0&&snapshot.badExit===7&&snapshot.stopped&&snapshot.slowIgnored&&snapshot.blockCount>=3&&snapshot.hasDone&&snapshot.hasError&&snapshot.hasCancelled&&snapshot.hasTruncatedNote&&snapshot.hasInputEcho&&snapshot.statusState==='cancelled'&&snapshot.statusWorkspace==='sao_auto'&&snapshot.statusWorkspaceCwd==='1'&&snapshot.statusWorkspaceSource==='selfcheck'&&snapshot.statusWorkspaceAutoDetected==='1'&&snapshot.statusProfile==='Windows PowerShell'&&snapshot.statusShellKind==='powershell'&&snapshot.statusJobId==='job-slow'&&snapshot.statusStdinBytes==='12'&&snapshot.statusStdinClosed==='1'&&snapshot.statusExitCode===''&&snapshot.statusDurationMs==='7'&&snapshot.statusStdoutTruncated==='0'&&snapshot.statusStderrTruncated==='0'&&snapshot.statusFinishedAt==='2026-06-27T00:00:02Z'&&snapshot.contextReady&&snapshot.contextWorkspace==='sao_auto'&&snapshot.contextCwd==='E:/VC/SAO-UI/sao_auto'&&snapshot.contextSource==='selfcheck'&&snapshot.contextAutoDetected==='1'&&snapshot.contextWorkspaceCwd==='1'&&snapshot.contextProfile==='Windows PowerShell'&&snapshot.contextShellKind==='powershell'&&snapshot.contextText.includes('Selfcheck')&&snapshot.contextActions.includes('switch-workspace')&&snapshot.contextActions.includes('copy-cwd')&&snapshot.contextActions.includes('reuse-cwd')&&snapshot.diagnosticsReady&&snapshot.diagnosticsState==='cancelled'&&snapshot.diagnosticsWorkspaceCwd==='1'&&snapshot.diagnosticsProfile==='Windows PowerShell'&&snapshot.diagnosticsShellKind==='powershell'&&snapshot.diagnosticsJobId==='job-slow'&&snapshot.diagnosticsStdinBytes===12&&snapshot.diagnosticsStdinClosed==='1'&&snapshot.diagnosticsCanWriteStdin==='0'&&snapshot.diagnosticsOutputLines>=3&&snapshot.diagnosticsOutputBytes>0&&snapshot.diagnosticsBlocks>=3&&snapshot.diagnosticsHistoryCount>=3&&snapshot.diagnosticsTruncated==='1'&&['run','job','cwd','profile','shell','exit','stdin','output','history'].every(kind=>snapshot.diagnosticKinds.includes(kind))&&snapshot.diagnosticValues.some(value=>String(value).includes('lines'))&&snapshot.promptText.includes('sao_auto')&&snapshot.promptTitle.includes('Windows PowerShell')&&snapshot.statusAfterBad.state==='error'&&snapshot.statusAfterBad.exitCode==='7'&&snapshot.statusAfterBad.durationMs==='9'&&snapshot.statusAfterBad.stderrTruncated==='1'&&String(snapshot.statusAfterBad.flags||'').includes('stderr truncated')&&snapshot.recentCount>=3&&snapshot.recentLabels.includes('slow-command')&&snapshot.recentInputValue==='echo terminal-ok'&&snapshot.commandActionCount>=15&&snapshot.commandActionLabels.includes('▶')&&snapshot.commandActionTypes.includes('copy-command')&&snapshot.commandActionTypes.includes('copy-output')&&snapshot.commandActionTypes.includes('copy-cwd')&&snapshot.commandMetaCount>=18&&snapshot.commandMetaText.some(text=>text.includes('Windows PowerShell')&&text.includes('sao_auto'))&&snapshot.commandMetaText.some(text=>text.includes('exit 7')&&text.includes('stderr truncated'))&&snapshot.commandMetaText.some(text=>text.includes('stdin bytes'))&&snapshot.commandDataset.includes('bad-command')&&snapshot.commandCwdDataset.includes('E:/VC/SAO-UI/sao_auto')&&snapshot.commandProfileDataset.includes('Windows PowerShell')&&snapshot.commandWorkspaceSourceDataset.includes('selfcheck')&&snapshot.commandJobDataset.includes('job-slow')&&snapshot.commandStdinDataset.includes('12')&&snapshot.commandExitCodeDataset.includes('7')&&snapshot.commandDurationDataset.includes('9')&&String(snapshot.commandCopyOutputCandidate||'').includes('bad')&&snapshot.selectorValue==='Windows PowerShell'&&snapshot.createdTermProfile==='Windows PowerShell'&&snapshot.lastCommand==='slow-command'&&snapshot.lastCwd==='E:/VC/SAO-UI/sao_auto'&&snapshot.lastProfile==='Windows PowerShell'&&snapshot.lastShellKind==='powershell'&&snapshot.lastJobId==='job-slow'&&snapshot.lastStdinBytes==='12'&&snapshot.lastStdinClosed==='1'&&Number(snapshot.lastOutputLines)>=3&&Number(snapshot.lastOutputBytes)>0&&snapshot.lastDurationMs==='7'&&snapshot.lastStdoutTruncated==='0'&&snapshot.lastStderrTruncated==='0'&&snapshot.payloadCwd==='E:/VC/SAO-UI/sao_auto'&&snapshot.payloadProfile==='Windows PowerShell'&&snapshot.writePayloadData==='hello stdin\n'&&snapshot.writeBytes===12&&snapshot.closeStdinPayload===true&&snapshot.closeStdinEcho&&snapshot.closeStdinResult===true;
+    snapshot.pass=snapshot.okExit===0&&snapshot.badExit===7&&snapshot.stopped&&snapshot.slowIgnored&&snapshot.blockCount>=3&&snapshot.hasDone&&snapshot.hasError&&snapshot.hasCancelled&&snapshot.hasTruncatedNote&&snapshot.hasInputEcho&&snapshot.statusState==='cancelled'&&snapshot.statusWorkspace==='sao_auto'&&snapshot.statusWorkspaceCwd==='1'&&snapshot.statusWorkspaceSource==='selfcheck'&&snapshot.statusWorkspaceAutoDetected==='1'&&snapshot.statusProfile==='Windows PowerShell'&&snapshot.statusShellKind==='powershell'&&snapshot.statusJobId==='job-slow'&&snapshot.statusProcessId==='4321'&&snapshot.statusSessionId==='job-slow'&&snapshot.statusCwdSource==='workspace'&&snapshot.statusProfileSource==='configured'&&snapshot.statusShellIntegrationStatus==='process'&&snapshot.statusEncoding==='utf-8'&&snapshot.statusStdinBytes==='12'&&snapshot.statusStdinClosed==='1'&&snapshot.statusExitCode===''&&snapshot.statusDurationMs==='7'&&snapshot.statusStdoutTruncated==='0'&&snapshot.statusStderrTruncated==='0'&&snapshot.statusFinishedAt==='2026-06-27T00:00:02Z'&&snapshot.contextReady&&snapshot.contextWorkspace==='sao_auto'&&snapshot.contextCwd==='E:/VC/SAO-UI/sao_auto'&&snapshot.contextSource==='selfcheck'&&snapshot.contextAutoDetected==='1'&&snapshot.contextWorkspaceCwd==='1'&&snapshot.contextProfile==='Windows PowerShell'&&snapshot.contextShellKind==='powershell'&&snapshot.contextText.includes('Selfcheck')&&snapshot.contextActions.includes('switch-workspace')&&snapshot.contextActions.includes('copy-cwd')&&snapshot.contextActions.includes('reuse-cwd')&&snapshot.diagnosticsReady&&snapshot.diagnosticsState==='cancelled'&&snapshot.diagnosticsWorkspaceCwd==='1'&&snapshot.diagnosticsProfile==='Windows PowerShell'&&snapshot.diagnosticsShellKind==='powershell'&&snapshot.diagnosticsJobId==='job-slow'&&snapshot.diagnosticsProcessId==='4321'&&snapshot.diagnosticsSessionId==='job-slow'&&snapshot.diagnosticsCwdSource==='workspace'&&snapshot.diagnosticsProfileSource==='configured'&&snapshot.diagnosticsShellIntegrationStatus==='process'&&snapshot.diagnosticsEncoding==='utf-8'&&snapshot.diagnosticsStdinBytes===12&&snapshot.diagnosticsStdinClosed==='1'&&snapshot.diagnosticsCanWriteStdin==='0'&&snapshot.diagnosticsOutputLines>=3&&snapshot.diagnosticsOutputBytes>0&&snapshot.diagnosticsBlocks>=3&&snapshot.diagnosticsHistoryCount>=3&&snapshot.diagnosticsTruncated==='1'&&['run','job','cwd','profile','shell','pid','session','cwd-source','profile-source','shell-integration','encoding','exit','stdin','output','history'].every(kind=>snapshot.diagnosticKinds.includes(kind))&&snapshot.diagnosticValues.some(value=>String(value).includes('lines'))&&snapshot.promptText.includes('sao_auto')&&snapshot.promptTitle.includes('Windows PowerShell')&&snapshot.statusAfterBad.state==='error'&&snapshot.statusAfterBad.exitCode==='7'&&snapshot.statusAfterBad.durationMs==='9'&&snapshot.statusAfterBad.stderrTruncated==='1'&&String(snapshot.statusAfterBad.flags||'').includes('stderr truncated')&&snapshot.recentCount>=3&&snapshot.recentLabels.includes('slow-command')&&snapshot.recentInputValue==='echo terminal-ok'&&snapshot.commandActionCount>=15&&snapshot.commandActionLabels.includes('▶')&&snapshot.commandActionTypes.includes('copy-command')&&snapshot.commandActionTypes.includes('copy-output')&&snapshot.commandActionTypes.includes('copy-cwd')&&snapshot.commandMetaCount>=36&&snapshot.commandMetaText.some(text=>text.includes('Windows PowerShell')&&text.includes('sao_auto'))&&snapshot.commandMetaText.some(text=>text.includes('exit 7')&&text.includes('stderr truncated'))&&snapshot.commandMetaText.some(text=>text.includes('pid 4321')&&text.includes('session job'))&&snapshot.commandMetaText.some(text=>text.includes('cwd workspace')&&text.includes('profile configured'))&&snapshot.commandMetaText.some(text=>text.includes('si process')&&text.includes('enc utf-8'))&&snapshot.commandMetaText.some(text=>text.includes('stdin bytes'))&&snapshot.commandDataset.includes('bad-command')&&snapshot.commandCwdDataset.includes('E:/VC/SAO-UI/sao_auto')&&snapshot.commandProfileDataset.includes('Windows PowerShell')&&snapshot.commandWorkspaceSourceDataset.includes('selfcheck')&&snapshot.commandJobDataset.includes('job-slow')&&snapshot.commandProcessDataset.includes('4321')&&snapshot.commandSessionDataset.includes('job-slow')&&snapshot.commandCwdSourceDataset.includes('workspace')&&snapshot.commandProfileSourceDataset.includes('configured')&&snapshot.commandShellIntegrationDataset.includes('process')&&snapshot.commandEncodingDataset.includes('utf-8')&&snapshot.commandStdinDataset.includes('12')&&snapshot.commandExitCodeDataset.includes('7')&&snapshot.commandDurationDataset.includes('9')&&String(snapshot.commandCopyOutputCandidate||'').includes('bad')&&snapshot.selectorValue==='Windows PowerShell'&&snapshot.createdTermProfile==='Windows PowerShell'&&snapshot.lastCommand==='slow-command'&&snapshot.lastCwd==='E:/VC/SAO-UI/sao_auto'&&snapshot.lastProfile==='Windows PowerShell'&&snapshot.lastShellKind==='powershell'&&snapshot.lastJobId==='job-slow'&&snapshot.lastProcessId==='4321'&&snapshot.lastSessionId==='job-slow'&&snapshot.lastCwdSource==='workspace'&&snapshot.lastProfileSource==='configured'&&snapshot.lastShellIntegrationStatus==='process'&&snapshot.lastEncoding==='utf-8'&&snapshot.lastStdinBytes==='12'&&snapshot.lastStdinClosed==='1'&&Number(snapshot.lastOutputLines)>=3&&Number(snapshot.lastOutputBytes)>0&&snapshot.lastDurationMs==='7'&&snapshot.lastStdoutTruncated==='0'&&snapshot.lastStderrTruncated==='0'&&snapshot.payloadCwd==='E:/VC/SAO-UI/sao_auto'&&snapshot.payloadProfile==='Windows PowerShell'&&snapshot.writePayloadData==='hello stdin\n'&&snapshot.writeBytes===12&&snapshot.closeStdinPayload===true&&snapshot.closeStdinEcho&&snapshot.closeStdinResult===true;
     return snapshot;
   }finally{
     call=oldCall;

@@ -15250,7 +15250,14 @@ console.log("command palette quick access helpers ok");
            and "data-terminal-diagnostic=\"output\"" in html
            and "data-terminal-diagnostic=\"stdin\"" in html
            and "data-terminal-diagnostic=\"shell\"" in html
+           and "data-terminal-diagnostic=\"pid\"" in html
+           and "data-terminal-diagnostic=\"session\"" in html
+           and "data-terminal-diagnostic=\"cwd-source\"" in html
+           and "data-terminal-diagnostic=\"profile-source\"" in html
+           and "data-terminal-diagnostic=\"shell-integration\"" in html
+           and "data-terminal-diagnostic=\"encoding\"" in html
            and "function _terminalWorkspaceSource()" in html
+           and "function _terminalRuntimeFields(result,block)" in html
            and "function _terminalContextMeta(meta)" in html
            and "function _updateTerminalContextBar(meta,state)" in html
            and "function _terminalOutputStats(out)" in html
@@ -15260,6 +15267,12 @@ console.log("command palette quick access helpers ok");
            and "strip.dataset.outputBytes=String(outputBytes);" in html
            and "strip.dataset.stdinBytes=String(stdinBytes);" in html
            and "strip.dataset.jobId=jobId;" in html
+           and "strip.dataset.processId=runtime.pid;" in html
+           and "strip.dataset.sessionId=runtime.sessionId;" in html
+           and "strip.dataset.cwdSource=runtime.cwdSource;" in html
+           and "strip.dataset.profileSource=runtime.profileSource;" in html
+           and "strip.dataset.shellIntegrationStatus=runtime.shellIntegrationStatus;" in html
+           and "strip.dataset.encoding=runtime.encoding;" in html
            and "strip.dataset.commandBlocks=String(stats.blocks);" in html
            and "strip.dataset.historyCount=String(historyCount);" in html
            and "strip.dataset.truncated=truncation?'1':'0';" in html
@@ -15275,6 +15288,12 @@ console.log("command palette quick access helpers ok");
             and "line.dataset.profile=profile" in html
             and "line.dataset.shellKind=String(meta.shellKind||'')" in html
             and "line.dataset.jobId=jobId;" in html
+            and "line.dataset.processId=runtime.pid;" in html
+            and "line.dataset.sessionId=runtime.sessionId;" in html
+            and "line.dataset.cwdSource=runtime.cwdSource;" in html
+            and "line.dataset.profileSource=runtime.profileSource;" in html
+            and "line.dataset.shellIntegrationStatus=runtime.shellIntegrationStatus;" in html
+            and "line.dataset.encoding=runtime.encoding;" in html
             and "line.dataset.stdinBytes=String(stdinBytes);" in html
             and "line.dataset.exitCode=exitCode;" in html
             and "line.dataset.durationMs=durationMs;" in html
@@ -15296,6 +15315,12 @@ console.log("command palette quick access helpers ok");
             and "tab.dataset.durationMs=t.lastDurationMs===null||t.lastDurationMs===undefined?'':String(t.lastDurationMs);" in html
             and "const flagBadge=(t.lastStdoutTruncated||t.lastStderrTruncated)?'<span class=\"term-flag\">TRUNC</span> ':'';" in html
             and "payloadProfile" in html
+           and "statusProcessId==='4321'" in html
+           and "statusSessionId==='job-slow'" in html
+           and "diagnosticsProcessId==='4321'" in html
+           and "commandProcessDataset.includes('4321')" in html
+           and "commandEncodingDataset.includes('utf-8')" in html
+           and "lastShellIntegrationStatus==='process'" in html
            and "writePayloadData" in html
             and "writeBytes" in html
             and "terminal-input-row" in html
@@ -15326,7 +15351,7 @@ console.log("command palette quick access helpers ok");
             and "diagnosticsOutputLines" in html
             and "diagnosticsHistoryCount" in html
             and "diagnosticsTruncated==='1'" in html
-            and "['run','job','cwd','profile','shell','exit','stdin','output','history'].every" in html
+            and "['run','job','cwd','profile','shell','pid','session','cwd-source','profile-source','shell-integration','encoding','exit','stdin','output','history'].every" in html
             and "commandCwdDataset.includes('E:/VC/SAO-UI/sao_auto')" in html
             and "commandActionCount>=15" in html
             and "selectorValue" in html
@@ -15349,6 +15374,12 @@ console.log("command palette quick access helpers ok");
            and "stdinBytes" in engine_tools_source
            and "stdinClosed" in engine_tools_source
            and "canWriteStdin" in engine_tools_source
+           and "\"processId\": job.get(\"pid\")" in engine_tools_source
+           and "\"sessionId\": terminal.get(\"sessionId\", job_id)" in engine_tools_source
+           and "\"cwdSource\": terminal.get(\"cwdSource\", \"\")" in engine_tools_source
+           and "\"profileSource\": terminal.get(\"profileSource\", \"\")" in engine_tools_source
+           and "\"shellIntegrationStatus\": terminal.get(\"shellIntegrationStatus\", \"\")" in engine_tools_source
+           and "\"encoding\": terminal.get(\"encoding\", \"utf-8\")" in engine_tools_source
            and "outputBytes" in engine_tools_source
            and "outputLines" in engine_tools_source
            and "profile_override: str = \"\"" in engine_tools_source

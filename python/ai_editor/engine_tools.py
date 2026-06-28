@@ -756,6 +756,14 @@ def _terminal_metadata(terminal: Dict[str, Any], timeout: int, output_limit: int
         "shellKind": _terminal_shell_kind(shell_path, explicit_shell),
         "profile": str(profile or ("Configured Shell" if explicit_shell else "System Shell")),
         "workspaceCwd": _terminal_path_in_workspace(cwd, workspace_root),
+        "cwdSource": (
+            "workspace" if cwd and workspace_root
+            and os.path.abspath(cwd) == os.path.abspath(workspace_root)
+            else ("explicit" if cwd else "none")
+        ),
+        "profileSource": "configured" if profile else "system",
+        "shellIntegrationStatus": "process",
+        "encoding": "utf-8",
     }
     for key in ("profileResolved", "profileFallback", "profileShellMissing"):
         if key in terminal:
@@ -998,6 +1006,8 @@ def _terminal_job_snapshot(job_id: str, since_seq: int = 0) -> Dict[str, Any]:
         snapshot = {
             "jobId": job_id,
             "pid": job.get("pid"),
+            "processId": job.get("pid"),
+            "sessionId": terminal.get("sessionId", job_id),
             "command": job.get("command", ""),
             "cwd": job.get("cwd", ""),
             "state": state,
@@ -1027,6 +1037,10 @@ def _terminal_job_snapshot(job_id: str, since_seq: int = 0) -> Dict[str, Any]:
             "shellKind": terminal.get("shellKind", ""),
             "shellPath": terminal.get("shellPath", ""),
             "shellArgs": terminal.get("shellArgs", []),
+            "cwdSource": terminal.get("cwdSource", ""),
+            "profileSource": terminal.get("profileSource", ""),
+            "shellIntegrationStatus": terminal.get("shellIntegrationStatus", ""),
+            "encoding": terminal.get("encoding", "utf-8"),
             "workspaceCwd": terminal.get("workspaceCwd"),
             "workspaceRoot": terminal.get("workspaceRoot", ""),
             "jobCount": len(_TERMINAL_JOBS),
@@ -1059,6 +1073,11 @@ def _start_terminal_job(command: str, cwd: str, gui_ref: Any,
         proc = subprocess.Popen(run_command, **kwargs)
     except Exception as exc:
         return {"error": str(exc), "command": command, "cwd": effective_cwd, "exitCode": 1}
+    terminal_meta = _terminal_metadata(
+        terminal, timeout, output_limit, explicit_shell, effective_cwd,
+        workspace_root)
+    terminal_meta["processId"] = proc.pid
+    terminal_meta["sessionId"] = job_id
     job = {
         "jobId": job_id,
         "process": proc,
@@ -1078,9 +1097,7 @@ def _start_terminal_job(command: str, cwd: str, gui_ref: Any,
         "started": time.monotonic(),
         "startedWall": time.time(),
         "finishedWall": 0,
-        "terminal": _terminal_metadata(
-            terminal, timeout, output_limit, explicit_shell, effective_cwd,
-            workspace_root),
+        "terminal": terminal_meta,
     }
     with _TERMINAL_JOB_LOCK:
         _terminal_prune_jobs_locked()
@@ -1203,6 +1220,7 @@ def _run_terminal(command: str, cwd: str = "", gui_ref: Any = None,
         }
         if effective_cwd:
             kwargs["cwd"] = effective_cwd
+        session_id = uuid.uuid4().hex
         started = time.monotonic()
         started_wall = time.time()
         result = subprocess.run(run_command, **kwargs)
@@ -1214,6 +1232,8 @@ def _run_terminal(command: str, cwd: str = "", gui_ref: Any = None,
         return {
             "command": command,
             "cwd": effective_cwd,
+            "sessionId": session_id,
+            "processId": None,
             "exitCode": result.returncode,
             "durationMs": duration_ms,
             "startedAt": _terminal_time_label(started_wall),
@@ -1222,6 +1242,15 @@ def _run_terminal(command: str, cwd: str = "", gui_ref: Any = None,
             "stderr": stderr[:stderr_limit],
             "stdoutTruncated": len(stdout) > output_limit,
             "stderrTruncated": len(stderr) > stderr_limit,
+            "cwdSource": (
+                "workspace" if effective_cwd and workspace_root
+                and os.path.abspath(effective_cwd) == os.path.abspath(workspace_root)
+                else ("explicit" if effective_cwd else "none")
+            ),
+            "profileSource": "configured" if _terminal_profile_name(
+                terminal.get("profile")) else "system",
+            "shellIntegrationStatus": "process",
+            "encoding": "utf-8",
             "terminal": _terminal_metadata(
                 terminal, timeout, output_limit, explicit_shell, effective_cwd,
                 workspace_root),
@@ -1252,6 +1281,17 @@ def _run_terminal(command: str, cwd: str = "", gui_ref: Any = None,
             "durationMs": timeout * 1000,
             "startedAt": "",
             "finishedAt": _terminal_time_label(time.time()),
+            "sessionId": uuid.uuid4().hex,
+            "processId": None,
+            "cwdSource": (
+                "workspace" if effective_cwd and workspace_root
+                and os.path.abspath(effective_cwd) == os.path.abspath(workspace_root)
+                else ("explicit" if effective_cwd else "none")
+            ),
+            "profileSource": "configured" if _terminal_profile_name(
+                terminal.get("profile")) else "system",
+            "shellIntegrationStatus": "process",
+            "encoding": "utf-8",
             "terminal": _terminal_metadata(terminal, timeout, output_limit,
                                            bool(shell_path),
                                            effective_cwd,
