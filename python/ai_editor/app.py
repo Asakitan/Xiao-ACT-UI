@@ -1640,12 +1640,46 @@ class _AIEditorUIBridge:
         self._api._emit("remove_language_status_item", {"id": item_id})
 
     # -- Webview panels --
+    def _webview_panel_record(self, view_id: str) -> Optional[Dict[str, Any]]:
+        normalized_view_id = str(view_id or "").strip()
+        if not normalized_view_id:
+            return None
+        panels = getattr(self._api, "_extension_webview_panels", None)
+        if not isinstance(panels, dict):
+            panels = {}
+            self._api._extension_webview_panels = panels
+        return panels.setdefault(normalized_view_id, {
+            "id": normalized_view_id,
+            "view_id": normalized_view_id,
+            "viewType": "",
+            "title": "",
+            "visible": True,
+            "active": True,
+            "disposed": False,
+            "renderCount": 0,
+            "messageCount": 0,
+            "lastMessage": None,
+            "localResourceRootCount": 0,
+            "htmlAvailable": False,
+            "htmlLength": 0,
+            "rawHtmlLength": 0,
+        })
+
+    @staticmethod
+    def _webview_root_count(local_resource_roots: Any) -> int:
+        if isinstance(local_resource_roots, list):
+            return len(local_resource_roots)
+        if local_resource_roots is None:
+            return 0
+        return 1
+
     def render_webview_panel(
             self, view_id: str, html: str,
             local_resource_roots: Any = None,
             state: Any = None,
             title: str = "",
-            options: Any = None) -> None:
+            options: Any = None,
+            view_type: str = "") -> None:
         """Push HTML content for a webview panel to the frontend."""
         state_to_render = state
         if state_to_render is None:
@@ -1658,8 +1692,33 @@ class _AIEditorUIBridge:
             nested_webview_options = {}
         prepared = self._api._prepare_extension_webview_html(
             html, local_resource_roots, view_id=view_id)
+        record = self._webview_panel_record(view_id)
+        if record is not None:
+            record.update({
+                "viewType": str(view_type or record.get("viewType") or ""),
+                "title": str(title or record.get("title") or ""),
+                "options": _json_safe(option_payload),
+                "localResourceRoots": _json_safe(local_resource_roots),
+                "local_resource_roots": _json_safe(local_resource_roots),
+                "localResourceRootCount": self._webview_root_count(
+                    local_resource_roots),
+                "retainContextWhenHidden": bool(
+                    option_payload.get(
+                        "retainContextWhenHidden",
+                        nested_webview_options.get(
+                            "retainContextWhenHidden", False))),
+                "htmlAvailable": bool(prepared),
+                "htmlLength": len(str(prepared or "")),
+                "rawHtmlLength": len(str(html or "")),
+                "stateAvailable": state_to_render is not None,
+                "disposed": False,
+                "visible": True,
+                "source": "webviewPanel",
+            })
+            record["renderCount"] = int(record.get("renderCount") or 0) + 1
         self._api._emit("render_webview_panel", {
             "view_id": view_id,
+            "view_type": str(view_type or ""),
             "html": prepared,
             "state": state_to_render,
             "title": str(title or ""),
@@ -1684,6 +1743,11 @@ class _AIEditorUIBridge:
         normalized_view_id = str(view_id or "").strip()
         if not normalized_view_id:
             return
+        record = self._webview_panel_record(normalized_view_id)
+        if record is not None:
+            record["title"] = str(title or "")
+            if view_type:
+                record["viewType"] = str(view_type or "")
         self._api._emit("update_webview_panel_title", {
             "view_id": normalized_view_id,
             "title": str(title or ""),
@@ -1696,6 +1760,11 @@ class _AIEditorUIBridge:
         normalized_view_id = str(view_id or "").strip()
         if not normalized_view_id:
             return
+        record = self._webview_panel_record(normalized_view_id)
+        if record is not None:
+            record["iconPath"] = _json_safe(icon_path)
+            if view_type:
+                record["viewType"] = str(view_type or "")
         self._api._emit("update_webview_panel_icon", {
             "view_id": normalized_view_id,
             "view_type": str(view_type or ""),
@@ -1709,11 +1778,23 @@ class _AIEditorUIBridge:
         normalized_view_id = str(view_id or "").strip()
         if not normalized_view_id:
             return
+        option_payload = options if isinstance(options, dict) else {}
+        record = self._webview_panel_record(normalized_view_id)
+        if record is not None:
+            record["options"] = _json_safe(option_payload)
+            record["localResourceRoots"] = _json_safe(local_resource_roots)
+            record["local_resource_roots"] = _json_safe(local_resource_roots)
+            record["localResourceRootCount"] = self._webview_root_count(
+                local_resource_roots)
+            if view_type:
+                record["viewType"] = str(view_type or "")
+            if title:
+                record["title"] = str(title or "")
         self._api._emit("update_webview_panel_options", {
             "view_id": normalized_view_id,
             "view_type": str(view_type or ""),
             "title": str(title or ""),
-            "options": _json_safe(options if isinstance(options, dict) else {}),
+            "options": _json_safe(option_payload),
             "local_resource_roots": _json_safe(local_resource_roots),
         })
 
@@ -1780,15 +1861,33 @@ class _AIEditorUIBridge:
             "view_type": str(view_type or ""),
             "title": str(title or ""),
         })
+        record = self._webview_panel_record(normalized_view_id)
+        if record is not None:
+            record["viewType"] = str(view_type or record.get("viewType") or "")
+            record["title"] = str(title or record.get("title") or "")
+            record["visible"] = bool(payload.get("visible", True))
+            record["active"] = bool(payload.get("active", record.get("active", True)))
+            record["viewColumn"] = payload.get("viewColumn", record.get("viewColumn"))
+            record["preserveFocus"] = bool(payload.get("preserveFocus", False))
+            record["disposed"] = False
         self._api._emit("reveal_webview_panel", payload)
 
     def dispose_webview_panel(self, view_id: str) -> None:
         """Dispose a webview panel by emitting a dispose event to the frontend."""
+        record = self._webview_panel_record(view_id)
+        if record is not None:
+            record["disposed"] = True
+            record["visible"] = False
+            record["active"] = False
         self._api._unregister_webview_resource_view(view_id)
         self._api._emit("dispose_webview_panel", {"view_id": view_id})
 
     def post_webview_message(self, view_id: str, message: Any) -> None:
         """Relay a message from the extension to the webview iframe."""
+        record = self._webview_panel_record(view_id)
+        if record is not None:
+            record["messageCount"] = int(record.get("messageCount") or 0) + 1
+            record["lastMessage"] = _json_safe(message)
         self._api._emit("webview_message", {
             "view_id": view_id,
             "message": message,
@@ -2477,6 +2576,7 @@ class AIEditorAPI:
         self._node_chat_participant_disposables: Dict[str, Any] = {}
         self._extension_runtime_surface_cache: Dict[str, Tuple[float, Dict[str, Any]]] = {}
         self._extension_runtime_surface_cache_ttl = 0.35
+        self._extension_webview_panels: Dict[str, Dict[str, Any]] = {}
         self._extensions_inited = False
         self._vscode_ns_ready = threading.Event()
 
@@ -12141,6 +12241,25 @@ class AIEditorAPI:
                     result.append(f"{view_id}:{len(str(html))}")
             return sorted(result)
 
+        def webview_panel_keys() -> List[str]:
+            result: List[str] = []
+            panels = getattr(self, "_extension_webview_panels", {})
+            if isinstance(panels, dict):
+                for view_id, item in panels.items():
+                    if not isinstance(item, dict):
+                        continue
+                    result.append(":".join([
+                        str(view_id),
+                        str(item.get("viewType") or ""),
+                        str(item.get("htmlLength") or 0),
+                        "1" if item.get("visible") else "0",
+                        "1" if item.get("active") else "0",
+                        "1" if item.get("disposed") else "0",
+                        str(item.get("messageCount") or 0),
+                        str(item.get("renderCount") or 0),
+                    ]))
+            return sorted(result)
+
         payload = {
             "context": context if isinstance(context, dict) else {},
             "contributionKeys": {
@@ -12155,6 +12274,7 @@ class AIEditorAPI:
                     getattr(vscode_ns, "_webview_view_providers", {})),
                 "webviewViews": keys(getattr(vscode_ns, "_webview_views", {})),
                 "webviewHtml": webview_html_keys(),
+                "webviewPanels": webview_panel_keys(),
                 "lmProviders": keys(getattr(vscode_ns, "_lm_providers", {})),
                 "registeredTools": keys(getattr(vscode_ns, "registered_tools", {})),
                 "chatParticipants": keys(
@@ -12166,6 +12286,30 @@ class AIEditorAPI:
             return json.dumps(payload, sort_keys=True, default=str)
         except Exception:
             return str(payload)
+
+    def _extension_surface_webview_panels(self) -> List[Dict[str, Any]]:
+        panels = getattr(self, "_extension_webview_panels", {})
+        if not isinstance(panels, dict):
+            return []
+        result: List[Dict[str, Any]] = []
+        for view_id in sorted(str(key) for key in panels.keys()):
+            item = panels.get(view_id)
+            if not isinstance(item, dict):
+                continue
+            record = json.loads(json.dumps(
+                dict(item), ensure_ascii=False, default=str))
+            record.setdefault("id", view_id)
+            record.setdefault("view_id", view_id)
+            record.setdefault("kind", "webviewPanel")
+            record.setdefault("source", "webviewPanel")
+            record["runtimeAvailable"] = True
+            record["readiness"] = (
+                "disposed" if record.get("disposed")
+                else "ready" if record.get("htmlAvailable")
+                else "pending")
+            record["providerBacked"] = bool(record.get("htmlAvailable"))
+            result.append(record)
+        return result
 
     def list_extension_runtime_surfaces(
             self, context: Any = None) -> Dict[str, Any]:
@@ -12311,6 +12455,7 @@ class AIEditorAPI:
         chat_participants = self._extension_surface_chat_participants(
             contributions)
         chat_context_providers = self._extension_surface_chat_context_providers()
+        webview_panels = self._extension_surface_webview_panels()
         webview_views = [
             item for item in views
             if str(item.get("kind") or "").lower() == "webviewview"
@@ -12404,6 +12549,21 @@ class AIEditorAPI:
                     "failureReasons") or [])
             if str(reason or "").strip()
         })
+        webview_panel_ready = sum(
+            1 for item in webview_panels
+            if str(item.get("readiness") or "") == "ready")
+        webview_panel_disposed = sum(
+            1 for item in webview_panels if item.get("disposed"))
+        webview_panel_visible = sum(
+            1 for item in webview_panels if item.get("visible"))
+        webview_panel_messages = sum(
+            int(item.get("messageCount") or 0) for item in webview_panels)
+        webview_panel_resource_roots = sum(
+            int(item.get("localResourceRootCount") or 0)
+            for item in webview_panels)
+        webview_panel_retained = sum(
+            1 for item in webview_panels
+            if item.get("retainContextWhenHidden"))
         runtime_only_surfaces = sum(
             1 for item in views if item.get("runtimeOnly"))
         manifest_backed_surfaces = sum(
@@ -12459,6 +12619,7 @@ class AIEditorAPI:
             "views": views,
             "treeViews": tree_views,
             "webviewViews": webview_views,
+            "webviewPanels": webview_panels,
             "viewContainers": view_containers,
             "customEditors": custom_editors,
             "notebooks": notebooks,
@@ -12492,6 +12653,13 @@ class AIEditorAPI:
                 "webviewResourceWarnings": webview_resource_warnings,
                 "webviewFailureCount": webview_failure_count,
                 "webviewFailureReasons": webview_failure_reasons[:12],
+                "webviewPanels": len(webview_panels),
+                "webviewPanelReady": webview_panel_ready,
+                "webviewPanelDisposed": webview_panel_disposed,
+                "webviewPanelVisible": webview_panel_visible,
+                "webviewPanelMessages": webview_panel_messages,
+                "webviewPanelResourceRoots": webview_panel_resource_roots,
+                "webviewPanelRetained": webview_panel_retained,
                 "runtimeOnlySurfaces": runtime_only_surfaces,
                 "manifestBackedSurfaces": manifest_backed_surfaces,
                 "manifestRuntimeSurfaces": manifest_runtime_surfaces,
@@ -12532,7 +12700,7 @@ class AIEditorAPI:
                 "chatContextProviders": len(chat_context_providers),
                 "cacheHit": False,
                 "dynamicSurfaces": (
-                    len(tree_views) + len(webview_views)
+                    len(tree_views) + len(webview_views) + len(webview_panels)
                     + len(custom_editors) + len(notebooks)
                     + len(commands) + len(menus)
                     + len(terminal_profiles) + len(language_model_tools)

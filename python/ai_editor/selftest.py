@@ -1004,6 +1004,7 @@ def test_app_settings_parity() -> None:
     print("── App Settings Parity ──")
     from ai_editor.app import (
         AIEditorAPI,
+        _AIEditorUIBridge,
         _AI_EDITOR_WORKSPACE_ROOT_ENV,
         _LAUNCH_CHILD_WINDOW_GRACE_SECONDS,
         _LAUNCH_FRONTEND_READY_GRACE_SECONDS,
@@ -11802,6 +11803,9 @@ console.log("frontend word separator behavior ok");
            and "self._extension_runtime_surface_cache_ttl = 0.35" in app_source
            and "def _extension_runtime_surface_cache_key(" in app_source
            and "\"webviewHtml\": webview_html_keys()" in app_source
+           and "\"webviewPanels\": webview_panel_keys()" in app_source
+           and "def _extension_surface_webview_panels(" in app_source
+           and "\"webviewPanels\": webview_panels" in app_source
            and "def _webview_runtime_evidence(" in app_source
            and "view_record[\"webviewEvidence\"] = webview_evidence" in app_source
            and "\"webviewHtmlAvailable\": webview_html_available" in app_source
@@ -11827,6 +11831,9 @@ console.log("frontend word separator behavior ok");
            and "\"webviewBridgeWarnings\": webview_bridge_warnings" in app_source
            and "\"webviewResourceWarnings\": webview_resource_warnings" in app_source
            and "\"webviewFailureCount\": webview_failure_count" in app_source
+           and "\"webviewPanelReady\": webview_panel_ready" in app_source
+           and "\"webviewPanelMessages\": webview_panel_messages" in app_source
+           and "\"webviewPanelResourceRoots\": webview_panel_resource_roots" in app_source
            and "\"messageHealth\": message_health" in app_source
            and "\"bridgeHealth\": bridge_health" in app_source
            and "\"resourceHealth\": resource_health" in app_source
@@ -16664,6 +16671,72 @@ console.log("frontend built-in language fallback behavior ok");
            and message_event.get("raw_message") == 0
            and message_event.get("rawMessage") == 0
            and message_event.get("data") == 0)
+
+    from ai_editor.app import _AIEditorUIBridge
+    panel_surface_api = AIEditorAPI(_SettingsGui({"ai_editor": {}}))
+    panel_surface_api._ensure_engine()
+    panel_surface_events = []
+    panel_surface_api._emit = lambda event, data: panel_surface_events.append(
+        (event, data))
+    panel_bridge = _AIEditorUIBridge(panel_surface_api)
+    panel_bridge.render_webview_panel(
+        "panel-surface-1",
+        "<main data-panel='surface'>ok</main>",
+        [{"fsPath": os.getcwd()}],
+        {"ready": True},
+        "Surface Panel",
+        {"enableScripts": True, "retainContextWhenHidden": True},
+        "selftest.surface.panel",
+    )
+    panel_bridge.update_webview_panel_title(
+        "panel-surface-1", "Surface Panel Renamed",
+        "selftest.surface.panel")
+    panel_bridge.update_webview_panel_icon(
+        "panel-surface-1", {"id": "rocket"},
+        "selftest.surface.panel")
+    panel_bridge.post_webview_message(
+        "panel-surface-1", {"kind": "probe"})
+    panel_bridge.reveal_webview_panel(
+        "panel-surface-1", "selftest.surface.panel",
+        "Surface Panel Renamed",
+        {"viewColumn": 2, "active": True, "visible": True})
+    panel_surfaces = panel_surface_api.list_extension_runtime_surfaces({})
+    panel_records = panel_surfaces.get("webviewPanels", [])
+    panel_record = next((
+        item for item in panel_records
+        if item.get("id") == "panel-surface-1"), {})
+    panel_bridge.dispose_webview_panel("panel-surface-1")
+    panel_surfaces_after_dispose = (
+        panel_surface_api.list_extension_runtime_surfaces({}))
+    disposed_panel_record = next((
+        item for item in panel_surfaces_after_dispose.get("webviewPanels", [])
+        if item.get("id") == "panel-surface-1"), {})
+    _check("extension runtime surfaces expose live WebviewPanel state",
+           panel_record.get("viewType") == "selftest.surface.panel"
+           and panel_record.get("title") == "Surface Panel Renamed"
+           and panel_record.get("htmlAvailable") is True
+           and panel_record.get("htmlLength", 0) >= 1
+           and panel_record.get("renderCount") == 1
+           and panel_record.get("messageCount") == 1
+           and panel_record.get("lastMessage", {}).get("kind") == "probe"
+           and panel_record.get("localResourceRootCount") == 1
+           and panel_record.get("retainContextWhenHidden") is True
+           and panel_record.get("readiness") == "ready"
+           and panel_surfaces.get("summary", {}).get("webviewPanels") == 1
+           and panel_surfaces.get("summary", {}).get("webviewPanelReady") == 1
+           and panel_surfaces.get("summary", {}).get(
+               "webviewPanelMessages") == 1
+           and panel_surfaces.get("summary", {}).get(
+               "webviewPanelResourceRoots") == 1
+           and disposed_panel_record.get("disposed") is True
+           and disposed_panel_record.get("visible") is False
+           and disposed_panel_record.get("readiness") == "disposed",
+           json.dumps({
+               "before": panel_record,
+               "after": disposed_panel_record,
+               "summary": panel_surfaces.get("summary", {}),
+               "events": panel_surface_events,
+           }, ensure_ascii=False, default=str))
 
     ext_defaults = AIEditorAPI(_SettingsGui({"ai_editor": {"extensions": {"enabled_contributions": ["commands"]}}}))
     _check("extension views contribution remains enabled for old settings",

@@ -2333,11 +2333,13 @@ class NodeExtensionHost:
             local_roots = msg.get("localResourceRoots", None)
             state = msg.get("state", None)
             title = str(msg.get("title", ""))
+            view_type = str(msg.get("viewType", ""))
             options = msg.get("options", {})
             if self._ui_bridge and view_id:
                 try:
                     self._ui_bridge.render_webview_panel(
-                        view_id, html, local_roots, state, title, options)
+                        view_id, html, local_roots, state, title, options,
+                        view_type)
                 except TypeError:
                     try:
                         self._ui_bridge.render_webview_panel(
