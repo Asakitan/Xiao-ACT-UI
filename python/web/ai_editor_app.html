@@ -1876,6 +1876,15 @@ pre.code-block code .type { color:var(--fg-type); }
 .settings-nav-memory-item:hover,.settings-nav-memory-item:focus { color:var(--fg); background:var(--bg-hover); outline:none; }
 .settings-nav-memory-item .kind { flex:0 0 auto; color:var(--fg-accent); font:10px var(--mono); }
 .settings-nav-memory-item .label { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.settings-nav-quick { margin:0 0 8px; display:grid; grid-template-columns:1fr 1fr; gap:4px;
+  padding:0 0 8px; border-bottom:1px solid color-mix(in srgb,var(--border) 70%,transparent); }
+.settings-nav-quick button { min-height:24px; border:1px solid var(--border); border-radius:4px;
+  background:var(--bg3); color:var(--fg-dim); font:11px var(--sans); cursor:pointer;
+  overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.settings-nav-quick button:hover,.settings-nav-quick button:focus { color:var(--fg); border-color:var(--border-focus); outline:none; background:var(--bg-hover); }
+.settings-nav-quick button.active { color:var(--fg-accent); border-color:color-mix(in srgb,var(--fg-accent) 50%,var(--border));
+  background:color-mix(in srgb,var(--fg-accent) 8%,var(--bg3)); }
+.settings-nav-quick button:disabled { opacity:.45; cursor:default; }
 .settings-nav-heading { padding:4px 8px 6px; color:var(--fg-dim); font:10px var(--mono); text-transform:uppercase; letter-spacing:0; }
 .settings-nav-item { width:100%; min-height:28px; display:flex; align-items:center; gap:7px;
   border:0; border-left:2px solid transparent; border-radius:4px; background:transparent; color:var(--fg-dim); padding:5px 8px 5px 6px;
@@ -1897,6 +1906,12 @@ pre.code-block code .type { color:var(--fg-type); }
 .settings-inspector { min-width:0; overflow-y:auto; border-left:1px solid var(--border); background:var(--bg2);
   padding:9px; }
 .settings-inspector-title { margin:0 0 7px; color:var(--fg-dim); font:10px var(--mono); text-transform:uppercase; letter-spacing:0; }
+.settings-inspector .settings-focus-deck { display:flex; flex-direction:column; grid-template-columns:none;
+  margin:0 0 9px; padding:7px; gap:7px; border-radius:5px;
+  background:color-mix(in srgb,var(--bg3) 56%,transparent); }
+.settings-inspector .settings-focus-deck .focus-card { padding:6px 7px; }
+.settings-inspector .settings-focus-deck .focus-actions { justify-content:flex-start; min-width:0; }
+.settings-inspector .settings-focus-deck .focus-actions button { flex:1 1 auto; min-width:72px; }
 .settings-empty-state { display:none; flex-direction:column; gap:8px; max-width:560px; margin:38px auto;
   padding:20px 22px; border:1px dashed var(--border); border-radius:6px; background:color-mix(in srgb,var(--bg2) 64%,transparent);
   color:var(--fg-dim); font-size:12px; line-height:1.45; }
@@ -1958,6 +1973,11 @@ pre.code-block code .type { color:var(--fg-type); }
 .modal textarea { min-height:80px; resize:vertical; }
 .modal-btns { display:flex; gap:8px; margin:0; justify-content:flex-end; padding:10px 18px;
   border-top:1px solid var(--border); background:var(--bg2); flex-shrink:0; }
+.settings-footer-summary { margin-right:auto; min-width:210px; max-width:42%;
+  display:inline-flex; align-items:center; gap:6px; color:var(--fg-dim);
+  font:11px var(--mono); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.settings-footer-summary.modified { color:var(--fg-accent); }
+.settings-footer-summary.error { color:var(--fg-error); }
 .modal-btns .settings-bottom-action { height:28px; padding:0 12px; border:1px solid var(--border);
   border-radius:4px; background:var(--bg3); color:var(--fg-dim); font:12px var(--sans); cursor:pointer; }
 .modal-btns .settings-bottom-action:hover,.modal-btns .settings-bottom-action:focus {
@@ -1965,6 +1985,7 @@ pre.code-block code .type { color:var(--fg-type); }
 .modal-btns .settings-bottom-action.primary { color:#fff; border-color:var(--btn); background:var(--btn); }
 .modal-btns .settings-bottom-action.primary:hover,.modal-btns .settings-bottom-action.primary:focus {
   background:var(--btn-hover); }
+.modal-btns .settings-bottom-action:disabled { opacity:.45; cursor:default; }
 .modal-status { margin:0; padding:6px 18px 0; font-size:12px; min-height:18px; flex-shrink:0; }
 .modal .settings-section { border-top:1px solid var(--border); margin-top:14px; padding-top:10px; }
 .settings-modal .settings-section { margin-top:0; }
@@ -3559,7 +3580,6 @@ pre.code-block { overflow:visible; }
       <div id="settings-search-memory" class="settings-search-memory" aria-label="Recent settings searches"></div>
       <div id="settings-target-summary" class="settings-target-summary" role="status" aria-live="polite"></div>
       <div id="settings-experience-bar" class="settings-experience-bar" role="status" aria-live="polite"></div>
-      <div id="settings-focus-deck" class="settings-focus-deck" role="status" aria-live="polite"></div>
       <div id="settings-section-context" class="settings-section-context" role="status" aria-live="polite"></div>
       <div id="settings-review-bar" class="settings-review-bar" role="status" aria-live="polite"></div>
       <div id="settings-save-preview" class="settings-save-preview" aria-live="polite"></div>
@@ -3943,12 +3963,14 @@ pre.code-block { overflow:visible; }
       </main>
       <aside class="settings-inspector" id="settings-inspector" aria-label="Selected setting details">
         <div class="settings-inspector-title">Selected Setting</div>
+        <div id="settings-focus-deck" class="settings-focus-deck" role="status" aria-live="polite"></div>
         <div id="settings-current-detail" class="settings-current-detail" role="status" aria-live="polite"></div>
       </aside>
     </div>
     <div class="modal-status" id="s-status"></div>
     <div class="modal-btns">
-      <button type="button" class="settings-bottom-action" onclick="closeSettings();openKeybindings()" style="margin-right:auto">Keyboard Shortcuts</button>
+      <span id="settings-footer-summary" class="settings-footer-summary" role="status" aria-live="polite">Clean</span>
+      <button type="button" class="settings-bottom-action" onclick="closeSettings();openKeybindings()">Keyboard Shortcuts</button>
       <button type="button" class="settings-top-action settings-reset-visible" onclick="resetVisibleModifiedSettings()">Reset Visible</button>
       <button type="button" class="settings-bottom-action" onclick="testConn()">Test</button>
       <button type="button" class="settings-bottom-action" onclick="closeSettings()">Cancel</button>
@@ -5142,15 +5164,32 @@ function markSettingsModified(){
 }
 function refreshSettingsDirtySummary(modifiedCount,errorCount){
   const pill=$('settings-dirty-summary');
-  if(!pill)return;
   modifiedCount=Number(modifiedCount)||0;
   errorCount=Number(errorCount)||0;
-  pill.classList.toggle('modified',modifiedCount>0&&errorCount===0);
-  pill.classList.toggle('error',errorCount>0);
-  pill.textContent=errorCount?errorCount+' error'+(errorCount===1?'':'s')
+  const label=errorCount?errorCount+' error'+(errorCount===1?'':'s')
     : modifiedCount?modifiedCount+' modified':'Clean';
+  if(pill){
+    pill.classList.toggle('modified',modifiedCount>0&&errorCount===0);
+    pill.classList.toggle('error',errorCount>0);
+    pill.textContent=label;
+  }
+  const footer=$('settings-footer-summary');
+  if(footer){
+    footer.classList.toggle('modified',modifiedCount>0&&errorCount===0);
+    footer.classList.toggle('error',errorCount>0);
+    footer.textContent=errorCount
+      ? label+' · fix errors before saving'
+      : modifiedCount
+        ? label+' · Ctrl+S saves to '+settingsTargetDisplayName(currentSettingsTarget)
+        : 'Clean · '+settingsTargetDisplayName(currentSettingsTarget)+' settings';
+    footer.title=footer.textContent;
+  }
   const save=document.querySelector('.settings-save-button');
-  if(save)save.dataset.modifiedCount=String(modifiedCount);
+  if(save){
+    save.dataset.modifiedCount=String(modifiedCount);
+    save.disabled=errorCount>0;
+    save.title=errorCount?'Fix validation errors before saving':'Save Settings';
+  }
 }
 
 let streaming=false, totalTokens=0, streamBuf='', currentMsgBody=null;
@@ -27128,6 +27167,24 @@ function renderSettingsNav(){
   personal.id='settings-nav-personal';
   nav.appendChild(personal);
   renderSettingsPersonalNav();
+  const quick=document.createElement('div');
+  quick.className='settings-nav-quick';
+  quick.id='settings-nav-quick';
+  const addQuick=(label,token,title)=>{
+    const btn=document.createElement('button');
+    btn.type='button';
+    btn.textContent=label;
+    btn.title=title||label;
+    btn.dataset.settingsQuickToken=token||'';
+    btn.onclick=ev=>{ev.preventDefault();token?settingsUseSearchHint(token):settingsClearFilters()};
+    quick.appendChild(btn);
+    return btn;
+  };
+  addQuick('Commonly Used','@common','Show commonly used settings');
+  addQuick('Modified','@modified','Show changed settings');
+  addQuick('Errors','@error','Show invalid settings');
+  addQuick('Overrides','@overrides','Show target override settings');
+  nav.appendChild(quick);
   const heading=document.createElement('div');
   heading.className='settings-nav-heading';
   heading.textContent='Categories';
@@ -27189,6 +27246,13 @@ function updateSettingsNavCounts(){
   if(visibleEl)visibleEl.textContent=String(totalVisible);
   if(modifiedEl)modifiedEl.textContent=String(totalModified);
   if(errorEl)errorEl.textContent=String(totalErrors);
+  const searchText=String(($('settings-search')||{}).value||'').toLowerCase();
+  nav.querySelectorAll('#settings-nav-quick [data-settings-quick-token]').forEach(btn=>{
+    const token=String(btn.dataset.settingsQuickToken||'').toLowerCase();
+    btn.classList.toggle('active',!!token&&searchText.split(/\s+/).includes(token));
+    if(token==='@modified')btn.disabled=totalModified===0;
+    if(token==='@error')btn.disabled=totalErrors===0;
+  });
   settingsFilterNavCategories(_settingsNavFilterValue,{preserveInput:true,preserveFocus:true});
 }
 function focusSettingsSearch(){
@@ -27315,6 +27379,9 @@ function settingsUiSelfCheckSnapshot(){
   const reviewActionLabels=Array.from(document.querySelectorAll('#settings-review-bar .review-actions button')).map(btn=>String(btn.textContent||''));
   const experienceBar=$('settings-experience-bar');
   const focusDeck=$('settings-focus-deck');
+  const quickNav=$('settings-nav-quick');
+  const footerSummary=$('settings-footer-summary');
+  const footerSave=document.querySelector('.modal-btns .settings-save-button');
   const rowImpact=document.querySelector('.settings-row-impact');
   return {
     pass:!!(modal&&nav&&main&&inspector&&$('settings-nav-filter')&&$('settings-density-toggle')&&detail
@@ -27329,6 +27396,7 @@ function settingsUiSelfCheckSnapshot(){
     hasWideCategoryNav:!!nav&&parseFloat(getComputedStyle(nav).width||'0')>=240,
     hasSettingsInspector:!!inspector&&String(getComputedStyle(inspector).overflowY)==='auto',
     hasInspectorDetail:!!(inspector&&detail&&inspector.contains(detail)),
+    hasInspectorFocusDeck:!!(inspector&&focusDeck&&inspector.contains(focusDeck)),
     hasLabelsInsideRows:!!originalLabel&&originalLabel.closest('.settings-field.builtin-setting'),
     hidesOriginalLabels:!!originalLabel&&String(getComputedStyle(originalLabel).display)==='none',
     hasNavFilter:!!$('settings-nav-filter'),
@@ -27370,6 +27438,8 @@ function settingsUiSelfCheckSnapshot(){
     hasFocusDeckCards:!!(focusDeck&&focusDeck.querySelector('[data-settings-focus-card="target"]')&&focusDeck.querySelector('[data-settings-focus-card="section"]')&&focusDeck.querySelector('[data-settings-focus-card="setting"]')),
     hasFocusDeckActions:!!(focusDeck&&focusDeck.querySelector('[data-settings-focus-actions="1"] button')),
     hasFocusDeckStateChips:!!(focusDeck&&focusDeck.querySelector('.focus-chip')),
+    hasSettingsQuickAccess:!!(quickNav&&quickNav.querySelector('[data-settings-quick-token="@common"]')&&quickNav.querySelector('[data-settings-quick-token="@modified"]')&&quickNav.querySelector('[data-settings-quick-token="@error"]')&&quickNav.querySelector('[data-settings-quick-token="@overrides"]')),
+    hasFooterSaveSummary:!!(footerSummary&&footerSave&&footerSave.closest('.modal-btns')),
     hasRowImpactSummary:!!(rowImpact&&rowImpact.querySelector('.impact-chip')),
     hasRowSaveRevertMenu:!!Array.from(document.querySelectorAll('.settings-row-action-menu button')).find(btn=>String(btn.textContent||'')==='Save Setting')&&!!Array.from(document.querySelectorAll('.settings-row-action-menu button')).find(btn=>String(btn.textContent||'')==='Revert Setting'),
     hasSuggestedMatchesHost:!!$('settings-suggested-matches'),

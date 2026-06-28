@@ -9821,6 +9821,9 @@ console.log("frontend word separator behavior ok");
            and "target.dataset.settingFootTarget='1'" in html
            and "cur.dataset.settingCurrentValue='1'" in html
            and "settings-save-button" in html
+           and "id=\"settings-footer-summary\"" in html
+           and "save.disabled=errorCount>0;" in html
+           and "fix errors before saving" in html
             and "Settings saved" in html
             and "closeSettings();" not in html[html.index("async function saveSettings()"):html.index("window.saveSettings=saveSettings;")]
             and "const first=settingsVisibleRows().find(Boolean);" in html
@@ -9836,6 +9839,8 @@ console.log("frontend word separator behavior ok");
             and "const SETTINGS_COMMONLY_USED_KEYS=[" in html
             and "function settingsToggleFavorite(row)" in html
             and "function renderSettingsPersonalNav()" in html
+            and "id='settings-nav-quick'" in html
+            and "data-settings-quick-token" in html
             and "function settingsCommonlyUsedItems()" in html
             and "id='settings-nav-personal'" in html
             and "Commonly Used" in html
@@ -10032,6 +10037,7 @@ console.log("frontend word separator behavior ok");
             and "experience-chip.dirty" in html
             and "function renderSettingsExperienceBar(parsed,visible,total,stats)" in html
             and "id=\"settings-focus-deck\"" in html
+            and ".settings-inspector .settings-focus-deck" in html
             and "function renderSettingsFocusDeck(parsed,visible,total,stats)" in html
             and "function settingsFocusDeckCurrentRowInfo(row)" in html
             and "function settingsFocusDeckCard(kind,label,title,subtitle,chips)" in html
@@ -10050,6 +10056,9 @@ console.log("frontend word separator behavior ok");
             and "hasFocusDeckCards" in html
             and "hasFocusDeckActions" in html
             and "hasFocusDeckStateChips" in html
+            and "hasInspectorFocusDeck" in html
+            and "hasSettingsQuickAccess" in html
+            and "hasFooterSaveSummary" in html
             and "renderSettingsFocusDeck(parsed,visible,total,targetStats);" in html
             and "renderSettingsFocusDeck(settingsQueryFilters((($('settings-search')||{}).value)||''),0,0" in html
             and "hasSuggestedMatchesHost" in html
