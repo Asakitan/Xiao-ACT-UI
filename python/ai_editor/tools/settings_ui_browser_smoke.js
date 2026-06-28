@@ -289,6 +289,9 @@ async function main() {
   if (!result.snapshot.hasQuietDefaultSettingsToolbar || !result.snapshot.hasDetailsOnlyJumpbar || !result.snapshot.hasSidebarQuickSettingsActions || !result.snapshot.hasCompactSearchScopeStack || !result.snapshot.hasNoTopSettingsBands || !result.snapshot.hasSingleSearchTopBand) {
     throw new Error("Settings selfcheck missing quiet VS Code-like top layout refinements: " + JSON.stringify(result.snapshot));
   }
+  if (!result.snapshot.hasSearchOnlyTopWorkbench || !result.snapshot.hasHiddenTopSearchCaption || !result.snapshot.hasWideSingleSettingsSearch) {
+    throw new Error("Settings selfcheck still has noisy top workbench bands: " + JSON.stringify(result.snapshot));
+  }
   if (!result.snapshot.hasVsCodeListSettingFlow || !result.snapshot.hasSettingCategoryPrefix || !result.snapshot.hasRowHeadControlActivation || !result.snapshot.hasQuietCleanDirtyState) {
     throw new Error("Settings selfcheck missing VS Code-like setting row flow refinements: " + JSON.stringify(result.snapshot));
   }

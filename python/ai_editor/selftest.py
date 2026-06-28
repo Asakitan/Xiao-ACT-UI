@@ -2217,8 +2217,14 @@ def test_app_settings_parity() -> None:
            and "self.root.after_idle(_launch_ai_editor_after_menu)" in panels_src
            and "_ai_editor_open_pending_until" in panels_src
            and "pending_until > now" in panels_src
+           and "import threading" in panels_src
+           and "def _launch_ai_editor_worker() -> None:" in panels_src
+           and "name=\"sao-ai-editor-menu-launch\"" in panels_src
+           and "threading.Thread(" in panels_src
            and "launch(gui_ref=self)" in panels_src
+           and "self.root.after(0, _show_ai_editor_fallback_panel)" in panels_src
            and "finally:" in panels_src
+           and "self.root.after(0, _reset_ai_editor_pending)" in panels_src
            and "self._ai_editor_open_pending_until = 0.0" in panels_src)
     app_path = os.path.join(root_dir, "ai_editor", "app.py")
     with open(app_path, "r", encoding="utf-8") as fh:
@@ -4459,6 +4465,12 @@ def test_phase1_ai_editor_regressions() -> None:
            and ".settings-vscode-calm.settings-details-open .settings-jumpbar," in html
            and "hasNoTopSettingsBands" in html
            and "hasSingleSearchTopBand" in html
+           and "hasSearchOnlyTopWorkbench" in html
+           and "hasHiddenTopSearchCaption" in html
+           and "hasWideSingleSettingsSearch" in html
+           and "visibleSearchbarChildren.length===1&&visibleSearchbarChildren[0]===searchRow" in html
+           and ".settings-vscode-calm .settings-search-caption," in html
+           and ".settings-vscode-calm.settings-details-open .settings-search-caption," in html
            and "function settingsJumpbarAction(action)" in html
            and "function renderSettingsJumpbar(stats)" in html
            and "host.dataset.settingsJumpbarRendered='1'" in html
@@ -4490,10 +4502,18 @@ def test_phase1_ai_editor_regressions() -> None:
            and ".settings-vscode-calm.settings-details-open .settings-search-row { grid-template-columns:minmax(520px,760px);" in html
            and ".drag-overlay:not(.active) { pointer-events:none; }" in html
            and "function clearTransientInteractionBlockers(reason)" in html
+           and "function scheduleTransientInteractionBlockerWatchdog(reason)" in html
+           and "document.body.dataset.interactionBlockerWatchdog=String(stamp);" in html
+           and "clearTransientInteractionBlockers(reason||'watchdog')" in html
+           and "scheduleTransientInteractionBlockerWatchdog('watchdog');" in html
+           and "clearTransientInteractionBlockers('close-fallback');" in html
            and "window.addEventListener('pageshow',()=>clearTransientInteractionBlockers('startup'))" in html
            and "window.addEventListener('load',()=>clearTransientInteractionBlockers('startup'))" in html
+           and "window.addEventListener('pageshow',()=>scheduleTransientInteractionBlockerWatchdog('watchdog'))" in html
+           and "window.addEventListener('load',()=>scheduleTransientInteractionBlockerWatchdog('watchdog'))" in html
            and "document.addEventListener('dragend',()=>clearTransientInteractionBlockers('dragend'),true)" in html
-           and "if(e&&e.key==='Escape')clearTransientInteractionBlockers('escape');" in html)
+           and "if(e&&e.key==='Escape')clearTransientInteractionBlockers('escape');" in html
+           and "e.preventDefault();clearTransientInteractionBlockers('drop');" in html)
     _check("frontend Settings row actions are keyboard accessible",
            "btn.setAttribute('aria-label',title||label);" in html
            and "const more=addButton('⋯','More setting actions',null,false);" in html

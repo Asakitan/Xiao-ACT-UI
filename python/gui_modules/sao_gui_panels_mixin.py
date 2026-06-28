@@ -42,6 +42,7 @@ Required SAOPlayerGUI methods (via MRO):
 from __future__ import annotations
 
 import math
+import threading
 import time
 from typing import Any, Optional
 
@@ -98,29 +99,47 @@ class SAOPlayerGUIPanelsMixin:
         except Exception:
             pass
 
-        def _launch_ai_editor_after_menu() -> None:
+        def _reset_ai_editor_pending() -> None:
+            try:
+                self._ai_editor_open_pending_until = 0.0
+            except Exception:
+                pass
+
+        def _show_ai_editor_fallback_panel() -> None:
+            try:
+                if not self._ai_editor_panel:
+                    from gui_modules.sao_gui_ai_editor import AIEditorPanel
+                    self._ai_editor_panel = AIEditorPanel(self.root, self)
+                if self._ai_editor_panel.is_visible():
+                    self._ai_editor_panel.hide()
+                else:
+                    self._ai_editor_panel.show()
+                    self.root.after(120, lambda: self._raise_panel_window(self._ai_editor_panel))
+            except Exception:
+                pass
+
+        def _launch_ai_editor_worker() -> None:
             try:
                 from ai_editor.app import launch
                 launch(gui_ref=self)
             except Exception as exc:
                 print(f"[AIEditor] launch failed: {exc}")
-                # Fallback to Tk panel
                 try:
-                    if not self._ai_editor_panel:
-                        from gui_modules.sao_gui_ai_editor import AIEditorPanel
-                        self._ai_editor_panel = AIEditorPanel(self.root, self)
-                    if self._ai_editor_panel.is_visible():
-                        self._ai_editor_panel.hide()
-                    else:
-                        self._ai_editor_panel.show()
-                        self.root.after(120, lambda: self._raise_panel_window(self._ai_editor_panel))
+                    self.root.after(0, _show_ai_editor_fallback_panel)
                 except Exception:
-                    pass
+                    _show_ai_editor_fallback_panel()
             finally:
                 try:
-                    self._ai_editor_open_pending_until = 0.0
+                    self.root.after(0, _reset_ai_editor_pending)
                 except Exception:
-                    pass
+                    _reset_ai_editor_pending()
+
+        def _launch_ai_editor_after_menu() -> None:
+            threading.Thread(
+                target=_launch_ai_editor_worker,
+                name="sao-ai-editor-menu-launch",
+                daemon=True,
+            ).start()
 
         try:
             self.root.after_idle(_launch_ai_editor_after_menu)
