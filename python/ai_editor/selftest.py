@@ -6266,15 +6266,18 @@ def test_phase1_ai_editor_regressions() -> None:
             and "applyExtensionProviderElementState(tab,panel,p,providerPrimaryViewId(p));" in html
             and "switchRightTab('chat')" in html)
     _check("frontend webview bridge rewrites VS Code-like resource attributes",
-            "var _urlAttrs={src:1,href:1,poster:1,data:1,action:1,formaction:1};" in html
+            "var _urlAttrs={src:1,href:1,poster:1,data:1,action:1,formaction:1,preload:1};" in html
+            and "_patchUrlProperty(window.HTMLImageElement&&HTMLImageElement.prototype,\"srcset\",_rewriteSrcset);" in html
+            and "_patchUrlProperty(window.HTMLLinkElement&&HTMLLinkElement.prototype,\"imageSrcset\",_rewriteSrcset);" in html
             and "_patchUrlProperty(window.HTMLVideoElement&&HTMLVideoElement.prototype,\"poster\",_rewriteResourceUrl);" in html
             and "_patchUrlProperty(window.HTMLMediaElement&&HTMLMediaElement.prototype,\"src\",_rewriteResourceUrl);" in html
             and "_patchUrlProperty(window.HTMLTrackElement&&HTMLTrackElement.prototype,\"src\",_rewriteResourceUrl);" in html
             and "_patchUrlProperty(window.HTMLEmbedElement&&HTMLEmbedElement.prototype,\"src\",_rewriteResourceUrl);" in html
             and "_patchUrlProperty(window.HTMLObjectElement&&HTMLObjectElement.prototype,\"data\",_rewriteResourceUrl);" in html
             and "_patchUrlProperty(window.HTMLFormElement&&HTMLFormElement.prototype,\"action\",_rewriteResourceUrl);" in html
-            and "[src],[href],[poster],[data],[action],[formaction],[srcset]" in html
-            and "attributeFilter:[\"src\",\"href\",\"poster\",\"data\",\"action\",\"formaction\",\"srcset\"]" in html)
+            and "_patchUrlProperty(window.CSSStyleDeclaration&&CSSStyleDeclaration.prototype,\"backgroundImage\",_rewriteCssText);" in html
+            and "[src],[href],[poster],[data],[action],[formaction],[preload],[srcset],[imagesrcset],[style],style" in html
+            and "attributeFilter:[\"src\",\"href\",\"poster\",\"data\",\"action\",\"formaction\",\"preload\",\"srcset\",\"imagesrcset\",\"style\"]" in html)
     _check("frontend custom editor placeholder exposes extension metadata",
             "class=\"provider-empty custom-editor-placeholder\"" in html
             and "host.dataset.viewType=viewType||'';" in html
@@ -14003,11 +14006,22 @@ console.log("command palette quick access helpers ok");
                and "AudioWorklet&&AudioWorklet.prototype" in html
                and "var rewritten=_rewriteModuleResourceUrl(String(url))"
                in html
-               and "window.fetch=function(input,init)" in html
-               and "XMLHttpRequest.prototype.open=function(method,url)" in html
-               and "Element.prototype.setAttribute=function(name,value)" in html
-               and "_patchUrlProperty(window.HTMLScriptElement&&HTMLScriptElement.prototype,\"src\",_rewriteResourceUrl)" in html
-               and "new MutationObserver(function(ms)" in html)
+                and "window.fetch=function(input,init)" in html
+                and "XMLHttpRequest.prototype.open=function(method,url)" in html
+                and "Element.prototype.setAttribute=function(name,value)" in html
+                and "function _rewriteCssText(v)" in html
+                and 'n==="srcset"||n==="imagesrcset"' in html
+                and "_patchUrlProperty(window.HTMLImageElement&&HTMLImageElement.prototype,\"srcset\",_rewriteSrcset)" in html
+                and "_patchUrlProperty(window.HTMLLinkElement&&HTMLLinkElement.prototype,\"imageSrcset\",_rewriteSrcset)" in html
+                and "_patchUrlProperty(window.HTMLScriptElement&&HTMLScriptElement.prototype,\"src\",_rewriteResourceUrl)" in html
+                and "_patchUrlProperty(window.CSSStyleDeclaration&&CSSStyleDeclaration.prototype,\"backgroundImage\",_rewriteCssText)" in html
+                and "CSSStyleSheet.prototype.insertRule=function(rule,index)" in html
+                and "CSSStyleSheet.prototype.replace=function(text)" in html
+                and "CSSStyleSheet.prototype.replaceSync=function(text)" in html
+                and "function _rewriteStyleElement(n)" in html
+                and "characterData:true" in html
+                and 'attributeFilter:["src","href","poster","data","action","formaction","preload","srcset","imagesrcset","style"]' in html
+                and "new MutationObserver(function(ms)" in html)
     _check("inline HTML handlers are exported to window",
            all(token in html for token in (
                "window.refreshExplorer=refreshExplorer",
