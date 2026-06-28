@@ -2969,12 +2969,26 @@ def test_app_settings_parity() -> None:
             time.sleep(0.05)
         _check("runTerminal writes stdin to running terminal jobs",
                bool(interactive_job)
+               and interactive_start.get("running") is True
+               and interactive_start.get("canWriteStdin") is True
+               and interactive_start.get("stdinAvailable") is True
+               and interactive_start.get("jobId") == interactive_job
+               and interactive_start.get("terminal", {}).get("workspaceCwd") is True
                and interactive_write.get("writtenBytes") == len("from-selftest\n")
                and interactive_write.get("stdinBytes") == len("from-selftest\n")
+               and interactive_write.get("sequence", 0) >= 1
+               and any(chunk.get("stream") == "stdin"
+                       for chunk in interactive_write.get("chunks", []))
                and interactive_status.get("exitCode") == 0
                and "got:from-selftest" in interactive_status.get("stdout", "")
                and interactive_status.get("stdinBytes") == len("from-selftest\n")
-               and interactive_status.get("stdinClosed") is False,
+               and interactive_status.get("stdinClosed") is False
+               and interactive_status.get("canWriteStdin") is False
+               and interactive_status.get("running") is False
+               and interactive_status.get("outputBytes", 0) >= len(
+                   interactive_status.get("stdout", ""))
+               and interactive_status.get("outputLines", 0) >= 2
+               and interactive_status.get("workspaceRoot") == os.path.abspath(term_tmp),
                json.dumps({
                    "start": interactive_start,
                    "write": interactive_write,
@@ -3074,9 +3088,11 @@ def test_app_settings_parity() -> None:
                and bool(close_job)
                and close_write.get("writtenBytes") == 3
                and close_write.get("stdinClosed") is True
+               and close_write.get("canWriteStdin") is False
                and close_status.get("exitCode") == 0
                and "closed:3" in close_status.get("stdout", "")
                and close_status.get("stdinClosed") is True
+               and close_status.get("outputLines", 0) >= 1
                and bool(stop_job)
                and stop_result.get("state") == "cancelled"
                and isinstance(stop_result.get("jobCount"), int)
@@ -14969,15 +14985,20 @@ console.log("command palette quick access helpers ok");
            and "terminal-diagnostics-strip" in html
            and "terminal-diagnostic-pill" in html
            and "data-terminal-diagnostic=\"run\"" in html
+           and "data-terminal-diagnostic=\"job\"" in html
            and "data-terminal-diagnostic=\"output\"" in html
+           and "data-terminal-diagnostic=\"stdin\"" in html
+           and "data-terminal-diagnostic=\"shell\"" in html
            and "function _terminalWorkspaceSource()" in html
            and "function _terminalContextMeta(meta)" in html
            and "function _updateTerminalContextBar(meta,state)" in html
            and "function _terminalOutputStats(out)" in html
            and "function _setTerminalDiagnosticPill(host,kind,label,value,state,title)" in html
            and "function _updateTerminalDiagnostics(meta,state)" in html
-           and "strip.dataset.outputLines=String(stats.lines);" in html
-           and "strip.dataset.outputBytes=String(stats.bytes);" in html
+           and "strip.dataset.outputLines=String(outputLines);" in html
+           and "strip.dataset.outputBytes=String(outputBytes);" in html
+           and "strip.dataset.stdinBytes=String(stdinBytes);" in html
+           and "strip.dataset.jobId=jobId;" in html
            and "strip.dataset.commandBlocks=String(stats.blocks);" in html
            and "strip.dataset.historyCount=String(historyCount);" in html
            and "strip.dataset.truncated=truncation?'1':'0';" in html
@@ -14992,6 +15013,8 @@ console.log("command palette quick access helpers ok");
             and "data-terminal-context-action=\"reuse-cwd\"" in html
             and "line.dataset.profile=profile" in html
             and "line.dataset.shellKind=String(meta.shellKind||'')" in html
+            and "line.dataset.jobId=jobId;" in html
+            and "line.dataset.stdinBytes=String(stdinBytes);" in html
             and "line.dataset.exitCode=exitCode;" in html
             and "line.dataset.durationMs=durationMs;" in html
             and "line.dataset.stdoutTruncated=stdoutTruncated?'1':'0';" in html
@@ -15029,6 +15052,8 @@ console.log("command palette quick access helpers ok");
             and "view.block.dataset.cwd=cwd;" in html
             and "view.block.dataset.profile=profile;" in html
             and "view.block.dataset.workspaceSource=_terminalWorkspaceSource();" in html
+            and "block.dataset.jobId=result&&result.jobId?String(result.jobId)" in html
+            and "block.dataset.stdinBytes=result&&result.stdinBytes" in html
             and "addAction('▶','Run command again'" in html
             and "recentLabels.includes('slow-command')" in html
             and "promptText.includes('sao_auto')" in html
@@ -15040,7 +15065,7 @@ console.log("command palette quick access helpers ok");
             and "diagnosticsOutputLines" in html
             and "diagnosticsHistoryCount" in html
             and "diagnosticsTruncated==='1'" in html
-            and "['run','cwd','profile','exit','output','history'].every" in html
+            and "['run','job','cwd','profile','shell','exit','stdin','output','history'].every" in html
             and "commandCwdDataset.includes('E:/VC/SAO-UI/sao_auto')" in html
             and "commandActionCount>=15" in html
             and "selectorValue" in html
@@ -15059,8 +15084,12 @@ console.log("command palette quick access helpers ok");
            and "_TERMINAL_PROFILE_DEFINITIONS" in engine_tools_source
            and "def _resolve_terminal_profile_shell(" in engine_tools_source
            and "def _write_terminal_job(" in engine_tools_source
+           and "def _terminal_append_job_chunk(" in engine_tools_source
            and "stdinBytes" in engine_tools_source
            and "stdinClosed" in engine_tools_source
+           and "canWriteStdin" in engine_tools_source
+           and "outputBytes" in engine_tools_source
+           and "outputLines" in engine_tools_source
            and "profile_override: str = \"\"" in engine_tools_source
            and "profileShellMissing" in engine_tools_source
            and "_TERMINAL_JOBS" in engine_tools_source

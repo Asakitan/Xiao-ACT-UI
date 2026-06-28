@@ -870,6 +870,17 @@ def _terminal_trim_job_output(job: Dict[str, Any]) -> None:
             job[f"{key}Truncated"] = True
 
 
+def _terminal_append_job_chunk(job: Dict[str, Any], stream_name: str,
+                               text: str) -> int:
+    seq = int(job.get("sequence") or 0) + 1
+    job["sequence"] = seq
+    chunks = job.setdefault("chunks", [])
+    chunks.append({"seq": seq, "stream": stream_name, "text": text})
+    if len(chunks) > 200:
+        del chunks[:len(chunks) - 200]
+    return seq
+
+
 def _terminal_append_job_output(job_id: str, stream_name: str, text: str) -> None:
     if not text:
         return
@@ -877,13 +888,8 @@ def _terminal_append_job_output(job_id: str, stream_name: str, text: str) -> Non
         job = _TERMINAL_JOBS.get(job_id)
         if not job:
             return
-        seq = int(job.get("sequence") or 0) + 1
-        job["sequence"] = seq
+        _terminal_append_job_chunk(job, stream_name, text)
         job[stream_name] = str(job.get(stream_name) or "") + text
-        chunks = job.setdefault("chunks", [])
-        chunks.append({"seq": seq, "stream": stream_name, "text": text})
-        if len(chunks) > 200:
-            del chunks[:len(chunks) - 200]
         _terminal_trim_job_output(job)
 
 
@@ -983,28 +989,46 @@ def _terminal_job_snapshot(job_id: str, since_seq: int = 0) -> Dict[str, Any]:
             if int(chunk.get("seq") or 0) > since_seq
         ]
         terminal = dict(job.get("terminal") or {})
+        stdout = str(job.get("stdout") or "")
+        stderr = str(job.get("stderr") or "")
+        state = str(job.get("state") or "running")
+        stdin_closed = bool(job.get("stdinClosed"))
+        process_running = state == "running" and proc is not None and (
+            proc.poll() is None if proc is not None else False)
         snapshot = {
             "jobId": job_id,
             "pid": job.get("pid"),
             "command": job.get("command", ""),
             "cwd": job.get("cwd", ""),
-            "state": job.get("state", "running"),
+            "state": state,
+            "running": process_running,
+            "canWriteStdin": process_running and not stdin_closed,
+            "stdinAvailable": process_running and getattr(proc, "stdin", None) is not None,
             "exitCode": job.get("exitCode"),
             "durationMs": job.get("durationMs"),
             "startedAt": _terminal_time_label(float(job.get("startedWall") or 0)),
             "finishedAt": _terminal_time_label(float(job.get("finishedWall") or 0)),
-            "stdout": job.get("stdout", ""),
-            "stderr": job.get("stderr", ""),
+            "stdout": stdout,
+            "stderr": stderr,
             "error": job.get("error", ""),
             "sequence": int(job.get("sequence") or 0),
             "chunks": chunks,
             "stdoutTruncated": bool(job.get("stdoutTruncated")),
             "stderrTruncated": bool(job.get("stderrTruncated")),
+            "stdoutBytes": len(stdout),
+            "stderrBytes": len(stderr),
+            "outputBytes": len(stdout) + len(stderr),
+            "outputLines": (
+                len((stdout + stderr).splitlines())
+                if (stdout or stderr) else 0),
             "stdinBytes": int(job.get("stdinBytes") or 0),
-            "stdinClosed": bool(job.get("stdinClosed")),
+            "stdinClosed": stdin_closed,
             "profile": terminal.get("profile", ""),
             "shellKind": terminal.get("shellKind", ""),
             "shellPath": terminal.get("shellPath", ""),
+            "shellArgs": terminal.get("shellArgs", []),
+            "workspaceCwd": terminal.get("workspaceCwd"),
+            "workspaceRoot": terminal.get("workspaceRoot", ""),
             "jobCount": len(_TERMINAL_JOBS),
             "terminal": terminal,
         }
@@ -1108,8 +1132,12 @@ def _write_terminal_job(job_id: str, data: str = "", close_stdin: bool = False) 
         job = _TERMINAL_JOBS.get(job_id)
         if job is not None:
             job["stdinBytes"] = int(job.get("stdinBytes") or 0) + written
+            if text:
+                _terminal_append_job_chunk(job, "stdin", text)
             if close_stdin:
                 job["stdinClosed"] = True
+                if not text:
+                    _terminal_append_job_chunk(job, "stdin", "[stdin closed]\n")
     snapshot = _terminal_job_snapshot(job_id)
     snapshot["writtenBytes"] = written
     return snapshot
