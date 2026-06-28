@@ -10023,7 +10023,7 @@ console.log("frontend word separator behavior ok");
             and "function extensionSettingFilterDomCache(container)" in html
             and "function invalidateExtensionSettingFilterDomCache()" in html
             and "extensionSettingFilterDomCache(container).sections" in html
-            and "invalidateExtensionSettingFilterDomCache();\n  container.innerHTML='';" in html
+            and "invalidateExtensionSettingFilterDomCache();\n  extensionSettingResetLazyHydration();\n  container.innerHTML='';" in html
             and "function extensionSettingRowInvalid(row)" in html
             and "function extensionSettingFocusRow(row,options)" in html
             and "function extensionSettingFocusVisibleRow(delta)" in html
@@ -10096,10 +10096,18 @@ console.log("frontend word separator behavior ok");
             and "function extensionSettingDynamicSuggestionCache(container)" in html
             and "function extensionSettingRenderStats()" in html
             and "function scheduleExtensionSettingsFilter(delay)" in html
+            and "function extensionSettingSchemaCache(schema)" in html
+            and "function extensionSettingCachedSchemaValue(schema,key,compute)" in html
+            and "function extensionSettingInstallLazyHydration(host,hydrate)" in html
+            and "function extensionSettingPreheatLazyRows(container,limit)" in html
+            and "function appendExtensionSettingEnumChoiceItems(wrap,schema,type,defaultValue,input)" in html
             and "ext-settings-perf" in html
+            and "ext-setting-lazy-details" in html
             and "await extensionSettingYieldToBrowser();" in html
+            and "extensionSettingPreheatLazyRows(container,18);" in html
             and "window.extensionSettingRenderStats=extensionSettingRenderStats;" in html
             and "window.scheduleExtensionSettingsFilter=scheduleExtensionSettingsFilter;" in html
+            and "window.extensionSettingPreheatLazyRows=extensionSettingPreheatLazyRows;" in html
             and "window.appendExtensionSettingStructuredAssist=appendExtensionSettingStructuredAssist;" in html
             and "window.appendExtensionSettingSchemaDetails=appendExtensionSettingSchemaDetails;" in html
             and "window.appendExtensionSettingEnumChoices=appendExtensionSettingEnumChoices;" in html
@@ -10466,6 +10474,8 @@ console.log("frontend word separator behavior ok");
             "extensionSettingConstraintSummary",
             "extensionSettingSchemaSummary",
             "extensionSettingSchemaFeatureTags",
+            "extensionSettingSchemaCache",
+            "extensionSettingCachedSchemaValue",
             "extensionSettingSchemaDetailItems",
             "appendExtensionSettingSchemaDetails",
             "extensionSettingDefaultOverrideMetadata",
@@ -10501,6 +10511,7 @@ console.log("frontend word separator behavior ok");
             "extensionSettingSelectedOption",
             "appendExtensionSettingEnumOptions",
             "renderExtensionSettingEnumDescription",
+            "appendExtensionSettingEnumChoiceItems",
             "appendExtensionSettingEnumChoices",
             "extensionSettingArrayEnumSuggestions",
             "extensionSettingObjectKeySuggestions",
@@ -10535,6 +10546,13 @@ console.log("frontend word separator behavior ok");
             "extensionSettingRenderStats",
             "renderExtensionSettingPerformanceStatus",
             "extensionSettingSetRenderStats",
+            "extensionSettingLazyHydrationStats",
+            "extensionSettingResetLazyHydration",
+            "extensionSettingInstallLazyHydration",
+            "extensionSettingQueueLazyHydration",
+            "extensionSettingRunLazyHydrationBatch",
+            "extensionSettingScheduleLazyHydration",
+            "extensionSettingPreheatLazyRows",
             "extensionSettingReadFilterState",
             "extensionSettingWriteFilterState",
             "extensionSettingWriteFilterStateDeferred",
@@ -10608,6 +10626,9 @@ globalThis.window = { location: { href: "https://example.invalid/settings" } };
 let _extensionSettingFilterDomCache = null;
 let _extensionSettingDynamicSuggestionCache = null;
 let _extensionSettingRenderStats = { rows: 0, sections: 0, renderMs: 0, yields: 0, filteredAt: 0, filterMs: 0 };
+let _extensionSettingSchemaDerivedCache = new WeakMap();
+let _extensionSettingLazyHydrationQueue = [];
+let _extensionSettingLazyHydrationTimer = 0;
 const fakeStorageData = {};
 globalThis.localStorage = {
   getItem(key){ return Object.prototype.hasOwnProperty.call(fakeStorageData,key) ? fakeStorageData[key] : null; },
@@ -11150,14 +11171,22 @@ assert(agentsDetails.some(item => item.label === "Agents Window"
        && item.text.indexOf("default: agentsDefault") >= 0
        && item.text.indexOf("read-only") >= 0),
        "schema detail items include agents window metadata");
+assert(extensionSettingSchemaDetailItems(conditionalSchema, "object", {}) === schemaDetails
+       && extensionSettingSchemaHintItems(objectSuggestionSchema, "object") === extensionSettingSchemaHintItems(objectSuggestionSchema, "object"),
+       "schema detail and hint helpers reuse cached derived metadata");
 const schemaDetailHost = makeNode("div");
-appendExtensionSettingSchemaDetails(schemaDetailHost, conditionalSchema, "object", {});
-assert(schemaDetailHost.children.some(n => n.className === "ext-setting-schema-details"
+const schemaDetailLazy = appendExtensionSettingSchemaDetails(schemaDetailHost, conditionalSchema, "object", {});
+assert(schemaDetailLazy && schemaDetailLazy.dataset.extLazyHydrate === "1"
+       && schemaDetailLazy.children.some(child => child.tagName === "SUMMARY" && child.textContent.indexOf("Schema details") >= 0)
+       && !schemaDetailLazy.children.some(chip => chip.className === "ext-setting-schema-chip"),
+       "schema detail chips start lazy with summary only");
+schemaDetailLazy._extensionSettingHydrate();
+assert(schemaDetailHost.children.some(n => String(n.className || "").indexOf("ext-setting-schema-details") >= 0
        && n.tagName === "DETAILS"
        && n.children.some(child => child.tagName === "SUMMARY" && child.textContent.indexOf("Schema details") >= 0)
        && n.children.some(chip => chip.className === "ext-setting-schema-chip"
          && chip.dataset.schemaTag === "conditional")),
-       "schema detail chips render in collapsible details with tags");
+       "schema detail chips hydrate in collapsible details with tags");
 const schemaHints = extensionSettingSchemaHintItems(objectSuggestionSchema, "object");
 assert(schemaHints.some(item => item.label === "Known keys")
        && schemaHints.some(item => item.label === "Pattern keys")
@@ -11173,7 +11202,12 @@ const enumChoiceSelect = makeNode("select");
 appendExtensionSettingEnumOptions(enumChoiceSelect, searchSchema, "always");
 let enumChoiceChanged = 0;
 enumChoiceSelect.addEventListener("change", () => { enumChoiceChanged++; });
-appendExtensionSettingEnumChoices(enumChoiceHost, searchSchema, "string", "always", enumChoiceSelect);
+const enumChoiceLazy = appendExtensionSettingEnumChoices(enumChoiceHost, searchSchema, "string", "always", enumChoiceSelect);
+assert(enumChoiceLazy && enumChoiceLazy.dataset.extLazyHydrate === "1"
+       && enumChoiceLazy.children.some(child => child.tagName === "SUMMARY" && child.textContent.indexOf("Enum choices") >= 0)
+       && !nodeFindAll(enumChoiceHost, node => node.tagName === "BUTTON").length,
+       "enum choices start lazy with summary only");
+enumChoiceLazy._extensionSettingHydrate();
 const enumChoiceActions = nodeFindAll(enumChoiceHost, node => node.tagName === "BUTTON");
 assert(enumChoiceActions.some(btn => btn.textContent === "Use" && btn.dataset.enumChoiceAction === "use")
        && enumChoiceActions.some(btn => btn.textContent === "Filter" && btn.dataset.enumChoiceAction === "filter"),
@@ -11942,8 +11976,12 @@ renderExtensionSettingEnumDescription(enumDescHost, searchSchema, {
 assert(enumDescHost.children.length === 0 && enumDescHost.style.display === "none",
        "missing enum description hidden");
 const enumChoicesHost = makeNode("div");
-appendExtensionSettingEnumChoices(enumChoicesHost, searchSchema, "string", "always");
-assert(enumChoicesHost.children.some(n => n.className === "ext-setting-enum-choices")
+const enumChoicesLazy = appendExtensionSettingEnumChoices(enumChoicesHost, searchSchema, "string", "always");
+assert(enumChoicesLazy && String(enumChoicesLazy.className || "").indexOf("ext-setting-enum-choices") >= 0
+       && !nodeTreeHas(enumChoicesHost, n => n.className === "ext-setting-default-badge"),
+       "enum choices host is lazy before hydration");
+enumChoicesLazy._extensionSettingHydrate();
+assert(enumChoicesHost.children.some(n => String(n.className || "").indexOf("ext-setting-enum-choices") >= 0)
        && nodeTreeHas(enumChoicesHost, n => n.className === "ext-setting-default-badge"
          && n.textContent === "Default")
        && nodeTreeHas(enumChoicesHost, n => n.tagName === "CODE"
@@ -11952,22 +11990,25 @@ assert(enumChoicesHost.children.some(n => n.className === "ext-setting-enum-choi
          && n.textContent === "network"),
        "enum choices render label raw value default marker and markdown description");
 const enumDefaultChoicesHost = makeNode("div");
-appendExtensionSettingEnumChoices(enumDefaultChoicesHost, enumDefaultOutsideSchema, "string", "inherit");
+const enumDefaultChoicesLazy = appendExtensionSettingEnumChoices(enumDefaultChoicesHost, enumDefaultOutsideSchema, "string", "inherit");
+enumDefaultChoicesLazy._extensionSettingHydrate();
 assert(nodeTreeHas(enumDefaultChoicesHost, n => n.className === "ext-setting-default-badge"
          && n.textContent === "Default")
        && nodeTreeHas(enumDefaultChoicesHost, n => n.className === "ext-setting-enum-choice-name"
          && n.textContent === "inherit"),
        "enum choices render synthetic default outside enum");
 const invisibleEnumChoicesHost = makeNode("div");
-appendExtensionSettingEnumChoices(invisibleEnumChoicesHost,
+const invisibleEnumChoicesLazy = appendExtensionSettingEnumChoices(invisibleEnumChoicesHost,
   { enum: [invisibleEnumValue], enumItemLabels: ["Visible line"] }, "string", invisibleEnumValue);
+invisibleEnumChoicesLazy._extensionSettingHydrate();
 assert(nodeTreeHas(invisibleEnumChoicesHost, n => n.tagName === "CODE"
          && n.textContent === "line\\nbreak\\rreturn")
        && nodeTreeHas(invisibleEnumChoicesHost, n => n.className === "ext-setting-enum-choice-name"
          && n.textContent === "Visible line"),
        "enum choices show escaped raw value when label differs");
 const composedChoicesHost = makeNode("div");
-appendExtensionSettingEnumChoices(composedChoicesHost, constEnumSchema, "string", "manual");
+const composedChoicesLazy = appendExtensionSettingEnumChoices(composedChoicesHost, constEnumSchema, "string", "manual");
+composedChoicesLazy._extensionSettingHydrate();
 assert(nodeTreeHas(composedChoicesHost, n => n.className === "ext-setting-enum-choice-name"
          && n.textContent === "Manual Mode")
        && nodeTreeHas(composedChoicesHost, n => n.className === "ext-setting-enum-choice-name"

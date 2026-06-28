@@ -2349,6 +2349,10 @@ pre.code-block { overflow:visible; }
 .ext-setting-enum-choice-actions button { height:20px; padding:0 6px; border:1px solid var(--border); background:var(--bg3);
   color:var(--fg-dim); border-radius:3px; font:10px var(--sans); }
 .ext-setting-enum-choice-actions button:hover { color:var(--fg); border-color:var(--fg-accent); background:var(--bg-hover); }
+.ext-setting-lazy-details summary { cursor:pointer; color:var(--fg-dim); font:10px var(--mono); list-style:none; user-select:none; }
+.ext-setting-lazy-details summary::-webkit-details-marker { display:none; }
+.ext-setting-lazy-details summary::before { content:'›'; display:inline-block; width:11px; color:var(--fg-accent); }
+.ext-setting-lazy-details[open] summary::before { transform:rotate(90deg); }
 .ext-setting-structured-assist { display:flex; flex-wrap:wrap; gap:4px; margin:4px 0 5px; align-items:center; }
 .ext-setting-structured-assist-label { color:var(--fg-dim); font-size:10px; margin-right:2px; }
 .ext-setting-structured-status { display:inline-flex; align-items:center; height:20px; padding:0 6px; border-radius:999px;
@@ -2398,11 +2402,8 @@ pre.code-block { overflow:visible; }
 .ext-setting-desc em,.ext-setting-enum-desc em,.ext-setting-deprecated em,.ext-setting-enum-choices em { color:var(--fg); font-style:italic; }
 .ext-setting-schema { font-size:10px; color:var(--fg-dim); font-family:var(--mono); margin-bottom:4px; }
 .ext-setting-schema-details { display:flex; flex-wrap:wrap; gap:4px; margin:0 0 5px; }
-.ext-setting-schema-details summary { flex:1 0 100%; cursor:pointer; color:var(--fg-dim); font:10px var(--mono);
-  list-style:none; user-select:none; }
+.ext-setting-schema-details summary { flex:1 0 100%; }
 .ext-setting-schema-details summary::-webkit-details-marker { display:none; }
-.ext-setting-schema-details summary::before { content:'›'; display:inline-block; width:11px; color:var(--fg-accent); }
-.ext-setting-schema-details[open] summary::before { transform:rotate(90deg); }
 .ext-setting-schema-chip { display:inline-flex; align-items:center; max-width:100%; gap:3px; padding:1px 5px;
   border:1px solid var(--border); border-radius:3px; background:var(--bg3); color:var(--fg-dim);
   font:10px/15px var(--mono); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
@@ -25738,6 +25739,7 @@ window.settingsClearReviewFilters=settingsClearReviewFilters;
 window.settingsHasReviewFilter=settingsHasReviewFilter;
 window.extensionSettingRenderStats=extensionSettingRenderStats;
 window.scheduleExtensionSettingsFilter=scheduleExtensionSettingsFilter;
+window.extensionSettingPreheatLazyRows=extensionSettingPreheatLazyRows;
 const SETTINGS_SCOPE_FILTERS={
   editor:['editor','format','formatter','suggest','hover','minimap','folding','sticky scroll','diff','diagnostic','language override'],
   files:['files','save','auto save','trim trailing','final newline'],
@@ -28327,8 +28329,24 @@ function extensionSettingSchemaFeatureTags(schema,type){
   if(schema.agentsWindow&&typeof schema.agentsWindow==='object')push('agents-window');
   return tags;
 }
+let _extensionSettingSchemaDerivedCache=typeof WeakMap!=='undefined'?new WeakMap():null;
+function extensionSettingSchemaCache(schema){
+  if(!_extensionSettingSchemaDerivedCache||!schema||typeof schema!=='object')return null;
+  let cache=_extensionSettingSchemaDerivedCache.get(schema);
+  if(!cache){cache=new Map();_extensionSettingSchemaDerivedCache.set(schema,cache)}
+  return cache;
+}
+function extensionSettingCachedSchemaValue(schema,key,compute){
+  const cache=extensionSettingSchemaCache(schema);
+  if(cache&&cache.has(key))return cache.get(key);
+  const value=compute();
+  if(cache)cache.set(key,value);
+  return value;
+}
 function extensionSettingSchemaDetailItems(schema,type,defaultValue){
   schema=(schema&&typeof schema==='object')?schema:{};
+  const cacheKey='details|'+String(type||'')+'|'+extensionSettingStableJson(defaultValue);
+  return extensionSettingCachedSchemaValue(schema,cacheKey,()=>{
   const details=[];
   const push=(label,text,tag)=>{
     text=String(text||'').trim();
@@ -28380,9 +28398,12 @@ function extensionSettingSchemaDetailItems(schema,type,defaultValue){
   if(schema.section&&schema.section.id)push('Section',schema.section.id,'section');
   if(Object.prototype.hasOwnProperty.call(schema,'default'))push('Schema default',extensionSettingJson(defaultValue,type).replace(/\s+/g,' ').trim(),'default');
   return details;
+  });
 }
 function extensionSettingSchemaHintItems(schema,type){
   schema=(schema&&typeof schema==='object')?schema:{};
+  const cacheKey='hints|'+String(type||'');
+  return extensionSettingCachedSchemaValue(schema,cacheKey,()=>{
   const hints=[];
   const push=(label,text)=>{
     text=String(text||'').trim();
@@ -28410,6 +28431,7 @@ function extensionSettingSchemaHintItems(schema,type){
   const constraints=extensionSettingConstraintSummary(schema,type);
   if(constraints&&!hints.some(item=>item.text===constraints))push('Rules',constraints);
   return hints.slice(0,6);
+  });
 }
 function appendExtensionSettingSchemaHints(wrap,schema,type){
   const hints=extensionSettingSchemaHintItems(schema,type);
@@ -28426,14 +28448,85 @@ function appendExtensionSettingSchemaHints(wrap,schema,type){
   wrap.appendChild(host);
   return host;
 }
+let _extensionSettingLazyHydrationQueue=[];
+let _extensionSettingLazyHydrationTimer=0;
+function extensionSettingResetLazyHydration(){
+  _extensionSettingLazyHydrationQueue=[];
+  clearTimeout(_extensionSettingLazyHydrationTimer);
+  _extensionSettingLazyHydrationTimer=0;
+  extensionSettingSetRenderStats({lazyControls:0,hydratedControls:0,pendingLazyControls:0});
+}
+function extensionSettingLazyHydrationStats(){
+  const stats=extensionSettingRenderStats();
+  return {
+    lazyControls:Number(stats.lazyControls||0),
+    hydratedControls:Number(stats.hydratedControls||0),
+    pendingLazyControls:Number(stats.pendingLazyControls||0),
+  };
+}
+function extensionSettingInstallLazyHydration(host,hydrate){
+  if(!host||typeof hydrate!=='function')return host;
+  host.dataset.extLazyHydrate='1';
+  const run=()=>{
+    if(host.dataset.extLazyHydrated==='1')return false;
+    host.dataset.extLazyHydrated='1';
+    hydrate(host);
+    const stats=extensionSettingLazyHydrationStats();
+    extensionSettingSetRenderStats({
+      hydratedControls:stats.hydratedControls+1,
+      pendingLazyControls:Math.max(0,stats.pendingLazyControls-1),
+    });
+    return true;
+  };
+  host._extensionSettingHydrate=run;
+  host.addEventListener('toggle',()=>{if(host.open)run()});
+  host.addEventListener('focusin',run);
+  host.addEventListener('mouseenter',()=>{if(host.open)run()});
+  host.addEventListener('keydown',ev=>{
+    if(ev&&(ev.key==='Enter'||ev.key===' '))setTimeout(run,0);
+  });
+  const stats=extensionSettingLazyHydrationStats();
+  extensionSettingSetRenderStats({lazyControls:stats.lazyControls+1,pendingLazyControls:stats.pendingLazyControls+1});
+  return host;
+}
+function extensionSettingQueueLazyHydration(host){
+  if(!host||typeof host._extensionSettingHydrate!=='function'||host.dataset.extLazyQueued==='1')return;
+  host.dataset.extLazyQueued='1';
+  _extensionSettingLazyHydrationQueue.push(host);
+}
+function extensionSettingRunLazyHydrationBatch(){
+  _extensionSettingLazyHydrationTimer=0;
+  let count=0;
+  while(_extensionSettingLazyHydrationQueue.length&&count<8){
+    const host=_extensionSettingLazyHydrationQueue.shift();
+    if(host&&host.isConnected!==false&&typeof host._extensionSettingHydrate==='function')host._extensionSettingHydrate();
+    count++;
+  }
+  if(_extensionSettingLazyHydrationQueue.length)extensionSettingScheduleLazyHydration();
+}
+function extensionSettingScheduleLazyHydration(){
+  if(_extensionSettingLazyHydrationTimer)return;
+  const schedule=resolve=>{
+    if(window.requestIdleCallback)window.requestIdleCallback(resolve,{timeout:80});
+    else setTimeout(resolve,24);
+  };
+  schedule(()=>{_extensionSettingLazyHydrationTimer=setTimeout(extensionSettingRunLazyHydrationBatch,0)});
+}
+function extensionSettingPreheatLazyRows(container,limit){
+  const root=container||$('ext-settings-container');
+  if(!root||!root.querySelectorAll)return;
+  Array.from(root.querySelectorAll('[data-ext-lazy-hydrate="1"]')).slice(0,limit||16).forEach(extensionSettingQueueLazyHydration);
+  extensionSettingScheduleLazyHydration();
+}
 function appendExtensionSettingSchemaDetails(row,schema,type,defaultValue){
   const details=extensionSettingSchemaDetailItems(schema,type,defaultValue);
   if(!row||!details.length)return;
-  const wrap=document.createElement('details');wrap.className='ext-setting-schema-details';
+  const wrap=document.createElement('details');wrap.className='ext-setting-schema-details ext-setting-lazy-details';
   const summary=document.createElement('summary');summary.textContent='Schema details · '+details.length;
   summary.title='Show detailed schema metadata';
   wrap.appendChild(summary);
-  details.slice(0,8).forEach(detail=>{
+  extensionSettingInstallLazyHydration(wrap,()=>{
+    details.slice(0,8).forEach(detail=>{
     const chip=document.createElement('span');chip.className='ext-setting-schema-chip';
     chip.dataset.schemaTag=detail.tag||'schema';
     const label=document.createElement('strong');label.textContent=detail.label+':';
@@ -28441,13 +28534,15 @@ function appendExtensionSettingSchemaDetails(row,schema,type,defaultValue){
     chip.appendChild(document.createTextNode(' '+detail.text));
     chip.title=detail.label+': '+detail.text;
     wrap.appendChild(chip);
-  });
-  if(details.length>8){
+    });
+    if(details.length>8){
     const chip=document.createElement('span');chip.className='ext-setting-schema-chip';
     chip.textContent='+'+(details.length-8)+' more';
     wrap.appendChild(chip);
-  }
+    }
+  });
   row.appendChild(wrap);
+  return wrap;
 }
 function extensionSettingDeprecationText(schema){
   if(!schema||typeof schema!=='object')return '';
@@ -28474,6 +28569,8 @@ function extensionSettingEnumDisplayValue(value){
 }
 function extensionSettingEnumOptionSources(schema){
   schema=(schema&&typeof schema==='object')?schema:{};
+  const cache=extensionSettingSchemaCache(schema);
+  if(cache&&cache.has('enumOptionSources'))return cache.get('enumOptionSources');
   const result=[],seen=new Set();
   const pushValue=(value,branch,sourceIndex)=>{
     const token=extensionSettingEnumValueToken(value);
@@ -28483,6 +28580,7 @@ function extensionSettingEnumOptionSources(schema){
   };
   if(Array.isArray(schema.enum)){
     schema.enum.forEach(value=>pushValue(value,schema,-1));
+    if(cache)cache.set('enumOptionSources',result);
     return result;
   }
   ['anyOf','oneOf'].forEach(name=>{
@@ -28493,6 +28591,7 @@ function extensionSettingEnumOptionSources(schema){
       else if(Object.prototype.hasOwnProperty.call(branch,'const'))pushValue(branch.const,branch,sourceIndex);
     });
   });
+  if(cache)cache.set('enumOptionSources',result);
   return result;
 }
 function extensionSettingHasEnumOptions(schema){
@@ -28589,9 +28688,8 @@ function extensionSettingQuotedFilterValue(value){
   const needsQuote=Array.from(text).some(ch=>ch===' '||ch==='\t'||ch==='\n'||ch==='\r'||ch===','||ch==='"');
   return needsQuote?JSON.stringify(text):text;
 }
-function appendExtensionSettingEnumChoices(row,schema,type,defaultValue,input){
-  if(!row||!schema||!extensionSettingHasEnumOptions(schema))return;
-  const wrap=document.createElement('div');wrap.className='ext-setting-enum-choices';
+function appendExtensionSettingEnumChoiceItems(wrap,schema,type,defaultValue,input){
+  if(!wrap||!schema||!extensionSettingHasEnumOptions(schema))return 0;
   const entries=extensionSettingEnumEntries(schema,defaultValue);
   entries.slice(0,8).forEach(entry=>{
     const value=entry.value,index=entry.index;
@@ -28638,7 +28736,18 @@ function appendExtensionSettingEnumChoices(row,schema,type,defaultValue,input){
     more.textContent='+'+(entries.length-8)+' more enum choices';
     wrap.appendChild(more);
   }
+  return entries.length;
+}
+function appendExtensionSettingEnumChoices(row,schema,type,defaultValue,input){
+  if(!row||!schema||!extensionSettingHasEnumOptions(schema))return;
+  const count=extensionSettingEnumEntries(schema,defaultValue).length;
+  const wrap=document.createElement('details');wrap.className='ext-setting-enum-choices ext-setting-lazy-details';
+  const summary=document.createElement('summary');summary.textContent='Enum choices · '+count;
+  summary.title='Show enum labels, descriptions, and quick actions';
+  wrap.appendChild(summary);
+  extensionSettingInstallLazyHydration(wrap,()=>appendExtensionSettingEnumChoiceItems(wrap,schema,type,defaultValue,input));
   row.appendChild(wrap);
+  return wrap;
 }
 function extensionSettingArrayEnumSuggestions(schema,items,currentIndex){
   schema=(schema&&typeof schema==='object')?schema:{};
@@ -29567,7 +29676,8 @@ function renderExtensionSettingPerformanceStatus(){
   if(!rows&&!sections){el.textContent='';el.title='';return}
   const renderMs=Math.round(Number(stats.renderMs||0));
   const filterMs=Math.round(Number(stats.filterMs||0));
-  el.textContent=rows+' rows · '+sections+' sections · render '+renderMs+'ms'+(filterMs?' · filter '+filterMs+'ms':'');
+  const lazy=Number(stats.lazyControls||0),hydrated=Number(stats.hydratedControls||0);
+  el.textContent=rows+' rows · '+sections+' sections · render '+renderMs+'ms'+(filterMs?' · filter '+filterMs+'ms':'')+(lazy?' · lazy '+hydrated+'/'+lazy:'');
   el.title='Extension Settings render and filter timing';
 }
 function extensionSettingSetRenderStats(stats){
@@ -30420,6 +30530,7 @@ async function renderExtensionSettings(){
   const renderStarted=extensionSettingNow();
   let yieldCount=0;
   invalidateExtensionSettingFilterDomCache();
+  extensionSettingResetLazyHydration();
   container.innerHTML='';
   let configs,languageDefaults;
   try{
@@ -30882,6 +30993,7 @@ async function renderExtensionSettings(){
   const renderCache=extensionSettingFilterDomCache(container);
   const renderedRows=renderCache.sections.reduce((total,record)=>total+record.rows.length,0);
   extensionSettingSetRenderStats({rows:renderedRows,sections:renderCache.sections.length,renderMs:extensionSettingNow()-renderStarted,yields:yieldCount,filterMs:0});
+  extensionSettingPreheatLazyRows(container,18);
   extensionSettingRestoreFilterState();
   categorySelect.onchange=()=>scheduleExtensionSettingsFilter(0);
   scopeSelect.onchange=()=>scheduleExtensionSettingsFilter(0);

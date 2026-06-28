@@ -203,6 +203,10 @@ async function main() {
     if (window.settingsClearFilters) window.settingsClearFilters();
     const insightButton = document.querySelector("#ext-settings-insight [data-ext-settings-insight-token]");
     if (insightButton) insightButton.click();
+    if (window.extensionSettingPreheatLazyRows) window.extensionSettingPreheatLazyRows(document.querySelector("#ext-settings-container"), 24);
+    document.querySelectorAll("[data-ext-lazy-hydrate='1']").forEach(node => {
+      if (typeof node._extensionSettingHydrate === "function") node._extensionSettingHydrate();
+    });
     const enumFilterButton = Array.from(document.querySelectorAll(".ext-setting-enum-choice-actions button")).find(btn => btn.textContent === "Filter");
     const enumUseButton = Array.from(document.querySelectorAll(".ext-setting-enum-choice-actions button")).find(btn => btn.textContent === "Use");
     const structuredHint = document.querySelector(".ext-setting-structured-hint");
