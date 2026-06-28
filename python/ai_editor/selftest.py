@@ -10039,10 +10039,13 @@ console.log("frontend word separator behavior ok");
             and "Next Section" in html
             and "#settings-modal.open" in html
             and "width:min(1400px, calc(100vw - 48px))" in html
-            and "grid-template-columns:280px minmax(0,1fr) minmax(270px,320px)" in html
+            and "grid-template-columns:260px minmax(0,1fr)" in html
+            and ".settings-shell.inspecting { grid-template-columns:250px minmax(0,1fr) minmax(270px,310px);" in html
             and "class=\"settings-inspector\" id=\"settings-inspector\"" in html
             and "Selected Setting" in html
-            and "settings-current-detail:not(.open)::before" in html
+            and "function settingsClearCurrentRow()" in html
+            and "if(shell)shell.classList.add('inspecting');" in html
+            and "if(shell)shell.classList.remove('inspecting');" in html
             and "function settingsOriginalLabelText(wrap)" in html
             and "originalLabel.classList.add('settings-original-label')" in html
             and "title.textContent=settingsOriginalLabelText(wrap)||settingFriendlyName(meta,inputId)" in html
@@ -10066,8 +10069,10 @@ console.log("frontend word separator behavior ok");
              and "hasWideSettingsEditor" in html
              and "hasSettingsEditorShell" in html
              and "hasWideCategoryNav" in html
-             and "hasSettingsInspector" in html
-             and "hasInspectorDetail" in html
+            and "hasSettingsInspector" in html
+            and "hasInspectorDetail" in html
+            and "hasOnDemandInspector" in html
+            and "hasQuietRecommendations" in html
              and "hasLabelsInsideRows" in html
              and "hidesOriginalLabels" in html
              and "hasBuiltSettingGridHead" in html
@@ -10092,13 +10097,18 @@ console.log("frontend word separator behavior ok");
              and "row.setAttribute('aria-posinset',String(Number(index)+1));" in html
              and "row.dataset.settingsAccessibleStatus=settingsRowAccessibleStatus(row);" in html
             and "settings-experience-bar" in html
+            and "settings-experience-bar.open" in html
             and "experience-chip.dirty" in html
             and "function renderSettingsExperienceBar(parsed,visible,total,stats)" in html
+            and "host.classList.toggle('open',hasSignal);" in html
+            and "addButton('Clear Focus','Hide selected setting details',settingsClearCurrentRow,!currentRow);" in html
             and "id=\"settings-recommendations\"" in html
             and ".settings-recommendations.open" in html
+            and ".settings-recommendations.quiet" in html
             and ".settings-recommendation-card" in html
             and "function settingsRecommendationItems()" in html
             and "function renderSettingsRecommendations()" in html
+            and "host.classList.toggle('quiet',!show);" in html
             and "function settingsRecommendationApply(kind)" in html
             and "function settingsRecommendationShowKey(key,target)" in html
             and "renderSettingsRecommendations();" in html
@@ -10128,6 +10138,8 @@ console.log("frontend word separator behavior ok");
             and "hasRecommendationActions" in html
             and "recommendationCount" in html
             and "hasExperienceScopeChip" in html
+            and "hasOnDemandInspector" in html
+            and "hasQuietRecommendations" in html
             and "hasRowImpactSummary" in html
             and "hasFocusDeck" in html
             and "hasFocusDeckCards" in html
@@ -10170,8 +10182,9 @@ console.log("frontend word separator behavior ok");
              and "window.settingsNavKeydown=settingsNavKeydown;" in html
              and "window.settingsMoveNavFocus=settingsMoveNavFocus;" in html
              and "window.settingsRefreshRowsAccessibility=settingsRefreshRowsAccessibility;" in html
-             and "window.settingsUiSelfCheckSnapshot=settingsUiSelfCheckSnapshot;" in html
-             and "window.settingsCopyRowUrl=settingsCopyRowUrl;" in html
+            and "window.settingsUiSelfCheckSnapshot=settingsUiSelfCheckSnapshot;" in html
+            and "window.settingsClearCurrentRow=settingsClearCurrentRow;" in html
+            and "window.settingsCopyRowUrl=settingsCopyRowUrl;" in html
              and "window.settingsRevertRowValue=settingsRevertRowValue;" in html
              and "window.settingsSaveFocusedRow=settingsSaveFocusedRow;" in html
              and "window.settingsPersistedValueForTarget=settingsPersistedValueForTarget;" in html
