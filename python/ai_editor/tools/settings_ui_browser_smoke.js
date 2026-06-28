@@ -261,6 +261,9 @@ async function main() {
   if (!result.snapshot.hasQueryBox || !result.snapshot.hasScopeControl || !result.snapshot.hasNavHeading || !result.snapshot.hasNavCountPills || !result.snapshot.hasActiveNavRail) {
     throw new Error("Settings selfcheck missing UI affordances: " + JSON.stringify(result.snapshot));
   }
+  if (!result.snapshot.hasBuiltSettingHead || !result.snapshot.hasOnDemandSettingValueDetails) {
+    throw new Error("Settings selfcheck missing row hierarchy affordances: " + JSON.stringify(result.snapshot));
+  }
   if (!result.snapshot.hasDetailValueActions) {
     throw new Error("Settings selfcheck missing row value actions: " + JSON.stringify(result.snapshot));
   }

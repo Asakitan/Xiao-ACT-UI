@@ -9857,6 +9857,10 @@ console.log("frontend word separator behavior ok");
              and "hasNavHeading" in html
              and "hasNavCountPills" in html
              and "hasActiveNavRail" in html
+             and "settings-built-head" in html
+             and "settings-built-head-state" in html
+             and "hasBuiltSettingHead" in html
+             and "hasOnDemandSettingValueDetails" in html
              and "hasDetailValueActions" in html
              and "hasReviewFilterActions" in html
              and "hasOverridesFilterToken" in html
@@ -9891,6 +9895,8 @@ console.log("frontend word separator behavior ok");
            and "result.snapshot.hasQueryBox" in settings_smoke_source
            and "result.snapshot.hasScopeControl" in settings_smoke_source
             and "result.snapshot.hasActiveNavRail" in settings_smoke_source
+            and "result.snapshot.hasBuiltSettingHead" in settings_smoke_source
+            and "result.snapshot.hasOnDemandSettingValueDetails" in settings_smoke_source
             and "result.snapshot.hasDetailValueActions" in settings_smoke_source
             and "result.snapshot.hasReviewFilterActions" in settings_smoke_source
             and "result.snapshot.hasOverridesFilterToken" in settings_smoke_source

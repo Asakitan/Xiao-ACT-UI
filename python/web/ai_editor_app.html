@@ -2263,6 +2263,17 @@ pre.code-block { overflow:visible; }
 .settings-modal.compact .ext-setting-row { margin-bottom:5px; padding-top:5px; padding-bottom:5px; }
 .settings-field.builtin-setting > label:first-child,
 .settings-field.builtin-setting > .settings-check:first-child { margin-top:0; }
+.settings-built-head { display:flex; align-items:center; gap:7px; min-height:22px; margin:0 0 4px; }
+.settings-built-head-title { min-width:0; color:var(--fg); font-weight:600; font-size:12px;
+  overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.settings-built-head code { user-select:all; color:var(--fg-dim); background:transparent;
+  border:0; padding:0; font:10px var(--mono); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.settings-built-head-state { margin-left:auto; display:inline-flex; align-items:center; max-width:180px; min-height:18px;
+  padding:0 6px; border:1px solid var(--border); border-radius:999px; color:var(--fg-dim); background:var(--bg3);
+  font:10px var(--mono); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.settings-built-head-state.edited { color:var(--fg-accent); border-color:color-mix(in srgb,var(--fg-accent) 48%,var(--border)); }
+.settings-built-head-state.default { color:var(--fg-success); border-color:color-mix(in srgb,var(--fg-success) 42%,var(--border)); }
+.settings-built-head-state.override { color:var(--fg-warning); border-color:color-mix(in srgb,var(--fg-warning) 48%,var(--border)); }
 .settings-built-meta { display:flex; flex-wrap:wrap; align-items:center; gap:5px; margin:5px 0 1px;
   color:var(--fg-dim); font:10px var(--mono); }
 .settings-built-meta code { user-select:all; color:var(--fg); background:var(--bg3);
@@ -2279,8 +2290,25 @@ pre.code-block { overflow:visible; }
 .settings-built-chip.value-state.override { color:var(--fg-warning); border-color:color-mix(in srgb,var(--fg-warning) 48%,var(--border)); }
 .settings-built-chip.inherited { max-width:340px; }
 .settings-field.modified .settings-built-chip.modified { display:inline-flex; }
+.settings-built-chip.source,.settings-built-chip.default,.settings-built-chip.inherited,.settings-built-chip.current {
+  display:none;
+}
+.settings-built-chip.inherited.global-hidden { display:none !important; }
+.settings-field:hover .settings-built-chip.source,.settings-field:focus-within .settings-built-chip.source,
+.settings-field.settings-current .settings-built-chip.source,
+.settings-field:hover .settings-built-chip.default,.settings-field:focus-within .settings-built-chip.default,
+.settings-field.settings-current .settings-built-chip.default,
+.settings-field:hover .settings-built-chip.inherited,.settings-field:focus-within .settings-built-chip.inherited,
+.settings-field.settings-current .settings-built-chip.inherited,
+.settings-field:hover .settings-built-chip.current,.settings-field:focus-within .settings-built-chip.current,
+.settings-field.settings-current .settings-built-chip.current,.settings-field.modified .settings-built-chip.current {
+  display:inline-flex;
+}
 .settings-built-desc { margin:3px 0 0; color:var(--fg-dim); font-size:11px; line-height:1.35; }
-.settings-built-foot { display:flex; flex-wrap:wrap; gap:5px; margin-top:5px; color:var(--fg-dim); font:10px var(--mono); }
+.settings-built-foot { display:none; flex-wrap:wrap; gap:5px; margin-top:5px; color:var(--fg-dim); font:10px var(--mono); }
+.settings-field:hover .settings-built-foot,.settings-field:focus-within .settings-built-foot,.settings-field.settings-current .settings-built-foot {
+  display:flex;
+}
 .settings-built-foot span { padding:1px 5px; border:1px solid color-mix(in srgb,var(--border) 75%,transparent);
   border-radius:999px; background:color-mix(in srgb,var(--bg3) 72%,transparent); }
 .settings-row-actions { position:absolute; top:6px; right:6px; display:flex; align-items:center; gap:3px;
@@ -4278,6 +4306,15 @@ function wrapSettingsField(inputId){
   wrap.tabIndex=0;
   wrap.setAttribute('role','group');
   wrap.setAttribute('aria-label',(meta.key||meta.path||inputId)+' setting');
+  if(!wrap.querySelector('.settings-built-head')){
+    const head=document.createElement('div');head.className='settings-built-head';
+    const title=document.createElement('span');title.className='settings-built-head-title';
+    title.textContent=settingFriendlyName(meta,inputId);head.appendChild(title);
+    const key=document.createElement('code');key.textContent=meta.key||meta.path||inputId;head.appendChild(key);
+    const state=document.createElement('span');state.className='settings-built-head-state';state.dataset.settingHeadState='1';
+    state.textContent='Inherited';head.appendChild(state);
+    wrap.insertBefore(head,wrap.firstChild);
+  }
   if(!wrap.querySelector('.s-reset')){
     const rst=document.createElement('span');rst.className='s-reset';rst.textContent='↻';rst.title='Reset to inherited/default value';
     rst.onclick=()=>{setSettingsInputValue(el,meta,settingInheritedValueForTarget(meta,currentSettingsTarget));markSettingsModified();scheduleFilterSettings(0);showToast('Reset '+(meta.key||inputId),'info',1400)};
@@ -4342,14 +4379,21 @@ function markSettingsModified(){
       const inherited='Inherited: '+settingCompactDisplayValue(settingInheritedValueForTarget(meta,currentSettingsTarget));
       inheritedChip.textContent=inherited;
       inheritedChip.title=inherited;
-      inheritedChip.style.display=settingsBackendTargetName(currentSettingsTarget)==='global'?'none':'inline-flex';
+      inheritedChip.style.display='';
+      inheritedChip.classList.toggle('global-hidden',settingsBackendTargetName(currentSettingsTarget)==='global');
     }
     const valueStateChip=wrap.querySelector('[data-setting-value-state="1"]');
+    const headState=wrap.querySelector('[data-setting-head-state="1"]');
     if(valueStateChip){
       const state=settingValueState(meta,cur,currentSettingsTarget);
       valueStateChip.textContent=state.label;
       valueStateChip.title='Value source: '+state.label;
       ['edited','default','override','inherited'].forEach(cls=>valueStateChip.classList.toggle(cls,state.state===cls));
+      if(headState){
+        headState.textContent=state.label;
+        headState.title=(meta.key||inputId)+' - '+state.label;
+        ['edited','default','override','inherited'].forEach(cls=>headState.classList.toggle(cls,state.state===cls));
+      }
     }
     const clearButton=wrap.querySelector('[data-settings-clear-target="1"]');
     if(clearButton){
@@ -25681,6 +25725,9 @@ function settingsUiSelfCheckSnapshot(){
   const overview=document.querySelector('.settings-section-overview');
   const navItems=nav?Array.from(nav.querySelectorAll('.settings-nav-item')):[];
   const detail=$('settings-current-detail');
+  const builtHead=document.querySelector('.settings-built-head');
+  const idleCurrentChip=Array.from(document.querySelectorAll('.settings-built-chip.current'))
+    .find(chip=>!(chip.closest&&chip.closest('.settings-current,.modified')));
   const detailActionLabels=detail?Array.from(detail.querySelectorAll('.detail-actions button')).map(btn=>String(btn.textContent||'')):[];
   const reviewActionLabels=Array.from(document.querySelectorAll('#settings-review-bar .review-actions button')).map(btn=>String(btn.textContent||''));
   return {
@@ -25698,6 +25745,8 @@ function settingsUiSelfCheckSnapshot(){
     hasNavHeading:!!document.querySelector('.settings-nav-heading'),
     hasNavCountPills:!!document.querySelector('.settings-nav-item .count'),
     hasActiveNavRail:navItems.some(item=>item.classList.contains('active')&&String(getComputedStyle(item).borderLeftColor||'')!=='rgba(0, 0, 0, 0)'),
+    hasBuiltSettingHead:!!(builtHead&&builtHead.querySelector('.settings-built-head-title')&&builtHead.querySelector('code')&&builtHead.querySelector('[data-setting-head-state="1"]')),
+    hasOnDemandSettingValueDetails:!!(idleCurrentChip&&String(getComputedStyle(idleCurrentChip).display)==='none'),
     hasDensityToggle:!!$('settings-density-toggle'),
     hasStickySectionOverview:!!overview&&String(getComputedStyle(overview).position)==='sticky',
     hasSectionContextActions:!!document.querySelector('.settings-section-context .section-actions'),
