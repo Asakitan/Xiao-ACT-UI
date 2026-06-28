@@ -1404,6 +1404,24 @@ pre.code-block code .type { color:var(--fg-type); }
 .workflow-result-step-title .idx { color:var(--fg-dim); font:10px var(--mono); }
 .workflow-result-step-title .agent { color:var(--fg-dim); font:10px var(--mono); border:1px solid var(--border); border-radius:999px; padding:0 6px; }
 .workflow-result-output { white-space:pre-wrap; color:var(--fg-dim); font:11px/1.4 var(--mono); max-height:120px; overflow:auto; }
+.chat-workflow-session-strip { display:none; align-items:center; gap:6px; min-height:28px; padding:5px 8px;
+  border-top:1px solid color-mix(in srgb,var(--border) 72%,transparent);
+  color:var(--fg-dim); font:11px var(--sans); }
+.chat-workflow-session-strip.open { display:flex; flex-wrap:nowrap; }
+.chat-workflow-session-strip.running { color:var(--fg-accent); }
+.chat-workflow-session-title { min-width:0; max-width:260px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-weight:600; color:var(--fg); }
+.chat-workflow-session-chip { border:1px solid var(--border); border-radius:999px; padding:1px 7px; line-height:18px;
+  background:color-mix(in srgb,var(--bg3) 75%,transparent); color:var(--fg-dim); white-space:nowrap; }
+.chat-workflow-session-chip.status-running { color:var(--fg-accent); border-color:color-mix(in srgb,var(--fg-accent) 50%,var(--border)); }
+.chat-workflow-session-chip.status-done { color:var(--fg-success); border-color:color-mix(in srgb,var(--fg-success) 50%,var(--border)); }
+.chat-workflow-session-chip.status-error { color:var(--fg-error); border-color:color-mix(in srgb,var(--fg-error) 50%,var(--border)); }
+.chat-workflow-session-chip.status-cancelled { color:var(--fg-warning); border-color:color-mix(in srgb,var(--fg-warning) 50%,var(--border)); }
+.chat-workflow-session-preview { min-width:80px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; flex:1 1 auto; }
+.chat-workflow-session-actions { display:flex; align-items:center; gap:4px; margin-left:auto; flex:0 0 auto; }
+.chat-workflow-session-action { height:22px; border:1px solid transparent; border-radius:999px; padding:0 8px;
+  background:transparent; color:var(--fg-dim); cursor:pointer; font:11px var(--sans); }
+.chat-workflow-session-action:hover,.chat-workflow-session-action:focus { color:var(--fg); background:var(--bg-hover); border-color:var(--border-focus); outline:none; }
+.chat-workflow-session-action.primary { color:var(--fg-accent); border-color:color-mix(in srgb,var(--border-focus) 42%,var(--border)); background:color-mix(in srgb,var(--border-focus) 9%,transparent); }
 /* Mode popup menu (VSCode-style) */
 .mode-trigger { display:inline-flex; align-items:center; gap:4px; height:22px; padding:0 8px; flex:0 0 auto;
   border:1px solid var(--border); border-radius:999px; background:var(--bg3); color:var(--fg-accent);
@@ -3205,6 +3223,7 @@ pre.code-block { overflow:visible; }
               <div class="chat-input-container" id="chat-input-container">
                 <div class="chat-toolbar-head" id="chat-toolbar-head" aria-live="polite"></div>
                 <div class="chat-action-tray" id="chat-action-tray" role="group" aria-label="Pending Assistant actions"></div>
+                <div class="chat-workflow-session-strip" id="chat-workflow-session-strip" role="status" aria-live="polite"></div>
                 <div class="chat-input-row">
                   <textarea class="chat-input" id="chat-input" rows="1" data-i18n="ask_placeholder" placeholder="Ask anything... (/ commands, @ context, # tools)" aria-label="Ask Agent" aria-describedby="chat-input-status chat-input-help" aria-autocomplete="list" aria-haspopup="listbox" aria-expanded="false"></textarea>
                   <button class="send-btn" id="send-btn" onclick="doSend()" title="Send" aria-label="Send" aria-disabled="true"><svg viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M8 2.5l-5 5h3.5V13h3V7.5H13L8 2.5z"/></svg></button>
@@ -6436,6 +6455,7 @@ let assistantWorkflowCustomPrompt=(()=>{try{return String(localStorage.getItem(A
 let assistantWorkflowRunActive=false;
 let assistantWorkflowCancelRequested=false;
 let assistantWorkflowActiveRunId='';
+let assistantWorkflowLastLaunch=null;
 function setAssistantWorkflowRunState(active,opts){
   opts=opts||{};
   assistantWorkflowRunActive=!!active;
@@ -6445,6 +6465,7 @@ function setAssistantWorkflowRunState(active,opts){
   if(!assistantWorkflowRunActive&&!opts.keepCancel)assistantWorkflowCancelRequested=false;
   if(typeof syncAssistantSessionState==='function')syncAssistantSessionState({requestInProgress:assistantWorkflowRunActive,workflowRunId:assistantWorkflowActiveRunId||assistantSessionState.workflowRunId||''});
   if(typeof updateToolbarWorkflowButton==='function')updateToolbarWorkflowButton();
+  if(typeof renderAssistantWorkflowSessionStrip==='function')renderAssistantWorkflowSessionStrip();
 }
 function setAssistantWorkflowMode(mode,opts){
   assistantWorkflowMode=normalizeWorkflowMode(mode);
@@ -6488,7 +6509,11 @@ function assistantSessionControlSnapshot(){
     workflowRunId:String(assistantSessionState&&assistantSessionState.workflowRunId||''),
     workflowMode:normalizeWorkflowMode(assistantWorkflowMode),
     workflowMethod:String(assistantSessionState&&assistantSessionState.workflowMethod||''),
-    workflowInputPreview:String(assistantSessionState&&assistantSessionState.workflowInputPreview||'')
+    workflowInputPreview:String(assistantSessionState&&assistantSessionState.workflowInputPreview||''),
+    workflowRunStatus:String(assistantSessionState&&assistantSessionState.workflowRunStatus||''),
+    workflowRunStatusSummary:String(assistantSessionState&&assistantSessionState.workflowRunStatusSummary||''),
+    workflowRunProgress:String(assistantSessionState&&assistantSessionState.workflowRunProgress||''),
+    workflowResultPreview:String(assistantSessionState&&assistantSessionState.workflowResultPreview||'')
   };
 }
 function assistantSessionDefaults(seed){
@@ -6518,7 +6543,14 @@ function assistantSessionDefaults(seed){
     workflowRunId:String(src.workflowRunId||''),
     workflowMode:normalizeWorkflowMode(src.workflowMode||assistantWorkflowMode),
     workflowMethod:String(src.workflowMethod||''),
-    workflowInputPreview:String(src.workflowInputPreview||'')
+    workflowInputPreview:String(src.workflowInputPreview||''),
+    workflowRunStatus:String(src.workflowRunStatus||''),
+    workflowRunStatusSummary:String(src.workflowRunStatusSummary||''),
+    workflowRunProgress:String(src.workflowRunProgress||''),
+    workflowCompletedSteps:Math.max(0,Number(src.workflowCompletedSteps||0)),
+    workflowStepCount:Math.max(0,Number(src.workflowStepCount||0)),
+    workflowDurationMs:Math.max(0,Number(src.workflowDurationMs||0)),
+    workflowResultPreview:String(src.workflowResultPreview||'')
   };
 }
 function loadAssistantSessionState(){
@@ -6924,6 +6956,8 @@ function renderAssistantSessionState(){
       +'\nWorkflow Mode: '+(assistantSessionState.workflowMode||assistantWorkflowMode||'off')
       +'\nWorkflow: '+(assistantSessionState.workflowLabel||assistantSessionState.workflowId||'-')
       +'\nWorkflow Method: '+(assistantSessionState.workflowMethod||'-')
+      +'\nWorkflow Status: '+(assistantSessionState.workflowRunStatus||'-')
+      +'\nWorkflow Progress: '+(assistantSessionState.workflowRunProgress||'-')
       +'\nWorkflow Input: '+(assistantSessionState.workflowInputPreview||'-')
       +'\nForked from: '+(assistantSessionState.parentSessionTitle||assistantSessionState.parentSessionResource||'-');
   }
@@ -6944,10 +6978,135 @@ function renderAssistantSessionState(){
     panel.dataset.chatWorkflowMode=assistantSessionState.workflowMode||assistantWorkflowMode||'off';
     panel.dataset.chatWorkflowMethod=assistantSessionState.workflowMethod||'';
     panel.dataset.chatWorkflowInputPreview=assistantSessionState.workflowInputPreview||'';
+    panel.dataset.chatWorkflowRunId=assistantSessionState.workflowRunId||'';
+    panel.dataset.chatWorkflowRunStatus=assistantSessionState.workflowRunStatus||'';
+    panel.dataset.chatWorkflowRunStatusSummary=assistantSessionState.workflowRunStatusSummary||'';
+    panel.dataset.chatWorkflowRunProgress=assistantSessionState.workflowRunProgress||'';
+    panel.dataset.chatWorkflowResultPreview=assistantSessionState.workflowResultPreview||'';
     panel.dataset.chatParentSessionResource=assistantSessionState.parentSessionResource||'';
     panel.dataset.chatParentSessionTitle=assistantSessionState.parentSessionTitle||'';
   }
+  if(typeof renderAssistantWorkflowSessionStrip==='function')renderAssistantWorkflowSessionStrip();
   if(typeof updateChatComposerState==='function')updateChatComposerState();
+}
+function assistantWorkflowStatusLabel(){
+  const status=String(assistantSessionState.workflowRunStatus||'').trim();
+  if(status)return status;
+  if(assistantWorkflowCancelRequested)return 'cancelling';
+  if(assistantWorkflowRunActive||assistantSessionState.requestInProgress)return 'running';
+  return '';
+}
+function assistantWorkflowSessionProgressLabel(){
+  if(assistantSessionState.workflowRunProgress)return String(assistantSessionState.workflowRunProgress||'');
+  const done=Number(assistantSessionState.workflowCompletedSteps||0)||0;
+  const total=Number(assistantSessionState.workflowStepCount||0)||0;
+  if(total)return done+'/'+total;
+  return '';
+}
+function renderAssistantWorkflowSessionStrip(){
+  const strip=$('chat-workflow-session-strip');
+  if(!strip)return null;
+  const runId=String(assistantSessionState.workflowRunId||assistantWorkflowActiveRunId||'');
+  const label=String(assistantSessionState.workflowLabel||assistantSelectedWorkflowLabel()||'');
+  const status=assistantWorkflowStatusLabel();
+  const progress=assistantWorkflowSessionProgressLabel();
+  const preview=String(assistantSessionState.workflowResultPreview||assistantSessionState.workflowInputPreview||'').replace(/\s+/g,' ').trim();
+  const shouldShow=!!(runId||status||preview||(assistantSessionState.workflowMode&&assistantSessionState.workflowMode!=='off'&&label));
+  strip.className='chat-workflow-session-strip'+(shouldShow?' open':'')+(status==='running'||status==='cancelling'?' running':'');
+  strip.dataset.workflowRunId=runId;
+  strip.dataset.workflowStatus=status;
+  strip.dataset.workflowProgress=progress;
+  strip.dataset.workflowLabel=label;
+  strip.dataset.workflowMethod=String(assistantSessionState.workflowMethod||'');
+  strip.dataset.workflowInputPreview=String(assistantSessionState.workflowInputPreview||'');
+  strip.dataset.workflowResultPreview=String(assistantSessionState.workflowResultPreview||'');
+  strip.innerHTML='';
+  if(!shouldShow)return strip;
+  const title=document.createElement('span');
+  title.className='chat-workflow-session-title';
+  title.textContent=label||'Workflow session';
+  title.title=(label||'Workflow session')+(runId?'\nRun: '+runId:'');
+  strip.appendChild(title);
+  const statusChip=document.createElement('span');
+  statusChip.className='chat-workflow-session-chip status-'+(status||'ready');
+  statusChip.textContent=status||'ready';
+  strip.appendChild(statusChip);
+  if(progress){
+    const progressChip=document.createElement('span');
+    progressChip.className='chat-workflow-session-chip';
+    progressChip.textContent=progress;
+    progressChip.title='Workflow progress';
+    strip.appendChild(progressChip);
+  }
+  if(assistantSessionState.workflowMethod){
+    const methodChip=document.createElement('span');
+    methodChip.className='chat-workflow-session-chip';
+    methodChip.textContent=assistantSessionState.workflowMethod;
+    methodChip.title='Workflow execution method';
+    strip.appendChild(methodChip);
+  }
+  const text=document.createElement('span');
+  text.className='chat-workflow-session-preview';
+  text.textContent=preview||String(assistantSessionState.workflowRunStatusSummary||'');
+  text.title=text.textContent;
+  strip.appendChild(text);
+  const actions=document.createElement('span');
+  actions.className='chat-workflow-session-actions';
+  const addAction=(labelText,handler,primary)=>{
+    const button=document.createElement('button');
+    button.type='button';
+    button.className='chat-workflow-session-action'+(primary?' primary':'');
+    button.textContent=labelText;
+    button.onclick=handler;
+    actions.appendChild(button);
+    return button;
+  };
+  if(assistantWorkflowRunActive)addAction('Cancel',()=>cancelAssistantWorkflowRun(),true);
+  else if(assistantWorkflowLastLaunch){
+    addAction('Retry',()=>assistantWorkflowRetryLast(),true);
+    addAction('Continue',()=>assistantWorkflowContinueLast(),false);
+  }
+  addAction('Copy',()=>assistantWorkflowCopySessionSummary(),false);
+  strip.appendChild(actions);
+  return strip;
+}
+async function assistantWorkflowRetryLast(){
+  if(assistantWorkflowRunActive)return false;
+  const last=assistantWorkflowLastLaunch;
+  if(!last||!last.workflow){showToast('No workflow run to retry','info',1800);return false}
+  setStatus('Retrying workflow: '+String(last.launch&&last.launch.workflowLabel||controlItemName(last.workflow)||'Workflow'));
+  return runWorkflowObjectAsAssistant(last.workflow,last.inputText||'',{retryOf:last.launch&&last.launch.workflowRunId});
+}
+function assistantWorkflowContinueLast(){
+  const state=assistantSessionState||{};
+  const label=state.workflowLabel||'workflow';
+  const text=[
+    'Continue workflow "'+label+'"',
+    state.workflowRunId?'Run: '+state.workflowRunId:'',
+    state.workflowRunStatus?'Status: '+state.workflowRunStatus:'',
+    state.workflowRunProgress?'Progress: '+state.workflowRunProgress:'',
+    state.workflowResultPreview?'Result: '+state.workflowResultPreview:'',
+    '',
+    'Next request:'
+  ].filter((row,index)=>row||index===5).join('\n');
+  setChatInputValue(text,{focus:true});
+  announceAssistantAction('Workflow continuation ready');
+  return true;
+}
+async function assistantWorkflowCopySessionSummary(){
+  const state=assistantSessionState||{};
+  const text=[
+    'Workflow: '+(state.workflowLabel||state.workflowId||'-'),
+    'Run: '+(state.workflowRunId||'-'),
+    'Status: '+(state.workflowRunStatus||'-'),
+    'Progress: '+(state.workflowRunProgress||'-'),
+    'Method: '+(state.workflowMethod||'-'),
+    'Input: '+(state.workflowInputPreview||'-'),
+    'Result: '+(state.workflowResultPreview||'-')
+  ].join('\n');
+  try{await navigator.clipboard.writeText(text);setStatus('Workflow summary copied')}
+  catch(_e){setStatus(text)}
+  return text;
 }
 function syncAssistantSessionState(patch){
   const input=$('chat-input');
@@ -6966,6 +7125,13 @@ function syncAssistantSessionState(patch){
   next.workflowMode=normalizeWorkflowMode(hasPatch('workflowMode')?patch.workflowMode:(controls.workflowMode||next.workflowMode||assistantWorkflowMode));
   next.workflowMethod=String(hasPatch('workflowMethod')?patch.workflowMethod:(controls.workflowMethod||next.workflowMethod||''));
   next.workflowInputPreview=String(hasPatch('workflowInputPreview')?patch.workflowInputPreview:(controls.workflowInputPreview||next.workflowInputPreview||''));
+  next.workflowRunStatus=String(hasPatch('workflowRunStatus')?patch.workflowRunStatus:(next.workflowRunStatus||''));
+  next.workflowRunStatusSummary=String(hasPatch('workflowRunStatusSummary')?patch.workflowRunStatusSummary:(next.workflowRunStatusSummary||''));
+  next.workflowRunProgress=String(hasPatch('workflowRunProgress')?patch.workflowRunProgress:(next.workflowRunProgress||''));
+  next.workflowCompletedSteps=Math.max(0,Number(hasPatch('workflowCompletedSteps')?patch.workflowCompletedSteps:(next.workflowCompletedSteps||0)));
+  next.workflowStepCount=Math.max(0,Number(hasPatch('workflowStepCount')?patch.workflowStepCount:(next.workflowStepCount||0)));
+  next.workflowDurationMs=Math.max(0,Number(hasPatch('workflowDurationMs')?patch.workflowDurationMs:(next.workflowDurationMs||0)));
+  next.workflowResultPreview=String(hasPatch('workflowResultPreview')?patch.workflowResultPreview:(next.workflowResultPreview||''));
   next.draft=input?String(input.value||''):String(next.draft||'');
   next.inputHasText=!!(next.draft&&next.draft.trim());
   next.context=patch&&Object.prototype.hasOwnProperty.call(patch,'context')
@@ -9987,6 +10153,53 @@ function assistantWorkflowRunButtonSnapshot(){
   updateToolbarWorkflowButton();
   return {exists:true,active,cancelling,restoredActive:assistantWorkflowRunActive};
 }
+function assistantWorkflowSessionStripSnapshot(){
+  const previousState=assistantSessionDefaults(assistantSessionState);
+  const previousLast=assistantWorkflowLastLaunch;
+  const previousActive=assistantWorkflowRunActive;
+  const previousCancel=assistantWorkflowCancelRequested;
+  const previousRunId=assistantWorkflowActiveRunId;
+  const workflow={id:'strip-selfcheck-flow',name:'Strip Selfcheck Flow',steps:[{agent:'default',label:'Inspect',prompt:'Inspect {{input}}',output_var:'inspection'}]};
+  assistantWorkflowLastLaunch={workflow,inputText:'strip input',launch:{workflowRunId:'wf-strip-selfcheck',workflowLabel:'Strip Selfcheck Flow'},refs:[],createdAt:Date.now()};
+  setAssistantWorkflowRunState(true,{runId:'wf-strip-selfcheck',cancelRequested:false});
+  syncAssistantSessionState({requestInProgress:true,workflowId:'strip-selfcheck-flow',workflowLabel:'Strip Selfcheck Flow',workflowRunId:'wf-strip-selfcheck',workflowMode:'on',workflowMethod:'backend',workflowInputPreview:'strip input',workflowRunStatus:'running',workflowRunStatusSummary:'running · backend · on',workflowRunProgress:'0/1',workflowCompletedSteps:0,workflowStepCount:1,workflowResultPreview:''});
+  const runningEl=renderAssistantWorkflowSessionStrip();
+  const runningActions=runningEl?Array.from(runningEl.querySelectorAll('.chat-workflow-session-action')).map(btn=>String(btn.textContent||'')):[];
+  const running={
+    exists:!!runningEl,
+    open:!!(runningEl&&runningEl.classList.contains('open')),
+    status:runningEl?String(runningEl.dataset.workflowStatus||''):'',
+    progress:runningEl?String(runningEl.dataset.workflowProgress||''):'',
+    hasCancel:runningActions.includes('Cancel'),
+    text:runningEl?String(runningEl.textContent||''):''
+  };
+  setAssistantWorkflowRunState(false,{runId:'wf-strip-selfcheck',keepRunId:true});
+  syncAssistantSessionState({requestInProgress:false,workflowRunStatus:'done',workflowRunStatusSummary:'done · backend · on · 42ms',workflowRunProgress:'1/1',workflowCompletedSteps:1,workflowStepCount:1,workflowDurationMs:42,workflowResultPreview:'strip result'});
+  const doneEl=renderAssistantWorkflowSessionStrip();
+  const doneActions=doneEl?Array.from(doneEl.querySelectorAll('.chat-workflow-session-action')).map(btn=>String(btn.textContent||'')):[];
+  const panel=$('chat-panel');
+  const done={
+    exists:!!doneEl,
+    open:!!(doneEl&&doneEl.classList.contains('open')),
+    status:doneEl?String(doneEl.dataset.workflowStatus||''):'',
+    progress:doneEl?String(doneEl.dataset.workflowProgress||''):'',
+    hasRetry:doneActions.includes('Retry'),
+    hasContinue:doneActions.includes('Continue'),
+    hasCopy:doneActions.includes('Copy'),
+    datasetStatus:panel?String(panel.dataset.chatWorkflowRunStatus||''):'',
+    datasetPreview:panel?String(panel.dataset.chatWorkflowResultPreview||''):'',
+    text:doneEl?String(doneEl.textContent||''):''
+  };
+  assistantSessionState=previousState;
+  assistantWorkflowLastLaunch=previousLast;
+  assistantWorkflowRunActive=previousActive;
+  assistantWorkflowCancelRequested=previousCancel;
+  assistantWorkflowActiveRunId=previousRunId;
+  saveAssistantSessionState({immediate:true});
+  renderAssistantSessionState();
+  updateToolbarWorkflowButton();
+  return {running,done,previousStatus:previousState.workflowRunStatus||'',restoredStatus:assistantSessionState.workflowRunStatus||''};
+}
 function assistantProviderSessionSmokeSnapshot(){
   const pid='assistant-selfcheck-provider';
   const prevProvider=providerDefs[pid];
@@ -10212,6 +10425,7 @@ async function runAssistantUiSelfCheck(opts){
   workflowBody.remove();
   const workflowResultState=assistantWorkflowResultStateSnapshot();
   const workflowButtonState=assistantWorkflowRunButtonSnapshot();
+  const workflowSessionStrip=assistantWorkflowSessionStripSnapshot();
   const providerSession=assistantProviderSessionSmokeSnapshot();
   const historyAffordance=assistantHistoryAffordanceSmokeSnapshot();
   const savedHistoryAffordance=assistantSavedHistoryAffordanceSmokeSnapshot();
@@ -10272,6 +10486,9 @@ async function runAssistantUiSelfCheck(opts){
   assistantUiSelfCheckRecord(checks,'workflow-result-state-rendered',workflowResultState.okStatus==='done'&&workflowResultState.errorStatus==='error'&&workflowResultState.cancelStatus==='cancelled'&&workflowResultState.badgeCount===3&&workflowResultState.messageCount===2&&workflowResultState.errorClass&&workflowResultState.cancelClass,JSON.stringify(workflowResultState));
   assistantUiSelfCheckRecord(checks,'workflow-result-metadata-rendered',workflowResultState.okMode==='on'&&workflowResultState.okAgents==='default'&&workflowResultState.okMethod==='backend'&&workflowResultState.okSession==='sao-ai-chat://local/result-ok'&&workflowResultState.okInputPreview==='ok input'&&workflowResultState.okDurationMs===42&&workflowResultState.durationChipCount>=1,JSON.stringify(workflowResultState));
   assistantUiSelfCheckRecord(checks,'workflow-run-button-active-state',workflowButtonState.exists&&workflowButtonState.active.text==='■'&&workflowButtonState.active.running&&workflowButtonState.active.disabled===false&&workflowButtonState.cancelling.title==='Cancelling workflow run',JSON.stringify(workflowButtonState));
+  assistantUiSelfCheckRecord(checks,'workflow-session-strip-running-ready',workflowSessionStrip.running.exists&&workflowSessionStrip.running.open&&workflowSessionStrip.running.status==='running'&&workflowSessionStrip.running.progress==='0/1'&&workflowSessionStrip.running.hasCancel&&workflowSessionStrip.running.text.includes('Strip Selfcheck Flow'),JSON.stringify(workflowSessionStrip.running));
+  assistantUiSelfCheckRecord(checks,'workflow-session-strip-result-ready',workflowSessionStrip.done.exists&&workflowSessionStrip.done.open&&workflowSessionStrip.done.status==='done'&&workflowSessionStrip.done.progress==='1/1'&&workflowSessionStrip.done.hasRetry&&workflowSessionStrip.done.hasContinue&&workflowSessionStrip.done.hasCopy&&workflowSessionStrip.done.text.includes('strip result'),JSON.stringify(workflowSessionStrip.done));
+  assistantUiSelfCheckRecord(checks,'workflow-session-state-dataset-ready',workflowSessionStrip.done.datasetStatus==='done'&&workflowSessionStrip.done.datasetPreview==='strip result'&&workflowSessionStrip.restoredStatus===workflowSessionStrip.previousStatus,JSON.stringify(workflowSessionStrip));
   const workflowBackend=await assistantWorkflowBackendExecutionSnapshot();
   assistantUiSelfCheckRecord(checks,'workflow-backend-execution-rendered',workflowBackend.ok&&workflowBackend.callCount===1&&workflowBackend.planExists&&workflowBackend.resultExists&&workflowBackend.resultStatus==='done'&&workflowBackend.resultStepCount===2&&workflowBackend.resultOutputs[0]==='inspection'&&workflowBackend.resultOutputs[1]==='review'&&workflowBackend.finalText.includes('review ok'),JSON.stringify(workflowBackend));
   assistantUiSelfCheckRecord(checks,'workflow-backend-metadata-payload-ready',workflowBackend.metadataMode===assistantWorkflowMode&&workflowBackend.metadataMethod==='backend'&&workflowBackend.metadataSession.startsWith('sao-ai-chat://')&&workflowBackend.metadataInputPreview==='backend smoke'&&workflowBackend.metadataStepCount===2&&workflowBackend.planStatus==='done'&&workflowBackend.planMethod==='backend'&&workflowBackend.planSession===workflowBackend.metadataSession&&workflowBackend.planInputPreview==='backend smoke'&&workflowBackend.resultMode===assistantWorkflowMode&&workflowBackend.resultMethod==='backend'&&workflowBackend.resultSession===workflowBackend.metadataSession&&workflowBackend.resultInputPreview==='backend smoke'&&workflowBackend.resultAgents.includes('default'),JSON.stringify(workflowBackend));
@@ -18631,7 +18848,19 @@ function onIdle(){
   setStatus(t('ready'));streaming=false;
   setChatStreamingState(false);
   updateTokenCount({minTokens:totalTokens});
-  syncAssistantSessionState({requestInProgress:false});
+  const workflowWasRunning=assistantWorkflowRunActive&&assistantSessionState.workflowRunId&&assistantSessionState.workflowRunStatus==='running';
+  const patch={requestInProgress:false};
+  if(workflowWasRunning){
+    const latest=latestChatMessageBody('assistant');
+    const preview=latest?assistantSessionMessageBodyText(latest).replace(/\s+/g,' ').trim().slice(0,260):'';
+    patch.workflowRunStatus='done';
+    patch.workflowRunStatusSummary='done · '+String(assistantSessionState.workflowMethod||'prompt')+' · '+String(assistantSessionState.workflowMode||assistantWorkflowMode||'');
+    patch.workflowRunProgress=assistantSessionState.workflowStepCount?String(assistantSessionState.workflowStepCount)+'/'+String(assistantSessionState.workflowStepCount):assistantSessionState.workflowRunProgress;
+    patch.workflowCompletedSteps=assistantSessionState.workflowStepCount||assistantSessionState.workflowCompletedSteps||0;
+    patch.workflowResultPreview=preview||assistantSessionState.workflowResultPreview||'';
+  }
+  syncAssistantSessionState(patch);
+  if(workflowWasRunning)setAssistantWorkflowRunState(false,{runId:assistantSessionState.workflowRunId,keepRunId:true});
   assistantSessionPersistCurrent({status:'completed'});
   const ci=$('chat-input');if(ci)ci.focus();
   if(assistantQueuedRequestCount())setTimeout(()=>assistantDrainQueuedRequests(),0);
@@ -22303,6 +22532,25 @@ function refreshWorkflowRunCardState(card,forcedStatus){
   }
   return status;
 }
+function assistantWorkflowPatchFromRunCard(card){
+  if(!card||typeof syncAssistantSessionState!=='function')return;
+  const runId=String(card.dataset.workflowRunId||'');
+  const activeId=String(assistantWorkflowActiveRunId||assistantSessionState.workflowRunId||'');
+  if(!runId||!activeId||runId!==activeId)return;
+  const rows=Array.from(card.querySelectorAll('.workflow-run-step'));
+  const done=rows.filter(row=>String(row.dataset.workflowStepStatus||'')==='done').length;
+  const total=Number(card.dataset.workflowStepCount||rows.length||0)||0;
+  const progress=total?(done+'/'+total):'';
+  syncAssistantSessionState({
+    workflowRunId:runId||assistantSessionState.workflowRunId,
+    workflowRunStatus:String(card.dataset.workflowRunStatus||''),
+    workflowRunStatusSummary:String(card.dataset.workflowRunStatusSummary||''),
+    workflowRunProgress:progress,
+    workflowCompletedSteps:done,
+    workflowStepCount:total,
+    workflowDurationMs:Number(card.dataset.workflowElapsedMs||0)||0
+  });
+}
 function workflowRunStepStatusText(status){
   const value=String(status||'pending').toLowerCase();
   if(value==='running')return 'running';
@@ -22354,6 +22602,7 @@ function updateWorkflowRunStepStatus(runId,data){
     badge.title=bits.join(' · ')||status;
   }
   refreshWorkflowRunCardState(card,data&&data.cancelled?'cancelled':'');
+  assistantWorkflowPatchFromRunCard(card);
   return true;
 }
 function workflowResultSteps(result){
@@ -22364,6 +22613,39 @@ function workflowResultStatus(result){
   if(result&&result.error)return 'error';
   if(workflowResultSteps(result).some(step=>step&&step.error))return 'error';
   return 'done';
+}
+function workflowResultPreview(result){
+  if(!result)return '';
+  if(result.cancelled)return String(result.message||'Workflow cancelled');
+  if(result.error)return String(result.error||'Workflow error');
+  const finalText=normalizeChatMessageText(result.final_output||result.output||'','assistant');
+  if(finalText)return finalText.replace(/\s+/g,' ').trim().slice(0,260);
+  const steps=workflowResultSteps(result);
+  for(let i=steps.length-1;i>=0;i--){
+    const text=String(steps[i].error||steps[i].output||'').replace(/\s+/g,' ').trim();
+    if(text)return text.slice(0,260);
+  }
+  return '';
+}
+function assistantWorkflowPatchFromResultCard(card,result){
+  if(!card||typeof syncAssistantSessionState!=='function')return;
+  const runId=String(card.dataset.workflowRunId||'');
+  const activeId=String(assistantWorkflowActiveRunId||assistantSessionState.workflowRunId||'');
+  if(!runId||!activeId||runId!==activeId)return;
+  const total=Number(card.dataset.workflowStepCount||0)||0;
+  const completed=card.querySelectorAll('.workflow-result-step[data-workflow-step-status="done"]').length;
+  const status=String(card.dataset.workflowResultStatus||workflowResultStatus(result));
+  syncAssistantSessionState({
+    requestInProgress:false,
+    workflowRunId:runId||assistantSessionState.workflowRunId,
+    workflowRunStatus:status,
+    workflowRunStatusSummary:status+' · '+String(card.dataset.workflowMethod||'')+' · '+String(card.dataset.workflowMode||'')+(card.dataset.workflowDurationMs&&card.dataset.workflowDurationMs!=='0'?' · '+workflowDurationLabel(card.dataset.workflowDurationMs):''),
+    workflowRunProgress:total?(completed+'/'+total):'',
+    workflowCompletedSteps:completed,
+    workflowStepCount:total,
+    workflowDurationMs:Number(card.dataset.workflowDurationMs||0)||0,
+    workflowResultPreview:workflowResultPreview(result)
+  });
 }
 function renderWorkflowResultSummary(body,result,launch){
   if(!body)return null;
@@ -22428,6 +22710,7 @@ function renderWorkflowResultSummary(body,result,launch){
     card.appendChild(row);
   });
   body.appendChild(card);
+  assistantWorkflowPatchFromResultCard(card,result);
   return card;
 }
 function workflowInputPreview(value){
@@ -22535,7 +22818,7 @@ async function runWorkflowEngineAsAssistant(workflow,inputText,launch,refs){
   const pending=document.createElement('div');pending.className='chat-response-progress-task';pending.textContent='Running workflow...';body.appendChild(pending);
   setStatus('Running workflow: '+workflowName);
   assistantSessionState.workflowRunId=launch.workflowRunId;
-  syncAssistantSessionState({workflowRunId:launch.workflowRunId,workflowMode:assistantWorkflowMode,workflowMethod:launch.workflowMethod,workflowInputPreview:launch.inputPreview,requestInProgress:true});
+  syncAssistantSessionState({workflowRunId:launch.workflowRunId,workflowMode:assistantWorkflowMode,workflowMethod:launch.workflowMethod,workflowInputPreview:launch.inputPreview,requestInProgress:true,workflowRunStatus:'running',workflowRunStatusSummary:'running · '+launch.workflowMethod+' · '+launch.workflowMode,workflowRunProgress:'0/'+String(launch.workflowStepCount||0),workflowCompletedSteps:0,workflowStepCount:launch.workflowStepCount,workflowResultPreview:''});
   setAssistantWorkflowRunState(true,{runId:launch.workflowRunId,cancelRequested:false});
   let result=null;
   try{result=await call('run_workflow',id,inputText,launch.workflowRunId,workflowLaunchNativeMetadata(launch))}
@@ -22546,7 +22829,7 @@ async function runWorkflowEngineAsAssistant(workflow,inputText,launch,refs){
     result={error:'Workflow backend unavailable'};
     renderWorkflowResultSummary(body,result,launch);
     setStatus('Workflow backend unavailable');
-    syncAssistantSessionState({requestInProgress:false});
+    syncAssistantSessionState({requestInProgress:false,workflowRunStatus:'error',workflowRunStatusSummary:'error · '+launch.workflowMethod+' · '+launch.workflowMode,workflowResultPreview:workflowResultPreview(result)});
     setAssistantWorkflowRunState(false,{runId:launch.workflowRunId,keepRunId:true});
     return false;
   }
@@ -22569,7 +22852,8 @@ async function runWorkflowEngineAsAssistant(workflow,inputText,launch,refs){
     if(finalText)renderMd(body,finalText);
   }
   setStatus(result.cancelled?'Workflow cancelled':result.error?'Workflow error':'Workflow complete');
-  syncAssistantSessionState({requestInProgress:false,workflowRunId:launch.workflowRunId,workflowMethod:launch.workflowMethod,workflowInputPreview:launch.inputPreview});
+  const finalStatus=result.cancelled?'cancelled':result.error?'error':'done';
+  syncAssistantSessionState({requestInProgress:false,workflowRunId:launch.workflowRunId,workflowMethod:launch.workflowMethod,workflowInputPreview:launch.inputPreview,workflowRunStatus:finalStatus,workflowRunStatusSummary:finalStatus+' · '+launch.workflowMethod+' · '+launch.workflowMode,workflowRunProgress:(launch.workflowStepCount?String(workflowResultSteps(result).filter(step=>!step.error).length)+'/'+String(launch.workflowStepCount):''),workflowCompletedSteps:workflowResultSteps(result).filter(step=>!step.error).length,workflowStepCount:launch.workflowStepCount,workflowDurationMs:Number(result.workflowDurationMs||result.durationMs||assistantSessionState.workflowDurationMs||0)||0,workflowResultPreview:workflowResultPreview(result)});
   setAssistantWorkflowRunState(false,{runId:launch.workflowRunId,keepRunId:true});
   assistantSessionPersistCurrent({status:result.cancelled?'cancelled':result.error?'error':'completed'});
   return !result.error&&!result.cancelled;
@@ -22593,14 +22877,16 @@ async function runWorkflowObjectAsAssistant(workflow,inputText,opts){
     workflowStepLabels:workflowRunSummary(workflow).labels,
     workflowStepOutputVars:workflowStepList(workflow).map(step=>String((step&&step.output_var)||''))
   };
+  assistantWorkflowLastLaunch={workflow,inputText:String(inputText||''),launch:Object.assign({},launch),refs:refs.slice(0,20),createdAt:Date.now(),retryOf:String(opts.retryOf||'')};
   const prompt=workflowLaunchPrompt(workflow,inputText,runId,launch);
   const input=$('chat-input');
   if(input&&String(input.value||'').trim()===inputText)setChatInputValue('',{focus:false,sync:false});
   assistantSessionState.workflowRunId=runId;
-  syncAssistantSessionState({workflowRunId:runId,workflowMode:assistantWorkflowMode,workflowMethod:launch.workflowMethod,workflowInputPreview:launch.inputPreview});
+  syncAssistantSessionState({workflowRunId:runId,workflowMode:assistantWorkflowMode,workflowMethod:launch.workflowMethod,workflowInputPreview:launch.inputPreview,workflowRunStatus:'running',workflowRunStatusSummary:'running · '+launch.workflowMethod+' · '+launch.workflowMode,workflowRunProgress:'0/'+String(launch.workflowStepCount||0),workflowCompletedSteps:0,workflowStepCount:launch.workflowStepCount,workflowDurationMs:0,workflowResultPreview:''});
   if(canUseBackend){
     return runWorkflowEngineAsAssistant(workflow,inputText,launch,refs);
   }
+  setAssistantWorkflowRunState(true,{runId:runId,cancelRequested:false});
   return sendAssistantTextRequest(prompt,{refs,workflowLaunch:launch,displayText:workflowDisplayText(workflow,inputText,runId),fromInput:false,appendUser:true,clearInput:false,allowSlash:false,toolHint:'workflow'});
 }
 async function runWorkflowAsAssistant(id,name,inputSeed){

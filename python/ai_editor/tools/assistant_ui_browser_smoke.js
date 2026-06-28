@@ -158,6 +158,9 @@ async function main() {
     "workflow-result-state-rendered",
     "workflow-result-metadata-rendered",
     "workflow-run-button-active-state",
+    "workflow-session-strip-running-ready",
+    "workflow-session-strip-result-ready",
+    "workflow-session-state-dataset-ready",
     "workflow-backend-execution-rendered",
     "workflow-backend-metadata-payload-ready",
     "workflow-backend-duration-payload-ready"

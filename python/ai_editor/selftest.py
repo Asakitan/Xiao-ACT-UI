@@ -5808,6 +5808,7 @@ def test_phase1_ai_editor_regressions() -> None:
            and "function assistantWorkflowRunCardSnapshot(card)" in html
            and "function assistantWorkflowResultStateSnapshot()" in html
            and "function assistantWorkflowRunButtonSnapshot()" in html
+           and "function assistantWorkflowSessionStripSnapshot()" in html
            and "async function assistantWorkflowBackendExecutionSnapshot()" in html
            and "assistantUiSelfCheckRecord(checks,'workflow-run-card-rendered'" in html
            and "assistantUiSelfCheckRecord(checks,'workflow-run-method-session-rendered'" in html
@@ -5818,6 +5819,9 @@ def test_phase1_ai_editor_regressions() -> None:
            and "assistantUiSelfCheckRecord(checks,'workflow-result-state-rendered'" in html
            and "assistantUiSelfCheckRecord(checks,'workflow-result-metadata-rendered'" in html
            and "assistantUiSelfCheckRecord(checks,'workflow-run-button-active-state'" in html
+           and "assistantUiSelfCheckRecord(checks,'workflow-session-strip-running-ready'" in html
+           and "assistantUiSelfCheckRecord(checks,'workflow-session-strip-result-ready'" in html
+           and "assistantUiSelfCheckRecord(checks,'workflow-session-state-dataset-ready'" in html
            and "assistantUiSelfCheckRecord(checks,'workflow-backend-execution-rendered'" in html
            and "assistantUiSelfCheckRecord(checks,'workflow-backend-metadata-payload-ready'" in html
            and "assistantUiSelfCheckRecord(checks,'workflow-backend-duration-payload-ready'" in html
@@ -5914,6 +5918,9 @@ def test_phase1_ai_editor_regressions() -> None:
             and "workflow-result-state-rendered" in smoke_source
            and "workflow-result-metadata-rendered" in smoke_source
             and "workflow-run-button-active-state" in smoke_source
+            and "workflow-session-strip-running-ready" in smoke_source
+            and "workflow-session-strip-result-ready" in smoke_source
+            and "workflow-session-state-dataset-ready" in smoke_source
             and "workflow-backend-metadata-payload-ready" in smoke_source
             and "workflow-backend-duration-payload-ready" in smoke_source
             and "channel: \"msedge\"" in smoke_source
