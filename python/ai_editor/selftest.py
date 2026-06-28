@@ -4322,22 +4322,40 @@ def test_phase1_ai_editor_regressions() -> None:
            and "el.dataset.webviewPendingMessageCount=String(Array.isArray(data.pendingMessages)?data.pendingMessages.length:0);" in html
            and "el.dataset.webviewQueuedMessageCount=String(Number(data.queuedMessageCount)||0);" in html
            and "el.dataset.webviewFlushedMessageCount=String(Number(data.flushedMessageCount)||0);" in html
+           and "el.dataset.webviewLastInboundMessageSeq=String(Number(data.lastInboundMessageSeq)||0);" in html
+           and "el.dataset.webviewLastOutboundMessageSeq=String(Number(data.lastOutboundMessageSeq)||0);" in html
+           and "el.dataset.webviewDroppedMessageCount=String(Number(data.droppedMessageCount)||0);" in html
+           and "el.dataset.webviewLastDroppedReason=String(data.lastDroppedReason||'');" in html
            and "el.dataset.webviewFrameLoaded=data.frameLoaded?'true':'false';" in html
            and "el.dataset.webviewIframeLoadedAt=String(Number(data.iframeLoadedAt)||0);" in html
            and "iframe.dataset.webviewFrameLoaded='false';" in html
            and "iframe.dataset.webviewFrameLoaded='true';" in html
            and "patchWebviewRuntimeLifecycle(viewId,{frameLoaded:true,iframeLoadedAt:webviewRuntimeNow()});" in html)
     _check("provider webviews queue extension messages until iframe mounts",
-           "function queueWebviewMessage(viewId,msg)" in html
-           and "function flushPendingWebviewMessages(viewId,iframe)" in html
+           "function queueWebviewMessage(viewId,msg,reason)" in html
+           and "function flushPendingWebviewMessages(viewId,iframe,reason)" in html
            and "pendingMessages" in html
-           and "queueWebviewMessage(viewId,msg)" in html
-           and "flushPendingWebviewMessages(viewId,iframe)" in html
+           and "queueWebviewMessage(viewId,msg,'missing-frame')" in html
+           and "flushPendingWebviewMessages(viewId,iframe,'iframe-load')" in html
            and "queuedMessageCount:(Number(cached.queuedMessageCount)||0)+1" in html
            and "const after=webviewRuntimeCache[id]||cached;" in html
            and "flushedMessageCount:(Number(after.flushedMessageCount)||0)+flushed" in html
-           and "lastQueuedAt:webviewRuntimeNow()" in html
-           and "lastFlushAt:webviewRuntimeNow()" in html)
+           and "lastQueuedAt:queuedAt" in html
+           and "lastQueueReason:String(reason||'missing-frame')" in html
+           and "lastFlushAt:webviewRuntimeNow()" in html
+           and "lastFlushReason:String(reason||'flush')" in html)
+    _check("provider webviews expose message sequence and drop evidence",
+           "function webviewRuntimeNextMessageSeq(viewId,direction)" in html
+           and "function webviewRuntimePatchDropped(viewId,reason,count,extra)" in html
+           and "function webviewQueuedMessageEnvelope(item)" in html
+           and "lastDeliveredMessageSeq:seq" in html
+           and "lastQueuedMessageSeq:seq" in html
+           and "lastFlushedMessageSeq:lastSeq" in html
+           and "patch.lastDroppedReason='queue-overflow'" in html
+           and "webviewRuntimePatchDropped(id,'disposed-queue'" in html
+           and "lastDroppedReason:pending?'dispose-pending'" in html
+           and "sequence:_messageSeq" in html
+           and "lastInboundMessageSeq:Number(e.data.sequence)||webviewRuntimeNextMessageSeq(viewId,'from-webview')" in html)
     _check("frontend accepts provider webview pushes",
            "const providerId=String(viewId).startsWith('provider.')?String(viewId).slice(9):''" in html
             and "isNativeCliProvider" not in html
@@ -6188,6 +6206,15 @@ def test_phase1_ai_editor_regressions() -> None:
             and "el.dataset.webviewFlushedMessageCount=String(Number(data.flushedMessageCount)||0);" in html
             and "el.dataset.webviewMessagesToCount=String(Number(data.messagesToWebview)||0);" in html
             and "el.dataset.webviewMessagesFromCount=String(Number(data.messagesFromWebview)||0);" in html
+            and "el.dataset.webviewLastInboundMessageSeq=String(Number(data.lastInboundMessageSeq)||0);" in html
+            and "el.dataset.webviewLastOutboundMessageSeq=String(Number(data.lastOutboundMessageSeq)||0);" in html
+            and "el.dataset.webviewLastDeliveredMessageSeq=String(Number(data.lastDeliveredMessageSeq)||0);" in html
+            and "el.dataset.webviewLastQueuedMessageSeq=String(Number(data.lastQueuedMessageSeq)||0);" in html
+            and "el.dataset.webviewLastFlushedMessageSeq=String(Number(data.lastFlushedMessageSeq)||0);" in html
+            and "el.dataset.webviewDroppedMessageCount=String(Number(data.droppedMessageCount)||0);" in html
+            and "el.dataset.webviewLastQueueReason=String(data.lastQueueReason||'');" in html
+            and "el.dataset.webviewLastFlushReason=String(data.lastFlushReason||'');" in html
+            and "el.dataset.webviewLastDeliveryReason=String(data.lastDeliveryReason||'');" in html
             and "el.dataset.webviewStateUpdateCount=String(Number(data.stateUpdateCount)||0);" in html
             and "el.dataset.webviewFrameLoaded=data.frameLoaded?'true':'false';" in html
             and "el.dataset.webviewIframeLoadedAt=String(Number(data.iframeLoadedAt)||0);" in html
@@ -13094,13 +13121,28 @@ console.log("extension setting schema helpers ok");
            and "window.dispatchEvent(new MessageEvent('message',{data:{type:'webview-set-state'" in html
            and "window.dispatchEvent(new MessageEvent('message',{data:{type:'webview-message'" in html
            and "window.dispatchEvent(new MessageEvent('message',{data:{type:'webview-visibility'" in html
+           and "window._onEditorEvent('webview_message',{view_id:lifecycleViewId,message:{kind:'queued-before-render'}});" in html
+           and "window._onEditorEvent('webview_message',{view_id:lifecycleViewId,message:{kind:'after-dispose'}});" in html
+           and "lifecycleDisposePendingViewId='provider.selftest.disposePending'" in html
            and "window._onEditorEvent('dispose_webview_panel',{view_id:lifecycleViewId" in html
            and "webviewLifecycle:lifecycleSnapshot" in html
            and "snapshot.webviewLifecycle.disposed&&snapshot.webviewLifecycle.disposedSeq>snapshot.webviewLifecycle.seq" in html
            and "snapshot.webviewLifecycle.frameApiReady==='true'" in html
            and "snapshot.webviewLifecycle.frameApiAcquired==='true'" in html
-           and "snapshot.webviewLifecycle.messagesTo>=1" in html
+           and "snapshot.runtimeWebviewMessageRows>=1" in html
+           and "snapshot.runtimeWebviewQueuedRows>=2" in html
+           and "snapshot.runtimeWebviewDroppedRows>=1" in html
+           and "snapshot.runtimeWebviewSeqRows>=1" in html
+           and "snapshot.runtimeMessageEvidenceFilterVisible>=1" in html
+           and "snapshot.runtimeQueuedEvidenceFilterVisible>=2" in html
+           and "snapshot.runtimeDroppedEvidenceFilterVisible>=1" in html
+           and "snapshot.webviewLifecycle.queuedBeforeRender>=1" in html
+           and "snapshot.webviewLifecycle.lastDeliveredSeq>=1" in html
+           and "snapshot.webviewLifecycle.lastQueueReason==='missing-frame'" in html
+           and "snapshot.webviewLifecycle.messagesTo>=2" in html
            and "snapshot.webviewLifecycle.messagesFrom>=1" in html
+           and "snapshot.webviewLifecycle.droppedAfterDispose>=1" in html
+           and "snapshot.webviewLifecycle.disposePendingReason==='dispose-pending'" in html
            and "snapshot.webviewLifecycle.stateUpdateCount>=1" in html
            and "snapshot.webviewLifecycle.apiReady" in html
            and "snapshot.webviewLifecycle.readyCount>=1" in html
@@ -13608,7 +13650,7 @@ console.log("command palette quick access helpers ok");
     else:
         _check("frontend command palette QuickAccess helpers skipped without Node.js", True)
     _check("webview bridge preserves raw and falsy messages",
-            "postExtensionMessageToWebview(iframe,msg)" in html
+            "postExtensionMessageToWebview(iframe,msg,'editor-event')" in html
             and "iframe.contentWindow.postMessage(msg,'*')" in html
             and "messagesToWebview:(Number(cached.messagesToWebview)||0)+1" in html
             and "messagesFromWebview:(Number(cached.messagesFromWebview)||0)+1" in html
@@ -13628,7 +13670,7 @@ console.log("command palette quick access helpers ok");
             and "readyCount:(Number(cached.readyCount)||0)+1" in html
             and "apiCallCount:(Number(cached.apiCallCount)||0)+1" in html
             and "stateUpdateCount:(Number(cached.stateUpdateCount)||0)+1" in html
-            and "flushPendingWebviewMessages(viewId,iframe);" in html)
+            and "flushPendingWebviewMessages(viewId,iframe,'webview-ready:'+String(e.data.phase||''));" in html)
     _check("non-webview provider panels use backend provider callbacks",
            "function _buildChatProviderPanel(panel,p)" in html
            and "send.onclick=()=>providerSend(pid)" in html

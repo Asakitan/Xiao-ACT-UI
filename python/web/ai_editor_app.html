@@ -3994,7 +3994,7 @@ pre.code-block { overflow:visible; }
             <input id="extension-runtime-filter-text" placeholder="Filter surfaces" aria-label="Filter extension runtime surfaces" oninput="applyExtensionRuntimeSurfaceFilter()">
             <select id="extension-runtime-filter-kind" aria-label="Filter extension runtime surface kind" onchange="applyExtensionRuntimeSurfaceFilter()"><option value="">All kinds</option></select>
             <select id="extension-runtime-filter-source" aria-label="Filter extension runtime source" onchange="applyExtensionRuntimeSurfaceFilter()"><option value="">All sources</option><option value="runtime">Runtime</option><option value="manifest">Manifest</option><option value="runtime-only">Runtime only</option></select>
-            <select id="extension-runtime-filter-evidence" aria-label="Filter webview render evidence" onchange="applyExtensionRuntimeSurfaceFilter()"><option value="">All evidence</option><option value="rendered">Rendered HTML</option><option value="missing">Missing HTML</option><option value="retained">Retained</option><option value="scripts">Scripts enabled</option></select>
+            <select id="extension-runtime-filter-evidence" aria-label="Filter webview render evidence" onchange="applyExtensionRuntimeSurfaceFilter()"><option value="">All evidence</option><option value="rendered">Rendered HTML</option><option value="missing">Missing HTML</option><option value="retained">Retained</option><option value="scripts">Scripts enabled</option><option value="messages">Has messages</option><option value="queued">Queued messages</option><option value="dropped">Dropped messages</option></select>
           </div>
         </div>
         <div class="extension-runtime-summary" id="extension-runtime-summary"></div>
@@ -23993,6 +23993,27 @@ const PROVIDER_TAB_LABEL_KEYS={chat:'tab_chat',copilot:'provider_copilot_label',
 let dynamicExtensionProviderDefs=Object.create(null);
 let webviewRuntimeCache=Object.create(null);
 function webviewRuntimeNow(){return Date.now()}
+function webviewRuntimeNextMessageSeq(viewId,direction){
+  const cached=webviewRuntimeCache[String(viewId||'')]||{};
+  const key=direction==='from-webview'?'lastInboundMessageSeq':'lastOutboundMessageSeq';
+  return (Number(cached[key])||0)+1;
+}
+function webviewRuntimePatchDropped(viewId,reason,count,extra){
+  const id=String(viewId||'').trim();if(!id)return null;
+  const cached=webviewRuntimeCache[id]||{};
+  return patchWebviewRuntimeLifecycle(id,{
+    droppedMessageCount:(Number(cached.droppedMessageCount)||0)+(Number(count)||1),
+    lastDroppedReason:String(reason||'unknown'),
+    lastDroppedAt:webviewRuntimeNow(),
+    ...(extra||{})
+  });
+}
+function webviewQueuedMessageEnvelope(item){
+  if(item&&typeof item==='object'&&item.__saoWebviewQueuedMessage)return item;
+  return {__saoWebviewQueuedMessage:true,seq:0,message:item,queuedAt:0,reason:''};
+}
+function webviewQueuedMessagePayload(item){return webviewQueuedMessageEnvelope(item).message}
+function webviewQueuedMessageSeq(item){return Number(webviewQueuedMessageEnvelope(item).seq)||0}
 function webviewRuntimeOptions(runtime){
   const data=runtime&&typeof runtime==='object'?runtime:{};
   const raw=data.options&&typeof data.options==='object'?data.options:{};
@@ -24094,11 +24115,23 @@ function applyWebviewRuntimeDataset(el,viewId,runtime){
   el.dataset.webviewFlushedMessageCount=String(Number(data.flushedMessageCount)||0);
   el.dataset.webviewMessagesToCount=String(Number(data.messagesToWebview)||0);
   el.dataset.webviewMessagesFromCount=String(Number(data.messagesFromWebview)||0);
+  el.dataset.webviewLastInboundMessageSeq=String(Number(data.lastInboundMessageSeq)||0);
+  el.dataset.webviewLastOutboundMessageSeq=String(Number(data.lastOutboundMessageSeq)||0);
+  el.dataset.webviewLastDeliveredMessageSeq=String(Number(data.lastDeliveredMessageSeq)||0);
+  el.dataset.webviewLastQueuedMessageSeq=String(Number(data.lastQueuedMessageSeq)||0);
+  el.dataset.webviewLastFlushedMessageSeq=String(Number(data.lastFlushedMessageSeq)||0);
+  el.dataset.webviewLastMessageSeq=String(Number(data.lastMessageSeq)||0);
+  el.dataset.webviewDroppedMessageCount=String(Number(data.droppedMessageCount)||0);
+  el.dataset.webviewLastDroppedReason=String(data.lastDroppedReason||'');
+  el.dataset.webviewLastQueueReason=String(data.lastQueueReason||'');
+  el.dataset.webviewLastFlushReason=String(data.lastFlushReason||'');
+  el.dataset.webviewLastDeliveryReason=String(data.lastDeliveryReason||'');
   el.dataset.webviewStateUpdateCount=String(Number(data.stateUpdateCount)||0);
   el.dataset.webviewFrameLoaded=data.frameLoaded?'true':'false';
   el.dataset.webviewIframeLoadedAt=String(Number(data.iframeLoadedAt)||0);
   el.dataset.webviewApiReady=data.apiReady?'true':'false';
   el.dataset.webviewReadyCount=String(Number(data.readyCount)||0);
+  el.dataset.webviewLastReadyPhase=String(data.readyPhase||'');
   el.dataset.webviewApiAcquired=data.apiAcquired?'true':'false';
   el.dataset.webviewApiAcquireCount=String(Number(data.apiAcquireCount)||0);
   el.dataset.webviewApiCallCount=String(Number(data.apiCallCount)||0);
@@ -25395,7 +25428,19 @@ function dispatchWebviewKeyboardEvent(viewId,data){
 function clearDisposedWebviewPanel(viewId,providerId){
   const id=String(viewId||'').trim();if(!id)return false;
   const existing=webviewRuntimeCache[id]||{};
-  patchWebviewRuntimeLifecycle(id,{html:'',pendingMessages:[],disposed:true,disposedAt:webviewRuntimeNow(),visible:false,viewState:{active:false,visible:false,viewColumn:1},messageCount:Number(existing.messageCount)||0});
+  const pending=Array.isArray(existing.pendingMessages)?existing.pendingMessages.length:0;
+  patchWebviewRuntimeLifecycle(id,{
+    html:'',
+    pendingMessages:[],
+    disposed:true,
+    disposedAt:webviewRuntimeNow(),
+    visible:false,
+    viewState:{active:false,visible:false,viewColumn:1},
+    messageCount:Number(existing.messageCount)||0,
+    droppedMessageCount:(Number(existing.droppedMessageCount)||0)+pending,
+    lastDroppedReason:pending?'dispose-pending':String(existing.lastDroppedReason||''),
+    lastDroppedAt:pending?webviewRuntimeNow():Number(existing.lastDroppedAt)||0
+  });
   delete _webviewTokens[id];
   const frameId='webview-frame-'+providerDomKey(id);
   const iframe=document.getElementById(frameId);
@@ -25692,7 +25737,7 @@ function _injectWebviewHtml(container,viewId,html,initialState){
     +'function _commandPayloadFromHref(href){var raw=String(href||"");if(raw.indexOf("command:")!==0)return{command:"",arguments:[]};raw=raw.slice(8);var qi=raw.indexOf("?"),cmd=qi>=0?raw.slice(0,qi):raw,q=qi>=0?raw.slice(qi+1):"";try{cmd=decodeURIComponent(cmd);}catch(e){}var args=[];if(q){try{var parsed=JSON.parse(decodeURIComponent(q));args=Array.isArray(parsed)?parsed:[parsed];}catch(e){args=[];}}return{command:String(cmd||"").trim(),arguments:args};}'
     +'function _commandUriAllowed(cmd){var allowed=_optionValue("enableCommandUris",false);if(allowed===true||allowed==="true")return true;if(Array.isArray(allowed))return allowed.map(String).indexOf(String(cmd||""))>=0;if(typeof allowed==="string")return allowed.split(/[,\\s]+/).filter(Boolean).indexOf(String(cmd||""))>=0;return false;}'
     +'function _readVsCodeContext(target){var ctx={};for(var n=target;n&&n.nodeType===1;n=n.parentElement){var raw=n.getAttribute&&n.getAttribute("data-vscode-context");if(!raw)continue;try{var parsed=JSON.parse(raw);if(parsed&&typeof parsed==="object"){Object.keys(parsed).forEach(function(k){ctx[k]=parsed[k];});}}catch(e){}}return ctx;}'
-    +'var _apiAcquired=false;var _apiAcquireCount=0;'
+    +'var _apiAcquired=false;var _apiAcquireCount=0;var _messageSeq=0;'
     +'function _postHostEvent(type,payload){try{payload=payload||{};payload.type=type;payload.viewId='+JSON.stringify(viewId)+';payload.token=_token;window.parent.postMessage(payload,"*");}catch(e){}}'
     +'function _postApiTelemetry(kind,extra){extra=extra||{};extra.apiKind=kind;extra.apiAcquired=_apiAcquired;extra.apiAcquireCount=_apiAcquireCount;_postHostEvent("webview-api-call",extra);}'
     +'function _notifyReady(phase){_postHostEvent("webview-ready",{phase:phase,apiAcquired:_apiAcquired,apiAcquireCount:_apiAcquireCount,visibilityState:document.visibilityState||""});}'
@@ -25706,7 +25751,7 @@ function _injectWebviewHtml(container,viewId,html,initialState){
     +'document.addEventListener("visibilitychange",function(){_postHostEvent("webview-visibility",{visibilityState:document.visibilityState||""});},true);'
     +'document.addEventListener("readystatechange",function(){if(document.readyState==="interactive"||document.readyState==="complete")_notifyReady(document.readyState);},true);'
     +'window.addEventListener("pageshow",function(){_notifyReady("pageshow");},true);'
-    +'var _vscodeApi=Object.freeze({postMessage:function(msg){_postApiTelemetry("postMessage");try{window.parent.postMessage({type:"webview-message",viewId:'+JSON.stringify(viewId)+',token:_token,message:msg},"*")}catch(e){}},'
+    +'var _vscodeApi=Object.freeze({postMessage:function(msg){_postApiTelemetry("postMessage");_messageSeq++;try{window.parent.postMessage({type:"webview-message",viewId:'+JSON.stringify(viewId)+',token:_token,message:msg,sequence:_messageSeq},"*")}catch(e){}},'
     +'setState:function(s){_state=s;_postApiTelemetry("setState");try{window.parent.postMessage({type:"webview-set-state",viewId:'+JSON.stringify(viewId)+',token:_token,state:s},"*")}catch(e){}return s;},'
     +'getState:function(){_postApiTelemetry("getState");return _state}});'
     +'Object.defineProperty(window,"acquireVsCodeApi",{configurable:false,enumerable:false,value:function(){_apiAcquireCount++;if(_apiAcquired){_postApiTelemetry("acquire-duplicate",{duplicate:true});return _vscodeApi;}_apiAcquired=true;_postApiTelemetry("acquire");return _vscodeApi;}});'
@@ -25719,9 +25764,9 @@ function _injectWebviewHtml(container,viewId,html,initialState){
   iframe.addEventListener('load',()=>{
     iframe.dataset.webviewFrameLoaded='true';
     patchWebviewRuntimeLifecycle(viewId,{frameLoaded:true,iframeLoadedAt:webviewRuntimeNow()});
-    flushPendingWebviewMessages(viewId,iframe);
+    flushPendingWebviewMessages(viewId,iframe,'iframe-load');
   },{once:true});
-  setTimeout(()=>flushPendingWebviewMessages(viewId,iframe),0);
+  setTimeout(()=>flushPendingWebviewMessages(viewId,iframe,'mount-tick'),0);
 }
 // Listen for postMessage from webview iframes (token-validated)
 window.addEventListener('message',function(e){
@@ -25734,7 +25779,9 @@ window.addEventListener('message',function(e){
       messageCount:(Number(cached.messageCount)||0)+1,
       messagesFromWebview:(Number(cached.messagesFromWebview)||0)+1,
       lastMessageAt:webviewRuntimeNow(),
-      lastMessageDirection:'from-webview'
+      lastMessageDirection:'from-webview',
+      lastInboundMessageSeq:Number(e.data.sequence)||webviewRuntimeNextMessageSeq(viewId,'from-webview'),
+      lastMessageSeq:Number(e.data.sequence)||webviewRuntimeNextMessageSeq(viewId,'from-webview')
     });
     if(window.pywebview&&window.pywebview.api&&window.pywebview.api.webview_post_message){
       window.pywebview.api.webview_post_message(viewId,msg);
@@ -25797,7 +25844,7 @@ window.addEventListener('message',function(e){
       apiAcquireCount:Math.max(Number(cached.apiAcquireCount)||0,Number(e.data.apiAcquireCount)||0),
       visibilityState:String(e.data.visibilityState||cached.visibilityState||'')
     });
-    flushPendingWebviewMessages(viewId,iframe);
+    flushPendingWebviewMessages(viewId,iframe,'webview-ready:'+String(e.data.phase||''));
     return;
   }
   if(e.data.type==='webview-api-call'){
@@ -26019,18 +26066,26 @@ function renderProviderToolConfirm(pid,data){
   const body=createProviderMessage(pid,'tool',data.name||'tool');
   if(body)renderConfirmBar(body,data,providerRefs(pid).messages,'Provider confirmation');
 }
-function postExtensionMessageToWebview(iframe,msg){
-  if(!iframe||!iframe.contentWindow)return;
+function postExtensionMessageToWebview(iframe,msg,reason,seqOverride){
+  if(!iframe||!iframe.contentWindow)return false;
   const runtimeId=iframe.dataset&&iframe.dataset.viewId?String(iframe.dataset.viewId):'';
   const cacheId=runtimeId||Object.keys(webviewRuntimeCache).find(id=>'webview-frame-'+providerDomKey(id)===iframe.id)||'';
   if(cacheId){
     const cached=webviewRuntimeCache[cacheId]||{};
-    if(cached.disposed)return;
+    if(cached.disposed){
+      webviewRuntimePatchDropped(cacheId,'disposed-send',1,{lastDeliveryReason:String(reason||'direct')});
+      return false;
+    }
+    const seq=Number(seqOverride)||webviewRuntimeNextMessageSeq(cacheId,'to-webview');
     patchWebviewRuntimeLifecycle(cacheId,{
       messageCount:(Number(cached.messageCount)||0)+1,
       messagesToWebview:(Number(cached.messagesToWebview)||0)+1,
       lastMessageAt:webviewRuntimeNow(),
-      lastMessageDirection:'to-webview'
+      lastMessageDirection:'to-webview',
+      lastOutboundMessageSeq:seq,
+      lastDeliveredMessageSeq:seq,
+      lastMessageSeq:seq,
+      lastDeliveryReason:String(reason||'direct')
     });
   }
   try{iframe.contentWindow.postMessage(msg,'*')}catch(e){}
@@ -26038,22 +26093,40 @@ function postExtensionMessageToWebview(iframe,msg){
   if(!alreadyWrapped){
     try{iframe.contentWindow.postMessage({type:'webview-extension-message',message:msg},'*')}catch(e){}
   }
+  return true;
 }
-function queueWebviewMessage(viewId,msg){
+function queueWebviewMessage(viewId,msg,reason){
   const id=String(viewId||'').trim();if(!id)return;
-  if(webviewRuntimeCache[id]&&webviewRuntimeCache[id].disposed)return;
+  if(webviewRuntimeCache[id]&&webviewRuntimeCache[id].disposed){
+    webviewRuntimePatchDropped(id,'disposed-queue',1,{lastQueueReason:String(reason||'missing-frame')});
+    return false;
+  }
   const cached=rememberWebviewRuntime(id,{});
   const q=Array.isArray(cached.pendingMessages)?cached.pendingMessages:[];
-  q.push(msg);
+  const seq=webviewRuntimeNextMessageSeq(id,'to-webview');
+  const queuedAt=webviewRuntimeNow();
+  q.push({__saoWebviewQueuedMessage:true,seq,message:msg,queuedAt,reason:String(reason||'missing-frame')});
+  const dropped=Math.max(0,q.length-50);
   cached.pendingMessages=q.slice(-50);
-  patchWebviewRuntimeLifecycle(id,{
+  const patch={
     pendingMessages:cached.pendingMessages,
     queuedMessageCount:(Number(cached.queuedMessageCount)||0)+1,
-    lastQueuedAt:webviewRuntimeNow(),
+    lastQueuedAt:queuedAt,
+    lastQueuedMessageSeq:seq,
+    lastQueueReason:String(reason||'missing-frame'),
+    lastOutboundMessageSeq:seq,
+    lastMessageSeq:seq,
     messageCount:(Number(cached.messageCount)||0)+1
-  });
+  };
+  if(dropped){
+    patch.droppedMessageCount=(Number(cached.droppedMessageCount)||0)+dropped;
+    patch.lastDroppedReason='queue-overflow';
+    patch.lastDroppedAt=queuedAt;
+  }
+  patchWebviewRuntimeLifecycle(id,patch);
+  return true;
 }
-function flushPendingWebviewMessages(viewId,iframe){
+function flushPendingWebviewMessages(viewId,iframe,reason){
   const id=String(viewId||'').trim();if(!id)return;
   const cached=webviewRuntimeCache[id];
   if(cached&&cached.disposed)return;
@@ -26061,14 +26134,24 @@ function flushPendingWebviewMessages(viewId,iframe){
   if(!q.length)return;
   const target=iframe||document.getElementById('webview-frame-'+providerDomKey(id));
   if(!target||!target.contentWindow)return;
-  const flushed=q.length;
+  let flushed=0,lastSeq=0;
   cached.pendingMessages=[];
-  q.forEach(msg=>postExtensionMessageToWebview(target,msg));
+  q.forEach(item=>{
+    const seq=webviewQueuedMessageSeq(item)||webviewRuntimeNextMessageSeq(id,'to-webview');
+    if(postExtensionMessageToWebview(target,webviewQueuedMessagePayload(item),String(reason||'flush'),seq)){
+      flushed++;
+      lastSeq=Math.max(lastSeq,seq);
+    }else{
+      webviewRuntimePatchDropped(id,'flush-failed',1,{lastFlushReason:String(reason||'flush')});
+    }
+  });
   const after=webviewRuntimeCache[id]||cached;
   patchWebviewRuntimeLifecycle(id,{
     pendingMessages:[],
     flushedMessageCount:(Number(after.flushedMessageCount)||0)+flushed,
     lastFlushAt:webviewRuntimeNow(),
+    lastFlushReason:String(reason||'flush'),
+    lastFlushedMessageSeq:lastSeq||Number(after.lastFlushedMessageSeq)||0,
     messageCount:Number(after.messageCount)||0
   });
 }
@@ -26164,9 +26247,9 @@ window._onEditorEvent=function(event,data){
     const frameId='webview-frame-'+providerDomKey(viewId);
     const iframe=document.getElementById(frameId);
     if(iframe&&iframe.contentWindow){
-      postExtensionMessageToWebview(iframe,msg);
+      postExtensionMessageToWebview(iframe,msg,'editor-event');
     }else{
-      queueWebviewMessage(viewId,msg);
+      queueWebviewMessage(viewId,msg,'missing-frame');
     }
     return;
   }
@@ -34283,6 +34366,9 @@ function extensionRuntimeEvidenceMatches(row,value){
   if(v==='missing')return !row.htmlAvailable;
   if(v==='retained')return !!ev.retainContextWhenHidden;
   if(v==='scripts')return ev.enableScripts===true;
+  if(v==='messages')return (Number(ev.messageCount)||0)>0;
+  if(v==='queued')return (Number(ev.pendingMessageCount)||0)>0||(Number(ev.queuedMessageCount)||0)>0;
+  if(v==='dropped')return (Number(ev.droppedMessageCount)||0)>0;
   return true;
 }
 function extensionRuntimeSurfaceViewId(row){
@@ -34337,6 +34423,23 @@ function extensionRuntimeSurfaceRows(data){
       : (item&&item.runtimeState&&item.runtimeState.webviewEvidence&&typeof item.runtimeState.webviewEvidence==='object'
         ? item.runtimeState.webviewEvidence
         : {});
+    const webviewId=String(item.id||item.viewId||item.view_id||item.webviewId||item.webview_id||'').trim();
+    const cachedRuntime=kind==='WebviewView'&&webviewId?(webviewRuntimeCache[webviewId]||{}):{};
+    if(kind==='WebviewView'&&cachedRuntime&&Object.keys(cachedRuntime).length){
+      evidence.messageCount=Number(cachedRuntime.messageCount)||Number(evidence.messageCount)||0;
+      evidence.pendingMessageCount=Array.isArray(cachedRuntime.pendingMessages)?cachedRuntime.pendingMessages.length:Number(evidence.pendingMessageCount)||0;
+      evidence.queuedMessageCount=Number(cachedRuntime.queuedMessageCount)||Number(evidence.queuedMessageCount)||0;
+      evidence.flushedMessageCount=Number(cachedRuntime.flushedMessageCount)||Number(evidence.flushedMessageCount)||0;
+      evidence.droppedMessageCount=Number(cachedRuntime.droppedMessageCount)||Number(evidence.droppedMessageCount)||0;
+      evidence.messagesToWebview=Number(cachedRuntime.messagesToWebview)||Number(evidence.messagesToWebview)||0;
+      evidence.messagesFromWebview=Number(cachedRuntime.messagesFromWebview)||Number(evidence.messagesFromWebview)||0;
+      evidence.lastQueueReason=String(cachedRuntime.lastQueueReason||evidence.lastQueueReason||'');
+      evidence.lastFlushReason=String(cachedRuntime.lastFlushReason||evidence.lastFlushReason||'');
+      evidence.lastDroppedReason=String(cachedRuntime.lastDroppedReason||evidence.lastDroppedReason||'');
+      evidence.lastDeliveredMessageSeq=Number(cachedRuntime.lastDeliveredMessageSeq)||Number(evidence.lastDeliveredMessageSeq)||0;
+      evidence.lastQueuedMessageSeq=Number(cachedRuntime.lastQueuedMessageSeq)||Number(evidence.lastQueuedMessageSeq)||0;
+      evidence.lastFlushedMessageSeq=Number(cachedRuntime.lastFlushedMessageSeq)||Number(evidence.lastFlushedMessageSeq)||0;
+    }
     const htmlLength=Number(evidence.htmlLength||item.htmlLength||0)||0;
     const evidenceText=[
       evidence.htmlAvailable||item.htmlAvailable?'html':'no-html',
@@ -34348,6 +34451,12 @@ function extensionRuntimeSurfaceRows(data){
       evidence.enableCommandUris===true?'command-uri':'',
       evidence.retainContextWhenHidden?'retain':'',
       evidence.visible?'visible':'',
+      evidence.messageCount?'messages:'+evidence.messageCount:'',
+      evidence.pendingMessageCount?'pending:'+evidence.pendingMessageCount:'',
+      evidence.queuedMessageCount?'queued:'+evidence.queuedMessageCount:'',
+      evidence.flushedMessageCount?'flushed:'+evidence.flushedMessageCount:'',
+      evidence.droppedMessageCount?'dropped:'+evidence.droppedMessageCount:'',
+      evidence.lastDroppedReason?'drop:'+evidence.lastDroppedReason:'',
     ].filter(Boolean).join(' ');
     const row={
       kind,
@@ -34650,6 +34759,9 @@ function renderExtensionRuntimeSurfacePanel(data){
     ['Missing Webview HTML',rows.filter(row=>row.kind==='WebviewView'&&!row.htmlAvailable).length],
     ['Retained Webview',summary.webviewRetained||0],
     ['Evidence Ready',rows.filter(row=>row.evidenceStatus==='rendered').length],
+    ['Webview Messages',rows.reduce((n,row)=>n+(row.kind==='WebviewView'?(Number(row.webviewEvidence&&row.webviewEvidence.messageCount)||0):0),0)],
+    ['Queued Webview',rows.reduce((n,row)=>n+(row.kind==='WebviewView'?(Number(row.webviewEvidence&&row.webviewEvidence.pendingMessageCount)||0):0),0)],
+    ['Dropped Webview',rows.reduce((n,row)=>n+(row.kind==='WebviewView'?(Number(row.webviewEvidence&&row.webviewEvidence.droppedMessageCount)||0):0),0)],
     ['Runtime',rows.filter(row=>row.ready).length],
     ['Manifest',rows.filter(row=>!row.ready).length],
   ];
@@ -34662,7 +34774,7 @@ function renderExtensionRuntimeSurfacePanel(data){
   chips.forEach(([label,value])=>{
     const chip=document.createElement('span');chip.className='extension-runtime-chip';
     chip.innerHTML='<strong>'+esc(String(value))+'</strong>'+esc(label);
-    if(['TreeView','WebviewView','CustomEditor','Notebook','Command','Menu','Terminal','LM Tool','LM Provider','Chat','Context','Runtime','Manifest','Webview HTML','Missing Webview HTML','Retained Webview','Evidence Ready'].includes(label)){
+    if(['TreeView','WebviewView','CustomEditor','Notebook','Command','Menu','Terminal','LM Tool','LM Provider','Chat','Context','Runtime','Manifest','Webview HTML','Missing Webview HTML','Retained Webview','Evidence Ready','Webview Messages','Queued Webview','Dropped Webview'].includes(label)){
       chip.classList.add('filterable');
       chip.tabIndex=0;
       chip.setAttribute('role','button');
@@ -34670,7 +34782,7 @@ function renderExtensionRuntimeSurfacePanel(data){
       chip.onclick=()=>{
         const kindMap={'Terminal':'TerminalProfile','LM Tool':'LMTool','LM Provider':'LMProvider','Chat':'ChatParticipant','Context':'ChatContext'};
         const sourceMap={Runtime:'runtime',Manifest:'manifest'};
-        const evidenceMap={'Webview HTML':'rendered','Missing Webview HTML':'missing','Retained Webview':'retained','Evidence Ready':'rendered'};
+        const evidenceMap={'Webview HTML':'rendered','Missing Webview HTML':'missing','Retained Webview':'retained','Evidence Ready':'rendered','Webview Messages':'messages','Queued Webview':'queued','Dropped Webview':'dropped'};
         const kindSel=$('extension-runtime-filter-kind'),sourceSel=$('extension-runtime-filter-source'),evidenceSel=$('extension-runtime-filter-evidence');
         if(sourceMap[label]&&sourceSel)sourceSel.value=sourceMap[label];
         else if(evidenceMap[label]&&evidenceSel)evidenceSel.value=evidenceMap[label];
@@ -34708,6 +34820,15 @@ function renderExtensionRuntimeSurfacePanel(data){
       el.dataset.webviewHtmlLength=String(row.htmlLength||0);
       el.dataset.webviewRetained=row.webviewEvidence&&row.webviewEvidence.retainContextWhenHidden?'1':'0';
       el.dataset.webviewEvidenceStatus=row.evidenceStatus||'';
+      el.dataset.webviewMessageCount=String(row.webviewEvidence&&row.webviewEvidence.messageCount||0);
+      el.dataset.webviewPendingMessageCount=String(row.webviewEvidence&&row.webviewEvidence.pendingMessageCount||0);
+      el.dataset.webviewQueuedMessageCount=String(row.webviewEvidence&&row.webviewEvidence.queuedMessageCount||0);
+      el.dataset.webviewFlushedMessageCount=String(row.webviewEvidence&&row.webviewEvidence.flushedMessageCount||0);
+      el.dataset.webviewDroppedMessageCount=String(row.webviewEvidence&&row.webviewEvidence.droppedMessageCount||0);
+      el.dataset.webviewLastDroppedReason=String(row.webviewEvidence&&row.webviewEvidence.lastDroppedReason||'');
+      el.dataset.webviewLastQueueReason=String(row.webviewEvidence&&row.webviewEvidence.lastQueueReason||'');
+      el.dataset.webviewLastFlushReason=String(row.webviewEvidence&&row.webviewEvidence.lastFlushReason||'');
+      el.dataset.webviewLastDeliveredMessageSeq=String(row.webviewEvidence&&row.webviewEvidence.lastDeliveredMessageSeq||0);
       el.dataset.focusable=row.focusable?'1':'0';
       el.dataset.refreshable=row.refreshable?'1':'0';
       el.dataset.search=row.searchText||'';
@@ -34736,6 +34857,13 @@ function renderExtensionRuntimeSurfacePanel(data){
           ev.enableCommandUris?{text:'command-uri'}:null,
           ev.retainContextWhenHidden?{text:'retain'}:null,
           ev.visible?{text:'visible'}:null,
+          ev.messageCount?{text:'msg '+ev.messageCount}:null,
+          ev.pendingMessageCount?{text:'pending '+ev.pendingMessageCount,missing:true}:null,
+          ev.queuedMessageCount?{text:'queued '+ev.queuedMessageCount}:null,
+          ev.flushedMessageCount?{text:'flushed '+ev.flushedMessageCount}:null,
+          ev.droppedMessageCount?{text:'drop '+ev.droppedMessageCount,missing:true}:null,
+          ev.lastDroppedReason?{text:'why '+ev.lastDroppedReason,missing:true}:null,
+          ev.lastDeliveredMessageSeq?{text:'seq '+ev.lastDeliveredMessageSeq}:null,
         ].filter(Boolean);
         chips.forEach(item=>{
           const chip=document.createElement('span');
@@ -36175,8 +36303,8 @@ function extensionRuntimeDomSelfCheckSnapshot(){
       viewContainers:[fixtureItem],
       treeViews:[{id:'selftest.dynamic.tree',name:'Runtime Tree',container:'selftest.dynamic.container',extensionId:'selftest.extension',runtimeAvailable:true}],
       webviewViews:[
-        {id:'selftest.dynamic.webview',name:'Runtime Webview',container:'selftest.dynamic.container',extensionId:'selftest.extension',runtimeAvailable:true,htmlAvailable:true,htmlLength:61,webviewEvidence:{htmlAvailable:true,htmlLength:61,stateKind:'dict',stateKeys:['ready'],enableScripts:true,enableForms:true,enableCommandUris:false,retainContextWhenHidden:true,visible:true}},
-        {id:'selftest.dynamic.webview.pending',name:'Pending Runtime Webview',container:'selftest.dynamic.container',extensionId:'selftest.extension',runtimeAvailable:true,htmlAvailable:false,htmlLength:0,webviewEvidence:{htmlAvailable:false,stateKind:'dict',stateKeys:['pending'],enableScripts:true,enableForms:true,retainContextWhenHidden:false,visible:false}}
+        {id:'selftest.dynamic.webview',name:'Runtime Webview',container:'selftest.dynamic.container',extensionId:'selftest.extension',runtimeAvailable:true,htmlAvailable:true,htmlLength:61,webviewEvidence:{htmlAvailable:true,htmlLength:61,stateKind:'dict',stateKeys:['ready'],enableScripts:true,enableForms:true,enableCommandUris:false,retainContextWhenHidden:true,visible:true,messageCount:3,messagesToWebview:2,messagesFromWebview:1,queuedMessageCount:1,flushedMessageCount:1,lastDeliveredMessageSeq:2,lastQueuedMessageSeq:1,lastFlushedMessageSeq:1,lastQueueReason:'missing-frame',lastFlushReason:'webview-ready:selftest'}},
+        {id:'selftest.dynamic.webview.pending',name:'Pending Runtime Webview',container:'selftest.dynamic.container',extensionId:'selftest.extension',runtimeAvailable:true,htmlAvailable:false,htmlLength:0,webviewEvidence:{htmlAvailable:false,stateKind:'dict',stateKeys:['pending'],enableScripts:true,enableForms:true,retainContextWhenHidden:false,visible:false,pendingMessageCount:1,queuedMessageCount:1,droppedMessageCount:1,lastDroppedReason:'disposed-queue',lastQueueReason:'missing-frame'}}
       ],
       customEditors:[{viewType:'selftest.customEditor',displayName:'Custom Fixture',extensionId:'selftest.extension',stateCount:1,states:[{uri:'custom.fixture'}],runtimeAvailable:true}],
       notebooks:[{type:'selftest-notebook',displayName:'Selftest Notebook',extensionId:'selftest.extension',serializerCount:1,controllerCount:1,uri:'selftest.notebook',runtimeAvailable:true}],
@@ -36267,6 +36395,8 @@ function extensionRuntimeDomSelfCheckSnapshot(){
 
     const lifecycleViewId='provider.selftest.lifecycle';
     const lifecycleProviderId='selftest.lifecycle';
+    window._onEditorEvent('webview_message',{view_id:lifecycleViewId,message:{kind:'queued-before-render'}});
+    const lifecycleQueuedBeforeRender={...(webviewRuntimeCache[lifecycleViewId]||{})};
     window._onEditorEvent('render_webview_panel',{view_id:lifecycleViewId,provider_id:lifecycleProviderId,title:'Lifecycle Start',html:'<html><body>lifecycle</body></html>',state:{phase:'render'},options:{retainContextWhenHidden:true},retainContextWhenHidden:true});
     window._onEditorEvent('update_webview_panel_title',{view_id:lifecycleViewId,title:'Lifecycle Updated',view_type:'selftest.lifecycle'});
     window._onEditorEvent('update_webview_panel_icon',{view_id:lifecycleViewId,icon_path:{id:'beaker'},view_type:'selftest.lifecycle'});
@@ -36290,8 +36420,16 @@ function extensionRuntimeDomSelfCheckSnapshot(){
     const lifecycleFrame=document.getElementById('webview-frame-'+providerDomKey(lifecycleViewId));
     const lifecycleBeforeDispose={...(webviewRuntimeCache[lifecycleViewId]||{})};
     window._onEditorEvent('dispose_webview_panel',{view_id:lifecycleViewId,provider_id:lifecycleProviderId});
+    window._onEditorEvent('webview_message',{view_id:lifecycleViewId,message:{kind:'after-dispose'}});
     const lifecycleAfterDispose={...(webviewRuntimeCache[lifecycleViewId]||{})};
+    const lifecycleDisposePendingViewId='provider.selftest.disposePending';
+    window._onEditorEvent('webview_message',{view_id:lifecycleDisposePendingViewId,message:{kind:'pending-dispose'}});
+    window._onEditorEvent('dispose_webview_panel',{view_id:lifecycleDisposePendingViewId,provider_id:'selftest.disposePending'});
+    const lifecycleDisposePending={...(webviewRuntimeCache[lifecycleDisposePendingViewId]||{})};
     const lifecycleSnapshot={
+      queuedBeforeRender:Number(lifecycleQueuedBeforeRender.queuedMessageCount)||0,
+      queuedBeforeReason:String(lifecycleQueuedBeforeRender.lastQueueReason||''),
+      queuedBeforeSeq:Number(lifecycleQueuedBeforeRender.lastQueuedMessageSeq)||0,
       rendered:lifecycleBeforeDispose.lifecycleState==='visible'||lifecycleBeforeDispose.lifecycleState==='rendered',
       seq:Number(lifecycleBeforeDispose.lifecycleSeq)||0,
       title:lifecyclePanel?lifecyclePanel.dataset.webviewTitle:'',
@@ -36307,6 +36445,14 @@ function extensionRuntimeDomSelfCheckSnapshot(){
       messageCount:Number(lifecycleBeforeDispose.messageCount)||0,
       messagesTo:Number(lifecycleBeforeDispose.messagesToWebview)||0,
       messagesFrom:Number(lifecycleBeforeDispose.messagesFromWebview)||0,
+      lastInboundSeq:Number(lifecycleBeforeDispose.lastInboundMessageSeq)||0,
+      lastOutboundSeq:Number(lifecycleBeforeDispose.lastOutboundMessageSeq)||0,
+      lastDeliveredSeq:Number(lifecycleBeforeDispose.lastDeliveredMessageSeq)||0,
+      lastQueuedSeq:Number(lifecycleBeforeDispose.lastQueuedMessageSeq)||0,
+      lastFlushedSeq:Number(lifecycleBeforeDispose.lastFlushedMessageSeq)||0,
+      lastQueueReason:String(lifecycleBeforeDispose.lastQueueReason||''),
+      lastFlushReason:String(lifecycleBeforeDispose.lastFlushReason||''),
+      lastDeliveryReason:String(lifecycleBeforeDispose.lastDeliveryReason||''),
       viewStateCount:Number(lifecycleBeforeDispose.viewStateCount)||0,
       stateUpdateCount:Number(lifecycleBeforeDispose.stateUpdateCount)||0,
       apiReady:lifecycleBeforeDispose.apiReady===true,
@@ -36333,6 +36479,10 @@ function extensionRuntimeDomSelfCheckSnapshot(){
       panelLastKey:lifecyclePanel?lifecyclePanel.dataset.webviewLastKey:'',
       disposed:lifecycleAfterDispose.disposed===true&&lifecycleAfterDispose.lifecycleState==='disposed',
       disposedSeq:Number(lifecycleAfterDispose.lifecycleSeq)||0,
+      droppedAfterDispose:Number(lifecycleAfterDispose.droppedMessageCount)||0,
+      lastDroppedReason:String(lifecycleAfterDispose.lastDroppedReason||''),
+      disposePendingDropped:Number(lifecycleDisposePending.droppedMessageCount)||0,
+      disposePendingReason:String(lifecycleDisposePending.lastDroppedReason||''),
       panelRemoved:!$(providerElId('rp',lifecycleProviderId)),
       tabRemoved:!providerTabElement(lifecycleProviderId)
     };
@@ -36390,6 +36540,11 @@ function extensionRuntimeDomSelfCheckSnapshot(){
       runtimeHtmlEvidenceRows:runtimeList?Array.from(runtimeList.querySelectorAll('.extension-runtime-row')).filter(row=>row.dataset.webviewHtmlAvailable==='1').length:0,
       runtimeMissingEvidenceRows:runtimeList?Array.from(runtimeList.querySelectorAll('.extension-runtime-row')).filter(row=>row.dataset.webviewEvidenceStatus==='missing').length:0,
       runtimeWebviewRetainedRows:runtimeList?Array.from(runtimeList.querySelectorAll('.extension-runtime-row')).filter(row=>row.dataset.webviewRetained==='1').length:0,
+      runtimeWebviewMessageRows:runtimeList?Array.from(runtimeList.querySelectorAll('.extension-runtime-row')).filter(row=>Number(row.dataset.webviewMessageCount)||0).length:0,
+      runtimeWebviewQueuedRows:runtimeList?Array.from(runtimeList.querySelectorAll('.extension-runtime-row')).filter(row=>(Number(row.dataset.webviewPendingMessageCount)||0)||(Number(row.dataset.webviewQueuedMessageCount)||0)).length:0,
+      runtimeWebviewDroppedRows:runtimeList?Array.from(runtimeList.querySelectorAll('.extension-runtime-row')).filter(row=>Number(row.dataset.webviewDroppedMessageCount)||0).length:0,
+      runtimeWebviewLastDropReasons:runtimeList?Array.from(runtimeList.querySelectorAll('.extension-runtime-row')).map(row=>row.dataset.webviewLastDroppedReason||'').filter(Boolean):[],
+      runtimeWebviewSeqRows:runtimeList?Array.from(runtimeList.querySelectorAll('.extension-runtime-row')).filter(row=>Number(row.dataset.webviewLastDeliveredMessageSeq)||0).length:0,
       runtimeEvidencePills:runtimeList?runtimeList.querySelectorAll('.extension-runtime-evidence').length:0,
       runtimeEvidenceStatuses:runtimeList?Array.from(runtimeList.querySelectorAll('.extension-runtime-row')).map(row=>row.dataset.webviewEvidenceStatus||'').filter(Boolean):[],
       runtimeMiniActionButtons:runtimeList?runtimeList.querySelectorAll('.extension-runtime-mini-action').length:0,
@@ -36420,6 +36575,9 @@ function extensionRuntimeDomSelfCheckSnapshot(){
       runtimeSourceFilterVisible:runtimeSourceFilterResult?runtimeSourceFilterResult.visible:0,
       runtimeRenderedEvidenceFilterVisible:runtimeRenderedEvidenceFilterResult?runtimeRenderedEvidenceFilterResult.visible:0,
       runtimeMissingEvidenceFilterVisible:runtimeMissingEvidenceFilterResult?runtimeMissingEvidenceFilterResult.visible:0,
+      runtimeMessageEvidenceFilterVisible:(()=>{if(!runtimeEvidenceFilter)return 0;runtimeEvidenceFilter.value='messages';const r=applyExtensionRuntimeSurfaceFilter();runtimeEvidenceFilter.value='';applyExtensionRuntimeSurfaceFilter();return r?r.visible:0})(),
+      runtimeQueuedEvidenceFilterVisible:(()=>{if(!runtimeEvidenceFilter)return 0;runtimeEvidenceFilter.value='queued';const r=applyExtensionRuntimeSurfaceFilter();runtimeEvidenceFilter.value='';applyExtensionRuntimeSurfaceFilter();return r?r.visible:0})(),
+      runtimeDroppedEvidenceFilterVisible:(()=>{if(!runtimeEvidenceFilter)return 0;runtimeEvidenceFilter.value='dropped';const r=applyExtensionRuntimeSurfaceFilter();runtimeEvidenceFilter.value='';applyExtensionRuntimeSurfaceFilter();return r?r.visible:0})(),
       runtimeTextFilterVisible:runtimeTextFilterResult?runtimeTextFilterResult.visible:0,
       runtimeSelectedRows:runtimeList?runtimeList.querySelectorAll('.extension-runtime-row.selected[aria-selected="true"]').length:0,
       runtimeSelectStatus:runtimeSelectAfter,
@@ -36444,6 +36602,7 @@ function extensionRuntimeDomSelfCheckSnapshot(){
       && snapshot.notebookOutputItems===3&&snapshot.notebookHtmlFrame&&snapshot.notebookImage&&snapshot.notebookText
       && snapshot.runtimeRows>=12&&snapshot.runtimeReadyRows>=11&&snapshot.runtimeChips>=15
       && snapshot.runtimeWebviewEvidenceRows>=6&&snapshot.runtimeHtmlEvidenceRows>=1&&snapshot.runtimeMissingEvidenceRows>=1&&snapshot.runtimeWebviewRetainedRows>=1
+      && snapshot.runtimeWebviewMessageRows>=1&&snapshot.runtimeWebviewQueuedRows>=2&&snapshot.runtimeWebviewDroppedRows>=1&&snapshot.runtimeWebviewSeqRows>=1&&snapshot.runtimeWebviewLastDropReasons.includes('disposed-queue')
       && snapshot.runtimeEvidencePills===snapshot.runtimeRows&&snapshot.runtimeEvidenceStatuses.includes('rendered')&&snapshot.runtimeEvidenceStatuses.includes('missing')
       && snapshot.runtimeMiniActionButtons>=snapshot.runtimeRows*3&&snapshot.runtimeFocusableRows>=4&&snapshot.runtimeRefreshableRows>=4
       && snapshot.runtimeListRole==='list'&&snapshot.runtimeListItems===snapshot.runtimeRows
@@ -36457,7 +36616,8 @@ function extensionRuntimeDomSelfCheckSnapshot(){
       && snapshot.runtimePanelVisibleCount==='12'&&snapshot.runtimePanelTotalCount==='12'
       && snapshot.runtimeDatasetSources.includes('runtime')&&snapshot.runtimeStatusText.includes('12 visible of 12 rows')
       && snapshot.runtimeFilterKinds.includes('LMTool')&&snapshot.runtimeFilterBefore.visible===12
-      && snapshot.runtimeKindFilterVisible===1&&snapshot.runtimeSourceFilterVisible===12&&snapshot.runtimeRenderedEvidenceFilterVisible===1&&snapshot.runtimeMissingEvidenceFilterVisible===1&&snapshot.runtimeTextFilterVisible===1
+      && snapshot.runtimeKindFilterVisible===1&&snapshot.runtimeSourceFilterVisible===12&&snapshot.runtimeRenderedEvidenceFilterVisible===1&&snapshot.runtimeMissingEvidenceFilterVisible===1
+      && snapshot.runtimeMessageEvidenceFilterVisible>=1&&snapshot.runtimeQueuedEvidenceFilterVisible>=2&&snapshot.runtimeDroppedEvidenceFilterVisible>=1&&snapshot.runtimeTextFilterVisible===1
       && snapshot.runtimeSelectedRows===1&&snapshot.runtimeSelectStatus.includes('Selected')
       && snapshot.runtimeChipFilterKind==='LMTool'
       && snapshot.runtimeActionStateRows>=4
@@ -36479,9 +36639,12 @@ function extensionRuntimeDomSelfCheckSnapshot(){
       && snapshot.webviewLifecycle.frame
       && snapshot.webviewLifecycle.frameApiReady==='true'
       && snapshot.webviewLifecycle.frameApiAcquired==='true'
-      && snapshot.webviewLifecycle.messageCount>=1
-      && snapshot.webviewLifecycle.messagesTo>=1
+      && snapshot.webviewLifecycle.queuedBeforeRender>=1&&snapshot.webviewLifecycle.queuedBeforeReason==='missing-frame'&&snapshot.webviewLifecycle.queuedBeforeSeq>=1
+      && snapshot.webviewLifecycle.messageCount>=3
+      && snapshot.webviewLifecycle.messagesTo>=2
       && snapshot.webviewLifecycle.messagesFrom>=1
+      && snapshot.webviewLifecycle.lastInboundSeq>=1&&snapshot.webviewLifecycle.lastOutboundSeq>=2&&snapshot.webviewLifecycle.lastDeliveredSeq>=1&&snapshot.webviewLifecycle.lastQueuedSeq>=1&&snapshot.webviewLifecycle.lastFlushedSeq>=1
+      && snapshot.webviewLifecycle.lastQueueReason==='missing-frame'&&snapshot.webviewLifecycle.lastFlushReason&&snapshot.webviewLifecycle.lastDeliveryReason
       && snapshot.webviewLifecycle.viewStateCount>=1
       && snapshot.webviewLifecycle.stateUpdateCount>=1
       && snapshot.webviewLifecycle.apiReady
@@ -36492,6 +36655,8 @@ function extensionRuntimeDomSelfCheckSnapshot(){
       && snapshot.webviewLifecycle.lastApiCallKind==='acquire'
       && snapshot.webviewLifecycle.visibilityState==='visible'
       && snapshot.webviewLifecycle.disposed&&snapshot.webviewLifecycle.disposedSeq>snapshot.webviewLifecycle.seq
+      && snapshot.webviewLifecycle.droppedAfterDispose>=1&&snapshot.webviewLifecycle.lastDroppedReason==='disposed-queue'
+      && snapshot.webviewLifecycle.disposePendingDropped>=1&&snapshot.webviewLifecycle.disposePendingReason==='dispose-pending'
       && snapshot.webviewLifecycle.panelRemoved&&snapshot.webviewLifecycle.tabRemoved;
     return snapshot;
   }finally{
