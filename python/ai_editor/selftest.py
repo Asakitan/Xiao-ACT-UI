@@ -9750,12 +9750,16 @@ console.log("frontend word separator behavior ok");
            and "window.formatSettingsJsonTab=formatSettingsJsonTab;" in html
            and "window.revertSettingsJsonTab=revertSettingsJsonTab;" in html)
     _check("frontend settings uses VS Code style settings layout",
-           "class=\"modal settings-modal\"" in html
+           "class=\"modal settings-modal preferences-workbench\"" in html
             and "class=\"settings-titlebar\"" in html
+            and "id=\"settings-title-route\"" in html
+            and "settings-toolbar-strip" in html
             and "settings-top-action primary" in html
             and "class=\"settings-searchbar\"" in html
             and "class=\"settings-search-row\"" in html
+            and "class=\"settings-search-primary\"" in html
             and "class=\"settings-query-box\"" in html
+            and "id=\"settings-search-caption-text\"" in html
             and "class=\"settings-scope-control\"" in html
             and "class=\"settings-scope-label\"" in html
             and "class=\"settings-target-tabs\"" in html
@@ -9777,6 +9781,8 @@ console.log("frontend word separator behavior ok");
            and "function settingsGroupMatchesTarget(group,target)" in html
            and "function settingsVisibleGroupText(group)" in html
             and "function renderSettingsTargetSummary(stats)" in html
+            and "function settingsWorkbenchContextLabel(visible,total)" in html
+            and "function renderSettingsWorkbenchHeader(visible,total,stats)" in html
             and "id=\"settings-review-bar\"" in html
             and "id=\"settings-save-preview\"" in html
             and "function settingsComputeReviewState(stats)" in html
@@ -10032,8 +10038,8 @@ console.log("frontend word separator behavior ok");
             and "Prev Section" in html
             and "Next Section" in html
             and "#settings-modal.open" in html
-            and "width:min(1360px, calc(100vw - 56px))" in html
-            and "grid-template-columns:264px minmax(0,1fr) minmax(240px,286px)" in html
+            and "width:min(1400px, calc(100vw - 48px))" in html
+            and "grid-template-columns:280px minmax(0,1fr) minmax(270px,320px)" in html
             and "class=\"settings-inspector\" id=\"settings-inspector\"" in html
             and "Selected Setting" in html
             and "settings-current-detail:not(.open)::before" in html
@@ -10065,6 +10071,10 @@ console.log("frontend word separator behavior ok");
              and "hasLabelsInsideRows" in html
              and "hidesOriginalLabels" in html
              and "hasBuiltSettingGridHead" in html
+             and "hasPreferencesWorkbenchShell" in html
+             and "hasWorkbenchHeaderContext" in html
+             and "hasSettingsToolbarStrip" in html
+             and "hasSearchPrimaryCaption" in html
              and "hasBuiltSettingRowDivider" in html
              and "hasTargetCountChips" in html
              and "hasTargetSummaryScopeCounts" in html
