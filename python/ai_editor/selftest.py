@@ -4756,6 +4756,18 @@ def test_phase1_ai_editor_regressions() -> None:
            and "document.addEventListener('wheel',()=>{" in html
            and "if(e&&e.key==='Escape')clearTransientInteractionBlockers('escape');" in html
            and "e.preventDefault();clearTransientInteractionBlockers('drop');" in html)
+    _check("frontend activity bar uses VS Code manage gear for Settings",
+           'class="ab-icon activity-manage" data-panel="settings"' in html
+           and 'title="Settings"' in html
+           and 'class="ab-icon theme-toggle"' not in html
+           and 'title="Toggle Theme" onclick="toggleTheme()"' not in html
+           and "function toggleTheme()" in html
+           and "function setupActivityButtonAccessibility(btn)" in html
+           and "btn.setAttribute('role','button');" in html
+           and "btn.tabIndex=0;" in html
+           and "btn.setAttribute('aria-label',title?('Open '+title):'Open view');" in html
+           and "if(e.key==='Enter'||e.key===' '){e.preventDefault();btn.click()}" in html
+           and "setupActivityButtonAccessibility(i);" in html)
     _check("frontend Settings row actions are keyboard accessible",
            "btn.setAttribute('aria-label',title||label);" in html
            and "const more=addButton('⋯','More setting actions',null,false);" in html
