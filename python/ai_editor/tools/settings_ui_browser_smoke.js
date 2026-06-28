@@ -279,7 +279,7 @@ async function main() {
   if (!result.snapshot.hasExtensionQuickFilters || !result.snapshot.hasExtensionQueryHistory || !result.snapshot.hasExtensionSortControl || !result.snapshot.hasExtensionSectionActions) {
     throw new Error("Settings selfcheck missing extension interaction controls: " + JSON.stringify(result.snapshot));
   }
-  if (!result.snapshot.hasDetailValueActions) {
+  if (!result.snapshot.hasDetailValueActions || !result.snapshot.hasDetailValueMatrix || !result.snapshot.hasDetailValueMatrixRows || !result.snapshot.hasDetailValueMatrixActions) {
     throw new Error("Settings selfcheck missing row value actions: " + JSON.stringify(result.snapshot));
   }
   if (!result.snapshot.hasDetailCopyLinkAction || !result.snapshot.hasExperienceBar || !result.snapshot.hasExperienceScopeChip || !result.snapshot.hasRowImpactSummary || !result.snapshot.hasSuggestedMatchesHost) {

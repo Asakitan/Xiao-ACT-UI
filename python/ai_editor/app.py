@@ -70,6 +70,7 @@ _TRANSIENT_CONFIG_KEYS = {
 }
 _AI_EDITOR_MIN_SIZE = (600, 400)
 _AI_EDITOR_WINDOW_TITLE = "SAO AI Editor"
+_AI_EDITOR_FORCE_NEW_ENV = "SAO_AI_EDITOR_FORCE_NEW"
 
 _MODE_VALUES = {"agent", "ask", "plan", "chat", "edit"}
 _APPROVAL_VALUES = {"default", "bypass", "autopilot"}
@@ -17055,6 +17056,7 @@ def _launch_subprocess() -> None:
     if _activate_existing_ai_editor_window():
         print("[AIEditor] activated existing window")
         return
+    _append_ai_editor_log("existing window unavailable; launching subprocess")
     if getattr(sys, 'frozen', False):
         from config import get_main_executable
         cmd = [get_main_executable(), '--ai-editor']
@@ -17230,6 +17232,26 @@ def _window_rect_for_handle(hwnd: int, user32: Any = None) -> Optional[tuple[int
         return None
 
 
+def _window_client_area_ok(hwnd: int, user32: Any = None,
+                           min_width: int = 320,
+                           min_height: int = 220) -> bool:
+    if sys.platform != "win32" or not hwnd:
+        return False
+    try:
+        import ctypes
+        from ctypes import wintypes
+        if user32 is None:
+            user32 = ctypes.windll.user32
+        rect = wintypes.RECT()
+        if not user32.GetClientRect(ctypes.c_void_p(int(hwnd)), ctypes.byref(rect)):
+            return False
+        width = int(rect.right) - int(rect.left)
+        height = int(rect.bottom) - int(rect.top)
+        return width >= int(min_width) and height >= int(min_height)
+    except Exception:
+        return False
+
+
 def _window_rect_intersects_screen(rect: Optional[tuple[int, int, int, int]],
                                    min_visible: int = 80) -> bool:
     if not rect:
@@ -17291,7 +17313,8 @@ def _window_handle_visible_after_activation(
             visible = bool(user32.IsWindowVisible(hwnd_ptr))
         rect_ok = _window_rect_intersects_screen(
             _window_rect_for_handle(hwnd, user32))
-        return visible and rect_ok and not _window_handle_cloaked(hwnd, dwmapi)
+        client_ok = _window_client_area_ok(hwnd, user32)
+        return visible and rect_ok and client_ok and not _window_handle_cloaked(hwnd, dwmapi)
     except Exception:
         return False
 
@@ -17326,7 +17349,18 @@ def _activate_window_handle(hwnd: int, keep_topmost_seconds: float = 0.9) -> boo
 
 
 def _activate_existing_ai_editor_window() -> bool:
-    return _activate_window_handle(_find_ai_editor_window())
+    if os.environ.get(_AI_EDITOR_FORCE_NEW_ENV):
+        _append_ai_editor_log(
+            f"existing window activation skipped by {_AI_EDITOR_FORCE_NEW_ENV}")
+        return False
+    hwnd = _find_ai_editor_window()
+    if not hwnd:
+        _append_ai_editor_log("no usable existing window found")
+        return False
+    ok = _activate_window_handle(hwnd)
+    if not ok:
+        _append_ai_editor_log(f"existing window activation failed hwnd={hwnd}")
+    return ok
 
 
 def _activate_ai_editor_window_with_retry() -> None:

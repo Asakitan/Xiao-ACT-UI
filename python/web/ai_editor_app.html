@@ -1727,6 +1727,17 @@ pre.code-block code .type { color:var(--fg-type); }
 .settings-current-detail .detail-chip.value-state.edited { color:var(--fg-accent); border-color:color-mix(in srgb,var(--fg-accent) 48%,var(--border)); }
 .settings-current-detail .detail-chip.value-state.default { color:var(--fg-success); border-color:color-mix(in srgb,var(--fg-success) 42%,var(--border)); }
 .settings-current-detail .detail-chip.value-state.override { color:var(--fg-warning); border-color:color-mix(in srgb,var(--fg-warning) 48%,var(--border)); }
+.settings-current-detail .detail-matrix { display:grid; gap:1px; padding:3px; border:1px solid var(--border);
+  border-radius:5px; background:color-mix(in srgb,var(--bg) 42%,transparent); }
+.settings-current-detail .detail-value-row { display:grid; grid-template-columns:76px minmax(0,1fr) auto; align-items:center;
+  gap:6px; min-height:24px; padding:2px 4px; border-radius:4px; }
+.settings-current-detail .detail-value-row:hover { background:var(--bg-hover); }
+.settings-current-detail .detail-value-row .label { color:var(--fg-dim); font:10px var(--mono); text-transform:uppercase; }
+.settings-current-detail .detail-value-row .value { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;
+  color:var(--fg); font:11px var(--mono); }
+.settings-current-detail .detail-value-row .value.empty { color:var(--fg-dim); font-family:var(--sans); }
+.settings-current-detail .detail-value-row .row-actions { display:inline-flex; align-items:center; gap:3px; }
+.settings-current-detail .detail-value-row button { height:20px; padding:1px 6px; font:10px var(--sans); }
 .settings-current-detail .detail-actions { display:flex; flex-wrap:wrap; align-items:center; gap:4px; padding-top:2px; }
 .settings-current-detail button { height:21px; padding:1px 7px; border:1px solid var(--border); border-radius:4px;
   background:var(--bg3); color:var(--fg-dim); font:11px var(--sans); cursor:pointer; }
@@ -4408,6 +4419,73 @@ function settingsMetaForRow(row){
   }
   return {key,input,inputId,meta};
 }
+function settingsDetailValueMatrix(row,info,current,inherited,def,key){
+  const matrix=document.createElement('div');
+  matrix.className='detail-matrix';
+  matrix.setAttribute('role','group');
+  matrix.setAttribute('aria-label','Selected setting values');
+  const addRow=(label,value,actions)=>{
+    const item=document.createElement('div');
+    item.className='detail-value-row';
+    item.dataset.settingsDetailValueRow=String(label||'').toLowerCase();
+    const labelEl=document.createElement('span');
+    labelEl.className='label';
+    labelEl.textContent=label;
+    const valueEl=document.createElement('span');
+    valueEl.className='value';
+    const compact=settingCompactDisplayValue(value,72);
+    valueEl.textContent=compact||'Not set';
+    valueEl.title=settingDisplayValue(value);
+    valueEl.classList.toggle('empty',!compact);
+    const actionHost=document.createElement('span');
+    actionHost.className='row-actions';
+    (actions||[]).forEach(action=>{
+      const btn=document.createElement('button');
+      btn.type='button';
+      btn.textContent=action.label;
+      btn.title=action.title||action.label;
+      btn.disabled=!!action.disabled;
+      btn.onclick=ev=>{ev.preventDefault();if(!btn.disabled&&action.handler)action.handler()};
+      actionHost.appendChild(btn);
+    });
+    item.appendChild(labelEl);
+    item.appendChild(valueEl);
+    item.appendChild(actionHost);
+    matrix.appendChild(item);
+    return item;
+  };
+  addRow('Current',current,[{
+    label:'Copy',
+    title:'Copy current value',
+    handler:()=>settingsCopyText(settingDisplayValue(current),'Current setting value')
+  }]);
+  if(info&&info.meta){
+    addRow('Inherited',inherited,[{
+      label:'Use',
+      title:'Apply inherited value to the active target',
+      handler:()=>settingsApplyRowValue(row,'inherited')
+    },{
+      label:'Copy',
+      title:'Copy inherited value',
+      handler:()=>settingsCopyText(settingDisplayValue(inherited),'Inherited setting value')
+    }]);
+    addRow('Default',def,[{
+      label:'Use',
+      title:'Apply default value',
+      handler:()=>settingsApplyRowValue(row,'default')
+    },{
+      label:'Copy',
+      title:'Copy default value',
+      handler:()=>settingsCopyText(settingDisplayValue(def),'Default setting value')
+    }]);
+  }
+  addRow('JSON',JSON.stringify({[key||settingsRowKey(row)||'setting']:current}),[{
+    label:'Copy',
+    title:'Copy JSON setting entry',
+    handler:()=>settingsCopyRowJson(row)
+  }]);
+  return matrix;
+}
 function settingsShowRowDetails(row){
   const host=$('settings-current-detail');if(!host)return;
   if(!row){host.classList.remove('open');host.innerHTML='';return}
@@ -4438,6 +4516,7 @@ function settingsShowRowDetails(row){
     const inheritedChip=document.createElement('span');inheritedChip.className='detail-chip';inheritedChip.textContent='Inherited: '+settingCompactDisplayValue(inherited,44);host.appendChild(inheritedChip);
     const defaultChip=document.createElement('span');defaultChip.className='detail-chip';defaultChip.textContent='Default: '+settingCompactDisplayValue(def,44);host.appendChild(defaultChip);
   }
+  host.appendChild(settingsDetailValueMatrix(row,info,current,inherited,def,key));
   const actions=document.createElement('span');actions.className='detail-actions';
   const addAction=(label,title,handler,disabled)=>{
     const btn=document.createElement('button');btn.type='button';btn.textContent=label;btn.title=title;
@@ -26849,6 +26928,7 @@ function settingsUiSelfCheckSnapshot(){
   const overview=document.querySelector('.settings-section-overview');
   const navItems=nav?Array.from(nav.querySelectorAll('.settings-nav-item')):[];
   const detail=$('settings-current-detail');
+  const detailMatrix=detail?detail.querySelector('.detail-matrix'):null;
   const builtHead=document.querySelector('.settings-built-head');
   const originalLabel=document.querySelector('.settings-field.builtin-setting > label.settings-original-label');
   const idleCurrentChip=Array.from(document.querySelectorAll('.settings-built-chip.current'))
@@ -26897,6 +26977,9 @@ function settingsUiSelfCheckSnapshot(){
     hasSectionContextActions:!!document.querySelector('.settings-section-context .section-actions'),
     hasCurrentDetail:!!detail,
     hasDetailActions:!!(detail&&detail.querySelector('.detail-actions')),
+    hasDetailValueMatrix:!!(detailMatrix&&detailMatrix.querySelector('[data-settings-detail-value-row="current"]')),
+    hasDetailValueMatrixRows:!!(detailMatrix&&detailMatrix.querySelector('[data-settings-detail-value-row="inherited"]')&&detailMatrix.querySelector('[data-settings-detail-value-row="default"]')&&detailMatrix.querySelector('[data-settings-detail-value-row="json"]')),
+    hasDetailValueMatrixActions:!!(detailMatrix&&Array.from(detailMatrix.querySelectorAll('button')).some(btn=>String(btn.textContent||'')==='Use')&&Array.from(detailMatrix.querySelectorAll('button')).some(btn=>String(btn.textContent||'')==='Copy')),
     hasDetailValueActions:['Copy Value','Copy JSON','Use Default','Use Inherited','Clear Override'].every(label=>detailActionLabels.includes(label)),
     hasDetailCopyLinkAction:detailActionLabels.includes('Copy Link'),
     hasExperienceBar:!!(experienceBar&&experienceBar.querySelector('.experience-chip')&&experienceBar.querySelector('.experience-actions button')),

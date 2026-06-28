@@ -985,6 +985,7 @@ def test_app_settings_parity() -> None:
         AIEditorAPI,
         _activate_window_handle,
         _normalize_window_geometry,
+        _window_client_area_ok,
         _window_handle_cloaked,
         _window_handle_visible_after_activation,
         _window_rect_intersects_screen,
@@ -2140,6 +2141,12 @@ def test_app_settings_parity() -> None:
         class _FakeUser32:
             def IsWindowVisible(self, _hwnd):
                 return 1
+            def GetClientRect(self, _hwnd, out_rect):
+                out_rect._obj.left = 0
+                out_rect._obj.top = 0
+                out_rect._obj.right = 900
+                out_rect._obj.bottom = 640
+                return 1
 
         _check("AI Editor activation verifies existing window visibility",
                _window_handle_visible_after_activation(123, _FakeUser32()) is False)
@@ -2148,6 +2155,12 @@ def test_app_settings_parity() -> None:
                   return_value=(10, 10, 700, 500)):
         class _FakeVisibleUser32:
             def IsWindowVisible(self, _hwnd):
+                return 1
+            def GetClientRect(self, _hwnd, out_rect):
+                out_rect._obj.left = 0
+                out_rect._obj.top = 0
+                out_rect._obj.right = 900
+                out_rect._obj.bottom = 640
                 return 1
 
         class _FakeCloakedDwm:
@@ -2159,6 +2172,23 @@ def test_app_settings_parity() -> None:
                _window_handle_cloaked(123, _FakeCloakedDwm()) is True
                and _window_handle_visible_after_activation(
                    123, _FakeVisibleUser32(), _FakeCloakedDwm()) is False)
+    with patch("ai_editor.app.sys.platform", "win32"), \
+            patch("ai_editor.app._window_rect_for_handle",
+                  return_value=(10, 10, 700, 500)):
+        class _FakeTinyClientUser32:
+            def IsWindowVisible(self, _hwnd):
+                return 1
+            def GetClientRect(self, _hwnd, out_rect):
+                out_rect._obj.left = 0
+                out_rect._obj.top = 0
+                out_rect._obj.right = 12
+                out_rect._obj.bottom = 12
+                return 1
+
+        _check("AI Editor activation rejects zero-client existing window",
+               _window_client_area_ok(123, _FakeTinyClientUser32()) is False
+               and _window_handle_visible_after_activation(
+                   123, _FakeTinyClientUser32()) is False)
     root_dir = os.path.dirname(os.path.dirname(__file__))
     panels_path = os.path.join(root_dir, "gui_modules", "sao_gui_panels_mixin.py")
     with open(panels_path, "r", encoding="utf-8") as fh:
@@ -2173,7 +2203,11 @@ def test_app_settings_parity() -> None:
            and "webview.start(debug=False)" in app_src)
     _check("AI Editor existing window activation verifies visibility before reuse",
            "def _window_handle_visible_after_activation(" in app_src
+           and "def _window_client_area_ok(" in app_src
+           and "_AI_EDITOR_FORCE_NEW_ENV" in app_src
+           and "existing window unavailable; launching subprocess" in app_src
            and "existing window activation failed visibility" in app_src
+           and "existing window activation failed hwnd" in app_src
            and "DwmGetWindowAttribute" in app_src
            and "_window_handle_cloaked(hwnd" in app_src
            and "_move_window_handle_on_screen(hwnd, user32)" in app_src
@@ -9839,6 +9873,10 @@ console.log("frontend word separator behavior ok");
             and "function settingsCopyRowValue(row)" in html
             and "function settingsCopyRowJson(row)" in html
             and "function settingsApplyRowValue(row,mode)" in html
+            and "function settingsDetailValueMatrix(row,info,current,inherited,def,key)" in html
+            and "data-settings-detail-value-row" in html
+            and ".settings-current-detail .detail-matrix" in html
+            and ".settings-current-detail .detail-value-row" in html
             and "Copy Value','Copy the current setting value" in html
             and "Copy JSON','Copy this setting and current value as JSON" in html
             and "Use Default','Apply the default value to this setting" in html
@@ -9957,6 +9995,9 @@ console.log("frontend word separator behavior ok");
              and "hasTargetSummaryScopeCounts" in html
              and "hasOnDemandSettingValueDetails" in html
              and "hasDetailValueActions" in html
+             and "hasDetailValueMatrix" in html
+             and "hasDetailValueMatrixRows" in html
+             and "hasDetailValueMatrixActions" in html
              and "settings-experience-bar" in html
              and "function renderSettingsExperienceBar(parsed,visible,total,stats)" in html
              and "function renderSettingsSuggestedMatches(parsed)" in html
@@ -10025,6 +10066,9 @@ console.log("frontend word separator behavior ok");
             and "result.snapshot.hasExtensionSortControl" in settings_smoke_source
             and "result.snapshot.hasExtensionSectionActions" in settings_smoke_source
             and "result.snapshot.hasDetailValueActions" in settings_smoke_source
+            and "result.snapshot.hasDetailValueMatrix" in settings_smoke_source
+            and "result.snapshot.hasDetailValueMatrixRows" in settings_smoke_source
+            and "result.snapshot.hasDetailValueMatrixActions" in settings_smoke_source
             and "result.snapshot.hasDetailCopyLinkAction" in settings_smoke_source
             and "result.snapshot.hasExperienceBar" in settings_smoke_source
             and "result.snapshot.hasExperienceScopeChip" in settings_smoke_source
