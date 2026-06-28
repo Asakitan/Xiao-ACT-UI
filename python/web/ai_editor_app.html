@@ -1735,17 +1735,20 @@ pre.code-block code .type { color:var(--fg-type); }
 .modal-bg { position:fixed; inset:0; background:#00000060; display:none;
   align-items:center; justify-content:center; z-index:200; }
 .modal-bg.open { display:flex; }
-#settings-modal.open { align-items:stretch; justify-content:center; padding:12px 22px; box-sizing:border-box;
+#settings-modal.open { --settings-viewport-gap:12px; --settings-available-height:calc(100dvh - 24px);
+  align-items:stretch; justify-content:center; padding:12px 22px; box-sizing:border-box;
   background:color-mix(in srgb,#000 42%,transparent); }
-#settings-modal.open:has(.settings-vscode-calm) { align-items:flex-start; justify-content:center; padding:14px 20px 18px; background:color-mix(in srgb,#000 34%,transparent); }
+#settings-modal.open:has(.settings-vscode-calm) { --settings-viewport-gap:14px; --settings-available-height:min(780px, calc(100dvh - 32px));
+  align-items:flex-start; justify-content:center; padding:14px 20px 18px; background:color-mix(in srgb,#000 34%,transparent); }
 .modal { background:var(--bg2); border:1px solid var(--border); border-radius:6px;
   width:560px; max-height:85vh; overflow-y:auto; padding:20px 24px; box-shadow:0 8px 32px #00000080; }
-.modal.settings-modal { width:min(1520px, calc(100vw - 44px)); height:calc(100vh - 24px);
-  max-height:calc(100vh - 24px); overflow:hidden; padding:0; display:flex; flex-direction:column;
+.modal.settings-modal { width:min(1520px, calc(100vw - 44px)); height:var(--settings-available-height, calc(100dvh - 24px));
+  max-height:var(--settings-available-height, calc(100dvh - 24px)); overflow:hidden; padding:0; display:flex; flex-direction:column;
   border-radius:3px; background:var(--bg); box-shadow:0 18px 54px #00000092; }
 .modal.settings-modal.preferences-workbench { border-color:color-mix(in srgb,var(--border) 86%,var(--fg-accent)); }
-.modal.settings-modal.preferences-workbench.settings-vscode-calm { width:min(1180px, calc(100vw - 40px)); height:min(780px, calc(100vh - 40px)); max-width:calc(100vw - 40px);
-  max-height:calc(100vh - 40px); border:1px solid color-mix(in srgb,var(--border) 82%,transparent); border-radius:4px; box-shadow:0 14px 42px #00000072; }
+.modal.settings-modal.preferences-workbench.settings-vscode-calm { width:min(1180px, calc(100vw - 40px)); height:var(--settings-available-height, min(780px, calc(100dvh - 32px))); max-width:calc(100vw - 40px);
+  max-height:var(--settings-available-height, min(780px, calc(100dvh - 32px))); min-height:0;
+  display:grid; grid-template-rows:minmax(0,1fr) auto; border:1px solid color-mix(in srgb,var(--border) 82%,transparent); border-radius:4px; box-shadow:0 14px 42px #00000072; }
 .modal h2 { color:var(--fg); font-size:14px; margin-bottom:16px; font-weight:600; }
 .settings-titlebar { display:flex; align-items:center; justify-content:space-between; gap:16px;
   min-height:36px; padding:6px 14px; border-bottom:1px solid var(--border); background:var(--bg2); flex-shrink:0; }
@@ -2073,7 +2076,7 @@ button.review-pill { cursor:pointer; }
   border-radius:4px; background:var(--bg3); color:var(--fg-dim); font:11px var(--sans); cursor:pointer; }
 .settings-reset-visible:hover,.settings-reset-visible:focus { color:var(--fg); border-color:var(--border-focus); outline:none; }
 .settings-reset-visible:disabled { opacity:.45; cursor:default; }
-.settings-shell { flex:1; min-height:0; display:grid; grid-template-columns:244px minmax(0,1fr);
+.settings-shell { flex:1; min-height:0; overflow:hidden; display:grid; grid-template-columns:244px minmax(0,1fr);
   background:linear-gradient(90deg,var(--bg2) 0,var(--bg2) 244px,var(--bg) 244px,var(--bg) 100%); }
 .settings-shell.inspecting { grid-template-columns:236px minmax(0,1fr) minmax(286px,330px);
   background:linear-gradient(90deg,var(--bg2) 0,var(--bg2) 236px,var(--bg) 236px,var(--bg) calc(100% - 330px),var(--bg2) calc(100% - 330px),var(--bg2) 100%); }
@@ -3378,17 +3381,20 @@ pre.code-block { overflow:visible; }
 .settings-vscode-calm .settings-nav-result-group:disabled { opacity:.45; cursor:default; }
 .settings-vscode-calm .settings-nav-result-group strong { color:var(--fg); font:600 11px var(--mono); }
 #settings-modal.open:has(.settings-vscode-calm) {
+  --settings-viewport-gap:14px; --settings-available-height:min(780px, calc(100dvh - 32px));
   align-items:flex-start; justify-content:center; padding:14px 20px 18px; background:color-mix(in srgb,#000 34%,transparent);
 }
 .modal.settings-modal.preferences-workbench.settings-vscode-calm {
-  width:min(1180px, calc(100vw - 40px)); height:min(780px, calc(100vh - 40px));
-  max-width:calc(100vw - 40px); max-height:calc(100vh - 40px);
+  width:min(1180px, calc(100vw - 40px)); height:var(--settings-available-height, min(780px, calc(100dvh - 32px)));
+  max-width:calc(100vw - 40px); max-height:var(--settings-available-height, min(780px, calc(100dvh - 32px)));
+  min-height:0; display:grid; grid-template-rows:minmax(0,1fr) auto;
   border:1px solid color-mix(in srgb,var(--border) 82%,transparent); border-radius:4px;
   box-shadow:0 14px 42px #00000072; overflow:hidden;
 }
 @supports (height: 100dvh) {
   .modal.settings-modal.preferences-workbench.settings-vscode-calm {
-    height:min(780px, calc(100dvh - 40px)); max-height:calc(100dvh - 40px);
+    height:var(--settings-available-height, min(780px, calc(100dvh - 32px)));
+    max-height:var(--settings-available-height, min(780px, calc(100dvh - 32px)));
   }
 }
 .settings-vscode-calm .settings-shell {
@@ -3397,7 +3403,7 @@ pre.code-block { overflow:visible; }
 .settings-vscode-calm .settings-nav,
 .settings-vscode-calm .settings-main,
 .settings-vscode-calm .settings-inspector {
-  min-height:0; overflow-y:auto; overscroll-behavior:contain;
+  min-height:0; overflow-y:auto; overscroll-behavior:contain; scrollbar-gutter:stable;
 }
 .settings-vscode-calm .settings-nav {
   padding-top:10px;
@@ -5498,6 +5504,7 @@ function settingsApplyDetails(open){
     btn.title=enabled?'Hide settings details':'Show settings details';
     btn.setAttribute('aria-label',btn.title);
   }
+  syncSettingsViewportFit('details');
   return enabled;
 }
 function settingsToggleDetails(force){
@@ -28965,10 +28972,45 @@ _bindPointerResize(splitter,'ns-resize',
 );
 window.addEventListener('resize',()=>{
   _clampLayoutDimensions();
+  syncSettingsViewportFit();
   _saveLayoutDebounced();
 });
 
 // ── Settings ──
+function syncSettingsViewportFit(reason){
+  const modal=$('settings-modal');
+  const frame=document.querySelector('.modal.settings-modal');
+  if(!modal||!frame)return null;
+  const viewportH=Math.max(320,Math.floor(window.innerHeight||document.documentElement.clientHeight||720));
+  const viewportW=Math.max(420,Math.floor(window.innerWidth||document.documentElement.clientWidth||1024));
+  const isCalm=frame.classList.contains('settings-vscode-calm');
+  const verticalGap=isCalm?32:24;
+  const maxHeight=Math.max(280,Math.min(isCalm?780:viewportH-verticalGap,viewportH-verticalGap));
+  modal.style.setProperty('--settings-available-height',maxHeight+'px');
+  modal.dataset.settingsViewportFit='1';
+  modal.dataset.settingsViewportReason=String(reason||'sync');
+  modal.dataset.settingsViewportHeight=String(viewportH);
+  modal.dataset.settingsViewportWidth=String(viewportW);
+  modal.dataset.settingsAvailableHeight=String(maxHeight);
+  const rect=frame.getBoundingClientRect();
+  const footer=frame.querySelector('.modal-btns');
+  const nav=$('settings-nav'),main=$('settings-main'),inspector=$('settings-inspector');
+  const columns=[nav,main,inspector].filter(Boolean);
+  const topVisible=rect.top>=0&&rect.top<=Math.max(32,viewportH-120);
+  const bottomVisible=rect.bottom<=viewportH&&rect.bottom>=Math.min(viewportH,120);
+  const columnsScroll=columns.every(el=>{
+    const style=getComputedStyle(el);
+    return style.overflowY==='auto'||style.overflowY==='scroll';
+  });
+  modal.dataset.settingsTopVisible=topVisible?'1':'0';
+  modal.dataset.settingsBottomVisible=bottomVisible?'1':'0';
+  modal.dataset.settingsScrollContained=columnsScroll?'1':'0';
+  if(footer)modal.dataset.settingsFooterVisible=(footer.getBoundingClientRect().bottom<=viewportH&&footer.getBoundingClientRect().top>=0)?'1':'0';
+  frame.dataset.settingsFitHeight=String(Math.round(rect.height||0));
+  frame.dataset.settingsFitTop=String(Math.round(rect.top||0));
+  frame.dataset.settingsFitBottom=String(Math.round(rect.bottom||0));
+  return {topVisible,bottomVisible,columnsScroll,maxHeight};
+}
 function settingSection(name){
   const section=mergeSectionDefaults(name,config[name]);
   if(!isPlainObject(section)||!isPlainObject(config))return section;
@@ -29603,7 +29645,9 @@ function openSettings(){
   settingsApplyDensity(settingsReadDensity());
   settingsApplyDetails(settingsReadDetails());
   $('settings-modal').classList.add('open');
+  syncSettingsViewportFit('open');
   setTimeout(()=>{
+    syncSettingsViewportFit('open-settle');
     renderSettingsSectionOverviews();
     filterSettings();renderSettingsNav();
     const saved=settingsViewState().section;
@@ -29738,6 +29782,7 @@ function settingsApplyDensity(value){
     btn.title=mode==='compact'?'Use comfortable Settings density':'Use compact Settings density';
     btn.setAttribute('aria-label',btn.title);
   }
+  syncSettingsViewportFit('density');
   return mode;
 }
 function settingsToggleDensity(){
@@ -30808,6 +30853,9 @@ function settingsUiSelfCheckSnapshot(){
   const rowActionMenu=document.querySelector('.settings-row-action-menu');
   const rowActionButtons=Array.from(document.querySelectorAll('.settings-row-action'));
   const workbenchStatus=$('settings-workbench-status');
+  const frameStyle=settingsFrame?getComputedStyle(settingsFrame):null;
+  const footerRect=footer?footer.getBoundingClientRect():null;
+  const modalDataset=modal&&modal.dataset?modal.dataset:{};
   return {
     pass:!!(modal&&nav&&main&&inspector&&$('settings-nav-filter')&&$('settings-density-toggle')&&detail
       &&typeof settingsFilterNavCategories==='function'
@@ -30831,6 +30879,14 @@ function settingsUiSelfCheckSnapshot(){
     hasBoundedSettingsWorkbench:!!(settingsFrame&&settingsFrameRect&&settingsFrameRect.top>=12&&settingsFrameRect.left>=12
       &&settingsFrameRect.height<=window.innerHeight-32&&settingsFrameRect.width<=window.innerWidth-32
       &&parseFloat(getComputedStyle(settingsFrame).borderRadius||'0')>=3),
+    hasSyncedSettingsViewport:!!(modal&&modalDataset.settingsViewportFit==='1'
+      &&Number(modalDataset.settingsAvailableHeight||0)>0
+      &&frameStyle&&String(frameStyle.height||'').endsWith('px')),
+    hasVisibleSettingsTop:!!(settingsFrameRect&&modalDataset.settingsTopVisible==='1'&&settingsFrameRect.top>=0),
+    hasVisibleSettingsFooter:!!(footer&&footerRect&&modalDataset.settingsFooterVisible==='1'&&footerRect.bottom<=window.innerHeight),
+    hasSettingsDvhHeightGuard:!!(modal&&String(modal.style.getPropertyValue('--settings-available-height')||'').endsWith('px')),
+    hasStableSettingsScrollbars:!!(nav&&main&&String(getComputedStyle(nav).scrollbarGutter||'').includes('stable')
+      &&String(getComputedStyle(main).scrollbarGutter||'').includes('stable')),
     hasScrollableSettingsColumns:!!(nav&&main&&String(getComputedStyle(nav).overflowY)==='auto'
       &&String(getComputedStyle(main).overflowY)==='auto'
       &&String(getComputedStyle(document.querySelector('.settings-shell')||main).overflow||'')==='hidden'),
@@ -31068,6 +31124,7 @@ function settingsUiSelfCheckSnapshot(){
   };
 }
 window.focusSettingsSearch=focusSettingsSearch;
+window.syncSettingsViewportFit=syncSettingsViewportFit;
 window.focusSettingsNavFilter=focusSettingsNavFilter;
 window.settingsOpenJsonView=settingsOpenJsonView;
 window.settingsUseSearchHint=settingsUseSearchHint;
@@ -32596,6 +32653,7 @@ function filterSettings(){
   updateSettingsTitleStatus(visible,total);
   renderSettingsSectionContext(visible,total);
   settingsUpdateSearchClearButton();
+  syncSettingsViewportFit('filter');
   persistSettingsViewState({target:currentSettingsTarget,search:q});
 }
 let _settingsFilterTimer=0;

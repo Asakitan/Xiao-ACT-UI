@@ -268,8 +268,11 @@ async function main() {
   if (!result.snapshot.hasBuiltSettingHead || !result.snapshot.hasOnDemandSettingValueDetails) {
     throw new Error("Settings selfcheck missing row hierarchy affordances: " + JSON.stringify(result.snapshot));
   }
-  if (!result.snapshot.hasWorkspaceSizedModal || !result.snapshot.hasWideSettingsEditor || !result.snapshot.hasSettingsEditorShell || !result.snapshot.hasWideCategoryNav) {
+  if (!result.snapshot.hasWorkspaceSizedModal || !result.snapshot.hasSyncedSettingsViewport || !result.snapshot.hasVisibleSettingsTop || !result.snapshot.hasVisibleSettingsFooter || !result.snapshot.hasSettingsDvhHeightGuard || !result.snapshot.hasWideSettingsEditor || !result.snapshot.hasSettingsEditorShell || !result.snapshot.hasWideCategoryNav) {
     throw new Error("Settings selfcheck missing VS Code-like editor shell: " + JSON.stringify(result.snapshot));
+  }
+  if (!result.snapshot.hasStableSettingsScrollbars || !result.snapshot.hasScrollableSettingsColumns) {
+    throw new Error("Settings selfcheck missing contained scroll columns: " + JSON.stringify(result.snapshot));
   }
   if (!result.snapshot.hasSettingsInspector || !result.snapshot.hasInspectorDetail || !result.snapshot.hasLabelsInsideRows || !result.snapshot.hidesOriginalLabels) {
     throw new Error("Settings selfcheck missing inspector or row label structure: " + JSON.stringify(result.snapshot));

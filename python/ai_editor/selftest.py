@@ -4749,9 +4749,15 @@ def test_phase1_ai_editor_regressions() -> None:
            and "hasJumpbarActionState" in html
            and "hasJumpbarModifiedCount" in html
            and "hasJumpbarActions" in html
-           and "#settings-modal.open:has(.settings-vscode-calm) {\n  align-items:flex-start; justify-content:center; padding:14px 20px 18px;" in html
-           and ".modal.settings-modal.preferences-workbench.settings-vscode-calm {\n  width:min(1180px, calc(100vw - 40px)); height:min(780px, calc(100vh - 40px));" in html
+           and "#settings-modal.open:has(.settings-vscode-calm) { --settings-viewport-gap:14px; --settings-available-height:min(780px, calc(100dvh - 32px));" in html
+           and ".modal.settings-modal.preferences-workbench.settings-vscode-calm {\n  width:min(1180px, calc(100vw - 40px)); height:var(--settings-available-height, min(780px, calc(100dvh - 32px)));" in html
            and ".settings-vscode-calm .settings-nav,\n.settings-vscode-calm .settings-main,\n.settings-vscode-calm .settings-inspector {\n  min-height:0; overflow-y:auto; overscroll-behavior:contain;" in html
+           and "scrollbar-gutter:stable;" in html
+           and "function syncSettingsViewportFit(reason)" in html
+           and "modal.dataset.settingsTopVisible=topVisible?'1':'0';" in html
+           and "modal.dataset.settingsBottomVisible=bottomVisible?'1':'0';" in html
+           and "modal.dataset.settingsScrollContained=columnsScroll?'1':'0';" in html
+           and "window.syncSettingsViewportFit=syncSettingsViewportFit;" in html
            and 'id="settings-workbench-status" class="settings-workbench-status" role="status"' in html
            and "function renderSettingsWorkbenchStatus(visible,total,stats)" in html
            and "host.dataset.settingsWorkbenchStatus='1'" in html
@@ -4773,6 +4779,11 @@ def test_phase1_ai_editor_regressions() -> None:
            and ".settings-vscode-calm .settings-row-actions { top:10px; opacity:0;" in html
            and "hasSettingsWorkbenchStatus" in html
            and "hasBoundedSettingsWorkbench" in html
+           and "hasSyncedSettingsViewport" in html
+           and "hasVisibleSettingsTop" in html
+           and "hasVisibleSettingsFooter" in html
+           and "hasSettingsDvhHeightGuard" in html
+           and "hasStableSettingsScrollbars" in html
            and "hasScrollableSettingsColumns" in html
            and "hasVsCodeWorkbenchSearchWidth" in html
            and "hasVsCodeHumanSettingControls" in html
@@ -11026,6 +11037,12 @@ console.log("frontend word separator behavior ok");
             and "result.snapshot.hasActiveNavRail" in settings_smoke_source
             and "result.snapshot.hasBuiltSettingHead" in settings_smoke_source
             and "result.snapshot.hasWorkspaceSizedModal" in settings_smoke_source
+            and "result.snapshot.hasSyncedSettingsViewport" in settings_smoke_source
+            and "result.snapshot.hasVisibleSettingsTop" in settings_smoke_source
+            and "result.snapshot.hasVisibleSettingsFooter" in settings_smoke_source
+            and "result.snapshot.hasSettingsDvhHeightGuard" in settings_smoke_source
+            and "result.snapshot.hasStableSettingsScrollbars" in settings_smoke_source
+            and "result.snapshot.hasScrollableSettingsColumns" in settings_smoke_source
             and "result.snapshot.hasWideSettingsEditor" in settings_smoke_source
             and "result.snapshot.hasSettingsEditorShell" in settings_smoke_source
             and "result.snapshot.hasWideCategoryNav" in settings_smoke_source
