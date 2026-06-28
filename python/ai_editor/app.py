@@ -17319,6 +17319,32 @@ def _window_handle_visible_after_activation(
         return False
 
 
+def _window_handle_responding(hwnd: int, user32: Any = None,
+                              timeout_ms: int = 160) -> bool:
+    if sys.platform != "win32" or not hwnd:
+        return False
+    try:
+        import ctypes
+        if user32 is None:
+            user32 = ctypes.windll.user32
+        send_timeout = getattr(user32, "SendMessageTimeoutW", None)
+        if send_timeout is None:
+            return True
+        result = ctypes.c_size_t(0)
+        ok = send_timeout(
+            ctypes.c_void_p(int(hwnd)),
+            0,  # WM_NULL liveness probe
+            0,
+            0,
+            0x0002,  # SMTO_ABORTIFHUNG
+            max(50, int(timeout_ms)),
+            ctypes.byref(result),
+        )
+        return bool(ok)
+    except Exception:
+        return False
+
+
 def _activate_window_handle(hwnd: int, keep_topmost_seconds: float = 0.9) -> bool:
     if sys.platform != "win32" or not hwnd:
         return False
@@ -17334,6 +17360,10 @@ def _activate_window_handle(hwnd: int, keep_topmost_seconds: float = 0.9) -> boo
         if not _window_handle_visible_after_activation(hwnd, user32):
             _append_ai_editor_log(
                 f"existing window activation failed visibility hwnd={hwnd}")
+            return False
+        if not _window_handle_responding(hwnd, user32):
+            _append_ai_editor_log(
+                f"existing window activation failed liveness hwnd={hwnd}")
             return False
         if keep_topmost_seconds > 0:
             def _release_topmost() -> None:

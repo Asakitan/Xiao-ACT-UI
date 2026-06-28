@@ -283,7 +283,7 @@ async function main() {
   if (!result.snapshot.hasCollapsedSecondaryActions || !result.snapshot.hasVsCodeGroupHeadings || !result.snapshot.hasLeanSettingControls || !result.snapshot.hasQuietInspectorFocusDeck || !result.snapshot.hasStatusbarFooter) {
     throw new Error("Settings selfcheck missing calmer VS Code layout refinements: " + JSON.stringify(result.snapshot));
   }
-  if (!result.snapshot.hasIconOnlySettingsToolbar || !result.snapshot.hasPrimaryJsonOnlyDefaultToolbar || !result.snapshot.hasCalmDefaultSettingsMode || !result.snapshot.hasVsCodeWideCategoryNav || !result.snapshot.hasMoreComfortableSettingControls) {
+  if (!result.snapshot.hasIconOnlySettingsToolbar || !result.snapshot.hasInlineDetailsToggle || !result.snapshot.hasHiddenDefaultTitlebar || !result.snapshot.hasPrimaryJsonOnlyDefaultToolbar || !result.snapshot.hasCalmDefaultSettingsMode || !result.snapshot.hasVsCodeWideCategoryNav || !result.snapshot.hasMoreComfortableSettingControls) {
     throw new Error("Settings selfcheck missing VS Code-like default interaction refinements: " + JSON.stringify(result.snapshot));
   }
   if (!result.snapshot.hasQuietDefaultSettingsToolbar || !result.snapshot.hasDetailsOnlyJumpbar || !result.snapshot.hasSidebarQuickSettingsActions || !result.snapshot.hasCompactSearchScopeStack) {

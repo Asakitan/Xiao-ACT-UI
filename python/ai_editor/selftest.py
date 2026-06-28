@@ -988,6 +988,7 @@ def test_app_settings_parity() -> None:
         _normalize_window_geometry,
         _window_client_area_ok,
         _window_handle_cloaked,
+        _window_handle_responding,
         _window_handle_visible_after_activation,
         _window_rect_intersects_screen,
     )
@@ -2190,6 +2191,18 @@ def test_app_settings_parity() -> None:
                _window_client_area_ok(123, _FakeTinyClientUser32()) is False
                and _window_handle_visible_after_activation(
                    123, _FakeTinyClientUser32()) is False)
+    with patch("ai_editor.app.sys.platform", "win32"):
+        class _FakeHungUser32:
+            def SendMessageTimeoutW(self, *_args):
+                return 0
+
+        class _FakeResponsiveUser32:
+            def SendMessageTimeoutW(self, *_args):
+                return 1
+
+        _check("AI Editor activation rejects unresponsive existing window",
+               _window_handle_responding(123, _FakeHungUser32()) is False
+               and _window_handle_responding(123, _FakeResponsiveUser32()) is True)
     root_dir = os.path.dirname(os.path.dirname(__file__))
     panels_path = os.path.join(root_dir, "gui_modules", "sao_gui_panels_mixin.py")
     with open(panels_path, "r", encoding="utf-8") as fh:
@@ -2204,11 +2217,14 @@ def test_app_settings_parity() -> None:
            and "webview.start(debug=False)" in app_src)
     _check("AI Editor existing window activation verifies visibility before reuse",
            "def _window_handle_visible_after_activation(" in app_src
+           and "def _window_handle_responding(" in app_src
            and "def _window_client_area_ok(" in app_src
            and "_AI_EDITOR_FORCE_NEW_ENV" in app_src
            and "existing window unavailable; launching subprocess" in app_src
            and "existing window activation failed visibility" in app_src
+           and "existing window activation failed liveness" in app_src
            and "existing window activation failed hwnd" in app_src
+           and "SendMessageTimeoutW" in app_src
            and "DwmGetWindowAttribute" in app_src
            and "_window_handle_cloaked(hwnd" in app_src
            and "_move_window_handle_on_screen(hwnd, user32)" in app_src
@@ -4333,10 +4349,14 @@ def test_phase1_ai_editor_regressions() -> None:
            and "aria-label=\"Previous visible setting\"" in html
            and "aria-label=\"Next visible setting\"" in html
            and ".settings-vscode-calm .settings-shell { grid-template-columns:300px minmax(0,1fr);" in html
-           and ".settings-vscode-calm .settings-field.builtin-setting.settings-current:not(.modified)" in html
-           and ".settings-vscode-calm .settings-control-frame { max-width:680px;" in html
-           and 'onkeydown="settingsHandleTargetTabKeydown(event)"' in html
-           and "function settingsHandleTargetTabKeydown(ev)" in html
+            and ".settings-vscode-calm .settings-field.builtin-setting.settings-current:not(.modified)" in html
+            and ".settings-vscode-calm .settings-control-frame { max-width:680px;" in html
+            and ".settings-vscode-calm .settings-titlebar { display:none;" in html
+            and ".settings-vscode-calm.settings-details-open .settings-titlebar { display:flex; }" in html
+            and ".settings-vscode-calm .settings-query-box #settings-details-toggle" in html
+            and 'document.querySelector(\'.settings-query-box #settings-details-toggle\')' in html
+            and 'onkeydown="settingsHandleTargetTabKeydown(event)"' in html
+            and "function settingsHandleTargetTabKeydown(ev)" in html
            and "function settingsMoveTargetTab(delta)" in html
            and "function settingsSelectTargetByIndex(index,opts)" in html
            and "btn.setAttribute('aria-label',settingsTargetDisplayName(target)+' settings, '+count+' row'" in html
@@ -4382,9 +4402,11 @@ def test_phase1_ai_editor_regressions() -> None:
            and "hasGroupedPersonalNav" in html
            and "hasQuietPersonalNavHistory" in html
            and "hasDetailsOnlyNavQuickFilters" in html
-           and "hasVsCodePolishedSettingControls" in html
-           and "hasIconOnlySettingsToolbar" in html
-           and "hasPrimaryJsonOnlyDefaultToolbar" in html
+            and "hasVsCodePolishedSettingControls" in html
+            and "hasIconOnlySettingsToolbar" in html
+            and "hasInlineDetailsToggle" in html
+            and "hasHiddenDefaultTitlebar" in html
+            and "hasPrimaryJsonOnlyDefaultToolbar" in html
            and "hasQuietDefaultSettingsToolbar" in html
            and "hasDetailsOnlyJumpbar" in html
            and "hasSidebarQuickSettingsActions" in html
@@ -10311,8 +10333,10 @@ console.log("frontend word separator behavior ok");
              and "hasLeanSettingControls" in html
              and "hasQuietInspectorFocusDeck" in html
              and "hasStatusbarFooter" in html
-             and "hasIconOnlySettingsToolbar" in html
-             and "hasPrimaryJsonOnlyDefaultToolbar" in html
+              and "hasIconOnlySettingsToolbar" in html
+              and "hasInlineDetailsToggle" in html
+              and "hasHiddenDefaultTitlebar" in html
+              and "hasPrimaryJsonOnlyDefaultToolbar" in html
              and "hasQuietDefaultSettingsToolbar" in html
              and "hasDetailsOnlyJumpbar" in html
              and "hasSidebarQuickSettingsActions" in html
@@ -10516,6 +10540,8 @@ console.log("frontend word separator behavior ok");
             and "result.snapshot.hasQuietInspectorFocusDeck" in settings_smoke_source
             and "result.snapshot.hasStatusbarFooter" in settings_smoke_source
             and "result.snapshot.hasIconOnlySettingsToolbar" in settings_smoke_source
+            and "result.snapshot.hasInlineDetailsToggle" in settings_smoke_source
+            and "result.snapshot.hasHiddenDefaultTitlebar" in settings_smoke_source
             and "result.snapshot.hasPrimaryJsonOnlyDefaultToolbar" in settings_smoke_source
             and "result.snapshot.hasQuietDefaultSettingsToolbar" in settings_smoke_source
             and "result.snapshot.hasDetailsOnlyJumpbar" in settings_smoke_source
