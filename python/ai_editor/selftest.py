@@ -9771,6 +9771,7 @@ console.log("frontend word separator behavior ok");
             and "hasExtensionEnumActions" in html
             and "hasExtensionPerformanceStatus" in html
             and "extensionPerformance:typeof extensionSettingRenderStats==='function'?extensionSettingRenderStats():{}" in html
+            and "extensionVirtualization:typeof extensionSettingVirtualizationStats==='function'?extensionSettingVirtualizationStats($('ext-settings-container')):{}" in html
             and "window.settingsFocusCurrentLanguageOverride=settingsFocusCurrentLanguageOverride;" in html
             and "String(ev.key||'').toLowerCase()==='g'" in html
             and "function settingsRecordSearch(query,parsed)" in html
@@ -10100,6 +10101,12 @@ console.log("frontend word separator behavior ok");
             and "function extensionSettingCachedSchemaValue(schema,key,compute)" in html
             and "function extensionSettingInstallLazyHydration(host,hydrate)" in html
             and "function extensionSettingPreheatLazyRows(container,limit)" in html
+            and "const EXTENSION_SETTINGS_INITIAL_SECTION_ROWS=80;" in html
+            and "function extensionSettingInstallSectionVirtualRows(section,inner,rowFactories)" in html
+            and "function extensionSettingAppendVirtualRows(section,count)" in html
+            and "function extensionSettingEnsureAllRowsRendered(container)" in html
+            and "extensionSettingEnsureAllRowsRendered(container)" in html
+            and ".ext-settings-more" in html
             and "function appendExtensionSettingEnumChoiceItems(wrap,schema,type,defaultValue,input)" in html
             and "ext-settings-perf" in html
             and "ext-setting-lazy-details" in html
@@ -10546,6 +10553,12 @@ console.log("frontend word separator behavior ok");
             "extensionSettingRenderStats",
             "renderExtensionSettingPerformanceStatus",
             "extensionSettingSetRenderStats",
+            "extensionSettingVirtualizationStats",
+            "extensionSettingUpdateVirtualStats",
+            "extensionSettingInsertBeforeMore",
+            "extensionSettingAppendVirtualRows",
+            "extensionSettingEnsureAllRowsRendered",
+            "extensionSettingInstallSectionVirtualRows",
             "extensionSettingLazyHydrationStats",
             "extensionSettingResetLazyHydration",
             "extensionSettingInstallLazyHydration",
@@ -10622,6 +10635,8 @@ console.log("frontend word separator behavior ok");
         js = setting_js + r"""
 function assert(ok,label){ if(!ok){ throw new Error(label); } }
 const EXTENSION_SETTINGS_FILTER_STATE_KEY='sao-ai-ext-settings-filter-v1';
+const EXTENSION_SETTINGS_INITIAL_SECTION_ROWS=80;
+const EXTENSION_SETTINGS_SECTION_ROW_BATCH=80;
 globalThis.window = { location: { href: "https://example.invalid/settings" } };
 let _extensionSettingFilterDomCache = null;
 let _extensionSettingDynamicSuggestionCache = null;
@@ -10640,7 +10655,9 @@ function makeNode(tag, text){
   const node = {
     tagName: tag ? String(tag).toUpperCase() : "",
     textContent: text || "",
+    className: "",
     children: [],
+    parentNode: null,
     style: {},
     dataset: {},
     href: "",
@@ -10649,7 +10666,37 @@ function makeNode(tag, text){
     type: "",
     value: "",
     rows: 0,
-    appendChild(child){ this.children.push(child); return child; },
+    appendChild(child){ child.parentNode = this; this.children.push(child); return child; },
+    insertBefore(child,before){
+      child.parentNode = this;
+      const index = this.children.indexOf(before);
+      if(index < 0)this.children.push(child);
+      else this.children.splice(index,0,child);
+      return child;
+    },
+    querySelector(selector){ return this.querySelectorAll(selector)[0] || null; },
+    querySelectorAll(selector){
+      const raw = String(selector || "").replace(/^:scope\s*>\s*/, "").trim();
+      const direct = String(selector || "").trim().startsWith(":scope >");
+      const matches = child => {
+        if(raw === ".ext-setting-row")return String(child.className || "").split(/\s+/).includes("ext-setting-row");
+        if(raw === ".ext-settings-more")return String(child.className || "").split(/\s+/).includes("ext-settings-more");
+        if(raw === "details[data-ext-settings-section]")return child.tagName === "DETAILS" && child.dataset.extSettingsSection !== undefined;
+        if(raw === "[data-ext-lazy-hydrate=\"1\"]")return child.dataset.extLazyHydrate === "1";
+        if(raw === "[data-ext-lazy-hydrate='1']")return child.dataset.extLazyHydrate === "1";
+        if(raw === "[data-ext-settings-more-label]")return child.dataset.extSettingsMoreLabel !== undefined;
+        return false;
+      };
+      const out = [];
+      const visit = current => {
+        (current.children || []).forEach(child => {
+          if(matches(child))out.push(child);
+          if(!direct)visit(child);
+        });
+      };
+      visit(this);
+      return out;
+    },
     addEventListener(type,handler){ (listeners[type] = listeners[type] || []).push(handler); },
     dispatchEvent(event){ (listeners[event && event.type] || []).forEach(handler => handler(event)); return true; },
   };
@@ -10682,12 +10729,16 @@ const fakeHidden = { checked: true };
 const fakeCategory = { value: "cat-a" };
 const fakeScope = { value: "window" };
 const fakeTarget = { value: "workspace" };
+const fakePerf = { textContent: "", title: "" };
+const fakeExtSettingsContainer = makeNode("div");
 globalThis.$ = id => id === "settings-search" ? fakeSearch : (
   id === "ext-settings-modified" ? fakeModified : (
   id === "ext-settings-hidden" ? fakeHidden : (
   id === "ext-settings-category" ? fakeCategory : (
   id === "ext-settings-scope" ? fakeScope : (
-  id === "ext-settings-target" ? fakeTarget : null)))));
+  id === "ext-settings-target" ? fakeTarget : (
+  id === "ext-settings-perf" ? fakePerf : (
+  id === "ext-settings-container" ? fakeExtSettingsContainer : null)))))));
 let filterApplyCount = 0;
 globalThis.applyExtensionSettingsFilter = () => { filterApplyCount++; };
 const arraySchema = { type: "array", items: { type: "string" } };
@@ -11219,6 +11270,36 @@ fakeSearch.value = "render";
 enumChoiceActions.find(btn => btn.textContent === "Filter").onclick({ preventDefault(){}, stopPropagation(){} });
 assert(fakeSearch.value.indexOf("@value:") >= 0 && filterApplyCount > 0,
        "enum choice filter action appends value filter token");
+const virtualContainer = makeNode("div");
+const virtualSection = makeNode("details");
+virtualSection.dataset.extSettingsSection = "1";
+const virtualInner = makeNode("div");
+virtualContainer.appendChild(virtualSection);
+virtualSection.appendChild(virtualInner);
+const virtualFactories = Array.from({ length: 125 }, (_, index) => () => {
+  const row = makeNode("div");
+  row.className = "ext-setting-row";
+  row.dataset.extSettingKey = "setting." + index;
+  return row;
+});
+extensionSettingInstallSectionVirtualRows(virtualSection, virtualInner, virtualFactories);
+assert(virtualSection.dataset.extVirtualTotal === "125"
+       && virtualSection.dataset.extVirtualRendered === "80"
+       && virtualInner.querySelectorAll(".ext-setting-row").length === 80
+       && virtualInner.querySelector(".ext-settings-more"),
+       "extension settings virtual section initially renders the first bounded row window");
+extensionSettingAppendVirtualRows(virtualSection, 10);
+assert(virtualSection.dataset.extVirtualRendered === "90"
+       && virtualInner.querySelectorAll(".ext-setting-row").length === 90,
+       "extension settings virtual section appends the next visible row batch");
+extensionSettingEnsureAllRowsRendered(virtualContainer);
+const virtualStats = extensionSettingUpdateVirtualStats(virtualContainer);
+assert(virtualInner.querySelectorAll(".ext-setting-row").length === 125
+       && virtualStats.totalRows === 125
+       && virtualStats.renderedRows === 125
+       && virtualStats.pendingRows === 0
+       && fakePerf.textContent.indexOf("125 rows") >= 0,
+       "extension settings virtual section can materialize all rows for accurate filtering");
 assert(extensionSettingQuotedFilterValue("auto mode") === '"auto mode"'
        && extensionSettingQuotedFilterValue("auto") === "auto",
        "settings filter token values quote whitespace only when needed");

@@ -2353,6 +2353,11 @@ pre.code-block { overflow:visible; }
 .ext-setting-lazy-details summary::-webkit-details-marker { display:none; }
 .ext-setting-lazy-details summary::before { content:'›'; display:inline-block; width:11px; color:var(--fg-accent); }
 .ext-setting-lazy-details[open] summary::before { transform:rotate(90deg); }
+.ext-settings-more { display:flex; align-items:center; gap:8px; padding:8px 0 3px; color:var(--fg-dim); font:11px var(--sans); }
+.ext-settings-more span { flex:1; min-width:0; font:10px var(--mono); }
+.ext-settings-more button { height:23px; padding:1px 8px; border:1px solid var(--border); border-radius:4px;
+  background:var(--bg3); color:var(--fg-dim); font:11px var(--sans); cursor:pointer; }
+.ext-settings-more button:hover,.ext-settings-more button:focus { color:var(--fg); border-color:var(--border-focus); outline:none; }
 .ext-setting-structured-assist { display:flex; flex-wrap:wrap; gap:4px; margin:4px 0 5px; align-items:center; }
 .ext-setting-structured-assist-label { color:var(--fg-dim); font-size:10px; margin-right:2px; }
 .ext-setting-structured-status { display:inline-flex; align-items:center; height:20px; padding:0 6px; border-radius:999px;
@@ -25690,6 +25695,7 @@ function settingsUiSelfCheckSnapshot(){
     hasExtensionEnumActions:!!document.querySelector('.ext-setting-enum-choice-actions button[data-enum-choice-action]'),
     hasExtensionPerformanceStatus:!!$('ext-settings-perf'),
     extensionPerformance:typeof extensionSettingRenderStats==='function'?extensionSettingRenderStats():{},
+    extensionVirtualization:typeof extensionSettingVirtualizationStats==='function'?extensionSettingVirtualizationStats($('ext-settings-container')):{},
     density:settingsReadDensity(),
     currentTarget:currentSettingsTarget,
     navItems:navItems.length,
@@ -29648,6 +29654,8 @@ let _extensionSettingPendingFilterState=null;
 let _extensionSettingFilterDomCache=null;
 let _extensionSettingDynamicSuggestionCache=null;
 let _extensionSettingsFilterTimer=0;
+const EXTENSION_SETTINGS_INITIAL_SECTION_ROWS=80;
+const EXTENSION_SETTINGS_SECTION_ROW_BATCH=80;
 let _extensionSettingRenderStats={rows:0,sections:0,renderMs:0,yields:0,filteredAt:0,filterMs:0};
 function invalidateExtensionSettingFilterDomCache(){_extensionSettingFilterDomCache=null;_extensionSettingDynamicSuggestionCache=null}
 function extensionSettingFilterDomCache(container){
@@ -29677,12 +29685,98 @@ function renderExtensionSettingPerformanceStatus(){
   const renderMs=Math.round(Number(stats.renderMs||0));
   const filterMs=Math.round(Number(stats.filterMs||0));
   const lazy=Number(stats.lazyControls||0),hydrated=Number(stats.hydratedControls||0);
-  el.textContent=rows+' rows · '+sections+' sections · render '+renderMs+'ms'+(filterMs?' · filter '+filterMs+'ms':'')+(lazy?' · lazy '+hydrated+'/'+lazy:'');
+  const totalRows=Number(stats.totalRows||rows),pendingRows=Number(stats.pendingRows||0);
+  el.textContent=rows+(totalRows&&totalRows!==rows?'/'+totalRows:'')+' rows · '+sections+' sections · render '+renderMs+'ms'+(filterMs?' · filter '+filterMs+'ms':'')+(pendingRows?' · pending '+pendingRows:'')+(lazy?' · lazy '+hydrated+'/'+lazy:'');
   el.title='Extension Settings render and filter timing';
 }
 function extensionSettingSetRenderStats(stats){
   _extensionSettingRenderStats=Object.assign({},_extensionSettingRenderStats||{},stats||{});
   renderExtensionSettingPerformanceStatus();
+}
+function extensionSettingVirtualizationStats(container){
+  const root=container||$('ext-settings-container');
+  const sections=Array.from((root&&root.querySelectorAll)?root.querySelectorAll('details[data-ext-settings-section]'):[]);
+  return sections.reduce((acc,section)=>{
+    const total=Number(section.dataset.extVirtualTotal||0);
+    const rendered=Number(section.dataset.extVirtualRendered||0);
+    acc.totalRows+=total;
+    acc.renderedRows+=rendered;
+    if(total>rendered)acc.pendingRows+=total-rendered;
+    if(total)acc.virtualSections++;
+    return acc;
+  },{totalRows:0,renderedRows:0,pendingRows:0,virtualSections:0});
+}
+function extensionSettingUpdateVirtualStats(container){
+  const stats=extensionSettingVirtualizationStats(container);
+  extensionSettingSetRenderStats({
+    rows:stats.renderedRows,
+    totalRows:stats.totalRows,
+    pendingRows:stats.pendingRows,
+    virtualSections:stats.virtualSections,
+  });
+  return stats;
+}
+function extensionSettingInsertBeforeMore(inner,row){
+  const more=inner&&inner.querySelector?inner.querySelector(':scope > .ext-settings-more'):null;
+  if(more)inner.insertBefore(row,more);
+  else inner.appendChild(row);
+}
+function extensionSettingAppendVirtualRows(section,count){
+  if(!section||!section._extSettingRowFactories||!section._extSettingInner)return 0;
+  const factories=section._extSettingRowFactories;
+  const inner=section._extSettingInner;
+  let rendered=Number(section.dataset.extVirtualRendered||0);
+  const limit=Math.min(factories.length,rendered+Math.max(0,Number(count||EXTENSION_SETTINGS_SECTION_ROW_BATCH)));
+  let added=0;
+  while(rendered<limit){
+    const row=factories[rendered]&&factories[rendered]();
+    rendered++;
+    if(row){extensionSettingInsertBeforeMore(inner,row);added++}
+  }
+  section.dataset.extVirtualRendered=String(rendered);
+  const more=section._extSettingMore;
+  if(more){
+    const pending=Math.max(0,factories.length-rendered);
+    more.dataset.pendingRows=String(pending);
+    more.style.display=pending?'flex':'none';
+    const label=more.querySelector('[data-ext-settings-more-label]');
+    if(label)label.textContent=pending?('Showing '+rendered+' of '+factories.length+' settings'):'All '+factories.length+' settings shown';
+  }
+  if(added){
+    invalidateExtensionSettingFilterDomCache();
+    extensionSettingUpdateVirtualStats();
+    extensionSettingPreheatLazyRows(section,8);
+  }
+  return added;
+}
+function extensionSettingEnsureAllRowsRendered(container){
+  const root=container||$('ext-settings-container');
+  let added=0;
+  Array.from((root&&root.querySelectorAll)?root.querySelectorAll('details[data-ext-settings-section]'):[]).forEach(section=>{
+    const total=Number(section.dataset.extVirtualTotal||0);
+    const rendered=Number(section.dataset.extVirtualRendered||0);
+    if(total>rendered)added+=extensionSettingAppendVirtualRows(section,total-rendered);
+  });
+  return added;
+}
+function extensionSettingInstallSectionVirtualRows(section,inner,rowFactories){
+  const factories=Array.isArray(rowFactories)?rowFactories:[];
+  section._extSettingInner=inner;
+  section._extSettingRowFactories=factories;
+  section.dataset.extVirtualTotal=String(factories.length);
+  section.dataset.extVirtualRendered='0';
+  if(factories.length>EXTENSION_SETTINGS_INITIAL_SECTION_ROWS){
+    const more=document.createElement('div');more.className='ext-settings-more';
+    const label=document.createElement('span');label.dataset.extSettingsMoreLabel='1';
+    const moreBtn=document.createElement('button');moreBtn.type='button';moreBtn.textContent='Show More';
+    moreBtn.onclick=ev=>{ev.preventDefault();extensionSettingAppendVirtualRows(section,EXTENSION_SETTINGS_SECTION_ROW_BATCH);applyExtensionSettingsFilter()};
+    const allBtn=document.createElement('button');allBtn.type='button';allBtn.textContent='Show All';
+    allBtn.onclick=ev=>{ev.preventDefault();extensionSettingAppendVirtualRows(section,factories.length);applyExtensionSettingsFilter()};
+    more.appendChild(label);more.appendChild(moreBtn);more.appendChild(allBtn);
+    section._extSettingMore=more;
+    inner.appendChild(more);
+  }
+  extensionSettingAppendVirtualRows(section,factories.length>EXTENSION_SETTINGS_INITIAL_SECTION_ROWS?EXTENSION_SETTINGS_INITIAL_SECTION_ROWS:factories.length);
 }
 function extensionSettingDynamicSuggestionCache(container){
   if(_extensionSettingDynamicSuggestionCache&&_extensionSettingDynamicSuggestionCache.container===container)return _extensionSettingDynamicSuggestionCache;
@@ -30174,6 +30268,18 @@ function applyExtensionSettingsFilter(){
   const scopeFilter=(($('ext-settings-scope')||{}).value)||'';
   const targetFilter=(($('ext-settings-target')||{}).value)||'';
   const query=extensionSettingsQuery();
+  const activeFilter=!!(category||scopeFilter||targetFilter||query.text||query.modifiedOnly||query.hiddenOnly
+    ||query.tags.length||query.scopes.length||query.targets.length||query.extensions.length||query.types.length
+    ||query.policies.length||query.experiments.length||query.agentsWindows.length||query.syncs.length
+    ||query.ids.length||query.features.length||query.languages.length||query.values.length||query.defaults.length
+    ||query.excludedTags.length||query.excludedScopes.length||query.excludedTargets.length||query.excludedExtensions.length
+    ||query.excludedTypes.length||query.excludedIds.length||query.excludedFeatures.length||query.excludedLanguages.length
+    ||query.excludedValues.length||query.excludedDefaults.length||query.restrictedOnly||query.experimentOnly
+    ||query.agentsWindowOnly||query.stableOnly||query.readonlyOnly||query.writableOnly||query.configuredOnly
+    ||query.unconfiguredOnly||query.defaultLockedOnly||query.onlineOnly);
+  if(activeFilter&&extensionSettingEnsureAllRowsRendered(container)){
+    invalidateExtensionSettingFilterDomCache();
+  }
   const textTokens=extensionSettingTextTokens(query.text);
   const cb=$('ext-settings-modified');if(cb)cb.checked=query.modifiedOnly;
   const hiddenCb=$('ext-settings-hidden');if(hiddenCb)hiddenCb.checked=query.hiddenOnly;
@@ -30183,9 +30289,9 @@ function applyExtensionSettingsFilter(){
   sections.forEach(record=>{
     const section=record.section;
     const categoryOk=!category||section.dataset.extSettingsCategory===category;
+    const sectionTotal=Number(section.dataset.extVirtualTotal||record.rows.length);
     let sectionRows=0,sectionModified=0,sectionInvalid=0,sectionHidden=0;
     record.rows.forEach(row=>{
-      totalRows++;
       const rowTags=extensionSettingRowTags(row);
       const scopeOk=(!scopeFilter||row.dataset.extSettingScope===scopeFilter)
         &&(!query.scopes.length||query.scopes.includes(row.dataset.extSettingScope||''));
@@ -30239,8 +30345,9 @@ function applyExtensionSettingsFilter(){
         if(row.dataset.extSettingModified==='1'&&!row.classList.contains('scope-readonly'))resettableVisible++;
       }
     });
+    totalRows+=sectionTotal;
     extensionSettingSortSectionRows(section,query.text);
-    updateExtensionSettingSectionSummary(section,{visible:sectionRows,total:record.rows.length,modified:sectionModified,invalid:sectionInvalid,hidden:sectionHidden});
+    updateExtensionSettingSectionSummary(section,{visible:sectionRows,total:sectionTotal,modified:sectionModified,invalid:sectionInvalid,hidden:sectionHidden});
     section.style.display=sectionRows?'':'none';
     if(sectionRows){visibleSections++;if(query.text||query.tags.length||query.scopes.length||query.targets.length||query.extensions.length||query.types.length||query.policies.length||query.experiments.length||query.agentsWindows.length||query.syncs.length||query.ids.length||query.features.length||query.languages.length||query.values.length||query.defaults.length||query.excludedTags.length||query.excludedScopes.length||query.excludedTargets.length||query.excludedExtensions.length||query.excludedTypes.length||query.excludedIds.length||query.excludedFeatures.length||query.excludedLanguages.length||query.excludedValues.length||query.excludedDefaults.length||query.restrictedOnly||query.experimentOnly||query.agentsWindowOnly||query.stableOnly||query.readonlyOnly||query.writableOnly||query.configuredOnly||query.unconfiguredOnly||query.defaultLockedOnly||query.onlineOnly||query.modifiedOnly||query.hiddenOnly||category||scopeFilter||targetFilter)section.open=true}
   });
@@ -30724,10 +30831,13 @@ async function renderExtensionSettings(){
       inner.appendChild(sectionDesc);
     }
     const sectionSearch=[displayName,title,configId,sectionDescription].filter(Boolean).join(' ');
+    const rowFactories=[];
     propKeys.forEach(key=>{
+      const rowOrder=rowFactories.length;
+      rowFactories.push(()=>{
       const isHiddenSetting=Object.prototype.hasOwnProperty.call(hiddenProperties,key);
       const schema=allProperties[key];
-      if(!schema||typeof schema!=='object')return;
+      if(!schema||typeof schema!=='object')return null;
       const type=extensionSettingType(schema);
       const valueMap=isHiddenSetting?hiddenValues:values;
       const defaultMap=isHiddenSetting?hiddenDefaults:defaults;
@@ -30766,7 +30876,7 @@ async function renderExtensionSettings(){
       settingsAddRowActions(row,{key:key,searchable:true});
       if(isHiddenSetting)row.classList.add('hidden-setting');
       if(hiddenEditable)row.classList.add('hidden-editable');
-      row.dataset.extSettingOrder=String(inner.children.length);
+      row.dataset.extSettingOrder=String(rowOrder);
       row.dataset.extSettingTitle=schema.title||shortKey;
       row.dataset.extSettingScope=scopeName;
       row.dataset.extSettingTarget=targetName;
@@ -30977,8 +31087,10 @@ async function renderExtensionSettings(){
       });
       if(type==='array'||type==='object')input.addEventListener('input',()=>setExtensionSettingError(row,''));
       markExtensionSettingRow(row,modifiedMap[key]===true);
-      inner.appendChild(row);
+      return row;
+      });
     });
+    extensionSettingInstallSectionVirtualRows(section,inner,rowFactories);
     section.appendChild(inner);
     fragment.appendChild(section);
     if(cfgIndex%4===3){
@@ -30992,7 +31104,8 @@ async function renderExtensionSettings(){
   invalidateExtensionSettingFilterDomCache();
   const renderCache=extensionSettingFilterDomCache(container);
   const renderedRows=renderCache.sections.reduce((total,record)=>total+record.rows.length,0);
-  extensionSettingSetRenderStats({rows:renderedRows,sections:renderCache.sections.length,renderMs:extensionSettingNow()-renderStarted,yields:yieldCount,filterMs:0});
+  const virtualStats=extensionSettingVirtualizationStats(container);
+  extensionSettingSetRenderStats({rows:virtualStats.renderedRows||renderedRows,totalRows:virtualStats.totalRows||renderedRows,pendingRows:virtualStats.pendingRows||0,virtualSections:virtualStats.virtualSections||0,sections:renderCache.sections.length,renderMs:extensionSettingNow()-renderStarted,yields:yieldCount,filterMs:0});
   extensionSettingPreheatLazyRows(container,18);
   extensionSettingRestoreFilterState();
   categorySelect.onchange=()=>scheduleExtensionSettingsFilter(0);
