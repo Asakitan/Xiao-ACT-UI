@@ -17943,6 +17943,8 @@ _LAUNCH_INFLIGHT_TTL_SECONDS = 8.0
 _LAUNCH_CHILD_GRACE_SECONDS = 90.0
 _LAUNCH_CHILD_WINDOW_GRACE_SECONDS = 12.0
 _LAUNCH_FRONTEND_READY_GRACE_SECONDS = 20.0
+_LAUNCH_FRONTEND_READY_STALE_SECONDS = 12 * 60 * 60.0
+_LAUNCH_STATE_SCHEMA = 2
 _EXISTING_WINDOW_RECOVERY_SECONDS = 5.0
 _LAUNCH_STATE_FILE = os.path.join(os.path.expanduser("~"), ".sao", "ai_editor_launch.json")
 _last_existing_window_activation: Dict[str, Any] = {"hwnd": 0, "at": 0.0}
@@ -18144,15 +18146,21 @@ def _read_launch_state() -> Dict[str, Any]:
 
 def _write_launch_state(pid: int) -> None:
     try:
+        now = time.time()
         os.makedirs(os.path.dirname(_LAUNCH_STATE_FILE), exist_ok=True)
         with open(_LAUNCH_STATE_FILE, "w", encoding="utf-8") as fh:
             json.dump({
+                "schema": _LAUNCH_STATE_SCHEMA,
                 "pid": int(pid),
-                "started_at": time.time(),
+                "launcher_pid": os.getpid(),
+                "started_at": now,
+                "updated_at": now,
                 "cwd": os.getcwd(),
                 "title": _AI_EDITOR_WINDOW_TITLE,
                 "frontend_ready_at": 0.0,
+                "frontend_ready_pid": 0,
                 "frontend_ready_phase": "",
+                "frontend_ready_until": 0.0,
             }, fh)
     except Exception:
         pass
@@ -18161,12 +18169,17 @@ def _write_launch_state(pid: int) -> None:
 def _mark_launch_state_frontend_ready(phase: str = "ready") -> None:
     try:
         state = _read_launch_state()
+        now = time.time()
+        state["schema"] = _LAUNCH_STATE_SCHEMA
         state["pid"] = int(state.get("pid") or os.getpid())
+        state["frontend_ready_pid"] = os.getpid()
         state["started_at"] = float(state.get("started_at") or time.time())
+        state["updated_at"] = now
         state["cwd"] = state.get("cwd") or os.getcwd()
         state["title"] = state.get("title") or _AI_EDITOR_WINDOW_TITLE
-        state["frontend_ready_at"] = time.time()
+        state["frontend_ready_at"] = now
         state["frontend_ready_phase"] = str(phase or "ready")
+        state["frontend_ready_until"] = now + _LAUNCH_FRONTEND_READY_STALE_SECONDS
         os.makedirs(os.path.dirname(_LAUNCH_STATE_FILE), exist_ok=True)
         with open(_LAUNCH_STATE_FILE, "w", encoding="utf-8") as fh:
             json.dump(state, fh)
@@ -18174,7 +18187,10 @@ def _mark_launch_state_frontend_ready(phase: str = "ready") -> None:
         pass
 
 
-def _launch_state_frontend_ready(state: Dict[str, Any], pid: int) -> bool:
+def _launch_state_frontend_ready(
+        state: Dict[str, Any],
+        pid: int,
+        max_ready_age: Optional[float] = None) -> bool:
     try:
         current_pid = int(state.get("pid") or 0)
     except Exception:
@@ -18182,9 +18198,103 @@ def _launch_state_frontend_ready(state: Dict[str, Any], pid: int) -> bool:
     if current_pid and int(pid or 0) and current_pid != int(pid or 0):
         return False
     try:
-        return float(state.get("frontend_ready_at") or 0.0) > 0.0
+        ready_at = float(state.get("frontend_ready_at") or 0.0)
     except Exception:
         return False
+    if ready_at <= 0.0:
+        return False
+    if max_ready_age is not None and float(max_ready_age) > 0:
+        return time.time() - ready_at <= float(max_ready_age)
+    return True
+
+
+def _launch_state_summary(
+        state: Dict[str, Any],
+        pid: int = 0,
+        hwnd: int = 0,
+        now: Optional[float] = None) -> Dict[str, Any]:
+    now_value = time.time() if now is None else float(now)
+    try:
+        state_pid = int(state.get("pid") or 0)
+    except Exception:
+        state_pid = 0
+    try:
+        wanted_pid = int(pid or 0)
+    except Exception:
+        wanted_pid = 0
+    try:
+        started_at = float(state.get("started_at") or 0.0)
+    except Exception:
+        started_at = 0.0
+    try:
+        ready_at = float(state.get("frontend_ready_at") or 0.0)
+    except Exception:
+        ready_at = 0.0
+    age_seconds = max(0.0, now_value - started_at) if started_at else None
+    ready_age_seconds = max(0.0, now_value - ready_at) if ready_at else None
+    pid_matches = bool(not state_pid or not wanted_pid or state_pid == wanted_pid)
+    frontend_ready = bool(pid_matches and ready_at > 0.0)
+    frontend_ready_fresh = bool(
+        frontend_ready
+        and ready_age_seconds is not None
+        and ready_age_seconds <= _LAUNCH_FRONTEND_READY_STALE_SECONDS)
+    try:
+        schema = int(state.get("schema") or 0) if isinstance(state, dict) else 0
+    except Exception:
+        schema = 0
+    try:
+        updated_at = float(state.get("updated_at") or 0.0) if isinstance(state, dict) else 0.0
+    except Exception:
+        updated_at = 0.0
+    return {
+        "schema": schema,
+        "pid": wanted_pid,
+        "statePid": state_pid,
+        "pidMatches": pid_matches,
+        "hwnd": int(hwnd or 0),
+        "hasWindow": bool(hwnd),
+        "ageSeconds": age_seconds,
+        "frontendReady": frontend_ready,
+        "frontendReadyAt": ready_at,
+        "frontendReadyAgeSeconds": ready_age_seconds,
+        "frontendReadyFresh": frontend_ready_fresh,
+        "frontendReadyPhase": str(state.get("frontend_ready_phase") or ""),
+        "updatedAt": updated_at,
+        "cwd": str(state.get("cwd") or "") if isinstance(state, dict) else "",
+        "title": str(state.get("title") or "") if isinstance(state, dict) else "",
+    }
+
+
+def launch_state_snapshot(pid: int = 0, hwnd: int = 0) -> Dict[str, Any]:
+    state = _read_launch_state()
+    return {
+        "ok": True,
+        "currentPid": os.getpid(),
+        "state": state,
+        "summary": _launch_state_summary(state, pid=pid, hwnd=hwnd),
+    }
+
+
+def _existing_window_frontend_summary(hwnd: int, user32: Any = None) -> Dict[str, Any]:
+    pid = _window_process_id(hwnd, user32)
+    return _launch_state_summary(_read_launch_state(), pid=pid, hwnd=hwnd)
+
+
+def _existing_window_needs_frontend_recovery(hwnd: int, user32: Any = None) -> bool:
+    summary = _existing_window_frontend_summary(hwnd, user32)
+    state_pid = int(summary.get("statePid") or 0)
+    pid = int(summary.get("pid") or 0)
+    if not state_pid or not pid or not summary.get("pidMatches"):
+        return False
+    if summary.get("frontendReady"):
+        return False
+    age = summary.get("ageSeconds")
+    if age is not None and float(age) <= _LAUNCH_FRONTEND_READY_GRACE_SECONDS:
+        return False
+    _append_ai_editor_log(
+        "existing window frontend not ready "
+        f"hwnd={int(hwnd or 0)} pid={pid} age={float(age or 0.0):.1f}s; allowing recovery relaunch")
+    return True
 
 
 def _clear_launch_state_for_pid(pid: int) -> None:
@@ -18205,8 +18315,13 @@ def _recent_child_launch_alive() -> bool:
         if age <= _LAUNCH_CHILD_WINDOW_GRACE_SECONDS:
             return True
         state = _read_launch_state()
-        if _find_ai_editor_window(skip_current_process=True):
+        hwnd = _find_ai_editor_window(skip_current_process=True)
+        summary = _launch_state_summary(state, pid=pid, hwnd=hwnd)
+        if hwnd:
             if _launch_state_frontend_ready(state, pid):
+                if not summary.get("frontendReadyFresh"):
+                    _append_ai_editor_log(
+                        f"recent child pid={pid} frontend ready signal is stale but window is responsive")
                 return True
             if age <= _LAUNCH_FRONTEND_READY_GRACE_SECONDS:
                 _append_ai_editor_log(
@@ -18216,9 +18331,12 @@ def _recent_child_launch_alive() -> bool:
                 f"recent child pid={pid} has a window but no frontend ready signal after {age:.1f}s; allowing relaunch")
             return False
         if _launch_state_frontend_ready(state, pid) and age <= _LAUNCH_CHILD_GRACE_SECONDS:
+            _append_ai_editor_log(
+                f"recent child pid={pid} has frontend ready state without a window age={age:.1f}s")
             return True
         _append_ai_editor_log(
-            f"recent child pid={pid} alive but no usable window after {age:.1f}s; allowing relaunch")
+            f"recent child pid={pid} alive but no usable window after {age:.1f}s; "
+            f"ready={summary.get('frontendReady')} phase={summary.get('frontendReadyPhase')!r}; allowing relaunch")
         return False
     try:
         proc = _running_child_process
@@ -18496,6 +18614,21 @@ def _window_handle_responding(hwnd: int, user32: Any = None,
         return False
 
 
+def _window_foreground_matches(hwnd: int, user32: Any = None) -> bool:
+    if sys.platform != "win32" or not hwnd:
+        return False
+    try:
+        import ctypes
+        if user32 is None:
+            user32 = ctypes.windll.user32
+        get_foreground = getattr(user32, "GetForegroundWindow", None)
+        if get_foreground is None:
+            return True
+        return int(get_foreground() or 0) == int(hwnd or 0)
+    except Exception:
+        return False
+
+
 def _activate_window_handle(hwnd: int, keep_topmost_seconds: float = 0.9) -> bool:
     if sys.platform != "win32" or not hwnd:
         return False
@@ -18508,6 +18641,12 @@ def _activate_window_handle(hwnd: int, keep_topmost_seconds: float = 0.9) -> boo
         _move_window_handle_on_screen(hwnd, user32)
         user32.SetWindowPos(hwnd_ptr, ctypes.c_void_p(-1), 0, 0, 0, 0, flags)
         user32.SetForegroundWindow(hwnd_ptr)
+        bring_to_top = getattr(user32, "BringWindowToTop", None)
+        if bring_to_top is not None:
+            bring_to_top(hwnd_ptr)
+        set_active = getattr(user32, "SetActiveWindow", None)
+        if set_active is not None:
+            set_active(hwnd_ptr)
         if not _window_handle_visible_after_activation(hwnd, user32):
             _append_ai_editor_log(
                 f"existing window activation failed visibility hwnd={hwnd}")
@@ -18516,6 +18655,9 @@ def _activate_window_handle(hwnd: int, keep_topmost_seconds: float = 0.9) -> boo
             _append_ai_editor_log(
                 f"existing window activation failed liveness hwnd={hwnd}")
             return False
+        if not _window_foreground_matches(hwnd, user32):
+            _append_ai_editor_log(
+                f"existing window activation foreground not confirmed hwnd={hwnd}")
         if keep_topmost_seconds > 0:
             def _release_topmost() -> None:
                 time.sleep(keep_topmost_seconds)
@@ -18538,6 +18680,9 @@ def _activate_existing_ai_editor_window(skip_current_process: bool = False) -> b
     hwnd = _find_ai_editor_window(skip_current_process=skip_current_process)
     if not hwnd:
         _append_ai_editor_log("no usable existing window found")
+        return False
+    if _existing_window_needs_frontend_recovery(hwnd):
+        _existing_window_recovery_until = time.monotonic() + _EXISTING_WINDOW_RECOVERY_SECONDS
         return False
     now = time.monotonic()
     last_hwnd = int(_last_existing_window_activation.get("hwnd") or 0)

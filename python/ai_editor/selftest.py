@@ -1008,12 +1008,17 @@ def test_app_settings_parity() -> None:
         _AI_EDITOR_WORKSPACE_ROOT_ENV,
         _LAUNCH_CHILD_WINDOW_GRACE_SECONDS,
         _LAUNCH_FRONTEND_READY_GRACE_SECONDS,
+        _LAUNCH_FRONTEND_READY_STALE_SECONDS,
         _recent_child_launch_alive,
+        _existing_window_needs_frontend_recovery,
         _launch_state_frontend_ready,
+        _launch_state_summary,
+        launch_state_snapshot,
         _activate_window_handle,
         _normalize_window_geometry,
         _window_client_area_ok,
         _window_handle_cloaked,
+        _window_foreground_matches,
         _window_handle_responding,
         _window_handle_visible_after_activation,
         _window_rect_intersects_screen,
@@ -2230,6 +2235,16 @@ def test_app_settings_parity() -> None:
         _check("AI Editor activation rejects unresponsive existing window",
                _window_handle_responding(123, _FakeHungUser32()) is False
                and _window_handle_responding(123, _FakeResponsiveUser32()) is True)
+    with patch("ai_editor.app.sys.platform", "win32"):
+        class _FakeForegroundUser32:
+            def __init__(self, hwnd):
+                self._hwnd = hwnd
+            def GetForegroundWindow(self):
+                return self._hwnd
+
+        _check("AI Editor activation can verify foreground ownership",
+               _window_foreground_matches(123, _FakeForegroundUser32(123)) is True
+               and _window_foreground_matches(123, _FakeForegroundUser32(456)) is False)
     old_launch_state = {
         "pid": 424242,
         "started_at": time.time() - (_LAUNCH_CHILD_WINDOW_GRACE_SECONDS + 8),
@@ -2248,6 +2263,57 @@ def test_app_settings_parity() -> None:
         "started_at": time.time() - (_LAUNCH_FRONTEND_READY_GRACE_SECONDS + 3),
         "frontend_ready_at": time.time() - 1,
     }
+    stale_ready_state = {
+        "schema": 2,
+        "pid": 424242,
+        "started_at": time.time() - (_LAUNCH_FRONTEND_READY_GRACE_SECONDS + 3),
+        "updated_at": time.time() - 2,
+        "frontend_ready_at": time.time() - (_LAUNCH_FRONTEND_READY_STALE_SECONDS + 5),
+        "frontend_ready_phase": "stale-test",
+        "cwd": "E:\\VC\\SAO-UI\\sao_auto",
+        "title": "SAO AI Editor",
+    }
+    stale_summary = _launch_state_summary(stale_ready_state, pid=424242, hwnd=123)
+    malformed_time_summary = _launch_state_summary(
+        {**stale_ready_state, "updated_at": "not-a-number"},
+        pid=424242,
+        hwnd=123)
+    with patch("ai_editor.app._read_launch_state", return_value=ready_window_state):
+        snapshot = launch_state_snapshot(pid=424242, hwnd=123)
+    _check("AI Editor launch state summary tracks frontend readiness freshness",
+           stale_summary.get("statePid") == 424242
+           and stale_summary.get("pidMatches") is True
+           and stale_summary.get("hasWindow") is True
+           and stale_summary.get("frontendReady") is True
+           and stale_summary.get("frontendReadyFresh") is False
+           and stale_summary.get("frontendReadyPhase") == "stale-test"
+           and malformed_time_summary.get("updatedAt") == 0.0
+           and _launch_state_frontend_ready(
+               stale_ready_state, 424242,
+               max_ready_age=_LAUNCH_FRONTEND_READY_STALE_SECONDS) is False
+           and snapshot.get("summary", {}).get("frontendReady") is True
+           and snapshot.get("summary", {}).get("hwnd") == 123)
+    with patch("ai_editor.app._read_launch_state",
+               return_value=stale_window_unready_state), \
+            patch("ai_editor.app._window_process_id", return_value=424242):
+        needs_recovery = _existing_window_needs_frontend_recovery(123)
+    with patch("ai_editor.app._read_launch_state",
+               return_value=young_launch_state), \
+            patch("ai_editor.app._window_process_id", return_value=424242):
+        young_needs_recovery = _existing_window_needs_frontend_recovery(123)
+    with patch("ai_editor.app._read_launch_state",
+               return_value=ready_window_state), \
+            patch("ai_editor.app._window_process_id", return_value=424242):
+        ready_needs_recovery = _existing_window_needs_frontend_recovery(123)
+    with patch("ai_editor.app._read_launch_state",
+               return_value=stale_window_unready_state), \
+            patch("ai_editor.app._window_process_id", return_value=111111):
+        mismatch_needs_recovery = _existing_window_needs_frontend_recovery(123)
+    _check("AI Editor existing window recovery waits for same-pid frontend ready timeout",
+           needs_recovery is True
+           and young_needs_recovery is False
+           and ready_needs_recovery is False
+           and mismatch_needs_recovery is False)
     with patch("ai_editor.app._running_child_process", None), \
             patch("ai_editor.app._process_alive", return_value=True), \
             patch("ai_editor.app._find_ai_editor_window", return_value=0), \
@@ -2316,11 +2382,19 @@ def test_app_settings_parity() -> None:
             and "_LAUNCH_CHILD_GRACE_SECONDS" in app_src
             and "_LAUNCH_CHILD_WINDOW_GRACE_SECONDS" in app_src
             and "_LAUNCH_FRONTEND_READY_GRACE_SECONDS" in app_src
+            and "_LAUNCH_FRONTEND_READY_STALE_SECONDS" in app_src
+            and "_LAUNCH_STATE_SCHEMA" in app_src
             and "recent child pid={pid} alive but no usable window" in app_src
+            and "ready={summary.get('frontendReady')}" in app_src
             and "has a window but no frontend ready signal" in app_src
             and "_LAUNCH_STATE_FILE" in app_src
+            and "def _launch_state_summary(" in app_src
+            and "def launch_state_snapshot(" in app_src
             and "def _mark_launch_state_frontend_ready" in app_src
             and "def _launch_state_frontend_ready" in app_src
+            and "\"frontend_ready_until\"" in app_src
+            and "\"frontend_ready_pid\"" in app_src
+            and "\"launcher_pid\"" in app_src
             and "def mark_frontend_ready(self, phase: str = \"ready\")" in app_src
             and "def _process_alive(pid: int)" in app_src
             and "def _recent_child_launch_alive()" in app_src
@@ -2335,6 +2409,13 @@ def test_app_settings_parity() -> None:
            and "def _window_handle_responding(" in app_src
            and "def _window_client_area_ok(" in app_src
            and "def _window_process_id(" in app_src
+           and "def _window_foreground_matches(" in app_src
+           and "BringWindowToTop" in app_src
+           and "SetActiveWindow" in app_src
+           and "activation foreground not confirmed" in app_src
+           and "def _existing_window_frontend_summary(" in app_src
+           and "def _existing_window_needs_frontend_recovery(" in app_src
+           and "existing window frontend not ready" in app_src
            and "skip_current_process: bool = False" in app_src
            and "_activate_existing_ai_editor_window(skip_current_process=True)" in app_src
            and "_AI_EDITOR_FORCE_NEW_ENV" in app_src
