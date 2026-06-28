@@ -10009,18 +10009,31 @@ console.log("frontend word separator behavior ok");
              and "hasDetailTargetNote" in html
              and "hasDetailSaveRevertActions" in html
              and "hasRowSaveRevertMenu" in html
-             and "settings-experience-bar" in html
-             and "experience-chip.dirty" in html
-             and "function renderSettingsExperienceBar(parsed,visible,total,stats)" in html
-             and "function renderSettingsSuggestedMatches(parsed)" in html
-             and "function renderSettingsRowImpactSummaries()" in html
+            and "settings-experience-bar" in html
+            and "experience-chip.dirty" in html
+            and "function renderSettingsExperienceBar(parsed,visible,total,stats)" in html
+            and "id=\"settings-focus-deck\"" in html
+            and "function renderSettingsFocusDeck(parsed,visible,total,stats)" in html
+            and "function settingsFocusDeckCurrentRowInfo(row)" in html
+            and "function settingsFocusDeckCard(kind,label,title,subtitle,chips)" in html
+            and "card.dataset.settingsFocusCard=kind||'summary';" in html
+            and "actions.dataset.settingsFocusActions='1';" in html
+            and "window.renderSettingsFocusDeck=renderSettingsFocusDeck;" in html
+            and "function renderSettingsSuggestedMatches(parsed)" in html
+            and "function renderSettingsRowImpactSummaries()" in html
              and "settings-row-impact" in html
              and "settings-suggested-matches" in html
              and "Copy Link','Copy a direct setting link" in html
-             and "hasExperienceBar" in html
-             and "hasExperienceScopeChip" in html
-             and "hasRowImpactSummary" in html
-             and "hasSuggestedMatchesHost" in html
+            and "hasExperienceBar" in html
+            and "hasExperienceScopeChip" in html
+            and "hasRowImpactSummary" in html
+            and "hasFocusDeck" in html
+            and "hasFocusDeckCards" in html
+            and "hasFocusDeckActions" in html
+            and "hasFocusDeckStateChips" in html
+            and "renderSettingsFocusDeck(parsed,visible,total,targetStats);" in html
+            and "renderSettingsFocusDeck(settingsQueryFilters((($('settings-search')||{}).value)||''),0,0" in html
+            and "hasSuggestedMatchesHost" in html
              and "hasReviewFilterActions" in html
              and "hasOverridesFilterToken" in html
              and "hasLanguageSuggestions" in html
@@ -10032,9 +10045,10 @@ console.log("frontend word separator behavior ok");
              and "window.settingsRevertRowValue=settingsRevertRowValue;" in html
              and "window.settingsSaveFocusedRow=settingsSaveFocusedRow;" in html
              and "window.settingsPersistedValueForTarget=settingsPersistedValueForTarget;" in html
-             and "window.renderSettingsRowImpactSummaries=renderSettingsRowImpactSummaries;" in html
-             and "window.renderSettingsExperienceBar=renderSettingsExperienceBar;" in html
-             and "window.settingsApplyReviewFilter=settingsApplyReviewFilter;" in html
+            and "window.renderSettingsRowImpactSummaries=renderSettingsRowImpactSummaries;" in html
+            and "window.renderSettingsExperienceBar=renderSettingsExperienceBar;" in html
+            and "window.renderSettingsFocusDeck=renderSettingsFocusDeck;" in html
+            and "window.settingsApplyReviewFilter=settingsApplyReviewFilter;" in html
              and "window.settingsClearReviewFilters=settingsClearReviewFilters;" in html
              and "window.settingsHasReviewFilter=settingsHasReviewFilter;" in html
              and "window.settingsSearchModifiedLanguageOverride=settingsSearchModifiedLanguageOverride;" in html

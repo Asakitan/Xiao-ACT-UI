@@ -1705,6 +1705,32 @@ pre.code-block code .type { color:var(--fg-type); }
   border-radius:4px; background:var(--bg3); color:var(--fg-dim); font:11px var(--sans); cursor:pointer; }
 .settings-experience-bar button:hover,.settings-experience-bar button:focus { color:var(--fg);
   border-color:var(--border-focus); outline:none; background:var(--bg-hover); }
+.settings-focus-deck { grid-column:1 / -1; display:grid; grid-template-columns:minmax(170px,.95fr) minmax(190px,1fr) minmax(220px,1.25fr) auto;
+  gap:8px; align-items:stretch; padding:7px; border:1px solid var(--border); border-radius:5px;
+  background:color-mix(in srgb,var(--bg2) 82%,transparent); color:var(--fg-dim); }
+.settings-focus-deck .focus-card { min-width:0; display:flex; flex-direction:column; gap:4px; padding:7px 8px;
+  border:1px solid color-mix(in srgb,var(--border) 72%,transparent); border-radius:5px;
+  background:color-mix(in srgb,var(--bg3) 62%,transparent); }
+.settings-focus-deck .focus-label { color:var(--fg-dim); font:10px var(--mono); text-transform:uppercase; }
+.settings-focus-deck .focus-title { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;
+  color:var(--fg); font-size:12px; font-weight:600; }
+.settings-focus-deck .focus-sub { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;
+  color:var(--fg-dim); font-size:11px; }
+.settings-focus-deck .focus-chips { display:flex; flex-wrap:wrap; gap:4px; align-items:center; }
+.settings-focus-deck .focus-chip { display:inline-flex; align-items:center; min-height:18px; max-width:240px;
+  padding:1px 6px; border:1px solid var(--border); border-radius:999px; background:var(--bg3);
+  color:var(--fg-dim); font:10px var(--mono); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.settings-focus-deck .focus-chip.active { color:var(--fg-accent); border-color:color-mix(in srgb,var(--fg-accent) 48%,var(--border)); }
+.settings-focus-deck .focus-chip.warning { color:var(--fg-warning); border-color:color-mix(in srgb,var(--fg-warning) 48%,var(--border)); }
+.settings-focus-deck .focus-chip.error { color:var(--fg-error); border-color:color-mix(in srgb,var(--fg-error) 55%,var(--border)); }
+.settings-focus-deck .focus-actions { display:flex; align-items:center; justify-content:flex-end; flex-wrap:wrap; gap:4px; min-width:130px; }
+.settings-focus-deck button { height:23px; padding:1px 8px; border:1px solid var(--border); border-radius:4px;
+  background:var(--bg3); color:var(--fg-dim); font:11px var(--sans); cursor:pointer; }
+.settings-focus-deck button.primary { color:var(--fg); border-color:color-mix(in srgb,var(--fg-accent) 55%,var(--border));
+  background:color-mix(in srgb,var(--fg-accent) 12%,var(--bg3)); }
+.settings-focus-deck button:hover:not(:disabled),.settings-focus-deck button:focus:not(:disabled) {
+  color:var(--fg); border-color:var(--border-focus); outline:none; background:var(--bg-hover); }
+.settings-focus-deck button:disabled { opacity:.45; cursor:default; }
 .settings-section-context { display:flex; align-items:center; gap:7px; min-height:24px; color:var(--fg-dim);
   font-size:11px; padding:3px 0; }
 .settings-section-context strong { color:var(--fg); font-weight:600; }
@@ -1921,6 +1947,13 @@ pre.code-block code .type { color:var(--fg-type); }
 .modal textarea { min-height:80px; resize:vertical; }
 .modal-btns { display:flex; gap:8px; margin:0; justify-content:flex-end; padding:10px 18px;
   border-top:1px solid var(--border); background:var(--bg2); flex-shrink:0; }
+.modal-btns .settings-bottom-action { height:28px; padding:0 12px; border:1px solid var(--border);
+  border-radius:4px; background:var(--bg3); color:var(--fg-dim); font:12px var(--sans); cursor:pointer; }
+.modal-btns .settings-bottom-action:hover,.modal-btns .settings-bottom-action:focus {
+  color:var(--fg); border-color:var(--border-focus); outline:none; background:var(--bg-hover); }
+.modal-btns .settings-bottom-action.primary { color:#fff; border-color:var(--btn); background:var(--btn); }
+.modal-btns .settings-bottom-action.primary:hover,.modal-btns .settings-bottom-action.primary:focus {
+  background:var(--btn-hover); }
 .modal-status { margin:0; padding:6px 18px 0; font-size:12px; min-height:18px; flex-shrink:0; }
 .modal .settings-section { border-top:1px solid var(--border); margin-top:14px; padding-top:10px; }
 .settings-modal .settings-section { margin-top:0; }
@@ -3493,6 +3526,7 @@ pre.code-block { overflow:visible; }
       <div id="settings-search-memory" class="settings-search-memory" aria-label="Recent settings searches"></div>
       <div id="settings-target-summary" class="settings-target-summary" role="status" aria-live="polite"></div>
       <div id="settings-experience-bar" class="settings-experience-bar" role="status" aria-live="polite"></div>
+      <div id="settings-focus-deck" class="settings-focus-deck" role="status" aria-live="polite"></div>
       <div id="settings-section-context" class="settings-section-context" role="status" aria-live="polite"></div>
       <div id="settings-review-bar" class="settings-review-bar" role="status" aria-live="polite"></div>
       <div id="settings-save-preview" class="settings-save-preview" aria-live="polite"></div>
@@ -3881,11 +3915,11 @@ pre.code-block { overflow:visible; }
     </div>
     <div class="modal-status" id="s-status"></div>
     <div class="modal-btns">
-      <span class="toolbar-btn" onclick="closeSettings();openKeybindings()" style="border:1px solid var(--border);padding:6px 14px;border-radius:var(--radius);margin-right:auto;font-size:11px">Keyboard Shortcuts</span>
+      <button type="button" class="settings-bottom-action" onclick="closeSettings();openKeybindings()" style="margin-right:auto">Keyboard Shortcuts</button>
       <button type="button" class="settings-top-action settings-reset-visible" onclick="resetVisibleModifiedSettings()">Reset Visible</button>
-      <span class="toolbar-btn" onclick="testConn()" style="border:1px solid var(--border);padding:6px 14px;border-radius:var(--radius)">Test</span>
-      <span class="toolbar-btn" onclick="closeSettings()" style="border:1px solid var(--border);padding:6px 14px;border-radius:var(--radius)">Cancel</span>
-      <button class="send-btn settings-save-button" onclick="saveSettings()">Save</button>
+      <button type="button" class="settings-bottom-action" onclick="testConn()">Test</button>
+      <button type="button" class="settings-bottom-action" onclick="closeSettings()">Cancel</button>
+      <button type="button" class="settings-bottom-action primary settings-save-button" onclick="saveSettings()">Save</button>
     </div>
   </div>
 </div>
@@ -4628,6 +4662,7 @@ function settingsHighlightRow(row){
   settingsShowRowDetails(row);
   updateSettingsResultNav(settingsVisibleRows().length);
   renderSettingsExperienceBar(settingsQueryFilters((($('settings-search')||{}).value)||''),0,0,{visible:settingsVisibleRows().length,modified:settingsReviewRows('modified').length,overrides:settingsReviewRows('override').length});
+  renderSettingsFocusDeck(settingsQueryFilters((($('settings-search')||{}).value)||''),0,0,{visible:settingsVisibleRows().length,modified:settingsReviewRows('modified').length,overrides:settingsReviewRows('override').length,errors:settingsReviewRows('error').length});
   try{row.focus({preventScroll:true})}catch(e){try{row.focus()}catch(_e){}}
   setTimeout(()=>row.classList.remove('highlight'),900);
 }
@@ -5020,6 +5055,7 @@ function markSettingsModified(){
   refreshSettingsDirtySummary(modifiedCount,errorCount);
   updateSettingsNavCounts();
   renderSettingsReviewBar();
+  renderSettingsFocusDeck(settingsQueryFilters((($('settings-search')||{}).value)||''),0,0,{visible:settingsVisibleRows().length,modified:modifiedCount,errors:errorCount,overrides:settingsReviewRows('override').length});
 }
 function refreshSettingsDirtySummary(modifiedCount,errorCount){
   const pill=$('settings-dirty-summary');
@@ -27027,6 +27063,7 @@ function settingsUiSelfCheckSnapshot(){
   const detailActionLabels=detail?Array.from(detail.querySelectorAll('.detail-actions button')).map(btn=>String(btn.textContent||'')):[];
   const reviewActionLabels=Array.from(document.querySelectorAll('#settings-review-bar .review-actions button')).map(btn=>String(btn.textContent||''));
   const experienceBar=$('settings-experience-bar');
+  const focusDeck=$('settings-focus-deck');
   const rowImpact=document.querySelector('.settings-row-impact');
   return {
     pass:!!(modal&&nav&&main&&inspector&&$('settings-nav-filter')&&$('settings-density-toggle')&&detail
@@ -27078,6 +27115,10 @@ function settingsUiSelfCheckSnapshot(){
     hasExperienceBar:!!(experienceBar&&experienceBar.querySelector('.experience-chip')&&experienceBar.querySelector('.experience-actions button')),
     hasExperienceScopeChip:!!(experienceBar&&/User|Workspace|Extensions/.test(experienceBar.textContent||'')),
     hasExperienceDirtyChip:!!(experienceBar&&experienceBar.querySelector('.experience-chip.dirty,.experience-chip.warning')),
+    hasFocusDeck:!!(focusDeck&&focusDeck.dataset.settingsFocusDeck==='1'),
+    hasFocusDeckCards:!!(focusDeck&&focusDeck.querySelector('[data-settings-focus-card="target"]')&&focusDeck.querySelector('[data-settings-focus-card="section"]')&&focusDeck.querySelector('[data-settings-focus-card="setting"]')),
+    hasFocusDeckActions:!!(focusDeck&&focusDeck.querySelector('[data-settings-focus-actions="1"] button')),
+    hasFocusDeckStateChips:!!(focusDeck&&focusDeck.querySelector('.focus-chip')),
     hasRowImpactSummary:!!(rowImpact&&rowImpact.querySelector('.impact-chip')),
     hasRowSaveRevertMenu:!!Array.from(document.querySelectorAll('.settings-row-action-menu button')).find(btn=>String(btn.textContent||'')==='Save Setting')&&!!Array.from(document.querySelectorAll('.settings-row-action-menu button')).find(btn=>String(btn.textContent||'')==='Revert Setting'),
     hasSuggestedMatchesHost:!!$('settings-suggested-matches'),
@@ -27137,6 +27178,7 @@ window.settingsToggleQueryHelp=settingsToggleQueryHelp;
 window.renderSettingsRowMatchSummaries=renderSettingsRowMatchSummaries;
 window.renderSettingsRowImpactSummaries=renderSettingsRowImpactSummaries;
 window.renderSettingsExperienceBar=renderSettingsExperienceBar;
+window.renderSettingsFocusDeck=renderSettingsFocusDeck;
 window.renderSettingsSuggestedMatches=renderSettingsSuggestedMatches;
 window.closeSettingsRowActionMenus=closeSettingsRowActionMenus;
 window.settingsToggleFilterToken=settingsToggleFilterToken;
@@ -27605,6 +27647,115 @@ function renderSettingsExperienceBar(parsed,visible,total,stats){
   addButton('JSON','Open settings JSON',settingsOpenJsonView);
   host.appendChild(actions);
 }
+function settingsFocusDeckChip(host,text,cls){
+  if(!host||!text)return null;
+  const chip=document.createElement('span');
+  chip.className='focus-chip'+(cls?' '+cls:'');
+  chip.textContent=text;
+  chip.title=text;
+  host.appendChild(chip);
+  return chip;
+}
+function settingsFocusDeckCard(kind,label,title,subtitle,chips){
+  const card=document.createElement('div');
+  card.className='focus-card';
+  card.dataset.settingsFocusCard=kind||'summary';
+  const labelEl=document.createElement('div');
+  labelEl.className='focus-label';
+  labelEl.textContent=label||'Settings';
+  const titleEl=document.createElement('div');
+  titleEl.className='focus-title';
+  titleEl.textContent=title||'Settings';
+  titleEl.title=titleEl.textContent;
+  const sub=document.createElement('div');
+  sub.className='focus-sub';
+  sub.textContent=subtitle||'';
+  sub.title=sub.textContent;
+  const chipHost=document.createElement('div');
+  chipHost.className='focus-chips';
+  (chips||[]).forEach(chip=>settingsFocusDeckChip(chipHost,chip.text,chip.cls));
+  card.appendChild(labelEl);
+  card.appendChild(titleEl);
+  if(sub.textContent)card.appendChild(sub);
+  if(chipHost.children.length)card.appendChild(chipHost);
+  return card;
+}
+function settingsFocusDeckCurrentRowInfo(row){
+  if(!row)return {title:'No setting selected',subtitle:'Click a row or press Down in search to inspect and edit.',chips:[]};
+  const info=settingsMetaForRow(row);
+  const key=info.key||settingsReviewRowLabel(row);
+  const current=info&&info.input&&info.meta?settingsInputValue(info.input,info.meta):settingsRowCurrentValue(row);
+  const state=info&&info.meta?settingValueState(info.meta,current,currentSettingsTarget):{state:row.classList&&row.classList.contains('modified')?'edited':'extension',label:row.classList&&row.classList.contains('modified')?'Modified':'Extension'};
+  const chips=[
+    {text:state.label,cls:state.state==='edited'?'active':state.state==='override'?'warning':state.state==='extension'?'active':''},
+    {text:settingsTargetDisplayName(currentSettingsTarget),cls:currentSettingsTarget==='workspace'?'warning':currentSettingsTarget==='extensions'?'active':''},
+    {text:settingsRowAppliesLabel(row,info),cls:''}
+  ];
+  if(row.classList&&row.classList.contains('invalid'))chips.push({text:'Needs attention',cls:'error'});
+  if(key)chips.push({text:key,cls:''});
+  return {
+    title:settingsRowTitle(row),
+    subtitle:settingCompactDisplayValue(current,96)||key,
+    chips
+  };
+}
+function renderSettingsFocusDeck(parsed,visible,total,stats){
+  const host=$('settings-focus-deck');if(!host)return;
+  const section=settingsActiveSectionElement();
+  const row=settingsCurrentRow();
+  const review=settingsComputeReviewState(stats||{visible:settingsVisibleRows().length});
+  const sectionStats=section?settingsSectionStats(section):{visible:settingsVisibleRows().length,modified:0,errors:0,overrides:0};
+  host.innerHTML='';
+  host.dataset.settingsFocusDeck='1';
+  const targetChips=[
+    {text:settingsTargetDisplayName(currentSettingsTarget),cls:currentSettingsTarget==='workspace'?'warning':currentSettingsTarget==='extensions'?'active':''},
+    {text:String(review.visible)+' visible',cls:''},
+    {text:String(review.modified.length)+' modified',cls:review.modified.length?'active':''},
+    {text:String(review.errors.length)+' errors',cls:review.errors.length?'error':''}
+  ];
+  if(parsed&&parsed.active)targetChips.push({text:'Filtered',cls:'active'});
+  if(Number.isFinite(Number(visible))&&Number.isFinite(Number(total)))targetChips.push({text:String(visible)+'/'+String(total)+' groups',cls:''});
+  host.appendChild(settingsFocusDeckCard(
+    'target',
+    'Target',
+    settingsTargetDisplayName(currentSettingsTarget)+' Settings',
+    currentSettingsTarget==='workspace'?'Workspace overrides active User values.':currentSettingsTarget==='extensions'?'Extension-contributed settings and runtime evidence.':'User settings shared across workspaces.',
+    targetChips
+  ));
+  host.appendChild(settingsFocusDeckCard(
+    'section',
+    'Section',
+    section?settingsSectionTitle(section):'No visible section',
+    section?settingsSectionDescription(section):'Clear filters or switch target.',
+    [
+      {text:String(sectionStats.visible||0)+' rows',cls:''},
+      {text:String(sectionStats.modified||0)+' modified',cls:sectionStats.modified?'active':''},
+      {text:String(sectionStats.errors||0)+' errors',cls:sectionStats.errors?'error':''}
+    ]
+  ));
+  const current=settingsFocusDeckCurrentRowInfo(row);
+  host.appendChild(settingsFocusDeckCard('setting','Focused Setting',current.title,current.subtitle,current.chips));
+  const actions=document.createElement('div');
+  actions.className='focus-actions';
+  actions.dataset.settingsFocusActions='1';
+  const addButton=(label,title,handler,disabled,primary)=>{
+    const btn=document.createElement('button');
+    btn.type='button';
+    btn.textContent=label;
+    btn.title=title||label;
+    btn.disabled=!!disabled;
+    if(primary)btn.classList.add('primary');
+    btn.onclick=ev=>{ev.preventDefault();if(!btn.disabled&&handler)handler()};
+    actions.appendChild(btn);
+    return btn;
+  };
+  addButton('Save','Save Settings',saveSettings,review.errors.length>0,false);
+  addButton('Review','Preview visible setting changes before saving',settingsToggleSavePreview,!(review.modified.length||review.errors.length||review.overrides.length),true);
+  addButton('Modified','Show modified settings',()=>settingsApplyReviewFilter('modified'),!review.modified.length,false);
+  addButton('JSON','Open settings.json',settingsOpenJsonView,false,false);
+  addButton('Focus','Focus selected setting',()=>row?settingsHighlightRow(row):settingsFocusBoundaryRow('first'),!settingsVisibleRows().length,false);
+  host.appendChild(actions);
+}
 function settingsSuggestionScore(row,tokens){
   const text=settingsRowFilterText(row);
   const key=settingsRowKey(row).toLowerCase();
@@ -28047,6 +28198,7 @@ function filterSettings(){
   renderSettingsSearchMemory(parsed);
   renderSettingsTargetSummary(targetStats);
   renderSettingsExperienceBar(parsed,visible,total,targetStats);
+  renderSettingsFocusDeck(parsed,visible,total,targetStats);
   renderSettingsReviewBar(targetStats);
   updateSettingsResultNav(settingsVisibleRows().length);
   renderSettingsFilterSuggestions();
