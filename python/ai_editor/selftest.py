@@ -9916,7 +9916,13 @@ console.log("frontend word separator behavior ok");
             and "Next Section" in html
             and "#settings-modal.open" in html
             and "width:min(1360px, calc(100vw - 56px))" in html
-            and "grid-template-columns:264px minmax(0,1fr)" in html
+            and "grid-template-columns:264px minmax(0,1fr) minmax(240px,286px)" in html
+            and "class=\"settings-inspector\" id=\"settings-inspector\"" in html
+            and "Selected Setting" in html
+            and "settings-current-detail:not(.open)::before" in html
+            and "function settingsOriginalLabelText(wrap)" in html
+            and "originalLabel.classList.add('settings-original-label')" in html
+            and "title.textContent=settingsOriginalLabelText(wrap)||settingFriendlyName(meta,inputId)" in html
             and "grid-template-columns:minmax(150px,260px) minmax(0,1fr) auto" in html
             and "settingsTargetDisplayName(target)+': '+String(Number(safeStats[target]||0))" in html
             and "hasResultCount" in html
@@ -9934,6 +9940,10 @@ console.log("frontend word separator behavior ok");
              and "hasWideSettingsEditor" in html
              and "hasSettingsEditorShell" in html
              and "hasWideCategoryNav" in html
+             and "hasSettingsInspector" in html
+             and "hasInspectorDetail" in html
+             and "hasLabelsInsideRows" in html
+             and "hidesOriginalLabels" in html
              and "hasBuiltSettingGridHead" in html
              and "hasBuiltSettingRowDivider" in html
              and "hasTargetCountChips" in html
@@ -9978,6 +9988,10 @@ console.log("frontend word separator behavior ok");
             and "result.snapshot.hasWideSettingsEditor" in settings_smoke_source
             and "result.snapshot.hasSettingsEditorShell" in settings_smoke_source
             and "result.snapshot.hasWideCategoryNav" in settings_smoke_source
+            and "result.snapshot.hasSettingsInspector" in settings_smoke_source
+            and "result.snapshot.hasInspectorDetail" in settings_smoke_source
+            and "result.snapshot.hasLabelsInsideRows" in settings_smoke_source
+            and "result.snapshot.hidesOriginalLabels" in settings_smoke_source
             and "result.snapshot.hasBuiltSettingGridHead" in settings_smoke_source
             and "result.snapshot.hasBuiltSettingRowDivider" in settings_smoke_source
             and "result.snapshot.hasTargetCountChips" in settings_smoke_source

@@ -1651,7 +1651,7 @@ pre.code-block code .type { color:var(--fg-type); }
 .settings-searchbar .settings-active-filters,.settings-searchbar .settings-filter-summary,
 .settings-searchbar .settings-validation-summary,.settings-searchbar .settings-review-bar,
 .settings-searchbar .settings-save-preview,.settings-searchbar .settings-search-memory,
-.settings-searchbar .settings-current-detail,.settings-searchbar .settings-section-context { grid-column:1 / -1; }
+.settings-searchbar .settings-section-context { grid-column:1 / -1; }
 .settings-searchbar .settings-quick-filters { grid-column:1 / -1; display:flex; flex-wrap:wrap; gap:5px;
   margin:-1px 0 0; }
 .settings-quick-filters button { height:22px; max-width:160px; padding:1px 7px; border:1px solid var(--border);
@@ -1677,20 +1677,22 @@ pre.code-block code .type { color:var(--fg-type); }
 .settings-section-context button { height:21px; padding:1px 7px; border:1px solid var(--border); border-radius:4px;
   background:var(--bg3); color:var(--fg-dim); font:11px var(--sans); cursor:pointer; }
 .settings-section-context button:hover,.settings-section-context button:focus { color:var(--fg); border-color:var(--border-focus); outline:none; }
-.settings-current-detail { display:none; align-items:center; gap:7px; min-height:28px; padding:5px 7px;
+.settings-current-detail { display:flex; flex-direction:column; gap:7px; min-height:0; padding:9px;
   border:1px solid var(--border); border-radius:5px; background:color-mix(in srgb,var(--bg2) 76%,transparent);
   color:var(--fg-dim); font-size:11px; }
-.settings-current-detail.open { display:flex; flex-wrap:wrap; }
-.settings-current-detail strong { color:var(--fg); font-weight:600; }
-.settings-current-detail code { color:var(--fg-accent); font:11px var(--mono); }
-.settings-current-detail .detail-chip { padding:1px 6px; border:1px solid var(--border); border-radius:999px;
-  background:var(--bg3); color:var(--fg-dim); font:10px var(--mono); max-width:260px; overflow:hidden;
+.settings-current-detail:not(.open)::before { content:'Select a setting'; color:var(--fg); font-weight:600; }
+.settings-current-detail:not(.open)::after { content:'Focus a row to inspect its id, current value, default, inherited value, and actions.'; line-height:1.35; }
+.settings-current-detail.open { display:flex; }
+.settings-current-detail strong { color:var(--fg); font-weight:600; line-height:16px; }
+.settings-current-detail code { color:var(--fg-accent); font:11px var(--mono); user-select:all; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.settings-current-detail .detail-chip { min-height:19px; padding:1px 6px; border:1px solid var(--border); border-radius:999px;
+  background:var(--bg3); color:var(--fg-dim); font:10px var(--mono); max-width:100%; overflow:hidden;
   text-overflow:ellipsis; white-space:nowrap; }
 .settings-current-detail .detail-chip.position { color:var(--fg); border-color:color-mix(in srgb,var(--border-focus) 45%,var(--border)); }
 .settings-current-detail .detail-chip.value-state.edited { color:var(--fg-accent); border-color:color-mix(in srgb,var(--fg-accent) 48%,var(--border)); }
 .settings-current-detail .detail-chip.value-state.default { color:var(--fg-success); border-color:color-mix(in srgb,var(--fg-success) 42%,var(--border)); }
 .settings-current-detail .detail-chip.value-state.override { color:var(--fg-warning); border-color:color-mix(in srgb,var(--fg-warning) 48%,var(--border)); }
-.settings-current-detail .detail-actions { margin-left:auto; display:inline-flex; flex-wrap:wrap; align-items:center; gap:4px; }
+.settings-current-detail .detail-actions { display:flex; flex-wrap:wrap; align-items:center; gap:4px; padding-top:2px; }
 .settings-current-detail button { height:21px; padding:1px 7px; border:1px solid var(--border); border-radius:4px;
   background:var(--bg3); color:var(--fg-dim); font:11px var(--sans); cursor:pointer; }
 .settings-current-detail button:hover,.settings-current-detail button:focus { color:var(--fg); border-color:var(--border-focus); outline:none; }
@@ -1756,8 +1758,8 @@ pre.code-block code .type { color:var(--fg-type); }
   border-radius:4px; background:var(--bg3); color:var(--fg-dim); font:11px var(--sans); cursor:pointer; }
 .settings-reset-visible:hover,.settings-reset-visible:focus { color:var(--fg); border-color:var(--border-focus); outline:none; }
 .settings-reset-visible:disabled { opacity:.45; cursor:default; }
-.settings-shell { flex:1; min-height:0; display:grid; grid-template-columns:264px minmax(0,1fr);
-  background:linear-gradient(90deg,var(--bg2) 0,var(--bg2) 264px,var(--bg) 264px,var(--bg) 100%); }
+.settings-shell { flex:1; min-height:0; display:grid; grid-template-columns:264px minmax(0,1fr) minmax(240px,286px);
+  background:linear-gradient(90deg,var(--bg2) 0,var(--bg2) 264px,var(--bg) 264px, var(--bg) calc(100% - 286px),var(--bg2) calc(100% - 286px),var(--bg2) 100%); }
 .settings-nav { overflow-y:auto; border-right:1px solid var(--border); background:var(--bg2); padding:9px 9px 14px; }
 .settings-nav-empty { color:var(--fg-dim); font-size:12px; padding:7px 8px; }
 .settings-nav-summary { position:sticky; top:0; z-index:2; margin:0 0 8px; padding:8px; border:1px solid var(--border); border-radius:5px;
@@ -1800,6 +1802,9 @@ pre.code-block code .type { color:var(--fg-type); }
 .settings-nav-item.modified .settings-nav-badge { background:var(--fg-accent); }
 .settings-nav-item.has-errors .settings-nav-badge { background:var(--fg-error); }
 .settings-main { min-width:0; overflow-y:auto; padding:10px 32px 22px; scroll-behavior:smooth; }
+.settings-inspector { min-width:0; overflow-y:auto; border-left:1px solid var(--border); background:var(--bg2);
+  padding:9px; }
+.settings-inspector-title { margin:0 0 7px; color:var(--fg-dim); font:10px var(--mono); text-transform:uppercase; letter-spacing:0; }
 .settings-empty-state { display:none; flex-direction:column; gap:8px; max-width:560px; margin:38px auto;
   padding:20px 22px; border:1px dashed var(--border); border-radius:6px; background:color-mix(in srgb,var(--bg2) 64%,transparent);
   color:var(--fg-dim); font-size:12px; line-height:1.45; }
@@ -2300,6 +2305,7 @@ pre.code-block { overflow:visible; }
 .settings-modal.compact .ext-setting-row { margin-bottom:5px; padding-top:5px; padding-bottom:5px; }
 .settings-field.builtin-setting > label:first-child,
 .settings-field.builtin-setting > .settings-check:first-child { margin-top:0; }
+.settings-field.builtin-setting > label.settings-original-label { display:none; }
 .settings-built-head { display:grid; grid-template-columns:minmax(150px,260px) minmax(0,1fr) auto;
   align-items:center; gap:8px; min-height:22px; margin:0 0 4px; }
 .settings-built-head-title { min-width:0; color:var(--fg); font-weight:600; font-size:12px;
@@ -3402,7 +3408,6 @@ pre.code-block { overflow:visible; }
       <div id="settings-search-memory" class="settings-search-memory" aria-label="Recent settings searches"></div>
       <div id="settings-target-summary" class="settings-target-summary" role="status" aria-live="polite"></div>
       <div id="settings-section-context" class="settings-section-context" role="status" aria-live="polite"></div>
-      <div id="settings-current-detail" class="settings-current-detail" role="status" aria-live="polite"></div>
       <div id="settings-review-bar" class="settings-review-bar" role="status" aria-live="polite"></div>
       <div id="settings-save-preview" class="settings-save-preview" aria-live="polite"></div>
       <div id="settings-filter-summary" class="settings-filter-summary" role="status" aria-live="polite"></div>
@@ -3781,6 +3786,10 @@ pre.code-block { overflow:visible; }
     </details>
 
       </main>
+      <aside class="settings-inspector" id="settings-inspector" aria-label="Selected setting details">
+        <div class="settings-inspector-title">Selected Setting</div>
+        <div id="settings-current-detail" class="settings-current-detail" role="status" aria-live="polite"></div>
+      </aside>
     </div>
     <div class="modal-status" id="s-status"></div>
     <div class="modal-btns">
@@ -4515,9 +4524,20 @@ function settingsFieldWrapper(inputId){
   const label=el.closest('label.settings-check');
   const target=label||el;
   const parent=target.parentElement;if(!parent)return null;
+  const prev=target.previousElementSibling;
+  const originalLabel=prev&&prev.tagName&&prev.tagName.toLowerCase()==='label'&&!prev.classList.contains('settings-check')?prev:null;
   const wrap=document.createElement('div');wrap.className='settings-field builtin-setting';
-  parent.insertBefore(wrap,target);wrap.appendChild(target);
+  parent.insertBefore(wrap,originalLabel||target);
+  if(originalLabel){
+    originalLabel.classList.add('settings-original-label');
+    wrap.appendChild(originalLabel);
+  }
+  wrap.appendChild(target);
   return wrap;
+}
+function settingsOriginalLabelText(wrap){
+  const label=wrap&&wrap.querySelector?wrap.querySelector(':scope > label.settings-original-label'):null;
+  return String((label&&label.textContent)||'').replace(/\s+/g,' ').trim();
 }
 function settingsControlKind(el,meta){
   if(!el)return 'input';
@@ -4592,7 +4612,7 @@ function wrapSettingsField(inputId){
   if(!wrap.querySelector('.settings-built-head')){
     const head=document.createElement('div');head.className='settings-built-head';
     const title=document.createElement('span');title.className='settings-built-head-title';
-    title.textContent=settingFriendlyName(meta,inputId);head.appendChild(title);
+    title.textContent=settingsOriginalLabelText(wrap)||settingFriendlyName(meta,inputId);head.appendChild(title);
     const key=document.createElement('code');key.textContent=meta.key||meta.path||inputId;head.appendChild(key);
     const state=document.createElement('span');state.className='settings-built-head-state';state.dataset.settingHeadState='1';
     state.textContent='Inherited';head.appendChild(state);
@@ -26417,16 +26437,18 @@ function installSettingsKeyboardHandlers(){
 }
 function settingsUiSelfCheckSnapshot(){
   const modal=$('settings-modal'),nav=$('settings-nav'),main=$('settings-main');
+  const inspector=$('settings-inspector');
   const overview=document.querySelector('.settings-section-overview');
   const navItems=nav?Array.from(nav.querySelectorAll('.settings-nav-item')):[];
   const detail=$('settings-current-detail');
   const builtHead=document.querySelector('.settings-built-head');
+  const originalLabel=document.querySelector('.settings-field.builtin-setting > label.settings-original-label');
   const idleCurrentChip=Array.from(document.querySelectorAll('.settings-built-chip.current'))
     .find(chip=>!(chip.closest&&chip.closest('.settings-current,.modified')));
   const detailActionLabels=detail?Array.from(detail.querySelectorAll('.detail-actions button')).map(btn=>String(btn.textContent||'')):[];
   const reviewActionLabels=Array.from(document.querySelectorAll('#settings-review-bar .review-actions button')).map(btn=>String(btn.textContent||''));
   return {
-    pass:!!(modal&&nav&&main&&$('settings-nav-filter')&&$('settings-density-toggle')&&detail
+    pass:!!(modal&&nav&&main&&inspector&&$('settings-nav-filter')&&$('settings-density-toggle')&&detail
       &&typeof settingsFilterNavCategories==='function'
       &&typeof settingsFocusVisibleRow==='function'
       &&typeof settingsFocusPagedRow==='function'
@@ -26436,6 +26458,10 @@ function settingsUiSelfCheckSnapshot(){
       && parseFloat(getComputedStyle(document.querySelector('.modal.settings-modal')).width||'0')>=1000,
     hasSettingsEditorShell:!!main&&String(getComputedStyle(main).overflowY)==='auto',
     hasWideCategoryNav:!!nav&&parseFloat(getComputedStyle(nav).width||'0')>=240,
+    hasSettingsInspector:!!inspector&&String(getComputedStyle(inspector).overflowY)==='auto',
+    hasInspectorDetail:!!(inspector&&detail&&inspector.contains(detail)),
+    hasLabelsInsideRows:!!originalLabel&&originalLabel.closest('.settings-field.builtin-setting'),
+    hidesOriginalLabels:!!originalLabel&&String(getComputedStyle(originalLabel).display)==='none',
     hasNavFilter:!!$('settings-nav-filter'),
     hasNavFilterEmptyState:!!$('settings-nav-filter-empty'),
     hasNavFilterCount:!!$('settings-nav-filter-count'),

@@ -267,6 +267,9 @@ async function main() {
   if (!result.snapshot.hasWorkspaceSizedModal || !result.snapshot.hasWideSettingsEditor || !result.snapshot.hasSettingsEditorShell || !result.snapshot.hasWideCategoryNav) {
     throw new Error("Settings selfcheck missing VS Code-like editor shell: " + JSON.stringify(result.snapshot));
   }
+  if (!result.snapshot.hasSettingsInspector || !result.snapshot.hasInspectorDetail || !result.snapshot.hasLabelsInsideRows || !result.snapshot.hidesOriginalLabels) {
+    throw new Error("Settings selfcheck missing inspector or row label structure: " + JSON.stringify(result.snapshot));
+  }
   if (!result.snapshot.hasBuiltSettingGridHead || !result.snapshot.hasBuiltSettingRowDivider || !result.snapshot.hasTargetCountChips || !result.snapshot.hasTargetSummaryScopeCounts) {
     throw new Error("Settings selfcheck missing Settings Editor row and scope affordances: " + JSON.stringify(result.snapshot));
   }
