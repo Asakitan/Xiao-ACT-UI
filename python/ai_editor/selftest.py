@@ -4296,7 +4296,7 @@ def test_phase1_ai_editor_regressions() -> None:
            and "saveEditorLanguageOverrideSettings();" in html
            and "saveFilesLanguageOverrideSettings();" in html)
     _check("frontend Settings uses VS Code-style setting rows",
-           ".settings-field.builtin-setting { position:relative; display:grid; grid-template-columns:minmax(250px,.72fr) minmax(280px,1fr);" in html
+           ".settings-field.builtin-setting { position:relative; display:grid; grid-template-columns:minmax(260px,.68fr) minmax(310px,1fr);" in html
            and ".settings-field.builtin-setting > .settings-control-frame" in html
            and "grid-column:2; grid-row:1 / span 7;" in html
            and '.settings-field.builtin-setting[data-setting-control-kind="textarea"] > .settings-control-frame' in html
@@ -10038,9 +10038,9 @@ console.log("frontend word separator behavior ok");
             and "Prev Section" in html
             and "Next Section" in html
             and "#settings-modal.open" in html
-            and "width:min(1400px, calc(100vw - 48px))" in html
-            and "grid-template-columns:260px minmax(0,1fr)" in html
-            and ".settings-shell.inspecting { grid-template-columns:250px minmax(0,1fr) minmax(270px,310px);" in html
+            and "width:min(1520px, calc(100vw - 44px))" in html
+            and "grid-template-columns:244px minmax(0,1fr)" in html
+            and ".settings-shell.inspecting { grid-template-columns:236px minmax(0,1fr) minmax(286px,330px);" in html
             and "class=\"settings-inspector\" id=\"settings-inspector\"" in html
             and "Selected Setting" in html
             and "function settingsClearCurrentRow()" in html
@@ -10083,6 +10083,9 @@ console.log("frontend word separator behavior ok");
              and "hasBuiltSettingRowDivider" in html
              and "hasTargetCountChips" in html
              and "hasTargetSummaryScopeCounts" in html
+             and "hasQuietSearchHints" in html
+             and "hasHelpOpenSearchHints" in html
+             and "hasConditionalReviewBar" in html
              and "hasOnDemandSettingValueDetails" in html
              and "hasDetailValueActions" in html
              and "hasDetailValueMatrix" in html
@@ -10207,7 +10210,11 @@ console.log("frontend word separator behavior ok");
              and "settingsRememberRecentSetting(row);" in html
              and "fav.dataset.settingsFavoriteKey=opts.key;" in html
             and "renderSettingsReviewBar(targetStats);" in html
-            and "renderSettingsReviewBar();" in html)
+            and "renderSettingsReviewBar();" in html
+            and ".settings-searchbar.help-open .settings-search-hints" in html
+            and ".settings-review-bar { display:none;" in html
+            and "host.classList.toggle('open',!!dirty||settingsHasReviewFilter());" in html
+            and "searchbar.classList.toggle('help-open',open);" in html)
     settings_smoke_path = os.path.join(
         os.path.dirname(__file__), "tools", "settings_ui_browser_smoke.js")
     settings_smoke_source = ""
@@ -10237,6 +10244,9 @@ console.log("frontend word separator behavior ok");
             and "result.snapshot.hasBuiltSettingRowDivider" in settings_smoke_source
             and "result.snapshot.hasTargetCountChips" in settings_smoke_source
             and "result.snapshot.hasTargetSummaryScopeCounts" in settings_smoke_source
+            and "result.snapshot.hasQuietSearchHints" in settings_smoke_source
+            and "result.snapshot.hasHelpOpenSearchHints" in settings_smoke_source
+            and "result.snapshot.hasConditionalReviewBar" in settings_smoke_source
             and "result.snapshot.hasOnDemandSettingValueDetails" in settings_smoke_source
             and "result.snapshot.hasExtensionVirtualSummary" in settings_smoke_source
             and "result.snapshot.hasExtensionVirtualActions" in settings_smoke_source
