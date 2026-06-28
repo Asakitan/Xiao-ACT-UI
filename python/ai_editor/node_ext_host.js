@@ -1641,6 +1641,104 @@ class EnvironmentVariableCollection {
 // Webview + WebviewView
 // -------------------------------------------------------------------------
 let _nextViewHandle = 1;
+const WEBVIEW_ARRAY_BUFFER_REF = '$$vscode_array_buffer_reference$$';
+const WEBVIEW_TYPED_ARRAY_CTORS = Object.freeze({
+    Int8Array,
+    Uint8Array,
+    Uint8ClampedArray,
+    Int16Array,
+    Uint16Array,
+    Int32Array,
+    Uint32Array,
+    Float32Array,
+    Float64Array,
+    BigInt64Array,
+    BigUint64Array,
+});
+
+function _webviewTypedArrayType(value) {
+    if (!value || !value.constructor) return '';
+    const name = value.constructor.name;
+    return Object.prototype.hasOwnProperty.call(WEBVIEW_TYPED_ARRAY_CTORS, name)
+        ? name
+        : '';
+}
+
+function _webviewArrayBufferToBase64(arrayBuffer) {
+    return Buffer.from(new Uint8Array(arrayBuffer)).toString('base64');
+}
+
+function _webviewArrayBufferFromBase64(value) {
+    const buffer = Buffer.from(String(value || ''), 'base64');
+    return buffer.buffer.slice(buffer.byteOffset, buffer.byteOffset + buffer.byteLength);
+}
+
+function _serializeWebviewMessageForBridge(message) {
+    const buffers = [];
+    const addBuffer = (arrayBuffer) => {
+        let index = buffers.indexOf(arrayBuffer);
+        if (index < 0) {
+            index = buffers.length;
+            buffers.push(arrayBuffer);
+        }
+        return index;
+    };
+    const json = JSON.stringify(message, (_key, value) => {
+        if (value instanceof ArrayBuffer) {
+            const index = addBuffer(value);
+            return {
+                [WEBVIEW_ARRAY_BUFFER_REF]: true,
+                index,
+                dataBase64: _webviewArrayBufferToBase64(value),
+                byteLength: value.byteLength,
+            };
+        }
+        if (ArrayBuffer.isView(value)) {
+            const type = _webviewTypedArrayType(value);
+            if (type) {
+                const index = addBuffer(value.buffer);
+                return {
+                    [WEBVIEW_ARRAY_BUFFER_REF]: true,
+                    index,
+                    dataBase64: _webviewArrayBufferToBase64(value.buffer),
+                    byteLength: value.buffer.byteLength,
+                    view: {
+                        type,
+                        byteLength: value.byteLength,
+                        byteOffset: value.byteOffset,
+                    },
+                };
+            }
+        }
+        return value;
+    });
+    return JSON.parse(json);
+}
+
+function _deserializeWebviewMessageFromBridge(message) {
+    if (!message || typeof message !== 'object') return message;
+    if (message[WEBVIEW_ARRAY_BUFFER_REF] && typeof message.dataBase64 === 'string') {
+        const arrayBuffer = _webviewArrayBufferFromBase64(message.dataBase64);
+        const view = message.view;
+        if (view && WEBVIEW_TYPED_ARRAY_CTORS[view.type]) {
+            const Ctor = WEBVIEW_TYPED_ARRAY_CTORS[view.type];
+            return new Ctor(
+                arrayBuffer,
+                Number(view.byteOffset) || 0,
+                Math.max(0, Number(view.byteLength) || 0) / Ctor.BYTES_PER_ELEMENT,
+            );
+        }
+        return arrayBuffer;
+    }
+    if (Array.isArray(message)) {
+        return message.map(item => _deserializeWebviewMessageFromBridge(item));
+    }
+    const copy = {};
+    for (const [key, value] of Object.entries(message)) {
+        copy[key] = _deserializeWebviewMessageFromBridge(value);
+    }
+    return copy;
+}
 
 class Webview {
     constructor(viewId, options, defaultLocalResourceRoots) {
@@ -1703,7 +1801,13 @@ class Webview {
     }
     postMessage(message) {
         this._assertAlive();
-        send({ type: 'webview_post_message', viewId: this._viewId, message });
+        let serialized;
+        try {
+            serialized = _serializeWebviewMessageForBridge(message);
+        } catch (err) {
+            return Promise.reject(err);
+        }
+        send({ type: 'webview_post_message', viewId: this._viewId, message: serialized });
         return Promise.resolve(true);
     }
     asWebviewUri(localUri) {
@@ -12699,19 +12803,20 @@ async function deactivateExtension(extensionId) {
 // Handle webview message from Python -> extension
 // -------------------------------------------------------------------------
 function handleWebviewMessage(viewId, message) {
+    const decoded = _deserializeWebviewMessageFromBridge(message);
     const view = _webviewViews.get(viewId);
     if (!view) {
         // Try matching by viewType
         for (const [id, v] of _webviewViews) {
             if (v.viewType === viewId) {
-                v.webview._onDidReceiveMessage.fire(message);
+                v.webview._onDidReceiveMessage.fire(decoded);
                 return;
             }
         }
         log(`webview_message: unknown viewId=${viewId}`);
         return;
     }
-    view.webview._onDidReceiveMessage.fire(message);
+    view.webview._onDidReceiveMessage.fire(decoded);
 }
 
 function handleWebviewPanelViewState(msg) {

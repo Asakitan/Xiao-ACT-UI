@@ -10,6 +10,7 @@ import io
 import json
 import logging
 import shutil
+import struct
 import subprocess
 import sys
 import os
@@ -23232,6 +23233,8 @@ const contentProviderEmitter = new vscode.EventEmitter();
 let contentProviderText = 'virtual-one';
 let webviewStatePanel = null;
 let webviewStateEvents = [];
+let webviewBinaryPanel = null;
+let webviewBinaryReceived = null;
 let dynamicWebviewView = null;
 let dynamicWebviewVisibility = [];
 let customEditorPanel = null;
@@ -27047,6 +27050,57 @@ async function activate(context) {
       viewColumn: panel.viewColumn,
     };
   });
+  vscode.commands.registerCommand('selftest.node.webviewBinaryPostMessage', async () => {
+    const panel = vscode.window.createWebviewPanel(
+      'selftest.binaryProbe',
+      'Binary Probe',
+      vscode.ViewColumn.One,
+      { enableScripts: true },
+    );
+    webviewBinaryPanel = panel;
+    webviewBinaryReceived = null;
+    panel.webview.html = '<main data-view="binary-probe"></main>';
+    panel.webview.onDidReceiveMessage(message => {
+      const raw = message && message.raw;
+      const slice = message && message.slice;
+      const floats = message && message.floats;
+      const nested = message && message.nested && message.nested.again;
+      webviewBinaryReceived = {
+        rawIsArrayBuffer: raw instanceof ArrayBuffer,
+        rawBytes: raw instanceof ArrayBuffer ? Array.from(new Uint8Array(raw)) : [],
+        sliceType: slice && slice.constructor && slice.constructor.name,
+        sliceBytes: slice ? Array.from(slice) : [],
+        sliceByteOffset: slice && slice.byteOffset,
+        sliceByteLength: slice && slice.byteLength,
+        sliceBufferBytes: slice && slice.buffer ? Array.from(new Uint8Array(slice.buffer)) : [],
+        floatType: floats && floats.constructor && floats.constructor.name,
+        floatValues: floats ? Array.from(floats) : [],
+        nestedType: nested && nested.constructor && nested.constructor.name,
+        nestedBytes: nested ? Array.from(nested) : [],
+        plain: message && message.plain,
+      };
+    });
+    const raw = new ArrayBuffer(8);
+    const bytes = new Uint8Array(raw);
+    bytes.set([1, 2, 3, 4, 5, 6, 7, 8]);
+    const slice = new Uint8Array(raw, 2, 4);
+    const floats = new Float32Array([1.5, -2.25]);
+    const posted = await panel.webview.postMessage({
+      kind: 'binary-out',
+      raw,
+      slice,
+      nested: { again: slice },
+      floats,
+      plain: { ok: true },
+    });
+    return { posted, viewId: panel.webview._viewId };
+  });
+  vscode.commands.registerCommand('selftest.node.webviewBinaryReceiveState', () => ({
+    hasPanel: !!webviewBinaryPanel,
+    viewId: webviewBinaryPanel && webviewBinaryPanel.webview
+      && webviewBinaryPanel.webview._viewId,
+    received: webviewBinaryReceived,
+  }));
   vscode.commands.registerCommand('selftest.node.dynamicWebviewViewProbe', async () => {
     dynamicWebviewView = null;
     dynamicWebviewVisibility = [];
@@ -27766,6 +27820,7 @@ process.stdin.resume();
                     self.webview_icons = {}
                     self.webview_options = {}
                     self.webview_view_metadata = {}
+                    self.webview_post_messages = []
                     self.local_resource_roots = {}
                     self.disposed = []
                     self.revealed = []
@@ -27842,6 +27897,10 @@ process.stdin.resume();
 
                 def post_webview_message(self, view_id: str, message) -> None:
                     self.webviews.setdefault(view_id, "")
+                    self.webview_post_messages.append({
+                        "view_id": str(view_id),
+                        "message": message,
+                    })
 
                 def dispose_webview_panel(self, view_id: str) -> None:
                     self.disposed.append(view_id)
@@ -28936,6 +28995,10 @@ process.stdin.resume();
                     lambda: "selftest.node.webviewOptionsProbe"
                     in api._ext_host.commands.list_commands(),
                     timeout=3.0)
+                node_webview_binary_command_registered = _wait_until(
+                    lambda: "selftest.node.webviewBinaryPostMessage"
+                    in api._ext_host.commands.list_commands(),
+                    timeout=3.0)
                 node_dynamic_webview_view_command_registered = _wait_until(
                     lambda: "selftest.node.dynamicWebviewViewProbe"
                     in api._ext_host.commands.list_commands(),
@@ -29364,6 +29427,12 @@ process.stdin.resume();
                 except Exception as exc:
                     node_webview_options_probe = {"_error": str(exc)}
                 try:
+                    node_webview_binary_post_probe = (
+                        api._ext_host.commands.execute(
+                            "selftest.node.webviewBinaryPostMessage"))
+                except Exception as exc:
+                    node_webview_binary_post_probe = {"_error": str(exc)}
+                try:
                     node_dynamic_webview_view_probe = (
                         api._ext_host.commands.execute(
                             "selftest.node.dynamicWebviewViewProbe"))
@@ -29438,6 +29507,11 @@ process.stdin.resume();
                     timeout=3.0)
                 _wait_until(
                     lambda: any(
+                        'data-view="binary-probe"' in html
+                        for html in node_ui_bridge.webviews.values()),
+                    timeout=3.0)
+                _wait_until(
+                    lambda: any(
                         'data-view="dynamic-webview-view"' in html
                         for html in node_ui_bridge.webviews.values()),
                     timeout=3.0)
@@ -29462,6 +29536,15 @@ process.stdin.resume();
                     in node_ui_bridge.webviews.items()
                     if 'data-view="options-probe"' in html
                 ), "")
+                node_binary_view_id = str(
+                    node_webview_binary_post_probe.get("viewId", "")
+                    if isinstance(node_webview_binary_post_probe, dict) else "")
+                if not node_binary_view_id:
+                    node_binary_view_id = next((
+                        view_id for view_id, html
+                        in node_ui_bridge.webviews.items()
+                        if 'data-view="binary-probe"' in html
+                    ), "")
                 node_dynamic_webview_view_id = next((
                     view_id for view_id, html
                     in node_ui_bridge.webviews.items()
@@ -29501,6 +29584,66 @@ process.stdin.resume();
                             "selftest.node.dynamicWebviewViewState"))
                 except Exception as exc:
                     node_dynamic_webview_view_state = {"_error": str(exc)}
+                node_binary_inbound_payload = {
+                    "raw": {
+                        "$$vscode_array_buffer_reference$$": True,
+                        "index": 0,
+                        "dataBase64": base64.b64encode(
+                            bytes([9, 8, 7, 6])).decode("ascii"),
+                    },
+                    "slice": {
+                        "$$vscode_array_buffer_reference$$": True,
+                        "index": 1,
+                        "dataBase64": base64.b64encode(
+                            bytes([20, 21, 22, 23, 24, 25])).decode("ascii"),
+                        "view": {
+                            "type": "Uint8Array",
+                            "byteOffset": 1,
+                            "byteLength": 4,
+                        },
+                    },
+                    "floats": {
+                        "$$vscode_array_buffer_reference$$": True,
+                        "index": 2,
+                        "dataBase64": base64.b64encode(
+                            struct.pack("<ff", 1.25, -2.25)).decode("ascii"),
+                        "view": {
+                            "type": "Float32Array",
+                            "byteOffset": 0,
+                            "byteLength": 8,
+                        },
+                    },
+                    "nested": {
+                        "again": {
+                            "$$vscode_array_buffer_reference$$": True,
+                            "index": 1,
+                            "dataBase64": base64.b64encode(
+                                bytes([20, 21, 22, 23, 24, 25])).decode("ascii"),
+                            "view": {
+                                "type": "Uint8Array",
+                                "byteOffset": 1,
+                                "byteLength": 4,
+                            },
+                        },
+                    },
+                    "plain": {"from": "python"},
+                }
+                node_binary_inbound_sent = (
+                    node_host.relay_webview_message(
+                        node_binary_view_id, node_binary_inbound_payload)
+                    if node_started and node_binary_view_id else False)
+                _wait_until(
+                    lambda: bool(
+                        api._ext_host.commands.execute(
+                            "selftest.node.webviewBinaryReceiveState")
+                        .get("received")),
+                    timeout=3.0)
+                try:
+                    node_binary_received_state = (
+                        api._ext_host.commands.execute(
+                            "selftest.node.webviewBinaryReceiveState"))
+                except Exception as exc:
+                    node_binary_received_state = {"_error": str(exc)}
                 node_serialized_view_id = str(
                     node_webview_serializer_result.get("viewId", "")
                     if isinstance(node_webview_serializer_result, dict) else "")
@@ -30817,6 +30960,31 @@ process.stdin.resume();
                 node_options_payload = node_options_bridge.get("options", {})
                 node_options_roots = (
                     node_options_bridge.get("local_resource_roots") or [])
+                node_binary_outbound = next((
+                    item for item in node_ui_bridge.webview_post_messages
+                    if item.get("view_id") == node_binary_view_id
+                ), {})
+                node_binary_outbound_message = (
+                    node_binary_outbound.get("message", {})
+                    if isinstance(node_binary_outbound, dict) else {})
+                node_binary_raw_ref = (
+                    node_binary_outbound_message.get("raw", {})
+                    if isinstance(node_binary_outbound_message, dict) else {})
+                node_binary_slice_ref = (
+                    node_binary_outbound_message.get("slice", {})
+                    if isinstance(node_binary_outbound_message, dict) else {})
+                node_binary_nested_ref = (
+                    node_binary_outbound_message.get("nested", {})
+                    .get("again", {})
+                    if isinstance(node_binary_outbound_message, dict)
+                    and isinstance(node_binary_outbound_message.get("nested"), dict)
+                    else {})
+                node_binary_float_ref = (
+                    node_binary_outbound_message.get("floats", {})
+                    if isinstance(node_binary_outbound_message, dict) else {})
+                node_binary_received = (
+                    node_binary_received_state.get("received", {})
+                    if isinstance(node_binary_received_state, dict) else {})
                 _check("node host webview options updates reach frontend bridge",
                        node_webview_options_command_registered
                        and isinstance(node_webview_options_probe, dict)
@@ -30858,6 +31026,58 @@ process.stdin.resume();
                            "probe": node_webview_options_probe,
                            "view_id": node_options_view_id,
                            "bridge": node_options_bridge,
+                       }, ensure_ascii=False, default=str))
+                _check("node host webview postMessage preserves ArrayBuffer typed arrays",
+                       node_webview_binary_command_registered
+                       and isinstance(node_webview_binary_post_probe, dict)
+                       and node_webview_binary_post_probe.get("posted") is True
+                       and node_binary_view_id
+                       and node_binary_raw_ref.get(
+                           "$$vscode_array_buffer_reference$$") is True
+                       and base64.b64decode(
+                           node_binary_raw_ref.get("dataBase64", ""))
+                       == bytes([1, 2, 3, 4, 5, 6, 7, 8])
+                       and node_binary_slice_ref.get(
+                           "$$vscode_array_buffer_reference$$") is True
+                       and node_binary_slice_ref.get("view", {}).get(
+                           "type") == "Uint8Array"
+                       and node_binary_slice_ref.get("view", {}).get(
+                           "byteOffset") == 2
+                       and node_binary_slice_ref.get("view", {}).get(
+                           "byteLength") == 4
+                       and node_binary_nested_ref.get("index")
+                       == node_binary_slice_ref.get("index")
+                       and node_binary_float_ref.get("view", {}).get(
+                           "type") == "Float32Array",
+                       json.dumps({
+                           "probe": node_webview_binary_post_probe,
+                           "view_id": node_binary_view_id,
+                           "message": node_binary_outbound_message,
+                       }, ensure_ascii=False, default=str))
+                _check("node host webview incoming binary messages restore typed arrays",
+                       node_binary_inbound_sent is True
+                       and isinstance(node_binary_received, dict)
+                       and node_binary_received.get("rawIsArrayBuffer") is True
+                       and node_binary_received.get("rawBytes")
+                       == [9, 8, 7, 6]
+                       and node_binary_received.get("sliceType") == "Uint8Array"
+                       and node_binary_received.get("sliceBytes")
+                       == [21, 22, 23, 24]
+                       and node_binary_received.get("sliceByteOffset") == 1
+                       and node_binary_received.get("sliceByteLength") == 4
+                       and node_binary_received.get("sliceBufferBytes")
+                       == [20, 21, 22, 23, 24, 25]
+                       and node_binary_received.get("floatType") == "Float32Array"
+                       and node_binary_received.get("floatValues")
+                       == [1.25, -2.25]
+                       and node_binary_received.get("nestedType") == "Uint8Array"
+                       and node_binary_received.get("nestedBytes")
+                       == [21, 22, 23, 24]
+                       and node_binary_received.get("plain", {}).get("from")
+                       == "python",
+                       json.dumps({
+                           "sent": node_binary_inbound_sent,
+                           "state": node_binary_received_state,
                        }, ensure_ascii=False, default=str))
                 dynamic_metadata = (
                     node_ui_bridge.webview_view_metadata.get(
