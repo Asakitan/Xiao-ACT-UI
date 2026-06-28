@@ -4397,7 +4397,23 @@ def test_phase1_ai_editor_regressions() -> None:
            and "hasSettingsJumpbar" in html
            and "hasJumpbarActionState" in html
            and "hasJumpbarModifiedCount" in html
-           and "hasJumpbarActions" in html)
+           and "hasJumpbarActions" in html
+           and "#settings-modal.open:has(.settings-vscode-calm) { padding:0; background:var(--bg); }" in html
+           and ".modal.settings-modal.preferences-workbench.settings-vscode-calm { width:100vw; height:100vh; max-width:none;" in html
+           and 'id="settings-workbench-status" class="settings-workbench-status" role="status"' in html
+           and "function renderSettingsWorkbenchStatus(visible,total,stats)" in html
+           and "host.dataset.settingsWorkbenchStatus='1'" in html
+           and "window.renderSettingsWorkbenchStatus=renderSettingsWorkbenchStatus;" in html
+           and ".settings-vscode-calm .settings-workbench-status { display:flex; max-width:1040px;" in html
+           and ".settings-vscode-calm .settings-search-row { grid-template-columns:minmax(520px,760px) minmax(260px,auto);" in html
+           and ".settings-vscode-calm .settings-shell { grid-template-columns:286px minmax(0,1fr);" in html
+           and ".settings-vscode-calm .settings-field.builtin-setting { padding:13px 96px 13px 0;" in html
+           and ".settings-vscode-calm .settings-control-frame { max-width:720px; min-height:32px; }" in html
+           and ".settings-vscode-calm .settings-row-actions { top:10px; opacity:0;" in html
+           and "hasSettingsWorkbenchStatus" in html
+           and "hasFullBleedSettingsWorkbench" in html
+           and "hasVsCodeWorkbenchSearchWidth" in html
+           and "hasVsCodeHumanSettingControls" in html)
     _check("frontend Settings row actions are keyboard accessible",
            "btn.setAttribute('aria-label',title||label);" in html
            and "const more=addButton('⋯','More setting actions',null,false);" in html
