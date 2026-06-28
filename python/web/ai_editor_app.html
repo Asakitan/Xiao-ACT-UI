@@ -1694,11 +1694,36 @@ pre.code-block code .type { color:var(--fg-type); }
 .status-context-text { max-width:110px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 #status-model { display:none!important; }
 .editor-language-status { max-width:190px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; color:var(--fg-dim); }
+.editor-language-status[role="button"] { cursor:pointer; }
 .editor-language-status.running { color:var(--fg-accent); }
 .editor-language-status.ready { color:var(--fg-success); }
 .editor-language-status.empty, .editor-language-status.cancelled { color:var(--fg-dim); }
 .editor-language-status.warning { color:var(--fg-warning); }
 .editor-language-status.error { color:var(--fg-error); }
+.editor-language-panel { position:fixed; z-index:240; width:min(560px, calc(100vw - 28px)); max-height:min(430px, calc(100vh - 58px));
+  display:none; grid-template-rows:auto auto minmax(0,1fr); border:1px solid var(--border-focus); border-radius:6px;
+  background:var(--bg2); color:var(--fg); box-shadow:0 10px 28px #00000066; overflow:hidden; }
+.editor-language-panel.open { display:grid; }
+.editor-language-panel-head { display:flex; align-items:center; justify-content:space-between; gap:10px;
+  padding:8px 10px; border-bottom:1px solid var(--border); background:color-mix(in srgb,var(--bg3) 72%,transparent); }
+.editor-language-panel-title { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-size:12px; font-weight:600; }
+.editor-language-panel-summary { color:var(--fg-dim); font:10px var(--mono); white-space:nowrap; }
+.editor-language-panel-actions { display:flex; flex-wrap:wrap; gap:5px; padding:7px 8px; border-bottom:1px solid var(--border); }
+.editor-language-panel-actions button { height:23px; border:1px solid var(--border); border-radius:4px; background:var(--bg3);
+  color:var(--fg-dim); padding:0 8px; font:11px var(--sans); cursor:pointer; }
+.editor-language-panel-actions button:hover,.editor-language-panel-actions button:focus { color:var(--fg); border-color:var(--border-focus); outline:none; }
+.editor-language-panel-actions button.primary { color:var(--fg); border-color:color-mix(in srgb,var(--fg-accent) 55%,var(--border)); }
+.editor-language-panel-body { overflow:auto; padding:7px 8px 9px; display:grid; gap:5px; }
+.editor-language-feature-row { display:grid; grid-template-columns:118px minmax(0,1fr) auto; align-items:center; gap:8px;
+  min-height:28px; padding:4px 6px; border:1px solid var(--border); border-radius:5px; background:color-mix(in srgb,var(--bg3) 58%,transparent); }
+.editor-language-feature-name { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-size:11px; color:var(--fg); }
+.editor-language-feature-detail { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; color:var(--fg-dim); font:10px var(--mono); }
+.editor-language-feature-state { justify-self:end; min-width:54px; text-align:center; border:1px solid var(--border);
+  border-radius:999px; padding:1px 6px; color:var(--fg-dim); font:10px var(--mono); }
+.editor-language-feature-row[data-state="ready"] .editor-language-feature-state { color:var(--fg-success); border-color:color-mix(in srgb,var(--fg-success) 42%,var(--border)); }
+.editor-language-feature-row[data-state="warning"] .editor-language-feature-state { color:var(--fg-warning); border-color:color-mix(in srgb,var(--fg-warning) 46%,var(--border)); }
+.editor-language-feature-row[data-state="error"] .editor-language-feature-state { color:var(--fg-error); border-color:color-mix(in srgb,var(--fg-error) 52%,var(--border)); }
+.editor-language-feature-row[data-state="running"] .editor-language-feature-state { color:var(--fg-accent); border-color:color-mix(in srgb,var(--fg-accent) 50%,var(--border)); }
 .language-status-item { max-width:220px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; color:var(--fg-dim); }
 .language-status-item.info { color:var(--fg-dim); }
 .language-status-item.warning { color:var(--fg-warning); }
@@ -4274,7 +4299,7 @@ pre.code-block { overflow:visible; }
   <span class="sb-item" id="status-encoding">UTF-8</span>
   <span class="sb-item" id="status-eol">LF</span>
   <span class="sb-item" id="status-language" title="Select Language Mode" style="cursor:pointer" onclick="showLanguagePicker()">{} Plain Text</span>
-  <span class="sb-item editor-language-status ready" id="status-language-service" title="Language services">Lang: Ready</span>
+  <span class="sb-item editor-language-status ready" id="status-language-service" title="Language services" role="button" tabindex="0" aria-haspopup="dialog" aria-expanded="false" onclick="toggleEditorLanguageStatusPanel(event)" onkeydown="handleEditorLanguageStatusKey(event)">Lang: Ready</span>
   <span class="sb-item" id="status-mode" title="Mode" style="cursor:pointer;font-weight:bold" onclick="cycleMode()">Agent</span>
   <span class="sb-item" id="status-approval" title="Approval level" style="cursor:pointer;color:var(--fg-dim)" onclick="cycleApproval()">◎ Default</span>
   <span class="sb-item status-context-usage" id="status-context-usage" title="Content window usage">
@@ -14899,6 +14924,7 @@ let _editorPasteDropRequest=0,_editorDropPasteOptions=[],_editorDropPasteOptionI
 let _editorSnippetSession=null;
 let _editorSaveParticipantSeq=0;
 let _editorLanguageProviderStatus={state:'ready',kind:'',message:'Lang: Ready',detail:'Language services are ready',requestId:'',updatedAt:0};
+let _editorLanguageStatusPanelOpen=false;
 let _editorLanguageFeatureState={
   diagnostics:{state:'empty',count:0,errors:0,warnings:0,infos:0,hints:0,message:'Diagnostics: 0'},
   codeActions:{state:'empty',count:0,kind:'',diagnostics:0,message:'Code actions: 0'},
@@ -15100,6 +15126,7 @@ function renderEditorLanguageFeatureStatus(){
     el.textContent=aggregate.summary.length?base+' · '+aggregate.label:base;
   }
   el.title=editorLanguageFeatureDetail(_editorLanguageProviderStatus.detail);
+  if(typeof _editorLanguageStatusPanelOpen!=='undefined'&&_editorLanguageStatusPanelOpen&&typeof renderEditorLanguageStatusPanel==='function')renderEditorLanguageStatusPanel();
 }
 function updateEditorLanguageFeatureState(kind,state,info){
   const key=String(kind||'').trim();
@@ -15119,6 +15146,170 @@ function updateEditorLanguageFeatureState(kind,state,info){
   renderEditorLanguageFeatureStatus();
   return next;
 }
+function editorLanguageStatusPanelFeatureRows(){
+  const s=_editorLanguageFeatureState||{};
+  const rows=[
+    ['diagnostics','Diagnostics'],
+    ['codeActions','Code Actions'],
+    ['formatting','Formatting'],
+    ['saveParticipants','Save Participants'],
+    ['semanticTokens','Semantic Tokens'],
+    ['inlineCompletions','Inline Completions'],
+    ['diff','Dirty Diff']
+  ];
+  return rows.map(item=>{
+    const key=item[0],label=item[1],state=isPlainObject(s[key])?s[key]:{};
+    const detail=[
+      state.message||'',
+      key==='diagnostics'&&state.count?String(state.errors||0)+' errors, '+String(state.warnings||0)+' warnings':'',
+      key==='codeActions'&&state.count?String(state.quickfix||0)+' quick, '+String(state.source||0)+' source':'',
+      key==='formatting'&&state.providerId?'provider '+String(state.providerId):'',
+      key==='saveParticipants'&&state.seq?'#'+String(state.seq)+' · '+String(state.durationMs||0)+'ms':'',
+      key==='semanticTokens'&&state.count?String(state.count)+' tokens':'',
+      key==='inlineCompletions'&&state.count?String(state.count)+' suggestions, '+String(state.accepted||0)+' accepted':'',
+      key==='diff'&&state.total?('+'+String(state.added||0)+' ~'+String(state.modified||0)+' -'+String(state.removed||0)):''
+    ].filter(Boolean).join(' · ');
+    return {key,label,state:String(state.state||'empty'),detail:detail||'Idle'};
+  });
+}
+function editorLanguageStatusPanelActions(){
+  return [
+    {id:'format-document',label:'Format Document',primary:true},
+    {id:'format-with',label:'Format With...'},
+    {id:'format-selection',label:'Format Selection'},
+    {id:'organize-imports',label:'Organize Imports'},
+    {id:'fix-all',label:'Fix All'},
+    {id:'quick-fix',label:'Quick Fix'},
+    {id:'open-diff',label:'Open Diff'}
+  ];
+}
+function ensureEditorLanguageStatusPanel(){
+  let panel=$('editor-language-status-panel');
+  if(panel)return panel;
+  panel=document.createElement('div');
+  panel.id='editor-language-status-panel';
+  panel.className='editor-language-panel';
+  panel.setAttribute('role','dialog');
+  panel.setAttribute('aria-label','Language services');
+  panel.addEventListener('click',ev=>{
+    const btn=ev.target&&ev.target.closest?ev.target.closest('button[data-editor-language-action]'):null;
+    if(!btn)return;
+    ev.preventDefault();ev.stopPropagation();
+    runEditorLanguageStatusAction(btn.dataset.editorLanguageAction||'');
+  });
+  document.body.appendChild(panel);
+  return panel;
+}
+function positionEditorLanguageStatusPanel(panel){
+  const anchor=$('status-language-service');
+  if(!panel||!anchor||!anchor.getBoundingClientRect)return;
+  const rect=anchor.getBoundingClientRect();
+  const width=Math.min(560,Math.max(320,window.innerWidth-28));
+  panel.style.width=width+'px';
+  const left=Math.max(8,Math.min(window.innerWidth-width-8,rect.right-width));
+  panel.style.left=left+'px';
+  panel.style.bottom=(Math.max(24,window.innerHeight-rect.top+4))+'px';
+}
+function renderEditorLanguageStatusPanel(){
+  const panel=ensureEditorLanguageStatusPanel();
+  const aggregate=editorLanguageFeatureAggregateSnapshot();
+  const rows=editorLanguageStatusPanelFeatureRows();
+  const actions=editorLanguageStatusPanelActions();
+  panel.dataset.open=_editorLanguageStatusPanelOpen?'1':'0';
+  panel.dataset.actionCount=String(actions.length);
+  panel.dataset.featureRows=String(rows.length);
+  panel.dataset.featureActiveCount=String(aggregate.activeCount||0);
+  panel.dataset.featureReadyCount=String(aggregate.readyCount||0);
+  panel.dataset.diffTotal=String(aggregate.diffTotal||0);
+  panel.dataset.codeActions=String(aggregate.codeActions||0);
+  panel.dataset.semanticTokens=String(aggregate.semanticTokens||0);
+  panel.innerHTML=
+    '<div class="editor-language-panel-head">'+
+      '<div class="editor-language-panel-title">Language Services</div>'+
+      '<div class="editor-language-panel-summary">'+esc(String(aggregate.summary&&aggregate.summary.length?aggregate.summary.join(' · '):'ready'))+'</div>'+
+    '</div>'+
+    '<div class="editor-language-panel-actions">'+
+      actions.map(action=>'<button type="button" '+(action.primary?'class="primary" ':'')+
+        'data-editor-language-action="'+esc(action.id)+'">'+esc(action.label)+'</button>').join('')+
+    '</div>'+
+    '<div class="editor-language-panel-body">'+
+      rows.map(row=>'<div class="editor-language-feature-row" data-feature="'+esc(row.key)+'" data-state="'+esc(row.state)+'">'+
+        '<div class="editor-language-feature-name">'+esc(row.label)+'</div>'+
+        '<div class="editor-language-feature-detail">'+esc(row.detail)+'</div>'+
+        '<div class="editor-language-feature-state">'+esc(row.state)+'</div>'+
+      '</div>').join('')+
+    '</div>';
+  panel.classList.toggle('open',_editorLanguageStatusPanelOpen);
+  positionEditorLanguageStatusPanel(panel);
+  return panel;
+}
+function openEditorLanguageStatusPanel(){
+  _editorLanguageStatusPanelOpen=true;
+  const anchor=$('status-language-service');
+  if(anchor)anchor.setAttribute('aria-expanded','true');
+  renderEditorLanguageStatusPanel();
+}
+function closeEditorLanguageStatusPanel(){
+  _editorLanguageStatusPanelOpen=false;
+  const anchor=$('status-language-service');
+  if(anchor)anchor.setAttribute('aria-expanded','false');
+  const panel=$('editor-language-status-panel');
+  if(panel){panel.classList.remove('open');panel.dataset.open='0'}
+}
+function toggleEditorLanguageStatusPanel(ev){
+  if(ev&&ev.stopPropagation)ev.stopPropagation();
+  if(_editorLanguageStatusPanelOpen)closeEditorLanguageStatusPanel();
+  else openEditorLanguageStatusPanel();
+}
+function handleEditorLanguageStatusKey(ev){
+  if(!ev)return false;
+  if(ev.key==='Enter'||ev.key===' '){ev.preventDefault();toggleEditorLanguageStatusPanel(ev);return true}
+  if(ev.key==='Escape'&&_editorLanguageStatusPanelOpen){ev.preventDefault();closeEditorLanguageStatusPanel();return true}
+  return false;
+}
+function requestEditorFixAll(quiet){
+  return requestEditorCodeActionsForKind(quiet===true,'source.fixAll','fix all action');
+}
+function runEditorLanguageStatusAction(action){
+  const id=String(action||'');
+  if(id==='format-document')return formatDocument({quiet:false});
+  if(id==='format-with')return formatDocumentWithProvider();
+  if(id==='format-selection')return formatSelection();
+  if(id==='organize-imports')return requestEditorOrganizeImports(false);
+  if(id==='fix-all')return requestEditorFixAll(false);
+  if(id==='quick-fix')return requestEditorCodeActions(false);
+  if(id==='open-diff')return openActiveEditorDirtyDiff();
+  return false;
+}
+function editorLanguageStatusPanelSelfCheckSnapshot(){
+  const wasOpen=_editorLanguageStatusPanelOpen;
+  openEditorLanguageStatusPanel();
+  const panel=$('editor-language-status-panel'),anchor=$('status-language-service');
+  const actions=panel?Array.from(panel.querySelectorAll('button[data-editor-language-action]')).map(btn=>btn.dataset.editorLanguageAction):[];
+  const rows=panel?Array.from(panel.querySelectorAll('.editor-language-feature-row')).map(row=>row.dataset.feature):[];
+  const snapshot={
+    open:panel&&panel.dataset.open==='1',
+    ariaExpanded:anchor&&anchor.getAttribute('aria-expanded')==='true',
+    actionCount:actions.length,
+    featureRows:rows.length,
+    actions,
+    rows,
+    featureActiveCount:panel?Number(panel.dataset.featureActiveCount)||0:0,
+    diffTotal:panel?Number(panel.dataset.diffTotal)||0:0,
+    semanticTokens:panel?Number(panel.dataset.semanticTokens)||0:0,
+    codeActions:panel?Number(panel.dataset.codeActions)||0:0
+  };
+  if(!wasOpen)closeEditorLanguageStatusPanel();
+  return snapshot;
+}
+document.addEventListener('click',ev=>{
+  if(!_editorLanguageStatusPanelOpen)return;
+  const panel=$('editor-language-status-panel'),anchor=$('status-language-service');
+  const target=ev&&ev.target;
+  if((panel&&panel.contains(target))||(anchor&&anchor.contains(target)))return;
+  closeEditorLanguageStatusPanel();
+},true);
+window.addEventListener('resize',()=>{if(_editorLanguageStatusPanelOpen)renderEditorLanguageStatusPanel()});
 function editorFilesSaveParticipantSummary(files){
   const settings=isPlainObject(files)?files:filesEffectiveSection();
   return {
@@ -45424,6 +45615,7 @@ function editorDirtyDiffSelfCheckSnapshot(){
 window.editorDirtyDiffSelfCheckSnapshot=editorDirtyDiffSelfCheckSnapshot;
 window.editorLanguageFeatureStateSnapshot=editorLanguageFeatureStateSnapshot;
 window.editorLanguageFeatureAggregateSnapshot=editorLanguageFeatureAggregateSnapshot;
+window.editorLanguageStatusPanelSelfCheckSnapshot=editorLanguageStatusPanelSelfCheckSnapshot;
 
 // ── chat-ux-4: Inline diff view for code changes ──
 function parseDiffText(text){

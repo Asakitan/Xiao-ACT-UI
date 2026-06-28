@@ -15454,7 +15454,8 @@ console.log("command palette quick access helpers ok");
            and "dataset.featureSummary" in html
            and "window.editorDirtyDiffSelfCheckSnapshot=editorDirtyDiffSelfCheckSnapshot" in html
            and "window.editorLanguageFeatureStateSnapshot=editorLanguageFeatureStateSnapshot" in html
-           and "window.editorLanguageFeatureAggregateSnapshot=editorLanguageFeatureAggregateSnapshot" in html)
+           and "window.editorLanguageFeatureAggregateSnapshot=editorLanguageFeatureAggregateSnapshot" in html
+           and "window.editorLanguageStatusPanelSelfCheckSnapshot=editorLanguageStatusPanelSelfCheckSnapshot" in html)
     _check("frontend refreshes language state after formatter and code-action edits",
            "function editorRefreshLanguageFeaturesAfterEdit(delayBase)" in html
            and "clearEditorDocumentHighlights();" in html
@@ -15530,6 +15531,48 @@ console.log("command palette quick access helpers ok");
             and "el.dataset.formatProviderId=String(fmt.providerId||'');" in html
             and "onSave:opts.onSave===true" in html
             and "'diagnostics','codeActions','formatting','inlineCompletions','saveParticipants','semanticTokens','diff'" in html)
+    _check("frontend exposes clickable VS Code-style language service status panel",
+           'id="status-language-service"' in html
+           and 'role="button" tabindex="0" aria-haspopup="dialog" aria-expanded="false"' in html
+           and 'onclick="toggleEditorLanguageStatusPanel(event)"' in html
+           and 'onkeydown="handleEditorLanguageStatusKey(event)"' in html
+           and ".editor-language-panel { position:fixed;" in html
+           and ".editor-language-panel-actions button" in html
+           and ".editor-language-feature-row" in html
+           and "let _editorLanguageStatusPanelOpen=false;" in html
+           and "function editorLanguageStatusPanelFeatureRows()" in html
+           and "function editorLanguageStatusPanelActions()" in html
+           and "function ensureEditorLanguageStatusPanel()" in html
+           and "function toggleEditorLanguageStatusPanel(ev)" in html
+           and "function handleEditorLanguageStatusKey(ev)" in html
+           and "function requestEditorFixAll(quiet)" in html
+           and "function editorLanguageStatusPanelSelfCheckSnapshot()" in html
+           and "{id:'format-document',label:'Format Document',primary:true}" in html
+           and "{id:'format-with',label:'Format With...'}" in html
+           and "{id:'format-selection',label:'Format Selection'}" in html
+           and "{id:'organize-imports',label:'Organize Imports'}" in html
+           and "{id:'fix-all',label:'Fix All'}" in html
+           and "{id:'quick-fix',label:'Quick Fix'}" in html
+           and "{id:'open-diff',label:'Open Diff'}" in html
+           and "['diagnostics','Diagnostics']" in html
+           and "['codeActions','Code Actions']" in html
+           and "['formatting','Formatting']" in html
+           and "['saveParticipants','Save Participants']" in html
+           and "['semanticTokens','Semantic Tokens']" in html
+           and "['inlineCompletions','Inline Completions']" in html
+           and "['diff','Dirty Diff']" in html
+           and "panel.dataset.actionCount=String(actions.length);" in html
+           and "panel.dataset.featureRows=String(rows.length);" in html
+           and "panel.dataset.semanticTokens=String(aggregate.semanticTokens||0);" in html
+           and "panel.dataset.diffTotal=String(aggregate.diffTotal||0);" in html
+           and "panel.dataset.codeActions=String(aggregate.codeActions||0);" in html
+           and "if(id==='format-document')return formatDocument({quiet:false});" in html
+           and "if(id==='format-with')return formatDocumentWithProvider();" in html
+           and "if(id==='format-selection')return formatSelection();" in html
+           and "if(id==='organize-imports')return requestEditorOrganizeImports(false);" in html
+           and "if(id==='fix-all')return requestEditorFixAll(false);" in html
+           and "if(id==='quick-fix')return requestEditorCodeActions(false);" in html
+           and "if(id==='open-diff')return openActiveEditorDirtyDiff();" in html)
     if not node_path:
         _check("frontend built-in language fallback behavior skipped without Node.js",
                True)
