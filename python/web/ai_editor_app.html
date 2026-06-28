@@ -13445,12 +13445,14 @@ let _editorLinkedEditingRanges=[],_editorLinkedEditingRequest=0,_editorLinkedEdi
 let _editorSelectionRanges=[],_editorSelectionRangeIndex=-1,_editorSelectionRangeKey='';
 let _editorPasteDropRequest=0,_editorDropPasteOptions=[],_editorDropPasteOptionIndex=0,_editorDropPasteSession=null;
 let _editorSnippetSession=null;
+let _editorSaveParticipantSeq=0;
 let _editorLanguageProviderStatus={state:'ready',kind:'',message:'Lang: Ready',detail:'Language services are ready',requestId:'',updatedAt:0};
 let _editorLanguageFeatureState={
   diagnostics:{state:'empty',count:0,errors:0,warnings:0,infos:0,hints:0,message:'Diagnostics: 0'},
   codeActions:{state:'empty',count:0,kind:'',diagnostics:0,message:'Code actions: 0'},
   formatting:{state:'empty',kind:'',edits:0,applied:false,message:'Formatting: idle'},
   semanticTokens:{state:'empty',source:'',count:0,resultId:'',message:'Semantic: idle'},
+  saveParticipants:{state:'empty',reason:'',changed:false,formatOnSave:false,codeActionKinds:[],codeActionCount:0,codeActionApplied:0,filesApplied:false,durationMs:0,message:'Save: idle'},
   diff:{state:'empty',mode:'',added:0,modified:0,removed:0,total:0,message:'Diff: clean'}
 };
 function activeEditorTab(){
@@ -13546,7 +13548,7 @@ function editorDiagnosticSeveritySummary(diagnostics){
 function editorLanguageFeatureSummaryParts(){
   const s=_editorLanguageFeatureState||{};
   const parts=[];
-  ['diagnostics','codeActions','formatting','semanticTokens','diff'].forEach(key=>{
+  ['diagnostics','codeActions','formatting','saveParticipants','semanticTokens','diff'].forEach(key=>{
     const item=s[key]||{};
     if(item.message)parts.push(item.message);
   });
@@ -13559,13 +13561,19 @@ function editorLanguageFeatureDetail(baseDetail){
 function renderEditorLanguageFeatureStatus(){
   const el=$('status-language-service');if(!el)return;
   const s=_editorLanguageFeatureState||{};
-  const diag=s.diagnostics||{},actions=s.codeActions||{},fmt=s.formatting||{},semantic=s.semanticTokens||{},diff=s.diff||{};
+  const diag=s.diagnostics||{},actions=s.codeActions||{},fmt=s.formatting||{},save=s.saveParticipants||{},semantic=s.semanticTokens||{},diff=s.diff||{};
   const providerStatus=_editorLanguageProviderStatus||{};
   el.dataset.diagnostics=String(diag.count||0);
   el.dataset.diagnosticErrors=String(diag.errors||0);
   el.dataset.diagnosticWarnings=String(diag.warnings||0);
   el.dataset.codeActions=String(actions.count||0);
   el.dataset.formatEdits=String(fmt.edits||0);
+  el.dataset.saveReason=String(save.reason||'');
+  el.dataset.saveChanged=save.changed?'1':'0';
+  el.dataset.saveDurationMs=String(save.durationMs||0);
+  el.dataset.saveCodeActions=String(save.codeActionApplied||0);
+  el.dataset.saveFormatOnSave=save.formatOnSave?'1':'0';
+  el.dataset.saveFilesApplied=save.filesApplied?'1':'0';
   el.dataset.semanticTokens=String(semantic.count||0);
   el.dataset.semanticSource=String(semantic.source||'');
   el.dataset.diffTotal=String(diff.total||0);
@@ -13586,12 +13594,61 @@ function updateEditorLanguageFeatureState(kind,state,info){
   if(!next.message){
     if(key==='codeActions')next.message='Code actions: '+(next.count||0);
     else if(key==='formatting')next.message='Formatting: '+(next.applied?'applied':'idle');
+    else if(key==='saveParticipants')next.message='Save: '+(next.changed?'updated':'checked');
     else if(key==='semanticTokens')next.message='Semantic: '+(next.count||0);
     else if(key==='diff')next.message='Diff: '+(next.total||0);
   }
   _editorLanguageFeatureState[key]=next;
   renderEditorLanguageFeatureStatus();
   return next;
+}
+function editorFilesSaveParticipantSummary(files){
+  const settings=isPlainObject(files)?files:filesEffectiveSection();
+  return {
+    trimTrailingWhitespace:settings.trimTrailingWhitespace===true,
+    insertFinalNewline:settings.insertFinalNewline===true,
+    trimFinalNewlines:settings.trimFinalNewlines===true
+  };
+}
+function editorSaveParticipantMessage(summary){
+  summary=isPlainObject(summary)?summary:{};
+  const parts=[];
+  if(summary.formatOnSave)parts.push(summary.formatChanged?'formatted':'format checked');
+  if((summary.codeActionKinds||[]).length)parts.push((summary.codeActionApplied||0)+' actions');
+  if(summary.filesApplied)parts.push('files cleanup');
+  if(!parts.length)parts.push(summary.changed?'updated':'checked');
+  return 'Save: '+parts.join(', ');
+}
+function beginEditorSaveParticipantRun(options){
+  const opts=isPlainObject(options)?options:{};
+  const explicit=opts.autoSave!==true;
+  const summary={
+    seq:++_editorSaveParticipantSeq,
+    reason:opts.autoSave===true?'autoSave':'manual',
+    autoSave:opts.autoSave===true,
+    autoSaveMode:String(opts.autoSaveMode||''),
+    startedAt:Date.now(),
+    durationMs:0,
+    changed:false,
+    formatOnSave:explicit&&editorFormatOnSaveEnabled(),
+    formatChanged:false,
+    codeActionKinds:explicit?editorCodeActionsOnSaveKinds('explicit'):[],
+    codeActionCount:0,
+    codeActionApplied:0,
+    codeActionErrors:0,
+    files:editorFilesSaveParticipantSummary(),
+    filesApplied:false,
+    message:'Save: running'
+  };
+  updateEditorLanguageFeatureState('saveParticipants','running',summary);
+  return summary;
+}
+function finishEditorSaveParticipantRun(summary){
+  if(!isPlainObject(summary))return summary;
+  summary.durationMs=Math.max(0,Date.now()-(Number(summary.startedAt)||Date.now()));
+  summary.message=editorSaveParticipantMessage(summary);
+  updateEditorLanguageFeatureState('saveParticipants',summary.changed?'ready':'empty',summary);
+  return summary;
 }
 function editorLanguageFeatureStateSnapshot(){
   return JSON.parse(JSON.stringify({
@@ -17352,6 +17409,33 @@ function editorFallbackCodeActions(range,diagnostics,only){
   });
   return actions.slice(0,24);
 }
+function editorFallbackFixAllCodeAction(range,diagnostics,only){
+  const onlyText=String(only||'');
+  if(onlyText&&onlyText!=='source.fixAll'&&!onlyText.startsWith('source.fixAll.'))return null;
+  const relevant=(Array.isArray(diagnostics)&&diagnostics.length?diagnostics:editorDiagnosticsForRange(range))
+    .map(normalizeEditorDiagnostic).filter(Boolean);
+  const edits=[],seen=new Set(),fixedDiagnostics=[];
+  relevant.forEach(diag=>{
+    const action=editorFallbackCodeActions(diag.range,[diag],'quickfix')
+      .find(item=>item&&item.isPreferred!==false&&item.edit&&!codeActionDisabledText(item.disabled));
+    const actionEdits=Array.isArray(action&&action.edit)?action.edit:[action&&action.edit].filter(Boolean);
+    actionEdits.forEach(edit=>{
+      const key=JSON.stringify(edit);
+      if(seen.has(key))return;
+      seen.add(key);edits.push(edit);
+    });
+    if(actionEdits.length)fixedDiagnostics.push(diag);
+  });
+  if(!edits.length)return null;
+  return {
+    title:'Fix all built-in problems',
+    kind:onlyText||'source.fixAll',
+    diagnostics:fixedDiagnostics,
+    isPreferred:true,
+    edit:edits,
+    source:'Built-in'
+  };
+}
 async function fetchEditorCodeActionsForKind(only,range,isCurrent){
   const actionRange=range||editorSelectedRangePayload();
   const payload={range:actionRange,itemResolveCount:0,triggerKind:1,diagnostics:editorDiagnosticsForRange(actionRange)};
@@ -17359,7 +17443,8 @@ async function fetchEditorCodeActionsForKind(only,range,isCurrent){
   const res=await editorRequestLanguageProvider('codeActions',editorProviderPayload('codeActions',payload),{countKey:'actions',itemLabel:'code action',isCurrent});
   if(editorProviderResultCancelled(res))return {cancelled:true,actions:[]};
   const providerActions=(res&&res.ok&&Array.isArray(res.actions)?res.actions:[]).filter(action=>!!action);
-  const fallbackActions=providerActions.length?[]:editorFallbackCodeActions(actionRange,payload.diagnostics,only);
+  const fixAll=providerActions.length?null:editorFallbackFixAllCodeAction(actionRange,payload.diagnostics,only);
+  const fallbackActions=providerActions.length?[]:(fixAll?[fixAll]:editorFallbackCodeActions(actionRange,payload.diagnostics,only));
   if(res&&res.error&&fallbackActions.length)return {actions:fallbackActions,fallback:true};
   if(res&&res.error)return {error:res.error,actions:[]};
   return {actions:providerActions.concat(fallbackActions),fallback:fallbackActions.length>0};
@@ -18833,15 +18918,23 @@ async function formatSelection(){
 async function runEditorCodeActionsOnSave(options){
   const opts=isPlainObject(options)?options:{};
   const kinds=editorCodeActionsOnSaveKinds(opts.reason||'explicit');
+  const summary=isPlainObject(opts.summary)?opts.summary:null;
+  if(summary)summary.codeActionKinds=kinds.slice();
   if(!kinds.length)return false;
   let changed=false;
   const range=editorFullRangePayload();
   for(const kind of kinds){
+    if(summary)summary.codeActionRequests=(summary.codeActionRequests||0)+1;
     const res=await fetchEditorCodeActionsForKind(kind,range);
     if(res&&res.cancelled)continue;
-    if(res&&res.error){setStatus('Code actions on save failed: '+res.error);continue}
-    for(const action of (res&&res.actions)||[]){
-      if(await applyEditorCodeActionForSave(action))changed=true;
+    if(res&&res.error){if(summary)summary.codeActionErrors=(summary.codeActionErrors||0)+1;setStatus('Code actions on save failed: '+res.error);continue}
+    const actions=(res&&res.actions)||[];
+    if(summary)summary.codeActionCount=(summary.codeActionCount||0)+actions.length;
+    for(const action of actions){
+      if(await applyEditorCodeActionForSave(action)){
+        changed=true;
+        if(summary)summary.codeActionApplied=(summary.codeActionApplied||0)+1;
+      }
     }
   }
   if(changed)setStatus('Applied code actions on save');
@@ -18850,12 +18943,29 @@ async function runEditorCodeActionsOnSave(options){
 async function runEditorSaveParticipants(options){
   const opts=isPlainObject(options)?options:{};
   const skipExplicitSaveParticipants=opts.autoSave===true;
+  const summary=beginEditorSaveParticipantRun(opts);
   let changed=false;
-  if(!skipExplicitSaveParticipants&&editorFormatOnSaveEnabled())changed=await formatDocument({quiet:true,onSave:true})||changed;
-  if(!skipExplicitSaveParticipants)changed=await runEditorCodeActionsOnSave({reason:'explicit'})||changed;
-  changed=applyEditorFilesSaveParticipants()||changed;
-  if(changed)saveCurrentTab();
-  return changed;
+  try{
+    if(!skipExplicitSaveParticipants&&editorFormatOnSaveEnabled()){
+      const formatted=await formatDocument({quiet:true,onSave:true});
+      summary.formatChanged=formatted===true;
+      changed=formatted||changed;
+    }
+    if(!skipExplicitSaveParticipants)changed=await runEditorCodeActionsOnSave({reason:'explicit',summary})||changed;
+    const filesChanged=applyEditorFilesSaveParticipants();
+    summary.filesApplied=filesChanged===true;
+    changed=filesChanged||changed;
+    summary.changed=changed===true;
+    if(changed)saveCurrentTab();
+    return changed;
+  }catch(err){
+    summary.error=err&&err.message?err.message:String(err);
+    summary.message='Save: failed';
+    updateEditorLanguageFeatureState('saveParticipants','error',summary);
+    throw err;
+  }finally{
+    if(!summary.error)finishEditorSaveParticipantRun(summary);
+  }
 }
 async function triggerEditorCodeActionsOnFocusChange(){
   const editor=editorEffectiveSection('editor');

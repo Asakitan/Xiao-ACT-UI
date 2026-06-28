@@ -6701,7 +6701,7 @@ def test_phase1_ai_editor_regressions() -> None:
            and "trimFinalNewlines:readCheckedValue('s-files-trim-final-newlines')" in html
            and "const skipExplicitSaveParticipants=opts.autoSave===true" in html
            and "if(!skipExplicitSaveParticipants&&editorFormatOnSaveEnabled())" in html
-           and "if(!skipExplicitSaveParticipants)changed=await runEditorCodeActionsOnSave({reason:'explicit'})||changed" in html
+           and "if(!skipExplicitSaveParticipants)changed=await runEditorCodeActionsOnSave({reason:'explicit',summary})||changed" in html
            and "if(opts.autoSave&&!(tab&&tab.filePath))" in html
            and "function triggerEditorAutoSave(mode)" in html
            and "ed.addEventListener('blur',()=>{triggerEditorCodeActionsOnFocusChange();triggerEditorAutoSave('onFocusChange')})" in html
@@ -6709,7 +6709,7 @@ def test_phase1_ai_editor_regressions() -> None:
            and "document.visibilityState==='hidden'" in html
            and "await saveFile({autoSave:true,autoSaveMode:autoSaveMode})" in html
            and "await runEditorSaveParticipants({autoSave:opts.autoSave===true,autoSaveMode:opts.autoSaveMode||''})" in html
-           and "changed=applyEditorFilesSaveParticipants()||changed" in html
+           and "const filesChanged=applyEditorFilesSaveParticipants();" in html
            and "await runEditorSaveParticipants();" in html
            and "saveTextTabAs(tab,{skipSaveParticipants:true})" in html
            and "async function formatSelection()" in html
@@ -14197,6 +14197,7 @@ console.log("command palette quick access helpers ok");
            and "function editorFindJsonTrailingCommaDiagnostics(value)" in html
            and "function editorBracketDiagnostics(value,language)" in html
            and "function editorFallbackCodeActions(range,diagnostics,only)" in html
+           and "function editorFallbackFixAllCodeAction(range,diagnostics,only)" in html
            and "function editorFallbackFormattedValue(value,language,options)" in html
            and "function editorFormatBraceLanguageValue(value,options)" in html
            and "function editorFormatHtmlValue(value,options)" in html
@@ -14204,7 +14205,7 @@ console.log("command palette quick access helpers ok");
            and "function editorFormatPythonValue(value,options)" in html
            and "providerDiagnostics.length?[]:editorFallbackDiagnostics"
            in html
-           and "fallbackActions=providerActions.length?[]:editorFallbackCodeActions"
+           and "fallbackActions=providerActions.length?[]:(fixAll?[fixAll]:editorFallbackCodeActions"
            in html
            and "const fallbackFormatted=formatEditorFallbackDocument(opts);"
            in html
@@ -14215,7 +14216,26 @@ console.log("command palette quick access helpers ok");
            and "json.trailingComma" in html
            and "format.trailingWhitespace" in html
            and "format.tabsToSpaces" in html
-           and "syntax.missingBracket" in html)
+           and "syntax.missingBracket" in html
+           and "Fix all built-in problems" in html
+           and "source.fixAll" in html)
+    _check("frontend exposes VS Code-style save participant language status",
+           "let _editorSaveParticipantSeq=0" in html
+           and "saveParticipants:{state:'empty'" in html
+           and "function beginEditorSaveParticipantRun(options)" in html
+           and "function finishEditorSaveParticipantRun(summary)" in html
+           and "function editorFilesSaveParticipantSummary(files)" in html
+           and "function editorSaveParticipantMessage(summary)" in html
+           and "updateEditorLanguageFeatureState('saveParticipants','running'" in html
+           and "summary.codeActionKinds=kinds.slice();" in html
+           and "summary.codeActionApplied=(summary.codeActionApplied||0)+1;" in html
+           and "summary.filesApplied=filesChanged===true;" in html
+           and "el.dataset.saveReason=String(save.reason||'');" in html
+           and "el.dataset.saveChanged=save.changed?'1':'0';" in html
+           and "el.dataset.saveCodeActions=String(save.codeActionApplied||0);" in html
+           and "el.dataset.saveFormatOnSave=save.formatOnSave?'1':'0';" in html
+           and "el.dataset.saveFilesApplied=save.filesApplied?'1':'0';" in html
+           and "'diagnostics','codeActions','formatting','saveParticipants','semanticTokens','diff'" in html)
     if not node_path:
         _check("frontend built-in language fallback behavior skipped without Node.js",
                True)
@@ -14263,6 +14283,7 @@ console.log("command palette quick access helpers ok");
             "editorFallbackQuickFixAction",
             "editorFallbackCodeActionsForDiagnostic",
             "editorFallbackCodeActions",
+            "editorFallbackFixAllCodeAction",
             "editorFallbackIndentUnit",
             "editorNormalizeFormattedEol",
             "editorFormatBraceLanguageValue",
@@ -14293,6 +14314,7 @@ function editorRangeText(range){
   return ed.value.slice(Math.min(start, end), Math.max(start, end));
 }
 function editorDiagnosticsForRange(){ return []; }
+function codeActionDisabledText(){ return ""; }
 """ + fallback_language_js + r"""
 const codeOf = diag => editorDiagnosticCodeLabel(diag && diag.code);
 let py = "if True\n\tprint('x')  \n";
@@ -14324,6 +14346,8 @@ ed.value = py;
 let trimFix = editorFallbackCodeActions(trailingDiag.range, [trailingDiag], "quickfix")[0];
 assert(trimFix && trimFix.title === "Trim trailing whitespace" && trimFix.edit[0].newText === "", "trim whitespace quick fix");
 assert(editorFallbackCodeActions(trailingDiag.range, [trailingDiag], "source").length === 0, "fallback quick fixes respect only filter");
+let fixAll = editorFallbackFixAllCodeAction(editorLineRange(py, 0, 0, py.length), pyDiag, "source.fixAll");
+assert(fixAll && fixAll.title === "Fix all built-in problems" && fixAll.kind === "source.fixAll" && fixAll.edit.length >= 2, "built-in source.fixAll fallback");
 assert(editorFallbackFormattedValue("if (x) {\nfoo()\n}\n", "javascript", formatOptions).includes("\n  foo()"), "javascript fallback formatting indents braces");
 assert(editorFallbackFormattedValue("<div><span>x</span></div>", "html", formatOptions).includes("\n"), "html fallback formatting splits tags");
 assert(editorFallbackFormattedValue("#Title  \n", "markdown", formatOptions) === "# Title\n", "markdown fallback formatting fixes heading and whitespace");
