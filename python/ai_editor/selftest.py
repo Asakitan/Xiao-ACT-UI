@@ -10510,8 +10510,12 @@ console.log("frontend word separator behavior ok");
            and "id=\"extension-runtime-filter-text\"" in html
            and "id=\"extension-runtime-filter-kind\"" in html
            and "id=\"extension-runtime-filter-source\"" in html
+           and "id=\"extension-runtime-filter-evidence\"" in html
            and "function extensionRuntimeSurfaceResourceUri(item)" in html
            and "function extensionRuntimeSurfaceAction(kind,item,row)" in html
+           and "function extensionRuntimeWebviewEvidenceStatus(row)" in html
+           and "function extensionRuntimeEvidenceMatches(row,value)" in html
+           and "function extensionRuntimeSurfaceViewId(row)" in html
            and "function prepareExtensionRuntimeAssistantPrompt(row,prompt,statusText)" in html
            and "function openExtensionRuntimeTerminalProfile(row)" in html
            and "function attachExtensionRuntimeChatContext(row)" in html
@@ -10524,6 +10528,9 @@ console.log("frontend word separator behavior ok");
            and "function extensionRuntimeSurfaceContainerById(id)" in html
            and "async function openExtensionRuntimeViewContainer(containerId)" in html
            and "async function openExtensionRuntimeSurface(rowOrKey)" in html
+           and "async function focusExtensionRuntimeSurface(rowOrKey)" in html
+           and "async function refreshExtensionRuntimeSurface(rowOrKey)" in html
+           and "async function copyExtensionRuntimeSurfaceSummary(rowOrKey)" in html
            and "function extensionRuntimeSurfaceRowElement(rowOrKey)" in html
            and "function markExtensionRuntimeSurfaceAction(rowEl,state)" in html
            and "function selectExtensionRuntimeRow(rowEl)" in html
@@ -10541,6 +10548,9 @@ console.log("frontend word separator behavior ok");
            and "window.applyExtensionRuntimeSurfaceFilter=applyExtensionRuntimeSurfaceFilter;" in html
            and "window.extensionRuntimeSurfaceRows=extensionRuntimeSurfaceRows;" in html
            and "window.openExtensionRuntimeSurface=openExtensionRuntimeSurface;" in html
+           and "window.focusExtensionRuntimeSurface=focusExtensionRuntimeSurface;" in html
+           and "window.refreshExtensionRuntimeSurface=refreshExtensionRuntimeSurface;" in html
+           and "window.copyExtensionRuntimeSurfaceSummary=copyExtensionRuntimeSurfaceSummary;" in html
            and "call('list_extension_runtime_surfaces',typeof commandPaletteContext==='function'?commandPaletteContext():{})" in html
            and "refreshRuntimeSupport();\n  renderExtensionRuntimeSurfaces();" in html
            and ".extension-runtime-refresh:disabled" in html
@@ -10551,6 +10561,8 @@ console.log("frontend word separator behavior ok");
            and "row.extensionId" in html
            and "row.action=extensionRuntimeSurfaceAction(kind,item,row);" in html
            and "row.openable=row.action&&row.action.type!=='inspect';" in html
+           and "row.evidenceStatus=extensionRuntimeWebviewEvidenceStatus(row);" in html
+           and "row.focusable=row.kind==='WebviewView'||row.kind==='TreeView'||row.kind==='CustomEditor'||row.kind==='Notebook';" in html
            and "row.key=[row.kind,row.id,row.command,row.extensionId,row.source,row.container,row.resourceUri].join('|');" in html
            and "id:String(item.id||item.profileId||item.profile_id||item.viewType||item.type||item.vendor||item.kind||item.name||item.command||'')," in html
            and "if(kind==='TerminalProfile'&&id)return {type:'open-terminal-profile'" in html
@@ -10569,12 +10581,16 @@ console.log("frontend word separator behavior ok");
            and "panel.dataset.runtimeLastAction=action.type||'inspect';" in html
            and "panel.dataset.runtimeLastActionTarget=action.target||'';" in html
            and "panel.dataset.runtimeLastActionOk=value==='success'?'1':value==='error'?'0':'';" in html
+           and "panel.dataset.runtimeLastRefresh=row.key||row.id||''" in html
            and "el.dataset.key=row.key||'';" in html
            and "el.dataset.container=row.container||'';" in html
            and "el.dataset.resourceUri=row.resourceUri||'';" in html
            and "el.dataset.action=row.action&&row.action.type||'inspect';" in html
            and "el.dataset.actionTarget=row.action&&row.action.target||'';" in html
            and "el.dataset.openable=row.openable?'1':'0';" in html
+           and "el.dataset.webviewEvidenceStatus=row.evidenceStatus||'';" in html
+           and "el.dataset.focusable=row.focusable?'1':'0';" in html
+           and "el.dataset.refreshable=row.refreshable?'1':'0';" in html
            and "el.dataset.search=row.searchText||'';" in html
            and "el.setAttribute('aria-selected','false');" in html
            and "el.setAttribute('role','listitem');" in html
@@ -10584,6 +10600,8 @@ console.log("frontend word separator behavior ok");
            and "renderExtensionRuntimeSurfacePanel({...extensionRuntimeSurfaceCache.data,_frontendCacheHit:true});" in html
            and "Runtime surfaces: '+visible+' visible of '+total+' rows" in html
            and ".extension-runtime-filter" in html
+           and ".extension-runtime-evidence" in html
+           and ".extension-runtime-mini-action" in html
            and ".extension-runtime-chip.filterable" in html
            and ".extension-runtime-row.selected" in html
            and ".extension-runtime-row[data-action-state=\"success\"] .extension-runtime-action" in html
@@ -10600,8 +10618,12 @@ console.log("frontend word separator behavior ok");
            and "webviewEvidence:evidence" in html
            and "el.dataset.webviewHtmlAvailable=row.htmlAvailable?'1':'0';" in html
            and "extension-runtime-tag webview-evidence" in html
-           and "snapshot.runtimeWebviewEvidenceRows>=4" in html
+           and "snapshot.runtimeWebviewEvidenceRows>=6" in html
+           and "snapshot.runtimeMissingEvidenceRows>=1" in html
+           and "snapshot.runtimeMiniActionButtons>=snapshot.runtimeRows*3" in html
            and "['Manifest',rows.filter(row=>!row.ready).length]" in html
+           and "['Missing Webview HTML',rows.filter(row=>row.kind==='WebviewView'&&!row.htmlAvailable).length]" in html
+           and "['Evidence Ready',rows.filter(row=>row.evidenceStatus==='rendered').length]" in html
            and "(data.terminalProfiles||[]).slice(0,8).forEach(item=>push('TerminalProfile'" in html
            and "(data.languageModelTools||[]).slice(0,8).forEach(item=>push('LMTool'" in html
            and "(data.languageModelProviders||[]).slice(0,8).forEach(item=>push('LMProvider'" in html
@@ -12767,6 +12789,9 @@ console.log("extension setting schema helpers ok");
            and "runtimeActionButtons:runtimeList?runtimeList.querySelectorAll('.extension-runtime-action').length:0" in html
            and "runtimeActionButtonLabels:runtimeList?Array.from(runtimeList.querySelectorAll('.extension-runtime-action')).map(item=>String(item.textContent||'')):[]" in html
            and "runtimeActionStateRows:runtimeList?runtimeList.querySelectorAll('.extension-runtime-row[data-action-state=\"success\"]').length:0" in html
+           and "runtimeMissingEvidenceRows:runtimeList?Array.from(runtimeList.querySelectorAll('.extension-runtime-row')).filter(row=>row.dataset.webviewEvidenceStatus==='missing').length:0" in html
+           and "runtimeEvidencePills:runtimeList?runtimeList.querySelectorAll('.extension-runtime-evidence').length:0" in html
+           and "runtimeMiniActionButtons:runtimeList?runtimeList.querySelectorAll('.extension-runtime-mini-action').length:0" in html
            and "runtimeRowKeys:runtimeList?Array.from(runtimeList.querySelectorAll('.extension-runtime-row')).map(item=>item.dataset.key||'').filter(Boolean).length:0" in html
            and "runtimeContainerRows:runtimeList?Array.from(runtimeList.querySelectorAll('.extension-runtime-row')).filter(item=>item.dataset.container==='selftest.dynamic.container').length:0" in html
            and "const runtimeActionRowByType=type=>runtimeList?Array.from(runtimeList.querySelectorAll('.extension-runtime-row')).find(row=>row.dataset.action===type):null;" in html
@@ -12780,10 +12805,10 @@ console.log("extension setting schema helpers ok");
            and "snapshot.webviewGroup&&snapshot.webviewFrame" in html
            and "snapshot.customPlaceholder&&snapshot.customDataset.viewType==='selftest.customEditor'" in html
            and "snapshot.notebookOutputItems===3" in html
-           and "snapshot.runtimeRows>=11" in html
-           and "snapshot.runtimeChips>=13" in html
+           and "snapshot.runtimeRows>=12" in html
+           and "snapshot.runtimeChips>=15" in html
            and "snapshot.runtimeOpenableRows===snapshot.runtimeRows" in html
-           and "snapshot.runtimeOpenableRows>=11" in html
+           and "snapshot.runtimeOpenableRows>=12" in html
            and "snapshot.runtimeActionButtons===snapshot.runtimeRows" in html
            and "snapshot.runtimeRowKeys===snapshot.runtimeRows" in html
            and "snapshot.runtimeContainerRows>=2" in html
@@ -12805,9 +12830,11 @@ console.log("extension setting schema helpers ok");
            and "runtimeKindFilterVisible:runtimeKindFilterResult?runtimeKindFilterResult.visible:0" in html
            and "runtimeSelectedRows:runtimeList?runtimeList.querySelectorAll('.extension-runtime-row.selected[aria-selected=\"true\"]').length:0" in html
            and "snapshot.runtimeListRole==='list'" in html
-           and "snapshot.runtimeStatusText.includes('11 visible of 11 rows')" in html
+           and "snapshot.runtimeStatusText.includes('12 visible of 12 rows')" in html
            and "snapshot.runtimeFilterKinds.includes('LMTool')" in html
            and "snapshot.runtimeKindFilterVisible===1" in html
+           and "snapshot.runtimeRenderedEvidenceFilterVisible===1" in html
+           and "snapshot.runtimeMissingEvidenceFilterVisible===1" in html
            and "snapshot.runtimeTextFilterVisible===1" in html
            and "snapshot.runtimeSelectedRows===1" in html
            and "snapshot.runtimeChipFilterKind==='LMTool'" in html

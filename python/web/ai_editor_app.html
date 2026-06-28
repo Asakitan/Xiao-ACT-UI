@@ -1923,7 +1923,7 @@ pre.code-block code .type { color:var(--fg-type); }
 .extension-runtime-refresh { width:auto; height:24px; padding:2px 8px; border:1px solid var(--border); border-radius:4px; background:var(--bg2); color:var(--fg-dim); font:11px var(--sans); cursor:pointer; }
 .extension-runtime-refresh:hover,.extension-runtime-refresh:focus { color:var(--fg); border-color:var(--border-focus); outline:none; }
 .extension-runtime-refresh:disabled { opacity:.55; cursor:default; }
-.extension-runtime-filter { display:grid; grid-template-columns:minmax(120px,1fr) minmax(92px,auto) minmax(92px,auto); gap:5px; width:100%; }
+.extension-runtime-filter { display:grid; grid-template-columns:minmax(120px,1fr) minmax(92px,auto) minmax(92px,auto) minmax(108px,auto); gap:5px; width:100%; }
 .extension-runtime-filter input,.extension-runtime-filter select { min-width:0; height:24px; padding:2px 7px; border:1px solid var(--border);
   border-radius:4px; background:var(--bg2); color:var(--fg); font:11px var(--sans); outline:none; }
 .extension-runtime-filter input:focus,.extension-runtime-filter select:focus { border-color:var(--border-focus); }
@@ -1934,7 +1934,7 @@ pre.code-block code .type { color:var(--fg-type); }
 .extension-runtime-chip.filterable:hover,.extension-runtime-chip.filterable:focus { color:var(--fg); border-color:var(--border-focus); outline:none; }
 .extension-runtime-chip.active { color:var(--fg-accent); border-color:var(--fg-accent); background:color-mix(in srgb,var(--fg-accent) 7%,transparent); }
 .extension-runtime-list { display:grid; gap:1px; padding:4px; }
-.extension-runtime-row { display:grid; grid-template-columns:92px minmax(0,1fr) auto auto; gap:7px; align-items:center; min-height:28px; padding:4px 6px; border-radius:4px; color:var(--fg-dim); font-size:11px; }
+.extension-runtime-row { display:grid; grid-template-columns:92px minmax(0,1fr) auto auto auto; gap:7px; align-items:center; min-height:28px; padding:4px 6px; border-radius:4px; color:var(--fg-dim); font-size:11px; }
 .extension-runtime-row:hover,.extension-runtime-row:focus { background:var(--bg-hover); outline:1px solid color-mix(in srgb,var(--border-focus) 40%,transparent); outline-offset:-1px; }
 .extension-runtime-row.selected { background:color-mix(in srgb,var(--fg-accent) 8%,var(--bg-hover)); outline:1px solid color-mix(in srgb,var(--border-focus) 55%,transparent); outline-offset:-1px; }
 .extension-runtime-row[data-action-state="running"] { background:color-mix(in srgb,var(--fg-accent) 5%,transparent); }
@@ -1953,9 +1953,17 @@ pre.code-block code .type { color:var(--fg-type); }
 .extension-runtime-state { border:1px solid var(--border); border-radius:999px; padding:1px 6px; font:10px var(--mono); color:var(--fg-dim); }
 .extension-runtime-state.ready { color:var(--fg-success); border-color:color-mix(in srgb,var(--fg-success) 50%,var(--border)); }
 .extension-runtime-state.pending { color:var(--fg-warning); border-color:color-mix(in srgb,var(--fg-warning) 50%,var(--border)); }
+.extension-runtime-evidence { border:1px solid var(--border); border-radius:999px; padding:1px 6px; font:10px var(--mono); color:var(--fg-dim); white-space:nowrap; }
+.extension-runtime-evidence.rendered { color:var(--fg-success); border-color:color-mix(in srgb,var(--fg-success) 50%,var(--border)); }
+.extension-runtime-evidence.partial { color:var(--fg-warning); border-color:color-mix(in srgb,var(--fg-warning) 50%,var(--border)); }
+.extension-runtime-evidence.missing { color:var(--fg-error); border-color:color-mix(in srgb,var(--fg-error) 46%,var(--border)); }
+.extension-runtime-actions { display:flex; align-items:center; justify-content:flex-end; gap:3px; min-width:max-content; }
 .extension-runtime-action { min-width:42px; height:22px; border:1px solid transparent; border-radius:4px; background:transparent; color:var(--fg-dim); padding:0 7px; cursor:pointer; font:10px var(--sans); }
 .extension-runtime-action:hover,.extension-runtime-action:focus { color:var(--fg); background:var(--bg-hover); border-color:var(--border-focus); outline:none; }
 .extension-runtime-action:disabled { opacity:.35; cursor:default; background:transparent; border-color:transparent; }
+.extension-runtime-mini-action { width:22px; height:22px; border:1px solid transparent; border-radius:4px; background:transparent; color:var(--fg-dim); cursor:pointer; padding:0; font:11px var(--sans); }
+.extension-runtime-mini-action:hover,.extension-runtime-mini-action:focus { color:var(--fg); background:var(--bg-hover); border-color:var(--border-focus); outline:none; }
+.extension-runtime-mini-action:disabled { opacity:.32; cursor:default; background:transparent; border-color:transparent; }
 .extension-runtime-empty { padding:8px; color:var(--fg-dim); font-size:11px; }
 .modal label.settings-danger { border:1px solid #f14c4c80; border-radius:var(--radius); padding:8px; background:#ff000012; }
 .modal input[type="checkbox"] { width:auto; }
@@ -3787,6 +3795,7 @@ pre.code-block { overflow:visible; }
             <input id="extension-runtime-filter-text" placeholder="Filter surfaces" aria-label="Filter extension runtime surfaces" oninput="applyExtensionRuntimeSurfaceFilter()">
             <select id="extension-runtime-filter-kind" aria-label="Filter extension runtime surface kind" onchange="applyExtensionRuntimeSurfaceFilter()"><option value="">All kinds</option></select>
             <select id="extension-runtime-filter-source" aria-label="Filter extension runtime source" onchange="applyExtensionRuntimeSurfaceFilter()"><option value="">All sources</option><option value="runtime">Runtime</option><option value="manifest">Manifest</option><option value="runtime-only">Runtime only</option></select>
+            <select id="extension-runtime-filter-evidence" aria-label="Filter webview render evidence" onchange="applyExtensionRuntimeSurfaceFilter()"><option value="">All evidence</option><option value="rendered">Rendered HTML</option><option value="missing">Missing HTML</option><option value="retained">Retained</option><option value="scripts">Scripts enabled</option></select>
           </div>
         </div>
         <div class="extension-runtime-summary" id="extension-runtime-summary"></div>
@@ -32910,6 +32919,30 @@ function extensionRuntimeSurfaceAction(kind,item,row){
   if(kind==='ChatContext'&&id)return {type:'attach-chat-context',label:'Attach',title:'Attach this chat context provider',target:id};
   return {type:'inspect',label:'Inspect',title:'Select runtime surface metadata',target:id||command||uri||row.label||''};
 }
+function extensionRuntimeWebviewEvidenceStatus(row){
+  if(!row||row.kind!=='WebviewView')return 'n/a';
+  const ev=row.webviewEvidence||{};
+  if(row.htmlAvailable)return 'rendered';
+  if(ev.visible||ev.retainContextWhenHidden||ev.stateKind||row.lifecycleState)return 'partial';
+  return 'missing';
+}
+function extensionRuntimeEvidenceMatches(row,value){
+  const v=String(value||'');
+  if(!v)return true;
+  if(!row||row.kind!=='WebviewView')return false;
+  const ev=row.webviewEvidence||{};
+  if(v==='rendered')return !!row.htmlAvailable;
+  if(v==='missing')return !row.htmlAvailable;
+  if(v==='retained')return !!ev.retainContextWhenHidden;
+  if(v==='scripts')return ev.enableScripts===true;
+  return true;
+}
+function extensionRuntimeSurfaceViewId(row){
+  if(!row)return '';
+  const target=String(row.action&&row.action.target||'').trim();
+  if(row.kind==='WebviewView'&&target)return target;
+  return String(row.id||'').trim();
+}
 function prepareExtensionRuntimeAssistantPrompt(row,prompt,statusText){
   const input=setChatInputValue(prompt||'',{focus:true});
   switchRightTab('chat');
@@ -32987,8 +33020,11 @@ function extensionRuntimeSurfaceRows(data){
     };
     row.action=extensionRuntimeSurfaceAction(kind,item,row);
     row.openable=row.action&&row.action.type!=='inspect';
+    row.evidenceStatus=extensionRuntimeWebviewEvidenceStatus(row);
+    row.focusable=row.kind==='WebviewView'||row.kind==='TreeView'||row.kind==='CustomEditor'||row.kind==='Notebook';
+    row.refreshable=row.kind==='WebviewView'||row.kind==='TreeView'||row.kind==='CustomEditor'||row.kind==='Notebook';
     row.key=[row.kind,row.id,row.command,row.extensionId,row.source,row.container,row.resourceUri].join('|');
-    row.searchText=[row.kind,row.label,row.meta,row.extensionId,row.container,row.resourceUri,row.source,row.command,row.id,row.action&&row.action.type,row.evidenceText].join(' ').toLowerCase();
+    row.searchText=[row.kind,row.label,row.meta,row.extensionId,row.container,row.resourceUri,row.source,row.command,row.id,row.action&&row.action.type,row.evidenceText,row.evidenceStatus].join(' ').toLowerCase();
     rows.push(row);
   };
   (data.treeViews||[]).slice(0,8).forEach(item=>push('TreeView',item,item.name||item.id,item.id+' · '+(item.container||'runtime'),item.runtimeAvailable!==false));
@@ -33021,7 +33057,8 @@ function extensionRuntimeFilterState(){
   return {
     text:String(($('extension-runtime-filter-text')||{}).value||'').trim().toLowerCase(),
     kind:String(($('extension-runtime-filter-kind')||{}).value||''),
-    source:String(($('extension-runtime-filter-source')||{}).value||'')
+    source:String(($('extension-runtime-filter-source')||{}).value||''),
+    evidence:String(($('extension-runtime-filter-evidence')||{}).value||'')
   };
 }
 function extensionRuntimeRowMatchesFilter(row,filter){
@@ -33029,6 +33066,7 @@ function extensionRuntimeRowMatchesFilter(row,filter){
   const f=filter||extensionRuntimeFilterState();
   if(f.kind&&row.kind!==f.kind)return false;
   if(f.source&&row.source!==f.source)return false;
+  if(f.evidence&&!extensionRuntimeEvidenceMatches(row,f.evidence))return false;
   if(f.text&&!String(row.searchText||'').includes(f.text))return false;
   return true;
 }
@@ -33137,6 +33175,54 @@ async function openExtensionRuntimeSurface(rowOrKey){
     return false;
   }
 }
+async function focusExtensionRuntimeSurface(rowOrKey){
+  const row=typeof rowOrKey==='string'?extensionRuntimeSurfaceRowByKey(rowOrKey):rowOrKey;
+  const status=$('extension-runtime-status');
+  if(!row)return false;
+  const rowEl=extensionRuntimeSurfaceRowElement(row);
+  selectExtensionRuntimeRow(rowEl);
+  let ok=false;
+  if(row.kind==='WebviewView'){
+    const viewId=extensionRuntimeSurfaceViewId(row);
+    ok=!!viewId&&revealExtensionWebviewPanel({view_id:viewId,title:row.label,preserveFocus:false});
+  }else if(row.container){
+    ok=await openExtensionRuntimeViewContainer(row.container);
+  }else if(row.openable){
+    ok=await openExtensionRuntimeSurface(row);
+  }
+  if(status)status.textContent=(ok?'Focused ':'Unable to focus ')+(row.label||row.kind)+'.';
+  if(rowEl)rowEl.dataset.focused=ok?'1':'0';
+  return ok;
+}
+async function refreshExtensionRuntimeSurface(rowOrKey){
+  const row=typeof rowOrKey==='string'?extensionRuntimeSurfaceRowByKey(rowOrKey):rowOrKey;
+  const status=$('extension-runtime-status'),panel=$('extension-runtime-panel');
+  if(panel&&row){panel.dataset.runtimeLastRefresh=row.key||row.id||''}
+  if(status)status.textContent='Refreshing runtime surfaces'+(row&&row.label?' for '+row.label:'')+'...';
+  await renderExtensionRuntimeSurfaces(true);
+  if(status)status.textContent='Runtime surfaces refreshed'+(row&&row.label?' after '+row.label:'')+'.';
+  return true;
+}
+async function copyExtensionRuntimeSurfaceSummary(rowOrKey){
+  const row=typeof rowOrKey==='string'?extensionRuntimeSurfaceRowByKey(rowOrKey):rowOrKey;
+  if(!row)return '';
+  const text=[
+    'Kind: '+(row.kind||'-'),
+    'Label: '+(row.label||'-'),
+    'ID: '+(row.id||'-'),
+    'Extension: '+(row.extensionId||'-'),
+    'Source: '+(row.source||'-'),
+    'Action: '+((row.action&&row.action.type)||'-'),
+    'Target: '+((row.action&&row.action.target)||'-'),
+    'Evidence: '+(row.evidenceStatus||'-'),
+    'Meta: '+(row.meta||'-')
+  ].join('\n');
+  try{await navigator.clipboard.writeText(text);setStatus('Runtime surface summary copied')}
+  catch(_e){setStatus(text)}
+  const status=$('extension-runtime-status');
+  if(status)status.textContent='Copied runtime surface summary for '+(row.label||row.kind)+'.';
+  return text;
+}
 function extensionRuntimeSurfaceRowElement(rowOrKey){
   const key=String((typeof rowOrKey==='string'?rowOrKey:(rowOrKey&&rowOrKey.key))||'');
   const list=$('extension-runtime-list');if(!key||!list)return null;
@@ -33168,6 +33254,9 @@ function applyExtensionRuntimeSurfaceFilter(){
     const match=extensionRuntimeRowMatchesFilter({
       kind:row.dataset.kind||'',
       source:row.dataset.source||'',
+      evidenceStatus:row.dataset.webviewEvidenceStatus||'',
+      htmlAvailable:row.dataset.webviewHtmlAvailable==='1',
+      webviewEvidence:{retainContextWhenHidden:row.dataset.webviewRetained==='1',enableScripts:String(row.dataset.search||'').includes('scripts')},
       searchText:row.dataset.search||''
     },filter);
     row.style.display=match?'':'none';
@@ -33210,7 +33299,9 @@ function renderExtensionRuntimeSurfacePanel(data){
     ['Chat',summary.chatParticipants||0],
     ['Context',summary.chatContextProviders||0],
     ['Webview HTML',summary.webviewHtmlAvailable||0],
+    ['Missing Webview HTML',rows.filter(row=>row.kind==='WebviewView'&&!row.htmlAvailable).length],
     ['Retained Webview',summary.webviewRetained||0],
+    ['Evidence Ready',rows.filter(row=>row.evidenceStatus==='rendered').length],
     ['Runtime',rows.filter(row=>row.ready).length],
     ['Manifest',rows.filter(row=>!row.ready).length],
   ];
@@ -33223,7 +33314,7 @@ function renderExtensionRuntimeSurfacePanel(data){
   chips.forEach(([label,value])=>{
     const chip=document.createElement('span');chip.className='extension-runtime-chip';
     chip.innerHTML='<strong>'+esc(String(value))+'</strong>'+esc(label);
-    if(['TreeView','WebviewView','CustomEditor','Notebook','Command','Menu','Terminal','LM Tool','LM Provider','Chat','Context','Runtime','Manifest'].includes(label)){
+    if(['TreeView','WebviewView','CustomEditor','Notebook','Command','Menu','Terminal','LM Tool','LM Provider','Chat','Context','Runtime','Manifest','Webview HTML','Missing Webview HTML','Retained Webview','Evidence Ready'].includes(label)){
       chip.classList.add('filterable');
       chip.tabIndex=0;
       chip.setAttribute('role','button');
@@ -33231,8 +33322,10 @@ function renderExtensionRuntimeSurfacePanel(data){
       chip.onclick=()=>{
         const kindMap={'Terminal':'TerminalProfile','LM Tool':'LMTool','LM Provider':'LMProvider','Chat':'ChatParticipant','Context':'ChatContext'};
         const sourceMap={Runtime:'runtime',Manifest:'manifest'};
-        const kindSel=$('extension-runtime-filter-kind'),sourceSel=$('extension-runtime-filter-source');
+        const evidenceMap={'Webview HTML':'rendered','Missing Webview HTML':'missing','Retained Webview':'retained','Evidence Ready':'rendered'};
+        const kindSel=$('extension-runtime-filter-kind'),sourceSel=$('extension-runtime-filter-source'),evidenceSel=$('extension-runtime-filter-evidence');
         if(sourceMap[label]&&sourceSel)sourceSel.value=sourceMap[label];
+        else if(evidenceMap[label]&&evidenceSel)evidenceSel.value=evidenceMap[label];
         else if(kindSel){
           const next=kindMap[label]||label;
           if(Array.from(kindSel.options).some(opt=>opt.value===next))kindSel.value=next;
@@ -33266,6 +33359,9 @@ function renderExtensionRuntimeSurfacePanel(data){
       el.dataset.webviewHtmlAvailable=row.htmlAvailable?'1':'0';
       el.dataset.webviewHtmlLength=String(row.htmlLength||0);
       el.dataset.webviewRetained=row.webviewEvidence&&row.webviewEvidence.retainContextWhenHidden?'1':'0';
+      el.dataset.webviewEvidenceStatus=row.evidenceStatus||'';
+      el.dataset.focusable=row.focusable?'1':'0';
+      el.dataset.refreshable=row.refreshable?'1':'0';
       el.dataset.search=row.searchText||'';
       el.dataset.label=row.label||'';
       el.setAttribute('aria-selected','false');
@@ -33302,6 +33398,10 @@ function renderExtensionRuntimeSurfacePanel(data){
       }
       mid.appendChild(main);mid.appendChild(meta);
       const state=document.createElement('div');state.className='extension-runtime-state '+(row.ready?'ready':'pending');state.textContent=row.ready?'ready':'pending';
+      const evidence=document.createElement('div');
+      evidence.className='extension-runtime-evidence '+(row.evidenceStatus||'n-a');
+      evidence.textContent=row.kind==='WebviewView'?(row.evidenceStatus==='rendered'?'html':row.evidenceStatus==='partial'?'partial':'missing'):'-';
+      evidence.title=row.kind==='WebviewView'?'Webview render evidence: '+row.evidenceStatus:'No webview evidence for this surface kind';
       const action=document.createElement('button');
       action.type='button';
       action.className='extension-runtime-action action-'+String(row.action&&row.action.type||'inspect').replace(/[^a-z0-9_-]/gi,'-');
@@ -33313,8 +33413,26 @@ function renderExtensionRuntimeSurfacePanel(data){
       action.disabled=!row.action;
       action.onclick=e=>{e.preventDefault();e.stopPropagation();selectExtensionRuntimeRow(el);void openExtensionRuntimeSurface(row)};
       action.onkeydown=e=>{if(e.key==='Enter'||e.key===' '){e.preventDefault();action.click()}};
+      const actions=document.createElement('div');
+      actions.className='extension-runtime-actions';
+      actions.appendChild(action);
+      const addMini=(label,title,handler,enabled)=>{
+        const btn=document.createElement('button');
+        btn.type='button';
+        btn.className='extension-runtime-mini-action';
+        btn.textContent=label;
+        btn.title=title;
+        btn.setAttribute('aria-label',title+' '+row.kind+' '+row.label);
+        btn.disabled=!enabled;
+        btn.onclick=e=>{e.preventDefault();e.stopPropagation();selectExtensionRuntimeRow(el);void handler(row)};
+        actions.appendChild(btn);
+        return btn;
+      };
+      addMini('◎','Focus runtime surface',focusExtensionRuntimeSurface,row.focusable);
+      addMini('↻','Refresh runtime surface evidence',refreshExtensionRuntimeSurface,row.refreshable);
+      addMini('⧉','Copy runtime surface summary',copyExtensionRuntimeSurfaceSummary,true);
       el.addEventListener('dblclick',e=>{e.preventDefault();void openExtensionRuntimeSurface(row)});
-      el.appendChild(kind);el.appendChild(mid);el.appendChild(state);el.appendChild(action);
+      el.appendChild(kind);el.appendChild(mid);el.appendChild(evidence);el.appendChild(state);el.appendChild(actions);
       listEl.appendChild(el);
     });
   }
@@ -33357,6 +33475,9 @@ window.renderExtensionRuntimeSurfaces=renderExtensionRuntimeSurfaces;
 window.applyExtensionRuntimeSurfaceFilter=applyExtensionRuntimeSurfaceFilter;
 window.extensionRuntimeSurfaceRows=extensionRuntimeSurfaceRows;
 window.openExtensionRuntimeSurface=openExtensionRuntimeSurface;
+window.focusExtensionRuntimeSurface=focusExtensionRuntimeSurface;
+window.refreshExtensionRuntimeSurface=refreshExtensionRuntimeSurface;
+window.copyExtensionRuntimeSurfaceSummary=copyExtensionRuntimeSurfaceSummary;
 
 async function searchExtensions(query,page){
   if(!query) query=$('ext-search')?$('ext-search').value.trim():'';
@@ -34538,7 +34659,7 @@ function extensionRuntimeDomSelfCheckSnapshot(){
   document.body.appendChild(root);
   const runtimeIds=[
     'extension-runtime-summary','extension-runtime-list','extension-runtime-status',
-    'extension-runtime-filter-text','extension-runtime-filter-kind','extension-runtime-filter-source'
+    'extension-runtime-filter-text','extension-runtime-filter-kind','extension-runtime-filter-source','extension-runtime-filter-evidence'
   ];
   const savedRuntime=runtimeIds.map(id=>{
     const el=$(id);
@@ -34661,10 +34782,13 @@ function extensionRuntimeDomSelfCheckSnapshot(){
     root.appendChild(notebookOutputHost);
 
     const runtimeData={
-      summary:{treeViews:1,webviewViews:1,webviewHtmlAvailable:1,webviewRetained:1,webviewVisible:1,customEditors:1,notebooks:1,commands:1,menus:1,terminalProfiles:1,languageModelTools:1,languageModelProviders:1,chatParticipants:1,chatContextProviders:1,dynamicSurfaces:11},
+      summary:{treeViews:1,webviewViews:2,webviewHtmlAvailable:1,webviewRetained:1,webviewVisible:1,customEditors:1,notebooks:1,commands:1,menus:1,terminalProfiles:1,languageModelTools:1,languageModelProviders:1,chatParticipants:1,chatContextProviders:1,dynamicSurfaces:12},
       viewContainers:[fixtureItem],
       treeViews:[{id:'selftest.dynamic.tree',name:'Runtime Tree',container:'selftest.dynamic.container',extensionId:'selftest.extension',runtimeAvailable:true}],
-      webviewViews:[{id:'selftest.dynamic.webview',name:'Runtime Webview',container:'selftest.dynamic.container',extensionId:'selftest.extension',runtimeAvailable:true,htmlAvailable:true,htmlLength:61,webviewEvidence:{htmlAvailable:true,htmlLength:61,stateKind:'dict',stateKeys:['ready'],enableScripts:true,enableForms:true,enableCommandUris:false,retainContextWhenHidden:true,visible:true}}],
+      webviewViews:[
+        {id:'selftest.dynamic.webview',name:'Runtime Webview',container:'selftest.dynamic.container',extensionId:'selftest.extension',runtimeAvailable:true,htmlAvailable:true,htmlLength:61,webviewEvidence:{htmlAvailable:true,htmlLength:61,stateKind:'dict',stateKeys:['ready'],enableScripts:true,enableForms:true,enableCommandUris:false,retainContextWhenHidden:true,visible:true}},
+        {id:'selftest.dynamic.webview.pending',name:'Pending Runtime Webview',container:'selftest.dynamic.container',extensionId:'selftest.extension',runtimeAvailable:true,htmlAvailable:false,htmlLength:0,webviewEvidence:{htmlAvailable:false,stateKind:'dict',stateKeys:['pending'],enableScripts:true,enableForms:true,retainContextWhenHidden:false,visible:false}}
+      ],
       customEditors:[{viewType:'selftest.customEditor',displayName:'Custom Fixture',extensionId:'selftest.extension',stateCount:1,states:[{uri:'custom.fixture'}],runtimeAvailable:true}],
       notebooks:[{type:'selftest-notebook',displayName:'Selftest Notebook',extensionId:'selftest.extension',serializerCount:1,controllerCount:1,uri:'selftest.notebook',runtimeAvailable:true}],
       commands:[{command:'selftest.run',title:'Run Fixture',source:'extension',extensionId:'selftest.extension',disabled:false}],
@@ -34678,6 +34802,7 @@ function extensionRuntimeDomSelfCheckSnapshot(){
     if(runtimeIds.every(id=>!!$(id)))renderExtensionRuntimeSurfacePanel(runtimeData);
     const runtimeKindFilter=$('extension-runtime-filter-kind');
     const runtimeSourceFilter=$('extension-runtime-filter-source');
+    const runtimeEvidenceFilter=$('extension-runtime-filter-evidence');
     const runtimeTextFilter=$('extension-runtime-filter-text');
     const runtimeFilterBefore=applyExtensionRuntimeSurfaceFilter();
     if(runtimeKindFilter)runtimeKindFilter.value='LMTool';
@@ -34686,6 +34811,11 @@ function extensionRuntimeDomSelfCheckSnapshot(){
     if(runtimeSourceFilter)runtimeSourceFilter.value='runtime';
     const runtimeSourceFilterResult=applyExtensionRuntimeSurfaceFilter();
     if(runtimeSourceFilter)runtimeSourceFilter.value='';
+    if(runtimeEvidenceFilter)runtimeEvidenceFilter.value='rendered';
+    const runtimeRenderedEvidenceFilterResult=applyExtensionRuntimeSurfaceFilter();
+    if(runtimeEvidenceFilter)runtimeEvidenceFilter.value='missing';
+    const runtimeMissingEvidenceFilterResult=applyExtensionRuntimeSurfaceFilter();
+    if(runtimeEvidenceFilter)runtimeEvidenceFilter.value='';
     if(runtimeTextFilter)runtimeTextFilter.value='custom fixture';
     const runtimeTextFilterResult=applyExtensionRuntimeSurfaceFilter();
     if(runtimeTextFilter)runtimeTextFilter.value='';
@@ -34699,6 +34829,7 @@ function extensionRuntimeDomSelfCheckSnapshot(){
     const runtimeChipFilterKind=runtimeKindFilter?runtimeKindFilter.value:'';
     if(runtimeKindFilter)runtimeKindFilter.value='';
     if(runtimeSourceFilter)runtimeSourceFilter.value='';
+    if(runtimeEvidenceFilter)runtimeEvidenceFilter.value='';
     if(runtimeTextFilter)runtimeTextFilter.value='';
     applyExtensionRuntimeSurfaceFilter();
     const runtimeActionRowByType=type=>runtimeList?Array.from(runtimeList.querySelectorAll('.extension-runtime-row')).find(row=>row.dataset.action===type):null;
@@ -34829,7 +34960,13 @@ function extensionRuntimeDomSelfCheckSnapshot(){
       runtimeTags:runtimeList?runtimeList.querySelectorAll('.extension-runtime-tag').length:0,
       runtimeWebviewEvidenceRows:runtimeList?runtimeList.querySelectorAll('.extension-runtime-tag.webview-evidence').length:0,
       runtimeHtmlEvidenceRows:runtimeList?Array.from(runtimeList.querySelectorAll('.extension-runtime-row')).filter(row=>row.dataset.webviewHtmlAvailable==='1').length:0,
+      runtimeMissingEvidenceRows:runtimeList?Array.from(runtimeList.querySelectorAll('.extension-runtime-row')).filter(row=>row.dataset.webviewEvidenceStatus==='missing').length:0,
       runtimeWebviewRetainedRows:runtimeList?Array.from(runtimeList.querySelectorAll('.extension-runtime-row')).filter(row=>row.dataset.webviewRetained==='1').length:0,
+      runtimeEvidencePills:runtimeList?runtimeList.querySelectorAll('.extension-runtime-evidence').length:0,
+      runtimeEvidenceStatuses:runtimeList?Array.from(runtimeList.querySelectorAll('.extension-runtime-row')).map(row=>row.dataset.webviewEvidenceStatus||'').filter(Boolean):[],
+      runtimeMiniActionButtons:runtimeList?runtimeList.querySelectorAll('.extension-runtime-mini-action').length:0,
+      runtimeFocusableRows:runtimeList?Array.from(runtimeList.querySelectorAll('.extension-runtime-row')).filter(row=>row.dataset.focusable==='1').length:0,
+      runtimeRefreshableRows:runtimeList?Array.from(runtimeList.querySelectorAll('.extension-runtime-row')).filter(row=>row.dataset.refreshable==='1').length:0,
       runtimeChips:runtimeSummary?runtimeSummary.querySelectorAll('.extension-runtime-chip').length:0,
       runtimeKinds:runtimeList?Array.from(runtimeList.querySelectorAll('.extension-runtime-kind')).map(item=>String(item.textContent||'')):[],
       runtimeListRole:runtimeList?runtimeList.getAttribute('role'):'',
@@ -34853,6 +34990,8 @@ function extensionRuntimeDomSelfCheckSnapshot(){
       runtimeFilterBefore,
       runtimeKindFilterVisible:runtimeKindFilterResult?runtimeKindFilterResult.visible:0,
       runtimeSourceFilterVisible:runtimeSourceFilterResult?runtimeSourceFilterResult.visible:0,
+      runtimeRenderedEvidenceFilterVisible:runtimeRenderedEvidenceFilterResult?runtimeRenderedEvidenceFilterResult.visible:0,
+      runtimeMissingEvidenceFilterVisible:runtimeMissingEvidenceFilterResult?runtimeMissingEvidenceFilterResult.visible:0,
       runtimeTextFilterVisible:runtimeTextFilterResult?runtimeTextFilterResult.visible:0,
       runtimeSelectedRows:runtimeList?runtimeList.querySelectorAll('.extension-runtime-row.selected[aria-selected="true"]').length:0,
       runtimeSelectStatus:runtimeSelectAfter,
@@ -34875,20 +35014,22 @@ function extensionRuntimeDomSelfCheckSnapshot(){
       && snapshot.activityRole==='button'&&snapshot.activityTabIndex===0&&snapshot.activityLabel.includes('Selftest Extensions')&&snapshot.activityPanel==='ext-vc-selftest.dynamic.container'
       && snapshot.customPlaceholder&&snapshot.customDataset.viewType==='selftest.customEditor'&&snapshot.customCapabilities
       && snapshot.notebookOutputItems===3&&snapshot.notebookHtmlFrame&&snapshot.notebookImage&&snapshot.notebookText
-      && snapshot.runtimeRows>=11&&snapshot.runtimeReadyRows>=10&&snapshot.runtimeChips>=13
-      && snapshot.runtimeWebviewEvidenceRows>=4&&snapshot.runtimeHtmlEvidenceRows>=1&&snapshot.runtimeWebviewRetainedRows>=1
+      && snapshot.runtimeRows>=12&&snapshot.runtimeReadyRows>=11&&snapshot.runtimeChips>=15
+      && snapshot.runtimeWebviewEvidenceRows>=6&&snapshot.runtimeHtmlEvidenceRows>=1&&snapshot.runtimeMissingEvidenceRows>=1&&snapshot.runtimeWebviewRetainedRows>=1
+      && snapshot.runtimeEvidencePills===snapshot.runtimeRows&&snapshot.runtimeEvidenceStatuses.includes('rendered')&&snapshot.runtimeEvidenceStatuses.includes('missing')
+      && snapshot.runtimeMiniActionButtons>=snapshot.runtimeRows*3&&snapshot.runtimeFocusableRows>=4&&snapshot.runtimeRefreshableRows>=4
       && snapshot.runtimeListRole==='list'&&snapshot.runtimeListItems===snapshot.runtimeRows
-      && snapshot.runtimeDatasetReady===snapshot.runtimeReadyRows&&snapshot.runtimePanelCount==='11'
-      && snapshot.runtimeOpenableRows===snapshot.runtimeRows&&snapshot.runtimeOpenableRows>=11&&snapshot.runtimeActionButtons===snapshot.runtimeRows
+      && snapshot.runtimeDatasetReady===snapshot.runtimeReadyRows&&snapshot.runtimePanelCount==='12'
+      && snapshot.runtimeOpenableRows===snapshot.runtimeRows&&snapshot.runtimeOpenableRows>=12&&snapshot.runtimeActionButtons===snapshot.runtimeRows
       && snapshot.runtimeRowKeys===snapshot.runtimeRows&&snapshot.runtimeContainerRows>=2
       && ['Open','Run','Use','Chat','Attach'].every(label=>snapshot.runtimeActionButtonLabels.includes(label))
       && ['open-view','open-webview','open-file','run-command','open-terminal-profile','prepare-lm-tool','prepare-lm-provider','open-chat-participant','attach-chat-context'].every(kind=>snapshot.runtimeActionTypes.includes(kind))
       && snapshot.runtimeActionTargets.includes('selftest.dynamic.tree')&&snapshot.runtimeActionTargets.includes('selftest.dynamic.webview')&&snapshot.runtimeActionTargets.includes('selftest.run')
       && snapshot.runtimeActionTargets.includes('selftest.terminalProfile')&&snapshot.runtimeActionTargets.includes('selftest.lmTool')&&snapshot.runtimeActionTargets.includes('selftest.vendor')&&snapshot.runtimeActionTargets.includes('selftest.chat')&&snapshot.runtimeActionTargets.includes('selftest.context')
-      && snapshot.runtimePanelVisibleCount==='11'&&snapshot.runtimePanelTotalCount==='11'
-      && snapshot.runtimeDatasetSources.includes('runtime')&&snapshot.runtimeStatusText.includes('11 visible of 11 rows')
-      && snapshot.runtimeFilterKinds.includes('LMTool')&&snapshot.runtimeFilterBefore.visible===11
-      && snapshot.runtimeKindFilterVisible===1&&snapshot.runtimeSourceFilterVisible===11&&snapshot.runtimeTextFilterVisible===1
+      && snapshot.runtimePanelVisibleCount==='12'&&snapshot.runtimePanelTotalCount==='12'
+      && snapshot.runtimeDatasetSources.includes('runtime')&&snapshot.runtimeStatusText.includes('12 visible of 12 rows')
+      && snapshot.runtimeFilterKinds.includes('LMTool')&&snapshot.runtimeFilterBefore.visible===12
+      && snapshot.runtimeKindFilterVisible===1&&snapshot.runtimeSourceFilterVisible===12&&snapshot.runtimeRenderedEvidenceFilterVisible===1&&snapshot.runtimeMissingEvidenceFilterVisible===1&&snapshot.runtimeTextFilterVisible===1
       && snapshot.runtimeSelectedRows===1&&snapshot.runtimeSelectStatus.includes('Selected')
       && snapshot.runtimeChipFilterKind==='LMTool'
       && snapshot.runtimeActionStateRows>=4
