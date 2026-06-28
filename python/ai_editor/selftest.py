@@ -15156,12 +15156,22 @@ console.log("command palette quick access helpers ok");
            and "function _statusBarAccessibility" in node_ext_host_source
            and "function _statusBarPriority" in node_ext_host_source
            and "status_bar_hide" in node_ext_host_source
-           and "self._ui_bridge.hide_status_bar_item" in extension_host_source
-           and "def hide_status_bar_item(self, item_id: str) -> None:"
-           in app_source
-           and "function _extStatusBarCommand(data)" in html
-           and "execute_command(command.command,...command.arguments)" in html
-           and "aria-label" in html)
+            and "self._ui_bridge.hide_status_bar_item" in extension_host_source
+            and "def hide_status_bar_item(self, item_id: str) -> None:"
+            in app_source
+            and "function _extStatusBarCommand(data)" in html
+            and "function _extStatusBarRenderText(el,text)" in html
+            and "className='sb-ext-codicon'" in html
+            and "function extensionStatusBarSnapshot()" in html
+            and "window.extensionStatusBarSnapshot=extensionStatusBarSnapshot;" in html
+            and "dataset.statusBarItem='1'" in html
+            and "dataset.hasCommand=command?'1':'0'" in html
+            and "el.tabIndex=command?0:-1" in html
+            and "event.key==='Enter'||event.key===' '" in html
+            and "function _hideExtStatusBarItem(id)" in html
+            and "function _disposeExtStatusBarItem(id)" in html
+            and "execute_command(command.command,...command.arguments)" in html
+            and "aria-label" in html)
     _check("extension language status items round-trip dynamically",
            "LanguageStatusSeverity: { Information: 0, Warning: 1, Error: 2 }"
            in node_ext_host_source

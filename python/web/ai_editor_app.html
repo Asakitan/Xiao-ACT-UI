@@ -1686,6 +1686,14 @@ pre.code-block code .type { color:var(--fg-type); }
 .statusbar .spacer { flex:1; }
 .sb-item { padding:0 6px; cursor:default; display:flex; align-items:center; gap:3px; height:22px; }
 .sb-item:hover { background:var(--bg-hover); }
+.sb-ext-left,.sb-ext-right { display:inline-flex; align-items:center; min-width:0; height:22px; }
+.sb-ext-item { max-width:220px; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;
+  border-radius:3px; outline-offset:-1px; user-select:none; }
+.sb-ext-item[data-has-command="1"] { cursor:pointer; }
+.sb-ext-item[data-has-command="1"]:hover,.sb-ext-item[data-has-command="1"]:focus {
+  background:var(--bg-hover); outline:1px solid color-mix(in srgb,var(--border-focus) 55%,transparent); }
+.sb-ext-codicon { display:inline-flex; align-items:center; justify-content:center; min-width:12px;
+  font:12px/1 var(--mono); opacity:.92; transform:translateY(.5px); }
 .status-context-usage { display:inline-flex; align-items:center; gap:5px; min-width:0; color:var(--statusbar-fg); }
 .status-context-usage .ctx-ring { width:13px; height:13px; flex-basis:13px; }
 .status-context-usage .ctx-ring::after { width:6px; height:6px; background:var(--statusbar-bg); }
@@ -6489,9 +6497,9 @@ window._onEditorEvent=function(event,data){
     });
     setStatus(label||'Working...');
   }
-  else if(event==='dispose_status_bar_item'){_removeExtStatusBarItem(data.id)}
+  else if(event==='dispose_status_bar_item'){_disposeExtStatusBarItem(data.id)}
   else if(event==='show_status_bar_item'){_upsertExtStatusBarItem(data)}
-  else if(event==='hide_status_bar_item'){_removeExtStatusBarItem(data.id)}
+  else if(event==='hide_status_bar_item'){_hideExtStatusBarItem(data.id)}
   else if(event==='show_language_status_item'){_upsertLanguageStatusItem(data)}
   else if(event==='remove_language_status_item'){_removeLanguageStatusItem(data.id)}
   else if(event==='extensions_changed'){handleExtensionsChanged(data)}
@@ -33858,20 +33866,67 @@ function _extStatusBarCssColor(value){
 function _extStatusBarThemeColorId(value){
   return value&&typeof value==='object'&&value.id?String(value.id):'';
 }
+function _extStatusBarThemeColorCss(id,kind){
+  id=String(id||'');
+  const foreground={
+    'statusBarItem.prominentForeground':'var(--statusbar-fg)',
+    'statusBarItem.warningForeground':'var(--statusbar-fg)',
+    'statusBarItem.errorForeground':'var(--statusbar-fg)'
+  };
+  const background={
+    'statusBarItem.prominentBackground':'color-mix(in srgb,var(--fg-accent) 24%,transparent)',
+    'statusBarItem.warningBackground':'color-mix(in srgb,var(--fg-warning) 24%,transparent)',
+    'statusBarItem.errorBackground':'color-mix(in srgb,var(--fg-error) 24%,transparent)'
+  };
+  return (kind==='background'?background:foreground)[id]||'';
+}
 function _extStatusBarCommand(data){
   const command=data&&data.command;
   if(!command)return null;
-  if(typeof command==='string')return {command,arguments:[]};
+  if(typeof command==='string')return {command,title:'',arguments:[]};
   if(typeof command==='object'&&command.command)return {
     command:String(command.command),
+    title:_extStatusBarText(command.title),
     arguments:Array.isArray(command.arguments)?command.arguments:[]
   };
   return null;
 }
+function _extStatusBarCodiconGlyph(id){
+  id=String(id||'').trim();
+  if(!id)return '';
+  const resolver=typeof extensionTreeThemeIconGlyph==='function'?extensionTreeThemeIconGlyph:null;
+  if(resolver){
+    const glyph=resolver(id);
+    if(glyph)return glyph;
+  }
+  return id.slice(0,2).toUpperCase();
+}
+function _extStatusBarRenderText(el,text){
+  el.innerHTML='';
+  const raw=String(text||'');
+  let codicons=0;
+  for(const part of raw.split(/(\$\([^)]+\))/g)){
+    const icon=/^\$\(([^)]+)\)$/.exec(part);
+    if(icon){
+      const span=document.createElement('span');
+      span.className='sb-ext-codicon';
+      span.dataset.codicon=icon[1];
+      span.setAttribute('aria-hidden','true');
+      span.textContent=_extStatusBarCodiconGlyph(icon[1]);
+      el.appendChild(span);
+      codicons++;
+    }else if(part){
+      el.appendChild(document.createTextNode(part));
+    }
+  }
+  el.dataset.rawText=raw;
+  el.dataset.codiconCount=String(codicons);
+  return codicons;
+}
 function _placeExtStatusBarItem(el,id,align,pri){
   const container=align===1?$('sb-ext-left'):$('sb-ext-right');
   if(!container)return;
-  _extStatusBarItems[id]={alignment:align,priority:pri};
+  _extStatusBarItems[id]={...(_extStatusBarItems[id]||{}),alignment:align,priority:pri};
   if(el.parentElement!==container)container.appendChild(el);
   const children=Array.from(container.children).filter(child=>child!==el);
   let inserted=false;
@@ -33894,31 +33949,91 @@ function _upsertExtStatusBarItem(data){
   const tooltip=_extStatusBarText(data.tooltip);
   const name=_extStatusBarText(data.name);
   const accessibility=data.accessibilityInformation&&typeof data.accessibilityInformation==='object'?data.accessibilityInformation:{};
-  el.textContent=text;
+  const command=_extStatusBarCommand(data);
+  const codicons=_extStatusBarRenderText(el,text);
   el.title=tooltip||name||text;
+  el.dataset.statusBarItem='1';
+  el.dataset.id=id;
   el.dataset.name=name;
   el.dataset.alignment=String(align);
+  el.dataset.alignmentName=align===1?'left':'right';
   el.dataset.priority=String(pri);
+  el.dataset.visible='1';
+  el.dataset.disposed='0';
+  el.dataset.hasCommand=command?'1':'0';
+  el.dataset.command=command?command.command:'';
+  el.dataset.commandTitle=command?command.title:'';
+  el.dataset.commandArgs=command?String(command.arguments.length):'0';
+  el.dataset.source=_extStatusBarText(data.source||data.extensionId||data.extension);
   const color=_extStatusBarCssColor(data.color),background=_extStatusBarCssColor(data.backgroundColor);
   const colorId=_extStatusBarThemeColorId(data.color),backgroundId=_extStatusBarThemeColorId(data.backgroundColor);
-  el.style.color=color||'';
-  el.style.background=background||'';
+  el.style.color=color||_extStatusBarThemeColorCss(colorId,'foreground')||'';
+  el.style.background=background||_extStatusBarThemeColorCss(backgroundId,'background')||'';
   if(colorId)el.dataset.themeColor=colorId;else delete el.dataset.themeColor;
   if(backgroundId)el.dataset.themeBackgroundColor=backgroundId;else delete el.dataset.themeBackgroundColor;
   const ariaLabel=_extStatusBarText(accessibility.label)||name||text;
   if(ariaLabel)el.setAttribute('aria-label',ariaLabel);else el.removeAttribute('aria-label');
   const role=_extStatusBarText(accessibility.role);
-  if(role)el.setAttribute('role',role);else el.removeAttribute('role');
-  const command=_extStatusBarCommand(data);
-  el.style.cursor=command?'pointer':'default';
-  el.onclick=command?()=>{if(window.pywebview&&window.pywebview.api)window.pywebview.api.execute_command(command.command,...command.arguments)}:null;
+  if(role)el.setAttribute('role',role);else if(command)el.setAttribute('role','button');else el.setAttribute('role','status');
+  el.tabIndex=command?0:-1;
+  if(!el.dataset.keybound){
+    el.addEventListener('keydown',event=>{
+      if((event.key==='Enter'||event.key===' ')&&el.dataset.hasCommand==='1'){
+        event.preventDefault();
+        el.click();
+      }
+    });
+    el.dataset.keybound='1';
+  }
+  el.onclick=command?()=>{
+    el.dataset.invoked='1';
+    el.dataset.lastCommand=command.command;
+    if(window.pywebview&&window.pywebview.api)window.pywebview.api.execute_command(command.command,...command.arguments)
+  }:null;
+  _extStatusBarItems[id]={
+    ...(_extStatusBarItems[id]||{}),
+    id,alignment:align,priority:pri,text,tooltip,name,visible:true,disposed:false,
+    source:el.dataset.source,hasCommand:!!command,command:command?command.command:'',
+    commandTitle:command?command.title:'',commandArgs:command?command.arguments.length:0,
+    color:color||'',background:background||'',themeColor:colorId,themeBackgroundColor:backgroundId,
+    ariaLabel,role:el.getAttribute('role')||'',codicons,lastEvent:'show'
+  };
 }
-function _removeExtStatusBarItem(id){
+function _markExtStatusBarItemRemoved(id,disposed){
   if(!id)return;
   const el=document.getElementById('sb-ext-'+id);
+  const prev=_extStatusBarItems[id]||{id:String(id)};
+  _extStatusBarItems[id]={...prev,visible:false,disposed:!!disposed,lastEvent:disposed?'dispose':'hide'};
   if(el)el.remove();
-  delete _extStatusBarItems[id];
 }
+function _hideExtStatusBarItem(id){_markExtStatusBarItemRemoved(id,false)}
+function _disposeExtStatusBarItem(id){_markExtStatusBarItemRemoved(id,true)}
+function _removeExtStatusBarItem(id){_disposeExtStatusBarItem(id)}
+function extensionStatusBarSnapshot(){
+  const domItems=Array.from(document.querySelectorAll('[data-status-bar-item="1"]'));
+  const items=Object.values(_extStatusBarItems).map(item=>({...item}));
+  const left=Array.from(($('sb-ext-left')||{}).children||[]).map(el=>el.dataset.id||el.id.replace('sb-ext-',''));
+  const right=Array.from(($('sb-ext-right')||{}).children||[]).map(el=>el.dataset.id||el.id.replace('sb-ext-',''));
+  return {
+    total:items.length,
+    visible:items.filter(item=>item.visible).length,
+    hidden:items.filter(item=>item.visible===false&&!item.disposed).length,
+    disposed:items.filter(item=>item.disposed).length,
+    commands:items.filter(item=>item.hasCommand).length,
+    codicons:items.reduce((sum,item)=>sum+(Number(item.codicons)||0),0),
+    left,right,
+    dom:domItems.map(el=>({
+      id:el.dataset.id,
+      rawText:el.dataset.rawText,
+      command:el.dataset.command,
+      codicons:Number(el.dataset.codiconCount)||0,
+      alignment:el.dataset.alignmentName,
+      priority:Number(el.dataset.priority)||0
+    })),
+    items
+  };
+}
+window.extensionStatusBarSnapshot=extensionStatusBarSnapshot;
 const _languageStatusItems={};
 function _languageStatusSeverityClass(value){
   const n=Number(value);
