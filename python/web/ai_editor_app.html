@@ -2787,6 +2787,25 @@ pre.code-block { overflow:visible; }
 .settings-vscode-calm .settings-view-options { gap:3px; }
 .settings-vscode-calm .settings-top-action { height:24px; border-radius:2px; background:transparent; }
 .settings-vscode-calm .settings-top-action.primary { background:color-mix(in srgb,var(--fg-accent) 9%,transparent); }
+.settings-vscode-calm .ext-settings-filter { border-radius:0; border-left:0; border-right:0; background:transparent; padding:6px 0; }
+.settings-vscode-calm .ext-settings-filter button,
+.settings-vscode-calm .ext-settings-filter select { border-radius:2px; }
+.settings-vscode-calm .ext-setting-row { border-radius:0; margin:0; padding:8px 70px 8px 0; border-left:0; border-bottom:1px solid color-mix(in srgb,var(--border) 58%,transparent); background:transparent; }
+.settings-vscode-calm .ext-setting-row.has-row-actions { padding-right:104px; }
+.settings-vscode-calm .ext-setting-row.modified { box-shadow:inset 2px 0 0 var(--fg-accent); padding-left:8px; background:transparent; }
+.settings-vscode-calm .ext-setting-row:hover,
+.settings-vscode-calm .ext-setting-row:focus-within,
+.settings-vscode-calm .ext-setting-row.active { background:color-mix(in srgb,var(--bg-hover) 50%,transparent); }
+.settings-vscode-calm .ext-setting-row:focus-visible { outline:1px solid color-mix(in srgb,var(--border-focus) 55%,transparent); outline-offset:-1px; }
+.settings-vscode-calm .ext-setting-head { align-items:flex-start; margin-bottom:3px; }
+.settings-vscode-calm .ext-setting-title { font-size:13px; }
+.settings-vscode-calm .ext-setting-key-label,
+.settings-vscode-calm .ext-setting-default-value,
+.settings-vscode-calm .ext-setting-indicators,
+.settings-vscode-calm .ext-setting-schema,
+.settings-vscode-calm .ext-setting-note { color:color-mix(in srgb,var(--fg-dim) 88%,var(--fg)); }
+.settings-vscode-calm .ext-setting-row .s-reset { right:4px; }
+.settings-vscode-calm .ext-setting-row.has-row-actions .s-reset { right:98px; }
 .settings-vscode-calm .settings-main .sb-group { margin:18px 0 7px !important; padding:0 !important;
   color:var(--fg); font-size:13px; font-weight:600; line-height:18px; text-transform:none; }
 .settings-vscode-calm .settings-main .sb-group:first-child { margin-top:0 !important; }
@@ -28431,6 +28450,11 @@ function settingsUiSelfCheckSnapshot(){
     hasExtensionVirtualActions:!!($('ext-settings-load-visible')&&$('ext-settings-load-all')),
     hasExtensionQuickFilters:!!document.querySelector('#ext-settings-quick-filters [data-ext-settings-quick-token="@modified"]'),
     hasExtensionQueryHistory:!!$('ext-settings-query-history'),
+    hasExtensionFilterBusyState:typeof extensionSettingSetFilterBusy==='function'&&!!$('ext-settings-container')&&$('ext-settings-container').dataset.extSettingsFilterBusy!==undefined,
+    hasExtensionFilterMetrics:!!($('ext-settings-container')&&$('ext-settings-container').dataset.extSettingsFilterMs!==undefined&&$('ext-settings-container').dataset.extSettingsVisibleRows!==undefined),
+    hasExtensionVisibleRowMetadata:!!document.querySelector('.ext-setting-row[data-ext-setting-visible-index][aria-posinset][aria-setsize]'),
+    hasExtensionBoundaryNavigation:typeof extensionSettingFocusBoundaryRow==='function',
+    hasExtensionCalmRowStyling:!!document.querySelector('.settings-vscode-calm #ext-settings-container,.settings-vscode-calm .ext-setting-row'),
     hasExtensionSortControl:!!$('ext-settings-sort'),
     hasExtensionSectionActions:!!($('ext-settings-collapse-visible')&&$('ext-settings-expand-visible')),
     extensionPerformance:typeof extensionSettingRenderStats==='function'?extensionSettingRenderStats():{},
@@ -28513,6 +28537,9 @@ window.settingsClearReviewFilters=settingsClearReviewFilters;
 window.settingsHasReviewFilter=settingsHasReviewFilter;
 window.settingsAppendExtensionDetailPanel=settingsAppendExtensionDetailPanel;
 window.extensionSettingRenderStats=extensionSettingRenderStats;
+window.extensionSettingSetFilterBusy=extensionSettingSetFilterBusy;
+window.extensionSettingFocusBoundaryRow=extensionSettingFocusBoundaryRow;
+window.extensionSettingAnnotateVisibleRows=extensionSettingAnnotateVisibleRows;
 window.scheduleExtensionSettingsFilter=scheduleExtensionSettingsFilter;
 window.extensionSettingPreheatLazyRows=extensionSettingPreheatLazyRows;
 window.extensionSettingLoadVisiblePendingRows=extensionSettingLoadVisiblePendingRows;
@@ -33018,6 +33045,7 @@ let _extensionSettingPendingFilterState=null;
 let _extensionSettingFilterDomCache=null;
 let _extensionSettingDynamicSuggestionCache=null;
 let _extensionSettingsFilterTimer=0;
+let _extensionSettingsFilterBusy=false;
 const EXTENSION_SETTINGS_INITIAL_SECTION_ROWS=80;
 const EXTENSION_SETTINGS_SECTION_ROW_BATCH=80;
 const EXTENSION_SETTINGS_AUTO_APPEND_THRESHOLD=420;
@@ -33043,8 +33071,35 @@ function extensionSettingYieldToBrowser(){
 function extensionSettingRenderStats(){
   return Object.assign({},_extensionSettingRenderStats||{});
 }
+function extensionSettingSetFilterBusy(busy,label){
+  const isBusy=busy===true;
+  if(typeof _extensionSettingsFilterBusy!=='undefined')_extensionSettingsFilterBusy=isBusy;
+  else if(typeof globalThis!=='undefined')globalThis.__extensionSettingsFilterBusy=isBusy;
+  const container=$('ext-settings-container');
+  const toolbar=container&&container.querySelector?container.querySelector('[data-ext-settings-filter="1"]'):null;
+  const perf=$('ext-settings-perf');
+  if(container){
+    container.dataset.extSettingsFilterBusy=isBusy?'1':'0';
+    container.setAttribute('aria-busy',isBusy?'true':'false');
+  }
+  if(toolbar)toolbar.setAttribute('aria-busy',isBusy?'true':'false');
+  if(perf){
+    perf.dataset.extSettingsBusy=isBusy?'1':'0';
+    if(isBusy){
+      perf.textContent=label||'Filtering...';
+      perf.title='Extension Settings filter update is pending';
+    }else{
+      delete perf.dataset.extSettingsBusy;
+      renderExtensionSettingPerformanceStatus();
+    }
+  }
+}
 function renderExtensionSettingPerformanceStatus(){
   const el=$('ext-settings-perf');if(!el)return;
+  const busy=typeof _extensionSettingsFilterBusy!=='undefined'
+    ? _extensionSettingsFilterBusy
+    : !!(typeof globalThis!=='undefined'&&globalThis.__extensionSettingsFilterBusy===true);
+  if(busy){el.textContent=el.textContent||'Filtering...';return}
   const stats=extensionSettingRenderStats();
   const rows=Number(stats.rows||0),sections=Number(stats.sections||0);
   if(!rows&&!sections){el.textContent='';el.title='';return}
@@ -33263,6 +33318,7 @@ function extensionSettingDynamicSuggestionCache(container){
 function scheduleExtensionSettingsFilter(delay){
   clearTimeout(_extensionSettingsFilterTimer);
   const wait=delay===undefined?60:Number(delay);
+  extensionSettingSetFilterBusy(true,wait>0?'Filtering...':'Updating...');
   if(wait<=0){_extensionSettingsFilterTimer=setTimeout(()=>{_extensionSettingsFilterTimer=0;applyExtensionSettingsFilter()},0);return}
   _extensionSettingsFilterTimer=setTimeout(()=>{_extensionSettingsFilterTimer=0;applyExtensionSettingsFilter()},wait);
 }
@@ -33605,12 +33661,27 @@ function extensionSettingFocusVisibleRow(delta){
   }
   return extensionSettingFocusRow(rows[index],{block:'nearest'});
 }
+function extensionSettingFocusBoundaryRow(boundary){
+  const rows=extensionSettingVisibleRows();
+  if(!rows.length)return false;
+  const index=String(boundary||'first').toLowerCase()==='last'?rows.length-1:0;
+  return extensionSettingFocusRow(rows[index],{block:index?'end':'start'});
+}
 function extensionSettingFocusFirstModifiedSetting(){
   return extensionSettingFocusRow(extensionSettingVisibleRows().find(row=>row.dataset.extSettingModified==='1'),{block:'center'});
 }
 function extensionSettingFocusFirstInvalidSetting(){
   const rows=extensionSettingVisibleRows();
   return extensionSettingFocusRow(rows.find(extensionSettingRowInvalid),{block:'center'});
+}
+function extensionSettingAnnotateVisibleRows(rows,totalRows){
+  const list=Array.isArray(rows)?rows:[];
+  list.forEach((row,index)=>{
+    row.dataset.extSettingVisibleIndex=String(index+1);
+    row.dataset.extSettingVisibleTotal=String(list.length);
+    row.setAttribute('aria-posinset',String(index+1));
+    row.setAttribute('aria-setsize',String(totalRows||list.length));
+  });
 }
 async function extensionSettingResetVisibleModifiedSettings(){
   const rows=extensionSettingVisibleRows().filter(row=>row.dataset.extSettingModified==='1'&&!row.classList.contains('scope-readonly'));
@@ -33809,6 +33880,7 @@ function extensionSettingParseQuery(raw,modifiedChecked,hiddenChecked){
 }
 function applyExtensionSettingsFilter(){
   const container=$('ext-settings-container');if(!container)return;
+  extensionSettingSetFilterBusy(true,'Filtering...');
   const filterStarted=extensionSettingNow();
   const category=(($('ext-settings-category')||{}).value)||'';
   const scopeFilter=(($('ext-settings-scope')||{}).value)||'';
@@ -33889,6 +33961,11 @@ function applyExtensionSettingsFilter(){
         if(extensionSettingRowInvalid(row)){invalidVisible++;sectionInvalid++}
         if(rowTags.includes('hidden')){hiddenVisible++;sectionHidden++}
         if(row.dataset.extSettingModified==='1'&&!row.classList.contains('scope-readonly'))resettableVisible++;
+      }else{
+        delete row.dataset.extSettingVisibleIndex;
+        delete row.dataset.extSettingVisibleTotal;
+        row.removeAttribute('aria-posinset');
+        row.removeAttribute('aria-setsize');
       }
     });
     totalRows+=sectionTotal;
@@ -33903,13 +33980,23 @@ function applyExtensionSettingsFilter(){
   if(divider)divider.style.display=visibleSections?'':'none';
   const toolbar=container.querySelector('[data-ext-settings-filter="1"]');
   if(toolbar)toolbar.style.display=totalRows?'':'none';
+  extensionSettingAnnotateVisibleRows(visibleRowList,totalRows);
+  container.dataset.extSettingsVisibleRows=String(visibleRows);
+  container.dataset.extSettingsTotalRows=String(totalRows);
+  container.dataset.extSettingsVisibleSections=String(visibleSections);
+  container.dataset.extSettingsModifiedVisible=String(modifiedVisible);
+  container.dataset.extSettingsInvalidVisible=String(invalidVisible);
+  container.dataset.extSettingsFilterActive=activeFilter?'1':'0';
   if(activeFilter)extensionSettingRememberQuery(extensionSettingSearchTokenValue());
   renderExtensionSettingFilterState(visibleRows,totalRows,{visibleRows:visibleRowList,modifiedVisible,invalidVisible,resettableVisible,hiddenVisible,visibleSections});
   renderExtensionSettingSuggestions();
   extensionSettingWriteFilterStateDeferred(extensionSettingCaptureFilterState());
   updateSettingsNavCounts();
   renderSettingsReviewBar();
-  extensionSettingSetRenderStats({filterMs:extensionSettingNow()-filterStarted,filteredAt:Date.now()});
+  const filterMs=extensionSettingNow()-filterStarted;
+  container.dataset.extSettingsFilterMs=String(Math.max(0,Math.round(filterMs)));
+  extensionSettingSetFilterBusy(false);
+  extensionSettingSetRenderStats({filterMs,filteredAt:Date.now()});
 }
 function renderExtensionLanguageDefaults(languageDefaults,container,categorySelect,seenCategories){
   (Array.isArray(languageDefaults)?languageDefaults:[]).forEach(item=>{
@@ -34720,6 +34807,9 @@ async function renderExtensionSettings(){
       if(ev.key==='Enter'&&!ev.altKey&&!ev.ctrlKey&&!ev.metaKey){
         ev.preventDefault();
         extensionSettingFocusVisibleRow(ev.shiftKey?-1:1);
+      }else if(ev.altKey&&(ev.key==='Home'||ev.key==='End')&&!ev.ctrlKey&&!ev.metaKey){
+        ev.preventDefault();
+        extensionSettingFocusBoundaryRow(ev.key==='End'?'last':'first');
       }
     });
   }

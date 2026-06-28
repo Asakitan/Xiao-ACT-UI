@@ -10539,8 +10539,13 @@ console.log("frontend word separator behavior ok");
             and "function extensionSettingRowInvalid(row)" in html
             and "function extensionSettingFocusRow(row,options)" in html
             and "function extensionSettingFocusVisibleRow(delta)" in html
+            and "function extensionSettingFocusBoundaryRow(boundary)" in html
             and "function extensionSettingFocusFirstModifiedSetting()" in html
             and "function extensionSettingFocusFirstInvalidSetting()" in html
+            and "function extensionSettingAnnotateVisibleRows(rows,totalRows)" in html
+            and "dataset.extSettingVisibleIndex" in html
+            and "aria-posinset" in html
+            and "aria-setsize" in html
             and "async function extensionSettingResetVisibleModifiedSettings()" in html
             and "function extensionSettingResultSummary(visibleRows,totalRows,stats)" in html
             and "function renderExtensionSettingFilterState(visibleRows,totalRows,stats)" in html
@@ -10564,6 +10569,7 @@ console.log("frontend word separator behavior ok");
             and "window.scheduleFilterSettings=scheduleFilterSettings;" in html
             and "settingsSearch.dataset.extSettingsNavigation" in html
             and "extensionSettingFocusVisibleRow(ev.shiftKey?-1:1)" in html
+            and "extensionSettingFocusBoundaryRow(ev.key==='End'?'last':'first')" in html
             and "function extensionSettingTargetName(target)" in html
             and "function createExtensionSettingTargetSelect(target)" in html
             and "function extensionSettingRowTarget(row)" in html
@@ -10607,6 +10613,10 @@ console.log("frontend word separator behavior ok");
             and "function extensionSettingInsightToken(kind,value)" in html
             and "function extensionSettingDynamicSuggestionCache(container)" in html
             and "function extensionSettingRenderStats()" in html
+            and "function extensionSettingSetFilterBusy(busy,label)" in html
+            and "dataset.extSettingsFilterBusy" in html
+            and "dataset.extSettingsFilterMs" in html
+            and "dataset.extSettingsVisibleRows" in html
             and "function scheduleExtensionSettingsFilter(delay)" in html
             and "function extensionSettingSchemaCache(schema)" in html
             and "function extensionSettingCachedSchemaValue(schema,key,compute)" in html
@@ -10648,6 +10658,9 @@ console.log("frontend word separator behavior ok");
             and "await extensionSettingYieldToBrowser();" in html
             and "extensionSettingPreheatLazyRows(container,18);" in html
             and "window.extensionSettingRenderStats=extensionSettingRenderStats;" in html
+            and "window.extensionSettingSetFilterBusy=extensionSettingSetFilterBusy;" in html
+            and "window.extensionSettingFocusBoundaryRow=extensionSettingFocusBoundaryRow;" in html
+            and "window.extensionSettingAnnotateVisibleRows=extensionSettingAnnotateVisibleRows;" in html
             and "window.scheduleExtensionSettingsFilter=scheduleExtensionSettingsFilter;" in html
             and "window.extensionSettingPreheatLazyRows=extensionSettingPreheatLazyRows;" in html
             and "window.extensionSettingLoadVisiblePendingRows=extensionSettingLoadVisiblePendingRows;" in html
@@ -10659,6 +10672,9 @@ console.log("frontend word separator behavior ok");
             and "window.appendExtensionSettingSchemaDetails=appendExtensionSettingSchemaDetails;" in html
             and "window.appendExtensionSettingEnumChoices=appendExtensionSettingEnumChoices;" in html
             and "window.renderExtensionSettingInsight=renderExtensionSettingInsight;" in html
+            and ".settings-vscode-calm .ext-settings-filter" in html
+            and ".settings-vscode-calm .ext-setting-row" in html
+            and ".settings-vscode-calm .ext-setting-row.active" in html
             and "ext-setting-structured-assist" in html
             and "ext-setting-structured-status" in html
             and "ext-setting-structured-editor" in html
