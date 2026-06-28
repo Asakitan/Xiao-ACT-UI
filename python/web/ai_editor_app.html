@@ -2351,6 +2351,50 @@ pre.code-block { overflow:visible; }
   overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .settings-search-hit > .settings-match-summary { display:block; }
 .settings-search-hit { box-shadow:inset 2px 0 0 color-mix(in srgb,var(--fg-accent) 55%,transparent); }
+.settings-control-frame { display:grid; grid-template-columns:minmax(0,1fr) auto; align-items:center; gap:8px;
+  margin:6px 0 3px; padding:6px 7px; border:1px solid color-mix(in srgb,var(--border) 78%,transparent);
+  border-radius:5px; background:color-mix(in srgb,var(--bg-input) 72%,transparent);
+  transition:border-color .12s ease, background .12s ease, box-shadow .12s ease; }
+.settings-control-frame:focus-within { border-color:var(--border-focus);
+  box-shadow:0 0 0 1px color-mix(in srgb,var(--border-focus) 20%,transparent);
+  background:color-mix(in srgb,var(--bg-input) 86%,var(--bg3)); }
+.settings-control-frame.modified { border-color:color-mix(in srgb,var(--fg-accent) 46%,var(--border));
+  background:color-mix(in srgb,var(--fg-accent) 6%,var(--bg-input)); }
+.settings-control-frame.override { border-color:color-mix(in srgb,var(--fg-warning) 42%,var(--border)); }
+.settings-control-frame.default { border-color:color-mix(in srgb,var(--fg-success) 32%,var(--border)); }
+.settings-control-frame.invalid { border-color:color-mix(in srgb,var(--fg-error) 62%,var(--border));
+  background:color-mix(in srgb,var(--fg-error) 7%,var(--bg-input)); }
+.settings-control-frame input,.settings-control-frame select,.settings-control-frame textarea {
+  margin:0; border-color:transparent; background:transparent; box-shadow:none; min-width:0; }
+.settings-control-frame input:focus,.settings-control-frame select:focus,.settings-control-frame textarea:focus {
+  border-color:transparent; box-shadow:none; }
+.settings-control-frame textarea { min-height:92px; }
+.settings-control-frame[data-control-kind="textarea"],
+.settings-control-frame[data-control-kind="json"] { grid-template-columns:minmax(0,1fr); align-items:stretch; }
+.settings-control-frame[data-control-kind="textarea"] .settings-control-status,
+.settings-control-frame[data-control-kind="json"] .settings-control-status { justify-self:start; }
+.settings-control-status { justify-self:end; max-width:220px; min-height:18px; display:inline-flex; align-items:center;
+  padding:0 6px; border:1px solid var(--border); border-radius:999px; background:var(--bg3);
+  color:var(--fg-dim); font:10px var(--mono); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.settings-control-frame.modified .settings-control-status { color:var(--fg-accent); border-color:color-mix(in srgb,var(--fg-accent) 48%,var(--border)); }
+.settings-control-frame.override .settings-control-status { color:var(--fg-warning); border-color:color-mix(in srgb,var(--fg-warning) 48%,var(--border)); }
+.settings-control-frame.default .settings-control-status { color:var(--fg-success); border-color:color-mix(in srgb,var(--fg-success) 42%,var(--border)); }
+.settings-control-frame.invalid .settings-control-status { color:var(--fg-error); border-color:color-mix(in srgb,var(--fg-error) 55%,var(--border)); }
+.settings-field.builtin-setting label.settings-check.settings-switch-row { display:flex; align-items:center; gap:9px;
+  min-height:28px; margin:0; cursor:pointer; color:var(--fg); }
+.settings-field.builtin-setting label.settings-check.settings-switch-row input[type="checkbox"] {
+  appearance:none; width:34px; height:18px; flex:0 0 auto; margin:0; border:1px solid var(--border);
+  border-radius:999px; background:var(--bg3); position:relative; transition:background .12s ease,border-color .12s ease; }
+.settings-field.builtin-setting label.settings-check.settings-switch-row input[type="checkbox"]::after {
+  content:''; position:absolute; width:12px; height:12px; left:2px; top:2px; border-radius:50%;
+  background:var(--fg-dim); transition:transform .12s ease, background .12s ease; }
+.settings-field.builtin-setting label.settings-check.settings-switch-row input[type="checkbox"]:checked {
+  border-color:color-mix(in srgb,var(--fg-accent) 70%,var(--border));
+  background:color-mix(in srgb,var(--fg-accent) 32%,var(--bg3)); }
+.settings-field.builtin-setting label.settings-check.settings-switch-row input[type="checkbox"]:checked::after {
+  transform:translateX(16px); background:var(--fg); }
+.settings-field.builtin-setting label.settings-check.settings-switch-row input[type="checkbox"]:focus-visible {
+  outline:1px solid var(--border-focus); outline-offset:2px; }
 .settings-built-foot { display:none; flex-wrap:wrap; gap:5px; margin-top:5px; color:var(--fg-dim); font:10px var(--mono); }
 .settings-field:hover .settings-built-foot,.settings-field:focus-within .settings-built-foot,.settings-field.settings-current .settings-built-foot {
   display:flex;
@@ -4469,6 +4513,67 @@ function settingsFieldWrapper(inputId){
   parent.insertBefore(wrap,target);wrap.appendChild(target);
   return wrap;
 }
+function settingsControlKind(el,meta){
+  if(!el)return 'input';
+  if(meta&&meta.json)return 'json';
+  if(el.tagName==='TEXTAREA')return 'textarea';
+  if(el.tagName==='SELECT')return 'select';
+  if(el.type==='checkbox')return 'checkbox';
+  if(el.type==='number')return 'number';
+  if(el.type==='password')return 'secret';
+  return 'input';
+}
+function settingsControlTarget(el){
+  if(!el)return null;
+  return el.closest('label.settings-check')||el;
+}
+function settingsDecorateCheckboxControl(el){
+  if(!el||el.type!=='checkbox')return;
+  const label=el.closest('label.settings-check');
+  if(label)label.classList.add('settings-switch-row');
+}
+function settingsEnsureControlFrame(wrap,el,meta,inputId){
+  if(!wrap||!el)return null;
+  const existing=el.closest('.settings-control-frame');
+  if(existing)return existing;
+  const target=settingsControlTarget(el);
+  const parent=target&&target.parentElement;
+  if(!target||!parent)return null;
+  settingsDecorateCheckboxControl(el);
+  const frame=document.createElement('div');
+  frame.className='settings-control-frame';
+  frame.dataset.settingControlFrame='1';
+  frame.dataset.controlKind=settingsControlKind(el,meta);
+  frame.dataset.settingInputId=inputId||el.id||'';
+  parent.insertBefore(frame,target);
+  frame.appendChild(target);
+  const status=document.createElement('span');
+  status.className='settings-control-status';
+  status.dataset.settingControlStatus='1';
+  status.textContent='Inherited';
+  frame.appendChild(status);
+  return frame;
+}
+function settingsUpdateControlFrame(wrap,meta,value){
+  if(!wrap||!meta)return;
+  const frame=wrap.querySelector('[data-setting-control-frame="1"]');
+  if(!frame)return;
+  const state=settingValueState(meta,value,currentSettingsTarget);
+  const scoped=settingHasTargetValue(meta,currentSettingsTarget);
+  const invalid=wrap.classList.contains('invalid')||!!wrap.querySelector('[aria-invalid="true"]');
+  frame.classList.toggle('modified',state.state==='edited');
+  frame.classList.toggle('override',state.state==='override'||scoped);
+  frame.classList.toggle('default',state.state==='default');
+  frame.classList.toggle('invalid',invalid);
+  frame.dataset.valueState=state.state;
+  frame.dataset.settingTarget=settingsBackendTargetName(currentSettingsTarget);
+  const status=frame.querySelector('[data-setting-control-status="1"]');
+  if(status){
+    const targetLabel=settingsTargetDisplayName(currentSettingsTarget);
+    status.textContent=invalid?'Invalid':state.label+' · '+targetLabel;
+    status.title=(meta.key||meta.path||'Setting')+' - '+status.textContent;
+  }
+}
 function wrapSettingsField(inputId){
   const el=$(inputId),meta=SETTING_INPUT_META[inputId];if(!el||!meta)return;
   if(el.hidden||el.type==='hidden'||el.style.display==='none')return;
@@ -4514,7 +4619,9 @@ function wrapSettingsField(inputId){
     const path=document.createElement('span');path.textContent='Path: '+(meta.path||inputId);foot.appendChild(path);
     wrap.appendChild(foot);
   }
+  settingsEnsureControlFrame(wrap,el,meta,inputId);
   settingsUpdateBuiltInValueSummary(wrap,meta,settingsInputValue(el,meta));
+  settingsUpdateControlFrame(wrap,meta,settingsInputValue(el,meta));
 }
 function markSettingsModified(){
   let modifiedCount=0;
@@ -4525,6 +4632,7 @@ function markSettingsModified(){
     const meta=SETTING_INPUT_META[inputId];
     const cur=settingsInputValue(el,meta);
     settingsUpdateBuiltInValueSummary(wrap,meta,cur);
+    settingsUpdateControlFrame(wrap,meta,cur);
     const modified=settingIsTargetModified(meta,cur,currentSettingsTarget);
     wrap.classList.toggle('modified',modified);
     wrap.dataset.settingModified=modified?'1':'0';

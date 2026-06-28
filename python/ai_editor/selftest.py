@@ -9594,6 +9594,17 @@ console.log("frontend word separator behavior ok");
              and "addMenuItem('Copy JSON','Copy JSON setting entry'" in html
              and "settingsAddRowActions(wrap,{key:meta.key||meta.path||inputId,searchable:false,meta,inputId,clearTarget:" in html
              and "settingsAddRowActions(row,{key:key,searchable:true});" in html
+             and ".settings-control-frame" in html
+             and ".settings-control-status" in html
+             and ".settings-switch-row" in html
+             and "function settingsControlKind(el,meta)" in html
+             and "function settingsControlTarget(el)" in html
+             and "function settingsDecorateCheckboxControl(el)" in html
+             and "function settingsEnsureControlFrame(wrap,el,meta,inputId)" in html
+             and "function settingsUpdateControlFrame(wrap,meta,value)" in html
+             and "frame.dataset.controlKind=settingsControlKind(el,meta)" in html
+             and "settingsUpdateControlFrame(wrap,meta,settingsInputValue(el,meta));" in html
+             and "status.textContent=invalid?'Invalid':state.label+' · '+targetLabel;" in html
               and "filters={modified:false,overrides:false,common:false,error:false,json:false,extensions:false,scopes:[],ids:[],tags:[],features:[],extensionIds:[],languages:[]}" in html
               and "Setting: '+raw.slice(3)" in html
               and "@([A-Za-z][A-Za-z0-9_-]*)" in html
