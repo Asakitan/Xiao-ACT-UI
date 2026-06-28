@@ -2412,10 +2412,24 @@ class AIEditorAPI:
             self._capture_window_geometry(prefer_live=True)
         self._ready.set()
 
-    def mark_frontend_ready(self, phase: str = "ready") -> Dict[str, Any]:
+    def update_frontend_health(
+            self,
+            phase: str = "heartbeat",
+            health: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+        """Record a lightweight HTML/JS interaction health heartbeat."""
+        phase_text = str(phase or "heartbeat")
+        health_payload = health if isinstance(health, dict) else {}
+        _update_launch_state_frontend_health(phase_text, health_payload)
+        return {"ok": True, "phase": phase_text, "pid": os.getpid()}
+
+    def mark_frontend_ready(
+            self,
+            phase: str = "ready",
+            health: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         """Record that the HTML/JS layer booted and released transient blockers."""
         phase_text = str(phase or "ready")
-        _mark_launch_state_frontend_ready(phase_text)
+        health_payload = health if isinstance(health, dict) else {}
+        _mark_launch_state_frontend_ready(phase_text, health_payload)
         return {"ok": True, "phase": phase_text, "pid": os.getpid()}
 
     def _capture_window_geometry(self, prefer_live: bool = False) -> Dict[str, int]:
@@ -18144,6 +18158,28 @@ def _read_launch_state() -> Dict[str, Any]:
         return {}
 
 
+def _frontend_health_summary(health: Any) -> Dict[str, Any]:
+    if not isinstance(health, dict):
+        return {}
+    allowed = {
+        "clickable", "forcedInteractive", "bodyWindowClosing",
+        "dragOverlayActive", "providerFramesClickable", "apiReady",
+        "pywebviewReady", "bootMode", "visibilityState", "documentReadyState",
+        "topElement", "activeElement", "lastClearedReason",
+        "lastInteractiveReason", "interactionClearCount",
+    }
+    summary: Dict[str, Any] = {}
+    for key in allowed:
+        if key not in health:
+            continue
+        value = health.get(key)
+        if isinstance(value, (bool, int, float)) or value is None:
+            summary[key] = value
+        else:
+            summary[key] = str(value)[:240]
+    return summary
+
+
 def _write_launch_state(pid: int) -> None:
     try:
         now = time.time()
@@ -18161,25 +18197,68 @@ def _write_launch_state(pid: int) -> None:
                 "frontend_ready_pid": 0,
                 "frontend_ready_phase": "",
                 "frontend_ready_until": 0.0,
+                "frontend_health_at": 0.0,
+                "frontend_health_phase": "",
+                "frontend_clickable": None,
+                "frontend_interactive": None,
+                "frontend_health": {},
             }, fh)
     except Exception:
         pass
 
 
-def _mark_launch_state_frontend_ready(phase: str = "ready") -> None:
+def _update_launch_state_frontend_health(
+        phase: str = "heartbeat",
+        health: Optional[Dict[str, Any]] = None) -> None:
+    try:
+        state = _read_launch_state()
+        now = time.time()
+        state["schema"] = _LAUNCH_STATE_SCHEMA
+        state["pid"] = int(state.get("pid") or os.getpid())
+        state["started_at"] = float(state.get("started_at") or now)
+        state["updated_at"] = now
+        state["cwd"] = state.get("cwd") or os.getcwd()
+        state["title"] = state.get("title") or _AI_EDITOR_WINDOW_TITLE
+        health_summary = _frontend_health_summary(health)
+        state["frontend_health_at"] = now
+        state["frontend_health_phase"] = str(phase or "heartbeat")
+        if "clickable" in health_summary:
+            state["frontend_clickable"] = bool(health_summary.get("clickable"))
+        if "forcedInteractive" in health_summary:
+            state["frontend_interactive"] = bool(health_summary.get("forcedInteractive"))
+        state["frontend_health"] = health_summary
+        os.makedirs(os.path.dirname(_LAUNCH_STATE_FILE), exist_ok=True)
+        with open(_LAUNCH_STATE_FILE, "w", encoding="utf-8") as fh:
+            json.dump(state, fh)
+    except Exception:
+        pass
+
+
+def _mark_launch_state_frontend_ready(
+        phase: str = "ready",
+        health: Optional[Dict[str, Any]] = None) -> None:
     try:
         state = _read_launch_state()
         now = time.time()
         state["schema"] = _LAUNCH_STATE_SCHEMA
         state["pid"] = int(state.get("pid") or os.getpid())
         state["frontend_ready_pid"] = os.getpid()
-        state["started_at"] = float(state.get("started_at") or time.time())
+        state["started_at"] = float(state.get("started_at") or now)
         state["updated_at"] = now
         state["cwd"] = state.get("cwd") or os.getcwd()
         state["title"] = state.get("title") or _AI_EDITOR_WINDOW_TITLE
         state["frontend_ready_at"] = now
         state["frontend_ready_phase"] = str(phase or "ready")
         state["frontend_ready_until"] = now + _LAUNCH_FRONTEND_READY_STALE_SECONDS
+        health_summary = _frontend_health_summary(health)
+        if health_summary:
+            state["frontend_health_at"] = now
+            state["frontend_health_phase"] = str(phase or "ready")
+            if "clickable" in health_summary:
+                state["frontend_clickable"] = bool(health_summary.get("clickable"))
+            if "forcedInteractive" in health_summary:
+                state["frontend_interactive"] = bool(health_summary.get("forcedInteractive"))
+            state["frontend_health"] = health_summary
         os.makedirs(os.path.dirname(_LAUNCH_STATE_FILE), exist_ok=True)
         with open(_LAUNCH_STATE_FILE, "w", encoding="utf-8") as fh:
             json.dump(state, fh)
@@ -18230,8 +18309,13 @@ def _launch_state_summary(
         ready_at = float(state.get("frontend_ready_at") or 0.0)
     except Exception:
         ready_at = 0.0
+    try:
+        health_at = float(state.get("frontend_health_at") or 0.0)
+    except Exception:
+        health_at = 0.0
     age_seconds = max(0.0, now_value - started_at) if started_at else None
     ready_age_seconds = max(0.0, now_value - ready_at) if ready_at else None
+    health_age_seconds = max(0.0, now_value - health_at) if health_at else None
     pid_matches = bool(not state_pid or not wanted_pid or state_pid == wanted_pid)
     frontend_ready = bool(pid_matches and ready_at > 0.0)
     frontend_ready_fresh = bool(
@@ -18259,6 +18343,15 @@ def _launch_state_summary(
         "frontendReadyAgeSeconds": ready_age_seconds,
         "frontendReadyFresh": frontend_ready_fresh,
         "frontendReadyPhase": str(state.get("frontend_ready_phase") or ""),
+        "frontendHealthAt": health_at,
+        "frontendHealthAgeSeconds": health_age_seconds,
+        "frontendHealthFresh": bool(
+            health_age_seconds is not None
+            and health_age_seconds <= _LAUNCH_FRONTEND_READY_GRACE_SECONDS),
+        "frontendHealthPhase": str(state.get("frontend_health_phase") or ""),
+        "frontendClickable": state.get("frontend_clickable"),
+        "frontendInteractive": state.get("frontend_interactive"),
+        "frontendHealth": state.get("frontend_health") if isinstance(state.get("frontend_health"), dict) else {},
         "updatedAt": updated_at,
         "cwd": str(state.get("cwd") or "") if isinstance(state, dict) else "",
         "title": str(state.get("title") or "") if isinstance(state, dict) else "",
@@ -18286,9 +18379,17 @@ def _existing_window_needs_frontend_recovery(hwnd: int, user32: Any = None) -> b
     pid = int(summary.get("pid") or 0)
     if not state_pid or not pid or not summary.get("pidMatches"):
         return False
-    if summary.get("frontendReady"):
-        return False
     age = summary.get("ageSeconds")
+    if summary.get("frontendReady"):
+        if (summary.get("frontendHealthFresh")
+                and summary.get("frontendClickable") is False
+                and (age is None or float(age) > _LAUNCH_FRONTEND_READY_GRACE_SECONDS)):
+            _append_ai_editor_log(
+                "existing window frontend reports not clickable "
+                f"hwnd={int(hwnd or 0)} pid={pid} "
+                f"health_phase={summary.get('frontendHealthPhase')!r}; allowing recovery relaunch")
+            return True
+        return False
     if age is not None and float(age) <= _LAUNCH_FRONTEND_READY_GRACE_SECONDS:
         return False
     _append_ai_editor_log(

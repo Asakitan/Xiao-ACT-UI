@@ -43516,14 +43516,19 @@ $('chat-messages').addEventListener('contextmenu',function(e){
 let attachments=[];
 
 function clearTransientInteractionBlockers(reason){
+  const reasonText=String(reason||'pointer');
   const overlay=$('drag-overlay');
   if(overlay&&overlay.classList.contains('active')){
     overlay.classList.remove('active');
-    overlay.dataset.lastClearedReason=String(reason||'pointer');
+    overlay.dataset.lastClearedReason=reasonText;
   }
   if(document.body.classList.contains('window-closing')&&['startup','focus','pointer','pointermove','wheel','visibility','pywebviewready','dragend','drop','escape','close-fallback','watchdog'].includes(String(reason||''))){
     document.body.classList.remove('window-closing');
   }
+  const count=Number(document.body.dataset.interactionClearCount||0)+1;
+  document.body.dataset.interactionClearCount=String(count);
+  document.body.dataset.aiEditorLastInteractiveReason=reasonText;
+  document.body.dataset.aiEditorLastInteractiveAt=String(Date.now());
 }
 function forceInteractiveUi(reason){
   clearTransientInteractionBlockers(reason||'startup');
@@ -43541,9 +43546,12 @@ function aiEditorInteractionHealthSnapshot(){
   const snapshot={
     bodyWindowClosing:document.body.classList.contains('window-closing'),
     bodyPointerEvents:String(bodyStyle.pointerEvents||''),
+    htmlPointerEvents:String(getComputedStyle(document.documentElement).pointerEvents||''),
     dragOverlayActive:!!(overlay&&overlay.classList.contains('active')),
     dragOverlayPointerEvents:overlayStyle?String(overlayStyle.pointerEvents||''):'',
     bootMode:String(document.body.dataset.aiEditorBootMode||''),
+    visibilityState:String(document.visibilityState||''),
+    documentReadyState:String(document.readyState||''),
     pywebviewReady:!!window.pywebview,
     apiReady:!!api(),
     topElement:topEl?String((topEl.id?('#'+topEl.id):topEl.tagName)||'').toLowerCase():'',
@@ -43552,6 +43560,12 @@ function aiEditorInteractionHealthSnapshot(){
     forcedInteractive:document.body.dataset.aiEditorInteractive==='1',
     activeElement:String((document.activeElement&&(document.activeElement.id||document.activeElement.tagName))||'').toLowerCase(),
     lastClearedReason:overlay?String(overlay.dataset.lastClearedReason||''):'',
+    lastInteractiveReason:String(document.body.dataset.aiEditorLastInteractiveReason||''),
+    lastInteractiveAt:Number(document.body.dataset.aiEditorLastInteractiveAt||0),
+    interactionClearCount:Number(document.body.dataset.interactionClearCount||0),
+    watchdogStamp:String(document.body.dataset.interactionBlockerWatchdog||''),
+    viewportWidth:Number(window.innerWidth||0),
+    viewportHeight:Number(window.innerHeight||0),
   };
   snapshot.clickable=!snapshot.bodyWindowClosing&&!snapshot.dragOverlayActive&&snapshot.bodyPointerEvents!=='none'&&snapshot.providerFramesClickable;
   return snapshot;
@@ -43564,6 +43578,7 @@ function scheduleTransientInteractionBlockerWatchdog(reason){
     const overlay=$('drag-overlay');
     if((overlay&&overlay.classList.contains('active'))||document.body.classList.contains('window-closing')){
       forceInteractiveUi(reason||'watchdog');
+      try{notifyAiEditorFrontendHealth('watchdog-recovery')}catch(_e){}
     }
   },900);
 }
@@ -46155,15 +46170,35 @@ window.aiEditorInteractionHealthSnapshot=aiEditorInteractionHealthSnapshot;
 
 let _aiEditorBootStarted=false;
 let _aiEditorFrontendReadyNotified=false;
+let _aiEditorFrontendHeartbeatTimer=0;
+let _aiEditorLastHealthSentAt=0;
+function notifyAiEditorFrontendHealth(phase,options){
+  const opts=options||{};
+  const now=Date.now();
+  if(!opts.force&&now-_aiEditorLastHealthSentAt<1200)return false;
+  const bridge=api();
+  if(!(bridge&&typeof bridge.update_frontend_health==='function'))return false;
+  _aiEditorLastHealthSentAt=now;
+  try{
+    const result=bridge.update_frontend_health(String(phase||'heartbeat'),aiEditorInteractionHealthSnapshot());
+    if(result&&typeof result.catch==='function')result.catch(()=>{_aiEditorLastHealthSentAt=0});
+    return true;
+  }catch(_e){_aiEditorLastHealthSentAt=0;return false}
+}
 function notifyAiEditorFrontendReady(phase){
   if(_aiEditorFrontendReadyNotified)return;
   const bridge=api();
   if(!(bridge&&typeof bridge.mark_frontend_ready==='function'))return;
   _aiEditorFrontendReadyNotified=true;
   try{
-    const result=bridge.mark_frontend_ready(String(phase||'ready'));
+    const result=bridge.mark_frontend_ready(String(phase||'ready'),aiEditorInteractionHealthSnapshot());
     if(result&&typeof result.catch==='function')result.catch(()=>{_aiEditorFrontendReadyNotified=false});
   }catch(_e){_aiEditorFrontendReadyNotified=false}
+}
+function startAiEditorFrontendHeartbeat(reason){
+  notifyAiEditorFrontendHealth(reason||'heartbeat-start',{force:true});
+  if(_aiEditorFrontendHeartbeatTimer)return;
+  _aiEditorFrontendHeartbeatTimer=setInterval(()=>notifyAiEditorFrontendHealth('heartbeat'),8000);
 }
 function bootAiEditorUi(reason){
   if(_aiEditorBootStarted)return;
@@ -46171,14 +46206,22 @@ function bootAiEditorUi(reason){
   try{document.body.dataset.aiEditorBootMode=reason||'pywebview'}catch(_e){}
   forceInteractiveUi(reason||'startup');
   scheduleTransientInteractionBlockerWatchdog('watchdog');
+  startAiEditorFrontendHeartbeat(reason||'startup');
   init().then(()=>{
     forceInteractiveUi('ready');
     notifyAiEditorFrontendReady(reason||'ready');
+    notifyAiEditorFrontendHealth('ready',{force:true});
   }).catch(e=>{
     console.error('[init]',e);
+    forceInteractiveUi('init-error');
+    notifyAiEditorFrontendHealth('init-error',{force:true});
     setStatus('AI Editor startup failed: '+(e&&e.message?e.message:e));
   });
 }
+window.addEventListener('focus',()=>notifyAiEditorFrontendHealth('focus'));
+window.addEventListener('pageshow',()=>notifyAiEditorFrontendHealth('pageshow',{force:true}));
+window.addEventListener('visibilitychange',()=>{if(document.visibilityState==='visible')notifyAiEditorFrontendHealth('visibility',{force:true})});
+window.addEventListener('pointerdown',()=>notifyAiEditorFrontendHealth('pointer'),true);
 if(window.pywebview){
   bootAiEditorUi('pywebview');
 }else{

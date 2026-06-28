@@ -1011,6 +1011,7 @@ def test_app_settings_parity() -> None:
         _LAUNCH_FRONTEND_READY_STALE_SECONDS,
         _recent_child_launch_alive,
         _existing_window_needs_frontend_recovery,
+        _frontend_health_summary,
         _launch_state_frontend_ready,
         _launch_state_summary,
         launch_state_snapshot,
@@ -1031,6 +1032,7 @@ def test_app_settings_parity() -> None:
         "cancel", "new_chat", "export_chat", "execute_tool",
         "list_history", "get_instructions", "save_user_instructions",
         "save_instruction_file", "delete_instruction_file", "list_agents",
+        "update_frontend_health",
         "list_workflows", "get_active_agent", "set_active_agent",
         "clear_active_agent", "delete_agent", "delete_workflow",
         "run_workflow", "get_scopes", "save_agent", "save_workflow",
@@ -2273,13 +2275,47 @@ def test_app_settings_parity() -> None:
         "cwd": "E:\\VC\\SAO-UI\\sao_auto",
         "title": "SAO AI Editor",
     }
+    ready_not_clickable_state = {
+        "schema": 2,
+        "pid": 424242,
+        "started_at": time.time() - (_LAUNCH_FRONTEND_READY_GRACE_SECONDS + 8),
+        "updated_at": time.time() - 1,
+        "frontend_ready_at": time.time() - 1,
+        "frontend_ready_phase": "ready",
+        "frontend_health_at": time.time() - 1,
+        "frontend_health_phase": "watchdog-recovery",
+        "frontend_clickable": False,
+        "frontend_interactive": True,
+        "frontend_health": {
+            "clickable": False,
+            "forcedInteractive": True,
+            "dragOverlayActive": True,
+            "bootMode": "pywebview",
+        },
+    }
     stale_summary = _launch_state_summary(stale_ready_state, pid=424242, hwnd=123)
     malformed_time_summary = _launch_state_summary(
         {**stale_ready_state, "updated_at": "not-a-number"},
         pid=424242,
         hwnd=123)
+    health_summary = _frontend_health_summary({
+        "clickable": False,
+        "forcedInteractive": True,
+        "dragOverlayActive": True,
+        "providerFramesClickable": False,
+        "bootMode": "pywebview",
+        "huge": "x" * 500,
+    })
     with patch("ai_editor.app._read_launch_state", return_value=ready_window_state):
         snapshot = launch_state_snapshot(pid=424242, hwnd=123)
+    with patch("ai_editor.app._update_launch_state_frontend_health") as health_mock:
+        health_result = api.update_frontend_health("selftest", {
+            "clickable": False,
+            "forcedInteractive": True,
+            "bootMode": "pywebview",
+        })
+    with patch("ai_editor.app._mark_launch_state_frontend_ready") as ready_mock:
+        ready_result = api.mark_frontend_ready("ready", {"clickable": True})
     _check("AI Editor launch state summary tracks frontend readiness freshness",
            stale_summary.get("statePid") == 424242
            and stale_summary.get("pidMatches") is True
@@ -2288,6 +2324,14 @@ def test_app_settings_parity() -> None:
            and stale_summary.get("frontendReadyFresh") is False
            and stale_summary.get("frontendReadyPhase") == "stale-test"
            and malformed_time_summary.get("updatedAt") == 0.0
+           and health_summary.get("clickable") is False
+           and health_summary.get("forcedInteractive") is True
+           and len(str(health_summary.get("huge") or "")) == 0
+           and health_result.get("ok") is True
+           and health_mock.call_args[0][0] == "selftest"
+           and health_mock.call_args[0][1].get("clickable") is False
+           and ready_result.get("ok") is True
+           and ready_mock.call_args[0][1].get("clickable") is True
            and _launch_state_frontend_ready(
                stale_ready_state, 424242,
                max_ready_age=_LAUNCH_FRONTEND_READY_STALE_SECONDS) is False
@@ -2306,6 +2350,10 @@ def test_app_settings_parity() -> None:
             patch("ai_editor.app._window_process_id", return_value=424242):
         ready_needs_recovery = _existing_window_needs_frontend_recovery(123)
     with patch("ai_editor.app._read_launch_state",
+               return_value=ready_not_clickable_state), \
+            patch("ai_editor.app._window_process_id", return_value=424242):
+        not_clickable_needs_recovery = _existing_window_needs_frontend_recovery(123)
+    with patch("ai_editor.app._read_launch_state",
                return_value=stale_window_unready_state), \
             patch("ai_editor.app._window_process_id", return_value=111111):
         mismatch_needs_recovery = _existing_window_needs_frontend_recovery(123)
@@ -2313,6 +2361,7 @@ def test_app_settings_parity() -> None:
            needs_recovery is True
            and young_needs_recovery is False
            and ready_needs_recovery is False
+           and not_clickable_needs_recovery is True
            and mismatch_needs_recovery is False)
     with patch("ai_editor.app._running_child_process", None), \
             patch("ai_editor.app._process_alive", return_value=True), \
@@ -2388,6 +2437,11 @@ def test_app_settings_parity() -> None:
             and "ready={summary.get('frontendReady')}" in app_src
             and "has a window but no frontend ready signal" in app_src
             and "_LAUNCH_STATE_FILE" in app_src
+            and "def _frontend_health_summary(" in app_src
+            and "def _update_launch_state_frontend_health(" in app_src
+            and "\"frontend_health_at\"" in app_src
+            and "\"frontend_clickable\"" in app_src
+            and "\"frontend_interactive\"" in app_src
             and "def _launch_state_summary(" in app_src
             and "def launch_state_snapshot(" in app_src
             and "def _mark_launch_state_frontend_ready" in app_src
@@ -2395,7 +2449,9 @@ def test_app_settings_parity() -> None:
             and "\"frontend_ready_until\"" in app_src
             and "\"frontend_ready_pid\"" in app_src
             and "\"launcher_pid\"" in app_src
-            and "def mark_frontend_ready(self, phase: str = \"ready\")" in app_src
+            and "def update_frontend_health(" in app_src
+            and "def mark_frontend_ready(" in app_src
+            and "_mark_launch_state_frontend_ready(phase_text, health_payload)" in app_src
             and "def _process_alive(pid: int)" in app_src
             and "def _recent_child_launch_alive()" in app_src
             and "launch request ignored; recent child process alive" in app_src
@@ -2416,6 +2472,9 @@ def test_app_settings_parity() -> None:
            and "def _existing_window_frontend_summary(" in app_src
            and "def _existing_window_needs_frontend_recovery(" in app_src
            and "existing window frontend not ready" in app_src
+           and "existing window frontend reports not clickable" in app_src
+           and "summary.get(\"frontendHealthFresh\")" in app_src
+           and "summary.get(\"frontendClickable\") is False" in app_src
            and "skip_current_process: bool = False" in app_src
            and "_activate_existing_ai_editor_window(skip_current_process=True)" in app_src
            and "_AI_EDITOR_FORCE_NEW_ENV" in app_src
@@ -4880,10 +4939,21 @@ def test_phase1_ai_editor_regressions() -> None:
            and "function aiEditorInteractionHealthSnapshot()" in html
            and "window.aiEditorInteractionHealthSnapshot=aiEditorInteractionHealthSnapshot;" in html
            and "forcedInteractive:document.body.dataset.aiEditorInteractive==='1'" in html
+           and "visibilityState:String(document.visibilityState||'')" in html
+           and "documentReadyState:String(document.readyState||'')" in html
+           and "interactionClearCount:Number(document.body.dataset.interactionClearCount||0)" in html
            and "snapshot.clickable=!snapshot.bodyWindowClosing&&!snapshot.dragOverlayActive" in html
            and "function scheduleTransientInteractionBlockerWatchdog(reason)" in html
            and "document.body.dataset.interactionBlockerWatchdog=String(stamp);" in html
            and "forceInteractiveUi(reason||'watchdog')" in html
+           and "notifyAiEditorFrontendHealth('watchdog-recovery')" in html
+           and "function notifyAiEditorFrontendHealth(phase,options)" in html
+           and "bridge.update_frontend_health(String(phase||'heartbeat'),aiEditorInteractionHealthSnapshot())" in html
+           and "let _aiEditorFrontendHeartbeatTimer=0;" in html
+           and "function startAiEditorFrontendHeartbeat(reason)" in html
+           and "setInterval(()=>notifyAiEditorFrontendHealth('heartbeat'),8000)" in html
+           and "bridge.mark_frontend_ready(String(phase||'ready'),aiEditorInteractionHealthSnapshot())" in html
+           and "notifyAiEditorFrontendHealth('init-error',{force:true});" in html
            and "scheduleTransientInteractionBlockerWatchdog('watchdog');" in html
            and "clearTransientInteractionBlockers('close-fallback');" in html
            and "window.addEventListener('pageshow',()=>forceInteractiveUi('startup'))" in html
