@@ -2287,6 +2287,10 @@ def test_app_settings_parity() -> None:
            and "existing window activation failed visibility" in app_src
            and "existing window activation failed liveness" in app_src
            and "existing window activation failed hwnd" in app_src
+           and "_EXISTING_WINDOW_RECOVERY_SECONDS" in app_src
+           and "def _existing_window_recovery_requested()" in app_src
+           and "was just activated; allowing recovery relaunch" in app_src
+           and "not _existing_window_recovery_requested()" in app_src
            and "SendMessageTimeoutW" in app_src
            and "DwmGetWindowAttribute" in app_src
            and "_window_handle_cloaked(hwnd" in app_src
@@ -4564,8 +4568,12 @@ def test_phase1_ai_editor_regressions() -> None:
             and "addCommand('Settings JSON','{}','Open Settings JSON',()=>settingsOpenJsonView(),true);" in html
             and ".settings-vscode-calm > .settings-titlebar," in html
             and ".settings-vscode-calm > .settings-searchbar" in html
-            and ".settings-vscode-calm .settings-nav-commandbar" in html
+           and ".settings-vscode-calm .settings-nav-commandbar" in html
             and ".settings-vscode-calm .settings-nav-result-groups" in html
+            and ".settings-vscode-calm .settings-nav-workbench {\n  display:none;" in html
+            and ".settings-vscode-calm.settings-details-open .settings-nav-workbench { display:grid; }" in html
+            and ".settings-vscode-calm .settings-nav-result-groups {\n  display:none;" in html
+            and ".settings-vscode-calm.settings-details-open .settings-nav-result-groups { display:grid; }" in html
             and "function settingsResultGroupRows(kind)" in html
             and "function settingsApplyResultGroup(kind)" in html
             and "function renderSettingsResultGroups(parsed,visible,total,state)" in html
@@ -4624,18 +4632,20 @@ def test_phase1_ai_editor_regressions() -> None:
            and ".settings-vscode-calm.settings-details-open .settings-search-row { grid-template-columns:minmax(520px,760px);" in html
            and ".drag-overlay:not(.active) { pointer-events:none; }" in html
            and "function clearTransientInteractionBlockers(reason)" in html
+           and "function forceInteractiveUi(reason)" in html
            and "function aiEditorInteractionHealthSnapshot()" in html
            and "window.aiEditorInteractionHealthSnapshot=aiEditorInteractionHealthSnapshot;" in html
+           and "forcedInteractive:document.body.dataset.aiEditorInteractive==='1'" in html
            and "snapshot.clickable=!snapshot.bodyWindowClosing&&!snapshot.dragOverlayActive" in html
            and "function scheduleTransientInteractionBlockerWatchdog(reason)" in html
            and "document.body.dataset.interactionBlockerWatchdog=String(stamp);" in html
-           and "clearTransientInteractionBlockers(reason||'watchdog')" in html
+           and "forceInteractiveUi(reason||'watchdog')" in html
            and "scheduleTransientInteractionBlockerWatchdog('watchdog');" in html
            and "clearTransientInteractionBlockers('close-fallback');" in html
-           and "window.addEventListener('pageshow',()=>clearTransientInteractionBlockers('startup'))" in html
-           and "window.addEventListener('load',()=>clearTransientInteractionBlockers('startup'))" in html
-           and "window.addEventListener('visibilitychange',()=>{if(document.visibilityState==='visible')clearTransientInteractionBlockers('visibility')})" in html
-           and "window.addEventListener('pywebviewready',()=>clearTransientInteractionBlockers('pywebviewready'))" in html
+           and "window.addEventListener('pageshow',()=>forceInteractiveUi('startup'))" in html
+           and "window.addEventListener('load',()=>forceInteractiveUi('startup'))" in html
+           and "window.addEventListener('visibilitychange',()=>{if(document.visibilityState==='visible')forceInteractiveUi('visibility')})" in html
+           and "window.addEventListener('pywebviewready',()=>forceInteractiveUi('pywebviewready'))" in html
            and "window.addEventListener('pageshow',()=>scheduleTransientInteractionBlockerWatchdog('watchdog'))" in html
            and "window.addEventListener('load',()=>scheduleTransientInteractionBlockerWatchdog('watchdog'))" in html
            and "document.addEventListener('dragend',()=>clearTransientInteractionBlockers('dragend'),true)" in html

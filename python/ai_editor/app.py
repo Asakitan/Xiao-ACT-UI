@@ -17103,7 +17103,10 @@ _launch_inflight_started_at = 0.0
 _LAUNCH_INFLIGHT_TTL_SECONDS = 8.0
 _LAUNCH_CHILD_GRACE_SECONDS = 90.0
 _LAUNCH_CHILD_WINDOW_GRACE_SECONDS = 12.0
+_EXISTING_WINDOW_RECOVERY_SECONDS = 5.0
 _LAUNCH_STATE_FILE = os.path.join(os.path.expanduser("~"), ".sao", "ai_editor_launch.json")
+_last_existing_window_activation: Dict[str, Any] = {"hwnd": 0, "at": 0.0}
+_existing_window_recovery_until = 0.0
 
 
 def _html_path() -> str:
@@ -17191,7 +17194,9 @@ def _launch_subprocess() -> None:
     if _activate_existing_ai_editor_window(skip_current_process=True):
         print("[AIEditor] activated existing window")
         return
-    if not os.environ.get(_AI_EDITOR_FORCE_NEW_ENV) and _recent_child_launch_alive():
+    if (not os.environ.get(_AI_EDITOR_FORCE_NEW_ENV)
+            and not _existing_window_recovery_requested()
+            and _recent_child_launch_alive()):
         return
     _append_ai_editor_log("existing window unavailable; launching subprocess")
     if getattr(sys, 'frozen', False):
@@ -17643,6 +17648,7 @@ def _activate_window_handle(hwnd: int, keep_topmost_seconds: float = 0.9) -> boo
 
 
 def _activate_existing_ai_editor_window(skip_current_process: bool = False) -> bool:
+    global _existing_window_recovery_until
     if os.environ.get(_AI_EDITOR_FORCE_NEW_ENV):
         _append_ai_editor_log(
             f"existing window activation skipped by {_AI_EDITOR_FORCE_NEW_ENV}")
@@ -17651,10 +17657,25 @@ def _activate_existing_ai_editor_window(skip_current_process: bool = False) -> b
     if not hwnd:
         _append_ai_editor_log("no usable existing window found")
         return False
+    now = time.monotonic()
+    last_hwnd = int(_last_existing_window_activation.get("hwnd") or 0)
+    last_at = float(_last_existing_window_activation.get("at") or 0.0)
+    if last_hwnd == int(hwnd) and now - last_at <= _EXISTING_WINDOW_RECOVERY_SECONDS:
+        _existing_window_recovery_until = now + _EXISTING_WINDOW_RECOVERY_SECONDS
+        _append_ai_editor_log(
+            f"existing window hwnd={hwnd} was just activated; allowing recovery relaunch")
+        return False
     ok = _activate_window_handle(hwnd)
+    if ok:
+        _last_existing_window_activation["hwnd"] = int(hwnd)
+        _last_existing_window_activation["at"] = now
     if not ok:
         _append_ai_editor_log(f"existing window activation failed hwnd={hwnd}")
     return ok
+
+
+def _existing_window_recovery_requested() -> bool:
+    return time.monotonic() <= float(_existing_window_recovery_until or 0.0)
 
 
 def _activate_ai_editor_window_with_retry() -> None:

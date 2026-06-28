@@ -3251,9 +3251,10 @@ pre.code-block { overflow:visible; }
   background:color-mix(in srgb,var(--fg-accent) 7%,transparent);
 }
 .settings-vscode-calm .settings-nav-workbench {
-  display:grid; gap:5px; padding:0 8px 9px 0; margin:0 0 8px;
+  display:none; gap:5px; padding:0 8px 9px 0; margin:0 0 8px;
   border-bottom:1px solid color-mix(in srgb,var(--border) 54%,transparent);
 }
+.settings-vscode-calm.settings-details-open .settings-nav-workbench { display:grid; }
 .settings-vscode-calm .settings-nav-workbench-title {
   display:flex; align-items:center; justify-content:space-between; gap:8px;
   min-height:20px; color:var(--fg); font:600 12px var(--sans);
@@ -3282,9 +3283,10 @@ pre.code-block { overflow:visible; }
 .settings-vscode-calm .settings-nav-workbench-badge.active strong { color:var(--fg-accent); }
 .settings-vscode-calm .settings-nav-workbench-badge.error strong { color:var(--fg-error); }
 .settings-vscode-calm .settings-nav-result-groups {
-  display:grid; gap:3px; padding:0 8px 9px 0; margin:0 0 8px;
+  display:none; gap:3px; padding:0 8px 9px 0; margin:0 0 8px;
   border-bottom:1px solid color-mix(in srgb,var(--border) 54%,transparent);
 }
+.settings-vscode-calm.settings-details-open .settings-nav-result-groups { display:grid; }
 .settings-vscode-calm .settings-nav-result-title {
   padding:0 0 4px; color:var(--fg-dim); font:10px var(--mono); text-transform:uppercase;
 }
@@ -41788,6 +41790,11 @@ function clearTransientInteractionBlockers(reason){
     document.body.classList.remove('window-closing');
   }
 }
+function forceInteractiveUi(reason){
+  clearTransientInteractionBlockers(reason||'startup');
+  try{document.documentElement.dataset.aiEditorInteractive='1'}catch(_e){}
+  try{document.body.dataset.aiEditorInteractive='1'}catch(_e){}
+}
 function aiEditorInteractionHealthSnapshot(){
   const overlay=$('drag-overlay');
   const bodyStyle=getComputedStyle(document.body);
@@ -41807,6 +41814,7 @@ function aiEditorInteractionHealthSnapshot(){
     topElement:topEl?String((topEl.id?('#'+topEl.id):topEl.tagName)||'').toLowerCase():'',
     providerFrameCount:frames.length,
     providerFramesClickable:frames.every(frame=>String(getComputedStyle(frame).pointerEvents||'')!=='none'),
+    forcedInteractive:document.body.dataset.aiEditorInteractive==='1',
     activeElement:String((document.activeElement&&(document.activeElement.id||document.activeElement.tagName))||'').toLowerCase(),
     lastClearedReason:overlay?String(overlay.dataset.lastClearedReason||''):'',
   };
@@ -41820,14 +41828,14 @@ function scheduleTransientInteractionBlockerWatchdog(reason){
     if(document.body.dataset.interactionBlockerWatchdog!==String(stamp))return;
     const overlay=$('drag-overlay');
     if((overlay&&overlay.classList.contains('active'))||document.body.classList.contains('window-closing')){
-      clearTransientInteractionBlockers(reason||'watchdog');
+      forceInteractiveUi(reason||'watchdog');
     }
   },900);
 }
 document.addEventListener('pointerdown',e=>{
   const overlay=$('drag-overlay');
   if((overlay&&overlay.classList.contains('active'))||document.body.classList.contains('window-closing')){
-    clearTransientInteractionBlockers('pointer');
+    forceInteractiveUi('pointer');
   }
 },true);
 document.addEventListener('pointermove',()=>{
@@ -41838,12 +41846,12 @@ document.addEventListener('wheel',()=>{
   const overlay=$('drag-overlay');
   if((overlay&&overlay.classList.contains('active'))||document.body.classList.contains('window-closing'))clearTransientInteractionBlockers('wheel');
 },true);
-window.addEventListener('focus',()=>clearTransientInteractionBlockers('focus'));
-window.addEventListener('visibilitychange',()=>{if(document.visibilityState==='visible')clearTransientInteractionBlockers('visibility')});
-window.addEventListener('pywebviewready',()=>clearTransientInteractionBlockers('pywebviewready'));
-window.addEventListener('pageshow',()=>clearTransientInteractionBlockers('startup'));
-window.addEventListener('load',()=>clearTransientInteractionBlockers('startup'));
-document.addEventListener('DOMContentLoaded',()=>clearTransientInteractionBlockers('startup'));
+window.addEventListener('focus',()=>forceInteractiveUi('focus'));
+window.addEventListener('visibilitychange',()=>{if(document.visibilityState==='visible')forceInteractiveUi('visibility')});
+window.addEventListener('pywebviewready',()=>forceInteractiveUi('pywebviewready'));
+window.addEventListener('pageshow',()=>forceInteractiveUi('startup'));
+window.addEventListener('load',()=>forceInteractiveUi('startup'));
+document.addEventListener('DOMContentLoaded',()=>forceInteractiveUi('startup'));
 window.addEventListener('pageshow',()=>scheduleTransientInteractionBlockerWatchdog('watchdog'));
 window.addEventListener('load',()=>scheduleTransientInteractionBlockerWatchdog('watchdog'));
 document.addEventListener('DOMContentLoaded',()=>scheduleTransientInteractionBlockerWatchdog('watchdog'));
@@ -44111,7 +44119,7 @@ function bootAiEditorUi(reason){
   if(_aiEditorBootStarted)return;
   _aiEditorBootStarted=true;
   try{document.body.dataset.aiEditorBootMode=reason||'pywebview'}catch(_e){}
-  clearTransientInteractionBlockers(reason||'startup');
+  forceInteractiveUi(reason||'startup');
   scheduleTransientInteractionBlockerWatchdog('watchdog');
   init().catch(e=>{
     console.error('[init]',e);
