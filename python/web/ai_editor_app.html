@@ -1090,10 +1090,11 @@ pre.code-block code .type { color:var(--fg-type); }
 .chat-progress-item.open .chat-progress-more { display:block; }
 .chat-toolbar-head { display:none; align-items:center; gap:6px; flex-wrap:wrap; min-height:26px;
   padding:7px 8px 0; color:var(--fg-dim); }
-.chat-toolbar-head.has-state { display:flex; }
+.chat-toolbar-head.has-state { display:none!important; }
 .chat-composer-summary { display:none; align-items:center; gap:5px; flex-wrap:wrap; padding:6px 8px 0;
   color:var(--fg-dim); font:10px/18px var(--mono); }
-.chat-composer-summary.has-state { display:flex; }
+.chat-composer-summary.has-state { display:none!important; }
+.chat-toolbar-head,.chat-composer-summary,.chat-prompt-shortcuts { min-height:0!important; padding:0!important; }
 .chat-composer-summary-chip { display:inline-flex; align-items:center; gap:4px; max-width:220px; min-height:18px;
   padding:0 6px; border:1px solid color-mix(in srgb,var(--border) 80%,transparent); border-radius:999px;
   background:color-mix(in srgb,var(--bg2) 70%,transparent); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
@@ -1681,6 +1682,13 @@ pre.code-block code .type { color:var(--fg-type); }
 .statusbar .spacer { flex:1; }
 .sb-item { padding:0 6px; cursor:default; display:flex; align-items:center; gap:3px; height:22px; }
 .sb-item:hover { background:var(--bg-hover); }
+.status-context-usage { display:inline-flex; align-items:center; gap:5px; min-width:0; color:var(--statusbar-fg); }
+.status-context-usage .ctx-ring { width:13px; height:13px; flex-basis:13px; }
+.status-context-usage .ctx-ring::after { width:6px; height:6px; background:var(--statusbar-bg); }
+.status-context-usage.warn .ctx-ring { background:conic-gradient(var(--fg-warning) var(--ctx-percent), color-mix(in srgb,var(--border) 70%,transparent) 0); }
+.status-context-usage.crit .ctx-ring { background:conic-gradient(var(--fg-error) var(--ctx-percent), color-mix(in srgb,var(--border) 70%,transparent) 0); }
+.status-context-text { max-width:110px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+#status-model { display:none!important; }
 .editor-language-status { max-width:190px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; color:var(--fg-dim); }
 .editor-language-status.running { color:var(--fg-accent); }
 .editor-language-status.ready { color:var(--fg-success); }
@@ -3823,7 +3831,7 @@ pre.code-block { overflow:visible; }
     <div id="ext-actbar-items"></div>
     <div class="ab-spacer"></div>
     <div class="ab-icon theme-toggle" data-i18n-title="toggle_theme" title="Toggle Theme" onclick="toggleTheme()"><svg width="20" height="20" viewBox="0 0 20 20" fill="none"><circle cx="10" cy="10" r="4" stroke="currentColor" stroke-width="1.5"/><path d="M10 2v2M10 16v2M2 10h2M16 10h2M4.9 4.9l1.4 1.4M13.7 13.7l1.4 1.4M15.1 4.9l-1.4 1.4M6.3 13.7l-1.4 1.4" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/></svg></div>
-    <div class="ab-icon" data-panel="settings" data-i18n-title="settings" title="Settings"><svg width="20" height="20" viewBox="0 0 20 20" fill="none"><circle cx="10" cy="10" r="2.5" stroke="currentColor" stroke-width="1.5"/><path d="M10 2v2.5M10 15.5V18M2 10h2.5M15.5 10H18M4.2 4.2l1.8 1.8M14 14l1.8 1.8M15.8 4.2L14 6M6 14l-1.8 1.8" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/></svg></div>
+    <div class="ab-icon" data-panel="settings" data-i18n-title="settings" title="Settings"><svg width="20" height="20" viewBox="0 0 20 20" fill="none"><path d="M8.4 2.75h3.2l.42 2.02c.45.16.87.4 1.24.72l1.97-.66 1.6 2.77-1.55 1.37a5.1 5.1 0 010 1.56l1.55 1.37-1.6 2.77-1.97-.66c-.37.32-.79.56-1.24.72l-.42 2.02H8.4l-.42-2.02a4.9 4.9 0 01-1.24-.72l-1.97.66-1.6-2.77 1.55-1.37a5.1 5.1 0 010-1.56L3.17 7.6l1.6-2.77 1.97.66c.37-.32.79-.56 1.24-.72l.42-2.02z" stroke="currentColor" stroke-width="1.35" stroke-linejoin="round"/><circle cx="10" cy="10" r="2.35" stroke="currentColor" stroke-width="1.35"/></svg></div>
   </div>
 
   <!-- Sidebar -->
@@ -4260,8 +4268,12 @@ pre.code-block { overflow:visible; }
   <span class="sb-item editor-language-status ready" id="status-language-service" title="Language services">Lang: Ready</span>
   <span class="sb-item" id="status-mode" title="Mode" style="cursor:pointer;font-weight:bold" onclick="cycleMode()">Agent</span>
   <span class="sb-item" id="status-approval" title="Approval level" style="cursor:pointer;color:var(--fg-dim)" onclick="cycleApproval()">◎ Default</span>
+  <span class="sb-item status-context-usage" id="status-context-usage" title="Content window usage">
+    <span class="ctx-ring" id="status-ctx-ring" aria-hidden="true"></span>
+    <span class="status-context-text" id="status-context-text">CW 0 / 128K</span>
+  </span>
   <span class="sb-item" id="status-model">-</span>
-  <span class="sb-item" id="status-tokens">0 tokens</span>
+  <span class="sb-item" id="status-tokens">0 tok</span>
   <span class="sb-ext-right" id="sb-ext-right"></span>
 </div>
 
@@ -12126,9 +12138,9 @@ async function runAssistantUiSelfCheck(opts){
   assistantUiSelfCheckRecord(checks,'visual-composer-fill-ready',visualLayout.ok&&visualLayout.composerLeftAligned&&visualLayout.composerRightAligned&&visualLayout.composerFillsArea&&visualLayout.composerBottomFilled,JSON.stringify(visualLayout));
   assistantUiSelfCheckRecord(checks,'visual-controls-one-row-ready',visualLayout.toolbarOneLine&&visualLayout.metaInsideTrailing&&visualLayout.buttonSurfaceReady&&visualLayout.triggerMotionReady,JSON.stringify(visualLayout));
   assistantUiSelfCheckRecord(checks,'visual-control-widths-ready',visualLayout.controlWidthsReady===true,JSON.stringify(visualLayout.triggerWidths));
-  assistantUiSelfCheckRecord(checks,'visual-prompt-shortcuts-hidden-ready',visualLayout.promptShortcutsHidden===true&&visualLayout.promptShortcutsHeight===0,JSON.stringify(visualLayout));
-  assistantUiSelfCheckRecord(checks,'visual-model-chip-removed-ready',visualLayout.modelChipHidden===true&&visualLayout.modelChipWidth===0,JSON.stringify(visualLayout));
-  assistantUiSelfCheckRecord(checks,'visual-content-window-ring-ready',visualLayout.contextRingReady===true&&visualLayout.contextTokenCompactReady===true,JSON.stringify(visualLayout.contextWindow));
+  assistantUiSelfCheckRecord(checks,'visual-composer-extra-rows-hidden-ready',visualLayout.headerHidden===true&&visualLayout.headerHeight===0&&visualLayout.summaryHidden===true&&visualLayout.summaryHeight===0&&visualLayout.promptShortcutsHidden===true&&visualLayout.promptShortcutsHeight===0,JSON.stringify(visualLayout));
+  assistantUiSelfCheckRecord(checks,'visual-model-chip-removed-ready',visualLayout.modelChipHidden===true&&visualLayout.modelChipWidth===0&&visualLayout.statusModelHidden===true,JSON.stringify(visualLayout));
+  assistantUiSelfCheckRecord(checks,'visual-content-window-ring-ready',visualLayout.contextRingReady===true&&visualLayout.contextTokenCompactReady===true&&visualLayout.statusContextReady===true,JSON.stringify(visualLayout.contextWindow));
   assistantUiSelfCheckRecord(checks,'visual-no-old-control-boxes-ready',visualLayout.noOldNativeBoxes===true,JSON.stringify(visualLayout.nativeBoxes));
   assistantUiSelfCheckRecord(checks,'visual-popup-surfaces-ready',visualLayout.popupsCustomSurface&&visualLayout.popupsOpenAbove&&visualLayout.popupMotionReady,JSON.stringify(visualLayout.popups));
   assistantUiSelfCheckRecord(checks,'visual-model-custom-endpoint-ready',visualLayout.modelEndpointReady===true,JSON.stringify(visualLayout));
@@ -12267,15 +12279,21 @@ function assistantVisualLayoutSnapshot(){
   const controls=document.querySelector('.chat-control-strip');
   const trailing=document.querySelector('.chat-composer-trailing');
   const meta=document.querySelector('.chat-composer-meta');
+  const head=$('chat-toolbar-head');
+  const summary=$('chat-composer-summary');
   const shortcuts=$('chat-prompt-shortcuts');
   const modelChip=$('model-chip');
   const ctxUsage=$('ctx-usage');
   const ctxRing=$('ctx-ring');
   const ctxText=$('ctx-text');
   const ctxEstimate=$('ctx-token-estimate');
+  const statusCtx=$('status-context-usage');
+  const statusCtxText=$('status-context-text');
+  const statusTokens=$('status-tokens');
+  const statusModel=$('status-model');
   const rect=el=>{if(!el)return null;const r=el.getBoundingClientRect();return {top:Math.round(r.top),left:Math.round(r.left),right:Math.round(r.right),bottom:Math.round(r.bottom),width:Math.round(r.width),height:Math.round(r.height)}};
   const cssPx=value=>{const n=parseFloat(String(value||'0'));return Number.isFinite(n)?n:0};
-  const panelRect=rect(panel),areaRect=rect(area),containerRect=rect(container),toolbarRect=rect(toolbar),controlsRect=rect(controls),trailingRect=rect(trailing),metaRect=rect(meta),shortcutsRect=rect(shortcuts),modelChipRect=rect(modelChip),ctxRingRect=rect(ctxRing);
+  const panelRect=rect(panel),areaRect=rect(area),containerRect=rect(container),toolbarRect=rect(toolbar),controlsRect=rect(controls),trailingRect=rect(trailing),metaRect=rect(meta),headRect=rect(head),summaryRect=rect(summary),shortcutsRect=rect(shortcuts),modelChipRect=rect(modelChip),ctxRingRect=rect(ctxRing),statusCtxRect=rect(statusCtx);
   const areaStyle=area?getComputedStyle(area):null;
   const contentLeft=areaRect?areaRect.left+cssPx(areaStyle&&areaStyle.paddingLeft):0;
   const contentRight=areaRect?areaRect.right-cssPx(areaStyle&&areaStyle.paddingRight):0;
@@ -12308,7 +12326,11 @@ function assistantVisualLayoutSnapshot(){
   const triggerWidthMap={};
   triggers.forEach(item=>{triggerWidthMap[item.id]=item.width});
   const shortcutStyle=shortcuts?getComputedStyle(shortcuts):null;
+  const headStyle=head?getComputedStyle(head):null;
+  const summaryStyle=summary?getComputedStyle(summary):null;
   const modelChipStyle=modelChip?getComputedStyle(modelChip):null;
+  const statusCtxStyle=statusCtx?getComputedStyle(statusCtx):null;
+  const statusModelStyle=statusModel?getComputedStyle(statusModel):null;
   const compactSamples=typeof assistantCompactNumber==='function'
     ? [assistantCompactNumber(999),assistantCompactNumber(1200),assistantCompactNumber(2500000),assistantCompactNumber(4300000000)]
     : [];
@@ -12318,7 +12340,10 @@ function assistantVisualLayoutSnapshot(){
     ringWidth:ctxRingRect?ctxRingRect.width:0,
     label:String(ctxText&&ctxText.textContent||''),
     estimate:String(ctxEstimate&&ctxEstimate.textContent||''),
+    statusLabel:String(statusCtxText&&statusCtxText.textContent||''),
+    statusEstimate:String(statusTokens&&statusTokens.textContent||''),
     cssPercent:String(ctxUsage&&ctxUsage.style&&ctxUsage.style.getPropertyValue('--ctx-percent')||''),
+    statusCssPercent:String(statusCtx&&statusCtx.style&&statusCtx.style.getPropertyValue('--ctx-percent')||''),
     compactSamples
   };
   return {
@@ -12337,13 +12362,19 @@ function assistantVisualLayoutSnapshot(){
     composerBottomFilled:!!(panelRect&&areaRect&&Math.abs(panelRect.bottom-areaRect.bottom)<=2),
     toolbarOneLine:!!(controlsRect&&trailingRect&&Math.abs(controlsRect.top-trailingRect.top)<=1&&!toolbarOverlap),
     metaInsideTrailing:!!(metaRect&&trailingRect&&metaRect.left>=trailingRect.left-1&&metaRect.right<=trailingRect.right+1),
+    headerHidden:!!(head&&headStyle&&headStyle.display==='none'),
+    headerHeight:headRect?headRect.height:0,
+    summaryHidden:!!(summary&&summaryStyle&&summaryStyle.display==='none'),
+    summaryHeight:summaryRect?summaryRect.height:0,
     promptShortcutsHidden:!!(shortcuts&&shortcutStyle&&shortcutStyle.display==='none'),
     promptShortcutsHeight:shortcutsRect?shortcutsRect.height:0,
     modelChipHidden:!modelChip||(modelChipStyle&&modelChipStyle.display==='none'),
     modelChipWidth:modelChipRect?modelChipRect.width:0,
+    statusModelHidden:!!(statusModel&&statusModelStyle&&statusModelStyle.display==='none'),
     contextWindow,
     contextRingReady:!!(ctxUsage&&ctxRing&&ctxRingRect&&ctxRingRect.width>=14&&contextWindow.cssPercent&&String(ctxRing.getAttribute('aria-hidden')||'')==='true'),
     contextTokenCompactReady:contextWindow.label.includes('CW ')&&contextWindow.estimate.endsWith('tok')&&compactSamples.join(',')==='999,1.2K,2.5M,4.3B',
+    statusContextReady:!!(statusCtx&&statusCtxStyle&&['flex','inline-flex'].includes(statusCtxStyle.display)&&statusCtxRect&&statusCtxRect.width>0&&contextWindow.statusLabel.includes('CW ')&&contextWindow.statusEstimate.endsWith('tok')&&contextWindow.statusCssPercent),
     triggers,
     buttonSurfaceReady:triggers.every(item=>item.exists&&item.tag==='button'&&item.radius>=10&&item.width>18&&item.height>=20),
     triggerMotionReady:triggers.every(item=>item.transition.includes('border-color')&&item.transition.includes('background')),
@@ -14699,6 +14730,7 @@ function updateEditorSyntaxHighlight(){
   layer.dataset.semanticTokenSource=semanticSummary.source;
   layer.dataset.semanticTokenResultId=semanticSummary.resultId;
   layer.dataset.semanticTokenRangeActive=semanticSummary.rangeActive?'1':'0';
+  layer.dataset.semanticTokenFresh=semanticSummary.lengthMatches?'1':'0';
   layer.dataset.semanticTokenTypes=semanticSummary.types.join(',');
   layer.innerHTML=enabled?((highlightCodeWithSemanticTokens(code,editorLang,_editorSemanticTokens)||highlightCode(code,editorLang))||'&nbsp;'):'';
   syncEditorSyntaxScroll();
@@ -14843,7 +14875,7 @@ let _workspaceSymbols=[],_workspaceSymbolIndex=0,_workspaceSymbolRequest=0,_work
 let _documentSymbolRows=[],_documentSymbols=[],_documentSymbolIndex=0,_documentSymbolRequest=0;
 let _editorLinks=[],_editorLinkIndex=0,_editorLinksRequest=0;
 let _editorInlayHints=[],_editorInlayHintRequest=0,_editorInlayHintTimer=null;
-let _editorInlineCompletions=[],_editorInlineCompletionIndex=0,_editorInlineCompletionRequest=0,_editorInlineCompletionTimer=null;
+let _editorInlineCompletions=[],_editorInlineCompletionIndex=0,_editorInlineCompletionRequest=0,_editorInlineCompletionTimer=null,_editorInlineCompletionAcceptedCount=0;
 let _editorCodeLenses=[],_editorCodeLensRequest=0,_editorCodeLensTimer=null;
 let _editorSemanticTokens=null,_editorSemanticTokensRequest=0,_editorSemanticTokensTimer=null,_editorSemanticTokensContentLength=-1,_editorSemanticTokensRangeActive=false;
 let currentSemanticTokenRules=[];
@@ -14862,6 +14894,7 @@ let _editorLanguageFeatureState={
   diagnostics:{state:'empty',count:0,errors:0,warnings:0,infos:0,hints:0,message:'Diagnostics: 0'},
   codeActions:{state:'empty',count:0,kind:'',diagnostics:0,message:'Code actions: 0'},
   formatting:{state:'empty',kind:'',edits:0,applied:false,message:'Formatting: idle'},
+  inlineCompletions:{state:'empty',count:0,visible:false,accepted:0,triggerKind:0,message:'Inline: idle'},
   semanticTokens:{state:'empty',source:'',count:0,resultId:'',message:'Semantic: idle'},
   saveParticipants:{state:'empty',reason:'',changed:false,formatOnSave:false,codeActionKinds:[],codeActionCount:0,codeActionApplied:0,filesApplied:false,durationMs:0,message:'Save: idle'},
   diff:{state:'empty',mode:'',added:0,modified:0,removed:0,total:0,message:'Diff: clean'}
@@ -14959,7 +14992,7 @@ function editorDiagnosticSeveritySummary(diagnostics){
 function editorLanguageFeatureSummaryParts(){
   const s=_editorLanguageFeatureState||{};
   const parts=[];
-  ['diagnostics','codeActions','formatting','saveParticipants','semanticTokens','diff'].forEach(key=>{
+  ['diagnostics','codeActions','formatting','inlineCompletions','saveParticipants','semanticTokens','diff'].forEach(key=>{
     const item=s[key]||{};
     if(item.message)parts.push(item.message);
   });
@@ -14971,10 +15004,10 @@ function editorLanguageFeatureDetail(baseDetail){
 }
 function editorLanguageFeatureAggregateSnapshot(){
   const s=_editorLanguageFeatureState||{};
-  const diag=s.diagnostics||{},actions=s.codeActions||{},fmt=s.formatting||{},save=s.saveParticipants||{},semantic=s.semanticTokens||{},diff=s.diff||{};
-  const readyFeatures=['diagnostics','codeActions','formatting','saveParticipants','semanticTokens','diff']
+  const diag=s.diagnostics||{},actions=s.codeActions||{},fmt=s.formatting||{},inline=s.inlineCompletions||{},save=s.saveParticipants||{},semantic=s.semanticTokens||{},diff=s.diff||{};
+  const readyFeatures=['diagnostics','codeActions','formatting','inlineCompletions','saveParticipants','semanticTokens','diff']
     .filter(key=>['ready','warning'].includes(String((s[key]||{}).state||'')));
-  const activeFeatures=['diagnostics','codeActions','formatting','saveParticipants','semanticTokens','diff']
+  const activeFeatures=['diagnostics','codeActions','formatting','inlineCompletions','saveParticipants','semanticTokens','diff']
     .filter(key=>String((s[key]||{}).state||'empty')!=='empty');
   const issueCount=(Number(diag.errors)||0)+(Number(diag.warnings)||0);
   const diffTotal=Number(diff.total)||0;
@@ -14982,6 +15015,7 @@ function editorLanguageFeatureAggregateSnapshot(){
     issueCount?editorFeatureCountText(issueCount,'problem'):'',
     diffTotal?editorFeatureCountText(diffTotal,'diff'):'',
     actions.count?editorFeatureCountText(actions.count,'action'):'',
+    inline.visible?editorFeatureCountText(inline.count,'inline suggestion'):'',
     save.changed?'save updated':'',
     semantic.count?editorFeatureCountText(semantic.count,'semantic token'):'',
     fmt.applied?'formatted':''
@@ -14994,6 +15028,9 @@ function editorLanguageFeatureAggregateSnapshot(){
     issueCount,
     diffTotal,
     codeActions:Number(actions.count)||0,
+    inlineCompletions:Number(inline.count)||0,
+    inlineVisible:!!inline.visible,
+    inlineAccepted:Number(inline.accepted)||0,
     formattingApplied:!!fmt.applied,
     saveChanged:!!save.changed,
     semanticTokens:Number(semantic.count)||0,
@@ -15004,7 +15041,7 @@ function editorLanguageFeatureAggregateSnapshot(){
 function renderEditorLanguageFeatureStatus(){
   const el=$('status-language-service');if(!el)return;
   const s=_editorLanguageFeatureState||{};
-  const diag=s.diagnostics||{},actions=s.codeActions||{},fmt=s.formatting||{},save=s.saveParticipants||{},semantic=s.semanticTokens||{},diff=s.diff||{};
+  const diag=s.diagnostics||{},actions=s.codeActions||{},fmt=s.formatting||{},inline=s.inlineCompletions||{},save=s.saveParticipants||{},semantic=s.semanticTokens||{},diff=s.diff||{};
   const providerStatus=_editorLanguageProviderStatus||{};
   const aggregate=typeof editorLanguageFeatureAggregateSnapshot==='function'
     ? editorLanguageFeatureAggregateSnapshot()
@@ -15014,16 +15051,29 @@ function renderEditorLanguageFeatureStatus(){
   el.dataset.diagnosticWarnings=String(diag.warnings||0);
   el.dataset.codeActions=String(actions.count||0);
   el.dataset.formatEdits=String(fmt.edits||0);
+  el.dataset.formatOnSave=fmt.onSave?'1':'0';
+  el.dataset.formatProviderId=String(fmt.providerId||'');
   el.dataset.formatProviderCount=String(fmt.providerCount||0);
   el.dataset.defaultFormatter=String(fmt.defaultFormatter||'');
+  el.dataset.inlineCompletions=String(inline.count||0);
+  el.dataset.inlineVisible=inline.visible?'1':'0';
+  el.dataset.inlineAccepted=String(inline.accepted||0);
+  el.dataset.inlineTriggerKind=String(inline.triggerKind||0);
+  el.dataset.inlineLastReason=String(inline.lastReason||'');
   el.dataset.saveReason=String(save.reason||'');
+  el.dataset.saveSeq=String(save.seq||0);
+  el.dataset.saveAutoSaveMode=String(save.autoSaveMode||'');
   el.dataset.saveChanged=save.changed?'1':'0';
   el.dataset.saveDurationMs=String(save.durationMs||0);
+  el.dataset.saveCodeActionCount=String(save.codeActionCount||0);
   el.dataset.saveCodeActions=String(save.codeActionApplied||0);
+  el.dataset.saveCodeActionErrors=String(save.codeActionErrors||0);
   el.dataset.saveFormatOnSave=save.formatOnSave?'1':'0';
+  el.dataset.saveFormatChanged=save.formatChanged?'1':'0';
   el.dataset.saveFilesApplied=save.filesApplied?'1':'0';
   el.dataset.semanticTokens=String(semantic.count||0);
   el.dataset.semanticSource=String(semantic.source||'');
+  el.dataset.semanticFresh=semantic.fresh===false?'0':'1';
   el.dataset.semanticTokenTypes=Array.isArray(semantic.tokenTypes)?semantic.tokenTypes.join(','):'';
   el.dataset.semanticTokenTypeCount=String(semantic.tokenTypeCount||0);
   el.dataset.diffTotal=String(diff.total||0);
@@ -15516,6 +15566,7 @@ async function requestEditorSemanticTokens(quiet){
     count:semanticCount,
     resultId:semanticSummary.resultId,
     rangeActive:semanticSummary.rangeActive,
+    fresh:semanticSummary.lengthMatches,
     tokenTypes:semanticSummary.types,
     tokenTypeCount:semanticSummary.types.length,
     message:semanticCount?'Semantic: '+semanticCount+' '+String(_editorSemanticTokens&&_editorSemanticTokens.source||'full'):'Semantic: 0'
@@ -15650,36 +15701,75 @@ function editorInlineCompletionPreviewText(item){
   if(typed&&!(insertText.startsWith(typed)||filter.startsWith(typed)))return '';
   return insertText.startsWith(typed)?insertText.slice(typed.length):insertText;
 }
-function clearEditorInlineCompletions(){
+function updateEditorInlineCompletionLayerState(layer,info){
+  if(!layer)return;
+  const data=isPlainObject(info)?info:{};
+  layer.dataset.inlineCompletionCount=String(data.count||0);
+  layer.dataset.inlineCompletionIndex=String(data.index||0);
+  layer.dataset.inlineCompletionVisible=data.visible?'1':'0';
+  layer.dataset.inlineCompletionPreviewLength=String(data.previewLength||0);
+  layer.dataset.inlineCompletionMultiline=data.multiline?'1':'0';
+  layer.dataset.inlineCompletionSource=String(data.source||'');
+  layer.dataset.inlineCompletionHasCommand=data.hasCommand?'1':'0';
+  layer.dataset.inlineCompletionReason=String(data.reason||'');
+}
+function updateEditorInlineCompletionFeatureState(state,info){
+  const data=isPlainObject(info)?info:{};
+  if(typeof updateEditorLanguageFeatureState==='function')updateEditorLanguageFeatureState('inlineCompletions',state||'empty',{
+    count:Number(data.count)||0,
+    visible:data.visible===true,
+    accepted:_editorInlineCompletionAcceptedCount,
+    triggerKind:Number(data.triggerKind)||0,
+    lastReason:String(data.reason||data.lastReason||''),
+    previewLength:Number(data.previewLength)||0,
+    multiline:data.multiline===true,
+    source:String(data.source||''),
+    message:data.message||((Number(data.count)||0)?'Inline: '+editorFeatureCountText(Number(data.count)||0,'suggestion'):'Inline: idle')
+  });
+}
+function clearEditorInlineCompletions(reason){
   _editorInlineCompletionRequest++;
   clearTimeout(_editorInlineCompletionTimer);
   _editorInlineCompletions=[];_editorInlineCompletionIndex=0;
-  const layer=$('editor-ghost-layer');if(layer)layer.innerHTML='';
+  const layer=$('editor-ghost-layer');if(layer){layer.innerHTML='';updateEditorInlineCompletionLayerState(layer,{reason:reason||'cleared'});}
+  updateEditorInlineCompletionFeatureState('empty',{reason:reason||'cleared',message:'Inline: '+(reason||'cleared')});
 }
 function renderEditorInlineCompletion(){
   const layer=$('editor-ghost-layer'),ta=$('editor-text'),wrap=$('editor-container');
   if(!layer||!ta||!wrap)return;
   layer.innerHTML='';
-  if(wrap.style.display==='none'||wrap.offsetParent===null||!_editorInlineCompletions.length)return;
+  updateEditorInlineCompletionLayerState(layer,{count:_editorInlineCompletions.length,index:_editorInlineCompletionIndex,reason:'render'});
+  if(wrap.style.display==='none'||wrap.offsetParent===null||!_editorInlineCompletions.length){
+    updateEditorInlineCompletionFeatureState('empty',{count:_editorInlineCompletions.length,reason:'hidden'});
+    return;
+  }
   let item=_editorInlineCompletions[_editorInlineCompletionIndex],preview=editorInlineCompletionPreviewText(item);
   if(!preview){
     const next=_editorInlineCompletions.findIndex(candidate=>editorInlineCompletionPreviewText(candidate));
-    if(next<0)return;
+    if(next<0){updateEditorInlineCompletionFeatureState('empty',{count:_editorInlineCompletions.length,reason:'no-preview'});return}
     _editorInlineCompletionIndex=next;item=_editorInlineCompletions[next];preview=editorInlineCompletionPreviewText(item);
   }
   const firstLine=preview.split('\n')[0]+(preview.includes('\n')?' ...':'');
-  if(!firstLine)return;
+  if(!firstLine){updateEditorInlineCompletionFeatureState('empty',{count:_editorInlineCompletions.length,reason:'empty-preview'});return}
   const style=getComputedStyle(ta),lineHeight=parseFloat(style.lineHeight)||parseFloat(style.fontSize)*1.5;
   const fontSize=parseFloat(style.fontSize)||13,charWidth=fontSize*.62;
   const paddingTop=parseFloat(style.paddingTop)||8,paddingLeft=parseFloat(style.paddingLeft)||12;
   const pos=editorPositionFromOffset(ed.value,ed.selectionStart);
   const top=paddingTop+(Number(pos.line)||0)*lineHeight-ta.scrollTop;
   const left=paddingLeft+(Number(pos.character)||0)*charWidth-ta.scrollLeft;
-  if(top<-lineHeight||top>wrap.clientHeight+lineHeight||left<-80||left>wrap.clientWidth)return;
+  if(top<-lineHeight||top>wrap.clientHeight+lineHeight||left<-80||left>wrap.clientWidth){
+    updateEditorInlineCompletionFeatureState('empty',{count:_editorInlineCompletions.length,reason:'out-of-view'});
+    return;
+  }
   const el=document.createElement('span');
   el.className='editor-ghost-text';el.textContent=firstLine;
   el.style.top=top+'px';el.style.left=left+'px';
+  el.dataset.inlineCompletionPreviewLength=String(preview.length);
+  el.dataset.inlineCompletionMultiline=preview.includes('\n')?'1':'0';
   layer.appendChild(el);
+  const source=String((item&&item.source)||(item&&item.providerId)||(item&&item.extensionId)||'');
+  updateEditorInlineCompletionLayerState(layer,{count:_editorInlineCompletions.length,index:_editorInlineCompletionIndex,visible:true,previewLength:preview.length,multiline:preview.includes('\n'),source,hasCommand:!!(item&&item.command),reason:'visible'});
+  updateEditorInlineCompletionFeatureState('ready',{count:_editorInlineCompletions.length,visible:true,previewLength:preview.length,multiline:preview.includes('\n'),source,reason:'visible',message:'Inline: '+editorFeatureCountText(_editorInlineCompletions.length,'suggestion')});
 }
 async function requestEditorInlineCompletions(quiet,triggerKind){
   const wrap=$('editor-container');
@@ -15694,8 +15784,9 @@ async function requestEditorInlineCompletions(quiet,triggerKind){
   });
   if(requestId!==_editorInlineCompletionRequest)return;
   if(editorProviderResultCancelled(res))return;
-  if(res&&res.error){_editorInlineCompletions=[];renderEditorInlineCompletion();if(!quiet)setStatus('Inline completions failed: '+res.error);return}
+  if(res&&res.error){_editorInlineCompletions=[];renderEditorInlineCompletion();updateEditorInlineCompletionFeatureState('error',{reason:'provider-error',message:'Inline: failed'});if(!quiet)setStatus('Inline completions failed: '+res.error);return}
   _editorInlineCompletions=(res&&res.ok&&Array.isArray(res.items)?res.items:[]).filter(item=>item&&item.insertText!==undefined);
+  updateEditorInlineCompletionFeatureState(_editorInlineCompletions.length?'ready':'empty',{count:_editorInlineCompletions.length,triggerKind:triggerKind==null?1:triggerKind,reason:'provider-result'});
   _editorInlineCompletionIndex=0;renderEditorInlineCompletion();
   if(!quiet)setStatus(_editorInlineCompletions.length+' inline completion'+(_editorInlineCompletions.length===1?'':'s'));
 }
@@ -15708,16 +15799,16 @@ async function acceptEditorInlineCompletion(){
   if(!item||!editorInlineCompletionPreviewText(item))return false;
   _undoPush(true);
   const ok=editorApplyTextEdits([{range:editorInlineCompletionRange(item),newText:editorInlineCompletionInsertText(item)}]);
-  clearEditorInlineCompletions();
+  clearEditorInlineCompletions(ok?'accepted':'apply-failed');
   if(ok&&item.command&&typeof runEditorCodeActionCommand==='function')await runEditorCodeActionCommand(item.command);
-  if(ok){ed.focus();setStatus('Accepted inline completion')}
+  if(ok){_editorInlineCompletionAcceptedCount++;updateEditorInlineCompletionFeatureState('ready',{reason:'accepted',message:'Inline: accepted'});ed.focus();setStatus('Accepted inline completion')}
   return !!ok;
 }
 function handleEditorInlineCompletionKey(e){
   const hasGhost=!!($('editor-ghost-layer')&&$('editor-ghost-layer').children.length);
   if(!hasGhost)return false;
   if(e.key==='Tab'){e.preventDefault();acceptEditorInlineCompletion();return true}
-  if(e.key==='Escape'){e.preventDefault();clearEditorInlineCompletions();return true}
+  if(e.key==='Escape'){e.preventDefault();clearEditorInlineCompletions('dismissed');return true}
   return false;
 }
 function editorCodeLensTitle(lens){
@@ -20437,7 +20528,7 @@ async function formatDocument(options){
   if(res&&res.ok&&Array.isArray(res.edits)&&res.edits.length){
     _undoPush(true);
     if(editorApplyTextEdits(res.edits)){
-      if(typeof updateEditorLanguageFeatureState==='function')updateEditorLanguageFeatureState('formatting','ready',{kind:'document',providerId:providerId||'',edits:res.edits.length,applied:true,message:'Formatting: document '+editorFeatureCountText(res.edits.length,'edit')});
+      if(typeof updateEditorLanguageFeatureState==='function')updateEditorLanguageFeatureState('formatting','ready',{kind:'document',providerId:providerId||'',defaultFormatter:editorDefaultFormatter(),onSave:opts.onSave===true,edits:res.edits.length,applied:true,message:'Formatting: document '+editorFeatureCountText(res.edits.length,'edit')});
       if(!opts.quiet)setStatus('Formatted via extension');return true
     }
   }
@@ -20780,6 +20871,7 @@ function onStreamEnd(d){
           ' ('+parts.join(', ')+') | Completion: '+(d.usage.completion_tokens||d.usage.output_tokens||'?');
         const ctxEl=$('ctx-usage');if(ctxEl)ctxEl.title=tip;
         const tokEl=$('status-tokens');if(tokEl)tokEl.title=tip;
+        const statusCtx=$('status-context-usage');if(statusCtx)statusCtx.title=tip;
       }
     }
   }
@@ -32411,15 +32503,26 @@ function updateContextUsage(usedTokens){
   usedTokens=Math.max(0,Number(usedTokens)||0);
   totalTokens=usedTokens;
   const statusTokens=$('status-tokens');if(statusTokens)statusTokens.textContent=assistantTokenEstimateLabel(usedTokens);
-  const ctxEl=$('ctx-text'),ctxWrap=$('ctx-usage'),estimateEl=$('ctx-token-estimate');if(!ctxEl||!ctxWrap)return;
+  const ctxEl=$('ctx-text'),ctxWrap=$('ctx-usage'),estimateEl=$('ctx-token-estimate');
+  const statusCtx=$('status-context-usage'),statusCtxText=$('status-context-text');
   const cw=(config.context_window&&config.context_window.max_input)||128000;
   const pct=Math.min(100,Math.round(usedTokens/cw*100));
-  ctxEl.textContent='CW '+assistantCompactNumber(usedTokens)+' / '+assistantCompactNumber(cw);
+  const cwText='CW '+assistantCompactNumber(usedTokens)+' / '+assistantCompactNumber(cw);
+  const title='Content window usage: '+assistantCompactNumber(usedTokens)+' / '+assistantCompactNumber(cw)+' tokens ('+pct+'%)';
+  if(statusCtxText)statusCtxText.textContent=cwText;
+  if(statusCtx){
+    statusCtx.style.setProperty('--ctx-percent',pct+'%');
+    statusCtx.classList.toggle('warn',pct>=75&&pct<90);
+    statusCtx.classList.toggle('crit',pct>=90);
+    statusCtx.title=title;
+  }
+  if(!ctxEl||!ctxWrap)return;
+  ctxEl.textContent=cwText;
   if(estimateEl)estimateEl.textContent=assistantTokenEstimateLabel(usedTokens);
   ctxWrap.style.setProperty('--ctx-percent',pct+'%');
   ctxWrap.classList.toggle('warn',pct>=75&&pct<90);
   ctxWrap.classList.toggle('crit',pct>=90);
-  ctxWrap.title='Content window usage: '+assistantCompactNumber(usedTokens)+' / '+assistantCompactNumber(cw)+' tokens ('+pct+'%)';
+  ctxWrap.title=title;
 }
 function providerLabel(value){
   const labels={openai:'OpenAI',anthropic:'Anthropic',deepseek:'DeepSeek',ollama:'Ollama',custom:'Custom'};
@@ -44443,7 +44546,7 @@ function editorDirtyDiffSelfCheckSnapshot(){
     const toolbarDatasetOk=!!(toolbar&&toolbar.dataset.dirtyDiffAdded!==undefined&&toolbar.dataset.dirtyDiffHunks!==undefined&&toolbar.dataset.dirtyDiffActiveHunk!==undefined);
     const openedDiff=openActiveEditorDirtyDiff();
     const diffHost=$('editor-diff-host');
-    const diffRows=diffHost?diffHost.querySelectorAll('.editor-diff-row.added,.editor-diff-row.modified,.editor-diff-row.removed').length:0;
+    const diffViewRows=diffHost?diffHost.querySelectorAll('.editor-diff-row.added,.editor-diff-row.modified,.editor-diff-row.removed').length:0;
     const diffSummary=diffHost?diffHost.querySelectorAll('.editor-diff-chip.added,.editor-diff-chip.modified,.editor-diff-chip.removed').length:0;
     const diffDatasetsOk=!!(diffHost&&diffHost.classList.contains('active')&&diffHost.dataset.diffAddedLines!==undefined&&diffHost.dataset.diffModifiedLines!==undefined&&diffHost.dataset.diffRemovedLines!==undefined&&diffHost.dataset.diffHunks!==undefined);
     const featureState=editorLanguageFeatureStateSnapshot();
@@ -44485,7 +44588,7 @@ function editorDirtyDiffSelfCheckSnapshot(){
       activeHunkGutters,
       rulerMarkers,
       openedDiff,
-      diffRows,
+      diffRows:diffViewRows,
       diffSummary,
       diffDatasetsOk,
       featureDiffTotal:featureState.features&&featureState.features.diff&&featureState.features.diff.total||0,
@@ -44511,7 +44614,7 @@ function editorDirtyDiffSelfCheckSnapshot(){
         (dirty.summary&&dirty.summary.total||0)>0&&markerCount>0&&
         hunkCount>0&&!!toolbar&&toolbar.textContent.includes('Diff')&&actionCount>=3&&
         toolbarDatasetOk&&activeHunkRows>0&&activeHunkGutters>0&&rulerMarkers>0&&
-        openedDiff&&diffRows>0&&diffSummary>=3&&diffDatasetsOk&&
+        openedDiff&&diffViewRows>0&&diffSummary>=3&&diffDatasetsOk&&
         ((featureState.features&&featureState.features.diff&&featureState.features.diff.total)||0)>0&&
         ((featureState.features&&featureState.features.diff&&featureState.features.diff.hunks)||0)>0&&
         featureAggregate.activeFeatures.includes('diff')&&featureAggregate.diffTotal>0&&

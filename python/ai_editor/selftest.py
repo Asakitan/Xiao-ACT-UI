@@ -4536,6 +4536,9 @@ def test_phase1_ai_editor_regressions() -> None:
            and "settingsRenderRowImpact(wrap);" in html)
     _check("frontend Settings defaults to calmer VS Code workbench UX",
            'class="modal settings-modal preferences-workbench settings-vscode-calm"' in html
+           and 'data-panel="settings" data-i18n-title="settings" title="Settings"' in html
+           and 'M8.4 2.75h3.2l.42 2.02' in html
+           and '<circle cx="10" cy="10" r="2.35"' in html
            and 'id="settings-details-toggle" data-settings-icon-action="1"' in html
            and "const SETTINGS_DETAILS_STORAGE_KEY='sao.aiEditor.settings.details.v1';" in html
            and "function settingsApplyDetails(open)" in html
@@ -5056,10 +5059,17 @@ def test_phase1_ai_editor_regressions() -> None:
            and ".chat-composer-action { width:22px; height:22px; border:1px solid transparent; border-radius:999px;" in html
            and ".model-chip { display:none; align-items:center; gap:3px; padding:2px 6px; background:var(--bg3);" in html
            and ".ctx-ring { width:16px; height:16px; flex:0 0 16px; border-radius:50%;" in html
+           and ".status-context-usage { display:inline-flex; align-items:center; gap:5px;" in html
+           and ".status-context-usage.warn .ctx-ring" in html
+           and "#status-model { display:none!important; }" in html
            and 'id="ctx-ring" aria-hidden="true"' in html
            and 'id="ctx-token-estimate"' in html
+           and 'id="status-context-usage" title="Content window usage"' in html
+           and 'id="status-context-text">CW 0 / 128K' in html
            and "function assistantCompactNumber(value)" in html
            and "return assistantCompactNumber(value)+' tok';" in html
+           and "statusCtx.style.setProperty('--ctx-percent',pct+'%');" in html
+           and "statusContextReady:!!(statusCtx&&statusCtxStyle" in html
            and "border:1px solid var(--border); border-radius:999px; font-size:11px; color:var(--fg-dim);" in html
            and ".workflow-popup-action { width:20px; height:20px; border:1px solid transparent; border-radius:999px;" in html
            and ".chat-control-popup.show { display:block; }" in html
@@ -5233,6 +5243,9 @@ def test_phase1_ai_editor_regressions() -> None:
            and 'data-chat-prompt-action="review"' in html
            and 'data-chat-prompt-action="copy-context"' in html
            and 'data-chat-prompt-action="clear-draft"' in html
+           and ".chat-toolbar-head.has-state { display:none!important; }" in html
+           and ".chat-composer-summary.has-state { display:none!important; }" in html
+           and ".chat-toolbar-head,.chat-composer-summary,.chat-prompt-shortcuts { min-height:0!important; padding:0!important; }" in html
            and ".chat-prompt-shortcuts { display:none;" in html
            and "function assistantComposerSummaryState()" in html
            and "function renderAssistantComposerSummary()" in html
@@ -6349,7 +6362,7 @@ def test_phase1_ai_editor_regressions() -> None:
             and "assistantUiSelfCheckRecord(checks,'visual-composer-fill-ready'" in html
             and "assistantUiSelfCheckRecord(checks,'visual-controls-one-row-ready'" in html
             and "assistantUiSelfCheckRecord(checks,'visual-control-widths-ready'" in html
-            and "assistantUiSelfCheckRecord(checks,'visual-prompt-shortcuts-hidden-ready'" in html
+            and "assistantUiSelfCheckRecord(checks,'visual-composer-extra-rows-hidden-ready'" in html
             and "assistantUiSelfCheckRecord(checks,'visual-model-chip-removed-ready'" in html
             and "assistantUiSelfCheckRecord(checks,'visual-content-window-ring-ready'" in html
             and "assistantUiSelfCheckRecord(checks,'visual-no-old-control-boxes-ready'" in html
@@ -7044,9 +7057,16 @@ def test_phase1_ai_editor_regressions() -> None:
            and "editorRequestLanguageProvider('inlayHint'" in html
            and "function requestEditorInlineCompletions(quiet,triggerKind)" in html
            and "function renderEditorInlineCompletion()" in html
+           and "function updateEditorInlineCompletionLayerState(layer,info)" in html
+           and "function updateEditorInlineCompletionFeatureState(state,info)" in html
            and "function scheduleEditorInlineCompletions(delay,triggerKind)" in html
            and "function acceptEditorInlineCompletion()" in html
            and "function handleEditorInlineCompletionKey(e)" in html
+           and "inlineCompletions:{state:'empty'" in html
+           and "layer.dataset.inlineCompletionVisible=data.visible?'1':'0';" in html
+           and "el.dataset.inlineCompletions=String(inline.count||0);" in html
+           and "clearEditorInlineCompletions('dismissed')" in html
+           and "Inline: accepted" in html
            and "editorProviderPayload('inlineCompletion'" in html
            and "editorRequestLanguageProvider('inlineCompletion'" in html
            and "function editorFormatOptions()" in html
@@ -7328,6 +7348,7 @@ def test_phase1_ai_editor_regressions() -> None:
            and "function editorSemanticTokensApplyEdits(previousPayload,editPayload)" in html
            and "function decodeEditorSemanticTokens(data,legend)" in html
            and "function editorSemanticTokenThemeStyle(token)" in html
+           and "function editorSemanticTokenSummary(payload,code)" in html
            and "function applyExtensionSemanticTokenColors(colors)" in html
            and "function semanticTokenThemeRule(selector,value)" in html
            and "function highlightCodeWithSemanticTokens(code,lang,payload)" in html
@@ -7343,6 +7364,8 @@ def test_phase1_ai_editor_regressions() -> None:
            and "editorRequestLanguageProvider('semanticTokensEdits'" in html
            and "editorRequestLanguageProvider('semanticTokens'" in html
            and "_editorSemanticTokensRangeActive" in html
+           and "layer.dataset.semanticTokenFresh=semanticSummary.lengthMatches?'1':'0';" in html
+           and "el.dataset.semanticFresh=semantic.fresh===false?'0':'1';" in html
            and "semanticTokenColors" in html
            and "Refresh Semantic Tokens" in html
            and ".sem-function" in html
@@ -7877,6 +7900,7 @@ async function editorRequestLanguageProvider(kind, payload, options){
             "editorSemanticTokensApplyEdits",
             "editorSemanticTokensLegend",
             "decodeEditorSemanticTokens",
+            "editorSemanticTokenSummary",
             "editorSemanticTokenClass",
             "editorSemanticTokenThemeStyle",
             "highlightCodeWithSemanticTokens",
@@ -7911,6 +7935,16 @@ const data = new Uint32Array([
 const payload = { tokens: { data }, legend };
 const decoded = decodeEditorSemanticTokens(editorSemanticTokensData(payload), editorSemanticTokensLegend(payload));
 assert(decoded.length === 3, "unknown token type skipped");
+_editorSemanticTokensContentLength = code.length;
+const summary = editorSemanticTokenSummary({ ...payload, source: "range" }, code);
+assert(summary.count === 3
+       && summary.source === "range"
+       && summary.lengthMatches === true
+       && summary.types.join(",") === "function,variable",
+       "semantic token summary exposes fresh decoded type state");
+_editorSemanticTokensContentLength = code.length + 1;
+assert(editorSemanticTokenSummary({ ...payload, source: "range" }, code).count === 0,
+       "semantic token summary treats stale payload as empty");
 assert(editorSemanticTokensData({ data: { 0: 0, 1: 0, 2: 1, 3: 0, 4: 0, length: 5 } }).length === 5,
        "array-like semantic token data normalized");
 const editPayload = editorSemanticTokensEditsFromResponse({
@@ -9056,6 +9090,7 @@ let _editorLanguageFeatureState = {
   diagnostics:{state:"empty",count:0,errors:0,warnings:0,infos:0,hints:0,message:"Diagnostics: 0"},
   codeActions:{state:"empty",count:0,kind:"",diagnostics:0,message:"Code actions: 0"},
   formatting:{state:"empty",kind:"",edits:0,applied:false,message:"Formatting: idle"},
+  inlineCompletions:{state:"empty",count:0,visible:false,accepted:0,triggerKind:0,message:"Inline: idle"},
   semanticTokens:{state:"empty",source:"",count:0,resultId:"",message:"Semantic: idle"},
   diff:{state:"empty",mode:"",added:0,modified:0,removed:0,total:0,message:"Diff: clean"}
 };
@@ -9085,17 +9120,26 @@ async function call(method,payload){
          "diagnostic severity summary counts VS Code severities");
   updateEditorLanguageFeatureState("diagnostics", "ready", severity);
   updateEditorLanguageFeatureState("codeActions", "ready", { count:2, diagnostics:3, message:"Code actions: 2 quick fixes" });
-  updateEditorLanguageFeatureState("formatting", "ready", { kind:"document", edits:1, applied:true, message:"Formatting: document 1 edit" });
-  updateEditorLanguageFeatureState("semanticTokens", "ready", { source:"range", count:4, resultId:"sem-1", tokenTypes:["class","function"], tokenTypeCount:2, message:"Semantic: 4 range" });
+  updateEditorLanguageFeatureState("formatting", "ready", { kind:"document", providerId:"self.formatter", onSave:true, edits:1, applied:true, message:"Formatting: document 1 edit" });
+  updateEditorLanguageFeatureState("inlineCompletions", "ready", { count:1, visible:true, accepted:2, triggerKind:1, lastReason:"visible", message:"Inline: 1 suggestion" });
+  updateEditorLanguageFeatureState("semanticTokens", "ready", { source:"range", count:4, resultId:"sem-1", fresh:true, tokenTypes:["class","function"], tokenTypeCount:2, message:"Semantic: 4 range" });
   updateEditorLanguageFeatureState("diff", "ready", { mode:"dirty", added:1, modified:1, removed:0, total:2, message:"Diff: +1 ~1 -0" });
   const snapshot = editorLanguageFeatureStateSnapshot();
   assert(snapshot.features.diagnostics.errors === 1
          && snapshot.features.codeActions.count === 2
          && snapshot.features.formatting.applied === true
+         && snapshot.features.inlineCompletions.visible === true
          && snapshot.features.semanticTokens.source === "range"
          && snapshot.features.diff.total === 2
          && snapshot.title.includes("Semantic: 4 range")
+         && languageStatus.dataset.formatOnSave === "1"
+         && languageStatus.dataset.formatProviderId === "self.formatter"
+         && languageStatus.dataset.inlineCompletions === "1"
+         && languageStatus.dataset.inlineVisible === "1"
+         && languageStatus.dataset.inlineAccepted === "2"
+         && languageStatus.dataset.inlineLastReason === "visible"
          && languageStatus.dataset.semanticTokens === "4"
+         && languageStatus.dataset.semanticFresh === "1"
          && languageStatus.dataset.semanticTokenTypeCount === "2"
          && languageStatus.dataset.semanticTokenTypes === "class,function"
          && languageStatus.dataset.diffTotal === "2",
@@ -15264,13 +15308,21 @@ console.log("command palette quick access helpers ok");
            and "updateEditorLanguageFeatureState('saveParticipants','running'" in html
            and "summary.codeActionKinds=kinds.slice();" in html
            and "summary.codeActionApplied=(summary.codeActionApplied||0)+1;" in html
-           and "summary.filesApplied=filesChanged===true;" in html
-           and "el.dataset.saveReason=String(save.reason||'');" in html
-           and "el.dataset.saveChanged=save.changed?'1':'0';" in html
-           and "el.dataset.saveCodeActions=String(save.codeActionApplied||0);" in html
-           and "el.dataset.saveFormatOnSave=save.formatOnSave?'1':'0';" in html
-           and "el.dataset.saveFilesApplied=save.filesApplied?'1':'0';" in html
-           and "'diagnostics','codeActions','formatting','saveParticipants','semanticTokens','diff'" in html)
+            and "summary.filesApplied=filesChanged===true;" in html
+            and "el.dataset.saveReason=String(save.reason||'');" in html
+            and "el.dataset.saveSeq=String(save.seq||0);" in html
+            and "el.dataset.saveAutoSaveMode=String(save.autoSaveMode||'');" in html
+            and "el.dataset.saveChanged=save.changed?'1':'0';" in html
+            and "el.dataset.saveCodeActionCount=String(save.codeActionCount||0);" in html
+            and "el.dataset.saveCodeActions=String(save.codeActionApplied||0);" in html
+            and "el.dataset.saveCodeActionErrors=String(save.codeActionErrors||0);" in html
+            and "el.dataset.saveFormatOnSave=save.formatOnSave?'1':'0';" in html
+            and "el.dataset.saveFormatChanged=save.formatChanged?'1':'0';" in html
+            and "el.dataset.saveFilesApplied=save.filesApplied?'1':'0';" in html
+            and "el.dataset.formatOnSave=fmt.onSave?'1':'0';" in html
+            and "el.dataset.formatProviderId=String(fmt.providerId||'');" in html
+            and "onSave:opts.onSave===true" in html
+            and "'diagnostics','codeActions','formatting','inlineCompletions','saveParticipants','semanticTokens','diff'" in html)
     if not node_path:
         _check("frontend built-in language fallback behavior skipped without Node.js",
                True)
