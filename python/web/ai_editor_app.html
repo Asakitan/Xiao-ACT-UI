@@ -23769,16 +23769,33 @@ function webviewCommandUriAllowed(viewId,command){
 function webviewCommandUriPayload(uri){
   return extensionWelcomeCommandPayloadFromUri(uri);
 }
+function webviewContextKeys(context){
+  return Object.keys(context&&typeof context==='object'?context:{})
+    .filter(Boolean).sort();
+}
 async function executeWebviewCommandUri(viewId,data){
   const href=String(data&&data.href||'').trim();
   const payload=data&&data.command?{command:String(data.command||''),arguments:Array.isArray(data.arguments)?data.arguments:[]}:webviewCommandUriPayload(href);
+  const id=String(viewId||'').trim();
+  const cached=webviewRuntimeCache[id]||{};
+  const basePatch={
+    commandUriCount:(Number(cached.commandUriCount)||0)+1,
+    lastCommandUri:href,
+    lastCommandUriCommand:payload.command,
+    lastCommandUriAt:webviewRuntimeNow()
+  };
   if(!webviewCommandUriAllowed(viewId,payload.command)){
+    patchWebviewRuntimeLifecycle(viewId,{...basePatch,commandUriBlockedCount:(Number(cached.commandUriBlockedCount)||0)+1,lastCommandUriAllowed:false});
     setStatus('Webview command URI is not enabled: '+payload.command);
     return false;
   }
-  patchWebviewRuntimeLifecycle(viewId,{lastCommandUri:href,lastCommandUriCommand:payload.command});
+  patchWebviewRuntimeLifecycle(viewId,{...basePatch,commandUriAllowedCount:(Number(cached.commandUriAllowedCount)||0)+1,lastCommandUriAllowed:true});
   const r=await call('execute_command',payload.command,...(payload.arguments||[]));
-  if(!callSucceeded(r))setStatus('Webview command failed: '+callFailedMessage(r,payload.command));
+  if(!callSucceeded(r)){
+    const after=webviewRuntimeCache[id]||{};
+    patchWebviewRuntimeLifecycle(viewId,{commandUriFailedCount:(Number(after.commandUriFailedCount)||0)+1});
+    setStatus('Webview command failed: '+callFailedMessage(r,payload.command));
+  }
   return callSucceeded(r);
 }
 function webviewRuntimeLifecycleState(runtime){
@@ -23822,6 +23839,18 @@ function applyWebviewRuntimeDataset(el,viewId,runtime){
   el.dataset.webviewApiCallCount=String(Number(data.apiCallCount)||0);
   el.dataset.webviewLastApiCallKind=String(data.lastApiCallKind||'');
   el.dataset.webviewVisibilityState=String(data.visibilityState||'');
+  el.dataset.webviewContextMenuCount=String(Number(data.contextMenuCount)||0);
+  el.dataset.webviewContextMenuActionCount=String(Number(data.contextMenuActionCount)||0);
+  el.dataset.webviewLastContextKeys=Array.isArray(data.lastContextKeys)?data.lastContextKeys.join(','):String(data.lastContextKeys||'');
+  el.dataset.webviewCommandUriCount=String(Number(data.commandUriCount)||0);
+  el.dataset.webviewCommandUriAllowedCount=String(Number(data.commandUriAllowedCount)||0);
+  el.dataset.webviewCommandUriBlockedCount=String(Number(data.commandUriBlockedCount)||0);
+  el.dataset.webviewCommandUriFailedCount=String(Number(data.commandUriFailedCount)||0);
+  el.dataset.webviewLastCommandUriCommand=String(data.lastCommandUriCommand||'');
+  el.dataset.webviewFocusEventCount=String(Number(data.focusEventCount)||0);
+  el.dataset.webviewFocused=data.focused?'true':'false';
+  el.dataset.webviewKeyEventCount=String(Number(data.keyEventCount)||0);
+  el.dataset.webviewLastKey=String(data.lastKey||'');
   el.dataset.webviewVisible=data.viewState&&data.viewState.visible!==undefined?(data.viewState.visible?'true':'false'):(data.visible===false?'false':'true');
   el.dataset.webviewActive=data.viewState&&data.viewState.active?'true':'false';
   if(data.title||data.name)el.dataset.webviewTitle=String(data.title||data.name);
@@ -25062,6 +25091,12 @@ function notifyWebviewPanelViewState(viewId,isActive,isVisible){
 }
 function handleWebviewFocusEvent(viewId,focused){
   const id=String(viewId||'').trim();if(!id)return;
+  const current=webviewRuntimeCache[id]||{};
+  patchWebviewRuntimeLifecycle(id,{
+    focused:!!focused,
+    focusEventCount:(Number(current.focusEventCount)||0)+1,
+    lastFocusAt:webviewRuntimeNow()
+  });
   const tab=findCustomEditorTabByViewId(id);
   if(tab&&focused&&tab.id!==activeTab)switchTab(tab.id);
   const isProvider=!!document.getElementById('webview-frame-'+providerDomKey(id));
@@ -25071,6 +25106,15 @@ function dispatchWebviewKeyboardEvent(viewId,data){
   data=data||{};
   const type=String(data.eventType||'keydown');
   if(type!=='keydown'&&type!=='keyup')return;
+  const id=String(viewId||'').trim();
+  const current=webviewRuntimeCache[id]||{};
+  patchWebviewRuntimeLifecycle(id,{
+    keyEventCount:(Number(current.keyEventCount)||0)+1,
+    lastKey:String(data.key||''),
+    lastKeyCode:String(data.code||''),
+    lastKeyEventType:type,
+    lastKeyAt:webviewRuntimeNow()
+  });
   let ev=null;
   try{
     ev=new KeyboardEvent(type,{
@@ -34469,16 +34513,57 @@ function webviewContextAnchor(viewId,clientX,clientY){
   }
   return {x:Number(clientX)||0,y:Number(clientY)||0};
 }
+function webviewFallbackContextActions(viewId,payload){
+  const keys=webviewContextKeys(payload);
+  const id=String(viewId||'');
+  return [
+    {title:'Copy Webview ID',command:'sao.webview.copyId',group:'navigation@1',saoFallback:'copy-id'},
+    {title:'Copy Context JSON',command:'sao.webview.copyContext',group:'navigation@2',saoFallback:'copy-context'},
+    {title:'Copy Runtime Options',command:'sao.webview.copyOptions',group:'navigation@3',saoFallback:'copy-options'},
+    {title:'Show Runtime Status',command:'sao.webview.showStatus',group:'navigation@4',saoFallback:'status',disabled:!id}
+  ].map(action=>({...action,arguments:[{viewId:id,contextKeys:keys}]}));
+}
+function runWebviewFallbackContextAction(viewId,action,payload){
+  const kind=String(action&&action.saoFallback||'');
+  const id=String(viewId||'').trim();
+  const runtime=webviewRuntimeCache[id]||{};
+  if(kind==='copy-id')return settingsCopyText(id,'Webview ID');
+  if(kind==='copy-context')return settingsCopyText(JSON.stringify(payload||{},null,2),'Webview context');
+  if(kind==='copy-options')return settingsCopyText(JSON.stringify(webviewRuntimeOptions(runtime)||{},null,2),'Webview runtime options');
+  if(kind==='status'){
+    const keys=webviewContextKeys(payload).join(', ')||'none';
+    setStatus('Webview '+id+' · '+webviewRuntimeLifecycleState(runtime)+' · context keys: '+keys);
+    return true;
+  }
+  return false;
+}
 async function showWebviewContextMenu(viewId,clientX,clientY,context){
   const id=String(viewId||'').trim();if(!id)return;
   const viewType=webviewProvidedViewType(id);
   const payload=webviewContextPayload(id,context);
+  const previous=webviewRuntimeCache[id]||{};
+  patchWebviewRuntimeLifecycle(id,{
+    contextMenuCount:(Number(previous.contextMenuCount)||0)+1,
+    lastContextMenuAt:webviewRuntimeNow(),
+    lastContextMenuX:Number(clientX)||0,
+    lastContextMenuY:Number(clientY)||0,
+    lastContextKeys:webviewContextKeys(payload),
+    lastContextPreventDefault:!!(context&&context.preventDefaultContextMenuItems),
+    lastContextWebview:viewType
+  });
   let r=null;
   try{r=await call('list_webview_context_actions',id,viewType,payload)}catch(e){r=null}
-  const actions=r&&Array.isArray(r.actions)?r.actions:[];
+  let actions=r&&Array.isArray(r.actions)?r.actions:[];
+  const fallback=!actions.length;
+  if(fallback)actions=webviewFallbackContextActions(id,payload);
+  patchWebviewRuntimeLifecycle(id,{
+    contextMenuActionCount:actions.length,
+    contextMenuFallback:fallback
+  });
   if(!actions.length)return;
   const anchor=webviewContextAnchor(id,clientX,clientY);
   showExtensionActionMenu(anchor.x,anchor.y,actions,action=>{
+    if(action&&action.saoFallback)return runWebviewFallbackContextAction(id,action,payload);
     if(action&&action.command&&!action.disabled)call('execute_command',action.command,...(action.arguments||[]));
   });
 }
@@ -35561,7 +35646,7 @@ function extensionRuntimeDomSelfCheckSnapshot(){
     window._onEditorEvent('render_webview_panel',{view_id:lifecycleViewId,provider_id:lifecycleProviderId,title:'Lifecycle Start',html:'<html><body>lifecycle</body></html>',state:{phase:'render'},options:{retainContextWhenHidden:true},retainContextWhenHidden:true});
     window._onEditorEvent('update_webview_panel_title',{view_id:lifecycleViewId,title:'Lifecycle Updated',view_type:'selftest.lifecycle'});
     window._onEditorEvent('update_webview_panel_icon',{view_id:lifecycleViewId,icon_path:{id:'beaker'},view_type:'selftest.lifecycle'});
-    window._onEditorEvent('update_webview_panel_options',{view_id:lifecycleViewId,options:{retainContextWhenHidden:true,enableScripts:true}});
+    window._onEditorEvent('update_webview_panel_options',{view_id:lifecycleViewId,options:{retainContextWhenHidden:true,enableScripts:true,enableCommandUris:['selftest.webviewCommand']}});
     window._onEditorEvent('reveal_webview_panel',{view_id:lifecycleViewId,provider_id:lifecycleProviderId,title:'Lifecycle Updated',preserveFocus:true});
     const lifecycleToken=_webviewTokens[lifecycleViewId]||'';
     if(lifecycleToken){
@@ -35570,6 +35655,10 @@ function extensionRuntimeDomSelfCheckSnapshot(){
       window.dispatchEvent(new MessageEvent('message',{data:{type:'webview-set-state',viewId:lifecycleViewId,token:lifecycleToken,state:{phase:'state'}}}));
       window.dispatchEvent(new MessageEvent('message',{data:{type:'webview-message',viewId:lifecycleViewId,token:lifecycleToken,message:{kind:'from-webview'}}}));
       window.dispatchEvent(new MessageEvent('message',{data:{type:'webview-visibility',viewId:lifecycleViewId,token:lifecycleToken,visibilityState:'visible'}}));
+      window.dispatchEvent(new MessageEvent('message',{data:{type:'webview-context-menu',viewId:lifecycleViewId,token:lifecycleToken,clientX:12,clientY:18,context:{webviewSection:'editor',preventDefaultContextMenuItems:true}}}));
+      window.dispatchEvent(new MessageEvent('message',{data:{type:'webview-command-uri',viewId:lifecycleViewId,token:lifecycleToken,href:'command:selftest.webviewCommand?%5B1%5D',command:'selftest.webviewCommand',arguments:[1]}}));
+      window.dispatchEvent(new MessageEvent('message',{data:{type:'webview-focus',viewId:lifecycleViewId,token:lifecycleToken,focused:true}}));
+      window.dispatchEvent(new MessageEvent('message',{data:{type:'webview-key',viewId:lifecycleViewId,token:lifecycleToken,eventType:'keydown',key:'F1',code:'F1',ctrlKey:true}}));
     }
     window._onEditorEvent('webview_message',{view_id:lifecycleViewId,message:{kind:'ping'}});
     const lifecyclePanel=$(providerElId('rp',lifecycleProviderId));
@@ -35603,6 +35692,21 @@ function extensionRuntimeDomSelfCheckSnapshot(){
       apiCallCount:Number(lifecycleBeforeDispose.apiCallCount)||0,
       lastApiCallKind:String(lifecycleBeforeDispose.lastApiCallKind||''),
       visibilityState:String(lifecycleBeforeDispose.visibilityState||''),
+      contextMenuCount:Number(lifecycleBeforeDispose.contextMenuCount)||0,
+      contextKeys:Array.isArray(lifecycleBeforeDispose.lastContextKeys)?lifecycleBeforeDispose.lastContextKeys:[],
+      panelContextMenuCount:lifecyclePanel?Number(lifecyclePanel.dataset.webviewContextMenuCount)||0:0,
+      panelContextKeys:lifecyclePanel?lifecyclePanel.dataset.webviewLastContextKeys:'',
+      commandUriCount:Number(lifecycleBeforeDispose.commandUriCount)||0,
+      commandUriAllowedCount:Number(lifecycleBeforeDispose.commandUriAllowedCount)||0,
+      lastCommandUriCommand:String(lifecycleBeforeDispose.lastCommandUriCommand||''),
+      panelCommandUriCount:lifecyclePanel?Number(lifecyclePanel.dataset.webviewCommandUriCount)||0:0,
+      panelLastCommandUriCommand:lifecyclePanel?lifecyclePanel.dataset.webviewLastCommandUriCommand:'',
+      focusEventCount:Number(lifecycleBeforeDispose.focusEventCount)||0,
+      keyEventCount:Number(lifecycleBeforeDispose.keyEventCount)||0,
+      lastKey:String(lifecycleBeforeDispose.lastKey||''),
+      panelFocusEventCount:lifecyclePanel?Number(lifecyclePanel.dataset.webviewFocusEventCount)||0:0,
+      panelKeyEventCount:lifecyclePanel?Number(lifecyclePanel.dataset.webviewKeyEventCount)||0:0,
+      panelLastKey:lifecyclePanel?lifecyclePanel.dataset.webviewLastKey:'',
       disposed:lifecycleAfterDispose.disposed===true&&lifecycleAfterDispose.lifecycleState==='disposed',
       disposedSeq:Number(lifecycleAfterDispose.lifecycleSeq)||0,
       panelRemoved:!$(providerElId('rp',lifecycleProviderId)),

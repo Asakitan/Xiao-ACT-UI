@@ -14589,6 +14589,11 @@ console.log("frontend built-in language fallback behavior ok");
            and "el.dataset.webviewPortMappings=String(portMapping.length);" in html
            and "function webviewCommandUriAllowed(viewId,command)" in html
            and "function executeWebviewCommandUri(viewId,data)" in html
+           and "commandUriCount:(Number(cached.commandUriCount)||0)+1" in html
+           and "commandUriAllowedCount:(Number(cached.commandUriAllowedCount)||0)+1" in html
+           and "commandUriBlockedCount:(Number(cached.commandUriBlockedCount)||0)+1" in html
+           and "el.dataset.webviewCommandUriCount=String(Number(data.commandUriCount)||0);" in html
+           and "el.dataset.webviewLastCommandUriCommand=String(data.lastCommandUriCommand||'');" in html
            and "type==='webview-command-uri'" in html
            and "function _portMappedUrl(v)" in html
            and "Number(m.webviewPort)===port" in html
@@ -14661,10 +14666,24 @@ console.log("frontend built-in language fallback behavior ok");
            and "\"webview/context\"" in app_source
            and "function showWebviewContextMenu(viewId,clientX,clientY,context)"
            in html
+           and "function webviewFallbackContextActions(viewId,payload)" in html
+           and "function runWebviewFallbackContextAction(viewId,action,payload)" in html
+           and "contextMenuCount:(Number(previous.contextMenuCount)||0)+1" in html
+           and "lastContextKeys:webviewContextKeys(payload)" in html
+           and "el.dataset.webviewContextMenuCount=String(Number(data.contextMenuCount)||0);" in html
+           and "el.dataset.webviewLastContextKeys=Array.isArray(data.lastContextKeys)?data.lastContextKeys.join(','):String(data.lastContextKeys||'');" in html
            and "data-vscode-context" in html
            and "webview-context-menu" in html
            and "function handleWebviewFocusEvent(viewId,focused)" in html
            and "function dispatchWebviewKeyboardEvent(viewId,data)" in html
+           and "focusEventCount:(Number(current.focusEventCount)||0)+1" in html
+           and "keyEventCount:(Number(current.keyEventCount)||0)+1" in html
+           and "el.dataset.webviewFocusEventCount=String(Number(data.focusEventCount)||0);" in html
+           and "el.dataset.webviewKeyEventCount=String(Number(data.keyEventCount)||0);" in html
+           and "el.dataset.webviewLastKey=String(data.lastKey||'');" in html
+           and "contextMenuCount:Number(lifecycleBeforeDispose.contextMenuCount)||0" in html
+           and "commandUriAllowedCount:Number(lifecycleBeforeDispose.commandUriAllowedCount)||0" in html
+           and "panelLastKey:lifecyclePanel?lifecyclePanel.dataset.webviewLastKey:''" in html
            and "menu_context.setdefault(\"webview\", webview_id)" in app_source
            and "action[\"arguments\"] = [json.loads(json.dumps("
            in app_source
