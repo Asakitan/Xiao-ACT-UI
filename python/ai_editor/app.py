@@ -16998,9 +16998,12 @@ class _DummyGui:
 
 _running_window = None
 _running_thread = None
+_running_child_process = None
 _launch_lock = threading.Lock()
 _launch_inflight_started_at = 0.0
 _LAUNCH_INFLIGHT_TTL_SECONDS = 8.0
+_LAUNCH_CHILD_GRACE_SECONDS = 90.0
+_LAUNCH_STATE_FILE = os.path.join(os.path.expanduser("~"), ".sao", "ai_editor_launch.json")
 
 
 def _html_path() -> str:
@@ -17088,6 +17091,8 @@ def _launch_subprocess() -> None:
     if _activate_existing_ai_editor_window():
         print("[AIEditor] activated existing window")
         return
+    if not os.environ.get(_AI_EDITOR_FORCE_NEW_ENV) and _recent_child_launch_alive():
+        return
     _append_ai_editor_log("existing window unavailable; launching subprocess")
     if getattr(sys, 'frozen', False):
         from config import get_main_executable
@@ -17113,6 +17118,8 @@ def _launch_subprocess() -> None:
             log.flush()
             proc = _sp.Popen(cmd, cwd=cwd, env=env, creationflags=flags,
                              stdout=log, stderr=log, close_fds=True)
+            globals()["_running_child_process"] = proc
+            _write_launch_state(proc.pid)
         print(f"[AIEditor] subprocess started (pid={proc.pid}, log={log_path})")
     except Exception as exc:
         print(f"[AIEditor] subprocess failed: {exc}")
@@ -17146,6 +17153,96 @@ def _append_ai_editor_log(message: str) -> None:
             log.write(f"[AIEditor] {message}\n")
     except Exception:
         pass
+
+
+def _process_alive(pid: int) -> bool:
+    try:
+        pid = int(pid or 0)
+    except Exception:
+        return False
+    if pid <= 0 or pid == os.getpid():
+        return False
+    if os.name == "nt":
+        try:
+            import ctypes
+            kernel32 = ctypes.windll.kernel32
+            handle = kernel32.OpenProcess(0x1000, False, int(pid))
+            if not handle:
+                return False
+            try:
+                code = ctypes.c_ulong(0)
+                if not kernel32.GetExitCodeProcess(handle, ctypes.byref(code)):
+                    return False
+                return int(code.value) == 259
+            finally:
+                kernel32.CloseHandle(handle)
+        except Exception:
+            return False
+    try:
+        os.kill(pid, 0)
+        return True
+    except Exception:
+        return False
+
+
+def _read_launch_state() -> Dict[str, Any]:
+    try:
+        with open(_LAUNCH_STATE_FILE, "r", encoding="utf-8") as fh:
+            data = json.load(fh)
+        return data if isinstance(data, dict) else {}
+    except Exception:
+        return {}
+
+
+def _write_launch_state(pid: int) -> None:
+    try:
+        os.makedirs(os.path.dirname(_LAUNCH_STATE_FILE), exist_ok=True)
+        with open(_LAUNCH_STATE_FILE, "w", encoding="utf-8") as fh:
+            json.dump({
+                "pid": int(pid),
+                "started_at": time.time(),
+                "cwd": os.getcwd(),
+                "title": _AI_EDITOR_WINDOW_TITLE,
+            }, fh)
+    except Exception:
+        pass
+
+
+def _clear_launch_state_for_pid(pid: int) -> None:
+    try:
+        state = _read_launch_state()
+        current = int(state.get("pid") or 0)
+        if current and current != int(pid or 0):
+            return
+        if os.path.exists(_LAUNCH_STATE_FILE):
+            os.remove(_LAUNCH_STATE_FILE)
+    except Exception:
+        pass
+
+
+def _recent_child_launch_alive() -> bool:
+    global _running_child_process
+    try:
+        proc = _running_child_process
+        if proc is not None and proc.poll() is None:
+            _append_ai_editor_log(
+                f"launch request ignored; child process alive pid={proc.pid}")
+            return True
+        _running_child_process = None
+    except Exception:
+        _running_child_process = None
+    state = _read_launch_state()
+    pid = int(state.get("pid") or 0)
+    started_at = float(state.get("started_at") or 0.0)
+    if pid and _process_alive(pid):
+        age = max(0.0, time.time() - started_at) if started_at else 0.0
+        if age <= _LAUNCH_CHILD_GRACE_SECONDS:
+            _append_ai_editor_log(
+                f"launch request ignored; recent child process alive pid={pid} age={age:.1f}s")
+            return True
+    elif pid:
+        _clear_launch_state_for_pid(pid)
+    return False
 
 
 def _virtual_screen_bounds() -> tuple[int, int, int, int]:
@@ -17526,6 +17623,7 @@ def _launch_webview_blocking(gui_ref: Any = None) -> None:
             except Exception:
                 pass
             _running_window = None
+            _clear_launch_state_for_pid(os.getpid())
 
         def _on_closing():
             api.cancel()

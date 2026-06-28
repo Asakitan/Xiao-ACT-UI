@@ -2233,13 +2233,20 @@ def test_app_settings_parity() -> None:
            "threading.Thread(target=_activate_ai_editor_window_with_retry" in app_src
            and "webview.start(debug=False)" in app_src)
     _check("AI Editor menu launch is async and single-flight",
-           "def _launch_subprocess_async()" in app_src
-           and "name=\"sao-ai-editor-launch\"" in app_src
-           and "_launch_lock = threading.Lock()" in app_src
-           and "_LAUNCH_INFLIGHT_TTL_SECONDS" in app_src
-           and "launch request ignored; launcher already running" in app_src
-           and "launch request ignored; launch recently started" in app_src
-           and "_launch_subprocess_async()" in app_src)
+            "def _launch_subprocess_async()" in app_src
+            and "name=\"sao-ai-editor-launch\"" in app_src
+            and "_launch_lock = threading.Lock()" in app_src
+            and "_LAUNCH_INFLIGHT_TTL_SECONDS" in app_src
+            and "_LAUNCH_CHILD_GRACE_SECONDS" in app_src
+            and "_LAUNCH_STATE_FILE" in app_src
+            and "def _process_alive(pid: int)" in app_src
+            and "def _recent_child_launch_alive()" in app_src
+            and "launch request ignored; recent child process alive" in app_src
+            and "_write_launch_state(proc.pid)" in app_src
+            and "_clear_launch_state_for_pid(os.getpid())" in app_src
+            and "launch request ignored; launcher already running" in app_src
+            and "launch request ignored; launch recently started" in app_src
+            and "_launch_subprocess_async()" in app_src)
     _check("AI Editor existing window activation verifies visibility before reuse",
            "def _window_handle_visible_after_activation(" in app_src
            and "def _window_handle_responding(" in app_src
@@ -4469,6 +4476,11 @@ def test_phase1_ai_editor_regressions() -> None:
            and "hasNoTopSettingsBands" in html
            and "hasSingleSearchTopBand" in html
            and "hasSearchOnlyTopWorkbench" in html
+           and 'id="settings-searchbar"' in html
+           and "searchbar.dataset.settingsPlacement='sidebar'" in html
+           and ".settings-vscode-calm .settings-nav > .settings-searchbar" in html
+           and "hasSidebarSettingsSearch" in html
+           and "hasNoFullWidthSettingsSearchbar" in html
            and "hasMinimalTopSearchControls" in html
            and "hasSearchResultTextOnlyDefault" in html
            and "hasHiddenTopSearchCaption" in html
@@ -4478,6 +4490,9 @@ def test_phase1_ai_editor_regressions() -> None:
            and ".settings-vscode-calm.settings-details-open .settings-search-caption," in html
            and "function settingsJumpbarAction(action)" in html
            and "function renderSettingsJumpbar(stats)" in html
+           and "function bootAiEditorUi(reason)" in html
+           and "document.body.dataset.aiEditorBootMode" in html
+           and "bootAiEditorUi('browser')" in html
            and "host.dataset.settingsJumpbarRendered='1'" in html
            and "window.settingsJumpbarAction=settingsJumpbarAction;" in html
            and "hasSettingsJumpbar" in html
@@ -10637,6 +10652,8 @@ console.log("frontend word separator behavior ok");
             and "result.snapshot.hasDetailsOnlyJumpbar" in settings_smoke_source
             and "result.snapshot.hasNoTopSettingsBands" in settings_smoke_source
             and "result.snapshot.hasSingleSearchTopBand" in settings_smoke_source
+            and "result.snapshot.hasSidebarSettingsSearch" in settings_smoke_source
+            and "result.snapshot.hasNoFullWidthSettingsSearchbar" in settings_smoke_source
             and "result.snapshot.hasSidebarQuickSettingsActions" in settings_smoke_source
             and "result.snapshot.hasCompactSearchScopeStack" in settings_smoke_source
             and "result.snapshot.hasCalmDefaultSettingsMode" in settings_smoke_source

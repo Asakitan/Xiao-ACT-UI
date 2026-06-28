@@ -3186,6 +3186,34 @@ pre.code-block { overflow:visible; }
 .settings-vscode-calm .settings-nav-quick[data-settings-command-surface="sidebar"] button {
   justify-content:space-between; text-align:left; padding:3px 7px;
 }
+.settings-vscode-calm .settings-nav > .settings-searchbar {
+  position:sticky; top:0; z-index:4; display:block; min-height:0; padding:0 8px 10px 0;
+  border-bottom:1px solid color-mix(in srgb,var(--border) 54%,transparent); background:var(--bg);
+}
+.settings-vscode-calm .settings-nav > .settings-searchbar .settings-search-row,
+.settings-vscode-calm.settings-details-open .settings-nav > .settings-searchbar .settings-search-row {
+  display:grid; grid-template-columns:minmax(0,1fr) !important; max-width:none; width:100%;
+  gap:0; padding:0; border-bottom:0;
+}
+.settings-vscode-calm .settings-nav > .settings-searchbar .settings-search-primary {
+  max-width:none; width:100%;
+}
+.settings-vscode-calm .settings-nav > .settings-searchbar .settings-query-box {
+  min-height:30px; grid-template-columns:22px minmax(0,1fr) auto auto;
+}
+.settings-vscode-calm .settings-nav > .settings-searchbar input#settings-search {
+  height:30px; font-size:12px; padding-left:4px;
+}
+.settings-vscode-calm .settings-nav > .settings-searchbar .settings-result-nav {
+  padding-right:3px;
+}
+.settings-vscode-calm .settings-nav > .settings-searchbar .settings-result-count {
+  min-width:42px; max-width:58px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;
+}
+.settings-vscode-calm:not(.settings-details-open) .settings-nav > .settings-searchbar .settings-result-nav button,
+.settings-vscode-calm:not(.settings-details-open) .settings-nav > .settings-searchbar #settings-details-toggle {
+  display:none;
+}
 .settings-row-action:disabled { opacity:.35; cursor:default; }
 .settings-row-action-menu { display:none; position:absolute; top:26px; right:0; min-width:174px; padding:4px;
   border:1px solid var(--border); border-radius:4px; background:var(--bg2); box-shadow:var(--shadow); }
@@ -4165,7 +4193,7 @@ pre.code-block { overflow:visible; }
       </div>
     </div>
     <!-- SETTINGS-01: Search/filter -->
-    <div class="settings-searchbar">
+    <div class="settings-searchbar" id="settings-searchbar">
       <div class="settings-search-row">
         <div class="settings-search-primary">
           <div class="settings-query-box">
@@ -29047,10 +29075,16 @@ function settingsNavKeydown(ev){
 function renderSettingsNav(){
   const nav=$('settings-nav');if(!nav)return;
   const sections=settingsCategorySections();
+  const searchbar=$('settings-searchbar')||document.querySelector('.settings-searchbar');
+  if(searchbar&&searchbar.parentElement===nav)searchbar.remove();
   nav.innerHTML='';
   nav.setAttribute('role','tree');
   nav.setAttribute('aria-label','Settings categories');
   nav.onkeydown=settingsNavKeydown;
+  if(searchbar){
+    searchbar.dataset.settingsPlacement='sidebar';
+    nav.appendChild(searchbar);
+  }
   const summary=document.createElement('div');
   summary.className='settings-nav-summary';
   summary.innerHTML='<strong id="settings-nav-target-title">'+settingsTargetDisplayName(currentSettingsTarget)+' Settings</strong>'
@@ -29445,6 +29479,8 @@ function settingsUiSelfCheckSnapshot(){
   const navReviewButtons=navReview?Array.from(navReview.querySelectorAll('[data-settings-nav-review-action]')):[];
   const topReviewHidden=!!(settingsFrame&&settingsFrame.classList.contains('settings-vscode-calm')&&!settingsFrame.classList.contains('settings-details-open')&&reviewBar&&String(getComputedStyle(reviewBar).display)==='none');
   const topActiveFiltersHidden=!!(settingsFrame&&settingsFrame.classList.contains('settings-vscode-calm')&&!settingsFrame.classList.contains('settings-details-open')&&topActiveFilters&&String(getComputedStyle(topActiveFilters).display)==='none');
+  const settingsSearchbar=$('settings-searchbar')||document.querySelector('.settings-searchbar');
+  const sidebarSearchbar=!!(settingsSearchbar&&nav&&settingsSearchbar.parentElement===nav&&settingsSearchbar.dataset.settingsPlacement==='sidebar');
   const topBands=['settings-jumpbar','settings-workbench-status','settings-active-filters','settings-review-bar','settings-save-preview','settings-quick-filters']
     .map(id=>$(id)).filter(Boolean);
   const topBandsHidden=topBands.every(el=>String(getComputedStyle(el).display)==='none'||String(getComputedStyle(el).maxHeight)==='0px');
@@ -29502,6 +29538,8 @@ function settingsUiSelfCheckSnapshot(){
     hasNoTopSettingsBands:topBandsHidden,
     hasSingleSearchTopBand:searchbarBandCount<=1,
     hasSearchOnlyTopWorkbench:visibleSearchbarChildren.length===1&&visibleSearchbarChildren[0]===searchRow,
+    hasSidebarSettingsSearch:sidebarSearchbar&&!!(settingsSearchbar.querySelector&&settingsSearchbar.querySelector('#settings-search')),
+    hasNoFullWidthSettingsSearchbar:sidebarSearchbar&&!!(settingsFrame&&settingsFrame.classList.contains('settings-vscode-calm')),
     hasHiddenTopSearchCaption:!!(searchCaption&&String(getComputedStyle(searchCaption).display)==='none'),
     hasWideSingleSettingsSearch:!!(searchRow&&searchRowWidth>=700&&String(getComputedStyle(searchRow).gridTemplateColumns||'').split(' ').filter(Boolean).length<=1),
     hasMinimalTopSearchControls:!!(settingsFrame&&settingsFrame.classList.contains('settings-vscode-calm')&&!settingsFrame.classList.contains('settings-details-open')&&hiddenResultNavButtons.length===resultNavButtons.length&&inlineDetailsToggle&&String(getComputedStyle(inlineDetailsToggle).display)==='none'),
@@ -43480,7 +43518,24 @@ window.refreshExplorer=refreshExplorer;window.refreshPremiumGuide=refreshPremium
 window.closeFindBar=closeFindBar;window.doReplace=doReplace;window.doReplaceAll=doReplaceAll;
 window.toggleExtInstall=toggleExtInstall;
 
-if(window.pywebview){init()}else{window.addEventListener('pywebviewready',init)}
+let _aiEditorBootStarted=false;
+function bootAiEditorUi(reason){
+  if(_aiEditorBootStarted)return;
+  _aiEditorBootStarted=true;
+  try{document.body.dataset.aiEditorBootMode=reason||'pywebview'}catch(_e){}
+  init().catch(e=>{
+    console.error('[init]',e);
+    setStatus('AI Editor startup failed: '+(e&&e.message?e.message:e));
+  });
+}
+if(window.pywebview){
+  bootAiEditorUi('pywebview');
+}else{
+  window.addEventListener('pywebviewready',()=>bootAiEditorUi('pywebviewready'),{once:true});
+  window.addEventListener('DOMContentLoaded',()=>setTimeout(()=>{
+    if(!window.pywebview)bootAiEditorUi('browser');
+  },0),{once:true});
+}
 })();
 </script>
 </body>
