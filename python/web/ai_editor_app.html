@@ -1587,6 +1587,10 @@ pre.code-block code .type { color:var(--fg-type); }
 .provider-empty-title { color:var(--fg); font-size:14px; font-weight:600; }
 .provider-empty-subtitle { max-width:340px; line-height:1.45; }
 .provider-empty.unavailable .provider-empty-icon { color:var(--fg-warning); }
+.provider-empty-chips { display:flex; flex-wrap:wrap; justify-content:center; gap:4px; max-width:420px; }
+.provider-empty-chip { border:1px solid color-mix(in srgb,var(--border) 78%,transparent);
+  background:color-mix(in srgb,var(--bg3) 68%,transparent); color:var(--fg-dim);
+  border-radius:999px; padding:1px 6px; font:10px var(--mono); }
 .provider-actions { display:flex; align-items:center; gap:8px; margin-top:4px; flex-wrap:wrap; justify-content:center; }
 .provider-action { background:transparent; color:var(--fg-accent); border:1px solid var(--border);
   border-radius:4px; padding:4px 10px; font:12px var(--sans); cursor:pointer; }
@@ -26015,15 +26019,50 @@ function webviewRuntimeLifecycleState(runtime){
   if(runtime&&runtime.visible===true)return 'visible';
   return String(runtime&&runtime.lifecycleState||'registered');
 }
+function webviewRuntimeReadiness(runtime){
+  const data=runtime||{};
+  const issues=[];
+  let score=100;
+  const htmlAvailable=!!(data.html||data.htmlAvailable);
+  const frameLoaded=!!data.frameLoaded;
+  const apiReady=!!data.apiReady;
+  const waitingMessages=(Array.isArray(data.pendingMessages)?data.pendingMessages.length:0)+(Number(data.queuedMessageCount)||0);
+  if(data.disposed){issues.push('disposed');score-=55}
+  if(!htmlAvailable){issues.push('waiting-html');score-=32}
+  if(htmlAvailable&&!frameLoaded){issues.push('iframe-loading');score-=14}
+  if(htmlAvailable&&frameLoaded&&!apiReady){issues.push('bridge-waiting');score-=10}
+  if(data.visible===false&&!data.retainContextWhenHidden){issues.push('hidden-disposable');score-=8}
+  if(waitingMessages>0&&(!htmlAvailable||(Number(data.flushedMessageCount)||0)<=0)){issues.push('queued-messages');score-=10}
+  if((Number(data.droppedMessageCount)||0)>0){issues.push('dropped-messages');score-=18}
+  const resourceEndpointReady=!!(data.resourceEndpointReady||(Number(data.resourceEndpointRewriteCount)||0)>0);
+  const resourceMapReady=!!(data.resourceMapReady||(Number(data.resourceMapHitCount)||0)>0);
+  if((Number(data.resourceRewriteCount)||0)>0&&!resourceEndpointReady&&!resourceMapReady){issues.push('resource-warning');score-=10}
+  score=Math.max(0,Math.min(100,Math.round(score)));
+  let kind='ready';
+  if(issues.includes('disposed'))kind='disposed';
+  else if(issues.includes('waiting-html'))kind='waiting-html';
+  else if(issues.includes('iframe-loading'))kind='iframe-loading';
+  else if(issues.includes('bridge-waiting'))kind='bridge-waiting';
+  else if(issues.includes('dropped-messages')||issues.includes('queued-messages'))kind='message-warning';
+  else if(issues.includes('resource-warning'))kind='resource-warning';
+  return {kind,score,issues};
+}
 function applyWebviewRuntimeDataset(el,viewId,runtime){
   if(!el||!viewId)return;
   const data=runtime||{};
+  const readiness=webviewRuntimeReadiness(data);
   const opts=webviewRuntimeOptions(data);
   const roots=Array.isArray(opts.localResourceRoots)?opts.localResourceRoots:(Array.isArray(data.localResourceRoots)?data.localResourceRoots:[]);
   const portMapping=Array.isArray(opts.portMapping)?opts.portMapping:[];
   el.dataset.viewId=String(viewId);
   el.dataset.webviewLifecycleState=webviewRuntimeLifecycleState(data);
+  el.dataset.webviewReadiness=readiness.kind;
+  el.dataset.webviewReadinessScore=String(readiness.score);
+  el.dataset.webviewReadinessIssues=readiness.issues.join(',');
   el.dataset.webviewDisposed=data.disposed?'true':'false';
+  el.dataset.webviewHtmlAvailable=(data.html||data.htmlAvailable)?'true':'false';
+  el.dataset.webviewHtmlLength=String(Number(data.htmlLength)||String(data.html||'').length||0);
+  el.dataset.webviewTokenPresent=_webviewTokens&&_webviewTokens[viewId]?'true':'false';
   el.dataset.webviewEnableScripts=webviewRuntimeOptionEnabled(data,'enableScripts',true)?'true':'false';
   el.dataset.webviewEnableForms=webviewRuntimeOptionEnabled(data,'enableForms',true)?'true':'false';
   el.dataset.webviewEnableCommandUris=webviewRuntimeOption(data,'enableCommandUris',false)?'true':'false';
@@ -26052,6 +26091,8 @@ function applyWebviewRuntimeDataset(el,viewId,runtime){
   el.dataset.webviewLastFlushReason=String(data.lastFlushReason||'');
   el.dataset.webviewLastDeliveryReason=String(data.lastDeliveryReason||'');
   el.dataset.webviewStateUpdateCount=String(Number(data.stateUpdateCount)||0);
+  el.dataset.webviewInitialStateKind=String(data.initialStateKind||data.stateKind||'');
+  el.dataset.webviewInitialStateKeys=Array.isArray(data.initialStateKeys)?data.initialStateKeys.join(','):(Array.isArray(data.stateKeys)?data.stateKeys.join(','):String(data.stateKeys||''));
   el.dataset.webviewFrameLoaded=data.frameLoaded?'true':'false';
   el.dataset.webviewIframeLoadedAt=String(Number(data.iframeLoadedAt)||0);
   el.dataset.webviewIframeReferrerPolicy=String(data.iframeReferrerPolicy||'');
@@ -26085,6 +26126,8 @@ function applyWebviewRuntimeDataset(el,viewId,runtime){
   el.dataset.webviewLastResourceRewriteKind=String(data.lastResourceRewriteKind||'');
   el.dataset.webviewLastResourceOriginal=String(data.lastResourceOriginal||'');
   el.dataset.webviewLastResourceRewritten=String(data.lastResourceRewritten||'');
+  el.dataset.webviewResourceMapReady=(data.resourceMapReady||(Number(data.resourceMapHitCount)||0)>0)?'true':'false';
+  el.dataset.webviewResourceEndpointReady=(data.resourceEndpointReady||(Number(data.resourceEndpointRewriteCount)||0)>0)?'true':'false';
   el.dataset.webviewVisible=data.viewState&&data.viewState.visible!==undefined?(data.viewState.visible?'true':'false'):(data.visible===false?'false':'true');
   el.dataset.webviewActive=data.viewState&&data.viewState.active?'true':'false';
   if(data.title||data.name)el.dataset.webviewTitle=String(data.title||data.name);
@@ -27573,11 +27616,13 @@ function _buildChatProviderPanel(panel,p){
   updateProviderEmpty(pid);updateProviderContext(pid,0);updateProviderStatus(pid,p.available===false?t('provider_status_unavailable'):t('provider_status_ready'),p.available===false?'error':'');
   input.addEventListener('keydown',e=>{if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();providerSend(pid)}});
 }
-function createProviderWebviewPlaceholder(p,mode){
+function createProviderWebviewPlaceholder(p,mode,evidence){
   const empty=document.createElement('div');empty.className='provider-empty'+(mode==='missing-runtime'?' unavailable':'');
   const icon=document.createElement('div');icon.className='provider-empty-icon';icon.textContent=p.icon||'✦';
   const title=document.createElement('div');title.className='provider-empty-title';
   const subtitle=document.createElement('div');subtitle.className='provider-empty-subtitle';
+  const ev=evidence||{};
+  const readiness=webviewRuntimeReadiness(ev);
   if(mode==='loading'){
     title.textContent=tf('provider_webview_loading_title',providerDisplayName(p.id));
     subtitle.textContent=t('provider_webview_loading_subtitle');
@@ -27586,17 +27631,30 @@ function createProviderWebviewPlaceholder(p,mode){
     subtitle.textContent=t('provider_webview_native_subtitle');
   }else{
     title.textContent=tf('provider_webview_extension_title',providerDisplayName(p.id));
-    subtitle.textContent=t('provider_webview_extension_subtitle');
+    const issues=readiness.issues&&readiness.issues.length?readiness.issues.join(', '):'waiting for provider';
+    subtitle.textContent=t('provider_webview_extension_subtitle')+' · '+issues;
   }
   empty.appendChild(icon);empty.appendChild(title);empty.appendChild(subtitle);
+  const chips=document.createElement('div');chips.className='provider-empty-chips';
+  const addChip=(text)=>{if(!text)return;const chip=document.createElement('span');chip.className='provider-empty-chip';chip.textContent=text;chips.appendChild(chip)};
+  addChip('readiness '+readiness.kind+' '+String(readiness.score));
+  addChip('html '+String(Number(ev.htmlLength)||String(ev.html||'').length||0));
+  if(Number(ev.queuedMessageCount)||Array.isArray(ev.pendingMessages))addChip('queued '+String((Number(ev.queuedMessageCount)||0)+(Array.isArray(ev.pendingMessages)?ev.pendingMessages.length:0)));
+  if(Number(ev.droppedMessageCount))addChip('dropped '+String(Number(ev.droppedMessageCount)||0));
+  if(String(ev.lastQueueReason||''))addChip('queue '+String(ev.lastQueueReason));
+  if(chips.children.length)empty.appendChild(chips);
   return empty;
 }
 function renderProviderWebviewPlaceholder(panel,p,mode){
   panel.classList.add('provider-webview-host');
   panel.dataset.providerSurface='extension-webview';
   panel.dataset.webviewFallback=mode;
+  const viewId=providerPrimaryViewId(p);
+  panel.dataset.viewId=viewId;
+  const evidence={...(webviewRuntimeCache[viewId]||{}),lifecycleState:mode,htmlAvailable:false};
+  applyWebviewRuntimeDataset(panel,viewId,evidence);
   panel.innerHTML='';
-  panel.appendChild(createProviderWebviewPlaceholder(p,mode));
+  panel.appendChild(createProviderWebviewPlaceholder(p,mode,evidence));
 }
 async function mountProviderWebviewPanel(panel,p){
   const fallbackViewId=providerPrimaryViewId(p);
@@ -27637,13 +27695,10 @@ var _webviewTokens=Object.create(null);
 function _injectWebviewHtml(container,viewId,html,initialState){
   if(!container)return;
   const mountedAt=webviewRuntimeNow();
-  const runtime=patchWebviewRuntimeLifecycle(viewId,{html:html,state:initialState,disposed:false,visible:true,mountedAt,renderedAt:(webviewRuntimeCache[viewId]&&webviewRuntimeCache[viewId].renderedAt)||mountedAt,iframeReferrerPolicy:'no-referrer',iframeLoading:'eager'});
+  const initialStateKeys=initialState&&typeof initialState==='object'&&!Array.isArray(initialState)?Object.keys(initialState).slice(0,12):[];
+  const initialStateKind=initialState&&typeof initialState==='object'?(Array.isArray(initialState)?'array':'dict'):(initialState===undefined?'undefined':typeof initialState);
+  const runtime=patchWebviewRuntimeLifecycle(viewId,{html:html,htmlAvailable:!!html,htmlLength:String(html||'').length,state:initialState,initialStateKind,initialStateKeys,stateKind:initialStateKind,stateKeys:initialStateKeys,disposed:false,visible:true,mountedAt,renderedAt:(webviewRuntimeCache[viewId]&&webviewRuntimeCache[viewId].renderedAt)||mountedAt,iframeReferrerPolicy:'no-referrer',iframeLoading:'eager'});
   const runtimeOptions=webviewRuntimeOptions(runtime);
-  delete container.dataset.webviewFallback;
-  container.classList.add('provider-webview-host');
-  container.dataset.providerSurface='extension-webview';
-  container.dataset.viewId=viewId;
-  applyWebviewRuntimeDataset(container,viewId,runtime);
   // Clear existing content
   container.innerHTML='';
   // Generate a unique token for this webview iframe
@@ -27651,6 +27706,11 @@ function _injectWebviewHtml(container,viewId,html,initialState){
     Array.from(crypto.getRandomValues(new Uint8Array(16)),b=>b.toString(16).padStart(2,'0')).join(''):
     Math.random().toString(36).slice(2)+Date.now().toString(36);
   _webviewTokens[viewId]=token;
+  delete container.dataset.webviewFallback;
+  container.classList.add('provider-webview-host');
+  container.dataset.providerSurface='extension-webview';
+  container.dataset.viewId=viewId;
+  applyWebviewRuntimeDataset(container,viewId,{...(webviewRuntimeCache[viewId]||runtime),tokenPresent:true});
   // Create sandboxed iframe for the webview content
   const iframe=document.createElement('iframe');
   iframe.className='provider-webview-frame';
@@ -39098,6 +39158,19 @@ function extensionWebviewViewEvidence(view,state,html){
     messageCount:Number(ev.messageCount||0)||0,
     messagesToWebview:Number(ev.messagesToWebview||0)||0,
     messagesFromWebview:Number(ev.messagesFromWebview||0)||0,
+    frameLoaded:!!ev.frameLoaded,
+    apiReady:!!ev.apiReady,
+    readyCount:Number(ev.readyCount||0)||0,
+    readyPhase:String(ev.readyPhase||ev.lastReadyPhase||''),
+    apiAcquired:!!ev.apiAcquired,
+    apiAcquireCount:Number(ev.apiAcquireCount||0)||0,
+    apiCallCount:Number(ev.apiCallCount||0)||0,
+    lastApiCallKind:String(ev.lastApiCallKind||''),
+    visibilityState:String(ev.visibilityState||''),
+    focused:!!ev.focused,
+    lastKey:String(ev.lastKey||''),
+    lastResourceOriginal:String(ev.lastResourceOriginal||''),
+    lastResourceRewritten:String(ev.lastResourceRewritten||''),
     pendingMessageCount:Number(ev.pendingMessageCount||0)||0,
     queuedMessageCount:Number(ev.queuedMessageCount||0)||0,
     flushedMessageCount:Number(ev.flushedMessageCount||0)||0,
@@ -39163,6 +39236,10 @@ function extensionWebviewViewSummaryText(view,state,evidence){
     'Forms: '+String(evidence.enableForms),
     'Command URIs: '+String(evidence.enableCommandUris),
     'Messages: '+String(evidence.messageCount)+' / queued '+String(evidence.queuedMessageCount||evidence.pendingMessageCount)+' / dropped '+String(evidence.droppedMessageCount),
+    'Frame/API: '+(evidence.frameLoaded?'frame loaded':'frame pending')+' / '+(evidence.apiReady?'api ready':'api pending')+' / acquire '+String(evidence.apiAcquireCount||0),
+    'Ready phase: '+(evidence.readyPhase||'-'),
+    'Last API call: '+(evidence.lastApiCallKind||'-'),
+    'Visibility/focus/key: '+(evidence.visibilityState||'-')+' / '+String(evidence.focused)+' / '+(evidence.lastKey||'-'),
     'Resources: '+String(evidence.resourceRewriteCount),
     'asWebviewUri: '+(evidence.asWebviewUriReady?'ready':(evidence.asWebviewUriSupported?'supported':'not configured')),
     'Resource endpoint: '+(evidence.resourceEndpointReady?'ready':'missing'),
@@ -39170,7 +39247,7 @@ function extensionWebviewViewSummaryText(view,state,evidence){
     'Resource roots: '+String(evidence.localResourceRootCount),
     'Port mappings: '+String(evidence.portMappingCount),
     'Map/Endpoint/Ports/CSS/Attr: '+String(evidence.resourceRewriteBreakdown||'0/0/0/0/0'),
-    'Last resource: '+String(evidence.lastResourceRewriteKind||'-')
+    'Last resource: '+String(evidence.lastResourceRewriteKind||'-')+' '+String(evidence.lastResourceOriginal||'-')+' -> '+String(evidence.lastResourceRewritten||'-')
   ].join('\n');
 }
 function applyExtensionWebviewViewDataset(target,evidence){
@@ -39188,6 +39265,17 @@ function applyExtensionWebviewViewDataset(target,evidence){
   target.dataset.webviewQueuedMessageCount=String(evidence.queuedMessageCount||0);
   target.dataset.webviewPendingMessageCount=String(evidence.pendingMessageCount||0);
   target.dataset.webviewDroppedMessageCount=String(evidence.droppedMessageCount||0);
+  target.dataset.webviewFrameLoaded=evidence.frameLoaded?'1':'0';
+  target.dataset.webviewApiReady=evidence.apiReady?'1':'0';
+  target.dataset.webviewReadyCount=String(evidence.readyCount||0);
+  target.dataset.webviewReadyPhase=String(evidence.readyPhase||'');
+  target.dataset.webviewApiAcquired=evidence.apiAcquired?'1':'0';
+  target.dataset.webviewApiAcquireCount=String(evidence.apiAcquireCount||0);
+  target.dataset.webviewApiCallCount=String(evidence.apiCallCount||0);
+  target.dataset.webviewLastApiCallKind=String(evidence.lastApiCallKind||'');
+  target.dataset.webviewVisibilityState=String(evidence.visibilityState||'');
+  target.dataset.webviewFocused=evidence.focused?'1':'0';
+  target.dataset.webviewLastKey=String(evidence.lastKey||'');
   target.dataset.webviewResourceRewriteCount=String(evidence.resourceRewriteCount||0);
   target.dataset.webviewLocalResourceRootCount=String(evidence.localResourceRootCount||0);
   target.dataset.webviewPortMappingCount=String(evidence.portMappingCount||0);
@@ -39204,6 +39292,8 @@ function applyExtensionWebviewViewDataset(target,evidence){
   target.dataset.webviewReadinessIssues=Array.isArray(evidence.readinessIssues)?evidence.readinessIssues.join(','):'';
   target.dataset.webviewResourceRewriteBreakdown=String(evidence.resourceRewriteBreakdown||'0/0/0/0/0');
   target.dataset.webviewLastResourceRewriteKind=String(evidence.lastResourceRewriteKind||'');
+  target.dataset.webviewLastResourceOriginal=String(evidence.lastResourceOriginal||'');
+  target.dataset.webviewLastResourceRewritten=String(evidence.lastResourceRewritten||'');
 }
 function appendExtensionWebviewViewStatus(body,view,state,evidence){
   const bar=document.createElement('div');
@@ -39234,6 +39324,11 @@ function appendExtensionWebviewViewStatus(body,view,state,evidence){
   if(evidence.stateKind)addChip('state '+evidence.stateKind,'');
   if(evidence.stateKeys&&evidence.stateKeys.length)addChip('keys '+evidence.stateKeys.join(','),'');
   if(evidence.messageCount)addChip('msg '+evidence.messageCount,'accent');
+  if(evidence.frameLoaded)addChip('frame','accent');
+  if(evidence.apiReady)addChip('api ready','accent');
+  else if(evidence.htmlAvailable)addChip('api pending','warn');
+  if(evidence.readyPhase)addChip('ready '+evidence.readyPhase,'');
+  if(evidence.lastApiCallKind)addChip('api '+evidence.lastApiCallKind,'');
   if(evidence.queuedMessageCount||evidence.pendingMessageCount)addChip('queued '+String(evidence.queuedMessageCount||evidence.pendingMessageCount),'warn');
   if(evidence.droppedMessageCount)addChip('drop '+evidence.droppedMessageCount,'warn');
   if(evidence.localResourceRootCount)addChip('roots '+evidence.localResourceRootCount,'accent');

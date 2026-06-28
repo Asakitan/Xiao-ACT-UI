@@ -12058,6 +12058,23 @@ class AIEditorAPI:
             1 for item in webview_views
             if _as_dict(item.get("webviewEvidence")).get(
                 "asWebviewUriReady"))
+        webview_readiness_ready = sum(
+            1 for item in webview_views
+            if _as_dict(item.get("webviewEvidence")).get(
+                "readiness") == "ready")
+        webview_readiness_warnings = sum(
+            1 for item in webview_views
+            if _as_dict(item.get("webviewEvidence")).get("readiness")
+            and _as_dict(item.get("webviewEvidence")).get(
+                "readiness") != "ready")
+        webview_readiness_issues = sorted({
+            str(issue)
+            for item in webview_views
+            for issue in (
+                _as_dict(item.get("webviewEvidence")).get(
+                    "readinessIssues") or [])
+            if str(issue or "").strip()
+        })
         runtime_only_surfaces = sum(
             1 for item in views if item.get("runtimeOnly"))
         manifest_backed_surfaces = sum(
@@ -12102,6 +12119,9 @@ class AIEditorAPI:
                 "webviewResourceMaps": webview_resource_maps,
                 "webviewAsWebviewUriSupported": webview_as_webview_uri_supported,
                 "webviewAsWebviewUriReady": webview_as_webview_uri_ready,
+                "webviewReadinessReady": webview_readiness_ready,
+                "webviewReadinessWarnings": webview_readiness_warnings,
+                "webviewReadinessIssues": webview_readiness_issues[:12],
                 "runtimeOnlySurfaces": runtime_only_surfaces,
                 "manifestBackedSurfaces": manifest_backed_surfaces,
                 "manifestRuntimeSurfaces": manifest_runtime_surfaces,
@@ -14021,6 +14041,40 @@ class AIEditorAPI:
         }
 
     @staticmethod
+    def _webview_evidence_readiness(
+            evidence: Dict[str, Any]) -> Dict[str, Any]:
+        issues: List[str] = []
+        score = 100
+        if not evidence.get("htmlAvailable"):
+            issues.append("waiting-html")
+            score -= 32
+        if (not evidence.get("visible")
+                and not evidence.get("retainContextWhenHidden")):
+            issues.append("hidden-disposable")
+            score -= 8
+        waiting_messages = int(evidence.get("pendingMessageCount") or 0) + int(
+            evidence.get("queuedMessageCount") or 0)
+        if waiting_messages:
+            issues.append("queued-messages")
+            score -= 10
+        if int(evidence.get("droppedMessageCount") or 0) > 0:
+            issues.append("dropped-messages")
+            score -= 18
+        if (evidence.get("asWebviewUriSupported")
+                and not evidence.get("asWebviewUriReady")):
+            issues.append("resource-uri-pending")
+            score -= 10
+        score = max(0, min(100, int(round(score))))
+        kind = "ready"
+        if "waiting-html" in issues:
+            kind = "waiting-html"
+        elif "dropped-messages" in issues or "queued-messages" in issues:
+            kind = "message-warning"
+        elif "resource-uri-pending" in issues:
+            kind = "resource-warning"
+        return {"kind": kind, "score": score, "issues": issues}
+
+    @staticmethod
     def _webview_runtime_evidence(
             view_id: str, state: Dict[str, Any]) -> Dict[str, Any]:
         html = str(state.get("html") or "")
@@ -14038,7 +14092,7 @@ class AIEditorAPI:
         local_resource_root_count = len(local_resource_roots)
         port_mapping_count = len(port_mapping)
         as_webview_uri_supported = bool(local_resource_root_count)
-        return {
+        evidence = {
             "viewId": str(view_id or ""),
             "htmlAvailable": bool(html),
             "htmlLength": len(html),
@@ -14066,6 +14120,11 @@ class AIEditorAPI:
                 or state.get("runtimeMessage")
                 or ""),
         }
+        readiness = AIEditorAPI._webview_evidence_readiness(evidence)
+        evidence["readiness"] = readiness["kind"]
+        evidence["readinessScore"] = readiness["score"]
+        evidence["readinessIssues"] = readiness["issues"]
+        return evidence
 
     def _manifest_view(self, view_id: str) -> Dict[str, Any]:
         for views in self._ext_host.ext_points.all_contributions.get("views", {}).values():

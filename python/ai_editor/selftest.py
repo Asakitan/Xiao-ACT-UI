@@ -6725,6 +6725,7 @@ def test_phase1_ai_editor_regressions() -> None:
             "function webviewRuntimeProviderId(viewId,runtime)" in html
             and "function webviewRuntimeProviderRecord(viewId,runtime)" in html
             and "function webviewRuntimeLifecycleState(runtime)" in html
+            and "function webviewRuntimeReadiness(runtime)" in html
             and "function applyWebviewRuntimeDataset(el,viewId,runtime)" in html
             and "function patchWebviewRuntimeLifecycle(viewId,patch)" in html
             and "function syncWebviewRuntimeDomState(viewId,runtime)" in html
@@ -6735,6 +6736,12 @@ def test_phase1_ai_editor_regressions() -> None:
             and "panel.dataset.webviewDescription=" in html
             and "panel.dataset.webviewRetainContext=" in html
             and "el.dataset.webviewLifecycleState=webviewRuntimeLifecycleState(data);" in html
+            and "el.dataset.webviewReadiness=readiness.kind;" in html
+            and "el.dataset.webviewReadinessScore=String(readiness.score);" in html
+            and "el.dataset.webviewReadinessIssues=readiness.issues.join(',');" in html
+            and "el.dataset.webviewHtmlAvailable=(data.html||data.htmlAvailable)?'true':'false';" in html
+            and "el.dataset.webviewHtmlLength=String(Number(data.htmlLength)||String(data.html||'').length||0);" in html
+            and "el.dataset.webviewTokenPresent=_webviewTokens&&_webviewTokens[viewId]?'true':'false';" in html
             and "el.dataset.webviewLifecycleSeq=String(Number(data.lifecycleSeq)||0);" in html
             and "el.dataset.webviewMessageCount=String(Number(data.messageCount)||0);" in html
             and "el.dataset.webviewViewStateCount=String(Number(data.viewStateCount)||0);" in html
@@ -6753,6 +6760,8 @@ def test_phase1_ai_editor_regressions() -> None:
             and "el.dataset.webviewLastFlushReason=String(data.lastFlushReason||'');" in html
             and "el.dataset.webviewLastDeliveryReason=String(data.lastDeliveryReason||'');" in html
             and "el.dataset.webviewStateUpdateCount=String(Number(data.stateUpdateCount)||0);" in html
+            and "el.dataset.webviewInitialStateKind=String(data.initialStateKind||data.stateKind||'');" in html
+            and "el.dataset.webviewInitialStateKeys=Array.isArray(data.initialStateKeys)?data.initialStateKeys.join(','):(Array.isArray(data.stateKeys)?data.stateKeys.join(','):String(data.stateKeys||''));" in html
             and "el.dataset.webviewFrameLoaded=data.frameLoaded?'true':'false';" in html
             and "el.dataset.webviewIframeLoadedAt=String(Number(data.iframeLoadedAt)||0);" in html
             and "el.dataset.webviewApiReady=data.apiReady?'true':'false';" in html
@@ -6760,6 +6769,13 @@ def test_phase1_ai_editor_regressions() -> None:
             and "el.dataset.webviewApiAcquired=data.apiAcquired?'true':'false';" in html
             and "el.dataset.webviewApiAcquireCount=String(Number(data.apiAcquireCount)||0);" in html
             and "el.dataset.webviewApiCallCount=String(Number(data.apiCallCount)||0);" in html
+            and "el.dataset.webviewResourceMapReady=(data.resourceMapReady||(Number(data.resourceMapHitCount)||0)>0)?'true':'false';" in html
+            and "el.dataset.webviewResourceEndpointReady=(data.resourceEndpointReady||(Number(data.resourceEndpointRewriteCount)||0)>0)?'true':'false';" in html
+            and "function createProviderWebviewPlaceholder(p,mode,evidence)" in html
+            and "provider-empty-chips" in html
+            and "provider-empty-chip" in html
+            and "applyWebviewRuntimeDataset(panel,viewId,evidence);" in html
+            and "const initialStateKeys=initialState&&typeof initialState==='object'&&!Array.isArray(initialState)?Object.keys(initialState).slice(0,12):[];" in html
             and "panel.dataset.webviewOptions=JSON.stringify" in html
             and "tab.hidden=!visible;" in html
             and "panel.hidden=!visible;" in html
@@ -11693,6 +11709,13 @@ console.log("frontend word separator behavior ok");
            and "\"webviewResourceRoots\": webview_resource_roots" in app_source
            and "\"webviewAsWebviewUriSupported\": webview_as_webview_uri_supported" in app_source
            and "\"webviewAsWebviewUriReady\": webview_as_webview_uri_ready" in app_source
+           and "def _webview_evidence_readiness(" in app_source
+           and "evidence[\"readiness\"] = readiness[\"kind\"]" in app_source
+           and "evidence[\"readinessScore\"] = readiness[\"score\"]" in app_source
+           and "evidence[\"readinessIssues\"] = readiness[\"issues\"]" in app_source
+           and "\"webviewReadinessReady\": webview_readiness_ready" in app_source
+           and "\"webviewReadinessWarnings\": webview_readiness_warnings" in app_source
+           and "\"webviewReadinessIssues\": webview_readiness_issues[:12]" in app_source
            and "\"localResourceRootCount\": local_resource_root_count" in app_source
            and "\"asWebviewUriSupported\": as_webview_uri_supported" in app_source
            and "payload.setdefault(\"summary\", {})[\"cacheHit\"] = True" in app_source
@@ -13816,8 +13839,19 @@ console.log("extension setting schema helpers ok");
            and "target.dataset.webviewReadiness=String(evidence.readiness||'');" in html
            and "target.dataset.webviewReadinessScore=String(evidence.readinessScore||0);" in html
            and "target.dataset.webviewReadinessIssues=Array.isArray(evidence.readinessIssues)?evidence.readinessIssues.join(','):'';" in html
+           and "target.dataset.webviewFrameLoaded=evidence.frameLoaded?'1':'0';" in html
+           and "target.dataset.webviewApiReady=evidence.apiReady?'1':'0';" in html
+           and "target.dataset.webviewApiAcquireCount=String(evidence.apiAcquireCount||0);" in html
+           and "target.dataset.webviewLastApiCallKind=String(evidence.lastApiCallKind||'');" in html
+           and "target.dataset.webviewVisibilityState=String(evidence.visibilityState||'');" in html
+           and "target.dataset.webviewLastResourceOriginal=String(evidence.lastResourceOriginal||'');" in html
+           and "target.dataset.webviewLastResourceRewritten=String(evidence.lastResourceRewritten||'');" in html
            and "Readiness: '+(evidence.readiness||'-')+' '+String(evidence.readinessScore||0)+'/100'" in html
+           and "'Frame/API: '+(evidence.frameLoaded?'frame loaded':'frame pending')" in html
+           and "'Last resource: '+String(evidence.lastResourceRewriteKind||'-')+' '+String(evidence.lastResourceOriginal||'-')+' -> '+String(evidence.lastResourceRewritten||'-')" in html
            and "addChip('readiness '+(evidence.readiness||'unknown')" in html
+           and "addChip('api ready','accent')" in html
+           and "addChip('api pending','warn')" in html
            and "addChip('roots '+evidence.localResourceRootCount,'accent')" in html
            and "addChip('asWebviewUri ready','accent')" in html
            and "addChip('endpoint ready','accent')" in html
