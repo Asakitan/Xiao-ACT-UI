@@ -11268,6 +11268,10 @@ console.log("frontend word separator behavior ok");
            and "['Webview HTML',summary.webviewHtmlAvailable||0]" in html
            and "webviewEvidence:evidence" in html
            and "el.dataset.webviewHtmlAvailable=row.htmlAvailable?'1':'0';" in html
+           and "['Resource Roots',rows.reduce((n,row)=>n+(row.kind==='WebviewView'?(Number(row.webviewEvidence&&row.webviewEvidence.localResourceRootCount)||0):0),0)]" in html
+           and "['Port Mappings',rows.reduce((n,row)=>n+(row.kind==='WebviewView'?(Number(row.webviewEvidence&&row.webviewEvidence.portMappingCount)||0):0),0)]" in html
+           and "el.dataset.webviewLocalResourceRootCount=String(row.webviewEvidence&&row.webviewEvidence.localResourceRootCount||0);" in html
+           and "el.dataset.webviewPortMappingCount=String(row.webviewEvidence&&row.webviewEvidence.portMappingCount||0);" in html
            and "extension-runtime-tag webview-evidence" in html
            and "snapshot.runtimeWebviewEvidenceRows>=6" in html
            and "snapshot.runtimeMissingEvidenceRows>=1" in html
@@ -13413,6 +13417,12 @@ console.log("extension setting schema helpers ok");
            and "extension-webview-view-status" in html
            and "extension-webview-view-action" in html
            and "extension-webview-view-empty" in html
+           and "localResourceRootCount:Number(ev.localResourceRootCount||ev.localResourceRootsCount||localResourceRoots.length)||0" in html
+           and "target.dataset.webviewLocalResourceRootCount=String(evidence.localResourceRootCount||0);" in html
+           and "target.dataset.webviewPortMappingCount=String(evidence.portMappingCount||0);" in html
+           and "target.dataset.webviewResourceEndpointRewriteCount=String(evidence.resourceEndpointRewriteCount||0);" in html
+           and "addChip('roots '+evidence.localResourceRootCount,'accent')" in html
+           and "addChip('endpoint '+evidence.resourceEndpointRewriteCount,'accent')" in html
            and "_injectWebviewHtml(frameHost,extensionRuntimeViewId(view,state),html,state.state)" in html
             and "renderExtensionContainerContent(item)" in html
             and "function extensionContainerIconUri(item)" in html
@@ -13467,8 +13477,14 @@ console.log("extension setting schema helpers ok");
            and "webviewHtmlDataset:!!root.querySelector('[data-webview-view-id=\"selftest.dynamic.webview\"][data-webview-html-available=\"1\"]')" in html
            and "webviewPendingDataset:!!root.querySelector('[data-webview-view-id=\"selftest.dynamic.webview.pending\"][data-webview-html-available=\"0\"]')" in html
            and "webviewViewActions:webviewViewActions.length" in html
+           and "webviewResourceRootDataset:!!root.querySelector('[data-webview-view-id=\"selftest.dynamic.webview\"][data-webview-local-resource-root-count=\"1\"]')" in html
+           and "webviewPortMappingDataset:!!root.querySelector('[data-webview-view-id=\"selftest.dynamic.webview\"][data-webview-port-mapping-count=\"1\"]')" in html
+           and "webviewResourceEndpointDataset:!!root.querySelector('[data-webview-view-id=\"selftest.dynamic.webview\"][data-webview-resource-endpoint-rewrite-count=\"2\"]')" in html
+           and "runtimeWebviewResourceRootRows:runtimeList?Array.from(runtimeList.querySelectorAll('.extension-runtime-row')).filter(row=>Number(row.dataset.webviewLocalResourceRootCount)||0).length:0" in html
+           and "runtimeWebviewPortMappingRows:runtimeList?Array.from(runtimeList.querySelectorAll('.extension-runtime-row')).filter(row=>Number(row.dataset.webviewPortMappingCount)||0).length:0" in html
            and "snapshot.webviewStatusBars>=2" in html
            and "snapshot.webviewHtmlDataset&&snapshot.webviewPendingDataset" in html
+           and "snapshot.webviewResourceRootDataset&&snapshot.webviewPortMappingDataset&&snapshot.webviewResourceMapDataset&&snapshot.webviewResourceEndpointDataset&&snapshot.webviewResourceCssDataset" in html
            and "['Open','Refresh','Copy'].every(label=>snapshot.webviewActionLabels.includes(label))" in html
            and "snapshot.customPlaceholder&&snapshot.customDataset.viewType==='selftest.customEditor'" in html
            and "snapshot.notebookOutputItems===3" in html
@@ -13535,6 +13551,7 @@ console.log("extension setting schema helpers ok");
            and "snapshot.runtimeWebviewMessageRows>=1" in html
            and "snapshot.runtimeWebviewQueuedRows>=2" in html
            and "snapshot.runtimeWebviewDroppedRows>=1" in html
+           and "snapshot.runtimeWebviewResourceRootRows>=1&&snapshot.runtimeWebviewPortMappingRows>=1&&snapshot.runtimeWebviewResourceMapRows>=1" in html
            and "snapshot.runtimeWebviewSeqRows>=1" in html
            and "snapshot.runtimeMessageEvidenceFilterVisible>=1" in html
            and "snapshot.runtimeQueuedEvidenceFilterVisible>=2" in html

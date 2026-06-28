@@ -36460,6 +36460,17 @@ function extensionRuntimeSurfaceRows(data){
       evidence.lastResourceRewriteKind=String(cachedRuntime.lastResourceRewriteKind||evidence.lastResourceRewriteKind||'');
     }
     const htmlLength=Number(evidence.htmlLength||item.htmlLength||0)||0;
+    const evidenceOptions=(evidence.options&&typeof evidence.options==='object'?evidence.options:(item.runtimeState&&item.runtimeState.options&&typeof item.runtimeState.options==='object'?item.runtimeState.options:{}))||{};
+    const localResourceRoots=Array.isArray(evidence.localResourceRoots)?evidence.localResourceRoots:
+      (Array.isArray(evidence.local_resource_roots)?evidence.local_resource_roots:
+      (Array.isArray(evidenceOptions.localResourceRoots)?evidenceOptions.localResourceRoots:
+      (Array.isArray(item.localResourceRoots)?item.localResourceRoots:
+      (Array.isArray(item.local_resource_roots)?item.local_resource_roots:[]))));
+    const portMappings=Array.isArray(evidence.portMapping)?evidence.portMapping:
+      (Array.isArray(evidenceOptions.portMapping)?evidenceOptions.portMapping:
+      (Array.isArray(item.portMapping)?item.portMapping:[]));
+    evidence.localResourceRootCount=Number(evidence.localResourceRootCount||evidence.localResourceRootsCount||localResourceRoots.length)||0;
+    evidence.portMappingCount=Number(evidence.portMappingCount||evidence.portMappingsCount||portMappings.length)||0;
     const evidenceText=[
       evidence.htmlAvailable||item.htmlAvailable?'html':'no-html',
       htmlLength?'htmlLength:'+htmlLength:'',
@@ -36477,6 +36488,12 @@ function extensionRuntimeSurfaceRows(data){
       evidence.droppedMessageCount?'dropped:'+evidence.droppedMessageCount:'',
       evidence.lastDroppedReason?'drop:'+evidence.lastDroppedReason:'',
       evidence.resourceRewriteCount?'resources:'+evidence.resourceRewriteCount:'',
+      evidence.localResourceRootCount?'roots:'+evidence.localResourceRootCount:'',
+      evidence.portMappingCount?'ports:'+evidence.portMappingCount:'',
+      evidence.resourceMapHitCount?'map:'+evidence.resourceMapHitCount:'',
+      evidence.resourceEndpointRewriteCount?'endpoint:'+evidence.resourceEndpointRewriteCount:'',
+      evidence.resourceCssRewriteCount?'css:'+evidence.resourceCssRewriteCount:'',
+      evidence.resourceAttributeRewriteCount?'attr:'+evidence.resourceAttributeRewriteCount:'',
       evidence.lastResourceRewriteKind?'resource-kind:'+evidence.lastResourceRewriteKind:'',
     ].filter(Boolean).join(' ');
     const row={
@@ -36781,6 +36798,8 @@ function renderExtensionRuntimeSurfacePanel(data){
     ['Retained Webview',summary.webviewRetained||0],
     ['Evidence Ready',rows.filter(row=>row.evidenceStatus==='rendered').length],
     ['Resource Rewrites',rows.reduce((n,row)=>n+(row.kind==='WebviewView'?(Number(row.webviewEvidence&&row.webviewEvidence.resourceRewriteCount)||0):0),0)],
+    ['Resource Roots',rows.reduce((n,row)=>n+(row.kind==='WebviewView'?(Number(row.webviewEvidence&&row.webviewEvidence.localResourceRootCount)||0):0),0)],
+    ['Port Mappings',rows.reduce((n,row)=>n+(row.kind==='WebviewView'?(Number(row.webviewEvidence&&row.webviewEvidence.portMappingCount)||0):0),0)],
     ['Webview Messages',rows.reduce((n,row)=>n+(row.kind==='WebviewView'?(Number(row.webviewEvidence&&row.webviewEvidence.messageCount)||0):0),0)],
     ['Queued Webview',rows.reduce((n,row)=>n+(row.kind==='WebviewView'?(Number(row.webviewEvidence&&row.webviewEvidence.pendingMessageCount)||0):0),0)],
     ['Dropped Webview',rows.reduce((n,row)=>n+(row.kind==='WebviewView'?(Number(row.webviewEvidence&&row.webviewEvidence.droppedMessageCount)||0):0),0)],
@@ -36796,7 +36815,7 @@ function renderExtensionRuntimeSurfacePanel(data){
   chips.forEach(([label,value])=>{
     const chip=document.createElement('span');chip.className='extension-runtime-chip';
     chip.innerHTML='<strong>'+esc(String(value))+'</strong>'+esc(label);
-    if(['TreeView','WebviewView','CustomEditor','Notebook','Command','Menu','Terminal','LM Tool','LM Provider','Chat','Context','Runtime','Manifest','Webview HTML','Missing Webview HTML','Retained Webview','Evidence Ready','Resource Rewrites','Webview Messages','Queued Webview','Dropped Webview'].includes(label)){
+    if(['TreeView','WebviewView','CustomEditor','Notebook','Command','Menu','Terminal','LM Tool','LM Provider','Chat','Context','Runtime','Manifest','Webview HTML','Missing Webview HTML','Retained Webview','Evidence Ready','Resource Rewrites','Resource Roots','Port Mappings','Webview Messages','Queued Webview','Dropped Webview'].includes(label)){
       chip.classList.add('filterable');
       chip.tabIndex=0;
       chip.setAttribute('role','button');
@@ -36804,7 +36823,7 @@ function renderExtensionRuntimeSurfacePanel(data){
       chip.onclick=()=>{
         const kindMap={'Terminal':'TerminalProfile','LM Tool':'LMTool','LM Provider':'LMProvider','Chat':'ChatParticipant','Context':'ChatContext'};
         const sourceMap={Runtime:'runtime',Manifest:'manifest'};
-        const evidenceMap={'Webview HTML':'rendered','Missing Webview HTML':'missing','Retained Webview':'retained','Evidence Ready':'rendered','Resource Rewrites':'resources','Webview Messages':'messages','Queued Webview':'queued','Dropped Webview':'dropped'};
+        const evidenceMap={'Webview HTML':'rendered','Missing Webview HTML':'missing','Retained Webview':'retained','Evidence Ready':'rendered','Resource Rewrites':'resources','Resource Roots':'resources','Port Mappings':'resources','Webview Messages':'messages','Queued Webview':'queued','Dropped Webview':'dropped'};
         const kindSel=$('extension-runtime-filter-kind'),sourceSel=$('extension-runtime-filter-source'),evidenceSel=$('extension-runtime-filter-evidence');
         if(sourceMap[label]&&sourceSel)sourceSel.value=sourceMap[label];
         else if(evidenceMap[label]&&evidenceSel)evidenceSel.value=evidenceMap[label];
@@ -36852,6 +36871,8 @@ function renderExtensionRuntimeSurfacePanel(data){
       el.dataset.webviewLastFlushReason=String(row.webviewEvidence&&row.webviewEvidence.lastFlushReason||'');
       el.dataset.webviewLastDeliveredMessageSeq=String(row.webviewEvidence&&row.webviewEvidence.lastDeliveredMessageSeq||0);
       el.dataset.webviewResourceRewriteCount=String(row.webviewEvidence&&row.webviewEvidence.resourceRewriteCount||0);
+      el.dataset.webviewLocalResourceRootCount=String(row.webviewEvidence&&row.webviewEvidence.localResourceRootCount||0);
+      el.dataset.webviewPortMappingCount=String(row.webviewEvidence&&row.webviewEvidence.portMappingCount||0);
       el.dataset.webviewResourceMapHitCount=String(row.webviewEvidence&&row.webviewEvidence.resourceMapHitCount||0);
       el.dataset.webviewResourceEndpointRewriteCount=String(row.webviewEvidence&&row.webviewEvidence.resourceEndpointRewriteCount||0);
       el.dataset.webviewResourcePortMappingRewriteCount=String(row.webviewEvidence&&row.webviewEvidence.resourcePortMappingRewriteCount||0);
@@ -36891,9 +36912,15 @@ function renderExtensionRuntimeSurfacePanel(data){
           ev.queuedMessageCount?{text:'queued '+ev.queuedMessageCount}:null,
           ev.flushedMessageCount?{text:'flushed '+ev.flushedMessageCount}:null,
           ev.droppedMessageCount?{text:'drop '+ev.droppedMessageCount,missing:true}:null,
-          ev.lastDroppedReason?{text:'why '+ev.lastDroppedReason,missing:true}:null,
-          ev.lastDeliveredMessageSeq?{text:'seq '+ev.lastDeliveredMessageSeq}:null,
-        ].filter(Boolean);
+      ev.lastDroppedReason?{text:'why '+ev.lastDroppedReason,missing:true}:null,
+      ev.lastDeliveredMessageSeq?{text:'seq '+ev.lastDeliveredMessageSeq}:null,
+      ev.localResourceRootCount?{text:'roots '+ev.localResourceRootCount}:null,
+      ev.portMappingCount?{text:'ports '+ev.portMappingCount}:null,
+      ev.resourceMapHitCount?{text:'map '+ev.resourceMapHitCount}:null,
+      ev.resourceEndpointRewriteCount?{text:'endpoint '+ev.resourceEndpointRewriteCount}:null,
+      ev.resourceCssRewriteCount?{text:'css '+ev.resourceCssRewriteCount}:null,
+      ev.resourceAttributeRewriteCount?{text:'attr '+ev.resourceAttributeRewriteCount}:null,
+      ].filter(Boolean);
         chips.forEach(item=>{
           const chip=document.createElement('span');
           chip.className='extension-runtime-tag webview-evidence'+(item.missing?' missing':'');
@@ -37967,6 +37994,11 @@ function extensionWebviewViewEvidence(view,state,html){
   const enableScripts=ev.enableScripts!==undefined?!!ev.enableScripts:(options.enableScripts!==false);
   const enableForms=ev.enableForms!==undefined?!!ev.enableForms:(options.enableForms!==false);
   const enableCommandUris=ev.enableCommandUris!==undefined?!!ev.enableCommandUris:!!options.enableCommandUris;
+  const localResourceRoots=Array.isArray(ev.localResourceRoots)?ev.localResourceRoots:
+    (Array.isArray(ev.local_resource_roots)?ev.local_resource_roots:
+    (Array.isArray(options.localResourceRoots)?options.localResourceRoots:[]));
+  const portMappings=Array.isArray(ev.portMapping)?ev.portMapping:
+    (Array.isArray(options.portMapping)?options.portMapping:[]);
   const status=htmlAvailable?'rendered':(visible||retain||state.kind||stateKeys.length?'partial':'missing');
   return {
     viewId,
@@ -37992,6 +38024,8 @@ function extensionWebviewViewEvidence(view,state,html){
     lastFlushReason:String(ev.lastFlushReason||''),
     lastDeliveredMessageSeq:Number(ev.lastDeliveredMessageSeq||0)||0,
     resourceRewriteCount:Number(ev.resourceRewriteCount||0)||0,
+    localResourceRootCount:Number(ev.localResourceRootCount||ev.localResourceRootsCount||localResourceRoots.length)||0,
+    portMappingCount:Number(ev.portMappingCount||ev.portMappingsCount||portMappings.length)||0,
     resourceMapHitCount:Number(ev.resourceMapHitCount||0)||0,
     resourceEndpointRewriteCount:Number(ev.resourceEndpointRewriteCount||0)||0,
     resourcePortMappingRewriteCount:Number(ev.resourcePortMappingRewriteCount||0)||0,
@@ -38014,7 +38048,11 @@ function extensionWebviewViewSummaryText(view,state,evidence){
     'Forms: '+String(evidence.enableForms),
     'Command URIs: '+String(evidence.enableCommandUris),
     'Messages: '+String(evidence.messageCount)+' / queued '+String(evidence.queuedMessageCount||evidence.pendingMessageCount)+' / dropped '+String(evidence.droppedMessageCount),
-    'Resources: '+String(evidence.resourceRewriteCount)
+    'Resources: '+String(evidence.resourceRewriteCount),
+    'Resource roots: '+String(evidence.localResourceRootCount),
+    'Port mappings: '+String(evidence.portMappingCount),
+    'Map/Endpoint/CSS/Attr: '+[evidence.resourceMapHitCount,evidence.resourceEndpointRewriteCount,evidence.resourceCssRewriteCount,evidence.resourceAttributeRewriteCount].map(n=>String(n||0)).join('/'),
+    'Last resource: '+String(evidence.lastResourceRewriteKind||'-')
   ].join('\n');
 }
 function applyExtensionWebviewViewDataset(target,evidence){
@@ -38033,6 +38071,13 @@ function applyExtensionWebviewViewDataset(target,evidence){
   target.dataset.webviewPendingMessageCount=String(evidence.pendingMessageCount||0);
   target.dataset.webviewDroppedMessageCount=String(evidence.droppedMessageCount||0);
   target.dataset.webviewResourceRewriteCount=String(evidence.resourceRewriteCount||0);
+  target.dataset.webviewLocalResourceRootCount=String(evidence.localResourceRootCount||0);
+  target.dataset.webviewPortMappingCount=String(evidence.portMappingCount||0);
+  target.dataset.webviewResourceMapHitCount=String(evidence.resourceMapHitCount||0);
+  target.dataset.webviewResourceEndpointRewriteCount=String(evidence.resourceEndpointRewriteCount||0);
+  target.dataset.webviewResourceCssRewriteCount=String(evidence.resourceCssRewriteCount||0);
+  target.dataset.webviewResourceAttributeRewriteCount=String(evidence.resourceAttributeRewriteCount||0);
+  target.dataset.webviewLastResourceRewriteKind=String(evidence.lastResourceRewriteKind||'');
 }
 function appendExtensionWebviewViewStatus(body,view,state,evidence){
   const bar=document.createElement('div');
@@ -38063,7 +38108,14 @@ function appendExtensionWebviewViewStatus(body,view,state,evidence){
   if(evidence.messageCount)addChip('msg '+evidence.messageCount,'accent');
   if(evidence.queuedMessageCount||evidence.pendingMessageCount)addChip('queued '+String(evidence.queuedMessageCount||evidence.pendingMessageCount),'warn');
   if(evidence.droppedMessageCount)addChip('drop '+evidence.droppedMessageCount,'warn');
+  if(evidence.localResourceRootCount)addChip('roots '+evidence.localResourceRootCount,'accent');
+  if(evidence.portMappingCount)addChip('ports '+evidence.portMappingCount,'accent');
   if(evidence.resourceRewriteCount)addChip('resources '+evidence.resourceRewriteCount,'accent');
+  if(evidence.resourceMapHitCount)addChip('map '+evidence.resourceMapHitCount,'accent');
+  if(evidence.resourceEndpointRewriteCount)addChip('endpoint '+evidence.resourceEndpointRewriteCount,'accent');
+  if(evidence.resourceCssRewriteCount)addChip('css '+evidence.resourceCssRewriteCount,'accent');
+  if(evidence.resourceAttributeRewriteCount)addChip('attr '+evidence.resourceAttributeRewriteCount,'accent');
+  if(evidence.lastResourceRewriteKind)addChip('last '+evidence.lastResourceRewriteKind,'');
   const actions=document.createElement('div');actions.className='extension-webview-view-actions';
   const addAction=(label,title,handler)=>{
     const btn=document.createElement('button');
@@ -38425,11 +38477,11 @@ function extensionRuntimeDomSelfCheckSnapshot(){
             description:'Dynamic HTML',
             visible:true,
             retainContextWhenHidden:true,
-            options:{retainContextWhenHidden:true},
+            options:{retainContextWhenHidden:true,localResourceRoots:[{fsPath:'/workspace/media'}],portMapping:[{webviewPort:3000,extensionHostPort:5173}]},
             badge:{value:1,tooltip:'one'},
             html:'<html><body><button id="inside">inside</button></body></html>',
             state:{ready:true},
-            webviewEvidence:{htmlAvailable:true,htmlLength:61,enableScripts:true,enableForms:true,retainContextWhenHidden:true,visible:true,messageCount:2,queuedMessageCount:1,resourceRewriteCount:1,stateKind:'dict',stateKeys:['ready']},
+            webviewEvidence:{htmlAvailable:true,htmlLength:61,enableScripts:true,enableForms:true,retainContextWhenHidden:true,visible:true,messageCount:2,queuedMessageCount:1,resourceRewriteCount:7,localResourceRootCount:1,portMappingCount:1,resourceMapHitCount:2,resourceEndpointRewriteCount:2,resourceCssRewriteCount:2,resourceAttributeRewriteCount:1,lastResourceRewriteKind:'css',stateKind:'dict',stateKeys:['ready']},
             welcome:[{contents:'[Run](command:selftest.run?[1])'}],
             titleActions:[{command:'selftest.webview.refresh',title:'Refresh Webview',icon:'$(refresh)',group:'navigation@1'}]
           }
@@ -38501,7 +38553,7 @@ function extensionRuntimeDomSelfCheckSnapshot(){
       viewContainers:[fixtureItem],
       treeViews:[{id:'selftest.dynamic.tree',name:'Runtime Tree',container:'selftest.dynamic.container',extensionId:'selftest.extension',runtimeAvailable:true}],
       webviewViews:[
-        {id:'selftest.dynamic.webview',name:'Runtime Webview',container:'selftest.dynamic.container',extensionId:'selftest.extension',runtimeAvailable:true,htmlAvailable:true,htmlLength:61,webviewEvidence:{htmlAvailable:true,htmlLength:61,stateKind:'dict',stateKeys:['ready'],enableScripts:true,enableForms:true,enableCommandUris:false,retainContextWhenHidden:true,visible:true,messageCount:3,messagesToWebview:2,messagesFromWebview:1,queuedMessageCount:1,flushedMessageCount:1,lastDeliveredMessageSeq:2,lastQueuedMessageSeq:1,lastFlushedMessageSeq:1,lastQueueReason:'missing-frame',lastFlushReason:'webview-ready:selftest'}},
+        {id:'selftest.dynamic.webview',name:'Runtime Webview',container:'selftest.dynamic.container',extensionId:'selftest.extension',runtimeAvailable:true,htmlAvailable:true,htmlLength:61,webviewEvidence:{htmlAvailable:true,htmlLength:61,stateKind:'dict',stateKeys:['ready'],enableScripts:true,enableForms:true,enableCommandUris:false,retainContextWhenHidden:true,visible:true,messageCount:3,messagesToWebview:2,messagesFromWebview:1,queuedMessageCount:1,flushedMessageCount:1,lastDeliveredMessageSeq:2,lastQueuedMessageSeq:1,lastFlushedMessageSeq:1,lastQueueReason:'missing-frame',lastFlushReason:'webview-ready:selftest',resourceRewriteCount:7,localResourceRootCount:1,portMappingCount:1,resourceMapHitCount:2,resourceEndpointRewriteCount:2,resourceCssRewriteCount:2,resourceAttributeRewriteCount:1,lastResourceRewriteKind:'css'}},
         {id:'selftest.dynamic.webview.pending',name:'Pending Runtime Webview',container:'selftest.dynamic.container',extensionId:'selftest.extension',runtimeAvailable:true,htmlAvailable:false,htmlLength:0,webviewEvidence:{htmlAvailable:false,stateKind:'dict',stateKeys:['pending'],enableScripts:true,enableForms:true,retainContextWhenHidden:false,visible:false,pendingMessageCount:1,queuedMessageCount:1,droppedMessageCount:1,lastDroppedReason:'disposed-queue',lastQueueReason:'missing-frame'}}
       ],
       customEditors:[{viewType:'selftest.customEditor',displayName:'Custom Fixture',extensionId:'selftest.extension',stateCount:1,states:[{uri:'custom.fixture'}],runtimeAvailable:true}],
@@ -38720,6 +38772,11 @@ function extensionRuntimeDomSelfCheckSnapshot(){
       webviewStatusChips:root.querySelectorAll('.extension-webview-view-chip').length,
       webviewViewActions:webviewViewActions.length,
       webviewActionLabels:webviewViewActions.map(item=>String(item.textContent||'')),
+      webviewResourceRootDataset:!!root.querySelector('[data-webview-view-id="selftest.dynamic.webview"][data-webview-local-resource-root-count="1"]'),
+      webviewPortMappingDataset:!!root.querySelector('[data-webview-view-id="selftest.dynamic.webview"][data-webview-port-mapping-count="1"]'),
+      webviewResourceMapDataset:!!root.querySelector('[data-webview-view-id="selftest.dynamic.webview"][data-webview-resource-map-hit-count="2"]'),
+      webviewResourceEndpointDataset:!!root.querySelector('[data-webview-view-id="selftest.dynamic.webview"][data-webview-resource-endpoint-rewrite-count="2"]'),
+      webviewResourceCssDataset:!!root.querySelector('[data-webview-view-id="selftest.dynamic.webview"][data-webview-resource-css-rewrite-count="2"]'),
       webviewEmptyState:!!root.querySelector('.extension-webview-view-empty strong'),
       manifestGroup:!!manifest,
       manifestHidden:manifest?manifest.dataset.runtimeVisible:'',
@@ -38751,6 +38808,9 @@ function extensionRuntimeDomSelfCheckSnapshot(){
       runtimeWebviewMessageRows:runtimeList?Array.from(runtimeList.querySelectorAll('.extension-runtime-row')).filter(row=>Number(row.dataset.webviewMessageCount)||0).length:0,
       runtimeWebviewQueuedRows:runtimeList?Array.from(runtimeList.querySelectorAll('.extension-runtime-row')).filter(row=>(Number(row.dataset.webviewPendingMessageCount)||0)||(Number(row.dataset.webviewQueuedMessageCount)||0)).length:0,
       runtimeWebviewDroppedRows:runtimeList?Array.from(runtimeList.querySelectorAll('.extension-runtime-row')).filter(row=>Number(row.dataset.webviewDroppedMessageCount)||0).length:0,
+      runtimeWebviewResourceRootRows:runtimeList?Array.from(runtimeList.querySelectorAll('.extension-runtime-row')).filter(row=>Number(row.dataset.webviewLocalResourceRootCount)||0).length:0,
+      runtimeWebviewPortMappingRows:runtimeList?Array.from(runtimeList.querySelectorAll('.extension-runtime-row')).filter(row=>Number(row.dataset.webviewPortMappingCount)||0).length:0,
+      runtimeWebviewResourceMapRows:runtimeList?Array.from(runtimeList.querySelectorAll('.extension-runtime-row')).filter(row=>Number(row.dataset.webviewResourceMapHitCount)||0).length:0,
       runtimeWebviewLastDropReasons:runtimeList?Array.from(runtimeList.querySelectorAll('.extension-runtime-row')).map(row=>row.dataset.webviewLastDroppedReason||'').filter(Boolean):[],
       runtimeWebviewSeqRows:runtimeList?Array.from(runtimeList.querySelectorAll('.extension-runtime-row')).filter(row=>Number(row.dataset.webviewLastDeliveredMessageSeq)||0).length:0,
       runtimeEvidencePills:runtimeList?runtimeList.querySelectorAll('.extension-runtime-evidence').length:0,
@@ -38807,6 +38867,7 @@ function extensionRuntimeDomSelfCheckSnapshot(){
       && snapshot.webviewStatusBars>=2&&snapshot.webviewStatusKinds.includes('rendered')&&snapshot.webviewStatusKinds.includes('partial')
       && snapshot.webviewHtmlDataset&&snapshot.webviewPendingDataset&&snapshot.webviewStatusChips>=10
       && snapshot.webviewViewActions>=6&&['Open','Refresh','Copy'].every(label=>snapshot.webviewActionLabels.includes(label))&&snapshot.webviewEmptyState
+      && snapshot.webviewResourceRootDataset&&snapshot.webviewPortMappingDataset&&snapshot.webviewResourceMapDataset&&snapshot.webviewResourceEndpointDataset&&snapshot.webviewResourceCssDataset
       && snapshot.manifestGroup&&snapshot.manifestHidden==='false'&&snapshot.welcomeRegions>=1&&snapshot.welcomeCommands>=1&&snapshot.welcomeExternalLinks>=1
       && snapshot.activityRole==='button'&&snapshot.activityTabIndex===0&&snapshot.activityLabel.includes('Selftest Extensions')&&snapshot.activityPanel==='ext-vc-selftest.dynamic.container'
       && snapshot.customPlaceholder&&snapshot.customDataset.viewType==='selftest.customEditor'&&snapshot.customCapabilities
@@ -38814,6 +38875,7 @@ function extensionRuntimeDomSelfCheckSnapshot(){
       && snapshot.runtimeRows>=12&&snapshot.runtimeReadyRows>=11&&snapshot.runtimeChips>=15
       && snapshot.runtimeWebviewEvidenceRows>=6&&snapshot.runtimeHtmlEvidenceRows>=1&&snapshot.runtimeMissingEvidenceRows>=1&&snapshot.runtimeWebviewRetainedRows>=1
       && snapshot.runtimeWebviewMessageRows>=1&&snapshot.runtimeWebviewQueuedRows>=2&&snapshot.runtimeWebviewDroppedRows>=1&&snapshot.runtimeWebviewSeqRows>=1&&snapshot.runtimeWebviewLastDropReasons.includes('disposed-queue')
+      && snapshot.runtimeWebviewResourceRootRows>=1&&snapshot.runtimeWebviewPortMappingRows>=1&&snapshot.runtimeWebviewResourceMapRows>=1
       && snapshot.runtimeEvidencePills===snapshot.runtimeRows&&snapshot.runtimeEvidenceStatuses.includes('rendered')&&snapshot.runtimeEvidenceStatuses.includes('missing')
       && snapshot.runtimeMiniActionButtons>=snapshot.runtimeRows*3&&snapshot.runtimeFocusableRows>=4&&snapshot.runtimeRefreshableRows>=4
       && snapshot.runtimeListRole==='list'&&snapshot.runtimeListItems===snapshot.runtimeRows
