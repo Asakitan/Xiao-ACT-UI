@@ -15231,6 +15231,132 @@ function editorDiagnosticTagLabel(tag){
   if(raw==='2'||raw==='deprecated')return 'deprecated';
   return raw;
 }
+function editorLanguageFamily(language){
+  const lang=String(language||editorLang||'plaintext').toLowerCase();
+  if(['javascript','javascriptreact','typescript','typescriptreact'].includes(lang))return 'javascript';
+  if(['json','jsonc'].includes(lang))return lang;
+  if(['css','scss','less'].includes(lang))return 'css';
+  if(['html','xml','vue','svelte'].includes(lang))return 'html';
+  if(['python','py'].includes(lang))return 'python';
+  if(['markdown','md'].includes(lang))return 'markdown';
+  return lang;
+}
+function editorRangePayloadFromValueOffsets(value,start,end){
+  value=String(value||'');
+  start=Math.max(0,Math.min(value.length,Number(start)||0));
+  end=Math.max(0,Math.min(value.length,Number(end)||start));
+  return {start:editorPositionFromOffset(value,Math.min(start,end)),end:editorPositionFromOffset(value,Math.max(start,end))};
+}
+function editorLineOffsetInfo(value,lineIndex){
+  value=String(value||'');
+  const lines=value.split('\n');
+  const line=Math.max(0,Math.min(lines.length-1,Number(lineIndex)||0));
+  let offset=0;
+  for(let i=0;i<line;i++)offset+=lines[i].length+1;
+  return {line,offset,text:lines[line]||''};
+}
+function editorLineRange(value,lineIndex,startChar,endChar){
+  const info=editorLineOffsetInfo(value,lineIndex);
+  const start=info.offset+Math.max(0,Number(startChar)||0);
+  const end=info.offset+Math.max(0,endChar==null?info.text.length:Number(endChar));
+  return editorRangePayloadFromValueOffsets(value,start,end);
+}
+function editorDiagnosticAtOffsets(value,start,end,message,severity,code,source){
+  return normalizeEditorDiagnostic({
+    range:editorRangePayloadFromValueOffsets(value,start,end),
+    message,severity:severity||'warning',code,source:source||'Built-in'
+  });
+}
+function editorFallbackDiagnosticPush(list,item){
+  const diag=normalizeEditorDiagnostic(item);
+  if(diag)list.push(diag);
+}
+function editorJsonParseDiagnostic(value,language){
+  if(language!=='json'&&language!=='jsonc')return null;
+  try{JSON.parse(language==='jsonc'?stripEditorJsoncForParse(value):value);return null}
+  catch(exc){
+    const message=String(exc&&exc.message?exc.message:'Invalid JSON');
+    const match=/position\s+(\d+)/i.exec(message);
+    const offset=match?Math.max(0,Math.min(String(value||'').length,Number(match[1])||0)):0;
+    return editorDiagnosticAtOffsets(value,offset,Math.min(String(value||'').length,offset+1),message,'error','json.parse','Built-in JSON');
+  }
+}
+function editorFindJsonTrailingCommaDiagnostics(value){
+  value=String(value||'');
+  const out=[];let inString=false,escape=false;
+  for(let i=0;i<value.length;i++){
+    const ch=value[i],next=value[i+1];
+    if(inString){
+      if(escape)escape=false;
+      else if(ch==='\\')escape=true;
+      else if(ch==='"')inString=false;
+      continue;
+    }
+    if(ch==='"'){inString=true;continue}
+    if(ch===','){
+      let j=i+1;
+      while(j<value.length&&/\s/.test(value[j]))j++;
+      if(value[j]==='}'||value[j]===']')out.push(editorDiagnosticAtOffsets(value,i,i+1,'Trailing comma is not valid JSON.','warning','json.trailingComma','Built-in JSON'));
+    }
+  }
+  return out.filter(Boolean);
+}
+function editorBracketDiagnostics(value,language){
+  const family=editorLanguageFamily(language);
+  if(!['javascript','css','html','json','jsonc'].includes(family))return [];
+  const pairs={ '(':')','[':']','{':'}' },opens=Object.keys(pairs),closes=Object.values(pairs);
+  const stack=[],out=[];let quote='',escape=false,lineComment=false,blockComment=false;
+  value=String(value||'');
+  for(let i=0;i<value.length;i++){
+    const ch=value[i],next=value[i+1];
+    if(lineComment){if(ch==='\n'||ch==='\r')lineComment=false;continue}
+    if(blockComment){if(ch==='*'&&next==='/'){blockComment=false;i++}continue}
+    if(quote){
+      if(escape)escape=false;
+      else if(ch==='\\')escape=true;
+      else if(ch===quote)quote='';
+      continue;
+    }
+    if(ch==='"'||ch==="'"||ch==='`'){quote=ch;continue}
+    if(family==='javascript'||family==='css'||family==='html'){
+      if(ch==='/'&&next==='/'){lineComment=true;i++;continue}
+      if(ch==='/'&&next==='*'){blockComment=true;i++;continue}
+    }
+    if(opens.includes(ch))stack.push({ch,offset:i});
+    else if(closes.includes(ch)){
+      const last=stack[stack.length-1];
+      if(last&&pairs[last.ch]===ch)stack.pop();
+      else out.push(editorDiagnosticAtOffsets(value,i,i+1,'Unmatched closing bracket "'+ch+'".','error','syntax.unmatchedBracket','Built-in Syntax'));
+    }
+  }
+  stack.slice(-12).forEach(item=>out.push(editorDiagnosticAtOffsets(value,item.offset,item.offset+1,'Missing closing bracket "'+pairs[item.ch]+'".','warning','syntax.missingBracket','Built-in Syntax')));
+  return out.filter(Boolean);
+}
+function editorFallbackDiagnostics(value,language){
+  value=String(value||'');const family=editorLanguageFamily(language),out=[],lines=value.split('\n'),fmt=editorFormatOptions();
+  const jsonDiag=editorJsonParseDiagnostic(value,family);
+  if(jsonDiag)out.push(jsonDiag);
+  if(family==='json')out.push(...editorFindJsonTrailingCommaDiagnostics(value));
+  out.push(...editorBracketDiagnostics(value,family));
+  lines.forEach((line,index)=>{
+    const raw=line.replace(/\r$/,'');
+    const trailing=/[ \t]+$/.exec(raw);
+    if(trailing)editorFallbackDiagnosticPush(out,{range:editorLineRange(value,index,trailing.index,raw.length),message:'Trailing whitespace.',severity:'hint',code:'format.trailingWhitespace',source:'Built-in Format'});
+    const leading=/^[ \t]+/.exec(raw);
+    if(fmt.insertSpaces&&leading&&leading[0].includes('\t'))editorFallbackDiagnosticPush(out,{range:editorLineRange(value,index,0,leading[0].length),message:'Indentation contains tabs while editor.insertSpaces is enabled.',severity:'info',code:'format.tabsToSpaces',source:'Built-in Format'});
+    if(family==='markdown'){
+      const bad=/^(#{1,6})([^\s#])/.exec(raw);
+      if(bad)editorFallbackDiagnosticPush(out,{range:editorLineRange(value,index,bad[1].length,bad[1].length+1),message:'Markdown headings should include a space after #.',severity:'warning',code:'markdown.headingSpace',source:'Built-in Markdown'});
+    }
+    if(family==='python'){
+      if(/^(?:\s*)(if|elif|else|for|while|def|class|try|except|finally|with|match|case)\b/.test(raw)&&!/:\s*(?:#.*)?$/.test(raw)){
+        editorFallbackDiagnosticPush(out,{range:editorLineRange(value,index,raw.length,raw.length),message:'Python block statements should end with a colon.',severity:'warning',code:'python.missingColon',source:'Built-in Python'});
+      }
+      if(leading&&/ /.test(leading[0])&&/\t/.test(leading[0]))editorFallbackDiagnosticPush(out,{range:editorLineRange(value,index,0,leading[0].length),message:'Mixed tabs and spaces in indentation.',severity:'warning',code:'python.mixedIndent',source:'Built-in Python'});
+    }
+  });
+  return out.filter(Boolean).slice(0,500);
+}
 function editorDiagnosticRangeIntersects(diagnosticRange,targetRange){
   if(!diagnosticRange||!diagnosticRange.start||!targetRange||!targetRange.start)return false;
   const diagEnd=diagnosticRange.end||diagnosticRange.start;
@@ -15306,15 +15432,24 @@ async function requestEditorDiagnostics(quiet){
   const res=await editorRequestLanguageProvider('diagnostics',editorProviderPayload('diagnostics'),{countKey:'diagnostics',itemLabel:'problem',isCurrent:()=>requestId===_editorDiagnosticRequest&&contentSnapshot===String(ed.value||'')});
   if(requestId!==_editorDiagnosticRequest||contentSnapshot!==String(ed.value||''))return;
   if(res&&res.error){
-    _editorDiagnostics=[];_editorDiagnosticContentLength=-1;renderEditorDiagnostics([]);
-    if(typeof updateEditorLanguageFeatureState==='function')updateEditorLanguageFeatureState('diagnostics','error',Object.assign(editorDiagnosticSeveritySummary([]),{message:'Diagnostics: failed'}));
-    if(!quiet)setStatus('Diagnostics failed: '+res.error);return
+    _editorDiagnostics=editorFallbackDiagnostics(contentSnapshot,editorLang);
+    _editorDiagnosticContentLength=contentLength;
+    renderEditorDiagnostics(_editorDiagnostics);
+    if(typeof updateEditorLanguageFeatureState==='function')updateEditorLanguageFeatureState('diagnostics',_editorDiagnostics.length?'warning':'error',Object.assign(editorDiagnosticSeveritySummary(_editorDiagnostics),{
+      message:_editorDiagnostics.length?'Diagnostics: built-in fallback':'Diagnostics: failed'
+    }));
+    if(!quiet)setStatus(_editorDiagnostics.length?('Built-in diagnostics: '+_editorDiagnostics.length):('Diagnostics failed: '+res.error));return
   }
-  _editorDiagnostics=(res&&res.ok&&Array.isArray(res.diagnostics)?res.diagnostics:[])
+  const providerDiagnostics=(res&&res.ok&&Array.isArray(res.diagnostics)?res.diagnostics:[])
     .map(normalizeEditorDiagnostic).filter(Boolean);
+  const fallbackDiagnostics=providerDiagnostics.length?[]:editorFallbackDiagnostics(contentSnapshot,editorLang);
+  _editorDiagnostics=providerDiagnostics.concat(fallbackDiagnostics);
   _editorDiagnosticContentLength=contentLength;
   renderEditorDiagnostics(_editorDiagnostics);
-  if(typeof updateEditorLanguageFeatureState==='function')updateEditorLanguageFeatureState('diagnostics',_editorDiagnostics.length?'ready':'empty',editorDiagnosticSeveritySummary(_editorDiagnostics));
+  if(typeof updateEditorLanguageFeatureState==='function')updateEditorLanguageFeatureState('diagnostics',_editorDiagnostics.length?'ready':'empty',Object.assign(editorDiagnosticSeveritySummary(_editorDiagnostics),{
+    fallback:fallbackDiagnostics.length,
+    message:_editorDiagnostics.length?('Diagnostics: '+_editorDiagnostics.length+(fallbackDiagnostics.length?' built-in':'')):'Diagnostics: 0'
+  }));
   if(!quiet)setStatus(_editorDiagnostics.length+' problem'+(_editorDiagnostics.length===1?'':'s'));
 }
 function scheduleEditorDiagnostics(delay){
@@ -16179,7 +16314,8 @@ async function formatEditorRange(range,options){
     kind:'range',edits:0,applied:false,
     message:res&&res.error?'Formatting: range failed':'Formatting: range unavailable'
   });
-  return false;
+  const fallback=formatEditorFallbackRange(range,opts);
+  return fallback===null?false:fallback;
 }
 async function maybeFormatEditorPasteRange(range,label){
   if(!editorFormatOnPasteEnabled()||!range)return false;
@@ -16336,14 +16472,65 @@ async function applyEditorCodeActionForSave(action){
   const commandResult=action.command?await runEditorCodeActionCommand(action.command):null;
   return !!(editResult.changed||editResult.tabApplied||editResult.workspaceApplied||callSucceeded(commandResult));
 }
+function editorFallbackQuickFixAction(title,diagnostic,edit,preferred){
+  return {
+    title,
+    kind:'quickfix',
+    diagnostics:diagnostic?[diagnostic]:[],
+    isPreferred:preferred===true,
+    edit:Array.isArray(edit)?edit:[edit],
+    source:'Built-in'
+  };
+}
+function editorFallbackCodeActionsForDiagnostic(diagnostic){
+  if(!diagnostic||!diagnostic.range)return [];
+  const code=editorDiagnosticCodeLabel(diagnostic.code);
+  const range=diagnostic.range;
+  const actions=[];
+  if(code==='format.trailingWhitespace'){
+    actions.push(editorFallbackQuickFixAction('Trim trailing whitespace',diagnostic,{range,newText:''},true));
+  }else if(code==='format.tabsToSpaces'||code==='python.mixedIndent'){
+    const text=editorRangeText(range),spaces=' '.repeat(editorTabSize((editorFormatOptions()||{}).tabSize));
+    actions.push(editorFallbackQuickFixAction('Convert indentation tabs to spaces',diagnostic,{range,newText:text.replace(/\t/g,spaces)},true));
+  }else if(code==='markdown.headingSpace'){
+    actions.push(editorFallbackQuickFixAction('Insert heading space',diagnostic,{range:{start:range.start,end:range.start},newText:' '},true));
+  }else if(code==='python.missingColon'){
+    actions.push(editorFallbackQuickFixAction('Add trailing colon',diagnostic,{range:{start:range.start,end:range.start},newText:':'},true));
+  }else if(code==='json.trailingComma'){
+    actions.push(editorFallbackQuickFixAction('Remove trailing comma',diagnostic,{range,newText:''},true));
+  }else if(code==='syntax.missingBracket'){
+    const match=/"([^"]+)"/.exec(String(diagnostic.message||''));
+    const close=match?match[1]:'';
+    if(close)actions.push(editorFallbackQuickFixAction('Insert missing '+close,diagnostic,{range:{start:range.end||range.start,end:range.end||range.start},newText:close},false));
+  }
+  return actions;
+}
+function editorFallbackCodeActions(range,diagnostics,only){
+  const onlyText=String(only||'');
+  if(onlyText&&onlyText!=='quickfix'&&!onlyText.startsWith('quickfix.'))return [];
+  const relevant=(Array.isArray(diagnostics)&&diagnostics.length?diagnostics:editorDiagnosticsForRange(range))
+    .map(normalizeEditorDiagnostic).filter(Boolean);
+  const seen=new Set(),actions=[];
+  relevant.forEach(diag=>{
+    editorFallbackCodeActionsForDiagnostic(diag).forEach(action=>{
+      const key=action.title+'|'+JSON.stringify(action.edit||[]);
+      if(seen.has(key))return;
+      seen.add(key);actions.push(action);
+    });
+  });
+  return actions.slice(0,24);
+}
 async function fetchEditorCodeActionsForKind(only,range,isCurrent){
   const actionRange=range||editorSelectedRangePayload();
   const payload={range:actionRange,itemResolveCount:0,triggerKind:1,diagnostics:editorDiagnosticsForRange(actionRange)};
   if(only)payload.only=only;
   const res=await editorRequestLanguageProvider('codeActions',editorProviderPayload('codeActions',payload),{countKey:'actions',itemLabel:'code action',isCurrent});
   if(editorProviderResultCancelled(res))return {cancelled:true,actions:[]};
+  const providerActions=(res&&res.ok&&Array.isArray(res.actions)?res.actions:[]).filter(action=>!!action);
+  const fallbackActions=providerActions.length?[]:editorFallbackCodeActions(actionRange,payload.diagnostics,only);
+  if(res&&res.error&&fallbackActions.length)return {actions:fallbackActions,fallback:true};
   if(res&&res.error)return {error:res.error,actions:[]};
-  return {actions:(res&&res.ok&&Array.isArray(res.actions)?res.actions:[]).filter(action=>!!action)};
+  return {actions:providerActions.concat(fallbackActions),fallback:fallbackActions.length>0};
 }
 async function requestEditorCodeActionsForKind(quiet,only,label){
   const requestId=++_editorCodeActionRequest,position=editorPositionFromOffset(ed.value,ed.selectionStart);
@@ -17674,6 +17861,114 @@ function formatEditorJsonLikeDocument(opts){
     return false;
   }
 }
+function editorFallbackIndentUnit(options){
+  options=options||editorFormatOptions();
+  return options.insertSpaces?' '.repeat(editorTabSize(options.tabSize)):'\t';
+}
+function editorNormalizeFormattedEol(original,text){
+  const eol=editorPreferredEol(original);
+  text=String(text||'').replace(/\r\n|\r|\n/g,eol);
+  return text;
+}
+function editorFormatBraceLanguageValue(value,options){
+  const unit=editorFallbackIndentUnit(options),lines=String(value||'').split(/\r?\n/);
+  let depth=0;
+  const out=lines.map(line=>{
+    const raw=line.replace(/[ \t]+$/,'').trim();
+    if(!raw)return '';
+    const closes=(raw.match(/^[}\])]+/)||[''])[0].length;
+    depth=Math.max(0,depth-closes);
+    const formatted=unit.repeat(depth)+raw;
+    const openCount=(raw.match(/[{\[(]/g)||[]).length;
+    const closeCount=(raw.match(/[}\])]/g)||[]).length;
+    depth=Math.max(0,depth+openCount-closeCount+closes);
+    return formatted;
+  });
+  return editorNormalizeFormattedEol(value,out.join('\n').replace(/\n{3,}/g,'\n\n'));
+}
+function editorFormatHtmlValue(value,options){
+  const unit=editorFallbackIndentUnit(options);
+  const tokens=String(value||'').replace(/>\s*</g,'>\n<').split(/\r?\n/);
+  let depth=0;
+  const out=tokens.map(line=>{
+    const raw=line.replace(/[ \t]+$/,'').trim();
+    if(!raw)return '';
+    const closing=/^<\//.test(raw),selfClosing=/\/>$/.test(raw)||/^<!|^<\?/.test(raw)||/^<(?:area|base|br|col|embed|hr|img|input|link|meta|param|source|track|wbr)\b/i.test(raw);
+    if(closing)depth=Math.max(0,depth-1);
+    const formatted=unit.repeat(depth)+raw;
+    if(/^<[^/!?\s][^>]*>$/.test(raw)&&!selfClosing&&!closing&&!/<\/[^>]+>$/.test(raw))depth++;
+    return formatted;
+  });
+  return editorNormalizeFormattedEol(value,out.join('\n'));
+}
+function editorFormatMarkdownValue(value){
+  const out=String(value||'').split(/\r?\n/).map(line=>{
+    let next=line.replace(/[ \t]+$/,'');
+    next=next.replace(/^(#{1,6})([^\s#])/,'$1 $2');
+    return next;
+  }).join('\n');
+  return editorNormalizeFormattedEol(value,out);
+}
+function editorFormatPythonValue(value,options){
+  const unit=editorFallbackIndentUnit(options);
+  const out=String(value||'').split(/\r?\n/).map(line=>{
+    const raw=line.replace(/[ \t]+$/,'');
+    if((options||{}).insertSpaces!==false){
+      const leading=(raw.match(/^[\t ]+/)||[''])[0];
+      return leading?leading.replace(/\t/g,unit)+raw.slice(leading.length):raw;
+    }
+    return raw;
+  }).join('\n');
+  return editorNormalizeFormattedEol(value,out);
+}
+function editorFallbackFormattedValue(value,language,options){
+  const family=editorLanguageFamily(language),opts=options||editorFormatOptions();
+  if(['javascript','css'].includes(family))return editorFormatBraceLanguageValue(value,opts);
+  if(family==='html')return editorFormatHtmlValue(value,opts);
+  if(family==='markdown')return editorFormatMarkdownValue(value,opts);
+  if(family==='python')return editorFormatPythonValue(value,opts);
+  return null;
+}
+function applyEditorFallbackFormattedValue(next,kind,quiet){
+  if(next==null)return null;
+  next=String(next);
+  const changed=next!==ed.value;
+  if(changed){
+    _undoPush(true);
+    ed.value=next;editorDirty=true;updateLineNums();updateCursorPos();scheduleEditorSyntaxHighlight();
+    editorRefreshLanguageFeaturesAfterEdit(160);
+  }
+  if(typeof updateEditorLanguageFeatureState==='function')updateEditorLanguageFeatureState('formatting','ready',{
+    kind:kind||'fallback',edits:changed?1:0,applied:true,message:'Formatting: built-in '+editorLanguageFamily(editorLang)
+  });
+  if(!quiet)setStatus(changed?'Formatted with built-in formatter':'Already formatted');
+  return true;
+}
+function formatEditorFallbackDocument(opts){
+  const next=editorFallbackFormattedValue(ed.value,editorLang,editorFormatOptions());
+  return applyEditorFallbackFormattedValue(next,'fallback',opts&&opts.quiet===true);
+}
+function formatEditorFallbackRange(range,opts){
+  if(!range||!range.start||!range.end)return null;
+  const value=String(ed.value||''),start=editorOffsetFromPosition(value,range.start),end=editorOffsetFromPosition(value,range.end);
+  if(start===end)return null;
+  const text=value.slice(Math.min(start,end),Math.max(start,end));
+  const next=editorFallbackFormattedValue(text,editorLang,editorFormatOptions());
+  if(next==null)return null;
+  if(next===text){
+    if(!opts||opts.quiet!==true)setStatus('Selection already formatted');
+    return true;
+  }
+  _undoPush(true);
+  if(editorApplyTextEdits([{range,newText:next}])){
+    if(typeof updateEditorLanguageFeatureState==='function')updateEditorLanguageFeatureState('formatting','ready',{
+      kind:'rangeFallback',edits:1,applied:true,message:'Formatting: built-in selection'
+    });
+    if(!opts||opts.quiet!==true)setStatus('Formatted selection with built-in formatter');
+    return true;
+  }
+  return false;
+}
 async function formatDocument(options){
   const opts=isPlainObject(options)?options:{};
   const payload={options:editorFormatOptions()};
@@ -17691,6 +17986,8 @@ async function formatDocument(options){
   }
   const jsonFormatted=formatEditorJsonLikeDocument(opts);
   if(jsonFormatted!==null)return jsonFormatted;
+  const fallbackFormatted=formatEditorFallbackDocument(opts);
+  if(fallbackFormatted!==null)return fallbackFormatted;
   if(typeof updateEditorLanguageFeatureState==='function')updateEditorLanguageFeatureState('formatting',res&&res.error?'error':'empty',{kind:'document',edits:0,applied:false,message:'Formatting: unavailable'});
   if(!opts.quiet)setStatus('Format not available for '+editorLang);
   return false;

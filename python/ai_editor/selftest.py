@@ -13895,6 +13895,173 @@ console.log("command palette quick access helpers ok");
            and "editorFormatOptions()" in html
            and "options.insertSpaces?editorTabSize(options.tabSize):0" in html
            and "Formatting: invalid '+lang.toUpperCase()" in html)
+    _check("frontend provides built-in language fallback diagnostics and fixes",
+           "function editorFallbackDiagnostics(value,language)" in html
+           and "function editorJsonParseDiagnostic(value,language)" in html
+           and "function editorFindJsonTrailingCommaDiagnostics(value)" in html
+           and "function editorBracketDiagnostics(value,language)" in html
+           and "function editorFallbackCodeActions(range,diagnostics,only)" in html
+           and "function editorFallbackFormattedValue(value,language,options)" in html
+           and "function editorFormatBraceLanguageValue(value,options)" in html
+           and "function editorFormatHtmlValue(value,options)" in html
+           and "function editorFormatMarkdownValue(value)" in html
+           and "function editorFormatPythonValue(value,options)" in html
+           and "providerDiagnostics.length?[]:editorFallbackDiagnostics"
+           in html
+           and "fallbackActions=providerActions.length?[]:editorFallbackCodeActions"
+           in html
+           and "const fallbackFormatted=formatEditorFallbackDocument(opts);"
+           in html
+           and "const fallback=formatEditorFallbackRange(range,opts);"
+           in html
+           and "python.missingColon" in html
+           and "markdown.headingSpace" in html
+           and "json.trailingComma" in html
+           and "format.trailingWhitespace" in html
+           and "format.tabsToSpaces" in html
+           and "syntax.missingBracket" in html)
+    if not node_path:
+        _check("frontend built-in language fallback behavior skipped without Node.js",
+               True)
+    else:
+        def _extract_fallback_language_function(name: str) -> str:
+            next_functions = {
+                "editorBracketDiagnostics": "editorFallbackDiagnostics",
+                "editorFallbackDiagnostics": "editorDiagnosticRangeIntersects",
+                "editorFallbackCodeActionsForDiagnostic":
+                    "editorFallbackCodeActions",
+                "editorFormatBraceLanguageValue": "editorFormatHtmlValue",
+                "editorFormatHtmlValue": "editorFormatMarkdownValue",
+                "editorFormatMarkdownValue": "editorFormatPythonValue",
+                "editorFormatPythonValue": "editorFallbackFormattedValue",
+                "editorFallbackFormattedValue":
+                    "applyEditorFallbackFormattedValue",
+            }
+            next_name = next_functions.get(name)
+            if next_name:
+                start = html.find(f"function {name}(")
+                end = html.find(f"\nfunction {next_name}(", start)
+                if start < 0 or end < 0:
+                    raise ValueError(f"Missing JS function: {name}")
+                return html[start:end]
+            return _extract_js_function(html, name)
+
+        fallback_language_functions = [
+            "editorPositionFromOffset",
+            "editorOffsetFromPosition",
+            "editorDiagnosticSeverityValue",
+            "normalizeEditorDiagnostic",
+            "editorDiagnosticCodeLabel",
+            "editorLanguageFamily",
+            "editorRangePayloadFromValueOffsets",
+            "editorLineOffsetInfo",
+            "editorLineRange",
+            "editorDiagnosticAtOffsets",
+            "editorFallbackDiagnosticPush",
+            "removeEditorJsonTrailingCommas",
+            "stripEditorJsoncForParse",
+            "editorJsonParseDiagnostic",
+            "editorFindJsonTrailingCommaDiagnostics",
+            "editorBracketDiagnostics",
+            "editorFallbackDiagnostics",
+            "editorFallbackQuickFixAction",
+            "editorFallbackCodeActionsForDiagnostic",
+            "editorFallbackCodeActions",
+            "editorFallbackIndentUnit",
+            "editorNormalizeFormattedEol",
+            "editorFormatBraceLanguageValue",
+            "editorFormatHtmlValue",
+            "editorFormatMarkdownValue",
+            "editorFormatPythonValue",
+            "editorFallbackFormattedValue",
+        ]
+        fallback_language_js = "\n".join(
+            _extract_fallback_language_function(name)
+            for name in fallback_language_functions)
+        js = r"""
+function assert(ok,label){ if(!ok){ throw new Error(label); } }
+let editorLang = "plaintext";
+let ed = { value: "" };
+let formatOptions = { tabSize: 2, insertSpaces: true };
+function editorTabSize(value){
+  const n = Number(value);
+  return Number.isFinite(n) && n >= 1 && n <= 8 ? Math.floor(n) : 4;
+}
+function editorFormatOptions(){ return formatOptions; }
+function editorPreferredEol(original){
+  return String(original || "").includes("\r\n") ? "\r\n" : "\n";
+}
+function editorRangeText(range){
+  const start = editorOffsetFromPosition(ed.value, range.start);
+  const end = editorOffsetFromPosition(ed.value, range.end || range.start);
+  return ed.value.slice(Math.min(start, end), Math.max(start, end));
+}
+function editorDiagnosticsForRange(){ return []; }
+""" + fallback_language_js + r"""
+const codeOf = diag => editorDiagnosticCodeLabel(diag && diag.code);
+let py = "if True\n\tprint('x')  \n";
+let pyDiag = editorFallbackDiagnostics(py, "python");
+assert(pyDiag.some(diag => codeOf(diag) === "python.missingColon"), "python missing colon diagnostic");
+assert(pyDiag.some(diag => codeOf(diag) === "format.trailingWhitespace"), "trailing whitespace diagnostic");
+assert(pyDiag.some(diag => codeOf(diag) === "format.tabsToSpaces"), "tabs to spaces diagnostic");
+let mixedPy = " \tprint('x')\n";
+assert(editorFallbackDiagnostics(mixedPy, "python").some(diag => codeOf(diag) === "python.mixedIndent"), "python mixed indent diagnostic");
+let md = "#Title  \n";
+let mdDiag = editorFallbackDiagnostics(md, "markdown");
+assert(mdDiag.some(diag => codeOf(diag) === "markdown.headingSpace"), "markdown heading space diagnostic");
+let json = "{\n  \"a\": 1,\n}";
+assert(editorFallbackDiagnostics(json, "json").some(diag => codeOf(diag) === "json.trailingComma"), "json trailing comma diagnostic");
+assert(!editorFallbackDiagnostics(json, "jsonc").some(diag => codeOf(diag) === "json.trailingComma"), "jsonc accepts trailing comma");
+let jsMissing = "if (x) {\nfoo()\n";
+assert(editorFallbackDiagnostics(jsMissing, "javascript").some(diag => codeOf(diag) === "syntax.missingBracket"), "missing bracket diagnostic");
+let quoted = "const s = \"{\";\n";
+assert(!editorFallbackDiagnostics(quoted, "javascript").some(diag => codeOf(diag) === "syntax.missingBracket"), "brackets in strings ignored");
+ed.value = md;
+let headingFix = editorFallbackCodeActions(
+  editorLineRange(md, 0, 1, 1),
+  mdDiag,
+  "quickfix"
+).find(action => action.title === "Insert heading space");
+assert(headingFix && headingFix.edit[0].newText === " ", "markdown heading quick fix");
+let trailingDiag = pyDiag.find(diag => codeOf(diag) === "format.trailingWhitespace");
+ed.value = py;
+let trimFix = editorFallbackCodeActions(trailingDiag.range, [trailingDiag], "quickfix")[0];
+assert(trimFix && trimFix.title === "Trim trailing whitespace" && trimFix.edit[0].newText === "", "trim whitespace quick fix");
+assert(editorFallbackCodeActions(trailingDiag.range, [trailingDiag], "source").length === 0, "fallback quick fixes respect only filter");
+assert(editorFallbackFormattedValue("if (x) {\nfoo()\n}\n", "javascript", formatOptions).includes("\n  foo()"), "javascript fallback formatting indents braces");
+assert(editorFallbackFormattedValue("<div><span>x</span></div>", "html", formatOptions).includes("\n"), "html fallback formatting splits tags");
+assert(editorFallbackFormattedValue("#Title  \n", "markdown", formatOptions) === "# Title\n", "markdown fallback formatting fixes heading and whitespace");
+assert(editorFallbackFormattedValue("\tprint('x')  \n", "python", formatOptions) === "  print('x')\n", "python fallback formatting expands tabs and trims whitespace");
+console.log("frontend built-in language fallback behavior ok");
+"""
+        js_path = ""
+        try:
+            with tempfile.NamedTemporaryFile(
+                    "w", encoding="utf-8", suffix=".js", delete=False) as fh:
+                js_path = fh.name
+                fh.write(js)
+            result = subprocess.run(
+                [node_path, js_path],
+                cwd=os.path.dirname(os.path.dirname(os.path.dirname(__file__))),
+                capture_output=True,
+                text=True,
+                timeout=10,
+                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+            )
+            _check_subprocess_result(
+                "frontend built-in language fallback behavior",
+                result,
+                "frontend built-in language fallback behavior ok",
+            )
+        except Exception as exc:
+            _check("frontend built-in language fallback behavior", False,
+                   str(exc))
+        finally:
+            if js_path:
+                try:
+                    os.unlink(js_path)
+                except OSError:
+                    pass
     _check("workspace auto root settings drive Explorer and Terminal cwd",
            "\"workspace\": {" in app_source
            and "\"recent_roots\": []" in app_source
