@@ -4872,7 +4872,9 @@ def test_phase1_ai_editor_regressions() -> None:
            and "flushedMessageCount:(Number(after.flushedMessageCount)||0)+flushed" in html
            and "lastQueuedAt:queuedAt" in html
            and "lastQueueReason:String(reason||'missing-frame')" in html
-           and "lastFlushAt:webviewRuntimeNow()" in html
+           and "oldestQueuedAgeMs:queueStats.oldestQueuedAgeMs" in html
+           and "flushBatchCount:(Number(after.flushBatchCount)||0)+1" in html
+           and "lastFlushAt:flushedAt" in html
            and "lastFlushReason:String(reason||'flush')" in html)
     _check("provider webviews expose message sequence and drop evidence",
            "function webviewRuntimeNextMessageSeq(viewId,direction)" in html
@@ -14015,15 +14017,24 @@ console.log("extension setting schema helpers ok");
            and "webviewResourceRootDataset:!!root.querySelector('[data-webview-view-id=\"selftest.dynamic.webview\"][data-webview-local-resource-root-count=\"1\"]')" in html
            and "webviewPortMappingDataset:!!root.querySelector('[data-webview-view-id=\"selftest.dynamic.webview\"][data-webview-port-mapping-count=\"1\"]')" in html
            and "webviewResourceEndpointDataset:!!root.querySelector('[data-webview-view-id=\"selftest.dynamic.webview\"][data-webview-resource-endpoint-rewrite-count=\"2\"]')" in html
+           and "webviewResourcePortHitDataset:!!root.querySelector('[data-webview-view-id=\"selftest.dynamic.webview\"][data-webview-resource-port-mapping-rewrite-count=\"1\"]')" in html
+           and "webviewResourceSchemeDataset:!!root.querySelector('[data-webview-view-id=\"selftest.dynamic.webview\"][data-webview-last-resource-original-scheme=\"http\"][data-webview-last-resource-rewritten-scheme=\"http\"]')" in html
+           and "webviewQueueAgeDataset:!!root.querySelector('[data-webview-view-id=\"selftest.dynamic.webview.pending\"][data-webview-oldest-queued-age-ms=\"6000\"]')" in html
+           and "webviewFlushDataset:!!root.querySelector('[data-webview-view-id=\"selftest.dynamic.webview\"][data-webview-flush-batch-count=\"1\"][data-webview-last-flush-batch-size=\"1\"]')" in html
            and "webviewAsWebviewUriReadyDataset:!!root.querySelector('[data-webview-view-id=\"selftest.dynamic.webview\"][data-webview-as-webview-uri-ready=\"1\"]')" in html
            and "webviewResourceEndpointReadyDataset:!!root.querySelector('[data-webview-view-id=\"selftest.dynamic.webview\"][data-webview-resource-endpoint-ready=\"1\"]')" in html
            and "webviewResourceMapReadyDataset:!!root.querySelector('[data-webview-view-id=\"selftest.dynamic.webview\"][data-webview-resource-map-ready=\"1\"]')" in html
            and "runtimeWebviewResourceRootRows:runtimeList?Array.from(runtimeList.querySelectorAll('.extension-runtime-row')).filter(row=>Number(row.dataset.webviewLocalResourceRootCount)||0).length:0" in html
            and "runtimeWebviewPortMappingRows:runtimeList?Array.from(runtimeList.querySelectorAll('.extension-runtime-row')).filter(row=>Number(row.dataset.webviewPortMappingCount)||0).length:0" in html
+           and "runtimeWebviewPortHitRows:runtimeList?Array.from(runtimeList.querySelectorAll('.extension-runtime-row')).filter(row=>Number(row.dataset.webviewResourcePortMappingRewriteCount)||0).length:0" in html
+           and "runtimeWebviewQueueAgeRows:runtimeList?Array.from(runtimeList.querySelectorAll('.extension-runtime-row')).filter(row=>Number(row.dataset.webviewOldestQueuedAgeMs)||0).length:0" in html
+           and "runtimeWebviewFlushRows:runtimeList?Array.from(runtimeList.querySelectorAll('.extension-runtime-row')).filter(row=>Number(row.dataset.webviewFlushBatchCount)||0).length:0" in html
+           and "runtimeWebviewLifecycleRows:runtimeList?Array.from(runtimeList.querySelectorAll('.extension-runtime-row')).filter(row=>(Number(row.dataset.webviewRenderCount)||0)||(Number(row.dataset.webviewRevealCount)||0)||(Number(row.dataset.webviewReviveCount)||0)||(Number(row.dataset.webviewDisposeCount)||0)).length:0" in html
            and "runtimeWebviewAsWebviewUriReadyRows:runtimeList?Array.from(runtimeList.querySelectorAll('.extension-runtime-row')).filter(row=>row.dataset.webviewAsWebviewUriReady==='1').length:0" in html
            and "snapshot.webviewStatusBars>=2" in html
            and "snapshot.webviewHtmlDataset&&snapshot.webviewPendingDataset" in html
            and "snapshot.webviewResourceRootDataset&&snapshot.webviewPortMappingDataset&&snapshot.webviewResourceMapDataset&&snapshot.webviewResourceEndpointDataset&&snapshot.webviewResourceCssDataset" in html
+           and "snapshot.webviewResourcePortHitDataset&&snapshot.webviewResourceSchemeDataset&&snapshot.webviewPortTargetDataset&&snapshot.webviewQueueAgeDataset&&snapshot.webviewFlushDataset&&snapshot.webviewLifecycleDataset" in html
            and "snapshot.webviewAsWebviewUriReadyDataset&&snapshot.webviewResourceEndpointReadyDataset&&snapshot.webviewResourceMapReadyDataset" in html
            and "snapshot.runtimeWebviewAsWebviewUriReadyRows>=1&&snapshot.runtimeWebviewResourceEndpointReadyRows>=1&&snapshot.runtimeWebviewResourceMapReadyRows>=1" in html
            and "['Open','Refresh','Copy'].every(label=>snapshot.webviewActionLabels.includes(label))" in html
@@ -14093,10 +14104,12 @@ console.log("extension setting schema helpers ok");
            and "snapshot.runtimeWebviewQueuedRows>=2" in html
            and "snapshot.runtimeWebviewDroppedRows>=1" in html
            and "snapshot.runtimeWebviewResourceRootRows>=1&&snapshot.runtimeWebviewPortMappingRows>=1&&snapshot.runtimeWebviewResourceMapRows>=1" in html
+           and "snapshot.runtimeWebviewPortHitRows>=1&&snapshot.runtimeWebviewQueueAgeRows>=1&&snapshot.runtimeWebviewFlushRows>=1&&snapshot.runtimeWebviewLifecycleRows>=2&&snapshot.runtimeWebviewSchemeRows>=1" in html
            and "snapshot.runtimeWebviewSeqRows>=1" in html
            and "snapshot.runtimeMessageEvidenceFilterVisible>=1" in html
            and "snapshot.runtimeQueuedEvidenceFilterVisible>=2" in html
            and "snapshot.runtimeDroppedEvidenceFilterVisible>=1" in html
+           and "snapshot.runtimePortHitFilterVisible>=1&&snapshot.runtimeQueueStaleFilterVisible>=1&&snapshot.runtimeLifecycleFilterVisible>=2" in html
            and "snapshot.webviewLifecycle.queuedBeforeRender>=1" in html
            and "snapshot.webviewLifecycle.lastDeliveredSeq>=1" in html
            and "snapshot.webviewLifecycle.lastQueueReason==='missing-frame'" in html
