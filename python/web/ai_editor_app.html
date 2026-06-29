@@ -1362,7 +1362,7 @@ pre.code-block code .type { color:var(--fg-type); }
 .chat-control-strip { display:flex; align-items:center; gap:6px; flex:0 0 auto; flex-wrap:nowrap; min-width:max-content;
   overflow:visible; width:max-content; max-width:none;
   --chat-provider-width:128px;
-  --chat-model-width:112px;
+  --chat-model-width:42px;
   --chat-agent-width:140px;
   --chat-workflow-width:144px; }
 .chat-chip,.chat-select-chip,.chat-model-inline,.chat-run-chip { height:22px; border:1px solid var(--border);
@@ -4138,7 +4138,7 @@ pre.code-block { overflow:visible; }
             <option value="deepseek">DeepSeek</option><option value="ollama">Ollama</option>
             <option value="custom">Custom</option>
           </select>
-          <input id="model-inp" placeholder="Model name" style="width:33%;min-width:92px;max-width:132px;margin-top:4px;background:var(--bg3);color:var(--fg);border:1px solid var(--border);border-radius:3px;padding:3px 6px;font:12px var(--mono)">
+          <input id="model-inp" placeholder="Model name" style="width:11%;min-width:36px;max-width:44px;margin-top:4px;background:var(--bg3);color:var(--fg);border:1px solid var(--border);border-radius:3px;padding:3px 6px;font:12px var(--mono)">
         </div>
         <div class="sb-group" style="margin-top:8px" data-i18n="quick_actions">Quick Actions</div>
         <div class="sb-item" onclick="execSlash('/system')">ℹ System Info</div>
@@ -12683,7 +12683,7 @@ function assistantVisualLayoutSnapshot(){
     nativeBoxes,
     noOldNativeBoxes:nativeBoxes.every(item=>item.exists&&item.display==='none'&&item.ariaHidden==='true'&&item.inert===true&&item.width===0&&item.height===0),
     triggerWidths:triggerWidthMap,
-    controlWidthsReady:!!(triggerWidthMap['chat-provider-trigger']>=128&&triggerWidthMap['chat-model-inline']>=104&&triggerWidthMap['chat-model-inline']<=128&&triggerWidthMap['chat-agent-trigger']>=140&&triggerWidthMap['chat-workflow-trigger']>=144),
+    controlWidthsReady:!!(triggerWidthMap['chat-provider-trigger']>=128&&triggerWidthMap['chat-model-inline']>=36&&triggerWidthMap['chat-model-inline']<=52&&triggerWidthMap['chat-agent-trigger']>=140&&triggerWidthMap['chat-workflow-trigger']>=144),
     popups:popupSnapshots,
     popupsCustomSurface:popupSnapshots.every(item=>item.customSurface&&item.shown&&item.display==='block'&&item.pointerEvents==='auto'),
     popupsOpenAbove:popupSnapshots.every(item=>item.rectReady&&item.opensAboveTrigger&&item.notToolbarClipped),
