@@ -383,10 +383,12 @@ body.window-resizing * { cursor:inherit !important; }
 .editor-dirty-diff-count.modified { color:var(--fg-accent); }
 .editor-dirty-diff-count.removed { color:var(--fg-error); }
 .editor-dirty-diff-total { color:var(--fg); padding:0 3px; }
+.editor-dirty-diff-status { color:var(--fg-dim); font:10px var(--mono); max-width:120px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .editor-dirty-diff-action { height:18px; min-width:20px; padding:0 5px; border:1px solid transparent;
   border-radius:3px; background:transparent; color:var(--fg-dim); font:10px var(--mono); cursor:pointer; }
 .editor-dirty-diff-action:hover,.editor-dirty-diff-action:focus { outline:none; color:var(--fg-bright);
   border-color:var(--border-focus); background:var(--bg-hover); }
+.editor-dirty-diff-action:disabled { opacity:.45; cursor:default; border-color:transparent; background:transparent; }
 .editor-diagnostic-layer { position:absolute; inset:0 0 0 50px; z-index:4; pointer-events:none;
   font:13px/1.5 var(--mono); padding:8px 12px; overflow:hidden; white-space:pre; tab-size:4; }
 .editor-diagnostic-marker { position:absolute; height:0; min-width:7px; border-bottom:2px dotted var(--fg-error);
@@ -13620,12 +13622,23 @@ function renderEditorDirtyDiffToolbar(layer,state){
   toolbar.title='Unsaved diff: '+(summary.added||0)+' added, '+(summary.modified||0)+' modified, '+(summary.removed||0)+' removed';
   const hunks=editorDirtyDiffHunks((state&&state.decorations)||[]);
   const activeHunk=hunks.length?Math.max(0,Math.min(_editorDirtyDiffActiveHunkIndex,hunks.length-1)):0;
+  const summaryLabel=editorDirtyDiffSummaryLabel(summary);
   toolbar.dataset.dirtyDiffAdded=String(summary.added||0);
   toolbar.dataset.dirtyDiffModified=String(summary.modified||0);
   toolbar.dataset.dirtyDiffRemoved=String(summary.removed||0);
   toolbar.dataset.dirtyDiffTotal=String(summary.total||0);
   toolbar.dataset.dirtyDiffHunks=String(hunks.length);
   toolbar.dataset.dirtyDiffActiveHunk=hunks.length?String(activeHunk+1):'0';
+  toolbar.dataset.dirtyDiffLabel=summaryLabel;
+  toolbar.dataset.dirtyDiffCanNavigate=hunks.length?'1':'0';
+  toolbar.dataset.dirtyDiffCanOpen=summary.total?'1':'0';
+  toolbar.dataset.dirtyDiffShortcut='Alt+F7/F7';
+  const status=document.createElement('span');
+  status.className='editor-dirty-diff-status';
+  status.dataset.dirtyDiffStatus='1';
+  status.textContent=(hunks.length?('H '+String(activeHunk+1)+'/'+String(hunks.length)):'H 0/0')+' · '+summaryLabel;
+  status.title='Unsaved diff status';
+  toolbar.appendChild(status);
   const total=document.createElement('span');
   total.className='editor-dirty-diff-total';
   total.textContent=String(summary.total||0);
@@ -13648,12 +13661,16 @@ function renderEditorDirtyDiffToolbar(layer,state){
   [['prev','↑','Previous change',-1],['next','↓','Next change',1]].forEach(([cls,label,title,dir])=>{
     const btn=document.createElement('button');
     btn.type='button';btn.className='editor-dirty-diff-action '+cls;btn.textContent=label;btn.title=title;btn.setAttribute('aria-label',title);
+    btn.dataset.dirtyDiffAction=cls;
+    btn.disabled=!hunks.length;
     btn.onmousedown=e=>e.preventDefault();
     btn.onclick=e=>{e.preventDefault();e.stopPropagation();editorDirtyDiffNavigate(dir)};
     toolbar.appendChild(btn);
   });
   const open=document.createElement('button');
   open.type='button';open.className='editor-dirty-diff-action open';open.textContent='Diff';open.title='Open side-by-side diff';open.setAttribute('aria-label','Open side-by-side diff');
+  open.dataset.dirtyDiffAction='open';
+  open.disabled=!summary.total;
   open.onmousedown=e=>e.preventDefault();
   open.onclick=e=>{e.preventDefault();e.stopPropagation();openActiveEditorDirtyDiff()};
   toolbar.appendChild(open);
@@ -19648,6 +19665,11 @@ ed.addEventListener('keydown',function(e){
   if(handleEditorSuggestKey(e))return;
   if(handleEditorSnippetKey(e))return;
   if(handleEditorInlineCompletionKey(e))return;
+  if(e.key==='F7'&&!e.ctrlKey&&!e.metaKey){
+    e.preventDefault();
+    if(e.altKey&&!e.shiftKey){openActiveEditorDirtyDiff();return}
+    editorDirtyDiffNavigate(e.shiftKey?-1:1);return
+  }
   if(e.key==='F2'&&!e.ctrlKey&&!e.shiftKey&&!e.altKey){e.preventDefault();requestEditorRename(false);return}
   if(e.key==='F12'&&e.ctrlKey&&!e.shiftKey&&!e.altKey){e.preventDefault();requestEditorImplementation(false);return}
   if(e.key==='F12'&&e.shiftKey&&!e.ctrlKey&&!e.altKey){e.preventDefault();requestEditorReferences(false);return}
@@ -33071,12 +33093,19 @@ function settingsReviewRowBeforeAfter(row){
 function settingsReviewItem(kind,row,options){
   const opts=options||{};
   const label=opts.label||settingsReviewRowLabel(row);
+  const delta=opts.delta===undefined?settingsReviewRowBeforeAfter(row):opts.delta;
+  const before=delta&&Object.prototype.hasOwnProperty.call(delta,'before')?String(delta.before):'';
+  const after=delta&&Object.prototype.hasOwnProperty.call(delta,'after')?String(delta.after):'';
+  const valueState=!delta?'invalid':(before===after?'unchanged':(before==='inherited'||after==='inherited'?'override':'changed'));
   return {
     kind,
     label,
     section:opts.section||settingsReviewRowSection(row),
     target:opts.target||settingsTargetDisplayName(currentSettingsTarget),
-    delta:opts.delta===undefined?settingsReviewRowBeforeAfter(row):opts.delta
+    delta,
+    before,
+    after,
+    valueState
   };
 }
 function settingsSavePreviewItems(state){
@@ -33170,17 +33199,31 @@ function renderSettingsSavePreview(state,forceOpen){
     const row=document.createElement('div');row.className='settings-save-preview-row';
     row.tabIndex=0;
     row.setAttribute('role','button');
+    const beforeValue=item.before||(item.delta&&Object.prototype.hasOwnProperty.call(item.delta,'before')?String(item.delta.before):'');
+    const afterValue=item.after||(item.delta&&Object.prototype.hasOwnProperty.call(item.delta,'after')?String(item.delta.after):'');
+    const valueState=item.valueState||(!item.delta?'invalid':(beforeValue===afterValue?'unchanged':(beforeValue==='inherited'||afterValue==='inherited'?'override':'changed')));
     row.dataset.settingsPreviewItem=item.kind;
     row.dataset.settingsPreviewLabel=item.label||'';
     row.dataset.settingsPreviewSection=item.section||group.section||'';
     row.dataset.settingsPreviewTarget=item.target||settingsTargetDisplayName(currentSettingsTarget);
+    row.dataset.settingsPreviewBefore=beforeValue;
+    row.dataset.settingsPreviewAfter=afterValue;
+    row.dataset.settingsPreviewValueState=valueState;
+    row.dataset.settingsPreviewHasDelta=item.delta?'1':'0';
+    row.dataset.settingsPreviewActionKind=String(item.kind||'').toLowerCase().replace(/\s+/g,'-');
     row.setAttribute('aria-label',item.kind+' '+item.label+' in '+(item.section||group.section));
+    row.title=item.delta
+      ? String(item.kind||'Change')+': '+String(item.label||'Setting')+' · '+beforeValue+' -> '+afterValue
+      : String(item.kind||'Change')+': '+String(item.label||'Setting');
     const code=document.createElement('code');code.textContent=item.label;row.appendChild(code);
     if(item.delta){
       const delta=document.createElement('span');delta.className='before-after';
-      const before=document.createElement('b');before.textContent=item.delta.before;
+      delta.dataset.settingsPreviewDelta='1';
+      delta.dataset.settingsPreviewBefore=beforeValue;
+      delta.dataset.settingsPreviewAfter=afterValue;
+      const before=document.createElement('b');before.textContent=item.delta.before;before.className='before';
       const arrow=document.createElement('i');arrow.textContent='→';
-      const after=document.createElement('b');after.textContent=item.delta.after;
+      const after=document.createElement('b');after.textContent=item.delta.after;after.className='after';
       delta.appendChild(before);delta.appendChild(arrow);delta.appendChild(after);
       row.appendChild(delta);
     }
@@ -48596,6 +48639,8 @@ function editorDirtyDiffSelfCheckSnapshot(){
     const markerCount=document.querySelectorAll('#editor-visual-layer .editor-dirty-diff-gutter').length;
     const toolbar=document.querySelector('#editor-visual-layer .editor-dirty-diff-toolbar');
     const actionCount=document.querySelectorAll('#editor-visual-layer .editor-dirty-diff-action').length;
+    const toolbarStatus=toolbar?toolbar.querySelector('.editor-dirty-diff-status'):null;
+    const toolbarActions=Array.from(document.querySelectorAll('#editor-visual-layer .editor-dirty-diff-action'));
     const removedRows=document.querySelectorAll('#editor-visual-layer .editor-dirty-diff-line.removed').length;
     const hunkCount=editorDirtyDiffHunks(dirty.decorations||[]).length;
     editorDirtyDiffNavigate(1);
@@ -48663,6 +48708,10 @@ function editorDirtyDiffSelfCheckSnapshot(){
       hasToolbar:!!toolbar,
       toolbarText:toolbar?toolbar.textContent:'',
       toolbarDatasetOk,
+      toolbarStatusText:toolbarStatus?toolbarStatus.textContent:'',
+      toolbarStateDatasetOk:!!(toolbar&&toolbar.dataset.dirtyDiffLabel&&toolbar.dataset.dirtyDiffCanNavigate==='1'&&toolbar.dataset.dirtyDiffCanOpen==='1'&&toolbar.dataset.dirtyDiffShortcut==='Alt+F7/F7'),
+      toolbarActionDatasets:toolbarActions.map(btn=>btn.dataset.dirtyDiffAction||'').join(','),
+      toolbarDisabledActions:toolbarActions.filter(btn=>btn.disabled).length,
       actionCount,
       removedRows,
       activeHunkRows,
@@ -48720,7 +48769,10 @@ function editorDirtyDiffSelfCheckSnapshot(){
       pass:(clean.summary&&clean.summary.total||0)===0&&
         (dirty.summary&&dirty.summary.total||0)>0&&markerCount>0&&
         hunkCount>0&&!!toolbar&&toolbar.textContent.includes('Diff')&&actionCount>=3&&
-        toolbarDatasetOk&&activeHunkRows>0&&activeHunkGutters>0&&rulerMarkers>0&&
+        toolbarDatasetOk&&toolbarStatus&&toolbarStatus.textContent.includes('+')&&
+        toolbar&&toolbar.dataset.dirtyDiffCanNavigate==='1'&&toolbar.dataset.dirtyDiffCanOpen==='1'&&toolbar.dataset.dirtyDiffShortcut==='Alt+F7/F7'&&
+        toolbarActions.map(btn=>btn.dataset.dirtyDiffAction||'').join(',').includes('open')&&toolbarActions.every(btn=>!btn.disabled)&&
+        activeHunkRows>0&&activeHunkGutters>0&&rulerMarkers>0&&
         openedDiff&&diffViewRows>0&&diffSummary>=3&&diffDatasetsOk&&
         ((featureState.features&&featureState.features.diff&&featureState.features.diff.total)||0)>0&&
         ((featureState.features&&featureState.features.diff&&featureState.features.diff.hunks)||0)>0&&

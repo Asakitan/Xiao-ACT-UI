@@ -10985,8 +10985,16 @@ console.log("frontend word separator behavior ok");
              and "row.dataset.settingsPreviewLabel=item.label||'';" in html
              and "row.dataset.settingsPreviewSection=item.section||group.section||'';" in html
              and "row.dataset.settingsPreviewTarget=item.target||settingsTargetDisplayName(currentSettingsTarget);" in html
+             and "row.dataset.settingsPreviewBefore=beforeValue;" in html
+             and "row.dataset.settingsPreviewAfter=afterValue;" in html
+             and "row.dataset.settingsPreviewValueState=valueState;" in html
+             and "row.dataset.settingsPreviewHasDelta=item.delta?'1':'0';" in html
+             and "row.dataset.settingsPreviewActionKind=String(item.kind||'').toLowerCase().replace" in html
              and "row.onkeydown=ev=>{if(ev.key==='Enter'||ev.key===' ')" in html
              and "target.className='review-target'" in html
+             and "delta.dataset.settingsPreviewDelta='1';" in html
+             and "before.className='before'" in html
+             and "after.className='after'" in html
              and "data-settings-filter-token=\"@overrides\"" in html
              and "overrides:'Overrides'" in html
              and "const SETTINGS_REVIEW_FILTER_TOKENS=[" in html
@@ -16023,6 +16031,15 @@ console.log("command palette quick access helpers ok");
            and "let _editorDirtyDiffActiveHunkIndex=0;" in html
            and "toolbar.dataset.dirtyDiffAdded" in html
            and "toolbar.dataset.dirtyDiffActiveHunk" in html
+           and "toolbar.dataset.dirtyDiffLabel=summaryLabel;" in html
+           and "toolbar.dataset.dirtyDiffCanNavigate=hunks.length?'1':'0';" in html
+           and "toolbar.dataset.dirtyDiffCanOpen=summary.total?'1':'0';" in html
+           and "toolbar.dataset.dirtyDiffShortcut='Alt+F7/F7';" in html
+           and "className='editor-dirty-diff-status'" in html
+           and "btn.dataset.dirtyDiffAction=cls;" in html
+           and "open.dataset.dirtyDiffAction='open';" in html
+           and "if(e.key==='F7'&&!e.ctrlKey&&!e.metaKey)" in html
+           and "if(e.altKey&&!e.shiftKey){openActiveEditorDirtyDiff();return}" in html
            and "function renderEditorDirtyDiffDecorations(layer,ta,metrics)" in html
            and "updateEditorLanguageFeatureState('diff'" in html
            and "setActiveEditorBaselineContent" in html
@@ -16032,6 +16049,8 @@ console.log("command palette quick access helpers ok");
             and "host.dataset.diffAddedLines" in html
             and "hasToolbar" in html
             and "toolbarDatasetOk" in html
+            and "toolbarStateDatasetOk" in html
+            and "toolbarActionDatasets" in html
             and "activeHunkRows" in html
            and "problemDiagnosticCount" in html
            and "problemDiffCount" in html
