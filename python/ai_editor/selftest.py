@@ -12202,6 +12202,8 @@ console.log("frontend word separator behavior ok");
            and "(data.chatContextProviders||[]).slice(0,8).forEach(item=>push('ChatContext'" in html
            and "extensionRuntimeStatusBarRows(data).slice(0,12).forEach(item=>push('StatusBarItem'" in html
            and "extensionRuntimeLanguageStatusRows(data).slice(0,12).forEach(item=>push('LanguageStatus'" in html
+           and "item.runtimeKind==='textEditorCommand'?'TextEditorCommand':'Command'" in html
+           and "['TextEditorCommand',summary.textEditorCommands||" in html
            and "['Terminal',summary.terminalProfiles||0]" in html
            and "['Task',summary.taskDefinitions||rows.filter(row=>row.kind==='TaskDefinition').length]" in html
            and "['Task Providers',summary.taskProviders||rows.reduce" in html
@@ -12239,11 +12241,14 @@ console.log("frontend word separator behavior ok");
            and "el.dataset.surfaceHasResolveTask=row.surfaceEvidence&&row.surfaceEvidence.hasResolveTask?'1':'0';" in html
            and "el.dataset.surfaceHasResolveDebugConfigurationWithSubstitutedVariables=row.surfaceEvidence&&row.surfaceEvidence.hasResolveDebugConfigurationWithSubstitutedVariables?'1':'0';" in html
            and "el.dataset.surfaceHasCreateDebugAdapterDescriptor=row.surfaceEvidence&&row.surfaceEvidence.hasCreateDebugAdapterDescriptor?'1':'0';" in html
+           and "el.dataset.surfaceCommandKind=String(row.surfaceEvidence&&row.surfaceEvidence.kind||row.kind||'');" in html
+           and "el.dataset.surfaceEditorRequired=row.surfaceEvidence&&row.surfaceEvidence.editorRequired?'1':'0';" in html
            and "el.dataset.surfaceLanguageSeverityName=String(row.surfaceEvidence&&row.surfaceEvidence.severityName||'');" in html
            and "el.dataset.textEditorDecorationRangeCount=String(row.surfaceEvidence&&row.surfaceEvidence.rangeCount||row.rangeCount||0);" in html
            and "el.dataset.textEditorDecorationEventCount=String(row.surfaceEvidence&&row.surfaceEvidence.eventCount||row.eventCount||0);" in html
            and "(data.textEditorDecorations||[]).slice(0,12).forEach(item=>push('TextEditorDecoration'" in html
            and "runtimeStatusBarRows" in html
+           and "runtimeTextEditorCommandRows" in html
            and "runtimeLanguageStatusRows" in html
            and "runtimeTextEditorDecorationRows" in html
            and "runtimeTaskDefinitionRows" in html
@@ -12260,6 +12265,7 @@ console.log("frontend word separator behavior ok");
            and "snapshot.runtimeDebugContextActive" in html
            and "snapshot.runtimeDebugContextNames.includes('answer')" in html
            and "snapshot.runtimeStatusBarRows>=1" in html
+           and "snapshot.runtimeTextEditorCommandRows>=1" in html
            and "snapshot.runtimeLanguageStatusRows>=1" in html
            and "snapshot.runtimeTaskDefinitionRows>=1" in html
            and "snapshot.runtimeTaskRequiredRows>=1" in html
@@ -12281,6 +12287,7 @@ console.log("frontend word separator behavior ok");
            and "ChatContext" in html
            and "StatusBarItem" in html
            and "LanguageStatus" in html
+           and "TextEditorCommand" in html
            and "TextEditorDecoration" in html)
     _check("backend extension runtime surfaces use bounded refresh cache",
            "self._extension_runtime_surface_cache: Dict[str, Tuple[float, Dict[str, Any]]] = {}" in app_source
@@ -12293,11 +12300,13 @@ console.log("frontend word separator behavior ok");
            and "def _extension_surface_status_bar_items(" in app_source
            and "def _extension_surface_language_status_items(" in app_source
            and "\"languageStatus\": language_status_keys()" in app_source
+           and "\"nodeCommands\": node_command_keys()" in app_source
            and "\"textEditorDecorations\": text_editor_decoration_keys()" in app_source
            and "\"statusBarItems\": status_bar_items" in app_source
            and "\"languageStatusItems\": language_status_items" in app_source
            and "\"textEditorDecorations\": text_editor_decorations" in app_source
            and "\"statusBarCommands\": status_bar_commands" in app_source
+           and "\"textEditorCommands\": text_editor_commands" in app_source
            and "\"languageStatusWarnings\": language_status_warnings" in app_source
            and "\"textEditorDecorationRanges\": text_editor_decoration_ranges" in app_source
            and "\"providerHealth\": provider_health_rows[:30]" in app_source
@@ -14706,8 +14715,8 @@ console.log("extension setting schema helpers ok");
            and "['Open','Refresh','Copy'].every(label=>snapshot.webviewActionLabels.includes(label))" in html
            and "snapshot.customPlaceholder&&snapshot.customDataset.viewType==='selftest.customEditor'" in html
            and "snapshot.notebookOutputItems===3" in html
-           and "snapshot.runtimeRows>=19" in html
-           and "snapshot.runtimeChips>=45" in html
+           and "snapshot.runtimeRows>=20" in html
+           and "snapshot.runtimeChips>=46" in html
            and "snapshot.runtimeAnchorLaneRows===snapshot.runtimeRows&&snapshot.runtimeAnchorPills>=snapshot.runtimeRows*2" in html
            and "snapshot.runtimeDynamicProviderRows>=17&&snapshot.runtimeAnchorReadyRows>=17&&snapshot.runtimeAnchorWarningRows>=3" in html
            and "['provider','host','chrome','html','frame','bridge','lifecycle'].every(key=>snapshot.runtimeAnchorKeys.includes(key))" in html
@@ -14721,7 +14730,7 @@ console.log("extension setting schema helpers ok");
            and "(snapshot.runtimeHealthFilters.includes('resource-warning')||snapshot.runtimeHealthFilters.includes('resources'))" in html
            and "['queued','dropped','message-stalled'].some(filter=>snapshot.runtimeHealthFilters.includes(filter))" in html
            and "snapshot.runtimeOpenableRows===snapshot.runtimeRows" in html
-           and "snapshot.runtimeOpenableRows>=18" in html
+           and "snapshot.runtimeOpenableRows>=19" in html
            and "snapshot.runtimeActionButtons===snapshot.runtimeRows" in html
            and "snapshot.runtimeRowKeys===snapshot.runtimeRows" in html
            and "snapshot.runtimeContainerRows>=3" in html
@@ -14732,6 +14741,7 @@ console.log("extension setting schema helpers ok");
            and "snapshot.runtimeActionTargets.includes('selftest.dynamic.tree')" in html
            and "snapshot.runtimeActionTargets.includes('selftest.dynamic.webview')" in html
            and "snapshot.runtimeActionTargets.includes('selftest.run')" in html
+           and "snapshot.runtimeActionTargets.includes('selftest.editorCommand')" in html
            and "snapshot.runtimeActionTargets.includes('selftest.terminalProfile')" in html
            and "snapshot.runtimeActionTargets.includes('selftest.lmTool')" in html
            and "snapshot.runtimeActionTargets.includes('selftest.vendor')" in html
@@ -14747,11 +14757,12 @@ console.log("extension setting schema helpers ok");
            and "runtimeKindFilterVisible:runtimeKindFilterResult?runtimeKindFilterResult.visible:0" in html
            and "runtimeSelectedRows:runtimeList?runtimeList.querySelectorAll('.extension-runtime-row.selected[aria-selected=\"true\"]').length:0" in html
            and "snapshot.runtimeListRole==='list'" in html
-           and "snapshot.runtimeStatusText.includes('19 visible of 19 rows')" in html
+           and "snapshot.runtimeStatusText.includes('20 visible of 20 rows')" in html
            and "snapshot.runtimeFilterKinds.includes('LMTool')" in html
            and "snapshot.runtimeFilterKinds.includes('ViewContainer')" in html
            and "snapshot.runtimeFilterKinds.includes('StatusBarItem')" in html
            and "snapshot.runtimeFilterKinds.includes('LanguageStatus')" in html
+           and "snapshot.runtimeFilterKinds.includes('TextEditorCommand')" in html
            and "snapshot.runtimeFilterKinds.includes('TaskDefinition')" in html
            and "snapshot.runtimeFilterKinds.includes('Debugger')" in html
            and "snapshot.runtimeKindFilterVisible===1" in html
@@ -14782,7 +14793,7 @@ console.log("extension setting schema helpers ok");
            and "snapshot.runtimeActionSmoke.taskPrompt.includes('selftest.task')&&snapshot.runtimeActionSmoke.taskPrompt.includes('Required fields: command')" in html
            and "snapshot.runtimeActionSmoke.debugPrompt.includes('selftest.debug')&&snapshot.runtimeActionSmoke.debugPrompt.includes('Launch template')&&snapshot.runtimeActionSmoke.debugPrompt.includes('program')" in html
            and "snapshot.runtimeActionSmoke.lastAction==='start-debugger'" in html
-           and "['WebviewPanel','TerminalProfile','TaskDefinition','Debugger','LMTool','LMProvider','ChatParticipant','ChatContext','StatusBarItem','LanguageStatus','TextEditorDecoration'].every(kind=>snapshot.runtimeKinds.includes(kind))" in html
+           and "['WebviewPanel','TerminalProfile','TaskDefinition','Debugger','LMTool','LMProvider','ChatParticipant','ChatContext','StatusBarItem','LanguageStatus','TextEditorDecoration','TextEditorCommand'].every(kind=>snapshot.runtimeKinds.includes(kind))" in html
            and "window._onEditorEvent('render_webview_panel',{view_id:lifecycleViewId" in html
            and "window._onEditorEvent('update_webview_panel_title',{view_id:lifecycleViewId" in html
            and "window._onEditorEvent('update_webview_panel_icon',{view_id:lifecycleViewId" in html
@@ -16658,6 +16669,14 @@ console.log("frontend built-in language fallback behavior ok");
            and "\"durationMs\": duration_ms" in engine_tools_source
            and "\"stdoutTruncated\"" in engine_tools_source
            and "\"stderrTruncated\"" in engine_tools_source)
+    _check("node command registration metadata distinguishes text editor commands",
+           "kind: 'textEditorCommand'" in node_ext_host_source
+           and "editorRequired: true" in node_ext_host_source
+           and "type: 'command_disposed'" in node_ext_host_source
+           and "self._node_registered_commands" in extension_host_source
+           and "def list_node_registered_commands(self)" in extension_host_source
+           and "elif msg_type == \"command_disposed\"" in extension_host_source
+           and "def unregister(self, command_id: str) -> None:" in extension_host_source)
     _check("extension notebook serializers bridge through Node host",
            "class NotebookCellData" in node_ext_host_source
            and "class NotebookCellOutputItem" in node_ext_host_source
@@ -27688,6 +27707,18 @@ async function activate(context) {
       },
     };
   });
+  context.subscriptions.push(vscode.commands.registerTextEditorCommand(
+    'selftest.node.runtimeTextEditorCommand',
+    (active, editBuilder) => {
+      if (active && editBuilder) {
+        editBuilder.insert(new vscode.Position(0, 0), '');
+      }
+      return {
+        command: 'selftest.node.runtimeTextEditorCommand',
+        uri: active && active.document && active.document.uri.toString(),
+      };
+    },
+  ));
   vscode.commands.registerCommand('selftest.node.textEditorProbe', async () => {
     const activeEvents = [];
     const visibleEvents = [];
@@ -31053,6 +31084,11 @@ process.stdin.resume();
                 node_text_editor_runtime = (
                     node_host.text_editor_runtime_state()
                     if node_started else {})
+                node_registered_commands = (
+                    node_host.list_node_registered_commands()
+                    if node_started and hasattr(
+                        node_host, "list_node_registered_commands")
+                    else [])
                 node_status_bar_command_registered = _wait_until(
                     lambda: "selftest.node.statusBarMessageProbe"
                     in api._ext_host.commands.list_commands(),
@@ -35002,6 +35038,12 @@ process.stdin.resume();
                        == "ALPHA\\nbeta-cmd"
                        and node_text_editor_probe.get("commandEditorSame") is True
                        and node_text_editor_probe.get("commandArg") == "arg-value"
+                       and any(
+                           item.get("command")
+                           == "selftest.node.runtimeTextEditorCommand"
+                           and item.get("kind") == "textEditorCommand"
+                           and item.get("editorRequired") is True
+                           for item in node_registered_commands)
                        and any(item.get("count") == 1
                                and item.get("line") == 0
                                for item in node_text_editor_probe.get(
@@ -35091,6 +35133,7 @@ process.stdin.resume();
                        json.dumps({
                            "probe": node_text_editor_probe,
                            "runtime": node_text_editor_runtime,
+                           "commands": node_registered_commands,
                        },
                                   ensure_ascii=False, default=str))
                 _check("node host status bar messages use dynamic UI bridge",
@@ -37180,6 +37223,26 @@ process.stdin.resume();
                            "chatContextProviders":
                                node_runtime_chat_context_providers,
                            "summary": node_runtime_surfaces.get("summary", {}),
+                       }, ensure_ascii=False, default=str))
+                _check("node-backed text editor commands appear in runtime surface panel data",
+                       node_started is True
+                       and node_runtime_surfaces.get("ok") is True
+                       and any(
+                           item.get("command")
+                           == "selftest.node.runtimeTextEditorCommand"
+                           and item.get("runtimeAvailable") is True
+                           and item.get("runtimeKind")
+                           == "textEditorCommand"
+                           and item.get("editorRequired") is True
+                           and item.get("surfaceEvidence", {}).get("kind")
+                           == "textEditorCommand"
+                           for item in node_runtime_command_surfaces)
+                       and node_runtime_surfaces.get("summary", {}).get(
+                           "textEditorCommands", 0) >= 1,
+                       json.dumps({
+                           "commands": node_runtime_command_surfaces,
+                           "summary": node_runtime_surfaces.get("summary", {}),
+                           "registered": node_registered_commands,
                        }, ensure_ascii=False, default=str))
                 _check("node-backed text editor decorations appear in runtime surface panel data",
                        node_started is True

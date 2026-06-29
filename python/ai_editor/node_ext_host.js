@@ -10332,8 +10332,23 @@ function buildVscodeModule(extDesc, extensionPath, storageRoot) {
             registerCommand(id, handler, thisArg) {
                 const wrapped = thisArg ? handler.bind(thisArg) : handler;
                 _commands.set(id, wrapped);
-                send({ type: 'command_registered', commandId: id });
-                const d = new Disposable(() => _commands.delete(id));
+                send({
+                    type: 'command_registered',
+                    commandId: id,
+                    extensionId: extDesc.extensionId || '',
+                    kind: 'command',
+                    editorRequired: false,
+                });
+                const d = new Disposable(() => {
+                    _commands.delete(id);
+                    send({
+                        type: 'command_disposed',
+                        commandId: id,
+                        extensionId: extDesc.extensionId || '',
+                        kind: 'command',
+                        editorRequired: false,
+                    });
+                });
                 subscriptions.push(d);
                 return d;
             },
@@ -10343,7 +10358,7 @@ function buildVscodeModule(extDesc, extensionPath, storageRoot) {
                 return _executePythonCommand(id, args);
             },
             registerTextEditorCommand(id, handler, thisArg) {
-                return vscode.commands.registerCommand(id, (...args) => {
+                _commands.set(id, (...args) => {
                     const editor = _activeTextEditor;
                     if (!editor || !editor.document) {
                         log(`Cannot execute ${id} because there is no active text editor.`);
@@ -10352,6 +10367,25 @@ function buildVscodeModule(extDesc, extensionPath, storageRoot) {
                     return editor.edit(editBuilder => (
                         handler.apply(thisArg, [editor, editBuilder, ...args])));
                 });
+                send({
+                    type: 'command_registered',
+                    commandId: id,
+                    extensionId: extDesc.extensionId || '',
+                    kind: 'textEditorCommand',
+                    editorRequired: true,
+                });
+                const d = new Disposable(() => {
+                    _commands.delete(id);
+                    send({
+                        type: 'command_disposed',
+                        commandId: id,
+                        extensionId: extDesc.extensionId || '',
+                        kind: 'textEditorCommand',
+                        editorRequired: true,
+                    });
+                });
+                subscriptions.push(d);
+                return d;
             },
             getCommands(filterInternal) {
                 return Promise.resolve([..._commands.keys()]);

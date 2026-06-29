@@ -395,6 +395,10 @@ class CommandService:
                 self._commands.pop(command_id, None)
         return dispose
 
+    def unregister(self, command_id: str) -> None:
+        with self._lock:
+            self._commands.pop(command_id, None)
+
     def execute(self, command_id: str, *args: Any) -> Any:
         handler = self._commands.get(command_id)
         if self._before_execute and (
@@ -1803,7 +1807,10 @@ class NodeExtensionHost:
         {"type": "webview_dispose",     "viewId": "..."}
         {"type": "webview_panel_deserialized", "requestId": "...",
          "ok": true, "viewId": "..."}
-        {"type": "command_registered",  "commandId": "...", "extensionId": "..."}
+        {"type": "command_registered",  "commandId": "...", "extensionId": "...",
+         "kind": "command|textEditorCommand", "editorRequired": false}
+        {"type": "command_disposed",     "commandId": "...", "extensionId": "...",
+         "kind": "command|textEditorCommand", "editorRequired": false}
         {"type": "command_response",    "requestId": "...", "ok": true, "value": ...}
         {"type": "config_set",          "section": "...", "key": "...", "value": ...}
         {"type": "config_set",          "section": "...", "key": "...",
@@ -1839,6 +1846,7 @@ class NodeExtensionHost:
         self._activation_sent_ids: Set[str] = set()
         self._output_channels: Dict[str, List[str]] = {}
         self._command_service: Optional[CommandService] = None
+        self._node_registered_commands: Dict[str, Dict[str, Any]] = {}
         self._command_request_lock = threading.Lock()
         self._command_requests: Dict[str, Dict[str, Any]] = {}
         self._diagnostics_enabled = False
@@ -2572,7 +2580,17 @@ class NodeExtensionHost:
         elif msg_type == "command_registered":
             command_id = str(msg.get("commandId", ""))
             ext_id = str(msg.get("extensionId", ""))
+            kind = str(msg.get("kind") or "command")
             if command_id and self._command_service:
+                self._node_registered_commands[command_id] = {
+                    "command": command_id,
+                    "id": command_id,
+                    "extensionId": ext_id,
+                    "kind": kind,
+                    "editorRequired": bool(msg.get("editorRequired")),
+                    "runtimeAvailable": True,
+                    "source": "runtime",
+                }
                 # Register a proxy command that forwards execution to Node
                 def _node_command_proxy(*args, _cid=command_id):
                     result = self.request_command_result(_cid, list(args))
@@ -2584,6 +2602,14 @@ class NodeExtensionHost:
                 self._command_service.register(command_id, _node_command_proxy)
                 _log.info("[NodeExtHost] Command registered: %s (from %s)",
                           command_id, ext_id)
+
+        elif msg_type == "command_disposed":
+            command_id = str(msg.get("commandId", ""))
+            if command_id:
+                self._node_registered_commands.pop(command_id, None)
+                if self._command_service:
+                    self._command_service.unregister(command_id)
+                _log.info("[NodeExtHost] Command disposed: %s", command_id)
 
         elif msg_type == "command_response":
             request_id = str(msg.get("requestId", ""))
@@ -6291,6 +6317,13 @@ class NodeExtensionHost:
 
     def list_activated(self) -> List[str]:
         return sorted(self._activated_ids)
+
+    def list_node_registered_commands(self) -> List[Dict[str, Any]]:
+        """Return commands registered dynamically by the Node extension host."""
+        return [
+            dict(self._node_registered_commands[key])
+            for key in sorted(self._node_registered_commands)
+        ]
 
     def list_language_providers(self) -> List[Dict[str, Any]]:
         """Return registered language provider capabilities from Node."""

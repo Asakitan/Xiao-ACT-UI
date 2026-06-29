@@ -11929,6 +11929,15 @@ class AIEditorAPI:
             menus.get("commandPalette", [])
             if isinstance(menus, dict) else [])
         registered_ids = set(self._ext_host.commands.list_commands())
+        node_commands = {
+            str(item.get("command") or item.get("id") or ""): item
+            for item in (
+                self._node_ext_host.list_node_registered_commands()
+                if getattr(self, "_node_ext_host", None) is not None
+                and hasattr(self._node_ext_host, "list_node_registered_commands")
+                else [])
+            if isinstance(item, dict)
+        }
         entries: List[Dict[str, Any]] = []
         seen: set[str] = set()
         explicit_palette_ids: set[str] = set()
@@ -11960,9 +11969,18 @@ class AIEditorAPI:
                 menu_item: Optional[Dict[str, Any]] = None,
                 source: str = "extension") -> Dict[str, Any]:
             menu_item = menu_item or {}
+            node_record = node_commands.get(command_id, {})
+            runtime_kind = str(
+                node_record.get("kind")
+                or ("command" if command_id in registered_ids else "")
+                or "").strip()
+            editor_required = bool(
+                node_record.get("editorRequired")
+                or runtime_kind == "textEditorCommand")
             extension_id = str(
                 menu_item.get("_extensionId")
-                or command_record.get("_extensionId") or "").strip()
+                or command_record.get("_extensionId")
+                or node_record.get("extensionId") or "").strip()
             title = (
                 menu_item.get("title")
                 or command_record.get("title")
@@ -11996,11 +12014,27 @@ class AIEditorAPI:
                 "extensionId": extension_id,
                 "extension": extension_info(extension_id),
                 "runtimeAvailable": command_id in registered_ids,
+                "runtimeKind": runtime_kind or "manifestCommand",
+                "editorRequired": editor_required,
                 "needsExtensionRuntime": bool(
                     (command_record.get("_runtimeSupport") or {}).get(
                         "needsExtensionRuntime", False)),
                 "enabled": True,
                 "disabled": False,
+                "surfaceEvidence": {
+                    "kind": runtime_kind or "manifestCommand",
+                    "command": command_id,
+                    "extensionId": extension_id,
+                    "runtimeAvailable": command_id in registered_ids,
+                    "editorRequired": editor_required,
+                    "readiness": (
+                        "ready" if command_id in registered_ids else
+                        "manifest-only"),
+                    "readinessScore": 100 if command_id in registered_ids else 70,
+                    "readinessIssues": (
+                        [] if command_id in registered_ids else
+                        ["runtime-not-registered"]),
+                },
             }
             if enablement:
                 enabled = self._extension_when_matches(
@@ -12078,6 +12112,12 @@ class AIEditorAPI:
         for command_id in sorted(registered_ids - seen - explicit_palette_ids):
             if not command_id or command_id.startswith("_"):
                 continue
+            node_record = node_commands.get(command_id, {})
+            runtime_kind = str(node_record.get("kind") or "command")
+            editor_required = bool(
+                node_record.get("editorRequired")
+                or runtime_kind == "textEditorCommand")
+            extension_id = str(node_record.get("extensionId") or "")
             entries.append({
                 "id": command_id,
                 "command": command_id,
@@ -12086,10 +12126,24 @@ class AIEditorAPI:
                 "category": "Runtime",
                 "description": "Runtime registered command",
                 "source": "runtime",
+                "extensionId": extension_id,
+                "extension": extension_info(extension_id),
                 "runtimeAvailable": True,
+                "runtimeKind": runtime_kind,
+                "editorRequired": editor_required,
                 "needsExtensionRuntime": False,
                 "enabled": True,
                 "disabled": False,
+                "surfaceEvidence": {
+                    "kind": runtime_kind,
+                    "command": command_id,
+                    "extensionId": extension_id,
+                    "runtimeAvailable": True,
+                    "editorRequired": editor_required,
+                    "readiness": "ready",
+                    "readinessScore": 100,
+                    "readinessIssues": [],
+                },
             })
 
         entries.sort(key=lambda item: (
@@ -13650,6 +13704,26 @@ class AIEditorAPI:
                 ]))
             return sorted(result)
 
+        def node_command_keys() -> List[str]:
+            if not host_running or not hasattr(
+                    host, "list_node_registered_commands"):
+                return []
+            result: List[str] = []
+            try:
+                rows = host.list_node_registered_commands()
+            except Exception:
+                return []
+            for item in rows:
+                if not isinstance(item, dict):
+                    continue
+                result.append(":".join([
+                    str(item.get("command") or item.get("id") or ""),
+                    str(item.get("kind") or ""),
+                    str(item.get("extensionId") or ""),
+                    "1" if item.get("editorRequired") else "0",
+                ]))
+            return sorted(result)
+
         def node_surface_keys(name: str) -> List[str]:
             if not host_running or not hasattr(host, name):
                 return []
@@ -13686,6 +13760,7 @@ class AIEditorAPI:
                 "registeredTools": keys(getattr(vscode_ns, "registered_tools", {})),
                 "chatParticipants": keys(
                     getattr(vscode_ns, "chat_participants", {})),
+                "nodeCommands": node_command_keys(),
                 "languageStatus": language_status_keys(),
                 "textEditorDecorations": text_editor_decoration_keys(),
                 "taskProviders": node_surface_keys("task_providers"),
@@ -14170,6 +14245,12 @@ class AIEditorAPI:
         text_editor_decoration_disposed = sum(
             1 for item in text_editor_decorations
             if item.get("disposed"))
+        text_editor_commands = sum(
+            1 for item in commands
+            if item.get("editorRequired")
+            or str(item.get("runtimeKind") or "") == "textEditorCommand"
+            or str(_as_dict(item.get("surfaceEvidence")).get("kind") or "")
+            == "textEditorCommand")
         payload = json.loads(json.dumps({
             "ok": True,
             "views": views,
@@ -14254,6 +14335,7 @@ class AIEditorAPI:
                 "runtimeCommands": sum(
                     1 for item in commands
                     if item.get("runtimeAvailable")),
+                "textEditorCommands": text_editor_commands,
                 "menus": len(menus),
                 "terminalProfiles": len(terminal_profiles),
                 "taskDefinitions": len(task_definitions),
