@@ -27680,6 +27680,10 @@ async function activate(context) {
   vscode.commands.registerCommand('selftest.node.textEditorProbe', async () => {
     const activeEvents = [];
     const visibleEvents = [];
+    const selectionEvents = [];
+    const optionsEvents = [];
+    const visibleRangeEvents = [];
+    const viewColumnEvents = [];
     const tabGroupEvents = [];
     const tabEvents = [];
     const activeDisposable = vscode.window.onDidChangeActiveTextEditor(editor => {
@@ -27691,6 +27695,32 @@ async function activate(context) {
       visibleEvents.push((editors || []).map(editor => (
         editor && editor.document ? editor.document.uri.toString() : ''
       )));
+    });
+    const selectionDisposable = vscode.window.onDidChangeTextEditorSelection(event => {
+      selectionEvents.push({
+        uri: event.textEditor.document.uri.toString(),
+        count: event.selections.length,
+        line: event.selections[0] && event.selections[0].start.line,
+        kind: event.kind,
+      });
+    });
+    const optionsDisposable = vscode.window.onDidChangeTextEditorOptions(event => {
+      optionsEvents.push({
+        tabSize: event.options.tabSize,
+        insertSpaces: event.options.insertSpaces,
+      });
+    });
+    const visibleRangeDisposable = vscode.window.onDidChangeTextEditorVisibleRanges(event => {
+      visibleRangeEvents.push({
+        count: event.visibleRanges.length,
+        startLine: event.visibleRanges[0] && event.visibleRanges[0].start.line,
+      });
+    });
+    const viewColumnDisposable = vscode.window.onDidChangeTextEditorViewColumn(event => {
+      viewColumnEvents.push({
+        uri: event.textEditor.document.uri.toString(),
+        viewColumn: event.viewColumn,
+      });
     });
     const tabGroupDisposable = vscode.window.tabGroups.onDidChangeTabGroups(event => {
       tabGroupEvents.push({
@@ -27731,6 +27761,33 @@ async function activate(context) {
     );
     await vscode.commands.executeCommand(
       'selftest.node.injectedTextEditorCommand', 'arg-value');
+    editor.selection = new vscode.Selection(
+      new vscode.Position(0, 1),
+      new vscode.Position(0, 3));
+    editor.selections = [new vscode.Selection(
+      new vscode.Position(0, 0),
+      new vscode.Position(0, 5))];
+    editor.options = { tabSize: 2, insertSpaces: false };
+    editor.revealRange(new vscode.Range(0, 0, 1, 0));
+    const decoration = vscode.window.createTextEditorDecorationType({
+      backgroundColor: '#112233',
+      border: '1px solid #445566',
+    });
+    editor.setDecorations(decoration, [
+      new vscode.Range(0, 0, 0, 5),
+      {
+        range: new vscode.Range(1, 0, 1, 4),
+        hoverMessage: 'hover decoration',
+      },
+    ]);
+    const decorationKey = decoration.key;
+    const decorationCount = editor._decorations.get(decorationKey).length;
+    decoration.dispose();
+    const decorationDisposed = !editor._decorations.has(decorationKey);
+    await vscode.window.showTextDocument(document, {
+      viewColumn: vscode.ViewColumn.Three,
+      selection: new vscode.Range(1, 0, 1, 4),
+    });
     const activeAfterShow = vscode.window.activeTextEditor === editor;
     const visibleAfterShow = vscode.window.visibleTextEditors.includes(editor);
     const selectionLine = editor.selection && editor.selection.start.line;
@@ -27756,6 +27813,10 @@ async function activate(context) {
     commandDisposable.dispose();
     activeDisposable.dispose();
     visibleDisposable.dispose();
+    selectionDisposable.dispose();
+    optionsDisposable.dispose();
+    visibleRangeDisposable.dispose();
+    viewColumnDisposable.dispose();
     tabGroupDisposable.dispose();
     tabDisposable.dispose();
     return {
@@ -27768,6 +27829,13 @@ async function activate(context) {
       shownText,
       commandEditorSame,
       commandArg,
+      selectionEvents,
+      optionsEvents,
+      visibleRangeEvents,
+      viewColumnEvents,
+      decorationKey,
+      decorationCount,
+      decorationDisposed,
       closeResult,
       activeAfterHide,
       visibleAfterHide,
@@ -34902,11 +34970,32 @@ process.stdin.resume();
                        and node_text_editor_probe.get("activeAfterShow") is True
                        and node_text_editor_probe.get("visibleAfterShow") is True
                        and node_text_editor_probe.get("selectionLine") == 1
-                       and node_text_editor_probe.get("viewColumn") == 2
+                       and node_text_editor_probe.get("viewColumn") == 3
                        and node_text_editor_probe.get("shownText")
                        == "ALPHA\\nbeta-cmd"
                        and node_text_editor_probe.get("commandEditorSame") is True
                        and node_text_editor_probe.get("commandArg") == "arg-value"
+                       and any(item.get("count") == 1
+                               and item.get("line") == 0
+                               for item in node_text_editor_probe.get(
+                                   "selectionEvents", []))
+                       and any(item.get("count") == 1
+                               and item.get("line") == 1
+                               for item in node_text_editor_probe.get(
+                                   "selectionEvents", []))
+                       and {"tabSize": 2, "insertSpaces": False}
+                       in node_text_editor_probe.get("optionsEvents", [])
+                       and any(item.get("count") == 1
+                               and item.get("startLine") == 0
+                               for item in node_text_editor_probe.get(
+                                   "visibleRangeEvents", []))
+                       and any(item.get("viewColumn") == 3 for item in
+                               node_text_editor_probe.get(
+                                   "viewColumnEvents", []))
+                       and str(node_text_editor_probe.get(
+                           "decorationKey", "")).startswith("sao-decoration-")
+                       and node_text_editor_probe.get("decorationCount") == 2
+                       and node_text_editor_probe.get("decorationDisposed") is True
                        and node_text_editor_probe.get("closeResult") is True
                        and node_text_editor_probe.get("activeAfterHide") is False
                        and node_text_editor_probe.get("visibleAfterHide") == 0
@@ -34920,7 +35009,7 @@ process.stdin.resume();
                        and node_text_editor_probe.get(
                            "tabSnapshot", {}).get("groupCount") == 1
                        and node_text_editor_probe.get(
-                           "tabSnapshot", {}).get("activeGroupColumn") == 2
+                           "tabSnapshot", {}).get("activeGroupColumn") == 3
                        and node_text_editor_probe.get(
                            "tabSnapshot", {}).get("activeGroupTabCount") == 1
                        and node_text_editor_probe.get(

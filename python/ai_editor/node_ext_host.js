@@ -2723,10 +2723,16 @@ const _onDidChangeTextDocumentEmitter = new EventEmitter();
 const _onDidSaveTextDocumentEmitter = new EventEmitter();
 const _onDidChangeActiveTextEditorEmitter = new EventEmitter();
 const _onDidChangeVisibleTextEditorsEmitter = new EventEmitter();
+const _onDidChangeTextEditorSelectionEmitter = new EventEmitter();
+const _onDidChangeTextEditorOptionsEmitter = new EventEmitter();
+const _onDidChangeTextEditorVisibleRangesEmitter = new EventEmitter();
+const _onDidChangeTextEditorViewColumnEmitter = new EventEmitter();
 const _onDidChangeTabGroupsEmitter = new EventEmitter();
 const _onDidChangeTabsEmitter = new EventEmitter();
 let _activeTextEditor = undefined;
 const _visibleTextEditors = new Map(); // uri -> TextEditor-like object
+const _textEditorDecorationTypes = new Map(); // key -> { key, options }
+let _nextTextEditorDecorationHandle = 1;
 const _onDidChangeLmToolsEmitter = new EventEmitter();
 const _onDidChangeLmChatModelsEmitter = new EventEmitter();
 const _workspaceRoot = path.resolve(process.cwd());
@@ -2845,6 +2851,116 @@ function _showTextDocumentOptions(options) {
         preserveFocus: !!options.preserveFocus,
         preview: options.preview !== false,
         selection: options.selection ? _rangeFromPayload(options.selection) : undefined,
+    };
+}
+
+function _selectionFromPayload(value) {
+    if (value instanceof Selection) return value;
+    if (value instanceof Range) return new Selection(value.start, value.end);
+    const range = _rangeFromPayload(value);
+    return new Selection(range.start, range.end);
+}
+
+function _textEditorSelections(value) {
+    if (Array.isArray(value)) {
+        const selections = value.map(_selectionFromPayload);
+        return selections.length ? selections : [new Selection(new Position(0, 0), new Position(0, 0))];
+    }
+    return [_selectionFromPayload(value)];
+}
+
+function _setTextEditorSelections(editor, value, kind = 'api') {
+    if (!editor) return;
+    const selections = _textEditorSelections(value);
+    editor._selections = selections;
+    _onDidChangeTextEditorSelectionEmitter.fire({
+        textEditor: editor,
+        selections,
+        kind,
+    });
+}
+
+function _setTextEditorOptions(editor, value) {
+    if (!editor) return;
+    const next = value && typeof value === 'object'
+        ? Object.assign({}, value)
+        : {};
+    editor._options = Object.assign({
+        tabSize: 4,
+        insertSpaces: true,
+    }, next);
+    _onDidChangeTextEditorOptionsEmitter.fire({
+        textEditor: editor,
+        options: editor._options,
+    });
+}
+
+function _setTextEditorVisibleRanges(editor, value) {
+    if (!editor) return;
+    const ranges = Array.isArray(value)
+        ? value.map(item => item instanceof Range ? item : _rangeFromPayload(item))
+        : [value instanceof Range ? value : _rangeFromPayload(value)];
+    editor._visibleRanges = ranges;
+    _onDidChangeTextEditorVisibleRangesEmitter.fire({
+        textEditor: editor,
+        visibleRanges: ranges,
+    });
+}
+
+function _setTextEditorViewColumn(editor, value) {
+    if (!editor) return false;
+    const next = _normalizeViewColumn(value);
+    const previous = _normalizeViewColumn(editor.viewColumn);
+    editor.viewColumn = next;
+    if (previous !== next) {
+        _onDidChangeTextEditorViewColumnEmitter.fire({
+            textEditor: editor,
+            viewColumn: next,
+        });
+        _fireEditorTabEvents('change', editor);
+        return true;
+    }
+    return false;
+}
+
+function _decorationTypeKey(decorationType) {
+    if (!decorationType) return '';
+    return String(decorationType.key || decorationType.id || decorationType);
+}
+
+function _decorationRangePayload(value) {
+    if (value instanceof Range) return { range: value };
+    if (value && typeof value === 'object' && value.range) {
+        return {
+            range: value.range instanceof Range ? value.range : _rangeFromPayload(value.range),
+            hoverMessage: value.hoverMessage,
+            renderOptions: value.renderOptions,
+        };
+    }
+    return { range: _rangeFromPayload(value) };
+}
+
+function _normalizeDecorationRanges(value) {
+    if (!Array.isArray(value)) return [];
+    return value.map(_decorationRangePayload);
+}
+
+function _createTextEditorDecorationType(options) {
+    const key = `sao-decoration-${_nextTextEditorDecorationHandle++}`;
+    const entry = {
+        key,
+        options: _plainBridgeValue(options || {}),
+    };
+    _textEditorDecorationTypes.set(key, entry);
+    return {
+        key,
+        dispose() {
+            _textEditorDecorationTypes.delete(key);
+            for (const editor of _visibleTextEditors.values()) {
+                if (editor._decorations) editor._decorations.delete(key);
+            }
+            send({ type: 'text_editor_decoration_type_disposed', key });
+        },
     };
 }
 
@@ -3006,20 +3122,25 @@ function _createTextEditor(document, options) {
     const initialSelection = showOptions.selection
         ? new Selection(showOptions.selection.start, showOptions.selection.end)
         : new Selection(new Position(0, 0), new Position(0, 0));
-    return {
+    const editor = {
         document,
         viewColumn: showOptions.viewColumn,
-        options: {
+        _options: {
             tabSize: 4,
             insertSpaces: true,
         },
-        selections: [initialSelection],
+        _selections: [initialSelection],
+        _visibleRanges: [],
+        _decorations: new Map(),
+        get options() { return this._options; },
+        set options(value) { _setTextEditorOptions(this, value); },
+        get selections() { return this._selections; },
+        set selections(value) { _setTextEditorSelections(this, value); },
         get selection() { return this.selections[0]; },
         set selection(value) {
-            const range = value instanceof Range ? value : _rangeFromPayload(value);
-            this.selections = [new Selection(range.start, range.end)];
+            _setTextEditorSelections(this, [value]);
         },
-        visibleRanges: [],
+        get visibleRanges() { return this._visibleRanges; },
         edit(callback) {
             if (typeof callback !== 'function') return Promise.resolve(false);
             const edit = {
@@ -3050,13 +3171,27 @@ function _createTextEditor(document, options) {
         },
         revealRange(range) {
             const normalized = range instanceof Range ? range : _rangeFromPayload(range);
-            this.visibleRanges = [normalized];
+            _setTextEditorVisibleRanges(this, [normalized]);
+        },
+        setDecorations(decorationType, rangesOrOptions) {
+            const key = _decorationTypeKey(decorationType);
+            if (!key || !_textEditorDecorationTypes.has(key)) return;
+            const ranges = _normalizeDecorationRanges(rangesOrOptions);
+            this._decorations.set(key, ranges);
+            send({
+                type: 'text_editor_decorations_changed',
+                key,
+                uri: document.uri.toString(),
+                rangeCount: ranges.length,
+                ranges: ranges.map(item => _plainBridgeValue(item)),
+            });
         },
         show() { return _showTextDocumentEditor(document, showOptions); },
         hide() {
             _closeTextEditor(this);
         },
     };
+    return editor;
 }
 
 function _showTextDocumentEditor(document, options) {
@@ -3069,12 +3204,11 @@ function _showTextDocumentEditor(document, options) {
         _visibleTextEditors.set(key, editor);
         _fireVisibleTextEditorsChanged('open', editor);
     } else {
-        const previousColumn = editor.viewColumn;
-        editor.viewColumn = showOptions.viewColumn;
+        const columnChanged = _setTextEditorViewColumn(editor, showOptions.viewColumn);
         if (showOptions.selection) {
-            editor.selection = showOptions.selection;
+            _setTextEditorSelections(editor, [showOptions.selection]);
         }
-        if (previousColumn !== editor.viewColumn || showOptions.selection) {
+        if (!columnChanged && showOptions.selection) {
             _fireEditorTabEvents('change', editor);
         }
     }
@@ -10525,6 +10659,9 @@ function buildVscodeModule(extDesc, extensionPath, storageRoot) {
                 subscriptions.push(disposable);
                 return disposable;
             },
+            createTextEditorDecorationType(options) {
+                return _createTextEditorDecorationType(options || {});
+            },
             showTextDocument(documentOrUri, columnOrOptions, preserveFocus) {
                 return _windowShowTextDocument(
                     documentOrUri, columnOrOptions, preserveFocus);
@@ -10611,6 +10748,10 @@ function buildVscodeModule(extDesc, extensionPath, storageRoot) {
             get activeColorTheme() { return { kind: 2 }; }, // Dark
             onDidChangeActiveTextEditor: _onDidChangeActiveTextEditorEmitter.event,
             onDidChangeVisibleTextEditors: _onDidChangeVisibleTextEditorsEmitter.event,
+            onDidChangeTextEditorSelection: _onDidChangeTextEditorSelectionEmitter.event,
+            onDidChangeTextEditorOptions: _onDidChangeTextEditorOptionsEmitter.event,
+            onDidChangeTextEditorVisibleRanges: _onDidChangeTextEditorVisibleRangesEmitter.event,
+            onDidChangeTextEditorViewColumn: _onDidChangeTextEditorViewColumnEmitter.event,
             onDidChangeActiveColorTheme: new EventEmitter().event,
             get tabGroups() {
                 return _tabGroupsApiObject();
