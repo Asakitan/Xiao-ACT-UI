@@ -5159,7 +5159,7 @@ def test_phase1_ai_editor_regressions() -> None:
              and ".chat-control-strip { display:flex; align-items:center; gap:6px; flex:0 0 auto; flex-wrap:nowrap; min-width:max-content;" in html
              and "overflow:visible; width:max-content; max-width:none;" in html
              and "--chat-provider-width:128px;" in html
-            and "--chat-model-width:64px;" in html
+            and "--chat-model-width:56px;" in html
             and "--chat-agent-width:140px;" in html
             and "--chat-workflow-width:144px;" in html
              and "appearance:none; -webkit-appearance:none; line-height:20px;" in html
@@ -6651,7 +6651,7 @@ def test_phase1_ai_editor_regressions() -> None:
             and "inputThreeLineHeight:!!(container&&container.querySelector('.chat-input')&&container.querySelector('.chat-input').getBoundingClientRect().height>=72)" in html
             and "assistantUiSelfCheckRecord(checks,'visual-controls-one-row-ready'" in html
             and "assistantUiSelfCheckRecord(checks,'visual-control-widths-ready'" in html
-           and "controlWidthsReady:!!(triggerWidthMap['chat-provider-trigger']>=128&&triggerWidthMap['chat-model-inline']>=58&&triggerWidthMap['chat-model-inline']<=68&&triggerWidthMap['chat-agent-trigger']>=140&&triggerWidthMap['chat-workflow-trigger']>=144)" in html
+           and "controlWidthsReady:!!(triggerWidthMap['chat-provider-trigger']>=128&&triggerWidthMap['chat-model-inline']>=50&&triggerWidthMap['chat-model-inline']<=58&&triggerWidthMap['chat-agent-trigger']>=140&&triggerWidthMap['chat-workflow-trigger']>=144)" in html
             and "assistantUiSelfCheckRecord(checks,'visual-composer-extra-rows-hidden-ready'" in html
             and "assistantUiSelfCheckRecord(checks,'visual-model-chip-removed-ready'" in html
             and "assistantUiSelfCheckRecord(checks,'visual-content-window-ring-ready'" in html
@@ -14384,6 +14384,7 @@ console.log("extension setting schema helpers ok");
            and "const extensionRuntimeTaskRuns=new Map();" in html
            and "const extensionRuntimeDebugSessions=new Map();" in html
            and "let extensionRuntimeTaskProblems=[];" in html
+           and "let extensionRuntimeDebugConsoleEntries=[];" in html
            and "function extensionRuntimeTaskProblemRows(record,result)" in html
            and "function extensionRuntimeTaskProblemMatcherRows(record,result)" in html
            and "function extensionRuntimeTaskProblemLocationParts(value)" in html
@@ -14412,6 +14413,10 @@ console.log("extension setting schema helpers ok");
            in html
            and "chip.dataset.runtimeRunReuseKey=String(row.terminalReuseKey||'');"
            in html
+           and "chip.dataset.runtimeRunDebugLastOutput=String(row.lastConsoleOutput||'');"
+           in html
+           and "panel.dataset.runtimeDebugConsoleEntryCount=String(extensionRuntimeDebugConsoleEntries.length);"
+           in html
            and "function updateExtensionRuntimeDebugSession(data)" in html
            and "function renderExtensionRuntimeRunStrip()" in html
            and "event==='extension_task_lifecycle'" in html
@@ -14433,6 +14438,10 @@ console.log("extension setting schema helpers ok");
            and "runtimeHealthErrors:(()=>{const panel=$('extension-runtime-panel');return panel?Number(panel.dataset.runtimeHealthErrors)||0:0})()" in html
            and "runtimeRunStripActive:!!(runtimeRunStrip&&runtimeRunStrip.classList.contains('active'))" in html
            and "runtimeTaskRunChips:runtimeRunStrip?runtimeRunStrip.querySelectorAll('.extension-runtime-run-chip[data-runtime-run-kind=\"task\"]').length:0" in html
+           and "runtimeDebugConsoleEntryCount:extensionRuntimeDebugConsoleEntries.length"
+           in html
+           and "snapshot.runtimeDebugTreeStoppedReasons.includes('breakpoint')"
+           in html
            and "runtimeDebugSessionChips:runtimeRunStrip?runtimeRunStrip.querySelectorAll('.extension-runtime-run-chip[data-runtime-run-kind=\"debug\"]').length:0" in html
            and "runtimeRunStates:runtimeRunStrip?Array.from(runtimeRunStrip.querySelectorAll('.extension-runtime-run-chip')).map(item=>item.dataset.runtimeRunState||''):[]" in html
            and "runtimeRunCommands:runtimeRunStrip?Array.from(runtimeRunStrip.querySelectorAll('.extension-runtime-run-chip')).map(item=>item.dataset.runtimeRunCommand||'').filter(Boolean):[]" in html
@@ -14571,7 +14580,7 @@ console.log("extension setting schema helpers ok");
            and "snapshot.runtimeActionSmoke.taskRunLastAction==='run-task-definition'" in html
            and "snapshot.runtimeActionSmoke.debugRunLastAction==='start-debugger'" in html
            and "snapshot.runtimeRunStripActive&&snapshot.runtimeTaskRunChips>=1&&snapshot.runtimeDebugSessionChips>=1" in html
-           and "snapshot.runtimeRunStates.includes('done')&&snapshot.runtimeRunStates.includes('started')" in html
+           and "snapshot.runtimeRunStates.includes('done')&&snapshot.runtimeRunStates.includes('stopped')" in html
            and "snapshot.runtimeRunCommands.includes('echo selftest task')" in html
            and "snapshot.runtimeTaskProblemCount>=3&&snapshot.runtimeTaskProblemSources.some(value=>value.includes('selftest-owner'))" in html
            and "snapshot.runtimeDebugTreeActive&&snapshot.runtimeDebugTreeRows>=1&&snapshot.runtimeDebugTreeActions>=6" in html
@@ -16456,6 +16465,15 @@ console.log("frontend built-in language fallback behavior ok");
            and "registerDebugAdapterTrackerFactory(type, factory)"
            in node_ext_host_source
            and "get activeDebugConsole()" in node_ext_host_source
+           and "function _debugSendSessionUpdate(session, patch = {})"
+           in node_ext_host_source
+           and "type: 'debug_session_update'" in node_ext_host_source
+           and "consoleOutputCount: Number(runtime.consoleOutputCount || 0)"
+           in node_ext_host_source
+           and "lastConsoleOutput: String(runtime.lastConsoleOutput || '')"
+           in node_ext_host_source
+           and "eventName === 'output'" in node_ext_host_source
+           and "eventName === 'stopped'" in node_ext_host_source
            and "onDidReceiveDebugSessionCustomEvent" in node_ext_host_source
            and "session._debugAdapterTransport = _debugCreateAdapterTransport" in node_ext_host_source
            and "transport => synchronizeBreakpointsToTransport(transport)" in node_ext_host_source
@@ -16470,6 +16488,9 @@ console.log("frontend built-in language fallback behavior ok");
            and "DebugAdapterExecutable," in node_ext_host_source
            and "DebugAdapterInlineImplementation," in node_ext_host_source
            and "msg_type == \"debug_console\"" in extension_host_source
+           and "msg_type == \"debug_session_update\"" in extension_host_source
+           and "\"lastConsoleOutput\": str(" in extension_host_source
+           and "\"stoppedReason\": str(" in extension_host_source
            and "msg_type == \"task_execute\"" in extension_host_source
            and "metadata[\"terminalName\"] = terminal_name"
            in extension_host_source
@@ -16493,6 +16514,9 @@ console.log("frontend built-in language fallback behavior ok");
            and "def start_extension_debugger_type(" in app_source
            and "def update_extension_task_lifecycle(" in app_source
            and "def update_extension_debug_session(" in app_source
+           and "runtimeRunDebugOutputCount" in html
+           and "runtimeDebugTreeLastOutputs" in html
+           and "runtimeDebugConsoleEntryCount" in html
            and "appendTerminalHostCommandResult(name,command,result,{name:name});"
            in app_source
            and "self._ui_bridge.run_terminal_command" in extension_host_source)
@@ -29417,6 +29441,7 @@ function handle(request) {
   if (request.command === "launch") {
     response(request, {});
     event("dapCustom", { value: "from-adapter" });
+    event("output", { category: "stdout", output: "dap debug selftest output\n" });
     event("stopped", { reason: "breakpoint", threadId: 7 });
     return;
   }
@@ -29758,6 +29783,8 @@ process.stdin.resume();
                     self.language_status_events = []
                     self.terminal_events = []
                     self.window_dialogs = []
+                    self.output_channels = {}
+                    self.debug_sessions = []
                     self.open_dialog_paths = [
                         os.path.join(node_tree_tmp, "dialog-open.txt"),
                         os.path.join(node_tree_tmp, "dialog-second.md"),
@@ -29874,6 +29901,24 @@ process.stdin.resume();
                             "fsPath": str(self.save_dialog_path),
                         }}
                     return {"cancelled": True}
+
+                def show_output(self, channel, text):
+                    self.output_channels[str(channel or "")] = str(text or "")
+                    emitted_events.append({
+                        "event": "output",
+                        "data": {
+                            "channel": str(channel or ""),
+                            "text": str(text or ""),
+                        },
+                    })
+
+                def update_extension_debug_session(self, payload):
+                    record = dict(payload or {})
+                    self.debug_sessions.append(record)
+                    emitted_events.append({
+                        "event": "extension_debug_session",
+                        "data": record,
+                    })
 
                 def read_clipboard_text(self):
                     self.clipboard_events.append(("read", self.clipboard_text))
@@ -30665,8 +30710,17 @@ process.stdin.resume();
                         "selftest.node.taskDebugProbe")
                 except Exception as exc:
                     node_task_debug_probe = {"_error": str(exc)}
+                _wait_until(
+                    lambda: any(
+                        item.get("lastEvent") == "stopped"
+                        for item in node_ui_bridge.debug_sessions),
+                    timeout=3.0)
                 node_task_terminal_events = list(
                     node_ui_bridge.terminal_events[node_task_terminal_start:])
+                node_debug_session_updates = list(
+                    node_ui_bridge.debug_sessions)
+                node_debug_console_outputs = dict(
+                    node_ui_bridge.output_channels)
                 node_message_options_command_registered = _wait_until(
                     lambda: "selftest.node.messageOptionsProbe"
                     in api._ext_host.commands.list_commands(),
@@ -35273,6 +35327,29 @@ process.stdin.resume();
                            "dapDebugStarted") is True
                        and node_task_debug_probe.get(
                            "dapCustomResponse", {}).get("echo") == "dap-ok"
+                       and any(
+                           "Debug Console: Node DAP Debug" == channel
+                           and "dap debug selftest output" in text
+                           for channel, text
+                           in node_debug_console_outputs.items())
+                       and any(
+                           item.get("lastEvent") == "output"
+                           and item.get("consoleOutputCount") == 1
+                           and item.get("lastConsoleCategory") == "stdout"
+                           and "dap debug selftest output" in item.get(
+                               "lastConsoleOutput", "")
+                           for item in node_debug_session_updates)
+                       and any(
+                           item.get("state") == "stopped"
+                           and item.get("stoppedReason") == "breakpoint"
+                           and item.get("threadId") == 7
+                           and item.get("lastEvent") == "stopped"
+                           for item in node_debug_session_updates)
+                       and any(
+                           item.get("state") == "running"
+                           and item.get("threadId") == 7
+                           and item.get("lastEvent") == "continued"
+                           for item in node_debug_session_updates)
                        and "configurationDone" in dap_adapter_commands
                        and dap_adapter_commands.index(
                            "configurationDone") < dap_adapter_commands.index(
@@ -35482,6 +35559,8 @@ process.stdin.resume();
                        json.dumps({
                            "probe": node_task_debug_probe,
                            "terminal": node_task_terminal_events,
+                           "debugSessionUpdates": node_debug_session_updates,
+                           "debugConsoleOutputs": node_debug_console_outputs,
                        }, ensure_ascii=False, default=str))
                 _check("node host message APIs separate options from actions",
                        node_started is True

@@ -4046,6 +4046,33 @@ class NodeExtensionHost:
                 except Exception:
                     pass
 
+        elif msg_type == "debug_session_update":
+            if self._ui_bridge:
+                try:
+                    updater = getattr(
+                        self._ui_bridge,
+                        "update_extension_debug_session",
+                        None)
+                    if callable(updater):
+                        updater({
+                            "state": str(msg.get("state") or "started"),
+                            "session": msg.get("session")
+                            if isinstance(msg.get("session"), dict) else {},
+                            "consoleOutputCount": int(
+                                msg.get("consoleOutputCount") or 0),
+                            "lastConsoleOutput": str(
+                                msg.get("lastConsoleOutput") or ""),
+                            "lastConsoleCategory": str(
+                                msg.get("lastConsoleCategory") or ""),
+                            "stoppedReason": str(
+                                msg.get("stoppedReason") or ""),
+                            "threadId": msg.get("threadId"),
+                            "lastEvent": str(msg.get("lastEvent") or ""),
+                            "message": str(msg.get("message") or ""),
+                        })
+                except Exception:
+                    pass
+
         elif msg_type == "debug_console":
             if self._ui_bridge:
                 try:
@@ -4054,7 +4081,16 @@ class NodeExtensionHost:
                         text = str(msg.get("text", ""))
                         if bool(msg.get("newline")):
                             text += "\n"
-                        writer("Debug Console", text)
+                        channel = "Debug Console"
+                        session = msg.get("session")
+                        if isinstance(session, dict):
+                            name = str(session.get("name") or "").strip()
+                            if name:
+                                channel = f"Debug Console: {name}"
+                        self._output_channels.setdefault(channel, []).append(text)
+                        del self._output_channels[channel][:-400]
+                        writer(channel, "".join(
+                            self._output_channels.get(channel, [])))
                 except Exception:
                     pass
 

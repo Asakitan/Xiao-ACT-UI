@@ -1343,7 +1343,7 @@ pre.code-block code .type { color:var(--fg-type); }
 .chat-control-strip { display:flex; align-items:center; gap:6px; flex:0 0 auto; flex-wrap:nowrap; min-width:max-content;
   overflow:visible; width:max-content; max-width:none;
   --chat-provider-width:128px;
-  --chat-model-width:64px;
+  --chat-model-width:56px;
   --chat-agent-width:140px;
   --chat-workflow-width:144px; }
 .chat-chip,.chat-select-chip,.chat-model-inline,.chat-run-chip { height:22px; border:1px solid var(--border);
@@ -12542,7 +12542,7 @@ function assistantVisualLayoutSnapshot(){
     nativeBoxes,
     noOldNativeBoxes:nativeBoxes.every(item=>item.exists&&item.display==='none'&&item.ariaHidden==='true'&&item.inert===true&&item.width===0&&item.height===0),
     triggerWidths:triggerWidthMap,
-    controlWidthsReady:!!(triggerWidthMap['chat-provider-trigger']>=128&&triggerWidthMap['chat-model-inline']>=58&&triggerWidthMap['chat-model-inline']<=68&&triggerWidthMap['chat-agent-trigger']>=140&&triggerWidthMap['chat-workflow-trigger']>=144),
+    controlWidthsReady:!!(triggerWidthMap['chat-provider-trigger']>=128&&triggerWidthMap['chat-model-inline']>=50&&triggerWidthMap['chat-model-inline']<=58&&triggerWidthMap['chat-agent-trigger']>=140&&triggerWidthMap['chat-workflow-trigger']>=144),
     popups:popupSnapshots,
     popupsCustomSurface:popupSnapshots.every(item=>item.customSurface&&item.shown&&item.display==='block'&&item.pointerEvents==='auto'),
     popupsOpenAbove:popupSnapshots.every(item=>item.rectReady&&item.opensAboveTrigger&&item.notToolbarClipped),
@@ -38539,6 +38539,7 @@ function extensionRuntimeSurfaceViewId(row){
 const extensionRuntimeTaskRuns=new Map();
 const extensionRuntimeDebugSessions=new Map();
 let extensionRuntimeTaskProblems=[];
+let extensionRuntimeDebugConsoleEntries=[];
 function extensionRuntimeBoundedSet(map,key,value,limit){
   const id=String(key||'').trim();
   if(!id)return;
@@ -38883,6 +38884,12 @@ function renderExtensionRuntimeDebugSessionTree(){
     item.dataset.debugSessionKey=String(row.key||'');
     item.dataset.debugSessionState=String(row.state||'');
     item.dataset.debugSessionType=String(row.debugType||'');
+    item.dataset.debugSessionConsoleCount=String(row.consoleOutputCount||0);
+    item.dataset.debugSessionLastOutput=String(row.lastConsoleOutput||'');
+    item.dataset.debugSessionLastCategory=String(row.lastConsoleCategory||'');
+    item.dataset.debugSessionStoppedReason=String(row.stoppedReason||'');
+    item.dataset.debugSessionThread=row.threadId===undefined||row.threadId===null?'':String(row.threadId);
+    item.dataset.debugSessionLastEvent=String(row.lastEvent||'');
     item.setAttribute('role','treeitem');
     item.setAttribute('aria-label','Debug session '+String(row.label||row.key||''));
     const main=document.createElement('div');main.className='extension-debug-session-main';
@@ -38892,6 +38899,10 @@ function renderExtensionRuntimeDebugSessionTree(){
     [
       row.debugType?('type '+row.debugType):'',
       row.state?('state '+row.state):'',
+      row.stoppedReason?('reason '+row.stoppedReason):'',
+      row.threadId!==''&&row.threadId!==undefined&&row.threadId!==null?('thread '+row.threadId):'',
+      row.consoleOutputCount?('console '+row.consoleOutputCount):'',
+      row.lastConsoleOutput?('last '+row.lastConsoleOutput):'',
       row.commandLine?('program '+row.commandLine):'',
       row.cwd?('cwd '+row.cwd):'',
       row.message||''
@@ -38941,6 +38952,12 @@ function renderExtensionRuntimeRunStrip(){
     chip.dataset.runtimeRunProblemCount=String(row.problemCount||0);
     chip.dataset.runtimeRunFirstProblem=String(row.firstProblemSummary||'');
     chip.dataset.runtimeRunFirstProblemLine=row.firstProblemLine===undefined||row.firstProblemLine===null?'':String(row.firstProblemLine);
+    chip.dataset.runtimeRunDebugOutputCount=String(row.consoleOutputCount||0);
+    chip.dataset.runtimeRunDebugLastOutput=String(row.lastConsoleOutput||'');
+    chip.dataset.runtimeRunDebugLastCategory=String(row.lastConsoleCategory||'');
+    chip.dataset.runtimeRunDebugStoppedReason=String(row.stoppedReason||'');
+    chip.dataset.runtimeRunDebugThread=row.threadId===undefined||row.threadId===null?'':String(row.threadId);
+    chip.dataset.runtimeRunDebugLastEvent=String(row.lastEvent||'');
     chip.dataset.runtimeRunBackground=row.isBackground?'1':'0';
     chip.dataset.runtimeRunGroup=String(row.groupId||'');
     chip.dataset.runtimeRunPanel=String(row.presentationPanel||'');
@@ -38965,6 +38982,10 @@ function renderExtensionRuntimeRunStrip(){
       row.problemMatcherCount?('problem matchers: '+row.problemMatcherCount):'',
       row.problemCount?('problems: '+row.problemCount):'',
       row.firstProblemSummary?('first problem: '+row.firstProblemSummary):'',
+      row.consoleOutputCount?('console output: '+row.consoleOutputCount):'',
+      row.lastConsoleOutput?('last output: '+row.lastConsoleOutput):'',
+      row.stoppedReason?('stopped: '+row.stoppedReason):'',
+      row.threadId!==''&&row.threadId!==undefined&&row.threadId!==null?('thread: '+row.threadId):'',
       row.exitCode!==null&&row.exitCode!==undefined?('exit: '+row.exitCode):'',
       row.message||''
     ].filter(Boolean).join('\n');
@@ -39056,22 +39077,50 @@ function updateExtensionRuntimeDebugSession(data){
   const config=data.config&&typeof data.config==='object'?data.config:(session.configuration&&typeof session.configuration==='object'?session.configuration:{});
   const key=extensionRuntimeDebugSessionKey(data);
   const state=String(data.state||data.status||(data.stopped?'stopped':'started')||'started').toLowerCase();
+  const existing=extensionRuntimeDebugSessions.get(key)||{};
   const record={
+    ...existing,
     kind:'debug',
     key,
     state,
-    label:String(session.name||config.name||data.label||data.debugType||session.type||'Debug Session'),
-    debugType:String(session.type||config.type||data.debugType||''),
-    commandLine:String(config.program||config.runtimeExecutable||config.debugServer||''),
-    cwd:String(config.cwd||''),
+    label:String(session.name||config.name||data.label||data.debugType||session.type||existing.label||'Debug Session'),
+    debugType:String(session.type||config.type||data.debugType||existing.debugType||''),
+    commandLine:String(config.program||config.runtimeExecutable||config.debugServer||existing.commandLine||''),
+    cwd:String(config.cwd||existing.cwd||''),
     problemMatcherCount:0,
     exitCode:data.exitCode!==undefined?data.exitCode:null,
+    consoleOutputCount:Number(data.consoleOutputCount!==undefined?data.consoleOutputCount:existing.consoleOutputCount)||0,
+    lastConsoleOutput:String(data.lastConsoleOutput!==undefined?data.lastConsoleOutput:existing.lastConsoleOutput||''),
+    lastConsoleCategory:String(data.lastConsoleCategory!==undefined?data.lastConsoleCategory:existing.lastConsoleCategory||''),
+    stoppedReason:String(data.stoppedReason!==undefined?data.stoppedReason:existing.stoppedReason||''),
+    threadId:data.threadId!==undefined?data.threadId:(existing.threadId!==undefined?existing.threadId:''),
+    lastEvent:String(data.lastEvent!==undefined?data.lastEvent:existing.lastEvent||''),
     message:String(data.message||''),
     updatedAt:Date.now()
   };
+  if(record.lastConsoleOutput&&record.lastEvent==='output'){
+    extensionRuntimeDebugConsoleEntries.push({
+      key,
+      label:record.label,
+      category:record.lastConsoleCategory||'console',
+      text:record.lastConsoleOutput,
+      count:record.consoleOutputCount,
+      at:record.updatedAt
+    });
+    extensionRuntimeDebugConsoleEntries=extensionRuntimeDebugConsoleEntries.slice(-120);
+  }
   extensionRuntimeBoundedSet(extensionRuntimeDebugSessions,key,record,24);
   const status=$('extension-runtime-status');
   if(status)status.textContent='Debug '+record.label+' '+record.state+'.';
+  const panel=$('extension-runtime-panel');
+  if(panel){
+    panel.dataset.runtimeDebugConsoleEntryCount=String(extensionRuntimeDebugConsoleEntries.length);
+    panel.dataset.runtimeDebugLastConsole=record.lastConsoleOutput||'';
+    panel.dataset.runtimeDebugLastCategory=record.lastConsoleCategory||'';
+    panel.dataset.runtimeDebugStoppedReason=record.stoppedReason||'';
+    panel.dataset.runtimeDebugThread=record.threadId===undefined||record.threadId===null?'':String(record.threadId);
+    panel.dataset.runtimeDebugLastEvent=record.lastEvent||'';
+  }
   renderExtensionRuntimeDebugSessionTree();
   return renderExtensionRuntimeRunStrip();
 }
@@ -42164,6 +42213,7 @@ function extensionRuntimeDomSelfCheckSnapshot(){
   const savedTaskRuns=new Map(extensionRuntimeTaskRuns);
   const savedDebugSessions=new Map(extensionRuntimeDebugSessions);
   const savedTaskProblems=extensionRuntimeTaskProblems.slice();
+  const savedDebugConsoleEntries=extensionRuntimeDebugConsoleEntries.slice();
   const menu=$('ctx-menu');
   const savedMenu=menu?{html:menu.innerHTML,display:menu.style.display,left:menu.style.left,top:menu.style.top,role:menu.getAttribute('role'),label:menu.getAttribute('aria-label')}:null;
   try{
@@ -42455,6 +42505,29 @@ function extensionRuntimeDomSelfCheckSnapshot(){
       if(debugButton)debugButton.click();
       runtimeActionSmoke.debugRunLastAction=(($('extension-runtime-panel')||{}).dataset||{}).runtimeLastAction||'';
       runtimeActionSmoke.debugRunOk=(($('extension-runtime-panel')||{}).dataset||{}).runtimeLastActionOk||'';
+      window._onEditorEvent('extension_debug_session',{
+        state:'running',
+        session:{id:'debug-selftest',type:'selftest.debug',name:'Selftest Debugger'},
+        config:{type:'selftest.debug',name:'Selftest Debugger',program:'${workspaceFolder}/index.js',cwd:'workspace'},
+        consoleOutputCount:1,
+        lastConsoleOutput:'debug selftest output',
+        lastConsoleCategory:'stdout',
+        lastEvent:'output',
+        threadId:7,
+        message:'Output received'
+      });
+      window._onEditorEvent('extension_debug_session',{
+        state:'stopped',
+        session:{id:'debug-selftest',type:'selftest.debug',name:'Selftest Debugger'},
+        config:{type:'selftest.debug',name:'Selftest Debugger',program:'${workspaceFolder}/index.js',cwd:'workspace'},
+        consoleOutputCount:1,
+        lastConsoleOutput:'debug selftest output',
+        lastConsoleCategory:'stdout',
+        stoppedReason:'breakpoint',
+        lastEvent:'stopped',
+        threadId:7,
+        message:'Paused on breakpoint'
+      });
       const debugPrepare=runtimeList?runtimeList.querySelector('.extension-runtime-row[data-kind="Debugger"] .extension-runtime-mini-action[title^="Prepare debugger"]'):null;
       if(debugPrepare)debugPrepare.click();
       runtimeActionSmoke.debugPrompt=$('chat-input')?$('chat-input').value:'';
@@ -42745,6 +42818,12 @@ function extensionRuntimeDomSelfCheckSnapshot(){
       runtimeRunChips:runtimeRunStrip?runtimeRunStrip.querySelectorAll('.extension-runtime-run-chip').length:0,
       runtimeTaskRunChips:runtimeRunStrip?runtimeRunStrip.querySelectorAll('.extension-runtime-run-chip[data-runtime-run-kind="task"]').length:0,
       runtimeDebugSessionChips:runtimeRunStrip?runtimeRunStrip.querySelectorAll('.extension-runtime-run-chip[data-runtime-run-kind="debug"]').length:0,
+      runtimeDebugOutputChips:runtimeRunStrip?runtimeRunStrip.querySelectorAll('.extension-runtime-run-chip[data-runtime-run-kind="debug"][data-runtime-run-debug-output-count="1"]').length:0,
+      runtimeDebugLastOutputs:runtimeRunStrip?Array.from(runtimeRunStrip.querySelectorAll('.extension-runtime-run-chip[data-runtime-run-kind="debug"]')).map(item=>item.dataset.runtimeRunDebugLastOutput||'').filter(Boolean):[],
+      runtimeDebugLastCategories:runtimeRunStrip?Array.from(runtimeRunStrip.querySelectorAll('.extension-runtime-run-chip[data-runtime-run-kind="debug"]')).map(item=>item.dataset.runtimeRunDebugLastCategory||'').filter(Boolean):[],
+      runtimeDebugStoppedReasons:runtimeRunStrip?Array.from(runtimeRunStrip.querySelectorAll('.extension-runtime-run-chip[data-runtime-run-kind="debug"]')).map(item=>item.dataset.runtimeRunDebugStoppedReason||'').filter(Boolean):[],
+      runtimeDebugThreads:runtimeRunStrip?Array.from(runtimeRunStrip.querySelectorAll('.extension-runtime-run-chip[data-runtime-run-kind="debug"]')).map(item=>item.dataset.runtimeRunDebugThread||'').filter(Boolean):[],
+      runtimeDebugLastEvents:runtimeRunStrip?Array.from(runtimeRunStrip.querySelectorAll('.extension-runtime-run-chip[data-runtime-run-kind="debug"]')).map(item=>item.dataset.runtimeRunDebugLastEvent||'').filter(Boolean):[],
       runtimeTaskStopButtons:runtimeRunStrip?runtimeRunStrip.querySelectorAll('.extension-runtime-run-stop[data-runtime-task-stop="1"]').length:0,
       runtimeRunStates:runtimeRunStrip?Array.from(runtimeRunStrip.querySelectorAll('.extension-runtime-run-chip')).map(item=>item.dataset.runtimeRunState||''):[],
       runtimeRunCommands:runtimeRunStrip?Array.from(runtimeRunStrip.querySelectorAll('.extension-runtime-run-chip')).map(item=>item.dataset.runtimeRunCommand||'').filter(Boolean):[],
@@ -42764,6 +42843,11 @@ function extensionRuntimeDomSelfCheckSnapshot(){
       runtimeDebugTreeRows:runtimeDebugTree?runtimeDebugTree.querySelectorAll('.extension-debug-session-row').length:0,
       runtimeDebugTreeActions:runtimeDebugTree?runtimeDebugTree.querySelectorAll('.extension-debug-session-action').length:0,
       runtimeDebugTreeCommands:runtimeDebugTree?Array.from(runtimeDebugTree.querySelectorAll('.extension-debug-session-action')).map(item=>item.dataset.debugAction||'').filter(Boolean):[],
+      runtimeDebugTreeLastOutputs:runtimeDebugTree?Array.from(runtimeDebugTree.querySelectorAll('.extension-debug-session-row')).map(item=>item.dataset.debugSessionLastOutput||'').filter(Boolean):[],
+      runtimeDebugTreeStoppedReasons:runtimeDebugTree?Array.from(runtimeDebugTree.querySelectorAll('.extension-debug-session-row')).map(item=>item.dataset.debugSessionStoppedReason||'').filter(Boolean):[],
+      runtimeDebugConsoleEntryCount:extensionRuntimeDebugConsoleEntries.length,
+      runtimeDebugPanelConsoleCount:(()=>{const panel=$('extension-runtime-panel');return panel?Number(panel.dataset.runtimeDebugConsoleEntryCount)||0:0})(),
+      runtimeDebugPanelLastConsole:(()=>{const panel=$('extension-runtime-panel');return panel?String(panel.dataset.runtimeDebugLastConsole||''):''})(),
       runtimeHealthFilterVisible:(()=>{const card=runtimeHealth&&runtimeHealth.querySelector('[data-runtime-health-filter="bridge-warning"]');if(!card)return 0;card.click();const value=(($('extension-runtime-filter-evidence')||{}).value)||'';const result=applyExtensionRuntimeSurfaceFilter();if($('extension-runtime-filter-evidence'))$('extension-runtime-filter-evidence').value='';applyExtensionRuntimeSurfaceFilter();return value==='bridge-warning'&&result?result.visible:0})(),
       runtimeKinds:runtimeList?Array.from(runtimeList.querySelectorAll('.extension-runtime-kind')).map(item=>String(item.textContent||'')):[],
       runtimeListRole:runtimeList?runtimeList.getAttribute('role'):'',
@@ -42888,13 +42972,16 @@ function extensionRuntimeDomSelfCheckSnapshot(){
       && snapshot.runtimeActionSmoke.taskStopButton===true&&snapshot.runtimeActionSmoke.taskStopCommand===true
       && snapshot.runtimeActionSmoke.debugRunLastAction==='start-debugger'
       && snapshot.runtimeRunStripActive&&snapshot.runtimeTaskRunChips>=1&&snapshot.runtimeDebugSessionChips>=1
+      && snapshot.runtimeDebugOutputChips>=1&&snapshot.runtimeDebugLastOutputs.some(value=>value.includes('debug selftest output'))&&snapshot.runtimeDebugLastCategories.includes('stdout')
+      && snapshot.runtimeDebugStoppedReasons.includes('breakpoint')&&snapshot.runtimeDebugThreads.includes('7')&&snapshot.runtimeDebugLastEvents.includes('stopped')
       && snapshot.runtimeTaskStopButtons>=1
-      && snapshot.runtimeRunStates.includes('done')&&snapshot.runtimeRunStates.includes('started')
+      && snapshot.runtimeRunStates.includes('done')&&snapshot.runtimeRunStates.includes('stopped')
       && snapshot.runtimeRunCommands.includes('echo selftest task')
       && snapshot.runtimeTaskBackgroundStates.includes('ready')&&snapshot.runtimeTaskBackgroundReadyChips>=1&&snapshot.runtimeTaskBackgroundActiveChips>=1
       && snapshot.runtimeTaskRunProblemCounts.some(value=>value>=3)&&snapshot.runtimeTaskRunFirstProblems.some(value=>value.includes('TS123'))
       && snapshot.runtimeTaskProblemCount>=3&&snapshot.runtimeTaskProblemSources.some(value=>value.includes('selftest-owner'))&&snapshot.runtimeTaskProblemSources.some(value=>value.includes('selftest-multiline'))&&snapshot.runtimeTaskProblemCodes.some(value=>value.includes('TS123'))&&snapshot.runtimeTaskProblemCodes.some(value=>value.includes('ML900'))&&snapshot.runtimeTaskProblemMessages.some(value=>value.includes('Selftest task warning'))&&snapshot.runtimeTaskProblemMessages.some(value=>value.includes('First multiline problem'))&&snapshot.runtimeTaskProblemMultilineRows>=2&&snapshot.runtimeTaskProblemEndCharacters.some(value=>value>=13)&&snapshot.runtimeProblemsPanelTaskRows>=3
       && snapshot.runtimeDebugTreeActive&&snapshot.runtimeDebugTreeRows>=1&&snapshot.runtimeDebugTreeActions>=6&&['workbench.action.debug.continue','workbench.action.debug.pause','workbench.action.debug.stepOver','workbench.action.debug.stepInto','workbench.action.debug.stepOut','workbench.action.debug.stop'].every(command=>snapshot.runtimeDebugTreeCommands.includes(command))
+      && snapshot.runtimeDebugTreeLastOutputs.some(value=>value.includes('debug selftest output'))&&snapshot.runtimeDebugTreeStoppedReasons.includes('breakpoint')&&snapshot.runtimeDebugConsoleEntryCount>=1&&snapshot.runtimeDebugPanelConsoleCount>=1&&snapshot.runtimeDebugPanelLastConsole.includes('debug selftest output')
       && snapshot.runtimeActionSmoke.taskPrompt.includes('selftest.task')&&snapshot.runtimeActionSmoke.taskPrompt.includes('Required fields: command')
       && snapshot.runtimeActionSmoke.debugPrompt.includes('selftest.debug')&&snapshot.runtimeActionSmoke.debugPrompt.includes('Launch template')&&snapshot.runtimeActionSmoke.debugPrompt.includes('program')
       && snapshot.runtimeActionSmoke.lastAction==='start-debugger'
@@ -42942,6 +43029,7 @@ function extensionRuntimeDomSelfCheckSnapshot(){
     extensionRuntimeDebugSessions.clear();
     savedDebugSessions.forEach((value,key)=>extensionRuntimeDebugSessions.set(key,value));
     extensionRuntimeTaskProblems=savedTaskProblems.slice();
+    extensionRuntimeDebugConsoleEntries=savedDebugConsoleEntries.slice();
     if(menu&&savedMenu){
       menu.innerHTML=savedMenu.html;
       menu.style.display=savedMenu.display;

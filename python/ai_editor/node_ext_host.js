@@ -4896,6 +4896,39 @@ function _debugCallTrackers(session, method, ...args) {
     }
 }
 
+function _debugRuntimeData(session) {
+    if (!session) return {};
+    if (!session._debugRuntimeData) {
+        session._debugRuntimeData = {
+            state: 'started',
+            consoleOutputCount: 0,
+            lastConsoleOutput: '',
+            lastConsoleCategory: '',
+            stoppedReason: '',
+            threadId: undefined,
+            lastEvent: '',
+        };
+    }
+    return session._debugRuntimeData;
+}
+
+function _debugSendSessionUpdate(session, patch = {}) {
+    if (!session) return;
+    const runtime = Object.assign(_debugRuntimeData(session), patch || {});
+    send({
+        type: 'debug_session_update',
+        state: runtime.state || 'started',
+        session: _debugSessionPayload(session),
+        consoleOutputCount: Number(runtime.consoleOutputCount || 0),
+        lastConsoleOutput: String(runtime.lastConsoleOutput || ''),
+        lastConsoleCategory: String(runtime.lastConsoleCategory || ''),
+        stoppedReason: String(runtime.stoppedReason || ''),
+        threadId: runtime.threadId,
+        lastEvent: String(runtime.lastEvent || ''),
+        message: String(runtime.message || ''),
+    });
+}
+
 function _debugProviderToken() {
     return {
         isCancellationRequested: false,
@@ -5041,10 +5074,59 @@ function _debugHandleDapMessage(transport, message) {
     }
     if (message.type === 'event') {
         _debugCallTrackers(transport.session, 'onDidSendMessage', message);
+        const eventName = String(message.event || '');
+        const body = message.body && typeof message.body === 'object'
+            ? message.body
+            : {};
+        if (eventName === 'output') {
+            const text = String(body.output ?? '');
+            const runtime = _debugRuntimeData(transport.session);
+            runtime.consoleOutputCount = Number(runtime.consoleOutputCount || 0) + (text ? 1 : 0);
+            runtime.lastConsoleOutput = text.trim();
+            runtime.lastConsoleCategory = String(body.category || 'console');
+            runtime.lastEvent = 'output';
+            send({
+                type: 'debug_console',
+                session: _debugSessionPayload(transport.session),
+                text,
+                newline: false,
+                category: runtime.lastConsoleCategory,
+                source: _plainBridgeValue(body.source || {}),
+                line: body.line,
+                column: body.column,
+            });
+            _debugSendSessionUpdate(transport.session, runtime);
+        } else if (eventName === 'stopped') {
+            _debugSendSessionUpdate(transport.session, {
+                state: 'stopped',
+                stoppedReason: String(body.reason || ''),
+                threadId: body.threadId,
+                lastEvent: eventName,
+                message: String(body.description || body.text || body.reason || 'Paused'),
+            });
+        } else if (eventName === 'continued') {
+            _debugSendSessionUpdate(transport.session, {
+                state: 'running',
+                stoppedReason: '',
+                threadId: body.threadId,
+                lastEvent: eventName,
+                message: 'Continued',
+            });
+        } else if (eventName === 'terminated' || eventName === 'exited') {
+            _debugSendSessionUpdate(transport.session, {
+                state: eventName,
+                stoppedReason: '',
+                threadId: body.threadId,
+                lastEvent: eventName,
+                message: eventName === 'exited' && body.exitCode !== undefined
+                    ? `Exited ${body.exitCode}`
+                    : eventName,
+            });
+        }
         transport.customEventEmitter.fire({
             session: transport.session,
-            event: String(message.event || ''),
-            body: _plainBridgeValue(message.body || {}),
+            event: eventName,
+            body: _plainBridgeValue(body),
         });
         _debugHandleDapEventState(transport, message);
     }
