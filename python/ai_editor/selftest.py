@@ -10885,6 +10885,13 @@ console.log("frontend word separator behavior ok");
             and "settings-nav-workbench-title" in html
             and "settings-nav-workbench-badges" in html
             and "host.dataset.settingsNavActiveSection=section||'';" in html
+            and "id='settings-nav-runtime-context'" in html
+            and "function settingsRuntimeContextSnapshot()" in html
+            and "function renderSettingsRuntimeContext()" in html
+            and "host.dataset.settingsRuntimeContext='1';" in html
+            and "host.dataset.terminalRunnable=ctx.terminalRunnable?'1':'0';" in html
+            and "renderSettingsRuntimeContext();" in html
+            and "String(_updateTerminalDiagnostics).includes(\"renderSettingsRuntimeContext()\")" in html
             and "settings-nav-heading" in html
             and "settings-nav-badge" in html
             and "settings-nav-text" in html

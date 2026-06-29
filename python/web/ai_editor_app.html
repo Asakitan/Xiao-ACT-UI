@@ -3401,10 +3401,37 @@ pre.code-block { overflow:visible; }
 .extension-runtime-panel:not([data-runtime-summary-expanded="1"]) .extension-runtime-summary:hover {
   max-height:none;
 }
+.settings-vscode-calm .settings-nav-runtime-context,
 .settings-vscode-calm .settings-nav-status,
 .settings-vscode-calm .settings-nav-active-filters,
 .settings-vscode-calm .settings-nav-review { padding:0 8px 9px 0; margin:0 0 8px;
   border-bottom:1px solid color-mix(in srgb,var(--border) 54%,transparent); }
+.settings-vscode-calm .settings-nav-runtime-context { display:grid; gap:4px; }
+.settings-vscode-calm .settings-nav-runtime-title {
+  display:flex; align-items:center; justify-content:space-between; gap:8px;
+  color:var(--fg); font:600 12px var(--sans);
+}
+.settings-vscode-calm .settings-nav-runtime-title span:last-child {
+  color:var(--fg-dim); font:10px var(--mono); text-transform:uppercase;
+}
+.settings-vscode-calm .settings-nav-runtime-line {
+  display:grid; grid-template-columns:minmax(0,1fr) auto; gap:8px; align-items:center;
+  color:var(--fg-dim); font:11px var(--sans); line-height:1.35;
+}
+.settings-vscode-calm .settings-nav-runtime-line strong {
+  min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;
+  color:var(--fg); font-weight:500;
+}
+.settings-vscode-calm .settings-nav-runtime-line.warn strong { color:var(--fg-warning); }
+.settings-vscode-calm .settings-nav-runtime-actions { display:grid; grid-template-columns:1fr 1fr; gap:3px; margin-top:1px; }
+.settings-vscode-calm .settings-nav-runtime-actions button {
+  min-height:23px; border:1px solid transparent; border-radius:2px; background:transparent;
+  color:var(--fg-dim); padding:2px 6px; font:11px var(--sans); cursor:pointer;
+}
+.settings-vscode-calm .settings-nav-runtime-actions button:hover,
+.settings-vscode-calm .settings-nav-runtime-actions button:focus {
+  color:var(--fg); border-color:var(--border-focus); background:var(--bg-hover); outline:none;
+}
 .settings-vscode-calm .settings-nav-status-title,
 .settings-vscode-calm .settings-nav-active-title,
 .settings-vscode-calm .settings-nav-review-title { padding:0 0 5px; color:var(--fg-dim); font:10px var(--mono); text-transform:uppercase; }
@@ -3625,6 +3652,12 @@ pre.code-block { overflow:visible; }
 }
 .settings-vscode-calm.settings-viewport-compact .settings-nav-commandbar {
   padding-bottom:6px; margin-bottom:6px;
+}
+.settings-vscode-calm.settings-viewport-compact .settings-nav-runtime-context {
+  padding-bottom:6px; margin-bottom:6px;
+}
+.settings-vscode-calm.settings-viewport-tight .settings-nav-runtime-line.extra {
+  display:none;
 }
 .settings-vscode-calm.settings-viewport-compact .settings-nav-item {
   min-height:24px; padding-top:3px; padding-bottom:3px;
@@ -32070,6 +32103,12 @@ function renderSettingsNav(){
   workbench.dataset.settingsNavWorkbench='1';
   workbench.setAttribute('aria-label','Settings workbench summary');
   nav.appendChild(workbench);
+  const runtime=document.createElement('div');
+  runtime.className='settings-nav-runtime-context';
+  runtime.id='settings-nav-runtime-context';
+  runtime.dataset.settingsRuntimeContext='1';
+  runtime.setAttribute('aria-label','Workspace and terminal context');
+  nav.appendChild(runtime);
   const resultGroups=document.createElement('div');
   resultGroups.className='settings-nav-result-groups';
   resultGroups.id='settings-nav-result-groups';
@@ -32224,6 +32263,75 @@ function renderSettingsNav(){
   setActiveSettingsNav(first?first.dataset.settingsId:'');
   settingsFilterNavCategories(_settingsNavFilterValue,{preserveInput:true,preserveFocus:true});
   settingsUpdateNavTreeMetadata();
+  renderSettingsRuntimeContext();
+}
+function settingsRuntimeContextSnapshot(){
+  const root=String(typeof currentWorkspaceRoot==='function'?currentWorkspaceRoot():'');
+  const ws=typeof workspaceSettings==='function'?(workspaceSettings()||{}):{};
+  const term=typeof terminalRuntimeSnapshot==='function'?(terminalRuntimeSnapshot()||{}):{};
+  const source=String(ws.source||term.workspaceSource||((ws.auto_detected||ws.auto_detect)?'auto':'configured')||'');
+  const profile=String(term.profile||(typeof currentTerminalProfile==='function'?currentTerminalProfile():'System Shell'));
+  const cwd=String(term.cwd||root||'');
+  const runnable=term.runnable!==undefined?!!term.runnable:(typeof _terminalCwdMatchesWorkspace==='function'?_terminalCwdMatchesWorkspace(cwd):!!root);
+  return {
+    workspaceRoot:root,
+    workspaceLabel:root?(typeof pathBaseName==='function'?pathBaseName(root):root):'No workspace',
+    workspaceSource:source,
+    workspaceSourceLabel:typeof workspaceSourceLabel==='function'?workspaceSourceLabel(source||'workspace'):(source||'workspace'),
+    workspaceAutoDetected:!!(ws.auto_detected||(!ws.configured_root&&ws.auto_detect!==false)||term.workspaceAutoDetected),
+    terminalProfile:profile,
+    terminalCwd:cwd,
+    terminalState:String(term.state||'idle'),
+    terminalHealth:String(term.health||''),
+    terminalRunnable:runnable,
+    terminalRunning:!!term.running,
+    terminalOutputNodes:Number(term.outputNodes||0)||0
+  };
+}
+function renderSettingsRuntimeContext(){
+  const host=$('settings-nav-runtime-context');
+  if(!host)return null;
+  const ctx=settingsRuntimeContextSnapshot();
+  host.dataset.settingsRuntimeContext='1';
+  host.dataset.workspaceRoot=ctx.workspaceRoot;
+  host.dataset.workspaceSource=ctx.workspaceSource;
+  host.dataset.workspaceAutoDetected=ctx.workspaceAutoDetected?'1':'0';
+  host.dataset.terminalProfile=ctx.terminalProfile;
+  host.dataset.terminalCwd=ctx.terminalCwd;
+  host.dataset.terminalRunnable=ctx.terminalRunnable?'1':'0';
+  host.dataset.terminalState=ctx.terminalState;
+  host.dataset.terminalRunning=ctx.terminalRunning?'1':'0';
+  host.innerHTML='';
+  const title=document.createElement('div');
+  title.className='settings-nav-runtime-title';
+  const titleText=document.createElement('span');titleText.textContent='Runtime Context';
+  const titleMode=document.createElement('span');titleMode.textContent=ctx.workspaceAutoDetected?'Auto':'Local';
+  title.appendChild(titleText);title.appendChild(titleMode);host.appendChild(title);
+  const addLine=(label,value,extra,warn,titleText)=>{
+    const line=document.createElement('div');
+    line.className='settings-nav-runtime-line'+(extra?' extra':'')+(warn?' warn':'');
+    const name=document.createElement('span');name.textContent=label;
+    const strong=document.createElement('strong');strong.textContent=value||'-';strong.title=titleText||value||'';
+    line.appendChild(name);line.appendChild(strong);host.appendChild(line);
+  };
+  addLine('Workspace',ctx.workspaceLabel,false,!ctx.workspaceRoot,ctx.workspaceRoot);
+  addLine('Source',(ctx.workspaceAutoDetected?'Auto · ':'')+ctx.workspaceSourceLabel,true,false,ctx.workspaceSource);
+  addLine('Terminal',ctx.terminalProfile,false,!ctx.terminalRunnable,ctx.terminalProfile);
+  addLine('CWD',ctx.terminalCwd?(typeof pathBaseName==='function'?pathBaseName(ctx.terminalCwd):ctx.terminalCwd):'-',true,!ctx.terminalRunnable,ctx.terminalCwd);
+  const actions=document.createElement('div');
+  actions.className='settings-nav-runtime-actions';
+  const addAction=(label,title,handler)=>{
+    const btn=document.createElement('button');
+    btn.type='button';btn.textContent=label;btn.title=title||label;btn.setAttribute('aria-label',title||label);
+    btn.onclick=ev=>{ev.preventDefault();handler&&handler()};
+    actions.appendChild(btn);
+  };
+  addAction('Workspace','Show workspace settings',()=>selectSettingsTarget('workspace',{preserveSearch:true,focusSearch:true}));
+  addAction('Terminal','Show terminal panel',()=>settingsCloseThen(()=>activateBottomPanelTab(document.querySelector('.ptab[data-ptab="terminal"]'))));
+  addAction('Copy Root','Copy detected workspace root',()=>settingsCopyText(ctx.workspaceRoot,'Workspace root'));
+  addAction('Copy CWD','Copy terminal cwd',()=>settingsCopyText(ctx.terminalCwd,'Terminal cwd'));
+  host.appendChild(actions);
+  return ctx;
 }
 function renderSettingsNavWorkbenchSummary(parsed,visible,total,state,tokens){
   const host=$('settings-nav-workbench-summary');
@@ -32615,6 +32723,7 @@ function settingsUiSelfCheckSnapshot(){
   const topQuickFilters=$('settings-quick-filters');
   const topActiveFilters=$('settings-active-filters');
   const navStatus=$('settings-nav-status');
+  const runtimeContext=$('settings-nav-runtime-context');
   const navWorkbench=$('settings-nav-workbench-summary');
   const navResultGroups=$('settings-nav-result-groups');
   const navResultButtons=navResultGroups?Array.from(navResultGroups.querySelectorAll('[data-settings-result-group]')):[];
@@ -32703,6 +32812,12 @@ function settingsUiSelfCheckSnapshot(){
     hasSidebarSettingsCommandbar:!!(commandbar&&commandbar.dataset.settingsCommandSurface==='sidebar'&&commandLabels.includes('Settings JSON{}')&&commandLabels.includes('Keyboard Shortcuts⌘')&&commandLabels.includes('Details⋯')),
     hasSidebarWorkbenchSummary:!!(navWorkbench&&navWorkbench.dataset.settingsNavWorkbench==='1'&&navWorkbench.dataset.settingsNavTarget&&navWorkbench.querySelector('.settings-nav-workbench-title')&&navWorkbench.querySelector('.settings-nav-workbench-badges')),
     hasSidebarWorkbenchSearchState:!!(navWorkbench&&navWorkbench.dataset.settingsNavQuery!==undefined&&navWorkbench.dataset.settingsNavActiveSection!==undefined&&navWorkbench.dataset.settingsNavVisible!==undefined),
+    hasSidebarRuntimeContext:!!(runtimeContext&&runtimeContext.dataset.settingsRuntimeContext==='1'&&runtimeContext.dataset.workspaceRoot!==undefined&&runtimeContext.dataset.terminalProfile!==undefined),
+    hasSidebarRuntimeWorkspaceState:!!(runtimeContext&&runtimeContext.dataset.workspaceSource!==undefined&&runtimeContext.dataset.workspaceAutoDetected!==undefined&&runtimeContext.querySelector('.settings-nav-runtime-line')),
+    hasSidebarRuntimeTerminalState:!!(runtimeContext&&runtimeContext.dataset.terminalCwd!==undefined&&runtimeContext.dataset.terminalRunnable!==undefined&&runtimeContext.dataset.terminalState!==undefined),
+    hasSidebarRuntimeActions:!!(runtimeContext&&Array.from(runtimeContext.querySelectorAll('.settings-nav-runtime-actions button')).map(btn=>String(btn.textContent||'')).join('|').includes('Workspace|Terminal|Copy Root|Copy CWD')),
+    hasSettingsRuntimeContextRefresh:typeof renderSettingsRuntimeContext==='function'&&typeof settingsRuntimeContextSnapshot==='function'
+      &&String(_updateTerminalDiagnostics).includes("renderSettingsRuntimeContext()"),
     hasSidebarResultGroups:!!(navResultGroups&&navResultGroups.dataset.settingsNavResultGroups==='1'&&navResultGroups.dataset.settingsNavResultKinds&&navResultButtons.length>=7),
     hasSidebarResultGroupActions:navResultButtons.some(btn=>btn.dataset.settingsResultGroup==='modified')&&navResultButtons.some(btn=>btn.dataset.settingsResultGroup==='keybindings')&&navResultButtons.some(btn=>btn.dataset.settingsResultGroup==='json'),
     hasNoVisibleTopSettingsBar:!!(settingsFrame&&settingsFrame.classList.contains('settings-vscode-calm')&&(!settingsTitlebar||String(getComputedStyle(settingsTitlebar).display)==='none')&&(!topSearchbar||String(getComputedStyle(topSearchbar).display)==='none')),
@@ -34705,6 +34820,7 @@ function filterSettings(){
   renderSettingsTargetSummary({...targetStats,queryMatched:queryStats.matched,queryHidden:queryStats.hidden,queryTotal:queryStats.total});
   renderSettingsWorkbenchHeader(visible,total,{...targetStats,queryMatched:queryStats.matched,queryHidden:queryStats.hidden,queryTotal:queryStats.total});
   renderSettingsJumpbar(targetStats);
+  renderSettingsRuntimeContext();
   renderSettingsExperienceBar(parsed,visible,total,{...targetStats,queryMatched:queryStats.matched,queryHidden:queryStats.hidden,queryTotal:queryStats.total});
   renderSettingsRecommendations();
   renderSettingsFocusDeck(parsed,visible,total,{...targetStats,queryMatched:queryStats.matched,queryHidden:queryStats.hidden,queryTotal:queryStats.total});
@@ -49580,6 +49696,7 @@ function _updateTerminalDiagnostics(meta,state){
   _setTerminalDiagnosticPill(strip,'output','output',outputValue,truncation?'warn':'',truncation?'Output was truncated':'Terminal output size');
   _setTerminalDiagnosticPill(strip,'scrollback','scroll',String(strip.dataset.outputNodes||'0')+' nodes',Number(strip.dataset.trimmedNodes||0)?'warn':'ok','Bounded terminal scrollback');
   _setTerminalDiagnosticPill(strip,'history','history',historyCount,historyCount?'ok':'','Recent command count');
+  if(typeof renderSettingsRuntimeContext==='function')renderSettingsRuntimeContext();
 }
 function terminalCurrentCwd(){
   const term=_getActiveTerminalRecord();
