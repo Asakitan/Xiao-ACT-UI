@@ -184,13 +184,17 @@ class TkMirrorLayer:
 
     def _capture_loop(self) -> None:
         while self._running:
-            if self._visible and self._layer and self._hwnd:
+            layer = self._layer
+            if self._visible and layer is not None and self._hwnd:
                 bgra = _capture_window(
                     self._hwnd, self._width, self._height)
-                if bgra:
-                    self._layer.upload_bgra(
-                        bgra, self._width, self._height)
-                    self._layer.request_redraw()
+                if bgra and layer is not None:
+                    try:
+                        layer.upload_bgra(
+                            bgra, self._width, self._height)
+                        layer.request_redraw()
+                    except Exception:
+                        pass
             self._stop_evt.wait(timeout=self._capture_interval)
 
     # ── Input forwarding ─────────────────────────────────────
