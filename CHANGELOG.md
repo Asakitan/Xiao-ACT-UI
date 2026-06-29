@@ -2,6 +2,18 @@
 
 逐版本变更记录, 最新在前。本文件由 config.py 内联的历史注释迁出。
 
+## v5.2.4: 插件卸载线程收口、识别引擎停机清理、菜单与弹窗交互修整.
+
+  - **插件生命周期**:
+    - `PluginContext` 新增 `should_stop` 与 `register_thread()`, 插件卸载时先发停止信号并等待已登记 worker 退出。
+    - `PluginManager.unload_plugin()` 在 `on_disable` / `on_unload` 前后统一触发停止事件, 避免脚本插件后台线程残留。
+  - **识别 / 内存路径**:
+    - WebView 停止识别引擎与 GUI 硬退出时同步关闭 ACT plugin manager, 防止平台插件继续持有 runtime 资源。
+    - Process Selector 与 `_dc` capture exclusion 改为通过 `rt_io.has_write_engine()` 判断写引擎能力, 避免直接读取私有句柄字段。
+  - **GUI 交互**:
+    - 脚本插件 overlay 菜单切换后保持菜单打开, 方便连续开启/关闭同类插件入口。
+    - GPU popup 动态扩展高度时向上补偿位置, 减少子菜单扩容造成的视觉跳动。
+
 ## v5.2.3: AI Editor text editor command 运行时追踪补齐, fisheye/弹窗/面板主题细节修整.
 
   - **AI Editor runtime surfaces**:

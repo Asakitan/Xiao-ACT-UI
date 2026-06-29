@@ -966,10 +966,31 @@ class PluginContext:
         #: Declarative UI builder (see :mod:`act_platform.ui_spec`).
         self.ui = UI
         self._mem_access: Any = None
+        self._stop_event = threading.Event()
+        self._registered_threads: list[threading.Thread] = []
 
     @property
     def plugin_id(self) -> str:
         return self._record.plugin_id
+
+    @property
+    def should_stop(self) -> bool:
+        return self._stop_event.is_set()
+
+    def register_thread(self, thread: threading.Thread) -> None:
+        """Register a worker thread so it gets joined on plugin unload."""
+        if isinstance(thread, threading.Thread):
+            self._registered_threads.append(thread)
+
+    def _signal_stop_and_join(self, timeout: float = 2.0) -> None:
+        self._stop_event.set()
+        for t in self._registered_threads:
+            try:
+                if t.is_alive():
+                    t.join(timeout=timeout)
+            except Exception:
+                pass
+        self._registered_threads.clear()
 
     @property
     def mem(self) -> Any:
@@ -2119,6 +2140,11 @@ class PluginManager:
         if record is None:
             return False
         was_loaded = bool(record.loaded or record.active or record.module is not None)
+        if record.context is not None:
+            try:
+                record.context._stop_event.set()
+            except Exception:
+                pass
         if record.module is not None:
             try:
                 self._call_hook(record, "on_disable")
@@ -2126,6 +2152,11 @@ class PluginManager:
                 pass
             try:
                 self._call_hook(record, "on_unload")
+            except Exception:
+                pass
+        if record.context is not None:
+            try:
+                record.context._signal_stop_and_join(timeout=2.0)
             except Exception:
                 pass
         self._unload_script_runtime(record)

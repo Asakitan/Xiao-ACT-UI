@@ -1396,6 +1396,11 @@ class SAOWebViewGUI:
 
     def _stop_recognition_engines(self, preserve_packet: bool = False):
         self._dispatch_webview_extension('stop_engines', preserve_packet)
+        try:
+            from act_platform.runtime import shutdown_act_plugin_manager
+            shutdown_act_plugin_manager(self)
+        except Exception:
+            pass
         engines = list(getattr(self, '_recognition_engines', []) or [])
         if not engines and self._recognition_engine:
             engines = [self._recognition_engine]

@@ -718,6 +718,7 @@ class SAOPlayerGUIMenuMixin:
                 'icon': icon,
                 'label': row_label,
                 'command': lambda entry=dict(entry), target=target: self._set_script_plugin_overlay_from_menu(entry, target),
+                'keep_menu_open': True,
             })]
         return children
 

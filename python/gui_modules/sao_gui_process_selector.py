@@ -376,7 +376,7 @@ class ProcessSelectorPanel:
             parts = []
             if getattr(rt_io, '_r1_ok', None) or getattr(rt_io, '_DRIVER_OK', False):
                 parts.append("EngA")
-            if getattr(rt_io, '_r3h', None):
+            if getattr(rt_io, 'has_write_engine', lambda: False)():
                 parts.append("EngE")
             tier = ""
             try:

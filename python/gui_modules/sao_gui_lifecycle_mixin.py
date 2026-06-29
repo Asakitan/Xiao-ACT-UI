@@ -135,6 +135,11 @@ class SAOPlayerGUILifecycleMixin:
 
     def _hard_exit_process(self) -> None:
         try:
+            from act_platform.runtime import shutdown_act_plugin_manager
+            shutdown_act_plugin_manager(self)
+        except Exception:
+            pass
+        try:
             from utils.sao_sound import unload_sao_fonts
             unload_sao_fonts()
         except Exception:

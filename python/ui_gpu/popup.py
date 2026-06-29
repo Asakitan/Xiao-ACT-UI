@@ -345,8 +345,10 @@ class SAOPopUpMenu:
             win_h = max(win_h, 200)
             try:
                 gx, gy = getattr(self, '_gpu_pos', (0, 0))
-                self._gpu_win.set_geometry(gx, gy, win_w, win_h)
-                self._gpu_pos = (gx, gy)
+                delta_h = win_h - max(200, old_h)
+                new_gy = gy - delta_h // 2
+                self._gpu_win.set_geometry(gx, max(0, new_gy), win_w, win_h)
+                self._gpu_pos = (gx, max(0, new_gy))
             except Exception:
                 pass
         if self._gpu_win is not None:
