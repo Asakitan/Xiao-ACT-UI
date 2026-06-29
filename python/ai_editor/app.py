@@ -1527,6 +1527,16 @@ class _AIEditorUIBridge:
             "extension_debug_session",
             payload if isinstance(payload, dict) else {})
 
+    def focus_debug_console(self, payload: Optional[Dict[str, Any]] = None) -> None:
+        self._api._emit(
+            "focus_debug_console",
+            payload if isinstance(payload, dict) else {})
+
+    def copy_debug_console(self, payload: Optional[Dict[str, Any]] = None) -> None:
+        self._api._emit(
+            "copy_debug_console",
+            payload if isinstance(payload, dict) else {})
+
     def insert_terminal_text(
             self, name: str, text: str,
             metadata: Optional[Dict[str, Any]] = None) -> None:
@@ -11319,9 +11329,55 @@ class AIEditorAPI:
                 return result
             return {"result": result}
         except KeyError:
+            host = getattr(self, "_node_ext_host", None)
+            if host and getattr(host, "is_running", False) and hasattr(
+                    host, "request_command_result"):
+                result = host.request_command_result(
+                    str(command_id or ""), list(args), timeout=4.0)
+                if isinstance(result, dict) and result.get("ok"):
+                    return {"ok": True, "result": result.get("value")}
+                return {
+                    "error": (
+                        result.get("error")
+                        if isinstance(result, dict)
+                        else f"Command not found: {command_id}"),
+                    "raw": result,
+                }
             return {"error": f"Command not found: {command_id}"}
         except Exception as exc:
             return {"error": str(exc)}
+
+    def evaluate_debug_console(
+            self, expression: str, frame_id: Optional[int] = None) -> Dict:
+        """Evaluate an expression through the active VS Code debug adapter."""
+        self._ensure_engine()
+        text = str(expression or "").strip()
+        if not text:
+            return {"ok": False, "error": "Expression is required"}
+        args: List[Any] = [text]
+        if frame_id is not None:
+            args.append(frame_id)
+        result = self.execute_command(
+            "workbench.action.debug.evaluate", *args)
+        if result.get("error"):
+            return {
+                "ok": False,
+                "expression": text,
+                "error": str(result.get("error") or "debug evaluate failed"),
+                "raw": result,
+            }
+        value = result.get("result")
+        body = value if isinstance(value, dict) else {}
+        return {
+            "ok": True,
+            "expression": text,
+            "result": str(body.get("result") if isinstance(body, dict)
+                          and body.get("result") is not None else value),
+            "type": str(body.get("type") or "") if isinstance(body, dict) else "",
+            "variablesReference": int(body.get("variablesReference") or 0)
+            if isinstance(body, dict) else 0,
+            "raw": result,
+        }
 
     def run_extension_task_type(self, task_type: str) -> Dict[str, Any]:
         """Execute the first task provided by a dynamic VS Code task provider."""

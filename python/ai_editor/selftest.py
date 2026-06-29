@@ -5159,12 +5159,12 @@ def test_phase1_ai_editor_regressions() -> None:
              and ".chat-control-strip { display:flex; align-items:center; gap:6px; flex:0 0 auto; flex-wrap:nowrap; min-width:max-content;" in html
              and "overflow:visible; width:max-content; max-width:none;" in html
              and "--chat-provider-width:128px;" in html
-            and "--chat-model-width:56px;" in html
+            and "--chat-model-width:36px;" in html
             and "--chat-agent-width:140px;" in html
             and "--chat-workflow-width:144px;" in html
              and "appearance:none; -webkit-appearance:none; line-height:20px;" in html
              and ".chat-select-chip { width:150px; max-width:208px; padding:0 9px; cursor:pointer; flex:0 1 150px; }" in html
-             and ".chat-model-inline { width:var(--chat-model-width); min-width:var(--chat-model-width); max-width:var(--chat-model-width); inline-size:var(--chat-model-width); min-inline-size:var(--chat-model-width); max-inline-size:var(--chat-model-width); justify-content:space-between; font-family:var(--mono); flex:0 0 var(--chat-model-width); flex-basis:var(--chat-model-width); text-align:left; }" in html
+             and ".chat-model-inline { width:var(--chat-model-width); min-width:var(--chat-model-width); max-width:var(--chat-model-width); inline-size:var(--chat-model-width); min-inline-size:var(--chat-model-width); max-inline-size:var(--chat-model-width); box-sizing:border-box; justify-content:space-between; font-family:var(--mono); flex:0 0 var(--chat-model-width); flex-basis:var(--chat-model-width); text-align:left; }" in html
              and ".chat-control-trigger { display:inline-flex; align-items:center; gap:4px; justify-content:space-between;" in html
              and "border-radius:999px!important; background:color-mix(in srgb,var(--bg3) 88%,#000); appearance:none!important; -webkit-appearance:none!important;" in html
              and "#chat-model-menu { width:var(--chat-model-width)!important; min-width:var(--chat-model-width)!important; max-width:var(--chat-model-width)!important; inline-size:var(--chat-model-width)!important; min-inline-size:var(--chat-model-width)!important; max-inline-size:var(--chat-model-width)!important; flex:0 0 var(--chat-model-width)!important; flex-basis:var(--chat-model-width)!important; }" in html
@@ -6651,7 +6651,7 @@ def test_phase1_ai_editor_regressions() -> None:
             and "inputThreeLineHeight:!!(container&&container.querySelector('.chat-input')&&container.querySelector('.chat-input').getBoundingClientRect().height>=72)" in html
             and "assistantUiSelfCheckRecord(checks,'visual-controls-one-row-ready'" in html
             and "assistantUiSelfCheckRecord(checks,'visual-control-widths-ready'" in html
-           and "controlWidthsReady:!!(triggerWidthMap['chat-provider-trigger']>=128&&triggerWidthMap['chat-model-inline']>=50&&triggerWidthMap['chat-model-inline']<=58&&triggerWidthMap['chat-agent-trigger']>=140&&triggerWidthMap['chat-workflow-trigger']>=144)" in html
+           and "controlWidthsReady:!!(triggerWidthMap['chat-provider-trigger']>=128&&triggerWidthMap['chat-model-inline']>=48&&triggerWidthMap['chat-model-inline']<=64&&triggerWidthMap['chat-agent-trigger']>=140&&triggerWidthMap['chat-workflow-trigger']>=144)" in html
             and "assistantUiSelfCheckRecord(checks,'visual-composer-extra-rows-hidden-ready'" in html
             and "assistantUiSelfCheckRecord(checks,'visual-model-chip-removed-ready'" in html
             and "assistantUiSelfCheckRecord(checks,'visual-content-window-ring-ready'" in html
@@ -16402,6 +16402,15 @@ console.log("frontend built-in language fallback behavior ok");
            and "transport.sendRequest('variables'" in node_ext_host_source
            and "workbench.action.debug.stepOver" in node_ext_host_source
            and "workbench.action.debug.continue" in node_ext_host_source
+           and "workbench.action.debug.evaluate" in node_ext_host_source
+           and "workbench.debug.action.evaluateRepl" in node_ext_host_source
+           and "repl.action.acceptInput" in node_ext_host_source
+           and "workbench.panel.repl.view.focus" in node_ext_host_source
+           and "repl.action.copyAll" in node_ext_host_source
+           and "type: 'debug_console_focus'" in node_ext_host_source
+           and "type: 'debug_console_copy_all'" in node_ext_host_source
+           and "function activeDebugEvaluateArgs(expression, frameId, context = 'repl')"
+           in node_ext_host_source
            and "sendActiveDebugAdapterRequest(command, args = {})" in node_ext_host_source
            and "activeDebugThreadArgs()" in node_ext_host_source
            and "function _debugCreateServerAdapterTransport(session, descriptor, config, customEventEmitter, beforeLaunch)" in node_ext_host_source
@@ -16488,6 +16497,8 @@ console.log("frontend built-in language fallback behavior ok");
            and "DebugAdapterExecutable," in node_ext_host_source
            and "DebugAdapterInlineImplementation," in node_ext_host_source
            and "msg_type == \"debug_console\"" in extension_host_source
+           and "msg_type == \"debug_console_focus\"" in extension_host_source
+           and "msg_type == \"debug_console_copy_all\"" in extension_host_source
            and "msg_type == \"debug_session_update\"" in extension_host_source
            and "\"lastConsoleOutput\": str(" in extension_host_source
            and "\"stoppedReason\": str(" in extension_host_source
@@ -16512,11 +16523,23 @@ console.log("frontend built-in language fallback behavior ok");
            in app_source
            and "\"metadata\": (" in app_source
            and "def start_extension_debugger_type(" in app_source
+           and "def evaluate_debug_console(" in app_source
+           and "def focus_debug_console(" in app_source
+           and "def copy_debug_console(" in app_source
+           and "host.request_command_result(" in app_source
            and "def update_extension_task_lifecycle(" in app_source
            and "def update_extension_debug_session(" in app_source
            and "runtimeRunDebugOutputCount" in html
            and "runtimeDebugTreeLastOutputs" in html
            and "runtimeDebugConsoleEntryCount" in html
+           and "function renderExtensionRuntimeDebugConsole()" in html
+           and "function renderBottomDebugConsole()" in html
+           and "function focusExtensionRuntimeDebugConsole(sessionKey)" in html
+           and "function submitExtensionRuntimeDebugConsoleInput()" in html
+           and 'id="debug-console-input"' in html
+           and "runtimeBottomDebugConsoleActive" in html
+           and "function evaluateExtensionDebugConsoleExpression(ev)" in html
+           and "call('evaluate_debug_console',expression)" in html
            and "appendTerminalHostCommandResult(name,command,result,{name:name});"
            in app_source
            and "self._ui_bridge.run_terminal_command" in extension_host_source)
@@ -28516,6 +28539,10 @@ async function activate(context) {
     await new Promise(resolve => setTimeout(resolve, 80));
     const dapActiveStackItem = vscode.debug.activeStackItem;
     const debugCommandList = await vscode.commands.getCommands();
+    const debugEvaluate = await vscode.commands.executeCommand(
+      'workbench.action.debug.evaluate',
+      'answer + 1',
+    );
     const debugStepOver = await vscode.commands.executeCommand('workbench.action.debug.stepOver');
     const debugStepInto = await vscode.commands.executeCommand('workbench.action.debug.stepInto');
     const debugStepOut = await vscode.commands.executeCommand('workbench.action.debug.stepOut');
@@ -28682,6 +28709,7 @@ async function activate(context) {
       } : null,
       debugCommandList,
       debugCommandResults: {
+        evaluate: debugEvaluate,
         stepOver: debugStepOver,
         stepInto: debugStepInto,
         stepOut: debugStepOut,
@@ -29492,6 +29520,15 @@ function handle(request) {
         type: "string",
         variablesReference: 0,
       }],
+    });
+    return;
+  }
+  if (request.command === "evaluate") {
+    response(request, {
+      result: "43",
+      type: "number",
+      variablesReference: 0,
+      presentationHint: { kind: "data" },
     });
     return;
   }
@@ -35354,6 +35391,11 @@ process.stdin.resume();
                        and dap_adapter_commands.index(
                            "configurationDone") < dap_adapter_commands.index(
                                "launch")
+                       and "evaluate" in dap_adapter_commands
+                       and node_debug_command_results.get(
+                           "evaluate", {}).get("result") == "43"
+                       and node_debug_command_results.get(
+                           "evaluate", {}).get("type") == "number"
                        and node_task_debug_probe.get(
                            "dapActiveStackItem", {}).get(
                                "session") == "Node DAP Debug"
@@ -35410,6 +35452,7 @@ process.stdin.resume();
                            isinstance(node_debug_command_results.get(key),
                                       dict)
                            for key in [
+                              "evaluate",
                                "stepOver", "stepInto", "stepOut", "pause",
                                "restart", "continue"
                            ])

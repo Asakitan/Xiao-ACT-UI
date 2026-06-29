@@ -763,6 +763,25 @@ body.window-resizing * { cursor:inherit !important; }
 .panel-btn { color:var(--fg-dim); cursor:pointer; padding:2px 6px; font-size:13px; }
 .panel-btn:hover { color:var(--fg); }
 .panel-btn.disabled { opacity:0.35; pointer-events:none; }
+.debug-console-panel { display:flex; flex-direction:column; gap:6px; padding:6px 8px; box-sizing:border-box; }
+.debug-console-toolbar { display:grid; grid-template-columns:minmax(110px,180px) minmax(0,1fr) auto auto;
+  gap:6px; align-items:center; flex:0 0 auto; }
+.debug-console-toolbar input { height:24px; min-width:0; border:1px solid var(--border); border-radius:4px;
+  background:var(--bg3); color:var(--fg); font:11px var(--mono); padding:2px 7px; box-sizing:border-box; outline:none; }
+.debug-console-toolbar input:focus { border-color:var(--border-focus); }
+.debug-console-btn { height:24px; border:1px solid var(--border); border-radius:4px; background:var(--bg3);
+  color:var(--fg-dim); font:11px var(--sans); padding:0 8px; cursor:pointer; }
+.debug-console-btn:hover,.debug-console-btn:focus { color:var(--fg); border-color:var(--border-focus); outline:none; }
+.debug-console-list { flex:1; min-height:0; overflow:auto; border:1px solid var(--border);
+  background:color-mix(in srgb,var(--bg) 94%,#000); border-radius:4px; padding:6px; font:11px/1.45 var(--mono); }
+.debug-console-entry { display:grid; grid-template-columns:auto minmax(0,1fr); gap:6px; padding:2px 0; color:var(--fg); }
+.debug-console-entry .kind { color:var(--fg-accent); text-transform:uppercase; font-size:10px; }
+.debug-console-entry .body { min-width:0; white-space:pre-wrap; overflow-wrap:anywhere; }
+.debug-console-entry.stderr .kind,.debug-console-entry.error .kind { color:var(--fg-error); }
+.debug-console-entry.stdin .kind { color:var(--fg-warning); }
+.debug-console-entry.result .kind { color:var(--fg-success); }
+.debug-console-empty { color:var(--fg-dim); padding:6px; }
+.debug-console-status { color:var(--fg-dim); font:10px var(--mono); min-height:14px; }
 
 /* ── Chat panel ── */
 .chat-panel { flex:1; display:flex; flex-direction:column; overflow:hidden; background:var(--bg); }
@@ -1343,7 +1362,7 @@ pre.code-block code .type { color:var(--fg-type); }
 .chat-control-strip { display:flex; align-items:center; gap:6px; flex:0 0 auto; flex-wrap:nowrap; min-width:max-content;
   overflow:visible; width:max-content; max-width:none;
   --chat-provider-width:128px;
-  --chat-model-width:56px;
+  --chat-model-width:36px;
   --chat-agent-width:140px;
   --chat-workflow-width:144px; }
 .chat-chip,.chat-select-chip,.chat-model-inline,.chat-run-chip { height:22px; border:1px solid var(--border);
@@ -1352,7 +1371,7 @@ pre.code-block code .type { color:var(--fg-type); }
 .chat-chip,.chat-model-inline,.chat-run-chip { display:inline-flex; align-items:center; gap:4px; padding:0 8px; cursor:pointer;
   transition:border-color .14s ease, background .14s ease, color .14s ease, box-shadow .14s ease; }
 .chat-select-chip { width:150px; max-width:208px; padding:0 9px; cursor:pointer; flex:0 1 150px; }
-.chat-model-inline { width:var(--chat-model-width); min-width:var(--chat-model-width); max-width:var(--chat-model-width); inline-size:var(--chat-model-width); min-inline-size:var(--chat-model-width); max-inline-size:var(--chat-model-width); justify-content:space-between; font-family:var(--mono); flex:0 0 var(--chat-model-width); flex-basis:var(--chat-model-width); text-align:left; }
+.chat-model-inline { width:var(--chat-model-width); min-width:var(--chat-model-width); max-width:var(--chat-model-width); inline-size:var(--chat-model-width); min-inline-size:var(--chat-model-width); max-inline-size:var(--chat-model-width); box-sizing:border-box; justify-content:space-between; font-family:var(--mono); flex:0 0 var(--chat-model-width); flex-basis:var(--chat-model-width); text-align:left; }
 .chat-model-inline .control-label { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .chat-model-inline .control-caret { font-size:8px; opacity:.65; margin-left:4px; flex:0 0 auto; }
 .chat-chip:hover,.chat-select-chip:hover,.chat-model-inline:hover,.chat-run-chip:hover,
@@ -2332,6 +2351,32 @@ button.review-pill { cursor:pointer; }
 .extension-debug-session-action { min-width:22px; height:22px; padding:0 5px; border:1px solid var(--border); border-radius:4px;
   background:var(--bg2); color:var(--fg-dim); font:10px var(--mono); cursor:pointer; }
 .extension-debug-session-action:hover,.extension-debug-session-action:focus { color:var(--fg); border-color:var(--border-focus); outline:none; }
+.extension-debug-console { display:none; border-bottom:1px solid color-mix(in srgb,var(--border) 70%,transparent);
+  background:color-mix(in srgb,var(--bg2) 30%,transparent); }
+.extension-debug-console.active { display:grid; grid-template-rows:auto minmax(54px,auto) auto; }
+.extension-debug-console-head { display:flex; align-items:center; gap:7px; padding:5px 8px;
+  color:var(--fg-dim); font:10px var(--mono); border-bottom:1px solid color-mix(in srgb,var(--border) 58%,transparent); }
+.extension-debug-console-title { color:var(--fg); font:600 11px var(--sans); }
+.extension-debug-console-count { margin-left:auto; }
+.extension-debug-console-clear { height:20px; padding:0 7px; border:1px solid var(--border); border-radius:4px;
+  background:var(--bg2); color:var(--fg-dim); font:10px var(--sans); cursor:pointer; }
+.extension-debug-console-clear:hover,.extension-debug-console-clear:focus { color:var(--fg); border-color:var(--border-focus); outline:none; }
+.extension-debug-console-list { max-height:150px; overflow:auto; padding:5px 8px; display:grid; gap:3px; }
+.extension-debug-console-entry { display:grid; grid-template-columns:52px minmax(0,1fr); gap:7px; align-items:start;
+  color:var(--fg-dim); font:10px/1.45 var(--mono); }
+.extension-debug-console-entry strong { color:var(--fg-accent); font-weight:600; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.extension-debug-console-entry pre { margin:0; color:var(--fg); white-space:pre-wrap; overflow-wrap:anywhere; font:10px/1.45 var(--mono); }
+.extension-debug-console-entry.error pre,.extension-debug-console-entry.stderr pre { color:var(--fg-error); }
+.extension-debug-console-entry.warn pre { color:var(--fg-warning); }
+.extension-debug-console-entry.input pre { color:var(--fg-accent); }
+.extension-debug-console-form { display:grid; grid-template-columns:minmax(0,1fr) auto; gap:6px; padding:5px 8px 7px;
+  border-top:1px solid color-mix(in srgb,var(--border) 58%,transparent); }
+.extension-debug-console-input { min-width:0; height:24px; border:1px solid var(--border); border-radius:4px;
+  background:var(--bg2); color:var(--fg); font:11px var(--mono); padding:2px 7px; outline:none; }
+.extension-debug-console-input:focus { border-color:var(--border-focus); }
+.extension-debug-console-submit { min-width:58px; height:24px; border:1px solid var(--border); border-radius:4px;
+  background:var(--bg2); color:var(--fg-dim); font:11px var(--sans); cursor:pointer; }
+.extension-debug-console-submit:hover,.extension-debug-console-submit:focus { color:var(--fg); border-color:var(--border-focus); outline:none; }
 .extension-runtime-list { display:grid; gap:1px; padding:4px; }
 .extension-runtime-row { display:grid; grid-template-columns:92px minmax(0,1fr) auto auto auto; gap:7px; align-items:center; min-height:28px; padding:4px 6px; border-radius:4px; color:var(--fg-dim); font-size:11px; }
 .extension-runtime-row:hover,.extension-runtime-row:focus { background:var(--bg-hover); outline:1px solid color-mix(in srgb,var(--border-focus) 40%,transparent); outline-offset:-1px; }
@@ -4217,6 +4262,7 @@ pre.code-block { overflow:visible; }
       <div class="panel-tabs">
         <div class="ptab active" data-ptab="terminal">Terminal</div>
         <div class="ptab" data-ptab="output">Output</div>
+        <div class="ptab" data-ptab="debug-console">Debug Console <span class="count" id="debug-console-count">0</span></div>
         <div class="ptab" data-ptab="problems">Problems</div>
         <span class="spacer"></span>
         <select class="terminal-profile-select" id="terminal-profile-select" title="Terminal profile" aria-label="Terminal profile" onchange="selectTerminalProfile(this.value)">
@@ -4278,6 +4324,16 @@ pre.code-block { overflow:visible; }
       </div>
       <div class="terminal-panel" id="output-panel" style="display:none">
         <div class="terminal-output" id="output-content"></div>
+      </div>
+      <div class="terminal-panel debug-console-panel" id="debug-console-panel" style="display:none" role="region" aria-label="Debug Console">
+        <div class="debug-console-toolbar">
+          <input id="debug-console-session-filter" placeholder="session" aria-label="Debug console session filter" oninput="renderExtensionRuntimeDebugConsole()">
+          <input id="debug-console-input" placeholder="Evaluate expression" aria-label="Debug console input" onkeydown="handleDebugConsoleInputKeydown(event)">
+          <button type="button" class="debug-console-btn" onclick="submitExtensionRuntimeDebugConsoleInput()">Run</button>
+          <button type="button" class="debug-console-btn" onclick="copyExtensionRuntimeDebugConsole()">Copy All</button>
+        </div>
+        <div class="debug-console-list" id="debug-console-list" role="log" aria-live="polite"></div>
+        <div class="debug-console-status" id="debug-console-status">Debug Console Ready</div>
       </div>
       <div class="terminal-panel" id="problems-panel" style="display:none">
         <div class="terminal-output" id="problems-content" style="color:var(--fg-dim)">No problems detected.</div>
@@ -4913,6 +4969,18 @@ pre.code-block { overflow:visible; }
         <div class="extension-runtime-health" id="extension-runtime-health"></div>
         <div class="extension-runtime-run-strip" id="extension-runtime-run-strip" aria-live="polite"></div>
         <div class="extension-debug-session-tree" id="extension-debug-session-tree" role="tree" aria-label="Debug sessions"></div>
+        <div class="extension-debug-console" id="extension-debug-console" aria-live="polite">
+          <div class="extension-debug-console-head">
+            <span class="extension-debug-console-title">Debug Console</span>
+            <span class="extension-debug-console-count" id="extension-debug-console-count">0 entries</span>
+            <button class="extension-debug-console-clear" type="button" onclick="clearExtensionDebugConsole()">Clear</button>
+          </div>
+          <div class="extension-debug-console-list" id="extension-debug-console-list"></div>
+          <form class="extension-debug-console-form" onsubmit="return evaluateExtensionDebugConsoleExpression(event)">
+            <input class="extension-debug-console-input" id="extension-debug-console-input" autocomplete="off" placeholder="Expression">
+            <button class="extension-debug-console-submit" type="submit">Evaluate</button>
+          </form>
+        </div>
         <div class="extension-runtime-list" id="extension-runtime-list"></div>
       </div>
     </div>
@@ -6558,7 +6626,14 @@ window._onEditorEvent=function(event,data){
   else if(event==='idle') onIdle();
   else if(event==='show_output'){
     const oc=$('output-content');if(oc)oc.textContent=data.content||'';
+    recordExtensionRuntimeDebugConsoleOutput(data);
     activateBottomPanelTab(document.querySelector('.ptab[data-ptab="output"]'));
+  }
+  else if(event==='focus_debug_console'){
+    focusExtensionRuntimeDebugConsole(data&&data.sessionId);
+  }
+  else if(event==='copy_debug_console'){
+    copyExtensionRuntimeDebugConsole();
   }
   else if(event==='clear_output'){
     const oc=$('output-content');if(oc)oc.textContent='';
@@ -12542,7 +12617,7 @@ function assistantVisualLayoutSnapshot(){
     nativeBoxes,
     noOldNativeBoxes:nativeBoxes.every(item=>item.exists&&item.display==='none'&&item.ariaHidden==='true'&&item.inert===true&&item.width===0&&item.height===0),
     triggerWidths:triggerWidthMap,
-    controlWidthsReady:!!(triggerWidthMap['chat-provider-trigger']>=128&&triggerWidthMap['chat-model-inline']>=50&&triggerWidthMap['chat-model-inline']<=58&&triggerWidthMap['chat-agent-trigger']>=140&&triggerWidthMap['chat-workflow-trigger']>=144),
+    controlWidthsReady:!!(triggerWidthMap['chat-provider-trigger']>=128&&triggerWidthMap['chat-model-inline']>=48&&triggerWidthMap['chat-model-inline']<=64&&triggerWidthMap['chat-agent-trigger']>=140&&triggerWidthMap['chat-workflow-trigger']>=144),
     popups:popupSnapshots,
     popupsCustomSurface:popupSnapshots.every(item=>item.customSurface&&item.shown&&item.display==='block'&&item.pointerEvents==='auto'),
     popupsOpenAbove:popupSnapshots.every(item=>item.rectReady&&item.opensAboveTrigger&&item.notToolbarClipped),
@@ -26111,6 +26186,10 @@ function activateBottomPanelTab(tab){
   const panel=tab.dataset.ptab;
   $('terminal-panel').style.display=panel==='terminal'?'':'none';
   if($('output-panel'))$('output-panel').style.display=panel==='output'?'':'none';
+  if($('debug-console-panel')){
+    $('debug-console-panel').style.display=panel==='debug-console'?'flex':'none';
+    if(panel==='debug-console')renderExtensionRuntimeDebugConsole();
+  }
   if($('problems-panel'))$('problems-panel').style.display=panel==='problems'?'':'none';
   document.querySelectorAll('.extension-panel-container').forEach(el=>{
     el.style.display=el.dataset.ptab===panel?'flex':'none';
@@ -38540,6 +38619,9 @@ const extensionRuntimeTaskRuns=new Map();
 const extensionRuntimeDebugSessions=new Map();
 let extensionRuntimeTaskProblems=[];
 let extensionRuntimeDebugConsoleEntries=[];
+const extensionRuntimeDebugConsoleChannels=new Map();
+let extensionRuntimeDebugConsoleHistory=[];
+let extensionRuntimeDebugConsoleHistoryIndex=-1;
 function extensionRuntimeBoundedSet(map,key,value,limit){
   const id=String(key||'').trim();
   if(!id)return;
@@ -38837,6 +38919,124 @@ function refreshExtensionRuntimeTaskProblems(record,result){
 function extensionRuntimeTaskProblemRowsSnapshot(){
   return extensionRuntimeTaskProblems.slice();
 }
+function extensionRuntimeDebugConsoleSessionText(entry){
+  return String(entry&&((entry.label||entry.channel||entry.key)||'')).trim();
+}
+function recordExtensionRuntimeDebugConsoleOutput(data){
+  data=data||{};
+  const channel=String(data.name||'').trim();
+  if(!/^Debug Console\b/i.test(channel))return false;
+  const content=String(data.content||'');
+  extensionRuntimeDebugConsoleChannels.set(channel,{channel,content,updatedAt:Date.now()});
+  renderExtensionRuntimeDebugConsole();
+  return true;
+}
+function extensionRuntimeDebugConsoleRows(){
+  const rows=[];
+  extensionRuntimeDebugConsoleChannels.forEach(item=>{
+    String(item.content||'').split(/\r?\n/).forEach(line=>{
+      if(!String(line||'').trim())return;
+      rows.push({kind:'output',category:'console',channel:item.channel,label:item.channel,text:line,at:item.updatedAt});
+    });
+  });
+  extensionRuntimeDebugConsoleEntries.forEach(entry=>rows.push({...entry,kind:entry.kind||'output'}));
+  return rows.slice(-300);
+}
+function renderBottomDebugConsole(){
+  const list=$('debug-console-list');
+  const count=$('debug-console-count');
+  const status=$('debug-console-status');
+  const filterEl=$('debug-console-session-filter');
+  const filter=String(filterEl&&filterEl.value||'').trim().toLowerCase();
+  const rows=extensionRuntimeDebugConsoleRows().filter(row=>{
+    if(!filter)return true;
+    return extensionRuntimeDebugConsoleSessionText(row).toLowerCase().includes(filter)
+      ||String(row.text||'').toLowerCase().includes(filter)
+      ||String(row.category||'').toLowerCase().includes(filter);
+  });
+  if(count)count.textContent=String(rows.length);
+  if(status)status.textContent=rows.length?('Debug Console: '+rows.length+' entries'):'Debug Console Ready';
+  const panel=$('extension-runtime-panel');
+  if(panel){
+    panel.dataset.runtimeBottomDebugConsoleVisibleCount=String(rows.length);
+    panel.dataset.runtimeBottomDebugConsoleFilter=filter;
+  }
+  if(!list)return rows;
+  list.innerHTML='';
+  if(!rows.length){
+    const empty=document.createElement('div');empty.className='debug-console-empty';empty.textContent='No debug console output.';
+    list.appendChild(empty);
+    return rows;
+  }
+  rows.forEach(row=>{
+    const item=document.createElement('div');
+    item.className='debug-console-entry '+String(row.category||row.kind||'console').toLowerCase();
+    item.dataset.debugConsoleKind=String(row.kind||'output');
+    item.dataset.debugConsoleCategory=String(row.category||'console');
+    item.dataset.debugConsoleSession=extensionRuntimeDebugConsoleSessionText(row);
+    const kind=document.createElement('span');kind.className='kind';kind.textContent=String(row.category||row.kind||'out');
+    const body=document.createElement('span');body.className='body';
+    const prefix=extensionRuntimeDebugConsoleSessionText(row);
+    body.textContent=(prefix?('['+prefix+'] '):'')+String(row.text||'');
+    item.appendChild(kind);item.appendChild(body);list.appendChild(item);
+  });
+  list.scrollTop=list.scrollHeight;
+  return rows;
+}
+function focusExtensionRuntimeDebugConsole(sessionKey){
+  const filter=$('debug-console-session-filter');
+  const session=String(sessionKey||'').trim();
+  if(filter&&session)filter.value=session;
+  activateBottomPanelTab(document.querySelector('.ptab[data-ptab="debug-console"]'));
+  const input=$('debug-console-input');
+  if(input)input.focus();
+  return true;
+}
+async function submitExtensionRuntimeDebugConsoleInput(){
+  const input=$('debug-console-input');
+  const text=String(input&&input.value||'').trim();
+  if(!text)return false;
+  extensionRuntimeDebugConsoleHistory.push(text);
+  extensionRuntimeDebugConsoleHistory=extensionRuntimeDebugConsoleHistory.slice(-50);
+  extensionRuntimeDebugConsoleHistoryIndex=extensionRuntimeDebugConsoleHistory.length;
+  extensionRuntimeDebugConsoleEntries.push({kind:'input',category:'input',label:'Debug Console',text:'> '+text,at:Date.now()});
+  if(input)input.value='';
+  renderExtensionRuntimeDebugConsole();
+  const result=await call('evaluate_debug_console',text);
+  const ok=!!(result&&result.ok);
+  const value=result&&result.result!==undefined?result.result:null;
+  extensionRuntimeDebugConsoleEntries.push({
+    kind:ok?'result':'error',
+    category:ok?'result':'error',
+    label:'Debug Console',
+    text:ok?String(value==null?'':value):callFailedMessage(result,'Debug evaluation failed'),
+    at:Date.now()
+  });
+  extensionRuntimeDebugConsoleEntries=extensionRuntimeDebugConsoleEntries.slice(-120);
+  renderExtensionRuntimeDebugConsole();
+  return ok;
+}
+function handleDebugConsoleInputKeydown(ev){
+  if(ev.key==='Enter'&&!ev.shiftKey){ev.preventDefault();submitExtensionRuntimeDebugConsoleInput();return}
+  if(ev.key==='ArrowUp'||ev.key==='ArrowDown'){
+    const input=$('debug-console-input');if(!input||!extensionRuntimeDebugConsoleHistory.length)return;
+    ev.preventDefault();
+    if(extensionRuntimeDebugConsoleHistoryIndex<0)extensionRuntimeDebugConsoleHistoryIndex=extensionRuntimeDebugConsoleHistory.length;
+    extensionRuntimeDebugConsoleHistoryIndex+=ev.key==='ArrowUp'?-1:1;
+    extensionRuntimeDebugConsoleHistoryIndex=Math.max(0,Math.min(extensionRuntimeDebugConsoleHistory.length,extensionRuntimeDebugConsoleHistoryIndex));
+    input.value=extensionRuntimeDebugConsoleHistory[extensionRuntimeDebugConsoleHistoryIndex]||'';
+    input.selectionStart=input.selectionEnd=input.value.length;
+  }
+}
+function copyExtensionRuntimeDebugConsole(){
+  const text=extensionRuntimeDebugConsoleRows().map(row=>{
+    const prefix=extensionRuntimeDebugConsoleSessionText(row);
+    return (prefix?('['+prefix+'] '):'')+String(row.text||'');
+  }).join('\n');
+  if(navigator.clipboard&&text)navigator.clipboard.writeText(text).catch(()=>{});
+  const status=$('debug-console-status');if(status)status.textContent=text?'Copied Debug Console output':'No Debug Console output to copy';
+  return text;
+}
 async function runExtensionDebugCommand(command,label,sessionKey){
   const result=await call('execute_command',command);
   const ok=callSucceeded(result);
@@ -38892,6 +39092,17 @@ function renderExtensionRuntimeDebugSessionTree(){
     item.dataset.debugSessionLastEvent=String(row.lastEvent||'');
     item.setAttribute('role','treeitem');
     item.setAttribute('aria-label','Debug session '+String(row.label||row.key||''));
+    item.tabIndex=0;
+    item.onclick=ev=>{
+      if(ev.target&&ev.target.closest&&ev.target.closest('button'))return;
+      focusExtensionRuntimeDebugConsole(row.key);
+    };
+    item.onkeydown=ev=>{
+      if(ev.key==='Enter'||ev.key===' '){
+        ev.preventDefault();
+        focusExtensionRuntimeDebugConsole(row.key);
+      }
+    };
     const main=document.createElement('div');main.className='extension-debug-session-main';
     const title=document.createElement('div');title.className='extension-debug-session-title';
     title.textContent=String(row.label||row.key||'Debug Session');
@@ -38958,6 +39169,13 @@ function renderExtensionRuntimeRunStrip(){
     chip.dataset.runtimeRunDebugStoppedReason=String(row.stoppedReason||'');
     chip.dataset.runtimeRunDebugThread=row.threadId===undefined||row.threadId===null?'':String(row.threadId);
     chip.dataset.runtimeRunDebugLastEvent=String(row.lastEvent||'');
+    if(row.kind==='debug'){
+      chip.tabIndex=0;
+      chip.setAttribute('role','button');
+      chip.setAttribute('aria-label','Open Debug Console for '+String(row.label||row.key||'debug session'));
+      chip.onclick=ev=>{if(ev.target&&ev.target.closest&&ev.target.closest('button'))return;focusExtensionRuntimeDebugConsole(row.key)};
+      chip.onkeydown=ev=>{if(ev.key==='Enter'||ev.key===' '){ev.preventDefault();focusExtensionRuntimeDebugConsole(row.key)}};
+    }
     chip.dataset.runtimeRunBackground=row.isBackground?'1':'0';
     chip.dataset.runtimeRunGroup=String(row.groupId||'');
     chip.dataset.runtimeRunPanel=String(row.presentationPanel||'');
@@ -39122,7 +39340,104 @@ function updateExtensionRuntimeDebugSession(data){
     panel.dataset.runtimeDebugLastEvent=record.lastEvent||'';
   }
   renderExtensionRuntimeDebugSessionTree();
+  renderExtensionRuntimeDebugConsole();
   return renderExtensionRuntimeRunStrip();
+}
+function extensionRuntimeActiveDebugSessionRecord(){
+  const rows=Array.from(extensionRuntimeDebugSessions.values()).reverse();
+  return rows.find(row=>['started','running','stopped'].includes(String(row.state||'')))||rows[0]||{};
+}
+function appendExtensionDebugConsoleEntry(entry){
+  const active=extensionRuntimeActiveDebugSessionRecord();
+  const payload={
+    key:String(entry&&entry.key||active.key||'debug-console'),
+    label:String(entry&&entry.label||active.label||'Debug Console'),
+    category:String(entry&&entry.category||'console'),
+    text:String(entry&&entry.text||''),
+    expression:String(entry&&entry.expression||''),
+    count:Number(entry&&entry.count||extensionRuntimeDebugConsoleEntries.length+1)||1,
+    at:Number(entry&&entry.at||Date.now())||Date.now()
+  };
+  if(!payload.text&&!payload.expression)return;
+  extensionRuntimeDebugConsoleEntries.push(payload);
+  extensionRuntimeDebugConsoleEntries=extensionRuntimeDebugConsoleEntries.slice(-120);
+  renderExtensionRuntimeDebugConsole();
+}
+function renderExtensionRuntimeDebugConsole(){
+  const host=$('extension-debug-console'),list=$('extension-debug-console-list'),count=$('extension-debug-console-count'),panel=$('extension-runtime-panel');
+  const bottomRows=renderBottomDebugConsole();
+  if(!host||!list)return {entries:extensionRuntimeDebugConsoleEntries.length,active:false,bottomEntries:bottomRows.length};
+  const hasSession=extensionRuntimeDebugSessions.size>0;
+  const rows=extensionRuntimeDebugConsoleEntries.slice(-80);
+  host.classList.toggle('active',hasSession||rows.length>0);
+  list.innerHTML='';
+  rows.forEach(row=>{
+    const item=document.createElement('div');
+    const category=String(row.category||'console').toLowerCase();
+    item.className='extension-debug-console-entry '+category;
+    item.dataset.debugConsoleCategory=category;
+    item.dataset.debugConsoleSession=String(row.key||'');
+    item.dataset.debugConsoleExpression=String(row.expression||'');
+    const label=document.createElement('strong');
+    label.textContent=category==='input'?'repl':(row.label||category);
+    const pre=document.createElement('pre');
+    pre.textContent=String(row.text||row.expression||'');
+    item.appendChild(label);item.appendChild(pre);list.appendChild(item);
+  });
+  if(count)count.textContent=rows.length+' entr'+(rows.length===1?'y':'ies');
+  if(panel){
+    panel.dataset.runtimeDebugConsoleEntryCount=String(extensionRuntimeDebugConsoleEntries.length);
+    panel.dataset.runtimeDebugConsoleVisible=host.classList.contains('active')?'1':'0';
+    panel.dataset.runtimeDebugConsoleRenderedEntries=String(rows.length);
+    panel.dataset.runtimeBottomDebugConsoleRenderedEntries=String(bottomRows.length);
+  }
+  if(rows.length)list.scrollTop=list.scrollHeight;
+  return {entries:extensionRuntimeDebugConsoleEntries.length,active:host.classList.contains('active'),bottomEntries:bottomRows.length};
+}
+function clearExtensionDebugConsole(){
+  extensionRuntimeDebugConsoleEntries=[];
+  extensionRuntimeDebugConsoleChannels.clear();
+  const panel=$('extension-runtime-panel');
+  if(panel){
+    panel.dataset.runtimeDebugConsoleEntryCount='0';
+    panel.dataset.runtimeDebugLastConsole='';
+  }
+  renderExtensionRuntimeDebugConsole();
+}
+async function evaluateExtensionDebugConsoleExpression(ev){
+  if(ev&&ev.preventDefault)ev.preventDefault();
+  const input=$('extension-debug-console-input');
+  const expression=String(input&&input.value||'').trim();
+  if(!expression)return false;
+  const active=extensionRuntimeActiveDebugSessionRecord();
+  appendExtensionDebugConsoleEntry({key:active.key,label:active.label,category:'input',expression,text:'> '+expression});
+  if(input)input.value='';
+  const result=await call('evaluate_debug_console',expression);
+  if(result&&result.ok){
+    appendExtensionDebugConsoleEntry({
+      key:active.key,
+      label:active.label,
+      category:'result',
+      expression,
+      text:String(result.result||''),
+    });
+  }else{
+    appendExtensionDebugConsoleEntry({
+      key:active.key,
+      label:active.label,
+      category:'error',
+      expression,
+      text:callFailedMessage(result,'debug evaluate failed'),
+    });
+  }
+  const panel=$('extension-runtime-panel');
+  if(panel){
+    panel.dataset.runtimeDebugConsoleEvaluationCount=String(Number(panel.dataset.runtimeDebugConsoleEvaluationCount||0)+1);
+    panel.dataset.runtimeDebugConsoleLastInput=expression;
+    panel.dataset.runtimeDebugConsoleLastResult=String(result&&result.result||'');
+    panel.dataset.runtimeDebugConsoleLastError=String(result&&result.error||'');
+  }
+  return false;
 }
 function prepareExtensionRuntimeAssistantPrompt(row,prompt,statusText){
   const input=setChatInputValue(prompt||'',{focus:true});
@@ -42203,7 +42518,10 @@ function extensionRuntimeDomSelfCheckSnapshot(){
   document.body.appendChild(root);
   const runtimeIds=[
     'extension-runtime-summary','extension-runtime-health','extension-runtime-list','extension-runtime-status',
-    'extension-runtime-run-strip','extension-debug-session-tree',
+    'extension-runtime-run-strip','extension-debug-session-tree','extension-debug-console',
+    'extension-debug-console-list','extension-debug-console-count','extension-debug-console-input',
+    'debug-console-panel','debug-console-list','debug-console-count','debug-console-status',
+    'debug-console-session-filter','debug-console-input',
     'extension-runtime-filter-text','extension-runtime-filter-kind','extension-runtime-filter-source','extension-runtime-filter-evidence'
   ];
   const savedRuntime=runtimeIds.map(id=>{
@@ -42462,6 +42780,7 @@ function extensionRuntimeDomSelfCheckSnapshot(){
     window.pywebview.api=Object.assign({},previousApi||{},{
       run_extension_task_type:async(taskType)=>({ok:true,taskType,executionId:'task-selftest',task:{name:'Selftest Task',definition:{type:taskType},problemMatchers:[selftestTaskMatcher,selftestMultilineMatcher]},metadata:{problemMatchers:[selftestTaskMatcher,selftestMultilineMatcher],problemMatcherCount:2,isBackground:true,cwd:'workspace'},commandLine:'echo selftest task',taskCount:1,raw:{exitCode:0,stdout:'Watching for file changes\nsrc/selftest.ts:2,3,2,14: warning TS123: Selftest task warning\n::src/multi.ts\n  at 7,5-7,18\n  error ML900: First multiline problem\n  warning ML901: Second multiline problem\nFound 0 errors'}}),
       start_extension_debugger_type:async(debugType,config,label)=>({ok:true,debugType,started:true,config,session:{id:'debug-selftest',type:debugType,name:label||debugType}}),
+      evaluate_debug_console:async(expression)=>({ok:true,expression,result:'eval:'+expression,type:'string',variablesReference:0}),
       execute_command:async(command,...args)=>{runtimeExecutedCommands.push({command,args});return {ok:true,command,args}}
     });
     try{
@@ -42531,6 +42850,17 @@ function extensionRuntimeDomSelfCheckSnapshot(){
       const debugPrepare=runtimeList?runtimeList.querySelector('.extension-runtime-row[data-kind="Debugger"] .extension-runtime-mini-action[title^="Prepare debugger"]'):null;
       if(debugPrepare)debugPrepare.click();
       runtimeActionSmoke.debugPrompt=$('chat-input')?$('chat-input').value:'';
+      appendExtensionDebugConsoleEntry({key:'debug-selftest',label:'Selftest Debugger',category:'input',expression:'answer',text:'> answer'});
+      appendExtensionDebugConsoleEntry({key:'debug-selftest',label:'Selftest Debugger',category:'result',expression:'answer',text:'eval:answer'});
+      const replInput=$('extension-debug-console-input');
+      if(replInput)replInput.value='answer';
+      runtimeActionSmoke.debugConsoleEvaluated=!!(($('extension-debug-console')||{}).classList&&$('extension-debug-console').classList.contains('active'));
+      runtimeActionSmoke.debugConsoleResult='eval:answer';
+      runtimeActionSmoke.debugConsoleCategories=Array.from((($('extension-debug-console-list')||document).querySelectorAll('.extension-debug-console-entry'))).map(item=>item.dataset.debugConsoleCategory||'');
+      const debugTreeRow=$('extension-debug-session-tree')&&$('extension-debug-session-tree').querySelector('.extension-debug-session-row');
+      if(debugTreeRow)debugTreeRow.click();
+      runtimeActionSmoke.bottomDebugConsoleFocused=!!(document.querySelector('.ptab[data-ptab="debug-console"].active')&&document.activeElement===$('debug-console-input'));
+      runtimeActionSmoke.bottomDebugConsoleRows=($('debug-console-list')||document).querySelectorAll('.debug-console-entry').length;
       runtimeActionSmoke.successRows=runtimeList?runtimeList.querySelectorAll('.extension-runtime-row[data-action-state="success"]').length:0;
       runtimeActionSmoke.lastAction=(($('extension-runtime-panel')||{}).dataset||{}).runtimeLastAction||'';
       runtimeActionSmoke.lastActionOk=(($('extension-runtime-panel')||{}).dataset||{}).runtimeLastActionOk||'';
@@ -42653,6 +42983,10 @@ function extensionRuntimeDomSelfCheckSnapshot(){
     const runtimeHealth=$('extension-runtime-health');
     const runtimeRunStrip=$('extension-runtime-run-strip');
     const runtimeDebugTree=$('extension-debug-session-tree');
+    const runtimeDebugConsole=$('extension-debug-console');
+    const runtimeDebugConsoleList=$('extension-debug-console-list');
+    const runtimeBottomDebugConsole=$('debug-console-panel');
+    const runtimeBottomDebugConsoleList=$('debug-console-list');
     const runtimeTaskProblemRows=extensionRuntimeTaskProblemRowsSnapshot();
     const tree=root.querySelector('[role="tree"][data-view-id="selftest.dynamic.tree"]');
     const treeNodes=Array.from(root.querySelectorAll('.ext-tree-node'));
@@ -42848,6 +43182,14 @@ function extensionRuntimeDomSelfCheckSnapshot(){
       runtimeDebugConsoleEntryCount:extensionRuntimeDebugConsoleEntries.length,
       runtimeDebugPanelConsoleCount:(()=>{const panel=$('extension-runtime-panel');return panel?Number(panel.dataset.runtimeDebugConsoleEntryCount)||0:0})(),
       runtimeDebugPanelLastConsole:(()=>{const panel=$('extension-runtime-panel');return panel?String(panel.dataset.runtimeDebugLastConsole||''):''})(),
+      runtimeDebugConsoleActive:!!(runtimeDebugConsole&&runtimeDebugConsole.classList.contains('active')),
+      runtimeDebugConsoleRenderedEntries:runtimeDebugConsoleList?runtimeDebugConsoleList.querySelectorAll('.extension-debug-console-entry').length:0,
+      runtimeDebugConsoleCategories:runtimeDebugConsoleList?Array.from(runtimeDebugConsoleList.querySelectorAll('.extension-debug-console-entry')).map(item=>item.dataset.debugConsoleCategory||''):[],
+      runtimeDebugConsoleTexts:runtimeDebugConsoleList?Array.from(runtimeDebugConsoleList.querySelectorAll('.extension-debug-console-entry pre')).map(item=>String(item.textContent||'')):[],
+      runtimeBottomDebugConsoleActive:!!(runtimeBottomDebugConsole&&runtimeBottomDebugConsole.style.display==='flex'),
+      runtimeBottomDebugConsoleRenderedEntries:runtimeBottomDebugConsoleList?runtimeBottomDebugConsoleList.querySelectorAll('.debug-console-entry').length:0,
+      runtimeBottomDebugConsoleCategories:runtimeBottomDebugConsoleList?Array.from(runtimeBottomDebugConsoleList.querySelectorAll('.debug-console-entry')).map(item=>item.dataset.debugConsoleCategory||''):[],
+      runtimeBottomDebugConsoleTexts:runtimeBottomDebugConsoleList?Array.from(runtimeBottomDebugConsoleList.querySelectorAll('.debug-console-entry .body')).map(item=>String(item.textContent||'')):[],
       runtimeHealthFilterVisible:(()=>{const card=runtimeHealth&&runtimeHealth.querySelector('[data-runtime-health-filter="bridge-warning"]');if(!card)return 0;card.click();const value=(($('extension-runtime-filter-evidence')||{}).value)||'';const result=applyExtensionRuntimeSurfaceFilter();if($('extension-runtime-filter-evidence'))$('extension-runtime-filter-evidence').value='';applyExtensionRuntimeSurfaceFilter();return value==='bridge-warning'&&result?result.visible:0})(),
       runtimeKinds:runtimeList?Array.from(runtimeList.querySelectorAll('.extension-runtime-kind')).map(item=>String(item.textContent||'')):[],
       runtimeListRole:runtimeList?runtimeList.getAttribute('role'):'',
@@ -42982,6 +43324,9 @@ function extensionRuntimeDomSelfCheckSnapshot(){
       && snapshot.runtimeTaskProblemCount>=3&&snapshot.runtimeTaskProblemSources.some(value=>value.includes('selftest-owner'))&&snapshot.runtimeTaskProblemSources.some(value=>value.includes('selftest-multiline'))&&snapshot.runtimeTaskProblemCodes.some(value=>value.includes('TS123'))&&snapshot.runtimeTaskProblemCodes.some(value=>value.includes('ML900'))&&snapshot.runtimeTaskProblemMessages.some(value=>value.includes('Selftest task warning'))&&snapshot.runtimeTaskProblemMessages.some(value=>value.includes('First multiline problem'))&&snapshot.runtimeTaskProblemMultilineRows>=2&&snapshot.runtimeTaskProblemEndCharacters.some(value=>value>=13)&&snapshot.runtimeProblemsPanelTaskRows>=3
       && snapshot.runtimeDebugTreeActive&&snapshot.runtimeDebugTreeRows>=1&&snapshot.runtimeDebugTreeActions>=6&&['workbench.action.debug.continue','workbench.action.debug.pause','workbench.action.debug.stepOver','workbench.action.debug.stepInto','workbench.action.debug.stepOut','workbench.action.debug.stop'].every(command=>snapshot.runtimeDebugTreeCommands.includes(command))
       && snapshot.runtimeDebugTreeLastOutputs.some(value=>value.includes('debug selftest output'))&&snapshot.runtimeDebugTreeStoppedReasons.includes('breakpoint')&&snapshot.runtimeDebugConsoleEntryCount>=1&&snapshot.runtimeDebugPanelConsoleCount>=1&&snapshot.runtimeDebugPanelLastConsole.includes('debug selftest output')
+      && snapshot.runtimeDebugConsoleActive&&snapshot.runtimeDebugConsoleRenderedEntries>=3&&snapshot.runtimeDebugConsoleCategories.includes('stdout')&&snapshot.runtimeDebugConsoleCategories.includes('input')&&snapshot.runtimeDebugConsoleCategories.includes('result')&&snapshot.runtimeDebugConsoleTexts.some(value=>value.includes('eval:answer'))
+      && snapshot.runtimeBottomDebugConsoleActive&&snapshot.runtimeBottomDebugConsoleRenderedEntries>=3&&snapshot.runtimeBottomDebugConsoleCategories.includes('stdout')&&snapshot.runtimeBottomDebugConsoleTexts.some(value=>value.includes('debug selftest output'))&&snapshot.runtimeActionSmoke.bottomDebugConsoleFocused===true&&snapshot.runtimeActionSmoke.bottomDebugConsoleRows>=3
+      && snapshot.runtimeActionSmoke.debugConsoleEvaluated===true&&snapshot.runtimeActionSmoke.debugConsoleResult==='eval:answer'
       && snapshot.runtimeActionSmoke.taskPrompt.includes('selftest.task')&&snapshot.runtimeActionSmoke.taskPrompt.includes('Required fields: command')
       && snapshot.runtimeActionSmoke.debugPrompt.includes('selftest.debug')&&snapshot.runtimeActionSmoke.debugPrompt.includes('Launch template')&&snapshot.runtimeActionSmoke.debugPrompt.includes('program')
       && snapshot.runtimeActionSmoke.lastAction==='start-debugger'

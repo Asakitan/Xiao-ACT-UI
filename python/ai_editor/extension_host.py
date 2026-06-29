@@ -4094,6 +4094,32 @@ class NodeExtensionHost:
                 except Exception:
                     pass
 
+        elif msg_type == "debug_console_focus":
+            if self._ui_bridge:
+                try:
+                    handler = getattr(self._ui_bridge, "focus_debug_console", None)
+                    if callable(handler):
+                        session = msg.get("session")
+                        payload = {}
+                        if isinstance(session, dict):
+                            payload = {
+                                "sessionId": str(session.get("id") or ""),
+                                "sessionName": str(session.get("name") or ""),
+                                "sessionType": str(session.get("type") or ""),
+                            }
+                        handler(payload)
+                except Exception:
+                    pass
+
+        elif msg_type == "debug_console_copy_all":
+            if self._ui_bridge:
+                try:
+                    handler = getattr(self._ui_bridge, "copy_debug_console", None)
+                    if callable(handler):
+                        handler({})
+                except Exception:
+                    pass
+
         elif msg_type in ("progress_start", "progress_report", "progress_done"):
             progress_handler = (
                 getattr(self._ui_bridge, "show_progress", None)

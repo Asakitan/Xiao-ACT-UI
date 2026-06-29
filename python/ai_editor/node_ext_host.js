@@ -11421,6 +11421,22 @@ function buildVscodeModule(extDesc, extensionPath, storageRoot) {
                 const threadId = _activeDebugStackItem?.thread?.id;
                 return threadId === undefined || threadId === null ? {} : { threadId };
             }
+            function activeDebugEvaluateArgs(expression, frameId, context = 'repl') {
+                const payload = {
+                    expression: String(expression ?? ''),
+                    context: String(context || 'repl'),
+                };
+                const explicitFrameId = Number(frameId);
+                if (Number.isFinite(explicitFrameId) && explicitFrameId > 0) {
+                    payload.frameId = explicitFrameId;
+                } else {
+                    const activeFrameId = Number(_activeDebugStackItem?.frame?.id);
+                    if (Number.isFinite(activeFrameId) && activeFrameId > 0) {
+                        payload.frameId = activeFrameId;
+                    }
+                }
+                return payload;
+            }
             function stopDebugSession(target) {
                 target = target || _activeDebugSession;
                 if (!target) return Promise.resolve(false);
@@ -11461,6 +11477,44 @@ function buildVscodeModule(extDesc, extensionPath, storageRoot) {
             }
             if (!_commands.has('workbench.action.debug.stop')) {
                 _commands.set('workbench.action.debug.stop', () => stopDebugSession());
+            }
+            if (!_commands.has('workbench.action.debug.evaluate')) {
+                _commands.set('workbench.action.debug.evaluate',
+                    (expression, frameId, context = 'repl') =>
+                        sendActiveDebugAdapterRequest(
+                            'evaluate',
+                            activeDebugEvaluateArgs(expression, frameId, context),
+                        ));
+            }
+            if (!_commands.has('workbench.debug.action.evaluateRepl')) {
+                _commands.set('workbench.debug.action.evaluateRepl',
+                    (expression, frameId) =>
+                        _commands.get('workbench.action.debug.evaluate')(
+                            expression, frameId, 'repl'));
+            }
+            if (!_commands.has('repl.action.acceptInput')) {
+                _commands.set('repl.action.acceptInput',
+                    (expression, frameId) =>
+                        _commands.get('workbench.action.debug.evaluate')(
+                            expression, frameId, 'repl'));
+            }
+            if (!_commands.has('workbench.panel.repl.view.focus')) {
+                _commands.set('workbench.panel.repl.view.focus', () => {
+                    send({
+                        type: 'debug_console_focus',
+                        session: _debugSessionPayload(_activeDebugSession),
+                    });
+                    return true;
+                });
+            }
+            if (!_commands.has('repl.action.copyAll')) {
+                _commands.set('repl.action.copyAll', () => {
+                    send({
+                        type: 'debug_console_copy_all',
+                        session: _debugSessionPayload(_activeDebugSession),
+                    });
+                    return true;
+                });
             }
             const activeDebugConsole = {
                 append(value) {
