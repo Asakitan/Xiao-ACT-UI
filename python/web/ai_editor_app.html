@@ -1352,7 +1352,7 @@ pre.code-block code .type { color:var(--fg-type); }
 .chat-chip,.chat-model-inline,.chat-run-chip { display:inline-flex; align-items:center; gap:4px; padding:0 8px; cursor:pointer;
   transition:border-color .14s ease, background .14s ease, color .14s ease, box-shadow .14s ease; }
 .chat-select-chip { width:150px; max-width:208px; padding:0 9px; cursor:pointer; flex:0 1 150px; }
-.chat-model-inline { width:var(--chat-model-width); max-width:var(--chat-model-width); justify-content:space-between; font-family:var(--mono); flex:0 0 var(--chat-model-width); text-align:left; }
+.chat-model-inline { width:var(--chat-model-width); min-width:var(--chat-model-width); max-width:var(--chat-model-width); inline-size:var(--chat-model-width); min-inline-size:var(--chat-model-width); max-inline-size:var(--chat-model-width); justify-content:space-between; font-family:var(--mono); flex:0 0 var(--chat-model-width); flex-basis:var(--chat-model-width); text-align:left; }
 .chat-model-inline .control-label { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .chat-model-inline .control-caret { font-size:8px; opacity:.65; margin-left:4px; flex:0 0 auto; }
 .chat-chip:hover,.chat-select-chip:hover,.chat-model-inline:hover,.chat-run-chip:hover,
@@ -1363,7 +1363,7 @@ pre.code-block code .type { color:var(--fg-type); }
 .chat-select-chip.agent.active { color:var(--fg); border-color:color-mix(in srgb, var(--fg-success) 45%, var(--border)); }
 .chat-control-menu { position:relative; display:inline-flex; align-items:center; flex:0 0 auto; min-width:0; align-self:stretch; z-index:3; }
 #chat-provider-menu { width:var(--chat-provider-width); flex-basis:var(--chat-provider-width); }
-#chat-model-menu { width:var(--chat-model-width); flex:0 0 var(--chat-model-width); min-width:var(--chat-model-width); }
+#chat-model-menu { width:var(--chat-model-width)!important; min-width:var(--chat-model-width)!important; max-width:var(--chat-model-width)!important; inline-size:var(--chat-model-width)!important; min-inline-size:var(--chat-model-width)!important; max-inline-size:var(--chat-model-width)!important; flex:0 0 var(--chat-model-width)!important; flex-basis:var(--chat-model-width)!important; }
 .chat-control-native { display:none!important; visibility:hidden!important; position:absolute!important; inset:0 auto auto 0!important; width:0!important; height:0!important; opacity:0!important; pointer-events:none!important; appearance:none; -webkit-appearance:none; }
 .chat-control-trigger { display:inline-flex; align-items:center; gap:4px; justify-content:space-between; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;
   width:100%; min-height:22px; border-radius:999px!important; background:color-mix(in srgb,var(--bg3) 88%,#000); appearance:none!important; -webkit-appearance:none!important;
@@ -1379,7 +1379,7 @@ pre.code-block code .type { color:var(--fg-type); }
 .chat-control-trigger .control-label { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .chat-control-trigger .control-caret { font-size:8px; opacity:.82; margin-left:4px; flex:0 0 auto; color:var(--fg-dim); }
 .chat-control-trigger.provider { width:var(--chat-provider-width); min-width:var(--chat-provider-width); max-width:var(--chat-provider-width); flex:0 0 var(--chat-provider-width); }
-.chat-control-trigger.model { width:var(--chat-model-width); min-width:var(--chat-model-width); max-width:var(--chat-model-width); flex:0 0 var(--chat-model-width); }
+.chat-control-trigger.model { width:var(--chat-model-width)!important; min-width:var(--chat-model-width)!important; max-width:var(--chat-model-width)!important; inline-size:var(--chat-model-width)!important; min-inline-size:var(--chat-model-width)!important; max-inline-size:var(--chat-model-width)!important; flex:0 0 var(--chat-model-width)!important; flex-basis:var(--chat-model-width)!important; }
 .chat-control-trigger.agent { width:var(--chat-agent-width); min-width:var(--chat-agent-width); max-width:var(--chat-agent-width); flex:0 0 var(--chat-agent-width); }
 .chat-control-trigger.mode { width:92px; min-width:88px; max-width:120px; flex:0 0 92px; color:var(--fg-accent);
   border-color:color-mix(in srgb, var(--border-focus) 50%, var(--border)); }
@@ -38581,9 +38581,123 @@ function extensionRuntimeNormalizeTaskProblemSeverity(value){
   if(raw.includes('hint'))return 'hint';
   return 'info';
 }
+function extensionRuntimeTaskProblemMatchers(record){
+  const rows=[];
+  const append=value=>{
+    if(Array.isArray(value))value.forEach(append);
+    else if(value!==undefined&&value!==null)rows.push(value);
+  };
+  append(record&&record.problemMatchers);
+  append(record&&record.metadataProblemMatchers);
+  return rows;
+}
+function extensionRuntimeTaskMatcherPatternRegExp(spec){
+  if(!spec)return null;
+  const source=typeof spec==='string'?spec:(spec&&typeof spec==='object'?spec.regexp:'');
+  if(!source)return null;
+  try{return new RegExp(String(source));}catch(_e){return null}
+}
+function extensionRuntimeTaskMatcherCapture(match,field){
+  if(field===undefined||field===null||field==='')return '';
+  if(typeof field==='number'||/^\d+$/.test(String(field))){
+    return match[Number(field)]||'';
+  }
+  const key=String(field);
+  return match.groups&&match.groups[key]!==undefined?match.groups[key]:'';
+}
+function extensionRuntimeTaskProblemFileLocation(file,cwd,fileLocation){
+  let value=String(file||'').trim();
+  const root=String(cwd||'').trim();
+  if(!value)return root;
+  const abs=/^(?:[A-Za-z]:[\\/]|\\\\|\/)/.test(value);
+  const mode=Array.isArray(fileLocation)?String(fileLocation[0]||''):String(fileLocation||'');
+  if(root&&!abs&&(mode.toLowerCase()==='relative'||Array.isArray(fileLocation))){
+    const slash=root.includes('\\')?'\\':'/';
+    value=root.replace(/[\\/]+$/,'')+slash+value.replace(/^[\\/]+/,'');
+  }
+  return value;
+}
+function extensionRuntimeTaskProblemMatcherRows(record,result){
+  const text=extensionRuntimeTaskOutputText(result);
+  if(!text)return [];
+  const rows=[];
+  const taskLabel=String(record&&record.label||'Extension Task');
+  const taskKey=String(record&&record.key||taskLabel);
+  const cwd=String(record&&record.cwd||'');
+  const matcherObjects=extensionRuntimeTaskProblemMatchers(record).filter(item=>item&&typeof item==='object'&&item.pattern);
+  matcherObjects.forEach(matcher=>{
+    const patterns=Array.isArray(matcher.pattern)?matcher.pattern:[matcher.pattern];
+    patterns.forEach(pattern=>{
+      if(!pattern||typeof pattern!=='object')return;
+      const regexp=extensionRuntimeTaskMatcherPatternRegExp(pattern);
+      if(!regexp)return;
+      String(text).split(/\r?\n/).slice(0,1000).forEach(rawLine=>{
+        const raw=String(rawLine||'').trim();
+        if(!raw)return;
+        regexp.lastIndex=0;
+        const match=regexp.exec(raw);
+        if(!match)return;
+        const message=String(extensionRuntimeTaskMatcherCapture(match,pattern.message)||raw).trim();
+        const file=extensionRuntimeTaskProblemFileLocation(
+          extensionRuntimeTaskMatcherCapture(match,pattern.file)||cwd||taskLabel,
+          cwd,
+          matcher.fileLocation
+        );
+        const lineNo=Number(extensionRuntimeTaskMatcherCapture(match,pattern.line))||1;
+        const columnNo=Number(extensionRuntimeTaskMatcherCapture(match,pattern.column))||1;
+        const severity=extensionRuntimeTaskMatcherCapture(match,pattern.severity)||matcher.severity||pattern.severity||'error';
+        const code=extensionRuntimeTaskMatcherCapture(match,pattern.code)||matcher.name||matcher.label||'task.problemMatcher';
+        rows.push({
+          kind:'task',
+          severity:extensionRuntimeNormalizeTaskProblemSeverity(severity),
+          source:String(matcher.owner||matcher.source||('Task '+taskLabel)),
+          code:String(code||'task.problemMatcher'),
+          message,
+          file,
+          uri:file,
+          line:Math.max(1,lineNo),
+          character:Math.max(1,columnNo),
+          range:extensionRuntimeTaskProblemRange(lineNo,columnNo,message),
+          taskKey,
+          taskLabel
+        });
+      });
+    });
+  });
+  return rows.slice(0,200);
+}
+function extensionRuntimeTaskBackgroundState(record,result){
+  const text=extensionRuntimeTaskOutputText(result);
+  const matchers=extensionRuntimeTaskProblemMatchers(record).filter(item=>item&&typeof item==='object'&&item.background);
+  let hasBackgroundMatcher=false;
+  let beginSeen=false;
+  let endSeen=false;
+  const matchesPattern=spec=>{
+    const regexp=extensionRuntimeTaskMatcherPatternRegExp(spec);
+    if(!regexp||!text)return false;
+    regexp.lastIndex=0;
+    return regexp.test(text);
+  };
+  matchers.forEach(matcher=>{
+    const bg=matcher.background&&typeof matcher.background==='object'?matcher.background:{};
+    hasBackgroundMatcher=true;
+    if(bg.activeOnStart===true)beginSeen=true;
+    if(matchesPattern(bg.beginsPattern))beginSeen=true;
+    if(matchesPattern(bg.endsPattern))endSeen=true;
+  });
+  const state=!hasBackgroundMatcher?'':(endSeen?'ready':(beginSeen?'active':'idle'));
+  return {
+    hasBackgroundMatcher,
+    backgroundActive:hasBackgroundMatcher&&beginSeen&&!endSeen,
+    backgroundReady:hasBackgroundMatcher&&endSeen,
+    backgroundState:state
+  };
+}
 function extensionRuntimeTaskProblemRows(record,result){
   const text=extensionRuntimeTaskOutputText(result);
   if(!text)return [];
+  const matcherRows=extensionRuntimeTaskProblemMatcherRows(record,result);
+  if(matcherRows.length)return matcherRows;
   const rows=[];
   const taskLabel=String(record&&record.label||'Extension Task');
   const taskKey=String(record&&record.key||taskLabel);
@@ -38751,6 +38865,9 @@ function renderExtensionRuntimeRunStrip(){
     chip.dataset.runtimeRunReveal=String(row.presentationReveal||'');
     chip.dataset.runtimeRunTerminal=String(row.terminalName||'');
     chip.dataset.runtimeRunReuseKey=String(row.terminalReuseKey||'');
+    chip.dataset.runtimeRunBackgroundState=String(row.backgroundState||'');
+    chip.dataset.runtimeRunBackgroundReady=row.backgroundReady?'1':'0';
+    chip.dataset.runtimeRunBackgroundActive=row.backgroundActive?'1':'0';
     chip.dataset.runtimeRunExitCode=row.exitCode===null||row.exitCode===undefined?'':String(row.exitCode);
     chip.title=[
       row.kind==='task'?'Task':'Debug',
@@ -38759,6 +38876,7 @@ function renderExtensionRuntimeRunStrip(){
       row.cwd?('cwd: '+row.cwd):'',
       row.groupLabel?('group: '+row.groupLabel):'',
       row.isBackground?'background task':'',
+      row.backgroundState?('background: '+row.backgroundState):'',
       row.presentationPanel?('panel: '+row.presentationPanel):'',
       row.presentationReveal?('reveal: '+row.presentationReveal):'',
       row.terminalName?('terminal: '+row.terminalName):'',
@@ -38777,7 +38895,7 @@ function renderExtensionRuntimeRunStrip(){
       const meta=document.createElement('span');
       meta.textContent=[
         row.groupLabel||'',
-        row.isBackground?'bg':'',
+        row.backgroundState?('bg '+row.backgroundState):(row.isBackground?'bg':''),
         row.presentationPanel||''
       ].filter(Boolean).join(' · ');
       chip.appendChild(meta);
@@ -38807,6 +38925,8 @@ function updateExtensionRuntimeTaskLifecycle(data){
   const state=String(data.state||result.state||(result.exitCode===0?'done':(result.exitCode!==undefined&&result.exitCode!==null?'error':'running'))||'running').toLowerCase();
   const metadata=data.metadata&&typeof data.metadata==='object'?data.metadata:{};
   const problemMatchers=Array.isArray(task.problemMatchers)?task.problemMatchers:(Array.isArray(task.problemMatcher)?task.problemMatcher:[]);
+  const metadataProblemMatchers=Array.isArray(metadata.problemMatchers)?metadata.problemMatchers:[];
+  const matcherList=problemMatchers.concat(metadataProblemMatchers);
   const record={
     kind:'task',
     key,
@@ -38815,7 +38935,9 @@ function updateExtensionRuntimeTaskLifecycle(data){
     taskType:String(def.type||data.taskType||''),
     commandLine:String(data.commandLine||result.commandLine||''),
     cwd:String(metadata.cwd||result.cwd||''),
-    problemMatcherCount:Number(data.problemMatcherCount||metadata.problemMatcherCount||problemMatchers.length||0)||0,
+    problemMatchers:matcherList,
+    metadataProblemMatchers,
+    problemMatcherCount:Number(data.problemMatcherCount||metadata.problemMatcherCount||matcherList.length||0)||0,
     isBackground:metadata.isBackground===true,
     groupId:String(metadata.groupId||''),
     groupLabel:String(metadata.groupLabel||''),
@@ -38827,6 +38949,7 @@ function updateExtensionRuntimeTaskLifecycle(data){
     message:String(data.message||result.error||''),
     updatedAt:Date.now()
   };
+  Object.assign(record,extensionRuntimeTaskBackgroundState(record,result));
   extensionRuntimeBoundedSet(extensionRuntimeTaskRuns,key,record,24);
   if(state==='running'){
     extensionRuntimeTaskProblems=extensionRuntimeTaskProblems.filter(row=>row.taskKey!==key);
@@ -38835,7 +38958,7 @@ function updateExtensionRuntimeTaskLifecycle(data){
     record.problemCount=matched.length;
   }
   const status=$('extension-runtime-status');
-  if(status)status.textContent='Task '+record.label+' '+record.state+'.';
+  if(status)status.textContent='Task '+record.label+' '+record.state+(record.backgroundState?' ('+record.backgroundState+')':'')+'.';
   return renderExtensionRuntimeRunStrip();
 }
 function updateExtensionRuntimeDebugSession(data){
@@ -42153,11 +42276,29 @@ function extensionRuntimeDomSelfCheckSnapshot(){
     const previousChatInput=$('chat-input')?$('chat-input').value:'';
     const previousContextAttachments=chatContextAttachments.slice();
     const previousApi=window.pywebview&&window.pywebview.api;
+    const selftestTaskMatcher={
+      owner:'selftest-owner',
+      fileLocation:['relative','${workspaceFolder}'],
+      pattern:{
+        regexp:'^(?<file>.*):(\\d+):(\\d+): (?<severity>warning|error) (?<code>[A-Z]+\\d+): (?<message>.*)$',
+        file:'file',
+        line:2,
+        column:3,
+        severity:'severity',
+        code:'code',
+        message:'message'
+      },
+      background:{
+        activeOnStart:true,
+        beginsPattern:'Watching for file changes',
+        endsPattern:'Found 0 errors'
+      }
+    };
     const runtimeActionSmoke={};
     const runtimeExecutedCommands=[];
     window.pywebview=window.pywebview||{};
     window.pywebview.api=Object.assign({},previousApi||{},{
-      run_extension_task_type:async(taskType)=>({ok:true,taskType,executionId:'task-selftest',task:{name:'Selftest Task',definition:{type:taskType},problemMatchers:['$selftest']},commandLine:'echo selftest task',taskCount:1,raw:{exitCode:0,stdout:'src/selftest.ts:2:3: warning: Selftest task warning'}}),
+      run_extension_task_type:async(taskType)=>({ok:true,taskType,executionId:'task-selftest',task:{name:'Selftest Task',definition:{type:taskType},problemMatchers:[selftestTaskMatcher]},metadata:{problemMatchers:[selftestTaskMatcher],problemMatcherCount:1,isBackground:true,cwd:'workspace'},commandLine:'echo selftest task',taskCount:1,raw:{exitCode:0,stdout:'Watching for file changes\nsrc/selftest.ts:2:3: warning TS123: Selftest task warning\nFound 0 errors'}}),
       start_extension_debugger_type:async(debugType,config,label)=>({ok:true,debugType,started:true,config,session:{id:'debug-selftest',type:debugType,name:label||debugType}}),
       execute_command:async(command,...args)=>{runtimeExecutedCommands.push({command,args});return {ok:true,command,args}}
     });
@@ -42187,9 +42328,9 @@ function extensionRuntimeDomSelfCheckSnapshot(){
       updateExtensionRuntimeTaskLifecycle({
         state:'running',
         executionId:'task-running-selftest',
-        task:{name:'Running Selftest Task',definition:{type:'selftest.task'},problemMatchers:['$selftest']},
+        task:{name:'Running Selftest Task',definition:{type:'selftest.task'},problemMatchers:[selftestTaskMatcher]},
         commandLine:'npm run watch',
-        metadata:{panel:'dedicated',reveal:'silent',terminalName:'Task: Running Selftest Task',terminalReuseKey:'dedicated:selftest.task:Running Selftest Task',isBackground:true,groupId:'build',groupLabel:'Build',problemMatcherCount:1}
+        metadata:{panel:'dedicated',reveal:'silent',terminalName:'Task: Running Selftest Task',terminalReuseKey:'dedicated:selftest.task:Running Selftest Task',isBackground:true,groupId:'build',groupLabel:'Build',problemMatchers:[selftestTaskMatcher],problemMatcherCount:1}
       });
       const stopButton=runtimeRunStrip?runtimeRunStrip.querySelector('.extension-runtime-run-stop[data-runtime-task-stop="1"]'):null;
       runtimeActionSmoke.taskStopButton=!!stopButton;
@@ -42495,8 +42636,12 @@ function extensionRuntimeDomSelfCheckSnapshot(){
       runtimeTaskStopButtons:runtimeRunStrip?runtimeRunStrip.querySelectorAll('.extension-runtime-run-stop[data-runtime-task-stop="1"]').length:0,
       runtimeRunStates:runtimeRunStrip?Array.from(runtimeRunStrip.querySelectorAll('.extension-runtime-run-chip')).map(item=>item.dataset.runtimeRunState||''):[],
       runtimeRunCommands:runtimeRunStrip?Array.from(runtimeRunStrip.querySelectorAll('.extension-runtime-run-chip')).map(item=>item.dataset.runtimeRunCommand||'').filter(Boolean):[],
+      runtimeTaskBackgroundStates:runtimeRunStrip?Array.from(runtimeRunStrip.querySelectorAll('.extension-runtime-run-chip[data-runtime-run-kind="task"]')).map(item=>item.dataset.runtimeRunBackgroundState||'').filter(Boolean):[],
+      runtimeTaskBackgroundReadyChips:runtimeRunStrip?runtimeRunStrip.querySelectorAll('.extension-runtime-run-chip[data-runtime-run-kind="task"][data-runtime-run-background-ready="1"]').length:0,
+      runtimeTaskBackgroundActiveChips:runtimeRunStrip?runtimeRunStrip.querySelectorAll('.extension-runtime-run-chip[data-runtime-run-kind="task"][data-runtime-run-background-active="1"]').length:0,
       runtimeTaskProblemCount:runtimeTaskProblemRows.length,
       runtimeTaskProblemSources:runtimeTaskProblemRows.map(row=>row.source||''),
+      runtimeTaskProblemCodes:runtimeTaskProblemRows.map(row=>row.code||''),
       runtimeTaskProblemMessages:runtimeTaskProblemRows.map(row=>row.message||''),
       runtimeProblemsPanelTaskRows:document.querySelectorAll('#problems-content .problem-row[data-problem-kind="task"]').length,
       runtimeDebugTreeActive:!!(runtimeDebugTree&&runtimeDebugTree.classList.contains('active')),
@@ -42630,7 +42775,8 @@ function extensionRuntimeDomSelfCheckSnapshot(){
       && snapshot.runtimeTaskStopButtons>=1
       && snapshot.runtimeRunStates.includes('done')&&snapshot.runtimeRunStates.includes('started')
       && snapshot.runtimeRunCommands.includes('echo selftest task')
-      && snapshot.runtimeTaskProblemCount>=1&&snapshot.runtimeTaskProblemSources.some(value=>value.includes('Selftest Task'))&&snapshot.runtimeTaskProblemMessages.some(value=>value.includes('Selftest task warning'))&&snapshot.runtimeProblemsPanelTaskRows>=1
+      && snapshot.runtimeTaskBackgroundStates.includes('ready')&&snapshot.runtimeTaskBackgroundReadyChips>=1&&snapshot.runtimeTaskBackgroundActiveChips>=1
+      && snapshot.runtimeTaskProblemCount>=1&&snapshot.runtimeTaskProblemSources.some(value=>value.includes('selftest-owner'))&&snapshot.runtimeTaskProblemCodes.some(value=>value.includes('TS123'))&&snapshot.runtimeTaskProblemMessages.some(value=>value.includes('Selftest task warning'))&&snapshot.runtimeProblemsPanelTaskRows>=1
       && snapshot.runtimeDebugTreeActive&&snapshot.runtimeDebugTreeRows>=1&&snapshot.runtimeDebugTreeActions>=6&&['workbench.action.debug.continue','workbench.action.debug.pause','workbench.action.debug.stepOver','workbench.action.debug.stepInto','workbench.action.debug.stepOut','workbench.action.debug.stop'].every(command=>snapshot.runtimeDebugTreeCommands.includes(command))
       && snapshot.runtimeActionSmoke.taskPrompt.includes('selftest.task')&&snapshot.runtimeActionSmoke.taskPrompt.includes('Required fields: command')
       && snapshot.runtimeActionSmoke.debugPrompt.includes('selftest.debug')&&snapshot.runtimeActionSmoke.debugPrompt.includes('Launch template')&&snapshot.runtimeActionSmoke.debugPrompt.includes('program')

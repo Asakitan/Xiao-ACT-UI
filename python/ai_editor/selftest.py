@@ -5164,12 +5164,12 @@ def test_phase1_ai_editor_regressions() -> None:
             and "--chat-workflow-width:144px;" in html
              and "appearance:none; -webkit-appearance:none; line-height:20px;" in html
              and ".chat-select-chip { width:150px; max-width:208px; padding:0 9px; cursor:pointer; flex:0 1 150px; }" in html
-             and ".chat-model-inline { width:var(--chat-model-width); max-width:var(--chat-model-width); justify-content:space-between; font-family:var(--mono); flex:0 0 var(--chat-model-width); text-align:left; }" in html
+             and ".chat-model-inline { width:var(--chat-model-width); min-width:var(--chat-model-width); max-width:var(--chat-model-width); inline-size:var(--chat-model-width); min-inline-size:var(--chat-model-width); max-inline-size:var(--chat-model-width); justify-content:space-between; font-family:var(--mono); flex:0 0 var(--chat-model-width); flex-basis:var(--chat-model-width); text-align:left; }" in html
              and ".chat-control-trigger { display:inline-flex; align-items:center; gap:4px; justify-content:space-between;" in html
              and "border-radius:999px!important; background:color-mix(in srgb,var(--bg3) 88%,#000); appearance:none!important; -webkit-appearance:none!important;" in html
-             and "#chat-model-menu { width:var(--chat-model-width); flex:0 0 var(--chat-model-width); min-width:var(--chat-model-width); }" in html
+             and "#chat-model-menu { width:var(--chat-model-width)!important; min-width:var(--chat-model-width)!important; max-width:var(--chat-model-width)!important; inline-size:var(--chat-model-width)!important; min-inline-size:var(--chat-model-width)!important; max-inline-size:var(--chat-model-width)!important; flex:0 0 var(--chat-model-width)!important; flex-basis:var(--chat-model-width)!important; }" in html
              and ".chat-control-trigger.provider { width:var(--chat-provider-width); min-width:var(--chat-provider-width); max-width:var(--chat-provider-width); flex:0 0 var(--chat-provider-width); }" in html
-             and ".chat-control-trigger.model { width:var(--chat-model-width); min-width:var(--chat-model-width); max-width:var(--chat-model-width); flex:0 0 var(--chat-model-width); }" in html
+             and ".chat-control-trigger.model { width:var(--chat-model-width)!important; min-width:var(--chat-model-width)!important; max-width:var(--chat-model-width)!important; inline-size:var(--chat-model-width)!important; min-inline-size:var(--chat-model-width)!important; max-inline-size:var(--chat-model-width)!important; flex:0 0 var(--chat-model-width)!important; flex-basis:var(--chat-model-width)!important; }" in html
              and ".chat-control-trigger.agent { width:var(--chat-agent-width); min-width:var(--chat-agent-width); max-width:var(--chat-agent-width); flex:0 0 var(--chat-agent-width); }" in html
              and ".chat-control-trigger.workflow { width:var(--chat-workflow-width); min-width:var(--chat-workflow-width); max-width:var(--chat-workflow-width); flex:0 0 var(--chat-workflow-width); }" in html
             and ".chat-control-menu { position:relative; display:inline-flex; align-items:center; flex:0 0 auto; min-width:0; align-self:stretch; z-index:3; }" in html
@@ -5326,7 +5326,7 @@ def test_phase1_ai_editor_regressions() -> None:
            and ".chat-control-trigger::before { content:''; position:absolute; inset:-3px; border-radius:999px; }" in html
            and ".chat-control-trigger .control-caret { font-size:8px; opacity:.82; margin-left:4px; flex:0 0 auto; color:var(--fg-dim); }" in html
            and ".chat-control-trigger.provider { width:var(--chat-provider-width); min-width:var(--chat-provider-width); max-width:var(--chat-provider-width); flex:0 0 var(--chat-provider-width); }" in html
-           and ".chat-control-trigger.model { width:var(--chat-model-width); min-width:var(--chat-model-width); max-width:var(--chat-model-width); flex:0 0 var(--chat-model-width); }" in html
+           and ".chat-control-trigger.model { width:var(--chat-model-width)!important; min-width:var(--chat-model-width)!important; max-width:var(--chat-model-width)!important; inline-size:var(--chat-model-width)!important; min-inline-size:var(--chat-model-width)!important; max-inline-size:var(--chat-model-width)!important; flex:0 0 var(--chat-model-width)!important; flex-basis:var(--chat-model-width)!important; }" in html
            and ".chat-control-trigger.workflow { width:var(--chat-workflow-width); min-width:var(--chat-workflow-width); max-width:var(--chat-workflow-width); flex:0 0 var(--chat-workflow-width); }" in html
            and "#chat-provider-menu { width:var(--chat-provider-width); flex-basis:var(--chat-provider-width); }" in html
            and "#chat-agent-menu { width:var(--chat-agent-width); flex-basis:var(--chat-agent-width); }" in html
@@ -14385,6 +14385,8 @@ console.log("extension setting schema helpers ok");
            and "const extensionRuntimeDebugSessions=new Map();" in html
            and "let extensionRuntimeTaskProblems=[];" in html
            and "function extensionRuntimeTaskProblemRows(record,result)" in html
+           and "function extensionRuntimeTaskProblemMatcherRows(record,result)" in html
+           and "function extensionRuntimeTaskBackgroundState(record,result)" in html
            and "function refreshExtensionRuntimeTaskProblems(record,result)" in html
            and "function renderExtensionRuntimeDebugSessionTree()" in html
            and "function runExtensionDebugCommand(command,label,sessionKey)" in html
@@ -14393,6 +14395,10 @@ console.log("extension setting schema helpers ok");
            and "stop.dataset.runtimeTaskStop='1';" in html
            and "function updateExtensionRuntimeTaskLifecycle(data)" in html
            and "chip.dataset.runtimeRunBackground=row.isBackground?'1':'0';"
+           in html
+           and "chip.dataset.runtimeRunBackgroundState=String(row.backgroundState||'');"
+           in html
+           and "chip.dataset.runtimeRunBackgroundReady=row.backgroundReady?'1':'0';"
            in html
            and "chip.dataset.runtimeRunPanel=String(row.presentationPanel||'');"
            in html
@@ -14424,9 +14430,14 @@ console.log("extension setting schema helpers ok");
            and "runtimeDebugSessionChips:runtimeRunStrip?runtimeRunStrip.querySelectorAll('.extension-runtime-run-chip[data-runtime-run-kind=\"debug\"]').length:0" in html
            and "runtimeRunStates:runtimeRunStrip?Array.from(runtimeRunStrip.querySelectorAll('.extension-runtime-run-chip')).map(item=>item.dataset.runtimeRunState||''):[]" in html
            and "runtimeRunCommands:runtimeRunStrip?Array.from(runtimeRunStrip.querySelectorAll('.extension-runtime-run-chip')).map(item=>item.dataset.runtimeRunCommand||'').filter(Boolean):[]" in html
+           and "runtimeTaskBackgroundStates:runtimeRunStrip?Array.from(runtimeRunStrip.querySelectorAll('.extension-runtime-run-chip[data-runtime-run-kind=\"task\"]')).map(item=>item.dataset.runtimeRunBackgroundState||'').filter(Boolean):[]"
+           in html
+           and "runtimeTaskBackgroundReadyChips:runtimeRunStrip?runtimeRunStrip.querySelectorAll('.extension-runtime-run-chip[data-runtime-run-kind=\"task\"][data-runtime-run-background-ready=\"1\"]').length:0"
+           in html
            and "runtimeTaskStopButtons:runtimeRunStrip?runtimeRunStrip.querySelectorAll('.extension-runtime-run-stop[data-runtime-task-stop=\"1\"]').length:0"
            in html
            and "runtimeTaskProblemCount:runtimeTaskProblemRows.length" in html
+           and "runtimeTaskProblemCodes:runtimeTaskProblemRows.map(row=>row.code||'')" in html
            and "runtimeProblemsPanelTaskRows:document.querySelectorAll('#problems-content .problem-row[data-problem-kind=\"task\"]').length" in html
            and "runtimeDebugTreeActive:!!(runtimeDebugTree&&runtimeDebugTree.classList.contains('active'))" in html
            and "runtimeDebugTreeCommands:runtimeDebugTree?Array.from(runtimeDebugTree.querySelectorAll('.extension-debug-session-action')).map(item=>item.dataset.debugAction||'').filter(Boolean):[]" in html
@@ -14441,6 +14452,10 @@ console.log("extension setting schema helpers ok");
            and "runtimeActionSmoke.taskStopButton=!!stopButton;" in html
            and "runtimeActionSmoke.taskStopCommand=runtimeExecutedCommands.some(item=>item.command==='workbench.action.tasks.terminate'&&item.args&&item.args[0]==='task-running-selftest');"
            in html
+           and "owner:'selftest-owner'" in html
+           and "beginsPattern:'Watching for file changes'" in html
+           and "snapshot.runtimeTaskBackgroundStates.includes('ready')" in html
+           and "snapshot.runtimeTaskProblemCodes.some(value=>value.includes('TS123'))" in html
            and "runtimeActionSmoke.debugPrompt=$('chat-input')?$('chat-input').value:'';" in html
            and "_terminals.filter(term=>term&&!previousTerminalIds.has(term.id)).map(term=>term.id).slice().forEach(id=>_closeTerminal(id));" in html
            and "showExtensionActionMenu(2,2" in html
@@ -14542,7 +14557,7 @@ console.log("extension setting schema helpers ok");
            and "snapshot.runtimeRunStripActive&&snapshot.runtimeTaskRunChips>=1&&snapshot.runtimeDebugSessionChips>=1" in html
            and "snapshot.runtimeRunStates.includes('done')&&snapshot.runtimeRunStates.includes('started')" in html
            and "snapshot.runtimeRunCommands.includes('echo selftest task')" in html
-           and "snapshot.runtimeTaskProblemCount>=1&&snapshot.runtimeTaskProblemSources.some(value=>value.includes('Selftest Task'))" in html
+           and "snapshot.runtimeTaskProblemCount>=1&&snapshot.runtimeTaskProblemSources.some(value=>value.includes('selftest-owner'))" in html
            and "snapshot.runtimeDebugTreeActive&&snapshot.runtimeDebugTreeRows>=1&&snapshot.runtimeDebugTreeActions>=6" in html
            and "snapshot.runtimeActionSmoke.taskPrompt.includes('selftest.task')&&snapshot.runtimeActionSmoke.taskPrompt.includes('Required fields: command')" in html
            and "snapshot.runtimeActionSmoke.debugPrompt.includes('selftest.debug')&&snapshot.runtimeActionSmoke.debugPrompt.includes('Launch template')&&snapshot.runtimeActionSmoke.debugPrompt.includes('program')" in html
