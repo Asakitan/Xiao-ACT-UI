@@ -303,6 +303,27 @@ body.window-resizing * { cursor:inherit !important; }
 
 /* ── Editor ── */
 .editor-area { flex:1; display:flex; flex-direction:column; overflow:hidden; position:relative; }
+.editor-surface-strip { display:none; align-items:center; gap:5px; min-height:28px; padding:3px 8px;
+  border-bottom:1px solid color-mix(in srgb,var(--border) 66%,transparent);
+  background:color-mix(in srgb,var(--bg2) 72%,var(--bg-editor)); color:var(--fg-dim);
+  font:11px var(--mono); overflow:hidden; }
+.editor-surface-strip.open { display:flex; }
+.editor-surface-strip[data-state="error"] { box-shadow:inset 2px 0 0 var(--fg-error); }
+.editor-surface-strip[data-state="warning"] { box-shadow:inset 2px 0 0 var(--fg-warning); }
+.editor-surface-strip[data-state="ready"] { box-shadow:inset 2px 0 0 color-mix(in srgb,var(--fg-success) 68%,transparent); }
+.editor-surface-strip-title { flex:0 0 auto; color:var(--fg); font:600 11px var(--sans); padding-right:3px; }
+.editor-surface-chip { display:inline-flex; align-items:center; gap:4px; min-width:0; max-width:170px; height:20px;
+  padding:0 6px; border:1px solid color-mix(in srgb,var(--border) 76%,transparent); border-radius:3px;
+  background:color-mix(in srgb,var(--bg3) 58%,transparent); color:var(--fg-dim); overflow:hidden; white-space:nowrap; }
+.editor-surface-chip strong { color:var(--fg); font-weight:600; overflow:hidden; text-overflow:ellipsis; }
+.editor-surface-chip.ready strong { color:var(--fg-success); }
+.editor-surface-chip.warning strong { color:var(--fg-warning); }
+.editor-surface-chip.error strong { color:var(--fg-error); }
+.editor-surface-chip.active strong { color:var(--fg-accent); }
+.editor-surface-chip.action { cursor:pointer; }
+.editor-surface-chip.action:hover,.editor-surface-chip.action:focus { outline:none; color:var(--fg);
+  border-color:var(--border-focus); background:var(--bg-hover); }
+.editor-surface-spacer { flex:1 1 auto; min-width:4px; }
 .editor-container { flex:1; display:flex; overflow:hidden; position:relative; }
 .line-numbers { width:50px; background:var(--bg-editor); color:var(--fg-dim); font:12px/1.5 var(--mono);
   padding:8px 8px 8px 0; text-align:right; overflow:hidden; user-select:none; flex-shrink:0; }
@@ -4374,6 +4395,7 @@ pre.code-block { overflow:visible; }
           <kbd>⚙ Settings</kbd> 配置 API Key &nbsp;→&nbsp; 在下方 Assistant 面板开始对话
         </div>
       </div>
+      <div class="editor-surface-strip" id="editor-surface-strip" role="status" aria-live="polite" aria-label="Editor language and diff status"></div>
       <div class="editor-container" id="editor-container" style="display:none">
         <div class="line-numbers" id="line-nums">1</div>
         <div class="editor-sticky-scroll" id="editor-sticky-scroll" aria-hidden="true"></div>
@@ -13568,6 +13590,8 @@ function showEditorArea(){
 function hideEditorArea(){
   _editorVis=false;
   $('tb-toggle-editor').classList.remove('active');
+  const surface=$('editor-surface-strip');
+  if(surface)surface.classList.remove('open');
   _applyPaneVisibility();
   _clampLayoutDimensions();
 }
@@ -15667,6 +15691,79 @@ function syncEditorSurfaceLanguageFeatureState(state){
   });
   updateEditorLanguageFeatureState('diff',diff.state==='dirty'?'ready':'empty',diff);
 }
+function editorSurfaceChipState(kind,value){
+  const text=String(kind||'');
+  if(text==='diagnostics')return (Number(value&&value.errors)||0)>0?'error':((Number(value&&value.warnings)||0)>0?'warning':'ready');
+  if(text==='diff')return (Number(value&&value.total)||0)>0?'active':'ready';
+  if(text==='formatting')return (Number(value&&value.providerCount)||0)>0||value&&value.formatOnSave?'ready':'warning';
+  if(text==='terminal')return value&&value.workspaceReady===false?'warning':'ready';
+  return 'ready';
+}
+function renderEditorSurfaceStrip(state){
+  const host=$('editor-surface-strip');
+  if(!host)return null;
+  const s=isPlainObject(state)?state:(_editorSurfaceState||{});
+  const lang=isPlainObject(s.language)?s.language:{};
+  const diag=isPlainObject(s.diagnostics)?s.diagnostics:{};
+  const diff=isPlainObject(s.diff)?s.diff:{};
+  const formatting=isPlainObject(s.formatting)?s.formatting:{};
+  const terminal=isPlainObject(s.terminal)?s.terminal:{};
+  const workspace=isPlainObject(s.workspace)?s.workspace:{};
+  const status=String(s.state||'ready');
+  host.classList.add('open');
+  host.dataset.state=status;
+  host.dataset.editorSurfaceStrip='1';
+  host.dataset.languageId=String(lang.languageId||editorLang||'plaintext');
+  host.dataset.providerCount=String(lang.providerCount||0);
+  host.dataset.formatProviderCount=String(formatting.providerCount||0);
+  host.dataset.formatOnSave=formatting.formatOnSave?'1':'0';
+  host.dataset.codeActionsOnSaveCount=String(formatting.codeActionsOnSaveCount||Object.keys(formatting.codeActionsOnSave||{}).length||0);
+  host.dataset.diagnosticCount=String(diag.count||0);
+  host.dataset.diagnosticErrors=String(diag.errors||0);
+  host.dataset.diagnosticWarnings=String(diag.warnings||0);
+  host.dataset.diffTotal=String(diff.total||0);
+  host.dataset.diffHunks=String(diff.hunks||0);
+  host.dataset.workspaceSource=String(workspace.source||'');
+  host.dataset.workspaceRoot=String(workspace.root||'');
+  host.dataset.terminalProfile=String(terminal.profile||'');
+  host.dataset.terminalWorkspaceReady=terminal.workspaceReady===false?'0':'1';
+  host.innerHTML='';
+  const title=document.createElement('span');
+  title.className='editor-surface-strip-title';
+  title.textContent=status==='error'?'Editor Issues':(status==='warning'?'Editor Check':'Editor Ready');
+  host.appendChild(title);
+  const addChip=(kind,label,value,detail,action,stateOverride)=>{
+    const chip=document.createElement(action?'button':'span');
+    if(action)chip.type='button';
+    chip.className='editor-surface-chip '+(stateOverride||editorSurfaceChipState(kind,{...value,workspaceReady:terminal.workspaceReady}))+(action?' action':'');
+    chip.dataset.editorSurfaceChip=kind;
+    chip.title=detail||label;
+    chip.setAttribute('aria-label',detail||label);
+    const name=document.createElement('span');name.textContent=label;
+    const strong=document.createElement('strong');strong.textContent=String(value&&value.text!==undefined?value.text:value||'0');
+    chip.appendChild(name);chip.appendChild(strong);
+    if(action)chip.onclick=ev=>{ev.preventDefault();action()};
+    host.appendChild(chip);
+    return chip;
+  };
+  addChip('language','Lang',{text:String(lang.languageId||editorLang||'text')},String(lang.message||'Language providers')+'\nProviders: '+String(lang.providerCount||0),null,'ready');
+  addChip('providers','Providers',{text:String(lang.providerCount||0)},'Dynamic language providers registered for this language');
+  addChip('diagnostics','Problems',{text:String(diag.count||0),errors:Number(diag.errors)||0,warnings:Number(diag.warnings)||0},
+    diag.message||'Diagnostics',
+    ()=>activateBottomPanelTab(document.querySelector('.ptab[data-ptab="problems"]')));
+  addChip('formatting','Format',{text:String(formatting.providerCount||0)+(formatting.formatOnSave?' + save':'')},
+    'Formatters: '+String(formatting.providerCount||0)+(formatting.defaultFormatter?'\nDefault: '+formatting.defaultFormatter:''),
+    ()=>formatDocument({quiet:false}));
+  addChip('diff','Diff',{text:String(diff.total||0),total:Number(diff.total)||0},
+    diff.message||'Dirty diff',
+    ()=>openActiveEditorDirtyDiff());
+  const spacer=document.createElement('span');spacer.className='editor-surface-spacer';host.appendChild(spacer);
+  addChip('terminal','Terminal',{text:String(terminal.profile||'shell')},
+    [terminal.profile?('Terminal: '+terminal.profile):'',terminal.cwd?('cwd: '+terminal.cwd):'',workspace.root?('workspace: '+workspace.root):''].filter(Boolean).join('\n'),
+    ()=>activateBottomPanelTab(document.querySelector('.ptab[data-ptab="terminal"]')),
+    terminal.workspaceReady===false?'warning':'ready');
+  return host;
+}
 function renderEditorSurfaceStatus(state){
   _editorSurfaceState=state||_editorSurfaceState;
   const el=$('status-editor-surface');if(!el)return _editorSurfaceState;
@@ -15694,6 +15791,7 @@ function renderEditorSurfaceStatus(state){
     'Diff: '+String(diff.total||0)
   ].filter(Boolean).join('\n');
   syncEditorSurfaceLanguageFeatureState(s);
+  renderEditorSurfaceStrip(s);
   return _editorSurfaceState;
 }
 async function refreshEditorSurfaceState(opts){
@@ -50728,6 +50826,11 @@ function editorDirtyDiffSelfCheckSnapshot(){
   const oldActive=activeTab,oldTabs=tabs.map(t=>({...t})),oldValue=ed.value,oldDirty=editorDirty,oldLang=editorLang;
   const oldDiagnostics=Array.isArray(_editorDiagnostics)?_editorDiagnostics.slice():[],oldDiagnosticLength=_editorDiagnosticContentLength;
   const oldProblemsFilter=Object.assign({},_editorProblemsFilter||{});
+  const oldSurfaceState=_editorSurfaceState;
+  const surfaceEl=$('editor-surface-strip');
+  const oldSurfaceHtml=surfaceEl?surfaceEl.innerHTML:'';
+  const oldSurfaceClass=surfaceEl?surfaceEl.className:'';
+  const oldSurfaceDataset=surfaceEl?Object.assign({},surfaceEl.dataset):{};
   try{
     const id=900000+Math.floor(Math.random()*1000);
     const tab={id,name:'diff-selfcheck.txt',content:'alpha\nbeta\nold\nomega',originalContent:'alpha\nbeta\nold\nomega',language:'plaintext',cursor:0,filePath:'',workspacePath:'',runtimeMode:'text',customEditor:null,webview:null};
@@ -50780,6 +50883,20 @@ function editorDirtyDiffSelfCheckSnapshot(){
     renderEditorDiagnostics(_editorDiagnostics);
     renderProblemsRows(editorAllProblemRows(_editorDiagnostics));
     renderEditorVisualDecorations();
+    renderEditorSurfaceStatus({
+      ok:true,
+      state:'warning',
+      message:'Selfcheck editor surface state',
+      workspace:{root:'E:/VC/SAO-UI/sao_auto',source:'selfcheck'},
+      terminal:{profile:'Windows PowerShell',cwd:'E:/VC/SAO-UI/sao_auto',workspaceReady:true},
+      language:{languageId:'plaintext',providerCount:3,message:'Language: plaintext'},
+      diagnostics:{state:'warning',count:2,errors:1,warnings:1,message:'Diagnostics: 2'},
+      formatting:{state:'ready',providerCount:1,formatOnSave:true,defaultFormatter:'selftest.formatter',codeActionsOnSave:{'source.fixAll':true}},
+      diff:{state:'dirty',total:dirty.summary.total,hunks:hunkCount,added:dirty.summary.added,modified:dirty.summary.modified,removed:dirty.summary.removed,message:'Diff: '+dirty.summary.total}
+    });
+    const surfaceStrip=$('editor-surface-strip');
+    const surfaceChips=surfaceStrip?Array.from(surfaceStrip.querySelectorAll('[data-editor-surface-chip]')):[];
+    const surfaceActionKinds=surfaceChips.filter(chip=>chip.tagName==='BUTTON').map(chip=>chip.dataset.editorSurfaceChip||'');
     const visualLayer=$('editor-visual-layer');
     const visualSnapshot={
       renderCount:visualLayer?Number(visualLayer.dataset.visualRenderCount||0):0,
@@ -50904,6 +51021,16 @@ function editorDirtyDiffSelfCheckSnapshot(){
       featureIssueCount:featureAggregate.issueCount,
       featureSummaryLabel:featureAggregate.label,
       featureSummaryText:featureAggregate.summary.join(' | '),
+      surfaceStripOpen:surfaceStrip?surfaceStrip.classList.contains('open'):false,
+      surfaceStripState:surfaceStrip?surfaceStrip.dataset.state:'',
+      surfaceStripProviderCount:surfaceStrip?surfaceStrip.dataset.providerCount:'',
+      surfaceStripFormatOnSave:surfaceStrip?surfaceStrip.dataset.formatOnSave:'',
+      surfaceStripDiagnostics:surfaceStrip?surfaceStrip.dataset.diagnosticCount:'',
+      surfaceStripDiagnosticErrors:surfaceStrip?surfaceStrip.dataset.diagnosticErrors:'',
+      surfaceStripDiffTotal:surfaceStrip?surfaceStrip.dataset.diffTotal:'',
+      surfaceStripTerminal:surfaceStrip?surfaceStrip.dataset.terminalProfile:'',
+      surfaceChipKinds:surfaceChips.map(chip=>chip.dataset.editorSurfaceChip||''),
+      surfaceActionKinds,
       problemCount:problemRows.length,
       problemDiagnosticCount:diagnosticRows.length,
       problemDiffCount:diffRows.length,
@@ -50964,6 +51091,13 @@ function editorDirtyDiffSelfCheckSnapshot(){
         ((featureState.features&&featureState.features.diff&&featureState.features.diff.hunks)||0)>0&&
         featureAggregate.activeFeatures.includes('diff')&&featureAggregate.diffTotal>0&&
         String(featureAggregate.label||'').includes('diff')&&
+        surfaceStrip&&surfaceStrip.classList.contains('open')&&surfaceStrip.dataset.state==='warning'&&
+        surfaceStrip.dataset.providerCount==='3'&&surfaceStrip.dataset.formatOnSave==='1'&&
+        surfaceStrip.dataset.diagnosticCount==='2'&&surfaceStrip.dataset.diagnosticErrors==='1'&&
+        Number(surfaceStrip.dataset.diffTotal||0)>0&&surfaceStrip.dataset.terminalProfile==='Windows PowerShell'&&
+        surfaceChips.map(chip=>chip.dataset.editorSurfaceChip||'').join(',').includes('language')&&
+        surfaceChips.map(chip=>chip.dataset.editorSurfaceChip||'').join(',').includes('formatting')&&
+        surfaceActionKinds.includes('diagnostics')&&surfaceActionKinds.includes('diff')&&surfaceActionKinds.includes('terminal')&&
         problemRows.length>=2&&diagnosticRows.length>=1&&diffRows.length>=1&&
         quickFixButtons.length>=1&&applyQuickFixButtons.length>=1&&diffButtons.length>=1&&
         navButtons.length>=2&&activeRowsAfterFocus.length===1&&activeDatasetAfterFocus==='1'&&
@@ -50985,6 +51119,13 @@ function editorDirtyDiffSelfCheckSnapshot(){
     tabs=oldTabs;activeTab=oldActive;ed.value=oldValue;editorDirty=oldDirty;editorLang=oldLang;
     _editorDiagnostics=oldDiagnostics;_editorDiagnosticContentLength=oldDiagnosticLength;
     _editorProblemsFilter=oldProblemsFilter;
+    _editorSurfaceState=oldSurfaceState;
+    if(surfaceEl){
+      surfaceEl.innerHTML=oldSurfaceHtml;
+      surfaceEl.className=oldSurfaceClass;
+      Object.keys(surfaceEl.dataset).forEach(k=>delete surfaceEl.dataset[k]);
+      Object.assign(surfaceEl.dataset,oldSurfaceDataset);
+    }
     _editorDirtyDiffCache={key:'',decorations:[],summary:null};
     renderTabs();updateLineNums();renderEditorVisualDecorations();renderProblemsRows(editorAllProblemRows(_editorDiagnostics));
   }

@@ -7321,17 +7321,27 @@ def test_phase1_ai_editor_regressions() -> None:
             and "function explorerFolderIcon(name,expanded,isRoot)" in html)
     _check("frontend exposes VS Code-like editor surface status",
            "id=\"status-editor-surface\"" in html
+           and "id=\"editor-surface-strip\"" in html
            and "function editorSurfaceStatePayload()" in html
            and "function refreshEditorSurfaceState(opts)" in html
+           and "function renderEditorSurfaceStrip(state)" in html
+           and "function editorSurfaceChipState(kind,value)" in html
            and "call('editor_surface_state'" in html
+           and "dataset.editorSurfaceStrip='1'" in html
            and "dataset.workspaceSource" in html
            and "dataset.terminalProfile" in html
            and "dataset.languageProviders" in html
            and "dataset.formatProviders" in html
+           and "dataset.providerCount=String(lang.providerCount||0);" in html
+           and "dataset.formatOnSave=formatting.formatOnSave?'1':'0';" in html
            and "dataset.diagnostics" in html
            and "dataset.diffTotal" in html
            and "dataset.settingsScopes" in html
-           and "scheduleEditorSurfaceStateRefresh" in html)
+           and "scheduleEditorSurfaceStateRefresh" in html
+           and "data-editor-surface-chip" in html
+           and "activateBottomPanelTab(document.querySelector('.ptab[data-ptab=\"problems\"]'))" in html
+           and "formatDocument({quiet:false})" in html
+           and "openActiveEditorDirtyDiff()" in html)
     _check("frontend invokes dynamic editor language providers",
            "id=\"editor-suggest\"" in html
            and "id=\"editor-hover\"" in html
