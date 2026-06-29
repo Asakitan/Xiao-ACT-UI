@@ -82,9 +82,16 @@ class SAOPlayerGUIDpsThemeMixin:
 
     def _set_all_themes(self, theme: str) -> None:
         """将所有面板设置为同一主题。"""
+        overlay_map = getattr(self, '_THEME_OVERLAY_MAP', None)
+        if not overlay_map:
+            try:
+                self._apply_act_panel_theme(theme)
+            except Exception:
+                pass
+            return
         cfg = self._cfg_settings_ref or self.settings
         themes = {}
-        for key in self._THEME_OVERLAY_MAP:
+        for key in overlay_map:
             themes[key] = theme
             self._apply_theme_to_overlay(key, theme)
         cfg.set('panel_themes', themes)

@@ -333,6 +333,22 @@ class SAOPopUpMenu:
         elif force:
             self._state.child_rows = []
             self._reset_row_anim()
+        # Resize GPU window if new rows exceed reserved size
+        new_max = _CY_UI.popup_max_child_rows(self.child_menus)
+        if new_max > getattr(self, '_reserved_rows', 0) and self._gpu_win is not None:
+            old_reserved = self._reserved_rows
+            self._reserved_rows = new_max
+            from ui_gpu import composer
+            _old_w, old_h = composer.window_size_reserved(self._state, old_reserved)
+            win_w, win_h = composer.window_size_reserved(self._state, new_max)
+            win_w = max(win_w, 200)
+            win_h = max(win_h, 200)
+            try:
+                gx, gy = getattr(self, '_gpu_pos', (0, 0))
+                self._gpu_win.set_geometry(gx, gy, win_w, win_h)
+                self._gpu_pos = (gx, gy)
+            except Exception:
+                pass
         if self._gpu_win is not None:
             self._gpu_win.request_redraw()
 

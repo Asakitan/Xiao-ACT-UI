@@ -364,6 +364,7 @@ class SAOPlayerGUIPanelsMixin:
 
     _PLATFORM_PANEL_ATTRS = (
         '_act_plugin_manager_panel',
+        '_process_selector_panel',
     )
 
     def _act_panel_theme(self) -> str:
@@ -378,11 +379,20 @@ class SAOPlayerGUIPanelsMixin:
         """Apply the grouped panel theme to all registered Tk plugin panels."""
         theme = 'light' if str(theme or self._act_panel_theme()).lower() == 'light' else 'dark'
         try:
-            _set_sao_panel_theme(theme)
+            _set_sao_panel_theme(theme, repaint_registered=True)
         except Exception:
             pass
         for attr in self._PLATFORM_PANEL_ATTRS:
             panel = getattr(self, attr, None)
+            if panel is None:
+                continue
+            refresh = getattr(panel, 'refresh_theme', None)
+            if callable(refresh):
+                try:
+                    refresh()
+                except Exception:
+                    pass
+                continue
             win = getattr(panel, '_win', None)
             try:
                 if win and win.winfo_exists():

@@ -379,15 +379,24 @@ class SAOPlayerGUIFloatHandlersMixin:
         self._sync_float_button_geometry(show=True)
 
     def _start_topmost_loop(self):
-        """Re-assert TOPMOST on the GPU trigger button every 2s."""
+        """Re-assert TOPMOST on the GPU trigger button every 2s.
+
+        Skip while SAO menu or fisheye is active — the menu's own
+        z-order management handles topmost, and re-raising the trigger
+        button here would push it above panels rendered on the fisheye.
+        """
         if getattr(self, '_destroyed', False):
             return
-        btn = getattr(self, '_float_gpu_button', None)
-        if btn is not None and getattr(btn, '_visible', False):
-            try:
-                btn.raise_topmost()
-            except Exception:
-                pass
+        menu = getattr(self, '_sao_menu', None)
+        menu_open = menu is not None and getattr(menu, 'visible', False)
+        fisheye_active = getattr(self, '_fisheye_ov', None) is not None
+        if not menu_open and not fisheye_active:
+            btn = getattr(self, '_float_gpu_button', None)
+            if btn is not None and getattr(btn, '_visible', False):
+                try:
+                    btn.raise_topmost()
+                except Exception:
+                    pass
         try:
             self.root.after(2000, self._start_topmost_loop)
         except Exception:

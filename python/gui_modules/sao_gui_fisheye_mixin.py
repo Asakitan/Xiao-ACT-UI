@@ -1121,8 +1121,9 @@ class SAOPlayerGUIFisheyeMixin:
             if s == 'init':
                 if _latest_frame[0] is not None:
                     try:
+                        _fade_target = 0.95 if _is_procedural_main else 1.0
                         presenter.set_alpha(0.0)
-                        presenter.start_fade(1.0, _FADEIN_DUR)
+                        presenter.start_fade(_fade_target, _FADEIN_DUR)
                         _fade_started[0] = True
                         gpu_win.request_redraw()
                     except Exception:
@@ -1154,7 +1155,7 @@ class SAOPlayerGUIFisheyeMixin:
             elif s == 'fadeout':
                 if _actual_should_run and not _stop_requested[0]:
                     try:
-                        presenter.start_fade(1.0, _FADEIN_DUR * 0.55)
+                        presenter.start_fade(0.97 if _is_procedural_main else 1.0, _FADEIN_DUR * 0.55)
                         gpu_win.request_redraw()
                     except Exception:
                         pass
@@ -1448,17 +1449,19 @@ class SAOPlayerGUIFisheyeMixin:
                                         col += white * head * col_vis * 0.08;
                                     }
 
-                                    // gauge rings — offset from center so barrel distortion deforms them
-                                    vec2 ring_center = vec2(
-                                        0.03 * sin(t * 0.15),
-                                        0.02 * cos(t * 0.12)
-                                    );
-                                    vec2 rcuv = cuv - ring_center;
-                                    float rcr = length(rcuv);
-                                    float rca = atan(rcuv.y, rcuv.x);
+                                    // gauge rings — per-ring offset, inner=fast outer=slow
                                     for (int i = 0; i < 4; i++) {
                                         float fi = float(i);
                                         float radius = 0.10 + fi * 0.12;
+                                        float drift_spd = 0.25 / (1.0 + fi * 0.8);
+                                        float drift_amp = 0.03 + fi * 0.005;
+                                        vec2 rc_off = vec2(
+                                            drift_amp * sin(t * drift_spd + fi * 1.2),
+                                            drift_amp * cos(t * drift_spd * 0.85 + fi * 2.1)
+                                        );
+                                        vec2 rcuv = cuv - rc_off;
+                                        float rcr = length(rcuv);
+                                        float rca = atan(rcuv.y, rcuv.x);
                                         float ring = smoothstep(0.003, 0.0, abs(rcr - radius));
                                         float seg = smoothstep(0.0, 0.015, abs(sin(rca * (8.0 + fi * 4.0) + t * (0.18 + fi * 0.10))));
                                         float pulse = 0.5 + 0.5 * sin(t * (0.45 + fi * 0.3) + fi * 1.57);
@@ -1475,14 +1478,21 @@ class SAOPlayerGUIFisheyeMixin:
                                         col += rc * minor * 0.12 * pulse;
                                     }
 
-                                    // scanning beams — follow ring center
+                                    // scanning beams — follow mid-ring drift
+                                    vec2 beam_off = vec2(
+                                        0.035 * sin(t * 0.18),
+                                        0.035 * cos(t * 0.15)
+                                    );
+                                    vec2 bcuv = cuv - beam_off;
+                                    float bcr = length(bcuv);
+                                    float bca = atan(bcuv.y, bcuv.x);
                                     for (int b = 0; b < 3; b++) {
                                         float fb = float(b);
                                         float bspd = 0.18 + fb * 0.10;
                                         float beam_a = t * bspd + fb * 2.094;
-                                        float bda = mod(rca - beam_a + 6.2832, 6.2832);
+                                        float bda = mod(bca - beam_a + 6.2832, 6.2832);
                                         float beam = smoothstep(0.22, 0.0, bda) * exp(-bda * 3.5);
-                                        beam *= smoothstep(0.46, 0.03, rcr);
+                                        beam *= smoothstep(0.46, 0.03, bcr);
                                         float bp = 0.6 + 0.4 * sin(t * (0.6 + fb * 0.35));
                                         col += mix(white, teal, 0.35) * beam * 0.15 * bp;
                                     }

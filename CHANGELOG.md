@@ -2,6 +2,22 @@
 
 逐版本变更记录, 最新在前。本文件由 config.py 内联的历史注释迁出。
 
+## v5.2.3: AI Editor text editor command 运行时追踪补齐, fisheye/弹窗/面板主题细节修整.
+
+  - **AI Editor runtime surfaces**:
+    - `ai_editor.node_ext_host.js` / `extension_host.py` 为动态注册命令补充 `kind` / `editorRequired` 元数据与 dispose 生命周期回传,
+      `textEditorCommand` 现在会进入 Python 侧 runtime registry。
+    - `ai_editor.app` 的 `list_extension_runtime_surfaces()` / 命令面板汇总加入 `nodeCommands`、`runtimeKind`、`textEditorCommands` 统计与 surface evidence。
+    - `web/ai_editor_app.html` 与 `ai_editor.selftest.py` 同步支持 `TextEditorCommand` 行、筛选、动作和 DOM 自检快照。
+  - **GUI / overlay polish**:
+    - `sao_gui_fisheye_mixin` 微调 procedural 鱼眼淡入目标、fadeout 恢复值，以及 ring / beam 漂移轨迹。
+    - `sao_gui_float_handlers_mixin` 在 SAO 菜单或 fisheye 活跃时暂停 GPU trigger button 的 topmost 重提, 避免按钮压住面板。
+    - `ui_gpu.popup` 在子菜单行数超出预留空间时自动扩展 GPU popup 几何尺寸。
+  - **面板主题 / 行为**:
+    - `sao_gui_panels_mixin` 把 `_process_selector_panel` 纳入平台主题刷新列表, 调主题时优先走 `refresh_theme()`。
+    - `sao_gui_dps_theme_mixin` 在 overlay 映射缺失时安全回退到统一 ACT panel 主题刷新。
+    - `sao_gui_link_animation_mixin` / `sao_theme.link_start` 继续平滑 LinkStart 焦点与阶段 FX 过渡, `sao_gui_menu_mixin` 移除临时的 NervGear 关闭后按钮重定位逻辑。
+
 ## v5.2.2: 脚本 compositor API 扩展、MMF 零拷贝图层接入、AI Editor 扩展 webview panel 运行时可观测性补齐.
 
   - **脚本 / SDK API**:
