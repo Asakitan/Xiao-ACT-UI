@@ -16400,6 +16400,9 @@ console.log("frontend built-in language fallback behavior ok");
            in node_ext_host_source
            and "async fetchTasks(filter)" in node_ext_host_source
            and "async executeTask(task)" in node_ext_host_source
+           and "function _taskNormalizeProblemMatchers(value)" in node_ext_host_source
+           and "if (item && typeof item === 'object')" in node_ext_host_source
+           and "return _plainBridgeValue(item);" in node_ext_host_source
            and "function _taskBridgeMetadata(task, executionSpec, extra = {})"
            in node_ext_host_source
            and "terminalReuseKey: panel === 'shared'" in node_ext_host_source
@@ -24466,12 +24469,32 @@ const vscode = require('vscode');
 async function activate() {
   vscode.tasks.registerTaskProvider('activation-task', {
     provideTasks() {
+      const activationMatcher = {
+        name: 'activation-schema-matcher',
+        owner: 'node-selftest-owner',
+        source: 'node-selftest-source',
+        background: {
+          activeOnStart: true,
+          beginsPattern: 'Watching node task',
+          endsPattern: 'Node task ready'
+        },
+        pattern: {
+          regexp: '^(.*):(\\d+):(\\d+): (warning|error) (NODE\\d+): (.*)$',
+          file: 1,
+          line: 2,
+          column: 3,
+          severity: 4,
+          code: 5,
+          message: 6
+        }
+      };
       return [new vscode.Task(
         { type: 'activation-task' },
         vscode.TaskScope.Workspace,
         'Activation Event Task',
         'activation',
         new vscode.ShellExecution('echo activation-task'),
+        ['$tsc', activationMatcher]
       )];
     },
   });
@@ -28104,6 +28127,26 @@ async function activate(context) {
     await new Promise(resolve => dapPipeServer.listen(dapPipePath, resolve));
     const providerDisposable = vscode.tasks.registerTaskProvider('node-selftest', {
       provideTasks() {
+        const schemaMatcher = {
+          name: 'node-schema-matcher',
+          owner: 'node-selftest-owner',
+          source: 'node-selftest-source',
+          fileLocation: ['relative', '${workspaceFolder}'],
+          background: {
+            activeOnStart: true,
+            beginsPattern: 'Watching node task',
+            endsPattern: 'Node task ready'
+          },
+          pattern: {
+            regexp: '^(.*):(\\d+):(\\d+): (warning|error) (NODE\\d+): (.*)$',
+            file: 1,
+            line: 2,
+            column: 3,
+            severity: 4,
+            code: 5,
+            message: 6
+          }
+        };
         const task = new vscode.Task(
           { type: 'node-selftest', command: 'echo' },
           vscode.TaskScope.Workspace,
@@ -28113,7 +28156,7 @@ async function activate(context) {
             cwd: context.extensionUri,
             env: { NODE_TASK_SELFTEST: '1' },
           }),
-          '$tsc'
+          ['$tsc', schemaMatcher]
         );
         task.group = vscode.TaskGroup.Build;
         task.group.isDefault = true;
@@ -34963,6 +35006,14 @@ process.stdin.resume();
                     if item.get("command") in {
                         "next", "stepIn", "stepOut", "pause", "continue"}
                 ]
+                node_task_problem_matchers = (
+                    node_task_debug_probe.get("taskProblemMatchers", [])
+                    if isinstance(node_task_debug_probe, dict) else [])
+                node_task_schema_matcher = (
+                    node_task_problem_matchers[1]
+                    if len(node_task_problem_matchers) > 1
+                    and isinstance(node_task_problem_matchers[1], dict)
+                    else {})
                 _check("node host task and debug lifecycles match VS Code API",
                        node_started is True
                        and node_task_debug_command_registered
@@ -34976,8 +35027,17 @@ process.stdin.resume();
                        == "Node Selftest Task"
                        and node_task_debug_probe.get("taskType")
                        == "node-selftest"
-                       and node_task_debug_probe.get("taskProblemMatchers")
-                       == ["$tsc"]
+                       and node_task_problem_matchers
+                       and node_task_problem_matchers[0] == "$tsc"
+                       and node_task_schema_matcher.get("owner")
+                       == "node-selftest-owner"
+                       and node_task_schema_matcher.get("source")
+                       == "node-selftest-source"
+                       and node_task_schema_matcher.get(
+                           "background", {}).get("endsPattern")
+                       == "Node task ready"
+                       and node_task_schema_matcher.get(
+                           "pattern", {}).get("message") == 6
                        and node_task_debug_probe.get("taskHasDefinedMatchers")
                        is True
                        and node_task_debug_probe.get("taskGroupId") == "build"
@@ -36159,6 +36219,17 @@ process.stdin.resume();
                 node_task_definition = (
                     node_task_payload.get("definition", {})
                     if isinstance(node_task_payload, dict) else {})
+                node_task_bridge_metadata = (
+                    node_task_run.get("metadata", {})
+                    if isinstance(node_task_run, dict) else {})
+                node_task_bridge_matchers = (
+                    node_task_bridge_metadata.get("problemMatchers", [])
+                    if isinstance(node_task_bridge_metadata, dict) else [])
+                node_task_bridge_schema_matcher = (
+                    node_task_bridge_matchers[1]
+                    if len(node_task_bridge_matchers) > 1
+                    and isinstance(node_task_bridge_matchers[1], dict)
+                    else {})
                 node_debug_config = (
                     node_debug_launch.get("config", {})
                     if isinstance(node_debug_launch, dict) else {})
@@ -36172,6 +36243,17 @@ process.stdin.resume();
                        and node_task_run.get("taskType") == "activation-task"
                        and node_task_run.get("taskCount", 0) >= 1
                        and node_task_definition.get("type") == "activation-task"
+                       and node_task_bridge_metadata.get(
+                           "problemMatcherCount", 0) >= 2
+                       and node_task_bridge_matchers
+                       and node_task_bridge_matchers[0] == "$tsc"
+                       and node_task_bridge_schema_matcher.get("owner")
+                       == "node-selftest-owner"
+                       and node_task_bridge_schema_matcher.get(
+                           "background", {}).get("beginsPattern")
+                       == "Watching node task"
+                       and node_task_bridge_schema_matcher.get(
+                           "pattern", {}).get("code") == 5
                        and isinstance(node_debug_launch, dict)
                        and node_debug_launch.get("ok") is True
                        and node_debug_launch.get("started") is True

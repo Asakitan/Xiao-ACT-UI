@@ -2461,7 +2461,18 @@ TaskGroup.Test = new TaskGroup('test', 'Test');
 
 function _taskNormalizeProblemMatchers(value) {
     if (typeof value === 'string') return [value];
-    if (Array.isArray(value)) return value.map(item => String(item));
+    if (Array.isArray(value)) {
+        return value
+            .filter(item => item !== undefined && item !== null)
+            .map(item => {
+                if (typeof item === 'string') return item;
+                if (item && typeof item === 'object') {
+                    return _plainBridgeValue(item);
+                }
+                return String(item);
+            });
+    }
+    if (value && typeof value === 'object') return [_plainBridgeValue(value)];
     return [];
 }
 
