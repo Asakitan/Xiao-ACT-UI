@@ -3872,7 +3872,9 @@ class NodeExtensionHost:
                 "notebook_deserialize_response",
                 "notebook_serialize_response",
                 "notebook_cell_status_bar_response",
-                "notebook_controller_response"}:
+                "notebook_controller_response",
+                "extension_task_execute_response",
+                "extension_debug_start_response"}:
             request_id = str(msg.get("requestId", ""))
             with self._notebook_request_lock:
                 pending = self._notebook_requests.get(request_id)
@@ -4662,6 +4664,32 @@ class NodeExtensionHost:
             payload["data"] = data
         else:
             payload["dataText"] = "" if data is None else str(data)
+        return self._notebook_request_result(
+            payload, default=default, timeout=timeout)
+
+    def request_extension_task_execute_result(
+            self,
+            task_type: str,
+            default: Any = None,
+            timeout: float = 5.0) -> Dict[str, Any]:
+        return self._notebook_request_result({
+            "type": "extension_task_execute_request",
+            "taskType": str(task_type or ""),
+        }, default=default, timeout=timeout)
+
+    def request_extension_debug_start_result(
+            self,
+            debug_type: str,
+            config: Optional[Dict[str, Any]] = None,
+            label: str = "",
+            default: Any = None,
+            timeout: float = 5.0) -> Dict[str, Any]:
+        payload: Dict[str, Any] = {
+            "type": "extension_debug_start_request",
+            "debugType": str(debug_type or ""),
+            "label": str(label or ""),
+            "config": config if isinstance(config, dict) else {},
+        }
         return self._notebook_request_result(
             payload, default=default, timeout=timeout)
 

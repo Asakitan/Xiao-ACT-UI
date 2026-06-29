@@ -5997,6 +5997,129 @@ async function _handleNotebookSerializeRequest(msg) {
     }
 }
 
+async function handleExtensionTaskExecuteRequest(msg) {
+    const requestId = String(msg.requestId || '');
+    const taskType = String(msg.taskType || msg.type || '').trim();
+    try {
+        if (!taskType) throw new Error('taskType is required');
+        await _activateKnownExtensionsForEvent(`onTaskType:${taskType}`);
+        const provider = _taskProviders.get(taskType);
+        if (!provider) throw new Error(`No task provider registered for type ${taskType}`);
+        const provided = await _callTaskProvider(provider, 'provideTasks');
+        const tasks = (Array.isArray(provided) ? provided : [])
+            .filter(task => _taskMatchesFilter(task, { type: taskType }));
+        const task = (Array.isArray(tasks) ? tasks : [])[0];
+        if (!task) throw new Error(`No task provided for type ${taskType}`);
+        if (task && typeof task === 'object'
+                && task.definition && !task.definition.type) {
+            task.definition.type = taskType;
+        }
+        const resolved = await _resolveTask(task);
+        const executionId = `task-request-${Date.now()}-${Math.floor(Math.random() * 10000)}`;
+        const executionSpec = _taskExecutionSpec(resolved);
+        send({
+            type: 'task_execute',
+            executionId,
+            task: _serializeTask(resolved),
+            commandLine: executionSpec.commandLine || '',
+            metadata: {
+                cwd: executionSpec.cwd,
+                env: executionSpec.env,
+                kind: executionSpec.kind,
+                requested: true,
+            },
+        });
+        send({
+            type: 'extension_task_execute_response',
+            requestId,
+            ok: true,
+            value: {
+                executionId,
+                task: _serializeTask(resolved),
+                commandLine: executionSpec.commandLine || '',
+                metadata: {
+                    cwd: executionSpec.cwd,
+                    env: executionSpec.env,
+                    kind: executionSpec.kind,
+                },
+                taskType,
+                taskCount: tasks.length,
+            },
+        });
+    } catch (err) {
+        send({
+            type: 'extension_task_execute_response',
+            requestId,
+            ok: false,
+            error: String(err && err.message || err),
+            value: { taskType },
+        });
+    }
+}
+
+async function handleExtensionDebugStartRequest(msg) {
+    const requestId = String(msg.requestId || '');
+    const debugType = String(msg.debugType || msg.type || '').trim();
+    try {
+        if (!debugType) throw new Error('debugType is required');
+        const rawConfig = msg.config && typeof msg.config === 'object'
+            ? msg.config
+            : {};
+        const config = {
+            type: debugType,
+            request: String(rawConfig.request || 'launch'),
+            name: String(rawConfig.name || msg.label || debugType || 'Debug'),
+            ...rawConfig,
+        };
+        await _activateKnownExtensionsForEvent('onDebug');
+        await _activateKnownExtensionsForEvent(`onDebugResolve:${debugType}`);
+        const providers = _debugConfigProviders.get(debugType) || [];
+        for (const entry of providers) {
+            const provider = entry && entry.provider;
+            if (provider && typeof provider.resolveDebugConfiguration === 'function') {
+                const resolved = await Promise.resolve(
+                    provider.resolveDebugConfiguration(
+                        undefined, { ...config }, _debugProviderToken()));
+                if (!resolved) throw new Error(`Debug configuration rejected for ${debugType}`);
+                Object.assign(config, resolved);
+            }
+        }
+        const session = {
+            id: `debug-request-${_nextDebugSessionHandle++}`,
+            type: String(config.type || debugType || 'debug'),
+            name: String(config.name || config.type || 'Debug'),
+            workspaceFolder: undefined,
+            configuration: { ...config },
+        };
+        _debugUpdateActive(session, null);
+        send({
+            type: 'debug_start',
+            session: _debugSessionPayload(session),
+            config: _plainBridgeValue(config || {}),
+            requested: true,
+        });
+        send({
+            type: 'extension_debug_start_response',
+            requestId,
+            ok: true,
+            value: {
+                started: true,
+                debugType,
+                config: _plainBridgeValue(config),
+                session: _debugSessionPayload(session),
+            },
+        });
+    } catch (err) {
+        send({
+            type: 'extension_debug_start_response',
+            requestId,
+            ok: false,
+            error: String(err && err.message || err),
+            value: { debugType },
+        });
+    }
+}
+
 function _debugUpdateActive(session, emitter) {
     _activeDebugSession = session || null;
     if (emitter) emitter.fire(_activeDebugSession);
@@ -15517,6 +15640,12 @@ async function handleMessage(msg) {
             break;
         case 'notebook_controller_execute_request':
             await _handleNotebookControllerExecuteRequest(msg);
+            break;
+        case 'extension_task_execute_request':
+            await handleExtensionTaskExecuteRequest(msg);
+            break;
+        case 'extension_debug_start_request':
+            await handleExtensionDebugStartRequest(msg);
             break;
         case 'lm_tool_request':
             await handleLmToolRequest(msg);

@@ -1036,10 +1036,10 @@ pre.code-block code .type { color:var(--fg-type); }
 
 /* Chat input */
 .chat-input-area { flex-shrink:0; background:linear-gradient(180deg, transparent 0, var(--bg) 18px);
-  padding:22px 12px 18px; max-width:none; margin:0 auto; width:100%; min-height:188px; box-sizing:border-box;
+  padding:24px 12px 20px; max-width:none; margin:0 auto; width:100%; min-height:204px; box-sizing:border-box;
   display:flex; justify-content:center; align-items:center; }
-.chat-input-area > div { width:min(66.666%, 1280px); min-width:min(760px, calc(100% - 24px));
-  max-width:1280px; display:flex; justify-content:center; }
+.chat-input-area > div { width:clamp(620px, 66.666%, 1280px); min-width:0;
+  max-width:calc(100% - 24px); display:flex; justify-content:center; }
 .chat-input-container { position:relative; border-radius:8px; border:1px solid var(--border);
   background:var(--bg3); transition:border-color .15s, box-shadow .35s, background .15s; overflow:visible;
   width:100%; min-width:0; max-width:none; min-height:144px;
@@ -1188,10 +1188,10 @@ pre.code-block code .type { color:var(--fg-type); }
 .chat-queue-badge { display:inline-flex; align-items:center; gap:4px; color:var(--fg-accent);
   font:10px/16px var(--mono); border:1px solid color-mix(in srgb,var(--fg-accent) 45%,var(--border));
   border-radius:999px; padding:0 6px; background:color-mix(in srgb,var(--fg-accent) 9%,transparent); }
-.chat-input-row { display:flex; gap:0; align-items:center; min-height:96px; flex:1 1 auto; }
+.chat-input-row { display:flex; gap:0; align-items:center; min-height:104px; flex:1 1 auto; }
 .chat-input { flex:1; background:transparent; color:var(--fg); border:none;
   padding:12px 13px 10px; font:13px/20px var(--sans); resize:none;
-  outline:none; min-height:92px; max-height:220px; }
+  outline:none; min-height:96px; max-height:220px; }
 .chat-input::placeholder { color:var(--fg-dim); }
 .send-btn { width:26px; height:26px; background:var(--btn); color:#fff; border:none; border-radius:5px;
   margin:0 8px 0 0; cursor:pointer; display:flex; align-items:center; justify-content:center;
@@ -38438,8 +38438,8 @@ function extensionRuntimeSurfaceAction(kind,item,row){
   if(kind==='LMProvider'&&id)return {type:'prepare-lm-provider',label:'Use',title:'Prepare this language-model provider in Assistant',target:id};
   if(kind==='ChatParticipant'&&id)return {type:'open-chat-participant',label:'Chat',title:'Open this chat participant in Assistant',target:id};
   if(kind==='ChatContext'&&id)return {type:'attach-chat-context',label:'Attach',title:'Attach this chat context provider',target:id};
-  if(kind==='TaskDefinition'&&id)return {type:'prepare-task-definition',label:'Task',title:'Prepare this extension task type in Assistant',target:id};
-  if(kind==='Debugger'&&id)return {type:'prepare-debugger',label:'Debug',title:'Prepare this extension debugger type in Assistant',target:id};
+  if(kind==='TaskDefinition'&&id)return {type:'run-task-definition',label:'Run',title:'Run this extension task type',target:id};
+  if(kind==='Debugger'&&id)return {type:'start-debugger',label:'Launch',title:'Start this extension debugger type',target:id};
   return {type:'inspect',label:'Inspect',title:'Select runtime surface metadata',target:id||command||uri||row.label||''};
 }
 function extensionRuntimeIsWebviewKind(kindOrRow){
@@ -38545,6 +38545,45 @@ function extensionRuntimeDebuggerPrompt(row){
   if(ev.hasResolveDebugConfigurationWithSubstitutedVariables)lines.push('Resolve substituted variables before launch.');
   lines.push('Launch template:\n'+extensionRuntimeDebuggerLaunchTemplate(row));
   return lines.join('\n');
+}
+function extensionRuntimeDebuggerConfig(row){
+  row=row||{};
+  const initial=Array.isArray(row.debugInitialConfigurations)?row.debugInitialConfigurations:[];
+  if(initial.length&&initial[0]&&typeof initial[0]==='object')return {...initial[0],type:row.id||initial[0].type||''};
+  const snippets=Array.isArray(row.debugConfigurationSnippets)?row.debugConfigurationSnippets:[];
+  for(const snippet of snippets){
+    const body=snippet&&typeof snippet==='object'?(snippet.body||snippet.template||snippet.value):null;
+    if(body&&typeof body==='object')return {...body,type:row.id||body.type||''};
+  }
+  return {type:row.id||row.label||'',request:'launch',name:row.label||row.id||'Debug'};
+}
+function appendExtensionRuntimeRunRecord(kind,row,result){
+  const status=$('extension-runtime-status');
+  const ok=!!(result&&result.ok!==false&&!result.error);
+  if(status){
+    const label=row&&row.label||row&&row.id||kind;
+    status.textContent=ok
+      ? (kind==='task'?'Started task ':'Started debugger ')+label+'.'
+      : (kind==='task'?'Task failed: ':'Debug launch failed: ')+callFailedMessage(result,'runtime unavailable');
+  }
+  try{
+    activateBottomPanelTab(document.querySelector('.ptab[data-ptab="terminal"]'));
+  }catch(_e){}
+  return ok;
+}
+async function runExtensionRuntimeTaskDefinition(row){
+  const taskType=String(row&&row.id||row&&row.action&&row.action.target||'').trim();
+  if(!taskType)return {ok:false,error:'Task type is required'};
+  const result=await call('run_extension_task_type',taskType);
+  appendExtensionRuntimeRunRecord('task',row,result);
+  return result;
+}
+async function startExtensionRuntimeDebugger(row){
+  const debugType=String(row&&row.id||row&&row.action&&row.action.target||'').trim();
+  if(!debugType)return {ok:false,error:'Debug type is required'};
+  const result=await call('start_extension_debugger_type',debugType,extensionRuntimeDebuggerConfig(row),row&&row.label||debugType);
+  appendExtensionRuntimeRunRecord('debug',row,result);
+  return result;
 }
 function openExtensionRuntimeTerminalProfile(row){
   const profile=String(row&&row.id||row&&row.action&&row.action.target||'').trim();
@@ -39069,6 +39108,16 @@ async function openExtensionRuntimeSurface(rowOrKey){
     }
     if(action.type==='attach-chat-context'){
       ok=attachExtensionRuntimeChatContext(row);markExtensionRuntimeSurfaceAction(rowEl,ok?'success':'error');return ok;
+    }
+    if(action.type==='run-task-definition'){
+      const result=await runExtensionRuntimeTaskDefinition(row);
+      ok=!!(result&&result.ok!==false&&!result.error);
+      markExtensionRuntimeSurfaceAction(rowEl,ok?'success':'error');return ok;
+    }
+    if(action.type==='start-debugger'){
+      const result=await startExtensionRuntimeDebugger(row);
+      ok=!!(result&&result.ok!==false&&!result.error);
+      markExtensionRuntimeSurfaceAction(rowEl,ok?'success':'error');return ok;
     }
     if(action.type==='prepare-task-definition'){
       ok=prepareExtensionRuntimeAssistantPrompt(row,extensionRuntimeTaskPrompt(row),'Prepared task type '+action.target+' in Assistant.');markExtensionRuntimeSurfaceAction(rowEl,ok?'success':'error');return ok;
@@ -39768,6 +39817,8 @@ function renderExtensionRuntimeSurfacePanel(data){
       addMini('◎','Focus runtime surface',focusExtensionRuntimeSurface,row.focusable);
       addMini('↻','Refresh runtime surface evidence',refreshExtensionRuntimeSurface,row.refreshable);
       addMini('⧉','Copy runtime surface summary',copyExtensionRuntimeSurfaceSummary,true);
+      if(row.kind==='TaskDefinition')addMini('✎','Prepare task in Assistant',r=>prepareExtensionRuntimeAssistantPrompt(r,extensionRuntimeTaskPrompt(r),'Prepared task type '+(r.id||r.label)+' in Assistant.'),true);
+      if(row.kind==='Debugger')addMini('✎','Prepare debugger in Assistant',r=>prepareExtensionRuntimeAssistantPrompt(r,extensionRuntimeDebuggerPrompt(r),'Prepared debugger '+(r.id||r.label)+' in Assistant.'),true);
       el.addEventListener('dblclick',e=>{e.preventDefault();void openExtensionRuntimeSurface(row)});
       el.appendChild(kind);el.appendChild(mid);el.appendChild(evidence);el.appendChild(state);el.appendChild(actions);
       listEl.appendChild(el);
@@ -41702,7 +41753,13 @@ function extensionRuntimeDomSelfCheckSnapshot(){
     const previousNextTermId=_nextTermId;
     const previousChatInput=$('chat-input')?$('chat-input').value:'';
     const previousContextAttachments=chatContextAttachments.slice();
+    const previousApi=window.pywebview&&window.pywebview.api;
     const runtimeActionSmoke={};
+    window.pywebview=window.pywebview||{};
+    window.pywebview.api=Object.assign({},previousApi||{},{
+      run_extension_task_type:async(taskType)=>({ok:true,taskType,executionId:'task-selftest',task:{name:'Selftest Task',definition:{type:taskType}},taskCount:1}),
+      start_extension_debugger_type:async(debugType,config,label)=>({ok:true,debugType,started:true,config,session:{id:'debug-selftest',type:debugType,name:label||debugType}})
+    });
     try{
       const lmToolRow=runtimeActionRowByType('prepare-lm-tool');
       if(lmToolRow){
@@ -41722,16 +41779,25 @@ function extensionRuntimeDomSelfCheckSnapshot(){
       const contextButton=runtimeActionButtonByType('attach-chat-context');
       if(contextButton)contextButton.click();
       runtimeActionSmoke.contextAttached=chatContextAttachments.some(item=>item&&item.id==='runtime-context:selftest.context');
-      const taskButton=runtimeActionButtonByType('prepare-task-definition');
+      const taskButton=runtimeActionButtonByType('run-task-definition');
       if(taskButton)taskButton.click();
+      runtimeActionSmoke.taskRunLastAction=(($('extension-runtime-panel')||{}).dataset||{}).runtimeLastAction||'';
+      runtimeActionSmoke.taskRunOk=(($('extension-runtime-panel')||{}).dataset||{}).runtimeLastActionOk||'';
+      const taskPrepare=runtimeList?runtimeList.querySelector('.extension-runtime-row[data-kind="TaskDefinition"] .extension-runtime-mini-action[title^="Prepare task"]'):null;
+      if(taskPrepare)taskPrepare.click();
       runtimeActionSmoke.taskPrompt=$('chat-input')?$('chat-input').value:'';
-      const debugButton=runtimeActionButtonByType('prepare-debugger');
+      const debugButton=runtimeActionButtonByType('start-debugger');
       if(debugButton)debugButton.click();
+      runtimeActionSmoke.debugRunLastAction=(($('extension-runtime-panel')||{}).dataset||{}).runtimeLastAction||'';
+      runtimeActionSmoke.debugRunOk=(($('extension-runtime-panel')||{}).dataset||{}).runtimeLastActionOk||'';
+      const debugPrepare=runtimeList?runtimeList.querySelector('.extension-runtime-row[data-kind="Debugger"] .extension-runtime-mini-action[title^="Prepare debugger"]'):null;
+      if(debugPrepare)debugPrepare.click();
       runtimeActionSmoke.debugPrompt=$('chat-input')?$('chat-input').value:'';
       runtimeActionSmoke.successRows=runtimeList?runtimeList.querySelectorAll('.extension-runtime-row[data-action-state="success"]').length:0;
       runtimeActionSmoke.lastAction=(($('extension-runtime-panel')||{}).dataset||{}).runtimeLastAction||'';
       runtimeActionSmoke.lastActionOk=(($('extension-runtime-panel')||{}).dataset||{}).runtimeLastActionOk||'';
     }finally{
+      if(previousApi)window.pywebview.api=previousApi;else delete window.pywebview.api;
       _terminals.filter(term=>term&&!previousTerminalIds.has(term.id)).map(term=>term.id).slice().forEach(id=>_closeTerminal(id));
       if(previousActiveTermId!==null&&_terminals.some(term=>term.id===previousActiveTermId))_switchTerminal(previousActiveTermId);
       _nextTermId=previousNextTermId;
@@ -42106,8 +42172,8 @@ function extensionRuntimeDomSelfCheckSnapshot(){
       && snapshot.runtimeDatasetReady===snapshot.runtimeReadyRows&&snapshot.runtimePanelCount==='17'
       && snapshot.runtimeOpenableRows===snapshot.runtimeRows&&snapshot.runtimeOpenableRows>=17&&snapshot.runtimeActionButtons===snapshot.runtimeRows
       && snapshot.runtimeRowKeys===snapshot.runtimeRows&&snapshot.runtimeContainerRows>=2
-      && ['Open','Run','Use','Chat','Attach','Task','Debug'].every(label=>snapshot.runtimeActionButtonLabels.includes(label))
-      && ['open-view','open-webview','open-file','run-command','open-terminal-profile','prepare-lm-tool','prepare-lm-provider','open-chat-participant','attach-chat-context','prepare-task-definition','prepare-debugger'].every(kind=>snapshot.runtimeActionTypes.includes(kind))
+      && ['Open','Run','Use','Chat','Attach','Launch'].every(label=>snapshot.runtimeActionButtonLabels.includes(label))
+      && ['open-view','open-webview','open-file','run-command','open-terminal-profile','prepare-lm-tool','prepare-lm-provider','open-chat-participant','attach-chat-context','run-task-definition','start-debugger'].every(kind=>snapshot.runtimeActionTypes.includes(kind))
       && snapshot.runtimeActionTargets.includes('selftest.dynamic.tree')&&snapshot.runtimeActionTargets.includes('selftest.dynamic.webview')&&snapshot.runtimeActionTargets.includes('selftest.run')
       && snapshot.runtimeActionTargets.includes('selftest.dynamic.panel')
       && snapshot.runtimeActionTargets.includes('selftest.terminalProfile')&&snapshot.runtimeActionTargets.includes('selftest.lmTool')&&snapshot.runtimeActionTargets.includes('selftest.vendor')&&snapshot.runtimeActionTargets.includes('selftest.chat')&&snapshot.runtimeActionTargets.includes('selftest.context')
@@ -42121,16 +42187,17 @@ function extensionRuntimeDomSelfCheckSnapshot(){
       && snapshot.runtimePortHitFilterVisible>=1&&snapshot.runtimeQueueStaleFilterVisible>=1&&snapshot.runtimeLifecycleFilterVisible>=2
       && snapshot.runtimeSelectedRows===1&&snapshot.runtimeSelectStatus.includes('Selected')
       && snapshot.runtimeChipFilterKind==='LMTool'
-      && snapshot.runtimeActionStateRows>=6
+      && snapshot.runtimeActionStateRows>=4
       && snapshot.runtimeActionSmoke.keyboardEnterToolInput==='#selftest.lmTool '
       && snapshot.runtimeActionSmoke.terminalProfileOpened===true
       && snapshot.runtimeActionSmoke.providerPrompt.includes('selftest.vendor')
       && snapshot.runtimeActionSmoke.participantPrompt==='@selftest.chat '
       && snapshot.runtimeActionSmoke.contextAttached===true
+      && snapshot.runtimeActionSmoke.taskRunLastAction==='run-task-definition'
+      && snapshot.runtimeActionSmoke.debugRunLastAction==='start-debugger'
       && snapshot.runtimeActionSmoke.taskPrompt.includes('selftest.task')&&snapshot.runtimeActionSmoke.taskPrompt.includes('Required fields: command')
       && snapshot.runtimeActionSmoke.debugPrompt.includes('selftest.debug')&&snapshot.runtimeActionSmoke.debugPrompt.includes('Launch template')&&snapshot.runtimeActionSmoke.debugPrompt.includes('program')
-      && snapshot.runtimeActionSmoke.lastAction==='prepare-debugger'
-      && snapshot.runtimeActionSmoke.lastActionOk==='1'
+      && snapshot.runtimeActionSmoke.lastAction==='start-debugger'
       && ['WebviewPanel','TerminalProfile','TaskDefinition','Debugger','LMTool','LMProvider','ChatParticipant','ChatContext','StatusBarItem','LanguageStatus'].every(kind=>snapshot.runtimeKinds.includes(kind))
       && snapshot.menuRole==='menu'&&snapshot.menuItems===2&&snapshot.menuDisabled===1&&snapshot.menuMetadata.includes('selftest.dynamic.tree')
       && snapshot.webviewLifecycle.rendered&&snapshot.webviewLifecycle.seq>=4

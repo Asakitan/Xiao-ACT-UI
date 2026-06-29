@@ -11302,6 +11302,76 @@ class AIEditorAPI:
         except Exception as exc:
             return {"error": str(exc)}
 
+    def run_extension_task_type(self, task_type: str) -> Dict[str, Any]:
+        """Execute the first task provided by a dynamic VS Code task provider."""
+        self._ensure_engine()
+        normalized = str(task_type or "").strip()
+        if not normalized:
+            return {"ok": False, "error": "Task type is required"}
+        self._activate_node_extensions_for_event(
+            f"onTaskType:{normalized}", wait=True)
+        host = getattr(self, "_node_ext_host", None)
+        if not host or not getattr(host, "is_running", False):
+            return {"ok": False, "error": "Node extension host is not running"}
+        if not hasattr(host, "request_extension_task_execute_result"):
+            return {"ok": False, "error": "Task execution bridge unavailable"}
+        result = host.request_extension_task_execute_result(
+            normalized, default={}, timeout=6.0)
+        value = result.get("value") if isinstance(result, dict) else {}
+        if not isinstance(value, dict):
+            value = {}
+        ok = bool(result.get("ok")) if isinstance(result, dict) else False
+        return {
+            "ok": ok,
+            "taskType": normalized,
+            "executionId": str(value.get("executionId") or ""),
+            "task": value.get("task") if isinstance(value.get("task"), dict) else {},
+            "taskCount": int(value.get("taskCount") or 0),
+            "error": "" if ok else str(result.get("error") or "task execution failed"),
+            "raw": result,
+        }
+
+    def start_extension_debugger_type(
+            self,
+            debug_type: str,
+            config: Optional[Dict[str, Any]] = None,
+            label: str = "") -> Dict[str, Any]:
+        """Start a dynamic VS Code debugger contribution through the Node host."""
+        self._ensure_engine()
+        normalized = str(debug_type or "").strip()
+        if not normalized:
+            return {"ok": False, "error": "Debug type is required"}
+        self._activate_node_extensions_for_event("onDebug", wait=True)
+        self._activate_node_extensions_for_event(
+            f"onDebugResolve:{normalized}", wait=True)
+        host = getattr(self, "_node_ext_host", None)
+        if not host or not getattr(host, "is_running", False):
+            return {"ok": False, "error": "Node extension host is not running"}
+        if not hasattr(host, "request_extension_debug_start_result"):
+            return {"ok": False, "error": "Debug launch bridge unavailable"}
+        launch_config = dict(config) if isinstance(config, dict) else {}
+        launch_config.setdefault("type", normalized)
+        launch_config.setdefault("request", "launch")
+        launch_config.setdefault("name", str(label or normalized))
+        result = host.request_extension_debug_start_result(
+            normalized, config=launch_config, label=label, default={},
+            timeout=6.0)
+        value = result.get("value") if isinstance(result, dict) else {}
+        if not isinstance(value, dict):
+            value = {}
+        ok = bool(result.get("ok")) if isinstance(result, dict) else False
+        return {
+            "ok": ok,
+            "debugType": normalized,
+            "started": bool(value.get("started")) if ok else False,
+            "config": value.get("config") if isinstance(value.get("config"), dict)
+            else launch_config,
+            "session": value.get("session") if isinstance(value.get("session"), dict)
+            else {},
+            "error": "" if ok else str(result.get("error") or "debug launch failed"),
+            "raw": result,
+        }
+
     def open_external_uri(self, uri: str) -> Dict:
         self._ensure_engine()
         uri_text = str(uri or "").strip()

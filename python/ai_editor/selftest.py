@@ -5335,11 +5335,12 @@ def test_phase1_ai_editor_regressions() -> None:
            and "border-radius:10px; box-shadow:0 14px 36px #00000078,0 0 0 1px #ffffff08;" in html
            and ".chat-input-area { flex-shrink:0; background:linear-gradient(180deg, transparent 0, var(--bg) 18px);" in html
            and "display:flex; justify-content:center; align-items:center;" in html
-           and ".chat-input-area > div { width:min(66.666%, 1280px); min-width:min(760px, calc(100% - 24px));" in html
+           and ".chat-input-area > div { width:clamp(620px, 66.666%, 1280px); min-width:0;" in html
+           and "max-width:calc(100% - 24px); display:flex; justify-content:center; }" in html
            and "width:100%; min-width:0; max-width:none; min-height:144px;" in html
            and "margin:0 auto; box-sizing:border-box;" in html
-           and ".chat-input-row { display:flex; gap:0; align-items:center; min-height:96px; flex:1 1 auto; }" in html
-           and "outline:none; min-height:92px; max-height:220px;" in html
+           and ".chat-input-row { display:flex; gap:0; align-items:center; min-height:104px; flex:1 1 auto; }" in html
+           and "outline:none; min-height:96px; max-height:220px;" in html
            and ".chat-composer-action { width:22px; height:22px; border:1px solid transparent; border-radius:999px;" in html
            and ".model-chip { display:none; align-items:center; gap:3px; padding:2px 6px; background:var(--bg3);" in html
            and ".ctx-ring { width:16px; height:16px; flex:0 0 16px; border-radius:50%;" in html
@@ -11909,18 +11910,24 @@ console.log("frontend word separator behavior ok");
            and "if(kind==='LMProvider'&&id)return {type:'prepare-lm-provider'" in html
            and "if(kind==='ChatParticipant'&&id)return {type:'open-chat-participant'" in html
            and "if(kind==='ChatContext'&&id)return {type:'attach-chat-context'" in html
-           and "if(kind==='TaskDefinition'&&id)return {type:'prepare-task-definition'" in html
-           and "if(kind==='Debugger'&&id)return {type:'prepare-debugger'" in html
+           and "if(kind==='TaskDefinition'&&id)return {type:'run-task-definition'" in html
+           and "if(kind==='Debugger'&&id)return {type:'start-debugger'" in html
            and "if(kind==='WebviewPanel'&&id)return {type:'open-webview'" in html
            and "if(action.type==='open-terminal-profile')" in html
            and "if(action.type==='prepare-lm-tool')" in html
            and "if(action.type==='prepare-lm-provider')" in html
            and "if(action.type==='open-chat-participant')" in html
            and "if(action.type==='attach-chat-context')" in html
+           and "if(action.type==='run-task-definition')" in html
+           and "if(action.type==='start-debugger')" in html
            and "if(action.type==='prepare-task-definition')" in html
            and "if(action.type==='prepare-debugger')" in html
            and "extensionRuntimeTaskPrompt(row)" in html
            and "extensionRuntimeDebuggerPrompt(row)" in html
+           and "function runExtensionRuntimeTaskDefinition(row)" in html
+           and "function startExtensionRuntimeDebugger(row)" in html
+           and "call('run_extension_task_type',taskType)" in html
+           and "call('start_extension_debugger_type',debugType,extensionRuntimeDebuggerConfig(row)" in html
            and "panel.dataset.runtimeSurfaceCount=String(summary.dynamicSurfaces||rows.length||0);" in html
            and "panel.dataset.runtimeOnlySurfaceCount=String(summary.runtimeOnlySurfaces||rows.filter(row=>row.source==='runtime-only').length);" in html
            and "panel.dataset.providerBackedWebviewCount=String(summary.providerBackedWebviews||rows.filter(row=>row.kind==='WebviewView'&&row.providerBacked).length);" in html
@@ -14447,8 +14454,8 @@ console.log("extension setting schema helpers ok");
            and "snapshot.runtimeActionButtons===snapshot.runtimeRows" in html
            and "snapshot.runtimeRowKeys===snapshot.runtimeRows" in html
            and "snapshot.runtimeContainerRows>=2" in html
-           and "['Open','Run','Use','Chat','Attach','Task','Debug'].every(label=>snapshot.runtimeActionButtonLabels.includes(label))" in html
-           and "['open-view','open-webview','open-file','run-command','open-terminal-profile','prepare-lm-tool','prepare-lm-provider','open-chat-participant','attach-chat-context','prepare-task-definition','prepare-debugger'].every(kind=>snapshot.runtimeActionTypes.includes(kind))" in html
+           and "['Open','Run','Use','Chat','Attach','Launch'].every(label=>snapshot.runtimeActionButtonLabels.includes(label))" in html
+           and "['open-view','open-webview','open-file','run-command','open-terminal-profile','prepare-lm-tool','prepare-lm-provider','open-chat-participant','attach-chat-context','run-task-definition','start-debugger'].every(kind=>snapshot.runtimeActionTypes.includes(kind))" in html
            and "snapshot.runtimeActionTargets.includes('selftest.dynamic.tree')" in html
            and "snapshot.runtimeActionTargets.includes('selftest.dynamic.webview')" in html
            and "snapshot.runtimeActionTargets.includes('selftest.run')" in html
@@ -14485,16 +14492,17 @@ console.log("extension setting schema helpers ok");
            and "snapshot.runtimeDebugRows>=1&&snapshot.runtimeDebugConfigRows>=1&&snapshot.runtimeDebugAdapterRows>=1&&snapshot.runtimeDebugTrackerRows>=1" in html
            and "snapshot.runtimeDebugAttributeRows>=1&&snapshot.runtimeDebugInitialRows>=1&&snapshot.runtimeDebugSnippetRows>=1" in html
            and "snapshot.runtimeDebugScopes.some(value=>value.includes('launch'))" in html
-           and "snapshot.runtimeActionStateRows>=6" in html
+           and "snapshot.runtimeActionStateRows>=4" in html
            and "snapshot.runtimeActionSmoke.keyboardEnterToolInput==='#selftest.lmTool '" in html
            and "snapshot.runtimeActionSmoke.terminalProfileOpened===true" in html
            and "snapshot.runtimeActionSmoke.providerPrompt.includes('selftest.vendor')" in html
            and "snapshot.runtimeActionSmoke.participantPrompt==='@selftest.chat '" in html
            and "snapshot.runtimeActionSmoke.contextAttached===true" in html
+           and "snapshot.runtimeActionSmoke.taskRunLastAction==='run-task-definition'" in html
+           and "snapshot.runtimeActionSmoke.debugRunLastAction==='start-debugger'" in html
            and "snapshot.runtimeActionSmoke.taskPrompt.includes('selftest.task')&&snapshot.runtimeActionSmoke.taskPrompt.includes('Required fields: command')" in html
            and "snapshot.runtimeActionSmoke.debugPrompt.includes('selftest.debug')&&snapshot.runtimeActionSmoke.debugPrompt.includes('Launch template')&&snapshot.runtimeActionSmoke.debugPrompt.includes('program')" in html
-           and "snapshot.runtimeActionSmoke.lastAction==='prepare-debugger'" in html
-           and "snapshot.runtimeActionSmoke.lastActionOk==='1'" in html
+           and "snapshot.runtimeActionSmoke.lastAction==='start-debugger'" in html
            and "['WebviewPanel','TerminalProfile','TaskDefinition','Debugger','LMTool','LMProvider','ChatParticipant','ChatContext','StatusBarItem','LanguageStatus'].every(kind=>snapshot.runtimeKinds.includes(kind))" in html
            and "window._onEditorEvent('render_webview_panel',{view_id:lifecycleViewId" in html
            and "window._onEditorEvent('update_webview_panel_title',{view_id:lifecycleViewId" in html
@@ -16331,11 +16339,23 @@ console.log("frontend built-in language fallback behavior ok");
            in node_ext_host_source
            and "async fetchTasks(filter)" in node_ext_host_source
            and "async executeTask(task)" in node_ext_host_source
+           and "async function handleExtensionTaskExecuteRequest(msg)"
+           in node_ext_host_source
+           and "case 'extension_task_execute_request':" in node_ext_host_source
+           and "type: 'extension_task_execute_response'"
+           in node_ext_host_source
+           and "type: 'task_execute'" in node_ext_host_source
            and "commandLine: executionSpec.commandLine || ''"
            in node_ext_host_source
            and "get taskExecutions()" in node_ext_host_source
            and "async startDebugging(folder, config, options)"
            in node_ext_host_source
+           and "async function handleExtensionDebugStartRequest(msg)"
+           in node_ext_host_source
+           and "case 'extension_debug_start_request':" in node_ext_host_source
+           and "type: 'extension_debug_start_response'"
+           in node_ext_host_source
+           and "type: 'debug_start'" in node_ext_host_source
            and "stopDebugging(session)" in node_ext_host_source
            and "addBreakpoints" in node_ext_host_source
            and "removeBreakpoints" in node_ext_host_source
@@ -16361,6 +16381,14 @@ console.log("frontend built-in language fallback behavior ok");
            and "DebugAdapterInlineImplementation," in node_ext_host_source
            and "msg_type == \"debug_console\"" in extension_host_source
            and "msg_type == \"task_execute\"" in extension_host_source
+           and "\"extension_task_execute_response\"" in extension_host_source
+           and "\"extension_debug_start_response\"" in extension_host_source
+           and "def request_extension_task_execute_result("
+           in extension_host_source
+           and "def request_extension_debug_start_result("
+           in extension_host_source
+           and "def run_extension_task_type(" in app_source
+           and "def start_extension_debugger_type(" in app_source
            and "self._ui_bridge.run_terminal_command" in extension_host_source)
     _check("extension workspace folder picker uses dynamic QuickPick",
            "showWorkspaceFolderPick(options, token)" in node_ext_host_source
@@ -35831,6 +35859,16 @@ process.stdin.resume();
                     node_runtime_surfaces.get("taskDefinitions", []))
                 node_runtime_debuggers = list(
                     node_runtime_surfaces.get("debuggers", []))
+                node_task_run = api.run_extension_task_type(
+                    "activation-task")
+                node_debug_launch = api.start_extension_debugger_type(
+                    "activation-debug",
+                    {
+                        "type": "activation-debug",
+                        "request": "launch",
+                        "name": "Activation Debug API",
+                    },
+                    "Activation Debug API")
                 node_runtime_lm_tools = list(
                     node_runtime_surfaces.get("languageModelTools", []))
                 node_runtime_lm_providers = list(
@@ -35987,6 +36025,37 @@ process.stdin.resume();
                            "taskDefinitions": node_runtime_task_definitions,
                            "debuggers": node_runtime_debuggers,
                            "summary": node_runtime_surfaces.get("summary", {}),
+                       }, ensure_ascii=False, default=str))
+                node_task_payload = (
+                    node_task_run.get("task", {})
+                    if isinstance(node_task_run, dict) else {})
+                node_task_definition = (
+                    node_task_payload.get("definition", {})
+                    if isinstance(node_task_payload, dict) else {})
+                node_debug_config = (
+                    node_debug_launch.get("config", {})
+                    if isinstance(node_debug_launch, dict) else {})
+                node_debug_session = (
+                    node_debug_launch.get("session", {})
+                    if isinstance(node_debug_launch, dict) else {})
+                _check("node-backed task/debug runtime actions launch through app bridge",
+                       isinstance(node_task_run, dict)
+                       and node_task_run.get("ok") is True
+                       and node_task_run.get("executionId")
+                       and node_task_run.get("taskType") == "activation-task"
+                       and node_task_run.get("taskCount", 0) >= 1
+                       and node_task_definition.get("type") == "activation-task"
+                       and isinstance(node_debug_launch, dict)
+                       and node_debug_launch.get("ok") is True
+                       and node_debug_launch.get("started") is True
+                       and node_debug_launch.get("debugType")
+                       == "activation-debug"
+                       and node_debug_config.get("type") == "activation-debug"
+                       and node_debug_config.get("resolvedByActivation") is True
+                       and node_debug_session.get("type") == "activation-debug",
+                       json.dumps({
+                           "task": node_task_run,
+                           "debug": node_debug_launch,
                        }, ensure_ascii=False, default=str))
                 _check("node-backed provider surfaces appear in runtime surface panel data",
                        node_started is True
