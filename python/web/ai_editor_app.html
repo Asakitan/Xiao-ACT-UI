@@ -38722,12 +38722,23 @@ function renderExtensionRuntimeRunStrip(){
     chip.dataset.runtimeRunKey=String(row.key||'');
     chip.dataset.runtimeRunCommand=String(row.commandLine||'');
     chip.dataset.runtimeRunProblemMatcherCount=String(row.problemMatcherCount||0);
+    chip.dataset.runtimeRunBackground=row.isBackground?'1':'0';
+    chip.dataset.runtimeRunGroup=String(row.groupId||'');
+    chip.dataset.runtimeRunPanel=String(row.presentationPanel||'');
+    chip.dataset.runtimeRunReveal=String(row.presentationReveal||'');
+    chip.dataset.runtimeRunTerminal=String(row.terminalName||'');
+    chip.dataset.runtimeRunReuseKey=String(row.terminalReuseKey||'');
     chip.dataset.runtimeRunExitCode=row.exitCode===null||row.exitCode===undefined?'':String(row.exitCode);
     chip.title=[
       row.kind==='task'?'Task':'Debug',
       row.label||row.key||'',
       row.commandLine?('$ '+row.commandLine):'',
       row.cwd?('cwd: '+row.cwd):'',
+      row.groupLabel?('group: '+row.groupLabel):'',
+      row.isBackground?'background task':'',
+      row.presentationPanel?('panel: '+row.presentationPanel):'',
+      row.presentationReveal?('reveal: '+row.presentationReveal):'',
+      row.terminalName?('terminal: '+row.terminalName):'',
       row.problemMatcherCount?('problem matchers: '+row.problemMatcherCount):'',
       row.exitCode!==null&&row.exitCode!==undefined?('exit: '+row.exitCode):'',
       row.message||''
@@ -38739,6 +38750,15 @@ function renderExtensionRuntimeRunStrip(){
     const state=document.createElement('span');
     state.textContent=String(row.state||'ready');
     chip.appendChild(kind);chip.appendChild(label);chip.appendChild(state);
+    if(row.kind==='task'&&(row.groupLabel||row.presentationPanel||row.isBackground)){
+      const meta=document.createElement('span');
+      meta.textContent=[
+        row.groupLabel||'',
+        row.isBackground?'bg':'',
+        row.presentationPanel||''
+      ].filter(Boolean).join(' · ');
+      chip.appendChild(meta);
+    }
     strip.appendChild(chip);
   });
   const debugTree=renderExtensionRuntimeDebugSessionTree();
@@ -38751,6 +38771,7 @@ function updateExtensionRuntimeTaskLifecycle(data){
   const result=data.result&&typeof data.result==='object'?data.result:{};
   const key=extensionRuntimeTaskRunKey(data);
   const state=String(data.state||result.state||(result.exitCode===0?'done':(result.exitCode!==undefined&&result.exitCode!==null?'error':'running'))||'running').toLowerCase();
+  const metadata=data.metadata&&typeof data.metadata==='object'?data.metadata:{};
   const problemMatchers=Array.isArray(task.problemMatchers)?task.problemMatchers:(Array.isArray(task.problemMatcher)?task.problemMatcher:[]);
   const record={
     kind:'task',
@@ -38759,8 +38780,15 @@ function updateExtensionRuntimeTaskLifecycle(data){
     label:String(task.name||data.label||def.type||data.taskType||'Extension Task'),
     taskType:String(def.type||data.taskType||''),
     commandLine:String(data.commandLine||result.commandLine||''),
-    cwd:String((data.metadata&&data.metadata.cwd)||result.cwd||''),
-    problemMatcherCount:Number(data.problemMatcherCount||problemMatchers.length||0)||0,
+    cwd:String(metadata.cwd||result.cwd||''),
+    problemMatcherCount:Number(data.problemMatcherCount||metadata.problemMatcherCount||problemMatchers.length||0)||0,
+    isBackground:metadata.isBackground===true,
+    groupId:String(metadata.groupId||''),
+    groupLabel:String(metadata.groupLabel||''),
+    presentationPanel:String(metadata.panel||''),
+    presentationReveal:String(metadata.reveal||''),
+    terminalName:String(metadata.terminalName||''),
+    terminalReuseKey:String(metadata.terminalReuseKey||''),
     exitCode:result.exitCode!==undefined?result.exitCode:null,
     message:String(data.message||result.error||''),
     updatedAt:Date.now()

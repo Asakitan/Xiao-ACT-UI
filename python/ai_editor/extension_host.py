@@ -3891,12 +3891,38 @@ class NodeExtensionHost:
                     task_name = "Extension Task"
                     if isinstance(task, dict):
                         task_name = str(task.get("name") or task_name)
-                    terminal_name = f"Task: {task_name}"
                     metadata = msg.get("metadata")
                     if not isinstance(metadata, dict):
                         metadata = {}
                     metadata = dict(metadata)
-                    metadata["executionId"] = str(msg.get("executionId", ""))
+                    execution_id = str(msg.get("executionId", ""))
+                    metadata["executionId"] = execution_id
+                    panel = str(metadata.get("panel") or "shared").lower()
+                    if panel not in {"shared", "dedicated", "new"}:
+                        panel = "shared"
+                    reveal = str(metadata.get("reveal") or "always").lower()
+                    if reveal not in {"always", "silent", "never"}:
+                        reveal = "always"
+                    metadata["panel"] = panel
+                    metadata["reveal"] = reveal
+                    metadata["taskName"] = str(
+                        metadata.get("taskName") or task_name)
+                    metadata["preserveFocus"] = (
+                        bool(metadata.get("preserveFocus"))
+                        or (reveal in {"silent", "never"}
+                            and not bool(metadata.get("focus"))))
+                    if panel == "shared":
+                        terminal_name = "Task"
+                    elif panel == "new":
+                        terminal_name = (
+                            f"Task: {task_name}"
+                            + (f" ({execution_id})" if execution_id else ""))
+                    else:
+                        terminal_name = f"Task: {task_name}"
+                    metadata["terminalName"] = terminal_name
+                    metadata["terminalReuseKey"] = str(
+                        metadata.get("terminalReuseKey")
+                        or (terminal_name if panel != "new" else ""))
                     lifecycle = getattr(
                         self._ui_bridge,
                         "update_extension_task_lifecycle",
@@ -3942,6 +3968,8 @@ class NodeExtensionHost:
                             "metadata": metadata,
                             "result": result_payload,
                         })
+                    if bool(metadata.get("close")) and state == "done":
+                        self._ui_bridge.hide_terminal(terminal_name)
                 except Exception:
                     pass
 
@@ -3952,6 +3980,21 @@ class NodeExtensionHost:
                     task_name = "Extension Task"
                     if isinstance(task, dict):
                         task_name = str(task.get("name") or task_name)
+                    metadata = msg.get("metadata")
+                    if not isinstance(metadata, dict):
+                        metadata = {}
+                    panel = str(metadata.get("panel") or "shared").lower()
+                    execution_id = str(
+                        metadata.get("executionId")
+                        or msg.get("executionId") or "")
+                    if panel == "shared":
+                        terminal_name = "Task"
+                    elif panel == "new":
+                        terminal_name = (
+                            f"Task: {task_name}"
+                            + (f" ({execution_id})" if execution_id else ""))
+                    else:
+                        terminal_name = f"Task: {task_name}"
                     lifecycle = getattr(
                         self._ui_bridge,
                         "update_extension_task_lifecycle",
@@ -3961,8 +4004,9 @@ class NodeExtensionHost:
                             "state": "cancelled",
                             "executionId": str(msg.get("executionId", "")),
                             "task": task if isinstance(task, dict) else {},
+                            "metadata": metadata,
                         })
-                    self._ui_bridge.hide_terminal(f"Task: {task_name}")
+                    self._ui_bridge.hide_terminal(terminal_name)
                 except Exception:
                     pass
 

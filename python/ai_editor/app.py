@@ -11347,6 +11347,10 @@ class AIEditorAPI:
             "taskType": normalized,
             "executionId": str(value.get("executionId") or ""),
             "task": value.get("task") if isinstance(value.get("task"), dict) else {},
+            "commandLine": str(value.get("commandLine") or ""),
+            "metadata": (
+                value.get("metadata")
+                if isinstance(value.get("metadata"), dict) else {}),
             "taskCount": int(value.get("taskCount") or 0),
             "error": "" if ok else str(result.get("error") or "task execution failed"),
             "raw": result,

@@ -14389,6 +14389,14 @@ console.log("extension setting schema helpers ok");
            and "function renderExtensionRuntimeDebugSessionTree()" in html
            and "function runExtensionDebugCommand(command,label,sessionKey)" in html
            and "function updateExtensionRuntimeTaskLifecycle(data)" in html
+           and "chip.dataset.runtimeRunBackground=row.isBackground?'1':'0';"
+           in html
+           and "chip.dataset.runtimeRunPanel=String(row.presentationPanel||'');"
+           in html
+           and "chip.dataset.runtimeRunTerminal=String(row.terminalName||'');"
+           in html
+           and "chip.dataset.runtimeRunReuseKey=String(row.terminalReuseKey||'');"
+           in html
            and "function updateExtensionRuntimeDebugSession(data)" in html
            and "function renderExtensionRuntimeRunStrip()" in html
            and "event==='extension_task_lifecycle'" in html
@@ -16369,6 +16377,10 @@ console.log("frontend built-in language fallback behavior ok");
            in node_ext_host_source
            and "async fetchTasks(filter)" in node_ext_host_source
            and "async executeTask(task)" in node_ext_host_source
+           and "function _taskBridgeMetadata(task, executionSpec, extra = {})"
+           in node_ext_host_source
+           and "terminalReuseKey: panel === 'shared'" in node_ext_host_source
+           and "metadata: bridgeMetadata" in node_ext_host_source
            and "async function handleExtensionTaskExecuteRequest(msg)"
            in node_ext_host_source
            and "case 'extension_task_execute_request':" in node_ext_host_source
@@ -16413,6 +16425,11 @@ console.log("frontend built-in language fallback behavior ok");
            and "DebugAdapterInlineImplementation," in node_ext_host_source
            and "msg_type == \"debug_console\"" in extension_host_source
            and "msg_type == \"task_execute\"" in extension_host_source
+           and "metadata[\"terminalName\"] = terminal_name"
+           in extension_host_source
+           and "metadata[\"terminalReuseKey\"] = str("
+           in extension_host_source
+           and "metadata[\"preserveFocus\"] = (" in extension_host_source
            and "msg_type == \"debug_start\"" in extension_host_source
            and "msg_type == \"debug_stop\"" in extension_host_source
            and "update_extension_task_lifecycle" in extension_host_source
@@ -16424,6 +16441,9 @@ console.log("frontend built-in language fallback behavior ok");
            and "def request_extension_debug_start_result("
            in extension_host_source
            and "def run_extension_task_type(" in app_source
+           and "\"commandLine\": str(value.get(\"commandLine\") or \"\")"
+           in app_source
+           and "\"metadata\": (" in app_source
            and "def start_extension_debugger_type(" in app_source
            and "def update_extension_task_lifecycle(" in app_source
            and "def update_extension_debug_session(" in app_source
@@ -34998,6 +35018,24 @@ process.stdin.resume();
                            item.get("event") == "show"
                            and item.get("name") == "Task: Node Selftest Task"
                            and item.get("metadata", {}).get("kind") == "shell"
+                           and item.get("metadata", {}).get("panel")
+                           == "dedicated"
+                           and item.get("metadata", {}).get("reveal")
+                           == "silent"
+                           and item.get("metadata", {}).get("terminalName")
+                           == "Task: Node Selftest Task"
+                           and item.get("metadata", {}).get(
+                               "terminalReuseKey")
+                           == "dedicated:node-selftest:Node Selftest Task"
+                           and item.get("metadata", {}).get("groupId")
+                           == "build"
+                           and item.get("metadata", {}).get("groupLabel")
+                           == "Build"
+                           and item.get("metadata", {}).get("isBackground")
+                           is True
+                           and item.get("metadata", {}).get("clear") is True
+                           and item.get("metadata", {}).get("preserveFocus")
+                           is True
                            and item.get("metadata", {}).get("env", {}).get(
                                "NODE_TASK_SELFTEST") == "1"
                            for item in node_task_terminal_events)
@@ -35012,13 +35050,23 @@ process.stdin.resume();
                            for item in node_task_terminal_events)
                        and any(
                            item.get("event") == "show"
-                           and item.get("name") == "Task: Node Custom Task"
+                           and item.get("name") == "Task"
                            and item.get("metadata", {}).get("kind")
                            == "customExecution"
+                           and item.get("metadata", {}).get("panel")
+                           == "shared"
+                           and item.get("metadata", {}).get("reveal")
+                           == "never"
+                           and item.get("metadata", {}).get("terminalName")
+                           == "Task"
+                           and item.get("metadata", {}).get(
+                               "terminalReuseKey") == "shared"
+                           and item.get("metadata", {}).get("preserveFocus")
+                           is True
                            for item in node_task_terminal_events)
                        and any(
                            item.get("event") == "hide"
-                           and item.get("name") == "Task: Node Custom Task"
+                           and item.get("name") == "Task"
                            for item in node_task_terminal_events)
                        and node_task_debug_probe.get("debugStarted") is True
                        and node_task_debug_probe.get("activeDebugName")

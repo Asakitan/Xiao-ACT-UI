@@ -4754,6 +4754,84 @@ function _taskExecutionSpec(task) {
     };
 }
 
+function _taskBridgePresentationName(value) {
+    const num = Number(value);
+    if (num === 1) return 'always';
+    if (num === 2) return 'silent';
+    if (num === 3) return 'never';
+    return '';
+}
+
+function _taskBridgePanelName(value) {
+    const num = Number(value);
+    if (num === 1) return 'shared';
+    if (num === 2) return 'dedicated';
+    if (num === 3) return 'new';
+    return '';
+}
+
+function _taskBridgeGroupId(group) {
+    if (!group) return '';
+    if (group instanceof TaskGroup) return String(group.id || '');
+    if (typeof group === 'string') return group;
+    if (typeof group === 'object') return String(group.id || group._id || '');
+    return '';
+}
+
+function _taskBridgeGroupLabel(group) {
+    if (!group) return '';
+    if (group instanceof TaskGroup) return String(group.label || group.id || '');
+    if (typeof group === 'string') return group;
+    if (typeof group === 'object') {
+        return String(group.label || group.id || group._id || '');
+    }
+    return '';
+}
+
+function _taskBridgeMetadata(task, executionSpec, extra = {}) {
+    const serialized = _serializeTask(task);
+    const presentation = task && typeof task.presentationOptions === 'object'
+        ? _plainBridgeValue(task.presentationOptions || {})
+        : {};
+    const runOptions = task && typeof task.runOptions === 'object'
+        ? _plainBridgeValue(task.runOptions || {})
+        : {};
+    const group = task ? task.group : undefined;
+    const panel = _taskBridgePanelName(presentation.panel) || 'shared';
+    const reveal = _taskBridgePresentationName(presentation.reveal) || 'always';
+    const terminalBase = serialized.name || _taskType(task) || 'Extension Task';
+    return {
+        cwd: executionSpec.cwd,
+        env: executionSpec.env,
+        kind: executionSpec.kind,
+        taskType: serialized.type || _taskType(task) || '',
+        taskName: terminalBase,
+        isBackground: !!(task && task.isBackground === true),
+        group: _plainBridgeValue(group),
+        groupId: _taskBridgeGroupId(group),
+        groupLabel: _taskBridgeGroupLabel(group),
+        presentationOptions: presentation,
+        runOptions,
+        reveal,
+        panel,
+        clear: presentation.clear === true,
+        close: presentation.close === true,
+        focus: presentation.focus === true,
+        echo: presentation.echo === true,
+        showReuseMessage: presentation.showReuseMessage !== false,
+        problemMatchers: serialized.problemMatchers || [],
+        problemMatcherCount: Array.isArray(serialized.problemMatchers)
+            ? serialized.problemMatchers.length
+            : 0,
+        terminalReuseKey: panel === 'shared'
+            ? 'shared'
+            : (panel === 'dedicated'
+                ? `dedicated:${serialized.type || ''}:${terminalBase}`
+                : ''),
+        ...extra,
+    };
+}
+
 async function _callTaskProvider(provider, methodName, ...args) {
     if (!provider || typeof provider !== 'object') return undefined;
     const method = provider[methodName];
@@ -6017,17 +6095,16 @@ async function handleExtensionTaskExecuteRequest(msg) {
         const resolved = await _resolveTask(task);
         const executionId = `task-request-${Date.now()}-${Math.floor(Math.random() * 10000)}`;
         const executionSpec = _taskExecutionSpec(resolved);
+        const bridgeMetadata = _taskBridgeMetadata(resolved, executionSpec, {
+            requested: true,
+            executionId,
+        });
         send({
             type: 'task_execute',
             executionId,
             task: _serializeTask(resolved),
             commandLine: executionSpec.commandLine || '',
-            metadata: {
-                cwd: executionSpec.cwd,
-                env: executionSpec.env,
-                kind: executionSpec.kind,
-                requested: true,
-            },
+            metadata: bridgeMetadata,
         });
         send({
             type: 'extension_task_execute_response',
@@ -6037,11 +6114,7 @@ async function handleExtensionTaskExecuteRequest(msg) {
                 executionId,
                 task: _serializeTask(resolved),
                 commandLine: executionSpec.commandLine || '',
-                metadata: {
-                    cwd: executionSpec.cwd,
-                    env: executionSpec.env,
-                    kind: executionSpec.kind,
-                },
+                metadata: bridgeMetadata,
                 taskType,
                 taskCount: tasks.length,
             },
@@ -11667,12 +11740,16 @@ function buildVscodeModule(extDesc, extensionPath, storageRoot) {
                                 type: 'task_terminate',
                                 executionId: execution.id,
                                 task: _serializeTask(resolved),
+                                metadata: execution._bridgeMetadata || {},
                             });
                             endExecution(execution, undefined);
                             return Promise.resolve();
                         },
                     };
                     const executionSpec = _taskExecutionSpec(resolved);
+                    const bridgeMetadata = _taskBridgeMetadata(
+                        resolved, executionSpec, { executionId: execution.id });
+                    execution._bridgeMetadata = bridgeMetadata;
                     _taskExecutions.push(execution);
                     _onDidStartTask.fire({ execution, task: resolved });
                     _onDidStartTaskProcess.fire({ execution, processId: 0 });
@@ -11681,11 +11758,7 @@ function buildVscodeModule(extDesc, extensionPath, storageRoot) {
                         executionId: execution.id,
                         task: _serializeTask(resolved),
                         commandLine: executionSpec.commandLine || '',
-                        metadata: {
-                            cwd: executionSpec.cwd,
-                            env: executionSpec.env,
-                            kind: executionSpec.kind,
-                        },
+                        metadata: bridgeMetadata,
                     });
                     if (resolved.execution instanceof CustomExecution) {
                         try {
