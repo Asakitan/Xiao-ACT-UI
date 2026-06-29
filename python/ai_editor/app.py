@@ -13869,6 +13869,9 @@ class AIEditorAPI:
             1 for item in views if item.get("dynamicSource") == "manifest")
         provider_backed_webviews = sum(
             1 for item in webview_views if item.get("providerBacked"))
+        view_container_views = sum(
+            int(item.get("view_count") or item.get("viewCount") or 0)
+            for item in view_containers)
         tree_views = [
             item for item in views
             if str(item.get("kind") or "").lower() == "treeview"
@@ -14021,6 +14024,7 @@ class AIEditorAPI:
                 "manifestOnlySurfaces": manifest_only_surfaces,
                 "providerBackedWebviews": provider_backed_webviews,
                 "viewContainers": len(view_containers),
+                "viewContainerViews": view_container_views,
                 "customEditors": len(custom_editors),
                 "customEditorStates": sum(
                     int(item.get("stateCount", 0))

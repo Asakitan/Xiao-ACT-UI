@@ -3651,6 +3651,10 @@ def test_app_settings_parity() -> None:
             item.get("type"): item
             for item in fixture_surfaces.get("notebooks", [])
         }
+        fixture_view_containers = {
+            item.get("id"): item
+            for item in fixture_surfaces.get("viewContainers", [])
+        }
         fixture_commands = {
             item.get("command"): item
             for item in fixture_surfaces.get("commands", [])
@@ -3691,6 +3695,8 @@ def test_app_settings_parity() -> None:
                    "extensionId") == "selftest.surface-fixture"
                and fixture_notebooks.get("selftest.surface.notebook", {}).get(
                    "extensionId") == "selftest.surface-fixture"
+               and fixture_view_containers.get(
+                   "selftest.surface.container", {}).get("view_count") == 2
                and fixture_commands.get("selftest.surface.command", {}).get(
                    "source") == "extension"
                and fixture_terminal_profiles.get(
@@ -3712,6 +3718,10 @@ def test_app_settings_parity() -> None:
                    "languageModelProviders") >= 1
                and fixture_surfaces.get("summary", {}).get(
                    "chatParticipants") >= 1
+               and fixture_surfaces.get("summary", {}).get(
+                   "viewContainers") >= 1
+               and fixture_surfaces.get("summary", {}).get(
+                   "viewContainerViews") >= 2
                and any(item.get("menu") == "view/title"
                        for item in fixture_menus),
                json.dumps(fixture_surfaces, ensure_ascii=False, default=str))
@@ -4931,8 +4941,13 @@ def test_phase1_ai_editor_regressions() -> None:
            and "frame.classList.toggle('settings-viewport-compact',autoCompact);" in html
            and "modal.dataset.settingsFrameFitsViewport=" in html
            and "modal.dataset.settingsAutoCompact=autoCompact?'1':'0';" in html
+           and "const autoTight=isCalm&&maxHeight<=560;" in html
+           and "modal.dataset.settingsAutoTight=autoTight?'1':'0';" in html
+           and "frame.classList.toggle('settings-viewport-tight',autoTight);" in html
            and "window.visualViewport.addEventListener('resize',()=>syncSettingsViewportFit('visual-viewport'));" in html
            and ".settings-vscode-calm.settings-viewport-compact .settings-main" in html
+           and ".settings-vscode-calm.settings-viewport-tight .settings-main" in html
+           and ".settings-vscode-calm.settings-viewport-tight:not(.settings-details-open) .settings-nav-commandbar button:not(.primary)" in html
            and "modal.dataset.settingsTopVisible=topVisible?'1':'0';" in html
            and "modal.dataset.settingsBottomVisible=bottomVisible?'1':'0';" in html
            and "modal.dataset.settingsScrollContained=columnsScroll?'1':'0';" in html
@@ -4964,6 +4979,7 @@ def test_phase1_ai_editor_regressions() -> None:
            and "hasSettingsFrameFitsViewport" in html
            and "hasSettingsSafeHeightCap" in html
            and "hasSettingsAutoCompactFit" in html
+           and "hasSettingsAutoTightFit" in html
            and "hasVisualViewportResizeSync" in html
            and "hasSettingsDvhHeightGuard" in html
            and "hasStableSettingsScrollbars" in html
@@ -5176,7 +5192,7 @@ def test_phase1_ai_editor_regressions() -> None:
             and "#chat-provider-menu { width:var(--chat-provider-width); flex-basis:var(--chat-provider-width); }" in html
             and "#chat-agent-menu { width:var(--chat-agent-width); flex-basis:var(--chat-agent-width); }" in html
             and "#chat-workflow-menu { width:var(--chat-workflow-width); flex-basis:var(--chat-workflow-width); }" in html
-            and ".chat-control-popup.model { min-width:460px; }" in html
+            and ".chat-control-popup.model { min-width:320px; }" in html
             and ".chat-control-popup.workflow { min-width:340px; }" in html
             and ".chat-composer-trailing { display:flex; align-items:center; justify-content:flex-end; gap:4px;" in html
             and "margin-left:auto; flex:0 0 auto; min-width:max-content; width:max-content; flex-wrap:nowrap; overflow:hidden; white-space:nowrap;" in html
@@ -11902,10 +11918,11 @@ console.log("frontend word separator behavior ok");
            and "row.action=extensionRuntimeSurfaceAction(kind,item,row);" in html
            and "row.openable=row.action&&row.action.type!=='inspect';" in html
            and "row.evidenceStatus=extensionRuntimeWebviewEvidenceStatus(row);" in html
-           and "row.focusable=extensionRuntimeIsWebviewKind(row)||row.kind==='TreeView'||row.kind==='CustomEditor'||row.kind==='Notebook';" in html
+           and "row.focusable=extensionRuntimeIsWebviewKind(row)||row.kind==='ViewContainer'||row.kind==='TreeView'||row.kind==='CustomEditor'||row.kind==='Notebook';" in html
            and "row.key=[row.kind,row.id,row.command,row.extensionId,row.source,row.container,row.resourceUri].join('|');" in html
            and "id:String(item.id||item.profileId||item.profile_id||item.viewType||item.type||item.vendor||item.kind||item.name||item.command||'')," in html
            and "if(kind==='TerminalProfile'&&id)return {type:'open-terminal-profile'" in html
+           and "if(kind==='ViewContainer'&&id)return {type:'open-view-container'" in html
            and "if(kind==='LMTool'&&id)return {type:'prepare-lm-tool'" in html
            and "if(kind==='LMProvider'&&id)return {type:'prepare-lm-provider'" in html
            and "if(kind==='ChatParticipant'&&id)return {type:'open-chat-participant'" in html
@@ -11914,6 +11931,7 @@ console.log("frontend word separator behavior ok");
            and "if(kind==='Debugger'&&id)return {type:'start-debugger'" in html
            and "if(kind==='WebviewPanel'&&id)return {type:'open-webview'" in html
            and "if(action.type==='open-terminal-profile')" in html
+           and "if(action.type==='open-view-container')" in html
            and "if(action.type==='prepare-lm-tool')" in html
            and "if(action.type==='prepare-lm-provider')" in html
            and "if(action.type==='open-chat-participant')" in html
@@ -11984,6 +12002,7 @@ console.log("frontend word separator behavior ok");
            and "action.dataset.actionLabel=row.action&&row.action.label||'Inspect';" in html
            and "el.addEventListener('dblclick',e=>{e.preventDefault();void openExtensionRuntimeSurface(row)});" in html
            and "['Runtime',rows.filter(row=>row.ready).length]" in html
+           and "['ViewContainer',summary.viewContainers||rows.filter(row=>row.kind==='ViewContainer').length]" in html
            and "['Provider Webview',summary.providerBackedWebviews||rows.filter(row=>row.kind==='WebviewView'&&row.providerBacked).length]" in html
            and "['Manifest + Runtime',summary.manifestRuntimeSurfaces||rows.filter(row=>row.source==='manifest+runtime').length]" in html
            and "['Runtime Only',summary.runtimeOnlySurfaces||rows.filter(row=>row.source==='runtime-only').length]" in html
@@ -12009,6 +12028,7 @@ console.log("frontend word separator behavior ok");
            and "el.dataset.surfaceCanSaveStateCount=String(row.surfaceEvidence&&row.surfaceEvidence.canSaveStateCount||0);" in html
            and "el.dataset.surfaceCanBackupStateCount=String(row.surfaceEvidence&&row.surfaceEvidence.canBackupStateCount||0);" in html
            and "el.dataset.surfaceSupportsMultipleEditors=row.surfaceEvidence&&row.surfaceEvidence.supportsMultipleEditorsPerDocument?'1':'0';" in html
+           and "el.dataset.surfaceViewContainerViewCount=String(row.viewContainerViewCount||row.surfaceEvidence&&row.surfaceEvidence.viewCount||0);" in html
            and "el.dataset.surfaceControllerCount=String(row.surfaceEvidence&&row.surfaceEvidence.controllerCount||0);" in html
            and "el.dataset.surfaceStatusBarProviderCount=String(row.surfaceEvidence&&row.surfaceEvidence.statusBarProviderCount||0);" in html
            and "el.dataset.surfaceSelectionCount=String(row.surfaceEvidence&&row.surfaceEvidence.selectionCount||0);" in html
@@ -12062,11 +12082,14 @@ console.log("frontend word separator behavior ok");
            and "snapshot.runtimeMissingEvidenceFilterVisible>=1" in html
            and "snapshot.runtimeMiniActionButtons>=snapshot.runtimeRows*3" in html
            and "snapshot.runtimeWebviewPanelRows>=1" in html
+           and "snapshot.runtimeViewContainerRows>=1" in html
            and "snapshot.runtimeCustomSaveRows>=1" in html
            and "snapshot.runtimeNotebookSelectionRows>=1" in html
            and "['Manifest',rows.filter(row=>!row.ready).length]" in html
            and "['Missing Webview HTML',rows.filter(row=>row.kind==='WebviewView'&&!row.htmlAvailable).length]" in html
            and "['Evidence Ready',rows.filter(row=>row.evidenceStatus==='rendered').length]" in html
+           and "(data.viewContainers||[]).slice(0,12).forEach(item=>" in html
+           and "push('ViewContainer',rowItem" in html
            and "(data.webviewPanels||[]).slice(0,8).forEach(item=>push('WebviewPanel'" in html
            and "(data.terminalProfiles||[]).slice(0,8).forEach(item=>push('TerminalProfile'" in html
            and "(data.taskDefinitions||[]).slice(0,12).forEach(item=>push('TaskDefinition'" in html
@@ -12166,6 +12189,8 @@ console.log("frontend word separator behavior ok");
            and "\"manifestRuntimeSurfaces\": manifest_runtime_surfaces" in app_source
            and "\"manifestOnlySurfaces\": manifest_only_surfaces" in app_source
            and "\"providerBackedWebviews\": provider_backed_webviews" in app_source
+           and "view_container_views = sum(" in app_source
+           and "\"viewContainerViews\": view_container_views" in app_source
            and "\"webviewPendingMessages\": webview_pending_messages" in app_source
            and "\"webviewDroppedMessages\": webview_dropped_messages" in app_source
            and "\"webviewResourceRoots\": webview_resource_roots" in app_source
@@ -14521,20 +14546,22 @@ console.log("extension setting schema helpers ok");
            and "['Open','Refresh','Copy'].every(label=>snapshot.webviewActionLabels.includes(label))" in html
            and "snapshot.customPlaceholder&&snapshot.customDataset.viewType==='selftest.customEditor'" in html
            and "snapshot.notebookOutputItems===3" in html
-           and "snapshot.runtimeRows>=17" in html
-           and "snapshot.runtimeChips>=40" in html
+           and "snapshot.runtimeRows>=18" in html
+           and "snapshot.runtimeChips>=41" in html
            and "snapshot.runtimeHealthCards>=5" in html
            and "snapshot.runtimeHealthWarnings>=2" in html
            and "snapshot.runtimeHealthErrors>=1" in html
            and "['bridge-warning','resource-warning','failures'].every(filter=>snapshot.runtimeHealthFilters.includes(filter))" in html
            and "['queued','dropped','message-stalled'].some(filter=>snapshot.runtimeHealthFilters.includes(filter))" in html
            and "snapshot.runtimeOpenableRows===snapshot.runtimeRows" in html
-           and "snapshot.runtimeOpenableRows>=17" in html
+           and "snapshot.runtimeOpenableRows>=18" in html
            and "snapshot.runtimeActionButtons===snapshot.runtimeRows" in html
            and "snapshot.runtimeRowKeys===snapshot.runtimeRows" in html
-           and "snapshot.runtimeContainerRows>=2" in html
+           and "snapshot.runtimeContainerRows>=3" in html
+           and "snapshot.runtimeViewContainerLocations.includes('activitybar')" in html
+           and "snapshot.runtimeViewContainerViewCounts.some(value=>value>=4)" in html
            and "['Open','Run','Use','Chat','Attach','Launch'].every(label=>snapshot.runtimeActionButtonLabels.includes(label))" in html
-           and "['open-view','open-webview','open-file','run-command','open-terminal-profile','prepare-lm-tool','prepare-lm-provider','open-chat-participant','attach-chat-context','run-task-definition','start-debugger'].every(kind=>snapshot.runtimeActionTypes.includes(kind))" in html
+           and "['open-view-container','open-view','open-webview','open-file','run-command','open-terminal-profile','prepare-lm-tool','prepare-lm-provider','open-chat-participant','attach-chat-context','run-task-definition','start-debugger'].every(kind=>snapshot.runtimeActionTypes.includes(kind))" in html
            and "snapshot.runtimeActionTargets.includes('selftest.dynamic.tree')" in html
            and "snapshot.runtimeActionTargets.includes('selftest.dynamic.webview')" in html
            and "snapshot.runtimeActionTargets.includes('selftest.run')" in html
@@ -14553,8 +14580,9 @@ console.log("extension setting schema helpers ok");
            and "runtimeKindFilterVisible:runtimeKindFilterResult?runtimeKindFilterResult.visible:0" in html
            and "runtimeSelectedRows:runtimeList?runtimeList.querySelectorAll('.extension-runtime-row.selected[aria-selected=\"true\"]').length:0" in html
            and "snapshot.runtimeListRole==='list'" in html
-           and "snapshot.runtimeStatusText.includes('17 visible of 17 rows')" in html
+           and "snapshot.runtimeStatusText.includes('18 visible of 18 rows')" in html
            and "snapshot.runtimeFilterKinds.includes('LMTool')" in html
+           and "snapshot.runtimeFilterKinds.includes('ViewContainer')" in html
            and "snapshot.runtimeFilterKinds.includes('StatusBarItem')" in html
            and "snapshot.runtimeFilterKinds.includes('LanguageStatus')" in html
            and "snapshot.runtimeFilterKinds.includes('TaskDefinition')" in html
