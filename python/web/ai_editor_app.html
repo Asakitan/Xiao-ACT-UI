@@ -1808,16 +1808,16 @@ pre.code-block code .type { color:var(--fg-type); }
 #settings-modal.open { --settings-viewport-gap:12px; --settings-available-height:calc(100dvh - 24px);
   align-items:stretch; justify-content:center; padding:12px 22px; box-sizing:border-box;
   background:color-mix(in srgb,#000 42%,transparent); }
-#settings-modal.open:has(.settings-vscode-calm) { --settings-viewport-gap:24px; --settings-available-height:min(720px, calc(100svh - 24px), calc(100dvh - 24px));
-  align-items:center; justify-content:center; padding:10px 20px 14px; background:color-mix(in srgb,#000 34%,transparent); }
+#settings-modal.open:has(.settings-vscode-calm) { --settings-viewport-gap:48px; --settings-available-height:min(660px, calc(100svh - 48px), calc(100dvh - 48px));
+  align-items:center; justify-content:center; padding:18px 24px; background:color-mix(in srgb,#000 34%,transparent); }
 .modal { background:var(--bg2); border:1px solid var(--border); border-radius:6px;
   width:560px; max-height:85vh; overflow-y:auto; padding:20px 24px; box-shadow:0 8px 32px #00000080; }
 .modal.settings-modal { width:min(1520px, calc(100vw - 44px)); height:var(--settings-available-height, calc(100dvh - 24px));
   max-height:var(--settings-available-height, calc(100dvh - 24px)); overflow:hidden; padding:0; display:flex; flex-direction:column;
   border-radius:3px; background:var(--bg); box-shadow:0 18px 54px #00000092; }
 .modal.settings-modal.preferences-workbench { border-color:color-mix(in srgb,var(--border) 86%,var(--fg-accent)); }
-.modal.settings-modal.preferences-workbench.settings-vscode-calm { width:min(1180px, calc(100vw - 40px)); height:var(--settings-available-height, min(720px, calc(100svh - 24px), calc(100dvh - 24px))); max-width:calc(100vw - 40px);
-  max-height:var(--settings-available-height, min(720px, calc(100svh - 24px), calc(100dvh - 24px))); min-height:0;
+.modal.settings-modal.preferences-workbench.settings-vscode-calm { width:min(1120px, calc(100vw - 64px)); height:var(--settings-available-height, min(660px, calc(100svh - 48px), calc(100dvh - 48px))); max-width:calc(100vw - 64px);
+  max-height:var(--settings-available-height, min(660px, calc(100svh - 48px), calc(100dvh - 48px))); min-height:0;
   display:grid; grid-template-rows:minmax(0,1fr) auto; border:1px solid color-mix(in srgb,var(--border) 82%,transparent); border-radius:4px; box-shadow:0 14px 42px #00000072; }
 .modal h2 { color:var(--fg); font-size:14px; margin-bottom:16px; font-weight:600; }
 .settings-titlebar { display:flex; align-items:center; justify-content:space-between; gap:16px;
@@ -3266,7 +3266,7 @@ pre.code-block { overflow:visible; }
 .settings-vscode-calm.settings-details-open .settings-workbench-status:not(.open) { display:flex; }
 .settings-vscode-calm .settings-shell { grid-template-columns:286px minmax(0,1fr); }
 .settings-vscode-calm .settings-shell.inspecting { grid-template-columns:286px minmax(0,1fr) minmax(312px,360px); }
-.settings-vscode-calm .settings-nav { padding:11px 10px 16px 18px; background:var(--bg);
+.settings-vscode-calm .settings-nav { padding:9px 8px 14px 16px; background:var(--bg);
   border-right:1px solid color-mix(in srgb,var(--border) 82%,transparent); }
 .settings-vscode-calm .settings-nav-tools { padding:0 8px 10px 0; border-bottom:0; }
 .settings-vscode-calm .settings-nav-tools input { background:var(--bg-input); border-color:color-mix(in srgb,var(--border) 78%,transparent); }
@@ -3351,7 +3351,7 @@ pre.code-block { overflow:visible; }
 }
 .settings-vscode-calm .settings-shell { grid-template-columns:300px minmax(0,1fr); }
 .settings-vscode-calm .settings-shell.inspecting { grid-template-columns:300px minmax(0,1fr) minmax(312px,360px); }
-.settings-vscode-calm .settings-nav { padding-left:22px; }
+.settings-vscode-calm .settings-nav { padding-left:18px; }
 .extension-runtime-panel:not([data-runtime-summary-expanded="1"]) .extension-runtime-summary {
   max-height:31px; overflow:hidden;
 }
@@ -3391,7 +3391,7 @@ pre.code-block { overflow:visible; }
 .settings-vscode-calm .settings-nav-review button.active { color:var(--fg-accent); }
 .settings-vscode-calm .settings-nav-review button.error { color:var(--fg-error); }
 .settings-vscode-calm .settings-nav-review button:disabled { opacity:.45; cursor:default; }
-.settings-vscode-calm .settings-main { padding:12px 40px 32px; background:var(--bg); scroll-padding-top:12px; }
+.settings-vscode-calm .settings-main { padding:10px 34px 24px; background:var(--bg); scroll-padding-top:10px; }
 .settings-vscode-calm .settings-main > .settings-section,
 .settings-vscode-calm .settings-main > details.settings-section,
 .settings-vscode-calm #ext-settings-container { max-width:960px; }
@@ -3551,20 +3551,20 @@ pre.code-block { overflow:visible; }
 .settings-vscode-calm .settings-nav-result-group:disabled { opacity:.45; cursor:default; }
 .settings-vscode-calm .settings-nav-result-group strong { color:var(--fg); font:600 11px var(--mono); }
 #settings-modal.open:has(.settings-vscode-calm) {
-  --settings-viewport-gap:24px; --settings-available-height:min(720px, calc(100svh - 24px), calc(100dvh - 24px));
-  align-items:center; justify-content:center; padding:10px 20px 14px; background:color-mix(in srgb,#000 34%,transparent);
+  --settings-viewport-gap:48px; --settings-available-height:min(660px, calc(100svh - 48px), calc(100dvh - 48px));
+  align-items:center; justify-content:center; padding:18px 24px; background:color-mix(in srgb,#000 34%,transparent);
 }
 .modal.settings-modal.preferences-workbench.settings-vscode-calm {
-  width:min(1180px, calc(100vw - 40px)); height:var(--settings-available-height, min(720px, calc(100svh - 24px), calc(100dvh - 24px)));
-  max-width:calc(100vw - 40px); max-height:var(--settings-available-height, min(720px, calc(100svh - 24px), calc(100dvh - 24px)));
+  width:min(1120px, calc(100vw - 64px)); height:var(--settings-available-height, min(660px, calc(100svh - 48px), calc(100dvh - 48px)));
+  max-width:calc(100vw - 64px); max-height:var(--settings-available-height, min(660px, calc(100svh - 48px), calc(100dvh - 48px)));
   min-height:0; display:grid; grid-template-rows:minmax(0,1fr) auto;
   border:1px solid color-mix(in srgb,var(--border) 82%,transparent); border-radius:4px;
   box-shadow:0 14px 42px #00000072; overflow:hidden;
 }
 @supports (height: 100dvh) {
   .modal.settings-modal.preferences-workbench.settings-vscode-calm {
-    height:var(--settings-available-height, min(720px, calc(100svh - 24px), calc(100dvh - 24px)));
-    max-height:var(--settings-available-height, min(720px, calc(100svh - 24px), calc(100dvh - 24px)));
+    height:var(--settings-available-height, min(660px, calc(100svh - 48px), calc(100dvh - 48px)));
+    max-height:var(--settings-available-height, min(660px, calc(100svh - 48px), calc(100dvh - 48px)));
   }
 }
 .settings-vscode-calm .settings-shell {
@@ -30091,8 +30091,8 @@ function syncSettingsViewportFit(reason){
   const viewportH=Math.max(320,Math.floor((vv&&vv.height)||window.innerHeight||document.documentElement.clientHeight||720));
   const viewportW=Math.max(420,Math.floor((vv&&vv.width)||window.innerWidth||document.documentElement.clientWidth||1024));
   const isCalm=frame.classList.contains('settings-vscode-calm');
-  const verticalGap=isCalm?24:24;
-  const hardCap=isCalm?720:viewportH-verticalGap;
+  const verticalGap=isCalm?48:24;
+  const hardCap=isCalm?660:viewportH-verticalGap;
   const maxHeight=Math.max(300,Math.min(hardCap,viewportH-verticalGap));
   const compressed=isCalm&&maxHeight<hardCap;
   const autoCompact=isCalm&&maxHeight<=680;
@@ -32034,7 +32034,7 @@ function settingsUiSelfCheckSnapshot(){
     hasVisibleSettingsTop:!!(settingsFrameRect&&modalDataset.settingsTopVisible==='1'&&settingsFrameRect.top>=0),
     hasVisibleSettingsFooter:!!(footer&&footerRect&&modalDataset.settingsFooterVisible==='1'&&footerRect.bottom<=window.innerHeight),
     hasSettingsFrameFitsViewport:!!(modalDataset.settingsFrameFitsViewport==='1'&&modalDataset.settingsBottomVisible==='1'),
-    hasSettingsSafeHeightCap:!!(Number(modalDataset.settingsAvailableHeight||0)>0&&Number(modalDataset.settingsAvailableHeight||0)<=720),
+    hasSettingsSafeHeightCap:!!(Number(modalDataset.settingsAvailableHeight||0)>0&&Number(modalDataset.settingsAvailableHeight||0)<=660),
     hasSettingsAutoCompactFit:typeof syncSettingsViewportFit==='function'
       &&String(syncSettingsViewportFit).includes("frame.classList.toggle('settings-viewport-compact',autoCompact)")
       &&settingsFrame&&settingsFrame.dataset.settingsViewportCompact!==undefined,

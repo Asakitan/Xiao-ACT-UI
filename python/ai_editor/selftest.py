@@ -4959,8 +4959,8 @@ def test_phase1_ai_editor_regressions() -> None:
            and "hasJumpbarActionState" in html
            and "hasJumpbarModifiedCount" in html
            and "hasJumpbarActions" in html
-           and "#settings-modal.open:has(.settings-vscode-calm) { --settings-viewport-gap:24px; --settings-available-height:min(720px, calc(100svh - 24px), calc(100dvh - 24px));" in html
-           and ".modal.settings-modal.preferences-workbench.settings-vscode-calm {\n  width:min(1180px, calc(100vw - 40px)); height:var(--settings-available-height, min(720px, calc(100svh - 24px), calc(100dvh - 24px)));" in html
+           and "#settings-modal.open:has(.settings-vscode-calm) { --settings-viewport-gap:48px; --settings-available-height:min(660px, calc(100svh - 48px), calc(100dvh - 48px));" in html
+           and ".modal.settings-modal.preferences-workbench.settings-vscode-calm {\n  width:min(1120px, calc(100vw - 64px)); height:var(--settings-available-height, min(660px, calc(100svh - 48px), calc(100dvh - 48px)));" in html
            and ".settings-vscode-calm .settings-nav,\n.settings-vscode-calm .settings-main,\n.settings-vscode-calm .settings-inspector {\n  min-height:0; overflow-y:auto; overscroll-behavior:contain;" in html
            and "scrollbar-gutter:stable;" in html
            and "function syncSettingsViewportFit(reason)" in html
@@ -5005,6 +5005,7 @@ def test_phase1_ai_editor_regressions() -> None:
            and "hasVisibleSettingsFooter" in html
            and "hasSettingsFrameFitsViewport" in html
            and "hasSettingsSafeHeightCap" in html
+           and "Number(modalDataset.settingsAvailableHeight||0)<=660" in html
            and "hasSettingsAutoCompactFit" in html
            and "hasSettingsAutoTightFit" in html
            and "hasVisualViewportResizeSync" in html
