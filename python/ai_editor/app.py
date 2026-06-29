@@ -12531,6 +12531,14 @@ class AIEditorAPI:
             task_type = str(item.get("type") or item.get("id") or "").strip()
             if not task_type:
                 continue
+            required = item.get("required", [])
+            if not isinstance(required, list):
+                required = []
+            properties = item.get("properties", {})
+            if not isinstance(properties, dict):
+                properties = {}
+            required_keys = [str(value) for value in required if value]
+            property_keys = [str(key) for key in properties.keys() if key]
             matching = providers_by_type.get(task_type, [])
             seen.add(task_type)
             has_provider = bool(matching)
@@ -12558,6 +12566,10 @@ class AIEditorAPI:
                     bool(provider.get("hasResolveTask"))
                     for provider in matching),
                 "problemMatcherCount": matcher_count_by_type.get(task_type, 0),
+                "requiredCount": len(required_keys),
+                "propertyCount": len(property_keys),
+                "requiredKeys": required_keys[:12],
+                "propertyKeys": property_keys[:16],
                 "readiness": readiness,
                 "readinessScore": max(0, min(100, score)),
                 "readinessIssues": issues,
@@ -12570,8 +12582,12 @@ class AIEditorAPI:
                 "providerCount": len(matching),
                 "hasProvideTasks": evidence["hasProvideTasks"],
                 "hasResolveTask": evidence["hasResolveTask"],
-                "required": item.get("required", []),
-                "properties": item.get("properties", {}),
+                "required": required,
+                "properties": properties,
+                "requiredCount": evidence["requiredCount"],
+                "propertyCount": evidence["propertyCount"],
+                "requiredKeys": evidence["requiredKeys"],
+                "propertyKeys": evidence["propertyKeys"],
                 "problemMatcherCount": evidence["problemMatcherCount"],
                 "runtimeOnly": False,
                 "providers": matching,
@@ -12596,6 +12612,10 @@ class AIEditorAPI:
                     bool(provider.get("hasResolveTask"))
                     for provider in matching),
                 "problemMatcherCount": matcher_count_by_type.get(task_type, 0),
+                "requiredCount": 0,
+                "propertyCount": 0,
+                "requiredKeys": [],
+                "propertyKeys": [],
                 "readiness": "ready",
                 "readinessScore": 100,
                 "readinessIssues": [],
@@ -12611,6 +12631,10 @@ class AIEditorAPI:
                 "hasResolveTask": evidence["hasResolveTask"],
                 "required": [],
                 "properties": {},
+                "requiredCount": 0,
+                "propertyCount": 0,
+                "requiredKeys": [],
+                "propertyKeys": [],
                 "problemMatcherCount": evidence["problemMatcherCount"],
                 "runtimeOnly": True,
                 "providers": matching,
@@ -12657,6 +12681,57 @@ class AIEditorAPI:
         config_by_type = group_by_type(config_providers)
         factory_by_type = group_by_type(adapter_factories)
         tracker_by_type = group_by_type(adapter_trackers)
+        breakpoint_languages = sorted({
+            str(item.get("language") or "").strip()
+            for item in contributions.get("breakpoints", [])
+            if isinstance(item, dict)
+            and str(item.get("language") or "").strip()
+        })
+
+        def debugger_manifest_details(item: Dict[str, Any]) -> Dict[str, Any]:
+            attributes = item.get("configurationAttributes", {})
+            if not isinstance(attributes, dict):
+                attributes = {}
+            attr_scopes = sorted(
+                str(key) for key in attributes.keys() if str(key))
+            initial = item.get("initialConfigurations", [])
+            if not isinstance(initial, list):
+                initial = []
+            snippets = item.get("configurationSnippets", [])
+            if not isinstance(snippets, list):
+                snippets = []
+            variables = item.get("variables", {})
+            if not isinstance(variables, dict):
+                variables = {}
+            languages = item.get("languages", [])
+            if not isinstance(languages, list):
+                languages = []
+            language_ids = [str(value) for value in languages if value]
+            matched_breakpoints = [
+                lang for lang in breakpoint_languages
+                if not language_ids or lang in language_ids
+            ]
+            return {
+                "configurationAttributeScopes": attr_scopes[:12],
+                "configurationAttributeScopeCount": len(attr_scopes),
+                "initialConfigurationCount": len(initial),
+                "configurationSnippetCount": len(snippets),
+                "variableCount": len(variables),
+                "variableNames": [
+                    str(key) for key in list(variables.keys())[:12] if key
+                ],
+                "languageCount": len(language_ids),
+                "languages": language_ids[:16],
+                "breakpointLanguageCount": len(matched_breakpoints),
+                "breakpointLanguages": matched_breakpoints[:16],
+                "adapterProgram": str(item.get("program") or ""),
+                "adapterRuntime": str(
+                    item.get("runtime")
+                    or item.get("runtimeExecutable")
+                    or item.get("adapterExecutableCommand")
+                    or item.get("executable")
+                    or ""),
+            }
 
         result: List[Dict[str, Any]] = []
         seen: set[str] = set()
@@ -12666,6 +12741,7 @@ class AIEditorAPI:
             debug_type = str(item.get("type") or item.get("id") or "").strip()
             if not debug_type:
                 continue
+            details = debugger_manifest_details(item)
             configs = config_by_type.get(debug_type, [])
             factories = factory_by_type.get(debug_type, [])
             trackers = (
@@ -12713,6 +12789,7 @@ class AIEditorAPI:
                 "hasCreateDebugAdapterTracker": any(
                     bool(tracker.get("hasCreateDebugAdapterTracker"))
                     for tracker in trackers),
+                **details,
                 "readiness": readiness,
                 "readinessScore": max(0, min(100, score)),
                 "readinessIssues": issues,
@@ -12739,8 +12816,26 @@ class AIEditorAPI:
                 "configurationAttributes": item.get(
                     "configurationAttributes", {}),
                 "initialConfigurations": item.get("initialConfigurations", []),
+                "configurationSnippets": item.get(
+                    "configurationSnippets", []),
                 "variables": item.get("variables", {}),
                 "languages": item.get("languages", []),
+                "configurationAttributeScopes": details[
+                    "configurationAttributeScopes"],
+                "configurationAttributeScopeCount": details[
+                    "configurationAttributeScopeCount"],
+                "initialConfigurationCount": details[
+                    "initialConfigurationCount"],
+                "configurationSnippetCount": details[
+                    "configurationSnippetCount"],
+                "variableCount": details["variableCount"],
+                "variableNames": details["variableNames"],
+                "languageCount": details["languageCount"],
+                "breakpointLanguageCount": details[
+                    "breakpointLanguageCount"],
+                "breakpointLanguages": details["breakpointLanguages"],
+                "adapterProgram": details["adapterProgram"],
+                "adapterRuntime": details["adapterRuntime"],
                 "runtimeOnly": False,
                 "configurationProviders": configs,
                 "adapterFactories": factories,
@@ -12790,6 +12885,18 @@ class AIEditorAPI:
                 "hasCreateDebugAdapterTracker": any(
                     bool(tracker.get("hasCreateDebugAdapterTracker"))
                     for tracker in trackers),
+                "configurationAttributeScopes": [],
+                "configurationAttributeScopeCount": 0,
+                "initialConfigurationCount": 0,
+                "configurationSnippetCount": 0,
+                "variableCount": 0,
+                "variableNames": [],
+                "languageCount": 0,
+                "languages": [],
+                "breakpointLanguageCount": 0,
+                "breakpointLanguages": [],
+                "adapterProgram": "",
+                "adapterRuntime": "",
                 "readiness": "ready",
                 "readinessScore": 100,
                 "readinessIssues": [],
@@ -12815,8 +12922,20 @@ class AIEditorAPI:
                     "hasCreateDebugAdapterTracker"],
                 "configurationAttributes": {},
                 "initialConfigurations": [],
+                "configurationSnippets": [],
                 "variables": {},
                 "languages": [],
+                "configurationAttributeScopes": [],
+                "configurationAttributeScopeCount": 0,
+                "initialConfigurationCount": 0,
+                "configurationSnippetCount": 0,
+                "variableCount": 0,
+                "variableNames": [],
+                "languageCount": 0,
+                "breakpointLanguageCount": 0,
+                "breakpointLanguages": [],
+                "adapterProgram": "",
+                "adapterRuntime": "",
                 "runtimeOnly": True,
                 "configurationProviders": configs,
                 "adapterFactories": factories,
@@ -13644,6 +13763,12 @@ class AIEditorAPI:
         task_problem_matchers = sum(
             int(item.get("problemMatcherCount") or 0)
             for item in task_definitions)
+        task_required_properties = sum(
+            int(item.get("requiredCount") or 0)
+            for item in task_definitions)
+        task_schema_properties = sum(
+            int(item.get("propertyCount") or 0)
+            for item in task_definitions)
         task_runtime_only = sum(
             1 for item in task_definitions if item.get("runtimeOnly"))
         debug_config_providers = sum(
@@ -13654,6 +13779,24 @@ class AIEditorAPI:
             for item in debuggers)
         debug_adapter_trackers = sum(
             int(item.get("adapterTrackerCount") or 0)
+            for item in debuggers)
+        debug_configuration_attributes = sum(
+            int(item.get("configurationAttributeScopeCount") or 0)
+            for item in debuggers)
+        debug_initial_configurations = sum(
+            int(item.get("initialConfigurationCount") or 0)
+            for item in debuggers)
+        debug_configuration_snippets = sum(
+            int(item.get("configurationSnippetCount") or 0)
+            for item in debuggers)
+        debug_variables = sum(
+            int(item.get("variableCount") or 0)
+            for item in debuggers)
+        debug_languages = sum(
+            int(item.get("languageCount") or 0)
+            for item in debuggers)
+        debug_breakpoint_languages = sum(
+            int(item.get("breakpointLanguageCount") or 0)
             for item in debuggers)
         debug_runtime_only = sum(
             1 for item in debuggers if item.get("runtimeOnly"))
@@ -13758,11 +13901,19 @@ class AIEditorAPI:
                 "taskDefinitions": len(task_definitions),
                 "taskProviders": task_providers,
                 "taskProblemMatchers": task_problem_matchers,
+                "taskRequiredProperties": task_required_properties,
+                "taskSchemaProperties": task_schema_properties,
                 "taskRuntimeOnly": task_runtime_only,
                 "debuggers": len(debuggers),
                 "debugConfigProviders": debug_config_providers,
                 "debugAdapterFactories": debug_adapter_factories,
                 "debugAdapterTrackers": debug_adapter_trackers,
+                "debugConfigurationAttributes": debug_configuration_attributes,
+                "debugInitialConfigurations": debug_initial_configurations,
+                "debugConfigurationSnippets": debug_configuration_snippets,
+                "debugVariables": debug_variables,
+                "debugLanguages": debug_languages,
+                "debugBreakpointLanguages": debug_breakpoint_languages,
                 "debugRuntimeOnly": debug_runtime_only,
                 "languageModelTools": len(language_model_tools),
                 "languageModelProviders": len(language_model_providers),

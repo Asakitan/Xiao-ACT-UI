@@ -38495,6 +38495,57 @@ function prepareExtensionRuntimeAssistantPrompt(row,prompt,statusText){
   if(status)status.textContent=statusText||('Prepared Assistant input for '+(row&&row.label||'runtime surface')+'.');
   return !!input;
 }
+function extensionRuntimeSurfaceKeys(value,limit){
+  const max=Number(limit)||12;
+  if(Array.isArray(value))return value.map(item=>String(item||'').trim()).filter(Boolean).slice(0,max);
+  if(value&&typeof value==='object')return Object.keys(value).map(key=>String(key||'').trim()).filter(Boolean).slice(0,max);
+  return [];
+}
+function extensionRuntimeTaskPrompt(row){
+  row=row||{};
+  const ev=row.surfaceEvidence||{};
+  const required=extensionRuntimeSurfaceKeys(row.taskRequiredKeys&&row.taskRequiredKeys.length?row.taskRequiredKeys:ev.requiredKeys,8);
+  const props=extensionRuntimeSurfaceKeys(row.taskPropertyKeys&&row.taskPropertyKeys.length?row.taskPropertyKeys:ev.propertyKeys,10);
+  const lines=['Run task type '+(row.id||row.label||'')+' for this workspace:'];
+  if(required.length)lines.push('Required fields: '+required.join(', ')+'.');
+  if(props.length)lines.push('Task schema properties: '+props.join(', ')+'.');
+  if(ev.problemMatcherCount)lines.push('Problem matchers: '+ev.problemMatcherCount+'.');
+  if(ev.hasResolveTask)lines.push('Use the registered resolveTask provider when task details are incomplete.');
+  return lines.join('\n');
+}
+function extensionRuntimeDebuggerLaunchTemplate(row){
+  row=row||{};
+  const initial=Array.isArray(row.debugInitialConfigurations)?row.debugInitialConfigurations:[];
+  if(initial.length){
+    try{return JSON.stringify(initial[0],null,2)}
+    catch(_e){return String(initial[0]||'')}
+  }
+  const snippets=Array.isArray(row.debugConfigurationSnippets)?row.debugConfigurationSnippets:[];
+  for(const snippet of snippets){
+    const body=snippet&&typeof snippet==='object'?(snippet.body||snippet.template||snippet.value):'';
+    if(body){
+      try{return typeof body==='string'?body:JSON.stringify(body,null,2)}
+      catch(_e){return String(body||'')}
+    }
+  }
+  return JSON.stringify({type:row.id||row.label||'',request:'launch',name:(row.label||row.id||'Debug')},null,2);
+}
+function extensionRuntimeDebuggerPrompt(row){
+  row=row||{};
+  const ev=row.surfaceEvidence||{};
+  const scopes=extensionRuntimeSurfaceKeys(row.debugConfigurationAttributeScopes&&row.debugConfigurationAttributeScopes.length?row.debugConfigurationAttributeScopes:ev.configurationAttributeScopes,8);
+  const vars=extensionRuntimeSurfaceKeys(row.debugVariableNames&&row.debugVariableNames.length?row.debugVariableNames:ev.variableNames,8);
+  const langs=extensionRuntimeSurfaceKeys(row.debugLanguages&&row.debugLanguages.length?row.debugLanguages:ev.languages,8);
+  const bps=extensionRuntimeSurfaceKeys(row.debugBreakpointLanguages&&row.debugBreakpointLanguages.length?row.debugBreakpointLanguages:ev.breakpointLanguages,8);
+  const lines=['Start debug configuration type '+(row.id||row.label||'')+' for this workspace:'];
+  if(scopes.length)lines.push('Configuration scopes: '+scopes.join(', ')+'.');
+  if(langs.length)lines.push('Supported languages: '+langs.join(', ')+'.');
+  if(bps.length)lines.push('Breakpoint languages: '+bps.join(', ')+'.');
+  if(vars.length)lines.push('Variables: '+vars.join(', ')+'.');
+  if(ev.hasResolveDebugConfigurationWithSubstitutedVariables)lines.push('Resolve substituted variables before launch.');
+  lines.push('Launch template:\n'+extensionRuntimeDebuggerLaunchTemplate(row));
+  return lines.join('\n');
+}
 function openExtensionRuntimeTerminalProfile(row){
   const profile=String(row&&row.id||row&&row.action&&row.action.target||'').trim();
   if(!profile)return false;
@@ -38803,8 +38854,25 @@ function extensionRuntimeSurfaceRows(data){
       surfaceEvidence.hasResolveTask?'resolve-task':'',
       surfaceEvidence.hasProvideDebugConfigurations?'provide-debug-config':'',
       surfaceEvidence.hasResolveDebugConfiguration?'resolve-debug-config':'',
+      surfaceEvidence.hasResolveDebugConfigurationWithSubstitutedVariables?'resolve-debug-substituted':'',
       surfaceEvidence.hasCreateDebugAdapterDescriptor?'debug-adapter-descriptor':'',
       surfaceEvidence.hasCreateDebugAdapterTracker?'debug-adapter-tracker':'',
+      surfaceEvidence.requiredCount?'task-required:'+surfaceEvidence.requiredCount:'',
+      surfaceEvidence.propertyCount?'task-properties:'+surfaceEvidence.propertyCount:'',
+      surfaceEvidence.configurationAttributeScopeCount?'debug-attributes:'+surfaceEvidence.configurationAttributeScopeCount:'',
+      surfaceEvidence.initialConfigurationCount?'debug-initials:'+surfaceEvidence.initialConfigurationCount:'',
+      surfaceEvidence.configurationSnippetCount?'debug-snippets:'+surfaceEvidence.configurationSnippetCount:'',
+      surfaceEvidence.variableCount?'debug-vars:'+surfaceEvidence.variableCount:'',
+      surfaceEvidence.languageCount?'debug-languages:'+surfaceEvidence.languageCount:'',
+      surfaceEvidence.breakpointLanguageCount?'debug-breakpoints:'+surfaceEvidence.breakpointLanguageCount:'',
+      surfaceEvidence.adapterRuntime?'debug-runtime:'+surfaceEvidence.adapterRuntime:'',
+      surfaceEvidence.adapterProgram?'debug-program:'+surfaceEvidence.adapterProgram:'',
+      Array.isArray(surfaceEvidence.requiredKeys)?surfaceEvidence.requiredKeys.join(' '):'',
+      Array.isArray(surfaceEvidence.propertyKeys)?surfaceEvidence.propertyKeys.join(' '):'',
+      Array.isArray(surfaceEvidence.configurationAttributeScopes)?surfaceEvidence.configurationAttributeScopes.join(' '):'',
+      Array.isArray(surfaceEvidence.variableNames)?surfaceEvidence.variableNames.join(' '):'',
+      Array.isArray(surfaceEvidence.languages)?surfaceEvidence.languages.join(' '):'',
+      Array.isArray(surfaceEvidence.breakpointLanguages)?surfaceEvidence.breakpointLanguages.join(' '):'',
       Array.isArray(surfaceEvidence.controllerIds)?surfaceEvidence.controllerIds.join(' '):'',
       Array.isArray(surfaceEvidence.selectedControllerIds)?surfaceEvidence.selectedControllerIds.join(' '):'',
       Array.isArray(surfaceEvidence.affinityControllerIds)?surfaceEvidence.affinityControllerIds.join(' '):'',
@@ -38834,6 +38902,16 @@ function extensionRuntimeSurfaceRows(data){
       webviewReadiness:evidence.readiness||readiness.kind,
       webviewReadinessScore:Number(evidence.readinessScore||readiness.score)||0,
       webviewReadinessIssues:Array.isArray(evidence.readinessIssues)?evidence.readinessIssues.slice():[],
+      taskRequiredKeys:extensionRuntimeSurfaceKeys(item.requiredKeys||surfaceEvidence.requiredKeys||item.required,12),
+      taskPropertyKeys:extensionRuntimeSurfaceKeys(item.propertyKeys||surfaceEvidence.propertyKeys||item.properties,16),
+      debugConfigurationAttributeScopes:extensionRuntimeSurfaceKeys(item.configurationAttributeScopes||surfaceEvidence.configurationAttributeScopes||item.configurationAttributes,12),
+      debugInitialConfigurations:Array.isArray(item.initialConfigurations)?item.initialConfigurations.slice(0,4):[],
+      debugConfigurationSnippets:Array.isArray(item.configurationSnippets)?item.configurationSnippets.slice(0,4):[],
+      debugVariableNames:extensionRuntimeSurfaceKeys(item.variableNames||surfaceEvidence.variableNames||item.variables,12),
+      debugLanguages:extensionRuntimeSurfaceKeys(item.languages||surfaceEvidence.languages,16),
+      debugBreakpointLanguages:extensionRuntimeSurfaceKeys(item.breakpointLanguages||surfaceEvidence.breakpointLanguages,16),
+      debugAdapterProgram:String(item.adapterProgram||surfaceEvidence.adapterProgram||item.program||''),
+      debugAdapterRuntime:String(item.adapterRuntime||surfaceEvidence.adapterRuntime||item.runtime||item.runtimeExecutable||''),
       htmlAvailable:!!(evidence.htmlAvailable||item.htmlAvailable),
       htmlLength,
       lifecycleState:String(item.lifecycleState||item.runtimeState&&item.runtimeState.lifecycleState||''),
@@ -38993,10 +39071,10 @@ async function openExtensionRuntimeSurface(rowOrKey){
       ok=attachExtensionRuntimeChatContext(row);markExtensionRuntimeSurfaceAction(rowEl,ok?'success':'error');return ok;
     }
     if(action.type==='prepare-task-definition'){
-      ok=prepareExtensionRuntimeAssistantPrompt(row,'Run task type '+action.target+' for this workspace: ','Prepared task type '+action.target+' in Assistant.');markExtensionRuntimeSurfaceAction(rowEl,ok?'success':'error');return ok;
+      ok=prepareExtensionRuntimeAssistantPrompt(row,extensionRuntimeTaskPrompt(row),'Prepared task type '+action.target+' in Assistant.');markExtensionRuntimeSurfaceAction(rowEl,ok?'success':'error');return ok;
     }
     if(action.type==='prepare-debugger'){
-      ok=prepareExtensionRuntimeAssistantPrompt(row,'Start debug configuration type '+action.target+' for this workspace: ','Prepared debugger '+action.target+' in Assistant.');markExtensionRuntimeSurfaceAction(rowEl,ok?'success':'error');return ok;
+      ok=prepareExtensionRuntimeAssistantPrompt(row,extensionRuntimeDebuggerPrompt(row),'Prepared debugger '+action.target+' in Assistant.');markExtensionRuntimeSurfaceAction(rowEl,ok?'success':'error');return ok;
     }
     if(status)status.textContent='Selected '+row.kind+': '+row.label+'.';
     markExtensionRuntimeSurfaceAction(rowEl,'');
@@ -39235,10 +39313,18 @@ function renderExtensionRuntimeSurfacePanel(data){
     ['Terminal',summary.terminalProfiles||0],
     ['Task',summary.taskDefinitions||rows.filter(row=>row.kind==='TaskDefinition').length],
     ['Task Providers',summary.taskProviders||rows.reduce((n,row)=>n+(row.kind==='TaskDefinition'?(Number(row.surfaceEvidence&&row.surfaceEvidence.providerCount)||0):0),0)],
+    ['Task Required',summary.taskRequiredProperties||rows.reduce((n,row)=>n+(row.kind==='TaskDefinition'?(Number(row.surfaceEvidence&&row.surfaceEvidence.requiredCount)||0):0),0)],
+    ['Task Schema',summary.taskSchemaProperties||rows.reduce((n,row)=>n+(row.kind==='TaskDefinition'?(Number(row.surfaceEvidence&&row.surfaceEvidence.propertyCount)||0):0),0)],
     ['Debug',summary.debuggers||rows.filter(row=>row.kind==='Debugger').length],
     ['Debug Config',summary.debugConfigProviders||rows.reduce((n,row)=>n+(row.kind==='Debugger'?(Number(row.surfaceEvidence&&row.surfaceEvidence.configurationProviderCount)||0):0),0)],
     ['Debug Adapter',summary.debugAdapterFactories||rows.reduce((n,row)=>n+(row.kind==='Debugger'?(Number(row.surfaceEvidence&&row.surfaceEvidence.adapterFactoryCount)||0):0),0)],
     ['Debug Tracker',summary.debugAdapterTrackers||rows.reduce((n,row)=>n+(row.kind==='Debugger'?(Number(row.surfaceEvidence&&row.surfaceEvidence.adapterTrackerCount)||0):0),0)],
+    ['Debug Attrs',summary.debugConfigurationAttributes||rows.reduce((n,row)=>n+(row.kind==='Debugger'?(Number(row.surfaceEvidence&&row.surfaceEvidence.configurationAttributeScopeCount)||0):0),0)],
+    ['Debug Initials',summary.debugInitialConfigurations||rows.reduce((n,row)=>n+(row.kind==='Debugger'?(Number(row.surfaceEvidence&&row.surfaceEvidence.initialConfigurationCount)||0):0),0)],
+    ['Debug Snippets',summary.debugConfigurationSnippets||rows.reduce((n,row)=>n+(row.kind==='Debugger'?(Number(row.surfaceEvidence&&row.surfaceEvidence.configurationSnippetCount)||0):0),0)],
+    ['Debug Vars',summary.debugVariables||rows.reduce((n,row)=>n+(row.kind==='Debugger'?(Number(row.surfaceEvidence&&row.surfaceEvidence.variableCount)||0):0),0)],
+    ['Debug Langs',summary.debugLanguages||rows.reduce((n,row)=>n+(row.kind==='Debugger'?(Number(row.surfaceEvidence&&row.surfaceEvidence.languageCount)||0):0),0)],
+    ['Debug Breakpoints',summary.debugBreakpointLanguages||rows.reduce((n,row)=>n+(row.kind==='Debugger'?(Number(row.surfaceEvidence&&row.surfaceEvidence.breakpointLanguageCount)||0):0),0)],
     ['LM Tool',summary.languageModelTools||0],
     ['LM Provider',summary.languageModelProviders||0],
     ['Chat',summary.chatParticipants||0],
@@ -39288,13 +39374,13 @@ function renderExtensionRuntimeSurfacePanel(data){
   chips.forEach(([label,value])=>{
     const chip=document.createElement('span');chip.className='extension-runtime-chip';
     chip.innerHTML='<strong>'+esc(String(value))+'</strong>'+esc(label);
-    if(['TreeView','WebviewView','WebviewPanel','Panel Ready','Panel Visible','Panel Retained','Panel Messages','CustomEditor','Notebook','Custom Ready','Custom Warnings','Custom Dirty','Notebook Ready','Notebook Warnings','Notebook Kernels','Notebook Status','Command','Menu','Terminal','Task','Task Providers','Debug','Debug Config','Debug Adapter','Debug Tracker','LM Tool','LM Provider','Chat','Context','Status Bar','Status Commands','Language Status','Language Busy','Language Warnings','Language Errors','Runtime','Manifest','Manifest + Runtime','Runtime Only','Provider Webview','Webview HTML','Missing Webview HTML','Retained Webview','Evidence Ready','Iframe Mounted','Iframe Missing','DOM Visible','Resource Rewrites','Resource Roots','Port Mappings','Webview Messages','Binary Webview','Queued Webview','Dropped Webview','Bridge Ready','Bridge Warnings','Message Stalled','Resource Warnings','Webview Failures','Webview Ready','Webview Warnings'].includes(label)){
+    if(['TreeView','WebviewView','WebviewPanel','Panel Ready','Panel Visible','Panel Retained','Panel Messages','CustomEditor','Notebook','Custom Ready','Custom Warnings','Custom Dirty','Notebook Ready','Notebook Warnings','Notebook Kernels','Notebook Status','Command','Menu','Terminal','Task','Task Providers','Task Required','Task Schema','Debug','Debug Config','Debug Adapter','Debug Tracker','Debug Attrs','Debug Initials','Debug Snippets','Debug Vars','Debug Langs','Debug Breakpoints','LM Tool','LM Provider','Chat','Context','Status Bar','Status Commands','Language Status','Language Busy','Language Warnings','Language Errors','Runtime','Manifest','Manifest + Runtime','Runtime Only','Provider Webview','Webview HTML','Missing Webview HTML','Retained Webview','Evidence Ready','Iframe Mounted','Iframe Missing','DOM Visible','Resource Rewrites','Resource Roots','Port Mappings','Webview Messages','Binary Webview','Queued Webview','Dropped Webview','Bridge Ready','Bridge Warnings','Message Stalled','Resource Warnings','Webview Failures','Webview Ready','Webview Warnings'].includes(label)){
       chip.classList.add('filterable');
       chip.tabIndex=0;
       chip.setAttribute('role','button');
       chip.dataset.filterLabel=label;
       chip.onclick=()=>{
-        const kindMap={'Terminal':'TerminalProfile','Task':'TaskDefinition','Task Providers':'TaskDefinition','Debug':'Debugger','Debug Config':'Debugger','Debug Adapter':'Debugger','Debug Tracker':'Debugger','LM Tool':'LMTool','LM Provider':'LMProvider','Chat':'ChatParticipant','Context':'ChatContext','Status Bar':'StatusBarItem','Status Commands':'StatusBarItem','Language Status':'LanguageStatus','Language Busy':'LanguageStatus','Language Warnings':'LanguageStatus','Language Errors':'LanguageStatus'};
+        const kindMap={'Terminal':'TerminalProfile','Task':'TaskDefinition','Task Providers':'TaskDefinition','Task Required':'TaskDefinition','Task Schema':'TaskDefinition','Debug':'Debugger','Debug Config':'Debugger','Debug Adapter':'Debugger','Debug Tracker':'Debugger','Debug Attrs':'Debugger','Debug Initials':'Debugger','Debug Snippets':'Debugger','Debug Vars':'Debugger','Debug Langs':'Debugger','Debug Breakpoints':'Debugger','LM Tool':'LMTool','LM Provider':'LMProvider','Chat':'ChatParticipant','Context':'ChatContext','Status Bar':'StatusBarItem','Status Commands':'StatusBarItem','Language Status':'LanguageStatus','Language Busy':'LanguageStatus','Language Warnings':'LanguageStatus','Language Errors':'LanguageStatus'};
         const sourceMap={Runtime:'manifest+runtime',Manifest:'manifest','Manifest + Runtime':'manifest+runtime','Runtime Only':'runtime-only'};
         const evidenceMap={'Panel Ready':'rendered','Panel Visible':'dom-visible','Panel Retained':'retained','Panel Messages':'messages','Webview HTML':'rendered','Missing Webview HTML':'missing','Retained Webview':'retained','Evidence Ready':'rendered','Iframe Mounted':'iframe-mounted','Iframe Missing':'iframe-missing','DOM Visible':'dom-visible','Resource Rewrites':'resources','Resource Roots':'resources','Port Mappings':'resources','Webview Messages':'messages','Binary Webview':'binary','Queued Webview':'queued','Dropped Webview':'dropped','Bridge Ready':'bridge-ready','Bridge Warnings':'bridge-warning','Message Stalled':'message-stalled','Resource Warnings':'resource-warning','Webview Failures':'failures','Provider Webview':'rendered'};
         const kindSel=$('extension-runtime-filter-kind'),sourceSel=$('extension-runtime-filter-source'),evidenceSel=$('extension-runtime-filter-evidence');
@@ -39412,13 +39498,30 @@ function renderExtensionRuntimeSurfacePanel(data){
       el.dataset.surfaceAffinityCount=String(row.surfaceEvidence&&row.surfaceEvidence.affinityCount||0);
       el.dataset.surfaceProviderCount=String(row.surfaceEvidence&&row.surfaceEvidence.providerCount||0);
       el.dataset.surfaceProblemMatcherCount=String(row.surfaceEvidence&&row.surfaceEvidence.problemMatcherCount||0);
+      el.dataset.surfaceTaskRequiredCount=String(row.surfaceEvidence&&row.surfaceEvidence.requiredCount||0);
+      el.dataset.surfaceTaskPropertyCount=String(row.surfaceEvidence&&row.surfaceEvidence.propertyCount||0);
+      el.dataset.surfaceTaskRequiredKeys=Array.isArray(row.taskRequiredKeys)?row.taskRequiredKeys.join(','):'';
+      el.dataset.surfaceTaskPropertyKeys=Array.isArray(row.taskPropertyKeys)?row.taskPropertyKeys.join(','):'';
       el.dataset.surfaceDebugConfigProviderCount=String(row.surfaceEvidence&&row.surfaceEvidence.configurationProviderCount||0);
       el.dataset.surfaceDebugAdapterFactoryCount=String(row.surfaceEvidence&&row.surfaceEvidence.adapterFactoryCount||0);
       el.dataset.surfaceDebugAdapterTrackerCount=String(row.surfaceEvidence&&row.surfaceEvidence.adapterTrackerCount||0);
+      el.dataset.surfaceDebugAttributeScopeCount=String(row.surfaceEvidence&&row.surfaceEvidence.configurationAttributeScopeCount||0);
+      el.dataset.surfaceDebugInitialConfigurationCount=String(row.surfaceEvidence&&row.surfaceEvidence.initialConfigurationCount||0);
+      el.dataset.surfaceDebugConfigurationSnippetCount=String(row.surfaceEvidence&&row.surfaceEvidence.configurationSnippetCount||0);
+      el.dataset.surfaceDebugVariableCount=String(row.surfaceEvidence&&row.surfaceEvidence.variableCount||0);
+      el.dataset.surfaceDebugLanguageCount=String(row.surfaceEvidence&&row.surfaceEvidence.languageCount||0);
+      el.dataset.surfaceDebugBreakpointLanguageCount=String(row.surfaceEvidence&&row.surfaceEvidence.breakpointLanguageCount||0);
+      el.dataset.surfaceDebugAttributeScopes=Array.isArray(row.debugConfigurationAttributeScopes)?row.debugConfigurationAttributeScopes.join(','):'';
+      el.dataset.surfaceDebugVariableNames=Array.isArray(row.debugVariableNames)?row.debugVariableNames.join(','):'';
+      el.dataset.surfaceDebugLanguages=Array.isArray(row.debugLanguages)?row.debugLanguages.join(','):'';
+      el.dataset.surfaceDebugBreakpointLanguages=Array.isArray(row.debugBreakpointLanguages)?row.debugBreakpointLanguages.join(','):'';
+      el.dataset.surfaceDebugAdapterProgram=String(row.debugAdapterProgram||'');
+      el.dataset.surfaceDebugAdapterRuntime=String(row.debugAdapterRuntime||'');
       el.dataset.surfaceHasProvideTasks=row.surfaceEvidence&&row.surfaceEvidence.hasProvideTasks?'1':'0';
       el.dataset.surfaceHasResolveTask=row.surfaceEvidence&&row.surfaceEvidence.hasResolveTask?'1':'0';
       el.dataset.surfaceHasProvideDebugConfigurations=row.surfaceEvidence&&row.surfaceEvidence.hasProvideDebugConfigurations?'1':'0';
       el.dataset.surfaceHasResolveDebugConfiguration=row.surfaceEvidence&&row.surfaceEvidence.hasResolveDebugConfiguration?'1':'0';
+      el.dataset.surfaceHasResolveDebugConfigurationWithSubstitutedVariables=row.surfaceEvidence&&row.surfaceEvidence.hasResolveDebugConfigurationWithSubstitutedVariables?'1':'0';
       el.dataset.surfaceHasCreateDebugAdapterDescriptor=row.surfaceEvidence&&row.surfaceEvidence.hasCreateDebugAdapterDescriptor?'1':'0';
       el.dataset.surfaceHasCreateDebugAdapterTracker=row.surfaceEvidence&&row.surfaceEvidence.hasCreateDebugAdapterTracker?'1':'0';
       el.dataset.surfaceSelectedControllerIds=Array.isArray(row.surfaceEvidence&&row.surfaceEvidence.selectedControllerIds)?row.surfaceEvidence.selectedControllerIds.join(','):'';
@@ -39572,6 +39675,10 @@ function renderExtensionRuntimeSurfacePanel(data){
           ...(row.surfaceReadinessIssues||[]).slice(0,2).map(issue=>({text:issue,missing:true})),
           ev.providerCount?{text:'providers '+ev.providerCount}:null,
           ev.problemMatcherCount?{text:'matchers '+ev.problemMatcherCount}:null,
+          ev.requiredCount?{text:'required '+ev.requiredCount}:null,
+          ev.propertyCount?{text:'schema '+ev.propertyCount}:null,
+          Array.isArray(ev.requiredKeys)&&ev.requiredKeys.length?{text:'req '+ev.requiredKeys.slice(0,2).join(',')}:null,
+          Array.isArray(ev.propertyKeys)&&ev.propertyKeys.length?{text:'props '+ev.propertyKeys.slice(0,2).join(',')}:null,
           ev.hasProvideTasks?{text:'provideTasks'}:{text:'no provideTasks',missing:true},
           ev.hasResolveTask?{text:'resolveTask'}:null,
         ].filter(Boolean).forEach(item=>{
@@ -39588,8 +39695,20 @@ function renderExtensionRuntimeSurfacePanel(data){
           ev.configurationProviderCount?{text:'config '+ev.configurationProviderCount}:null,
           ev.adapterFactoryCount?{text:'adapter '+ev.adapterFactoryCount}:null,
           ev.adapterTrackerCount?{text:'tracker '+ev.adapterTrackerCount}:null,
+          ev.configurationAttributeScopeCount?{text:'attrs '+ev.configurationAttributeScopeCount}:null,
+          ev.initialConfigurationCount?{text:'initials '+ev.initialConfigurationCount}:null,
+          ev.configurationSnippetCount?{text:'snippets '+ev.configurationSnippetCount}:null,
+          ev.variableCount?{text:'vars '+ev.variableCount}:null,
+          ev.languageCount?{text:'langs '+ev.languageCount}:null,
+          ev.breakpointLanguageCount?{text:'breakpoints '+ev.breakpointLanguageCount}:null,
+          Array.isArray(ev.configurationAttributeScopes)&&ev.configurationAttributeScopes.length?{text:'scope '+ev.configurationAttributeScopes.slice(0,2).join(',')}:null,
+          Array.isArray(ev.languages)&&ev.languages.length?{text:'lang '+ev.languages.slice(0,2).join(',')}:null,
+          Array.isArray(ev.breakpointLanguages)&&ev.breakpointLanguages.length?{text:'bp '+ev.breakpointLanguages.slice(0,2).join(',')}:null,
+          ev.adapterRuntime?{text:'runtime '+ev.adapterRuntime}:null,
+          ev.adapterProgram?{text:'program'}:null,
           ev.hasProvideDebugConfigurations?{text:'provideConfig'}:null,
           ev.hasResolveDebugConfiguration?{text:'resolveConfig'}:null,
+          ev.hasResolveDebugConfigurationWithSubstitutedVariables?{text:'resolveSubst'}:null,
           ev.hasCreateDebugAdapterDescriptor?{text:'descriptor'}:{text:'no descriptor',missing:true},
           ev.hasCreateDebugAdapterTracker?{text:'trackerFactory'}:null,
         ].filter(Boolean).forEach(item=>{
@@ -41518,7 +41637,7 @@ function extensionRuntimeDomSelfCheckSnapshot(){
     root.appendChild(notebookOutputHost);
 
     const runtimeData={
-      summary:{treeViews:1,webviewViews:2,webviewPanels:1,webviewPanelReady:1,webviewPanelVisible:1,webviewPanelMessages:2,webviewPanelRetained:1,webviewHtmlAvailable:1,webviewRetained:1,webviewVisible:1,webviewBridgeReady:1,webviewBridgeWarnings:1,webviewMessageStalled:1,webviewResourceWarnings:1,webviewFailureCount:1,customEditors:1,customEditorReady:1,customEditorDirtyStates:1,notebooks:1,notebookReady:1,notebookControllers:1,notebookStatusBarProviders:1,commands:1,menus:1,terminalProfiles:1,taskDefinitions:1,taskProviders:1,taskProblemMatchers:1,debuggers:1,debugConfigProviders:1,debugAdapterFactories:1,debugAdapterTrackers:1,languageModelTools:1,languageModelProviders:1,chatParticipants:1,chatContextProviders:1,statusBarItems:1,statusBarCommands:1,languageStatusItems:1,languageStatusWarnings:1,dynamicSurfaces:17},
+      summary:{treeViews:1,webviewViews:2,webviewPanels:1,webviewPanelReady:1,webviewPanelVisible:1,webviewPanelMessages:2,webviewPanelRetained:1,webviewHtmlAvailable:1,webviewRetained:1,webviewVisible:1,webviewBridgeReady:1,webviewBridgeWarnings:1,webviewMessageStalled:1,webviewResourceWarnings:1,webviewFailureCount:1,customEditors:1,customEditorReady:1,customEditorDirtyStates:1,notebooks:1,notebookReady:1,notebookControllers:1,notebookStatusBarProviders:1,commands:1,menus:1,terminalProfiles:1,taskDefinitions:1,taskProviders:1,taskProblemMatchers:1,taskRequiredProperties:1,taskSchemaProperties:2,debuggers:1,debugConfigProviders:1,debugAdapterFactories:1,debugAdapterTrackers:1,debugConfigurationAttributes:2,debugInitialConfigurations:1,debugConfigurationSnippets:1,debugVariables:1,debugLanguages:1,debugBreakpointLanguages:1,languageModelTools:1,languageModelProviders:1,chatParticipants:1,chatContextProviders:1,statusBarItems:1,statusBarCommands:1,languageStatusItems:1,languageStatusWarnings:1,dynamicSurfaces:17},
       viewContainers:[fixtureItem],
       treeViews:[{id:'selftest.dynamic.tree',name:'Runtime Tree',container:'selftest.dynamic.container',extensionId:'selftest.extension',runtimeAvailable:true}],
       webviewViews:[
@@ -41531,8 +41650,8 @@ function extensionRuntimeDomSelfCheckSnapshot(){
       commands:[{command:'selftest.run',title:'Run Fixture',source:'extension',extensionId:'selftest.extension',disabled:false}],
       menus:[{menu:'view/title',command:'selftest.run',when:'view == selftest.dynamic.tree',extensionId:'selftest.extension'}],
       terminalProfiles:[{id:'selftest.terminalProfile',extensionId:'selftest.extension',runtimeAvailable:true}],
-      taskDefinitions:[{type:'selftest.task',extensionId:'selftest.extension',runtimeAvailable:true,providerCount:1,hasProvideTasks:true,hasResolveTask:true,problemMatcherCount:1,runtimeOnly:true,surfaceEvidence:{kind:'taskDefinition',type:'selftest.task',runtimeAvailable:true,providerCount:1,hasProvideTasks:true,hasResolveTask:true,problemMatcherCount:1,readiness:'ready',readinessScore:100,readinessIssues:[]}}],
-      debuggers:[{type:'selftest.debug',label:'Selftest Debugger',extensionId:'selftest.extension',runtimeAvailable:true,configurationProviderCount:1,adapterFactoryCount:1,adapterTrackerCount:1,hasProvideDebugConfigurations:true,hasResolveDebugConfiguration:true,hasCreateDebugAdapterDescriptor:true,hasCreateDebugAdapterTracker:true,runtimeOnly:true,surfaceEvidence:{kind:'debugger',type:'selftest.debug',runtimeAvailable:true,configurationProviderCount:1,adapterFactoryCount:1,adapterTrackerCount:1,hasProvideDebugConfigurations:true,hasResolveDebugConfiguration:true,hasCreateDebugAdapterDescriptor:true,hasCreateDebugAdapterTracker:true,readiness:'ready',readinessScore:100,readinessIssues:[]}}],
+      taskDefinitions:[{type:'selftest.task',extensionId:'selftest.extension',runtimeAvailable:true,providerCount:1,hasProvideTasks:true,hasResolveTask:true,problemMatcherCount:1,required:['command'],properties:{command:{type:'string'},cwd:{type:'string'}},requiredCount:1,propertyCount:2,requiredKeys:['command'],propertyKeys:['command','cwd'],runtimeOnly:true,surfaceEvidence:{kind:'taskDefinition',type:'selftest.task',runtimeAvailable:true,providerCount:1,hasProvideTasks:true,hasResolveTask:true,problemMatcherCount:1,requiredCount:1,propertyCount:2,requiredKeys:['command'],propertyKeys:['command','cwd'],readiness:'ready',readinessScore:100,readinessIssues:[]}}],
+      debuggers:[{type:'selftest.debug',label:'Selftest Debugger',extensionId:'selftest.extension',runtimeAvailable:true,configurationProviderCount:1,adapterFactoryCount:1,adapterTrackerCount:1,hasProvideDebugConfigurations:true,hasResolveDebugConfiguration:true,hasResolveDebugConfigurationWithSubstitutedVariables:true,hasCreateDebugAdapterDescriptor:true,hasCreateDebugAdapterTracker:true,configurationAttributes:{launch:{required:['program']},attach:{required:['processId']}},initialConfigurations:[{type:'selftest.debug',request:'launch',name:'Launch Selftest',program:'${workspaceFolder}/index.js'}],configurationSnippets:[{label:'Selftest launch',body:{type:'selftest.debug',request:'launch',name:'Selftest snippet'}}],variables:{selftestWorkspace:'workspace'},languages:['javascript'],configurationAttributeScopes:['attach','launch'],configurationAttributeScopeCount:2,initialConfigurationCount:1,configurationSnippetCount:1,variableCount:1,variableNames:['selftestWorkspace'],languageCount:1,breakpointLanguageCount:1,breakpointLanguages:['javascript'],adapterRuntime:'node',adapterProgram:'debug-adapter.js',runtimeOnly:true,surfaceEvidence:{kind:'debugger',type:'selftest.debug',runtimeAvailable:true,configurationProviderCount:1,adapterFactoryCount:1,adapterTrackerCount:1,hasProvideDebugConfigurations:true,hasResolveDebugConfiguration:true,hasResolveDebugConfigurationWithSubstitutedVariables:true,hasCreateDebugAdapterDescriptor:true,hasCreateDebugAdapterTracker:true,configurationAttributeScopes:['attach','launch'],configurationAttributeScopeCount:2,initialConfigurationCount:1,configurationSnippetCount:1,variableCount:1,variableNames:['selftestWorkspace'],languageCount:1,languages:['javascript'],breakpointLanguageCount:1,breakpointLanguages:['javascript'],adapterRuntime:'node',adapterProgram:'debug-adapter.js',readiness:'ready',readinessScore:100,readinessIssues:[]}}],
       languageModelTools:[{name:'selftest.lmTool',description:'LM tool fixture',extensionId:'selftest.extension',runtimeAvailable:true}],
       languageModelProviders:[{vendor:'selftest.vendor',name:'Selftest LM Provider',modelCount:1,extensionId:'selftest.extension',runtimeAvailable:true}],
       chatParticipants:[{id:'selftest.chat',name:'Selftest Chat',extensionId:'selftest.extension',runtimeAvailable:true}],
@@ -41851,10 +41970,24 @@ function extensionRuntimeDomSelfCheckSnapshot(){
       runtimeTaskDefinitionRows:runtimeList?Array.from(runtimeList.querySelectorAll('.extension-runtime-row')).filter(row=>row.dataset.kind==='TaskDefinition').length:0,
       runtimeTaskProviderRows:runtimeList?Array.from(runtimeList.querySelectorAll('.extension-runtime-row')).filter(row=>row.dataset.kind==='TaskDefinition'&&(Number(row.dataset.surfaceProviderCount)||0)>0).length:0,
       runtimeTaskResolveRows:runtimeList?Array.from(runtimeList.querySelectorAll('.extension-runtime-row')).filter(row=>row.dataset.kind==='TaskDefinition'&&row.dataset.surfaceHasResolveTask==='1').length:0,
+      runtimeTaskRequiredRows:runtimeList?Array.from(runtimeList.querySelectorAll('.extension-runtime-row')).filter(row=>row.dataset.kind==='TaskDefinition'&&(Number(row.dataset.surfaceTaskRequiredCount)||0)>0).length:0,
+      runtimeTaskSchemaRows:runtimeList?Array.from(runtimeList.querySelectorAll('.extension-runtime-row')).filter(row=>row.dataset.kind==='TaskDefinition'&&(Number(row.dataset.surfaceTaskPropertyCount)||0)>0).length:0,
+      runtimeTaskRequiredKeys:runtimeList?Array.from(runtimeList.querySelectorAll('.extension-runtime-row')).map(row=>row.dataset.surfaceTaskRequiredKeys||'').filter(Boolean):[],
+      runtimeTaskPropertyKeys:runtimeList?Array.from(runtimeList.querySelectorAll('.extension-runtime-row')).map(row=>row.dataset.surfaceTaskPropertyKeys||'').filter(Boolean):[],
       runtimeDebugRows:runtimeList?Array.from(runtimeList.querySelectorAll('.extension-runtime-row')).filter(row=>row.dataset.kind==='Debugger').length:0,
       runtimeDebugConfigRows:runtimeList?Array.from(runtimeList.querySelectorAll('.extension-runtime-row')).filter(row=>row.dataset.kind==='Debugger'&&(Number(row.dataset.surfaceDebugConfigProviderCount)||0)>0).length:0,
       runtimeDebugAdapterRows:runtimeList?Array.from(runtimeList.querySelectorAll('.extension-runtime-row')).filter(row=>row.dataset.kind==='Debugger'&&(Number(row.dataset.surfaceDebugAdapterFactoryCount)||0)>0).length:0,
       runtimeDebugTrackerRows:runtimeList?Array.from(runtimeList.querySelectorAll('.extension-runtime-row')).filter(row=>row.dataset.kind==='Debugger'&&(Number(row.dataset.surfaceDebugAdapterTrackerCount)||0)>0).length:0,
+      runtimeDebugAttributeRows:runtimeList?Array.from(runtimeList.querySelectorAll('.extension-runtime-row')).filter(row=>row.dataset.kind==='Debugger'&&(Number(row.dataset.surfaceDebugAttributeScopeCount)||0)>0).length:0,
+      runtimeDebugInitialRows:runtimeList?Array.from(runtimeList.querySelectorAll('.extension-runtime-row')).filter(row=>row.dataset.kind==='Debugger'&&(Number(row.dataset.surfaceDebugInitialConfigurationCount)||0)>0).length:0,
+      runtimeDebugSnippetRows:runtimeList?Array.from(runtimeList.querySelectorAll('.extension-runtime-row')).filter(row=>row.dataset.kind==='Debugger'&&(Number(row.dataset.surfaceDebugConfigurationSnippetCount)||0)>0).length:0,
+      runtimeDebugVariableRows:runtimeList?Array.from(runtimeList.querySelectorAll('.extension-runtime-row')).filter(row=>row.dataset.kind==='Debugger'&&(Number(row.dataset.surfaceDebugVariableCount)||0)>0).length:0,
+      runtimeDebugLanguageRows:runtimeList?Array.from(runtimeList.querySelectorAll('.extension-runtime-row')).filter(row=>row.dataset.kind==='Debugger'&&(Number(row.dataset.surfaceDebugLanguageCount)||0)>0).length:0,
+      runtimeDebugBreakpointRows:runtimeList?Array.from(runtimeList.querySelectorAll('.extension-runtime-row')).filter(row=>row.dataset.kind==='Debugger'&&(Number(row.dataset.surfaceDebugBreakpointLanguageCount)||0)>0).length:0,
+      runtimeDebugSubstitutedRows:runtimeList?Array.from(runtimeList.querySelectorAll('.extension-runtime-row')).filter(row=>row.dataset.kind==='Debugger'&&row.dataset.surfaceHasResolveDebugConfigurationWithSubstitutedVariables==='1').length:0,
+      runtimeDebugScopes:runtimeList?Array.from(runtimeList.querySelectorAll('.extension-runtime-row')).map(row=>row.dataset.surfaceDebugAttributeScopes||'').filter(Boolean):[],
+      runtimeDebugLanguages:runtimeList?Array.from(runtimeList.querySelectorAll('.extension-runtime-row')).map(row=>row.dataset.surfaceDebugLanguages||'').filter(Boolean):[],
+      runtimeDebugBreakpointLanguages:runtimeList?Array.from(runtimeList.querySelectorAll('.extension-runtime-row')).map(row=>row.dataset.surfaceDebugBreakpointLanguages||'').filter(Boolean):[],
       runtimeStatusBarRows:runtimeList?Array.from(runtimeList.querySelectorAll('.extension-runtime-row')).filter(row=>row.dataset.kind==='StatusBarItem').length:0,
       runtimeStatusBarCommandRows:runtimeList?Array.from(runtimeList.querySelectorAll('.extension-runtime-row')).filter(row=>row.dataset.kind==='StatusBarItem'&&row.dataset.surfaceHasCommand==='1').length:0,
       runtimeStatusBarLeftRows:runtimeList?Array.from(runtimeList.querySelectorAll('.extension-runtime-row')).filter(row=>row.dataset.kind==='StatusBarItem'&&row.dataset.surfaceStatusBarAlignment==='left').length:0,
@@ -41941,7 +42074,7 @@ function extensionRuntimeDomSelfCheckSnapshot(){
       && snapshot.activityRole==='button'&&snapshot.activityTabIndex===0&&snapshot.activityLabel.includes('Selftest Extensions')&&snapshot.activityPanel==='ext-vc-selftest.dynamic.container'
       && snapshot.customPlaceholder&&snapshot.customDataset.viewType==='selftest.customEditor'&&snapshot.customCapabilities
       && snapshot.notebookOutputItems===3&&snapshot.notebookHtmlFrame&&snapshot.notebookImage&&snapshot.notebookText
-      && snapshot.runtimeRows>=17&&snapshot.runtimeReadyRows>=16&&snapshot.runtimeChips>=32
+      && snapshot.runtimeRows>=17&&snapshot.runtimeReadyRows>=16&&snapshot.runtimeChips>=40
       && snapshot.runtimeWebviewEvidenceRows>=6&&snapshot.runtimeHtmlEvidenceRows>=1&&snapshot.runtimeMissingEvidenceFilterVisible>=1&&snapshot.runtimeWebviewRetainedRows>=1
       && snapshot.runtimeWebviewMessageRows>=1&&snapshot.runtimeWebviewBinaryRows>=1&&snapshot.runtimeWebviewBinaryTypes.some(value=>value.includes('Uint8Array'))&&snapshot.runtimeWebviewQueuedRows>=2&&snapshot.runtimeWebviewDroppedRows>=1&&snapshot.runtimeWebviewSeqRows>=1&&snapshot.runtimeWebviewLastDropReasons.includes('disposed-queue')
       && snapshot.runtimeWebviewBridgeReadyRows>=1&&snapshot.runtimeWebviewBridgeWarningRows>=1&&snapshot.runtimeWebviewMessageStalledRows>=1
@@ -41955,7 +42088,12 @@ function extensionRuntimeDomSelfCheckSnapshot(){
       && snapshot.runtimeNotebookControllerRows>=1&&snapshot.runtimeNotebookStatusRows>=1
       && snapshot.runtimeNotebookSelectionRows>=1&&snapshot.runtimeNotebookAffinityRows>=1&&snapshot.runtimeNotebookSelectedIds.some(value=>value.includes('selftest.notebookController'))
       && snapshot.runtimeTaskDefinitionRows>=1&&snapshot.runtimeTaskProviderRows>=1&&snapshot.runtimeTaskResolveRows>=1
+      && snapshot.runtimeTaskRequiredRows>=1&&snapshot.runtimeTaskSchemaRows>=1
+      && snapshot.runtimeTaskRequiredKeys.some(value=>value.includes('command'))&&snapshot.runtimeTaskPropertyKeys.some(value=>value.includes('cwd'))
       && snapshot.runtimeDebugRows>=1&&snapshot.runtimeDebugConfigRows>=1&&snapshot.runtimeDebugAdapterRows>=1&&snapshot.runtimeDebugTrackerRows>=1
+      && snapshot.runtimeDebugAttributeRows>=1&&snapshot.runtimeDebugInitialRows>=1&&snapshot.runtimeDebugSnippetRows>=1
+      && snapshot.runtimeDebugVariableRows>=1&&snapshot.runtimeDebugLanguageRows>=1&&snapshot.runtimeDebugBreakpointRows>=1&&snapshot.runtimeDebugSubstitutedRows>=1
+      && snapshot.runtimeDebugScopes.some(value=>value.includes('launch'))&&snapshot.runtimeDebugLanguages.some(value=>value.includes('javascript'))&&snapshot.runtimeDebugBreakpointLanguages.some(value=>value.includes('javascript'))
       && snapshot.runtimeStatusBarRows>=1&&snapshot.runtimeStatusBarCommandRows>=1&&snapshot.runtimeStatusBarLeftRows>=1
       && snapshot.runtimeLanguageStatusRows>=1&&snapshot.runtimeLanguageBusyRows>=1&&snapshot.runtimeLanguageWarningRows>=1
       && snapshot.runtimeEvidencePills===snapshot.runtimeRows&&snapshot.runtimeEvidenceStatuses.includes('rendered')&&(snapshot.runtimeEvidenceStatuses.includes('missing')||snapshot.runtimeEvidenceStatuses.includes('partial'))
@@ -41989,8 +42127,8 @@ function extensionRuntimeDomSelfCheckSnapshot(){
       && snapshot.runtimeActionSmoke.providerPrompt.includes('selftest.vendor')
       && snapshot.runtimeActionSmoke.participantPrompt==='@selftest.chat '
       && snapshot.runtimeActionSmoke.contextAttached===true
-      && snapshot.runtimeActionSmoke.taskPrompt.includes('selftest.task')
-      && snapshot.runtimeActionSmoke.debugPrompt.includes('selftest.debug')
+      && snapshot.runtimeActionSmoke.taskPrompt.includes('selftest.task')&&snapshot.runtimeActionSmoke.taskPrompt.includes('Required fields: command')
+      && snapshot.runtimeActionSmoke.debugPrompt.includes('selftest.debug')&&snapshot.runtimeActionSmoke.debugPrompt.includes('Launch template')&&snapshot.runtimeActionSmoke.debugPrompt.includes('program')
       && snapshot.runtimeActionSmoke.lastAction==='prepare-debugger'
       && snapshot.runtimeActionSmoke.lastActionOk==='1'
       && ['WebviewPanel','TerminalProfile','TaskDefinition','Debugger','LMTool','LMProvider','ChatParticipant','ChatContext','StatusBarItem','LanguageStatus'].every(kind=>snapshot.runtimeKinds.includes(kind))

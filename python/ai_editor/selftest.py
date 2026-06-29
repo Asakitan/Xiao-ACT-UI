@@ -11843,6 +11843,9 @@ console.log("frontend word separator behavior ok");
            and "function extensionRuntimeSurfaceHealthSnapshot()" in html
            and "function extensionRuntimeSurfaceViewId(row)" in html
            and "function prepareExtensionRuntimeAssistantPrompt(row,prompt,statusText)" in html
+           and "function extensionRuntimeTaskPrompt(row)" in html
+           and "function extensionRuntimeDebuggerLaunchTemplate(row)" in html
+           and "function extensionRuntimeDebuggerPrompt(row)" in html
            and "function openExtensionRuntimeTerminalProfile(row)" in html
            and "function attachExtensionRuntimeChatContext(row)" in html
            and "function languageStatusSnapshot()" in html
@@ -11916,6 +11919,8 @@ console.log("frontend word separator behavior ok");
            and "if(action.type==='attach-chat-context')" in html
            and "if(action.type==='prepare-task-definition')" in html
            and "if(action.type==='prepare-debugger')" in html
+           and "extensionRuntimeTaskPrompt(row)" in html
+           and "extensionRuntimeDebuggerPrompt(row)" in html
            and "panel.dataset.runtimeSurfaceCount=String(summary.dynamicSurfaces||rows.length||0);" in html
            and "panel.dataset.runtimeOnlySurfaceCount=String(summary.runtimeOnlySurfaces||rows.filter(row=>row.source==='runtime-only').length);" in html
            and "panel.dataset.providerBackedWebviewCount=String(summary.providerBackedWebviews||rows.filter(row=>row.kind==='WebviewView'&&row.providerBacked).length);" in html
@@ -12068,10 +12073,18 @@ console.log("frontend word separator behavior ok");
            and "['Terminal',summary.terminalProfiles||0]" in html
            and "['Task',summary.taskDefinitions||rows.filter(row=>row.kind==='TaskDefinition').length]" in html
            and "['Task Providers',summary.taskProviders||rows.reduce" in html
+           and "['Task Required',summary.taskRequiredProperties||rows.reduce" in html
+           and "['Task Schema',summary.taskSchemaProperties||rows.reduce" in html
            and "['Debug',summary.debuggers||rows.filter(row=>row.kind==='Debugger').length]" in html
            and "['Debug Config',summary.debugConfigProviders||rows.reduce" in html
            and "['Debug Adapter',summary.debugAdapterFactories||rows.reduce" in html
            and "['Debug Tracker',summary.debugAdapterTrackers||rows.reduce" in html
+           and "['Debug Attrs',summary.debugConfigurationAttributes||rows.reduce" in html
+           and "['Debug Initials',summary.debugInitialConfigurations||rows.reduce" in html
+           and "['Debug Snippets',summary.debugConfigurationSnippets||rows.reduce" in html
+           and "['Debug Vars',summary.debugVariables||rows.reduce" in html
+           and "['Debug Langs',summary.debugLanguages||rows.reduce" in html
+           and "['Debug Breakpoints',summary.debugBreakpointLanguages||rows.reduce" in html
            and "['LM Tool',summary.languageModelTools||0]" in html
            and "['LM Provider',summary.languageModelProviders||0]" in html
            and "['Chat',summary.chatParticipants||0]" in html
@@ -12083,17 +12096,29 @@ console.log("frontend word separator behavior ok");
            and "['Language Warnings',summary.languageStatusWarnings||" in html
            and "el.dataset.surfaceStatusBarAlignment=String(row.surfaceEvidence&&row.surfaceEvidence.alignmentName||row.alignmentName||'');" in html
            and "el.dataset.surfaceProviderCount=String(row.surfaceEvidence&&row.surfaceEvidence.providerCount||0);" in html
+           and "el.dataset.surfaceTaskRequiredCount=String(row.surfaceEvidence&&row.surfaceEvidence.requiredCount||0);" in html
+           and "el.dataset.surfaceTaskPropertyCount=String(row.surfaceEvidence&&row.surfaceEvidence.propertyCount||0);" in html
            and "el.dataset.surfaceDebugAdapterTrackerCount=String(row.surfaceEvidence&&row.surfaceEvidence.adapterTrackerCount||0);" in html
+           and "el.dataset.surfaceDebugAttributeScopeCount=String(row.surfaceEvidence&&row.surfaceEvidence.configurationAttributeScopeCount||0);" in html
+           and "el.dataset.surfaceDebugConfigurationSnippetCount=String(row.surfaceEvidence&&row.surfaceEvidence.configurationSnippetCount||0);" in html
            and "el.dataset.surfaceHasResolveTask=row.surfaceEvidence&&row.surfaceEvidence.hasResolveTask?'1':'0';" in html
+           and "el.dataset.surfaceHasResolveDebugConfigurationWithSubstitutedVariables=row.surfaceEvidence&&row.surfaceEvidence.hasResolveDebugConfigurationWithSubstitutedVariables?'1':'0';" in html
            and "el.dataset.surfaceHasCreateDebugAdapterDescriptor=row.surfaceEvidence&&row.surfaceEvidence.hasCreateDebugAdapterDescriptor?'1':'0';" in html
            and "el.dataset.surfaceLanguageSeverityName=String(row.surfaceEvidence&&row.surfaceEvidence.severityName||'');" in html
            and "runtimeStatusBarRows" in html
            and "runtimeLanguageStatusRows" in html
            and "runtimeTaskDefinitionRows" in html
+           and "runtimeTaskRequiredRows" in html
+           and "runtimeTaskSchemaRows" in html
            and "runtimeDebugAdapterRows" in html
+           and "runtimeDebugAttributeRows" in html
+           and "runtimeDebugSnippetRows" in html
+           and "runtimeDebugBreakpointRows" in html
            and "snapshot.runtimeStatusBarRows>=1" in html
            and "snapshot.runtimeLanguageStatusRows>=1" in html
            and "snapshot.runtimeTaskDefinitionRows>=1" in html
+           and "snapshot.runtimeTaskRequiredRows>=1" in html
+           and "snapshot.runtimeDebugAttributeRows>=1" in html
            and "snapshot.runtimeDebugRows>=1" in html
            and "TreeView" in html
            and "WebviewView" in html
@@ -12171,6 +12196,16 @@ console.log("frontend word separator behavior ok");
            and "\"notebookWarnings\": notebook_warnings" in app_source
            and "\"notebookStatusBarProviders\": notebook_status_bar_providers" in app_source
            and "\"notebookSelectedControllers\": notebook_selected_controllers" in app_source
+           and "\"taskRequiredProperties\": task_required_properties" in app_source
+           and "\"taskSchemaProperties\": task_schema_properties" in app_source
+           and "\"requiredKeys\": required_keys[:12]" in app_source
+           and "\"propertyKeys\": property_keys[:16]" in app_source
+           and "\"configurationSnippets\": item.get(" in app_source
+           and "\"debugConfigurationAttributes\": debug_configuration_attributes" in app_source
+           and "\"debugInitialConfigurations\": debug_initial_configurations" in app_source
+           and "\"debugConfigurationSnippets\": debug_configuration_snippets" in app_source
+           and "\"debugBreakpointLanguages\": debug_breakpoint_languages" in app_source
+           and "def debugger_manifest_details(item: Dict[str, Any])" in app_source
            and "payload.setdefault(\"summary\", {})[\"cacheHit\"] = True" in app_source
            and "\"cacheHit\": False" in app_source
            and "if len(self._extension_runtime_surface_cache) > 12:" in app_source)
@@ -14401,7 +14436,7 @@ console.log("extension setting schema helpers ok");
            and "snapshot.customPlaceholder&&snapshot.customDataset.viewType==='selftest.customEditor'" in html
            and "snapshot.notebookOutputItems===3" in html
            and "snapshot.runtimeRows>=17" in html
-           and "snapshot.runtimeChips>=32" in html
+           and "snapshot.runtimeChips>=40" in html
            and "snapshot.runtimeHealthCards>=5" in html
            and "snapshot.runtimeHealthWarnings>=2" in html
            and "snapshot.runtimeHealthErrors>=1" in html
@@ -14445,15 +14480,19 @@ console.log("extension setting schema helpers ok");
            and "snapshot.runtimeSelectedRows===1" in html
            and "snapshot.runtimeChipFilterKind==='LMTool'" in html
            and "snapshot.runtimeTaskDefinitionRows>=1&&snapshot.runtimeTaskProviderRows>=1&&snapshot.runtimeTaskResolveRows>=1" in html
+           and "snapshot.runtimeTaskRequiredRows>=1&&snapshot.runtimeTaskSchemaRows>=1" in html
+           and "snapshot.runtimeTaskRequiredKeys.some(value=>value.includes('command'))" in html
            and "snapshot.runtimeDebugRows>=1&&snapshot.runtimeDebugConfigRows>=1&&snapshot.runtimeDebugAdapterRows>=1&&snapshot.runtimeDebugTrackerRows>=1" in html
+           and "snapshot.runtimeDebugAttributeRows>=1&&snapshot.runtimeDebugInitialRows>=1&&snapshot.runtimeDebugSnippetRows>=1" in html
+           and "snapshot.runtimeDebugScopes.some(value=>value.includes('launch'))" in html
            and "snapshot.runtimeActionStateRows>=6" in html
            and "snapshot.runtimeActionSmoke.keyboardEnterToolInput==='#selftest.lmTool '" in html
            and "snapshot.runtimeActionSmoke.terminalProfileOpened===true" in html
            and "snapshot.runtimeActionSmoke.providerPrompt.includes('selftest.vendor')" in html
            and "snapshot.runtimeActionSmoke.participantPrompt==='@selftest.chat '" in html
            and "snapshot.runtimeActionSmoke.contextAttached===true" in html
-           and "snapshot.runtimeActionSmoke.taskPrompt.includes('selftest.task')" in html
-           and "snapshot.runtimeActionSmoke.debugPrompt.includes('selftest.debug')" in html
+           and "snapshot.runtimeActionSmoke.taskPrompt.includes('selftest.task')&&snapshot.runtimeActionSmoke.taskPrompt.includes('Required fields: command')" in html
+           and "snapshot.runtimeActionSmoke.debugPrompt.includes('selftest.debug')&&snapshot.runtimeActionSmoke.debugPrompt.includes('Launch template')&&snapshot.runtimeActionSmoke.debugPrompt.includes('program')" in html
            and "snapshot.runtimeActionSmoke.lastAction==='prepare-debugger'" in html
            and "snapshot.runtimeActionSmoke.lastActionOk==='1'" in html
            and "['WebviewPanel','TerminalProfile','TaskDefinition','Debugger','LMTool','LMProvider','ChatParticipant','ChatContext','StatusBarItem','LanguageStatus'].every(kind=>snapshot.runtimeKinds.includes(kind))" in html
@@ -29410,6 +29449,14 @@ process.stdin.resume();
                         "displayName": "Selftest Notebook",
                         "selector": [{"filenamePattern": "*.selfnb"}],
                     }],
+                    "taskDefinitions": [{
+                        "type": "node-package-task",
+                        "required": ["script"],
+                        "properties": {
+                            "script": {"type": "string"},
+                            "cwd": {"type": "string"},
+                        },
+                    }],
                     "debuggers": [{
                         "type": "node-package-debug",
                         "label": "Node Package Debug",
@@ -29417,6 +29464,28 @@ process.stdin.resume();
                         "runtimeArgs": ["--inspect=0"],
                         "program": "./debug-adapter.js",
                         "args": ["--from-package"],
+                        "languages": ["javascript"],
+                        "configurationAttributes": {
+                            "launch": {"required": ["program"]},
+                            "attach": {"required": ["processId"]},
+                        },
+                        "initialConfigurations": [{
+                            "type": "node-package-debug",
+                            "request": "launch",
+                            "name": "Launch Package Debug",
+                            "program": "${workspaceFolder}/index.js",
+                        }],
+                        "configurationSnippets": [{
+                            "label": "Package Launch",
+                            "body": {
+                                "type": "node-package-debug",
+                                "request": "launch",
+                                "name": "Package Launch",
+                            },
+                        }],
+                        "variables": {
+                            "packageDebugWorkspace": "workspace folder",
+                        },
                     }, {
                         "type": "node-fallback-debug",
                         "label": "Node Fallback Debug",
@@ -29424,6 +29493,7 @@ process.stdin.resume();
                         "program": "./debug-adapter.js",
                         "args": ["--fallback"],
                     }],
+                    "breakpoints": [{"language": "javascript"}],
                     "configuration": {
                         "title": "Node Selftest",
                         "properties": {
@@ -35861,6 +35931,13 @@ process.stdin.resume();
                            and item.get("runtimeOnly") is True
                            for item in node_runtime_task_definitions)
                        and any(
+                           item.get("type") == "node-package-task"
+                           and item.get("requiredCount") == 1
+                           and item.get("propertyCount") == 2
+                           and "script" in item.get("requiredKeys", [])
+                           and "cwd" in item.get("propertyKeys", [])
+                           for item in node_runtime_task_definitions)
+                       and any(
                            item.get("type") == "activation-debug"
                            and item.get("runtimeAvailable") is True
                            and item.get("configurationProviderCount", 0) >= 1
@@ -35873,14 +35950,39 @@ process.stdin.resume();
                            is True
                            and item.get("runtimeOnly") is True
                            for item in node_runtime_debuggers)
+                       and any(
+                           item.get("type") == "node-package-debug"
+                           and item.get("configurationAttributeScopeCount") == 2
+                           and item.get("initialConfigurationCount") == 1
+                           and item.get("configurationSnippetCount") == 1
+                           and item.get("variableCount") == 1
+                           and item.get("languageCount") == 1
+                           and item.get("breakpointLanguageCount") == 1
+                           and "launch" in item.get(
+                               "configurationAttributeScopes", [])
+                           and "javascript" in item.get(
+                               "breakpointLanguages", [])
+                           for item in node_runtime_debuggers)
                        and node_runtime_surfaces.get("summary", {}).get(
                            "taskProviders", 0) >= 1
+                       and node_runtime_surfaces.get("summary", {}).get(
+                           "taskRequiredProperties", 0) >= 1
+                       and node_runtime_surfaces.get("summary", {}).get(
+                           "taskSchemaProperties", 0) >= 2
                        and node_runtime_surfaces.get("summary", {}).get(
                            "debugConfigProviders", 0) >= 1
                        and node_runtime_surfaces.get("summary", {}).get(
                            "debugAdapterFactories", 0) >= 1
                        and node_runtime_surfaces.get("summary", {}).get(
-                           "debugAdapterTrackers", 0) >= 1,
+                           "debugAdapterTrackers", 0) >= 1
+                       and node_runtime_surfaces.get("summary", {}).get(
+                           "debugConfigurationAttributes", 0) >= 2
+                       and node_runtime_surfaces.get("summary", {}).get(
+                           "debugInitialConfigurations", 0) >= 1
+                       and node_runtime_surfaces.get("summary", {}).get(
+                           "debugConfigurationSnippets", 0) >= 1
+                       and node_runtime_surfaces.get("summary", {}).get(
+                           "debugBreakpointLanguages", 0) >= 1,
                        json.dumps({
                            "taskDefinitions": node_runtime_task_definitions,
                            "debuggers": node_runtime_debuggers,
