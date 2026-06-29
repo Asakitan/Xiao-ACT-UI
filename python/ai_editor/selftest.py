@@ -11929,6 +11929,7 @@ console.log("frontend word separator behavior ok");
            and "function extensionRuntimeSurfaceAction(kind,item,row)" in html
            and "function extensionRuntimeIsWebviewKind(kindOrRow)" in html
            and "function extensionRuntimeWebviewEvidenceStatus(row)" in html
+           and "function extensionRuntimeAnchorLaneItems(row)" in html
            and "function extensionRuntimeWebviewReadinessSummary(row)" in html
            and "function extensionRuntimeSurfaceActionSummary(row)" in html
            and "function extensionWebviewRuntimeDiagnostics(evidence)" in html
@@ -11993,6 +11994,8 @@ console.log("frontend word separator behavior ok");
            and ".extension-runtime-row:hover,.extension-runtime-row:focus" in html
            and ".extension-runtime-mid" in html
            and ".extension-runtime-action-summary" in html
+           and ".extension-runtime-anchor-lane" in html
+           and ".extension-runtime-anchor-pill" in html
            and ".extension-runtime-tag" in html
            and "const dynamicSource=String(item.dynamicSource||item.dynamic_source||item.source||'').trim()" in html
            and "source:dynamicSource" in html
@@ -12001,8 +12004,13 @@ console.log("frontend word separator behavior ok");
            and "row.action=extensionRuntimeSurfaceAction(kind,item,row);" in html
            and "row.openable=row.action&&row.action.type!=='inspect';" in html
            and "row.evidenceStatus=extensionRuntimeWebviewEvidenceStatus(row);" in html
+           and "row.anchorLane=extensionRuntimeAnchorLaneItems(row);" in html
            and "el.dataset.webviewReadinessSummary=readinessSummary;" in html
            and "el.dataset.runtimeActionSummary=actionSummary;" in html
+           and "el.dataset.runtimeAnchorLane=(row.anchorLane||[]).map(item=>item.key+':'+item.state+':'+item.text).join('|');" in html
+           and "el.dataset.runtimeDynamicProvider=(row.anchorLane||[]).some(item=>item.key==='provider'&&item.state==='ready')?'1':'0';" in html
+           and "anchorLane.className='extension-runtime-anchor-lane';" in html
+           and "pill.dataset.runtimeAnchorKey=item.key||'';" in html
            and "Readiness summary: '+(extensionRuntimeIsWebviewKind(row)?extensionRuntimeWebviewReadinessSummary(row):String(row.surfaceReadiness||'-'))" in html
            and '<option value="ready">Ready</option>' in html
            and "row.focusable=extensionRuntimeIsWebviewKind(row)||row.kind==='ViewContainer'||row.kind==='TreeView'||row.kind==='CustomEditor'||row.kind==='Notebook';" in html
@@ -14574,6 +14582,11 @@ console.log("extension setting schema helpers ok");
            and "runtimeActionStateRows:runtimeList?runtimeList.querySelectorAll('.extension-runtime-row[data-action-state=\"success\"]').length:0" in html
            and "runtimeActionSummaryRows:runtimeList?runtimeList.querySelectorAll('.extension-runtime-action-summary[data-runtime-action-summary=\"1\"]').length:0" in html
            and "runtimeActionSummaryDataRows:runtimeList?Array.from(runtimeList.querySelectorAll('.extension-runtime-row')).filter(row=>String(row.dataset.runtimeActionSummary||'').includes('·')).length:0" in html
+           and "runtimeAnchorLaneRows:runtimeList?runtimeList.querySelectorAll('.extension-runtime-anchor-lane[data-runtime-anchor-lane=\"1\"]').length:0" in html
+           and "runtimeAnchorPills:runtimeList?runtimeList.querySelectorAll('.extension-runtime-anchor-pill').length:0" in html
+           and "runtimeDynamicProviderRows:runtimeList?Array.from(runtimeList.querySelectorAll('.extension-runtime-row')).filter(row=>row.dataset.runtimeDynamicProvider==='1').length:0" in html
+           and "runtimeAnchorKeys:runtimeList?Array.from(runtimeList.querySelectorAll('.extension-runtime-anchor-pill')).map(item=>item.dataset.runtimeAnchorKey||'').filter(Boolean):[]" in html
+           and "runtimeWebviewChromeRows:runtimeList?Array.from(runtimeList.querySelectorAll('.extension-runtime-row')).filter(row=>row.dataset.kind==='WebviewView'&&(row.dataset.runtimeSurfaceTitle||row.dataset.runtimeSurfaceDescription||row.dataset.runtimeSurfaceBadge)).length:0" in html
            and "runtimeWebviewReadinessSummaryRows:runtimeList?Array.from(runtimeList.querySelectorAll('.extension-runtime-row')).filter(row=>String(row.dataset.webviewReadinessSummary||'').includes('HTML')||String(row.dataset.webviewReadinessSummary||'').includes('waiting for HTML')).length:0" in html
            and "runtimeMissingEvidenceRows:runtimeList?Array.from(runtimeList.querySelectorAll('.extension-runtime-row')).filter(row=>row.dataset.webviewEvidenceStatus==='missing').length:0" in html
            and "runtimeEvidencePills:runtimeList?runtimeList.querySelectorAll('.extension-runtime-evidence').length:0" in html
@@ -14684,6 +14697,10 @@ console.log("extension setting schema helpers ok");
            and "snapshot.notebookOutputItems===3" in html
            and "snapshot.runtimeRows>=18" in html
            and "snapshot.runtimeChips>=41" in html
+           and "snapshot.runtimeAnchorLaneRows===snapshot.runtimeRows&&snapshot.runtimeAnchorPills>=snapshot.runtimeRows*2" in html
+           and "snapshot.runtimeDynamicProviderRows>=17&&snapshot.runtimeAnchorReadyRows>=17&&snapshot.runtimeAnchorWarningRows>=3" in html
+           and "['provider','host','chrome','html','frame','bridge','lifecycle'].every(key=>snapshot.runtimeAnchorKeys.includes(key))" in html
+           and "snapshot.runtimeAnchorStates.includes('ready')&&snapshot.runtimeAnchorStates.includes('warn')&&snapshot.runtimeWebviewChromeRows>=1" in html
            and "snapshot.runtimeHealthCards>=5" in html
            and "snapshot.runtimeHealthWarnings>=2" in html
            and "snapshot.runtimeHealthErrors>=1" in html

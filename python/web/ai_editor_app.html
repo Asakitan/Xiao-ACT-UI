@@ -2440,6 +2440,15 @@ button.review-pill { cursor:pointer; }
   overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .extension-runtime-action-summary.warn { color:var(--fg-warning); }
 .extension-runtime-action-summary.ready { color:var(--fg-success); }
+.extension-runtime-anchor-lane { grid-column:2 / -1; min-width:0; display:flex; align-items:center; gap:4px;
+  color:var(--fg-dim); font:10px var(--mono); overflow:hidden; }
+.extension-runtime-anchor-pill { display:inline-flex; align-items:center; max-width:170px; min-height:18px; padding:0 6px;
+  border:1px solid color-mix(in srgb,var(--border) 78%,transparent); border-radius:999px;
+  background:color-mix(in srgb,var(--bg2) 55%,transparent); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.extension-runtime-anchor-pill.ready { color:var(--fg-success); border-color:color-mix(in srgb,var(--fg-success) 44%,var(--border)); }
+.extension-runtime-anchor-pill.warn { color:var(--fg-warning); border-color:color-mix(in srgb,var(--fg-warning) 46%,var(--border)); }
+.extension-runtime-anchor-pill.error { color:var(--fg-error); border-color:color-mix(in srgb,var(--fg-error) 46%,var(--border)); }
+.extension-runtime-anchor-pill.accent { color:var(--fg-accent); border-color:color-mix(in srgb,var(--fg-accent) 42%,var(--border)); }
 .extension-runtime-tag { border:1px solid color-mix(in srgb,var(--border) 80%,transparent); border-radius:999px; padding:0 5px; color:var(--fg-dim); }
 .extension-runtime-tag.runtime { color:var(--fg-success); border-color:color-mix(in srgb,var(--fg-success) 45%,var(--border)); }
 .extension-runtime-tag.manifest { color:var(--fg-warning); border-color:color-mix(in srgb,var(--fg-warning) 45%,var(--border)); }
@@ -39436,6 +39445,72 @@ function extensionRuntimeEvidenceMatches(row,value){
   if(v==='failures')return (Number(ev.failureCount)||0)>0;
   return true;
 }
+function extensionRuntimeAnchorLaneItems(row){
+  if(!row)return [];
+  const ev=row.webviewEvidence||{};
+  const surface=row.surfaceEvidence||{};
+  const items=[];
+  const source=String(row.dynamicSource||row.source||'');
+  const providerDynamic=!!(row.providerBacked||source==='runtime-only'||source==='manifest+runtime'||row.ready);
+  items.push({
+    key:'provider',
+    text:providerDynamic?'dynamic provider':'manifest contribution',
+    state:providerDynamic?'ready':'warn',
+    title:'Extension contribution/provider registration source'
+  });
+  if(row.kind==='ViewContainer'){
+    items.push({key:'host',text:(row.viewContainerLocation||'container')+' host',state:row.ready?'ready':'warn',title:'View container host'});
+    items.push({key:'views',text:'views '+String(row.viewContainerViewCount||0),state:row.viewContainerViewCount?'ready':'warn',title:'Registered child views'});
+    if(row.viewContainerBuiltin)items.push({key:'builtin',text:'dynamic host',state:'accent',title:'Runtime-created view container'});
+  }else if(row.kind==='TreeView'){
+    items.push({key:'host',text:(row.container||'view')+' host',state:row.ready?'ready':'warn',title:'TreeView host container'});
+    items.push({key:'provider',text:row.providerBacked?'provider backed':'provider pending',state:row.providerBacked?'ready':'warn',title:'Tree data provider backing'});
+  }else if(extensionRuntimeIsWebviewKind(row)){
+    items.push({key:'host',text:(row.kind==='WebviewPanel'?'panel':'view')+' host',state:row.ready?'ready':'warn',title:'Webview host registration'});
+    items.push({key:'chrome',text:(row.surfaceTitle?'title':'chrome')+(row.surfaceDescription?' +desc':'')+(row.surfaceBadge?' +badge':''),state:row.surfaceTitle||row.surfaceDescription||row.surfaceBadge?'accent':'warn',title:'Webview title/description/badge chrome'});
+    items.push({key:'visibility',text:ev.visible===false||surface.visible===false?'hidden':'visible',state:ev.visible===false||surface.visible===false?'warn':'ready',title:'Runtime visibility'});
+    if(surface.disposed||ev.bridgeHealth==='disposed'||Number(ev.disposeCount||0)>0)items.push({key:'disposed',text:'disposed',state:'warn',title:'Disposed lifecycle observed'});
+    items.push({key:'html',text:row.htmlAvailable?'html mounted':'waiting html',state:row.htmlAvailable?'ready':'warn',title:'Provider webview HTML'});
+    items.push({key:'frame',text:ev.iframePresent?'iframe':'iframe pending',state:ev.iframePresent?'ready':'warn',title:'DOM iframe mount'});
+    items.push({key:'bridge',text:'bridge '+(ev.bridgeHealth||'unknown'),state:ev.bridgeHealth==='ready'?'ready':(['iframe-pending','api-pending','inactive','disposed'].includes(ev.bridgeHealth)?'warn':'accent'),title:'Webview API bridge'});
+    if(ev.asWebviewUriReady||ev.resourceRewriteCount||ev.resourceEndpointReady||ev.resourceMapReady){
+      items.push({key:'resources',text:'resources '+String(ev.resourceRewriteCount||0),state:ev.asWebviewUriReady||ev.resourceEndpointReady||ev.resourceMapReady?'ready':'warn',title:'asWebviewUri/resource rewriting'});
+    }
+    if(ev.messageCount||ev.pendingMessageCount||ev.queuedMessageCount||ev.droppedMessageCount){
+      const pending=(Number(ev.pendingMessageCount)||0)+(Number(ev.queuedMessageCount)||0);
+      const dropped=Number(ev.droppedMessageCount)||0;
+      items.push({key:'messages',text:'msg '+String(ev.messageCount||0)+(pending?' q'+pending:'')+(dropped?' drop'+dropped:''),state:dropped?'warn':'accent',title:'postMessage traffic'});
+    }
+    if(ev.renderCount||ev.revealCount||ev.reviveCount||ev.disposeCount){
+      items.push({key:'lifecycle',text:'life '+[ev.renderCount||0,ev.revealCount||0,ev.reviveCount||0,ev.disposeCount||0].join('/'),state:(Number(ev.renderCount)||0)>0?'ready':'warn',title:'render/reveal/revive/dispose counts'});
+    }
+  }else if(row.kind==='CustomEditor'||row.kind==='Notebook'){
+    items.push({key:'provider',text:row.surfaceReadiness||'runtime',state:['ready','dirty'].includes(row.surfaceReadiness)?'ready':'warn',title:'Editor/notebook provider readiness'});
+    if(surface.selectorCount)items.push({key:'selector',text:'selectors '+surface.selectorCount,state:'accent',title:'Contribution selector'});
+    if(surface.stateCount)items.push({key:'state',text:'states '+surface.stateCount,state:surface.dirtyStateCount?'warn':'ready',title:'Runtime editor states'});
+    if(surface.controllerCount)items.push({key:'controller',text:'kernels '+surface.controllerCount,state:'ready',title:'Notebook controllers'});
+  }else if(row.kind==='TaskDefinition'){
+    items.push({key:'provider',text:'providers '+String(surface.providerCount||0),state:surface.providerCount?'ready':'warn',title:'Task provider registrations'});
+    if(surface.hasResolveTask)items.push({key:'resolve',text:'resolveTask',state:'accent',title:'Task resolve hook'});
+    if(surface.requiredCount||surface.propertyCount)items.push({key:'schema',text:'schema '+String(surface.propertyCount||0),state:'ready',title:'Task definition schema'});
+  }else if(row.kind==='Debugger'){
+    items.push({key:'provider',text:'config '+String(surface.configurationProviderCount||0),state:surface.configurationProviderCount?'ready':'warn',title:'Debug configuration provider'});
+    items.push({key:'adapter',text:'adapter '+String(surface.adapterFactoryCount||0),state:surface.adapterFactoryCount?'ready':'warn',title:'Debug adapter factory'});
+    if(surface.adapterTrackerCount)items.push({key:'tracker',text:'tracker '+surface.adapterTrackerCount,state:'accent',title:'Debug adapter tracker'});
+  }else if(row.kind==='StatusBarItem'||row.kind==='LanguageStatus'){
+    items.push({key:'visibility',text:surface.liveVisible?'visible':'not visible',state:surface.liveVisible?'ready':'warn',title:'Live workbench surface visibility'});
+    if(row.command||surface.hasCommand)items.push({key:'command',text:'command',state:'accent',title:'Command-bound surface'});
+  }else{
+    items.push({key:'surface',text:row.openable?'openable':'inspect only',state:row.openable?'ready':'warn',title:'Runtime action availability'});
+  }
+  const seen=new Set();
+  return items.filter(item=>{
+    const key=String(item&&item.key||'');
+    if(!key||seen.has(key))return false;
+    seen.add(key);
+    return true;
+  }).slice(0,9);
+}
 function extensionRuntimeSurfaceViewId(row){
   if(!row)return '';
   const target=String(row.action&&row.action.target||'').trim();
@@ -40919,6 +40994,11 @@ function extensionRuntimeSurfaceRows(data){
     const rowContainer=kind==='ViewContainer'
       ? String(item.id||item.container||item.viewContainer||item.view_container||'')
       : String(item.container||item.viewContainer||item.view_container||'');
+    const runtimeState=item.runtimeState&&typeof item.runtimeState==='object'?item.runtimeState:{};
+    const rawBadge=runtimeState.badge!==undefined?runtimeState.badge:(item.badge!==undefined?item.badge:surfaceEvidence.badge);
+    const surfaceBadgeText=rawBadge&&typeof rawBadge==='object'
+      ? String(rawBadge.value!==undefined?rawBadge.value:(rawBadge.tooltip||'badge'))
+      : String(rawBadge||'');
     const row={
       kind,
       label:String(label||item.id||item.command||item.viewType||item.type||''),
@@ -40953,6 +41033,9 @@ function extensionRuntimeSurfaceRows(data){
       viewContainerLocation:String(item.location||surfaceEvidence.location||''),
       viewContainerViewCount:Number(item.view_count||item.viewCount||surfaceEvidence.viewCount||(Array.isArray(item.views)?item.views.length:0)||0)||0,
       viewContainerBuiltin:!!(item.builtin||surfaceEvidence.builtin),
+      surfaceTitle:String(runtimeState.title||item.title||item.name||surfaceEvidence.title||label||''),
+      surfaceDescription:String(runtimeState.description||item.description||surfaceEvidence.description||''),
+      surfaceBadge:surfaceBadgeText,
       htmlAvailable:!!(evidence.htmlAvailable||item.htmlAvailable),
       htmlLength,
       lifecycleState:String(item.lifecycleState||item.runtimeState&&item.runtimeState.lifecycleState||''),
@@ -40961,10 +41044,11 @@ function extensionRuntimeSurfaceRows(data){
     row.action=extensionRuntimeSurfaceAction(kind,item,row);
     row.openable=row.action&&row.action.type!=='inspect';
     row.evidenceStatus=extensionRuntimeWebviewEvidenceStatus(row);
+    row.anchorLane=extensionRuntimeAnchorLaneItems(row);
     row.focusable=extensionRuntimeIsWebviewKind(row)||row.kind==='ViewContainer'||row.kind==='TreeView'||row.kind==='CustomEditor'||row.kind==='Notebook';
     row.refreshable=extensionRuntimeIsWebviewKind(row)||row.kind==='ViewContainer'||row.kind==='TreeView'||row.kind==='CustomEditor'||row.kind==='Notebook';
     row.key=[row.kind,row.id,row.command,row.extensionId,row.source,row.container,row.resourceUri].join('|');
-      row.searchText=[row.kind,row.label,row.meta,row.extensionId,row.container,row.resourceUri,row.source,row.dynamicSource,row.providerBacked?'provider-backed':'',row.command,row.id,row.action&&row.action.type,row.evidenceText,row.evidenceStatus,row.surfaceReadiness,(row.surfaceReadinessIssues||[]).join(' ')].join(' ').toLowerCase();
+      row.searchText=[row.kind,row.label,row.meta,row.extensionId,row.container,row.resourceUri,row.source,row.dynamicSource,row.providerBacked?'provider-backed':'',row.command,row.id,row.action&&row.action.type,row.evidenceText,row.evidenceStatus,row.surfaceReadiness,(row.surfaceReadinessIssues||[]).join(' '),(row.anchorLane||[]).map(item=>item.text).join(' ')].join(' ').toLowerCase();
     rows.push(row);
   };
   (data.viewContainers||[]).slice(0,12).forEach(item=>{
@@ -41593,6 +41677,14 @@ function renderExtensionRuntimeSurfacePanel(data){
       el.dataset.webviewReadinessIssues=(row.webviewReadinessIssues||row.webviewEvidence&&row.webviewEvidence.readinessIssues||[]).join(',');
       el.dataset.webviewReadinessSummary=readinessSummary;
       el.dataset.runtimeActionSummary=actionSummary;
+      el.dataset.runtimeAnchorLane=(row.anchorLane||[]).map(item=>item.key+':'+item.state+':'+item.text).join('|');
+      el.dataset.runtimeAnchorCount=String((row.anchorLane||[]).length);
+      el.dataset.runtimeDynamicProvider=(row.anchorLane||[]).some(item=>item.key==='provider'&&item.state==='ready')?'1':'0';
+      el.dataset.runtimeAnchorReady=(row.anchorLane||[]).some(item=>item.state==='ready')?'1':'0';
+      el.dataset.runtimeAnchorWarning=(row.anchorLane||[]).some(item=>item.state==='warn'||item.state==='error')?'1':'0';
+      el.dataset.runtimeSurfaceTitle=String(row.surfaceTitle||'');
+      el.dataset.runtimeSurfaceDescription=String(row.surfaceDescription||'');
+      el.dataset.runtimeSurfaceBadge=String(row.surfaceBadge||'');
       el.dataset.surfaceEvidenceKind=String(row.surfaceEvidence&&row.surfaceEvidence.kind||row.kind||'');
       el.dataset.surfaceReadiness=row.surfaceReadiness||row.surfaceEvidence&&row.surfaceEvidence.readiness||'';
       el.dataset.surfaceReadinessScore=String(row.surfaceReadinessScore||row.surfaceEvidence&&row.surfaceEvidence.readinessScore||0);
@@ -41919,8 +42011,20 @@ function renderExtensionRuntimeSurfacePanel(data){
       addMini('⧉','Copy runtime surface summary',copyExtensionRuntimeSurfaceSummary,true);
       if(row.kind==='TaskDefinition')addMini('✎','Prepare task in Assistant',r=>prepareExtensionRuntimeAssistantPrompt(r,extensionRuntimeTaskPrompt(r),'Prepared task type '+(r.id||r.label)+' in Assistant.'),true);
       if(row.kind==='Debugger')addMini('✎','Prepare debugger in Assistant',r=>prepareExtensionRuntimeAssistantPrompt(r,extensionRuntimeDebuggerPrompt(r),'Prepared debugger '+(r.id||r.label)+' in Assistant.'),true);
+      const anchorLane=document.createElement('div');
+      anchorLane.className='extension-runtime-anchor-lane';
+      anchorLane.dataset.runtimeAnchorLane='1';
+      (row.anchorLane||[]).forEach(item=>{
+        const pill=document.createElement('span');
+        pill.className='extension-runtime-anchor-pill '+(item.state||'');
+        pill.dataset.runtimeAnchorKey=item.key||'';
+        pill.dataset.runtimeAnchorState=item.state||'';
+        pill.textContent=item.text||item.key||'surface';
+        pill.title=item.title||pill.textContent;
+        anchorLane.appendChild(pill);
+      });
       el.addEventListener('dblclick',e=>{e.preventDefault();void openExtensionRuntimeSurface(row)});
-      el.appendChild(kind);el.appendChild(mid);el.appendChild(evidence);el.appendChild(state);el.appendChild(actions);
+      el.appendChild(kind);el.appendChild(mid);el.appendChild(evidence);el.appendChild(state);el.appendChild(actions);el.appendChild(anchorLane);
       listEl.appendChild(el);
     });
   }
@@ -44261,6 +44365,14 @@ function extensionRuntimeDomSelfCheckSnapshot(){
       runtimeTags:runtimeList?runtimeList.querySelectorAll('.extension-runtime-tag').length:0,
       runtimeActionSummaryRows:runtimeList?runtimeList.querySelectorAll('.extension-runtime-action-summary[data-runtime-action-summary="1"]').length:0,
       runtimeActionSummaryDataRows:runtimeList?Array.from(runtimeList.querySelectorAll('.extension-runtime-row')).filter(row=>String(row.dataset.runtimeActionSummary||'').includes('·')).length:0,
+      runtimeAnchorLaneRows:runtimeList?runtimeList.querySelectorAll('.extension-runtime-anchor-lane[data-runtime-anchor-lane="1"]').length:0,
+      runtimeAnchorPills:runtimeList?runtimeList.querySelectorAll('.extension-runtime-anchor-pill').length:0,
+      runtimeDynamicProviderRows:runtimeList?Array.from(runtimeList.querySelectorAll('.extension-runtime-row')).filter(row=>row.dataset.runtimeDynamicProvider==='1').length:0,
+      runtimeAnchorReadyRows:runtimeList?Array.from(runtimeList.querySelectorAll('.extension-runtime-row')).filter(row=>row.dataset.runtimeAnchorReady==='1').length:0,
+      runtimeAnchorWarningRows:runtimeList?Array.from(runtimeList.querySelectorAll('.extension-runtime-row')).filter(row=>row.dataset.runtimeAnchorWarning==='1').length:0,
+      runtimeAnchorKeys:runtimeList?Array.from(runtimeList.querySelectorAll('.extension-runtime-anchor-pill')).map(item=>item.dataset.runtimeAnchorKey||'').filter(Boolean):[],
+      runtimeAnchorStates:runtimeList?Array.from(runtimeList.querySelectorAll('.extension-runtime-anchor-pill')).map(item=>item.dataset.runtimeAnchorState||'').filter(Boolean):[],
+      runtimeWebviewChromeRows:runtimeList?Array.from(runtimeList.querySelectorAll('.extension-runtime-row')).filter(row=>row.dataset.kind==='WebviewView'&&(row.dataset.runtimeSurfaceTitle||row.dataset.runtimeSurfaceDescription||row.dataset.runtimeSurfaceBadge)).length:0,
       runtimeWebviewReadinessSummaryRows:runtimeList?Array.from(runtimeList.querySelectorAll('.extension-runtime-row')).filter(row=>String(row.dataset.webviewReadinessSummary||'').includes('HTML')||String(row.dataset.webviewReadinessSummary||'').includes('waiting for HTML')).length:0,
       runtimeWebviewEvidenceRows:runtimeList?runtimeList.querySelectorAll('.extension-runtime-tag.webview-evidence').length:0,
       runtimeHtmlEvidenceRows:runtimeList?Array.from(runtimeList.querySelectorAll('.extension-runtime-row')).filter(row=>row.dataset.webviewHtmlAvailable==='1').length:0,
@@ -44476,6 +44588,10 @@ function extensionRuntimeDomSelfCheckSnapshot(){
       && snapshot.customPlaceholder&&snapshot.customDataset.viewType==='selftest.customEditor'&&snapshot.customCapabilities
       && snapshot.notebookOutputItems===3&&snapshot.notebookHtmlFrame&&snapshot.notebookImage&&snapshot.notebookText
       && snapshot.runtimeRows>=18&&snapshot.runtimeReadyRows>=17&&snapshot.runtimeChips>=41
+      && snapshot.runtimeAnchorLaneRows===snapshot.runtimeRows&&snapshot.runtimeAnchorPills>=snapshot.runtimeRows*2
+      && snapshot.runtimeDynamicProviderRows>=17&&snapshot.runtimeAnchorReadyRows>=17&&snapshot.runtimeAnchorWarningRows>=3
+      && ['provider','host','chrome','html','frame','bridge','lifecycle'].every(key=>snapshot.runtimeAnchorKeys.includes(key))
+      && snapshot.runtimeAnchorStates.includes('ready')&&snapshot.runtimeAnchorStates.includes('warn')&&snapshot.runtimeWebviewChromeRows>=1
       && snapshot.runtimeWebviewEvidenceRows>=6&&snapshot.runtimeHtmlEvidenceRows>=1&&snapshot.runtimeMissingEvidenceFilterVisible>=1&&snapshot.runtimeWebviewRetainedRows>=1
       && snapshot.runtimeWebviewMessageRows>=1&&snapshot.runtimeWebviewBinaryRows>=1&&snapshot.runtimeWebviewBinaryTypes.some(value=>value.includes('Uint8Array'))&&snapshot.runtimeWebviewQueuedRows>=2&&snapshot.runtimeWebviewQueuedByteRows>=1&&snapshot.runtimeWebviewQueuePrunedRows>=1&&snapshot.runtimeWebviewQueuePrunedByBytesRows>=1&&snapshot.runtimeWebviewDroppedRows>=1&&snapshot.runtimeWebviewSeqRows>=1&&snapshot.runtimeWebviewLastDropReasons.includes('disposed-queue')
       && snapshot.runtimeWebviewBridgeReadyRows>=1&&snapshot.runtimeWebviewBridgeWarningRows>=1&&snapshot.runtimeWebviewMessageStalledRows>=1
