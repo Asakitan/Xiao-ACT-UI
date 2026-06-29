@@ -5620,6 +5620,7 @@ def test_phase1_ai_editor_regressions() -> None:
            'id="chat-composer-summary"' in html
            and 'id="chat-prompt-shortcuts"' in html
            and 'data-chat-prompt-action="explain"' in html
+           and 'data-chat-prompt-action="anchor"' in html
            and 'data-chat-prompt-action="fix"' in html
            and 'data-chat-prompt-action="tests"' in html
            and 'data-chat-prompt-action="review"' in html
@@ -5640,9 +5641,21 @@ def test_phase1_ai_editor_regressions() -> None:
            and "panel.dataset.chatComposerProviderLabel=state.provider;" in html
            and "panel.dataset.chatComposerModelLabel=state.model;" in html
            and "panel.dataset.chatComposerDraftLength=String(state.draftLength);" in html
+           and "panel.dataset.chatComposerAnchorCount=String(state.anchorCount);" in html
            and "panel.dataset.chatComposerShortcut=state.shortcut;" in html
            and "lastComposerShortcut:String(src.lastComposerShortcut||'')" in html
            and "assistantUiSelfCheckRecord(checks,'composer-summary-shortcuts-ready'" in html)
+    _check("frontend Assistant composer anchors current file or selection",
+           "function chatContextAnchorFromEditor()" in html
+           and "if(key==='anchor')return chatContextAnchorFromEditor();" in html
+           and "function anchorAssistantComposerContext()" in html
+           and "window.anchorAssistantComposerContext=anchorAssistantComposerContext;" in html
+           and "['path','uri','anchorKind'].forEach" in html
+           and "kind:'anchor',anchorKind:'selection'" in html
+           and "kind:'anchor',anchorKind:'position'" in html
+           and "const AT_VARS=[['@anchor','Anchor current file or selection'" in html
+           and "if(ref.kind==='anchor')card.classList.add('anchor');" in html
+           and "assistantUiSelfCheckRecord(checks,'composer-anchor-context-ready'" in html)
     _check("frontend Assistant tracks Copilot-style session and input state",
            "ASSISTANT_SESSION_STATE_KEY='sao-ai-editor-chat-session-state'"
            in html

@@ -1249,6 +1249,8 @@ pre.code-block code .type { color:var(--fg-type); }
   padding:2px 8px; border:1px solid color-mix(in srgb, var(--border-focus) 35%, var(--border));
   border-radius:999px; background:color-mix(in srgb, var(--bg-hover) 60%, var(--bg3));
   color:var(--fg); font-size:11px; box-sizing:border-box; }
+.chat-context-pill.anchor { border-color:color-mix(in srgb, var(--fg-accent) 58%, var(--border));
+  background:color-mix(in srgb, var(--fg-accent) 10%, var(--bg3)); }
 .chat-context-pill .kind { color:var(--fg-accent); font:10px var(--mono); text-transform:uppercase; }
 .chat-context-pill .label { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .chat-context-pill .remove { cursor:pointer; color:var(--fg-dim); flex:0 0 auto; border:0;
@@ -1257,6 +1259,7 @@ pre.code-block code .type { color:var(--fg-type); }
 .chat-references { margin-top:7px; display:flex; flex-direction:column; gap:4px; }
 .chat-reference-card { border:1px solid var(--border); border-radius:6px; background:var(--bg3);
   padding:5px 7px; color:var(--fg-dim); font-size:11px; line-height:1.35; }
+.chat-reference-card.anchor { border-color:color-mix(in srgb, var(--fg-accent) 50%, var(--border)); }
 .chat-reference-card .ref-head { display:flex; gap:6px; align-items:center; color:var(--fg); }
 .chat-reference-card .ref-kind { color:var(--fg-accent); font:10px var(--mono); text-transform:uppercase; }
 .chat-reference-card .ref-label { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
@@ -4484,6 +4487,7 @@ pre.code-block { overflow:visible; }
                 <div class="chat-workflow-session-strip" id="chat-workflow-session-strip" role="status" aria-live="polite"></div>
                 <div class="chat-composer-summary" id="chat-composer-summary" role="status" aria-live="polite"></div>
                 <div class="chat-prompt-shortcuts" id="chat-prompt-shortcuts" role="toolbar" aria-label="Prompt shortcuts">
+                  <button type="button" class="chat-prompt-shortcut utility" data-chat-prompt-action="anchor" onclick="anchorAssistantComposerContext()" title="Anchor current file or selection">Anchor</button>
                   <button type="button" class="chat-prompt-shortcut" data-chat-prompt-action="explain" onclick="applyAssistantPromptShortcut('explain')" title="Draft an explanation request">Explain</button>
                   <button type="button" class="chat-prompt-shortcut" data-chat-prompt-action="fix" onclick="applyAssistantPromptShortcut('fix')" title="Draft a fix request">Fix</button>
                   <button type="button" class="chat-prompt-shortcut" data-chat-prompt-action="tests" onclick="applyAssistantPromptShortcut('tests')" title="Draft a test request">Tests</button>
@@ -7822,6 +7826,7 @@ function assistantComposerSummaryState(){
   try{session=assistantSessionState||{}}catch(_e){session={}}
   const draft=String(input?input.value:session.draft||'');
   const contextCount=Array.isArray(chatContextAttachments)?chatContextAttachments.length:0;
+  const anchorCount=Array.isArray(chatContextAttachments)?chatContextAttachments.filter(item=>item&&item.kind==='anchor').length:0;
   let attachmentCounts={total:0,images:0,files:0};
   try{attachmentCounts=typeof assistantAttachmentCounts==='function'?assistantAttachmentCounts():attachmentCounts}catch(_e){}
   let queued=0;
@@ -7842,6 +7847,7 @@ function assistantComposerSummaryState(){
     workflowId:state.workflowId||'',
     workflowMode,
     contextCount,
+    anchorCount,
     attachmentCount:attachmentCounts.total||0,
     imageAttachmentCount:attachmentCounts.images||0,
     fileAttachmentCount:attachmentCounts.files||0,
@@ -7873,6 +7879,7 @@ function assistantComposerContextText(){
     'Agent: '+state.agent,
     'Workflow: '+state.workflow+' ('+state.workflowMode+')',
     'Requests: '+state.requestCount,
+    'Anchors: '+state.anchorCount,
     'Context refs: '+state.contextCount,
     'Attachments: '+state.attachmentCount,
     'Draft chars: '+state.draftLength
@@ -7891,6 +7898,7 @@ function renderAssistantComposerSummary(){
     panel.dataset.chatComposerWorkflowLabel=state.workflow;
     panel.dataset.chatComposerWorkflowMode=state.workflowMode;
     panel.dataset.chatComposerContextCount=String(state.contextCount);
+    panel.dataset.chatComposerAnchorCount=String(state.anchorCount);
     panel.dataset.chatComposerAttachmentCount=String(state.attachmentCount);
     panel.dataset.chatComposerDraftLength=String(state.draftLength);
     panel.dataset.chatComposerStatus=state.status.toLowerCase();
@@ -7903,7 +7911,7 @@ function renderAssistantComposerSummary(){
   appendAssistantComposerSummaryChip(summary,'Agent: '+state.agent,'','Active agent');
   appendAssistantComposerSummaryChip(summary,'Mode: '+state.mode,'','Assistant mode');
   appendAssistantComposerSummaryChip(summary,'Workflow: '+state.workflow,'','Workflow mode and selection');
-  appendAssistantComposerSummaryChip(summary,'Ctx '+state.contextCount+' · Files '+state.attachmentCount,'','Attached context and files');
+  appendAssistantComposerSummaryChip(summary,'Anchor '+state.anchorCount+' · Ctx '+state.contextCount+' · Files '+state.attachmentCount,'','Anchored, attached context and files');
   appendAssistantComposerSummaryChip(summary,state.requestCount+' req','','Session request count');
   if(state.draftLength)appendAssistantComposerSummaryChip(summary,state.draftLength+' chars','dirty','Current draft length');
   summary.classList.add('has-state');
@@ -8576,10 +8584,15 @@ function assistantSessionFindItemByResource(resource,items){
   )||null;
 }
 function assistantSessionNormalizeRefs(refs){
-  return (refs||[]).filter(Boolean).slice(0,20).map(ref=>({
-    id:String(ref.id||''),kind:String(ref.kind||'ctx'),label:String(ref.label||ref.id||'Context'),
-    preview:String(ref.preview||'').slice(0,800),prompt:String(ref.prompt||'').slice(0,12000)
-  }));
+  return (refs||[]).filter(Boolean).slice(0,20).map(ref=>{
+    const row={
+      id:String(ref.id||''),kind:String(ref.kind||'ctx'),label:String(ref.label||ref.id||'Context'),
+      preview:String(ref.preview||'').slice(0,800),prompt:String(ref.prompt||'').slice(0,12000)
+    };
+    ['path','uri','anchorKind'].forEach(key=>{if(ref[key])row[key]=String(ref[key])});
+    if(ref.range&&typeof ref.range==='object')row.range=JSON.parse(JSON.stringify(ref.range));
+    return row;
+  });
 }
 function assistantSessionContextSnapshot(){return assistantSessionNormalizeRefs(chatContextAttachments||[])}
 let _assistantSessionSaveTimer=null;
@@ -9235,12 +9248,50 @@ function chatContextFileLabel(){
   const tab=activeEditorTab();
   return String(tab.filePath||tab.name||editorFileName||'Untitled');
 }
+function chatContextEditorPosition(offset){
+  const editor=(typeof ed!=='undefined'&&ed)?ed:{value:''};
+  const value=String(editor.value||'');
+  const safe=Math.max(0,Math.min(value.length,Number(offset)||0));
+  const before=value.slice(0,safe).split(/\r?\n/);
+  return {line:before.length,character:(before[before.length-1]||'').length+1,offset:safe};
+}
+function chatContextAnchorFromEditor(){
+  const tab=activeEditorTab(),file=chatContextFileLabel();
+  const editor=(typeof ed!=='undefined'&&ed)?ed:{value:'',selectionStart:0,selectionEnd:0};
+  const value=String(editor.value||'');
+  const start=Math.min(editor.selectionStart||0,editor.selectionEnd||0);
+  const end=Math.max(editor.selectionStart||0,editor.selectionEnd||0);
+  const anchorStart=chatContextEditorPosition(start);
+  const anchorEnd=chatContextEditorPosition(end);
+  const path=String((tab&&tab.filePath)||file||'');
+  const range={start:anchorStart,end:anchorEnd};
+  if(end>start){
+    const selected=value.slice(start,end);
+    const label=file+' '+anchorStart.line+':'+anchorStart.character+'-'+anchorEnd.line+':'+anchorEnd.character;
+    return {
+      id:'anchor:'+path+':'+start+':'+end,
+      kind:'anchor',anchorKind:'selection',label,path,uri:path,range,
+      preview:chatContextTextSample(selected,220),
+      prompt:'Anchor selection in '+file+' ('+label+'):\n```\n'+chatContextTextSample(selected,6000)+'\n```'
+    };
+  }
+  const lines=value.split(/\r?\n/);
+  const lineText=lines[Math.max(0,anchorStart.line-1)]||'';
+  const label=file+' '+anchorStart.line+':'+anchorStart.character;
+  return {
+    id:'anchor:'+path+':'+start,
+    kind:'anchor',anchorKind:'position',label,path,uri:path,range,
+    preview:lineText?('Line '+anchorStart.line+': '+chatContextTextSample(lineText.trim(),220)):path,
+    prompt:'Anchor current editor location in '+file+' at '+anchorStart.line+':'+anchorStart.character+(lineText?':\n```\n'+chatContextTextSample(lineText,1200)+'\n```':'')
+  };
+}
 function chatContextFromToken(token){
   const raw=String(token||'').trim();
   const key=raw.replace(/^@/,'').toLowerCase();
   const tab=activeEditorTab(),file=chatContextFileLabel();
   const editor=(typeof ed!=='undefined'&&ed)?ed:{value:'',selectionStart:0,selectionEnd:0};
   const value=String(editor.value||'');
+  if(key==='anchor')return chatContextAnchorFromEditor();
   if(key==='file')return {id:'file:'+file,kind:'file',label:file,prompt:'Current file: '+file};
   if(key==='selection'){
     const start=Math.min(editor.selectionStart||0,editor.selectionEnd||0),end=Math.max(editor.selectionStart||0,editor.selectionEnd||0);
@@ -9284,13 +9335,26 @@ function renderChatContextAttachments(){
   const area=$('chat-context-area');if(!area)return;
   area.innerHTML='';
   chatContextAttachments.forEach((item,i)=>{
-    const pill=document.createElement('span');pill.className='chat-context-pill';pill.dataset.kind=item.kind||'ctx';
+    const pill=document.createElement('span');pill.className='chat-context-pill'+(item.kind==='anchor'?' anchor':'');pill.dataset.kind=item.kind||'ctx';
+    if(item.path||item.uri)pill.dataset.path=String(item.path||item.uri);
+    if(item.anchorKind)pill.dataset.anchorKind=String(item.anchorKind);
+    if(item.range)try{pill.dataset.range=JSON.stringify(item.range)}catch(_e){}
     pill.title=(item.preview||item.prompt||item.label||'').slice(0,500);
     pill.innerHTML='<span class="kind">'+esc(item.kind||'ctx')+'</span><span class="label">'+esc(item.label||item.id||'Context')+'</span>'+
       '<button type="button" class="remove" onclick="removeChatContextAttachment('+i+')" aria-label="Remove context '+esc(item.label||item.id||'')+'">×</button>';
     area.appendChild(pill);
   });
   syncAssistantSessionState();
+  if(typeof updateChatComposerState==='function')updateChatComposerState();
+}
+function anchorAssistantComposerContext(){
+  const item=chatContextAnchorFromEditor();
+  if(!item||item.empty){announceAssistantAction('No editor anchor available');return null}
+  addChatContextAttachment(item);
+  syncAssistantSessionState({lastComposerShortcut:'anchor'});
+  announceAssistantAction('Anchor attached: '+(item.label||item.id));
+  const input=$('chat-input');if(input)input.focus();
+  return item;
 }
 function addChatContextAttachment(item){
   if(!item||item.empty)return false;
@@ -9371,8 +9435,8 @@ function drainPendingAttachmentsAsContext(){
 function chatNativeRequestPayload(text,refs,toolHint,providerId,workflowLaunch){
   const normalizedRefs=(refs||[]).filter(Boolean);
   const attachmentRefs=normalizedRefs.filter(ref=>ref&&ref.attachment).map(ref=>ref.attachment);
-  const referenceRows=normalizedRefs.map(ref=>({id:ref.id||'',kind:ref.kind||'ctx',label:ref.label||ref.id||'',preview:ref.preview||'',prompt:ref.prompt||''}));
-  const usedRows=normalizedRefs.map(ref=>({id:ref.id||'',kind:ref.kind||'ctx',label:ref.label||ref.id||'',uri:ref.path||ref.uri||'',preview:ref.preview||''}));
+  const referenceRows=normalizedRefs.map(ref=>({id:ref.id||'',kind:ref.kind||'ctx',label:ref.label||ref.id||'',preview:ref.preview||'',prompt:ref.prompt||'',path:ref.path||'',uri:ref.uri||ref.path||'',range:ref.range||null,anchorKind:ref.anchorKind||''}));
+  const usedRows=normalizedRefs.map(ref=>({id:ref.id||'',kind:ref.kind||'ctx',label:ref.label||ref.id||'',uri:ref.path||ref.uri||'',path:ref.path||'',range:ref.range||null,anchorKind:ref.anchorKind||'',preview:ref.preview||''}));
   const workflow=workflowLaunch&&typeof workflowLaunch==='object'?workflowLaunch:null;
   const workflowRow=workflow?{
     workflowRunId:String(workflow.workflowRunId||''),
@@ -9418,6 +9482,9 @@ function renderChatReferences(body,refs){
   const wrap=document.createElement('div');wrap.className='chat-references';wrap.setAttribute('aria-label','Attached references');
   normalized.forEach(ref=>{
     const card=document.createElement('div');card.className='chat-reference-card';
+    if(ref.kind==='anchor')card.classList.add('anchor');
+    if(ref.path||ref.uri)card.dataset.path=String(ref.path||ref.uri);
+    if(ref.anchorKind)card.dataset.anchorKind=String(ref.anchorKind);
     card.innerHTML='<div class="ref-head"><span class="ref-kind">'+esc(ref.kind||'ctx')+'</span><span class="ref-label">'+esc(ref.label||ref.id||'Reference')+'</span></div>';
     if(ref.preview){const pre=document.createElement('pre');pre.textContent=ref.preview;card.appendChild(pre)}
     wrap.appendChild(card);
@@ -12457,6 +12524,7 @@ async function runAssistantUiSelfCheck(opts){
   assistantUiSelfCheckRecord(checks,'composer-attachment-summary-ready',composerInteractions.attachHeader&&composerInteractions.attachCounts.total===2&&composerInteractions.attachCounts.images===1&&composerInteractions.attachCounts.files===1,JSON.stringify(composerInteractions));
   assistantUiSelfCheckRecord(checks,'composer-queue-state-ready',composerInteractions.queueClass&&composerInteractions.queueCount===1&&composerInteractions.queuedMessage,JSON.stringify(composerInteractions));
   assistantUiSelfCheckRecord(checks,'composer-summary-shortcuts-ready',composerInteractions.shortcutButtonCount>=6&&composerInteractions.shortcutText.includes('minimal fix')&&composerInteractions.summaryChipCount>=7&&composerInteractions.summaryDatasetReady&&composerInteractions.copyContextReady&&composerInteractions.clearDraftReady,JSON.stringify(composerInteractions));
+  assistantUiSelfCheckRecord(checks,'composer-anchor-context-ready',composerInteractions.anchorButtonReady&&composerInteractions.atAnchorReady&&composerInteractions.anchorAttached&&composerInteractions.anchorPillReady&&composerInteractions.anchorSummaryReady&&composerInteractions.anchorNativeReady&&composerInteractions.anchorQueuedReady,JSON.stringify(composerInteractions));
   const previousCustomModels=config.custom_models;
   config.custom_models={...(config.custom_models||{}),'custom-endpoint-model':{max_input:64000,max_output:4096,provider:config.provider||'openai'}};
   const providerPopup=assistantControlPopupSnapshot('provider');
@@ -12764,18 +12832,24 @@ function assistantVisualLayoutSnapshot(){
   };
 }
 function assistantComposerInteractionSnapshot(){
-  const input=$('chat-input'),container=$('chat-input-container'),head=$('chat-toolbar-head'),summary=$('chat-composer-summary'),shortcuts=$('chat-prompt-shortcuts');
+  const input=$('chat-input'),container=$('chat-input-container'),head=$('chat-toolbar-head'),summary=$('chat-composer-summary'),shortcuts=$('chat-prompt-shortcuts'),panel=$('chat-panel');
   const previousHistory=_chatHistory.slice();
   const previousHistoryIdx=_chatHistoryIdx;
   const previousDraft=_chatDraft;
   const previousAttachments=Array.isArray(attachments)?attachments.slice():[];
+  const previousContextAttachments=Array.isArray(chatContextAttachments)?chatContextAttachments.slice():[];
   const previousInput=input?String(input.value||''):'';
   const previousQueue=_assistantRequestQueue.slice();
   const previousStreaming=streaming;
   const previousSessionState=assistantSessionDefaults(assistantSessionState);
+  const editor=(typeof ed!=='undefined'&&ed)?ed:null;
+  const previousEditorValue=editor?String(editor.value||''):'';
+  const previousEditorSelectionStart=editor?Number(editor.selectionStart||0):0;
+  const previousEditorSelectionEnd=editor?Number(editor.selectionEnd||0):0;
   const beforeItems=chatConversationItems();
   let historyRecalled='',historyRestored='',editHighlighted=false,editCleared=false,editInput='',queueClass=false,queueCount=0,queuedMessage=false,attachHeader=false,attachCounts={total:0,images:0,files:0};
   let shortcutButtonCount=0,shortcutText='',summaryChipCount=0,summaryDatasetReady=false,copyContextReady=false,clearDraftReady=false;
+  let anchorButtonReady=false,atAnchorReady=false,anchorAttached=false,anchorPillReady=false,anchorSummaryReady=false,anchorNativeReady=false,anchorQueuedReady=false;
   try{
     _chatHistory.length=0;
     _chatHistory.push('first selfcheck request','second selfcheck request');
@@ -12792,6 +12866,19 @@ function assistantComposerInteractionSnapshot(){
     renderAttachments();
     attachCounts=assistantAttachmentCounts();
     attachHeader=!!(head&&String(head.textContent||'').includes('2 attached'));
+    if(editor){
+      editor.value='const anchorSelfcheck = true;\nreturn anchorSelfcheck;\n';
+      editor.selectionStart=6;editor.selectionEnd=21;
+    }
+    anchorButtonReady=!!(shortcuts&&shortcuts.querySelector('[data-chat-prompt-action="anchor"]'));
+    atAnchorReady=_getAtMentionItems().some(item=>item&&item[0]==='@anchor')&&chatContextPickerItems().some(item=>item&&item.kind==='anchor');
+    const anchorItem=anchorAssistantComposerContext();
+    const anchorRefs=chatContextAttachments.slice();
+    const anchorNative=chatNativeRequestPayload('anchor selfcheck',anchorRefs,'','selfcheck');
+    anchorAttached=!!(anchorItem&&anchorRefs.some(ref=>ref&&ref.kind==='anchor'));
+    anchorPillReady=!!document.querySelector('#chat-context-area .chat-context-pill.anchor[data-anchor-kind="selection"]');
+    anchorSummaryReady=assistantComposerSummaryState().anchorCount>=1&&!!(panel&&panel.dataset.chatComposerAnchorCount==='1')&&assistantComposerContextText().includes('Anchors: 1');
+    anchorNativeReady=!!(anchorNative&&anchorNative.usedContext&&anchorNative.usedContext.some(ref=>ref.kind==='anchor'&&ref.range&&ref.anchorKind==='selection')&&anchorNative.contentReferences&&anchorNative.contentReferences.some(ref=>ref.kind==='anchor'&&ref.path));
     const body=createMsg('user');
     body.textContent='edit selfcheck request';
     const msg=body.closest('.msg');
@@ -12804,12 +12891,12 @@ function assistantComposerInteractionSnapshot(){
     queueCount=assistantQueuedRequestCount();
     queueClass=!!(container&&container.classList.contains('queued'));
     queuedMessage=chatConversationItems().some(el=>el.dataset.chatRequestPending==='true');
+    anchorQueuedReady=_assistantRequestQueue.some(item=>Array.isArray(item.refs)&&item.refs.some(ref=>ref&&ref.kind==='anchor'));
     shortcutButtonCount=shortcuts?shortcuts.querySelectorAll('button[data-chat-prompt-action]').length:0;
     setChatInputValue('summary seed',{focus:false});
     shortcutText=applyAssistantPromptShortcut('fix');
     renderAssistantComposerSummary();
     summaryChipCount=summary?summary.querySelectorAll('.chat-composer-summary-chip').length:0;
-    const panel=$('chat-panel');
     summaryDatasetReady=!!(panel&&panel.dataset.chatComposerStatus==='draft'&&Number(panel.dataset.chatComposerDraftLength||0)>0&&panel.dataset.chatComposerShortcut==='fix');
     copyContextReady=typeof copyAssistantComposerContext==='function'&&assistantComposerContextText().includes('Provider:')&&assistantComposerContextText().includes('Draft chars:');
     clearDraftReady=clearAssistantDraft()&&!!(input&&input.value==='');
@@ -12818,8 +12905,10 @@ function assistantComposerInteractionSnapshot(){
     _assistantRequestQueue.length=0;previousQueue.forEach(item=>_assistantRequestQueue.push(item));
     _chatHistory.length=0;previousHistory.forEach(item=>_chatHistory.push(item));
     _chatHistoryIdx=previousHistoryIdx;_chatDraft=previousDraft;
-    attachments=previousAttachments;renderAttachments();
     assistantSessionState=previousSessionState;
+    attachments=previousAttachments;renderAttachments();
+    chatContextAttachments=previousContextAttachments;renderChatContextAttachments();
+    if(editor){editor.value=previousEditorValue;editor.selectionStart=previousEditorSelectionStart;editor.selectionEnd=previousEditorSelectionEnd}
     if(input)setChatInputValue(previousInput,{focus:false,sync:false});
     streaming=previousStreaming;
     clearAssistantEditTarget({restore:false});
@@ -12834,6 +12923,13 @@ function assistantComposerInteractionSnapshot(){
     editInput,
     attachHeader,
     attachCounts,
+    anchorButtonReady,
+    atAnchorReady,
+    anchorAttached,
+    anchorPillReady,
+    anchorSummaryReady,
+    anchorNativeReady,
+    anchorQueuedReady,
     queueClass,
     queueCount,
     queuedMessage,
@@ -46072,7 +46168,7 @@ $('term-input')&&$('term-input').addEventListener('keydown',function(e){
 });
 
 // ── @/# chat input completions (Copilot Chat-style dynamic context and tool refs) ──
-const AT_VARS=[['@file','Current file name','context','\u{1f4c4}'],['@selection','Selected text in editor','context','✂'],
+const AT_VARS=[['@anchor','Anchor current file or selection','context','⚓'],['@file','Current file name','context','\u{1f4c4}'],['@selection','Selected text in editor','context','✂'],
   ['@editor','Full editor content','context','\u{1f4dd}'],['@state','Runtime state','context','⚡'],['@language','Editor language','context','\u{1f310}']];
 
 let _atPopupTimer=null,_atSelectedIdx=0,_chatCompletionMode='mention';
@@ -48145,6 +48241,7 @@ window.runAssistantUiSelfCheck=runAssistantUiSelfCheck;
 window.assistantComposerLayoutSnapshot=assistantComposerLayoutSnapshot;
 window.assistantVisualLayoutSnapshot=assistantVisualLayoutSnapshot;
 window.assistantComposerInteractionSnapshot=assistantComposerInteractionSnapshot;
+window.anchorAssistantComposerContext=anchorAssistantComposerContext;
 window.assistantSubmitResponsePartAction=assistantSubmitResponsePartAction;
 window.assistantActionTraySnapshot=assistantActionTraySnapshot;
 window.focusAssistantQuestionCarousel=()=>focusAssistantActionCarousel('questionCarousel');
