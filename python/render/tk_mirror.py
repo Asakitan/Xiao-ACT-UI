@@ -320,7 +320,7 @@ import tkinter as tk
 def _compositor_tk_panels_enabled() -> bool:
     try:
         from config import SettingsManager
-        return bool(SettingsManager().get('compositor_tk_panels', True))
+        return bool(SettingsManager().get('compositor_tk_panels', False))
     except Exception:
         return False
 
