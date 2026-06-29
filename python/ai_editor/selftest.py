@@ -14386,6 +14386,8 @@ console.log("extension setting schema helpers ok");
            and "let extensionRuntimeTaskProblems=[];" in html
            and "function extensionRuntimeTaskProblemRows(record,result)" in html
            and "function extensionRuntimeTaskProblemMatcherRows(record,result)" in html
+           and "function extensionRuntimeTaskProblemLocationParts(value)" in html
+           and "function extensionRuntimeTaskProblemMatcherSequenceRows(record,matcher,patterns,lines,startIndex)" in html
            and "function extensionRuntimeTaskBackgroundState(record,result)" in html
            and "function refreshExtensionRuntimeTaskProblems(record,result)" in html
            and "function renderExtensionRuntimeDebugSessionTree()" in html
@@ -14399,6 +14401,10 @@ console.log("extension setting schema helpers ok");
            and "chip.dataset.runtimeRunBackgroundState=String(row.backgroundState||'');"
            in html
            and "chip.dataset.runtimeRunBackgroundReady=row.backgroundReady?'1':'0';"
+           in html
+           and "chip.dataset.runtimeRunProblemCount=String(row.problemCount||0);"
+           in html
+           and "chip.dataset.runtimeRunFirstProblem=String(row.firstProblemSummary||'');"
            in html
            and "chip.dataset.runtimeRunPanel=String(row.presentationPanel||'');"
            in html
@@ -14434,10 +14440,16 @@ console.log("extension setting schema helpers ok");
            in html
            and "runtimeTaskBackgroundReadyChips:runtimeRunStrip?runtimeRunStrip.querySelectorAll('.extension-runtime-run-chip[data-runtime-run-kind=\"task\"][data-runtime-run-background-ready=\"1\"]').length:0"
            in html
+           and "runtimeTaskRunProblemCounts:runtimeRunStrip?Array.from(runtimeRunStrip.querySelectorAll('.extension-runtime-run-chip[data-runtime-run-kind=\"task\"]')).map(item=>Number(item.dataset.runtimeRunProblemCount)||0):[]"
+           in html
+           and "runtimeTaskRunFirstProblems:runtimeRunStrip?Array.from(runtimeRunStrip.querySelectorAll('.extension-runtime-run-chip[data-runtime-run-kind=\"task\"]')).map(item=>item.dataset.runtimeRunFirstProblem||'').filter(Boolean):[]"
+           in html
            and "runtimeTaskStopButtons:runtimeRunStrip?runtimeRunStrip.querySelectorAll('.extension-runtime-run-stop[data-runtime-task-stop=\"1\"]').length:0"
            in html
            and "runtimeTaskProblemCount:runtimeTaskProblemRows.length" in html
            and "runtimeTaskProblemCodes:runtimeTaskProblemRows.map(row=>row.code||'')" in html
+           and "runtimeTaskProblemMultilineRows:runtimeTaskProblemRows.filter(row=>row.multiline===true).length" in html
+           and "runtimeTaskProblemEndCharacters:runtimeTaskProblemRows.map(row=>row.range&&row.range.end?row.range.end.character:0)" in html
            and "runtimeProblemsPanelTaskRows:document.querySelectorAll('#problems-content .problem-row[data-problem-kind=\"task\"]').length" in html
            and "runtimeDebugTreeActive:!!(runtimeDebugTree&&runtimeDebugTree.classList.contains('active'))" in html
            and "runtimeDebugTreeCommands:runtimeDebugTree?Array.from(runtimeDebugTree.querySelectorAll('.extension-debug-session-action')).map(item=>item.dataset.debugAction||'').filter(Boolean):[]" in html
@@ -14453,9 +14465,13 @@ console.log("extension setting schema helpers ok");
            and "runtimeActionSmoke.taskStopCommand=runtimeExecutedCommands.some(item=>item.command==='workbench.action.tasks.terminate'&&item.args&&item.args[0]==='task-running-selftest');"
            in html
            and "owner:'selftest-owner'" in html
+           and "owner:'selftest-multiline'" in html
+           and "loop:true" in html
            and "beginsPattern:'Watching for file changes'" in html
            and "snapshot.runtimeTaskBackgroundStates.includes('ready')" in html
            and "snapshot.runtimeTaskProblemCodes.some(value=>value.includes('TS123'))" in html
+           and "snapshot.runtimeTaskProblemCodes.some(value=>value.includes('ML900'))" in html
+           and "snapshot.runtimeTaskRunProblemCounts.some(value=>value>=3)" in html
            and "runtimeActionSmoke.debugPrompt=$('chat-input')?$('chat-input').value:'';" in html
            and "_terminals.filter(term=>term&&!previousTerminalIds.has(term.id)).map(term=>term.id).slice().forEach(id=>_closeTerminal(id));" in html
            and "showExtensionActionMenu(2,2" in html
@@ -14557,7 +14573,7 @@ console.log("extension setting schema helpers ok");
            and "snapshot.runtimeRunStripActive&&snapshot.runtimeTaskRunChips>=1&&snapshot.runtimeDebugSessionChips>=1" in html
            and "snapshot.runtimeRunStates.includes('done')&&snapshot.runtimeRunStates.includes('started')" in html
            and "snapshot.runtimeRunCommands.includes('echo selftest task')" in html
-           and "snapshot.runtimeTaskProblemCount>=1&&snapshot.runtimeTaskProblemSources.some(value=>value.includes('selftest-owner'))" in html
+           and "snapshot.runtimeTaskProblemCount>=3&&snapshot.runtimeTaskProblemSources.some(value=>value.includes('selftest-owner'))" in html
            and "snapshot.runtimeDebugTreeActive&&snapshot.runtimeDebugTreeRows>=1&&snapshot.runtimeDebugTreeActions>=6" in html
            and "snapshot.runtimeActionSmoke.taskPrompt.includes('selftest.task')&&snapshot.runtimeActionSmoke.taskPrompt.includes('Required fields: command')" in html
            and "snapshot.runtimeActionSmoke.debugPrompt.includes('selftest.debug')&&snapshot.runtimeActionSmoke.debugPrompt.includes('Launch template')&&snapshot.runtimeActionSmoke.debugPrompt.includes('program')" in html
