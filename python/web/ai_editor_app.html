@@ -1343,7 +1343,7 @@ pre.code-block code .type { color:var(--fg-type); }
 .chat-control-strip { display:flex; align-items:center; gap:6px; flex:0 0 auto; flex-wrap:nowrap; min-width:max-content;
   overflow:visible; width:max-content; max-width:none;
   --chat-provider-width:128px;
-  --chat-model-width:76px;
+  --chat-model-width:64px;
   --chat-agent-width:140px;
   --chat-workflow-width:144px; }
 .chat-chip,.chat-select-chip,.chat-model-inline,.chat-run-chip { height:22px; border:1px solid var(--border);
@@ -2311,6 +2311,23 @@ button.review-pill { cursor:pointer; }
 .extension-runtime-run-chip.error,.extension-runtime-run-chip.failed { color:var(--fg-error); border-color:color-mix(in srgb,var(--fg-error) 48%,var(--border)); }
 .extension-runtime-run-chip.cancelled,.extension-runtime-run-chip.stopped { color:var(--fg-warning); border-color:color-mix(in srgb,var(--fg-warning) 48%,var(--border)); }
 .extension-runtime-run-chip strong { color:var(--fg); font-weight:600; max-width:180px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.extension-debug-session-tree { display:none; padding:6px 8px; border-bottom:1px solid color-mix(in srgb,var(--border) 70%,transparent);
+  background:color-mix(in srgb,var(--bg2) 34%,transparent); }
+.extension-debug-session-tree.active { display:grid; gap:5px; }
+.extension-debug-session-row { display:grid; grid-template-columns:minmax(0,1fr) auto; gap:7px; align-items:center;
+  min-height:26px; padding:4px 6px; border:1px solid color-mix(in srgb,var(--border) 82%,transparent); border-radius:5px;
+  color:var(--fg-dim); font:10px var(--mono); background:color-mix(in srgb,var(--bg3) 68%,transparent); }
+.extension-debug-session-row.running,.extension-debug-session-row.started { border-color:color-mix(in srgb,var(--fg-success) 42%,var(--border)); }
+.extension-debug-session-row.stopped { border-color:color-mix(in srgb,var(--fg-warning) 48%,var(--border)); }
+.extension-debug-session-row.error { border-color:color-mix(in srgb,var(--fg-error) 50%,var(--border)); }
+.extension-debug-session-main { min-width:0; display:flex; flex-direction:column; gap:1px; }
+.extension-debug-session-title { color:var(--fg); font:600 11px var(--sans); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.extension-debug-session-meta { display:flex; flex-wrap:wrap; gap:4px; min-width:0; }
+.extension-debug-session-meta span { max-width:220px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.extension-debug-session-actions { display:inline-flex; align-items:center; gap:3px; }
+.extension-debug-session-action { min-width:22px; height:22px; padding:0 5px; border:1px solid var(--border); border-radius:4px;
+  background:var(--bg2); color:var(--fg-dim); font:10px var(--mono); cursor:pointer; }
+.extension-debug-session-action:hover,.extension-debug-session-action:focus { color:var(--fg); border-color:var(--border-focus); outline:none; }
 .extension-runtime-list { display:grid; gap:1px; padding:4px; }
 .extension-runtime-row { display:grid; grid-template-columns:92px minmax(0,1fr) auto auto auto; gap:7px; align-items:center; min-height:28px; padding:4px 6px; border-radius:4px; color:var(--fg-dim); font-size:11px; }
 .extension-runtime-row:hover,.extension-runtime-row:focus { background:var(--bg-hover); outline:1px solid color-mix(in srgb,var(--border-focus) 40%,transparent); outline-offset:-1px; }
@@ -4891,6 +4908,7 @@ pre.code-block { overflow:visible; }
         <div class="extension-runtime-summary" id="extension-runtime-summary"></div>
         <div class="extension-runtime-health" id="extension-runtime-health"></div>
         <div class="extension-runtime-run-strip" id="extension-runtime-run-strip" aria-live="polite"></div>
+        <div class="extension-debug-session-tree" id="extension-debug-session-tree" role="tree" aria-label="Debug sessions"></div>
         <div class="extension-runtime-list" id="extension-runtime-list"></div>
       </div>
     </div>
@@ -12520,7 +12538,7 @@ function assistantVisualLayoutSnapshot(){
     nativeBoxes,
     noOldNativeBoxes:nativeBoxes.every(item=>item.exists&&item.display==='none'&&item.ariaHidden==='true'&&item.inert===true&&item.width===0&&item.height===0),
     triggerWidths:triggerWidthMap,
-    controlWidthsReady:!!(triggerWidthMap['chat-provider-trigger']>=128&&triggerWidthMap['chat-model-inline']>=76&&triggerWidthMap['chat-model-inline']<=90&&triggerWidthMap['chat-agent-trigger']>=140&&triggerWidthMap['chat-workflow-trigger']>=144),
+    controlWidthsReady:!!(triggerWidthMap['chat-provider-trigger']>=128&&triggerWidthMap['chat-model-inline']>=58&&triggerWidthMap['chat-model-inline']<=68&&triggerWidthMap['chat-agent-trigger']>=140&&triggerWidthMap['chat-workflow-trigger']>=144),
     popups:popupSnapshots,
     popupsCustomSurface:popupSnapshots.every(item=>item.customSurface&&item.shown&&item.display==='block'&&item.pointerEvents==='auto'),
     popupsOpenAbove:popupSnapshots.every(item=>item.rectReady&&item.opensAboveTrigger&&item.notToolbarClipped),
@@ -26292,7 +26310,12 @@ function editorProblemSummary(rows){
   return summary;
 }
 function editorAllProblemRows(diagnostics){
-  return editorProblemRowsFromDiagnostics(diagnostics||_editorDiagnostics).concat(editorProblemRowsFromDirtyDiff());
+  const runtimeTaskRows=typeof extensionRuntimeTaskProblemRowsSnapshot==='function'
+    ? extensionRuntimeTaskProblemRowsSnapshot()
+    : [];
+  return editorProblemRowsFromDiagnostics(diagnostics||_editorDiagnostics)
+    .concat(runtimeTaskRows)
+    .concat(editorProblemRowsFromDirtyDiff());
 }
 function updateProblemsTabState(rows){
   rows=editorAssignProblemRowState(rows);
@@ -38511,6 +38534,7 @@ function extensionRuntimeSurfaceViewId(row){
 }
 const extensionRuntimeTaskRuns=new Map();
 const extensionRuntimeDebugSessions=new Map();
+let extensionRuntimeTaskProblems=[];
 function extensionRuntimeBoundedSet(map,key,value,limit){
   const id=String(key||'').trim();
   if(!id)return;
@@ -38532,6 +38556,148 @@ function extensionRuntimeDebugSessionKey(data){
   data=data||{};
   const session=data.session&&typeof data.session==='object'?data.session:{};
   return String(session.id||data.sessionId||data.debugType||session.type||'').trim();
+}
+function extensionRuntimeTaskOutputText(result){
+  result=result&&typeof result==='object'?result:{};
+  return [result.stdout,result.stderr,result.output,result.text]
+    .map(value=>value==null?'':String(value))
+    .filter(Boolean)
+    .join('\n');
+}
+function extensionRuntimeTaskProblemRange(line,column,message){
+  const zeroLine=Math.max(0,(Number(line)||1)-1);
+  const zeroColumn=Math.max(0,(Number(column)||1)-1);
+  const width=Math.max(1,Math.min(120,String(message||'').length||1));
+  return {start:{line:zeroLine,character:zeroColumn},end:{line:zeroLine,character:zeroColumn+width}};
+}
+function extensionRuntimeNormalizeTaskProblemSeverity(value){
+  const raw=String(value||'').toLowerCase();
+  if(raw.includes('error')||raw==='err'||raw==='fatal')return 'error';
+  if(raw.includes('warn'))return 'warning';
+  if(raw.includes('hint'))return 'hint';
+  return 'info';
+}
+function extensionRuntimeTaskProblemRows(record,result){
+  const text=extensionRuntimeTaskOutputText(result);
+  if(!text)return [];
+  const rows=[];
+  const taskLabel=String(record&&record.label||'Extension Task');
+  const taskKey=String(record&&record.key||taskLabel);
+  const cwd=String(record&&record.cwd||'');
+  const patterns=[
+    /^(.*?):(\d+):(\d+):\s*(error|warning|warn|info|hint|fatal)\b\s*:?\s*(.*)$/i,
+    /^(.*?):(\d+):\s*(error|warning|warn|info|hint|fatal)\b\s*:?\s*(.*)$/i,
+    /^(.*?)\((\d+),(\d+)\):\s*(error|warning|warn|info|hint|fatal)\s*([A-Za-z0-9_.-]+)?\s*:?\s*(.*)$/i
+  ];
+  String(text).split(/\r?\n/).slice(0,800).forEach((line,index)=>{
+    const raw=String(line||'').trim();
+    if(!raw)return;
+    let match=patterns[0].exec(raw);
+    let file='',lineNo=0,columnNo=1,severity='',code='',message='';
+    if(match){
+      file=match[1];lineNo=Number(match[2]);columnNo=Number(match[3]);severity=match[4];message=match[5];
+    }else if((match=patterns[1].exec(raw))){
+      file=match[1];lineNo=Number(match[2]);columnNo=1;severity=match[3];message=match[4];
+    }else if((match=patterns[2].exec(raw))){
+      file=match[1];lineNo=Number(match[2]);columnNo=Number(match[3]);severity=match[4];code=match[5]||'';message=match[6];
+    }else if(/\b(error|warning|warn|fatal)\b/i.test(raw)&&index<120){
+      file=cwd||taskLabel;lineNo=1;columnNo=1;severity=/\b(error|fatal)\b/i.test(raw)?'error':'warning';message=raw;
+    }else return;
+    message=String(message||raw).trim();
+    file=String(file||cwd||taskLabel).trim();
+    rows.push({
+      kind:'task',
+      severity:extensionRuntimeNormalizeTaskProblemSeverity(severity),
+      source:'Task '+taskLabel,
+      code:code||'task.problemMatcher',
+      message,
+      file,
+      uri:file,
+      line:Math.max(1,Number(lineNo)||1),
+      character:Math.max(1,Number(columnNo)||1),
+      range:extensionRuntimeTaskProblemRange(lineNo,columnNo,message),
+      taskKey,
+      taskLabel
+    });
+  });
+  return rows.slice(0,200);
+}
+function refreshExtensionRuntimeTaskProblems(record,result){
+  const key=String(record&&record.key||'');
+  if(!key)return [];
+  extensionRuntimeTaskProblems=extensionRuntimeTaskProblems.filter(row=>row.taskKey!==key);
+  const rows=extensionRuntimeTaskProblemRows(record,result);
+  extensionRuntimeTaskProblems=extensionRuntimeTaskProblems.concat(rows).slice(-400);
+  const panel=$('extension-runtime-panel');
+  if(panel){
+    panel.dataset.runtimeTaskProblemCount=String(extensionRuntimeTaskProblems.length);
+    panel.dataset.runtimeLastTaskProblemCount=String(rows.length);
+  }
+  if(typeof renderProblemsRows==='function')renderProblemsRows(editorAllProblemRows(_editorDiagnostics));
+  return rows;
+}
+function extensionRuntimeTaskProblemRowsSnapshot(){
+  return extensionRuntimeTaskProblems.slice();
+}
+async function runExtensionDebugCommand(command,label,sessionKey){
+  const result=await call('execute_command',command);
+  const ok=callSucceeded(result);
+  const status=$('extension-runtime-status');
+  if(status)status.textContent=(ok?'Debug ':'Debug command failed: ')+(label||command);
+  if(sessionKey&&command==='workbench.action.debug.stop'){
+    const existing=extensionRuntimeDebugSessions.get(sessionKey);
+    if(existing)updateExtensionRuntimeDebugSession({state:'stopped',session:{id:existing.key,type:existing.debugType,name:existing.label},config:{cwd:existing.cwd,program:existing.commandLine},message:'Stopped from UI'});
+  }
+  return ok;
+}
+function renderExtensionRuntimeDebugSessionTree(){
+  const tree=$('extension-debug-session-tree');
+  const panel=$('extension-runtime-panel');
+  if(!tree)return {debugSessions:extensionRuntimeDebugSessions.size,visible:0};
+  const rows=Array.from(extensionRuntimeDebugSessions.values()).slice(-8).reverse();
+  tree.innerHTML='';
+  tree.classList.toggle('active',rows.length>0);
+  if(panel){
+    panel.dataset.runtimeDebugTreeCount=String(rows.length);
+    panel.dataset.runtimeDebugControlCount=String(rows.length?rows.length*6:0);
+  }
+  rows.forEach(row=>{
+    const item=document.createElement('div');
+    item.className='extension-debug-session-row '+String(row.state||'');
+    item.dataset.debugSessionKey=String(row.key||'');
+    item.dataset.debugSessionState=String(row.state||'');
+    item.dataset.debugSessionType=String(row.debugType||'');
+    item.setAttribute('role','treeitem');
+    item.setAttribute('aria-label','Debug session '+String(row.label||row.key||''));
+    const main=document.createElement('div');main.className='extension-debug-session-main';
+    const title=document.createElement('div');title.className='extension-debug-session-title';
+    title.textContent=String(row.label||row.key||'Debug Session');
+    const meta=document.createElement('div');meta.className='extension-debug-session-meta';
+    [
+      row.debugType?('type '+row.debugType):'',
+      row.state?('state '+row.state):'',
+      row.commandLine?('program '+row.commandLine):'',
+      row.cwd?('cwd '+row.cwd):'',
+      row.message||''
+    ].filter(Boolean).forEach(text=>{const span=document.createElement('span');span.textContent=text;meta.appendChild(span)});
+    main.appendChild(title);main.appendChild(meta);
+    const actions=document.createElement('div');actions.className='extension-debug-session-actions';
+    [
+      ['▶','Continue','workbench.action.debug.continue'],
+      ['Ⅱ','Pause','workbench.action.debug.pause'],
+      ['↷','Step Over','workbench.action.debug.stepOver'],
+      ['↓','Step Into','workbench.action.debug.stepInto'],
+      ['↑','Step Out','workbench.action.debug.stepOut'],
+      ['■','Stop','workbench.action.debug.stop']
+    ].forEach(spec=>{
+      const btn=document.createElement('button');btn.type='button';btn.className='extension-debug-session-action';
+      btn.textContent=spec[0];btn.title=spec[1];btn.dataset.debugAction=spec[2];
+      btn.onclick=ev=>{ev.preventDefault();ev.stopPropagation();runExtensionDebugCommand(spec[2],spec[1],row.key)};
+      actions.appendChild(btn);
+    });
+    item.appendChild(main);item.appendChild(actions);tree.appendChild(item);
+  });
+  return {debugSessions:extensionRuntimeDebugSessions.size,visible:rows.length};
 }
 function renderExtensionRuntimeRunStrip(){
   const strip=$('extension-runtime-run-strip');
@@ -38575,7 +38741,8 @@ function renderExtensionRuntimeRunStrip(){
     chip.appendChild(kind);chip.appendChild(label);chip.appendChild(state);
     strip.appendChild(chip);
   });
-  return {tasks:extensionRuntimeTaskRuns.size,debugSessions:extensionRuntimeDebugSessions.size,visible:rows.length};
+  const debugTree=renderExtensionRuntimeDebugSessionTree();
+  return {tasks:extensionRuntimeTaskRuns.size,debugSessions:extensionRuntimeDebugSessions.size,visible:rows.length,debugTreeVisible:debugTree.visible};
 }
 function updateExtensionRuntimeTaskLifecycle(data){
   data=data||{};
@@ -38599,6 +38766,12 @@ function updateExtensionRuntimeTaskLifecycle(data){
     updatedAt:Date.now()
   };
   extensionRuntimeBoundedSet(extensionRuntimeTaskRuns,key,record,24);
+  if(state==='running'){
+    extensionRuntimeTaskProblems=extensionRuntimeTaskProblems.filter(row=>row.taskKey!==key);
+  }else{
+    const matched=refreshExtensionRuntimeTaskProblems(record,result);
+    record.problemCount=matched.length;
+  }
   const status=$('extension-runtime-status');
   if(status)status.textContent='Task '+record.label+' '+record.state+'.';
   return renderExtensionRuntimeRunStrip();
@@ -38625,6 +38798,7 @@ function updateExtensionRuntimeDebugSession(data){
   extensionRuntimeBoundedSet(extensionRuntimeDebugSessions,key,record,24);
   const status=$('extension-runtime-status');
   if(status)status.textContent='Debug '+record.label+' '+record.state+'.';
+  renderExtensionRuntimeDebugSessionTree();
   return renderExtensionRuntimeRunStrip();
 }
 function prepareExtensionRuntimeAssistantPrompt(row,prompt,statusText){
@@ -41706,12 +41880,16 @@ function extensionRuntimeDomSelfCheckSnapshot(){
   document.body.appendChild(root);
   const runtimeIds=[
     'extension-runtime-summary','extension-runtime-health','extension-runtime-list','extension-runtime-status',
+    'extension-runtime-run-strip','extension-debug-session-tree',
     'extension-runtime-filter-text','extension-runtime-filter-kind','extension-runtime-filter-source','extension-runtime-filter-evidence'
   ];
   const savedRuntime=runtimeIds.map(id=>{
     const el=$(id);
     return {id,el,html:el?el.innerHTML:'',text:el?el.textContent:'',attrs:el?Array.from(el.attributes).map(attr=>[attr.name,attr.value]):[]};
   });
+  const savedTaskRuns=new Map(extensionRuntimeTaskRuns);
+  const savedDebugSessions=new Map(extensionRuntimeDebugSessions);
+  const savedTaskProblems=extensionRuntimeTaskProblems.slice();
   const menu=$('ctx-menu');
   const savedMenu=menu?{html:menu.innerHTML,display:menu.style.display,left:menu.style.left,top:menu.style.top,role:menu.getAttribute('role'),label:menu.getAttribute('aria-label')}:null;
   try{
@@ -41916,7 +42094,7 @@ function extensionRuntimeDomSelfCheckSnapshot(){
     const runtimeActionSmoke={};
     window.pywebview=window.pywebview||{};
     window.pywebview.api=Object.assign({},previousApi||{},{
-      run_extension_task_type:async(taskType)=>({ok:true,taskType,executionId:'task-selftest',task:{name:'Selftest Task',definition:{type:taskType},problemMatchers:['$selftest']},commandLine:'echo selftest task',taskCount:1}),
+      run_extension_task_type:async(taskType)=>({ok:true,taskType,executionId:'task-selftest',task:{name:'Selftest Task',definition:{type:taskType},problemMatchers:['$selftest']},commandLine:'echo selftest task',taskCount:1,raw:{exitCode:0,stdout:'src/selftest.ts:2:3: warning: Selftest task warning'}}),
       start_extension_debugger_type:async(debugType,config,label)=>({ok:true,debugType,started:true,config,session:{id:'debug-selftest',type:debugType,name:label||debugType}})
     });
     try{
@@ -42073,6 +42251,8 @@ function extensionRuntimeDomSelfCheckSnapshot(){
     const runtimeSummary=$('extension-runtime-summary');
     const runtimeHealth=$('extension-runtime-health');
     const runtimeRunStrip=$('extension-runtime-run-strip');
+    const runtimeDebugTree=$('extension-debug-session-tree');
+    const runtimeTaskProblemRows=extensionRuntimeTaskProblemRowsSnapshot();
     const tree=root.querySelector('[role="tree"][data-view-id="selftest.dynamic.tree"]');
     const treeNodes=Array.from(root.querySelectorAll('.ext-tree-node'));
     const webviewFrame=root.querySelector('.extension-webview-view-host iframe.provider-webview-frame');
@@ -42239,6 +42419,14 @@ function extensionRuntimeDomSelfCheckSnapshot(){
       runtimeDebugSessionChips:runtimeRunStrip?runtimeRunStrip.querySelectorAll('.extension-runtime-run-chip[data-runtime-run-kind="debug"]').length:0,
       runtimeRunStates:runtimeRunStrip?Array.from(runtimeRunStrip.querySelectorAll('.extension-runtime-run-chip')).map(item=>item.dataset.runtimeRunState||''):[],
       runtimeRunCommands:runtimeRunStrip?Array.from(runtimeRunStrip.querySelectorAll('.extension-runtime-run-chip')).map(item=>item.dataset.runtimeRunCommand||'').filter(Boolean):[],
+      runtimeTaskProblemCount:runtimeTaskProblemRows.length,
+      runtimeTaskProblemSources:runtimeTaskProblemRows.map(row=>row.source||''),
+      runtimeTaskProblemMessages:runtimeTaskProblemRows.map(row=>row.message||''),
+      runtimeProblemsPanelTaskRows:document.querySelectorAll('#problems-content .problem-row[data-problem-kind="task"]').length,
+      runtimeDebugTreeActive:!!(runtimeDebugTree&&runtimeDebugTree.classList.contains('active')),
+      runtimeDebugTreeRows:runtimeDebugTree?runtimeDebugTree.querySelectorAll('.extension-debug-session-row').length:0,
+      runtimeDebugTreeActions:runtimeDebugTree?runtimeDebugTree.querySelectorAll('.extension-debug-session-action').length:0,
+      runtimeDebugTreeCommands:runtimeDebugTree?Array.from(runtimeDebugTree.querySelectorAll('.extension-debug-session-action')).map(item=>item.dataset.debugAction||'').filter(Boolean):[],
       runtimeHealthFilterVisible:(()=>{const card=runtimeHealth&&runtimeHealth.querySelector('[data-runtime-health-filter="bridge-warning"]');if(!card)return 0;card.click();const value=(($('extension-runtime-filter-evidence')||{}).value)||'';const result=applyExtensionRuntimeSurfaceFilter();if($('extension-runtime-filter-evidence'))$('extension-runtime-filter-evidence').value='';applyExtensionRuntimeSurfaceFilter();return value==='bridge-warning'&&result?result.visible:0})(),
       runtimeKinds:runtimeList?Array.from(runtimeList.querySelectorAll('.extension-runtime-kind')).map(item=>String(item.textContent||'')):[],
       runtimeListRole:runtimeList?runtimeList.getAttribute('role'):'',
@@ -42364,6 +42552,8 @@ function extensionRuntimeDomSelfCheckSnapshot(){
       && snapshot.runtimeRunStripActive&&snapshot.runtimeTaskRunChips>=1&&snapshot.runtimeDebugSessionChips>=1
       && snapshot.runtimeRunStates.includes('done')&&snapshot.runtimeRunStates.includes('started')
       && snapshot.runtimeRunCommands.includes('echo selftest task')
+      && snapshot.runtimeTaskProblemCount>=1&&snapshot.runtimeTaskProblemSources.some(value=>value.includes('Selftest Task'))&&snapshot.runtimeTaskProblemMessages.some(value=>value.includes('Selftest task warning'))&&snapshot.runtimeProblemsPanelTaskRows>=1
+      && snapshot.runtimeDebugTreeActive&&snapshot.runtimeDebugTreeRows>=1&&snapshot.runtimeDebugTreeActions>=6&&['workbench.action.debug.continue','workbench.action.debug.pause','workbench.action.debug.stepOver','workbench.action.debug.stepInto','workbench.action.debug.stepOut','workbench.action.debug.stop'].every(command=>snapshot.runtimeDebugTreeCommands.includes(command))
       && snapshot.runtimeActionSmoke.taskPrompt.includes('selftest.task')&&snapshot.runtimeActionSmoke.taskPrompt.includes('Required fields: command')
       && snapshot.runtimeActionSmoke.debugPrompt.includes('selftest.debug')&&snapshot.runtimeActionSmoke.debugPrompt.includes('Launch template')&&snapshot.runtimeActionSmoke.debugPrompt.includes('program')
       && snapshot.runtimeActionSmoke.lastAction==='start-debugger'
@@ -42406,6 +42596,11 @@ function extensionRuntimeDomSelfCheckSnapshot(){
       Array.from(saved.el.attributes).forEach(attr=>saved.el.removeAttribute(attr.name));
       saved.attrs.forEach(([name,value])=>saved.el.setAttribute(name,value));
     });
+    extensionRuntimeTaskRuns.clear();
+    savedTaskRuns.forEach((value,key)=>extensionRuntimeTaskRuns.set(key,value));
+    extensionRuntimeDebugSessions.clear();
+    savedDebugSessions.forEach((value,key)=>extensionRuntimeDebugSessions.set(key,value));
+    extensionRuntimeTaskProblems=savedTaskProblems.slice();
     if(menu&&savedMenu){
       menu.innerHTML=savedMenu.html;
       menu.style.display=savedMenu.display;

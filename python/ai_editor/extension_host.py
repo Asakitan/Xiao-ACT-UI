@@ -3985,6 +3985,23 @@ class NodeExtensionHost:
                 except Exception:
                     pass
 
+        elif msg_type == "debug_stop":
+            if self._ui_bridge:
+                try:
+                    updater = getattr(
+                        self._ui_bridge,
+                        "update_extension_debug_session",
+                        None)
+                    if callable(updater):
+                        updater({
+                            "state": "stopped",
+                            "session": msg.get("session")
+                            if isinstance(msg.get("session"), dict) else {},
+                            "message": "Debug session stopped",
+                        })
+                except Exception:
+                    pass
+
         elif msg_type == "debug_console":
             if self._ui_bridge:
                 try:

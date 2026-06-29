@@ -11255,6 +11255,28 @@ function buildVscodeModule(extDesc, extensionPath, storageRoot) {
                 const threadId = _activeDebugStackItem?.thread?.id;
                 return threadId === undefined || threadId === null ? {} : { threadId };
             }
+            function stopDebugSession(target) {
+                target = target || _activeDebugSession;
+                if (!target) return Promise.resolve(false);
+                _debugCallTrackers(target, 'onWillStopSession');
+                try { target._debugAdapterTransport?.dispose?.(); } catch {}
+                if (_activeDebugSession && _activeDebugSession.id === target.id) {
+                    _debugUpdateActive(null, _onDidChangeActiveDebugSession);
+                }
+                if (_activeDebugStackItem
+                        && _activeDebugStackItem.session
+                        && _activeDebugStackItem.session.id === target.id) {
+                    _activeDebugStackItem = undefined;
+                    _onDidChangeActiveStackItem.fire(undefined);
+                }
+                _onDidTerminateDebugSession.fire(target);
+                send({
+                    type: 'debug_stop',
+                    session: _debugSessionPayload(target),
+                });
+                _debugCallTrackers(target, 'onExit', undefined, undefined);
+                return Promise.resolve(true);
+            }
             const debugCommandSpecs = [
                 ['workbench.action.debug.continue', 'continue', true],
                 ['workbench.action.debug.stepOver', 'next', true],
@@ -11270,6 +11292,9 @@ function buildVscodeModule(extDesc, extensionPath, storageRoot) {
                         usesThread ? activeDebugThreadArgs() : {},
                     ));
                 }
+            }
+            if (!_commands.has('workbench.action.debug.stop')) {
+                _commands.set('workbench.action.debug.stop', () => stopDebugSession());
             }
             const activeDebugConsole = {
                 append(value) {
@@ -11535,26 +11560,7 @@ function buildVscodeModule(extDesc, extensionPath, storageRoot) {
                     return true;
                 },
                 stopDebugging(session) {
-                    const target = session || _activeDebugSession;
-                    if (!target) return Promise.resolve();
-                    _debugCallTrackers(target, 'onWillStopSession');
-                    try { target._debugAdapterTransport?.dispose?.(); } catch {}
-                    if (_activeDebugSession && _activeDebugSession.id === target.id) {
-                        _debugUpdateActive(null, _onDidChangeActiveDebugSession);
-                    }
-                    if (_activeDebugStackItem
-                            && _activeDebugStackItem.session
-                            && _activeDebugStackItem.session.id === target.id) {
-                        _activeDebugStackItem = undefined;
-                        _onDidChangeActiveStackItem.fire(undefined);
-                    }
-                    _onDidTerminateDebugSession.fire(target);
-                    send({
-                        type: 'debug_stop',
-                        session: _debugSessionPayload(target),
-                    });
-                    _debugCallTrackers(target, 'onExit', undefined, undefined);
-                    return Promise.resolve();
+                    return stopDebugSession(session).then(() => undefined);
                 },
                 get activeDebugSession() { return _activeDebugSession; },
                 get activeDebugConsole() { return activeDebugConsole; },

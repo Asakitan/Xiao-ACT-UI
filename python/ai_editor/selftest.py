@@ -5159,7 +5159,7 @@ def test_phase1_ai_editor_regressions() -> None:
              and ".chat-control-strip { display:flex; align-items:center; gap:6px; flex:0 0 auto; flex-wrap:nowrap; min-width:max-content;" in html
              and "overflow:visible; width:max-content; max-width:none;" in html
              and "--chat-provider-width:128px;" in html
-            and "--chat-model-width:76px;" in html
+            and "--chat-model-width:64px;" in html
             and "--chat-agent-width:140px;" in html
             and "--chat-workflow-width:144px;" in html
              and "appearance:none; -webkit-appearance:none; line-height:20px;" in html
@@ -6651,7 +6651,7 @@ def test_phase1_ai_editor_regressions() -> None:
             and "inputThreeLineHeight:!!(container&&container.querySelector('.chat-input')&&container.querySelector('.chat-input').getBoundingClientRect().height>=72)" in html
             and "assistantUiSelfCheckRecord(checks,'visual-controls-one-row-ready'" in html
             and "assistantUiSelfCheckRecord(checks,'visual-control-widths-ready'" in html
-            and "controlWidthsReady:!!(triggerWidthMap['chat-provider-trigger']>=128&&triggerWidthMap['chat-model-inline']>=76&&triggerWidthMap['chat-model-inline']<=90&&triggerWidthMap['chat-agent-trigger']>=140&&triggerWidthMap['chat-workflow-trigger']>=144)" in html
+           and "controlWidthsReady:!!(triggerWidthMap['chat-provider-trigger']>=128&&triggerWidthMap['chat-model-inline']>=58&&triggerWidthMap['chat-model-inline']<=68&&triggerWidthMap['chat-agent-trigger']>=140&&triggerWidthMap['chat-workflow-trigger']>=144)" in html
             and "assistantUiSelfCheckRecord(checks,'visual-composer-extra-rows-hidden-ready'" in html
             and "assistantUiSelfCheckRecord(checks,'visual-model-chip-removed-ready'" in html
             and "assistantUiSelfCheckRecord(checks,'visual-content-window-ring-ready'" in html
@@ -14380,8 +14380,14 @@ console.log("extension setting schema helpers ok");
            and "renderExtensionRuntimeSurfacePanel(runtimeData);" in html
            and "'extension-runtime-summary','extension-runtime-health','extension-runtime-list','extension-runtime-status'" in html
            and 'id="extension-runtime-run-strip" aria-live="polite"' in html
+           and 'id="extension-debug-session-tree" role="tree" aria-label="Debug sessions"' in html
            and "const extensionRuntimeTaskRuns=new Map();" in html
            and "const extensionRuntimeDebugSessions=new Map();" in html
+           and "let extensionRuntimeTaskProblems=[];" in html
+           and "function extensionRuntimeTaskProblemRows(record,result)" in html
+           and "function refreshExtensionRuntimeTaskProblems(record,result)" in html
+           and "function renderExtensionRuntimeDebugSessionTree()" in html
+           and "function runExtensionDebugCommand(command,label,sessionKey)" in html
            and "function updateExtensionRuntimeTaskLifecycle(data)" in html
            and "function updateExtensionRuntimeDebugSession(data)" in html
            and "function renderExtensionRuntimeRunStrip()" in html
@@ -14407,6 +14413,10 @@ console.log("extension setting schema helpers ok");
            and "runtimeDebugSessionChips:runtimeRunStrip?runtimeRunStrip.querySelectorAll('.extension-runtime-run-chip[data-runtime-run-kind=\"debug\"]').length:0" in html
            and "runtimeRunStates:runtimeRunStrip?Array.from(runtimeRunStrip.querySelectorAll('.extension-runtime-run-chip')).map(item=>item.dataset.runtimeRunState||''):[]" in html
            and "runtimeRunCommands:runtimeRunStrip?Array.from(runtimeRunStrip.querySelectorAll('.extension-runtime-run-chip')).map(item=>item.dataset.runtimeRunCommand||'').filter(Boolean):[]" in html
+           and "runtimeTaskProblemCount:runtimeTaskProblemRows.length" in html
+           and "runtimeProblemsPanelTaskRows:document.querySelectorAll('#problems-content .problem-row[data-problem-kind=\"task\"]').length" in html
+           and "runtimeDebugTreeActive:!!(runtimeDebugTree&&runtimeDebugTree.classList.contains('active'))" in html
+           and "runtimeDebugTreeCommands:runtimeDebugTree?Array.from(runtimeDebugTree.querySelectorAll('.extension-debug-session-action')).map(item=>item.dataset.debugAction||'').filter(Boolean):[]" in html
            and "runtimeHealthFilterVisible:(()=>{const card=runtimeHealth&&runtimeHealth.querySelector('[data-runtime-health-filter=\"bridge-warning\"]')" in html
            and "runtimeRowKeys:runtimeList?Array.from(runtimeList.querySelectorAll('.extension-runtime-row')).map(item=>item.dataset.key||'').filter(Boolean).length:0" in html
            and "runtimeContainerRows:runtimeList?Array.from(runtimeList.querySelectorAll('.extension-runtime-row')).filter(item=>item.dataset.container==='selftest.dynamic.container').length:0" in html
@@ -14516,6 +14526,8 @@ console.log("extension setting schema helpers ok");
            and "snapshot.runtimeRunStripActive&&snapshot.runtimeTaskRunChips>=1&&snapshot.runtimeDebugSessionChips>=1" in html
            and "snapshot.runtimeRunStates.includes('done')&&snapshot.runtimeRunStates.includes('started')" in html
            and "snapshot.runtimeRunCommands.includes('echo selftest task')" in html
+           and "snapshot.runtimeTaskProblemCount>=1&&snapshot.runtimeTaskProblemSources.some(value=>value.includes('Selftest Task'))" in html
+           and "snapshot.runtimeDebugTreeActive&&snapshot.runtimeDebugTreeRows>=1&&snapshot.runtimeDebugTreeActions>=6" in html
            and "snapshot.runtimeActionSmoke.taskPrompt.includes('selftest.task')&&snapshot.runtimeActionSmoke.taskPrompt.includes('Required fields: command')" in html
            and "snapshot.runtimeActionSmoke.debugPrompt.includes('selftest.debug')&&snapshot.runtimeActionSmoke.debugPrompt.includes('Launch template')&&snapshot.runtimeActionSmoke.debugPrompt.includes('program')" in html
            and "snapshot.runtimeActionSmoke.lastAction==='start-debugger'" in html
@@ -16375,6 +16387,8 @@ console.log("frontend built-in language fallback behavior ok");
            in node_ext_host_source
            and "type: 'debug_start'" in node_ext_host_source
            and "stopDebugging(session)" in node_ext_host_source
+           and "function stopDebugSession(target)" in node_ext_host_source
+           and "_commands.set('workbench.action.debug.stop', () => stopDebugSession());" in node_ext_host_source
            and "addBreakpoints" in node_ext_host_source
            and "removeBreakpoints" in node_ext_host_source
            and "onDidChangeBreakpoints: _onDidChangeBreakpoints.event" in node_ext_host_source
@@ -16400,6 +16414,7 @@ console.log("frontend built-in language fallback behavior ok");
            and "msg_type == \"debug_console\"" in extension_host_source
            and "msg_type == \"task_execute\"" in extension_host_source
            and "msg_type == \"debug_start\"" in extension_host_source
+           and "msg_type == \"debug_stop\"" in extension_host_source
            and "update_extension_task_lifecycle" in extension_host_source
            and "update_extension_debug_session" in extension_host_source
            and "\"extension_task_execute_response\"" in extension_host_source
