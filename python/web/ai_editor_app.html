@@ -27769,6 +27769,14 @@ function webviewCommandUriAllowed(viewId,command){
 function webviewCommandUriPayload(uri){
   return extensionWelcomeCommandPayloadFromUri(uri);
 }
+function webviewSupportedExternalLinkTarget(uri){
+  const raw=String(uri||'').trim();
+  if(!raw)return '';
+  try{
+    const target=new URL(raw,window.location&&window.location.href?window.location.href:undefined);
+    return /^(https?:|mailto:|sao-editor:|vscode:)$/i.test(target.protocol)?target.href:'';
+  }catch(e){return ''}
+}
 function webviewCommandUriPayloadFromData(data){
   data=data&&typeof data==='object'?data:{};
   if(data.command&&typeof data.command==='object'){
@@ -27784,6 +27792,9 @@ function webviewCommandUriPayloadFromData(data){
     };
   }
   return webviewCommandUriPayload(data.href);
+}
+function webviewLinkScheme(uri){
+  try{return new URL(String(uri||'')).protocol.replace(/:$/,'').toLowerCase()}catch(e){return ''}
 }
 function webviewCommandUriArgumentPreview(args){
   try{return JSON.stringify(Array.isArray(args)?args:[]).slice(0,240)}catch(e){return '[]'}
@@ -27818,6 +27829,36 @@ async function executeWebviewCommandUri(viewId,data){
     setStatus('Webview command failed: '+callFailedMessage(r,payload.command));
   }
   return callSucceeded(r);
+}
+async function executeWebviewOpenLink(viewId,data){
+  const id=String(viewId||'').trim();
+  const href=String(data&&data.href||data&&data.url||'').trim();
+  const target=webviewSupportedExternalLinkTarget(href);
+  const cached=webviewRuntimeCache[id]||{};
+  const basePatch={
+    externalLinkCount:(Number(cached.externalLinkCount)||0)+1,
+    lastExternalLink:href,
+    lastExternalLinkTarget:target,
+    lastExternalLinkScheme:webviewLinkScheme(target||href),
+    lastExternalLinkAt:webviewRuntimeNow()
+  };
+  if(!target){
+    patchWebviewRuntimeLifecycle(id,{...basePatch,externalLinkBlockedCount:(Number(cached.externalLinkBlockedCount)||0)+1,lastExternalLinkOpened:false});
+    setStatus('Webview link scheme is not supported: '+href);
+    return false;
+  }
+  patchWebviewRuntimeLifecycle(id,{...basePatch,externalLinkAllowedCount:(Number(cached.externalLinkAllowedCount)||0)+1});
+  const r=await call('open_external_uri',target);
+  if(callSucceeded(r)){
+    const after=webviewRuntimeCache[id]||{};
+    patchWebviewRuntimeLifecycle(id,{externalLinkOpenedCount:(Number(after.externalLinkOpenedCount)||0)+1,lastExternalLinkOpened:true});
+    setStatus('Opened webview link');
+    return true;
+  }
+  const after=webviewRuntimeCache[id]||{};
+  patchWebviewRuntimeLifecycle(id,{externalLinkFailedCount:(Number(after.externalLinkFailedCount)||0)+1,lastExternalLinkOpened:false});
+  setStatus('Webview link failed: '+callFailedMessage(r,target));
+  return false;
 }
 function webviewRuntimeLifecycleState(runtime){
   if(runtime&&runtime.disposed)return 'disposed';
@@ -28031,6 +28072,13 @@ function applyWebviewRuntimeDataset(el,viewId,runtime){
   el.dataset.webviewLastCommandUriCommand=String(data.lastCommandUriCommand||'');
   el.dataset.webviewLastCommandUriArgumentCount=String(Number(data.lastCommandUriArgumentCount)||0);
   el.dataset.webviewLastCommandUriAllowed=data.lastCommandUriAllowed===true?'true':(data.lastCommandUriAllowed===false?'false':'');
+  el.dataset.webviewExternalLinkCount=String(Number(data.externalLinkCount)||0);
+  el.dataset.webviewExternalLinkAllowedCount=String(Number(data.externalLinkAllowedCount)||0);
+  el.dataset.webviewExternalLinkBlockedCount=String(Number(data.externalLinkBlockedCount)||0);
+  el.dataset.webviewExternalLinkOpenedCount=String(Number(data.externalLinkOpenedCount)||0);
+  el.dataset.webviewExternalLinkFailedCount=String(Number(data.externalLinkFailedCount)||0);
+  el.dataset.webviewLastExternalLinkScheme=String(data.lastExternalLinkScheme||'');
+  el.dataset.webviewLastExternalLinkOpened=data.lastExternalLinkOpened===true?'true':(data.lastExternalLinkOpened===false?'false':'');
   el.dataset.webviewFocusEventCount=String(Number(data.focusEventCount)||0);
   el.dataset.webviewFocused=data.focused?'true':'false';
   el.dataset.webviewKeyEventCount=String(Number(data.keyEventCount)||0);
@@ -29749,12 +29797,13 @@ function _injectWebviewHtml(container,viewId,html,initialState){
     +'document.addEventListener("DOMContentLoaded",function(){_rewriteNode(document.documentElement);});'
     +'function _commandPayloadFromHref(href){var raw=String(href||"");if(raw.indexOf("command:")!==0)return{command:"",arguments:[]};raw=raw.slice(8);var qi=raw.indexOf("?"),cmd=qi>=0?raw.slice(0,qi):raw,q=qi>=0?raw.slice(qi+1):"";try{cmd=decodeURIComponent(cmd);}catch(e){}var args=[];if(q){try{var parsed=JSON.parse(decodeURIComponent(q));args=Array.isArray(parsed)?parsed:[parsed];}catch(e){args=[];}}return{command:String(cmd||"").trim(),arguments:args};}'
     +'function _commandUriAllowed(cmd){var allowed=_optionValue("enableCommandUris",false);if(allowed===true||allowed==="true")return true;if(Array.isArray(allowed))return allowed.map(String).indexOf(String(cmd||""))>=0;if(typeof allowed==="string")return allowed.split(/[,\\s]+/).filter(Boolean).indexOf(String(cmd||""))>=0;return false;}'
+    +'function _supportedExternalHref(href){try{var u=new URL(String(href||""),document.baseURI||window.location.href);return /^(https?:|mailto:|sao-editor:|vscode:)$/i.test(u.protocol)?u.href:"";}catch(e){return "";}}'
     +'function _readVsCodeContext(target){var ctx={};for(var n=target;n&&n.nodeType===1;n=n.parentElement){var raw=n.getAttribute&&n.getAttribute("data-vscode-context");if(!raw)continue;try{var parsed=JSON.parse(raw);if(parsed&&typeof parsed==="object"){Object.keys(parsed).forEach(function(k){ctx[k]=parsed[k];});}}catch(e){}}return ctx;}'
     +'var _apiAcquired=false;var _apiAcquireCount=0;var _messageSeq=0;'
     +'function _postHostEvent(type,payload){try{payload=payload||{};payload.type=type;payload.viewId='+JSON.stringify(viewId)+';payload.token=_token;window.parent.postMessage(payload,"*");}catch(e){}}'
     +'function _postApiTelemetry(kind,extra){extra=extra||{};extra.apiKind=kind;extra.apiAcquired=_apiAcquired;extra.apiAcquireCount=_apiAcquireCount;_postHostEvent("webview-api-call",extra);}'
     +'function _notifyReady(phase){_postHostEvent("webview-ready",{phase:phase,apiAcquired:_apiAcquired,apiAcquireCount:_apiAcquireCount,visibilityState:document.visibilityState||""});}'
-    +'document.addEventListener("click",function(ev){var a=ev.target&&ev.target.closest&&ev.target.closest("a[href]");if(!a)return;var href=a.getAttribute("href")||"";if(href.indexOf("command:")!==0)return;var payload=_commandPayloadFromHref(href);if(!_commandUriAllowed(payload.command))return;ev.preventDefault();_postHostEvent("webview-command-uri",{href:href,command:payload.command,arguments:payload.arguments});},true);'
+    +'document.addEventListener("click",function(ev){var a=ev.target&&ev.target.closest&&ev.target.closest("a[href]");if(!a)return;var href=a.getAttribute("href")||"";if(href.indexOf("command:")===0){var payload=_commandPayloadFromHref(href);ev.preventDefault();_postHostEvent("webview-command-uri",{href:href,command:payload.command,arguments:payload.arguments,commandAllowed:_commandUriAllowed(payload.command)});return;}var external=_supportedExternalHref(href);if(external){ev.preventDefault();_postHostEvent("webview-open-link",{href:href,url:external,target:a.getAttribute("target")||""});}},true);'
     +'document.addEventListener("contextmenu",function(ev){var ctx=_readVsCodeContext(ev.target);_postHostEvent("webview-context-menu",{clientX:ev.clientX,clientY:ev.clientY,context:ctx});if(!ctx.preventDefaultContextMenuItems)ev.preventDefault();},true);'
     +'window.addEventListener("focus",function(){_postHostEvent("webview-focus",{focused:true});},true);'
     +'window.addEventListener("blur",function(){_postHostEvent("webview-focus",{focused:false});},true);'
@@ -29837,6 +29886,12 @@ window.addEventListener('message',function(e){
     const viewId=e.data.viewId,tok=e.data.token;
     if(!viewId||!tok||_webviewTokens[viewId]!==tok)return;
     void executeWebviewCommandUri(viewId,e.data);
+    return;
+  }
+  if(e.data.type==='webview-open-link'){
+    const viewId=e.data.viewId,tok=e.data.token;
+    if(!viewId||!tok||_webviewTokens[viewId]!==tok)return;
+    void executeWebviewOpenLink(viewId,e.data);
     return;
   }
   if(e.data.type==='webview-focus'){
@@ -40073,6 +40128,10 @@ function extensionRuntimeEvidenceMatches(row,value){
   if(v==='bridge-ready')return ev.bridgeHealth==='ready';
   if(v==='bridge-warning')return ['iframe-pending','api-pending','inactive','disposed'].includes(ev.bridgeHealth);
   if(v==='message-stalled')return ev.messageHealth==='stalled';
+  if(v==='command-uri')return (Number(ev.commandUriCount)||0)>0;
+  if(v==='command-uri-blocked')return (Number(ev.commandUriBlockedCount)||0)>0;
+  if(v==='external-link')return (Number(ev.externalLinkCount)||0)>0;
+  if(v==='external-link-failed')return (Number(ev.externalLinkFailedCount)||0)>0||(Number(ev.externalLinkBlockedCount)||0)>0;
   if(v==='resource-warning')return ['pending','rewrite-warning','unused-roots','resource-warning','resource-error'].includes(ev.resourceHealth);
   if(v==='resource-error')return ev.resourceHealth==='resource-error'||(Number(ev.resourceBlockedCount)||0)>0||(Number(ev.resourceMissingCount)||0)>0;
   if(v==='failures')return (Number(ev.failureCount)||0)>0;
@@ -41437,6 +41496,17 @@ function extensionRuntimeSurfaceRows(data){
         cachedRuntime.lastCommandUriAllowed!==undefined
           ? cachedRuntime.lastCommandUriAllowed===true
           : evidence.lastCommandUriAllowed);
+      evidence.externalLinkCount=Number(cachedRuntime.externalLinkCount)||Number(evidence.externalLinkCount)||0;
+      evidence.externalLinkAllowedCount=Number(cachedRuntime.externalLinkAllowedCount)||Number(evidence.externalLinkAllowedCount)||0;
+      evidence.externalLinkBlockedCount=Number(cachedRuntime.externalLinkBlockedCount)||Number(evidence.externalLinkBlockedCount)||0;
+      evidence.externalLinkOpenedCount=Number(cachedRuntime.externalLinkOpenedCount)||Number(evidence.externalLinkOpenedCount)||0;
+      evidence.externalLinkFailedCount=Number(cachedRuntime.externalLinkFailedCount)||Number(evidence.externalLinkFailedCount)||0;
+      evidence.lastExternalLink=String(cachedRuntime.lastExternalLink||evidence.lastExternalLink||'');
+      evidence.lastExternalLinkScheme=String(cachedRuntime.lastExternalLinkScheme||evidence.lastExternalLinkScheme||'');
+      evidence.lastExternalLinkOpened=(
+        cachedRuntime.lastExternalLinkOpened!==undefined
+          ? cachedRuntime.lastExternalLinkOpened===true
+          : evidence.lastExternalLinkOpened);
       evidence.resourceRewriteCount=Number(cachedRuntime.resourceRewriteCount)||Number(evidence.resourceRewriteCount)||0;
       evidence.resourceMapHitCount=Number(cachedRuntime.resourceMapHitCount)||Number(evidence.resourceMapHitCount)||0;
       evidence.resourceEndpointRewriteCount=Number(cachedRuntime.resourceEndpointRewriteCount)||Number(evidence.resourceEndpointRewriteCount)||0;
@@ -42063,6 +42133,12 @@ function applyExtensionRuntimeSurfaceFilter(){
         queuedMessageCount:Number(row.dataset.webviewQueuedMessageCount)||0,
         oldestQueuedAgeMs:Number(row.dataset.webviewOldestQueuedAgeMs)||0,
         droppedMessageCount:Number(row.dataset.webviewDroppedMessageCount)||0,
+        commandUriCount:Number(row.dataset.webviewCommandUriCount)||0,
+        commandUriBlockedCount:Number(row.dataset.webviewCommandUriBlockedCount)||0,
+        commandUriFailedCount:Number(row.dataset.webviewCommandUriFailedCount)||0,
+        externalLinkCount:Number(row.dataset.webviewExternalLinkCount)||0,
+        externalLinkBlockedCount:Number(row.dataset.webviewExternalLinkBlockedCount)||0,
+        externalLinkFailedCount:Number(row.dataset.webviewExternalLinkFailedCount)||0,
         resourceRewriteCount:Number(row.dataset.webviewResourceRewriteCount)||0,
         resourceBlockedCount:Number(row.dataset.webviewResourceBlockedCount)||0,
         resourceMissingCount:Number(row.dataset.webviewResourceMissingCount)||0,
@@ -42116,6 +42192,9 @@ function extensionRuntimeHealthDeckRows(rows,summary){
   const queued=sum(row=>Number(row.webviewEvidence&&row.webviewEvidence.pendingMessageCount)||Number(row.webviewEvidence&&row.webviewEvidence.queuedMessageCount)||0);
   const dropped=sum(row=>row.webviewEvidence&&row.webviewEvidence.droppedMessageCount);
   const stalled=count(row=>row.webviewEvidence&&row.webviewEvidence.messageHealth==='stalled');
+  const commandUris=sum(row=>row.webviewEvidence&&row.webviewEvidence.commandUriCount);
+  const externalLinks=sum(row=>row.webviewEvidence&&row.webviewEvidence.externalLinkCount);
+  const linkFailures=sum(row=>(Number(row.webviewEvidence&&row.webviewEvidence.commandUriFailedCount)||0)+(Number(row.webviewEvidence&&row.webviewEvidence.externalLinkFailedCount)||0)+(Number(row.webviewEvidence&&row.webviewEvidence.externalLinkBlockedCount)||0));
   const resourceRewrites=sum(row=>row.webviewEvidence&&row.webviewEvidence.resourceRewriteCount);
   const resourcePrepErrors=sum(row=>(Number(row.webviewEvidence&&row.webviewEvidence.resourceBlockedCount)||0)+(Number(row.webviewEvidence&&row.webviewEvidence.resourceMissingCount)||0));
   const resourceOversize=sum(row=>row.webviewEvidence&&row.webviewEvidence.resourceOversizeCount);
@@ -42128,6 +42207,7 @@ function extensionRuntimeHealthDeckRows(rows,summary){
     {id:'mount',label:'Mounted',value:mounted+'/'+webviews.length,detail:visible+' visible'+(panels?' · '+panels+' panels':''),state:mounted===webviews.length?'ready':'warning',filter:mounted===webviews.length?'iframe-mounted':'iframe-missing'},
     {id:'bridge',label:'Bridge',value:String(bridgeReady),detail:bridgeWarnings?bridgeWarnings+' warning':'API ready',state:bridgeWarnings?'warning':'ready',filter:bridgeWarnings?'bridge-warning':'bridge-ready'},
     {id:'messages',label:'Messages',value:String(messageTotal),detail:(queued?queued+' queued · ':'')+(dropped?dropped+' dropped · ':'')+(stalled?stalled+' stalled':'flow ok'),state:(dropped||stalled)?'error':(queued?'warning':'ready'),filter:stalled?'message-stalled':(dropped?'dropped':(queued?'queued':'messages'))},
+    {id:'links',label:'Links',value:String(commandUris+externalLinks),detail:commandUris+' command · '+externalLinks+' external'+(linkFailures?' · '+linkFailures+' issue':''),state:linkFailures?'warning':'ready',filter:linkFailures?'external-link-failed':'external-link'},
     {id:'resources',label:'Resources',value:String(resourceRewrites),detail:roots+' roots · '+ports+' ports'+(resourcePrepErrors?' · '+resourcePrepErrors+' blocked/missing':'')+(resourceOversize?' · '+resourceOversize+' oversized':'')+(resourceWarnings?' · '+resourceWarnings+' warning':''),state:resourcePrepErrors?'error':(resourceWarnings?'warning':'ready'),filter:resourcePrepErrors?'resource-error':(resourceWarnings?'resource-warning':'resources')},
     {id:'failures',label:'Failures',value:String(failures),detail:failures?'runtime failures':'none',state:failures?'error':'ready',filter:failures?'failures':'rendered'}
   ];
@@ -42246,6 +42326,7 @@ function renderExtensionRuntimeSurfacePanel(data){
     ['Resource Roots',rows.reduce((n,row)=>n+(extensionRuntimeIsWebviewKind(row)?(Number(row.webviewEvidence&&row.webviewEvidence.localResourceRootCount)||0):0),0)],
     ['Port Mappings',rows.reduce((n,row)=>n+(extensionRuntimeIsWebviewKind(row)?(Number(row.webviewEvidence&&row.webviewEvidence.portMappingCount)||0):0),0)],
     ['Webview Messages',rows.reduce((n,row)=>n+(extensionRuntimeIsWebviewKind(row)?(Number(row.webviewEvidence&&row.webviewEvidence.messageCount)||0):0),0)],
+    ['Webview Links',rows.reduce((n,row)=>n+(extensionRuntimeIsWebviewKind(row)?((Number(row.webviewEvidence&&row.webviewEvidence.commandUriCount)||0)+(Number(row.webviewEvidence&&row.webviewEvidence.externalLinkCount)||0)):0),0)],
     ['Binary Webview',rows.reduce((n,row)=>n+(extensionRuntimeIsWebviewKind(row)?(Number(row.webviewEvidence&&row.webviewEvidence.binaryMessageCount)||0):0),0)],
     ['Queued Webview',rows.reduce((n,row)=>n+(extensionRuntimeIsWebviewKind(row)?(Number(row.webviewEvidence&&row.webviewEvidence.pendingMessageCount)||0):0),0)],
     ['Dropped Webview',rows.reduce((n,row)=>n+(extensionRuntimeIsWebviewKind(row)?(Number(row.webviewEvidence&&row.webviewEvidence.droppedMessageCount)||0):0),0)],
@@ -42274,7 +42355,7 @@ function renderExtensionRuntimeSurfacePanel(data){
   chips.forEach(([label,value])=>{
     const chip=document.createElement('span');chip.className='extension-runtime-chip';
     chip.innerHTML='<strong>'+esc(String(value))+'</strong>'+esc(label);
-    if(['TreeView','WebviewView','WebviewPanel','Panel Ready','Panel Visible','Panel Retained','Panel Messages','CustomEditor','Notebook','Custom Ready','Custom Warnings','Custom Dirty','Notebook Ready','Notebook Warnings','Notebook Kernels','Notebook Status','Command','TextEditorCommand','Keybinding','Keybinding Commands','Menu','Terminal','Task','Task Providers','Task Required','Task Schema','Debug','Debug Config','Debug Adapter','Debug Tracker','Debug Attrs','Debug Initials','Debug Snippets','Debug Vars','Debug Langs','Debug Breakpoints','LM Tool','LM Provider','Chat','Context','LanguageProvider','Formatter Provider','Code Action Provider','Provider Matched','DiagnosticCollection','Diagnostics','Status Bar','Status Commands','Language Status','Language Busy','Language Warnings','Language Errors','TextEditorDecoration','Editor Decoration Ranges','Editor Decoration Events','Editor Decorations Disposed','Runtime','Manifest','Manifest + Runtime','Runtime Only','Provider Webview','Webview HTML','Missing Webview HTML','Retained Webview','Evidence Ready','Iframe Mounted','Iframe Missing','DOM Visible','Resource Rewrites','Resource Roots','Port Mappings','Webview Messages','Binary Webview','Queued Webview','Dropped Webview','Bridge Ready','Bridge Warnings','Message Stalled','Resource Warnings','Webview Failures','Webview Ready','Webview Warnings'].includes(label)){
+    if(['TreeView','WebviewView','WebviewPanel','Panel Ready','Panel Visible','Panel Retained','Panel Messages','CustomEditor','Notebook','Custom Ready','Custom Warnings','Custom Dirty','Notebook Ready','Notebook Warnings','Notebook Kernels','Notebook Status','Command','TextEditorCommand','Keybinding','Keybinding Commands','Menu','Terminal','Task','Task Providers','Task Required','Task Schema','Debug','Debug Config','Debug Adapter','Debug Tracker','Debug Attrs','Debug Initials','Debug Snippets','Debug Vars','Debug Langs','Debug Breakpoints','LM Tool','LM Provider','Chat','Context','LanguageProvider','Formatter Provider','Code Action Provider','Provider Matched','DiagnosticCollection','Diagnostics','Status Bar','Status Commands','Language Status','Language Busy','Language Warnings','Language Errors','TextEditorDecoration','Editor Decoration Ranges','Editor Decoration Events','Editor Decorations Disposed','Runtime','Manifest','Manifest + Runtime','Runtime Only','Provider Webview','Webview HTML','Missing Webview HTML','Retained Webview','Evidence Ready','Iframe Mounted','Iframe Missing','DOM Visible','Resource Rewrites','Resource Roots','Port Mappings','Webview Messages','Binary Webview','Queued Webview','Dropped Webview','Bridge Ready','Bridge Warnings','Message Stalled','Webview Links','Resource Warnings','Webview Failures','Webview Ready','Webview Warnings'].includes(label)){
       chip.classList.add('filterable');
       chip.tabIndex=0;
       chip.setAttribute('role','button');
@@ -42282,7 +42363,7 @@ function renderExtensionRuntimeSurfacePanel(data){
       chip.onclick=()=>{
         const kindMap={'Keybinding Commands':'Keybinding','Formatter Provider':'LanguageProvider','Code Action Provider':'LanguageProvider','Provider Matched':'LanguageProvider','Diagnostics':'DiagnosticCollection','Terminal':'TerminalProfile','Task':'TaskDefinition','Task Providers':'TaskDefinition','Task Required':'TaskDefinition','Task Schema':'TaskDefinition','Debug':'Debugger','Debug Config':'Debugger','Debug Adapter':'Debugger','Debug Tracker':'Debugger','Debug Attrs':'Debugger','Debug Initials':'Debugger','Debug Snippets':'Debugger','Debug Vars':'Debugger','Debug Langs':'Debugger','Debug Breakpoints':'Debugger','LM Tool':'LMTool','LM Provider':'LMProvider','Chat':'ChatParticipant','Context':'ChatContext','Status Bar':'StatusBarItem','Status Commands':'StatusBarItem','Language Status':'LanguageStatus','Language Busy':'LanguageStatus','Language Warnings':'LanguageStatus','Language Errors':'LanguageStatus','Editor Decoration Ranges':'TextEditorDecoration','Editor Decoration Events':'TextEditorDecoration','Editor Decorations Disposed':'TextEditorDecoration'};
         const sourceMap={Runtime:'manifest+runtime',Manifest:'manifest','Manifest + Runtime':'manifest+runtime','Runtime Only':'runtime-only'};
-        const evidenceMap={'Panel Ready':'rendered','Panel Visible':'dom-visible','Panel Retained':'retained','Panel Messages':'messages','Webview HTML':'rendered','Missing Webview HTML':'missing','Retained Webview':'retained','Evidence Ready':'rendered','Iframe Mounted':'iframe-mounted','Iframe Missing':'iframe-missing','DOM Visible':'dom-visible','Resource Rewrites':'resources','Resource Roots':'resources','Port Mappings':'resources','Webview Messages':'messages','Binary Webview':'binary','Queued Webview':'queued','Dropped Webview':'dropped','Bridge Ready':'bridge-ready','Bridge Warnings':'bridge-warning','Message Stalled':'message-stalled','Resource Warnings':'resource-warning','Webview Failures':'failures','Provider Webview':'rendered'};
+        const evidenceMap={'Panel Ready':'rendered','Panel Visible':'dom-visible','Panel Retained':'retained','Panel Messages':'messages','Webview HTML':'rendered','Missing Webview HTML':'missing','Retained Webview':'retained','Evidence Ready':'rendered','Iframe Mounted':'iframe-mounted','Iframe Missing':'iframe-missing','DOM Visible':'dom-visible','Resource Rewrites':'resources','Resource Roots':'resources','Port Mappings':'resources','Webview Messages':'messages','Binary Webview':'binary','Queued Webview':'queued','Dropped Webview':'dropped','Bridge Ready':'bridge-ready','Bridge Warnings':'bridge-warning','Message Stalled':'message-stalled','Webview Links':'external-link','Resource Warnings':'resource-warning','Webview Failures':'failures','Provider Webview':'rendered'};
         const kindSel=$('extension-runtime-filter-kind'),sourceSel=$('extension-runtime-filter-source'),evidenceSel=$('extension-runtime-filter-evidence');
         if(sourceMap[label]&&sourceSel)sourceSel.value=sourceMap[label];
         else if(evidenceMap[label]&&evidenceSel)evidenceSel.value=evidenceMap[label];
@@ -42363,6 +42444,15 @@ function renderExtensionRuntimeSurfacePanel(data){
       el.dataset.webviewBridgeHealth=String(row.webviewEvidence&&row.webviewEvidence.bridgeHealth||'');
       el.dataset.webviewResourceHealth=String(row.webviewEvidence&&row.webviewEvidence.resourceHealth||'');
       el.dataset.webviewFailureCount=String(row.webviewEvidence&&row.webviewEvidence.failureCount||0);
+      el.dataset.webviewCommandUriCount=String(row.webviewEvidence&&row.webviewEvidence.commandUriCount||0);
+      el.dataset.webviewCommandUriAllowedCount=String(row.webviewEvidence&&row.webviewEvidence.commandUriAllowedCount||0);
+      el.dataset.webviewCommandUriBlockedCount=String(row.webviewEvidence&&row.webviewEvidence.commandUriBlockedCount||0);
+      el.dataset.webviewCommandUriFailedCount=String(row.webviewEvidence&&row.webviewEvidence.commandUriFailedCount||0);
+      el.dataset.webviewExternalLinkCount=String(row.webviewEvidence&&row.webviewEvidence.externalLinkCount||0);
+      el.dataset.webviewExternalLinkOpenedCount=String(row.webviewEvidence&&row.webviewEvidence.externalLinkOpenedCount||0);
+      el.dataset.webviewExternalLinkBlockedCount=String(row.webviewEvidence&&row.webviewEvidence.externalLinkBlockedCount||0);
+      el.dataset.webviewExternalLinkFailedCount=String(row.webviewEvidence&&row.webviewEvidence.externalLinkFailedCount||0);
+      el.dataset.webviewLastExternalLinkScheme=String(row.webviewEvidence&&row.webviewEvidence.lastExternalLinkScheme||'');
       el.dataset.webviewFailureReasons=Array.isArray(row.webviewEvidence&&row.webviewEvidence.failureReasons)?row.webviewEvidence.failureReasons.join(','):String(row.webviewEvidence&&row.webviewEvidence.failureReasons||'');
       el.dataset.webviewDiagnosticSummary=String(row.webviewEvidence&&row.webviewEvidence.diagnosticSummary||'');
       el.dataset.webviewResourceRewriteCount=String(row.webviewEvidence&&row.webviewEvidence.resourceRewriteCount||0);
@@ -43861,6 +43951,10 @@ function extensionWebviewRuntimeDiagnostics(evidence){
   const fromWebview=Number(ev.messagesFromWebview||0)||0;
   const binaryCount=Number(ev.binaryMessageCount||0)||0;
   const binaryBytes=Number(ev.binaryByteLength||0)||0;
+  const commandUriFailedCount=Number(ev.commandUriFailedCount||0)||0;
+  const commandUriBlockedCount=Number(ev.commandUriBlockedCount||0)||0;
+  const externalLinkFailedCount=Number(ev.externalLinkFailedCount||0)||0;
+  const externalLinkBlockedCount=Number(ev.externalLinkBlockedCount||0)||0;
   let messageHealth='idle';
   if(dropped>0)messageHealth='dropped';
   else if((pending+queued)>0&&(flushed<=0||queueAge>5000))messageHealth='stalled';
@@ -43898,13 +43992,17 @@ function extensionWebviewRuntimeDiagnostics(evidence){
     ev.lastError,
     ev.lastDroppedReason,
     messageHealth==='stalled'?(ev.lastQueueReason||ev.pendingReasons):'',
+    commandUriBlockedCount?'command-uri-blocked':'',
+    commandUriFailedCount?'command-uri-failed':'',
+    externalLinkBlockedCount?'external-link-blocked':'',
+    externalLinkFailedCount?'external-link-failed':'',
     resourceHealth==='rewrite-warning'?ev.lastResourceRewriteKind:'',
     resourceHealth==='rewrite-warning'?ev.lastResourceOriginalScheme:'',
     resourceBlockedCount?'blocked-resource':'',
     resourceMissingCount?'missing-resource':'',
     resourceOversizeCount?'oversize-resource':'',
   ].map(v=>String(v||'').trim()).filter(Boolean);
-  const failureCount=dropped+(Number(ev.failedMessageCount)||0)+(Number(ev.commandUriFailedCount)||0)+(ev.lastError?1:0)+resourceBlockedCount+resourceMissingCount;
+  const failureCount=dropped+(Number(ev.failedMessageCount)||0)+commandUriFailedCount+externalLinkFailedCount+(ev.lastError?1:0)+resourceBlockedCount+resourceMissingCount;
   return {
     messageHealth,
     bridgeHealth,
@@ -44004,6 +44102,23 @@ function extensionWebviewViewEvidence(view,state,html){
     resourceInlineByteLength,
     resourceMapReady,
     resourceEndpointReady,
+    commandUriCount:Number(ev.commandUriCount||0)||0,
+    commandUriAllowedCount:Number(ev.commandUriAllowedCount||0)||0,
+    commandUriBlockedCount:Number(ev.commandUriBlockedCount||0)||0,
+    commandUriFailedCount:Number(ev.commandUriFailedCount||0)||0,
+    lastCommandUri:String(ev.lastCommandUri||''),
+    lastCommandUriCommand:String(ev.lastCommandUriCommand||''),
+    lastCommandUriArgumentCount:Number(ev.lastCommandUriArgumentCount||0)||0,
+    lastCommandUriArgumentsPreview:String(ev.lastCommandUriArgumentsPreview||''),
+    lastCommandUriAllowed:ev.lastCommandUriAllowed,
+    externalLinkCount:Number(ev.externalLinkCount||0)||0,
+    externalLinkAllowedCount:Number(ev.externalLinkAllowedCount||0)||0,
+    externalLinkBlockedCount:Number(ev.externalLinkBlockedCount||0)||0,
+    externalLinkOpenedCount:Number(ev.externalLinkOpenedCount||0)||0,
+    externalLinkFailedCount:Number(ev.externalLinkFailedCount||0)||0,
+    lastExternalLink:String(ev.lastExternalLink||''),
+    lastExternalLinkScheme:String(ev.lastExternalLinkScheme||''),
+    lastExternalLinkOpened:ev.lastExternalLinkOpened,
     asWebviewUriSupported,
     asWebviewUriReady
   });
@@ -44127,6 +44242,9 @@ function extensionWebviewViewReadiness(evidence){
   if((Number(ev.resourceOversizeCount)||0)>0&&!ev.resourceEndpointReady){issues.push('resource-warning');score-=10}
   if(ev.bridgeHealth==='iframe-pending'||ev.bridgeHealth==='api-pending'){issues.push(ev.bridgeHealth);score-=8}
   if(ev.messageHealth==='stalled'){issues.push('message-stalled');score-=12}
+  if((Number(ev.commandUriFailedCount)||0)>0){issues.push('command-uri-failed');score-=10}
+  if((Number(ev.externalLinkFailedCount)||0)>0){issues.push('external-link-failed');score-=10}
+  if((Number(ev.externalLinkBlockedCount)||0)>0){issues.push('external-link-blocked');score-=6}
   if(['rewrite-warning','unused-roots','resource-warning','resource-error'].includes(ev.resourceHealth)){issues.push(ev.resourceHealth);score-=8}
   if((Number(ev.failureCount)||0)>0){issues.push('runtime-failures');score-=12}
   score=Math.max(0,Math.min(100,Math.round(score)));
@@ -44136,6 +44254,7 @@ function extensionWebviewViewReadiness(evidence){
   else if(issues.includes('iframe-pending')||issues.includes('api-pending'))kind='bridge-warning';
   else if(issues.includes('dropped-messages')||issues.includes('queued-messages'))kind='message-warning';
   else if(issues.includes('message-stalled'))kind='message-warning';
+  else if(issues.includes('command-uri-failed')||issues.includes('external-link-failed')||issues.includes('external-link-blocked'))kind='message-warning';
   else if(issues.includes('resource-error'))kind='resource-warning';
   else if(issues.includes('resource-warning')||issues.includes('resource-uri-pending'))kind='resource-warning';
   else if(issues.includes('rewrite-warning')||issues.includes('unused-roots'))kind='resource-warning';
@@ -44162,6 +44281,8 @@ function extensionWebviewViewSummaryText(view,state,evidence){
     'Queue age: '+String(evidence.oldestQueuedAgeMs||0)+'ms / reasons '+((evidence.pendingReasons||[]).join(', ')||'-'),
     'Queue budget: '+String(evidence.queuedByteLength||0)+'B / limit '+String(evidence.queueByteLimit||0)+'B / pruned '+String(evidence.queuePrunedCount||0),
     'Flush: batches '+String(evidence.flushBatchCount||0)+' / last '+String(evidence.lastFlushBatchSize||0)+' / '+(evidence.lastFlushTargetFrameId||'-'),
+    'Command URIs: '+String(evidence.commandUriCount||0)+' / allowed '+String(evidence.commandUriAllowedCount||0)+' / blocked '+String(evidence.commandUriBlockedCount||0)+' / failed '+String(evidence.commandUriFailedCount||0),
+    'External links: '+String(evidence.externalLinkCount||0)+' / opened '+String(evidence.externalLinkOpenedCount||0)+' / blocked '+String(evidence.externalLinkBlockedCount||0)+' / failed '+String(evidence.externalLinkFailedCount||0)+' / '+(evidence.lastExternalLinkScheme||'-'),
     'Message health: '+String(evidence.messageHealth||'-'),
     'Frame/API: '+(evidence.frameLoaded?'frame loaded':'frame pending')+' / '+(evidence.apiReady?'api ready':'api pending')+' / acquire '+String(evidence.apiAcquireCount||0),
     'Bridge health: '+String(evidence.bridgeHealth||'-'),
@@ -44894,7 +45015,8 @@ function extensionRuntimeDomSelfCheckSnapshot(){
       run_extension_task_type:async(taskType)=>({ok:true,taskType,executionId:'task-selftest',task:{name:'Selftest Task',definition:{type:taskType},problemMatchers:[selftestTaskMatcher,selftestMultilineMatcher]},metadata:{problemMatchers:[selftestTaskMatcher,selftestMultilineMatcher],problemMatcherCount:2,isBackground:true,cwd:'workspace'},commandLine:'echo selftest task',taskCount:1,raw:{exitCode:0,stdout:selftestTaskOutput}}),
       start_extension_debugger_type:async(debugType,config,label)=>({ok:true,debugType,started:true,config,session:{id:'debug-selftest',type:debugType,name:label||debugType}}),
       evaluate_debug_console:async(expression)=>({ok:true,expression,result:'eval:'+expression,type:'string',variablesReference:0}),
-      execute_command:async(command,...args)=>{runtimeExecutedCommands.push({command,args});return {ok:true,command,args}}
+      execute_command:async(command,...args)=>{runtimeExecutedCommands.push({command,args});return {ok:true,command,args}},
+      open_external_uri:async(uri)=>({ok:true,uri})
     });
     try{
       const lmToolRow=runtimeActionRowByType('prepare-lm-tool');
@@ -45038,7 +45160,9 @@ function extensionRuntimeDomSelfCheckSnapshot(){
       window.dispatchEvent(new MessageEvent('message',{data:{type:'webview-message',viewId:lifecycleViewId,token:lifecycleToken,message:{kind:'from-webview',raw:new Uint8Array([1,2,3,4]).buffer,nested:{bytes:new Uint8Array([5,6,7,8])}}}}));
       window.dispatchEvent(new MessageEvent('message',{data:{type:'webview-visibility',viewId:lifecycleViewId,token:lifecycleToken,visibilityState:'visible'}}));
       window.dispatchEvent(new MessageEvent('message',{data:{type:'webview-context-menu',viewId:lifecycleViewId,token:lifecycleToken,clientX:12,clientY:18,context:{webviewSection:'editor',preventDefaultContextMenuItems:true}}}));
+      await executeWebviewCommandUri(lifecycleViewId,{href:'command:selftest.blockedCommand?%5B2%5D',command:'selftest.blockedCommand',arguments:[2]});
       window.dispatchEvent(new MessageEvent('message',{data:{type:'webview-command-uri',viewId:lifecycleViewId,token:lifecycleToken,href:'command:selftest.webviewCommand?%5B1%5D',command:'selftest.webviewCommand',arguments:[1]}}));
+      await executeWebviewOpenLink(lifecycleViewId,{href:'https://example.invalid/selftest'});
       window.dispatchEvent(new MessageEvent('message',{data:{type:'webview-focus',viewId:lifecycleViewId,token:lifecycleToken,focused:true}}));
       window.dispatchEvent(new MessageEvent('message',{data:{type:'webview-key',viewId:lifecycleViewId,token:lifecycleToken,eventType:'keydown',key:'F1',code:'F1',ctrlKey:true}}));
     }
@@ -45112,6 +45236,16 @@ function extensionRuntimeDomSelfCheckSnapshot(){
       panelCommandUriArgumentCount:lifecyclePanel?Number(lifecyclePanel.dataset.webviewLastCommandUriArgumentCount)||0:0,
       panelCommandUriAllowed:lifecyclePanel?lifecyclePanel.dataset.webviewLastCommandUriAllowed:'',
       panelLastCommandUriCommand:lifecyclePanel?lifecyclePanel.dataset.webviewLastCommandUriCommand:'',
+      externalLinkCount:Number(lifecycleBeforeDispose.externalLinkCount)||0,
+      externalLinkAllowedCount:Number(lifecycleBeforeDispose.externalLinkAllowedCount)||0,
+      externalLinkOpenedCount:Number(lifecycleBeforeDispose.externalLinkOpenedCount)||0,
+      externalLinkFailedCount:Number(lifecycleBeforeDispose.externalLinkFailedCount)||0,
+      lastExternalLinkScheme:String(lifecycleBeforeDispose.lastExternalLinkScheme||''),
+      lastExternalLinkOpened:lifecycleBeforeDispose.lastExternalLinkOpened===true,
+      panelExternalLinkCount:lifecyclePanel?Number(lifecyclePanel.dataset.webviewExternalLinkCount)||0:0,
+      panelExternalLinkOpenedCount:lifecyclePanel?Number(lifecyclePanel.dataset.webviewExternalLinkOpenedCount)||0:0,
+      panelLastExternalLinkScheme:lifecyclePanel?lifecyclePanel.dataset.webviewLastExternalLinkScheme:'',
+      panelLastExternalLinkOpened:lifecyclePanel?lifecyclePanel.dataset.webviewLastExternalLinkOpened:'',
       focusEventCount:Number(lifecycleBeforeDispose.focusEventCount)||0,
       keyEventCount:Number(lifecycleBeforeDispose.keyEventCount)||0,
       lastKey:String(lifecycleBeforeDispose.lastKey||''),
@@ -45495,11 +45629,12 @@ function extensionRuntimeDomSelfCheckSnapshot(){
       && snapshot.runtimeHealthCards>=5&&snapshot.runtimeHealthWarnings>=2&&snapshot.runtimeHealthErrors>=1
       && snapshot.runtimeHealthWebviewRows>=3&&snapshot.runtimeHealthPanelRows>=1
       && ['bridge-warning','failures'].every(filter=>snapshot.runtimeHealthFilters.includes(filter))
+      && snapshot.runtimeHealthFilters.includes('external-link')
       && (snapshot.runtimeHealthFilters.includes('resource-warning')||snapshot.runtimeHealthFilters.includes('resources'))
       && ['queued','dropped','message-stalled'].some(filter=>snapshot.runtimeHealthFilters.includes(filter))
       && snapshot.runtimeHealthStates.includes('warning')&&snapshot.runtimeHealthStates.includes('error')
       && snapshot.runtimeListRole==='list'&&snapshot.runtimeListItems===snapshot.runtimeRows
-      && snapshot.runtimeDatasetReady===snapshot.runtimeReadyRows&&snapshot.runtimePanelCount==='23'
+      && snapshot.runtimeDatasetReady===snapshot.runtimeReadyRows&&Number(snapshot.runtimePanelCount)===snapshot.runtimeRows
       && snapshot.runtimeOpenableRows===snapshot.runtimeRows&&snapshot.runtimeOpenableRows>=19&&snapshot.runtimeActionButtons===snapshot.runtimeRows
       && snapshot.runtimeRowKeys===snapshot.runtimeRows&&snapshot.runtimeContainerRows>=3
       && snapshot.runtimeViewContainerRows>=1&&snapshot.runtimeViewContainerLocations.includes('activitybar')&&snapshot.runtimeViewContainerViewCounts.some(value=>value>=4)
@@ -45509,10 +45644,10 @@ function extensionRuntimeDomSelfCheckSnapshot(){
       && snapshot.runtimeActionTargets.includes('selftest.dynamic.panel')&&snapshot.runtimeActionTargets.includes('selftest.editorCommand')
       && snapshot.runtimeActionTargets.includes('selftest.terminalProfile')&&snapshot.runtimeActionTargets.includes('selftest.lmTool')&&snapshot.runtimeActionTargets.includes('selftest.vendor')&&snapshot.runtimeActionTargets.includes('selftest.chat')&&snapshot.runtimeActionTargets.includes('selftest.context')
       && snapshot.runtimeActionTargets.includes('selftest.task')&&snapshot.runtimeActionTargets.includes('selftest.debug')
-      && snapshot.runtimePanelVisibleCount==='23'&&snapshot.runtimePanelTotalCount==='23'
-      && snapshot.runtimeDatasetSources.includes('runtime-only')&&snapshot.runtimeStatusText.includes('23 visible of 23 rows')
-      && snapshot.runtimeFilterKinds.includes('ViewContainer')&&snapshot.runtimeFilterKinds.includes('LMTool')&&snapshot.runtimeFilterKinds.includes('WebviewPanel')&&snapshot.runtimeFilterKinds.includes('TaskDefinition')&&snapshot.runtimeFilterKinds.includes('Debugger')&&snapshot.runtimeFilterKinds.includes('StatusBarItem')&&snapshot.runtimeFilterKinds.includes('LanguageStatus')&&snapshot.runtimeFilterKinds.includes('TextEditorDecoration')&&snapshot.runtimeFilterKinds.includes('TextEditorCommand')&&snapshot.runtimeFilterKinds.includes('Keybinding')&&snapshot.runtimeFilterKinds.includes('LanguageProvider')&&snapshot.runtimeFilterKinds.includes('DiagnosticCollection')&&snapshot.runtimeFilterBefore.visible===23
-      && snapshot.runtimeKindFilterVisible===1&&snapshot.runtimeSourceFilterVisible===23&&snapshot.runtimeRenderedEvidenceFilterVisible>=2&&snapshot.runtimeMissingEvidenceFilterVisible===1&&snapshot.runtimeBinaryEvidenceFilterVisible>=1
+      && Number(snapshot.runtimePanelVisibleCount)===snapshot.runtimeRows&&Number(snapshot.runtimePanelTotalCount)===snapshot.runtimeRows
+      && snapshot.runtimeDatasetSources.includes('runtime-only')&&snapshot.runtimeStatusText.includes(snapshot.runtimeRows+' visible of '+snapshot.runtimeRows+' rows')
+      && snapshot.runtimeFilterKinds.includes('ViewContainer')&&snapshot.runtimeFilterKinds.includes('LMTool')&&snapshot.runtimeFilterKinds.includes('WebviewPanel')&&snapshot.runtimeFilterKinds.includes('TaskDefinition')&&snapshot.runtimeFilterKinds.includes('Debugger')&&snapshot.runtimeFilterKinds.includes('StatusBarItem')&&snapshot.runtimeFilterKinds.includes('LanguageStatus')&&snapshot.runtimeFilterKinds.includes('TextEditorDecoration')&&snapshot.runtimeFilterKinds.includes('TextEditorCommand')&&snapshot.runtimeFilterKinds.includes('Keybinding')&&snapshot.runtimeFilterKinds.includes('LanguageProvider')&&snapshot.runtimeFilterKinds.includes('DiagnosticCollection')&&snapshot.runtimeFilterBefore.visible===snapshot.runtimeRows
+      && snapshot.runtimeKindFilterVisible===1&&snapshot.runtimeSourceFilterVisible===snapshot.runtimeRows&&snapshot.runtimeRenderedEvidenceFilterVisible>=2&&snapshot.runtimeMissingEvidenceFilterVisible===1&&snapshot.runtimeBinaryEvidenceFilterVisible>=1
       && snapshot.runtimeMessageEvidenceFilterVisible>=1&&snapshot.runtimeQueuedEvidenceFilterVisible>=2&&snapshot.runtimeDroppedEvidenceFilterVisible>=1&&snapshot.runtimeTextFilterVisible===1
       && snapshot.runtimeBridgeReadyFilterVisible>=1&&snapshot.runtimeBridgeWarningFilterVisible>=1&&snapshot.runtimeMessageStalledFilterVisible>=1&&snapshot.runtimeResourceWarningFilterVisible>=1&&snapshot.runtimeFailuresFilterVisible>=1
       && snapshot.runtimePortHitFilterVisible>=1&&snapshot.runtimeQueueStaleFilterVisible>=1&&snapshot.runtimeLifecycleFilterVisible>=2
@@ -45578,6 +45713,7 @@ function extensionRuntimeDomSelfCheckSnapshot(){
       && snapshot.webviewLifecycle.visibilityState==='visible'
       && snapshot.webviewLifecycle.commandUriCount>=1
       && snapshot.webviewLifecycle.commandUriAllowedCount>=1
+      && snapshot.webviewLifecycle.commandUriBlockedCount>=1
       && snapshot.webviewLifecycle.lastCommandUriCommand==='selftest.webviewCommand'
       && snapshot.webviewLifecycle.lastCommandUriArgumentCount===1
       && snapshot.webviewLifecycle.lastCommandUriArgumentsPreview.includes('1')
@@ -45585,6 +45721,15 @@ function extensionRuntimeDomSelfCheckSnapshot(){
       && snapshot.webviewLifecycle.panelCommandUriCount>=1
       && snapshot.webviewLifecycle.panelCommandUriArgumentCount===1
       && snapshot.webviewLifecycle.panelCommandUriAllowed==='true'
+      && snapshot.webviewLifecycle.externalLinkCount>=1
+      && snapshot.webviewLifecycle.externalLinkAllowedCount>=1
+      && snapshot.webviewLifecycle.externalLinkOpenedCount>=1
+      && snapshot.webviewLifecycle.lastExternalLinkScheme==='https'
+      && snapshot.webviewLifecycle.lastExternalLinkOpened
+      && snapshot.webviewLifecycle.panelExternalLinkCount>=1
+      && snapshot.webviewLifecycle.panelExternalLinkOpenedCount>=1
+      && snapshot.webviewLifecycle.panelLastExternalLinkScheme==='https'
+      && snapshot.webviewLifecycle.panelLastExternalLinkOpened==='true'
       && snapshot.webviewLifecycle.disposed&&snapshot.webviewLifecycle.disposedSeq>snapshot.webviewLifecycle.seq
       && snapshot.webviewLifecycle.droppedAfterDispose>=1&&snapshot.webviewLifecycle.lastDroppedReason==='disposed-queue'
       && snapshot.webviewLifecycle.disposePendingDropped>=1&&snapshot.webviewLifecycle.disposePendingReason==='dispose-pending'
