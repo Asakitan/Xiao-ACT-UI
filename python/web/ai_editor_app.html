@@ -30649,6 +30649,22 @@ function openSettings(){
     }
   },0);
 }
+function openSettingsTarget(target,search){
+  openSettings();
+  const wanted=String(target||'user').toLowerCase();
+  const safeTarget=['user','workspace','extensions'].includes(wanted)?wanted:'user';
+  const apply=()=>{
+    selectSettingsTarget(safeTarget,{preserveSearch:true,focusSearch:true,persist:true});
+    if(search!==undefined&&search!==null){
+      const input=$('settings-search');
+      if(input){input.value=String(search||'');scheduleFilterSettings(0)}
+    }
+    focusSettingsSearch();
+  };
+  apply();
+  setTimeout(apply,0);
+  return safeTarget;
+}
 function settingsAllRows(){
   const root=settingsMainElement()||document;
   return Array.from(root.querySelectorAll('.settings-field.builtin-setting,.ext-setting-row'));
@@ -45349,8 +45365,12 @@ const COMMANDS=[
   {label:'Format Document With...',shortcut:'',action:()=>formatDocumentWithProvider()},
   {label:'Format Selection',shortcut:'',action:()=>formatSelection()},
   {label:'Change Language Mode',shortcut:'',action:()=>showLanguagePicker()},
+  {id:'workbench.action.openSettings',label:'Preferences: Open Settings (UI)',shortcut:'',category:'Preferences',description:'Open user settings.',action:()=>openSettings()},
+  {id:'workbench.action.openUserSettings',label:'Preferences: Open User Settings',shortcut:'',category:'Preferences',description:'Open user settings scope.',action:()=>openSettingsTarget('user')},
+  {id:'workbench.action.openWorkspaceSettings',label:'Preferences: Open Workspace Settings',shortcut:'',category:'Preferences',description:'Open workspace settings scope.',action:()=>openSettingsTarget('workspace')},
+  {id:'workbench.action.openExtensionSettings',label:'Preferences: Open Extension Settings',shortcut:'',category:'Preferences',description:'Open extension-contributed settings.',action:()=>openSettingsTarget('extensions')},
+  {id:'workbench.action.openSettingsJson',label:'Preferences: Open Settings (JSON)',shortcut:'',category:'Preferences',description:'Open editable settings.json.',action:()=>{openSettings();settingsOpenJsonView()}},
   {label:'Toggle Theme',shortcut:'',action:()=>toggleTheme()},
-  {label:'Open Settings',shortcut:'',action:()=>openSettings()},
   {label:'New Tab',shortcut:'',action:()=>addTab()},
   {label:'Upload Image',shortcut:'',action:()=>uploadImage()},
   {label:'System Info',shortcut:'',action:()=>execSlash('/system')},
@@ -45360,7 +45380,7 @@ const COMMANDS=[
   {label:'Chat History',shortcut:'',action:()=>openChatHistory()},
   {label:'Custom Instructions',shortcut:'',action:()=>switchSidebar('instructions')},
   {label:'Agents & Workflows',shortcut:'',action:()=>switchSidebar('agents')},
-  {label:'Keyboard Shortcuts',shortcut:'Ctrl+K Ctrl+S',action:()=>openKeybindings()},
+  {id:'workbench.action.openGlobalKeybindings',label:'Preferences: Open Keyboard Shortcuts',shortcut:'Ctrl+K Ctrl+S',category:'Preferences',description:'Open keyboard shortcuts.',action:()=>openKeybindings()},
 ];
 
 function openCommandPalette(initialValue){
@@ -45543,7 +45563,7 @@ function commandPaletteFuzzyMatch(query,text){
   if(qi<q.length)return null;
   ranges.push([start,last+1]);
   const exact=t.indexOf(q);
-  if(exact>=0)score+=140+(t.length-q.length);
+  if(exact>=0)score+=180-Math.min(60,exact*2)-Math.max(0,t.length-q.length)*0.08;
   score-=Math.max(0,t.length-q.length)*0.02;
   return{matched:true,score,ranges};
 }
@@ -45779,12 +45799,13 @@ document.addEventListener('keydown',e=>{
   // KB-001: Dispatch custom keybindings saved by the keyboard shortcuts editor
   const combo=_normalizeKeyCombo(e);
   const customMap=_loadCustomKeybindings();
-  for(const[cmdLabel,shortcut]of Object.entries(customMap)){
+  for(const[cmdKey,shortcut]of Object.entries(customMap)){
     if(shortcut===combo){
-      const cmd=COMMANDS.find(c=>c.label===cmdLabel);
+      const cmd=COMMANDS.find(c=>keybindingCommandKey(c)===cmdKey||c.label===cmdKey);
       if(cmd&&cmd.action){e.preventDefault();cmd.action();return}
-      const builtin=_getBuiltinKeybindings().find(b=>b.command===cmdLabel);
+      const builtin=_getBuiltinKeybindings().find(b=>b.id===cmdKey||b.command===cmdKey);
       if(builtin&&builtin.action){e.preventDefault();builtin.action();return}
+      if(keybindingRunCommand(cmdKey)){e.preventDefault();return}
     }
   }
   // KB-002: Global shortcuts shown in menus (Ctrl+N/O/S/B/L)
@@ -45796,23 +45817,101 @@ document.addEventListener('keydown',e=>{
 const _KB_STORAGE_KEY='sao-custom-keybindings';
 function _loadCustomKeybindings(){try{return JSON.parse(localStorage.getItem(_KB_STORAGE_KEY)||'{}');}catch(e){return {};}}
 function _saveCustomKeybindings(map){try{localStorage.setItem(_KB_STORAGE_KEY,JSON.stringify(map))}catch(e){}}
-function _getBuiltinKeybindings(){
-  const bindings=[];
-  COMMANDS.forEach(c=>{if(c.shortcut)bindings.push({command:c.label,shortcut:c.shortcut,source:'built-in',action:c.action})});
-  // add common editor keybindings not in COMMANDS
-  [['New File','Ctrl+N'],['Open File','Ctrl+O'],['Save','Ctrl+S'],['Close Tab','Ctrl+W'],
-   ['Toggle Sidebar','Ctrl+B'],['Command Palette','Ctrl+Shift+P']].forEach(([cmd,sc])=>{
-    if(!bindings.some(b=>b.command===cmd))bindings.push({command:cmd,shortcut:sc,source:'built-in'});
+let _keybindingDynamicCommands=[];
+let _keybindingDynamicRefresh=0;
+function keybindingCommandKey(command){
+  return commandPaletteCommandId(command)||String(command&&command.label||'').trim();
+}
+function keybindingCommandLabel(command){
+  return String(command&&command.label||keybindingCommandKey(command)||'Command');
+}
+function keybindingCommandSource(command){
+  const source=String(command&&command.source||'').trim();
+  if(source)return source==='runtime'?'runtime':'extension';
+  if(command&&command.extensionId)return 'extension';
+  return 'built-in';
+}
+function keybindingCommandShortcut(command,custom){
+  const key=keybindingCommandKey(command),label=keybindingCommandLabel(command);
+  if(custom&&Object.prototype.hasOwnProperty.call(custom,key))return custom[key];
+  if(custom&&Object.prototype.hasOwnProperty.call(custom,label))return custom[label];
+  return String(command&&command.shortcut||'');
+}
+function keybindingDynamicCommands(){
+  const seen=new Set(),items=[];
+  (_cmdPaletteDynamicCommands||[]).concat(_keybindingDynamicCommands||[]).forEach(command=>{
+    const key=keybindingCommandKey(command);
+    if(!key||seen.has(key))return;
+    seen.add(key);items.push(command);
   });
-  return bindings;
+  return items;
+}
+function keybindingCommandRows(){
+  const seen=new Set(),rows=[];
+  const push=command=>{
+    const key=keybindingCommandKey(command);
+    if(!key||seen.has(key))return;
+    seen.add(key);rows.push(command);
+  };
+  COMMANDS.forEach(push);
+  [['New File','Ctrl+N'],['Open File','Ctrl+O'],['Save','Ctrl+S'],['Close Tab','Ctrl+W'],
+   ['Toggle Sidebar','Ctrl+B'],['Command Palette','Ctrl+Shift+P']].forEach(([label,shortcut])=>{
+    push({id:label,label,shortcut,source:'built-in'});
+  });
+  keybindingDynamicCommands().forEach(push);
+  return rows;
+}
+function keybindingFindCommand(key){
+  const wanted=String(key||'');
+  return keybindingCommandRows().find(command=>{
+    return keybindingCommandKey(command)===wanted||keybindingCommandLabel(command)===wanted;
+  })||null;
+}
+function keybindingRunCommand(key){
+  const command=keybindingFindCommand(key);
+  if(command&&typeof command.action==='function'){command.action();return true}
+  if(command&&command.commandId){call('execute_command',command.commandId,...(Array.isArray(command.arguments)?command.arguments:[]));return true}
+  const commandKey=String(key||'').trim();
+  if(commandKey&&commandKey.includes('.')){call('execute_command',commandKey);return true}
+  return false;
+}
+async function refreshKeybindingsDynamicCommands(){
+  const requestId=++_keybindingDynamicRefresh;
+  const result=await call('list_command_palette_commands',commandPaletteContext());
+  if(requestId!==_keybindingDynamicRefresh)return [];
+  const builtinIds=commandPaletteBuiltinIdSet();
+  const rawCommands=result&&Array.isArray(result.commands)?result.commands:[];
+  _keybindingDynamicCommands=rawCommands.map(raw=>commandPaletteNormalizeDynamicCommand(raw,builtinIds)).filter(Boolean);
+  if($('kb-shortcuts-modal')&&$('kb-shortcuts-modal').classList.contains('open'))renderKeybindingTable();
+  return _keybindingDynamicCommands;
+}
+function _getBuiltinKeybindings(){
+  return keybindingCommandRows()
+    .filter(command=>keybindingCommandShortcut(command,{}))
+    .map(command=>({
+      id:keybindingCommandKey(command),
+      command:keybindingCommandLabel(command),
+      shortcut:keybindingCommandShortcut(command,{}),
+      source:keybindingCommandSource(command),
+      action:command.action
+    }));
 }
 function _getAllKeybindings(){
-  const builtins=_getBuiltinKeybindings();
   const custom=_loadCustomKeybindings();
-  return builtins.map(b=>{
-    const override=custom[b.command];
-    if(override!==undefined)return{...b,shortcut:override,source:'custom'};
-    return b;
+  return keybindingCommandRows().map(command=>{
+    const key=keybindingCommandKey(command);
+    const label=keybindingCommandLabel(command);
+    const shortcut=keybindingCommandShortcut(command,custom);
+    const customSource=Object.prototype.hasOwnProperty.call(custom,key)||Object.prototype.hasOwnProperty.call(custom,label);
+    return{
+      id:key,
+      command:label,
+      shortcut,
+      source:customSource?'custom':keybindingCommandSource(command),
+      extensionId:String(command.extensionId||''),
+      description:String(command.description||''),
+      action:command.action
+    };
   });
 }
 let _kbRecordingRow=null;
@@ -45820,6 +45919,7 @@ function openKeybindings(){
   $('kb-shortcuts-modal').classList.add('open');
   $('kb-filter').value='';
   renderKeybindingTable();
+  refreshKeybindingsDynamicCommands();
 }
 function closeKeybindings(){
   $('kb-shortcuts-modal').classList.remove('open');
@@ -45829,19 +45929,22 @@ function filterKeybindings(){renderKeybindingTable()}
 function renderKeybindingTable(){
   const q=($('kb-filter').value||'').toLowerCase();
   const tbody=$('kb-table-body');tbody.innerHTML='';
-  const bindings=_getAllKeybindings().filter(b=>!q||b.command.toLowerCase().includes(q)||b.shortcut.toLowerCase().includes(q));
+  const bindings=_getAllKeybindings().filter(b=>!q||String(b.command||'').toLowerCase().includes(q)||String(b.shortcut||'').toLowerCase().includes(q)||String(b.id||'').toLowerCase().includes(q)||String(b.extensionId||'').toLowerCase().includes(q));
   bindings.forEach((b,i)=>{
     const tr=document.createElement('tr');
+    tr.dataset.keybindingCommand=b.id||b.command;
+    tr.dataset.keybindingSource=b.source||'';
+    tr.dataset.keybindingExtension=b.extensionId||'';
     tr.innerHTML='<td>'+esc(b.command)+'</td>'
       +'<td>'+(b.shortcut?'<span class="kb-key">'+esc(b.shortcut)+'</span>':'<span style="color:var(--fg-dim)">-</span>')+'</td>'
       +'<td style="color:var(--fg-dim);font-size:11px">'+esc(b.source)+'</td>'
-      +'<td><button class="kb-edit" data-cmd="'+esc(b.command)+'" onclick="startRecordKeybinding(this)">Edit</button></td>';
+      +'<td><button class="kb-edit" data-command-key="'+esc(b.id||b.command)+'" data-cmd="'+esc(b.command)+'" onclick="startRecordKeybinding(this)">Edit</button></td>';
     tbody.appendChild(tr);
   });
 }
 function startRecordKeybinding(btn){
   if(_kbRecordingRow){document.querySelectorAll('.kb-edit.recording').forEach(b=>{b.classList.remove('recording');b.textContent='Edit'})}
-  _kbRecordingRow=btn.dataset.cmd;
+  _kbRecordingRow=btn.dataset.commandKey||btn.dataset.cmd;
   btn.classList.add('recording');btn.textContent='Press keys...';
   function onKeyDown(e){
     e.preventDefault();e.stopPropagation();
@@ -45862,13 +45965,17 @@ function startRecordKeybinding(btn){
   }
   document.addEventListener('keydown',onKeyDown,true);
   // Escape to cancel
-  const cancelOnEsc=(e)=>{if(e.key==='Escape'&&_kbRecordingRow===btn.dataset.cmd){
+  const cancelOnEsc=(e)=>{if(e.key==='Escape'&&_kbRecordingRow===(btn.dataset.commandKey||btn.dataset.cmd)){
     _kbRecordingRow=null;document.removeEventListener('keydown',onKeyDown,true);
     document.removeEventListener('keydown',cancelOnEsc,true);renderKeybindingTable()}};
   document.addEventListener('keydown',cancelOnEsc,true);
 }
 window.openKeybindings=openKeybindings;window.closeKeybindings=closeKeybindings;
 window.filterKeybindings=filterKeybindings;window.startRecordKeybinding=startRecordKeybinding;
+window.refreshKeybindingsDynamicCommands=refreshKeybindingsDynamicCommands;
+window.keybindingDynamicCommands=keybindingDynamicCommands;
+window.keybindingCommandRows=keybindingCommandRows;
+window.keybindingRunCommand=keybindingRunCommand;
 $('kb-shortcuts-modal').addEventListener('click',e=>{if(e.target.id==='kb-shortcuts-modal')closeKeybindings()});
 
 // ── Tab dirty indicator ──
@@ -49341,7 +49448,7 @@ COMMANDS.push({label:'New Terminal Tab',shortcut:'',action:()=>_createTerminal()
 // Expose to global scope for HTML onclick attributes
 window.tbMenu=tbMenu;window.switchSidebar=switchSidebar;window.toggleSidebarVis=toggleSidebarVis;
 window.toggleEditorVis=toggleEditorVis;window.toggleChatVis=toggleChatVis;
-window.toggleTheme=toggleTheme;window.openSettings=openSettings;
+window.toggleTheme=toggleTheme;window.openSettings=openSettings;window.openSettingsTarget=openSettingsTarget;
 window.openCmdPalette=openCommandPalette;window.addTab=addTab;
 window.focusTerminal=focusTerminal;window.goToLineDialog=goToLineDialog;
 window.showAbout=showAbout;window.openFileDialog=openFileDialog;

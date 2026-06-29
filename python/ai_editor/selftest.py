@@ -4851,6 +4851,13 @@ def test_phase1_ai_editor_regressions() -> None:
            and "modal.dataset.settingsDiscardArmed='1'" in html
            and "function settingsCancelOrClose()" in html
            and "function settingsCloseThen(fn)" in html
+           and "function openSettingsTarget(target,search)" in html
+           and "selectSettingsTarget(safeTarget,{preserveSearch:true,focusSearch:true,persist:true});" in html
+           and "window.openSettingsTarget=openSettingsTarget;" in html
+           and "Preferences: Open User Settings" in html
+           and "Preferences: Open Workspace Settings" in html
+           and "Preferences: Open Extension Settings" in html
+           and "Preferences: Open Settings (JSON)" in html
            and "settingsCloseThen(openKeybindings)" in html
            and "settingsApplyReviewFilter(state.errorCount?'error':'modified')" in html
            and "settingsApplyReviewFilter('error')" in html
@@ -14841,8 +14848,20 @@ console.log("extension setting schema helpers ok");
            and "function commandPaletteAllCommands()" in html
            and "function commandPaletteContext()" in html
            and "function refreshCommandPaletteDynamicCommands()" in html
+           and "function keybindingDynamicCommands()" in html
+           and "function keybindingCommandRows()" in html
+           and "function keybindingRunCommand(key)" in html
+           and "async function refreshKeybindingsDynamicCommands()" in html
+           and "window.refreshKeybindingsDynamicCommands=refreshKeybindingsDynamicCommands;" in html
+           and "workbench.action.openUserSettings" in html
+           and "workbench.action.openWorkspaceSettings" in html
+           and "workbench.action.openExtensionSettings" in html
+           and "workbench.action.openSettingsJson" in html
+           and "function openSettingsTarget(target,search)" in html
+           and "window.openSettingsTarget=openSettingsTarget;" in html
            and "call('list_command_palette_commands',commandPaletteContext())" in html
            and "call('execute_command',id" in html
+           and "call('execute_command',commandKey)" in html
            and "const enabled=raw.disabled?false:raw.enabled!==false" in html
            and "disabledReason:raw.disabledReason" in html
            and "Command is disabled" in html
@@ -15031,6 +15050,18 @@ console.log("quick input filter helpers ok");
             "commandPaletteViewEntries",
             "commandPalettePrefixEntries",
             "commandPaletteHighlightedHtml",
+            "_loadCustomKeybindings",
+            "_saveCustomKeybindings",
+            "keybindingCommandKey",
+            "keybindingCommandLabel",
+            "keybindingCommandSource",
+            "keybindingCommandShortcut",
+            "keybindingDynamicCommands",
+            "keybindingCommandRows",
+            "keybindingFindCommand",
+            "keybindingRunCommand",
+            "_getBuiltinKeybindings",
+            "_getAllKeybindings",
         ]
         command_palette_js = "\n".join(
             _extract_js_function(html, name)
@@ -15041,11 +15072,19 @@ function esc(value){ return String(value).replace(/[&<>"']/g, ch => ({'&':'&amp;
 const COMMANDS = [
   { id: "workbench.action.files.save", label: "File: Save", shortcut: "Ctrl+S", category: "File", description: "Save the active editor" },
   { id: "editor.action.rename", label: "Rename Symbol", shortcut: "F2", category: "Editor", description: "Rename at cursor" },
-  { id: "workbench.action.openSettings", label: "Preferences: Open Settings", shortcut: "", category: "Preferences", description: "Open Settings UI" },
+  { id: "workbench.action.openSettings", label: "Preferences: Open Settings (UI)", shortcut: "", category: "Preferences", description: "Open Settings UI" },
+  { id: "workbench.action.openWorkspaceSettings", label: "Preferences: Open Workspace Settings", shortcut: "", category: "Preferences", description: "Open workspace settings" },
   { id: "developer.reload", label: "Developer: Reload Window", shortcut: "", category: "Developer", description: "Reload extension host" },
   { id: "workbench.action.terminal.new", label: "Terminal: Create New Terminal", shortcut: "Ctrl+Shift+`", category: "Terminal", description: "Create terminal" },
 ];
 let _cmdPaletteDynamicCommands = [];
+let _keybindingDynamicCommands = [];
+const localStorage = {
+  data: {},
+  getItem(key){ return Object.prototype.hasOwnProperty.call(this.data,key)?this.data[key]:null; },
+  setItem(key,value){ this.data[key]=String(value); }
+};
+const _KB_STORAGE_KEY='sao-custom-keybindings';
 const executedCommands = [];
 let openedDocumentQuery = null;
 let openedWorkspaceQuery = null;
@@ -15161,7 +15200,7 @@ let filtered = commandPaletteFilteredCommands("> rn sym", {});
 assert(filtered.length === 1 && filtered[0].command.label === "Rename Symbol",
        "query filters with normalized prefix and fuzzy match");
 filtered = commandPaletteFilteredCommands("settings", { "workbench.action.terminal.new": 50 });
-assert(filtered[0].command.label === "Preferences: Open Settings",
+assert(filtered[0].command.label === "Preferences: Open Settings (UI)",
        "matching command beats unrelated MRU");
 filtered = commandPaletteFilteredCommands("", { "workbench.action.terminal.new": 50 });
 assert(filtered[0].command.label === "Terminal: Create New Terminal",
@@ -15220,6 +15259,7 @@ assert(statusText === "Enablement not satisfied: neverContext"
 assert(commandPaletteNormalizeDynamicCommand({ command: "editor.action.rename", title: "Duplicate" }, commandPaletteBuiltinIdSet()) === null,
        "dynamic command does not duplicate built-in ids");
 _cmdPaletteDynamicCommands = [dynamic, disabledDynamic];
+_keybindingDynamicCommands = [dynamic, disabledDynamic];
 filtered = commandPaletteFilteredCommands("probe", {});
 const enabledProbe = filtered.find(entry => entry.command.id === "selftest.extension.run");
 assert(enabledProbe && enabledProbe.command.id === "selftest.extension.run",
@@ -15228,6 +15268,31 @@ enabledProbe.command.action();
 assert(executedCommands[0].method === "execute_command"
        && executedCommands[0].args[0] === "selftest.extension.run",
        "dynamic command executes through backend command service");
+let allBindings = _getAllKeybindings();
+let dynamicBinding = allBindings.find(item => item.id === "selftest.extension.run");
+assert(dynamicBinding && dynamicBinding.command === "Selftest: Run Probe"
+       && dynamicBinding.source === "extension"
+       && dynamicBinding.extensionId === "selftest.commands",
+       "dynamic extension commands appear in keyboard shortcuts rows");
+let customBindings = _loadCustomKeybindings();
+customBindings["selftest.extension.run"] = "Ctrl+Alt+R";
+_saveCustomKeybindings(customBindings);
+allBindings = _getAllKeybindings();
+dynamicBinding = allBindings.find(item => item.id === "selftest.extension.run");
+assert(dynamicBinding && dynamicBinding.shortcut === "Ctrl+Alt+R"
+       && dynamicBinding.source === "custom",
+       "custom shortcut overrides extension command by command id");
+executedCommands.length = 0;
+assert(keybindingRunCommand("selftest.extension.run") === true
+       && executedCommands.some(item => item.method === "execute_command"
+          && item.args[0] === "selftest.extension.run"
+          && item.args[1] && item.args[1].from === "commandPalette"),
+       "custom extension shortcut dispatches through execute_command with contributed arguments");
+executedCommands.length = 0;
+assert(keybindingRunCommand("selftest.runtimeOnly") === true
+       && executedCommands.some(item => item.method === "execute_command"
+          && item.args[0] === "selftest.runtimeOnly"),
+       "unknown runtime command id shortcut falls back to backend command execution");
 console.log("command palette quick access helpers ok");
 """
         js_path = ""
