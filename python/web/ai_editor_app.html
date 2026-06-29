@@ -1761,6 +1761,14 @@ pre.code-block code .type { color:var(--fg-type); }
 .status-context-usage.warn .ctx-ring { background:conic-gradient(var(--fg-warning) var(--ctx-percent), color-mix(in srgb,var(--border) 70%,transparent) 0); }
 .status-context-usage.crit .ctx-ring { background:conic-gradient(var(--fg-error) var(--ctx-percent), color-mix(in srgb,var(--border) 70%,transparent) 0); }
 .status-context-text { max-width:110px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.editor-action-status { color:var(--fg-dim); max-width:150px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.editor-action-status.running { color:var(--fg-accent); animation:languageStatusPulse 1.1s ease-in-out infinite; }
+.editor-action-status.done { color:var(--fg-success); }
+.editor-action-status.cancelled,.editor-action-status.error { color:var(--fg-warning); }
+.editor-action-cancel { width:18px; height:18px; display:none; align-items:center; justify-content:center; border:1px solid transparent;
+  border-radius:4px; background:transparent; color:var(--fg-dim); cursor:pointer; font:12px var(--mono); padding:0; }
+.editor-action-cancel.visible { display:inline-flex; }
+.editor-action-cancel:hover,.editor-action-cancel:focus { color:var(--fg); border-color:var(--border-focus); background:var(--bg-hover); outline:none; }
 #status-model { display:none!important; }
 .editor-language-status { max-width:190px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; color:var(--fg-dim); }
 .editor-language-status[role="button"] { cursor:pointer; }
@@ -4581,6 +4589,8 @@ pre.code-block { overflow:visible; }
   <span class="sb-item" id="status-eol">LF</span>
   <span class="sb-item" id="status-language" title="Select Language Mode" style="cursor:pointer" onclick="showLanguagePicker()">{} Plain Text</span>
   <span class="sb-item editor-language-status ready" id="status-language-service" title="Language services" role="button" tabindex="0" aria-haspopup="dialog" aria-expanded="false" onclick="toggleEditorLanguageStatusPanel(event)" onkeydown="handleEditorLanguageStatusKey(event)">Lang: Ready</span>
+  <span class="sb-item editor-action-status idle" id="status-editor-action" title="Editor action state" role="status" aria-live="polite">Action: Ready</span>
+  <button type="button" class="editor-action-cancel" id="status-editor-action-cancel" title="Cancel editor action" aria-label="Cancel editor action" onclick="cancelEditorLongAction('status-button')">×</button>
   <span class="sb-item editor-surface-status ready" id="status-editor-surface" title="Editor surfaces">Editor: Ready</span>
   <span class="sb-item" id="status-mode" title="Mode" style="cursor:pointer;font-weight:bold" onclick="cycleMode()">Agent</span>
   <span class="sb-item" id="status-approval" title="Approval level" style="cursor:pointer;color:var(--fg-dim)" onclick="cycleApproval()">◎ Default</span>
@@ -16069,6 +16079,133 @@ function updateEditorLanguageProviderStatus(state,info){
   renderEditorLanguageFeatureStatus();
   return _editorLanguageProviderStatus;
 }
+let _editorActionSeq=0,_editorActiveAction=null,_editorActionHistory=[];
+function editorActionStatusElements(){
+  return {label:$('status-editor-action'),cancel:$('status-editor-action-cancel')};
+}
+function editorLongActionLabel(kind,label){
+  const text=String(label||'').trim();
+  if(text)return text;
+  const map={formatting:'Format document',rangeFormatting:'Format selection',codeActions:'Code actions',applyCodeAction:'Apply code action',saveParticipants:'Save participants'};
+  return map[String(kind||'')]||'Editor action';
+}
+function renderEditorLongActionStatus(action,state,detail){
+  const els=editorActionStatusElements(),label=els.label,cancel=els.cancel;
+  const current=isPlainObject(action)?action:{};
+  const nextState=String(state||current.state||'idle');
+  const text=nextState==='running'
+    ? 'Action: '+editorLongActionLabel(current.kind,current.label)
+    : nextState==='done'
+      ? 'Action: Done'
+      : nextState==='cancelled'
+        ? 'Action: Cancelled'
+        : nextState==='error'
+          ? 'Action: Failed'
+          : 'Action: Ready';
+  if(label){
+    label.className='sb-item editor-action-status '+nextState;
+    label.dataset.editorActionState=nextState;
+    label.dataset.editorActionId=String(current.id||'');
+    label.dataset.editorActionKind=String(current.kind||'');
+    label.dataset.editorActionLabel=String(current.label||'');
+    label.dataset.editorActionReason=String(current.cancelReason||current.error||'');
+    label.dataset.editorActionDurationMs=String(current.endedAt&&current.startedAt?Math.max(0,current.endedAt-current.startedAt):0);
+    label.textContent=text;
+    label.title=String(detail||current.detail||editorLongActionLabel(current.kind,current.label));
+  }
+  if(cancel){
+    const cancellable=nextState==='running'&&current.cancellable!==false;
+    cancel.classList.toggle('visible',cancellable);
+    cancel.disabled=!cancellable;
+    cancel.dataset.editorActionId=String(current.id||'');
+    cancel.dataset.editorActionKind=String(current.kind||'');
+  }
+  return current;
+}
+function beginEditorLongAction(kind,label,options){
+  const opts=isPlainObject(options)?options:{};
+  const previous=_editorActiveAction;
+  if(previous&&previous.state==='running'){
+    previous.superseded=true;
+    previous.endedAt=Date.now();
+    previous.state='cancelled';
+  }
+  const action={
+    id:++_editorActionSeq,
+    kind:String(kind||'editorAction'),
+    label:editorLongActionLabel(kind,label),
+    startedAt:Date.now(),
+    endedAt:0,
+    state:'running',
+    cancellable:opts.cancellable!==false,
+    quiet:opts.quiet===true,
+    cancelled:false,
+    superseded:false
+  };
+  _editorActiveAction=action;
+  renderEditorLongActionStatus(action,'running','Running '+action.label);
+  return action;
+}
+function editorActionIsCurrent(action){
+  return !!(action&&_editorActiveAction&&_editorActiveAction.id===action.id&&!action.cancelled&&!action.superseded&&_editorActiveAction.state==='running');
+}
+function finishEditorLongAction(action,state,detail){
+  if(!action)return action;
+  action.endedAt=Date.now();
+  action.state=String(state||'done');
+  action.detail=String(detail||'');
+  _editorActionHistory.push({id:action.id,kind:action.kind,label:action.label,state:action.state,durationMs:Math.max(0,action.endedAt-action.startedAt)});
+  _editorActionHistory=_editorActionHistory.slice(-20);
+  if(_editorActiveAction&&_editorActiveAction.id===action.id){
+    _editorActiveAction=action;
+    renderEditorLongActionStatus(action,action.state,detail);
+  }
+  return action;
+}
+function cancelEditorLongAction(reason){
+  const action=_editorActiveAction;
+  if(!action||action.state!=='running')return false;
+  action.cancelled=true;
+  action.cancelReason=String(reason||'cancelled');
+  ++_editorCodeActionRequest;
+  closeEditorCodeActions();
+  finishEditorLongAction(action,'cancelled','Cancelled '+action.label);
+  updateEditorLanguageProviderStatus('cancelled',{kind:action.kind,label:action.label,message:action.label+' cancelled',detail:action.cancelReason});
+  setStatus(action.label+' cancelled');
+  return true;
+}
+async function runEditorLongAction(kind,label,worker,options){
+  const action=beginEditorLongAction(kind,label,options);
+  try{
+    const result=await worker(action);
+    if(!editorActionIsCurrent(action))return {cancelled:true,ignored:true,actionId:action.id};
+    finishEditorLongAction(action,'done',action.label+' completed');
+    return result;
+  }catch(err){
+    action.error=err&&err.message?err.message:String(err);
+    if(editorActionIsCurrent(action))finishEditorLongAction(action,'error',action.error);
+    throw err;
+  }
+}
+function editorLongActionSelfCheckSnapshot(){
+  const previous=_editorActiveAction;
+  const action=beginEditorLongAction('selftest','Selftest Action',{});
+  const running=editorActionIsCurrent(action);
+  const cancelled=cancelEditorLongAction('selfcheck')===true;
+  const ignored=!editorActionIsCurrent(action);
+  const els=editorActionStatusElements();
+  const snapshot={
+    running,
+    cancelled,
+    ignored,
+    state:els.label?els.label.dataset.editorActionState:'',
+    cancelHidden:els.cancel?!els.cancel.classList.contains('visible'):false,
+    historyCount:_editorActionHistory.length
+  };
+  _editorActiveAction=previous||null;
+  renderEditorLongActionStatus(_editorActiveAction,_editorActiveAction&&_editorActiveAction.state||'idle','Editor action state');
+  return snapshot;
+}
 function editorLanguageProviderFailureMessage(kind,res){
   const label=editorLanguageProviderKindLabel(kind);
   if(editorProviderResultSkipped(res))return label+' skipped for large file';
@@ -19698,13 +19835,16 @@ function editorDropPastePrimaryInsertRange(edit,ranges,beforeValue){
 }
 async function formatEditorRange(range,options){
   const opts=isPlainObject(options)?options:{};
+  const editorAction=isPlainObject(opts.editorAction)?opts.editorAction:null;
   if(!range||!range.start||!range.end)return false;
   const payload={range,options:editorFormatOptions()};
   const providerId=editorFormattingProviderId(opts);
   if(providerId)payload.providerId=providerId;
   const res=await editorRequestLanguageProvider('rangeFormatting',editorProviderPayload('rangeFormatting',payload),{
-    countKey:'edits',itemLabel:'format edit',label:opts.label||'Format range',quiet:opts.quiet===true
+    countKey:'edits',itemLabel:'format edit',label:opts.label||'Format range',quiet:opts.quiet===true,
+    isCurrent:editorAction?()=>editorActionIsCurrent(editorAction):undefined
   });
+  if(editorAction&&!editorActionIsCurrent(editorAction))return false;
   if(res&&res.ok&&Array.isArray(res.edits)&&res.edits.length){
     _undoPush(true);
     if(editorApplyTextEdits(res.edits)){
@@ -19719,6 +19859,7 @@ async function formatEditorRange(range,options){
     kind:'range',edits:0,applied:false,
     message:res&&res.error?'Formatting: range failed':'Formatting: range unavailable'
   });
+  if(editorAction&&!editorActionIsCurrent(editorAction))return false;
   const fallback=formatEditorFallbackRange(range,opts);
   return fallback===null?false:fallback;
 }
@@ -19838,6 +19979,9 @@ async function runEditorCodeActionCommand(command){
   return result;
 }
 async function applyEditorCodeAction(action){
+  const actionOpts=(arguments[1]&&typeof arguments[1]==='object'&&!Array.isArray(arguments[1]))?arguments[1]:{};
+  const editorAction=(actionOpts.editorAction&&typeof actionOpts.editorAction==='object')?actionOpts.editorAction:null;
+  if(!editorAction&&typeof runEditorLongAction==='function')return runEditorLongAction('applyCodeAction','Apply '+codeActionTitle(action),runnerAction=>applyEditorCodeAction(action,{editorAction:runnerAction}),{});
   if(!action)return;
   const disabled=codeActionDisabledText(action.disabled);
   if(disabled){setStatus(disabled);return}
@@ -19845,12 +19989,14 @@ async function applyEditorCodeAction(action){
     setStatus('Resolving code action...');
     await resolveEditorCodeAction(action);
   }
+  if(editorAction&&typeof editorActionIsCurrent==='function'&&!editorActionIsCurrent(editorAction))return false;
   const resolvedDisabled=codeActionDisabledText(action.disabled);
   if(resolvedDisabled){setStatus(resolvedDisabled);return}
   const summary=action.edit?editorCodeActionEdits({edit:action.edit}):{edits:[],tabEdits:[],workspaceEdits:[],skipped:0};
   if(action.edit&&(summary.tabEdits.length||summary.workspaceEdits.length)){
     if(!await confirmEditorWorkspaceEditApply('Apply Code Action',summary,'Apply code action "'+codeActionTitle(action)+'".')){ed.focus();return}
   }
+  if(editorAction&&typeof editorActionIsCurrent==='function'&&!editorActionIsCurrent(editorAction))return false;
   _undoPush(true);
   const actionCount=(typeof _editorCodeActions!=='undefined'&&Array.isArray(_editorCodeActions))?_editorCodeActions.length:0;
   const actionKind=typeof codeActionKindText==='function'?codeActionKindText(action&&action.kind):String((action&&action.kind&&((action.kind.value)||(action.kind.kind)||(action.kind.id)))||(action&&action.kind)||'');
@@ -19970,11 +20116,18 @@ async function fetchEditorCodeActionsForKind(only,range,isCurrent){
   return {actions:providerActions.concat(fallbackActions),fallback:fallbackActions.length>0};
 }
 async function requestEditorCodeActionsForKind(quiet,only,label){
+  const actionOpts=isPlainObject(arguments[3])?arguments[3]:{};
+  const editorAction=isPlainObject(actionOpts.editorAction)?actionOpts.editorAction:null;
+  if(quiet!==true&&!editorAction){
+    const actionLabel=label||'code action';
+    return runEditorLongAction('codeActions',actionLabel,runnerAction=>requestEditorCodeActionsForKind(quiet,only,label,{editorAction:runnerAction}),{});
+  }
   const requestId=++_editorCodeActionRequest,position=editorPositionFromOffset(ed.value,ed.selectionStart);
   const range=editorSelectedRangePayload();
   const actionLabel=label||'code action';
-  const res=await fetchEditorCodeActionsForKind(only,range,()=>requestId===_editorCodeActionRequest);
+  const res=await fetchEditorCodeActionsForKind(only,range,()=>requestId===_editorCodeActionRequest&&(!editorAction||editorActionIsCurrent(editorAction)));
   if(requestId!==_editorCodeActionRequest)return;
+  if(editorAction&&!editorActionIsCurrent(editorAction))return {cancelled:true};
   if(res&&res.cancelled)return;
   if(res&&res.error){
     closeEditorCodeActions();
@@ -21516,12 +21669,18 @@ function formatEditorFallbackRange(range,opts){
 }
 async function formatDocument(options){
   const opts=isPlainObject(options)?options:{};
+  const editorAction=isPlainObject(opts.editorAction)?opts.editorAction:null;
+  if(opts.quiet!==true&&!editorAction){
+    return runEditorLongAction('formatting','Format document',runnerAction=>formatDocument({...opts,editorAction:runnerAction}),{});
+  }
   const payload={options:editorFormatOptions()};
   const providerId=editorFormattingProviderId(opts);
   if(providerId)payload.providerId=providerId;
   const res=await editorRequestLanguageProvider('formatting',editorProviderPayload('formatting',payload),{
-    countKey:'edits',itemLabel:'format edit',label:'Format document',quiet:opts.quiet===true
+    countKey:'edits',itemLabel:'format edit',label:'Format document',quiet:opts.quiet===true,
+    isCurrent:editorAction?()=>editorActionIsCurrent(editorAction):undefined
   });
+  if(editorAction&&!editorActionIsCurrent(editorAction))return false;
   if(res&&res.ok&&Array.isArray(res.edits)&&res.edits.length){
     _undoPush(true);
     if(editorApplyTextEdits(res.edits)){
@@ -21529,8 +21688,10 @@ async function formatDocument(options){
       if(!opts.quiet)setStatus('Formatted via extension');return true
     }
   }
+  if(editorAction&&!editorActionIsCurrent(editorAction))return false;
   const jsonFormatted=formatEditorJsonLikeDocument(opts);
   if(jsonFormatted!==null)return jsonFormatted;
+  if(editorAction&&!editorActionIsCurrent(editorAction))return false;
   const fallbackFormatted=formatEditorFallbackDocument(opts);
   if(fallbackFormatted!==null)return fallbackFormatted;
   if(typeof updateEditorLanguageFeatureState==='function')updateEditorLanguageFeatureState('formatting',res&&res.error?'error':'empty',{kind:'document',edits:0,applied:false,message:'Formatting: unavailable'});
@@ -21540,11 +21701,15 @@ async function formatDocument(options){
 async function formatSelection(){
   const range=editorSelectedRangePayload(),start=range.start,end=range.end;
   if(start.line===end.line&&start.character===end.character){setStatus('No selection to format');return}
-  if(await formatEditorRange(range,{label:'Format selection',status:'Formatted selection via extension'}))return;
-  setStatus('Format selection not available for '+editorLang);
+  return runEditorLongAction('rangeFormatting','Format selection',async runnerAction=>{
+    if(await formatEditorRange(range,{label:'Format selection',status:'Formatted selection via extension',editorAction:runnerAction}))return true;
+    if(editorActionIsCurrent(runnerAction))setStatus('Format selection not available for '+editorLang);
+    return false;
+  },{});
 }
 async function runEditorCodeActionsOnSave(options){
   const opts=isPlainObject(options)?options:{};
+  const editorAction=isPlainObject(opts.editorAction)?opts.editorAction:null;
   const kinds=editorCodeActionsOnSaveKinds(opts.reason||'explicit');
   const summary=isPlainObject(opts.summary)?opts.summary:null;
   if(summary)summary.codeActionKinds=kinds.slice();
@@ -21552,13 +21717,16 @@ async function runEditorCodeActionsOnSave(options){
   let changed=false;
   const range=editorFullRangePayload();
   for(const kind of kinds){
+    if(editorAction&&!editorActionIsCurrent(editorAction))return false;
     if(summary)summary.codeActionRequests=(summary.codeActionRequests||0)+1;
-    const res=await fetchEditorCodeActionsForKind(kind,range);
+    const res=await fetchEditorCodeActionsForKind(kind,range,editorAction?()=>editorActionIsCurrent(editorAction):undefined);
+    if(editorAction&&!editorActionIsCurrent(editorAction))return false;
     if(res&&res.cancelled)continue;
     if(res&&res.error){if(summary)summary.codeActionErrors=(summary.codeActionErrors||0)+1;setStatus('Code actions on save failed: '+res.error);continue}
     const actions=(res&&res.actions)||[];
     if(summary)summary.codeActionCount=(summary.codeActionCount||0)+actions.length;
     for(const action of actions){
+      if(editorAction&&!editorActionIsCurrent(editorAction))return false;
       if(await applyEditorCodeActionForSave(action)){
         changed=true;
         if(summary)summary.codeActionApplied=(summary.codeActionApplied||0)+1;
@@ -21570,16 +21738,23 @@ async function runEditorCodeActionsOnSave(options){
 }
 async function runEditorSaveParticipants(options){
   const opts=isPlainObject(options)?options:{};
+  const editorAction=isPlainObject(opts.editorAction)?opts.editorAction:null;
+  if(opts.autoSave!==true&&!editorAction){
+    return runEditorLongAction('saveParticipants','Save participants',runnerAction=>runEditorSaveParticipants({...opts,editorAction:runnerAction}),{});
+  }
   const skipExplicitSaveParticipants=opts.autoSave===true;
   const summary=beginEditorSaveParticipantRun(opts);
+  summary.actionId=editorAction?editorAction.id:0;
   let changed=false;
   try{
     if(!skipExplicitSaveParticipants&&editorFormatOnSaveEnabled()){
-      const formatted=await formatDocument({quiet:true,onSave:true});
+      const formatted=await formatDocument({quiet:true,onSave:true,editorAction});
       summary.formatChanged=formatted===true;
       changed=formatted||changed;
     }
-    if(!skipExplicitSaveParticipants)changed=await runEditorCodeActionsOnSave({reason:'explicit',summary})||changed;
+    if(editorAction&&!editorActionIsCurrent(editorAction))return {cancelled:true};
+    if(!skipExplicitSaveParticipants)changed=await runEditorCodeActionsOnSave({reason:'explicit',summary,editorAction})||changed;
+    if(editorAction&&!editorActionIsCurrent(editorAction))return {cancelled:true};
     const filesChanged=applyEditorFilesSaveParticipants();
     summary.filesApplied=filesChanged===true;
     changed=filesChanged||changed;
@@ -48400,7 +48575,8 @@ async function saveFile(options){
   }
   if(isSettingsJsonTab(tab))return await saveSettingsJsonTab(tab,opts);
   if(opts.autoSave&&!(tab&&tab.filePath))return {ok:false,skipped:true};
-  await runEditorSaveParticipants({autoSave:opts.autoSave===true,autoSaveMode:opts.autoSaveMode||''});
+  const participantResult=await runEditorSaveParticipants({autoSave:opts.autoSave===true,autoSaveMode:opts.autoSaveMode||''});
+  if(participantResult&&participantResult.cancelled)return {ok:false,cancelled:true};
   const content=$('editor-text').value;
   if(tab&&tab.filePath){
     const r=await call('execute_tool','editFile',JSON.stringify({path:tab.filePath,content:content}),true);
@@ -50406,6 +50582,7 @@ window.editorSurfaceLanguageProviderRows=editorSurfaceLanguageProviderRows;
 window.editorLanguageFeatureStateSnapshot=editorLanguageFeatureStateSnapshot;
 window.editorLanguageFeatureAggregateSnapshot=editorLanguageFeatureAggregateSnapshot;
 window.editorLanguageStatusPanelSelfCheckSnapshot=editorLanguageStatusPanelSelfCheckSnapshot;
+window.editorLongActionSelfCheckSnapshot=editorLongActionSelfCheckSnapshot;
 
 // ── chat-ux-4: Inline diff view for code changes ──
 function parseDiffText(text){

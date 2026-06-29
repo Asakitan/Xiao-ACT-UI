@@ -7712,7 +7712,7 @@ def test_phase1_ai_editor_regressions() -> None:
            and "trimFinalNewlines:readCheckedValue('s-files-trim-final-newlines')" in html
            and "const skipExplicitSaveParticipants=opts.autoSave===true" in html
            and "if(!skipExplicitSaveParticipants&&editorFormatOnSaveEnabled())" in html
-           and "if(!skipExplicitSaveParticipants)changed=await runEditorCodeActionsOnSave({reason:'explicit',summary})||changed" in html
+            and "if(!skipExplicitSaveParticipants)changed=await runEditorCodeActionsOnSave({reason:'explicit',summary,editorAction})||changed" in html
            and "if(opts.autoSave&&!(tab&&tab.filePath))" in html
            and "function triggerEditorAutoSave(mode)" in html
            and "ed.addEventListener('blur',()=>{triggerEditorCodeActionsOnFocusChange();triggerEditorAutoSave('onFocusChange')})" in html
@@ -16496,8 +16496,8 @@ console.log("command palette quick access helpers ok");
            and "Fix all built-in problems" in html
            and "source.fixAll" in html)
     _check("frontend exposes VS Code-style save participant language status",
-           "let _editorSaveParticipantSeq=0" in html
-           and "saveParticipants:{state:'empty'" in html
+            "let _editorSaveParticipantSeq=0" in html
+            and "saveParticipants:{state:'empty'" in html
            and "function beginEditorSaveParticipantRun(options)" in html
            and "function finishEditorSaveParticipantRun(summary)" in html
            and "function editorFilesSaveParticipantSummary(files)" in html
@@ -16518,8 +16518,28 @@ console.log("command palette quick access helpers ok");
             and "el.dataset.saveFilesApplied=save.filesApplied?'1':'0';" in html
             and "el.dataset.formatOnSave=fmt.onSave?'1':'0';" in html
             and "el.dataset.formatProviderId=String(fmt.providerId||'');" in html
-            and "onSave:opts.onSave===true" in html
-            and "'diagnostics','codeActions','formatting','inlineCompletions','saveParticipants','semanticTokens','diff'" in html)
+             and "onSave:opts.onSave===true" in html
+             and "'diagnostics','codeActions','formatting','inlineCompletions','saveParticipants','semanticTokens','diff'" in html)
+    _check("frontend exposes cancellable long-running editor actions",
+           'id="status-editor-action"' in html
+           and 'id="status-editor-action-cancel"' in html
+           and "function beginEditorLongAction(kind,label,options)" in html
+           and "function editorActionIsCurrent(action)" in html
+           and "function cancelEditorLongAction(reason)" in html
+           and "function runEditorLongAction(kind,label,worker,options)" in html
+           and "function editorLongActionSelfCheckSnapshot()" in html
+           and "window.editorLongActionSelfCheckSnapshot=editorLongActionSelfCheckSnapshot;" in html
+           and "++_editorCodeActionRequest;" in html
+           and "closeEditorCodeActions();" in html
+           and "return runEditorLongAction('formatting','Format document'" in html
+           and "return runEditorLongAction('rangeFormatting','Format selection'" in html
+           and "return runEditorLongAction('codeActions',actionLabel" in html
+           and "return runEditorLongAction('applyCodeAction','Apply '+codeActionTitle(action)" in html
+           and "return runEditorLongAction('saveParticipants','Save participants'" in html
+           and "isCurrent:editorAction?()=>editorActionIsCurrent(editorAction):undefined" in html
+           and "requestId===_editorCodeActionRequest&&(!editorAction||editorActionIsCurrent(editorAction))" in html
+           and "const participantResult=await runEditorSaveParticipants" in html
+           and "if(participantResult&&participantResult.cancelled)return {ok:false,cancelled:true};" in html)
     _check("frontend exposes clickable VS Code-style language service status panel",
            'id="status-language-service"' in html
            and 'role="button" tabindex="0" aria-haspopup="dialog" aria-expanded="false"' in html
