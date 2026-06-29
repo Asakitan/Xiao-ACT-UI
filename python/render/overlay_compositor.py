@@ -738,11 +738,12 @@ class UnifiedOverlay:
     def _enforce_z_order(self) -> None:
         """Position the compositor host just above the game window.
 
-        Normal path: SetWindowPos(host, game_hwnd) — insertAfter.
-        Kernel path: if the game is TOPMOST, use Engine A to set the
-        compositor's TOPMOST bit via physical memory (invisible to
-        user-mode API hooks), then insertAfter.
-        Fallback: HWND_TOP if no game HWND is set.
+        Priority order:
+          1. Kernel path (Engine A R3): set TOPMOST bit via physical
+             memory — invisible to user-mode API hooks.
+          2. User-mode fallback: SetWindowPos(HWND_TOPMOST) if R3
+             is unavailable (no driver loaded / calibration failed).
+          3. HWND_TOP if no game HWND is set.
         """
         host = self._host
         if host is None:
@@ -756,18 +757,32 @@ class UnifiedOverlay:
             u32 = _ct.windll.user32
             _SWP = 0x0002 | 0x0001 | 0x0010  # NOMOVE | NOSIZE | NOACTIVATE
             if game and u32.IsWindow(game):
-                game_topmost = False
+                kernel_ok = False
+                game_is_topmost = False
                 try:
                     from mem_probe._dc import read_exstyle, set_exstyle_bit
                     ex = read_exstyle(game)
                     if ex is not None and (ex & 0x8):
-                        game_topmost = True
-                        set_exstyle_bit(comp_hwnd, 0x8)
+                        game_is_topmost = True
+                        kernel_ok = set_exstyle_bit(comp_hwnd, 0x8)
+                    else:
+                        kernel_ok = True
                 except Exception:
-                    pass
-                u32.SetWindowPos(
-                    _ct.c_void_p(comp_hwnd), _ct.c_void_p(game),
-                    0, 0, 0, 0, _SWP)
+                    kernel_ok = False
+                if kernel_ok:
+                    u32.SetWindowPos(
+                        _ct.c_void_p(comp_hwnd), _ct.c_void_p(game),
+                        0, 0, 0, 0, _SWP)
+                elif game_is_topmost:
+                    _HWND_TOPMOST = -1
+                    u32.SetWindowPos(
+                        _ct.c_void_p(comp_hwnd),
+                        _ct.c_void_p(_HWND_TOPMOST),
+                        0, 0, 0, 0, _SWP)
+                else:
+                    u32.SetWindowPos(
+                        _ct.c_void_p(comp_hwnd), _ct.c_void_p(game),
+                        0, 0, 0, 0, _SWP)
             else:
                 _HWND_TOP = 0
                 u32.SetWindowPos(
