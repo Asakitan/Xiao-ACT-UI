@@ -14388,6 +14388,9 @@ console.log("extension setting schema helpers ok");
            and "function refreshExtensionRuntimeTaskProblems(record,result)" in html
            and "function renderExtensionRuntimeDebugSessionTree()" in html
            and "function runExtensionDebugCommand(command,label,sessionKey)" in html
+           and "async function stopExtensionRuntimeTask(executionId,label)" in html
+           and "call('execute_command','workbench.action.tasks.terminate',id)" in html
+           and "stop.dataset.runtimeTaskStop='1';" in html
            and "function updateExtensionRuntimeTaskLifecycle(data)" in html
            and "chip.dataset.runtimeRunBackground=row.isBackground?'1':'0';"
            in html
@@ -14421,6 +14424,8 @@ console.log("extension setting schema helpers ok");
            and "runtimeDebugSessionChips:runtimeRunStrip?runtimeRunStrip.querySelectorAll('.extension-runtime-run-chip[data-runtime-run-kind=\"debug\"]').length:0" in html
            and "runtimeRunStates:runtimeRunStrip?Array.from(runtimeRunStrip.querySelectorAll('.extension-runtime-run-chip')).map(item=>item.dataset.runtimeRunState||''):[]" in html
            and "runtimeRunCommands:runtimeRunStrip?Array.from(runtimeRunStrip.querySelectorAll('.extension-runtime-run-chip')).map(item=>item.dataset.runtimeRunCommand||'').filter(Boolean):[]" in html
+           and "runtimeTaskStopButtons:runtimeRunStrip?runtimeRunStrip.querySelectorAll('.extension-runtime-run-stop[data-runtime-task-stop=\"1\"]').length:0"
+           in html
            and "runtimeTaskProblemCount:runtimeTaskProblemRows.length" in html
            and "runtimeProblemsPanelTaskRows:document.querySelectorAll('#problems-content .problem-row[data-problem-kind=\"task\"]').length" in html
            and "runtimeDebugTreeActive:!!(runtimeDebugTree&&runtimeDebugTree.classList.contains('active'))" in html
@@ -14433,6 +14438,9 @@ console.log("extension setting schema helpers ok");
            and "runtimeActionSmoke.terminalProfileOpened=_terminals.some(term=>term&&term.metadata&&term.metadata.profile==='selftest.terminalProfile');" in html
            and "runtimeActionSmoke.contextAttached=chatContextAttachments.some(item=>item&&item.id==='runtime-context:selftest.context');" in html
            and "runtimeActionSmoke.taskPrompt=$('chat-input')?$('chat-input').value:'';" in html
+           and "runtimeActionSmoke.taskStopButton=!!stopButton;" in html
+           and "runtimeActionSmoke.taskStopCommand=runtimeExecutedCommands.some(item=>item.command==='workbench.action.tasks.terminate'&&item.args&&item.args[0]==='task-running-selftest');"
+           in html
            and "runtimeActionSmoke.debugPrompt=$('chat-input')?$('chat-input').value:'';" in html
            and "_terminals.filter(term=>term&&!previousTerminalIds.has(term.id)).map(term=>term.id).slice().forEach(id=>_closeTerminal(id));" in html
            and "showExtensionActionMenu(2,2" in html
@@ -16381,6 +16389,10 @@ console.log("frontend built-in language fallback behavior ok");
            in node_ext_host_source
            and "terminalReuseKey: panel === 'shared'" in node_ext_host_source
            and "metadata: bridgeMetadata" in node_ext_host_source
+           and "_commands.set('workbench.action.tasks.terminate', terminateTaskExecution);"
+           in node_ext_host_source
+           and "_commands.set('workbench.action.tasks.terminateTask', terminateTaskExecution);"
+           in node_ext_host_source
            and "async function handleExtensionTaskExecuteRequest(msg)"
            in node_ext_host_source
            and "case 'extension_task_execute_request':" in node_ext_host_source
@@ -28272,7 +28284,10 @@ async function activate(context) {
     const activeAfterTask = vscode.tasks.taskExecutions.length;
     const customExecution = await vscode.tasks.executeTask(fetchedBySource[0]);
     const activeDuringCustomTask = vscode.tasks.taskExecutions.length;
-    await customExecution.terminate();
+    const taskTerminateCommandResult = await vscode.commands.executeCommand(
+      'workbench.action.tasks.terminate',
+      customExecution.id
+    );
     const activeAfterCustomTask = vscode.tasks.taskExecutions.length;
     const processWithOptions = new vscode.ProcessExecution('node', {
       cwd: context.extensionUri,
@@ -28492,6 +28507,9 @@ async function activate(context) {
       customTaskType: fetchedBySource[0] && fetchedBySource[0].definition && fetchedBySource[0].definition.type,
       customTaskPresentationOptions: fetchedBySource[0] && fetchedBySource[0].presentationOptions,
       customExecutionId: customExecution && customExecution.id,
+      taskTerminateCommandResult,
+      taskTerminateCommandRegistered: debugCommandList.includes('workbench.action.tasks.terminate'),
+      taskTerminateTaskCommandRegistered: debugCommandList.includes('workbench.action.tasks.terminateTask'),
       customOpened,
       customCallbackDefinition,
       activeDuringCustomTask,
@@ -34973,6 +34991,12 @@ process.stdin.resume();
                            "customTaskPresentationOptions", {}).get(
                                "reveal") == 3
                        and node_task_debug_probe.get("customExecutionId")
+                       and node_task_debug_probe.get(
+                           "taskTerminateCommandResult") is True
+                       and node_task_debug_probe.get(
+                           "taskTerminateCommandRegistered") is True
+                       and node_task_debug_probe.get(
+                           "taskTerminateTaskCommandRegistered") is True
                        and node_task_debug_probe.get("customOpened") is True
                        and node_task_debug_probe.get(
                            "customCallbackDefinition", {}).get(

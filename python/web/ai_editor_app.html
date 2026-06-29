@@ -2311,6 +2311,10 @@ button.review-pill { cursor:pointer; }
 .extension-runtime-run-chip.error,.extension-runtime-run-chip.failed { color:var(--fg-error); border-color:color-mix(in srgb,var(--fg-error) 48%,var(--border)); }
 .extension-runtime-run-chip.cancelled,.extension-runtime-run-chip.stopped { color:var(--fg-warning); border-color:color-mix(in srgb,var(--fg-warning) 48%,var(--border)); }
 .extension-runtime-run-chip strong { color:var(--fg); font-weight:600; max-width:180px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.extension-runtime-run-stop { width:18px; height:18px; border:1px solid color-mix(in srgb,var(--border) 80%,transparent);
+  border-radius:999px; background:color-mix(in srgb,var(--bg2) 86%,#000); color:var(--fg-dim);
+  font:10px/16px var(--mono); padding:0; cursor:pointer; flex:0 0 auto; }
+.extension-runtime-run-stop:hover,.extension-runtime-run-stop:focus { color:var(--fg-error); border-color:color-mix(in srgb,var(--fg-error) 55%,var(--border)); outline:none; }
 .extension-debug-session-tree { display:none; padding:6px 8px; border-bottom:1px solid color-mix(in srgb,var(--border) 70%,transparent);
   background:color-mix(in srgb,var(--bg2) 34%,transparent); }
 .extension-debug-session-tree.active { display:grid; gap:5px; }
@@ -38650,6 +38654,25 @@ async function runExtensionDebugCommand(command,label,sessionKey){
   }
   return ok;
 }
+async function stopExtensionRuntimeTask(executionId,label){
+  const id=String(executionId||'').trim();
+  if(!id)return false;
+  const result=await call('execute_command','workbench.action.tasks.terminate',id);
+  const ok=callSucceeded(result);
+  if(ok){
+    updateExtensionRuntimeTaskLifecycle({
+      state:'cancelled',
+      executionId:id,
+      label:label||'Extension Task',
+      message:'Cancelled from runtime UI'
+    });
+  }
+  const status=$('extension-runtime-status');
+  if(status)status.textContent=ok
+    ? 'Cancelled task '+(label||id)+'.'
+    : 'Task cancel failed: '+callFailedMessage(result,'runtime unavailable');
+  return ok;
+}
 function renderExtensionRuntimeDebugSessionTree(){
   const tree=$('extension-debug-session-tree');
   const panel=$('extension-runtime-panel');
@@ -38758,6 +38781,17 @@ function renderExtensionRuntimeRunStrip(){
         row.presentationPanel||''
       ].filter(Boolean).join(' · ');
       chip.appendChild(meta);
+    }
+    if(row.kind==='task'&&row.state==='running'){
+      const stop=document.createElement('button');
+      stop.type='button';
+      stop.className='extension-runtime-run-stop';
+      stop.title='Cancel task';
+      stop.setAttribute('aria-label','Cancel task '+String(row.label||row.key||''));
+      stop.dataset.runtimeTaskStop='1';
+      stop.textContent='■';
+      stop.onclick=ev=>{ev.preventDefault();ev.stopPropagation();stopExtensionRuntimeTask(row.key,row.label)};
+      chip.appendChild(stop);
     }
     strip.appendChild(chip);
   });
@@ -42120,10 +42154,12 @@ function extensionRuntimeDomSelfCheckSnapshot(){
     const previousContextAttachments=chatContextAttachments.slice();
     const previousApi=window.pywebview&&window.pywebview.api;
     const runtimeActionSmoke={};
+    const runtimeExecutedCommands=[];
     window.pywebview=window.pywebview||{};
     window.pywebview.api=Object.assign({},previousApi||{},{
       run_extension_task_type:async(taskType)=>({ok:true,taskType,executionId:'task-selftest',task:{name:'Selftest Task',definition:{type:taskType},problemMatchers:['$selftest']},commandLine:'echo selftest task',taskCount:1,raw:{exitCode:0,stdout:'src/selftest.ts:2:3: warning: Selftest task warning'}}),
-      start_extension_debugger_type:async(debugType,config,label)=>({ok:true,debugType,started:true,config,session:{id:'debug-selftest',type:debugType,name:label||debugType}})
+      start_extension_debugger_type:async(debugType,config,label)=>({ok:true,debugType,started:true,config,session:{id:'debug-selftest',type:debugType,name:label||debugType}}),
+      execute_command:async(command,...args)=>{runtimeExecutedCommands.push({command,args});return {ok:true,command,args}}
     });
     try{
       const lmToolRow=runtimeActionRowByType('prepare-lm-tool');
@@ -42148,6 +42184,17 @@ function extensionRuntimeDomSelfCheckSnapshot(){
       if(taskButton)taskButton.click();
       runtimeActionSmoke.taskRunLastAction=(($('extension-runtime-panel')||{}).dataset||{}).runtimeLastAction||'';
       runtimeActionSmoke.taskRunOk=(($('extension-runtime-panel')||{}).dataset||{}).runtimeLastActionOk||'';
+      updateExtensionRuntimeTaskLifecycle({
+        state:'running',
+        executionId:'task-running-selftest',
+        task:{name:'Running Selftest Task',definition:{type:'selftest.task'},problemMatchers:['$selftest']},
+        commandLine:'npm run watch',
+        metadata:{panel:'dedicated',reveal:'silent',terminalName:'Task: Running Selftest Task',terminalReuseKey:'dedicated:selftest.task:Running Selftest Task',isBackground:true,groupId:'build',groupLabel:'Build',problemMatcherCount:1}
+      });
+      const stopButton=runtimeRunStrip?runtimeRunStrip.querySelector('.extension-runtime-run-stop[data-runtime-task-stop="1"]'):null;
+      runtimeActionSmoke.taskStopButton=!!stopButton;
+      if(stopButton)stopButton.click();
+      runtimeActionSmoke.taskStopCommand=runtimeExecutedCommands.some(item=>item.command==='workbench.action.tasks.terminate'&&item.args&&item.args[0]==='task-running-selftest');
       const taskPrepare=runtimeList?runtimeList.querySelector('.extension-runtime-row[data-kind="TaskDefinition"] .extension-runtime-mini-action[title^="Prepare task"]'):null;
       if(taskPrepare)taskPrepare.click();
       runtimeActionSmoke.taskPrompt=$('chat-input')?$('chat-input').value:'';
@@ -42445,6 +42492,7 @@ function extensionRuntimeDomSelfCheckSnapshot(){
       runtimeRunChips:runtimeRunStrip?runtimeRunStrip.querySelectorAll('.extension-runtime-run-chip').length:0,
       runtimeTaskRunChips:runtimeRunStrip?runtimeRunStrip.querySelectorAll('.extension-runtime-run-chip[data-runtime-run-kind="task"]').length:0,
       runtimeDebugSessionChips:runtimeRunStrip?runtimeRunStrip.querySelectorAll('.extension-runtime-run-chip[data-runtime-run-kind="debug"]').length:0,
+      runtimeTaskStopButtons:runtimeRunStrip?runtimeRunStrip.querySelectorAll('.extension-runtime-run-stop[data-runtime-task-stop="1"]').length:0,
       runtimeRunStates:runtimeRunStrip?Array.from(runtimeRunStrip.querySelectorAll('.extension-runtime-run-chip')).map(item=>item.dataset.runtimeRunState||''):[],
       runtimeRunCommands:runtimeRunStrip?Array.from(runtimeRunStrip.querySelectorAll('.extension-runtime-run-chip')).map(item=>item.dataset.runtimeRunCommand||'').filter(Boolean):[],
       runtimeTaskProblemCount:runtimeTaskProblemRows.length,
@@ -42576,8 +42624,10 @@ function extensionRuntimeDomSelfCheckSnapshot(){
       && snapshot.runtimeActionSmoke.participantPrompt==='@selftest.chat '
       && snapshot.runtimeActionSmoke.contextAttached===true
       && snapshot.runtimeActionSmoke.taskRunLastAction==='run-task-definition'
+      && snapshot.runtimeActionSmoke.taskStopButton===true&&snapshot.runtimeActionSmoke.taskStopCommand===true
       && snapshot.runtimeActionSmoke.debugRunLastAction==='start-debugger'
       && snapshot.runtimeRunStripActive&&snapshot.runtimeTaskRunChips>=1&&snapshot.runtimeDebugSessionChips>=1
+      && snapshot.runtimeTaskStopButtons>=1
       && snapshot.runtimeRunStates.includes('done')&&snapshot.runtimeRunStates.includes('started')
       && snapshot.runtimeRunCommands.includes('echo selftest task')
       && snapshot.runtimeTaskProblemCount>=1&&snapshot.runtimeTaskProblemSources.some(value=>value.includes('Selftest Task'))&&snapshot.runtimeTaskProblemMessages.some(value=>value.includes('Selftest task warning'))&&snapshot.runtimeProblemsPanelTaskRows>=1

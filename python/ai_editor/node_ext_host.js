@@ -11670,6 +11670,23 @@ function buildVscodeModule(extDesc, extensionPath, storageRoot) {
                 _onDidEndTask.fire({ execution, task: execution.task });
                 _onDidEndTaskProcess.fire({ execution, exitCode });
             };
+            const terminateTaskExecution = async (executionId) => {
+                const wanted = String(executionId || '').trim();
+                const target = wanted
+                    ? _taskExecutions.find(item => item && String(item.id || '') === wanted)
+                    : _taskExecutions[_taskExecutions.length - 1];
+                if (!target || typeof target.terminate !== 'function') {
+                    return false;
+                }
+                await Promise.resolve(target.terminate());
+                return true;
+            };
+            if (!_commands.has('workbench.action.tasks.terminate')) {
+                _commands.set('workbench.action.tasks.terminate', terminateTaskExecution);
+            }
+            if (!_commands.has('workbench.action.tasks.terminateTask')) {
+                _commands.set('workbench.action.tasks.terminateTask', terminateTaskExecution);
+            }
             return {
                 registerTaskProvider(type, provider) {
                     const key = String(type || '');
