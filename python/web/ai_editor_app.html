@@ -405,8 +405,9 @@ body.window-resizing * { cursor:inherit !important; }
 .problems-filter-input:focus { border-color:var(--border-focus); }
 .problems-chip { display:inline-flex; align-items:center; gap:4px; min-height:20px; padding:1px 6px;
   border:1px solid var(--border); border-radius:999px; background:var(--bg3); }
-.problems-chip.button { cursor:pointer; user-select:none; }
+.problems-chip.button { cursor:pointer; user-select:none; color:inherit; font:inherit; }
 .problems-chip.active { color:var(--fg); border-color:var(--border-focus); background:var(--bg-hover); }
+.problems-chip.button:hover,.problems-chip.button:focus { outline:none; color:var(--fg); border-color:var(--border-focus); background:var(--bg-hover); }
 .problems-nav { height:20px; min-width:22px; padding:0 6px; border:1px solid var(--border); border-radius:999px;
   background:var(--bg3); color:var(--fg-dim); font:11px var(--mono); cursor:pointer; }
 .problems-nav:hover,.problems-nav:focus { outline:none; color:var(--fg); border-color:var(--border-focus); background:var(--bg-hover); }
@@ -13416,6 +13417,7 @@ const EDITOR_SUGGEST_MEMORY_KEY='sao.aiEditor.suggestMemory.v1';
 let _prevLineCount=1;
 let _editorDirtyDiffCache={key:'',decorations:[],summary:null};
 let _editorDirtyDiffActiveHunkIndex=0;
+let _editorVisualDecorationsCache={signature:'',renders:0,skips:0};
 function updateLineNums(){
   scheduleEditorSyntaxHighlight();
   const lines=$('editor-text').value.split('\n').length;
@@ -13676,8 +13678,8 @@ function renderEditorDirtyDiffToolbar(layer,state){
   toolbar.appendChild(open);
   layer.appendChild(toolbar);
 }
-function renderEditorDirtyDiffDecorations(layer,ta,metrics){
-  const state=editorDirtyDiffState();
+function renderEditorDirtyDiffDecorations(layer,ta,metrics,state){
+  state=state||editorDirtyDiffState();
   const decorations=state.decorations||[];
   const visibleHeight=ta.clientHeight||($('editor-container')&&$('editor-container').clientHeight)||100000;
   const hunks=editorDirtyDiffHunks(decorations);
@@ -13966,13 +13968,60 @@ function renderEditorStickyScroll(){
   });
   host.classList.add('visible');
 }
+function editorVisualDecorationsSignature(ta,metrics,visual,lines,dirty){
+  const value=String(ta&&ta.value||'');
+  const contentSignature=typeof editorDiffContentSignature==='function'
+    ? editorDiffContentSignature(value)
+    : String(value.length);
+  const foldingRanges=typeof _editorFoldingRanges!=='undefined'&&Array.isArray(_editorFoldingRanges)?_editorFoldingRanges:[];
+  const foldingContentLength=typeof _editorFoldingRangeContentLength==='undefined'?'':_editorFoldingRangeContentLength;
+  const folding=foldingRanges
+    .map(range=>[range.start,range.startLine,range.end,range.endLine,range.kind,range.source].join(':'))
+    .join(',');
+  const activeLine=(value.substring(0,ta.selectionStart||0).split('\n').length)||1;
+  const dirtySummary=(dirty&&dirty.summary)||{};
+  return [
+    typeof activeTab==='undefined'?'':activeTab,
+    typeof editorLang==='undefined'?'':editorLang,
+    contentSignature,activeLine,ta.selectionStart||0,ta.selectionEnd||0,
+    Math.round(ta.scrollTop||0),Math.round(ta.scrollLeft||0),lines.length,
+    Math.round(metrics.lineHeight*100)/100,Math.round(metrics.charWidth*100)/100,
+    JSON.stringify(visual||{}),typeof _editorDirtyDiffActiveHunkIndex==='undefined'?0:_editorDirtyDiffActiveHunkIndex,
+    dirty&&dirty.key||'',dirtySummary.total||0,dirtySummary.added||0,dirtySummary.modified||0,dirtySummary.removed||0,
+    foldingContentLength,folding
+  ].join('|');
+}
 function renderEditorVisualDecorations(){
   const layer=$('editor-visual-layer'),ta=$('editor-text');if(!layer||!ta)return;
+  if(!layer.dataset)layer.dataset={};
+  const metrics={...editorTextMetrics(ta),scrollTop:ta.scrollTop,scrollLeft:ta.scrollLeft},visual=editorVisualOptions(),lines=(ta.value||'').split('\n');
+  const dirty=typeof editorDirtyDiffState==='function'?editorDirtyDiffState():null;
+  const signature=editorVisualDecorationsSignature(ta,metrics,visual,lines,dirty);
+  const visualCache=typeof _editorVisualDecorationsCache!=='undefined'
+    ? _editorVisualDecorationsCache
+    : (globalThis._editorVisualDecorationsCache||(globalThis._editorVisualDecorationsCache={signature:'',renders:0,skips:0}));
+  if(visualCache.signature===signature&&layer.dataset.visualSignature===signature){
+    visualCache.skips++;
+    layer.dataset.visualRenderSkipped='1';
+    layer.dataset.visualRenderSkipCount=String(visualCache.skips);
+    return;
+  }
+  visualCache.signature=signature;
+  visualCache.renders++;
   layer.innerHTML='';
   layer.scrollTop=ta.scrollTop;layer.scrollLeft=ta.scrollLeft;
-  const metrics={...editorTextMetrics(ta),scrollTop:ta.scrollTop,scrollLeft:ta.scrollLeft},visual=editorVisualOptions(),lines=(ta.value||'').split('\n');
+  layer.dataset.visualSignature=signature;
+  layer.dataset.visualRenderSkipped='0';
+  layer.dataset.visualRenderCount=String(visualCache.renders);
+  layer.dataset.visualRenderSkipCount=String(visualCache.skips);
+  layer.dataset.visualLineCount=String(lines.length);
+  layer.dataset.visualScrollTop=String(Math.round(ta.scrollTop||0));
+  layer.dataset.visualScrollLeft=String(Math.round(ta.scrollLeft||0));
+  layer.dataset.visualDirtyDiffTotal=String((dirty&&dirty.summary&&dirty.summary.total)||0);
+  const dirtyHunks=typeof editorDirtyDiffHunks==='function'?editorDirtyDiffHunks((dirty&&dirty.decorations)||[]):[];
+  layer.dataset.visualDirtyDiffHunks=String(dirtyHunks.length);
   _updateLineHighlight(ta,(ta.value.substring(0,ta.selectionStart||0).split('\n').length)||1);
-  if(typeof renderEditorDirtyDiffDecorations==='function')renderEditorDirtyDiffDecorations(layer,ta,metrics);
+  if(typeof renderEditorDirtyDiffDecorations==='function')renderEditorDirtyDiffDecorations(layer,ta,metrics,dirty);
   renderEditorBracketPairs(layer,ta,metrics,visual);
   renderEditorFoldingDecorations(layer,ta,metrics);
   visual.rulers.forEach(ruler=>{
@@ -15191,7 +15240,7 @@ let _editorDefinitionRequest=0;
 let _editorDocumentHighlights=[],_editorDocumentHighlightRequest=0,_editorDocumentHighlightTimer=null,_editorDocumentHighlightContentLength=-1;
 let _editorDiagnostics=[],_editorDiagnosticRequest=0,_editorDiagnosticTimer=null,_editorDiagnosticContentLength=-1;
 let _editorActiveProblemIndex=0,_editorActiveProblemKey='';
-let _editorProblemsFilter={query:'',mode:'all',groupBy:'none',previewKey:''};
+let _editorProblemsFilter={query:'',mode:'all',groupBy:'none',severity:'all',source:'',previewKey:''};
 let _editorReferences=[],_editorReferenceIndex=0,_editorReferencesRequest=0;
 let _editorReferenceGroups=[],_editorLocationPeekLabel='';
 let _editorHierarchyMode='',_editorHierarchyDirection='',_editorHierarchyRoot=null,_editorHierarchyRows=[],_editorHierarchyIndex=0,_editorHierarchyRequest=0;
@@ -26420,6 +26469,13 @@ function editorProblemMatchesFilter(problem){
   if(mode==='warnings'&&editorProblemSeverityRank(problem&&problem.severity)!==1)return false;
   if(mode==='diff'&&(!problem||problem.kind!=='diff'))return false;
   if(mode==='diagnostics'&&problem&&problem.kind==='diff')return false;
+  const severity=String(filter.severity||'all').toLowerCase();
+  if(severity&&severity!=='all'){
+    const rowSeverity=problem&&problem.kind==='diff'?'diff':String(editorDiagnosticSeverityLabel(problem&&problem.severity)||'').toLowerCase();
+    if(rowSeverity!==severity)return false;
+  }
+  const source=String(filter.source||'').trim().toLowerCase();
+  if(source&&String(problem&&problem.source||'').trim().toLowerCase()!==source)return false;
   const query=String(filter.query||'').trim().toLowerCase();
   if(!query)return true;
   return query.split(/\s+/).every(part=>editorProblemSearchText(problem).includes(part));
@@ -26446,7 +26502,7 @@ function editorGroupedProblemRows(rows){
   return Array.from(map.entries()).map(([key,items])=>({key,label:key||'Unknown',rows:items}));
 }
 function setEditorProblemsFilter(partial){
-  _editorProblemsFilter=Object.assign({query:'',mode:'all',groupBy:'none',previewKey:''},_editorProblemsFilter||{},partial||{});
+  _editorProblemsFilter=Object.assign({query:'',mode:'all',groupBy:'none',severity:'all',source:'',previewKey:''},_editorProblemsFilter||{},partial||{});
   renderProblemsRows(editorAllProblemRows(_editorDiagnostics));
 }
 function editorProblemPreviewText(problem){
@@ -26465,10 +26521,12 @@ function toggleEditorProblemPreview(problem){
   return !!_editorProblemsFilter.previewKey;
 }
 function editorProblemSummary(rows){
-  const summary={count:0,errors:0,warnings:0,infos:0,hints:0,diff:0,diagnostics:0,quickFixable:0,diffOpenable:0,actions:0};
+  const summary={count:0,errors:0,warnings:0,infos:0,hints:0,diff:0,diagnostics:0,quickFixable:0,diffOpenable:0,actions:0,sources:{}};
   (Array.isArray(rows)?rows:[]).forEach(row=>{
     summary.count++;
     summary.actions+=Number(row&&row._problemActionCount)||2;
+    const source=String(row&&row.source||'Unknown');
+    summary.sources[source]=(summary.sources[source]||0)+1;
     if(row&&row.kind==='diff'){summary.diff++;summary.diffOpenable++;return}
     summary.quickFixable++;
     summary.diagnostics++;
@@ -26578,6 +26636,8 @@ function renderProblemsRows(rows){
   el.dataset.problemActiveIndex=String(_editorActiveProblemIndex+1);
   el.dataset.problemFilterQuery=String(_editorProblemsFilter.query||'');
   el.dataset.problemFilterMode=String(_editorProblemsFilter.mode||'all');
+  el.dataset.problemFilterSeverity=String(_editorProblemsFilter.severity||'all');
+  el.dataset.problemFilterSource=String(_editorProblemsFilter.source||'');
   el.dataset.problemGroupBy=String(_editorProblemsFilter.groupBy||'none');
   el.dataset.problemPreviewOpen=_editorProblemsFilter.previewKey?'1':'0';
   const head=document.createElement('div');head.className='problems-summary';
@@ -26592,7 +26652,15 @@ function renderProblemsRows(rows){
     ['diff',summary.diff,'Diff']
   ].forEach(item=>{
     if(!item[1])return;
-    const chip=document.createElement('span');chip.className='problems-chip '+item[0];chip.textContent=item[2]+': '+item[1];head.appendChild(chip);
+    const chip=document.createElement('button');
+    chip.type='button';
+    chip.className='problems-chip button '+item[0]+(String(_editorProblemsFilter.severity||'all')===item[0]?' active':'');
+    chip.textContent=item[2]+': '+item[1];
+    chip.dataset.problemFilter='severity';
+    chip.dataset.problemFilterValue=item[0];
+    chip.title='Filter by '+item[2].toLowerCase();
+    chip.onclick=ev=>{ev.preventDefault();setEditorProblemsFilter({severity:String(_editorProblemsFilter.severity||'all')===item[0]?'all':item[0]})};
+    head.appendChild(chip);
   });
   const total=document.createElement('span');total.className='problems-chip';total.textContent='Total: '+count;head.appendChild(total);
   if(summary.count!==visibleSummary.count){
@@ -26618,6 +26686,33 @@ function renderProblemsRows(rows){
     btn.onclick=ev=>{ev.preventDefault();setEditorProblemsFilter({mode:item[0]})};
     filterBar.appendChild(btn);
   });
+  [['all','Any Severity'],['error','Error'],['warning','Warning'],['info','Info'],['hint','Hint'],['diff','Diff']].forEach(item=>{
+    const btn=document.createElement('button');btn.type='button';btn.className='problems-chip button '+item[0]+(String(_editorProblemsFilter.severity||'all')===item[0]?' active':'');
+    btn.textContent=item[1];btn.dataset.problemFilter='severity';btn.dataset.problemFilterValue=item[0];
+    btn.onclick=ev=>{ev.preventDefault();setEditorProblemsFilter({severity:item[0]})};
+    filterBar.appendChild(btn);
+  });
+  Object.entries(summary.sources||{}).sort((a,b)=>b[1]-a[1]||String(a[0]).localeCompare(String(b[0]))).slice(0,6).forEach(([source,count])=>{
+    const btn=document.createElement('button');
+    btn.type='button';
+    btn.className='problems-chip button'+(String(_editorProblemsFilter.source||'')===String(source)?' active':'');
+    btn.textContent=String(source||'Unknown')+': '+String(count);
+    btn.dataset.problemFilter='source';
+    btn.dataset.problemFilterValue=String(source||'Unknown');
+    btn.title='Filter source '+String(source||'Unknown');
+    btn.onclick=ev=>{ev.preventDefault();setEditorProblemsFilter({source:String(_editorProblemsFilter.source||'')===String(source)?'':String(source)})};
+    filterBar.appendChild(btn);
+  });
+  if(_editorProblemsFilter.source){
+    const clearSource=document.createElement('button');
+    clearSource.type='button';
+    clearSource.className='problems-chip button active';
+    clearSource.textContent='Clear Source';
+    clearSource.dataset.problemFilter='source';
+    clearSource.dataset.problemFilterValue='';
+    clearSource.onclick=ev=>{ev.preventDefault();setEditorProblemsFilter({source:''})};
+    filterBar.appendChild(clearSource);
+  }
   [['none','Flat'],['file','File'],['source','Source'],['severity','Severity']].forEach(item=>{
     const btn=document.createElement('button');btn.type='button';btn.className='problems-chip button'+((_editorProblemsFilter.groupBy||'none')===item[0]?' active':'');
     btn.textContent='Group: '+item[1];btn.dataset.problemFilter='group';btn.dataset.problemFilterValue=item[0];
@@ -48774,6 +48869,12 @@ function editorDirtyDiffSelfCheckSnapshot(){
     const diffViewRows=diffHost?diffHost.querySelectorAll('.editor-diff-row.added,.editor-diff-row.modified,.editor-diff-row.removed').length:0;
     const diffSummary=diffHost?diffHost.querySelectorAll('.editor-diff-chip.added,.editor-diff-chip.modified,.editor-diff-chip.removed').length:0;
     const diffDatasetsOk=!!(diffHost&&diffHost.classList.contains('active')&&diffHost.dataset.diffAddedLines!==undefined&&diffHost.dataset.diffModifiedLines!==undefined&&diffHost.dataset.diffRemovedLines!==undefined&&diffHost.dataset.diffHunks!==undefined);
+    activeTab=id;
+    showEditorArea();
+    ed.value='alpha\nbeta changed\nnew\nomega';
+    editorDirty=true;
+    updateLineNums();
+    renderEditorVisualDecorations();
     const featureState=editorLanguageFeatureStateSnapshot();
     const featureAggregate=editorLanguageFeatureAggregateSnapshot();
     _editorDiagnostics=[normalizeEditorDiagnostic({
@@ -48782,10 +48883,26 @@ function editorDirtyDiffSelfCheckSnapshot(){
       severity:'warning',
       source:'Selfcheck',
       code:'selfcheck.problem'
+    }),normalizeEditorDiagnostic({
+      range:{start:{line:2,character:0},end:{line:2,character:3}},
+      message:'Compiler diagnostic problem.',
+      severity:'error',
+      source:'Compiler',
+      code:'compiler.problem'
     })].filter(Boolean);
     _editorDiagnosticContentLength=String(ed.value||'').length;
     renderEditorDiagnostics(_editorDiagnostics);
     renderProblemsRows(editorAllProblemRows(_editorDiagnostics));
+    renderEditorVisualDecorations();
+    const visualLayer=$('editor-visual-layer');
+    const visualSnapshot={
+      renderCount:visualLayer?Number(visualLayer.dataset.visualRenderCount||0):0,
+      renderSkipped:visualLayer?visualLayer.dataset.visualRenderSkipped:'',
+      renderSkipCount:visualLayer?Number(visualLayer.dataset.visualRenderSkipCount||0):0,
+      dirtyDiffTotal:visualLayer?Number(visualLayer.dataset.visualDirtyDiffTotal||0):0,
+      dirtyDiffHunks:visualLayer?Number(visualLayer.dataset.visualDirtyDiffHunks||0):0,
+      signatureReady:!!(visualLayer&&visualLayer.dataset.visualSignature&&visualLayer.dataset.visualLineCount&&visualLayer.dataset.visualScrollTop!==undefined)
+    };
     const problemsTab=document.querySelector('.ptab[data-ptab="problems"]');
     const problemRows=Array.from(document.querySelectorAll('#problems-content .problem-row'));
     const diagnosticRows=problemRows.filter(row=>row.dataset.problemKind==='diagnostic');
@@ -48794,7 +48911,19 @@ function editorDirtyDiffSelfCheckSnapshot(){
     const diffButtons=Array.from(document.querySelectorAll('#problems-content [data-problem-action="open-diff"]'));
     const navButtons=Array.from(document.querySelectorAll('#problems-content .problems-nav'));
     const summaryChips=Array.from(document.querySelectorAll('#problems-content .problems-chip')).map(chip=>chip.textContent);
+    const severityFilterButtons=Array.from(document.querySelectorAll('#problems-content .problems-chip.button[data-problem-filter="severity"]'));
+    const sourceFilterButtons=Array.from(document.querySelectorAll('#problems-content .problems-chip.button[data-problem-filter="source"]'));
     const problemsContent=$('problems-content');
+    const problemTabSnapshot={
+      count:problemsTab?problemsTab.dataset.problemCount:'',
+      diff:problemsTab?problemsTab.dataset.problemDiff:'',
+      active:problemsTab?problemsTab.dataset.problemActiveIndex:''
+    };
+    const problemPanelSnapshot={
+      actionCount:$('problems-panel')?$('problems-panel').dataset.problemActionCount:'',
+      quickFixable:problemsContent?problemsContent.dataset.problemQuickFixable:'',
+      diffOpenable:problemsContent?problemsContent.dataset.problemDiffOpenable:''
+    };
     const focusedDiff=diffRows.length?focusEditorProblem(editorAllProblemRows(_editorDiagnostics).find(row=>row.kind==='diff')):false;
     const activeRowsAfterFocus=Array.from(document.querySelectorAll('#problems-content .problem-row.active'));
     const activeDatasetAfterFocus=activeRowsAfterFocus.length?activeRowsAfterFocus[0].dataset.problemActive:'';
@@ -48802,7 +48931,8 @@ function editorDirtyDiffSelfCheckSnapshot(){
     const activeRowsAfterNav=Array.from(document.querySelectorAll('#problems-content .problem-row.active'));
     const rowsWithOrdinalAndKey=problemRows.filter(row=>row.dataset.problemOrdinal&&row.dataset.problemKey&&row.dataset.problemActionCount);
     const rowsWithAria=problemRows.filter(row=>row.getAttribute('role')==='option'&&row.getAttribute('aria-selected')!==null);
-    const previewTarget=editorAllProblemRows(_editorDiagnostics).find(row=>row&&row.kind==='diagnostic');
+    const previewTarget=editorAllProblemRows(_editorDiagnostics).find(row=>row&&row.kind!=='diff');
+    _editorProblemsFilter.previewKey='';
     const previewOpened=toggleEditorProblemPreview(previewTarget);
     const previewRows=Array.from(document.querySelectorAll('#problems-content .problem-row.preview-open,[data-problem-preview-open="1"]'));
     const previewBoxes=Array.from(document.querySelectorAll('#problems-content .problem-quickfix-preview')).filter(box=>box.textContent.includes('Quick Fix preview')||box.textContent.includes('Diff preview'));
@@ -48812,6 +48942,31 @@ function editorDirtyDiffSelfCheckSnapshot(){
     const filterInput=document.querySelector('#problems-content .problems-filter-input');
     const activeFilterButtons=Array.from(document.querySelectorAll('#problems-content .problems-chip.button.active')).map(btn=>btn.dataset.problemFilter+':'+btn.dataset.problemFilterValue);
     const sourceGroupHeaders=Array.from(document.querySelectorAll('#problems-content .problem-group-header'));
+    const filteredSnapshot={
+      query:filteredContent?filteredContent.dataset.problemFilterQuery:'',
+      mode:filteredContent?filteredContent.dataset.problemFilterMode:'',
+      groupBy:filteredContent?filteredContent.dataset.problemGroupBy:'',
+      visible:filteredContent?Number(filteredContent.dataset.problemVisibleCount||0):0,
+      hidden:filteredContent?Number(filteredContent.dataset.problemHiddenCount||0):0,
+      rows:filteredRows.length,
+      inputValue:filterInput?filterInput.value:'',
+      activeButtons:activeFilterButtons.slice(),
+      sourceGroups:sourceGroupHeaders.length
+    };
+    setEditorProblemsFilter({query:'',mode:'all',severity:'warning',source:'Selfcheck',groupBy:'severity'});
+    const severitySourceContent=$('problems-content');
+    const severitySourceRows=Array.from(document.querySelectorAll('#problems-content .problem-row')).filter(row=>row.dataset.problemKind!=='empty');
+    const severitySourceActive=Array.from(document.querySelectorAll('#problems-content .problems-chip.button.active')).map(btn=>btn.dataset.problemFilter+':'+btn.dataset.problemFilterValue);
+    const severityGroupHeaders=Array.from(document.querySelectorAll('#problems-content .problem-group-header'));
+    const severitySourceSnapshot={
+      severity:severitySourceContent?severitySourceContent.dataset.problemFilterSeverity:'',
+      source:severitySourceContent?severitySourceContent.dataset.problemFilterSource:'',
+      rows:severitySourceRows.length,
+      hidden:severitySourceContent?Number(severitySourceContent.dataset.problemHiddenCount||0):0,
+      active:severitySourceActive.slice(),
+      groups:severityGroupHeaders.length
+    };
+    setEditorProblemsFilter({query:'',mode:'all',severity:'all',source:'',groupBy:'none'});
     setEditorProblemsFilter({query:'',mode:'diff',groupBy:'file'});
     const diffFilterContent=$('problems-content');
     const diffFilteredRows=Array.from(document.querySelectorAll('#problems-content .problem-row')).filter(row=>row.dataset.problemKind==='diff');
@@ -48838,6 +48993,12 @@ function editorDirtyDiffSelfCheckSnapshot(){
       activeHunkRows,
       activeHunkGutters,
       rulerMarkers,
+      visualRenderCount:visualSnapshot.renderCount,
+      visualRenderSkipped:visualSnapshot.renderSkipped,
+      visualRenderSkipCount:visualSnapshot.renderSkipCount,
+      visualDirtyDiffTotal:visualSnapshot.dirtyDiffTotal,
+      visualDirtyDiffHunks:visualSnapshot.dirtyDiffHunks,
+      visualSignatureReady:visualSnapshot.signatureReady,
       openedDiff,
       diffRows:diffViewRows,
       diffSummary,
@@ -48853,17 +49014,19 @@ function editorDirtyDiffSelfCheckSnapshot(){
       problemCount:problemRows.length,
       problemDiagnosticCount:diagnosticRows.length,
       problemDiffCount:diffRows.length,
-      problemTabCount:problemsTab?problemsTab.dataset.problemCount:'',
-      problemTabDiff:problemsTab?problemsTab.dataset.problemDiff:'',
-      problemTabActive:problemsTab?problemsTab.dataset.problemActiveIndex:'',
-      problemPanelActionCount:$('problems-panel')?$('problems-panel').dataset.problemActionCount:'',
-      problemContentQuickFixable:problemsContent?problemsContent.dataset.problemQuickFixable:'',
-      problemContentDiffOpenable:problemsContent?problemsContent.dataset.problemDiffOpenable:'',
+      problemTabCount:problemTabSnapshot.count,
+      problemTabDiff:problemTabSnapshot.diff,
+      problemTabActive:problemTabSnapshot.active,
+      problemPanelActionCount:problemPanelSnapshot.actionCount,
+      problemContentQuickFixable:problemPanelSnapshot.quickFixable,
+      problemContentDiffOpenable:problemPanelSnapshot.diffOpenable,
       problemRowDatasetOk:problemRows.every(row=>row.dataset.problemKind&&row.dataset.problemLine&&row.dataset.problemSource!==undefined&&row.dataset.problemCode!==undefined),
       problemRowStateDatasetOk:rowsWithOrdinalAndKey.length===problemRows.length&&rowsWithAria.length===problemRows.length,
       quickFixCount:quickFixButtons.length,
       diffActionCount:diffButtons.length,
       problemNavCount:navButtons.length,
+      severityFilterButtonCount:severityFilterButtons.length,
+      sourceFilterButtonCount:sourceFilterButtons.length,
       activeProblemCount:activeRowsAfterFocus.length,
       activeProblemDataset:activeDatasetAfterFocus,
       navigatedProblem,
@@ -48871,15 +49034,21 @@ function editorDirtyDiffSelfCheckSnapshot(){
       previewOpened,
       previewRows:previewRows.length,
       previewBoxes:previewBoxes.length,
-      filteredQuery:filteredContent?filteredContent.dataset.problemFilterQuery:'',
-      filteredMode:filteredContent?filteredContent.dataset.problemFilterMode:'',
-      filteredGroupBy:filteredContent?filteredContent.dataset.problemGroupBy:'',
-      filteredVisible:filteredContent?Number(filteredContent.dataset.problemVisibleCount||0):0,
-      filteredHidden:filteredContent?Number(filteredContent.dataset.problemHiddenCount||0):0,
-      filteredRows:filteredRows.length,
-      filterInputValue:filterInput?filterInput.value:'',
-      activeFilterButtons,
-      sourceGroupCount:sourceGroupHeaders.length,
+      filteredQuery:filteredSnapshot.query,
+      filteredMode:filteredSnapshot.mode,
+      filteredGroupBy:filteredSnapshot.groupBy,
+      filteredVisible:filteredSnapshot.visible,
+      filteredHidden:filteredSnapshot.hidden,
+      filteredRows:filteredSnapshot.rows,
+      filterInputValue:filteredSnapshot.inputValue,
+      activeFilterButtons:filteredSnapshot.activeButtons,
+      sourceGroupCount:filteredSnapshot.sourceGroups,
+      severitySourceSeverity:severitySourceSnapshot.severity,
+      severitySourceSource:severitySourceSnapshot.source,
+      severitySourceRows:severitySourceSnapshot.rows,
+      severitySourceHidden:severitySourceSnapshot.hidden,
+      severitySourceActive:severitySourceSnapshot.active,
+      severityGroupCount:severitySourceSnapshot.groups,
       diffFilterMode:diffFilterContent?diffFilterContent.dataset.problemFilterMode:'',
       diffFilterGroupBy:diffFilterContent?diffFilterContent.dataset.problemGroupBy:'',
       diffFilterRows:diffFilteredRows.length,
@@ -48894,6 +49063,7 @@ function editorDirtyDiffSelfCheckSnapshot(){
         toolbar&&toolbar.dataset.dirtyDiffCanNavigate==='1'&&toolbar.dataset.dirtyDiffCanOpen==='1'&&toolbar.dataset.dirtyDiffShortcut==='Alt+F7/F7'&&
         toolbarActions.map(btn=>btn.dataset.dirtyDiffAction||'').join(',').includes('open')&&toolbarActions.every(btn=>!btn.disabled)&&
         activeHunkRows>0&&activeHunkGutters>0&&rulerMarkers>0&&
+        visualSnapshot.renderCount>0&&visualSnapshot.renderSkipped==='1'&&visualSnapshot.renderSkipCount>0&&visualSnapshot.dirtyDiffTotal>0&&visualSnapshot.dirtyDiffHunks>0&&visualSnapshot.signatureReady&&
         openedDiff&&diffViewRows>0&&diffSummary>=3&&diffDatasetsOk&&
         ((featureState.features&&featureState.features.diff&&featureState.features.diff.total)||0)>0&&
         ((featureState.features&&featureState.features.diff&&featureState.features.diff.hunks)||0)>0&&
@@ -48903,14 +49073,16 @@ function editorDirtyDiffSelfCheckSnapshot(){
         quickFixButtons.length>=1&&diffButtons.length>=1&&
         navButtons.length>=2&&activeRowsAfterFocus.length===1&&activeDatasetAfterFocus==='1'&&
         navigatedProblem&&activeRowsAfterNav.length===1&&rowsWithOrdinalAndKey.length===problemRows.length&&rowsWithAria.length===problemRows.length&&
-        Number($('problems-panel')&&$('problems-panel').dataset.problemActionCount||0)>=problemRows.length*2&&
-        Number(problemsContent&&problemsContent.dataset.problemQuickFixable||0)>=1&&Number(problemsContent&&problemsContent.dataset.problemDiffOpenable||0)>=1&&
+        Number(problemPanelSnapshot.actionCount||0)>=problemRows.length*2&&
+        Number(problemPanelSnapshot.quickFixable||0)>=1&&Number(problemPanelSnapshot.diffOpenable||0)>=1&&
         previewOpened&&previewRows.length>=1&&previewBoxes.length>=1&&
-        filteredContent&&filteredContent.dataset.problemFilterQuery==='Selfcheck'&&filteredContent.dataset.problemFilterMode==='diagnostics'&&filteredContent.dataset.problemGroupBy==='source'&&
-        Number(filteredContent.dataset.problemVisibleCount||0)>=1&&Number(filteredContent.dataset.problemHiddenCount||0)>=1&&
-        filterInput&&filterInput.value==='Selfcheck'&&activeFilterButtons.includes('mode:diagnostics')&&activeFilterButtons.includes('group:source')&&sourceGroupHeaders.length>=1&&
+        filteredSnapshot.query==='Selfcheck'&&filteredSnapshot.mode==='diagnostics'&&filteredSnapshot.groupBy==='source'&&
+        filteredSnapshot.visible>=1&&filteredSnapshot.hidden>=1&&
+        filteredSnapshot.inputValue==='Selfcheck'&&filteredSnapshot.activeButtons.includes('mode:diagnostics')&&filteredSnapshot.activeButtons.includes('group:source')&&filteredSnapshot.sourceGroups>=1&&
+        severityFilterButtons.length>=5&&sourceFilterButtons.length>=2&&
+        severitySourceSnapshot.severity==='warning'&&severitySourceSnapshot.source==='Selfcheck'&&severitySourceSnapshot.rows===1&&severitySourceSnapshot.hidden>=2&&severitySourceSnapshot.active.includes('severity:warning')&&severitySourceSnapshot.active.includes('source:Selfcheck')&&severitySourceSnapshot.groups>=1&&
         diffFilterContent&&diffFilterContent.dataset.problemFilterMode==='diff'&&diffFilterContent.dataset.problemGroupBy==='file'&&diffFilteredRows.length>=1&&fileGroupHeaders.length>=1&&
-        problemsTab&&Number(problemsTab.dataset.problemDiff)>0&&
+        Number(problemTabSnapshot.diff)>0&&
         problemRows.every(row=>row.dataset.problemKind&&row.dataset.problemLine)&&focusedDiff&&
         (reset.summary&&reset.summary.total||0)===0
     };

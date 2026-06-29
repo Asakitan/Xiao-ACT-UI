@@ -10174,6 +10174,7 @@ function setEditorDropPasteOptionIndex(index){ _editorDropPasteOptionIndex = ind
             "editorClickAfterLineEndInfo",
             "handleEditorUnfoldOnClickAfterEndOfLine",
             "_updateLineHighlight",
+            "editorVisualDecorationsSignature",
             "renderEditorVisualDecorations",
             "editorRenderWhitespaceMode",
             "editorRenderControlCharactersEnabled",
@@ -16074,7 +16075,12 @@ console.log("command palette quick access helpers ok");
            and "open.dataset.dirtyDiffAction='open';" in html
            and "if(e.key==='F7'&&!e.ctrlKey&&!e.metaKey)" in html
            and "if(e.altKey&&!e.shiftKey){openActiveEditorDirtyDiff();return}" in html
-           and "function renderEditorDirtyDiffDecorations(layer,ta,metrics)" in html
+           and "function renderEditorDirtyDiffDecorations(layer,ta,metrics,state)" in html
+           and "let _editorVisualDecorationsCache={signature:'',renders:0,skips:0};" in html
+           and "function editorVisualDecorationsSignature(ta,metrics,visual,lines,dirty)" in html
+           and "layer.dataset.visualRenderSkipped='1';" in html
+           and "layer.dataset.visualRenderCount=String(visualCache.renders);" in html
+           and "layer.dataset.visualDirtyDiffTotal=String((dirty&&dirty.summary&&dirty.summary.total)||0);" in html
            and "updateEditorLanguageFeatureState('diff'" in html
            and "setActiveEditorBaselineContent" in html
            and "function editorDiffLineClassMaps(originalContent,modifiedContent)" in html
@@ -16086,6 +16092,8 @@ console.log("command palette quick access helpers ok");
             and "toolbarStateDatasetOk" in html
             and "toolbarActionDatasets" in html
             and "activeHunkRows" in html
+           and "visualRenderCount" in html
+           and "visualRenderSkipped" in html
            and "problemDiagnosticCount" in html
            and "problemDiffCount" in html
            and "problemRowDatasetOk" in html
@@ -16102,6 +16110,11 @@ console.log("command palette quick access helpers ok");
            and "function editorGroupedProblemRows(rows)" in html
            and "function toggleEditorProblemPreview(problem)" in html
            and "function editorProblemPreviewText(problem)" in html
+           and "severity:'all',source:''" in html
+           and "el.dataset.problemFilterSeverity=String(_editorProblemsFilter.severity||'all');" in html
+           and "el.dataset.problemFilterSource=String(_editorProblemsFilter.source||'');" in html
+           and "btn.dataset.problemFilter='severity';btn.dataset.problemFilterValue=item[0];" in html
+           and "btn.dataset.problemFilter='source';" in html
            and "dataset.problemQuickFixable" in html
            and "dataset.problemDiffOpenable" in html
            and "dataset.problemActionCount" in html
@@ -16113,6 +16126,8 @@ console.log("command palette quick access helpers ok");
            and "problemHiddenCount" in html
            and "previewOpened" in html
            and "filteredQuery" in html
+           and "severityFilterButtonCount" in html
+           and "severitySourceSeverity" in html
            and "diffFilterRows" in html
            and "diffActionCount" in html
             and "rulerMarkers" in html
