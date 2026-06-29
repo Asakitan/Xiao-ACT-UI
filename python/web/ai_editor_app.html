@@ -1018,12 +1018,12 @@ pre.code-block code .type { color:var(--fg-type); }
 
 /* Chat input */
 .chat-input-area { flex-shrink:0; background:linear-gradient(180deg, transparent 0, var(--bg) 18px);
-  padding:14px 12px 12px; max-width:none; margin:0 auto; width:100%; box-sizing:border-box;
+  padding:18px 12px 14px; max-width:none; margin:0 auto; width:100%; box-sizing:border-box;
   display:flex; justify-content:center; align-items:center; }
 .chat-input-area > div { width:100%; display:flex; justify-content:center; }
 .chat-input-container { position:relative; border-radius:8px; border:1px solid var(--border);
   background:var(--bg3); transition:border-color .15s, box-shadow .35s, background .15s; overflow:visible;
-  width:clamp(1040px,66.666%,1220px); max-width:100%; min-height:96px;
+  width:66.666%; min-width:min(720px,100%); max-width:1280px; min-height:120px;
   display:flex; flex-direction:column; justify-content:center; }
 .chat-input-container:focus-within { border-color:var(--border-focus); box-shadow:0 0 0 1px var(--border-focus); }
 .chat-input-container.sendable { border-color:color-mix(in srgb, var(--border-focus) 35%, var(--border)); }
@@ -1168,10 +1168,10 @@ pre.code-block code .type { color:var(--fg-type); }
 .chat-queue-badge { display:inline-flex; align-items:center; gap:4px; color:var(--fg-accent);
   font:10px/16px var(--mono); border:1px solid color-mix(in srgb,var(--fg-accent) 45%,var(--border));
   border-radius:999px; padding:0 6px; background:color-mix(in srgb,var(--fg-accent) 9%,transparent); }
-.chat-input-row { display:flex; gap:0; align-items:center; min-height:60px; }
+.chat-input-row { display:flex; gap:0; align-items:center; min-height:76px; }
 .chat-input { flex:1; background:transparent; color:var(--fg); border:none;
-  padding:14px 13px 10px; font:13px/20px var(--sans); resize:none;
-  outline:none; min-height:60px; max-height:200px; }
+  padding:12px 13px 10px; font:13px/20px var(--sans); resize:none;
+  outline:none; min-height:72px; max-height:220px; }
 .chat-input::placeholder { color:var(--fg-dim); }
 .send-btn { width:26px; height:26px; background:var(--btn); color:#fff; border:none; border-radius:5px;
   margin:0 8px 0 0; cursor:pointer; display:flex; align-items:center; justify-content:center;
@@ -1715,6 +1715,11 @@ pre.code-block code .type { color:var(--fg-type); }
 .editor-language-status.empty, .editor-language-status.cancelled { color:var(--fg-dim); }
 .editor-language-status.warning { color:var(--fg-warning); }
 .editor-language-status.error { color:var(--fg-error); }
+.editor-surface-status { max-width:170px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; color:var(--fg-dim); }
+.editor-surface-status.ready { color:var(--fg-success); }
+.editor-surface-status.warning { color:var(--fg-warning); }
+.editor-surface-status.error { color:var(--fg-error); }
+.editor-surface-status.running { color:var(--fg-accent); }
 .editor-language-panel { position:fixed; z-index:240; width:min(560px, calc(100vw - 28px)); max-height:min(430px, calc(100vh - 58px));
   display:none; grid-template-rows:auto auto minmax(0,1fr); border:1px solid var(--border-focus); border-radius:6px;
   background:var(--bg2); color:var(--fg); box-shadow:0 10px 28px #00000066; overflow:hidden; }
@@ -4235,7 +4240,7 @@ pre.code-block { overflow:visible; }
                   <button type="button" class="chat-prompt-shortcut utility" data-chat-prompt-action="clear-draft" onclick="clearAssistantDraft()" title="Clear the current draft">Clear</button>
                 </div>
                 <div class="chat-input-row">
-                  <textarea class="chat-input" id="chat-input" rows="1" data-i18n="ask_placeholder" placeholder="Ask anything... (/ commands, @ context, # tools)" aria-label="Ask Agent" aria-describedby="chat-input-status chat-input-help" aria-autocomplete="list" aria-haspopup="listbox" aria-expanded="false"></textarea>
+                  <textarea class="chat-input" id="chat-input" rows="3" data-i18n="ask_placeholder" placeholder="Ask anything... (/ commands, @ context, # tools)" aria-label="Ask Agent" aria-describedby="chat-input-status chat-input-help" aria-autocomplete="list" aria-haspopup="listbox" aria-expanded="false"></textarea>
                   <button class="send-btn" id="send-btn" onclick="doSend()" title="Send" aria-label="Send" aria-disabled="true"><svg viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M8 2.5l-5 5h3.5V13h3V7.5H13L8 2.5z"/></svg></button>
                 </div>
                 <div class="sr-only" id="chat-input-help">Enter sends, Shift+Enter inserts a new line, Ctrl+Enter also sends, Escape cancels editing or stops a running response.</div>
@@ -4332,6 +4337,7 @@ pre.code-block { overflow:visible; }
   <span class="sb-item" id="status-eol">LF</span>
   <span class="sb-item" id="status-language" title="Select Language Mode" style="cursor:pointer" onclick="showLanguagePicker()">{} Plain Text</span>
   <span class="sb-item editor-language-status ready" id="status-language-service" title="Language services" role="button" tabindex="0" aria-haspopup="dialog" aria-expanded="false" onclick="toggleEditorLanguageStatusPanel(event)" onkeydown="handleEditorLanguageStatusKey(event)">Lang: Ready</span>
+  <span class="sb-item editor-surface-status ready" id="status-editor-surface" title="Editor surfaces">Editor: Ready</span>
   <span class="sb-item" id="status-mode" title="Mode" style="cursor:pointer;font-weight:bold" onclick="cycleMode()">Agent</span>
   <span class="sb-item" id="status-approval" title="Approval level" style="cursor:pointer;color:var(--fg-dim)" onclick="cycleApproval()">◎ Default</span>
   <span class="sb-item status-context-usage" id="status-context-usage" title="Content window usage">
@@ -6722,6 +6728,7 @@ async function init(){
   refreshHistory();await loadMode();await loadChatControls();await renderProviderTabs();
   setLang(_curLang,{persist:false});
   renderWelcome();
+  if(typeof refreshEditorSurfaceState==='function')refreshEditorSurfaceState({running:true});
   $('chat-input').focus();
 }
 
@@ -14769,6 +14776,7 @@ function setEditorLanguage(lang){
   if(typeof scheduleEditorSemanticTokens==='function')scheduleEditorSemanticTokens(360);
   if(typeof scheduleEditorFoldingRanges==='function')scheduleEditorFoldingRanges(420);
   if(typeof scheduleEditorDocumentColors==='function')scheduleEditorDocumentColors(460);
+  if(typeof scheduleEditorSurfaceStateRefresh==='function')scheduleEditorSurfaceStateRefresh(280);
 }
 
 let _editorSyntaxRaf=0;
@@ -14865,6 +14873,7 @@ async function editorUndo(){
   if(typeof scheduleEditorFoldingRanges==='function')scheduleEditorFoldingRanges(460);
   if(typeof clearEditorDocumentColors==='function')clearEditorDocumentColors();
   if(typeof scheduleEditorDocumentColors==='function')scheduleEditorDocumentColors(500);
+  if(typeof scheduleEditorSurfaceStateRefresh==='function')scheduleEditorSurfaceStateRefresh(320);
 }
 async function editorRedo(){
   if(typeof editorCancelSnippetSession==='function')editorCancelSnippetSession(false);
@@ -14931,6 +14940,7 @@ function _editorInputWithUndo(e){
   scheduleEditorDocumentColors();
   applyEditorLinkedEditingFromInput();
   requestEditorOnTypeFormatting(ch,true);
+  if(typeof scheduleEditorSurfaceStateRefresh==='function')scheduleEditorSurfaceStateRefresh(320);
 }
 
 let _editorSuggestItems=[],_editorSuggestIndex=0,_editorSuggestRequest=0,_editorSuggestResolveRequest=0,_editorSuggestDetailsOpen=false;
@@ -15006,6 +15016,61 @@ function editorProviderPayload(kind,extra){
     requestKey:'editor:'+String(kind||'')+':'+tabKey,
     language:editorLang,content:value,dirty:editorDirty,offset,position:editorPositionFromOffset(value,offset)
   },extra||{});
+}
+let _editorSurfaceState=null,_editorSurfaceStateTimer=null,_editorSurfaceStateSeq=0;
+function editorSurfaceStatePayload(){
+  const tab=activeEditorTab(),value=ed&&typeof ed.value==='string'?ed.value:'';
+  return {
+    uri:(tab&&tab.filePath)||editorUntitledUri(tab),
+    filePath:(tab&&tab.filePath)||'',
+    workspacePath:(tab&&tab.workspacePath)||'',
+    name:(tab&&tab.name)||editorFileName||'untitled',
+    language:editorLang||'plaintext',
+    content:value,
+    baseContent:tab&&Object.prototype.hasOwnProperty.call(tab,'originalContent')?tab.originalContent:null,
+    dirty:!!editorDirty,
+    diagnostics:Array.isArray(_editorDiagnostics)?_editorDiagnostics:[]
+  };
+}
+function renderEditorSurfaceStatus(state){
+  _editorSurfaceState=state||_editorSurfaceState;
+  const el=$('status-editor-surface');if(!el)return _editorSurfaceState;
+  const s=_editorSurfaceState||{};
+  const lang=s.language||{},diag=s.diagnostics||{},diff=s.diff||{},terminal=s.terminal||{},workspace=s.workspace||{};
+  const cls=String(s.state||'ready');
+  el.className='sb-item editor-surface-status '+cls;
+  el.dataset.state=cls;
+  el.dataset.workspaceSource=String(workspace.source||'');
+  el.dataset.workspaceRoot=String(workspace.root||'');
+  el.dataset.terminalProfile=String(terminal.profile||'');
+  el.dataset.languageProviders=String(lang.providerCount||0);
+  el.dataset.formatProviders=String((s.formatting&&s.formatting.providerCount)||0);
+  el.dataset.diagnostics=String(diag.count||0);
+  el.dataset.diffTotal=String(diff.total||0);
+  el.dataset.diffHunks=String(diff.hunks||0);
+  el.dataset.settingsScopes=Array.isArray(s.settings&&s.settings.targetScopes)?s.settings.targetScopes.join(','):'';
+  el.textContent=cls==='error'?'Editor: Issues':(cls==='warning'?'Editor: Check':'Editor: Ready');
+  el.title=[
+    String(s.message||'Editor surfaces ready'),
+    workspace.root?'Workspace: '+workspace.root:'',
+    terminal.profile?'Terminal: '+terminal.profile:'',
+    'Providers: '+String(lang.providerCount||0),
+    'Diagnostics: '+String(diag.count||0),
+    'Diff: '+String(diff.total||0)
+  ].filter(Boolean).join('\n');
+  return _editorSurfaceState;
+}
+async function refreshEditorSurfaceState(opts){
+  const seq=++_editorSurfaceStateSeq;
+  if(opts&&opts.running)renderEditorSurfaceStatus({...(_editorSurfaceState||{}),state:'running',message:'Editor surfaces refreshing'});
+  const res=await call('editor_surface_state',editorSurfaceStatePayload());
+  if(seq!==_editorSurfaceStateSeq)return _editorSurfaceState;
+  if(res&&res.ok!==false&&!res.error)return renderEditorSurfaceStatus(res);
+  return renderEditorSurfaceStatus({...(_editorSurfaceState||{}),state:'warning',message:callFailedMessage(res,'Editor surface state unavailable')});
+}
+function scheduleEditorSurfaceStateRefresh(delay){
+  clearTimeout(_editorSurfaceStateTimer);
+  _editorSurfaceStateTimer=setTimeout(()=>refreshEditorSurfaceState(),delay==null?260:delay);
 }
 function editorProviderResultCancelled(res){
   return !!(res&&(res.cancelled===true||res.reason==='superseded'));
@@ -43194,6 +43259,7 @@ ed.addEventListener('input',function(){
   const tab=document.querySelector('.tab[data-tab-id="'+activeTab+'"]');
   if(tab&&!tab.classList.contains('dirty'))tab.classList.add('dirty');
   scheduleEditorAutoSave();
+  if(typeof scheduleEditorSurfaceStateRefresh==='function')scheduleEditorSurfaceStateRefresh(320);
 });
 
 // ── Enhanced Find with regex/case/word toggles ──

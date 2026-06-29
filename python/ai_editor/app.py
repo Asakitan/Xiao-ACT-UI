@@ -11,6 +11,7 @@ the pywebview window in a background thread if not already running.
 from __future__ import annotations
 
 import base64
+import difflib
 import fnmatch
 import inspect
 import json
@@ -2803,6 +2804,300 @@ class AIEditorAPI:
             "iconThemes": sum(
                 1 for item in themes if item.get("themeType") != "color"),
         }
+
+    @staticmethod
+    def _editor_diff_surface_summary(
+            base_content: Any, content: str, dirty: bool) -> Dict[str, Any]:
+        if base_content is None:
+            return {
+                "state": "dirty" if dirty else "clean",
+                "hasBase": False,
+                "dirty": bool(dirty),
+                "added": 0,
+                "modified": 0,
+                "removed": 0,
+                "total": 0,
+                "hunks": 0,
+                "truncated": False,
+                "message": "Diff: dirty" if dirty else "Diff: clean",
+            }
+        before = str(base_content)
+        after = str(content or "")
+        if before == after:
+            return {
+                "state": "clean",
+                "hasBase": True,
+                "dirty": bool(dirty),
+                "added": 0,
+                "modified": 0,
+                "removed": 0,
+                "total": 0,
+                "hunks": 0,
+                "truncated": False,
+                "message": "Diff: clean",
+            }
+        before_lines = before.splitlines()
+        after_lines = after.splitlines()
+        truncated = len(before_lines) + len(after_lines) > 20000
+        if truncated:
+            before_lines = before_lines[:10000]
+            after_lines = after_lines[:10000]
+        added = modified = removed = hunks = 0
+        for tag, i1, i2, j1, j2 in difflib.SequenceMatcher(
+                None, before_lines, after_lines, autojunk=True).get_opcodes():
+            if tag == "equal":
+                continue
+            hunks += 1
+            old_count = max(0, i2 - i1)
+            new_count = max(0, j2 - j1)
+            if tag == "replace":
+                shared = min(old_count, new_count)
+                modified += shared
+                removed += max(0, old_count - shared)
+                added += max(0, new_count - shared)
+            elif tag == "delete":
+                removed += old_count
+            elif tag == "insert":
+                added += new_count
+        total = added + modified + removed
+        return {
+            "state": "dirty" if total else "clean",
+            "hasBase": True,
+            "dirty": bool(dirty or total),
+            "added": added,
+            "modified": modified,
+            "removed": removed,
+            "total": total,
+            "hunks": hunks,
+            "truncated": truncated,
+            "message": (
+                f"Diff: +{added} ~{modified} -{removed}"
+                if total else "Diff: clean"),
+        }
+
+    @staticmethod
+    def _editor_diagnostic_surface_summary(
+            diagnostics: Any) -> Dict[str, Any]:
+        values = diagnostics if isinstance(diagnostics, list) else (
+            [] if diagnostics is None else [diagnostics])
+        counts = {"errors": 0, "warnings": 0, "infos": 0, "hints": 0}
+        normalized: List[Dict[str, Any]] = []
+        for item in values:
+            value = _json_ready_language_value(item)
+            if not isinstance(value, dict):
+                continue
+            normalized.append(value)
+            severity = int(value.get("severity") or 0)
+            if severity == 0:
+                counts["errors"] += 1
+            elif severity == 1:
+                counts["warnings"] += 1
+            elif severity == 2:
+                counts["infos"] += 1
+            else:
+                counts["hints"] += 1
+        total = len(normalized)
+        return {
+            "state": (
+                "error" if counts["errors"] else
+                "warning" if counts["warnings"] else
+                "ready" if total else "empty"),
+            "count": total,
+            **counts,
+            "items": normalized[:20],
+            "truncated": len(normalized) > 20,
+            "message": (
+                f"Diagnostics: {total}" if total else "Diagnostics: 0"),
+        }
+
+    def _editor_provider_surface_summary(
+            self, language: str, content: str, uri: Any) -> Dict[str, Any]:
+        document = self._vscode_ns.update_text_document_snapshot(
+            uri, content, language or "plaintext")
+        provider_map = getattr(self._vscode_ns, "_language_providers", {}) or {}
+        node_entries: List[Dict[str, Any]] = []
+        node_health: Dict[str, Any] = {}
+        node_host = getattr(self, "_node_ext_host", None)
+        if node_host is not None and getattr(node_host, "is_running", False):
+            try:
+                node_entries = [
+                    item for item in node_host.list_language_providers()
+                    if isinstance(item, dict)
+                ]
+            except Exception:
+                node_entries = []
+            try:
+                node_health = node_host.language_provider_health_snapshot()
+            except Exception:
+                node_health = {}
+        feature_kinds = {
+            "completion": ["completion"],
+            "hover": ["hover"],
+            "diagnostics": ["diagnostics"],
+            "codeActions": ["codeActions"],
+            "formatting": ["formatting", "rangeFormatting", "onTypeFormatting"],
+            "semanticTokens": ["semanticTokens", "semanticTokensRange"],
+            "symbols": ["documentSymbol", "workspaceSymbol"],
+            "navigation": [
+                "definition", "typeDefinition", "declaration",
+                "implementation", "references"],
+            "inline": ["inlineCompletion", "inlayHint", "codeLens"],
+            "links": ["documentLink", "documentColor"],
+        }
+        by_kind: Dict[str, Dict[str, Any]] = {}
+        for feature, kinds in feature_kinds.items():
+            providers: List[Dict[str, Any]] = []
+            for kind in kinds:
+                for entry in provider_map.get(kind, []) or []:
+                    if not isinstance(entry, dict):
+                        continue
+                    item = _language_provider_metadata_entry(
+                        "python", entry, document, self._vscode_ns)
+                    if item.get("matched"):
+                        providers.append(item)
+                for entry in node_entries:
+                    if str(entry.get("kind") or "") != kind:
+                        continue
+                    provider_id = str(
+                        entry.get("providerId") or entry.get("id")
+                        or entry.get("handle") or "")
+                    health = (
+                        node_health.get(f"{kind}:{provider_id}")
+                        or node_health.get(provider_id)
+                        or {})
+                    item = _language_provider_metadata_entry(
+                        "node", entry, document, self._vscode_ns,
+                        health=health)
+                    if item.get("matched"):
+                        providers.append(item)
+            by_kind[feature] = {
+                "count": len(providers),
+                "providers": providers[:10],
+                "truncated": len(providers) > 10,
+                "ready": bool(providers),
+            }
+        total = sum(int(item.get("count") or 0) for item in by_kind.values())
+        formatter_count = int(by_kind.get("formatting", {}).get("count") or 0)
+        return {
+            "state": "ready" if total else "empty",
+            "languageId": language,
+            "providerCount": total,
+            "features": by_kind,
+            "formattingReady": formatter_count > 0,
+            "formattingProviderCount": formatter_count,
+            "message": (
+                f"Language: {total} providers" if total else
+                "Language: fallback"),
+        }
+
+    def editor_surface_state(self, payload: Optional[Dict[str, Any]] = None) -> Dict:
+        """Return one VS Code-style readiness snapshot for editor surfaces."""
+        self._ensure_engine()
+        data = payload if isinstance(payload, dict) else {}
+        content = "" if data.get("content") is None else str(data.get("content"))
+        language = str(
+            data.get("language")
+            or data.get("languageId")
+            or "plaintext").strip() or "plaintext"
+        uri = _editor_provider_uri({
+            "uri": data.get("uri") or data.get("filePath") or data.get("path"),
+            "filePath": data.get("filePath") or data.get("path") or "",
+            "workspacePath": data.get("workspacePath") or "",
+            "name": data.get("name") or "untitled",
+        })
+        dirty = bool(data.get("dirty"))
+        base_content = (
+            data.get("baseContent")
+            if "baseContent" in data else data.get("originalContent"))
+        workspace = self._workspace_info()
+        ai_cfg = _normalize_ai_editor_config(
+            self._settings_getter("ai_editor", {}) or {})
+        terminal_cfg = _as_dict(ai_cfg.get("terminal"))
+        editor_cfg = _as_dict(ai_cfg.get("editor"))
+        provider_summary = self._editor_provider_surface_summary(
+            language, content, uri)
+        diagnostics = data.get("diagnostics")
+        if diagnostics is None:
+            diagnostics = self._vscode_ns._get_diagnostics(uri)
+        diagnostics_summary = self._editor_diagnostic_surface_summary(
+            diagnostics)
+        diff_summary = self._editor_diff_surface_summary(
+            base_content, content, dirty)
+        format_on_save = _as_bool(editor_cfg.get("formatOnSave"), False)
+        format_on_type = _as_bool(editor_cfg.get("formatOnType"), False)
+        code_actions_on_save = _as_dict(editor_cfg.get("codeActionsOnSave"))
+        terminal_profile = str(
+            data.get("terminalProfile")
+            or terminal_cfg.get("profile")
+            or "PowerShell 7 (No Profile)")
+        workspace_root = str(workspace.get("root") or "")
+        terminal = {
+            "state": "ready" if os.path.isdir(workspace_root) else "warning",
+            "profile": terminal_profile,
+            "cwd": str(data.get("terminalCwd") or workspace_root),
+            "cwdSource": str(workspace.get("source") or "workspace"),
+            "workspaceReady": os.path.isdir(workspace_root),
+            "timeout": int(terminal_cfg.get("timeout") or 30),
+            "outputLimit": int(terminal_cfg.get("output_limit") or 8000),
+            "shellPathConfigured": bool(str(
+                terminal_cfg.get("shell_path") or "").strip()),
+            "message": (
+                f"Terminal: {terminal_profile}" if terminal_profile
+                else "Terminal: system shell"),
+        }
+        settings_surface = {
+            "state": "ready",
+            "targetScopes": ["user", "workspace", "extensions"],
+            "queryTokens": [
+                "@modified", "@workspace", "@extensions", "@lang:",
+                "@id:", "@feature:", "@tag:"],
+            "formatOnSave": format_on_save,
+            "formatOnType": format_on_type,
+            "codeActionsOnSaveCount": len(code_actions_on_save),
+        }
+        issue_count = (
+            int(diagnostics_summary.get("errors") or 0)
+            + int(diagnostics_summary.get("warnings") or 0))
+        warnings: List[str] = []
+        if not provider_summary.get("providerCount"):
+            warnings.append("language-provider-fallback")
+        if not terminal.get("workspaceReady"):
+            warnings.append("terminal-workspace-missing")
+        if diff_summary.get("truncated"):
+            warnings.append("diff-truncated")
+        state = "error" if diagnostics_summary.get("errors") else (
+            "warning" if warnings or issue_count else "ready")
+        summary = {
+            "state": state,
+            "workspace": workspace,
+            "terminal": terminal,
+            "language": provider_summary,
+            "diagnostics": diagnostics_summary,
+            "formatting": {
+                "state": (
+                    "ready" if provider_summary.get("formattingReady")
+                    or format_on_save or format_on_type else "empty"),
+                "providerCount": provider_summary.get(
+                    "formattingProviderCount", 0),
+                "formatOnSave": format_on_save,
+                "formatOnType": format_on_type,
+                "defaultFormatter": str(
+                    editor_cfg.get("defaultFormatter") or ""),
+                "codeActionsOnSave": code_actions_on_save,
+            },
+            "diff": diff_summary,
+            "settings": settings_surface,
+            "warnings": warnings,
+        }
+        summary["message"] = " · ".join([
+            f"{language}",
+            f"{provider_summary.get('providerCount', 0)} providers",
+            diagnostics_summary.get("message", "Diagnostics: 0"),
+            diff_summary.get("message", "Diff: clean"),
+            terminal.get("profile", ""),
+        ]).strip(" ·")
+        summary["ok"] = True
+        return summary
 
     def get_editor_theme(self, theme_id: str) -> Dict:
         """Return safe color data for one extension-contributed color theme."""

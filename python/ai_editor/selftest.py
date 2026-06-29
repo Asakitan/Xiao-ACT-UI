@@ -1041,7 +1041,7 @@ def test_app_settings_parity() -> None:
         "notebook_cell_status_bar_items", "notebook_controllers",
         "select_notebook_controller", "execute_notebook_controller",
         "apply_workspace_text_edits", "open_external_uri",
-        "editor_language_provider", "get_diagnostics",
+        "editor_language_provider", "editor_surface_state", "get_diagnostics",
         "get_chat_controls", "set_active_provider", "set_active_model",
         "set_active_mode", "set_provider_model", "set_chat_provider",
         "set_chat_controls",
@@ -2171,6 +2171,26 @@ def test_app_settings_parity() -> None:
                and format_on_type_result.get("edits", [{}])[0]
                .get("newText") == "typed"
                and editor_provider.seen_on_type_trigger == "}")
+        surface_state = provider_api.editor_surface_state({
+            "uri": provider_path,
+            "filePath": provider_path,
+            "workspacePath": tmp_provider_dir,
+            "name": "selftest.py",
+            "language": "python",
+            "content": "print('x')\nprint('y')\n",
+            "baseContent": "print('x')\n",
+            "dirty": True,
+            "diagnostics": [{"severity": 1, "message": "warn"}],
+        })
+        _check("editor_surface_state summarizes workspace terminal language diagnostics formatting and diff",
+               surface_state.get("ok") is True
+               and surface_state.get("workspace", {}).get("root")
+               and surface_state.get("terminal", {}).get("profile")
+               and surface_state.get("language", {}).get("providerCount", -1) >= 0
+               and surface_state.get("diagnostics", {}).get("warnings") == 1
+               and surface_state.get("formatting", {}).get("providerCount", -1) >= 0
+               and surface_state.get("diff", {}).get("added", 0) >= 1
+               and surface_state.get("settings", {}).get("targetScopes") == ["user", "workspace", "extensions"])
     finally:
         shutil.rmtree(tmp_provider_dir, ignore_errors=True)
 
@@ -5306,9 +5326,9 @@ def test_phase1_ai_editor_regressions() -> None:
            and ".chat-input-area { flex-shrink:0; background:linear-gradient(180deg, transparent 0, var(--bg) 18px);" in html
            and "display:flex; justify-content:center; align-items:center;" in html
            and ".chat-input-area > div { width:100%; display:flex; justify-content:center; }" in html
-           and "width:clamp(1040px,66.666%,1220px); max-width:100%; min-height:96px;" in html
-           and ".chat-input-row { display:flex; gap:0; align-items:center; min-height:60px; }" in html
-           and "outline:none; min-height:60px; max-height:200px;" in html
+           and "width:66.666%; min-width:min(720px,100%); max-width:1280px; min-height:120px;" in html
+           and ".chat-input-row { display:flex; gap:0; align-items:center; min-height:76px; }" in html
+           and "outline:none; min-height:72px; max-height:220px;" in html
            and ".chat-composer-action { width:22px; height:22px; border:1px solid transparent; border-radius:999px;" in html
            and ".model-chip { display:none; align-items:center; gap:3px; padding:2px 6px; background:var(--bg3);" in html
            and ".ctx-ring { width:16px; height:16px; flex:0 0 16px; border-radius:50%;" in html
@@ -7167,6 +7187,19 @@ def test_phase1_ai_editor_regressions() -> None:
             and "icon.uri||icon.iconUri" in html
             and "function iconThemeFileGlyph(name,language)" in html
             and "function explorerFolderIcon(name,expanded,isRoot)" in html)
+    _check("frontend exposes VS Code-like editor surface status",
+           "id=\"status-editor-surface\"" in html
+           and "function editorSurfaceStatePayload()" in html
+           and "function refreshEditorSurfaceState(opts)" in html
+           and "call('editor_surface_state'" in html
+           and "dataset.workspaceSource" in html
+           and "dataset.terminalProfile" in html
+           and "dataset.languageProviders" in html
+           and "dataset.formatProviders" in html
+           and "dataset.diagnostics" in html
+           and "dataset.diffTotal" in html
+           and "dataset.settingsScopes" in html
+           and "scheduleEditorSurfaceStateRefresh" in html)
     _check("frontend invokes dynamic editor language providers",
            "id=\"editor-suggest\"" in html
            and "id=\"editor-hover\"" in html
