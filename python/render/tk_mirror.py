@@ -300,3 +300,79 @@ def stop_all_mirrors() -> None:
         names = list(_mirrors.keys())
     for name in names:
         unmirror_tk_panel(name)
+
+
+# ── SaoToplevel: drop-in replacement for tk.Toplevel ─────────────
+#
+# Usage:  from render.tk_mirror import SaoToplevel
+#         win = SaoToplevel(root, mirror_name='my_panel')
+#
+# deiconify/withdraw/destroy are auto-hooked — the panel code
+# needs ZERO boilerplate for compositor mirroring.
+
+import tkinter as tk
+
+
+def _compositor_tk_panels_enabled() -> bool:
+    try:
+        from config import SettingsManager
+        return bool(SettingsManager().get('compositor_tk_panels', True))
+    except Exception:
+        return False
+
+
+class SaoToplevel(tk.Toplevel):
+    """Tk Toplevel that automatically renders through the compositor.
+
+    Drop-in replacement: ``SaoToplevel(root, mirror_name='panel')``
+    instead of ``tk.Toplevel(root)``.  Show/hide/destroy route through
+    TkMirrorLayer transparently.  Falls back to normal Tk rendering
+    when ``compositor_tk_panels`` config is False or compositor is
+    unavailable.
+    """
+
+    def __init__(self, *args, mirror_name: Optional[str] = None,
+                 mirror_z: int = 500, mirror_fps: float = 30.0, **kwargs):
+        super().__init__(*args, **kwargs)
+        self._mirror: Optional[TkMirrorLayer] = None
+        self._mirror_name = mirror_name or f'tk_{id(self)}'
+        self._mirror_z = mirror_z
+        self._mirror_fps = mirror_fps
+        self._mirror_attached = False
+
+    def _ensure_mirror(self) -> None:
+        if self._mirror_attached:
+            return
+        self._mirror_attached = True
+        if not _compositor_tk_panels_enabled():
+            return
+        try:
+            m = TkMirrorLayer(self, self._mirror_name,
+                              z=self._mirror_z,
+                              capture_fps=self._mirror_fps)
+            m.attach()
+            self._mirror = m
+        except Exception:
+            self._mirror = None
+
+    def deiconify(self) -> None:
+        self._ensure_mirror()
+        if self._mirror is not None:
+            self._mirror.show()
+        else:
+            super().deiconify()
+
+    def withdraw(self) -> None:
+        if self._mirror is not None:
+            self._mirror.hide()
+        else:
+            super().withdraw()
+
+    def destroy(self) -> None:
+        if self._mirror is not None:
+            try:
+                self._mirror.detach()
+            except Exception:
+                pass
+            self._mirror = None
+        super().destroy()

@@ -489,35 +489,21 @@ class WorkshopPanel:
             self._build()
         if self._win is None:
             return
-        mirror = getattr(self, '_mirror', None)
-        if mirror is not None:
-            mirror.show()
-        else:
-            try:
-                self._win.deiconify()
-                self._win.lift()
-            except Exception:
-                pass
+        try:
+            self._win.deiconify()
+            self._win.lift()
+        except Exception:
+            pass
         self._show_tab(self._active_tab)
 
     def hide(self) -> None:
-        mirror = getattr(self, '_mirror', None)
-        if mirror is not None:
-            mirror.hide()
-        elif self._win is not None:
+        if self._win is not None:
             try:
                 self._win.withdraw()
             except Exception:
                 pass
 
     def destroy(self) -> None:
-        mirror = getattr(self, '_mirror', None)
-        if mirror is not None:
-            try:
-                mirror.detach()
-            except Exception:
-                pass
-            self._mirror = None
         if self._win is not None:
             try:
                 self._win.destroy()
@@ -538,7 +524,8 @@ class WorkshopPanel:
     # ── Build ──────────────────────────────────────────────────────
 
     def _build(self) -> None:
-        win = tk.Toplevel(self.root)
+        from render.tk_mirror import SaoToplevel
+        win = SaoToplevel(self.root, mirror_name='workshop')
         self._win = win
         win.title('SAO Creative Workshop')
         win.geometry('980x720+140+80')
@@ -626,14 +613,6 @@ class WorkshopPanel:
         grip.bind('<B1-Motion>', self._resize_motion_cb)
 
         win.protocol('WM_DELETE_WINDOW', self.hide)
-        try:
-            from config import SettingsManager
-            if SettingsManager().get('compositor_tk_panels', True):
-                from render.tk_mirror import TkMirrorLayer
-                self._mirror = TkMirrorLayer(win, 'workshop', z=500)
-                self._mirror.attach()
-        except Exception:
-            self._mirror = None
 
     def _build_store_tab(self, parent: tk.Frame):
         toolbar = tk.Frame(parent, bg=_WG_BODY_BG)

@@ -188,7 +188,8 @@ class ProcessSelectorPanel:
         self._resize_state = {}
 
     def _build(self):
-        win = tk.Toplevel(self.root)
+        from render.tk_mirror import SaoToplevel
+        win = SaoToplevel(self.root, mirror_name='process_selector')
         win.withdraw()
         win.overrideredirect(True)
         win.configure(bg=_tc('border', _SAO_PANEL_BORDER))
@@ -358,14 +359,6 @@ class ProcessSelectorPanel:
 
         self._restore_last_attach()
         self.root.after(50, self._do_refresh)
-        try:
-            from config import SettingsManager
-            if SettingsManager().get('compositor_tk_panels', True):
-                from render.tk_mirror import TkMirrorLayer
-                self._mirror = TkMirrorLayer(win, 'process_selector', z=500)
-                self._mirror.attach()
-        except Exception:
-            self._mirror = None
 
     def _bind_mousewheel_recursive(self, widget):
         def _on_mousewheel(event):
@@ -683,17 +676,13 @@ class ProcessSelectorPanel:
         if not self._exists():
             self._win = None
             self._build()
-        mirror = getattr(self, '_mirror', None)
-        if mirror is not None:
-            mirror.show()
-        else:
-            self._win.deiconify()
-            self._win.lift()
-            try:
-                self._win.update_idletasks()
-                _apply_panel_style(self._win)
-            except Exception:
-                pass
+        self._win.deiconify()
+        self._win.lift()
+        try:
+            self._win.update_idletasks()
+            _apply_panel_style(self._win)
+        except Exception:
+            pass
         self._update_mode_display()
         if not self._win.geometry().startswith("1x1"):
             self._do_refresh()
@@ -730,10 +719,7 @@ class ProcessSelectorPanel:
             self._do_refresh()
 
     def hide(self):
-        mirror = getattr(self, '_mirror', None)
-        if mirror is not None:
-            mirror.hide()
-        elif self._win:
+        if self._win:
             try:
                 self._win.withdraw()
             except Exception:
@@ -748,13 +734,6 @@ class ProcessSelectorPanel:
             return False
 
     def destroy(self):
-        mirror = getattr(self, '_mirror', None)
-        if mirror is not None:
-            try:
-                mirror.detach()
-            except Exception:
-                pass
-            self._mirror = None
         if self._win:
             try:
                 self._win.destroy()
