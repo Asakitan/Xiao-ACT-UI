@@ -1909,6 +1909,10 @@ class NodeExtensionHost:
         self._active_terminal: Dict[str, Any] = {}
         self._terminal_shell_integrations: List[Dict[str, Any]] = []
         self._terminal_shell_executions: List[Dict[str, Any]] = []
+        self._task_providers: Dict[str, Dict[str, Any]] = {}
+        self._debug_config_providers: Dict[str, Dict[str, Any]] = {}
+        self._debug_adapter_factories: Dict[str, Dict[str, Any]] = {}
+        self._debug_adapter_trackers: Dict[str, Dict[str, Any]] = {}
         self._custom_editor_request_lock = threading.Lock()
         self._custom_editor_requests: Dict[str, Dict[str, Any]] = {}
         self._custom_editor_lifecycle_lock = threading.Lock()
@@ -2688,6 +2692,80 @@ class NodeExtensionHost:
                 detail=str(msg.get("detail", "")),
                 error=str(msg.get("error", "")),
             )
+
+        elif msg_type == "task_provider_registered":
+            handle = str(msg.get("handle") or msg.get("taskType") or "")
+            if handle:
+                self._task_providers[handle] = {
+                    "handle": msg.get("handle"),
+                    "type": str(msg.get("taskType") or ""),
+                    "extensionId": str(msg.get("extensionId") or ""),
+                    "runtimeAvailable": True,
+                    "hasProvideTasks": bool(msg.get("hasProvideTasks")),
+                    "hasResolveTask": bool(msg.get("hasResolveTask")),
+                }
+
+        elif msg_type == "task_provider_disposed":
+            handle = str(msg.get("handle") or "")
+            if handle:
+                self._task_providers.pop(handle, None)
+
+        elif msg_type == "debug_config_provider_registered":
+            handle = str(msg.get("handle") or "")
+            if handle:
+                self._debug_config_providers[handle] = {
+                    "handle": msg.get("handle"),
+                    "type": str(msg.get("debugType") or ""),
+                    "extensionId": str(msg.get("extensionId") or ""),
+                    "runtimeAvailable": True,
+                    "triggerKind": int(msg.get("triggerKind") or 1),
+                    "hasProvideDebugConfigurations": bool(
+                        msg.get("hasProvideDebugConfigurations")),
+                    "hasResolveDebugConfiguration": bool(
+                        msg.get("hasResolveDebugConfiguration")),
+                    "hasResolveDebugConfigurationWithSubstitutedVariables": bool(
+                        msg.get(
+                            "hasResolveDebugConfigurationWithSubstitutedVariables")),
+                }
+
+        elif msg_type == "debug_config_provider_disposed":
+            handle = str(msg.get("handle") or "")
+            if handle:
+                self._debug_config_providers.pop(handle, None)
+
+        elif msg_type == "debug_adapter_factory_registered":
+            handle = str(msg.get("handle") or "")
+            if handle:
+                self._debug_adapter_factories[handle] = {
+                    "handle": msg.get("handle"),
+                    "type": str(msg.get("debugType") or ""),
+                    "extensionId": str(msg.get("extensionId") or ""),
+                    "runtimeAvailable": True,
+                    "hasCreateDebugAdapterDescriptor": bool(
+                        msg.get("hasCreateDebugAdapterDescriptor")),
+                }
+
+        elif msg_type == "debug_adapter_factory_disposed":
+            handle = str(msg.get("handle") or "")
+            if handle:
+                self._debug_adapter_factories.pop(handle, None)
+
+        elif msg_type == "debug_adapter_tracker_registered":
+            handle = str(msg.get("handle") or "")
+            if handle:
+                self._debug_adapter_trackers[handle] = {
+                    "handle": msg.get("handle"),
+                    "type": str(msg.get("debugType") or ""),
+                    "extensionId": str(msg.get("extensionId") or ""),
+                    "runtimeAvailable": True,
+                    "hasCreateDebugAdapterTracker": bool(
+                        msg.get("hasCreateDebugAdapterTracker")),
+                }
+
+        elif msg_type == "debug_adapter_tracker_disposed":
+            handle = str(msg.get("handle") or "")
+            if handle:
+                self._debug_adapter_trackers.pop(handle, None)
 
         elif msg_type == "output":
             channel = str(
@@ -4499,6 +4577,18 @@ class NodeExtensionHost:
             dict(item)
             for item in self._notebook_cell_status_bar_changes
         ]
+
+    def task_providers(self) -> List[Dict[str, Any]]:
+        return [dict(item) for item in self._task_providers.values()]
+
+    def debug_config_providers(self) -> List[Dict[str, Any]]:
+        return [dict(item) for item in self._debug_config_providers.values()]
+
+    def debug_adapter_factories(self) -> List[Dict[str, Any]]:
+        return [dict(item) for item in self._debug_adapter_factories.values()]
+
+    def debug_adapter_trackers(self) -> List[Dict[str, Any]]:
+        return [dict(item) for item in self._debug_adapter_trackers.values()]
 
     def _notebook_request_result(
             self,

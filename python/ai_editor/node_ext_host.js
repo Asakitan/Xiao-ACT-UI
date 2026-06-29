@@ -2699,6 +2699,12 @@ let _nextCustomEditorEditHandle = 1;
 const _debugAdapterFactories = new Map();   // type -> factory
 const _debugConfigProviders = new Map();    // type -> provider
 const _taskProviders = new Map();           // type -> provider
+const _taskProviderStates = new Map();      // type -> provider metadata
+const _debugAdapterFactoryStates = new Map(); // type -> factory metadata
+let _nextTaskProviderHandle = 1;
+let _nextDebugConfigProviderHandle = 1;
+let _nextDebugAdapterFactoryHandle = 1;
+let _nextDebugAdapterTrackerHandle = 1;
 const _scmProviders = new Map();            // id -> SourceControl
 const _authenticationProviders = new Map(); // id -> { label, provider, options, listener }
 const _authenticationSessions = new Map();  // id -> AuthenticationSession[]
@@ -11161,34 +11167,99 @@ function buildVscodeModule(extDesc, extensionPath, storageRoot) {
             };
             return {
                 registerDebugAdapterDescriptorFactory(type, factory) {
-                    _debugAdapterFactories.set(type, factory);
+                    const key = String(type || '');
+                    const handle = _nextDebugAdapterFactoryHandle++;
+                    _debugAdapterFactories.set(key, factory);
+                    _debugAdapterFactoryStates.set(key, {
+                        handle,
+                        type: key,
+                        extensionId: extDesc.extensionId || '',
+                        hasCreateDebugAdapterDescriptor: !!(factory && typeof factory.createDebugAdapterDescriptor === 'function'),
+                    });
+                    send({
+                        type: 'debug_adapter_factory_registered',
+                        handle,
+                        debugType: key,
+                        extensionId: extDesc.extensionId || '',
+                        hasCreateDebugAdapterDescriptor: !!(factory && typeof factory.createDebugAdapterDescriptor === 'function'),
+                    });
                     log(`debug: registered adapter factory for "${type}"`);
-                    return new Disposable(() => _debugAdapterFactories.delete(type));
+                    return new Disposable(() => {
+                        _debugAdapterFactories.delete(key);
+                        _debugAdapterFactoryStates.delete(key);
+                        send({
+                            type: 'debug_adapter_factory_disposed',
+                            handle,
+                            debugType: key,
+                            extensionId: extDesc.extensionId || '',
+                        });
+                    });
                 },
                 registerDebugAdapterTrackerFactory(type, factory) {
+                    const handle = _nextDebugAdapterTrackerHandle++;
                     const entry = {
+                        handle,
                         type: String(type || '*'),
+                        extensionId: extDesc.extensionId || '',
                         factory,
                     };
                     _debugAdapterTrackerFactories.push(entry);
+                    send({
+                        type: 'debug_adapter_tracker_registered',
+                        handle,
+                        debugType: entry.type,
+                        extensionId: extDesc.extensionId || '',
+                        hasCreateDebugAdapterTracker: !!(factory && typeof factory.createDebugAdapterTracker === 'function'),
+                    });
                     log(`debug: registered adapter tracker for "${entry.type}"`);
                     return new Disposable(() => {
                         const index = _debugAdapterTrackerFactories.indexOf(entry);
                         if (index >= 0) _debugAdapterTrackerFactories.splice(index, 1);
+                        send({
+                            type: 'debug_adapter_tracker_disposed',
+                            handle,
+                            debugType: entry.type,
+                            extensionId: extDesc.extensionId || '',
+                        });
                     });
                 },
                 registerDebugConfigurationProvider(type, provider, triggerKind = 1) {
                     const key = String(type || '');
-                    const entry = { provider, triggerKind };
+                    const handle = _nextDebugConfigProviderHandle++;
+                    const entry = {
+                        handle,
+                        provider,
+                        triggerKind,
+                        extensionId: extDesc.extensionId || '',
+                        hasProvideDebugConfigurations: !!(provider && typeof provider.provideDebugConfigurations === 'function'),
+                        hasResolveDebugConfiguration: !!(provider && typeof provider.resolveDebugConfiguration === 'function'),
+                        hasResolveDebugConfigurationWithSubstitutedVariables: !!(provider && typeof provider.resolveDebugConfigurationWithSubstitutedVariables === 'function'),
+                    };
                     const list = _debugConfigProviders.get(key) || [];
                     list.push(entry);
                     _debugConfigProviders.set(key, list);
+                    send({
+                        type: 'debug_config_provider_registered',
+                        handle,
+                        debugType: key,
+                        extensionId: extDesc.extensionId || '',
+                        triggerKind: Number(triggerKind || 1),
+                        hasProvideDebugConfigurations: entry.hasProvideDebugConfigurations,
+                        hasResolveDebugConfiguration: entry.hasResolveDebugConfiguration,
+                        hasResolveDebugConfigurationWithSubstitutedVariables: entry.hasResolveDebugConfigurationWithSubstitutedVariables,
+                    });
                     log(`debug: registered config provider for "${type}"`);
                     return new Disposable(() => {
                         const current = _debugConfigProviders.get(key) || [];
                         const next = current.filter(item => item !== entry);
                         if (next.length) _debugConfigProviders.set(key, next);
                         else _debugConfigProviders.delete(key);
+                        send({
+                            type: 'debug_config_provider_disposed',
+                            handle,
+                            debugType: key,
+                            extensionId: extDesc.extensionId || '',
+                        });
                     });
                 },
                 async startDebugging(folder, config, options) {
@@ -11399,9 +11470,35 @@ function buildVscodeModule(extDesc, extensionPath, storageRoot) {
             };
             return {
                 registerTaskProvider(type, provider) {
-                    _taskProviders.set(type, provider);
+                    const key = String(type || '');
+                    const handle = _nextTaskProviderHandle++;
+                    _taskProviders.set(key, provider);
+                    _taskProviderStates.set(key, {
+                        handle,
+                        type: key,
+                        extensionId: extDesc.extensionId || '',
+                        hasProvideTasks: !!(provider && typeof provider.provideTasks === 'function'),
+                        hasResolveTask: !!(provider && typeof provider.resolveTask === 'function'),
+                    });
+                    send({
+                        type: 'task_provider_registered',
+                        handle,
+                        taskType: key,
+                        extensionId: extDesc.extensionId || '',
+                        hasProvideTasks: !!(provider && typeof provider.provideTasks === 'function'),
+                        hasResolveTask: !!(provider && typeof provider.resolveTask === 'function'),
+                    });
                     log(`tasks: registered provider for "${type}"`);
-                    return new Disposable(() => _taskProviders.delete(type));
+                    return new Disposable(() => {
+                        _taskProviders.delete(key);
+                        _taskProviderStates.delete(key);
+                        send({
+                            type: 'task_provider_disposed',
+                            handle,
+                            taskType: key,
+                            extensionId: extDesc.extensionId || '',
+                        });
+                    });
                 },
                 async fetchTasks(filter) {
                     log('tasks: fetchTasks');

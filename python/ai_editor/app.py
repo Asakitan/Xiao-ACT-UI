@@ -12495,6 +12495,343 @@ class AIEditorAPI:
             })
         return result
 
+    def _extension_surface_task_definitions(
+            self, contributions: Dict[str, Any]) -> List[Dict[str, Any]]:
+        host = getattr(self, "_node_ext_host", None)
+        host_running = bool(host is not None and getattr(host, "is_running", False))
+        providers = host.task_providers() if (
+            host_running and hasattr(host, "task_providers")) else []
+        providers = [
+            dict(item) for item in providers if isinstance(item, dict)
+        ]
+        providers_by_type: Dict[str, List[Dict[str, Any]]] = {}
+        for provider in providers:
+            task_type = str(provider.get("type") or "").strip()
+            if not task_type:
+                continue
+            providers_by_type.setdefault(task_type, []).append(provider)
+
+        problem_matchers = [
+            dict(item) for item in contributions.get("problemMatchers", [])
+            if isinstance(item, dict)
+        ]
+        matcher_count_by_type: Dict[str, int] = {}
+        for matcher in problem_matchers:
+            for key in ("type", "taskType", "owner", "name", "label"):
+                value = str(matcher.get(key) or "").strip()
+                if value:
+                    matcher_count_by_type[value] = (
+                        matcher_count_by_type.get(value, 0) + 1)
+
+        result: List[Dict[str, Any]] = []
+        seen: set[str] = set()
+        for item in contributions.get("taskDefinitions", []):
+            if not isinstance(item, dict):
+                continue
+            task_type = str(item.get("type") or item.get("id") or "").strip()
+            if not task_type:
+                continue
+            matching = providers_by_type.get(task_type, [])
+            seen.add(task_type)
+            has_provider = bool(matching)
+            issues: List[str] = []
+            score = 100
+            if not host_running:
+                issues.append("node-host-stopped")
+                score -= 45
+            if not has_provider:
+                issues.append("missing-provider")
+                score -= 34
+            readiness = (
+                "ready" if has_provider else
+                "missing-runtime" if not host_running else "missing-provider")
+            evidence = {
+                "kind": "taskDefinition",
+                "type": task_type,
+                "hostRunning": host_running,
+                "runtimeAvailable": has_provider,
+                "providerCount": len(matching),
+                "hasProvideTasks": any(
+                    bool(provider.get("hasProvideTasks"))
+                    for provider in matching),
+                "hasResolveTask": any(
+                    bool(provider.get("hasResolveTask"))
+                    for provider in matching),
+                "problemMatcherCount": matcher_count_by_type.get(task_type, 0),
+                "readiness": readiness,
+                "readinessScore": max(0, min(100, score)),
+                "readinessIssues": issues,
+            }
+            result.append({
+                "type": task_type,
+                "extensionId": self._extension_surface_extension_id(item),
+                "runtimeAvailable": has_provider,
+                "nodeHostRunning": host_running,
+                "providerCount": len(matching),
+                "hasProvideTasks": evidence["hasProvideTasks"],
+                "hasResolveTask": evidence["hasResolveTask"],
+                "required": item.get("required", []),
+                "properties": item.get("properties", {}),
+                "problemMatcherCount": evidence["problemMatcherCount"],
+                "runtimeOnly": False,
+                "providers": matching,
+                "surfaceEvidence": evidence,
+                "readiness": readiness,
+                "readinessScore": evidence["readinessScore"],
+                "readinessIssues": issues,
+            })
+
+        for task_type in sorted(set(providers_by_type) - seen):
+            matching = providers_by_type.get(task_type, [])
+            evidence = {
+                "kind": "taskDefinition",
+                "type": task_type,
+                "hostRunning": host_running,
+                "runtimeAvailable": True,
+                "providerCount": len(matching),
+                "hasProvideTasks": any(
+                    bool(provider.get("hasProvideTasks"))
+                    for provider in matching),
+                "hasResolveTask": any(
+                    bool(provider.get("hasResolveTask"))
+                    for provider in matching),
+                "problemMatcherCount": matcher_count_by_type.get(task_type, 0),
+                "readiness": "ready",
+                "readinessScore": 100,
+                "readinessIssues": [],
+            }
+            result.append({
+                "type": task_type,
+                "extensionId": str(matching[0].get("extensionId") or "")
+                if matching else "",
+                "runtimeAvailable": True,
+                "nodeHostRunning": host_running,
+                "providerCount": len(matching),
+                "hasProvideTasks": evidence["hasProvideTasks"],
+                "hasResolveTask": evidence["hasResolveTask"],
+                "required": [],
+                "properties": {},
+                "problemMatcherCount": evidence["problemMatcherCount"],
+                "runtimeOnly": True,
+                "providers": matching,
+                "surfaceEvidence": evidence,
+                "readiness": "ready",
+                "readinessScore": 100,
+                "readinessIssues": [],
+            })
+        result.sort(key=lambda row: (
+            1 if row.get("runtimeOnly") else 0,
+            str(row.get("extensionId") or ""),
+            str(row.get("type") or "")))
+        return result
+
+    def _extension_surface_debuggers(
+            self, contributions: Dict[str, Any]) -> List[Dict[str, Any]]:
+        host = getattr(self, "_node_ext_host", None)
+        host_running = bool(host is not None and getattr(host, "is_running", False))
+
+        def host_items(name: str) -> List[Dict[str, Any]]:
+            if not host_running or not hasattr(host, name):
+                return []
+            try:
+                return [
+                    dict(item) for item in getattr(host, name)()
+                    if isinstance(item, dict)
+                ]
+            except Exception:
+                return []
+
+        config_providers = host_items("debug_config_providers")
+        adapter_factories = host_items("debug_adapter_factories")
+        adapter_trackers = host_items("debug_adapter_trackers")
+
+        def group_by_type(items: List[Dict[str, Any]]) -> Dict[str, List[Dict[str, Any]]]:
+            grouped: Dict[str, List[Dict[str, Any]]] = {}
+            for item in items:
+                debug_type = str(item.get("type") or "").strip()
+                if not debug_type:
+                    continue
+                grouped.setdefault(debug_type, []).append(item)
+            return grouped
+
+        config_by_type = group_by_type(config_providers)
+        factory_by_type = group_by_type(adapter_factories)
+        tracker_by_type = group_by_type(adapter_trackers)
+
+        result: List[Dict[str, Any]] = []
+        seen: set[str] = set()
+        for item in contributions.get("debuggers", []):
+            if not isinstance(item, dict):
+                continue
+            debug_type = str(item.get("type") or item.get("id") or "").strip()
+            if not debug_type:
+                continue
+            configs = config_by_type.get(debug_type, [])
+            factories = factory_by_type.get(debug_type, [])
+            trackers = (
+                tracker_by_type.get(debug_type, [])
+                + tracker_by_type.get("*", []))
+            seen.add(debug_type)
+            runtime_available = bool(configs or factories or trackers)
+            issues: List[str] = []
+            score = 100
+            if not host_running:
+                issues.append("node-host-stopped")
+                score -= 45
+            if not configs:
+                issues.append("missing-config-provider")
+                score -= 18
+            if not factories:
+                issues.append("missing-adapter-factory")
+                score -= 28
+            readiness = (
+                "ready" if configs and factories else
+                "missing-runtime" if not host_running else
+                "missing-adapter" if not factories else
+                "missing-config-provider")
+            evidence = {
+                "kind": "debugger",
+                "type": debug_type,
+                "hostRunning": host_running,
+                "runtimeAvailable": runtime_available,
+                "configurationProviderCount": len(configs),
+                "adapterFactoryCount": len(factories),
+                "adapterTrackerCount": len(trackers),
+                "hasProvideDebugConfigurations": any(
+                    bool(provider.get("hasProvideDebugConfigurations"))
+                    for provider in configs),
+                "hasResolveDebugConfiguration": any(
+                    bool(provider.get("hasResolveDebugConfiguration"))
+                    for provider in configs),
+                "hasResolveDebugConfigurationWithSubstitutedVariables": any(
+                    bool(provider.get(
+                        "hasResolveDebugConfigurationWithSubstitutedVariables"))
+                    for provider in configs),
+                "hasCreateDebugAdapterDescriptor": any(
+                    bool(factory.get("hasCreateDebugAdapterDescriptor"))
+                    for factory in factories),
+                "hasCreateDebugAdapterTracker": any(
+                    bool(tracker.get("hasCreateDebugAdapterTracker"))
+                    for tracker in trackers),
+                "readiness": readiness,
+                "readinessScore": max(0, min(100, score)),
+                "readinessIssues": issues,
+            }
+            result.append({
+                "type": debug_type,
+                "label": str(item.get("label") or item.get("name") or debug_type),
+                "extensionId": self._extension_surface_extension_id(item),
+                "runtimeAvailable": runtime_available,
+                "nodeHostRunning": host_running,
+                "configurationProviderCount": len(configs),
+                "adapterFactoryCount": len(factories),
+                "adapterTrackerCount": len(trackers),
+                "hasProvideDebugConfigurations": evidence[
+                    "hasProvideDebugConfigurations"],
+                "hasResolveDebugConfiguration": evidence[
+                    "hasResolveDebugConfiguration"],
+                "hasResolveDebugConfigurationWithSubstitutedVariables": evidence[
+                    "hasResolveDebugConfigurationWithSubstitutedVariables"],
+                "hasCreateDebugAdapterDescriptor": evidence[
+                    "hasCreateDebugAdapterDescriptor"],
+                "hasCreateDebugAdapterTracker": evidence[
+                    "hasCreateDebugAdapterTracker"],
+                "configurationAttributes": item.get(
+                    "configurationAttributes", {}),
+                "initialConfigurations": item.get("initialConfigurations", []),
+                "variables": item.get("variables", {}),
+                "languages": item.get("languages", []),
+                "runtimeOnly": False,
+                "configurationProviders": configs,
+                "adapterFactories": factories,
+                "adapterTrackers": trackers,
+                "surfaceEvidence": evidence,
+                "readiness": readiness,
+                "readinessScore": evidence["readinessScore"],
+                "readinessIssues": issues,
+            })
+
+        runtime_types = (
+            set(config_by_type)
+            | set(factory_by_type)
+            | {item for item in tracker_by_type if item != "*"})
+        for debug_type in sorted(runtime_types - seen):
+            configs = config_by_type.get(debug_type, [])
+            factories = factory_by_type.get(debug_type, [])
+            trackers = (
+                tracker_by_type.get(debug_type, [])
+                + tracker_by_type.get("*", []))
+            extension_id = ""
+            for source in (configs, factories, trackers):
+                if source:
+                    extension_id = str(source[0].get("extensionId") or "")
+                    break
+            evidence = {
+                "kind": "debugger",
+                "type": debug_type,
+                "hostRunning": host_running,
+                "runtimeAvailable": True,
+                "configurationProviderCount": len(configs),
+                "adapterFactoryCount": len(factories),
+                "adapterTrackerCount": len(trackers),
+                "hasProvideDebugConfigurations": any(
+                    bool(provider.get("hasProvideDebugConfigurations"))
+                    for provider in configs),
+                "hasResolveDebugConfiguration": any(
+                    bool(provider.get("hasResolveDebugConfiguration"))
+                    for provider in configs),
+                "hasResolveDebugConfigurationWithSubstitutedVariables": any(
+                    bool(provider.get(
+                        "hasResolveDebugConfigurationWithSubstitutedVariables"))
+                    for provider in configs),
+                "hasCreateDebugAdapterDescriptor": any(
+                    bool(factory.get("hasCreateDebugAdapterDescriptor"))
+                    for factory in factories),
+                "hasCreateDebugAdapterTracker": any(
+                    bool(tracker.get("hasCreateDebugAdapterTracker"))
+                    for tracker in trackers),
+                "readiness": "ready",
+                "readinessScore": 100,
+                "readinessIssues": [],
+            }
+            result.append({
+                "type": debug_type,
+                "label": debug_type,
+                "extensionId": extension_id,
+                "runtimeAvailable": True,
+                "nodeHostRunning": host_running,
+                "configurationProviderCount": len(configs),
+                "adapterFactoryCount": len(factories),
+                "adapterTrackerCount": len(trackers),
+                "hasProvideDebugConfigurations": evidence[
+                    "hasProvideDebugConfigurations"],
+                "hasResolveDebugConfiguration": evidence[
+                    "hasResolveDebugConfiguration"],
+                "hasResolveDebugConfigurationWithSubstitutedVariables": evidence[
+                    "hasResolveDebugConfigurationWithSubstitutedVariables"],
+                "hasCreateDebugAdapterDescriptor": evidence[
+                    "hasCreateDebugAdapterDescriptor"],
+                "hasCreateDebugAdapterTracker": evidence[
+                    "hasCreateDebugAdapterTracker"],
+                "configurationAttributes": {},
+                "initialConfigurations": [],
+                "variables": {},
+                "languages": [],
+                "runtimeOnly": True,
+                "configurationProviders": configs,
+                "adapterFactories": factories,
+                "adapterTrackers": trackers,
+                "surfaceEvidence": evidence,
+                "readiness": "ready",
+                "readinessScore": 100,
+                "readinessIssues": [],
+            })
+        result.sort(key=lambda row: (
+            1 if row.get("runtimeOnly") else 0,
+            str(row.get("extensionId") or ""),
+            str(row.get("type") or "")))
+        return result
+
     def _extension_surface_language_model_tools(
             self, contributions: Dict[str, Any]) -> List[Dict[str, Any]]:
         manifest_tools = [
@@ -12852,6 +13189,23 @@ class AIEditorAPI:
                 return []
             return sorted(result)
 
+        def node_surface_keys(name: str) -> List[str]:
+            if not host_running or not hasattr(host, name):
+                return []
+            result: List[str] = []
+            try:
+                for item in getattr(host, name)():
+                    if not isinstance(item, dict):
+                        continue
+                    result.append(":".join([
+                        str(item.get("type") or ""),
+                        str(item.get("handle") or ""),
+                        str(item.get("extensionId") or ""),
+                    ]))
+            except Exception:
+                return []
+            return sorted(result)
+
         payload = {
             "context": context if isinstance(context, dict) else {},
             "contributionKeys": {
@@ -12872,6 +13226,13 @@ class AIEditorAPI:
                 "chatParticipants": keys(
                     getattr(vscode_ns, "chat_participants", {})),
                 "languageStatus": language_status_keys(),
+                "taskProviders": node_surface_keys("task_providers"),
+                "debugConfigProviders": node_surface_keys(
+                    "debug_config_providers"),
+                "debugAdapterFactories": node_surface_keys(
+                    "debug_adapter_factories"),
+                "debugAdapterTrackers": node_surface_keys(
+                    "debug_adapter_trackers"),
                 "nodeHostRunning": host_running,
             },
         }
@@ -13106,6 +13467,9 @@ class AIEditorAPI:
         notebooks = self._extension_surface_notebooks(contributions)
         terminal_profiles = self._extension_surface_terminal_profiles(
             contributions)
+        task_definitions = self._extension_surface_task_definitions(
+            contributions)
+        debuggers = self._extension_surface_debuggers(contributions)
         language_model_tools = self._extension_surface_language_model_tools(
             contributions)
         language_model_providers = (
@@ -13274,6 +13638,25 @@ class AIEditorAPI:
         notebook_selected_controllers = sum(
             int(item.get("selectionCount") or 0)
             for item in notebooks)
+        task_providers = sum(
+            int(item.get("providerCount") or 0)
+            for item in task_definitions)
+        task_problem_matchers = sum(
+            int(item.get("problemMatcherCount") or 0)
+            for item in task_definitions)
+        task_runtime_only = sum(
+            1 for item in task_definitions if item.get("runtimeOnly"))
+        debug_config_providers = sum(
+            int(item.get("configurationProviderCount") or 0)
+            for item in debuggers)
+        debug_adapter_factories = sum(
+            int(item.get("adapterFactoryCount") or 0)
+            for item in debuggers)
+        debug_adapter_trackers = sum(
+            int(item.get("adapterTrackerCount") or 0)
+            for item in debuggers)
+        debug_runtime_only = sum(
+            1 for item in debuggers if item.get("runtimeOnly"))
         status_bar_commands = sum(
             1 for item in status_bar_items if item.get("command"))
         status_bar_left = sum(
@@ -13300,6 +13683,8 @@ class AIEditorAPI:
             "commands": commands,
             "menus": menus,
             "terminalProfiles": terminal_profiles,
+            "taskDefinitions": task_definitions,
+            "debuggers": debuggers,
             "languageModelTools": language_model_tools,
             "languageModelProviders": language_model_providers,
             "chatParticipants": chat_participants,
@@ -13370,6 +13755,15 @@ class AIEditorAPI:
                     if item.get("runtimeAvailable")),
                 "menus": len(menus),
                 "terminalProfiles": len(terminal_profiles),
+                "taskDefinitions": len(task_definitions),
+                "taskProviders": task_providers,
+                "taskProblemMatchers": task_problem_matchers,
+                "taskRuntimeOnly": task_runtime_only,
+                "debuggers": len(debuggers),
+                "debugConfigProviders": debug_config_providers,
+                "debugAdapterFactories": debug_adapter_factories,
+                "debugAdapterTrackers": debug_adapter_trackers,
+                "debugRuntimeOnly": debug_runtime_only,
                 "languageModelTools": len(language_model_tools),
                 "languageModelProviders": len(language_model_providers),
                 "chatParticipants": len(chat_participants),
@@ -13387,7 +13781,8 @@ class AIEditorAPI:
                     len(tree_views) + len(webview_views) + len(webview_panels)
                     + len(custom_editors) + len(notebooks)
                     + len(commands) + len(menus)
-                    + len(terminal_profiles) + len(language_model_tools)
+                    + len(terminal_profiles) + len(task_definitions)
+                    + len(debuggers) + len(language_model_tools)
                     + len(language_model_providers) + len(chat_participants)
                     + len(chat_context_providers) + len(status_bar_items)
                     + len(language_status_items)),

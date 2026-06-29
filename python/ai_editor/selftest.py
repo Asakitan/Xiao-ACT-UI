@@ -24343,6 +24343,13 @@ async function activate() {
       );
     },
   });
+  vscode.debug.registerDebugAdapterTrackerFactory('activation-debug', {
+    createDebugAdapterTracker() {
+      return {
+        onWillStartSession() {},
+      };
+    },
+  });
 }
 module.exports = { activate };
 """)
@@ -35718,6 +35725,10 @@ process.stdin.resume();
                     node_runtime_surfaces.get("commands", []))
                 node_runtime_terminal_profiles = list(
                     node_runtime_surfaces.get("terminalProfiles", []))
+                node_runtime_task_definitions = list(
+                    node_runtime_surfaces.get("taskDefinitions", []))
+                node_runtime_debuggers = list(
+                    node_runtime_surfaces.get("debuggers", []))
                 node_runtime_lm_tools = list(
                     node_runtime_surfaces.get("languageModelTools", []))
                 node_runtime_lm_providers = list(
@@ -35807,6 +35818,42 @@ process.stdin.resume();
                                for item in node_runtime_menu_surfaces),
                        json.dumps(node_runtime_surfaces,
                                   ensure_ascii=False, default=str))
+                _check("node-backed task and debug surfaces register dynamically end to end",
+                       node_started is True
+                       and node_runtime_surfaces.get("ok") is True
+                       and any(
+                           item.get("type") == "activation-task"
+                           and item.get("runtimeAvailable") is True
+                           and item.get("providerCount", 0) >= 1
+                           and item.get("hasProvideTasks") is True
+                           and item.get("runtimeOnly") is True
+                           for item in node_runtime_task_definitions)
+                       and any(
+                           item.get("type") == "activation-debug"
+                           and item.get("runtimeAvailable") is True
+                           and item.get("configurationProviderCount", 0) >= 1
+                           and item.get("adapterFactoryCount", 0) >= 1
+                           and item.get("adapterTrackerCount", 0) >= 1
+                           and item.get("hasResolveDebugConfiguration") is True
+                           and item.get("hasCreateDebugAdapterDescriptor")
+                           is True
+                           and item.get("hasCreateDebugAdapterTracker")
+                           is True
+                           and item.get("runtimeOnly") is True
+                           for item in node_runtime_debuggers)
+                       and node_runtime_surfaces.get("summary", {}).get(
+                           "taskProviders", 0) >= 1
+                       and node_runtime_surfaces.get("summary", {}).get(
+                           "debugConfigProviders", 0) >= 1
+                       and node_runtime_surfaces.get("summary", {}).get(
+                           "debugAdapterFactories", 0) >= 1
+                       and node_runtime_surfaces.get("summary", {}).get(
+                           "debugAdapterTrackers", 0) >= 1,
+                       json.dumps({
+                           "taskDefinitions": node_runtime_task_definitions,
+                           "debuggers": node_runtime_debuggers,
+                           "summary": node_runtime_surfaces.get("summary", {}),
+                       }, ensure_ascii=False, default=str))
                 _check("node-backed provider surfaces appear in runtime surface panel data",
                        node_started is True
                        and node_runtime_surfaces.get("ok") is True
