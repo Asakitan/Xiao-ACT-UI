@@ -343,6 +343,12 @@ class Location {
     }
 }
 
+class TabInputText {
+    constructor(uri) {
+        this.uri = uri instanceof Uri ? uri : _uriFromPayload(uri);
+    }
+}
+
 const NotebookCellKind = Object.freeze({ Markup: 1, Code: 2 });
 const NotebookCellStatusBarAlignment = Object.freeze({ Left: 1, Right: 2 });
 const NotebookControllerAffinity = Object.freeze({ Default: 1, Preferred: 2 });
@@ -2717,6 +2723,8 @@ const _onDidChangeTextDocumentEmitter = new EventEmitter();
 const _onDidSaveTextDocumentEmitter = new EventEmitter();
 const _onDidChangeActiveTextEditorEmitter = new EventEmitter();
 const _onDidChangeVisibleTextEditorsEmitter = new EventEmitter();
+const _onDidChangeTabGroupsEmitter = new EventEmitter();
+const _onDidChangeTabsEmitter = new EventEmitter();
 let _activeTextEditor = undefined;
 const _visibleTextEditors = new Map(); // uri -> TextEditor-like object
 const _onDidChangeLmToolsEmitter = new EventEmitter();
@@ -2840,6 +2848,159 @@ function _showTextDocumentOptions(options) {
     };
 }
 
+function _documentTabLabel(document) {
+    if (!document || !document.uri) return '';
+    if (document.uri.scheme === 'untitled') {
+        const base = path.basename(document.uri.path || '');
+        return base || 'Untitled';
+    }
+    if (document.uri.scheme === 'file') return path.basename(document.uri.fsPath || '');
+    return path.basename(document.uri.path || '') || document.uri.toString();
+}
+
+function _editorTabObject(editor, group) {
+    const document = editor && editor.document;
+    const tab = {
+        get isActive() { return _activeTextEditor === editor; },
+        get label() { return _documentTabLabel(document); },
+        get input() { return new TabInputText(document.uri); },
+        get isDirty() { return !!document.isDirty; },
+        get isPinned() { return true; },
+        get isPreview() { return false; },
+        get group() { return group; },
+        _editor: editor,
+    };
+    return tab;
+}
+
+function _editorTabGroupsSnapshot() {
+    const byColumn = new Map();
+    for (const editor of _visibleTextEditors.values()) {
+        const column = _normalizeViewColumn(editor.viewColumn);
+        if (!byColumn.has(column)) byColumn.set(column, []);
+        byColumn.get(column).push(editor);
+    }
+    if (!byColumn.size) byColumn.set(1, []);
+    const activeColumn = _activeTextEditor
+        ? _normalizeViewColumn(_activeTextEditor.viewColumn)
+        : Math.min(...byColumn.keys());
+    return [...byColumn.entries()]
+        .sort((a, b) => a[0] - b[0])
+        .map(([viewColumn, editors]) => {
+            const group = {
+                _tabsCache: undefined,
+                get isActive() { return viewColumn === activeColumn; },
+                viewColumn,
+                get activeTab() {
+                    return this.tabs.find(tab => tab.isActive) || this.tabs[0];
+                },
+                get tabs() {
+                    if (!this._tabsCache) {
+                        this._tabsCache = Object.freeze(
+                            editors.map(editor => _editorTabObject(editor, group)));
+                    }
+                    return this._tabsCache;
+                },
+            };
+            return group;
+        });
+}
+
+function _fireEditorTabEvents(kind, editor) {
+    const groups = _editorTabGroupsSnapshot();
+    let tab = editor
+        ? groups.flatMap(group => group.tabs)
+            .find(candidate => candidate._editor === editor)
+        : undefined;
+    if (!tab && editor && editor.document) {
+        const fallbackGroup = {
+            isActive: false,
+            viewColumn: _normalizeViewColumn(editor.viewColumn),
+            activeTab: undefined,
+            tabs: Object.freeze([]),
+        };
+        tab = _editorTabObject(editor, fallbackGroup);
+    }
+    _onDidChangeTabGroupsEmitter.fire({
+        opened: [],
+        closed: [],
+        changed: groups,
+    });
+    _onDidChangeTabsEmitter.fire({
+        opened: kind === 'open' && tab ? [tab] : [],
+        closed: kind === 'close' && tab ? [tab] : [],
+        changed: kind === 'change' && tab ? [tab] : [],
+    });
+}
+
+function _fireVisibleTextEditorsChanged(kind, editor) {
+    _onDidChangeVisibleTextEditorsEmitter.fire(
+        Array.from(_visibleTextEditors.values()));
+    _fireEditorTabEvents(kind, editor);
+}
+
+function _closeTextEditor(editor) {
+    if (!editor || !editor.document || !editor.document.uri) return false;
+    const key = editor.document.uri.toString();
+    if (_visibleTextEditors.get(key) !== editor) return false;
+    _visibleTextEditors.delete(key);
+    if (_activeTextEditor === editor) {
+        _activeTextEditor = undefined;
+        _onDidChangeActiveTextEditorEmitter.fire(undefined);
+    }
+    _fireVisibleTextEditorsChanged('close', editor);
+    return true;
+}
+
+function _tabEditor(tab) {
+    return tab && tab._editor;
+}
+
+function _tabGroupEditors(group) {
+    if (!group || !Array.isArray(group.tabs)) return [];
+    return group.tabs.map(_tabEditor).filter(Boolean);
+}
+
+async function _tabGroupsClose(tabOrGroup, preserveFocus) {
+    const items = Array.isArray(tabOrGroup) ? tabOrGroup : [tabOrGroup];
+    if (!items.length) return true;
+    let ok = true;
+    for (const item of items) {
+        const editors = item && Array.isArray(item.tabs)
+            ? _tabGroupEditors(item)
+            : [_tabEditor(item)].filter(Boolean);
+        if (!editors.length) {
+            ok = false;
+            continue;
+        }
+        for (const editor of editors) {
+            ok = _workspaceCloseTextDocument(editor.document) !== undefined && ok;
+        }
+    }
+    if (preserveFocus && !_activeTextEditor) {
+        const first = _visibleTextEditors.values().next();
+        if (!first.done) {
+            _activeTextEditor = first.value;
+            _onDidChangeActiveTextEditorEmitter.fire(_activeTextEditor);
+            _fireEditorTabEvents('change', _activeTextEditor);
+        }
+    }
+    return ok;
+}
+
+function _tabGroupsApiObject() {
+    return {
+        onDidChangeTabGroups: _onDidChangeTabGroupsEmitter.event,
+        onDidChangeTabs: _onDidChangeTabsEmitter.event,
+        get all() { return Object.freeze(_editorTabGroupsSnapshot()); },
+        get activeTabGroup() {
+            return _editorTabGroupsSnapshot().find(group => group.isActive)
+                || _editorTabGroupsSnapshot()[0];
+        },
+        close: _tabGroupsClose,
+    };
+}
+
 function _createTextEditor(document, options) {
     const showOptions = _showTextDocumentOptions(options);
     const initialSelection = showOptions.selection
@@ -2893,16 +3054,7 @@ function _createTextEditor(document, options) {
         },
         show() { return _showTextDocumentEditor(document, showOptions); },
         hide() {
-            const key = document.uri.toString();
-            if (_visibleTextEditors.get(key) === this) {
-                _visibleTextEditors.delete(key);
-                if (_activeTextEditor === this) {
-                    _activeTextEditor = undefined;
-                    _onDidChangeActiveTextEditorEmitter.fire(undefined);
-                }
-                _onDidChangeVisibleTextEditorsEmitter.fire(
-                    Array.from(_visibleTextEditors.values()));
-            }
+            _closeTextEditor(this);
         },
     };
 }
@@ -2915,17 +3067,21 @@ function _showTextDocumentEditor(document, options) {
     if (!editor || editor.document !== document) {
         editor = _createTextEditor(document, showOptions);
         _visibleTextEditors.set(key, editor);
-        _onDidChangeVisibleTextEditorsEmitter.fire(
-            Array.from(_visibleTextEditors.values()));
+        _fireVisibleTextEditorsChanged('open', editor);
     } else {
+        const previousColumn = editor.viewColumn;
         editor.viewColumn = showOptions.viewColumn;
         if (showOptions.selection) {
             editor.selection = showOptions.selection;
+        }
+        if (previousColumn !== editor.viewColumn || showOptions.selection) {
+            _fireEditorTabEvents('change', editor);
         }
     }
     if (!showOptions.preserveFocus && _activeTextEditor !== editor) {
         _activeTextEditor = editor;
         _onDidChangeActiveTextEditorEmitter.fire(editor);
+        _fireEditorTabEvents('change', editor);
     }
     return Promise.resolve(editor);
 }
@@ -7839,8 +7995,7 @@ function _workspaceCloseTextDocument(uriOrDoc) {
             _activeTextEditor = undefined;
             _onDidChangeActiveTextEditorEmitter.fire(undefined);
         }
-        _onDidChangeVisibleTextEditorsEmitter.fire(
-            Array.from(_visibleTextEditors.values()));
+        _fireVisibleTextEditorsChanged('close', editor);
     }
     if (_workspaceDocumentIsOpened(doc)) _onDidCloseTextDocumentEmitter.fire(doc);
     return doc;
@@ -9914,6 +10069,7 @@ function buildVscodeModule(extDesc, extensionPath, storageRoot) {
         Range,
         Selection,
         Location,
+        TabInputText,
         ThemeColor,
         ThemeIcon,
         FileDecoration,
@@ -10031,8 +10187,16 @@ function buildVscodeModule(extDesc, extensionPath, storageRoot) {
                 if (handler) return Promise.resolve(handler(...args));
                 return _executePythonCommand(id, args);
             },
-            registerTextEditorCommand(id, handler) {
-                return vscode.commands.registerCommand(id, handler);
+            registerTextEditorCommand(id, handler, thisArg) {
+                return vscode.commands.registerCommand(id, (...args) => {
+                    const editor = _activeTextEditor;
+                    if (!editor || !editor.document) {
+                        log(`Cannot execute ${id} because there is no active text editor.`);
+                        return undefined;
+                    }
+                    return editor.edit(editBuilder => (
+                        handler.apply(thisArg, [editor, editBuilder, ...args])));
+                });
             },
             getCommands(filterInternal) {
                 return Promise.resolve([..._commands.keys()]);
@@ -10449,7 +10613,7 @@ function buildVscodeModule(extDesc, extensionPath, storageRoot) {
             onDidChangeVisibleTextEditors: _onDidChangeVisibleTextEditorsEmitter.event,
             onDidChangeActiveColorTheme: new EventEmitter().event,
             get tabGroups() {
-                return { all: [], activeTabGroup: { tabs: [], isActive: true, viewColumn: 1 }, onDidChangeTabGroups: new EventEmitter().event, onDidChangeTabs: new EventEmitter().event, close: () => Promise.resolve() };
+                return _tabGroupsApiObject();
             },
         },
 

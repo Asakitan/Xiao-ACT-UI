@@ -27680,6 +27680,8 @@ async function activate(context) {
   vscode.commands.registerCommand('selftest.node.textEditorProbe', async () => {
     const activeEvents = [];
     const visibleEvents = [];
+    const tabGroupEvents = [];
+    const tabEvents = [];
     const activeDisposable = vscode.window.onDidChangeActiveTextEditor(editor => {
       activeEvents.push(editor && editor.document
         ? editor.document.uri.toString()
@@ -27689,6 +27691,20 @@ async function activate(context) {
       visibleEvents.push((editors || []).map(editor => (
         editor && editor.document ? editor.document.uri.toString() : ''
       )));
+    });
+    const tabGroupDisposable = vscode.window.tabGroups.onDidChangeTabGroups(event => {
+      tabGroupEvents.push({
+        opened: event.opened.length,
+        closed: event.closed.length,
+        changed: event.changed.length,
+      });
+    });
+    const tabDisposable = vscode.window.tabGroups.onDidChangeTabs(event => {
+      tabEvents.push({
+        opened: event.opened.length,
+        closed: event.closed.length,
+        changed: event.changed.length,
+      });
     });
     const document = await vscode.workspace.openTextDocument({
       language: 'plaintext',
@@ -27703,15 +27719,45 @@ async function activate(context) {
     await editor.edit(editBuilder => {
       editBuilder.replace(new vscode.Range(0, 0, 0, 5), 'ALPHA');
     });
+    let commandEditorSame = false;
+    let commandArg = '';
+    const commandDisposable = vscode.commands.registerTextEditorCommand(
+      'selftest.node.injectedTextEditorCommand',
+      (active, editBuilder, arg) => {
+        commandEditorSame = active === editor;
+        commandArg = String(arg || '');
+        editBuilder.insert(new vscode.Position(1, 4), '-cmd');
+      },
+    );
+    await vscode.commands.executeCommand(
+      'selftest.node.injectedTextEditorCommand', 'arg-value');
     const activeAfterShow = vscode.window.activeTextEditor === editor;
     const visibleAfterShow = vscode.window.visibleTextEditors.includes(editor);
     const selectionLine = editor.selection && editor.selection.start.line;
     const shownText = editor.document.getText();
-    editor.hide();
+    const tabGroups = vscode.window.tabGroups;
+    const activeGroup = tabGroups.activeTabGroup;
+    const activeTab = activeGroup && activeGroup.activeTab;
+    const tabSnapshot = {
+      groupCount: tabGroups.all.length,
+      activeGroupColumn: activeGroup && activeGroup.viewColumn,
+      activeGroupTabCount: activeGroup && activeGroup.tabs.length,
+      activeTabLabel: activeTab && activeTab.label,
+      activeTabDirty: activeTab && activeTab.isDirty,
+      activeTabIsActive: activeTab && activeTab.isActive,
+      activeTabInputUri: activeTab && activeTab.input && activeTab.input.uri
+        && activeTab.input.uri.toString(),
+      activeTabInputType: activeTab && activeTab.input instanceof vscode.TabInputText,
+      activeTabGroupSame: activeTab && activeTab.group === activeGroup,
+    };
+    const closeResult = await tabGroups.close(activeTab);
     const activeAfterHide = !!vscode.window.activeTextEditor;
     const visibleAfterHide = vscode.window.visibleTextEditors.length;
+    commandDisposable.dispose();
     activeDisposable.dispose();
     visibleDisposable.dispose();
+    tabGroupDisposable.dispose();
+    tabDisposable.dispose();
     return {
       beforeActive,
       beforeVisible,
@@ -27720,10 +27766,16 @@ async function activate(context) {
       selectionLine,
       viewColumn: editor.viewColumn,
       shownText,
+      commandEditorSame,
+      commandArg,
+      closeResult,
       activeAfterHide,
       visibleAfterHide,
       activeEvents,
       visibleEvents,
+      tabGroupEvents,
+      tabEvents,
+      tabSnapshot,
       documentUri: document.uri.toString(),
     };
   });
@@ -34852,7 +34904,10 @@ process.stdin.resume();
                        and node_text_editor_probe.get("selectionLine") == 1
                        and node_text_editor_probe.get("viewColumn") == 2
                        and node_text_editor_probe.get("shownText")
-                       == "ALPHA\\nbeta"
+                       == "ALPHA\\nbeta-cmd"
+                       and node_text_editor_probe.get("commandEditorSame") is True
+                       and node_text_editor_probe.get("commandArg") == "arg-value"
+                       and node_text_editor_probe.get("closeResult") is True
                        and node_text_editor_probe.get("activeAfterHide") is False
                        and node_text_editor_probe.get("visibleAfterHide") == 0
                        and len(node_text_editor_probe.get(
@@ -34861,7 +34916,30 @@ process.stdin.resume();
                            node_text_editor_probe.get("documentUri")
                            in visible
                            for visible in node_text_editor_probe.get(
-                               "visibleEvents", [])),
+                               "visibleEvents", []))
+                       and node_text_editor_probe.get(
+                           "tabSnapshot", {}).get("groupCount") == 1
+                       and node_text_editor_probe.get(
+                           "tabSnapshot", {}).get("activeGroupColumn") == 2
+                       and node_text_editor_probe.get(
+                           "tabSnapshot", {}).get("activeGroupTabCount") == 1
+                       and node_text_editor_probe.get(
+                           "tabSnapshot", {}).get("activeTabDirty") is True
+                       and node_text_editor_probe.get(
+                           "tabSnapshot", {}).get("activeTabIsActive") is True
+                       and node_text_editor_probe.get(
+                           "tabSnapshot", {}).get("activeTabInputType") is True
+                       and node_text_editor_probe.get(
+                           "tabSnapshot", {}).get("activeTabGroupSame") is True
+                       and node_text_editor_probe.get(
+                           "tabSnapshot", {}).get("activeTabInputUri")
+                       == node_text_editor_probe.get("documentUri")
+                       and any(item.get("opened") == 1 for item in
+                               node_text_editor_probe.get("tabEvents", []))
+                       and any(item.get("closed") == 1 for item in
+                               node_text_editor_probe.get("tabEvents", []))
+                       and any(item.get("changed", 0) >= 1 for item in
+                               node_text_editor_probe.get("tabGroupEvents", [])),
                        json.dumps(node_text_editor_probe,
                                   ensure_ascii=False, default=str))
                 _check("node host status bar messages use dynamic UI bridge",
