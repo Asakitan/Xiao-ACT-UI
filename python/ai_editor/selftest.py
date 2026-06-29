@@ -11217,7 +11217,10 @@ console.log("frontend word separator behavior ok");
             and "function settingsRecommendationItems()" in html
             and "function renderSettingsRecommendations()" in html
             and "host.classList.toggle('quiet',!show);" in html
-            and "function settingsRecommendationApply(kind)" in html
+            and "async function settingsRecommendationApply(kind)" in html
+            and "settingsDetectedFormatterProviders('s-editor-default-formatter')" in html
+            and "defaultFormatterMissingProvider" in html
+            and "defaultFormatterFirst" in html
             and "function settingsRecommendationShowKey(key,target)" in html
             and "renderSettingsRecommendations();" in html
             and "Enable format on save" in html
@@ -16353,6 +16356,10 @@ console.log("command palette quick access helpers ok");
            and "dataset.problemQuickFixable" in html
            and "dataset.problemDiffOpenable" in html
            and "dataset.problemActionCount" in html
+           and "async function applyEditorQuickFixForProblem(problem,quiet)" in html
+           and "function editorPreferredProblemCodeAction(actions)" in html
+           and "apply.dataset.problemAction=d.kind==='diff'?'open-diff-direct':'apply-quick-fix';" in html
+           and "else if(ev.ctrlKey&&ev.key==='Enter')" in html
            and ".problems-nav" in html
            and ".problems-filterbar" in html
            and ".problem-group-header" in html
@@ -16360,6 +16367,7 @@ console.log("command palette quick access helpers ok");
            and "problemVisibleCount" in html
            and "problemHiddenCount" in html
            and "previewOpened" in html
+           and "applyQuickFixCount" in html
            and "filteredQuery" in html
            and "severityFilterButtonCount" in html
            and "severitySourceSeverity" in html

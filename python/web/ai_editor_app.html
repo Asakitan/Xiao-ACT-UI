@@ -20988,6 +20988,20 @@ async function pickSettingsDefaultFormatter(inputId){
   if(!selected)return false;
   return setSettingsFormatterInput(inputId,selected.providerId);
 }
+function settingsDetectedFormatterProviders(inputId){
+  const selector=inputId?'[data-target-input="'+inputId+'"] [data-formatter-provider-id]':'[data-formatter-provider-id]';
+  const seen=new Set();
+  return Array.from(document.querySelectorAll(selector)).map(btn=>{
+    const id=String(btn.dataset.formatterProviderId||'').trim();
+    if(!id||seen.has(id.toLowerCase()))return null;
+    seen.add(id.toLowerCase());
+    return {
+      providerId:id,
+      displayName:String(btn.textContent||id).trim()||id,
+      isDefault:btn.dataset.formatterDefault==='1'
+    };
+  }).filter(Boolean);
+}
 function finishEditorFormatterPicker(provider){
   const session=_editorFormatterPickSession;
   _editorFormatterPickSession=null;
@@ -27058,6 +27072,34 @@ async function requestEditorQuickFixForProblem(problem,quiet){
   await requestEditorCodeActionsForKind(quiet===true,'quickfix','quick fix');
   return true;
 }
+function editorPreferredProblemCodeAction(actions){
+  const values=(Array.isArray(actions)?actions:[]).filter(action=>action&&!codeActionDisabledText(action&&action.disabled));
+  return values.find(action=>action&&action.isPreferred)||
+    values.find(action=>codeActionKindBucket(action&&action.kind)==='quickfix')||
+    values[0]||null;
+}
+async function applyEditorQuickFixForProblem(problem,quiet){
+  if(!focusEditorProblem(problem))return false;
+  if(problem&&problem.kind==='diff'){openActiveEditorDirtyDiff();return true}
+  const range=problem&&problem.range?problem.range:editorSelectedRangePayload();
+  const res=await fetchEditorCodeActionsForKind('quickfix',range);
+  if(res&&res.cancelled)return false;
+  if(res&&res.error){
+    if(!quiet)setStatus('Quick fix failed: '+res.error);
+    return false;
+  }
+  const actions=Array.isArray(res&&res.actions)?res.actions:[];
+  const action=editorPreferredProblemCodeAction(actions);
+  if(!action){
+    if(!quiet)setStatus('No quick fix for selected problem');
+    return false;
+  }
+  await applyEditorCodeAction(action);
+  if($('problems-panel')&&$('problems-panel').style.display!=='none'){
+    renderProblemsRows(editorAllProblemRows(_editorDiagnostics));
+  }
+  return true;
+}
 function updateProblemsPanelFromEditorDiagnostics(diagnostics){
   const panel=$('problems-panel');
   const rows=editorAllProblemRows(diagnostics);
@@ -27205,7 +27247,7 @@ function renderProblemsRows(rows){
     row.dataset.problemColumn=String(d.character||'');
     row.dataset.problemSource=String(d.source||'');
     row.dataset.problemCode=String(code||'');
-    row.dataset.problemActionCount=String(d._problemActionCount||2);
+    row.dataset.problemActionCount=String(d._problemActionCount||(d.kind==='diff'?3:4));
     row.dataset.problemQuickFixable=d.kind==='diff'?'0':'1';
     row.dataset.problemDiffOpenable=d.kind==='diff'?'1':'0';
     row.dataset.problemActive=active?'1':'0';
@@ -27227,10 +27269,13 @@ function renderProblemsRows(rows){
     const fix=document.createElement('button');fix.type='button';fix.textContent=d.kind==='diff'?'Diff':'Quick Fix';fix.title=d.kind==='diff'?'Open side-by-side diff':'Show quick fixes for this problem';
     fix.dataset.problemAction=d.kind==='diff'?'open-diff':'quick-fix';
     fix.onclick=ev=>{ev.preventDefault();ev.stopPropagation();requestEditorQuickFixForProblem(d,false)};
+    const apply=document.createElement('button');apply.type='button';apply.textContent=d.kind==='diff'?'Open':'Apply';apply.title=d.kind==='diff'?'Open side-by-side diff':'Apply the best quick fix for this problem';
+    apply.dataset.problemAction=d.kind==='diff'?'open-diff-direct':'apply-quick-fix';
+    apply.onclick=ev=>{ev.preventDefault();ev.stopPropagation();applyEditorQuickFixForProblem(d,false)};
     const copy=document.createElement('button');copy.type='button';copy.textContent='Copy';copy.title='Copy problem details';
     copy.dataset.problemAction='copy';
     copy.onclick=ev=>{ev.preventDefault();ev.stopPropagation();settingsCopyText([sev.toUpperCase(),location,d.message,meta+tagText].filter(Boolean).join(' '),'Problem')};
-    actions.appendChild(preview);actions.appendChild(fix);actions.appendChild(copy);
+    actions.appendChild(preview);actions.appendChild(fix);actions.appendChild(apply);actions.appendChild(copy);
     row.appendChild(severity);row.appendChild(main);row.appendChild(actions);
     const previewBox=document.createElement('div');previewBox.className='problem-quickfix-preview';
     previewBox.dataset.problemPreview='1';
@@ -27243,6 +27288,7 @@ function renderProblemsRows(rows){
       else if(ev.key==='ArrowDown'){ev.preventDefault();focusEditorProblemByDirection(1)}
       else if(ev.key==='ArrowUp'){ev.preventDefault();focusEditorProblemByDirection(-1)}
       else if(ev.key==='F2'||(ev.ctrlKey&&ev.key==='.')){ev.preventDefault();requestEditorQuickFixForProblem(d,false)}
+      else if(ev.ctrlKey&&ev.key==='Enter'){ev.preventDefault();applyEditorQuickFixForProblem(d,false)}
     };
     el.appendChild(row);
   });
@@ -33288,7 +33334,7 @@ function settingsRecommendationSetValue(inputId,value){
   if(row)settingsHighlightRow(row);
   return true;
 }
-function settingsRecommendationApply(kind){
+async function settingsRecommendationApply(kind){
   kind=String(kind||'');
   if(kind==='formatOnSave')return settingsRecommendationSetChecked('s-editor-format-on-save',true);
   if(kind==='filesSaveHygiene'){
@@ -33300,6 +33346,12 @@ function settingsRecommendationApply(kind){
   if(kind==='disableExtensionDiagnostics')return settingsRecommendationSetChecked('s-ext-diagnostics',false);
   if(kind==='terminalProfile')return settingsRecommendationSetValue('s-term-profile','Windows PowerShell');
   if(kind==='languageOverride')return settingsRecommendationSetChecked('s-editor-lang-override-enabled',true);
+  if(kind==='defaultFormatterFirst'){
+    const providers=settingsDetectedFormatterProviders('s-editor-default-formatter');
+    if(providers.length)return setSettingsFormatterInput('s-editor-default-formatter',providers[0].providerId);
+    return pickSettingsDefaultFormatter('s-editor-default-formatter');
+  }
+  if(kind==='defaultFormatterPick')return pickSettingsDefaultFormatter('s-editor-default-formatter');
   return false;
 }
 function settingsRecommendationShowKey(key,target){
@@ -33317,15 +33369,28 @@ function settingsRecommendationItems(){
   const editor=settingSection('editor'),files=settingSection('files'),workspace=settingSection('workspace'),terminal=settingSection('terminal'),extensions=settingSection('extensions');
   const formatOnSave=readCheckedValue('s-editor-format-on-save')||editor.formatOnSave===true;
   const defaultFormatter=readInputValue('s-editor-default-formatter')||editor.defaultFormatter||editor.default_formatter||'';
+  const formatterProviders=settingsDetectedFormatterProviders('s-editor-default-formatter');
+  const formatterProviderIds=formatterProviders.map(provider=>String(provider.providerId||'').toLowerCase());
   if(!formatOnSave)add({
     id:'formatOnSave',severity:'active',title:'Enable format on save',
     detail:'Run formatter providers before explicit saves so editor formatting settings have visible effect.',
     key:'editor.formatOnSave',target:'user',action:'Enable',apply:'formatOnSave'
   });
-  if(formatOnSave&&!String(defaultFormatter||'').trim())add({
+  if(formatOnSave&&!String(defaultFormatter||'').trim()&&formatterProviders.length===1)add({
+    id:'defaultFormatterAuto',severity:'active',title:'Use '+formatterProviders[0].displayName+' as default formatter',
+    detail:'One formatter provider is available for '+String(editorLang||'the active language')+'. Set it as editor.defaultFormatter for VS Code-style provider tie-breaks.',
+    key:'editor.defaultFormatter',target:'user',action:'Use',apply:'defaultFormatterFirst'
+  });
+  if(formatOnSave&&!String(defaultFormatter||'').trim()&&formatterProviders.length!==1)add({
     id:'defaultFormatter',severity:'warning',title:'Choose a default formatter',
     detail:'Format on save is enabled, but no default formatter is selected for provider tie-breaks.',
-    key:'editor.defaultFormatter',target:'user',action:'Open'
+    key:'editor.defaultFormatter',target:'user',action:formatterProviders.length?'Pick':'Open',apply:formatterProviders.length?'defaultFormatterPick':''
+  });
+  if(String(defaultFormatter||'').trim()&&formatterProviders.length&&
+      !formatterProviderIds.includes(String(defaultFormatter||'').trim().toLowerCase()))add({
+    id:'defaultFormatterMissingProvider',severity:'warning',title:'Default formatter is not active',
+    detail:'The configured formatter "'+String(defaultFormatter).trim()+'" is not registered for '+String(editorLang||'the active language')+'. Pick an active provider.',
+    key:'editor.defaultFormatter',target:'user',action:'Pick',apply:'defaultFormatterPick'
   });
   if(!(readCheckedValue('s-files-trim-trailing-whitespace')||files.trimTrailingWhitespace===true)||
      !(readCheckedValue('s-files-insert-final-newline')||files.insertFinalNewline===true)){
@@ -50052,6 +50117,7 @@ function editorDirtyDiffSelfCheckSnapshot(){
     const diagnosticRows=problemRows.filter(row=>row.dataset.problemKind==='diagnostic');
     const diffRows=problemRows.filter(row=>row.dataset.problemKind==='diff');
     const quickFixButtons=Array.from(document.querySelectorAll('#problems-content [data-problem-action="quick-fix"]'));
+    const applyQuickFixButtons=Array.from(document.querySelectorAll('#problems-content [data-problem-action="apply-quick-fix"]'));
     const diffButtons=Array.from(document.querySelectorAll('#problems-content [data-problem-action="open-diff"]'));
     const navButtons=Array.from(document.querySelectorAll('#problems-content .problems-nav'));
     const summaryChips=Array.from(document.querySelectorAll('#problems-content .problems-chip')).map(chip=>chip.textContent);
@@ -50173,6 +50239,7 @@ function editorDirtyDiffSelfCheckSnapshot(){
       problemRowDatasetOk:problemRows.every(row=>row.dataset.problemKind&&row.dataset.problemLine&&row.dataset.problemSource!==undefined&&row.dataset.problemCode!==undefined),
       problemRowStateDatasetOk:rowsWithOrdinalAndKey.length===problemRows.length&&rowsWithAria.length===problemRows.length,
       quickFixCount:quickFixButtons.length,
+      applyQuickFixCount:applyQuickFixButtons.length,
       diffActionCount:diffButtons.length,
       problemNavCount:navButtons.length,
       severityFilterButtonCount:severityFilterButtons.length,
@@ -50221,7 +50288,7 @@ function editorDirtyDiffSelfCheckSnapshot(){
         featureAggregate.activeFeatures.includes('diff')&&featureAggregate.diffTotal>0&&
         String(featureAggregate.label||'').includes('diff')&&
         problemRows.length>=2&&diagnosticRows.length>=1&&diffRows.length>=1&&
-        quickFixButtons.length>=1&&diffButtons.length>=1&&
+        quickFixButtons.length>=1&&applyQuickFixButtons.length>=1&&diffButtons.length>=1&&
         navButtons.length>=2&&activeRowsAfterFocus.length===1&&activeDatasetAfterFocus==='1'&&
         navigatedProblem&&activeRowsAfterNav.length===1&&rowsWithOrdinalAndKey.length===problemRows.length&&rowsWithAria.length===problemRows.length&&
         Number(problemPanelSnapshot.actionCount||0)>=problemRows.length*2&&
