@@ -278,6 +278,30 @@ function _asWebviewResourceUri(localUri) {
     );
 }
 
+function _webviewResourceRootPath(root) {
+    try {
+        const uri = root instanceof Uri ? root : _workspaceUriFromInput(root);
+        return path.resolve(uri.fsPath || '').toLowerCase();
+    } catch {
+        return '';
+    }
+}
+
+function _webviewResourceWithinRoots(localUri, roots) {
+    let fsPath = '';
+    try {
+        const uri = localUri instanceof Uri ? localUri : _workspaceUriFromInput(localUri);
+        fsPath = path.resolve(uri.fsPath || '').toLowerCase();
+    } catch {
+        return false;
+    }
+    if (!fsPath) return false;
+    return (Array.isArray(roots) ? roots : []).some(root => {
+        const rootPath = _webviewResourceRootPath(root);
+        return !!rootPath && (fsPath === rootPath || fsPath.startsWith(rootPath + path.sep));
+    });
+}
+
 // -------------------------------------------------------------------------
 // Position / Range / Selection / Location
 // -------------------------------------------------------------------------
@@ -966,6 +990,11 @@ CodeActionKind.Source = CodeActionKind.Empty.append('source');
 CodeActionKind.SourceOrganizeImports = CodeActionKind.Source.append('organizeImports');
 CodeActionKind.SourceFixAll = CodeActionKind.Source.append('fixAll');
 CodeActionKind.Notebook = CodeActionKind.Empty.append('notebook');
+
+const CodeActionTriggerKind = {
+    Invoke: 1,
+    Automatic: 2,
+};
 
 class DocumentDropEdit {
     constructor(insertText, title, kind) {
@@ -1752,6 +1781,12 @@ class Webview {
             ? defaultLocalResourceRoots
             : [];
         this._disposed = false;
+        this._asWebviewUriStats = {
+            count: 0,
+            lastSource: '',
+            lastUri: '',
+            lastInLocalResourceRoot: false,
+        };
         this._onDidReceiveMessage = new EventEmitter();
         this.onDidReceiveMessage = this._onDidReceiveMessage.event;
         this.cspSource = WEBVIEW_CSP_SOURCE;
@@ -1812,7 +1847,26 @@ class Webview {
     }
     asWebviewUri(localUri) {
         this._assertAlive();
-        return _asWebviewResourceUri(localUri);
+        const uri = localUri instanceof Uri ? localUri : _workspaceUriFromInput(localUri);
+        const webviewUri = _asWebviewResourceUri(uri);
+        const roots = this._localResourceRootValues();
+        this._asWebviewUriStats = {
+            count: Number(this._asWebviewUriStats.count || 0) + 1,
+            lastSource: uri.toString(),
+            lastUri: webviewUri.toString(),
+            lastInLocalResourceRoot: _webviewResourceWithinRoots(uri, roots),
+        };
+        send({
+            type: 'webview_resource_uri',
+            viewId: this._viewId,
+            viewType: this._viewType,
+            title: this._title,
+            source: this._asWebviewUriStats.lastSource,
+            uri: this._asWebviewUriStats.lastUri,
+            inLocalResourceRoot: this._asWebviewUriStats.lastInLocalResourceRoot,
+            count: this._asWebviewUriStats.count,
+        });
+        return webviewUri;
     }
     _setState(state) {
         this._state = state === undefined ? null : state;
@@ -1821,13 +1875,16 @@ class Webview {
         this._viewType = String(viewType || '');
         this._title = String(title || '');
     }
-    _localResourceRootsPayload() {
-        const roots = (
+    _localResourceRootValues() {
+        return (
             this._options
             && Array.isArray(this._options.localResourceRoots)
         )
             ? this._options.localResourceRoots
             : this._defaultLocalResourceRoots;
+    }
+    _localResourceRootsPayload() {
+        const roots = this._localResourceRootValues();
         return roots.map((root) => {
             const uri = root instanceof Uri ? root : _workspaceUriFromInput(root);
             return {
@@ -1862,6 +1919,11 @@ class Webview {
         }
         const roots = this._localResourceRootsPayload();
         if (roots !== undefined) payload.localResourceRoots = roots;
+        payload.defaultLocalResourceRootCount = this._defaultLocalResourceRoots.length;
+        payload.asWebviewUriCallCount = Number(this._asWebviewUriStats.count || 0);
+        payload.lastAsWebviewUri = this._asWebviewUriStats.lastUri || '';
+        payload.lastAsWebviewUriSource = this._asWebviewUriStats.lastSource || '';
+        payload.lastAsWebviewUriInLocalResourceRoot = !!this._asWebviewUriStats.lastInLocalResourceRoot;
         return payload;
     }
 }
@@ -12025,6 +12087,7 @@ function buildVscodeModule(extDesc, extensionPath, storageRoot) {
             }
         },
         CodeActionKind,
+        CodeActionTriggerKind,
         Hover: class { constructor(contents, range) { this.contents = Array.isArray(contents) ? contents : [contents]; this.range = range; } },
         DocumentLink: class { constructor(range, target) { this.range = range; this.target = target; } },
         DocumentDropOrPasteEditKind,
@@ -15012,10 +15075,19 @@ async function handleLanguageProviderRequest(msg) {
             const values = [];
             const rawResolveCount = Number(msg.itemResolveCount || msg.resolveCount || 0);
             let remainingResolves = Number.isFinite(rawResolveCount) ? Math.max(0, rawResolveCount) : 0;
+            const onlyKind = msg.only === undefined || msg.only === null
+                ? undefined
+                : _codeActionKindFromPayload(msg.only);
+            const rawTriggerKind = Number(msg.triggerKind);
+            const triggerKind = (
+                rawTriggerKind === CodeActionTriggerKind.Invoke
+                || rawTriggerKind === CodeActionTriggerKind.Automatic)
+                ? rawTriggerKind
+                : CodeActionTriggerKind.Invoke;
             const codeActionContext = {
                 diagnostics: _codeActionDiagnostics(document, msg),
-                only: msg.only,
-                triggerKind: msg.triggerKind,
+                only: onlyKind,
+                triggerKind,
             };
             for (const entry of providers) {
                 if (token.isCancellationRequested) { respondCancelled(); return; }

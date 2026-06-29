@@ -3884,8 +3884,15 @@ class VscodeNamespace:
         }
         if kind is not None:
             context["only"] = kind
-        if trigger_kind is not None:
-            context["triggerKind"] = trigger_kind
+        try:
+            normalized_trigger_kind = int(trigger_kind)
+        except Exception:
+            normalized_trigger_kind = 1
+        if normalized_trigger_kind not in (1, 2):
+            normalized_trigger_kind = 1
+        context["triggerKind"] = (
+            normalized_trigger_kind if trigger_kind is not None
+            else 1)
         try:
             remaining_resolves = max(0, int(item_resolve_count or 0))
         except Exception:
@@ -4502,6 +4509,7 @@ class VscodeNamespace:
                 "SourceFixAll": "source.fixAll",
                 "Empty": "",
             },
+            "CodeActionTriggerKind": {"Invoke": 1, "Automatic": 2},
             "DiagnosticSeverity": {"Error": 0, "Warning": 1, "Information": 2, "Hint": 3},
             "DiagnosticTag": {"Unnecessary": 1, "Deprecated": 2},
             "FileType": {"Unknown": 0, "File": 1, "Directory": 2, "SymbolicLink": 64},

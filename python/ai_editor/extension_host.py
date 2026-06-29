@@ -2423,6 +2423,41 @@ class NodeExtensionHost:
                         "[NodeExtHost] update_webview_panel_options failed "
                         "for %s", view_id)
 
+        elif msg_type == "webview_resource_uri":
+            view_id = str(msg.get("viewId", ""))
+            view_type = str(msg.get("viewType", ""))
+            title = str(msg.get("title", ""))
+            options = {
+                "asWebviewUriCallCount": int(msg.get("count") or 0),
+                "lastAsWebviewUri": str(msg.get("uri") or ""),
+                "lastAsWebviewUriSource": str(msg.get("source") or ""),
+                "lastAsWebviewUriInLocalResourceRoot": bool(
+                    msg.get("inLocalResourceRoot", False)),
+            }
+            if self._ui_bridge and view_id:
+                try:
+                    updater = getattr(
+                        self._ui_bridge, "update_webview_panel_options", None)
+                    if callable(updater):
+                        updater(view_id, options, None, view_type, title)
+                except Exception:
+                    _log.exception(
+                        "[NodeExtHost] update_webview_panel_options failed "
+                        "for resource URI %s", view_id)
+                try:
+                    updater = getattr(
+                        self._ui_bridge, "update_webview_view_metadata", None)
+                    if callable(updater):
+                        updater(view_id, view_type, {
+                            "title": title,
+                            "options": options,
+                            "source": msg_type,
+                        })
+                except Exception:
+                    _log.exception(
+                        "[NodeExtHost] update_webview_view_metadata failed "
+                        "for resource URI %s", view_id)
+
         elif msg_type == "webview_view_provider_registered":
             view_type = str(msg.get("viewType", ""))
             if view_type:

@@ -1204,6 +1204,7 @@ def test_app_settings_parity() -> None:
             self.seen_on_type_trigger = None
             self.seen_inlay_resolves = 0
             self.seen_code_action_resolves = 0
+            self.seen_code_action_contexts = []
 
         def provideCompletionItems(self, document, position, token, context):
             self.seen_texts.append(document.getText())
@@ -1246,6 +1247,7 @@ def test_app_settings_parity() -> None:
             return [TextEdit.insert(position, "typed")]
 
         def provideCodeActions(self, document, range, context, token):
+            self.seen_code_action_contexts.append(dict(context or {}))
             action = CodeAction("Replace buffer", "quickfix")
             action.diagnostics = context.get("diagnostics", [])
             edit = WorkspaceEdit()
@@ -1883,7 +1885,13 @@ def test_app_settings_parity() -> None:
         ]
         _check("editor_language_provider forwards diagnostics to code actions",
                 "editor boom" in context_messages
-                and "frontend boom" in context_messages)
+                and "frontend boom" in context_messages
+                and any(
+                    item.get("triggerKind") == 1
+                    for item in editor_provider.seen_code_action_contexts)
+                and any(
+                    item.get("only") == "source.organizeImports"
+                    for item in editor_provider.seen_code_action_contexts))
         _check("editor_language_provider exposes code action metadata",
                provider_metadata_result.get("ok") is True
                and any(
@@ -5175,7 +5183,8 @@ def test_phase1_ai_editor_regressions() -> None:
              and ".chat-control-strip { display:flex; align-items:center; gap:6px; flex:0 0 auto; flex-wrap:nowrap; min-width:max-content;" in html
              and "overflow:visible; width:max-content; max-width:none;" in html
              and "--chat-provider-width:128px;" in html
-            and "--chat-model-width:36px;" in html
+            and "--chat-model-width:112px;" in html
+            and "width:33%;min-width:92px;max-width:132px" in html
             and "--chat-agent-width:140px;" in html
             and "--chat-workflow-width:144px;" in html
              and "appearance:none; -webkit-appearance:none; line-height:20px;" in html
@@ -6667,7 +6676,7 @@ def test_phase1_ai_editor_regressions() -> None:
             and "inputThreeLineHeight:!!(container&&container.querySelector('.chat-input')&&container.querySelector('.chat-input').getBoundingClientRect().height>=72)" in html
             and "assistantUiSelfCheckRecord(checks,'visual-controls-one-row-ready'" in html
             and "assistantUiSelfCheckRecord(checks,'visual-control-widths-ready'" in html
-           and "controlWidthsReady:!!(triggerWidthMap['chat-provider-trigger']>=128&&triggerWidthMap['chat-model-inline']>=32&&triggerWidthMap['chat-model-inline']<=40&&triggerWidthMap['chat-agent-trigger']>=140&&triggerWidthMap['chat-workflow-trigger']>=144)" in html
+           and "controlWidthsReady:!!(triggerWidthMap['chat-provider-trigger']>=128&&triggerWidthMap['chat-model-inline']>=104&&triggerWidthMap['chat-model-inline']<=128&&triggerWidthMap['chat-agent-trigger']>=140&&triggerWidthMap['chat-workflow-trigger']>=144)" in html
             and "assistantUiSelfCheckRecord(checks,'visual-composer-extra-rows-hidden-ready'" in html
             and "assistantUiSelfCheckRecord(checks,'visual-model-chip-removed-ready'" in html
             and "assistantUiSelfCheckRecord(checks,'visual-content-window-ring-ready'" in html
@@ -12237,6 +12246,8 @@ console.log("frontend word separator behavior ok");
            and "\"diagnosticSummary\": (" in app_source
            and "\"localResourceRootCount\": local_resource_root_count" in app_source
            and "\"asWebviewUriSupported\": as_webview_uri_supported" in app_source
+           and "or options.get(\"asWebviewUriCallCount\")" in app_source
+           and "lastAsWebviewUriInLocalResourceRoot" in app_source
            and "def _custom_editor_surface_evidence(" in app_source
            and "def _notebook_surface_evidence(" in app_source
            and "\"surfaceEvidence\": evidence" in app_source
@@ -14386,6 +14397,8 @@ console.log("extension setting schema helpers ok");
            and "target.dataset.webviewVisibilityState=String(evidence.visibilityState||'');" in html
            and "target.dataset.webviewLastResourceOriginal=String(evidence.lastResourceOriginal||'');" in html
            and "target.dataset.webviewLastResourceRewritten=String(evidence.lastResourceRewritten||'');" in html
+           and "target.dataset.webviewAsWebviewUriCallCount=String(evidence.asWebviewUriCallCount||0);" in html
+           and "el.dataset.webviewAsWebviewUriCallCount=String(row.webviewEvidence&&row.webviewEvidence.asWebviewUriCallCount||0);" in html
            and "Readiness: '+(evidence.readiness||'-')+' '+String(evidence.readinessScore||0)+'/100'" in html
            and "'Frame/API: '+(evidence.frameLoaded?'frame loaded':'frame pending')" in html
            and "'Last resource: '+String(evidence.lastResourceRewriteKind||'-')+' '+String(evidence.lastResourceOriginal||'-')+' -> '+String(evidence.lastResourceRewritten||'-')" in html
@@ -14393,6 +14406,7 @@ console.log("extension setting schema helpers ok");
            and "addChip('api ready','accent')" in html
            and "addChip('api pending','warn')" in html
            and "addChip('roots '+evidence.localResourceRootCount,'accent')" in html
+           and "addChip('asWebviewUri x'+evidence.asWebviewUriCallCount" in html
            and "addChip('asWebviewUri ready','accent')" in html
            and "addChip('endpoint ready','accent')" in html
            and "addChip('map ready','accent')" in html
@@ -16642,18 +16656,34 @@ console.log("frontend built-in language fallback behavior ok");
            and "event==='update_webview_panel_icon'" in html)
     _check("extension webview panel options updates reach frontend",
            "type: 'webview_options'" in node_ext_host_source
+           and "type: 'webview_resource_uri'" in node_ext_host_source
+           and "function _webviewResourceWithinRoots(localUri, roots)" in node_ext_host_source
+           and "payload.asWebviewUriCallCount = Number(this._asWebviewUriStats.count || 0);" in node_ext_host_source
            and "set options(value)" in node_ext_host_source
            and "payload.enableForms = !!options.enableForms;" in node_ext_host_source
            and "payload.enableCommandUris = Array.isArray(options.enableCommandUris)" in node_ext_host_source
            and "payload.portMapping = options.portMapping" in node_ext_host_source
            and "elif msg_type == \"webview_options\"" in extension_host_source
+           and "elif msg_type == \"webview_resource_uri\"" in extension_host_source
            and "\"localResourceRoots\": _node_json_safe(" in extension_host_source
            and "def update_webview_panel_options(" in app_source
+           and "merged_options.update(option_payload)" in app_source
+           and "local_resource_roots is not None" in app_source
            and "\"update_webview_panel_options\"" in app_source
-           and "\"localResourceRoots\": _json_safe(local_resource_roots)" in app_source
+           and "record[\"localResourceRoots\"] = _json_safe(merged_roots)" in app_source
+           and "\"local_resource_roots\": _json_safe(merged_roots)" in app_source
            and "function updateWebviewPanelOptions(viewId,data)" in html
+           and "target.dataset.webviewAsWebviewUriCallCount=String(evidence.asWebviewUriCallCount||0);" in html
            and "event==='update_webview_panel_options'" in html
            and "retainContextWhenHidden" in html)
+    _check("node host code action context matches VS Code shape",
+           "const CodeActionTriggerKind = {" in node_ext_host_source
+           and "CodeActionTriggerKind," in node_ext_host_source
+           and "only: onlyKind," in node_ext_host_source
+           and "const rawTriggerKind = Number(msg.triggerKind);" in node_ext_host_source
+           and "rawTriggerKind === CodeActionTriggerKind.Invoke" in node_ext_host_source
+           and "triggerKind," in node_ext_host_source
+           and "\"CodeActionTriggerKind\": {\"Invoke\": 1, \"Automatic\": 2}" in vscode_api_source)
     _check("extension webview iframe respects VS Code webview options",
            "function webviewRuntimeOptions(runtime)" in html
            and "function webviewRuntimeOption(runtime,key,fallback)" in html
@@ -18521,6 +18551,9 @@ def test_vscode_api() -> None:
     _check("api.scm", "createSourceControl" in api["scm"])
     _check("api.env", api["env"]["appName"] == "SAO AI Editor")
     _check("api.languages", "createDiagnosticCollection" in api["languages"])
+    _check("api CodeActionTriggerKind",
+           api["CodeActionTriggerKind"]["Invoke"] == 1
+           and api["CodeActionTriggerKind"]["Automatic"] == 2)
     _check("api.tasks", "registerTaskProvider" in api["tasks"])
     _check("api.debug", "registerDebugConfigurationProvider" in api["debug"])
     _check("api.lm", "selectChatModels" in api["lm"])
@@ -26452,11 +26485,19 @@ async function activate(context) {
     || !vscode.CodeActionKind.Source.contains(organizeKind)
     || !organizeKind.intersects(vscode.CodeActionKind.Source)
     || organizeKind.contains(vscode.CodeActionKind.Source)
+    || vscode.CodeActionTriggerKind.Invoke !== 1
+    || vscode.CodeActionTriggerKind.Automatic !== 2
   ) {
     throw new Error('CodeActionKind hierarchy mismatch');
   }
+  const nodeCodeActionContexts = [];
   vscode.languages.registerCodeActionsProvider('python', {
     provideCodeActions(document, range, context, token) {
+      nodeCodeActionContexts.push({
+        only: context.only && context.only.value,
+        triggerKind: context.triggerKind,
+        diagnosticCount: (context.diagnostics || []).length,
+      });
       const action = new vscode.CodeAction('node quick fix', vscode.CodeActionKind.QuickFix);
       action.diagnostics = context.diagnostics || [];
       const organize = new vscode.CodeAction('node organize imports', vscode.CodeActionKind.SourceOrganizeImports);
@@ -26471,6 +26512,7 @@ async function activate(context) {
       return action;
     },
   });
+  vscode.commands.registerCommand('selftest.node.codeActionContexts', () => nodeCodeActionContexts.slice());
   vscode.languages.registerDocumentFormattingEditProvider('python', {
     provideDocumentFormattingEdits(document, options, token) {
       return [vscode.TextEdit.replace(new vscode.Range(0, 0, 0, 4), 'NODE')];
@@ -29160,6 +29202,8 @@ async function activate(context) {
       vscode.Uri.parse('sao-resource://host.name/path/to/asset.svg'));
     const httpUrl = panel.webview.asWebviewUri(
       vscode.Uri.parse('https://example.com/cdn/app.js?x=1#top'));
+    const trackedUrl = panel.webview.asWebviewUri(
+      vscode.Uri.joinPath(context.extensionUri, 'tracked asset.txt'));
     const fromUri = vscode.Uri.from({
       scheme: 'selfdoc',
       authority: 'host.name',
@@ -29184,6 +29228,7 @@ async function activate(context) {
       windowsUrl: windowsUrl.toString(),
       authorityUrl: authorityUrl.toString(),
       httpUrl: httpUrl.toString(),
+      trackedUrl: trackedUrl.toString(),
       cspSource: panel.webview.cspSource,
       fromUri: fromUri.toString(),
       fromUriRaw: fromUri.toString(true),
@@ -31329,6 +31374,8 @@ process.stdin.resume();
                     "vscode.executeCodeActionProvider",
                     node_uri, Range(Position(0, 0), Position(0, 1)),
                     "source.organizeImports")
+                node_code_action_contexts = api._ext_host.commands.execute(
+                    "selftest.node.codeActionContexts")
                 node_editor_diagnostics = api.editor_language_provider({
                     "kind": "diagnostics",
                     "filePath": node_provider_sample,
@@ -31509,6 +31556,14 @@ process.stdin.resume();
                         "selftest.node.webviewUriProbe")
                 except Exception as exc:
                     node_webview_uri_probe = {"_error": str(exc)}
+                node_webview_uri_options = next((
+                    item for item in node_ui_bridge.webview_options.values()
+                    if isinstance(item, dict)
+                    and item.get("view_type") == "selftest.uriProbe"
+                    and isinstance(item.get("options"), dict)
+                    and int(item.get("options", {}).get(
+                        "asWebviewUriCallCount") or 0) >= 5
+                ), {})
                 try:
                     node_webview_dispose_probe = api._ext_host.commands.execute(
                         "selftest.node.webviewDisposeProbe")
@@ -32631,6 +32686,20 @@ process.stdin.resume();
                        and len(node_organize_actions) == 1
                        and node_organize_actions[0].get("title")
                        == "node organize imports")
+                _check("node host passes VS Code-shaped code action context",
+                       isinstance(node_code_action_contexts, list)
+                       and any(
+                           item.get("only") == "quickfix"
+                           and item.get("triggerKind") == 1
+                           for item in node_code_action_contexts
+                           if isinstance(item, dict))
+                       and any(
+                           item.get("only") == "source.organizeImports"
+                           and item.get("triggerKind") == 1
+                           for item in node_code_action_contexts
+                           if isinstance(item, dict)),
+                       json.dumps(node_code_action_contexts,
+                                  ensure_ascii=False, default=str))
                 _check("editor_language_provider returns Node diagnostics",
                         node_editor_diagnostics.get("ok") is True
                        and (node_editor_diagnostics.get(
@@ -33205,6 +33274,8 @@ process.stdin.resume();
                            ".vscode-resource.webview.local/path/to/asset.svg")
                        and node_webview_uri_probe.get("httpUrl") == (
                            "https://example.com/cdn/app.js?x=1#top")
+                       and node_webview_uri_probe.get("trackedUrl", "")
+                       .endswith("/tracked%20asset.txt")
                        and node_webview_uri_probe.get("fromUri") == (
                            "selfdoc://host.name/folder/a%20file.md"
                            "?q=1&name=a b#frag value")
@@ -33234,8 +33305,16 @@ process.stdin.resume();
                        and "https://*.vscode-resource.webview.local"
                        in node_webview_uri_probe.get("cspSource", "")
                        and "cdn.example.com"
-                       not in node_webview_uri_probe.get("cspSource", ""),
-                       json.dumps(node_webview_uri_probe, ensure_ascii=False))
+                       not in node_webview_uri_probe.get("cspSource", "")
+                       and node_webview_uri_options.get(
+                           "options", {}).get("asWebviewUriCallCount") >= 5
+                       and node_webview_uri_options.get(
+                           "options", {}).get(
+                               "lastAsWebviewUriInLocalResourceRoot") is True,
+                       json.dumps({
+                           "probe": node_webview_uri_probe,
+                           "options": node_webview_uri_options,
+                       }, ensure_ascii=False, default=str))
                 node_webview_dispose_initial = (
                     node_webview_dispose_probe.get("initial", {})
                     if isinstance(node_webview_dispose_probe, dict) else {})

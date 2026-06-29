@@ -1362,7 +1362,7 @@ pre.code-block code .type { color:var(--fg-type); }
 .chat-control-strip { display:flex; align-items:center; gap:6px; flex:0 0 auto; flex-wrap:nowrap; min-width:max-content;
   overflow:visible; width:max-content; max-width:none;
   --chat-provider-width:128px;
-  --chat-model-width:36px;
+  --chat-model-width:112px;
   --chat-agent-width:140px;
   --chat-workflow-width:144px; }
 .chat-chip,.chat-select-chip,.chat-model-inline,.chat-run-chip { height:22px; border:1px solid var(--border);
@@ -4138,7 +4138,7 @@ pre.code-block { overflow:visible; }
             <option value="deepseek">DeepSeek</option><option value="ollama">Ollama</option>
             <option value="custom">Custom</option>
           </select>
-          <input id="model-inp" placeholder="Model name" style="width:100%;margin-top:4px;background:var(--bg3);color:var(--fg);border:1px solid var(--border);border-radius:3px;padding:3px 6px;font:12px var(--mono)">
+          <input id="model-inp" placeholder="Model name" style="width:33%;min-width:92px;max-width:132px;margin-top:4px;background:var(--bg3);color:var(--fg);border:1px solid var(--border);border-radius:3px;padding:3px 6px;font:12px var(--mono)">
         </div>
         <div class="sb-group" style="margin-top:8px" data-i18n="quick_actions">Quick Actions</div>
         <div class="sb-item" onclick="execSlash('/system')">ℹ System Info</div>
@@ -12683,7 +12683,7 @@ function assistantVisualLayoutSnapshot(){
     nativeBoxes,
     noOldNativeBoxes:nativeBoxes.every(item=>item.exists&&item.display==='none'&&item.ariaHidden==='true'&&item.inert===true&&item.width===0&&item.height===0),
     triggerWidths:triggerWidthMap,
-    controlWidthsReady:!!(triggerWidthMap['chat-provider-trigger']>=128&&triggerWidthMap['chat-model-inline']>=32&&triggerWidthMap['chat-model-inline']<=40&&triggerWidthMap['chat-agent-trigger']>=140&&triggerWidthMap['chat-workflow-trigger']>=144),
+    controlWidthsReady:!!(triggerWidthMap['chat-provider-trigger']>=128&&triggerWidthMap['chat-model-inline']>=104&&triggerWidthMap['chat-model-inline']<=128&&triggerWidthMap['chat-agent-trigger']>=140&&triggerWidthMap['chat-workflow-trigger']>=144),
     popups:popupSnapshots,
     popupsCustomSurface:popupSnapshots.every(item=>item.customSurface&&item.shown&&item.display==='block'&&item.pointerEvents==='auto'),
     popupsOpenAbove:popupSnapshots.every(item=>item.rectReady&&item.opensAboveTrigger&&item.notToolbarClipped),
@@ -40889,6 +40889,10 @@ function renderExtensionRuntimeSurfacePanel(data){
       el.dataset.webviewResourceEndpointReady=row.webviewEvidence&&row.webviewEvidence.resourceEndpointReady?'1':'0';
       el.dataset.webviewAsWebviewUriSupported=row.webviewEvidence&&row.webviewEvidence.asWebviewUriSupported?'1':'0';
       el.dataset.webviewAsWebviewUriReady=row.webviewEvidence&&row.webviewEvidence.asWebviewUriReady?'1':'0';
+      el.dataset.webviewAsWebviewUriCallCount=String(row.webviewEvidence&&row.webviewEvidence.asWebviewUriCallCount||0);
+      el.dataset.webviewLastAsWebviewUri=String(row.webviewEvidence&&row.webviewEvidence.lastAsWebviewUri||'');
+      el.dataset.webviewLastAsWebviewUriSource=String(row.webviewEvidence&&row.webviewEvidence.lastAsWebviewUriSource||'');
+      el.dataset.webviewLastAsWebviewUriInRoot=row.webviewEvidence&&row.webviewEvidence.lastAsWebviewUriInLocalResourceRoot?'1':'0';
       el.dataset.webviewReadiness=row.webviewReadiness||row.webviewEvidence&&row.webviewEvidence.readiness||'';
       el.dataset.webviewReadinessScore=String(row.webviewReadinessScore||row.webviewEvidence&&row.webviewEvidence.readinessScore||0);
       el.dataset.webviewReadinessIssues=(row.webviewReadinessIssues||row.webviewEvidence&&row.webviewEvidence.readinessIssues||[]).join(',');
@@ -42243,8 +42247,9 @@ function extensionWebviewRuntimeDiagnostics(evidence){
   const resourceRewriteCount=Number(ev.resourceRewriteCount||0)||0;
   const resourceMapReady=!!(ev.resourceMapReady||ev.resourceMapAvailable||Number(ev.resourceMapHitCount||0));
   const resourceEndpointReady=!!(ev.resourceEndpointReady||ev.resourceEndpointBaseAvailable||Number(ev.resourceEndpointRewriteCount||0));
-  const asWebviewUriSupported=!!(ev.asWebviewUriSupported||localResourceRootCount||resourceMapReady||resourceEndpointReady);
-  const asWebviewUriReady=!!(ev.asWebviewUriReady||((resourceRewriteCount||resourceMapReady||resourceEndpointReady)&&asWebviewUriSupported));
+  const asWebviewUriCallCount=Number(ev.asWebviewUriCallCount||0)||0;
+  const asWebviewUriSupported=!!(ev.asWebviewUriSupported||asWebviewUriCallCount||localResourceRootCount||resourceMapReady||resourceEndpointReady);
+  const asWebviewUriReady=!!(ev.asWebviewUriReady||asWebviewUriCallCount||((resourceRewriteCount||resourceMapReady||resourceEndpointReady)&&asWebviewUriSupported));
   let resourceHealth='unconfigured';
   if(asWebviewUriReady)resourceHealth='ready';
   else if(resourceRewriteCount&&!resourceEndpointReady&&!resourceMapReady)resourceHealth='rewrite-warning';
@@ -42309,8 +42314,9 @@ function extensionWebviewViewEvidence(view,state,html){
   const resourceAttributeRewriteCount=Number(ev.resourceAttributeRewriteCount||0)||0;
   const resourceMapReady=!!(ev.resourceMapReady||ev.resourceMapAvailable||resourceMapHitCount);
   const resourceEndpointReady=!!(ev.resourceEndpointReady||ev.resourceEndpointBaseAvailable||resourceEndpointRewriteCount);
-  const asWebviewUriSupported=!!(ev.asWebviewUriSupported||localResourceRootCount||resourceMapReady||resourceEndpointReady);
-  const asWebviewUriReady=!!(ev.asWebviewUriReady||((resourceMapReady||resourceEndpointReady||resourceRewriteCount)&&asWebviewUriSupported));
+  const asWebviewUriCallCount=Number(ev.asWebviewUriCallCount||options.asWebviewUriCallCount||0)||0;
+  const asWebviewUriSupported=!!(ev.asWebviewUriSupported||asWebviewUriCallCount||localResourceRootCount||resourceMapReady||resourceEndpointReady);
+  const asWebviewUriReady=!!(ev.asWebviewUriReady||asWebviewUriCallCount||((resourceMapReady||resourceEndpointReady||resourceRewriteCount)&&asWebviewUriSupported));
   const readiness=extensionWebviewViewReadiness({
     status,
     runtimeAvailable:view.runtimeAvailable!==false&&state.runtimeAvailable!==false&&ev.runtimeAvailable!==false,
@@ -42419,6 +42425,10 @@ function extensionWebviewViewEvidence(view,state,html){
     resourceEndpointReady,
     asWebviewUriSupported,
     asWebviewUriReady,
+    asWebviewUriCallCount,
+    lastAsWebviewUri:String(ev.lastAsWebviewUri||options.lastAsWebviewUri||''),
+    lastAsWebviewUriSource:String(ev.lastAsWebviewUriSource||options.lastAsWebviewUriSource||''),
+    lastAsWebviewUriInLocalResourceRoot:!!(ev.lastAsWebviewUriInLocalResourceRoot||options.lastAsWebviewUriInLocalResourceRoot),
     messageHealth:String(ev.messageHealth||diagnostics.messageHealth),
     bridgeHealth:String(ev.bridgeHealth||diagnostics.bridgeHealth),
     resourceHealth:String(ev.resourceHealth||diagnostics.resourceHealth),
@@ -42562,6 +42572,10 @@ function applyExtensionWebviewViewDataset(target,evidence){
   target.dataset.webviewResourceEndpointReady=evidence.resourceEndpointReady?'1':'0';
   target.dataset.webviewAsWebviewUriSupported=evidence.asWebviewUriSupported?'1':'0';
   target.dataset.webviewAsWebviewUriReady=evidence.asWebviewUriReady?'1':'0';
+  target.dataset.webviewAsWebviewUriCallCount=String(evidence.asWebviewUriCallCount||0);
+  target.dataset.webviewLastAsWebviewUri=String(evidence.lastAsWebviewUri||'');
+  target.dataset.webviewLastAsWebviewUriSource=String(evidence.lastAsWebviewUriSource||'');
+  target.dataset.webviewLastAsWebviewUriInRoot=evidence.lastAsWebviewUriInLocalResourceRoot?'1':'0';
   target.dataset.webviewReadiness=String(evidence.readiness||'');
   target.dataset.webviewReadinessScore=String(evidence.readinessScore||0);
   target.dataset.webviewReadinessIssues=Array.isArray(evidence.readinessIssues)?evidence.readinessIssues.join(','):'';
@@ -42620,6 +42634,7 @@ function appendExtensionWebviewViewStatus(body,view,state,evidence){
   if(evidence.flushBatchCount)addChip('flush batches '+evidence.flushBatchCount,'accent');
   if(evidence.droppedMessageCount)addChip('drop '+evidence.droppedMessageCount,'warn');
   if(evidence.localResourceRootCount)addChip('roots '+evidence.localResourceRootCount,'accent');
+  if(evidence.asWebviewUriCallCount)addChip('asWebviewUri x'+evidence.asWebviewUriCallCount,evidence.lastAsWebviewUriInLocalResourceRoot?'accent':'warn');
   if(evidence.portMappingCount)addChip('ports '+evidence.portMappingCount,'accent');
   if(evidence.resourceRewriteCount)addChip('resources '+evidence.resourceRewriteCount,'accent');
   if(evidence.resourceHealth)addChip('resource '+evidence.resourceHealth,['pending','rewrite-warning','unused-roots'].includes(evidence.resourceHealth)?'warn':'');

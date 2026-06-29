@@ -1852,12 +1852,18 @@ class _AIEditorUIBridge:
             return
         option_payload = options if isinstance(options, dict) else {}
         record = self._webview_panel_record(normalized_view_id)
+        merged_options = dict(record.get("options") or {}) if record else {}
+        merged_options.update(option_payload)
+        merged_roots = (
+            local_resource_roots
+            if local_resource_roots is not None
+            else (record.get("localResourceRoots") if record else None))
         if record is not None:
-            record["options"] = _json_safe(option_payload)
-            record["localResourceRoots"] = _json_safe(local_resource_roots)
-            record["local_resource_roots"] = _json_safe(local_resource_roots)
+            record["options"] = _json_safe(merged_options)
+            record["localResourceRoots"] = _json_safe(merged_roots)
+            record["local_resource_roots"] = _json_safe(merged_roots)
             record["localResourceRootCount"] = self._webview_root_count(
-                local_resource_roots)
+                merged_roots)
             if view_type:
                 record["viewType"] = str(view_type or "")
             if title:
@@ -1866,8 +1872,8 @@ class _AIEditorUIBridge:
             "view_id": normalized_view_id,
             "view_type": str(view_type or ""),
             "title": str(title or ""),
-            "options": _json_safe(option_payload),
-            "local_resource_roots": _json_safe(local_resource_roots),
+            "options": _json_safe(merged_options),
+            "local_resource_roots": _json_safe(merged_roots),
         })
 
     def update_webview_view_metadata(
@@ -16060,7 +16066,10 @@ class AIEditorAPI:
             state_keys = sorted(str(key) for key in view_state.keys())[:12]
         local_resource_root_count = len(local_resource_roots)
         port_mapping_count = len(port_mapping)
-        as_webview_uri_supported = bool(local_resource_root_count)
+        as_webview_uri_supported = bool(
+            local_resource_root_count
+            or options.get("asWebviewUriCallCount")
+            or state.get("asWebviewUriCallCount"))
         pending_message_count = int(state.get("pendingMessageCount") or 0)
         queued_message_count = int(state.get("queuedMessageCount") or 0)
         flushed_message_count = int(state.get("flushedMessageCount") or 0)
@@ -16081,6 +16090,7 @@ class AIEditorAPI:
             or resource_endpoint_rewrite_count)
         as_webview_uri_ready = bool(
             state.get("asWebviewUriReady")
+            or options.get("asWebviewUriCallCount")
             or ((resource_rewrite_count or resource_map_ready
                  or resource_endpoint_ready) and as_webview_uri_supported))
         waiting_messages = pending_message_count + queued_message_count
@@ -16146,6 +16156,18 @@ class AIEditorAPI:
             "portMappingCount": port_mapping_count,
             "asWebviewUriSupported": as_webview_uri_supported,
             "asWebviewUriReady": as_webview_uri_ready,
+            "asWebviewUriCallCount": int(
+                options.get("asWebviewUriCallCount")
+                or state.get("asWebviewUriCallCount") or 0),
+            "lastAsWebviewUri": str(
+                options.get("lastAsWebviewUri")
+                or state.get("lastAsWebviewUri") or ""),
+            "lastAsWebviewUriSource": str(
+                options.get("lastAsWebviewUriSource")
+                or state.get("lastAsWebviewUriSource") or ""),
+            "lastAsWebviewUriInLocalResourceRoot": bool(
+                options.get("lastAsWebviewUriInLocalResourceRoot")
+                or state.get("lastAsWebviewUriInLocalResourceRoot")),
             "resourceEndpointReady": resource_endpoint_ready,
             "resourceMapReady": resource_map_ready,
             "resourceRewriteCount": resource_rewrite_count,
