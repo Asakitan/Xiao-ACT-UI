@@ -12047,6 +12047,8 @@ console.log("frontend word separator behavior ok");
            and "function extensionRuntimeIsWebviewKind(kindOrRow)" in html
            and "function extensionRuntimeWebviewEvidenceStatus(row)" in html
            and "function extensionRuntimeAnchorLaneItems(row)" in html
+           and "function extensionRuntimeMenuContextKeys(when)" in html
+           and "function extensionRuntimeMenuEvidence(row)" in html
            and "function extensionRuntimeWebviewReadinessSummary(row)" in html
            and "function extensionRuntimeSurfaceActionSummary(row)" in html
            and "function extensionWebviewRuntimeDiagnostics(evidence)" in html
@@ -12068,6 +12070,11 @@ console.log("frontend word separator behavior ok");
            and "function extensionRuntimeSurfaceRows(data)" in html
            and "function extensionRuntimeFilterState()" in html
            and "function extensionRuntimeRowMatchesFilter(row,filter)" in html
+           and "el.dataset.surfaceMenuId=String(row.menuId||'');" in html
+           and "el.dataset.surfaceMenuWhen=String(row.menuWhen||'');" in html
+           and "el.dataset.surfaceMenuContextKeys=Array.isArray(row.menuContextKeys)?row.menuContextKeys.join(','):'';" in html
+           and "context.className='extension-runtime-menu-context';" in html
+           and "chip.className='extension-runtime-menu-chip '+(item.state||'');" in html
            and "function populateExtensionRuntimeKindFilter(rows)" in html
            and "function updateExtensionRuntimeFilterSummary(visible,total)" in html
            and "function extensionRuntimeSurfaceRowByKey(key)" in html
@@ -14733,6 +14740,11 @@ console.log("extension setting schema helpers ok");
            and "showCustomEditorPlaceholder(customHost" in html
            and "renderNotebookOutputs(notebookOutputHost" in html
            and "renderExtensionRuntimeSurfacePanel(runtimeData);" in html
+           and "group:'navigation@1',alt:'selftest.altRun'" in html
+           and "runtimeMenuRows:runtimeList?Array.from(runtimeList.querySelectorAll('.extension-runtime-row')).filter(row=>row.dataset.kind==='Menu').length:0" in html
+           and "runtimeMenuContextKeys:runtimeList?Array.from(runtimeList.querySelectorAll('.extension-runtime-row')).map(row=>row.dataset.surfaceMenuContextKeys||'').filter(Boolean):[]" in html
+           and "runtimeMenuChipCount:runtimeList?runtimeList.querySelectorAll('.extension-runtime-menu-chip').length:0" in html
+           and "snapshot.runtimeMenuRows>=1&&snapshot.runtimeMenuWhenRows>=1" in html
            and "'extension-runtime-summary','extension-runtime-health','extension-runtime-list','extension-runtime-status'" in html
            and 'id="extension-runtime-run-strip" aria-live="polite"' in html
            and 'id="extension-debug-session-tree" role="tree" aria-label="Debug sessions"' in html
@@ -16695,6 +16707,8 @@ console.log("command palette quick access helpers ok");
            and ".editor-language-panel { position:fixed;" in html
            and ".editor-language-health-rail" in html
            and ".editor-language-health-pill" in html
+           and ".editor-language-capability-matrix" in html
+           and ".editor-language-capability" in html
            and ".editor-language-panel-actions button" in html
            and ".editor-language-feature-row" in html
            and "let _editorLanguageStatusPanelOpen=false;" in html
@@ -16707,6 +16721,7 @@ console.log("command palette quick access helpers ok");
            and "window.editorSurfaceLanguageProviderRows=editorSurfaceLanguageProviderRows;" in html
            and "function editorLanguageStatusPanelActions()" in html
            and "function editorLanguageHealthPills(aggregate)" in html
+           and "function editorLanguageCapabilityMatrixRows(aggregate)" in html
            and "function ensureEditorLanguageStatusPanel()" in html
            and "function toggleEditorLanguageStatusPanel(ev)" in html
            and "function handleEditorLanguageStatusKey(ev)" in html
@@ -16732,10 +16747,17 @@ console.log("command palette quick access helpers ok");
            and "panel.dataset.providerErrorRows=String(providerRows.filter(row=>row.state==='error').length);" in html
            and "panel.dataset.providerWarningRows=String(providerRows.filter(row=>row.state==='warning').length);" in html
            and "panel.dataset.healthPillCount=String(healthPills.length);" in html
+           and "panel.dataset.capabilityRows=String(capabilityRows.length);" in html
+           and "panel.dataset.capabilityKeys=capabilityRows.map(row=>row.key).join(',');" in html
            and "panel.dataset.providerHealthScore=String(providerHealth.score==null?100:providerHealth.score);" in html
            and "data-editor-language-health-rail=\"1\"" in html
+           and "data-editor-language-capability-matrix=\"1\"" in html
+           and "data-capability=\"'+esc(row.key)+'\"" in html
            and "data-health-key=\"'+esc(item.key)+'\"" in html
            and "healthPills=panel?Array.from(panel.querySelectorAll('.editor-language-health-pill')).map(item=>item.dataset.healthKey+':'+item.dataset.healthState):[]" in html
+           and "capabilities=panel?Array.from(panel.querySelectorAll('.editor-language-capability')).map(row=>row.dataset.capability+':'+row.dataset.capabilityState+':'+row.dataset.capabilityValue):[]" in html
+           and "capabilityRows:capabilities.length" in html
+           and "capabilityKeys:panel?String(panel.dataset.capabilityKeys||''):''" in html
            and "healthPillCount:panel?Number(panel.dataset.healthPillCount)||0:0" in html
            and "providerHealthScore:panel?Number(panel.dataset.providerHealthScore)||0:0" in html
            and "panel.dataset.semanticTokens=String(aggregate.semanticTokens||0);" in html

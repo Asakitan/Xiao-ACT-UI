@@ -1847,6 +1847,16 @@ pre.code-block code .type { color:var(--fg-type); }
 .editor-language-panel-body { overflow:auto; padding:7px 8px 9px; display:grid; gap:5px; }
 .editor-language-panel-section { display:grid; gap:5px; }
 .editor-language-panel-section-title { margin:4px 0 1px; color:var(--fg-dim); font:10px var(--mono); text-transform:uppercase; letter-spacing:.35px; }
+.editor-language-capability-matrix { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:5px;
+  padding:7px 8px; border-bottom:1px solid color-mix(in srgb,var(--border) 70%,transparent);
+  background:color-mix(in srgb,var(--bg2) 42%,transparent); }
+.editor-language-capability { min-width:0; display:grid; gap:2px; padding:5px 7px; border:1px solid var(--border);
+  border-radius:4px; background:color-mix(in srgb,var(--bg3) 72%,transparent); color:var(--fg-dim); }
+.editor-language-capability strong { color:var(--fg); font:600 11px var(--sans); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.editor-language-capability span { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font:10px var(--mono); }
+.editor-language-capability.ready { border-color:color-mix(in srgb,var(--fg-success) 38%,var(--border)); }
+.editor-language-capability.warning { border-color:color-mix(in srgb,var(--fg-warning) 44%,var(--border)); }
+.editor-language-capability.error { border-color:color-mix(in srgb,var(--fg-error) 48%,var(--border)); }
 .editor-language-feature-row { display:grid; grid-template-columns:118px minmax(0,1fr) auto; align-items:center; gap:8px;
   min-height:28px; padding:4px 6px; border:1px solid var(--border); border-radius:5px; background:color-mix(in srgb,var(--bg3) 58%,transparent); }
 .editor-language-feature-name { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-size:11px; color:var(--fg); }
@@ -2517,6 +2527,14 @@ button.review-pill { cursor:pointer; }
 .extension-runtime-anchor-pill.warn { color:var(--fg-warning); border-color:color-mix(in srgb,var(--fg-warning) 46%,var(--border)); }
 .extension-runtime-anchor-pill.error { color:var(--fg-error); border-color:color-mix(in srgb,var(--fg-error) 46%,var(--border)); }
 .extension-runtime-anchor-pill.accent { color:var(--fg-accent); border-color:color-mix(in srgb,var(--fg-accent) 42%,var(--border)); }
+.extension-runtime-menu-context { grid-column:2 / -1; min-width:0; display:flex; align-items:center; gap:4px;
+  color:var(--fg-dim); font:10px var(--mono); overflow:hidden; }
+.extension-runtime-menu-chip { display:inline-flex; align-items:center; max-width:190px; min-height:18px; padding:0 6px;
+  border:1px solid color-mix(in srgb,var(--border) 78%,transparent); border-radius:999px;
+  background:color-mix(in srgb,var(--bg2) 56%,transparent); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.extension-runtime-menu-chip.ready { color:var(--fg-success); border-color:color-mix(in srgb,var(--fg-success) 42%,var(--border)); }
+.extension-runtime-menu-chip.warn { color:var(--fg-warning); border-color:color-mix(in srgb,var(--fg-warning) 46%,var(--border)); }
+.extension-runtime-menu-chip.error { color:var(--fg-error); border-color:color-mix(in srgb,var(--fg-error) 48%,var(--border)); }
 .extension-runtime-tag { border:1px solid color-mix(in srgb,var(--border) 80%,transparent); border-radius:999px; padding:0 5px; color:var(--fg-dim); }
 .extension-runtime-tag.runtime { color:var(--fg-success); border-color:color-mix(in srgb,var(--fg-success) 45%,var(--border)); }
 .extension-runtime-tag.manifest { color:var(--fg-warning); border-color:color-mix(in srgb,var(--fg-warning) 45%,var(--border)); }
@@ -16094,6 +16112,25 @@ function editorLanguageHealthPills(aggregate){
     {key:'diff',label:'Diff',value:String(Number(diff.total)||0),state:Number(diff.total)?'ready':'warning',title:'Unsaved dirty diff hunks'}
   ];
 }
+function editorLanguageCapabilityMatrixRows(aggregate){
+  aggregate=aggregate||editorLanguageFeatureAggregateSnapshot();
+  const s=_editorLanguageFeatureState||{},surface=_editorSurfaceState||{};
+  const providers=editorSurfaceLanguageProviderRows(surface);
+  const fmt=s.formatting||{},diag=s.diagnostics||{},actions=s.codeActions||{},semantic=s.semanticTokens||{},diff=s.diff||{},save=s.saveParticipants||{};
+  const providerErrors=providers.filter(row=>row.state==='error').length;
+  const providerWarnings=providers.filter(row=>row.state==='warning').length;
+  const providerState=providerErrors?'error':(providerWarnings?'warning':'ready');
+  const formatters=Number(fmt.providerCount)||Number(fmt.edits)||0;
+  return [
+    {key:'providers',label:'Providers',value:String(providers.length),state:providerState,detail:[providerErrors?providerErrors+' errors':'',providerWarnings?providerWarnings+' warnings':'',providers.length?'matched':'fallback'].filter(Boolean).join(' · ')},
+    {key:'formatting',label:'Formatting',value:String(formatters),state:formatters||fmt.applied?'ready':'warning',detail:[fmt.providerId?('provider '+fmt.providerId):'',fmt.defaultFormatter?('default '+fmt.defaultFormatter):'',fmt.onSave?'on save':'manual'].filter(Boolean).join(' · ')||'no formatter'},
+    {key:'diagnostics',label:'Diagnostics',value:String(Number(diag.count)||0),state:(Number(diag.errors)||0)?'error':((Number(diag.warnings)||0)?'warning':'ready'),detail:[diag.errors?diag.errors+' errors':'',diag.warnings?diag.warnings+' warnings':'',diag.count?diag.count+' total':'clean'].filter(Boolean).join(' · ')},
+    {key:'codeActions',label:'Code Actions',value:String(Number(actions.count)||0),state:Number(actions.count)?'ready':'warning',detail:[actions.quickfix?actions.quickfix+' quick':'',actions.source?actions.source+' source':'',actions.count?'available':'none'].filter(Boolean).join(' · ')},
+    {key:'semanticTokens',label:'Semantic Tokens',value:String(Number(semantic.count)||0),state:Number(semantic.count)?'ready':'warning',detail:[semantic.source?('source '+semantic.source):'',semantic.tokenTypeCount?semantic.tokenTypeCount+' types':'',semantic.fresh===false?'stale':'fresh'].filter(Boolean).join(' · ')},
+    {key:'dirtyDiff',label:'Dirty Diff',value:String(Number(diff.total)||0),state:Number(diff.total)?'ready':'warning',detail:('+'+String(diff.added||0)+' ~'+String(diff.modified||0)+' -'+String(diff.removed||0))},
+    {key:'saveParticipants',label:'Save Participants',value:String(Number(save.seq)||0),state:save.changed||save.seq?'ready':'warning',detail:[save.reason?('reason '+save.reason):'',save.formatOnSave?'format':'',save.codeActionCount?save.codeActionCount+' actions':'',save.durationMs?save.durationMs+'ms':''].filter(Boolean).join(' · ')||'idle'}
+  ];
+}
 function ensureEditorLanguageStatusPanel(){
   let panel=$('editor-language-status-panel');
   if(panel)return panel;
@@ -16128,6 +16165,7 @@ function renderEditorLanguageStatusPanel(){
   const providerRows=editorLanguageStatusPanelProviderRows();
   const actions=editorLanguageStatusPanelActions();
   const healthPills=editorLanguageHealthPills(aggregate);
+  const capabilityRows=editorLanguageCapabilityMatrixRows(aggregate);
   const providerHealth=healthPills.find(item=>item.key==='providers')||{};
   panel.dataset.open=_editorLanguageStatusPanelOpen?'1':'0';
   panel.dataset.actionCount=String(actions.length);
@@ -16136,6 +16174,10 @@ function renderEditorLanguageStatusPanel(){
   panel.dataset.providerErrorRows=String(providerRows.filter(row=>row.state==='error').length);
   panel.dataset.providerWarningRows=String(providerRows.filter(row=>row.state==='warning').length);
   panel.dataset.healthPillCount=String(healthPills.length);
+  panel.dataset.capabilityRows=String(capabilityRows.length);
+  panel.dataset.capabilityKeys=capabilityRows.map(row=>row.key).join(',');
+  panel.dataset.capabilityWarnings=String(capabilityRows.filter(row=>row.state==='warning').length);
+  panel.dataset.capabilityErrors=String(capabilityRows.filter(row=>row.state==='error').length);
   panel.dataset.providerHealthScore=String(providerHealth.score==null?100:providerHealth.score);
   panel.dataset.featureActiveCount=String(aggregate.activeCount||0);
   panel.dataset.featureReadyCount=String(aggregate.readyCount||0);
@@ -16151,6 +16193,11 @@ function renderEditorLanguageStatusPanel(){
       healthPills.map(item=>'<span class="editor-language-health-pill '+esc(item.state||'')+'" data-health-key="'+esc(item.key)+'" data-health-state="'+esc(item.state||'')+'" title="'+esc(item.title||item.label)+'">'+
         '<strong>'+esc(item.value)+'</strong>'+esc(item.label)+
       '</span>').join('')+
+    '</div>'+
+    '<div class="editor-language-capability-matrix" data-editor-language-capability-matrix="1">'+
+      capabilityRows.map(row=>'<div class="editor-language-capability '+esc(row.state||'')+'" data-capability="'+esc(row.key)+'" data-capability-state="'+esc(row.state||'')+'" data-capability-value="'+esc(row.value)+'">'+
+        '<strong>'+esc(row.label)+' '+esc(row.value)+'</strong><span>'+esc(row.detail||'')+'</span>'+
+      '</div>').join('')+
     '</div>'+
     '<div class="editor-language-panel-actions">'+
       actions.map(action=>'<button type="button" '+(action.primary?'class="primary" ':'')+
@@ -16224,6 +16271,7 @@ function editorLanguageStatusPanelSelfCheckSnapshot(){
   const rows=panel?Array.from(panel.querySelectorAll('.editor-language-feature-row[data-feature]')).map(row=>row.dataset.feature):[];
   const providers=panel?Array.from(panel.querySelectorAll('.editor-language-provider-row')).map(row=>row.dataset.provider):[];
   const healthPills=panel?Array.from(panel.querySelectorAll('.editor-language-health-pill')).map(item=>item.dataset.healthKey+':'+item.dataset.healthState):[];
+  const capabilities=panel?Array.from(panel.querySelectorAll('.editor-language-capability')).map(row=>row.dataset.capability+':'+row.dataset.capabilityState+':'+row.dataset.capabilityValue):[];
   const snapshot={
     open:panel&&panel.dataset.open==='1',
     ariaExpanded:anchor&&anchor.getAttribute('aria-expanded')==='true',
@@ -16236,7 +16284,12 @@ function editorLanguageStatusPanelSelfCheckSnapshot(){
     rows,
     providers,
     healthPills,
+    capabilities,
     healthPillCount:panel?Number(panel.dataset.healthPillCount)||0:0,
+    capabilityRows:capabilities.length,
+    capabilityWarnings:panel?Number(panel.dataset.capabilityWarnings)||0:0,
+    capabilityErrors:panel?Number(panel.dataset.capabilityErrors)||0:0,
+    capabilityKeys:panel?String(panel.dataset.capabilityKeys||''):'',
     providerHealthScore:panel?Number(panel.dataset.providerHealthScore)||0:0,
     featureActiveCount:panel?Number(panel.dataset.featureActiveCount)||0:0,
     diffTotal:panel?Number(panel.dataset.diffTotal)||0:0,
@@ -41545,6 +41598,42 @@ function extensionRuntimeSurfaceKeys(value,limit){
   if(value&&typeof value==='object')return Object.keys(value).map(key=>String(key||'').trim()).filter(Boolean).slice(0,max);
   return [];
 }
+function extensionRuntimeMenuContextKeys(when){
+  const text=String(when||'');
+  if(!text.trim())return [];
+  const blocked=new Set(['true','false','and','or','not','in']);
+  const keys=[];
+  (text.match(/[A-Za-z_][\w.$-]*/g)||[]).forEach(raw=>{
+    const key=String(raw||'').trim();
+    if(!key||blocked.has(key.toLowerCase()))return;
+    if(!keys.includes(key))keys.push(key);
+  });
+  return keys.slice(0,12);
+}
+function extensionRuntimeMenuEvidence(row){
+  row=row||{};
+  const keys=Array.isArray(row.menuContextKeys)?row.menuContextKeys:[];
+  const chips=[
+    {text:row.menuId||'menu',state:'ready'},
+    row.menuGroup?{text:'group '+row.menuGroup,state:'ready'}:null,
+    row.menuOrder?{text:'order '+row.menuOrder,state:'ready'}:null,
+    row.menuWhen?{text:'when',state:row.menuWhenMatches===false?'warn':'ready'}:null,
+    row.menuAlt?{text:'alt '+row.menuAlt,state:'ready'}:null,
+    row.menuVisible===false?{text:'hidden',state:'warn'}:{text:'visible',state:'ready'},
+    keys.length?{text:'ctx '+keys.join(', '),state:'ready'}:null
+  ].filter(Boolean);
+  return {
+    chips,
+    text:[
+      row.menuId?('menu '+row.menuId):'',
+      row.menuGroup?('group '+row.menuGroup):'',
+      row.menuWhen?('when '+row.menuWhen):'',
+      keys.length?('keys '+keys.join(', ')):'',
+      row.menuAlt?('alt '+row.menuAlt):'',
+      row.menuVisible===false?'hidden':'visible'
+    ].filter(Boolean).join(' · ')
+  };
+}
 function extensionRuntimeTaskPrompt(row){
   row=row||{};
   const ev=row.surfaceEvidence||{};
@@ -42046,6 +42135,9 @@ function extensionRuntimeSurfaceRows(data){
     const surfaceBadgeText=rawBadge&&typeof rawBadge==='object'
       ? String(rawBadge.value!==undefined?rawBadge.value:(rawBadge.tooltip||'badge'))
       : String(rawBadge||'');
+    const menuGroupRaw=String(item.group||surfaceEvidence.group||'');
+    const menuGroupParts=menuGroupRaw.split('@');
+    const menuContextKeys=Array.isArray(item.contextKeys)?item.contextKeys.slice(0,12):extensionRuntimeMenuContextKeys(item.when||surfaceEvidence.when);
     const row={
       kind,
       label:String(label||item.id||item.command||item.viewType||item.type||''),
@@ -42080,6 +42172,16 @@ function extensionRuntimeSurfaceRows(data){
       keybindingKey:String(item.key||surfaceEvidence.key||''),
       keybindingWhen:String(item.when||surfaceEvidence.when||''),
       keybindingPlatforms:Array.isArray(item.platforms)?item.platforms.slice(0,4):(Array.isArray(surfaceEvidence.platforms)?surfaceEvidence.platforms.slice(0,4):[]),
+      menuId:String(item.menu||surfaceEvidence.menu||item.menuId||''),
+      menuGroup:menuGroupParts[0]||'',
+      menuOrder:String(item.order||surfaceEvidence.order||menuGroupParts[1]||''),
+      menuWhen:String(item.when||surfaceEvidence.when||''),
+      menuCommand:String(item.command||surfaceEvidence.command||''),
+      menuAlt:String((item.alt&&typeof item.alt==='object'?item.alt.command:item.alt)||surfaceEvidence.alt||''),
+      menuContextKeys,
+      menuWhenMatches:surfaceEvidence.whenMatches===false||item.whenMatches===false?false:true,
+      menuVisible:surfaceEvidence.visible===false||item.visible===false?false:true,
+      menuScope:String(item.scope||surfaceEvidence.scope||''),
       languageProviderKind:String(item.providerKind||surfaceEvidence.providerKind||''),
       languageProviderFeature:String(item.feature||surfaceEvidence.feature||''),
       languageProviderMatched:!!(item.matched||surfaceEvidence.matched),
@@ -42108,7 +42210,7 @@ function extensionRuntimeSurfaceRows(data){
     row.focusable=extensionRuntimeIsWebviewKind(row)||row.kind==='ViewContainer'||row.kind==='TreeView'||row.kind==='CustomEditor'||row.kind==='Notebook';
     row.refreshable=extensionRuntimeIsWebviewKind(row)||row.kind==='ViewContainer'||row.kind==='TreeView'||row.kind==='CustomEditor'||row.kind==='Notebook';
     row.key=[row.kind,row.id,row.command,row.extensionId,row.source,row.container,row.resourceUri].join('|');
-      row.searchText=[row.kind,row.label,row.meta,row.extensionId,row.container,row.resourceUri,row.source,row.dynamicSource,row.providerBacked?'provider-backed':'',row.command,row.id,row.action&&row.action.type,row.evidenceText,row.evidenceStatus,row.surfaceReadiness,(row.surfaceReadinessIssues||[]).join(' '),(row.anchorLane||[]).map(item=>item.text).join(' ')].join(' ').toLowerCase();
+      row.searchText=[row.kind,row.label,row.meta,row.extensionId,row.container,row.resourceUri,row.source,row.dynamicSource,row.providerBacked?'provider-backed':'',row.command,row.id,row.action&&row.action.type,row.evidenceText,row.evidenceStatus,row.surfaceReadiness,(row.surfaceReadinessIssues||[]).join(' '),(row.anchorLane||[]).map(item=>item.text).join(' '),row.menuId,row.menuGroup,row.menuOrder,row.menuWhen,row.menuCommand,row.menuAlt,(row.menuContextKeys||[]).join(' '),row.menuVisible===false?'hidden-menu':'visible-menu'].join(' ').toLowerCase();
     rows.push(row);
   };
   (data.viewContainers||[]).slice(0,12).forEach(item=>{
@@ -42855,6 +42957,16 @@ function renderExtensionRuntimeSurfacePanel(data){
       el.dataset.surfaceKeybindingWhen=String(row.keybindingWhen||row.surfaceEvidence&&row.surfaceEvidence.when||'');
       el.dataset.surfaceKeybindingPlatforms=Array.isArray(row.keybindingPlatforms)?row.keybindingPlatforms.join(','):'';
       el.dataset.surfaceKeybindingWhenMatches=row.surfaceEvidence&&row.surfaceEvidence.whenMatches===false?'0':'1';
+      el.dataset.surfaceMenuId=String(row.menuId||'');
+      el.dataset.surfaceMenuWhen=String(row.menuWhen||'');
+      el.dataset.surfaceMenuGroup=String(row.menuGroup||'');
+      el.dataset.surfaceMenuOrder=String(row.menuOrder||'');
+      el.dataset.surfaceMenuCommand=String(row.menuCommand||row.command||'');
+      el.dataset.surfaceMenuAltCommand=String(row.menuAlt||'');
+      el.dataset.surfaceMenuContextKeys=Array.isArray(row.menuContextKeys)?row.menuContextKeys.join(','):'';
+      el.dataset.surfaceMenuWhenMatches=row.menuWhenMatches===false?'0':'1';
+      el.dataset.surfaceMenuVisible=row.menuVisible===false?'0':'1';
+      el.dataset.surfaceMenuScope=String(row.menuScope||'');
       el.dataset.surfaceLanguageProviderKind=String(row.languageProviderKind||row.surfaceEvidence&&row.surfaceEvidence.providerKind||'');
       el.dataset.surfaceLanguageProviderFeature=String(row.languageProviderFeature||row.surfaceEvidence&&row.surfaceEvidence.feature||'');
       el.dataset.surfaceLanguageProviderMatched=row.languageProviderMatched?'1':'0';
@@ -43052,6 +43164,31 @@ function renderExtensionRuntimeSurfacePanel(data){
           chip.textContent=item.text;
           meta.appendChild(chip);
         });
+      }else if(row.kind==='Menu'){
+        const menuEvidence=extensionRuntimeMenuEvidence(row);
+        menuEvidence.chips.forEach(item=>{
+          const chip=document.createElement('span');
+          chip.className='extension-runtime-tag surface-evidence'+(item.state==='warn'||item.state==='error'?' missing':'');
+          chip.textContent=item.text;
+          meta.appendChild(chip);
+        });
+        if(row.menuWhen||row.menuContextKeys.length||row.menuAlt){
+          const context=document.createElement('div');
+          context.className='extension-runtime-menu-context';
+          [
+            row.menuWhen?{text:'when '+row.menuWhen,state:row.menuWhenMatches===false?'warn':'ready'}:null,
+            row.menuContextKeys.length?{text:'keys '+row.menuContextKeys.join(', '),state:'ready'}:null,
+            row.menuAlt?{text:'alt '+row.menuAlt,state:'ready'}:null,
+            row.menuVisible===false?{text:'hidden',state:'warn'}:null,
+          ].filter(Boolean).forEach(item=>{
+            const chip=document.createElement('span');
+            chip.className='extension-runtime-menu-chip '+(item.state||'');
+            chip.textContent=item.text;
+            chip.title=item.text;
+            context.appendChild(chip);
+          });
+          row._menuContextEl=context;
+        }
       }else if(row.kind==='LanguageProvider'){
         const ev=row.surfaceEvidence||{};
         [
@@ -43185,6 +43322,7 @@ function renderExtensionRuntimeSurfacePanel(data){
       summaryLine.textContent=actionSummary;
       summaryLine.title=actionSummary;
       mid.appendChild(main);mid.appendChild(meta);mid.appendChild(summaryLine);
+      if(row._menuContextEl)mid.appendChild(row._menuContextEl);
       const state=document.createElement('div');state.className='extension-runtime-state '+(row.ready?'ready':'pending');state.textContent=row.ready?'ready':'pending';
       const evidence=document.createElement('div');
       evidence.className='extension-runtime-evidence '+(row.evidenceStatus||'n-a');
@@ -45213,7 +45351,7 @@ async function extensionRuntimeDomSelfCheckSnapshot(){
       commands:[{command:'selftest.run',title:'Run Fixture',source:'extension',extensionId:'selftest.extension',runtimeKind:'command',disabled:false,primaryKeybinding:'ctrl+alt+r',keybindingCount:1,keybindings:[{command:'selftest.run',key:'ctrl+alt+r',mac:'cmd+alt+r',win:'ctrl+alt+r',linux:'ctrl+alt+r',when:'editorTextFocus',extensionId:'selftest.extension',runtimeAvailable:true,enabled:true,surfaceEvidence:{kind:'keybinding',command:'selftest.run',key:'ctrl+alt+r',when:'editorTextFocus',platforms:['mac','win','linux'],platformCount:3,whenMatches:true,runtimeAvailable:true,readiness:'ready',readinessScore:100,readinessIssues:[]}}],surfaceEvidence:{kind:'command',command:'selftest.run',extensionId:'selftest.extension',runtimeAvailable:true,editorRequired:false,keybindingCount:1,keybindings:['ctrl+alt+r'],keybindingWhens:['editorTextFocus'],readiness:'ready',readinessScore:100,readinessIssues:[]}},
         {command:'selftest.editorCommand',title:'Editor Command Fixture',source:'runtime',extensionId:'selftest.extension',runtimeAvailable:true,runtimeKind:'textEditorCommand',editorRequired:true,disabled:false,surfaceEvidence:{kind:'textEditorCommand',command:'selftest.editorCommand',extensionId:'selftest.extension',runtimeAvailable:true,editorRequired:true,readiness:'ready',readinessScore:100,readinessIssues:[]}}],
       keybindings:[{id:'selftest.extension:selftest.run:0',command:'selftest.run',key:'ctrl+alt+r',mac:'cmd+alt+r',win:'ctrl+alt+r',linux:'ctrl+alt+r',when:'editorTextFocus',extensionId:'selftest.extension',platforms:['mac','win','linux'],platformCount:3,runtimeAvailable:true,enabled:true,source:'manifest',dynamicSource:'manifest+runtime',readiness:'ready',readinessScore:100,readinessIssues:[],surfaceEvidence:{kind:'keybinding',command:'selftest.run',extensionId:'selftest.extension',key:'ctrl+alt+r',platforms:['mac','win','linux'],platformCount:3,hasWhen:true,when:'editorTextFocus',whenMatches:true,runtimeAvailable:true,readiness:'ready',readinessScore:100,readinessIssues:[]}}],
-      menus:[{menu:'view/title',command:'selftest.run',when:'view == selftest.dynamic.tree',extensionId:'selftest.extension'}],
+      menus:[{menu:'view/title',command:'selftest.run',when:'view == selftest.dynamic.tree',group:'navigation@1',alt:'selftest.altRun',extensionId:'selftest.extension',contextKeys:['view'],whenMatches:true,visible:true}],
       terminalProfiles:[{id:'selftest.terminalProfile',extensionId:'selftest.extension',runtimeAvailable:true}],
       taskDefinitions:[{type:'selftest.task',extensionId:'selftest.extension',runtimeAvailable:true,providerCount:1,hasProvideTasks:true,hasResolveTask:true,problemMatcherCount:1,required:['command'],properties:{command:{type:'string'},cwd:{type:'string'}},requiredCount:1,propertyCount:2,requiredKeys:['command'],propertyKeys:['command','cwd'],runtimeOnly:true,surfaceEvidence:{kind:'taskDefinition',type:'selftest.task',runtimeAvailable:true,providerCount:1,hasProvideTasks:true,hasResolveTask:true,problemMatcherCount:1,requiredCount:1,propertyCount:2,requiredKeys:['command'],propertyKeys:['command','cwd'],readiness:'ready',readinessScore:100,readinessIssues:[]}}],
       debuggers:[{type:'selftest.debug',label:'Selftest Debugger',extensionId:'selftest.extension',runtimeAvailable:true,configurationProviderCount:1,adapterFactoryCount:1,adapterTrackerCount:1,hasProvideDebugConfigurations:true,hasResolveDebugConfiguration:true,hasResolveDebugConfigurationWithSubstitutedVariables:true,hasCreateDebugAdapterDescriptor:true,hasCreateDebugAdapterTracker:true,configurationAttributes:{launch:{required:['program']},attach:{required:['processId']}},initialConfigurations:[{type:'selftest.debug',request:'launch',name:'Launch Selftest',program:'${workspaceFolder}/index.js'}],configurationSnippets:[{label:'Selftest launch',body:{type:'selftest.debug',request:'launch',name:'Selftest snippet'}}],variables:{selftestWorkspace:'workspace'},languages:['javascript'],configurationAttributeScopes:['attach','launch'],configurationAttributeScopeCount:2,initialConfigurationCount:1,configurationSnippetCount:1,variableCount:1,variableNames:['selftestWorkspace'],languageCount:1,breakpointLanguageCount:1,breakpointLanguages:['javascript'],adapterRuntime:'node',adapterProgram:'debug-adapter.js',runtimeOnly:true,surfaceEvidence:{kind:'debugger',type:'selftest.debug',runtimeAvailable:true,configurationProviderCount:1,adapterFactoryCount:1,adapterTrackerCount:1,hasProvideDebugConfigurations:true,hasResolveDebugConfiguration:true,hasResolveDebugConfigurationWithSubstitutedVariables:true,hasCreateDebugAdapterDescriptor:true,hasCreateDebugAdapterTracker:true,configurationAttributeScopes:['attach','launch'],configurationAttributeScopeCount:2,initialConfigurationCount:1,configurationSnippetCount:1,variableCount:1,variableNames:['selftestWorkspace'],languageCount:1,languages:['javascript'],breakpointLanguageCount:1,breakpointLanguages:['javascript'],adapterRuntime:'node',adapterProgram:'debug-adapter.js',readiness:'ready',readinessScore:100,readinessIssues:[]}}],
@@ -45746,6 +45884,15 @@ async function extensionRuntimeDomSelfCheckSnapshot(){
       runtimeKeybindingKeys:runtimeList?Array.from(runtimeList.querySelectorAll('.extension-runtime-row')).map(row=>row.dataset.surfaceKeybindingKey||'').filter(Boolean):[],
       runtimeKeybindingWhens:runtimeList?Array.from(runtimeList.querySelectorAll('.extension-runtime-row')).map(row=>row.dataset.surfaceKeybindingWhen||'').filter(Boolean):[],
       runtimeKeybindingPlatforms:runtimeList?Array.from(runtimeList.querySelectorAll('.extension-runtime-row')).map(row=>row.dataset.surfaceKeybindingPlatforms||'').filter(Boolean):[],
+      runtimeMenuRows:runtimeList?Array.from(runtimeList.querySelectorAll('.extension-runtime-row')).filter(row=>row.dataset.kind==='Menu').length:0,
+      runtimeMenuWhenRows:runtimeList?Array.from(runtimeList.querySelectorAll('.extension-runtime-row')).filter(row=>row.dataset.kind==='Menu'&&row.dataset.surfaceMenuWhen).length:0,
+      runtimeMenuVisibleRows:runtimeList?Array.from(runtimeList.querySelectorAll('.extension-runtime-row')).filter(row=>row.dataset.kind==='Menu'&&row.dataset.surfaceMenuVisible==='1').length:0,
+      runtimeMenuIds:runtimeList?Array.from(runtimeList.querySelectorAll('.extension-runtime-row')).map(row=>row.dataset.surfaceMenuId||'').filter(Boolean):[],
+      runtimeMenuGroups:runtimeList?Array.from(runtimeList.querySelectorAll('.extension-runtime-row')).map(row=>row.dataset.surfaceMenuGroup||'').filter(Boolean):[],
+      runtimeMenuOrders:runtimeList?Array.from(runtimeList.querySelectorAll('.extension-runtime-row')).map(row=>row.dataset.surfaceMenuOrder||'').filter(Boolean):[],
+      runtimeMenuAltCommands:runtimeList?Array.from(runtimeList.querySelectorAll('.extension-runtime-row')).map(row=>row.dataset.surfaceMenuAltCommand||'').filter(Boolean):[],
+      runtimeMenuContextKeys:runtimeList?Array.from(runtimeList.querySelectorAll('.extension-runtime-row')).map(row=>row.dataset.surfaceMenuContextKeys||'').filter(Boolean):[],
+      runtimeMenuChipCount:runtimeList?runtimeList.querySelectorAll('.extension-runtime-menu-chip').length:0,
       runtimeLanguageProviderRows:runtimeList?Array.from(runtimeList.querySelectorAll('.extension-runtime-row')).filter(row=>row.dataset.kind==='LanguageProvider').length:0,
       runtimeFormatterProviderRows:runtimeList?Array.from(runtimeList.querySelectorAll('.extension-runtime-row')).filter(row=>row.dataset.kind==='LanguageProvider'&&row.dataset.surfaceLanguageProviderFeature==='formatting').length:0,
       runtimeLanguageProviderMatchedRows:runtimeList?Array.from(runtimeList.querySelectorAll('.extension-runtime-row')).filter(row=>row.dataset.kind==='LanguageProvider'&&row.dataset.surfaceLanguageProviderMatched==='1').length:0,
@@ -45927,6 +46074,7 @@ async function extensionRuntimeDomSelfCheckSnapshot(){
       && snapshot.runtimeStatusBarRows>=1&&snapshot.runtimeStatusBarCommandRows>=1&&snapshot.runtimeStatusBarLeftRows>=1
       && snapshot.runtimeTextEditorCommandRows>=1&&snapshot.runtimeEditorRequiredCommandRows>=1&&snapshot.runtimeCommandKinds.includes('textEditorCommand')&&snapshot.runtimeCommandIds.includes('selftest.editorCommand')
       && snapshot.runtimeKeybindingRows>=1&&snapshot.runtimeKeybindingCommandRows>=1&&snapshot.runtimeKeybindingKeys.includes('ctrl+alt+r')&&snapshot.runtimeKeybindingWhens.includes('editorTextFocus')&&snapshot.runtimeKeybindingPlatforms.some(value=>value.includes('mac')&&value.includes('win')&&value.includes('linux'))
+      && snapshot.runtimeMenuRows>=1&&snapshot.runtimeMenuWhenRows>=1&&snapshot.runtimeMenuVisibleRows>=1&&snapshot.runtimeMenuIds.includes('view/title')&&snapshot.runtimeMenuGroups.includes('navigation')&&snapshot.runtimeMenuOrders.includes('1')&&snapshot.runtimeMenuAltCommands.includes('selftest.altRun')&&snapshot.runtimeMenuContextKeys.some(value=>value.includes('view'))&&snapshot.runtimeMenuChipCount>=3
       && snapshot.runtimeLanguageProviderRows>=1&&snapshot.runtimeFormatterProviderRows>=1&&snapshot.runtimeLanguageProviderMatchedRows>=1&&snapshot.runtimeLanguageProviderKinds.includes('formatting')&&snapshot.runtimeLanguageProviderFeatures.includes('formatting')&&snapshot.runtimeLanguageProviderCodeActionKinds.some(value=>value.includes('source.fixAll.selftest'))
       && snapshot.runtimeDiagnosticCollectionRows>=1&&snapshot.runtimeDiagnosticRows>=1&&snapshot.runtimeDiagnosticWarningRows>=1
       && snapshot.runtimeLanguageStatusRows>=1&&snapshot.runtimeLanguageBusyRows>=1&&snapshot.runtimeLanguageWarningRows>=1
