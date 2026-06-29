@@ -398,6 +398,9 @@ body.window-resizing * { cursor:inherit !important; }
   border-bottom:1px solid var(--border); color:var(--fg-dim); font:11px var(--mono); }
 .problems-chip { display:inline-flex; align-items:center; gap:4px; min-height:20px; padding:1px 6px;
   border:1px solid var(--border); border-radius:999px; background:var(--bg3); }
+.problems-nav { height:20px; min-width:22px; padding:0 6px; border:1px solid var(--border); border-radius:999px;
+  background:var(--bg3); color:var(--fg-dim); font:11px var(--mono); cursor:pointer; }
+.problems-nav:hover,.problems-nav:focus { outline:none; color:var(--fg); border-color:var(--border-focus); background:var(--bg-hover); }
 .problems-chip.error { color:var(--fg-error); border-color:color-mix(in srgb,var(--fg-error) 45%,var(--border)); }
 .problems-chip.warning { color:var(--fg-warning); border-color:color-mix(in srgb,var(--fg-warning) 45%,var(--border)); }
 .problems-chip.info { color:var(--fg-accent); border-color:color-mix(in srgb,var(--fg-accent) 45%,var(--border)); }
@@ -14976,6 +14979,7 @@ let _editorCodeActions=[],_editorCodeActionIndex=0,_editorCodeActionRequest=0;
 let _editorDefinitionRequest=0;
 let _editorDocumentHighlights=[],_editorDocumentHighlightRequest=0,_editorDocumentHighlightTimer=null,_editorDocumentHighlightContentLength=-1;
 let _editorDiagnostics=[],_editorDiagnosticRequest=0,_editorDiagnosticTimer=null,_editorDiagnosticContentLength=-1;
+let _editorActiveProblemIndex=0,_editorActiveProblemKey='';
 let _editorReferences=[],_editorReferenceIndex=0,_editorReferencesRequest=0;
 let _editorReferenceGroups=[],_editorLocationPeekLabel='';
 let _editorHierarchyMode='',_editorHierarchyDirection='',_editorHierarchyRoot=null,_editorHierarchyRows=[],_editorHierarchyIndex=0,_editorHierarchyRequest=0;
@@ -26120,11 +26124,74 @@ function sortEditorProblemRows(rows){
     || (Number(a.character)||0)-(Number(b.character)||0)
     || String(a.message||'').localeCompare(String(b.message||'')));
 }
+function editorProblemStableKey(problem){
+  if(!problem)return '';
+  return [
+    problem.kind||'diagnostic',
+    problem.file||'',
+    problem.line||0,
+    problem.character||0,
+    problem.source||'',
+    editorDiagnosticCodeLabel(problem.code),
+    problem.diffType||'',
+    problem.message||''
+  ].join('|');
+}
+function editorAssignProblemRowState(rows){
+  rows=sortEditorProblemRows(rows);
+  const previousKey=_editorActiveProblemKey;
+  rows.forEach((row,index)=>{
+    row._problemIndex=index;
+    row._problemKey=editorProblemStableKey(row);
+    row._problemActionCount=row.kind==='diff'?2:2;
+  });
+  if(rows.length){
+    const restored=previousKey?rows.findIndex(row=>row._problemKey===previousKey):-1;
+    _editorActiveProblemIndex=Math.max(0,Math.min(restored>=0?restored:_editorActiveProblemIndex,rows.length-1));
+    _editorActiveProblemKey=rows[_editorActiveProblemIndex]._problemKey||'';
+  }else{
+    _editorActiveProblemIndex=0;
+    _editorActiveProblemKey='';
+  }
+  return rows;
+}
+function refreshActiveProblemRows(){
+  document.querySelectorAll('#problems-content .problem-row').forEach(row=>{
+    const active=Number(row.dataset.problemIndex||-1)===_editorActiveProblemIndex;
+    row.classList.toggle('active',active);
+    row.setAttribute('aria-selected',active?'true':'false');
+    row.dataset.problemActive=active?'1':'0';
+    if(active)row.scrollIntoView({block:'nearest'});
+  });
+  const tab=document.querySelector('.ptab[data-ptab="problems"]');
+  if(tab)tab.dataset.problemActiveIndex=String(_editorActiveProblemIndex+1);
+  const panel=$('problems-panel');
+  if(panel)panel.dataset.problemActiveIndex=String(_editorActiveProblemIndex+1);
+  const content=$('problems-content');
+  if(content)content.dataset.problemActiveIndex=String(_editorActiveProblemIndex+1);
+}
+function setEditorActiveProblemIndex(index,rows){
+  rows=rows||editorAssignProblemRowState(editorAllProblemRows(_editorDiagnostics));
+  if(!rows.length)return null;
+  _editorActiveProblemIndex=((Number(index)||0)+rows.length)%rows.length;
+  if(_editorActiveProblemIndex<0)_editorActiveProblemIndex+=rows.length;
+  _editorActiveProblemKey=rows[_editorActiveProblemIndex]._problemKey||editorProblemStableKey(rows[_editorActiveProblemIndex]);
+  refreshActiveProblemRows();
+  return rows[_editorActiveProblemIndex];
+}
+function focusEditorProblemByDirection(direction){
+  const rows=editorAssignProblemRowState(editorAllProblemRows(_editorDiagnostics));
+  if(!rows.length){setStatus('Problems: none');return false}
+  const next=setEditorActiveProblemIndex(_editorActiveProblemIndex+(Number(direction)<0?-1:1),rows);
+  return next?focusEditorProblem(next):false;
+}
 function editorProblemSummary(rows){
-  const summary={count:0,errors:0,warnings:0,infos:0,hints:0,diff:0,diagnostics:0};
+  const summary={count:0,errors:0,warnings:0,infos:0,hints:0,diff:0,diagnostics:0,quickFixable:0,diffOpenable:0,actions:0};
   (Array.isArray(rows)?rows:[]).forEach(row=>{
     summary.count++;
-    if(row&&row.kind==='diff'){summary.diff++;return}
+    summary.actions+=Number(row&&row._problemActionCount)||2;
+    if(row&&row.kind==='diff'){summary.diff++;summary.diffOpenable++;return}
+    summary.quickFixable++;
     summary.diagnostics++;
     const rank=editorProblemSeverityRank(row.severity);
     if(rank===0)summary.errors++;
@@ -26138,7 +26205,7 @@ function editorAllProblemRows(diagnostics){
   return editorProblemRowsFromDiagnostics(diagnostics||_editorDiagnostics).concat(editorProblemRowsFromDirtyDiff());
 }
 function updateProblemsTabState(rows){
-  rows=sortEditorProblemRows(rows);
+  rows=editorAssignProblemRowState(rows);
   const tab=document.querySelector('.ptab[data-ptab="problems"]');
   const badge=tab&&tab.querySelector?tab.querySelector('.count'):null;
   const summary=editorProblemSummary(rows);
@@ -26149,6 +26216,10 @@ function updateProblemsTabState(rows){
     tab.dataset.problemDiff=String(summary.diff);
     tab.dataset.problemErrors=String(summary.errors);
     tab.dataset.problemWarnings=String(summary.warnings);
+    tab.dataset.problemQuickFixable=String(summary.quickFixable);
+    tab.dataset.problemDiffOpenable=String(summary.diffOpenable);
+    tab.dataset.problemActionCount=String(summary.actions);
+    tab.dataset.problemActiveIndex=summary.count?String(_editorActiveProblemIndex+1):'0';
     tab.title=summary.count
       ? 'Problems: '+summary.count+' total · '+summary.errors+' errors · '+summary.warnings+' warnings · '+summary.diff+' diff'
       : 'Problems: none';
@@ -26160,6 +26231,10 @@ function updateProblemsTabState(rows){
     panel.dataset.problemDiff=String(summary.diff);
     panel.dataset.problemErrors=String(summary.errors);
     panel.dataset.problemWarnings=String(summary.warnings);
+    panel.dataset.problemQuickFixable=String(summary.quickFixable);
+    panel.dataset.problemDiffOpenable=String(summary.diffOpenable);
+    panel.dataset.problemActionCount=String(summary.actions);
+    panel.dataset.problemActiveIndex=summary.count?String(_editorActiveProblemIndex+1):'0';
   }
   return summary;
 }
@@ -26175,12 +26250,16 @@ function editorScrollProblemIntoView(problem){
 }
 function focusEditorProblem(problem){
   if(!(problem&&problem.range&&problem.range.start))return false;
+  if(problem._problemIndex!=null){
+    _editorActiveProblemIndex=Math.max(0,Number(problem._problemIndex)||0);
+    _editorActiveProblemKey=problem._problemKey||editorProblemStableKey(problem);
+  }
   ed.focus();
   const off=editorOffsetFromPosition(ed.value,problem.range.start);
   const end=problem.range.end?editorOffsetFromPosition(ed.value,problem.range.end):off;
   ed.selectionStart=off;ed.selectionEnd=Math.max(off,end);
   editorScrollProblemIntoView(problem);
-  updateCursorPos();renderEditorDiagnostics(_editorDiagnostics);
+  updateCursorPos();renderEditorDiagnostics(_editorDiagnostics);refreshActiveProblemRows();
   setStatus((problem.kind==='diff'?'Diff':'Problem')+' at Ln '+String((Number(problem.line)||0)||((Number(problem.range.start.line)||0)+1)));
   return true;
 }
@@ -26199,12 +26278,25 @@ function updateProblemsPanelFromEditorDiagnostics(diagnostics){
 }
 function renderProblemsRows(rows){
   const el=$('problems-content');if(!el)return;
-  rows=sortEditorProblemRows(rows);
+  rows=editorAssignProblemRowState(rows);
   const count=rows.length,summary=editorProblemSummary(rows);
   updateProblemsTabState(rows);
-  if(!count){el.style.color='var(--fg-dim)';el.textContent='No problems detected.';return}
+  if(!count){
+    el.style.color='var(--fg-dim)';el.textContent='No problems detected.';
+    ['problemCount','problemDiagnostics','problemDiff','problemQuickFixable','problemDiffOpenable','problemActionCount','problemActiveIndex'].forEach(key=>{el.dataset[key]=key==='problemActiveIndex'?'0':'0'});
+    return;
+  }
   el.innerHTML='';el.style.color='';
+  el.dataset.problemCount=String(summary.count);
+  el.dataset.problemDiagnostics=String(summary.diagnostics);
+  el.dataset.problemDiff=String(summary.diff);
+  el.dataset.problemQuickFixable=String(summary.quickFixable);
+  el.dataset.problemDiffOpenable=String(summary.diffOpenable);
+  el.dataset.problemActionCount=String(summary.actions);
+  el.dataset.problemActiveIndex=String(_editorActiveProblemIndex+1);
   const head=document.createElement('div');head.className='problems-summary';
+  head.dataset.problemCount=String(summary.count);
+  head.dataset.problemActiveIndex=String(_editorActiveProblemIndex+1);
   [
     ['error',summary.errors,'Errors'],
     ['warning',summary.warnings,'Warnings'],
@@ -26216,6 +26308,13 @@ function renderProblemsRows(rows){
     const chip=document.createElement('span');chip.className='problems-chip '+item[0];chip.textContent=item[2]+': '+item[1];head.appendChild(chip);
   });
   const total=document.createElement('span');total.className='problems-chip';total.textContent='Total: '+count;head.appendChild(total);
+  [['prev','↑','Previous problem',-1],['next','↓','Next problem',1]].forEach(item=>{
+    const btn=document.createElement('button');
+    btn.type='button';btn.className='problems-nav '+item[0];btn.textContent=item[1];btn.title=item[2];btn.setAttribute('aria-label',item[2]);
+    btn.dataset.problemAction=item[0]==='prev'?'previous-problem':'next-problem';
+    btn.onclick=ev=>{ev.preventDefault();ev.stopPropagation();focusEditorProblemByDirection(item[3])};
+    head.appendChild(btn);
+  });
   el.appendChild(head);
   rows.forEach(d=>{
     const sev=d.kind==='diff'?'diff':editorDiagnosticSeverityLabel(d.severity);
@@ -26224,14 +26323,26 @@ function renderProblemsRows(rows){
     const tags=(Array.isArray(d.tags)?d.tags:[]).map(editorDiagnosticTagLabel).filter(Boolean);
     const meta=[d.source,code].filter(Boolean).join(' ');
     const tagText=tags.length?' ['+tags.join(', ')+']':'';
-    const row=document.createElement('div');row.className='problem-row severity-'+sev+(d.kind==='diff'?' kind-diff diff-'+String(d.diffType||'modified'):'');row.tabIndex=0;
+    const active=Number(d._problemIndex||0)===_editorActiveProblemIndex;
+    const row=document.createElement('div');row.className='problem-row severity-'+sev+(active?' active':'')+(d.kind==='diff'?' kind-diff diff-'+String(d.diffType||'modified'):'');row.tabIndex=0;
+    row.setAttribute('role','option');
+    row.setAttribute('aria-selected',active?'true':'false');
     row.dataset.problemKind=String(d.kind||'diagnostic');
+    row.dataset.problemIndex=String((Number(d._problemIndex)||0));
+    row.dataset.problemOrdinal=String((Number(d._problemIndex)||0)+1);
+    row.dataset.problemKey=String(d._problemKey||editorProblemStableKey(d));
     row.dataset.problemSeverity=sev;
+    row.dataset.problemSeverityRank=String(d.kind==='diff'?4:editorProblemSeverityRank(d.severity));
     row.dataset.problemLine=String(d.line||'');
     row.dataset.problemColumn=String(d.character||'');
     row.dataset.problemSource=String(d.source||'');
     row.dataset.problemCode=String(code||'');
+    row.dataset.problemActionCount=String(d._problemActionCount||2);
+    row.dataset.problemQuickFixable=d.kind==='diff'?'0':'1';
+    row.dataset.problemDiffOpenable=d.kind==='diff'?'1':'0';
+    row.dataset.problemActive=active?'1':'0';
     if(d.kind==='diff')row.dataset.problemDiffType=String(d.diffType||'modified');
+    if(d.kind==='diff')row.dataset.problemDiffHunk=String(d.hunk||0);
     const severity=document.createElement('div');severity.className='problem-severity '+sev;severity.textContent=sev;
     const main=document.createElement('div');main.className='problem-main';
     const message=document.createElement('div');message.className='problem-message';message.textContent=String(d.message||'');
@@ -26248,10 +26359,16 @@ function renderProblemsRows(rows){
     actions.appendChild(fix);actions.appendChild(copy);
     row.appendChild(severity);row.appendChild(main);row.appendChild(actions);
     row.title=[d.source,code,String(d.message||'')].filter(Boolean).join(': ')+(tagText?' '+tagText:'');
-    row.onmousedown=()=>focusEditorProblem(d);
-    row.onkeydown=ev=>{if(ev.key==='Enter'){ev.preventDefault();focusEditorProblem(d)}else if(ev.key==='F2'||(ev.ctrlKey&&ev.key==='.')){ev.preventDefault();requestEditorQuickFixForProblem(d,false)}};
+    row.onmousedown=()=>{setEditorActiveProblemIndex(d._problemIndex,rows);focusEditorProblem(d)};
+    row.onkeydown=ev=>{
+      if(ev.key==='Enter'){ev.preventDefault();focusEditorProblem(d)}
+      else if(ev.key==='ArrowDown'){ev.preventDefault();focusEditorProblemByDirection(1)}
+      else if(ev.key==='ArrowUp'){ev.preventDefault();focusEditorProblemByDirection(-1)}
+      else if(ev.key==='F2'||(ev.ctrlKey&&ev.key==='.')){ev.preventDefault();requestEditorQuickFixForProblem(d,false)}
+    };
     el.appendChild(row);
   });
+  refreshActiveProblemRows();
 }
 // PANEL-001: Populate the Problems panel from backend diagnostics or editor analysis
 async function _refreshProblems(){
@@ -46406,8 +46523,16 @@ function editorDirtyDiffSelfCheckSnapshot(){
     const diffRows=problemRows.filter(row=>row.dataset.problemKind==='diff');
     const quickFixButtons=Array.from(document.querySelectorAll('#problems-content [data-problem-action="quick-fix"]'));
     const diffButtons=Array.from(document.querySelectorAll('#problems-content [data-problem-action="open-diff"]'));
+    const navButtons=Array.from(document.querySelectorAll('#problems-content .problems-nav'));
     const summaryChips=Array.from(document.querySelectorAll('#problems-content .problems-chip')).map(chip=>chip.textContent);
+    const problemsContent=$('problems-content');
     const focusedDiff=diffRows.length?focusEditorProblem(editorAllProblemRows(_editorDiagnostics).find(row=>row.kind==='diff')):false;
+    const activeRowsAfterFocus=Array.from(document.querySelectorAll('#problems-content .problem-row.active'));
+    const activeDatasetAfterFocus=activeRowsAfterFocus.length?activeRowsAfterFocus[0].dataset.problemActive:'';
+    const navigatedProblem=focusEditorProblemByDirection(1);
+    const activeRowsAfterNav=Array.from(document.querySelectorAll('#problems-content .problem-row.active'));
+    const rowsWithOrdinalAndKey=problemRows.filter(row=>row.dataset.problemOrdinal&&row.dataset.problemKey&&row.dataset.problemActionCount);
+    const rowsWithAria=problemRows.filter(row=>row.getAttribute('role')==='option'&&row.getAttribute('aria-selected')!==null);
     setActiveEditorBaselineContent(ed.value);
     let reset=editorDirtyDiffState();
     return {
@@ -46443,9 +46568,19 @@ function editorDirtyDiffSelfCheckSnapshot(){
       problemDiffCount:diffRows.length,
       problemTabCount:problemsTab?problemsTab.dataset.problemCount:'',
       problemTabDiff:problemsTab?problemsTab.dataset.problemDiff:'',
+      problemTabActive:problemsTab?problemsTab.dataset.problemActiveIndex:'',
+      problemPanelActionCount:$('problems-panel')?$('problems-panel').dataset.problemActionCount:'',
+      problemContentQuickFixable:problemsContent?problemsContent.dataset.problemQuickFixable:'',
+      problemContentDiffOpenable:problemsContent?problemsContent.dataset.problemDiffOpenable:'',
       problemRowDatasetOk:problemRows.every(row=>row.dataset.problemKind&&row.dataset.problemLine&&row.dataset.problemSource!==undefined&&row.dataset.problemCode!==undefined),
+      problemRowStateDatasetOk:rowsWithOrdinalAndKey.length===problemRows.length&&rowsWithAria.length===problemRows.length,
       quickFixCount:quickFixButtons.length,
       diffActionCount:diffButtons.length,
+      problemNavCount:navButtons.length,
+      activeProblemCount:activeRowsAfterFocus.length,
+      activeProblemDataset:activeDatasetAfterFocus,
+      navigatedProblem,
+      activeProblemAfterNav:activeRowsAfterNav.length,
       problemSummaryText:summaryChips.join(' | '),
       focusedProblem:focusedDiff,
       resetTotal:reset.summary&&reset.summary.total||0,
@@ -46460,6 +46595,10 @@ function editorDirtyDiffSelfCheckSnapshot(){
         String(featureAggregate.label||'').includes('diff')&&
         problemRows.length>=2&&diagnosticRows.length>=1&&diffRows.length>=1&&
         quickFixButtons.length>=1&&diffButtons.length>=1&&
+        navButtons.length>=2&&activeRowsAfterFocus.length===1&&activeDatasetAfterFocus==='1'&&
+        navigatedProblem&&activeRowsAfterNav.length===1&&rowsWithOrdinalAndKey.length===problemRows.length&&rowsWithAria.length===problemRows.length&&
+        Number($('problems-panel')&&$('problems-panel').dataset.problemActionCount||0)>=problemRows.length*2&&
+        Number(problemsContent&&problemsContent.dataset.problemQuickFixable||0)>=1&&Number(problemsContent&&problemsContent.dataset.problemDiffOpenable||0)>=1&&
         problemsTab&&Number(problemsTab.dataset.problemDiff)>0&&
         problemRows.every(row=>row.dataset.problemKind&&row.dataset.problemLine)&&focusedDiff&&
         (reset.summary&&reset.summary.total||0)===0

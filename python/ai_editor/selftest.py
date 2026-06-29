@@ -15799,10 +15799,22 @@ console.log("command palette quick access helpers ok");
             and "hasToolbar" in html
             and "toolbarDatasetOk" in html
             and "activeHunkRows" in html
-            and "problemDiagnosticCount" in html
-            and "problemDiffCount" in html
-            and "problemRowDatasetOk" in html
-            and "diffActionCount" in html
+           and "problemDiagnosticCount" in html
+           and "problemDiffCount" in html
+           and "problemRowDatasetOk" in html
+           and "problemRowStateDatasetOk" in html
+           and "problemNavCount" in html
+           and "activeProblemCount" in html
+           and "activeProblemAfterNav" in html
+           and "function editorProblemStableKey(problem)" in html
+           and "function editorAssignProblemRowState(rows)" in html
+           and "function refreshActiveProblemRows()" in html
+           and "function focusEditorProblemByDirection(direction)" in html
+           and "dataset.problemQuickFixable" in html
+           and "dataset.problemDiffOpenable" in html
+           and "dataset.problemActionCount" in html
+           and ".problems-nav" in html
+           and "diffActionCount" in html
             and "rulerMarkers" in html
            and "diffDatasetsOk" in html
            and "featureDiffTotal" in html
