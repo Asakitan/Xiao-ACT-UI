@@ -26,6 +26,7 @@ import time
 import uuid
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any, Callable, Dict, List, Optional, Set, Tuple
 from urllib.parse import quote, unquote, urlparse, urlsplit, urlunsplit
 
@@ -12421,6 +12422,285 @@ class AIEditorAPI:
             str(row.get("extensionId") or "")))
         return result
 
+    @staticmethod
+    def _extension_language_provider_feature(kind: str) -> str:
+        groups = {
+            "formatting": {
+                "formatting", "rangeFormatting", "onTypeFormatting",
+            },
+            "codeActions": {"codeActions"},
+            "diagnostics": {"diagnostics"},
+            "symbols": {"documentSymbol", "workspaceSymbol"},
+            "navigation": {
+                "definition", "typeDefinition", "declaration",
+                "implementation", "references",
+            },
+            "completion": {
+                "completion", "inlineCompletion", "signatureHelp",
+            },
+            "semanticTokens": {"semanticTokens", "semanticTokensRange"},
+            "links": {"documentLink", "documentColor"},
+            "inline": {"inlayHint", "codeLens"},
+            "editing": {
+                "rename", "documentHighlight", "linkedEditing",
+                "foldingRange", "selectionRange",
+            },
+            "hierarchy": {"callHierarchy", "typeHierarchy"},
+            "documentIO": {"documentPaste", "documentDrop"},
+        }
+        for feature, values in groups.items():
+            if kind in values:
+                return feature
+        return "language"
+
+    def _extension_surface_language_document(
+            self, context: Any = None) -> Tuple[Any, str, str]:
+        data = context if isinstance(context, dict) else {}
+        language = str(
+            data.get("resourceLangId")
+            or data.get("language")
+            or data.get("languageId")
+            or "plaintext").strip() or "plaintext"
+        content = "" if data.get("content") is None else str(data.get("content"))
+        uri = _editor_provider_uri({
+            "uri": (
+                data.get("resourceUri")
+                or data.get("uri")
+                or data.get("filePath")
+                or data.get("path")),
+            "filePath": data.get("filePath") or data.get("path") or "",
+            "workspacePath": data.get("workspacePath") or "",
+            "name": data.get("name") or "runtime-surface",
+        })
+        updater = getattr(
+            self._vscode_ns, "update_text_document_snapshot", None)
+        if callable(updater):
+            document = updater(uri, content, language)
+        else:
+            document = SimpleNamespace(
+                uri=uri,
+                fileName=getattr(uri, "fsPath", str(uri)),
+                languageId=language,
+                getText=lambda: content,
+                isDirty=False,
+            )
+        return document, language, str(uri)
+
+    def _extension_surface_language_providers(
+            self, context: Any = None) -> List[Dict[str, Any]]:
+        document, language, resource_uri = (
+            self._extension_surface_language_document(context))
+        provider_map = getattr(self._vscode_ns, "_language_providers", {}) or {}
+        node_entries: List[Dict[str, Any]] = []
+        node_health: Dict[str, Any] = {}
+        host = getattr(self, "_node_ext_host", None)
+        host_running = bool(host is not None and getattr(host, "is_running", False))
+        if host_running and hasattr(host, "list_language_providers"):
+            try:
+                node_entries = [
+                    item for item in host.list_language_providers()
+                    if isinstance(item, dict)
+                ]
+            except Exception:
+                node_entries = []
+            try:
+                node_health = host.language_provider_health_snapshot()
+            except Exception:
+                node_health = {}
+
+        rows: List[Dict[str, Any]] = []
+
+        def add_entry(source: str, entry: Dict[str, Any]) -> None:
+            provider_kind = str(entry.get("kind") or "")
+            provider_id = str(
+                entry.get("providerId")
+                or entry.get("id")
+                or entry.get("handle")
+                or "")
+            health = {}
+            if source == "node":
+                health = (
+                    node_health.get(f"{provider_kind}:{provider_id}")
+                    or node_health.get(provider_id)
+                    or {})
+            item = _language_provider_metadata_entry(
+                source, entry, document, self._vscode_ns, health=health)
+            feature = self._extension_language_provider_feature(provider_kind)
+            matched = bool(item.get("matched"))
+            errors = int(_as_dict(item.get("health")).get("errors") or 0)
+            timeouts = int(_as_dict(item.get("health")).get("timeouts") or 0)
+            cancelled = int(_as_dict(item.get("health")).get("cancelled") or 0)
+            readiness_issues: List[str] = []
+            if not matched:
+                readiness_issues.append("selector-not-matched")
+            if errors or timeouts:
+                readiness_issues.append("provider-errors")
+            elif cancelled:
+                readiness_issues.append("provider-cancelled")
+            readiness = (
+                "error" if errors or timeouts else
+                "warning" if cancelled else
+                "ready" if matched else "context-mismatch")
+            score = (
+                45 if errors or timeouts else
+                70 if cancelled else
+                100 if matched else 65)
+            evidence = {
+                "kind": "languageProvider",
+                "providerKind": provider_kind,
+                "feature": feature,
+                "providerId": provider_id,
+                "extensionId": str(item.get("extensionId") or ""),
+                "source": source,
+                "languageId": language,
+                "resourceUri": resource_uri,
+                "matchScore": int(item.get("matchScore") or 0),
+                "matched": matched,
+                "triggerCount": len(item.get("triggerCharacters") or []),
+                "triggerCharacters": item.get("triggerCharacters") or [],
+                "codeActionKindCount": len(item.get("codeActionKinds") or []),
+                "codeActionKinds": item.get("codeActionKinds") or [],
+                "resolveSupported": bool(
+                    _as_dict(item.get("resolveSupport")).get("supported")),
+                "errors": errors,
+                "timeouts": timeouts,
+                "cancelled": cancelled,
+                "readiness": readiness,
+                "readinessScore": score,
+                "readinessIssues": readiness_issues[:8],
+            }
+            rows.append({
+                "id": ":".join([
+                    source or "provider",
+                    provider_kind or "language",
+                    provider_id or str(entry.get("handle") or len(rows)),
+                ]),
+                "providerId": provider_id,
+                "providerKind": provider_kind,
+                "feature": feature,
+                "displayName": str(item.get("displayName") or provider_id),
+                "extensionId": str(item.get("extensionId") or ""),
+                "selector": item.get("selector"),
+                "matchScore": int(item.get("matchScore") or 0),
+                "matched": matched,
+                "languageId": language,
+                "resourceUri": resource_uri,
+                "triggerCharacters": item.get("triggerCharacters") or [],
+                "resolveSupport": item.get("resolveSupport") or {},
+                "metadata": item.get("metadata") or {},
+                "codeActionKinds": item.get("codeActionKinds") or [],
+                "health": item.get("health") or {},
+                "runtimeAvailable": True,
+                "source": (
+                    "runtime-only" if source == "node" else
+                    "python-runtime"),
+                "dynamicSource": (
+                    "runtime-only" if source == "node" else
+                    "python-runtime"),
+                "readiness": readiness,
+                "readinessScore": score,
+                "readinessIssues": readiness_issues[:8],
+                "surfaceEvidence": evidence,
+            })
+
+        if isinstance(provider_map, dict):
+            for provider_kind, entries in provider_map.items():
+                for entry in entries if isinstance(entries, list) else []:
+                    if isinstance(entry, dict):
+                        normalized = dict(entry)
+                        normalized.setdefault("kind", str(provider_kind))
+                        add_entry("python", normalized)
+        for entry in node_entries:
+            add_entry("node", entry)
+        rows.sort(key=lambda item: (
+            str(item.get("feature") or ""),
+            str(item.get("providerKind") or ""),
+            0 if item.get("matched") else 1,
+            str(item.get("displayName") or ""),
+            str(item.get("providerId") or "")))
+        return json.loads(json.dumps(rows, ensure_ascii=False, default=str))
+
+    def _extension_surface_diagnostic_collections(self) -> List[Dict[str, Any]]:
+        collections = getattr(self._vscode_ns, "_diagnostic_collections", {}) or {}
+        if not isinstance(collections, dict):
+            return []
+        rows: List[Dict[str, Any]] = []
+        for name, collection in collections.items():
+            try:
+                entries = list(collection.entries())
+            except Exception:
+                entries = []
+            counts = {
+                "errors": 0,
+                "warnings": 0,
+                "infos": 0,
+                "hints": 0,
+            }
+            uri_count = len(entries)
+            diagnostic_count = 0
+            uris: List[str] = []
+            for uri, diagnostics in entries:
+                uri_text = str(uri or "")
+                if uri_text:
+                    uris.append(uri_text)
+                values = diagnostics if isinstance(diagnostics, list) else (
+                    [] if diagnostics is None else [diagnostics])
+                diagnostic_count += len(values)
+                for diagnostic in values:
+                    value = _json_ready_language_value(diagnostic)
+                    if not isinstance(value, dict):
+                        continue
+                    severity = int(value.get("severity") or 0)
+                    if severity == 0:
+                        counts["errors"] += 1
+                    elif severity == 1:
+                        counts["warnings"] += 1
+                    elif severity == 2:
+                        counts["infos"] += 1
+                    else:
+                        counts["hints"] += 1
+            readiness = (
+                "error" if counts["errors"] else
+                "warning" if counts["warnings"] else
+                "ready" if diagnostic_count else "empty")
+            evidence = {
+                "kind": "diagnosticCollection",
+                "name": str(name or "default"),
+                "uriCount": uri_count,
+                "diagnosticCount": diagnostic_count,
+                **counts,
+                "readiness": readiness,
+                "readinessScore": (
+                    55 if counts["errors"] else
+                    75 if counts["warnings"] else
+                    100 if diagnostic_count else 80),
+                "readinessIssues": (
+                    ["diagnostic-errors"] if counts["errors"] else
+                    ["diagnostic-warnings"] if counts["warnings"] else []),
+            }
+            first_uri = uris[0] if uris else ""
+            rows.append({
+                "id": str(name or "default"),
+                "name": str(name or "default"),
+                "uri": first_uri,
+                "resourceUri": first_uri,
+                "uris": uris[:12],
+                "uriCount": uri_count,
+                "diagnosticCount": diagnostic_count,
+                **counts,
+                "runtimeAvailable": True,
+                "source": "python-runtime",
+                "dynamicSource": "python-runtime",
+                "readiness": readiness,
+                "readinessScore": evidence["readinessScore"],
+                "readinessIssues": evidence["readinessIssues"],
+                "surfaceEvidence": evidence,
+            })
+        rows.sort(key=lambda item: (
+            str(item.get("readiness") or ""),
+            str(item.get("name") or "")))
+        return rows
+
     def _extension_surface_custom_editors(
             self,
             contributions: Dict[str, Any]) -> List[Dict[str, Any]]:
@@ -13887,6 +14167,71 @@ class AIEditorAPI:
                 return []
             return sorted(result)
 
+        def language_provider_keys() -> List[str]:
+            result: List[str] = []
+            provider_map = getattr(vscode_ns, "_language_providers", {}) or {}
+            if isinstance(provider_map, dict):
+                for kind, rows in provider_map.items():
+                    for item in rows if isinstance(rows, list) else []:
+                        if not isinstance(item, dict):
+                            continue
+                        result.append(":".join([
+                            "python",
+                            str(kind),
+                            str(item.get("providerId") or item.get("id")
+                                or item.get("handle") or ""),
+                            json.dumps(
+                                _json_ready_language_value(
+                                    item.get("selector")),
+                                sort_keys=True,
+                                ensure_ascii=False,
+                                default=str),
+                        ]))
+            if host_running and hasattr(host, "list_language_providers"):
+                try:
+                    for item in host.list_language_providers():
+                        if not isinstance(item, dict):
+                            continue
+                        result.append(":".join([
+                            "node",
+                            str(item.get("kind") or ""),
+                            str(item.get("providerId") or item.get("id")
+                                or item.get("handle") or ""),
+                            json.dumps(
+                                _json_ready_language_value(
+                                    item.get("selector")),
+                                sort_keys=True,
+                                ensure_ascii=False,
+                                default=str),
+                        ]))
+                except Exception:
+                    pass
+            return sorted(result)
+
+        def diagnostic_collection_keys() -> List[str]:
+            result: List[str] = []
+            collections = getattr(vscode_ns, "_diagnostic_collections", {}) or {}
+            if not isinstance(collections, dict):
+                return []
+            for name, collection in collections.items():
+                entries = []
+                try:
+                    entries = list(collection.entries())
+                except Exception:
+                    entries = []
+                diag_count = 0
+                for _uri, diagnostics in entries:
+                    if isinstance(diagnostics, list):
+                        diag_count += len(diagnostics)
+                    elif diagnostics:
+                        diag_count += 1
+                result.append(":".join([
+                    str(name),
+                    str(len(entries)),
+                    str(diag_count),
+                ]))
+            return sorted(result)
+
         def keybinding_keys() -> List[str]:
             items = (
                 contributions.get("keybindings", [])
@@ -13929,6 +14274,8 @@ class AIEditorAPI:
                     getattr(vscode_ns, "chat_participants", {})),
                 "keybindings": keybinding_keys(),
                 "nodeCommands": node_command_keys(),
+                "languageProviders": language_provider_keys(),
+                "diagnosticCollections": diagnostic_collection_keys(),
                 "languageStatus": language_status_keys(),
                 "textEditorDecorations": text_editor_decoration_keys(),
                 "taskProviders": node_surface_keys("task_providers"),
@@ -14184,6 +14531,9 @@ class AIEditorAPI:
         chat_participants = self._extension_surface_chat_participants(
             contributions)
         chat_context_providers = self._extension_surface_chat_context_providers()
+        language_providers = self._extension_surface_language_providers(
+            context or {})
+        diagnostic_collections = self._extension_surface_diagnostic_collections()
         status_bar_items = self._extension_surface_status_bar_items(contributions)
         language_status_items = self._extension_surface_language_status_items()
         text_editor_decorations = self._extension_surface_text_editor_decorations()
@@ -14432,6 +14782,34 @@ class AIEditorAPI:
             if item.get("runtimeAvailable")
             and str(item.get("command") or "").strip()
         })
+        language_provider_matched = sum(
+            1 for item in language_providers if item.get("matched"))
+        language_formatter_providers = sum(
+            1 for item in language_providers
+            if item.get("feature") == "formatting")
+        language_code_action_providers = sum(
+            1 for item in language_providers
+            if item.get("feature") == "codeActions")
+        language_provider_errors = sum(
+            1 for item in language_providers
+            if str(item.get("readiness") or "") == "error")
+        language_provider_warnings = sum(
+            1 for item in language_providers
+            if str(item.get("readiness") or "") in {
+                "warning", "context-mismatch",
+            })
+        diagnostic_collection_entries = sum(
+            int(item.get("uriCount") or 0)
+            for item in diagnostic_collections)
+        diagnostic_collection_items = sum(
+            int(item.get("diagnosticCount") or 0)
+            for item in diagnostic_collections)
+        diagnostic_collection_errors = sum(
+            int(item.get("errors") or 0)
+            for item in diagnostic_collections)
+        diagnostic_collection_warnings = sum(
+            int(item.get("warnings") or 0)
+            for item in diagnostic_collections)
         payload = json.loads(json.dumps({
             "ok": True,
             "views": views,
@@ -14451,6 +14829,8 @@ class AIEditorAPI:
             "languageModelProviders": language_model_providers,
             "chatParticipants": chat_participants,
             "chatContextProviders": chat_context_providers,
+            "languageProviders": language_providers,
+            "diagnosticCollections": diagnostic_collections,
             "statusBarItems": status_bar_items,
             "languageStatusItems": language_status_items,
             "textEditorDecorations": text_editor_decorations,
@@ -14544,6 +14924,17 @@ class AIEditorAPI:
                 "languageModelProviders": len(language_model_providers),
                 "chatParticipants": len(chat_participants),
                 "chatContextProviders": len(chat_context_providers),
+                "languageProviders": len(language_providers),
+                "languageProviderMatched": language_provider_matched,
+                "languageFormatterProviders": language_formatter_providers,
+                "languageCodeActionProviders": language_code_action_providers,
+                "languageProviderErrors": language_provider_errors,
+                "languageProviderWarnings": language_provider_warnings,
+                "diagnosticCollections": len(diagnostic_collections),
+                "diagnosticCollectionEntries": diagnostic_collection_entries,
+                "diagnosticCollectionItems": diagnostic_collection_items,
+                "diagnosticCollectionErrors": diagnostic_collection_errors,
+                "diagnosticCollectionWarnings": diagnostic_collection_warnings,
                 "statusBarItems": len(status_bar_items),
                 "statusBarCommands": status_bar_commands,
                 "statusBarLeft": status_bar_left,
@@ -14564,7 +14955,8 @@ class AIEditorAPI:
                     + len(terminal_profiles) + len(task_definitions)
                     + len(debuggers) + len(language_model_tools)
                     + len(language_model_providers) + len(chat_participants)
-                    + len(chat_context_providers) + len(status_bar_items)
+                    + len(chat_context_providers) + len(language_providers)
+                    + len(diagnostic_collections) + len(status_bar_items)
                     + len(language_status_items)
                     + len(text_editor_decorations)),
             },

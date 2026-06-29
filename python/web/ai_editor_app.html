@@ -39497,6 +39497,7 @@ function extensionRuntimeSurfaceAction(kind,item,row){
   if((kind==='Command'||kind==='TextEditorCommand'||kind==='Keybinding'||kind==='Menu')&&command)return {type:'run-command',label:'Run',title:'Run extension command',target:command};
   if((kind==='StatusBarItem'||kind==='LanguageStatus')&&command)return {type:'run-command',label:'Run',title:'Run extension surface command',target:command};
   if((kind==='CustomEditor'||kind==='Notebook')&&uri)return {type:'open-file',label:'Open',title:'Open contributed editor resource',target:uri};
+  if((kind==='LanguageProvider'||kind==='DiagnosticCollection')&&uri)return {type:'open-file',label:'Open',title:'Open provider diagnostic resource',target:uri};
   if(kind==='TerminalProfile'&&id)return {type:'open-terminal-profile',label:'Open',title:'Open extension terminal profile',target:id};
   if(kind==='LMTool'&&id)return {type:'prepare-lm-tool',label:'Use',title:'Prepare this language-model tool in Assistant',target:id};
   if(kind==='LMProvider'&&id)return {type:'prepare-lm-provider',label:'Use',title:'Prepare this language-model provider in Assistant',target:id};
@@ -39524,6 +39525,8 @@ function extensionRuntimeEvidenceMatches(row,value){
   if(v==='text-editor-decoration')return row&&row.kind==='TextEditorDecoration';
   if(v==='text-editor-command')return row&&row.kind==='TextEditorCommand';
   if(v==='keybinding')return row&&row.kind==='Keybinding';
+  if(v==='language-provider')return row&&row.kind==='LanguageProvider';
+  if(v==='diagnostic-collection')return row&&row.kind==='DiagnosticCollection';
   if(!row||!extensionRuntimeIsWebviewKind(row))return false;
   const ev=row.webviewEvidence||{};
   if(v==='rendered')return !!row.htmlAvailable;
@@ -39614,6 +39617,16 @@ function extensionRuntimeAnchorLaneItems(row){
     items.push({key:'keybinding',text:row.keybindingKey||'keybinding',state:row.ready?'ready':'warn',title:'Manifest keybinding contribution'});
     items.push({key:'command',text:'command',state:row.command?'ready':'warn',title:'Command bound to this keybinding'});
     if(row.keybindingWhen)items.push({key:'when',text:'when',state:row.surfaceEvidence&&row.surfaceEvidence.whenMatches===false?'warn':'accent',title:'VS Code when-clause context'});
+  }else if(row.kind==='LanguageProvider'){
+    items.push({key:'provider',text:row.languageProviderKind||'provider',state:row.ready?'ready':'warn',title:'Runtime language provider'});
+    items.push({key:'selector',text:row.languageProviderMatched?'matched':'selector pending',state:row.languageProviderMatched?'ready':'warn',title:'Document selector match'});
+    if(row.languageProviderFeature)items.push({key:'feature',text:row.languageProviderFeature,state:'accent',title:'Provider feature group'});
+    if(row.surfaceEvidence&&row.surfaceEvidence.errors)items.push({key:'health',text:'errors '+row.surfaceEvidence.errors,state:'warn',title:'Provider health'});
+  }else if(row.kind==='DiagnosticCollection'){
+    items.push({key:'diagnostics',text:'diagnostics '+String(row.diagnosticCount||0),state:row.diagnosticErrors?'warn':'ready',title:'Diagnostic collection entries'});
+    items.push({key:'uris',text:'uris '+String(row.diagnosticUriCount||0),state:row.diagnosticUriCount?'accent':'warn',title:'Resources with diagnostics'});
+    if(row.diagnosticErrors)items.push({key:'errors',text:'errors '+row.diagnosticErrors,state:'warn',title:'Diagnostic errors'});
+    if(row.diagnosticWarnings)items.push({key:'warnings',text:'warnings '+row.diagnosticWarnings,state:'warn',title:'Diagnostic warnings'});
   }else if(row.kind==='Command'||row.kind==='TextEditorCommand'){
     items.push({key:'command',text:row.kind==='TextEditorCommand'?'editor command':'command',state:'ready',title:'Dynamic command registration'});
     if(row.surfaceEvidence&&row.surfaceEvidence.editorRequired)items.push({key:'editor',text:'active editor required',state:'accent',title:'VS Code TextEditorCommand receives active editor/edit builder'});
@@ -41100,6 +41113,13 @@ function extensionRuntimeSurfaceRows(data){
       surfaceEvidence.command?'command:'+surfaceEvidence.command:'',
       surfaceEvidence.key?'keybinding:'+surfaceEvidence.key:'',
       surfaceEvidence.keybindingCount?'keybindings:'+surfaceEvidence.keybindingCount:'',
+      surfaceEvidence.providerKind?'provider-kind:'+surfaceEvidence.providerKind:'',
+      surfaceEvidence.feature?'provider-feature:'+surfaceEvidence.feature:'',
+      surfaceEvidence.matchScore!==undefined?'match:'+surfaceEvidence.matchScore:'',
+      surfaceEvidence.diagnosticCount?'diagnostics:'+surfaceEvidence.diagnosticCount:'',
+      surfaceEvidence.uriCount?'diagnostic-uris:'+surfaceEvidence.uriCount:'',
+      surfaceEvidence.errors?'errors:'+surfaceEvidence.errors:'',
+      surfaceEvidence.warnings?'warnings:'+surfaceEvidence.warnings:'',
       surfaceEvidence.when?'when:'+surfaceEvidence.when:'',
       Array.isArray(surfaceEvidence.keybindings)?surfaceEvidence.keybindings.join(' '):'',
       Array.isArray(surfaceEvidence.keybindingWhens)?surfaceEvidence.keybindingWhens.join(' '):'',
@@ -41167,6 +41187,16 @@ function extensionRuntimeSurfaceRows(data){
       keybindingKey:String(item.key||surfaceEvidence.key||''),
       keybindingWhen:String(item.when||surfaceEvidence.when||''),
       keybindingPlatforms:Array.isArray(item.platforms)?item.platforms.slice(0,4):(Array.isArray(surfaceEvidence.platforms)?surfaceEvidence.platforms.slice(0,4):[]),
+      languageProviderKind:String(item.providerKind||surfaceEvidence.providerKind||''),
+      languageProviderFeature:String(item.feature||surfaceEvidence.feature||''),
+      languageProviderMatched:!!(item.matched||surfaceEvidence.matched),
+      languageProviderMatchScore:Number(item.matchScore||surfaceEvidence.matchScore||0)||0,
+      triggerCharacters:Array.isArray(item.triggerCharacters)?item.triggerCharacters.slice(0,8):[],
+      codeActionKinds:Array.isArray(item.codeActionKinds)?item.codeActionKinds.slice(0,8):[],
+      diagnosticCount:Number(item.diagnosticCount||surfaceEvidence.diagnosticCount||0)||0,
+      diagnosticUriCount:Number(item.uriCount||surfaceEvidence.uriCount||0)||0,
+      diagnosticErrors:Number(item.errors||surfaceEvidence.errors||0)||0,
+      diagnosticWarnings:Number(item.warnings||surfaceEvidence.warnings||0)||0,
       viewContainerLocation:String(item.location||surfaceEvidence.location||''),
       viewContainerViewCount:Number(item.view_count||item.viewCount||surfaceEvidence.viewCount||(Array.isArray(item.views)?item.views.length:0)||0)||0,
       viewContainerBuiltin:!!(item.builtin||surfaceEvidence.builtin),
@@ -41211,6 +41241,8 @@ function extensionRuntimeSurfaceRows(data){
   (data.languageModelProviders||[]).slice(0,8).forEach(item=>push('LMProvider',item,item.name||item.vendor||item.id,(item.vendor||item.id)+' · models '+(item.modelCount||0),item.runtimeAvailable!==false));
   (data.chatParticipants||[]).slice(0,8).forEach(item=>push('ChatParticipant',item,item.name||item.id,item.id,item.runtimeAvailable!==false));
   (data.chatContextProviders||[]).slice(0,8).forEach(item=>push('ChatContext',item,item.id||item.kind,item.kind+(item.selector?' · selector':''),item.runtimeAvailable!==false));
+  (data.languageProviders||[]).slice(0,16).forEach(item=>push('LanguageProvider',item,item.displayName||item.providerId||item.providerKind,(item.feature||item.providerKind||'language')+' · '+(item.languageId||'document')+' · match '+(item.matchScore||0),item.readiness!=='error'));
+  (data.diagnosticCollections||[]).slice(0,8).forEach(item=>push('DiagnosticCollection',item,item.name||item.id,(item.uriCount||0)+' uris · '+(item.diagnosticCount||0)+' diagnostics',item.readiness!=='error'));
   extensionRuntimeStatusBarRows(data).slice(0,12).forEach(item=>push('StatusBarItem',item,item.text||item.name||item.id,(item.alignmentName||'status')+' · '+(item.extensionId||item.id),item.runtimeAvailable!==false));
   extensionRuntimeLanguageStatusRows(data).slice(0,12).forEach(item=>push('LanguageStatus',item,item.label||item.text||item.name||item.id,(item.source||item.extensionId||'runtime')+' · severity '+(item.severity||0),item.runtimeAvailable!==false));
   (data.textEditorDecorations||[]).slice(0,12).forEach(item=>push('TextEditorDecoration',item,item.name||item.key||item.id,(item.uri||item.resourceUri||'editor')+' · ranges '+(item.rangeCount||0)+' · events '+(item.eventCount||0),item.runtimeAvailable!==false));
@@ -41665,6 +41697,12 @@ function renderExtensionRuntimeSurfacePanel(data){
     ['LM Provider',summary.languageModelProviders||0],
     ['Chat',summary.chatParticipants||0],
     ['Context',summary.chatContextProviders||0],
+    ['LanguageProvider',summary.languageProviders||rows.filter(row=>row.kind==='LanguageProvider').length],
+    ['Formatter Provider',summary.languageFormatterProviders||rows.filter(row=>row.kind==='LanguageProvider'&&row.languageProviderFeature==='formatting').length],
+    ['Code Action Provider',summary.languageCodeActionProviders||rows.filter(row=>row.kind==='LanguageProvider'&&row.languageProviderFeature==='codeActions').length],
+    ['Provider Matched',summary.languageProviderMatched||rows.filter(row=>row.kind==='LanguageProvider'&&row.languageProviderMatched).length],
+    ['DiagnosticCollection',summary.diagnosticCollections||rows.filter(row=>row.kind==='DiagnosticCollection').length],
+    ['Diagnostics',summary.diagnosticCollectionItems||rows.reduce((n,row)=>n+(row.kind==='DiagnosticCollection'?(Number(row.diagnosticCount)||0):0),0)],
     ['Status Bar',summary.statusBarItems||rows.filter(row=>row.kind==='StatusBarItem').length],
     ['Status Commands',summary.statusBarCommands||rows.filter(row=>row.kind==='StatusBarItem'&&row.command).length],
     ['Language Status',summary.languageStatusItems||rows.filter(row=>row.kind==='LanguageStatus').length],
@@ -41714,13 +41752,13 @@ function renderExtensionRuntimeSurfacePanel(data){
   chips.forEach(([label,value])=>{
     const chip=document.createElement('span');chip.className='extension-runtime-chip';
     chip.innerHTML='<strong>'+esc(String(value))+'</strong>'+esc(label);
-    if(['TreeView','WebviewView','WebviewPanel','Panel Ready','Panel Visible','Panel Retained','Panel Messages','CustomEditor','Notebook','Custom Ready','Custom Warnings','Custom Dirty','Notebook Ready','Notebook Warnings','Notebook Kernels','Notebook Status','Command','TextEditorCommand','Keybinding','Keybinding Commands','Menu','Terminal','Task','Task Providers','Task Required','Task Schema','Debug','Debug Config','Debug Adapter','Debug Tracker','Debug Attrs','Debug Initials','Debug Snippets','Debug Vars','Debug Langs','Debug Breakpoints','LM Tool','LM Provider','Chat','Context','Status Bar','Status Commands','Language Status','Language Busy','Language Warnings','Language Errors','TextEditorDecoration','Editor Decoration Ranges','Editor Decoration Events','Editor Decorations Disposed','Runtime','Manifest','Manifest + Runtime','Runtime Only','Provider Webview','Webview HTML','Missing Webview HTML','Retained Webview','Evidence Ready','Iframe Mounted','Iframe Missing','DOM Visible','Resource Rewrites','Resource Roots','Port Mappings','Webview Messages','Binary Webview','Queued Webview','Dropped Webview','Bridge Ready','Bridge Warnings','Message Stalled','Resource Warnings','Webview Failures','Webview Ready','Webview Warnings'].includes(label)){
+    if(['TreeView','WebviewView','WebviewPanel','Panel Ready','Panel Visible','Panel Retained','Panel Messages','CustomEditor','Notebook','Custom Ready','Custom Warnings','Custom Dirty','Notebook Ready','Notebook Warnings','Notebook Kernels','Notebook Status','Command','TextEditorCommand','Keybinding','Keybinding Commands','Menu','Terminal','Task','Task Providers','Task Required','Task Schema','Debug','Debug Config','Debug Adapter','Debug Tracker','Debug Attrs','Debug Initials','Debug Snippets','Debug Vars','Debug Langs','Debug Breakpoints','LM Tool','LM Provider','Chat','Context','LanguageProvider','Formatter Provider','Code Action Provider','Provider Matched','DiagnosticCollection','Diagnostics','Status Bar','Status Commands','Language Status','Language Busy','Language Warnings','Language Errors','TextEditorDecoration','Editor Decoration Ranges','Editor Decoration Events','Editor Decorations Disposed','Runtime','Manifest','Manifest + Runtime','Runtime Only','Provider Webview','Webview HTML','Missing Webview HTML','Retained Webview','Evidence Ready','Iframe Mounted','Iframe Missing','DOM Visible','Resource Rewrites','Resource Roots','Port Mappings','Webview Messages','Binary Webview','Queued Webview','Dropped Webview','Bridge Ready','Bridge Warnings','Message Stalled','Resource Warnings','Webview Failures','Webview Ready','Webview Warnings'].includes(label)){
       chip.classList.add('filterable');
       chip.tabIndex=0;
       chip.setAttribute('role','button');
       chip.dataset.filterLabel=label;
       chip.onclick=()=>{
-        const kindMap={'Keybinding Commands':'Keybinding','Terminal':'TerminalProfile','Task':'TaskDefinition','Task Providers':'TaskDefinition','Task Required':'TaskDefinition','Task Schema':'TaskDefinition','Debug':'Debugger','Debug Config':'Debugger','Debug Adapter':'Debugger','Debug Tracker':'Debugger','Debug Attrs':'Debugger','Debug Initials':'Debugger','Debug Snippets':'Debugger','Debug Vars':'Debugger','Debug Langs':'Debugger','Debug Breakpoints':'Debugger','LM Tool':'LMTool','LM Provider':'LMProvider','Chat':'ChatParticipant','Context':'ChatContext','Status Bar':'StatusBarItem','Status Commands':'StatusBarItem','Language Status':'LanguageStatus','Language Busy':'LanguageStatus','Language Warnings':'LanguageStatus','Language Errors':'LanguageStatus','Editor Decoration Ranges':'TextEditorDecoration','Editor Decoration Events':'TextEditorDecoration','Editor Decorations Disposed':'TextEditorDecoration'};
+        const kindMap={'Keybinding Commands':'Keybinding','Formatter Provider':'LanguageProvider','Code Action Provider':'LanguageProvider','Provider Matched':'LanguageProvider','Diagnostics':'DiagnosticCollection','Terminal':'TerminalProfile','Task':'TaskDefinition','Task Providers':'TaskDefinition','Task Required':'TaskDefinition','Task Schema':'TaskDefinition','Debug':'Debugger','Debug Config':'Debugger','Debug Adapter':'Debugger','Debug Tracker':'Debugger','Debug Attrs':'Debugger','Debug Initials':'Debugger','Debug Snippets':'Debugger','Debug Vars':'Debugger','Debug Langs':'Debugger','Debug Breakpoints':'Debugger','LM Tool':'LMTool','LM Provider':'LMProvider','Chat':'ChatParticipant','Context':'ChatContext','Status Bar':'StatusBarItem','Status Commands':'StatusBarItem','Language Status':'LanguageStatus','Language Busy':'LanguageStatus','Language Warnings':'LanguageStatus','Language Errors':'LanguageStatus','Editor Decoration Ranges':'TextEditorDecoration','Editor Decoration Events':'TextEditorDecoration','Editor Decorations Disposed':'TextEditorDecoration'};
         const sourceMap={Runtime:'manifest+runtime',Manifest:'manifest','Manifest + Runtime':'manifest+runtime','Runtime Only':'runtime-only'};
         const evidenceMap={'Panel Ready':'rendered','Panel Visible':'dom-visible','Panel Retained':'retained','Panel Messages':'messages','Webview HTML':'rendered','Missing Webview HTML':'missing','Retained Webview':'retained','Evidence Ready':'rendered','Iframe Mounted':'iframe-mounted','Iframe Missing':'iframe-missing','DOM Visible':'dom-visible','Resource Rewrites':'resources','Resource Roots':'resources','Port Mappings':'resources','Webview Messages':'messages','Binary Webview':'binary','Queued Webview':'queued','Dropped Webview':'dropped','Bridge Ready':'bridge-ready','Bridge Warnings':'bridge-warning','Message Stalled':'message-stalled','Resource Warnings':'resource-warning','Webview Failures':'failures','Provider Webview':'rendered'};
         const kindSel=$('extension-runtime-filter-kind'),sourceSel=$('extension-runtime-filter-source'),evidenceSel=$('extension-runtime-filter-evidence');
@@ -41892,6 +41930,15 @@ function renderExtensionRuntimeSurfacePanel(data){
       el.dataset.surfaceKeybindingWhen=String(row.keybindingWhen||row.surfaceEvidence&&row.surfaceEvidence.when||'');
       el.dataset.surfaceKeybindingPlatforms=Array.isArray(row.keybindingPlatforms)?row.keybindingPlatforms.join(','):'';
       el.dataset.surfaceKeybindingWhenMatches=row.surfaceEvidence&&row.surfaceEvidence.whenMatches===false?'0':'1';
+      el.dataset.surfaceLanguageProviderKind=String(row.languageProviderKind||row.surfaceEvidence&&row.surfaceEvidence.providerKind||'');
+      el.dataset.surfaceLanguageProviderFeature=String(row.languageProviderFeature||row.surfaceEvidence&&row.surfaceEvidence.feature||'');
+      el.dataset.surfaceLanguageProviderMatched=row.languageProviderMatched?'1':'0';
+      el.dataset.surfaceLanguageProviderMatchScore=String(row.languageProviderMatchScore||row.surfaceEvidence&&row.surfaceEvidence.matchScore||0);
+      el.dataset.surfaceLanguageProviderCodeActionKinds=Array.isArray(row.surfaceEvidence&&row.surfaceEvidence.codeActionKinds)?row.surfaceEvidence.codeActionKinds.join(','):(Array.isArray(row.codeActionKinds)?row.codeActionKinds.join(','):'');
+      el.dataset.surfaceDiagnosticCount=String(row.diagnosticCount||row.surfaceEvidence&&row.surfaceEvidence.diagnosticCount||0);
+      el.dataset.surfaceDiagnosticUriCount=String(row.diagnosticUriCount||row.surfaceEvidence&&row.surfaceEvidence.uriCount||0);
+      el.dataset.surfaceDiagnosticErrors=String(row.diagnosticErrors||row.surfaceEvidence&&row.surfaceEvidence.errors||0);
+      el.dataset.surfaceDiagnosticWarnings=String(row.diagnosticWarnings||row.surfaceEvidence&&row.surfaceEvidence.warnings||0);
       el.dataset.surfaceLiveVisible=row.surfaceEvidence&&row.surfaceEvidence.liveVisible?'1':'0';
       el.dataset.surfaceLiveDisposed=row.surfaceEvidence&&row.surfaceEvidence.liveDisposed?'1':'0';
       el.dataset.surfaceCodiconCount=String(row.surfaceEvidence&&row.surfaceEvidence.codicons||0);
@@ -42074,6 +42121,36 @@ function renderExtensionRuntimeSurfacePanel(data){
           Array.isArray(row.keybindingPlatforms)&&row.keybindingPlatforms.length?{text:row.keybindingPlatforms.join('/')}:null,
           ev.runtimeAvailable?{text:'runtime'}:{text:'manifest only',missing:true},
           ev.whenMatches===false?{text:'context off',missing:true}:null,
+        ].filter(Boolean).forEach(item=>{
+          const chip=document.createElement('span');
+          chip.className='extension-runtime-tag surface-evidence'+(item.missing?' missing':'');
+          chip.textContent=item.text;
+          meta.appendChild(chip);
+        });
+      }else if(row.kind==='LanguageProvider'){
+        const ev=row.surfaceEvidence||{};
+        [
+          row.languageProviderFeature?{text:row.languageProviderFeature}:null,
+          row.languageProviderKind?{text:row.languageProviderKind}:null,
+          row.languageProviderMatched?{text:'matched'}:{text:'selector pending',missing:true},
+          row.languageProviderMatchScore?{text:'score '+row.languageProviderMatchScore}:null,
+          Array.isArray(row.triggerCharacters)&&row.triggerCharacters.length?{text:'triggers '+row.triggerCharacters.join('')}:null,
+          Array.isArray(row.codeActionKinds)&&row.codeActionKinds.length?{text:row.codeActionKinds[0]}:null,
+          ev.resolveSupported?{text:'resolve'}:null,
+          ev.errors?{text:'errors '+ev.errors,missing:true}:null,
+          ev.timeouts?{text:'timeouts '+ev.timeouts,missing:true}:null,
+        ].filter(Boolean).forEach(item=>{
+          const chip=document.createElement('span');
+          chip.className='extension-runtime-tag surface-evidence'+(item.missing?' missing':'');
+          chip.textContent=item.text;
+          meta.appendChild(chip);
+        });
+      }else if(row.kind==='DiagnosticCollection'){
+        [
+          row.diagnosticUriCount?{text:'uris '+row.diagnosticUriCount}:null,
+          row.diagnosticCount?{text:'diagnostics '+row.diagnosticCount}:null,
+          row.diagnosticErrors?{text:'errors '+row.diagnosticErrors,missing:true}:null,
+          row.diagnosticWarnings?{text:'warnings '+row.diagnosticWarnings,missing:true}:null,
         ].filter(Boolean).forEach(item=>{
           const chip=document.createElement('span');
           chip.className='extension-runtime-tag surface-evidence'+(item.missing?' missing':'');
@@ -44136,7 +44213,7 @@ function extensionRuntimeDomSelfCheckSnapshot(){
     root.appendChild(notebookOutputHost);
 
     const runtimeData={
-      summary:{viewContainers:1,viewContainerViews:4,treeViews:1,webviewViews:2,webviewPanels:1,webviewPanelReady:1,webviewPanelVisible:1,webviewPanelMessages:2,webviewPanelRetained:1,webviewHtmlAvailable:1,webviewRetained:1,webviewVisible:1,webviewBridgeReady:1,webviewBridgeWarnings:1,webviewMessageStalled:1,webviewResourceWarnings:1,webviewFailureCount:1,customEditors:1,customEditorReady:1,customEditorDirtyStates:1,notebooks:1,notebookReady:1,notebookControllers:1,notebookStatusBarProviders:1,commands:2,textEditorCommands:1,keybindings:1,keybindingCommands:1,keybindingRuntimeCommands:1,menus:1,terminalProfiles:1,taskDefinitions:1,taskProviders:1,taskProblemMatchers:1,taskRequiredProperties:1,taskSchemaProperties:2,debuggers:1,debugConfigProviders:1,debugAdapterFactories:1,debugAdapterTrackers:1,debugConfigurationAttributes:2,debugInitialConfigurations:1,debugConfigurationSnippets:1,debugVariables:1,debugLanguages:1,debugBreakpointLanguages:1,languageModelTools:1,languageModelProviders:1,chatParticipants:1,chatContextProviders:1,statusBarItems:1,statusBarCommands:1,languageStatusItems:1,languageStatusWarnings:1,textEditorDecorations:1,textEditorDecorationRanges:2,textEditorDecorationEvents:3,textEditorDecorationDisposed:1,dynamicSurfaces:21},
+      summary:{viewContainers:1,viewContainerViews:4,treeViews:1,webviewViews:2,webviewPanels:1,webviewPanelReady:1,webviewPanelVisible:1,webviewPanelMessages:2,webviewPanelRetained:1,webviewHtmlAvailable:1,webviewRetained:1,webviewVisible:1,webviewBridgeReady:1,webviewBridgeWarnings:1,webviewMessageStalled:1,webviewResourceWarnings:1,webviewFailureCount:1,customEditors:1,customEditorReady:1,customEditorDirtyStates:1,notebooks:1,notebookReady:1,notebookControllers:1,notebookStatusBarProviders:1,commands:2,textEditorCommands:1,keybindings:1,keybindingCommands:1,keybindingRuntimeCommands:1,menus:1,terminalProfiles:1,taskDefinitions:1,taskProviders:1,taskProblemMatchers:1,taskRequiredProperties:1,taskSchemaProperties:2,debuggers:1,debugConfigProviders:1,debugAdapterFactories:1,debugAdapterTrackers:1,debugConfigurationAttributes:2,debugInitialConfigurations:1,debugConfigurationSnippets:1,debugVariables:1,debugLanguages:1,debugBreakpointLanguages:1,languageModelTools:1,languageModelProviders:1,chatParticipants:1,chatContextProviders:1,languageProviders:1,languageProviderMatched:1,languageFormatterProviders:1,languageCodeActionProviders:1,diagnosticCollections:1,diagnosticCollectionEntries:1,diagnosticCollectionItems:2,diagnosticCollectionWarnings:1,statusBarItems:1,statusBarCommands:1,languageStatusItems:1,languageStatusWarnings:1,textEditorDecorations:1,textEditorDecorationRanges:2,textEditorDecorationEvents:3,textEditorDecorationDisposed:1,dynamicSurfaces:23},
       viewContainers:[fixtureItem],
       treeViews:[{id:'selftest.dynamic.tree',name:'Runtime Tree',container:'selftest.dynamic.container',extensionId:'selftest.extension',runtimeAvailable:true}],
       webviewViews:[
@@ -44157,6 +44234,8 @@ function extensionRuntimeDomSelfCheckSnapshot(){
       languageModelProviders:[{vendor:'selftest.vendor',name:'Selftest LM Provider',modelCount:1,extensionId:'selftest.extension',runtimeAvailable:true}],
       chatParticipants:[{id:'selftest.chat',name:'Selftest Chat',extensionId:'selftest.extension',runtimeAvailable:true}],
       chatContextProviders:[{id:'selftest.context',kind:'explicit',extensionId:'selftest.extension',runtimeAvailable:true}],
+      languageProviders:[{id:'node:formatting:selftest.formatter',providerId:'selftest.formatter',providerKind:'formatting',feature:'formatting',displayName:'Selftest Formatter',extensionId:'selftest.extension',selector:{language:'javascript'},matchScore:10,matched:true,languageId:'javascript',resourceUri:'file:///workspace/selftest.js',triggerCharacters:[';'],resolveSupport:{supported:false,method:''},metadata:{},codeActionKinds:['source.fixAll.selftest'],health:{},runtimeAvailable:true,source:'runtime-only',dynamicSource:'runtime-only',readiness:'ready',readinessScore:100,readinessIssues:[],surfaceEvidence:{kind:'languageProvider',providerKind:'formatting',feature:'formatting',providerId:'selftest.formatter',extensionId:'selftest.extension',source:'node',languageId:'javascript',resourceUri:'file:///workspace/selftest.js',matchScore:10,matched:true,triggerCount:1,triggerCharacters:[';'],codeActionKindCount:1,codeActionKinds:['source.fixAll.selftest'],resolveSupported:false,errors:0,timeouts:0,cancelled:0,readiness:'ready',readinessScore:100,readinessIssues:[]}}],
+      diagnosticCollections:[{id:'selftest-diagnostics',name:'selftest-diagnostics',uri:'file:///workspace/selftest.js',resourceUri:'file:///workspace/selftest.js',uris:['file:///workspace/selftest.js'],uriCount:1,diagnosticCount:2,errors:0,warnings:1,infos:1,hints:0,runtimeAvailable:true,source:'python-runtime',dynamicSource:'python-runtime',readiness:'warning',readinessScore:75,readinessIssues:['diagnostic-warnings'],surfaceEvidence:{kind:'diagnosticCollection',name:'selftest-diagnostics',uriCount:1,diagnosticCount:2,errors:0,warnings:1,infos:1,hints:0,readiness:'warning',readinessScore:75,readinessIssues:['diagnostic-warnings']}}],
       statusBarItems:[{id:'manifest:selftest.extension:selftest.status',manifestId:'selftest.status',name:'Selftest Status',text:'$(check) Status',tooltip:'Status tooltip',command:{command:'selftest.run',arguments:[]},alignment:1,alignmentName:'left',priority:10,extensionId:'selftest.extension',runtimeAvailable:true,source:'manifest',surfaceEvidence:{kind:'statusBarItem',alignmentName:'left',priority:10,hasCommand:true,readiness:'ready',readinessScore:100,readinessIssues:[]}}],
       languageStatusItems:[{id:'selftest.extension/selftest.languageStatus',name:'Selftest Language',label:'Lang status',text:'Lang status',severity:1,busy:true,command:{command:'selftest.run',arguments:[]},extensionId:'selftest.extension',runtimeAvailable:true,source:'runtime-only',surfaceEvidence:{kind:'languageStatus',severity:1,severityName:'warning',busy:true,hasCommand:true,readiness:'ready',readinessScore:100,readinessIssues:[]}}],
       textEditorDecorations:[{id:'sao-decoration-selftest',key:'sao-decoration-selftest',name:'sao-decoration-selftest',uri:'file:///tmp/editor-decoration.txt',resourceUri:'file:///tmp/editor-decoration.txt',rangeCount:2,eventCount:3,latestEvent:'text_editor_decoration_type_disposed',disposed:true,runtimeAvailable:true,runtimeOnly:true,source:'runtime-only',surfaceEvidence:{kind:'textEditorDecoration',key:'sao-decoration-selftest',uri:'file:///tmp/editor-decoration.txt',rangeCount:2,eventCount:3,active:false,disposed:true,registered:true,changed:true,latestEvent:'text_editor_decoration_type_disposed',readiness:'disposed',readinessScore:70,readinessIssues:['disposed']}}]
@@ -44667,6 +44746,15 @@ function extensionRuntimeDomSelfCheckSnapshot(){
       runtimeKeybindingKeys:runtimeList?Array.from(runtimeList.querySelectorAll('.extension-runtime-row')).map(row=>row.dataset.surfaceKeybindingKey||'').filter(Boolean):[],
       runtimeKeybindingWhens:runtimeList?Array.from(runtimeList.querySelectorAll('.extension-runtime-row')).map(row=>row.dataset.surfaceKeybindingWhen||'').filter(Boolean):[],
       runtimeKeybindingPlatforms:runtimeList?Array.from(runtimeList.querySelectorAll('.extension-runtime-row')).map(row=>row.dataset.surfaceKeybindingPlatforms||'').filter(Boolean):[],
+      runtimeLanguageProviderRows:runtimeList?Array.from(runtimeList.querySelectorAll('.extension-runtime-row')).filter(row=>row.dataset.kind==='LanguageProvider').length:0,
+      runtimeFormatterProviderRows:runtimeList?Array.from(runtimeList.querySelectorAll('.extension-runtime-row')).filter(row=>row.dataset.kind==='LanguageProvider'&&row.dataset.surfaceLanguageProviderFeature==='formatting').length:0,
+      runtimeLanguageProviderMatchedRows:runtimeList?Array.from(runtimeList.querySelectorAll('.extension-runtime-row')).filter(row=>row.dataset.kind==='LanguageProvider'&&row.dataset.surfaceLanguageProviderMatched==='1').length:0,
+      runtimeLanguageProviderKinds:runtimeList?Array.from(runtimeList.querySelectorAll('.extension-runtime-row')).map(row=>row.dataset.surfaceLanguageProviderKind||'').filter(Boolean):[],
+      runtimeLanguageProviderFeatures:runtimeList?Array.from(runtimeList.querySelectorAll('.extension-runtime-row')).map(row=>row.dataset.surfaceLanguageProviderFeature||'').filter(Boolean):[],
+      runtimeLanguageProviderCodeActionKinds:runtimeList?Array.from(runtimeList.querySelectorAll('.extension-runtime-row')).map(row=>row.dataset.surfaceLanguageProviderCodeActionKinds||'').filter(Boolean):[],
+      runtimeDiagnosticCollectionRows:runtimeList?Array.from(runtimeList.querySelectorAll('.extension-runtime-row')).filter(row=>row.dataset.kind==='DiagnosticCollection').length:0,
+      runtimeDiagnosticRows:runtimeList?Array.from(runtimeList.querySelectorAll('.extension-runtime-row')).filter(row=>row.dataset.kind==='DiagnosticCollection'&&(Number(row.dataset.surfaceDiagnosticCount)||0)>0).length:0,
+      runtimeDiagnosticWarningRows:runtimeList?Array.from(runtimeList.querySelectorAll('.extension-runtime-row')).filter(row=>row.dataset.kind==='DiagnosticCollection'&&(Number(row.dataset.surfaceDiagnosticWarnings)||0)>0).length:0,
       runtimeLanguageStatusRows:runtimeList?Array.from(runtimeList.querySelectorAll('.extension-runtime-row')).filter(row=>row.dataset.kind==='LanguageStatus').length:0,
       runtimeLanguageBusyRows:runtimeList?Array.from(runtimeList.querySelectorAll('.extension-runtime-row')).filter(row=>row.dataset.kind==='LanguageStatus'&&row.dataset.surfaceLanguageBusy==='1').length:0,
       runtimeLanguageWarningRows:runtimeList?Array.from(runtimeList.querySelectorAll('.extension-runtime-row')).filter(row=>row.dataset.kind==='LanguageStatus'&&row.dataset.surfaceLanguageSeverityName==='warning').length:0,
@@ -44812,7 +44900,7 @@ function extensionRuntimeDomSelfCheckSnapshot(){
       && snapshot.activityRole==='button'&&snapshot.activityTabIndex===0&&snapshot.activityLabel.includes('Selftest Extensions')&&snapshot.activityPanel==='ext-vc-selftest.dynamic.container'
       && snapshot.customPlaceholder&&snapshot.customDataset.viewType==='selftest.customEditor'&&snapshot.customCapabilities
       && snapshot.notebookOutputItems===3&&snapshot.notebookHtmlFrame&&snapshot.notebookImage&&snapshot.notebookText
-      && snapshot.runtimeRows>=21&&snapshot.runtimeReadyRows>=20&&snapshot.runtimeChips>=48
+      && snapshot.runtimeRows>=23&&snapshot.runtimeReadyRows>=22&&snapshot.runtimeChips>=54
       && snapshot.runtimeAnchorLaneRows===snapshot.runtimeRows&&snapshot.runtimeAnchorPills>=snapshot.runtimeRows*2
       && snapshot.runtimeDynamicProviderRows>=17&&snapshot.runtimeAnchorReadyRows>=17&&snapshot.runtimeAnchorWarningRows>=3
       && ['provider','host','chrome','html','frame','bridge','lifecycle'].every(key=>snapshot.runtimeAnchorKeys.includes(key))
@@ -44839,6 +44927,8 @@ function extensionRuntimeDomSelfCheckSnapshot(){
       && snapshot.runtimeStatusBarRows>=1&&snapshot.runtimeStatusBarCommandRows>=1&&snapshot.runtimeStatusBarLeftRows>=1
       && snapshot.runtimeTextEditorCommandRows>=1&&snapshot.runtimeEditorRequiredCommandRows>=1&&snapshot.runtimeCommandKinds.includes('textEditorCommand')&&snapshot.runtimeCommandIds.includes('selftest.editorCommand')
       && snapshot.runtimeKeybindingRows>=1&&snapshot.runtimeKeybindingCommandRows>=1&&snapshot.runtimeKeybindingKeys.includes('ctrl+alt+r')&&snapshot.runtimeKeybindingWhens.includes('editorTextFocus')&&snapshot.runtimeKeybindingPlatforms.some(value=>value.includes('mac')&&value.includes('win')&&value.includes('linux'))
+      && snapshot.runtimeLanguageProviderRows>=1&&snapshot.runtimeFormatterProviderRows>=1&&snapshot.runtimeLanguageProviderMatchedRows>=1&&snapshot.runtimeLanguageProviderKinds.includes('formatting')&&snapshot.runtimeLanguageProviderFeatures.includes('formatting')&&snapshot.runtimeLanguageProviderCodeActionKinds.some(value=>value.includes('source.fixAll.selftest'))
+      && snapshot.runtimeDiagnosticCollectionRows>=1&&snapshot.runtimeDiagnosticRows>=1&&snapshot.runtimeDiagnosticWarningRows>=1
       && snapshot.runtimeLanguageStatusRows>=1&&snapshot.runtimeLanguageBusyRows>=1&&snapshot.runtimeLanguageWarningRows>=1
       && snapshot.runtimeEvidencePills===snapshot.runtimeRows&&snapshot.runtimeEvidenceStatuses.includes('rendered')&&(snapshot.runtimeEvidenceStatuses.includes('missing')||snapshot.runtimeEvidenceStatuses.includes('partial'))
       && snapshot.runtimeMiniActionButtons>=snapshot.runtimeRows*3&&snapshot.runtimeFocusableRows>=4&&snapshot.runtimeRefreshableRows>=4
@@ -44849,7 +44939,7 @@ function extensionRuntimeDomSelfCheckSnapshot(){
       && ['queued','dropped','message-stalled'].some(filter=>snapshot.runtimeHealthFilters.includes(filter))
       && snapshot.runtimeHealthStates.includes('warning')&&snapshot.runtimeHealthStates.includes('error')
       && snapshot.runtimeListRole==='list'&&snapshot.runtimeListItems===snapshot.runtimeRows
-      && snapshot.runtimeDatasetReady===snapshot.runtimeReadyRows&&snapshot.runtimePanelCount==='21'
+      && snapshot.runtimeDatasetReady===snapshot.runtimeReadyRows&&snapshot.runtimePanelCount==='23'
       && snapshot.runtimeOpenableRows===snapshot.runtimeRows&&snapshot.runtimeOpenableRows>=19&&snapshot.runtimeActionButtons===snapshot.runtimeRows
       && snapshot.runtimeRowKeys===snapshot.runtimeRows&&snapshot.runtimeContainerRows>=3
       && snapshot.runtimeViewContainerRows>=1&&snapshot.runtimeViewContainerLocations.includes('activitybar')&&snapshot.runtimeViewContainerViewCounts.some(value=>value>=4)
@@ -44859,10 +44949,10 @@ function extensionRuntimeDomSelfCheckSnapshot(){
       && snapshot.runtimeActionTargets.includes('selftest.dynamic.panel')&&snapshot.runtimeActionTargets.includes('selftest.editorCommand')
       && snapshot.runtimeActionTargets.includes('selftest.terminalProfile')&&snapshot.runtimeActionTargets.includes('selftest.lmTool')&&snapshot.runtimeActionTargets.includes('selftest.vendor')&&snapshot.runtimeActionTargets.includes('selftest.chat')&&snapshot.runtimeActionTargets.includes('selftest.context')
       && snapshot.runtimeActionTargets.includes('selftest.task')&&snapshot.runtimeActionTargets.includes('selftest.debug')
-      && snapshot.runtimePanelVisibleCount==='21'&&snapshot.runtimePanelTotalCount==='21'
-      && snapshot.runtimeDatasetSources.includes('runtime-only')&&snapshot.runtimeStatusText.includes('21 visible of 21 rows')
-      && snapshot.runtimeFilterKinds.includes('ViewContainer')&&snapshot.runtimeFilterKinds.includes('LMTool')&&snapshot.runtimeFilterKinds.includes('WebviewPanel')&&snapshot.runtimeFilterKinds.includes('TaskDefinition')&&snapshot.runtimeFilterKinds.includes('Debugger')&&snapshot.runtimeFilterKinds.includes('StatusBarItem')&&snapshot.runtimeFilterKinds.includes('LanguageStatus')&&snapshot.runtimeFilterKinds.includes('TextEditorDecoration')&&snapshot.runtimeFilterKinds.includes('TextEditorCommand')&&snapshot.runtimeFilterKinds.includes('Keybinding')&&snapshot.runtimeFilterBefore.visible===21
-      && snapshot.runtimeKindFilterVisible===1&&snapshot.runtimeSourceFilterVisible===21&&snapshot.runtimeRenderedEvidenceFilterVisible>=2&&snapshot.runtimeMissingEvidenceFilterVisible===1&&snapshot.runtimeBinaryEvidenceFilterVisible>=1
+      && snapshot.runtimePanelVisibleCount==='23'&&snapshot.runtimePanelTotalCount==='23'
+      && snapshot.runtimeDatasetSources.includes('runtime-only')&&snapshot.runtimeStatusText.includes('23 visible of 23 rows')
+      && snapshot.runtimeFilterKinds.includes('ViewContainer')&&snapshot.runtimeFilterKinds.includes('LMTool')&&snapshot.runtimeFilterKinds.includes('WebviewPanel')&&snapshot.runtimeFilterKinds.includes('TaskDefinition')&&snapshot.runtimeFilterKinds.includes('Debugger')&&snapshot.runtimeFilterKinds.includes('StatusBarItem')&&snapshot.runtimeFilterKinds.includes('LanguageStatus')&&snapshot.runtimeFilterKinds.includes('TextEditorDecoration')&&snapshot.runtimeFilterKinds.includes('TextEditorCommand')&&snapshot.runtimeFilterKinds.includes('Keybinding')&&snapshot.runtimeFilterKinds.includes('LanguageProvider')&&snapshot.runtimeFilterKinds.includes('DiagnosticCollection')&&snapshot.runtimeFilterBefore.visible===23
+      && snapshot.runtimeKindFilterVisible===1&&snapshot.runtimeSourceFilterVisible===23&&snapshot.runtimeRenderedEvidenceFilterVisible>=2&&snapshot.runtimeMissingEvidenceFilterVisible===1&&snapshot.runtimeBinaryEvidenceFilterVisible>=1
       && snapshot.runtimeMessageEvidenceFilterVisible>=1&&snapshot.runtimeQueuedEvidenceFilterVisible>=2&&snapshot.runtimeDroppedEvidenceFilterVisible>=1&&snapshot.runtimeTextFilterVisible===1
       && snapshot.runtimeBridgeReadyFilterVisible>=1&&snapshot.runtimeBridgeWarningFilterVisible>=1&&snapshot.runtimeMessageStalledFilterVisible>=1&&snapshot.runtimeResourceWarningFilterVisible>=1&&snapshot.runtimeFailuresFilterVisible>=1
       && snapshot.runtimePortHitFilterVisible>=1&&snapshot.runtimeQueueStaleFilterVisible>=1&&snapshot.runtimeLifecycleFilterVisible>=2
@@ -44899,7 +44989,7 @@ function extensionRuntimeDomSelfCheckSnapshot(){
       && snapshot.runtimeActionSmoke.lastAction==='start-debugger'
       && snapshot.runtimeTextEditorDecorationRows>=1&&snapshot.runtimeTextEditorDecorationRangeRows>=1&&snapshot.runtimeTextEditorDecorationEventRows>=1&&snapshot.runtimeTextEditorDecorationDisposedRows>=1
       && snapshot.runtimeTextEditorDecorationLatestEvents.some(value=>value.includes('disposed'))
-      && ['WebviewPanel','TerminalProfile','TaskDefinition','Debugger','LMTool','LMProvider','ChatParticipant','ChatContext','StatusBarItem','LanguageStatus','TextEditorDecoration','TextEditorCommand','Keybinding'].every(kind=>snapshot.runtimeKinds.includes(kind))
+      && ['WebviewPanel','TerminalProfile','TaskDefinition','Debugger','LMTool','LMProvider','ChatParticipant','ChatContext','LanguageProvider','DiagnosticCollection','StatusBarItem','LanguageStatus','TextEditorDecoration','TextEditorCommand','Keybinding'].every(kind=>snapshot.runtimeKinds.includes(kind))
       && snapshot.menuRole==='menu'&&snapshot.menuItems===2&&snapshot.menuDisabled===1&&snapshot.menuMetadata.includes('selftest.dynamic.tree')
       && snapshot.webviewLifecycle.rendered&&snapshot.webviewLifecycle.seq>=4
       && snapshot.webviewLifecycle.title==='Lifecycle Updated'

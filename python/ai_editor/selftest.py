@@ -12208,6 +12208,11 @@ console.log("frontend word separator behavior ok");
            and "['Keybinding',summary.keybindings||" in html
            and "['Keybinding Commands',summary.keybindingCommands||" in html
            and "if(v==='keybinding')return row&&row.kind==='Keybinding';" in html
+           and "(data.languageProviders||[]).slice(0,16).forEach(item=>push('LanguageProvider'" in html
+           and "(data.diagnosticCollections||[]).slice(0,8).forEach(item=>push('DiagnosticCollection'" in html
+           and "['LanguageProvider',summary.languageProviders||" in html
+           and "['DiagnosticCollection',summary.diagnosticCollections||" in html
+           and "if(v==='language-provider')return row&&row.kind==='LanguageProvider';" in html
            and "['Terminal',summary.terminalProfiles||0]" in html
            and "['Task',summary.taskDefinitions||rows.filter(row=>row.kind==='TaskDefinition').length]" in html
            and "['Task Providers',summary.taskProviders||rows.reduce" in html
@@ -12249,6 +12254,8 @@ console.log("frontend word separator behavior ok");
            and "el.dataset.surfaceEditorRequired=row.surfaceEvidence&&row.surfaceEvidence.editorRequired?'1':'0';" in html
            and "el.dataset.surfaceKeybindingKey=String(row.keybindingKey||row.surfaceEvidence&&row.surfaceEvidence.key||'');" in html
            and "el.dataset.surfaceKeybindingWhen=String(row.keybindingWhen||row.surfaceEvidence&&row.surfaceEvidence.when||'');" in html
+           and "el.dataset.surfaceLanguageProviderKind=String(row.languageProviderKind||row.surfaceEvidence&&row.surfaceEvidence.providerKind||'');" in html
+           and "el.dataset.surfaceDiagnosticCount=String(row.diagnosticCount||row.surfaceEvidence&&row.surfaceEvidence.diagnosticCount||0);" in html
            and "el.dataset.surfaceLanguageSeverityName=String(row.surfaceEvidence&&row.surfaceEvidence.severityName||'');" in html
            and "el.dataset.textEditorDecorationRangeCount=String(row.surfaceEvidence&&row.surfaceEvidence.rangeCount||row.rangeCount||0);" in html
            and "el.dataset.textEditorDecorationEventCount=String(row.surfaceEvidence&&row.surfaceEvidence.eventCount||row.eventCount||0);" in html
@@ -12256,6 +12263,8 @@ console.log("frontend word separator behavior ok");
            and "runtimeStatusBarRows" in html
            and "runtimeTextEditorCommandRows" in html
            and "runtimeKeybindingRows" in html
+           and "runtimeLanguageProviderRows" in html
+           and "runtimeDiagnosticCollectionRows" in html
            and "runtimeLanguageStatusRows" in html
            and "runtimeTextEditorDecorationRows" in html
            and "runtimeTaskDefinitionRows" in html
@@ -12274,6 +12283,8 @@ console.log("frontend word separator behavior ok");
            and "snapshot.runtimeStatusBarRows>=1" in html
            and "snapshot.runtimeTextEditorCommandRows>=1" in html
            and "snapshot.runtimeKeybindingRows>=1" in html
+           and "snapshot.runtimeLanguageProviderRows>=1" in html
+           and "snapshot.runtimeDiagnosticCollectionRows>=1" in html
            and "snapshot.runtimeLanguageStatusRows>=1" in html
            and "snapshot.runtimeTaskDefinitionRows>=1" in html
            and "snapshot.runtimeTaskRequiredRows>=1" in html
@@ -12296,6 +12307,8 @@ console.log("frontend word separator behavior ok");
            and "StatusBarItem" in html
            and "LanguageStatus" in html
            and "Keybinding" in html
+           and "LanguageProvider" in html
+           and "DiagnosticCollection" in html
            and "TextEditorCommand" in html
            and "TextEditorDecoration" in html)
     _check("backend extension runtime surfaces use bounded refresh cache",
@@ -12311,15 +12324,22 @@ console.log("frontend word separator behavior ok");
            and "\"languageStatus\": language_status_keys()" in app_source
            and "\"keybindings\": keybinding_keys()" in app_source
            and "\"nodeCommands\": node_command_keys()" in app_source
+           and "\"languageProviders\": language_provider_keys()" in app_source
+           and "\"diagnosticCollections\": diagnostic_collection_keys()" in app_source
            and "\"textEditorDecorations\": text_editor_decoration_keys()" in app_source
            and "\"statusBarItems\": status_bar_items" in app_source
            and "\"languageStatusItems\": language_status_items" in app_source
            and "\"textEditorDecorations\": text_editor_decorations" in app_source
            and "\"keybindings\": keybindings" in app_source
+           and "\"languageProviders\": language_providers" in app_source
+           and "\"diagnosticCollections\": diagnostic_collections" in app_source
            and "\"statusBarCommands\": status_bar_commands" in app_source
            and "\"textEditorCommands\": text_editor_commands" in app_source
            and "\"keybindingCommands\": keybinding_commands" in app_source
            and "\"keybindingRuntimeCommands\": keybinding_runtime_commands" in app_source
+           and "\"languageFormatterProviders\": language_formatter_providers" in app_source
+           and "\"languageCodeActionProviders\": language_code_action_providers" in app_source
+           and "\"diagnosticCollectionItems\": diagnostic_collection_items" in app_source
            and "\"languageStatusWarnings\": language_status_warnings" in app_source
            and "\"textEditorDecorationRanges\": text_editor_decoration_ranges" in app_source
            and "\"providerHealth\": provider_health_rows[:30]" in app_source
@@ -12369,6 +12389,8 @@ console.log("frontend word separator behavior ok");
            and "def _notebook_surface_evidence(" in app_source
            and "def _extension_surface_keybindings(" in app_source
            and "def _extension_keybinding_primary(" in app_source
+           and "def _extension_surface_language_providers(" in app_source
+           and "def _extension_surface_diagnostic_collections(" in app_source
            and "\"surfaceEvidence\": evidence" in app_source
            and "\"customEditorReady\": custom_editor_ready" in app_source
            and "\"customEditorWarnings\": custom_editor_warnings" in app_source
@@ -14730,8 +14752,8 @@ console.log("extension setting schema helpers ok");
            and "['Open','Refresh','Copy'].every(label=>snapshot.webviewActionLabels.includes(label))" in html
            and "snapshot.customPlaceholder&&snapshot.customDataset.viewType==='selftest.customEditor'" in html
            and "snapshot.notebookOutputItems===3" in html
-           and "snapshot.runtimeRows>=21" in html
-           and "snapshot.runtimeChips>=48" in html
+           and "snapshot.runtimeRows>=23" in html
+           and "snapshot.runtimeChips>=54" in html
            and "snapshot.runtimeAnchorLaneRows===snapshot.runtimeRows&&snapshot.runtimeAnchorPills>=snapshot.runtimeRows*2" in html
            and "snapshot.runtimeDynamicProviderRows>=17&&snapshot.runtimeAnchorReadyRows>=17&&snapshot.runtimeAnchorWarningRows>=3" in html
            and "['provider','host','chrome','html','frame','bridge','lifecycle'].every(key=>snapshot.runtimeAnchorKeys.includes(key))" in html
@@ -14760,6 +14782,10 @@ console.log("extension setting schema helpers ok");
            and "snapshot.runtimeKeybindingRows>=1" in html
            and "snapshot.runtimeKeybindingKeys.includes('ctrl+alt+r')" in html
            and "snapshot.runtimeKeybindingWhens.includes('editorTextFocus')" in html
+           and "snapshot.runtimeLanguageProviderRows>=1" in html
+           and "snapshot.runtimeFormatterProviderRows>=1" in html
+           and "snapshot.runtimeDiagnosticCollectionRows>=1" in html
+           and "snapshot.runtimeDiagnosticWarningRows>=1" in html
            and "snapshot.runtimeActionTargets.includes('selftest.terminalProfile')" in html
            and "snapshot.runtimeActionTargets.includes('selftest.lmTool')" in html
            and "snapshot.runtimeActionTargets.includes('selftest.vendor')" in html
@@ -14775,13 +14801,15 @@ console.log("extension setting schema helpers ok");
            and "runtimeKindFilterVisible:runtimeKindFilterResult?runtimeKindFilterResult.visible:0" in html
            and "runtimeSelectedRows:runtimeList?runtimeList.querySelectorAll('.extension-runtime-row.selected[aria-selected=\"true\"]').length:0" in html
            and "snapshot.runtimeListRole==='list'" in html
-           and "snapshot.runtimeStatusText.includes('21 visible of 21 rows')" in html
+           and "snapshot.runtimeStatusText.includes('23 visible of 23 rows')" in html
            and "snapshot.runtimeFilterKinds.includes('LMTool')" in html
            and "snapshot.runtimeFilterKinds.includes('ViewContainer')" in html
            and "snapshot.runtimeFilterKinds.includes('StatusBarItem')" in html
            and "snapshot.runtimeFilterKinds.includes('LanguageStatus')" in html
            and "snapshot.runtimeFilterKinds.includes('TextEditorCommand')" in html
            and "snapshot.runtimeFilterKinds.includes('Keybinding')" in html
+           and "snapshot.runtimeFilterKinds.includes('LanguageProvider')" in html
+           and "snapshot.runtimeFilterKinds.includes('DiagnosticCollection')" in html
            and "snapshot.runtimeFilterKinds.includes('TaskDefinition')" in html
            and "snapshot.runtimeFilterKinds.includes('Debugger')" in html
            and "snapshot.runtimeKindFilterVisible===1" in html
@@ -14812,7 +14840,7 @@ console.log("extension setting schema helpers ok");
            and "snapshot.runtimeActionSmoke.taskPrompt.includes('selftest.task')&&snapshot.runtimeActionSmoke.taskPrompt.includes('Required fields: command')" in html
            and "snapshot.runtimeActionSmoke.debugPrompt.includes('selftest.debug')&&snapshot.runtimeActionSmoke.debugPrompt.includes('Launch template')&&snapshot.runtimeActionSmoke.debugPrompt.includes('program')" in html
            and "snapshot.runtimeActionSmoke.lastAction==='start-debugger'" in html
-           and "['WebviewPanel','TerminalProfile','TaskDefinition','Debugger','LMTool','LMProvider','ChatParticipant','ChatContext','StatusBarItem','LanguageStatus','TextEditorDecoration','TextEditorCommand','Keybinding'].every(kind=>snapshot.runtimeKinds.includes(kind))" in html
+           and "['WebviewPanel','TerminalProfile','TaskDefinition','Debugger','LMTool','LMProvider','ChatParticipant','ChatContext','LanguageProvider','DiagnosticCollection','StatusBarItem','LanguageStatus','TextEditorDecoration','TextEditorCommand','Keybinding'].every(kind=>snapshot.runtimeKinds.includes(kind))" in html
            and "window._onEditorEvent('render_webview_panel',{view_id:lifecycleViewId" in html
            and "window._onEditorEvent('update_webview_panel_title',{view_id:lifecycleViewId" in html
            and "window._onEditorEvent('update_webview_panel_icon',{view_id:lifecycleViewId" in html
@@ -17614,6 +17642,78 @@ console.log("frontend built-in language fallback behavior ok");
                "dynamicSurfaces", 0) >= len(keybinding_surfaces.get(
                    "commands", [])) + len(keybinding_rows),
            json.dumps(keybinding_surfaces, ensure_ascii=False, default=str))
+    provider_map = getattr(
+        command_palette_api._vscode_ns, "_language_providers", {})
+    provider_map.setdefault("formatting", []).append({
+        "kind": "formatting",
+        "providerId": "selftest.formatter",
+        "displayName": "Selftest Formatter",
+        "extensionId": "selftest.commands-pack",
+        "selector": {"language": "markdown"},
+        "metadata": {},
+    })
+    provider_map.setdefault("codeActions", []).append({
+        "kind": "codeActions",
+        "providerId": "selftest.codeActions",
+        "displayName": "Selftest Code Actions",
+        "extensionId": "selftest.commands-pack",
+        "selector": {"language": "markdown"},
+        "metadata": {
+            "providedCodeActionKinds": ["quickfix", "source.fixAll.selftest"],
+        },
+    })
+    diag_collection = command_palette_api._vscode_ns._create_diagnostic_collection(
+        "selftest-runtime")
+    diag_collection.set("file:///tmp/readme.md", [{
+        "range": {
+            "start": {"line": 0, "character": 0},
+            "end": {"line": 0, "character": 4},
+        },
+        "message": "selftest warning",
+        "severity": 1,
+        "source": "selftest",
+    }])
+    provider_surfaces = command_palette_api.list_extension_runtime_surfaces({
+        "resourceUri": "file:///tmp/readme.md",
+        "resourceLangId": "markdown",
+        "content": "# Readme",
+    })
+    provider_rows = provider_surfaces.get("languageProviders", [])
+    diagnostic_rows = provider_surfaces.get("diagnosticCollections", [])
+    formatter_row = next((
+        item for item in provider_rows
+        if item.get("providerId") == "selftest.formatter"), {})
+    code_action_row = next((
+        item for item in provider_rows
+        if item.get("providerId") == "selftest.codeActions"), {})
+    diagnostic_row = next((
+        item for item in diagnostic_rows
+        if item.get("name") == "selftest-runtime"), {})
+    _check("extension runtime surfaces expose language providers and diagnostics",
+           provider_surfaces.get("summary", {}).get(
+               "languageProviders", 0) >= 2
+           and provider_surfaces.get("summary", {}).get(
+               "languageProviderMatched", 0) >= 2
+           and provider_surfaces.get("summary", {}).get(
+               "languageFormatterProviders", 0) >= 1
+           and provider_surfaces.get("summary", {}).get(
+               "languageCodeActionProviders", 0) >= 1
+           and formatter_row.get("feature") == "formatting"
+           and formatter_row.get("matched") is True
+           and formatter_row.get("surfaceEvidence", {}).get(
+               "providerKind") == "formatting"
+           and code_action_row.get("feature") == "codeActions"
+           and "source.fixAll.selftest" in code_action_row.get(
+               "codeActionKinds", [])
+           and provider_surfaces.get("summary", {}).get(
+               "diagnosticCollections") == 1
+           and provider_surfaces.get("summary", {}).get(
+               "diagnosticCollectionItems") == 1
+           and diagnostic_row.get("diagnosticCount") == 1
+           and diagnostic_row.get("warnings") == 1
+           and diagnostic_row.get("surfaceEvidence", {}).get(
+               "kind") == "diagnosticCollection",
+           json.dumps(provider_surfaces, ensure_ascii=False, default=str))
     command_palette_api._ext_host.commands.execute(
         "setContext", "selftest.palette.enabled", True)
     command_palette_api._ext_host.commands.execute(
