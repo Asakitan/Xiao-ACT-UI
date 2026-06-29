@@ -5335,11 +5335,11 @@ def test_phase1_ai_editor_regressions() -> None:
            and "border-radius:10px; box-shadow:0 14px 36px #00000078,0 0 0 1px #ffffff08;" in html
            and ".chat-input-area { flex-shrink:0; background:linear-gradient(180deg, transparent 0, var(--bg) 18px);" in html
            and "display:flex; justify-content:center; align-items:center;" in html
-           and ".chat-input-area > div { width:100%; display:flex; justify-content:center; }" in html
-           and "width:min(66.666%, 1280px); min-width:min(720px, calc(100% - 24px)); max-width:1280px; min-height:132px;" in html
+           and ".chat-input-area > div { width:min(66.666%, 1280px); min-width:min(760px, calc(100% - 24px));" in html
+           and "width:100%; min-width:0; max-width:none; min-height:144px;" in html
            and "margin:0 auto; box-sizing:border-box;" in html
-           and ".chat-input-row { display:flex; gap:0; align-items:center; min-height:88px; }" in html
-           and "outline:none; min-height:84px; max-height:220px;" in html
+           and ".chat-input-row { display:flex; gap:0; align-items:center; min-height:96px; flex:1 1 auto; }" in html
+           and "outline:none; min-height:92px; max-height:220px;" in html
            and ".chat-composer-action { width:22px; height:22px; border:1px solid transparent; border-radius:999px;" in html
            and ".model-chip { display:none; align-items:center; gap:3px; padding:2px 6px; background:var(--bg3);" in html
            and ".ctx-ring { width:16px; height:16px; flex:0 0 16px; border-radius:50%;" in html
