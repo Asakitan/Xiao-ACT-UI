@@ -166,6 +166,7 @@ def _write_builtin_smoke_extension(parent_dir: str) -> str:
         "main": "./extension.js",
         "activationEvents": [
             "onCommand:saoProbe.activate",
+            "onCommand:saoProbe.openPanel",
             "onView:saoProbe.dynamicView",
             "onCustomEditor:saoProbe.customEditor",
         ],
@@ -174,8 +175,14 @@ def _write_builtin_smoke_extension(parent_dir: str) -> str:
                 "command": "saoProbe.activate",
                 "title": "SAO Probe Activate",
             }, {
+                "command": "saoProbe.openPanel",
+                "title": "SAO Probe Open Panel",
+            }, {
                 "command": "saoProbe.state",
                 "title": "SAO Probe State",
+            }, {
+                "command": "saoProbe.statusCommand",
+                "title": "SAO Probe Status Command",
             }],
             "viewsContainers": {
                 "activitybar": [{
@@ -197,6 +204,11 @@ def _write_builtin_smoke_extension(parent_dir: str) -> str:
                 "selector": [{"filenamePattern": "*.sao-probe"}],
                 "priority": "default",
             }],
+            "notebooks": [{
+                "type": "sao-probe-notebook",
+                "displayName": "SAO Probe Notebook",
+                "selector": [{"filenamePattern": "*.sao-probe-nb"}],
+            }],
         },
     })
     _write_text(os.path.join(media_dir, "probe.svg"), (
@@ -211,7 +223,11 @@ const vscode = require('vscode');
 const state = {
   activated: false,
   webview: { resolved: false, messages: [], contextState: null },
+  panel: { opened: false, deserialized: false, messages: [], disposed: false },
   custom: { resolved: false, messages: [], text: '' },
+  notebook: { serializer: false, controller: false, statusProvider: false },
+  status: { created: false },
+  languageStatus: { created: false },
 };
 
 function htmlFor(webview, context, kind, text) {
@@ -253,6 +269,150 @@ function activate(context) {
     'saoProbe.state',
     () => state,
   ));
+  context.subscriptions.push(vscode.commands.registerCommand(
+    'saoProbe.statusCommand',
+    (payload) => ({ ok: true, payload: payload || null }),
+  ));
+
+  context.subscriptions.push(vscode.window.registerWebviewPanelSerializer(
+    'saoProbe.panel',
+    {
+      async deserializeWebviewPanel(panel, webviewState) {
+        state.panel.deserialized = true;
+        panel.webview.options = {
+          enableScripts: true,
+          enableForms: true,
+          enableCommandUris: ['saoProbe.activate'],
+          portMapping: [{ webviewPort: 6173, extensionHostPort: 16173 }],
+          retainContextWhenHidden: true,
+          localResourceRoots: [vscode.Uri.joinPath(context.extensionUri, 'media')],
+        };
+        panel.webview.html = htmlFor(
+          panel.webview, context, 'webview-panel', webviewState && webviewState.text || 'panel');
+      },
+    },
+  ));
+  context.subscriptions.push(vscode.commands.registerCommand(
+    'saoProbe.openPanel',
+    (payload) => {
+      const panel = vscode.window.createWebviewPanel(
+        'saoProbe.panel',
+        'SAO Probe Panel',
+        vscode.ViewColumn.One,
+        {
+          enableScripts: true,
+          enableForms: true,
+          enableCommandUris: ['saoProbe.activate'],
+          portMapping: [{ webviewPort: 6173, extensionHostPort: 16173 }],
+          retainContextWhenHidden: true,
+          localResourceRoots: [vscode.Uri.joinPath(context.extensionUri, 'media')],
+        },
+      );
+      state.panel.opened = true;
+      panel.webview.options = {
+        enableScripts: true,
+        enableForms: true,
+        enableCommandUris: ['saoProbe.activate'],
+        portMapping: [{ webviewPort: 6173, extensionHostPort: 16173 }],
+        retainContextWhenHidden: true,
+        localResourceRoots: [vscode.Uri.joinPath(context.extensionUri, 'media')],
+      };
+      panel.webview.onDidReceiveMessage((message) => {
+        state.panel.messages.push(message);
+      });
+      panel.onDidDispose(() => {
+        state.panel.disposed = true;
+      });
+      panel.webview.html = htmlFor(
+        panel.webview, context, 'webview-panel',
+        payload && payload.text || 'panel');
+      return { ok: true, viewType: 'saoProbe.panel', title: panel.title };
+    },
+  ));
+
+  const status = vscode.window.createStatusBarItem(
+    'saoProbe.status',
+    vscode.StatusBarAlignment.Left,
+    91,
+  );
+  status.name = 'SAO Probe Status';
+  status.text = '$(beaker) SAO Probe';
+  status.tooltip = 'Runtime registered status bar item';
+  status.command = {
+    command: 'saoProbe.statusCommand',
+    title: 'SAO Probe Status Command',
+    arguments: [{ source: 'status-bar' }],
+  };
+  status.show();
+  state.status.created = true;
+  context.subscriptions.push(status);
+
+  const languageStatus = vscode.languages.createLanguageStatusItem(
+    'saoProbe.languageStatus',
+    [{ language: 'json' }],
+  );
+  languageStatus.name = 'SAO Probe Language';
+  languageStatus.text = 'SAO Ready';
+  languageStatus.detail = 'Runtime registered language status item';
+  languageStatus.severity = vscode.LanguageStatusSeverity.Information;
+  languageStatus.busy = false;
+  languageStatus.command = {
+    command: 'saoProbe.activate',
+    title: 'SAO Probe Activate',
+    arguments: [{ source: 'language-status' }],
+  };
+  state.languageStatus.created = true;
+  context.subscriptions.push(languageStatus);
+
+  context.subscriptions.push(vscode.workspace.registerNotebookSerializer(
+    'sao-probe-notebook',
+    {
+      async deserializeNotebook(content) {
+        const text = new TextDecoder().decode(content || new Uint8Array());
+        return new vscode.NotebookData([
+          new vscode.NotebookCellData(
+            vscode.NotebookCellKind.Code,
+            text || 'console.log("probe")',
+            'javascript',
+          ),
+        ]);
+      },
+      async serializeNotebook(data) {
+        const text = (data.cells || []).map((cell) => cell.value || '').join('\n');
+        return new TextEncoder().encode(text || 'console.log("probe")');
+      },
+    },
+    { transientOutputs: true },
+  ));
+  state.notebook.serializer = true;
+  const controller = vscode.window.createNotebookController(
+    'saoProbe.notebookController',
+    'sao-probe-notebook',
+    'SAO Probe Controller',
+    async () => {},
+  );
+  controller.supportedLanguages = ['javascript', 'typescript'];
+  controller.description = 'Runtime registered notebook controller';
+  context.subscriptions.push(controller);
+  state.notebook.controller = true;
+  context.subscriptions.push(vscode.notebooks.registerNotebookCellStatusBarItemProvider(
+    'sao-probe-notebook',
+    {
+      provideCellStatusBarItems() {
+        return [{
+          text: 'SAO Probe Cell',
+          tooltip: 'Runtime registered notebook cell status item',
+          alignment: vscode.NotebookCellStatusBarAlignment.Right,
+          command: {
+            command: 'saoProbe.activate',
+            title: 'SAO Probe Activate',
+            arguments: [{ source: 'notebook-status' }],
+          },
+        }];
+      },
+    },
+  ));
+  state.notebook.statusProvider = true;
 
   context.subscriptions.push(vscode.window.registerWebviewViewProvider(
     'saoProbe.dynamicView',
@@ -319,6 +479,7 @@ def _surface_visual_checks(
     opts = options if isinstance(options, dict) else {}
     meta = metadata if isinstance(metadata, dict) else {}
     is_custom = kind == "custom-editor"
+    is_panel = kind == "webview-panel"
     return {
         "hasProbeBody": f'data-probe="{kind}"' in text,
         "hasMainKind": f'data-kind="{kind}"' in text,
@@ -344,37 +505,50 @@ def _surface_visual_checks(
         "hasCspSource": "https://*.vscode-resource.webview.local" in text,
         "hasExpectedTitleOrState": (
             "custom editor body" in text if is_custom
-            else meta.get("title") == "SAO Probe Dynamic"),
+            else (
+                meta.get("title") == "SAO Probe Panel"
+                if is_panel else meta.get("title") == "SAO Probe Dynamic")),
     }
 
 
 def _write_frontend_visual_fixture(
         fixture_dir: str,
         webview_html: str,
+        panel_html: str,
         custom_html: str,
         webview_id: str,
+        panel_id: str,
         custom_id: str,
         webview_options: Dict[str, Any],
+        panel_options: Dict[str, Any],
         custom_options: Dict[str, Any],
-        webview_metadata: Dict[str, Any]) -> Dict[str, Any]:
+        webview_metadata: Dict[str, Any],
+        panel_metadata: Dict[str, Any]) -> Dict[str, Any]:
     os.makedirs(fixture_dir, exist_ok=True)
     fixture_path = os.path.join(fixture_dir, "visual-webview-smoke.html")
     data_path = os.path.join(fixture_dir, "visual-webview-smoke.json")
     payload = {
         "webviewId": webview_id,
+        "webviewPanelId": panel_id,
         "customEditorId": custom_id,
         "webviewOptions": _safe_json(webview_options),
+        "webviewPanelOptions": _safe_json(panel_options),
         "customEditorOptions": _safe_json(custom_options),
         "webviewMetadata": _safe_json(webview_metadata),
+        "webviewPanelMetadata": _safe_json(panel_metadata),
         "checks": {
             "webview": _surface_visual_checks(
                 webview_html, "webview-view", webview_options,
                 webview_metadata),
+            "webviewPanel": _surface_visual_checks(
+                panel_html, "webview-panel", panel_options,
+                panel_metadata),
             "customEditor": _surface_visual_checks(
                 custom_html, "custom-editor", custom_options, {}),
         },
     }
     webview_srcdoc = html_lib.escape(str(webview_html or ""), quote=True)
+    panel_srcdoc = html_lib.escape(str(panel_html or ""), quote=True)
     custom_srcdoc = html_lib.escape(str(custom_html or ""), quote=True)
     fixture = f"""<!DOCTYPE html>
 <html>
@@ -384,7 +558,7 @@ def _write_frontend_visual_fixture(
   <style>
     body {{ margin:0; background:#1e1e1e; color:#cccccc; font:12px Segoe UI, sans-serif; }}
     header {{ padding:10px 14px; border-bottom:1px solid #3c3c3c; background:#252526; }}
-    main {{ display:grid; grid-template-columns:1fr 1fr; gap:10px; padding:10px; }}
+    main {{ display:grid; grid-template-columns:repeat(3, minmax(0, 1fr)); gap:10px; padding:10px; }}
     section {{ min-width:0; border:1px solid #3c3c3c; background:#181818; }}
     h2 {{ margin:0; padding:7px 9px; font-size:12px; border-bottom:1px solid #3c3c3c; }}
     iframe {{ width:100%; height:360px; border:0; background:white; }}
@@ -394,13 +568,18 @@ def _write_frontend_visual_fixture(
 <body>
   <header>
     <strong>AI Editor Webview Visual Smoke</strong>
-    <span> dynamic WebviewView + custom editor iframe surfaces</span>
+    <span> dynamic WebviewView + WebviewPanel + custom editor iframe surfaces</span>
   </header>
   <main>
     <section data-surface="webview-view" data-view-id="{html_lib.escape(webview_id)}">
       <h2>WebviewView: {html_lib.escape(webview_id)}</h2>
       <iframe title="Dynamic WebviewView" srcdoc="{webview_srcdoc}"></iframe>
       <div class="meta">{html_lib.escape(json.dumps(webview_options, ensure_ascii=False, indent=2, default=str))}</div>
+    </section>
+    <section data-surface="webview-panel" data-view-id="{html_lib.escape(panel_id)}">
+      <h2>WebviewPanel: {html_lib.escape(panel_id)}</h2>
+      <iframe title="Dynamic WebviewPanel" srcdoc="{panel_srcdoc}"></iframe>
+      <div class="meta">{html_lib.escape(json.dumps(panel_options, ensure_ascii=False, indent=2, default=str))}</div>
     </section>
     <section data-surface="custom-editor" data-view-id="{html_lib.escape(custom_id)}">
       <h2>Custom Editor: {html_lib.escape(custom_id)}</h2>
@@ -445,13 +624,24 @@ def _install_capture_bridge(
     bridge = getattr(getattr(api, "_vscode_ns", None), "_ui_bridge", None)
     if bridge is None:
         return
+    original_render_webview_panel = getattr(bridge, "render_webview_panel", None)
+    original_update_webview_panel_options = getattr(
+        bridge, "update_webview_panel_options", None)
+    original_update_webview_view_metadata = getattr(
+        bridge, "update_webview_view_metadata", None)
 
     def render_webview_panel(
             view_id: str, html: str,
             local_resource_roots: Any = None,
             state: Any = None,
             title: str = "",
-            options: Any = None) -> None:
+            options: Any = None,
+            view_type: str = "") -> None:
+        if callable(original_render_webview_panel):
+            original_render_webview_panel(
+                view_id, html, local_resource_roots, state, title, options,
+                view_type)
+            return
         state_to_render = state
         if state_to_render is None:
             state_to_render = api._webview_states.get(str(view_id or ""))
@@ -465,6 +655,7 @@ def _install_capture_bridge(
             html, local_resource_roots, view_id=view_id)
         _capture("render_webview_panel", {
             "view_id": view_id,
+            "view_type": str(view_type or ""),
             "html": prepared,
             "state": state_to_render,
             "title": str(title or ""),
@@ -480,6 +671,10 @@ def _install_capture_bridge(
             view_id: str, options: Any = None,
             local_resource_roots: Any = None,
             view_type: str = "", title: str = "") -> None:
+        if callable(original_update_webview_panel_options):
+            original_update_webview_panel_options(
+                view_id, options, local_resource_roots, view_type, title)
+            return
         _capture("update_webview_panel_options", {
             "view_id": str(view_id or ""),
             "view_type": str(view_type or ""),
@@ -491,6 +686,9 @@ def _install_capture_bridge(
     def update_webview_view_metadata(
             view_id: str, view_type: str = "",
             metadata: Optional[Dict[str, Any]] = None) -> None:
+        if callable(original_update_webview_view_metadata):
+            original_update_webview_view_metadata(
+                view_id, view_type, metadata)
         _capture("update_webview_view_metadata", {
             "view_id": str(view_id or ""),
             "view_type": str(view_type or ""),
@@ -817,6 +1015,10 @@ def run_builtin_smoke_probe(
             activate_result = api.execute_command("saoProbe.activate", {
                 "source": "builtin-smoke",
             })
+            panel_result = api.execute_command("saoProbe.openPanel", {
+                "source": "builtin-smoke",
+                "text": "panel",
+            })
 
             webview_render = _wait_for_render_matching(
                 rendered, 'data-probe="webview-view"')
@@ -833,6 +1035,22 @@ def run_builtin_smoke_probe(
                     "target": "webview-view",
                 })
                 if webview_view_id else {"ok": False})
+
+            panel_render = _wait_for_render_matching(
+                rendered, 'data-probe="webview-panel"')
+            time.sleep(0.1)
+            panel_render = (
+                _latest_render_matching(rendered, 'data-probe="webview-panel"')
+                or panel_render)
+            panel_view_id = str(
+                panel_render.get("view_id", "")
+                if isinstance(panel_render, dict) else "")
+            panel_message_result = (
+                api.webview_post_message(panel_view_id, {
+                    "type": "ping",
+                    "target": "webview-panel",
+                })
+                if panel_view_id else {"ok": False})
 
             custom_result = api.resolve_extension_custom_editor(
                 "saoProbe.customEditor", custom_path, "SAO Probe Custom")
@@ -857,6 +1075,7 @@ def run_builtin_smoke_probe(
                 if (
                         isinstance(command_state, dict)
                         and command_state.get("webview", {}).get("messages")
+                        and command_state.get("panel", {}).get("messages")
                         and command_state.get("custom", {}).get("messages")):
                     break
                 time.sleep(0.05)
@@ -879,6 +1098,25 @@ def run_builtin_smoke_probe(
                         webview_view_id = candidate_id
                         webview_render = payload
                         break
+            if not command_state.get("panel", {}).get("messages"):
+                for payload in _matching_render_payloads(
+                        rendered, 'data-probe="webview-panel"'):
+                    candidate_id = str(payload.get("view_id", ""))
+                    if not candidate_id or candidate_id == panel_view_id:
+                        continue
+                    panel_message_result = api.webview_post_message(
+                        candidate_id, {
+                            "type": "ping",
+                            "target": "webview-panel",
+                        })
+                    raw_state = api.execute_command("saoProbe.state")
+                    command_state = (
+                        raw_state.get("result", raw_state)
+                        if isinstance(raw_state, dict) else {})
+                    if command_state.get("panel", {}).get("messages"):
+                        panel_view_id = candidate_id
+                        panel_render = payload
+                        break
 
             runtime_surfaces = api.list_extension_runtime_surfaces()
             custom_state = (
@@ -888,12 +1126,17 @@ def run_builtin_smoke_probe(
                 events, "update_webview_panel_options", webview_view_id)
             webview_metadata = _find_event_payload(
                 events, "update_webview_view_metadata", webview_view_id)
+            panel_options = _find_event_payload(
+                events, "update_webview_panel_options", panel_view_id)
             custom_options = _find_event_payload(
                 events, "update_webview_panel_options", custom_view_id)
 
             webview_html = str(
                 webview_render.get("html", "")
                 if isinstance(webview_render, dict) else "")
+            panel_html = str(
+                panel_render.get("html", "")
+                if isinstance(panel_render, dict) else "")
             custom_html = str(
                 custom_render.get("html", "")
                 if isinstance(custom_render, dict) else "")
@@ -903,6 +1146,17 @@ def run_builtin_smoke_probe(
             webview_metadata_payload = (
                 webview_metadata.get("metadata", {})
                 if isinstance(webview_metadata, dict) else {})
+            panel_option_payload = (
+                panel_options.get("options", {})
+                if isinstance(panel_options, dict) else {})
+            panel_metadata_payload = {
+                "title": str(
+                    panel_render.get("title", "")
+                    if isinstance(panel_render, dict) else ""),
+                "viewType": str(
+                    panel_options.get("view_type", "")
+                    if isinstance(panel_options, dict) else "saoProbe.panel"),
+            }
             custom_option_payload = (
                 custom_options.get("options", {})
                 if isinstance(custom_options, dict) else {})
@@ -911,20 +1165,32 @@ def run_builtin_smoke_probe(
             visual_fixture = _write_frontend_visual_fixture(
                 fixture_dir,
                 webview_html,
+                panel_html,
                 custom_html,
                 webview_view_id,
+                panel_view_id,
                 custom_view_id,
                 webview_option_payload,
+                panel_option_payload,
                 custom_option_payload,
-                webview_metadata_payload)
+                webview_metadata_payload,
+                panel_metadata_payload)
             visual_webview_checks = visual_fixture.get(
                 "checks", {}).get("webview", {})
+            visual_panel_checks = visual_fixture.get(
+                "checks", {}).get("webviewPanel", {})
             visual_custom_checks = visual_fixture.get(
                 "checks", {}).get("customEditor", {})
+            panel_runtime_record = next((
+                item for item in runtime_surfaces.get("webviewPanels", [])
+                if item.get("id") == panel_view_id
+                or item.get("view_id") == panel_view_id
+                or item.get("viewType") == "saoProbe.panel"), {})
 
             checks = {
                 "extensionInstalled": install_result.get("ok") is True,
                 "commandActivation": activate_result.get("ok") is True,
+                "webviewPanelCommandActivation": panel_result.get("ok") is True,
                 "dynamicWebviewRendered": bool(webview_view_id)
                 and 'data-probe="webview-view"' in webview_html,
                 "dynamicWebviewOptions": (
@@ -956,6 +1222,30 @@ def run_builtin_smoke_probe(
                         and item.get("target") == "webview-view"
                         for item in command_state.get(
                             "webview", {}).get("messages", []))),
+                "dynamicWebviewPanelRendered": bool(panel_view_id)
+                and 'data-probe="webview-panel"' in panel_html,
+                "dynamicWebviewPanelOptions": (
+                    panel_option_payload.get("enableScripts") is True
+                    and panel_option_payload.get("enableForms") is True
+                    and panel_option_payload.get("enableCommandUris")
+                    == ["saoProbe.activate"]
+                    and panel_option_payload.get("portMapping") == [{
+                        "webviewPort": 6173,
+                        "extensionHostPort": 16173,
+                    }]
+                    and panel_option_payload.get(
+                        "retainContextWhenHidden") is True),
+                "dynamicWebviewPanelResourceRewrite": (
+                    "sao-webview-resource-endpoint" in panel_html
+                    and "sao-webview-resource-map" in panel_html
+                    and ".vscode-resource.webview.local" in panel_html),
+                "dynamicWebviewPanelMessageRelay": (
+                    panel_message_result.get("ok") is True
+                    and (
+                        int(panel_runtime_record.get(
+                            "messagesFromWebview") or 0) >= 1
+                        or int(panel_runtime_record.get(
+                            "messageCount") or 0) >= 1)),
                 "customEditorRendered": (
                     custom_result.get("ok") is True
                     and custom_view_id
@@ -987,8 +1277,47 @@ def run_builtin_smoke_probe(
                         item.get("viewType") == "saoProbe.customEditor"
                         for item in runtime_surfaces.get(
                             "customEditors", []))),
+                "runtimeWebviewPanelSurface": (
+                    runtime_surfaces.get("summary", {}).get(
+                        "webviewPanels", 0) >= 1
+                    and any(
+                        item.get("viewType") == "saoProbe.panel"
+                        or item.get("id") == panel_view_id
+                        for item in runtime_surfaces.get(
+                            "webviewPanels", []))),
+                "runtimeStatusBarSurface": (
+                    runtime_surfaces.get("summary", {}).get(
+                        "statusBarItems", 0) >= 1
+                    and any(
+                        item.get("id") == "saoProbe.status"
+                        and item.get("command", {}).get("command")
+                        == "saoProbe.statusCommand"
+                        for item in runtime_surfaces.get(
+                            "statusBarItems", []))),
+                "runtimeLanguageStatusSurface": (
+                    runtime_surfaces.get("summary", {}).get(
+                        "languageStatusItems", 0) >= 1
+                    and any(
+                        item.get("itemId") == "saoProbe.languageStatus"
+                        or str(item.get("id", "")).endswith(
+                            "/saoProbe.languageStatus")
+                        for item in runtime_surfaces.get(
+                            "languageStatusItems", []))),
+                "runtimeNotebookSurface": (
+                    runtime_surfaces.get("summary", {}).get(
+                        "notebookSerializers", 0) >= 1
+                    and runtime_surfaces.get("summary", {}).get(
+                        "notebookControllers", 0) >= 1
+                    and runtime_surfaces.get("summary", {}).get(
+                        "notebookStatusBarProviders", 0) >= 1
+                    and any(
+                        item.get("type") == "sao-probe-notebook"
+                        or item.get("viewType") == "sao-probe-notebook"
+                        for item in runtime_surfaces.get("notebooks", []))),
                 "frontendVisualWebviewSurface": bool(visual_webview_checks)
                 and all(bool(value) for value in visual_webview_checks.values()),
+                "frontendVisualWebviewPanelSurface": bool(visual_panel_checks)
+                and all(bool(value) for value in visual_panel_checks.values()),
                 "frontendVisualCustomEditorSurface": bool(visual_custom_checks)
                 and all(bool(value) for value in visual_custom_checks.values()),
                 "frontendVisualFixtureWritten": (
@@ -1002,6 +1331,7 @@ def run_builtin_smoke_probe(
                 "install": install_result,
                 "diagnostics_enabled": diagnostics_enabled,
                 "activate": activate_result,
+                "openPanel": panel_result,
                 "webview": {
                     "viewId": webview_view_id,
                     "rendered": bool(webview_render),
@@ -1009,6 +1339,14 @@ def run_builtin_smoke_probe(
                     "options": webview_option_payload,
                     "metadata": webview_metadata_payload,
                     "message": webview_message_result,
+                },
+                "webviewPanel": {
+                    "viewId": panel_view_id,
+                    "rendered": bool(panel_render),
+                    "htmlLength": len(panel_html),
+                    "options": panel_option_payload,
+                    "metadata": panel_metadata_payload,
+                    "message": panel_message_result,
                 },
                 "customEditor": {
                     "viewId": custom_view_id,
@@ -1022,7 +1360,14 @@ def run_builtin_smoke_probe(
                 "runtimeSurfaces": {
                     "summary": runtime_surfaces.get("summary", {}),
                     "webviewViews": runtime_surfaces.get("webviewViews", []),
+                    "webviewPanels": runtime_surfaces.get(
+                        "webviewPanels", []),
                     "customEditors": runtime_surfaces.get("customEditors", []),
+                    "notebooks": runtime_surfaces.get("notebooks", []),
+                    "statusBarItems": runtime_surfaces.get(
+                        "statusBarItems", []),
+                    "languageStatusItems": runtime_surfaces.get(
+                        "languageStatusItems", []),
                 },
                 "frontendVisual": visual_fixture,
                 "commandState": command_state,

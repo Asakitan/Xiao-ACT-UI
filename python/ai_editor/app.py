@@ -1619,6 +1619,33 @@ class _AIEditorUIBridge:
                              backgroundColor: str = "",
                              name: str = "",
                              accessibilityInformation: Any = None) -> None:
+        normalized_id = str(item_id or "").strip()
+        if normalized_id:
+            items = getattr(self._api, "_extension_status_bar_items", None)
+            if not isinstance(items, dict):
+                items = {}
+                self._api._extension_status_bar_items = items
+            existing = items.get(normalized_id, {})
+            show_count = int(existing.get("showCount") or 0) + 1
+            items[normalized_id] = {
+                **existing,
+                "id": normalized_id,
+                "text": str(text or ""),
+                "tooltip": str(tooltip or ""),
+                "command": _json_safe(command),
+                "alignment": int(alignment or 2),
+                "priority": int(priority or 0),
+                "color": str(color or ""),
+                "backgroundColor": str(backgroundColor or ""),
+                "name": str(name or normalized_id),
+                "accessibilityInformation": _json_safe(
+                    accessibilityInformation),
+                "visible": True,
+                "disposed": False,
+                "showCount": show_count,
+                "runtimeAvailable": True,
+                "source": "runtime",
+            }
         self._api._emit("show_status_bar_item", {
             "id": item_id, "text": text, "tooltip": tooltip,
             "command": command, "alignment": alignment,
@@ -1627,9 +1654,22 @@ class _AIEditorUIBridge:
             "accessibilityInformation": accessibilityInformation})
 
     def hide_status_bar_item(self, item_id: str) -> None:
+        normalized_id = str(item_id or "").strip()
+        items = getattr(self._api, "_extension_status_bar_items", None)
+        if normalized_id and isinstance(items, dict):
+            record = items.setdefault(normalized_id, {"id": normalized_id})
+            record["visible"] = False
+            record["hideCount"] = int(record.get("hideCount") or 0) + 1
         self._api._emit("hide_status_bar_item", {"id": item_id})
 
     def dispose_status_bar_item(self, item_id: str) -> None:
+        normalized_id = str(item_id or "").strip()
+        items = getattr(self._api, "_extension_status_bar_items", None)
+        if normalized_id and isinstance(items, dict):
+            record = items.setdefault(normalized_id, {"id": normalized_id})
+            record["visible"] = False
+            record["disposed"] = True
+            record["disposeCount"] = int(record.get("disposeCount") or 0) + 1
         self._api._emit("dispose_status_bar_item", {"id": item_id})
 
     def show_language_status_item(self, item: Dict[str, Any]) -> None:
@@ -2591,6 +2631,7 @@ class AIEditorAPI:
         self._extension_runtime_surface_cache: Dict[str, Tuple[float, Dict[str, Any]]] = {}
         self._extension_runtime_surface_cache_ttl = 0.35
         self._extension_webview_panels: Dict[str, Dict[str, Any]] = {}
+        self._extension_status_bar_items: Dict[str, Dict[str, Any]] = {}
         self._extensions_inited = False
         self._vscode_ns_ready = threading.Event()
 
@@ -3409,6 +3450,18 @@ class AIEditorAPI:
         given *view_id*.  Messages without a ``_token`` are allowed through
         (backward compat), but an incorrect token is rejected.
         """
+        def _record_panel_inbound_message() -> None:
+            panels = getattr(self, "_extension_webview_panels", None)
+            if not isinstance(panels, dict):
+                return
+            record = panels.get(str(view_id or ""))
+            if not isinstance(record, dict):
+                return
+            record["messageCount"] = int(record.get("messageCount") or 0) + 1
+            record["messagesFromWebview"] = int(
+                record.get("messagesFromWebview") or 0) + 1
+            record["lastMessage"] = _json_safe(message)
+
         vscode_ns = getattr(self, "_vscode_ns", None)
         if not vscode_ns:
             return {"error": "vscode namespace not initialized"}
@@ -3421,11 +3474,13 @@ class AIEditorAPI:
                     return {"error": "Invalid webview token", "view_id": view_id}
         delivered = vscode_ns.deliver_webview_message(view_id, message)
         if delivered:
+            _record_panel_inbound_message()
             return {"ok": True, "view_id": view_id}
         node_host = getattr(self, "_node_ext_host", None)
         if node_host is not None and getattr(node_host, "is_running", False):
             try:
                 if node_host.relay_webview_message(view_id, message):
+                    _record_panel_inbound_message()
                     return {
                         "ok": True,
                         "view_id": view_id,
@@ -3998,8 +4053,7 @@ class AIEditorAPI:
             for env_name in (
                     _AI_EDITOR_WORKSPACE_ROOT_ENV,
                     "SAO_WORKSPACE_ROOT",
-                    "WORKSPACE_ROOT",
-                    "VSCODE_CWD"):
+                    "WORKSPACE_ROOT"):
                 env_root = self._usable_workspace_root(os.environ.get(env_name))
                 if env_root:
                     candidates.append((env_root, "environment"))
@@ -4027,6 +4081,9 @@ class AIEditorAPI:
                 root = self._git_root_from(path) or self._usable_workspace_root(path)
                 if root:
                     candidates.append((root, source))
+            vscode_cwd = self._usable_workspace_root(os.environ.get("VSCODE_CWD"))
+            if vscode_cwd:
+                candidates.append((vscode_cwd, "environment"))
         if remember_last and last_root:
             candidates.append((last_root, "last_root"))
         if isinstance(roots, (list, tuple)):
@@ -12340,6 +12397,54 @@ class AIEditorAPI:
                 "readinessScore": evidence["readinessScore"],
                 "readinessIssues": evidence["readinessIssues"],
             })
+        runtime_items = getattr(self, "_extension_status_bar_items", {})
+        seen_ids = {str(item.get("id") or "") for item in result}
+        for item_id in sorted(str(key) for key in (
+                runtime_items.keys() if isinstance(runtime_items, dict) else [])):
+            record = runtime_items.get(item_id)
+            if not isinstance(record, dict) or item_id in seen_ids:
+                continue
+            alignment = int(record.get("alignment") or 2)
+            disposed = bool(record.get("disposed"))
+            evidence = {
+                "kind": "statusBarItem",
+                "alignment": alignment,
+                "alignmentName": "left" if alignment == 1 else "right",
+                "priority": int(record.get("priority") or 0),
+                "hasCommand": bool(record.get("command")),
+                "hasText": bool(str(record.get("text") or "")),
+                "hasTooltip": bool(str(record.get("tooltip") or "")),
+                "visible": bool(record.get("visible")),
+                "disposed": disposed,
+                "showCount": int(record.get("showCount") or 0),
+                "readiness": "disposed" if disposed else "ready",
+                "readinessScore": 30 if disposed else 100,
+                "readinessIssues": ["disposed"] if disposed else [],
+            }
+            result.append({
+                "id": item_id,
+                "manifestId": "",
+                "name": str(record.get("name") or item_id),
+                "text": str(record.get("text") or ""),
+                "tooltip": str(record.get("tooltip") or ""),
+                "extensionId": str(record.get("extensionId") or ""),
+                "command": record.get("command") or "",
+                "alignment": alignment,
+                "alignmentName": evidence["alignmentName"],
+                "priority": evidence["priority"],
+                "color": record.get("color", ""),
+                "backgroundColor": record.get("backgroundColor", ""),
+                "accessibilityInformation": (
+                    record.get("accessibilityInformation") or {}),
+                "runtimeAvailable": True,
+                "visible": bool(record.get("visible")),
+                "disposed": disposed,
+                "source": "runtime",
+                "surfaceEvidence": evidence,
+                "readiness": evidence["readiness"],
+                "readinessScore": evidence["readinessScore"],
+                "readinessIssues": evidence["readinessIssues"],
+            })
         result.sort(key=lambda row: (
             int(row.get("alignment") or 2),
             -int(row.get("priority") or 0),
@@ -12532,6 +12637,8 @@ class AIEditorAPI:
                 "retainContextWhenHidden": bool(
                     record.get("retainContextWhenHidden")),
                 "messageCount": int(record.get("messageCount") or 0),
+                "messagesFromWebview": int(
+                    record.get("messagesFromWebview") or 0),
                 "pendingMessageCount": int(
                     record.get("pendingMessageCount") or 0),
                 "droppedMessageCount": int(
@@ -12559,6 +12666,8 @@ class AIEditorAPI:
                 "visible": bool(record.get("visible")),
                 "disposed": bool(record.get("disposed")),
                 "messageCount": int(record.get("messageCount") or 0),
+                "messagesFromWebview": int(
+                    record.get("messagesFromWebview") or 0),
                 "resourceRootCount": int(
                     record.get("localResourceRootCount") or 0),
             }

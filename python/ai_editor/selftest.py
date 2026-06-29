@@ -1090,9 +1090,19 @@ def test_app_settings_parity() -> None:
            callable(getattr(real_extension_probe, "run_builtin_smoke_probe", None))
            and "_write_builtin_smoke_extension" in probe_source
            and "registerWebviewViewProvider" in probe_source
+           and "createWebviewPanel" in probe_source
+           and "registerWebviewPanelSerializer" in probe_source
            and "registerCustomEditorProvider" in probe_source
+           and "createStatusBarItem" in probe_source
+           and "createLanguageStatusItem" in probe_source
+           and "registerNotebookSerializer" in probe_source
+           and "createNotebookController" in probe_source
            and "saoProbe.dynamicView" in probe_source
+           and "saoProbe.panel" in probe_source
            and "saoProbe.customEditor" in probe_source
+           and "saoProbe.status" in probe_source
+           and "saoProbe.languageStatus" in probe_source
+           and "sao-probe-notebook" in probe_source
            and "enableCommandUris" in probe_source
            and "portMapping" in probe_source)
     _check("real extension probe writes frontend visual fixture evidence",
@@ -1101,10 +1111,12 @@ def test_app_settings_parity() -> None:
            and "visual-webview-smoke.html" in probe_source
            and "visual-webview-smoke.json" in probe_source
            and "frontendVisualWebviewSurface" in probe_source
+           and "frontendVisualWebviewPanelSurface" in probe_source
            and "frontendVisualCustomEditorSurface" in probe_source
            and "frontendVisualFixtureWritten" in probe_source
            and "--visual-fixture-dir" in probe_source
            and "data-surface=\"webview-view\"" in probe_source
+           and "data-surface=\"webview-panel\"" in probe_source
            and "data-surface=\"custom-editor\"" in probe_source)
     fixture_list = api.assistant_native_response_fixture("list")
     native_fixture = api.assistant_native_response_fixture("split-native-response-parts")

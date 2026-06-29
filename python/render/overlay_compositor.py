@@ -132,6 +132,17 @@ class _MMFReader:
         sz = self.fw * self.fh * 4
         return v[off:off + sz]
 
+    def peek(self) -> Optional[memoryview]:
+        """Return the current read-slot frame without advancing seq."""
+        v = self._view
+        if v is None:
+            return None
+        ws = _struct.unpack_from('<I', v, 32)[0]
+        rs = (ws + self.slot_count - 1) % self.slot_count
+        off = _MMF_HEADER + rs * self.slot_stride
+        sz = self.fw * self.fh * 4
+        return v[off:off + sz]
+
     def close(self) -> None:
         self._view = None
         if self._ptr:
@@ -305,7 +316,7 @@ class CompositorLayer:
         self._fade_dur = 0.3
         self._fade_done_fn: Optional[Callable[[], None]] = None
 
-        # Per-layer RGN span cache (avoids re-scanning alpha every frame)
+        # Per-layer RGN span cache (avoids re-scanning unchanged frames)
         self._rgn_cache_key: Any = None
         self._rgn_cached_spans: list = []
 
@@ -507,12 +518,15 @@ class CompositorLayer:
         self._frame_seq += 1
         self._uploaded_seq = self._frame_seq
         self._dirty = True
+        # Store frame memoryview for RGN alpha scanning (zero copy)
+        self._frame_bytes = frame
+        self._frame_w = w
+        self._frame_h = h
         return True
 
     def _ensure_texture(self, ctx: moderngl.Context) -> None:
         if self._mmf_name is not None:
-            self._poll_mmf(ctx)
-            return
+            return  # MMF layers are polled in the main loop
         with self._lock:
             seq = self._frame_seq
             w = self._frame_w
@@ -653,9 +667,6 @@ class UnifiedOverlay:
         self._target_fps = 60
         self._frame_interval = 1.0 / self._target_fps
 
-        # RGN throttle for high-fps layers
-        self._rgn_last_full_scan = 0.0
-        self._rgn_scan_interval = 0.1  # 10 Hz for high-fps layers
 
     # ── Layer management ─────────────────────────────────────
 
@@ -723,7 +734,7 @@ class UnifiedOverlay:
         max_fps = self._default_fps
         with self._lock:
             for layer in self._z_sorted:
-                if layer.visible and layer.target_fps > max_fps:
+                if layer.target_fps > max_fps:
                     max_fps = layer.target_fps
         if max_fps != self._target_fps:
             self._target_fps = max_fps
@@ -912,14 +923,6 @@ class UnifiedOverlay:
                     continue
                 lx = layer.x - ox
                 ly = layer.y - oy
-
-                # Fast path: high-fps click-through layers use bounding rect
-                if layer.high_fps and layer.click_through:
-                    spans.append((
-                        lx - pad, ly - pad,
-                        lx + layer.width + pad,
-                        ly + layer.height + pad))
-                    continue
 
                 fb = layer._frame_bytes
                 fw = layer._frame_w
