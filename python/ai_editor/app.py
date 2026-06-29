@@ -13458,6 +13458,111 @@ class AIEditorAPI:
             str(row.get("id") or "")))
         return result
 
+    def _extension_surface_text_editor_decorations(
+            self) -> List[Dict[str, Any]]:
+        """Return Node TextEditor decoration runtime evidence rows."""
+        host = getattr(self, "_node_ext_host", None)
+        host_running = bool(host is not None and getattr(host, "is_running", False))
+        if not host_running or not hasattr(host, "text_editor_runtime_state"):
+            return []
+        try:
+            state = host.text_editor_runtime_state()
+        except Exception:
+            return []
+        if not isinstance(state, dict):
+            return []
+        active_types = {
+            str(item.get("key") or ""): item
+            for item in state.get("decorationTypes", [])
+            if isinstance(item, dict) and str(item.get("key") or "")
+        }
+        active_decorations = {
+            str(item.get("key") or ""): item
+            for item in state.get("decorations", [])
+            if isinstance(item, dict) and str(item.get("key") or "")
+        }
+        events_by_key: Dict[str, List[Dict[str, Any]]] = {}
+        for event in state.get("decorationEvents", []):
+            if not isinstance(event, dict):
+                continue
+            key = str(event.get("key") or "")
+            if key:
+                events_by_key.setdefault(key, []).append(event)
+        result: List[Dict[str, Any]] = []
+        for key in sorted(set(active_types) | set(active_decorations) | set(events_by_key)):
+            events = events_by_key.get(key, [])
+            latest = events[-1] if events else {}
+            active = key in active_types or key in active_decorations
+            disposed = any(
+                item.get("event") == "text_editor_decoration_type_disposed"
+                for item in events)
+            changed = [
+                item for item in events
+                if item.get("event") == "text_editor_decorations_changed"
+            ]
+            latest_change = changed[-1] if changed else {}
+            decoration = active_decorations.get(key, {})
+            uri = str(
+                decoration.get("uri") or latest_change.get("uri")
+                or latest.get("uri") or "")
+            try:
+                range_count = int(
+                    decoration.get("rangeCount")
+                    if decoration.get("rangeCount") is not None
+                    else latest_change.get("rangeCount") or 0)
+            except Exception:
+                range_count = 0
+            ranges = (
+                decoration.get("ranges")
+                if isinstance(decoration.get("ranges"), list)
+                else latest_change.get("ranges"))
+            if not isinstance(ranges, list):
+                ranges = []
+            evidence = {
+                "kind": "textEditorDecoration",
+                "key": key,
+                "uri": uri,
+                "rangeCount": range_count,
+                "rangePreviewCount": len(ranges[:4]),
+                "eventCount": len(events),
+                "active": active,
+                "disposed": disposed,
+                "registered": key in active_types or any(
+                    item.get("event")
+                    == "text_editor_decoration_type_registered"
+                    for item in events),
+                "changed": bool(changed),
+                "latestEvent": str(latest.get("event") or ""),
+                "readiness": "disposed" if disposed and not active else "ready",
+                "readinessScore": 70 if disposed and not active else 100,
+                "readinessIssues": (
+                    ["disposed"] if disposed and not active else []),
+            }
+            options = active_types.get(key, {}).get("options")
+            result.append({
+                "id": key,
+                "key": key,
+                "name": key,
+                "uri": uri,
+                "resourceUri": uri,
+                "rangeCount": range_count,
+                "ranges": ranges[:8],
+                "eventCount": len(events),
+                "latestEvent": evidence["latestEvent"],
+                "active": active,
+                "disposed": disposed,
+                "options": options if isinstance(options, dict) else {},
+                "runtimeAvailable": True,
+                "nodeHostRunning": host_running,
+                "runtimeOnly": True,
+                "source": "runtime-only",
+                "surfaceEvidence": evidence,
+                "readiness": evidence["readiness"],
+                "readinessScore": evidence["readinessScore"],
+                "readinessIssues": evidence["readinessIssues"],
+            })
+        return result
+
     def _extension_runtime_surface_cache_key(
             self, context: Any, contributions: Dict[str, Any]) -> str:
         vscode_ns = getattr(self, "_vscode_ns", None)
@@ -13515,6 +13620,36 @@ class AIEditorAPI:
                 return []
             return sorted(result)
 
+        def text_editor_decoration_keys() -> List[str]:
+            if not host_running or not hasattr(host, "text_editor_runtime_state"):
+                return []
+            try:
+                state = host.text_editor_runtime_state()
+            except Exception:
+                return []
+            if not isinstance(state, dict):
+                return []
+            result: List[str] = []
+            for item in state.get("decorationEvents", []):
+                if not isinstance(item, dict):
+                    continue
+                result.append(":".join([
+                    str(item.get("event") or ""),
+                    str(item.get("key") or ""),
+                    str(item.get("uri") or ""),
+                    str(item.get("rangeCount") or 0),
+                ]))
+            for item in state.get("decorations", []):
+                if not isinstance(item, dict):
+                    continue
+                result.append(":".join([
+                    "active",
+                    str(item.get("key") or ""),
+                    str(item.get("uri") or ""),
+                    str(item.get("rangeCount") or 0),
+                ]))
+            return sorted(result)
+
         def node_surface_keys(name: str) -> List[str]:
             if not host_running or not hasattr(host, name):
                 return []
@@ -13552,6 +13687,7 @@ class AIEditorAPI:
                 "chatParticipants": keys(
                     getattr(vscode_ns, "chat_participants", {})),
                 "languageStatus": language_status_keys(),
+                "textEditorDecorations": text_editor_decoration_keys(),
                 "taskProviders": node_surface_keys("task_providers"),
                 "debugConfigProviders": node_surface_keys(
                     "debug_config_providers"),
@@ -13805,6 +13941,7 @@ class AIEditorAPI:
         chat_context_providers = self._extension_surface_chat_context_providers()
         status_bar_items = self._extension_surface_status_bar_items(contributions)
         language_status_items = self._extension_surface_language_status_items()
+        text_editor_decorations = self._extension_surface_text_editor_decorations()
         webview_panels = self._extension_surface_webview_panels()
         webview_views = [
             item for item in views
@@ -14024,6 +14161,15 @@ class AIEditorAPI:
         language_status_errors = sum(
             1 for item in language_status_items
             if int(item.get("severity") or 0) >= 2)
+        text_editor_decoration_ranges = sum(
+            int(item.get("rangeCount") or 0)
+            for item in text_editor_decorations)
+        text_editor_decoration_events = sum(
+            int(item.get("eventCount") or 0)
+            for item in text_editor_decorations)
+        text_editor_decoration_disposed = sum(
+            1 for item in text_editor_decorations
+            if item.get("disposed"))
         payload = json.loads(json.dumps({
             "ok": True,
             "views": views,
@@ -14044,6 +14190,7 @@ class AIEditorAPI:
             "chatContextProviders": chat_context_providers,
             "statusBarItems": status_bar_items,
             "languageStatusItems": language_status_items,
+            "textEditorDecorations": text_editor_decorations,
             "summary": {
                 "views": len(views),
                 "treeViews": len(tree_views),
@@ -14138,6 +14285,10 @@ class AIEditorAPI:
                 "languageStatusBusy": language_status_busy,
                 "languageStatusWarnings": language_status_warnings,
                 "languageStatusErrors": language_status_errors,
+                "textEditorDecorations": len(text_editor_decorations),
+                "textEditorDecorationRanges": text_editor_decoration_ranges,
+                "textEditorDecorationEvents": text_editor_decoration_events,
+                "textEditorDecorationDisposed": text_editor_decoration_disposed,
                 "cacheHit": False,
                 "dynamicSurfaces": (
                     len(tree_views) + len(webview_views) + len(webview_panels)
@@ -14147,7 +14298,8 @@ class AIEditorAPI:
                     + len(debuggers) + len(language_model_tools)
                     + len(language_model_providers) + len(chat_participants)
                     + len(chat_context_providers) + len(status_bar_items)
-                    + len(language_status_items)),
+                    + len(language_status_items)
+                    + len(text_editor_decorations)),
             },
         }, ensure_ascii=False, default=str))
         self._extension_runtime_surface_cache[cache_key] = (now, payload)

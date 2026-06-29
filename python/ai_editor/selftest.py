@@ -12226,6 +12226,9 @@ console.log("frontend word separator behavior ok");
            and "['Language Status',summary.languageStatusItems||" in html
            and "['Language Busy',summary.languageStatusBusy||" in html
            and "['Language Warnings',summary.languageStatusWarnings||" in html
+           and "['TextEditorDecoration',summary.textEditorDecorations||" in html
+           and "['Editor Decoration Ranges',summary.textEditorDecorationRanges||" in html
+           and "['Editor Decoration Events',summary.textEditorDecorationEvents||" in html
            and "el.dataset.surfaceStatusBarAlignment=String(row.surfaceEvidence&&row.surfaceEvidence.alignmentName||row.alignmentName||'');" in html
            and "el.dataset.surfaceProviderCount=String(row.surfaceEvidence&&row.surfaceEvidence.providerCount||0);" in html
            and "el.dataset.surfaceTaskRequiredCount=String(row.surfaceEvidence&&row.surfaceEvidence.requiredCount||0);" in html
@@ -12237,8 +12240,12 @@ console.log("frontend word separator behavior ok");
            and "el.dataset.surfaceHasResolveDebugConfigurationWithSubstitutedVariables=row.surfaceEvidence&&row.surfaceEvidence.hasResolveDebugConfigurationWithSubstitutedVariables?'1':'0';" in html
            and "el.dataset.surfaceHasCreateDebugAdapterDescriptor=row.surfaceEvidence&&row.surfaceEvidence.hasCreateDebugAdapterDescriptor?'1':'0';" in html
            and "el.dataset.surfaceLanguageSeverityName=String(row.surfaceEvidence&&row.surfaceEvidence.severityName||'');" in html
+           and "el.dataset.textEditorDecorationRangeCount=String(row.surfaceEvidence&&row.surfaceEvidence.rangeCount||row.rangeCount||0);" in html
+           and "el.dataset.textEditorDecorationEventCount=String(row.surfaceEvidence&&row.surfaceEvidence.eventCount||row.eventCount||0);" in html
+           and "(data.textEditorDecorations||[]).slice(0,12).forEach(item=>push('TextEditorDecoration'" in html
            and "runtimeStatusBarRows" in html
            and "runtimeLanguageStatusRows" in html
+           and "runtimeTextEditorDecorationRows" in html
            and "runtimeTaskDefinitionRows" in html
            and "runtimeTaskRequiredRows" in html
            and "runtimeTaskSchemaRows" in html
@@ -12273,7 +12280,8 @@ console.log("frontend word separator behavior ok");
            and "ChatParticipant" in html
            and "ChatContext" in html
            and "StatusBarItem" in html
-           and "LanguageStatus" in html)
+           and "LanguageStatus" in html
+           and "TextEditorDecoration" in html)
     _check("backend extension runtime surfaces use bounded refresh cache",
            "self._extension_runtime_surface_cache: Dict[str, Tuple[float, Dict[str, Any]]] = {}" in app_source
            and "self._extension_runtime_surface_cache_ttl = 0.35" in app_source
@@ -12285,10 +12293,13 @@ console.log("frontend word separator behavior ok");
            and "def _extension_surface_status_bar_items(" in app_source
            and "def _extension_surface_language_status_items(" in app_source
            and "\"languageStatus\": language_status_keys()" in app_source
+           and "\"textEditorDecorations\": text_editor_decoration_keys()" in app_source
            and "\"statusBarItems\": status_bar_items" in app_source
            and "\"languageStatusItems\": language_status_items" in app_source
+           and "\"textEditorDecorations\": text_editor_decorations" in app_source
            and "\"statusBarCommands\": status_bar_commands" in app_source
            and "\"languageStatusWarnings\": language_status_warnings" in app_source
+           and "\"textEditorDecorationRanges\": text_editor_decoration_ranges" in app_source
            and "\"providerHealth\": provider_health_rows[:30]" in app_source
            and "\"providerWarnings\": provider_warnings" in app_source
            and "\"providerErrors\": provider_errors" in app_source
@@ -14695,8 +14706,8 @@ console.log("extension setting schema helpers ok");
            and "['Open','Refresh','Copy'].every(label=>snapshot.webviewActionLabels.includes(label))" in html
            and "snapshot.customPlaceholder&&snapshot.customDataset.viewType==='selftest.customEditor'" in html
            and "snapshot.notebookOutputItems===3" in html
-           and "snapshot.runtimeRows>=18" in html
-           and "snapshot.runtimeChips>=41" in html
+           and "snapshot.runtimeRows>=19" in html
+           and "snapshot.runtimeChips>=45" in html
            and "snapshot.runtimeAnchorLaneRows===snapshot.runtimeRows&&snapshot.runtimeAnchorPills>=snapshot.runtimeRows*2" in html
            and "snapshot.runtimeDynamicProviderRows>=17&&snapshot.runtimeAnchorReadyRows>=17&&snapshot.runtimeAnchorWarningRows>=3" in html
            and "['provider','host','chrome','html','frame','bridge','lifecycle'].every(key=>snapshot.runtimeAnchorKeys.includes(key))" in html
@@ -14736,7 +14747,7 @@ console.log("extension setting schema helpers ok");
            and "runtimeKindFilterVisible:runtimeKindFilterResult?runtimeKindFilterResult.visible:0" in html
            and "runtimeSelectedRows:runtimeList?runtimeList.querySelectorAll('.extension-runtime-row.selected[aria-selected=\"true\"]').length:0" in html
            and "snapshot.runtimeListRole==='list'" in html
-           and "snapshot.runtimeStatusText.includes('18 visible of 18 rows')" in html
+           and "snapshot.runtimeStatusText.includes('19 visible of 19 rows')" in html
            and "snapshot.runtimeFilterKinds.includes('LMTool')" in html
            and "snapshot.runtimeFilterKinds.includes('ViewContainer')" in html
            and "snapshot.runtimeFilterKinds.includes('StatusBarItem')" in html
@@ -14771,7 +14782,7 @@ console.log("extension setting schema helpers ok");
            and "snapshot.runtimeActionSmoke.taskPrompt.includes('selftest.task')&&snapshot.runtimeActionSmoke.taskPrompt.includes('Required fields: command')" in html
            and "snapshot.runtimeActionSmoke.debugPrompt.includes('selftest.debug')&&snapshot.runtimeActionSmoke.debugPrompt.includes('Launch template')&&snapshot.runtimeActionSmoke.debugPrompt.includes('program')" in html
            and "snapshot.runtimeActionSmoke.lastAction==='start-debugger'" in html
-           and "['WebviewPanel','TerminalProfile','TaskDefinition','Debugger','LMTool','LMProvider','ChatParticipant','ChatContext','StatusBarItem','LanguageStatus'].every(kind=>snapshot.runtimeKinds.includes(kind))" in html
+           and "['WebviewPanel','TerminalProfile','TaskDefinition','Debugger','LMTool','LMProvider','ChatParticipant','ChatContext','StatusBarItem','LanguageStatus','TextEditorDecoration'].every(kind=>snapshot.runtimeKinds.includes(kind))" in html
            and "window._onEditorEvent('render_webview_panel',{view_id:lifecycleViewId" in html
            and "window._onEditorEvent('update_webview_panel_title',{view_id:lifecycleViewId" in html
            and "window._onEditorEvent('update_webview_panel_icon',{view_id:lifecycleViewId" in html
@@ -36922,6 +36933,8 @@ process.stdin.resume();
                     node_runtime_surfaces.get("chatParticipants", []))
                 node_runtime_chat_context_providers = list(
                     node_runtime_surfaces.get("chatContextProviders", []))
+                node_runtime_text_editor_decorations = list(
+                    node_runtime_surfaces.get("textEditorDecorations", []))
                 node_runtime_menu_surfaces = [
                     item for item in node_runtime_surfaces.get("menus", [])
                     if item.get("command") == "selftest.node.openItem"
@@ -37167,6 +37180,32 @@ process.stdin.resume();
                            "chatContextProviders":
                                node_runtime_chat_context_providers,
                            "summary": node_runtime_surfaces.get("summary", {}),
+                       }, ensure_ascii=False, default=str))
+                _check("node-backed text editor decorations appear in runtime surface panel data",
+                       node_started is True
+                       and node_runtime_surfaces.get("ok") is True
+                       and any(
+                           item.get("key")
+                           == node_text_editor_probe.get("decorationKey")
+                           and item.get("runtimeAvailable") is True
+                           and item.get("rangeCount") == 2
+                           and item.get("eventCount", 0) >= 3
+                           and item.get("disposed") is True
+                           and item.get("surfaceEvidence", {}).get(
+                               "latestEvent")
+                           == "text_editor_decoration_type_disposed"
+                           for item in node_runtime_text_editor_decorations)
+                       and node_runtime_surfaces.get("summary", {}).get(
+                           "textEditorDecorations", 0) >= 1
+                       and node_runtime_surfaces.get("summary", {}).get(
+                           "textEditorDecorationRanges", 0) >= 2
+                       and node_runtime_surfaces.get("summary", {}).get(
+                           "textEditorDecorationEvents", 0) >= 3,
+                       json.dumps({
+                           "textEditorDecorations":
+                               node_runtime_text_editor_decorations,
+                           "summary": node_runtime_surfaces.get("summary", {}),
+                           "probe": node_text_editor_probe,
                        }, ensure_ascii=False, default=str))
                 _check("local Node extension registers combined runtime surfaces end to end",
                        node_started is True
