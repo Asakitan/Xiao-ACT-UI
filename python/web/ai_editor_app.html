@@ -11975,7 +11975,10 @@ function assistantControlPopupSnapshot(kind){
     workflowModeCount:kind==='workflow'?options.filter(option=>option.dataset.workflowMode).length:0,
     workflowModeStrip:kind==='workflow'&&!!(popup&&popup.querySelector('.workflow-mode-strip')),
     workflowModeToolbar:kind==='workflow'&&!!(popup&&popup.querySelector('.workflow-mode-toolbar')),
-    workflowModeActive:kind==='workflow'?modeOptions.filter(option=>option.classList.contains('active')).map(option=>option.dataset.workflowMode):[]
+    workflowModeActive:kind==='workflow'?modeOptions.filter(option=>option.classList.contains('active')).map(option=>option.dataset.workflowMode):[],
+    agentAnchorCount:kind==='agent'?agentOptionRows().length:0,
+    agentBuiltinFallbackCount:kind==='agent'?agentOptionRows().filter(item=>item.anchorSource==='builtin-fallback').length:0,
+    agentDefaultSelectableCount:kind==='agent'?options.filter(option=>String(option.dataset.value||'').toLowerCase()==='default').length:0
   };
   closeChatControlPopups();
   return snapshot;
@@ -12488,7 +12491,7 @@ async function runAssistantUiSelfCheck(opts){
   assistantUiSelfCheckRecord(checks,'composer-native-selects-hidden',layout.nativeHidden===true,JSON.stringify(layout.nativeControls));
   assistantUiSelfCheckRecord(checks,'mode-popup-custom-control-ready',modePopup.shown&&modePopup.optionCount>=6&&modePopup.modeActionCount>=6&&modePopup.keyboardReady&&!modePopup.oldModePopupPresent&&modePopup.visibleText.includes('Agent')&&modePopup.visibleText.includes('Default Approvals'),JSON.stringify(modePopup));
   assistantUiSelfCheckRecord(checks,'control-popup-rects-unclipped',[providerPopup,modelPopup,agentPopup,modePopup,workflowPopup].every(s=>s.shown&&s.display==='block'&&s.rectReady&&s.opensAboveTrigger&&s.notToolbarClipped&&!s.className.includes('mode-popup')),JSON.stringify({providerPopup,modelPopup,agentPopup,modePopup,workflowPopup}));
-  assistantUiSelfCheckRecord(checks,'agent-popup-configured-agents-ready',agentPopup.shown&&agentPopup.optionCount>=6&&agentPopup.focusableCount===agentPopup.optionCount&&agentPopup.keyboardReady&&agentPopup.visibleText.includes('Code Reviewer')&&agentPopup.visibleText.includes('Debugger'),JSON.stringify(agentPopup));
+  assistantUiSelfCheckRecord(checks,'agent-popup-configured-agents-ready',agentPopup.shown&&agentPopup.optionCount>=6&&agentPopup.focusableCount===agentPopup.optionCount&&agentPopup.keyboardReady&&agentPopup.agentAnchorCount>=5&&agentPopup.agentBuiltinFallbackCount>=5&&agentPopup.agentDefaultSelectableCount===0&&agentPopup.visibleText.includes('Code Reviewer')&&agentPopup.visibleText.includes('Debugger'),JSON.stringify(agentPopup));
   assistantUiSelfCheckRecord(checks,'visual-composer-centered-three-line-ready',visualLayout.ok&&visualLayout.composerCentered&&visualLayout.composerTwoThirdsWide&&visualLayout.composerThreeLineHeight&&visualLayout.inputThreeLineHeight&&visualLayout.composerBottomFilled,JSON.stringify(visualLayout));
   assistantUiSelfCheckRecord(checks,'visual-controls-one-row-ready',visualLayout.toolbarOneLine&&visualLayout.metaInsideTrailing&&visualLayout.buttonSurfaceReady&&visualLayout.triggerMotionReady,JSON.stringify(visualLayout));
   assistantUiSelfCheckRecord(checks,'visual-control-widths-ready',visualLayout.controlWidthsReady===true,JSON.stringify(visualLayout.triggerWidths));
@@ -25552,8 +25555,8 @@ window.createInstructionFile=createInstructionFile;
 let activeAgentId='';
 async function refreshAgents(){
   const ar=await call('list_agents');const wr=await call('list_workflows');
-  const aa=await call('get_active_agent');activeAgentId=(aa&&aa.agent_id)||'';
-  chatControlState.agents=normalizeControlList(ar,'agents');
+  const aa=await call('get_active_agent');activeAgentId=normalizeActiveAgentId((aa&&aa.agent_id)||'');
+  const agentRows=syncChatAgentAnchors(normalizeControlList(ar,'agents'));
   chatControlState.workflows=normalizeControlList(wr,'workflows');
   // Active badge
   const badge=$('agent-active-badge');
@@ -25561,7 +25564,7 @@ async function refreshAgents(){
   else{badge.style.display='none'}
   // Agents list
   const al=$('agents-list');al.innerHTML='';
-  if(ar&&ar.agents){ar.agents.forEach(a=>{
+  if(agentRows.length){agentRows.forEach(a=>{
     const row=document.createElement('div');row.className='sb-item multi-line';
     if(a.id===activeAgentId)row.style.background='var(--bg3)';
     const icon=document.createElement('span');icon.textContent=a.icon||'\u{1f916}';icon.style.cssText='font-size:14px;flex-shrink:0;margin-top:2px';
@@ -34777,6 +34780,7 @@ $('model-inp').onchange=e=>updateProviderModel(config.provider,e.target.value,tr
 
 // ── Inline CHAT controls ──
 let chatControlState={agents:[],workflows:[],providers:[],models:[]};
+let chatAgentAnchorRows=[];
 let chatProviderModelOptions=Object.create(null);
 let chatProviderModelFetchKeys=Object.create(null);
 let chatProviderModelFetchInflight=Object.create(null);
@@ -34787,6 +34791,7 @@ const CHAT_BUILTIN_AGENT_ROWS=[
   {id:'optimizer',name:'Performance Optimizer',description:'Finds speed and memory bottlenecks',icon:'⚡',builtin:true},
   {id:'documenter',name:'Documentation Writer',description:'Writes concise docs, guides, and examples',icon:'≡',builtin:true}
 ];
+const CHAT_DEFAULT_AGENT_IDS=new Set(['','default','agent:default']);
 function normalizeControlList(value,key){
   const raw=Array.isArray(value)?value:(value&&Array.isArray(value[key])?value[key]:[]);
   return raw.filter(Boolean);
@@ -34801,17 +34806,45 @@ function controlItemId(item){
 }
 function controlItemName(item){return String((item&&typeof item==='object'&&(item.name||item.label||item.id||item.value))||item||'')}
 function controlItemDescription(item){return String((item&&typeof item==='object'&&(item.description||item.detail||item.when_to_use))||'')}
-function agentOptionRows(){
+function normalizeActiveAgentId(agentId){
+  const id=String(agentId||'').trim();
+  return CHAT_DEFAULT_AGENT_IDS.has(id.toLowerCase())?'':id;
+}
+function normalizeChatAgentRow(agent,source){
+  const id=controlItemId(agent).trim();
+  if(!id||CHAT_DEFAULT_AGENT_IDS.has(id.toLowerCase()))return null;
+  if(agent&&typeof agent==='object'){
+    return {
+      ...agent,
+      id,
+      name:controlItemName(agent)||id,
+      description:controlItemDescription(agent),
+      icon:String(agent.icon||'○'),
+      builtin:!!agent.builtin||source==='builtin-fallback',
+      anchorSource:source||String(agent.anchorSource||agent.source||'state')
+    };
+  }
+  return {id,name:id,description:'',icon:'○',builtin:source==='builtin-fallback',anchorSource:source||'state'};
+}
+function mergeChatAgentAnchorRows(value){
   const rows=[];
   const pushAgent=agent=>{
-    const id=controlItemId(agent);
+    const source=(agent&&agent.anchorSource)||'state';
+    const row=normalizeChatAgentRow(agent,source);
+    const id=row&&controlItemId(row);
     if(!id||rows.some(item=>controlItemId(item)===id))return;
-    rows.push(agent);
+    rows.push(row);
   };
-  normalizeControlList(chatControlState.agents,'agents').forEach(pushAgent);
-  CHAT_BUILTIN_AGENT_ROWS.forEach(pushAgent);
+  normalizeControlList(value,'agents').forEach(pushAgent);
+  CHAT_BUILTIN_AGENT_ROWS.forEach(agent=>pushAgent({...agent,anchorSource:'builtin-fallback'}));
   return rows;
 }
+function syncChatAgentAnchors(value){
+  chatAgentAnchorRows=mergeChatAgentAnchorRows(value===undefined?chatControlState.agents:value);
+  chatControlState.agents=chatAgentAnchorRows.slice();
+  return chatAgentAnchorRows;
+}
+function agentOptionRows(){return syncChatAgentAnchors(chatControlState.agents).slice()}
 function isPlaceholderModelValue(value){
   const text=String(value||'').trim().toLowerCase();
   return !text||text==='model';
@@ -35074,6 +35107,7 @@ function chatControlPopupItem(kind,item,active){
   row.setAttribute('aria-selected',active?'true':'false');
   row.tabIndex=-1;
   row.dataset.value=id;
+  if(item&&item.anchorSource)row.dataset.anchorSource=String(item.anchorSource);
   const icon=document.createElement('span');
   icon.className='mp-icon';
   icon.textContent=kind==='workflow'?(item.icon||'▶'):(kind==='agent'?(item.icon||'⊙'):(kind==='model'?(item.custom?'◆':'◇'):'◉'));
@@ -35481,8 +35515,8 @@ async function loadChatControls(){
     if(controls.mode)currentMode=normalizeMode(controls.mode);
     currentApproval=normalizeApproval(controls.approval||config.approval||'default');
     activeProviderId=String(controls.active_chat_provider||config.active_chat_provider||activeProviderId||'chat');
-    activeAgentId=controls.active_agent_id||controls.activeAgentId||controls.agent_id||activeAgentId||'';
-    chatControlState.agents=normalizeControlList(controls.agents,'agents');
+    activeAgentId=normalizeActiveAgentId(controls.active_agent_id||controls.activeAgentId||controls.agent_id||activeAgentId||'');
+    syncChatAgentAnchors(normalizeControlList(controls.agents,'agents'));
     chatControlState.workflows=normalizeControlList(controls.workflows,'workflows');
     chatControlState.providers=normalizeControlList(controls.providers,'providers');
     chatControlState.models=normalizeControlList(controls.models,'models');
@@ -35493,10 +35527,10 @@ async function loadChatControls(){
     currentApproval=normalizeApproval(config.approval||'default');
     activeProviderId=String(config.active_chat_provider||activeProviderId||'chat');
     const ar=await call('list_agents');const wr=await call('list_workflows');const aa=await call('get_active_agent');
-    chatControlState.agents=normalizeControlList(ar,'agents');
+    syncChatAgentAnchors(normalizeControlList(ar,'agents'));
     chatControlState.workflows=normalizeControlList(wr,'workflows');
     chatControlState.models=modelOptionRows();
-    activeAgentId=(aa&&aa.agent_id)||activeAgentId||'';
+    activeAgentId=normalizeActiveAgentId((aa&&aa.agent_id)||activeAgentId||'');
   }
   renderChatControlOptions();syncUI();updateModeUI();bindChatToolbarControls();
 }
@@ -35517,6 +35551,7 @@ function bindChatToolbarControls(){
   const workflow=$('chat-workflow-sel');if(workflow)workflow.onchange=()=>{updateToolbarWorkflowButton();renderChatControlPopups()};
 }
 async function setToolbarAgent(agentId){
+  agentId=normalizeActiveAgentId(agentId);
   let r=await call('set_chat_controls',{agent_id:agentId||''});
   if(!(r&&r.ok))r=agentId?await call('set_active_agent',agentId):await call('clear_active_agent');
   if((r&&r.ok)||!api()){

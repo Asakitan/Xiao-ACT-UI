@@ -5395,10 +5395,19 @@ def test_phase1_ai_editor_regressions() -> None:
            "const CHAT_BUILTIN_AGENT_ROWS=[" in html
            and "id:'code-reviewer',name:'Code Reviewer'" in html
            and "id:'debugger',name:'Debugger'" in html
+           and "let chatAgentAnchorRows=[];" in html
+           and "const CHAT_DEFAULT_AGENT_IDS=new Set(['','default','agent:default']);" in html
+           and "function normalizeActiveAgentId(agentId)" in html
+           and "function syncChatAgentAnchors(value)" in html
            and "function agentOptionRows()" in html
-           and "CHAT_BUILTIN_AGENT_ROWS.forEach(pushAgent);" in html
+           and "const agentRows=syncChatAgentAnchors(normalizeControlList(ar,'agents'));" in html
+           and "CHAT_BUILTIN_AGENT_ROWS.forEach(agent=>pushAgent({...agent,anchorSource:'builtin-fallback'}));" in html
+           and "chatControlState.agents=chatAgentAnchorRows.slice();" in html
+           and "if(item&&item.anchorSource)row.dataset.anchorSource=String(item.anchorSource);" in html
            and "agentRows.forEach(a=>agentPopup.appendChild(chatControlPopupItem('agent',a,controlItemId(a)===activeAgentId)));" in html
            and "agentPopup.optionCount>=6" in html
+           and "agentPopup.agentBuiltinFallbackCount>=5" in html
+           and "agentPopup.agentDefaultSelectableCount===0" in html
            and "agentPopup.visibleText.includes('Code Reviewer')" in html
            and "const agent=slashFindControlItem(agentOptionRows(),arg);" in html
            and "agentOptionRows().forEach(a=>{" in html)
