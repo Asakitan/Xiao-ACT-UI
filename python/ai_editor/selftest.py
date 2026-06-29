@@ -4922,11 +4922,17 @@ def test_phase1_ai_editor_regressions() -> None:
            and "hasJumpbarActionState" in html
            and "hasJumpbarModifiedCount" in html
            and "hasJumpbarActions" in html
-           and "#settings-modal.open:has(.settings-vscode-calm) { --settings-viewport-gap:14px; --settings-available-height:min(780px, calc(100dvh - 32px));" in html
-           and ".modal.settings-modal.preferences-workbench.settings-vscode-calm {\n  width:min(1180px, calc(100vw - 40px)); height:var(--settings-available-height, min(780px, calc(100dvh - 32px)));" in html
+           and "#settings-modal.open:has(.settings-vscode-calm) { --settings-viewport-gap:24px; --settings-available-height:min(720px, calc(100svh - 24px), calc(100dvh - 24px));" in html
+           and ".modal.settings-modal.preferences-workbench.settings-vscode-calm {\n  width:min(1180px, calc(100vw - 40px)); height:var(--settings-available-height, min(720px, calc(100svh - 24px), calc(100dvh - 24px)));" in html
            and ".settings-vscode-calm .settings-nav,\n.settings-vscode-calm .settings-main,\n.settings-vscode-calm .settings-inspector {\n  min-height:0; overflow-y:auto; overscroll-behavior:contain;" in html
            and "scrollbar-gutter:stable;" in html
            and "function syncSettingsViewportFit(reason)" in html
+           and "const vv=window.visualViewport||null;" in html
+           and "frame.classList.toggle('settings-viewport-compact',autoCompact);" in html
+           and "modal.dataset.settingsFrameFitsViewport=" in html
+           and "modal.dataset.settingsAutoCompact=autoCompact?'1':'0';" in html
+           and "window.visualViewport.addEventListener('resize',()=>syncSettingsViewportFit('visual-viewport'));" in html
+           and ".settings-vscode-calm.settings-viewport-compact .settings-main" in html
            and "modal.dataset.settingsTopVisible=topVisible?'1':'0';" in html
            and "modal.dataset.settingsBottomVisible=bottomVisible?'1':'0';" in html
            and "modal.dataset.settingsScrollContained=columnsScroll?'1':'0';" in html
@@ -4955,6 +4961,10 @@ def test_phase1_ai_editor_regressions() -> None:
            and "hasSyncedSettingsViewport" in html
            and "hasVisibleSettingsTop" in html
            and "hasVisibleSettingsFooter" in html
+           and "hasSettingsFrameFitsViewport" in html
+           and "hasSettingsSafeHeightCap" in html
+           and "hasSettingsAutoCompactFit" in html
+           and "hasVisualViewportResizeSync" in html
            and "hasSettingsDvhHeightGuard" in html
            and "hasStableSettingsScrollbars" in html
            and "hasScrollableSettingsColumns" in html
@@ -5326,9 +5336,10 @@ def test_phase1_ai_editor_regressions() -> None:
            and ".chat-input-area { flex-shrink:0; background:linear-gradient(180deg, transparent 0, var(--bg) 18px);" in html
            and "display:flex; justify-content:center; align-items:center;" in html
            and ".chat-input-area > div { width:100%; display:flex; justify-content:center; }" in html
-           and "width:66.666%; min-width:min(720px,100%); max-width:1280px; min-height:120px;" in html
-           and ".chat-input-row { display:flex; gap:0; align-items:center; min-height:76px; }" in html
-           and "outline:none; min-height:72px; max-height:220px;" in html
+           and "width:min(66.666%, 1280px); min-width:min(720px, calc(100% - 24px)); max-width:1280px; min-height:132px;" in html
+           and "margin:0 auto; box-sizing:border-box;" in html
+           and ".chat-input-row { display:flex; gap:0; align-items:center; min-height:88px; }" in html
+           and "outline:none; min-height:84px; max-height:220px;" in html
            and ".chat-composer-action { width:22px; height:22px; border:1px solid transparent; border-radius:999px;" in html
            and ".model-chip { display:none; align-items:center; gap:3px; padding:2px 6px; background:var(--bg3);" in html
            and ".ctx-ring { width:16px; height:16px; flex:0 0 16px; border-radius:50%;" in html
@@ -6635,8 +6646,8 @@ def test_phase1_ai_editor_regressions() -> None:
             and "assistantUiSelfCheckRecord(checks,'visual-composer-centered-three-line-ready'" in html
             and "composerCentered:!!(containerRect&&contentWidth>0&&Math.abs((containerRect.left+containerRect.right)/2-(contentLeft+contentRight)/2)<=3)" in html
             and "composerTwoThirdsWide:!!(containerRect&&contentWidth>0&&containerRect.width>=contentWidth*.62&&containerRect.width<=contentWidth*.72)" in html
-            and "composerThreeLineHeight:!!(containerRect&&containerRect.height>=92)" in html
-            and "inputThreeLineHeight:!!(container&&container.querySelector('.chat-input')&&container.querySelector('.chat-input').getBoundingClientRect().height>=56)" in html
+            and "composerThreeLineHeight:!!(containerRect&&containerRect.height>=120)" in html
+            and "inputThreeLineHeight:!!(container&&container.querySelector('.chat-input')&&container.querySelector('.chat-input').getBoundingClientRect().height>=72)" in html
             and "assistantUiSelfCheckRecord(checks,'visual-controls-one-row-ready'" in html
             and "assistantUiSelfCheckRecord(checks,'visual-control-widths-ready'" in html
             and "controlWidthsReady:!!(triggerWidthMap['chat-provider-trigger']>=128&&triggerWidthMap['chat-model-inline']>=220&&triggerWidthMap['chat-agent-trigger']>=140&&triggerWidthMap['chat-workflow-trigger']>=144)" in html
@@ -11248,6 +11259,10 @@ console.log("frontend word separator behavior ok");
             and "result.snapshot.hasSyncedSettingsViewport" in settings_smoke_source
             and "result.snapshot.hasVisibleSettingsTop" in settings_smoke_source
             and "result.snapshot.hasVisibleSettingsFooter" in settings_smoke_source
+            and "result.snapshot.hasSettingsFrameFitsViewport" in settings_smoke_source
+            and "result.snapshot.hasSettingsSafeHeightCap" in settings_smoke_source
+            and "result.snapshot.hasSettingsAutoCompactFit" in settings_smoke_source
+            and "result.snapshot.hasVisualViewportResizeSync" in settings_smoke_source
             and "result.snapshot.hasSettingsDvhHeightGuard" in settings_smoke_source
             and "result.snapshot.hasStableSettingsScrollbars" in settings_smoke_source
             and "result.snapshot.hasScrollableSettingsColumns" in settings_smoke_source

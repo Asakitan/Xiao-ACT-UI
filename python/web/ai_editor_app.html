@@ -1023,7 +1023,8 @@ pre.code-block code .type { color:var(--fg-type); }
 .chat-input-area > div { width:100%; display:flex; justify-content:center; }
 .chat-input-container { position:relative; border-radius:8px; border:1px solid var(--border);
   background:var(--bg3); transition:border-color .15s, box-shadow .35s, background .15s; overflow:visible;
-  width:66.666%; min-width:min(720px,100%); max-width:1280px; min-height:120px;
+  width:min(66.666%, 1280px); min-width:min(720px, calc(100% - 24px)); max-width:1280px; min-height:132px;
+  margin:0 auto; box-sizing:border-box;
   display:flex; flex-direction:column; justify-content:center; }
 .chat-input-container:focus-within { border-color:var(--border-focus); box-shadow:0 0 0 1px var(--border-focus); }
 .chat-input-container.sendable { border-color:color-mix(in srgb, var(--border-focus) 35%, var(--border)); }
@@ -1168,10 +1169,10 @@ pre.code-block code .type { color:var(--fg-type); }
 .chat-queue-badge { display:inline-flex; align-items:center; gap:4px; color:var(--fg-accent);
   font:10px/16px var(--mono); border:1px solid color-mix(in srgb,var(--fg-accent) 45%,var(--border));
   border-radius:999px; padding:0 6px; background:color-mix(in srgb,var(--fg-accent) 9%,transparent); }
-.chat-input-row { display:flex; gap:0; align-items:center; min-height:76px; }
+.chat-input-row { display:flex; gap:0; align-items:center; min-height:88px; }
 .chat-input { flex:1; background:transparent; color:var(--fg); border:none;
   padding:12px 13px 10px; font:13px/20px var(--sans); resize:none;
-  outline:none; min-height:72px; max-height:220px; }
+  outline:none; min-height:84px; max-height:220px; }
 .chat-input::placeholder { color:var(--fg-dim); }
 .send-btn { width:26px; height:26px; background:var(--btn); color:#fff; border:none; border-radius:5px;
   margin:0 8px 0 0; cursor:pointer; display:flex; align-items:center; justify-content:center;
@@ -1758,16 +1759,16 @@ pre.code-block code .type { color:var(--fg-type); }
 #settings-modal.open { --settings-viewport-gap:12px; --settings-available-height:calc(100dvh - 24px);
   align-items:stretch; justify-content:center; padding:12px 22px; box-sizing:border-box;
   background:color-mix(in srgb,#000 42%,transparent); }
-#settings-modal.open:has(.settings-vscode-calm) { --settings-viewport-gap:14px; --settings-available-height:min(780px, calc(100dvh - 32px));
-  align-items:flex-start; justify-content:center; padding:14px 20px 18px; background:color-mix(in srgb,#000 34%,transparent); }
+#settings-modal.open:has(.settings-vscode-calm) { --settings-viewport-gap:24px; --settings-available-height:min(720px, calc(100svh - 24px), calc(100dvh - 24px));
+  align-items:center; justify-content:center; padding:10px 20px 14px; background:color-mix(in srgb,#000 34%,transparent); }
 .modal { background:var(--bg2); border:1px solid var(--border); border-radius:6px;
   width:560px; max-height:85vh; overflow-y:auto; padding:20px 24px; box-shadow:0 8px 32px #00000080; }
 .modal.settings-modal { width:min(1520px, calc(100vw - 44px)); height:var(--settings-available-height, calc(100dvh - 24px));
   max-height:var(--settings-available-height, calc(100dvh - 24px)); overflow:hidden; padding:0; display:flex; flex-direction:column;
   border-radius:3px; background:var(--bg); box-shadow:0 18px 54px #00000092; }
 .modal.settings-modal.preferences-workbench { border-color:color-mix(in srgb,var(--border) 86%,var(--fg-accent)); }
-.modal.settings-modal.preferences-workbench.settings-vscode-calm { width:min(1180px, calc(100vw - 40px)); height:var(--settings-available-height, min(780px, calc(100dvh - 32px))); max-width:calc(100vw - 40px);
-  max-height:var(--settings-available-height, min(780px, calc(100dvh - 32px))); min-height:0;
+.modal.settings-modal.preferences-workbench.settings-vscode-calm { width:min(1180px, calc(100vw - 40px)); height:var(--settings-available-height, min(720px, calc(100svh - 24px), calc(100dvh - 24px))); max-width:calc(100vw - 40px);
+  max-height:var(--settings-available-height, min(720px, calc(100svh - 24px), calc(100dvh - 24px))); min-height:0;
   display:grid; grid-template-rows:minmax(0,1fr) auto; border:1px solid color-mix(in srgb,var(--border) 82%,transparent); border-radius:4px; box-shadow:0 14px 42px #00000072; }
 .modal h2 { color:var(--fg); font-size:14px; margin-bottom:16px; font-weight:600; }
 .settings-titlebar { display:flex; align-items:center; justify-content:space-between; gap:16px;
@@ -3401,20 +3402,20 @@ pre.code-block { overflow:visible; }
 .settings-vscode-calm .settings-nav-result-group:disabled { opacity:.45; cursor:default; }
 .settings-vscode-calm .settings-nav-result-group strong { color:var(--fg); font:600 11px var(--mono); }
 #settings-modal.open:has(.settings-vscode-calm) {
-  --settings-viewport-gap:14px; --settings-available-height:min(780px, calc(100dvh - 32px));
-  align-items:flex-start; justify-content:center; padding:14px 20px 18px; background:color-mix(in srgb,#000 34%,transparent);
+  --settings-viewport-gap:24px; --settings-available-height:min(720px, calc(100svh - 24px), calc(100dvh - 24px));
+  align-items:center; justify-content:center; padding:10px 20px 14px; background:color-mix(in srgb,#000 34%,transparent);
 }
 .modal.settings-modal.preferences-workbench.settings-vscode-calm {
-  width:min(1180px, calc(100vw - 40px)); height:var(--settings-available-height, min(780px, calc(100dvh - 32px)));
-  max-width:calc(100vw - 40px); max-height:var(--settings-available-height, min(780px, calc(100dvh - 32px)));
+  width:min(1180px, calc(100vw - 40px)); height:var(--settings-available-height, min(720px, calc(100svh - 24px), calc(100dvh - 24px)));
+  max-width:calc(100vw - 40px); max-height:var(--settings-available-height, min(720px, calc(100svh - 24px), calc(100dvh - 24px)));
   min-height:0; display:grid; grid-template-rows:minmax(0,1fr) auto;
   border:1px solid color-mix(in srgb,var(--border) 82%,transparent); border-radius:4px;
   box-shadow:0 14px 42px #00000072; overflow:hidden;
 }
 @supports (height: 100dvh) {
   .modal.settings-modal.preferences-workbench.settings-vscode-calm {
-    height:var(--settings-available-height, min(780px, calc(100dvh - 32px)));
-    max-height:var(--settings-available-height, min(780px, calc(100dvh - 32px)));
+    height:var(--settings-available-height, min(720px, calc(100svh - 24px), calc(100dvh - 24px)));
+    max-height:var(--settings-available-height, min(720px, calc(100svh - 24px), calc(100dvh - 24px)));
   }
 }
 .settings-vscode-calm .settings-shell {
@@ -3427,6 +3428,30 @@ pre.code-block { overflow:visible; }
 }
 .settings-vscode-calm .settings-nav {
   padding-top:10px;
+}
+.settings-vscode-calm.settings-viewport-compact .settings-nav {
+  padding-top:6px;
+}
+.settings-vscode-calm.settings-viewport-compact .settings-nav-commandbar {
+  padding-bottom:6px; margin-bottom:6px;
+}
+.settings-vscode-calm.settings-viewport-compact .settings-nav-item {
+  min-height:24px; padding-top:3px; padding-bottom:3px;
+}
+.settings-vscode-calm.settings-viewport-compact .settings-main {
+  padding-top:6px; padding-bottom:14px;
+}
+.settings-vscode-calm.settings-viewport-compact .settings-section-overview {
+  padding-top:9px; padding-bottom:5px; margin-bottom:5px;
+}
+.settings-vscode-calm.settings-viewport-compact .settings-field.builtin-setting {
+  min-height:52px; padding-top:8px; padding-bottom:8px;
+}
+.settings-vscode-calm.settings-viewport-compact .ext-setting-row {
+  padding-top:6px; padding-bottom:6px;
+}
+.settings-vscode-calm.settings-viewport-compact .modal-btns {
+  min-height:30px; padding-top:3px; padding-bottom:3px;
 }
 .settings-row-action:disabled { opacity:.35; cursor:default; }
 .settings-row-action-menu { display:none; position:absolute; top:26px; right:0; min-width:174px; padding:4px;
@@ -12437,8 +12462,8 @@ function assistantVisualLayoutSnapshot(){
     composerFillsArea:!!(containerRect&&contentWidth>0&&containerRect.width>=contentWidth-2),
     composerCentered:!!(containerRect&&contentWidth>0&&Math.abs((containerRect.left+containerRect.right)/2-(contentLeft+contentRight)/2)<=3),
     composerTwoThirdsWide:!!(containerRect&&contentWidth>0&&containerRect.width>=contentWidth*.62&&containerRect.width<=contentWidth*.72),
-    composerThreeLineHeight:!!(containerRect&&containerRect.height>=92),
-    inputThreeLineHeight:!!(container&&container.querySelector('.chat-input')&&container.querySelector('.chat-input').getBoundingClientRect().height>=56),
+    composerThreeLineHeight:!!(containerRect&&containerRect.height>=120),
+    inputThreeLineHeight:!!(container&&container.querySelector('.chat-input')&&container.querySelector('.chat-input').getBoundingClientRect().height>=72),
     composerBottomFilled:!!(panelRect&&areaRect&&Math.abs(panelRect.bottom-areaRect.bottom)<=2),
     toolbarOneLine:!!(controlsRect&&trailingRect&&Math.abs(controlsRect.top-trailingRect.top)<=1&&!toolbarOverlap),
     metaInsideTrailing:!!(metaRect&&trailingRect&&metaRect.left>=trailingRect.left-1&&metaRect.right<=trailingRect.right+1),
@@ -29159,33 +29184,45 @@ _bindPointerResize(splitter,'ns-resize',
   (e,state)=>_setPanelHeight(state.startHeight+(state.startY-e.clientY)),
   ()=>_resetPanelHeight()
 );
+let _settingsVisualViewportResizeWired=false;
 window.addEventListener('resize',()=>{
   _clampLayoutDimensions();
   syncSettingsViewportFit();
   _saveLayoutDebounced();
 });
+if(window.visualViewport){
+  window.visualViewport.addEventListener('resize',()=>syncSettingsViewportFit('visual-viewport'));
+  _settingsVisualViewportResizeWired=true;
+}
 
 // ── Settings ──
 function syncSettingsViewportFit(reason){
   const modal=$('settings-modal');
   const frame=document.querySelector('.modal.settings-modal');
   if(!modal||!frame)return null;
-  const viewportH=Math.max(320,Math.floor(window.innerHeight||document.documentElement.clientHeight||720));
-  const viewportW=Math.max(420,Math.floor(window.innerWidth||document.documentElement.clientWidth||1024));
+  const vv=window.visualViewport||null;
+  const viewportH=Math.max(320,Math.floor((vv&&vv.height)||window.innerHeight||document.documentElement.clientHeight||720));
+  const viewportW=Math.max(420,Math.floor((vv&&vv.width)||window.innerWidth||document.documentElement.clientWidth||1024));
   const isCalm=frame.classList.contains('settings-vscode-calm');
-  const verticalGap=isCalm?32:24;
-  const maxHeight=Math.max(280,Math.min(isCalm?780:viewportH-verticalGap,viewportH-verticalGap));
+  const verticalGap=isCalm?24:24;
+  const hardCap=isCalm?720:viewportH-verticalGap;
+  const maxHeight=Math.max(300,Math.min(hardCap,viewportH-verticalGap));
+  const compressed=isCalm&&maxHeight<hardCap;
+  const autoCompact=isCalm&&maxHeight<=680;
   modal.style.setProperty('--settings-available-height',maxHeight+'px');
   modal.dataset.settingsViewportFit='1';
   modal.dataset.settingsViewportReason=String(reason||'sync');
   modal.dataset.settingsViewportHeight=String(viewportH);
   modal.dataset.settingsViewportWidth=String(viewportW);
   modal.dataset.settingsAvailableHeight=String(maxHeight);
+  modal.dataset.settingsViewportCompressed=compressed?'1':'0';
+  modal.dataset.settingsAutoCompact=autoCompact?'1':'0';
+  frame.classList.toggle('settings-viewport-compact',autoCompact);
   const rect=frame.getBoundingClientRect();
   const footer=frame.querySelector('.modal-btns');
   const nav=$('settings-nav'),main=$('settings-main'),inspector=$('settings-inspector');
   const columns=[nav,main,inspector].filter(Boolean);
-  const topVisible=rect.top>=0&&rect.top<=Math.max(32,viewportH-120);
+  const topVisible=rect.top>=0&&rect.top<=Math.max(24,viewportH-120);
   const bottomVisible=rect.bottom<=viewportH&&rect.bottom>=Math.min(viewportH,120);
   const columnsScroll=columns.every(el=>{
     const style=getComputedStyle(el);
@@ -29195,10 +29232,13 @@ function syncSettingsViewportFit(reason){
   modal.dataset.settingsBottomVisible=bottomVisible?'1':'0';
   modal.dataset.settingsScrollContained=columnsScroll?'1':'0';
   if(footer)modal.dataset.settingsFooterVisible=(footer.getBoundingClientRect().bottom<=viewportH&&footer.getBoundingClientRect().top>=0)?'1':'0';
+  modal.dataset.settingsFrameFitsViewport=(topVisible&&bottomVisible&&(!footer||modal.dataset.settingsFooterVisible==='1'))?'1':'0';
+  modal.dataset.settingsColumnCount=String(columns.length);
   frame.dataset.settingsFitHeight=String(Math.round(rect.height||0));
   frame.dataset.settingsFitTop=String(Math.round(rect.top||0));
   frame.dataset.settingsFitBottom=String(Math.round(rect.bottom||0));
-  return {topVisible,bottomVisible,columnsScroll,maxHeight};
+  frame.dataset.settingsViewportCompact=autoCompact?'1':'0';
+  return {topVisible,bottomVisible,columnsScroll,maxHeight,autoCompact,compressed};
 }
 function settingSection(name){
   const section=mergeSectionDefaults(name,config[name]);
@@ -31051,8 +31091,8 @@ function settingsUiSelfCheckSnapshot(){
       &&typeof settingsFocusVisibleRow==='function'
       &&typeof settingsFocusPagedRow==='function'
       &&typeof settingsFocusActiveSection==='function'),
-    hasWorkspaceSizedModal:!!(modal&&settingsFrameRect&&String(getComputedStyle(modal).alignItems)==='flex-start'
-      &&settingsFrameRect.top>=10&&settingsFrameRect.bottom<=window.innerHeight-10),
+    hasWorkspaceSizedModal:!!(modal&&settingsFrameRect&&String(getComputedStyle(modal).alignItems)==='center'
+      &&settingsFrameRect.top>=8&&settingsFrameRect.bottom<=window.innerHeight-8),
     hasPreferencesWorkbenchShell:!!document.querySelector('.modal.settings-modal.preferences-workbench'),
     hasWorkbenchHeaderContext:!!(route&&route.textContent&&typeof renderSettingsWorkbenchHeader==='function'&&typeof settingsWorkbenchContextLabel==='function'),
     hasSettingsToolbarStrip:!!document.querySelector('.settings-toolbar-strip .settings-top-action.primary'),
@@ -31073,6 +31113,12 @@ function settingsUiSelfCheckSnapshot(){
       &&frameStyle&&String(frameStyle.height||'').endsWith('px')),
     hasVisibleSettingsTop:!!(settingsFrameRect&&modalDataset.settingsTopVisible==='1'&&settingsFrameRect.top>=0),
     hasVisibleSettingsFooter:!!(footer&&footerRect&&modalDataset.settingsFooterVisible==='1'&&footerRect.bottom<=window.innerHeight),
+    hasSettingsFrameFitsViewport:!!(modalDataset.settingsFrameFitsViewport==='1'&&modalDataset.settingsBottomVisible==='1'),
+    hasSettingsSafeHeightCap:!!(Number(modalDataset.settingsAvailableHeight||0)>0&&Number(modalDataset.settingsAvailableHeight||0)<=720),
+    hasSettingsAutoCompactFit:typeof syncSettingsViewportFit==='function'
+      &&String(syncSettingsViewportFit).includes("frame.classList.toggle('settings-viewport-compact',autoCompact)")
+      &&settingsFrame&&settingsFrame.dataset.settingsViewportCompact!==undefined,
+    hasVisualViewportResizeSync:window.visualViewport?_settingsVisualViewportResizeWired===true:true,
     hasSettingsDvhHeightGuard:!!(modal&&String(modal.style.getPropertyValue('--settings-available-height')||'').endsWith('px')),
     hasStableSettingsScrollbars:!!(nav&&main&&String(getComputedStyle(nav).scrollbarGutter||'').includes('stable')
       &&String(getComputedStyle(main).scrollbarGutter||'').includes('stable')),
