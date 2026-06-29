@@ -1777,6 +1777,8 @@ pre.code-block code .type { color:var(--fg-type); }
 .editor-language-panel-actions button:hover,.editor-language-panel-actions button:focus { color:var(--fg); border-color:var(--border-focus); outline:none; }
 .editor-language-panel-actions button.primary { color:var(--fg); border-color:color-mix(in srgb,var(--fg-accent) 55%,var(--border)); }
 .editor-language-panel-body { overflow:auto; padding:7px 8px 9px; display:grid; gap:5px; }
+.editor-language-panel-section { display:grid; gap:5px; }
+.editor-language-panel-section-title { margin:4px 0 1px; color:var(--fg-dim); font:10px var(--mono); text-transform:uppercase; letter-spacing:.35px; }
 .editor-language-feature-row { display:grid; grid-template-columns:118px minmax(0,1fr) auto; align-items:center; gap:8px;
   min-height:28px; padding:4px 6px; border:1px solid var(--border); border-radius:5px; background:color-mix(in srgb,var(--bg3) 58%,transparent); }
 .editor-language-feature-name { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-size:11px; color:var(--fg); }
@@ -1787,6 +1789,8 @@ pre.code-block code .type { color:var(--fg-type); }
 .editor-language-feature-row[data-state="warning"] .editor-language-feature-state { color:var(--fg-warning); border-color:color-mix(in srgb,var(--fg-warning) 46%,var(--border)); }
 .editor-language-feature-row[data-state="error"] .editor-language-feature-state { color:var(--fg-error); border-color:color-mix(in srgb,var(--fg-error) 52%,var(--border)); }
 .editor-language-feature-row[data-state="running"] .editor-language-feature-state { color:var(--fg-accent); border-color:color-mix(in srgb,var(--fg-accent) 50%,var(--border)); }
+.editor-language-provider-row { grid-template-columns:118px minmax(0,1fr) 72px; }
+.editor-language-provider-row[data-source="node"] .editor-language-feature-name::after { content:' node'; color:var(--fg-accent); font:9px var(--mono); margin-left:4px; }
 .language-status-item { max-width:220px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; color:var(--fg-dim); }
 .language-status-item.info { color:var(--fg-dim); }
 .language-status-item.warning { color:var(--fg-warning); }
@@ -15322,6 +15326,78 @@ function editorSurfaceStatePayload(){
     diagnostics:Array.isArray(_editorDiagnostics)?_editorDiagnostics:[]
   };
 }
+function editorSurfaceLanguageProviderRows(state){
+  const lang=isPlainObject(state&&state.language)?state.language:{};
+  const direct=Array.isArray(lang.providerHealth)?lang.providerHealth:[];
+  if(direct.length)return direct.slice(0,30).map(row=>({
+    feature:String(row.feature||row.kind||'provider'),
+    kind:String(row.kind||''),
+    source:String(row.source||''),
+    providerId:String(row.providerId||''),
+    displayName:String(row.displayName||row.providerId||row.extensionId||'provider'),
+    extensionId:String(row.extensionId||''),
+    state:String(row.state||'ready'),
+    errors:Number(row.errors)||0,
+    timeouts:Number(row.timeouts)||0,
+    cancelled:Number(row.cancelled)||0,
+    lastError:String(row.lastError||row.last_error||'')
+  }));
+  const features=isPlainObject(lang.features)?lang.features:{};
+  const rows=[];
+  Object.keys(features).sort().forEach(feature=>{
+    const providers=Array.isArray(features[feature]&&features[feature].providers)?features[feature].providers:[];
+    providers.forEach(provider=>{
+      const health=isPlainObject(provider.health)?provider.health:{};
+      const errors=Number(health.errors)||0,timeouts=Number(health.timeouts)||0,cancelled=Number(health.cancelled)||0;
+      rows.push({
+        feature,
+        kind:String(provider.kind||''),
+        source:String(provider.source||''),
+        providerId:String(provider.providerId||''),
+        displayName:String(provider.displayName||provider.providerId||provider.extensionId||'provider'),
+        extensionId:String(provider.extensionId||''),
+        state:errors||timeouts?'error':(cancelled?'warning':'ready'),
+        errors,timeouts,cancelled,
+        lastError:String(health.last_error||health.lastError||'')
+      });
+    });
+  });
+  return rows.slice(0,30);
+}
+function syncEditorSurfaceLanguageFeatureState(state){
+  if(!isPlainObject(state))return;
+  const lang=isPlainObject(state.language)?state.language:{};
+  const formatting=isPlainObject(state.formatting)?state.formatting:{};
+  const diagnostics=isPlainObject(state.diagnostics)?state.diagnostics:{};
+  const diff=isPlainObject(state.diff)?state.diff:{};
+  const providerRows=editorSurfaceLanguageProviderRows(state);
+  const providerErrors=Number(lang.providerErrors)||providerRows.filter(row=>row.state==='error').length;
+  const providerWarnings=Number(lang.providerWarnings)||providerRows.filter(row=>row.state==='warning').length;
+  updateEditorLanguageProviderStatus(providerErrors?'error':(providerWarnings?'warning':'ready'),{
+    kind:'surface',
+    message:'Lang: '+String(lang.languageId||editorLang||'text')+' · '+String(lang.providerCount||0)+' providers',
+    detail:[
+      String(lang.message||'Language providers ready'),
+      providerErrors?providerErrors+' provider errors':'',
+      providerWarnings?providerWarnings+' provider warnings':'',
+      formatting.providerCount!==undefined?'Formatters: '+String(formatting.providerCount||0):'',
+      diagnostics.message||'',
+      diff.message||''
+    ].filter(Boolean).join('\n'),
+    providerWarnings,
+    providerErrors
+  });
+  updateEditorLanguageFeatureState('diagnostics',diagnostics.state||'empty',diagnostics);
+  updateEditorLanguageFeatureState('formatting',formatting.state||'empty',{
+    providerCount:Number(formatting.providerCount)||0,
+    defaultFormatter:String(formatting.defaultFormatter||''),
+    onSave:formatting.formatOnSave===true,
+    onType:formatting.formatOnType===true,
+    codeActionsOnSave:formatting.codeActionsOnSave||{},
+    message:'Formatting: '+String(formatting.providerCount||0)+' providers'
+  });
+  updateEditorLanguageFeatureState('diff',diff.state==='dirty'?'ready':'empty',diff);
+}
 function renderEditorSurfaceStatus(state){
   _editorSurfaceState=state||_editorSurfaceState;
   const el=$('status-editor-surface');if(!el)return _editorSurfaceState;
@@ -15348,6 +15424,7 @@ function renderEditorSurfaceStatus(state){
     'Diagnostics: '+String(diag.count||0),
     'Diff: '+String(diff.total||0)
   ].filter(Boolean).join('\n');
+  syncEditorSurfaceLanguageFeatureState(s);
   return _editorSurfaceState;
 }
 async function refreshEditorSurfaceState(opts){
@@ -15566,6 +15643,27 @@ function editorLanguageStatusPanelFeatureRows(){
     return {key,label,state:String(state.state||'empty'),detail:detail||'Idle'};
   });
 }
+function editorLanguageStatusPanelProviderRows(){
+  return editorSurfaceLanguageProviderRows(_editorSurfaceState).slice(0,12).map(row=>{
+    const status=[
+      row.errors?String(row.errors)+' errors':'',
+      row.timeouts?String(row.timeouts)+' timeouts':'',
+      row.cancelled?String(row.cancelled)+' cancelled':'',
+      row.lastError
+    ].filter(Boolean).join(' · ');
+    return {
+      key:String(row.feature||row.kind||'provider')+':'+String(row.providerId||row.displayName||''),
+      label:String(row.displayName||row.providerId||'provider'),
+      source:String(row.source||''),
+      state:String(row.state||'ready'),
+      detail:[
+        String(row.feature||row.kind||'provider'),
+        row.extensionId?String(row.extensionId):'',
+        status||'healthy'
+      ].filter(Boolean).join(' · ')
+    };
+  });
+}
 function editorLanguageStatusPanelActions(){
   return [
     {id:'format-document',label:'Format Document',primary:true},
@@ -15608,10 +15706,14 @@ function renderEditorLanguageStatusPanel(){
   const panel=ensureEditorLanguageStatusPanel();
   const aggregate=editorLanguageFeatureAggregateSnapshot();
   const rows=editorLanguageStatusPanelFeatureRows();
+  const providerRows=editorLanguageStatusPanelProviderRows();
   const actions=editorLanguageStatusPanelActions();
   panel.dataset.open=_editorLanguageStatusPanelOpen?'1':'0';
   panel.dataset.actionCount=String(actions.length);
   panel.dataset.featureRows=String(rows.length);
+  panel.dataset.providerRows=String(providerRows.length);
+  panel.dataset.providerErrorRows=String(providerRows.filter(row=>row.state==='error').length);
+  panel.dataset.providerWarningRows=String(providerRows.filter(row=>row.state==='warning').length);
   panel.dataset.featureActiveCount=String(aggregate.activeCount||0);
   panel.dataset.featureReadyCount=String(aggregate.readyCount||0);
   panel.dataset.diffTotal=String(aggregate.diffTotal||0);
@@ -15627,11 +15729,22 @@ function renderEditorLanguageStatusPanel(){
         'data-editor-language-action="'+esc(action.id)+'">'+esc(action.label)+'</button>').join('')+
     '</div>'+
     '<div class="editor-language-panel-body">'+
+      '<div class="editor-language-panel-section" data-editor-language-section="features">'+
+      '<div class="editor-language-panel-section-title">Features</div>'+
       rows.map(row=>'<div class="editor-language-feature-row" data-feature="'+esc(row.key)+'" data-state="'+esc(row.state)+'">'+
         '<div class="editor-language-feature-name">'+esc(row.label)+'</div>'+
         '<div class="editor-language-feature-detail">'+esc(row.detail)+'</div>'+
         '<div class="editor-language-feature-state">'+esc(row.state)+'</div>'+
       '</div>').join('')+
+      '</div>'+
+      '<div class="editor-language-panel-section" data-editor-language-section="providers">'+
+      '<div class="editor-language-panel-section-title">Providers</div>'+
+      (providerRows.length?providerRows.map(row=>'<div class="editor-language-feature-row editor-language-provider-row" data-provider="'+esc(row.key)+'" data-source="'+esc(row.source)+'" data-state="'+esc(row.state)+'">'+
+        '<div class="editor-language-feature-name">'+esc(row.label)+'</div>'+
+        '<div class="editor-language-feature-detail">'+esc(row.detail)+'</div>'+
+        '<div class="editor-language-feature-state">'+esc(row.state)+'</div>'+
+      '</div>').join(''):'<div class="editor-language-feature-row editor-language-provider-row" data-provider="fallback" data-state="empty"><div class="editor-language-feature-name">Fallback</div><div class="editor-language-feature-detail">No matched extension providers reported for this document</div><div class="editor-language-feature-state">empty</div></div>')+
+      '</div>'+
     '</div>';
   panel.classList.toggle('open',_editorLanguageStatusPanelOpen);
   positionEditorLanguageStatusPanel(panel);
@@ -15680,14 +15793,19 @@ function editorLanguageStatusPanelSelfCheckSnapshot(){
   openEditorLanguageStatusPanel();
   const panel=$('editor-language-status-panel'),anchor=$('status-language-service');
   const actions=panel?Array.from(panel.querySelectorAll('button[data-editor-language-action]')).map(btn=>btn.dataset.editorLanguageAction):[];
-  const rows=panel?Array.from(panel.querySelectorAll('.editor-language-feature-row')).map(row=>row.dataset.feature):[];
+  const rows=panel?Array.from(panel.querySelectorAll('.editor-language-feature-row[data-feature]')).map(row=>row.dataset.feature):[];
+  const providers=panel?Array.from(panel.querySelectorAll('.editor-language-provider-row')).map(row=>row.dataset.provider):[];
   const snapshot={
     open:panel&&panel.dataset.open==='1',
     ariaExpanded:anchor&&anchor.getAttribute('aria-expanded')==='true',
     actionCount:actions.length,
     featureRows:rows.length,
+    providerRows:providers.length,
+    providerErrorRows:panel?Number(panel.dataset.providerErrorRows)||0:0,
+    providerWarningRows:panel?Number(panel.dataset.providerWarningRows)||0:0,
     actions,
     rows,
+    providers,
     featureActiveCount:panel?Number(panel.dataset.featureActiveCount)||0:0,
     diffTotal:panel?Number(panel.dataset.diffTotal)||0:0,
     semanticTokens:panel?Number(panel.dataset.semanticTokens)||0:0,
@@ -40879,7 +40997,8 @@ function setExtensionRuntimeSurfaceLoading(loading){
 function extensionRuntimeHealthDeckRows(rows,summary){
   rows=Array.isArray(rows)?rows:[];
   summary=summary||{};
-  const webviews=rows.filter(row=>row.kind==='WebviewView');
+  const webviews=rows.filter(row=>extensionRuntimeIsWebviewKind(row));
+  const panels=webviews.filter(row=>row.kind==='WebviewPanel').length;
   const count=fn=>webviews.filter(fn).length;
   const sum=fn=>webviews.reduce((n,row)=>n+(Number(fn(row))||0),0);
   const ready=count(row=>row.webviewReadiness==='ready');
@@ -40898,8 +41017,8 @@ function extensionRuntimeHealthDeckRows(rows,summary){
   const ports=sum(row=>row.webviewEvidence&&row.webviewEvidence.portMappingCount);
   const failures=sum(row=>row.webviewEvidence&&row.webviewEvidence.failureCount);
   return [
-    {id:'ready',label:'Readiness',value:ready+'/'+webviews.length,detail:warnings?warnings+' warning':'all ready',state:warnings?'warning':'ready',filter:warnings?'missing':'rendered'},
-    {id:'mount',label:'Mounted',value:mounted+'/'+webviews.length,detail:visible+' visible',state:mounted===webviews.length?'ready':'warning',filter:mounted===webviews.length?'iframe-mounted':'iframe-missing'},
+    {id:'ready',label:'Readiness',value:ready+'/'+webviews.length,detail:(panels?panels+' panels · ':'')+(warnings?warnings+' warning':'all ready'),state:warnings?'warning':'ready',filter:warnings?'missing':'rendered'},
+    {id:'mount',label:'Mounted',value:mounted+'/'+webviews.length,detail:visible+' visible'+(panels?' · '+panels+' panels':''),state:mounted===webviews.length?'ready':'warning',filter:mounted===webviews.length?'iframe-mounted':'iframe-missing'},
     {id:'bridge',label:'Bridge',value:String(bridgeReady),detail:bridgeWarnings?bridgeWarnings+' warning':'API ready',state:bridgeWarnings?'warning':'ready',filter:bridgeWarnings?'bridge-warning':'bridge-ready'},
     {id:'messages',label:'Messages',value:String(messageTotal),detail:(queued?queued+' queued · ':'')+(dropped?dropped+' dropped · ':'')+(stalled?stalled+' stalled':'flow ok'),state:(dropped||stalled)?'error':(queued?'warning':'ready'),filter:stalled?'message-stalled':(dropped?'dropped':(queued?'queued':'messages'))},
     {id:'resources',label:'Resources',value:String(resourceRewrites),detail:roots+' roots · '+ports+' ports'+(resourceWarnings?' · '+resourceWarnings+' warning':''),state:resourceWarnings?'warning':'ready',filter:resourceWarnings?'resource-warning':'resources'},
@@ -40916,6 +41035,8 @@ function renderExtensionRuntimeHealthDeck(rows,summary){
   host.dataset.runtimeHealthFilters=cards.map(card=>card.filter).join(',');
   if(panel){
     panel.dataset.runtimeHealthCards=String(cards.length);
+    panel.dataset.runtimeHealthWebviewRows=String(rows.filter(row=>extensionRuntimeIsWebviewKind(row)).length);
+    panel.dataset.runtimeHealthPanelRows=String(rows.filter(row=>row.kind==='WebviewPanel').length);
     panel.dataset.runtimeHealthWarnings=String(cards.filter(card=>card.state==='warning').length);
     panel.dataset.runtimeHealthErrors=String(cards.filter(card=>card.state==='error').length);
     panel.dataset.runtimeHealthFilters=cards.map(card=>card.filter).join(',');
@@ -43889,6 +44010,8 @@ function extensionRuntimeDomSelfCheckSnapshot(){
       runtimeHealthFilters:runtimeHealth?Array.from(runtimeHealth.querySelectorAll('.extension-runtime-health-card')).map(item=>item.dataset.runtimeHealthFilter||''):[],
       runtimeHealthWarnings:(()=>{const panel=$('extension-runtime-panel');return panel?Number(panel.dataset.runtimeHealthWarnings)||0:0})(),
       runtimeHealthErrors:(()=>{const panel=$('extension-runtime-panel');return panel?Number(panel.dataset.runtimeHealthErrors)||0:0})(),
+      runtimeHealthWebviewRows:(()=>{const panel=$('extension-runtime-panel');return panel?Number(panel.dataset.runtimeHealthWebviewRows)||0:0})(),
+      runtimeHealthPanelRows:(()=>{const panel=$('extension-runtime-panel');return panel?Number(panel.dataset.runtimeHealthPanelRows)||0:0})(),
       runtimeRunStripActive:!!(runtimeRunStrip&&runtimeRunStrip.classList.contains('active')),
       runtimeRunChips:runtimeRunStrip?runtimeRunStrip.querySelectorAll('.extension-runtime-run-chip').length:0,
       runtimeTaskRunChips:runtimeRunStrip?runtimeRunStrip.querySelectorAll('.extension-runtime-run-chip[data-runtime-run-kind="task"]').length:0,
@@ -44036,6 +44159,7 @@ function extensionRuntimeDomSelfCheckSnapshot(){
       && snapshot.runtimeEvidencePills===snapshot.runtimeRows&&snapshot.runtimeEvidenceStatuses.includes('rendered')&&(snapshot.runtimeEvidenceStatuses.includes('missing')||snapshot.runtimeEvidenceStatuses.includes('partial'))
       && snapshot.runtimeMiniActionButtons>=snapshot.runtimeRows*3&&snapshot.runtimeFocusableRows>=4&&snapshot.runtimeRefreshableRows>=4
       && snapshot.runtimeHealthCards>=5&&snapshot.runtimeHealthWarnings>=2&&snapshot.runtimeHealthErrors>=1
+      && snapshot.runtimeHealthWebviewRows>=3&&snapshot.runtimeHealthPanelRows>=1
       && ['bridge-warning','failures'].every(filter=>snapshot.runtimeHealthFilters.includes(filter))
       && (snapshot.runtimeHealthFilters.includes('resource-warning')||snapshot.runtimeHealthFilters.includes('resources'))
       && ['queued','dropped','message-stalled'].some(filter=>snapshot.runtimeHealthFilters.includes(filter))
@@ -49095,6 +49219,9 @@ function editorDirtyDiffSelfCheckSnapshot(){
   }
 }
 window.editorDirtyDiffSelfCheckSnapshot=editorDirtyDiffSelfCheckSnapshot;
+window.renderEditorSurfaceStatus=renderEditorSurfaceStatus;
+window.syncEditorSurfaceLanguageFeatureState=syncEditorSurfaceLanguageFeatureState;
+window.editorSurfaceLanguageProviderRows=editorSurfaceLanguageProviderRows;
 window.editorLanguageFeatureStateSnapshot=editorLanguageFeatureStateSnapshot;
 window.editorLanguageFeatureAggregateSnapshot=editorLanguageFeatureAggregateSnapshot;
 window.editorLanguageStatusPanelSelfCheckSnapshot=editorLanguageStatusPanelSelfCheckSnapshot;

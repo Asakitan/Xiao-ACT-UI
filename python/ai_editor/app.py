@@ -3013,13 +3013,59 @@ class AIEditorAPI:
                 "truncated": len(providers) > 10,
                 "ready": bool(providers),
             }
+        provider_health_rows: List[Dict[str, Any]] = []
+        seen_health_rows: set[str] = set()
+        for feature, data in by_kind.items():
+            for provider in data.get("providers", []):
+                if not isinstance(provider, dict):
+                    continue
+                health = provider.get("health")
+                if not isinstance(health, dict):
+                    health = {}
+                key = ":".join([
+                    str(feature),
+                    str(provider.get("kind") or ""),
+                    str(provider.get("providerId") or ""),
+                    str(provider.get("source") or ""),
+                ])
+                if key in seen_health_rows:
+                    continue
+                seen_health_rows.add(key)
+                errors = int(health.get("errors") or 0)
+                timeouts = int(health.get("timeouts") or 0)
+                cancelled = int(health.get("cancelled") or 0)
+                state = "error" if errors or timeouts else (
+                    "warning" if cancelled else "ready")
+                provider_health_rows.append({
+                    "feature": feature,
+                    "kind": str(provider.get("kind") or ""),
+                    "source": str(provider.get("source") or ""),
+                    "providerId": str(provider.get("providerId") or ""),
+                    "displayName": str(provider.get("displayName") or ""),
+                    "extensionId": str(provider.get("extensionId") or ""),
+                    "matchScore": int(provider.get("matchScore") or 0),
+                    "state": state,
+                    "errors": errors,
+                    "timeouts": timeouts,
+                    "cancelled": cancelled,
+                    "lastError": str(health.get("last_error") or ""),
+                })
         total = sum(int(item.get("count") or 0) for item in by_kind.values())
         formatter_count = int(by_kind.get("formatting", {}).get("count") or 0)
+        provider_errors = sum(
+            1 for item in provider_health_rows
+            if item.get("state") == "error")
+        provider_warnings = sum(
+            1 for item in provider_health_rows
+            if item.get("state") == "warning")
         return {
             "state": "ready" if total else "empty",
             "languageId": language,
             "providerCount": total,
             "features": by_kind,
+            "providerHealth": provider_health_rows[:30],
+            "providerWarnings": provider_warnings,
+            "providerErrors": provider_errors,
             "formattingReady": formatter_count > 0,
             "formattingProviderCount": formatter_count,
             "message": (
@@ -3098,6 +3144,10 @@ class AIEditorAPI:
         warnings: List[str] = []
         if not provider_summary.get("providerCount"):
             warnings.append("language-provider-fallback")
+        if provider_summary.get("providerErrors"):
+            warnings.append("language-provider-errors")
+        elif provider_summary.get("providerWarnings"):
+            warnings.append("language-provider-warnings")
         if not terminal.get("workspaceReady"):
             warnings.append("terminal-workspace-missing")
         if diff_summary.get("truncated"):

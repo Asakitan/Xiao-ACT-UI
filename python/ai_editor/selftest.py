@@ -2195,6 +2195,9 @@ def test_app_settings_parity() -> None:
                and surface_state.get("workspace", {}).get("root")
                and surface_state.get("terminal", {}).get("profile")
                and surface_state.get("language", {}).get("providerCount", -1) >= 0
+               and isinstance(surface_state.get("language", {}).get("providerHealth"), list)
+               and "providerWarnings" in surface_state.get("language", {})
+               and "providerErrors" in surface_state.get("language", {})
                and surface_state.get("diagnostics", {}).get("warnings") == 1
                and surface_state.get("formatting", {}).get("providerCount", -1) >= 0
                and surface_state.get("diff", {}).get("added", 0) >= 1
@@ -11935,6 +11938,8 @@ console.log("frontend word separator behavior ok");
            and "function setExtensionRuntimeSurfaceLoading(loading)" in html
            and "function extensionRuntimeHealthDeckRows(rows,summary)" in html
            and "function renderExtensionRuntimeHealthDeck(rows,summary)" in html
+           and "const webviews=rows.filter(row=>extensionRuntimeIsWebviewKind(row));" in html
+           and "const panels=webviews.filter(row=>row.kind==='WebviewPanel').length;" in html
            and "function renderExtensionRuntimeSurfacePanel(data)" in html
            and "async function renderExtensionRuntimeSurfaces(force)" in html
            and "window.renderExtensionRuntimeSurfaces=renderExtensionRuntimeSurfaces;" in html
@@ -11995,6 +12000,8 @@ console.log("frontend word separator behavior ok");
            and "panel.dataset.runtimeHealthCardCount=String(healthCards.length);" in html
            and "panel.dataset.runtimeHealthWarnings=String(cards.filter(card=>card.state==='warning').length);" in html
            and "panel.dataset.runtimeHealthErrors=String(cards.filter(card=>card.state==='error').length);" in html
+           and "panel.dataset.runtimeHealthWebviewRows=String(rows.filter(row=>extensionRuntimeIsWebviewKind(row)).length);" in html
+           and "panel.dataset.runtimeHealthPanelRows=String(rows.filter(row=>row.kind==='WebviewPanel').length);" in html
            and "panel.dataset.runtimeHealthFilters=cards.map(card=>card.filter).join(',');" in html
            and "extensionRuntimeSurfaceDomSnapshot(webviewId,cachedRuntime)" in html
            and "evidence.iframePresent=domSnapshot.iframePresent;" in html
@@ -12235,6 +12242,11 @@ console.log("frontend word separator behavior ok");
            and "\"languageStatusItems\": language_status_items" in app_source
            and "\"statusBarCommands\": status_bar_commands" in app_source
            and "\"languageStatusWarnings\": language_status_warnings" in app_source
+           and "\"providerHealth\": provider_health_rows[:30]" in app_source
+           and "\"providerWarnings\": provider_warnings" in app_source
+           and "\"providerErrors\": provider_errors" in app_source
+           and "warnings.append(\"language-provider-errors\")" in app_source
+           and "warnings.append(\"language-provider-warnings\")" in app_source
            and "def _webview_runtime_evidence(" in app_source
            and "view_record[\"webviewEvidence\"] = webview_evidence" in app_source
            and "\"webviewHtmlAvailable\": webview_html_available" in app_source
@@ -14529,6 +14541,8 @@ console.log("extension setting schema helpers ok");
            and "runtimeHealthFilters:runtimeHealth?Array.from(runtimeHealth.querySelectorAll('.extension-runtime-health-card')).map(item=>item.dataset.runtimeHealthFilter||''):[]" in html
            and "runtimeHealthWarnings:(()=>{const panel=$('extension-runtime-panel');return panel?Number(panel.dataset.runtimeHealthWarnings)||0:0})()" in html
            and "runtimeHealthErrors:(()=>{const panel=$('extension-runtime-panel');return panel?Number(panel.dataset.runtimeHealthErrors)||0:0})()" in html
+           and "runtimeHealthWebviewRows:(()=>{const panel=$('extension-runtime-panel');return panel?Number(panel.dataset.runtimeHealthWebviewRows)||0:0})()" in html
+           and "runtimeHealthPanelRows:(()=>{const panel=$('extension-runtime-panel');return panel?Number(panel.dataset.runtimeHealthPanelRows)||0:0})()" in html
            and "runtimeRunStripActive:!!(runtimeRunStrip&&runtimeRunStrip.classList.contains('active'))" in html
            and "runtimeTaskRunChips:runtimeRunStrip?runtimeRunStrip.querySelectorAll('.extension-runtime-run-chip[data-runtime-run-kind=\"task\"]').length:0" in html
            and "runtimeDebugConsoleEntryCount:extensionRuntimeDebugConsoleEntries.length"
@@ -14631,6 +14645,8 @@ console.log("extension setting schema helpers ok");
            and "snapshot.runtimeHealthCards>=5" in html
            and "snapshot.runtimeHealthWarnings>=2" in html
            and "snapshot.runtimeHealthErrors>=1" in html
+           and "snapshot.runtimeHealthWebviewRows>=3" in html
+           and "snapshot.runtimeHealthPanelRows>=1" in html
            and "['bridge-warning','failures'].every(filter=>snapshot.runtimeHealthFilters.includes(filter))" in html
            and "(snapshot.runtimeHealthFilters.includes('resource-warning')||snapshot.runtimeHealthFilters.includes('resources'))" in html
            and "['queued','dropped','message-stalled'].some(filter=>snapshot.runtimeHealthFilters.includes(filter))" in html
@@ -16229,6 +16245,12 @@ console.log("command palette quick access helpers ok");
            and ".editor-language-feature-row" in html
            and "let _editorLanguageStatusPanelOpen=false;" in html
            and "function editorLanguageStatusPanelFeatureRows()" in html
+           and "function editorSurfaceLanguageProviderRows(state)" in html
+           and "function syncEditorSurfaceLanguageFeatureState(state)" in html
+           and "function editorLanguageStatusPanelProviderRows()" in html
+           and "window.renderEditorSurfaceStatus=renderEditorSurfaceStatus;" in html
+           and "window.syncEditorSurfaceLanguageFeatureState=syncEditorSurfaceLanguageFeatureState;" in html
+           and "window.editorSurfaceLanguageProviderRows=editorSurfaceLanguageProviderRows;" in html
            and "function editorLanguageStatusPanelActions()" in html
            and "function ensureEditorLanguageStatusPanel()" in html
            and "function toggleEditorLanguageStatusPanel(ev)" in html
@@ -16251,6 +16273,9 @@ console.log("command palette quick access helpers ok");
            and "['diff','Dirty Diff']" in html
            and "panel.dataset.actionCount=String(actions.length);" in html
            and "panel.dataset.featureRows=String(rows.length);" in html
+           and "panel.dataset.providerRows=String(providerRows.length);" in html
+           and "panel.dataset.providerErrorRows=String(providerRows.filter(row=>row.state==='error').length);" in html
+           and "panel.dataset.providerWarningRows=String(providerRows.filter(row=>row.state==='warning').length);" in html
            and "panel.dataset.semanticTokens=String(aggregate.semanticTokens||0);" in html
            and "panel.dataset.diffTotal=String(aggregate.diffTotal||0);" in html
            and "panel.dataset.codeActions=String(aggregate.codeActions||0);" in html
@@ -16260,7 +16285,12 @@ console.log("command palette quick access helpers ok");
            and "if(id==='organize-imports')return requestEditorOrganizeImports(false);" in html
            and "if(id==='fix-all')return requestEditorFixAll(false);" in html
            and "if(id==='quick-fix')return requestEditorCodeActions(false);" in html
-           and "if(id==='open-diff')return openActiveEditorDirtyDiff();" in html)
+           and "if(id==='open-diff')return openActiveEditorDirtyDiff();" in html
+           and ".editor-language-panel-section-title" in html
+           and ".editor-language-provider-row" in html
+           and "data-editor-language-section=\"providers\"" in html
+           and "providerRows.length?providerRows.map" in html
+           and "providerErrors?providerErrors+' provider errors':''" in html)
     if not node_path:
         _check("frontend built-in language fallback behavior skipped without Node.js",
                True)
