@@ -6651,7 +6651,7 @@ def test_phase1_ai_editor_regressions() -> None:
             and "inputThreeLineHeight:!!(container&&container.querySelector('.chat-input')&&container.querySelector('.chat-input').getBoundingClientRect().height>=72)" in html
             and "assistantUiSelfCheckRecord(checks,'visual-controls-one-row-ready'" in html
             and "assistantUiSelfCheckRecord(checks,'visual-control-widths-ready'" in html
-           and "controlWidthsReady:!!(triggerWidthMap['chat-provider-trigger']>=128&&triggerWidthMap['chat-model-inline']>=48&&triggerWidthMap['chat-model-inline']<=64&&triggerWidthMap['chat-agent-trigger']>=140&&triggerWidthMap['chat-workflow-trigger']>=144)" in html
+           and "controlWidthsReady:!!(triggerWidthMap['chat-provider-trigger']>=128&&triggerWidthMap['chat-model-inline']>=32&&triggerWidthMap['chat-model-inline']<=40&&triggerWidthMap['chat-agent-trigger']>=140&&triggerWidthMap['chat-workflow-trigger']>=144)" in html
             and "assistantUiSelfCheckRecord(checks,'visual-composer-extra-rows-hidden-ready'" in html
             and "assistantUiSelfCheckRecord(checks,'visual-model-chip-removed-ready'" in html
             and "assistantUiSelfCheckRecord(checks,'visual-content-window-ring-ready'" in html
