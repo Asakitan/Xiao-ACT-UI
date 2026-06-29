@@ -390,6 +390,14 @@ body.window-resizing * { cursor:inherit !important; }
 .editor-dirty-diff-action:hover,.editor-dirty-diff-action:focus { outline:none; color:var(--fg-bright);
   border-color:var(--border-focus); background:var(--bg-hover); }
 .editor-dirty-diff-action:disabled { opacity:.45; cursor:default; border-color:transparent; background:transparent; }
+.editor-dirty-diff-overview { display:inline-flex; align-items:center; gap:2px; max-width:96px; height:16px; padding:0 3px;
+  border:1px solid color-mix(in srgb,var(--border) 58%,transparent); border-radius:3px;
+  background:color-mix(in srgb,var(--bg3) 70%,transparent); overflow:hidden; }
+.editor-dirty-diff-overview-segment { width:5px; min-width:3px; height:10px; border-radius:2px; opacity:.88; }
+.editor-dirty-diff-overview-segment.added { background:var(--fg-success); }
+.editor-dirty-diff-overview-segment.modified { background:var(--fg-accent); }
+.editor-dirty-diff-overview-segment.removed { background:var(--fg-error); }
+.editor-dirty-diff-overview-segment.active { height:14px; box-shadow:0 0 0 1px var(--border-focus); opacity:1; }
 .editor-diagnostic-layer { position:absolute; inset:0 0 0 50px; z-index:4; pointer-events:none;
   font:13px/1.5 var(--mono); padding:8px 12px; overflow:hidden; white-space:pre; tab-size:4; }
 .editor-diagnostic-marker { position:absolute; height:0; min-width:7px; border-bottom:2px dotted var(--fg-error);
@@ -1774,6 +1782,17 @@ pre.code-block code .type { color:var(--fg-type); }
   padding:8px 10px; border-bottom:1px solid var(--border); background:color-mix(in srgb,var(--bg3) 72%,transparent); }
 .editor-language-panel-title { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-size:12px; font-weight:600; }
 .editor-language-panel-summary { color:var(--fg-dim); font:10px var(--mono); white-space:nowrap; }
+.editor-language-health-rail { display:flex; flex-wrap:wrap; gap:5px; padding:7px 8px;
+  border-bottom:1px solid color-mix(in srgb,var(--border) 70%,transparent);
+  background:color-mix(in srgb,var(--bg) 38%,transparent); }
+.editor-language-health-pill { display:inline-flex; align-items:center; gap:4px; min-height:20px; max-width:170px; padding:1px 7px;
+  border:1px solid var(--border); border-radius:999px; color:var(--fg-dim); font:10px var(--mono);
+  overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.editor-language-health-pill strong { color:var(--fg); font-weight:600; }
+.editor-language-health-pill.ready { color:var(--fg-success); border-color:color-mix(in srgb,var(--fg-success) 42%,var(--border)); }
+.editor-language-health-pill.warning { color:var(--fg-warning); border-color:color-mix(in srgb,var(--fg-warning) 46%,var(--border)); }
+.editor-language-health-pill.error { color:var(--fg-error); border-color:color-mix(in srgb,var(--fg-error) 50%,var(--border)); }
+.editor-language-health-pill.running { color:var(--fg-accent); border-color:color-mix(in srgb,var(--fg-accent) 48%,var(--border)); }
 .editor-language-panel-actions { display:flex; flex-wrap:wrap; gap:5px; padding:7px 8px; border-bottom:1px solid var(--border); }
 .editor-language-panel-actions button { height:23px; border:1px solid var(--border); border-radius:4px; background:var(--bg3);
   color:var(--fg-dim); padding:0 8px; font:11px var(--sans); cursor:pointer; }
@@ -13607,6 +13626,49 @@ function editorDirtyDiffSummaryLabel(summary){
   summary=summary||{};
   return '+'+(summary.added||0)+' ~'+(summary.modified||0)+' -'+(summary.removed||0);
 }
+function editorDirtyDiffRenderBudget(summary,hunks,decorations,value){
+  const total=Number(summary&&summary.total)||0;
+  const hunkCount=Array.isArray(hunks)?hunks.length:0;
+  const decorationCount=Array.isArray(decorations)?decorations.length:0;
+  const lineCount=String(value||'').split('\n').length;
+  const maxInline=260;
+  const maxOverview=36;
+  const mode=decorationCount>maxInline?'overview':'full';
+  return {
+    mode,
+    lineCount,
+    total,
+    hunkCount,
+    decorationCount,
+    maxInline,
+    maxOverview,
+    capped:decorationCount>maxInline,
+    overviewCount:Math.min(hunkCount,maxOverview),
+    skippedInline:Math.max(0,decorationCount-maxInline)
+  };
+}
+function appendEditorDirtyDiffOverview(toolbar,hunks,budget,activeHunkIndex){
+  if(!toolbar||!Array.isArray(hunks)||!hunks.length)return null;
+  const overview=document.createElement('span');
+  overview.className='editor-dirty-diff-overview';
+  overview.dataset.dirtyDiffOverview='1';
+  overview.dataset.dirtyDiffOverviewCount=String(Math.min(hunks.length,Number(budget&&budget.maxOverview)||36));
+  overview.dataset.dirtyDiffOverviewCapped=budget&&hunks.length>Number(budget.maxOverview)?'1':'0';
+  overview.title='Diff overview: '+String(hunks.length)+' hunks'+(budget&&budget.capped?' · inline render capped':'');
+  const max=Math.min(hunks.length,Number(budget&&budget.maxOverview)||36);
+  const step=Math.max(1,Math.ceil(hunks.length/max));
+  for(let i=0;i<hunks.length;i+=step){
+    const hunk=hunks[i];
+    const seg=document.createElement('span');
+    const type=hunk.types&&hunk.types.added?'added':(hunk.types&&hunk.types.removed?'removed':'modified');
+    seg.className='editor-dirty-diff-overview-segment '+type+(i===activeHunkIndex?' active':'');
+    seg.dataset.dirtyDiffOverviewHunk=String(i+1);
+    seg.title='Hunk '+String(i+1)+' · line '+String((hunk.line||0)+1);
+    overview.appendChild(seg);
+  }
+  toolbar.appendChild(overview);
+  return overview;
+}
 function editorDirtyDiffNavigate(direction){
   const state=editorDirtyDiffState(),hunks=editorDirtyDiffHunks(state.decorations||[]);
   if(!hunks.length){setStatus('Diff: clean');return false}
@@ -13649,6 +13711,7 @@ function renderEditorDirtyDiffToolbar(layer,state){
   toolbar.title='Unsaved diff: '+(summary.added||0)+' added, '+(summary.modified||0)+' modified, '+(summary.removed||0)+' removed';
   const hunks=editorDirtyDiffHunks((state&&state.decorations)||[]);
   const activeHunk=hunks.length?Math.max(0,Math.min(_editorDirtyDiffActiveHunkIndex,hunks.length-1)):0;
+  const budget=editorDirtyDiffRenderBudget(summary,hunks,(state&&state.decorations)||[],ed&&ed.value);
   const summaryLabel=editorDirtyDiffSummaryLabel(summary);
   toolbar.dataset.dirtyDiffAdded=String(summary.added||0);
   toolbar.dataset.dirtyDiffModified=String(summary.modified||0);
@@ -13660,6 +13723,9 @@ function renderEditorDirtyDiffToolbar(layer,state){
   toolbar.dataset.dirtyDiffCanNavigate=hunks.length?'1':'0';
   toolbar.dataset.dirtyDiffCanOpen=summary.total?'1':'0';
   toolbar.dataset.dirtyDiffShortcut='Alt+F7/F7';
+  toolbar.dataset.dirtyDiffRenderMode=budget.mode;
+  toolbar.dataset.dirtyDiffRenderCapped=budget.capped?'1':'0';
+  toolbar.dataset.dirtyDiffSkippedInline=String(budget.skippedInline||0);
   const status=document.createElement('span');
   status.className='editor-dirty-diff-status';
   status.dataset.dirtyDiffStatus='1';
@@ -13685,6 +13751,7 @@ function renderEditorDirtyDiffToolbar(layer,state){
   hunkChip.title='Active diff hunk';
   hunkChip.setAttribute('aria-label','Active diff hunk '+hunkChip.textContent.replace(/^H\s*/,''));
   toolbar.appendChild(hunkChip);
+  appendEditorDirtyDiffOverview(toolbar,hunks,budget,activeHunk);
   [['prev','↑','Previous change',-1],['next','↓','Next change',1]].forEach(([cls,label,title,dir])=>{
     const btn=document.createElement('button');
     btn.type='button';btn.className='editor-dirty-diff-action '+cls;btn.textContent=label;btn.title=title;btn.setAttribute('aria-label',title);
@@ -13710,7 +13777,15 @@ function renderEditorDirtyDiffDecorations(layer,ta,metrics,state){
   const hunks=editorDirtyDiffHunks(decorations);
   const activeHunk=hunks.length?hunks[Math.max(0,Math.min(_editorDirtyDiffActiveHunkIndex,hunks.length-1))]:null;
   const activeHunkIndex=activeHunk?hunks.indexOf(activeHunk):-1;
-  decorations.forEach(dec=>{
+  const budget=editorDirtyDiffRenderBudget(state.summary||{},hunks,decorations,ta.value||'');
+  if(layer){
+    layer.dataset.visualDirtyDiffRenderMode=budget.mode;
+    layer.dataset.visualDirtyDiffRenderCapped=budget.capped?'1':'0';
+    layer.dataset.visualDirtyDiffSkippedInline=String(budget.skippedInline||0);
+    layer.dataset.visualDirtyDiffBudget=String(budget.maxInline);
+  }
+  const renderDecorations=budget.capped?decorations.slice(0,budget.maxInline):decorations;
+  renderDecorations.forEach(dec=>{
     const line=Math.max(0,Number(dec.line)||0);
     const top=metrics.paddingTop+line*metrics.lineHeight-ta.scrollTop;
     if(top<-metrics.lineHeight||top>visibleHeight+metrics.lineHeight)return;
@@ -13737,6 +13812,9 @@ function renderEditorDirtyDiffDecorations(layer,ta,metrics,state){
     removed:summary.removed||0,
     total:summary.total||0,
     decorations:decorations.length,
+    renderMode:budget.mode,
+    renderCapped:budget.capped,
+    skippedInline:budget.skippedInline,
     hunks:hunks.length,
     message:summary.total?('Diff: '+editorDirtyDiffSummaryLabel(summary)+' · '+hunks.length+' hunk'+(hunks.length===1?'':'s')):'Diff: clean'
   });
@@ -15696,6 +15774,24 @@ function editorLanguageStatusPanelActions(){
     {id:'open-diff',label:'Open Diff'}
   ];
 }
+function editorLanguageHealthPills(aggregate){
+  aggregate=aggregate||editorLanguageFeatureAggregateSnapshot();
+  const s=_editorLanguageFeatureState||{},surface=_editorSurfaceState||{};
+  const diag=s.diagnostics||{},fmt=s.formatting||{},actions=s.codeActions||{},semantic=s.semanticTokens||{},diff=s.diff||{};
+  const providerRows=editorSurfaceLanguageProviderRows(surface);
+  const providerErrors=providerRows.filter(row=>row.state==='error').length;
+  const providerWarnings=providerRows.filter(row=>row.state==='warning').length;
+  const providerState=providerErrors?'error':(providerWarnings?'warning':'ready');
+  const score=Math.max(0,100-providerErrors*30-providerWarnings*12-(Number(diag.errors)||0)*15-(Number(diag.warnings)||0)*5);
+  return [
+    {key:'providers',label:'Providers',value:String(providerRows.length||0),state:providerState,title:'Matched extension language providers',score},
+    {key:'diagnostics',label:'Problems',value:String(Number(diag.count)||0),state:(Number(diag.errors)||0)?'error':((Number(diag.warnings)||0)?'warning':'ready'),title:'Diagnostics from language providers'},
+    {key:'formatting',label:'Formatters',value:String(Number(fmt.providerCount)||Number(fmt.edits)||0),state:(Number(fmt.providerCount)||fmt.applied)?'ready':'warning',title:'Document/range/on-type formatting capability'},
+    {key:'codeActions',label:'Actions',value:String(Number(actions.count)||0),state:Number(actions.count)?'ready':'warning',title:'Quick fixes and source actions'},
+    {key:'semanticTokens',label:'Semantic',value:String(Number(semantic.count)||0),state:Number(semantic.count)?'ready':'warning',title:'Semantic token coverage'},
+    {key:'diff',label:'Diff',value:String(Number(diff.total)||0),state:Number(diff.total)?'ready':'warning',title:'Unsaved dirty diff hunks'}
+  ];
+}
 function ensureEditorLanguageStatusPanel(){
   let panel=$('editor-language-status-panel');
   if(panel)return panel;
@@ -15729,12 +15825,16 @@ function renderEditorLanguageStatusPanel(){
   const rows=editorLanguageStatusPanelFeatureRows();
   const providerRows=editorLanguageStatusPanelProviderRows();
   const actions=editorLanguageStatusPanelActions();
+  const healthPills=editorLanguageHealthPills(aggregate);
+  const providerHealth=healthPills.find(item=>item.key==='providers')||{};
   panel.dataset.open=_editorLanguageStatusPanelOpen?'1':'0';
   panel.dataset.actionCount=String(actions.length);
   panel.dataset.featureRows=String(rows.length);
   panel.dataset.providerRows=String(providerRows.length);
   panel.dataset.providerErrorRows=String(providerRows.filter(row=>row.state==='error').length);
   panel.dataset.providerWarningRows=String(providerRows.filter(row=>row.state==='warning').length);
+  panel.dataset.healthPillCount=String(healthPills.length);
+  panel.dataset.providerHealthScore=String(providerHealth.score==null?100:providerHealth.score);
   panel.dataset.featureActiveCount=String(aggregate.activeCount||0);
   panel.dataset.featureReadyCount=String(aggregate.readyCount||0);
   panel.dataset.diffTotal=String(aggregate.diffTotal||0);
@@ -15744,6 +15844,11 @@ function renderEditorLanguageStatusPanel(){
     '<div class="editor-language-panel-head">'+
       '<div class="editor-language-panel-title">Language Services</div>'+
       '<div class="editor-language-panel-summary">'+esc(String(aggregate.summary&&aggregate.summary.length?aggregate.summary.join(' · '):'ready'))+'</div>'+
+    '</div>'+
+    '<div class="editor-language-health-rail" data-editor-language-health-rail="1">'+
+      healthPills.map(item=>'<span class="editor-language-health-pill '+esc(item.state||'')+'" data-health-key="'+esc(item.key)+'" data-health-state="'+esc(item.state||'')+'" title="'+esc(item.title||item.label)+'">'+
+        '<strong>'+esc(item.value)+'</strong>'+esc(item.label)+
+      '</span>').join('')+
     '</div>'+
     '<div class="editor-language-panel-actions">'+
       actions.map(action=>'<button type="button" '+(action.primary?'class="primary" ':'')+
@@ -15816,6 +15921,7 @@ function editorLanguageStatusPanelSelfCheckSnapshot(){
   const actions=panel?Array.from(panel.querySelectorAll('button[data-editor-language-action]')).map(btn=>btn.dataset.editorLanguageAction):[];
   const rows=panel?Array.from(panel.querySelectorAll('.editor-language-feature-row[data-feature]')).map(row=>row.dataset.feature):[];
   const providers=panel?Array.from(panel.querySelectorAll('.editor-language-provider-row')).map(row=>row.dataset.provider):[];
+  const healthPills=panel?Array.from(panel.querySelectorAll('.editor-language-health-pill')).map(item=>item.dataset.healthKey+':'+item.dataset.healthState):[];
   const snapshot={
     open:panel&&panel.dataset.open==='1',
     ariaExpanded:anchor&&anchor.getAttribute('aria-expanded')==='true',
@@ -15827,6 +15933,9 @@ function editorLanguageStatusPanelSelfCheckSnapshot(){
     actions,
     rows,
     providers,
+    healthPills,
+    healthPillCount:panel?Number(panel.dataset.healthPillCount)||0:0,
+    providerHealthScore:panel?Number(panel.dataset.providerHealthScore)||0:0,
     featureActiveCount:panel?Number(panel.dataset.featureActiveCount)||0:0,
     diffTotal:panel?Number(panel.dataset.diffTotal)||0:0,
     semanticTokens:panel?Number(panel.dataset.semanticTokens)||0:0,
@@ -49598,6 +49707,8 @@ function editorDirtyDiffSelfCheckSnapshot(){
     const actionCount=document.querySelectorAll('#editor-visual-layer .editor-dirty-diff-action').length;
     const toolbarStatus=toolbar?toolbar.querySelector('.editor-dirty-diff-status'):null;
     const toolbarActions=Array.from(document.querySelectorAll('#editor-visual-layer .editor-dirty-diff-action'));
+    const overview=document.querySelector('#editor-visual-layer .editor-dirty-diff-overview');
+    const overviewSegments=Array.from(document.querySelectorAll('#editor-visual-layer .editor-dirty-diff-overview-segment'));
     const removedRows=document.querySelectorAll('#editor-visual-layer .editor-dirty-diff-line.removed').length;
     const hunkCount=editorDirtyDiffHunks(dirty.decorations||[]).length;
     editorDirtyDiffNavigate(1);
@@ -49729,6 +49840,10 @@ function editorDirtyDiffSelfCheckSnapshot(){
       toolbarStateDatasetOk:!!(toolbar&&toolbar.dataset.dirtyDiffLabel&&toolbar.dataset.dirtyDiffCanNavigate==='1'&&toolbar.dataset.dirtyDiffCanOpen==='1'&&toolbar.dataset.dirtyDiffShortcut==='Alt+F7/F7'),
       toolbarActionDatasets:toolbarActions.map(btn=>btn.dataset.dirtyDiffAction||'').join(','),
       toolbarDisabledActions:toolbarActions.filter(btn=>btn.disabled).length,
+      toolbarOverview:!!overview,
+      toolbarOverviewSegments:overviewSegments.length,
+      toolbarRenderMode:toolbar?toolbar.dataset.dirtyDiffRenderMode:'',
+      toolbarRenderCapped:toolbar?toolbar.dataset.dirtyDiffRenderCapped:'',
       actionCount,
       removedRows,
       activeHunkRows,
@@ -49739,6 +49854,8 @@ function editorDirtyDiffSelfCheckSnapshot(){
       visualRenderSkipCount:visualSnapshot.renderSkipCount,
       visualDirtyDiffTotal:visualSnapshot.dirtyDiffTotal,
       visualDirtyDiffHunks:visualSnapshot.dirtyDiffHunks,
+      visualDirtyDiffRenderMode:visualLayer?visualLayer.dataset.visualDirtyDiffRenderMode:'',
+      visualDirtyDiffBudget:visualLayer?Number(visualLayer.dataset.visualDirtyDiffBudget)||0:0,
       visualSignatureReady:visualSnapshot.signatureReady,
       openedDiff,
       diffRows:diffViewRows,
@@ -49802,9 +49919,10 @@ function editorDirtyDiffSelfCheckSnapshot(){
         hunkCount>0&&!!toolbar&&toolbar.textContent.includes('Diff')&&actionCount>=3&&
         toolbarDatasetOk&&toolbarStatus&&toolbarStatus.textContent.includes('+')&&
         toolbar&&toolbar.dataset.dirtyDiffCanNavigate==='1'&&toolbar.dataset.dirtyDiffCanOpen==='1'&&toolbar.dataset.dirtyDiffShortcut==='Alt+F7/F7'&&
+        overview&&overviewSegments.length>0&&toolbar.dataset.dirtyDiffRenderMode==='full'&&toolbar.dataset.dirtyDiffRenderCapped==='0'&&
         toolbarActions.map(btn=>btn.dataset.dirtyDiffAction||'').join(',').includes('open')&&toolbarActions.every(btn=>!btn.disabled)&&
         activeHunkRows>0&&activeHunkGutters>0&&rulerMarkers>0&&
-        visualSnapshot.renderCount>0&&visualSnapshot.renderSkipped==='1'&&visualSnapshot.renderSkipCount>0&&visualSnapshot.dirtyDiffTotal>0&&visualSnapshot.dirtyDiffHunks>0&&visualSnapshot.signatureReady&&
+        visualSnapshot.renderCount>0&&visualSnapshot.renderSkipped==='1'&&visualSnapshot.renderSkipCount>0&&visualSnapshot.dirtyDiffTotal>0&&visualSnapshot.dirtyDiffHunks>0&&visualLayer&&visualLayer.dataset.visualDirtyDiffRenderMode==='full'&&Number(visualLayer.dataset.visualDirtyDiffBudget||0)>0&&visualSnapshot.signatureReady&&
         openedDiff&&diffViewRows>0&&diffSummary>=3&&diffDatasetsOk&&
         ((featureState.features&&featureState.features.diff&&featureState.features.diff.total)||0)>0&&
         ((featureState.features&&featureState.features.diff&&featureState.features.diff.hunks)||0)>0&&

@@ -16217,6 +16217,13 @@ console.log("command palette quick access helpers ok");
            and "toolbar.dataset.dirtyDiffCanNavigate=hunks.length?'1':'0';" in html
            and "toolbar.dataset.dirtyDiffCanOpen=summary.total?'1':'0';" in html
            and "toolbar.dataset.dirtyDiffShortcut='Alt+F7/F7';" in html
+           and "function editorDirtyDiffRenderBudget(summary,hunks,decorations,value)" in html
+           and "function appendEditorDirtyDiffOverview(toolbar,hunks,budget,activeHunkIndex)" in html
+           and "toolbar.dataset.dirtyDiffRenderMode=budget.mode;" in html
+           and "toolbar.dataset.dirtyDiffRenderCapped=budget.capped?'1':'0';" in html
+           and "overview.dataset.dirtyDiffOverview='1';" in html
+           and "layer.dataset.visualDirtyDiffRenderMode=budget.mode;" in html
+           and "const renderDecorations=budget.capped?decorations.slice(0,budget.maxInline):decorations;" in html
            and "className='editor-dirty-diff-status'" in html
            and "btn.dataset.dirtyDiffAction=cls;" in html
            and "open.dataset.dirtyDiffAction='open';" in html
@@ -16278,6 +16285,11 @@ console.log("command palette quick access helpers ok");
            and "diffFilterRows" in html
            and "diffActionCount" in html
             and "rulerMarkers" in html
+           and "toolbarOverview" in html
+           and "toolbarOverviewSegments" in html
+           and "toolbarRenderMode" in html
+           and "visualDirtyDiffRenderMode" in html
+           and "visualDirtyDiffBudget" in html
            and "diffDatasetsOk" in html
            and "featureDiffTotal" in html
            and "featureDiffHunks" in html
@@ -16372,6 +16384,8 @@ console.log("command palette quick access helpers ok");
            and 'onclick="toggleEditorLanguageStatusPanel(event)"' in html
            and 'onkeydown="handleEditorLanguageStatusKey(event)"' in html
            and ".editor-language-panel { position:fixed;" in html
+           and ".editor-language-health-rail" in html
+           and ".editor-language-health-pill" in html
            and ".editor-language-panel-actions button" in html
            and ".editor-language-feature-row" in html
            and "let _editorLanguageStatusPanelOpen=false;" in html
@@ -16383,6 +16397,7 @@ console.log("command palette quick access helpers ok");
            and "window.syncEditorSurfaceLanguageFeatureState=syncEditorSurfaceLanguageFeatureState;" in html
            and "window.editorSurfaceLanguageProviderRows=editorSurfaceLanguageProviderRows;" in html
            and "function editorLanguageStatusPanelActions()" in html
+           and "function editorLanguageHealthPills(aggregate)" in html
            and "function ensureEditorLanguageStatusPanel()" in html
            and "function toggleEditorLanguageStatusPanel(ev)" in html
            and "function handleEditorLanguageStatusKey(ev)" in html
@@ -16407,6 +16422,13 @@ console.log("command palette quick access helpers ok");
            and "panel.dataset.providerRows=String(providerRows.length);" in html
            and "panel.dataset.providerErrorRows=String(providerRows.filter(row=>row.state==='error').length);" in html
            and "panel.dataset.providerWarningRows=String(providerRows.filter(row=>row.state==='warning').length);" in html
+           and "panel.dataset.healthPillCount=String(healthPills.length);" in html
+           and "panel.dataset.providerHealthScore=String(providerHealth.score==null?100:providerHealth.score);" in html
+           and "data-editor-language-health-rail=\"1\"" in html
+           and "data-health-key=\"'+esc(item.key)+'\"" in html
+           and "healthPills=panel?Array.from(panel.querySelectorAll('.editor-language-health-pill')).map(item=>item.dataset.healthKey+':'+item.dataset.healthState):[]" in html
+           and "healthPillCount:panel?Number(panel.dataset.healthPillCount)||0:0" in html
+           and "providerHealthScore:panel?Number(panel.dataset.providerHealthScore)||0:0" in html
            and "panel.dataset.semanticTokens=String(aggregate.semanticTokens||0);" in html
            and "panel.dataset.diffTotal=String(aggregate.diffTotal||0);" in html
            and "panel.dataset.codeActions=String(aggregate.codeActions||0);" in html
