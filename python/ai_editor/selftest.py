@@ -27677,6 +27677,56 @@ async function activate(context) {
       },
     };
   });
+  vscode.commands.registerCommand('selftest.node.textEditorProbe', async () => {
+    const activeEvents = [];
+    const visibleEvents = [];
+    const activeDisposable = vscode.window.onDidChangeActiveTextEditor(editor => {
+      activeEvents.push(editor && editor.document
+        ? editor.document.uri.toString()
+        : null);
+    });
+    const visibleDisposable = vscode.window.onDidChangeVisibleTextEditors(editors => {
+      visibleEvents.push((editors || []).map(editor => (
+        editor && editor.document ? editor.document.uri.toString() : ''
+      )));
+    });
+    const document = await vscode.workspace.openTextDocument({
+      language: 'plaintext',
+      content: 'alpha\\nbeta',
+    });
+    const beforeActive = !!vscode.window.activeTextEditor;
+    const beforeVisible = vscode.window.visibleTextEditors.length;
+    const editor = await vscode.window.showTextDocument(document, {
+      viewColumn: vscode.ViewColumn.Two,
+      selection: new vscode.Range(1, 0, 1, 4),
+    });
+    await editor.edit(editBuilder => {
+      editBuilder.replace(new vscode.Range(0, 0, 0, 5), 'ALPHA');
+    });
+    const activeAfterShow = vscode.window.activeTextEditor === editor;
+    const visibleAfterShow = vscode.window.visibleTextEditors.includes(editor);
+    const selectionLine = editor.selection && editor.selection.start.line;
+    const shownText = editor.document.getText();
+    editor.hide();
+    const activeAfterHide = !!vscode.window.activeTextEditor;
+    const visibleAfterHide = vscode.window.visibleTextEditors.length;
+    activeDisposable.dispose();
+    visibleDisposable.dispose();
+    return {
+      beforeActive,
+      beforeVisible,
+      activeAfterShow,
+      visibleAfterShow,
+      selectionLine,
+      viewColumn: editor.viewColumn,
+      shownText,
+      activeAfterHide,
+      visibleAfterHide,
+      activeEvents,
+      visibleEvents,
+      documentUri: document.uri.toString(),
+    };
+  });
   vscode.commands.registerCommand('selftest.node.dialogProbe', async () => {
     const openUris = await vscode.window.showOpenDialog({
       title: 'Open fixture',
@@ -30847,6 +30897,15 @@ process.stdin.resume();
                         "selftest.node.clipboardProbe")
                 except Exception as exc:
                     node_clipboard_probe = {"_error": str(exc)}
+                node_text_editor_command_registered = _wait_until(
+                    lambda: "selftest.node.textEditorProbe"
+                    in api._ext_host.commands.list_commands(),
+                    timeout=3.0)
+                try:
+                    node_text_editor_probe = api._ext_host.commands.execute(
+                        "selftest.node.textEditorProbe")
+                except Exception as exc:
+                    node_text_editor_probe = {"_error": str(exc)}
                 node_status_bar_command_registered = _wait_until(
                     lambda: "selftest.node.statusBarMessageProbe"
                     in api._ext_host.commands.list_commands(),
@@ -34782,6 +34841,29 @@ process.stdin.resume();
                            "probe": node_clipboard_probe,
                            "events": node_ui_bridge.clipboard_events,
                        }, ensure_ascii=False, default=str))
+                _check("node host text editor state tracks showTextDocument",
+                       node_started is True
+                       and node_text_editor_command_registered
+                       and isinstance(node_text_editor_probe, dict)
+                       and node_text_editor_probe.get("beforeActive") is False
+                       and node_text_editor_probe.get("beforeVisible") == 0
+                       and node_text_editor_probe.get("activeAfterShow") is True
+                       and node_text_editor_probe.get("visibleAfterShow") is True
+                       and node_text_editor_probe.get("selectionLine") == 1
+                       and node_text_editor_probe.get("viewColumn") == 2
+                       and node_text_editor_probe.get("shownText")
+                       == "ALPHA\\nbeta"
+                       and node_text_editor_probe.get("activeAfterHide") is False
+                       and node_text_editor_probe.get("visibleAfterHide") == 0
+                       and len(node_text_editor_probe.get(
+                           "activeEvents", [])) >= 2
+                       and any(
+                           node_text_editor_probe.get("documentUri")
+                           in visible
+                           for visible in node_text_editor_probe.get(
+                               "visibleEvents", [])),
+                       json.dumps(node_text_editor_probe,
+                                  ensure_ascii=False, default=str))
                 _check("node host status bar messages use dynamic UI bridge",
                        node_started is True
                        and node_status_bar_command_registered

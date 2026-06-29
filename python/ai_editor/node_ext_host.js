@@ -2715,6 +2715,10 @@ const _onDidOpenTextDocumentEmitter = new EventEmitter();
 const _onDidCloseTextDocumentEmitter = new EventEmitter();
 const _onDidChangeTextDocumentEmitter = new EventEmitter();
 const _onDidSaveTextDocumentEmitter = new EventEmitter();
+const _onDidChangeActiveTextEditorEmitter = new EventEmitter();
+const _onDidChangeVisibleTextEditorsEmitter = new EventEmitter();
+let _activeTextEditor = undefined;
+const _visibleTextEditors = new Map(); // uri -> TextEditor-like object
 const _onDidChangeLmToolsEmitter = new EventEmitter();
 const _onDidChangeLmChatModelsEmitter = new EventEmitter();
 const _workspaceRoot = path.resolve(process.cwd());
@@ -2816,6 +2820,127 @@ function _languageProviderResolveSupport(kind, provider) {
 
 function _workspaceDocumentIsOpened(document) {
     return !!document && document.__opened !== false;
+}
+
+function _normalizeViewColumn(value) {
+    const raw = Number(value);
+    if (!Number.isFinite(raw)) return 1;
+    if (raw === -2) return 2;
+    return raw > 0 ? raw : 1;
+}
+
+function _showTextDocumentOptions(options) {
+    if (typeof options === 'number') return { viewColumn: _normalizeViewColumn(options) };
+    if (!options || typeof options !== 'object') return { viewColumn: 1 };
+    return {
+        viewColumn: _normalizeViewColumn(options.viewColumn),
+        preserveFocus: !!options.preserveFocus,
+        preview: options.preview !== false,
+        selection: options.selection ? _rangeFromPayload(options.selection) : undefined,
+    };
+}
+
+function _createTextEditor(document, options) {
+    const showOptions = _showTextDocumentOptions(options);
+    const initialSelection = showOptions.selection
+        ? new Selection(showOptions.selection.start, showOptions.selection.end)
+        : new Selection(new Position(0, 0), new Position(0, 0));
+    return {
+        document,
+        viewColumn: showOptions.viewColumn,
+        options: {
+            tabSize: 4,
+            insertSpaces: true,
+        },
+        selections: [initialSelection],
+        get selection() { return this.selections[0]; },
+        set selection(value) {
+            const range = value instanceof Range ? value : _rangeFromPayload(value);
+            this.selections = [new Selection(range.start, range.end)];
+        },
+        visibleRanges: [],
+        edit(callback) {
+            if (typeof callback !== 'function') return Promise.resolve(false);
+            const edit = {
+                _edits: [],
+                replace(uri, range, text) { this._edits.push({ uri, range, text }); },
+                insert(uri, pos, text) {
+                    this._edits.push({ uri, range: new Range(pos, pos), text });
+                },
+                delete(uri, range) { this._edits.push({ uri, range, text: '' }); },
+            };
+            const builder = {
+                replace: (range, text) => edit.replace(document.uri, range, text),
+                insert: (position, text) => edit.insert(document.uri, position, text),
+                delete: (range) => edit.delete(document.uri, range),
+            };
+            callback(builder);
+            return _workspaceApplyEdit(edit);
+        },
+        insertSnippet(snippet, location) {
+            const text = snippet && snippet.value !== undefined
+                ? String(snippet.value)
+                : String(snippet ?? '');
+            const target = location instanceof Range
+                ? location
+                : new Range(location || this.selection.start, location || this.selection.start);
+            const edit = { _edits: [{ uri: document.uri, range: target, text }] };
+            return _workspaceApplyEdit(edit);
+        },
+        revealRange(range) {
+            const normalized = range instanceof Range ? range : _rangeFromPayload(range);
+            this.visibleRanges = [normalized];
+        },
+        show() { return _showTextDocumentEditor(document, showOptions); },
+        hide() {
+            const key = document.uri.toString();
+            if (_visibleTextEditors.get(key) === this) {
+                _visibleTextEditors.delete(key);
+                if (_activeTextEditor === this) {
+                    _activeTextEditor = undefined;
+                    _onDidChangeActiveTextEditorEmitter.fire(undefined);
+                }
+                _onDidChangeVisibleTextEditorsEmitter.fire(
+                    Array.from(_visibleTextEditors.values()));
+            }
+        },
+    };
+}
+
+function _showTextDocumentEditor(document, options) {
+    if (!document || !document.uri) return Promise.resolve(undefined);
+    const key = document.uri.toString();
+    const showOptions = _showTextDocumentOptions(options);
+    let editor = _visibleTextEditors.get(key);
+    if (!editor || editor.document !== document) {
+        editor = _createTextEditor(document, showOptions);
+        _visibleTextEditors.set(key, editor);
+        _onDidChangeVisibleTextEditorsEmitter.fire(
+            Array.from(_visibleTextEditors.values()));
+    } else {
+        editor.viewColumn = showOptions.viewColumn;
+        if (showOptions.selection) {
+            editor.selection = showOptions.selection;
+        }
+    }
+    if (!showOptions.preserveFocus && _activeTextEditor !== editor) {
+        _activeTextEditor = editor;
+        _onDidChangeActiveTextEditorEmitter.fire(editor);
+    }
+    return Promise.resolve(editor);
+}
+
+async function _windowShowTextDocument(documentOrUri, columnOrOptions, preserveFocus) {
+    const document = documentOrUri && documentOrUri.uri
+        ? documentOrUri
+        : await _workspaceOpenTextDocument(documentOrUri);
+    const options = typeof columnOrOptions === 'object'
+        ? columnOrOptions
+        : {
+            viewColumn: columnOrOptions,
+            preserveFocus: preserveFocus === true,
+        };
+    return _showTextDocumentEditor(document, options);
 }
 
 function _workspacePromoteTextDocument(document) {
@@ -7707,6 +7832,16 @@ function _workspaceCloseTextDocument(uriOrDoc) {
     const doc = _workspaceTextDocuments.get(key);
     if (!doc) return undefined;
     _workspaceTextDocuments.delete(key);
+    const editor = _visibleTextEditors.get(key);
+    if (editor) {
+        _visibleTextEditors.delete(key);
+        if (_activeTextEditor === editor) {
+            _activeTextEditor = undefined;
+            _onDidChangeActiveTextEditorEmitter.fire(undefined);
+        }
+        _onDidChangeVisibleTextEditorsEmitter.fire(
+            Array.from(_visibleTextEditors.values()));
+    }
     if (_workspaceDocumentIsOpened(doc)) _onDidCloseTextDocumentEmitter.fire(doc);
     return doc;
 }
@@ -7966,8 +8101,11 @@ async function _workspaceApplyEdit(edit) {
             continue;
         }
         const uri = _workspaceEditUri(entry);
-        if (!uri || uri.scheme !== 'file' || !entry.range) return false;
+        if (!uri || !entry.range) return false;
         const key = uri.toString();
+        if (uri.scheme !== 'file' && !_workspaceTextDocuments.has(key)) {
+            return false;
+        }
         if (!grouped.has(key)) grouped.set(key, { uri, edits: [] });
         grouped.get(key).edits.push({
             range: _rangeFromPayload(entry.range),
@@ -10223,6 +10361,10 @@ function buildVscodeModule(extDesc, extensionPath, storageRoot) {
                 subscriptions.push(disposable);
                 return disposable;
             },
+            showTextDocument(documentOrUri, columnOrOptions, preserveFocus) {
+                return _windowShowTextDocument(
+                    documentOrUri, columnOrOptions, preserveFocus);
+            },
             createTerminal(nameOrOptions, shellPath, shellArgs) {
                 return _createTerminal(nameOrOptions, shellPath, shellArgs);
             },
@@ -10300,11 +10442,11 @@ function buildVscodeModule(extDesc, extensionPath, storageRoot) {
             onDidEndTerminalShellExecution: _onDidEndTerminalShellExecutionEmitter.event,
             get state() { return { ..._windowState }; },
             onDidChangeWindowState: _onDidChangeWindowStateEmitter.event,
-            get activeTextEditor() { return undefined; },
-            get visibleTextEditors() { return []; },
+            get activeTextEditor() { return _activeTextEditor; },
+            get visibleTextEditors() { return Array.from(_visibleTextEditors.values()); },
             get activeColorTheme() { return { kind: 2 }; }, // Dark
-            onDidChangeActiveTextEditor: new EventEmitter().event,
-            onDidChangeVisibleTextEditors: new EventEmitter().event,
+            onDidChangeActiveTextEditor: _onDidChangeActiveTextEditorEmitter.event,
+            onDidChangeVisibleTextEditors: _onDidChangeVisibleTextEditorsEmitter.event,
             onDidChangeActiveColorTheme: new EventEmitter().event,
             get tabGroups() {
                 return { all: [], activeTabGroup: { tabs: [], isActive: true, viewColumn: 1 }, onDidChangeTabGroups: new EventEmitter().event, onDidChangeTabs: new EventEmitter().event, close: () => Promise.resolve() };
