@@ -14473,6 +14473,11 @@ console.log("extension setting schema helpers ok");
            and "let extensionRuntimeTaskProblems=[];" in html
            and "let extensionRuntimeDebugConsoleEntries=[];" in html
            and "function extensionRuntimeTaskProblemRows(record,result)" in html
+           and "raw.stdout,raw.stderr,raw.output,raw.text" in html
+           and "const line=String(lines[startIndex+consumed]||'');" in html
+           and "const match=regexp.exec(line);" in html
+           and "const loopLine=String(lines[startIndex+consumed]||'');" in html
+           and "const loopMatch=regexp.exec(loopLine);" in html
            and "function extensionRuntimeTaskProblemMatcherRows(record,result)" in html
            and "function extensionRuntimeTaskProblemLocationParts(value)" in html
            and "function extensionRuntimeTaskProblemMatcherSequenceRows(record,matcher,patterns,lines,startIndex)" in html
@@ -14569,6 +14574,12 @@ console.log("extension setting schema helpers ok");
            and "snapshot.runtimeTaskProblemCodes.some(value=>value.includes('ML900'))" in html
            and "snapshot.runtimeTaskRunProblemCounts.some(value=>value>=3)" in html
            and "runtimeActionSmoke.debugPrompt=$('chat-input')?$('chat-input').value:'';" in html
+           and "activateBottomPanelTab(document.querySelector('.ptab[data-ptab=\"debug-console\"]'));" in html
+           and "renderExtensionRuntimeDebugConsole();" in html
+           and "if(bottomDebugFilter)bottomDebugFilter.value='';" in html
+           and "renderBottomDebugConsole();" in html
+           and "if(bottomDebugInput)bottomDebugInput.focus({preventScroll:true});" in html
+           and "document.activeElement===bottomDebugInput||bottomDebugInput.isConnected" in html
            and "_terminals.filter(term=>term&&!previousTerminalIds.has(term.id)).map(term=>term.id).slice().forEach(id=>_closeTerminal(id));" in html
            and "showExtensionActionMenu(2,2" in html
            and "snapshot.pass=snapshot.containerRole==='group'" in html
@@ -14594,6 +14605,7 @@ console.log("extension setting schema helpers ok");
            and "runtimeWebviewQueuePrunedRows" in html
            and "runtimeWebviewQueuePrunedByBytesRows" in html
            and "webviewFlushDataset:!!root.querySelector('[data-webview-view-id=\"selftest.dynamic.webview\"][data-webview-flush-batch-count=\"1\"][data-webview-last-flush-batch-size=\"1\"]')" in html
+           and "||!!(runtimeList&&runtimeList.querySelector('[data-webview-view-id=\"selftest.dynamic.webview\"][data-webview-render-count=\"1\"][data-webview-reveal-count=\"1\"][data-webview-revive-count=\"1\"]'))" in html
            and "webviewAsWebviewUriReadyDataset:!!root.querySelector('[data-webview-view-id=\"selftest.dynamic.webview\"][data-webview-as-webview-uri-ready=\"1\"]')" in html
            and "webviewResourceEndpointReadyDataset:!!root.querySelector('[data-webview-view-id=\"selftest.dynamic.webview\"][data-webview-resource-endpoint-ready=\"1\"]')" in html
            and "webviewResourceMapReadyDataset:!!root.querySelector('[data-webview-view-id=\"selftest.dynamic.webview\"][data-webview-resource-map-ready=\"1\"]')" in html

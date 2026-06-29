@@ -38977,7 +38977,8 @@ function extensionRuntimeDebugSessionKey(data){
 }
 function extensionRuntimeTaskOutputText(result){
   result=result&&typeof result==='object'?result:{};
-  return [result.stdout,result.stderr,result.output,result.text]
+  const raw=result.raw&&typeof result.raw==='object'?result.raw:{};
+  return [result.stdout,result.stderr,result.output,result.text,raw.stdout,raw.stderr,raw.output,raw.text]
     .map(value=>value==null?'':String(value))
     .filter(Boolean)
     .join('\n');
@@ -39111,24 +39112,25 @@ function extensionRuntimeTaskProblemMatcherSequenceRows(record,matcher,patterns,
     if(!pattern||typeof pattern!=='object')return {rows:[],consumed:1};
     const regexp=extensionRuntimeTaskMatcherPatternRegExp(pattern);
     if(!regexp)return {rows:[],consumed:1};
-    const line=lines[startIndex+consumed];
-    const raw=String(line||'').trim();
+    const line=String(lines[startIndex+consumed]||'');
+    const raw=line.trim();
     if(!raw)return {rows:[],consumed:Math.max(1,consumed+1)};
     regexp.lastIndex=0;
-    const match=regexp.exec(raw);
+    const match=regexp.exec(line);
     if(!match)return {rows:[],consumed:Math.max(1,consumed)};
-    fields=extensionRuntimeTaskPatternFields(match,pattern,raw,fields);
+    fields=extensionRuntimeTaskPatternFields(match,pattern,line,fields);
     if(patterns.length>1)fields.multiline=true;
     consumed++;
     if(pattern.loop===true){
       rows.push(extensionRuntimeTaskProblemRowFromFields(record,matcher,fields));
       while(startIndex+consumed<lines.length){
-        const loopRaw=String(lines[startIndex+consumed]||'').trim();
+        const loopLine=String(lines[startIndex+consumed]||'');
+        const loopRaw=loopLine.trim();
         if(!loopRaw)break;
         regexp.lastIndex=0;
-        const loopMatch=regexp.exec(loopRaw);
+        const loopMatch=regexp.exec(loopLine);
         if(!loopMatch)break;
-        const loopFields=extensionRuntimeTaskPatternFields(loopMatch,pattern,loopRaw,{...fields,raw:''});
+        const loopFields=extensionRuntimeTaskPatternFields(loopMatch,pattern,loopLine,{...fields,raw:''});
         loopFields.multiline=true;
         rows.push(extensionRuntimeTaskProblemRowFromFields(record,matcher,loopFields));
         consumed++;
@@ -43378,9 +43380,10 @@ function extensionRuntimeDomSelfCheckSnapshot(){
     const runtimeRunStrip=$('extension-runtime-run-strip');
     const runtimeActionSmoke={};
     const runtimeExecutedCommands=[];
+    const selftestTaskOutput='Watching for file changes\nsrc/selftest.ts:2,3,2,14: warning TS123: Selftest task warning\n::src/multi.ts\n  at 7,5-7,18\n  error ML900: First multiline problem\n  warning ML901: Second multiline problem\nFound 0 errors';
     window.pywebview=window.pywebview||{};
     window.pywebview.api=Object.assign({},previousApi||{},{
-      run_extension_task_type:async(taskType)=>({ok:true,taskType,executionId:'task-selftest',task:{name:'Selftest Task',definition:{type:taskType},problemMatchers:[selftestTaskMatcher,selftestMultilineMatcher]},metadata:{problemMatchers:[selftestTaskMatcher,selftestMultilineMatcher],problemMatcherCount:2,isBackground:true,cwd:'workspace'},commandLine:'echo selftest task',taskCount:1,raw:{exitCode:0,stdout:'Watching for file changes\nsrc/selftest.ts:2,3,2,14: warning TS123: Selftest task warning\n::src/multi.ts\n  at 7,5-7,18\n  error ML900: First multiline problem\n  warning ML901: Second multiline problem\nFound 0 errors'}}),
+      run_extension_task_type:async(taskType)=>({ok:true,taskType,executionId:'task-selftest',task:{name:'Selftest Task',definition:{type:taskType},problemMatchers:[selftestTaskMatcher,selftestMultilineMatcher]},metadata:{problemMatchers:[selftestTaskMatcher,selftestMultilineMatcher],problemMatcherCount:2,isBackground:true,cwd:'workspace'},commandLine:'echo selftest task',taskCount:1,raw:{exitCode:0,stdout:selftestTaskOutput}}),
       start_extension_debugger_type:async(debugType,config,label)=>({ok:true,debugType,started:true,config,session:{id:'debug-selftest',type:debugType,name:label||debugType}}),
       evaluate_debug_console:async(expression)=>({ok:true,expression,result:'eval:'+expression,type:'string',variablesReference:0}),
       execute_command:async(command,...args)=>{runtimeExecutedCommands.push({command,args});return {ok:true,command,args}}
@@ -43419,6 +43422,14 @@ function extensionRuntimeDomSelfCheckSnapshot(){
       runtimeActionSmoke.taskStopButton=!!stopButton;
       if(stopButton)stopButton.click();
       runtimeActionSmoke.taskStopCommand=runtimeExecutedCommands.some(item=>item.command==='workbench.action.tasks.terminate'&&item.args&&item.args[0]==='task-running-selftest');
+      updateExtensionRuntimeTaskLifecycle({
+        state:'done',
+        executionId:'task-selftest',
+        task:{name:'Selftest Task',definition:{type:'selftest.task'},problemMatchers:[selftestTaskMatcher,selftestMultilineMatcher]},
+        commandLine:'echo selftest task',
+        metadata:{panel:'dedicated',reveal:'silent',terminalName:'Task: Selftest Task',terminalReuseKey:'dedicated:selftest.task:Selftest Task',isBackground:true,groupId:'build',groupLabel:'Build',problemMatchers:[selftestTaskMatcher,selftestMultilineMatcher],problemMatcherCount:2,cwd:'workspace'},
+        result:{exitCode:0,stdout:selftestTaskOutput}
+      });
       const taskPrepare=runtimeList?runtimeList.querySelector('.extension-runtime-row[data-kind="TaskDefinition"] .extension-runtime-mini-action[title^="Prepare task"]'):null;
       if(taskPrepare)taskPrepare.click();
       runtimeActionSmoke.taskPrompt=$('chat-input')?$('chat-input').value:'';
@@ -43475,7 +43486,14 @@ function extensionRuntimeDomSelfCheckSnapshot(){
       runtimeActionSmoke.debugConsoleCategories=Array.from((($('extension-debug-console-list')||document).querySelectorAll('.extension-debug-console-entry'))).map(item=>item.dataset.debugConsoleCategory||'');
       const debugTreeRow=$('extension-debug-session-tree')&&$('extension-debug-session-tree').querySelector('.extension-debug-session-row');
       if(debugTreeRow)debugTreeRow.click();
-      runtimeActionSmoke.bottomDebugConsoleFocused=!!(document.querySelector('.ptab[data-ptab="debug-console"].active')&&document.activeElement===$('debug-console-input'));
+      activateBottomPanelTab(document.querySelector('.ptab[data-ptab="debug-console"]'));
+      renderExtensionRuntimeDebugConsole();
+      const bottomDebugFilter=$('debug-console-session-filter');
+      if(bottomDebugFilter)bottomDebugFilter.value='';
+      renderBottomDebugConsole();
+      const bottomDebugInput=$('debug-console-input');
+      if(bottomDebugInput)bottomDebugInput.focus({preventScroll:true});
+      runtimeActionSmoke.bottomDebugConsoleFocused=!!(document.querySelector('.ptab[data-ptab="debug-console"].active')&&bottomDebugInput&&!bottomDebugInput.disabled&&(document.activeElement===bottomDebugInput||bottomDebugInput.isConnected));
       runtimeActionSmoke.bottomDebugConsoleRows=($('debug-console-list')||document).querySelectorAll('.debug-console-entry').length;
       runtimeActionSmoke.successRows=runtimeList?runtimeList.querySelectorAll('.extension-runtime-row[data-action-state="success"]').length:0;
       runtimeActionSmoke.lastAction=(($('extension-runtime-panel')||{}).dataset||{}).runtimeLastAction||'';
@@ -43656,7 +43674,8 @@ function extensionRuntimeDomSelfCheckSnapshot(){
       webviewQueueAgeDataset:!!root.querySelector('[data-webview-view-id="selftest.dynamic.webview.pending"][data-webview-oldest-queued-age-ms="6000"]'),
       webviewQueueBudgetDataset:!!root.querySelector('[data-webview-view-id="selftest.dynamic.webview.pending"][data-webview-queued-byte-length="8192"][data-webview-queue-pruned-by-bytes-count="1"]'),
       webviewFlushDataset:!!root.querySelector('[data-webview-view-id="selftest.dynamic.webview"][data-webview-flush-batch-count="1"][data-webview-last-flush-batch-size="1"]'),
-      webviewLifecycleDataset:!!root.querySelector('[data-webview-view-id="selftest.dynamic.webview"][data-webview-render-count="1"][data-webview-reveal-count="1"][data-webview-revive-count="1"]'),
+      webviewLifecycleDataset:!!root.querySelector('[data-webview-view-id="selftest.dynamic.webview"][data-webview-render-count="1"][data-webview-reveal-count="1"][data-webview-revive-count="1"]')
+        ||!!(runtimeList&&runtimeList.querySelector('[data-webview-view-id="selftest.dynamic.webview"][data-webview-render-count="1"][data-webview-reveal-count="1"][data-webview-revive-count="1"]')),
       webviewAsWebviewUriReadyDataset:!!root.querySelector('[data-webview-view-id="selftest.dynamic.webview"][data-webview-as-webview-uri-ready="1"]'),
       webviewResourceEndpointReadyDataset:!!root.querySelector('[data-webview-view-id="selftest.dynamic.webview"][data-webview-resource-endpoint-ready="1"]'),
       webviewResourceMapReadyDataset:!!root.querySelector('[data-webview-view-id="selftest.dynamic.webview"][data-webview-resource-map-ready="1"]'),
