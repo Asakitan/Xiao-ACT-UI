@@ -1343,7 +1343,7 @@ pre.code-block code .type { color:var(--fg-type); }
 .chat-control-strip { display:flex; align-items:center; gap:6px; flex:0 0 auto; flex-wrap:nowrap; min-width:max-content;
   overflow:visible; width:max-content; max-width:none;
   --chat-provider-width:128px;
-  --chat-model-width:220px;
+  --chat-model-width:76px;
   --chat-agent-width:140px;
   --chat-workflow-width:144px; }
 .chat-chip,.chat-select-chip,.chat-model-inline,.chat-run-chip { height:22px; border:1px solid var(--border);
@@ -1352,7 +1352,7 @@ pre.code-block code .type { color:var(--fg-type); }
 .chat-chip,.chat-model-inline,.chat-run-chip { display:inline-flex; align-items:center; gap:4px; padding:0 8px; cursor:pointer;
   transition:border-color .14s ease, background .14s ease, color .14s ease, box-shadow .14s ease; }
 .chat-select-chip { width:150px; max-width:208px; padding:0 9px; cursor:pointer; flex:0 1 150px; }
-.chat-model-inline { width:100%; max-width:none; justify-content:space-between; font-family:var(--mono); flex:1 1 var(--chat-model-width); text-align:left; }
+.chat-model-inline { width:var(--chat-model-width); max-width:var(--chat-model-width); justify-content:space-between; font-family:var(--mono); flex:0 0 var(--chat-model-width); text-align:left; }
 .chat-model-inline .control-label { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .chat-model-inline .control-caret { font-size:8px; opacity:.65; margin-left:4px; flex:0 0 auto; }
 .chat-chip:hover,.chat-select-chip:hover,.chat-model-inline:hover,.chat-run-chip:hover,
@@ -1363,7 +1363,7 @@ pre.code-block code .type { color:var(--fg-type); }
 .chat-select-chip.agent.active { color:var(--fg); border-color:color-mix(in srgb, var(--fg-success) 45%, var(--border)); }
 .chat-control-menu { position:relative; display:inline-flex; align-items:center; flex:0 0 auto; min-width:0; align-self:stretch; z-index:3; }
 #chat-provider-menu { width:var(--chat-provider-width); flex-basis:var(--chat-provider-width); }
-#chat-model-menu { flex:1 1 var(--chat-model-width); min-width:var(--chat-model-width); }
+#chat-model-menu { width:var(--chat-model-width); flex:0 0 var(--chat-model-width); min-width:var(--chat-model-width); }
 .chat-control-native { display:none!important; visibility:hidden!important; position:absolute!important; inset:0 auto auto 0!important; width:0!important; height:0!important; opacity:0!important; pointer-events:none!important; appearance:none; -webkit-appearance:none; }
 .chat-control-trigger { display:inline-flex; align-items:center; gap:4px; justify-content:space-between; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;
   width:100%; min-height:22px; border-radius:999px!important; background:color-mix(in srgb,var(--bg3) 88%,#000); appearance:none!important; -webkit-appearance:none!important;
@@ -1379,7 +1379,7 @@ pre.code-block code .type { color:var(--fg-type); }
 .chat-control-trigger .control-label { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .chat-control-trigger .control-caret { font-size:8px; opacity:.82; margin-left:4px; flex:0 0 auto; color:var(--fg-dim); }
 .chat-control-trigger.provider { width:var(--chat-provider-width); min-width:var(--chat-provider-width); max-width:var(--chat-provider-width); flex:0 0 var(--chat-provider-width); }
-.chat-control-trigger.model { width:100%; min-width:var(--chat-model-width); max-width:none; flex:1 1 var(--chat-model-width); }
+.chat-control-trigger.model { width:var(--chat-model-width); min-width:var(--chat-model-width); max-width:var(--chat-model-width); flex:0 0 var(--chat-model-width); }
 .chat-control-trigger.agent { width:var(--chat-agent-width); min-width:var(--chat-agent-width); max-width:var(--chat-agent-width); flex:0 0 var(--chat-agent-width); }
 .chat-control-trigger.mode { width:92px; min-width:88px; max-width:120px; flex:0 0 92px; color:var(--fg-accent);
   border-color:color-mix(in srgb, var(--border-focus) 50%, var(--border)); }
@@ -12520,7 +12520,7 @@ function assistantVisualLayoutSnapshot(){
     nativeBoxes,
     noOldNativeBoxes:nativeBoxes.every(item=>item.exists&&item.display==='none'&&item.ariaHidden==='true'&&item.inert===true&&item.width===0&&item.height===0),
     triggerWidths:triggerWidthMap,
-    controlWidthsReady:!!(triggerWidthMap['chat-provider-trigger']>=128&&triggerWidthMap['chat-model-inline']>=220&&triggerWidthMap['chat-agent-trigger']>=140&&triggerWidthMap['chat-workflow-trigger']>=144),
+    controlWidthsReady:!!(triggerWidthMap['chat-provider-trigger']>=128&&triggerWidthMap['chat-model-inline']>=76&&triggerWidthMap['chat-model-inline']<=90&&triggerWidthMap['chat-agent-trigger']>=140&&triggerWidthMap['chat-workflow-trigger']>=144),
     popups:popupSnapshots,
     popupsCustomSurface:popupSnapshots.every(item=>item.customSurface&&item.shown&&item.display==='block'&&item.pointerEvents==='auto'),
     popupsOpenAbove:popupSnapshots.every(item=>item.rectReady&&item.opensAboveTrigger&&item.notToolbarClipped),
