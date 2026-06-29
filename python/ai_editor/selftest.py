@@ -5203,17 +5203,17 @@ def test_phase1_ai_editor_regressions() -> None:
             and "renderWelcome();\n  setStatus(t('new_chat_title')" in html
             and "const body=latestChatMessageBody('assistant');" in html)
     _check("frontend Assistant composer keeps normal-width controls in one row",
-           ".chat-toolbar { display:grid; grid-template-columns:max-content max-content; align-items:center; column-gap:8px; row-gap:0;" in html
+           ".chat-toolbar { display:grid; grid-template-columns:max-content minmax(320px,1fr); align-items:center; column-gap:10px; row-gap:0;" in html
             and "border-top:1px solid color-mix(in srgb, var(--border) 55%, transparent);" in html
             and "min-width:0; overflow:visible; white-space:nowrap; min-height:29px; flex-wrap:nowrap;" in html
             and ".chat-toolbar .spacer { display:none; }" in html
              and ".chat-control-strip { display:flex; align-items:center; gap:6px; flex:0 0 auto; flex-wrap:nowrap; min-width:max-content;" in html
              and "overflow:visible; width:max-content; max-width:none;" in html
-             and "--chat-provider-width:128px;" in html
-            and "--chat-model-width:38px;" in html
+             and "--chat-provider-width:132px;" in html
+            and "--chat-model-width:76px;" in html
             and "width:11%;min-width:36px;max-width:44px" in html
-            and "--chat-agent-width:140px;" in html
-            and "--chat-workflow-width:144px;" in html
+            and "--chat-agent-width:148px;" in html
+            and "--chat-workflow-width:150px;" in html
              and "appearance:none; -webkit-appearance:none; line-height:20px;" in html
              and ".chat-select-chip { width:150px; max-width:208px; padding:0 9px; cursor:pointer; flex:0 1 150px; }" in html
              and ".chat-model-inline { width:var(--chat-model-width); min-width:var(--chat-model-width); max-width:var(--chat-model-width); inline-size:var(--chat-model-width); min-inline-size:var(--chat-model-width); max-inline-size:var(--chat-model-width); box-sizing:border-box; justify-content:space-between; font-family:var(--mono); flex:0 0 var(--chat-model-width); flex-basis:var(--chat-model-width); text-align:left; padding-inline:4px; gap:2px; }" in html
@@ -5230,11 +5230,11 @@ def test_phase1_ai_editor_regressions() -> None:
             and "#chat-workflow-menu { width:var(--chat-workflow-width); flex-basis:var(--chat-workflow-width); }" in html
             and ".chat-control-popup.model { min-width:320px; }" in html
             and ".chat-control-popup.workflow { min-width:340px; }" in html
-            and ".chat-composer-trailing { display:flex; align-items:center; justify-content:flex-end; gap:4px;" in html
-            and "margin-left:auto; flex:0 0 auto; min-width:max-content; width:max-content; flex-wrap:nowrap; overflow:hidden; white-space:nowrap;" in html
-            and ".chat-composer-meta { display:flex; align-items:center; justify-content:flex-end; gap:5px; min-width:0; max-width:142px; flex:0 1 142px;" in html
-            and "color:var(--fg-dim); white-space:nowrap; overflow:hidden;" in html
-            and ".chat-session-chip { max-width:76px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;" in html
+            and ".chat-composer-trailing { display:flex; align-items:center; justify-content:flex-end; gap:5px;" in html
+            and "margin-left:auto; flex:1 1 auto; min-width:0; width:100%; flex-wrap:nowrap; overflow:visible; white-space:nowrap;" in html
+            and ".chat-composer-meta { display:flex; align-items:center; justify-content:flex-end; gap:6px; min-width:218px; max-width:none; flex:0 0 auto;" in html
+            and "color:var(--fg-dim); white-space:nowrap; overflow:visible;" in html
+            and ".chat-session-chip { max-width:116px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;" in html
             and ".ctx-bar { width:30px; height:6px;" in html
             and ".ctx-ring { width:16px; height:16px; flex:0 0 16px; border-radius:50%;" in html
            and '<div class="chat-toolbar" role="toolbar" aria-label="Assistant composer">' in html
@@ -5367,7 +5367,7 @@ def test_phase1_ai_editor_regressions() -> None:
            and "agentPopup.onkeydown=e=>handleChatControlPopupKeydown(e,'agent');" in html
            and "window.selectAgentFromPopup=selectAgentFromPopup;" in html)
     _check("frontend Assistant control popups avoid clipped native dropdowns",
-           ".chat-toolbar { display:grid; grid-template-columns:max-content max-content;" in html
+           ".chat-toolbar { display:grid; grid-template-columns:max-content minmax(320px,1fr);" in html
            and "min-width:0; overflow:visible; white-space:nowrap; min-height:29px;" in html
            and ".chat-control-strip { display:flex; align-items:center; gap:6px; flex:0 0 auto; flex-wrap:nowrap; min-width:max-content;" in html
            and "overflow:visible; width:max-content; max-width:none;" in html
@@ -6703,7 +6703,7 @@ def test_phase1_ai_editor_regressions() -> None:
             and "inputThreeLineHeight:!!(container&&container.querySelector('.chat-input')&&container.querySelector('.chat-input').getBoundingClientRect().height>=72)" in html
             and "assistantUiSelfCheckRecord(checks,'visual-controls-one-row-ready'" in html
             and "assistantUiSelfCheckRecord(checks,'visual-control-widths-ready'" in html
-           and "controlWidthsReady:!!(triggerWidthMap['chat-provider-trigger']>=128&&triggerWidthMap['chat-model-inline']>=36&&triggerWidthMap['chat-model-inline']<=42&&triggerWidthMap['chat-agent-trigger']>=140&&triggerWidthMap['chat-workflow-trigger']>=144)" in html
+           and "controlWidthsReady:!!(triggerWidthMap['chat-provider-trigger']>=132&&triggerWidthMap['chat-model-inline']>=74&&triggerWidthMap['chat-model-inline']<=80&&triggerWidthMap['chat-agent-trigger']>=148&&triggerWidthMap['chat-workflow-trigger']>=150)" in html
             and "assistantUiSelfCheckRecord(checks,'visual-composer-extra-rows-hidden-ready'" in html
             and "assistantUiSelfCheckRecord(checks,'visual-model-chip-removed-ready'" in html
             and "assistantUiSelfCheckRecord(checks,'visual-content-window-ring-ready'" in html
@@ -15979,6 +15979,7 @@ console.log("command palette quick access helpers ok");
            and "data-terminal-diagnostic=\"output\"" in html
            and "data-terminal-diagnostic=\"stdin\"" in html
            and "data-terminal-diagnostic=\"shell\"" in html
+           and "data-terminal-diagnostic=\"scrollback\"" in html
            and "data-terminal-diagnostic=\"pid\"" in html
            and "data-terminal-diagnostic=\"session\"" in html
            and "data-terminal-diagnostic=\"cwd-source\"" in html
@@ -15992,10 +15993,20 @@ console.log("command palette quick access helpers ok");
             and "function _terminalContextMeta(meta)" in html
             and "function _updateTerminalContextBar(meta,state)" in html
            and "function _terminalOutputStats(out)" in html
+           and "const _TERM_OUTPUT_NODE_LIMIT=1600;" in html
+           and "const _TERM_OUTPUT_CHAR_LIMIT=220000;" in html
+           and "const _terminalAppendStats={flushes:0,trimmedNodes:0,trimmedChars:0,lastFlushMs:0,lastTarget:''};" in html
+           and "function _terminalOutputRoot(el)" in html
+           and "function _markTerminalOutputBounded(root,trimmedNodes,trimmedChars,flushMs,target)" in html
+           and "function terminalOutputPerformanceSelfCheckSnapshot()" in html
+           and "window.terminalOutputPerformanceSelfCheckSnapshot=terminalOutputPerformanceSelfCheckSnapshot" in html
            and "function _setTerminalDiagnosticPill(host,kind,label,value,state,title)" in html
            and "function _updateTerminalDiagnostics(meta,state)" in html
            and "strip.dataset.outputLines=String(outputLines);" in html
            and "strip.dataset.outputBytes=String(outputBytes);" in html
+           and "strip.dataset.outputBounded=out&&out.dataset?String(out.dataset.terminalOutputBounded||'0'):'0';" in html
+           and "strip.dataset.outputFlushes=out&&out.dataset?String(out.dataset.terminalOutputFlushes||'0'):'0';" in html
+           and "strip.dataset.trimmedNodes=out&&out.dataset?String(out.dataset.terminalTrimmedNodes||'0'):'0';" in html
            and "strip.dataset.stdinBytes=String(stdinBytes);" in html
            and "strip.dataset.jobId=jobId;" in html
            and "strip.dataset.processId=runtime.pid;" in html
@@ -16019,6 +16030,9 @@ console.log("command palette quick access helpers ok");
             and "data-terminal-context-action=\"switch-workspace\"" in html
             and "data-terminal-context-action=\"copy-cwd\"" in html
             and "data-terminal-context-action=\"reuse-cwd\"" in html
+            and "outputBounded:diagnostics&&diagnostics.dataset?diagnostics.dataset.outputBounded==='1':false" in html
+            and "trimmedNodes:Number(diagnostics&&diagnostics.dataset&&diagnostics.dataset.trimmedNodes||0)||0" in html
+            and "performanceSnapshot" in html
             and "line.dataset.profile=profile" in html
             and "line.dataset.shellKind=String(meta.shellKind||'')" in html
             and "line.dataset.jobId=jobId;" in html
@@ -16088,12 +16102,12 @@ console.log("command palette quick access helpers ok");
             and "diagnosticsOutputLines" in html
             and "diagnosticsHistoryCount" in html
             and "diagnosticsTruncated==='1'" in html
-            and "diagnosticsHealth==='warn'" in html
+            and "['warn','ok'].includes(snapshot.diagnosticsHealth)" in html
             and "diagnosticsRunnable==='1'" in html
             and "protectedSyncDecision==='protected-running'" in html
             and "runtimeSnapshot.workspaceSync.protected>=1" in html
             and "runtimeSnapshot.blocks.some(block=>block.command==='slow-command'" in html
-            and "['run','job','cwd','profile','shell','pid','session','cwd-source','profile-source','shell-integration','encoding','exit','stdin','output','history'].every" in html
+            and "['run','job','cwd','profile','shell','pid','session','cwd-source','profile-source','shell-integration','encoding','exit','stdin','output','scrollback','history'].every" in html
             and "commandCwdDataset.includes('E:/VC/SAO-UI/sao_auto')" in html
             and "commandActionCount>=15" in html
             and "selectorValue" in html
@@ -16547,6 +16561,18 @@ console.log("frontend built-in language fallback behavior ok");
            and "window.terminalWorkspaceSyncSnapshot=terminalWorkspaceSyncSnapshot" in html
            and "ws.resolved_root||ws.root||ws.last_root" in html
            and "workspace-switcher-source" in html
+           and "role=\"listbox\" aria-label=\"Workspace candidates\"" in html
+           and "function workspaceSwitcherFocusIndex(index,opts)" in html
+           and "function workspaceSwitcherMoveFocus(delta)" in html
+           and "function workspaceSwitcherChooseFocused()" in html
+           and "window.workspaceSwitcherFocusIndex=workspaceSwitcherFocusIndex" in html
+           and "window.workspaceSwitcherMoveFocus=workspaceSwitcherMoveFocus" in html
+           and "window.workspaceSwitcherChooseFocused=workspaceSwitcherChooseFocused" in html
+           and "list.dataset.workspaceKeyboardReady='1';" in html
+           and "btn.setAttribute('role','option');" in html
+           and "btn.setAttribute('aria-selected',active?'true':'false');" in html
+           and "workspaceSwitcherMoveFocus(1)" in html
+           and "workspaceSwitcherChooseFocused()" in html
            and "dataset.workspaceSource" in html
            and "_lastTerminalWorkspaceRoot" in html
            and "_lastTerminalWorkspaceSync" in html
@@ -16556,6 +16582,8 @@ console.log("frontend built-in language fallback behavior ok");
            and "terminalSyncCwd" in html
            and "terminalSyncStatusWorkspaceCwd" in html
            and "terminalSyncContextWorkspaceCwd" in html
+           and "keyboardReady" in html
+           and "movedFocusedRoots" in html
            and "recent_roots" in html
            and "s-workspace-root" in html
            and "s-workspace-auto" in html

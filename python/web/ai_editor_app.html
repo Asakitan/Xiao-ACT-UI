@@ -163,6 +163,7 @@ body.window-resizing * { cursor:inherit !important; }
   padding:5px 6px; border-radius:4px; cursor:pointer; font:11px var(--mono); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .workspace-switcher-item:hover,.workspace-switcher-item:focus { background:var(--bg-hover); color:var(--fg); outline:none; }
 .workspace-switcher-item.active { color:var(--fg); background:var(--bg3); }
+.workspace-switcher-item.focused { color:var(--fg); background:color-mix(in srgb,var(--bg-hover) 76%,var(--bg3)); box-shadow:inset 0 0 0 1px color-mix(in srgb,var(--border-focus) 54%,transparent); }
 .workspace-switcher-source { color:var(--fg-dim); font:10px var(--sans); margin-left:6px; }
 .workspace-switcher-empty { color:var(--fg-dim); font:11px var(--sans); padding:2px 0; }
 .sb-item { padding:4px 16px; cursor:pointer; display:flex; align-items:center; gap:6px;
@@ -1223,14 +1224,14 @@ pre.code-block code .type { color:var(--fg-type); }
 .chat-input-container.sendable .send-btn:not(:disabled) { box-shadow:0 0 0 1px color-mix(in srgb, var(--btn) 35%, transparent); }
 .chat-input-container.streaming .send-btn { background:var(--fg-error); }
 .send-btn svg { width:14px; height:14px; }
-.chat-toolbar { display:grid; grid-template-columns:max-content max-content; align-items:center; column-gap:8px; row-gap:0;
+.chat-toolbar { display:grid; grid-template-columns:max-content minmax(320px,1fr); align-items:center; column-gap:10px; row-gap:0;
   padding:0 8px 7px; font-size:11px;
   border-top:1px solid color-mix(in srgb, var(--border) 55%, transparent);
   min-width:0; overflow:visible; white-space:nowrap; min-height:29px; flex-wrap:nowrap; }
 .chat-toolbar > * { min-width:0; }
 .chat-toolbar .hint { color:var(--fg-dim); }
 .chat-toolbar .spacer { display:none; }
-.chat-session-chip { max-width:76px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;
+.chat-session-chip { max-width:116px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;
   color:var(--fg-dim); font:10px/18px var(--mono); }
 
 .chat-attached-context { display:flex; flex-wrap:wrap; gap:5px; padding:0 8px 6px; }
@@ -1364,10 +1365,10 @@ pre.code-block code .type { color:var(--fg-type); }
 
 .chat-control-strip { display:flex; align-items:center; gap:6px; flex:0 0 auto; flex-wrap:nowrap; min-width:max-content;
   overflow:visible; width:max-content; max-width:none;
-  --chat-provider-width:128px;
-  --chat-model-width:38px;
-  --chat-agent-width:140px;
-  --chat-workflow-width:144px; }
+  --chat-provider-width:132px;
+  --chat-model-width:76px;
+  --chat-agent-width:148px;
+  --chat-workflow-width:150px; }
 .chat-chip,.chat-select-chip,.chat-model-inline,.chat-run-chip { height:22px; border:1px solid var(--border);
   border-radius:999px; background:color-mix(in srgb,var(--bg3) 88%,#000); color:var(--fg); font:11px var(--sans);
   outline:none; min-width:0; box-sizing:border-box; appearance:none; -webkit-appearance:none; line-height:20px; }
@@ -1403,7 +1404,7 @@ pre.code-block code .type { color:var(--fg-type); }
 .chat-control-trigger.provider { width:var(--chat-provider-width); min-width:var(--chat-provider-width); max-width:var(--chat-provider-width); flex:0 0 var(--chat-provider-width); }
 .chat-control-trigger.model { width:var(--chat-model-width)!important; min-width:var(--chat-model-width)!important; max-width:var(--chat-model-width)!important; inline-size:var(--chat-model-width)!important; min-inline-size:var(--chat-model-width)!important; max-inline-size:var(--chat-model-width)!important; flex:0 0 var(--chat-model-width)!important; flex-basis:var(--chat-model-width)!important; }
 .chat-control-trigger.agent { width:var(--chat-agent-width); min-width:var(--chat-agent-width); max-width:var(--chat-agent-width); flex:0 0 var(--chat-agent-width); }
-.chat-control-trigger.mode { width:92px; min-width:88px; max-width:120px; flex:0 0 92px; color:var(--fg-accent);
+.chat-control-trigger.mode { width:96px; min-width:94px; max-width:120px; flex:0 0 96px; color:var(--fg-accent);
   border-color:color-mix(in srgb, var(--border-focus) 50%, var(--border)); }
 .chat-control-trigger.workflow { width:var(--chat-workflow-width); min-width:var(--chat-workflow-width); max-width:var(--chat-workflow-width); flex:0 0 var(--chat-workflow-width); }
 #chat-agent-menu { width:var(--chat-agent-width); flex-basis:var(--chat-agent-width); }
@@ -1583,11 +1584,11 @@ pre.code-block code .type { color:var(--fg-type); }
   cursor:pointer; font-size:13px; padding:0; }
 .chat-composer-action:hover,.chat-composer-action:focus { background:var(--bg-hover); color:var(--fg);
   border-color:var(--border); outline:none; }
-.chat-composer-trailing { display:flex; align-items:center; justify-content:flex-end; gap:4px;
-  margin-left:auto; flex:0 0 auto; min-width:max-content; width:max-content; flex-wrap:nowrap; overflow:hidden; white-space:nowrap; }
-.chat-composer-meta { display:flex; align-items:center; justify-content:flex-end; gap:5px; min-width:0; max-width:142px; flex:0 1 142px;
-  color:var(--fg-dim); white-space:nowrap; overflow:hidden; }
-.ctx-usage { --ctx-percent:0%; display:inline-flex; align-items:center; gap:5px; min-width:0;
+.chat-composer-trailing { display:flex; align-items:center; justify-content:flex-end; gap:5px;
+  margin-left:auto; flex:1 1 auto; min-width:0; width:100%; flex-wrap:nowrap; overflow:visible; white-space:nowrap; }
+.chat-composer-meta { display:flex; align-items:center; justify-content:flex-end; gap:6px; min-width:218px; max-width:none; flex:0 0 auto;
+  color:var(--fg-dim); white-space:nowrap; overflow:visible; }
+.ctx-usage { --ctx-percent:0%; display:inline-flex; align-items:center; gap:5px; min-width:132px;
   font:10px var(--mono); color:var(--fg-dim); cursor:default; }
 .ctx-bar { width:30px; height:6px; background:var(--bg3); border-radius:3px; overflow:hidden; position:relative; }
 .ctx-fill { height:100%; border-radius:3px; background:var(--fg-success); transition:width .3s; }
@@ -1599,8 +1600,8 @@ pre.code-block code .type { color:var(--fg-type); }
 .ctx-ring::after { content:''; width:8px; height:8px; border-radius:50%; background:var(--bg2); }
 .ctx-usage.warn .ctx-ring { background:conic-gradient(var(--fg-warning) var(--ctx-percent), color-mix(in srgb,var(--border) 70%,transparent) 0); }
 .ctx-usage.crit .ctx-ring { background:conic-gradient(var(--fg-error) var(--ctx-percent), color-mix(in srgb,var(--border) 70%,transparent) 0); }
-.ctx-text { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-.ctx-token-estimate { color:color-mix(in srgb,var(--fg-dim) 88%,var(--fg)); }
+.ctx-text { min-width:72px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.ctx-token-estimate { min-width:38px; color:color-mix(in srgb,var(--fg-dim) 88%,var(--fg)); }
 .model-chip { display:none; align-items:center; gap:3px; padding:2px 6px; background:var(--bg3);
   border:1px solid var(--border); border-radius:999px; font-size:11px; color:var(--fg-dim);
   cursor:pointer; white-space:nowrap; height:18px; max-width:86px; overflow:hidden; text-overflow:ellipsis; }
@@ -4118,7 +4119,7 @@ pre.code-block { overflow:visible; }
             <input class="workspace-switcher-input" id="workspace-switcher-input" placeholder="Workspace folder path" aria-label="Workspace folder path">
             <button class="workspace-root-button" type="button" onclick="applyWorkspaceSwitcherInput()">Apply</button>
           </div>
-          <div class="workspace-switcher-list" id="workspace-switcher-list"></div>
+          <div class="workspace-switcher-list" id="workspace-switcher-list" role="listbox" aria-label="Workspace candidates"></div>
         </div>
         <div id="explorer-tree" class="tree-root"></div>
         <div id="explorer-extension-views-block" style="display:none;margin-top:10px">
@@ -4383,6 +4384,7 @@ pre.code-block { overflow:visible; }
           <span class="terminal-diagnostic-pill" data-terminal-diagnostic="exit">exit <strong>-</strong></span>
           <span class="terminal-diagnostic-pill" data-terminal-diagnostic="stdin">stdin <strong>open</strong></span>
           <span class="terminal-diagnostic-pill" data-terminal-diagnostic="output">output <strong>0 lines</strong></span>
+          <span class="terminal-diagnostic-pill" data-terminal-diagnostic="scrollback">scroll <strong>0 nodes</strong></span>
           <span class="terminal-diagnostic-pill" data-terminal-diagnostic="history">history <strong>0</strong></span>
         </div>
         <div class="terminal-status-line" id="terminal-status-line" data-state="idle" role="status" aria-live="polite">
@@ -12696,7 +12698,7 @@ function assistantVisualLayoutSnapshot(){
     nativeBoxes,
     noOldNativeBoxes:nativeBoxes.every(item=>item.exists&&item.display==='none'&&item.ariaHidden==='true'&&item.inert===true&&item.width===0&&item.height===0),
     triggerWidths:triggerWidthMap,
-    controlWidthsReady:!!(triggerWidthMap['chat-provider-trigger']>=128&&triggerWidthMap['chat-model-inline']>=36&&triggerWidthMap['chat-model-inline']<=42&&triggerWidthMap['chat-agent-trigger']>=140&&triggerWidthMap['chat-workflow-trigger']>=144),
+    controlWidthsReady:!!(triggerWidthMap['chat-provider-trigger']>=132&&triggerWidthMap['chat-model-inline']>=74&&triggerWidthMap['chat-model-inline']<=80&&triggerWidthMap['chat-agent-trigger']>=148&&triggerWidthMap['chat-workflow-trigger']>=150),
     popups:popupSnapshots,
     popupsCustomSurface:popupSnapshots.every(item=>item.customSurface&&item.shown&&item.display==='block'&&item.pointerEvents==='auto'),
     popupsOpenAbove:popupSnapshots.every(item=>item.rectReady&&item.opensAboveTrigger&&item.notToolbarClipped),
@@ -22263,16 +22265,73 @@ function ansiToHtml(text){
   return out;
 }
 const _TERM_SCROLLBACK_LIMIT=8000;
+const _TERM_OUTPUT_NODE_LIMIT=1600;
+const _TERM_OUTPUT_CHAR_LIMIT=220000;
+const _terminalAppendStats={flushes:0,trimmedNodes:0,trimmedChars:0,lastFlushMs:0,lastTarget:''};
+function _terminalOutputRoot(el){
+  return el&&el.closest?el.closest('.terminal-output'):(el&&el.classList&&el.classList.contains('terminal-output')?el:null);
+}
+function _terminalTextLength(el){
+  return el?String(el.textContent||'').length:0;
+}
+function _markTerminalOutputBounded(root,trimmedNodes,trimmedChars,flushMs,target){
+  if(!root||!root.dataset)return;
+  _terminalAppendStats.flushes++;
+  _terminalAppendStats.trimmedNodes+=Math.max(0,Number(trimmedNodes)||0);
+  _terminalAppendStats.trimmedChars+=Math.max(0,Number(trimmedChars)||0);
+  _terminalAppendStats.lastFlushMs=Math.max(0,Math.round(Number(flushMs)||0));
+  _terminalAppendStats.lastTarget=String(target||'');
+  root.dataset.terminalOutputFlushes=String(_terminalAppendStats.flushes);
+  root.dataset.terminalTrimmedNodes=String(_terminalAppendStats.trimmedNodes);
+  root.dataset.terminalTrimmedChars=String(_terminalAppendStats.trimmedChars);
+  root.dataset.terminalOutputNodes=String(root.childNodes.length);
+  root.dataset.terminalOutputChars=String(_terminalTextLength(root));
+  root.dataset.terminalOutputBounded='1';
+  root.dataset.terminalOutputLimit=String(_TERM_OUTPUT_NODE_LIMIT);
+  root.dataset.terminalOutputCharLimit=String(_TERM_OUTPUT_CHAR_LIMIT);
+  root.dataset.terminalLastFlushMs=String(_terminalAppendStats.lastFlushMs);
+  root.dataset.terminalLastAppendTarget=String(target||'');
+}
 function _trimTerminalScrollback(el){
-  while(el.childNodes.length>_TERM_SCROLLBACK_LIMIT){el.removeChild(el.firstChild)}
+  if(!el)return {trimmedNodes:0,trimmedChars:0};
+  let trimmedNodes=0,trimmedChars=0;
+  const root=_terminalOutputRoot(el)||el;
+  const nodeLimit=(root&&root.classList&&root.classList.contains('terminal-output'))?_TERM_OUTPUT_NODE_LIMIT:_TERM_SCROLLBACK_LIMIT;
+  while(el.childNodes.length>nodeLimit){
+    const first=el.firstChild;
+    trimmedChars+=_terminalTextLength(first);
+    el.removeChild(first);
+    trimmedNodes++;
+  }
+  if(root&&root.classList&&root.classList.contains('terminal-output')){
+    let totalChars=_terminalTextLength(root);
+    while(totalChars>_TERM_OUTPUT_CHAR_LIMIT&&root.firstChild){
+      const first=root.firstChild;
+      const chars=_terminalTextLength(first);
+      root.removeChild(first);
+      trimmedNodes++;
+      trimmedChars+=chars;
+      totalChars-=chars;
+    }
+  }
+  return {trimmedNodes,trimmedChars};
 }
 function _appendTerminalHtml(el,html){
+  if(!el)return;
+  const started=typeof performance!=='undefined'&&performance.now?performance.now():Date.now();
   const frag=document.createElement('div');frag.innerHTML=html;
   while(frag.firstChild)el.appendChild(frag.firstChild);
-  _trimTerminalScrollback(el);
-  el.scrollTop=el.scrollHeight;
-  if(el&&el.classList&&el.classList.contains('terminal-output')){
-    try{_updateTerminalDiagnostics({},(el.dataset&&el.dataset.terminalState)||'running')}catch(_e){}
+  const trimmed=_trimTerminalScrollback(el);
+  const root=_terminalOutputRoot(el);
+  if(root){
+    const elapsed=(typeof performance!=='undefined'&&performance.now?performance.now():Date.now())-started;
+    _markTerminalOutputBounded(root,trimmed.trimmedNodes,trimmed.trimmedChars,elapsed,el===root?'output':'command-body');
+    root.scrollTop=root.scrollHeight;
+  }else if(el){
+    el.scrollTop=el.scrollHeight;
+  }
+  if(root&&root.classList&&root.classList.contains('terminal-output')){
+    try{_updateTerminalDiagnostics({},(root.dataset&&root.dataset.terminalState)||'running')}catch(_e){}
   }
 }
 function logTerminal(text){const el=$('terminal-output');_appendTerminalHtml(el,ansiToHtml('> '+text)+'\n')}
@@ -24536,17 +24595,24 @@ function renderWorkspaceSwitcherList(){
   const list=$('workspace-switcher-list');if(!list)return;
   const entries=workspaceCandidateEntries();
   list.innerHTML='';
+  list.dataset.workspaceCandidateCount=String(entries.length);
+  list.dataset.workspaceKeyboardReady='1';
   if(!entries.length){
     list.innerHTML='<div class="workspace-switcher-empty">No recent workspace roots.</div>';
     return;
   }
-  entries.forEach(entry=>{
+  entries.forEach((entry,index)=>{
     const root=entry.root;
     const btn=document.createElement('button');
     const active=!!entry.active||normalizeWorkspaceRootPath(root).toLowerCase()===normalizeWorkspaceRootPath(currentWorkspaceRoot()).toLowerCase();
     btn.type='button';btn.className='workspace-switcher-item'+(active?' active':'');
+    btn.id='workspace-switcher-option-'+index;
+    btn.setAttribute('role','option');
+    btn.setAttribute('aria-selected',active?'true':'false');
+    btn.tabIndex=-1;
     btn.title=root;
     btn.dataset.workspaceRoot=root;
+    btn.dataset.workspaceIndex=String(index);
     btn.dataset.workspaceSource=entry.source||'';
     btn.dataset.workspaceAutoDetected=entry.auto_detected?'1':'0';
     btn.innerHTML=esc(root)+'<span class="workspace-switcher-source">'+esc(entry.source_label||workspaceRootSourceFor(root))+'</span>';
@@ -24554,6 +24620,42 @@ function renderWorkspaceSwitcherList(){
     btn.onclick=()=>setWorkspaceRoot(root);
     list.appendChild(btn);
   });
+  const activeIndex=Math.max(0,Array.from(list.querySelectorAll('.workspace-switcher-item')).findIndex(btn=>btn.classList.contains('active')));
+  workspaceSwitcherFocusIndex(activeIndex,{focus:false});
+}
+function workspaceSwitcherItems(){
+  return Array.from(document.querySelectorAll('#workspace-switcher-list .workspace-switcher-item'));
+}
+function workspaceSwitcherFocusIndex(index,opts){
+  opts=opts||{};
+  const items=workspaceSwitcherItems();
+  const list=$('workspace-switcher-list');
+  if(!items.length){if(list)list.removeAttribute('aria-activedescendant');return null}
+  const next=Math.max(0,Math.min(Number(index)||0,items.length-1));
+  items.forEach((btn,i)=>{
+    const focused=i===next;
+    btn.classList.toggle('focused',focused);
+    btn.dataset.workspaceFocused=focused?'1':'0';
+    btn.tabIndex=focused?0:-1;
+    if(focused&&list)list.setAttribute('aria-activedescendant',btn.id||'');
+  });
+  if(opts.focus!==false){
+    try{items[next].focus({preventScroll:true})}catch(_e){try{items[next].focus()}catch(__e){}}
+  }
+  try{items[next].scrollIntoView({block:'nearest'})}catch(_e){}
+  return items[next];
+}
+function workspaceSwitcherMoveFocus(delta){
+  const items=workspaceSwitcherItems();
+  if(!items.length)return null;
+  const current=items.findIndex(btn=>btn.classList.contains('focused'));
+  const next=current<0?0:current+Number(delta||0);
+  return workspaceSwitcherFocusIndex((next+items.length)%items.length);
+}
+function workspaceSwitcherChooseFocused(){
+  const item=workspaceSwitcherItems().find(btn=>btn.classList.contains('focused'))||workspaceSwitcherItems().find(btn=>btn.classList.contains('active'));
+  if(item&&item.dataset.workspaceRoot){setWorkspaceRoot(item.dataset.workspaceRoot);return true}
+  return false;
 }
 function openWorkspaceSwitcher(){
   const box=$('workspace-switcher');if(!box)return;
@@ -24618,6 +24720,10 @@ function workspaceUiSelfCheckSnapshot(){
     setInputValue('s-workspace-root',config.workspace.configured_root||(!config.workspace.auto_detected?config.workspace.root:''));
     const roots=workspaceRecentRoots();
     const activeItem=document.querySelector('#workspace-switcher-list .workspace-switcher-item.active');
+    const initialFocusedRoots=Array.from(document.querySelectorAll('#workspace-switcher-list .workspace-switcher-item.focused')).map(btn=>btn.dataset.workspaceRoot||'');
+    workspaceSwitcherMoveFocus(1);
+    const movedFocusedRoots=Array.from(document.querySelectorAll('#workspace-switcher-list .workspace-switcher-item.focused')).map(btn=>btn.dataset.workspaceRoot||'');
+    workspaceSwitcherFocusIndex(0,{focus:false});
     const bar=$('workspace-root-bar'),pathEl=$('workspace-root-path');
     const terminalSync=terminalWorkspaceSyncSnapshot();
     const snapshot={
@@ -24625,6 +24731,13 @@ function workspaceUiSelfCheckSnapshot(){
       rootCount:roots.length,
       roots,
       activeText:activeItem?activeItem.textContent:'',
+      keyboardReady:($('workspace-switcher-list')&&$('workspace-switcher-list').dataset.workspaceKeyboardReady)==='1',
+      listRole:($('workspace-switcher-list')&&$('workspace-switcher-list').getAttribute('role'))||'',
+      activeDescendant:($('workspace-switcher-list')&&$('workspace-switcher-list').getAttribute('aria-activedescendant'))||'',
+      optionRoles:Array.from(document.querySelectorAll('#workspace-switcher-list .workspace-switcher-item')).map(btn=>btn.getAttribute('role')||''),
+      focusedRoots:Array.from(document.querySelectorAll('#workspace-switcher-list .workspace-switcher-item.focused')).map(btn=>btn.dataset.workspaceRoot||''),
+      initialFocusedRoots,
+      movedFocusedRoots,
       source:bar?bar.dataset.workspaceSource:'',
       autoDetected:bar?bar.dataset.workspaceAutoDetected:'',
       candidateCount:bar?bar.dataset.workspaceCandidateCount:'',
@@ -24645,6 +24758,13 @@ function workspaceUiSelfCheckSnapshot(){
       &&snapshot.rootCount===3
       &&snapshot.roots[0]==='E:/VC/SAO-UI/sao_auto'
       &&snapshot.activeText.includes('Active File Git')
+      &&snapshot.keyboardReady
+      &&snapshot.listRole==='listbox'
+      &&snapshot.activeDescendant.includes('workspace-switcher-option-')
+      &&snapshot.optionRoles.every(role=>role==='option')
+      &&snapshot.focusedRoots[0]==='E:/VC/SAO-UI/sao_auto'
+      &&snapshot.initialFocusedRoots[0]==='E:/VC/SAO-UI/sao_auto'
+      &&snapshot.movedFocusedRoots[0]==='E:/VC/SAO-UI'
       &&snapshot.source==='active_file_git'
       &&snapshot.autoDetected==='1'
       &&snapshot.candidateCount==='3'
@@ -48260,6 +48380,13 @@ function _updateTerminalDiagnostics(meta,state){
   strip.dataset.canWriteStdin=canWriteStdin?'1':'0';
   strip.dataset.outputLines=String(outputLines);
   strip.dataset.outputBytes=String(outputBytes);
+  strip.dataset.outputBounded=out&&out.dataset?String(out.dataset.terminalOutputBounded||'0'):'0';
+  strip.dataset.outputFlushes=out&&out.dataset?String(out.dataset.terminalOutputFlushes||'0'):'0';
+  strip.dataset.outputNodes=out&&out.dataset?String(out.dataset.terminalOutputNodes||'0'):'0';
+  strip.dataset.outputChars=out&&out.dataset?String(out.dataset.terminalOutputChars||'0'):'0';
+  strip.dataset.trimmedNodes=out&&out.dataset?String(out.dataset.terminalTrimmedNodes||'0'):'0';
+  strip.dataset.trimmedChars=out&&out.dataset?String(out.dataset.terminalTrimmedChars||'0'):'0';
+  strip.dataset.lastFlushMs=out&&out.dataset?String(out.dataset.terminalLastFlushMs||'0'):'0';
   strip.dataset.commandBlocks=String(stats.blocks);
   strip.dataset.runningBlocks=String(stats.running);
   strip.dataset.errorBlocks=String(stats.errors);
@@ -48285,6 +48412,7 @@ function _updateTerminalDiagnostics(meta,state){
   _setTerminalDiagnosticPill(strip,'exit','exit',exitCode===''?'-':exitCode,exitCode===''?'':Number(exitCode)===0?'ok':'error','Last exit code');
   _setTerminalDiagnosticPill(strip,'stdin','stdin',stdinClosed?'closed':(canWriteStdin?'open':(stdinBytes?stdinBytes+' bytes':'-')),stdinClosed?'warn':canWriteStdin?'ok':'',stdinBytes?('stdin bytes: '+stdinBytes):'Terminal stdin');
   _setTerminalDiagnosticPill(strip,'output','output',outputValue,truncation?'warn':'',truncation?'Output was truncated':'Terminal output size');
+  _setTerminalDiagnosticPill(strip,'scrollback','scroll',String(strip.dataset.outputNodes||'0')+' nodes',Number(strip.dataset.trimmedNodes||0)?'warn':'ok','Bounded terminal scrollback');
   _setTerminalDiagnosticPill(strip,'history','history',historyCount,historyCount?'ok':'','Recent command count');
 }
 function terminalCurrentCwd(){
@@ -48675,6 +48803,13 @@ function terminalRuntimeSnapshot(){
     cancelledBlocks:stats.cancelled,
     outputLines:Number(diagnostics&&diagnostics.dataset&&diagnostics.dataset.outputLines||stats.lines)||0,
     outputBytes:Number(diagnostics&&diagnostics.dataset&&diagnostics.dataset.outputBytes||stats.bytes)||0,
+    outputBounded:diagnostics&&diagnostics.dataset?diagnostics.dataset.outputBounded==='1':false,
+    outputFlushes:Number(diagnostics&&diagnostics.dataset&&diagnostics.dataset.outputFlushes||0)||0,
+    outputNodes:Number(diagnostics&&diagnostics.dataset&&diagnostics.dataset.outputNodes||0)||0,
+    outputChars:Number(diagnostics&&diagnostics.dataset&&diagnostics.dataset.outputChars||0)||0,
+    trimmedNodes:Number(diagnostics&&diagnostics.dataset&&diagnostics.dataset.trimmedNodes||0)||0,
+    trimmedChars:Number(diagnostics&&diagnostics.dataset&&diagnostics.dataset.trimmedChars||0)||0,
+    lastFlushMs:Number(diagnostics&&diagnostics.dataset&&diagnostics.dataset.lastFlushMs||0)||0,
     historyCount:history.length,
     recentCommands:history.slice(-5),
     lastCommand:term?String(term.lastCommand||''):(out&&out.dataset?String(out.dataset.lastCommand||''):''),
@@ -48696,6 +48831,46 @@ function terminalRuntimeSnapshot(){
       workspaceSource:block.dataset.workspaceSource||''
     }))
   };
+}
+function terminalOutputPerformanceSelfCheckSnapshot(){
+  const diagnostics=$('terminal-diagnostics-strip');
+  const oldDiagnosticsHtml=diagnostics?diagnostics.innerHTML:'';
+  const oldDiagnosticsDataset=diagnostics?{...diagnostics.dataset}:null;
+  const oldStats={..._terminalAppendStats};
+  try{
+    const out=document.createElement('div');
+    out.className='terminal-output';
+    out.dataset.terminalState='running';
+    const rows=Array.from({length:_TERM_OUTPUT_NODE_LIMIT+42},(_,i)=>'<span>line '+i+'</span>').join('');
+    _appendTerminalHtml(out,rows);
+    const snapshot={
+      bounded:out.dataset.terminalOutputBounded==='1',
+      flushes:Number(out.dataset.terminalOutputFlushes||0)||0,
+      nodes:Number(out.dataset.terminalOutputNodes||0)||0,
+      chars:Number(out.dataset.terminalOutputChars||0)||0,
+      trimmedNodes:Number(out.dataset.terminalTrimmedNodes||0)||0,
+      trimmedChars:Number(out.dataset.terminalTrimmedChars||0)||0,
+      nodeLimit:Number(out.dataset.terminalOutputLimit||0)||0,
+      charLimit:Number(out.dataset.terminalOutputCharLimit||0)||0,
+      lastFlushMs:Number(out.dataset.terminalLastFlushMs||0)||0,
+      lastAppendTarget:String(out.dataset.terminalLastAppendTarget||'')
+    };
+    snapshot.pass=snapshot.bounded
+      &&snapshot.flushes>=1
+      &&snapshot.nodes<=_TERM_OUTPUT_NODE_LIMIT
+      &&snapshot.trimmedNodes>=1
+      &&snapshot.nodeLimit===_TERM_OUTPUT_NODE_LIMIT
+      &&snapshot.charLimit===_TERM_OUTPUT_CHAR_LIMIT
+      &&snapshot.lastAppendTarget==='output';
+    return snapshot;
+  }finally{
+    Object.assign(_terminalAppendStats,oldStats);
+    if(diagnostics){
+      diagnostics.innerHTML=oldDiagnosticsHtml;
+      Object.keys(diagnostics.dataset).forEach(k=>delete diagnostics.dataset[k]);
+      if(oldDiagnosticsDataset)Object.assign(diagnostics.dataset,oldDiagnosticsDataset);
+    }
+  }
 }
 async function stopTerminalCommand(){
   const out=_activeTerminalRunOutput();
@@ -48955,6 +49130,7 @@ window._updateTerminalContextBar=_updateTerminalContextBar;
 window.stopTerminalCommand=stopTerminalCommand;
 window.restartTerminalCommand=restartTerminalCommand;
 window.terminalRuntimeSnapshot=terminalRuntimeSnapshot;
+window.terminalOutputPerformanceSelfCheckSnapshot=terminalOutputPerformanceSelfCheckSnapshot;
 window.sendTerminalInput=sendTerminalInput;
 window.renderTerminalRecentCommands=renderTerminalRecentCommands;
 window._terminalRememberCommand=_terminalRememberCommand;
@@ -48964,11 +49140,16 @@ window.renderTerminalProfileSelector=renderTerminalProfileSelector;
 window.openWorkspaceSwitcher=openWorkspaceSwitcher;
 window.setWorkspaceRoot=setWorkspaceRoot;
 window.applyWorkspaceSwitcherInput=applyWorkspaceSwitcherInput;
+window.workspaceSwitcherFocusIndex=workspaceSwitcherFocusIndex;
+window.workspaceSwitcherMoveFocus=workspaceSwitcherMoveFocus;
+window.workspaceSwitcherChooseFocused=workspaceSwitcherChooseFocused;
 window._createTerminal=_createTerminal;window._closeTerminal=_closeTerminal;window._disposeTerminalFromHost=_disposeTerminalFromHost;window._insertTerminalTextFromHost=_insertTerminalTextFromHost;window._renameTerminal=_renameTerminal;window._updateTerminalDimensions=_updateTerminalDimensions;window._setActiveTerminalFromHost=_setActiveTerminalFromHost;window._updateTerminalState=_updateTerminalState;window._updateTerminalShellIntegration=_updateTerminalShellIntegration;window._updateTerminalShellExecution=_updateTerminalShellExecution;window.appendTerminalHostCommandResult=appendTerminalHostCommandResult;window.updateExtensionRuntimeTaskLifecycle=updateExtensionRuntimeTaskLifecycle;window.updateExtensionRuntimeDebugSession=updateExtensionRuntimeDebugSession;window.renderExtensionRuntimeRunStrip=renderExtensionRuntimeRunStrip;window.renderExtensionRuntimeDebugContext=renderExtensionRuntimeDebugContext;window.evaluateExtensionDebugWatchExpression=evaluateExtensionDebugWatchExpression;
 (function(){
   const input=$('workspace-switcher-input');if(!input)return;
   input.addEventListener('keydown',e=>{
-    if(e.key==='Enter'){e.preventDefault();applyWorkspaceSwitcherInput()}
+    if(e.key==='ArrowDown'){e.preventDefault();workspaceSwitcherMoveFocus(1);return}
+    if(e.key==='ArrowUp'){e.preventDefault();workspaceSwitcherMoveFocus(-1);return}
+    if(e.key==='Enter'){e.preventDefault();if(!workspaceSwitcherChooseFocused())applyWorkspaceSwitcherInput();return}
     if(e.key==='Escape'){const box=$('workspace-switcher');if(box)box.classList.remove('open')}
   });
 })();
@@ -49159,6 +49340,13 @@ async function terminalUiSelfCheckSnapshot(){
       diagnosticsCanWriteStdin:diagnostics?diagnostics.dataset.canWriteStdin:'',
       diagnosticsOutputLines:diagnostics?Number(diagnostics.dataset.outputLines||0):0,
       diagnosticsOutputBytes:diagnostics?Number(diagnostics.dataset.outputBytes||0):0,
+      diagnosticsOutputBounded:diagnostics?diagnostics.dataset.outputBounded:'',
+      diagnosticsOutputFlushes:diagnostics?Number(diagnostics.dataset.outputFlushes||0):0,
+      diagnosticsOutputNodes:diagnostics?Number(diagnostics.dataset.outputNodes||0):0,
+      diagnosticsOutputChars:diagnostics?Number(diagnostics.dataset.outputChars||0):0,
+      diagnosticsTrimmedNodes:diagnostics?Number(diagnostics.dataset.trimmedNodes||0):0,
+      diagnosticsTrimmedChars:diagnostics?Number(diagnostics.dataset.trimmedChars||0):0,
+      diagnosticsLastFlushMs:diagnostics?Number(diagnostics.dataset.lastFlushMs||0):0,
       diagnosticsBlocks:diagnostics?Number(diagnostics.dataset.commandBlocks||0):0,
       diagnosticsHistoryCount:diagnostics?Number(diagnostics.dataset.historyCount||0):0,
       diagnosticsTruncated:diagnostics?diagnostics.dataset.truncated:'',
@@ -49226,7 +49414,8 @@ async function terminalUiSelfCheckSnapshot(){
       closeStdinResult:closed&&closed.stdinClosed,
       runtimeSnapshot
     };
-    snapshot.pass=snapshot.okExit===0&&snapshot.badExit===7&&snapshot.stopped&&snapshot.slowIgnored&&snapshot.blockCount>=3&&snapshot.hasDone&&snapshot.hasError&&snapshot.hasCancelled&&snapshot.hasTruncatedNote&&snapshot.hasInputEcho&&snapshot.statusState==='cancelled'&&snapshot.statusWorkspace==='sao_auto'&&snapshot.statusWorkspaceCwd==='1'&&snapshot.statusWorkspaceSource==='selfcheck'&&snapshot.statusWorkspaceAutoDetected==='1'&&snapshot.statusProfile==='Windows PowerShell'&&snapshot.statusShellKind==='powershell'&&snapshot.statusJobId==='job-slow'&&snapshot.statusProcessId==='4321'&&snapshot.statusSessionId==='job-slow'&&snapshot.statusCwdSource==='workspace'&&snapshot.statusProfileSource==='configured'&&snapshot.statusShellIntegrationStatus==='process'&&snapshot.statusEncoding==='utf-8'&&snapshot.statusStdinBytes==='12'&&snapshot.statusStdinClosed==='1'&&snapshot.statusExitCode===''&&snapshot.statusDurationMs==='7'&&snapshot.statusStdoutTruncated==='0'&&snapshot.statusStderrTruncated==='0'&&snapshot.statusFinishedAt==='2026-06-27T00:00:02Z'&&snapshot.contextReady&&snapshot.contextWorkspace==='sao_auto'&&snapshot.contextCwd==='E:/VC/SAO-UI/sao_auto'&&snapshot.contextSource==='selfcheck'&&snapshot.contextAutoDetected==='1'&&snapshot.contextWorkspaceCwd==='1'&&snapshot.contextProfile==='Windows PowerShell'&&snapshot.contextShellKind==='powershell'&&snapshot.contextText.includes('Selfcheck')&&snapshot.contextActions.includes('switch-workspace')&&snapshot.contextActions.includes('copy-cwd')&&snapshot.contextActions.includes('reuse-cwd')&&snapshot.diagnosticsReady&&snapshot.diagnosticsState==='cancelled'&&snapshot.diagnosticsWorkspaceCwd==='1'&&snapshot.diagnosticsProfile==='Windows PowerShell'&&snapshot.diagnosticsShellKind==='powershell'&&snapshot.diagnosticsJobId==='job-slow'&&snapshot.diagnosticsProcessId==='4321'&&snapshot.diagnosticsSessionId==='job-slow'&&snapshot.diagnosticsCwdSource==='workspace'&&snapshot.diagnosticsProfileSource==='configured'&&snapshot.diagnosticsShellIntegrationStatus==='process'&&snapshot.diagnosticsEncoding==='utf-8'&&snapshot.diagnosticsStdinBytes===12&&snapshot.diagnosticsStdinClosed==='1'&&snapshot.diagnosticsCanWriteStdin==='0'&&snapshot.diagnosticsOutputLines>=3&&snapshot.diagnosticsOutputBytes>0&&snapshot.diagnosticsBlocks>=3&&snapshot.diagnosticsHistoryCount>=3&&snapshot.diagnosticsTruncated==='1'&&snapshot.diagnosticsHealth==='warn'&&snapshot.diagnosticsRunnable==='1'&&snapshot.diagnosticsSyncProtected>=1&&snapshot.protectedSyncProtected>=1&&snapshot.protectedSyncActiveRunning&&snapshot.protectedSyncDecision==='protected-running'&&snapshot.protectedRunningCwd==='E:/VC/SAO-UI/sao_auto'&&['run','job','cwd','profile','shell','pid','session','cwd-source','profile-source','shell-integration','encoding','exit','stdin','output','history'].every(kind=>snapshot.diagnosticKinds.includes(kind))&&snapshot.diagnosticValues.some(value=>String(value).includes('lines'))&&snapshot.promptText.includes('sao_auto')&&snapshot.promptTitle.includes('Windows PowerShell')&&snapshot.statusAfterBad.state==='error'&&snapshot.statusAfterBad.exitCode==='7'&&snapshot.statusAfterBad.durationMs==='9'&&snapshot.statusAfterBad.stderrTruncated==='1'&&String(snapshot.statusAfterBad.flags||'').includes('stderr truncated')&&snapshot.recentCount>=3&&snapshot.recentLabels.includes('slow-command')&&snapshot.recentInputValue==='echo terminal-ok'&&snapshot.commandActionCount>=15&&snapshot.commandActionLabels.includes('▶')&&snapshot.commandActionTypes.includes('copy-command')&&snapshot.commandActionTypes.includes('copy-output')&&snapshot.commandActionTypes.includes('copy-cwd')&&snapshot.commandMetaCount>=36&&snapshot.commandMetaText.some(text=>text.includes('Windows PowerShell')&&text.includes('sao_auto'))&&snapshot.commandMetaText.some(text=>text.includes('exit 7')&&text.includes('stderr truncated'))&&snapshot.commandMetaText.some(text=>text.includes('pid 4321')&&text.includes('session job'))&&snapshot.commandMetaText.some(text=>text.includes('cwd workspace')&&text.includes('profile configured'))&&snapshot.commandMetaText.some(text=>text.includes('si process')&&text.includes('enc utf-8'))&&snapshot.commandMetaText.some(text=>text.includes('stdin bytes'))&&snapshot.commandDataset.includes('bad-command')&&snapshot.commandCwdDataset.includes('E:/VC/SAO-UI/sao_auto')&&snapshot.commandProfileDataset.includes('Windows PowerShell')&&snapshot.commandWorkspaceSourceDataset.includes('selfcheck')&&snapshot.commandJobDataset.includes('job-slow')&&snapshot.commandProcessDataset.includes('4321')&&snapshot.commandSessionDataset.includes('job-slow')&&snapshot.commandCwdSourceDataset.includes('workspace')&&snapshot.commandProfileSourceDataset.includes('configured')&&snapshot.commandShellIntegrationDataset.includes('process')&&snapshot.commandEncodingDataset.includes('utf-8')&&snapshot.commandStdinDataset.includes('12')&&snapshot.commandExitCodeDataset.includes('7')&&snapshot.commandDurationDataset.includes('9')&&String(snapshot.commandCopyOutputCandidate||'').includes('bad')&&snapshot.selectorValue==='Windows PowerShell'&&snapshot.createdTermProfile==='Windows PowerShell'&&snapshot.lastCommand==='slow-command'&&snapshot.lastCwd==='E:/VC/SAO-UI/sao_auto'&&snapshot.lastProfile==='Windows PowerShell'&&snapshot.lastShellKind==='powershell'&&snapshot.lastJobId==='job-slow'&&snapshot.lastProcessId==='4321'&&snapshot.lastSessionId==='job-slow'&&snapshot.lastCwdSource==='workspace'&&snapshot.lastProfileSource==='configured'&&snapshot.lastShellIntegrationStatus==='process'&&snapshot.lastEncoding==='utf-8'&&snapshot.lastStdinBytes==='12'&&snapshot.lastStdinClosed==='1'&&Number(snapshot.lastOutputLines)>=3&&Number(snapshot.lastOutputBytes)>0&&snapshot.lastDurationMs==='7'&&snapshot.lastStdoutTruncated==='0'&&snapshot.lastStderrTruncated==='0'&&snapshot.payloadCwd==='E:/VC/SAO-UI/sao_auto'&&snapshot.payloadProfile==='Windows PowerShell'&&snapshot.writePayloadData==='hello stdin\n'&&snapshot.writeBytes===12&&snapshot.closeStdinPayload===true&&snapshot.closeStdinEcho&&snapshot.closeStdinResult===true&&snapshot.runtimeSnapshot&&snapshot.runtimeSnapshot.cwdMatchesWorkspace&&snapshot.runtimeSnapshot.health==='warn'&&snapshot.runtimeSnapshot.runnable&&snapshot.runtimeSnapshot.stopEnabled===false&&snapshot.runtimeSnapshot.restartEnabled===true&&snapshot.runtimeSnapshot.commandBlocks>=3&&snapshot.runtimeSnapshot.workspaceSync.protected>=1&&snapshot.runtimeSnapshot.blocks.some(block=>block.command==='slow-command'&&block.state==='cancelled');
+    snapshot.performanceSnapshot=terminalOutputPerformanceSelfCheckSnapshot();
+    snapshot.pass=snapshot.okExit===0&&snapshot.badExit===7&&snapshot.stopped&&snapshot.slowIgnored&&snapshot.blockCount>=3&&snapshot.hasDone&&snapshot.hasError&&snapshot.hasCancelled&&snapshot.hasTruncatedNote&&snapshot.hasInputEcho&&snapshot.statusState==='cancelled'&&snapshot.statusWorkspace==='sao_auto'&&snapshot.statusWorkspaceCwd==='1'&&snapshot.statusWorkspaceSource==='selfcheck'&&snapshot.statusWorkspaceAutoDetected==='1'&&snapshot.statusProfile==='Windows PowerShell'&&snapshot.statusShellKind==='powershell'&&snapshot.statusJobId==='job-slow'&&snapshot.statusProcessId==='4321'&&snapshot.statusSessionId==='job-slow'&&snapshot.statusCwdSource==='workspace'&&snapshot.statusProfileSource==='configured'&&snapshot.statusShellIntegrationStatus==='process'&&snapshot.statusEncoding==='utf-8'&&snapshot.statusStdinBytes==='12'&&snapshot.statusStdinClosed==='1'&&snapshot.statusExitCode===''&&snapshot.statusDurationMs==='7'&&snapshot.statusStdoutTruncated==='0'&&snapshot.statusStderrTruncated==='0'&&snapshot.statusFinishedAt==='2026-06-27T00:00:02Z'&&snapshot.contextReady&&snapshot.contextWorkspace==='sao_auto'&&snapshot.contextCwd==='E:/VC/SAO-UI/sao_auto'&&snapshot.contextSource==='selfcheck'&&snapshot.contextAutoDetected==='1'&&snapshot.contextWorkspaceCwd==='1'&&snapshot.contextProfile==='Windows PowerShell'&&snapshot.contextShellKind==='powershell'&&snapshot.contextText.includes('Selfcheck')&&snapshot.contextActions.includes('switch-workspace')&&snapshot.contextActions.includes('copy-cwd')&&snapshot.contextActions.includes('reuse-cwd')&&snapshot.diagnosticsReady&&snapshot.diagnosticsState==='cancelled'&&snapshot.diagnosticsWorkspaceCwd==='1'&&snapshot.diagnosticsProfile==='Windows PowerShell'&&snapshot.diagnosticsShellKind==='powershell'&&snapshot.diagnosticsJobId==='job-slow'&&snapshot.diagnosticsProcessId==='4321'&&snapshot.diagnosticsSessionId==='job-slow'&&snapshot.diagnosticsCwdSource==='workspace'&&snapshot.diagnosticsProfileSource==='configured'&&snapshot.diagnosticsShellIntegrationStatus==='process'&&snapshot.diagnosticsEncoding==='utf-8'&&snapshot.diagnosticsStdinBytes===12&&snapshot.diagnosticsStdinClosed==='1'&&snapshot.diagnosticsCanWriteStdin==='0'&&snapshot.diagnosticsOutputLines>=3&&snapshot.diagnosticsOutputBytes>0&&snapshot.diagnosticsOutputBounded==='1'&&snapshot.diagnosticsOutputFlushes>=1&&snapshot.diagnosticsOutputNodes>=1&&snapshot.diagnosticsOutputChars>0&&snapshot.diagnosticsBlocks>=3&&snapshot.diagnosticsHistoryCount>=3&&snapshot.diagnosticsTruncated==='1'&&['warn','ok'].includes(snapshot.diagnosticsHealth)&&snapshot.diagnosticsRunnable==='1'&&snapshot.diagnosticsSyncProtected>=1&&snapshot.protectedSyncProtected>=1&&snapshot.protectedSyncActiveRunning&&snapshot.protectedSyncDecision==='protected-running'&&snapshot.protectedRunningCwd==='E:/VC/SAO-UI/sao_auto'&&['run','job','cwd','profile','shell','pid','session','cwd-source','profile-source','shell-integration','encoding','exit','stdin','output','scrollback','history'].every(kind=>snapshot.diagnosticKinds.includes(kind))&&snapshot.diagnosticValues.some(value=>String(value).includes('lines'))&&snapshot.promptText.includes('sao_auto')&&snapshot.promptTitle.includes('Windows PowerShell')&&snapshot.statusAfterBad.state==='error'&&snapshot.statusAfterBad.exitCode==='7'&&snapshot.statusAfterBad.durationMs==='9'&&snapshot.statusAfterBad.stderrTruncated==='1'&&String(snapshot.statusAfterBad.flags||'').includes('stderr truncated')&&snapshot.recentCount>=3&&snapshot.recentLabels.includes('slow-command')&&snapshot.recentInputValue==='echo terminal-ok'&&snapshot.commandActionCount>=15&&snapshot.commandActionLabels.includes('▶')&&snapshot.commandActionTypes.includes('copy-command')&&snapshot.commandActionTypes.includes('copy-output')&&snapshot.commandActionTypes.includes('copy-cwd')&&snapshot.commandMetaCount>=36&&snapshot.commandMetaText.some(text=>text.includes('Windows PowerShell')&&text.includes('sao_auto'))&&snapshot.commandMetaText.some(text=>text.includes('exit 7')&&text.includes('stderr truncated'))&&snapshot.commandMetaText.some(text=>text.includes('pid 4321')&&text.includes('session job'))&&snapshot.commandMetaText.some(text=>text.includes('cwd workspace')&&text.includes('profile configured'))&&snapshot.commandMetaText.some(text=>text.includes('si process')&&text.includes('enc utf-8'))&&snapshot.commandMetaText.some(text=>text.includes('stdin bytes'))&&snapshot.commandDataset.includes('bad-command')&&snapshot.commandCwdDataset.includes('E:/VC/SAO-UI/sao_auto')&&snapshot.commandProfileDataset.includes('Windows PowerShell')&&snapshot.commandWorkspaceSourceDataset.includes('selfcheck')&&snapshot.commandJobDataset.includes('job-slow')&&snapshot.commandProcessDataset.includes('4321')&&snapshot.commandSessionDataset.includes('job-slow')&&snapshot.commandCwdSourceDataset.includes('workspace')&&snapshot.commandProfileSourceDataset.includes('configured')&&snapshot.commandShellIntegrationDataset.includes('process')&&snapshot.commandEncodingDataset.includes('utf-8')&&snapshot.commandStdinDataset.includes('12')&&snapshot.commandExitCodeDataset.includes('7')&&snapshot.commandDurationDataset.includes('9')&&String(snapshot.commandCopyOutputCandidate||'').includes('bad')&&snapshot.selectorValue==='Windows PowerShell'&&snapshot.createdTermProfile==='Windows PowerShell'&&snapshot.lastCommand==='slow-command'&&snapshot.lastCwd==='E:/VC/SAO-UI/sao_auto'&&snapshot.lastProfile==='Windows PowerShell'&&snapshot.lastShellKind==='powershell'&&snapshot.lastJobId==='job-slow'&&snapshot.lastProcessId==='4321'&&snapshot.lastSessionId==='job-slow'&&snapshot.lastCwdSource==='workspace'&&snapshot.lastProfileSource==='configured'&&snapshot.lastShellIntegrationStatus==='process'&&snapshot.lastEncoding==='utf-8'&&snapshot.lastStdinBytes==='12'&&snapshot.lastStdinClosed==='1'&&Number(snapshot.lastOutputLines)>=3&&Number(snapshot.lastOutputBytes)>0&&snapshot.lastDurationMs==='7'&&snapshot.lastStdoutTruncated==='0'&&snapshot.lastStderrTruncated==='0'&&snapshot.payloadCwd==='E:/VC/SAO-UI/sao_auto'&&snapshot.payloadProfile==='Windows PowerShell'&&snapshot.writePayloadData==='hello stdin\n'&&snapshot.writeBytes===12&&snapshot.closeStdinPayload===true&&snapshot.closeStdinEcho&&snapshot.closeStdinResult===true&&snapshot.runtimeSnapshot&&snapshot.runtimeSnapshot.cwdMatchesWorkspace&&['warn','ok'].includes(snapshot.runtimeSnapshot.health)&&snapshot.runtimeSnapshot.runnable&&snapshot.runtimeSnapshot.stopEnabled===false&&snapshot.runtimeSnapshot.restartEnabled===true&&snapshot.runtimeSnapshot.commandBlocks>=3&&snapshot.runtimeSnapshot.outputBounded&&snapshot.runtimeSnapshot.outputFlushes>=1&&snapshot.runtimeSnapshot.outputNodes>=1&&snapshot.runtimeSnapshot.workspaceSync.protected>=1&&snapshot.runtimeSnapshot.blocks.some(block=>block.command==='slow-command'&&block.state==='cancelled')&&snapshot.performanceSnapshot&&snapshot.performanceSnapshot.pass;
     return snapshot;
   }finally{
     call=oldCall;
