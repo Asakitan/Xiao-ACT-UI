@@ -88,13 +88,24 @@ class TkMirrorLayer:
         self._orig_w = self._width
         self._orig_h = self._height
 
-        ex = _user32.GetWindowLongPtrW(self._hwnd, GWL_EXSTYLE)
-        _user32.SetWindowLongPtrW(
-            self._hwnd, GWL_EXSTYLE, ex | WS_EX_NOACTIVATE)
+        # Save original exstyle + alpha for detach restore
+        self._orig_exstyle = _user32.GetWindowLongPtrW(
+            self._hwnd, GWL_EXSTYLE)
+        try:
+            self._orig_alpha = float(win.attributes('-alpha') or 1.0)
+        except Exception:
+            self._orig_alpha = 1.0
 
-        _user32.MoveWindow(
-            self._hwnd, -10000, -10000,
-            self._width, self._height, False)
+        # Make the Tk window nearly invisible (alpha≈0) and click-through.
+        # The window stays at its normal position so PrintWindow captures
+        # valid content (moving off-screen causes empty frames).
+        _user32.SetWindowLongPtrW(
+            self._hwnd, GWL_EXSTYLE,
+            self._orig_exstyle | WS_EX_NOACTIVATE | WS_EX_TRANSPARENT)
+        try:
+            win.attributes('-alpha', 0.01)
+        except Exception:
+            pass
 
         self._install_geometry_hook()
 
@@ -143,11 +154,14 @@ class TkMirrorLayer:
                 pass
             self._layer = None
 
+        # Restore original alpha + exstyle
         try:
-            _user32.MoveWindow(
-                self._hwnd,
-                self._screen_x, self._screen_y,
-                self._width, self._height, True)
+            self._tk_win.attributes('-alpha', self._orig_alpha)
+        except Exception:
+            pass
+        try:
+            _user32.SetWindowLongPtrW(
+                self._hwnd, GWL_EXSTYLE, self._orig_exstyle)
         except Exception:
             pass
         self._attached = False
@@ -167,6 +181,10 @@ class TkMirrorLayer:
         self._screen_y = y
         if self._layer:
             self._layer.set_position(x, y)
+        if self._hwnd:
+            _user32.MoveWindow(
+                self._hwnd, x, y,
+                self._width, self._height, False)
 
     def set_geometry(self, x: int, y: int, w: int, h: int) -> None:
         self._screen_x = x
@@ -176,9 +194,8 @@ class TkMirrorLayer:
         self._height = h
         if self._layer:
             self._layer.set_geometry(x, y, w, h)
-        if changed and self._hwnd:
-            _user32.MoveWindow(
-                self._hwnd, -10000, -10000, w, h, True)
+        if self._hwnd:
+            _user32.MoveWindow(self._hwnd, x, y, w, h, True)
 
     # ── Capture loop ─────────────────────────────────────────
 
@@ -320,7 +337,7 @@ import tkinter as tk
 def _compositor_tk_panels_enabled() -> bool:
     try:
         from config import SettingsManager
-        return bool(SettingsManager().get('compositor_tk_panels', False))
+        return bool(SettingsManager().get('compositor_tk_panels', True))
     except Exception:
         return False
 
