@@ -4796,7 +4796,7 @@ def test_phase1_ai_editor_regressions() -> None:
            and "settingsRenderRowImpact(wrap);" in html)
     _check("frontend Settings defaults to calmer VS Code workbench UX",
            'class="modal settings-modal preferences-workbench settings-vscode-calm"' in html
-           and 'data-panel="settings" data-i18n-title="settings" title="Settings"' in html
+           and 'data-panel="settings" data-command="open-settings" data-i18n-title="settings" title="Settings"' in html
            and 'data-settings-manage-icon="gear"' in html
            and 'data-settings-manage-style="codicon-gear"' in html
            and 'data-settings-manage-shape="codicon-settings-gear"' in html
@@ -5077,8 +5077,10 @@ def test_phase1_ai_editor_regressions() -> None:
            and "if(e&&e.key==='Escape')clearTransientInteractionBlockers('escape');" in html
            and "e.preventDefault();clearTransientInteractionBlockers('drop');" in html)
     _check("frontend activity bar uses VS Code manage gear for Settings",
-           'class="ab-icon activity-manage" data-panel="settings"' in html
+           'class="ab-icon activity-manage" data-panel="settings" data-command="open-settings"' in html
            and 'title="Settings"' in html
+           and 'class="ab-icon activity-theme" data-command="toggle-theme"' in html
+           and 'data-theme-toggle-icon="day-night"' in html
            and 'data-settings-manage-icon="gear"' in html
            and 'data-settings-manage-style="codicon-gear"' in html
            and 'data-settings-manage-shape="codicon-settings-gear"' in html
@@ -5091,11 +5093,19 @@ def test_phase1_ai_editor_regressions() -> None:
            and 'class="ab-icon theme-toggle"' not in html
            and 'title="Toggle Theme" onclick="toggleTheme()"' not in html
            and "function toggleTheme()" in html
+           and "function runActivityCommand(command)" in html
+           and "if(cmd==='toggle-theme'){toggleTheme();return true}" in html
+           and "if(cmd==='open-settings'){" in html
+           and "switchSidebar('settings');" in html
            and "function setupActivityButtonAccessibility(btn)" in html
+           and "(!btn.dataset.panel&&!btn.dataset.command)" in html
            and "btn.setAttribute('role','button');" in html
            and "btn.tabIndex=0;" in html
-           and "btn.setAttribute('aria-label',title?('Open '+title):'Open view');" in html
+           and "const prefix=btn.dataset.command?'':'Open ';" in html
+           and "btn.setAttribute('aria-label',title?(prefix+title):'Open view');" in html
            and "if(e.key==='Enter'||e.key===' '){e.preventDefault();btn.click()}" in html
+           and "document.querySelectorAll('.ab-icon[data-panel],.ab-icon[data-command]').forEach(i=>{" in html
+           and "if(i.dataset.command&&runActivityCommand(i.dataset.command))return;" in html
            and "setupActivityButtonAccessibility(i);" in html)
     _check("frontend Settings row actions are keyboard accessible",
            "btn.setAttribute('aria-label',title||label);" in html
@@ -11373,6 +11383,13 @@ console.log("frontend word separator behavior ok");
              and "Same Extension','Filter extension settings from" in html
              and "Same Scope','Filter extension settings by scope" in html
              and "Copy Schema','Copy extension setting schema summary" in html
+             and "function extensionSettingConditionInsightItems(schema,type,defaultValue)" in html
+             and "function appendExtensionSettingConditionInsight(row,schema,type,defaultValue)" in html
+             and "host.dataset.extSettingConditionInsight='1';" in html
+             and "row.dataset.extSettingConditionTokens=host.dataset.conditionTokens;" in html
+             and "appendExtensionSettingConditionInsight(row,schema,type,defaultValue);" in html
+             and "appendExtensionSettingConditionInsight(row,schema,type,defaultVal);" in html
+             and "data.extSettingConditionTokens" in html
              and "row.dataset.extSettingDisplayName=displayName||extId||'Extension';" in html
              and "row.dataset.extSettingConfig=configId||title||headerLabel||'Configuration';" in html
              and "row.dataset.extSettingConfig='Language Defaults';" in html
@@ -12571,6 +12588,8 @@ console.log("frontend word separator behavior ok");
             "extensionSettingSchemaCache",
             "extensionSettingCachedSchemaValue",
             "extensionSettingSchemaDetailItems",
+            "extensionSettingConditionInsightItems",
+            "appendExtensionSettingConditionInsight",
             "appendExtensionSettingSchemaDetails",
             "extensionSettingDefaultOverrideMetadata",
             "appendExtensionSettingDefaultOverrideBadge",
@@ -13383,6 +13402,27 @@ assert(schemaDetailHost.children.some(n => String(n.className || "").indexOf("ex
        && n.children.some(chip => chip.className === "ext-setting-schema-chip"
          && chip.dataset.schemaTag === "conditional")),
        "schema detail chips hydrate in collapsible details with tags");
+const conditionInsightItems = extensionSettingConditionInsightItems(conditionalSchema, "object", {});
+const dependencyInsightItems = extensionSettingConditionInsightItems(dependencySchema, "object", {});
+assert(conditionInsightItems.some(item => item.kind === "conditional" && item.text.indexOf("if") >= 0)
+       && dependencyInsightItems.some(item => item.kind === "dependency" && item.text.indexOf("mode -> threshold") >= 0),
+       "condition insight items summarize condition and dependency rules");
+const conditionInsightHost = makeNode("div");
+const conditionInsight = appendExtensionSettingConditionInsight(conditionInsightHost, conditionalSchema, "object", {});
+assert(conditionInsight
+       && conditionInsight.dataset.extSettingConditionInsight === "1"
+       && conditionInsight.dataset.conditionCount === "1"
+       && conditionInsightHost.dataset.extSettingConditionInsight === "1"
+       && conditionInsightHost.dataset.extSettingConditionTokens.indexOf("conditional") >= 0
+       && conditionInsight.children.some(chip => chip.dataset.conditionKind === "conditional"),
+       "condition insight renders row-level condition metadata");
+const dependencyInsightHost = makeNode("div");
+const dependencyInsight = appendExtensionSettingConditionInsight(dependencyInsightHost, dependencySchema, "object", {});
+assert(dependencyInsight
+       && dependencyInsight.dataset.dependencyCount === "1"
+       && dependencyInsightHost.dataset.extSettingDependencyCount === "1"
+       && dependencyInsightHost.dataset.extSettingConditionTokens.indexOf("dependency") >= 0,
+       "condition insight renders dependency metadata");
 const schemaHints = extensionSettingSchemaHintItems(objectSuggestionSchema, "object");
 assert(schemaHints.some(item => item.label === "Known keys")
        && schemaHints.some(item => item.label === "Pattern keys")
@@ -14686,7 +14726,7 @@ console.log("extension setting schema helpers ok");
             and "#ctx-menu .ctx-item.disabled" in html
             and "activateBottomPanelTab(document.querySelector('.ptab[data-ptab=\"terminal\"]'))" in html)
     _check("frontend extension runtime surfaces expose DOM selfcheck",
-           "function extensionRuntimeDomSelfCheckSnapshot()" in html
+           "async function extensionRuntimeDomSelfCheckSnapshot()" in html
            and "window.extensionRuntimeDomSelfCheckSnapshot=extensionRuntimeDomSelfCheckSnapshot;" in html
            and "renderExtensionViewsInto(root,fixtureItem,{showMeta:true});" in html
            and "createExtensionActivityButton(fixtureItem)" in html
@@ -16255,7 +16295,17 @@ console.log("command palette quick access helpers ok");
             and "window.terminalRuntimeSnapshot=terminalRuntimeSnapshot" in html
             and "function _terminalContextMeta(meta)" in html
             and "function _updateTerminalContextBar(meta,state)" in html
-           and "function _terminalOutputStats(out)" in html
+            and "id=\"terminal-profile-inspector\"" in html
+            and "function terminalProfileLaunchContext(meta)" in html
+            and "function renderTerminalProfileInspector(meta,state)" in html
+            and "host.dataset.terminalProfileInspector='1';" in html
+            and "host.dataset.shellPath=ctx.shellPath;" in html
+            and "host.dataset.runnable=ctx.runnable?'1':'0';" in html
+            and "window.terminalProfileLaunchContext=terminalProfileLaunchContext;" in html
+            and "window.renderTerminalProfileInspector=renderTerminalProfileInspector;" in html
+            and "profileInspector:inspector&&inspector.dataset?{" in html
+            and "snapshot.inspectorReady&&snapshot.inspectorProfile==='Windows PowerShell'" in html
+            and "function _terminalOutputStats(out)" in html
            and "const _TERM_OUTPUT_NODE_LIMIT=1600;" in html
            and "const _TERM_OUTPUT_CHAR_LIMIT=220000;" in html
            and "const _terminalAppendStats={flushes:0,trimmedNodes:0,trimmedChars:0,lastFlushMs:0,lastTarget:''};" in html

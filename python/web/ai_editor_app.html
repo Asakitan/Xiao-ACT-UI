@@ -1728,6 +1728,20 @@ pre.code-block code .type { color:var(--fg-type); }
 .terminal-context-actions button { height:20px; padding:0 7px; border:1px solid var(--border); border-radius:3px;
   background:transparent; color:var(--fg-dim); font:10px var(--sans); cursor:pointer; }
 .terminal-context-actions button:hover,.terminal-context-actions button:focus { color:var(--fg); border-color:var(--border-focus); outline:none; background:var(--bg-hover); }
+.terminal-profile-inspector { min-height:26px; display:flex; align-items:center; gap:5px; padding:3px 12px;
+  border-top:1px solid color-mix(in srgb,var(--border) 48%,transparent);
+  background:color-mix(in srgb,var(--bg-panel) 88%,var(--bg2)); color:var(--fg-dim);
+  font:11px var(--mono); flex-shrink:0; overflow:hidden; }
+.terminal-profile-inspector .profile-chip { max-width:220px; min-height:18px; display:inline-flex; align-items:center; gap:4px;
+  padding:0 6px; border:1px solid color-mix(in srgb,var(--border) 72%,transparent); border-radius:3px;
+  background:color-mix(in srgb,var(--bg3) 58%,transparent); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.terminal-profile-inspector .profile-chip strong { color:var(--fg); font-weight:600; overflow:hidden; text-overflow:ellipsis; }
+.terminal-profile-inspector .profile-chip.ok strong { color:var(--fg-success); }
+.terminal-profile-inspector .profile-chip.warn strong { color:var(--fg-warning); }
+.terminal-profile-inspector .profile-spacer { flex:1 1 auto; min-width:4px; }
+.terminal-profile-inspector button { height:20px; padding:0 7px; border:1px solid var(--border); border-radius:3px;
+  background:transparent; color:var(--fg-dim); font:10px var(--sans); cursor:pointer; }
+.terminal-profile-inspector button:hover,.terminal-profile-inspector button:focus { color:var(--fg); border-color:var(--border-focus); outline:none; background:var(--bg-hover); }
 .terminal-diagnostics-strip { min-height:25px; display:flex; align-items:center; gap:5px; padding:3px 12px;
   border-top:1px solid color-mix(in srgb,var(--border) 50%,transparent);
   background:color-mix(in srgb,var(--bg-panel) 92%,var(--bg2)); color:var(--fg-dim);
@@ -3888,6 +3902,14 @@ pre.code-block { overflow:visible; }
 .ext-setting-desc strong,.ext-setting-enum-desc strong,.ext-setting-deprecated strong,.ext-setting-enum-choices strong { color:var(--fg); font-weight:600; }
 .ext-setting-desc em,.ext-setting-enum-desc em,.ext-setting-deprecated em,.ext-setting-enum-choices em { color:var(--fg); font-style:italic; }
 .ext-setting-schema { font-size:10px; color:var(--fg-dim); font-family:var(--mono); margin-bottom:4px; }
+.ext-setting-condition-insight { display:flex; flex-wrap:wrap; gap:4px; margin:0 0 5px;
+  color:var(--fg-dim); font:10px var(--mono); }
+.ext-setting-condition-chip { display:inline-flex; align-items:center; gap:3px; max-width:100%;
+  padding:1px 5px; border:1px solid color-mix(in srgb,var(--border) 78%,transparent); border-radius:3px;
+  background:color-mix(in srgb,var(--bg3) 62%,transparent); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.ext-setting-condition-chip strong { color:var(--fg); font-family:var(--sans); font-weight:600; }
+.ext-setting-condition-chip.conditional strong { color:var(--fg-accent); }
+.ext-setting-condition-chip.dependency strong { color:var(--fg-warning); }
 .ext-setting-schema-details { display:flex; flex-wrap:wrap; gap:4px; margin:0 0 5px; }
 .ext-setting-schema-details summary { flex:1 0 100%; }
 .ext-setting-schema-details summary::-webkit-details-marker { display:none; }
@@ -4193,7 +4215,8 @@ pre.code-block { overflow:visible; }
     <div class="ab-icon" data-panel="premium" data-i18n-title="premium" title="Premium"><svg width="20" height="20" viewBox="0 0 20 20" fill="none"><rect x="4" y="8" width="12" height="9" rx="1.5" stroke="currentColor" stroke-width="1.5"/><path d="M7 8V5.5a3 3 0 016 0V8" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/><circle cx="10" cy="13" r="1.2" fill="currentColor"/></svg></div>
     <div id="ext-actbar-items"></div>
     <div class="ab-spacer"></div>
-    <div class="ab-icon activity-manage" data-panel="settings" data-i18n-title="settings" title="Settings"><svg class="settings-gear-icon" width="20" height="20" viewBox="0 0 16 16" fill="currentColor" data-settings-manage-icon="gear" data-settings-manage-style="codicon-gear" data-settings-manage-shape="codicon-settings-gear" data-settings-manage-visual="solid-vscode-gear" aria-hidden="true"><path data-settings-manage-gear-teeth="codicon-settings-gear" fill-rule="evenodd" clip-rule="evenodd" d="M9.18 1.5H6.82l-.42 2.06c-.34.12-.67.25-.98.41L3.66 2.8 2.08 4.38l1.16 1.74c-.17.32-.31.66-.42 1.01L.75 7.54v2.24l2.07.41c.11.35.25.69.42 1.01l-1.16 1.74 1.58 1.58 1.76-1.17c.31.16.64.29.98.41l.42 2.06h2.36l.42-2.06c.34-.12.67-.25.98-.41l1.76 1.17 1.58-1.58-1.16-1.74c.17-.32.31-.66.42-1.01l2.07-.41V7.54l-2.07-.41a5.63 5.63 0 0 0-.42-1.01l1.16-1.74-1.58-1.58-1.76 1.17c-.31-.16-.64-.29-.98-.41L9.18 1.5zM8 10.75A2.75 2.75 0 1 0 8 5.25a2.75 2.75 0 0 0 0 5.5z"/><circle data-settings-manage-gear-center="codicon-settings-gear" cx="8" cy="8" r="1.55" fill="var(--activitybar-bg,#181818)"/></svg></div>
+    <div class="ab-icon activity-theme" data-command="toggle-theme" data-i18n-title="toggle_theme" title="Toggle Theme"><svg class="theme-toggle-icon" width="20" height="20" viewBox="0 0 20 20" fill="none" data-theme-toggle-icon="day-night" aria-hidden="true"><path d="M10 2.75a7.25 7.25 0 107.25 7.25c0-.42-.04-.83-.11-1.23A5.25 5.25 0 0111.23 2.86 7.4 7.4 0 0010 2.75z" stroke="currentColor" stroke-width="1.45" stroke-linejoin="round"/><path d="M4.9 15.1L15.1 4.9" stroke="currentColor" stroke-width="1.35" stroke-linecap="round"/></svg></div>
+    <div class="ab-icon activity-manage" data-panel="settings" data-command="open-settings" data-i18n-title="settings" title="Settings"><svg class="settings-gear-icon" width="20" height="20" viewBox="0 0 16 16" fill="currentColor" data-settings-manage-icon="gear" data-settings-manage-style="codicon-gear" data-settings-manage-shape="codicon-settings-gear" data-settings-manage-visual="solid-vscode-gear" aria-hidden="true"><path data-settings-manage-gear-teeth="codicon-settings-gear" fill-rule="evenodd" clip-rule="evenodd" d="M9.18 1.5H6.82l-.42 2.06c-.34.12-.67.25-.98.41L3.66 2.8 2.08 4.38l1.16 1.74c-.17.32-.31.66-.42 1.01L.75 7.54v2.24l2.07.41c.11.35.25.69.42 1.01l-1.16 1.74 1.58 1.58 1.76-1.17c.31.16.64.29.98.41l.42 2.06h2.36l.42-2.06c.34-.12.67-.25.98-.41l1.76 1.17 1.58-1.58-1.16-1.74c.17-.32.31-.66.42-1.01l2.07-.41V7.54l-2.07-.41a5.63 5.63 0 0 0-.42-1.01l1.16-1.74-1.58-1.58-1.76 1.17c-.31-.16-.64-.29-.98-.41L9.18 1.5zM8 10.75A2.75 2.75 0 1 0 8 5.25a2.75 2.75 0 0 0 0 5.5z"/><circle data-settings-manage-gear-center="codicon-settings-gear" cx="8" cy="8" r="1.55" fill="var(--activitybar-bg,#181818)"/></svg></div>
   </div>
 
   <!-- Sidebar -->
@@ -4468,6 +4491,7 @@ pre.code-block { overflow:visible; }
             <button type="button" data-terminal-context-action="reuse-cwd" onclick="useTerminalCwdAsWorkspace()">Use CWD</button>
           </span>
         </div>
+        <div class="terminal-profile-inspector" id="terminal-profile-inspector" role="status" aria-live="polite" aria-label="Terminal profile launch context"></div>
         <div class="terminal-diagnostics-strip" id="terminal-diagnostics-strip" data-terminal-diagnostics="1" role="status" aria-live="polite">
           <span class="terminal-diagnostic-pill" data-terminal-diagnostic="run">run <strong>idle</strong></span>
           <span class="terminal-diagnostic-pill" data-terminal-diagnostic="job">job <strong>-</strong></span>
@@ -5677,6 +5701,12 @@ function settingsRenderRowImpact(row){
   if(info&&info.meta&&settingsBackendTargetName(currentSettingsTarget)!=='global'){
     settingsImpactChip(host,'Inherited: '+settingCompactDisplayValue(settingInheritedValueForTarget(info.meta,currentSettingsTarget),36),'');
   }
+  if(row&&row.dataset&&row.dataset.extSettingConditionInsight==='1'){
+    const cond=Number(row.dataset.extSettingConditionCount||0)||0;
+    const dep=Number(row.dataset.extSettingDependencyCount||0)||0;
+    if(cond)settingsImpactChip(host,'Condition rules: '+cond,'active');
+    if(dep)settingsImpactChip(host,'Dependencies: '+dep,'warning');
+  }
   if(row&&row.classList&&row.classList.contains('invalid'))settingsImpactChip(host,'Needs attention','warning');
 }
 function renderSettingsRowImpactSummaries(){
@@ -5955,6 +5985,7 @@ function settingsAppendExtensionDetailPanel(host,row){
   add('Type',data.extSettingType||'');
   add('Default',data.extSettingDefaultSource||'');
   add('Schema',data.extSettingSchemaSummary||'');
+  if(data.extSettingConditionTokens)add('Rules',data.extSettingConditionTokens);
   if(data.extSettingReadonlyReason)add('Readonly',data.extSettingReadonlyReason);
   card.appendChild(grid);
   const actions=document.createElement('span');
@@ -23853,13 +23884,26 @@ function switchSidebar(panel){
   }
   const sb=$('sidebar');sb.classList.remove('hidden');
 }
+function runActivityCommand(command){
+  const cmd=String(command||'').trim();
+  if(cmd==='toggle-theme'){toggleTheme();return true}
+  if(cmd==='open-settings'){
+    reportActiveExtensionActivityVisibility(false);
+    _activeSidebarPanel='settings';
+    switchSidebar('settings');
+    if(typeof _saveLayoutImmediate==='function')_saveLayoutImmediate();
+    return true;
+  }
+  return false;
+}
 function setupActivityButtonAccessibility(btn){
-  if(!btn||!btn.dataset||!btn.dataset.panel)return;
+  if(!btn||!btn.dataset||(!btn.dataset.panel&&!btn.dataset.command))return;
   if(!btn.hasAttribute('role'))btn.setAttribute('role','button');
   if(!btn.hasAttribute('tabindex'))btn.tabIndex=0;
   if(!btn.hasAttribute('aria-label')){
     const title=String(btn.getAttribute('title')||btn.dataset.panel||'View').trim();
-    btn.setAttribute('aria-label',title?('Open '+title):'Open view');
+    const prefix=btn.dataset.command?'':'Open ';
+    btn.setAttribute('aria-label',title?(prefix+title):'Open view');
   }
   if(btn.dataset.activityKeydownBound==='1')return;
   btn.dataset.activityKeydownBound='1';
@@ -23869,9 +23913,10 @@ function setupActivityButtonAccessibility(btn){
 }
 // LN-10: Same-icon click toggles sidebar off (VSCode behavior)
 let _activeSidebarPanel='chat';
-document.querySelectorAll('.ab-icon[data-panel]').forEach(i=>{
+document.querySelectorAll('.ab-icon[data-panel],.ab-icon[data-command]').forEach(i=>{
   setupActivityButtonAccessibility(i);
   i.addEventListener('click',function(){
+    if(i.dataset.command&&runActivityCommand(i.dataset.command))return;
     const panel=i.dataset.panel;
     if(panel===_activeSidebarPanel&&_sidebarVis){toggleSidebarVis();return}
     reportActiveExtensionActivityVisibility(false);
@@ -25220,6 +25265,7 @@ function terminalWorkspaceSyncSnapshot(){
   const status=$('terminal-status-line');
   const context=$('terminal-context-bar');
   const diagnostics=$('terminal-diagnostics-strip');
+  const inspector=$('terminal-profile-inspector');
   return {
     workspaceRoot:root,
     terminalCwd:cwd,
@@ -37107,6 +37153,50 @@ function extensionSettingSchemaDetailItems(schema,type,defaultValue){
   return details;
   });
 }
+function extensionSettingConditionInsightItems(schema,type,defaultValue){
+  schema=(schema&&typeof schema==='object')?schema:{};
+  const details=extensionSettingSchemaDetailItems(schema,type,defaultValue);
+  const tags=extensionSettingSchemaFeatureTags(schema,type);
+  const items=[];
+  const push=(kind,label,text)=>{
+    text=String(text||'').trim();
+    if(text)items.push({kind,label:String(label||kind),text});
+  };
+  details.filter(item=>item&&(item.tag==='conditional'||item.tag==='dependency'||item.tag==='composition')).forEach(item=>{
+    push(item.tag,item.label,item.text);
+  });
+  if(!items.some(item=>item.kind==='conditional')&&tags.includes('conditional'))push('conditional','Condition','if -> then -> else');
+  if(!items.some(item=>item.kind==='dependency')&&tags.includes('dependency'))push('dependency','Dependency','dependency rules configured');
+  return items.slice(0,6);
+}
+function appendExtensionSettingConditionInsight(row,schema,type,defaultValue){
+  const items=extensionSettingConditionInsightItems(schema,type,defaultValue);
+  if(!row||!items.length)return null;
+  const host=document.createElement('div');
+  host.className='ext-setting-condition-insight';
+  host.dataset.extSettingConditionInsight='1';
+  host.dataset.conditionCount=String(items.filter(item=>item.kind==='conditional').length);
+  host.dataset.dependencyCount=String(items.filter(item=>item.kind==='dependency').length);
+  host.dataset.compositionCount=String(items.filter(item=>item.kind==='composition').length);
+  host.dataset.conditionTokens=items.map(item=>item.kind+':'+item.text).join(' | ');
+  items.forEach(item=>{
+    const chip=document.createElement('span');
+    chip.className='ext-setting-condition-chip '+item.kind;
+    chip.dataset.conditionKind=item.kind;
+    chip.title=item.label+': '+item.text;
+    const label=document.createElement('strong');label.textContent=item.label+':';
+    chip.appendChild(label);
+    chip.appendChild(document.createTextNode(' '+item.text));
+    host.appendChild(chip);
+  });
+  row.dataset.extSettingConditionInsight='1';
+  row.dataset.extSettingConditionTokens=host.dataset.conditionTokens;
+  row.dataset.extSettingConditionCount=host.dataset.conditionCount;
+  row.dataset.extSettingDependencyCount=host.dataset.dependencyCount;
+  row.dataset.extSettingCompositionCount=host.dataset.compositionCount;
+  row.appendChild(host);
+  return host;
+}
 function extensionSettingSchemaHintItems(schema,type){
   schema=(schema&&typeof schema==='object')?schema:{};
   const cacheKey='hints|'+String(type||'');
@@ -39529,6 +39619,7 @@ function renderExtensionLanguageDefaults(languageDefaults,container,categorySele
       const meta=document.createElement('div');meta.className='ext-setting-schema';meta.textContent=metaParts.join(' · ');
       row.appendChild(meta);
       appendExtensionSettingDefaultValue(row,defaultValue,type);
+      appendExtensionSettingConditionInsight(row,schema,type,defaultValue);
       appendExtensionSettingSchemaDetails(row,schema,type,defaultValue);
       let input,enumHelp;
       if(type==='boolean'){
@@ -40022,6 +40113,7 @@ async function renderExtensionSettings(){
       const meta=document.createElement('div');meta.className='ext-setting-schema';meta.textContent=metaParts.join(' · ');
       row.appendChild(meta);
       appendExtensionSettingDefaultValue(row,defaultVal,type);
+      appendExtensionSettingConditionInsight(row,schema,type,defaultVal);
       appendExtensionSettingSchemaDetails(row,schema,type,defaultVal);
       let input,enumHelp;
       if(type==='boolean'){
@@ -44953,7 +45045,7 @@ async function renderExtensionActivityBar(){
     container.appendChild(createExtensionActivityButton(item));
   });
 }
-function extensionRuntimeDomSelfCheckSnapshot(){
+async function extensionRuntimeDomSelfCheckSnapshot(){
   const root=document.createElement('div');
   root.style.cssText='position:absolute;left:-10000px;top:-10000px;width:760px;height:auto;visibility:hidden';
   document.body.appendChild(root);
@@ -49252,6 +49344,7 @@ function renderTerminalProfileSelector(){
   });
   sel.value=TERMINAL_PROFILE_OPTIONS.some(item=>item.id===profile)?profile:TERMINAL_PROFILE_OPTIONS[0].id;
   sel.title='Terminal profile: '+terminalProfileDefinition(sel.value).name;
+  renderTerminalProfileInspector(terminalProfileMetadata(sel.value),'idle');
 }
 async function selectTerminalProfile(profile,opts){
   opts=opts||{};
@@ -49665,6 +49758,80 @@ function _terminalContextMeta(meta){
     workspaceRoot:String(meta.workspaceRoot||currentWorkspaceRoot()||'')
   };
 }
+function terminalProfileLaunchContext(meta){
+  meta=meta&&typeof meta==='object'?meta:{};
+  const profileId=String(meta.profile||currentTerminalProfile()||TERMINAL_PROFILE_OPTIONS[0].id);
+  const def=terminalProfileDefinition(profileId);
+  const cwd=String(meta.cwd||terminalCurrentCwd&&terminalCurrentCwd()||currentWorkspaceRoot()||'');
+  const shellArgs=Array.isArray(meta.shellArgs)?meta.shellArgs.slice():(Array.isArray(def.shellArgs)?def.shellArgs.slice():[]);
+  const shellPath=String(meta.shellPath!==undefined?meta.shellPath:def.shellPath||'');
+  const shellKind=String(meta.shellKind||def.shellKind||'system');
+  const workspaceCwd=meta.workspaceCwd===true?true:(meta.workspaceCwd===false?false:_terminalCwdMatchesWorkspace(cwd));
+  const isDefault=profileId===String(currentTerminalProfile()||'');
+  const runnable=!!(workspaceCwd&&(shellPath||shellKind==='system'||def.id==='System Shell'));
+  return {
+    profile:profileId,
+    name:String(def.name||profileId),
+    shellKind,
+    shellPath,
+    shellArgs,
+    shellArgsText:shellArgs.length?shellArgs.join(' '):'none',
+    cwd,
+    workspaceCwd,
+    workspaceRoot:String(meta.workspaceRoot||currentWorkspaceRoot()||''),
+    profileSource:String(meta.profileSource||(isDefault?'default':'selected')),
+    cwdSource:String(meta.cwdSource||(workspaceCwd?'workspace':'explicit')),
+    shellIntegrationStatus:String(meta.shellIntegrationStatus||'none'),
+    encoding:String(meta.encoding||'utf-8'),
+    isDefault,
+    runnable
+  };
+}
+function renderTerminalProfileInspector(meta,state){
+  const host=$('terminal-profile-inspector');if(!host)return null;
+  const ctx=terminalProfileLaunchContext(meta);
+  host.dataset.terminalProfileInspector='1';
+  host.dataset.state=String(state||'idle');
+  host.dataset.profile=ctx.profile;
+  host.dataset.profileName=ctx.name;
+  host.dataset.shellKind=ctx.shellKind;
+  host.dataset.shellPath=ctx.shellPath;
+  host.dataset.shellArgs=ctx.shellArgsText;
+  host.dataset.cwd=ctx.cwd;
+  host.dataset.workspaceCwd=ctx.workspaceCwd?'1':'0';
+  host.dataset.runnable=ctx.runnable?'1':'0';
+  host.dataset.defaultProfile=ctx.isDefault?'1':'0';
+  host.dataset.profileSource=ctx.profileSource;
+  host.dataset.cwdSource=ctx.cwdSource;
+  host.dataset.shellIntegrationStatus=ctx.shellIntegrationStatus;
+  host.dataset.encoding=ctx.encoding;
+  host.innerHTML='';
+  const addChip=(label,value,cls,title)=>{
+    const chip=document.createElement('span');
+    chip.className='profile-chip'+(cls?' '+cls:'');
+    chip.title=title||String(value||'');
+    const name=document.createElement('span');name.textContent=label;
+    const strong=document.createElement('strong');strong.textContent=String(value||'-');
+    chip.appendChild(name);chip.appendChild(strong);host.appendChild(chip);
+    return chip;
+  };
+  addChip('Profile',ctx.name+(ctx.isDefault?' (Default)':''),'ok',ctx.profile);
+  addChip('Shell',ctx.shellPath||ctx.shellKind,ctx.shellPath||ctx.shellKind==='system'?'ok':'warn',ctx.shellKind);
+  addChip('Args',ctx.shellArgsText,'',ctx.shellArgsText);
+  addChip('CWD',ctx.cwd?pathBaseName(ctx.cwd):'-',ctx.workspaceCwd?'ok':'warn',ctx.cwd||'No terminal cwd');
+  addChip('Launch',ctx.runnable?'Ready':'Check',''+(ctx.runnable?'ok':'warn'),ctx.runnable?'Profile can launch in workspace cwd':'Profile or workspace cwd needs attention');
+  const spacer=document.createElement('span');spacer.className='profile-spacer';host.appendChild(spacer);
+  const addButton=(label,title,handler)=>{
+    const btn=document.createElement('button');
+    btn.type='button';btn.textContent=label;btn.title=title||label;btn.setAttribute('aria-label',title||label);
+    btn.onclick=ev=>{ev.preventDefault();handler&&handler(ctx)};
+    host.appendChild(btn);
+  };
+  addButton('New','Create a terminal with this profile',profileCtx=>_createTerminal(null,terminalProfileMetadata(profileCtx.profile),true));
+  addButton('Copy Shell','Copy terminal shell launch metadata',profileCtx=>settingsCopyText([profileCtx.profile,profileCtx.shellPath,profileCtx.shellArgsText,profileCtx.cwd].filter(Boolean).join('\n'),'Terminal profile'));
+  addButton('Settings','Filter Settings to terminal',()=>settingsUseSearchHint('@terminal'));
+  return ctx;
+}
 function _updateTerminalContextBar(meta,state){
   const bar=$('terminal-context-bar');if(!bar)return;
   const ctx=_terminalContextMeta(meta);
@@ -49976,6 +50143,7 @@ function _setTerminalStatus(state,text,detail,meta){
   if(detailEl){detailEl.textContent=detail||'';detailEl.title=[meta.lastCommand?('$ '+meta.lastCommand):'',meta.startedAt?('Started: '+meta.startedAt):'',meta.finishedAt?('Finished: '+meta.finishedAt):''].filter(Boolean).join('\n')}
   _updateTerminalPrompt({...meta,cwd,profile});
   _updateTerminalContextBar({...meta,cwd,profile},state);
+  renderTerminalProfileInspector({...meta,cwd,profile},state);
   _updateTerminalDiagnostics({...meta,cwd,profile,exitCode,durationMs,stdoutTruncated,stderrTruncated},state);
 }
 function _updateTerminalStatusLine(){
@@ -50198,6 +50366,22 @@ function terminalRuntimeSnapshot(){
     lastDurationMs:status&&status.dataset?String(status.dataset.durationMs||''):'',
     health:diagnostics&&diagnostics.dataset?String(diagnostics.dataset.health||''):'',
     runnable:diagnostics&&diagnostics.dataset?diagnostics.dataset.runnable==='1':_terminalCwdMatchesWorkspace(cwd),
+    profileInspector:inspector&&inspector.dataset?{
+      ready:inspector.dataset.terminalProfileInspector==='1',
+      profile:inspector.dataset.profile||'',
+      profileName:inspector.dataset.profileName||'',
+      shellKind:inspector.dataset.shellKind||'',
+      shellPath:inspector.dataset.shellPath||'',
+      shellArgs:inspector.dataset.shellArgs||'',
+      cwd:inspector.dataset.cwd||'',
+      workspaceCwd:inspector.dataset.workspaceCwd==='1',
+      runnable:inspector.dataset.runnable==='1',
+      defaultProfile:inspector.dataset.defaultProfile==='1',
+      profileSource:inspector.dataset.profileSource||'',
+      cwdSource:inspector.dataset.cwdSource||'',
+      shellIntegrationStatus:inspector.dataset.shellIntegrationStatus||'',
+      encoding:inspector.dataset.encoding||''
+    }:null,
     stopEnabled:stop?stop.dataset.enabled==='1':false,
     restartEnabled:restart?restart.dataset.enabled==='1':false,
     workspaceSync:{...(_lastTerminalWorkspaceSync||{}),decisions:Array.isArray(_lastTerminalWorkspaceSync&&_lastTerminalWorkspaceSync.decisions)?_lastTerminalWorkspaceSync.decisions.slice():[]},
@@ -50518,6 +50702,8 @@ window._terminalRememberCommand=_terminalRememberCommand;
 window._terminalCwdMatchesWorkspace=_terminalCwdMatchesWorkspace;
 window.selectTerminalProfile=selectTerminalProfile;
 window.renderTerminalProfileSelector=renderTerminalProfileSelector;
+window.terminalProfileLaunchContext=terminalProfileLaunchContext;
+window.renderTerminalProfileInspector=renderTerminalProfileInspector;
 window.openWorkspaceSwitcher=openWorkspaceSwitcher;
 window.setWorkspaceRoot=setWorkspaceRoot;
 window.applyWorkspaceSwitcherInput=applyWorkspaceSwitcherInput;
@@ -50584,6 +50770,7 @@ async function terminalUiSelfCheckSnapshot(){
   const status=$('terminal-status-line');
   const contextBar=$('terminal-context-bar');
   const diagnostics=$('terminal-diagnostics-strip');
+  const inspector=$('terminal-profile-inspector');
   const oldDefaultHtml=defaultOut?defaultOut.innerHTML:'';
   const oldDefaultDataset=defaultOut?{...defaultOut.dataset}:{};
   const oldStatusClass=status?status.className:'';
@@ -50591,6 +50778,8 @@ async function terminalUiSelfCheckSnapshot(){
   const oldContextDataset=contextBar?{...contextBar.dataset}:{};
   const oldDiagnosticsHtml=diagnostics?diagnostics.innerHTML:'';
   const oldDiagnosticsDataset=diagnostics?{...diagnostics.dataset}:{};
+  const oldInspectorHtml=inspector?inspector.innerHTML:'';
+  const oldInspectorDataset=inspector?{...inspector.dataset}:{};
   const oldTermInputValue=$('term-input')?$('term-input').value:'';
   const oldWorkspace=config.workspace;
   const oldTerminal=config.terminal;
@@ -50702,6 +50891,21 @@ async function terminalUiSelfCheckSnapshot(){
       contextShellKind:contextBar?contextBar.dataset.shellKind:'',
       contextText:contextBar?contextBar.textContent.trim():'',
       contextActions,
+      inspectorReady:!!(inspector&&inspector.dataset.terminalProfileInspector==='1'),
+      inspectorProfile:inspector?inspector.dataset.profile:'',
+      inspectorProfileName:inspector?inspector.dataset.profileName:'',
+      inspectorShellKind:inspector?inspector.dataset.shellKind:'',
+      inspectorShellPath:inspector?inspector.dataset.shellPath:'',
+      inspectorShellArgs:inspector?inspector.dataset.shellArgs:'',
+      inspectorCwd:inspector?inspector.dataset.cwd:'',
+      inspectorWorkspaceCwd:inspector?inspector.dataset.workspaceCwd:'',
+      inspectorRunnable:inspector?inspector.dataset.runnable:'',
+      inspectorDefaultProfile:inspector?inspector.dataset.defaultProfile:'',
+      inspectorProfileSource:inspector?inspector.dataset.profileSource:'',
+      inspectorCwdSource:inspector?inspector.dataset.cwdSource:'',
+      inspectorShellIntegrationStatus:inspector?inspector.dataset.shellIntegrationStatus:'',
+      inspectorEncoding:inspector?inspector.dataset.encoding:'',
+      inspectorText:inspector?inspector.textContent:'',
       diagnosticsReady:!!(diagnostics&&diagnostics.dataset.terminalDiagnostics==='1'),
       diagnosticsState:diagnostics?diagnostics.dataset.state:'',
       diagnosticsRunning:diagnostics?diagnostics.dataset.running:'',
@@ -50796,7 +51000,7 @@ async function terminalUiSelfCheckSnapshot(){
       runtimeSnapshot
     };
     snapshot.performanceSnapshot=terminalOutputPerformanceSelfCheckSnapshot();
-    snapshot.pass=snapshot.okExit===0&&snapshot.badExit===7&&snapshot.stopped&&snapshot.slowIgnored&&snapshot.blockCount>=3&&snapshot.hasDone&&snapshot.hasError&&snapshot.hasCancelled&&snapshot.hasTruncatedNote&&snapshot.hasInputEcho&&snapshot.statusState==='cancelled'&&snapshot.statusWorkspace==='sao_auto'&&snapshot.statusWorkspaceCwd==='1'&&snapshot.statusWorkspaceSource==='selfcheck'&&snapshot.statusWorkspaceAutoDetected==='1'&&snapshot.statusProfile==='Windows PowerShell'&&snapshot.statusShellKind==='powershell'&&snapshot.statusJobId==='job-slow'&&snapshot.statusProcessId==='4321'&&snapshot.statusSessionId==='job-slow'&&snapshot.statusCwdSource==='workspace'&&snapshot.statusProfileSource==='configured'&&snapshot.statusShellIntegrationStatus==='process'&&snapshot.statusEncoding==='utf-8'&&snapshot.statusStdinBytes==='12'&&snapshot.statusStdinClosed==='1'&&snapshot.statusExitCode===''&&snapshot.statusDurationMs==='7'&&snapshot.statusStdoutTruncated==='0'&&snapshot.statusStderrTruncated==='0'&&snapshot.statusFinishedAt==='2026-06-27T00:00:02Z'&&snapshot.contextReady&&snapshot.contextWorkspace==='sao_auto'&&snapshot.contextCwd==='E:/VC/SAO-UI/sao_auto'&&snapshot.contextSource==='selfcheck'&&snapshot.contextAutoDetected==='1'&&snapshot.contextWorkspaceCwd==='1'&&snapshot.contextProfile==='Windows PowerShell'&&snapshot.contextShellKind==='powershell'&&snapshot.contextText.includes('Selfcheck')&&snapshot.contextActions.includes('switch-workspace')&&snapshot.contextActions.includes('copy-cwd')&&snapshot.contextActions.includes('reuse-cwd')&&snapshot.diagnosticsReady&&snapshot.diagnosticsState==='cancelled'&&snapshot.diagnosticsWorkspaceCwd==='1'&&snapshot.diagnosticsProfile==='Windows PowerShell'&&snapshot.diagnosticsShellKind==='powershell'&&snapshot.diagnosticsJobId==='job-slow'&&snapshot.diagnosticsProcessId==='4321'&&snapshot.diagnosticsSessionId==='job-slow'&&snapshot.diagnosticsCwdSource==='workspace'&&snapshot.diagnosticsProfileSource==='configured'&&snapshot.diagnosticsShellIntegrationStatus==='process'&&snapshot.diagnosticsEncoding==='utf-8'&&snapshot.diagnosticsStdinBytes===12&&snapshot.diagnosticsStdinClosed==='1'&&snapshot.diagnosticsCanWriteStdin==='0'&&snapshot.diagnosticsOutputLines>=3&&snapshot.diagnosticsOutputBytes>0&&snapshot.diagnosticsOutputBounded==='1'&&snapshot.diagnosticsOutputFlushes>=1&&snapshot.diagnosticsOutputNodes>=1&&snapshot.diagnosticsOutputChars>0&&snapshot.diagnosticsBlocks>=3&&snapshot.diagnosticsHistoryCount>=3&&snapshot.diagnosticsTruncated==='1'&&['warn','ok'].includes(snapshot.diagnosticsHealth)&&snapshot.diagnosticsRunnable==='1'&&snapshot.diagnosticsSyncProtected>=1&&snapshot.protectedSyncProtected>=1&&snapshot.protectedSyncActiveRunning&&snapshot.protectedSyncDecision==='protected-running'&&snapshot.protectedRunningCwd==='E:/VC/SAO-UI/sao_auto'&&['run','job','cwd','profile','shell','pid','session','cwd-source','profile-source','shell-integration','encoding','exit','stdin','output','scrollback','history'].every(kind=>snapshot.diagnosticKinds.includes(kind))&&snapshot.diagnosticValues.some(value=>String(value).includes('lines'))&&snapshot.promptText.includes('sao_auto')&&snapshot.promptTitle.includes('Windows PowerShell')&&snapshot.statusAfterBad.state==='error'&&snapshot.statusAfterBad.exitCode==='7'&&snapshot.statusAfterBad.durationMs==='9'&&snapshot.statusAfterBad.stderrTruncated==='1'&&String(snapshot.statusAfterBad.flags||'').includes('stderr truncated')&&snapshot.recentCount>=3&&snapshot.recentLabels.includes('slow-command')&&snapshot.recentInputValue==='echo terminal-ok'&&snapshot.commandActionCount>=15&&snapshot.commandActionLabels.includes('▶')&&snapshot.commandActionTypes.includes('copy-command')&&snapshot.commandActionTypes.includes('copy-output')&&snapshot.commandActionTypes.includes('copy-cwd')&&snapshot.commandMetaCount>=36&&snapshot.commandMetaText.some(text=>text.includes('Windows PowerShell')&&text.includes('sao_auto'))&&snapshot.commandMetaText.some(text=>text.includes('exit 7')&&text.includes('stderr truncated'))&&snapshot.commandMetaText.some(text=>text.includes('pid 4321')&&text.includes('session job'))&&snapshot.commandMetaText.some(text=>text.includes('cwd workspace')&&text.includes('profile configured'))&&snapshot.commandMetaText.some(text=>text.includes('si process')&&text.includes('enc utf-8'))&&snapshot.commandMetaText.some(text=>text.includes('stdin bytes'))&&snapshot.commandDataset.includes('bad-command')&&snapshot.commandCwdDataset.includes('E:/VC/SAO-UI/sao_auto')&&snapshot.commandProfileDataset.includes('Windows PowerShell')&&snapshot.commandWorkspaceSourceDataset.includes('selfcheck')&&snapshot.commandJobDataset.includes('job-slow')&&snapshot.commandProcessDataset.includes('4321')&&snapshot.commandSessionDataset.includes('job-slow')&&snapshot.commandCwdSourceDataset.includes('workspace')&&snapshot.commandProfileSourceDataset.includes('configured')&&snapshot.commandShellIntegrationDataset.includes('process')&&snapshot.commandEncodingDataset.includes('utf-8')&&snapshot.commandStdinDataset.includes('12')&&snapshot.commandExitCodeDataset.includes('7')&&snapshot.commandDurationDataset.includes('9')&&String(snapshot.commandCopyOutputCandidate||'').includes('bad')&&snapshot.selectorValue==='Windows PowerShell'&&snapshot.createdTermProfile==='Windows PowerShell'&&snapshot.lastCommand==='slow-command'&&snapshot.lastCwd==='E:/VC/SAO-UI/sao_auto'&&snapshot.lastProfile==='Windows PowerShell'&&snapshot.lastShellKind==='powershell'&&snapshot.lastJobId==='job-slow'&&snapshot.lastProcessId==='4321'&&snapshot.lastSessionId==='job-slow'&&snapshot.lastCwdSource==='workspace'&&snapshot.lastProfileSource==='configured'&&snapshot.lastShellIntegrationStatus==='process'&&snapshot.lastEncoding==='utf-8'&&snapshot.lastStdinBytes==='12'&&snapshot.lastStdinClosed==='1'&&Number(snapshot.lastOutputLines)>=3&&Number(snapshot.lastOutputBytes)>0&&snapshot.lastDurationMs==='7'&&snapshot.lastStdoutTruncated==='0'&&snapshot.lastStderrTruncated==='0'&&snapshot.payloadCwd==='E:/VC/SAO-UI/sao_auto'&&snapshot.payloadProfile==='Windows PowerShell'&&snapshot.writePayloadData==='hello stdin\n'&&snapshot.writeBytes===12&&snapshot.closeStdinPayload===true&&snapshot.closeStdinEcho&&snapshot.closeStdinResult===true&&snapshot.runtimeSnapshot&&snapshot.runtimeSnapshot.cwdMatchesWorkspace&&['warn','ok'].includes(snapshot.runtimeSnapshot.health)&&snapshot.runtimeSnapshot.runnable&&snapshot.runtimeSnapshot.stopEnabled===false&&snapshot.runtimeSnapshot.restartEnabled===true&&snapshot.runtimeSnapshot.commandBlocks>=3&&snapshot.runtimeSnapshot.outputBounded&&snapshot.runtimeSnapshot.outputFlushes>=1&&snapshot.runtimeSnapshot.outputNodes>=1&&snapshot.runtimeSnapshot.workspaceSync.protected>=1&&snapshot.runtimeSnapshot.blocks.some(block=>block.command==='slow-command'&&block.state==='cancelled')&&snapshot.performanceSnapshot&&snapshot.performanceSnapshot.pass;
+    snapshot.pass=snapshot.okExit===0&&snapshot.badExit===7&&snapshot.stopped&&snapshot.slowIgnored&&snapshot.blockCount>=3&&snapshot.hasDone&&snapshot.hasError&&snapshot.hasCancelled&&snapshot.hasTruncatedNote&&snapshot.hasInputEcho&&snapshot.statusState==='cancelled'&&snapshot.statusWorkspace==='sao_auto'&&snapshot.statusWorkspaceCwd==='1'&&snapshot.statusWorkspaceSource==='selfcheck'&&snapshot.statusWorkspaceAutoDetected==='1'&&snapshot.statusProfile==='Windows PowerShell'&&snapshot.statusShellKind==='powershell'&&snapshot.statusJobId==='job-slow'&&snapshot.statusProcessId==='4321'&&snapshot.statusSessionId==='job-slow'&&snapshot.statusCwdSource==='workspace'&&snapshot.statusProfileSource==='configured'&&snapshot.statusShellIntegrationStatus==='process'&&snapshot.statusEncoding==='utf-8'&&snapshot.statusStdinBytes==='12'&&snapshot.statusStdinClosed==='1'&&snapshot.statusExitCode===''&&snapshot.statusDurationMs==='7'&&snapshot.statusStdoutTruncated==='0'&&snapshot.statusStderrTruncated==='0'&&snapshot.statusFinishedAt==='2026-06-27T00:00:02Z'&&snapshot.contextReady&&snapshot.contextWorkspace==='sao_auto'&&snapshot.contextCwd==='E:/VC/SAO-UI/sao_auto'&&snapshot.contextSource==='selfcheck'&&snapshot.contextAutoDetected==='1'&&snapshot.contextWorkspaceCwd==='1'&&snapshot.contextProfile==='Windows PowerShell'&&snapshot.contextShellKind==='powershell'&&snapshot.contextText.includes('Selfcheck')&&snapshot.contextActions.includes('switch-workspace')&&snapshot.contextActions.includes('copy-cwd')&&snapshot.contextActions.includes('reuse-cwd')&&snapshot.inspectorReady&&snapshot.inspectorProfile==='Windows PowerShell'&&snapshot.inspectorProfileName==='Windows PowerShell'&&snapshot.inspectorShellKind==='powershell'&&snapshot.inspectorShellPath==='powershell'&&snapshot.inspectorShellArgs.includes('-NoProfile')&&snapshot.inspectorCwd==='E:/VC/SAO-UI/sao_auto'&&snapshot.inspectorWorkspaceCwd==='1'&&snapshot.inspectorRunnable==='1'&&snapshot.inspectorDefaultProfile==='1'&&snapshot.inspectorProfileSource==='configured'&&snapshot.inspectorCwdSource==='workspace'&&snapshot.inspectorShellIntegrationStatus==='process'&&snapshot.inspectorEncoding==='utf-8'&&snapshot.inspectorText.includes('LaunchReady')&&snapshot.diagnosticsReady&&snapshot.diagnosticsState==='cancelled'&&snapshot.diagnosticsWorkspaceCwd==='1'&&snapshot.diagnosticsProfile==='Windows PowerShell'&&snapshot.diagnosticsShellKind==='powershell'&&snapshot.diagnosticsJobId==='job-slow'&&snapshot.diagnosticsProcessId==='4321'&&snapshot.diagnosticsSessionId==='job-slow'&&snapshot.diagnosticsCwdSource==='workspace'&&snapshot.diagnosticsProfileSource==='configured'&&snapshot.diagnosticsShellIntegrationStatus==='process'&&snapshot.diagnosticsEncoding==='utf-8'&&snapshot.diagnosticsStdinBytes===12&&snapshot.diagnosticsStdinClosed==='1'&&snapshot.diagnosticsCanWriteStdin==='0'&&snapshot.diagnosticsOutputLines>=3&&snapshot.diagnosticsOutputBytes>0&&snapshot.diagnosticsOutputBounded==='1'&&snapshot.diagnosticsOutputFlushes>=1&&snapshot.diagnosticsOutputNodes>=1&&snapshot.diagnosticsOutputChars>0&&snapshot.diagnosticsBlocks>=3&&snapshot.diagnosticsHistoryCount>=3&&snapshot.diagnosticsTruncated==='1'&&['warn','ok'].includes(snapshot.diagnosticsHealth)&&snapshot.diagnosticsRunnable==='1'&&snapshot.diagnosticsSyncProtected>=1&&snapshot.protectedSyncProtected>=1&&snapshot.protectedSyncActiveRunning&&snapshot.protectedSyncDecision==='protected-running'&&snapshot.protectedRunningCwd==='E:/VC/SAO-UI/sao_auto'&&['run','job','cwd','profile','shell','pid','session','cwd-source','profile-source','shell-integration','encoding','exit','stdin','output','scrollback','history'].every(kind=>snapshot.diagnosticKinds.includes(kind))&&snapshot.diagnosticValues.some(value=>String(value).includes('lines'))&&snapshot.promptText.includes('sao_auto')&&snapshot.promptTitle.includes('Windows PowerShell')&&snapshot.statusAfterBad.state==='error'&&snapshot.statusAfterBad.exitCode==='7'&&snapshot.statusAfterBad.durationMs==='9'&&snapshot.statusAfterBad.stderrTruncated==='1'&&String(snapshot.statusAfterBad.flags||'').includes('stderr truncated')&&snapshot.recentCount>=3&&snapshot.recentLabels.includes('slow-command')&&snapshot.recentInputValue==='echo terminal-ok'&&snapshot.commandActionCount>=15&&snapshot.commandActionLabels.includes('▶')&&snapshot.commandActionTypes.includes('copy-command')&&snapshot.commandActionTypes.includes('copy-output')&&snapshot.commandActionTypes.includes('copy-cwd')&&snapshot.commandMetaCount>=36&&snapshot.commandMetaText.some(text=>text.includes('Windows PowerShell')&&text.includes('sao_auto'))&&snapshot.commandMetaText.some(text=>text.includes('exit 7')&&text.includes('stderr truncated'))&&snapshot.commandMetaText.some(text=>text.includes('pid 4321')&&text.includes('session job'))&&snapshot.commandMetaText.some(text=>text.includes('cwd workspace')&&text.includes('profile configured'))&&snapshot.commandMetaText.some(text=>text.includes('si process')&&text.includes('enc utf-8'))&&snapshot.commandMetaText.some(text=>text.includes('stdin bytes'))&&snapshot.commandDataset.includes('bad-command')&&snapshot.commandCwdDataset.includes('E:/VC/SAO-UI/sao_auto')&&snapshot.commandProfileDataset.includes('Windows PowerShell')&&snapshot.commandWorkspaceSourceDataset.includes('selfcheck')&&snapshot.commandJobDataset.includes('job-slow')&&snapshot.commandProcessDataset.includes('4321')&&snapshot.commandSessionDataset.includes('job-slow')&&snapshot.commandCwdSourceDataset.includes('workspace')&&snapshot.commandProfileSourceDataset.includes('configured')&&snapshot.commandShellIntegrationDataset.includes('process')&&snapshot.commandEncodingDataset.includes('utf-8')&&snapshot.commandStdinDataset.includes('12')&&snapshot.commandExitCodeDataset.includes('7')&&snapshot.commandDurationDataset.includes('9')&&String(snapshot.commandCopyOutputCandidate||'').includes('bad')&&snapshot.selectorValue==='Windows PowerShell'&&snapshot.createdTermProfile==='Windows PowerShell'&&snapshot.lastCommand==='slow-command'&&snapshot.lastCwd==='E:/VC/SAO-UI/sao_auto'&&snapshot.lastProfile==='Windows PowerShell'&&snapshot.lastShellKind==='powershell'&&snapshot.lastJobId==='job-slow'&&snapshot.lastProcessId==='4321'&&snapshot.lastSessionId==='job-slow'&&snapshot.lastCwdSource==='workspace'&&snapshot.lastProfileSource==='configured'&&snapshot.lastShellIntegrationStatus==='process'&&snapshot.lastEncoding==='utf-8'&&snapshot.lastStdinBytes==='12'&&snapshot.lastStdinClosed==='1'&&Number(snapshot.lastOutputLines)>=3&&Number(snapshot.lastOutputBytes)>0&&snapshot.lastDurationMs==='7'&&snapshot.lastStdoutTruncated==='0'&&snapshot.lastStderrTruncated==='0'&&snapshot.payloadCwd==='E:/VC/SAO-UI/sao_auto'&&snapshot.payloadProfile==='Windows PowerShell'&&snapshot.writePayloadData==='hello stdin\n'&&snapshot.writeBytes===12&&snapshot.closeStdinPayload===true&&snapshot.closeStdinEcho&&snapshot.closeStdinResult===true&&snapshot.runtimeSnapshot&&snapshot.runtimeSnapshot.cwdMatchesWorkspace&&snapshot.runtimeSnapshot.profileInspector&&snapshot.runtimeSnapshot.profileInspector.ready&&snapshot.runtimeSnapshot.profileInspector.runnable&&snapshot.runtimeSnapshot.profileInspector.shellPath==='powershell'&&['warn','ok'].includes(snapshot.runtimeSnapshot.health)&&snapshot.runtimeSnapshot.runnable&&snapshot.runtimeSnapshot.stopEnabled===false&&snapshot.runtimeSnapshot.restartEnabled===true&&snapshot.runtimeSnapshot.commandBlocks>=3&&snapshot.runtimeSnapshot.outputBounded&&snapshot.runtimeSnapshot.outputFlushes>=1&&snapshot.runtimeSnapshot.outputNodes>=1&&snapshot.runtimeSnapshot.workspaceSync.protected>=1&&snapshot.runtimeSnapshot.blocks.some(block=>block.command==='slow-command'&&block.state==='cancelled')&&snapshot.performanceSnapshot&&snapshot.performanceSnapshot.pass;
     return snapshot;
   }finally{
     call=oldCall;
@@ -50814,6 +51018,7 @@ async function terminalUiSelfCheckSnapshot(){
     if(status){status.className=oldStatusClass;Object.keys(status.dataset).forEach(k=>delete status.dataset[k]);Object.assign(status.dataset,oldStatusDataset)}
     if(contextBar){Object.keys(contextBar.dataset).forEach(k=>delete contextBar.dataset[k]);Object.assign(contextBar.dataset,oldContextDataset)}
     if(diagnostics){diagnostics.innerHTML=oldDiagnosticsHtml;Object.keys(diagnostics.dataset).forEach(k=>delete diagnostics.dataset[k]);Object.assign(diagnostics.dataset,oldDiagnosticsDataset)}
+    if(inspector){inspector.innerHTML=oldInspectorHtml;Object.keys(inspector.dataset).forEach(k=>delete inspector.dataset[k]);Object.assign(inspector.dataset,oldInspectorDataset)}
     if($('term-input'))$('term-input').value=oldTermInputValue;
     _terminals.forEach(t=>{t.outputEl.style.display=t.id===_activeTermId?'':'none'});
     if(defaultOut)defaultOut.style.display=_activeTermId!==null?'none':'';
