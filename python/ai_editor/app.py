@@ -2148,6 +2148,25 @@ class AIEditorAPI:
 
     _webview_resource_server: Optional[_WebviewResourceServer] = None
     _webview_resource_server_lock = threading.Lock()
+    _LANGUAGE_PROVIDER_LARGE_FILE_CHAR_LIMIT = 180_000
+    _LANGUAGE_PROVIDER_LARGE_FILE_LINE_LIMIT = 4_000
+    _LANGUAGE_PROVIDER_LARGE_FILE_SKIP_KINDS = {
+        "diagnostics",
+        "semanticTokens",
+        "semanticTokensEdits",
+        "semanticTokensRange",
+        "documentSymbol",
+        "foldingRange",
+        "inlayHint",
+        "codeLens",
+        "documentLink",
+        "documentColor",
+        "documentHighlight",
+        "inlineValue",
+        "evaluatableExpression",
+        "onTypeFormatting",
+        "linkedEditing",
+    }
     _LANGUAGE_PROVIDER_SUPERSEDE_KINDS = {
         "completion",
         "hover",
@@ -2201,6 +2220,86 @@ class AIEditorAPI:
         self._language_provider_request_lock = threading.Lock()
         self._active_language_provider_requests: Dict[str, str] = {}
         self._assistant_response_part_actions: List[Dict[str, Any]] = []
+
+    def _language_provider_content_budget(
+            self, kind: str, content: str, payload: Dict[str, Any]) -> Dict[str, Any]:
+        """Return the editor language-provider budget for the current buffer."""
+        try:
+            content_length = int(payload.get("contentLength"))
+        except Exception:
+            content_length = len(content)
+        if content_length < 0:
+            content_length = len(content)
+        try:
+            line_count = int(payload.get("lineCount"))
+        except Exception:
+            line_count = content.count("\n") + (1 if content else 0)
+        if line_count < 0:
+            line_count = content.count("\n") + (1 if content else 0)
+        char_limit = self._LANGUAGE_PROVIDER_LARGE_FILE_CHAR_LIMIT
+        line_limit = self._LANGUAGE_PROVIDER_LARGE_FILE_LINE_LIMIT
+        large = content_length > char_limit or line_count > line_limit
+        force = payload.get("force") is True or payload.get("forceProvider") is True
+        should_skip = (
+            large
+            and not force
+            and kind in self._LANGUAGE_PROVIDER_LARGE_FILE_SKIP_KINDS)
+        return {
+            "contentLength": content_length,
+            "lineCount": line_count,
+            "charLimit": char_limit,
+            "lineLimit": line_limit,
+            "largeFile": large,
+            "skip": should_skip,
+            "forced": force,
+            "policy": "large-file-provider-budget",
+        }
+
+    def _language_provider_skipped_result(
+            self, kind: str, payload: Dict[str, Any],
+            budget: Dict[str, Any]) -> Dict[str, Any]:
+        uri = _editor_provider_uri(payload)
+        try:
+            version = int(payload.get("version") or 0)
+        except Exception:
+            version = 0
+        reason = "large-file"
+        message = (
+            f"{kind} skipped for large file "
+            f"({budget.get('contentLength', 0)} chars, "
+            f"{budget.get('lineCount', 0)} lines)")
+        result = {
+            "ok": True,
+            "kind": kind,
+            "uri": str(uri),
+            "version": version,
+            "skipped": True,
+            "reason": reason,
+            "message": message,
+            "budget": budget,
+            "providerCount": 0,
+            "providerErrors": [],
+        }
+        empty_fields = {
+            "diagnostics": "diagnostics",
+            "semanticTokens": "tokens",
+            "semanticTokensEdits": "edits",
+            "semanticTokensRange": "tokens",
+            "documentSymbol": "symbols",
+            "foldingRange": "ranges",
+            "inlayHint": "hints",
+            "codeLens": "lenses",
+            "documentLink": "links",
+            "documentColor": "colors",
+            "documentHighlight": "highlights",
+            "inlineValue": "values",
+            "onTypeFormatting": "edits",
+            "linkedEditing": "ranges",
+        }
+        field = empty_fields.get(kind)
+        if field:
+            result[field] = [] if kind != "semanticTokensEdits" else {}
+        return result
 
     @classmethod
     def _ensure_webview_resource_server(cls) -> _WebviewResourceServer:
@@ -6725,8 +6824,12 @@ class AIEditorAPI:
         if not kind:
             return {"error": "Unsupported language provider kind"}
 
-        self._ensure_engine()
         content = "" if payload.get("content") is None else str(payload.get("content"))
+        budget = self._language_provider_content_budget(kind, content, payload)
+        if budget.get("skip"):
+            return self._language_provider_skipped_result(kind, payload, budget)
+
+        self._ensure_engine()
         language = str(
             payload.get("language")
             or payload.get("languageId")

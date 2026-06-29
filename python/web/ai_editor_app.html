@@ -15411,14 +15411,31 @@ function editorUntitledUri(tab){
   const name=String((tab&&tab.name)||editorFileName||'Untitled-1').replace(/[\r\n?#]+/g,'-')||'Untitled-1';
   return 'untitled:'+name;
 }
+function editorContentBudget(value){
+  value=String(value||'');
+  let lineCount=value?1:0;
+  for(let i=0;i<value.length;i++)if(value.charCodeAt(i)===10)lineCount++;
+  const charLimit=180000,lineLimit=4000;
+  return {contentLength:value.length,lineCount,charLimit,lineLimit,largeFile:value.length>charLimit||lineCount>lineLimit};
+}
+function editorLanguageProviderDelay(kind,baseDelay){
+  const value=ed&&typeof ed.value==='string'?ed.value:'';
+  const budget=editorContentBudget(value);
+  const base=baseDelay==null?650:Number(baseDelay)||0;
+  if(!budget.largeFile)return base;
+  if(['diagnostics','semanticTokens','semanticTokensRange','semanticTokensEdits','documentSymbol','foldingRange','inlayHint','codeLens','documentLink'].includes(String(kind||'')))return Math.max(base,1500);
+  return Math.max(base,900);
+}
 function editorProviderPayload(kind,extra){
   const tab=activeEditorTab(),value=ed.value,offset=ed.selectionStart;
   const filePath=tab.filePath||'',uri=filePath||editorUntitledUri(tab);
   const tabKey=String((tab&&tab.id)||uri||tab.name||editorFileName||'untitled');
+  const budget=editorContentBudget(value);
   return Object.assign({
     kind,uri,filePath,workspacePath:tab.workspacePath||'',name:tab.name||editorFileName||'untitled',
     requestKey:'editor:'+String(kind||'')+':'+tabKey,
-    language:editorLang,content:value,dirty:editorDirty,offset,position:editorPositionFromOffset(value,offset)
+    language:editorLang,content:value,contentLength:budget.contentLength,lineCount:budget.lineCount,
+    largeFile:budget.largeFile,dirty:editorDirty,offset,position:editorPositionFromOffset(value,offset)
   },extra||{});
 }
 let _editorSurfaceState=null,_editorSurfaceStateTimer=null,_editorSurfaceStateSeq=0;
@@ -15551,6 +15568,9 @@ function scheduleEditorSurfaceStateRefresh(delay){
 }
 function editorProviderResultCancelled(res){
   return !!(res&&(res.cancelled===true||res.reason==='superseded'));
+}
+function editorProviderResultSkipped(res){
+  return !!(res&&res.skipped===true);
 }
 function editorLanguageProviderKindLabel(kind){
   const labels={
@@ -16048,6 +16068,7 @@ function updateEditorLanguageProviderStatus(state,info){
 }
 function editorLanguageProviderFailureMessage(kind,res){
   const label=editorLanguageProviderKindLabel(kind);
+  if(editorProviderResultSkipped(res))return label+' skipped for large file';
   if(res&&res.timeout)return label+' timed out';
   if(editorProviderResultCancelled(res))return label+' cancelled';
   const providerErrors=Array.isArray(res&&res.providerErrors)?res.providerErrors:[];
@@ -16078,6 +16099,10 @@ async function editorRequestLanguageProvider(kind,payload,options){
   if(quiet)return res;
   if(editorProviderResultCancelled(res)){
     updateEditorLanguageProviderStatus('cancelled',{kind,label,message:label+' cancelled',detail:String((res&&res.reason)||'cancelled'),requestId:res&&res.requestId});
+    return res;
+  }
+  if(editorProviderResultSkipped(res)){
+    updateEditorLanguageProviderStatus('warning',{kind,label,message:editorLanguageProviderFailureMessage(kind,res),detail:String((res&&res.message)||'Large file provider request skipped'),requestId:res&&res.requestId});
     return res;
   }
   if(!res||res.error||res.ok===false){
@@ -16382,6 +16407,11 @@ async function requestEditorSemanticTokens(quiet){
   });
   if(requestId!==_editorSemanticTokensRequest||contentSnapshot!==String(ed.value||''))return;
   if(editorProviderResultCancelled(res))return;
+  if(editorProviderResultSkipped(res)){
+    _editorSemanticTokens=null;_editorSemanticTokensContentLength=-1;_editorSemanticTokensRangeActive=false;
+    if(typeof updateEditorLanguageFeatureState==='function')updateEditorLanguageFeatureState('semanticTokens','warning',{source:'',count:0,resultId:'',skipped:true,budget:res&&res.budget||{},message:'Semantic: skipped for large file'});
+    scheduleEditorSyntaxHighlight();if(!quiet)setStatus('Semantic tokens skipped for large file');return;
+  }
   let payload=editorSemanticTokensPayloadFromResponse(res,'range',visibleRange);
   if(!payload){
     const previousResultId=editorSemanticTokensResultId(_editorSemanticTokens);
@@ -16392,6 +16422,11 @@ async function requestEditorSemanticTokens(quiet){
       });
       if(requestId!==_editorSemanticTokensRequest||contentSnapshot!==String(ed.value||''))return;
       if(editorProviderResultCancelled(res))return;
+      if(editorProviderResultSkipped(res)){
+        _editorSemanticTokens=null;_editorSemanticTokensContentLength=-1;_editorSemanticTokensRangeActive=false;
+        if(typeof updateEditorLanguageFeatureState==='function')updateEditorLanguageFeatureState('semanticTokens','warning',{source:'',count:0,resultId:'',skipped:true,budget:res&&res.budget||{},message:'Semantic: skipped for large file'});
+        scheduleEditorSyntaxHighlight();if(!quiet)setStatus('Semantic tokens skipped for large file');return;
+      }
       if(!(res&&res.error))payload=editorSemanticTokensApplyEdits(_editorSemanticTokens,editorSemanticTokensEditsFromResponse(res));
     }
   }
@@ -16402,6 +16437,11 @@ async function requestEditorSemanticTokens(quiet){
     });
     if(requestId!==_editorSemanticTokensRequest||contentSnapshot!==String(ed.value||''))return;
     if(editorProviderResultCancelled(res))return;
+    if(editorProviderResultSkipped(res)){
+      _editorSemanticTokens=null;_editorSemanticTokensContentLength=-1;_editorSemanticTokensRangeActive=false;
+      if(typeof updateEditorLanguageFeatureState==='function')updateEditorLanguageFeatureState('semanticTokens','warning',{source:'',count:0,resultId:'',skipped:true,budget:res&&res.budget||{},message:'Semantic: skipped for large file'});
+      scheduleEditorSyntaxHighlight();if(!quiet)setStatus('Semantic tokens skipped for large file');return;
+    }
     if(res&&res.error){
       _editorSemanticTokens=null;_editorSemanticTokensContentLength=-1;_editorSemanticTokensRangeActive=false;
       if(typeof updateEditorLanguageFeatureState==='function')updateEditorLanguageFeatureState('semanticTokens','error',{source:'',count:0,resultId:'',message:'Semantic: failed'});
@@ -16431,7 +16471,7 @@ async function requestEditorSemanticTokens(quiet){
 }
 function scheduleEditorSemanticTokens(delay){
   clearTimeout(_editorSemanticTokensTimer);
-  _editorSemanticTokensTimer=setTimeout(()=>requestEditorSemanticTokens(true),delay==null?780:delay);
+  _editorSemanticTokensTimer=setTimeout(()=>requestEditorSemanticTokens(true),editorLanguageProviderDelay('semanticTokens',delay==null?780:delay));
 }
 function editorInlayHintLabelText(label){
   if(label==null)return '';
@@ -18781,6 +18821,18 @@ async function requestEditorDiagnostics(quiet){
   const contentSnapshot=String(ed.value||''),contentLength=contentSnapshot.length;
   const res=await editorRequestLanguageProvider('diagnostics',editorProviderPayload('diagnostics'),{countKey:'diagnostics',itemLabel:'problem',isCurrent:()=>requestId===_editorDiagnosticRequest&&contentSnapshot===String(ed.value||'')});
   if(requestId!==_editorDiagnosticRequest||contentSnapshot!==String(ed.value||''))return;
+  if(editorProviderResultSkipped(res)){
+    _editorDiagnostics=editorFallbackDiagnostics(contentSnapshot,editorLang);
+    _editorDiagnosticContentLength=contentLength;
+    renderEditorDiagnostics(_editorDiagnostics);
+    if(typeof updateEditorLanguageFeatureState==='function')updateEditorLanguageFeatureState('diagnostics','warning',Object.assign(editorDiagnosticSeveritySummary(_editorDiagnostics),{
+      skipped:true,
+      budget:res&&res.budget||{},
+      message:_editorDiagnostics.length?'Diagnostics: large-file fallback':'Diagnostics: skipped for large file'
+    }));
+    if(!quiet)setStatus(_editorDiagnostics.length?('Large-file built-in diagnostics: '+_editorDiagnostics.length):'Diagnostics skipped for large file');
+    return;
+  }
   if(res&&res.error){
     _editorDiagnostics=editorFallbackDiagnostics(contentSnapshot,editorLang);
     _editorDiagnosticContentLength=contentLength;
@@ -18804,7 +18856,7 @@ async function requestEditorDiagnostics(quiet){
 }
 function scheduleEditorDiagnostics(delay){
   clearTimeout(_editorDiagnosticTimer);
-  _editorDiagnosticTimer=setTimeout(()=>requestEditorDiagnostics(true),delay==null?650:delay);
+  _editorDiagnosticTimer=setTimeout(()=>requestEditorDiagnostics(true),editorLanguageProviderDelay('diagnostics',delay==null?650:delay));
 }
 function isWorkspaceSymbolPickerOpen(){
   const box=$('workspace-symbol-palette');return !!(box&&box.classList.contains('open'));

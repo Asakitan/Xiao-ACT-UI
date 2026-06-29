@@ -1081,6 +1081,29 @@ def test_app_settings_parity() -> None:
     )
     missing = [name for name in js_methods if not callable(getattr(api, name, None))]
     _check("AIEditorAPI JS-callable methods", not missing, ", ".join(missing))
+    large_provider_text = ("line\n" * (
+        AIEditorAPI._LANGUAGE_PROVIDER_LARGE_FILE_LINE_LIMIT + 1))
+    large_diag_result = api.editor_language_provider({
+        "kind": "diagnostics",
+        "uri": "untitled:large-provider.py",
+        "language": "python",
+        "content": large_provider_text,
+    })
+    large_completion_budget = api._language_provider_content_budget(
+        "completion", large_provider_text, {})
+    _check("editor_language_provider skips heavy providers for large files",
+           large_diag_result.get("ok") is True
+           and large_diag_result.get("skipped") is True
+           and large_diag_result.get("reason") == "large-file"
+           and large_diag_result.get("diagnostics") == []
+           and large_diag_result.get("budget", {}).get("largeFile") is True
+           and large_diag_result.get("budget", {}).get("skip") is True
+           and large_completion_budget.get("largeFile") is True
+           and large_completion_budget.get("skip") is False,
+           json.dumps({
+               "diagnostics": large_diag_result,
+               "completionBudget": large_completion_budget,
+           }, ensure_ascii=False, default=str))
     from ai_editor import real_extension_probe
     with open(
             os.path.join(os.path.dirname(__file__), "real_extension_probe.py"),
@@ -7320,6 +7343,11 @@ def test_phase1_ai_editor_regressions() -> None:
            and "Ctrl+Shift+O" in html
            and "call('editor_language_provider'" in html
            and "function editorProviderPayload(kind,extra)" in html
+           and "function editorContentBudget(value)" in html
+           and "function editorLanguageProviderDelay(kind,baseDelay)" in html
+           and "contentLength:budget.contentLength" in html
+           and "lineCount:budget.lineCount" in html
+           and "largeFile:budget.largeFile" in html
            and "function requestEditorCompletion(triggerCharacter,quiet)" in html
            and "itemResolveCount:0" in html
            and "const COMPLETION_TRIGGER_INVOKE=0" in html
@@ -7339,6 +7367,10 @@ def test_phase1_ai_editor_regressions() -> None:
            and "function editorLanguageProviderFailureMessage(kind,res)" in html
            and "function editorProviderResultCount(res,key)" in html
            and "editorProviderResultCancelled(res)" in html
+           and "function editorProviderResultSkipped(res)" in html
+           and "editorProviderResultSkipped(res)" in html
+           and "Diagnostics: skipped for large file" in html
+           and "Semantic: skipped for large file" in html
            and "res&&res.timeout?'warning':'error'" in html
            and "function applyEditorCompletion(item)" in html
            and "function handleEditorSuggestKey(e)" in html
@@ -9464,6 +9496,7 @@ console.log("frontend minimap settings behavior ok");
     else:
         provider_status_functions = [
             "editorProviderResultCancelled",
+            "editorProviderResultSkipped",
             "editorLanguageProviderKindLabel",
             "editorProviderResultCount",
             "editorFeatureCountText",
@@ -9600,6 +9633,14 @@ async function call(method,payload){
          "timeout status is visible");
   assert(editorProviderResultCancelled({ timeout:true }) === false,
          "timeout is not treated as cancellation");
+
+  callResponses = [{ ok:true, skipped:true, reason:"large-file", message:"diagnostics skipped for large file", requestId:"r3b", budget:{ largeFile:true, skip:true } }];
+  await editorRequestLanguageProvider("diagnostics", null, { countKey:"diagnostics" });
+  assert(editorProviderResultSkipped({ skipped:true }) === true
+         && languageStatus.className.includes("warning")
+         && languageStatus.textContent === "Diagnostics skipped for large file"
+         && languageStatus.title.includes("large file"),
+         "skipped provider status is visible");
 
   callResponses = [{ ok:false, cancelled:true, reason:"superseded", requestId:"r4" }];
   await editorRequestLanguageProvider("references", null, { countKey:"references" });
