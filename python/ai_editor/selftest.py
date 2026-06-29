@@ -14379,6 +14379,14 @@ console.log("extension setting schema helpers ok");
            and "renderNotebookOutputs(notebookOutputHost" in html
            and "renderExtensionRuntimeSurfacePanel(runtimeData);" in html
            and "'extension-runtime-summary','extension-runtime-health','extension-runtime-list','extension-runtime-status'" in html
+           and 'id="extension-runtime-run-strip" aria-live="polite"' in html
+           and "const extensionRuntimeTaskRuns=new Map();" in html
+           and "const extensionRuntimeDebugSessions=new Map();" in html
+           and "function updateExtensionRuntimeTaskLifecycle(data)" in html
+           and "function updateExtensionRuntimeDebugSession(data)" in html
+           and "function renderExtensionRuntimeRunStrip()" in html
+           and "event==='extension_task_lifecycle'" in html
+           and "event==='extension_debug_session'" in html
            and "viewContainers:[fixtureItem]" in html
            and "runtimeOpenableRows:runtimeList?Array.from(runtimeList.querySelectorAll('.extension-runtime-row')).filter(item=>item.dataset.openable==='1').length:0" in html
            and "runtimeActionTypes:runtimeList?Array.from(runtimeList.querySelectorAll('.extension-runtime-row')).map(item=>item.dataset.action||''):[]" in html
@@ -14394,6 +14402,11 @@ console.log("extension setting schema helpers ok");
            and "runtimeHealthFilters:runtimeHealth?Array.from(runtimeHealth.querySelectorAll('.extension-runtime-health-card')).map(item=>item.dataset.runtimeHealthFilter||''):[]" in html
            and "runtimeHealthWarnings:(()=>{const panel=$('extension-runtime-panel');return panel?Number(panel.dataset.runtimeHealthWarnings)||0:0})()" in html
            and "runtimeHealthErrors:(()=>{const panel=$('extension-runtime-panel');return panel?Number(panel.dataset.runtimeHealthErrors)||0:0})()" in html
+           and "runtimeRunStripActive:!!(runtimeRunStrip&&runtimeRunStrip.classList.contains('active'))" in html
+           and "runtimeTaskRunChips:runtimeRunStrip?runtimeRunStrip.querySelectorAll('.extension-runtime-run-chip[data-runtime-run-kind=\"task\"]').length:0" in html
+           and "runtimeDebugSessionChips:runtimeRunStrip?runtimeRunStrip.querySelectorAll('.extension-runtime-run-chip[data-runtime-run-kind=\"debug\"]').length:0" in html
+           and "runtimeRunStates:runtimeRunStrip?Array.from(runtimeRunStrip.querySelectorAll('.extension-runtime-run-chip')).map(item=>item.dataset.runtimeRunState||''):[]" in html
+           and "runtimeRunCommands:runtimeRunStrip?Array.from(runtimeRunStrip.querySelectorAll('.extension-runtime-run-chip')).map(item=>item.dataset.runtimeRunCommand||'').filter(Boolean):[]" in html
            and "runtimeHealthFilterVisible:(()=>{const card=runtimeHealth&&runtimeHealth.querySelector('[data-runtime-health-filter=\"bridge-warning\"]')" in html
            and "runtimeRowKeys:runtimeList?Array.from(runtimeList.querySelectorAll('.extension-runtime-row')).map(item=>item.dataset.key||'').filter(Boolean).length:0" in html
            and "runtimeContainerRows:runtimeList?Array.from(runtimeList.querySelectorAll('.extension-runtime-row')).filter(item=>item.dataset.container==='selftest.dynamic.container').length:0" in html
@@ -14500,6 +14513,9 @@ console.log("extension setting schema helpers ok");
            and "snapshot.runtimeActionSmoke.contextAttached===true" in html
            and "snapshot.runtimeActionSmoke.taskRunLastAction==='run-task-definition'" in html
            and "snapshot.runtimeActionSmoke.debugRunLastAction==='start-debugger'" in html
+           and "snapshot.runtimeRunStripActive&&snapshot.runtimeTaskRunChips>=1&&snapshot.runtimeDebugSessionChips>=1" in html
+           and "snapshot.runtimeRunStates.includes('done')&&snapshot.runtimeRunStates.includes('started')" in html
+           and "snapshot.runtimeRunCommands.includes('echo selftest task')" in html
            and "snapshot.runtimeActionSmoke.taskPrompt.includes('selftest.task')&&snapshot.runtimeActionSmoke.taskPrompt.includes('Required fields: command')" in html
            and "snapshot.runtimeActionSmoke.debugPrompt.includes('selftest.debug')&&snapshot.runtimeActionSmoke.debugPrompt.includes('Launch template')&&snapshot.runtimeActionSmoke.debugPrompt.includes('program')" in html
            and "snapshot.runtimeActionSmoke.lastAction==='start-debugger'" in html
@@ -15629,6 +15645,7 @@ console.log("command palette quick access helpers ok");
             and "function copyTerminalOutputFromBlock(button)" in html
             and "function copyTerminalCwdFromBlock(button)" in html
             and "function renderTerminalCommandMeta(block,result,durationMs,state)" in html
+            and "function appendTerminalHostCommandResult(name,cmd,rawResult,metadata)" in html
             and "function stopTerminalCommand()" in html
             and "function restartTerminalCommand()" in html
             and "async function sendTerminalInput(text,options)" in html
@@ -15666,6 +15683,7 @@ console.log("command palette quick access helpers ok");
               and "window.copyTerminalOutputFromBlock=copyTerminalOutputFromBlock" in html
               and "window.copyTerminalCwdFromBlock=copyTerminalCwdFromBlock" in html
               and "window.renderTerminalCommandMeta=renderTerminalCommandMeta" in html
+              and "window.appendTerminalHostCommandResult=appendTerminalHostCommandResult" in html
               and "function _updateTerminalPrompt(meta)" in html
              and "function _terminalStateLabel(state)" in html
             and "function _terminalTruncationLabel(stdoutTruncated,stderrTruncated)" in html
@@ -16381,6 +16399,9 @@ console.log("frontend built-in language fallback behavior ok");
            and "DebugAdapterInlineImplementation," in node_ext_host_source
            and "msg_type == \"debug_console\"" in extension_host_source
            and "msg_type == \"task_execute\"" in extension_host_source
+           and "msg_type == \"debug_start\"" in extension_host_source
+           and "update_extension_task_lifecycle" in extension_host_source
+           and "update_extension_debug_session" in extension_host_source
            and "\"extension_task_execute_response\"" in extension_host_source
            and "\"extension_debug_start_response\"" in extension_host_source
            and "def request_extension_task_execute_result("
@@ -16389,6 +16410,10 @@ console.log("frontend built-in language fallback behavior ok");
            in extension_host_source
            and "def run_extension_task_type(" in app_source
            and "def start_extension_debugger_type(" in app_source
+           and "def update_extension_task_lifecycle(" in app_source
+           and "def update_extension_debug_session(" in app_source
+           and "appendTerminalHostCommandResult(name,command,result,{name:name});"
+           in app_source
            and "self._ui_bridge.run_terminal_command" in extension_host_source)
     _check("extension workspace folder picker uses dynamic QuickPick",
            "showWorkspaceFolderPick(options, token)" in node_ext_host_source

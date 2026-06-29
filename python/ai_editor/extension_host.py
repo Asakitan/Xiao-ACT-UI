@@ -3897,11 +3897,51 @@ class NodeExtensionHost:
                         metadata = {}
                     metadata = dict(metadata)
                     metadata["executionId"] = str(msg.get("executionId", ""))
+                    lifecycle = getattr(
+                        self._ui_bridge,
+                        "update_extension_task_lifecycle",
+                        None)
+                    if callable(lifecycle):
+                        lifecycle({
+                            "state": "running",
+                            "executionId": metadata["executionId"],
+                            "task": task if isinstance(task, dict) else {},
+                            "commandLine": str(msg.get("commandLine") or ""),
+                            "metadata": metadata,
+                        })
                     self._ui_bridge.show_terminal(terminal_name, metadata)
                     command_line = str(msg.get("commandLine") or "")
+                    result = None
                     if command_line:
-                        self._ui_bridge.run_terminal_command(
+                        result = self._ui_bridge.run_terminal_command(
                             terminal_name, command_line)
+                    if callable(lifecycle):
+                        state = "done"
+                        result_payload = result
+                        if isinstance(result_payload, str):
+                            try:
+                                result_payload = json.loads(result_payload)
+                            except Exception:
+                                result_payload = {"stdout": result_payload}
+                        if not isinstance(result_payload, dict):
+                            result_payload = {}
+                        exit_code = result_payload.get("exitCode")
+                        if exit_code is None:
+                            exit_code = result_payload.get("exit_code")
+                        if result_payload.get("error"):
+                            state = "error"
+                        elif exit_code not in (None, "", 0, "0"):
+                            state = "error"
+                        elif result_payload.get("cancelled"):
+                            state = "cancelled"
+                        lifecycle({
+                            "state": state,
+                            "executionId": metadata["executionId"],
+                            "task": task if isinstance(task, dict) else {},
+                            "commandLine": command_line,
+                            "metadata": metadata,
+                            "result": result_payload,
+                        })
                 except Exception:
                     pass
 
@@ -3912,7 +3952,36 @@ class NodeExtensionHost:
                     task_name = "Extension Task"
                     if isinstance(task, dict):
                         task_name = str(task.get("name") or task_name)
+                    lifecycle = getattr(
+                        self._ui_bridge,
+                        "update_extension_task_lifecycle",
+                        None)
+                    if callable(lifecycle):
+                        lifecycle({
+                            "state": "cancelled",
+                            "executionId": str(msg.get("executionId", "")),
+                            "task": task if isinstance(task, dict) else {},
+                        })
                     self._ui_bridge.hide_terminal(f"Task: {task_name}")
+                except Exception:
+                    pass
+
+        elif msg_type == "debug_start":
+            if self._ui_bridge:
+                try:
+                    updater = getattr(
+                        self._ui_bridge,
+                        "update_extension_debug_session",
+                        None)
+                    if callable(updater):
+                        updater({
+                            "state": "started",
+                            "session": msg.get("session")
+                            if isinstance(msg.get("session"), dict) else {},
+                            "config": msg.get("config")
+                            if isinstance(msg.get("config"), dict) else {},
+                            "requested": bool(msg.get("requested")),
+                        })
                 except Exception:
                     pass
 

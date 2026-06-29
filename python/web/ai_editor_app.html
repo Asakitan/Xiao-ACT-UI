@@ -2300,6 +2300,17 @@ button.review-pill { cursor:pointer; }
 .extension-runtime-health-card[data-state="ready"] { border-color:color-mix(in srgb,var(--fg-success) 42%,var(--border)); }
 .extension-runtime-health-card[data-state="warning"] { border-color:color-mix(in srgb,var(--fg-warning) 48%,var(--border)); }
 .extension-runtime-health-card[data-state="error"] { border-color:color-mix(in srgb,var(--fg-error) 54%,var(--border)); }
+.extension-runtime-run-strip { display:none; flex-wrap:wrap; gap:5px; padding:7px 8px;
+  border-bottom:1px solid color-mix(in srgb,var(--border) 70%,transparent); background:color-mix(in srgb,var(--bg2) 46%,transparent); }
+.extension-runtime-run-strip.active { display:flex; }
+.extension-runtime-run-chip { display:inline-flex; align-items:center; gap:5px; max-width:100%; min-height:22px;
+  padding:2px 7px; border:1px solid var(--border); border-radius:999px; color:var(--fg-dim); font:10px var(--mono);
+  background:color-mix(in srgb,var(--bg3) 70%,transparent); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.extension-runtime-run-chip.running { color:var(--fg-accent); border-color:color-mix(in srgb,var(--fg-accent) 44%,var(--border)); }
+.extension-runtime-run-chip.done,.extension-runtime-run-chip.started { color:var(--fg-success); border-color:color-mix(in srgb,var(--fg-success) 44%,var(--border)); }
+.extension-runtime-run-chip.error,.extension-runtime-run-chip.failed { color:var(--fg-error); border-color:color-mix(in srgb,var(--fg-error) 48%,var(--border)); }
+.extension-runtime-run-chip.cancelled,.extension-runtime-run-chip.stopped { color:var(--fg-warning); border-color:color-mix(in srgb,var(--fg-warning) 48%,var(--border)); }
+.extension-runtime-run-chip strong { color:var(--fg); font-weight:600; max-width:180px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .extension-runtime-list { display:grid; gap:1px; padding:4px; }
 .extension-runtime-row { display:grid; grid-template-columns:92px minmax(0,1fr) auto auto auto; gap:7px; align-items:center; min-height:28px; padding:4px 6px; border-radius:4px; color:var(--fg-dim); font-size:11px; }
 .extension-runtime-row:hover,.extension-runtime-row:focus { background:var(--bg-hover); outline:1px solid color-mix(in srgb,var(--border-focus) 40%,transparent); outline-offset:-1px; }
@@ -4879,6 +4890,7 @@ pre.code-block { overflow:visible; }
         </div>
         <div class="extension-runtime-summary" id="extension-runtime-summary"></div>
         <div class="extension-runtime-health" id="extension-runtime-health"></div>
+        <div class="extension-runtime-run-strip" id="extension-runtime-run-strip" aria-live="polite"></div>
         <div class="extension-runtime-list" id="extension-runtime-list"></div>
       </div>
     </div>
@@ -6561,6 +6573,8 @@ window._onEditorEvent=function(event,data){
   else if(event==='hide_status_bar_item'){_hideExtStatusBarItem(data.id)}
   else if(event==='show_language_status_item'){_upsertLanguageStatusItem(data)}
   else if(event==='remove_language_status_item'){_removeLanguageStatusItem(data.id)}
+  else if(event==='extension_task_lifecycle'){updateExtensionRuntimeTaskLifecycle(data)}
+  else if(event==='extension_debug_session'){updateExtensionRuntimeDebugSession(data)}
   else if(event==='extensions_changed'){handleExtensionsChanged(data)}
 };
 
@@ -29138,6 +29152,14 @@ window._onEditorEvent=function(event,data){
     renderQuickInputEvent(data);
     return;
   }
+  if(event==='extension_task_lifecycle'){
+    updateExtensionRuntimeTaskLifecycle(data);
+    return;
+  }
+  if(event==='extension_debug_session'){
+    updateExtensionRuntimeDebugSession(data);
+    return;
+  }
   if(event==='extension_tree_changed'){
     scheduleExtensionActivityRefresh();
     return;
@@ -38487,6 +38509,124 @@ function extensionRuntimeSurfaceViewId(row){
   if(row.kind==='WebviewView'&&target)return target;
   return String(row.id||'').trim();
 }
+const extensionRuntimeTaskRuns=new Map();
+const extensionRuntimeDebugSessions=new Map();
+function extensionRuntimeBoundedSet(map,key,value,limit){
+  const id=String(key||'').trim();
+  if(!id)return;
+  if(map.has(id))map.delete(id);
+  map.set(id,value);
+  const max=Number(limit)||24;
+  while(map.size>max){
+    const first=map.keys().next().value;
+    map.delete(first);
+  }
+}
+function extensionRuntimeTaskRunKey(data){
+  data=data||{};
+  const task=data.task&&typeof data.task==='object'?data.task:{};
+  const def=task.definition&&typeof task.definition==='object'?task.definition:{};
+  return String(data.executionId||def.type||task.name||data.taskType||'').trim();
+}
+function extensionRuntimeDebugSessionKey(data){
+  data=data||{};
+  const session=data.session&&typeof data.session==='object'?data.session:{};
+  return String(session.id||data.sessionId||data.debugType||session.type||'').trim();
+}
+function renderExtensionRuntimeRunStrip(){
+  const strip=$('extension-runtime-run-strip');
+  const panel=$('extension-runtime-panel');
+  if(!strip)return;
+  const taskRows=Array.from(extensionRuntimeTaskRuns.values()).slice(-8).reverse();
+  const debugRows=Array.from(extensionRuntimeDebugSessions.values()).slice(-8).reverse();
+  const rows=[...taskRows,...debugRows].slice(0,12);
+  strip.innerHTML='';
+  strip.classList.toggle('active',rows.length>0);
+  if(panel){
+    panel.dataset.runtimeTaskRunCount=String(extensionRuntimeTaskRuns.size);
+    panel.dataset.runtimeDebugSessionCount=String(extensionRuntimeDebugSessions.size);
+    panel.dataset.runtimeActiveTaskRuns=String(taskRows.filter(row=>row.state==='running').length);
+    panel.dataset.runtimeActiveDebugSessions=String(debugRows.filter(row=>row.state==='started'||row.state==='running').length);
+  }
+  rows.forEach(row=>{
+    const chip=document.createElement('span');
+    chip.className='extension-runtime-run-chip '+String(row.state||'');
+    chip.dataset.runtimeRunKind=String(row.kind||'');
+    chip.dataset.runtimeRunState=String(row.state||'');
+    chip.dataset.runtimeRunKey=String(row.key||'');
+    chip.dataset.runtimeRunCommand=String(row.commandLine||'');
+    chip.dataset.runtimeRunProblemMatcherCount=String(row.problemMatcherCount||0);
+    chip.dataset.runtimeRunExitCode=row.exitCode===null||row.exitCode===undefined?'':String(row.exitCode);
+    chip.title=[
+      row.kind==='task'?'Task':'Debug',
+      row.label||row.key||'',
+      row.commandLine?('$ '+row.commandLine):'',
+      row.cwd?('cwd: '+row.cwd):'',
+      row.problemMatcherCount?('problem matchers: '+row.problemMatcherCount):'',
+      row.exitCode!==null&&row.exitCode!==undefined?('exit: '+row.exitCode):'',
+      row.message||''
+    ].filter(Boolean).join('\n');
+    const kind=document.createElement('span');
+    kind.textContent=row.kind==='task'?'task':'debug';
+    const label=document.createElement('strong');
+    label.textContent=String(row.label||row.key||'runtime');
+    const state=document.createElement('span');
+    state.textContent=String(row.state||'ready');
+    chip.appendChild(kind);chip.appendChild(label);chip.appendChild(state);
+    strip.appendChild(chip);
+  });
+  return {tasks:extensionRuntimeTaskRuns.size,debugSessions:extensionRuntimeDebugSessions.size,visible:rows.length};
+}
+function updateExtensionRuntimeTaskLifecycle(data){
+  data=data||{};
+  const task=data.task&&typeof data.task==='object'?data.task:{};
+  const def=task.definition&&typeof task.definition==='object'?task.definition:{};
+  const result=data.result&&typeof data.result==='object'?data.result:{};
+  const key=extensionRuntimeTaskRunKey(data);
+  const state=String(data.state||result.state||(result.exitCode===0?'done':(result.exitCode!==undefined&&result.exitCode!==null?'error':'running'))||'running').toLowerCase();
+  const problemMatchers=Array.isArray(task.problemMatchers)?task.problemMatchers:(Array.isArray(task.problemMatcher)?task.problemMatcher:[]);
+  const record={
+    kind:'task',
+    key,
+    state,
+    label:String(task.name||data.label||def.type||data.taskType||'Extension Task'),
+    taskType:String(def.type||data.taskType||''),
+    commandLine:String(data.commandLine||result.commandLine||''),
+    cwd:String((data.metadata&&data.metadata.cwd)||result.cwd||''),
+    problemMatcherCount:Number(data.problemMatcherCount||problemMatchers.length||0)||0,
+    exitCode:result.exitCode!==undefined?result.exitCode:null,
+    message:String(data.message||result.error||''),
+    updatedAt:Date.now()
+  };
+  extensionRuntimeBoundedSet(extensionRuntimeTaskRuns,key,record,24);
+  const status=$('extension-runtime-status');
+  if(status)status.textContent='Task '+record.label+' '+record.state+'.';
+  return renderExtensionRuntimeRunStrip();
+}
+function updateExtensionRuntimeDebugSession(data){
+  data=data||{};
+  const session=data.session&&typeof data.session==='object'?data.session:{};
+  const config=data.config&&typeof data.config==='object'?data.config:(session.configuration&&typeof session.configuration==='object'?session.configuration:{});
+  const key=extensionRuntimeDebugSessionKey(data);
+  const state=String(data.state||data.status||(data.stopped?'stopped':'started')||'started').toLowerCase();
+  const record={
+    kind:'debug',
+    key,
+    state,
+    label:String(session.name||config.name||data.label||data.debugType||session.type||'Debug Session'),
+    debugType:String(session.type||config.type||data.debugType||''),
+    commandLine:String(config.program||config.runtimeExecutable||config.debugServer||''),
+    cwd:String(config.cwd||''),
+    problemMatcherCount:0,
+    exitCode:data.exitCode!==undefined?data.exitCode:null,
+    message:String(data.message||''),
+    updatedAt:Date.now()
+  };
+  extensionRuntimeBoundedSet(extensionRuntimeDebugSessions,key,record,24);
+  const status=$('extension-runtime-status');
+  if(status)status.textContent='Debug '+record.label+' '+record.state+'.';
+  return renderExtensionRuntimeRunStrip();
+}
 function prepareExtensionRuntimeAssistantPrompt(row,prompt,statusText){
   const input=setChatInputValue(prompt||'',{focus:true});
   switchRightTab('chat');
@@ -38560,6 +38700,25 @@ function extensionRuntimeDebuggerConfig(row){
 function appendExtensionRuntimeRunRecord(kind,row,result){
   const status=$('extension-runtime-status');
   const ok=!!(result&&result.ok!==false&&!result.error);
+  if(kind==='task'){
+    updateExtensionRuntimeTaskLifecycle({
+      state:ok?'done':'error',
+      executionId:result&&result.executionId,
+      task:result&&result.task,
+      taskType:result&&result.taskType||row&&row.id,
+      commandLine:result&&result.commandLine,
+      metadata:result&&result.metadata,
+      result:result&&result.raw
+    });
+  }else if(kind==='debug'){
+    updateExtensionRuntimeDebugSession({
+      state:ok?'started':'error',
+      debugType:result&&result.debugType||row&&row.id,
+      session:result&&result.session,
+      config:result&&result.config,
+      message:result&&result.error
+    });
+  }
   if(status){
     const label=row&&row.label||row&&row.id||kind;
     status.textContent=ok
@@ -41757,7 +41916,7 @@ function extensionRuntimeDomSelfCheckSnapshot(){
     const runtimeActionSmoke={};
     window.pywebview=window.pywebview||{};
     window.pywebview.api=Object.assign({},previousApi||{},{
-      run_extension_task_type:async(taskType)=>({ok:true,taskType,executionId:'task-selftest',task:{name:'Selftest Task',definition:{type:taskType}},taskCount:1}),
+      run_extension_task_type:async(taskType)=>({ok:true,taskType,executionId:'task-selftest',task:{name:'Selftest Task',definition:{type:taskType},problemMatchers:['$selftest']},commandLine:'echo selftest task',taskCount:1}),
       start_extension_debugger_type:async(debugType,config,label)=>({ok:true,debugType,started:true,config,session:{id:'debug-selftest',type:debugType,name:label||debugType}})
     });
     try{
@@ -41913,6 +42072,7 @@ function extensionRuntimeDomSelfCheckSnapshot(){
 
     const runtimeSummary=$('extension-runtime-summary');
     const runtimeHealth=$('extension-runtime-health');
+    const runtimeRunStrip=$('extension-runtime-run-strip');
     const tree=root.querySelector('[role="tree"][data-view-id="selftest.dynamic.tree"]');
     const treeNodes=Array.from(root.querySelectorAll('.ext-tree-node'));
     const webviewFrame=root.querySelector('.extension-webview-view-host iframe.provider-webview-frame');
@@ -42073,6 +42233,12 @@ function extensionRuntimeDomSelfCheckSnapshot(){
       runtimeHealthFilters:runtimeHealth?Array.from(runtimeHealth.querySelectorAll('.extension-runtime-health-card')).map(item=>item.dataset.runtimeHealthFilter||''):[],
       runtimeHealthWarnings:(()=>{const panel=$('extension-runtime-panel');return panel?Number(panel.dataset.runtimeHealthWarnings)||0:0})(),
       runtimeHealthErrors:(()=>{const panel=$('extension-runtime-panel');return panel?Number(panel.dataset.runtimeHealthErrors)||0:0})(),
+      runtimeRunStripActive:!!(runtimeRunStrip&&runtimeRunStrip.classList.contains('active')),
+      runtimeRunChips:runtimeRunStrip?runtimeRunStrip.querySelectorAll('.extension-runtime-run-chip').length:0,
+      runtimeTaskRunChips:runtimeRunStrip?runtimeRunStrip.querySelectorAll('.extension-runtime-run-chip[data-runtime-run-kind="task"]').length:0,
+      runtimeDebugSessionChips:runtimeRunStrip?runtimeRunStrip.querySelectorAll('.extension-runtime-run-chip[data-runtime-run-kind="debug"]').length:0,
+      runtimeRunStates:runtimeRunStrip?Array.from(runtimeRunStrip.querySelectorAll('.extension-runtime-run-chip')).map(item=>item.dataset.runtimeRunState||''):[],
+      runtimeRunCommands:runtimeRunStrip?Array.from(runtimeRunStrip.querySelectorAll('.extension-runtime-run-chip')).map(item=>item.dataset.runtimeRunCommand||'').filter(Boolean):[],
       runtimeHealthFilterVisible:(()=>{const card=runtimeHealth&&runtimeHealth.querySelector('[data-runtime-health-filter="bridge-warning"]');if(!card)return 0;card.click();const value=(($('extension-runtime-filter-evidence')||{}).value)||'';const result=applyExtensionRuntimeSurfaceFilter();if($('extension-runtime-filter-evidence'))$('extension-runtime-filter-evidence').value='';applyExtensionRuntimeSurfaceFilter();return value==='bridge-warning'&&result?result.visible:0})(),
       runtimeKinds:runtimeList?Array.from(runtimeList.querySelectorAll('.extension-runtime-kind')).map(item=>String(item.textContent||'')):[],
       runtimeListRole:runtimeList?runtimeList.getAttribute('role'):'',
@@ -42195,6 +42361,9 @@ function extensionRuntimeDomSelfCheckSnapshot(){
       && snapshot.runtimeActionSmoke.contextAttached===true
       && snapshot.runtimeActionSmoke.taskRunLastAction==='run-task-definition'
       && snapshot.runtimeActionSmoke.debugRunLastAction==='start-debugger'
+      && snapshot.runtimeRunStripActive&&snapshot.runtimeTaskRunChips>=1&&snapshot.runtimeDebugSessionChips>=1
+      && snapshot.runtimeRunStates.includes('done')&&snapshot.runtimeRunStates.includes('started')
+      && snapshot.runtimeRunCommands.includes('echo selftest task')
       && snapshot.runtimeActionSmoke.taskPrompt.includes('selftest.task')&&snapshot.runtimeActionSmoke.taskPrompt.includes('Required fields: command')
       && snapshot.runtimeActionSmoke.debugPrompt.includes('selftest.debug')&&snapshot.runtimeActionSmoke.debugPrompt.includes('Launch template')&&snapshot.runtimeActionSmoke.debugPrompt.includes('program')
       && snapshot.runtimeActionSmoke.lastAction==='start-debugger'
@@ -46467,6 +46636,36 @@ function _appendTerminalJobChunks(view,status){
     _appendTerminalHtml(view.body,ansiToHtml(text));
   });
 }
+function appendTerminalHostCommandResult(name,cmd,rawResult,metadata){
+  const payload=(metadata&&typeof metadata==='object')?metadata:{};
+  let term=_terminalFromHostPayload(payload,name);
+  if(!term&&name)term=_createTerminal(name,payload,true);
+  if(!term)return null;
+  term.metadata={...(term.metadata||{}),...payload};
+  const out=term.outputEl||_getActiveTermOutput();
+  if(!out)return null;
+  if(term.id!==_activeTermId)_switchTerminal(term.id);
+  const command=String(cmd||'').trim();
+  if(!command)return null;
+  const result=_terminalNormalizeResult(rawResult);
+  const elapsed=result.durationMs!==null?result.durationMs:null;
+  const view=_appendTerminalCommandBlock(out,command);
+  view.block.dataset.hostCommand='1';
+  view.block.dataset.runtimeSurfaceKind=String(payload.runtimeSurfaceKind||'');
+  view.block.dataset.executionId=String(payload.executionId||'');
+  if(result.stdout)_appendTerminalHtml(view.body,ansiToHtml(result.stdout));
+  if(result.stderr)_appendTerminalHtml(view.body,ansiToHtml(result.stderr));
+  if(result.error)_appendTerminalHtml(view.body,ansiToHtml(result.error)+'\n');
+  if(result.stdoutTruncated||result.stderrTruncated)_appendTerminalHtml(view.body,ansiToHtml('\n[output truncated]\n'));
+  const state=_terminalStateForResult(result);
+  view.block.className='terminal-command-block '+state;
+  view.status.textContent=[state==='timeout'?'timeout':(state==='cancelled'?'cancelled':'exit '+result.exitCode),elapsed!==null?_formatTerminalDuration(elapsed):'',result.cwd?('cwd '+result.cwd):''].filter(Boolean).join('  ');
+  renderTerminalCommandMeta(view.block,{...result,cwd:result.cwd||payload.cwd||currentWorkspaceRoot(),terminal:{...(result.terminal||{}),...(payload||{})}},elapsed,state);
+  _updateTerminalRecordForRun(command,state,{...result,cwd:result.cwd||payload.cwd||currentWorkspaceRoot(),terminal:{...(result.terminal||{}),...(payload||{})}},elapsed);
+  out.dataset.lastHostCommandResult='1';
+  out.scrollTop=out.scrollHeight;
+  return {state,exitCode:result.exitCode,durationMs:elapsed,terminalId:String(term.id),executionId:String(payload.executionId||'')};
+}
 async function _pollTerminalJob(runId,jobId,out,view,started,cmd,cwd){
   let seq=0;
   for(;;){
@@ -46616,7 +46815,7 @@ window.renderTerminalProfileSelector=renderTerminalProfileSelector;
 window.openWorkspaceSwitcher=openWorkspaceSwitcher;
 window.setWorkspaceRoot=setWorkspaceRoot;
 window.applyWorkspaceSwitcherInput=applyWorkspaceSwitcherInput;
-window._createTerminal=_createTerminal;window._closeTerminal=_closeTerminal;window._disposeTerminalFromHost=_disposeTerminalFromHost;window._insertTerminalTextFromHost=_insertTerminalTextFromHost;window._renameTerminal=_renameTerminal;window._updateTerminalDimensions=_updateTerminalDimensions;window._setActiveTerminalFromHost=_setActiveTerminalFromHost;window._updateTerminalState=_updateTerminalState;window._updateTerminalShellIntegration=_updateTerminalShellIntegration;window._updateTerminalShellExecution=_updateTerminalShellExecution;
+window._createTerminal=_createTerminal;window._closeTerminal=_closeTerminal;window._disposeTerminalFromHost=_disposeTerminalFromHost;window._insertTerminalTextFromHost=_insertTerminalTextFromHost;window._renameTerminal=_renameTerminal;window._updateTerminalDimensions=_updateTerminalDimensions;window._setActiveTerminalFromHost=_setActiveTerminalFromHost;window._updateTerminalState=_updateTerminalState;window._updateTerminalShellIntegration=_updateTerminalShellIntegration;window._updateTerminalShellExecution=_updateTerminalShellExecution;window.appendTerminalHostCommandResult=appendTerminalHostCommandResult;window.updateExtensionRuntimeTaskLifecycle=updateExtensionRuntimeTaskLifecycle;window.updateExtensionRuntimeDebugSession=updateExtensionRuntimeDebugSession;window.renderExtensionRuntimeRunStrip=renderExtensionRuntimeRunStrip;
 (function(){
   const input=$('workspace-switcher-input');if(!input)return;
   input.addEventListener('keydown',e=>{

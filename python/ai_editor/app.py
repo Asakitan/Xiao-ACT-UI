@@ -1504,7 +1504,28 @@ class _AIEditorUIBridge:
                 "command": text,
                 "cwd": self._api._workspace_root(),
             }), True)
+        self._api._eval_js(
+            "(function(name,command,result){try{"
+            "if(typeof appendTerminalHostCommandResult==='function')"
+            "appendTerminalHostCommandResult(name,command,result,{name:name});"
+            "}catch(e){}})("
+            f"{json.dumps(str(name or 'Extension Terminal'))},"
+            f"{json.dumps(str(text or ''))},"
+            f"{json.dumps(result, ensure_ascii=False, default=str)});"
+        )
         return result
+
+    def update_extension_task_lifecycle(
+            self, payload: Dict[str, Any]) -> None:
+        self._api._emit(
+            "extension_task_lifecycle",
+            payload if isinstance(payload, dict) else {})
+
+    def update_extension_debug_session(
+            self, payload: Dict[str, Any]) -> None:
+        self._api._emit(
+            "extension_debug_session",
+            payload if isinstance(payload, dict) else {})
 
     def insert_terminal_text(
             self, name: str, text: str,
