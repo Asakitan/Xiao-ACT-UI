@@ -5209,11 +5209,11 @@ def test_phase1_ai_editor_regressions() -> None:
             and ".chat-toolbar .spacer { display:none; }" in html
              and ".chat-control-strip { display:flex; align-items:center; gap:6px; flex:0 0 auto; flex-wrap:nowrap; min-width:max-content;" in html
              and "overflow:visible; width:max-content; max-width:none;" in html
-             and "--chat-provider-width:132px;" in html
-            and "--chat-model-width:76px;" in html
+             and "--chat-provider-width:104px;" in html
+            and "--chat-model-width:104px;" in html
             and "width:11%;min-width:36px;max-width:44px" in html
-            and "--chat-agent-width:148px;" in html
-            and "--chat-workflow-width:150px;" in html
+            and "--chat-agent-width:122px;" in html
+            and "--chat-workflow-width:124px;" in html
              and "appearance:none; -webkit-appearance:none; line-height:20px;" in html
              and ".chat-select-chip { width:150px; max-width:208px; padding:0 9px; cursor:pointer; flex:0 1 150px; }" in html
              and ".chat-model-inline { width:var(--chat-model-width); min-width:var(--chat-model-width); max-width:var(--chat-model-width); inline-size:var(--chat-model-width); min-inline-size:var(--chat-model-width); max-inline-size:var(--chat-model-width); box-sizing:border-box; justify-content:space-between; font-family:var(--mono); flex:0 0 var(--chat-model-width); flex-basis:var(--chat-model-width); text-align:left; padding-inline:4px; gap:2px; }" in html
@@ -5366,6 +5366,17 @@ def test_phase1_ai_editor_regressions() -> None:
            and "agentTrigger.onkeydown=e=>handleChatControlPopupKeydown(e,'agent');" in html
            and "agentPopup.onkeydown=e=>handleChatControlPopupKeydown(e,'agent');" in html
            and "window.selectAgentFromPopup=selectAgentFromPopup;" in html)
+    _check("frontend Assistant agent picker falls back to built-in agents",
+           "const CHAT_BUILTIN_AGENT_ROWS=[" in html
+           and "id:'code-reviewer',name:'Code Reviewer'" in html
+           and "id:'debugger',name:'Debugger'" in html
+           and "function agentOptionRows()" in html
+           and "CHAT_BUILTIN_AGENT_ROWS.forEach(pushAgent);" in html
+           and "agentRows.forEach(a=>agentPopup.appendChild(chatControlPopupItem('agent',a,controlItemId(a)===activeAgentId)));" in html
+           and "agentPopup.optionCount>=6" in html
+           and "agentPopup.visibleText.includes('Code Reviewer')" in html
+           and "const agent=slashFindControlItem(agentOptionRows(),arg);" in html
+           and "agentOptionRows().forEach(a=>{" in html)
     _check("frontend Assistant control popups avoid clipped native dropdowns",
            ".chat-toolbar { display:grid; grid-template-columns:max-content minmax(320px,1fr);" in html
            and "min-width:0; overflow:visible; white-space:nowrap; min-height:29px;" in html
@@ -6703,7 +6714,7 @@ def test_phase1_ai_editor_regressions() -> None:
             and "inputThreeLineHeight:!!(container&&container.querySelector('.chat-input')&&container.querySelector('.chat-input').getBoundingClientRect().height>=72)" in html
             and "assistantUiSelfCheckRecord(checks,'visual-controls-one-row-ready'" in html
             and "assistantUiSelfCheckRecord(checks,'visual-control-widths-ready'" in html
-           and "controlWidthsReady:!!(triggerWidthMap['chat-provider-trigger']>=132&&triggerWidthMap['chat-model-inline']>=74&&triggerWidthMap['chat-model-inline']<=80&&triggerWidthMap['chat-agent-trigger']>=148&&triggerWidthMap['chat-workflow-trigger']>=150)" in html
+           and "controlWidthsReady:!!(triggerWidthMap['chat-provider-trigger']>=100&&triggerWidthMap['chat-provider-trigger']<=108&&triggerWidthMap['chat-model-inline']>=100&&triggerWidthMap['chat-model-inline']<=108&&triggerWidthMap['chat-agent-trigger']>=118&&triggerWidthMap['chat-agent-trigger']<=126&&triggerWidthMap['chat-workflow-trigger']>=120&&triggerWidthMap['chat-workflow-trigger']<=128)" in html
             and "assistantUiSelfCheckRecord(checks,'visual-composer-extra-rows-hidden-ready'" in html
             and "assistantUiSelfCheckRecord(checks,'visual-model-chip-removed-ready'" in html
             and "assistantUiSelfCheckRecord(checks,'visual-content-window-ring-ready'" in html

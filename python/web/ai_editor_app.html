@@ -1365,10 +1365,10 @@ pre.code-block code .type { color:var(--fg-type); }
 
 .chat-control-strip { display:flex; align-items:center; gap:6px; flex:0 0 auto; flex-wrap:nowrap; min-width:max-content;
   overflow:visible; width:max-content; max-width:none;
-  --chat-provider-width:132px;
-  --chat-model-width:76px;
-  --chat-agent-width:148px;
-  --chat-workflow-width:150px; }
+  --chat-provider-width:104px;
+  --chat-model-width:104px;
+  --chat-agent-width:122px;
+  --chat-workflow-width:124px; }
 .chat-chip,.chat-select-chip,.chat-model-inline,.chat-run-chip { height:22px; border:1px solid var(--border);
   border-radius:999px; background:color-mix(in srgb,var(--bg3) 88%,#000); color:var(--fg); font:11px var(--sans);
   outline:none; min-width:0; box-sizing:border-box; appearance:none; -webkit-appearance:none; line-height:20px; }
@@ -1404,7 +1404,7 @@ pre.code-block code .type { color:var(--fg-type); }
 .chat-control-trigger.provider { width:var(--chat-provider-width); min-width:var(--chat-provider-width); max-width:var(--chat-provider-width); flex:0 0 var(--chat-provider-width); }
 .chat-control-trigger.model { width:var(--chat-model-width)!important; min-width:var(--chat-model-width)!important; max-width:var(--chat-model-width)!important; inline-size:var(--chat-model-width)!important; min-inline-size:var(--chat-model-width)!important; max-inline-size:var(--chat-model-width)!important; flex:0 0 var(--chat-model-width)!important; flex-basis:var(--chat-model-width)!important; }
 .chat-control-trigger.agent { width:var(--chat-agent-width); min-width:var(--chat-agent-width); max-width:var(--chat-agent-width); flex:0 0 var(--chat-agent-width); }
-.chat-control-trigger.mode { width:96px; min-width:94px; max-width:120px; flex:0 0 96px; color:var(--fg-accent);
+.chat-control-trigger.mode { width:86px; min-width:84px; max-width:108px; flex:0 0 86px; color:var(--fg-accent);
   border-color:color-mix(in srgb, var(--border-focus) 50%, var(--border)); }
 .chat-control-trigger.workflow { width:var(--chat-workflow-width); min-width:var(--chat-workflow-width); max-width:var(--chat-workflow-width); flex:0 0 var(--chat-workflow-width); }
 #chat-agent-menu { width:var(--chat-agent-width); flex-basis:var(--chat-agent-width); }
@@ -9203,7 +9203,7 @@ function chatContextFromToken(token){
     return {id:'state:'+state,kind:'state',label:'Runtime state',preview:state,prompt:'Current IDE state: '+state};
   }
   if(key==='language')return {id:'language:'+String(editorLang||'plaintext'),kind:'language',label:String(editorLang||'plaintext'),prompt:'Current editor language: '+String(editorLang||'plaintext')};
-  const agent=(chatControlState&&chatControlState.agents||[]).find(a=>controlItemId(a).toLowerCase()===key);
+  const agent=agentOptionRows().find(a=>controlItemId(a).toLowerCase()===key);
   if(agent)return {id:'agent:'+controlItemId(agent),kind:'agent',label:controlItemName(agent)||controlItemId(agent),prompt:'Use chat participant/agent: '+controlItemId(agent)};
   const providerKey=key.replace(/^provider:/,'');
   const provider=(chatControlState&&chatControlState.providers||[]).find(p=>controlItemId(p).toLowerCase()===providerKey);
@@ -9412,7 +9412,7 @@ function chatContextPickerItems(){
       description:'Pending attachment',preview:a.type==='image'?'Image attachment':chatContextTextSample(a.data,220),
       prompt:a.type==='image'?'Attached image: '+a.name:'Attached file '+a.name+':\n```\n'+chatContextTextSample(a.data,6000)+'\n```'}));
   }
-  (chatControlState.agents||[]).forEach(a=>{
+  agentOptionRows().forEach(a=>{
     const id=controlItemId(a);if(!id)return;
     items.push({id:'agent:'+id,kind:'agent',icon:a.icon||'@',label:controlItemName(a)||id,
       description:a.description||'Registered chat participant',prompt:'Use chat participant/agent: '+id,token:'@'+id});
@@ -12447,7 +12447,7 @@ async function runAssistantUiSelfCheck(opts){
   assistantUiSelfCheckRecord(checks,'composer-native-selects-hidden',layout.nativeHidden===true,JSON.stringify(layout.nativeControls));
   assistantUiSelfCheckRecord(checks,'mode-popup-custom-control-ready',modePopup.shown&&modePopup.optionCount>=6&&modePopup.modeActionCount>=6&&modePopup.keyboardReady&&!modePopup.oldModePopupPresent&&modePopup.visibleText.includes('Agent')&&modePopup.visibleText.includes('Default Approvals'),JSON.stringify(modePopup));
   assistantUiSelfCheckRecord(checks,'control-popup-rects-unclipped',[providerPopup,modelPopup,agentPopup,modePopup,workflowPopup].every(s=>s.shown&&s.display==='block'&&s.rectReady&&s.opensAboveTrigger&&s.notToolbarClipped&&!s.className.includes('mode-popup')),JSON.stringify({providerPopup,modelPopup,agentPopup,modePopup,workflowPopup}));
-  assistantUiSelfCheckRecord(checks,'agent-popup-configured-agents-ready',agentPopup.shown&&agentPopup.optionCount>=1&&agentPopup.focusableCount===agentPopup.optionCount&&agentPopup.keyboardReady&&agentPopup.visibleText.includes('Agent'),JSON.stringify(agentPopup));
+  assistantUiSelfCheckRecord(checks,'agent-popup-configured-agents-ready',agentPopup.shown&&agentPopup.optionCount>=6&&agentPopup.focusableCount===agentPopup.optionCount&&agentPopup.keyboardReady&&agentPopup.visibleText.includes('Code Reviewer')&&agentPopup.visibleText.includes('Debugger'),JSON.stringify(agentPopup));
   assistantUiSelfCheckRecord(checks,'visual-composer-centered-three-line-ready',visualLayout.ok&&visualLayout.composerCentered&&visualLayout.composerTwoThirdsWide&&visualLayout.composerThreeLineHeight&&visualLayout.inputThreeLineHeight&&visualLayout.composerBottomFilled,JSON.stringify(visualLayout));
   assistantUiSelfCheckRecord(checks,'visual-controls-one-row-ready',visualLayout.toolbarOneLine&&visualLayout.metaInsideTrailing&&visualLayout.buttonSurfaceReady&&visualLayout.triggerMotionReady,JSON.stringify(visualLayout));
   assistantUiSelfCheckRecord(checks,'visual-control-widths-ready',visualLayout.controlWidthsReady===true,JSON.stringify(visualLayout.triggerWidths));
@@ -12698,7 +12698,7 @@ function assistantVisualLayoutSnapshot(){
     nativeBoxes,
     noOldNativeBoxes:nativeBoxes.every(item=>item.exists&&item.display==='none'&&item.ariaHidden==='true'&&item.inert===true&&item.width===0&&item.height===0),
     triggerWidths:triggerWidthMap,
-    controlWidthsReady:!!(triggerWidthMap['chat-provider-trigger']>=132&&triggerWidthMap['chat-model-inline']>=74&&triggerWidthMap['chat-model-inline']<=80&&triggerWidthMap['chat-agent-trigger']>=148&&triggerWidthMap['chat-workflow-trigger']>=150),
+    controlWidthsReady:!!(triggerWidthMap['chat-provider-trigger']>=100&&triggerWidthMap['chat-provider-trigger']<=108&&triggerWidthMap['chat-model-inline']>=100&&triggerWidthMap['chat-model-inline']<=108&&triggerWidthMap['chat-agent-trigger']>=118&&triggerWidthMap['chat-agent-trigger']<=126&&triggerWidthMap['chat-workflow-trigger']>=120&&triggerWidthMap['chat-workflow-trigger']<=128),
     popups:popupSnapshots,
     popupsCustomSurface:popupSnapshots.every(item=>item.customSurface&&item.shown&&item.display==='block'&&item.pointerEvents==='auto'),
     popupsOpenAbove:popupSnapshots.every(item=>item.rectReady&&item.opensAboveTrigger&&item.notToolbarClipped),
@@ -21991,7 +21991,7 @@ window.doSend=doSend;window.doStop=doStop;window.newChat=newChat;window.clearCha
 // ── Slash commands ──
 function slashCommandDynamicRows(){
   const rows=[];
-  (chatControlState.agents||[]).forEach(a=>{const id=controlItemId(a);if(id)rows.push(['/agent '+id,controlItemName(a)||id,'agent'])});
+  agentOptionRows().forEach(a=>{const id=controlItemId(a);if(id)rows.push(['/agent '+id,controlItemName(a)||id,'agent'])});
   (chatControlState.providers||[]).forEach(p=>{const id=controlItemId(p);if(id)rows.push(['/provider '+id,controlItemName(p)||id,'provider'])});
   (chatControlState.workflows||[]).forEach(w=>{const id=controlItemId(w);if(id)rows.push(['/workflow '+id,controlItemName(w)||id,'workflow'])});
   assistantSessionLoadItems().slice(0,20).forEach(s=>{if(s&&s.id)rows.push(['/session '+s.id,s.title||s.sessionResource||'Chat session','session'])});
@@ -22053,7 +22053,7 @@ async function execSlash(raw){
   else if(cmd==='/instructions')switchSidebar('instructions')
   else if(cmd==='/agents')switchSidebar('agents')
   else if(cmd==='/agent'){
-    const agent=slashFindControlItem(chatControlState.agents,arg);
+    const agent=slashFindControlItem(agentOptionRows(),arg);
     if(arg&&!agent)appendSystem('Agent not found: '+arg);
     else if(agent)await setToolbarAgent(controlItemId(agent));
     else switchSidebar('agents');
@@ -34459,6 +34459,13 @@ let chatControlState={agents:[],workflows:[],providers:[],models:[]};
 let chatProviderModelOptions=Object.create(null);
 let chatProviderModelFetchKeys=Object.create(null);
 let chatProviderModelFetchInflight=Object.create(null);
+const CHAT_BUILTIN_AGENT_ROWS=[
+  {id:'code-reviewer',name:'Code Reviewer',description:'Reviews code for bugs, security issues, and style',icon:'⌕',builtin:true},
+  {id:'explainer',name:'Code Explainer',description:'Explains code structure, logic, and patterns',icon:'ⓘ',builtin:true},
+  {id:'debugger',name:'Debugger',description:'Diagnoses and fixes bugs systematically',icon:'◌',builtin:true},
+  {id:'optimizer',name:'Performance Optimizer',description:'Finds speed and memory bottlenecks',icon:'⚡',builtin:true},
+  {id:'documenter',name:'Documentation Writer',description:'Writes concise docs, guides, and examples',icon:'≡',builtin:true}
+];
 function normalizeControlList(value,key){
   const raw=Array.isArray(value)?value:(value&&Array.isArray(value[key])?value[key]:[]);
   return raw.filter(Boolean);
@@ -34473,6 +34480,17 @@ function controlItemId(item){
 }
 function controlItemName(item){return String((item&&typeof item==='object'&&(item.name||item.label||item.id||item.value))||item||'')}
 function controlItemDescription(item){return String((item&&typeof item==='object'&&(item.description||item.detail||item.when_to_use))||'')}
+function agentOptionRows(){
+  const rows=[];
+  const pushAgent=agent=>{
+    const id=controlItemId(agent);
+    if(!id||rows.some(item=>controlItemId(item)===id))return;
+    rows.push(agent);
+  };
+  normalizeControlList(chatControlState.agents,'agents').forEach(pushAgent);
+  CHAT_BUILTIN_AGENT_ROWS.forEach(pushAgent);
+  return rows;
+}
 function isPlaceholderModelValue(value){
   const text=String(value||'').trim().toLowerCase();
   return !text||text==='model';
@@ -34894,7 +34912,8 @@ function renderChatControlPopups(){
   }
   const agentTrigger=$('chat-agent-trigger'),agentLabelEl=$('chat-agent-trigger-label'),agentPopup=$('chat-agent-popup');
   if(agentTrigger&&agentLabelEl){
-    const active=activeAgentId?chatControlState.agents.find(a=>controlItemId(a)===activeAgentId):null;
+    const agentRows=agentOptionRows();
+    const active=activeAgentId?agentRows.find(a=>controlItemId(a)===activeAgentId):null;
     agentLabelEl.textContent=activeAgentId?'Agent: '+(controlItemName(active)||activeAgentId):'Agent: Default';
     agentTrigger.title=activeAgentId?'Active agent: '+(controlItemName(active)||activeAgentId):'Active agent: Default';
     agentTrigger.classList.toggle('active',!!activeAgentId);
@@ -34904,9 +34923,10 @@ function renderChatControlPopups(){
   if(agentPopup){
     agentPopup.innerHTML='';
     agentPopup.appendChild(chatControlPopupItem('agent',{id:'',name:'Agent: Default',description:'Use the default assistant behavior',icon:'○'},!activeAgentId));
-    if(chatControlState.agents.length){
+    const agentRows=agentOptionRows();
+    if(agentRows.length){
       const sep=document.createElement('div');sep.className='mode-popup-sep';agentPopup.appendChild(sep);
-      chatControlState.agents.forEach(a=>agentPopup.appendChild(chatControlPopupItem('agent',a,controlItemId(a)===activeAgentId)));
+      agentRows.forEach(a=>agentPopup.appendChild(chatControlPopupItem('agent',a,controlItemId(a)===activeAgentId)));
     }
     agentPopup.onkeydown=e=>handleChatControlPopupKeydown(e,'agent');
   }
@@ -35105,7 +35125,7 @@ function renderChatControlOptions(){
   if(agentSel){
     agentSel.innerHTML='';
     agentSel.add(new Option('Agent: Default',''));
-    chatControlState.agents.forEach(a=>{
+    agentOptionRows().forEach(a=>{
       const id=controlItemId(a);if(!id)return;
       const name=controlItemName(a)||id;
       agentSel.add(new Option((id===activeAgentId?'Agent: ':'')+name,id));
@@ -45242,8 +45262,8 @@ function _getAtMentionItems(){
   chatInputTabCompletionItems().forEach(item=>items.push(item));
   chatInputSessionCompletionItems().forEach(item=>items.push(item));
   chatInputSymbolCompletions().forEach(symbol=>items.push([symbol.token,symbol.preview,'symbol','ƒ']));
-  if(chatControlState&&chatControlState.agents){
-    chatControlState.agents.forEach(a=>{
+  if(chatControlState){
+    agentOptionRows().forEach(a=>{
       const id=a.id||a.name||'';const name=a.name||id;
       if(id)items.push(['@'+id,name+(a.description?' — '+a.description:''),'agent',a.icon||'\u{1f916}']);
     });
