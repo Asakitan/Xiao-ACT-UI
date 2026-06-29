@@ -4939,6 +4939,15 @@ def test_phase1_ai_editor_regressions() -> None:
            and "visibleSearchbarChildren.length===1&&visibleSearchbarChildren[0]===searchRow" in html
            and ".settings-vscode-calm .settings-search-caption," in html
            and ".settings-vscode-calm.settings-details-open .settings-search-caption," in html
+           and ".settings-field.settings-query-hidden,.ext-setting-row.settings-query-hidden { display:none !important; }" in html
+           and "function settingsRowMatchesQuery(row,query)" in html
+           and "function applySettingsQueryRowVisibility(root,parsed)" in html
+           and "function settingsSearchDomSnapshot()" in html
+           and "window.settingsSearchDomSnapshot=settingsSearchDomSnapshot;" in html
+           and "row.dataset.settingsQueryMatch=targetMatch&&match?'1':'0';" in html
+           and "modal.dataset.settingsQueryRowMatched=String(stats.matched);" in html
+           and "Rows: '+String(targetStats.queryMatched)+' matched / '" in html
+           and "if(row.classList&&row.classList.contains('settings-query-hidden'))return false;" in html
            and "function settingsJumpbarAction(action)" in html
            and "function renderSettingsJumpbar(stats)" in html
            and "function bootAiEditorUi(reason)" in html
@@ -5201,13 +5210,13 @@ def test_phase1_ai_editor_regressions() -> None:
              and ".chat-control-strip { display:flex; align-items:center; gap:6px; flex:0 0 auto; flex-wrap:nowrap; min-width:max-content;" in html
              and "overflow:visible; width:max-content; max-width:none;" in html
              and "--chat-provider-width:128px;" in html
-            and "--chat-model-width:56px;" in html
+            and "--chat-model-width:38px;" in html
             and "width:11%;min-width:36px;max-width:44px" in html
             and "--chat-agent-width:140px;" in html
             and "--chat-workflow-width:144px;" in html
              and "appearance:none; -webkit-appearance:none; line-height:20px;" in html
              and ".chat-select-chip { width:150px; max-width:208px; padding:0 9px; cursor:pointer; flex:0 1 150px; }" in html
-             and ".chat-model-inline { width:var(--chat-model-width); min-width:var(--chat-model-width); max-width:var(--chat-model-width); inline-size:var(--chat-model-width); min-inline-size:var(--chat-model-width); max-inline-size:var(--chat-model-width); box-sizing:border-box; justify-content:space-between; font-family:var(--mono); flex:0 0 var(--chat-model-width); flex-basis:var(--chat-model-width); text-align:left; padding-inline:6px; }" in html
+             and ".chat-model-inline { width:var(--chat-model-width); min-width:var(--chat-model-width); max-width:var(--chat-model-width); inline-size:var(--chat-model-width); min-inline-size:var(--chat-model-width); max-inline-size:var(--chat-model-width); box-sizing:border-box; justify-content:space-between; font-family:var(--mono); flex:0 0 var(--chat-model-width); flex-basis:var(--chat-model-width); text-align:left; padding-inline:4px; gap:2px; }" in html
              and ".chat-control-trigger { display:inline-flex; align-items:center; gap:4px; justify-content:space-between;" in html
              and "border-radius:999px!important; background:color-mix(in srgb,var(--bg3) 88%,#000); appearance:none!important; -webkit-appearance:none!important;" in html
              and "#chat-model-menu { width:var(--chat-model-width)!important; min-width:var(--chat-model-width)!important; max-width:var(--chat-model-width)!important; inline-size:var(--chat-model-width)!important; min-inline-size:var(--chat-model-width)!important; max-inline-size:var(--chat-model-width)!important; flex:0 0 var(--chat-model-width)!important; flex-basis:var(--chat-model-width)!important; }" in html
@@ -6694,7 +6703,7 @@ def test_phase1_ai_editor_regressions() -> None:
             and "inputThreeLineHeight:!!(container&&container.querySelector('.chat-input')&&container.querySelector('.chat-input').getBoundingClientRect().height>=72)" in html
             and "assistantUiSelfCheckRecord(checks,'visual-controls-one-row-ready'" in html
             and "assistantUiSelfCheckRecord(checks,'visual-control-widths-ready'" in html
-           and "controlWidthsReady:!!(triggerWidthMap['chat-provider-trigger']>=128&&triggerWidthMap['chat-model-inline']>=50&&triggerWidthMap['chat-model-inline']<=58&&triggerWidthMap['chat-agent-trigger']>=140&&triggerWidthMap['chat-workflow-trigger']>=144)" in html
+           and "controlWidthsReady:!!(triggerWidthMap['chat-provider-trigger']>=128&&triggerWidthMap['chat-model-inline']>=36&&triggerWidthMap['chat-model-inline']<=42&&triggerWidthMap['chat-agent-trigger']>=140&&triggerWidthMap['chat-workflow-trigger']>=144)" in html
             and "assistantUiSelfCheckRecord(checks,'visual-composer-extra-rows-hidden-ready'" in html
             and "assistantUiSelfCheckRecord(checks,'visual-model-chip-removed-ready'" in html
             and "assistantUiSelfCheckRecord(checks,'visual-content-window-ring-ready'" in html
@@ -11223,7 +11232,7 @@ console.log("frontend word separator behavior ok");
             and "hasDefaultVisiblePersonalNav" in html
             and "hasDetailBreadcrumb" in html
             and "hasFooterSaveSummary" in html
-            and "renderSettingsFocusDeck(parsed,visible,total,targetStats);" in html
+            and "renderSettingsFocusDeck(parsed,visible,total,{...targetStats,queryMatched:queryStats.matched,queryHidden:queryStats.hidden,queryTotal:queryStats.total});" in html
             and "renderSettingsFocusDeck(settingsQueryFilters((($('settings-search')||{}).value)||''),0,0" in html
             and "hasSuggestedMatchesHost" in html
              and "hasReviewFilterActions" in html
@@ -11294,7 +11303,7 @@ console.log("frontend word separator behavior ok");
              and "hasSearchEnterFocus" in html
              and "settingsRememberRecentSetting(row);" in html
              and "fav.dataset.settingsFavoriteKey=opts.key;" in html
-            and "renderSettingsReviewBar(targetStats);" in html
+            and "renderSettingsReviewBar({...targetStats,queryMatched:queryStats.matched,queryHidden:queryStats.hidden,queryTotal:queryStats.total});" in html
             and "renderSettingsReviewBar();" in html
             and ".settings-searchbar.help-open .settings-search-hints" in html
             and ".settings-review-bar { display:none;" in html
@@ -11905,8 +11914,11 @@ console.log("frontend word separator behavior ok");
            and "function extensionRuntimeSurfaceAction(kind,item,row)" in html
            and "function extensionRuntimeIsWebviewKind(kindOrRow)" in html
            and "function extensionRuntimeWebviewEvidenceStatus(row)" in html
+           and "function extensionRuntimeWebviewReadinessSummary(row)" in html
+           and "function extensionRuntimeSurfaceActionSummary(row)" in html
            and "function extensionWebviewRuntimeDiagnostics(evidence)" in html
            and "function extensionRuntimeEvidenceMatches(row,value)" in html
+           and "if(['ready','waiting-html','partial','bridge-warning','message-warning','resource-warning','missing-runtime'].includes(v))" in html
            and "function extensionRuntimeSurfaceDomSnapshot(viewId,runtime)" in html
            and "function extensionRuntimeSurfaceHealthSnapshot()" in html
            and "function extensionRuntimeSurfaceViewId(row)" in html
@@ -11965,6 +11977,7 @@ console.log("frontend word separator behavior ok");
            and ".extension-runtime-refresh:disabled" in html
            and ".extension-runtime-row:hover,.extension-runtime-row:focus" in html
            and ".extension-runtime-mid" in html
+           and ".extension-runtime-action-summary" in html
            and ".extension-runtime-tag" in html
            and "const dynamicSource=String(item.dynamicSource||item.dynamic_source||item.source||'').trim()" in html
            and "source:dynamicSource" in html
@@ -11973,6 +11986,10 @@ console.log("frontend word separator behavior ok");
            and "row.action=extensionRuntimeSurfaceAction(kind,item,row);" in html
            and "row.openable=row.action&&row.action.type!=='inspect';" in html
            and "row.evidenceStatus=extensionRuntimeWebviewEvidenceStatus(row);" in html
+           and "el.dataset.webviewReadinessSummary=readinessSummary;" in html
+           and "el.dataset.runtimeActionSummary=actionSummary;" in html
+           and "Readiness summary: '+(extensionRuntimeIsWebviewKind(row)?extensionRuntimeWebviewReadinessSummary(row):String(row.surfaceReadiness||'-'))" in html
+           and '<option value="ready">Ready</option>' in html
            and "row.focusable=extensionRuntimeIsWebviewKind(row)||row.kind==='ViewContainer'||row.kind==='TreeView'||row.kind==='CustomEditor'||row.kind==='Notebook';" in html
            and "row.key=[row.kind,row.id,row.command,row.extensionId,row.source,row.container,row.resourceUri].join('|');" in html
            and "id:String(item.id||item.profileId||item.profile_id||item.viewType||item.type||item.vendor||item.kind||item.name||item.command||'')," in html
@@ -14540,6 +14557,9 @@ console.log("extension setting schema helpers ok");
            and "runtimeActionButtons:runtimeList?runtimeList.querySelectorAll('.extension-runtime-action').length:0" in html
            and "runtimeActionButtonLabels:runtimeList?Array.from(runtimeList.querySelectorAll('.extension-runtime-action')).map(item=>String(item.textContent||'')):[]" in html
            and "runtimeActionStateRows:runtimeList?runtimeList.querySelectorAll('.extension-runtime-row[data-action-state=\"success\"]').length:0" in html
+           and "runtimeActionSummaryRows:runtimeList?runtimeList.querySelectorAll('.extension-runtime-action-summary[data-runtime-action-summary=\"1\"]').length:0" in html
+           and "runtimeActionSummaryDataRows:runtimeList?Array.from(runtimeList.querySelectorAll('.extension-runtime-row')).filter(row=>String(row.dataset.runtimeActionSummary||'').includes('·')).length:0" in html
+           and "runtimeWebviewReadinessSummaryRows:runtimeList?Array.from(runtimeList.querySelectorAll('.extension-runtime-row')).filter(row=>String(row.dataset.webviewReadinessSummary||'').includes('HTML')||String(row.dataset.webviewReadinessSummary||'').includes('waiting for HTML')).length:0" in html
            and "runtimeMissingEvidenceRows:runtimeList?Array.from(runtimeList.querySelectorAll('.extension-runtime-row')).filter(row=>row.dataset.webviewEvidenceStatus==='missing').length:0" in html
            and "runtimeEvidencePills:runtimeList?runtimeList.querySelectorAll('.extension-runtime-evidence').length:0" in html
            and "runtimeMiniActionButtons:runtimeList?runtimeList.querySelectorAll('.extension-runtime-mini-action').length:0" in html

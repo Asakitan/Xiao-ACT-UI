@@ -1365,7 +1365,7 @@ pre.code-block code .type { color:var(--fg-type); }
 .chat-control-strip { display:flex; align-items:center; gap:6px; flex:0 0 auto; flex-wrap:nowrap; min-width:max-content;
   overflow:visible; width:max-content; max-width:none;
   --chat-provider-width:128px;
-  --chat-model-width:56px;
+  --chat-model-width:38px;
   --chat-agent-width:140px;
   --chat-workflow-width:144px; }
 .chat-chip,.chat-select-chip,.chat-model-inline,.chat-run-chip { height:22px; border:1px solid var(--border);
@@ -1374,9 +1374,9 @@ pre.code-block code .type { color:var(--fg-type); }
 .chat-chip,.chat-model-inline,.chat-run-chip { display:inline-flex; align-items:center; gap:4px; padding:0 8px; cursor:pointer;
   transition:border-color .14s ease, background .14s ease, color .14s ease, box-shadow .14s ease; }
 .chat-select-chip { width:150px; max-width:208px; padding:0 9px; cursor:pointer; flex:0 1 150px; }
-.chat-model-inline { width:var(--chat-model-width); min-width:var(--chat-model-width); max-width:var(--chat-model-width); inline-size:var(--chat-model-width); min-inline-size:var(--chat-model-width); max-inline-size:var(--chat-model-width); box-sizing:border-box; justify-content:space-between; font-family:var(--mono); flex:0 0 var(--chat-model-width); flex-basis:var(--chat-model-width); text-align:left; padding-inline:6px; }
+.chat-model-inline { width:var(--chat-model-width); min-width:var(--chat-model-width); max-width:var(--chat-model-width); inline-size:var(--chat-model-width); min-inline-size:var(--chat-model-width); max-inline-size:var(--chat-model-width); box-sizing:border-box; justify-content:space-between; font-family:var(--mono); flex:0 0 var(--chat-model-width); flex-basis:var(--chat-model-width); text-align:left; padding-inline:4px; gap:2px; }
 .chat-model-inline .control-label { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-.chat-model-inline .control-caret { font-size:8px; opacity:.65; margin-left:4px; flex:0 0 auto; }
+.chat-model-inline .control-caret { font-size:8px; opacity:.65; margin-left:1px; flex:0 0 auto; }
 .chat-chip:hover,.chat-select-chip:hover,.chat-model-inline:hover,.chat-run-chip:hover,
 .chat-select-chip:focus,.chat-model-inline:focus,.chat-run-chip:focus { border-color:var(--border-focus); background:color-mix(in srgb,var(--bg-hover) 72%,var(--bg3)); }
 .chat-chip.muted,.chat-select-chip.muted { color:var(--fg-dim); }
@@ -2433,6 +2433,10 @@ button.review-pill { cursor:pointer; }
 .extension-runtime-main { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; color:var(--fg); }
 .extension-runtime-meta { display:flex; flex-wrap:wrap; align-items:center; gap:4px; min-width:0; color:var(--fg-dim); font:10px var(--mono); overflow:hidden; }
 .extension-runtime-meta span { max-width:180px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.extension-runtime-action-summary { grid-column:2 / 5; min-width:0; color:var(--fg-dim); font:10px/1.35 var(--mono);
+  overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.extension-runtime-action-summary.warn { color:var(--fg-warning); }
+.extension-runtime-action-summary.ready { color:var(--fg-success); }
 .extension-runtime-tag { border:1px solid color-mix(in srgb,var(--border) 80%,transparent); border-radius:999px; padding:0 5px; color:var(--fg-dim); }
 .extension-runtime-tag.runtime { color:var(--fg-success); border-color:color-mix(in srgb,var(--fg-success) 45%,var(--border)); }
 .extension-runtime-tag.manifest { color:var(--fg-warning); border-color:color-mix(in srgb,var(--fg-warning) 45%,var(--border)); }
@@ -2844,6 +2848,7 @@ pre.code-block { overflow:visible; }
 .settings-field.modified .s-reset { display:inline-block; }
 .settings-field.invalid, .settings-input-invalid { border-color:var(--fg-error) !important; }
 .settings-field.settings-target-hidden { display:none !important; }
+.settings-field.settings-query-hidden,.ext-setting-row.settings-query-hidden { display:none !important; }
 .settings-field.builtin-setting { position:relative; display:grid; grid-template-columns:minmax(260px,.68fr) minmax(310px,1fr);
   gap:4px 20px; align-items:start; padding:8px 34px 8px 10px; border-radius:3px; margin:1px 0 5px;
   border-left:2px solid transparent; border-bottom:1px solid color-mix(in srgb,var(--border) 42%,transparent);
@@ -5034,7 +5039,7 @@ pre.code-block { overflow:visible; }
             <input id="extension-runtime-filter-text" placeholder="Filter surfaces" aria-label="Filter extension runtime surfaces" oninput="applyExtensionRuntimeSurfaceFilter()">
             <select id="extension-runtime-filter-kind" aria-label="Filter extension runtime surface kind" onchange="applyExtensionRuntimeSurfaceFilter()"><option value="">All kinds</option></select>
             <select id="extension-runtime-filter-source" aria-label="Filter extension runtime source" onchange="applyExtensionRuntimeSurfaceFilter()"><option value="">All sources</option><option value="manifest+runtime">Manifest + runtime</option><option value="manifest">Manifest</option><option value="runtime-only">Runtime only</option></select>
-            <select id="extension-runtime-filter-evidence" aria-label="Filter webview render evidence" onchange="applyExtensionRuntimeSurfaceFilter()"><option value="">All evidence</option><option value="rendered">Rendered HTML</option><option value="missing">Missing HTML</option><option value="iframe-mounted">Iframe mounted</option><option value="iframe-missing">Iframe missing</option><option value="dom-visible">DOM visible</option><option value="dom-hidden">DOM hidden</option><option value="retained">Retained</option><option value="scripts">Scripts enabled</option><option value="resources">Resource rewrites</option><option value="port-hit">Port mapped resources</option><option value="messages">Has messages</option><option value="binary">Binary messages</option><option value="queued">Queued messages</option><option value="queue-stale">Stale queue</option><option value="dropped">Dropped messages</option><option value="lifecycle">Lifecycle events</option></select>
+            <select id="extension-runtime-filter-evidence" aria-label="Filter webview render evidence" onchange="applyExtensionRuntimeSurfaceFilter()"><option value="">All evidence</option><option value="ready">Ready</option><option value="waiting-html">Waiting HTML</option><option value="bridge-warning">Bridge warning</option><option value="message-warning">Message warning</option><option value="resource-warning">Resource warning</option><option value="rendered">Rendered HTML</option><option value="missing">Missing HTML</option><option value="iframe-mounted">Iframe mounted</option><option value="iframe-missing">Iframe missing</option><option value="dom-visible">DOM visible</option><option value="dom-hidden">DOM hidden</option><option value="retained">Retained</option><option value="scripts">Scripts enabled</option><option value="resources">Resource rewrites</option><option value="port-hit">Port mapped resources</option><option value="messages">Has messages</option><option value="binary">Binary messages</option><option value="queued">Queued messages</option><option value="queue-stale">Stale queue</option><option value="dropped">Dropped messages</option><option value="lifecycle">Lifecycle events</option></select>
           </div>
         </div>
         <div class="extension-runtime-summary" id="extension-runtime-summary"></div>
@@ -6216,6 +6221,7 @@ function settingsVisibleRows(){
   return Array.from(root.querySelectorAll('.settings-field.builtin-setting:not(.settings-target-hidden),.ext-setting-row:not(.settings-target-hidden)'))
     .filter(row=>{
       if(row.style.display==='none')return false;
+      if(row.classList&&row.classList.contains('settings-query-hidden'))return false;
       const group=row.closest('.settings-section,#ext-settings-container,details');
       return !group||group.style.display!=='none';
     });
@@ -12690,7 +12696,7 @@ function assistantVisualLayoutSnapshot(){
     nativeBoxes,
     noOldNativeBoxes:nativeBoxes.every(item=>item.exists&&item.display==='none'&&item.ariaHidden==='true'&&item.inert===true&&item.width===0&&item.height===0),
     triggerWidths:triggerWidthMap,
-    controlWidthsReady:!!(triggerWidthMap['chat-provider-trigger']>=128&&triggerWidthMap['chat-model-inline']>=50&&triggerWidthMap['chat-model-inline']<=58&&triggerWidthMap['chat-agent-trigger']>=140&&triggerWidthMap['chat-workflow-trigger']>=144),
+    controlWidthsReady:!!(triggerWidthMap['chat-provider-trigger']>=128&&triggerWidthMap['chat-model-inline']>=36&&triggerWidthMap['chat-model-inline']<=42&&triggerWidthMap['chat-agent-trigger']>=140&&triggerWidthMap['chat-workflow-trigger']>=144),
     popups:popupSnapshots,
     popupsCustomSurface:popupSnapshots.every(item=>item.customSurface&&item.shown&&item.display==='block'&&item.pointerEvents==='auto'),
     popupsOpenAbove:popupSnapshots.every(item=>item.rectReady&&item.opensAboveTrigger&&item.notToolbarClipped),
@@ -30827,11 +30833,11 @@ function settingsSectionVisibleCount(section){
   if(!section||section.style.display==='none')return 0;
   const rows=section.querySelectorAll('.settings-field,.ext-setting-row');
   if(!rows.length)return 1;
-  return Array.from(rows).filter(row=>row.style.display!=='none'&&!row.classList.contains('settings-target-hidden')).length;
+  return Array.from(rows).filter(row=>row.style.display!=='none'&&!row.classList.contains('settings-target-hidden')&&!row.classList.contains('settings-query-hidden')).length;
 }
 function settingsSectionStats(section){
   const rows=Array.from((section||document).querySelectorAll('.settings-field.builtin-setting,.ext-setting-row'));
-  const visibleRows=rows.filter(row=>row.style.display!=='none'&&!row.classList.contains('settings-target-hidden'));
+  const visibleRows=rows.filter(row=>row.style.display!=='none'&&!row.classList.contains('settings-target-hidden')&&!row.classList.contains('settings-query-hidden'));
   const errors=visibleRows.filter(row=>(row.querySelector&&row.querySelector('[aria-invalid="true"],.settings-input-invalid'))||(row.classList&&row.classList.contains('invalid'))).length;
   return {
     rows,
@@ -32221,6 +32227,7 @@ window.renderSettingsSearchSuggest=renderSettingsSearchSuggest;
 window.settingsSearchSuggestRows=settingsSearchSuggestRows;
 window.settingsApplySearchSuggest=settingsApplySearchSuggest;
 window.settingsHandleSearchSuggestKeydown=settingsHandleSearchSuggestKeydown;
+window.settingsSearchDomSnapshot=settingsSearchDomSnapshot;
 window.settingsFocusCurrentLanguageOverride=settingsFocusCurrentLanguageOverride;
 window.settingsSearchForLanguageOverride=settingsSearchForLanguageOverride;
 window.settingsSearchModifiedLanguageOverride=settingsSearchModifiedLanguageOverride;
@@ -32332,13 +32339,13 @@ function settingsGroupMatchesTarget(group,target){
   return target==='user';
 }
 function settingsVisibleGroupText(group){
-  const rows=Array.from((group||document).querySelectorAll('.settings-field.builtin-setting:not(.settings-target-hidden),.ext-setting-row:not(.settings-target-hidden)'))
+  const rows=Array.from((group||document).querySelectorAll('.settings-field.builtin-setting:not(.settings-target-hidden):not(.settings-query-hidden),.ext-setting-row:not(.settings-target-hidden):not(.settings-query-hidden)'))
     .filter(row=>row.style.display!=='none');
   if(rows.length)return rows.map(row=>row.textContent||'').join(' ').toLowerCase();
   return ((group&&group.textContent)||'').toLowerCase();
 }
 function settingsGroupRows(group){
-  return Array.from((group||document).querySelectorAll('.settings-field.builtin-setting:not(.settings-target-hidden),.ext-setting-row:not(.settings-target-hidden)'))
+  return Array.from((group||document).querySelectorAll('.settings-field.builtin-setting:not(.settings-target-hidden):not(.settings-query-hidden),.ext-setting-row:not(.settings-target-hidden):not(.settings-query-hidden)'))
     .filter(row=>row.style.display!=='none');
 }
 function settingsRowFilterText(row){
@@ -32386,7 +32393,7 @@ function renderSettingsRowMatchSummaries(parsed){
   const active=parsed&&parsed.active;
   const rows=Array.from((settingsMainElement()||document).querySelectorAll('.settings-field.builtin-setting,.ext-setting-row'));
   rows.forEach(row=>{
-    const reasons=active&&row.style.display!=='none'&&!row.classList.contains('settings-target-hidden')
+    const reasons=active&&row.style.display!=='none'&&!row.classList.contains('settings-target-hidden')&&!row.classList.contains('settings-query-hidden')
       ? settingsRowMatchReasons(row,parsed)
       : [];
     row.classList.toggle('settings-search-hit',reasons.length>0);
@@ -32435,6 +32442,89 @@ function settingsGroupMatchesLanguageFilters(group,languages){
     || rows.some(row=>String(((row.dataset||{}).extSettingLanguage)||'').toLowerCase()===lang
       || settingsRowFilterText(row).includes('language '+lang)
       || settingsRowFilterText(row).includes('['+lang+']')));
+}
+function settingsTextTokens(text){
+  return String(text||'').toLowerCase().split(/\s+/).map(v=>v.trim()).filter(Boolean);
+}
+function settingsRowTextMatches(row,text){
+  const tokens=settingsTextTokens(text);
+  if(!tokens.length)return true;
+  const hay=settingsRowFilterText(row);
+  return tokens.every(token=>hay.includes(token));
+}
+function settingsRowMatchesIdFilters(row,ids){
+  if(!ids||!ids.length)return true;
+  const key=String((row&&row.dataset&&row.dataset.settingKey)||(row&&row.dataset&&row.dataset.extSettingKey)||'').toLowerCase();
+  return ids.some(id=>id.endsWith('*')?key.startsWith(id.slice(0,-1)):key.includes(id));
+}
+function settingsRowMatchesTokenValues(row,values,kind){
+  if(!values||!values.length)return true;
+  const data=row&&row.dataset||{};
+  const text=settingsRowFilterText(row);
+  return values.every(value=>{
+    const v=String(value||'').toLowerCase();
+    if(!v)return true;
+    if(kind==='tag'){
+      if(v==='modified')return row.classList&&row.classList.contains('modified');
+      if(v==='error')return (row.classList&&row.classList.contains('invalid'))||!!(row.querySelector&&row.querySelector('[aria-invalid="true"],.settings-input-invalid'));
+      if(v==='json')return text.includes('json')||!!(row.querySelector&&row.querySelector('[id$="-json"],#s-xheaders,#s-xbody'));
+      if(v==='extensions'||v==='extension')return settingsRowScope(row)==='extensions'||!!String(data.extSettingExtension||'').trim();
+      return text.includes(v)||String(data.extSettingTags||'').toLowerCase().split(/[,\s]+/).includes(v);
+    }
+    if(kind==='feature')return text.includes(v)||String(data.extSettingFeature||'').toLowerCase().includes(v);
+    if(kind==='extension')return String(data.extSettingExtension||'').toLowerCase().includes(v)||String(data.extSettingExtensionId||'').toLowerCase().includes(v);
+    if(kind==='language')return String(data.extSettingLanguage||'').toLowerCase()===v||text.includes('language '+v)||text.includes('['+v+']')||text.includes(v);
+    return text.includes(v);
+  });
+}
+function settingsRowMatchesScopeFilters(row,scopes){
+  if(!scopes||!scopes.length)return true;
+  const scope=settingsRowScope(row);
+  const text=settingsRowFilterText(row);
+  return scopes.some(item=>{
+    if(scope===item)return true;
+    return (SETTINGS_SCOPE_FILTERS[item]||[]).some(term=>text.includes(term));
+  });
+}
+function settingsRowMatchesQuery(row,query){
+  if(!row)return false;
+  const q=query||{};
+  if(!settingsRowMatchesTarget(row,currentSettingsTarget))return false;
+  if(q.text&&!settingsRowTextMatches(row,q.text))return false;
+  if(q.ids&&!settingsRowMatchesIdFilters(row,q.ids))return false;
+  if(q.tags&&!settingsRowMatchesTokenValues(row,q.tags,'tag'))return false;
+  if(q.features&&!settingsRowMatchesTokenValues(row,q.features,'feature'))return false;
+  if(q.extensionIds&&!settingsRowMatchesTokenValues(row,q.extensionIds,'extension'))return false;
+  if(q.languages&&!settingsRowMatchesTokenValues(row,q.languages,'language'))return false;
+  if(q.scopes&&!settingsRowMatchesScopeFilters(row,q.scopes))return false;
+  if(q.modified&&!(row.classList&&row.classList.contains('modified')))return false;
+  if(q.overrides&&!(row.dataset&&row.dataset.settingTargetOverride==='1'))return false;
+  if(q.common&&!new Set(SETTINGS_COMMONLY_USED_KEYS.map(key=>String(key).toLowerCase())).has(settingsRowKey(row).toLowerCase()))return false;
+  if(q.error&&!((row.classList&&row.classList.contains('invalid'))||(row.querySelector&&row.querySelector('[aria-invalid="true"],.settings-input-invalid'))))return false;
+  if(q.json&&!settingsRowMatchesTokenValues(row,['json'],'tag'))return false;
+  return true;
+}
+function applySettingsQueryRowVisibility(root,parsed){
+  const rows=Array.from((root||document).querySelectorAll('.settings-field.builtin-setting,.ext-setting-row'));
+  const active=!!(parsed&&parsed.active);
+  const stats={total:rows.length,matched:0,hidden:0,targetHidden:0};
+  rows.forEach(row=>{
+    const targetMatch=settingsRowMatchesTarget(row,currentSettingsTarget);
+    const match=!active||settingsRowMatchesQuery(row,parsed);
+    row.classList.toggle('settings-query-hidden',targetMatch&&!match);
+    row.dataset.settingsQueryMatch=targetMatch&&match?'1':'0';
+    row.dataset.settingsQueryFiltered=targetMatch&&!match?'1':'0';
+    if(!targetMatch)stats.targetHidden++;
+    else if(match)stats.matched++;
+    else stats.hidden++;
+  });
+  const modal=$('settings-modal');
+  if(modal){
+    modal.dataset.settingsQueryRowTotal=String(stats.total);
+    modal.dataset.settingsQueryRowMatched=String(stats.matched);
+    modal.dataset.settingsQueryRowHidden=String(stats.hidden);
+  }
+  return stats;
 }
 function settingsGroupMatchesCommonFilter(group){
   const keys=new Set(SETTINGS_COMMONLY_USED_KEYS.map(key=>String(key).toLowerCase()));
@@ -32489,6 +32579,8 @@ function settingsGroupMatchesIdFilters(group,ids){
 }
 function settingsGroupMatchesFilter(group,query){
   if(!group)return false;
+  const rows=settingsGroupRows(group);
+  if(rows.length)return true;
   const text=settingsVisibleGroupText(group);
   if(query.text&&!text.includes(query.text))return false;
   if(query.ids&&!settingsGroupMatchesIdFilters(group,query.ids))return false;
@@ -32772,9 +32864,32 @@ function renderSettingsSearchInspector(parsed,visible,total,targetStats){
   if(parsed&&parsed.common)add('Commonly used','active');
   if(parsed&&parsed.error)add('Errors only','warning');
   if(parsed&&parsed.json)add('JSON settings','active');
+  if(targetStats&&Number(targetStats.queryMatched)>=0)add('Rows: '+String(targetStats.queryMatched)+' matched / '+String(targetStats.queryHidden||0)+' hidden','active');
   add(settingsTargetDisplayName(currentSettingsTarget)+': '+String((targetStats&&targetStats.visible)||0)+' visible','');
   if(Number(total)>0)add(String(visible)+' / '+String(total)+' groups','');
   if(Number(visible)===0)add('No visible matches. Remove a token or switch target.','warning');
+}
+function settingsSearchDomSnapshot(){
+  const modal=$('settings-modal');
+  const input=$('settings-search');
+  const parsed=settingsQueryFilters(input&&input.value||'');
+  const root=settingsMainElement()||document;
+  const rows=Array.from(root.querySelectorAll('.settings-field.builtin-setting,.ext-setting-row'));
+  const visible=settingsVisibleRows();
+  return {
+    target:currentSettingsTarget,
+    query:String(input&&input.value||''),
+    parsed,
+    rowTotal:rows.length,
+    visibleRows:visible.length,
+    queryMatched:rows.filter(row=>row.dataset&&row.dataset.settingsQueryMatch==='1').length,
+    queryHidden:rows.filter(row=>row.classList&&row.classList.contains('settings-query-hidden')).length,
+    targetHidden:rows.filter(row=>row.classList&&row.classList.contains('settings-target-hidden')).length,
+    activeFilterChips:Array.from(document.querySelectorAll('#settings-active-filters [data-settings-filter-token]')).map(el=>String(el.dataset.settingsFilterToken||'')),
+    inspectorText:String(($('settings-search-inspector')||{}).textContent||''),
+    modalQueryMatched:modal?Number(modal.dataset.settingsQueryRowMatched||0):0,
+    modalQueryHidden:modal?Number(modal.dataset.settingsQueryRowHidden||0):0,
+  };
 }
 function settingsExperienceActiveRowLabel(){
   const row=document.querySelector('.settings-field.settings-current,.ext-setting-row.settings-current');
@@ -33773,6 +33888,7 @@ function filterSettings(){
   let visible=0,total=0;
   renderSettingsSectionOverviews();
   const targetStats=applySettingsTargetVisibility(modal);
+  const queryStats=applySettingsQueryRowVisibility(modal,parsed);
   // Collect all filterable groups: sb-group, settings-section, details
   const cache=settingsFilterDomCache(modal);
   cache.groups.forEach(g=>{
@@ -33802,16 +33918,16 @@ function filterSettings(){
   const inp=$('settings-search');if(inp)inp.placeholder=parsed.active?visible+' matches':currentSettingsTarget==='extensions'?'Search extension settings...':currentSettingsTarget==='workspace'?'Search workspace settings...':'Search user settings...';
   settingsRecordSearch(q,parsed);
   renderSettingsActiveFilters(parsed,visible,total);
-  renderSettingsSearchInspector(parsed,visible,total,targetStats);
+  renderSettingsSearchInspector(parsed,visible,total,{...targetStats,queryMatched:queryStats.matched,queryHidden:queryStats.hidden,queryTotal:queryStats.total});
   renderSettingsSearchMemory(parsed);
   renderSettingsSearchSuggest(false);
-  renderSettingsTargetSummary(targetStats);
-  renderSettingsWorkbenchHeader(visible,total,targetStats);
+  renderSettingsTargetSummary({...targetStats,queryMatched:queryStats.matched,queryHidden:queryStats.hidden,queryTotal:queryStats.total});
+  renderSettingsWorkbenchHeader(visible,total,{...targetStats,queryMatched:queryStats.matched,queryHidden:queryStats.hidden,queryTotal:queryStats.total});
   renderSettingsJumpbar(targetStats);
-  renderSettingsExperienceBar(parsed,visible,total,targetStats);
+  renderSettingsExperienceBar(parsed,visible,total,{...targetStats,queryMatched:queryStats.matched,queryHidden:queryStats.hidden,queryTotal:queryStats.total});
   renderSettingsRecommendations();
-  renderSettingsFocusDeck(parsed,visible,total,targetStats);
-  renderSettingsReviewBar(targetStats);
+  renderSettingsFocusDeck(parsed,visible,total,{...targetStats,queryMatched:queryStats.matched,queryHidden:queryStats.hidden,queryTotal:queryStats.total});
+  renderSettingsReviewBar({...targetStats,queryMatched:queryStats.matched,queryHidden:queryStats.hidden,queryTotal:queryStats.total});
   const visibleRowCount=settingsRefreshRowsAccessibility();
   updateSettingsResultNav(visibleRowCount);
   renderSettingsFilterSuggestions();
@@ -39146,6 +39262,15 @@ function extensionRuntimeEvidenceMatches(row,value){
   const ev=row.webviewEvidence||{};
   if(v==='rendered')return !!row.htmlAvailable;
   if(v==='missing')return !row.htmlAvailable;
+  if(['ready','waiting-html','partial','bridge-warning','message-warning','resource-warning','missing-runtime'].includes(v)){
+    return String(row.webviewReadiness||ev.readiness||'')===v
+      || (Array.isArray(row.webviewReadinessIssues)&&row.webviewReadinessIssues.includes(v))
+      || (Array.isArray(ev.readinessIssues)&&ev.readinessIssues.includes(v));
+  }
+  if(['queued-messages','queued-stale','dropped-messages','resource-uri-pending','runtime-failures','message-stalled'].includes(v)){
+    return (Array.isArray(row.webviewReadinessIssues)&&row.webviewReadinessIssues.includes(v))
+      || (Array.isArray(ev.readinessIssues)&&ev.readinessIssues.includes(v));
+  }
   if(v==='iframe-mounted')return !!ev.iframePresent;
   if(v==='iframe-missing')return !ev.iframePresent;
   if(v==='dom-visible')return !!ev.domVisible;
@@ -40751,6 +40876,42 @@ function extensionRuntimeRowMatchesFilter(row,filter){
   if(f.text&&!String(row.searchText||'').includes(f.text))return false;
   return true;
 }
+function extensionRuntimeWebviewReadinessSummary(row){
+  row=row||{};
+  const ev=row.webviewEvidence||{};
+  const readiness=String(row.webviewReadiness||ev.readiness||'').trim()||'unknown';
+  const score=Number(row.webviewReadinessScore||ev.readinessScore||0)||0;
+  const issues=(row.webviewReadinessIssues||ev.readinessIssues||[]).filter(Boolean).slice(0,3);
+  const parts=[readiness+(score?(' '+score+'/100'):'')];
+  if(row.htmlAvailable||ev.htmlAvailable)parts.push('HTML '+String(row.htmlLength||ev.htmlLength||0));
+  else parts.push('waiting for HTML');
+  if(ev.iframePresent)parts.push('iframe mounted');
+  else if(extensionRuntimeIsWebviewKind(row))parts.push('iframe missing');
+  if(ev.apiReady)parts.push('API ready');
+  else if(row.htmlAvailable||ev.htmlAvailable)parts.push('API pending');
+  if(ev.messageHealth)parts.push('messages '+ev.messageHealth);
+  if(ev.resourceHealth)parts.push('resources '+ev.resourceHealth);
+  if(issues.length)parts.push('issues '+issues.join(','));
+  return parts.join(' · ');
+}
+function extensionRuntimeSurfaceActionSummary(row){
+  row=row||{};
+  const action=row.action||{};
+  const label=action.label||(
+    action.type==='open-webview'?'Open dynamic webview':
+    action.type==='open-view-container'?'Open view container':
+    action.type==='run-task-definition'?'Run task':
+    action.type==='start-debugger'?'Start debugger':
+    action.type==='open-terminal-profile'?'Open terminal profile':
+    action.type==='prepare-lm-tool'?'Prepare LM tool':
+    action.type==='prepare-lm-provider'?'Prepare LM provider':
+    action.type==='open-chat-participant'?'Prepare chat participant':
+    action.type==='attach-chat-context'?'Attach chat context':
+    action.type==='run-command'?'Run command':
+    action.type||'Inspect');
+  const readiness=extensionRuntimeIsWebviewKind(row)?extensionRuntimeWebviewReadinessSummary(row):(row.surfaceReadiness?('readiness '+row.surfaceReadiness):'');
+  return [label,action.target?('target '+action.target):'',row.container?('container '+row.container):'',readiness].filter(Boolean).join(' · ');
+}
 function populateExtensionRuntimeKindFilter(rows){
   const select=$('extension-runtime-filter-kind');if(!select)return;
   const current=select.value;
@@ -40916,7 +41077,9 @@ async function copyExtensionRuntimeSurfaceSummary(rowOrKey){
     'Source: '+(row.source||'-'),
     'Action: '+((row.action&&row.action.type)||'-'),
     'Target: '+((row.action&&row.action.target)||'-'),
+    'Action summary: '+extensionRuntimeSurfaceActionSummary(row),
     'Evidence: '+(row.evidenceStatus||'-'),
+    'Readiness summary: '+(extensionRuntimeIsWebviewKind(row)?extensionRuntimeWebviewReadinessSummary(row):String(row.surfaceReadiness||'-')),
     'Iframe: '+(row.webviewEvidence&&row.webviewEvidence.iframePresent?'mounted':'missing'),
     'Visible: '+(row.webviewEvidence&&row.webviewEvidence.domVisible?'yes':'no'),
     'Queue: '+String(row.webviewEvidence&&row.webviewEvidence.pendingMessageCount||0)+' pending, '+String(row.webviewEvidence&&row.webviewEvidence.droppedMessageCount||0)+' dropped',
@@ -40958,12 +41121,16 @@ function applyExtensionRuntimeSurfaceFilter(){
   let visible=0,total=0;
   Array.from(list.querySelectorAll('.extension-runtime-row')).forEach(row=>{
     total++;
-    const match=extensionRuntimeRowMatchesFilter({
+      const match=extensionRuntimeRowMatchesFilter({
       kind:row.dataset.kind||'',
       source:row.dataset.source||'',
       evidenceStatus:row.dataset.webviewEvidenceStatus||'',
       htmlAvailable:row.dataset.webviewHtmlAvailable==='1',
+      webviewReadiness:row.dataset.webviewReadiness||'',
+      webviewReadinessIssues:String(row.dataset.webviewReadinessIssues||'').split(',').filter(Boolean),
       webviewEvidence:{
+        readiness:row.dataset.webviewReadiness||'',
+        readinessIssues:String(row.dataset.webviewReadinessIssues||'').split(',').filter(Boolean),
         retainContextWhenHidden:row.dataset.webviewRetained==='1',
         iframePresent:row.dataset.webviewIframePresent==='1',
         panelPresent:row.dataset.webviewPanelPresent==='1',
@@ -41200,6 +41367,8 @@ function renderExtensionRuntimeSurfacePanel(data){
   }else{
     rows.forEach(row=>{
       const el=document.createElement('div');el.className='extension-runtime-row';
+      const actionSummary=extensionRuntimeSurfaceActionSummary(row);
+      const readinessSummary=extensionRuntimeIsWebviewKind(row)?extensionRuntimeWebviewReadinessSummary(row):'';
       el.tabIndex=0;
       el.setAttribute('role','listitem');
       el.dataset.kind=row.kind;
@@ -41278,6 +41447,8 @@ function renderExtensionRuntimeSurfacePanel(data){
       el.dataset.webviewReadiness=row.webviewReadiness||row.webviewEvidence&&row.webviewEvidence.readiness||'';
       el.dataset.webviewReadinessScore=String(row.webviewReadinessScore||row.webviewEvidence&&row.webviewEvidence.readinessScore||0);
       el.dataset.webviewReadinessIssues=(row.webviewReadinessIssues||row.webviewEvidence&&row.webviewEvidence.readinessIssues||[]).join(',');
+      el.dataset.webviewReadinessSummary=readinessSummary;
+      el.dataset.runtimeActionSummary=actionSummary;
       el.dataset.surfaceEvidenceKind=String(row.surfaceEvidence&&row.surfaceEvidence.kind||row.kind||'');
       el.dataset.surfaceReadiness=row.surfaceReadiness||row.surfaceEvidence&&row.surfaceEvidence.readiness||'';
       el.dataset.surfaceReadinessScore=String(row.surfaceReadinessScore||row.surfaceEvidence&&row.surfaceEvidence.readinessScore||0);
@@ -41560,7 +41731,14 @@ function renderExtensionRuntimeSurfacePanel(data){
           meta.appendChild(chip);
         });
       }
-      mid.appendChild(main);mid.appendChild(meta);
+      const summaryLine=document.createElement('div');
+      summaryLine.className='extension-runtime-action-summary'
+        +(extensionRuntimeIsWebviewKind(row)&&row.webviewReadiness==='ready'?' ready':'')
+        +(extensionRuntimeIsWebviewKind(row)&&row.webviewReadiness&&row.webviewReadiness!=='ready'?' warn':'');
+      summaryLine.dataset.runtimeActionSummary='1';
+      summaryLine.textContent=actionSummary;
+      summaryLine.title=actionSummary;
+      mid.appendChild(main);mid.appendChild(meta);mid.appendChild(summaryLine);
       const state=document.createElement('div');state.className='extension-runtime-state '+(row.ready?'ready':'pending');state.textContent=row.ready?'ready':'pending';
       const evidence=document.createElement('div');
       evidence.className='extension-runtime-evidence '+(row.evidenceStatus||'n-a');
@@ -43937,6 +44115,9 @@ function extensionRuntimeDomSelfCheckSnapshot(){
       runtimeRows:runtimeList?runtimeList.querySelectorAll('.extension-runtime-row').length:0,
       runtimeReadyRows:runtimeList?runtimeList.querySelectorAll('.extension-runtime-state.ready').length:0,
       runtimeTags:runtimeList?runtimeList.querySelectorAll('.extension-runtime-tag').length:0,
+      runtimeActionSummaryRows:runtimeList?runtimeList.querySelectorAll('.extension-runtime-action-summary[data-runtime-action-summary="1"]').length:0,
+      runtimeActionSummaryDataRows:runtimeList?Array.from(runtimeList.querySelectorAll('.extension-runtime-row')).filter(row=>String(row.dataset.runtimeActionSummary||'').includes('·')).length:0,
+      runtimeWebviewReadinessSummaryRows:runtimeList?Array.from(runtimeList.querySelectorAll('.extension-runtime-row')).filter(row=>String(row.dataset.webviewReadinessSummary||'').includes('HTML')||String(row.dataset.webviewReadinessSummary||'').includes('waiting for HTML')).length:0,
       runtimeWebviewEvidenceRows:runtimeList?runtimeList.querySelectorAll('.extension-runtime-tag.webview-evidence').length:0,
       runtimeHtmlEvidenceRows:runtimeList?Array.from(runtimeList.querySelectorAll('.extension-runtime-row')).filter(row=>row.dataset.webviewHtmlAvailable==='1').length:0,
       runtimeMissingEvidenceRows:runtimeList?Array.from(runtimeList.querySelectorAll('.extension-runtime-row')).filter(row=>row.dataset.webviewEvidenceStatus==='missing').length:0,
