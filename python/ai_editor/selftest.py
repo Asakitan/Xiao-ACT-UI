@@ -7117,6 +7117,8 @@ def test_phase1_ai_editor_regressions() -> None:
             and "function webviewRuntimeLifecycleState(runtime)" in html
             and "function webviewRuntimeReadiness(runtime)" in html
             and "function applyWebviewRuntimeDataset(el,viewId,runtime)" in html
+            and "const incomingEvidence=(data.webviewEvidence&&typeof data.webviewEvidence==='object')?data.webviewEvidence:" in html
+            and "webviewEvidence:{...(existing.webviewEvidence||{}),...incomingEvidence}" in html
             and "function patchWebviewRuntimeLifecycle(viewId,patch)" in html
             and "function syncWebviewRuntimeDomState(viewId,runtime)" in html
             and "function applyExtensionProviderElementState(tab,panel,p,viewId)" in html
@@ -7164,6 +7166,9 @@ def test_phase1_ai_editor_regressions() -> None:
             and "el.dataset.webviewApiCallCount=String(Number(data.apiCallCount)||0);" in html
             and "el.dataset.webviewResourceMapReady=(data.resourceMapReady||(Number(data.resourceMapHitCount)||0)>0)?'true':'false';" in html
             and "el.dataset.webviewResourceEndpointReady=(data.resourceEndpointReady||(Number(data.resourceEndpointRewriteCount)||0)>0)?'true':'false';" in html
+            and "el.dataset.webviewResourceBlockedCount=String(Number(data.resourceBlockedCount)||0);" in html
+            and "el.dataset.webviewResourceMissingCount=String(Number(data.resourceMissingCount)||0);" in html
+            and "el.dataset.webviewBlockedResourceSamples=Array.isArray(data.blockedResourceSamples)" in html
             and "function createProviderWebviewPlaceholder(p,mode,evidence)" in html
             and "provider-empty-chips" in html
             and "provider-empty-chip" in html
@@ -12012,7 +12017,7 @@ console.log("frontend word separator behavior ok");
            and "function extensionRuntimeSurfaceActionSummary(row)" in html
            and "function extensionWebviewRuntimeDiagnostics(evidence)" in html
            and "function extensionRuntimeEvidenceMatches(row,value)" in html
-           and "if(['ready','waiting-html','partial','bridge-warning','message-warning','resource-warning','missing-runtime'].includes(v))" in html
+           and "if(['ready','waiting-html','partial','bridge-warning','message-warning','resource-warning','resource-error','missing-runtime'].includes(v))" in html
            and "function extensionRuntimeSurfaceDomSnapshot(viewId,runtime)" in html
            and "function extensionRuntimeSurfaceHealthSnapshot()" in html
            and "function extensionRuntimeSurfaceViewId(row)" in html
@@ -12190,6 +12195,8 @@ console.log("frontend word separator behavior ok");
            and "['Custom Ready',summary.customEditorReady||rows.filter(row=>row.kind==='CustomEditor'" in html
            and "['Notebook Status',summary.notebookStatusBarProviders||rows.reduce" in html
            and "webviewEvidence:evidence" in html
+           and "resourcePrepErrors=sum(row=>(Number(row.webviewEvidence&&row.webviewEvidence.resourceBlockedCount)||0)+(Number(row.webviewEvidence&&row.webviewEvidence.resourceMissingCount)||0));" in html
+           and "if(v==='resource-error')return ev.resourceHealth==='resource-error'" in html
            and "evidence.queuedByteLength=Number(cachedRuntime.queuedByteLength)||Number(evidence.queuedByteLength)||0;" in html
            and "evidence.queuePrunedByBytesCount=Number(cachedRuntime.queuePrunedByBytesCount)||Number(evidence.queuePrunedByBytesCount)||0;" in html
            and "el.dataset.webviewQueuePrunedByBytesCount=String(row.webviewEvidence&&row.webviewEvidence.queuePrunedByBytesCount||0);" in html
@@ -12219,6 +12226,9 @@ console.log("frontend word separator behavior ok");
            and "el.dataset.webviewPortMappingCount=String(row.webviewEvidence&&row.webviewEvidence.portMappingCount||0);" in html
            and "el.dataset.webviewAsWebviewUriReady=row.webviewEvidence&&row.webviewEvidence.asWebviewUriReady?'1':'0';" in html
            and "el.dataset.webviewResourceEndpointReady=row.webviewEvidence&&row.webviewEvidence.resourceEndpointReady?'1':'0';" in html
+           and "el.dataset.webviewResourceBlockedCount=String(row.webviewEvidence&&row.webviewEvidence.resourceBlockedCount||0);" in html
+           and "el.dataset.webviewResourceMissingCount=String(row.webviewEvidence&&row.webviewEvidence.resourceMissingCount||0);" in html
+           and "el.dataset.webviewBlockedResourceSamples=Array.isArray(row.webviewEvidence&&row.webviewEvidence.blockedResourceSamples)" in html
            and "el.dataset.webviewMessageHealth=String(row.webviewEvidence&&row.webviewEvidence.messageHealth||'');" in html
            and "el.dataset.webviewBridgeHealth=String(row.webviewEvidence&&row.webviewEvidence.bridgeHealth||'');" in html
            and "el.dataset.webviewResourceHealth=String(row.webviewEvidence&&row.webviewEvidence.resourceHealth||'');" in html
@@ -15678,11 +15688,13 @@ console.log("command palette quick access helpers ok");
         import urllib.request
         script_path = os.path.join(webview_tmp, "panel.js")
         large_script_path = os.path.join(webview_tmp, "panel-large.js")
+        large_asset_path = os.path.join(webview_tmp, "panel-large.png")
         worklet_path = os.path.join(webview_tmp, "paint-worklet.mjs")
         module_dep_path = os.path.join(webview_tmp, "dep.js")
         style_path = os.path.join(webview_tmp, "panel.css")
         font_path = os.path.join(webview_tmp, "panel.woff")
         outside_script_path = os.path.join(outside_tmp, "blocked.js")
+        missing_script_path = os.path.join(webview_tmp, "missing.js")
         with open(script_path, "w", encoding="utf-8") as fh:
             fh.write("window.__panelLoaded = true;\n")
         with open(worklet_path, "w", encoding="utf-8") as fh:
@@ -15691,6 +15703,8 @@ console.log("command palette quick access helpers ok");
             fh.write("export const loaded = true;\n")
         with open(large_script_path, "wb") as fh:
             fh.write(b"/" + b"x" * (2 * 1024 * 1024 + 32))
+        with open(large_asset_path, "wb") as fh:
+            fh.write(b"\x89PNG\r\n" + b"x" * (2 * 1024 * 1024 + 32))
         with open(outside_script_path, "w", encoding="utf-8") as fh:
             fh.write("window.__blockedLoaded = true;\n")
         with open(font_path, "wb") as fh:
@@ -15719,6 +15733,10 @@ console.log("command palette quick access helpers ok");
             '<meta http-equiv="Content-Security-Policy" '
             'content="default-src \'none\'; script-src https://webview.local">'
             f'<script src="{_wv_resource_url(large_script_path)}"></script>')
+        large_asset_webview_html = (
+            '<meta http-equiv="Content-Security-Policy" '
+            'content="default-src \'none\'; img-src https://webview.local">'
+            f'<img src="{_wv_url(large_asset_path)}">')
         runtime_only_html = (
             '<meta http-equiv="Content-Security-Policy" '
             'content="default-src \'none\'; script-src https://webview.local">'
@@ -15729,25 +15747,37 @@ console.log("command palette quick access helpers ok");
             f'new Worker("{_wv_url(worklet_path)}",{{type:"module"}});'
             '</script>')
         blocked_webview_html = f'<script src="{_wv_url(outside_script_path)}"></script>'
+        missing_webview_html = f'<script src="{_wv_url(missing_script_path)}"></script>'
         webview_api = AIEditorAPI(_SettingsGui({"ai_editor": {}}))
-        prepared_webview_html = webview_api._prepare_extension_webview_html(
+        prepared_webview_html, prepared_webview_evidence = (
+            webview_api._prepare_extension_webview_html_with_evidence(
             raw_webview_html,
             [{"uri": "file:///" + webview_tmp.replace("\\", "/")}],
-            view_id="selftest.inline")
+            view_id="selftest.inline"))
         encoded_prepared_html = webview_api._prepare_extension_webview_html(
             encoded_webview_html, [{"fsPath": webview_tmp}],
             view_id="selftest.encoded")
-        large_prepared_html = webview_api._prepare_extension_webview_html(
+        large_prepared_html, large_prepared_evidence = (
+            webview_api._prepare_extension_webview_html_with_evidence(
             large_webview_html, [{"fsPath": webview_tmp}],
-            view_id="selftest.large")
-        runtime_only_prepared_html = webview_api._prepare_extension_webview_html(
+            view_id="selftest.large"))
+        large_asset_prepared_html, large_asset_prepared_evidence = (
+            webview_api._prepare_extension_webview_html_with_evidence(
+            large_asset_webview_html, [{"fsPath": webview_tmp}],
+            view_id="selftest.large-asset"))
+        runtime_only_prepared_html, runtime_only_prepared_evidence = (
+            webview_api._prepare_extension_webview_html_with_evidence(
             runtime_only_html, [{"fsPath": webview_tmp}],
-            view_id="selftest.runtime")
+            view_id="selftest.runtime"))
         module_loader_prepared_html = webview_api._prepare_extension_webview_html(
             module_loader_html, [{"fsPath": webview_tmp}],
             view_id="selftest.module-loader")
-        blocked_prepared_html = webview_api._prepare_extension_webview_html(
-            blocked_webview_html, [{"fsPath": webview_tmp}])
+        blocked_prepared_html, blocked_prepared_evidence = (
+            webview_api._prepare_extension_webview_html_with_evidence(
+                blocked_webview_html, [{"fsPath": webview_tmp}]))
+        missing_prepared_html, missing_prepared_evidence = (
+            webview_api._prepare_extension_webview_html_with_evidence(
+                missing_webview_html, [{"fsPath": webview_tmp}]))
         script_endpoint_url = prepared_webview_html.split(
             '<script nonce="a" src="', 1)[1].split('"', 1)[0]
         script_endpoint_data = urllib.request.urlopen(
@@ -15759,6 +15789,10 @@ console.log("command palette quick access helpers ok");
         large_endpoint_url = large_prepared_html.split('src="', 1)[1].split('"', 1)[0]
         large_endpoint_data = urllib.request.urlopen(
             large_endpoint_url, timeout=2).read()
+        large_asset_endpoint_url = large_asset_prepared_html.split(
+            'src="', 1)[1].split('"', 1)[0]
+        large_asset_endpoint_data = urllib.request.urlopen(
+            large_asset_endpoint_url, timeout=2).read()
         worklet_endpoint_url = module_loader_prepared_html.split(
             'addModule("', 1)[1].split('"', 1)[0]
         worker_endpoint_url = module_loader_prepared_html.split(
@@ -15795,6 +15829,9 @@ console.log("command palette quick access helpers ok");
                large_endpoint_url.startswith("http://127.0.0.1:")
                and "/__sao_webview_resource__/" in large_endpoint_url
                and large_endpoint_data.startswith(b"/x")
+               and large_asset_endpoint_url.startswith("http://127.0.0.1:")
+               and "/__sao_webview_resource__/" in large_asset_endpoint_url
+               and large_asset_endpoint_data.startswith(b"\x89PNG")
                and _wv_resource_url(large_script_path) not in large_prepared_html
                and "sao-webview-resource-endpoint" in large_prepared_html
                and "default-src 'none' http://127.0.0.1:"
@@ -15812,6 +15849,30 @@ console.log("command palette quick access helpers ok");
         _check("webview local resource roots block outside files",
                "https://webview.local/" in blocked_prepared_html
                and "data:text/javascript;base64," not in blocked_prepared_html)
+        _check("webview local resource preparation exposes diagnostics",
+               prepared_webview_evidence.get("resourceRewriteCount", 0) >= 2
+               and prepared_webview_evidence.get("resourceMapHitCount") == 1
+               and prepared_webview_evidence.get("resourceEndpointRewriteCount") == 1
+               and prepared_webview_evidence.get("resourceCssRewriteCount") == 1
+               and prepared_webview_evidence.get("resourceInlineFileCount", 0) >= 2
+               and prepared_webview_evidence.get("resourceInlineByteLength", 0) > 0
+               and prepared_webview_evidence.get("resourceEndpointReady") is True
+               and prepared_webview_evidence.get("resourceMapReady") is True
+               and large_prepared_evidence.get("resourceEndpointRewriteCount") == 1
+               and large_asset_prepared_evidence.get("resourceOversizeCount") == 1
+               and large_asset_prepared_evidence.get("resourceEndpointRewriteCount") == 1
+               and runtime_only_prepared_evidence.get("resourceEndpointReady") is True
+               and blocked_prepared_evidence.get("resourceBlockedCount") == 1
+               and missing_prepared_evidence.get("resourceMissingCount") == 1
+               and "https://webview.local/" in missing_prepared_html,
+               json.dumps({
+                   "inline": prepared_webview_evidence,
+                   "large": large_prepared_evidence,
+                   "largeAsset": large_asset_prepared_evidence,
+                   "runtime": runtime_only_prepared_evidence,
+                   "blocked": blocked_prepared_evidence,
+                   "missing": missing_prepared_evidence,
+               }, ensure_ascii=False, default=str))
         _check("webview bridge rewrites dynamic local resources",
                "function _resourceMap()" in html
                and "sao-webview-resource-map" in html
@@ -17967,6 +18028,11 @@ console.log("frontend built-in language fallback behavior ok");
     panel_record = next((
         item for item in panel_records
         if item.get("id") == "panel-surface-1"), {})
+    panel_render_event = next((
+        data for event, data in panel_surface_events
+        if event == "render_webview_panel"), {})
+    panel_record_evidence = panel_record.get("webviewEvidence", {})
+    panel_event_evidence = panel_render_event.get("webviewEvidence", {})
     panel_bridge.dispose_webview_panel("panel-surface-1")
     panel_surfaces_after_dispose = (
         panel_surface_api.list_extension_runtime_surfaces({}))
@@ -17983,6 +18049,11 @@ console.log("frontend built-in language fallback behavior ok");
            and panel_record.get("lastMessage", {}).get("kind") == "probe"
            and panel_record.get("localResourceRootCount") == 1
            and panel_record.get("retainContextWhenHidden") is True
+           and panel_record_evidence.get("resourceEndpointReady") is True
+           and panel_record_evidence.get("resourceEndpointBaseAvailable") is True
+           and panel_record_evidence.get("localResourceRootCount") == 1
+           and panel_event_evidence.get("resourceEndpointReady") is True
+           and panel_event_evidence.get("localResourceRootCount") == 1
            and panel_record.get("readiness") == "ready"
            and panel_surfaces.get("summary", {}).get("webviewPanels") == 1
            and panel_surfaces.get("summary", {}).get("webviewPanelReady") == 1

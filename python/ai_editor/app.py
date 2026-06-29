@@ -1763,8 +1763,9 @@ class _AIEditorUIBridge:
         nested_webview_options = option_payload.get("webviewOptions")
         if not isinstance(nested_webview_options, dict):
             nested_webview_options = {}
-        prepared = self._api._prepare_extension_webview_html(
-            html, local_resource_roots, view_id=view_id)
+        prepared, resource_evidence = (
+            self._api._prepare_extension_webview_html_with_evidence(
+                html, local_resource_roots, view_id=view_id))
         record = self._webview_panel_record(view_id)
         if record is not None:
             record.update({
@@ -1789,6 +1790,30 @@ class _AIEditorUIBridge:
                 "source": "webviewPanel",
             })
             record["renderCount"] = int(record.get("renderCount") or 0) + 1
+            resource_evidence = {
+                **resource_evidence,
+                "kind": "webviewPanel",
+                "viewId": str(view_id or ""),
+                "viewType": str(view_type or record.get("viewType") or ""),
+                "title": str(title or record.get("title") or ""),
+                "renderCount": int(record.get("renderCount") or 0),
+                "htmlAvailable": bool(prepared),
+                "htmlLength": len(str(prepared or "")),
+                "rawHtmlLength": len(str(html or "")),
+                "localResourceRoots": _json_safe(local_resource_roots),
+                "localResourceRootCount": self._webview_root_count(
+                    local_resource_roots),
+                "retainContextWhenHidden": bool(
+                    option_payload.get(
+                        "retainContextWhenHidden",
+                        nested_webview_options.get(
+                            "retainContextWhenHidden", False))),
+                "visible": True,
+            }
+            record["webviewEvidence"] = {
+                **_as_dict(record.get("webviewEvidence")),
+                **resource_evidence,
+            }
         self._api._emit("render_webview_panel", {
             "view_id": view_id,
             "view_type": str(view_type or ""),
@@ -1803,6 +1828,8 @@ class _AIEditorUIBridge:
                     "retainContextWhenHidden",
                     nested_webview_options.get(
                         "retainContextWhenHidden", False))),
+            "webviewEvidence": _json_safe(resource_evidence),
+            "resourceEvidence": _json_safe(resource_evidence),
         })
 
     def get_webview_state(self, view_id: str) -> Any:
@@ -2421,6 +2448,13 @@ class AIEditorAPI:
     def _prepare_extension_webview_html(
             self, html: str, local_resource_roots: Any = None,
             view_id: str = "") -> str:
+        prepared, _evidence = self._prepare_extension_webview_html_with_evidence(
+            html, local_resource_roots, view_id=view_id)
+        return prepared
+
+    def _prepare_extension_webview_html_with_evidence(
+            self, html: str, local_resource_roots: Any = None,
+            view_id: str = "") -> Tuple[str, Dict[str, Any]]:
         """Inline local ``asWebviewUri`` resources for srcdoc webviews.
 
         Node-side extensions naturally emit local HTTPS resource URLs from
@@ -2432,31 +2466,100 @@ class AIEditorAPI:
         text = str(html or "")
         budget = {"bytes": 0}
         allowed_roots = self._webview_resource_roots(local_resource_roots)
+        root_count = len(allowed_roots or [])
         endpoint_base = ""
         endpoint_origin = ""
         view_key = str(view_id or "").strip()
         if view_key:
             endpoint_base, endpoint_origin = self._register_webview_resource_view(
                 view_key, local_resource_roots)
+        evidence: Dict[str, Any] = {
+            "resourceRewriteCount": 0,
+            "resourceMapHitCount": 0,
+            "resourceEndpointRewriteCount": 0,
+            "resourceInlineByteLength": 0,
+            "resourceInlineFileCount": 0,
+            "resourceInlineBudgetBytes": _WEBVIEW_RESOURCE_TOTAL_MAX_BYTES,
+            "resourceInlineMaxBytes": _WEBVIEW_RESOURCE_MAX_BYTES,
+            "resourceBlockedCount": 0,
+            "resourceMissingCount": 0,
+            "resourceOversizeCount": 0,
+            "resourceCssRewriteCount": 0,
+            "resourceAttributeRewriteCount": 0,
+            "resourceEndpointBaseAvailable": bool(endpoint_base),
+            "resourceEndpointOrigin": endpoint_origin,
+            "resourceEndpointBase": endpoint_base,
+            "resourceMapReady": False,
+            "resourceEndpointReady": bool(endpoint_base),
+            "localResourceRootCount": root_count,
+            "asWebviewUriSupported": bool(root_count or endpoint_base),
+            "asWebviewUriReady": bool(endpoint_base),
+            "blockedResourceSamples": [],
+            "missingResourceSamples": [],
+            "oversizeResourceSamples": [],
+            "resourcePrepWarnings": [],
+        }
+
+        def sample(key: str, value: str) -> None:
+            items = evidence.setdefault(key, [])
+            if isinstance(items, list) and value and value not in items and len(items) < 5:
+                items.append(value)
+
+        def scheme(value: str) -> str:
+            return urlparse(str(value or "")).scheme
+
+        def note_rewrite(kind: str, original: str, rewritten: str) -> None:
+            evidence["resourceRewriteCount"] = int(
+                evidence.get("resourceRewriteCount") or 0) + 1
+            evidence["lastResourceRewriteKind"] = kind
+            evidence["lastResourceOriginal"] = str(original or "")
+            evidence["lastResourceRewritten"] = str(rewritten or "")
+            evidence["lastResourceOriginalScheme"] = scheme(original)
+            evidence["lastResourceRewrittenScheme"] = scheme(rewritten)
+            if kind == "map":
+                evidence["resourceMapHitCount"] = int(
+                    evidence.get("resourceMapHitCount") or 0) + 1
+                evidence["resourceMapReady"] = True
+            elif kind == "endpoint":
+                evidence["resourceEndpointRewriteCount"] = int(
+                    evidence.get("resourceEndpointRewriteCount") or 0) + 1
+                evidence["resourceEndpointReady"] = True
+
         if "webview.local/" not in text and not endpoint_base:
-            return text
+            return text, evidence
         resource_map: Dict[str, str] = {}
 
         def file_to_data_uri(path: str) -> str:
             full = os.path.abspath(path)
             try:
                 if not self._webview_path_allowed(full, allowed_roots):
+                    evidence["resourceBlockedCount"] = int(
+                        evidence.get("resourceBlockedCount") or 0) + 1
+                    sample("blockedResourceSamples", full)
                     return ""
                 if not os.path.isfile(full):
+                    evidence["resourceMissingCount"] = int(
+                        evidence.get("resourceMissingCount") or 0) + 1
+                    sample("missingResourceSamples", full)
                     return ""
                 size = os.path.getsize(full)
                 if (size > _WEBVIEW_RESOURCE_MAX_BYTES or
                         budget["bytes"] + size > _WEBVIEW_RESOURCE_TOTAL_MAX_BYTES):
+                    evidence["resourceOversizeCount"] = int(
+                        evidence.get("resourceOversizeCount") or 0) + 1
+                    sample("oversizeResourceSamples", full)
                     return ""
                 budget["bytes"] += size
+                evidence["resourceInlineByteLength"] = int(
+                    evidence.get("resourceInlineByteLength") or 0) + size
+                evidence["resourceInlineFileCount"] = int(
+                    evidence.get("resourceInlineFileCount") or 0) + 1
                 with open(full, "rb") as fh:
                     data = fh.read()
             except Exception:
+                evidence["resourcePrepWarnings"] = (
+                    evidence.get("resourcePrepWarnings") or [])[:4] + [
+                        f"read-failed:{full}"]
                 return ""
             mime = self._webview_mime_for_path(full)
             if mime == "text/css":
@@ -2474,7 +2577,11 @@ class AIEditorAPI:
                         ref_path = os.path.abspath(
                             os.path.join(css_dir, unquote(raw_ref)))
                         nested = file_to_data_uri(ref_path)
-                        return f"url({quote}{nested}{quote})" if nested else match.group(0)
+                        if nested:
+                            evidence["resourceCssRewriteCount"] = int(
+                                evidence.get("resourceCssRewriteCount") or 0) + 1
+                            return f"url({quote}{nested}{quote})"
+                        return match.group(0)
 
                     css = re.sub(
                         r"url\(\s*(['\"]?)([^'\")]+)\1\s*\)",
@@ -2491,19 +2598,28 @@ class AIEditorAPI:
             url = match.group(0)
             path = self._webview_local_path_from_url(url)
             if not path or not self._webview_path_allowed(path, allowed_roots):
+                if path:
+                    evidence["resourceBlockedCount"] = int(
+                        evidence.get("resourceBlockedCount") or 0) + 1
+                    sample("blockedResourceSamples", path)
                 return url
             if endpoint_base and self._webview_should_endpoint_resource(path):
                 server = self.__class__._webview_resource_server
                 if server is not None:
-                    return server.resource_url(view_key, url)
+                    rewritten = server.resource_url(view_key, url)
+                    note_rewrite("endpoint", url, rewritten)
+                    return rewritten
             data_uri = file_to_data_uri(path)
             if data_uri:
                 resource_map[url] = data_uri
+                note_rewrite("map", url, data_uri)
                 return data_uri
             if endpoint_base:
                 server = self.__class__._webview_resource_server
                 if server is not None:
-                    return server.resource_url(view_key, url)
+                    rewritten = server.resource_url(view_key, url)
+                    note_rewrite("endpoint", url, rewritten)
+                    return rewritten
             return url
 
         prepared = _WEBVIEW_LOCAL_URL_RE.sub(local_url_repl, text)
@@ -2527,8 +2643,25 @@ class AIEditorAPI:
             )
         if prefix_parts:
             prepared = "".join(prefix_parts) + prepared
-        return self._relax_webview_csp_for_data_uris(
+        evidence["resourceMapReady"] = bool(
+            evidence.get("resourceMapReady") or resource_map)
+        evidence["resourceEndpointReady"] = bool(
+            evidence.get("resourceEndpointReady") or endpoint_base)
+        evidence["asWebviewUriReady"] = bool(
+            evidence.get("resourceRewriteCount")
+            or evidence.get("resourceEndpointReady")
+            or evidence.get("resourceMapReady"))
+        evidence["resourceRewriteBreakdown"] = "/".join(str(int(
+            evidence.get(key) or 0)) for key in (
+                "resourceMapHitCount",
+                "resourceEndpointRewriteCount",
+                "resourcePortMappingRewriteCount",
+                "resourceCssRewriteCount",
+                "resourceAttributeRewriteCount",
+            ))
+        prepared = self._relax_webview_csp_for_data_uris(
             prepared, endpoint_origin=endpoint_origin)
+        return prepared, _json_safe(evidence)
 
     @staticmethod
     def _relax_webview_csp_for_data_uris(
@@ -14412,6 +14545,16 @@ class AIEditorAPI:
             record.setdefault("kind", "webviewPanel")
             record.setdefault("source", "webviewPanel")
             record["runtimeAvailable"] = True
+            record_evidence = _as_dict(record.get("webviewEvidence"))
+            resource_blocked_count = int(
+                record_evidence.get("resourceBlockedCount")
+                or record.get("resourceBlockedCount") or 0)
+            resource_missing_count = int(
+                record_evidence.get("resourceMissingCount")
+                or record.get("resourceMissingCount") or 0)
+            resource_oversize_count = int(
+                record_evidence.get("resourceOversizeCount")
+                or record.get("resourceOversizeCount") or 0)
             readiness = (
                 "disposed" if record.get("disposed")
                 else "ready" if record.get("htmlAvailable")
@@ -14430,6 +14573,16 @@ class AIEditorAPI:
             if int(record.get("droppedMessageCount") or 0):
                 readiness_issues.append("dropped-messages")
                 readiness_score -= 18
+            if resource_blocked_count or resource_missing_count:
+                readiness_issues.append("resource-error")
+                readiness_score -= 18
+                if readiness == "ready":
+                    readiness = "resource-warning"
+            elif resource_oversize_count:
+                readiness_issues.append("resource-warning")
+                readiness_score -= 10
+                if readiness == "ready":
+                    readiness = "resource-warning"
             readiness_score = max(0, min(100, int(readiness_score)))
             record["readiness"] = readiness
             record["readinessScore"] = readiness_score
@@ -16990,8 +17143,17 @@ class AIEditorAPI:
         if evidence.get("messageHealth") == "stalled":
             issues.append("message-stalled")
             score -= 12
+        if (int(evidence.get("resourceBlockedCount") or 0) > 0
+                or int(evidence.get("resourceMissingCount") or 0) > 0):
+            issues.append("resource-error")
+            score -= 18
+        if (int(evidence.get("resourceOversizeCount") or 0) > 0
+                and not evidence.get("resourceEndpointReady")):
+            issues.append("resource-warning")
+            score -= 10
         if evidence.get("resourceHealth") in {
-                "rewrite-warning", "unused-roots"}:
+                "rewrite-warning", "unused-roots", "resource-warning",
+                "resource-error"}:
             issues.append(str(evidence.get("resourceHealth")))
             score -= 8
         if int(evidence.get("failureCount") or 0) > 0:
@@ -17007,6 +17169,8 @@ class AIEditorAPI:
             kind = "message-warning"
         elif "message-stalled" in issues:
             kind = "message-warning"
+        elif "resource-error" in issues:
+            kind = "resource-warning"
         elif "resource-uri-pending" in issues:
             kind = "resource-warning"
         elif "resource-warning" in issues or "unused-roots" in issues:
@@ -17047,6 +17211,13 @@ class AIEditorAPI:
         resource_map_hit_count = int(state.get("resourceMapHitCount") or 0)
         resource_endpoint_rewrite_count = int(
             state.get("resourceEndpointRewriteCount") or 0)
+        resource_blocked_count = int(state.get("resourceBlockedCount") or 0)
+        resource_missing_count = int(state.get("resourceMissingCount") or 0)
+        resource_oversize_count = int(state.get("resourceOversizeCount") or 0)
+        resource_inline_byte_length = int(
+            state.get("resourceInlineByteLength") or 0)
+        resource_inline_file_count = int(
+            state.get("resourceInlineFileCount") or 0)
         resource_map_ready = bool(
             state.get("resourceMapReady") or resource_map_hit_count)
         resource_endpoint_ready = bool(
@@ -17079,7 +17250,11 @@ class AIEditorAPI:
         elif html:
             bridge_health = "rendered"
         resource_health = "unconfigured"
-        if as_webview_uri_ready:
+        if resource_blocked_count or resource_missing_count:
+            resource_health = "resource-error"
+        elif resource_oversize_count and not resource_endpoint_ready:
+            resource_health = "resource-warning"
+        elif as_webview_uri_ready:
             resource_health = "ready"
         elif resource_rewrite_count and not (
                 resource_endpoint_ready or resource_map_ready):
@@ -17097,6 +17272,9 @@ class AIEditorAPI:
                 else "",
                 state.get("lastResourceRewriteKind")
                 if resource_health == "rewrite-warning" else "",
+                "blocked-resource" if resource_blocked_count else "",
+                "missing-resource" if resource_missing_count else "",
+                "oversize-resource" if resource_oversize_count else "",
             )
             if str(value or "").strip()
         ]
@@ -17104,7 +17282,9 @@ class AIEditorAPI:
             dropped_message_count
             + int(state.get("failedMessageCount") or 0)
             + int(state.get("commandUriFailedCount") or 0)
-            + (1 if state.get("lastError") else 0))
+            + (1 if state.get("lastError") else 0)
+            + resource_blocked_count
+            + resource_missing_count)
         evidence = {
             "viewId": str(view_id or ""),
             "htmlAvailable": bool(html),
@@ -17143,6 +17323,17 @@ class AIEditorAPI:
                 state.get("resourceCssRewriteCount") or 0),
             "resourceAttributeRewriteCount": int(
                 state.get("resourceAttributeRewriteCount") or 0),
+            "resourceInlineByteLength": resource_inline_byte_length,
+            "resourceInlineFileCount": resource_inline_file_count,
+            "resourceBlockedCount": resource_blocked_count,
+            "resourceMissingCount": resource_missing_count,
+            "resourceOversizeCount": resource_oversize_count,
+            "blockedResourceSamples": _json_safe(
+                state.get("blockedResourceSamples") or []),
+            "missingResourceSamples": _json_safe(
+                state.get("missingResourceSamples") or []),
+            "oversizeResourceSamples": _json_safe(
+                state.get("oversizeResourceSamples") or []),
             "resourceRewriteBreakdown": "/".join(
                 str(int(state.get(key) or 0))
                 for key in (
@@ -17188,7 +17379,9 @@ class AIEditorAPI:
             "lastError": str(state.get("lastError") or ""),
             "diagnosticSummary": (
                 f"bridge={bridge_health}; message={message_health}; "
-                f"resource={resource_health}; failures={failure_count}"),
+                f"resource={resource_health}; "
+                f"prep={resource_blocked_count + resource_missing_count + resource_oversize_count}/"
+                f"{resource_inline_byte_length}B; failures={failure_count}"),
         }
         readiness = AIEditorAPI._webview_evidence_readiness(evidence)
         evidence["readiness"] = readiness["kind"]

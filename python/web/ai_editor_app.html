@@ -28041,6 +28041,13 @@ function applyWebviewRuntimeDataset(el,viewId,runtime){
   el.dataset.webviewResourcePortMappingRewriteCount=String(Number(data.resourcePortMappingRewriteCount)||0);
   el.dataset.webviewResourceCssRewriteCount=String(Number(data.resourceCssRewriteCount)||0);
   el.dataset.webviewResourceAttributeRewriteCount=String(Number(data.resourceAttributeRewriteCount)||0);
+  el.dataset.webviewResourceInlineByteLength=String(Number(data.resourceInlineByteLength)||0);
+  el.dataset.webviewResourceInlineFileCount=String(Number(data.resourceInlineFileCount)||0);
+  el.dataset.webviewResourceBlockedCount=String(Number(data.resourceBlockedCount)||0);
+  el.dataset.webviewResourceMissingCount=String(Number(data.resourceMissingCount)||0);
+  el.dataset.webviewResourceOversizeCount=String(Number(data.resourceOversizeCount)||0);
+  el.dataset.webviewBlockedResourceSamples=Array.isArray(data.blockedResourceSamples)?data.blockedResourceSamples.join('|'):String(data.blockedResourceSamples||'');
+  el.dataset.webviewMissingResourceSamples=Array.isArray(data.missingResourceSamples)?data.missingResourceSamples.join('|'):String(data.missingResourceSamples||'');
   el.dataset.webviewLastResourceRewriteKind=String(data.lastResourceRewriteKind||'');
   el.dataset.webviewLastResourceOriginal=String(data.lastResourceOriginal||'');
   el.dataset.webviewLastResourceRewritten=String(data.lastResourceRewritten||'');
@@ -28375,6 +28382,8 @@ function rememberWebviewRuntime(viewId,data){
   const id=String(viewId||'').trim();if(!id||!data)return null;
   const existing=webviewRuntimeCache[id]||{};
   const now=webviewRuntimeNow();
+  const incomingEvidence=(data.webviewEvidence&&typeof data.webviewEvidence==='object')?data.webviewEvidence:
+    ((data.resourceEvidence&&typeof data.resourceEvidence==='object')?data.resourceEvidence:{});
   const incomingOptions={
     ...((data.webviewOptions&&typeof data.webviewOptions==='object')?data.webviewOptions:{}),
     ...((data.options&&typeof data.options==='object')?data.options:{})
@@ -28383,6 +28392,8 @@ function rememberWebviewRuntime(viewId,data){
   const retain=('retainContextWhenHidden' in options)?!!options.retainContextWhenHidden:!!(data.retainContextWhenHidden||existing.retainContextWhenHidden);
   const next={
     ...existing,
+    ...incomingEvidence,
+    webviewEvidence:{...(existing.webviewEvidence||{}),...incomingEvidence},
     html:data.html!==undefined?data.html:existing.html,
     state:data.state!==undefined?data.state:existing.state,
     source:data.source||existing.source||'event',
@@ -40036,12 +40047,12 @@ function extensionRuntimeEvidenceMatches(row,value){
   const ev=row.webviewEvidence||{};
   if(v==='rendered')return !!row.htmlAvailable;
   if(v==='missing')return !row.htmlAvailable;
-  if(['ready','waiting-html','partial','bridge-warning','message-warning','resource-warning','missing-runtime'].includes(v)){
+  if(['ready','waiting-html','partial','bridge-warning','message-warning','resource-warning','resource-error','missing-runtime'].includes(v)){
     return String(row.webviewReadiness||ev.readiness||'')===v
       || (Array.isArray(row.webviewReadinessIssues)&&row.webviewReadinessIssues.includes(v))
       || (Array.isArray(ev.readinessIssues)&&ev.readinessIssues.includes(v));
   }
-  if(['queued-messages','queued-stale','dropped-messages','resource-uri-pending','runtime-failures','message-stalled'].includes(v)){
+  if(['queued-messages','queued-stale','dropped-messages','resource-uri-pending','resource-error','runtime-failures','message-stalled'].includes(v)){
     return (Array.isArray(row.webviewReadinessIssues)&&row.webviewReadinessIssues.includes(v))
       || (Array.isArray(ev.readinessIssues)&&ev.readinessIssues.includes(v));
   }
@@ -40062,7 +40073,8 @@ function extensionRuntimeEvidenceMatches(row,value){
   if(v==='bridge-ready')return ev.bridgeHealth==='ready';
   if(v==='bridge-warning')return ['iframe-pending','api-pending','inactive','disposed'].includes(ev.bridgeHealth);
   if(v==='message-stalled')return ev.messageHealth==='stalled';
-  if(v==='resource-warning')return ['pending','rewrite-warning','unused-roots'].includes(ev.resourceHealth);
+  if(v==='resource-warning')return ['pending','rewrite-warning','unused-roots','resource-warning','resource-error'].includes(ev.resourceHealth);
+  if(v==='resource-error')return ev.resourceHealth==='resource-error'||(Number(ev.resourceBlockedCount)||0)>0||(Number(ev.resourceMissingCount)||0)>0;
   if(v==='failures')return (Number(ev.failureCount)||0)>0;
   return true;
 }
@@ -42052,6 +42064,9 @@ function applyExtensionRuntimeSurfaceFilter(){
         oldestQueuedAgeMs:Number(row.dataset.webviewOldestQueuedAgeMs)||0,
         droppedMessageCount:Number(row.dataset.webviewDroppedMessageCount)||0,
         resourceRewriteCount:Number(row.dataset.webviewResourceRewriteCount)||0,
+        resourceBlockedCount:Number(row.dataset.webviewResourceBlockedCount)||0,
+        resourceMissingCount:Number(row.dataset.webviewResourceMissingCount)||0,
+        resourceOversizeCount:Number(row.dataset.webviewResourceOversizeCount)||0,
         resourcePortMappingRewriteCount:Number(row.dataset.webviewResourcePortMappingRewriteCount)||0,
         portMappingCount:Number(row.dataset.webviewPortMappingCount)||0,
         lastPortMappingTarget:String(row.dataset.webviewLastPortMappingTarget||''),
@@ -42102,7 +42117,9 @@ function extensionRuntimeHealthDeckRows(rows,summary){
   const dropped=sum(row=>row.webviewEvidence&&row.webviewEvidence.droppedMessageCount);
   const stalled=count(row=>row.webviewEvidence&&row.webviewEvidence.messageHealth==='stalled');
   const resourceRewrites=sum(row=>row.webviewEvidence&&row.webviewEvidence.resourceRewriteCount);
-  const resourceWarnings=count(row=>['pending','rewrite-warning','unused-roots'].includes(row.webviewEvidence&&row.webviewEvidence.resourceHealth));
+  const resourcePrepErrors=sum(row=>(Number(row.webviewEvidence&&row.webviewEvidence.resourceBlockedCount)||0)+(Number(row.webviewEvidence&&row.webviewEvidence.resourceMissingCount)||0));
+  const resourceOversize=sum(row=>row.webviewEvidence&&row.webviewEvidence.resourceOversizeCount);
+  const resourceWarnings=count(row=>['pending','rewrite-warning','unused-roots','resource-warning','resource-error'].includes(row.webviewEvidence&&row.webviewEvidence.resourceHealth));
   const roots=sum(row=>row.webviewEvidence&&row.webviewEvidence.localResourceRootCount);
   const ports=sum(row=>row.webviewEvidence&&row.webviewEvidence.portMappingCount);
   const failures=sum(row=>row.webviewEvidence&&row.webviewEvidence.failureCount);
@@ -42111,7 +42128,7 @@ function extensionRuntimeHealthDeckRows(rows,summary){
     {id:'mount',label:'Mounted',value:mounted+'/'+webviews.length,detail:visible+' visible'+(panels?' · '+panels+' panels':''),state:mounted===webviews.length?'ready':'warning',filter:mounted===webviews.length?'iframe-mounted':'iframe-missing'},
     {id:'bridge',label:'Bridge',value:String(bridgeReady),detail:bridgeWarnings?bridgeWarnings+' warning':'API ready',state:bridgeWarnings?'warning':'ready',filter:bridgeWarnings?'bridge-warning':'bridge-ready'},
     {id:'messages',label:'Messages',value:String(messageTotal),detail:(queued?queued+' queued · ':'')+(dropped?dropped+' dropped · ':'')+(stalled?stalled+' stalled':'flow ok'),state:(dropped||stalled)?'error':(queued?'warning':'ready'),filter:stalled?'message-stalled':(dropped?'dropped':(queued?'queued':'messages'))},
-    {id:'resources',label:'Resources',value:String(resourceRewrites),detail:roots+' roots · '+ports+' ports'+(resourceWarnings?' · '+resourceWarnings+' warning':''),state:resourceWarnings?'warning':'ready',filter:resourceWarnings?'resource-warning':'resources'},
+    {id:'resources',label:'Resources',value:String(resourceRewrites),detail:roots+' roots · '+ports+' ports'+(resourcePrepErrors?' · '+resourcePrepErrors+' blocked/missing':'')+(resourceOversize?' · '+resourceOversize+' oversized':'')+(resourceWarnings?' · '+resourceWarnings+' warning':''),state:resourcePrepErrors?'error':(resourceWarnings?'warning':'ready'),filter:resourcePrepErrors?'resource-error':(resourceWarnings?'resource-warning':'resources')},
     {id:'failures',label:'Failures',value:String(failures),detail:failures?'runtime failures':'none',state:failures?'error':'ready',filter:failures?'failures':'rendered'}
   ];
 }
@@ -42356,6 +42373,13 @@ function renderExtensionRuntimeSurfacePanel(data){
       el.dataset.webviewResourcePortMappingRewriteCount=String(row.webviewEvidence&&row.webviewEvidence.resourcePortMappingRewriteCount||0);
       el.dataset.webviewResourceCssRewriteCount=String(row.webviewEvidence&&row.webviewEvidence.resourceCssRewriteCount||0);
       el.dataset.webviewResourceAttributeRewriteCount=String(row.webviewEvidence&&row.webviewEvidence.resourceAttributeRewriteCount||0);
+      el.dataset.webviewResourceInlineByteLength=String(row.webviewEvidence&&row.webviewEvidence.resourceInlineByteLength||0);
+      el.dataset.webviewResourceInlineFileCount=String(row.webviewEvidence&&row.webviewEvidence.resourceInlineFileCount||0);
+      el.dataset.webviewResourceBlockedCount=String(row.webviewEvidence&&row.webviewEvidence.resourceBlockedCount||0);
+      el.dataset.webviewResourceMissingCount=String(row.webviewEvidence&&row.webviewEvidence.resourceMissingCount||0);
+      el.dataset.webviewResourceOversizeCount=String(row.webviewEvidence&&row.webviewEvidence.resourceOversizeCount||0);
+      el.dataset.webviewBlockedResourceSamples=Array.isArray(row.webviewEvidence&&row.webviewEvidence.blockedResourceSamples)?row.webviewEvidence.blockedResourceSamples.join('|'):String(row.webviewEvidence&&row.webviewEvidence.blockedResourceSamples||'');
+      el.dataset.webviewMissingResourceSamples=Array.isArray(row.webviewEvidence&&row.webviewEvidence.missingResourceSamples)?row.webviewEvidence.missingResourceSamples.join('|'):String(row.webviewEvidence&&row.webviewEvidence.missingResourceSamples||'');
       el.dataset.webviewResourceMapReady=row.webviewEvidence&&row.webviewEvidence.resourceMapReady?'1':'0';
       el.dataset.webviewResourceEndpointReady=row.webviewEvidence&&row.webviewEvidence.resourceEndpointReady?'1':'0';
       el.dataset.webviewAsWebviewUriSupported=row.webviewEvidence&&row.webviewEvidence.asWebviewUriSupported?'1':'0';
@@ -43853,13 +43877,20 @@ function extensionWebviewRuntimeDiagnostics(evidence){
   else if(htmlAvailable)bridgeHealth='rendered';
   const localResourceRootCount=Number(ev.localResourceRootCount||ev.localResourceRootsCount||0)||0;
   const resourceRewriteCount=Number(ev.resourceRewriteCount||0)||0;
+  const resourceBlockedCount=Number(ev.resourceBlockedCount||0)||0;
+  const resourceMissingCount=Number(ev.resourceMissingCount||0)||0;
+  const resourceOversizeCount=Number(ev.resourceOversizeCount||0)||0;
+  const resourcePrepIssueCount=resourceBlockedCount+resourceMissingCount+resourceOversizeCount;
+  const resourceInlineByteLength=Number(ev.resourceInlineByteLength||0)||0;
   const resourceMapReady=!!(ev.resourceMapReady||ev.resourceMapAvailable||Number(ev.resourceMapHitCount||0));
   const resourceEndpointReady=!!(ev.resourceEndpointReady||ev.resourceEndpointBaseAvailable||Number(ev.resourceEndpointRewriteCount||0));
   const asWebviewUriCallCount=Number(ev.asWebviewUriCallCount||0)||0;
   const asWebviewUriSupported=!!(ev.asWebviewUriSupported||asWebviewUriCallCount||localResourceRootCount||resourceMapReady||resourceEndpointReady);
   const asWebviewUriReady=!!(ev.asWebviewUriReady||asWebviewUriCallCount||((resourceRewriteCount||resourceMapReady||resourceEndpointReady)&&asWebviewUriSupported));
   let resourceHealth='unconfigured';
-  if(asWebviewUriReady)resourceHealth='ready';
+  if(resourceBlockedCount||resourceMissingCount)resourceHealth='resource-error';
+  else if(resourceOversizeCount&&!resourceEndpointReady)resourceHealth='resource-warning';
+  else if(asWebviewUriReady)resourceHealth='ready';
   else if(resourceRewriteCount&&!resourceEndpointReady&&!resourceMapReady)resourceHealth='rewrite-warning';
   else if(asWebviewUriSupported)resourceHealth='pending';
   else if(localResourceRootCount)resourceHealth='unused-roots';
@@ -43869,15 +43900,18 @@ function extensionWebviewRuntimeDiagnostics(evidence){
     messageHealth==='stalled'?(ev.lastQueueReason||ev.pendingReasons):'',
     resourceHealth==='rewrite-warning'?ev.lastResourceRewriteKind:'',
     resourceHealth==='rewrite-warning'?ev.lastResourceOriginalScheme:'',
+    resourceBlockedCount?'blocked-resource':'',
+    resourceMissingCount?'missing-resource':'',
+    resourceOversizeCount?'oversize-resource':'',
   ].map(v=>String(v||'').trim()).filter(Boolean);
-  const failureCount=dropped+(Number(ev.failedMessageCount)||0)+(Number(ev.commandUriFailedCount)||0)+(ev.lastError?1:0);
+  const failureCount=dropped+(Number(ev.failedMessageCount)||0)+(Number(ev.commandUriFailedCount)||0)+(ev.lastError?1:0)+resourceBlockedCount+resourceMissingCount;
   return {
     messageHealth,
     bridgeHealth,
     resourceHealth,
     failureCount,
     failureReasons:[...new Set(failureReasons)].slice(0,8),
-    diagnosticSummary:'bridge='+bridgeHealth+'; message='+messageHealth+'; binary='+binaryCount+'/'+binaryBytes+'B; resource='+resourceHealth+'; failures='+failureCount,
+    diagnosticSummary:'bridge='+bridgeHealth+'; message='+messageHealth+'; binary='+binaryCount+'/'+binaryBytes+'B; resource='+resourceHealth+'; prep='+resourcePrepIssueCount+'/'+resourceInlineByteLength+'B; failures='+failureCount,
     asWebviewUriReady,
     asWebviewUriSupported,
     resourceMapReady,
@@ -43920,6 +43954,11 @@ function extensionWebviewViewEvidence(view,state,html){
   const resourcePortMappingRewriteCount=Number(ev.resourcePortMappingRewriteCount||0)||0;
   const resourceCssRewriteCount=Number(ev.resourceCssRewriteCount||0)||0;
   const resourceAttributeRewriteCount=Number(ev.resourceAttributeRewriteCount||0)||0;
+  const resourceInlineByteLength=Number(ev.resourceInlineByteLength||0)||0;
+  const resourceInlineFileCount=Number(ev.resourceInlineFileCount||0)||0;
+  const resourceBlockedCount=Number(ev.resourceBlockedCount||0)||0;
+  const resourceMissingCount=Number(ev.resourceMissingCount||0)||0;
+  const resourceOversizeCount=Number(ev.resourceOversizeCount||0)||0;
   const resourceMapReady=!!(ev.resourceMapReady||ev.resourceMapAvailable||resourceMapHitCount);
   const resourceEndpointReady=!!(ev.resourceEndpointReady||ev.resourceEndpointBaseAvailable||resourceEndpointRewriteCount);
   const asWebviewUriCallCount=Number(ev.asWebviewUriCallCount||options.asWebviewUriCallCount||0)||0;
@@ -43939,7 +43978,10 @@ function extensionWebviewViewEvidence(view,state,html){
     asWebviewUriReady,
     resourceRewriteCount,
     resourceEndpointReady,
-    resourceMapReady
+    resourceMapReady,
+    resourceBlockedCount,
+    resourceMissingCount,
+    resourceOversizeCount
   });
   const diagnostics=extensionWebviewRuntimeDiagnostics({
     ...ev,
@@ -43956,6 +43998,10 @@ function extensionWebviewViewEvidence(view,state,html){
     messagesFromWebview:Number(ev.messagesFromWebview||0)||0,
     localResourceRootCount,
     resourceRewriteCount,
+    resourceBlockedCount,
+    resourceMissingCount,
+    resourceOversizeCount,
+    resourceInlineByteLength,
     resourceMapReady,
     resourceEndpointReady,
     asWebviewUriSupported,
@@ -44037,6 +44083,11 @@ function extensionWebviewViewEvidence(view,state,html){
     resourcePortMappingRewriteCount,
     resourceCssRewriteCount,
     resourceAttributeRewriteCount,
+    resourceInlineByteLength,
+    resourceInlineFileCount,
+    resourceBlockedCount,
+    resourceMissingCount,
+    resourceOversizeCount,
     resourceMapReady,
     resourceEndpointReady,
     asWebviewUriSupported,
@@ -44072,9 +44123,11 @@ function extensionWebviewViewReadiness(evidence){
   if((Number(ev.droppedMessageCount)||0)>0){issues.push('dropped-messages');score-=20}
   if(ev.asWebviewUriSupported&&!ev.asWebviewUriReady){issues.push('resource-uri-pending');score-=10}
   if((Number(ev.resourceRewriteCount)||0)>0&&!ev.resourceEndpointReady&&!ev.resourceMapReady){issues.push('resource-warning');score-=12}
+  if((Number(ev.resourceBlockedCount)||0)>0||(Number(ev.resourceMissingCount)||0)>0){issues.push('resource-error');score-=18}
+  if((Number(ev.resourceOversizeCount)||0)>0&&!ev.resourceEndpointReady){issues.push('resource-warning');score-=10}
   if(ev.bridgeHealth==='iframe-pending'||ev.bridgeHealth==='api-pending'){issues.push(ev.bridgeHealth);score-=8}
   if(ev.messageHealth==='stalled'){issues.push('message-stalled');score-=12}
-  if(ev.resourceHealth==='rewrite-warning'||ev.resourceHealth==='unused-roots'){issues.push(ev.resourceHealth);score-=8}
+  if(['rewrite-warning','unused-roots','resource-warning','resource-error'].includes(ev.resourceHealth)){issues.push(ev.resourceHealth);score-=8}
   if((Number(ev.failureCount)||0)>0){issues.push('runtime-failures');score-=12}
   score=Math.max(0,Math.min(100,Math.round(score)));
   let kind='ready';
@@ -44083,6 +44136,7 @@ function extensionWebviewViewReadiness(evidence){
   else if(issues.includes('iframe-pending')||issues.includes('api-pending'))kind='bridge-warning';
   else if(issues.includes('dropped-messages')||issues.includes('queued-messages'))kind='message-warning';
   else if(issues.includes('message-stalled'))kind='message-warning';
+  else if(issues.includes('resource-error'))kind='resource-warning';
   else if(issues.includes('resource-warning')||issues.includes('resource-uri-pending'))kind='resource-warning';
   else if(issues.includes('rewrite-warning')||issues.includes('unused-roots'))kind='resource-warning';
   else if(String(ev.status||'')==='partial')kind='partial';
@@ -44120,6 +44174,7 @@ function extensionWebviewViewSummaryText(view,state,evidence){
     'Resource endpoint: '+(evidence.resourceEndpointReady?'ready':'missing'),
     'Resource map: '+(evidence.resourceMapReady?'ready':'missing'),
     'Resource roots: '+String(evidence.localResourceRootCount),
+    'Resource prep: inline '+String(evidence.resourceInlineFileCount||0)+' files / '+String(evidence.resourceInlineByteLength||0)+'B / blocked '+String(evidence.resourceBlockedCount||0)+' / missing '+String(evidence.resourceMissingCount||0)+' / oversized '+String(evidence.resourceOversizeCount||0),
     'Port mappings: '+String(evidence.portMappingCount),
     'Map/Endpoint/Ports/CSS/Attr: '+String(evidence.resourceRewriteBreakdown||'0/0/0/0/0'),
     'Last resource: '+String(evidence.lastResourceRewriteKind||'-')+' '+String(evidence.lastResourceOriginal||'-')+' -> '+String(evidence.lastResourceRewritten||'-'),
