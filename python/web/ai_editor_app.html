@@ -26801,19 +26801,40 @@ function webviewCommandUriAllowed(viewId,command){
 function webviewCommandUriPayload(uri){
   return extensionWelcomeCommandPayloadFromUri(uri);
 }
+function webviewCommandUriPayloadFromData(data){
+  data=data&&typeof data==='object'?data:{};
+  if(data.command&&typeof data.command==='object'){
+    return {
+      command:String(data.command.command||'').trim(),
+      arguments:Array.isArray(data.command.arguments)?data.command.arguments:[]
+    };
+  }
+  if(data.command){
+    return {
+      command:String(data.command||'').trim(),
+      arguments:Array.isArray(data.arguments)?data.arguments:[]
+    };
+  }
+  return webviewCommandUriPayload(data.href);
+}
+function webviewCommandUriArgumentPreview(args){
+  try{return JSON.stringify(Array.isArray(args)?args:[]).slice(0,240)}catch(e){return '[]'}
+}
 function webviewContextKeys(context){
   return Object.keys(context&&typeof context==='object'?context:{})
     .filter(Boolean).sort();
 }
 async function executeWebviewCommandUri(viewId,data){
   const href=String(data&&data.href||'').trim();
-  const payload=data&&data.command?{command:String(data.command||''),arguments:Array.isArray(data.arguments)?data.arguments:[]}:webviewCommandUriPayload(href);
+  const payload=webviewCommandUriPayloadFromData(data);
   const id=String(viewId||'').trim();
   const cached=webviewRuntimeCache[id]||{};
   const basePatch={
     commandUriCount:(Number(cached.commandUriCount)||0)+1,
     lastCommandUri:href,
     lastCommandUriCommand:payload.command,
+    lastCommandUriArgumentCount:Array.isArray(payload.arguments)?payload.arguments.length:0,
+    lastCommandUriArgumentsPreview:webviewCommandUriArgumentPreview(payload.arguments),
     lastCommandUriAt:webviewRuntimeNow()
   };
   if(!webviewCommandUriAllowed(viewId,payload.command)){
@@ -27024,6 +27045,8 @@ function applyWebviewRuntimeDataset(el,viewId,runtime){
   el.dataset.webviewCommandUriBlockedCount=String(Number(data.commandUriBlockedCount)||0);
   el.dataset.webviewCommandUriFailedCount=String(Number(data.commandUriFailedCount)||0);
   el.dataset.webviewLastCommandUriCommand=String(data.lastCommandUriCommand||'');
+  el.dataset.webviewLastCommandUriArgumentCount=String(Number(data.lastCommandUriArgumentCount)||0);
+  el.dataset.webviewLastCommandUriAllowed=data.lastCommandUriAllowed===true?'true':(data.lastCommandUriAllowed===false?'false':'');
   el.dataset.webviewFocusEventCount=String(Number(data.focusEventCount)||0);
   el.dataset.webviewFocused=data.focused?'true':'false';
   el.dataset.webviewKeyEventCount=String(Number(data.keyEventCount)||0);
@@ -40067,7 +40090,18 @@ function extensionRuntimeSurfaceRows(data){
       evidence.lastApiCallKind=String(cachedRuntime.lastApiCallKind||evidence.lastApiCallKind||'');
       evidence.lastError=String(cachedRuntime.lastError||evidence.lastError||'');
       evidence.failedMessageCount=Number(cachedRuntime.failedMessageCount)||Number(evidence.failedMessageCount)||0;
+      evidence.commandUriCount=Number(cachedRuntime.commandUriCount)||Number(evidence.commandUriCount)||0;
+      evidence.commandUriAllowedCount=Number(cachedRuntime.commandUriAllowedCount)||Number(evidence.commandUriAllowedCount)||0;
+      evidence.commandUriBlockedCount=Number(cachedRuntime.commandUriBlockedCount)||Number(evidence.commandUriBlockedCount)||0;
       evidence.commandUriFailedCount=Number(cachedRuntime.commandUriFailedCount)||Number(evidence.commandUriFailedCount)||0;
+      evidence.lastCommandUri=String(cachedRuntime.lastCommandUri||evidence.lastCommandUri||'');
+      evidence.lastCommandUriCommand=String(cachedRuntime.lastCommandUriCommand||evidence.lastCommandUriCommand||'');
+      evidence.lastCommandUriArgumentCount=Number(cachedRuntime.lastCommandUriArgumentCount)||Number(evidence.lastCommandUriArgumentCount)||0;
+      evidence.lastCommandUriArgumentsPreview=String(cachedRuntime.lastCommandUriArgumentsPreview||evidence.lastCommandUriArgumentsPreview||'');
+      evidence.lastCommandUriAllowed=(
+        cachedRuntime.lastCommandUriAllowed!==undefined
+          ? cachedRuntime.lastCommandUriAllowed===true
+          : evidence.lastCommandUriAllowed);
       evidence.resourceRewriteCount=Number(cachedRuntime.resourceRewriteCount)||Number(evidence.resourceRewriteCount)||0;
       evidence.resourceMapHitCount=Number(cachedRuntime.resourceMapHitCount)||Number(evidence.resourceMapHitCount)||0;
       evidence.resourceEndpointRewriteCount=Number(cachedRuntime.resourceEndpointRewriteCount)||Number(evidence.resourceEndpointRewriteCount)||0;
@@ -40107,8 +40141,9 @@ function extensionRuntimeSurfaceRows(data){
     evidence.portMappingCount=Number(evidence.portMappingCount||evidence.portMappingsCount||portMappings.length)||0;
     evidence.resourceMapReady=!!(evidence.resourceMapReady||evidence.resourceMapAvailable||Number(evidence.resourceMapHitCount||0));
     evidence.resourceEndpointReady=!!(evidence.resourceEndpointReady||evidence.resourceEndpointBaseAvailable||Number(evidence.resourceEndpointRewriteCount||0));
-    evidence.asWebviewUriSupported=!!(evidence.asWebviewUriSupported||evidence.localResourceRootCount||evidence.resourceMapReady||evidence.resourceEndpointReady);
-    evidence.asWebviewUriReady=!!(evidence.asWebviewUriReady||((Number(evidence.resourceRewriteCount||0)||evidence.resourceMapReady||evidence.resourceEndpointReady)&&evidence.asWebviewUriSupported));
+    evidence.asWebviewUriCallCount=Number(evidence.asWebviewUriCallCount||evidenceOptions.asWebviewUriCallCount||0)||0;
+    evidence.asWebviewUriSupported=!!(evidence.asWebviewUriSupported||evidence.asWebviewUriCallCount||evidence.localResourceRootCount||evidence.resourceMapReady||evidence.resourceEndpointReady);
+    evidence.asWebviewUriReady=!!(evidence.asWebviewUriReady||evidence.asWebviewUriCallCount||((Number(evidence.resourceRewriteCount||0)||evidence.resourceMapReady||evidence.resourceEndpointReady)&&evidence.asWebviewUriSupported));
     const diagnostics=isWebviewSurface?extensionWebviewRuntimeDiagnostics(evidence):null;
     if(diagnostics){
       evidence.messageHealth=String(evidence.messageHealth||diagnostics.messageHealth);
@@ -43400,8 +43435,15 @@ function extensionRuntimeDomSelfCheckSnapshot(){
       panelContextKeys:lifecyclePanel?lifecyclePanel.dataset.webviewLastContextKeys:'',
       commandUriCount:Number(lifecycleBeforeDispose.commandUriCount)||0,
       commandUriAllowedCount:Number(lifecycleBeforeDispose.commandUriAllowedCount)||0,
+      commandUriBlockedCount:Number(lifecycleBeforeDispose.commandUriBlockedCount)||0,
+      commandUriFailedCount:Number(lifecycleBeforeDispose.commandUriFailedCount)||0,
+      lastCommandUriArgumentCount:Number(lifecycleBeforeDispose.lastCommandUriArgumentCount)||0,
+      lastCommandUriArgumentsPreview:String(lifecycleBeforeDispose.lastCommandUriArgumentsPreview||''),
+      lastCommandUriAllowed:lifecycleBeforeDispose.lastCommandUriAllowed===true,
       lastCommandUriCommand:String(lifecycleBeforeDispose.lastCommandUriCommand||''),
       panelCommandUriCount:lifecyclePanel?Number(lifecyclePanel.dataset.webviewCommandUriCount)||0:0,
+      panelCommandUriArgumentCount:lifecyclePanel?Number(lifecyclePanel.dataset.webviewLastCommandUriArgumentCount)||0:0,
+      panelCommandUriAllowed:lifecyclePanel?lifecyclePanel.dataset.webviewLastCommandUriAllowed:'',
       panelLastCommandUriCommand:lifecyclePanel?lifecyclePanel.dataset.webviewLastCommandUriCommand:'',
       focusEventCount:Number(lifecycleBeforeDispose.focusEventCount)||0,
       keyEventCount:Number(lifecycleBeforeDispose.keyEventCount)||0,
@@ -43815,6 +43857,15 @@ function extensionRuntimeDomSelfCheckSnapshot(){
       && snapshot.webviewLifecycle.apiCallCount>=1
       && snapshot.webviewLifecycle.lastApiCallKind==='acquire'
       && snapshot.webviewLifecycle.visibilityState==='visible'
+      && snapshot.webviewLifecycle.commandUriCount>=1
+      && snapshot.webviewLifecycle.commandUriAllowedCount>=1
+      && snapshot.webviewLifecycle.lastCommandUriCommand==='selftest.webviewCommand'
+      && snapshot.webviewLifecycle.lastCommandUriArgumentCount===1
+      && snapshot.webviewLifecycle.lastCommandUriArgumentsPreview.includes('1')
+      && snapshot.webviewLifecycle.lastCommandUriAllowed
+      && snapshot.webviewLifecycle.panelCommandUriCount>=1
+      && snapshot.webviewLifecycle.panelCommandUriArgumentCount===1
+      && snapshot.webviewLifecycle.panelCommandUriAllowed==='true'
       && snapshot.webviewLifecycle.disposed&&snapshot.webviewLifecycle.disposedSeq>snapshot.webviewLifecycle.seq
       && snapshot.webviewLifecycle.droppedAfterDispose>=1&&snapshot.webviewLifecycle.lastDroppedReason==='disposed-queue'
       && snapshot.webviewLifecycle.disposePendingDropped>=1&&snapshot.webviewLifecycle.disposePendingReason==='dispose-pending'

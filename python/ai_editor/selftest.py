@@ -14399,6 +14399,10 @@ console.log("extension setting schema helpers ok");
            and "target.dataset.webviewLastResourceRewritten=String(evidence.lastResourceRewritten||'');" in html
            and "target.dataset.webviewAsWebviewUriCallCount=String(evidence.asWebviewUriCallCount||0);" in html
            and "el.dataset.webviewAsWebviewUriCallCount=String(row.webviewEvidence&&row.webviewEvidence.asWebviewUriCallCount||0);" in html
+           and "function webviewCommandUriPayloadFromData(data)" in html
+           and "lastCommandUriArgumentCount:Array.isArray(payload.arguments)?payload.arguments.length:0" in html
+           and "evidence.commandUriAllowedCount=Number(cachedRuntime.commandUriAllowedCount)||Number(evidence.commandUriAllowedCount)||0;" in html
+           and "el.dataset.webviewLastCommandUriArgumentCount=String(Number(data.lastCommandUriArgumentCount)||0);" in html
            and "Readiness: '+(evidence.readiness||'-')+' '+String(evidence.readinessScore||0)+'/100'" in html
            and "'Frame/API: '+(evidence.frameLoaded?'frame loaded':'frame pending')" in html
            and "'Last resource: '+String(evidence.lastResourceRewriteKind||'-')+' '+String(evidence.lastResourceOriginal||'-')+' -> '+String(evidence.lastResourceRewritten||'-')" in html
@@ -15717,6 +15721,9 @@ console.log("command palette quick access helpers ok");
            and "terminal_link_request" in node_ext_host_source
            and "terminal_link_activate" in node_ext_host_source
            and "class TerminalShellIntegration" in node_ext_host_source
+           and "this._shellExecutions = [];" in node_ext_host_source
+           and "_trackShellExecution(execution)" in node_ext_host_source
+           and "_appendShellExecutionOutput(data)" in node_ext_host_source
            and "onDidChangeTerminalShellIntegration" in node_ext_host_source
            and "onDidStartTerminalShellExecution" in node_ext_host_source
            and "TerminalShellExecutionCommandLineConfidence" in node_ext_host_source
@@ -16695,11 +16702,14 @@ console.log("frontend built-in language fallback behavior ok");
            and "el.dataset.webviewPortMappings=String(portMapping.length);" in html
            and "function webviewCommandUriAllowed(viewId,command)" in html
            and "function executeWebviewCommandUri(viewId,data)" in html
+           and "function webviewCommandUriPayloadFromData(data)" in html
            and "commandUriCount:(Number(cached.commandUriCount)||0)+1" in html
            and "commandUriAllowedCount:(Number(cached.commandUriAllowedCount)||0)+1" in html
            and "commandUriBlockedCount:(Number(cached.commandUriBlockedCount)||0)+1" in html
+           and "lastCommandUriArgumentCount:Array.isArray(payload.arguments)?payload.arguments.length:0" in html
            and "el.dataset.webviewCommandUriCount=String(Number(data.commandUriCount)||0);" in html
            and "el.dataset.webviewLastCommandUriCommand=String(data.lastCommandUriCommand||'');" in html
+           and "el.dataset.webviewLastCommandUriArgumentCount=String(Number(data.lastCommandUriArgumentCount)||0);" in html
            and "type==='webview-command-uri'" in html
            and "function _portMappedUrl(v)" in html
            and "Number(m.webviewPort)===port" in html
@@ -16789,6 +16799,9 @@ console.log("frontend built-in language fallback behavior ok");
            and "el.dataset.webviewLastKey=String(data.lastKey||'');" in html
            and "contextMenuCount:Number(lifecycleBeforeDispose.contextMenuCount)||0" in html
            and "commandUriAllowedCount:Number(lifecycleBeforeDispose.commandUriAllowedCount)||0" in html
+           and "lastCommandUriArgumentCount:Number(lifecycleBeforeDispose.lastCommandUriArgumentCount)||0" in html
+           and "panelCommandUriAllowed:lifecyclePanel?lifecyclePanel.dataset.webviewLastCommandUriAllowed:''" in html
+           and "snapshot.webviewLifecycle.lastCommandUriArgumentCount===1" in html
            and "panelLastKey:lifecyclePanel?lifecyclePanel.dataset.webviewLastKey:''" in html
            and "menu_context.setdefault(\"webview\", webview_id)" in app_source
            and "action[\"arguments\"] = [json.loads(json.dumps("
@@ -27593,6 +27606,12 @@ async function activate(context) {
     terminal.sendText('echo node-terminal');
     terminal.sendText('typed only', false);
     await new Promise(resolve => setTimeout(resolve, 10));
+    const shellReadChunks = [];
+    if (shellExecution && shellExecution.read) {
+      for await (const chunk of shellExecution.read()) {
+        shellReadChunks.push(String(chunk));
+      }
+    }
     terminal.hide();
     const interacted = terminal.state.isInteractedWith === true;
     const shell = {
@@ -27606,6 +27625,8 @@ async function activate(context) {
       commandLine: shellExecution && shellExecution.commandLine && shellExecution.commandLine.value,
       confidence: shellExecution && shellExecution.commandLine && shellExecution.commandLine.confidence,
       hasRead: !!(shellExecution && shellExecution.read),
+      readChunks: shellReadChunks,
+      readText: shellReadChunks.join(''),
       enumHigh: vscode.TerminalShellExecutionCommandLineConfidence.High,
     };
     terminal.dispose();
@@ -34698,6 +34719,9 @@ process.stdin.resume();
                        and node_terminal_shell.get("confidence")
                        == node_terminal_shell.get("enumHigh") == 2
                        and node_terminal_shell.get("hasRead") is True
+                       and 'echo "shell integration"'
+                       in node_terminal_shell.get("readText", "")
+                       and node_terminal_shell.get("readChunks")
                        and node_terminal_probe.get("interacted") is True
                        and node_terminal_strict.get("creationShellArgs")
                        == "-NoLogo"

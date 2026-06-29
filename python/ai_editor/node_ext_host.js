@@ -6421,6 +6421,7 @@ class TerminalObject {
         this.state = { isInteractedWith: false };
         this.shellIntegration = undefined;
         this._shellIntegrationObject = null;
+        this._shellExecutions = [];
         this.dimensions = undefined;
         this._pty = normalizedOptions?.pty && typeof normalizedOptions.pty.open === 'function'
             ? normalizedOptions.pty
@@ -6443,6 +6444,7 @@ class TerminalObject {
         if (!pty) return;
         const writeDisposable = _terminalSubscribeEvent(pty.onDidWrite, data => {
             if (!this._ptyOpened || this._disposed) return;
+            this._appendShellExecutionOutput(data);
             send({
                 type: 'terminal_write',
                 id: this._handle,
@@ -6527,6 +6529,19 @@ class TerminalObject {
             env: this._shellIntegrationObject.envPayload(),
         });
         return this.shellIntegration;
+    }
+    _trackShellExecution(execution) {
+        if (!execution || this._shellExecutions.includes(execution)) return;
+        this._shellExecutions.push(execution);
+    }
+    _finishShellExecution(execution) {
+        const index = this._shellExecutions.indexOf(execution);
+        if (index >= 0) this._shellExecutions.splice(index, 1);
+    }
+    _appendShellExecutionOutput(data) {
+        for (const execution of this._shellExecutions.slice()) {
+            execution._append(data);
+        }
     }
     sendText(text, shouldExecute = true) {
         if (this._disposed) return;
@@ -6681,6 +6696,8 @@ class TerminalShellIntegration {
     executeCommand(commandLineOrExecutable, args) {
         const commandLine = _terminalShellCommandLine(commandLineOrExecutable, args);
         const execution = new TerminalShellExecution(this._terminal, commandLine);
+        execution._append(commandLine + '\n');
+        this._terminal._trackShellExecution(execution);
         const startEvent = {
             terminal: this._terminal,
             shellIntegration: this.value,
@@ -6705,6 +6722,7 @@ class TerminalShellIntegration {
                 exitCode: undefined,
             };
             _onDidEndTerminalShellExecutionEmitter.fire(endEvent);
+            this._terminal._finishShellExecution(execution);
             send({
                 type: 'terminal_shell_execution_end',
                 terminal: _terminalBridgePayload(this._terminal),
