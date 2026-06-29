@@ -4912,6 +4912,15 @@ function _debugRuntimeData(session) {
     return session._debugRuntimeData;
 }
 
+function _debugActiveStackItemPayload(item) {
+    if (!item || typeof item !== 'object') return undefined;
+    const payload = { ...item };
+    if (payload.session && typeof payload.session === 'object') {
+        payload.session = _debugSessionPayload(payload.session);
+    }
+    return _plainBridgeValue(payload);
+}
+
 function _debugSendSessionUpdate(session, patch = {}) {
     if (!session) return;
     const runtime = Object.assign(_debugRuntimeData(session), patch || {});
@@ -4926,6 +4935,7 @@ function _debugSendSessionUpdate(session, patch = {}) {
         threadId: runtime.threadId,
         lastEvent: String(runtime.lastEvent || ''),
         message: String(runtime.message || ''),
+        activeStackItem: _debugActiveStackItemPayload(session.activeStackItem || runtime.activeStackItem || undefined),
     });
 }
 
@@ -5190,6 +5200,7 @@ function _debugSetActiveStackItem(transport, item) {
     transport.activeStackItem = item || undefined;
     transport.session.activeStackItem = item || undefined;
     try { transport.onActiveStackItem?.(item || undefined); } catch {}
+    _debugSendSessionUpdate(transport.session, { activeStackItem: item || undefined });
 }
 
 function _debugRefreshActiveStackItem(transport, stoppedBody) {

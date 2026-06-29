@@ -10876,6 +10876,12 @@ console.log("frontend word separator behavior ok");
             and "String(ev.key||'').toLowerCase()==='g'" in html
             and "function settingsRecordSearch(query,parsed)" in html
             and "id=\"settings-search-memory\"" in html
+            and "id=\"settings-search-suggest\"" in html
+            and "function settingsSearchSuggestRows(query)" in html
+            and "function renderSettingsSearchSuggest(force)" in html
+            and "function settingsHandleSearchSuggestKeydown(ev)" in html
+            and "window.renderSettingsSearchSuggest=renderSettingsSearchSuggest;" in html
+            and "hasSearchSuggestKeyboard" in html
             and "id=\"settings-search-inspector\"" in html
             and "settings-insight-chip" in html
             and "function renderSettingsSearchInspector(parsed,visible,total,targetStats)" in html
@@ -11850,6 +11856,12 @@ console.log("frontend word separator behavior ok");
            and "id=\"extension-runtime-filter-kind\"" in html
            and "id=\"extension-runtime-filter-source\"" in html
            and "id=\"extension-runtime-filter-evidence\"" in html
+           and "id=\"extension-debug-context\"" in html
+           and "function renderExtensionRuntimeDebugContext()" in html
+           and "function extensionRuntimeDebugVariableRows(record)" in html
+           and "function extensionRuntimeDebugWatchRows(record)" in html
+           and "function extensionRuntimeDebugCallStackRows(record)" in html
+           and "function evaluateExtensionDebugWatchExpression(ev)" in html
            and "function extensionRuntimeSurfaceResourceUri(item)" in html
            and "function extensionRuntimeSurfaceAction(kind,item,row)" in html
            and "function extensionRuntimeIsWebviewKind(kindOrRow)" in html
@@ -11897,6 +11909,8 @@ console.log("frontend word separator behavior ok");
            and "function renderExtensionRuntimeSurfacePanel(data)" in html
            and "async function renderExtensionRuntimeSurfaces(force)" in html
            and "window.renderExtensionRuntimeSurfaces=renderExtensionRuntimeSurfaces;" in html
+           and "window.renderExtensionRuntimeDebugContext=renderExtensionRuntimeDebugContext;" in html
+           and "window.evaluateExtensionDebugWatchExpression=evaluateExtensionDebugWatchExpression;" in html
            and "window.applyExtensionRuntimeSurfaceFilter=applyExtensionRuntimeSurfaceFilter;" in html
            and "window.extensionRuntimeSurfaceRows=extensionRuntimeSurfaceRows;" in html
            and "window.extensionRuntimeSurfaceHealthSnapshot=extensionRuntimeSurfaceHealthSnapshot;" in html
@@ -12144,6 +12158,12 @@ console.log("frontend word separator behavior ok");
            and "runtimeDebugAttributeRows" in html
            and "runtimeDebugSnippetRows" in html
            and "runtimeDebugBreakpointRows" in html
+           and "runtimeDebugContextActive" in html
+           and "runtimeDebugContextVariableRows" in html
+           and "runtimeDebugContextWatchRows" in html
+           and "runtimeDebugContextFrameRows" in html
+           and "snapshot.runtimeDebugContextActive" in html
+           and "snapshot.runtimeDebugContextNames.includes('answer')" in html
            and "snapshot.runtimeStatusBarRows>=1" in html
            and "snapshot.runtimeLanguageStatusRows>=1" in html
            and "snapshot.runtimeTaskDefinitionRows>=1" in html
@@ -16505,6 +16525,10 @@ console.log("frontend built-in language fallback behavior ok");
            and "function _debugSendSessionUpdate(session, patch = {})"
            in node_ext_host_source
            and "type: 'debug_session_update'" in node_ext_host_source
+           and "function _debugActiveStackItemPayload(item)" in node_ext_host_source
+           and "payload.session = _debugSessionPayload(payload.session);" in node_ext_host_source
+           and "activeStackItem: _debugActiveStackItemPayload(session.activeStackItem || runtime.activeStackItem || undefined)" in node_ext_host_source
+           and "_debugSendSessionUpdate(transport.session, { activeStackItem: item || undefined });" in node_ext_host_source
            and "consoleOutputCount: Number(runtime.consoleOutputCount || 0)"
            in node_ext_host_source
            and "lastConsoleOutput: String(runtime.lastConsoleOutput || '')"

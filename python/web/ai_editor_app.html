@@ -2089,6 +2089,19 @@ pre.code-block code .type { color:var(--fg-type); }
   border-radius:999px; background:var(--bg3); color:var(--fg-dim); font:10px var(--mono); cursor:pointer;
   overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .settings-search-memory button:hover,.settings-search-memory button:focus { color:var(--fg); border-color:var(--border-focus); outline:none; }
+.settings-search-suggest { display:none; margin-top:4px; border:1px solid color-mix(in srgb,var(--border-focus) 34%,var(--border));
+  border-radius:4px; background:color-mix(in srgb,var(--bg2) 94%,#000); box-shadow:0 8px 22px #00000052;
+  overflow:hidden; max-height:210px; }
+.settings-search-suggest.open { display:block; }
+.settings-search-suggest-row { width:100%; min-height:28px; display:grid; grid-template-columns:52px minmax(0,1fr) auto;
+  align-items:center; gap:8px; padding:4px 8px; border:0; border-bottom:1px solid color-mix(in srgb,var(--border) 54%,transparent);
+  background:transparent; color:var(--fg); text-align:left; font:11px var(--sans); cursor:pointer; }
+.settings-search-suggest-row:last-child { border-bottom:0; }
+.settings-search-suggest-row:hover,.settings-search-suggest-row:focus,
+.settings-search-suggest-row.active { background:var(--bg-hover); outline:none; }
+.settings-search-suggest-row .kind { color:var(--fg-accent); font:10px var(--mono); text-transform:uppercase; }
+.settings-search-suggest-row .label { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.settings-search-suggest-row .desc { color:var(--fg-dim); font:10px var(--mono); white-space:nowrap; }
 .settings-review-bar { display:none; flex-wrap:wrap; align-items:center; gap:6px; min-height:28px;
   padding:5px 6px; border:1px solid var(--border); border-radius:5px; background:color-mix(in srgb,var(--bg2) 78%,transparent); }
 .settings-review-bar.open { display:flex; }
@@ -2351,6 +2364,30 @@ button.review-pill { cursor:pointer; }
 .extension-debug-session-action { min-width:22px; height:22px; padding:0 5px; border:1px solid var(--border); border-radius:4px;
   background:var(--bg2); color:var(--fg-dim); font:10px var(--mono); cursor:pointer; }
 .extension-debug-session-action:hover,.extension-debug-session-action:focus { color:var(--fg); border-color:var(--border-focus); outline:none; }
+.extension-debug-context { display:none; grid-template-columns:repeat(3,minmax(0,1fr)); gap:6px; padding:6px 8px;
+  border-bottom:1px solid color-mix(in srgb,var(--border) 70%,transparent); background:color-mix(in srgb,var(--bg2) 34%,transparent); }
+.extension-debug-context.active { display:grid; }
+.extension-debug-section { min-width:0; border:1px solid color-mix(in srgb,var(--border) 80%,transparent); border-radius:5px;
+  background:color-mix(in srgb,var(--bg) 74%,transparent); overflow:hidden; }
+.extension-debug-section-head { display:flex; align-items:center; gap:6px; min-height:24px; padding:3px 7px;
+  border-bottom:1px solid color-mix(in srgb,var(--border) 65%,transparent); color:var(--fg-dim); font:10px var(--mono); text-transform:uppercase; }
+.extension-debug-section-count { margin-left:auto; color:var(--fg-accent); }
+.extension-debug-section-list { display:grid; gap:1px; max-height:132px; overflow:auto; padding:3px; }
+.extension-debug-row { min-width:0; display:grid; grid-template-columns:minmax(0,1fr) auto; gap:6px; align-items:center;
+  min-height:20px; padding:2px 4px; border-radius:3px; color:var(--fg); font:11px var(--sans); }
+.extension-debug-row:hover,.extension-debug-row:focus { background:var(--bg-hover); outline:none; }
+.extension-debug-row .name { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.extension-debug-row .value { color:var(--fg-dim); font:10px var(--mono); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.extension-debug-row.frame .name { color:var(--fg-accent); }
+.extension-debug-row.scope .name { color:var(--fg-warning); }
+.extension-debug-watch-form { display:grid; grid-template-columns:minmax(0,1fr) auto; gap:4px; padding:4px;
+  border-top:1px solid color-mix(in srgb,var(--border) 60%,transparent); }
+.extension-debug-watch-input { min-width:0; height:22px; border:1px solid var(--border); border-radius:4px;
+  background:var(--bg-input); color:var(--fg); font:11px var(--mono); padding:0 6px; outline:none; }
+.extension-debug-watch-input:focus { border-color:var(--border-focus); }
+.extension-debug-watch-btn { height:22px; border:1px solid var(--border); border-radius:4px; background:var(--bg3);
+  color:var(--fg-dim); cursor:pointer; font:11px var(--sans); padding:0 7px; }
+.extension-debug-watch-btn:hover,.extension-debug-watch-btn:focus { color:var(--fg); border-color:var(--border-focus); outline:none; }
 .extension-debug-console { display:none; border-bottom:1px solid color-mix(in srgb,var(--border) 70%,transparent);
   background:color-mix(in srgb,var(--bg2) 30%,transparent); }
 .extension-debug-console.active { display:grid; grid-template-rows:auto minmax(54px,auto) auto; }
@@ -4594,6 +4631,7 @@ pre.code-block { overflow:visible; }
             </div>
             <button type="button" class="settings-top-action" id="settings-details-toggle" data-settings-icon-action="1" title="Toggle settings details" aria-label="Toggle settings details" onclick="settingsToggleDetails()">⋯</button>
           </div>
+          <div id="settings-search-suggest" class="settings-search-suggest" role="listbox" aria-label="Settings search suggestions"></div>
           <div class="settings-search-caption">
             <strong>Search Settings</strong>
             <span id="settings-search-caption-text">Use @modified, @workspace, @ext:, @lang:, or setting IDs.</span>
@@ -4996,6 +5034,7 @@ pre.code-block { overflow:visible; }
         <div class="extension-runtime-health" id="extension-runtime-health"></div>
         <div class="extension-runtime-run-strip" id="extension-runtime-run-strip" aria-live="polite"></div>
         <div class="extension-debug-session-tree" id="extension-debug-session-tree" role="tree" aria-label="Debug sessions"></div>
+        <div class="extension-debug-context" id="extension-debug-context" aria-label="Debug context"></div>
         <div class="extension-debug-console" id="extension-debug-console" aria-live="polite">
           <div class="extension-debug-console-head">
             <span class="extension-debug-console-title">Debug Console</span>
@@ -30363,6 +30402,8 @@ const SETTINGS_SEARCH_HISTORY_STORAGE_KEY='sao.aiEditor.settings.searchHistory.v
 const SETTINGS_DENSITY_STORAGE_KEY='sao.aiEditor.settings.density.v1';
 const SETTINGS_DETAILS_STORAGE_KEY='sao.aiEditor.settings.details.v1';
 let _settingsNavFilterValue='';
+let _settingsSearchSuggestIndex=-1;
+let _settingsSearchSuggestSuppressUntil=0;
 const SETTINGS_COMMONLY_USED_KEYS=[
   'aiEditor.provider','aiEditor.model','workbench.colorTheme','workbench.iconTheme',
   'editor.defaultFormatter','editor.tabSize','editor.insertSpaces','editor.formatOnSave',
@@ -31316,6 +31357,13 @@ function selectSettingsTarget(target,options){
 function installSettingsKeyboardHandlers(){
   const modal=$('settings-modal');if(!modal||modal.dataset.settingsKeyboardHandlers)return;
   modal.dataset.settingsKeyboardHandlers='1';
+  const searchInput=$('settings-search');
+  if(searchInput&&!searchInput.dataset.settingsSuggestWired){
+    searchInput.dataset.settingsSuggestWired='1';
+    searchInput.addEventListener('focus',()=>renderSettingsSearchSuggest(true));
+    searchInput.addEventListener('input',()=>renderSettingsSearchSuggest(false));
+    searchInput.addEventListener('blur',()=>setTimeout(closeSettingsSearchSuggest,120));
+  }
   modal.addEventListener('click',ev=>{
     if(!(ev.target&&ev.target.closest&&ev.target.closest('.settings-row-actions')))closeSettingsRowActionMenus();
   });
@@ -31362,6 +31410,7 @@ function installSettingsKeyboardHandlers(){
     if(ev.altKey&&ev.key==='PageDown'){ev.preventDefault();settingsFocusSiblingSection(1);return}
     if(ev.altKey&&ev.key==='PageUp'){ev.preventDefault();settingsFocusSiblingSection(-1);return}
     if(ev.altKey&&String(ev.key||'').toLowerCase()==='r'){ev.preventDefault();resetVisibleModifiedSettings();return}
+    if(ev.target&&ev.target.id==='settings-search'&&settingsHandleSearchSuggestKeydown(ev))return;
     if(ev.key==='ArrowDown'&&ev.target&&ev.target.id==='settings-search'){
       const first=settingsVisibleRows().find(Boolean);
       if(first){ev.preventDefault();settingsHighlightRow(first);}
@@ -31483,6 +31532,9 @@ function settingsUiSelfCheckSnapshot(){
   const visibleSearchbarChildren=Array.from(document.querySelectorAll('.settings-searchbar > *'))
     .filter(el=>String(getComputedStyle(el).display)!=='none'&&String(getComputedStyle(el).maxHeight)!=='0px');
   const searchCaption=document.querySelector('.settings-search-caption');
+  const searchSuggest=renderSettingsSearchSuggest(true);
+  const searchSuggestHost=$('settings-search-suggest');
+  const searchSuggestRows=searchSuggestHost?Array.from(searchSuggestHost.querySelectorAll('.settings-search-suggest-row')):[];
   const searchRowWidth=searchRow?parseFloat(getComputedStyle(searchRow).maxWidth||'0')||searchRow.getBoundingClientRect().width:0;
   const rowActionMenu=document.querySelector('.settings-row-action-menu');
   const rowActionButtons=Array.from(document.querySelectorAll('.settings-row-action'));
@@ -31648,6 +31700,12 @@ function settingsUiSelfCheckSnapshot(){
     hasNavFilterCount:!!$('settings-nav-filter-count'),
     hasResultCount:!!$('settings-result-count'),
     hasQueryBox:!!document.querySelector('.settings-search-row .settings-query-box #settings-search'),
+    hasSearchSuggest:!!(searchSuggestHost&&searchSuggestHost.dataset.settingsSuggestOpen==='1'&&searchSuggestRows.length>=4),
+    hasSearchSuggestKeyboard:typeof settingsHandleSearchSuggestKeydown==='function'
+      && String(settingsHandleSearchSuggestKeydown).includes("key==='ArrowDown'")
+      && String(settingsHandleSearchSuggestKeydown).includes('settingsApplySearchSuggest(rows[_settingsSearchSuggestIndex])'),
+    searchSuggestCount:searchSuggest.count,
+    searchSuggestKinds:searchSuggestHost?String(searchSuggestHost.dataset.settingsSuggestKinds||''):'',
     hasQueryHelp:!!($('settings-query-help')&&$('settings-query-help-toggle')),
     hasQuietSearchHints:!!document.querySelector('.settings-searchbar .settings-search-hints')
       && String(getComputedStyle(document.querySelector('.settings-searchbar .settings-search-hints')).display)==='none',
@@ -31826,6 +31884,10 @@ window.closeSettingsRowActionMenus=closeSettingsRowActionMenus;
 window.settingsToggleFilterToken=settingsToggleFilterToken;
 window.settingsClearFilters=settingsClearFilters;
 window.settingsRemoveLastFilterToken=settingsRemoveLastFilterToken;
+window.renderSettingsSearchSuggest=renderSettingsSearchSuggest;
+window.settingsSearchSuggestRows=settingsSearchSuggestRows;
+window.settingsApplySearchSuggest=settingsApplySearchSuggest;
+window.settingsHandleSearchSuggestKeydown=settingsHandleSearchSuggestKeydown;
 window.settingsFocusCurrentLanguageOverride=settingsFocusCurrentLanguageOverride;
 window.settingsSearchForLanguageOverride=settingsSearchForLanguageOverride;
 window.settingsSearchModifiedLanguageOverride=settingsSearchModifiedLanguageOverride;
@@ -32179,6 +32241,7 @@ function settingsClearSearch(){
   }
   ['ext-settings-modified','ext-settings-hidden'].forEach(id=>{const cb=$(id);if(cb)cb.checked=false});
   ['ext-settings-category','ext-settings-scope','ext-settings-target'].forEach(id=>{const select=$(id);if(select)select.value=''});
+  closeSettingsSearchSuggest();
   scheduleFilterSettings(0);
   if(typeof applyExtensionSettingsFilter==='function')applyExtensionSettingsFilter();
   settingsUpdateSearchClearButton();
@@ -32235,6 +32298,110 @@ function renderSettingsSearchMemory(parsed){
     btn.onclick=()=>settingsApplySearchHistory(item);
     host.appendChild(btn);
   });
+}
+function settingsSearchSuggestRows(query){
+  query=String(query||'');
+  const rows=[],seen=new Set();
+  const push=(kind,label,value,description,target)=>{
+    value=String(value||'').trim();
+    if(!value)return;
+    const key=(kind+'|'+value+'|'+(target||'')).toLowerCase();
+    if(seen.has(key))return;
+    seen.add(key);
+    rows.push({kind,label:String(label||value),value,description:String(description||''),target:String(target||'')});
+  };
+  settingsStorageList(SETTINGS_SEARCH_HISTORY_STORAGE_KEY).filter(item=>item&&item.query).slice(0,5)
+    .forEach(item=>push('recent',item.query,item.query,settingsTargetDisplayName(item.target),item.target));
+  const targetToken=currentSettingsTarget==='workspace'?'@workspace':currentSettingsTarget==='extensions'?'@extensions':'@common';
+  push('scope',targetToken,targetToken,settingsTargetDisplayName(currentSettingsTarget));
+  settingsBuiltinFilterSuggestions(query).slice(0,10).forEach(value=>{
+    const token=(String(value).match(/@\S+$/)||[String(value).trim()])[0];
+    push('filter',token,value,'Query token');
+  });
+  ['@modified','@overrides','@error','@json','@feature:editor','@feature:terminal','@lang:python','@id:editor.'].forEach(token=>{
+    push('filter',token,settingsCompleteFilterToken(query,token),'Query token');
+  });
+  return rows.slice(0,14);
+}
+function closeSettingsSearchSuggest(){
+  const host=$('settings-search-suggest');
+  if(host){
+    host.classList.remove('open');
+    host.innerHTML='';
+    host.dataset.settingsSuggestOpen='0';
+  }
+  _settingsSearchSuggestIndex=-1;
+}
+function renderSettingsSearchSuggest(force){
+  const host=$('settings-search-suggest'),input=$('settings-search');
+  if(!host||!input)return {open:false,count:0};
+  if(!force&&Date.now()<_settingsSearchSuggestSuppressUntil){
+    closeSettingsSearchSuggest();
+    return {open:false,count:0};
+  }
+  const rows=settingsSearchSuggestRows(input.value);
+  const shouldOpen=!!rows.length&&(force||document.activeElement===input);
+  host.innerHTML='';
+  host.classList.toggle('open',shouldOpen);
+  host.dataset.settingsSuggestOpen=shouldOpen?'1':'0';
+  host.dataset.settingsSuggestCount=String(rows.length);
+  host.dataset.settingsSuggestIndex=String(_settingsSearchSuggestIndex);
+  host.dataset.settingsSuggestKinds=rows.map(row=>row.kind).join(',');
+  if(!shouldOpen)return {open:false,count:rows.length};
+  if(_settingsSearchSuggestIndex>=rows.length)_settingsSearchSuggestIndex=rows.length-1;
+  rows.forEach((row,index)=>{
+    const btn=document.createElement('button');
+    btn.type='button';
+    btn.className='settings-search-suggest-row'+(index===_settingsSearchSuggestIndex?' active':'');
+    btn.dataset.settingsSuggestKind=row.kind;
+    btn.dataset.settingsSuggestValue=row.value;
+    btn.dataset.settingsSuggestTarget=row.target;
+    btn.setAttribute('role','option');
+    btn.setAttribute('aria-selected',index===_settingsSearchSuggestIndex?'true':'false');
+    btn.onmousedown=ev=>ev.preventDefault();
+    btn.onclick=()=>settingsApplySearchSuggest(row);
+    const kind=document.createElement('span');kind.className='kind';kind.textContent=row.kind;
+    const label=document.createElement('span');label.className='label';label.textContent=row.label;
+    const desc=document.createElement('span');desc.className='desc';desc.textContent=row.description;
+    btn.appendChild(kind);btn.appendChild(label);btn.appendChild(desc);host.appendChild(btn);
+  });
+  return {open:true,count:rows.length};
+}
+function settingsApplySearchSuggest(row){
+  if(!row)return false;
+  if(row.target&&row.target!==currentSettingsTarget)selectSettingsTarget(row.target,{preserveSearch:true});
+  const input=$('settings-search');
+  if(input){
+    input.value=String(row.value||'');
+    try{input.focus({preventScroll:true})}catch(e){try{input.focus()}catch(_e){}}
+  }
+  _settingsSearchSuggestSuppressUntil=Date.now()+220;
+  closeSettingsSearchSuggest();
+  scheduleFilterSettings(0);
+  return true;
+}
+function settingsHandleSearchSuggestKeydown(ev){
+  const host=$('settings-search-suggest'),input=$('settings-search');
+  if(!host||!input||!(ev&&ev.target===input))return false;
+  const key=String(ev.key||'');
+  if(key==='Escape'&&host.classList.contains('open')){
+    ev.preventDefault();closeSettingsSearchSuggest();return true;
+  }
+  if(!['ArrowDown','ArrowUp','Enter'].includes(key))return false;
+  const rows=settingsSearchSuggestRows(input.value);
+  if(!rows.length)return false;
+  const open=host.classList.contains('open');
+  if(key==='Enter'){
+    if(open&&_settingsSearchSuggestIndex>=0&&_settingsSearchSuggestIndex<rows.length){
+      ev.preventDefault();settingsApplySearchSuggest(rows[_settingsSearchSuggestIndex]);return true;
+    }
+    return false;
+  }
+  ev.preventDefault();
+  if(!open)_settingsSearchSuggestIndex=key==='ArrowUp'?rows.length-1:0;
+  else _settingsSearchSuggestIndex=(_settingsSearchSuggestIndex+(key==='ArrowUp'?-1:1)+rows.length)%rows.length;
+  renderSettingsSearchSuggest(true);
+  return true;
 }
 function settingsRemoveLastFilterToken(){
   const input=$('settings-search');if(!input)return;
@@ -33283,6 +33450,7 @@ function filterSettings(){
   renderSettingsActiveFilters(parsed,visible,total);
   renderSettingsSearchInspector(parsed,visible,total,targetStats);
   renderSettingsSearchMemory(parsed);
+  renderSettingsSearchSuggest(false);
   renderSettingsTargetSummary(targetStats);
   renderSettingsWorkbenchHeader(visible,total,targetStats);
   renderSettingsJumpbar(targetStats);
@@ -38656,6 +38824,8 @@ const extensionRuntimeDebugSessions=new Map();
 let extensionRuntimeTaskProblems=[];
 let extensionRuntimeDebugConsoleEntries=[];
 const extensionRuntimeDebugConsoleChannels=new Map();
+let extensionRuntimeActiveDebugSessionKey='';
+let extensionRuntimeDebugWatchExpressions=[];
 let extensionRuntimeDebugConsoleHistory=[];
 let extensionRuntimeDebugConsoleHistoryIndex=-1;
 function extensionRuntimeBoundedSet(map,key,value,limit){
@@ -39022,7 +39192,9 @@ function renderBottomDebugConsole(){
 function focusExtensionRuntimeDebugConsole(sessionKey){
   const filter=$('debug-console-session-filter');
   const session=String(sessionKey||'').trim();
+  if(session)extensionRuntimeActiveDebugSessionKey=session;
   if(filter&&session)filter.value=session;
+  renderExtensionRuntimeDebugContext();
   activateBottomPanelTab(document.querySelector('.ptab[data-ptab="debug-console"]'));
   const input=$('debug-console-input');
   if(input)input.focus();
@@ -39102,6 +39274,167 @@ async function stopExtensionRuntimeTask(executionId,label){
     ? 'Cancelled task '+(label||id)+'.'
     : 'Task cancel failed: '+callFailedMessage(result,'runtime unavailable');
   return ok;
+}
+function extensionRuntimeDebugArray(value){
+  if(Array.isArray(value))return value.filter(item=>item!==undefined&&item!==null);
+  if(value&&typeof value==='object')return Object.keys(value).map(key=>{
+    const raw=value[key];
+    return raw&&typeof raw==='object'?{name:key,...raw}:{name:key,value:raw};
+  });
+  return [];
+}
+function extensionRuntimeDebugContextRecord(){
+  const active=extensionRuntimeActiveDebugSessionKey&&extensionRuntimeDebugSessions.get(extensionRuntimeActiveDebugSessionKey);
+  if(active)return active;
+  return extensionRuntimeActiveDebugSessionRecord();
+}
+function extensionRuntimeDebugVariableRows(record){
+  const rows=[];
+  const active=record&&record.activeStackItem&&typeof record.activeStackItem==='object'?record.activeStackItem:{};
+  const scopes=extensionRuntimeDebugArray(active.scopes&&active.scopes.length?active.scopes:record&&record.scopes);
+  scopes.forEach(scope=>{
+    const scopeName=String(scope.name||scope.presentationHint||'Scope');
+    rows.push({kind:'scope',name:scopeName,value:scope.expensive?'lazy':''});
+    extensionRuntimeDebugArray(scope.variables).slice(0,24).forEach(variable=>{
+      rows.push({
+        kind:'variable',
+        name:String(variable.name||variable.evaluateName||'value'),
+        value:String(variable.value!==undefined?variable.value:(variable.type||'')),
+        type:String(variable.type||''),
+        variablesReference:Number(variable.variablesReference||0)||0
+      });
+    });
+  });
+  extensionRuntimeDebugArray(record&&record.variables).slice(0,24).forEach(variable=>{
+    rows.push({
+      kind:'variable',
+      name:String(variable.name||variable.evaluateName||'value'),
+      value:String(variable.value!==undefined?variable.value:(variable.type||'')),
+      type:String(variable.type||''),
+      variablesReference:Number(variable.variablesReference||0)||0
+    });
+  });
+  return rows.slice(0,48);
+}
+function extensionRuntimeDebugCallStackRows(record){
+  const active=record&&record.activeStackItem&&typeof record.activeStackItem==='object'?record.activeStackItem:{};
+  const rows=[];
+  if(active.thread)rows.push({kind:'thread',name:String(active.thread.name||('Thread '+active.thread.id)),value:active.reason?('reason '+active.reason):''});
+  if(active.frame)rows.push({kind:'frame',name:String(active.frame.name||'frame'),value:[active.frame.source&&active.frame.source.path||active.frame.source&&active.frame.source.name||'',active.frame.line?(':'+active.frame.line):''].join('')});
+  extensionRuntimeDebugArray(record&&record.stackFrames||record&&record.callStack).slice(0,24).forEach(frame=>{
+    rows.push({kind:'frame',name:String(frame.name||frame.functionName||'frame'),value:[frame.source&&frame.source.path||frame.file||'',frame.line?(':'+frame.line):''].join('')});
+  });
+  return rows.slice(0,32);
+}
+function extensionRuntimeDebugWatchRows(record){
+  const sessionWatches=extensionRuntimeDebugArray(record&&record.watches||record&&record.watchExpressions);
+  const rows=sessionWatches.map(item=>({
+    kind:'watch',
+    name:String(item.expression||item.name||'watch'),
+    value:String(item.value!==undefined?item.value:(item.result!==undefined?item.result:'')),
+    error:String(item.error||'')
+  }));
+  extensionRuntimeDebugWatchExpressions.slice(-12).forEach(item=>{
+    rows.push({kind:'watch',name:String(item.expression||''),value:String(item.value||''),error:String(item.error||'')});
+  });
+  return rows.slice(-24);
+}
+function renderExtensionDebugSection(host,id,title,rows,opts){
+  const section=document.createElement('section');
+  section.className='extension-debug-section';
+  section.dataset.debugSection=id;
+  const head=document.createElement('div');
+  head.className='extension-debug-section-head';
+  const label=document.createElement('span');label.textContent=title;
+  const count=document.createElement('span');count.className='extension-debug-section-count';count.textContent=String(rows.length);
+  head.appendChild(label);head.appendChild(count);section.appendChild(head);
+  const list=document.createElement('div');
+  list.className='extension-debug-section-list';
+  list.setAttribute('role',id==='callstack'?'tree':'list');
+  rows.forEach(row=>{
+    const item=document.createElement('div');
+    item.className='extension-debug-row '+String(row.kind||id)+(row.error?' error':'');
+    item.dataset.debugRowKind=String(row.kind||id);
+    item.dataset.debugRowName=String(row.name||'');
+    item.dataset.debugRowValue=String(row.value||'');
+    item.dataset.debugRowError=String(row.error||'');
+    item.tabIndex=0;
+    item.setAttribute('role',id==='callstack'?'treeitem':'listitem');
+    const name=document.createElement('span');name.className='name';name.textContent=String(row.name||'');
+    const value=document.createElement('span');value.className='value';value.textContent=String(row.error||row.value||row.type||'');
+    item.appendChild(name);item.appendChild(value);list.appendChild(item);
+  });
+  if(!rows.length){
+    const empty=document.createElement('div');empty.className='extension-debug-row empty';
+    empty.innerHTML='<span class="name">No '+title.toLowerCase()+'</span><span class="value"></span>';
+    list.appendChild(empty);
+  }
+  section.appendChild(list);
+  if(opts&&opts.watchForm){
+    const form=document.createElement('form');
+    form.className='extension-debug-watch-form';
+    form.onsubmit=e=>evaluateExtensionDebugWatchExpression(e);
+    const input=document.createElement('input');
+    input.className='extension-debug-watch-input';
+    input.id='extension-debug-watch-input';
+    input.placeholder='Add expression';
+    input.autocomplete='off';
+    const btn=document.createElement('button');
+    btn.type='submit';btn.className='extension-debug-watch-btn';btn.textContent='Watch';
+    form.appendChild(input);form.appendChild(btn);section.appendChild(form);
+  }
+  host.appendChild(section);
+  return section;
+}
+function renderExtensionRuntimeDebugContext(){
+  const host=$('extension-debug-context');
+  const panel=$('extension-runtime-panel');
+  if(!host)return {active:false,variables:0,watches:0,frames:0};
+  const record=extensionRuntimeDebugContextRecord();
+  const hasSession=!!(record&&record.key);
+  const variableRows=hasSession?extensionRuntimeDebugVariableRows(record):[];
+  const watchRows=hasSession?extensionRuntimeDebugWatchRows(record):[];
+  const callStackRows=hasSession?extensionRuntimeDebugCallStackRows(record):[];
+  host.innerHTML='';
+  host.classList.toggle('active',hasSession);
+  host.dataset.debugContextSession=hasSession?String(record.key||''):'';
+  host.dataset.debugContextVariables=String(variableRows.length);
+  host.dataset.debugContextWatches=String(watchRows.length);
+  host.dataset.debugContextFrames=String(callStackRows.length);
+  if(panel){
+    panel.dataset.runtimeDebugContextVisible=hasSession?'1':'0';
+    panel.dataset.runtimeDebugVariableRows=String(variableRows.length);
+    panel.dataset.runtimeDebugWatchRows=String(watchRows.length);
+    panel.dataset.runtimeDebugCallStackRows=String(callStackRows.length);
+    panel.dataset.runtimeDebugActiveSession=hasSession?String(record.key||''):'';
+  }
+  if(!hasSession)return {active:false,variables:0,watches:0,frames:0};
+  renderExtensionDebugSection(host,'variables','Variables',variableRows);
+  renderExtensionDebugSection(host,'watch','Watch',watchRows,{watchForm:true});
+  renderExtensionDebugSection(host,'callstack','Call Stack',callStackRows);
+  return {active:true,variables:variableRows.length,watches:watchRows.length,frames:callStackRows.length};
+}
+async function evaluateExtensionDebugWatchExpression(ev){
+  if(ev&&ev.preventDefault)ev.preventDefault();
+  const input=$('extension-debug-watch-input');
+  const expression=String(input&&input.value||'').trim();
+  if(!expression)return false;
+  const result=await call('evaluate_debug_console',expression);
+  const ok=!!(result&&result.ok);
+  extensionRuntimeDebugWatchExpressions=extensionRuntimeDebugWatchExpressions.filter(item=>item.expression!==expression);
+  extensionRuntimeDebugWatchExpressions.push({
+    expression,
+    value:ok?String(result.result===undefined?'':result.result):'',
+    error:ok?'':callFailedMessage(result,'debug evaluate failed')
+  });
+  appendExtensionDebugConsoleEntry({
+    category:ok?'result':'error',
+    expression,
+    text:ok?String(result.result===undefined?'':result.result):callFailedMessage(result,'debug evaluate failed')
+  });
+  if(input)input.value='';
+  renderExtensionRuntimeDebugContext();
+  return false;
 }
 function renderExtensionRuntimeDebugSessionTree(){
   const tree=$('extension-debug-session-tree');
@@ -39273,7 +39606,8 @@ function renderExtensionRuntimeRunStrip(){
     strip.appendChild(chip);
   });
   const debugTree=renderExtensionRuntimeDebugSessionTree();
-  return {tasks:extensionRuntimeTaskRuns.size,debugSessions:extensionRuntimeDebugSessions.size,visible:rows.length,debugTreeVisible:debugTree.visible};
+  const debugContext=renderExtensionRuntimeDebugContext();
+  return {tasks:extensionRuntimeTaskRuns.size,debugSessions:extensionRuntimeDebugSessions.size,visible:rows.length,debugTreeVisible:debugTree.visible,debugContextActive:debugContext.active};
 }
 function updateExtensionRuntimeTaskLifecycle(data){
   data=data||{};
@@ -39349,6 +39683,11 @@ function updateExtensionRuntimeDebugSession(data){
     stoppedReason:String(data.stoppedReason!==undefined?data.stoppedReason:existing.stoppedReason||''),
     threadId:data.threadId!==undefined?data.threadId:(existing.threadId!==undefined?existing.threadId:''),
     lastEvent:String(data.lastEvent!==undefined?data.lastEvent:existing.lastEvent||''),
+    activeStackItem:data.activeStackItem&&typeof data.activeStackItem==='object'?data.activeStackItem:(existing.activeStackItem||null),
+    scopes:extensionRuntimeDebugArray(data.scopes!==undefined?data.scopes:existing.scopes),
+    variables:extensionRuntimeDebugArray(data.variables!==undefined?data.variables:existing.variables),
+    stackFrames:extensionRuntimeDebugArray(data.stackFrames!==undefined?data.stackFrames:(data.callStack!==undefined?data.callStack:existing.stackFrames)),
+    watches:extensionRuntimeDebugArray(data.watches!==undefined?data.watches:(data.watchExpressions!==undefined?data.watchExpressions:existing.watches)),
     message:String(data.message||''),
     updatedAt:Date.now()
   };
@@ -39376,11 +39715,13 @@ function updateExtensionRuntimeDebugSession(data){
     panel.dataset.runtimeDebugLastEvent=record.lastEvent||'';
   }
   renderExtensionRuntimeDebugSessionTree();
+  renderExtensionRuntimeDebugContext();
   renderExtensionRuntimeDebugConsole();
   return renderExtensionRuntimeRunStrip();
 }
 function extensionRuntimeActiveDebugSessionRecord(){
   const rows=Array.from(extensionRuntimeDebugSessions.values()).reverse();
+  if(extensionRuntimeActiveDebugSessionKey&&extensionRuntimeDebugSessions.has(extensionRuntimeActiveDebugSessionKey))return extensionRuntimeDebugSessions.get(extensionRuntimeActiveDebugSessionKey);
   return rows.find(row=>['started','running','stopped'].includes(String(row.state||'')))||rows[0]||{};
 }
 function appendExtensionDebugConsoleEntry(entry){
@@ -42588,7 +42929,7 @@ function extensionRuntimeDomSelfCheckSnapshot(){
   document.body.appendChild(root);
   const runtimeIds=[
     'extension-runtime-summary','extension-runtime-health','extension-runtime-list','extension-runtime-status',
-    'extension-runtime-run-strip','extension-debug-session-tree','extension-debug-console',
+    'extension-runtime-run-strip','extension-debug-session-tree','extension-debug-context','extension-debug-console',
     'extension-debug-console-list','extension-debug-console-count','extension-debug-console-input',
     'debug-console-panel','debug-console-list','debug-console-count','debug-console-status',
     'debug-console-session-filter','debug-console-input',
@@ -42903,6 +43244,12 @@ function extensionRuntimeDomSelfCheckSnapshot(){
         lastConsoleCategory:'stdout',
         lastEvent:'output',
         threadId:7,
+        activeStackItem:{
+          reason:'entry',
+          thread:{id:7,name:'Main Thread'},
+          frame:{id:11,name:'main',line:12,source:{path:'src/index.ts',name:'index.ts'}},
+          scopes:[{name:'Locals',variables:[{name:'answer',value:'42',type:'number'},{name:'message',value:'ready',type:'string'}]}]
+        },
         message:'Output received'
       });
       window._onEditorEvent('extension_debug_session',{
@@ -42915,6 +43262,14 @@ function extensionRuntimeDomSelfCheckSnapshot(){
         stoppedReason:'breakpoint',
         lastEvent:'stopped',
         threadId:7,
+        activeStackItem:{
+          reason:'breakpoint',
+          thread:{id:7,name:'Main Thread'},
+          frame:{id:11,name:'main',line:12,source:{path:'src/index.ts',name:'index.ts'}},
+          scopes:[{name:'Locals',variables:[{name:'answer',value:'42',type:'number'},{name:'message',value:'ready',type:'string'}]}]
+        },
+        stackFrames:[{id:11,name:'main',line:12,source:{path:'src/index.ts'}},{id:12,name:'bootstrap',line:3,source:{path:'src/bootstrap.ts'}}],
+        watches:[{expression:'answer',value:'42'}],
         message:'Paused on breakpoint'
       });
       const debugPrepare=runtimeList?runtimeList.querySelector('.extension-runtime-row[data-kind="Debugger"] .extension-runtime-mini-action[title^="Prepare debugger"]'):null;
@@ -43053,6 +43408,7 @@ function extensionRuntimeDomSelfCheckSnapshot(){
     const runtimeHealth=$('extension-runtime-health');
     const runtimeRunStrip=$('extension-runtime-run-strip');
     const runtimeDebugTree=$('extension-debug-session-tree');
+    const runtimeDebugContext=$('extension-debug-context');
     const runtimeDebugConsole=$('extension-debug-console');
     const runtimeDebugConsoleList=$('extension-debug-console-list');
     const runtimeBottomDebugConsole=$('debug-console-panel');
@@ -43249,6 +43605,15 @@ function extensionRuntimeDomSelfCheckSnapshot(){
       runtimeDebugTreeCommands:runtimeDebugTree?Array.from(runtimeDebugTree.querySelectorAll('.extension-debug-session-action')).map(item=>item.dataset.debugAction||'').filter(Boolean):[],
       runtimeDebugTreeLastOutputs:runtimeDebugTree?Array.from(runtimeDebugTree.querySelectorAll('.extension-debug-session-row')).map(item=>item.dataset.debugSessionLastOutput||'').filter(Boolean):[],
       runtimeDebugTreeStoppedReasons:runtimeDebugTree?Array.from(runtimeDebugTree.querySelectorAll('.extension-debug-session-row')).map(item=>item.dataset.debugSessionStoppedReason||'').filter(Boolean):[],
+      runtimeDebugContextActive:!!(runtimeDebugContext&&runtimeDebugContext.classList.contains('active')),
+      runtimeDebugContextSections:runtimeDebugContext?runtimeDebugContext.querySelectorAll('.extension-debug-section').length:0,
+      runtimeDebugContextSession:runtimeDebugContext?String(runtimeDebugContext.dataset.debugContextSession||''):'',
+      runtimeDebugContextVariableRows:runtimeDebugContext?Number(runtimeDebugContext.dataset.debugContextVariables)||0:0,
+      runtimeDebugContextWatchRows:runtimeDebugContext?Number(runtimeDebugContext.dataset.debugContextWatches)||0:0,
+      runtimeDebugContextFrameRows:runtimeDebugContext?Number(runtimeDebugContext.dataset.debugContextFrames)||0:0,
+      runtimeDebugContextNames:runtimeDebugContext?Array.from(runtimeDebugContext.querySelectorAll('.extension-debug-row .name')).map(item=>String(item.textContent||'')):[],
+      runtimeDebugContextValues:runtimeDebugContext?Array.from(runtimeDebugContext.querySelectorAll('.extension-debug-row .value')).map(item=>String(item.textContent||'')):[],
+      runtimeDebugWatchForm:!!(runtimeDebugContext&&runtimeDebugContext.querySelector('.extension-debug-watch-form #extension-debug-watch-input')),
       runtimeDebugConsoleEntryCount:extensionRuntimeDebugConsoleEntries.length,
       runtimeDebugPanelConsoleCount:(()=>{const panel=$('extension-runtime-panel');return panel?Number(panel.dataset.runtimeDebugConsoleEntryCount)||0:0})(),
       runtimeDebugPanelLastConsole:(()=>{const panel=$('extension-runtime-panel');return panel?String(panel.dataset.runtimeDebugLastConsole||''):''})(),
@@ -43399,6 +43764,9 @@ function extensionRuntimeDomSelfCheckSnapshot(){
       && snapshot.runtimeTaskProblemCount>=3&&snapshot.runtimeTaskProblemSources.some(value=>value.includes('selftest-owner'))&&snapshot.runtimeTaskProblemSources.some(value=>value.includes('selftest-multiline'))&&snapshot.runtimeTaskProblemCodes.some(value=>value.includes('TS123'))&&snapshot.runtimeTaskProblemCodes.some(value=>value.includes('ML900'))&&snapshot.runtimeTaskProblemMessages.some(value=>value.includes('Selftest task warning'))&&snapshot.runtimeTaskProblemMessages.some(value=>value.includes('First multiline problem'))&&snapshot.runtimeTaskProblemMultilineRows>=2&&snapshot.runtimeTaskProblemEndCharacters.some(value=>value>=13)&&snapshot.runtimeProblemsPanelTaskRows>=3
       && snapshot.runtimeDebugTreeActive&&snapshot.runtimeDebugTreeRows>=1&&snapshot.runtimeDebugTreeActions>=6&&['workbench.action.debug.continue','workbench.action.debug.pause','workbench.action.debug.stepOver','workbench.action.debug.stepInto','workbench.action.debug.stepOut','workbench.action.debug.stop'].every(command=>snapshot.runtimeDebugTreeCommands.includes(command))
       && snapshot.runtimeDebugTreeLastOutputs.some(value=>value.includes('debug selftest output'))&&snapshot.runtimeDebugTreeStoppedReasons.includes('breakpoint')&&snapshot.runtimeDebugConsoleEntryCount>=1&&snapshot.runtimeDebugPanelConsoleCount>=1&&snapshot.runtimeDebugPanelLastConsole.includes('debug selftest output')
+      && snapshot.runtimeDebugContextActive&&snapshot.runtimeDebugContextSections===3&&snapshot.runtimeDebugContextSession==='debug-selftest'
+      && snapshot.runtimeDebugContextVariableRows>=3&&snapshot.runtimeDebugContextWatchRows>=1&&snapshot.runtimeDebugContextFrameRows>=3&&snapshot.runtimeDebugWatchForm
+      && snapshot.runtimeDebugContextNames.includes('Locals')&&snapshot.runtimeDebugContextNames.includes('answer')&&snapshot.runtimeDebugContextNames.includes('main')&&snapshot.runtimeDebugContextValues.includes('42')
       && snapshot.runtimeDebugConsoleActive&&snapshot.runtimeDebugConsoleRenderedEntries>=3&&snapshot.runtimeDebugConsoleCategories.includes('stdout')&&snapshot.runtimeDebugConsoleCategories.includes('input')&&snapshot.runtimeDebugConsoleCategories.includes('result')&&snapshot.runtimeDebugConsoleTexts.some(value=>value.includes('eval:answer'))
       && snapshot.runtimeBottomDebugConsoleActive&&snapshot.runtimeBottomDebugConsoleRenderedEntries>=3&&snapshot.runtimeBottomDebugConsoleCategories.includes('stdout')&&snapshot.runtimeBottomDebugConsoleTexts.some(value=>value.includes('debug selftest output'))&&snapshot.runtimeActionSmoke.bottomDebugConsoleFocused===true&&snapshot.runtimeActionSmoke.bottomDebugConsoleRows>=3
       && snapshot.runtimeActionSmoke.debugConsoleEvaluated===true&&snapshot.runtimeActionSmoke.debugConsoleResult==='eval:answer'
@@ -47859,7 +48227,7 @@ window.renderTerminalProfileSelector=renderTerminalProfileSelector;
 window.openWorkspaceSwitcher=openWorkspaceSwitcher;
 window.setWorkspaceRoot=setWorkspaceRoot;
 window.applyWorkspaceSwitcherInput=applyWorkspaceSwitcherInput;
-window._createTerminal=_createTerminal;window._closeTerminal=_closeTerminal;window._disposeTerminalFromHost=_disposeTerminalFromHost;window._insertTerminalTextFromHost=_insertTerminalTextFromHost;window._renameTerminal=_renameTerminal;window._updateTerminalDimensions=_updateTerminalDimensions;window._setActiveTerminalFromHost=_setActiveTerminalFromHost;window._updateTerminalState=_updateTerminalState;window._updateTerminalShellIntegration=_updateTerminalShellIntegration;window._updateTerminalShellExecution=_updateTerminalShellExecution;window.appendTerminalHostCommandResult=appendTerminalHostCommandResult;window.updateExtensionRuntimeTaskLifecycle=updateExtensionRuntimeTaskLifecycle;window.updateExtensionRuntimeDebugSession=updateExtensionRuntimeDebugSession;window.renderExtensionRuntimeRunStrip=renderExtensionRuntimeRunStrip;
+window._createTerminal=_createTerminal;window._closeTerminal=_closeTerminal;window._disposeTerminalFromHost=_disposeTerminalFromHost;window._insertTerminalTextFromHost=_insertTerminalTextFromHost;window._renameTerminal=_renameTerminal;window._updateTerminalDimensions=_updateTerminalDimensions;window._setActiveTerminalFromHost=_setActiveTerminalFromHost;window._updateTerminalState=_updateTerminalState;window._updateTerminalShellIntegration=_updateTerminalShellIntegration;window._updateTerminalShellExecution=_updateTerminalShellExecution;window.appendTerminalHostCommandResult=appendTerminalHostCommandResult;window.updateExtensionRuntimeTaskLifecycle=updateExtensionRuntimeTaskLifecycle;window.updateExtensionRuntimeDebugSession=updateExtensionRuntimeDebugSession;window.renderExtensionRuntimeRunStrip=renderExtensionRuntimeRunStrip;window.renderExtensionRuntimeDebugContext=renderExtensionRuntimeDebugContext;window.evaluateExtensionDebugWatchExpression=evaluateExtensionDebugWatchExpression;
 (function(){
   const input=$('workspace-switcher-input');if(!input)return;
   input.addEventListener('keydown',e=>{
