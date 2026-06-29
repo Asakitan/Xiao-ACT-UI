@@ -38438,6 +38438,8 @@ function extensionRuntimeSurfaceAction(kind,item,row){
   if(kind==='LMProvider'&&id)return {type:'prepare-lm-provider',label:'Use',title:'Prepare this language-model provider in Assistant',target:id};
   if(kind==='ChatParticipant'&&id)return {type:'open-chat-participant',label:'Chat',title:'Open this chat participant in Assistant',target:id};
   if(kind==='ChatContext'&&id)return {type:'attach-chat-context',label:'Attach',title:'Attach this chat context provider',target:id};
+  if(kind==='TaskDefinition'&&id)return {type:'prepare-task-definition',label:'Task',title:'Prepare this extension task type in Assistant',target:id};
+  if(kind==='Debugger'&&id)return {type:'prepare-debugger',label:'Debug',title:'Prepare this extension debugger type in Assistant',target:id};
   return {type:'inspect',label:'Inspect',title:'Select runtime surface metadata',target:id||command||uri||row.label||''};
 }
 function extensionRuntimeIsWebviewKind(kindOrRow){
@@ -38792,6 +38794,17 @@ function extensionRuntimeSurfaceRows(data){
       surfaceEvidence.statusBarProviderCount?'statusbar:'+surfaceEvidence.statusBarProviderCount:'',
       surfaceEvidence.selectionCount?'selected:'+surfaceEvidence.selectionCount:'',
       surfaceEvidence.affinityCount?'affinity:'+surfaceEvidence.affinityCount:'',
+      surfaceEvidence.providerCount?'providers:'+surfaceEvidence.providerCount:'',
+      surfaceEvidence.problemMatcherCount?'problem-matchers:'+surfaceEvidence.problemMatcherCount:'',
+      surfaceEvidence.configurationProviderCount?'debug-config:'+surfaceEvidence.configurationProviderCount:'',
+      surfaceEvidence.adapterFactoryCount?'debug-adapter:'+surfaceEvidence.adapterFactoryCount:'',
+      surfaceEvidence.adapterTrackerCount?'debug-tracker:'+surfaceEvidence.adapterTrackerCount:'',
+      surfaceEvidence.hasProvideTasks?'provide-tasks':'',
+      surfaceEvidence.hasResolveTask?'resolve-task':'',
+      surfaceEvidence.hasProvideDebugConfigurations?'provide-debug-config':'',
+      surfaceEvidence.hasResolveDebugConfiguration?'resolve-debug-config':'',
+      surfaceEvidence.hasCreateDebugAdapterDescriptor?'debug-adapter-descriptor':'',
+      surfaceEvidence.hasCreateDebugAdapterTracker?'debug-adapter-tracker':'',
       Array.isArray(surfaceEvidence.controllerIds)?surfaceEvidence.controllerIds.join(' '):'',
       Array.isArray(surfaceEvidence.selectedControllerIds)?surfaceEvidence.selectedControllerIds.join(' '):'',
       Array.isArray(surfaceEvidence.affinityControllerIds)?surfaceEvidence.affinityControllerIds.join(' '):'',
@@ -38843,6 +38856,8 @@ function extensionRuntimeSurfaceRows(data){
   (data.commands||[]).filter(item=>item&&item.source==='extension').slice(0,8).forEach(item=>push('Command',item,item.title||item.label||item.command,item.command+(item.menu?' · '+item.menu:''),item.disabled!==true));
   (data.menus||[]).slice(0,8).forEach(item=>push('Menu',item,item.command||item.menu,item.menu+(item.when?' · '+item.when:''),true));
   (data.terminalProfiles||[]).slice(0,8).forEach(item=>push('TerminalProfile',item,item.id||item.profileId,item.id||item.profileId,item.runtimeAvailable!==false));
+  (data.taskDefinitions||[]).slice(0,12).forEach(item=>push('TaskDefinition',item,item.type||item.id,(item.extensionId||'runtime')+' · providers '+(item.providerCount||0)+' · matchers '+(item.problemMatcherCount||0),item.runtimeAvailable!==false));
+  (data.debuggers||[]).slice(0,12).forEach(item=>push('Debugger',item,item.label||item.type,(item.type||item.id)+' · config '+(item.configurationProviderCount||0)+' · adapter '+(item.adapterFactoryCount||0)+' · tracker '+(item.adapterTrackerCount||0),item.runtimeAvailable!==false));
   (data.languageModelTools||[]).slice(0,8).forEach(item=>push('LMTool',item,item.name,item.description||item.name,item.runtimeAvailable!==false));
   (data.languageModelProviders||[]).slice(0,8).forEach(item=>push('LMProvider',item,item.name||item.vendor||item.id,(item.vendor||item.id)+' · models '+(item.modelCount||0),item.runtimeAvailable!==false));
   (data.chatParticipants||[]).slice(0,8).forEach(item=>push('ChatParticipant',item,item.name||item.id,item.id,item.runtimeAvailable!==false));
@@ -38976,6 +38991,12 @@ async function openExtensionRuntimeSurface(rowOrKey){
     }
     if(action.type==='attach-chat-context'){
       ok=attachExtensionRuntimeChatContext(row);markExtensionRuntimeSurfaceAction(rowEl,ok?'success':'error');return ok;
+    }
+    if(action.type==='prepare-task-definition'){
+      ok=prepareExtensionRuntimeAssistantPrompt(row,'Run task type '+action.target+' for this workspace: ','Prepared task type '+action.target+' in Assistant.');markExtensionRuntimeSurfaceAction(rowEl,ok?'success':'error');return ok;
+    }
+    if(action.type==='prepare-debugger'){
+      ok=prepareExtensionRuntimeAssistantPrompt(row,'Start debug configuration type '+action.target+' for this workspace: ','Prepared debugger '+action.target+' in Assistant.');markExtensionRuntimeSurfaceAction(rowEl,ok?'success':'error');return ok;
     }
     if(status)status.textContent='Selected '+row.kind+': '+row.label+'.';
     markExtensionRuntimeSurfaceAction(rowEl,'');
@@ -39212,6 +39233,12 @@ function renderExtensionRuntimeSurfacePanel(data){
     ['Command',summary.commands||0],
     ['Menu',summary.menus||0],
     ['Terminal',summary.terminalProfiles||0],
+    ['Task',summary.taskDefinitions||rows.filter(row=>row.kind==='TaskDefinition').length],
+    ['Task Providers',summary.taskProviders||rows.reduce((n,row)=>n+(row.kind==='TaskDefinition'?(Number(row.surfaceEvidence&&row.surfaceEvidence.providerCount)||0):0),0)],
+    ['Debug',summary.debuggers||rows.filter(row=>row.kind==='Debugger').length],
+    ['Debug Config',summary.debugConfigProviders||rows.reduce((n,row)=>n+(row.kind==='Debugger'?(Number(row.surfaceEvidence&&row.surfaceEvidence.configurationProviderCount)||0):0),0)],
+    ['Debug Adapter',summary.debugAdapterFactories||rows.reduce((n,row)=>n+(row.kind==='Debugger'?(Number(row.surfaceEvidence&&row.surfaceEvidence.adapterFactoryCount)||0):0),0)],
+    ['Debug Tracker',summary.debugAdapterTrackers||rows.reduce((n,row)=>n+(row.kind==='Debugger'?(Number(row.surfaceEvidence&&row.surfaceEvidence.adapterTrackerCount)||0):0),0)],
     ['LM Tool',summary.languageModelTools||0],
     ['LM Provider',summary.languageModelProviders||0],
     ['Chat',summary.chatParticipants||0],
@@ -39261,13 +39288,13 @@ function renderExtensionRuntimeSurfacePanel(data){
   chips.forEach(([label,value])=>{
     const chip=document.createElement('span');chip.className='extension-runtime-chip';
     chip.innerHTML='<strong>'+esc(String(value))+'</strong>'+esc(label);
-    if(['TreeView','WebviewView','WebviewPanel','Panel Ready','Panel Visible','Panel Retained','Panel Messages','CustomEditor','Notebook','Custom Ready','Custom Warnings','Custom Dirty','Notebook Ready','Notebook Warnings','Notebook Kernels','Notebook Status','Command','Menu','Terminal','LM Tool','LM Provider','Chat','Context','Status Bar','Status Commands','Language Status','Language Busy','Language Warnings','Language Errors','Runtime','Manifest','Manifest + Runtime','Runtime Only','Provider Webview','Webview HTML','Missing Webview HTML','Retained Webview','Evidence Ready','Iframe Mounted','Iframe Missing','DOM Visible','Resource Rewrites','Resource Roots','Port Mappings','Webview Messages','Binary Webview','Queued Webview','Dropped Webview','Bridge Ready','Bridge Warnings','Message Stalled','Resource Warnings','Webview Failures','Webview Ready','Webview Warnings'].includes(label)){
+    if(['TreeView','WebviewView','WebviewPanel','Panel Ready','Panel Visible','Panel Retained','Panel Messages','CustomEditor','Notebook','Custom Ready','Custom Warnings','Custom Dirty','Notebook Ready','Notebook Warnings','Notebook Kernels','Notebook Status','Command','Menu','Terminal','Task','Task Providers','Debug','Debug Config','Debug Adapter','Debug Tracker','LM Tool','LM Provider','Chat','Context','Status Bar','Status Commands','Language Status','Language Busy','Language Warnings','Language Errors','Runtime','Manifest','Manifest + Runtime','Runtime Only','Provider Webview','Webview HTML','Missing Webview HTML','Retained Webview','Evidence Ready','Iframe Mounted','Iframe Missing','DOM Visible','Resource Rewrites','Resource Roots','Port Mappings','Webview Messages','Binary Webview','Queued Webview','Dropped Webview','Bridge Ready','Bridge Warnings','Message Stalled','Resource Warnings','Webview Failures','Webview Ready','Webview Warnings'].includes(label)){
       chip.classList.add('filterable');
       chip.tabIndex=0;
       chip.setAttribute('role','button');
       chip.dataset.filterLabel=label;
       chip.onclick=()=>{
-        const kindMap={'Terminal':'TerminalProfile','LM Tool':'LMTool','LM Provider':'LMProvider','Chat':'ChatParticipant','Context':'ChatContext','Status Bar':'StatusBarItem','Status Commands':'StatusBarItem','Language Status':'LanguageStatus','Language Busy':'LanguageStatus','Language Warnings':'LanguageStatus','Language Errors':'LanguageStatus'};
+        const kindMap={'Terminal':'TerminalProfile','Task':'TaskDefinition','Task Providers':'TaskDefinition','Debug':'Debugger','Debug Config':'Debugger','Debug Adapter':'Debugger','Debug Tracker':'Debugger','LM Tool':'LMTool','LM Provider':'LMProvider','Chat':'ChatParticipant','Context':'ChatContext','Status Bar':'StatusBarItem','Status Commands':'StatusBarItem','Language Status':'LanguageStatus','Language Busy':'LanguageStatus','Language Warnings':'LanguageStatus','Language Errors':'LanguageStatus'};
         const sourceMap={Runtime:'manifest+runtime',Manifest:'manifest','Manifest + Runtime':'manifest+runtime','Runtime Only':'runtime-only'};
         const evidenceMap={'Panel Ready':'rendered','Panel Visible':'dom-visible','Panel Retained':'retained','Panel Messages':'messages','Webview HTML':'rendered','Missing Webview HTML':'missing','Retained Webview':'retained','Evidence Ready':'rendered','Iframe Mounted':'iframe-mounted','Iframe Missing':'iframe-missing','DOM Visible':'dom-visible','Resource Rewrites':'resources','Resource Roots':'resources','Port Mappings':'resources','Webview Messages':'messages','Binary Webview':'binary','Queued Webview':'queued','Dropped Webview':'dropped','Bridge Ready':'bridge-ready','Bridge Warnings':'bridge-warning','Message Stalled':'message-stalled','Resource Warnings':'resource-warning','Webview Failures':'failures','Provider Webview':'rendered'};
         const kindSel=$('extension-runtime-filter-kind'),sourceSel=$('extension-runtime-filter-source'),evidenceSel=$('extension-runtime-filter-evidence');
@@ -39383,6 +39410,17 @@ function renderExtensionRuntimeSurfacePanel(data){
       el.dataset.surfaceDetectionTaskCount=String(row.surfaceEvidence&&row.surfaceEvidence.detectionTaskCount||0);
       el.dataset.surfaceSelectionCount=String(row.surfaceEvidence&&row.surfaceEvidence.selectionCount||0);
       el.dataset.surfaceAffinityCount=String(row.surfaceEvidence&&row.surfaceEvidence.affinityCount||0);
+      el.dataset.surfaceProviderCount=String(row.surfaceEvidence&&row.surfaceEvidence.providerCount||0);
+      el.dataset.surfaceProblemMatcherCount=String(row.surfaceEvidence&&row.surfaceEvidence.problemMatcherCount||0);
+      el.dataset.surfaceDebugConfigProviderCount=String(row.surfaceEvidence&&row.surfaceEvidence.configurationProviderCount||0);
+      el.dataset.surfaceDebugAdapterFactoryCount=String(row.surfaceEvidence&&row.surfaceEvidence.adapterFactoryCount||0);
+      el.dataset.surfaceDebugAdapterTrackerCount=String(row.surfaceEvidence&&row.surfaceEvidence.adapterTrackerCount||0);
+      el.dataset.surfaceHasProvideTasks=row.surfaceEvidence&&row.surfaceEvidence.hasProvideTasks?'1':'0';
+      el.dataset.surfaceHasResolveTask=row.surfaceEvidence&&row.surfaceEvidence.hasResolveTask?'1':'0';
+      el.dataset.surfaceHasProvideDebugConfigurations=row.surfaceEvidence&&row.surfaceEvidence.hasProvideDebugConfigurations?'1':'0';
+      el.dataset.surfaceHasResolveDebugConfiguration=row.surfaceEvidence&&row.surfaceEvidence.hasResolveDebugConfiguration?'1':'0';
+      el.dataset.surfaceHasCreateDebugAdapterDescriptor=row.surfaceEvidence&&row.surfaceEvidence.hasCreateDebugAdapterDescriptor?'1':'0';
+      el.dataset.surfaceHasCreateDebugAdapterTracker=row.surfaceEvidence&&row.surfaceEvidence.hasCreateDebugAdapterTracker?'1':'0';
       el.dataset.surfaceSelectedControllerIds=Array.isArray(row.surfaceEvidence&&row.surfaceEvidence.selectedControllerIds)?row.surfaceEvidence.selectedControllerIds.join(','):'';
       el.dataset.surfaceAffinityControllerIds=Array.isArray(row.surfaceEvidence&&row.surfaceEvidence.affinityControllerIds)?row.surfaceEvidence.affinityControllerIds.join(','):'';
       el.dataset.surfaceStatusBarAlignment=String(row.surfaceEvidence&&row.surfaceEvidence.alignmentName||row.alignmentName||'');
@@ -39521,6 +39559,39 @@ function renderExtensionRuntimeSurfacePanel(data){
           ev.codicons?{text:'icons '+ev.codicons}:null,
           ev.hasColor?{text:'color'}:null,
           ev.hasBackgroundColor?{text:'background'}:null,
+        ].filter(Boolean).forEach(item=>{
+          const chip=document.createElement('span');
+          chip.className='extension-runtime-tag surface-evidence'+(item.missing?' missing':'');
+          chip.textContent=item.text;
+          meta.appendChild(chip);
+        });
+      }else if(row.kind==='TaskDefinition'){
+        const ev=row.surfaceEvidence||{};
+        [
+          row.surfaceReadiness?{text:'readiness '+row.surfaceReadiness+(row.surfaceReadinessScore?(' '+row.surfaceReadinessScore):''),missing:row.surfaceReadiness!=='ready'}:null,
+          ...(row.surfaceReadinessIssues||[]).slice(0,2).map(issue=>({text:issue,missing:true})),
+          ev.providerCount?{text:'providers '+ev.providerCount}:null,
+          ev.problemMatcherCount?{text:'matchers '+ev.problemMatcherCount}:null,
+          ev.hasProvideTasks?{text:'provideTasks'}:{text:'no provideTasks',missing:true},
+          ev.hasResolveTask?{text:'resolveTask'}:null,
+        ].filter(Boolean).forEach(item=>{
+          const chip=document.createElement('span');
+          chip.className='extension-runtime-tag surface-evidence'+(item.missing?' missing':'');
+          chip.textContent=item.text;
+          meta.appendChild(chip);
+        });
+      }else if(row.kind==='Debugger'){
+        const ev=row.surfaceEvidence||{};
+        [
+          row.surfaceReadiness?{text:'readiness '+row.surfaceReadiness+(row.surfaceReadinessScore?(' '+row.surfaceReadinessScore):''),missing:row.surfaceReadiness!=='ready'}:null,
+          ...(row.surfaceReadinessIssues||[]).slice(0,2).map(issue=>({text:issue,missing:true})),
+          ev.configurationProviderCount?{text:'config '+ev.configurationProviderCount}:null,
+          ev.adapterFactoryCount?{text:'adapter '+ev.adapterFactoryCount}:null,
+          ev.adapterTrackerCount?{text:'tracker '+ev.adapterTrackerCount}:null,
+          ev.hasProvideDebugConfigurations?{text:'provideConfig'}:null,
+          ev.hasResolveDebugConfiguration?{text:'resolveConfig'}:null,
+          ev.hasCreateDebugAdapterDescriptor?{text:'descriptor'}:{text:'no descriptor',missing:true},
+          ev.hasCreateDebugAdapterTracker?{text:'trackerFactory'}:null,
         ].filter(Boolean).forEach(item=>{
           const chip=document.createElement('span');
           chip.className='extension-runtime-tag surface-evidence'+(item.missing?' missing':'');
@@ -41447,7 +41518,7 @@ function extensionRuntimeDomSelfCheckSnapshot(){
     root.appendChild(notebookOutputHost);
 
     const runtimeData={
-      summary:{treeViews:1,webviewViews:2,webviewPanels:1,webviewPanelReady:1,webviewPanelVisible:1,webviewPanelMessages:2,webviewPanelRetained:1,webviewHtmlAvailable:1,webviewRetained:1,webviewVisible:1,webviewBridgeReady:1,webviewBridgeWarnings:1,webviewMessageStalled:1,webviewResourceWarnings:1,webviewFailureCount:1,customEditors:1,customEditorReady:1,customEditorDirtyStates:1,notebooks:1,notebookReady:1,notebookControllers:1,notebookStatusBarProviders:1,commands:1,menus:1,terminalProfiles:1,languageModelTools:1,languageModelProviders:1,chatParticipants:1,chatContextProviders:1,statusBarItems:1,statusBarCommands:1,languageStatusItems:1,languageStatusWarnings:1,dynamicSurfaces:15},
+      summary:{treeViews:1,webviewViews:2,webviewPanels:1,webviewPanelReady:1,webviewPanelVisible:1,webviewPanelMessages:2,webviewPanelRetained:1,webviewHtmlAvailable:1,webviewRetained:1,webviewVisible:1,webviewBridgeReady:1,webviewBridgeWarnings:1,webviewMessageStalled:1,webviewResourceWarnings:1,webviewFailureCount:1,customEditors:1,customEditorReady:1,customEditorDirtyStates:1,notebooks:1,notebookReady:1,notebookControllers:1,notebookStatusBarProviders:1,commands:1,menus:1,terminalProfiles:1,taskDefinitions:1,taskProviders:1,taskProblemMatchers:1,debuggers:1,debugConfigProviders:1,debugAdapterFactories:1,debugAdapterTrackers:1,languageModelTools:1,languageModelProviders:1,chatParticipants:1,chatContextProviders:1,statusBarItems:1,statusBarCommands:1,languageStatusItems:1,languageStatusWarnings:1,dynamicSurfaces:17},
       viewContainers:[fixtureItem],
       treeViews:[{id:'selftest.dynamic.tree',name:'Runtime Tree',container:'selftest.dynamic.container',extensionId:'selftest.extension',runtimeAvailable:true}],
       webviewViews:[
@@ -41460,6 +41531,8 @@ function extensionRuntimeDomSelfCheckSnapshot(){
       commands:[{command:'selftest.run',title:'Run Fixture',source:'extension',extensionId:'selftest.extension',disabled:false}],
       menus:[{menu:'view/title',command:'selftest.run',when:'view == selftest.dynamic.tree',extensionId:'selftest.extension'}],
       terminalProfiles:[{id:'selftest.terminalProfile',extensionId:'selftest.extension',runtimeAvailable:true}],
+      taskDefinitions:[{type:'selftest.task',extensionId:'selftest.extension',runtimeAvailable:true,providerCount:1,hasProvideTasks:true,hasResolveTask:true,problemMatcherCount:1,runtimeOnly:true,surfaceEvidence:{kind:'taskDefinition',type:'selftest.task',runtimeAvailable:true,providerCount:1,hasProvideTasks:true,hasResolveTask:true,problemMatcherCount:1,readiness:'ready',readinessScore:100,readinessIssues:[]}}],
+      debuggers:[{type:'selftest.debug',label:'Selftest Debugger',extensionId:'selftest.extension',runtimeAvailable:true,configurationProviderCount:1,adapterFactoryCount:1,adapterTrackerCount:1,hasProvideDebugConfigurations:true,hasResolveDebugConfiguration:true,hasCreateDebugAdapterDescriptor:true,hasCreateDebugAdapterTracker:true,runtimeOnly:true,surfaceEvidence:{kind:'debugger',type:'selftest.debug',runtimeAvailable:true,configurationProviderCount:1,adapterFactoryCount:1,adapterTrackerCount:1,hasProvideDebugConfigurations:true,hasResolveDebugConfiguration:true,hasCreateDebugAdapterDescriptor:true,hasCreateDebugAdapterTracker:true,readiness:'ready',readinessScore:100,readinessIssues:[]}}],
       languageModelTools:[{name:'selftest.lmTool',description:'LM tool fixture',extensionId:'selftest.extension',runtimeAvailable:true}],
       languageModelProviders:[{vendor:'selftest.vendor',name:'Selftest LM Provider',modelCount:1,extensionId:'selftest.extension',runtimeAvailable:true}],
       chatParticipants:[{id:'selftest.chat',name:'Selftest Chat',extensionId:'selftest.extension',runtimeAvailable:true}],
@@ -41530,6 +41603,12 @@ function extensionRuntimeDomSelfCheckSnapshot(){
       const contextButton=runtimeActionButtonByType('attach-chat-context');
       if(contextButton)contextButton.click();
       runtimeActionSmoke.contextAttached=chatContextAttachments.some(item=>item&&item.id==='runtime-context:selftest.context');
+      const taskButton=runtimeActionButtonByType('prepare-task-definition');
+      if(taskButton)taskButton.click();
+      runtimeActionSmoke.taskPrompt=$('chat-input')?$('chat-input').value:'';
+      const debugButton=runtimeActionButtonByType('prepare-debugger');
+      if(debugButton)debugButton.click();
+      runtimeActionSmoke.debugPrompt=$('chat-input')?$('chat-input').value:'';
       runtimeActionSmoke.successRows=runtimeList?runtimeList.querySelectorAll('.extension-runtime-row[data-action-state="success"]').length:0;
       runtimeActionSmoke.lastAction=(($('extension-runtime-panel')||{}).dataset||{}).runtimeLastAction||'';
       runtimeActionSmoke.lastActionOk=(($('extension-runtime-panel')||{}).dataset||{}).runtimeLastActionOk||'';
@@ -41769,6 +41848,13 @@ function extensionRuntimeDomSelfCheckSnapshot(){
       runtimeNotebookSelectionRows:runtimeList?Array.from(runtimeList.querySelectorAll('.extension-runtime-row')).filter(row=>Number(row.dataset.surfaceSelectionCount)||0).length:0,
       runtimeNotebookAffinityRows:runtimeList?Array.from(runtimeList.querySelectorAll('.extension-runtime-row')).filter(row=>Number(row.dataset.surfaceAffinityCount)||0).length:0,
       runtimeNotebookSelectedIds:runtimeList?Array.from(runtimeList.querySelectorAll('.extension-runtime-row')).map(row=>row.dataset.surfaceSelectedControllerIds||'').filter(Boolean):[],
+      runtimeTaskDefinitionRows:runtimeList?Array.from(runtimeList.querySelectorAll('.extension-runtime-row')).filter(row=>row.dataset.kind==='TaskDefinition').length:0,
+      runtimeTaskProviderRows:runtimeList?Array.from(runtimeList.querySelectorAll('.extension-runtime-row')).filter(row=>row.dataset.kind==='TaskDefinition'&&(Number(row.dataset.surfaceProviderCount)||0)>0).length:0,
+      runtimeTaskResolveRows:runtimeList?Array.from(runtimeList.querySelectorAll('.extension-runtime-row')).filter(row=>row.dataset.kind==='TaskDefinition'&&row.dataset.surfaceHasResolveTask==='1').length:0,
+      runtimeDebugRows:runtimeList?Array.from(runtimeList.querySelectorAll('.extension-runtime-row')).filter(row=>row.dataset.kind==='Debugger').length:0,
+      runtimeDebugConfigRows:runtimeList?Array.from(runtimeList.querySelectorAll('.extension-runtime-row')).filter(row=>row.dataset.kind==='Debugger'&&(Number(row.dataset.surfaceDebugConfigProviderCount)||0)>0).length:0,
+      runtimeDebugAdapterRows:runtimeList?Array.from(runtimeList.querySelectorAll('.extension-runtime-row')).filter(row=>row.dataset.kind==='Debugger'&&(Number(row.dataset.surfaceDebugAdapterFactoryCount)||0)>0).length:0,
+      runtimeDebugTrackerRows:runtimeList?Array.from(runtimeList.querySelectorAll('.extension-runtime-row')).filter(row=>row.dataset.kind==='Debugger'&&(Number(row.dataset.surfaceDebugAdapterTrackerCount)||0)>0).length:0,
       runtimeStatusBarRows:runtimeList?Array.from(runtimeList.querySelectorAll('.extension-runtime-row')).filter(row=>row.dataset.kind==='StatusBarItem').length:0,
       runtimeStatusBarCommandRows:runtimeList?Array.from(runtimeList.querySelectorAll('.extension-runtime-row')).filter(row=>row.dataset.kind==='StatusBarItem'&&row.dataset.surfaceHasCommand==='1').length:0,
       runtimeStatusBarLeftRows:runtimeList?Array.from(runtimeList.querySelectorAll('.extension-runtime-row')).filter(row=>row.dataset.kind==='StatusBarItem'&&row.dataset.surfaceStatusBarAlignment==='left').length:0,
@@ -41855,7 +41941,7 @@ function extensionRuntimeDomSelfCheckSnapshot(){
       && snapshot.activityRole==='button'&&snapshot.activityTabIndex===0&&snapshot.activityLabel.includes('Selftest Extensions')&&snapshot.activityPanel==='ext-vc-selftest.dynamic.container'
       && snapshot.customPlaceholder&&snapshot.customDataset.viewType==='selftest.customEditor'&&snapshot.customCapabilities
       && snapshot.notebookOutputItems===3&&snapshot.notebookHtmlFrame&&snapshot.notebookImage&&snapshot.notebookText
-      && snapshot.runtimeRows>=15&&snapshot.runtimeReadyRows>=14&&snapshot.runtimeChips>=26
+      && snapshot.runtimeRows>=17&&snapshot.runtimeReadyRows>=16&&snapshot.runtimeChips>=32
       && snapshot.runtimeWebviewEvidenceRows>=6&&snapshot.runtimeHtmlEvidenceRows>=1&&snapshot.runtimeMissingEvidenceFilterVisible>=1&&snapshot.runtimeWebviewRetainedRows>=1
       && snapshot.runtimeWebviewMessageRows>=1&&snapshot.runtimeWebviewBinaryRows>=1&&snapshot.runtimeWebviewBinaryTypes.some(value=>value.includes('Uint8Array'))&&snapshot.runtimeWebviewQueuedRows>=2&&snapshot.runtimeWebviewDroppedRows>=1&&snapshot.runtimeWebviewSeqRows>=1&&snapshot.runtimeWebviewLastDropReasons.includes('disposed-queue')
       && snapshot.runtimeWebviewBridgeReadyRows>=1&&snapshot.runtimeWebviewBridgeWarningRows>=1&&snapshot.runtimeWebviewMessageStalledRows>=1
@@ -41868,6 +41954,8 @@ function extensionRuntimeDomSelfCheckSnapshot(){
       && snapshot.runtimeCustomSaveRows>=1&&snapshot.runtimeCustomBackupRows>=1&&snapshot.runtimeCustomMultiRows>=1
       && snapshot.runtimeNotebookControllerRows>=1&&snapshot.runtimeNotebookStatusRows>=1
       && snapshot.runtimeNotebookSelectionRows>=1&&snapshot.runtimeNotebookAffinityRows>=1&&snapshot.runtimeNotebookSelectedIds.some(value=>value.includes('selftest.notebookController'))
+      && snapshot.runtimeTaskDefinitionRows>=1&&snapshot.runtimeTaskProviderRows>=1&&snapshot.runtimeTaskResolveRows>=1
+      && snapshot.runtimeDebugRows>=1&&snapshot.runtimeDebugConfigRows>=1&&snapshot.runtimeDebugAdapterRows>=1&&snapshot.runtimeDebugTrackerRows>=1
       && snapshot.runtimeStatusBarRows>=1&&snapshot.runtimeStatusBarCommandRows>=1&&snapshot.runtimeStatusBarLeftRows>=1
       && snapshot.runtimeLanguageStatusRows>=1&&snapshot.runtimeLanguageBusyRows>=1&&snapshot.runtimeLanguageWarningRows>=1
       && snapshot.runtimeEvidencePills===snapshot.runtimeRows&&snapshot.runtimeEvidenceStatuses.includes('rendered')&&(snapshot.runtimeEvidenceStatuses.includes('missing')||snapshot.runtimeEvidenceStatuses.includes('partial'))
@@ -41877,32 +41965,35 @@ function extensionRuntimeDomSelfCheckSnapshot(){
       && ['queued','dropped','message-stalled'].some(filter=>snapshot.runtimeHealthFilters.includes(filter))
       && snapshot.runtimeHealthStates.includes('warning')&&snapshot.runtimeHealthStates.includes('error')
       && snapshot.runtimeListRole==='list'&&snapshot.runtimeListItems===snapshot.runtimeRows
-      && snapshot.runtimeDatasetReady===snapshot.runtimeReadyRows&&snapshot.runtimePanelCount==='15'
-      && snapshot.runtimeOpenableRows===snapshot.runtimeRows&&snapshot.runtimeOpenableRows>=15&&snapshot.runtimeActionButtons===snapshot.runtimeRows
+      && snapshot.runtimeDatasetReady===snapshot.runtimeReadyRows&&snapshot.runtimePanelCount==='17'
+      && snapshot.runtimeOpenableRows===snapshot.runtimeRows&&snapshot.runtimeOpenableRows>=17&&snapshot.runtimeActionButtons===snapshot.runtimeRows
       && snapshot.runtimeRowKeys===snapshot.runtimeRows&&snapshot.runtimeContainerRows>=2
-      && ['Open','Run','Use','Chat','Attach'].every(label=>snapshot.runtimeActionButtonLabels.includes(label))
-      && ['open-view','open-webview','open-file','run-command','open-terminal-profile','prepare-lm-tool','prepare-lm-provider','open-chat-participant','attach-chat-context'].every(kind=>snapshot.runtimeActionTypes.includes(kind))
+      && ['Open','Run','Use','Chat','Attach','Task','Debug'].every(label=>snapshot.runtimeActionButtonLabels.includes(label))
+      && ['open-view','open-webview','open-file','run-command','open-terminal-profile','prepare-lm-tool','prepare-lm-provider','open-chat-participant','attach-chat-context','prepare-task-definition','prepare-debugger'].every(kind=>snapshot.runtimeActionTypes.includes(kind))
       && snapshot.runtimeActionTargets.includes('selftest.dynamic.tree')&&snapshot.runtimeActionTargets.includes('selftest.dynamic.webview')&&snapshot.runtimeActionTargets.includes('selftest.run')
       && snapshot.runtimeActionTargets.includes('selftest.dynamic.panel')
       && snapshot.runtimeActionTargets.includes('selftest.terminalProfile')&&snapshot.runtimeActionTargets.includes('selftest.lmTool')&&snapshot.runtimeActionTargets.includes('selftest.vendor')&&snapshot.runtimeActionTargets.includes('selftest.chat')&&snapshot.runtimeActionTargets.includes('selftest.context')
-      && snapshot.runtimePanelVisibleCount==='15'&&snapshot.runtimePanelTotalCount==='15'
-      && snapshot.runtimeDatasetSources.includes('runtime-only')&&snapshot.runtimeStatusText.includes('15 visible of 15 rows')
-      && snapshot.runtimeFilterKinds.includes('LMTool')&&snapshot.runtimeFilterKinds.includes('WebviewPanel')&&snapshot.runtimeFilterKinds.includes('StatusBarItem')&&snapshot.runtimeFilterKinds.includes('LanguageStatus')&&snapshot.runtimeFilterBefore.visible===15
-      && snapshot.runtimeKindFilterVisible===1&&snapshot.runtimeSourceFilterVisible===15&&snapshot.runtimeRenderedEvidenceFilterVisible>=2&&snapshot.runtimeMissingEvidenceFilterVisible===1&&snapshot.runtimeBinaryEvidenceFilterVisible>=1
+      && snapshot.runtimeActionTargets.includes('selftest.task')&&snapshot.runtimeActionTargets.includes('selftest.debug')
+      && snapshot.runtimePanelVisibleCount==='17'&&snapshot.runtimePanelTotalCount==='17'
+      && snapshot.runtimeDatasetSources.includes('runtime-only')&&snapshot.runtimeStatusText.includes('17 visible of 17 rows')
+      && snapshot.runtimeFilterKinds.includes('LMTool')&&snapshot.runtimeFilterKinds.includes('WebviewPanel')&&snapshot.runtimeFilterKinds.includes('TaskDefinition')&&snapshot.runtimeFilterKinds.includes('Debugger')&&snapshot.runtimeFilterKinds.includes('StatusBarItem')&&snapshot.runtimeFilterKinds.includes('LanguageStatus')&&snapshot.runtimeFilterBefore.visible===17
+      && snapshot.runtimeKindFilterVisible===1&&snapshot.runtimeSourceFilterVisible===17&&snapshot.runtimeRenderedEvidenceFilterVisible>=2&&snapshot.runtimeMissingEvidenceFilterVisible===1&&snapshot.runtimeBinaryEvidenceFilterVisible>=1
       && snapshot.runtimeMessageEvidenceFilterVisible>=1&&snapshot.runtimeQueuedEvidenceFilterVisible>=2&&snapshot.runtimeDroppedEvidenceFilterVisible>=1&&snapshot.runtimeTextFilterVisible===1
       && snapshot.runtimeBridgeReadyFilterVisible>=1&&snapshot.runtimeBridgeWarningFilterVisible>=1&&snapshot.runtimeMessageStalledFilterVisible>=1&&snapshot.runtimeResourceWarningFilterVisible>=1&&snapshot.runtimeFailuresFilterVisible>=1
       && snapshot.runtimePortHitFilterVisible>=1&&snapshot.runtimeQueueStaleFilterVisible>=1&&snapshot.runtimeLifecycleFilterVisible>=2
       && snapshot.runtimeSelectedRows===1&&snapshot.runtimeSelectStatus.includes('Selected')
       && snapshot.runtimeChipFilterKind==='LMTool'
-      && snapshot.runtimeActionStateRows>=4
+      && snapshot.runtimeActionStateRows>=6
       && snapshot.runtimeActionSmoke.keyboardEnterToolInput==='#selftest.lmTool '
       && snapshot.runtimeActionSmoke.terminalProfileOpened===true
       && snapshot.runtimeActionSmoke.providerPrompt.includes('selftest.vendor')
       && snapshot.runtimeActionSmoke.participantPrompt==='@selftest.chat '
       && snapshot.runtimeActionSmoke.contextAttached===true
-      && snapshot.runtimeActionSmoke.lastAction==='attach-chat-context'
+      && snapshot.runtimeActionSmoke.taskPrompt.includes('selftest.task')
+      && snapshot.runtimeActionSmoke.debugPrompt.includes('selftest.debug')
+      && snapshot.runtimeActionSmoke.lastAction==='prepare-debugger'
       && snapshot.runtimeActionSmoke.lastActionOk==='1'
-      && ['WebviewPanel','TerminalProfile','LMTool','LMProvider','ChatParticipant','ChatContext','StatusBarItem','LanguageStatus'].every(kind=>snapshot.runtimeKinds.includes(kind))
+      && ['WebviewPanel','TerminalProfile','TaskDefinition','Debugger','LMTool','LMProvider','ChatParticipant','ChatContext','StatusBarItem','LanguageStatus'].every(kind=>snapshot.runtimeKinds.includes(kind))
       && snapshot.menuRole==='menu'&&snapshot.menuItems===2&&snapshot.menuDisabled===1&&snapshot.menuMetadata.includes('selftest.dynamic.tree')
       && snapshot.webviewLifecycle.rendered&&snapshot.webviewLifecycle.seq>=4
       && snapshot.webviewLifecycle.title==='Lifecycle Updated'

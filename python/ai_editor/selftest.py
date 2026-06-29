@@ -11906,12 +11906,16 @@ console.log("frontend word separator behavior ok");
            and "if(kind==='LMProvider'&&id)return {type:'prepare-lm-provider'" in html
            and "if(kind==='ChatParticipant'&&id)return {type:'open-chat-participant'" in html
            and "if(kind==='ChatContext'&&id)return {type:'attach-chat-context'" in html
+           and "if(kind==='TaskDefinition'&&id)return {type:'prepare-task-definition'" in html
+           and "if(kind==='Debugger'&&id)return {type:'prepare-debugger'" in html
            and "if(kind==='WebviewPanel'&&id)return {type:'open-webview'" in html
            and "if(action.type==='open-terminal-profile')" in html
            and "if(action.type==='prepare-lm-tool')" in html
            and "if(action.type==='prepare-lm-provider')" in html
            and "if(action.type==='open-chat-participant')" in html
            and "if(action.type==='attach-chat-context')" in html
+           and "if(action.type==='prepare-task-definition')" in html
+           and "if(action.type==='prepare-debugger')" in html
            and "panel.dataset.runtimeSurfaceCount=String(summary.dynamicSurfaces||rows.length||0);" in html
            and "panel.dataset.runtimeOnlySurfaceCount=String(summary.runtimeOnlySurfaces||rows.filter(row=>row.source==='runtime-only').length);" in html
            and "panel.dataset.providerBackedWebviewCount=String(summary.providerBackedWebviews||rows.filter(row=>row.kind==='WebviewView'&&row.providerBacked).length);" in html
@@ -12053,6 +12057,8 @@ console.log("frontend word separator behavior ok");
            and "['Evidence Ready',rows.filter(row=>row.evidenceStatus==='rendered').length]" in html
            and "(data.webviewPanels||[]).slice(0,8).forEach(item=>push('WebviewPanel'" in html
            and "(data.terminalProfiles||[]).slice(0,8).forEach(item=>push('TerminalProfile'" in html
+           and "(data.taskDefinitions||[]).slice(0,12).forEach(item=>push('TaskDefinition'" in html
+           and "(data.debuggers||[]).slice(0,12).forEach(item=>push('Debugger'" in html
            and "(data.languageModelTools||[]).slice(0,8).forEach(item=>push('LMTool'" in html
            and "(data.languageModelProviders||[]).slice(0,8).forEach(item=>push('LMProvider'" in html
            and "(data.chatParticipants||[]).slice(0,8).forEach(item=>push('ChatParticipant'" in html
@@ -12060,6 +12066,12 @@ console.log("frontend word separator behavior ok");
            and "extensionRuntimeStatusBarRows(data).slice(0,12).forEach(item=>push('StatusBarItem'" in html
            and "extensionRuntimeLanguageStatusRows(data).slice(0,12).forEach(item=>push('LanguageStatus'" in html
            and "['Terminal',summary.terminalProfiles||0]" in html
+           and "['Task',summary.taskDefinitions||rows.filter(row=>row.kind==='TaskDefinition').length]" in html
+           and "['Task Providers',summary.taskProviders||rows.reduce" in html
+           and "['Debug',summary.debuggers||rows.filter(row=>row.kind==='Debugger').length]" in html
+           and "['Debug Config',summary.debugConfigProviders||rows.reduce" in html
+           and "['Debug Adapter',summary.debugAdapterFactories||rows.reduce" in html
+           and "['Debug Tracker',summary.debugAdapterTrackers||rows.reduce" in html
            and "['LM Tool',summary.languageModelTools||0]" in html
            and "['LM Provider',summary.languageModelProviders||0]" in html
            and "['Chat',summary.chatParticipants||0]" in html
@@ -12070,11 +12082,19 @@ console.log("frontend word separator behavior ok");
            and "['Language Busy',summary.languageStatusBusy||" in html
            and "['Language Warnings',summary.languageStatusWarnings||" in html
            and "el.dataset.surfaceStatusBarAlignment=String(row.surfaceEvidence&&row.surfaceEvidence.alignmentName||row.alignmentName||'');" in html
+           and "el.dataset.surfaceProviderCount=String(row.surfaceEvidence&&row.surfaceEvidence.providerCount||0);" in html
+           and "el.dataset.surfaceDebugAdapterTrackerCount=String(row.surfaceEvidence&&row.surfaceEvidence.adapterTrackerCount||0);" in html
+           and "el.dataset.surfaceHasResolveTask=row.surfaceEvidence&&row.surfaceEvidence.hasResolveTask?'1':'0';" in html
+           and "el.dataset.surfaceHasCreateDebugAdapterDescriptor=row.surfaceEvidence&&row.surfaceEvidence.hasCreateDebugAdapterDescriptor?'1':'0';" in html
            and "el.dataset.surfaceLanguageSeverityName=String(row.surfaceEvidence&&row.surfaceEvidence.severityName||'');" in html
            and "runtimeStatusBarRows" in html
            and "runtimeLanguageStatusRows" in html
+           and "runtimeTaskDefinitionRows" in html
+           and "runtimeDebugAdapterRows" in html
            and "snapshot.runtimeStatusBarRows>=1" in html
            and "snapshot.runtimeLanguageStatusRows>=1" in html
+           and "snapshot.runtimeTaskDefinitionRows>=1" in html
+           and "snapshot.runtimeDebugRows>=1" in html
            and "TreeView" in html
            and "WebviewView" in html
            and "WebviewPanel" in html
@@ -12083,6 +12103,8 @@ console.log("frontend word separator behavior ok");
            and "Command" in html
            and "Menu" in html
            and "TerminalProfile" in html
+           and "TaskDefinition" in html
+           and "Debugger" in html
            and "LMTool" in html
            and "LMProvider" in html
            and "ChatParticipant" in html
@@ -14337,6 +14359,8 @@ console.log("extension setting schema helpers ok");
            and "lmToolRow.dispatchEvent(new KeyboardEvent('keydown',{key:'Enter',bubbles:true,cancelable:true}));" in html
            and "runtimeActionSmoke.terminalProfileOpened=_terminals.some(term=>term&&term.metadata&&term.metadata.profile==='selftest.terminalProfile');" in html
            and "runtimeActionSmoke.contextAttached=chatContextAttachments.some(item=>item&&item.id==='runtime-context:selftest.context');" in html
+           and "runtimeActionSmoke.taskPrompt=$('chat-input')?$('chat-input').value:'';" in html
+           and "runtimeActionSmoke.debugPrompt=$('chat-input')?$('chat-input').value:'';" in html
            and "_terminals.filter(term=>term&&!previousTerminalIds.has(term.id)).map(term=>term.id).slice().forEach(id=>_closeTerminal(id));" in html
            and "showExtensionActionMenu(2,2" in html
            and "snapshot.pass=snapshot.containerRole==='group'" in html
@@ -14376,20 +14400,20 @@ console.log("extension setting schema helpers ok");
            and "['Open','Refresh','Copy'].every(label=>snapshot.webviewActionLabels.includes(label))" in html
            and "snapshot.customPlaceholder&&snapshot.customDataset.viewType==='selftest.customEditor'" in html
            and "snapshot.notebookOutputItems===3" in html
-           and "snapshot.runtimeRows>=15" in html
-           and "snapshot.runtimeChips>=26" in html
+           and "snapshot.runtimeRows>=17" in html
+           and "snapshot.runtimeChips>=32" in html
            and "snapshot.runtimeHealthCards>=5" in html
            and "snapshot.runtimeHealthWarnings>=2" in html
            and "snapshot.runtimeHealthErrors>=1" in html
            and "['bridge-warning','resource-warning','failures'].every(filter=>snapshot.runtimeHealthFilters.includes(filter))" in html
            and "['queued','dropped','message-stalled'].some(filter=>snapshot.runtimeHealthFilters.includes(filter))" in html
            and "snapshot.runtimeOpenableRows===snapshot.runtimeRows" in html
-           and "snapshot.runtimeOpenableRows>=15" in html
+           and "snapshot.runtimeOpenableRows>=17" in html
            and "snapshot.runtimeActionButtons===snapshot.runtimeRows" in html
            and "snapshot.runtimeRowKeys===snapshot.runtimeRows" in html
            and "snapshot.runtimeContainerRows>=2" in html
-           and "['Open','Run','Use','Chat','Attach'].every(label=>snapshot.runtimeActionButtonLabels.includes(label))" in html
-           and "['open-view','open-webview','open-file','run-command','open-terminal-profile','prepare-lm-tool','prepare-lm-provider','open-chat-participant','attach-chat-context'].every(kind=>snapshot.runtimeActionTypes.includes(kind))" in html
+           and "['Open','Run','Use','Chat','Attach','Task','Debug'].every(label=>snapshot.runtimeActionButtonLabels.includes(label))" in html
+           and "['open-view','open-webview','open-file','run-command','open-terminal-profile','prepare-lm-tool','prepare-lm-provider','open-chat-participant','attach-chat-context','prepare-task-definition','prepare-debugger'].every(kind=>snapshot.runtimeActionTypes.includes(kind))" in html
            and "snapshot.runtimeActionTargets.includes('selftest.dynamic.tree')" in html
            and "snapshot.runtimeActionTargets.includes('selftest.dynamic.webview')" in html
            and "snapshot.runtimeActionTargets.includes('selftest.run')" in html
@@ -14398,6 +14422,8 @@ console.log("extension setting schema helpers ok");
            and "snapshot.runtimeActionTargets.includes('selftest.vendor')" in html
            and "snapshot.runtimeActionTargets.includes('selftest.chat')" in html
            and "snapshot.runtimeActionTargets.includes('selftest.context')" in html
+           and "snapshot.runtimeActionTargets.includes('selftest.task')" in html
+           and "snapshot.runtimeActionTargets.includes('selftest.debug')" in html
            and "runtimeListRole:runtimeList?runtimeList.getAttribute('role'):''" in html
            and "runtimeDatasetSources:runtimeList?Array.from(runtimeList.querySelectorAll('.extension-runtime-row')).map(item=>item.dataset.source||''):[]" in html
            and "runtimePanelCount:(()=>{const panel=$('extension-runtime-panel');return panel?panel.dataset.runtimeSurfaceCount:''})()" in html
@@ -14406,25 +14432,31 @@ console.log("extension setting schema helpers ok");
            and "runtimeKindFilterVisible:runtimeKindFilterResult?runtimeKindFilterResult.visible:0" in html
            and "runtimeSelectedRows:runtimeList?runtimeList.querySelectorAll('.extension-runtime-row.selected[aria-selected=\"true\"]').length:0" in html
            and "snapshot.runtimeListRole==='list'" in html
-           and "snapshot.runtimeStatusText.includes('15 visible of 15 rows')" in html
+           and "snapshot.runtimeStatusText.includes('17 visible of 17 rows')" in html
            and "snapshot.runtimeFilterKinds.includes('LMTool')" in html
            and "snapshot.runtimeFilterKinds.includes('StatusBarItem')" in html
            and "snapshot.runtimeFilterKinds.includes('LanguageStatus')" in html
+           and "snapshot.runtimeFilterKinds.includes('TaskDefinition')" in html
+           and "snapshot.runtimeFilterKinds.includes('Debugger')" in html
            and "snapshot.runtimeKindFilterVisible===1" in html
            and "snapshot.runtimeRenderedEvidenceFilterVisible>=2" in html
            and "snapshot.runtimeMissingEvidenceFilterVisible===1" in html
            and "snapshot.runtimeTextFilterVisible===1" in html
            and "snapshot.runtimeSelectedRows===1" in html
            and "snapshot.runtimeChipFilterKind==='LMTool'" in html
-           and "snapshot.runtimeActionStateRows>=4" in html
+           and "snapshot.runtimeTaskDefinitionRows>=1&&snapshot.runtimeTaskProviderRows>=1&&snapshot.runtimeTaskResolveRows>=1" in html
+           and "snapshot.runtimeDebugRows>=1&&snapshot.runtimeDebugConfigRows>=1&&snapshot.runtimeDebugAdapterRows>=1&&snapshot.runtimeDebugTrackerRows>=1" in html
+           and "snapshot.runtimeActionStateRows>=6" in html
            and "snapshot.runtimeActionSmoke.keyboardEnterToolInput==='#selftest.lmTool '" in html
            and "snapshot.runtimeActionSmoke.terminalProfileOpened===true" in html
            and "snapshot.runtimeActionSmoke.providerPrompt.includes('selftest.vendor')" in html
            and "snapshot.runtimeActionSmoke.participantPrompt==='@selftest.chat '" in html
            and "snapshot.runtimeActionSmoke.contextAttached===true" in html
-           and "snapshot.runtimeActionSmoke.lastAction==='attach-chat-context'" in html
+           and "snapshot.runtimeActionSmoke.taskPrompt.includes('selftest.task')" in html
+           and "snapshot.runtimeActionSmoke.debugPrompt.includes('selftest.debug')" in html
+           and "snapshot.runtimeActionSmoke.lastAction==='prepare-debugger'" in html
            and "snapshot.runtimeActionSmoke.lastActionOk==='1'" in html
-           and "['WebviewPanel','TerminalProfile','LMTool','LMProvider','ChatParticipant','ChatContext','StatusBarItem','LanguageStatus'].every(kind=>snapshot.runtimeKinds.includes(kind))" in html
+           and "['WebviewPanel','TerminalProfile','TaskDefinition','Debugger','LMTool','LMProvider','ChatParticipant','ChatContext','StatusBarItem','LanguageStatus'].every(kind=>snapshot.runtimeKinds.includes(kind))" in html
            and "window._onEditorEvent('render_webview_panel',{view_id:lifecycleViewId" in html
            and "window._onEditorEvent('update_webview_panel_title',{view_id:lifecycleViewId" in html
            and "window._onEditorEvent('update_webview_panel_icon',{view_id:lifecycleViewId" in html
