@@ -7592,10 +7592,15 @@ def test_phase1_ai_editor_regressions() -> None:
             and "function scheduleEditorHover(event)" in html
             and "function editorFormatOnSaveEnabled()" in html
            and "function editorDefaultFormatter()" in html
-           and "async function requestEditorFormattingProviders()" in html
+           and "async function requestEditorFormattingProviders(options)" in html
            and "editorProviderPayload('formattingProviders',{matchedOnly:true})" in html
            and "editorRequestLanguageProvider('formattingProviders'" in html
-           and "function editorFormatterProviderIsDefault(provider)" in html
+           and "function editorFormatterProviderIsDefault(provider,value)" in html
+           and "function renderEditorFormatterProviderChips(hostId,inputId,providers)" in html
+           and "async function refreshEditorFormatterProviderSettings()" in html
+           and "async function pickSettingsDefaultFormatter(inputId)" in html
+           and "id=\"s-editor-formatter-detected\"" in html
+           and "id=\"s-editor-lang-formatter-detected\"" in html
            and "palette.dataset.formatterCount=String(providers.length);" in html
            and "d.dataset.formatterProviderId=provider.providerId;" in html
            and "function showEditorFormatterPicker(providers)" in html
@@ -9263,7 +9268,8 @@ assert(showEditorHover([], { line: 0, character: 0 }) === false
        "empty hover closes widget");
 showEditorCodeActions([
   { title: "disabled fix", disabled: { reason: "needs selection" }, kind: { value: "quickfix" } },
-  { title: "enabled refactor", kind: { value: "refactor.extract" }, isPreferred: true, source: "selftest.ext" },
+  { title: "enabled refactor", kind: { value: "refactor.extract" }, isPreferred: true, source: "selftest.ext",
+    diagnostics: [{ message: "diag" }], edit: [{ range: {}, newText: "x" }], command: { command: "selftest.run" } },
 ], { line: 0, character: 0 });
 assert(actionsBox.children.length === 2
        && actionsBox.children[0].className.includes("disabled")
@@ -9271,10 +9277,16 @@ assert(actionsBox.children.length === 2
        && actionsBox.children[0].dataset.codeActionBucket === "quickfix"
        && actionsBox.children[1].dataset.codeActionPreferred === "1"
        && actionsBox.children[1].dataset.codeActionSource === "selftest.ext"
+       && actionsBox.children[1].dataset.codeActionHasEdit === "1"
+       && actionsBox.children[1].dataset.codeActionHasCommand === "1"
+       && actionsBox.children[1].dataset.codeActionDiagnosticCount === "1"
        && actionsBox.dataset.codeActionPreferred === "1"
        && actionsBox.dataset.codeActionDisabled === "1"
        && actionsBox.dataset.codeActionQuickfix === "1"
        && actionsBox.dataset.codeActionRefactor === "1"
+       && actionsBox.dataset.codeActionEditable === "1"
+       && actionsBox.dataset.codeActionCommandOnly === "0"
+       && actionsBox.dataset.codeActionDiagnostics === "1"
        && nodeText(actionsBox.children[0]).includes("needs selection")
        && nodeText(actionsBox.children[1]).includes("refactor")
        && codeActionKindBucket({ value: "source.organizeImports" }) === "source"
@@ -16410,6 +16422,9 @@ console.log("command palette quick access helpers ok");
            in html
            and "fallbackActions=providerActions.length?[]:(fixAll?[fixAll]:editorFallbackCodeActions"
            in html
+           and "appliedKind:actionKind" in html
+           and "appliedSource:actionSource" in html
+           and "box.dataset.codeActionEditable=String(summary.editable);" in html
            and "const fallbackFormatted=formatEditorFallbackDocument(opts);"
            in html
            and "const fallback=formatEditorFallbackRange(range,opts);"

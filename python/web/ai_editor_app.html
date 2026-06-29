@@ -2288,6 +2288,9 @@ button.review-pill { cursor:pointer; }
   background:var(--bg3); color:var(--fg-dim); font:10px var(--mono); }
 .settings-language-actions,.settings-language-chips { display:flex; flex-wrap:wrap; gap:5px; align-items:center; }
 .settings-language-actions { margin-bottom:6px; }
+.settings-inline-row { display:flex; gap:6px; align-items:center; }
+.settings-inline-row input,.settings-inline-row select { min-width:0; flex:1; }
+.settings-inline-row button { flex:0 0 auto; }
 .settings-language-actions button,.settings-language-chips button { height:22px; padding:1px 7px; border:1px solid var(--border);
   border-radius:4px; background:var(--bg3); color:var(--fg-dim); font:11px var(--sans); cursor:pointer; }
 .settings-language-actions button:hover,.settings-language-actions button:focus,
@@ -4818,8 +4821,12 @@ pre.code-block { overflow:visible; }
     <div class="settings-section" data-settings-id="editor" data-settings-title="Editor / Files">
       <div class="sb-group" style="padding:0;margin-top:0">Editor</div>
       <label>Default Formatter</label>
-      <input id="s-editor-default-formatter" placeholder="publisher.extension-id" style="width:100%">
+      <div class="settings-inline-row">
+        <input id="s-editor-default-formatter" placeholder="publisher.extension-id" style="width:100%">
+        <button type="button" onclick="pickSettingsDefaultFormatter('s-editor-default-formatter')">Pick</button>
+      </div>
       <div class="settings-help">Matches VS Code's editor.defaultFormatter and is used by Format Document, Format Selection, and format on save.</div>
+      <div id="s-editor-formatter-detected" class="settings-language-chips"></div>
       <div class="settings-grid">
         <div><label>Tab Size</label><input id="s-editor-tab-size" type="number" min="1" max="16" step="1" style="width:100%"></div>
         <label class="settings-check"><input id="s-editor-insert-spaces" type="checkbox"><span><b>Insert spaces</b><small>Use spaces instead of tab characters when formatting.</small></span></label>
@@ -4934,7 +4941,11 @@ pre.code-block { overflow:visible; }
       <div class="settings-help" id="s-editor-lang-override-info">Writes VS Code-style [language] editor settings for the active editor language.</div>
       <label class="settings-check"><input id="s-editor-lang-override-enabled" type="checkbox"><span><b>Override current language</b><small>Use these values only when the active editor has this language id.</small></span></label>
       <label>Default Formatter</label>
-      <input id="s-editor-lang-default-formatter" placeholder="publisher.extension-id" style="width:100%">
+      <div class="settings-inline-row">
+        <input id="s-editor-lang-default-formatter" placeholder="publisher.extension-id" style="width:100%">
+        <button type="button" onclick="pickSettingsDefaultFormatter('s-editor-lang-default-formatter')">Pick</button>
+      </div>
+      <div id="s-editor-lang-formatter-detected" class="settings-language-chips"></div>
       <div class="settings-grid">
         <div><label>Tab Size</label><input id="s-editor-lang-tab-size" type="number" min="1" max="16" step="1" style="width:100%"></div>
         <label class="settings-check"><input id="s-editor-lang-insert-spaces" type="checkbox"><span><b>Insert spaces</b><small>Language-specific editor.insertSpaces.</small></span></label>
@@ -17981,13 +17992,19 @@ function setEditorCodeActionIndex(index){
 function showEditorCodeActions(actions,position){
   const box=$('editor-code-actions');if(!box)return;
   _editorCodeActions=actions.slice(0,80);_editorCodeActionIndex=0;box.innerHTML='';
-  const summary={count:_editorCodeActions.length,preferred:0,disabled:0,quickfix:0,refactor:0,source:0,other:0,command:0};
+  const summary={count:_editorCodeActions.length,preferred:0,disabled:0,quickfix:0,refactor:0,source:0,other:0,command:0,editable:0,commandOnly:0,diagnostics:0};
   _editorCodeActions.forEach((action,index)=>{
     const disabled=codeActionDisabledText(action&&action.disabled);
     const bucket=codeActionKindBucket(action&&action.kind);
     const preferred=!!(action&&action.isPreferred);
+    const diagnosticCount=Array.isArray(action&&action.diagnostics)?action.diagnostics.length:0;
+    const hasEdit=!!(action&&action.edit);
+    const hasCommand=!!(action&&action.command);
     if(preferred)summary.preferred++;
     if(disabled)summary.disabled++;
+    if(hasEdit)summary.editable++;
+    if(hasCommand&&!hasEdit)summary.commandOnly++;
+    summary.diagnostics+=diagnosticCount;
     summary[bucket]=(summary[bucket]||0)+1;
     const row=document.createElement('div');row.className='editor-code-action-item'+(index===0?' active':'')+(preferred?' preferred':'')+(disabled?' disabled':'');row.setAttribute('role','option');
     row.id='editor-code-action-'+index;
@@ -17997,6 +18014,9 @@ function showEditorCodeActions(actions,position){
     row.dataset.codeActionPreferred=preferred?'1':'0';
     row.dataset.codeActionDisabled=disabled?'1':'0';
     row.dataset.codeActionSource=String((action&&action.source)||(action&&action.extensionId)||'');
+    row.dataset.codeActionHasEdit=hasEdit?'1':'0';
+    row.dataset.codeActionHasCommand=hasCommand?'1':'0';
+    row.dataset.codeActionDiagnosticCount=String(diagnosticCount);
     row.setAttribute('aria-selected',index===0?'true':'false');
     if(disabled){row.setAttribute('aria-disabled','true');row.title=disabled}
     const title=document.createElement('div');title.className='editor-code-action-title';title.textContent=codeActionTitle(action);
@@ -18014,6 +18034,9 @@ function showEditorCodeActions(actions,position){
   box.dataset.codeActionRefactor=String(summary.refactor);
   box.dataset.codeActionSource=String(summary.source);
   box.dataset.codeActionOther=String(summary.other+summary.command);
+  box.dataset.codeActionEditable=String(summary.editable);
+  box.dataset.codeActionCommandOnly=String(summary.commandOnly);
+  box.dataset.codeActionDiagnostics=String(summary.diagnostics);
   placeEditorOverlay(box,position);box.style.display='block';requestAnimationFrame(()=>box.classList.add('open'));
 }
 function editorNormalizeDocumentUri(value){
@@ -19774,16 +19797,20 @@ async function applyEditorCodeAction(action){
     if(!await confirmEditorWorkspaceEditApply('Apply Code Action',summary,'Apply code action "'+codeActionTitle(action)+'".')){ed.focus();return}
   }
   _undoPush(true);
+  const actionCount=(typeof _editorCodeActions!=='undefined'&&Array.isArray(_editorCodeActions))?_editorCodeActions.length:0;
+  const actionKind=typeof codeActionKindText==='function'?codeActionKindText(action&&action.kind):String((action&&action.kind&&((action.kind.value)||(action.kind.kind)||(action.kind.id)))||(action&&action.kind)||'');
+  const actionSource=String((action&&action.source)||(action&&action.extensionId)||'');
+  const diagnosticCount=Array.isArray(action&&action.diagnostics)?action.diagnostics.length:0;
   const editResult=action.edit?await editorApplyWorkspaceEdit(action.edit,summary):{changed:false,skipped:0,tabApplied:0,workspaceApplied:0,errors:[]};
   const commandResult=action.command?await runEditorCodeActionCommand(action.command):null;
   closeEditorCodeActions();ed.focus();
   const title=codeActionTitle(action);
   if(editResult.changed||editResult.tabApplied||editResult.workspaceApplied){
-    if(typeof updateEditorLanguageFeatureState==='function')updateEditorLanguageFeatureState('codeActions','ready',{count:_editorCodeActions.length,applied:title,message:'Code actions: applied '+title});
+    if(typeof updateEditorLanguageFeatureState==='function')updateEditorLanguageFeatureState('codeActions','ready',{count:actionCount,applied:title,appliedKind:actionKind,appliedSource:actionSource,appliedDiagnostics:diagnosticCount,tabEdits:editResult.tabApplied||0,workspaceEdits:editResult.workspaceApplied||0,message:'Code actions: applied '+title});
     setStatus('Applied code action: '+title);return
   }
   if(callSucceeded(commandResult)){
-    if(typeof updateEditorLanguageFeatureState==='function')updateEditorLanguageFeatureState('codeActions','ready',{count:_editorCodeActions.length,applied:title,message:'Code actions: ran '+title});
+    if(typeof updateEditorLanguageFeatureState==='function')updateEditorLanguageFeatureState('codeActions','ready',{count:actionCount,applied:title,appliedKind:actionKind,appliedSource:actionSource,appliedDiagnostics:diagnosticCount,command:action&&action.command,message:'Code actions: ran '+title});
     setStatus('Ran code action: '+title);return
   }
   if(editResult.skipped){setStatus('Code action edits outside the active editor were skipped');return}
@@ -20889,13 +20916,14 @@ function normalizeEditorFormattingProvider(value){
   const capabilities=Array.isArray(value.capabilities)?value.capabilities.map(String):[String(value.capability||value.kind||'formatting')];
   return {...value,id:providerId,providerId,displayName,capabilities:[...new Set(capabilities.filter(Boolean))]};
 }
-function editorFormatterProviderIsDefault(provider){
-  const def=editorDefaultFormatter().toLowerCase();
+function editorFormatterProviderIsDefault(provider,value){
+  const def=String(value!==undefined?value:editorDefaultFormatter()).toLowerCase();
   return !!(def&&provider&&String(provider.providerId||'').toLowerCase()===def);
 }
-async function requestEditorFormattingProviders(){
+async function requestEditorFormattingProviders(options){
+  const opts=isPlainObject(options)?options:{};
   const res=await editorRequestLanguageProvider('formattingProviders',editorProviderPayload('formattingProviders',{matchedOnly:true}),{
-    countKey:'providers',itemLabel:'formatter provider',label:'Formatter providers'
+    countKey:'providers',itemLabel:'formatter provider',label:'Formatter providers',quiet:opts.quiet===true
   });
   if(res&&res.error){setStatus('Formatter providers failed: '+res.error);return []}
   const providers=Array.isArray(res&&res.providers)?res.providers:[];
@@ -20906,6 +20934,59 @@ async function requestEditorFormattingProviders(){
     seen.add(key);items.push(provider);
   });
   return items;
+}
+function setSettingsFormatterInput(inputId,providerId){
+  const input=$(inputId),value=String(providerId||'').trim();
+  if(!input||!value)return false;
+  setInputValue(inputId,value);
+  input.dataset.formatterSelected='1';
+  document.querySelectorAll('[data-target-input="'+inputId+'"] [data-formatter-provider-id]').forEach(btn=>{
+    const active=String(btn.dataset.formatterProviderId||'').toLowerCase()===value.toLowerCase();
+    btn.classList.toggle('active',active);
+    btn.dataset.formatterDefault=active?'1':'0';
+  });
+  if(typeof markSettingsModified==='function')markSettingsModified();
+  if(typeof scheduleSettingsValidation==='function')scheduleSettingsValidation();
+  if(typeof scheduleFilterSettings==='function')scheduleFilterSettings(0);
+  return true;
+}
+function renderEditorFormatterProviderChips(hostId,inputId,providers){
+  const host=$(hostId);if(!host)return;
+  host.innerHTML='';
+  const values=Array.isArray(providers)?providers:[];
+  host.dataset.formatterProviderCount=String(values.length);
+  host.dataset.targetInput=inputId;
+  const current=readInputValue(inputId);
+  host.dataset.defaultFormatter=current;
+  if(!values.length){host.textContent='No formatter providers detected for the active language.';return}
+  const label=document.createElement('span');label.textContent='Detected: ';host.appendChild(label);
+  values.slice(0,12).forEach(provider=>{
+    const btn=document.createElement('button');
+    btn.type='button';
+    btn.dataset.formatterProviderId=provider.providerId;
+    btn.dataset.formatterDefault=editorFormatterProviderIsDefault(provider,current)?'1':'0';
+    btn.className=editorFormatterProviderIsDefault(provider,current)?'active':'';
+    btn.textContent=provider.displayName||provider.providerId;
+    btn.title=provider.providerId+(provider.capabilities&&provider.capabilities.length?' - '+provider.capabilities.join(', '):'');
+    btn.onclick=()=>setSettingsFormatterInput(inputId,provider.providerId);
+    host.appendChild(btn);
+    host.appendChild(document.createTextNode(' '));
+  });
+}
+async function refreshEditorFormatterProviderSettings(){
+  const providers=await requestEditorFormattingProviders({quiet:true});
+  renderEditorFormatterProviderChips('s-editor-formatter-detected','s-editor-default-formatter',providers);
+  renderEditorFormatterProviderChips('s-editor-lang-formatter-detected','s-editor-lang-default-formatter',providers);
+  return providers;
+}
+async function pickSettingsDefaultFormatter(inputId){
+  const providers=await requestEditorFormattingProviders({quiet:true});
+  renderEditorFormatterProviderChips('s-editor-formatter-detected','s-editor-default-formatter',providers);
+  renderEditorFormatterProviderChips('s-editor-lang-formatter-detected','s-editor-lang-default-formatter',providers);
+  if(!providers.length){setStatus('No formatter providers for '+editorLang);return false}
+  const selected=providers.length===1?providers[0]:await showEditorFormatterPicker(providers);
+  if(!selected)return false;
+  return setSettingsFormatterInput(inputId,selected.providerId);
 }
 function finishEditorFormatterPicker(provider){
   const session=_editorFormatterPickSession;
@@ -30808,6 +30889,7 @@ function openSettings(){
   setInputValue('s-editor-lang-fix-all-on-save',editorCodeActionsOnSaveMode(languageEditor.codeActionsOnSave,'source.fixAll'));
   setInputValue('s-editor-lang-code-actions-on-save-json',stringifyJsonObjectValue(editorCodeActionsOnSaveExtras(languageEditor.codeActionsOnSave)));
   setCheckedValue('s-editor-lang-code-actions-trigger-focus',isPlainObject(languageEditor.codeActions)&&languageEditor.codeActions.triggerOnFocusChange===true);
+  refreshEditorFormatterProviderSettings();
   const langInfo=$('s-editor-lang-override-info');
   if(langInfo)langInfo.textContent='Writes VS Code-style '+editorLanguageOverrideKey(editorLang)+' editor settings for the active editor language.';
   const languageFiles=filesLanguageOverrideHas(editorLang)?{...files,...filesLanguageOverrideSettings(editorLang)}:filesEffectiveSection(editorLang);
