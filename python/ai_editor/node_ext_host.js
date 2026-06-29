@@ -2727,6 +2727,7 @@ const _onDidChangeTextEditorSelectionEmitter = new EventEmitter();
 const _onDidChangeTextEditorOptionsEmitter = new EventEmitter();
 const _onDidChangeTextEditorVisibleRangesEmitter = new EventEmitter();
 const _onDidChangeTextEditorViewColumnEmitter = new EventEmitter();
+const _onDidChangeTextEditorDiffInformationEmitter = new EventEmitter();
 const _onDidChangeTabGroupsEmitter = new EventEmitter();
 const _onDidChangeTabsEmitter = new EventEmitter();
 let _activeTextEditor = undefined;
@@ -2923,6 +2924,18 @@ function _setTextEditorViewColumn(editor, value) {
     return false;
 }
 
+function _setTextEditorDiffInformation(editor, value) {
+    if (!editor) return;
+    const next = value && typeof value === 'object'
+        ? _plainBridgeValue(Object.assign({}, value))
+        : {};
+    editor._diffInformation = next;
+    _onDidChangeTextEditorDiffInformationEmitter.fire({
+        textEditor: editor,
+        diffInformation: next,
+    });
+}
+
 function _decorationTypeKey(decorationType) {
     if (!decorationType) return '';
     return String(decorationType.key || decorationType.id || decorationType);
@@ -2952,6 +2965,11 @@ function _createTextEditorDecorationType(options) {
         options: _plainBridgeValue(options || {}),
     };
     _textEditorDecorationTypes.set(key, entry);
+    send({
+        type: 'text_editor_decoration_type_registered',
+        key,
+        options: entry.options,
+    });
     return {
         key,
         dispose() {
@@ -3131,6 +3149,7 @@ function _createTextEditor(document, options) {
         },
         _selections: [initialSelection],
         _visibleRanges: [],
+        _diffInformation: {},
         _decorations: new Map(),
         get options() { return this._options; },
         set options(value) { _setTextEditorOptions(this, value); },
@@ -3141,6 +3160,8 @@ function _createTextEditor(document, options) {
             _setTextEditorSelections(this, [value]);
         },
         get visibleRanges() { return this._visibleRanges; },
+        get diffInformation() { return this._diffInformation; },
+        _setDiffInformation(value) { _setTextEditorDiffInformation(this, value); },
         edit(callback) {
             if (typeof callback !== 'function') return Promise.resolve(false);
             const edit = {
@@ -10752,6 +10773,7 @@ function buildVscodeModule(extDesc, extensionPath, storageRoot) {
             onDidChangeTextEditorOptions: _onDidChangeTextEditorOptionsEmitter.event,
             onDidChangeTextEditorVisibleRanges: _onDidChangeTextEditorVisibleRangesEmitter.event,
             onDidChangeTextEditorViewColumn: _onDidChangeTextEditorViewColumnEmitter.event,
+            onDidChangeTextEditorDiffInformation: _onDidChangeTextEditorDiffInformationEmitter.event,
             onDidChangeActiveColorTheme: new EventEmitter().event,
             get tabGroups() {
                 return _tabGroupsApiObject();

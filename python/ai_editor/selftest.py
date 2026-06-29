@@ -27684,6 +27684,7 @@ async function activate(context) {
     const optionsEvents = [];
     const visibleRangeEvents = [];
     const viewColumnEvents = [];
+    const diffEvents = [];
     const tabGroupEvents = [];
     const tabEvents = [];
     const activeDisposable = vscode.window.onDidChangeActiveTextEditor(editor => {
@@ -27720,6 +27721,14 @@ async function activate(context) {
       viewColumnEvents.push({
         uri: event.textEditor.document.uri.toString(),
         viewColumn: event.viewColumn,
+      });
+    });
+    const diffDisposable = vscode.window.onDidChangeTextEditorDiffInformation(event => {
+      diffEvents.push({
+        uri: event.textEditor.document.uri.toString(),
+        added: event.diffInformation && event.diffInformation.added,
+        modified: event.diffInformation && event.diffInformation.modified,
+        removed: event.diffInformation && event.diffInformation.removed,
       });
     });
     const tabGroupDisposable = vscode.window.tabGroups.onDidChangeTabGroups(event => {
@@ -27769,6 +27778,7 @@ async function activate(context) {
       new vscode.Position(0, 5))];
     editor.options = { tabSize: 2, insertSpaces: false };
     editor.revealRange(new vscode.Range(0, 0, 1, 0));
+    editor._setDiffInformation({ added: 2, modified: 1, removed: 0 });
     const decoration = vscode.window.createTextEditorDecorationType({
       backgroundColor: '#112233',
       border: '1px solid #445566',
@@ -27817,6 +27827,7 @@ async function activate(context) {
     optionsDisposable.dispose();
     visibleRangeDisposable.dispose();
     viewColumnDisposable.dispose();
+    diffDisposable.dispose();
     tabGroupDisposable.dispose();
     tabDisposable.dispose();
     return {
@@ -27833,6 +27844,8 @@ async function activate(context) {
       optionsEvents,
       visibleRangeEvents,
       viewColumnEvents,
+      diffEvents,
+      diffInformation: editor.diffInformation,
       decorationKey,
       decorationCount,
       decorationDisposed,
@@ -31026,6 +31039,9 @@ process.stdin.resume();
                         "selftest.node.textEditorProbe")
                 except Exception as exc:
                     node_text_editor_probe = {"_error": str(exc)}
+                node_text_editor_runtime = (
+                    node_host.text_editor_runtime_state()
+                    if node_started else {})
                 node_status_bar_command_registered = _wait_until(
                     lambda: "selftest.node.statusBarMessageProbe"
                     in api._ext_host.commands.list_commands(),
@@ -34992,10 +35008,42 @@ process.stdin.resume();
                        and any(item.get("viewColumn") == 3 for item in
                                node_text_editor_probe.get(
                                    "viewColumnEvents", []))
+                       and any(item.get("added") == 2
+                               and item.get("modified") == 1
+                               and item.get("removed") == 0
+                               for item in node_text_editor_probe.get(
+                                   "diffEvents", []))
+                       and node_text_editor_probe.get(
+                           "diffInformation", {}).get("added") == 2
                        and str(node_text_editor_probe.get(
                            "decorationKey", "")).startswith("sao-decoration-")
                        and node_text_editor_probe.get("decorationCount") == 2
                        and node_text_editor_probe.get("decorationDisposed") is True
+                       and any(
+                           item.get("event")
+                           == "text_editor_decoration_type_registered"
+                           and item.get("key")
+                           == node_text_editor_probe.get("decorationKey")
+                           for item in node_text_editor_runtime.get(
+                               "decorationEvents", []))
+                       and any(
+                           item.get("event")
+                           == "text_editor_decorations_changed"
+                           and item.get("key")
+                           == node_text_editor_probe.get("decorationKey")
+                           and item.get("rangeCount") == 2
+                           for item in node_text_editor_runtime.get(
+                               "decorationEvents", []))
+                       and any(
+                           item.get("event")
+                           == "text_editor_decoration_type_disposed"
+                           and item.get("key")
+                           == node_text_editor_probe.get("decorationKey")
+                           for item in node_text_editor_runtime.get(
+                               "decorationEvents", []))
+                       and node_text_editor_runtime.get(
+                           "decorationTypes") == []
+                       and node_text_editor_runtime.get("decorations") == []
                        and node_text_editor_probe.get("closeResult") is True
                        and node_text_editor_probe.get("activeAfterHide") is False
                        and node_text_editor_probe.get("visibleAfterHide") == 0
@@ -35029,7 +35077,10 @@ process.stdin.resume();
                                node_text_editor_probe.get("tabEvents", []))
                        and any(item.get("changed", 0) >= 1 for item in
                                node_text_editor_probe.get("tabGroupEvents", [])),
-                       json.dumps(node_text_editor_probe,
+                       json.dumps({
+                           "probe": node_text_editor_probe,
+                           "runtime": node_text_editor_runtime,
+                       },
                                   ensure_ascii=False, default=str))
                 _check("node host status bar messages use dynamic UI bridge",
                        node_started is True

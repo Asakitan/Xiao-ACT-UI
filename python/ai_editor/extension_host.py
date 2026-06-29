@@ -1891,6 +1891,9 @@ class NodeExtensionHost:
         self._file_decoration_request_lock = threading.Lock()
         self._file_decoration_requests: Dict[str, Dict[str, Any]] = {}
         self._file_decoration_providers: List[Dict[str, Any]] = []
+        self._text_editor_decoration_types: Dict[str, Dict[str, Any]] = {}
+        self._text_editor_decorations: Dict[str, Dict[str, Any]] = {}
+        self._text_editor_decoration_events: List[Dict[str, Any]] = []
         self._notebook_request_lock = threading.Lock()
         self._notebook_requests: Dict[str, Dict[str, Any]] = {}
         self._notebook_serializers: List[Dict[str, Any]] = []
@@ -3128,6 +3131,49 @@ class NodeExtensionHost:
                 except Exception:
                     _log.exception(
                         "[NodeExtHost] on_file_decoration callback error")
+
+        elif msg_type == "text_editor_decoration_type_registered":
+            key = str(msg.get("key", ""))
+            if key:
+                record = {
+                    "key": key,
+                    "options": msg.get("options")
+                    if isinstance(msg.get("options"), dict) else {},
+                }
+                self._text_editor_decoration_types[key] = record
+                self._record_text_editor_decoration_event(
+                    msg_type, dict(record))
+
+        elif msg_type == "text_editor_decorations_changed":
+            key = str(msg.get("key", ""))
+            uri = str(msg.get("uri", ""))
+            if key and uri:
+                try:
+                    range_count = int(msg.get("rangeCount") or 0)
+                except Exception:
+                    range_count = 0
+                ranges = msg.get("ranges")
+                record = {
+                    "key": key,
+                    "uri": uri,
+                    "rangeCount": range_count,
+                    "ranges": ranges if isinstance(ranges, list) else [],
+                }
+                self._text_editor_decorations[f"{uri}\0{key}"] = record
+                self._record_text_editor_decoration_event(
+                    msg_type, dict(record))
+
+        elif msg_type == "text_editor_decoration_type_disposed":
+            key = str(msg.get("key", ""))
+            if key:
+                self._text_editor_decoration_types.pop(key, None)
+                self._text_editor_decorations = {
+                    item_key: item
+                    for item_key, item in self._text_editor_decorations.items()
+                    if item.get("key") != key
+                }
+                self._record_text_editor_decoration_event(
+                    msg_type, {"key": key})
 
         elif msg_type in {"lm_tool_registered", "lm_tool_disposed"}:
             name = str(msg.get("name") or msg.get("toolName") or "")
@@ -6271,6 +6317,33 @@ class NodeExtensionHost:
     def list_file_decoration_providers(self) -> List[Dict[str, Any]]:
         """Return registered file decoration providers from Node."""
         return list(self._file_decoration_providers)
+
+    def list_text_editor_decoration_types(self) -> List[Dict[str, Any]]:
+        """Return active Node TextEditorDecorationType records."""
+        return list(self._text_editor_decoration_types.values())
+
+    def list_text_editor_decorations(self) -> List[Dict[str, Any]]:
+        """Return active Node TextEditor.setDecorations records."""
+        return list(self._text_editor_decorations.values())
+
+    def text_editor_decoration_events(self) -> List[Dict[str, Any]]:
+        """Return recent Node text-editor decoration bridge events."""
+        return list(self._text_editor_decoration_events)
+
+    def text_editor_runtime_state(self) -> Dict[str, Any]:
+        """Return Node text-editor runtime state visible to the Python host."""
+        return {
+            "decorationTypes": self.list_text_editor_decoration_types(),
+            "decorations": self.list_text_editor_decorations(),
+            "decorationEvents": self.text_editor_decoration_events(),
+        }
+
+    def _record_text_editor_decoration_event(
+            self, event: str, payload: Dict[str, Any]) -> None:
+        record = dict(payload)
+        record["event"] = str(event or "")
+        self._text_editor_decoration_events.append(record)
+        del self._text_editor_decoration_events[:-100]
 
     def _emit_file_decoration_provider_refresh(
             self, event: str, provider: Dict[str, Any]) -> None:
