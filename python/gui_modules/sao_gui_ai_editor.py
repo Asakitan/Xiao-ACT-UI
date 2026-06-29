@@ -150,11 +150,18 @@ class AIEditorPanel:
         if self._win is None or not self._win.winfo_exists():
             self._build()
         self._visible = True
-        self._win.deiconify()
-        self._win.lift()
+        mirror = getattr(self, '_mirror', None)
+        if mirror is not None:
+            mirror.show()
+        else:
+            self._win.deiconify()
+            self._win.lift()
 
     def hide(self) -> None:
-        if self._win is not None:
+        mirror = getattr(self, '_mirror', None)
+        if mirror is not None:
+            mirror.hide()
+        elif self._win is not None:
             self._win.withdraw()
         self._visible = False
 
@@ -168,6 +175,13 @@ class AIEditorPanel:
             except Exception:
                 pass
             self._slash_popup = None
+        mirror = getattr(self, '_mirror', None)
+        if mirror is not None:
+            try:
+                mirror.detach()
+            except Exception:
+                pass
+            self._mirror = None
         if self._win is not None:
             try:
                 self._win.destroy()
@@ -257,11 +271,6 @@ class AIEditorPanel:
         win.minsize(680, 480)
         win.configure(bg=_C["bg"])
         win.protocol("WM_DELETE_WINDOW", self.hide)
-
-        try:
-            win.attributes("-topmost", False)
-        except Exception:
-            pass
 
         # ── Title bar ──
         header = tk.Frame(win, bg=_C["bg_secondary"], height=36)
@@ -475,6 +484,14 @@ class AIEditorPanel:
             "运行时工具已就绪: 内存状态 · 插件列表 · 设置 · Python执行\n\n"
             "先在 ⚙ Settings 中配置 API Key, 然后开始对话。"
         )
+        try:
+            from config import SettingsManager
+            if SettingsManager().get('compositor_tk_panels', True):
+                from render.tk_mirror import TkMirrorLayer
+                self._mirror = TkMirrorLayer(win, 'ai_editor', z=500)
+                self._mirror.attach()
+        except Exception:
+            self._mirror = None
 
     # ================================================================
     # Chat tags (syntax highlighting)

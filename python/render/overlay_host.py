@@ -436,10 +436,10 @@ class OverlayHost:
             0, 0, 1, 1, None, None, hinst, None,
         )
 
-        # Main overlay — TOPMOST + TRANSPARENT. Always click-through;
-        # interactive layers use separate Tk input windows.
+        # Main overlay — TRANSPARENT (no TOPMOST; z-order managed by
+        # compositor _enforce_z_order via game HWND anchor).
         self.hwnd = _user32.CreateWindowExW(
-            WS_EX_TOPMOST | WS_EX_TRANSPARENT
+            WS_EX_TRANSPARENT
             | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE,
             self._class_name,
             '',
@@ -667,18 +667,31 @@ class OverlayHost:
     def show(self) -> None:
         """Show the overlay window without activating it."""
         _user32.ShowWindow(self.hwnd, SW_SHOWNOACTIVATE)
-        self._hide_topmost_flag()
 
     def hide(self) -> None:
         _user32.ShowWindow(self.hwnd, 0)  # SW_HIDE
 
     def raise_topmost(self) -> None:
-        """Re-assert topmost z-order without focus steal."""
+        """Legacy — kept for callers not yet migrated. Prefer raise_above()."""
         _user32.SetWindowPos(
             self.hwnd, HWND_TOPMOST, 0, 0, 0, 0,
             SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE,
         )
         self._hide_topmost_flag()
+
+    def raise_top(self) -> None:
+        """Place at top of regular z-order."""
+        _user32.SetWindowPos(
+            self.hwnd, HWND_TOP, 0, 0, 0, 0,
+            SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE,
+        )
+
+    def raise_above(self, hwnd_after: int) -> None:
+        """Place this window just above *hwnd_after* in z-order."""
+        _user32.SetWindowPos(
+            self.hwnd, wt.HWND(hwnd_after), 0, 0, 0, 0,
+            SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE,
+        )
 
     def set_input_passthrough(self, passthrough: bool) -> None:
         """Toggle WS_EX_TRANSPARENT for cross-process click passthrough.
@@ -747,7 +760,7 @@ class OverlayHost:
         self.origin_x = x
         self.origin_y = y
         _user32.SetWindowPos(
-            self.hwnd, HWND_TOPMOST, x, y, w, h,
+            self.hwnd, HWND_TOP, x, y, w, h,
             SWP_NOACTIVATE,
         )
 

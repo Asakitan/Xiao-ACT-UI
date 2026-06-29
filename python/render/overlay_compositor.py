@@ -640,9 +640,13 @@ class UnifiedOverlay:
         # Ready event: set when host window is created
         self._ready = threading.Event()
 
-        # Topmost pulse interval
+        # Periodic z-order pulse interval
         self._topmost_interval = 2.0  # seconds
         self._last_topmost = 0.0
+
+        # Game window HWND — set by process selector on attach.
+        # The z-order pulse positions the compositor just above this.
+        self._game_hwnd: int = 0
 
         # Video fence (frame validation gate)
         self._vf = None
@@ -723,6 +727,54 @@ class UnifiedOverlay:
             if layer:
                 layer.z_order = max_z + 1
                 self._rebuild_z_order()
+
+    # ── Centralized z-order management ──────────────────────────
+
+    def set_game_hwnd(self, hwnd: int) -> None:
+        """Set the game window HWND. The z-order pulse positions the
+        compositor just above this window."""
+        self._game_hwnd = int(hwnd) if hwnd else 0
+
+    def _enforce_z_order(self) -> None:
+        """Position the compositor host just above the game window.
+
+        Normal path: SetWindowPos(host, game_hwnd) — insertAfter.
+        Kernel path: if the game is TOPMOST, use Engine A to set the
+        compositor's TOPMOST bit via physical memory (invisible to
+        user-mode API hooks), then insertAfter.
+        Fallback: HWND_TOP if no game HWND is set.
+        """
+        host = self._host
+        if host is None:
+            return
+        comp_hwnd = host.hwnd
+        if not comp_hwnd:
+            return
+        game = self._game_hwnd
+        try:
+            import ctypes as _ct
+            u32 = _ct.windll.user32
+            _SWP = 0x0002 | 0x0001 | 0x0010  # NOMOVE | NOSIZE | NOACTIVATE
+            if game and u32.IsWindow(game):
+                game_topmost = False
+                try:
+                    from mem_probe._dc import read_exstyle, set_exstyle_bit
+                    ex = read_exstyle(game)
+                    if ex is not None and (ex & 0x8):
+                        game_topmost = True
+                        set_exstyle_bit(comp_hwnd, 0x8)
+                except Exception:
+                    pass
+                u32.SetWindowPos(
+                    _ct.c_void_p(comp_hwnd), _ct.c_void_p(game),
+                    0, 0, 0, 0, _SWP)
+            else:
+                _HWND_TOP = 0
+                u32.SetWindowPos(
+                    _ct.c_void_p(comp_hwnd), _ct.c_void_p(_HWND_TOP),
+                    0, 0, 0, 0, _SWP)
+        except Exception:
+            pass
 
     def _rebuild_z_order(self) -> None:
         self._z_sorted = sorted(
@@ -1160,10 +1212,12 @@ class UnifiedOverlay:
             # Process Win32 messages
             self._host.process_messages()
 
-            # Topmost pulse
+            # Z-order pulse: enforce the registered priority order.
+            # Uses HWND_TOP chaining (not TOPMOST) so Tk panels stay
+            # above the compositor without z-order flickering.
             now = time.perf_counter()
             if now - self._last_topmost >= self._topmost_interval:
-                self._host.raise_topmost()
+                self._enforce_z_order()
                 self._last_topmost = now
 
             # Poll MMF-sourced layers for new frames (zero-copy)
@@ -1328,3 +1382,5 @@ def get_unified_overlay(root: Any = None) -> UnifiedOverlay:
         if _overlay is None:
             _overlay = UnifiedOverlay(root)
         return _overlay
+
+

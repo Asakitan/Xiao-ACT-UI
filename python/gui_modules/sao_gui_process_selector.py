@@ -10,6 +10,7 @@ from typing import Any, List, Optional
 from utils.sao_sound import get_sao_font as _sao_font, get_cjk_font as _cjk_font, play_sound
 from gui_modules.sao_panel_ui import (
     _sao_panel_header, _sao_panel_body, _bind_panel_drag,
+    _apply_panel_style,
     _SAO_PANEL_BODY_BG, _SAO_PANEL_BORDER, _SAO_PANEL_ACCENT,
     _SAO_PANEL_LABEL_FG, _SAO_PANEL_VALUE_FG,
     _SAO_PANEL_SEP, _theme_color,
@@ -190,7 +191,6 @@ class ProcessSelectorPanel:
         win = tk.Toplevel(self.root)
         win.withdraw()
         win.overrideredirect(True)
-        win.attributes("-topmost", True)
         win.configure(bg=_tc('border', _SAO_PANEL_BORDER))
         self._win = win
 
@@ -358,6 +358,14 @@ class ProcessSelectorPanel:
 
         self._restore_last_attach()
         self.root.after(50, self._do_refresh)
+        try:
+            from config import SettingsManager
+            if SettingsManager().get('compositor_tk_panels', True):
+                from render.tk_mirror import TkMirrorLayer
+                self._mirror = TkMirrorLayer(win, 'process_selector', z=500)
+                self._mirror.attach()
+        except Exception:
+            self._mirror = None
 
     def _bind_mousewheel_recursive(self, widget):
         def _on_mousewheel(event):
@@ -675,8 +683,17 @@ class ProcessSelectorPanel:
         if not self._exists():
             self._win = None
             self._build()
-        self._win.deiconify()
-        self._win.lift()
+        mirror = getattr(self, '_mirror', None)
+        if mirror is not None:
+            mirror.show()
+        else:
+            self._win.deiconify()
+            self._win.lift()
+            try:
+                self._win.update_idletasks()
+                _apply_panel_style(self._win)
+            except Exception:
+                pass
         self._update_mode_display()
         if not self._win.geometry().startswith("1x1"):
             self._do_refresh()
@@ -691,8 +708,32 @@ class ProcessSelectorPanel:
             pass
         self._do_refresh()
 
+    def refresh_theme(self):
+        if not self._exists():
+            return
+        geo = self._win.geometry()
+        visible = self.is_visible()
+        self._win.destroy()
+        self._win = None
+        self._placeholder_active = True
+        self._search_var.set('')
+        self._build()
+        if visible:
+            self._win.geometry(geo)
+            self._win.deiconify()
+            self._win.lift()
+            try:
+                self._win.update_idletasks()
+                _apply_panel_style(self._win)
+            except Exception:
+                pass
+            self._do_refresh()
+
     def hide(self):
-        if self._win:
+        mirror = getattr(self, '_mirror', None)
+        if mirror is not None:
+            mirror.hide()
+        elif self._win:
             try:
                 self._win.withdraw()
             except Exception:
@@ -707,6 +748,13 @@ class ProcessSelectorPanel:
             return False
 
     def destroy(self):
+        mirror = getattr(self, '_mirror', None)
+        if mirror is not None:
+            try:
+                mirror.detach()
+            except Exception:
+                pass
+            self._mirror = None
         if self._win:
             try:
                 self._win.destroy()

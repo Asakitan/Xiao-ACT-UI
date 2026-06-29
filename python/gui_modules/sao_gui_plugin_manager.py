@@ -48,6 +48,7 @@ from gui_modules.sao_panel_ui import (
     _SAO_PANEL_LABEL_FG,
     _SAO_PANEL_SEP,
     _SAO_PANEL_VALUE_FG,
+    _apply_panel_style,
     _apply_window_icon,
     _bind_panel_drag,
     _sao_panel_body,
@@ -113,27 +114,40 @@ class PluginManagerPanel:
             self._build()
         if self._win is None:
             return
-        try:
-            self._win.deiconify()
-            self._win.lift()
-            self._win.attributes('-topmost', True)
-            self._win.after(220, lambda: self._win and self._win.attributes('-topmost', False))
-        except Exception:
-            pass
+        mirror = getattr(self, '_mirror', None)
+        if mirror is not None:
+            mirror.show()
+        else:
+            try:
+                self._win.deiconify()
+                self._win.lift()
+                self._win.update_idletasks()
+                _apply_panel_style(self._win)
+            except Exception:
+                pass
         self.refresh()
         self._show_tab(self._active_tab)
 
     def hide(self) -> None:
         if self._panel_list is not None:
             self._panel_list.stop()
-        if self._win is None:
-            return
-        try:
-            self._win.withdraw()
-        except Exception:
-            pass
+        mirror = getattr(self, '_mirror', None)
+        if mirror is not None:
+            mirror.hide()
+        elif self._win is not None:
+            try:
+                self._win.withdraw()
+            except Exception:
+                pass
 
     def destroy(self) -> None:
+        mirror = getattr(self, '_mirror', None)
+        if mirror is not None:
+            try:
+                mirror.detach()
+            except Exception:
+                pass
+            self._mirror = None
         if self._panel_list is not None:
             try:
                 self._panel_list.stop()
@@ -152,6 +166,27 @@ class PluginManagerPanel:
 
     def is_visible(self) -> bool:
         return bool(self._win is not None and self._exists() and self._win.state() != 'withdrawn')
+
+    def refresh_theme(self) -> None:
+        if not self._exists():
+            return
+        geo = self._win.geometry()
+        visible = self.is_visible()
+        active_tab = self._active_tab
+        self.destroy()
+        self._build()
+        if visible and self._win is not None:
+            self._win.geometry(geo)
+            self._win.deiconify()
+            self._win.lift()
+            try:
+                self._win.update_idletasks()
+                _apply_panel_style(self._win)
+            except Exception:
+                pass
+            self._active_tab = active_tab
+            self.refresh()
+            self._show_tab(active_tab)
 
     def refresh(self) -> Dict[str, Any]:
         try:
@@ -316,6 +351,14 @@ class PluginManagerPanel:
         grip.bind('<B1-Motion>', _resize_motion)
 
         win.protocol('WM_DELETE_WINDOW', self.hide)
+        try:
+            from config import SettingsManager
+            if SettingsManager().get('compositor_tk_panels', True):
+                from render.tk_mirror import TkMirrorLayer
+                self._mirror = TkMirrorLayer(win, 'plugin_manager', z=500)
+                self._mirror.attach()
+        except Exception:
+            self._mirror = None
         self._show_tab(self._active_tab)
 
     def _show_tab(self, name: str) -> None:
@@ -692,19 +735,26 @@ class PluginDetachedPanel:
             self._build()
         if self._win is None:
             return
-        try:
-            self._win.deiconify()
-            self._win.lift()
-            self._win.attributes('-topmost', True)
-            self._win.after(220, lambda: self._win and self._win.attributes('-topmost', False))
-        except Exception:
-            pass
+        mirror = getattr(self, '_mirror', None)
+        if mirror is not None:
+            mirror.show()
+        else:
+            try:
+                self._win.deiconify()
+                self._win.lift()
+                self._win.update_idletasks()
+                _apply_panel_style(self._win)
+            except Exception:
+                pass
         self._dirty = True
         self._start()
 
     def hide(self) -> None:
         self._stop()
-        if self._win is not None:
+        mirror = getattr(self, '_mirror', None)
+        if mirror is not None:
+            mirror.hide()
+        elif self._win is not None:
             try:
                 self._win.withdraw()
             except Exception:
@@ -712,6 +762,13 @@ class PluginDetachedPanel:
 
     def destroy(self) -> None:
         self._stop()
+        mirror = getattr(self, '_mirror', None)
+        if mirror is not None:
+            try:
+                mirror.detach()
+            except Exception:
+                pass
+            self._mirror = None
         if self._win is not None:
             try:
                 self._win.destroy()
@@ -822,6 +879,14 @@ class PluginDetachedPanel:
         win.protocol('WM_DELETE_WINDOW', self.hide)
         self._build_hotkeys()
         self._subscribe()
+        try:
+            from config import SettingsManager
+            if SettingsManager().get('compositor_tk_panels', True):
+                from render.tk_mirror import TkMirrorLayer
+                self._mirror = TkMirrorLayer(win, f'plugin_detached_{self.plugin_id}', z=500)
+                self._mirror.attach()
+        except Exception:
+            self._mirror = None
 
     def _make_action(self, panel_id: str):
         def _handler(action: str, payload: dict) -> None:
