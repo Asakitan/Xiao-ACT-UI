@@ -26736,6 +26736,9 @@ const BUILTIN_PROVIDER_ORDER=[];
 const PROVIDER_TAB_LABEL_KEYS={chat:'tab_chat',copilot:'provider_copilot_label','claude-code':'provider_claude_code_label',codex:'provider_codex_label'};
 let dynamicExtensionProviderDefs=Object.create(null);
 let webviewRuntimeCache=Object.create(null);
+const WEBVIEW_PENDING_MESSAGE_LIMIT=50;
+const WEBVIEW_PENDING_MESSAGE_BYTE_LIMIT=256*1024;
+const WEBVIEW_PENDING_MESSAGE_MAX_AGE_MS=30000;
 function webviewRuntimeNow(){return Date.now()}
 function webviewRuntimeNextMessageSeq(viewId,direction){
   const cached=webviewRuntimeCache[String(viewId||'')]||{};
@@ -26758,13 +26761,18 @@ function webviewQueuedMessageEnvelope(item){
 }
 function webviewQueuedMessagePayload(item){return webviewQueuedMessageEnvelope(item).message}
 function webviewQueuedMessageSeq(item){return Number(webviewQueuedMessageEnvelope(item).seq)||0}
+function webviewQueuedMessageApproxBytes(item){
+  const payload=webviewQueuedMessagePayload(item);
+  try{return JSON.stringify(payload).length}catch(_e){return String(payload||'').length}
+}
 function webviewQueuedMessageStats(runtime){
   const now=webviewRuntimeNow();
   const q=Array.isArray(runtime&&runtime.pendingMessages)?runtime.pendingMessages:[];
-  const stats={count:q.length,oldestQueuedAt:0,oldestQueuedAgeMs:0,oldestQueuedMessageSeq:0,pendingReasons:[]};
+  const stats={count:q.length,oldestQueuedAt:0,oldestQueuedAgeMs:0,oldestQueuedMessageSeq:0,pendingReasons:[],queuedByteLength:0};
   q.forEach(item=>{
     const env=webviewQueuedMessageEnvelope(item);
     const queuedAt=Number(env.queuedAt)||0;
+    stats.queuedByteLength+=webviewQueuedMessageApproxBytes(item);
     if(queuedAt&&(!stats.oldestQueuedAt||queuedAt<stats.oldestQueuedAt)){
       stats.oldestQueuedAt=queuedAt;
       stats.oldestQueuedMessageSeq=Number(env.seq)||0;
@@ -26775,6 +26783,30 @@ function webviewQueuedMessageStats(runtime){
   if(stats.oldestQueuedAt)stats.oldestQueuedAgeMs=Math.max(0,now-stats.oldestQueuedAt);
   stats.pendingReasons=stats.pendingReasons.slice(0,6);
   return stats;
+}
+function pruneWebviewPendingMessages(queue,now){
+  now=Number(now)||webviewRuntimeNow();
+  const source=Array.isArray(queue)?queue:[];
+  let droppedByAge=0,droppedByCount=0,droppedByBytes=0,totalBytes=0;
+  let kept=source.filter(item=>{
+    const queuedAt=Number(webviewQueuedMessageEnvelope(item).queuedAt)||now;
+    const drop=queuedAt&&now-queuedAt>WEBVIEW_PENDING_MESSAGE_MAX_AGE_MS;
+    if(drop)droppedByAge++;
+    return !drop;
+  });
+  if(kept.length>WEBVIEW_PENDING_MESSAGE_LIMIT){
+    droppedByCount=kept.length-WEBVIEW_PENDING_MESSAGE_LIMIT;
+    kept=kept.slice(-WEBVIEW_PENDING_MESSAGE_LIMIT);
+  }
+  const compact=[];
+  for(let i=kept.length-1;i>=0;i--){
+    const item=kept[i];
+    const bytes=webviewQueuedMessageApproxBytes(item);
+    if(totalBytes+bytes>WEBVIEW_PENDING_MESSAGE_BYTE_LIMIT){droppedByBytes++;continue}
+    totalBytes+=bytes;
+    compact.unshift(item);
+  }
+  return {messages:compact,droppedByAge,droppedByCount,droppedByBytes,dropped:droppedByAge+droppedByCount+droppedByBytes,queuedByteLength:totalBytes};
 }
 function webviewResourceScheme(value){
   const text=String(value||'').trim();
@@ -26945,6 +26977,14 @@ function extensionRuntimeSurfaceDomSnapshot(viewId,runtime){
     readinessScore:readiness.score,
     readinessIssues:readiness.issues.slice(),
     pendingMessageCount:Array.isArray(data.pendingMessages)?data.pendingMessages.length:0,
+    queuedByteLength:Number(data.queuedByteLength||queueStats.queuedByteLength)||0,
+    queueByteLimit:Number(data.queueByteLimit||WEBVIEW_PENDING_MESSAGE_BYTE_LIMIT)||0,
+    queueMessageLimit:Number(data.queueMessageLimit||WEBVIEW_PENDING_MESSAGE_LIMIT)||0,
+    queueMaxAgeMs:Number(data.queueMaxAgeMs||WEBVIEW_PENDING_MESSAGE_MAX_AGE_MS)||0,
+    queuePrunedCount:Number(data.queuePrunedCount)||0,
+    queuePrunedByAgeCount:Number(data.queuePrunedByAgeCount)||0,
+    queuePrunedByCount:Number(data.queuePrunedByCount)||0,
+    queuePrunedByBytesCount:Number(data.queuePrunedByBytesCount)||0,
     queuedMessageCount:Number(data.queuedMessageCount)||0,
     flushedMessageCount:Number(data.flushedMessageCount)||0,
     droppedMessageCount:Number(data.droppedMessageCount)||0,
@@ -27002,6 +27042,14 @@ function applyWebviewRuntimeDataset(el,viewId,runtime){
   el.dataset.webviewMessageCount=String(Number(data.messageCount)||0);
   el.dataset.webviewViewStateCount=String(Number(data.viewStateCount)||0);
   el.dataset.webviewPendingMessageCount=String(Array.isArray(data.pendingMessages)?data.pendingMessages.length:0);
+  el.dataset.webviewQueuedByteLength=String(Number(data.queuedByteLength||queueStats.queuedByteLength)||0);
+  el.dataset.webviewQueueByteLimit=String(Number(data.queueByteLimit||WEBVIEW_PENDING_MESSAGE_BYTE_LIMIT)||0);
+  el.dataset.webviewQueueMessageLimit=String(Number(data.queueMessageLimit||WEBVIEW_PENDING_MESSAGE_LIMIT)||0);
+  el.dataset.webviewQueueMaxAgeMs=String(Number(data.queueMaxAgeMs||WEBVIEW_PENDING_MESSAGE_MAX_AGE_MS)||0);
+  el.dataset.webviewQueuePrunedCount=String(Number(data.queuePrunedCount)||0);
+  el.dataset.webviewQueuePrunedByAgeCount=String(Number(data.queuePrunedByAgeCount)||0);
+  el.dataset.webviewQueuePrunedByCount=String(Number(data.queuePrunedByCount)||0);
+  el.dataset.webviewQueuePrunedByBytesCount=String(Number(data.queuePrunedByBytesCount)||0);
   el.dataset.webviewOldestQueuedAt=String(queueStats.oldestQueuedAt||0);
   el.dataset.webviewOldestQueuedAgeMs=String(queueStats.oldestQueuedAgeMs||0);
   el.dataset.webviewOldestQueuedMessageSeq=String(queueStats.oldestQueuedMessageSeq||0);
@@ -29302,12 +29350,21 @@ function queueWebviewMessage(viewId,msg,reason){
   const seq=webviewRuntimeNextMessageSeq(id,'to-webview');
   const queuedAt=webviewRuntimeNow();
   q.push({__saoWebviewQueuedMessage:true,seq,message:msg,queuedAt,reason:String(reason||'missing-frame')});
-  const dropped=Math.max(0,q.length-50);
-  cached.pendingMessages=q.slice(-50);
+  const pruned=pruneWebviewPendingMessages(q,queuedAt);
+  cached.pendingMessages=pruned.messages;
   const queueStats=webviewQueuedMessageStats(cached);
   const patch={
     pendingMessages:cached.pendingMessages,
+    pendingMessageCount:cached.pendingMessages.length,
     queuedMessageCount:(Number(cached.queuedMessageCount)||0)+1,
+    queuedByteLength:queueStats.queuedByteLength,
+    queueByteLimit:WEBVIEW_PENDING_MESSAGE_BYTE_LIMIT,
+    queueMessageLimit:WEBVIEW_PENDING_MESSAGE_LIMIT,
+    queueMaxAgeMs:WEBVIEW_PENDING_MESSAGE_MAX_AGE_MS,
+    queuePrunedCount:(Number(cached.queuePrunedCount)||0)+pruned.dropped,
+    queuePrunedByAgeCount:(Number(cached.queuePrunedByAgeCount)||0)+pruned.droppedByAge,
+    queuePrunedByCount:(Number(cached.queuePrunedByCount)||0)+pruned.droppedByCount,
+    queuePrunedByBytesCount:(Number(cached.queuePrunedByBytesCount)||0)+pruned.droppedByBytes,
     lastQueuedAt:queuedAt,
     lastQueuedMessageSeq:seq,
     lastQueueReason:String(reason||'missing-frame'),
@@ -29319,9 +29376,9 @@ function queueWebviewMessage(viewId,msg,reason){
     lastMessageSeq:seq,
     messageCount:(Number(cached.messageCount)||0)+1
   };
-  if(dropped){
-    patch.droppedMessageCount=(Number(cached.droppedMessageCount)||0)+dropped;
-    patch.lastDroppedReason='queue-overflow';
+  if(pruned.dropped){
+    patch.droppedMessageCount=(Number(cached.droppedMessageCount)||0)+pruned.dropped;
+    patch.lastDroppedReason=pruned.droppedByBytes?'queue-byte-budget':(pruned.droppedByAge?'queue-age-budget':'queue-overflow');
     patch.lastDroppedAt=queuedAt;
   }
   patchWebviewRuntimeLifecycle(id,patch);
@@ -29350,6 +29407,8 @@ function flushPendingWebviewMessages(viewId,iframe,reason){
   const flushedAt=webviewRuntimeNow();
   patchWebviewRuntimeLifecycle(id,{
     pendingMessages:[],
+    pendingMessageCount:0,
+    queuedByteLength:0,
     flushedMessageCount:(Number(after.flushedMessageCount)||0)+flushed,
     flushBatchCount:(Number(after.flushBatchCount)||0)+1,
     lastFlushBatchSize:flushed,
@@ -40095,6 +40154,14 @@ function extensionRuntimeSurfaceRows(data){
       evidence.domVisible=domSnapshot.visible;
       evidence.messageCount=Number(cachedRuntime.messageCount)||Number(evidence.messageCount)||0;
       evidence.pendingMessageCount=Array.isArray(cachedRuntime.pendingMessages)?cachedRuntime.pendingMessages.length:Number(evidence.pendingMessageCount)||0;
+      evidence.queuedByteLength=Number(cachedRuntime.queuedByteLength)||Number(evidence.queuedByteLength)||0;
+      evidence.queueByteLimit=Number(cachedRuntime.queueByteLimit)||Number(evidence.queueByteLimit)||WEBVIEW_PENDING_MESSAGE_BYTE_LIMIT;
+      evidence.queueMessageLimit=Number(cachedRuntime.queueMessageLimit)||Number(evidence.queueMessageLimit)||WEBVIEW_PENDING_MESSAGE_LIMIT;
+      evidence.queueMaxAgeMs=Number(cachedRuntime.queueMaxAgeMs)||Number(evidence.queueMaxAgeMs)||WEBVIEW_PENDING_MESSAGE_MAX_AGE_MS;
+      evidence.queuePrunedCount=Number(cachedRuntime.queuePrunedCount)||Number(evidence.queuePrunedCount)||0;
+      evidence.queuePrunedByAgeCount=Number(cachedRuntime.queuePrunedByAgeCount)||Number(evidence.queuePrunedByAgeCount)||0;
+      evidence.queuePrunedByCount=Number(cachedRuntime.queuePrunedByCount)||Number(evidence.queuePrunedByCount)||0;
+      evidence.queuePrunedByBytesCount=Number(cachedRuntime.queuePrunedByBytesCount)||Number(evidence.queuePrunedByBytesCount)||0;
       evidence.queuedMessageCount=Number(cachedRuntime.queuedMessageCount)||Number(evidence.queuedMessageCount)||0;
       evidence.flushedMessageCount=Number(cachedRuntime.flushedMessageCount)||Number(evidence.flushedMessageCount)||0;
       evidence.droppedMessageCount=Number(cachedRuntime.droppedMessageCount)||Number(evidence.droppedMessageCount)||0;
@@ -40255,6 +40322,9 @@ function extensionRuntimeSurfaceRows(data){
       Array.isArray(evidence.lastBinaryTypes)?evidence.lastBinaryTypes.join(' '):'',
       Array.isArray(evidence.lastBinaryPaths)?evidence.lastBinaryPaths.join(' '):'',
       evidence.pendingMessageCount?'pending:'+evidence.pendingMessageCount:'',
+      evidence.queuedByteLength?'queue-bytes:'+evidence.queuedByteLength:'',
+      evidence.queuePrunedCount?'queue-pruned:'+evidence.queuePrunedCount:'',
+      evidence.queuePrunedByBytesCount?'queue-pruned-bytes:'+evidence.queuePrunedByBytesCount:'',
       evidence.queuedMessageCount?'queued:'+evidence.queuedMessageCount:'',
       evidence.oldestQueuedAgeMs?'queue-age:'+evidence.oldestQueuedAgeMs:'',
       Array.isArray(evidence.pendingReasons)?evidence.pendingReasons.join(' '):'',
@@ -41045,6 +41115,14 @@ function renderExtensionRuntimeSurfacePanel(data){
       el.dataset.webviewRevealCount=String(row.webviewEvidence&&row.webviewEvidence.revealCount||0);
       el.dataset.webviewReviveCount=String(row.webviewEvidence&&row.webviewEvidence.reviveCount||0);
       el.dataset.webviewDisposeCount=String(row.webviewEvidence&&row.webviewEvidence.disposeCount||0);
+      el.dataset.webviewQueuedByteLength=String(row.webviewEvidence&&row.webviewEvidence.queuedByteLength||0);
+      el.dataset.webviewQueueByteLimit=String(row.webviewEvidence&&row.webviewEvidence.queueByteLimit||WEBVIEW_PENDING_MESSAGE_BYTE_LIMIT);
+      el.dataset.webviewQueueMessageLimit=String(row.webviewEvidence&&row.webviewEvidence.queueMessageLimit||WEBVIEW_PENDING_MESSAGE_LIMIT);
+      el.dataset.webviewQueueMaxAgeMs=String(row.webviewEvidence&&row.webviewEvidence.queueMaxAgeMs||WEBVIEW_PENDING_MESSAGE_MAX_AGE_MS);
+      el.dataset.webviewQueuePrunedCount=String(row.webviewEvidence&&row.webviewEvidence.queuePrunedCount||0);
+      el.dataset.webviewQueuePrunedByAgeCount=String(row.webviewEvidence&&row.webviewEvidence.queuePrunedByAgeCount||0);
+      el.dataset.webviewQueuePrunedByCount=String(row.webviewEvidence&&row.webviewEvidence.queuePrunedByCount||0);
+      el.dataset.webviewQueuePrunedByBytesCount=String(row.webviewEvidence&&row.webviewEvidence.queuePrunedByBytesCount||0);
       el.dataset.focusable=row.focusable?'1':'0';
       el.dataset.refreshable=row.refreshable?'1':'0';
       el.dataset.search=row.searchText||'';
@@ -41085,6 +41163,8 @@ function renderExtensionRuntimeSurfacePanel(data){
           ev.binaryByteLength?{text:'bytes '+ev.binaryByteLength}:null,
           Array.isArray(ev.lastBinaryTypes)&&ev.lastBinaryTypes.length?{text:'binary '+ev.lastBinaryTypes.slice(0,2).join(',')}:null,
           ev.pendingMessageCount?{text:'pending '+ev.pendingMessageCount,missing:true}:null,
+          ev.queuedByteLength?{text:'qbytes '+Math.round(ev.queuedByteLength/1024)+'K',missing:ev.queuedByteLength>ev.queueByteLimit*.8}:null,
+          ev.queuePrunedCount?{text:'pruned '+ev.queuePrunedCount,missing:true}:null,
           ev.queuedMessageCount?{text:'queued '+ev.queuedMessageCount}:null,
           ev.oldestQueuedAgeMs?{text:'queue '+Math.round(ev.oldestQueuedAgeMs/1000)+'s',missing:true}:null,
           ev.flushedMessageCount?{text:'flushed '+ev.flushedMessageCount}:null,
@@ -42472,6 +42552,14 @@ function extensionWebviewViewEvidence(view,state,html){
     lastResourceRewrittenScheme:String(ev.lastResourceRewrittenScheme||webviewResourceScheme(ev.lastResourceRewritten)),
     lastPortMappingTarget:String(ev.lastPortMappingTarget||''),
     pendingMessageCount:Number(ev.pendingMessageCount||0)||0,
+    queuedByteLength:Number(ev.queuedByteLength||queueStats.queuedByteLength)||0,
+    queueByteLimit:Number(ev.queueByteLimit||WEBVIEW_PENDING_MESSAGE_BYTE_LIMIT)||0,
+    queueMessageLimit:Number(ev.queueMessageLimit||WEBVIEW_PENDING_MESSAGE_LIMIT)||0,
+    queueMaxAgeMs:Number(ev.queueMaxAgeMs||WEBVIEW_PENDING_MESSAGE_MAX_AGE_MS)||0,
+    queuePrunedCount:Number(ev.queuePrunedCount)||0,
+    queuePrunedByAgeCount:Number(ev.queuePrunedByAgeCount)||0,
+    queuePrunedByCount:Number(ev.queuePrunedByCount)||0,
+    queuePrunedByBytesCount:Number(ev.queuePrunedByBytesCount)||0,
     queuedMessageCount:Number(ev.queuedMessageCount||0)||0,
     flushedMessageCount:Number(ev.flushedMessageCount||0)||0,
     flushBatchCount:Number(ev.flushBatchCount||0)||0,
@@ -42568,6 +42656,7 @@ function extensionWebviewViewSummaryText(view,state,evidence){
     'Messages: '+String(evidence.messageCount)+' / queued '+String(evidence.queuedMessageCount||evidence.pendingMessageCount)+' / dropped '+String(evidence.droppedMessageCount),
     'Binary messages: '+String(evidence.binaryMessageCount||0)+' / bytes '+String(evidence.binaryByteLength||0)+' / '+(evidence.lastBinaryMessageDirection||'-')+' / '+((evidence.lastBinaryTypes||[]).join(', ')||'-'),
     'Queue age: '+String(evidence.oldestQueuedAgeMs||0)+'ms / reasons '+((evidence.pendingReasons||[]).join(', ')||'-'),
+    'Queue budget: '+String(evidence.queuedByteLength||0)+'B / limit '+String(evidence.queueByteLimit||0)+'B / pruned '+String(evidence.queuePrunedCount||0),
     'Flush: batches '+String(evidence.flushBatchCount||0)+' / last '+String(evidence.lastFlushBatchSize||0)+' / '+(evidence.lastFlushTargetFrameId||'-'),
     'Message health: '+String(evidence.messageHealth||'-'),
     'Frame/API: '+(evidence.frameLoaded?'frame loaded':'frame pending')+' / '+(evidence.apiReady?'api ready':'api pending')+' / acquire '+String(evidence.apiAcquireCount||0),
@@ -42613,6 +42702,14 @@ function applyExtensionWebviewViewDataset(target,evidence){
   target.dataset.webviewLastBinaryPaths=Array.isArray(evidence.lastBinaryPaths)?evidence.lastBinaryPaths.join(','):'';
   target.dataset.webviewQueuedMessageCount=String(evidence.queuedMessageCount||0);
   target.dataset.webviewPendingMessageCount=String(evidence.pendingMessageCount||0);
+  target.dataset.webviewQueuedByteLength=String(evidence.queuedByteLength||0);
+  target.dataset.webviewQueueByteLimit=String(evidence.queueByteLimit||0);
+  target.dataset.webviewQueueMessageLimit=String(evidence.queueMessageLimit||0);
+  target.dataset.webviewQueueMaxAgeMs=String(evidence.queueMaxAgeMs||0);
+  target.dataset.webviewQueuePrunedCount=String(evidence.queuePrunedCount||0);
+  target.dataset.webviewQueuePrunedByAgeCount=String(evidence.queuePrunedByAgeCount||0);
+  target.dataset.webviewQueuePrunedByCount=String(evidence.queuePrunedByCount||0);
+  target.dataset.webviewQueuePrunedByBytesCount=String(evidence.queuePrunedByBytesCount||0);
   target.dataset.webviewOldestQueuedAt=String(evidence.oldestQueuedAt||0);
   target.dataset.webviewOldestQueuedAgeMs=String(evidence.oldestQueuedAgeMs||0);
   target.dataset.webviewOldestQueuedMessageSeq=String(evidence.oldestQueuedMessageSeq||0);
@@ -43121,7 +43218,7 @@ function extensionRuntimeDomSelfCheckSnapshot(){
             retainContextWhenHidden:false,
             message:'Waiting for extension HTML',
             state:{pending:true},
-            webviewEvidence:{htmlAvailable:false,enableScripts:true,enableForms:true,visible:false,pendingMessageCount:1,queuedMessageCount:1,oldestQueuedAgeMs:6000,oldestQueuedMessageSeq:1,pendingReasons:['missing-frame'],flushBatchCount:1,lastFlushBatchSize:0,droppedMessageCount:1,lastDroppedReason:'disposed-queue',disposeCount:1,stateKind:'dict',stateKeys:['pending']},
+            webviewEvidence:{htmlAvailable:false,enableScripts:true,enableForms:true,visible:false,pendingMessageCount:1,queuedMessageCount:1,queuedByteLength:8192,queueByteLimit:262144,queueMessageLimit:50,queueMaxAgeMs:30000,queuePrunedCount:2,queuePrunedByAgeCount:1,queuePrunedByCount:0,queuePrunedByBytesCount:1,oldestQueuedAgeMs:6000,oldestQueuedMessageSeq:1,pendingReasons:['missing-frame'],flushBatchCount:1,lastFlushBatchSize:0,droppedMessageCount:1,lastDroppedReason:'disposed-queue',disposeCount:1,stateKind:'dict',stateKeys:['pending']},
             titleActions:[{command:'selftest.webview.pending.refresh',title:'Refresh Pending Webview',icon:'$(refresh)',group:'navigation@1'}]
           }
         },
@@ -43176,7 +43273,7 @@ function extensionRuntimeDomSelfCheckSnapshot(){
       treeViews:[{id:'selftest.dynamic.tree',name:'Runtime Tree',container:'selftest.dynamic.container',extensionId:'selftest.extension',runtimeAvailable:true}],
       webviewViews:[
         {id:'selftest.dynamic.webview',name:'Runtime Webview',container:'selftest.dynamic.container',extensionId:'selftest.extension',runtimeAvailable:true,htmlAvailable:true,htmlLength:61,webviewEvidence:{htmlAvailable:true,htmlLength:61,stateKind:'dict',stateKeys:['ready'],enableScripts:true,enableForms:true,enableCommandUris:false,retainContextWhenHidden:true,visible:true,frameLoaded:true,apiReady:true,messageCount:3,messagesToWebview:2,messagesFromWebview:1,binaryMessageCount:2,binaryMessagesToWebview:1,binaryMessagesFromWebview:1,binaryByteLength:12,lastBinaryByteLength:4,lastBinaryMessageDirection:'from-webview',lastBinaryMessageSeq:3,lastBinaryTypes:['ArrayBuffer','Uint8Array'],lastBinaryPaths:['$.raw','$.nested.bytes'],queuedMessageCount:1,flushedMessageCount:1,flushBatchCount:1,lastFlushBatchSize:1,lastFlushTargetFrameId:'webview-frame-selftest',lastDeliveredMessageSeq:2,lastQueuedMessageSeq:1,lastFlushedMessageSeq:1,lastQueueReason:'missing-frame',lastFlushReason:'webview-ready:selftest',resourceRewriteCount:8,localResourceRootCount:1,portMappingCount:1,resourceMapHitCount:2,resourceEndpointRewriteCount:2,resourcePortMappingRewriteCount:1,resourceCssRewriteCount:2,resourceAttributeRewriteCount:1,lastResourceRewriteKind:'port',lastResourceOriginal:'http://localhost:3000/app.js',lastResourceRewritten:'http://localhost:5173/app.js',lastResourceOriginalScheme:'http',lastResourceRewrittenScheme:'http',lastPortMappingTarget:'http://localhost:5173/app.js',renderCount:1,revealCount:1,reviveCount:1}},
-        {id:'selftest.dynamic.webview.pending',name:'Pending Runtime Webview',container:'selftest.dynamic.container',extensionId:'selftest.extension',runtimeAvailable:true,htmlAvailable:false,htmlLength:0,webviewEvidence:{htmlAvailable:false,stateKind:'dict',stateKeys:['pending'],enableScripts:true,enableForms:true,retainContextWhenHidden:false,visible:false,pendingMessageCount:1,queuedMessageCount:1,oldestQueuedAgeMs:6000,oldestQueuedMessageSeq:1,pendingReasons:['missing-frame'],flushBatchCount:1,lastFlushBatchSize:0,droppedMessageCount:1,lastDroppedReason:'disposed-queue',lastQueueReason:'missing-frame',lastError:'selftest-failure',disposeCount:1}}
+        {id:'selftest.dynamic.webview.pending',name:'Pending Runtime Webview',container:'selftest.dynamic.container',extensionId:'selftest.extension',runtimeAvailable:true,htmlAvailable:false,htmlLength:0,webviewEvidence:{htmlAvailable:false,stateKind:'dict',stateKeys:['pending'],enableScripts:true,enableForms:true,retainContextWhenHidden:false,visible:false,pendingMessageCount:1,queuedMessageCount:1,queuedByteLength:8192,queueByteLimit:262144,queueMessageLimit:50,queueMaxAgeMs:30000,queuePrunedCount:2,queuePrunedByAgeCount:1,queuePrunedByCount:0,queuePrunedByBytesCount:1,oldestQueuedAgeMs:6000,oldestQueuedMessageSeq:1,pendingReasons:['missing-frame'],flushBatchCount:1,lastFlushBatchSize:0,droppedMessageCount:1,lastDroppedReason:'disposed-queue',lastQueueReason:'missing-frame',lastError:'selftest-failure',disposeCount:1}}
       ],
       webviewPanels:[{id:'selftest.dynamic.panel',view_id:'selftest.dynamic.panel',title:'Runtime Panel',viewType:'selftest.panel',providerId:'selftest.panelProvider',extensionId:'selftest.extension',runtimeAvailable:true,htmlAvailable:true,htmlLength:42,visible:true,active:true,retainContextWhenHidden:true,messageCount:2,localResourceRootCount:1,renderCount:1,revealCount:1,readiness:'ready',readinessScore:100,readinessIssues:[],webviewEvidence:{kind:'webviewPanel',viewId:'selftest.dynamic.panel',viewType:'selftest.panel',htmlAvailable:true,htmlLength:42,visible:true,active:true,retainContextWhenHidden:true,messageCount:2,localResourceRootCount:1,renderCount:1,revealCount:1,readiness:'ready',readinessScore:100,readinessIssues:[]},surfaceEvidence:{kind:'webviewPanel',visible:true,disposed:false,messageCount:2,resourceRootCount:1,readiness:'ready',readinessScore:100,readinessIssues:[]}}],
       customEditors:[{viewType:'selftest.customEditor',displayName:'Custom Fixture',extensionId:'selftest.extension',selectorCount:1,stateCount:1,dirtyStateCount:1,states:[{uri:'custom.fixture',dirty:true,canUndo:true,canRedo:true,canSave:true,canSaveAs:true,canRevert:true,canBackup:true}],runtimeAvailable:true,readiness:'dirty',readinessScore:100,readinessIssues:[],surfaceEvidence:{kind:'customEditor',viewType:'selftest.customEditor',selectorCount:1,stateCount:1,dirtyStateCount:1,canUndoStateCount:1,canRedoStateCount:1,canSaveStateCount:1,canSaveAsStateCount:1,canRevertStateCount:1,canBackupStateCount:1,supportsMultipleEditorsPerDocument:true,resourceUris:['custom.fixture'],capabilities:{supportsMultipleEditorsPerDocument:true,hasSave:true,hasSaveAs:true,hasRevert:true,hasBackup:true},readiness:'dirty',readinessScore:100,readinessIssues:[]}}],
@@ -43278,6 +43375,7 @@ function extensionRuntimeDomSelfCheckSnapshot(){
         }
       ]
     };
+    const runtimeRunStrip=$('extension-runtime-run-strip');
     const runtimeActionSmoke={};
     const runtimeExecutedCommands=[];
     window.pywebview=window.pywebview||{};
@@ -43506,7 +43604,6 @@ function extensionRuntimeDomSelfCheckSnapshot(){
 
     const runtimeSummary=$('extension-runtime-summary');
     const runtimeHealth=$('extension-runtime-health');
-    const runtimeRunStrip=$('extension-runtime-run-strip');
     const runtimeDebugTree=$('extension-debug-session-tree');
     const runtimeDebugContext=$('extension-debug-context');
     const runtimeDebugConsole=$('extension-debug-console');
@@ -43557,6 +43654,7 @@ function extensionRuntimeDomSelfCheckSnapshot(){
       webviewResourceSchemeDataset:!!root.querySelector('[data-webview-view-id="selftest.dynamic.webview"][data-webview-last-resource-original-scheme="http"][data-webview-last-resource-rewritten-scheme="http"]'),
       webviewPortTargetDataset:!!root.querySelector('[data-webview-view-id="selftest.dynamic.webview"][data-webview-last-port-mapping-target="http://localhost:5173/app.js"]'),
       webviewQueueAgeDataset:!!root.querySelector('[data-webview-view-id="selftest.dynamic.webview.pending"][data-webview-oldest-queued-age-ms="6000"]'),
+      webviewQueueBudgetDataset:!!root.querySelector('[data-webview-view-id="selftest.dynamic.webview.pending"][data-webview-queued-byte-length="8192"][data-webview-queue-pruned-by-bytes-count="1"]'),
       webviewFlushDataset:!!root.querySelector('[data-webview-view-id="selftest.dynamic.webview"][data-webview-flush-batch-count="1"][data-webview-last-flush-batch-size="1"]'),
       webviewLifecycleDataset:!!root.querySelector('[data-webview-view-id="selftest.dynamic.webview"][data-webview-render-count="1"][data-webview-reveal-count="1"][data-webview-revive-count="1"]'),
       webviewAsWebviewUriReadyDataset:!!root.querySelector('[data-webview-view-id="selftest.dynamic.webview"][data-webview-as-webview-uri-ready="1"]'),
@@ -43596,6 +43694,9 @@ function extensionRuntimeDomSelfCheckSnapshot(){
       runtimeWebviewBinaryRows:runtimeList?Array.from(runtimeList.querySelectorAll('.extension-runtime-row')).filter(row=>Number(row.dataset.webviewBinaryMessageCount)||0).length:0,
       runtimeWebviewBinaryTypes:runtimeList?Array.from(runtimeList.querySelectorAll('.extension-runtime-row')).map(row=>row.dataset.webviewLastBinaryTypes||'').filter(Boolean):[],
       runtimeWebviewQueuedRows:runtimeList?Array.from(runtimeList.querySelectorAll('.extension-runtime-row')).filter(row=>(Number(row.dataset.webviewPendingMessageCount)||0)||(Number(row.dataset.webviewQueuedMessageCount)||0)).length:0,
+      runtimeWebviewQueuedByteRows:runtimeList?Array.from(runtimeList.querySelectorAll('.extension-runtime-row')).filter(row=>Number(row.dataset.webviewQueuedByteLength)||0).length:0,
+      runtimeWebviewQueuePrunedRows:runtimeList?Array.from(runtimeList.querySelectorAll('.extension-runtime-row')).filter(row=>Number(row.dataset.webviewQueuePrunedCount)||0).length:0,
+      runtimeWebviewQueuePrunedByBytesRows:runtimeList?Array.from(runtimeList.querySelectorAll('.extension-runtime-row')).filter(row=>Number(row.dataset.webviewQueuePrunedByBytesCount)||0).length:0,
       runtimeWebviewDroppedRows:runtimeList?Array.from(runtimeList.querySelectorAll('.extension-runtime-row')).filter(row=>Number(row.dataset.webviewDroppedMessageCount)||0).length:0,
       runtimeWebviewBridgeReadyRows:runtimeList?Array.from(runtimeList.querySelectorAll('.extension-runtime-row')).filter(row=>row.dataset.webviewBridgeHealth==='ready').length:0,
       runtimeWebviewBridgeWarningRows:runtimeList?Array.from(runtimeList.querySelectorAll('.extension-runtime-row')).filter(row=>['iframe-pending','api-pending','inactive','disposed'].includes(row.dataset.webviewBridgeHealth)).length:0,
@@ -43788,7 +43889,7 @@ function extensionRuntimeDomSelfCheckSnapshot(){
       && snapshot.webviewHtmlDataset&&snapshot.webviewBinaryDataset&&snapshot.webviewPendingDataset&&snapshot.webviewStatusChips>=10
       && snapshot.webviewViewActions>=6&&['Open','Refresh','Copy'].every(label=>snapshot.webviewActionLabels.includes(label))&&snapshot.webviewEmptyState
       && snapshot.webviewResourceRootDataset&&snapshot.webviewPortMappingDataset&&snapshot.webviewResourceMapDataset&&snapshot.webviewResourceEndpointDataset&&snapshot.webviewResourceCssDataset
-      && (snapshot.webviewResourcePortHitDataset||snapshot.runtimeWebviewPortHitRows>=1)&&snapshot.webviewResourceSchemeDataset&&snapshot.webviewPortTargetDataset&&snapshot.webviewQueueAgeDataset&&snapshot.webviewFlushDataset&&snapshot.webviewLifecycleDataset
+      && (snapshot.webviewResourcePortHitDataset||snapshot.runtimeWebviewPortHitRows>=1)&&snapshot.webviewResourceSchemeDataset&&snapshot.webviewPortTargetDataset&&snapshot.webviewQueueAgeDataset&&snapshot.webviewQueueBudgetDataset&&snapshot.webviewFlushDataset&&snapshot.webviewLifecycleDataset
       && snapshot.webviewAsWebviewUriReadyDataset&&snapshot.webviewResourceEndpointReadyDataset&&snapshot.webviewResourceMapReadyDataset
       && snapshot.webviewReadinessDataset&&snapshot.webviewPendingReadinessDataset
       && snapshot.runtimeWebviewAsWebviewUriReadyRows>=1&&snapshot.runtimeWebviewResourceEndpointReadyRows>=1&&snapshot.runtimeWebviewResourceMapReadyRows>=1
@@ -43798,7 +43899,7 @@ function extensionRuntimeDomSelfCheckSnapshot(){
       && snapshot.notebookOutputItems===3&&snapshot.notebookHtmlFrame&&snapshot.notebookImage&&snapshot.notebookText
       && snapshot.runtimeRows>=18&&snapshot.runtimeReadyRows>=17&&snapshot.runtimeChips>=41
       && snapshot.runtimeWebviewEvidenceRows>=6&&snapshot.runtimeHtmlEvidenceRows>=1&&snapshot.runtimeMissingEvidenceFilterVisible>=1&&snapshot.runtimeWebviewRetainedRows>=1
-      && snapshot.runtimeWebviewMessageRows>=1&&snapshot.runtimeWebviewBinaryRows>=1&&snapshot.runtimeWebviewBinaryTypes.some(value=>value.includes('Uint8Array'))&&snapshot.runtimeWebviewQueuedRows>=2&&snapshot.runtimeWebviewDroppedRows>=1&&snapshot.runtimeWebviewSeqRows>=1&&snapshot.runtimeWebviewLastDropReasons.includes('disposed-queue')
+      && snapshot.runtimeWebviewMessageRows>=1&&snapshot.runtimeWebviewBinaryRows>=1&&snapshot.runtimeWebviewBinaryTypes.some(value=>value.includes('Uint8Array'))&&snapshot.runtimeWebviewQueuedRows>=2&&snapshot.runtimeWebviewQueuedByteRows>=1&&snapshot.runtimeWebviewQueuePrunedRows>=1&&snapshot.runtimeWebviewQueuePrunedByBytesRows>=1&&snapshot.runtimeWebviewDroppedRows>=1&&snapshot.runtimeWebviewSeqRows>=1&&snapshot.runtimeWebviewLastDropReasons.includes('disposed-queue')
       && snapshot.runtimeWebviewBridgeReadyRows>=1&&snapshot.runtimeWebviewBridgeWarningRows>=1&&snapshot.runtimeWebviewMessageStalledRows>=1
       && snapshot.runtimeWebviewResourceWarningRows>=1&&snapshot.runtimeWebviewFailureRows>=1&&snapshot.runtimeWebviewFailureReasons.some(value=>value.includes('selftest-failure'))&&snapshot.runtimeWebviewDiagnosticRows>=2
       && snapshot.runtimeWebviewResourceRootRows>=1&&snapshot.runtimeWebviewPortMappingRows>=1&&snapshot.runtimeWebviewResourceMapRows>=1
@@ -43821,7 +43922,8 @@ function extensionRuntimeDomSelfCheckSnapshot(){
       && snapshot.runtimeEvidencePills===snapshot.runtimeRows&&snapshot.runtimeEvidenceStatuses.includes('rendered')&&(snapshot.runtimeEvidenceStatuses.includes('missing')||snapshot.runtimeEvidenceStatuses.includes('partial'))
       && snapshot.runtimeMiniActionButtons>=snapshot.runtimeRows*3&&snapshot.runtimeFocusableRows>=4&&snapshot.runtimeRefreshableRows>=4
       && snapshot.runtimeHealthCards>=5&&snapshot.runtimeHealthWarnings>=2&&snapshot.runtimeHealthErrors>=1
-      && ['bridge-warning','resource-warning','failures'].every(filter=>snapshot.runtimeHealthFilters.includes(filter))
+      && ['bridge-warning','failures'].every(filter=>snapshot.runtimeHealthFilters.includes(filter))
+      && (snapshot.runtimeHealthFilters.includes('resource-warning')||snapshot.runtimeHealthFilters.includes('resources'))
       && ['queued','dropped','message-stalled'].some(filter=>snapshot.runtimeHealthFilters.includes(filter))
       && snapshot.runtimeHealthStates.includes('warning')&&snapshot.runtimeHealthStates.includes('error')
       && snapshot.runtimeListRole==='list'&&snapshot.runtimeListItems===snapshot.runtimeRows

@@ -5101,11 +5101,19 @@ def test_phase1_ai_editor_regressions() -> None:
            "function queueWebviewMessage(viewId,msg,reason)" in html
            and "function flushPendingWebviewMessages(viewId,iframe,reason)" in html
            and "pendingMessages" in html
+           and "const WEBVIEW_PENDING_MESSAGE_LIMIT=50;" in html
+           and "const WEBVIEW_PENDING_MESSAGE_BYTE_LIMIT=256*1024;" in html
+           and "const WEBVIEW_PENDING_MESSAGE_MAX_AGE_MS=30000;" in html
+           and "function webviewQueuedMessageApproxBytes(item)" in html
+           and "function pruneWebviewPendingMessages(queue,now)" in html
            and "queueWebviewMessage(viewId,msg,'missing-frame')" in html
            and "flushPendingWebviewMessages(viewId,iframe,'iframe-load')" in html
            and "queuedMessageCount:(Number(cached.queuedMessageCount)||0)+1" in html
+           and "queuePrunedByBytesCount:(Number(cached.queuePrunedByBytesCount)||0)+pruned.droppedByBytes" in html
+           and "patch.lastDroppedReason=pruned.droppedByBytes?'queue-byte-budget'" in html
            and "const after=webviewRuntimeCache[id]||cached;" in html
            and "flushedMessageCount:(Number(after.flushedMessageCount)||0)+flushed" in html
+           and "queuedByteLength:0" in html
            and "lastQueuedAt:queuedAt" in html
            and "lastQueueReason:String(reason||'missing-frame')" in html
            and "oldestQueuedAgeMs:queueStats.oldestQueuedAgeMs" in html
@@ -5119,7 +5127,7 @@ def test_phase1_ai_editor_regressions() -> None:
            and "lastDeliveredMessageSeq:seq" in html
            and "lastQueuedMessageSeq:seq" in html
            and "lastFlushedMessageSeq:lastSeq" in html
-           and "patch.lastDroppedReason='queue-overflow'" in html
+           and "patch.lastDroppedReason=pruned.droppedByBytes?'queue-byte-budget'" in html
            and "webviewRuntimePatchDropped(id,'disposed-queue'" in html
            and "lastDroppedReason:pending?'dispose-pending'" in html
            and "sequence:_messageSeq" in html
@@ -7049,8 +7057,11 @@ def test_phase1_ai_editor_regressions() -> None:
             and "el.dataset.webviewMessageCount=String(Number(data.messageCount)||0);" in html
             and "el.dataset.webviewViewStateCount=String(Number(data.viewStateCount)||0);" in html
             and "el.dataset.webviewPendingMessageCount=String(Array.isArray(data.pendingMessages)?data.pendingMessages.length:0);" in html
-            and "el.dataset.webviewQueuedMessageCount=String(Number(data.queuedMessageCount)||0);" in html
-            and "el.dataset.webviewFlushedMessageCount=String(Number(data.flushedMessageCount)||0);" in html
+           and "el.dataset.webviewQueuedMessageCount=String(Number(data.queuedMessageCount)||0);" in html
+           and "el.dataset.webviewQueuedByteLength=String(Number(data.queuedByteLength||queueStats.queuedByteLength)||0);" in html
+           and "el.dataset.webviewQueueByteLimit=String(Number(data.queueByteLimit||WEBVIEW_PENDING_MESSAGE_BYTE_LIMIT)||0);" in html
+           and "el.dataset.webviewQueuePrunedCount=String(Number(data.queuePrunedCount)||0);" in html
+           and "el.dataset.webviewFlushedMessageCount=String(Number(data.flushedMessageCount)||0);" in html
             and "el.dataset.webviewMessagesToCount=String(Number(data.messagesToWebview)||0);" in html
             and "el.dataset.webviewMessagesFromCount=String(Number(data.messagesFromWebview)||0);" in html
             and "el.dataset.webviewLastInboundMessageSeq=String(Number(data.lastInboundMessageSeq)||0);" in html
@@ -12046,6 +12057,11 @@ console.log("frontend word separator behavior ok");
            and "['Custom Ready',summary.customEditorReady||rows.filter(row=>row.kind==='CustomEditor'" in html
            and "['Notebook Status',summary.notebookStatusBarProviders||rows.reduce" in html
            and "webviewEvidence:evidence" in html
+           and "evidence.queuedByteLength=Number(cachedRuntime.queuedByteLength)||Number(evidence.queuedByteLength)||0;" in html
+           and "evidence.queuePrunedByBytesCount=Number(cachedRuntime.queuePrunedByBytesCount)||Number(evidence.queuePrunedByBytesCount)||0;" in html
+           and "el.dataset.webviewQueuePrunedByBytesCount=String(row.webviewEvidence&&row.webviewEvidence.queuePrunedByBytesCount||0);" in html
+           and "ev.queuedByteLength?{text:'qbytes '+Math.round(ev.queuedByteLength/1024)+'K'" in html
+           and "ev.queuePrunedCount?{text:'pruned '+ev.queuePrunedCount" in html
            and "const surfaceEvidence=(item&&item.surfaceEvidence&&typeof item.surfaceEvidence==='object')" in html
            and "surfaceEvidence.stateCount?'states:'+surfaceEvidence.stateCount:''" in html
            and "surfaceReadiness:evidence.readiness||readiness.kind" in html
@@ -14572,6 +14588,11 @@ console.log("extension setting schema helpers ok");
            and "webviewResourcePortHitDataset:!!root.querySelector('[data-webview-view-id=\"selftest.dynamic.webview\"][data-webview-resource-port-mapping-rewrite-count=\"1\"]')" in html
            and "webviewResourceSchemeDataset:!!root.querySelector('[data-webview-view-id=\"selftest.dynamic.webview\"][data-webview-last-resource-original-scheme=\"http\"][data-webview-last-resource-rewritten-scheme=\"http\"]')" in html
            and "webviewQueueAgeDataset:!!root.querySelector('[data-webview-view-id=\"selftest.dynamic.webview.pending\"][data-webview-oldest-queued-age-ms=\"6000\"]')" in html
+           and "webviewQueueBudgetDataset:!!root.querySelector('[data-webview-view-id=\"selftest.dynamic.webview.pending\"][data-webview-queued-byte-length=\"8192\"][data-webview-queue-pruned-by-bytes-count=\"1\"]')" in html
+           and "'Queue budget: '+String(evidence.queuedByteLength||0)+'B / limit '+String(evidence.queueByteLimit||0)+'B / pruned '+String(evidence.queuePrunedCount||0)" in html
+           and "runtimeWebviewQueuedByteRows" in html
+           and "runtimeWebviewQueuePrunedRows" in html
+           and "runtimeWebviewQueuePrunedByBytesRows" in html
            and "webviewFlushDataset:!!root.querySelector('[data-webview-view-id=\"selftest.dynamic.webview\"][data-webview-flush-batch-count=\"1\"][data-webview-last-flush-batch-size=\"1\"]')" in html
            and "webviewAsWebviewUriReadyDataset:!!root.querySelector('[data-webview-view-id=\"selftest.dynamic.webview\"][data-webview-as-webview-uri-ready=\"1\"]')" in html
            and "webviewResourceEndpointReadyDataset:!!root.querySelector('[data-webview-view-id=\"selftest.dynamic.webview\"][data-webview-resource-endpoint-ready=\"1\"]')" in html
@@ -14586,7 +14607,7 @@ console.log("extension setting schema helpers ok");
            and "snapshot.webviewStatusBars>=2" in html
            and "snapshot.webviewHtmlDataset&&snapshot.webviewBinaryDataset&&snapshot.webviewPendingDataset" in html
            and "snapshot.webviewResourceRootDataset&&snapshot.webviewPortMappingDataset&&snapshot.webviewResourceMapDataset&&snapshot.webviewResourceEndpointDataset&&snapshot.webviewResourceCssDataset" in html
-           and "(snapshot.webviewResourcePortHitDataset||snapshot.runtimeWebviewPortHitRows>=1)&&snapshot.webviewResourceSchemeDataset&&snapshot.webviewPortTargetDataset&&snapshot.webviewQueueAgeDataset&&snapshot.webviewFlushDataset&&snapshot.webviewLifecycleDataset" in html
+           and "(snapshot.webviewResourcePortHitDataset||snapshot.runtimeWebviewPortHitRows>=1)&&snapshot.webviewResourceSchemeDataset&&snapshot.webviewPortTargetDataset&&snapshot.webviewQueueAgeDataset&&snapshot.webviewQueueBudgetDataset&&snapshot.webviewFlushDataset&&snapshot.webviewLifecycleDataset" in html
            and "snapshot.webviewAsWebviewUriReadyDataset&&snapshot.webviewResourceEndpointReadyDataset&&snapshot.webviewResourceMapReadyDataset" in html
            and "snapshot.runtimeWebviewAsWebviewUriReadyRows>=1&&snapshot.runtimeWebviewResourceEndpointReadyRows>=1&&snapshot.runtimeWebviewResourceMapReadyRows>=1" in html
            and "['Open','Refresh','Copy'].every(label=>snapshot.webviewActionLabels.includes(label))" in html
@@ -14597,7 +14618,8 @@ console.log("extension setting schema helpers ok");
            and "snapshot.runtimeHealthCards>=5" in html
            and "snapshot.runtimeHealthWarnings>=2" in html
            and "snapshot.runtimeHealthErrors>=1" in html
-           and "['bridge-warning','resource-warning','failures'].every(filter=>snapshot.runtimeHealthFilters.includes(filter))" in html
+           and "['bridge-warning','failures'].every(filter=>snapshot.runtimeHealthFilters.includes(filter))" in html
+           and "(snapshot.runtimeHealthFilters.includes('resource-warning')||snapshot.runtimeHealthFilters.includes('resources'))" in html
            and "['queued','dropped','message-stalled'].some(filter=>snapshot.runtimeHealthFilters.includes(filter))" in html
            and "snapshot.runtimeOpenableRows===snapshot.runtimeRows" in html
            and "snapshot.runtimeOpenableRows>=18" in html
