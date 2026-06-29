@@ -396,8 +396,15 @@ body.window-resizing * { cursor:inherit !important; }
 .editor-diagnostic-marker.severity-3 { border-bottom-color:var(--fg-dim); opacity:.78; }
 .problems-summary { display:flex; align-items:center; gap:6px; flex-wrap:wrap; padding:5px 8px;
   border-bottom:1px solid var(--border); color:var(--fg-dim); font:11px var(--mono); }
+.problems-filterbar { display:flex; align-items:center; gap:6px; flex-wrap:wrap; padding:5px 8px;
+  border-bottom:1px solid color-mix(in srgb,var(--border) 70%,transparent); background:var(--bg2); }
+.problems-filter-input { flex:1 1 180px; min-width:160px; height:22px; box-sizing:border-box; border:1px solid var(--border);
+  border-radius:4px; background:var(--bg3); color:var(--fg); padding:2px 7px; font:11px var(--mono); outline:none; }
+.problems-filter-input:focus { border-color:var(--border-focus); }
 .problems-chip { display:inline-flex; align-items:center; gap:4px; min-height:20px; padding:1px 6px;
   border:1px solid var(--border); border-radius:999px; background:var(--bg3); }
+.problems-chip.button { cursor:pointer; user-select:none; }
+.problems-chip.active { color:var(--fg); border-color:var(--border-focus); background:var(--bg-hover); }
 .problems-nav { height:20px; min-width:22px; padding:0 6px; border:1px solid var(--border); border-radius:999px;
   background:var(--bg3); color:var(--fg-dim); font:11px var(--mono); cursor:pointer; }
 .problems-nav:hover,.problems-nav:focus { outline:none; color:var(--fg); border-color:var(--border-focus); background:var(--bg-hover); }
@@ -412,6 +419,10 @@ body.window-resizing * { cursor:inherit !important; }
 .problem-row.kind-diff.diff-added { box-shadow:inset 2px 0 0 color-mix(in srgb,var(--fg-success) 70%,transparent); }
 .problem-row.kind-diff.diff-removed { box-shadow:inset 2px 0 0 color-mix(in srgb,var(--fg-error) 70%,transparent); }
 .problem-row.kind-diff.diff-modified { box-shadow:inset 2px 0 0 color-mix(in srgb,var(--fg-accent) 70%,transparent); }
+.problem-group-header { display:flex; align-items:center; gap:6px; min-height:22px; padding:3px 8px;
+  color:var(--fg-dim); background:color-mix(in srgb,var(--bg3) 70%,transparent); border-bottom:1px solid color-mix(in srgb,var(--border) 58%,transparent);
+  font:10px var(--mono); text-transform:uppercase; }
+.problem-group-header strong { color:var(--fg); font-weight:600; text-transform:none; }
 .problem-severity { font:10px var(--mono); min-width:48px; text-transform:uppercase; }
 .problem-severity.error { color:var(--fg-error); }
 .problem-severity.warning { color:var(--fg-warning); }
@@ -425,6 +436,10 @@ body.window-resizing * { cursor:inherit !important; }
 .problem-actions button { height:21px; padding:1px 6px; border:1px solid var(--border); border-radius:3px;
   background:var(--bg3); color:var(--fg-dim); font-size:10px; }
 .problem-actions button:hover { color:var(--fg); border-color:var(--fg-accent); background:var(--bg-hover); }
+.problem-quickfix-preview { grid-column:1/4; display:none; margin-top:4px; padding:5px 7px;
+  border:1px solid color-mix(in srgb,var(--border) 72%,transparent); border-radius:4px;
+  background:color-mix(in srgb,var(--bg3) 72%,transparent); color:var(--fg-dim); font:10px/1.45 var(--mono); white-space:pre-wrap; }
+.problem-row.preview-open .problem-quickfix-preview { display:block; }
 .editor-inlay-layer { position:absolute; inset:0 0 0 50px; z-index:3; pointer-events:none;
   font:13px/1.5 var(--mono); padding:8px 12px; overflow:hidden; white-space:pre; tab-size:4; }
 .editor-inlay-hint { position:absolute; max-width:260px; overflow:hidden; text-overflow:ellipsis;
@@ -14980,6 +14995,7 @@ let _editorDefinitionRequest=0;
 let _editorDocumentHighlights=[],_editorDocumentHighlightRequest=0,_editorDocumentHighlightTimer=null,_editorDocumentHighlightContentLength=-1;
 let _editorDiagnostics=[],_editorDiagnosticRequest=0,_editorDiagnosticTimer=null,_editorDiagnosticContentLength=-1;
 let _editorActiveProblemIndex=0,_editorActiveProblemKey='';
+let _editorProblemsFilter={query:'',mode:'all',groupBy:'none',previewKey:''};
 let _editorReferences=[],_editorReferenceIndex=0,_editorReferencesRequest=0;
 let _editorReferenceGroups=[],_editorLocationPeekLabel='';
 let _editorHierarchyMode='',_editorHierarchyDirection='',_editorHierarchyRoot=null,_editorHierarchyRows=[],_editorHierarchyIndex=0,_editorHierarchyRequest=0;
@@ -26143,7 +26159,7 @@ function editorAssignProblemRowState(rows){
   rows.forEach((row,index)=>{
     row._problemIndex=index;
     row._problemKey=editorProblemStableKey(row);
-    row._problemActionCount=row.kind==='diff'?2:2;
+    row._problemActionCount=3;
   });
   if(rows.length){
     const restored=previousKey?rows.findIndex(row=>row._problemKey===previousKey):-1;
@@ -26184,6 +26200,64 @@ function focusEditorProblemByDirection(direction){
   if(!rows.length){setStatus('Problems: none');return false}
   const next=setEditorActiveProblemIndex(_editorActiveProblemIndex+(Number(direction)<0?-1:1),rows);
   return next?focusEditorProblem(next):false;
+}
+function editorProblemSearchText(problem){
+  if(!problem)return '';
+  return [
+    problem.kind,problem.severity,problem.diffType,problem.source,editorDiagnosticCodeLabel(problem.code),
+    problem.message,problem.file,problem.line,problem.character
+  ].filter(v=>v!==undefined&&v!==null).join(' ').toLowerCase();
+}
+function editorProblemMatchesFilter(problem){
+  const filter=_editorProblemsFilter||{};
+  const mode=String(filter.mode||'all');
+  if(mode==='errors'&&editorProblemSeverityRank(problem&&problem.severity)!==0)return false;
+  if(mode==='warnings'&&editorProblemSeverityRank(problem&&problem.severity)!==1)return false;
+  if(mode==='diff'&&(!problem||problem.kind!=='diff'))return false;
+  if(mode==='diagnostics'&&problem&&problem.kind==='diff')return false;
+  const query=String(filter.query||'').trim().toLowerCase();
+  if(!query)return true;
+  return query.split(/\s+/).every(part=>editorProblemSearchText(problem).includes(part));
+}
+function editorFilteredProblemRows(rows){
+  return (Array.isArray(rows)?rows:[]).filter(editorProblemMatchesFilter);
+}
+function editorProblemGroupKey(problem){
+  const groupBy=String((_editorProblemsFilter&&_editorProblemsFilter.groupBy)||'none');
+  if(groupBy==='file')return String(problem&&problem.file||'untitled');
+  if(groupBy==='source')return String(problem&&problem.source||'Unknown');
+  if(groupBy==='severity')return String(problem&&problem.kind==='diff'?'diff':editorDiagnosticSeverityLabel(problem&&problem.severity));
+  return '';
+}
+function editorGroupedProblemRows(rows){
+  const groupBy=String((_editorProblemsFilter&&_editorProblemsFilter.groupBy)||'none');
+  if(groupBy==='none')return [{key:'',label:'',rows:rows||[]}];
+  const map=new Map();
+  (rows||[]).forEach(row=>{
+    const key=editorProblemGroupKey(row);
+    if(!map.has(key))map.set(key,[]);
+    map.get(key).push(row);
+  });
+  return Array.from(map.entries()).map(([key,items])=>({key,label:key||'Unknown',rows:items}));
+}
+function setEditorProblemsFilter(partial){
+  _editorProblemsFilter=Object.assign({query:'',mode:'all',groupBy:'none',previewKey:''},_editorProblemsFilter||{},partial||{});
+  renderProblemsRows(editorAllProblemRows(_editorDiagnostics));
+}
+function editorProblemPreviewText(problem){
+  if(!problem)return '';
+  const loc=(problem.file?String(problem.file):'Current editor')+':'+String(problem.line||1)+':'+String(problem.character||1);
+  if(problem.kind==='diff'){
+    return 'Diff preview\n'+loc+'\nHunk '+String(problem.hunk||0)+' · '+String(problem.diffType||'modified')+'\nOpen Diff shows original/current side by side.';
+  }
+  const code=editorDiagnosticCodeLabel(problem.code);
+  return 'Quick Fix preview\n'+loc+'\n'+String(problem.source||'Diagnostic')+(code?' '+code:'')+'\n'+String(problem.message||'')+'\nUse Quick Fix to request matching code actions for this range.';
+}
+function toggleEditorProblemPreview(problem){
+  const key=problem&&problem._problemKey||editorProblemStableKey(problem);
+  _editorProblemsFilter.previewKey=_editorProblemsFilter.previewKey===key?'':key;
+  renderProblemsRows(editorAllProblemRows(_editorDiagnostics));
+  return !!_editorProblemsFilter.previewKey;
 }
 function editorProblemSummary(rows){
   const summary={count:0,errors:0,warnings:0,infos:0,hints:0,diff:0,diagnostics:0,quickFixable:0,diffOpenable:0,actions:0};
@@ -26279,23 +26353,26 @@ function updateProblemsPanelFromEditorDiagnostics(diagnostics){
 function renderProblemsRows(rows){
   const el=$('problems-content');if(!el)return;
   rows=editorAssignProblemRowState(rows);
-  const count=rows.length,summary=editorProblemSummary(rows);
+  const filteredRows=editorFilteredProblemRows(rows);
+  const count=filteredRows.length,summary=editorProblemSummary(rows),visibleSummary=editorProblemSummary(filteredRows);
   updateProblemsTabState(rows);
-  if(!count){
-    el.style.color='var(--fg-dim)';el.textContent='No problems detected.';
-    ['problemCount','problemDiagnostics','problemDiff','problemQuickFixable','problemDiffOpenable','problemActionCount','problemActiveIndex'].forEach(key=>{el.dataset[key]=key==='problemActiveIndex'?'0':'0'});
-    return;
-  }
   el.innerHTML='';el.style.color='';
   el.dataset.problemCount=String(summary.count);
+  el.dataset.problemVisibleCount=String(visibleSummary.count);
+  el.dataset.problemHiddenCount=String(Math.max(0,summary.count-visibleSummary.count));
   el.dataset.problemDiagnostics=String(summary.diagnostics);
   el.dataset.problemDiff=String(summary.diff);
   el.dataset.problemQuickFixable=String(summary.quickFixable);
   el.dataset.problemDiffOpenable=String(summary.diffOpenable);
   el.dataset.problemActionCount=String(summary.actions);
   el.dataset.problemActiveIndex=String(_editorActiveProblemIndex+1);
+  el.dataset.problemFilterQuery=String(_editorProblemsFilter.query||'');
+  el.dataset.problemFilterMode=String(_editorProblemsFilter.mode||'all');
+  el.dataset.problemGroupBy=String(_editorProblemsFilter.groupBy||'none');
+  el.dataset.problemPreviewOpen=_editorProblemsFilter.previewKey?'1':'0';
   const head=document.createElement('div');head.className='problems-summary';
   head.dataset.problemCount=String(summary.count);
+  head.dataset.problemVisibleCount=String(visibleSummary.count);
   head.dataset.problemActiveIndex=String(_editorActiveProblemIndex+1);
   [
     ['error',summary.errors,'Errors'],
@@ -26308,6 +26385,9 @@ function renderProblemsRows(rows){
     const chip=document.createElement('span');chip.className='problems-chip '+item[0];chip.textContent=item[2]+': '+item[1];head.appendChild(chip);
   });
   const total=document.createElement('span');total.className='problems-chip';total.textContent='Total: '+count;head.appendChild(total);
+  if(summary.count!==visibleSummary.count){
+    const hidden=document.createElement('span');hidden.className='problems-chip';hidden.textContent='Hidden: '+String(summary.count-visibleSummary.count);head.appendChild(hidden);
+  }
   [['prev','↑','Previous problem',-1],['next','↓','Next problem',1]].forEach(item=>{
     const btn=document.createElement('button');
     btn.type='button';btn.className='problems-nav '+item[0];btn.textContent=item[1];btn.title=item[2];btn.setAttribute('aria-label',item[2]);
@@ -26316,7 +26396,42 @@ function renderProblemsRows(rows){
     head.appendChild(btn);
   });
   el.appendChild(head);
-  rows.forEach(d=>{
+  const filterBar=document.createElement('div');filterBar.className='problems-filterbar';
+  filterBar.dataset.problemFilterBar='1';
+  const input=document.createElement('input');input.type='search';input.className='problems-filter-input';input.placeholder='Filter problems';input.value=String(_editorProblemsFilter.query||'');
+  input.dataset.problemFilter='query';
+  input.oninput=ev=>setEditorProblemsFilter({query:ev.target.value});
+  filterBar.appendChild(input);
+  [['all','All'],['errors','Errors'],['warnings','Warnings'],['diagnostics','Diagnostics'],['diff','Diff']].forEach(item=>{
+    const btn=document.createElement('button');btn.type='button';btn.className='problems-chip button'+((_editorProblemsFilter.mode||'all')===item[0]?' active':'');
+    btn.textContent=item[1];btn.dataset.problemFilter='mode';btn.dataset.problemFilterValue=item[0];
+    btn.onclick=ev=>{ev.preventDefault();setEditorProblemsFilter({mode:item[0]})};
+    filterBar.appendChild(btn);
+  });
+  [['none','Flat'],['file','File'],['source','Source'],['severity','Severity']].forEach(item=>{
+    const btn=document.createElement('button');btn.type='button';btn.className='problems-chip button'+((_editorProblemsFilter.groupBy||'none')===item[0]?' active':'');
+    btn.textContent='Group: '+item[1];btn.dataset.problemFilter='group';btn.dataset.problemFilterValue=item[0];
+    btn.onclick=ev=>{ev.preventDefault();setEditorProblemsFilter({groupBy:item[0]})};
+    filterBar.appendChild(btn);
+  });
+  el.appendChild(filterBar);
+  if(!count){
+    const empty=document.createElement('div');
+    empty.className='problem-row';
+    empty.dataset.problemKind='empty';
+    empty.textContent=summary.count?'No problems match the current filter.':'No problems detected.';
+    el.appendChild(empty);
+    return;
+  }
+  editorGroupedProblemRows(filteredRows).forEach(group=>{
+    if(group.label){
+      const header=document.createElement('div');header.className='problem-group-header';
+      header.dataset.problemGroup=String(group.key);
+      header.dataset.problemGroupCount=String(group.rows.length);
+      header.innerHTML='<strong>'+esc(group.label)+'</strong><span>'+String(group.rows.length)+' item'+(group.rows.length===1?'':'s')+'</span>';
+      el.appendChild(header);
+    }
+    group.rows.forEach(d=>{
     const sev=d.kind==='diff'?'diff':editorDiagnosticSeverityLabel(d.severity);
     const location=d.file?String(d.file)+(d.line?':'+d.line:''):'';
     const code=editorDiagnosticCodeLabel(d.code);
@@ -26324,7 +26439,8 @@ function renderProblemsRows(rows){
     const meta=[d.source,code].filter(Boolean).join(' ');
     const tagText=tags.length?' ['+tags.join(', ')+']':'';
     const active=Number(d._problemIndex||0)===_editorActiveProblemIndex;
-    const row=document.createElement('div');row.className='problem-row severity-'+sev+(active?' active':'')+(d.kind==='diff'?' kind-diff diff-'+String(d.diffType||'modified'):'');row.tabIndex=0;
+    const previewOpen=!!(d._problemKey&&d._problemKey===_editorProblemsFilter.previewKey);
+    const row=document.createElement('div');row.className='problem-row severity-'+sev+(active?' active':'')+(previewOpen?' preview-open':'')+(d.kind==='diff'?' kind-diff diff-'+String(d.diffType||'modified'):'');row.tabIndex=0;
     row.setAttribute('role','option');
     row.setAttribute('aria-selected',active?'true':'false');
     row.dataset.problemKind=String(d.kind||'diagnostic');
@@ -26341,6 +26457,9 @@ function renderProblemsRows(rows){
     row.dataset.problemQuickFixable=d.kind==='diff'?'0':'1';
     row.dataset.problemDiffOpenable=d.kind==='diff'?'1':'0';
     row.dataset.problemActive=active?'1':'0';
+    row.dataset.problemPreviewable='1';
+    row.dataset.problemPreviewOpen=previewOpen?'1':'0';
+    row.dataset.problemGroup=editorProblemGroupKey(d);
     if(d.kind==='diff')row.dataset.problemDiffType=String(d.diffType||'modified');
     if(d.kind==='diff')row.dataset.problemDiffHunk=String(d.hunk||0);
     const severity=document.createElement('div');severity.className='problem-severity '+sev;severity.textContent=sev;
@@ -26350,14 +26469,21 @@ function renderProblemsRows(rows){
     detail.textContent=[location,meta+tagText].filter(Boolean).join(' · ');
     main.appendChild(message);main.appendChild(detail);
     const actions=document.createElement('div');actions.className='problem-actions';
+    const preview=document.createElement('button');preview.type='button';preview.textContent='Preview';preview.title=d.kind==='diff'?'Preview diff hunk':'Preview quick fix target';
+    preview.dataset.problemAction='preview';
+    preview.onclick=ev=>{ev.preventDefault();ev.stopPropagation();toggleEditorProblemPreview(d)};
     const fix=document.createElement('button');fix.type='button';fix.textContent=d.kind==='diff'?'Diff':'Quick Fix';fix.title=d.kind==='diff'?'Open side-by-side diff':'Show quick fixes for this problem';
     fix.dataset.problemAction=d.kind==='diff'?'open-diff':'quick-fix';
     fix.onclick=ev=>{ev.preventDefault();ev.stopPropagation();requestEditorQuickFixForProblem(d,false)};
     const copy=document.createElement('button');copy.type='button';copy.textContent='Copy';copy.title='Copy problem details';
     copy.dataset.problemAction='copy';
     copy.onclick=ev=>{ev.preventDefault();ev.stopPropagation();settingsCopyText([sev.toUpperCase(),location,d.message,meta+tagText].filter(Boolean).join(' '),'Problem')};
-    actions.appendChild(fix);actions.appendChild(copy);
+    actions.appendChild(preview);actions.appendChild(fix);actions.appendChild(copy);
     row.appendChild(severity);row.appendChild(main);row.appendChild(actions);
+    const previewBox=document.createElement('div');previewBox.className='problem-quickfix-preview';
+    previewBox.dataset.problemPreview='1';
+    previewBox.textContent=editorProblemPreviewText(d);
+    row.appendChild(previewBox);
     row.title=[d.source,code,String(d.message||'')].filter(Boolean).join(': ')+(tagText?' '+tagText:'');
     row.onmousedown=()=>{setEditorActiveProblemIndex(d._problemIndex,rows);focusEditorProblem(d)};
     row.onkeydown=ev=>{
@@ -26367,6 +26493,7 @@ function renderProblemsRows(rows){
       else if(ev.key==='F2'||(ev.ctrlKey&&ev.key==='.')){ev.preventDefault();requestEditorQuickFixForProblem(d,false)}
     };
     el.appendChild(row);
+  });
   });
   refreshActiveProblemRows();
 }
@@ -46482,6 +46609,7 @@ window.terminalUiSelfCheckSnapshot=terminalUiSelfCheckSnapshot;
 function editorDirtyDiffSelfCheckSnapshot(){
   const oldActive=activeTab,oldTabs=tabs.map(t=>({...t})),oldValue=ed.value,oldDirty=editorDirty,oldLang=editorLang;
   const oldDiagnostics=Array.isArray(_editorDiagnostics)?_editorDiagnostics.slice():[],oldDiagnosticLength=_editorDiagnosticContentLength;
+  const oldProblemsFilter=Object.assign({},_editorProblemsFilter||{});
   try{
     const id=900000+Math.floor(Math.random()*1000);
     const tab={id,name:'diff-selfcheck.txt',content:'alpha\nbeta\nold\nomega',originalContent:'alpha\nbeta\nold\nomega',language:'plaintext',cursor:0,filePath:'',workspacePath:'',runtimeMode:'text',customEditor:null,webview:null};
@@ -46533,6 +46661,20 @@ function editorDirtyDiffSelfCheckSnapshot(){
     const activeRowsAfterNav=Array.from(document.querySelectorAll('#problems-content .problem-row.active'));
     const rowsWithOrdinalAndKey=problemRows.filter(row=>row.dataset.problemOrdinal&&row.dataset.problemKey&&row.dataset.problemActionCount);
     const rowsWithAria=problemRows.filter(row=>row.getAttribute('role')==='option'&&row.getAttribute('aria-selected')!==null);
+    const previewTarget=editorAllProblemRows(_editorDiagnostics).find(row=>row&&row.kind==='diagnostic');
+    const previewOpened=toggleEditorProblemPreview(previewTarget);
+    const previewRows=Array.from(document.querySelectorAll('#problems-content .problem-row.preview-open,[data-problem-preview-open="1"]'));
+    const previewBoxes=Array.from(document.querySelectorAll('#problems-content .problem-quickfix-preview')).filter(box=>box.textContent.includes('Quick Fix preview')||box.textContent.includes('Diff preview'));
+    setEditorProblemsFilter({query:'Selfcheck',mode:'diagnostics',groupBy:'source'});
+    const filteredContent=$('problems-content');
+    const filteredRows=Array.from(document.querySelectorAll('#problems-content .problem-row')).filter(row=>row.dataset.problemKind!=='empty');
+    const filterInput=document.querySelector('#problems-content .problems-filter-input');
+    const activeFilterButtons=Array.from(document.querySelectorAll('#problems-content .problems-chip.button.active')).map(btn=>btn.dataset.problemFilter+':'+btn.dataset.problemFilterValue);
+    const sourceGroupHeaders=Array.from(document.querySelectorAll('#problems-content .problem-group-header'));
+    setEditorProblemsFilter({query:'',mode:'diff',groupBy:'file'});
+    const diffFilterContent=$('problems-content');
+    const diffFilteredRows=Array.from(document.querySelectorAll('#problems-content .problem-row')).filter(row=>row.dataset.problemKind==='diff');
+    const fileGroupHeaders=Array.from(document.querySelectorAll('#problems-content .problem-group-header'));
     setActiveEditorBaselineContent(ed.value);
     let reset=editorDirtyDiffState();
     return {
@@ -46581,6 +46723,22 @@ function editorDirtyDiffSelfCheckSnapshot(){
       activeProblemDataset:activeDatasetAfterFocus,
       navigatedProblem,
       activeProblemAfterNav:activeRowsAfterNav.length,
+      previewOpened,
+      previewRows:previewRows.length,
+      previewBoxes:previewBoxes.length,
+      filteredQuery:filteredContent?filteredContent.dataset.problemFilterQuery:'',
+      filteredMode:filteredContent?filteredContent.dataset.problemFilterMode:'',
+      filteredGroupBy:filteredContent?filteredContent.dataset.problemGroupBy:'',
+      filteredVisible:filteredContent?Number(filteredContent.dataset.problemVisibleCount||0):0,
+      filteredHidden:filteredContent?Number(filteredContent.dataset.problemHiddenCount||0):0,
+      filteredRows:filteredRows.length,
+      filterInputValue:filterInput?filterInput.value:'',
+      activeFilterButtons,
+      sourceGroupCount:sourceGroupHeaders.length,
+      diffFilterMode:diffFilterContent?diffFilterContent.dataset.problemFilterMode:'',
+      diffFilterGroupBy:diffFilterContent?diffFilterContent.dataset.problemGroupBy:'',
+      diffFilterRows:diffFilteredRows.length,
+      fileGroupCount:fileGroupHeaders.length,
       problemSummaryText:summaryChips.join(' | '),
       focusedProblem:focusedDiff,
       resetTotal:reset.summary&&reset.summary.total||0,
@@ -46599,6 +46757,11 @@ function editorDirtyDiffSelfCheckSnapshot(){
         navigatedProblem&&activeRowsAfterNav.length===1&&rowsWithOrdinalAndKey.length===problemRows.length&&rowsWithAria.length===problemRows.length&&
         Number($('problems-panel')&&$('problems-panel').dataset.problemActionCount||0)>=problemRows.length*2&&
         Number(problemsContent&&problemsContent.dataset.problemQuickFixable||0)>=1&&Number(problemsContent&&problemsContent.dataset.problemDiffOpenable||0)>=1&&
+        previewOpened&&previewRows.length>=1&&previewBoxes.length>=1&&
+        filteredContent&&filteredContent.dataset.problemFilterQuery==='Selfcheck'&&filteredContent.dataset.problemFilterMode==='diagnostics'&&filteredContent.dataset.problemGroupBy==='source'&&
+        Number(filteredContent.dataset.problemVisibleCount||0)>=1&&Number(filteredContent.dataset.problemHiddenCount||0)>=1&&
+        filterInput&&filterInput.value==='Selfcheck'&&activeFilterButtons.includes('mode:diagnostics')&&activeFilterButtons.includes('group:source')&&sourceGroupHeaders.length>=1&&
+        diffFilterContent&&diffFilterContent.dataset.problemFilterMode==='diff'&&diffFilterContent.dataset.problemGroupBy==='file'&&diffFilteredRows.length>=1&&fileGroupHeaders.length>=1&&
         problemsTab&&Number(problemsTab.dataset.problemDiff)>0&&
         problemRows.every(row=>row.dataset.problemKind&&row.dataset.problemLine)&&focusedDiff&&
         (reset.summary&&reset.summary.total||0)===0
@@ -46606,6 +46769,7 @@ function editorDirtyDiffSelfCheckSnapshot(){
   }finally{
     tabs=oldTabs;activeTab=oldActive;ed.value=oldValue;editorDirty=oldDirty;editorLang=oldLang;
     _editorDiagnostics=oldDiagnostics;_editorDiagnosticContentLength=oldDiagnosticLength;
+    _editorProblemsFilter=oldProblemsFilter;
     _editorDirtyDiffCache={key:'',decorations:[],summary:null};
     renderTabs();updateLineNums();renderEditorVisualDecorations();renderProblemsRows(editorAllProblemRows(_editorDiagnostics));
   }

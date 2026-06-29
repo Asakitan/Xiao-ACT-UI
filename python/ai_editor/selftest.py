@@ -15810,10 +15810,23 @@ console.log("command palette quick access helpers ok");
            and "function editorAssignProblemRowState(rows)" in html
            and "function refreshActiveProblemRows()" in html
            and "function focusEditorProblemByDirection(direction)" in html
+           and "function editorProblemSearchText(problem)" in html
+           and "function editorProblemMatchesFilter(problem)" in html
+           and "function editorGroupedProblemRows(rows)" in html
+           and "function toggleEditorProblemPreview(problem)" in html
+           and "function editorProblemPreviewText(problem)" in html
            and "dataset.problemQuickFixable" in html
            and "dataset.problemDiffOpenable" in html
            and "dataset.problemActionCount" in html
            and ".problems-nav" in html
+           and ".problems-filterbar" in html
+           and ".problem-group-header" in html
+           and ".problem-quickfix-preview" in html
+           and "problemVisibleCount" in html
+           and "problemHiddenCount" in html
+           and "previewOpened" in html
+           and "filteredQuery" in html
+           and "diffFilterRows" in html
            and "diffActionCount" in html
             and "rulerMarkers" in html
            and "diffDatasetsOk" in html
