@@ -11938,6 +11938,13 @@ class AIEditorAPI:
                 else [])
             if isinstance(item, dict)
         }
+        keybinding_rows = self._extension_surface_keybindings(
+            contributions, context)
+        keybindings_by_command: Dict[str, List[Dict[str, Any]]] = {}
+        for row in keybinding_rows:
+            command_id = str(row.get("command") or "").strip()
+            if command_id:
+                keybindings_by_command.setdefault(command_id, []).append(row)
         entries: List[Dict[str, Any]] = []
         seen: set[str] = set()
         explicit_palette_ids: set[str] = set()
@@ -11962,6 +11969,40 @@ class AIEditorAPI:
                 if str(value or "").strip()
             ]
             return " && ".join(parts)
+
+        def _attach_keybinding_metadata(
+                entry: Dict[str, Any], command_id: str) -> Dict[str, Any]:
+            rows = keybindings_by_command.get(command_id, [])
+            if not rows:
+                return entry
+            limited = json.loads(json.dumps(
+                rows[:6], ensure_ascii=False, default=str))
+            primary = str(limited[0].get("key") or "").strip()
+            if not primary:
+                primary = str(
+                    limited[0].get("win")
+                    or limited[0].get("linux")
+                    or limited[0].get("mac")
+                    or "").strip()
+            entry["keybindings"] = limited
+            entry["primaryKeybinding"] = primary
+            entry["keybindingCount"] = len(rows)
+            evidence = entry.setdefault("surfaceEvidence", {})
+            if isinstance(evidence, dict):
+                evidence["keybindingCount"] = len(rows)
+                evidence["keybindings"] = [
+                    str(item.get("key") or item.get("win") or
+                        item.get("linux") or item.get("mac") or "")
+                    for item in limited
+                    if str(item.get("key") or item.get("win") or
+                           item.get("linux") or item.get("mac") or "").strip()
+                ][:6]
+                evidence["keybindingWhens"] = [
+                    str(item.get("when") or "")
+                    for item in limited
+                    if str(item.get("when") or "").strip()
+                ][:6]
+            return entry
 
         def _command_palette_entry(
                 command_id: str,
@@ -12076,7 +12117,7 @@ class AIEditorAPI:
                                 or alt_record.get("title")
                                 or alt_command),
                         }
-            return entry
+            return _attach_keybinding_metadata(entry, command_id)
 
         for item in palette_menu_items if isinstance(palette_menu_items, list) else []:
             if not isinstance(item, dict):
@@ -12118,7 +12159,7 @@ class AIEditorAPI:
                 node_record.get("editorRequired")
                 or runtime_kind == "textEditorCommand")
             extension_id = str(node_record.get("extensionId") or "")
-            entries.append({
+            entry = {
                 "id": command_id,
                 "command": command_id,
                 "label": command_id,
@@ -12144,7 +12185,8 @@ class AIEditorAPI:
                     "readinessScore": 100,
                     "readinessIssues": [],
                 },
-            })
+            }
+            entries.append(_attach_keybinding_metadata(entry, command_id))
 
         entries.sort(key=lambda item: (
             int(item.get("groupRank", 100)),
@@ -12273,6 +12315,110 @@ class AIEditorAPI:
             float(item.get("order", 0.0)),
             int(item.get("index", 0)),
             str(item.get("command") or "")))
+        return result
+
+    @staticmethod
+    def _extension_keybinding_primary(item: Dict[str, Any]) -> str:
+        for name in ("key", "win", "linux", "mac"):
+            value = str(item.get(name) or "").strip()
+            if value:
+                return value
+        return ""
+
+    def _extension_surface_keybindings(
+            self,
+            contributions: Dict[str, Any],
+            context: Any = None) -> List[Dict[str, Any]]:
+        raw_items = (
+            contributions.get("keybindings", [])
+            if isinstance(contributions, dict) else [])
+        if not isinstance(raw_items, list):
+            return []
+        try:
+            registered_ids = set(self._ext_host.commands.list_commands())
+        except Exception:
+            registered_ids = set()
+        palette_context = self._command_palette_context(context)
+        result: List[Dict[str, Any]] = []
+        for index, item in enumerate(raw_items):
+            if not isinstance(item, dict):
+                continue
+            command_id = str(item.get("command") or "").strip()
+            if not command_id:
+                continue
+            extension_id = self._extension_surface_extension_id(item)
+            key = self._extension_keybinding_primary(item)
+            when = str(item.get("when") or "").strip()
+            platform_keys = {
+                name: str(item.get(name) or "").strip()
+                for name in ("key", "mac", "win", "linux")
+                if str(item.get(name) or "").strip()
+            }
+            platforms = [
+                name for name in ("mac", "win", "linux")
+                if str(item.get(name) or "").strip()
+            ]
+            runtime_available = command_id in registered_ids
+            when_matches = self._extension_when_matches(when, palette_context)
+            readiness_issues: List[str] = []
+            if not runtime_available:
+                readiness_issues.append("runtime-not-registered")
+            if when and not when_matches:
+                readiness_issues.append("when-not-satisfied")
+            readiness = (
+                "ready" if runtime_available and when_matches else
+                "context-disabled" if runtime_available else
+                "manifest-only")
+            score = 100 if readiness == "ready" else 75 if runtime_available else 65
+            if when and not when_matches:
+                score -= 15
+            score = max(0, min(100, score))
+            evidence = {
+                "kind": "keybinding",
+                "command": command_id,
+                "extensionId": extension_id,
+                "key": key,
+                "platforms": platforms,
+                "platformCount": len(platforms),
+                "hasWhen": bool(when),
+                "when": when,
+                "whenMatches": when_matches,
+                "runtimeAvailable": runtime_available,
+                "readiness": readiness,
+                "readinessScore": score,
+                "readinessIssues": readiness_issues[:8],
+            }
+            result.append({
+                "id": ":".join([
+                    extension_id or "extension",
+                    command_id,
+                    str(index),
+                ]),
+                "command": command_id,
+                "key": key,
+                "mac": str(item.get("mac") or ""),
+                "win": str(item.get("win") or ""),
+                "linux": str(item.get("linux") or ""),
+                "when": when,
+                "extensionId": extension_id,
+                "platformKeys": platform_keys,
+                "platforms": platforms,
+                "platformCount": len(platforms),
+                "runtimeAvailable": runtime_available,
+                "enabled": when_matches,
+                "source": "manifest",
+                "dynamicSource": (
+                    "manifest+runtime" if runtime_available else "manifest"),
+                "readiness": readiness,
+                "readinessScore": score,
+                "readinessIssues": readiness_issues[:8],
+                "surfaceEvidence": evidence,
+            })
+        result.sort(key=lambda row: (
+            str(row.get("command") or ""),
+            str(row.get("key") or ""),
+            str(row.get("when") or ""),
+            str(row.get("extensionId") or "")))
         return result
 
     def _extension_surface_custom_editors(
@@ -13741,6 +13887,27 @@ class AIEditorAPI:
                 return []
             return sorted(result)
 
+        def keybinding_keys() -> List[str]:
+            items = (
+                contributions.get("keybindings", [])
+                if isinstance(contributions, dict) else [])
+            if not isinstance(items, list):
+                return []
+            result: List[str] = []
+            for item in items:
+                if not isinstance(item, dict):
+                    continue
+                result.append(":".join([
+                    str(item.get("_extensionId") or item.get("extensionId") or ""),
+                    str(item.get("command") or ""),
+                    str(item.get("key") or ""),
+                    str(item.get("mac") or ""),
+                    str(item.get("win") or ""),
+                    str(item.get("linux") or ""),
+                    str(item.get("when") or ""),
+                ]))
+            return sorted(result)
+
         payload = {
             "context": context if isinstance(context, dict) else {},
             "contributionKeys": {
@@ -13760,6 +13927,7 @@ class AIEditorAPI:
                 "registeredTools": keys(getattr(vscode_ns, "registered_tools", {})),
                 "chatParticipants": keys(
                     getattr(vscode_ns, "chat_participants", {})),
+                "keybindings": keybinding_keys(),
                 "nodeCommands": node_command_keys(),
                 "languageStatus": language_status_keys(),
                 "textEditorDecorations": text_editor_decoration_keys(),
@@ -14000,6 +14168,8 @@ class AIEditorAPI:
                 if isinstance(item, dict)
             ]
         menus = self._extension_surface_menu_items()
+        keybindings = self._extension_surface_keybindings(
+            contributions, context or {})
         custom_editors = self._extension_surface_custom_editors(contributions)
         notebooks = self._extension_surface_notebooks(contributions)
         terminal_profiles = self._extension_surface_terminal_profiles(
@@ -14251,6 +14421,17 @@ class AIEditorAPI:
             or str(item.get("runtimeKind") or "") == "textEditorCommand"
             or str(_as_dict(item.get("surfaceEvidence")).get("kind") or "")
             == "textEditorCommand")
+        keybinding_commands = len({
+            str(item.get("command") or "")
+            for item in keybindings
+            if str(item.get("command") or "").strip()
+        })
+        keybinding_runtime_commands = len({
+            str(item.get("command") or "")
+            for item in keybindings
+            if item.get("runtimeAvailable")
+            and str(item.get("command") or "").strip()
+        })
         payload = json.loads(json.dumps({
             "ok": True,
             "views": views,
@@ -14262,6 +14443,7 @@ class AIEditorAPI:
             "notebooks": notebooks,
             "commands": commands,
             "menus": menus,
+            "keybindings": keybindings,
             "terminalProfiles": terminal_profiles,
             "taskDefinitions": task_definitions,
             "debuggers": debuggers,
@@ -14336,6 +14518,9 @@ class AIEditorAPI:
                     1 for item in commands
                     if item.get("runtimeAvailable")),
                 "textEditorCommands": text_editor_commands,
+                "keybindings": len(keybindings),
+                "keybindingCommands": keybinding_commands,
+                "keybindingRuntimeCommands": keybinding_runtime_commands,
                 "menus": len(menus),
                 "terminalProfiles": len(terminal_profiles),
                 "taskDefinitions": len(task_definitions),
@@ -14375,7 +14560,7 @@ class AIEditorAPI:
                 "dynamicSurfaces": (
                     len(tree_views) + len(webview_views) + len(webview_panels)
                     + len(custom_editors) + len(notebooks)
-                    + len(commands) + len(menus)
+                    + len(commands) + len(menus) + len(keybindings)
                     + len(terminal_profiles) + len(task_definitions)
                     + len(debuggers) + len(language_model_tools)
                     + len(language_model_providers) + len(chat_participants)

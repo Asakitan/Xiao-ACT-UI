@@ -12204,6 +12204,10 @@ console.log("frontend word separator behavior ok");
            and "extensionRuntimeLanguageStatusRows(data).slice(0,12).forEach(item=>push('LanguageStatus'" in html
            and "item.runtimeKind==='textEditorCommand'?'TextEditorCommand':'Command'" in html
            and "['TextEditorCommand',summary.textEditorCommands||" in html
+           and "(data.keybindings||[]).slice(0,12).forEach(item=>push('Keybinding'" in html
+           and "['Keybinding',summary.keybindings||" in html
+           and "['Keybinding Commands',summary.keybindingCommands||" in html
+           and "if(v==='keybinding')return row&&row.kind==='Keybinding';" in html
            and "['Terminal',summary.terminalProfiles||0]" in html
            and "['Task',summary.taskDefinitions||rows.filter(row=>row.kind==='TaskDefinition').length]" in html
            and "['Task Providers',summary.taskProviders||rows.reduce" in html
@@ -12243,12 +12247,15 @@ console.log("frontend word separator behavior ok");
            and "el.dataset.surfaceHasCreateDebugAdapterDescriptor=row.surfaceEvidence&&row.surfaceEvidence.hasCreateDebugAdapterDescriptor?'1':'0';" in html
            and "el.dataset.surfaceCommandKind=String(row.surfaceEvidence&&row.surfaceEvidence.kind||row.kind||'');" in html
            and "el.dataset.surfaceEditorRequired=row.surfaceEvidence&&row.surfaceEvidence.editorRequired?'1':'0';" in html
+           and "el.dataset.surfaceKeybindingKey=String(row.keybindingKey||row.surfaceEvidence&&row.surfaceEvidence.key||'');" in html
+           and "el.dataset.surfaceKeybindingWhen=String(row.keybindingWhen||row.surfaceEvidence&&row.surfaceEvidence.when||'');" in html
            and "el.dataset.surfaceLanguageSeverityName=String(row.surfaceEvidence&&row.surfaceEvidence.severityName||'');" in html
            and "el.dataset.textEditorDecorationRangeCount=String(row.surfaceEvidence&&row.surfaceEvidence.rangeCount||row.rangeCount||0);" in html
            and "el.dataset.textEditorDecorationEventCount=String(row.surfaceEvidence&&row.surfaceEvidence.eventCount||row.eventCount||0);" in html
            and "(data.textEditorDecorations||[]).slice(0,12).forEach(item=>push('TextEditorDecoration'" in html
            and "runtimeStatusBarRows" in html
            and "runtimeTextEditorCommandRows" in html
+           and "runtimeKeybindingRows" in html
            and "runtimeLanguageStatusRows" in html
            and "runtimeTextEditorDecorationRows" in html
            and "runtimeTaskDefinitionRows" in html
@@ -12266,6 +12273,7 @@ console.log("frontend word separator behavior ok");
            and "snapshot.runtimeDebugContextNames.includes('answer')" in html
            and "snapshot.runtimeStatusBarRows>=1" in html
            and "snapshot.runtimeTextEditorCommandRows>=1" in html
+           and "snapshot.runtimeKeybindingRows>=1" in html
            and "snapshot.runtimeLanguageStatusRows>=1" in html
            and "snapshot.runtimeTaskDefinitionRows>=1" in html
            and "snapshot.runtimeTaskRequiredRows>=1" in html
@@ -12287,6 +12295,7 @@ console.log("frontend word separator behavior ok");
            and "ChatContext" in html
            and "StatusBarItem" in html
            and "LanguageStatus" in html
+           and "Keybinding" in html
            and "TextEditorCommand" in html
            and "TextEditorDecoration" in html)
     _check("backend extension runtime surfaces use bounded refresh cache",
@@ -12300,13 +12309,17 @@ console.log("frontend word separator behavior ok");
            and "def _extension_surface_status_bar_items(" in app_source
            and "def _extension_surface_language_status_items(" in app_source
            and "\"languageStatus\": language_status_keys()" in app_source
+           and "\"keybindings\": keybinding_keys()" in app_source
            and "\"nodeCommands\": node_command_keys()" in app_source
            and "\"textEditorDecorations\": text_editor_decoration_keys()" in app_source
            and "\"statusBarItems\": status_bar_items" in app_source
            and "\"languageStatusItems\": language_status_items" in app_source
            and "\"textEditorDecorations\": text_editor_decorations" in app_source
+           and "\"keybindings\": keybindings" in app_source
            and "\"statusBarCommands\": status_bar_commands" in app_source
            and "\"textEditorCommands\": text_editor_commands" in app_source
+           and "\"keybindingCommands\": keybinding_commands" in app_source
+           and "\"keybindingRuntimeCommands\": keybinding_runtime_commands" in app_source
            and "\"languageStatusWarnings\": language_status_warnings" in app_source
            and "\"textEditorDecorationRanges\": text_editor_decoration_ranges" in app_source
            and "\"providerHealth\": provider_health_rows[:30]" in app_source
@@ -12354,6 +12367,8 @@ console.log("frontend word separator behavior ok");
            and "lastAsWebviewUriInLocalResourceRoot" in app_source
            and "def _custom_editor_surface_evidence(" in app_source
            and "def _notebook_surface_evidence(" in app_source
+           and "def _extension_surface_keybindings(" in app_source
+           and "def _extension_keybinding_primary(" in app_source
            and "\"surfaceEvidence\": evidence" in app_source
            and "\"customEditorReady\": custom_editor_ready" in app_source
            and "\"customEditorWarnings\": custom_editor_warnings" in app_source
@@ -14715,8 +14730,8 @@ console.log("extension setting schema helpers ok");
            and "['Open','Refresh','Copy'].every(label=>snapshot.webviewActionLabels.includes(label))" in html
            and "snapshot.customPlaceholder&&snapshot.customDataset.viewType==='selftest.customEditor'" in html
            and "snapshot.notebookOutputItems===3" in html
-           and "snapshot.runtimeRows>=20" in html
-           and "snapshot.runtimeChips>=46" in html
+           and "snapshot.runtimeRows>=21" in html
+           and "snapshot.runtimeChips>=48" in html
            and "snapshot.runtimeAnchorLaneRows===snapshot.runtimeRows&&snapshot.runtimeAnchorPills>=snapshot.runtimeRows*2" in html
            and "snapshot.runtimeDynamicProviderRows>=17&&snapshot.runtimeAnchorReadyRows>=17&&snapshot.runtimeAnchorWarningRows>=3" in html
            and "['provider','host','chrome','html','frame','bridge','lifecycle'].every(key=>snapshot.runtimeAnchorKeys.includes(key))" in html
@@ -14742,6 +14757,9 @@ console.log("extension setting schema helpers ok");
            and "snapshot.runtimeActionTargets.includes('selftest.dynamic.webview')" in html
            and "snapshot.runtimeActionTargets.includes('selftest.run')" in html
            and "snapshot.runtimeActionTargets.includes('selftest.editorCommand')" in html
+           and "snapshot.runtimeKeybindingRows>=1" in html
+           and "snapshot.runtimeKeybindingKeys.includes('ctrl+alt+r')" in html
+           and "snapshot.runtimeKeybindingWhens.includes('editorTextFocus')" in html
            and "snapshot.runtimeActionTargets.includes('selftest.terminalProfile')" in html
            and "snapshot.runtimeActionTargets.includes('selftest.lmTool')" in html
            and "snapshot.runtimeActionTargets.includes('selftest.vendor')" in html
@@ -14757,12 +14775,13 @@ console.log("extension setting schema helpers ok");
            and "runtimeKindFilterVisible:runtimeKindFilterResult?runtimeKindFilterResult.visible:0" in html
            and "runtimeSelectedRows:runtimeList?runtimeList.querySelectorAll('.extension-runtime-row.selected[aria-selected=\"true\"]').length:0" in html
            and "snapshot.runtimeListRole==='list'" in html
-           and "snapshot.runtimeStatusText.includes('20 visible of 20 rows')" in html
+           and "snapshot.runtimeStatusText.includes('21 visible of 21 rows')" in html
            and "snapshot.runtimeFilterKinds.includes('LMTool')" in html
            and "snapshot.runtimeFilterKinds.includes('ViewContainer')" in html
            and "snapshot.runtimeFilterKinds.includes('StatusBarItem')" in html
            and "snapshot.runtimeFilterKinds.includes('LanguageStatus')" in html
            and "snapshot.runtimeFilterKinds.includes('TextEditorCommand')" in html
+           and "snapshot.runtimeFilterKinds.includes('Keybinding')" in html
            and "snapshot.runtimeFilterKinds.includes('TaskDefinition')" in html
            and "snapshot.runtimeFilterKinds.includes('Debugger')" in html
            and "snapshot.runtimeKindFilterVisible===1" in html
@@ -14793,7 +14812,7 @@ console.log("extension setting schema helpers ok");
            and "snapshot.runtimeActionSmoke.taskPrompt.includes('selftest.task')&&snapshot.runtimeActionSmoke.taskPrompt.includes('Required fields: command')" in html
            and "snapshot.runtimeActionSmoke.debugPrompt.includes('selftest.debug')&&snapshot.runtimeActionSmoke.debugPrompt.includes('Launch template')&&snapshot.runtimeActionSmoke.debugPrompt.includes('program')" in html
            and "snapshot.runtimeActionSmoke.lastAction==='start-debugger'" in html
-           and "['WebviewPanel','TerminalProfile','TaskDefinition','Debugger','LMTool','LMProvider','ChatParticipant','ChatContext','StatusBarItem','LanguageStatus','TextEditorDecoration','TextEditorCommand'].every(kind=>snapshot.runtimeKinds.includes(kind))" in html
+           and "['WebviewPanel','TerminalProfile','TaskDefinition','Debugger','LMTool','LMProvider','ChatParticipant','ChatContext','StatusBarItem','LanguageStatus','TextEditorDecoration','TextEditorCommand','Keybinding'].every(kind=>snapshot.runtimeKinds.includes(kind))" in html
            and "window._onEditorEvent('render_webview_panel',{view_id:lifecycleViewId" in html
            and "window._onEditorEvent('update_webview_panel_title',{view_id:lifecycleViewId" in html
            and "window._onEditorEvent('update_webview_panel_icon',{view_id:lifecycleViewId" in html
@@ -17427,6 +17446,14 @@ console.log("frontend built-in language fallback behavior ok");
             "enablement": "selftest.palette.menuEnabled",
             "group": "navigation@3",
         }]},
+        "keybindings": [{
+            "command": "selftest.commandPalette.run",
+            "key": "ctrl+alt+r",
+            "mac": "cmd+alt+r",
+            "win": "ctrl+alt+r",
+            "linux": "ctrl+alt+r",
+            "when": "editorTextFocus",
+        }],
         },
     }, "/tmp/selftest-commands-pack")
     command_palette_api._ext_host.registry.register(command_desc)
@@ -17520,6 +17547,14 @@ console.log("frontend built-in language fallback behavior ok");
            and manifest_command.get("enablement") == "editorTextFocus"
            and manifest_command.get("enabled") is True
            and manifest_command.get("disabled") is False
+           and manifest_command.get("primaryKeybinding") == "ctrl+alt+r"
+           and manifest_command.get("keybindingCount") == 1
+           and manifest_command.get("keybindings", [{}])[0].get("when")
+           == "editorTextFocus"
+           and manifest_command.get("surfaceEvidence", {}).get(
+               "keybindingCount") == 1
+           and "ctrl+alt+r" in manifest_command.get(
+               "surfaceEvidence", {}).get("keybindings", [])
            and disabled_command.get("enabled") is False
            and disabled_command.get("disabled") is True
            and disabled_command.get("disabledReason") == "Enablement not satisfied: neverContext"
@@ -17551,6 +17586,34 @@ console.log("frontend built-in language fallback behavior ok");
            and runtime_command.get("source") == "runtime"
            and runtime_command.get("runtimeAvailable") is True,
            json.dumps(palette_commands, ensure_ascii=False, default=str))
+    keybinding_surfaces = command_palette_api.list_extension_runtime_surfaces({
+        "resourceUri": "file:///tmp/readme.md",
+        "resourceLangId": "markdown",
+        "editorTextFocus": True,
+    })
+    keybinding_rows = keybinding_surfaces.get("keybindings", [])
+    keybinding_row = next(
+        (item for item in keybinding_rows
+         if item.get("command") == "selftest.commandPalette.run"), {})
+    _check("extension keybinding contributions surface dynamically",
+           keybinding_surfaces.get("summary", {}).get("keybindings") == 1
+           and keybinding_surfaces.get("summary", {}).get(
+               "keybindingCommands") == 1
+           and keybinding_surfaces.get("summary", {}).get(
+               "keybindingRuntimeCommands") == 1
+           and keybinding_row.get("key") == "ctrl+alt+r"
+           and keybinding_row.get("mac") == "cmd+alt+r"
+           and keybinding_row.get("when") == "editorTextFocus"
+           and keybinding_row.get("runtimeAvailable") is True
+           and keybinding_row.get("enabled") is True
+           and keybinding_row.get("dynamicSource") == "manifest+runtime"
+           and keybinding_row.get("surfaceEvidence", {}).get(
+               "kind") == "keybinding"
+           and "keybindings" in keybinding_surfaces.get("summary", {})
+           and keybinding_surfaces.get("summary", {}).get(
+               "dynamicSurfaces", 0) >= len(keybinding_surfaces.get(
+                   "commands", [])) + len(keybinding_rows),
+           json.dumps(keybinding_surfaces, ensure_ascii=False, default=str))
     command_palette_api._ext_host.commands.execute(
         "setContext", "selftest.palette.enabled", True)
     command_palette_api._ext_host.commands.execute(
