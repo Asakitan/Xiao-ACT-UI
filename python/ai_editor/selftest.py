@@ -5209,14 +5209,15 @@ def test_phase1_ai_editor_regressions() -> None:
             and ".chat-toolbar .spacer { display:none; }" in html
              and ".chat-control-strip { display:flex; align-items:center; gap:6px; flex:0 0 auto; flex-wrap:nowrap; min-width:max-content;" in html
              and "overflow:visible; width:max-content; max-width:none;" in html
-             and "--chat-provider-width:104px;" in html
-            and "--chat-model-width:104px;" in html
+             and "--chat-provider-width:92px;" in html
+            and "--chat-model-width:132px;" in html
             and "width:11%;min-width:36px;max-width:44px" in html
-            and "--chat-agent-width:122px;" in html
-            and "--chat-workflow-width:124px;" in html
+            and "--chat-agent-width:112px;" in html
+            and "--chat-mode-width:78px;" in html
+            and "--chat-workflow-width:112px;" in html
              and "appearance:none; -webkit-appearance:none; line-height:20px;" in html
              and ".chat-select-chip { width:150px; max-width:208px; padding:0 9px; cursor:pointer; flex:0 1 150px; }" in html
-             and ".chat-model-inline { width:var(--chat-model-width); min-width:var(--chat-model-width); max-width:var(--chat-model-width); inline-size:var(--chat-model-width); min-inline-size:var(--chat-model-width); max-inline-size:var(--chat-model-width); box-sizing:border-box; justify-content:space-between; font-family:var(--mono); flex:0 0 var(--chat-model-width); flex-basis:var(--chat-model-width); text-align:left; padding-inline:4px; gap:2px; }" in html
+             and ".chat-model-inline { width:var(--chat-model-width); min-width:var(--chat-model-width); max-width:var(--chat-model-width); inline-size:var(--chat-model-width); min-inline-size:var(--chat-model-width); max-inline-size:var(--chat-model-width); box-sizing:border-box; justify-content:space-between; font-family:var(--mono); flex:0 0 var(--chat-model-width); flex-basis:var(--chat-model-width); text-align:left; padding-inline:10px 6px; gap:4px; }" in html
              and ".chat-control-trigger { display:inline-flex; align-items:center; gap:4px; justify-content:space-between;" in html
              and "border-radius:999px!important; background:color-mix(in srgb,var(--bg3) 88%,#000); appearance:none!important; -webkit-appearance:none!important;" in html
              and "#chat-model-menu { width:var(--chat-model-width)!important; min-width:var(--chat-model-width)!important; max-width:var(--chat-model-width)!important; inline-size:var(--chat-model-width)!important; min-inline-size:var(--chat-model-width)!important; max-inline-size:var(--chat-model-width)!important; flex:0 0 var(--chat-model-width)!important; flex-basis:var(--chat-model-width)!important; }" in html
@@ -5593,8 +5594,9 @@ def test_phase1_ai_editor_regressions() -> None:
            and 'data-chat-prompt-action="clear-draft"' in html
            and ".chat-toolbar-head.has-state { display:none!important; }" in html
            and ".chat-composer-summary.has-state { display:none!important; }" in html
-           and ".chat-toolbar-head,.chat-composer-summary,.chat-prompt-shortcuts { min-height:0!important; padding:0!important; }" in html
-           and ".chat-prompt-shortcuts { display:none;" in html
+           and ".chat-toolbar-head,.chat-composer-summary { min-height:0!important; padding:0!important; }" in html
+           and ".chat-prompt-shortcuts { display:flex; align-items:center; gap:5px; flex-wrap:wrap; padding:7px 8px 0;" in html
+           and "max-height:31px; overflow:hidden;" in html
            and "function assistantComposerSummaryState()" in html
            and "function renderAssistantComposerSummary()" in html
            and "function assistantComposerContextText()" in html
@@ -6714,7 +6716,8 @@ def test_phase1_ai_editor_regressions() -> None:
             and "inputThreeLineHeight:!!(container&&container.querySelector('.chat-input')&&container.querySelector('.chat-input').getBoundingClientRect().height>=72)" in html
             and "assistantUiSelfCheckRecord(checks,'visual-controls-one-row-ready'" in html
             and "assistantUiSelfCheckRecord(checks,'visual-control-widths-ready'" in html
-           and "controlWidthsReady:!!(triggerWidthMap['chat-provider-trigger']>=100&&triggerWidthMap['chat-provider-trigger']<=108&&triggerWidthMap['chat-model-inline']>=100&&triggerWidthMap['chat-model-inline']<=108&&triggerWidthMap['chat-agent-trigger']>=118&&triggerWidthMap['chat-agent-trigger']<=126&&triggerWidthMap['chat-workflow-trigger']>=120&&triggerWidthMap['chat-workflow-trigger']<=128)" in html
+           and "controlWidthsReady:!!(triggerWidthMap['chat-provider-trigger']>=88&&triggerWidthMap['chat-provider-trigger']<=96&&triggerWidthMap['chat-model-inline']>=128&&triggerWidthMap['chat-model-inline']<=136&&triggerWidthMap['chat-agent-trigger']>=108&&triggerWidthMap['chat-agent-trigger']<=116&&triggerWidthMap['chat-mode-trigger']>=74&&triggerWidthMap['chat-mode-trigger']<=82&&triggerWidthMap['chat-workflow-trigger']>=108&&triggerWidthMap['chat-workflow-trigger']<=116)" in html
+            and "assistantUiSelfCheckRecord(checks,'visual-composer-shortcuts-visible-ready'" in html
             and "assistantUiSelfCheckRecord(checks,'visual-composer-extra-rows-hidden-ready'" in html
             and "assistantUiSelfCheckRecord(checks,'visual-model-chip-removed-ready'" in html
             and "assistantUiSelfCheckRecord(checks,'visual-content-window-ring-ready'" in html
