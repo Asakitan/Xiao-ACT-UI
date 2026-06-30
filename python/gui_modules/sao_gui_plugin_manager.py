@@ -856,7 +856,8 @@ class PluginDetachedPanel:
                 act_plugin_ui_action(self.owner, panel_id, action, payload)
             except Exception:
                 pass
-            self._dirty = True
+            if not str(action).startswith("drag_"):
+                self._dirty = True
         return _handler
 
     def _teardown_renderer(self) -> None:

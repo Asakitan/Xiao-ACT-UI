@@ -302,13 +302,19 @@ def _normalize_node(node: Any, depth: int, budget: list[int]) -> Optional[dict]:
             "style": _choice(node.get("style"), TEXT_STYLES, "value"),
         }
     if kind == "bar":
-        return {
+        d = {
             "type": "bar",
             "label": _s(node.get("label"), 200),
             "pct": _clamp01(node.get("pct")),
             "color": _choice(node.get("color"), BAR_COLORS, "cyan"),
             "caption": _s(node.get("caption"), 200),
         }
+        if node.get("action"):
+            d["action"] = _s(node["action"], 120)
+            d["lo"] = float(node.get("lo", 0.0))
+            d["hi"] = float(node.get("hi", 1.0))
+            d["step"] = float(node.get("step", 0.0))
+        return d
     if kind == "badge":
         return {
             "type": "badge",

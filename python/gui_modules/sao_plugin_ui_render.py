@@ -395,6 +395,7 @@ class SpecRenderer:
     def _build_bar(self, parent, ns, pal) -> _RNode:
         pct = _finite_float(ns.get("pct"), 0.0, lo=0.0, hi=1.0)
         color = _bar_color(str(ns.get("color") or "cyan"), pal)
+        interactive = bool(ns.get("action"))
         w = tk.Frame(parent, bg=parent["bg"])
         top = tk.Frame(w, bg=parent["bg"])
         top.pack(fill="x", pady=(3, 1))
@@ -404,20 +405,53 @@ class SpecRenderer:
         cap = tk.Label(top, text=str(ns.get("caption") or ""), bg=parent["bg"], fg=pal["value"],
                        anchor="e", font=("Segoe UI", 9))
         cap.pack(side="right")
-        track = tk.Frame(w, bg=pal["sep"], height=8)
+        bar_h = 16 if interactive else 8
+        track = tk.Frame(w, bg=pal["sep"], height=bar_h,
+                         cursor="hand2" if interactive else "")
         track.pack(fill="x", pady=(0, 3))
         track.pack_propagate(False)
         fill = tk.Frame(track, bg=color)
-        fill.place(relx=0, rely=0, relwidth=pct, relheight=1)
-        return _RNode("bar", w, parts={"label": lbl, "caption": cap, "fill": fill},
+        fill.place(relx=0, rely=0, relwidth=max(pct, 0.001), relheight=1)
+
+        if interactive and self._on_action:
+            action = str(ns["action"])
+            lo = float(ns.get("lo", 0.0))
+            hi = float(ns.get("hi", 1.0))
+            step = float(ns.get("step", 0.0))
+            on_act = self._on_action
+
+            def _on_click(event, src_is_fill=False):
+                tw = track.winfo_width()
+                if tw < 1:
+                    return
+                x = event.x + (fill.winfo_x() if src_is_fill else 0)
+                raw = max(0.0, min(1.0, x / tw))
+                val = lo + raw * (hi - lo)
+                if step > 0:
+                    val = round(val / step) * step
+                val = max(lo, min(hi, val))
+                rel = (val - lo) / (hi - lo) if hi > lo else 0.0
+                fill.place_configure(relwidth=max(rel, 0.001))
+                cap.config(text=f"{val:.2f}" if isinstance(val, float) and hi <= 1.01 else
+                           (f"{val:.1f}" if isinstance(val, float) else str(int(val))))
+                on_act(action, {"value": val})
+
+            track.bind("<Button-1>", lambda e: _on_click(e, False))
+            track.bind("<B1-Motion>", lambda e: _on_click(e, False))
+            fill.bind("<Button-1>", lambda e: _on_click(e, True))
+            fill.bind("<B1-Motion>", lambda e: _on_click(e, True))
+
+        return _RNode("bar", w, parts={"label": lbl, "caption": cap, "fill": fill,
+                                        "track": track},
                       spec=ns, pack_kw={"fill": "x"})
 
     def _update_bar(self, rn, ns, pal) -> None:
-        pct = _finite_float(ns.get("pct"), 0.0, lo=0.0, hi=1.0)
         rn.parts["label"].config(text=str(ns.get("label") or ""))
-        rn.parts["caption"].config(text=str(ns.get("caption") or ""))
         rn.parts["fill"].config(bg=_bar_color(str(ns.get("color") or "cyan"), pal))
-        rn.parts["fill"].place_configure(relwidth=pct)
+        if not ns.get("action"):
+            pct = _finite_float(ns.get("pct"), 0.0, lo=0.0, hi=1.0)
+            rn.parts["caption"].config(text=str(ns.get("caption") or ""))
+            rn.parts["fill"].place_configure(relwidth=pct)
 
     def _build_badge(self, parent, ns, pal) -> _RNode:
         fg = _badge_fg(str(ns.get("style") or "muted"), pal)
