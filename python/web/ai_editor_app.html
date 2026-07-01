@@ -2382,6 +2382,7 @@ button.review-pill { cursor:pointer; }
 .settings-language-head code { color:var(--fg-accent); font:11px var(--mono); }
 .settings-language-head .lang-chip { padding:1px 6px; border:1px solid var(--border); border-radius:999px;
   background:var(--bg3); color:var(--fg-dim); font:10px var(--mono); }
+.settings-language-head .lang-chip.active { color:var(--fg-success); border-color:color-mix(in srgb,var(--fg-success) 42%,var(--border)); }
 .settings-language-actions,.settings-language-chips { display:flex; flex-wrap:wrap; gap:5px; align-items:center; }
 .settings-language-actions { margin-bottom:6px; }
 .settings-inline-row { display:flex; gap:6px; align-items:center; }
@@ -3174,7 +3175,7 @@ pre.code-block { overflow:visible; }
 .settings-control-frame.override .settings-control-status { color:var(--fg-warning); border-color:color-mix(in srgb,var(--fg-warning) 48%,var(--border)); }
 .settings-control-frame.default .settings-control-status { color:var(--fg-success); border-color:color-mix(in srgb,var(--fg-success) 42%,var(--border)); }
 .settings-control-frame.invalid .settings-control-status { color:var(--fg-error); border-color:color-mix(in srgb,var(--fg-error) 55%,var(--border)); }
-.settings-field.builtin-setting label.settings-check.settings-switch-row { display:flex; align-items:center; gap:9px;
+.settings-field.builtin-setting label.settings-check.settings-switch-row { display:flex; align-items:center; gap:12px;
   min-height:28px; margin:0; cursor:pointer; color:var(--fg); }
 .settings-field.builtin-setting label.settings-check.settings-switch-row input[type="checkbox"] {
   appearance:none; width:34px; height:18px; flex:0 0 auto; margin:0; border:1px solid var(--border);
@@ -3332,7 +3333,7 @@ pre.code-block { overflow:visible; }
 .settings-vscode-calm .settings-field:hover > .settings-row-impact,
 .settings-vscode-calm .settings-field:focus-within > .settings-row-impact { display:flex; }
 .settings-vscode-calm .settings-field.builtin-setting > .settings-control-frame { grid-column:1; grid-row:auto; }
-.settings-vscode-calm .settings-control-frame { max-width:680px; min-height:30px; border-radius:2px; padding:3px 6px; background:var(--bg-input); }
+.settings-vscode-calm .settings-control-frame { max-width:680px; min-height:30px; border-radius:2px; padding:5px 10px; background:var(--bg-input); }
 .settings-vscode-calm .settings-field.builtin-setting[data-setting-control-kind="textarea"] > .settings-control-frame,
 .settings-vscode-calm .settings-field.builtin-setting[data-setting-control-kind="json"] > .settings-control-frame { max-width:none; }
 .settings-vscode-calm .settings-control-status { display:none; }
@@ -3374,7 +3375,7 @@ pre.code-block { overflow:visible; }
 .settings-vscode-calm .settings-main .sb-group { margin:18px 0 7px !important; padding:0 !important;
   color:var(--fg); font-size:13px; font-weight:600; line-height:18px; text-transform:none; }
 .settings-vscode-calm .settings-main .sb-group:first-child { margin-top:0 !important; }
-.settings-vscode-calm .settings-main .settings-help { max-width:720px; color:color-mix(in srgb,var(--fg-dim) 88%,var(--fg)); }
+.settings-vscode-calm .settings-main .settings-help { max-width:720px; color:color-mix(in srgb,var(--fg-dim) 88%,var(--fg)); margin:6px 0 10px; line-height:1.5; }
 .settings-vscode-calm .settings-field.builtin-setting > label.settings-original-label { display:none; }
 .settings-vscode-calm .settings-field.builtin-setting > .settings-built-desc { max-width:610px; line-height:1.45; font-size:12px; }
 .settings-vscode-calm .settings-control-frame input,
@@ -3604,11 +3605,11 @@ pre.code-block { overflow:visible; }
 .settings-vscode-calm .settings-main > details.settings-section,
 .settings-vscode-calm #ext-settings-container { max-width:960px; }
 .settings-vscode-calm .settings-section-overview { padding-top:13px; border-bottom-color:color-mix(in srgb,var(--border) 58%,transparent); }
-.settings-vscode-calm .settings-field.builtin-setting { padding:11px 72px 11px 0;
+.settings-vscode-calm .settings-field.builtin-setting { padding:11px 72px 11px 12px;
   border-bottom:1px solid color-mix(in srgb,var(--border) 58%,transparent); }
 .settings-vscode-calm .settings-field.builtin-setting.modified { box-shadow:inset 2px 0 0 var(--fg-accent);
-  padding-left:10px; }
-.settings-vscode-calm .settings-field.builtin-setting.invalid { box-shadow:inset 2px 0 0 var(--fg-error); padding-left:10px; }
+  padding-left:14px; }
+.settings-vscode-calm .settings-field.builtin-setting.invalid { box-shadow:inset 2px 0 0 var(--fg-error); padding-left:14px; }
 .settings-vscode-calm .settings-built-head { grid-template-columns:minmax(88px,auto) minmax(220px,1fr) minmax(0,1.2fr) auto; }
 .settings-vscode-calm .settings-built-head-category { color:color-mix(in srgb,var(--fg-dim) 86%,var(--fg)); }
 .settings-vscode-calm .settings-built-head-state.edited { color:var(--fg-accent); }
@@ -5202,6 +5203,22 @@ pre.code-block { overflow:visible; }
       </div>
       <label class="settings-check"><input id="s-cc-prefer-cli" type="checkbox"><span><b>Prefer Claude Code CLI</b><small>Keep the local CLI path ready for external launches; the embedded Claude Code tab continues to use the Anthropic/API path inside the editor.</small></span></label>
       <label class="settings-check settings-danger"><input id="s-cc-skip-permissions" type="checkbox"><span><b>Allow Claude skip permissions flag</b><small>Off by default. Enable only if you want external Claude CLI launches from this workspace to include the skip-permissions flag.</small></span></label>
+      <div class="sb-group" style="padding:0;margin-top:12px">Local Proxy</div>
+      <div class="settings-help">Runs a local Anthropic-compatible proxy so external Claude Code CLI/SDK launches use this editor's configured provider and API key instead of a direct Anthropic key.</div>
+      <div id="cc-proxy-panel" class="settings-language-panel" aria-live="polite">
+        <div class="settings-language-head">
+          <strong>Proxy</strong>
+          <span id="cc-proxy-state-chip" class="lang-chip">Stopped</span>
+          <span id="cc-proxy-port-chip" class="lang-chip" style="display:none">Port: -</span>
+          <span id="cc-proxy-model-chip" class="lang-chip" style="display:none">Model: -</span>
+        </div>
+        <div class="settings-language-actions">
+          <button type="button" class="primary" id="cc-proxy-start-btn" onclick="startClaudeProxy()">Start Proxy</button>
+          <button type="button" id="cc-proxy-stop-btn" onclick="stopClaudeProxy()" disabled>Stop Proxy</button>
+          <button type="button" id="cc-proxy-copy-env-btn" onclick="copyClaudeProxyEnv()" disabled>Copy Env Vars</button>
+        </div>
+        <div class="settings-help" id="cc-proxy-detail"></div>
+      </div>
     </div>
 
     <div class="settings-section" data-settings-id="codex" data-settings-title="Codex">
@@ -5717,6 +5734,49 @@ function settingsCopyText(text,label){
     showToast((label||'Setting')+' copied','success',1400);
   }catch(e){showToast('Copy failed','warning',1800)}
 }
+let _claudeProxyLastEnv=null;
+function renderClaudeProxyStatus(status){
+  status=status||{};
+  const running=!!status.running;
+  const stateChip=$('cc-proxy-state-chip');
+  if(stateChip){stateChip.textContent=running?'Running':'Stopped';stateChip.classList.toggle('active',running)}
+  const portChip=$('cc-proxy-port-chip');
+  if(portChip){portChip.style.display=running?'':'none';portChip.textContent='Port: '+(status.port||'-')}
+  const modelChip=$('cc-proxy-model-chip');
+  if(modelChip){modelChip.style.display=running?'':'none';modelChip.textContent='Model: '+(status.model||'-')}
+  const startBtn=$('cc-proxy-start-btn');if(startBtn)startBtn.disabled=running;
+  const stopBtn=$('cc-proxy-stop-btn');if(stopBtn)stopBtn.disabled=!running;
+  const copyBtn=$('cc-proxy-copy-env-btn');if(copyBtn)copyBtn.disabled=!running;
+  const detail=$('cc-proxy-detail');
+  if(detail)detail.textContent=running?('Base URL: '+(status.base_url||'')):'';
+  if(!running)_claudeProxyLastEnv=null;
+}
+async function refreshClaudeProxyStatus(){
+  const status=await call('get_claude_proxy_status');
+  renderClaudeProxyStatus(status||{running:false});
+}
+async function startClaudeProxy(){
+  const btn=$('cc-proxy-start-btn');if(btn)btn.disabled=true;
+  const result=await call('start_claude_proxy');
+  if(!result){showToast('Claude proxy backend unavailable','error',2200);if(btn)btn.disabled=false;return}
+  if(result.error){showToast('Claude proxy failed: '+result.error,'error',2600);if(btn)btn.disabled=false;return}
+  _claudeProxyLastEnv=result.env||null;
+  await refreshClaudeProxyStatus();
+  showToast('Claude proxy started on port '+(result.port||'?'),'success',1800);
+}
+async function stopClaudeProxy(){
+  await call('stop_claude_proxy');
+  await refreshClaudeProxyStatus();
+  showToast('Claude proxy stopped','info',1600);
+}
+function copyClaudeProxyEnv(){
+  if(!_claudeProxyLastEnv){showToast('Start the proxy first','info',1600);return}
+  const lines=Object.entries(_claudeProxyLastEnv).map(([k,v])=>k+'='+v).join('\n');
+  settingsCopyText(lines,'Proxy env vars');
+}
+window.startClaudeProxy=startClaudeProxy;
+window.stopClaudeProxy=stopClaudeProxy;
+window.copyClaudeProxyEnv=copyClaudeProxyEnv;
 function settingsEnsureValueSummary(row){
   if(!row||!row.querySelector)return null;
   let summary=row.querySelector('[data-settings-value-summary="1"]');
@@ -32441,6 +32501,7 @@ function openSettings(){
   const cc=settingSection('claude_code');
   setInputValue('s-cc-cli',cc.cli_path);setInputValue('s-cc-model',cc.model);setInputValue('s-cc-args',listToText(cc.cli_args));
   setCheckedValue('s-cc-prefer-cli',cc.prefer_cli);setCheckedValue('s-cc-skip-permissions',cc.allow_dangerously_skip_permissions===true);
+  refreshClaudeProxyStatus();
   const codex=settingSection('codex');
   setInputValue('s-codex-cli',codex.cli_path);setInputValue('s-codex-model',codex.model);setInputValue('s-codex-args',listToText(codex.cli_args));
   setSelectValue('s-codex-transport',codex.transport,'chat_completions');
@@ -54897,7 +54958,7 @@ if(window.pywebview){
     display: grid !important;
     grid-template-columns: minmax(0, 1fr) !important;
     gap: 4px !important;
-    padding: 12px 48px 13px 0 !important;
+    padding: 12px 48px 13px 12px !important;
   }
 
   #settings-modal.open .settings-vscode-calm .settings-field.builtin-setting > .settings-built-head,

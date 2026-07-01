@@ -5519,7 +5519,7 @@ def test_phase1_ai_editor_regressions() -> None:
            and ".settings-vscode-calm.settings-details-open .settings-nav-quick[data-settings-command-surface=\"sidebar\"] { display:grid; }" in html
            and ".settings-vscode-calm:not(.settings-details-open) .settings-nav-commandbar button[data-settings-nav-command=\"keyboard-shortcuts\"]," in html
            and ".settings-vscode-calm .settings-shell { grid-template-columns:286px minmax(0,1fr);" in html
-           and ".settings-vscode-calm .settings-field.builtin-setting { padding:11px 72px 11px 0;" in html
+           and ".settings-vscode-calm .settings-field.builtin-setting { padding:11px 72px 11px 12px;" in html
            and ".settings-vscode-calm .settings-control-frame { max-width:680px; min-height:32px; }" in html
            and ".settings-vscode-calm .settings-row-actions { top:10px; opacity:0;" in html
            and "hasSettingsWorkbenchStatus" in html
@@ -12127,6 +12127,24 @@ console.log("frontend word separator behavior ok");
     _check("settings row header reserves space for the hover action buttons",
            ".settings-built-head { display:grid; grid-template-columns:auto minmax(120px,auto) minmax(0,1fr) auto;\n  align-items:center; gap:8px; min-height:22px; margin:0 0 2px; padding-right:84px; }" in html
            and ".settings-vscode-calm .settings-built-head { grid-template-columns:auto minmax(180px,auto) minmax(0,1fr) auto; gap:7px; cursor:default; padding-right:84px; }" in html)
+    _check("settings row is not flush against the left edge and has vertical breathing room",
+           "#settings-modal.open .settings-vscode-calm .settings-field.builtin-setting {\n    display: grid !important;\n    grid-template-columns: minmax(0, 1fr) !important;\n    gap: 4px !important;\n    padding: 12px 48px 13px 12px !important;\n  }" in html
+           and ".settings-vscode-calm .settings-field.builtin-setting { padding:11px 72px 11px 12px;" in html
+           and ".settings-vscode-calm .settings-field.builtin-setting.modified { box-shadow:inset 2px 0 0 var(--fg-accent);\n  padding-left:14px; }" in html
+           and ".settings-vscode-calm .settings-main .settings-help { max-width:720px; color:color-mix(in srgb,var(--fg-dim) 88%,var(--fg)); margin:6px 0 10px; line-height:1.5; }" in html
+           and ".settings-vscode-calm .settings-control-frame { max-width:680px; min-height:30px; border-radius:2px; padding:5px 10px; background:var(--bg-input); }" in html
+           and "gap:12px;\n  min-height:28px; margin:0; cursor:pointer; color:var(--fg); }" in html)
+    _check("claude code proxy start/stop/status is wired into settings and window-exported",
+           "id=\"cc-proxy-start-btn\" onclick=\"startClaudeProxy()\"" in html
+           and "id=\"cc-proxy-stop-btn\" onclick=\"stopClaudeProxy()\"" in html
+           and "function renderClaudeProxyStatus(status){" in html
+           and "async function refreshClaudeProxyStatus(){" in html
+           and "async function startClaudeProxy(){" in html
+           and "async function stopClaudeProxy(){" in html
+           and "window.startClaudeProxy=startClaudeProxy;" in html
+           and "window.stopClaudeProxy=stopClaudeProxy;" in html
+           and "window.copyClaudeProxyEnv=copyClaudeProxyEnv;" in html
+           and "refreshClaudeProxyStatus();" in html)
     _check("settings has a simple/complex/advanced complexity tier",
            "const SETTINGS_MODE_ORDER=['simple','complex','advanced'];" in html
            and "function settingsCurrentMode(){" in html
