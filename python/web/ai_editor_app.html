@@ -5308,6 +5308,7 @@ pre.code-block { overflow:visible; }
         <div><label>Output Limit</label><input id="s-term-output" type="number" min="1000" value="8000"></div>
         <div class="full"><label>Shell Args (one per line)</label><textarea id="s-term-args" rows="2" placeholder="Optional non-secret args only"></textarea></div>
       </div>
+      <label class="settings-check"><input id="s-term-use-pty" type="checkbox"><span><b>Use real pseudo-terminal (ConPTY)</b><small>Needed for raw-mode/full-screen programs to see a real terminal size and isatty(). Requires the optional pywinpty dependency; falls back silently to the normal pipe if it isn't installed. May show extra redraw escape sequences for programs that repaint the whole screen.</small></span></label>
     </div>
 
     <div class="settings-section" data-settings-id="workspace" data-settings-title="Workspace">
@@ -5649,6 +5650,7 @@ const SETTING_INPUT_META={
   's-term-shell':{key:'terminal.integrated.shell.windows',path:'terminal.shell_path',scope:'User'},
   's-term-timeout':{key:'aiEditor.terminal.timeout',path:'terminal.timeout',scope:'User'},
   's-term-output':{key:'aiEditor.terminal.outputLimit',path:'terminal.output_limit',scope:'User'},
+  's-term-use-pty':{key:'aiEditor.terminal.usePty',path:'terminal.use_pty',scope:'User'},
   's-workspace-root':{key:'aiEditor.workspace.root',path:'workspace.root',scope:'Workspace',fallback:''},
   's-workspace-auto':{key:'aiEditor.workspace.autoDetect',path:'workspace.auto_detect',scope:'Workspace'},
   's-ext-confirm':{key:'extensions.confirmInstall',path:'extensions.confirm_install',scope:'User'},
@@ -24133,9 +24135,20 @@ window.pickSlash=function(cmd){closeSlashPopup();setChatInputValue('',{focus:fal
 // ── Terminal ──
 // TERM-01: ANSI SGR escape code renderer
 const _ANSI_FG_NAMES=['black','red','green','yellow','blue','magenta','cyan','white'];
+// PTY-02: a real ConPTY-backed session emits full-screen repaint/query escape
+// sequences (cursor positioning, save/restore, device queries, mode toggles)
+// that this log-style transcript can't act on (no terminal grid to draw
+// into) — strip them instead of leaking raw escape bytes into the DOM.
+function _stripNonSgrEscapes(safe){
+  let out=safe.replace(/\x1b\[\d*(?:;\d*)?H(?:\x1b\[0?m)? {2,}/g,'');
+  out=out.replace(/\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)/g,'');
+  out=out.replace(/\x1b[78]/g,'');
+  out=out.replace(/\x1b\[[\?0-9;]*[A-Za-z]/g,seq=>/m$/.test(seq)?seq:'');
+  return out;
+}
 function ansiToHtml(text){
   // XSS safety: escape HTML entities first
-  const safe=text.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+  const safe=_stripNonSgrEscapes(text.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'));
   let out='',openSpans=0;
   const parts=safe.split(/(\x1b\[[0-9;]*m)/g);
   let classes=[];
@@ -32816,6 +32829,7 @@ function openSettings(){
   const term=settingSection('terminal');
   setInputValue('s-term-profile',term.profile);setInputValue('s-term-shell',term.shell_path);setInputValue('s-term-args',listToText(term.shell_args));
   setInputValue('s-term-timeout',term.timeout??30);setInputValue('s-term-output',term.output_limit??8000);
+  setCheckedValue('s-term-use-pty',term.use_pty===true);
   const workspace=settingSection('workspace');
   setInputValue('s-workspace-root',workspace.configured_root||(!workspace.auto_detected?workspace.root:''));
   setInputValue('s-workspace-roots',listToText(workspace.roots));
@@ -36552,7 +36566,7 @@ async function saveSettings(){
   config.claude_code={...settingSection('claude_code'),cli_path:readInputValue('s-cc-cli'),model:readInputValue('s-cc-model'),cli_args:readListValue('s-cc-args',false),prefer_cli:readCheckedValue('s-cc-prefer-cli'),allow_dangerously_skip_permissions:readCheckedValue('s-cc-skip-permissions')};
   config.codex={...settingSection('codex'),cli_path:readInputValue('s-codex-cli'),model:readInputValue('s-codex-model'),transport:readInputValue('s-codex-transport')||'chat_completions',cli_args:readListValue('s-codex-args',false)};
   config.mcp={...settingSection('mcp'),access:readInputValue('s-mcp-access')||'prompt',collision_behavior:readInputValue('s-mcp-collision')||'first',discovery_enabled:readCheckedValue('s-mcp-discovery'),autostart:readCheckedValue('s-mcp-autostart'),server_sampling:readCheckedValue('s-mcp-sampling')};
-  config.terminal={...settingSection('terminal'),profile:readInputValue('s-term-profile')||'PowerShell 7 (No Profile)',shell_path:readInputValue('s-term-shell'),shell_args:readListValue('s-term-args',false),timeout:readNumberValue('s-term-timeout',30,true),output_limit:readNumberValue('s-term-output',8000,true)};
+  config.terminal={...settingSection('terminal'),profile:readInputValue('s-term-profile')||'PowerShell 7 (No Profile)',shell_path:readInputValue('s-term-shell'),shell_args:readListValue('s-term-args',false),timeout:readNumberValue('s-term-timeout',30,true),output_limit:readNumberValue('s-term-output',8000,true),use_pty:readCheckedValue('s-term-use-pty')};
   const workspaceRootInput=readInputValue('s-workspace-root');
   config.workspace={...settingSection('workspace'),root:workspaceRootInput,configured_root:workspaceRootInput,resolved_root:currentWorkspaceRoot(),roots:readListValue('s-workspace-roots',false),recent_roots:workspaceRecentRoots(),auto_detect:readCheckedValue('s-workspace-auto'),remember_last:readCheckedValue('s-workspace-remember'),last_root:currentWorkspaceRoot()};
   config.extensions={...settingSection('extensions'),confirm_install:readCheckedValue('s-ext-confirm'),diagnostics_enabled:readCheckedValue('s-ext-diagnostics'),allowed_publishers:readListValue('s-ext-allow',true),blocked_publishers:readListValue('s-ext-block',true),enabled_contributions:readExtensionContributionValues(),enabled_contributions_explicit:true};
@@ -51440,6 +51454,9 @@ function currentTerminalProfile(){
   const term=terminalSettings();
   return String(term.profile||TERMINAL_PROFILE_OPTIONS[0].id);
 }
+function currentTerminalUsePty(){
+  return terminalSettings().use_pty===true;
+}
 function terminalProfileMetadata(profile){
   const def=terminalProfileDefinition(profile||currentTerminalProfile());
   const root=currentWorkspaceRoot();
@@ -53057,6 +53074,10 @@ async function runTerminalCommand(cmd,options){
   try{
     const payload={command:cmd,mode:'start',profile};
     if(cwd)payload.cwd=cwd;
+    if(currentTerminalUsePty())payload.pty=true;
+    const startDims=terminalComputeColsRows(out);
+    payload.cols=startDims.cols;payload.rows=startDims.rows;
+    _terminalLastSentDims={cols:startDims.cols,rows:startDims.rows};
     let raw=await call('execute_tool','runTerminal',JSON.stringify(payload),true);
     if(raw==null)raw=_terminalApiUnavailableResult(cmd,cwd,profile);
     const activeRun=_terminalCurrentRun(out);
@@ -53109,6 +53130,70 @@ async function runTerminalCommand(cmd,options){
     return result;
   }
 }
+// PTY-01: real terminal size forwarding — measure the monospace cell size of
+// the terminal output panel and push cols/rows to the active PTY-backed job
+// whenever the panel is resized, so raw-mode programs see a real window size.
+let _termProbeEl=null;
+function _terminalCellMetrics(el){
+  if(!el)return {charW:8,lineH:16};
+  if(!_termProbeEl){
+    _termProbeEl=document.createElement('span');
+    _termProbeEl.style.position='fixed';
+    _termProbeEl.style.left='-9999px';
+    _termProbeEl.style.top='0';
+    _termProbeEl.style.visibility='hidden';
+    _termProbeEl.style.whiteSpace='pre';
+    _termProbeEl.textContent='M'.repeat(20);
+    document.body.appendChild(_termProbeEl);
+  }
+  const cs=getComputedStyle(el);
+  _termProbeEl.style.fontFamily=cs.fontFamily;
+  _termProbeEl.style.fontSize=cs.fontSize;
+  _termProbeEl.style.fontWeight=cs.fontWeight;
+  _termProbeEl.style.letterSpacing=cs.letterSpacing;
+  const rect=_termProbeEl.getBoundingClientRect();
+  const charW=rect.width/20||8;
+  const lineH=parseFloat(cs.lineHeight)||(parseFloat(cs.fontSize)*1.4)||16;
+  return {charW,lineH};
+}
+function terminalComputeColsRows(el){
+  if(!el)return {cols:80,rows:24};
+  const {charW,lineH}=_terminalCellMetrics(el);
+  const rect=el.getBoundingClientRect();
+  const cols=Math.max(20,Math.floor((rect.width||0)/Math.max(1,charW)));
+  const rows=Math.max(5,Math.floor((rect.height||0)/Math.max(1,lineH)));
+  return {cols,rows};
+}
+let _terminalLastSentDims={cols:0,rows:0};
+let _terminalResizeDebounceTimer=null;
+async function _terminalForwardResize(jobId,cols,rows){
+  if(!jobId)return;
+  try{
+    await call('execute_tool','runTerminal',JSON.stringify({command:'',mode:'resize',jobId,cols,rows}),true);
+  }catch(ex){/* best-effort: resize forwarding never blocks terminal use */}
+}
+function _terminalHandlePanelResize(){
+  const out=(typeof _getActiveTermOutput==='function'?_getActiveTermOutput():null)||$('terminal-output');
+  if(!out)return;
+  const dims=terminalComputeColsRows(out);
+  if(dims.cols===_terminalLastSentDims.cols&&dims.rows===_terminalLastSentDims.rows)return;
+  _terminalLastSentDims=dims;
+  const run=typeof _terminalCurrentRun==='function'?_terminalCurrentRun(out):null;
+  if(run&&run.jobId)_terminalForwardResize(run.jobId,dims.cols,dims.rows);
+}
+(function(){
+  const panel=$('terminal-panel');
+  if(!panel||typeof ResizeObserver==='undefined')return;
+  const observer=new ResizeObserver(()=>{
+    clearTimeout(_terminalResizeDebounceTimer);
+    _terminalResizeDebounceTimer=setTimeout(_terminalHandlePanelResize,150);
+  });
+  observer.observe(panel);
+  window._terminalResizeObserver=observer;
+})();
+window.terminalComputeColsRows=terminalComputeColsRows;
+window._terminalHandlePanelResize=_terminalHandlePanelResize;
+window._terminalForwardResize=_terminalForwardResize;
 clearTerminal=function(){const el=_getActiveTermOutput();if(el)el.innerHTML='';_updateTerminalDiagnostics({},'idle')};
 window.clearTerminal=clearTerminal;
 window.runTerminalCommand=runTerminalCommand;

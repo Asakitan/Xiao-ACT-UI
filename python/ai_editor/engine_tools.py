@@ -16,12 +16,20 @@ import os
 import shlex
 import shutil
 import subprocess
+import tempfile
 import threading
 import time
 import uuid
 from typing import Any, Dict, List, Optional, Tuple
 
 from ai_editor.tool_registry import ToolRegistry
+
+try:
+    import winpty as _winpty  # type: ignore
+    _PTY_AVAILABLE = os.name == "nt"
+except Exception:
+    _winpty = None
+    _PTY_AVAILABLE = False
 
 
 def _call_editor_api(api_ref: Any, method_name: str, *args: Any) -> Dict[str, Any]:
@@ -147,11 +155,15 @@ def register_engine_tools(registry: ToolRegistry, gui_ref: Any, api_ref: Any = N
                 "profile": {"type": "string", "description": "Terminal profile name to use for this command", "default": ""},
                 "data": {"type": "string", "description": "Text to write to the running terminal job stdin", "default": ""},
                 "closeStdin": {"type": "boolean", "description": "Close stdin after writing data", "default": False},
+                "pty": {"type": "boolean", "description": "Use a real pseudo-terminal (ConPTY) for mode=start, needed for full-screen/raw-mode programs", "default": False},
+                "cols": {"type": "integer", "description": "Terminal width in columns, for mode=start/resize", "default": 0},
+                "rows": {"type": "integer", "description": "Terminal height in rows, for mode=start/resize", "default": 0},
             },
             "required": ["command"],
         },
-        handler=lambda command="", cwd="", mode="run", jobId="", sinceSeq=0, profile="", data="", closeStdin=False: _run_terminal(
-            command, cwd, gui_ref, api_ref, mode, jobId, int(sinceSeq or 0), profile, data, bool(closeStdin)),
+        handler=lambda command="", cwd="", mode="run", jobId="", sinceSeq=0, profile="", data="", closeStdin=False, pty=False, cols=0, rows=0: _run_terminal(
+            command, cwd, gui_ref, api_ref, mode, jobId, int(sinceSeq or 0), profile, data, bool(closeStdin),
+            bool(pty), int(cols or 0), int(rows or 0)),
         category="terminal",
         requires_confirm=True,
         tags={"destructive": True},
@@ -832,6 +844,133 @@ _TERMINAL_JOB_TTL_SEC = 300
 _TERMINAL_JOB_MAX_HISTORY = 64
 
 
+class _PtyProcAdapter:
+    """Adapts a winpty.PtyProcess to the subset of subprocess.Popen's
+    interface the terminal job lifecycle (_terminal_waiter/_terminal_finish_job/
+    _stop_terminal_job/_write_terminal_job) already relies on, so PTY-backed
+    and pipe-backed jobs share one code path."""
+
+    def __init__(self, pty_proc: Any) -> None:
+        self._pty = pty_proc
+        self.pid = getattr(pty_proc, "pid", None)
+        self.stdin = self
+        self.stdout = self
+        self.stderr = None
+
+    def poll(self) -> Optional[int]:
+        if self._pty.isalive():
+            return None
+        code = getattr(self._pty, "exitstatus", None)
+        return int(code) if code is not None else 0
+
+    def wait(self, timeout: Optional[float] = None) -> int:
+        deadline = None if timeout is None else time.monotonic() + timeout
+        while self._pty.isalive():
+            if deadline is not None and time.monotonic() >= deadline:
+                raise subprocess.TimeoutExpired(cmd="", timeout=timeout or 0)
+            time.sleep(0.05)
+        code = getattr(self._pty, "exitstatus", None)
+        return int(code) if code is not None else 0
+
+    def terminate(self) -> None:
+        try:
+            self._pty.terminate()
+        except Exception:
+            pass
+
+    def kill(self) -> None:
+        try:
+            self._pty.terminate(force=True)
+        except Exception:
+            pass
+
+    def write(self, text: str) -> None:
+        self._pty.write(text)
+
+    def flush(self) -> None:
+        pass
+
+    def close(self) -> None:
+        pass
+
+
+def _pty_default_shell() -> Tuple[str, List[str]]:
+    if os.name == "nt":
+        comspec = os.environ.get("COMSPEC") or shutil.which("cmd.exe") or "cmd.exe"
+        return comspec, []
+    shell = os.environ.get("SHELL") or shutil.which("bash") or shutil.which("sh") or "/bin/sh"
+    return shell, []
+
+
+def _pty_wrap_command_for_shell(shell_path: str, command: str) -> Tuple[List[str], str]:
+    """winpty.PtyProcess.spawn always reconstructs its child's command line
+    via subprocess.list2cmdline, which mangles a command that itself
+    contains embedded double quotes (e.g. `python -c "..."`) when it's
+    passed inline as a `cmd.exe /c <command>` argv element. Route through a
+    throwaway script file instead so the shell's argv never has to carry
+    quote characters at all."""
+    shell_name = os.path.basename(shell_path).lower()
+    is_powershell = shell_name in {"powershell.exe", "powershell", "pwsh.exe", "pwsh"}
+    is_posix = shell_name in {"bash.exe", "bash", "sh.exe", "sh", "zsh.exe", "zsh"}
+    suffix = ".ps1" if is_powershell else (".sh" if is_posix else ".cmd")
+    fd, script_path = tempfile.mkstemp(prefix="sao_pty_cmd_", suffix=suffix)
+    with os.fdopen(fd, "w", encoding="utf-8") as fh:
+        if suffix == ".cmd":
+            fh.write("@echo off\n")
+        fh.write(command)
+    if is_powershell:
+        return [shell_path, "-NoLogo", "-NoProfile", "-File", script_path], script_path
+    if is_posix:
+        return [shell_path, script_path], script_path
+    return [shell_path, "/c", script_path], script_path
+
+
+def _cleanup_pty_temp_script(job: Dict[str, Any]) -> None:
+    script_path = job.pop("ptyTempScript", "") if job else ""
+    if script_path:
+        try:
+            os.unlink(script_path)
+        except OSError:
+            pass
+
+
+def _spawn_pty_process(argv: List[str], cwd: str, env: Dict[str, str],
+                       cols: int, rows: int) -> Any:
+    dimensions = (max(2, int(rows or 24)), max(2, int(cols or 80)))
+    return _winpty.PtyProcess.spawn(argv, cwd=cwd or None, env=env, dimensions=dimensions)
+
+
+def _terminal_pty_reader(job_id: str, pty_proc: Any) -> None:
+    try:
+        while True:
+            try:
+                chunk = pty_proc.read(4096)
+            except EOFError:
+                break
+            if not chunk:
+                break
+            _terminal_append_job_output(job_id, "stdout", chunk)
+    except Exception as exc:
+        _terminal_append_job_output(job_id, "stdout", f"\n[terminal stream error: {exc}]\n")
+
+
+def _resize_terminal_job(job_id: str, cols: int, rows: int) -> Dict[str, Any]:
+    with _TERMINAL_JOB_LOCK:
+        job = _TERMINAL_JOBS.get(str(job_id or ""))
+        pty_obj = job.get("pty") if job else None
+    if not job:
+        return {"error": f"Unknown terminal job: {job_id}", "jobId": job_id}
+    if pty_obj is None:
+        return {"jobId": job_id, "ptyBacked": False}
+    cols = max(2, int(cols or 0) or 80)
+    rows = max(2, int(rows or 0) or 24)
+    try:
+        pty_obj.setwinsize(rows, cols)
+    except Exception as exc:
+        return {"error": str(exc), "jobId": job_id, "ptyBacked": True}
+    return {"jobId": job_id, "cols": cols, "rows": rows, "ptyBacked": True}
+
+
 def _terminal_command_context(command: str, cwd: str, gui_ref: Any,
                               api_ref: Any, profile_override: str = "") -> Tuple[Dict[str, Any], int, int, bool, str, str, Any]:
     terminal = _get_terminal_settings(gui_ref)
@@ -1029,6 +1168,7 @@ def _terminal_finish_job(job_id: str, exit_code: Optional[int] = None,
         if error:
             job["error"] = error
         _terminal_trim_job_output(job)
+        _cleanup_pty_temp_script(job)
 
 
 def _terminal_waiter(job_id: str, timeout: int) -> None:
@@ -1129,6 +1269,9 @@ def _terminal_job_snapshot(job_id: str, since_seq: int = 0) -> Dict[str, Any]:
             "profileSource": terminal.get("profileSource", ""),
             "shellIntegrationStatus": terminal.get("shellIntegrationStatus", ""),
             "encoding": terminal.get("encoding", "utf-8"),
+            "ptyRequested": bool(terminal.get("ptyRequested")),
+            "ptyBacked": bool(terminal.get("ptyBacked")),
+            "ptyFallbackReason": terminal.get("ptyFallbackReason", ""),
             "workspaceCwd": terminal.get("workspaceCwd"),
             "workspaceRoot": terminal.get("workspaceRoot", ""),
             "jobCount": len(_TERMINAL_JOBS),
@@ -1138,43 +1281,83 @@ def _terminal_job_snapshot(job_id: str, since_seq: int = 0) -> Dict[str, Any]:
 
 
 def _start_terminal_job(command: str, cwd: str, gui_ref: Any,
-                        api_ref: Any, profile: str = "") -> Dict[str, Any]:
+                        api_ref: Any, profile: str = "",
+                        use_pty: bool = False, cols: int = 0,
+                        rows: int = 0) -> Dict[str, Any]:
     try:
         terminal, timeout, output_limit, explicit_shell, effective_cwd, workspace_root, run_command = (
             _terminal_command_context(command, cwd, gui_ref, api_ref, profile))
     except Exception as exc:
         return _terminal_failure_result(
             command, cwd, gui_ref, api_ref, profile, exc)
-    kwargs: Dict[str, Any] = {
-        "shell": not explicit_shell,
-        "stdout": subprocess.PIPE,
-        "stderr": subprocess.PIPE,
-        "stdin": subprocess.PIPE,
-        "text": True,
-        "encoding": "utf-8",
-        "errors": "replace",
-        "bufsize": 1,
-        "env": _terminal_subprocess_env(terminal),
-    }
-    if effective_cwd:
-        kwargs["cwd"] = effective_cwd
-    if os.name == "nt":
-        kwargs["creationflags"] = getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
+
+    want_pty = bool(use_pty)
+    use_real_pty = want_pty and _PTY_AVAILABLE
+    pty_temp_script = ""
+    if want_pty and not explicit_shell:
+        shell_path, shell_args = _pty_default_shell()
+        if use_real_pty:
+            run_command, pty_temp_script = _pty_wrap_command_for_shell(shell_path, command)
+        else:
+            run_command = _build_explicit_shell_command(shell_path, shell_args, command)
+        explicit_shell = True
+
     job_id = uuid.uuid4().hex
-    try:
-        proc = subprocess.Popen(run_command, **kwargs)
-    except Exception as exc:
-        return _terminal_failure_result(
-            command, effective_cwd, gui_ref, api_ref, profile, exc,
-            started_wall=time.time())
+    env = _terminal_subprocess_env(terminal)
+    pty_obj: Any = None
+    if use_real_pty:
+        argv = run_command if isinstance(run_command, list) else [run_command]
+        try:
+            pty_obj = _spawn_pty_process(argv, effective_cwd, env, cols, rows)
+        except Exception as exc:
+            if pty_temp_script:
+                try:
+                    os.unlink(pty_temp_script)
+                except OSError:
+                    pass
+            return _terminal_failure_result(
+                command, effective_cwd, gui_ref, api_ref, profile, exc,
+                started_wall=time.time())
+        proc: Any = _PtyProcAdapter(pty_obj)
+    else:
+        kwargs: Dict[str, Any] = {
+            "shell": not explicit_shell,
+            "stdout": subprocess.PIPE,
+            "stderr": subprocess.PIPE,
+            "stdin": subprocess.PIPE,
+            "text": True,
+            "encoding": "utf-8",
+            "errors": "replace",
+            "bufsize": 1,
+            "env": env,
+        }
+        if effective_cwd:
+            kwargs["cwd"] = effective_cwd
+        if os.name == "nt":
+            kwargs["creationflags"] = getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
+        try:
+            proc = subprocess.Popen(run_command, **kwargs)
+        except Exception as exc:
+            return _terminal_failure_result(
+                command, effective_cwd, gui_ref, api_ref, profile, exc,
+                started_wall=time.time())
     terminal_meta = _terminal_metadata(
         terminal, timeout, output_limit, explicit_shell, effective_cwd,
         workspace_root)
     terminal_meta["processId"] = proc.pid
     terminal_meta["sessionId"] = job_id
+    terminal_meta["ptyRequested"] = want_pty
+    terminal_meta["ptyBacked"] = use_real_pty
+    if want_pty and not use_real_pty:
+        terminal_meta["ptyFallbackReason"] = (
+            "pywinpty not installed" if not _PTY_AVAILABLE else "unsupported on this platform")
+    if use_real_pty:
+        terminal_meta["shellIntegrationStatus"] = "pty"
     job = {
         "jobId": job_id,
         "process": proc,
+        "pty": pty_obj,
+        "ptyTempScript": pty_temp_script,
         "pid": proc.pid,
         "command": command,
         "cwd": effective_cwd,
@@ -1196,10 +1379,14 @@ def _start_terminal_job(command: str, cwd: str, gui_ref: Any,
     with _TERMINAL_JOB_LOCK:
         _terminal_prune_jobs_locked()
         _TERMINAL_JOBS[job_id] = job
-    threading.Thread(target=_terminal_reader, args=(job_id, "stdout", proc.stdout),
-                     daemon=True).start()
-    threading.Thread(target=_terminal_reader, args=(job_id, "stderr", proc.stderr),
-                     daemon=True).start()
+    if use_real_pty:
+        threading.Thread(target=_terminal_pty_reader, args=(job_id, pty_obj),
+                         daemon=True).start()
+    else:
+        threading.Thread(target=_terminal_reader, args=(job_id, "stdout", proc.stdout),
+                         daemon=True).start()
+        threading.Thread(target=_terminal_reader, args=(job_id, "stderr", proc.stderr),
+                         daemon=True).start()
     threading.Thread(target=_terminal_waiter, args=(job_id, timeout),
                      daemon=True).start()
     return _terminal_job_snapshot(job_id)
@@ -1282,6 +1469,8 @@ def _stop_terminal_job(job_id: str) -> Dict[str, Any]:
                 proc.kill()
             except Exception:
                 pass
+    if job is not None:
+        _cleanup_pty_temp_script(job)
     return _terminal_job_snapshot(job_id)
 
 
@@ -1289,16 +1478,20 @@ def _run_terminal(command: str, cwd: str = "", gui_ref: Any = None,
                   api_ref: Any = None, mode: str = "run",
                   jobId: str = "", sinceSeq: int = 0,
                   profile: str = "", data: str = "",
-                  closeStdin: bool = False) -> Dict[str, Any]:
+                  closeStdin: bool = False, pty: bool = False,
+                  cols: int = 0, rows: int = 0) -> Dict[str, Any]:
     mode = str(mode or "run").strip().lower()
     if mode == "start":
-        return _start_terminal_job(command, cwd, gui_ref, api_ref, profile)
+        return _start_terminal_job(command, cwd, gui_ref, api_ref, profile,
+                                   bool(pty), int(cols or 0), int(rows or 0))
     if mode == "status":
         return _terminal_job_snapshot(str(jobId or ""), sinceSeq)
     if mode == "write":
         return _write_terminal_job(str(jobId or ""), data, closeStdin)
     if mode == "stop":
         return _stop_terminal_job(str(jobId or ""))
+    if mode == "resize":
+        return _resize_terminal_job(str(jobId or ""), int(cols or 0), int(rows or 0))
     try:
         terminal, timeout, output_limit, explicit_shell, effective_cwd, workspace_root, run_command = (
             _terminal_command_context(command, cwd, gui_ref, api_ref, profile))

@@ -315,6 +315,10 @@ def _wait_until(predicate, timeout: float = 2.0) -> bool:
     return predicate()
 
 
+_JS_REGEX_PRECEDING_DISALLOWED = frozenset(
+    "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_$)]")
+
+
 def _extract_js_function(html: str, name: str) -> str:
     marker = f"function {name}("
     start = html.find(marker)
@@ -330,34 +334,69 @@ def _extract_js_function(html: str, name: str) -> str:
     escaped = False
     in_line_comment = False
     in_block_comment = False
-    for index in range(brace, len(html)):
+    last_significant = ""
+    length = len(html)
+    index = brace
+    while index < length:
         ch = html[index]
-        nxt = html[index + 1] if index + 1 < len(html) else ""
+        nxt = html[index + 1] if index + 1 < length else ""
         if in_line_comment:
             if ch == "\n":
                 in_line_comment = False
+            index += 1
             continue
         if in_block_comment:
             if ch == "*" and nxt == "/":
                 in_block_comment = False
+                index += 2
+                continue
+            index += 1
             continue
         if escaped:
             escaped = False
+            index += 1
             continue
         if in_quote:
             if ch == "\\":
                 escaped = True
             elif ch == in_quote:
                 in_quote = ""
+            index += 1
             continue
         if ch in ("'", '"', "`"):
             in_quote = ch
+            index += 1
             continue
         if ch == "/" and nxt == "/":
             in_line_comment = True
+            index += 2
             continue
         if ch == "/" and nxt == "*":
             in_block_comment = True
+            index += 2
+            continue
+        if ch == "/" and last_significant not in _JS_REGEX_PRECEDING_DISALLOWED:
+            # JS regex literal (e.g. /"/g) — its own quote/brace-like
+            # characters aren't real quotes/braces, so skip over it whole
+            # rather than letting the tokenizer above misparse it.
+            j = index + 1
+            in_class = False
+            while j < length:
+                c = html[j]
+                if c == "\\":
+                    j += 2
+                    continue
+                if c == "\n":
+                    break
+                if c == "[":
+                    in_class = True
+                elif c == "]":
+                    in_class = False
+                elif c == "/" and not in_class:
+                    break
+                j += 1
+            index = j + 1
+            last_significant = ")"
             continue
         if ch == "{":
             depth += 1
@@ -365,6 +404,9 @@ def _extract_js_function(html: str, name: str) -> str:
             depth -= 1
             if depth == 0:
                 return html[start:index + 1]
+        if not ch.isspace():
+            last_significant = ch
+        index += 1
     raise ValueError(f"Unterminated JS function: {name}")
 
 
@@ -10697,6 +10739,61 @@ console.log("frontend setLang boot race ok");
             )
         except Exception as exc:
             _check("frontend setLang boot race", False, str(exc))
+        finally:
+            if js_path:
+                try:
+                    os.unlink(js_path)
+                except OSError:
+                    pass
+    if not node_path:
+        _check("frontend ansiToHtml strips real ConPTY escape noise skipped without Node.js", True)
+    else:
+        # PTY-02: a real ConPTY-backed terminal session emits full-screen
+        # repaint/query escape sequences (cursor positioning, save/restore,
+        # device queries, mode toggles) that this log-style transcript can't
+        # act on. Regression-covers the real captured escape sequence from
+        # `cmd.exe /c echo pty-test2 && exit` under a real winpty.PtyProcess.
+        pty_ansi_functions = ["_stripNonSgrEscapes", "ansiToHtml"]
+        pty_ansi_js_functions = "\n".join(
+            _extract_js_function(html, name)
+            for name in pty_ansi_functions)
+        js = r"""
+function assert(ok,label){ if(!ok){ throw new Error(label); } }
+const _ANSI_FG_NAMES=['black','red','green','yellow','blue','magenta','cyan','white'];
+""" + pty_ansi_js_functions + r"""
+const sample = "\x1b[1t\x1b[c\x1b[?1004h\x1b[?9001h\x1b[?7l\x1b[?7h\x1b[1;1H\x1b7\x1b[1;1H\x1b[0m" +
+  " ".repeat(80) + "\x1b[2;1H\x1b[0m" + " ".repeat(80) + "\x1b8pty-test2 \r\n";
+assert(ansiToHtml(sample) === "pty-test2 \r\n",
+       "real ConPTY screen-clear/query preamble is stripped to just the printed text");
+const colorResult = ansiToHtml("\x1b[31mred text\x1b[0m plain");
+assert(colorResult.includes('ansi-fg-red') && colorResult.includes('red text') && colorResult.includes('plain'),
+       "SGR color handling still works after non-SGR escape stripping");
+const plainText = "just some plain text with [brackets] and H letters";
+assert(ansiToHtml(plainText) === plainText,
+       "plain text with bracket/letter characters is left untouched");
+console.log("frontend ansiToHtml strips real ConPTY escape noise ok");
+"""
+        js_path = ""
+        try:
+            with tempfile.NamedTemporaryFile(
+                    "w", encoding="utf-8", suffix=".js", delete=False) as fh:
+                js_path = fh.name
+                fh.write(js)
+            result = subprocess.run(
+                [node_path, js_path],
+                cwd=os.path.dirname(os.path.dirname(os.path.dirname(__file__))),
+                capture_output=True,
+                text=True,
+                timeout=10,
+                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+            )
+            _check_subprocess_result(
+                "frontend ansiToHtml strips real ConPTY escape noise",
+                result,
+                "frontend ansiToHtml strips real ConPTY escape noise ok",
+            )
+        except Exception as exc:
+            _check("frontend ansiToHtml strips real ConPTY escape noise", False, str(exc))
         finally:
             if js_path:
                 try:
@@ -40279,6 +40376,153 @@ def test_tk_window() -> None:
             print(f"[Selftest] Tk cleanup failed: {cleanup_exc}")
 
 
+def test_terminal_pty() -> None:
+    print("── Terminal Real PTY (长期计划 A) ──")
+    from ai_editor import engine_tools as et
+
+    class _FakeWinptyProc:
+        """Stands in for a winpty.PtyProcess without needing pywinpty
+        installed, so _PtyProcAdapter's own logic is covered everywhere."""
+
+        def __init__(self) -> None:
+            self.pid = 4242
+            self._alive = True
+            self.exitstatus = None
+            self.written = []
+            self.resized = None
+            self.terminated_force = None
+
+        def isalive(self) -> bool:
+            return self._alive
+
+        def terminate(self, force: bool = False) -> None:
+            self._alive = False
+            self.exitstatus = 0
+            self.terminated_force = force
+
+        def write(self, text: str) -> None:
+            self.written.append(text)
+
+        def setwinsize(self, rows: int, cols: int) -> None:
+            self.resized = (rows, cols)
+
+        def finish(self, code: int = 0) -> None:
+            self._alive = False
+            self.exitstatus = code
+
+    fake = _FakeWinptyProc()
+    adapter = et._PtyProcAdapter(fake)
+    _check("_PtyProcAdapter exposes the child pid",
+           adapter.pid == 4242)
+    _check("_PtyProcAdapter.poll returns None while alive",
+           adapter.poll() is None)
+    fake.finish(0)
+    _check("_PtyProcAdapter.poll returns the real exit code once dead",
+           adapter.poll() == 0)
+    fake._alive = True
+    adapter.stdin.write("hello\n")
+    _check("_PtyProcAdapter.stdin.write delegates to the pty",
+           fake.written == ["hello\n"])
+    adapter.terminate()
+    _check("_PtyProcAdapter.terminate stops the underlying pty (not force)",
+           fake.isalive() is False and fake.terminated_force is False)
+
+    fake2 = _FakeWinptyProc()
+    adapter2 = et._PtyProcAdapter(fake2)
+    start = time.monotonic()
+    try:
+        adapter2.wait(timeout=0.2)
+        timed_out = False
+    except subprocess.TimeoutExpired:
+        timed_out = True
+    _check("_PtyProcAdapter.wait raises TimeoutExpired instead of blocking forever",
+           timed_out and time.monotonic() - start < 2.0)
+    fake2.finish(3)
+    _check("_PtyProcAdapter.wait returns the real exit code once the pty exits",
+           adapter2.wait(timeout=1.0) == 3)
+
+    # Fallback path: requesting pty=True must never fail or hang even when
+    # pywinpty genuinely is not importable - it silently falls back to the
+    # existing subprocess.Popen pipe path with zero behavior change.
+    original_available = et._PTY_AVAILABLE
+    et._PTY_AVAILABLE = False
+    try:
+        snap = et._start_terminal_job(
+            "echo pty-fallback-selftest", "", None, None, "", True, 80, 24)
+        _check("pty=True with pywinpty unavailable starts a real (fallback) job",
+               "jobId" in snap and snap.get("state") == "running")
+        _check("fallback job metadata records the request but not the backing",
+               snap["terminal"].get("ptyRequested") is True
+               and snap["terminal"].get("ptyBacked") is False
+               and bool(snap["terminal"].get("ptyFallbackReason")))
+        _wait_until(lambda: et._terminal_job_snapshot(snap["jobId"])["state"] != "running", timeout=5.0)
+        status = et._terminal_job_snapshot(snap["jobId"])
+        _check("fallback job still actually runs the command and captures output",
+               status["state"] == "done" and "pty-fallback-selftest" in status["stdout"])
+        _check("resize on a non-pty job is a harmless no-op, not an error",
+               et._resize_terminal_job(snap["jobId"], 100, 30) == {
+                   "jobId": snap["jobId"], "ptyBacked": False})
+    finally:
+        et._PTY_AVAILABLE = original_available
+
+    # Unaffected default path: not requesting pty at all must be byte-for-byte
+    # the same as before this feature existed (no new params passed).
+    plain_snap = et._start_terminal_job("echo pty-plain-selftest", "", None, None, "")
+    _check("omitting pty entirely keeps the original subprocess.Popen path",
+           plain_snap["terminal"].get("ptyRequested") is False
+           and plain_snap["terminal"].get("ptyBacked") is False)
+    _wait_until(lambda: et._terminal_job_snapshot(plain_snap["jobId"])["state"] != "running", timeout=5.0)
+    plain_status = et._terminal_job_snapshot(plain_snap["jobId"])
+    _check("plain job output and exit code are unchanged",
+           plain_status["state"] == "done" and "pty-plain-selftest" in plain_status["stdout"])
+
+    _check("resize of an unknown job id reports the error without raising",
+           et._resize_terminal_job("not-a-real-job-id", 80, 24).get("error", "").startswith("Unknown"))
+
+    if not et._PTY_AVAILABLE:
+        _check("real winpty.PtyProcess spawn/read/resize/exit skipped (pywinpty not installed on this machine)", True)
+        return
+
+    # Real machine coverage: pywinpty is actually importable here, so exercise
+    # a genuine ConPTY-backed process end to end - isatty()/terminal size are
+    # exactly the properties a real pty gives that a plain pipe can't.
+    size_probe = (
+        "import sys,os;"
+        "print('ISATTY',sys.stdout.isatty());"
+        "print('SIZE',os.get_terminal_size().columns,os.get_terminal_size().lines)"
+    )
+    py_exe = sys.executable or "python"
+    pty_snap = et._start_terminal_job(
+        f'{py_exe} -c "{size_probe}"', "", None, None, "", True, 100, 32)
+    _check("real pty job reports ptyBacked=True", pty_snap["terminal"].get("ptyBacked") is True)
+    _wait_until(lambda: et._terminal_job_snapshot(pty_snap["jobId"])["state"] != "running", timeout=10.0)
+    pty_status = et._terminal_job_snapshot(pty_snap["jobId"])
+    _check("real ConPTY child sees isatty()=True (impossible over a plain pipe)",
+           "ISATTY True" in pty_status["stdout"])
+    _check("real ConPTY child sees the exact requested terminal size",
+           "SIZE 100 32" in pty_status["stdout"])
+    _check("real pty job exits cleanly with the process's own exit code",
+           pty_status["state"] == "done" and pty_status["exitCode"] == 0)
+    _check("the throwaway wrapper script used to dodge winpty's quote-mangling is cleaned up",
+           not et._TERMINAL_JOBS.get(pty_snap["jobId"], {}).get("ptyTempScript"))
+
+    # Resize forwarding: start a longer-lived process and confirm a resize
+    # call actually reaches the real pseudo-console (getwinsize reflects it).
+    sleepy = f'{py_exe} -c "import time;time.sleep(2)"'
+    resize_snap = et._start_terminal_job(sleepy, "", None, None, "", True, 80, 24)
+    job_id = resize_snap["jobId"]
+    try:
+        _wait_until(lambda: bool(et._TERMINAL_JOBS.get(job_id, {}).get("pty")), timeout=3.0)
+        resize_result = et._resize_terminal_job(job_id, 120, 40)
+        _check("resize on a real pty job reports the new size back",
+               resize_result == {"jobId": job_id, "cols": 120, "rows": 40, "ptyBacked": True})
+        pty_obj = et._TERMINAL_JOBS[job_id]["pty"]
+        _check("resize on a real pty job actually reaches the pseudo-console",
+               pty_obj.getwinsize() == (40, 120))
+    finally:
+        et._stop_terminal_job(job_id)
+
+
 def test_real_extension_smoke() -> None:
     print("── Real Extension Smoke (阶段1.4) ──")
     from ai_editor import real_extension_smoke as res
@@ -40522,6 +40766,7 @@ def main() -> None:
         ("Claude Proxy", test_claude_proxy),
         ("Agents", test_agents),
         ("Workflows", test_workflows),
+        ("Terminal Real PTY", test_terminal_pty),
         ("Real Extension Smoke", test_real_extension_smoke),
         ("Real Extension Live Theme Activation", test_real_extension_live_theme_activation),
         ("Frontend Health Parity Snapshot", test_frontend_health_parity_snapshot),

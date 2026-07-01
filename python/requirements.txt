@@ -35,3 +35,6 @@ zstandard>=0.20                 # zstd 解压 (数据源压缩)
 # dpkt>=1.9                     # 以太网/IP/TCP 解析 (已内置手动解析, 可选)
 protobuf>=6.31.1               # compiled proto 解码
 # Npcap 驱动需单独安装: https://npcap.com
+
+# ═══ AI Editor 终端真 PTY (可选, Windows only) ═══
+pywinpty>=2.0; sys_platform == "win32"   # ConPTY-backed 真伪终端 (engine_tools.py try-import, 没装则回退现有 subprocess 管道路径)
