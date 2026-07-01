@@ -17563,6 +17563,15 @@ console.log("command palette quick access helpers ok");
            and "revertButtonPresent" in html
            and "revertMatchesBaseline" in html
            and "revertDiffClean" in html)
+    _check("chat diff Apply button patches only the matched hunk region, not the whole buffer",
+           "function diffTextHunks(lines,stripContextMarker)" in html
+           and "function buildDiffApplyEditsForHunks(hunks,currentValue)" in html
+           and "function buildDiffApplyEdits(lines,currentValue)" in html
+           and "buildDiffApplyEditsForHunks(diffTextHunks(lines,true),currentValue)" in html
+           and "buildDiffApplyEditsForHunks(diffTextHunks(lines,false),currentValue)" in html
+           and "const precise=buildDiffApplyEdits(lines,ta.value);" in html
+           and "if(editorApplyTextEdits(precise))showToast('Diff applied to editor','success',1500);" in html
+           and "Diff context did not match the open file - replaced whole buffer instead" in html)
     _check("frontend refreshes language state after formatter and code-action edits",
            "function editorRefreshLanguageFeaturesAfterEdit(delayBase)" in html
            and "clearEditorDocumentHighlights();" in html
@@ -23407,6 +23416,10 @@ def test_app_extension_runtime_support() -> None:
                    "hiddenSet": hidden_set,
                    "hiddenSave": hidden_save,
                }, ensure_ascii=False))
+        _check("get_extension_settings removed as dead API "
+               "(list_extension_settings is the superset that shipped later "
+               "and is the only one the frontend actually calls)",
+               not hasattr(api, "get_extension_settings"))
         _check("extension settings hide unconfigured deprecated entries",
                "selftest.deprecatedUnused" not in settings_cfg.get(
                    "properties", {})
