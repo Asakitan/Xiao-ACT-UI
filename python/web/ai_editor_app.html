@@ -1229,6 +1229,8 @@ pre.code-block code .type { color:var(--fg-type); }
   .chat-action-carousel { animation:none; }
   .chat-action-carousel-preview { transition:none; }
   .chat-control-trigger,.chat-control-popup,.workflow-run-card { transition:none; animation:none; }
+  .msg,.welcome-prompt-btn,.toast,.modal-bg.open,.modal-bg.open .modal,
+  .quick-input,.language-status-item.busy,.thinking-shimmer { transition:none; animation:none; }
 }
 .chat-action-tray-row { display:grid; grid-template-columns:minmax(0,1fr) auto; gap:8px; align-items:center; }
 .chat-action-tray-title { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; color:var(--fg-dim); font-size:12px; }
@@ -1921,7 +1923,10 @@ button.editor-language-capability:hover,button.editor-language-capability:focus 
 /* ── Settings modal ── */
 .modal-bg { position:fixed; inset:0; background:#00000060; display:none;
   align-items:center; justify-content:center; z-index:200; }
-.modal-bg.open { display:flex; }
+.modal-bg.open { display:flex; animation:modalScrimIn var(--motion-fast) var(--ease-standard); }
+.modal-bg.open .modal { animation:modalPopIn var(--motion-base) var(--ease-emphasized); }
+@keyframes modalScrimIn { from{opacity:0} to{opacity:1} }
+@keyframes modalPopIn { from{opacity:0; transform:scale(.97) translateY(6px)} to{opacity:1; transform:scale(1) translateY(0)} }
 #settings-modal.open { --settings-viewport-gap:12px; --settings-available-height:calc(100dvh - 24px);
   align-items:stretch; justify-content:center; padding:12px 22px; box-sizing:border-box;
   background:color-mix(in srgb,#000 42%,transparent); }
@@ -2790,7 +2795,7 @@ button.extension-webview-resource-pill:hover,button.extension-webview-resource-p
   flex-direction:column; gap:8px; }
 .quick-input { position:relative; background:var(--bg2); border:1px solid var(--border); border-radius:6px;
   box-shadow:0 10px 30px #00000070; color:var(--fg); overflow:hidden; pointer-events:auto;
-  animation:quickInputIn .12s ease-out; }
+  animation:quickInputIn var(--motion-fast) var(--ease-decelerate); }
 .quick-input.hidden { display:none; }
 .quick-input.disabled { opacity:.72; }
 .quick-input.busy::before { content:''; position:absolute; top:0; left:0; height:2px; width:38%;
