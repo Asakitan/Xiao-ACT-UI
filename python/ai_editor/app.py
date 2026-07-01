@@ -9467,16 +9467,12 @@ class AIEditorAPI:
         agents = []
         for a in self._agent_registry.list_all():
             item = a.to_dict()
-            if not getattr(a, "builtin", False):
+            item["builtin"] = bool(getattr(a, "builtin", False))
+            if not item["builtin"]:
                 item["_scope"] = getattr(a, "_scope", "workspace")
                 item["_plugin_id"] = getattr(a, "_plugin_id", "")
             agents.append(item)
         return {"agents": agents}
-
-    def get_agent(self, agent_id: str) -> Dict:
-        self._ensure_engine()
-        a = self._agent_registry.get(agent_id)
-        return a.to_dict() if a else {"error": "Not found"}
 
     def save_agent(self, data: Dict) -> Dict:
         self._ensure_engine()
@@ -9525,16 +9521,12 @@ class AIEditorAPI:
         workflows = []
         for w in self._wf_registry.list_all():
             item = w.to_dict()
-            if not getattr(w, "builtin", False):
+            item["builtin"] = bool(getattr(w, "builtin", False))
+            if not item["builtin"]:
                 item["_scope"] = getattr(w, "_scope", "workspace")
                 item["_plugin_id"] = getattr(w, "_plugin_id", "")
             workflows.append(item)
         return {"workflows": workflows}
-
-    def get_workflow(self, wf_id: str) -> Dict:
-        self._ensure_engine()
-        w = self._wf_registry.get(wf_id)
-        return w.to_dict() if w else {"error": "Not found"}
 
     def save_workflow(self, data: Dict) -> Dict:
         self._ensure_engine()

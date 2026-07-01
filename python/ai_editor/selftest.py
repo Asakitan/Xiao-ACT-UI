@@ -39413,6 +39413,28 @@ def test_agents() -> None:
         restored = AgentDef.from_dict(d)
         _check("from_dict roundtrip", restored.id == "code-reviewer")
 
+        # AIEditorAPI.list_agents() must expose an explicit builtin flag —
+        # AgentDef.to_dict() unconditionally strips "builtin" (it's only meant
+        # to keep custom agent JSON files free of a redundant always-false
+        # field), so the frontend's "hide delete/edit for builtin rows" check
+        # was silently always false until list_agents() re-adds it per row.
+        list_api = AIEditorAPI(_SettingsGui({"ai_editor": {}}))
+        list_api._ensure_engine()
+        list_custom = AgentDef(id="list-test-agent", name="List Test", system_prompt="x")
+        list_api._agent_registry.save_custom(list_custom, workspace_root=tmpdir)
+        rows = list_api.list_agents().get("agents", [])
+        builtin_row = next((r for r in rows if r.get("id") == "code-reviewer"), None)
+        custom_row = next((r for r in rows if r.get("id") == "list-test-agent"), None)
+        _check("list_agents marks builtin vs custom agents explicitly",
+               builtin_row is not None and builtin_row.get("builtin") is True
+               and "_scope" not in builtin_row
+               and custom_row is not None and custom_row.get("builtin") is False
+               and custom_row.get("_scope") == "workspace",
+               json.dumps({"builtin_row": builtin_row, "custom_row": custom_row}, ensure_ascii=False))
+        list_api._agent_registry.delete_custom("list-test-agent", workspace_root=tmpdir)
+        _check("get_agent removed as dead API (frontend edits via the already-fetched list, not by-id refetch)",
+               not hasattr(list_api, "get_agent"))
+
     finally:
         shutil.rmtree(tmpdir, ignore_errors=True)
 
@@ -39475,6 +39497,29 @@ def test_workflows() -> None:
         _check("wf to_dict", d["id"] == "review-and-fix" and len(d["steps"]) == 2)
         restored = WorkflowDef.from_dict(d)
         _check("wf from_dict roundtrip", restored.id == "review-and-fix")
+
+        # Same builtin-flag gap as list_agents(): WorkflowDef.to_dict() strips
+        # "builtin" unconditionally, so list_workflows() must re-add it per row
+        # or the frontend's "hide edit/delete for builtin rows" check is dead.
+        from ai_editor.app import AIEditorAPI
+        list_api = AIEditorAPI(_SettingsGui({"ai_editor": {}}))
+        list_api._ensure_engine()
+        list_custom = WorkflowDef(
+            id="list-test-wf", name="List Test WF",
+            steps=[WorkflowStep(prompt="{{input}}", output_var="out", label="Step")])
+        list_api._wf_registry.save_custom(list_custom, workspace_root=tmpdir)
+        rows = list_api.list_workflows().get("workflows", [])
+        builtin_row = next((r for r in rows if r.get("id") == "review-and-fix"), None)
+        custom_row = next((r for r in rows if r.get("id") == "list-test-wf"), None)
+        _check("list_workflows marks builtin vs custom workflows explicitly",
+               builtin_row is not None and builtin_row.get("builtin") is True
+               and "_scope" not in builtin_row
+               and custom_row is not None and custom_row.get("builtin") is False
+               and custom_row.get("_scope") == "workspace",
+               json.dumps({"builtin_row": builtin_row, "custom_row": custom_row}, ensure_ascii=False))
+        list_api._wf_registry.delete_custom("list-test-wf", workspace_root=tmpdir)
+        _check("get_workflow removed as dead API (frontend edits via the already-fetched list, not by-id refetch)",
+               not hasattr(list_api, "get_workflow"))
 
         class _Resp:
             def __init__(self, content: str, error: str = "") -> None:
