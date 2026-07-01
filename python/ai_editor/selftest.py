@@ -5304,7 +5304,7 @@ def test_phase1_ai_editor_regressions() -> None:
             and "window.requestWindowClose=requestWindowClose" in html)
     _check("frontend window close state never hard-disables all buttons",
            "body.window-closing { pointer-events:none" not in html
-           and "body.window-closing { animation:windowCloseOut .18s ease-in; }" in html
+           and "body.window-closing { animation:windowCloseOut var(--motion-base) var(--ease-accelerate); }" in html
            and "body.window-closing { animation:windowCloseOut .18s ease-in forwards; }" not in html
            and "const recoverIfStillVisible=()=>{" in html
            and "setTimeout(recoverIfStillVisible,520);" in html
@@ -6034,7 +6034,7 @@ def test_phase1_ai_editor_regressions() -> None:
            and ".chat-control-native { display:none!important; visibility:hidden!important; position:absolute!important; inset:0 auto auto 0!important;" in html
            and "appearance:none; -webkit-appearance:none; line-height:20px;" in html
            and ".chat-control-trigger { display:inline-flex; align-items:center; gap:4px; justify-content:space-between;" in html
-           and "transition:border-color .14s ease, background .14s ease, color .14s ease, box-shadow .14s ease; position:relative; user-select:none;" in html
+           and "transition:border-color var(--motion-base) var(--ease-standard), background var(--motion-base) var(--ease-standard), color var(--motion-base) var(--ease-standard), box-shadow var(--motion-base) var(--ease-standard); position:relative; user-select:none;" in html
            and ".chat-control-trigger::before { content:''; position:absolute; inset:-3px; border-radius:999px; }" in html
            and ".chat-control-trigger .control-caret { font-size:8px; opacity:.82; margin-left:4px; flex:0 0 auto; color:var(--fg-dim); }" in html
            and ".chat-control-trigger.provider { width:var(--chat-provider-width); min-width:var(--chat-provider-width); max-width:var(--chat-provider-width); flex:0 0 var(--chat-provider-width); }" in html
@@ -7665,7 +7665,7 @@ def test_phase1_ai_editor_regressions() -> None:
            and ".chat-action-tray .chat-question-carousel-widget-container:empty" in html
            and ".chat-action-tray .chat-tool-confirmation-carousel-container:empty" in html
            and ".chat-action-carousel { color:var(--fg); display:flex; flex-direction:column; max-height:min(300px,45vh);" in html
-           and "animation:assistantActionTraySlideIn .16s ease-out;" in html
+           and "animation:assistantActionTraySlideIn var(--motion-base) var(--ease-decelerate);" in html
            and ".chat-action-carousel-preview.expanded" in html
            and "chat-tool-confirmation-carousel" in html
            and "chat-question-carousel-widget-container" in html
