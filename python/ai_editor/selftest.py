@@ -3274,8 +3274,9 @@ def test_app_settings_parity() -> None:
     _check("editor mutating API does not fake success without window",
            "not available" in no_window_editor.editor_set_content("x").get("error", "")
            and "not available" in no_window_editor.editor_insert_text("x").get("error", "")
-           and "not available" in no_window_editor.editor_go_to_line(1).get("error", "")
-           and "not available" in no_window_editor.editor_find_replace("x", "y").get("error", ""))
+           and "not available" in no_window_editor.editor_go_to_line(1).get("error", ""))
+    _check("editor_find_replace removed as dead API (frontend find-bar handles find/replace client-side)",
+           not hasattr(no_window_editor, "editor_find_replace"))
     _check("open_text_file reports missing window explicitly",
            "No window" in no_window_editor.open_text_file().get("error", ""))
     _check("save_file_dialog reports missing window explicitly",

@@ -47887,8 +47887,7 @@ function renderExtCard(container,ext){
   card.onclick=()=>showExtDetail(ext);
   container.appendChild(card);
 }
-function showExtDetail(ext){
-  ext=lookupExtensionState(ext);
+function renderExtDetailBody(ext){
   const panel=$('ext-detail-panel');if(!panel)return;
   $('ext-detail-name').textContent=ext.displayName||ext.name||ext.id;
   const body=$('ext-detail-body');
@@ -47898,12 +47897,34 @@ function showExtDetail(ext){
   const marketplaceMeta=extensionMarketplaceMetadata(ext);
   const marketplaceMetaHtml=marketplaceMeta.length?'<div style="margin-top:10px;font-size:11px;color:var(--fg-dim);line-height:1.45">'+marketplaceMeta.map(esc).join('<br>')+'</div>':'';
   body.innerHTML='<div style="display:flex;gap:12px;margin-bottom:12px;align-items:flex-start">'+iconEl+'<div style="flex:1"><div style="font-size:15px;font-weight:600;color:var(--fg)">'+esc(ext.displayName||ext.name)+'</div>'+(ext.publisher?'<div style="font-size:11px;color:var(--fg-accent);margin-top:2px">'+esc(ext.publisher)+'</div>':'')+(detailBadges?'<div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:6px">'+detailBadges+'</div>':'')+'<div style="margin-top:6px">'+extensionButtonHtml(ext)+'</div></div></div>'+'<div style="font-size:12px;color:var(--fg);line-height:1.5;white-space:pre-wrap">'+esc(ext.description||'No description available.')+'</div>'+marketplaceMetaHtml+trustReason+(ext.ext_dir?'<div style="margin-top:10px;font:11px/1.45 var(--mono);color:var(--fg-dim)">Path: '+esc(ext.ext_dir)+'</div>':'');
+}
+let _extDetailOpenKey='';
+function showExtDetail(ext){
+  ext=lookupExtensionState(ext);
+  const panel=$('ext-detail-panel');if(!panel)return;
+  renderExtDetailBody(ext);
   panel.style.display='flex';
   const section=panel.previousElementSibling;if(section)section.style.display='none';
+  _extDetailOpenKey=extKey(ext);
+  enrichExtDetailFromMarketplace(ext);
 }
 function hideExtDetail(){
   const panel=$('ext-detail-panel');if(panel)panel.style.display='none';
   const section=panel?panel.previousElementSibling:null;if(section)section.style.display='';
+  _extDetailOpenKey='';
+}
+async function enrichExtDetailFromMarketplace(ext){
+  if(!ext||!ext.id||ext.iconUrl||ext.installCount||ext.rating)return;
+  const dot=ext.id.indexOf('.');
+  if(dot<=0)return;
+  const publisher=ext.publisherId||ext.publisher||ext.id.slice(0,dot);
+  const name=ext.id.slice(dot+1);
+  const key=extKey(ext);
+  const detail=await call('get_extension_detail',publisher,name);
+  if(!detail||detail.error||_extDetailOpenKey!==key)return;
+  const merged={...ext,...detail};
+  extCache=extCache.map(item=>extKey(item)===key?{...item,...merged}:item);
+  renderExtDetailBody(lookupExtensionState(merged));
 }
 window.showExtDetail=showExtDetail;window.hideExtDetail=hideExtDetail;
 

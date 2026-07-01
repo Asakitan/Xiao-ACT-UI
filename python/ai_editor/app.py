@@ -21140,30 +21140,6 @@ class AIEditorAPI:
             return {"error": "Editor window is not available"}
         return {"ok": True, "line": line}
 
-    def editor_find_replace(self, find: str, replace: str, replace_all: bool = False) -> Dict:
-        """Find and replace in editor."""
-        f = json.dumps(find)
-        r = json.dumps(replace)
-        if replace_all:
-            ok = self._eval_js(f"""(function(){{
-                var ed=document.getElementById('editor-text');
-                ed.value=ed.value.split({f}).join({r});updateLineNums();
-            }})()""")
-        else:
-            ok = self._eval_js(f"""(function(){{
-                var ed=document.getElementById('editor-text');
-                var idx=ed.value.indexOf({f},ed.selectionEnd);
-                if(idx===-1)idx=ed.value.indexOf({f});
-                if(idx>=0){{
-                    ed.value=ed.value.substring(0,idx)+{r}+ed.value.substring(idx+{len(find)});
-                    ed.selectionStart=idx;ed.selectionEnd=idx+{len(replace)};
-                    updateLineNums();
-                }}
-            }})()""")
-        if not ok:
-            return {"error": "Editor window is not available"}
-        return {"ok": True}
-
     def editor_get_language(self) -> Dict:
         """Get current editor language mode."""
         if not self._window:
