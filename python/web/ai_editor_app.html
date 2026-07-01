@@ -26941,6 +26941,10 @@ async function refreshAgents(){
     row.appendChild(icon);row.appendChild(info);
     row.onclick=()=>activateAgent(a.id);row.title='Click to activate · '+a.description;
     if(!a.builtin){
+      const edit=document.createElement('span');edit.textContent='✎';edit.title='Edit';
+      edit.style.cssText='cursor:pointer;font-size:11px;opacity:0.6;color:var(--fg-accent)';
+      edit.onclick=e=>{e.stopPropagation();createAgent(a)};
+      row.appendChild(edit);
       const del=document.createElement('span');del.textContent='✕';del.title='Delete';
       del.style.cssText='cursor:pointer;font-size:11px;opacity:0.5;color:var(--fg-error,#f44)';
       del.onclick=e=>{e.stopPropagation();deleteAgent(a.id)};
@@ -27908,9 +27912,10 @@ function onWorkflowConfirmationNeeded(d){
   if(!body){body=createMsg('system');body.style.color='var(--fg-dim)'}
   renderWorkflowConfirmBar(body,d,msgs);
 }
-function createAgent(){
+function createAgent(existing){
+  existing=existing||null;
   const modal=document.createElement('div');modal.className='modal-bg';modal.classList.add('open');
-  modal.innerHTML='<div class="modal"><h2>New Agent</h2>'
+  modal.innerHTML='<div class="modal"><h2>'+(existing?'Edit Agent':'New Agent')+'</h2>'
     +'<label>ID (slug)</label><input id="ag-id" placeholder="my-agent">'
     +'<label>Name</label><input id="ag-name" placeholder="My Agent">'
     +'<label>Icon</label><input id="ag-icon" value="\u{1f916}" style="width:60px">'
@@ -27927,6 +27932,17 @@ function createAgent(){
     document.getElementById('ag-scope').appendChild(opt);
   })});
   document.body.appendChild(modal);modal.onclick=e=>{if(e.target===modal)modal.remove()};
+  if(existing){
+    $('ag-id').value=controlItemId(existing);
+    $('ag-id').readOnly=true;
+    $('ag-name').value=controlItemName(existing);
+    $('ag-icon').value=existing.icon||'\u{1f916}';
+    $('ag-desc').value=existing.description||'';
+    $('ag-prompt').value=existing.system_prompt||'';
+    $('ag-tools').value=(existing.tools||[]).join('\n');
+    $('ag-when').value=existing.when_to_use||'';
+    if(existing._scope)$('ag-scope').value=existing._scope;
+  }
   document.getElementById('ag-save').onclick=async()=>{
     const data={id:$('ag-id').value.trim(),name:$('ag-name').value.trim(),icon:$('ag-icon').value,
       description:$('ag-desc').value,system_prompt:$('ag-prompt').value,when_to_use:$('ag-when').value,

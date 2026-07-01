@@ -12198,6 +12198,11 @@ console.log("frontend word separator behavior ok");
            and "window.installExtensionFromDir=installExtensionFromDir;" in html
            and "install_from_folder:'Install from Folder...'," in html
            and "install_from_folder:'从文件夹安装...'," in html)
+    _check("custom agents can be edited, not just created and deleted",
+           "function createAgent(existing){" in html
+           and "(existing?'Edit Agent':'New Agent')" in html
+           and "$('ag-id').readOnly=true;" in html
+           and "edit.onclick=e=>{e.stopPropagation();createAgent(a)};" in html)
     _check("settings has a simple/complex/advanced complexity tier",
            "const SETTINGS_MODE_ORDER=['simple','complex','advanced'];" in html
            and "function settingsCurrentMode(){" in html
