@@ -40578,6 +40578,48 @@ def test_terminal_pty() -> None:
     finally:
         et._stop_terminal_job(job_id)
 
+    # A pre-existing bug found while verifying the PTY work above (not
+    # PTY-specific): any terminal profile with an *explicit* configured shell
+    # (e.g. "Command Prompt") ran subprocess.Popen(a_list, shell=False), and
+    # Python's own list2cmdline mangles a command containing embedded double
+    # quotes the exact same way winpty's did - `python -c "..."` truncated to
+    # `"import`. Fixed by building a single pre-quoted command-LINE STRING
+    # (shell path/args safely quoted, the raw inner command appended
+    # unescaped) and relying on Windows CreateProcess taking a string as-is
+    # with shell=False - the same trick used for the PTY wrapper script, just
+    # without needing a temp file since Popen(str, shell=False) is safe here.
+    template_list = ["custom-shell.exe", "--run={command}"]
+    _check("_explicit_shell_popen_command leaves template-substitution profiles untouched",
+           et._explicit_shell_popen_command(template_list, "irrelevant") is template_list)
+
+    class _G:
+        settings = {"ai_editor": {"terminal": {
+            "profile": "Command Prompt", "shell_path": "", "shell_args": []}}}
+
+        def get(self, k, d=None):
+            cur = self.settings
+            for part in k.split("."):
+                if not isinstance(cur, dict) or part not in cur:
+                    return d
+                cur = cur[part]
+            return cur
+
+    quoted_probe = "import sys;print('QUOTED_OK',sys.argv)"
+    quoted_command = '{} -c "{}"'.format(sys.executable, quoted_probe)
+    sync_result = et._run_terminal(quoted_command, "", _G(), None, "run", profile="Command Prompt")
+    _check("mode=run with an explicit shell profile no longer mangles a command with embedded quotes",
+           sync_result.get("exitCode") == 0 and "QUOTED_OK" in (sync_result.get("stdout") or ""))
+
+    quoted_job = et._start_terminal_job(quoted_command, "", _G(), None, "Command Prompt")
+    _wait_until(lambda: et._terminal_job_snapshot(quoted_job["jobId"])["state"] != "running", timeout=5.0)
+    quoted_job_status = et._terminal_job_snapshot(quoted_job["jobId"])
+    _check("mode=start (job-based) with an explicit shell profile also survives embedded quotes",
+           quoted_job_status["state"] == "done" and "QUOTED_OK" in quoted_job_status["stdout"])
+
+    default_result = et._run_terminal(quoted_command, "", None, None, "run")
+    _check("the default (no explicit shell) profile was never affected by this bug or its fix",
+           default_result.get("exitCode") == 0 and "QUOTED_OK" in (default_result.get("stdout") or ""))
+
 
 def test_real_extension_smoke() -> None:
     print("── Real Extension Smoke (阶段1.4) ──")

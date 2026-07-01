@@ -755,6 +755,21 @@ def _build_explicit_shell_command(shell_path: str, shell_args: List[str], comman
     return [shell_path, *resolved_args, command]
 
 
+def _explicit_shell_popen_command(shell_list: List[str], command: str) -> Any:
+    """subprocess.Popen(list, shell=False) reconstructs the Windows command
+    line via subprocess.list2cmdline, which mangles *command* when it
+    already contains embedded double quotes (verified: `cmd.exe /c python -c
+    "..."` gets truncated to just `"import`). Only the raw command itself
+    needs to stay unescaped — the shell path and its own switches are still
+    safely quoted. POSIX execs argv natively, so there is no such collision
+    and the list is passed through unchanged there; the template-substitution
+    profile (`{command}` inside a configured arg) is left as-is too, since
+    the raw command there isn't a single trailing list element."""
+    if os.name != "nt" or not shell_list or shell_list[-1] != command:
+        return shell_list
+    return subprocess.list2cmdline(shell_list[:-1]) + " " + command
+
+
 def _terminal_shell_kind(shell_path: str, explicit_shell: bool) -> str:
     if not explicit_shell:
         return "system"
@@ -1335,8 +1350,11 @@ def _start_terminal_job(command: str, cwd: str, gui_ref: Any,
             kwargs["cwd"] = effective_cwd
         if os.name == "nt":
             kwargs["creationflags"] = getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
+        popen_command = run_command
+        if explicit_shell and isinstance(run_command, list):
+            popen_command = _explicit_shell_popen_command(run_command, command)
         try:
-            proc = subprocess.Popen(run_command, **kwargs)
+            proc = subprocess.Popen(popen_command, **kwargs)
         except Exception as exc:
             return _terminal_failure_result(
                 command, effective_cwd, gui_ref, api_ref, profile, exc,
@@ -1507,10 +1525,13 @@ def _run_terminal(command: str, cwd: str = "", gui_ref: Any = None,
         }
         if effective_cwd:
             kwargs["cwd"] = effective_cwd
+        popen_command = run_command
+        if explicit_shell and isinstance(run_command, list):
+            popen_command = _explicit_shell_popen_command(run_command, command)
         session_id = uuid.uuid4().hex
         started = time.monotonic()
         started_wall = time.time()
-        result = subprocess.run(run_command, **kwargs)
+        result = subprocess.run(popen_command, **kwargs)
         finished_wall = time.time()
         duration_ms = int((time.monotonic() - started) * 1000)
         stdout = result.stdout or ""
