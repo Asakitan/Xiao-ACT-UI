@@ -12143,18 +12143,6 @@ class AIEditorAPI:
         return {"extensions": self._ext_host.list_extensions(),
                 "contributes": self._ext_host.get_contributes_summary()}
 
-    def activate_extension(self, ext_id: str) -> Dict:
-        self._ensure_engine()
-        ext = self._ext_host.registry.get(ext_id)
-        if ext and not self._extension_allowed(ext):
-            return {"error": f"Extension blocked by trust policy: {ext_id}"}
-        act = self._ext_host.activator.activate(ext_id)
-        if act:
-            self._register_ext_tools()
-            return {"ok": True, "id": ext_id,
-                    "activationTimeMs": act.activation_time_ms}
-        return {"error": f"Failed to activate: {ext_id}"}
-
     def execute_command(self, command_id: str, *args: Any) -> Dict:
         self._ensure_engine()
         try:
@@ -12614,10 +12602,6 @@ class AIEditorAPI:
         except Exception:
             pass
 
-    def list_commands(self) -> Dict:
-        self._ensure_engine()
-        return {"commands": self._ext_host.commands.list_commands()}
-
     def _extension_runtime_when_context(self) -> Dict[str, str]:
         runtime_context: Dict[str, str] = {}
         vscode_ns = getattr(self, "_vscode_ns", None)
@@ -12974,19 +12958,6 @@ class AIEditorAPI:
             str(item.get("id") or "")))
         return {"commands": json.loads(json.dumps(
             entries, ensure_ascii=False, default=str))}
-
-    # ── VSCode API ──
-
-    def get_vscode_api(self) -> Dict:
-        """Return summary of the vscode.* namespace state."""
-        self._ensure_engine()
-        return {
-            "chat_participants": list(self._vscode_ns.chat_participants.keys()),
-            "lm_tools": list(self._vscode_ns.registered_tools.keys()),
-            "variables": list(self._vscode_ns.variables.keys()),
-            "commands": self._ext_host.commands.list_commands(),
-            "contributes": self._ext_host.get_contributes_summary(),
-        }
 
     @staticmethod
     def _diagnostic_file_label(uri: Any) -> str:
@@ -21060,30 +21031,6 @@ class AIEditorAPI:
         except Exception as exc:
             return str(exc)
         return None
-
-    def get_full_config(self) -> Dict:
-        """Return ALL configurable parameters for the active endpoint."""
-        self._ensure_engine()
-        c = self._engine.config
-        return {
-            "provider": c.provider, "model": c.effective_model,
-            "base_url": c.effective_base_url,
-            "temperature": c.temperature, "top_p": c.top_p,
-            "max_tokens": c.max_tokens,
-            "frequency_penalty": c.frequency_penalty,
-            "presence_penalty": c.presence_penalty,
-            "stop": c.stop, "timeout": c.timeout,
-            "max_input_tokens": c.max_input_tokens,
-            "max_output_tokens": c.max_output_tokens,
-            "extra_headers": c.extra_headers,
-            "extra_body": c.extra_body,
-            "context_window": c.effective_context,
-        }
-
-    def count_tokens(self, text: str = "") -> Dict:
-        self._ensure_engine()
-        count = self._engine.estimate_tokens(text)
-        return {"tokens": count, "model": self._engine.config.effective_model}
 
     def count_conversation_tokens(self) -> Dict:
         self._ensure_engine()
