@@ -12241,6 +12241,29 @@ console.log("frontend word separator behavior ok");
            and "window.stopProviderCli=stopProviderCli;" in html
            and "refreshProviderCliStatus('claude-code');" in html
            and "refreshProviderCliStatus('codex');" in html)
+    _check("settings has an Accounts section backed by the authentication session API",
+           'data-settings-id="accounts" data-settings-title="Accounts"' in html
+           and "accounts:'Authentication sessions used by vscode.authentication and manual token sign-in.'," in html
+           and 'id="auth-sessions-list"' in html
+           and "async function renderAuthSessions(){" in html
+           and "call('list_auth_sessions',pid)" in html
+           and "window.renderAuthSessions=renderAuthSessions;" in html
+           and "renderAuthSessions();" in html)
+    _check("accounts section can add and remove authentication sessions",
+           'onclick="addAuthSession()"' in html
+           and 'onclick="trackAuthProvider()"' in html
+           and "async function addAuthSession(){" in html
+           and "call('create_auth_session',pid,token,label)" in html
+           and "async function removeAuthSession(providerId,sessionId){" in html
+           and "call('remove_auth_session',providerId,sessionId)" in html
+           and "window.trackAuthProvider=trackAuthProvider;" in html
+           and "window.addAuthSession=addAuthSession;" in html
+           and "window.removeAuthSession=removeAuthSession;" in html)
+    _check("tool permission dropdown in settings calls set_tool_permission immediately",
+           "class=\"perm-select\"" in html
+           and "sel.onchange=async()=>{" in html
+           and "call('set_tool_permission',tool,value||'default')" in html
+           and "callSucceededOrApplied(r2)" in html)
     _check("settings has a simple/complex/advanced complexity tier",
            "const SETTINGS_MODE_ORDER=['simple','complex','advanced'];" in html
            and "function settingsCurrentMode(){" in html

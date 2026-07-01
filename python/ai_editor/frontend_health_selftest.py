@@ -324,6 +324,19 @@ def run_frontend_health_selftest() -> list[str]:
     _require(failures, "settings control health tracks control types", "checkboxCount" in html and "selectCount" in html and "sliderCount" in html and "colorControlCount" in html)
     _require(failures, "settings control health tracks save reset entries", "settingsSaveEntryPresent" in html and "settingsResetEntryPresent" in html)
     _require(failures, "aggregate diagnostics includes settings controls", "settingsControls: safeCall(\"aiEditorSettingsControlHealthSnapshot\")" in html)
+    _require(failures, "settings accounts section is wired to the authentication session API", (
+        'data-settings-id="accounts" data-settings-title="Accounts"' in html
+        and "async function renderAuthSessions(){" in html
+        and "call('list_auth_sessions',pid)" in html
+        and "call('create_auth_session',pid,token,label)" in html
+        and "call('remove_auth_session',providerId,sessionId)" in html
+        and "window.renderAuthSessions=renderAuthSessions;" in html
+    ))
+    _require(failures, "settings tool permission dropdown calls set_tool_permission on change", (
+        "class=\"perm-select\"" in html
+        and "sel.onchange=async()=>{" in html
+        and "call('set_tool_permission',tool,value||'default')" in html
+    ))
 
     _require(failures, "assistant polish css exists", "ai-editor-assistant-polish-css" in html)
     _require(failures, "assistant health snapshot exists", "aiEditorAssistantHealthSnapshot" in html)

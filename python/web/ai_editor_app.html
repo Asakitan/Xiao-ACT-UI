@@ -2397,6 +2397,7 @@ button.review-pill { cursor:pointer; }
 .settings-language-head .lang-chip.active { color:var(--fg-success); border-color:color-mix(in srgb,var(--fg-success) 42%,var(--border)); }
 .settings-language-actions,.settings-language-chips { display:flex; flex-wrap:wrap; gap:5px; align-items:center; }
 .settings-language-actions { margin-bottom:6px; }
+.auth-session-group { animation:fadeIn var(--motion-base) var(--ease-standard); }
 .settings-inline-row { display:flex; gap:6px; align-items:center; }
 .settings-inline-row input,.settings-inline-row select { min-width:0; flex:1; }
 .settings-inline-row button { flex:0 0 auto; }
@@ -5368,6 +5369,26 @@ pre.code-block { overflow:visible; }
       </div>
     </div>
 
+    <div class="settings-section" data-settings-id="accounts" data-settings-title="Accounts">
+      <div class="sb-group" style="padding:0;margin-top:0">Authentication Sessions</div>
+      <div class="settings-help">Sessions backing <code>vscode.authentication.getSession()</code> for installed extensions. Extensions normally create a session themselves the first time one is needed (<code>createIfNone</code>); use Remove to sign an account out, or add a manual session below for providers that accept a pasted token.</div>
+      <div class="settings-inline-row">
+        <input id="s-auth-provider-id" placeholder="Provider ID (e.g. github, anthropic)" autocomplete="off">
+        <button type="button" onclick="trackAuthProvider()">Show Sessions</button>
+      </div>
+      <div id="auth-sessions-list" style="margin-top:8px" aria-live="polite"></div>
+      <div class="sb-group" style="padding:0;margin-top:12px">Add Manual Session</div>
+      <div class="settings-help">Creates a session from a pasted token for the Provider ID above.</div>
+      <div class="settings-grid">
+        <div><label>Token</label><input id="s-auth-token" type="password" placeholder="Access token / API key" autocomplete="off"></div>
+        <div><label>Label</label><input id="s-auth-label" placeholder="Account label (optional)" autocomplete="off"></div>
+      </div>
+      <div class="settings-inline-row" style="margin-top:4px">
+        <button type="button" class="primary" onclick="addAuthSession()">Add Session</button>
+        <button type="button" onclick="renderAuthSessions()">Refresh</button>
+      </div>
+    </div>
+
     <!-- EXT-10: Extension-contributed settings -->
     <div id="ext-settings-container" data-settings-id="extension-settings" data-settings-title="Extension Settings"></div>
 
@@ -5818,6 +5839,119 @@ function copyClaudeProxyEnv(){
 window.startClaudeProxy=startClaudeProxy;
 window.stopClaudeProxy=stopClaudeProxy;
 window.copyClaudeProxyEnv=copyClaudeProxyEnv;
+
+// ── Authentication Sessions (vscode.authentication parity) ──
+const AUTH_KNOWN_PROVIDERS_KEY='sao-ai-auth-known-providers';
+const AUTH_DEFAULT_PROVIDERS=['github','microsoft','anthropic','openai'];
+function authKnownProviders(){
+  try{
+    const raw=localStorage.getItem(AUTH_KNOWN_PROVIDERS_KEY);
+    const list=raw?JSON.parse(raw):null;
+    if(Array.isArray(list)&&list.length)return Array.from(new Set(list.map(String).filter(Boolean)));
+  }catch(e){}
+  return AUTH_DEFAULT_PROVIDERS.slice();
+}
+function authRememberProvider(providerId){
+  const pid=String(providerId||'').trim();if(!pid)return;
+  const list=authKnownProviders();
+  if(!list.includes(pid)){
+    list.push(pid);
+    try{localStorage.setItem(AUTH_KNOWN_PROVIDERS_KEY,JSON.stringify(list))}catch(e){}
+  }
+}
+let _authSessionDetailKeys=new Set();
+function authSessionDetailKey(providerId,sessionId){return providerId+'::'+sessionId}
+async function renderAuthSessions(){
+  const el=$('auth-sessions-list');if(!el)return;
+  const providers=authKnownProviders();
+  const groups=[];
+  for(const pid of providers){
+    const r=await call('list_auth_sessions',pid);
+    const sessions=(r&&Array.isArray(r.sessions))?r.sessions:[];
+    if(sessions.length)groups.push({providerId:pid,sessions:sessions});
+  }
+  el.innerHTML='';
+  if(!groups.length){
+    const empty=document.createElement('div');
+    empty.style.cssText='color:var(--fg-dim);font-size:11px;padding:4px 0';
+    empty.textContent='No authentication sessions. Extensions create one automatically via vscode.authentication.getSession, or add a manual session below.';
+    el.appendChild(empty);
+    return;
+  }
+  groups.forEach(g=>{
+    const group=document.createElement('div');
+    group.className='settings-language-panel auth-session-group';
+    const head=document.createElement('div');head.className='settings-language-head';
+    const title=document.createElement('strong');title.textContent=g.providerId;
+    const count=document.createElement('span');count.className='lang-chip active';
+    count.textContent=g.sessions.length+(g.sessions.length===1?' session':' sessions');
+    head.appendChild(title);head.appendChild(count);
+    group.appendChild(head);
+    g.sessions.forEach(s=>{
+      const account=s.account||{};
+      const label=account.label||account.id||'(unnamed account)';
+      const scopes=Array.isArray(s.scopes)&&s.scopes.length?s.scopes.join(', '):'(no scopes)';
+      const sid=String(s.id||'');
+      const row=document.createElement('div');
+      row.style.cssText='display:flex;align-items:center;gap:8px;padding:3px 0;border-bottom:1px solid color-mix(in srgb,var(--border) 55%,transparent)';
+      const info=document.createElement('span');
+      info.style.cssText='flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:11px';
+      info.innerHTML='<b>'+esc(String(label))+'</b> <span style="color:var(--fg-dim)">'+esc(scopes)+'</span>';
+      const detailKey=authSessionDetailKey(g.providerId,sid);
+      const detailBtn=document.createElement('button');
+      detailBtn.type='button';
+      detailBtn.textContent=_authSessionDetailKeys.has(detailKey)?'Hide':'Details';
+      detailBtn.onclick=()=>{
+        if(_authSessionDetailKeys.has(detailKey))_authSessionDetailKeys.delete(detailKey);else _authSessionDetailKeys.add(detailKey);
+        renderAuthSessions();
+      };
+      const removeBtn=document.createElement('button');
+      removeBtn.type='button';removeBtn.style.color='var(--fg-error)';
+      removeBtn.textContent='Remove';
+      removeBtn.onclick=()=>removeAuthSession(g.providerId,sid);
+      row.appendChild(info);row.appendChild(detailBtn);row.appendChild(removeBtn);
+      group.appendChild(row);
+      if(_authSessionDetailKeys.has(detailKey)){
+        const pre=document.createElement('pre');
+        pre.style.cssText='font-size:10px;background:var(--bg3);padding:6px;border-radius:4px;overflow:auto;margin:2px 0 4px';
+        pre.textContent=JSON.stringify({id:s.id,provider:g.providerId,account:s.account,scopes:s.scopes},null,1);
+        group.appendChild(pre);
+      }
+    });
+    el.appendChild(group);
+  });
+}
+async function trackAuthProvider(){
+  const input=$('s-auth-provider-id');const pid=input?input.value.trim():'';
+  if(!pid){showToast('Enter a provider ID first','info',1600);return}
+  authRememberProvider(pid);
+  await renderAuthSessions();
+  showToast('Tracking provider: '+pid,'success',1400);
+}
+async function addAuthSession(){
+  const pidInput=$('s-auth-provider-id');const tokenInput=$('s-auth-token');const labelInput=$('s-auth-label');
+  const pid=pidInput?pidInput.value.trim():'';
+  const token=tokenInput?tokenInput.value.trim():'';
+  const label=labelInput?labelInput.value.trim():'';
+  if(!pid||!token){showToast('Provider ID and token are required','warning',1800);return}
+  const r=await call('create_auth_session',pid,token,label);
+  if(!r||r.error){showToast('Add session failed: '+((r&&r.error)||'unknown error'),'error',2200);return}
+  authRememberProvider(pid);
+  if(tokenInput)tokenInput.value='';
+  if(labelInput)labelInput.value='';
+  await renderAuthSessions();
+  showToast('Session added for '+pid,'success',1600);
+}
+async function removeAuthSession(providerId,sessionId){
+  const r=await call('remove_auth_session',providerId,sessionId);
+  if(!r||r.ok===false){showToast('Remove session failed','error',1800);return}
+  await renderAuthSessions();
+  showToast('Session removed','info',1400);
+}
+window.trackAuthProvider=trackAuthProvider;
+window.addAuthSession=addAuthSession;
+window.removeAuthSession=removeAuthSession;
+window.renderAuthSessions=renderAuthSessions;
 
 const PROVIDER_CLI_UI_IDS={
   'claude-code':{state:'cc-cli-state-chip',pid:'cc-cli-pid-chip',launch:'cc-cli-launch-btn',stop:'cc-cli-stop-btn',detail:'cc-cli-detail'},
@@ -32666,6 +32800,7 @@ function openSettings(){
   const ext=settingSection('extensions');
   setCheckedValue('s-ext-confirm',ext.confirm_install!==false);setCheckedValue('s-ext-diagnostics',ext.diagnostics_enabled===true);setInputValue('s-ext-allow',listToText(ext.allowed_publishers));setInputValue('s-ext-block',listToText(ext.blocked_publishers));renderExtensionContributionOptions(ext.enabled_contributions,ext.enabled_contributions_explicit===true);
   renderExtensionTrustSummary(ext);
+  renderAuthSessions();
   const cust=settingSection('customization');
   setCheckedValue('s-cust-agent-md',cust.use_agent_md!==false);setCheckedValue('s-cust-claude-md',cust.use_claude_md===true);
   setInputValue('s-cust-instructions',listToText(cust.instructions_locations));setInputValue('s-cust-agents',listToText(cust.agent_locations));
@@ -32819,6 +32954,7 @@ const SETTINGS_SECTION_DESCRIPTIONS={
   workspace:'Workspace roots, auto-detection, and remembered workspace behavior.',
   extensions:'Extension install trust, contribution loading, diagnostics, and runtime surfaces.',
   'extension-settings':'Settings dynamically contributed by installed VS Code extensions.',
+  accounts:'Authentication sessions used by vscode.authentication and manual token sign-in.',
   customization:'Workspace instructions, agents, workflows, and skill discovery paths.',
   advanced:'Advanced sampling, timeout, headers, and request body overrides.',
   models:'Custom endpoint models available to provider and assistant controls.'
@@ -37836,10 +37972,18 @@ function renderPermissions(){
     });
     html+='</table>';el.innerHTML=html;
     el.querySelectorAll('.perm-select').forEach(sel=>{
-      sel.onchange=()=>{
+      sel.onchange=async()=>{
         const tool=sel.getAttribute('data-tool');
+        const value=sel.value;
         config.permissions=config.permissions||{};
-        if(sel.value)config.permissions[tool]=sel.value;else delete config.permissions[tool];
+        if(value)config.permissions[tool]=value;else delete config.permissions[tool];
+        const r2=await call('set_tool_permission',tool,value||'default');
+        if(callSucceededOrApplied(r2)){
+          if(callAppliedLocally(r2))showPersistenceFailure(r2,{errorPrefix:'Permission save failed: ',partialPrefix:'Permission updated only for current session: '});
+          else showToast('Permission updated: '+tool,'success',1200);
+        }else{
+          showPersistenceFailure(r2,{errorPrefix:'Permission save failed: '});
+        }
         renderPermissions();
       };
     });
