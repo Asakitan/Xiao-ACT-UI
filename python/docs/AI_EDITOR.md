@@ -263,7 +263,7 @@ Workflow 是多步骤的链式 LLM 调用，每一步可以使用不同的 Agent
 | **ASSISTANT** | 始终存在 | 通用对话，使用你在 Settings 中配置的模型 |
 | **Claude Code** | 已配置 Anthropic API Key 或本机有 `claude` CLI | 自动进入 Agent 模式 |
 | **Codex** | 已配置 OpenAI API Key | 自动进入 Agent 模式 |
-| **插件自定义** | 插件调用 `register_chat_provider()` 注册 | 按插件配置运行 |
+| **插件自定义** | 插件 `plugin.json` 里声明 `chatProviders`（见下方"插件开发者指南"） | 按插件配置运行 |
 
 每个 Provider 标签页有独立的对话会话和 LLM 引擎实例，互不干扰。
 
@@ -298,27 +298,34 @@ AI Editor 支持连接 MCP 服务器，扩展 LLM 可用的工具。配置来源
 
 ## 注册 Chat Provider
 
-在插件的 `plugin.py` 中通过 `ctx.ai_editor.register_chat_provider()` 注册一个对话标签页：
+AI Editor 正常情况下运行在与主 SAO 进程**不同的操作系统进程**里（`ai_editor.app.launch()` 用 `subprocess.Popen` 拉起一个独立子进程/独立 exe），SAO root 插件（`plugins/<id>/plugin.py`）跑在主进程里——两边不共享 Python 内存，插件没有一个能直接调用的“live”对象。所以注册方式是**声明式 manifest**，不是在 `plugin.py` 里调用某个 `ctx` 方法：在插件的 `plugin.json` 里加一个 `chatProviders` 数组，AI Editor 启动时会扫描所有 `plugins/*/plugin.json` 并自动注册（和已有的 `mcpServers` manifest 扫描是同一套约定，同一个文件，同一种发现时机）：
 
-```python
-def on_enable(ctx):
-    ctx.ai_editor.register_chat_provider({
-        "id": "my-bot",
-        "name": "My Bot",
-        "icon": "🤖",
-        "provider_type": "openai",      # openai / anthropic / custom
-        "model": "gpt-4o-mini",
-        "base_url": "",                  # 留空使用默认端点
-        "system_prompt": "你是一个游戏辅助助手，专注于回答战斗相关问题。",
-        "auto_agent": False,             # 是否默认开启 Agent 模式
-    })
+```json
+{
+  "id": "acme-bot",
+  "name": "Acme Bot Plugin",
+  "chatProviders": [
+    {
+      "id": "my-bot",
+      "name": "My Bot",
+      "icon": "🤖",
+      "provider_type": "openai",
+      "model": "gpt-4o-mini",
+      "base_url": "",
+      "system_prompt": "你是一个游戏辅助助手，专注于回答战斗相关问题。",
+      "auto_agent": false
+    }
+  ]
+}
 ```
+
+注册后的标签页 id 会自动加上插件 id 前缀（如 `acme-bot.my-bot`），避免不同插件之间撞名，也保证永远不会覆盖内置的 `chat` 标签页。
 
 **ChatProviderDef 全部字段：**
 
 | 字段 | 类型 | 默认 | 说明 |
 |------|------|------|------|
-| `id` | str | (必填) | 唯一标识 |
+| `id` | str | (必填) | 唯一标识（会被加上插件 id 前缀） |
 | `name` | str | (必填) | 标签页显示名称 |
 | `icon` | str | 💬 | Emoji 图标 |
 | `provider_type` | str | openai | LLM 提供商 |
@@ -328,7 +335,11 @@ def on_enable(ctx):
 | `system_prompt` | str | "" | 系统提示词 |
 | `auto_agent` | bool | False | 打开时是否自动切到 Agent 模式 |
 
-注册后，标签页立即出现在右侧边栏中。
+注册后，标签页在下次 AI Editor 启动时出现在右侧边栏中（manifest 是启动时一次性扫描，不是热重载）。
+
+**如果需要真正的自定义工具执行**（不只是一个对话标签页，而是要跑插件自己的代码），declarative JSON 表达不了一个活的 Python 函数——用同一个 `plugin.json` 里已有的 `mcpServers` 字段声明一个真正的 MCP server（stdio 或 HTTP），AI Editor 会像连接任何其他 MCP server 一样连接它。这正是 MCP 协议本来要解决的"跨进程调用活代码"问题，不需要再造一个新机制。
+
+`AIEditorAPI.register_chat_provider()`/`register_mcp_tools()`（`window.pywebview.api.xxx`）仍然是真实、可调用的方法，但它们是给**同进程内**的调用方用的（比如未来的 JS/Node extension host），SAO root 插件因为跨进程边界，走的是上面这条 manifest 路径。
 
 ## 通过 Scope 分发 Agent 和 Workflow
 

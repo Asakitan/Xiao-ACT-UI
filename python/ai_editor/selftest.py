@@ -5356,6 +5356,62 @@ def test_phase1_ai_editor_regressions() -> None:
     _check("unregister_chat_provider removes custom providers only",
            plugin_provider_api.unregister_chat_provider("plugin-demo").get("ok") is True
            and plugin_provider_api._provider_registry.get("plugin-demo") is None)
+
+    # Manifest-declared chat providers (长期计划 B项): SAO root plugins run in
+    # a different OS process than the AI Editor (ai_editor.app.launch spawns
+    # a subprocess), so there is no live Python object for a plugin to call
+    # into. Providers are declared as static JSON in plugin.json instead, and
+    # the AI Editor scans plugins/*/plugin.json for them on startup, mirroring
+    # the existing mcpServers manifest scan (same directory, same file).
+    import config as _config_mod
+    from ai_editor.chat_providers import (
+        load_manifest_chat_providers, register_manifest_chat_providers, ChatProviderRegistry)
+    manifest_tmpdir = tempfile.mkdtemp(prefix="sao_chat_provider_manifest_")
+    original_base_dir = getattr(_config_mod, "BASE_DIR", None)
+    try:
+        plugins_root = os.path.join(manifest_tmpdir, "plugins")
+        good_plugin_dir = os.path.join(plugins_root, "acme.bot")
+        os.makedirs(good_plugin_dir)
+        with open(os.path.join(good_plugin_dir, "plugin.json"), "w", encoding="utf-8") as f:
+            json.dump({
+                "id": "acme.bot", "name": "Acme Bot",
+                "chatProviders": [
+                    {"id": "my-bot", "name": "My Bot", "icon": "\U0001f916",
+                     "provider_type": "openai", "model": "gpt-4o-mini"},
+                    {"name": "missing id, must be skipped"},
+                ],
+            }, f)
+        broken_plugin_dir = os.path.join(plugins_root, "broken.plugin")
+        os.makedirs(broken_plugin_dir)
+        with open(os.path.join(broken_plugin_dir, "plugin.json"), "w", encoding="utf-8") as f:
+            f.write("{not valid json")
+        _config_mod.BASE_DIR = manifest_tmpdir
+
+        loaded = load_manifest_chat_providers()
+        _check("manifest scan finds only the one valid declared provider "
+               "(id-less entry skipped, malformed neighbor plugin.json didn't raise) and namespaces its id",
+               len(loaded) == 1 and loaded[0]["id"] == "acme.bot.my-bot"
+               and loaded[0]["name"] == "My Bot")
+
+        fresh_registry = ChatProviderRegistry()
+        registered = register_manifest_chat_providers(fresh_registry)
+        _check("register_manifest_chat_providers registers the namespaced provider into a fresh registry",
+               registered == ["acme.bot.my-bot"]
+               and fresh_registry.get("acme.bot.my-bot") is not None
+               and fresh_registry.get("acme.bot.my-bot").model == "gpt-4o-mini")
+        _check("manifest-declared providers can never collide with a built-in id (namespacing)",
+               fresh_registry.get("chat").builtin is True
+               and fresh_registry.get("chat").name == "Assistant")
+    finally:
+        if original_base_dir is not None:
+            _config_mod.BASE_DIR = original_base_dir
+        elif hasattr(_config_mod, "BASE_DIR"):
+            del _config_mod.BASE_DIR
+        shutil.rmtree(manifest_tmpdir, ignore_errors=True)
+    _check("_ensure_engine wires manifest chat providers into the real provider registry on startup",
+           "register_manifest_chat_providers(self._provider_registry)" in
+           open(os.path.join(os.path.dirname(__file__), "app.py"), "r", encoding="utf-8").read())
+
     _check("list_chat_providers shows native/webview metadata",
            api_cli_items.get("claude-code", {}).get("runtime_mode") == "extension-webview"
            and api_cli_items.get("codex", {}).get("runtime_mode") == "extension-webview"

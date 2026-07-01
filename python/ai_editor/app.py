@@ -3127,8 +3127,12 @@ class AIEditorAPI:
         self._apply_mode_permissions()
 
         # Chat provider registry + per-provider controllers
-        from ai_editor.chat_providers import get_provider_registry
+        from ai_editor.chat_providers import get_provider_registry, register_manifest_chat_providers
         self._provider_registry = get_provider_registry()
+        try:
+            register_manifest_chat_providers(self._provider_registry)
+        except Exception as exc:
+            print(f"[ChatProviders] Manifest scan failed: {exc}")
         self._provider_controllers: Dict[str, ChatController] = {}
         saved_provider = str(ai_cfg.get("active_chat_provider") or "chat") if isinstance(ai_cfg, dict) else "chat"
         self._active_provider = saved_provider if self._provider_registry.get(saved_provider) else "chat"

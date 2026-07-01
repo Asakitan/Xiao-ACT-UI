@@ -9,6 +9,7 @@ Plugins call ``register_chat_provider()`` to add custom tabs.
 
 from __future__ import annotations
 
+import json
 import os
 import shutil
 from dataclasses import dataclass, field, asdict
@@ -584,3 +585,58 @@ def get_provider_registry() -> ChatProviderRegistry:
     if _singleton is None:
         _singleton = ChatProviderRegistry()
     return _singleton
+
+
+def load_manifest_chat_providers() -> List[Dict[str, Any]]:
+    """Scan ``plugins/*/plugin.json`` for a declarative ``chatProviders`` list.
+
+    SAO root plugins run in the main SAO process; the AI Editor normally runs
+    in a separate subprocess (see ``ai_editor.app.launch``), so there is no
+    live Python object a plugin could call into. This mirrors
+    ``mcp_client.load_mcp_configs``'s existing plugin-manifest scan (same
+    directory, same ``plugins/<id>/plugin.json`` file, same per-plugin id
+    namespacing) rather than inventing a second convention: a plugin
+    declares its chat provider as static JSON, and the AI Editor registers it
+    on startup. Providers needing live tool execution should declare a real
+    MCP server instead (``mcpServers`` in the same manifest) — that's what
+    MCP is for.
+    """
+    providers: List[Dict[str, Any]] = []
+    try:
+        from config import BASE_DIR
+        plugins_dir = os.path.join(BASE_DIR, "plugins")
+    except ImportError:
+        plugins_dir = os.path.join(os.path.dirname(__file__), "..", "plugins")
+    if not os.path.isdir(plugins_dir):
+        return providers
+    for pname in os.listdir(plugins_dir):
+        manifest = os.path.join(plugins_dir, pname, "plugin.json")
+        if not os.path.isfile(manifest):
+            continue
+        try:
+            with open(manifest, "r", encoding="utf-8") as f:
+                pdata = json.load(f)
+        except Exception:
+            continue
+        for entry in pdata.get("chatProviders") or []:
+            if not isinstance(entry, dict) or not str(entry.get("id") or "").strip():
+                continue
+            declared = dict(entry)
+            declared["id"] = f"{pname}.{declared['id']}"
+            providers.append(declared)
+    return providers
+
+
+def register_manifest_chat_providers(registry: ChatProviderRegistry) -> List[str]:
+    """Register every manifest-declared chat provider found by
+    :func:`load_manifest_chat_providers`. Returns the ids that registered
+    successfully; malformed entries or id collisions with a built-in
+    provider are skipped rather than raising."""
+    registered: List[str] = []
+    for entry in load_manifest_chat_providers():
+        try:
+            registry.register(ChatProviderDef.from_dict(entry))
+        except (TypeError, ValueError):
+            continue
+        registered.append(entry["id"])
+    return registered
