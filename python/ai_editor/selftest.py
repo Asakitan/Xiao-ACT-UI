@@ -2329,6 +2329,55 @@ def test_app_settings_parity() -> None:
     finally:
         shutil.rmtree(tmp_provider_dir, ignore_errors=True)
 
+    # Built-in JSON syntax diagnostic fallback (mirrors real VS Code's core
+    # editor, which validates .json/.jsonc even with zero extensions
+    # installed) - only fires when nothing else (registered
+    # DiagnosticCollection, Node-hosted provider) already produced
+    # diagnostics for the document, and only for json/jsonc.
+    json_diag_dir = tempfile.mkdtemp(prefix="sao_json_diag_")
+    try:
+        json_diag_api = AIEditorAPI(_SettingsGui({"ai_editor": {}}))
+        broken_path = os.path.join(json_diag_dir, "broken.json")
+        with open(broken_path, "w", encoding="utf-8") as fh:
+            fh.write('{"a": 1,}')
+        broken_result = json_diag_api.editor_language_provider({
+            "filePath": broken_path, "language": "json",
+            "content": '{"a": 1,}', "dirty": True, "kind": "diagnostics",
+        })
+        broken_diagnostic = (broken_result.get("diagnostics") or [{}])[0]
+        _check("built-in JSON syntax fallback flags a real syntax error when nothing else did",
+               broken_result.get("ok") is True
+               and len(broken_result.get("diagnostics") or []) == 1
+               and broken_diagnostic.get("source") == "json"
+               and broken_diagnostic.get("severity") == 0
+               and "range" in broken_diagnostic,
+               json.dumps(broken_result, ensure_ascii=False, default=str))
+
+        valid_path = os.path.join(json_diag_dir, "valid.json")
+        with open(valid_path, "w", encoding="utf-8") as fh:
+            fh.write('{"a": 1}')
+        valid_result = json_diag_api.editor_language_provider({
+            "filePath": valid_path, "language": "json",
+            "content": '{"a": 1}', "dirty": True, "kind": "diagnostics",
+        })
+        _check("built-in JSON syntax fallback reports nothing for well-formed JSON",
+               valid_result.get("ok") is True
+               and valid_result.get("diagnostics") == [])
+
+        non_json_path = os.path.join(json_diag_dir, "broken.py")
+        with open(non_json_path, "w", encoding="utf-8") as fh:
+            fh.write("not json at all {{{")
+        non_json_result = json_diag_api.editor_language_provider({
+            "filePath": non_json_path, "language": "python",
+            "content": "not json at all {{{", "dirty": True,
+            "kind": "diagnostics",
+        })
+        _check("built-in JSON syntax fallback never fires for non-json/jsonc languages",
+               non_json_result.get("ok") is True
+               and non_json_result.get("diagnostics") == [])
+    finally:
+        shutil.rmtree(json_diag_dir, ignore_errors=True)
+
     x, y, w, h = _normalize_window_geometry({"x": 999999, "y": 999999, "w": 999999, "h": 999999})
     _check("saved AI Editor window geometry is clamped to visible screen",
            w >= 600 and h >= 400 and x < 999999 and y < 999999)

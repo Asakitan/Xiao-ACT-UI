@@ -1095,6 +1095,38 @@ def _json_ready_language_value(value: Any, depth: int = 0) -> Any:
     return str(value)
 
 
+def _builtin_json_syntax_diagnostics(content: str) -> List[Dict[str, Any]]:
+    """VS Code's core editor validates JSON syntax for .json/.jsonc files
+    even with zero extensions installed (built into the base product, not
+    an extension contribution) - mirrors that here as a last-resort
+    fallback, only consulted when no registered DiagnosticCollection or
+    Node-hosted provider produced anything for this document. Strict
+    json.loads only (no JSONC comment/trailing-comma tolerance) - a real
+    JSON language extension is expected to handle the .jsonc dialect
+    properly; this fallback's job is just "don't show total silence for a
+    file with genuinely broken JSON".
+    """
+    try:
+        json.loads(content)
+        return []
+    except json.JSONDecodeError as exc:
+        line = max(0, exc.lineno - 1)
+        character = max(0, exc.colno - 1)
+        end_character = character + 1
+        return [{
+            "range": {
+                "start": {"line": line, "character": character},
+                "end": {"line": line, "character": end_character},
+            },
+            "message": exc.msg,
+            "severity": 0,
+            "source": "json",
+            "code": "json.syntax",
+        }]
+    except Exception:
+        return []
+
+
 def _code_action_metadata_kinds(metadata: Any) -> List[str]:
     """Return VS Code code action kinds declared by provider metadata."""
     if not isinstance(metadata, dict):
@@ -7393,6 +7425,8 @@ class AIEditorAPI:
                 })
                 if isinstance(node_result, dict) and node_result.get("ok"):
                     add_diagnostics(node_result.get("value"))
+                if not diagnostics and language in ("json", "jsonc"):
+                    add_diagnostics(_builtin_json_syntax_diagnostics(content))
                 return {
                     "ok": True,
                     "kind": kind,
