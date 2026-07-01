@@ -6999,6 +6999,7 @@ window._onEditorEvent=function(event,data){
   else if(event==='tool_confirm') onToolConfirm(data);
   else if(event==='token_warning') onTokenWarning(data);
   else if(event==='workflow_step') onWorkflowStep(data);
+  else if(event==='workflow_confirmation_needed') onWorkflowConfirmationNeeded(data);
   else if(event==='error') onError(data);
   else if(event==='idle') onIdle();
   else if(event==='show_output'){
@@ -27721,6 +27722,47 @@ function onWorkflowStep(d){
     if(pending)pending.textContent='Workflow '+String(d&&d.status||'running')+': '+String(d&&d.label||('Step '+((Number(d&&d.step)||0)+1)));
   }
   setStatus('⚡ '+(d.label||'Step '+(d.step+1))+' ('+d.status+')');
+}
+function renderWorkflowConfirmBar(container,d,scrollEl){
+  if(!container||!d)return null;
+  const barId='wfconfirm-'+providerDomKey(String(d.workflowRunId||''))+'-'+String(d.step);
+  const existing=document.getElementById(barId);
+  if(existing)return existing;
+  const label=String(d.label||('Step '+(Number(d.step||0)+1)));
+  const bar=document.createElement('div');bar.className='confirm-bar chat-tool-confirmation';
+  bar.id=barId;
+  bar.dataset.state='waiting';
+  bar.dataset.toolName=label;
+  bar.dataset.workflowRunId=String(d.workflowRunId||'');
+  bar.dataset.workflowStep=String(d.step);
+  bar.setAttribute('role','group');
+  bar.setAttribute('aria-label','Workflow step confirmation: '+label);
+  const msg=document.createElement('div');msg.className='msg';
+  const title=document.createElement('div');title.className='confirm-title';
+  title.innerHTML='<span aria-hidden="true">⚠</span><span class="tool-name">'+esc(label)+'</span><span>'+esc(t('requires_confirmation'))+'</span>';
+  msg.appendChild(title);
+  const actions=document.createElement('div');actions.className='confirm-actions';
+  const allow=document.createElement('button');allow.type='button';allow.className='confirm-btn confirm-allow';allow.textContent=t('allow');
+  const deny=document.createElement('button');deny.type='button';deny.className='confirm-btn confirm-deny';deny.textContent=t('deny');
+  allow.setAttribute('aria-label','Approve workflow step '+label);
+  deny.setAttribute('aria-label','Reject workflow step '+label);
+  allow.onclick=()=>confirmWorkflowStep(d.workflowRunId,d.step,true,bar);
+  deny.onclick=()=>confirmWorkflowStep(d.workflowRunId,d.step,false,bar);
+  actions.appendChild(allow);actions.appendChild(deny);
+  bar.appendChild(msg);bar.appendChild(actions);container.appendChild(bar);
+  if(scrollEl)scrollEl.scrollTop=scrollEl.scrollHeight;
+  setStatus('Waiting for confirmation: '+label);
+  return bar;
+}
+window.confirmWorkflowStep=async function(runId,step,allowed,bar){
+  if(bar)updateConfirmBarDecision(bar,allowed,{kind:'userAction',reason:t('confirm_user_action')});
+  await call('confirm_workflow_step',runId,step,allowed);
+};
+function onWorkflowConfirmationNeeded(d){
+  const msgs=$('chat-messages');
+  let body=latestChatMessageBody();
+  if(!body){body=createMsg('system');body.style.color='var(--fg-dim)'}
+  renderWorkflowConfirmBar(body,d,msgs);
 }
 function createAgent(){
   const modal=document.createElement('div');modal.className='modal-bg';modal.classList.add('open');

@@ -1038,6 +1038,7 @@ def test_app_settings_parity() -> None:
         "list_workflows", "get_active_agent", "set_active_agent",
         "clear_active_agent", "delete_agent", "delete_workflow",
         "run_workflow", "retry_workflow_step", "pause_workflow", "resume_workflow",
+        "confirm_workflow_step",
         "get_scopes", "save_agent", "save_workflow",
         "list_workspace_tree", "workspace_file_decorations",
         "open_workspace_file", "save_workspace_notebook",
@@ -7528,14 +7529,27 @@ def test_phase1_ai_editor_regressions() -> None:
            and "def resume_workflow(self, run_id: str = \"\") -> Dict:" in app_source
            and "def _workflow_wait_if_paused(self, run_id: str," in app_source
            and "event.set()" in app_source
-           and "wait_if_paused=self._workflow_wait_if_paused(run_id, cancel_event))" in app_source)
+           and "wait_if_paused=self._workflow_wait_if_paused(run_id, cancel_event)," in app_source)
     _check("backend workflow gives grouped steps an isolated llm_factory",
            "llm_factory=lambda: LLMEngine(self._engine.config))" in app_source)
+    _check("backend workflow supports human-confirmation steps",
+           "def confirm_workflow_step(self, run_id: str, step_index: int," in app_source
+           and "def _workflow_confirm_step(self, run_id: str," in app_source
+           and "\"No pending confirmation for that step\"" in app_source
+           and "\"workflow_confirmation_needed\"" in app_source
+           and "confirm_step=self._workflow_confirm_step(run_id, cancel_event))" in app_source
+           and "self._forget_workflow_confirmations(run_id)" in app_source)
     _check("frontend workflow retry targets the first failed step",
            "function workflowRetryStepPlan(last){" in html
            and "const failedIndex=steps.findIndex(step=>step&&step.error);" in html
            and "call('retry_workflow_step',id,inputText,retryOpts.stepIndex,retryOpts.seedContext||{}" in html
            and "assistantWorkflowLastLaunch.lastResult=result;" in html)
+    _check("frontend workflow renders a confirm bar for human-confirmation steps",
+           "else if(event==='workflow_confirmation_needed') onWorkflowConfirmationNeeded(data);" in html
+           and "function renderWorkflowConfirmBar(container,d,scrollEl){" in html
+           and "window.confirmWorkflowStep=async function(runId,step,allowed,bar){" in html
+           and "call('confirm_workflow_step',runId,step,allowed);" in html
+           and "function onWorkflowConfirmationNeeded(d){" in html)
     _check("frontend workflow run can be paused and resumed mid-run",
            "let assistantWorkflowRunPaused=false;" in html
            and "async function pauseAssistantWorkflowRun(){" in html
@@ -39575,6 +39589,74 @@ def test_workflows() -> None:
                json.dumps({
                    "elapsed": no_factory_elapsed,
                    "steps": no_factory_result.get("steps", []),
+               }, ensure_ascii=False, default=str))
+
+        gated_wf = WorkflowDef(
+            id="confirm-test", name="Confirm", steps=[
+                WorkflowStep(prompt="Gate {{input}}", output_var="gated",
+                             label="Gate", requires_confirmation=True),
+                WorkflowStep(prompt="After {{gated}}", output_var="after",
+                             label="After"),
+            ])
+
+        approve_llm = _FakeWorkflowLlm()
+        approve_engine = WorkflowEngine(approve_llm, _FakeAgents())
+        approve_result = approve_engine.run(
+            gated_wf, "seed", run_id="wf-confirm-approve",
+            confirm_step=lambda i, step: True)
+        _check("workflow engine proceeds when a confirmation step is approved",
+               approve_result.get("steps", [{}])[0].get("status") == "done"
+               and approve_llm.prompts == ["Gate seed", "After out-1"]
+               and approve_result.get("final_output") == "out-2")
+
+        reject_llm = _FakeWorkflowLlm()
+        reject_engine = WorkflowEngine(reject_llm, _FakeAgents())
+        reject_result = reject_engine.run(
+            gated_wf, "seed", run_id="wf-confirm-reject",
+            confirm_step=lambda i, step: False)
+        reject_steps = reject_result.get("steps", [])
+        _check("workflow engine halts a rejected confirmation step "
+               "without calling the LLM",
+               len(reject_steps) == 1
+               and reject_steps[0].get("status") == "rejected"
+               and reject_steps[0].get("rejected") is True
+               and reject_llm.prompts == []
+               and not reject_result.get("cancelled"),
+               json.dumps({"steps": reject_steps,
+                           "prompts": reject_llm.prompts},
+                          ensure_ascii=False, default=str))
+
+        cw_cancel_event = threading.Event()
+
+        def _confirm_wait_for_cancel(i, step):
+            while not cw_cancel_event.is_set():
+                cw_cancel_event.wait(timeout=0.02)
+            return None
+
+        cw_llm = _FakeWorkflowLlm()
+        cw_engine = WorkflowEngine(cw_llm, _FakeAgents())
+        cw_holder: Dict[str, Any] = {}
+
+        def _run_cw():
+            cw_holder["result"] = cw_engine.run(
+                gated_wf, "seed", run_id="wf-confirm-cancel",
+                cancel_requested=cw_cancel_event.is_set,
+                confirm_step=_confirm_wait_for_cancel)
+
+        cw_thread = threading.Thread(target=_run_cw, daemon=True)
+        cw_thread.start()
+        time.sleep(0.1)
+        still_waiting = cw_thread.is_alive()
+        cw_cancel_event.set()
+        cw_thread.join(timeout=2.0)
+        _check("workflow engine cancels a step stuck waiting on confirmation",
+               still_waiting
+               and not cw_thread.is_alive()
+               and cw_holder.get("result", {}).get("cancelled") is True
+               and cw_llm.prompts == [],
+               json.dumps({
+                   "stillWaiting": still_waiting,
+                   "result": cw_holder.get("result"),
                }, ensure_ascii=False, default=str))
 
     finally:

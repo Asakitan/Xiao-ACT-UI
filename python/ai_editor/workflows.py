@@ -43,6 +43,9 @@ class WorkflowStep:
     # Steps sharing the same non-empty, *contiguous* group value run
     # concurrently against the same pre-batch context snapshot.
     group: str = ""
+    # If set, the engine blocks this step (via ``confirm_step``) right
+    # before its LLM call until a human approves or rejects it.
+    requires_confirmation: bool = False
 
     def to_dict(self) -> Dict[str, Any]:
         return asdict(self)
@@ -376,14 +379,20 @@ class WorkflowEngine:
     def _make_entry(i: int, step: "WorkflowStep", output: str,
                     error: Optional[str], started_at: int, ended_at: int
                     ) -> Dict[str, Any]:
+        status = "done"
+        if error == "Workflow cancelled":
+            status = "cancelled"
+        elif error == "Workflow step rejected":
+            status = "rejected"
+        elif error:
+            status = "error"
         entry: Dict[str, Any] = {
             "step": i,
             "agent": step.agent,
             "label": step.label or f"Step {i + 1}",
             "output_var": step.output_var,
             "output": output,
-            "status": "cancelled" if error == "Workflow cancelled"
-            else "error" if error else "done",
+            "status": status,
             "startedAt": started_at,
             "endedAt": ended_at,
             "durationMs": max(0, ended_at - started_at),
@@ -392,7 +401,27 @@ class WorkflowEngine:
             entry["error"] = error
         if error == "Workflow cancelled":
             entry["cancelled"] = True
+        if error == "Workflow step rejected":
+            entry["rejected"] = True
         return entry
+
+    @staticmethod
+    def _maybe_confirm(i: int, step: "WorkflowStep",
+                       confirm_step: Optional[Callable[[int, "WorkflowStep"],
+                                                        Optional[bool]]]
+                       ) -> Optional[str]:
+        """Returns an error string if the step must not run (rejected or
+        cancelled while waiting), or ``None`` if it's clear to proceed."""
+        if not getattr(step, "requires_confirmation", False):
+            return None
+        if confirm_step is None:
+            return None
+        decision = confirm_step(i, step)
+        if decision is None:
+            return "Workflow cancelled"
+        if not decision:
+            return "Workflow step rejected"
+        return None
 
     @staticmethod
     def _plan_batches(steps: List["WorkflowStep"], start_index: int
@@ -423,7 +452,8 @@ class WorkflowEngine:
                             total: int, context: Dict[str, str],
                             on_step_start: Optional[Callable],
                             on_step_end: Optional[Callable],
-                            cancelled: Callable[[], bool]
+                            cancelled: Callable[[], bool],
+                            confirm_step: Optional[Callable] = None,
                             ) -> Dict[int, Dict[str, Any]]:
         """Run each batch member one at a time against the same context
         snapshot, using the shared ``self._llm``. Used for singleton
@@ -434,8 +464,12 @@ class WorkflowEngine:
             if on_step_start:
                 on_step_start(i, total, step)
             started_at = int(time.time() * 1000)
-            messages = self._step_messages(step, context)
-            output, error = self._call_llm(self._llm, messages, cancelled)
+            blocked = self._maybe_confirm(i, step, confirm_step)
+            if blocked is not None:
+                output, error = "", blocked
+            else:
+                messages = self._step_messages(step, context)
+                output, error = self._call_llm(self._llm, messages, cancelled)
             ended_at = int(time.time() * 1000)
             entries[i] = self._make_entry(i, step, output, error,
                                           started_at, ended_at)
@@ -447,7 +481,8 @@ class WorkflowEngine:
                             total: int, context: Dict[str, str],
                             on_step_start: Optional[Callable],
                             on_step_end: Optional[Callable],
-                            cancelled: Callable[[], bool]
+                            cancelled: Callable[[], bool],
+                            confirm_step: Optional[Callable] = None,
                             ) -> Dict[int, Dict[str, Any]]:
         """Run every batch member concurrently, each against its own
         ``llm_factory()``-provided client so none share cancel/http state."""
@@ -457,7 +492,11 @@ class WorkflowEngine:
         started_ats = {i: int(time.time() * 1000) for i, _ in batch}
         entries: Dict[int, Dict[str, Any]] = {}
 
-        def _call_isolated(step: "WorkflowStep") -> Tuple[str, Optional[str]]:
+        def _call_isolated(i: int, step: "WorkflowStep"
+                           ) -> Tuple[str, Optional[str]]:
+            blocked = self._maybe_confirm(i, step, confirm_step)
+            if blocked is not None:
+                return "", blocked
             llm = self._llm_factory()
             try:
                 return self._call_llm(
@@ -473,7 +512,7 @@ class WorkflowEngine:
         with concurrent.futures.ThreadPoolExecutor(
                 max_workers=len(batch)) as pool:
             futures = {
-                pool.submit(_call_isolated, step): (i, step)
+                pool.submit(_call_isolated, i, step): (i, step)
                 for i, step in batch
             }
             for fut in concurrent.futures.as_completed(futures):
@@ -497,6 +536,8 @@ class WorkflowEngine:
             start_index: int = 0,
             seed_context: Optional[Dict[str, str]] = None,
             wait_if_paused: Optional[Callable[[], None]] = None,
+            confirm_step: Optional[Callable[[int, "WorkflowStep"],
+                                            Optional[bool]]] = None,
             ) -> Dict[str, Any]:
         """Run synchronously — call from a background thread.
 
@@ -509,6 +550,12 @@ class WorkflowEngine:
         expected to block the calling thread until the run is resumed (or
         the run is cancelled, in which case it must return promptly so the
         cancellation check right after it can take effect).
+
+        ``confirm_step``, if given, is called for any step with
+        ``requires_confirmation=True`` right before its LLM call, and is
+        expected to block until a decision is made: return ``True`` to
+        proceed, ``False`` to reject the step, or ``None`` if the run was
+        cancelled while waiting.
         """
         run_id = str(run_id or "").strip()
         start_index = max(0, int(start_index or 0))
@@ -549,11 +596,11 @@ class WorkflowEngine:
             if len(batch) > 1 and self._llm_factory is not None:
                 entries = self._run_batch_parallel(
                     batch, total, context, on_step_start, on_step_end,
-                    _cancelled)
+                    _cancelled, confirm_step)
             else:
                 entries = self._run_batch_isolated(
                     batch, total, context, on_step_start, on_step_end,
-                    _cancelled)
+                    _cancelled, confirm_step)
 
             batch_cancelled = False
             batch_error: Optional[str] = None

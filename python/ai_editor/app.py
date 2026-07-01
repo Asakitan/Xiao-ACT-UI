@@ -2355,6 +2355,8 @@ class AIEditorAPI:
         self._workflow_cancel_events: Dict[str, threading.Event] = {}
         self._workflow_pause_lock = threading.Lock()
         self._workflow_pause_events: Dict[str, threading.Event] = {}
+        self._workflow_confirm_lock = threading.Lock()
+        self._workflow_confirmations: Dict[Tuple[str, int], Dict[str, Any]] = {}
         self._extension_dynamic_ui_lock = threading.Lock()
         self._extension_dynamic_ui_state: Dict[str, Any] = {
             "quickInputs": {},
@@ -9673,6 +9675,69 @@ class AIEditorAPI:
 
         return _wait
 
+    def confirm_workflow_step(self, run_id: str, step_index: int,
+                              approved: bool) -> Dict:
+        """Approve or reject a pending human-confirmation step. No-op
+        (returns an error) if that step isn't currently waiting."""
+        try:
+            step_index = int(step_index)
+        except (TypeError, ValueError):
+            return {"ok": False, "error": "Invalid step index"}
+        key = (str(run_id or "").strip(), step_index)
+        with self._workflow_confirm_lock:
+            entry = self._workflow_confirmations.get(key)
+            if entry is None:
+                return {"ok": False, "error": "No pending confirmation for that step"}
+            entry["approved"] = bool(approved)
+            entry["event"].set()
+        return {
+            "ok": True,
+            "workflowRunId": key[0],
+            "step": key[1],
+            "approved": bool(approved),
+        }
+
+    def _workflow_confirm_step(self, run_id: str,
+                               cancel_event: Optional[threading.Event]
+                               ) -> Optional[Callable[[int, Any], Optional[bool]]]:
+        run_id = str(run_id or "").strip()
+        if not run_id:
+            return None
+
+        def _confirm(i: int, step: Any) -> Optional[bool]:
+            key = (run_id, i)
+            event = threading.Event()
+            with self._workflow_confirm_lock:
+                self._workflow_confirmations[key] = {
+                    "approved": None, "event": event,
+                    "label": getattr(step, "label", "") or f"Step {i + 1}",
+                }
+            self._emit("workflow_confirmation_needed", {
+                "workflowRunId": run_id, "step": i,
+                "label": getattr(step, "label", ""),
+                "agent": getattr(step, "agent", ""),
+            })
+            while not event.is_set():
+                if cancel_event is not None and cancel_event.is_set():
+                    with self._workflow_confirm_lock:
+                        self._workflow_confirmations.pop(key, None)
+                    return None
+                event.wait(timeout=0.25)
+            with self._workflow_confirm_lock:
+                entry = self._workflow_confirmations.pop(key, None)
+            return bool(entry and entry.get("approved"))
+
+        return _confirm
+
+    def _forget_workflow_confirmations(self, run_id: str) -> None:
+        run_id = str(run_id or "").strip()
+        if not run_id:
+            return
+        with self._workflow_confirm_lock:
+            stale = [key for key in self._workflow_confirmations if key[0] == run_id]
+            for key in stale:
+                self._workflow_confirmations.pop(key, None)
+
     @staticmethod
     def _workflow_result_payload(
             wf: Any,
@@ -9781,11 +9846,13 @@ class AIEditorAPI:
                 wf, input_text, _on_start, _on_end, run_id,
                 cancel_requested=(
                     cancel_event.is_set if cancel_event is not None else None),
-                wait_if_paused=self._workflow_wait_if_paused(run_id, cancel_event))
+                wait_if_paused=self._workflow_wait_if_paused(run_id, cancel_event),
+                confirm_step=self._workflow_confirm_step(run_id, cancel_event))
             return self._workflow_result_payload(wf, result, input_text, metadata)
         finally:
             self._forget_workflow_cancel_event(run_id)
             self._forget_workflow_pause_event(run_id)
+            self._forget_workflow_confirmations(run_id)
 
     def retry_workflow_step(self, wf_id: str, input_text: str,
                             step_index: int,
@@ -9822,7 +9889,8 @@ class AIEditorAPI:
                 cancel_requested=(
                     cancel_event.is_set if cancel_event is not None else None),
                 start_index=step_index, seed_context=seed_context,
-                wait_if_paused=self._workflow_wait_if_paused(run_id, cancel_event))
+                wait_if_paused=self._workflow_wait_if_paused(run_id, cancel_event),
+                confirm_step=self._workflow_confirm_step(run_id, cancel_event))
             payload = self._workflow_result_payload(
                 wf, result, input_text, metadata)
             payload["workflowRetryFromStep"] = step_index
@@ -9830,6 +9898,7 @@ class AIEditorAPI:
         finally:
             self._forget_workflow_cancel_event(run_id)
             self._forget_workflow_pause_event(run_id)
+            self._forget_workflow_confirmations(run_id)
 
     # ── Engine action handlers (registered on gui._ai_engine_actions) ──
 
