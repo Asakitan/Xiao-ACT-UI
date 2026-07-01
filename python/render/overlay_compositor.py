@@ -666,6 +666,11 @@ class UnifiedOverlay:
         self._rgn_prev_pos: Dict[str, Tuple[int, int]] = {}
         self._rgn_moving = False
 
+        # DirectComposition bridge (replaces SwapBuffers for WDA)
+        self._dcomp = None
+        self._dcomp_buf: bytearray | None = None
+        self._dcomp_buf_sz = 0
+
         # Performance
         self._default_fps = 60
         self._target_fps = 60
@@ -829,8 +834,7 @@ class UnifiedOverlay:
             target=self._run, daemon=True,
         )
         self._thread.start()
-        if self._root is not None:
-            self._start_tk_poller()
+        self._schedule_tk_poller()
 
     def stop(self) -> None:
         self._running = False
@@ -1054,7 +1058,22 @@ class UnifiedOverlay:
 
     # ── Tk callback bridge ───────────────────────────────────
 
+    def _schedule_tk_poller(self) -> None:
+        if self._root is None or self._tk_poller_id is not None:
+            return
+        self._tk_poller_pending = True
+
+    def ensure_tk_poller(self) -> None:
+        if self._tk_poller_id is not None or self._root is None:
+            return
+        if not getattr(self, '_tk_poller_pending', False):
+            return
+        self._tk_poller_pending = False
+        self._start_tk_poller()
+
     def _start_tk_poller(self) -> None:
+        if self._tk_poller_id is not None:
+            return
         def _drain():
             for _ in range(64):
                 try:
@@ -1182,13 +1201,21 @@ class UnifiedOverlay:
             self._host.mouse_fn = self._on_mouse_event
             print('[Compositor] init GL...', flush=True)
             self._init_gl()
-            print('[Compositor] GL ready, showing window', flush=True)
+            print('[Compositor] GL ready', flush=True)
+            try:
+                from render.dcomp_bridge import DCompBridge
+                self._dcomp = DCompBridge(
+                    self._host.hwnd, self._host.width, self._host.height)
+            except Exception as _dc_exc:
+                print(f'[Compositor] DComp unavailable, using SwapBuffers: '
+                      f'{_dc_exc}', flush=True)
+                self._dcomp = None
             self._host.show()
             self._ready.set()
             print('[Compositor] running', flush=True)
             try:
-                from config import get_config_value
-                if get_config_value('streaming_mode', False):
+                from config import SettingsManager
+                if SettingsManager().get('streaming_mode', False):
                     _paid = False
                     try:
                         from license import get_license_manager
@@ -1255,7 +1282,7 @@ class UnifiedOverlay:
                 try:
                     self._render_frame(now - t0)
                     self._sync_host_rgn(has_visible)
-                    self._host.swap_buffers()
+                    self._present_frame()
                 except Exception as _exc:
                     import traceback; traceback.print_exc()
             else:
@@ -1277,6 +1304,9 @@ class UnifiedOverlay:
                 break
 
         # Cleanup
+        if self._dcomp:
+            self._dcomp.destroy()
+            self._dcomp = None
         self._cleanup_gl()
         self._host.destroy()
         self._host = None
@@ -1324,6 +1354,29 @@ class UnifiedOverlay:
             self._rgba_prog,
             [(vbo_fbo, '2f 2f', 'in_pos', 'in_uv')],
         )
+
+    def _present_frame(self) -> None:
+        """Present the rendered framebuffer via DComp or SwapBuffers."""
+        dc = self._dcomp
+        if dc is not None and dc.alive:
+            ctx = self._host.ctx
+            sw = self._host.width
+            sh = self._host.height
+            buf_sz = sw * sh * 4
+
+            if self._dcomp_buf_sz != buf_sz:
+                self._dcomp_buf = bytearray(buf_sz)
+                self._dcomp_buf_sz = buf_sz
+
+            ctx.screen.read_into(
+                self._dcomp_buf,
+                viewport=(0, 0, sw, sh), components=4, alignment=1)
+            dc.present(self._dcomp_buf, sw, sh)
+
+            ctx.clear(0.0, 0.0, 0.0, 0.0)
+            self._host.swap_buffers()
+        else:
+            self._host.swap_buffers()
 
     def _render_frame(self, t: float) -> None:
         ctx = self._host.ctx
@@ -1398,4 +1451,16 @@ def get_unified_overlay(root: Any = None) -> UnifiedOverlay:
             _overlay = UnifiedOverlay(root)
         return _overlay
 
+
+def reset_unified_overlay() -> None:
+    """Drop a failed singleton UnifiedOverlay after stopping it."""
+    global _overlay
+    with _overlay_lock:
+        old = _overlay
+        _overlay = None
+    if old is not None:
+        try:
+            old.stop()
+        except Exception:
+            pass
 

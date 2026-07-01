@@ -459,9 +459,9 @@ def _make_panel_close_button(parent, command, bg=_SAO_PANEL_HEADER_BG, *, flat=F
     lbl._img_normal = normal
     lbl._img_hover = hover
     lbl.configure(image=normal)
-    lbl.bind('<Enter>', lambda e: lbl.configure(image=lbl._img_hover))
-    lbl.bind('<Leave>', lambda e: lbl.configure(image=lbl._img_normal))
-    lbl.bind('<Button-1>', lambda e: command())
+    lbl.bind('<Enter>', lambda *_: lbl.configure(image=lbl._img_hover))
+    lbl.bind('<Leave>', lambda *_: lbl.configure(image=lbl._img_normal))
+    lbl.bind('<Button-1>', lambda *_: command())
     return lbl
 
 

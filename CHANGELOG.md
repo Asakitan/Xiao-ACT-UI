@@ -2,6 +2,20 @@
 
 逐版本变更记录, 最新在前。本文件由 config.py 内联的历史注释迁出。
 
+## v5.2.6: overlay DComp 呈现桥、Tk mirror 时序收口、WDA 路径改写与非 AI 运行时批量刷新.
+
+  - **overlay / mirror**:
+    - unified overlay 新增 DirectComposition bridge 呈现路径, 初始化失败时重试并自动回退到旧 GLFW overlay。
+    - Tk mirror 仅在 input proxy 就绪后才隐藏真实窗口, show / hide / 几何变化时同步 proxy, 并为镜像捕获补上圆角透明裁切。
+    - overlay host 的 WGL 上下文创建 / 销毁增加串行化保护, `sao_gui` 启动阶段延迟确保 Tk poller 可恢复挂起的 unified compositor。
+  - **WDA / capture exclusion**:
+    - `_dc` 改为先通过动态 syscall 路径设置 `SetWindowDisplayAffinity`, 再 best-effort 清理 tagWND / ExStyle 痕迹, 校验改走 `GetWindowDisplayAffinity()`。
+  - **GUI / 面板**:
+    - WebView UI 菜单入口在主菜单与浮动菜单中统一标记为暂时废弃并禁用。
+    - ACT / 进程选择器 / Workshop 面板显示时补做主题与样式刷新, 面板关闭按钮事件绑定兼容不同触发签名。
+  - **Star Resonance Cython**:
+    - 刷新 `_sao_cy_combat` / `_sao_cy_packet` / `_sao_cy_skillfx` / `_sao_cy_sr_uihelpers` 加速二进制, 并移除插件目录中陈旧的 `_sao_cy_pixels` 副本, 统一回到顶层 accelerator 布局。
+
 ## v5.2.5: ACT 插件交互条形控件、拖动刷新降噪与 Nuitka 打包自测裁剪.
 
   - **ACT UI spec**:

@@ -185,6 +185,22 @@ def _try_imports() -> bool:
         return False
     _glfw = _g
     _moderngl = _m
+    try:
+        _default_handler = _g._handle_glfw_errors  # library's built-in reporter
+
+        def _filtered_glfw_error_callback(error_code, description):
+            # Known-benign GLFW/WGL quirk: teardown of the LinkStart vsync
+            # window's context after it has sat off-screen for ~9s. Cosmetic
+            # only (see gpu_overlay_window._destroy_on_pump); suppress just
+            # this exact (code, message) pair, pass everything else through
+            # to GLFW's normal ERROR_REPORTING behavior unchanged.
+            if error_code == _g.PLATFORM_ERROR and b'Failed to clear current context' in (description or b''):
+                return
+            _default_handler(error_code, description)
+
+        _g.set_error_callback(_filtered_glfw_error_callback)
+    except Exception:
+        pass  # never let error-callback setup block GPU overlay init
     return True
 
 
@@ -802,16 +818,36 @@ def prestart_unified_overlay(root: Any = None) -> None:
         return
     import threading
     def _init():
-        global _UNIFIED_OVERLAY_MODE
+        global _UNIFIED_OVERLAY_MODE, _unified_overlay_instance
+        max_attempts = 3
+        for attempt in range(1, max_attempts + 1):
+            try:
+                uo = _get_unified_overlay(root)
+                if not uo.wait_ready(timeout=10.0):
+                    raise RuntimeError('compositor did not become ready in 10s')
+                print('[Overlay] compositor ready', flush=True)
+                return
+            except Exception as exc:
+                print(f'[Overlay] compositor init attempt {attempt}/{max_attempts} '
+                      f'failed: {exc}', flush=True)
+                if attempt < max_attempts:
+                    import time
+                    time.sleep(2.0)
         try:
-            uo = _get_unified_overlay(root)
-            if not uo.wait_ready(timeout=10.0):
-                raise RuntimeError('compositor did not become ready in 10s')
-            print('[Overlay] compositor ready', flush=True)
-        except Exception as exc:
-            print(f'[Overlay] compositor failed, falling back to GLFW: '
-                  f'{exc}', flush=True)
-            _UNIFIED_OVERLAY_MODE = False
+            uo = _unified_overlay_instance
+            if uo is not None:
+                uo.stop()
+        except Exception:
+            pass
+        try:
+            from render import overlay_compositor as _oc
+            _oc.reset_unified_overlay()
+        except Exception:
+            pass
+        _unified_overlay_instance = None
+        _UNIFIED_OVERLAY_MODE = False
+        print('[Overlay] compositor failed after retries, falling back to '
+              'per-window GLFW overlays', flush=True)
     threading.Thread(target=_init, daemon=True).start()
 
 

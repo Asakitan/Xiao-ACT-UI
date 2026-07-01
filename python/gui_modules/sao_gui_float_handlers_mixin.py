@@ -259,7 +259,8 @@ class SAOPlayerGUIFloatHandlersMixin:
         self._float_ctx.add_command(label='🌙 切换主题 Dark/Light',
                                     command=self._toggle_nervegear_theme)
         self._float_ctx.add_command(label='◈ 隐藏/显示面板', command=self._toggle_hide_all_panels)
-        self._float_ctx.add_command(label='◇ WebView UI', command=self._switch_to_webview_ui)
+        self._float_ctx.add_command(label='◇ WebView UI (暂时废弃)',
+                                    command=self._switch_to_webview_ui, state='disabled')
         self._float_ctx.add_command(label='◇ 关于', command=self._show_about)
         self._float_ctx.add_command(label='✕ 退出', command=self._on_close)
         def _show_ctx_menu_at(x_root: int, y_root: int):

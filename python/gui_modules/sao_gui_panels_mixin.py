@@ -153,6 +153,10 @@ class SAOPlayerGUIPanelsMixin:
     def _toggle_process_selector_panel(self):
         self._dismiss_sao_menu_for_panel()
         if not getattr(self, '_process_selector_panel', None):
+            try:
+                self._apply_act_panel_theme()
+            except Exception:
+                pass
             from gui_modules.sao_gui_process_selector import ProcessSelectorPanel
             self._process_selector_panel = ProcessSelectorPanel(self.root, self)
         if self._process_selector_panel.is_visible():
@@ -163,6 +167,7 @@ class SAOPlayerGUIPanelsMixin:
                 self._stop_fisheye_overlay()
             except Exception:
                 pass
+            self._apply_act_panel_theme()
             self._process_selector_panel.show()
             self.root.after(120, lambda: self._raise_panel_window(self._process_selector_panel))
 
@@ -371,7 +376,9 @@ class SAOPlayerGUIPanelsMixin:
         try:
             cfg = self._cfg_settings_ref or self.settings
             themes = dict(cfg.get('panel_themes', {}) or {})
-            return 'light' if themes.get('plugin_manager') == 'light' else 'dark'
+            # 'act' is the key _set_all_themes()/_toggle_panel_theme('act')
+            # actually persist under (see sao_gui_dps_theme_mixin.py).
+            return 'light' if themes.get('act') == 'light' else 'dark'
         except Exception:
             return 'dark'
 

@@ -317,7 +317,7 @@ class SAOPlayerGUIMenuMixin:
                 {'icon': '🔑', 'label': '授权管理', 'command': self._show_license_panel_from_menu},
                 {'icon': '◇', 'label': '关于本程序', 'command': self._show_about},
                 {'icon': '⬇', 'label': self._build_update_menu_label(), 'command': self._check_for_updates_interactive},
-                {'icon': '◇', 'label': '切换到 WebView UI', 'command': self._switch_to_webview_ui},
+                {'icon': '◇', 'label': '切换到 WebView UI (暂时废弃)'},
                 {'icon': '✕', 'label': '退出', 'command': self._on_close},
             ],
         }

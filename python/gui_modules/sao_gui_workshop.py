@@ -24,6 +24,7 @@ from typing import Any, Dict, List, Mapping, Optional
 
 from utils.sao_sound import get_sao_font, get_cjk_font
 from gui_modules.sao_panel_ui import (
+    _apply_panel_style,
     _apply_window_icon,
     _bind_panel_drag,
 )
@@ -492,6 +493,8 @@ class WorkshopPanel:
         try:
             self._win.deiconify()
             self._win.lift()
+            self._win.update_idletasks()
+            _apply_panel_style(self._win)
         except Exception:
             pass
         self._show_tab(self._active_tab)

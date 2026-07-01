@@ -266,6 +266,20 @@ class SAOPlayerGUI(SAOPlayerGUIMenuMixin, SAOPlayerGUIFisheyeMixin, SAOPlayerGUI
 
     def run(self):
         self.root.protocol("WM_DELETE_WINDOW", self._on_close)
+        def _ensure_compositor_poller():
+            try:
+                from render.gpu_overlay_window import _unified_overlay_instance
+                uo = _unified_overlay_instance
+                if uo is not None:
+                    uo.ensure_tk_poller()
+                else:
+                    self.root.after(500, _ensure_compositor_poller)
+            except Exception:
+                pass
+        try:
+            self.root.after(100, _ensure_compositor_poller)
+        except Exception:
+            pass
         self.root.mainloop()
         # mainloop 已退出 — 先停 GLFW pump 线程（v2.3.14 解耦后 pump 在独立线程
         # 上跑 GL；必须在 root.destroy() 之前 join，否则 daemon 线程会被强杀，

@@ -314,18 +314,13 @@ class OverlayHost:
 
     def __init__(self, width: int = 0, height: int = 0):
         if width <= 0:
-            width = _user32.GetSystemMetrics(SM_CXVIRTUALSCREEN)
-            if width <= 0:
-                width = _user32.GetSystemMetrics(SM_CXSCREEN)
+            width = _user32.GetSystemMetrics(SM_CXSCREEN)
         if height <= 0:
-            height = _user32.GetSystemMetrics(SM_CYVIRTUALSCREEN)
-            if height <= 0:
-                height = _user32.GetSystemMetrics(SM_CYSCREEN)
+            height = _user32.GetSystemMetrics(SM_CYSCREEN)
         self.width = width
         self.height = height
-        # Virtual screen origin (for multi-monitor)
-        self.origin_x = _user32.GetSystemMetrics(SM_XVIRTUALSCREEN)
-        self.origin_y = _user32.GetSystemMetrics(SM_YVIRTUALSCREEN)
+        self.origin_x = 0
+        self.origin_y = 0
 
         self.hwnd: int = 0
         self.hdc: int = 0
@@ -353,7 +348,21 @@ class OverlayHost:
         if self.hwnd:
             return self
         self._create_window()
-        self._setup_wgl()
+        # Serialize WGL context creation against any other thread doing
+        # WGL work concurrently (GLFW pump, moderngl standalone contexts
+        # e.g. fisheye's worker). Without this, two threads racing
+        # wglCreateContext/wglMakeCurrent on the same GPU driver can
+        # corrupt each other's tracked current-context state, surfacing
+        # as spurious "WGL: Failed to clear current context: handle
+        # invalid" errors from GLFW elsewhere in the process.
+        try:
+            from render.gpu_overlay_window import get_wgl_serialize_lock
+            lock = get_wgl_serialize_lock()
+        except Exception:
+            import contextlib
+            lock = contextlib.nullcontext()
+        with lock:
+            self._setup_wgl()
         self._setup_dwm()
         return self
 
@@ -769,8 +778,15 @@ class OverlayHost:
             return
         self._destroyed = True
         if self.hglrc:
-            _opengl32.wglMakeCurrent(0, 0)
-            _opengl32.wglDeleteContext(self.hglrc)
+            try:
+                from render.gpu_overlay_window import get_wgl_serialize_lock
+                lock = get_wgl_serialize_lock()
+            except Exception:
+                import contextlib
+                lock = contextlib.nullcontext()
+            with lock:
+                _opengl32.wglMakeCurrent(0, 0)
+                _opengl32.wglDeleteContext(self.hglrc)
             self.hglrc = 0
         if self.hdc and self.hwnd:
             _user32.ReleaseDC(self.hwnd, self.hdc)
