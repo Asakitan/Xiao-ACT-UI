@@ -10,14 +10,96 @@ import subprocess
 ROOT = Path(__file__).resolve().parents[1]
 HTML_PATH = ROOT / "web" / "ai_editor_app.html"
 
+# Every _require() call is also recorded here (name, passed) so
+# compute_parity_snapshot() can bucket the whole health sweep into VS Code
+# parity phases without touching any of the ~100 existing call sites above.
+_ALL_CHECKS: list[tuple[str, bool]] = []
+
+# (phase label, keywords) - first matching keyword found in a lowercased
+# check name wins; order matters. Mirrors the phases in
+# AI_IDE_VSCODE_PARITY_LONG_TERM_PLAN.md so "which phase is behind" can be
+# read off mechanically instead of re-deriving it by hand each round.
+_PARITY_PHASES: list[tuple[str, tuple[str, ...]]] = [
+    ("0-baseline", ("script ids", "style ids", "inline scripts parse", "aggregate diagnostics",
+                     "stale global lock", "api health", "frontend health payload",
+                     "frontend heartbeat", "frontend ready sends", "ui action error")),
+    ("1-extension-host", ("extension", "webview", "task/debug", "quick input", "quickinput")),
+    ("2-assistant", ("assistant", "workflow", "chat")),
+    ("3-settings", ("settings",)),
+    ("4-language-editor", ("language", "diff")),
+    ("5-perf-stability", ("interaction", "control noop", "critical action", "long action",
+                           "command health", "statusbar", "diagnostics maintenance",
+                           "lifecycle", "high-frequency", "idle time", "failure classif")),
+    ("6-motion-ui-workspace", ("terminal", "workspace", "window closing", "drag overlay",
+                               "keyboard recovery")),
+]
+
+
+def _classify_phase(name: str) -> str:
+    lowered = name.lower()
+    for phase, keywords in _PARITY_PHASES:
+        if any(keyword in lowered for keyword in keywords):
+            return phase
+    return "unclassified"
+
 
 def _read_html() -> str:
     return HTML_PATH.read_text(encoding="utf-8")
 
 
 def _require(failures: list[str], name: str, condition: bool) -> None:
+    _ALL_CHECKS.append((name, bool(condition)))
     if not condition:
         failures.append(name)
+
+
+def compute_parity_snapshot() -> dict:
+    """Bucket every frontend-health check into a VS Code parity phase.
+
+    This is the 阶段0 dashboard from AI_IDE_VSCODE_PARITY_LONG_TERM_PLAN.md:
+    a mechanical "what's ready vs partial vs missing" read instead of a
+    manual re-derivation each round. A phase with any failing check is
+    "partial"; a phase with zero checks recorded is "missing" (nothing here
+    verifies it yet, which is itself a gap); otherwise "ready".
+    """
+    phases: dict[str, dict] = {}
+    for name, passed in _ALL_CHECKS:
+        phase = _classify_phase(name)
+        bucket = phases.setdefault(phase, {"passed": 0, "total": 0, "failures": []})
+        bucket["total"] += 1
+        if passed:
+            bucket["passed"] += 1
+        else:
+            bucket["failures"].append(name)
+    for phase, _keywords in _PARITY_PHASES:
+        phases.setdefault(phase, {"passed": 0, "total": 0, "failures": []})
+    summary = {}
+    for phase, bucket in phases.items():
+        if bucket["total"] == 0:
+            status = "missing"
+        elif bucket["failures"]:
+            status = "partial"
+        else:
+            status = "ready"
+        summary[phase] = {
+            "status": status,
+            "passed": bucket["passed"],
+            "total": bucket["total"],
+            "failures": bucket["failures"],
+        }
+    phase_order = [phase for phase, _keywords in _PARITY_PHASES] + ["unclassified"]
+    top_gaps: list[str] = []
+    for phase in phase_order:
+        bucket = summary.get(phase)
+        if not bucket:
+            continue
+        for failure in bucket["failures"]:
+            top_gaps.append(f"[{phase}] {failure}")
+            if len(top_gaps) >= 5:
+                break
+        if len(top_gaps) >= 5:
+            break
+    return {"phases": summary, "top_gaps": top_gaps}
 
 
 def _duplicate_ids(html: str, tag_name: str) -> list[str]:
@@ -94,6 +176,7 @@ def _slice_between(html: str, start: str, end: str) -> str:
 
 
 def run_frontend_health_selftest() -> list[str]:
+    _ALL_CHECKS.clear()
     html = _read_html()
     failures: list[str] = []
     duplicate_script_ids = _duplicate_ids(html, "script")
@@ -300,6 +383,20 @@ def run_frontend_health_selftest() -> list[str]:
     return failures
 
 
+def _print_parity_snapshot() -> None:
+    snapshot = compute_parity_snapshot()
+    print("── AI IDE VS Code parity snapshot (阶段0) ──")
+    for phase, bucket in snapshot["phases"].items():
+        marker = {"ready": "✓", "partial": "~", "missing": "✗"}.get(bucket["status"], "?")
+        print(f"  {marker} {phase}: {bucket['passed']}/{bucket['total']} ({bucket['status']})")
+    if snapshot["top_gaps"]:
+        print("  Next gaps to fix:")
+        for index, gap in enumerate(snapshot["top_gaps"], 1):
+            print(f"    {index}. {gap}")
+    else:
+        print("  No frontend-health gaps recorded this run.")
+
+
 def main() -> int:
     failures = run_frontend_health_selftest()
     if failures:
@@ -307,8 +404,10 @@ def main() -> int:
         print("Failure points:")
         for index, failure in enumerate(failures, 1):
             print(f"{index}. {failure}")
+        _print_parity_snapshot()
         return 1
     print("AI Editor frontend health selftest passed.")
+    _print_parity_snapshot()
     return 0
 
 

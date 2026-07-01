@@ -39947,6 +39947,59 @@ def test_tk_window() -> None:
             print(f"[Selftest] Tk cleanup failed: {cleanup_exc}")
 
 
+def test_frontend_health_parity_snapshot() -> None:
+    print("── Frontend Health Parity Snapshot ──")
+    from ai_editor import frontend_health_selftest as fhs
+
+    _check("classify_phase buckets settings checks",
+           fhs._classify_phase("settings health snapshot exists") == "3-settings")
+    _check("classify_phase buckets assistant/workflow checks",
+           fhs._classify_phase("assistant workflow run supports pause and resume") == "2-assistant")
+    _check("classify_phase buckets extension/webview checks",
+           fhs._classify_phase("extension surface registry exists") == "1-extension-host")
+    _check("classify_phase buckets language/diff checks",
+           fhs._classify_phase("language and diff health exists") == "4-language-editor")
+    _check("classify_phase buckets terminal/workspace checks",
+           fhs._classify_phase("terminal health fallback exists") == "6-motion-ui-workspace")
+    _check("classify_phase buckets baseline/infra checks",
+           fhs._classify_phase("api health capsule exists") == "0-baseline")
+    _check("classify_phase falls back to unclassified for unknown checks",
+           fhs._classify_phase("some brand new made up check name") == "unclassified")
+
+    saved = list(fhs._ALL_CHECKS)
+    try:
+        fhs._ALL_CHECKS.clear()
+        fhs._ALL_CHECKS.extend([
+            ("settings health snapshot exists", True),
+            ("settings control health exists", False),
+            ("assistant health snapshot exists", True),
+        ])
+        snapshot = fhs.compute_parity_snapshot()
+        _check("parity snapshot marks a phase with a failure as partial",
+               snapshot["phases"]["3-settings"]["status"] == "partial"
+               and snapshot["phases"]["3-settings"]["passed"] == 1
+               and snapshot["phases"]["3-settings"]["total"] == 2)
+        _check("parity snapshot marks a phase with no failures as ready",
+               snapshot["phases"]["2-assistant"]["status"] == "ready")
+        _check("parity snapshot marks a phase with zero recorded checks as missing",
+               snapshot["phases"]["1-extension-host"]["status"] == "missing"
+               and snapshot["phases"]["1-extension-host"]["total"] == 0)
+        _check("parity snapshot top_gaps lists the failing check with its phase prefix",
+               snapshot["top_gaps"] == ["[3-settings] settings control health exists"])
+    finally:
+        fhs._ALL_CHECKS.clear()
+        fhs._ALL_CHECKS.extend(saved)
+
+    real_failures = fhs.run_frontend_health_selftest()
+    real_snapshot = fhs.compute_parity_snapshot()
+    _check("real frontend-health run produces a non-empty parity snapshot",
+           len(real_snapshot["phases"]) >= len(fhs._PARITY_PHASES)
+           and sum(b["total"] for b in real_snapshot["phases"].values()) == len(fhs._ALL_CHECKS))
+    _check("real parity snapshot top_gaps matches actual failures when present",
+           (not real_failures and not real_snapshot["top_gaps"])
+           or (real_failures and real_snapshot["top_gaps"]))
+
+
 def main() -> None:
     global _PASS, _FAIL
     _route_selftest_diagnostics_to_stdout()
@@ -39978,6 +40031,7 @@ def main() -> None:
         ("Claude Proxy", test_claude_proxy),
         ("Agents", test_agents),
         ("Workflows", test_workflows),
+        ("Frontend Health Parity Snapshot", test_frontend_health_parity_snapshot),
         ("Tk Window", test_tk_window),
     ]
     for label, fn in tests:

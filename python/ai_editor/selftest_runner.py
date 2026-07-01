@@ -41,6 +41,19 @@ def _run_frontend_health_selftest() -> object:
     return module.run_frontend_health_selftest()
 
 
+def _print_parity_snapshot() -> None:
+    module = importlib.import_module("ai_editor.frontend_health_selftest")
+    snapshot = module.compute_parity_snapshot()
+    print("── AI IDE VS Code parity snapshot (阶段0) ──")
+    for phase, bucket in snapshot["phases"].items():
+        marker = {"ready": "OK", "partial": "~~", "missing": "!!"}.get(bucket["status"], "??")
+        print(f"  [{marker}] {phase}: {bucket['passed']}/{bucket['total']} ({bucket['status']})")
+    if snapshot["top_gaps"]:
+        print("  Next gaps to fix:")
+        for index, gap in enumerate(snapshot["top_gaps"], 1):
+            print(f"    {index}. {gap}")
+
+
 def main() -> int:
     checks: list[tuple[str, Callable[[], object]]] = [
         ("legacy selftest", _run_legacy_selftest),
@@ -55,8 +68,10 @@ def main() -> int:
         print("Failure points:")
         for index, failure in enumerate(failures, 1):
             print(f"{index}. {failure}")
+        _print_parity_snapshot()
         return 1
     print("AI Editor selftests passed.")
+    _print_parity_snapshot()
     return 0
 
 
