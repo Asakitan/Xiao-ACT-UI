@@ -10480,6 +10480,82 @@ async function call(method,payload){
                 except OSError:
                     pass
     if not node_path:
+        _check("frontend settings JSON parse/JSONC support skipped without Node.js", True)
+    else:
+        settings_json_functions = [
+            "isPlainObject",
+            "removeEditorJsonTrailingCommas",
+            "stripEditorJsoncForParse",
+            "settingsJsonParseText",
+        ]
+        settings_json_js_functions = "\n".join(
+            _extract_js_function(html, name)
+            for name in settings_json_functions)
+        js = r"""
+function assert(ok,label){ if(!ok){ throw new Error(label); } }
+""" + settings_json_js_functions + r"""
+const plain = settingsJsonParseText('{"a": 1, "b": "two"}');
+assert(plain.ok === true && plain.value.a === 1 && plain.value.b === "two",
+       "plain valid JSON parses");
+
+const jsonc = settingsJsonParseText([
+  '{',
+  '  // a line comment',
+  '  "a": 1,',
+  '  /* a block',
+  '     comment */',
+  '  "b": "two", // trailing line comment',
+  '  "c": [1, 2, 3,],',
+  '}',
+].join('\n'));
+assert(jsonc.ok === true && jsonc.value.a === 1 && jsonc.value.b === "two"
+       && JSON.stringify(jsonc.value.c) === "[1,2,3]",
+       "JSONC (line comments, block comments, trailing commas) parses");
+
+const stringPreserved = settingsJsonParseText('{"note": "not a // comment", "url": "http://x"}');
+assert(stringPreserved.ok === true
+       && stringPreserved.value.note === "not a // comment"
+       && stringPreserved.value.url === "http://x",
+       "comment-stripping does not touch // or /* inside real string values");
+
+const broken = settingsJsonParseText('{"a": 1,');
+assert(broken.ok === false && /Invalid Settings JSON/.test(broken.error),
+       "malformed JSON returns ok:false with a clear error message");
+
+const notObject = settingsJsonParseText('[1, 2, 3]');
+assert(notObject.ok === false && /must be an object/.test(notObject.error),
+       "a JSON array root is rejected with an explicit message");
+
+console.log("frontend settings JSON parse/JSONC support ok");
+"""
+        js_path = ""
+        try:
+            with tempfile.NamedTemporaryFile(
+                    "w", encoding="utf-8", suffix=".js", delete=False) as fh:
+                js_path = fh.name
+                fh.write(js)
+            result = subprocess.run(
+                [node_path, js_path],
+                cwd=os.path.dirname(os.path.dirname(os.path.dirname(__file__))),
+                capture_output=True,
+                text=True,
+                timeout=10,
+                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+            )
+            _check_subprocess_result(
+                "frontend settings JSON parse/JSONC support",
+                result,
+                "frontend settings JSON parse/JSONC support ok",
+            )
+        except Exception as exc:
+            _check("frontend settings JSON parse/JSONC support", False, str(exc))
+        finally:
+            if js_path:
+                try:
+                    os.unlink(js_path)
+                except OSError:
+                    pass
+    if not node_path:
         _check("frontend settings filters and dirty diff behavior skipped without Node.js", True)
     else:
         settings_diff_functions = [
