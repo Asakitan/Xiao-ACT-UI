@@ -20886,6 +20886,37 @@ def test_vscode_api() -> None:
                "selftestDot" not in [item.label for item in dot_after_dispose.items])
         generic_completion_dispose.dispose()
 
+        no_provider_completions = api["commands"]["executeCommand"](
+            "vscode.executeCompletionItemProvider", doc.uri, Position(0, 0))
+        no_provider_labels = [item.label for item in no_provider_completions.items]
+        # Don't hardcode expected words: an earlier block in this same giant
+        # test function may have renamed identifiers in this shared temp
+        # file (e.g. a rename-symbol test turning print(...) into
+        # echo(...)) - derive the expected word set from the document's
+        # actual current text instead of assuming its original content.
+        import re as _re
+        expected_words = set(_re.findall(r"[A-Za-z_][A-Za-z0-9_]{1,}", doc.getText() or ""))
+        _check("completion falls back to built-in word-based suggestions when no provider is registered",
+               bool(no_provider_labels)
+               and set(no_provider_labels) <= expected_words
+               and "vscode" in no_provider_labels
+               and all(item.kind == 0 for item in no_provider_completions.items)
+               and all(item.detail == "Word-based suggestion" for item in no_provider_completions.items),
+               json.dumps({"labels": no_provider_labels, "docText": doc.getText()}))
+
+        class _RealCompletionProvider:
+            def provideCompletionItems(self, document, position, token, context):
+                return [CompletionItem("realProviderResult")]
+
+        real_dispose = api["languages"]["registerCompletionItemProvider"](
+            "python", _RealCompletionProvider())
+        with_provider_completions = api["commands"]["executeCommand"](
+            "vscode.executeCompletionItemProvider", doc.uri, Position(0, 1))
+        with_provider_labels = [item.label for item in with_provider_completions.items]
+        _check("word-based fallback never fires once a real provider returns results",
+               with_provider_labels == ["realProviderResult"])
+        real_dispose.dispose()
+
         class _HoverProvider:
             def provideHover(self, document, position, token):
                 return Hover(["selftest hover"], Range(position, position))

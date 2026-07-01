@@ -3081,6 +3081,9 @@ class VscodeNamespace:
         if normalized_external is not None:
             items.extend(normalized_external.items)
             incomplete = incomplete or bool(normalized_external.isIncomplete)
+        if not items:
+            offset = _position_to_offset(document.getText() or "", pos)
+            items = _builtin_word_based_completions(document.getText() or "", offset)
         return CompletionList(items, incomplete)
 
     def _execute_completion_item_provider(
@@ -8597,6 +8600,45 @@ def _coerce_color(value: Any) -> Color:
         getattr(value, "green", 0.0),
         getattr(value, "blue", 0.0),
         getattr(value, "alpha", 1.0))
+
+
+_WORD_TOKEN_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]{1,}")
+_BUILTIN_WORD_COMPLETION_LIMIT = 50
+
+
+def _builtin_word_based_completions(
+        text: str, offset: int, limit: int = _BUILTIN_WORD_COMPLETION_LIMIT
+        ) -> List["CompletionItem"]:
+    """VS Code's own core editor falls back to word-based suggestions
+    (CompletionItemKind.Text) scanned from open documents when no language
+    server/extension is installed for a file type - this mirrors that so a
+    fresh install with zero language extensions still has *some* completion
+    instead of an empty list. Only ever consulted as a last resort (see
+    _provide_completion_items) when no registered or external provider
+    returned anything, so it never shadows a real language server's results.
+    """
+    if not text:
+        return []
+    before = text[:max(0, min(len(text), offset))]
+    prefix_match = re.search(r"[A-Za-z_][A-Za-z0-9_]*$", before)
+    prefix = prefix_match.group(0) if prefix_match else ""
+    counts: Dict[str, int] = {}
+    for match in _WORD_TOKEN_RE.finditer(text):
+        word = match.group(0)
+        if word == prefix:
+            continue
+        if prefix and not word.lower().startswith(prefix.lower()):
+            continue
+        counts[word] = counts.get(word, 0) + 1
+    ranked = sorted(counts, key=lambda w: (-counts[w], w))[:max(0, limit)]
+    items: List["CompletionItem"] = []
+    for word in ranked:
+        item = CompletionItem(word, 0)  # CompletionItemKind.Text
+        item.detail = "Word-based suggestion"
+        item.insertText = word
+        item.sortText = "~" + word  # sort after any real provider's items
+        items.append(item)
+    return items
 
 
 def _position_to_offset(text: str, position: Position) -> int:
