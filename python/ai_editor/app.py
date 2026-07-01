@@ -19400,6 +19400,24 @@ class AIEditorAPI:
             return {"ok": True, "id": desc.id, "name": desc.display_name}
         return {"error": "Failed to install from directory"}
 
+    def install_extension_from_dir_dialog(self) -> Dict:
+        """Prompt for a local extension folder (containing package.json) and install it."""
+        if not self._window:
+            return {"error": "No window"}
+        try:
+            import webview as _webview
+            folder_dialog_type = int(getattr(_webview, "FOLDER_DIALOG", 30))
+        except Exception:
+            folder_dialog_type = 30
+        try:
+            result = self._window.create_file_dialog(dialog_type=folder_dialog_type)
+        except Exception as exc:
+            return {"error": str(exc)}
+        if not result:
+            return {"cancelled": True}
+        ext_dir = result[0] if isinstance(result, (list, tuple)) else str(result)
+        return self.install_extension_dir(ext_dir)
+
     def export_chat(self) -> str:
         if not self._controller:
             return "[]"

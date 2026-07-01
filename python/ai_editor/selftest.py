@@ -3378,6 +3378,52 @@ def test_app_settings_parity() -> None:
                and saved_text.get("path") == save_path
                and open(save_path, "r", encoding="utf-8").read() == "# saved")
 
+    no_window_dir_api = AIEditorAPI(_SettingsGui({"ai_editor": {}}))
+    _check("install_extension_from_dir_dialog reports missing window explicitly",
+           "No window" in no_window_dir_api.install_extension_from_dir_dialog().get("error", ""))
+
+    class _CancelDialogWindow:
+        def create_file_dialog(self, **kw):
+            return None
+
+    cancel_dir_api = AIEditorAPI(_SettingsGui({"ai_editor": {}}))
+    cancel_dir_api.set_window(_CancelDialogWindow())
+    _check("install_extension_from_dir_dialog reports cancellation",
+           cancel_dir_api.install_extension_from_dir_dialog().get("cancelled") is True)
+
+    with tempfile.TemporaryDirectory() as dir_ext_tmp:
+        dir_ext_path = os.path.join(dir_ext_tmp, "selftest-dir-ext")
+        os.makedirs(dir_ext_path, exist_ok=True)
+        with open(os.path.join(dir_ext_path, "package.json"), "w", encoding="utf-8") as fh:
+            json.dump({
+                "name": "dir-install-fixture",
+                "publisher": "selftest",
+                "version": "1.0.0",
+                "displayName": "Dir Install Fixture",
+                "engines": {"vscode": "^1.0.0"},
+            }, fh)
+
+        class _FolderDialogWindow:
+            def create_file_dialog(self, **kw):
+                return [dir_ext_path]
+
+        dir_install_api = AIEditorAPI(_SettingsGui({"ai_editor": {}}))
+        dir_install_api.set_window(_FolderDialogWindow())
+        dir_installed = dir_install_api.install_extension_from_dir_dialog()
+        _check("install_extension_from_dir_dialog installs the picked folder",
+               dir_installed.get("ok") is True
+               and dir_installed.get("id") == "selftest.dir-install-fixture",
+               json.dumps(dir_installed, ensure_ascii=False))
+
+        blocked_dir_api = AIEditorAPI(_SettingsGui({"ai_editor": {
+            "extensions": {"blocked_publishers": ["selftest"]},
+        }}))
+        blocked_dir_api.set_window(_FolderDialogWindow())
+        blocked_dir_result = blocked_dir_api.install_extension_from_dir_dialog()
+        _check("install_extension_from_dir_dialog honors trust policy",
+               "blocked" in blocked_dir_result.get("error", "").lower(),
+               json.dumps(blocked_dir_result, ensure_ascii=False))
+
     unsupported_tool_api = AIEditorAPI(_SettingsGui({"ai_editor": {}}))
     unsupported_tool_api._ensure_engine()
     unsupported_tool_api._vscode_ns._register_tool_definition(
@@ -12146,6 +12192,12 @@ console.log("frontend word separator behavior ok");
            and "window.stopClaudeProxy=stopClaudeProxy;" in html
            and "window.copyClaudeProxyEnv=copyClaudeProxyEnv;" in html
            and "refreshClaudeProxyStatus();" in html)
+    _check("install extension from folder is wired into the extensions sidebar and window-exported",
+           'onclick="installExtensionFromDir()"' in html
+           and "async function installExtensionFromDir(){" in html
+           and "window.installExtensionFromDir=installExtensionFromDir;" in html
+           and "install_from_folder:'Install from Folder...'," in html
+           and "install_from_folder:'从文件夹安装...'," in html)
     _check("settings has a simple/complex/advanced complexity tier",
            "const SETTINGS_MODE_ORDER=['simple','complex','advanced'];" in html
            and "function settingsCurrentMode(){" in html

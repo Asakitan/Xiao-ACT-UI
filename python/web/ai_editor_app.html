@@ -4401,6 +4401,7 @@ pre.code-block { overflow:visible; }
     <!-- Extensions sidebar (VSCode marketplace) -->
     <div class="sb-view" id="sb-extensions" style="display:none">
       <div class="sb-header"><span data-i18n="extensions">Extensions</span> <span class="spacer"></span>
+        <span class="sb-action" onclick="installExtensionFromDir()" data-i18n-title="install_from_folder" title="Install from Folder...">📁</span>
         <span class="sb-action" onclick="searchExtensions()" data-i18n-title="refresh" title="Refresh">↻</span>
       </div>
       <div style="padding:4px 10px">
@@ -8014,6 +8015,7 @@ en:{
   extension_runtime_status_missing:'Extension runtime status not loaded.',mcp_runtime_status_missing:'MCP status not loaded.',
   searching:'Searching...',no_tools:'No tools available',runtime_required:'Requires extension runtime handler',
   install_confirm:'Install extension?',update_confirm:'Update extension?',uninstalled_prefix:'Uninstalled: ',installed_prefix:'Installed: ',updated_prefix:'Updated: ',save_failed_prefix:'Save failed: ',
+  install_from_folder:'Install from Folder...',
 },
 zh:{
   file:'文件',edit:'编辑',selection:'选择',view:'视图',go:'转到',run:'运行',terminal:'终端',help:'帮助',
@@ -8143,6 +8145,7 @@ zh:{
   extension_runtime_status_missing:'扩展运行时状态未加载。',mcp_runtime_status_missing:'MCP 状态未加载。',
   searching:'搜索中...',no_tools:'没有可用工具',runtime_required:'需要扩展运行时处理器',
   install_confirm:'安装此扩展？',update_confirm:'更新此扩展？',uninstalled_prefix:'已卸载: ',installed_prefix:'已安装: ',updated_prefix:'已更新: ',save_failed_prefix:'保存失败: ',
+  install_from_folder:'从文件夹安装...',
 }};
 let _curLang='en';
 function normalizeUiLanguage(lang){return lang==='zh'||lang==='en'?lang:''}
@@ -48011,6 +48014,18 @@ async function toggleExtInstall(btn,event){
   renderExtensionActivityBar();
 }
 window.searchExtensions=searchExtensions;
+
+async function installExtensionFromDir(){
+  const r=await call('install_extension_from_dir_dialog');
+  if(!r||r.cancelled)return;
+  if(r.error){setStatus(t('test_failed')+': '+r.error);showToast(r.error,'error');return}
+  setStatus(t('installed_prefix')+(r.name||r.id||''));
+  showToast(t('installed_prefix')+(r.name||r.id||''),'success');
+  refreshInstalledExts();
+  if(extCache.length)renderExtList($('ext-marketplace-list'),extCache);
+  renderExtensionActivityBar();
+}
+window.installExtensionFromDir=installExtensionFromDir;
 
 // EXT-03: Hardcoded recommended extensions for AI coding
 const RECOMMENDED_EXTENSIONS=[
