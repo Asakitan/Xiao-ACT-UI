@@ -1012,6 +1012,8 @@ def test_app_settings_parity() -> None:
         _recent_child_launch_alive,
         _existing_window_needs_frontend_recovery,
         _frontend_health_summary,
+        _launch_state_critical_api_failed,
+        _launch_state_core_control_noop,
         _launch_state_frontend_ready,
         _launch_state_summary,
         launch_state_snapshot,
@@ -1035,7 +1037,7 @@ def test_app_settings_parity() -> None:
         "update_frontend_health",
         "list_workflows", "get_active_agent", "set_active_agent",
         "clear_active_agent", "delete_agent", "delete_workflow",
-        "run_workflow", "get_scopes", "save_agent", "save_workflow",
+        "run_workflow", "retry_workflow_step", "get_scopes", "save_agent", "save_workflow",
         "list_workspace_tree", "workspace_file_decorations",
         "open_workspace_file", "save_workspace_notebook",
         "notebook_cell_status_bar_items", "notebook_controllers",
@@ -1065,7 +1067,7 @@ def test_app_settings_parity() -> None:
         "set_extension_tree_item_checkbox_state",
         "drop_extension_tree_items",
         "webview_panel_dispose",
-        "extension_quick_input_action",
+        "extension_quick_input_action", "extension_window_message_action",
         "load_history", "switch_provider", "list_chat_providers",
         "provider_send", "provider_cancel", "provider_new_chat",
         "assistant_native_response_fixture", "assistant_response_part_action",
@@ -1081,6 +1083,40 @@ def test_app_settings_parity() -> None:
     )
     missing = [name for name in js_methods if not callable(getattr(api, name, None))]
     _check("AIEditorAPI JS-callable methods", not missing, ", ".join(missing))
+    try:
+        cancel_result = api.cancel()
+    except Exception as exc:
+        cancel_result = {"ok": False, "error": f"{type(exc).__name__}: {exc}"}
+    _check("AIEditorAPI cancel works before engine init",
+           cancel_result.get("ok") is True,
+           json.dumps(cancel_result, ensure_ascii=False, default=str))
+    try:
+        api._shutdown_node_extension_host()
+        shutdown_result = {"ok": True}
+    except Exception as exc:
+        shutdown_result = {
+            "ok": False,
+            "error": f"{type(exc).__name__}: {exc}",
+        }
+    _check("AIEditorAPI shutdown works before engine init",
+           shutdown_result.get("ok") is True,
+           json.dumps(shutdown_result, ensure_ascii=False, default=str))
+    app_source_for_lifecycle = ""
+    try:
+        with open(os.path.join(os.path.dirname(__file__), "app.py"),
+                  "r", encoding="utf-8") as fh:
+            app_source_for_lifecycle = fh.read()
+    except Exception:
+        app_source_for_lifecycle = ""
+    _check("AIEditor pywebview closing isolates cleanup failures",
+           "for label, action in (" in app_source_for_lifecycle
+           and "(\"cancel\", api.cancel)" in app_source_for_lifecycle
+           and "(\"shutdown node extension host\","
+           in app_source_for_lifecycle
+           and "(\"stop webview resource server\","
+           in app_source_for_lifecycle
+           and "closing {label} failed" in app_source_for_lifecycle,
+           "pywebview closing cleanup must not abort on one failed step")
     large_provider_text = ("line\n" * (
         AIEditorAPI._LANGUAGE_PROVIDER_LARGE_FILE_LINE_LIMIT + 1))
     large_diag_result = api.editor_language_provider({
@@ -1127,7 +1163,12 @@ def test_app_settings_parity() -> None:
            and "saoProbe.languageStatus" in probe_source
            and "sao-probe-notebook" in probe_source
            and "enableCommandUris" in probe_source
-           and "portMapping" in probe_source)
+           and "portMapping" in probe_source
+           and "probe.css" in probe_source
+           and "probe.js" in probe_source
+           and "data-resource-smoke=\"ready\"" in probe_source
+           and "data-probe-data-uri" in probe_source
+           and "data-probe-port" in probe_source)
     _check("real extension probe writes frontend visual fixture evidence",
            "_surface_visual_checks" in probe_source
            and "_write_frontend_visual_fixture" in probe_source
@@ -1136,11 +1177,47 @@ def test_app_settings_parity() -> None:
            and "frontendVisualWebviewSurface" in probe_source
            and "frontendVisualWebviewPanelSurface" in probe_source
            and "frontendVisualCustomEditorSurface" in probe_source
+           and "_resource_visual_smoke" in probe_source
+           and "frontendVisualResourceSmoke" in probe_source
+           and "frontendVisualResourceSchemes" in probe_source
+           and "resourceSmokeSummary" in probe_source
+           and "resourceUriCount" in probe_source
+           and "localResourceRootCount" in probe_source
+           and "portMappingCount" in probe_source
            and "frontendVisualFixtureWritten" in probe_source
            and "--visual-fixture-dir" in probe_source
            and "data-surface=\"webview-view\"" in probe_source
            and "data-surface=\"webview-panel\"" in probe_source
            and "data-surface=\"custom-editor\"" in probe_source)
+    with tempfile.TemporaryDirectory(prefix="sao_probe_visual_") as visual_dir:
+        smoke_result = real_extension_probe.run_builtin_smoke_probe(
+            visual_fixture_dir=visual_dir)
+        resource_smoke = smoke_result.get(
+            "frontendVisualResourceSmoke", {})
+        resource_summary = (
+            resource_smoke.get("summary", {})
+            if isinstance(resource_smoke, dict) else {})
+        resource_schemes = resource_summary.get("schemes", [])
+        _check("real extension probe runs multi-resource WebView smoke",
+               smoke_result.get("ok") is True
+               and resource_smoke.get("ok") is True
+               and resource_summary.get("surfaceCount") == 3
+               and resource_summary.get("okSurfaceCount") == 3
+               and int(resource_summary.get("resourceUriCount") or 0) >= 9
+               and int(resource_summary.get("localResourceRootCount") or 0) >= 3
+               and int(resource_summary.get("portMappingCount") or 0) >= 3
+               and all(scheme in resource_schemes for scheme in [
+                   "vscodeResource", "endpoint", "data", "localhost",
+               ]),
+               json.dumps({
+                   "ok": smoke_result.get("ok"),
+                   "failed": [
+                       name for name, ok in (
+                           smoke_result.get("checks") or {}).items()
+                       if not ok
+                   ],
+                   "resource": resource_smoke,
+               }, ensure_ascii=False, default=str))
     fixture_list = api.assistant_native_response_fixture("list")
     native_fixture = api.assistant_native_response_fixture("split-native-response-parts")
     actionable_fixture = api.assistant_native_response_fixture("actionable-response-parts")
@@ -1749,14 +1826,16 @@ def test_app_settings_parity() -> None:
             dict(provider_payload, kind="linkedEditing"))
         call_hierarchy_result = provider_api.editor_language_provider(
             dict(provider_payload, kind="prepareCallHierarchy"))
-        call_item = call_hierarchy_result.get("items", [{}])[0]
+        call_items = call_hierarchy_result.get("items") or [{}]
+        call_item = call_items[0]
         incoming_calls_result = provider_api.editor_language_provider(
             dict(provider_payload, kind="callHierarchyIncoming", item=call_item))
         outgoing_calls_result = provider_api.editor_language_provider(
             dict(provider_payload, kind="callHierarchyOutgoing", item=call_item))
         type_hierarchy_result = provider_api.editor_language_provider(
             dict(provider_payload, kind="prepareTypeHierarchy"))
-        type_item = type_hierarchy_result.get("items", [{}])[0]
+        type_items = type_hierarchy_result.get("items") or [{}]
+        type_item = type_items[0]
         supertypes_result = provider_api.editor_language_provider(
             dict(provider_payload, kind="typeHierarchySupertypes", item=type_item))
         subtypes_result = provider_api.editor_language_provider(
@@ -1804,7 +1883,8 @@ def test_app_settings_parity() -> None:
             }))
         workspace_symbol_result = provider_api.editor_language_provider(
             dict(provider_payload, kind="workspaceSymbol", query="buf"))
-        workspace_symbol = workspace_symbol_result.get("symbols", [{}])[0]
+        workspace_symbols = workspace_symbol_result.get("symbols") or [{}]
+        workspace_symbol = workspace_symbols[0]
         resolve_workspace_symbol_result = provider_api.editor_language_provider(
             dict(provider_payload, kind="resolveWorkspaceSymbol",
                  symbol=workspace_symbol))
@@ -1851,47 +1931,62 @@ def test_app_settings_parity() -> None:
                  triggerCharacter="}"))
         with open(provider_path, "r", encoding="utf-8") as fh:
             disk_text = fh.read()
+
+        def _nth(result: dict, key: str, index: int = 0) -> dict:
+            if not isinstance(result, dict):
+                return {}
+            values = result.get(key) or []
+            if not isinstance(values, list) or len(values) <= index:
+                return {}
+            value = values[index]
+            return value if isinstance(value, dict) else {}
+
+        def _first(result: dict, key: str) -> dict:
+            return _nth(result, key, 0)
+
+        completion_item = _first(completion_result, "items")
+        completion_extra_edit = _first(completion_item, "additionalTextEdits")
         _check("editor_language_provider serializes completion items",
                completion_result.get("ok") is True
-               and completion_result.get("items", [{}])[0].get("label")
-               == "editorCompletion"
-               and completion_result.get("items", [{}])[0].get("detail")
-               == "python"
-               and completion_result.get("items", [{}])[0].get("tags")
-               == [1]
-               and completion_result.get("items", [{}])[0].get("sortText")
-               == "000_editorCompletion"
-               and completion_result.get("items", [{}])[0].get("filterText")
-               == "editorCompletionFilter"
-               and completion_result.get("items", [{}])[0].get("preselect")
-               is True
-               and completion_result.get("items", [{}])[0].get("insertTextRules")
-               == 4
-               and completion_result.get("items", [{}])[0].get("keepWhitespace")
-               is True
-               and completion_result.get("items", [{}])[0].get("commitCharacters")
-               == ["."]
-               and completion_result.get("items", [{}])[0]
-               .get("additionalTextEdits", [{}])[0].get("newText")
-               == "# completion\n"
+               and completion_item.get("label") == "editorCompletion"
+               and completion_item.get("detail") == "python"
+               and completion_item.get("tags") == [1]
+               and completion_item.get("sortText") == "000_editorCompletion"
+               and completion_item.get("filterText") == "editorCompletionFilter"
+               and completion_item.get("preselect") is True
+               and completion_item.get("insertTextRules") == 4
+               and completion_item.get("keepWhitespace") is True
+               and completion_item.get("commitCharacters") == ["."]
+               and completion_extra_edit.get("newText") == "# completion\n"
                and editor_provider.seen_texts[-1] == "buffer"
-               and editor_provider.seen_dirty[-1] is True)
+               and editor_provider.seen_dirty[-1] is True,
+               json.dumps({
+                   "result": completion_result,
+                   "item": completion_item,
+                   "extraEdit": completion_extra_edit,
+                   "seenTexts": editor_provider.seen_texts,
+                   "seenDirty": editor_provider.seen_dirty,
+               }, ensure_ascii=False, default=str))
+        hover = _first(hover_result, "hovers")
         _check("editor_language_provider serializes hover contents",
-               hover_result.get("hovers", [{}])[0].get("contents") == [
-                   "hover buffer"])
+               hover.get("contents") == ["hover buffer"],
+               json.dumps({
+                   "result": hover_result,
+                   "hover": hover,
+               }, ensure_ascii=False, default=str))
+        signature = _first(signature_result.get("signatureHelp", {}),
+                           "signatures")
+        signature_param = _first(signature, "parameters")
         _check("editor_language_provider serializes signature help",
-               signature_result.get("signatureHelp", {})
-               .get("signatures", [{}])[0].get("label") == "editorCall(value)"
-               and signature_result.get("signatureHelp", {})
-               .get("signatures", [{}])[0].get("parameters", [{}])[0]
-               .get("documentation") == "value docs")
+               signature.get("label") == "editorCall(value)"
+               and signature_param.get("documentation") == "value docs")
+        diagnostic = _first(diagnostics_result, "diagnostics")
         _check("editor_language_provider returns document diagnostics",
                diagnostics_result.get("ok") is True
-               and diagnostics_result.get("diagnostics", [{}])[0]
-               .get("message") == "editor boom"
-               and diagnostics_result.get("diagnostics", [{}])[0]
-               .get("range", {}).get("start", {}).get("character") == 1)
-        action = code_action_result.get("actions", [{}])[0]
+               and diagnostic.get("message") == "editor boom"
+               and diagnostic.get("range", {}).get("start", {})
+               .get("character") == 1)
+        action = _first(code_action_result, "actions")
         _check("editor_language_provider serializes code actions",
                code_action_result.get("ok") is True
                and action.get("title") == "Replace buffer"
@@ -1900,7 +1995,7 @@ def test_app_settings_parity() -> None:
                and action.get("command", {}).get("arguments") == ["resolved-ok"]
                and action.get("isPreferred") is True
                and editor_provider.seen_code_action_resolves == 1)
-        context_action = code_action_context_result.get("actions", [{}])[0]
+        context_action = _first(code_action_context_result, "actions")
         context_messages = [
             item.get("message")
             for item in context_action.get("diagnostics", [])
@@ -1972,35 +2067,33 @@ def test_app_settings_parity() -> None:
         _check("editor_language_provider filters organize import actions",
                organize_action_result.get("ok") is True
                and len(organize_action_result.get("actions", [])) == 1
-               and organize_action_result.get("actions", [{}])[0].get("title")
-               == "Organize imports"
-               and organize_action_result.get("actions", [{}])[0].get("kind")
-               == "source.organizeImports")
-        definition = definition_result.get("definitions", [{}])[0]
+                and _first(organize_action_result, "actions").get("title")
+                == "Organize imports"
+                and _first(organize_action_result, "actions").get("kind")
+                == "source.organizeImports")
+        definition = _first(definition_result, "definitions")
         _check("editor_language_provider serializes definitions",
                definition_result.get("ok") is True
                and definition.get("uri", "").startswith("file://")
                and definition.get("range", {}).get("start", {}).get("line") == 0
                and definition.get("range", {}).get("end", {})
                .get("character") == 6)
-        type_definition = type_definition_result.get(
-            "typeDefinitions", [{}])[0]
+        type_definition = _first(type_definition_result, "typeDefinitions")
         _check("editor_language_provider serializes type definitions",
                type_definition_result.get("ok") is True
                and type_definition.get("range", {}).get("start", {})
                .get("character") == 1)
-        declaration = declaration_result.get("declarations", [{}])[0]
+        declaration = _first(declaration_result, "declarations")
         _check("editor_language_provider serializes declarations",
                declaration_result.get("ok") is True
                and declaration.get("range", {}).get("start", {})
                .get("character") == 2)
-        implementation = implementation_result.get(
-            "implementations", [{}])[0]
+        implementation = _first(implementation_result, "implementations")
         _check("editor_language_provider serializes implementations",
                implementation_result.get("ok") is True
                and implementation.get("range", {}).get("start", {})
                .get("character") == 3)
-        reference = references_result.get("references", [{}])[0]
+        reference = _first(references_result, "references")
         _check("editor_language_provider serializes references",
                references_result.get("ok") is True
                and editor_provider.seen_reference_context
@@ -2008,14 +2101,14 @@ def test_app_settings_parity() -> None:
                and reference.get("uri", "").startswith("file://")
                and reference.get("range", {}).get("start", {})
                .get("character") == 1)
-        link = document_link_result.get("links", [{}])[0]
+        link = _first(document_link_result, "links")
         _check("editor_language_provider serializes document links",
                document_link_result.get("ok") is True
                and link.get("target", "").startswith("file://")
                and link.get("tooltip") == "buffer link"
                and link.get("range", {}).get("end", {})
                .get("character") == 6)
-        hint = inlay_hint_result.get("hints", [{}])[0]
+        hint = _first(inlay_hint_result, "hints")
         _check("editor_language_provider serializes inlay hints",
                inlay_hint_result.get("ok") is True
                and hint.get("label") == ": str"
@@ -2024,14 +2117,14 @@ def test_app_settings_parity() -> None:
                and hint.get("paddingLeft") is True
                and hint.get("position", {}).get("character") == 6
                and editor_provider.seen_inlay_resolves == 1)
-        inline_item = inline_completion_result.get("items", [{}])[0]
+        inline_item = _first(inline_completion_result, "items")
         _check("editor_language_provider serializes inline completions",
                inline_completion_result.get("ok") is True
                and inline_item.get("insertText") == "bufferGhost"
                and inline_item.get("filterText") == "bufferGhost"
                and inline_item.get("range", {}).get("end", {})
                .get("character") == 6)
-        lens = code_lens_result.get("lenses", [{}])[0]
+        lens = _first(code_lens_result, "lenses")
         _check("editor_language_provider serializes code lenses",
                code_lens_result.get("ok") is True
                and lens.get("command", {}).get("title") == "Run lens"
@@ -2040,41 +2133,41 @@ def test_app_settings_parity() -> None:
                .get("character") == 6)
         _check("editor_language_provider serializes folding ranges",
                folding_range_result.get("ok") is True
-               and folding_range_result.get("ranges", [{}])[0].get("start") == 0
-               and folding_range_result.get("ranges", [{}])[0].get("end") == 2
-               and folding_range_result.get("ranges", [{}])[0].get("kind") == 3)
-        selection_range = selection_range_result.get("ranges", [{}])[0]
+               and _first(folding_range_result, "ranges").get("start") == 0
+               and _first(folding_range_result, "ranges").get("end") == 2
+               and _first(folding_range_result, "ranges").get("kind") == 3)
+        selection_range = _first(selection_range_result, "ranges")
         _check("editor_language_provider serializes selection ranges",
                selection_range_result.get("ok") is True
                and selection_range.get("range", {}).get("end", {})
                .get("character") == 3
                and selection_range.get("parent", {})
                .get("range", {}).get("end", {}).get("character") == 6)
-        linked_range = linked_editing_result.get("ranges", [{}])[1]
+        linked_range = _nth(linked_editing_result, "ranges", 1)
         _check("editor_language_provider serializes linked editing ranges",
                linked_editing_result.get("ok") is True
                and linked_range.get("start", {}).get("character") == 7
                and linked_editing_result.get("linkedEditing", {})
                .get("wordPattern") == "[A-Za-z]+")
-        incoming_call = incoming_calls_result.get("calls", [{}])[0]
-        outgoing_call = outgoing_calls_result.get("calls", [{}])[0]
+        incoming_call = (incoming_calls_result.get("calls") or [{}])[0]
+        outgoing_call = (outgoing_calls_result.get("calls") or [{}])[0]
         _check("editor_language_provider serializes call hierarchy",
                call_hierarchy_result.get("ok") is True
                and call_item.get("name") == "editorCall"
                and incoming_call.get("from", {}).get("name") == "editorCaller"
                and outgoing_call.get("to", {}).get("name") == "editorCallee"
-               and outgoing_call.get("fromRanges", [{}])[0]
-               .get("end", {}).get("character") == 6)
-        super_item = supertypes_result.get("items", [{}])[0]
-        sub_item = subtypes_result.get("items", [{}])[0]
+               and _first(outgoing_call, "fromRanges").get("end", {})
+               .get("character") == 6)
+        super_item = (supertypes_result.get("items") or [{}])[0]
+        sub_item = (subtypes_result.get("items") or [{}])[0]
         _check("editor_language_provider serializes type hierarchy",
                type_hierarchy_result.get("ok") is True
                and type_item.get("name") == "EditorType"
                and super_item.get("name") == "EditorSuper"
                and sub_item.get("selectionRange", {})
                .get("end", {}).get("character") == 9)
-        paste_edit = paste_edit_result.get("pasteEdits", [{}])[0]
-        drop_edit = drop_edit_result.get("dropEdits", [{}])[0]
+        paste_edit = _first(paste_edit_result, "pasteEdits")
+        drop_edit = _first(drop_edit_result, "dropEdits")
         _check("editor_language_provider prepares document paste data transfer",
                prepare_paste_result.get("ok") is True
                and prepare_paste_result.get("dataTransfer", {})
@@ -2084,7 +2177,7 @@ def test_app_settings_parity() -> None:
                and paste_edit.get("insertText") == "paste:clip:resolved"
                and paste_edit.get("title") == "Paste Selftest"
                and paste_edit.get("kind", {}).get("value") == "text.selftest"
-               and paste_edit.get("yieldTo", [{}])[0].get("value") == "text"
+               and _first(paste_edit, "yieldTo").get("value") == "text"
                and editor_provider.seen_paste_context.get("only").value
                == "text.selftest")
         _check("editor_language_provider serializes document drop edits",
@@ -2093,7 +2186,7 @@ def test_app_settings_parity() -> None:
                and drop_edit.get("title") == "Drop Selftest"
                and drop_edit.get("kind", {}).get("value") == "text"
                and drop_filtered_result.get("dropEdits") == [])
-        highlight = document_highlight_result.get("highlights", [{}])[0]
+        highlight = _first(document_highlight_result, "highlights")
         _check("editor_language_provider serializes document highlights",
                document_highlight_result.get("ok") is True
                and editor_provider.seen_highlight_position.character == 1
@@ -2132,9 +2225,8 @@ def test_app_settings_parity() -> None:
                and resolve_workspace_symbol_result.get("symbol", {})
                .get("location", {}).get("range", {}).get("start", {})
                .get("character") == 1)
-        color_info = document_color_result.get("colors", [{}])[0]
-        color_presentation = color_presentation_result.get(
-            "presentations", [{}])[0]
+        color_info = _first(document_color_result, "colors")
+        color_presentation = _first(color_presentation_result, "presentations")
         _check("editor_language_provider serializes document colors",
                document_color_result.get("ok") is True
                and color_info.get("range", {}).get("end", {})
@@ -2173,10 +2265,10 @@ def test_app_settings_parity() -> None:
         _check("editor_language_provider serializes rename edits",
                rename_result.get("ok") is True
                and editor_provider.seen_rename_name == "renamed"
-               and rename_result.get("edit", {}).get("_edits", [{}])[0]
+               and _first(rename_result.get("edit", {}), "_edits")
                .get("newText") == "renamed")
         _check("editor_language_provider exposes formatting edits without saving",
-               format_result.get("edits", [{}])[0].get("newText") == "formatted"
+               _first(format_result, "edits").get("newText") == "formatted"
                and disk_text == "disk")
         _check("editor_language_provider exposes formatter provider metadata",
                format_provider_result.get("ok") is True
@@ -2187,19 +2279,19 @@ def test_app_settings_parity() -> None:
                    for item in format_provider_result.get("providers", [])))
         _check("editor_language_provider filters formatter provider id",
                filtered_format_result.get("ok") is True
-               and filtered_format_result.get("edits", [{}])[0].get("newText")
+               and _first(filtered_format_result, "edits").get("newText")
                == "formatted"
                and missing_format_result.get("ok") is True
                and missing_format_result.get("edits") == [])
         _check("editor_language_provider exposes range formatting edits",
                format_range_result.get("ok") is True
-               and format_range_result.get("edits", [{}])[0]
+               and _first(format_range_result, "edits")
                .get("newText") == "range-formatted"
                and editor_provider.seen_range_format_range.end.character == 6)
         _check("editor_language_provider exposes on-type formatting edits",
                format_on_type_miss.get("edits") == []
                and format_on_type_result.get("ok") is True
-               and format_on_type_result.get("edits", [{}])[0]
+               and _first(format_on_type_result, "edits")
                .get("newText") == "typed"
                and editor_provider.seen_on_type_trigger == "}")
         surface_state = provider_api.editor_surface_state({
@@ -2213,6 +2305,7 @@ def test_app_settings_parity() -> None:
             "dirty": True,
             "diagnostics": [{"severity": 1, "message": "warn"}],
         })
+        surface_features = surface_state.get("language", {}).get("features", {})
         _check("editor_surface_state summarizes workspace terminal language diagnostics formatting and diff",
                surface_state.get("ok") is True
                and surface_state.get("workspace", {}).get("root")
@@ -2225,6 +2318,12 @@ def test_app_settings_parity() -> None:
                and surface_state.get("formatting", {}).get("providerCount", -1) >= 0
                and surface_state.get("diff", {}).get("added", 0) >= 1
                and surface_state.get("settings", {}).get("targetScopes") == ["user", "workspace", "extensions"])
+        _check("editor_surface_state exposes advanced VS Code language capabilities",
+               all(surface_features.get(key, {}).get("count", 0) >= 1 for key in [
+                   "rename", "hierarchy", "pasteDrop", "linkedEditing",
+                   "selectionRanges", "folding", "colors", "highlights",
+                   "links", "debugInline",
+               ]))
     finally:
         shutil.rmtree(tmp_provider_dir, ignore_errors=True)
 
@@ -2330,6 +2429,31 @@ def test_app_settings_parity() -> None:
         "pid": 424242,
         "started_at": time.time() - (_LAUNCH_FRONTEND_READY_GRACE_SECONDS + 3),
         "frontend_ready_at": time.time() - 1,
+        "frontend_health_at": time.time() - 1,
+        "frontend_health": {
+            "clickable": True,
+            "forcedInteractive": True,
+            "apiReady": True,
+            "bootMode": "pywebview",
+        },
+    }
+    stale_health_ready_state = {
+        "schema": 2,
+        "pid": 424242,
+        "started_at": time.time() - (_LAUNCH_FRONTEND_READY_GRACE_SECONDS + 8),
+        "updated_at": time.time() - (_LAUNCH_FRONTEND_READY_GRACE_SECONDS + 3),
+        "frontend_ready_at": time.time() - 1,
+        "frontend_ready_phase": "ready",
+        "frontend_health_at": time.time() - (_LAUNCH_FRONTEND_READY_GRACE_SECONDS + 3),
+        "frontend_health_phase": "heartbeat",
+        "frontend_clickable": True,
+        "frontend_interactive": True,
+        "frontend_health": {
+            "clickable": True,
+            "forcedInteractive": True,
+            "apiReady": True,
+            "bootMode": "pywebview",
+        },
     }
     stale_ready_state = {
         "schema": 2,
@@ -2359,6 +2483,65 @@ def test_app_settings_parity() -> None:
             "bootMode": "pywebview",
         },
     }
+    ready_api_missing_state = {
+        "schema": 2,
+        "pid": 424242,
+        "started_at": time.time() - (_LAUNCH_FRONTEND_READY_GRACE_SECONDS + 8),
+        "updated_at": time.time() - 1,
+        "frontend_ready_at": time.time() - 1,
+        "frontend_ready_phase": "ready",
+        "frontend_health_at": time.time() - 1,
+        "frontend_health_phase": "api-missing",
+        "frontend_clickable": True,
+        "frontend_interactive": True,
+        "frontend_health": {
+            "clickable": True,
+            "forcedInteractive": True,
+            "apiReady": False,
+            "bootMode": "pywebview",
+        },
+    }
+    ready_api_failed_state = {
+        "schema": 2,
+        "pid": 424242,
+        "started_at": time.time() - (_LAUNCH_FRONTEND_READY_GRACE_SECONDS + 8),
+        "updated_at": time.time() - 1,
+        "frontend_ready_at": time.time() - 1,
+        "frontend_ready_phase": "ready",
+        "frontend_health_at": time.time() - 1,
+        "frontend_health_phase": "api-call-failed",
+        "frontend_clickable": True,
+        "frontend_interactive": True,
+        "frontend_health": {
+            "clickable": True,
+            "forcedInteractive": True,
+            "apiReady": True,
+            "lastApiFailureMethod": "load_config",
+            "lastApiFailureReason": "call failed",
+            "bootMode": "pywebview",
+        },
+    }
+    ready_core_noop_state = {
+        "schema": 2,
+        "pid": 424242,
+        "started_at": time.time() - (_LAUNCH_FRONTEND_READY_GRACE_SECONDS + 8),
+        "updated_at": time.time() - 1,
+        "frontend_ready_at": time.time() - 1,
+        "frontend_ready_phase": "ready",
+        "frontend_health_at": time.time() - 1,
+        "frontend_health_phase": "control-noop",
+        "frontend_clickable": True,
+        "frontend_interactive": True,
+        "frontend_health": {
+            "clickable": True,
+            "forcedInteractive": True,
+            "apiReady": True,
+            "lastControlNoopAt": str(time.time()),
+            "lastControlNoopLabel": "Settings",
+            "lastControlNoopCommand": "open-settings",
+            "bootMode": "pywebview",
+        },
+    }
     stale_summary = _launch_state_summary(stale_ready_state, pid=424242, hwnd=123)
     malformed_time_summary = _launch_state_summary(
         {**stale_ready_state, "updated_at": "not-a-number"},
@@ -2370,6 +2553,42 @@ def test_app_settings_parity() -> None:
         "dragOverlayActive": True,
         "providerFramesClickable": False,
         "bootMode": "pywebview",
+        "lastApiFailureMethod": "load_config",
+        "lastApiFailureReason": "call failed",
+        "healthAggregate": True,
+        "terminalPendingCwd": "E:/VC/SAO-UI/sao_auto",
+        "terminalPendingProfile": "Windows PowerShell",
+        "terminalPendingRunnable": True,
+        "terminalMatchesWorkspace": False,
+        "assistantProvider": "OpenAI",
+        "assistantWorkflowMode": "custom",
+        "languageId": "python",
+        "editorLongActionState": "cancelled",
+        "editorLongActionKind": "formatting",
+        "editorLongActionReason": "status-button",
+        "editorLongActionElapsed": "1.2s",
+        "editorLongActionHistoryCount": 2,
+        "quickInputVisibleCount": 1,
+        "quickInputRenderedItems": 3,
+        "quickInputFocusOutReady": True,
+        "quickInputHasDescribedBy": True,
+        "extensionWindowMessageCount": 1,
+        "extensionWindowMessageToastCount": 1,
+        "extensionWindowMessageActions": 2,
+        "extensionWindowDialogCount": 2,
+        "extensionWindowDialogPicked": 1,
+        "extensionWindowDialogErrors": 0,
+        "extensionWindowDialogPaths": 3,
+        "extensionSurfaceCount": 3,
+        "lastControlNoopAt": "12345",
+        "lastControlNoopLabel": "Settings",
+        "lastControlNoopCommand": "open-settings",
+        "lastUiActionErrorLabel": "Settings",
+        "lastUiActionErrorMessage": "inspector is not defined",
+        "criticalActionMissingCount": 0,
+        "criticalActionNoHandlerCount": 0,
+        "criticalActionNonFocusableCount": 0,
+        "failureKind": "process-spawn-failure",
         "huge": "x" * 500,
     })
     with patch("ai_editor.app._read_launch_state", return_value=ready_window_state):
@@ -2392,6 +2611,39 @@ def test_app_settings_parity() -> None:
            and malformed_time_summary.get("updatedAt") == 0.0
            and health_summary.get("clickable") is False
            and health_summary.get("forcedInteractive") is True
+           and health_summary.get("lastApiFailureMethod") == "load_config"
+           and health_summary.get("lastApiFailureReason") == "call failed"
+           and health_summary.get("healthAggregate") is True
+           and health_summary.get("terminalPendingCwd") == "E:/VC/SAO-UI/sao_auto"
+           and health_summary.get("terminalPendingProfile") == "Windows PowerShell"
+           and health_summary.get("terminalPendingRunnable") is True
+           and health_summary.get("terminalMatchesWorkspace") is False
+           and health_summary.get("assistantProvider") == "OpenAI"
+           and health_summary.get("assistantWorkflowMode") == "custom"
+           and health_summary.get("languageId") == "python"
+           and health_summary.get("editorLongActionState") == "cancelled"
+           and health_summary.get("editorLongActionKind") == "formatting"
+           and health_summary.get("editorLongActionReason") == "status-button"
+           and health_summary.get("editorLongActionElapsed") == "1.2s"
+           and health_summary.get("editorLongActionHistoryCount") == 2
+           and health_summary.get("quickInputVisibleCount") == 1
+           and health_summary.get("quickInputRenderedItems") == 3
+           and health_summary.get("quickInputFocusOutReady") is True
+           and health_summary.get("quickInputHasDescribedBy") is True
+           and health_summary.get("extensionWindowMessageCount") == 1
+           and health_summary.get("extensionWindowMessageActions") == 2
+           and health_summary.get("extensionWindowDialogCount") == 2
+           and health_summary.get("extensionWindowDialogPaths") == 3
+           and health_summary.get("extensionSurfaceCount") == 3
+           and health_summary.get("lastControlNoopAt") == "12345"
+           and health_summary.get("lastControlNoopLabel") == "Settings"
+           and health_summary.get("lastControlNoopCommand") == "open-settings"
+           and health_summary.get("lastUiActionErrorLabel") == "Settings"
+           and health_summary.get("lastUiActionErrorMessage") == "inspector is not defined"
+           and health_summary.get("criticalActionMissingCount") == 0
+           and health_summary.get("criticalActionNoHandlerCount") == 0
+           and health_summary.get("criticalActionNonFocusableCount") == 0
+           and health_summary.get("failureKind") == "process-spawn-failure"
            and len(str(health_summary.get("huge") or "")) == 0
            and health_result.get("ok") is True
            and health_mock.call_args[0][0] == "selftest"
@@ -2402,7 +2654,13 @@ def test_app_settings_parity() -> None:
                stale_ready_state, 424242,
                max_ready_age=_LAUNCH_FRONTEND_READY_STALE_SECONDS) is False
            and snapshot.get("summary", {}).get("frontendReady") is True
-           and snapshot.get("summary", {}).get("hwnd") == 123)
+           and snapshot.get("summary", {}).get("hwnd") == 123
+           and _launch_state_critical_api_failed(
+               _launch_state_summary(ready_api_failed_state, pid=424242, hwnd=123),
+               _LAUNCH_FRONTEND_READY_GRACE_SECONDS + 8) is True
+           and _launch_state_core_control_noop(
+               _launch_state_summary(ready_core_noop_state, pid=424242, hwnd=123),
+               _LAUNCH_FRONTEND_READY_GRACE_SECONDS + 8) is True)
     with patch("ai_editor.app._read_launch_state",
                return_value=stale_window_unready_state), \
             patch("ai_editor.app._window_process_id", return_value=424242):
@@ -2420,6 +2678,22 @@ def test_app_settings_parity() -> None:
             patch("ai_editor.app._window_process_id", return_value=424242):
         not_clickable_needs_recovery = _existing_window_needs_frontend_recovery(123)
     with patch("ai_editor.app._read_launch_state",
+               return_value=stale_health_ready_state), \
+            patch("ai_editor.app._window_process_id", return_value=424242):
+        stale_health_needs_recovery = _existing_window_needs_frontend_recovery(123)
+    with patch("ai_editor.app._read_launch_state",
+               return_value=ready_api_missing_state), \
+            patch("ai_editor.app._window_process_id", return_value=424242):
+        api_missing_needs_recovery = _existing_window_needs_frontend_recovery(123)
+    with patch("ai_editor.app._read_launch_state",
+               return_value=ready_api_failed_state), \
+            patch("ai_editor.app._window_process_id", return_value=424242):
+        api_failed_needs_recovery = _existing_window_needs_frontend_recovery(123)
+    with patch("ai_editor.app._read_launch_state",
+               return_value=ready_core_noop_state), \
+            patch("ai_editor.app._window_process_id", return_value=424242):
+        core_noop_needs_recovery = _existing_window_needs_frontend_recovery(123)
+    with patch("ai_editor.app._read_launch_state",
                return_value=stale_window_unready_state), \
             patch("ai_editor.app._window_process_id", return_value=111111):
         mismatch_needs_recovery = _existing_window_needs_frontend_recovery(123)
@@ -2428,6 +2702,10 @@ def test_app_settings_parity() -> None:
            and young_needs_recovery is False
            and ready_needs_recovery is False
            and not_clickable_needs_recovery is True
+           and stale_health_needs_recovery is True
+           and api_missing_needs_recovery is True
+           and api_failed_needs_recovery is True
+           and core_noop_needs_recovery is True
            and mismatch_needs_recovery is False)
     with patch("ai_editor.app._running_child_process", None), \
             patch("ai_editor.app._process_alive", return_value=True), \
@@ -2459,6 +2737,34 @@ def test_app_settings_parity() -> None:
                _recent_child_launch_alive() is True
                and _launch_state_frontend_ready(ready_window_state, 424242) is True
                and _launch_state_frontend_ready(stale_window_unready_state, 424242) is False)
+    with patch("ai_editor.app._running_child_process", None), \
+            patch("ai_editor.app._process_alive", return_value=True), \
+            patch("ai_editor.app._find_ai_editor_window", return_value=123), \
+            patch("ai_editor.app._read_launch_state",
+                  return_value=stale_health_ready_state):
+        _check("AI Editor relaunches when frontend health heartbeat is stale",
+               _recent_child_launch_alive() is False)
+    with patch("ai_editor.app._running_child_process", None), \
+            patch("ai_editor.app._process_alive", return_value=True), \
+            patch("ai_editor.app._find_ai_editor_window", return_value=123), \
+            patch("ai_editor.app._read_launch_state",
+                  return_value=ready_api_missing_state):
+        _check("AI Editor relaunches when frontend is ready but API is missing",
+               _recent_child_launch_alive() is False)
+    with patch("ai_editor.app._running_child_process", None), \
+            patch("ai_editor.app._process_alive", return_value=True), \
+            patch("ai_editor.app._find_ai_editor_window", return_value=123), \
+            patch("ai_editor.app._read_launch_state",
+                  return_value=ready_api_failed_state):
+        _check("AI Editor relaunches when critical startup API call fails",
+               _recent_child_launch_alive() is False)
+    with patch("ai_editor.app._running_child_process", None), \
+            patch("ai_editor.app._process_alive", return_value=True), \
+            patch("ai_editor.app._find_ai_editor_window", return_value=123), \
+            patch("ai_editor.app._read_launch_state",
+                  return_value=ready_core_noop_state):
+        _check("AI Editor relaunches when core controls stop changing UI state",
+               _recent_child_launch_alive() is False)
     root_dir = os.path.dirname(os.path.dirname(__file__))
     panels_path = os.path.join(root_dir, "gui_modules", "sao_gui_panels_mixin.py")
     with open(panels_path, "r", encoding="utf-8") as fh:
@@ -2514,6 +2820,12 @@ def test_app_settings_parity() -> None:
             and "def _launch_state_frontend_ready" in app_src
             and "\"frontend_ready_until\"" in app_src
             and "\"frontend_ready_pid\"" in app_src
+            and "\"terminalPendingCwd\"" in app_src
+            and "\"lastControlNoopAt\"" in app_src
+            and "\"lastControlNoopCommand\"" in app_src
+            and "\"lastUiActionErrorLabel\"" in app_src
+            and "\"criticalActionMissingCount\"" in app_src
+            and "\"editorLongActionState\"" in app_src
             and "\"launcher_pid\"" in app_src
             and "def update_frontend_health(" in app_src
             and "def mark_frontend_ready(" in app_src
@@ -2539,8 +2851,19 @@ def test_app_settings_parity() -> None:
            and "def _existing_window_needs_frontend_recovery(" in app_src
            and "existing window frontend not ready" in app_src
            and "existing window frontend reports not clickable" in app_src
+           and "existing window frontend API is not ready" in app_src
+           and "recent child pid={pid} frontend API is not ready" in app_src
+           and "existing window frontend critical API call failed" in app_src
+           and "recent child pid={pid} frontend critical API call failed" in app_src
+           and "def _launch_state_core_control_noop(" in app_src
+           and "existing window frontend core control no-op" in app_src
+           and "recent child pid={pid} frontend core control no-op" in app_src
+           and "_LAUNCH_CRITICAL_API_METHODS" in app_src
            and "summary.get(\"frontendHealthFresh\")" in app_src
            and "summary.get(\"frontendClickable\") is False" in app_src
+           and "health.get(\"apiReady\") is False" in app_src
+           and "lastApiFailureMethod" in app_src
+           and "lastApiFailureReason" in app_src
            and "skip_current_process: bool = False" in app_src
            and "_activate_existing_ai_editor_window(skip_current_process=True)" in app_src
            and "_AI_EDITOR_FORCE_NEW_ENV" in app_src
@@ -3080,260 +3403,260 @@ def test_app_settings_parity() -> None:
         "runTerminal", json.dumps({"command": "echo ok"})))
     _check("direct mutating tool requires confirmation",
            direct_result.get("requires_confirmation") is True)
-    with tempfile.TemporaryDirectory() as term_tmp:
-        os.makedirs(os.path.join(term_tmp, ".git"), exist_ok=True)
-        term_api = AIEditorAPI(_SettingsGui({
-            "ai_editor": {
-                "mode": "agent",
-                "workspace": {"root": term_tmp, "auto_detect": True},
-                "terminal": {"timeout": 10, "output_limit": 2000},
-            }
-        }))
-        term_result = json.loads(term_api.execute_tool(
-            "runTerminal",
-            json.dumps({
-                "command": f'"{sys.executable}" -c "import os;print(os.getcwd())"'
-            }),
-            confirmed=True,
-        ))
-        _check("runTerminal defaults cwd to active workspace and reports metadata",
-               term_result.get("exitCode") == 0
-               and os.path.normcase(term_result.get("stdout", "").strip())
-               == os.path.normcase(os.path.abspath(term_tmp))
-               and os.path.normcase(term_result.get("cwd", ""))
-               == os.path.normcase(os.path.abspath(term_tmp))
-               and isinstance(term_result.get("durationMs"), int)
-               and term_result.get("terminal", {}).get("cwd")
-               == term_result.get("cwd")
-               and term_result.get("terminal", {}).get("profile")
-               == "System Shell"
-               and term_result.get("terminal", {}).get("shellKind")
-               == "system"
-               and term_result.get("terminal", {}).get("workspaceCwd") is True
-               and term_result.get("terminal", {}).get("workspaceRoot")
-               == term_result.get("cwd")
-               and term_result.get("startedAt")
-               and term_result.get("finishedAt")
-               and term_result.get("stdoutTruncated") is False
-               and term_result.get("stderrTruncated") is False,
-               json.dumps(term_result, ensure_ascii=False))
-        profile_result = json.loads(term_api.execute_tool(
-            "runTerminal",
-            json.dumps({
-                "command": f'"{sys.executable}" -c "print(123)"',
-                "profile": "System Shell",
-            }),
-            confirmed=True,
-        ))
-        _check("runTerminal accepts terminal profile override",
-               profile_result.get("exitCode") == 0
-               and profile_result.get("stdout", "").strip() == "123"
-               and profile_result.get("terminal", {}).get("profile")
-               == "System Shell"
-               and profile_result.get("terminal", {}).get("shellKind")
-               == "system"
-               and profile_result.get("terminal", {}).get("workspaceCwd") is True,
-               json.dumps(profile_result, ensure_ascii=False))
-        with tempfile.TemporaryDirectory() as outside_tmp:
-            outside_result = json.loads(term_api.execute_tool(
-                "runTerminal",
-                json.dumps({
-                    "command": f'"{sys.executable}" -c "import os;print(os.getcwd())"',
-                    "cwd": outside_tmp,
-                    "profile": "System Shell",
-                }),
-                confirmed=True,
-            ))
-            _check("runTerminal reports non-workspace cwd accurately",
-                   outside_result.get("exitCode") == 0
-                   and os.path.normcase(outside_result.get("cwd", ""))
-                   == os.path.normcase(os.path.abspath(outside_tmp))
-                   and outside_result.get("terminal", {}).get("workspaceCwd") is False
-                   and os.path.normcase(
-                       outside_result.get("terminal", {}).get("workspaceRoot", ""))
-                   == os.path.normcase(os.path.abspath(term_tmp)),
-                   json.dumps(outside_result, ensure_ascii=False))
-        interactive_cmd = (
-            f'"{sys.executable}" -u -c '
-            '"import sys;print(\'ready\');'
-            'line=sys.stdin.readline().strip();print(\'got:\'+line)"'
-        )
-        interactive_start = json.loads(term_api.execute_tool(
-            "runTerminal",
-            json.dumps({
-                "command": interactive_cmd,
-                "mode": "start",
-                "profile": "System Shell",
-            }),
-            confirmed=True,
-        ))
-        interactive_job = interactive_start.get("jobId", "")
-        interactive_write = json.loads(term_api.execute_tool(
+    term_tmp = tempfile.mkdtemp()
+    os.makedirs(os.path.join(term_tmp, ".git"), exist_ok=True)
+    term_api = AIEditorAPI(_SettingsGui({
+        "ai_editor": {
+            "mode": "agent",
+            "workspace": {"root": term_tmp, "auto_detect": True},
+            "terminal": {"timeout": 10, "output_limit": 2000},
+        }
+    }))
+    term_result = json.loads(term_api.execute_tool(
+        "runTerminal",
+        json.dumps({
+            "command": f'"{sys.executable}" -c "import os;print(os.getcwd())"'
+        }),
+        confirmed=True,
+    ))
+    _check("runTerminal defaults cwd to active workspace and reports metadata",
+           term_result.get("exitCode") == 0
+           and os.path.normcase(term_result.get("stdout", "").strip())
+           == os.path.normcase(os.path.abspath(term_tmp))
+           and os.path.normcase(term_result.get("cwd", ""))
+           == os.path.normcase(os.path.abspath(term_tmp))
+           and isinstance(term_result.get("durationMs"), int)
+           and term_result.get("terminal", {}).get("cwd")
+           == term_result.get("cwd")
+           and term_result.get("terminal", {}).get("profile")
+           == "System Shell"
+           and term_result.get("terminal", {}).get("shellKind")
+           == "system"
+           and term_result.get("terminal", {}).get("workspaceCwd") is True
+           and term_result.get("terminal", {}).get("workspaceRoot")
+           == term_result.get("cwd")
+           and term_result.get("startedAt")
+           and term_result.get("finishedAt")
+           and term_result.get("stdoutTruncated") is False
+           and term_result.get("stderrTruncated") is False,
+           json.dumps(term_result, ensure_ascii=False))
+    profile_result = json.loads(term_api.execute_tool(
+        "runTerminal",
+        json.dumps({
+            "command": f'"{sys.executable}" -c "print(123)"',
+            "profile": "System Shell",
+        }),
+        confirmed=True,
+    ))
+    _check("runTerminal accepts terminal profile override",
+           profile_result.get("exitCode") == 0
+           and profile_result.get("stdout", "").strip() == "123"
+           and profile_result.get("terminal", {}).get("profile")
+           == "System Shell"
+           and profile_result.get("terminal", {}).get("shellKind")
+           == "system"
+           and profile_result.get("terminal", {}).get("workspaceCwd") is True,
+           json.dumps(profile_result, ensure_ascii=False))
+    outside_tmp = tempfile.mkdtemp()
+    outside_result = json.loads(term_api.execute_tool(
+        "runTerminal",
+        json.dumps({
+            "command": f'"{sys.executable}" -c "import os;print(os.getcwd())"',
+            "cwd": outside_tmp,
+            "profile": "System Shell",
+        }),
+        confirmed=True,
+    ))
+    _check("runTerminal reports non-workspace cwd accurately",
+           outside_result.get("exitCode") == 0
+           and os.path.normcase(outside_result.get("cwd", ""))
+           == os.path.normcase(os.path.abspath(outside_tmp))
+           and outside_result.get("terminal", {}).get("workspaceCwd") is False
+           and os.path.normcase(
+               outside_result.get("terminal", {}).get("workspaceRoot", ""))
+           == os.path.normcase(os.path.abspath(term_tmp)),
+           json.dumps(outside_result, ensure_ascii=False))
+    interactive_cmd = (
+        f'"{sys.executable}" -u -c '
+        '"import sys;print(\'ready\');'
+        'line=sys.stdin.readline().strip();print(\'got:\'+line)"'
+    )
+    interactive_start = json.loads(term_api.execute_tool(
+        "runTerminal",
+        json.dumps({
+            "command": interactive_cmd,
+            "mode": "start",
+            "profile": "System Shell",
+        }),
+        confirmed=True,
+    ))
+    interactive_job = interactive_start.get("jobId", "")
+    interactive_write = json.loads(term_api.execute_tool(
+        "runTerminal",
+        json.dumps({
+            "command": "",
+            "mode": "write",
+            "jobId": interactive_job,
+            "data": "from-selftest\n",
+            "profile": "System Shell",
+        }),
+        confirmed=True,
+    ))
+    interactive_status = {}
+    for _ in range(40):
+        interactive_status = json.loads(term_api.execute_tool(
             "runTerminal",
             json.dumps({
                 "command": "",
-                "mode": "write",
+                "mode": "status",
                 "jobId": interactive_job,
-                "data": "from-selftest\n",
                 "profile": "System Shell",
             }),
             confirmed=True,
         ))
-        interactive_status = {}
-        for _ in range(40):
-            interactive_status = json.loads(term_api.execute_tool(
-                "runTerminal",
-                json.dumps({
-                    "command": "",
-                    "mode": "status",
-                    "jobId": interactive_job,
-                    "profile": "System Shell",
-                }),
-                confirmed=True,
-            ))
-            if interactive_status.get("state") != "running":
-                break
-            time.sleep(0.05)
-        _check("runTerminal writes stdin to running terminal jobs",
-               bool(interactive_job)
-               and interactive_start.get("running") is True
-               and interactive_start.get("canWriteStdin") is True
-               and interactive_start.get("stdinAvailable") is True
-               and interactive_start.get("jobId") == interactive_job
-               and interactive_start.get("terminal", {}).get("workspaceCwd") is True
-               and interactive_write.get("writtenBytes") == len("from-selftest\n")
-               and interactive_write.get("stdinBytes") == len("from-selftest\n")
-               and interactive_write.get("sequence", 0) >= 1
-               and any(chunk.get("stream") == "stdin"
-                       for chunk in interactive_write.get("chunks", []))
-               and interactive_status.get("exitCode") == 0
-               and "got:from-selftest" in interactive_status.get("stdout", "")
-               and interactive_status.get("stdinBytes") == len("from-selftest\n")
-               and interactive_status.get("stdinClosed") is False
-               and interactive_status.get("canWriteStdin") is False
-               and interactive_status.get("running") is False
-               and interactive_status.get("outputBytes", 0) >= len(
-                   interactive_status.get("stdout", ""))
-               and interactive_status.get("outputLines", 0) >= 2
-               and interactive_status.get("workspaceRoot") == os.path.abspath(term_tmp),
-               json.dumps({
-                   "start": interactive_start,
-                   "write": interactive_write,
-                   "status": interactive_status,
-               }, ensure_ascii=False))
-        utf8_result = json.loads(term_api.execute_tool(
-            "runTerminal",
-            json.dumps({
-                "command": (
-                    f'"{sys.executable}" -c '
-                    '"print(\'\\u4e2d\\u6587\\u2713\')"'
-                ),
-                "profile": "System Shell",
-            }),
-            confirmed=True,
-        ))
-        env_result = json.loads(term_api.execute_tool(
-            "runTerminal",
-            json.dumps({
-                "command": (
-                    f'"{sys.executable}" -c '
-                    '"import os;print(os.environ.get(\'SAO_AI_EDITOR_TERMINAL_PROFILE\', \'\'))"'
-                ),
-                "profile": "System Shell",
-            }),
-            confirmed=True,
-        ))
-        close_cmd = (
-            f'"{sys.executable}" -u -c '
-            '"import sys;data=sys.stdin.read();print(\'closed:\'+str(len(data)))"'
-        )
-        close_start = json.loads(term_api.execute_tool(
-            "runTerminal",
-            json.dumps({
-                "command": close_cmd,
-                "mode": "start",
-                "profile": "System Shell",
-            }),
-            confirmed=True,
-        ))
-        close_job = close_start.get("jobId", "")
-        close_write = json.loads(term_api.execute_tool(
+        if interactive_status.get("state") != "running":
+            break
+        time.sleep(0.05)
+    _check("runTerminal writes stdin to running terminal jobs",
+           bool(interactive_job)
+           and interactive_start.get("running") is True
+           and interactive_start.get("canWriteStdin") is True
+           and interactive_start.get("stdinAvailable") is True
+           and interactive_start.get("jobId") == interactive_job
+           and interactive_start.get("terminal", {}).get("workspaceCwd") is True
+           and interactive_write.get("writtenBytes") == len("from-selftest\n")
+           and interactive_write.get("stdinBytes") == len("from-selftest\n")
+           and interactive_write.get("sequence", 0) >= 1
+           and any(chunk.get("stream") == "stdin"
+                   for chunk in interactive_write.get("chunks", []))
+           and interactive_status.get("exitCode") == 0
+           and "got:from-selftest" in interactive_status.get("stdout", "")
+           and interactive_status.get("stdinBytes") == len("from-selftest\n")
+           and interactive_status.get("stdinClosed") is False
+           and interactive_status.get("canWriteStdin") is False
+           and interactive_status.get("running") is False
+           and interactive_status.get("outputBytes", 0) >= len(
+               interactive_status.get("stdout", ""))
+           and interactive_status.get("outputLines", 0) >= 2
+           and interactive_status.get("workspaceRoot") == os.path.abspath(term_tmp),
+           json.dumps({
+               "start": interactive_start,
+               "write": interactive_write,
+               "status": interactive_status,
+           }, ensure_ascii=False))
+    utf8_result = json.loads(term_api.execute_tool(
+        "runTerminal",
+        json.dumps({
+            "command": (
+                f'"{sys.executable}" -c '
+                '"print(\'\\u4e2d\\u6587\\u2713\')"'
+            ),
+            "profile": "System Shell",
+        }),
+        confirmed=True,
+    ))
+    env_result = json.loads(term_api.execute_tool(
+        "runTerminal",
+        json.dumps({
+            "command": (
+                f'"{sys.executable}" -c '
+                '"import os;print(os.environ.get(\'SAO_AI_EDITOR_TERMINAL_PROFILE\', \'\'))"'
+            ),
+            "profile": "System Shell",
+        }),
+        confirmed=True,
+    ))
+    close_cmd = (
+        f'"{sys.executable}" -u -c '
+        '"import sys;data=sys.stdin.read();print(\'closed:\'+str(len(data)))"'
+    )
+    close_start = json.loads(term_api.execute_tool(
+        "runTerminal",
+        json.dumps({
+            "command": close_cmd,
+            "mode": "start",
+            "profile": "System Shell",
+        }),
+        confirmed=True,
+    ))
+    close_job = close_start.get("jobId", "")
+    close_write = json.loads(term_api.execute_tool(
+        "runTerminal",
+        json.dumps({
+            "command": "",
+            "mode": "write",
+            "jobId": close_job,
+            "data": "abc",
+            "closeStdin": True,
+            "profile": "System Shell",
+        }),
+        confirmed=True,
+    ))
+    close_status = {}
+    for _ in range(40):
+        close_status = json.loads(term_api.execute_tool(
             "runTerminal",
             json.dumps({
                 "command": "",
-                "mode": "write",
+                "mode": "status",
                 "jobId": close_job,
-                "data": "abc",
-                "closeStdin": True,
                 "profile": "System Shell",
             }),
             confirmed=True,
         ))
-        close_status = {}
-        for _ in range(40):
-            close_status = json.loads(term_api.execute_tool(
-                "runTerminal",
-                json.dumps({
-                    "command": "",
-                    "mode": "status",
-                    "jobId": close_job,
-                    "profile": "System Shell",
-                }),
-                confirmed=True,
-            ))
-            if close_status.get("state") != "running":
-                break
-            time.sleep(0.05)
-        stop_cmd = (
-            f'"{sys.executable}" -u -c '
-            '"import time;print(\'sleeping\');time.sleep(10)"'
-        )
-        stop_start = json.loads(term_api.execute_tool(
-            "runTerminal",
-            json.dumps({
-                "command": stop_cmd,
-                "mode": "start",
-                "profile": "System Shell",
-            }),
-            confirmed=True,
-        ))
-        stop_job = stop_start.get("jobId", "")
-        stop_result = json.loads(term_api.execute_tool(
-            "runTerminal",
-            json.dumps({
-                "command": "",
-                "mode": "stop",
-                "jobId": stop_job,
-                "profile": "System Shell",
-            }),
-            confirmed=True,
-        ))
-        _check("runTerminal preserves utf-8 output env and close/stop lifecycle",
-               utf8_result.get("exitCode") == 0
-               and "中文✓" in utf8_result.get("stdout", "")
-               and env_result.get("stdout", "").strip() == "System Shell"
-               and bool(close_job)
-               and close_write.get("writtenBytes") == 3
-               and close_write.get("stdinClosed") is True
-               and close_write.get("canWriteStdin") is False
-               and close_status.get("exitCode") == 0
-               and "closed:3" in close_status.get("stdout", "")
-               and close_status.get("stdinClosed") is True
-               and close_status.get("outputLines", 0) >= 1
-               and bool(stop_job)
-               and stop_result.get("state") == "cancelled"
-               and isinstance(stop_result.get("jobCount"), int)
-               and stop_start.get("profile") == "System Shell"
-               and stop_start.get("terminal", {}).get("profile") == "System Shell",
-               json.dumps({
-                   "utf8": utf8_result,
-                   "env": env_result,
-                   "close_start": close_start,
-                   "close_write": close_write,
-                   "close_status": close_status,
-                   "stop_start": stop_start,
-                   "stop_result": stop_result,
-               }, ensure_ascii=False))
+        if close_status.get("state") != "running":
+            break
+        time.sleep(0.05)
+    stop_cmd = (
+        f'"{sys.executable}" -u -c '
+        '"import time;print(\'sleeping\');time.sleep(10)"'
+    )
+    stop_start = json.loads(term_api.execute_tool(
+        "runTerminal",
+        json.dumps({
+            "command": stop_cmd,
+            "mode": "start",
+            "profile": "System Shell",
+        }),
+        confirmed=True,
+    ))
+    stop_job = stop_start.get("jobId", "")
+    stop_result = json.loads(term_api.execute_tool(
+        "runTerminal",
+        json.dumps({
+            "command": "",
+            "mode": "stop",
+            "jobId": stop_job,
+            "profile": "System Shell",
+        }),
+        confirmed=True,
+    ))
+    _check("runTerminal preserves utf-8 output env and close/stop lifecycle",
+           utf8_result.get("exitCode") == 0
+           and "中文✓" in utf8_result.get("stdout", "")
+           and env_result.get("stdout", "").strip() == "System Shell"
+           and bool(close_job)
+           and close_write.get("writtenBytes") == 3
+           and close_write.get("stdinClosed") is True
+           and close_write.get("canWriteStdin") is False
+           and close_status.get("exitCode") == 0
+           and "closed:3" in close_status.get("stdout", "")
+           and close_status.get("stdinClosed") is True
+           and close_status.get("outputLines", 0) >= 1
+           and bool(stop_job)
+           and stop_result.get("state") == "cancelled"
+           and isinstance(stop_result.get("jobCount"), int)
+           and stop_start.get("profile") == "System Shell"
+           and stop_start.get("terminal", {}).get("profile") == "System Shell",
+           json.dumps({
+               "utf8": utf8_result,
+               "env": env_result,
+               "close_start": close_start,
+               "close_write": close_write,
+               "close_status": close_status,
+               "stop_start": stop_start,
+               "stop_result": stop_result,
+           }, ensure_ascii=False))
 
     from ai_editor.mcp_client import load_mcp_configs
     mcp_payload = {"ai_editor": {"mcp": {"autostart": False, "servers": [
@@ -3661,6 +3984,70 @@ def test_app_settings_parity() -> None:
             "extensions": {"confirm_install": False}
         }}))
         installed_fixture = fixture_api.install_extension_dir(fixture_ext_dir)
+        fixture_media_dir = os.path.join(fixture_ext_dir, "media")
+        os.makedirs(fixture_media_dir, exist_ok=True)
+        fixture_script_path = os.path.join(fixture_media_dir, "panel.js")
+        fixture_style_path = os.path.join(fixture_media_dir, "panel.css")
+        with open(fixture_script_path, "w", encoding="utf-8") as fh:
+            fh.write("window.__saoWebviewSmoke = 'endpoint';\n")
+        with open(fixture_style_path, "w", encoding="utf-8") as fh:
+            fh.write(".smoke { color: #9cdcfe; }\n")
+        script_url = "https://webview.local/" + quote(
+            fixture_script_path.replace("\\", "/"), safe="/:")
+        style_url = "https://webview.local/" + quote(
+            fixture_style_path.replace("\\", "/"), safe="/:")
+        _AIEditorUIBridge(fixture_api).render_webview_panel(
+            "selftest.resource.panel",
+            (
+                "<html><head>"
+                f"<link rel=\"stylesheet\" href=\"{style_url}\">"
+                f"<script src=\"{script_url}\"></script>"
+                "</head><body class=\"smoke\">resource panel</body></html>"
+            ),
+            [{"path": fixture_media_dir}],
+            {"resourceSmoke": True},
+            "Selftest Resource Panel",
+            {"webviewOptions": {"retainContextWhenHidden": True}},
+            "selftest.resource.panel",
+        )
+        fixture_api._record_extension_dynamic_ui("quickInput", {
+            "id": "selftest.quick.input",
+            "kind": "quickPick",
+            "event": "show",
+            "visible": True,
+            "state": {
+                "kind": "quickPick",
+                "title": "Selftest Quick Pick",
+                "items": [
+                    {"label": "Alpha"},
+                    {"label": "Beta", "buttons": [{"tooltip": "Open"}]},
+                ],
+                "selectedItems": [{"label": "Alpha"}],
+                "activeItems": [{"label": "Alpha"}],
+                "buttons": [{"tooltip": "Refresh"}],
+                "canSelectMany": True,
+            },
+        })
+        fixture_api._record_extension_dynamic_ui("message", {
+            "id": "selftest.window.message",
+            "level": "warning",
+            "message": "Selftest message",
+            "options": {"modal": True, "detail": "Runtime message detail"},
+            "items": [{"title": "Open"}, {"title": "Dismiss"}],
+        })
+        fixture_api._record_extension_dynamic_ui("windowDialog", {
+            "id": "selftest.window.dialog",
+            "kind": "open",
+            "state": "picked",
+            "options": {
+                "title": "Open Selftest",
+                "defaultPath": "file:///workspace",
+                "filters": {"Python": ["py"]},
+                "canSelectMany": True,
+            },
+            "paths": ["file:///workspace/a.py", "file:///workspace/b.py"],
+            "pathCount": 2,
+        })
         fixture_surfaces = fixture_api.list_extension_runtime_surfaces({
             "view": "selftest.surface.tree",
             "editorTextFocus": True,
@@ -3713,6 +4100,24 @@ def test_app_settings_parity() -> None:
             item for item in fixture_surfaces.get("menus", [])
             if item.get("command") == "selftest.surface.command"
         ]
+        fixture_quick_inputs = {
+            item.get("id"): item
+            for item in fixture_surfaces.get("quickInputs", [])
+        }
+        fixture_window_messages = {
+            item.get("id"): item
+            for item in fixture_surfaces.get("windowMessages", [])
+        }
+        fixture_window_dialogs = {
+            item.get("id"): item
+            for item in fixture_surfaces.get("windowDialogs", [])
+        }
+        fixture_panels = {
+            item.get("id") or item.get("view_id"): item
+            for item in fixture_surfaces.get("webviewPanels", [])
+        }
+        resource_panel = fixture_panels.get("selftest.resource.panel", {})
+        resource_evidence = resource_panel.get("webviewEvidence", {})
         _check("installed extension fixture exposes dynamic runtime surfaces",
                installed_fixture.get("ok") is True
                and installed_fixture.get("id") == "selftest.surface-fixture"
@@ -3756,9 +4161,59 @@ def test_app_settings_parity() -> None:
                    "viewContainers") >= 1
                and fixture_surfaces.get("summary", {}).get(
                    "viewContainerViews") >= 2
-               and any(item.get("menu") == "view/title"
-                       for item in fixture_menus),
-               json.dumps(fixture_surfaces, ensure_ascii=False, default=str))
+                and any(item.get("menu") == "view/title"
+                        for item in fixture_menus),
+                json.dumps(fixture_surfaces, ensure_ascii=False, default=str))
+        _check("extension runtime surfaces expose transient window UI",
+               fixture_surfaces.get("summary", {}).get("quickInputs") >= 1
+               and fixture_surfaces.get("summary", {}).get(
+                   "quickInputVisible") >= 1
+               and fixture_surfaces.get("summary", {}).get(
+                   "quickInputItems") >= 2
+               and fixture_surfaces.get("summary", {}).get(
+                   "quickInputButtons") >= 2
+               and fixture_surfaces.get("summary", {}).get(
+                   "windowMessages") >= 1
+               and fixture_surfaces.get("summary", {}).get(
+                   "windowMessageActions") >= 2
+               and fixture_surfaces.get("summary", {}).get(
+                   "windowDialogs") >= 1
+               and fixture_surfaces.get("summary", {}).get(
+                   "windowDialogPicked") >= 1
+               and fixture_surfaces.get("summary", {}).get(
+                   "windowDialogPaths") >= 2
+               and fixture_quick_inputs.get(
+                   "selftest.quick.input", {}).get(
+                       "surfaceEvidence", {}).get("kind") == "quickInput"
+               and fixture_window_messages.get(
+                   "selftest.window.message", {}).get(
+                       "surfaceEvidence", {}).get("kind") == "windowMessage"
+               and fixture_window_dialogs.get(
+                   "selftest.window.dialog", {}).get(
+                       "surfaceEvidence", {}).get("kind") == "windowDialog",
+                json.dumps({
+                    "summary": fixture_surfaces.get("summary", {}),
+                    "quickInputs": fixture_surfaces.get("quickInputs", []),
+                    "windowMessages": fixture_surfaces.get("windowMessages", []),
+                    "windowDialogs": fixture_surfaces.get("windowDialogs", []),
+                }, ensure_ascii=False, default=str))
+        _check("extension webview resources resolve through dynamic endpoint smoke",
+               resource_panel.get("readiness") == "ready"
+               and resource_evidence.get("resourceEndpointRewriteCount") >= 1
+               and resource_evidence.get("resourceEndpointSmokeReady") is True
+               and resource_evidence.get("resourceEndpointSmokeCount") >= 1
+               and resource_evidence.get("resourceEndpointSmokeBytes") > 0
+               and resource_evidence.get("resourceEndpointSmokeMime") == "text/javascript"
+               and resource_evidence.get("resourceMapHitCount") >= 1
+               and resource_evidence.get("resourceMapReady") is True
+               and fixture_surfaces.get("summary", {}).get(
+                   "webviewPanels") >= 1
+               and fixture_surfaces.get("summary", {}).get(
+                   "webviewPanelEndpointSmokeReady") >= 1,
+               json.dumps({
+                   "panel": resource_panel,
+                   "summary": fixture_surfaces.get("summary", {}),
+               }, ensure_ascii=False, default=str))
         _check("extension runtime surface snapshot is cached within refresh frame",
                fixture_surfaces.get("summary", {}).get("cacheHit") is False
                and fixture_surfaces_cached.get("summary", {}).get(
@@ -4291,11 +4746,25 @@ def test_app_settings_parity() -> None:
                and runtime_surfaces.get("summary", {}).get("customEditorWarnings") == 0
                and runtime_surfaces.get("summary", {}).get("customEditorStates") == 1
                and runtime_surfaces.get("summary", {}).get("customEditorSelectors") == 1
+               and runtime_surfaces.get("summary", {}).get(
+                   "customEditorLifecycleActions") >= 4
+               and runtime_surfaces.get("summary", {}).get(
+                   "customEditorResourceStates") == 1
+               and runtime_surfaces.get("summary", {}).get(
+                   "customEditorActiveViews") == 1
                and runtime_surfaces.get("summary", {}).get("notebookReady") == 0
                and runtime_surfaces.get("summary", {}).get("notebookWarnings") == 1
                and runtime_surfaces.get("summary", {}).get("notebookStatusBarProviders") == 1
                and runtime_surfaces.get("summary", {}).get("notebookDetectionTasks") == 1
                and runtime_surfaces.get("summary", {}).get("notebookSelectedControllers") == 1
+               and runtime_surfaces.get("summary", {}).get(
+                   "notebookLifecycleActions") >= 5
+               and runtime_surfaces.get("summary", {}).get(
+                   "notebookSerializerReady") == 1
+               and runtime_surfaces.get("summary", {}).get(
+                   "notebookControllerReady") == 1
+               and runtime_surfaces.get("summary", {}).get(
+                   "notebookExecutionReady") == 1
                and custom_surface.get("selftest.customNbt", {}).get(
                    "runtimeAvailable") is True
                and custom_surface.get("selftest.customNbt", {}).get(
@@ -4304,11 +4773,13 @@ def test_app_settings_parity() -> None:
                    "readiness") == "ready"
                and custom_surface.get("selftest.customNbt", {}).get(
                    "surfaceEvidence", {}).get("selectorCount") == 1
-               and custom_surface.get("selftest.customNbt", {}).get(
-                   "surfaceEvidence", {}).get("capabilities", {}).get(
-                       "hasSave") is True
-               and notebook_surface.get("selftest.notebook", {}).get(
-                   "runtimeAvailable") is True
+                and custom_surface.get("selftest.customNbt", {}).get(
+                    "surfaceEvidence", {}).get("capabilities", {}).get(
+                        "hasSave") is True
+                and custom_surface.get("selftest.customNbt", {}).get(
+                    "surfaceEvidence", {}).get("lifecycleActionCount") >= 4
+                and notebook_surface.get("selftest.notebook", {}).get(
+                    "runtimeAvailable") is True
                and notebook_surface.get("selftest.notebook", {}).get(
                    "serializerCount") == 1
                and notebook_surface.get("selftest.notebook", {}).get(
@@ -4317,10 +4788,14 @@ def test_app_settings_parity() -> None:
                    "detectionTaskCount") == 1
                and notebook_surface.get("selftest.notebook", {}).get(
                    "readiness") == "detecting"
-               and notebook_surface.get("selftest.notebook", {}).get(
-                   "statusBarProviderCount") == 1
-               and notebook_surface.get("selftest.notebook", {}).get(
-                   "surfaceEvidence", {}).get("controllerIds", [])
+                and notebook_surface.get("selftest.notebook", {}).get(
+                    "statusBarProviderCount") == 1
+                and notebook_surface.get("selftest.notebook", {}).get(
+                    "executionReady") is True
+                and notebook_surface.get("selftest.notebook", {}).get(
+                    "surfaceEvidence", {}).get("lifecycleActionCount") >= 5
+                and notebook_surface.get("selftest.notebook", {}).get(
+                    "surfaceEvidence", {}).get("controllerIds", [])
                == ["selftest.notebookController"],
                json.dumps(runtime_surfaces, ensure_ascii=False, default=str))
         save_notebook = tree_api.save_workspace_notebook(
@@ -4751,10 +5226,18 @@ def test_phase1_ai_editor_regressions() -> None:
            and "if(content.getBoundingClientRect().width<120)" in html
            and "_ensureEditorPaneVisible();" in html)
     _check("frontend window close plays exit animation before backend close",
-           "body.window-closing" in html
-           and "function requestWindowClose()" in html
-           and "setTimeout(()=>" in html
-           and "window.requestWindowClose=requestWindowClose" in html)
+            "body.window-closing" in html
+            and "function requestWindowClose()" in html
+            and "setTimeout(()=>" in html
+            and "window.requestWindowClose=requestWindowClose" in html)
+    _check("frontend window close state never hard-disables all buttons",
+           "body.window-closing { pointer-events:none" not in html
+           and "body.window-closing { animation:windowCloseOut .18s ease-in; }" in html
+           and "body.window-closing { animation:windowCloseOut .18s ease-in forwards; }" not in html
+           and "const recoverIfStillVisible=()=>{" in html
+           and "setTimeout(recoverIfStillVisible,520);" in html
+           and "clearTransientInteractionBlockers('close-fallback');" in html
+           and "notifyAiEditorFrontendHealth('close-fallback',{force:true})" in html)
     _check("frontend supports VS Code language override editor settings",
            'id="s-editor-lang-override-enabled"' in html
            and 'id="s-editor-lang-default-formatter"' in html
@@ -4796,7 +5279,8 @@ def test_phase1_ai_editor_regressions() -> None:
            and "settingsRenderRowImpact(wrap);" in html)
     _check("frontend Settings defaults to calmer VS Code workbench UX",
            'class="modal settings-modal preferences-workbench settings-vscode-calm"' in html
-           and 'data-panel="settings" data-command="open-settings" data-i18n-title="settings" title="Settings"' in html
+           and 'data-panel="settings" data-command="open-settings" data-settings-button="1"' in html
+           and 'onclick="event.stopImmediatePropagation();openSettings();return false"' in html
            and 'data-settings-manage-icon="gear"' in html
            and 'data-settings-manage-style="codicon-gear"' in html
            and 'data-settings-manage-shape="codicon-settings-gear"' in html
@@ -4870,9 +5354,15 @@ def test_phase1_ai_editor_regressions() -> None:
            and "settingsHasActiveSearch()" in html
            and "save.textContent=errorCount?'Fix Errors':(modifiedCount?'Save '+String(modifiedCount):'Save')" in html
            and 'id="settings-cancel-button" onclick="settingsCancelOrClose()"' in html
+           and 'id="settings-title-close-button"' in html
+           and 'id="settings-floating-close-button"' in html
+           and 'data-command="close-settings"' in html
+           and 'settings-close-action' in html
+           and 'settings-floating-close' in html
            and "function settingsArmDiscardClose(reason)" in html
            and "modal.dataset.settingsDiscardArmed='1'" in html
            and "function settingsCancelOrClose()" in html
+           and "const buttons=[$('settings-cancel-button'),$('settings-title-close-button'),$('settings-floating-close-button')].filter(Boolean);" in html
            and "function settingsCloseThen(fn)" in html
            and "function openSettingsTarget(target,search)" in html
            and "selectSettingsTarget(safeTarget,{preserveSearch:true,focusSearch:true,persist:true});" in html
@@ -4904,6 +5394,15 @@ def test_phase1_ai_editor_regressions() -> None:
            and "hasHumanizedSaveAffordance" in html
            and "hasDisabledCleanSave" in html
            and "hasStatusbarDirtyClass" in html
+           and "--settings-calm-sidebar-width: 300px;" in html
+           and "grid-template-columns: var(--settings-calm-sidebar-width) minmax(0, 1fr) !important;" in html
+           and "max-width: var(--settings-calm-content-width) !important;" in html
+           and "grid-template-areas:" in html
+           and '"category title state"' in html
+           and "navUsable" in html
+           and "mainUsable" in html
+           and "settingsHealthNavUsable" in html
+           and "settingsHealthMainUsable" in html
            and "hasGroupedPersonalNav" in html
            and "hasQuietPersonalNavHistory" in html
            and "hasDetailsOnlyNavQuickFilters" in html
@@ -5057,11 +5556,30 @@ def test_phase1_ai_editor_regressions() -> None:
            and "forceInteractiveUi(reason||'watchdog')" in html
            and "notifyAiEditorFrontendHealth('watchdog-recovery')" in html
            and "function notifyAiEditorFrontendHealth(phase,options)" in html
-           and "bridge.update_frontend_health(String(phase||'heartbeat'),aiEditorInteractionHealthSnapshot())" in html
+           and "function aiEditorFrontendHealthPayload()" in html
+           and "window.aiEditorFrontendHealthPayload=aiEditorFrontendHealthPayload;" in html
+           and "payload.lastUiActionErrorLabel=uiActionErrors.lastErrorActionLabel||'';" in html
+           and "payload.lastUiActionErrorMessage=uiActionErrors.lastErrorMessage||'';" in html
+            and "payload.criticalActionMissingCount=criticalActions.missingCount||0;" in html
+            and "payload.criticalActionNoHandlerCount=criticalActions.noHandlerCount||0;" in html
+            and "payload.taskDebugHealth=taskDebug.health||'';" in html
+            and "payload.taskDebugConsoleEntryCount=taskDebug.debugConsoleEntryCount||0;" in html
+            and "function extensionWebviewResourceHealthSnapshot(rows)" in html
+            and "window.extensionWebviewResourceHealthSnapshot=extensionWebviewResourceHealthSnapshot;" in html
+            and "id=\"extension-webview-resource-summary\"" in html
+            and "extensionWebviewResources: safeCall(\"extensionWebviewResourceHealthSnapshot\")" in html
+            and "payload.extensionWebviewResourceHealth=webviewResources.health||'';" in html
+            and "payload.extensionWebviewEndpointSmokeReady=webviewResources.resourceEndpointSmokeReadyRows||0;" in html
+            and "payload.extensionWebviewEndpointSmokeFailures=webviewResources.resourceEndpointSmokeFailureRows||0;" in html
+            and "payload.extensionWebviewQueuedMessages=webviewResources.queuedMessages||0;" in html
+            and "payload.extensionWebviewFailureReasons=Array.isArray(webviewResources.failureReasons)" in html
+            and "payload.extensionCustomEditorLifecycleActions=runtimeSummary.customEditorLifecycleActions||0;" in html
+            and "payload.extensionNotebookExecutionReady=runtimeSummary.notebookExecutionReady||0;" in html
+            and "bridge.update_frontend_health(String(phase||'heartbeat'),aiEditorFrontendHealthPayload())" in html
            and "let _aiEditorFrontendHeartbeatTimer=0;" in html
            and "function startAiEditorFrontendHeartbeat(reason)" in html
            and "setInterval(()=>notifyAiEditorFrontendHealth('heartbeat'),8000)" in html
-           and "bridge.mark_frontend_ready(String(phase||'ready'),aiEditorInteractionHealthSnapshot())" in html
+           and "bridge.mark_frontend_ready(String(phase||'ready'),aiEditorFrontendHealthPayload())" in html
            and "notifyAiEditorFrontendHealth('init-error',{force:true});" in html
            and "scheduleTransientInteractionBlockerWatchdog('watchdog');" in html
            and "clearTransientInteractionBlockers('close-fallback');" in html
@@ -5075,7 +5593,22 @@ def test_phase1_ai_editor_regressions() -> None:
            and "document.addEventListener('pointermove',()=>{" in html
            and "document.addEventListener('wheel',()=>{" in html
            and "if(e&&e.key==='Escape')clearTransientInteractionBlockers('escape');" in html
-           and "e.preventDefault();clearTransientInteractionBlockers('drop');" in html)
+           and "function isFileDragEvent(e)" in html
+           and "if(!isFileDragEvent(e))return;" in html
+           and "types.includes('Files')" in html
+           and "e.preventDefault();clearTransientInteractionBlockers('drop');" in html
+           and "\"#drag-overlay.active\"" in html
+           and "el.id === \"drag-overlay\"" in html
+           and "el.classList.remove(\"active\")" in html
+           and "ai-editor-ui-action-error-boundary" in html
+           and "window.aiEditorUiActionErrorSnapshot = function()" in html
+           and "window.aiEditorMarkUiActionError = markError;" in html
+           and "clearAiEditorInteractionLocks(\"ui-action-error\")" in html
+           and "ai-editor-critical-action-health" in html
+           and "window.aiEditorCriticalActionHealthSnapshot = snapshotCriticalActions;" in html
+           and "criticalActions: safeCall(\"aiEditorCriticalActionHealthSnapshot\")" in html
+           and "{name:\"Settings\", selector:\"[data-settings-button='1'], [data-command='open-settings'], [aria-label='Settings']\", command:\"open-settings\"}" in html
+           and "{name:\"Assistant Send\", selector:\"#send-btn, [data-chat-send], button[aria-label='Send']\", requireFocusable:false}" in html)
     _check("frontend activity bar uses VS Code manage gear for Settings",
            'class="ab-icon activity-manage" data-panel="settings" data-command="open-settings"' in html
            and 'title="Settings"' in html
@@ -5513,11 +6046,15 @@ def test_phase1_ai_editor_regressions() -> None:
            and "function setAssistantWorkflowRunState(active,opts)" in html
            and "function assistantWorkflowNormalizeRuns(runs)" in html
            and "function assistantWorkflowUpsertRun(run)" in html
+           and "function assistantWorkflowTimelineRuns(limit)" in html
+           and "function assistantWorkflowTimelineSnapshot()" in html
+           and ".chat-workflow-session-timeline" in html
+           and ".chat-workflow-session-timeline-item" in html
            and "async function cancelAssistantWorkflowRun()" in html
            and "function workflowResultStatus(result)" in html
            and "function workflowResultRerunFromCard(card)" in html
            and "function renderWorkflowResultSummary(body,result,launch)" in html
-           and "async function runWorkflowEngineAsAssistant(workflow,inputText,launch,refs)" in html
+           and "async function runWorkflowEngineAsAssistant(workflow,inputText,launch,refs,retryOpts)" in html
            and "call('run_workflow',id,inputText,launch.workflowRunId,workflowLaunchNativeMetadata(launch))" in html
            and "liveCard.classList.add('workflow-run-live')" in html
            and "liveCard.dataset.workflowTranscriptRole='assistant-live'" in html
@@ -5551,6 +6088,8 @@ def test_phase1_ai_editor_regressions() -> None:
            and "card.dataset.workflowResultOutputVars=steps.map" in html
            and ".workflow-result-output-var" in html
            and "strip.dataset.workflowHistoryCount=String(workflowRuns.length);" in html
+           and "strip.dataset.workflowTimelineCount=String(workflowRuns.length);" in html
+           and "workflow-session-timeline-ready" in html
            and "workflowRuns:assistantWorkflowNormalizeRuns(src.workflowRuns)" in html
            and "'Workflow mode: '+normalizeWorkflowMode(info.workflowMode||assistantWorkflowMode)" in html
            and "'Execution method: '+method" in html
@@ -5666,6 +6205,36 @@ def test_phase1_ai_editor_regressions() -> None:
            and "const AT_VARS=[['@anchor','Anchor current file or selection'" in html
            and "if(ref.kind==='anchor')card.classList.add('anchor');" in html
            and "assistantUiSelfCheckRecord(checks,'composer-anchor-context-ready'" in html)
+    _check("frontend Assistant is discoverable from command palette",
+           "Chat: Focus Assistant" in html
+           and "Chat: New Chat" in html
+           and "Chat: Copy Composer Context" in html
+           and "Chat: Anchor Current Selection" in html
+           and "Chat: Explain Selection" in html
+           and "Chat: Fix Selection" in html
+           and "Chat: Generate Tests" in html
+           and "Chat: Review Selection" in html
+           and "Chat: Run Workflow" in html
+           and "Chat: Cancel Workflow" in html
+           and "Chat: Retry Last Workflow" in html
+           and "Chat: Copy Workflow Summary" in html
+           and "Developer: Run Assistant UI Self Check" in html)
+    _check("frontend Assistant detailed health reaches aggregate payload",
+           "draftLength: Number(summary.draftLength" in html
+           and "queuedRequestCount: Number(queued || 0) || 0" in html
+           and "nativeCardCount: Number(nativeDom.nativeCardCount || 0) || 0" in html
+           and "actionTrayVisible: actionTray.visible === true" in html
+           and "commandPaletteChatEntryCount: commandEntries" in html
+           and "document.body.dataset.assistantCommandPaletteChatEntryCount = String(snap.commandPaletteChatEntryCount);" in html
+           and "payload.assistantDraftLength=assistant.draftLength||0;" in html
+           and "payload.assistantAttachmentCount=assistant.attachmentCount||0;" in html
+           and "payload.assistantNativeCardCount=assistant.nativeCardCount||0;" in html
+           and "payload.assistantActionTrayVisible=assistant.actionTrayVisible===true;" in html
+           and "payload.assistantCommandPaletteChatEntryCount=assistant.commandPaletteChatEntryCount||0;" in html
+           and "payload.assistantWorkflowRunActive=assistant.workflowRunActive===true;" in html
+           and "payload.assistantWorkflowTimelineCount=assistant.workflowTimelineCount||0;" in html
+           and "payload.assistantWorkflowLatestStatus=assistant.workflowLatestStatus||'';" in html
+           and "payload.assistantWorkflowResumeReady=assistant.workflowResumeReady===true;" in html)
     _check("frontend Assistant tracks Copilot-style session and input state",
            "ASSISTANT_SESSION_STATE_KEY='sao-ai-editor-chat-session-state'"
            in html
@@ -6946,6 +7515,18 @@ def test_phase1_ai_editor_regressions() -> None:
            and "\"elapsedMs\": max(0, ended_at - run_started_at)" in app_source
            and "return self._workflow_result_payload(wf, result, input_text, metadata)" in app_source
            and "return self._workflow_result_payload(wf, result, input_text, kw)" in app_source)
+    _check("backend workflow supports single-step retry",
+           "def retry_workflow_step(self, wf_id: str, input_text: str," in app_source
+           and "def _workflow_progress_callbacks(self, wf: Any, run_id: str," in app_source
+           and "\"Step index out of range: {step_index}\"" in app_source
+           and "\"Invalid step index\"" in app_source
+           and "start_index=step_index, seed_context=seed_context)" in app_source
+           and "payload[\"workflowRetryFromStep\"] = step_index" in app_source)
+    _check("frontend workflow retry targets the first failed step",
+           "function workflowRetryStepPlan(last){" in html
+           and "const failedIndex=steps.findIndex(step=>step&&step.error);" in html
+           and "call('retry_workflow_step',id,inputText,retryOpts.stepIndex,retryOpts.seedContext||{}" in html
+           and "assistantWorkflowLastLaunch.lastResult=result;" in html)
     _check("frontend Assistant response part actions submit callback metadata",
            "function assistantSubmitResponsePartAction(part,action,value,button,opts)" in html
            and "call('assistant_response_part_action',payload)" in html
@@ -7176,6 +7757,8 @@ def test_phase1_ai_editor_regressions() -> None:
             and "el.dataset.webviewApiCallCount=String(Number(data.apiCallCount)||0);" in html
             and "el.dataset.webviewResourceMapReady=(data.resourceMapReady||(Number(data.resourceMapHitCount)||0)>0)?'true':'false';" in html
             and "el.dataset.webviewResourceEndpointReady=(data.resourceEndpointReady||(Number(data.resourceEndpointRewriteCount)||0)>0)?'true':'false';" in html
+            and "target.dataset.webviewResourceEndpointSmokeReady=evidence.resourceEndpointSmokeReady?'1':'0';" in html
+            and "resourceEndpointSmokeFailureRows" in html
             and "el.dataset.webviewResourceBlockedCount=String(Number(data.resourceBlockedCount)||0);" in html
             and "el.dataset.webviewResourceMissingCount=String(Number(data.resourceMissingCount)||0);" in html
             and "el.dataset.webviewBlockedResourceSamples=Array.isArray(data.blockedResourceSamples)" in html
@@ -7277,10 +7860,13 @@ def test_phase1_ai_editor_regressions() -> None:
             and "function editorWordBoundary(value,pos,direction)" in html
             and "function editorMoveWord(direction,selecting)" in html
             and "function editorSelectWordAtCursor()" in html
+            and "selectionRanges:{state:'empty'" in html
             and "async function requestEditorSelectionRanges(direction,quiet)" in html
+            and "updateEditorLanguageFeatureState('selectionRanges'" in html
             and "editorRequestLanguageProvider('selectionRange'" in html
             and "async function expandEditorSelection(quiet)" in html
             and "async function shrinkEditorSelection(quiet)" in html
+            and "if(id==='shrink-selection')return shrinkEditorSelection(false);" in html
             and "editorProviderPayload('selectionRange'" in html
             and "Expand Selection" in html
             and "Shrink Selection" in html
@@ -7349,9 +7935,27 @@ def test_phase1_ai_editor_regressions() -> None:
            and "dataset.settingsScopes" in html
            and "scheduleEditorSurfaceStateRefresh" in html
            and "data-editor-surface-chip" in html
-           and "activateBottomPanelTab(document.querySelector('.ptab[data-ptab=\"problems\"]'))" in html
-           and "formatDocument({quiet:false})" in html
-           and "openActiveEditorDirtyDiff()" in html)
+            and "function editorLanguageAdvancedCapabilityRows(state)" in html
+            and "surfaceCapabilityReadyCount" in html
+            and "surfaceCapabilities" in html
+            and "data-capability-action" in html
+            and "capabilityActions" in html
+            and "Capabilities: '+String(readyCapabilities.length)+'/'+String(capabilityRows.length)+' advanced" in html
+            and "capability-'+row.key" in html
+            and "'Rename','F2 rename/prepare rename'" in html
+            and "'Paste/Drop','Paste as and drop edits'" in html
+            and "'Hierarchy','Call/type hierarchy'" in html
+            and "'Linked Editing','Linked editing ranges'" in html
+            and "'Selection Ranges','Expand/shrink selection'" in html
+            and "'debugInline','Debug Inline','Evaluatable expressions and inline values','debug-inline'" in html
+            and "if(id==='rename-symbol')return requestEditorRename(false);" in html
+            and "if(id==='paste-as')return requestEditorPasteAs(false);" in html
+            and "if(id==='expand-selection')return expandEditorSelection(false);" in html
+            and "if(id==='peek-call-hierarchy')return requestEditorCallHierarchy(false);" in html
+            and "if(id==='document-links')return requestEditorDocumentLinks(false,true);" in html
+            and "activateBottomPanelTab(document.querySelector('.ptab[data-ptab=\"problems\"]'))" in html
+            and "formatDocument({quiet:false})" in html
+            and "openActiveEditorDirtyDiff()" in html)
     _check("frontend invokes dynamic editor language providers",
            "id=\"editor-suggest\"" in html
            and "id=\"editor-hover\"" in html
@@ -7489,16 +8093,19 @@ def test_phase1_ai_editor_regressions() -> None:
            and "function showEditorReferences(references,position)" in html
            and "function handleEditorReferencesKey(e)" in html
            and "id=\"editor-hierarchy\"" in html
-           and "function requestEditorCallHierarchy(quiet)" in html
-           and "function requestEditorTypeHierarchy(quiet)" in html
-           and "function openEditorHierarchyPeek(mode,items,direction,position)" in html
+            and "function requestEditorCallHierarchy(quiet)" in html
+            and "function requestEditorTypeHierarchy(quiet)" in html
+            and "async function requestEditorDebugInlineValues(quiet)" in html
+            and "function openEditorHierarchyPeek(mode,items,direction,position)" in html
            and "function refreshEditorHierarchyChildren(quiet)" in html
            and "function handleEditorHierarchyKey(e)" in html
            and "editorProviderPayload('prepareCallHierarchy'" in html
            and "editorProviderPayload('prepareTypeHierarchy'" in html
            and "editorRequestLanguageProvider('prepareCallHierarchy'" in html
-           and "editorRequestLanguageProvider('prepareTypeHierarchy'" in html
-           and "editorRequestLanguageProvider(childKind" in html
+            and "editorRequestLanguageProvider('prepareTypeHierarchy'" in html
+            and "editorRequestLanguageProvider('evaluatableExpression'" in html
+            and "editorRequestLanguageProvider('inlineValue'" in html
+            and "editorRequestLanguageProvider(childKind" in html
            and "callHierarchyIncoming" in html
            and "callHierarchyOutgoing" in html
            and "typeHierarchySupertypes" in html
@@ -7767,7 +8374,9 @@ def test_phase1_ai_editor_regressions() -> None:
            and "Format Document With..." in html
            and "Format Selection" in html
            and "async function handleEditorDocumentPaste(e)" in html
-           and "async function handleEditorDocumentDrop(e)" in html
+            and "async function readEditorClipboardText()" in html
+            and "async function requestEditorPasteAs(quiet)" in html
+            and "async function handleEditorDocumentDrop(e)" in html
            and "id=\"editor-drop-paste-options\"" in html
            and "function editorDataTransferPayload(source)" in html
            and "function editorApplyDropPasteEdit(edit,ranges,label)" in html
@@ -7778,10 +8387,11 @@ def test_phase1_ai_editor_regressions() -> None:
            and "editorDropPasteProviderPayload('prepareDocumentPaste'" in html
            and "editorDropPasteProviderPayload('documentPaste'" in html
            and "editorDropPasteProviderPayload('documentDrop'" in html
-           and "editorRequestLanguageProvider('prepareDocumentPaste'" in html
-           and "editorRequestLanguageProvider('documentPaste'" in html
-           and "editorRequestLanguageProvider('documentDrop'" in html
-           and "ed.addEventListener('paste',handleEditorDocumentPaste)" in html
+            and "editorRequestLanguageProvider('prepareDocumentPaste'" in html
+            and "editorRequestLanguageProvider('documentPaste'" in html
+            and "editorRequestLanguageProvider('documentDrop'" in html
+            and "context:{triggerKind:1,preferences}" in html
+            and "ed.addEventListener('paste',handleEditorDocumentPaste)" in html
            and "ed.addEventListener('drop',handleEditorDocumentDrop)" in html
            and "function requestEditorCodeLenses(quiet)" in html
            and "function renderEditorCodeLenses(lenses)" in html
@@ -7799,18 +8409,24 @@ def test_phase1_ai_editor_regressions() -> None:
            and "editorRequestLanguageProvider('documentHighlight'" in html
            and "editor-document-highlight" in html
            and "function requestEditorDocumentColors(quiet)" in html
-           and "function renderEditorDocumentColors(colors)" in html
-           and "async function requestEditorColorPresentations(info,quiet,event)" in html
-           and "function showEditorColorPresentationMenu(info,presentations,event)" in html
+            and "function renderEditorDocumentColors(colors)" in html
+            and "async function requestEditorColorPresentations(info,quiet,event)" in html
+            and "function editorActiveDocumentColorAtSelection()" in html
+            and "async function showEditorColorPresentationsForSelection(quiet)" in html
+            and "async function applyFirstEditorColorPresentation(quiet)" in html
+            and "updateEditorLanguageFeatureState('documentColors'" in html
+            and "function showEditorColorPresentationMenu(info,presentations,event)" in html
            and "function applyEditorColorPresentation(presentation,info)" in html
            and "function closeEditorColorPresentationMenu()" in html
            and "function scheduleEditorDocumentColors(delay)" in html
            and "editorProviderPayload('documentColor'" in html
            and "editorRequestLanguageProvider('documentColor'" in html
-           and "editorProviderPayload('colorPresentation'" in html
-           and "editorRequestLanguageProvider('colorPresentation'" in html
-           and "Refresh Document Colors" in html
-           and "editor-color-swatch" in html
+            and "editorProviderPayload('colorPresentation'" in html
+            and "editorRequestLanguageProvider('colorPresentation'" in html
+            and "Refresh Document Colors" in html
+            and "Show Color Presentations" in html
+            and "Apply First Color Presentation" in html
+            and "editor-color-swatch" in html
            and "editor-color-presentation-menu" in html
            and "function requestEditorSemanticTokens(quiet)" in html
            and "function editorVisibleRangePayload()" in html
@@ -10911,6 +11527,11 @@ console.log("frontend word separator behavior ok");
             and "host.dataset.settingsRuntimeContext='1';" in html
             and "host.dataset.terminalRunnable=ctx.terminalRunnable?'1':'0';" in html
             and "renderSettingsRuntimeContext();" in html
+            and "status.dataset.settingsNavTargetLabel=settingsTargetDisplayName(currentSettingsTarget);" in html
+            and "add('Overrides',(state.overrides||[]).length" in html
+            and "currentTarget: typeof currentSettingsTarget === \"string\" ? currentSettingsTarget : \"\"" in html
+            and "document.body.dataset.settingsHealthTarget = String(snap.currentTarget || \"\");" in html
+            and "payload.settingsCurrentTarget=settings.currentTarget||settings.target||'';" in html
             and "String(_updateTerminalDiagnostics).includes(\"renderSettingsRuntimeContext()\")" in html
             and "settings-nav-heading" in html
             and "settings-nav-badge" in html
@@ -10935,8 +11556,30 @@ console.log("frontend word separator behavior ok");
             and "window.settingsToggleSavePreview=settingsToggleSavePreview;" in html
             and "window.resetVisibleModifiedSettings=resetVisibleModifiedSettings;" in html
             and "window.focusSettingsSearch=focusSettingsSearch;" in html
-            and "renderSettingsNav();" in html
+           and "renderSettingsNav();" in html
            and "updateSettingsNavCounts();" in html)
+    _check("frontend settings layout avoids generic row override regression",
+           "body[data-ai-editor-settings-visible=\"true\"] #settings-modal.open .settings-row" not in html
+           and "body[data-ai-editor-settings-visible=\"true\"] #settings-modal.open .setting-row" not in html
+           and "#settings-modal.open .settings-vscode-calm .settings-field.builtin-setting" in html
+           and "grid-template-columns: minmax(0, 1fr) !important;" in html
+           and "grid-row: auto !important;" in html
+           and "--settings-calm-sidebar-width: 300px;" in html
+           and "grid-template-columns: var(--settings-calm-sidebar-width) minmax(0, 1fr) !important;" in html)
+    _check("frontend settings layout keeps sidebar search and readable columns",
+           "--settings-calm-sidebar-width: 300px;" in html
+           and "grid-template-columns: var(--settings-calm-sidebar-width) minmax(0, 1fr) !important;" in html
+           and "max-width: var(--settings-calm-content-width) !important;" in html
+           and "#settings-modal.open .settings-vscode-calm .settings-nav > .settings-searchbar" in html
+           and "navHasSearchbar" in html
+           and "navSearchbarVisible" in html
+           and "readableColumns" in html
+           and "navUsable" in html
+           and "mainUsable" in html
+           and "payload.settingsNavHasSearchbar=settings.navHasSearchbar===true;" in html
+           and "payload.settingsReadableColumns=settings.readableColumns===true;" in html
+           and "payload.settingsNavUsable=settings.navUsable===true;" in html
+           and "payload.settingsMainUsable=settings.mainUsable===true;" in html)
     _check("frontend settings target tabs filter by scope without mutating search",
            "input.value=(input.value+' @workspace').trim();" not in html
            and "input.value=(input.value+' @extensions').trim();" not in html
@@ -12053,6 +12696,14 @@ console.log("frontend word separator behavior ok");
            and "function extensionRuntimeSurfaceActionSummary(row)" in html
            and "function extensionWebviewRuntimeDiagnostics(evidence)" in html
            and "function extensionRuntimeEvidenceMatches(row,value)" in html
+           and "function markApiCallUnavailable(method,reason,error)" in html
+           and "document.body.dataset.aiEditorLastApiFailureMethod=methodText;" in html
+           and "AI Editor API '+reasonText+': '+methodText" in html
+           and "lastApiFailureMethod:String(document.body.dataset.aiEditorLastApiFailureMethod||'')" in html
+           and "lastApiFailureReason:String(document.body.dataset.aiEditorLastApiFailureReason||'')" in html
+           and "lastApiFailureAt:Number(document.body.dataset.aiEditorLastApiFailureAt||0)" in html
+           and "notifyAiEditorFrontendHealth('api-'+reasonText.replace(/\\s+/g,'-'),{force:true});" in html
+           and "function markApiCallReady(method)" in html
            and "if(['ready','waiting-html','partial','bridge-warning','message-warning','resource-warning','resource-error','missing-runtime'].includes(v))" in html
            and "function extensionRuntimeSurfaceDomSnapshot(viewId,runtime)" in html
            and "function extensionRuntimeSurfaceHealthSnapshot()" in html
@@ -12065,16 +12716,22 @@ console.log("frontend word separator behavior ok");
            and "function attachExtensionRuntimeChatContext(row)" in html
            and "function languageStatusSnapshot()" in html
            and "window.languageStatusSnapshot=languageStatusSnapshot;" in html
-           and "function extensionRuntimeStatusBarRows(data)" in html
-           and "function extensionRuntimeLanguageStatusRows(data)" in html
-           and "function extensionRuntimeSurfaceRows(data)" in html
-           and "function extensionRuntimeFilterState()" in html
-           and "function extensionRuntimeRowMatchesFilter(row,filter)" in html
-           and "el.dataset.surfaceMenuId=String(row.menuId||'');" in html
-           and "el.dataset.surfaceMenuWhen=String(row.menuWhen||'');" in html
-           and "el.dataset.surfaceMenuContextKeys=Array.isArray(row.menuContextKeys)?row.menuContextKeys.join(','):'';" in html
-           and "context.className='extension-runtime-menu-context';" in html
-           and "chip.className='extension-runtime-menu-chip '+(item.state||'');" in html
+            and "function extensionRuntimeStatusBarRows(data)" in html
+            and "function extensionRuntimeLanguageStatusRows(data)" in html
+            and "function extensionRuntimeSurfaceRows(data)" in html
+            and "(data.quickInputs||[]).slice(0,12).forEach(item=>push('QuickInput'" in html
+            and "(data.windowMessages||[]).slice(0,12).forEach(item=>push('WindowMessage'" in html
+            and "(data.windowDialogs||[]).slice(0,12).forEach(item=>push('WindowDialog'" in html
+            and "function extensionRuntimeFilterState()" in html
+            and "function extensionRuntimeRowMatchesFilter(row,filter)" in html
+            and "el.dataset.surfaceMenuId=String(row.menuId||'');" in html
+            and "el.dataset.surfaceMenuWhen=String(row.menuWhen||'');" in html
+            and "el.dataset.surfaceMenuContextKeys=Array.isArray(row.menuContextKeys)?row.menuContextKeys.join(','):'';" in html
+            and "el.dataset.surfaceQuickInputKind=String(row.quickInputKind||'');" in html
+            and "el.dataset.surfaceWindowMessageLevel=String(row.windowMessageLevel||'');" in html
+            and "el.dataset.surfaceWindowDialogKind=String(row.windowDialogKind||'');" in html
+            and "context.className='extension-runtime-menu-context';" in html
+            and "chip.className='extension-runtime-menu-chip '+(item.state||'');" in html
            and "function populateExtensionRuntimeKindFilter(rows)" in html
            and "function updateExtensionRuntimeFilterSummary(visible,total)" in html
            and "function extensionRuntimeSurfaceRowByKey(key)" in html
@@ -12234,7 +12891,12 @@ console.log("frontend word separator behavior ok");
            and "['Webview Ready',rows.filter(row=>extensionRuntimeIsWebviewKind(row)&&row.webviewReadiness==='ready').length]" in html
            and "['Webview Warnings',rows.filter(row=>extensionRuntimeIsWebviewKind(row)&&row.webviewReadiness&&row.webviewReadiness!=='ready').length]" in html
            and "['Custom Ready',summary.customEditorReady||rows.filter(row=>row.kind==='CustomEditor'" in html
+           and "['Custom Lifecycle',summary.customEditorLifecycleActions||rows.reduce" in html
+           and "['Custom Resources',summary.customEditorResourceStates||rows.reduce" in html
            and "['Notebook Status',summary.notebookStatusBarProviders||rows.reduce" in html
+           and "['Notebook Lifecycle',summary.notebookLifecycleActions||rows.reduce" in html
+           and "['Notebook Execution',summary.notebookExecutionReady||rows.filter" in html
+           and "Editor Surfaces" in html
            and "webviewEvidence:evidence" in html
            and "resourcePrepErrors=sum(row=>(Number(row.webviewEvidence&&row.webviewEvidence.resourceBlockedCount)||0)+(Number(row.webviewEvidence&&row.webviewEvidence.resourceMissingCount)||0));" in html
            and "if(v==='resource-error')return ev.resourceHealth==='resource-error'" in html
@@ -12255,6 +12917,8 @@ console.log("frontend word separator behavior ok");
            and "el.dataset.surfaceDirtyStateCount=String(row.surfaceEvidence&&row.surfaceEvidence.dirtyStateCount||0);" in html
            and "el.dataset.surfaceCanSaveStateCount=String(row.surfaceEvidence&&row.surfaceEvidence.canSaveStateCount||0);" in html
            and "el.dataset.surfaceCanBackupStateCount=String(row.surfaceEvidence&&row.surfaceEvidence.canBackupStateCount||0);" in html
+           and "el.dataset.surfaceLifecycleActionCount=String(row.lifecycleActionCount||row.surfaceEvidence&&row.surfaceEvidence.lifecycleActionCount||0);" in html
+           and "el.dataset.surfaceNotebookExecutionReady=row.notebookExecutionReady||row.surfaceEvidence&&row.surfaceEvidence.executionReady?'1':'0';" in html
            and "el.dataset.surfaceSupportsMultipleEditors=row.surfaceEvidence&&row.surfaceEvidence.supportsMultipleEditorsPerDocument?'1':'0';" in html
            and "el.dataset.surfaceViewContainerViewCount=String(row.viewContainerViewCount||row.surfaceEvidence&&row.surfaceEvidence.viewCount||0);" in html
            and "el.dataset.surfaceControllerCount=String(row.surfaceEvidence&&row.surfaceEvidence.controllerCount||0);" in html
@@ -12506,6 +13170,10 @@ console.log("frontend word separator behavior ok");
            and "\"webviewPanelReady\": webview_panel_ready" in app_source
            and "\"webviewPanelMessages\": webview_panel_messages" in app_source
            and "\"webviewPanelResourceRoots\": webview_panel_resource_roots" in app_source
+           and "\"customEditorLifecycleActions\": custom_editor_lifecycle_actions" in app_source
+           and "\"customEditorResourceStates\": custom_editor_resource_states" in app_source
+           and "\"notebookLifecycleActions\": notebook_lifecycle_actions" in app_source
+           and "\"notebookExecutionReady\": notebook_execution_ready" in app_source
            and "\"messageHealth\": message_health" in app_source
            and "\"bridgeHealth\": bridge_health" in app_source
            and "\"resourceHealth\": resource_health" in app_source
@@ -14739,13 +15407,21 @@ console.log("extension setting schema helpers ok");
            and "createExtensionActivityButton(fixtureItem)" in html
            and "showCustomEditorPlaceholder(customHost" in html
            and "renderNotebookOutputs(notebookOutputHost" in html
-           and "renderExtensionRuntimeSurfacePanel(runtimeData);" in html
-           and "group:'navigation@1',alt:'selftest.altRun'" in html
-           and "runtimeMenuRows:runtimeList?Array.from(runtimeList.querySelectorAll('.extension-runtime-row')).filter(row=>row.dataset.kind==='Menu').length:0" in html
-           and "runtimeMenuContextKeys:runtimeList?Array.from(runtimeList.querySelectorAll('.extension-runtime-row')).map(row=>row.dataset.surfaceMenuContextKeys||'').filter(Boolean):[]" in html
-           and "runtimeMenuChipCount:runtimeList?runtimeList.querySelectorAll('.extension-runtime-menu-chip').length:0" in html
-           and "snapshot.runtimeMenuRows>=1&&snapshot.runtimeMenuWhenRows>=1" in html
-           and "'extension-runtime-summary','extension-runtime-health','extension-runtime-list','extension-runtime-status'" in html
+            and "renderExtensionRuntimeSurfacePanel(runtimeData);" in html
+            and "quickInputs:[" in html
+            and "windowMessages:[" in html
+            and "windowDialogs:[" in html
+            and "group:'navigation@1',alt:'selftest.altRun'" in html
+            and "runtimeMenuRows:runtimeList?Array.from(runtimeList.querySelectorAll('.extension-runtime-row')).filter(row=>row.dataset.kind==='Menu').length:0" in html
+            and "runtimeQuickInputRows:runtimeList?Array.from(runtimeList.querySelectorAll('.extension-runtime-row')).filter(row=>row.dataset.kind==='QuickInput').length:0" in html
+            and "runtimeWindowMessageRows:runtimeList?Array.from(runtimeList.querySelectorAll('.extension-runtime-row')).filter(row=>row.dataset.kind==='WindowMessage').length:0" in html
+            and "runtimeWindowDialogRows:runtimeList?Array.from(runtimeList.querySelectorAll('.extension-runtime-row')).filter(row=>row.dataset.kind==='WindowDialog').length:0" in html
+            and "runtimeMenuContextKeys:runtimeList?Array.from(runtimeList.querySelectorAll('.extension-runtime-row')).map(row=>row.dataset.surfaceMenuContextKeys||'').filter(Boolean):[]" in html
+            and "runtimeMenuChipCount:runtimeList?runtimeList.querySelectorAll('.extension-runtime-menu-chip').length:0" in html
+            and "snapshot.runtimeMenuRows>=1&&snapshot.runtimeMenuWhenRows>=1" in html
+            and "snapshot.runtimeQuickInputRows>=2&&snapshot.runtimeQuickInputVisibleRows>=1" in html
+            and "snapshot.runtimeWindowDialogRows>=2&&snapshot.runtimeWindowDialogKinds.includes('open')" in html
+            and "'extension-runtime-summary','extension-runtime-health','extension-runtime-list','extension-runtime-status'" in html
            and 'id="extension-runtime-run-strip" aria-live="polite"' in html
            and 'id="extension-debug-session-tree" role="tree" aria-label="Debug sessions"' in html
            and "const extensionRuntimeTaskRuns=new Map();" in html
@@ -15065,6 +15741,9 @@ console.log("extension setting schema helpers ok");
            and "function quickInputResourceBasename(value)" in html
            and "function quickInputMoveActive(state,delta)" in html
            and "function quickInputAccept(state)" in html
+           and "function quickInputStatusSummary(state)" in html
+           and "function quickInputFrontendHealthSnapshot()" in html
+           and "window.quickInputFrontendHealthSnapshot=quickInputFrontendHealthSnapshot;" in html
            and "function quickInputButtonHandle(button,index)" in html
            and "function quickInputButtonLocation(button)" in html
            and "function quickInputIconId(value)" in html
@@ -15085,14 +15764,21 @@ console.log("extension setting schema helpers ok");
            and "state.enabled===false&&e.key!=='Escape'" in html
            and "buttonHandle:quickInputButtonHandle(button,index)" in html
            and "input.setAttribute('aria-invalid'" in html
+           and "input.setAttribute('aria-describedby'" in html
            and "validation.classList.toggle('warning'" in html
+           and ".quick-input-status" in html
+           and "quick-input-count" in html
            and "item.alwaysShow" in html
            and "payload.itemIndex=active" in html
            and "e.key==='Home'" in html
            and "e.key==='End'" in html
            and "aria-disabled" in html
+           and "aria-modal" in html
            and "aria-checked" in html
            and "aria-pressed" in html
+           and "view.visible=!!state.visible;view.ignoreFocusOut=!!state.ignoreFocusOut;" in html
+           and "el.dataset.visibleItemCount=String(quickInputVisibleItemCount(state));" in html
+           and "row.dataset.quickInputItemLabel=String(display.label||'');" in html
            and "quick-input-title-btns" in html
            and "quick-input-input-btns" in html
            and "quick-input-field-wrap" in html
@@ -15114,8 +15800,32 @@ console.log("extension setting schema helpers ok");
            and "quickInputAction(state.id,'accept'" in html
            and "quickInputAction(state.id,'hide'" in html
            and "call('extension_quick_input_action',id,action,payload||{})" in html
+           and "quickInputs: safeCall(\"quickInputFrontendHealthSnapshot\")" in html
+           and "payload.quickInputVisibleCount=quickInputs.visible||0;" in html
            and "if(event==='quick_input')" in html
-           and "renderQuickInputEvent(data)" in html)
+            and "renderQuickInputEvent(data)" in html)
+    _check("frontend exposes task/debug runtime health",
+           "function extensionRuntimeTaskDebugSnapshot()" in html
+           and "function syncExtensionRuntimeTaskDebugSummary(snapshot)" in html
+           and "id=\"extension-runtime-task-debug-summary\"" in html
+           and "window.extensionRuntimeTaskDebugSnapshot=extensionRuntimeTaskDebugSnapshot;" in html
+           and "taskDebug: safeCall(\"extensionRuntimeTaskDebugSnapshot\")" in html
+           and "panel.dataset.runtimeTaskDebugHealth=snapshot.health;" in html
+           and "panel.dataset.runtimeTaskDebugConsoleEntries=String(snapshot.debugConsoleEntryCount);" in html
+           and "payload.taskDebugTaskTotal=taskDebug.taskTotal||0;" in html
+           and "payload.taskDebugContextRows=(taskDebug.debugContextVariables||0)+(taskDebug.debugContextWatches||0)+(taskDebug.debugContextFrames||0);" in html)
+    _check("frontend exposes extension dynamic UI health",
+           "function extensionDynamicUiFrontendHealthSnapshot()" in html
+           and "window.extensionDynamicUiFrontendHealthSnapshot=extensionDynamicUiFrontendHealthSnapshot;" in html
+           and "extensionDynamicUi: safeCall(\"extensionDynamicUiFrontendHealthSnapshot\")" in html
+           and "payload.extensionWindowMessageCount=dynamicUi.windowMessages||0;" in html
+           and "payload.extensionWindowMessageToastCount=dynamicUi.visibleMessageToasts||0;" in html
+           and "payload.extensionWindowMessageActions=dynamicUi.windowMessageActions||0;" in html
+           and "payload.extensionWindowDialogCount=dynamicUi.windowDialogs||0;" in html
+           and "payload.extensionWindowDialogPaths=dynamicUi.windowDialogPaths||0;" in html
+           and "toast.dataset.extensionWindowMessage='1';" in html
+           and "toast.dataset.windowMessageActionCount=String(messageItems.length);" in html
+           and "showToast(data.message||'',data.level||'info',4000,{extensionWindowMessage:true" in html)
     _check("frontend command palette aligns with QuickAccess basics",
            "const _CMD_HISTORY_KEY='sao-command-palette-history'" in html
            and "function commandPaletteNormalizeQuery(value)" in html
@@ -16015,7 +16725,11 @@ console.log("command palette quick access helpers ok");
         vscode_api_source = fh.read()
     _check("extension QuickInput frontend actions round-trip to Node host",
            "def quick_input_changed(self, payload" in app_source
+           and "self._api._record_extension_dynamic_ui(\"quickInput\", event)" in app_source
            and "self._api._emit(\"quick_input\"" in app_source
+           and "def _extension_surface_dynamic_ui(self)" in app_source
+           and "\"quickInputs\": quick_inputs" in app_source
+           and "\"quickInputVisible\": quick_input_visible" in app_source
            and "def extension_quick_input_action(" in app_source
            and "host.send_quick_input_action(input_id, action, payload or {})"
            in app_source
@@ -16088,7 +16802,27 @@ console.log("command palette quick access helpers ok");
            and "window_dialog_response" in extension_host_source
            and "def show_window_dialog(self, kind: str,"
            in app_source
+           and "dialog_id = self._api._record_extension_dynamic_ui(" in app_source
+           and "\"windowDialog\", dialog_request)" in app_source
+           and "\"windowDialogs\": window_dialogs" in app_source
+           and "\"windowDialogPicked\": window_dialog_picked" in app_source
+           and "self._ui_bridge.show_message(level, message, {" in extension_host_source
            and "create_file_dialog" in app_source)
+    _check("extension window messages resolve from frontend actions",
+           "const _windowMessageRequests = new Map()" in node_ext_host_source
+           and "function _requestWindowMessage(level, message, options, rawItems, normalizedItems)" in node_ext_host_source
+           and "type: 'window_message_request'" in node_ext_host_source
+           and "case 'window_message_response':" in node_ext_host_source
+           and "function _handleWindowMessageResponse(msg)" in node_ext_host_source
+           and "return _requestWindowMessage(level, message, options, items, normalizedItems);" in node_ext_host_source
+           and "elif msg_type == \"window_message_request\":" in extension_host_source
+           and "def send_window_message_response(" in extension_host_source
+           and "\"type\": \"window_message_response\"" in extension_host_source
+           and "def extension_window_message_action(" in app_source
+           and "host.send_window_message_response(request_id, data)" in app_source
+           and "function extensionWindowMessageAction(requestId,index,payload)" in html
+           and "call('extension_window_message_action',id,data)" in html
+           and "className='toast-action'" in html)
     _check("extension clipboard round-trips through Node host",
            "env_clipboard_request" in node_ext_host_source
            and "env_clipboard_response" in node_ext_host_source
@@ -16250,6 +16984,7 @@ console.log("command palette quick access helpers ok");
            and "terminal-stdin-line" in html
            and "const TERMINAL_PROFILE_OPTIONS=[" in html
            and "function terminalProfileMetadata(profile)" in html
+           and "function terminalPendingLaunchContext(meta)" in html
            and "async function selectTerminalProfile(profile,opts)" in html
            and "window.sendTerminalInput=sendTerminalInput" in html
            and "window.selectTerminalProfile=selectTerminalProfile" in html
@@ -16263,12 +16998,18 @@ console.log("command palette quick access helpers ok");
            and "mode:'status'" in html
            and "mode:'write'" in html
            and "mode:'stop'" in html
-           and "run&&run.jobId&&!run.cancelled" in html
-           and "profile:def.id,shell_path:'',shell_args:[]" in html
-           and "payload={command:cmd,mode:'start',profile}" in html
-           and "out.dataset.runningProfile=run.profile||currentTerminalProfile()" in html
-           and "terminalRunCancelled" in html
-           and "function _terminalNormalizeResult(raw)" in html
+            and "run&&run.jobId&&!run.cancelled" in html
+            and "profile:def.id,shell_path:'',shell_args:[]" in html
+            and "payload={command:cmd,mode:'start',profile}" in html
+            and "function _terminalApiUnavailableResult(command,cwd,profile,detail)" in html
+            and "AI Editor API unavailable: runTerminal returned no result" in html
+            and "AI Editor API unavailable while polling terminal job" in html
+            and "AI Editor API unavailable while stopping terminal job" in html
+            and "AI Editor API unavailable while writing terminal stdin" in html
+            and "shellIntegrationStatus:'api-unavailable'" in html
+            and "out.dataset.runningProfile=run.profile||currentTerminalProfile()" in html
+            and "terminalRunCancelled" in html
+            and "function _terminalNormalizeResult(raw)" in html
             and "function _terminalStateForResult(result)" in html
            and "function _terminalWorkspaceLabel(cwd)" in html
              and "function _terminalProfileLabel(meta)" in html
@@ -16314,9 +17055,28 @@ console.log("command palette quick access helpers ok");
             and "host.dataset.shellPath=ctx.shellPath;" in html
             and "host.dataset.runnable=ctx.runnable?'1':'0';" in html
             and "window.terminalProfileLaunchContext=terminalProfileLaunchContext;" in html
+            and "window.terminalPendingLaunchContext=terminalPendingLaunchContext;" in html
+            and "function terminalRecoveryDecision(meta)" in html
+            and "async function applyTerminalRecovery(decision,opts)" in html
+            and "window.terminalRecoverySnapshot=terminalRecoverySnapshot;" in html
+            and "terminalRecovery: safeCall(\"terminalRecoverySnapshot\")" in html
+            and "payload.terminalRecoveryAction=terminalActions.recoveryAction||terminalRecovery.action||'';" in html
             and "window.renderTerminalProfileInspector=renderTerminalProfileInspector;" in html
+            and "const inspector=$('terminal-profile-inspector');" in html
             and "profileInspector:inspector&&inspector.dataset?{" in html
             and "snapshot.inspectorReady&&snapshot.inspectorProfile==='Windows PowerShell'" in html
+            and "id=\"terminal-action-summary\"" in html
+            and "function terminalPanelButtonKeydown(ev,node)" in html
+            and "function terminalActionHealthSnapshot()" in html
+            and "function syncTerminalActionSummary(snapshot)" in html
+            and "window.terminalActionHealthSnapshot=terminalActionHealthSnapshot;" in html
+            and "terminalActions: safeCall(\"terminalActionHealthSnapshot\")" in html
+            and "payload.terminalActionHealth=terminalActions.health||'';" in html
+            and "payload.terminalActionCanWriteStdin=terminalActions.canWriteStdin===true;" in html
+            and "body.dataset.terminalActionHealth=snapshot.health;" in html
+            and "body.dataset.terminalRecoveryAction=snapshot.recoveryAction;" in html
+            and "data-terminal-action=\"clear\"" in html
+            and "role=\"button\" tabindex=\"0\" data-terminal-action=\"stop\"" in html
             and "function _terminalOutputStats(out)" in html
            and "const _TERM_OUTPUT_NODE_LIMIT=1600;" in html
            and "const _TERM_OUTPUT_CHAR_LIMIT=220000;" in html
@@ -16429,6 +17189,11 @@ console.log("command palette quick access helpers ok");
             and "diagnosticsTruncated==='1'" in html
             and "['warn','ok'].includes(snapshot.diagnosticsHealth)" in html
             and "diagnosticsRunnable==='1'" in html
+            and "pendingLaunchPass" in html
+            and "statusPendingCwd==='E:/VC/SAO-UI/sao_auto'" in html
+            and "contextPendingProfile==='Windows PowerShell'" in html
+            and "diagnosticsPendingRunnable==='1'" in html
+            and "runtimeSnapshot.pendingCwd==='E:/VC/SAO-UI/sao_auto'" in html
             and "protectedSyncDecision==='protected-running'" in html
             and "runtimeSnapshot.workspaceSync.protected>=1" in html
             and "runtimeSnapshot.blocks.some(block=>block.command==='slow-command'" in html
@@ -16441,6 +17206,22 @@ console.log("command palette quick access helpers ok");
             and "snapshot.statusDurationMs==='7'" in html
             and "async function terminalUiSelfCheckSnapshot()" in html
            and "window.terminalUiSelfCheckSnapshot=terminalUiSelfCheckSnapshot" in html)
+    _check("terminal command palette and runtime health are first-class",
+           "Terminal: Focus Terminal" in html
+           and "Terminal: Select Default Profile" in html
+           and "Terminal: Copy Current CWD" in html
+           and "Terminal: Use CWD as Workspace" in html
+           and "Workspaces: Switch Workspace..." in html
+           and "Developer: Run Terminal UI Self Check" in html
+           and "runtime = typeof window.terminalRuntimeSnapshot === \"function\"" in html
+           and "actions = typeof window.terminalActionHealthSnapshot === \"function\"" in html
+           and "recovery = typeof window.terminalRecoverySnapshot === \"function\"" in html
+           and "outputBounded: runtime.outputBounded === true" in html
+           and "historyCount: Number(runtime.historyCount || 0) || 0" in html
+           and "payload.terminalRuntimeCwd=terminal.cwd||'';" in html
+           and "payload.terminalRuntimeOutputBounded=terminal.outputBounded===true;" in html
+           and "payload.terminalRuntimeHistoryCount=terminal.historyCount||0;" in html
+           and "payload.terminalPendingActiveRunning=terminal.pendingActiveRunning===true;" in html)
     _check("terminal backend exposes cancellable job lifecycle without adding tool count",
            "mode\": {\"type\": \"string\"" in engine_tools_source
            and "jobId\": {\"type\": \"string\"" in engine_tools_source
@@ -16471,8 +17252,11 @@ console.log("command palette quick access helpers ok");
            and "def _terminal_job_snapshot(" in engine_tools_source
            and "_TERMINAL_JOB_TTL_SEC" in engine_tools_source
            and "_TERMINAL_JOB_MAX_HISTORY" in engine_tools_source
-           and "def _terminal_subprocess_env(" in engine_tools_source
-           and "def _terminal_path_in_workspace(" in engine_tools_source
+            and "def _terminal_subprocess_env(" in engine_tools_source
+            and "def _terminal_failure_result(" in engine_tools_source
+            and "\"shellIntegrationStatus\": \"process-error\"" in engine_tools_source
+            and "return _terminal_failure_result(" in engine_tools_source
+            and "def _terminal_path_in_workspace(" in engine_tools_source
            and "def _terminal_prune_jobs_locked(" in engine_tools_source
            and "PYTHONIOENCODING" in engine_tools_source
            and "SAO_AI_EDITOR_TERMINAL_PROFILE" in engine_tools_source
@@ -16591,8 +17375,11 @@ console.log("command palette quick access helpers ok");
            and "diffDatasetsOk" in html
            and "featureDiffTotal" in html
            and "featureDiffHunks" in html
-           and "function editorLanguageFeatureAggregateSnapshot()" in html
-           and "featureActiveCount" in html
+            and "function editorLanguageFeatureAggregateSnapshot()" in html
+            and "selectionRanges:Number(selection.count)||0" in html
+            and "documentColors:Number(colors.count)||0" in html
+            and "colorPresentationApplied:!!colors.applied" in html
+            and "featureActiveCount" in html
            and "featureReadyCount" in html
            and "featureIssueCount" in html
            and "featureSummaryLabel" in html
@@ -16678,16 +17465,41 @@ console.log("command palette quick access helpers ok");
             and "el.dataset.formatOnSave=fmt.onSave?'1':'0';" in html
             and "el.dataset.formatProviderId=String(fmt.providerId||'');" in html
              and "onSave:opts.onSave===true" in html
-             and "'diagnostics','codeActions','formatting','inlineCompletions','saveParticipants','semanticTokens','diff'" in html)
+             and all(
+                 item in html for item in [
+                     "'diagnostics'",
+                     "'codeActions'",
+                     "'formatting'",
+                     "'inlineCompletions'",
+                     "'saveParticipants'",
+                     "'semanticTokens'",
+                     "'diff'",
+                 ]))
     _check("frontend exposes cancellable long-running editor actions",
            'id="status-editor-action"' in html
            and 'id="status-editor-action-cancel"' in html
+           and ".editor-action-status.running::after" in html
+           and ".editor-action-cancel.visible" in html
+           and "function editorActionElapsedLabel(action,now)" in html
            and "function beginEditorLongAction(kind,label,options)" in html
            and "function editorActionIsCurrent(action)" in html
            and "function cancelEditorLongAction(reason)" in html
            and "function runEditorLongAction(kind,label,worker,options)" in html
+           and "function editorLongActionHealthSnapshot()" in html
            and "function editorLongActionSelfCheckSnapshot()" in html
+           and "window.beginEditorLongAction=beginEditorLongAction;" in html
+           and "window.cancelEditorLongAction=cancelEditorLongAction;" in html
+           and "window.runEditorLongAction=runEditorLongAction;" in html
+           and "window.editorLongActionHealthSnapshot=editorLongActionHealthSnapshot;" in html
            and "window.editorLongActionSelfCheckSnapshot=editorLongActionSelfCheckSnapshot;" in html
+           and "label.dataset.editorActionDetail=actionDetail;" in html
+           and "label.dataset.editorActionElapsed=elapsed;" in html
+           and "cancel.setAttribute('aria-disabled',cancellable?'false':'true');" in html
+           and "cancel.dataset.editorActionCancellable=cancellable?'1':'0';" in html
+           and "cancelReason:action.cancelReason||''" in html
+           and "editorLongActions: safeCall(\"editorLongActionHealthSnapshot\")" in html
+           and "payload.editorLongActionState=editorLongActions.state||'';" in html
+           and "payload.editorLongActionHistoryCount=editorLongActions.historyCount||0;" in html
            and "++_editorCodeActionRequest;" in html
            and "closeEditorCodeActions();" in html
            and "return runEditorLongAction('formatting','Format document'" in html
@@ -16978,6 +17790,18 @@ console.log("frontend built-in language fallback behavior ok");
            and "\"durationMs\": duration_ms" in engine_tools_source
            and "\"stdoutTruncated\"" in engine_tools_source
            and "\"stderrTruncated\"" in engine_tools_source)
+    _check("workspace health exports terminal sync and autosync state",
+           "sync = typeof window.terminalWorkspaceSyncSnapshot === \"function\"" in html
+           and "autosync = typeof window.aiEditorWorkspaceAutosyncSnapshot === \"function\"" in html
+           and "workspaceSyncProtected: Number(sync.syncProtected || 0) || 0" in html
+           and "workspaceAutosyncSource: autosync.workspaceAutosyncSource || autosync.activeTabHintSource || \"\"" in html
+           and "document.body.dataset.workspaceHealthSyncProtected = String(snap.workspaceSyncProtected);" in html
+           and "workspaceAutosyncSource: document.body ? document.body.dataset.workspaceAutosyncSource || \"\" : \"\"" in html
+           and "workspaceAutosyncError: document.body ? document.body.dataset.workspaceAutosyncError || \"\" : \"\"" in html
+           and "payload.workspaceSyncProtected=workspace.workspaceSyncProtected||0;" in html
+           and "payload.workspaceAutosyncSource=workspace.workspaceAutosyncSource||'';" in html
+           and "payload.workspaceTerminalProfile=workspace.terminalProfile||'';" in html
+           and "payload.workspaceTerminalRunning=workspace.terminalRunning===true;" in html)
     _check("node command registration metadata distinguishes text editor commands",
            "kind: 'textEditorCommand'" in node_ext_host_source
            and "editorRequired: true" in node_ext_host_source
@@ -30971,6 +31795,33 @@ process.stdin.resume();
                             self.node_host.send_quick_input_action(
                                 payload.get("id"), "hide", {})
 
+                def show_message(self, level, message, metadata=None):
+                    data = dict(metadata or {})
+                    data.update({
+                        "level": str(level or "info"),
+                        "message": str(message or ""),
+                    })
+                    emitted_events.append({
+                        "event": "show_message",
+                        "data": data,
+                    })
+                    request_id = str(data.get("requestId") or "")
+                    items = data.get("items") if isinstance(
+                        data.get("items"), list) else []
+                    if request_id and self.node_host is not None:
+                        if items:
+                            item = items[0] if isinstance(items[0], dict) else {
+                                "title": str(items[0])}
+                            self.node_host.send_window_message_response(
+                                request_id, {
+                                    "index": 0,
+                                    "handle": item.get("handle", 0),
+                                    "title": item.get("title", ""),
+                                })
+                        else:
+                            self.node_host.send_window_message_response(
+                                request_id, {"cancelled": True})
+
                 def show_window_dialog(self, kind, options):
                     self.window_dialogs.append({
                         "kind": str(kind or ""),
@@ -38345,9 +39196,18 @@ def test_agents() -> None:
     print("── Agents ──")
     import tempfile, shutil
     from ai_editor.agents import AgentDef, AgentRegistry
+    from ai_editor.app import AIEditorAPI
 
     tmpdir = tempfile.mkdtemp(prefix="sao_agent_test_")
     try:
+        startup_api = AIEditorAPI()
+        _check("active agent is safe before engine init",
+               startup_api.get_active_agent() == {"agent_id": ""})
+        startup_mode = startup_api.get_mode()
+        _check("mode permissions are safe before engine init",
+               startup_mode.get("mode") == "agent"
+               and isinstance(startup_mode.get("permissions"), dict))
+
         reg = AgentRegistry()
         builtins = reg.list_all()
         _check(f"builtin agents: {len(builtins)}", len(builtins) >= 5)
@@ -38550,6 +39410,36 @@ def test_workflows() -> None:
                    "prompts": cancel_llm.prompts,
                    "events": cancel_events,
                }, ensure_ascii=False))
+
+        retry_llm = _FakeWorkflowLlm()
+        retry_engine = WorkflowEngine(retry_llm, _FakeAgents())
+        retry_events = []
+        retry_result = retry_engine.run(
+            chained, "seed",
+            lambda i, total, step: retry_events.append(("start", i)),
+            lambda i, total, step, output, error: retry_events.append(
+                ("end", i, output, error)),
+            run_id="wf-retry-selftest",
+            start_index=1,
+            seed_context={"first": "recovered-output"})
+        _check("workflow engine retry skips steps before start_index",
+               retry_events == [("start", 1), ("end", 1, "out-1", None)]
+               and retry_llm.prompts == ["Second recovered-output"],
+               json.dumps({
+                   "events": retry_events,
+                   "prompts": retry_llm.prompts,
+               }, ensure_ascii=False))
+        _check("workflow engine retry result only contains retried steps",
+               len(retry_result.get("steps", [])) == 1
+               and retry_result.get("steps", [{}])[0].get("step") == 1
+               and retry_result.get("final_output") == "out-1"
+               and retry_result.get("workflowRunId") == "wf-retry-selftest")
+
+        oob_result = retry_engine.run(
+            chained, "seed", run_id="wf-retry-oob", start_index=5)
+        _check("workflow engine retry past last step runs nothing",
+               oob_result.get("steps") == []
+               and oob_result.get("final_output") == "")
 
     finally:
         shutil.rmtree(tmpdir, ignore_errors=True)

@@ -1322,6 +1322,50 @@ class _WebviewResourceServer:
             url += f"#{parsed.fragment}"
         return url
 
+    def probe_resource_url(self, view_id: str, original_url: str) -> Dict[str, Any]:
+        key = str(view_id or "").strip()
+        source = str(original_url or "")
+        result: Dict[str, Any] = {
+            "ok": False,
+            "viewId": key,
+            "source": source,
+            "endpointUrl": "",
+            "path": "",
+            "mime": "",
+            "bytes": 0,
+            "reason": "",
+        }
+        if not key or not source:
+            result["reason"] = "missing-view-or-source"
+            return result
+        endpoint_url = self.resource_url(key, source)
+        result["endpointUrl"] = endpoint_url
+        parsed = urlsplit(endpoint_url)
+        if parsed.scheme not in {"http", "https"}:
+            result["reason"] = "not-endpoint-url"
+            return result
+        raw_path = parsed.path
+        if parsed.query:
+            raw_path += f"?{parsed.query}"
+        resolved = self.resolve_request(raw_path)
+        if not resolved:
+            result["reason"] = "unresolved"
+            return result
+        fs_path, mime = resolved
+        try:
+            size = os.path.getsize(fs_path)
+        except OSError:
+            result["reason"] = "stat-failed"
+            return result
+        result.update({
+            "ok": True,
+            "path": fs_path,
+            "mime": mime,
+            "bytes": int(size),
+            "reason": "resolved",
+        })
+        return result
+
     def resolve_request(self, raw_path: str) -> Optional[tuple[str, str]]:
         parsed = urlsplit(str(raw_path or ""))
         parts = parsed.path.split("/")
@@ -1582,8 +1626,16 @@ class _AIEditorUIBridge:
         self._api._eval_js(script)
 
     # -- Messages / toasts --
-    def show_message(self, level: str, message: str) -> None:
-        self._api._emit("show_message", {"level": level, "message": message})
+    def show_message(
+            self, level: str, message: str,
+            metadata: Optional[Dict[str, Any]] = None) -> None:
+        payload = {
+            "level": level,
+            "message": message,
+            **(metadata if isinstance(metadata, dict) else {}),
+        }
+        self._api._record_extension_dynamic_ui("message", payload)
+        self._api._emit("show_message", payload)
 
     def confirm_tool_invocation(self, tool_name: str,
                                 confirmation: Dict[str, Any],
@@ -1614,7 +1666,9 @@ class _AIEditorUIBridge:
 
     def quick_input_changed(self, payload: Dict[str, Any]) -> None:
         """Forward extension-created QuickInput state to the frontend."""
-        self._api._emit("quick_input", dict(payload or {}))
+        event = dict(payload or {})
+        self._api._record_extension_dynamic_ui("quickInput", event)
+        self._api._emit("quick_input", event)
 
     def read_clipboard_text(self) -> str:
         try:
@@ -2112,9 +2166,22 @@ class _AIEditorUIBridge:
 
     def show_window_dialog(self, kind: str,
                            options: Dict[str, Any]) -> Dict[str, Any]:
+        dialog_request = {
+            "kind": str(kind or ""),
+            "options": options if isinstance(options, dict) else {},
+            "state": "pending",
+        }
+        dialog_id = self._api._record_extension_dynamic_ui(
+            "windowDialog", dialog_request)
         window = getattr(self._api, "_window", None)
         dialog = getattr(window, "create_file_dialog", None)
         if not callable(dialog):
+            self._api._record_extension_dynamic_ui("windowDialog", {
+                **dialog_request,
+                "id": dialog_id,
+                "state": "cancelled",
+                "cancelled": True,
+            })
             return {"cancelled": True}
         opts = options if isinstance(options, dict) else {}
         default_path = str(opts.get("defaultPath") or "")
@@ -2136,11 +2203,24 @@ class _AIEditorUIBridge:
                     file_types=self._dialog_file_types(opts.get("filters")),
                 )
                 if not result:
+                    self._api._record_extension_dynamic_ui("windowDialog", {
+                        **dialog_request,
+                        "id": dialog_id,
+                        "state": "cancelled",
+                        "cancelled": True,
+                    })
                     return {"cancelled": True}
                 path_value = (
                     result if isinstance(result, str)
                     else result[0] if isinstance(result, (list, tuple))
                     else str(result))
+                self._api._record_extension_dynamic_ui("windowDialog", {
+                    **dialog_request,
+                    "id": dialog_id,
+                    "state": "picked",
+                    "path": path_value,
+                    "pathCount": 1,
+                })
                 return {"path": path_value}
 
             dialog_type = 10  # OPEN_DIALOG
@@ -2157,12 +2237,33 @@ class _AIEditorUIBridge:
                 file_types=self._dialog_file_types(opts.get("filters")),
             )
             if not result:
+                self._api._record_extension_dynamic_ui("windowDialog", {
+                    **dialog_request,
+                    "id": dialog_id,
+                    "state": "cancelled",
+                    "cancelled": True,
+                })
                 return {"cancelled": True}
             paths = (
                 list(result) if isinstance(result, (list, tuple))
                 else [str(result)])
-            return {"paths": [str(item) for item in paths if str(item)]}
+            picked_paths = [str(item) for item in paths if str(item)]
+            self._api._record_extension_dynamic_ui("windowDialog", {
+                **dialog_request,
+                "id": dialog_id,
+                "state": "picked",
+                "paths": picked_paths,
+                "pathCount": len(picked_paths),
+            })
+            return {"paths": picked_paths}
         except Exception as exc:
+            self._api._record_extension_dynamic_ui("windowDialog", {
+                **dialog_request,
+                "id": dialog_id,
+                "state": "error",
+                "error": str(exc),
+                "cancelled": True,
+            })
             return {"error": str(exc), "cancelled": True}
 
 
@@ -2247,6 +2348,92 @@ class AIEditorAPI:
         self._language_provider_request_lock = threading.Lock()
         self._active_language_provider_requests: Dict[str, str] = {}
         self._assistant_response_part_actions: List[Dict[str, Any]] = []
+        self._pending_confirm: Dict[str, threading.Event] = {}
+        self._confirm_results: Dict[str, bool] = {}
+        self._confirmation_timeout = 30.0
+        self._workflow_cancel_lock = threading.Lock()
+        self._workflow_cancel_events: Dict[str, threading.Event] = {}
+        self._extension_dynamic_ui_lock = threading.Lock()
+        self._extension_dynamic_ui_state: Dict[str, Any] = {
+            "quickInputs": {},
+            "messages": [],
+            "windowDialogs": [],
+            "seq": 0,
+        }
+        self._ext_host = None
+        self._node_ext_host = None
+        self._node_tree_disposables: Dict[str, Any] = {}
+        self._node_lm_tool_disposables: Dict[str, Any] = {}
+        self._node_chat_participant_disposables: Dict[str, Any] = {}
+        self._extension_runtime_surface_cache: Dict[str, Tuple[float, Dict[str, Any]]] = {}
+        self._extension_runtime_surface_cache_ttl = 0.35
+        self._extension_webview_panels: Dict[str, Dict[str, Any]] = {}
+        self._extension_status_bar_items: Dict[str, Dict[str, Any]] = {}
+        self._extensions_inited = False
+        self._vscode_ns_ready = threading.Event()
+        self._vscode_ns = None
+        self._agent_registry = None
+        self._wf_registry = None
+        self._wf_engine = None
+        self._active_agent_id: Optional[str] = None
+
+    def _record_extension_dynamic_ui(
+            self, kind: str, payload: Dict[str, Any]) -> str:
+        """Track extension-created transient UI for runtime surface diagnostics."""
+        data = _json_safe(payload if isinstance(payload, dict) else {})
+        now_ms = int(time.time() * 1000)
+        with self._extension_dynamic_ui_lock:
+            state = self._extension_dynamic_ui_state
+            state["seq"] = int(state.get("seq") or 0) + 1
+            seq = int(state["seq"])
+            if kind == "quickInput":
+                input_id = str(data.get("id") or f"quick-input-{seq}")
+                existing = _as_dict(state.get("quickInputs")).get(input_id, {})
+                record = {
+                    **_as_dict(existing),
+                    **data,
+                    "id": input_id,
+                    "updatedAt": now_ms,
+                    "seq": seq,
+                }
+                event = str(data.get("event") or "")
+                if event == "dispose":
+                    record["disposed"] = True
+                    record["visible"] = False
+                state.setdefault("quickInputs", {})[input_id] = record
+                # Keep the most recent transient UI records bounded.
+                items = sorted(
+                    _as_dict(state.get("quickInputs")).items(),
+                    key=lambda item: int(_as_dict(item[1]).get("updatedAt") or 0),
+                    reverse=True)
+                state["quickInputs"] = dict(items[:12])
+                return input_id
+            if kind == "message":
+                msg_id = str(data.get("id") or f"message-{seq}")
+                record = {**data, "id": msg_id, "updatedAt": now_ms, "seq": seq}
+                messages = _as_list(state.get("messages"))
+                messages.append(record)
+                state["messages"] = messages[-12:]
+                return msg_id
+            if kind == "windowDialog":
+                dialogs = _as_list(state.get("windowDialogs"))
+                dialog_id = str(data.get("id") or f"dialog-{seq}")
+                record = {**data, "id": dialog_id, "updatedAt": now_ms, "seq": seq}
+                replaced = False
+                for index, item in enumerate(dialogs):
+                    if str(_as_dict(item).get("id") or "") == dialog_id:
+                        dialogs[index] = {**_as_dict(item), **record}
+                        replaced = True
+                        break
+                if not replaced:
+                    dialogs.append(record)
+                state["windowDialogs"] = dialogs[-12:]
+                return dialog_id
+            return str(data.get("id") or f"dynamic-ui-{seq}")
+
+    def _extension_dynamic_ui_snapshot(self) -> Dict[str, Any]:
+        with self._extension_dynamic_ui_lock:
+            return _json_safe(self._extension_dynamic_ui_state)
 
     def _language_provider_content_budget(
             self, kind: str, content: str, payload: Dict[str, Any]) -> Dict[str, Any]:
@@ -2491,6 +2678,12 @@ class AIEditorAPI:
             "resourceEndpointBase": endpoint_base,
             "resourceMapReady": False,
             "resourceEndpointReady": bool(endpoint_base),
+            "resourceEndpointSmokeReady": False,
+            "resourceEndpointSmokeCount": 0,
+            "resourceEndpointSmokeBytes": 0,
+            "resourceEndpointSmokeMime": "",
+            "resourceEndpointSmokeReason": "",
+            "resourceEndpointSmokeUrl": "",
             "localResourceRootCount": root_count,
             "asWebviewUriSupported": bool(root_count or endpoint_base),
             "asWebviewUriReady": bool(endpoint_base),
@@ -2524,6 +2717,25 @@ class AIEditorAPI:
                 evidence["resourceEndpointRewriteCount"] = int(
                     evidence.get("resourceEndpointRewriteCount") or 0) + 1
                 evidence["resourceEndpointReady"] = True
+
+        def note_endpoint_probe(original: str, rewritten: str) -> None:
+            server = self.__class__._webview_resource_server
+            evidence["resourceEndpointSmokeCount"] = int(
+                evidence.get("resourceEndpointSmokeCount") or 0) + 1
+            evidence["resourceEndpointSmokeUrl"] = str(rewritten or "")
+            if server is None or not view_key:
+                evidence["resourceEndpointSmokeReason"] = "server-unavailable"
+                return
+            probe = server.probe_resource_url(view_key, original)
+            evidence["resourceEndpointSmokeReason"] = str(
+                probe.get("reason") or "")
+            evidence["resourceEndpointSmokeReady"] = bool(
+                evidence.get("resourceEndpointSmokeReady") or probe.get("ok"))
+            if probe.get("ok"):
+                evidence["resourceEndpointSmokeBytes"] = int(
+                    probe.get("bytes") or 0)
+                evidence["resourceEndpointSmokeMime"] = str(
+                    probe.get("mime") or "")
 
         if "webview.local/" not in text and not endpoint_base:
             return text, evidence
@@ -2608,6 +2820,7 @@ class AIEditorAPI:
                 if server is not None:
                     rewritten = server.resource_url(view_key, url)
                     note_rewrite("endpoint", url, rewritten)
+                    note_endpoint_probe(url, rewritten)
                     return rewritten
             data_uri = file_to_data_uri(path)
             if data_uri:
@@ -2619,6 +2832,7 @@ class AIEditorAPI:
                 if server is not None:
                     rewritten = server.resource_url(view_key, url)
                     note_rewrite("endpoint", url, rewritten)
+                    note_endpoint_probe(url, rewritten)
                     return rewritten
             return url
 
@@ -2867,10 +3081,6 @@ class AIEditorAPI:
         # @-mention variable resolver
         self._controller.resolve_variable = self._resolve_variable
 
-        self._pending_confirm: Dict[str, threading.Event] = {}
-        self._confirm_results: Dict[str, bool] = {}
-        self._confirmation_timeout = 30.0
-
         # Load mode from settings
         ai_cfg = _normalize_ai_editor_config(
             self._settings_getter("ai_editor", {}) or {})
@@ -2931,8 +3141,6 @@ class AIEditorAPI:
         self._agent_registry = get_agent_registry()
         self._wf_registry = get_workflow_registry()
         self._wf_engine = WorkflowEngine(self._engine, self._agent_registry)
-        self._workflow_cancel_lock = threading.Lock()
-        self._workflow_cancel_events: Dict[str, threading.Event] = {}
         self._active_agent_id: Optional[str] = None
 
         gui = self._gui_ref or _DummyGui()
@@ -3208,11 +3416,20 @@ class AIEditorAPI:
             "formatting": ["formatting", "rangeFormatting", "onTypeFormatting"],
             "semanticTokens": ["semanticTokens", "semanticTokensRange"],
             "symbols": ["documentSymbol", "workspaceSymbol"],
+            "rename": ["rename"],
             "navigation": [
                 "definition", "typeDefinition", "declaration",
                 "implementation", "references"],
+            "hierarchy": ["callHierarchy", "typeHierarchy"],
+            "pasteDrop": ["documentPaste", "documentDrop"],
+            "linkedEditing": ["linkedEditing"],
+            "selectionRanges": ["selectionRange"],
             "inline": ["inlineCompletion", "inlayHint", "codeLens"],
-            "links": ["documentLink", "documentColor"],
+            "folding": ["foldingRange"],
+            "links": ["documentLink"],
+            "colors": ["documentColor"],
+            "highlights": ["documentHighlight"],
+            "debugInline": ["evaluatableExpression", "inlineValue"],
         }
         by_kind: Dict[str, Dict[str, Any]] = {}
         for feature, kinds in feature_kinds.items():
@@ -4380,8 +4597,12 @@ class AIEditorAPI:
         return ""
 
     def cancel(self) -> Dict:
-        for call_id in list(self._pending_confirm):
-            evt = self._pending_confirm.pop(call_id, None)
+        pending = getattr(self, "_pending_confirm", None)
+        if not isinstance(pending, dict):
+            pending = {}
+            self._pending_confirm = pending
+        for call_id in list(pending):
+            evt = pending.pop(call_id, None)
             if evt:
                 evt.set()
         self._cancel_active_workflows()
@@ -6982,6 +7203,92 @@ class AIEditorAPI:
         position = _editor_provider_position(pos_value, content)
 
         try:
+            language_host = getattr(self._vscode_ns, "_host", None)
+            language_commands = getattr(language_host, "commands", None)
+            if language_commands is None:
+                language_commands = getattr(self._ext_host, "commands", None)
+
+            def execute_language_command(command_id: str, *args: Any) -> Any:
+                local_methods = {
+                    "vscode.executeCompletionItemProvider": "_execute_completion_item_provider",
+                    "vscode.executeHoverProvider": "_execute_hover_provider",
+                    "vscode.executeSignatureHelpProvider": "_execute_signature_help_provider",
+                    "vscode.executeDefinitionProvider": "_execute_definition_provider",
+                    "_executeTypeDefinitionProvider": "_execute_type_definition_provider",
+                    "vscode.executeTypeDefinitionProvider": "_execute_type_definition_provider",
+                    "_executeDeclarationProvider": "_execute_declaration_provider",
+                    "vscode.executeDeclarationProvider": "_execute_declaration_provider",
+                    "_executeImplementationProvider": "_execute_implementation_provider",
+                    "vscode.executeImplementationProvider": "_execute_implementation_provider",
+                    "vscode.executeReferenceProvider": "_execute_reference_provider",
+                    "_executeDocumentHighlightProvider": "_execute_document_highlight_provider",
+                    "vscode.executeDocumentHighlightProvider": "_execute_document_highlight_provider",
+                    "_executeEvaluatableExpressionProvider": "_execute_evaluatable_expression_provider",
+                    "_executeInlineValueProvider": "_execute_inline_value_provider",
+                    "_executeDocumentRenameProvider": "_execute_rename_provider",
+                    "vscode.executeDocumentRenameProvider": "_execute_rename_provider",
+                    "_executePrepareRename": "_execute_prepare_rename_provider",
+                    "vscode.executePrepareRenameProvider": "_execute_prepare_rename_provider",
+                    "_executeLinkProvider": "_execute_link_provider",
+                    "vscode.executeLinkProvider": "_execute_link_provider",
+                    "_executeInlayHintProvider": "_execute_inlay_hint_provider",
+                    "vscode.executeInlayHintProvider": "_execute_inlay_hint_provider",
+                    "_executeInlineCompletionProvider": "_execute_inline_completion_provider",
+                    "_executeCodeLensProvider": "_execute_code_lens_provider",
+                    "vscode.executeCodeLensProvider": "_execute_code_lens_provider",
+                    "_executeFoldingRangeProvider": "_execute_folding_range_provider",
+                    "vscode.executeFoldingRangeProvider": "_execute_folding_range_provider",
+                    "_executeSelectionRangeProvider": "_execute_selection_range_provider",
+                    "vscode.executeSelectionRangeProvider": "_execute_selection_range_provider",
+                    "_executeLinkedEditingProvider": "_execute_linked_editing_provider",
+                    "_executeDocumentColorProvider": "_execute_document_color_provider",
+                    "vscode.executeDocumentColorProvider": "_execute_document_color_provider",
+                    "_executeColorPresentationProvider": "_execute_color_presentation_provider",
+                    "vscode.executeColorPresentationProvider": "_execute_color_presentation_provider",
+                    "_executePrepareCallHierarchy": "_execute_prepare_call_hierarchy_provider",
+                    "vscode.prepareCallHierarchy": "_execute_prepare_call_hierarchy_provider",
+                    "_executeProvideIncomingCalls": "_execute_call_hierarchy_incoming_provider",
+                    "vscode.provideIncomingCalls": "_execute_call_hierarchy_incoming_provider",
+                    "_executeProvideOutgoingCalls": "_execute_call_hierarchy_outgoing_provider",
+                    "vscode.provideOutgoingCalls": "_execute_call_hierarchy_outgoing_provider",
+                    "_executePrepareTypeHierarchy": "_execute_prepare_type_hierarchy_provider",
+                    "vscode.prepareTypeHierarchy": "_execute_prepare_type_hierarchy_provider",
+                    "_executeProvideSupertypes": "_execute_type_hierarchy_supertypes_provider",
+                    "vscode.provideSupertypes": "_execute_type_hierarchy_supertypes_provider",
+                    "_executeProvideSubtypes": "_execute_type_hierarchy_subtypes_provider",
+                    "vscode.provideSubtypes": "_execute_type_hierarchy_subtypes_provider",
+                    "_executeWorkspaceSymbolProvider": "_execute_workspace_symbol_provider",
+                    "vscode.executeWorkspaceSymbolProvider": "_execute_workspace_symbol_provider",
+                    "_resolveWorkspaceSymbolProvider": "_execute_resolve_workspace_symbol_provider",
+                    "_provideDocumentSemanticTokensLegend": "_execute_document_semantic_tokens_legend",
+                    "vscode.provideDocumentSemanticTokensLegend": "_execute_document_semantic_tokens_legend",
+                    "_provideDocumentSemanticTokens": "_execute_document_semantic_tokens_provider",
+                    "vscode.provideDocumentSemanticTokens": "_execute_document_semantic_tokens_provider",
+                    "_provideDocumentSemanticTokensEdits": "_execute_document_semantic_tokens_edits_provider",
+                    "vscode.provideDocumentSemanticTokensEdits": "_execute_document_semantic_tokens_edits_provider",
+                    "_provideDocumentRangeSemanticTokensLegend": "_execute_document_range_semantic_tokens_legend",
+                    "vscode.provideDocumentRangeSemanticTokensLegend": "_execute_document_range_semantic_tokens_legend",
+                    "_provideDocumentRangeSemanticTokens": "_execute_document_range_semantic_tokens_provider",
+                    "vscode.provideDocumentRangeSemanticTokens": "_execute_document_range_semantic_tokens_provider",
+                    "vscode.executeDocumentSymbolProvider": "_execute_document_symbol_provider",
+                    "vscode.executeCodeActionProvider": "_execute_code_action_provider",
+                    "vscode.executeFormatDocumentProvider": "_execute_format_document_provider",
+                    "_executeFormattingProviderList": "_execute_formatting_provider_list",
+                    "_executeFormatRangeProvider": "_execute_format_range_provider",
+                    "vscode.executeFormatRangeProvider": "_execute_format_range_provider",
+                    "_executeFormatOnTypeProvider": "_execute_format_on_type_provider",
+                    "vscode.executeFormatOnTypeProvider": "_execute_format_on_type_provider",
+                    "_prepareDocumentPasteProvider": "_execute_prepare_document_paste_provider",
+                    "_executeDocumentPasteEditProvider": "_execute_document_paste_edit_provider",
+                    "_executeDocumentDropEditProvider": "_execute_document_drop_edit_provider",
+                }
+                method_name = local_methods.get(command_id)
+                method = getattr(self._vscode_ns, method_name, None) if method_name else None
+                if callable(method):
+                    return method(*args)
+                if language_commands is None:
+                    raise RuntimeError(f"Language command unavailable: {command_id}")
+                return language_commands.execute(command_id, *args)
             if kind == "providerMetadata":
                 target_kind = str(payload.get("providerKind") or "").strip()
                 matched_only = payload.get("matchedOnly") is True or (
@@ -7190,7 +7497,7 @@ class AIEditorAPI:
                     "triggerKind": payload.get("triggerKind"),
                     "triggerCharacter": payload.get("triggerCharacter"),
                 }
-                result = self._ext_host.commands.execute(
+                result = execute_language_command(
                     "vscode.executeCompletionItemProvider",
                     document.uri,
                     position,
@@ -7219,7 +7526,7 @@ class AIEditorAPI:
                     "snippetCount": len(snippet_items),
                 }
             if kind == "hover":
-                result = self._ext_host.commands.execute(
+                result = execute_language_command(
                     "vscode.executeHoverProvider", document.uri, position)
                 value = _json_ready_language_value(result)
                 return {
@@ -7231,7 +7538,7 @@ class AIEditorAPI:
                         [] if value is None else [value]),
                 }
             if kind == "signatureHelp":
-                result = self._ext_host.commands.execute(
+                result = execute_language_command(
                     "vscode.executeSignatureHelpProvider",
                     document.uri,
                     position,
@@ -7248,7 +7555,7 @@ class AIEditorAPI:
                     "signatureHelp": _json_ready_language_value(result),
                 }
             if kind == "definition":
-                result = self._ext_host.commands.execute(
+                result = execute_language_command(
                     "vscode.executeDefinitionProvider", document.uri, position)
                 value = _json_ready_language_value(result)
                 return {
@@ -7260,7 +7567,7 @@ class AIEditorAPI:
                         [] if value is None else [value]),
                 }
             if kind == "typeDefinition":
-                result = self._ext_host.commands.execute(
+                result = execute_language_command(
                     "vscode.executeTypeDefinitionProvider",
                     document.uri, position)
                 value = _json_ready_language_value(result)
@@ -7273,7 +7580,7 @@ class AIEditorAPI:
                         [] if value is None else [value]),
                 }
             if kind == "declaration":
-                result = self._ext_host.commands.execute(
+                result = execute_language_command(
                     "vscode.executeDeclarationProvider",
                     document.uri, position)
                 value = _json_ready_language_value(result)
@@ -7286,7 +7593,7 @@ class AIEditorAPI:
                         [] if value is None else [value]),
                 }
             if kind == "implementation":
-                result = self._ext_host.commands.execute(
+                result = execute_language_command(
                     "vscode.executeImplementationProvider",
                     document.uri, position)
                 value = _json_ready_language_value(result)
@@ -7303,7 +7610,7 @@ class AIEditorAPI:
                     "includeDeclaration": bool(
                         payload.get("includeDeclaration", True)),
                 }
-                result = self._ext_host.commands.execute(
+                result = execute_language_command(
                     "vscode.executeReferenceProvider",
                     document.uri,
                     position,
@@ -7319,7 +7626,7 @@ class AIEditorAPI:
                         [] if value is None else [value]),
                 }
             if kind == "documentHighlight":
-                result = self._ext_host.commands.execute(
+                result = execute_language_command(
                     "vscode.executeDocumentHighlightProvider",
                     document.uri,
                     position,
@@ -7334,7 +7641,7 @@ class AIEditorAPI:
                         [] if value is None else [value]),
                 }
             if kind == "evaluatableExpression":
-                result = self._ext_host.commands.execute(
+                result = execute_language_command(
                     "_executeEvaluatableExpressionProvider",
                     document.uri,
                     position,
@@ -7372,7 +7679,7 @@ class AIEditorAPI:
                     "frameId": frame_id,
                     "stoppedLocation": stopped_location,
                 }
-                result = self._ext_host.commands.execute(
+                result = execute_language_command(
                     "_executeInlineValueProvider",
                     document.uri,
                     view_range,
@@ -7388,7 +7695,7 @@ class AIEditorAPI:
                         [] if value is None else [value]),
                 }
             if kind == "prepareRename":
-                result = self._ext_host.commands.execute(
+                result = execute_language_command(
                     "_executePrepareRename", document.uri, position)
                 return {
                     "ok": True,
@@ -7401,7 +7708,7 @@ class AIEditorAPI:
                 new_name = str(payload.get("newName") or "")
                 if not new_name:
                     return {"error": "New name is required"}
-                result = self._ext_host.commands.execute(
+                result = execute_language_command(
                     "_executeDocumentRenameProvider",
                     document.uri,
                     position,
@@ -7422,7 +7729,7 @@ class AIEditorAPI:
                         else payload.get("resolveCount") or 0)
                 except Exception:
                     link_resolve_count = 0
-                result = self._ext_host.commands.execute(
+                result = execute_language_command(
                     "vscode.executeLinkProvider",
                     document.uri,
                     max(0, link_resolve_count),
@@ -7446,7 +7753,7 @@ class AIEditorAPI:
                         else payload.get("resolveCount") or 0)
                 except Exception:
                     hint_resolve_count = 0
-                result = self._ext_host.commands.execute(
+                result = execute_language_command(
                     "vscode.executeInlayHintProvider",
                     document.uri,
                     hint_range,
@@ -7477,7 +7784,7 @@ class AIEditorAPI:
                         if payload.get("selectedCompletionInfo") is not None
                         else context.get("selectedCompletionInfo")),
                 }
-                result = self._ext_host.commands.execute(
+                result = execute_language_command(
                     "_executeInlineCompletionProvider",
                     document.uri,
                     position,
@@ -7500,7 +7807,7 @@ class AIEditorAPI:
                         else payload.get("resolveCount") or 0)
                 except Exception:
                     resolve_count = 0
-                result = self._ext_host.commands.execute(
+                result = execute_language_command(
                     "vscode.executeCodeLensProvider",
                     document.uri,
                     max(0, resolve_count),
@@ -7515,7 +7822,7 @@ class AIEditorAPI:
                         [] if value is None else [value]),
                 }
             if kind == "foldingRange":
-                result = self._ext_host.commands.execute(
+                result = execute_language_command(
                     "vscode.executeFoldingRangeProvider",
                     document.uri,
                 )
@@ -7537,7 +7844,7 @@ class AIEditorAPI:
                     ]
                 else:
                     selection_positions = [position]
-                result = self._ext_host.commands.execute(
+                result = execute_language_command(
                     "vscode.executeSelectionRangeProvider",
                     document.uri,
                     selection_positions,
@@ -7552,7 +7859,7 @@ class AIEditorAPI:
                         [] if value is None else [value]),
                 }
             if kind == "linkedEditing":
-                result = self._ext_host.commands.execute(
+                result = execute_language_command(
                     "_executeLinkedEditingProvider",
                     document.uri,
                     position,
@@ -7571,7 +7878,7 @@ class AIEditorAPI:
                     "ranges": ranges,
                 }
             if kind == "prepareCallHierarchy":
-                result = self._ext_host.commands.execute(
+                result = execute_language_command(
                     "vscode.prepareCallHierarchy", document.uri, position)
                 value = _json_ready_language_value(result)
                 return {
@@ -7583,7 +7890,7 @@ class AIEditorAPI:
                         [] if value is None else [value]),
                 }
             if kind == "callHierarchyIncoming":
-                result = self._ext_host.commands.execute(
+                result = execute_language_command(
                     "vscode.provideIncomingCalls",
                     payload.get("item") or payload.get("callHierarchyItem"),
                 )
@@ -7597,7 +7904,7 @@ class AIEditorAPI:
                         [] if value is None else [value]),
                 }
             if kind == "callHierarchyOutgoing":
-                result = self._ext_host.commands.execute(
+                result = execute_language_command(
                     "vscode.provideOutgoingCalls",
                     payload.get("item") or payload.get("callHierarchyItem"),
                 )
@@ -7611,7 +7918,7 @@ class AIEditorAPI:
                         [] if value is None else [value]),
                 }
             if kind == "prepareTypeHierarchy":
-                result = self._ext_host.commands.execute(
+                result = execute_language_command(
                     "vscode.prepareTypeHierarchy", document.uri, position)
                 value = _json_ready_language_value(result)
                 return {
@@ -7623,7 +7930,7 @@ class AIEditorAPI:
                         [] if value is None else [value]),
                 }
             if kind == "typeHierarchySupertypes":
-                result = self._ext_host.commands.execute(
+                result = execute_language_command(
                     "vscode.provideSupertypes",
                     payload.get("item") or payload.get("typeHierarchyItem"),
                 )
@@ -7637,7 +7944,7 @@ class AIEditorAPI:
                         [] if value is None else [value]),
                 }
             if kind == "typeHierarchySubtypes":
-                result = self._ext_host.commands.execute(
+                result = execute_language_command(
                     "vscode.provideSubtypes",
                     payload.get("item") or payload.get("typeHierarchyItem"),
                 )
@@ -7651,7 +7958,7 @@ class AIEditorAPI:
                         [] if value is None else [value]),
                 }
             if kind == "documentColor":
-                result = self._ext_host.commands.execute(
+                result = execute_language_command(
                     "vscode.executeDocumentColorProvider",
                     document.uri,
                 )
@@ -7667,7 +7974,7 @@ class AIEditorAPI:
             if kind == "colorPresentation":
                 color_range = _editor_provider_range(
                     payload.get("range"), content)
-                result = self._ext_host.commands.execute(
+                result = execute_language_command(
                     "vscode.executeColorPresentationProvider",
                     payload.get("color") or {},
                     {"uri": document.uri, "range": color_range},
@@ -7682,11 +7989,11 @@ class AIEditorAPI:
                         [] if value is None else [value]),
                 }
             if kind == "semanticTokens":
-                legend = self._ext_host.commands.execute(
+                legend = execute_language_command(
                     "vscode.provideDocumentSemanticTokensLegend",
                     document.uri,
                 )
-                result = self._ext_host.commands.execute(
+                result = execute_language_command(
                     "vscode.provideDocumentSemanticTokens",
                     document.uri,
                 )
@@ -7709,11 +8016,11 @@ class AIEditorAPI:
                     payload.get("previousResultId")
                     if payload.get("previousResultId") is not None
                     else payload.get("previous_result_id") or "")
-                legend = self._ext_host.commands.execute(
+                legend = execute_language_command(
                     "vscode.provideDocumentSemanticTokensLegend",
                     document.uri,
                 )
-                result = self._ext_host.commands.execute(
+                result = execute_language_command(
                     "vscode.provideDocumentSemanticTokensEdits",
                     document.uri,
                     previous_result_id,
@@ -7738,11 +8045,11 @@ class AIEditorAPI:
             if kind == "semanticTokensRange":
                 token_range = _editor_provider_range(
                     payload.get("range"), content)
-                legend = self._ext_host.commands.execute(
+                legend = execute_language_command(
                     "vscode.provideDocumentRangeSemanticTokensLegend",
                     document.uri,
                 )
-                result = self._ext_host.commands.execute(
+                result = execute_language_command(
                     "vscode.provideDocumentRangeSemanticTokens",
                     document.uri,
                     token_range,
@@ -7762,7 +8069,7 @@ class AIEditorAPI:
                     "tokens": value,
                 }
             if kind == "documentSymbol":
-                result = self._ext_host.commands.execute(
+                result = execute_language_command(
                     "vscode.executeDocumentSymbolProvider", document.uri)
                 value = _json_ready_language_value(result)
                 return {
@@ -7777,7 +8084,7 @@ class AIEditorAPI:
                 query = str(payload.get("query")
                             if payload.get("query") is not None
                             else payload.get("search") or "")
-                result = self._ext_host.commands.execute(
+                result = execute_language_command(
                     "vscode.executeWorkspaceSymbolProvider", query)
                 value = _json_ready_language_value(result)
                 return {
@@ -7789,7 +8096,7 @@ class AIEditorAPI:
                         [] if value is None else [value]),
                 }
             if kind == "resolveWorkspaceSymbol":
-                result = self._ext_host.commands.execute(
+                result = execute_language_command(
                     "_resolveWorkspaceSymbolProvider",
                     payload.get("symbol") or {},
                 )
@@ -7810,7 +8117,7 @@ class AIEditorAPI:
                         else payload.get("resolveCount") or 0)
                 except Exception:
                     item_resolve_count = 0
-                result = self._ext_host.commands.execute(
+                result = execute_language_command(
                     "vscode.executeCodeActionProvider",
                     document.uri,
                     action_range,
@@ -7852,7 +8159,7 @@ class AIEditorAPI:
                     if text_value is not None:
                         data_transfer = {"text/plain": str(text_value)}
                 if kind == "prepareDocumentPaste":
-                    result = self._ext_host.commands.execute(
+                    result = execute_language_command(
                         "_prepareDocumentPasteProvider",
                         document.uri,
                         paste_ranges,
@@ -7880,7 +8187,7 @@ class AIEditorAPI:
                         else payload.get("resolveCount") or 0)
                 except Exception:
                     resolve_count = 0
-                result = self._ext_host.commands.execute(
+                result = execute_language_command(
                     "_executeDocumentPasteEditProvider",
                     document.uri,
                     paste_ranges,
@@ -7916,7 +8223,7 @@ class AIEditorAPI:
                         else payload.get("resolveCount") or 0)
                 except Exception:
                     resolve_count = 0
-                result = self._ext_host.commands.execute(
+                result = execute_language_command(
                     "_executeDocumentDropEditProvider",
                     document.uri,
                     position,
@@ -7933,7 +8240,7 @@ class AIEditorAPI:
                         [] if value is None else [value]),
                 }
             if kind == "formattingProviders":
-                result = self._ext_host.commands.execute(
+                result = execute_language_command(
                     "_executeFormattingProviderList", document.uri)
                 value = _json_ready_language_value(result)
                 return {
@@ -7955,7 +8262,7 @@ class AIEditorAPI:
             if kind == "rangeFormatting":
                 format_range = _editor_provider_range(
                     payload.get("range"), content)
-                result = self._ext_host.commands.execute(
+                result = execute_language_command(
                     "vscode.executeFormatRangeProvider",
                     document.uri,
                     format_range,
@@ -7979,7 +8286,7 @@ class AIEditorAPI:
                 )
                 if trigger is None:
                     trigger = payload.get("character")
-                result = self._ext_host.commands.execute(
+                result = execute_language_command(
                     "vscode.executeFormatOnTypeProvider",
                     document.uri,
                     position,
@@ -7995,7 +8302,7 @@ class AIEditorAPI:
                     "edits": value if isinstance(value, list) else (
                         [] if value is None else [value]),
                 }
-            result = self._ext_host.commands.execute(
+            result = execute_language_command(
                 "vscode.executeFormatDocumentProvider",
                 document.uri,
                 options,
@@ -9189,7 +9496,7 @@ class AIEditorAPI:
         return {"ok": True}
 
     def get_active_agent(self) -> Dict:
-        return {"agent_id": self._active_agent_id or ""}
+        return {"agent_id": getattr(self, "_active_agent_id", None) or ""}
 
     def _set_active_agent(self, agent_id: str) -> Dict:
         agent = self._agent_registry.get(agent_id)
@@ -9335,17 +9642,11 @@ class AIEditorAPI:
                 payload.setdefault("inputPreview", metadata.get("inputPreview"))
         return payload
 
-    def run_workflow(self, wf_id: str, input_text: str,
-                     run_id: str = "",
-                     metadata: Optional[Dict] = None) -> Dict:
-        """Run a workflow from the UI. Executes in the calling thread."""
-        self._ensure_engine()
-        wf = self._wf_registry.get(wf_id)
-        if not wf:
-            return {"error": f"Workflow not found: {wf_id}"}
-        run_id = str(run_id or "").strip()
-        cancel_event = self._workflow_cancel_event(run_id)
-        run_started_at = int(time.time() * 1000)
+    def _workflow_progress_callbacks(self, wf: Any, run_id: str,
+                                     run_started_at: int) -> tuple:
+        """Build the on_step_start/on_step_end callbacks shared by
+        run_workflow and retry_workflow_step so both emit identical
+        ``workflow_step`` events."""
         step_started_at: Dict[int, int] = {}
 
         def _on_start(i, total, step):
@@ -9376,12 +9677,70 @@ class AIEditorAPI:
                 "workflowStartedAt": run_started_at,
                 "elapsedMs": max(0, ended_at - run_started_at)})
 
+        return _on_start, _on_end
+
+    def run_workflow(self, wf_id: str, input_text: str,
+                     run_id: str = "",
+                     metadata: Optional[Dict] = None) -> Dict:
+        """Run a workflow from the UI. Executes in the calling thread."""
+        self._ensure_engine()
+        wf = self._wf_registry.get(wf_id)
+        if not wf:
+            return {"error": f"Workflow not found: {wf_id}"}
+        run_id = str(run_id or "").strip()
+        cancel_event = self._workflow_cancel_event(run_id)
+        run_started_at = int(time.time() * 1000)
+        _on_start, _on_end = self._workflow_progress_callbacks(
+            wf, run_id, run_started_at)
+
         try:
             result = self._wf_engine.run(
                 wf, input_text, _on_start, _on_end, run_id,
                 cancel_requested=(
                     cancel_event.is_set if cancel_event is not None else None))
             return self._workflow_result_payload(wf, result, input_text, metadata)
+        finally:
+            self._forget_workflow_cancel_event(run_id)
+
+    def retry_workflow_step(self, wf_id: str, input_text: str,
+                            step_index: int,
+                            context: Optional[Dict] = None,
+                            run_id: str = "",
+                            metadata: Optional[Dict] = None) -> Dict:
+        """Re-run a workflow starting at ``step_index``, reusing the
+        previously computed ``output_var`` values in ``context`` so
+        ``{{var}}`` interpolation for later steps still resolves. Steps
+        before ``step_index`` are not re-executed."""
+        self._ensure_engine()
+        wf = self._wf_registry.get(wf_id)
+        if not wf:
+            return {"error": f"Workflow not found: {wf_id}"}
+        try:
+            step_index = int(step_index)
+        except (TypeError, ValueError):
+            return {"error": "Invalid step index"}
+        if step_index < 0 or step_index >= len(wf.steps):
+            return {"error": f"Step index out of range: {step_index}"}
+        seed_context = {
+            str(k): str(v) for k, v in (context or {}).items()
+            if isinstance(context, dict) and k != "input"
+        }
+        run_id = str(run_id or "").strip()
+        cancel_event = self._workflow_cancel_event(run_id)
+        run_started_at = int(time.time() * 1000)
+        _on_start, _on_end = self._workflow_progress_callbacks(
+            wf, run_id, run_started_at)
+
+        try:
+            result = self._wf_engine.run(
+                wf, input_text, _on_start, _on_end, run_id,
+                cancel_requested=(
+                    cancel_event.is_set if cancel_event is not None else None),
+                start_index=step_index, seed_context=seed_context)
+            payload = self._workflow_result_payload(
+                wf, result, input_text, metadata)
+            payload["workflowRetryFromStep"] = step_index
+            return payload
         finally:
             self._forget_workflow_cancel_event(run_id)
 
@@ -10659,15 +11018,23 @@ class AIEditorAPI:
 
     def _shutdown_node_extension_host(self) -> None:
         """Stop the Node extension host if running."""
-        for disposable in list(self._node_tree_disposables.values()):
+        tree_disposables = getattr(self, "_node_tree_disposables", {})
+        if not isinstance(tree_disposables, dict):
+            tree_disposables = {}
+            self._node_tree_disposables = tree_disposables
+        for disposable in list(tree_disposables.values()):
             try:
                 dispose = getattr(disposable, "dispose", None)
                 if callable(dispose):
                     dispose()
             except Exception:
                 pass
-        self._node_tree_disposables.clear()
-        for record in list(self._node_lm_tool_disposables.values()):
+        tree_disposables.clear()
+        lm_tool_disposables = getattr(self, "_node_lm_tool_disposables", {})
+        if not isinstance(lm_tool_disposables, dict):
+            lm_tool_disposables = {}
+            self._node_lm_tool_disposables = lm_tool_disposables
+        for record in list(lm_tool_disposables.values()):
             try:
                 disposable = (
                     record.get("disposable")
@@ -10677,9 +11044,15 @@ class AIEditorAPI:
                     dispose()
             except Exception:
                 pass
-        self._node_lm_tool_disposables.clear()
+        lm_tool_disposables.clear()
+        chat_participant_disposables = getattr(
+            self, "_node_chat_participant_disposables", {})
+        if not isinstance(chat_participant_disposables, dict):
+            chat_participant_disposables = {}
+            self._node_chat_participant_disposables = (
+                chat_participant_disposables)
         for participant_id, disposable in list(
-                self._node_chat_participant_disposables.items()):
+                chat_participant_disposables.items()):
             try:
                 dispose = getattr(disposable, "dispose", None)
                 if callable(dispose):
@@ -10689,8 +11062,8 @@ class AIEditorAPI:
             registry = getattr(self, "_provider_registry", None)
             if registry is not None:
                 registry.unregister(f"ext-{participant_id}")
-        self._node_chat_participant_disposables.clear()
-        host = self._node_ext_host
+        chat_participant_disposables.clear()
+        host = getattr(self, "_node_ext_host", None)
         if host is not None:
             try:
                 host.set_lm_model_request_callback(None)
@@ -10699,9 +11072,11 @@ class AIEditorAPI:
                 pass
             host.stop()
             self._node_ext_host = None
-        self._vscode_ns.set_language_provider_request_callback(None)
-        self._vscode_ns.set_file_decoration_request_callback(None)
-        self._vscode_ns.set_file_decoration_change_callback(None)
+        vscode_ns = getattr(self, "_vscode_ns", None)
+        if vscode_ns is not None:
+            vscode_ns.set_language_provider_request_callback(None)
+            vscode_ns.set_file_decoration_request_callback(None)
+            vscode_ns.set_file_decoration_change_callback(None)
 
     def relay_node_webview_message(self, view_id: str, message: Any) -> Dict:
         """Forward a webview message to the Node extension host."""
@@ -10720,6 +11095,16 @@ class AIEditorAPI:
             return {"error": "Node extension host not running"}
         ok = host.send_quick_input_action(input_id, action, payload or {})
         return {"ok": ok, "id": input_id, "action": action}
+
+    def extension_window_message_action(
+            self, request_id: str, payload: Optional[Dict[str, Any]] = None) -> Dict:
+        """Forward a visible extension message action to the Node extension host."""
+        host = self._node_ext_host
+        if host is None or not host.is_running:
+            return {"error": "Node extension host not running"}
+        data = payload if isinstance(payload, dict) else {}
+        ok = host.send_window_message_response(request_id, data)
+        return {"ok": ok, "request_id": request_id}
 
     def _extension_scan_dirs(self) -> List[str]:
         """Return extension directories to scan without activating anything."""
@@ -10945,7 +11330,7 @@ class AIEditorAPI:
         return payload
 
     def _sync_extension_tools(self) -> None:
-        if not hasattr(self, "_ext_host"):
+        if not getattr(self, "_ext_host", None):
             return
         if not getattr(self, "_extensions_inited", False):
             self.init_extensions()
@@ -12991,6 +13376,11 @@ class AIEditorAPI:
                     evidence.get("canRevertStateCount") or 0),
                 "canBackupStateCount": int(
                     evidence.get("canBackupStateCount") or 0),
+                "lifecycleActionCount": int(
+                    evidence.get("lifecycleActionCount") or 0),
+                "resourceStateCount": int(
+                    evidence.get("resourceStateCount") or 0),
+                "activeViewCount": int(evidence.get("activeViewCount") or 0),
                 "supportsMultipleEditorsPerDocument": bool(
                     evidence.get("supportsMultipleEditorsPerDocument")),
                 "resourceUris": evidence.get("resourceUris", []),
@@ -13071,6 +13461,14 @@ class AIEditorAPI:
         can_backup_count = sum(
             1 for state in states
             if state.get("canBackup") or state.get("supportsBackup"))
+        lifecycle_action_count = sum(1 for count in (
+            can_save_count or len(states),
+            can_save_as_count or len(states),
+            can_revert_count or len(states),
+            can_backup_count or len(states),
+            can_undo_count,
+            can_redo_count,
+        ) if count)
         view_ids = [
             str(state.get("viewId") or state.get("view_id") or "").strip()
             for state in states
@@ -13117,6 +13515,9 @@ class AIEditorAPI:
             "canSaveAsStateCount": can_save_as_count,
             "canRevertStateCount": can_revert_count,
             "canBackupStateCount": can_backup_count,
+            "lifecycleActionCount": lifecycle_action_count,
+            "resourceStateCount": len(resource_uris),
+            "activeViewCount": len(view_ids),
             "resourceUris": resource_uris,
             "viewIds": view_ids,
             "supportsMultipleEditorsPerDocument": multiple,
@@ -13126,6 +13527,8 @@ class AIEditorAPI:
                 "hasSaveAs": bool(can_save_as_count or states),
                 "hasRevert": bool(can_revert_count or states),
                 "hasBackup": bool(can_backup_count or states),
+                "hasUndo": bool(can_undo_count),
+                "hasRedo": bool(can_redo_count),
                 **capabilities,
             },
             "readiness": readiness,
@@ -13243,6 +13646,14 @@ class AIEditorAPI:
                 "statusBarProviderCount": len(matching_status_bar),
                 "selectionCount": len(matching_selections),
                 "affinityCount": len(matching_affinities),
+                "serializerReady": bool(evidence.get("serializerReady")),
+                "controllerReady": bool(evidence.get("controllerReady")),
+                "selectedControllerReady": bool(
+                    evidence.get("selectedControllerReady")),
+                "executionReady": bool(evidence.get("executionReady")),
+                "statusBarReady": bool(evidence.get("statusBarReady")),
+                "lifecycleActionCount": int(
+                    evidence.get("lifecycleActionCount") or 0),
                 "controllerIds": evidence.get("controllerIds", []),
                 "selectedControllerIds": evidence.get(
                     "selectedControllerIds", []),
@@ -13314,6 +13725,18 @@ class AIEditorAPI:
             for provider in status_bar_providers
             if str(provider.get("handle") or provider.get("id") or "").strip()
         ][:12]
+        serializer_ready = bool(serializers)
+        controller_ready = bool(controllers)
+        selected_controller_ready = bool(selected_ids)
+        status_bar_ready = bool(status_bar_providers)
+        execution_ready = bool(serializer_ready and controller_ready)
+        lifecycle_action_count = sum(1 for ready in (
+            serializer_ready,
+            controller_ready,
+            selected_controller_ready,
+            status_bar_ready,
+            bool(affinities),
+        ) if ready)
         supported_languages = sorted({
             str(language)
             for controller in controllers
@@ -13365,6 +13788,12 @@ class AIEditorAPI:
             "statusBarProviderCount": len(status_bar_providers),
             "selectionCount": len(selections),
             "affinityCount": len(affinities),
+            "serializerReady": serializer_ready,
+            "controllerReady": controller_ready,
+            "selectedControllerReady": selected_controller_ready,
+            "executionReady": execution_ready,
+            "statusBarReady": status_bar_ready,
+            "lifecycleActionCount": lifecycle_action_count,
             "controllerIds": controller_ids,
             "selectedControllerIds": selected_ids,
             "affinityControllerIds": affinity_ids,
@@ -14279,6 +14708,164 @@ class AIEditorAPI:
             })
         return result
 
+    def _extension_surface_dynamic_ui(self) -> Dict[str, List[Dict[str, Any]]]:
+        """Return transient extension UI surfaces created through vscode.window."""
+        snapshot = self._extension_dynamic_ui_snapshot()
+        quick_inputs: List[Dict[str, Any]] = []
+        for item in _as_dict(snapshot.get("quickInputs")).values():
+            record = _as_dict(item)
+            state = _as_dict(record.get("state"))
+            input_kind = str(record.get("kind") or state.get("kind") or "")
+            items = _as_list(state.get("items"))
+            buttons = _as_list(state.get("buttons"))
+            selected = _as_list(state.get("selectedItems"))
+            active = _as_list(state.get("activeItems"))
+            item_button_count = sum(
+                len(_as_list(_as_dict(entry).get("buttons")))
+                for entry in items if isinstance(entry, dict))
+            validation = state.get("validationMessage")
+            validation_text = (
+                str(validation.get("message") or "")
+                if isinstance(validation, dict)
+                else str(validation or ""))
+            severity = _as_int(
+                state.get("severity")
+                or (validation.get("severity") if isinstance(validation, dict) else 0),
+                0)
+            visible = bool(record.get("visible") or state.get("visible"))
+            disposed = bool(record.get("disposed"))
+            quick_inputs.append({
+                "id": str(record.get("id") or ""),
+                "kind": input_kind or "quickInput",
+                "title": str(state.get("title") or record.get("title") or ""),
+                "placeholder": str(
+                    state.get("placeholder")
+                    or state.get("placeHolder")
+                    or record.get("placeholder")
+                    or ""),
+                "prompt": str(state.get("prompt") or record.get("prompt") or ""),
+                "value": str(state.get("value") or ""),
+                "visible": visible,
+                "disposed": disposed,
+                "busy": bool(state.get("busy")),
+                "enabled": state.get("enabled") is not False,
+                "ignoreFocusOut": bool(state.get("ignoreFocusOut")),
+                "canSelectMany": bool(state.get("canSelectMany")),
+                "matchOnDescription": bool(state.get("matchOnDescription")),
+                "matchOnDetail": bool(state.get("matchOnDetail")),
+                "itemCount": len(items),
+                "selectedCount": len(selected),
+                "activeCount": len(active),
+                "buttonCount": len(buttons),
+                "itemButtonCount": item_button_count,
+                "validationMessage": validation_text,
+                "validationSeverity": severity,
+                "event": str(record.get("event") or ""),
+                "updatedAt": _as_int(record.get("updatedAt"), 0),
+                "runtimeAvailable": True,
+                "source": "node-runtime",
+                "dynamicSource": "runtime-only",
+                "surfaceEvidence": {
+                    "kind": "quickInput",
+                    "inputKind": input_kind or "quickInput",
+                    "visible": visible,
+                    "disposed": disposed,
+                    "itemCount": len(items),
+                    "selectedCount": len(selected),
+                    "activeCount": len(active),
+                    "buttonCount": len(buttons),
+                    "itemButtonCount": item_button_count,
+                    "validationSeverity": severity,
+                    "validationMessage": validation_text,
+                    "readiness": "disposed" if disposed else (
+                        "visible" if visible else "hidden"),
+                    "readinessScore": 100 if visible and not disposed else 70,
+                    "readinessIssues": [] if visible and not disposed else [
+                        "disposed" if disposed else "not-visible"],
+                },
+            })
+        quick_inputs.sort(
+            key=lambda row: int(row.get("updatedAt") or 0), reverse=True)
+
+        messages: List[Dict[str, Any]] = []
+        for item in _as_list(snapshot.get("messages")):
+            record = _as_dict(item)
+            options = _as_dict(record.get("options"))
+            actions = _as_list(record.get("items"))
+            messages.append({
+                "id": str(record.get("id") or ""),
+                "level": str(record.get("level") or "info"),
+                "message": str(record.get("message") or ""),
+                "detail": str(options.get("detail") or record.get("detail") or ""),
+                "modal": bool(options.get("modal")),
+                "actionCount": len(actions),
+                "actions": [
+                    str(_as_dict(action).get("title") or action)
+                    for action in actions[:6]
+                ],
+                "updatedAt": _as_int(record.get("updatedAt"), 0),
+                "runtimeAvailable": True,
+                "source": "node-runtime",
+                "dynamicSource": "runtime-only",
+                "surfaceEvidence": {
+                    "kind": "windowMessage",
+                    "level": str(record.get("level") or "info"),
+                    "modal": bool(options.get("modal")),
+                    "actionCount": len(actions),
+                    "readiness": "ready",
+                    "readinessScore": 100,
+                    "readinessIssues": [],
+                },
+            })
+        messages.sort(
+            key=lambda row: int(row.get("updatedAt") or 0), reverse=True)
+
+        dialogs: List[Dict[str, Any]] = []
+        for item in _as_list(snapshot.get("windowDialogs")):
+            record = _as_dict(item)
+            options = _as_dict(record.get("options"))
+            path_count = _as_int(record.get("pathCount"), 0)
+            if not path_count:
+                path_count = len(_as_list(record.get("paths")))
+                if not path_count and record.get("path"):
+                    path_count = 1
+            dialog_state = str(record.get("state") or "pending")
+            dialogs.append({
+                "id": str(record.get("id") or ""),
+                "kind": str(record.get("kind") or ""),
+                "state": dialog_state,
+                "title": str(options.get("title") or ""),
+                "defaultPath": str(options.get("defaultPath") or ""),
+                "canSelectFiles": options.get("canSelectFiles") is not False,
+                "canSelectFolders": bool(options.get("canSelectFolders")),
+                "canSelectMany": bool(options.get("canSelectMany")),
+                "filterCount": len(_as_dict(options.get("filters"))),
+                "pathCount": path_count,
+                "error": str(record.get("error") or ""),
+                "updatedAt": _as_int(record.get("updatedAt"), 0),
+                "runtimeAvailable": True,
+                "source": "node-runtime",
+                "dynamicSource": "runtime-only",
+                "surfaceEvidence": {
+                    "kind": "windowDialog",
+                    "dialogKind": str(record.get("kind") or ""),
+                    "state": dialog_state,
+                    "pathCount": path_count,
+                    "filterCount": len(_as_dict(options.get("filters"))),
+                    "readiness": "ready" if dialog_state == "picked" else dialog_state,
+                    "readinessScore": 100 if dialog_state == "picked" else 70,
+                    "readinessIssues": (
+                        [] if dialog_state == "picked" else [dialog_state]),
+                },
+            })
+        dialogs.sort(
+            key=lambda row: int(row.get("updatedAt") or 0), reverse=True)
+        return {
+            "quickInputs": quick_inputs[:12],
+            "windowMessages": messages[:12],
+            "windowDialogs": dialogs[:12],
+        }
+
     def _extension_runtime_surface_cache_key(
             self, context: Any, contributions: Dict[str, Any]) -> str:
         vscode_ns = getattr(self, "_vscode_ns", None)
@@ -14489,6 +15076,38 @@ class AIEditorAPI:
                 ]))
             return sorted(result)
 
+        def dynamic_ui_keys() -> List[str]:
+            snapshot = self._extension_dynamic_ui_snapshot()
+            result: List[str] = []
+            for item in _as_dict(snapshot.get("quickInputs")).values():
+                record = _as_dict(item)
+                state = _as_dict(record.get("state"))
+                result.append(":".join([
+                    "quickInput",
+                    str(record.get("id") or ""),
+                    str(record.get("event") or ""),
+                    str(record.get("visible") or state.get("visible") or ""),
+                    str(record.get("updatedAt") or ""),
+                ]))
+            for item in _as_list(snapshot.get("messages")):
+                record = _as_dict(item)
+                result.append(":".join([
+                    "message",
+                    str(record.get("id") or ""),
+                    str(record.get("level") or ""),
+                    str(record.get("updatedAt") or ""),
+                ]))
+            for item in _as_list(snapshot.get("windowDialogs")):
+                record = _as_dict(item)
+                result.append(":".join([
+                    "dialog",
+                    str(record.get("id") or ""),
+                    str(record.get("kind") or ""),
+                    str(record.get("state") or ""),
+                    str(record.get("updatedAt") or ""),
+                ]))
+            return sorted(result)
+
         payload = {
             "context": context if isinstance(context, dict) else {},
             "contributionKeys": {
@@ -14514,6 +15133,7 @@ class AIEditorAPI:
                 "diagnosticCollections": diagnostic_collection_keys(),
                 "languageStatus": language_status_keys(),
                 "textEditorDecorations": text_editor_decoration_keys(),
+                "dynamicUI": dynamic_ui_keys(),
                 "taskProviders": node_surface_keys("task_providers"),
                 "debugConfigProviders": node_surface_keys(
                     "debug_config_providers"),
@@ -14793,6 +15413,10 @@ class AIEditorAPI:
         status_bar_items = self._extension_surface_status_bar_items(contributions)
         language_status_items = self._extension_surface_language_status_items()
         text_editor_decorations = self._extension_surface_text_editor_decorations()
+        dynamic_ui = self._extension_surface_dynamic_ui()
+        quick_inputs = dynamic_ui.get("quickInputs", [])
+        window_messages = dynamic_ui.get("windowMessages", [])
+        window_dialogs = dynamic_ui.get("windowDialogs", [])
         webview_panels = self._extension_surface_webview_panels()
         webview_views = [
             item for item in views
@@ -14836,6 +15460,16 @@ class AIEditorAPI:
             1 for item in webview_views
             if _as_dict(item.get("webviewEvidence")).get(
                 "asWebviewUriReady"))
+        webview_endpoint_smoke_ready = sum(
+            1 for item in webview_views
+            if _as_dict(item.get("webviewEvidence")).get(
+                "resourceEndpointSmokeReady"))
+        webview_endpoint_smoke_failures = sum(
+            1 for item in webview_views
+            if int(_as_dict(item.get("webviewEvidence")).get(
+                    "resourceEndpointSmokeCount") or 0)
+            and not _as_dict(item.get("webviewEvidence")).get(
+                "resourceEndpointSmokeReady"))
         webview_readiness_ready = sum(
             1 for item in webview_views
             if _as_dict(item.get("webviewEvidence")).get(
@@ -14899,6 +15533,16 @@ class AIEditorAPI:
         webview_panel_resource_roots = sum(
             int(item.get("localResourceRootCount") or 0)
             for item in webview_panels)
+        webview_panel_endpoint_smoke_ready = sum(
+            1 for item in webview_panels
+            if _as_dict(item.get("webviewEvidence")).get(
+                "resourceEndpointSmokeReady"))
+        webview_panel_endpoint_smoke_failures = sum(
+            1 for item in webview_panels
+            if int(_as_dict(item.get("webviewEvidence")).get(
+                    "resourceEndpointSmokeCount") or 0)
+            and not _as_dict(item.get("webviewEvidence")).get(
+                "resourceEndpointSmokeReady"))
         webview_panel_retained = sum(
             1 for item in webview_panels
             if item.get("retainContextWhenHidden"))
@@ -14936,6 +15580,15 @@ class AIEditorAPI:
         custom_editor_selectors = sum(
             int(item.get("selectorCount") or 0)
             for item in custom_editors)
+        custom_editor_lifecycle_actions = sum(
+            int(item.get("lifecycleActionCount") or 0)
+            for item in custom_editors)
+        custom_editor_resource_states = sum(
+            int(item.get("resourceStateCount") or 0)
+            for item in custom_editors)
+        custom_editor_active_views = sum(
+            int(item.get("activeViewCount") or 0)
+            for item in custom_editors)
         notebook_ready = sum(
             1 for item in notebooks
             if str(item.get("readiness") or "") == "ready")
@@ -14955,6 +15608,17 @@ class AIEditorAPI:
         notebook_selected_controllers = sum(
             int(item.get("selectionCount") or 0)
             for item in notebooks)
+        notebook_lifecycle_actions = sum(
+            int(item.get("lifecycleActionCount") or 0)
+            for item in notebooks)
+        notebook_serializer_ready = sum(
+            1 for item in notebooks if item.get("serializerReady"))
+        notebook_controller_ready = sum(
+            1 for item in notebooks if item.get("controllerReady"))
+        notebook_execution_ready = sum(
+            1 for item in notebooks if item.get("executionReady"))
+        notebook_status_bar_ready = sum(
+            1 for item in notebooks if item.get("statusBarReady"))
         task_providers = sum(
             int(item.get("providerCount") or 0)
             for item in task_definitions)
@@ -15021,6 +15685,21 @@ class AIEditorAPI:
         text_editor_decoration_disposed = sum(
             1 for item in text_editor_decorations
             if item.get("disposed"))
+        quick_input_visible = sum(
+            1 for item in quick_inputs if item.get("visible"))
+        quick_input_items = sum(
+            int(item.get("itemCount") or 0) for item in quick_inputs)
+        quick_input_buttons = sum(
+            int(item.get("buttonCount") or 0)
+            + int(item.get("itemButtonCount") or 0)
+            for item in quick_inputs)
+        window_message_actions = sum(
+            int(item.get("actionCount") or 0) for item in window_messages)
+        window_dialog_picked = sum(
+            1 for item in window_dialogs
+            if str(item.get("state") or "") == "picked")
+        window_dialog_paths = sum(
+            int(item.get("pathCount") or 0) for item in window_dialogs)
         text_editor_commands = sum(
             1 for item in commands
             if item.get("editorRequired")
@@ -15090,6 +15769,9 @@ class AIEditorAPI:
             "statusBarItems": status_bar_items,
             "languageStatusItems": language_status_items,
             "textEditorDecorations": text_editor_decorations,
+            "quickInputs": quick_inputs,
+            "windowMessages": window_messages,
+            "windowDialogs": window_dialogs,
             "summary": {
                 "views": len(views),
                 "treeViews": len(tree_views),
@@ -15104,6 +15786,8 @@ class AIEditorAPI:
                 "webviewResourceMaps": webview_resource_maps,
                 "webviewAsWebviewUriSupported": webview_as_webview_uri_supported,
                 "webviewAsWebviewUriReady": webview_as_webview_uri_ready,
+                "webviewEndpointSmokeReady": webview_endpoint_smoke_ready,
+                "webviewEndpointSmokeFailures": webview_endpoint_smoke_failures,
                 "webviewReadinessReady": webview_readiness_ready,
                 "webviewReadinessWarnings": webview_readiness_warnings,
                 "webviewReadinessIssues": webview_readiness_issues[:12],
@@ -15119,6 +15803,8 @@ class AIEditorAPI:
                 "webviewPanelVisible": webview_panel_visible,
                 "webviewPanelMessages": webview_panel_messages,
                 "webviewPanelResourceRoots": webview_panel_resource_roots,
+                "webviewPanelEndpointSmokeReady": webview_panel_endpoint_smoke_ready,
+                "webviewPanelEndpointSmokeFailures": webview_panel_endpoint_smoke_failures,
                 "webviewPanelRetained": webview_panel_retained,
                 "runtimeOnlySurfaces": runtime_only_surfaces,
                 "manifestBackedSurfaces": manifest_backed_surfaces,
@@ -15136,6 +15822,9 @@ class AIEditorAPI:
                 "customEditorDirtyStates": custom_editor_dirty_states,
                 "customEditorUndoStates": custom_editor_undo_states,
                 "customEditorSelectors": custom_editor_selectors,
+                "customEditorLifecycleActions": custom_editor_lifecycle_actions,
+                "customEditorResourceStates": custom_editor_resource_states,
+                "customEditorActiveViews": custom_editor_active_views,
                 "notebooks": len(notebooks),
                 "notebookSerializers": sum(
                     int(item.get("serializerCount", 0))
@@ -15149,6 +15838,11 @@ class AIEditorAPI:
                 "notebookDetectionTasks": notebook_detection_tasks,
                 "notebookSelectors": notebook_selectors,
                 "notebookSelectedControllers": notebook_selected_controllers,
+                "notebookLifecycleActions": notebook_lifecycle_actions,
+                "notebookSerializerReady": notebook_serializer_ready,
+                "notebookControllerReady": notebook_controller_ready,
+                "notebookExecutionReady": notebook_execution_ready,
+                "notebookStatusBarReady": notebook_status_bar_ready,
                 "commands": len(commands),
                 "runtimeCommands": sum(
                     1 for item in commands
@@ -15203,6 +15897,15 @@ class AIEditorAPI:
                 "textEditorDecorationRanges": text_editor_decoration_ranges,
                 "textEditorDecorationEvents": text_editor_decoration_events,
                 "textEditorDecorationDisposed": text_editor_decoration_disposed,
+                "quickInputs": len(quick_inputs),
+                "quickInputVisible": quick_input_visible,
+                "quickInputItems": quick_input_items,
+                "quickInputButtons": quick_input_buttons,
+                "windowMessages": len(window_messages),
+                "windowMessageActions": window_message_actions,
+                "windowDialogs": len(window_dialogs),
+                "windowDialogPicked": window_dialog_picked,
+                "windowDialogPaths": window_dialog_paths,
                 "cacheHit": False,
                 "dynamicSurfaces": (
                     len(tree_views) + len(webview_views) + len(webview_panels)
@@ -15214,7 +15917,9 @@ class AIEditorAPI:
                     + len(chat_context_providers) + len(language_providers)
                     + len(diagnostic_collections) + len(status_bar_items)
                     + len(language_status_items)
-                    + len(text_editor_decorations)),
+                    + len(text_editor_decorations)
+                    + len(quick_inputs) + len(window_messages)
+                    + len(window_dialogs)),
             },
         }, ensure_ascii=False, default=str))
         self._extension_runtime_surface_cache[cache_key] = (now, payload)
@@ -20511,6 +21216,16 @@ _LAUNCH_FRONTEND_READY_GRACE_SECONDS = 20.0
 _LAUNCH_FRONTEND_READY_STALE_SECONDS = 12 * 60 * 60.0
 _LAUNCH_STATE_SCHEMA = 2
 _EXISTING_WINDOW_RECOVERY_SECONDS = 5.0
+_LAUNCH_CRITICAL_API_METHODS = {
+    "load_config",
+    "list_tools",
+    "get_mode",
+    "editor_surface_state",
+    "list_chat_providers",
+    "list_agents",
+    "list_workflows",
+    "get_active_agent",
+}
 _LAUNCH_STATE_FILE = os.path.join(os.path.expanduser("~"), ".sao", "ai_editor_launch.json")
 _last_existing_window_activation: Dict[str, Any] = {"hwnd": 0, "at": 0.0}
 _existing_window_recovery_until = 0.0
@@ -20718,6 +21433,31 @@ def _frontend_health_summary(health: Any) -> Dict[str, Any]:
         "pywebviewReady", "bootMode", "visibilityState", "documentReadyState",
         "topElement", "activeElement", "lastClearedReason",
         "lastInteractiveReason", "interactionClearCount",
+        "lastApiFailureMethod", "lastApiFailureReason", "lastApiFailureAt",
+        "healthAggregate", "healthAggregateError", "apiMissingMethods",
+        "terminalApiReady", "terminalCanExecuteTool", "terminalPendingCwd",
+        "terminalPendingProfile", "terminalPendingRunnable", "workspaceRoot",
+        "terminalCwd", "terminalMatchesWorkspace", "assistantProvider",
+        "assistantModel", "assistantWorkflowMode", "assistantContextWindow",
+        "assistantTokenEstimate", "settingsHasUnsavedChanges",
+        "settingsControlCount", "languageId", "formatActionAvailable",
+        "quickFixActionAvailable", "diffVisible", "lastLanguageAction",
+        "lastLanguageActionState", "editorLongActionState",
+        "editorLongActionKind", "editorLongActionReason",
+        "editorLongActionElapsed", "editorLongActionHistoryCount",
+        "quickInputVisibleCount", "quickInputRenderedItems",
+        "quickInputFocusOutReady", "quickInputHasDescribedBy",
+        "extensionWindowMessageCount", "extensionWindowMessageToastCount",
+        "extensionWindowMessageActions", "extensionWindowDialogCount",
+        "extensionWindowDialogPicked", "extensionWindowDialogErrors",
+        "extensionWindowDialogPaths",
+        "extensionSurfaceCount",
+        "visibleControlCount", "missingCommandCount", "lastControlNoopLabel",
+        "lastControlNoopAt", "lastControlNoopCommand",
+        "lastUiActionErrorLabel", "lastUiActionErrorMessage",
+        "criticalActionMissingCount", "criticalActionNoHandlerCount",
+        "criticalActionNonFocusableCount",
+        "failureKind", "failureCode", "failureActionable",
     }
     summary: Dict[str, Any] = {}
     for key in allowed:
@@ -20909,6 +21649,47 @@ def _launch_state_summary(
     }
 
 
+def _launch_state_critical_api_failed(
+        summary: Dict[str, Any],
+        age: Optional[float] = None) -> bool:
+    if not summary.get("frontendHealthFresh"):
+        return False
+    health = summary.get("frontendHealth")
+    if not isinstance(health, dict):
+        return False
+    method = str(health.get("lastApiFailureMethod") or "").strip()
+    reason = str(health.get("lastApiFailureReason") or "").strip()
+    if method not in _LAUNCH_CRITICAL_API_METHODS:
+        return False
+    if reason not in {"not ready", "method missing", "call failed"}:
+        return False
+    if age is not None and float(age) <= _LAUNCH_FRONTEND_READY_GRACE_SECONDS:
+        return False
+    return True
+
+
+def _launch_state_core_control_noop(
+        summary: Dict[str, Any],
+        age: Optional[float] = None) -> bool:
+    if not summary.get("frontendHealthFresh"):
+        return False
+    if age is not None and float(age) <= _LAUNCH_FRONTEND_READY_GRACE_SECONDS:
+        return False
+    health = summary.get("frontendHealth")
+    if not isinstance(health, dict):
+        return False
+    label = str(health.get("lastControlNoopLabel") or "").strip().lower()
+    command = str(health.get("lastControlNoopCommand") or "").strip().lower()
+    if not label and not command:
+        return False
+    core_tokens = (
+        "settings", "theme", "toggle-theme", "open-settings",
+        "assistant", "agent", "send", "provider", "workflow",
+        "terminal", "command palette", "showcommands",
+    )
+    return any(token in label or token in command for token in core_tokens)
+
+
 def launch_state_snapshot(pid: int = 0, hwnd: int = 0) -> Dict[str, Any]:
     state = _read_launch_state()
     return {
@@ -20932,6 +21713,38 @@ def _existing_window_needs_frontend_recovery(hwnd: int, user32: Any = None) -> b
         return False
     age = summary.get("ageSeconds")
     if summary.get("frontendReady"):
+        if (not summary.get("frontendHealthFresh")
+                and (age is None or float(age) > _LAUNCH_FRONTEND_READY_GRACE_SECONDS)):
+            _append_ai_editor_log(
+                "existing window frontend health is stale "
+                f"hwnd={int(hwnd or 0)} pid={pid} "
+                f"health_age={float(summary.get('frontendHealthAgeSeconds') or 0.0):.1f}s; "
+                "allowing recovery relaunch")
+            return True
+        health = summary.get("frontendHealth")
+        if (summary.get("frontendHealthFresh")
+                and isinstance(health, dict)
+                and health.get("apiReady") is False
+                and (age is None or float(age) > _LAUNCH_FRONTEND_READY_GRACE_SECONDS)):
+            _append_ai_editor_log(
+                "existing window frontend API is not ready "
+                f"hwnd={int(hwnd or 0)} pid={pid} "
+                f"health_phase={summary.get('frontendHealthPhase')!r}; allowing recovery relaunch")
+            return True
+        if _launch_state_critical_api_failed(summary, age):
+            _append_ai_editor_log(
+                "existing window frontend critical API call failed "
+                f"hwnd={int(hwnd or 0)} pid={pid} "
+                f"method={health.get('lastApiFailureMethod')!r} "
+                f"reason={health.get('lastApiFailureReason')!r}; allowing recovery relaunch")
+            return True
+        if _launch_state_core_control_noop(summary, age):
+            _append_ai_editor_log(
+                "existing window frontend core control no-op "
+                f"hwnd={int(hwnd or 0)} pid={pid} "
+                f"label={health.get('lastControlNoopLabel')!r} "
+                f"command={health.get('lastControlNoopCommand')!r}; allowing recovery relaunch")
+            return True
         if (summary.get("frontendHealthFresh")
                 and summary.get("frontendClickable") is False
                 and (age is None or float(age) > _LAUNCH_FRONTEND_READY_GRACE_SECONDS)):
@@ -20971,6 +21784,38 @@ def _recent_child_launch_alive() -> bool:
         summary = _launch_state_summary(state, pid=pid, hwnd=hwnd)
         if hwnd:
             if _launch_state_frontend_ready(state, pid):
+                if (not summary.get("frontendHealthFresh")
+                        and age > _LAUNCH_FRONTEND_READY_GRACE_SECONDS):
+                    _append_ai_editor_log(
+                        f"recent child pid={pid} frontend health is stale "
+                        f"after {age:.1f}s; allowing relaunch")
+                    return False
+                health = summary.get("frontendHealth")
+                if (summary.get("frontendHealthFresh")
+                        and isinstance(health, dict)
+                        and health.get("apiReady") is False
+                        and age > _LAUNCH_FRONTEND_READY_GRACE_SECONDS):
+                    _append_ai_editor_log(
+                        f"recent child pid={pid} frontend API is not ready "
+                        f"after {age:.1f}s; allowing relaunch")
+                    return False
+                if _launch_state_critical_api_failed(summary, age):
+                    _append_ai_editor_log(
+                        f"recent child pid={pid} frontend critical API call failed "
+                        f"after {age:.1f}s; allowing relaunch")
+                    return False
+                if _launch_state_core_control_noop(summary, age):
+                    _append_ai_editor_log(
+                        f"recent child pid={pid} frontend core control no-op "
+                        f"after {age:.1f}s; allowing relaunch")
+                    return False
+                if (summary.get("frontendHealthFresh")
+                        and summary.get("frontendClickable") is False
+                        and age > _LAUNCH_FRONTEND_READY_GRACE_SECONDS):
+                    _append_ai_editor_log(
+                        f"recent child pid={pid} frontend reports not clickable "
+                        f"after {age:.1f}s; allowing relaunch")
+                    return False
                 if not summary.get("frontendReadyFresh"):
                     _append_ai_editor_log(
                         f"recent child pid={pid} frontend ready signal is stale but window is responsive")
@@ -21461,9 +22306,17 @@ def _launch_webview_blocking(gui_ref: Any = None) -> None:
             _clear_launch_state_for_pid(os.getpid())
 
         def _on_closing():
-            api.cancel()
-            api._shutdown_node_extension_host()
-            api._stop_webview_resource_server()
+            for label, action in (
+                    ("cancel", api.cancel),
+                    ("shutdown node extension host",
+                     api._shutdown_node_extension_host),
+                    ("stop webview resource server",
+                     api._stop_webview_resource_server)):
+                try:
+                    action()
+                except Exception as exc:
+                    _append_ai_editor_log(
+                        f"closing {label} failed: {type(exc).__name__}: {exc}")
 
         window.events.closing += _on_closing
         window.events.closed += _on_closed

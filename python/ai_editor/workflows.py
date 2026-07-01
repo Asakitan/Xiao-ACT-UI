@@ -317,10 +317,21 @@ class WorkflowEngine:
             on_step_end: Optional[Callable] = None,
             run_id: str = "",
             cancel_requested: Optional[Callable[[], bool]] = None,
+            start_index: int = 0,
+            seed_context: Optional[Dict[str, str]] = None,
             ) -> Dict[str, Any]:
-        """Run synchronously — call from a background thread."""
+        """Run synchronously — call from a background thread.
+
+        ``start_index``/``seed_context`` let a caller retry a workflow from a
+        single failed step: steps before ``start_index`` are skipped and
+        ``seed_context`` seeds ``{{var}}`` interpolation with their
+        previously computed ``output_var`` values.
+        """
         run_id = str(run_id or "").strip()
+        start_index = max(0, int(start_index or 0))
         context: Dict[str, str] = {"input": input_text}
+        if seed_context:
+            context.update({str(k): str(v) for k, v in seed_context.items()})
         results: List[Dict[str, Any]] = []
         run_started_at = int(time.time() * 1000)
 
@@ -333,6 +344,8 @@ class WorkflowEngine:
                 return False
 
         for i, step in enumerate(workflow.steps):
+            if i < start_index:
+                continue
             if _cancelled():
                 ended_at = int(time.time() * 1000)
                 return {
