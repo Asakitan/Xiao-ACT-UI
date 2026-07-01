@@ -406,6 +406,15 @@ class SAOPlayerGUIPanelsMixin:
                     _set_sao_panel_theme(theme, win)
             except Exception:
                 pass
+        detached = getattr(self, '_plugin_detached_panels', None)
+        if isinstance(detached, dict):
+            for panel in list(detached.values()):
+                win = getattr(panel, '_win', None)
+                try:
+                    if win and win.winfo_exists():
+                        _set_sao_panel_theme(theme, win)
+                except Exception:
+                    pass
 
     def _toggle_recognition_menu(self):
         """切换插件识别开关。"""

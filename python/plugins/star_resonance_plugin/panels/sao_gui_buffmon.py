@@ -49,7 +49,7 @@ except Exception:  # pragma: no cover
 def _gpu_buffmon_enabled() -> bool:
     """BuffMon requires the shared Entity GPU backend."""
     try:
-        from config import USE_GPU_BUFFMON as _flag
+        from sr_config import USE_GPU_BUFFMON as _flag
     except Exception:
         _flag = True
     if not _flag:
@@ -64,7 +64,7 @@ def _gpu_buffmon_enabled() -> bool:
 # ─────────────────────────────────────────
 def _dbg(msg: str):
     try:
-        from config import BUFFMON_DEBUG as _flag
+        from sr_config import BUFFMON_DEBUG as _flag
     except Exception:
         _flag = False
     if _flag:
@@ -73,7 +73,7 @@ def _dbg(msg: str):
 
 def _default_filter_mode() -> str:
     try:
-        from config import BUFFMON_SELF_FILTER as _mode
+        from sr_config import BUFFMON_SELF_FILTER as _mode
         return str(_mode or 'ultimate').lower()
     except Exception:
         return 'ultimate'

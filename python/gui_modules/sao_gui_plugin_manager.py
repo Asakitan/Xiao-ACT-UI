@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import math
+import threading
 import tkinter as tk
 from tkinter import filedialog
 from typing import Any, Dict, List, Mapping, Optional
@@ -108,6 +109,7 @@ class PluginManagerPanel:
         self._panels_wrap: Optional[tk.Frame] = None
         self._panel_list: Optional[PluginPanelList] = None
         self._tab_buttons: Dict[str, tk.Button] = {}
+        self._refresh_busy = False
 
     def show(self) -> None:
         if self._win is None or not self._exists():
@@ -121,8 +123,13 @@ class PluginManagerPanel:
             _apply_panel_style(self._win)
         except Exception:
             pass
-        self.refresh()
         self._show_tab(self._active_tab)
+        # Discovery scans plugin dirs on disk (os.stat/listdir per plugin) and
+        # can take seconds — running it synchronously here blocked the Tk
+        # mainloop (and with it all compositor-forwarded clicks) for the
+        # whole scan. Show the panel immediately and populate once the
+        # background scan completes.
+        self.refresh_async()
 
     def hide(self) -> None:
         if self._panel_list is not None:
@@ -171,7 +178,7 @@ class PluginManagerPanel:
             except Exception:
                 pass
             self._active_tab = active_tab
-            self.refresh()
+            self.refresh_async()
             self._show_tab(active_tab)
 
     def refresh(self) -> Dict[str, Any]:
@@ -182,6 +189,39 @@ class PluginManagerPanel:
         self._last_status = dict(status or {})
         self._render_status(self._last_status)
         return self._last_status
+
+    def refresh_async(self) -> None:
+        """Run plugin discovery off the Tk thread, then apply the result.
+
+        ``act_plugin_status`` performs filesystem discovery (os.stat/listdir
+        per plugin dir) which can take seconds. Running it on the Tk thread
+        stalls the mainloop's ``after()`` polling, which is what drains
+        compositor-forwarded mouse events for mirrored panels — so a slow
+        scan looked like the whole panel had stopped responding to clicks.
+        """
+        if self._refresh_busy:
+            return
+        self._refresh_busy = True
+        owner = self.owner
+
+        def _bg() -> None:
+            try:
+                status = act_plugin_status(owner)
+            except Exception as exc:
+                status = {"ok": False, "message": str(exc), "plugins": [], "plugin_count": 0, "active_count": 0}
+
+            def _apply() -> None:
+                self._refresh_busy = False
+                if not self._exists():
+                    return
+                self._last_status = dict(status or {})
+                self._render_status(self._last_status)
+            try:
+                self.root.after(0, _apply)
+            except Exception:
+                self._refresh_busy = False
+
+        threading.Thread(target=_bg, daemon=True, name='plugin-manager-refresh').start()
 
     def _exists(self) -> bool:
         try:
@@ -566,12 +606,13 @@ class PluginManagerPanel:
         the clicked widget mid-event, which can cause Tk to dispatch residual
         ``<B1-Motion>`` events to the header drag handler — moving the window
         to the mouse position.  Deferring by one tick lets the click handler
-        finish cleanly before any widget is destroyed.
+        finish cleanly before any widget is destroyed.  Uses the async path
+        so the discovery scan itself doesn't also stall the mainloop.
         """
         try:
-            self.root.after(1, self.refresh)
+            self.root.after(1, self.refresh_async)
         except Exception:
-            self.refresh()
+            self.refresh_async()
 
     def _import_plugin(self) -> None:
         try:

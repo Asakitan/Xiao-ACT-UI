@@ -2902,11 +2902,48 @@ class NodeExtensionHost:
             message = str(msg.get("message", ""))
             if self._ui_bridge:
                 try:
-                    self._ui_bridge.show_message(level, message)
+                    self._ui_bridge.show_message(level, message, {
+                        "options": msg.get("options") if isinstance(
+                            msg.get("options"), dict) else {},
+                        "items": msg.get("items") if isinstance(
+                            msg.get("items"), list) else [],
+                    })
                 except Exception:
                     pass
             else:
                 _log.info("[NodeExtHost] %s: %s", level, message)
+
+        elif msg_type == "window_message_request":
+            request_id = str(msg.get("requestId", ""))
+            level = str(msg.get("level", "info"))
+            message = str(msg.get("message", ""))
+            if self._ui_bridge:
+                try:
+                    self._ui_bridge.show_message(level, message, {
+                        "requestId": request_id,
+                        "id": request_id,
+                        "options": msg.get("options") if isinstance(
+                            msg.get("options"), dict) else {},
+                        "items": msg.get("items") if isinstance(
+                            msg.get("items"), list) else [],
+                    })
+                except Exception as exc:
+                    if request_id:
+                        self._send({
+                            "type": "window_message_response",
+                            "requestId": request_id,
+                            "ok": False,
+                            "value": {"cancelled": True},
+                            "error": str(exc),
+                        })
+            elif request_id:
+                self._send({
+                    "type": "window_message_response",
+                    "requestId": request_id,
+                    "ok": True,
+                    "value": {"cancelled": True},
+                    "error": "",
+                })
 
         elif msg_type == "quick_input":
             if self._ui_bridge:
@@ -6274,6 +6311,18 @@ class NodeExtensionHost:
         if isinstance(payload, dict):
             msg.update(payload)
         return self._send(msg)
+
+    def send_window_message_response(
+            self, request_id: str, payload: Optional[Dict[str, Any]] = None) -> bool:
+        """Relay a frontend window message action selection to Node."""
+        value = payload if isinstance(payload, dict) else {}
+        return self._send({
+            "type": "window_message_response",
+            "requestId": str(request_id or ""),
+            "ok": True,
+            "value": value,
+            "error": "",
+        })
 
     # -- Integration helpers -------------------------------------------------
 

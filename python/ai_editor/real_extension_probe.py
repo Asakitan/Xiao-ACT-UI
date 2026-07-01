@@ -139,6 +139,23 @@ def _find_event_payload(
     return {}
 
 
+def _find_event_payload_with_metadata(
+        events: List[Dict[str, Any]], event: str, view_id: str,
+        keys: List[str]) -> Dict[str, Any]:
+    normalized = str(view_id or "")
+    wanted = [str(item) for item in keys]
+    for item in reversed(events):
+        if item.get("event") != event:
+            continue
+        data = item.get("data", {})
+        if not isinstance(data, dict) or str(data.get("view_id", "")) != normalized:
+            continue
+        metadata = data.get("metadata", {})
+        if isinstance(metadata, dict) and all(key in metadata for key in wanted):
+            return dict(data)
+    return _find_event_payload(events, event, view_id)
+
+
 def _write_json(path: str, data: Dict[str, Any]) -> None:
     os.makedirs(os.path.dirname(path), exist_ok=True)
     with open(path, "w", encoding="utf-8", newline="\n") as fh:
@@ -217,6 +234,16 @@ def _write_builtin_smoke_extension(parent_dir: str) -> str:
         "fill=\"#007acc\"/><circle cx=\"32\" cy=\"32\" r=\"20\" "
         "fill=\"#ffffff\"/></svg>\n"
     ))
+    _write_text(os.path.join(media_dir, "probe.css"), (
+        "body[data-probe]{background:#1e1e1e;color:#cccccc;"
+        "font:12px Segoe UI,sans-serif;margin:0;padding:12px;}"
+        "[data-resource-smoke='ready']{border:1px solid #007acc;padding:8px;}"
+        ".probe-title{color:#4fc1ff;font-weight:600;}\n"
+    ))
+    _write_text(os.path.join(media_dir, "probe.js"), (
+        "window.__saoProbeExternalScript={loaded:true,source:'probe.js'};"
+        "document.documentElement.dataset.probeExternalScript='loaded';\n"
+    ))
     _write_text(os.path.join(ext_dir, "extension.js"), r"""
 const vscode = require('vscode');
 
@@ -233,20 +260,30 @@ const state = {
 function htmlFor(webview, context, kind, text) {
   const asset = webview.asWebviewUri(
     vscode.Uri.joinPath(context.extensionUri, 'media', 'probe.svg'));
+  const css = webview.asWebviewUri(
+    vscode.Uri.joinPath(context.extensionUri, 'media', 'probe.css'));
+  const script = webview.asWebviewUri(
+    vscode.Uri.joinPath(context.extensionUri, 'media', 'probe.js'));
+  const portAsset = `http://localhost:${kind === 'webview-panel' ? 6173 : (kind === 'custom-editor' ? 4173 : 5173)}/probe-port.js`;
   const commandHref = 'command:saoProbe.activate?'
     + encodeURIComponent(JSON.stringify([{ source: kind }]));
   return `<!DOCTYPE html>
 <html>
 <head>
   <meta charset="utf-8">
-  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src ${webview.cspSource}; script-src 'unsafe-inline'; style-src 'unsafe-inline'; form-action ${webview.cspSource};">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src ${webview.cspSource} data:; script-src 'unsafe-inline' ${webview.cspSource} http://localhost:*; style-src 'unsafe-inline' ${webview.cspSource}; form-action ${webview.cspSource};">
   <title>SAO ${kind}</title>
+  <link data-probe-css rel="stylesheet" href="${css}">
 </head>
 <body data-probe="${kind}">
-  <main data-kind="${kind}">
+  <main data-kind="${kind}" data-resource-smoke="ready" data-resource-css="${css}" data-resource-script="${script}" data-resource-port="${portAsset}">
+    <div class="probe-title">SAO ${kind}</div>
     <img data-probe-asset src="${asset}" alt="probe">
+    <img data-probe-data-uri src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='2' height='2'%3E%3Crect width='2' height='2' fill='%23007acc'/%3E%3C/svg%3E" alt="data">
     <form data-probe-form><input name="message" value="${text || kind}"></form>
     <a data-probe-command href="${commandHref}">command</a>
+    <script data-probe-external src="${script}"></script>
+    <script data-probe-port src="${portAsset}"></script>
     <script>
       const api = acquireVsCodeApi();
       api.setState({ kind: '${kind}', ready: true });
@@ -511,6 +548,58 @@ def _surface_visual_checks(
     }
 
 
+def _resource_visual_smoke(
+        prepared_html: str, options: Dict[str, Any]) -> Dict[str, Any]:
+    text = str(prepared_html or "")
+    opts = options if isinstance(options, dict) else {}
+    local_roots = opts.get("localResourceRoots")
+    port_mapping = opts.get("portMapping")
+    if not isinstance(local_roots, list):
+        local_roots = []
+    if not isinstance(port_mapping, list):
+        port_mapping = []
+    resource_uri_count = text.count(".vscode-resource.webview.local")
+    endpoint_ready = (
+        "sao-webview-resource-endpoint" in text
+        and "__sao_webview_resource__" in text)
+    resource_map_ready = "sao-webview-resource-map" in text
+    checks = {
+        "hasResourceSmokeRoot": 'data-resource-smoke="ready"' in text,
+        "hasCssLink": "data-probe-css" in text and "probe.css" in text,
+        "hasScriptSrc": "data-probe-external" in text and "probe.js" in text,
+        "hasImageSrc": "data-probe-asset" in text and "probe.svg" in text,
+        "hasDataImage": "data-probe-data-uri" in text
+        and "data:image/svg+xml" in text,
+        "hasPortMappedScript": "data-probe-port" in text
+        and "http://localhost:" in text,
+        "hasCspResourceSources": (
+            "img-src" in text
+            and "script-src" in text
+            and "style-src" in text
+            and "https://*.vscode-resource.webview.local" in text
+            and "data:" in text
+            and "http://localhost:" in text),
+        "hasEndpointMetadata": endpoint_ready,
+        "hasResourceMapMetadata": resource_map_ready,
+        "hasLocalResourceRoots": bool(local_roots),
+        "hasPortMapping": bool(port_mapping),
+        "hasMultipleAsWebviewUris": resource_uri_count >= 3,
+    }
+    return {
+        "checks": checks,
+        "ok": all(bool(value) for value in checks.values()),
+        "resourceUriCount": resource_uri_count,
+        "localResourceRootCount": len(local_roots),
+        "portMappingCount": len(port_mapping),
+        "schemes": {
+            "vscodeResource": ".vscode-resource.webview.local" in text,
+            "endpoint": endpoint_ready,
+            "data": "data:image/svg+xml" in text,
+            "localhost": "http://localhost:" in text,
+        },
+    }
+
+
 def _write_frontend_visual_fixture(
         fixture_dir: str,
         webview_html: str,
@@ -527,6 +616,12 @@ def _write_frontend_visual_fixture(
     os.makedirs(fixture_dir, exist_ok=True)
     fixture_path = os.path.join(fixture_dir, "visual-webview-smoke.html")
     data_path = os.path.join(fixture_dir, "visual-webview-smoke.json")
+    resource_smoke = {
+        "webview": _resource_visual_smoke(webview_html, webview_options),
+        "webviewPanel": _resource_visual_smoke(panel_html, panel_options),
+        "customEditor": _resource_visual_smoke(
+            custom_html, custom_options),
+    }
     payload = {
         "webviewId": webview_id,
         "webviewPanelId": panel_id,
@@ -545,6 +640,33 @@ def _write_frontend_visual_fixture(
                 panel_metadata),
             "customEditor": _surface_visual_checks(
                 custom_html, "custom-editor", custom_options, {}),
+        },
+        "resourceSmoke": resource_smoke,
+        "resourceSmokeSummary": {
+            "surfaceCount": len(resource_smoke),
+            "okSurfaceCount": sum(
+                1 for item in resource_smoke.values()
+                if isinstance(item, dict) and item.get("ok") is True),
+            "resourceUriCount": sum(
+                int(item.get("resourceUriCount") or 0)
+                for item in resource_smoke.values()
+                if isinstance(item, dict)),
+            "localResourceRootCount": sum(
+                int(item.get("localResourceRootCount") or 0)
+                for item in resource_smoke.values()
+                if isinstance(item, dict)),
+            "portMappingCount": sum(
+                int(item.get("portMappingCount") or 0)
+                for item in resource_smoke.values()
+                if isinstance(item, dict)),
+            "schemes": sorted({
+                scheme
+                for item in resource_smoke.values()
+                if isinstance(item, dict)
+                for scheme, present in _safe_json(
+                    item.get("schemes") or {}).items()
+                if present
+            }),
         },
     }
     webview_srcdoc = html_lib.escape(str(webview_html or ""), quote=True)
@@ -566,24 +688,27 @@ def _write_frontend_visual_fixture(
   </style>
 </head>
 <body>
-  <header>
+  <header data-resource-smoke-summary="{html_lib.escape(json.dumps(payload['resourceSmokeSummary'], ensure_ascii=False, default=str), quote=True)}">
     <strong>AI Editor Webview Visual Smoke</strong>
-    <span> dynamic WebviewView + WebviewPanel + custom editor iframe surfaces</span>
+    <span> dynamic WebviewView + WebviewPanel + custom editor iframe surfaces with CSS/JS/image/port resources</span>
   </header>
   <main>
     <section data-surface="webview-view" data-view-id="{html_lib.escape(webview_id)}">
       <h2>WebviewView: {html_lib.escape(webview_id)}</h2>
       <iframe title="Dynamic WebviewView" srcdoc="{webview_srcdoc}"></iframe>
+      <div class="meta">{html_lib.escape(json.dumps(resource_smoke['webview'], ensure_ascii=False, indent=2, default=str))}</div>
       <div class="meta">{html_lib.escape(json.dumps(webview_options, ensure_ascii=False, indent=2, default=str))}</div>
     </section>
     <section data-surface="webview-panel" data-view-id="{html_lib.escape(panel_id)}">
       <h2>WebviewPanel: {html_lib.escape(panel_id)}</h2>
       <iframe title="Dynamic WebviewPanel" srcdoc="{panel_srcdoc}"></iframe>
+      <div class="meta">{html_lib.escape(json.dumps(resource_smoke['webviewPanel'], ensure_ascii=False, indent=2, default=str))}</div>
       <div class="meta">{html_lib.escape(json.dumps(panel_options, ensure_ascii=False, indent=2, default=str))}</div>
     </section>
     <section data-surface="custom-editor" data-view-id="{html_lib.escape(custom_id)}">
       <h2>Custom Editor: {html_lib.escape(custom_id)}</h2>
       <iframe title="Custom Editor" srcdoc="{custom_srcdoc}"></iframe>
+      <div class="meta">{html_lib.escape(json.dumps(resource_smoke['customEditor'], ensure_ascii=False, indent=2, default=str))}</div>
       <div class="meta">{html_lib.escape(json.dumps(custom_options, ensure_ascii=False, indent=2, default=str))}</div>
     </section>
   </main>
@@ -1124,8 +1249,9 @@ def run_builtin_smoke_probe(
                 if custom_view_id else {"ok": False})
             webview_options = _find_event_payload(
                 events, "update_webview_panel_options", webview_view_id)
-            webview_metadata = _find_event_payload(
-                events, "update_webview_view_metadata", webview_view_id)
+            webview_metadata = _find_event_payload_with_metadata(
+                events, "update_webview_view_metadata", webview_view_id,
+                ["title", "description", "badge"])
             panel_options = _find_event_payload(
                 events, "update_webview_panel_options", panel_view_id)
             custom_options = _find_event_payload(
@@ -1181,6 +1307,10 @@ def run_builtin_smoke_probe(
                 "checks", {}).get("webviewPanel", {})
             visual_custom_checks = visual_fixture.get(
                 "checks", {}).get("customEditor", {})
+            visual_resource_smoke = visual_fixture.get(
+                "resourceSmoke", {})
+            visual_resource_summary = visual_fixture.get(
+                "resourceSmokeSummary", {})
             panel_runtime_record = next((
                 item for item in runtime_surfaces.get("webviewPanels", [])
                 if item.get("id") == panel_view_id
@@ -1320,6 +1450,24 @@ def run_builtin_smoke_probe(
                 and all(bool(value) for value in visual_panel_checks.values()),
                 "frontendVisualCustomEditorSurface": bool(visual_custom_checks)
                 and all(bool(value) for value in visual_custom_checks.values()),
+                "frontendVisualResourceSmoke": (
+                    visual_resource_summary.get("surfaceCount") == 3
+                    and visual_resource_summary.get("okSurfaceCount") == 3
+                    and int(visual_resource_summary.get(
+                        "resourceUriCount") or 0) >= 9
+                    and int(visual_resource_summary.get(
+                        "localResourceRootCount") or 0) >= 3
+                    and int(visual_resource_summary.get(
+                        "portMappingCount") or 0) >= 3
+                    and all(
+                        isinstance(item, dict) and item.get("ok") is True
+                        for item in visual_resource_smoke.values())),
+                "frontendVisualResourceSchemes": all(
+                    scheme in (
+                        visual_resource_summary.get("schemes") or [])
+                    for scheme in [
+                        "vscodeResource", "endpoint", "data", "localhost",
+                    ]),
                 "frontendVisualFixtureWritten": (
                     bool(visual_fixture.get("fixtureBytes"))
                     and bool(visual_fixture.get("dataBytes"))),
@@ -1368,6 +1516,13 @@ def run_builtin_smoke_probe(
                         "statusBarItems", []),
                     "languageStatusItems": runtime_surfaces.get(
                         "languageStatusItems", []),
+                },
+                "frontendVisualResourceSmoke": {
+                    "ok": bool(checks.get("frontendVisualResourceSmoke")),
+                    "schemesOk": bool(checks.get(
+                        "frontendVisualResourceSchemes")),
+                    "summary": visual_resource_summary,
+                    "surfaces": visual_resource_smoke,
                 },
                 "frontendVisual": visual_fixture,
                 "commandState": command_state,

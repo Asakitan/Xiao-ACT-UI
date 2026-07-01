@@ -5297,7 +5297,7 @@ class StarResonanceWebViewBridge:
         return json.dumps({'ok': True, 'mode': normalized}, ensure_ascii=False)
 
     def set_component_source(self, component, mode):
-        from config import DATA_SOURCE_COMPONENTS, DEFAULT_DATA_SOURCE_MAP, normalize_source_map, normalize_source_mode
+        from sr_config import DATA_SOURCE_COMPONENTS, DEFAULT_DATA_SOURCE_MAP, normalize_source_map, normalize_source_mode
         component_name = str(component or '').strip().lower()
         if component_name not in DATA_SOURCE_COMPONENTS:
             self.owner._sync_menu_settings()

@@ -2664,6 +2664,7 @@ const _commands = new Map();             // commandId -> handler
 const _pythonCommandRequests = new Map(); // requestId -> { resolve, reject, timer }
 const _pythonLmRequests = new Map();      // requestId -> { resolve, reject, timer }
 const _windowDialogRequests = new Map();  // requestId -> { resolve, timer, cleanup, kind }
+const _windowMessageRequests = new Map();  // requestId -> { resolve, timer, cleanup, items }
 const _envClipboardRequests = new Map();  // requestId -> { resolve, timer, cleanup, action }
 const _webviewViewProviders = new Map(); // viewType -> { provider, options }
 const _webviewViews = new Map();         // viewId -> WebviewView
@@ -2708,6 +2709,7 @@ let _nextPythonCommandRequestHandle = 1;
 let _nextPythonLmRequestHandle = 1;
 let _nextExtensionActivationRequestHandle = 1;
 let _nextWindowDialogRequestHandle = 1;
+let _nextWindowMessageRequestHandle = 1;
 let _nextEnvClipboardRequestHandle = 1;
 let _nextTaskExecutionHandle = 1;
 let _nextDebugSessionHandle = 1;
@@ -3984,6 +3986,43 @@ function _handleWindowDialogResponse(msg) {
     }
 }
 
+function _handleWindowMessageResponse(msg) {
+    const requestId = String(msg.requestId || '');
+    const pending = _windowMessageRequests.get(requestId);
+    if (!pending) return;
+    pending.cleanup?.();
+    if (!msg.ok) {
+        log(`window message failed: ${msg.error || 'unknown error'}`);
+        pending.resolve(undefined);
+        return;
+    }
+    const value = msg.value && typeof msg.value === 'object' ? msg.value : {};
+    if (value.cancelled) {
+        pending.resolve(undefined);
+        return;
+    }
+    const handle = Number.isInteger(Number(value.handle)) ? Number(value.handle) : null;
+    const index = Number.isInteger(Number(value.index)) ? Number(value.index) : null;
+    const title = value.title !== undefined ? String(value.title) : '';
+    let selected = null;
+    if (handle !== null) {
+        const normalizedIndex = pending.items.findIndex(item => Number(item && item.handle) === handle);
+        if (normalizedIndex >= 0 && normalizedIndex < pending.rawItems.length) {
+            selected = pending.rawItems[normalizedIndex];
+        }
+    }
+    if (!selected && index !== null && index >= 0 && index < pending.rawItems.length) {
+        selected = pending.rawItems[index];
+    }
+    if (!selected && title) {
+        selected = pending.rawItems.find(item => {
+            if (typeof item === 'string') return item === title;
+            return item && String(item.title || '') === title;
+        }) || null;
+    }
+    pending.resolve(selected || undefined);
+}
+
 function _fileDecorationUriFromChangeItem(value) {
     if (value === undefined || value === null) return null;
     try {
@@ -4064,6 +4103,42 @@ function _requestWindowDialog(kind, options = {}, token = undefined) {
             requestId,
             kind,
             options: _serializeWindowDialogOptions(kind, options),
+        });
+    });
+}
+
+function _requestWindowMessage(level, message, options, rawItems, normalizedItems) {
+    const requestId = `wnmsg-${_nextWindowMessageRequestHandle++}`;
+    return new Promise(resolve => {
+        let timer;
+        const cleanup = () => {
+            _windowMessageRequests.delete(requestId);
+            if (timer) clearTimeout(timer);
+        };
+        const finishUndefined = () => {
+            const pending = _windowMessageRequests.get(requestId);
+            if (!pending) return;
+            cleanup();
+            resolve(undefined);
+        };
+        timer = setTimeout(finishUndefined, 30000);
+        _windowMessageRequests.set(requestId, {
+            resolve,
+            timer,
+            cleanup,
+            rawItems: rawItems.filter(_messageArgIsItem),
+            items: normalizedItems,
+        });
+        send({
+            type: 'window_message_request',
+            requestId,
+            level,
+            message: String(message),
+            options: {
+                modal: !!options.modal,
+                detail: options.detail ? String(options.detail) : '',
+            },
+            items: normalizedItems,
         });
     });
 }
@@ -9711,17 +9786,7 @@ function _windowShowMessage(level, message, args) {
                 handle: index,
                 isCloseAffordance: !!item.isCloseAffordance,
             });
-    send({
-        type: 'show_message',
-        level,
-        message: String(message),
-        options: {
-            modal: !!options.modal,
-            detail: options.detail ? String(options.detail) : '',
-        },
-        items: normalizedItems,
-    });
-    return Promise.resolve(items.find(_messageArgIsItem));
+    return _requestWindowMessage(level, message, options, items, normalizedItems);
 }
 
 function _windowSetStatusBarMessage(text, hideAfterTimeoutOrThenable) {
@@ -16415,6 +16480,9 @@ async function handleMessage(msg) {
             break;
         case 'window_dialog_response':
             _handleWindowDialogResponse(msg);
+            break;
+        case 'window_message_response':
+            _handleWindowMessageResponse(msg);
             break;
         case 'env_clipboard_response':
             _handleEnvClipboardResponse(msg);

@@ -28,7 +28,6 @@ from gui_modules.sao_panel_ui import (
     _SAO_PANEL_BORDER,
     _SAO_PANEL_ACCENT,
     _sao_panel_header,
-    _bind_panel_drag,
 )
 
 # ---------------------------------------------------------------------------
@@ -320,7 +319,34 @@ class AIEditorPanel:
         new_btn.pack(side="right", padx=4)
         new_btn.bind("<Button-1>", lambda _: self._new_chat())
 
-        _bind_panel_drag(win, header)
+        # Header has several interactive buttons (settings/close/tools/new),
+        # so it can't use the shared `_bind_panel_drag` recursive helper
+        # (which only excludes a single widget from the drag binding — it
+        # would silently break the other buttons). Bind drag directly to
+        # just the header background and the title label instead; the old
+        # `_bind_panel_drag(win, header)` call bound drag to the *entire*
+        # window body (everything except `header`), making every click in
+        # the chat/sidebar area move the window instead of reaching it.
+        _drag_state: Dict[str, int] = {}
+
+        def _drag_start(event):
+            _drag_state['x'] = event.x_root
+            _drag_state['y'] = event.y_root
+
+        def _drag_move(event):
+            try:
+                dx = event.x_root - _drag_state['x']
+                dy = event.y_root - _drag_state['y']
+                _drag_state['x'] = event.x_root
+                _drag_state['y'] = event.y_root
+                win.geometry(f'+{win.winfo_x() + dx}+{win.winfo_y() + dy}')
+            except Exception:
+                pass
+
+        header.bind('<Button-1>', _drag_start)
+        header.bind('<B1-Motion>', _drag_move)
+        title_lbl.bind('<Button-1>', _drag_start)
+        title_lbl.bind('<B1-Motion>', _drag_move)
 
         # History toggle button in header
         history_btn = tk.Label(

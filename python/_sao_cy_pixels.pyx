@@ -1427,3 +1427,50 @@ cpdef list bgra_alpha_spans(const unsigned char[:] bgra,
                 else:
                     x += 1
     return spans
+
+
+cpdef list pad_and_merge_row_spans(list spans, int pad):
+    """Pad each (x0, y0, x1, y1) span by *pad* and merge same-row spans
+    that touch or overlap once padded, in one linear pass.
+
+    ``spans`` must be in scanline order (row-major, ascending x within a
+    row) — exactly what ``bgra_alpha_spans()`` emits. This is a lossless
+    reshape: the final GDI region union is identical whether the spans
+    are pre-merged or fed to ExtCreateRegion one-by-one — a boolean union
+    of touching/overlapping rects gives the same result either way. It
+    matters because a detailed sprite (hair/fur alpha edges) can scan
+    into tens of thousands of 1-2px spans; building the HRGN from that
+    many individual rects costs far more than the scan itself.
+    """
+    cdef Py_ssize_t n = len(spans)
+    cdef list merged = []
+    cdef Py_ssize_t i
+    cdef long cx0, cy0, cx1, cy1, x0, y0, x1, y1
+    cdef tuple t
+
+    if n == 0:
+        return merged
+
+    t = <tuple>spans[0]
+    cx0 = <long>t[0] - pad
+    cy0 = <long>t[1] - pad
+    cx1 = <long>t[2] + pad
+    cy1 = <long>t[3] + pad
+
+    for i in range(1, n):
+        t = <tuple>spans[i]
+        x0 = <long>t[0] - pad
+        y0 = <long>t[1] - pad
+        x1 = <long>t[2] + pad
+        y1 = <long>t[3] + pad
+        if y0 == cy0 and y1 == cy1 and x0 <= cx1:
+            if x1 > cx1:
+                cx1 = x1
+        else:
+            merged.append((cx0, cy0, cx1, cy1))
+            cx0 = x0
+            cy0 = y0
+            cx1 = x1
+            cy1 = y1
+    merged.append((cx0, cy0, cx1, cy1))
+    return merged

@@ -833,6 +833,64 @@ def _terminal_command_context(command: str, cwd: str, gui_ref: Any,
     )
 
 
+def _terminal_failure_result(command: str, cwd: str, gui_ref: Any,
+                             api_ref: Any, profile: str,
+                             error: Any,
+                             *, exit_code: int = 1,
+                             state: str = "error",
+                             duration_ms: Optional[int] = None,
+                             started_wall: Optional[float] = None,
+                             finished_wall: Optional[float] = None) -> Dict[str, Any]:
+    terminal = _get_terminal_settings(gui_ref)
+    override_profile = _terminal_profile_name(profile)
+    if override_profile:
+        terminal["profile"] = override_profile
+    timeout = _terminal_int(
+        terminal.get("timeout"), _DEFAULT_TERMINAL_TIMEOUT)
+    output_limit = _terminal_int(
+        terminal.get("output_limit"), _DEFAULT_STDOUT_LIMIT)
+    workspace_root = _default_terminal_cwd(api_ref)
+    effective_cwd = os.path.abspath(cwd) if cwd else workspace_root
+    shell_path = _terminal_shell_path(terminal.get("shell_path"))
+    if not shell_path:
+        resolved_shell, resolved_args, profile_meta = _resolve_terminal_profile_shell(
+            _terminal_profile_name(terminal.get("profile")))
+        terminal.update({k: v for k, v in profile_meta.items()
+                         if k != "profile" or v})
+        if resolved_shell:
+            terminal["shell_path"] = resolved_shell
+            terminal["shell_args"] = list(resolved_args)
+            shell_path = resolved_shell
+    now_wall = time.time()
+    terminal_meta = _terminal_metadata(
+        terminal, timeout, output_limit, bool(shell_path),
+        effective_cwd, workspace_root)
+    terminal_meta["shellIntegrationStatus"] = "process-error"
+    terminal_meta["processId"] = None
+    return {
+        "command": command,
+        "cwd": effective_cwd,
+        "error": str(error),
+        "exitCode": exit_code,
+        "state": state,
+        "durationMs": duration_ms,
+        "startedAt": _terminal_time_label(started_wall or 0),
+        "finishedAt": _terminal_time_label(finished_wall or now_wall),
+        "sessionId": uuid.uuid4().hex,
+        "processId": None,
+        "cwdSource": (
+            "workspace" if effective_cwd and workspace_root
+            and os.path.abspath(effective_cwd) == os.path.abspath(workspace_root)
+            else ("explicit" if effective_cwd else "none")
+        ),
+        "profileSource": "configured" if _terminal_profile_name(
+            terminal.get("profile")) else "system",
+        "shellIntegrationStatus": "process-error",
+        "encoding": "utf-8",
+        "terminal": terminal_meta,
+    }
+
+
 def _terminal_subprocess_env(terminal: Dict[str, Any]) -> Dict[str, str]:
     env = os.environ.copy()
     env.setdefault("PYTHONIOENCODING", "utf-8")
@@ -1051,8 +1109,12 @@ def _terminal_job_snapshot(job_id: str, since_seq: int = 0) -> Dict[str, Any]:
 
 def _start_terminal_job(command: str, cwd: str, gui_ref: Any,
                         api_ref: Any, profile: str = "") -> Dict[str, Any]:
-    terminal, timeout, output_limit, explicit_shell, effective_cwd, workspace_root, run_command = (
-        _terminal_command_context(command, cwd, gui_ref, api_ref, profile))
+    try:
+        terminal, timeout, output_limit, explicit_shell, effective_cwd, workspace_root, run_command = (
+            _terminal_command_context(command, cwd, gui_ref, api_ref, profile))
+    except Exception as exc:
+        return _terminal_failure_result(
+            command, cwd, gui_ref, api_ref, profile, exc)
     kwargs: Dict[str, Any] = {
         "shell": not explicit_shell,
         "stdout": subprocess.PIPE,
@@ -1072,7 +1134,9 @@ def _start_terminal_job(command: str, cwd: str, gui_ref: Any,
     try:
         proc = subprocess.Popen(run_command, **kwargs)
     except Exception as exc:
-        return {"error": str(exc), "command": command, "cwd": effective_cwd, "exitCode": 1}
+        return _terminal_failure_result(
+            command, effective_cwd, gui_ref, api_ref, profile, exc,
+            started_wall=time.time())
     terminal_meta = _terminal_metadata(
         terminal, timeout, output_limit, explicit_shell, effective_cwd,
         workspace_root)
@@ -1298,7 +1362,8 @@ def _run_terminal(command: str, cwd: str = "", gui_ref: Any = None,
                                            workspace_root),
         }
     except Exception as exc:
-        return {"error": str(exc)}
+        return _terminal_failure_result(
+            command, cwd, gui_ref, api_ref, profile, exc)
 
 
 # ======================================================================

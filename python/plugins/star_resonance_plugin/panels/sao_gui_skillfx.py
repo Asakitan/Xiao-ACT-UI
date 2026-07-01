@@ -128,7 +128,7 @@ MOTION_SAMPLES_STEADY = ((0.0, 1.0),)
 def _skillfx_gpu_enabled() -> bool:
     """SkillFX requires the shader/GPU compose path."""
     try:
-        from config import USE_GPU_SKILLFX  # type: ignore
+        from sr_config import USE_GPU_SKILLFX  # type: ignore
     except Exception:
         USE_GPU_SKILLFX = True
     if not USE_GPU_SKILLFX:

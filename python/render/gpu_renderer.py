@@ -133,6 +133,7 @@ def _try_init() -> bool:
     # Build shader programs for this thread's context
     _tls.ctx = ctx
     _tls.fbo_cache = {}
+    _tls.src_tex_cache = {}
     try:
         _build_programs_tls()
     except Exception as exc:
@@ -327,6 +328,28 @@ def _get_fbo(w: int, h: int, tag: str = 'rgba'):
     return fbo
 
 
+def _get_src_tex(w: int, h: int, tag: str, filt=(0x2600, 0x2600)):
+    """Per-thread, per-tag source texture cache.
+
+    Reuses the GL texture object across calls (glTexSubImage2D via
+    ``.write()``) instead of create+release every invocation. Only
+    reallocates when the requested size changes.
+    """
+    cache = _tls.src_tex_cache
+    entry = cache.get(tag)
+    if entry is not None and entry[0] == w and entry[1] == h:
+        return entry[2]
+    if entry is not None:
+        entry[2].release()
+    ctx = _tls.ctx
+    tex = ctx.texture((w, h), 4, dtype='f1')
+    tex.filter = filt
+    tex.repeat_x = False
+    tex.repeat_y = False
+    cache[tag] = (w, h, tex)
+    return tex
+
+
 def _to_rgba_np(img) -> np.ndarray:
     if isinstance(img, np.ndarray):
         arr = img
@@ -369,10 +392,8 @@ def gaussian_blur_rgba(img, sigma: float) -> Image.Image:
         # Re-bind our context in case another standalone GL context was made
         # current on this thread.
         with _get_wgl_serialize_lock(), _render_lock, ctx:
-            src_tex = ctx.texture((w, h), 4, arr.tobytes(), dtype='f1')
-            src_tex.filter = (0x2601, 0x2601)  # GL_LINEAR
-            src_tex.repeat_x = False
-            src_tex.repeat_y = False
+            src_tex = _get_src_tex(w, h, 'blurSrc', filt=(0x2601, 0x2601))  # GL_LINEAR
+            src_tex.write(arr)
 
             fbo_h = _get_fbo(w, h, 'blurH')
             fbo_v = _get_fbo(w, h, 'blurV')
@@ -398,8 +419,6 @@ def gaussian_blur_rgba(img, sigma: float) -> Image.Image:
             data = fbo_v.read(components=4, alignment=1)
             out = np.frombuffer(data, dtype=np.uint8).reshape(h, w, 4)
             out = np.flipud(out).copy()
-
-            src_tex.release()
         return Image.fromarray(out, 'RGBA')
     except Exception as exc:
         try:
@@ -504,8 +523,8 @@ def premultiply_bgra_bytes(rgba: np.ndarray) -> Optional[bytes]:
         with _get_wgl_serialize_lock(), _render_lock:
             _phase_trace('gpu.premult.lock.acquired', f'{w}x{h}')
             with ctx:
-                src_tex = ctx.texture((w, h), 4, arr.tobytes(), dtype='f1')
-                src_tex.filter = (0x2600, 0x2600)
+                src_tex = _get_src_tex(w, h, 'premSrc', filt=(0x2600, 0x2600))
+                src_tex.write(arr)
                 fbo = _get_fbo(w, h, 'prem')
                 fbo.use()
                 ctx.viewport = (0, 0, w, h)
@@ -520,7 +539,6 @@ def premultiply_bgra_bytes(rgba: np.ndarray) -> Optional[bytes]:
                 # the CPU premultiply path already writes rows in top-down order.
                 # Do not flip here or every async ULW overlay ends up mirrored.
                 out = np.frombuffer(data, dtype=np.uint8).reshape(h, w, 4).copy()
-                src_tex.release()
         _phase_trace('gpu.premult.end', f'{w}x{h}')
         return out.tobytes()
     except Exception as exc:

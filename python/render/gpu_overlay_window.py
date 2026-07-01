@@ -450,7 +450,8 @@ class GlfwPump:
         # thread-safe (Tcl_Eval re-entrancy → fast crash).
         self._tk_q: 'queue.Queue[Callable[[], Any]]' = queue.Queue()
         self._tk_poller_id: Optional[str] = None
-        self._tk_poller_ms = 8  # ~125 Hz dispatch latency
+        self._tk_poller_ms = 16  # ~62 Hz dispatch latency; carries only
+        # structural events (window show/create), not per-frame render data
         self._start_tk_poller()
 
     # ── Thread lifecycle ────────────────────────────────────────────

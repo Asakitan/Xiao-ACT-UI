@@ -529,7 +529,7 @@ class SAOPlayerGUIPacketCallbacksMixin:
                         if not getattr(self, '_dbg_buffmon_boss_first', False):
                             self._dbg_buffmon_boss_first = True
                             try:
-                                from config import BUFFMON_DEBUG as _bm_dbg
+                                from sr_config import BUFFMON_DEBUG as _bm_dbg
                             except Exception:
                                 _bm_dbg = False
                             if _bm_dbg:

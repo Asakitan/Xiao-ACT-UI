@@ -548,7 +548,6 @@ class WorkshopPanel:
         header = tk.Frame(win, bg=_WG_HEADER_BG, height=44)
         header.pack(fill='x')
         header.pack_propagate(False)
-        _bind_panel_drag(win, header)
         hdr_inner = tk.Frame(header, bg=_WG_HEADER_BG)
         hdr_inner.pack(fill='both', expand=True, padx=12, pady=0)
         tk.Label(hdr_inner, text='◇', bg=_WG_HEADER_BG, fg=_WG_GOLD,
@@ -564,6 +563,11 @@ class WorkshopPanel:
         close_btn.bind('<Button-1>', lambda e: self.hide())
         close_btn.bind('<Enter>', lambda e: close_btn.configure(fg=_WG_RED))
         close_btn.bind('<Leave>', lambda e: close_btn.configure(fg=_WG_MUTED))
+        # Bind drag to the header bar only (excluding the close button) —
+        # binding the whole toplevel here (as `_bind_panel_drag(win, header)`
+        # did previously) made every click anywhere in the body start a
+        # window drag instead of reaching the clicked control.
+        _bind_panel_drag(header, close_btn)
         tk.Frame(win, bg=_WG_BORDER, height=1).pack(fill='x')
 
         # ── Tabs ──

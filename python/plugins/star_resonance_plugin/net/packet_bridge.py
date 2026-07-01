@@ -560,14 +560,10 @@ class PacketBridge:
                 return
             # hybrid/auto 模式: memory 失败时 fall through 到 TCP;
             # hybrid 成功时也继续启动 TCP, 保留 boss/entity/damage 兜底.
-            try:
-                from config import logger as _logger  # type: ignore
-                if mem_ok:
-                    _logger.info("[bridge] hybrid memory source started; keeping TCP fallback active")
-                else:
-                    _logger.warning("[bridge] memory source failed; falling back to TCP")
-            except Exception:
-                pass
+            if mem_ok:
+                print("[bridge] hybrid memory source started; keeping TCP fallback active", flush=True)
+            else:
+                print("[bridge] memory source failed; falling back to TCP", flush=True)
         self._thread = threading.Thread(target=self._run, daemon=True,
                                         name='sao_bridge')
         self._thread.start()
@@ -1929,7 +1925,7 @@ class PacketBridge:
                 if not getattr(self, '_dbg_buffmon_first', False):
                     self._dbg_buffmon_first = True
                     try:
-                        from config import BUFFMON_DEBUG as _bm_dbg
+                        from sr_config import BUFFMON_DEBUG as _bm_dbg
                     except Exception:
                         _bm_dbg = False
                     if _bm_dbg:

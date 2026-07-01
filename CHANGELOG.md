@@ -2,6 +2,23 @@
 
 逐版本变更记录, 最新在前。本文件由 config.py 内联的历史注释迁出。
 
+## v5.2.7: AI Editor 消息回传 / 本地代理、镜像点击修复与 overlay 区域生成提速.
+
+  - **AI Editor / 扩展宿主**:
+    - 终端启动失败统一返回结构化 `process-error` 结果, 前端可稳定展示失败的 cwd / profile / shell / 时间戳信息。
+    - Node extension host 新增 `window_message_request/response` 往返, 带 action 的 `showInformationMessage` / `showWarningMessage` 选择结果可回传给扩展。
+    - 设置页新增 Claude Code 本地代理状态面板, 支持启动 / 停止 / 复制环境变量; `real_extension_probe` 与 `selftest` 补齐 CSS / JS / image / localhost 资源 smoke 覆盖, 并新增 `selftest_runner` 聚合入口。
+  - **GUI / 面板交互**:
+    - AI Editor 与 Workshop 分离窗口仅允许标题栏拖动, 避免正文区域点击误触发拖窗。
+    - 插件管理面板刷新改为后台线程异步扫描, 减少 Tk 主线程卡顿; detached plugin panels 同步补做主题刷新。
+  - **overlay / render**:
+    - `tk_mirror` 改为直接按 Tk 控件树命中并 `event_generate()` 分发输入, 修复镜像窗口正文点击被吞、hover/press 不稳定的问题。
+    - `overlay_compositor` 新增 alpha span `pad_and_merge_row_spans()` 合并与 `ExtCreateRegion` 批量建区路径, 默认帧率跟随主显示器刷新率并启用 1ms timer quantum。
+    - `gpu_renderer` 复用源纹理缓存, 减少每帧 create/release 开销; `gpu_overlay_window` 的 Tk poller 降到 16ms, 只承载结构事件派发。
+  - **Star Resonance / 打包**:
+    - buffmon / skillfx / packet bridge / webview bridge 的运行期开关读取切到 `sr_config`, 避免误读全局 `config`。
+    - Nuitka 打包显式补入 `lupa`, 保证 Lua 运行时随包可用。
+
 ## v5.2.6: overlay DComp 呈现桥、Tk mirror 时序收口、WDA 路径改写与非 AI 运行时批量刷新.
 
   - **overlay / mirror**:

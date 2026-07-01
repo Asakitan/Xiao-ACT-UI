@@ -2,13 +2,13 @@
 """tk_mirror — capture Tk Toplevel windows and present via compositor.
 
 Mirrors a Tk Toplevel through the unified overlay compositor:
-  1. Hides the real Tk window off-screen (-10000, -10000)
+  1. Makes the real Tk window invisible (alpha≈0, WS_EX_TRANSPARENT)
   2. Captures its rendered content via PrintWindow → BGRA at target FPS
-  3. Uploads the BGRA to a compositor layer
-  4. Forwards mouse events from the compositor layer to the hidden Tk window
+  3. Uploads the BGRA to a compositor layer (protected by WDA)
+  4. Forwards mouse events by walking this window's own Tk widget geometry
+     to resolve the hit widget (GetCursorPos coords) and synthesizing the
+     event directly onto it with event_generate()
   5. Intercepts geometry() calls so drag operations move the compositor layer
-
-API matches WebViewProxy pattern from webview_proxy.py.
 """
 from __future__ import annotations
 
@@ -20,15 +20,14 @@ from typing import Any, Callable, Dict, Optional, Tuple
 
 import numpy as np
 
-from render.webview_proxy import (
-    _capture_window, _make_lparam, _user32,
-    WM_MOUSEMOVE, WM_LBUTTONDOWN, WM_LBUTTONUP,
-    WM_RBUTTONDOWN, WM_RBUTTONUP, WM_MOUSEWHEEL,
-    MK_LBUTTON, MK_RBUTTON,
-)
+from render.webview_proxy import _capture_window, _user32
 
 WS_EX_NOACTIVATE = 0x08000000
+WS_EX_TRANSPARENT = 0x00000020
 GWL_EXSTYLE = -20
+
+_user32.GetCursorPos.argtypes = [ctypes.POINTER(wt.POINT)]
+_user32.GetCursorPos.restype = wt.BOOL
 
 #: Default corner radius (px) applied to mirrored Tk panels — matches the
 #: DWM window-rounding look used elsewhere (rounded_panel()/CreateRoundRectRgn
@@ -112,6 +111,7 @@ class TkMirrorLayer:
         self._screen_y: int = 0
 
         self._layer = None
+        self._compositor = None
         self._running = False
         self._thread: Optional[threading.Thread] = None
         self._stop_evt = threading.Event()
@@ -123,7 +123,14 @@ class TkMirrorLayer:
         self._orig_y: int = 0
         self._orig_w: int = 0
         self._orig_h: int = 0
-        self._press_target: Optional[Any] = None
+        self._held_button: int = -1
+        self._pressed_widget = None
+        self._hover_widget = None
+        # (widget, x0, y0, x1, y1) for the last resolved hit — re-verified
+        # cheaply (4 winfo_* calls) on every move instead of re-walking the
+        # whole widget tree, since that's the common case (cursor sitting
+        # still or drifting slightly within the same control).
+        self._hit_rect_cache: Optional[Tuple[Any, int, int, int, int]] = None
 
     def attach(self) -> None:
         if self._attached:
@@ -147,7 +154,7 @@ class TkMirrorLayer:
 
         root = _tk_root_for(win)
         if root is None:
-            raise RuntimeError('Tk mirror requires a Tk root for input proxy')
+            raise RuntimeError('Tk mirror requires a Tk root')
 
         from render.gpu_overlay_window import (
             _get_unified_overlay, get_unified_overlay_mode,
@@ -176,13 +183,10 @@ class TkMirrorLayer:
             )
             layer.set_input_callbacks(
                 cursor_pos_fn=self._on_cursor_pos,
+                cursor_leave_fn=self._on_cursor_leave,
                 mouse_button_fn=self._on_mouse_button,
                 scroll_fn=self._on_scroll,
             )
-            layer.create_input_proxy(root)
-            if layer._input_proxy is None:
-                raise RuntimeError('failed to create Tk mirror input proxy')
-            layer.sync_input_proxy()
         except Exception:
             if layer is not None:
                 try:
@@ -192,29 +196,32 @@ class TkMirrorLayer:
             raise
 
         self._layer = layer
+        self._compositor = uo
 
-        # Save original exstyle + alpha for detach restore after compositor
-        # input is ready. If setup fails before this point, the real Tk window
-        # stays normal and clickable.
-        self._orig_exstyle = _user32.GetWindowLongPtrW(
-            self._hwnd, GWL_EXSTYLE)
         try:
-            self._orig_alpha = float(win.attributes('-alpha') or 1.0)
-        except Exception:
-            self._orig_alpha = 1.0
+            self._orig_exstyle = _user32.GetWindowLongPtrW(
+                self._hwnd, GWL_EXSTYLE)
+            try:
+                self._orig_alpha = float(win.attributes('-alpha') or 1.0)
+            except Exception:
+                self._orig_alpha = 1.0
 
-        # Make the Tk window nearly invisible (alpha≈0) and click-through.
-        # The window stays at its normal position so PrintWindow captures
-        # valid content (moving off-screen causes empty frames).
-        _user32.SetWindowLongPtrW(
-            self._hwnd, GWL_EXSTYLE,
-            self._orig_exstyle | WS_EX_NOACTIVATE | WS_EX_TRANSPARENT)
-        try:
-            win.attributes('-alpha', 0.01)
-        except Exception:
-            pass
+            _user32.SetWindowLongPtrW(
+                self._hwnd, GWL_EXSTYLE,
+                self._orig_exstyle | WS_EX_NOACTIVATE | WS_EX_TRANSPARENT)
+            try:
+                win.attributes('-alpha', 0.01)
+            except Exception:
+                pass
 
-        self._install_geometry_hook()
+            self._install_geometry_hook()
+        except Exception:
+            try:
+                uo.destroy_layer(layer_name)
+            except Exception:
+                pass
+            self._layer = None
+            raise
 
         self._attached = True
         self._running = True
@@ -224,6 +231,7 @@ class TkMirrorLayer:
             name=f'tk-mirror-{self._name}',
         )
         self._thread.start()
+        self._sync_host_input()
 
     def detach(self) -> None:
         if not self._attached:
@@ -243,6 +251,7 @@ class TkMirrorLayer:
             except Exception:
                 pass
             self._layer = None
+        self._sync_host_input()
 
         # Restore original alpha + exstyle
         try:
@@ -256,24 +265,41 @@ class TkMirrorLayer:
             pass
         self._attached = False
 
+    def _sync_host_input(self) -> None:
+        try:
+            if self._compositor is not None:
+                self._compositor.sync_host_input_mode()
+        except Exception:
+            pass
+
     def show(self) -> None:
         self._visible = True
         if self._layer:
             self._layer.show()
-            self._layer.sync_input_proxy()
+        self._sync_host_input()
 
     def hide(self) -> None:
         self._visible = False
         if self._layer:
             self._layer.hide()
-            self._layer.sync_input_proxy()
+        self._sync_host_input()
+        # A layer that hides mid-press (e.g. its own close button) never
+        # gets the matching button-up — the compositor's capture routing
+        # sees .visible go False and stops delivering to this layer at all.
+        # Without this reset, _pressed_widget stays stale and the *next*
+        # time this panel is reopened, the first hover move is wrongly
+        # treated as an in-progress drag instead of resolving normally.
+        self._pressed_widget = None
+        self._hover_widget = None
+        self._held_button = -1
+        self._hit_rect_cache = None
 
     def set_position(self, x: int, y: int) -> None:
         self._screen_x = x
         self._screen_y = y
+        self._hit_rect_cache = None
         if self._layer:
             self._layer.set_position(x, y)
-            self._layer.sync_input_proxy()
         if self._hwnd:
             _user32.MoveWindow(
                 self._hwnd, x, y,
@@ -282,21 +308,50 @@ class TkMirrorLayer:
     def set_geometry(self, x: int, y: int, w: int, h: int) -> None:
         self._screen_x = x
         self._screen_y = y
-        changed = (w != self._width or h != self._height)
         self._width = w
         self._height = h
+        self._hit_rect_cache = None
         if self._layer:
             self._layer.set_geometry(x, y, w, h)
-            self._layer.sync_input_proxy()
         if self._hwnd:
             _user32.MoveWindow(self._hwnd, x, y, w, h, True)
+
+    def sync_from_window(self) -> None:
+        """Sync layer size from actual Win32 window rect."""
+        if not self._hwnd or self._layer is None:
+            return
+        rect = wt.RECT()
+        if not _user32.GetWindowRect(self._hwnd, ctypes.byref(rect)):
+            return
+        w = max(1, rect.right - rect.left)
+        h = max(1, rect.bottom - rect.top)
+        if w != self._width or h != self._height:
+            self._width = w
+            self._height = h
+            try:
+                self._layer.set_geometry(
+                    self._screen_x, self._screen_y, w, h)
+            except Exception:
+                pass
 
     # ── Capture loop ─────────────────────────────────────────
 
     def _capture_loop(self) -> None:
+        rect = wt.RECT()
         while self._running:
             layer = self._layer
             if self._visible and layer is not None and self._hwnd:
+                if _user32.GetWindowRect(self._hwnd, ctypes.byref(rect)):
+                    aw = max(1, rect.right - rect.left)
+                    ah = max(1, rect.bottom - rect.top)
+                    if aw != self._width or ah != self._height:
+                        self._width = aw
+                        self._height = ah
+                        try:
+                            layer.set_geometry(
+                                self._screen_x, self._screen_y, aw, ah)
+                        except Exception:
+                            pass
                 bgra = _capture_window(
                     self._hwnd, self._width, self._height)
                 if bgra and layer is not None:
@@ -312,119 +367,189 @@ class TkMirrorLayer:
                         pass
             self._stop_evt.wait(timeout=self._capture_interval)
 
-    # ── Input forwarding ─────────────────────────────────────
+    # ── Input forwarding (direct Tk widget dispatch) ──
+    #
+    # Previously this forwarded via SendMessageW(WM_LBUTTONDOWN/UP/MOVE) to
+    # the hidden (WS_EX_NOACTIVATE | WS_EX_TRANSPARENT, alpha=0.01) source
+    # HWND and relied on Tk's own Win32 message pump to hit-test the click
+    # against a widget. That round-trip was unreliable for this window
+    # (never activated, never really painted) — clicks would frequently not
+    # reach any widget's binding at all.
+    #
+    # Instead: read the *current* absolute cursor position (GetCursorPos,
+    # always accurate — unaffected by any queued/stale compositor-thread
+    # coords), manually walk this mirror's own Tk widget tree to find which
+    # widget's rect contains that screen point, and synthesize the event
+    # straight onto that widget with ``event_generate``. This never touches
+    # the Win32 message queue — it is pure in-process Tk event dispatch, the
+    # same mechanism real mouse input would use once a target is resolved.
+    #
+    # Deliberately not Tk's built-in ``winfo_containing()``: on Windows that
+    # resolves the toplevel via a WindowFromPoint-style OS query first, and
+    # this source window is WS_EX_TRANSPARENT (needed so it doesn't itself
+    # block real clicks to the game/compositor) — such a query would skip
+    # right over it and find nothing. Walking ``self._tk_win``'s own child
+    # geometry directly needs no OS window lookup at all: we already know
+    # which toplevel to search.
+    #
+    # A press on widget W keeps W as the target for subsequent move/release
+    # events regardless of where the cursor drifts (implicit grab), matching
+    # how a real click-drag on W would behave.
 
-    def _widget_offset(self, widget) -> Tuple[int, int]:
-        ox = 0
-        oy = 0
-        cur = widget
-        while cur is not None and cur is not self._tk_win:
-            try:
-                ox += int(cur.winfo_x())
-                oy += int(cur.winfo_y())
-                cur = cur.master
-            except Exception:
-                break
-        return ox, oy
+    def _cursor_screen_pos(self) -> Tuple[int, int]:
+        pt = wt.POINT()
+        _user32.GetCursorPos(ctypes.byref(pt))
+        return pt.x, pt.y
 
-    def _widget_at(self, widget, x: int, y: int,
-                   ox: int = 0, oy: int = 0):
-        try:
-            children = list(widget.winfo_children())
-        except Exception:
-            children = []
-        for child in reversed(children):
-            try:
-                if not child.winfo_ismapped():
-                    continue
-                cx = ox + int(child.winfo_x())
-                cy = oy + int(child.winfo_y())
-                cw = int(child.winfo_width())
-                ch = int(child.winfo_height())
-            except Exception:
-                continue
-            if cx <= x < cx + cw and cy <= y < cy + ch:
-                return self._widget_at(child, x, y, cx, cy)
-        return widget, x - ox, y - oy
+    # Bound how long a cached hit-rect can be reused without re-walking the
+    # tree, so a layout rebuild under a stationary cursor (e.g. the plugin
+    # card list refreshing) can't leave the cache stale indefinitely.
+    _HIT_CACHE_MAX_AGE = 0.3
 
-    def _forward_tk_mouse_event(self, sequence: str, x: int, y: int,
-                                *, capture: bool = False,
-                                delta: Optional[int] = None) -> bool:
-        try:
-            target_info = None
-            if capture and self._press_target is not None:
-                target = self._press_target
-                ox, oy = self._widget_offset(target)
-                target_info = (target, x - ox, y - oy)
-            if target_info is None:
-                target_info = self._widget_at(self._tk_win, x, y)
-            target, lx, ly = target_info
-            if sequence.startswith('<ButtonPress'):
+    def _widget_at(self, sx: int, sy: int):
+        # Only a *leaf* widget's rect is safe to trust via plain containment:
+        # a container's bounding rect can have children positioned inside
+        # it, and a point inside the container's rect but over one of those
+        # children must resolve to the child, not the container. Since we
+        # don't track the "holes" a container's children carve out of its
+        # rect, reusing a container hit via containment alone would wrongly
+        # swallow points that actually belong to a child (e.g. the header
+        # frame's cached rect masking its close button) — which is exactly
+        # why hover effects were firing inconsistently. So the cache only
+        # short-circuits for widgets with no children at all.
+        cache = self._hit_rect_cache
+        if cache is not None:
+            widget, x0, y0, x1, y1, stamp = cache
+            if (time.monotonic() - stamp < self._HIT_CACHE_MAX_AGE
+                    and x0 <= sx < x1 and y0 <= sy < y1):
                 try:
-                    target.focus_set()
+                    if widget.winfo_viewable() and not widget.winfo_children():
+                        return widget
                 except Exception:
                     pass
-            kwargs = {
-                'x': max(0, int(lx)),
-                'y': max(0, int(ly)),
-                'rootx': int(self._screen_x + x),
-                'rooty': int(self._screen_y + y),
-            }
-            if delta is not None:
-                kwargs['delta'] = int(delta)
-            target.event_generate(sequence, **kwargs)
-            return True
-        except Exception:
-            return False
+            self._hit_rect_cache = None
 
-    def _on_cursor_pos(self, lx: float, ly: float) -> None:
-        x, y = int(lx), int(ly)
-        if self._forward_tk_mouse_event('<Motion>', x, y, capture=True):
+        win = self._tk_win
+        try:
+            wx0, wy0 = win.winfo_rootx(), win.winfo_rooty()
+            wx1, wy1 = wx0 + win.winfo_width(), wy0 + win.winfo_height()
+            if not (wx0 <= sx < wx1 and wy0 <= sy < wy1):
+                return None
+        except Exception:
+            return None
+        best = win
+        best_rect = (wx0, wy0, wx1, wy1)
+        best_is_leaf = False
+
+        def _descend(children) -> None:
+            nonlocal best, best_rect, best_is_leaf
+            for ch in children:
+                try:
+                    if not ch.winfo_viewable():
+                        continue
+                    cx, cy = ch.winfo_rootx(), ch.winfo_rooty()
+                    cw, chh = ch.winfo_width(), ch.winfo_height()
+                    if cx <= sx < cx + cw and cy <= sy < cy + chh:
+                        best = ch
+                        best_rect = (cx, cy, cx + cw, cy + chh)
+                        grandchildren = ch.winfo_children()
+                        best_is_leaf = not grandchildren
+                        if grandchildren:
+                            _descend(grandchildren)
+                except Exception:
+                    continue
+
+        try:
+            _descend(win.winfo_children())
+        except Exception:
+            pass
+        if best_is_leaf:
+            x0, y0, x1, y1 = best_rect
+            self._hit_rect_cache = (best, x0, y0, x1, y1, time.monotonic())
+        else:
+            self._hit_rect_cache = None
+        return best
+
+    # X11/Tk event-state bits (used by real Tk on every platform, including
+    # Windows) — set explicitly rather than relying on event_generate() to
+    # infer them from the sequence's modifier prefix.
+    _STATE_BUTTON1 = 0x100
+    _STATE_BUTTON3 = 0x400
+
+    def _generate(self, widget, sequence: str, sx: int, sy: int,
+                  state: int = 0, **extra) -> None:
+        try:
+            lx = sx - widget.winfo_rootx()
+            ly = sy - widget.winfo_rooty()
+            widget.event_generate(
+                sequence, x=lx, y=ly, rootx=sx, rooty=sy, state=state,
+                **extra)
+        except Exception:
+            pass
+
+    def _on_cursor_pos(self, _lx: float, _ly: float) -> None:
+        sx, sy = self._cursor_screen_pos()
+        if self._pressed_widget is not None:
+            # Real Tk/X11 suppresses Enter/Leave while a button is held
+            # (implicit grab) — only the grabbed widget gets motion.
+            target = self._pressed_widget
+            if self._held_button == 0:
+                self._generate(target, '<B1-Motion>', sx, sy, state=self._STATE_BUTTON1)
+            elif self._held_button == 1:
+                self._generate(target, '<B3-Motion>', sx, sy, state=self._STATE_BUTTON3)
             return
-        lp = _make_lparam(x, y)
-        _user32.PostMessageW(self._hwnd, WM_MOUSEMOVE, 0, lp)
+
+        target = self._widget_at(sx, sy)
+        if target is not self._hover_widget:
+            prev = self._hover_widget
+            self._hover_widget = target
+            if prev is not None:
+                self._generate(prev, '<Leave>', sx, sy)
+            if target is not None:
+                self._generate(target, '<Enter>', sx, sy)
+        if target is not None:
+            self._generate(target, '<Motion>', sx, sy)
+
+    def _on_cursor_leave(self) -> None:
+        prev = self._hover_widget
+        self._hover_widget = None
+        if prev is not None:
+            sx, sy = self._cursor_screen_pos()
+            self._generate(prev, '<Leave>', sx, sy)
 
     def _on_mouse_button(self, button: int, action: int,
-                         mods: int, lx: float, ly: float) -> None:
-        x, y = int(lx), int(ly)
-        lp = _make_lparam(x, y)
-        if button == 0:
-            msg = WM_LBUTTONDOWN if action == 1 else WM_LBUTTONUP
-            wp = MK_LBUTTON if action == 1 else 0
-            sequence = '<ButtonPress-1>' if action == 1 else '<ButtonRelease-1>'
-        elif button == 1:
-            msg = WM_RBUTTONDOWN if action == 1 else WM_RBUTTONUP
-            wp = MK_RBUTTON if action == 1 else 0
-            sequence = '<ButtonPress-3>' if action == 1 else '<ButtonRelease-3>'
-        else:
+                         mods: int, _lx: float, _ly: float) -> None:
+        if button not in (0, 1):
             return
+        sx, sy = self._cursor_screen_pos()
         if action == 1:
+            target = self._widget_at(sx, sy)
+            if target is None:
+                return
+            self._pressed_widget = target
+            self._held_button = button
             try:
-                self._press_target = self._widget_at(self._tk_win, x, y)[0]
-            except Exception:
-                self._press_target = None
-        forwarded = self._forward_tk_mouse_event(
-            sequence, x, y, capture=action == 0)
-        if action == 0:
-            self._press_target = None
-        if forwarded:
-            return
-        _user32.PostMessageW(self._hwnd, msg, wp, lp)
-        if action == 1:
-            try:
-                _user32.SetFocus(self._hwnd)
+                target.focus_set()
             except Exception:
                 pass
+            seq = '<ButtonPress-1>' if button == 0 else '<ButtonPress-3>'
+            self._generate(target, seq, sx, sy)
+        else:
+            target = self._pressed_widget
+            self._pressed_widget = None
+            self._held_button = -1
+            if target is None:
+                return
+            seq = '<ButtonRelease-1>' if button == 0 else '<ButtonRelease-3>'
+            state = self._STATE_BUTTON1 if button == 0 else self._STATE_BUTTON3
+            self._generate(target, seq, sx, sy, state=state)
 
-    def _on_scroll(self, dx: float, dy: float) -> None:
-        delta = int(dy * 120)
-        if self._forward_tk_mouse_event(
-                '<MouseWheel>', self._width // 2, self._height // 2,
-                delta=delta):
+    def _on_scroll(self, _dx: float, dy: float) -> None:
+        sx, sy = self._cursor_screen_pos()
+        target = self._pressed_widget or self._widget_at(sx, sy)
+        if target is None:
             return
-        wp = (delta & 0xFFFF) << 16
-        lp = _make_lparam(self._width // 2, self._height // 2)
-        _user32.PostMessageW(self._hwnd, WM_MOUSEWHEEL, wp, lp)
+        self._generate(target, '<MouseWheel>', sx, sy, delta=int(dy * 120))
 
     # ── Geometry hook (intercept Tk drag → move compositor layer) ─
 
@@ -581,14 +706,24 @@ class SaoToplevel(tk.Toplevel):
             self._mirror = None
             self._mirror_attached = False
 
+    def attributes(self, *args):
+        if self._mirror is not None and args:
+            if str(args[0]) == '-alpha' and len(args) >= 2:
+                return ''
+        return super().attributes(*args)
+
+    wm_attributes = attributes
+
     def deiconify(self) -> None:
         self._ensure_mirror()
         if self._mirror is not None:
             try:
                 super().deiconify()
-                self.attributes('-alpha', 0.01)
+                super().update_idletasks()
+                super().attributes('-alpha', 0.01)
             except Exception:
                 pass
+            self._mirror.sync_from_window()
             self._mirror.show()
         else:
             super().deiconify()
