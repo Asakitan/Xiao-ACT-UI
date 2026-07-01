@@ -12124,6 +12124,9 @@ console.log("frontend word separator behavior ok");
             and ".settings-review-bar { display:none;" in html
             and "host.classList.toggle('open',!!dirty||settingsHasReviewFilter());" in html
             and "searchbar.classList.toggle('help-open',open);" in html)
+    _check("settings row header reserves space for the hover action buttons",
+           ".settings-built-head { display:grid; grid-template-columns:auto minmax(120px,auto) minmax(0,1fr) auto;\n  align-items:center; gap:8px; min-height:22px; margin:0 0 2px; padding-right:84px; }" in html
+           and ".settings-vscode-calm .settings-built-head { grid-template-columns:auto minmax(180px,auto) minmax(0,1fr) auto; gap:7px; cursor:default; padding-right:84px; }" in html)
     _check("settings has a simple/complex/advanced complexity tier",
            "const SETTINGS_MODE_ORDER=['simple','complex','advanced'];" in html
            and "function settingsCurrentMode(){" in html
