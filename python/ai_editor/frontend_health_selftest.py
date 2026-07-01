@@ -29,7 +29,8 @@ _PARITY_PHASES: list[tuple[str, tuple[str, ...]]] = [
     ("4-language-editor", ("language", "diff")),
     ("5-perf-stability", ("interaction", "control noop", "critical action", "long action",
                            "command health", "statusbar", "diagnostics maintenance",
-                           "lifecycle", "high-frequency", "idle time", "failure classif")),
+                           "lifecycle", "high-frequency", "idle time", "failure classif",
+                           "perf budget")),
     ("6-motion-ui-workspace", ("terminal", "workspace", "window closing", "drag overlay",
                                "keyboard recovery")),
 ]
@@ -373,6 +374,12 @@ def run_frontend_health_selftest() -> list[str]:
 
     _require(failures, "health checks are not high-frequency polling", "setInterval(interactionWatchdog, 800)" in html)
     _require(failures, "health work can be scheduled during idle time", "aiEditorScheduleHealthWork" in html and "requestIdleCallback" in html)
+
+    _require(failures, "perf budget tracker exists", "function recordAiEditorPerfSample(name,durationMs)" in html and "function aiEditorPerfBudgetSnapshot()" in html)
+    _require(failures, "perf budget tracker is exported for the health aggregate", "window.recordAiEditorPerfSample=recordAiEditorPerfSample;" in html and "window.aiEditorPerfBudgetSnapshot=aiEditorPerfBudgetSnapshot;" in html and 'perfBudgets: safeCall("aiEditorPerfBudgetSnapshot")' in html)
+    _require(failures, "settings open time is sampled against its plan budget", "const _settingsOpenT0=performance.now();" in html and "recordAiEditorPerfSample('settingsOpenVisible'" in html and "settingsOpenVisible:400" in html)
+    _require(failures, "language provider round trip is sampled against its plan budget", "const _providerT0=performance.now();" in html and "recordAiEditorPerfSample('languageProvider'" in html and "languageProvider:1500" in html)
+    _require(failures, "perf budget over-budget state reaches the health payload", "payload.perfBudgetOverCount=perfBudgets.overBudgetCount||0;" in html and "payload.perfBudgetOverNames=perfBudgets.overBudgetNames||'';" in html)
 
     if duplicate_script_ids:
         failures.append(f"duplicate script ids: {', '.join(duplicate_script_ids)}")

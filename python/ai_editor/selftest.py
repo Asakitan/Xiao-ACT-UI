@@ -10284,6 +10284,7 @@ console.log("frontend minimap settings behavior ok");
             "updateEditorLanguageProviderStatus",
             "editorLanguageProviderFailureMessage",
             "editorLanguageProviderErrorSummary",
+            "recordAiEditorPerfSample",
             "editorRequestLanguageProvider",
         ]
         provider_status_js_functions = "\n".join(
@@ -10302,6 +10303,7 @@ let _editorLanguageFeatureState = {
   diff:{state:"empty",mode:"",added:0,modified:0,removed:0,total:0,message:"Diff: clean"}
 };
 let callResponses = [];
+const _aiEditorPerfBudgets = {};
 function isPlainObject(value){ return !!value && typeof value === "object" && !Array.isArray(value); }
 function callFailedMessage(result,fallback){ return result && result.error ? String(result.error) : String(fallback || "failed"); }
 function $(id){ return id === "status-language-service" ? languageStatus : null; }

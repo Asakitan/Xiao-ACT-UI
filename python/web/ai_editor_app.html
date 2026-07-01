@@ -17421,7 +17421,9 @@ async function editorRequestLanguageProvider(kind,payload,options){
   const label=opts.label||editorLanguageProviderKindLabel(kind);
   const quiet=opts.quiet===true;
   if(!quiet)updateEditorLanguageProviderStatus('running',{kind,label,message:label+'...',detail:'Running '+label.toLowerCase()+' providers'});
+  const _providerT0=performance.now();
   const res=await call('editor_language_provider',payload||editorProviderPayload(kind));
+  recordAiEditorPerfSample('languageProvider',performance.now()-_providerT0);
   if(typeof opts.isCurrent==='function'&&!opts.isCurrent())return res;
   if(quiet)return res;
   if(editorProviderResultCancelled(res)){
@@ -32549,6 +32551,7 @@ async function showModelInfo(){
   else{el.textContent='Custom model — default 128K context. Add via Custom Models below.'}
 }
 function openSettings(){
+  const _settingsOpenT0=performance.now();
   Object.assign(config,withSettingsDefaults(config));
   $('s-provider').value=config.provider;$('s-apikey').value=config.api_key;
   $('s-baseurl').value=config.base_url;$('s-model').value=config.model;
@@ -32696,6 +32699,7 @@ function openSettings(){
   settingsApplyDensity(settingsReadDensity());
   settingsApplyDetails(settingsReadDetails());
   $('settings-modal').classList.add('open');
+  recordAiEditorPerfSample('settingsOpenVisible',performance.now()-_settingsOpenT0);
   syncSettingsViewportFit('open');
   setTimeout(()=>{
     syncSettingsViewportFit('open-settle');
@@ -53807,6 +53811,35 @@ let _aiEditorBootStarted=false;
 let _aiEditorFrontendReadyNotified=false;
 let _aiEditorFrontendHeartbeatTimer=0;
 let _aiEditorLastHealthSentAt=0;
+
+// 阶段5.1 perf budgets (AI_IDE_VSCODE_PARITY_LONG_TERM_PLAN.md): named
+// operations record a performance.now() duration sample here; budgetMs
+// values mirror the plan's own targets so "over budget" is mechanical
+// instead of eyeballed from a screenshot.
+const _aiEditorPerfBudgets={};
+const AI_EDITOR_PERF_BUDGET_MS={settingsOpenVisible:400,languageProvider:1500};
+function recordAiEditorPerfSample(name,durationMs){
+  const key=String(name||'unknown');
+  const ms=Math.max(0,Number(durationMs)||0);
+  const entry=_aiEditorPerfBudgets[key]||(_aiEditorPerfBudgets[key]={count:0,totalMs:0,maxMs:0,lastMs:0});
+  entry.count++;entry.totalMs+=ms;entry.maxMs=Math.max(entry.maxMs,ms);entry.lastMs=ms;
+}
+function aiEditorPerfBudgetSnapshot(){
+  const names=Object.keys(_aiEditorPerfBudgets);
+  const rows=names.map(name=>{
+    const e=_aiEditorPerfBudgets[name];
+    const budgetMs=AI_EDITOR_PERF_BUDGET_MS[name]||0;
+    return {
+      name,count:e.count,
+      lastMs:Math.round(e.lastMs),avgMs:Math.round(e.totalMs/Math.max(1,e.count)),maxMs:Math.round(e.maxMs),
+      budgetMs,overBudget:budgetMs>0&&e.maxMs>budgetMs
+    };
+  });
+  const overBudgetRows=rows.filter(r=>r.overBudget);
+  return {rows,count:rows.length,overBudgetCount:overBudgetRows.length,overBudgetNames:overBudgetRows.map(r=>r.name).join(',')};
+}
+window.recordAiEditorPerfSample=recordAiEditorPerfSample;
+window.aiEditorPerfBudgetSnapshot=aiEditorPerfBudgetSnapshot;
 function aiEditorFrontendHealthPayload(){
   const payload=Object.assign({}, aiEditorInteractionHealthSnapshot());
   try{
@@ -53834,6 +53867,7 @@ function aiEditorFrontendHealthPayload(){
       const noop=aggregate.controlNoop||{};
       const uiActionErrors=aggregate.uiActionErrors||{};
       const criticalActions=aggregate.criticalActions||{};
+      const perfBudgets=aggregate.perfBudgets||{};
       const failure=aggregate.failure||{};
       payload.healthAggregate=true;
       payload.apiMissingMethods=Array.isArray(api.missingMethods)?api.missingMethods.slice(0,8).join(','):'';
@@ -53994,6 +54028,9 @@ function aiEditorFrontendHealthPayload(){
       payload.criticalActionMissingCount=criticalActions.missingCount||0;
       payload.criticalActionNoHandlerCount=criticalActions.noHandlerCount||0;
       payload.criticalActionNonFocusableCount=criticalActions.nonFocusableCount||0;
+      payload.perfBudgetOverCount=perfBudgets.overBudgetCount||0;
+      payload.perfBudgetOverNames=perfBudgets.overBudgetNames||'';
+      payload.perfBudgetSampleCount=perfBudgets.count||0;
       payload.failureKind=failure.kind||'';
       payload.failureCode=failure.code||'';
       payload.failureActionable=failure.actionable||'';
@@ -54619,6 +54656,7 @@ if(window.pywebview){
       extensionSurfaces: safeCall("aiEditorExtensionSurfaceHealthSnapshot"),
       extensionSurfaceRegistry: safeCall("aiEditorExtensionSurfaceRegistrySnapshot"),
       diagnosticsMaintenance: safeCall("aiEditorDiagnosticsMaintenanceSnapshot"),
+      perfBudgets: safeCall("aiEditorPerfBudgetSnapshot"),
       failure: {
         kind: document.body ? document.body.dataset.lastFailureKind || "" : "",
         code: document.body ? document.body.dataset.lastFailureCode || "" : "",
