@@ -319,6 +319,7 @@ class WorkflowEngine:
             cancel_requested: Optional[Callable[[], bool]] = None,
             start_index: int = 0,
             seed_context: Optional[Dict[str, str]] = None,
+            wait_if_paused: Optional[Callable[[], None]] = None,
             ) -> Dict[str, Any]:
         """Run synchronously — call from a background thread.
 
@@ -326,6 +327,11 @@ class WorkflowEngine:
         single failed step: steps before ``start_index`` are skipped and
         ``seed_context`` seeds ``{{var}}`` interpolation with their
         previously computed ``output_var`` values.
+
+        ``wait_if_paused``, if given, is called at every step boundary and is
+        expected to block the calling thread until the run is resumed (or
+        the run is cancelled, in which case it must return promptly so the
+        cancellation check right after it can take effect).
         """
         run_id = str(run_id or "").strip()
         start_index = max(0, int(start_index or 0))
@@ -346,6 +352,8 @@ class WorkflowEngine:
         for i, step in enumerate(workflow.steps):
             if i < start_index:
                 continue
+            if wait_if_paused:
+                wait_if_paused()
             if _cancelled():
                 ended_at = int(time.time() * 1000)
                 return {

@@ -8772,6 +8772,7 @@ let assistantWorkflowCustomPrompt=(()=>{try{return String(localStorage.getItem(A
 let assistantWorkflowRunActive=false;
 let assistantWorkflowCancelRequested=false;
 let assistantWorkflowActiveRunId='';
+let assistantWorkflowRunPaused=false;
 let assistantWorkflowLastLaunch=null;
 function assistantWorkflowNormalizeRun(item,index){
   const src=item&&typeof item==='object'?item:{};
@@ -8815,8 +8816,10 @@ function setAssistantWorkflowRunState(active,opts){
   assistantWorkflowRunActive=!!active;
   if(opts.runId!==undefined)assistantWorkflowActiveRunId=String(opts.runId||'');
   if(opts.cancelRequested!==undefined)assistantWorkflowCancelRequested=!!opts.cancelRequested;
+  if(opts.paused!==undefined)assistantWorkflowRunPaused=!!opts.paused;
   if(!assistantWorkflowRunActive&&!opts.keepRunId)assistantWorkflowActiveRunId='';
   if(!assistantWorkflowRunActive&&!opts.keepCancel)assistantWorkflowCancelRequested=false;
+  if(!assistantWorkflowRunActive)assistantWorkflowRunPaused=false;
   if(typeof syncAssistantSessionState==='function')syncAssistantSessionState({requestInProgress:assistantWorkflowRunActive,workflowRunId:assistantWorkflowActiveRunId||assistantSessionState.workflowRunId||''});
   if(typeof updateToolbarWorkflowButton==='function')updateToolbarWorkflowButton();
   if(typeof renderAssistantWorkflowSessionStrip==='function')renderAssistantWorkflowSessionStrip();
@@ -9436,6 +9439,7 @@ function renderAssistantWorkflowSessionStrip(){
   strip.dataset.workflowLatestStatus=String(workflowRuns[0]&&workflowRuns[0].status||'');
   strip.dataset.workflowLatestProgress=String(workflowRuns[0]&&workflowRuns[0].progress||'');
   strip.dataset.workflowResumeReady=assistantWorkflowLastLaunch?'true':'false';
+  strip.dataset.workflowRunPaused=assistantWorkflowRunActive&&assistantWorkflowRunPaused?'true':'false';
   strip.innerHTML='';
   if(!shouldShow)return strip;
   const title=document.createElement('span');
@@ -9523,7 +9527,11 @@ function renderAssistantWorkflowSessionStrip(){
     actions.appendChild(button);
     return button;
   };
-  if(assistantWorkflowRunActive)addAction('Cancel',()=>cancelAssistantWorkflowRun(),true);
+  if(assistantWorkflowRunActive){
+    if(assistantWorkflowRunPaused)addAction('Resume',()=>resumeAssistantWorkflowRun(),true);
+    else addAction('Pause',()=>pauseAssistantWorkflowRun(),false);
+    addAction('Cancel',()=>cancelAssistantWorkflowRun(),!assistantWorkflowRunPaused);
+  }
   else if(assistantWorkflowLastLaunch){
     addAction('Retry',()=>assistantWorkflowRetryLast(),true);
     addAction('Continue',()=>assistantWorkflowContinueLast(),false);
@@ -36985,6 +36993,20 @@ async function cancelAssistantWorkflowRun(){
   setStatus('Cancelling workflow run');
   try{await call('cancel_workflow',assistantWorkflowActiveRunId)}catch(_e){}
   try{await call('provider_cancel',activeProviderId||'chat')}catch(_e){}
+  return true;
+}
+async function pauseAssistantWorkflowRun(){
+  if(!assistantWorkflowRunActive||assistantWorkflowRunPaused)return false;
+  setAssistantWorkflowRunState(true,{runId:assistantWorkflowActiveRunId,paused:true});
+  setStatus('Workflow paused');
+  try{await call('pause_workflow',assistantWorkflowActiveRunId)}catch(_e){}
+  return true;
+}
+async function resumeAssistantWorkflowRun(){
+  if(!assistantWorkflowRunActive||!assistantWorkflowRunPaused)return false;
+  setAssistantWorkflowRunState(true,{runId:assistantWorkflowActiveRunId,paused:false});
+  setStatus('Resuming workflow: '+String(assistantSessionState.workflowLabel||'workflow'));
+  try{await call('resume_workflow',assistantWorkflowActiveRunId)}catch(_e){}
   return true;
 }
 function runToolbarWorkflow(){

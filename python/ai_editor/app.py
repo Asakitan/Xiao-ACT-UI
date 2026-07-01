@@ -2353,6 +2353,8 @@ class AIEditorAPI:
         self._confirmation_timeout = 30.0
         self._workflow_cancel_lock = threading.Lock()
         self._workflow_cancel_events: Dict[str, threading.Event] = {}
+        self._workflow_pause_lock = threading.Lock()
+        self._workflow_pause_events: Dict[str, threading.Event] = {}
         self._extension_dynamic_ui_lock = threading.Lock()
         self._extension_dynamic_ui_state: Dict[str, Any] = {
             "quickInputs": {},
@@ -9590,6 +9592,85 @@ class AIEditorAPI:
             "count": count,
         }
 
+    def _workflow_pause_event(self, run_id: str) -> Optional[threading.Event]:
+        """Event is *set* while running and *cleared* while paused, so a
+        freshly created run is unblocked by default."""
+        run_id = str(run_id or "").strip()
+        if not run_id:
+            return None
+        with self._workflow_pause_lock:
+            event = self._workflow_pause_events.get(run_id)
+            if event is None:
+                event = threading.Event()
+                event.set()
+                self._workflow_pause_events[run_id] = event
+            return event
+
+    def _forget_workflow_pause_event(self, run_id: str) -> None:
+        run_id = str(run_id or "").strip()
+        if not run_id:
+            return
+        with self._workflow_pause_lock:
+            self._workflow_pause_events.pop(run_id, None)
+
+    def _set_workflow_paused(self, run_id: str, paused: bool) -> int:
+        run_id = str(run_id or "").strip()
+        with self._workflow_pause_lock:
+            if run_id:
+                events = [self._workflow_pause_events.get(run_id)]
+            else:
+                events = list(self._workflow_pause_events.values())
+        count = 0
+        for event in events:
+            if event is None:
+                continue
+            if paused:
+                event.clear()
+            else:
+                event.set()
+            count += 1
+        return count
+
+    def pause_workflow(self, run_id: str = "") -> Dict:
+        """Pause one active workflow run by id, or all active runs. Takes
+        effect at the next step boundary; the in-flight LLM call for the
+        current step still finishes."""
+        count = self._set_workflow_paused(run_id, True)
+        return {
+            "ok": True,
+            "workflowRunId": str(run_id or "").strip(),
+            "paused": count > 0,
+            "count": count,
+        }
+
+    def resume_workflow(self, run_id: str = "") -> Dict:
+        """Resume one paused workflow run by id, or all paused runs."""
+        count = self._set_workflow_paused(run_id, False)
+        return {
+            "ok": True,
+            "workflowRunId": str(run_id or "").strip(),
+            "resumed": count > 0,
+            "count": count,
+        }
+
+    def _workflow_wait_if_paused(self, run_id: str,
+                                 cancel_event: Optional[threading.Event]
+                                 ) -> Optional[Callable[[], None]]:
+        run_id = str(run_id or "").strip()
+        if not run_id:
+            return None
+
+        def _wait() -> None:
+            event = self._workflow_pause_event(run_id)
+            if event is None:
+                return
+            while not event.is_set():
+                if cancel_event is not None and cancel_event.is_set():
+                    return
+                event.wait(timeout=0.25)
+
+        return _wait
+
     @staticmethod
     def _workflow_result_payload(
             wf: Any,
@@ -9697,10 +9778,12 @@ class AIEditorAPI:
             result = self._wf_engine.run(
                 wf, input_text, _on_start, _on_end, run_id,
                 cancel_requested=(
-                    cancel_event.is_set if cancel_event is not None else None))
+                    cancel_event.is_set if cancel_event is not None else None),
+                wait_if_paused=self._workflow_wait_if_paused(run_id, cancel_event))
             return self._workflow_result_payload(wf, result, input_text, metadata)
         finally:
             self._forget_workflow_cancel_event(run_id)
+            self._forget_workflow_pause_event(run_id)
 
     def retry_workflow_step(self, wf_id: str, input_text: str,
                             step_index: int,
@@ -9736,13 +9819,15 @@ class AIEditorAPI:
                 wf, input_text, _on_start, _on_end, run_id,
                 cancel_requested=(
                     cancel_event.is_set if cancel_event is not None else None),
-                start_index=step_index, seed_context=seed_context)
+                start_index=step_index, seed_context=seed_context,
+                wait_if_paused=self._workflow_wait_if_paused(run_id, cancel_event))
             payload = self._workflow_result_payload(
                 wf, result, input_text, metadata)
             payload["workflowRetryFromStep"] = step_index
             return payload
         finally:
             self._forget_workflow_cancel_event(run_id)
+            self._forget_workflow_pause_event(run_id)
 
     # ── Engine action handlers (registered on gui._ai_engine_actions) ──
 

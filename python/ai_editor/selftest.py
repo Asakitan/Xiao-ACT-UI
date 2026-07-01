@@ -1037,7 +1037,8 @@ def test_app_settings_parity() -> None:
         "update_frontend_health",
         "list_workflows", "get_active_agent", "set_active_agent",
         "clear_active_agent", "delete_agent", "delete_workflow",
-        "run_workflow", "retry_workflow_step", "get_scopes", "save_agent", "save_workflow",
+        "run_workflow", "retry_workflow_step", "pause_workflow", "resume_workflow",
+        "get_scopes", "save_agent", "save_workflow",
         "list_workspace_tree", "workspace_file_decorations",
         "open_workspace_file", "save_workspace_notebook",
         "notebook_cell_status_bar_items", "notebook_controllers",
@@ -7520,13 +7521,28 @@ def test_phase1_ai_editor_regressions() -> None:
            and "def _workflow_progress_callbacks(self, wf: Any, run_id: str," in app_source
            and "\"Step index out of range: {step_index}\"" in app_source
            and "\"Invalid step index\"" in app_source
-           and "start_index=step_index, seed_context=seed_context)" in app_source
+           and "start_index=step_index, seed_context=seed_context," in app_source
            and "payload[\"workflowRetryFromStep\"] = step_index" in app_source)
+    _check("backend workflow supports pause and resume",
+           "def pause_workflow(self, run_id: str = \"\") -> Dict:" in app_source
+           and "def resume_workflow(self, run_id: str = \"\") -> Dict:" in app_source
+           and "def _workflow_wait_if_paused(self, run_id: str," in app_source
+           and "event.set()" in app_source
+           and "wait_if_paused=self._workflow_wait_if_paused(run_id, cancel_event))" in app_source)
     _check("frontend workflow retry targets the first failed step",
            "function workflowRetryStepPlan(last){" in html
            and "const failedIndex=steps.findIndex(step=>step&&step.error);" in html
            and "call('retry_workflow_step',id,inputText,retryOpts.stepIndex,retryOpts.seedContext||{}" in html
            and "assistantWorkflowLastLaunch.lastResult=result;" in html)
+    _check("frontend workflow run can be paused and resumed mid-run",
+           "let assistantWorkflowRunPaused=false;" in html
+           and "async function pauseAssistantWorkflowRun(){" in html
+           and "async function resumeAssistantWorkflowRun(){" in html
+           and "call('pause_workflow',assistantWorkflowActiveRunId)" in html
+           and "call('resume_workflow',assistantWorkflowActiveRunId)" in html
+           and "if(assistantWorkflowRunPaused)addAction('Resume',()=>resumeAssistantWorkflowRun(),true);" in html
+           and "else addAction('Pause',()=>pauseAssistantWorkflowRun(),false);" in html
+           and "strip.dataset.workflowRunPaused=" in html)
     _check("frontend Assistant response part actions submit callback metadata",
            "function assistantSubmitResponsePartAction(part,action,value,button,opts)" in html
            and "call('assistant_response_part_action',payload)" in html
@@ -39440,6 +39456,49 @@ def test_workflows() -> None:
         _check("workflow engine retry past last step runs nothing",
                oob_result.get("steps") == []
                and oob_result.get("final_output") == "")
+
+        pause_llm = _FakeWorkflowLlm()
+        pause_engine = WorkflowEngine(pause_llm, _FakeAgents())
+        pause_event = threading.Event()
+        pause_event.set()
+        pause_order: List[Any] = []
+
+        def _wait_if_paused():
+            while not pause_event.is_set():
+                pause_event.wait(timeout=0.02)
+
+        def _on_pause_start(i, total, step):
+            pause_order.append(("start", i))
+            if i == 0:
+                pause_event.clear()
+
+        pause_holder: Dict[str, Any] = {}
+
+        def _run_paused():
+            pause_holder["result"] = pause_engine.run(
+                chained, "seed", _on_pause_start, None,
+                run_id="wf-pause-selftest", wait_if_paused=_wait_if_paused)
+
+        pause_thread = threading.Thread(target=_run_paused, daemon=True)
+        pause_thread.start()
+        deadline = time.time() + 2.0
+        while len(pause_order) < 1 and time.time() < deadline:
+            time.sleep(0.01)
+        time.sleep(0.15)
+        blocked_before_resume = (
+            pause_thread.is_alive() and pause_order == [("start", 0)])
+        pause_event.set()
+        pause_thread.join(timeout=2.0)
+        _check("workflow engine pause blocks the next step until resumed",
+               blocked_before_resume
+               and not pause_thread.is_alive()
+               and pause_order == [("start", 0), ("start", 1)]
+               and pause_holder.get("result", {}).get("final_output") == "out-2",
+               json.dumps({
+                   "blockedBeforeResume": blocked_before_resume,
+                   "order": pause_order,
+                   "result": pause_holder.get("result"),
+               }, ensure_ascii=False, default=str))
 
     finally:
         shutil.rmtree(tmpdir, ignore_errors=True)
