@@ -17863,6 +17863,21 @@ console.log("command palette quick access helpers ok");
            and "shellArgs" in engine_tools_source
            and "subprocess.Popen" in engine_tools_source
            and "proc.terminate()" in engine_tools_source)
+    # 长期计划A项打包跟进: pywinpty 的 conpty.dll/winpty.dll 不会被 PyInstaller
+    # 的 import 静态分析发现, OpenConsole.exe/winpty-agent.exe 更是 ConPTY 要
+    # spawn 的独立可执行文件 —— 没有显式收集的话, 开发环境能跑但打包后的
+    # exe 会静默退化成假 PTY, 是那种不写测试就会被以后重构悄悄删掉的那类缺口。
+    spec_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), "XiaoACTUI.spec")
+    with open(spec_path, "r", encoding="utf-8") as f:
+        spec_source = f.read()
+    _check("packaging spec collects pywinpty's native ConPTY binaries (长期计划A项打包跟进)",
+           "collect_dynamic_libs('winpty')" in spec_source
+           and "collect_data_files('winpty'" in spec_source
+           and "PYWINPTY_BINARIES" in spec_source
+           and "PYWINPTY_DATAS" in spec_source
+           and "binaries=GPU_RENDER_BINARIES + CYTHON_ACCEL_BINARIES + PYWINPTY_BINARIES" in spec_source
+           and "] + GPU_RENDER_DATAS + PYWINPTY_DATAS," in spec_source
+           and "'winpty'," in spec_source)
     _check("editor dirty diff decorations render while editing",
            "editor-dirty-diff-line" in html
            and "editor-dirty-diff-gutter" in html

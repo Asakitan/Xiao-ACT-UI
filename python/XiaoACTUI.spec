@@ -105,6 +105,13 @@ GPU_RENDER_BINARIES = (
     collect_dynamic_libs('skia')
     + collect_dynamic_libs('glfw')
 )
+# AI Editor 真终端 PTY (可选依赖, 长期计划A项) — pywinpty 的 conpty.dll/
+# winpty.dll 不会被 import 静态分析发现, OpenConsole.exe/winpty-agent.exe
+# 更是 ConPTY 实际要 spawn 的独立可执行文件, 必须显式收集; 未安装时
+# collect_dynamic_libs/collect_data_files 各自只打印 WARNING 返回空列表,
+# 不会中断打包 (engine_tools.py 本身也是 try-import 优雅降级)。
+PYWINPTY_BINARIES = collect_dynamic_libs('winpty')
+PYWINPTY_DATAS = collect_data_files('winpty', include_py_files=False)
 CYTHON_ACCEL_BINARIES = [
     (path, '.')
     for path in glob(os.path.join(HERE, '_sao_cy*.pyd'))
@@ -124,7 +131,7 @@ GPU_RENDER_DATAS = (
 a = Analysis(
     ['main.py'],
     pathex=[HERE, *PLUGIN_CYTHON_PATHS],
-    binaries=GPU_RENDER_BINARIES + CYTHON_ACCEL_BINARIES,
+    binaries=GPU_RENDER_BINARIES + CYTHON_ACCEL_BINARIES + PYWINPTY_BINARIES,
     datas=[
         # Modular runtime data lifted to exe top level by build_release/dev_publish.
         ('web', 'web'),
@@ -152,7 +159,7 @@ a = Analysis(
             if f.endswith(('.dat', '.bin', '.cache'))
             and f not in ('a.dat', 'b.dat', 'c.dat', 'd.dat')
         ] if os.path.isdir(os.path.join(HERE, 'locale')) else []),
-    ] + GPU_RENDER_DATAS,
+    ] + GPU_RENDER_DATAS + PYWINPTY_DATAS,
     hiddenimports=LOCAL_HIDDENIMPORTS + WEBVIEW_PLATFORM_HIDDENIMPORTS + PROTOBUF_HIDDENIMPORTS + CLR_LOADER_HIDDENIMPORTS + GUI_MODULES_HIDDENIMPORTS + REORG_PKG_HIDDENIMPORTS + MEM_PROBE_RUNTIME_HIDDENIMPORTS + [
         # pythonnet (.NET interop)
         'clr',
@@ -194,6 +201,11 @@ a = Analysis(
         'moderngl_window.context.headless',
         'glfw',
         'skia',  # skia-python: GPU 2D + 文字 atlas
+        # AI Editor 真终端 PTY (可选依赖, 未安装时 hiddenimport 只是找不到模块,
+        # 不影响其余打包 — engine_tools.py 自己 try-import 降级)
+        'winpty',
+        'winpty.ptyprocess',
+        'winpty.enums',
         # 压缩
         'zstandard',
         # 标准库 (PyInstaller 有时遗漏)
