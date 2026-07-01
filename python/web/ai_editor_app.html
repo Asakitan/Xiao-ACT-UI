@@ -8764,6 +8764,9 @@ const ASSISTANT_SESSION_STATE_KEY='sao-ai-editor-chat-session-state';
 const ASSISTANT_SESSION_ITEMS_KEY='sao-ai-editor-chat-session-items';
 const ASSISTANT_WORKFLOW_MODE_KEY='sao-ai-editor-workflow-mode';
 const ASSISTANT_WORKFLOW_CUSTOM_PROMPT_KEY='sao-ai-editor-workflow-custom-prompt';
+const ASSISTANT_WORKFLOW_LAST_LAUNCH_KEY='sao-ai-editor-workflow-last-launch';
+const ASSISTANT_WORKFLOW_LAST_LAUNCH_MAX_STEPS=20;
+const ASSISTANT_WORKFLOW_LAST_LAUNCH_OUTPUT_CAP=4000;
 function normalizeWorkflowMode(value){
   const v=String(value||'off').toLowerCase();
   return v==='on'||v==='custom'||v==='off'?v:'off';
@@ -8775,6 +8778,69 @@ let assistantWorkflowCancelRequested=false;
 let assistantWorkflowActiveRunId='';
 let assistantWorkflowRunPaused=false;
 let assistantWorkflowLastLaunch=null;
+function trimWorkflowResultForPersist(result){
+  if(!result||typeof result!=='object')return null;
+  const steps=(Array.isArray(result.steps)?result.steps:[]).slice(0,ASSISTANT_WORKFLOW_LAST_LAUNCH_MAX_STEPS).map(s=>({
+    step:Number(s&&s.step)||0,
+    label:String((s&&s.label)||''),
+    agent:String((s&&s.agent)||''),
+    output_var:String((s&&s.output_var)||''),
+    output:String((s&&s.output)||'').slice(0,ASSISTANT_WORKFLOW_LAST_LAUNCH_OUTPUT_CAP),
+    error:(s&&s.error)?String(s.error).slice(0,500):'',
+    status:String((s&&s.status)||''),
+    cancelled:!!(s&&s.cancelled),
+    rejected:!!(s&&s.rejected)
+  }));
+  return {
+    steps,
+    final_output:String(result.final_output||'').slice(0,ASSISTANT_WORKFLOW_LAST_LAUNCH_OUTPUT_CAP),
+    cancelled:!!result.cancelled,
+    error:result.error?String(result.error).slice(0,500):'',
+    workflowRunId:String(result.workflowRunId||'')
+  };
+}
+function saveAssistantWorkflowLastLaunch(){
+  try{
+    if(typeof localStorage==='undefined')return;
+    const last=assistantWorkflowLastLaunch;
+    if(!last||!last.workflow){localStorage.removeItem(ASSISTANT_WORKFLOW_LAST_LAUNCH_KEY);return}
+    const record={
+      workflowId:String(controlItemId(last.workflow)||''),
+      inputText:String(last.inputText||'').slice(0,4000),
+      launch:last.launch||{},
+      retryOf:String(last.retryOf||''),
+      createdAt:Number(last.createdAt||Date.now()),
+      lastResult:trimWorkflowResultForPersist(last.lastResult)
+    };
+    if(!record.workflowId){localStorage.removeItem(ASSISTANT_WORKFLOW_LAST_LAUNCH_KEY);return}
+    localStorage.setItem(ASSISTANT_WORKFLOW_LAST_LAUNCH_KEY,JSON.stringify(record));
+  }catch(_e){}
+}
+function assistantWorkflowResolveForRestore(workflowId){
+  if(workflowId==='custom'){
+    return {id:'custom',name:'Custom Workflow',description:'User-defined workflow prompt',icon:'✎',
+      steps:[{agent:activeAgentId||'default',label:'Custom workflow',prompt:assistantWorkflowCustomPrompt||'{{input}}',output_var:'result'}]};
+  }
+  return workflowById(workflowId);
+}
+function restoreAssistantWorkflowLastLaunch(){
+  try{
+    if(typeof localStorage==='undefined')return false;
+    const raw=localStorage.getItem(ASSISTANT_WORKFLOW_LAST_LAUNCH_KEY);
+    if(!raw)return false;
+    const record=JSON.parse(raw);
+    if(!record||!record.workflowId)return false;
+    const workflow=assistantWorkflowResolveForRestore(record.workflowId);
+    if(!workflow)return false;
+    assistantWorkflowLastLaunch={
+      workflow,inputText:String(record.inputText||''),launch:record.launch||{},refs:[],
+      createdAt:Number(record.createdAt||Date.now()),retryOf:String(record.retryOf||''),
+      lastResult:record.lastResult||null
+    };
+    if(typeof renderAssistantWorkflowSessionStrip==='function')renderAssistantWorkflowSessionStrip();
+    return true;
+  }catch(_e){return false}
+}
 function assistantWorkflowNormalizeRun(item,index){
   const src=item&&typeof item==='object'?item:{};
   return {
@@ -27629,6 +27695,7 @@ async function runWorkflowEngineAsAssistant(workflow,inputText,launch,refs,retry
   if(wasCancelled)result={...result,cancelled:true,message:'Workflow cancellation requested'};
   if(assistantWorkflowLastLaunch&&String(assistantWorkflowLastLaunch.launch&&assistantWorkflowLastLaunch.launch.workflowRunId||'')===String(launch.workflowRunId||'')){
     assistantWorkflowLastLaunch.lastResult=result;
+    saveAssistantWorkflowLastLaunch();
   }
   workflowResultSteps(result).forEach(step=>updateWorkflowRunStepStatus(launch.workflowRunId,{
     workflowRunId:launch.workflowRunId,
@@ -27674,6 +27741,7 @@ async function runWorkflowObjectAsAssistant(workflow,inputText,opts){
     workflowStepOutputVars:workflowStepList(workflow).map(step=>String((step&&step.output_var)||''))
   };
   assistantWorkflowLastLaunch={workflow,inputText:String(inputText||''),launch:Object.assign({},launch),refs:refs.slice(0,20),createdAt:Date.now(),retryOf:String(opts.retryOf||'')};
+  saveAssistantWorkflowLastLaunch();
   const prompt=workflowLaunchPrompt(workflow,inputText,runId,launch);
   const input=$('chat-input');
   if(input&&String(input.value||'').trim()===inputText)setChatInputValue('',{focus:false,sync:false});
@@ -36966,6 +37034,7 @@ async function loadChatControls(){
     activeAgentId=normalizeActiveAgentId((aa&&aa.agent_id)||activeAgentId||'');
   }
   renderChatControlOptions();syncUI();updateModeUI();bindChatToolbarControls();
+  restoreAssistantWorkflowLastLaunch();
 }
 let chatToolbarBound=false;
 function bindChatToolbarControls(){

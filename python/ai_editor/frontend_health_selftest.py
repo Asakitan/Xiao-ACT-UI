@@ -252,6 +252,7 @@ def run_frontend_health_selftest() -> list[str]:
     _require(failures, "assistant workflow retry targets the failed step, not a full restart", "function workflowRetryStepPlan(last){" in html and "retryOpts.stepIndex!=null" in html and "call('retry_workflow_step'" in html)
     _require(failures, "assistant workflow run supports pause and resume", "async function pauseAssistantWorkflowRun(){" in html and "async function resumeAssistantWorkflowRun(){" in html and "call('pause_workflow'" in html and "call('resume_workflow'" in html)
     _require(failures, "assistant workflow human-confirmation steps render a confirm bar", "function renderWorkflowConfirmBar(container,d,scrollEl){" in html and "onWorkflowConfirmationNeeded" in html and "call('confirm_workflow_step'" in html)
+    _require(failures, "assistant workflow retry/continue state persists across reload", "function saveAssistantWorkflowLastLaunch(){" in html and "function restoreAssistantWorkflowLastLaunch(){" in html and "restoreAssistantWorkflowLastLaunch();" in html)
     _require(failures, "assistant token and context compact numbers exist", "tokenEstimateCompact" in html and "contextWindowCompact" in html and "compactNumber" in html)
     _require(failures, "assistant compact numbers are exposed on dom", "data-token-count-compact" in html and "data-context-window-compact" in html)
     _require(failures, "assistant mutation observer exists", "new MutationObserver" in html and "installAssistantObserver" in html)

@@ -7544,6 +7544,14 @@ def test_phase1_ai_editor_regressions() -> None:
            and "const failedIndex=steps.findIndex(step=>step&&step.error);" in html
            and "call('retry_workflow_step',id,inputText,retryOpts.stepIndex,retryOpts.seedContext||{}" in html
            and "assistantWorkflowLastLaunch.lastResult=result;" in html)
+    _check("frontend workflow retry/continue state survives a page reload",
+           "const ASSISTANT_WORKFLOW_LAST_LAUNCH_KEY='sao-ai-editor-workflow-last-launch';" in html
+           and "function saveAssistantWorkflowLastLaunch(){" in html
+           and "function restoreAssistantWorkflowLastLaunch(){" in html
+           and "function assistantWorkflowResolveForRestore(workflowId){" in html
+           and "localStorage.setItem(ASSISTANT_WORKFLOW_LAST_LAUNCH_KEY,JSON.stringify(record));" in html
+           and "restoreAssistantWorkflowLastLaunch();" in html
+           and "saveAssistantWorkflowLastLaunch();" in html)
     _check("frontend workflow renders a confirm bar for human-confirmation steps",
            "else if(event==='workflow_confirmation_needed') onWorkflowConfirmationNeeded(data);" in html
            and "function renderWorkflowConfirmBar(container,d,scrollEl){" in html
