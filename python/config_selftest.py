@@ -51,17 +51,34 @@ def run_selftest() -> dict:
 
         settings = SettingsManager(path)
         assert settings._load_error, "corrupt JSON should record a load error"
+        assert settings.get_load_error() == settings._load_error, (
+            "get_load_error() must expose the same value as _load_error "
+            "(AI Editor's load_config surfaces this to the user via a toast)")
         backups = [name for name in os.listdir(root) if name.startswith("settings.json.corrupt")]
         assert backups, "corrupt JSON should be backed up"
 
         settings.set("act_plugin_enabled", {})
         settings.set("act_plugin_settings", {})
         settings.save()
+        assert settings.get_load_error() == "", (
+            "a successful save should clear the load-error flag")
         with open(path, "r", encoding="utf-8") as handle:
             repaired = json.load(handle)
         assert repaired == {"act_plugin_enabled": {}, "act_plugin_settings": {}}, repaired
 
-    return {"ok": True, "settings_corrupt_backup": True, "settings_save_json": True}
+        clean_path = os.path.join(root, "clean_settings.json")
+        with open(clean_path, "w", encoding="utf-8") as handle:
+            json.dump({"foo": "bar"}, handle)
+        clean_settings = SettingsManager(clean_path)
+        assert clean_settings.get_load_error() == "", (
+            "loading a well-formed settings file must not report a load error")
+
+    return {
+        "ok": True,
+        "settings_corrupt_backup": True,
+        "settings_save_json": True,
+        "settings_load_error_getter": True,
+    }
 
 
 def main() -> int:

@@ -7535,6 +7535,9 @@ function _applyLayoutState(){
 // ── Init ──
 async function init(){
   const c=await call('load_config'); Object.assign(config,withSettingsDefaults({...config,...(c||{})}));
+  if(c&&c._settings_load_error){
+    showToast('Settings file was invalid and has been reset to defaults (backup saved as settings.json.corrupt): '+String(c._settings_load_error),'warning',6000);
+  }
   await loadEditorLanguages();
   await loadEditorThemes();
   if(normalizeUiLanguage(config.language))_curLang=config.language;

@@ -3224,6 +3224,9 @@ class AIEditorAPI:
                 "active_chat_provider", getattr(self, "_active_provider", "chat")),
             "permissions": ai_cfg.get("permissions", self._perm_overrides),
             "context_window": ctx,
+            "_settings_load_error": (
+                settings.get_load_error()
+                if settings and hasattr(settings, "get_load_error") else ""),
         }
         for section in _AI_EDITOR_SECTION_DEFAULTS:
             if section == "workspace":

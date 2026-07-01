@@ -641,6 +641,11 @@ class SettingsManager:
             self._backup_corrupt_file(exc)
             self._data = {}
 
+    def get_load_error(self) -> str:
+        """Non-empty if settings.json failed to parse at load time and was
+        reset to defaults (a .corrupt backup was written alongside it)."""
+        return self._load_error
+
     def get(self, key: str, default: Any = None) -> Any:
         if key == "panel_themes":
             if key in self._data:

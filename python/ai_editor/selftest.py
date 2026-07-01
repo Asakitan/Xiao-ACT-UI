@@ -3114,6 +3114,31 @@ def test_app_settings_parity() -> None:
     finally:
         app_mod._STANDALONE_SETTINGS = previous_standalone_settings
 
+    previous_standalone_settings = app_mod._STANDALONE_SETTINGS
+    try:
+        with tempfile.TemporaryDirectory() as td:
+            corrupt_path = os.path.join(td, "settings.json")
+            with open(corrupt_path, "w", encoding="utf-8") as fh:
+                fh.write("{not valid json")
+            app_mod._STANDALONE_SETTINGS = SettingsManager(corrupt_path)
+            corrupt_loaded = AIEditorAPI(_FakeGui()).load_config()
+            _check("load_config surfaces a corrupt-settings load error for the frontend toast",
+                   bool(corrupt_loaded.get("_settings_load_error")))
+            backups = [n for n in os.listdir(td) if n.startswith("settings.json.corrupt")]
+            _check("corrupt settings file is backed up alongside the reset",
+                   len(backups) == 1)
+            # A subsequent successful save clears the error for later reloads.
+            AIEditorAPI(_FakeGui()).save_config({"provider": "openai"})
+            recovered_loaded = AIEditorAPI(_FakeGui()).load_config()
+            _check("load error clears after a successful save",
+                   not recovered_loaded.get("_settings_load_error"))
+    finally:
+        app_mod._STANDALONE_SETTINGS = previous_standalone_settings
+
+    well_formed = _SettingsGui({"ai_editor": {}})
+    _check("load_config reports no settings load error for a well-formed in-memory settings object",
+           not AIEditorAPI(well_formed).load_config().get("_settings_load_error"))
+
     save_failure_result = AIEditorAPI(_FailingSettingsGui({"ai_editor": {}})).save_config({"provider": "openai"})
     _check("save_config surfaces persistence errors",
            save_failure_result.get("error") == "disk failed"

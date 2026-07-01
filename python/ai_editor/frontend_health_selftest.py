@@ -302,6 +302,7 @@ def run_frontend_health_selftest() -> list[str]:
     _require(failures, "aggregate diagnostics includes language feature aggregate", "languageFeatures: safeCall(\"editorLanguageFeatureAggregateSnapshot\")" in html)
     _require(failures, "language feature aggregate reaches health payload", "payload.languageSelectionRanges=languageFeatures.selectionRanges||0;" in html and "payload.languageDocumentColors=languageFeatures.documentColors||0;" in html and "payload.languageColorPresentationApplied=languageFeatures.colorPresentationApplied===true;" in html)
 
+    _require(failures, "corrupt settings.json recovery is surfaced to the user on init", "c._settings_load_error" in html and "settings.json.corrupt" in html)
     _require(failures, "settings polish css exists", "ai-editor-settings-polish-css" in html)
     _require(failures, "settings health snapshot exists", "aiEditorSettingsHealthSnapshot" in html)
     _require(failures, "settings overflow guard exists", "overflow-y: auto !important" in html and "scrollbar-gutter: stable" in html)
