@@ -19228,6 +19228,14 @@ def test_tool_registry() -> None:
         def editor_get_selection(self):
             return {"selection": "hi", "start": 7, "end": 9}
 
+        def editor_insert_text(self, text):
+            self.calls.append(("insert", text))
+            return {"ok": True}
+
+        def editor_go_to_line(self, line):
+            self.calls.append(("goto", line))
+            return {"ok": True, "line": line}
+
     reg_editor = ToolRegistry()
     fake_editor_api = _FakeEditorApi()
     register_engine_tools(reg_editor, _FakeGui(), fake_editor_api)
@@ -19238,6 +19246,23 @@ def test_tool_registry() -> None:
            editor_set.get("ok") is True
            and fake_editor_api.calls == [("abc", "text")]
            and editor_get.get("content") == "print('hi')")
+
+    editor_insert = json.loads(reg_editor.execute(
+        "editor_insertText", json.dumps({"text": "xyz"})))
+    editor_goto = json.loads(reg_editor.execute(
+        "editor_goToLine", json.dumps({"line": 42})))
+    _check("editor insertText and goToLine tools call live editor API",
+           editor_insert.get("ok") is True
+           and editor_goto.get("ok") is True
+           and editor_goto.get("line") == 42
+           and ("insert", "xyz") in fake_editor_api.calls
+           and ("goto", 42) in fake_editor_api.calls)
+
+    editor_insert_missing = json.loads(reg.execute("editor_insertText", json.dumps({"text": "x"})))
+    editor_goto_missing = json.loads(reg.execute("editor_goToLine", json.dumps({"line": 1})))
+    _check("editor insertText and goToLine tools report missing API explicitly",
+           "No editor API available" in editor_insert_missing.get("error", "")
+           and "No editor API available" in editor_goto_missing.get("error", ""))
 
     reg_todo = ToolRegistry()
     todo_gui = _SettingsGui({})

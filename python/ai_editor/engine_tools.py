@@ -246,6 +246,36 @@ def register_engine_tools(registry: ToolRegistry, gui_ref: Any, api_ref: Any = N
         tags={"readOnly": True},
     )
 
+    registry.register(
+        name="editor_insertText",
+        description="Insert text at the current cursor position in the active editor tab.",
+        parameters={
+            "type": "object",
+            "properties": {
+                "text": {"type": "string", "description": "Text to insert at the cursor"},
+            },
+            "required": ["text"],
+        },
+        handler=lambda text: _call_live_editor_api(api_ref, "editor_insert_text", text),
+        category="editor",
+        tags={"destructive": True},
+    )
+
+    registry.register(
+        name="editor_goToLine",
+        description="Move the editor cursor to a specific line number and scroll it into view.",
+        parameters={
+            "type": "object",
+            "properties": {
+                "line": {"type": "integer", "description": "1-based line number to navigate to"},
+            },
+            "required": ["line"],
+        },
+        handler=lambda line: _call_live_editor_api(api_ref, "editor_go_to_line", line),
+        category="editor",
+        tags={"readOnly": True},
+    )
+
     # ==================================================================
     # Web Fetch
     # ==================================================================
