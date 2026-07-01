@@ -346,6 +346,7 @@ def run_frontend_health_selftest() -> list[str]:
     _require(failures, "assistant health checks provider model workflow agent", "providerPresent" in html and "modelPresent" in html and "workflowPresent" in html and "agentPresent" in html)
     _require(failures, "assistant health exposes provider model workflow agent values", "providerValue" in html and "modelValue" in html and "workflowValue" in html and "agentValue" in html)
     _require(failures, "assistant health exposes option counts", "providerOptionCount" in html and "modelOptionCount" in html and "workflowOptionCount" in html and "agentOptionCount" in html)
+    _require(failures, "boot-time setLang does not race loadChatControls's workflow dropdown population", "if(opts.persist!==false&&typeof refreshAgents==='function')refreshAgents();" in html)
     _require(failures, "assistant workflow mode supports on off custom", "workflowMode" in html and '"custom"' in html and '"off"' in html and '"on"' in html)
     _require(failures, "assistant workflow session timeline exists", "assistantWorkflowTimelineRuns" in html and "assistantWorkflowTimelineSnapshot" in html and "chat-workflow-session-timeline" in html and "chat-workflow-session-timeline-item" in html)
     _require(failures, "assistant workflow timeline health reaches payload", "workflowTimelineCount" in html and "workflowTimelineItemCount" in html and "payload.assistantWorkflowTimelineCount=assistant.workflowTimelineCount||0;" in html and "payload.assistantWorkflowLatestStatus=assistant.workflowLatestStatus||'';" in html)

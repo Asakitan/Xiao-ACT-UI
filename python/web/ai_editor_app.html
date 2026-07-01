@@ -8407,7 +8407,18 @@ function setLang(lang,options){
   if(typeof updateModeUI==='function')updateModeUI();
   if(typeof renderChatControlOptions==='function')renderChatControlOptions();
   localizeDynamicUi();
-  if(typeof refreshAgents==='function')refreshAgents();
+  // Only re-fetch agents/workflows on a real user-initiated language switch
+  // (opts.persist!==false, e.g. toggleLang()). The two silent boot-time
+  // calls (persist:false, applying the already-active language for the
+  // first render) run *after* init()'s own loadChatControls() already
+  // populated chatControlState.workflows from get_chat_controls() - calling
+  // refreshAgents() here raced its own independent list_workflows() call
+  // against that and could clobber the chat toolbar's workflow dropdown
+  // back to empty if the two calls' timing ever diverged (reproduced via a
+  // mocked backend where list_workflows briefly disagreed with
+  // get_chat_controls; agent/workflow names aren't localized strings
+  // anyway, so this refetch served no real i18n purpose during boot).
+  if(opts.persist!==false&&typeof refreshAgents==='function')refreshAgents();
 }
 function toggleLang(){
   const next=_curLang==='en'?'zh':'en';

@@ -10556,6 +10556,96 @@ console.log("frontend settings JSON parse/JSONC support ok");
                 except OSError:
                     pass
     if not node_path:
+        _check("frontend setLang boot race skipped without Node.js", True)
+    else:
+        # Regression test for a real bug found via live Playwright reproduction:
+        # init() calls loadChatControls() (populates chatControlState.workflows
+        # from get_chat_controls(), renders #chat-workflow-sel correctly), then
+        # immediately calls setLang(_curLang,{persist:false}) to apply the
+        # already-active language to the freshly-rendered DOM. setLang used to
+        # unconditionally call refreshAgents() at its end, which makes its own
+        # independent list_workflows() call and overwrites
+        # chatControlState.workflows - if that call's timing/data ever
+        # disagreed with get_chat_controls()'s answer (reproduced with a mocked
+        # backend where they differed), the workflow dropdown that
+        # loadChatControls() had just correctly populated got silently wiped
+        # back to empty. Fixed by only calling refreshAgents() from setLang()
+        # on a real user-initiated switch (opts.persist!==false, e.g.
+        # toggleLang()), not the two silent boot-time reapplications.
+        setlang_functions = ["isPlainObject", "setLang"]
+        setlang_js_functions = "\n".join(
+            _extract_js_function(html, name)
+            for name in setlang_functions)
+        js = r"""
+function assert(ok,label){ if(!ok){ throw new Error(label); } }
+""" + setlang_js_functions + r"""
+let refreshAgentsCallCount = 0;
+function refreshAgents(){ refreshAgentsCallCount++; }
+function renderChatControlOptions(){}
+function updateModeUI(){}
+function localizeDynamicUi(){}
+function normalizeUiLanguage(lang){ return lang === 'zh' ? 'zh' : 'en'; }
+function t(key){ return key; }
+function renderWelcome(){}
+const config = {};
+const window = {pywebview: null};
+const localStorageStore = {};
+const localStorage = {
+  setItem(k,v){ localStorageStore[k]=v; },
+  getItem(k){ return localStorageStore[k]; }
+};
+const document = {
+  title: '',
+  querySelectorAll(){ return []; }
+};
+function $(id){ return null; }
+
+setLang('en', {persist:false});
+assert(refreshAgentsCallCount === 0,
+       "silent boot-time reapplication (persist:false) does not call refreshAgents");
+
+setLang('en', {persist:false});
+assert(refreshAgentsCallCount === 0,
+       "a second silent boot-time reapplication still does not call refreshAgents");
+
+setLang('zh');
+assert(refreshAgentsCallCount === 1,
+       "a real user-initiated language switch (no options -> persist defaults true) does call refreshAgents");
+
+setLang('en', {persist:true});
+assert(refreshAgentsCallCount === 2,
+       "an explicit persist:true switch also calls refreshAgents");
+
+console.log("frontend setLang boot race ok");
+"""
+        js_path = ""
+        try:
+            with tempfile.NamedTemporaryFile(
+                    "w", encoding="utf-8", suffix=".js", delete=False) as fh:
+                js_path = fh.name
+                fh.write(js)
+            result = subprocess.run(
+                [node_path, js_path],
+                cwd=os.path.dirname(os.path.dirname(os.path.dirname(__file__))),
+                capture_output=True,
+                text=True,
+                timeout=10,
+                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+            )
+            _check_subprocess_result(
+                "frontend setLang boot race",
+                result,
+                "frontend setLang boot race ok",
+            )
+        except Exception as exc:
+            _check("frontend setLang boot race", False, str(exc))
+        finally:
+            if js_path:
+                try:
+                    os.unlink(js_path)
+                except OSError:
+                    pass
+    if not node_path:
         _check("frontend settings filters and dirty diff behavior skipped without Node.js", True)
     else:
         settings_diff_functions = [
