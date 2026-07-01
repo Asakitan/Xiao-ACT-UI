@@ -1494,9 +1494,11 @@ pre.code-block code .type { color:var(--fg-type); }
 .workflow-save-options { display:grid; grid-template-columns:1fr 1fr; gap:8px; margin-top:8px; }
 .workflow-save-options .wide { grid-column:1 / -1; }
 .workflow-step-editor { display:flex; flex-direction:column; gap:8px; margin-top:4px; }
-.workflow-step-card { border:1px solid var(--border); border-radius:6px; background:var(--bg2); padding:8px; display:grid; grid-template-columns:1fr 1fr 1fr auto; gap:6px; align-items:end; }
+.workflow-step-card { border:1px solid var(--border); border-radius:6px; background:var(--bg2); padding:8px; display:grid; grid-template-columns:1fr 1fr 1fr 100px auto; gap:6px; align-items:end; }
 .workflow-step-card textarea { grid-column:1 / -1; min-height:58px; }
 .workflow-step-card label { margin:0; }
+.workflow-step-confirm-label { grid-column:1 / -1; display:flex; align-items:center; gap:6px; font-size:12px; color:var(--fg-dim); }
+.workflow-step-confirm-label input { margin:0; }
 .workflow-step-actions { display:flex; align-items:center; gap:3px; justify-content:flex-end; }
 .workflow-step-action { width:24px; height:24px; border:1px solid var(--border); border-radius:4px; background:var(--bg3); color:var(--fg); cursor:pointer; }
 .workflow-step-action:hover,.workflow-step-action:focus { border-color:var(--border-focus); background:var(--bg-hover); outline:none; }
@@ -27284,7 +27286,7 @@ function editWorkflowFromPopup(id){
   createWorkflow(workflow);
 }
 function defaultWorkflowStep(index){
-  return {agent:'default',label:'Step '+(Number(index||0)+1),prompt:'{{input}}',output_var:'result'};
+  return {agent:'default',label:'Step '+(Number(index||0)+1),prompt:'{{input}}',output_var:'result',group:'',requires_confirmation:false};
 }
 function normalizeWorkflowStepForEditor(step,index){
   step=step||{};
@@ -27292,7 +27294,9 @@ function normalizeWorkflowStepForEditor(step,index){
     agent:String(step.agent||'default'),
     label:String(step.label||('Step '+(Number(index||0)+1))),
     prompt:String(step.prompt||'{{input}}'),
-    output_var:String(step.output_var||step.outputVar||'')
+    output_var:String(step.output_var||step.outputVar||''),
+    group:String(step.group||''),
+    requires_confirmation:!!(step.requires_confirmation||step.requiresConfirmation)
   };
 }
 function workflowStepFromEditorRow(row){
@@ -27300,7 +27304,9 @@ function workflowStepFromEditorRow(row){
     agent:row.querySelector('[data-step-field="agent"]').value.trim()||'default',
     label:row.querySelector('[data-step-field="label"]').value.trim()||'Workflow step',
     output_var:row.querySelector('[data-step-field="output_var"]').value.trim(),
-    prompt:row.querySelector('[data-step-field="prompt"]').value.trim()||'{{input}}'
+    prompt:row.querySelector('[data-step-field="prompt"]').value.trim()||'{{input}}',
+    group:row.querySelector('[data-step-field="group"]').value.trim(),
+    requires_confirmation:row.querySelector('[data-step-field="requires_confirmation"]').checked
   };
 }
 function renumberWorkflowStepCards(container){
@@ -27319,12 +27325,16 @@ function addWorkflowStepRow(container,step,index){
   row.innerHTML='<label><span class="workflow-step-title">Step '+(Number(index||0)+1)+'</span><input data-step-field="label" placeholder="Label"></label>'
     +'<label>Agent<input data-step-field="agent" placeholder="default"></label>'
     +'<label>Output<input data-step-field="output_var" placeholder="result"></label>'
+    +'<label title="Steps sharing the same non-empty group run concurrently">Group<input data-step-field="group" placeholder="(sequential)"></label>'
+    +'<label class="workflow-step-confirm-label"><input type="checkbox" data-step-field="requires_confirmation"> Requires confirmation before running</label>'
     +'<div class="workflow-step-actions"><button type="button" class="workflow-step-action" data-step-action="up" title="Move step up">↑</button><button type="button" class="workflow-step-action" data-step-action="down" title="Move step down">↓</button><button type="button" class="workflow-step-action" data-step-action="delete" title="Delete step">×</button></div>'
     +'<textarea data-step-field="prompt" rows="3" placeholder="Step prompt. Use {{input}} for the workflow input."></textarea>';
   row.querySelector('[data-step-field="label"]').value=data.label;
   row.querySelector('[data-step-field="agent"]').value=data.agent;
   row.querySelector('[data-step-field="output_var"]').value=data.output_var;
   row.querySelector('[data-step-field="prompt"]').value=data.prompt;
+  row.querySelector('[data-step-field="group"]').value=data.group;
+  row.querySelector('[data-step-field="requires_confirmation"]').checked=data.requires_confirmation;
   row.querySelector('[data-step-action="up"]').onclick=()=>{const prev=row.previousElementSibling;if(prev&&prev.classList.contains('workflow-step-card'))container.insertBefore(row,prev);renumberWorkflowStepCards(container)};
   row.querySelector('[data-step-action="down"]').onclick=()=>{const next=row.nextElementSibling;if(next&&next.classList.contains('workflow-step-card'))container.insertBefore(next,row);renumberWorkflowStepCards(container)};
   row.querySelector('[data-step-action="delete"]').onclick=()=>{if(container.querySelectorAll('.workflow-step-card').length>1){row.remove();renumberWorkflowStepCards(container)}};

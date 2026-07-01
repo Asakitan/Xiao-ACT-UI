@@ -6218,6 +6218,15 @@ def test_phase1_ai_editor_regressions() -> None:
            and "$('wf-id').readOnly=true;" in html
            and "edit.onclick=e=>{e.stopPropagation();createWorkflow(w)};" in html
            and "Plain chat" in html)
+    _check("frontend workflow step editor authors group (parallel) and requires_confirmation",
+           "data-step-field=\"group\"" in html
+           and "data-step-field=\"requires_confirmation\"" in html
+           and "group:row.querySelector('[data-step-field=\"group\"]').value.trim()," in html
+           and "requires_confirmation:row.querySelector('[data-step-field=\"requires_confirmation\"]').checked" in html
+           and "group:String(step.group||'')," in html
+           and "requires_confirmation:!!(step.requires_confirmation||step.requiresConfirmation)" in html
+           and "Steps sharing the same non-empty group run concurrently" in html
+           and "workflow-step-confirm-label" in html)
     _check("frontend Assistant provider workflow popups are keyboard accessible",
            "function focusChatControlPopupOption(kind,delta)" in html
            and "function handleChatControlPopupKeydown(e,kind)" in html
@@ -39773,6 +39782,33 @@ def test_workflows() -> None:
         # Cannot delete builtin
         r = reg.delete_custom("review-and-fix")
         _check("cant delete builtin wf", r.get("ok") is False)
+
+        # group/requires_confirmation (now UI-authorable via createWorkflow's
+        # step editor, not just hand-written JSON/BUILTIN_WORKFLOWS) must
+        # survive a real save-to-disk-and-reload round trip, same as any
+        # other step field.
+        group_wf = WorkflowDef(
+            id="test-wf-group", name="Group WF", description="Testing group/confirm",
+            steps=[
+                WorkflowStep(prompt="A: {{input}}", output_var="a", label="A", group="g1"),
+                WorkflowStep(prompt="B: {{input}}", output_var="b", label="B", group="g1"),
+                WorkflowStep(prompt="C: {{a}} {{b}}", output_var="c", label="C",
+                             requires_confirmation=True),
+            ],
+        )
+        r = reg.save_custom(group_wf, workspace_root=tmpdir)
+        _check("save custom wf with group/requires_confirmation", r.get("ok") is True)
+        reg3 = WorkflowRegistry()
+        reg3.load_custom(workspace_root=tmpdir)
+        reloaded_group_wf = reg3.get("test-wf-group")
+        _check("group/requires_confirmation survive a save+reload round trip",
+               reloaded_group_wf is not None
+               and reloaded_group_wf.steps[0].group == "g1"
+               and reloaded_group_wf.steps[1].group == "g1"
+               and reloaded_group_wf.steps[0].requires_confirmation is False
+               and reloaded_group_wf.steps[2].group == ""
+               and reloaded_group_wf.steps[2].requires_confirmation is True)
+        reg.delete_custom("test-wf-group", workspace_root=tmpdir)
 
         r = reg.save_custom(WorkflowDef(id="../escape", name="Bad"), workspace_root=tmpdir)
         _check("workflow save blocks path traversal", r.get("ok") is False)
