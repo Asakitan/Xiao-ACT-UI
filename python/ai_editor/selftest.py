@@ -39972,6 +39972,92 @@ def test_tk_window() -> None:
             print(f"[Selftest] Tk cleanup failed: {cleanup_exc}")
 
 
+def test_real_extension_smoke() -> None:
+    print("── Real Extension Smoke (阶段1.4) ──")
+    from ai_editor import real_extension_smoke as res
+
+    # Deterministic fixture check first (works on any machine/CI): a
+    # synthetic two-extension directory exercises the scan+describe path
+    # without depending on what happens to be installed locally.
+    tmpdir = tempfile.mkdtemp(prefix="sao_real_ext_smoke_")
+    try:
+        ext_a = os.path.join(tmpdir, "acme.foo-1.0.0")
+        os.makedirs(ext_a, exist_ok=True)
+        with open(os.path.join(ext_a, "package.json"), "w", encoding="utf-8") as f:
+            json.dump({
+                "name": "foo", "publisher": "acme", "version": "1.0.0",
+                "displayName": "Foo", "main": "./out/extension.js",
+                "activationEvents": ["onLanguage:foo", "onCommand:acme.foo.run"],
+                "contributes": {
+                    "commands": [{"command": "acme.foo.run", "title": "Run Foo"}],
+                    "languages": [{"id": "foo", "extensions": [".foo"]}],
+                    "configuration": {"properties": {"acme.foo.enabled": {"type": "boolean"}}},
+                },
+            }, f)
+        ext_b = os.path.join(tmpdir, "acme.bar-2.0.0")
+        os.makedirs(ext_b, exist_ok=True)
+        with open(os.path.join(ext_b, "package.json"), "w", encoding="utf-8") as f:
+            json.dump({
+                "name": "bar", "publisher": "acme", "version": "2.0.0",
+                "contributes": {"grammars": [{"language": "bar"}], "themes": [{"label": "Bar Dark"}]},
+            }, f)
+        # A directory entry with no package.json must be silently skipped.
+        os.makedirs(os.path.join(tmpdir, "not-an-extension"), exist_ok=True)
+
+        reports = res.scan_real_extensions(tmpdir)
+        _check("synthetic fixture scan finds exactly the 2 real package.json dirs",
+               len(reports) == 2)
+        foo = next((r for r in reports if r["id"] == "acme.foo"), None)
+        bar = next((r for r in reports if r["id"] == "acme.bar"), None)
+        _check("scanned extension exposes id/publisher/version/displayName",
+               foo is not None and foo["publisher"] == "acme"
+               and foo["version"] == "1.0.0" and foo["displayName"] == "Foo")
+        _check("scanned extension counts commands/languages/configuration correctly",
+               foo["contributionCounts"]["commands"] == 1
+               and foo["contributionCounts"]["languages"] == 1
+               and foo["contributionCounts"]["configuration"] == 1
+               and foo["totalContributedItems"] == 3)
+        _check("scanned extension counts grammars/themes correctly",
+               bar is not None
+               and bar["contributionCounts"]["grammars"] == 1
+               and bar["contributionCounts"]["themes"] == 1
+               and bar["totalContributedItems"] == 2)
+        _check("extension with a main entry point is flagged hasMain",
+               foo["hasMain"] is True)
+        _check("activation events are captured", foo["activationEventCount"] == 2)
+
+        summary = res.run_real_extension_smoke(tmpdir, write_results=False)
+        _check("run_real_extension_smoke wraps scan_real_extensions with directory metadata",
+               summary["directoryAvailable"] is True
+               and summary["extensionCount"] == 2
+               and summary["extensionsWithContributions"] == 2
+               and summary["extensionsWithMain"] == 1)
+
+        missing_dir = os.path.join(tmpdir, "does-not-exist")
+        empty_summary = res.run_real_extension_smoke(missing_dir, write_results=False)
+        _check("a missing extensions directory reports unavailable rather than raising",
+               empty_summary["directoryAvailable"] is False
+               and empty_summary["extensionCount"] == 0)
+    finally:
+        shutil.rmtree(tmpdir, ignore_errors=True)
+
+    # Best-effort real-machine sweep: whatever VS Code extensions happen to
+    # be installed here, if any. Not a hard requirement (CI/fresh machines
+    # legitimately have none), but if the directory exists, require it to
+    # actually find and describe every extension in it without raising.
+    real_dir = res._real_extensions_dir()
+    if os.path.isdir(real_dir):
+        real_summary = res.run_real_extension_smoke(write_results=False)
+        _check("real installed-extensions sweep parses every found extension without error",
+               real_summary["extensionCount"] > 0
+               and all(r.get("id") and r.get("version") for r in real_summary["extensions"]))
+        print(f"  (real machine sweep: {real_summary['extensionCount']} extension(s) found "
+              f"under {real_dir})")
+    else:
+        print(f"  (no {real_dir} on this machine - skipping real-machine sweep, "
+              "fixture-based checks above still ran)")
+
+
 def test_frontend_health_parity_snapshot() -> None:
     print("── Frontend Health Parity Snapshot ──")
     from ai_editor import frontend_health_selftest as fhs
@@ -40056,6 +40142,7 @@ def main() -> None:
         ("Claude Proxy", test_claude_proxy),
         ("Agents", test_agents),
         ("Workflows", test_workflows),
+        ("Real Extension Smoke", test_real_extension_smoke),
         ("Frontend Health Parity Snapshot", test_frontend_health_parity_snapshot),
         ("Tk Window", test_tk_window),
     ]
