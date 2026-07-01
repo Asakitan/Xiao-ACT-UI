@@ -3142,7 +3142,9 @@ class AIEditorAPI:
         from ai_editor.workflows import get_workflow_registry, WorkflowEngine
         self._agent_registry = get_agent_registry()
         self._wf_registry = get_workflow_registry()
-        self._wf_engine = WorkflowEngine(self._engine, self._agent_registry)
+        self._wf_engine = WorkflowEngine(
+            self._engine, self._agent_registry,
+            llm_factory=lambda: LLMEngine(self._engine.config))
         self._active_agent_id: Optional[str] = None
 
         gui = self._gui_ref or _DummyGui()

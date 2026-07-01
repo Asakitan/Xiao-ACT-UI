@@ -7529,6 +7529,8 @@ def test_phase1_ai_editor_regressions() -> None:
            and "def _workflow_wait_if_paused(self, run_id: str," in app_source
            and "event.set()" in app_source
            and "wait_if_paused=self._workflow_wait_if_paused(run_id, cancel_event))" in app_source)
+    _check("backend workflow gives grouped steps an isolated llm_factory",
+           "llm_factory=lambda: LLMEngine(self._engine.config))" in app_source)
     _check("frontend workflow retry targets the first failed step",
            "function workflowRetryStepPlan(last){" in html
            and "const failedIndex=steps.findIndex(step=>step&&step.error);" in html
@@ -39498,6 +39500,81 @@ def test_workflows() -> None:
                    "blockedBeforeResume": blocked_before_resume,
                    "order": pause_order,
                    "result": pause_holder.get("result"),
+               }, ensure_ascii=False, default=str))
+
+        class _FakeParallelLlm:
+            def __init__(self, delay: float = 0.12) -> None:
+                self.delay = delay
+                self.closed = False
+
+            def reset_cancel(self) -> None:
+                pass
+
+            def cancel(self) -> None:
+                pass
+
+            def close(self) -> None:
+                self.closed = True
+
+            def chat_completion_stream(self, messages, tools=None,
+                                       on_delta=None):
+                time.sleep(self.delay)
+                return _Resp("out:" + messages[-1]["content"])
+
+        parallel_wf = WorkflowDef(
+            id="parallel-test", name="Parallel", steps=[
+                WorkflowStep(prompt="A {{input}}", output_var="a",
+                             label="A", group="g1"),
+                WorkflowStep(prompt="B {{input}}", output_var="b",
+                             label="B", group="g1"),
+                WorkflowStep(prompt="C {{input}}", output_var="c",
+                             label="C", group="g1"),
+            ])
+        created_parallel_llms: List[Any] = []
+
+        def _parallel_llm_factory() -> Any:
+            inst = _FakeParallelLlm()
+            created_parallel_llms.append(inst)
+            return inst
+
+        parallel_engine = WorkflowEngine(
+            _FakeWorkflowLlm(), _FakeAgents(),
+            llm_factory=_parallel_llm_factory)
+        parallel_t0 = time.time()
+        parallel_result = parallel_engine.run(
+            parallel_wf, "seed", run_id="wf-parallel-selftest")
+        parallel_elapsed = time.time() - parallel_t0
+        parallel_steps = parallel_result.get("steps", [])
+        _check("workflow engine runs group steps concurrently",
+               parallel_elapsed < 0.25
+               and len(created_parallel_llms) == 3
+               and all(inst.closed for inst in created_parallel_llms)
+               and [s.get("step") for s in parallel_steps] == [0, 1, 2]
+               and [s.get("output") for s in parallel_steps] == [
+                   "out:A seed", "out:B seed", "out:C seed"]
+               and parallel_result.get("final_output") == "out:C seed",
+               json.dumps({
+                   "elapsed": parallel_elapsed,
+                   "createdCount": len(created_parallel_llms),
+                   "steps": parallel_steps,
+               }, ensure_ascii=False, default=str))
+
+        no_factory_llm = _FakeParallelLlm(delay=0.05)
+        no_factory_engine = WorkflowEngine(no_factory_llm, _FakeAgents())
+        no_factory_t0 = time.time()
+        no_factory_result = no_factory_engine.run(
+            parallel_wf, "seed", run_id="wf-parallel-no-factory-selftest")
+        no_factory_elapsed = time.time() - no_factory_t0
+        _check("workflow engine falls back to sequential group execution "
+               "without an llm_factory",
+               no_factory_elapsed >= 0.14
+               and not no_factory_llm.closed
+               and [s.get("output") for s in
+                    no_factory_result.get("steps", [])] == [
+                   "out:A seed", "out:B seed", "out:C seed"],
+               json.dumps({
+                   "elapsed": no_factory_elapsed,
+                   "steps": no_factory_result.get("steps", []),
                }, ensure_ascii=False, default=str))
 
     finally:

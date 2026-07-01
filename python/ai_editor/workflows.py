@@ -9,12 +9,13 @@ Claude-style multi-step workflows:
 
 from __future__ import annotations
 
+import concurrent.futures
 import json
 import logging
 import os
 import time
 from dataclasses import dataclass, field, asdict
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 
 logger = logging.getLogger(__name__)
@@ -39,6 +40,9 @@ class WorkflowStep:
     prompt: str = ""
     output_var: str = ""
     label: str = ""
+    # Steps sharing the same non-empty, *contiguous* group value run
+    # concurrently against the same pre-batch context snapshot.
+    group: str = ""
 
     def to_dict(self) -> Dict[str, Any]:
         return asdict(self)
@@ -306,11 +310,184 @@ def get_workflow_registry() -> WorkflowRegistry:
 
 
 class WorkflowEngine:
-    """Executes workflows by chaining LLM calls per step."""
+    """Executes workflows by chaining LLM calls per step.
 
-    def __init__(self, llm_engine: Any, agent_registry: Any) -> None:
+    ``llm_factory``, if given, is a zero-arg callable returning a fresh,
+    independently-cancellable LLM client (e.g. ``lambda: LLMEngine(cfg)``).
+    It is used to isolate concurrent ``group`` steps from each other and
+    from the shared ``llm_engine`` — required because callers typically
+    reuse one ``llm_engine`` instance (with its own mutable cancel/http
+    state) for both interactive chat and workflows. Without a factory,
+    ``group`` steps still run — just one at a time, against the same
+    shared context snapshot — instead of risking concurrent access to
+    that shared mutable state.
+    """
+
+    def __init__(self, llm_engine: Any, agent_registry: Any,
+                 llm_factory: Optional[Callable[[], Any]] = None) -> None:
         self._llm = llm_engine
         self._agents = agent_registry
+        self._llm_factory = llm_factory
+
+    def _step_messages(self, step: "WorkflowStep", context: Dict[str, str]
+                       ) -> List[Dict[str, str]]:
+        prompt = step.prompt
+        for var, val in context.items():
+            prompt = prompt.replace("{{" + var + "}}", str(val))
+        agent = (self._agents.get(step.agent)
+                 if step.agent != "default" else None)
+        system = agent.system_prompt if agent else ""
+        messages: List[Dict[str, str]] = []
+        if system:
+            messages.append({"role": "system", "content": system})
+        messages.append({"role": "user", "content": prompt})
+        return messages
+
+    @staticmethod
+    def _call_llm(llm: Any, messages: List[Dict[str, str]],
+                  cancelled: Callable[[], bool]) -> Tuple[str, Optional[str]]:
+        output = ""
+        error: Optional[str] = None
+        try:
+            llm.reset_cancel()
+            if cancelled():
+                raise WorkflowCancelled("Workflow cancelled")
+            resp = llm.chat_completion_stream(
+                messages=messages, tools=None, on_delta=lambda _d: None)
+            output = resp.content or ""
+            error = resp.error if resp.error else None
+            if getattr(resp, "finish_reason", "") == "cancelled":
+                raise WorkflowCancelled("Workflow cancelled")
+            if cancelled():
+                raise WorkflowCancelled("Workflow cancelled")
+        except WorkflowCancelled as exc:
+            error = str(exc)
+            try:
+                cancel = getattr(llm, "cancel", None)
+                if callable(cancel):
+                    cancel()
+            except Exception:
+                pass
+        except Exception as exc:
+            error = str(exc)
+        return output, error
+
+    @staticmethod
+    def _make_entry(i: int, step: "WorkflowStep", output: str,
+                    error: Optional[str], started_at: int, ended_at: int
+                    ) -> Dict[str, Any]:
+        entry: Dict[str, Any] = {
+            "step": i,
+            "agent": step.agent,
+            "label": step.label or f"Step {i + 1}",
+            "output_var": step.output_var,
+            "output": output,
+            "status": "cancelled" if error == "Workflow cancelled"
+            else "error" if error else "done",
+            "startedAt": started_at,
+            "endedAt": ended_at,
+            "durationMs": max(0, ended_at - started_at),
+        }
+        if error:
+            entry["error"] = error
+        if error == "Workflow cancelled":
+            entry["cancelled"] = True
+        return entry
+
+    @staticmethod
+    def _plan_batches(steps: List["WorkflowStep"], start_index: int
+                      ) -> List[List[Tuple[int, "WorkflowStep"]]]:
+        """Group step indices into execution batches: a contiguous run of
+        steps sharing the same non-empty ``group`` is one batch (run
+        concurrently); every other step is its own singleton batch (run
+        exactly as before)."""
+        batches: List[List[Tuple[int, "WorkflowStep"]]] = []
+        current: List[Tuple[int, "WorkflowStep"]] = []
+        current_group: Optional[str] = None
+        for i, step in enumerate(steps):
+            if i < start_index:
+                continue
+            group = str(getattr(step, "group", "") or "")
+            if group and group == current_group:
+                current.append((i, step))
+                continue
+            if current:
+                batches.append(current)
+            current = [(i, step)]
+            current_group = group or None
+        if current:
+            batches.append(current)
+        return batches
+
+    def _run_batch_isolated(self, batch: List[Tuple[int, "WorkflowStep"]],
+                            total: int, context: Dict[str, str],
+                            on_step_start: Optional[Callable],
+                            on_step_end: Optional[Callable],
+                            cancelled: Callable[[], bool]
+                            ) -> Dict[int, Dict[str, Any]]:
+        """Run each batch member one at a time against the same context
+        snapshot, using the shared ``self._llm``. Used for singleton
+        (non-grouped) steps, and as the safe fallback for ``group`` steps
+        when no ``llm_factory`` is available for real concurrency."""
+        entries: Dict[int, Dict[str, Any]] = {}
+        for i, step in batch:
+            if on_step_start:
+                on_step_start(i, total, step)
+            started_at = int(time.time() * 1000)
+            messages = self._step_messages(step, context)
+            output, error = self._call_llm(self._llm, messages, cancelled)
+            ended_at = int(time.time() * 1000)
+            entries[i] = self._make_entry(i, step, output, error,
+                                          started_at, ended_at)
+            if on_step_end:
+                on_step_end(i, total, step, output, error)
+        return entries
+
+    def _run_batch_parallel(self, batch: List[Tuple[int, "WorkflowStep"]],
+                            total: int, context: Dict[str, str],
+                            on_step_start: Optional[Callable],
+                            on_step_end: Optional[Callable],
+                            cancelled: Callable[[], bool]
+                            ) -> Dict[int, Dict[str, Any]]:
+        """Run every batch member concurrently, each against its own
+        ``llm_factory()``-provided client so none share cancel/http state."""
+        for i, step in batch:
+            if on_step_start:
+                on_step_start(i, total, step)
+        started_ats = {i: int(time.time() * 1000) for i, _ in batch}
+        entries: Dict[int, Dict[str, Any]] = {}
+
+        def _call_isolated(step: "WorkflowStep") -> Tuple[str, Optional[str]]:
+            llm = self._llm_factory()
+            try:
+                return self._call_llm(
+                    llm, self._step_messages(step, context), cancelled)
+            finally:
+                close = getattr(llm, "close", None)
+                if callable(close):
+                    try:
+                        close()
+                    except Exception:
+                        pass
+
+        with concurrent.futures.ThreadPoolExecutor(
+                max_workers=len(batch)) as pool:
+            futures = {
+                pool.submit(_call_isolated, step): (i, step)
+                for i, step in batch
+            }
+            for fut in concurrent.futures.as_completed(futures):
+                i, step = futures[fut]
+                try:
+                    output, error = fut.result()
+                except Exception as exc:
+                    output, error = "", str(exc)
+                ended_at = int(time.time() * 1000)
+                entries[i] = self._make_entry(
+                    i, step, output, error, started_ats[i], ended_at)
+                if on_step_end:
+                    on_step_end(i, total, step, output, error)
+        return entries
 
     def run(self, workflow: WorkflowDef, input_text: str,
             on_step_start: Optional[Callable] = None,
@@ -349,9 +526,10 @@ class WorkflowEngine:
             except Exception:
                 return False
 
-        for i, step in enumerate(workflow.steps):
-            if i < start_index:
-                continue
+        total = len(workflow.steps)
+        batches = self._plan_batches(workflow.steps, start_index)
+
+        for batch in batches:
             if wait_if_paused:
                 wait_if_paused()
             if _cancelled():
@@ -367,81 +545,34 @@ class WorkflowEngine:
                     "cancelled": True,
                     "message": "Workflow cancelled",
                 }
-            if on_step_start:
-                on_step_start(i, len(workflow.steps), step)
-            step_started_at = int(time.time() * 1000)
 
-            prompt = step.prompt
-            for var, val in context.items():
-                prompt = prompt.replace("{{" + var + "}}", str(val))
+            if len(batch) > 1 and self._llm_factory is not None:
+                entries = self._run_batch_parallel(
+                    batch, total, context, on_step_start, on_step_end,
+                    _cancelled)
+            else:
+                entries = self._run_batch_isolated(
+                    batch, total, context, on_step_start, on_step_end,
+                    _cancelled)
 
-            agent = (self._agents.get(step.agent)
-                     if step.agent != "default" else None)
-            system = agent.system_prompt if agent else ""
+            batch_cancelled = False
+            batch_error: Optional[str] = None
+            for i, step in batch:
+                entry = entries[i]
+                results.append(entry)
+                if step.output_var:
+                    context[step.output_var] = entry.get("output", "")
+                if entry.get("cancelled"):
+                    batch_cancelled = True
+                elif entry.get("error") and batch_error is None:
+                    batch_error = entry["error"]
 
-            messages: List[Dict[str, str]] = []
-            if system:
-                messages.append({"role": "system", "content": system})
-            messages.append({"role": "user", "content": prompt})
-
-            output = ""
-            error: Optional[str] = None
-            try:
-                self._llm.reset_cancel()
-                if _cancelled():
-                    raise WorkflowCancelled("Workflow cancelled")
-                resp = self._llm.chat_completion_stream(
-                    messages=messages, tools=None,
-                    on_delta=lambda _d: None,
-                )
-                output = resp.content or ""
-                error = resp.error if resp.error else None
-                if getattr(resp, "finish_reason", "") == "cancelled":
-                    raise WorkflowCancelled("Workflow cancelled")
-                if _cancelled():
-                    raise WorkflowCancelled("Workflow cancelled")
-            except WorkflowCancelled as exc:
-                error = str(exc)
-                try:
-                    cancel = getattr(self._llm, "cancel", None)
-                    if callable(cancel):
-                        cancel()
-                except Exception:
-                    pass
-            except Exception as exc:
-                error = str(exc)
-
-            if step.output_var:
-                context[step.output_var] = output
-
-            step_ended_at = int(time.time() * 1000)
-            entry: Dict[str, Any] = {
-                "step": i,
-                "agent": step.agent,
-                "label": step.label or f"Step {i + 1}",
-                "output_var": step.output_var,
-                "output": output,
-                "status": "cancelled" if error == "Workflow cancelled"
-                else "error" if error else "done",
-                "startedAt": step_started_at,
-                "endedAt": step_ended_at,
-                "durationMs": max(0, step_ended_at - step_started_at),
-            }
-            if error:
-                entry["error"] = error
-            if error == "Workflow cancelled":
-                entry["cancelled"] = True
-            results.append(entry)
-
-            if on_step_end:
-                on_step_end(i, len(workflow.steps), step, output, error)
-
-            if error == "Workflow cancelled":
+            if batch_cancelled:
                 ended_at = int(time.time() * 1000)
                 return {
                     "workflow": workflow.id,
                     "steps": results,
-                    "final_output": output,
+                    "final_output": results[-1]["output"] if results else "",
                     "workflowRunId": run_id,
                     "startedAt": run_started_at,
                     "endedAt": ended_at,
@@ -449,7 +580,7 @@ class WorkflowEngine:
                     "cancelled": True,
                     "message": "Workflow cancelled",
                 }
-            if error:
+            if batch_error:
                 break
 
         final = results[-1]["output"] if results else ""
