@@ -5007,6 +5007,23 @@ def test_app_settings_parity() -> None:
            and provider_model_result.get("controls", {}).get("provider") == "anthropic"
            and provider_model_result.get("controls", {}).get("model") == "claude-test")
 
+    # Provider CLI lifecycle (external terminal launch, now wired into Settings).
+    # Uses an unmapped provider id so provider_runtime_cli_path() can never
+    # resolve a real executable regardless of what's on the test machine's
+    # PATH - launch_provider_cli must never actually spawn a subprocess here.
+    cli_api = AIEditorAPI(_SettingsGui({"ai_editor": {}}))
+    cli_api._ensure_engine()
+    not_found = cli_api.launch_provider_cli("selftest-no-such-provider")
+    _check("launch_provider_cli reports a clear error when no CLI is found",
+           "CLI not found" in not_found.get("error", ""))
+    idle_status = cli_api.provider_cli_status("selftest-no-such-provider")
+    _check("provider_cli_status is safe before any launch",
+           idle_status.get("running") is False
+           and idle_status.get("cli_available") is False)
+    idle_stop = cli_api.stop_provider_cli("selftest-no-such-provider")
+    _check("stop_provider_cli is a safe no-op when nothing was launched",
+           idle_stop.get("ok") is True and idle_stop.get("was_running") is False)
+
 
 def test_phase1_ai_editor_regressions() -> None:
     print("── Phase 1 AI Editor Regressions ──")
