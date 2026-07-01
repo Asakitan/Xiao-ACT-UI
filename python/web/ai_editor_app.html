@@ -26792,6 +26792,7 @@ function explorerFolderIcon(name,expanded,isRoot){
 async function refreshExplorer(relPath=''){
   const tree=$('explorer-tree');
   if(!tree)return;
+  const _explorerRenderT0=performance.now();
   const seq=++explorerTreeRequestSeq;
   delete tree.dataset.loaded;
   tree.innerHTML='<div class="tree-note">'+esc(t('loading'))+'</div>';
@@ -26814,6 +26815,7 @@ async function refreshExplorer(relPath=''){
   const rootIcon=rootNode.querySelector('.tree-icon');if(rootIcon)applyIconVisual(rootIcon,explorerFolderIcon(explorerRootName,true,true));
   renderExplorerEntries(children,res.entries||[],1,currentPath);
   tree.dataset.loaded='1';
+  recordAiEditorPerfSample('treeFirstRender',performance.now()-_explorerRenderT0);
   renderExplorerExtensionViews();
 }
 
@@ -48284,7 +48286,9 @@ async function toggleExtInstall(btn,event){
     if(!confirm(extensionInstallPreflightText(preflight,extId)))return;
     setExtensionOperation(extId,'installing');
     setStatus(t('installing')+' '+extId+'...');
+    const _extInstallT0=performance.now();
     const r=await call('install_extension',extId,vsix,true);
+    recordAiEditorPerfSample('extensionInstall',performance.now()-_extInstallT0);
     setExtensionOperation(extId,'');
     if(r&&r.ok){
       if(r.extension&&r.extension.id){
@@ -53964,7 +53968,7 @@ let _aiEditorLastHealthSentAt=0;
 // values mirror the plan's own targets so "over budget" is mechanical
 // instead of eyeballed from a screenshot.
 const _aiEditorPerfBudgets={};
-const AI_EDITOR_PERF_BUDGET_MS={settingsOpenVisible:400,languageProvider:1500};
+const AI_EDITOR_PERF_BUDGET_MS={settingsOpenVisible:400,languageProvider:1500,treeFirstRender:500,extensionInstall:2000};
 function recordAiEditorPerfSample(name,durationMs){
   const key=String(name||'unknown');
   const ms=Math.max(0,Number(durationMs)||0);

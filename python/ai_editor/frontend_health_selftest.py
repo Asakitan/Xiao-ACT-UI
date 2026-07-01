@@ -32,7 +32,7 @@ _PARITY_PHASES: list[tuple[str, tuple[str, ...]]] = [
                            "lifecycle", "high-frequency", "idle time", "failure classif",
                            "perf budget")),
     ("6-motion-ui-workspace", ("terminal", "workspace", "window closing", "drag overlay",
-                               "keyboard recovery")),
+                               "keyboard recovery", "explorer tree", "tree first render")),
 ]
 
 
@@ -393,6 +393,8 @@ def run_frontend_health_selftest() -> list[str]:
     _require(failures, "perf budget tracker is exported for the health aggregate", "window.recordAiEditorPerfSample=recordAiEditorPerfSample;" in html and "window.aiEditorPerfBudgetSnapshot=aiEditorPerfBudgetSnapshot;" in html and 'perfBudgets: safeCall("aiEditorPerfBudgetSnapshot")' in html)
     _require(failures, "settings open time is sampled against its plan budget", "const _settingsOpenT0=performance.now();" in html and "recordAiEditorPerfSample('settingsOpenVisible'" in html and "settingsOpenVisible:400" in html)
     _require(failures, "language provider round trip is sampled against its plan budget", "const _providerT0=performance.now();" in html and "recordAiEditorPerfSample('languageProvider'" in html and "languageProvider:1500" in html)
+    _require(failures, "explorer tree first render is sampled against its plan budget", "const _explorerRenderT0=performance.now();" in html and "recordAiEditorPerfSample('treeFirstRender'" in html and "treeFirstRender:500" in html)
+    _require(failures, "extension install is sampled against its plan budget", "const _extInstallT0=performance.now();" in html and "recordAiEditorPerfSample('extensionInstall'" in html and "extensionInstall:2000" in html)
     _require(failures, "perf budget over-budget state reaches the health payload", "payload.perfBudgetOverCount=perfBudgets.overBudgetCount||0;" in html and "payload.perfBudgetOverNames=perfBudgets.overBudgetNames||'';" in html)
 
     if duplicate_script_ids:
