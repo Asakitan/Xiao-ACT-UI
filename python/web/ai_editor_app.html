@@ -14302,7 +14302,7 @@ const COMPLETION_ITEM_TAG_DEPRECATED=1;
 const EDITOR_SUGGEST_MEMORY_KEY='sao.aiEditor.suggestMemory.v1';
 
 let _prevLineCount=1;
-let _editorDirtyDiffCache={key:'',decorations:[],summary:null};
+let _editorDirtyDiffCache={key:'',decorations:[],summary:null,changes:[]};
 let _editorDirtyDiffActiveHunkIndex=0;
 let _editorVisualDecorationsCache={signature:'',renders:0,skips:0};
 function updateLineNums(){
@@ -14357,7 +14357,7 @@ function activeEditorBaselineContent(){
 function setActiveEditorBaselineContent(content){
   const tab=activeEditorTab();
   if(tab)tab.originalContent=String(content||'');
-  _editorDirtyDiffCache={key:'',decorations:[],summary:null};
+  _editorDirtyDiffCache={key:'',decorations:[],summary:null,changes:[]};
   _editorDirtyDiffActiveHunkIndex=0;
   if(typeof renderEditorVisualDecorations==='function')renderEditorVisualDecorations();
 }
@@ -14385,7 +14385,8 @@ function computeEditorDirtyDiffFallback(oldLines,newLines,start,oldEnd,newEnd){
   const added=Math.max(0,newSpan-oldSpan);
   const removed=Math.max(0,oldSpan-newSpan);
   const modified=Math.min(oldSpan,newSpan);
-  return {decorations,summary:{added,modified,removed,total:added+modified+removed,algorithm:'fallback'}};
+  const changes=(oldSpan||newSpan)?[{oldStart:start,oldCount:oldSpan,newStart:start,newCount:newSpan}]:[];
+  return {decorations,summary:{added,modified,removed,total:added+modified+removed,algorithm:'fallback'},changes};
 }
 function computeEditorDirtyDiffLcs(oldLines,newLines,start,oldEnd,newEnd){
   const oldSeg=oldLines.slice(start,oldEnd+1),newSeg=newLines.slice(start,newEnd+1);
@@ -14397,12 +14398,13 @@ function computeEditorDirtyDiffLcs(oldLines,newLines,start,oldEnd,newEnd){
       dp[i][j]=oldSeg[i]===newSeg[j]?dp[i+1][j+1]+1:Math.max(dp[i+1][j],dp[i][j+1]);
     }
   }
-  const decorations=[],summary={added:0,modified:0,removed:0,total:0,algorithm:'lcs'};
+  const decorations=[],changes=[],summary={added:0,modified:0,removed:0,total:0,algorithm:'lcs'};
   let i=0,j=0;
-  const pushChange=(oldCount,newCount,line)=>{
+  const pushChange=(oldCount,newCount,line,oldLine)=>{
     if(!oldCount&&!newCount)return;
     const modified=Math.min(oldCount,newCount),added=Math.max(0,newCount-oldCount),removed=Math.max(0,oldCount-newCount);
     summary.modified+=modified;summary.added+=added;summary.removed+=removed;summary.total+=modified+added+removed;
+    changes.push({oldStart:oldLine,oldCount,newStart:line,newCount});
     if(newCount){
       for(let k=0;k<newCount;k++)decorations.push({line:line+k,type:k<oldCount?'modified':'added'});
     }else{
@@ -14412,16 +14414,17 @@ function computeEditorDirtyDiffLcs(oldLines,newLines,start,oldEnd,newEnd){
   while(i<oldLen||j<newLen){
     if(i<oldLen&&j<newLen&&oldSeg[i]===newSeg[j]){i++;j++;continue}
     const line=start+j;
+    const oldLine=start+i;
     let oi=i,nj=j;
     while(oi<oldLen||nj<newLen){
       if(oi<oldLen&&nj<newLen&&oldSeg[oi]===newSeg[nj])break;
       if(nj>=newLen||(oi<oldLen&&dp[oi+1][nj]>=dp[oi][nj+1]))oi++;
       else nj++;
     }
-    pushChange(oi-i,nj-j,line);
+    pushChange(oi-i,nj-j,line,oldLine);
     i=oi;j=nj;
   }
-  return {decorations,summary};
+  return {decorations,summary,changes};
 }
 function computeEditorDirtyDiff(base,current){
   base=String(base||'');current=String(current||'');
@@ -14442,7 +14445,7 @@ function editorDirtyDiffState(){
   const key=String(tab.id)+':'+editorDiffContentSignature(base)+':'+editorDiffContentSignature(value);
   if(_editorDirtyDiffCache.key===key)return _editorDirtyDiffCache;
   const computed=computeEditorDirtyDiff(base,value);
-  _editorDirtyDiffCache={key,decorations:computed.decorations,summary:computed.summary};
+  _editorDirtyDiffCache={key,decorations:computed.decorations,summary:computed.summary,changes:computed.changes||[]};
   const hunks=editorDirtyDiffHunks(_editorDirtyDiffCache.decorations||[]);
   _editorDirtyDiffActiveHunkIndex=Math.max(0,Math.min(_editorDirtyDiffActiveHunkIndex,hunks.length?hunks.length-1:0));
   return _editorDirtyDiffCache;
@@ -14529,6 +14532,32 @@ function editorDirtyDiffNavigate(direction){
   renderEditorVisualDecorations();
   return true;
 }
+function editorDirtyDiffRevertHunk(hunkIndex){
+  const tab=activeEditorTab(),ta=$('editor-text');
+  if(!tab||!ta)return false;
+  const state=editorDirtyDiffState(),hunks=editorDirtyDiffHunks(state.decorations||[]);
+  if(!hunks.length){setStatus('Diff: clean');return false}
+  const idx=Math.max(0,Math.min(Number(hunkIndex)||0,hunks.length-1));
+  const hunk=hunks[idx];
+  const changes=(state.changes||[]).filter(c=>{
+    const newEndLine=c.newCount?c.newStart+c.newCount-1:c.newStart;
+    return newEndLine>=hunk.line&&c.newStart<=hunk.endLine;
+  }).sort((a,b)=>b.newStart-a.newStart);
+  if(!changes.length){setStatus('Diff: nothing to revert');return false}
+  const baseLines=activeEditorBaselineContent().split('\n');
+  const currentLines=ta.value.split('\n');
+  changes.forEach(c=>{
+    const replacement=baseLines.slice(c.oldStart,c.oldStart+c.oldCount);
+    currentLines.splice(c.newStart,c.newCount,...replacement);
+  });
+  ta.value=currentLines.join('\n');
+  const targetLine=Math.max(0,Math.min(changes[changes.length-1].newStart,currentLines.length-1));
+  editorSetCursorLine(targetLine);
+  _editorDirtyDiffActiveHunkIndex=Math.max(0,Math.min(idx,Math.max(0,hunks.length-2)));
+  updateLineNums();
+  setStatus('Reverted hunk '+(idx+1)+'/'+hunks.length);
+  return true;
+}
 function openActiveEditorDirtyDiff(){
   const tab=activeEditorTab(),state=editorDirtyDiffState(),summary=state.summary||{};
   if(!tab||!summary.total){setStatus('Diff: clean');return false}
@@ -14604,6 +14633,13 @@ function renderEditorDirtyDiffToolbar(layer,state){
     btn.onclick=e=>{e.preventDefault();e.stopPropagation();editorDirtyDiffNavigate(dir)};
     toolbar.appendChild(btn);
   });
+  const revert=document.createElement('button');
+  revert.type='button';revert.className='editor-dirty-diff-action revert';revert.textContent='⎌';revert.title='Revert this hunk';revert.setAttribute('aria-label','Revert this hunk');
+  revert.dataset.dirtyDiffAction='revert';
+  revert.disabled=!hunks.length;
+  revert.onmousedown=e=>e.preventDefault();
+  revert.onclick=e=>{e.preventDefault();e.stopPropagation();editorDirtyDiffRevertHunk(activeHunk)};
+  toolbar.appendChild(revert);
   const open=document.createElement('button');
   open.type='button';open.className='editor-dirty-diff-action open';open.textContent='Diff';open.title='Open side-by-side diff';open.setAttribute('aria-label','Open side-by-side diff');
   open.dataset.dirtyDiffAction='open';
@@ -48268,7 +48304,7 @@ function switchTab(id){
     hideNotebookSurface();
     $('editor-text').value=tab.content;
     if(tab.originalContent===undefined)tab.originalContent=tab.content||'';
-    _editorDirtyDiffCache={key:'',decorations:[],summary:null};
+    _editorDirtyDiffCache={key:'',decorations:[],summary:null,changes:[]};
     setEditorLanguage(tab.language);
     $('editor-text').selectionStart=$('editor-text').selectionEnd=tab.cursor;
     _undoStack.length=0;_redoStack.length=0;_undoPush(true);
@@ -50913,7 +50949,7 @@ async function saveTextTabAs(tab,options){
   if(r&&r.ok){
     if(tab){tab.filePath=r.path;tab.name=r.name;tab.language=r.language||editorLang;tab.originalContent=content;tab.content=content}
     editorDirty=false;
-    _editorDirtyDiffCache={key:'',decorations:[],summary:null};
+    _editorDirtyDiffCache={key:'',decorations:[],summary:null,changes:[]};
     renderEditorVisualDecorations();
     const tabEl=document.querySelector('.tab[data-tab-id="'+activeTab+'"]');
     if(tabEl){tabEl.classList.remove('dirty');const lbl=tabEl.querySelector('.tab-label');if(lbl)lbl.textContent=r.name||r.path}
@@ -51039,7 +51075,7 @@ async function saveSettingsJsonTab(tab,options){
     updateLineNums();updateCursorPos();scheduleEditorSyntaxHighlight();
     if(typeof renderEditorVisualDecorations==='function')renderEditorVisualDecorations();
   }
-  _editorDirtyDiffCache={key:'',decorations:[],summary:null};
+  _editorDirtyDiffCache={key:'',decorations:[],summary:null,changes:[]};
   settingsJsonRefreshUiAfterApply();
   renderTabs();
   showToast('Settings JSON applied','success',1600);
@@ -51073,7 +51109,7 @@ async function saveFile(options){
     if(r){try{const d=JSON.parse(r);if(d.error){if(!opts.autoSave)showToast('Save failed: '+d.error,'error');return {ok:false,error:d.error}}}catch(e){}}
     editorDirty=false;
     if(tab){tab.originalContent=content;tab.content=content}
-    _editorDirtyDiffCache={key:'',decorations:[],summary:null};
+    _editorDirtyDiffCache={key:'',decorations:[],summary:null,changes:[]};
     renderEditorVisualDecorations();
     const tabEl=document.querySelector('.tab[data-tab-id="'+activeTab+'"]');if(tabEl)tabEl.classList.remove('dirty');
     if(opts.autoSave)setStatus('Auto saved: '+tab.filePath);
@@ -53283,6 +53319,17 @@ function editorDirtyDiffSelfCheckSnapshot(){
     const diffViewRows=diffHost?diffHost.querySelectorAll('.editor-diff-row.added,.editor-diff-row.modified,.editor-diff-row.removed').length:0;
     const diffSummary=diffHost?diffHost.querySelectorAll('.editor-diff-chip.added,.editor-diff-chip.modified,.editor-diff-chip.removed').length:0;
     const diffDatasetsOk=!!(diffHost&&diffHost.classList.contains('active')&&diffHost.dataset.diffAddedLines!==undefined&&diffHost.dataset.diffModifiedLines!==undefined&&diffHost.dataset.diffRemovedLines!==undefined&&diffHost.dataset.diffHunks!==undefined);
+    const revertButton=toolbarActions.find(btn=>btn.dataset.dirtyDiffAction==='revert')||null;
+    const revertButtonPresent=!!revertButton;
+    const revertedOk=editorDirtyDiffRevertHunk(0);
+    const revertedValue=ed.value;
+    const revertedClean=editorDirtyDiffState().summary.total===0;
+    const revertSnapshot={
+      buttonPresent:revertButtonPresent,
+      reverted:!!revertedOk,
+      matchesBaseline:revertedValue===tab.originalContent,
+      diffClean:revertedClean
+    };
     activeTab=id;
     showEditorArea();
     ed.value='alpha\nbeta changed\nnew\nomega';
@@ -53417,6 +53464,10 @@ function editorDirtyDiffSelfCheckSnapshot(){
       toolbarStateDatasetOk:!!(toolbar&&toolbar.dataset.dirtyDiffLabel&&toolbar.dataset.dirtyDiffCanNavigate==='1'&&toolbar.dataset.dirtyDiffCanOpen==='1'&&toolbar.dataset.dirtyDiffShortcut==='Alt+F7/F7'),
       toolbarActionDatasets:toolbarActions.map(btn=>btn.dataset.dirtyDiffAction||'').join(','),
       toolbarDisabledActions:toolbarActions.filter(btn=>btn.disabled).length,
+      revertButtonPresent:revertSnapshot.buttonPresent,
+      revertOk:revertSnapshot.reverted,
+      revertMatchesBaseline:revertSnapshot.matchesBaseline,
+      revertDiffClean:revertSnapshot.diffClean,
       toolbarOverview:!!overview,
       toolbarOverviewSegments:overviewSegments.length,
       toolbarRenderMode:toolbar?toolbar.dataset.dirtyDiffRenderMode:'',
@@ -53551,7 +53602,7 @@ function editorDirtyDiffSelfCheckSnapshot(){
       Object.keys(surfaceEl.dataset).forEach(k=>delete surfaceEl.dataset[k]);
       Object.assign(surfaceEl.dataset,oldSurfaceDataset);
     }
-    _editorDirtyDiffCache={key:'',decorations:[],summary:null};
+    _editorDirtyDiffCache={key:'',decorations:[],summary:null,changes:[]};
     renderTabs();updateLineNums();renderEditorVisualDecorations();renderProblemsRows(editorAllProblemRows(_editorDiagnostics));
   }
 }
@@ -54834,10 +54885,14 @@ if(window.pywebview){
   }
 
   function collectDiffCounts(){
+    // .editor-diff-row.* is what this app's own dirty-diff/SCM diff renderer
+    // actually emits (see computeEditorDirtyDiff/renderEditorDirtyDiffDecorations
+    // and showDiffEditorSurface); the other selectors are a generic/Monaco-style
+    // fallback kept for any future embedded diff surface that uses them instead.
     return {
-      added: document.querySelectorAll(".ai-editor-diff-added, .diff-added, .line-added, .line-insert, .char-insert").length,
-      removed: document.querySelectorAll(".ai-editor-diff-removed, .diff-removed, .line-removed, .line-delete, .char-delete").length,
-      modified: document.querySelectorAll(".ai-editor-diff-modified, .diff-modified, .line-modified, .line-modify").length
+      added: document.querySelectorAll(".ai-editor-diff-added, .diff-added, .line-added, .line-insert, .char-insert, .editor-diff-row.added").length,
+      removed: document.querySelectorAll(".ai-editor-diff-removed, .diff-removed, .line-removed, .line-delete, .char-delete, .editor-diff-row.removed").length,
+      modified: document.querySelectorAll(".ai-editor-diff-modified, .diff-modified, .line-modified, .line-modify, .editor-diff-row.modified").length
     };
   }
 

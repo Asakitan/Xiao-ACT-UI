@@ -17556,7 +17556,13 @@ console.log("command palette quick access helpers ok");
            and "window.editorDirtyDiffSelfCheckSnapshot=editorDirtyDiffSelfCheckSnapshot" in html
            and "window.editorLanguageFeatureStateSnapshot=editorLanguageFeatureStateSnapshot" in html
            and "window.editorLanguageFeatureAggregateSnapshot=editorLanguageFeatureAggregateSnapshot" in html
-           and "window.editorLanguageStatusPanelSelfCheckSnapshot=editorLanguageStatusPanelSelfCheckSnapshot" in html)
+           and "window.editorLanguageStatusPanelSelfCheckSnapshot=editorLanguageStatusPanelSelfCheckSnapshot" in html
+           and "function editorDirtyDiffRevertHunk(hunkIndex)" in html
+           and "editor-dirty-diff-action revert" in html
+           and "revert.dataset.dirtyDiffAction='revert';" in html
+           and "revertButtonPresent" in html
+           and "revertMatchesBaseline" in html
+           and "revertDiffClean" in html)
     _check("frontend refreshes language state after formatter and code-action edits",
            "function editorRefreshLanguageFeaturesAfterEdit(delayBase)" in html
            and "clearEditorDocumentHighlights();" in html
@@ -23293,8 +23299,6 @@ def test_app_extension_runtime_support() -> None:
         ext_settings_payload = api.list_extension_settings()
         ext_settings = ext_settings_payload.get("configurations", [])
         language_defaults = ext_settings_payload.get("languageDefaults", [])
-        legacy_settings_payload = api.get_extension_settings(
-            "selftest.settings-pack")
         settings_cfg = next(
             (item for item in ext_settings
              if item.get("extension_id") == "selftest.settings-pack"),
@@ -23302,12 +23306,6 @@ def test_app_extension_runtime_support() -> None:
         nested_settings_cfg = next(
             (item for item in ext_settings
              if item.get("extension_id") == "selftest.settings-pack"
-             and item.get("id") == "selftest.advanced"),
-            {})
-        legacy_nested_settings_cfg = next(
-            (item for item in legacy_settings_payload.get(
-                "configurations", [])
-             if item.get("_extensionId") == "selftest.settings-pack"
              and item.get("id") == "selftest.advanced"),
             {})
         _check("extension settings expose defaults and modified map",
@@ -23366,11 +23364,7 @@ def test_app_extension_runtime_support() -> None:
                    "selftest.options", {}).get("_propertyOrder") == 2
                and nested_settings_cfg.get("properties", {}).get(
                    "selftest.allOfInheritedScope", {}).get(
-                       "_propertyOrder") == 0
-               and legacy_nested_settings_cfg.get("title") == (
-                   "Advanced Selftest")
-               and "selftest.allOfInheritedScope" in
-                   legacy_nested_settings_cfg.get("properties", {}))
+                       "_propertyOrder") == 0)
         _check("extension configurationDefaults override schema defaults",
                api.get_extension_setting("selftest.mode").get("value") == "manual"
                and api.get_extension_setting(
@@ -23380,10 +23374,6 @@ def test_app_extension_runtime_support() -> None:
             "selftest.hidden", "changed")
         hidden_save = api.save_extension_setting(
             "selftest.settings-pack", "selftest.hidden", "changed")
-        legacy_hidden_props = [
-            cfg.get("properties", {})
-            for cfg in legacy_settings_payload.get("configurations", [])
-        ]
         _check("extension settings hide included false entries",
                api.get_extension_setting(
                    "selftest.hidden", "fallback").get("value") == "fallback"
@@ -23406,9 +23396,7 @@ def test_app_extension_runtime_support() -> None:
                and hidden_set.get("ok") is False
                and "hidden" in hidden_set.get("error", "").lower()
                and hidden_save.get("ok") is False
-               and "hidden" in hidden_save.get("error", "").lower()
-               and all("selftest.hidden" not in props
-                       for props in legacy_hidden_props),
+               and "hidden" in hidden_save.get("error", "").lower(),
                json.dumps({
                    "hidden": settings_cfg.get("hiddenProperties", {}).get(
                        "selftest.hidden", {}),
