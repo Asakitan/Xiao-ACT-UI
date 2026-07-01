@@ -3022,6 +3022,7 @@ pre.code-block { overflow:visible; }
 .settings-field.invalid, .settings-input-invalid { border-color:var(--fg-error) !important; }
 .settings-field.settings-target-hidden { display:none !important; }
 .settings-field.settings-query-hidden,.ext-setting-row.settings-query-hidden { display:none !important; }
+.settings-field.settings-mode-hidden,[data-settings-tier="advanced-only"].settings-mode-hidden { display:none !important; }
 .settings-field.builtin-setting { position:relative; display:grid; grid-template-columns:minmax(260px,.68fr) minmax(310px,1fr);
   gap:4px 20px; align-items:start; padding:8px 34px 8px 10px; border-radius:3px; margin:1px 0 5px;
   border-left:2px solid transparent; border-bottom:1px solid color-mix(in srgb,var(--border) 42%,transparent);
@@ -3462,6 +3463,16 @@ pre.code-block { overflow:visible; }
 .settings-vscode-calm .settings-nav-scope-tabs button { justify-content:space-between; min-height:27px; height:27px;
   border:0; border-left:2px solid transparent; border-radius:2px; padding:0 8px 0 7px; background:transparent; }
 .settings-vscode-calm .settings-nav-scope-tabs button.active { border-left-color:var(--fg-accent); border-bottom-color:transparent;
+  background:color-mix(in srgb,var(--bg-hover) 78%,transparent); }
+.settings-vscode-calm .settings-nav-mode { padding:0 8px 10px 0; margin:0 0 8px;
+  border-bottom:1px solid color-mix(in srgb,var(--border) 54%,transparent); }
+.settings-vscode-calm .settings-nav-mode-title { padding:0 0 5px; color:var(--fg-dim); font:10px var(--mono);
+  text-transform:uppercase; }
+.settings-vscode-calm .settings-nav-mode-tabs { display:grid; grid-template-columns:repeat(3,1fr); gap:2px; border:0;
+  background:transparent; overflow:visible; }
+.settings-vscode-calm .settings-nav-mode-tabs button { justify-content:center; min-height:27px; height:27px;
+  border:0; border-left:2px solid transparent; border-radius:2px; padding:0 6px; background:transparent; min-width:0; }
+.settings-vscode-calm .settings-nav-mode-tabs button.active { border-left-color:var(--fg-accent); border-bottom-color:transparent;
   background:color-mix(in srgb,var(--bg-hover) 78%,transparent); }
 .settings-vscode-calm .settings-active-filters,
 .settings-vscode-calm .settings-review-bar,
@@ -5107,6 +5118,7 @@ pre.code-block { overflow:visible; }
       <label class="settings-check"><input id="s-files-trim-trailing-whitespace" type="checkbox"><span><b>Trim trailing whitespace</b><small>Matches files.trimTrailingWhitespace during explicit saves.</small></span></label>
       <label class="settings-check"><input id="s-files-insert-final-newline" type="checkbox"><span><b>Insert final newline</b><small>Matches files.insertFinalNewline during explicit saves.</small></span></label>
       <label class="settings-check"><input id="s-files-trim-final-newlines" type="checkbox"><span><b>Trim final newlines</b><small>Matches files.trimFinalNewlines during explicit saves.</small></span></label>
+      <div data-settings-tier="advanced-only">
       <div class="sb-group" style="padding:0;margin-top:12px">Current Language Override</div>
       <div id="settings-language-override-panel" class="settings-language-panel" aria-live="polite">
         <div class="settings-language-head">
@@ -5178,6 +5190,7 @@ pre.code-block { overflow:visible; }
       <label class="settings-check"><input id="s-files-lang-trim-trailing-whitespace" type="checkbox"><span><b>Trim trailing whitespace</b><small>Language-specific files.trimTrailingWhitespace.</small></span></label>
       <label class="settings-check"><input id="s-files-lang-insert-final-newline" type="checkbox"><span><b>Insert final newline</b><small>Language-specific files.insertFinalNewline.</small></span></label>
       <label class="settings-check"><input id="s-files-lang-trim-final-newlines" type="checkbox"><span><b>Trim final newlines</b><small>Language-specific files.trimFinalNewlines.</small></span></label>
+      </div>
     </div>
 
     <div class="settings-section" data-settings-id="claude" data-settings-title="Claude Code">
@@ -32470,6 +32483,7 @@ function openSettings(){
   // Add change listeners for live modified-state updates
   Object.keys(SETTING_INPUT_MAP).forEach(id=>{const el=$(id);if(el&&!el.dataset.resetWired){el.dataset.resetWired='1';const update=()=>{markSettingsModified();scheduleFilterSettings()};el.addEventListener('input',update);el.addEventListener('change',update)}});
   restoreSettingsViewState();
+  applySettingsMode();
   SETTINGS_VALIDATION_INPUTS.forEach(id=>{const el=$(id);if(el&&!el.dataset.validationWired){el.dataset.validationWired='1';el.addEventListener('input',scheduleSettingsValidation);el.addEventListener('change',scheduleSettingsValidation)}});
   ['s-editor-lang-override-enabled','s-files-lang-override-enabled','s-editor-lang-default-formatter','s-editor-lang-tab-size','s-editor-lang-format-on-save','s-editor-lang-code-actions-on-save-json','s-files-lang-trim-trailing-whitespace','s-files-lang-insert-final-newline','s-files-lang-trim-final-newlines'].forEach(id=>{const el=$(id);if(el&&!el.dataset.languageOverrideWired){el.dataset.languageOverrideWired='1';const update=()=>{renderSettingsLanguageOverridePanel();markSettingsModified();scheduleFilterSettings()};el.addEventListener('input',update);el.addEventListener('change',update)}});
   ['s-ext-confirm','s-ext-allow','s-ext-block'].forEach(id=>{const el=$(id);if(el&&!el.dataset.trustSummaryWired){el.dataset.trustSummaryWired='1';const update=()=>renderExtensionTrustSummary({confirm_install:readCheckedValue('s-ext-confirm'),allowed_publishers:readListValue('s-ext-allow',true),blocked_publishers:readListValue('s-ext-block',true)});el.addEventListener('input',update);el.addEventListener('change',update)}});
@@ -32602,6 +32616,70 @@ const SETTINGS_SECTION_DESCRIPTIONS={
   advanced:'Advanced sampling, timeout, headers, and request body overrides.',
   models:'Custom endpoint models available to provider and assistant controls.'
 };
+const SETTINGS_MODE_ORDER=['simple','complex','advanced'];
+const SETTINGS_MODE_LABELS={simple:'Simple',complex:'Complex',advanced:'Advanced'};
+const SETTINGS_MODE_DESCRIPTIONS={
+  simple:'Only the handful of settings most people touch.',
+  complex:'Everything except the deepest per-language and low-level overrides.',
+  advanced:'All settings, including per-language overrides and raw config.'
+};
+const SETTINGS_SIMPLE_CATEGORY_IDS=new Set(['assistant','appearance','editor','extensions','terminal','workspace']);
+const SETTINGS_COMPLEX_HIDDEN_CATEGORY_IDS=new Set(['advanced','models']);
+let _settingsSimpleAllowedInputIdsCache=null;
+function settingsCurrentMode(){
+  const v=settingsViewState().mode;
+  return SETTINGS_MODE_ORDER.includes(v)?v:'advanced';
+}
+function settingsCategoryAllowedInMode(id,mode){
+  mode=mode||settingsCurrentMode();
+  if(id==='extension-settings')return true;
+  if(mode==='advanced')return true;
+  if(mode==='complex')return !SETTINGS_COMPLEX_HIDDEN_CATEGORY_IDS.has(id);
+  return SETTINGS_SIMPLE_CATEGORY_IDS.has(id);
+}
+function settingsSimpleAllowedInputIds(){
+  if(_settingsSimpleAllowedInputIdsCache)return _settingsSimpleAllowedInputIdsCache;
+  const keySet=new Set(SETTINGS_COMMONLY_USED_KEYS);
+  const ids=new Set();
+  Object.entries(SETTING_INPUT_META).forEach(([inputId,meta])=>{
+    if(meta&&keySet.has(meta.key))ids.add(inputId);
+  });
+  _settingsSimpleAllowedInputIdsCache=ids;
+  return ids;
+}
+function settingsFieldRowElement(inputId){
+  return (typeof settingsFieldWrapper==='function'?settingsFieldWrapper(inputId):null)||$(inputId);
+}
+function applySettingsMode(){
+  const mode=settingsCurrentMode();
+  settingsCategorySections().forEach(section=>{
+    const id=section.dataset.settingsId;
+    if(!settingsCategoryAllowedInMode(id,mode))section.style.display='none';
+  });
+  const allowedFields=mode==='simple'?settingsSimpleAllowedInputIds():null;
+  Object.keys(SETTING_INPUT_META).forEach(inputId=>{
+    const row=settingsFieldRowElement(inputId);
+    if(!row)return;
+    row.classList.toggle('settings-mode-hidden',!!(allowedFields&&!allowedFields.has(inputId)));
+  });
+  document.querySelectorAll('[data-settings-tier="advanced-only"]').forEach(el=>{
+    el.classList.toggle('settings-mode-hidden',mode!=='advanced');
+  });
+  const modal=$('settings-modal');
+  if(modal)modal.dataset.settingsMode=mode;
+}
+function settingsSetMode(mode){
+  mode=SETTINGS_MODE_ORDER.includes(mode)?mode:'advanced';
+  persistSettingsViewState({mode});
+  applySettingsMode();
+  filterSettings();
+  renderSettingsNav();
+  const active=settingsActiveSectionElement&&settingsActiveSectionElement();
+  if(!active||active.style.display==='none'){
+    const fallback=settingsVisibleSections()[0];
+    if(fallback)scrollToSettingsSection(fallback.dataset.settingsId);
+  }
+}
 function settingsMainElement(){return $('settings-main')||$('settings-modal')}
 function settingsStorageList(key){
   try{const value=JSON.parse(localStorage.getItem(key)||'[]');return Array.isArray(value)?value:[]}catch(e){return []}
@@ -32671,11 +32749,11 @@ function settingsSectionVisibleCount(section){
   if(!section||section.style.display==='none')return 0;
   const rows=section.querySelectorAll('.settings-field,.ext-setting-row');
   if(!rows.length)return 1;
-  return Array.from(rows).filter(row=>row.style.display!=='none'&&!row.classList.contains('settings-target-hidden')&&!row.classList.contains('settings-query-hidden')).length;
+  return Array.from(rows).filter(row=>row.style.display!=='none'&&!row.classList.contains('settings-target-hidden')&&!row.classList.contains('settings-query-hidden')&&!row.classList.contains('settings-mode-hidden')).length;
 }
 function settingsSectionStats(section){
   const rows=Array.from((section||document).querySelectorAll('.settings-field.builtin-setting,.ext-setting-row'));
-  const visibleRows=rows.filter(row=>row.style.display!=='none'&&!row.classList.contains('settings-target-hidden')&&!row.classList.contains('settings-query-hidden'));
+  const visibleRows=rows.filter(row=>row.style.display!=='none'&&!row.classList.contains('settings-target-hidden')&&!row.classList.contains('settings-query-hidden')&&!row.classList.contains('settings-mode-hidden'));
   const errors=visibleRows.filter(row=>(row.querySelector&&row.querySelector('[aria-invalid="true"],.settings-input-invalid'))||(row.classList&&row.classList.contains('invalid'))).length;
   return {
     rows,
@@ -33129,7 +33207,7 @@ function settingsNavKeydown(ev){
 }
 function renderSettingsNav(){
   const nav=$('settings-nav');if(!nav)return;
-  const sections=settingsCategorySections();
+  const sections=settingsCategorySections().filter(section=>settingsCategoryAllowedInMode(section.dataset.settingsId));
   const searchbar=$('settings-searchbar')||document.querySelector('.settings-searchbar');
   if(searchbar&&searchbar.parentElement===nav)searchbar.remove();
   nav.innerHTML='';
@@ -33209,6 +33287,32 @@ function renderSettingsNav(){
   emptyFilter.id='settings-nav-filter-empty';
   emptyFilter.className='settings-nav-filter-empty';
   nav.appendChild(emptyFilter);
+  const viewMode=document.createElement('div');
+  viewMode.className='settings-nav-mode';
+  viewMode.id='settings-nav-mode';
+  const viewModeTitle=document.createElement('div');
+  viewModeTitle.className='settings-nav-mode-title';
+  viewModeTitle.textContent='View';
+  const viewModeTabs=document.createElement('div');
+  viewModeTabs.className='settings-target-tabs settings-nav-mode-tabs';
+  viewModeTabs.setAttribute('role','tablist');
+  viewModeTabs.setAttribute('aria-label','Settings complexity level');
+  const activeMode=settingsCurrentMode();
+  SETTINGS_MODE_ORDER.forEach(mode=>{
+    const btn=document.createElement('button');
+    btn.type='button';
+    btn.dataset.settingsMode=mode;
+    btn.setAttribute('role','tab');
+    btn.setAttribute('aria-selected',mode===activeMode?'true':'false');
+    btn.classList.toggle('active',mode===activeMode);
+    btn.tabIndex=mode===activeMode?0:-1;
+    btn.textContent=SETTINGS_MODE_LABELS[mode]||mode;
+    btn.title=SETTINGS_MODE_DESCRIPTIONS[mode]||'';
+    btn.onclick=()=>settingsSetMode(mode);
+    viewModeTabs.appendChild(btn);
+  });
+  viewMode.appendChild(viewModeTitle);viewMode.appendChild(viewModeTabs);
+  nav.appendChild(viewMode);
   const scope=document.createElement('div');
   scope.className='settings-nav-scope';
   scope.id='settings-nav-scope';
@@ -34262,13 +34366,13 @@ function settingsGroupMatchesTarget(group,target){
   return target==='user';
 }
 function settingsVisibleGroupText(group){
-  const rows=Array.from((group||document).querySelectorAll('.settings-field.builtin-setting:not(.settings-target-hidden):not(.settings-query-hidden),.ext-setting-row:not(.settings-target-hidden):not(.settings-query-hidden)'))
+  const rows=Array.from((group||document).querySelectorAll('.settings-field.builtin-setting:not(.settings-target-hidden):not(.settings-query-hidden):not(.settings-mode-hidden),.ext-setting-row:not(.settings-target-hidden):not(.settings-query-hidden)'))
     .filter(row=>row.style.display!=='none');
   if(rows.length)return rows.map(row=>row.textContent||'').join(' ').toLowerCase();
   return ((group&&group.textContent)||'').toLowerCase();
 }
 function settingsGroupRows(group){
-  return Array.from((group||document).querySelectorAll('.settings-field.builtin-setting:not(.settings-target-hidden):not(.settings-query-hidden),.ext-setting-row:not(.settings-target-hidden):not(.settings-query-hidden)'))
+  return Array.from((group||document).querySelectorAll('.settings-field.builtin-setting:not(.settings-target-hidden):not(.settings-query-hidden):not(.settings-mode-hidden),.ext-setting-row:not(.settings-target-hidden):not(.settings-query-hidden)'))
     .filter(row=>row.style.display!=='none');
 }
 function settingsRowFilterText(row){
@@ -34316,7 +34420,7 @@ function renderSettingsRowMatchSummaries(parsed){
   const active=parsed&&parsed.active;
   const rows=Array.from((settingsMainElement()||document).querySelectorAll('.settings-field.builtin-setting,.ext-setting-row'));
   rows.forEach(row=>{
-    const reasons=active&&row.style.display!=='none'&&!row.classList.contains('settings-target-hidden')&&!row.classList.contains('settings-query-hidden')
+    const reasons=active&&row.style.display!=='none'&&!row.classList.contains('settings-target-hidden')&&!row.classList.contains('settings-query-hidden')&&!row.classList.contains('settings-mode-hidden')
       ? settingsRowMatchReasons(row,parsed)
       : [];
     row.classList.toggle('settings-search-hit',reasons.length>0);
@@ -35837,6 +35941,8 @@ function filterSettings(){
   const cache=settingsFilterDomCache(modal);
   cache.groups.forEach(g=>{
     total++;
+    const modeAllowed=settingsCategoryAllowedInMode(g.dataset&&g.dataset.settingsId);
+    if(!modeAllowed){g.style.display='none';return}
     const targetMatch=settingsGroupMatchesTarget(g,currentSettingsTarget);
     if(!targetMatch){g.style.display='none';return}
     if(!parsed.active){g.style.display='';visible++;return}

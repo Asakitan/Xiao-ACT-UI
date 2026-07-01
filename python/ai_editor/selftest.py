@@ -12124,6 +12124,20 @@ console.log("frontend word separator behavior ok");
             and ".settings-review-bar { display:none;" in html
             and "host.classList.toggle('open',!!dirty||settingsHasReviewFilter());" in html
             and "searchbar.classList.toggle('help-open',open);" in html)
+    _check("settings has a simple/complex/advanced complexity tier",
+           "const SETTINGS_MODE_ORDER=['simple','complex','advanced'];" in html
+           and "function settingsCurrentMode(){" in html
+           and "function settingsCategoryAllowedInMode(id,mode){" in html
+           and "function settingsSimpleAllowedInputIds(){" in html
+           and "function applySettingsMode(){" in html
+           and "function settingsSetMode(mode){" in html
+           and "const SETTINGS_SIMPLE_CATEGORY_IDS=new Set(['assistant','appearance','editor','extensions','terminal','workspace']);" in html
+           and "const SETTINGS_COMPLEX_HIDDEN_CATEGORY_IDS=new Set(['advanced','models']);" in html
+           and "settings-nav-mode-tabs" in html
+           and "'[data-settings-tier=\"advanced-only\"]'" in html
+           and "modeAllowed=settingsCategoryAllowedInMode(g.dataset&&g.dataset.settingsId);" in html
+           and "data-settings-tier=\"advanced-only\"" in html
+           and ".settings-field.settings-mode-hidden,[data-settings-tier=\"advanced-only\"].settings-mode-hidden { display:none !important; }" in html)
     settings_smoke_path = os.path.join(
         os.path.dirname(__file__), "tools", "settings_ui_browser_smoke.js")
     settings_smoke_source = ""
