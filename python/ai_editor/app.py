@@ -8369,11 +8369,6 @@ class AIEditorAPI:
             self._controller.conversation.system_prompt = self._default_system_prompt()
         return {"ok": True}
 
-    def get_instruction_files(self) -> Dict:
-        """List .sao/instructions.md and .sao/instructions/*.md files."""
-        from ai_editor.prompts import list_instruction_files
-        return {"files": list_instruction_files()}
-
     def save_instruction_file(self, name: str, content: str) -> Dict:
         """Create or update an instruction file under .sao/."""
         from ai_editor.prompts import save_instruction_file as _save
@@ -11226,14 +11221,6 @@ class AIEditorAPI:
             vscode_ns.set_file_decoration_request_callback(None)
             vscode_ns.set_file_decoration_change_callback(None)
 
-    def relay_node_webview_message(self, view_id: str, message: Any) -> Dict:
-        """Forward a webview message to the Node extension host."""
-        host = self._node_ext_host
-        if host is None or not host.is_running:
-            return {"error": "Node extension host not running"}
-        ok = host.relay_webview_message(view_id, message)
-        return {"ok": ok, "view_id": view_id}
-
     def extension_quick_input_action(
             self, input_id: str, action: str,
             payload: Optional[Dict[str, Any]] = None) -> Dict:
@@ -12129,11 +12116,6 @@ class AIEditorAPI:
                 "servers": servers,
             },
         }
-
-    def list_vscode_extensions(self) -> Dict:
-        self._ensure_engine()
-        return {"extensions": self._ext_host.list_extensions(),
-                "contributes": self._ext_host.get_contributes_summary()}
 
     def execute_command(self, command_id: str, *args: Any) -> Dict:
         self._ensure_engine()

@@ -3277,6 +3277,12 @@ def test_app_settings_parity() -> None:
            and "not available" in no_window_editor.editor_go_to_line(1).get("error", ""))
     _check("editor_find_replace removed as dead API (frontend find-bar handles find/replace client-side)",
            not hasattr(no_window_editor, "editor_find_replace"))
+    _check("get_instruction_files removed as dead API (frontend uses get_instructions/refreshInstructions instead)",
+           not hasattr(no_window_editor, "get_instruction_files"))
+    _check("list_vscode_extensions removed as dead API (superseded by get_runtime_support_summary, same payload)",
+           not hasattr(no_window_editor, "list_vscode_extensions"))
+    _check("relay_node_webview_message removed as dead API (webview_post_message already falls back to node_host.relay_webview_message)",
+           not hasattr(no_window_editor, "relay_node_webview_message"))
     _check("open_text_file reports missing window explicitly",
            "No window" in no_window_editor.open_text_file().get("error", ""))
     _check("save_file_dialog reports missing window explicitly",
@@ -12203,6 +12209,19 @@ console.log("frontend word separator behavior ok");
            and "(existing?'Edit Agent':'New Agent')" in html
            and "$('ag-id').readOnly=true;" in html
            and "edit.onclick=e=>{e.stopPropagation();createAgent(a)};" in html)
+    _check("claude-code and codex external CLI launch/stop is wired into settings",
+           "onclick=\"launchProviderCli('claude-code')\"" in html
+           and "onclick=\"stopProviderCli('claude-code')\"" in html
+           and "onclick=\"launchProviderCli('codex')\"" in html
+           and "onclick=\"stopProviderCli('codex')\"" in html
+           and "function renderProviderCliStatus(providerId,status){" in html
+           and "async function refreshProviderCliStatus(providerId){" in html
+           and "async function launchProviderCli(providerId){" in html
+           and "async function stopProviderCli(providerId){" in html
+           and "window.launchProviderCli=launchProviderCli;" in html
+           and "window.stopProviderCli=stopProviderCli;" in html
+           and "refreshProviderCliStatus('claude-code');" in html
+           and "refreshProviderCliStatus('codex');" in html)
     _check("settings has a simple/complex/advanced complexity tier",
            "const SETTINGS_MODE_ORDER=['simple','complex','advanced'];" in html
            and "function settingsCurrentMode(){" in html
