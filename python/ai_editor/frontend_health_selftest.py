@@ -339,6 +339,8 @@ def run_frontend_health_selftest() -> list[str]:
         and "call('set_tool_permission',tool,value||'default')" in html
     ))
 
+    _require(failures, "toast supports plain local actions distinct from the extension window-message protocol", "if(Array.isArray(opts.actions)&&opts.actions.length){" in html and "if(action&&typeof action.onClick==='function')action.onClick();" in html)
+    _require(failures, "chat diff Apply success toast offers an Undo action", "showToast('Diff applied to editor','success',2600,{actions:[{title:'Undo',onClick:()=>editorUndo()}]});" in html)
     _require(failures, "assistant polish css exists", "ai-editor-assistant-polish-css" in html)
     _require(failures, "assistant health snapshot exists", "aiEditorAssistantHealthSnapshot" in html)
     _require(failures, "assistant health checks provider model workflow agent", "providerPresent" in html and "modelPresent" in html and "workflowPresent" in html and "agentPresent" in html)

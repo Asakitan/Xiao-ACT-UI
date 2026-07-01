@@ -17696,7 +17696,7 @@ console.log("command palette quick access helpers ok");
            and "buildDiffApplyEditsForHunks(diffTextHunks(lines,true),currentValue)" in html
            and "buildDiffApplyEditsForHunks(diffTextHunks(lines,false),currentValue)" in html
            and "const precise=buildDiffApplyEdits(lines,ta.value);" in html
-           and "if(editorApplyTextEdits(precise))showToast('Diff applied to editor','success',1500);" in html
+           and "if(editorApplyTextEdits(precise))showToast('Diff applied to editor','success',2600,{actions:[{title:'Undo',onClick:()=>editorUndo()}]});" in html
            and "Diff context did not match the open file - replaced whole buffer instead" in html)
     _check("frontend refreshes language state after formatter and code-action edits",
            "function editorRefreshLanguageFeaturesAfterEdit(delayBase)" in html

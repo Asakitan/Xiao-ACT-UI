@@ -49107,6 +49107,22 @@ function showToast(msg,type,duration,opts){
     });
     toast.appendChild(actions);
   }
+  // Plain toast actions (e.g. "Undo") - distinct from the extension
+  // window-message protocol above, which routes through a requestId back
+  // to a specific extension. This is just a local callback.
+  if(Array.isArray(opts.actions)&&opts.actions.length){
+    const actions=document.createElement('div');actions.className='toast-actions';
+    opts.actions.forEach(action=>{
+      const title=String((action&&action.title)||'Action');
+      const btn=document.createElement('button');btn.type='button';btn.className='toast-action';btn.textContent=title;btn.title=title;
+      btn.onclick=()=>{
+        if(action&&typeof action.onClick==='function')action.onClick();
+        toast.remove();
+      };
+      actions.appendChild(btn);
+    });
+    toast.appendChild(actions);
+  }
   container.appendChild(toast);
   setTimeout(()=>{if(toast.parentElement)toast.remove()},duration);
 }
@@ -53847,14 +53863,14 @@ function renderDiffView(container,diffText){
     const precise=buildDiffApplyEdits(lines,ta.value);
     if(precise){
       _undoPush(true);
-      if(editorApplyTextEdits(precise))showToast('Diff applied to editor','success',1500);
+      if(editorApplyTextEdits(precise))showToast('Diff applied to editor','success',2600,{actions:[{title:'Undo',onClick:()=>editorUndo()}]});
       else showToast('Diff apply failed','error',1800);
       return;
     }
     const addedLines=lines.filter(l=>l.type==='added').map(l=>l.text.substring(1));
     if(addedLines.length){
       _undoPush(true);ta.value=addedLines.join('\n');updateLineNums();updateCursorPos();editorDirty=true;
-      showToast('Diff context did not match the open file - replaced whole buffer instead','warning',2600);
+      showToast('Diff context did not match the open file - replaced whole buffer instead','warning',3600,{actions:[{title:'Undo',onClick:()=>editorUndo()}]});
     }
   };
   body.appendChild(applyBtn);container.appendChild(section);return true;
