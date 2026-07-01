@@ -40269,15 +40269,88 @@ def test_real_extension_smoke() -> None:
     # actually find and describe every extension in it without raising.
     real_dir = res._real_extensions_dir()
     if os.path.isdir(real_dir):
-        real_summary = res.run_real_extension_smoke(write_results=False)
+        real_summary = res.run_real_extension_smoke(write_results=False, include_live_activation=True)
         _check("real installed-extensions sweep parses every found extension without error",
                real_summary["extensionCount"] > 0
                and all(r.get("id") and r.get("version") for r in real_summary["extensions"]))
         print(f"  (real machine sweep: {real_summary['extensionCount']} extension(s) found "
               f"under {real_dir})")
+        live = real_summary.get("liveActivation") or {}
+        if live.get("candidateCount"):
+            _check("real theme-only extension(s) install and their theme JSON reads back correctly",
+                   live["allInstalled"] and live["allThemesReadable"])
+            print(f"  (real live activation: {live['candidateCount']} theme-only extension(s), "
+                  f"all installed={live['allInstalled']}, all themes readable={live['allThemesReadable']})")
+        else:
+            print("  (no theme-only, zero-JS extensions on this machine to live-activate)")
     else:
         print(f"  (no {real_dir} on this machine - skipping real-machine sweep, "
               "fixture-based checks above still ran)")
+
+
+def test_real_extension_live_theme_activation() -> None:
+    print("── Real Extension Live Theme Activation (阶段1.4 depth) ──")
+    from ai_editor import real_extension_smoke as res
+
+    # Synthetic fixture (portable - works on any machine/CI): a genuine
+    # zero-JS theme-only extension with a real VS Code color-theme JSON,
+    # actually installed through install_extension_dir and read back
+    # through get_editor_theme() - the same path a real theme extension
+    # (verified separately against the real ms-vscode.cpptools-themes
+    # extension when present) goes through.
+    tmpdir = tempfile.mkdtemp(prefix="sao_theme_live_")
+    try:
+        ext_dir = os.path.join(tmpdir, "acme.midnight-theme-1.0.0")
+        theme_dir = os.path.join(ext_dir, "themes")
+        os.makedirs(theme_dir, exist_ok=True)
+        with open(os.path.join(ext_dir, "package.json"), "w", encoding="utf-8") as f:
+            json.dump({
+                "name": "midnight-theme", "publisher": "acme", "version": "1.0.0",
+                "displayName": "Midnight", "engines": {"vscode": "^1.30.0"},
+                "contributes": {
+                    "themes": [{
+                        "id": "Midnight", "label": "Midnight",
+                        "uiTheme": "vs-dark", "path": "./themes/midnight.json",
+                    }],
+                },
+            }, f)
+        with open(os.path.join(theme_dir, "midnight.json"), "w", encoding="utf-8") as f:
+            json.dump({
+                "name": "Midnight",
+                "colors": {"editor.background": "#0a0a12", "editor.foreground": "#e0e0ff"},
+                "tokenColors": [],
+            }, f)
+
+        reports = res.scan_real_extensions(tmpdir)
+        candidates = res.theme_only_candidates(reports)
+        _check("a zero-JS extension contributing only themes is a live-activation candidate",
+               len(candidates) == 1 and candidates[0]["id"] == "acme.midnight-theme")
+
+        live = res.attempt_theme_live_activation(reports)
+        _check("live activation installs the real extension and reads its real theme JSON",
+               live["candidateCount"] == 1
+               and live["allInstalled"] and live["allThemesReadable"]
+               and live["results"][0]["themesDiscovered"] == 1
+               and live["results"][0]["themesReadable"] == 1)
+
+        # An extension with a `main` entry point (real JS to execute) must
+        # never be treated as a safe live-activation candidate, even if it
+        # also happens to contribute themes.
+        ext_dir2 = os.path.join(tmpdir, "acme.has-code-1.0.0")
+        os.makedirs(ext_dir2, exist_ok=True)
+        with open(os.path.join(ext_dir2, "package.json"), "w", encoding="utf-8") as f:
+            json.dump({
+                "name": "has-code", "publisher": "acme", "version": "1.0.0",
+                "main": "./out/extension.js",
+                "contributes": {"themes": [{"id": "X", "label": "X", "path": "./x.json"}]},
+            }, f)
+        reports2 = res.scan_real_extensions(tmpdir)
+        candidates2 = res.theme_only_candidates(reports2)
+        _check("an extension with a main JS entry point is never a live-activation candidate, even with themes",
+               all(c["id"] != "acme.has-code" for c in candidates2)
+               and len(candidates2) == 1)
+    finally:
+        shutil.rmtree(tmpdir, ignore_errors=True)
 
 
 def test_frontend_health_parity_snapshot() -> None:
@@ -40365,6 +40438,7 @@ def main() -> None:
         ("Agents", test_agents),
         ("Workflows", test_workflows),
         ("Real Extension Smoke", test_real_extension_smoke),
+        ("Real Extension Live Theme Activation", test_real_extension_live_theme_activation),
         ("Frontend Health Parity Snapshot", test_frontend_health_parity_snapshot),
         ("Tk Window", test_tk_window),
     ]
