@@ -280,6 +280,23 @@ void main() {
 }
 '''
 
+# For GPU-shared-texture layers (Part B): the shared texture holds
+# straight (non-premultiplied) RGBA — the producer process never
+# touches the pixels on the CPU, so premultiply happens here instead
+# (a shader multiply is effectively free; doing it upstream would cost
+# either a CPU pass or extra native-plugin shader work).
+_FRAG_SHARED_SRC = '''
+#version 330
+uniform sampler2D u_tex;
+uniform float u_alpha;
+in vec2 v_uv;
+out vec4 fragColor;
+void main() {
+    vec4 c = texture(u_tex, v_uv);
+    fragColor = vec4(c.rgb * c.a, c.a) * u_alpha;
+}
+'''
+
 
 # ── CompositorLayer ──────────────────────────────────────────────
 class CompositorLayer:
@@ -326,6 +343,22 @@ class CompositorLayer:
         self._mmf_name: Optional[str] = None
         self._mmf: Optional[_MMFReader] = None
 
+        # GPU-shared D3D11 texture source (Part B) — set from any
+        # thread via set_shared_texture_source(); registered/locked
+        # only on the render thread. When active, this is the layer's
+        # color source (drawn via a raw-GL-bound external texture);
+        # _mmf_name (if also set) keeps being polled purely for its
+        # alpha byte, feeding _sync_host_rgn's click-through scan —
+        # see _ensure_shared_texture()/_poll_mmf().
+        self._shared_tex_handle: Optional[int] = None
+        self._shared_tex_w = 0
+        self._shared_tex_h = 0
+        self._shared_reg_handle_value = 0
+        self._shared_d3d_tex = None    # c_void_p from open_shared_texture()
+        self._shared_gl_tex_id = 0
+        self._shared_hobj = None       # interop object handle (lock/unlock)
+        self._shared_attempt_failed = False  # a set handle failed to register
+
         # Optional render-to-FBO callback
         self._render_fn: Optional[
             Callable[[moderngl.Context, float], None]
@@ -359,12 +392,30 @@ class CompositorLayer:
         self._fade_dur = 0.3
         self._fade_done_fn: Optional[Callable[[], None]] = None
 
+        # Screen-space rect (host-origin-relative) this layer occupied the
+        # last time it was actually drawn — used to build the per-frame
+        # dirty rect for partial DComp readback/present (see
+        # UnifiedOverlay._compute_dirty_rect). None until first drawn.
+        self._last_draw_rect: Optional[Tuple[int, int, int, int]] = None
+
         # Per-layer RGN span cache (avoids re-scanning unchanged frames)
         self._rgn_cache_key: Any = None
         self._rgn_cached_spans: list = []
 
     def upload_bgra(self, bgra: bytes, w: int, h: int) -> None:
-        """Upload premultiplied BGRA frame data (thread-safe)."""
+        """Upload premultiplied BGRA frame data (thread-safe).
+
+        Rejects a (w, h) that doesn't match ``len(bgra)`` instead of storing
+        it — callers race their own dimension fields against a background
+        capture in flight (a resize/animation mid-capture) often enough
+        that this shouldn't be treated as exceptional. Storing a mismatched
+        pair here would otherwise crash the render thread's
+        ``ctx.texture()`` call on every frame until the next successful
+        upload overwrites it; skipping just keeps showing the last good
+        frame for one tick.
+        """
+        if w <= 0 or h <= 0 or len(bgra) != w * h * 4:
+            return
         with self._lock:
             self._frame_bytes = bgra
             self._frame_w = w
@@ -379,6 +430,21 @@ class CompositorLayer:
             if mmf_name is None and self._mmf is not None:
                 self._mmf.close()
                 self._mmf = None
+        self._dirty = True
+
+    def set_shared_texture_source(self, handle: int, width: int, height: int) -> None:
+        """Attach a GPU-shared D3D11 texture as this layer's color
+        source (thread-safe). ``handle <= 0`` clears it — the render
+        thread unregisters/releases whatever was registered on its
+        next tick. Does not touch ``_mmf_name``: a layer can keep an
+        MMF source attached purely for its alpha byte (RGN scanning)
+        while its color comes from the shared texture instead."""
+        with self._lock:
+            h = int(handle) if handle else 0
+            self._shared_tex_handle = h if h > 0 else None
+            self._shared_tex_w = max(1, int(width)) if h > 0 else 0
+            self._shared_tex_h = max(1, int(height)) if h > 0 else 0
+        self._shared_attempt_failed = False
         self._dirty = True
 
     def set_render_fn(
@@ -407,6 +473,12 @@ class CompositorLayer:
 
     def hide(self) -> None:
         self.visible = False
+        # Must open the render gate: the vacated screen area only gets
+        # repainted if a frame is actually rendered+presented after the
+        # hide. Without this, hiding while nothing else animates leaves
+        # the layer's last pixels on screen until some other layer goes
+        # dirty ("ghost" residue after closing a panel).
+        self._dirty = True
 
     def start_fade(self, target: float, duration: float = 0.3,
                    done_fn: Optional[Callable[[], None]] = None) -> None:
@@ -549,15 +621,21 @@ class CompositorLayer:
         if frame is None:
             return False
         w, h = mmf.fw, mmf.fh
-        if self._texture is None or self._tex_w != w or self._tex_h != h:
-            if self._texture is not None:
-                self._texture.release()
-            self._texture = ctx.texture((w, h), 4, data=frame)
-            self._texture.filter = (moderngl.LINEAR, moderngl.LINEAR)
-            self._tex_w = w
-            self._tex_h = h
-        else:
-            self._texture.write(frame)
+        # A layer with an active GPU shared-texture color source (Part B)
+        # only needs this MMF frame for its alpha byte (RGN click-through
+        # scanning) — the color already comes from the shared texture, so
+        # skip the GL upload entirely. Re-checked every poll since the
+        # shared-texture handshake can complete/drop at any time.
+        if self._shared_tex_handle is None:
+            if self._texture is None or self._tex_w != w or self._tex_h != h:
+                if self._texture is not None:
+                    self._texture.release()
+                self._texture = ctx.texture((w, h), 4, data=frame)
+                self._texture.filter = (moderngl.LINEAR, moderngl.LINEAR)
+                self._tex_w = w
+                self._tex_h = h
+            else:
+                self._texture.write(frame)
         self._frame_seq += 1
         self._uploaded_seq = self._frame_seq
         self._dirty = True
@@ -593,6 +671,125 @@ class CompositorLayer:
             self._texture.write(data)
         self._uploaded_seq = seq
 
+    def _ensure_shared_texture(self, dc) -> bool:
+        """Register/refresh this layer's GPU-shared texture source
+        (render-thread only, mirrors ``_poll_mmf``'s lazy-open shape).
+
+        Returns True if the layer currently has a valid registered GL
+        texture ready to draw from. On any failure — no handle set, no
+        GPU interop available, OpenSharedResource/register failing —
+        releases whatever was registered and returns False; the caller
+        must skip drawing this layer's shared-texture branch that tick
+        (the layer's plain MMF/upload path, if any, is unaffected).
+        """
+        from render.dcomp_bridge import (
+            gl_gen_texture, gl_delete_texture, gl_bind_texture_unit0,
+            gl_set_bound_texture_linear, release_com)
+
+        with self._lock:
+            handle = self._shared_tex_handle
+            w = self._shared_tex_w
+            h = self._shared_tex_h
+
+        if handle is None or dc is None or not dc.gl_interop_active:
+            if self._shared_hobj is not None:
+                self._release_shared_texture(dc)
+            if handle is not None:
+                # A handle IS attached but interop is gone (disabled
+                # after a device loss / never came up) — that's a real
+                # failure the producer must learn about, not a benign
+                # "nothing attached" state.
+                self._shared_attempt_failed = True
+                self._log_shared_fail(handle, 'GPU interop inactive')
+            return False
+
+        if handle == self._shared_reg_handle_value and self._shared_hobj is not None:
+            return True  # already registered against this exact handle
+
+        # New handle (first time, or the producer recreated its shared
+        # texture e.g. on resize) — tear down the old registration and
+        # open fresh.
+        self._release_shared_texture(dc)
+
+        d3d_tex = dc.open_shared_texture(handle)
+        if d3d_tex is None:
+            self._shared_attempt_failed = True
+            self._log_shared_fail(handle, 'OpenSharedResource failed')
+            return False
+        gl_id = gl_gen_texture()
+        if not gl_id:
+            release_com(d3d_tex)
+            self._shared_attempt_failed = True
+            self._log_shared_fail(handle, 'glGenTextures failed')
+            return False
+        hobj = dc.register_external_texture(d3d_tex.value, gl_id)
+        if hobj is None:
+            gl_delete_texture(gl_id)
+            release_com(d3d_tex)
+            self._shared_attempt_failed = True
+            self._log_shared_fail(handle, 'wglDXRegisterObjectNV failed')
+            return False
+
+        # A raw GL texture name defaults to a mipmapping min-filter; the
+        # registered texture has one level, so it would be INCOMPLETE and
+        # sample black without explicit filters. GL may only touch the
+        # object while locked.
+        if dc.lock_external_texture(hobj):
+            try:
+                gl_bind_texture_unit0(gl_id)
+                gl_set_bound_texture_linear()
+            finally:
+                dc.unlock_external_texture(hobj)
+
+        self._shared_d3d_tex = d3d_tex
+        self._shared_gl_tex_id = gl_id
+        self._shared_hobj = hobj
+        self._shared_reg_handle_value = handle
+        self._shared_attempt_failed = False
+        self.width = w
+        self.height = h
+        self._dirty = True
+        print(f'[Compositor] layer {self.name!r}: GPU shared texture '
+              f'0x{handle:X} registered ({w}x{h})', flush=True)
+        return True
+
+    def _log_shared_fail(self, handle: int, why: str) -> None:
+        # One line per distinct failing handle — this runs every frame
+        # while a handle is set, so unthrottled printing would flood.
+        if getattr(self, '_shared_fail_logged', None) == handle:
+            return
+        self._shared_fail_logged = handle
+        print(f'[Compositor] layer {self.name!r}: shared texture '
+              f'0x{handle:X} unusable ({why}) — MMF color path stays',
+              flush=True)
+
+    @property
+    def shared_texture_active(self) -> bool:
+        """False only once an attached handle actually FAILED to
+        register on the render thread. "Handle set but not attempted
+        yet" (layer hidden, first draw pending) still reports True so
+        a producer polling right after its handshake doesn't false-
+        trigger its fallback while the layer simply hasn't drawn."""
+        if self._shared_hobj is not None:
+            return True
+        with self._lock:
+            handle = self._shared_tex_handle
+        return handle is not None and not self._shared_attempt_failed
+
+    def _release_shared_texture(self, dc) -> None:
+        from render.dcomp_bridge import gl_delete_texture, release_com
+
+        if self._shared_hobj is not None and dc is not None:
+            dc.unregister_external_texture(self._shared_hobj)
+        self._shared_hobj = None
+        if self._shared_gl_tex_id:
+            gl_delete_texture(self._shared_gl_tex_id)
+            self._shared_gl_tex_id = 0
+        if self._shared_d3d_tex is not None:
+            release_com(self._shared_d3d_tex)
+            self._shared_d3d_tex = None
+        self._shared_reg_handle_value = 0
+
     def _ensure_fbo(self, ctx: moderngl.Context) -> None:
         w, h = self.width, self.height
         if (self._fbo is not None
@@ -623,7 +820,7 @@ class CompositorLayer:
                 self._fade_done_fn = None
         self._dirty = True
 
-    def _release_gl(self) -> None:
+    def _release_gl(self, dc=None) -> None:
         if self._mmf is not None:
             self._mmf.close()
             self._mmf = None
@@ -635,6 +832,8 @@ class CompositorLayer:
             self._fbo_tex.release()
             self._fbo = None
             self._fbo_tex = None
+        if self._shared_hobj is not None or self._shared_d3d_tex is not None:
+            self._release_shared_texture(dc)
 
 
 # ── Mouse event types ────────────────────────────────────────────
@@ -800,10 +999,24 @@ class UnifiedOverlay:
         self._rgn_prev_pos: Dict[str, Tuple[int, int]] = {}
         self._rgn_moving = False
 
+        # One-shot render gate opener for events the per-layer dirty
+        # scan can't see (destroying a visible layer removes it from
+        # the scan entirely) — consumed by the overlay loop.
+        self._layers_changed = False
+
         # DirectComposition bridge (replaces SwapBuffers for WDA)
         self._dcomp = None
         self._dcomp_buf: bytearray | None = None
         self._dcomp_buf_sz = 0
+        self._dcomp_partial_buf: bytearray | None = None
+        # moderngl wrap of the bridge's interop FBO (Part A). Rendering
+        # into that FBO MUST go through this wrap — raw glBindFramebuffer
+        # behind moderngl's back gets silently undone by the next
+        # ctx.clear()/Framebuffer.use() (moderngl rebinds its own tracked
+        # framebuffer), scattering draws across stale targets
+        # (gpu_interop_selftest.py check 2 vs 3 proves both halves).
+        self._gpu_fbo_wrap = None
+        self._gpu_fbo_wrap_gen = -1
 
         # Performance — default follows the primary monitor's actual
         # refresh rate (e.g. 144 Hz) instead of a hardcoded 60. Layers may
@@ -838,6 +1051,11 @@ class UnifiedOverlay:
             if layer:
                 self._rebuild_z_order()
         self._recalc_fps()
+        if layer is not None and layer.visible:
+            # The removed layer no longer participates in the dirty
+            # scan, so nothing else would trigger the render+present
+            # that repaints its vacated screen area — force one frame.
+            self._layers_changed = True
 
         if layer:
             try:
@@ -847,7 +1065,7 @@ class UnifiedOverlay:
 
         def _release():
             if layer:
-                layer._release_gl()
+                layer._release_gl(self._dcomp)
         self._cmd_q.put(_release)
 
     def get_layer(self, name: str) -> Optional[CompositorLayer]:
@@ -1072,6 +1290,28 @@ class UnifiedOverlay:
         def _set():
             if self._host:
                 self._host.set_input_passthrough(True)
+        self._cmd_q.put(_set)
+
+    def force_host_hidden(self, hidden: bool) -> None:
+        """Temporarily hide/show the host window itself.
+
+        Used around blocking native dialogs (file pickers). Passthrough
+        alone (``force_host_input_passthrough``) fixes click routing, but
+        the host is still WS_EX_TOPMOST and has its z-order re-asserted
+        every ``_topmost_interval`` seconds by ``_enforce_z_order()`` — a
+        normal (non-topmost) dialog window can still end up visually
+        buried under it even though clicks now pass through. Hiding the
+        host outright avoids both the input *and* the visual-obstruction
+        problem for the dialog's duration; nothing is drawn or hit-tested
+        while it's hidden.
+        """
+
+        def _set():
+            if self._host:
+                if hidden:
+                    self._host.hide()
+                else:
+                    self._host.show()
         self._cmd_q.put(_set)
 
     # ── Host region (click passthrough) ────────────────────────
@@ -1356,6 +1596,16 @@ class UnifiedOverlay:
                 from render.dcomp_bridge import DCompBridge
                 self._dcomp = DCompBridge(
                     self._host.hwnd, self._host.width, self._host.height)
+                try:
+                    if self._dcomp.enable_gl_interop(self._host.hdc):
+                        print('[Compositor] GPU present path active '
+                              '(WGL_NV_DX_interop2)', flush=True)
+                    else:
+                        print('[Compositor] GPU present path unavailable, '
+                              'using CPU readback present', flush=True)
+                except Exception as _interop_exc:
+                    print(f'[Compositor] enable_gl_interop failed, using '
+                          f'CPU readback present: {_interop_exc}', flush=True)
             except Exception as _dc_exc:
                 print(f'[Compositor] DComp unavailable, using SwapBuffers: '
                       f'{_dc_exc}', flush=True)
@@ -1433,7 +1683,22 @@ class UnifiedOverlay:
                     if layer.visible and layer._mmf_name is not None:
                         layer._poll_mmf(ctx)
 
-            # Tick layer fades + check if any layer needs rendering
+            # Tick layer fades + check if any layer needs rendering.
+            #
+            # The `_dirty` flag is set by set_position()/set_geometry(),
+            # called unsynchronized from whatever thread owns the caller
+            # (e.g. the C# plugin bridge dragging a desktop pet). That
+            # write (layer.x = x; layer.y = y; layer._dirty = True) is not
+            # atomic as a group, so this loop can sample `_dirty` a hair
+            # before the write lands and conclude nothing changed — which
+            # skips render_frame()/present_frame() entirely for the tick
+            # ("gap frame"). _compute_dirty_rect has its own moved_or_new
+            # fallback for exactly this reason, but that fallback is dead
+            # if the gate below never lets it run. Cross-check the current
+            # position against what was last actually presented so a
+            # missed `_dirty` still opens the gate.
+            ox = self._host.origin_x
+            oy = self._host.origin_y
             any_dirty = False
             for layer in self._z_sorted:
                 layer._tick_fade()
@@ -1441,16 +1706,25 @@ class UnifiedOverlay:
                     any_dirty = True
                 elif layer.visible and layer._render_fn is not None:
                     any_dirty = True
+                elif layer.visible and layer.alpha > 0.001:
+                    cur_rect = (layer.x - ox, layer.y - oy,
+                                layer.x - ox + layer.width, layer.y - oy + layer.height)
+                    if cur_rect != layer._last_draw_rect:
+                        any_dirty = True
+
+            if self._layers_changed:
+                self._layers_changed = False
+                any_dirty = True
 
             has_visible = any(l.visible for l in self._z_sorted)
             if any_dirty:
                 try:
                     with _probe('compositor.render_frame'):
-                        self._render_frame(now - t0)
+                        dirty_rect = self._render_frame(now - t0)
                     with _probe('compositor.sync_host_rgn'):
                         self._sync_host_rgn(has_visible)
                     with _probe('compositor.present_frame'):
-                        self._present_frame()
+                        self._present_frame(dirty_rect)
                 except Exception as _exc:
                     import traceback; traceback.print_exc()
             else:
@@ -1531,49 +1805,226 @@ class UnifiedOverlay:
             [(vbo_fbo, '2f 2f', 'in_pos', 'in_uv')],
         )
 
-    def _present_frame(self) -> None:
-        """Present the rendered framebuffer via DComp or SwapBuffers."""
+        # GPU-shared-texture layers (Part B): same premultiply-free
+        # straight-alpha shader, bottom-up UV. Interop aliases the D3D11
+        # texture memory 1:1 into GL, so the producer's row order is
+        # what t=0 samples. Unity D3D11 render targets store row 0 =
+        # image BOTTOM (its render-to-texture projection flip — provable
+        # from SharedMemoryFramePublisher.OnReadback needing a
+        # (_height-1-srcY) flip to produce the top-down MMF), which is
+        # exactly GL's bottom-up convention → vbo_fbo winding. A
+        # producer with top-down rows would need verts_bgra instead.
+        self._shared_prog = ctx.program(
+            vertex_shader=_VERT_SRC, fragment_shader=_FRAG_SHARED_SRC,
+        )
+        self._quad_vao_shared = ctx.vertex_array(
+            self._shared_prog,
+            [(vbo_fbo, '2f 2f', 'in_pos', 'in_uv')],
+        )
+
+    def _present_frame(
+        self, dirty_rect: Optional[Tuple[int, int, int, int]] = None,
+    ) -> None:
+        """Present the rendered framebuffer via DComp or SwapBuffers.
+
+        *dirty_rect*, if given, is the host-relative, top-left-origin
+        (x0, y0, x1, y1) rect that actually needs re-presenting this
+        frame (see ``_compute_dirty_rect``). The GPU-side render pass
+        always redraws the full framebuffer regardless — only the
+        CPU-side readback + D3D11 staging write is narrowed to this
+        rect, which is where the measured cost lived (~2-3ms/frame for a
+        full-screen readback+copy vs a typical small dirty rect) before
+        Part A's GPU interop path removed the CPU readback entirely.
+        """
         dc = self._dcomp
+        if dc is not None and dc.gl_interop_active:
+            with _probe('compositor.dcomp_present_gpu'):
+                if dc.present_gpu():
+                    return
+            # Present failed mid-session (driver reset, device lost) —
+            # disable interop permanently for this run and fall through
+            # to the CPU path below for this frame and all future ones.
+            dc.disable_gl_interop()
         if dc is not None and dc.alive:
             ctx = self._host.ctx
             sw = self._host.width
             sh = self._host.height
             buf_sz = sw * sh * 4
-
-            if self._dcomp_buf_sz != buf_sz:
+            resized = self._dcomp_buf_sz != buf_sz
+            if resized:
                 self._dcomp_buf = bytearray(buf_sz)
                 self._dcomp_buf_sz = buf_sz
 
-            with _probe('compositor.dcomp_readback'):
-                ctx.screen.read_into(
-                    self._dcomp_buf,
-                    viewport=(0, 0, sw, sh), components=4, alignment=1)
-            with _probe('compositor.dcomp_present'):
-                dc.present(self._dcomp_buf, sw, sh)
+            use_partial = (
+                not resized and dirty_rect is not None
+                and dirty_rect != (0, 0, sw, sh))
+            if use_partial:
+                x0, y0, x1, y1 = dirty_rect
+                vw = x1 - x0
+                vh = y1 - y0
+                gl_x = x0
+                gl_y = sh - y1
+                need = vw * vh * 4
+                buf = self._dcomp_partial_buf
+                if buf is None or len(buf) != need:
+                    buf = bytearray(need)
+                    self._dcomp_partial_buf = buf
+                with _probe('compositor.dcomp_readback'):
+                    ctx.screen.read_into(
+                        buf, viewport=(gl_x, gl_y, vw, vh),
+                        components=4, alignment=1)
+                with _probe('compositor.dcomp_present'):
+                    ok = dc.present_partial(
+                        buf, sw, sh, gl_x, gl_y, vw, vh)
+                if not ok:
+                    use_partial = False
 
-            ctx.clear(0.0, 0.0, 0.0, 0.0)
-            self._host.swap_buffers()
+            if not use_partial:
+                with _probe('compositor.dcomp_readback'):
+                    ctx.screen.read_into(
+                        self._dcomp_buf,
+                        viewport=(0, 0, sw, sh), components=4, alignment=1)
+                with _probe('compositor.dcomp_present'):
+                    dc.present(self._dcomp_buf, sw, sh)
         else:
             self._host.swap_buffers()
 
-    def _render_frame(self, t: float) -> None:
+    def _compute_dirty_rect(
+        self, sw: int, sh: int, ox: int, oy: int,
+        snapshots: Dict[str, Tuple[int, int, int, int]],
+    ) -> Optional[Tuple[int, int, int, int]]:
+        """Union bounding rect (host-relative, top-left origin) of every
+        screen area that actually needs re-presenting this frame.
+
+        For each layer, unions in its *current* rect if it needs redrawing
+        (dirty/fading/render_fn) and its *previous* rect if that differs
+        from the current one (covers "moved away from", "shrunk", or
+        "became invisible" — the vacated area must still be refreshed even
+        though the layer itself has nothing new to draw there). A layer
+        that is visible, unchanged, and at the same rect as last frame
+        contributes nothing — its presented pixels are already correct.
+
+        The GPU-side render pass in ``_render_frame`` is NOT restricted to
+        this rect — it always redraws the whole framebuffer (cheap, see
+        profiling: ~0.2-0.3ms). Only the CPU-side readback/present step
+        uses this rect, which is where the real cost was measured
+        (~2-3ms/frame from a full 1920x1080+ readback+D3D11 copy).
+        """
+        x0 = y0 = x1 = y1 = None
+        pad = 2  # small defensive margin against off-by-one rect edges
+        for layer in self._z_sorted:
+            visible_now = layer.visible and layer.alpha > 0.001
+            cur_rect = None
+            if visible_now:
+                lx, ly, lw, lh = snapshots[layer.name]
+                lx0 = lx - ox
+                ly0 = ly - oy
+                cur_rect = (lx0, ly0, lx0 + lw, ly0 + lh)
+
+            was_rect = layer._last_draw_rect
+            # A rect mismatch (appeared, moved, or resized) forces a redraw
+            # in its own right — don't rely solely on the _dirty flag being
+            # set by every caller that mutates x/y/width/height.
+            moved_or_new = visible_now and was_rect != cur_rect
+            needs_redraw = visible_now and (
+                layer._dirty or layer._fade_active
+                or layer._render_fn is not None or moved_or_new)
+
+            if needs_redraw and cur_rect is not None:
+                rx0, ry0, rx1, ry1 = cur_rect
+                x0 = rx0 if x0 is None else min(x0, rx0)
+                y0 = ry0 if y0 is None else min(y0, ry0)
+                x1 = rx1 if x1 is None else max(x1, rx1)
+                y1 = ry1 if y1 is None else max(y1, ry1)
+            if was_rect is not None and was_rect != cur_rect:
+                rx0, ry0, rx1, ry1 = was_rect
+                x0 = rx0 if x0 is None else min(x0, rx0)
+                y0 = ry0 if y0 is None else min(y0, ry0)
+                x1 = rx1 if x1 is None else max(x1, rx1)
+                y1 = ry1 if y1 is None else max(y1, ry1)
+
+            layer._last_draw_rect = cur_rect
+
+        if x0 is None:
+            return None
+        x0 = max(0, x0 - pad)
+        y0 = max(0, y0 - pad)
+        x1 = min(sw, x1 + pad)
+        y1 = min(sh, y1 + pad)
+        if x1 <= x0 or y1 <= y0:
+            return None
+        return (x0, y0, x1, y1)
+
+    def _render_frame(self, t: float) -> Optional[Tuple[int, int, int, int]]:
         ctx = self._host.ctx
         sw = self._host.width
         sh = self._host.height
         ox = self._host.origin_x
         oy = self._host.origin_y
 
-        ctx.screen.use()
-        ctx.viewport = (0, 0, sw, sh)
+        # Snapshot each layer's geometry ONCE for this tick. Layer
+        # position is mutated directly (unsynchronized, from whatever
+        # thread owns the caller — e.g. the C# plugin bridge calling
+        # set_compositor_layer_position for a desktop pet) rather than
+        # through the render thread's command queue. Re-reading
+        # layer.x/y/width/height separately in _compute_dirty_rect and
+        # again here could see two different positions if a mutation
+        # lands in between, so the presented dirty rect and the actually
+        # drawn pixels could disagree — the sprite vanishes for a frame
+        # because the rect that got read back/presented doesn't cover
+        # where it was actually drawn. Snapshotting once keeps both
+        # consumers looking at the exact same values for this tick.
+        snapshots: Dict[str, Tuple[int, int, int, int]] = {
+            layer.name: (layer.x, layer.y, layer.width, layer.height)
+            for layer in self._z_sorted
+        }
+
+        dirty_rect = self._compute_dirty_rect(sw, sh, ox, oy, snapshots)
+
+        # Part A: render straight into the interop-registered D3D11
+        # texture when available, so present_frame() can CopyResource
+        # it into the swapchain with zero CPU touch. Any failure here
+        # (begin returns False) falls straight back to ctx.screen —
+        # the exact same path used when interop was never enabled.
+        dc = self._dcomp
+        gpu_target_active = dc is not None and dc.render_to_gpu_texture_begin()
+        if gpu_target_active:
+            # Bind through a moderngl wrap so moderngl's framebuffer
+            # state tracking agrees with reality — see the field's
+            # comment in __init__ for why a raw bind is not enough.
+            gen = dc.gpu_target_generation
+            if self._gpu_fbo_wrap is None or self._gpu_fbo_wrap_gen != gen:
+                self._gpu_fbo_wrap = ctx.detect_framebuffer(dc.gpu_fbo_id)
+                self._gpu_fbo_wrap_gen = gen
+            self._gpu_fbo_wrap.use()
+            ctx.viewport = (0, 0, sw, sh)
+        else:
+            ctx.screen.use()
+            ctx.viewport = (0, 0, sw, sh)
         ctx.clear(0.0, 0.0, 0.0, 0.0)
+
+        from render.dcomp_bridge import gl_bind_texture_unit0
 
         for layer in self._z_sorted:
             if not layer.visible or layer.alpha <= 0.001:
                 layer._dirty = False
                 continue
 
+            lx, ly, lw, lh = snapshots[layer.name]
+
+            # GPU-shared-texture layers (Part B): color comes straight
+            # from an interop-registered external texture — no
+            # moderngl Texture object involved, so this branch handles
+            # its own bind/draw further down instead of setting a
+            # (tex, prog, vao) triple for the shared tail.
+            is_shared = (
+                layer._shared_tex_handle is not None
+                and layer._ensure_shared_texture(dc))
+            if is_shared:
+                prog = self._shared_prog
+                vao = self._quad_vao_shared
             # Render-fn layers: draw to FBO then composite
-            if layer._render_fn is not None:
+            elif layer._render_fn is not None:
                 layer._ensure_fbo(ctx)
                 layer._fbo.use()
                 ctx.viewport = (0, 0, layer.width, layer.height)
@@ -1582,7 +2033,10 @@ class UnifiedOverlay:
                     layer._render_fn(ctx, t)
                 except Exception:
                     pass
-                ctx.screen.use()
+                if gpu_target_active:
+                    self._gpu_fbo_wrap.use()
+                else:
+                    ctx.screen.use()
                 ctx.viewport = (0, 0, sw, sh)
                 tex = layer._fbo_tex
                 prog = self._rgba_prog
@@ -1597,22 +2051,41 @@ class UnifiedOverlay:
                 prog = self._bgra_prog
                 vao = self._quad_vao_bgra
 
-            # Compute NDC rect from screen coords
-            rx = (layer.x - ox) / sw
-            ry = 1.0 - (layer.y - oy + layer.height) / sh
-            rw = layer.width / sw
-            rh = layer.height / sh
+            # Compute NDC rect from the snapshotted screen coords (same
+            # values _compute_dirty_rect used above)
+            rx = (lx - ox) / sw
+            ry = 1.0 - (ly - oy + lh) / sh
+            rw = lw / sw
+            rh = lh / sh
 
             prog['u_rect'].value = (rx, ry, rw, rh)
             prog['u_alpha'].value = layer.alpha
-            tex.use(location=0)
-            vao.render(moderngl.TRIANGLE_STRIP)
+            if is_shared:
+                if dc.lock_external_texture(layer._shared_hobj):
+                    try:
+                        gl_bind_texture_unit0(layer._shared_gl_tex_id)
+                        vao.render(moderngl.TRIANGLE_STRIP)
+                    finally:
+                        dc.unlock_external_texture(layer._shared_hobj)
+            else:
+                tex.use(location=0)
+                vao.render(moderngl.TRIANGLE_STRIP)
 
             layer._dirty = False
 
+        if gpu_target_active:
+            dc.render_to_gpu_texture_end()
+
+        return dirty_rect
+
     def _cleanup_gl(self) -> None:
+        dc = self._dcomp
+        # Drop the interop-FBO wrap reference only — releasing it would
+        # glDeleteFramebuffers the bridge's own FBO out from under it.
+        self._gpu_fbo_wrap = None
+        self._gpu_fbo_wrap_gen = -1
         for layer in self._layers.values():
-            layer._release_gl()
+            layer._release_gl(dc)
         # Programs and VAOs are released when context is destroyed
 
 

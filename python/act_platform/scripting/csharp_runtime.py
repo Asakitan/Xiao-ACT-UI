@@ -679,6 +679,16 @@ class _CSharpProxy:
     def set_compositor_layer_mmf_source(self, name, mmf_name):
         self._ctx.set_compositor_layer_mmf_source(str(name), str(mmf_name))
 
+    def set_compositor_layer_shared_texture_source(self, name, handle, width, height):
+        self._ctx.set_compositor_layer_shared_texture_source(
+            str(name), int(handle), int(width), int(height))
+
+    def compositor_gpu_interop_available(self):
+        return bool(self._ctx.compositor_gpu_interop_available())
+
+    def compositor_layer_shared_texture_active(self, name):
+        return bool(self._ctx.compositor_layer_shared_texture_active(str(name)))
+
     def set_compositor_layer_position(self, name, x, y):
         self._ctx.set_compositor_layer_position(str(name), int(x), int(y))
 

@@ -1294,6 +1294,57 @@ class PluginContext:
         if not layer.visible:
             layer.show()
 
+    def set_compositor_layer_shared_texture_source(
+        self, name: str, handle: int, width: int, height: int,
+    ) -> None:
+        """Attach a GPU-shared D3D11 texture as a compositor layer's
+        color source (zero-copy, GPU-to-GPU — no CPU pixel touch).
+
+        *handle* is a legacy D3D11 shared handle value from the
+        producer process's own ``IDXGIResource::GetSharedHandle()``.
+        Requires ``compositor_gpu_interop_available()`` to be True —
+        callers should check that first and keep using
+        ``set_compositor_layer_mmf_source`` if it's False. Generic:
+        any plugin can call this, not tied to any particular producer.
+        """
+        layers = getattr(self, "_compositor_layers", None)
+        if not layers:
+            return
+        layer = layers.get(str(name))
+        if layer is None:
+            return
+        layer.set_shared_texture_source(int(handle), int(width), int(height))
+        if not layer.visible:
+            layer.show()
+
+    def compositor_gpu_interop_available(self) -> bool:
+        """Whether the compositor's GPU interop path (WGL_NV_DX_interop2)
+        is active. Callers must check this before ever attempting
+        ``set_compositor_layer_shared_texture_source`` — if False, the
+        platform/driver doesn't support it and the caller should keep
+        using the MMF/upload path instead."""
+        overlay = self._get_compositor_overlay()
+        if overlay is None:
+            return False
+        dc = getattr(overlay, "_dcomp", None)
+        return bool(dc is not None and getattr(dc, "gl_interop_active", False))
+
+    def compositor_layer_shared_texture_active(self, name: str) -> bool:
+        """Whether *name*'s layer is actually drawing from a registered
+        GPU shared texture right now. Setting a handle can still fail
+        later on the render thread (driver refuses the cross-process
+        registration, interop disabled after a device loss, ...) —
+        producers should poll this for a while after handing over a
+        handle and, if it stays False, clear the source (handle=0) and
+        resume their CPU/MMF publishing path."""
+        layers = getattr(self, "_compositor_layers", None)
+        if not layers:
+            return False
+        layer = layers.get(str(name))
+        if layer is None:
+            return False
+        return bool(getattr(layer, "shared_texture_active", False))
+
     _upload_log_count: int = 0
 
     def upload_compositor_frame(
@@ -2278,7 +2329,7 @@ class PluginManager:
         """
         locale_id = _normalize_locale(locale) or self.current_locale()
         entries: list[dict[str, Any]] = []
-        script_languages = {"lua", "csharp", "angelscript", "emma"}
+        script_languages = {"lua", "csharp", "angelscript", "emma", "python"}
 
         def _boolish(value: Any, default: bool = False) -> bool:
             if isinstance(value, bool):
