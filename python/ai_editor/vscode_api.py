@@ -6308,7 +6308,7 @@ class VscodeNamespace:
                 "ok": False,
                 "error": "Task has no runnable local command. Provide command/args, execution, or run().",
             }
-        process = self._spawn_local_process(**spec)
+        process = self._spawn_local_process(**spec, capture_output=True)
         execution = _TaskExecution(
             task=resolved,
             name=str(spec.get("name") or "task"),
@@ -6543,30 +6543,33 @@ class VscodeNamespace:
     @staticmethod
     def _spawn_local_process(command: Any, args: Any = None,
                              shell: bool = True, cwd: Optional[str] = None,
-                             name: str = "", kind: str = "process") -> subprocess.Popen:
+                             name: str = "", kind: str = "process",
+                             capture_output: bool = False) -> subprocess.Popen:
         arg_list = [str(item) for item in list(args or [])]
+        if capture_output:
+            # Piped + merged (not DEVNULL): the Task Runner UI needs to show
+            # real output, matching VS Code's own "task output appears in a
+            # terminal" behavior. Only used for tasks (_TaskExecution reads
+            # the pipe on its own thread) - debug sessions keep the original
+            # DEVNULL default so an unread pipe can never deadlock them.
+            io_kwargs: Dict[str, Any] = dict(
+                stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                text=True, encoding="utf-8", errors="replace", bufsize=1)
+        else:
+            io_kwargs = dict(stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         if shell:
             if isinstance(command, list):
                 cmd_value = " ".join(str(item) for item in command + arg_list)
             else:
                 cmd_value = " ".join([str(command)] + arg_list).strip()
             return subprocess.Popen(
-                cmd_value,
-                cwd=cwd or None,
-                shell=True,
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-            )
+                cmd_value, cwd=cwd or None, shell=True, **io_kwargs)
         command_value = command if isinstance(command, list) else [str(command)]
         if not isinstance(command_value, list):
             command_value = [str(command_value)]
         return subprocess.Popen(
             [str(item) for item in command_value] + arg_list,
-            cwd=cwd or None,
-            shell=False,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-        )
+            cwd=cwd or None, shell=False, **io_kwargs)
 
     def _build_notebooks(self) -> Dict[str, Any]:
         return {"registerNotebookSerializer": lambda *a, **kw: Disposable()}
@@ -7912,6 +7915,29 @@ class _TaskExecution:
         self.processId = getattr(process, "pid", None)
         self.exitStatus: Optional[Dict[str, Any]] = None
         self.state = {"isInteractedWith": False}
+        # Incrementally captured stdout+stderr (merged) for "process"-kind
+        # tasks, so the AI Editor's Task Runner UI can show real output
+        # instead of the previous DEVNULL-everything behavior. Read under
+        # _output_lock since a background reader thread appends to it.
+        self.output = ""
+        self._output_lock = threading.Lock()
+        if process is not None and getattr(process, "stdout", None) is not None:
+            threading.Thread(
+                target=self._read_output, daemon=True).start()
+
+    def _read_output(self) -> None:
+        try:
+            for line in iter(self.process.stdout.readline, ""):
+                if not line:
+                    break
+                with self._output_lock:
+                    self.output += line
+        except Exception:
+            pass
+
+    def output_snapshot(self) -> str:
+        with self._output_lock:
+            return self.output
 
     def terminate(self) -> None:
         if self.process and self.process.poll() is None:

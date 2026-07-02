@@ -40380,6 +40380,89 @@ def test_workflows() -> None:
         _check("get_workflow removed as dead API (frontend edits via the already-fetched list, not by-id refetch)",
                not hasattr(list_api, "get_workflow"))
 
+        # Task Runner UI (长期计划批次17): vscode.tasks backend (registerTaskProvider/
+        # fetchTasks/executeTask) was already real and tested in test_vscode_api,
+        # but had zero consumer anywhere in app.py/the frontend. list_tasks/
+        # run_task/task_execution_status/cancel_task are the missing bridge -
+        # real subprocess execution, not mocked, matching how the PTY/terminal
+        # job tests earlier this session verified real behavior.
+        task_api = AIEditorAPI(_SettingsGui({"ai_editor": {}}))
+        task_api._ensure_engine()
+        task_target = os.path.join(tmpdir, "task_target.py")
+        with open(task_target, "w", encoding="utf-8") as fh:
+            fh.write("print('task line one')\nprint('task line two')\n")
+        py_exe = sys.executable or "python"
+
+        class _SelftestTaskProvider:
+            def provideTasks(self):
+                return [{
+                    "type": "selftest-task-runner",
+                    "label": "Selftest Task",
+                    "command": py_exe,
+                    "args": [task_target],
+                }]
+        task_disposable = task_api._vscode_ns.build()["tasks"]["registerTaskProvider"](
+            "selftest-task-runner", _SelftestTaskProvider())
+        listed = task_api.list_tasks()
+        _check("list_tasks surfaces a real registered task with label/type/detail",
+               len(listed.get("tasks", [])) == 1
+               and listed["tasks"][0]["label"] == "Selftest Task"
+               and listed["tasks"][0]["type"] == "selftest-task-runner"
+               and py_exe in listed["tasks"][0]["detail"])
+        run_result = task_api.run_task(0)
+        _check("run_task starts a real process and returns an executionId",
+               "executionId" in run_result and run_result.get("kind") == "process"
+               and isinstance(run_result.get("processId"), int))
+        exec_id = run_result["executionId"]
+        finished_status = None
+        for _ in range(40):
+            time.sleep(0.15)
+            finished_status = task_api.task_execution_status(exec_id)
+            if finished_status.get("running") is False:
+                break
+        _check("task_execution_status reports real captured output and exit code",
+               finished_status is not None and finished_status.get("running") is False
+               and finished_status.get("exitCode") == 0
+               and "task line one" in finished_status.get("output", "")
+               and "task line two" in finished_status.get("output", ""))
+        task_disposable.dispose()
+        _check("run_task rejects an out-of-range index",
+               "error" in task_api.run_task(99))
+        _check("task_execution_status rejects an unknown execution id",
+               "error" in task_api.task_execution_status("not-a-real-id"))
+        _check("cancel_task rejects an unknown execution id",
+               "error" in task_api.cancel_task("not-a-real-id"))
+
+        long_task_target = os.path.join(tmpdir, "long_task_target.py")
+        with open(long_task_target, "w", encoding="utf-8") as fh:
+            fh.write("import time\ntime.sleep(5)\n")
+
+        class _LongTaskProviderForCancel:
+            def provideTasks(self):
+                return [{
+                    "type": "selftest-long-task-runner",
+                    "label": "Long Selftest Task",
+                    "command": py_exe,
+                    "args": [long_task_target],
+                }]
+        long_disposable = task_api._vscode_ns.build()["tasks"]["registerTaskProvider"](
+            "selftest-long-task-runner", _LongTaskProviderForCancel())
+        long_listed = task_api.list_tasks()
+        long_index = next(
+            i for i, t in enumerate(long_listed["tasks"]) if t["label"] == "Long Selftest Task")
+        long_run = task_api.run_task(long_index)
+        cancel_result = task_api.cancel_task(long_run["executionId"])
+        cancelled_status = None
+        for _ in range(20):
+            time.sleep(0.15)
+            cancelled_status = task_api.task_execution_status(long_run["executionId"])
+            if cancelled_status.get("running") is False:
+                break
+        _check("cancel_task terminates a long-running task early rather than waiting the full 5s",
+               cancel_result.get("ok") is True
+               and cancelled_status is not None and cancelled_status.get("running") is False)
+        long_disposable.dispose()
+
         class _Resp:
             def __init__(self, content: str, error: str = "") -> None:
                 self.content = content

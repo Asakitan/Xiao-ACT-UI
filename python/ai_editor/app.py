@@ -2387,6 +2387,8 @@ class AIEditorAPI:
         self._workflow_cancel_events: Dict[str, threading.Event] = {}
         self._workflow_pause_lock = threading.Lock()
         self._workflow_pause_events: Dict[str, threading.Event] = {}
+        self._task_runner_cache: List[Dict[str, Any]] = []
+        self._task_runner_executions: Dict[str, Any] = {}
         self._workflow_confirm_lock = threading.Lock()
         self._workflow_confirmations: Dict[Tuple[str, int], Dict[str, Any]] = {}
         self._extension_dynamic_ui_lock = threading.Lock()
@@ -9563,6 +9565,92 @@ class AIEditorAPI:
                 item["_plugin_id"] = getattr(w, "_plugin_id", "")
             workflows.append(item)
         return {"workflows": workflows}
+
+    def list_tasks(self) -> Dict:
+        """Task Runner: list tasks contributed by registered vscode.tasks
+        providers (Python-side extensions calling registerTaskProvider).
+        The backend (vscode_api.py's _build_tasks/_fetch_tasks/_execute_task)
+        was already real and tested - this and run_task/task_execution_status/
+        cancel_task are what were missing: a way for the AI Editor's own UI
+        to actually call it."""
+        self._ensure_engine()
+        vscode_ns = getattr(self, "_vscode_ns", None)
+        if vscode_ns is None:
+            return {"tasks": []}
+        try:
+            raw_tasks = vscode_ns.build()["tasks"]["fetchTasks"]()
+        except Exception as exc:
+            return {"tasks": [], "error": str(exc)}
+        self._task_runner_cache = [t for t in raw_tasks if isinstance(t, dict)]
+        tasks = []
+        for index, task in enumerate(self._task_runner_cache):
+            label = str(task.get("label") or task.get("name") or f"Task {index + 1}")
+            detail_bits = [
+                str(task.get("type") or ""),
+                str(task.get("command") or task.get("process") or ""),
+            ]
+            tasks.append({
+                "index": index,
+                "type": str(task.get("type") or ""),
+                "label": label,
+                "detail": " · ".join(bit for bit in detail_bits if bit),
+            })
+        return {"tasks": tasks}
+
+    def run_task(self, index: Any) -> Dict:
+        """Task Runner: execute the task at the index list_tasks() returned."""
+        self._ensure_engine()
+        vscode_ns = getattr(self, "_vscode_ns", None)
+        try:
+            idx = int(index)
+        except (TypeError, ValueError):
+            return {"error": "Invalid task index"}
+        if vscode_ns is None or idx < 0 or idx >= len(self._task_runner_cache):
+            return {"error": "Unknown task"}
+        task = self._task_runner_cache[idx]
+        try:
+            execution = vscode_ns.build()["tasks"]["executeTask"](task)
+        except Exception as exc:
+            return {"error": str(exc)}
+        if isinstance(execution, dict):
+            return execution if execution.get("error") else {"error": "Task did not start"}
+        if not hasattr(execution, "id"):
+            return {"error": "Task did not start"}
+        self._task_runner_executions[execution.id] = execution
+        return {
+            "executionId": execution.id,
+            "name": execution.name,
+            "kind": execution.kind,
+            "processId": execution.processId,
+        }
+
+    def task_execution_status(self, execution_id: str) -> Dict:
+        """Task Runner: poll a running/finished task's captured output
+        (stdout+stderr merged) and exit state."""
+        execution = self._task_runner_executions.get(str(execution_id or ""))
+        if execution is None:
+            return {"error": "Unknown task execution"}
+        exit_status = execution.exitStatus
+        output_fn = getattr(execution, "output_snapshot", None)
+        return {
+            "executionId": execution.id,
+            "name": execution.name,
+            "kind": execution.kind,
+            "processId": execution.processId,
+            "running": exit_status is None,
+            "output": output_fn() if callable(output_fn) else "",
+            "exitCode": exit_status.get("code") if isinstance(exit_status, dict) else None,
+        }
+
+    def cancel_task(self, execution_id: str) -> Dict:
+        """Task Runner: terminate a running task early."""
+        execution = self._task_runner_executions.get(str(execution_id or ""))
+        if execution is None:
+            return {"error": "Unknown task execution"}
+        terminate = getattr(execution, "terminate", None)
+        if callable(terminate):
+            terminate()
+        return {"ok": True}
 
     def save_workflow(self, data: Dict) -> Dict:
         self._ensure_engine()

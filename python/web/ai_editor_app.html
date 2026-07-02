@@ -49276,7 +49276,73 @@ const COMMANDS=[
   {id:'workbench.action.switchWorkspace',label:'Workspaces: Switch Workspace...',shortcut:'',category:'Workspaces',description:'Open the workspace switcher.',action:()=>openWorkspaceSwitcher()},
   {id:'workbench.action.terminal.runSelfCheck',label:'Developer: Run Terminal UI Self Check',shortcut:'',category:'Developer',description:'Run the integrated terminal UI self-check.',action:async()=>{const snap=await terminalUiSelfCheckSnapshot();showToast(snap&&snap.pass?'Terminal self-check passed':'Terminal self-check failed',snap&&snap.pass?'success':'error',2600)}},
   {id:'workbench.action.openGlobalKeybindings',label:'Preferences: Open Keyboard Shortcuts',shortcut:'Ctrl+K Ctrl+S',category:'Preferences',description:'Open keyboard shortcuts.',action:()=>openKeybindings()},
+  {id:'workbench.action.tasks.runTask',label:'Tasks: Run Task...',shortcut:'',category:'Tasks',description:'Pick and run a task contributed by an installed extension.',action:()=>openTaskRunnerPicker()},
+  {id:'workbench.action.tasks.terminate',label:'Tasks: Terminate Task',shortcut:'',category:'Tasks',description:'Cancel the currently running task, if any.',action:()=>cancelActiveTask()},
 ];
+
+// ── Task Runner (backend vscode.tasks was real+tested but had zero UI
+// consumer - this is that missing piece). Output is shown via the existing
+// Output panel/#output-content, reusing the same show_output rendering path
+// _OutputChannel already uses, instead of building new UI for it.
+let _taskRunnerActiveExecutionId='';
+let _taskRunnerPollTimer=null;
+async function openTaskRunnerPicker(){
+  const result=await call('list_tasks');
+  const tasks=(result&&Array.isArray(result.tasks))?result.tasks:[];
+  if(!tasks.length){showToast('No tasks found (no installed extension registers a task provider)','info',2600);return}
+  const modal=document.createElement('div');modal.className='modal-bg';modal.classList.add('open');
+  modal.innerHTML='<div class="modal"><h2>Run Task</h2>'
+    +'<div id="task-picker-list" style="max-height:320px;overflow:auto;margin:8px 0"></div>'
+    +'<div class="modal-btns"><span class="toolbar-btn" style="border:1px solid var(--border);padding:6px 14px;border-radius:var(--radius);cursor:pointer" onclick="this.closest(\'.modal-bg\').remove()">Cancel</span></div>'
+    +'</div>';
+  document.body.appendChild(modal);
+  modal.onclick=e=>{if(e.target===modal)modal.remove()};
+  const list=modal.querySelector('#task-picker-list');
+  tasks.forEach(task=>{
+    const row=document.createElement('div');
+    row.className='sb-item';
+    row.style.cssText='padding:8px 10px;cursor:pointer;border-bottom:1px solid var(--border)';
+    row.innerHTML='<div style="font-weight:600">'+esc(task.label)+'</div>'
+      +(task.detail?'<div style="font-size:11px;color:var(--fg-dim)">'+esc(task.detail)+'</div>':'');
+    row.onclick=()=>{modal.remove();runSelectedTask(task.index)};
+    list.appendChild(row);
+  });
+}
+async function runSelectedTask(index){
+  const oc=$('output-content');
+  if(oc)oc.textContent='Starting task...';
+  if(typeof activateBottomPanelTab==='function')activateBottomPanelTab(document.querySelector('.ptab[data-ptab="output"]'));
+  const result=await call('run_task',index);
+  if(!result||result.error){
+    if(oc)oc.textContent='Task failed to start: '+((result&&result.error)||'unknown error');
+    showToast('Task failed to start','error',2600);
+    return;
+  }
+  _taskRunnerActiveExecutionId=result.executionId;
+  setStatus('Running task: '+(result.name||'task'));
+  pollTaskExecution(result.executionId);
+}
+async function pollTaskExecution(executionId){
+  clearTimeout(_taskRunnerPollTimer);
+  const status=await call('task_execution_status',executionId);
+  if(!status||status.error)return;
+  const oc=$('output-content');
+  if(oc)oc.innerHTML=ansiToHtml(status.output||'')||'(no output yet)';
+  if(status.running){
+    _taskRunnerPollTimer=setTimeout(()=>pollTaskExecution(executionId),400);
+  }else{
+    setStatus('Task finished: exit code '+String(status.exitCode));
+    if(_taskRunnerActiveExecutionId===executionId)_taskRunnerActiveExecutionId='';
+  }
+}
+async function cancelActiveTask(){
+  if(!_taskRunnerActiveExecutionId){showToast('No task is currently running','info',2000);return}
+  await call('cancel_task',_taskRunnerActiveExecutionId);
+  showToast('Task cancelled','info',2000);
+}
+window.openTaskRunnerPicker=openTaskRunnerPicker;
+window.runSelectedTask=runSelectedTask;
+window.cancelActiveTask=cancelActiveTask;
 
 function openCommandPalette(initialValue){
   openCommandPaletteWithValue(initialValue==null?'>':initialValue);
