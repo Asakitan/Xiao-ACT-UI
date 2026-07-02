@@ -333,6 +333,10 @@ body.window-resizing * { cursor:inherit !important; }
 .editor-container { flex:1; display:flex; overflow:hidden; position:relative; }
 .line-numbers { width:50px; background:var(--bg-editor); color:var(--fg-dim); font:12px/1.5 var(--mono);
   padding:8px 8px 8px 0; text-align:right; overflow:hidden; user-select:none; flex-shrink:0; }
+.editor-breakpoint-layer { position:absolute; inset:0 auto 0 0; width:50px; overflow:hidden; cursor:pointer; }
+.editor-breakpoint-dot { position:absolute; left:6px; width:9px; height:9px; border-radius:50%;
+  background:#e51400; box-shadow:0 0 0 1px var(--bg-editor); }
+.editor-breakpoint-dot.disabled { background:var(--bg-editor); border:1.5px solid #e51400; }
 .editor-syntax-layer { position:absolute; inset:0 0 0 50px; z-index:0; pointer-events:none;
   background:var(--bg-editor); color:var(--fg-code); font:13px/1.5 var(--mono);
   padding:8px 12px; white-space:pre; overflow:hidden; tab-size:4; }
@@ -4555,6 +4559,7 @@ pre.code-block { overflow:visible; }
       <div class="editor-surface-strip" id="editor-surface-strip" role="status" aria-live="polite" aria-label="Editor language and diff status"></div>
       <div class="editor-container" id="editor-container" style="display:none">
         <div class="line-numbers" id="line-nums">1</div>
+        <div class="editor-breakpoint-layer" id="editor-breakpoint-layer" aria-hidden="true"></div>
         <div class="editor-sticky-scroll" id="editor-sticky-scroll" aria-hidden="true"></div>
         <pre class="editor-syntax-layer" id="editor-syntax-highlight" aria-hidden="true"></pre>
         <div class="editor-visual-layer" id="editor-visual-layer" aria-hidden="true"></div>
@@ -14478,6 +14483,7 @@ function updateLineNums(){
     $('line-nums').textContent=Array.from({length:lines},(_,i)=>i+1).join('\n');
   }
   if(typeof renderEditorVisualDecorations==='function')renderEditorVisualDecorations();
+  if(typeof renderEditorBreakpointLayer==='function')renderEditorBreakpointLayer();
 }
 function updateCursorPos(){
   const ta=$('editor-text'),val=ta.value,pos=ta.selectionStart;
@@ -20396,6 +20402,65 @@ function renderEditorDiagnostics(diagnostics){
     }
   });
 }
+// ── Breakpoint gutter. #editor-text is a plain textarea (no per-line DOM
+// nodes to hang click handlers off), so - same trick as the diagnostics/
+// inlay-hint layers above - this is an absolutely-positioned overlay whose
+// dot Y-positions are computed from line-height/scrollTop, not real rows.
+let _editorBreakpoints=[];
+function editorCurrentFileUri(){
+  const tab=(typeof activeEditorTab==='function'?activeEditorTab():null)||{};
+  return String(tab.filePath||tab.workspacePath||tab.name||editorFileName||'');
+}
+function editorGutterLineMetrics(){
+  const nums=$('line-nums');
+  if(!nums)return null;
+  const style=getComputedStyle(nums);
+  const lineHeight=parseFloat(style.lineHeight)||parseFloat(style.fontSize)*1.5;
+  const paddingTop=parseFloat(style.paddingTop)||8;
+  return {lineHeight,paddingTop};
+}
+function renderEditorBreakpointLayer(){
+  const layer=$('editor-breakpoint-layer'),wrap=$('editor-container'),nums=$('line-nums');
+  if(!layer||!wrap||!nums)return;
+  layer.innerHTML='';
+  if(wrap.style.display==='none')return;
+  const metrics=editorGutterLineMetrics();if(!metrics)return;
+  const scrollTop=nums.scrollTop,maxTop=wrap.clientHeight+metrics.lineHeight;
+  _editorBreakpoints.forEach(bp=>{
+    const line=Number(bp&&bp.line)||0;
+    const top=metrics.paddingTop+line*metrics.lineHeight-scrollTop;
+    if(top<-metrics.lineHeight||top>maxTop)return;
+    const dot=document.createElement('span');
+    dot.className='editor-breakpoint-dot'+(bp.enabled===false?' disabled':'');
+    dot.style.top=(top+metrics.lineHeight/2-4.5)+'px';
+    dot.title='Line '+(line+1)+' breakpoint'+(bp.condition?' — '+bp.condition:'');
+    layer.appendChild(dot);
+  });
+}
+async function refreshEditorBreakpoints(){
+  const uri=editorCurrentFileUri();
+  if(!uri){_editorBreakpoints=[];renderEditorBreakpointLayer();return}
+  const result=await call('list_breakpoints',uri);
+  _editorBreakpoints=(result&&Array.isArray(result.breakpoints))?result.breakpoints:[];
+  renderEditorBreakpointLayer();
+}
+async function toggleEditorBreakpointAtClientY(clientY){
+  const nums=$('line-nums');
+  if(!nums)return;
+  const metrics=editorGutterLineMetrics();if(!metrics)return;
+  const rect=nums.getBoundingClientRect();
+  const y=clientY-rect.top+nums.scrollTop-metrics.paddingTop;
+  const line=Math.max(0,Math.floor(y/metrics.lineHeight));
+  const uri=editorCurrentFileUri();
+  if(!uri){showToast('Open a file to set breakpoints','info',2000);return}
+  const result=await call('toggle_breakpoint',uri,line);
+  if(!result||result.error)return;
+  _editorBreakpoints=Array.isArray(result.breakpoints)?result.breakpoints:[];
+  renderEditorBreakpointLayer();
+}
+if($('editor-breakpoint-layer'))$('editor-breakpoint-layer').onclick=e=>toggleEditorBreakpointAtClientY(e.clientY);
+window.refreshEditorBreakpoints=refreshEditorBreakpoints;
+window.renderEditorBreakpointLayer=renderEditorBreakpointLayer;
 async function requestEditorDiagnostics(quiet){
   const wrap=$('editor-container');
   if(!ed||!wrap||wrap.style.display==='none')return;
@@ -21662,7 +21727,7 @@ ed.addEventListener('drop',handleEditorDocumentDrop);
 ed.addEventListener('click',e=>{editorCancelSnippetSession(false);closeEditorDropPasteOptions();updateCursorPos();renderEditorInlineCompletion();scheduleEditorDocumentHighlights();scheduleEditorLinkedEditingRanges();if(e.ctrlKey||e.metaKey){requestEditorDocumentLinks(true,true);return}scheduleEditorHover(e)});
 ed.addEventListener('dblclick',()=>editorSelectWordAtCursor());
 ed.addEventListener('keyup',e=>{updateCursorPos();renderEditorInlineCompletion();scheduleEditorDocumentHighlights();scheduleEditorLinkedEditingRanges();scheduleEditorHover(e)});
-ed.addEventListener('scroll',function(){$('line-nums').scrollTop=this.scrollTop;syncEditorSyntaxScroll();renderEditorInlayHints(_editorInlayHints);renderEditorDocumentHighlights(_editorDocumentHighlights);renderEditorDiagnostics(_editorDiagnostics);if(_editorSemanticTokensRangeActive)scheduleEditorSemanticTokens(260);updateCursorPos();closeEditorHover();closeEditorSignatureHelp();closeEditorCodeActions();closeEditorDropPasteOptions();closeEditorReferences();closeEditorHierarchy();closeEditorLinks();closeEditorColorPresentationMenu()});
+ed.addEventListener('scroll',function(){$('line-nums').scrollTop=this.scrollTop;syncEditorSyntaxScroll();renderEditorInlayHints(_editorInlayHints);renderEditorDocumentHighlights(_editorDocumentHighlights);renderEditorDiagnostics(_editorDiagnostics);renderEditorBreakpointLayer();if(_editorSemanticTokensRangeActive)scheduleEditorSemanticTokens(260);updateCursorPos();closeEditorHover();closeEditorSignatureHelp();closeEditorCodeActions();closeEditorDropPasteOptions();closeEditorReferences();closeEditorHierarchy();closeEditorLinks();closeEditorColorPresentationMenu()});
 ed.addEventListener('mousedown',handleEditorUnfoldOnClickAfterEndOfLine);
 ed.addEventListener('keydown',function(e){
   if(handleEditorDropPasteOptionsKey(e))return;
@@ -48565,6 +48630,7 @@ function switchTab(id){
     if(typeof clearEditorDocumentColors==='function')clearEditorDocumentColors();
     updateLineNums();updateCursorPos();
     $('editor-welcome').style.display='none';$('editor-container').style.display='flex';
+    if(typeof refreshEditorBreakpoints==='function')refreshEditorBreakpoints();
     if(typeof scheduleEditorInlayHints==='function')scheduleEditorInlayHints(160);
     if(typeof scheduleEditorInlineCompletions==='function')scheduleEditorInlineCompletions(220);
     if(typeof scheduleEditorCodeLenses==='function')scheduleEditorCodeLenses(280);

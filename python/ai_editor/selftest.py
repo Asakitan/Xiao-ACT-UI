@@ -40541,6 +40541,30 @@ def test_workflows() -> None:
                and stopped_status is not None and stopped_status.get("running") is False)
         long_debug_disposable.dispose()
 
+        # Editor breakpoint gutter (长期计划批次18b): addBreakpoints/
+        # removeBreakpoints were already real (batch 14) but nothing in the
+        # editor UI ever called them - list_breakpoints/toggle_breakpoint
+        # are that missing bridge, same pattern as tasks/debug.
+        bp_api = AIEditorAPI(_SettingsGui({"ai_editor": {}}))
+        bp_api._ensure_engine()
+        file_a, file_b = "C:/proj/a.py", "C:/proj/b.py"
+        _check("list_breakpoints starts empty", bp_api.list_breakpoints(file_a) == {"breakpoints": []})
+        toggled_on = bp_api.toggle_breakpoint(file_a, 4)
+        _check("toggle_breakpoint adds a real breakpoint at the given line",
+               toggled_on.get("breakpoints") == [{"uri": file_a, "line": 4, "enabled": True}])
+        bp_api.toggle_breakpoint(file_a, 9)
+        bp_api.toggle_breakpoint(file_b, 2)
+        _check("list_breakpoints filters by uri",
+               len(bp_api.list_breakpoints(file_a).get("breakpoints", [])) == 2
+               and len(bp_api.list_breakpoints(file_b).get("breakpoints", [])) == 1)
+        _check("list_breakpoints with no uri returns every file's breakpoints",
+               len(bp_api.list_breakpoints("").get("breakpoints", [])) == 3)
+        toggled_off = bp_api.toggle_breakpoint(file_a, 4)
+        _check("toggle_breakpoint removes an existing breakpoint at the same line (toggle, not just add)",
+               toggled_off.get("breakpoints") == [{"uri": file_a, "line": 9, "enabled": True}])
+        _check("toggle_breakpoint rejects a non-integer line",
+               "error" in bp_api.toggle_breakpoint(file_a, "not-a-line"))
+
         class _Resp:
             def __init__(self, content: str, error: str = "") -> None:
                 self.content = content

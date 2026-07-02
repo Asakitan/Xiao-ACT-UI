@@ -9756,6 +9756,45 @@ class AIEditorAPI:
         session.terminate()
         return {"ok": True}
 
+    def list_breakpoints(self, uri: str = "") -> Dict:
+        """Editor breakpoint gutter: list real vscode.debug.breakpoints,
+        optionally filtered to one file. addBreakpoints/removeBreakpoints
+        were already real (long-term plan batch 14) but nothing in the
+        editor UI ever called them - breakpoints were only settable by a
+        Python extension calling the API directly."""
+        self._ensure_engine()
+        vscode_ns = getattr(self, "_vscode_ns", None)
+        if vscode_ns is None:
+            return {"breakpoints": []}
+        all_bps = [bp for bp in (vscode_ns.build()["debug"]["breakpoints"] or []) if isinstance(bp, dict)]
+        if uri:
+            all_bps = [bp for bp in all_bps if bp.get("uri") == uri]
+        return {"breakpoints": all_bps}
+
+    def toggle_breakpoint(self, uri: str, line: Any) -> Dict:
+        """Editor breakpoint gutter: click a gutter line to add/remove a
+        breakpoint there. Breakpoints are plain {uri, line, enabled} dicts -
+        vscode_api.py's addBreakpoints/removeBreakpoints never enforced a
+        schema, so this defines the shape the editor gutter needs."""
+        self._ensure_engine()
+        vscode_ns = getattr(self, "_vscode_ns", None)
+        if vscode_ns is None:
+            return {"error": "engine not ready"}
+        try:
+            line_number = int(line)
+        except (TypeError, ValueError):
+            return {"error": "Invalid line number"}
+        debug_ns = vscode_ns.build()["debug"]
+        existing = next(
+            (bp for bp in debug_ns["breakpoints"]
+             if isinstance(bp, dict) and bp.get("uri") == uri and bp.get("line") == line_number),
+            None)
+        if existing is not None:
+            debug_ns["removeBreakpoints"]([existing])
+        else:
+            debug_ns["addBreakpoints"]([{"uri": uri, "line": line_number, "enabled": True}])
+        return self.list_breakpoints(uri)
+
     def save_workflow(self, data: Dict) -> Dict:
         self._ensure_engine()
         from ai_editor.workflows import WorkflowDef
