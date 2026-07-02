@@ -24,6 +24,12 @@ echo   release_dir=%UPDATE_HOST_RELEASE_DIR%
 echo   downloads=%UPDATE_HOST_DOWNLOADS%
 echo   bind=%UPDATE_HOST_HOST%:%UPDATE_HOST_PORT%
 
+REM app.py 用 "from update_host.workshop_routes import ..." 这种包限定写法，
+REM update_host/ 没有 __init__.py(隐式命名空间包)，要让它解析成功，上级目录
+REM 得在 sys.path 上——不补的话 workshop 路由会被 app.py 的 try/except 悄悄
+REM 吞掉，服务照样能起，但 /api/workshop/* 全部 404。
+set "PYTHONPATH=%ROOT%..;%PYTHONPATH%"
+
 python -m uvicorn app:app --host %UPDATE_HOST_HOST% --port %UPDATE_HOST_PORT%
 
 popd

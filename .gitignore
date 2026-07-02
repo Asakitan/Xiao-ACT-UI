@@ -95,6 +95,7 @@ license.db
 python/act_platform/protect/
 python/update_host/build_service.py
 python/update_host/toolchain_bootstrap.py
+python/update_host/native_crypto.py
 *.pyd.sao
 *.native_cache/
 
