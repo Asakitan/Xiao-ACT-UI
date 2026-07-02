@@ -3,7 +3,6 @@
 import tkinter as tk
 import time
 from typing import Optional, Callable, List, Dict, Tuple
-from PIL import Image, ImageDraw, ImageFilter, ImageTk
 import _sao_cy_uihelpers as _CY_UI  # type: ignore[import-not-found]
 from render.overlay_scheduler import get_scheduler as _get_scheduler
 from utils.perf_probe import phase as _phase_trace, probe as _probe
@@ -84,8 +83,6 @@ class SAOPopUpMenu:
         self._menu_hud_static_photo = None
         self._menu_hud_last_sig = None
         self._menu_hud_renderer = MenuHudSpriteRenderer()
-        self._menu_hud_backdrop = None
-        self._menu_hud_backdrop_key = None
         # GPU-required HUD overlay. Canvas-native HUD fallback is disabled.
         if MenuHudOverlay is None:
             raise RuntimeError('MenuHudOverlay GPU module is required')
@@ -94,7 +91,7 @@ class SAOPopUpMenu:
         self._content_place_sig = None
         self._overlay_size_part = ''
         self._overlay_drift_sig = None
-        self._hud_cached_dims: Optional[Tuple[int, int, int, int]] = None
+        self._hud_cached_dims: Optional[Tuple[int, int]] = None
         self._menu_force_60_until = 0.0
         self._menu_open_grace_until = 0.0
         self._root_click_id = None
@@ -454,66 +451,45 @@ class SAOPopUpMenu:
         except Exception:
             return None
 
-    def _get_menu_backdrop_sprite(self, width: int, height: int):
-        width = max(260, int(width))
-        height = max(180, int(height))
-        key = (width, height)
-        if self._menu_hud_backdrop_key == key and self._menu_hud_backdrop is not None:
-            return self._menu_hud_backdrop
-
-        pad = 24
-        img_w = width + pad * 2
-        img_h = height + pad * 2
-
-        shadow = Image.new('RGBA', (img_w, img_h), (0, 0, 0, 0))
-        sdraw = ImageDraw.Draw(shadow)
-        sdraw.rounded_rectangle((pad + 5, pad + 7, pad + width + 5, pad + height + 7),
-            radius=32, fill=(0, 0, 0, 40))
-        shadow = shadow.filter(ImageFilter.GaussianBlur(radius=10))
-
-        plate = Image.new('RGBA', (img_w, img_h), (0, 0, 0, 0))
-        pdraw = ImageDraw.Draw(plate)
-        outer = (pad, pad, pad + width, pad + height)
-        inner = (pad + 8, pad + 8, pad + width - 8, pad + height - 8)
-        pdraw.rounded_rectangle(outer, radius=32,
-                fill=(10, 16, 24, 180), outline=(110, 210, 240, 60), width=1)
-        pdraw.rounded_rectangle(inner, radius=26,
-                fill=(14, 20, 30, 140), outline=(160, 230, 255, 36), width=1)
-        gloss = Image.new('RGBA', (img_w, img_h), (0, 0, 0, 0))
-        gdraw = ImageDraw.Draw(gloss)
-        gdraw.rounded_rectangle((pad + 8, pad + 6, pad + width - 10, int(pad + height * 0.36)),
-            radius=24, fill=(200, 240, 255, 14))
-        gloss = gloss.filter(ImageFilter.GaussianBlur(radius=10))
-        plate = Image.alpha_composite(plate, gloss)
-
-        merged = Image.alpha_composite(shadow, plate)
-        self._menu_hud_backdrop = ImageTk.PhotoImage(merged)
-        self._menu_hud_backdrop_key = key
-        return self._menu_hud_backdrop
-
     @_probe.decorate('ui.menu.draw_main')
     def _draw_menu_hud(self, dx: int = 0, dy: int = 0, phase: float = 0.0):
         if not self._menu_hud_cv or not self._overlay or not self._overlay.winfo_exists():
             return
-        # Cache overlay + content dimensions. The overlay is a fullscreen
-        # Toplevel and the content frame doesn't change size after the
-        # menu is built, so we only need to query Tk when the cache is
-        # invalidated (sized None = force refresh on next tick).
+        # The overlay's own size is cached — it's a fullscreen Toplevel
+        # that never resizes. `cw`/`ch` (the content frame's size) must
+        # NOT be cached the same way: the content frame's width changes
+        # whenever the child bar opens/closes/animates (SAOChildBar grows
+        # from ~0 to ~290px over ~180ms), and with `place(anchor='se')`
+        # the frame's on-screen position (`left`/`top` below, already
+        # read live every tick) shifts in lockstep to keep its
+        # bottom-right corner pinned. Caching cw/ch let them go stale
+        # mid-animation (or after) while `left`/`top` kept tracking the
+        # real, currently-wider frame — the HUD brackets/glass plate were
+        # then drawn at the *live* position but sized to the *stale*
+        # (too-narrow) width, which is what actually produced the
+        # "everything's crooked / doesn't wrap the real content" look,
+        # not a padding problem. Read cw/ch live, every tick, exactly
+        # like left/top already are.
         cached = self._hud_cached_dims
         if cached is None:
             try:
                 sw = self._overlay.winfo_width()
                 sh = self._overlay.winfo_height()
-                cw = max(120, self._content.winfo_width() or self._content.winfo_reqwidth())
-                ch = max(120, self._content.winfo_height() or self._content.winfo_reqheight())
             except Exception:
                 return
-            if sw <= 1 or sh <= 1 or cw <= 1 or ch <= 1:
-                # Tk hasn't laid out yet; try again next tick without caching.
+            if sw <= 1 or sh <= 1:
                 return
-            self._hud_cached_dims = (sw, sh, cw, ch)
+            self._hud_cached_dims = (sw, sh)
         else:
-            sw, sh, cw, ch = cached
+            sw, sh = cached
+        try:
+            cw = max(120, self._content.winfo_width() or self._content.winfo_reqwidth())
+            ch = max(120, self._content.winfo_height() or self._content.winfo_reqheight())
+        except Exception:
+            return
+        if cw <= 1 or ch <= 1:
+            # Tk hasn't laid out yet; try again next tick.
+            return
 
         if self._content_x is not None and self._content_y is not None:
             # v2.2.12: anchored-mode breathing — apply dx/dy to HUD sprite
@@ -537,12 +513,26 @@ class SAOPopUpMenu:
             try:
                 # MenuHudOverlay.set_geometry expects the content top-left
                 # in *screen* coordinates; convert from overlay-local.
-                ox_screen = self._overlay.winfo_rootx() + left
-                oy_screen = self._overlay.winfo_rooty() + top
+                # `left`/`top` already carry the breathing dx/dy, but
+                # MenuHudOverlay.tick() adds dx/dy to the anchor itself —
+                # passing them baked in here doubled the drift (window sat
+                # at content + 2*dx instead of + dx, visibly pushed
+                # down-right for the first seconds after opening while
+                # both offsets are positive). Hand tick() the un-drifted
+                # anchor and let it apply dx/dy exactly once.
+                ox_screen = self._overlay.winfo_rootx() + (left - dx)
+                oy_screen = self._overlay.winfo_rooty() + (top - dy)
+                # Clamp box = the real screen, not the overlay Toplevel —
+                # the overlay is oversized by breath_pad*2 (+24), so using
+                # its winfo size let the sprite sit up to 24px past the
+                # true screen edge before the tick() clamp engaged, and
+                # that overhang is exactly what got visually cut off.
+                scr_w = self.root.winfo_screenwidth()
+                scr_h = self.root.winfo_screenheight()
                 self._hud_overlay.set_geometry(
                     ox_screen, oy_screen,
                     max(120, cw), max(120, ch),
-                    sw, sh,
+                    scr_w, scr_h,
                 )
                 self._hud_overlay.tick(time.time(), dx, dy, phase)
                 self._menu_hud_origin = (left, top)

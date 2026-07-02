@@ -82,11 +82,22 @@ class MenuHudOverlay:
         self._content_h: int = 0
         self._screen_w: int = 0
         self._screen_h: int = 0
-        # Sprite-origin offset returned by the renderer (negative pad).
-        self._sprite_off: Tuple[int, int] = (0, 0)
         # Pinned worker lane (heavy / isolated) for compose work.
         self._render_worker = AsyncFrameWorker(prefer_isolation=True)
         self._renderer = MenuHudSpriteRenderer()
+        # Sprite-origin offset returned by the renderer (negative pad).
+        # Seeded to the real value up front (gpu_pad is a fixed constant,
+        # not content-size-dependent, so it's known before any render_pil
+        # call) instead of (0, 0) — compose_frame() only overwrites this
+        # *after* the worker finishes a render, but tick() reads it
+        # *before* that first compose has even been submitted. With a
+        # (0, 0) placeholder, the very first frame's window position was
+        # computed with no offset at all (window placed at the content's
+        # anchor instead of anchor - gpu_pad), i.e. shifted gpu_pad px
+        # right/down from where it should be while already sized to the
+        # bigger sprite — reading as "clipped on the right/bottom, top-
+        # left pinned in place instead of expanding outward evenly".
+        self._sprite_off: Tuple[int, int] = (-self._renderer.gpu_pad, -self._renderer.gpu_pad)
         # Track last submitted commit position so we don't enqueue
         # duplicates when nothing moved.
         self._last_commit_xy: Optional[Tuple[int, int]] = None
@@ -222,6 +233,27 @@ class MenuHudOverlay:
         #    via x/y so the FrameBuffer carries the right position.
         sprite_x = self._anchor_x + dx + self._sprite_off[0]
         sprite_y = self._anchor_y + dy + self._sprite_off[1]
+        # Keep the whole sprite (content + the gpu_pad margin the glass
+        # backdrop grew into) on-screen. The content frame is placed
+        # anchor='se' near the floating menu button — when that button
+        # sits close to a screen edge, content_right + gpu_pad (or
+        # content_bottom + gpu_pad) can run past screen_w/screen_h, and
+        # since anything beyond the monitor's coordinate space simply
+        # isn't composited, the backdrop's right/bottom edge gets cut
+        # off there. Shift the sprite back on-screen instead (same
+        # pattern as a tooltip/context menu flipping to stay visible)
+        # rather than growing the pad and hoping the anchor is never
+        # near an edge.
+        # Mirror the renderer's floor (max(120, ...), same as the caller)
+        # so this clamp's idea of the sprite size matches what's actually
+        # drawn — a mismatch here would "correct" the position against the
+        # wrong box.
+        sprite_w = max(120, self._content_w) + 2 * self._renderer.gpu_pad
+        sprite_h = max(120, self._content_h) + 2 * self._renderer.gpu_pad
+        if self._screen_w > sprite_w:
+            sprite_x = max(0, min(sprite_x, self._screen_w - sprite_w))
+        if self._screen_h > sprite_h:
+            sprite_y = max(0, min(sprite_y, self._screen_h - sprite_h))
         # v2.3.0: phase-quantized dedup. q_phase ticks at 30 Hz; below
         # that quantum, every other 60 Hz tick reuses the previous
         # composed frame (presenter keeps it on the GL surface).

@@ -8,6 +8,7 @@ import threading
 from dataclasses import dataclass
 from typing import Dict, List, Optional, Tuple
 
+import numpy as np
 from PIL import Image, ImageDraw, ImageFilter, ImageFont, ImageTk
 import _sao_cy_uihelpers as _CY_UI  # type: ignore[import-not-found]
 
@@ -94,6 +95,27 @@ def _rgba_to_hex(color: Tuple[int, int, int, int]) -> str:
     return f'#{r:02x}{g:02x}{b:02x}'
 
 
+def _unpremultiply_rgba(img: Image.Image) -> Image.Image:
+    """Convert a premultiplied-alpha RGBA image to straight alpha.
+
+    ``render_shell_rgba``'s GPU shader writes premultiplied output (its RGB
+    channels are already scaled by alpha, the convention its own blend
+    pipeline expects), but every PIL-side consumer downstream —
+    ``Image.alpha_composite``, plain ``ImageDraw`` fills for the brackets/
+    rails drawn on top — assumes straight (non-premultiplied) alpha like
+    the rest of this module's PIL fallback path. Left unconverted, any
+    color drawn through this path reads darker/muddier the more transparent
+    it is (e.g. white at alpha 180/255 renders as ~176 gray instead of
+    ~249 near-white) instead of the requested color.
+    """
+    arr = np.asarray(img).astype(np.float32)
+    alpha = arr[..., 3:4]
+    safe_alpha = np.where(alpha > 0, alpha, 1.0)
+    rgb = np.clip(arr[..., :3] * (255.0 / safe_alpha), 0, 255)
+    out = np.concatenate([rgb, alpha], axis=-1).astype(np.uint8)
+    return Image.fromarray(out, 'RGBA')
+
+
 def _tk_font_spec(kind: str, size: int) -> Tuple:
     """Return a Tk font spec, preferring the installed SAO UI/CJK face so
     the Canvas stamp looks identical to the PIL-rendered version. Falls
@@ -149,7 +171,64 @@ class MenuHudSpriteRenderer:
     _PLATE_PAD = 16
     _HUD_MARGIN = 6
     _BRACKET_LEN = 16
+    # Extra canvas margin used only by the GPU-path glass shell
+    # (_get_static_layer_gpu/_build_shell), on top of _PLATE_PAD. Before
+    # this, the shell's own body_pad was _PLATE_PAD (16), which put the
+    # plate's edge *inside* the bracket frame's edge (brackets sit at
+    # _PLATE_PAD - _HUD_MARGIN = 10px inset, i.e. 6px further out than
+    # the plate) — the backdrop visibly didn't reach the HUD frame it's
+    # supposed to back, reading as "too small". This grows the whole
+    # sprite canvas so the plate can extend a bit *past* the bracket
+    # frame instead (see _shell_body_pad below).
+    # v1-v3 (20, 27, 31) chased this by inflating the pad every time it
+    # was reported "still too small" — wrong direction. The real bug was
+    # in the caller (sao_theme/popup_menu.py::_draw_menu_hud): it cached
+    # content_w/content_h once per menu-activate event while reading the
+    # content frame's *position* live every tick, so whenever the child
+    # bar's animated open/close changed the content frame's real width,
+    # the HUD's brackets/plate kept using a stale (often much narrower)
+    # width at a live (already-shifted) position — reading as "crooked,
+    # doesn't wrap the real content" no matter how big this pad got.
+    # That's fixed now (content_w/h read live, same as position).
+    #
+    # IMPORTANT: gpu_pad (canvas/window margin) and _PLATE_MARGIN (how
+    # far the visible glass plate extends past the content edge) are
+    # INDEPENDENT knobs. They were NOT independent before — every
+    # v1-v3 round (20, 27, 31) grew gpu_pad while _shell_body_pad was
+    # defined as ``gpu_pad - <constant>``; since the canvas itself is
+    # ``content_w + 2*gpu_pad``, the plate's actual size
+    # (``canvas - 2*shell_body_pad``) reduces to
+    # ``content_w + 2*<constant>`` — the gpu_pad terms cancel exactly.
+    # So growing gpu_pad only ever pushed the bracket/rail frame (whose
+    # inset is likewise ``gpu_pad - <constant>``, same cancellation)
+    # and the transparent canvas/window further out — it never actually
+    # grew the plate at all, which is exactly why "make the plate
+    # bigger, independently" kept not working. Fixed by making
+    # _PLATE_MARGIN its own constant, unrelated to gpu_pad.
+    _SHELL_GROW_PAD = 24  # canvas/window margin only — NOT the plate size
     _RAIL_OFFSET = 4
+    # Distance (px) from the real widget content's edge to the glass
+    # plate's edge — the one true "how big does the plate look" knob.
+    # rail sits at HUD_MARGIN(6) + RAIL_OFFSET(4) = 10px past content;
+    # 25 clears that with a clearly visible ring of glass around it.
+    _PLATE_MARGIN = 25
+
+    @property
+    def gpu_pad(self) -> int:
+        """Canvas/window margin (px) for the GPU-path sprite — purely how
+        much transparent room + off-screen slack the render surface has;
+        does not affect the plate's or bracket frame's visible size or
+        position relative to content (see _PLATE_MARGIN for that)."""
+        return self._PLATE_PAD + self._SHELL_GROW_PAD
+
+    @property
+    def _shell_body_pad(self) -> int:
+        """Inset (px) of the glass plate's edge from the GPU canvas edge.
+        Derived so the plate's actual visible size is
+        ``content + 2*_PLATE_MARGIN`` regardless of gpu_pad — grow
+        _PLATE_MARGIN to make the plate itself bigger; grow gpu_pad only
+        to give the sprite/window more surrounding room."""
+        return max(0, self.gpu_pad - self._PLATE_MARGIN)
     _DOT_RADIUS = 2
     _CYAN = (94, 184, 202, 255)
     _GOLD = (243, 175, 18, 255)
@@ -157,12 +236,30 @@ class MenuHudSpriteRenderer:
     _DIM_GOLD = (200, 145, 14, 180)
     _SCAN_TRAIL = ((58, 106, 120, 255), (42, 80, 96, 255))
     _SHELL_SHADOW = (76, 122, 138, 24)
+    # Glass backdrop tones — match the menu's own near-white chrome family
+    # (SAOColors.CIRCLE_BG '#f7f8f8' / CHILD_BG '#f8f8f8' / INFO_BG '#fbfbfb'
+    # / CIRCLE_BORDER '#bcc4ca') instead of an unrelated dark navy slab, so
+    # the plate reads as "part of this menu" against the white circle
+    # buttons and child list rather than a mismatched dark island.
+    _SHELL_FILL_OUTER = (247, 248, 248, 200)
+    _SHELL_FILL_INNER = (251, 251, 251, 160)
+    _SHELL_EDGE_OUTER = (188, 196, 202, 90)
+    _SHELL_EDGE_INNER = (255, 255, 255, 80)
 
     def __init__(self) -> None:
         self._static_key: Optional[Tuple[int, int, int, int]] = None
         self._static_img: Optional[Image.Image] = None
         self._static_photo: Optional[ImageTk.PhotoImage] = None
         self._static_photo_size: Optional[Tuple[int, int]] = None
+        # GPU (render_pil / MenuHudOverlay) path only — kept separate from
+        # the legacy chroma-key static layer above so the glass backdrop
+        # shell never leaks into the transparent-only Canvas fallback path
+        # (that path renders on a -transparentcolor window, where a
+        # translucent plate produces a visible black fringe; the GPU path
+        # is a real per-pixel-alpha layered window and doesn't have that
+        # problem — see MenuHudSpriteRenderer._get_static_layer_gpu).
+        self._static_key_gpu: Optional[Tuple[int, int, int, int]] = None
+        self._static_img_gpu: Optional[Image.Image] = None
         self._photo: Optional[ImageTk.PhotoImage] = None
         self._photo_size: Optional[Tuple[int, int]] = None
         self._font_cache: Dict[Tuple[str, int], ImageFont.FreeTypeFont] = {}
@@ -202,6 +299,8 @@ class MenuHudSpriteRenderer:
         self._static_img = None
         self._static_photo = None
         self._static_photo_size = None
+        self._static_key_gpu = None
+        self._static_img_gpu = None
         self._photo = None
         self._photo_size = None
         self._stamp_second = None
@@ -242,8 +341,11 @@ class MenuHudSpriteRenderer:
     def _render_locked(self, content_w: int, content_h: int,
                        screen_w: int, screen_h: int,
                        phase: float) -> 'MenuHudFrame':
-        content_w = max(260, int(content_w))
-        content_h = max(180, int(content_h))
+        # Same floor as the caller (max(120, ...)) — see the note in
+        # _render_pil_locked on why an inflated floor here misaligns the
+        # HUD frame against the anchor='se'-placed real content.
+        content_w = max(120, int(content_w))
+        content_h = max(120, int(content_h))
         screen_w = max(1, int(screen_w))
         screen_h = max(1, int(screen_h))
 
@@ -321,12 +423,23 @@ class MenuHudSpriteRenderer:
     def _render_pil_locked(self, content_w: int, content_h: int,
                            screen_w: int, screen_h: int,
                            phase: float) -> Tuple[Image.Image, Tuple[int, int]]:
-        content_w = max(260, int(content_w))
-        content_h = max(180, int(content_h))
+        # Floor MUST match the caller's (sao_theme/popup_menu.py::
+        # _draw_menu_hud passes max(120, cw/ch), and MenuHudOverlay stores
+        # max(120, ...)). The old max(260, ...)/max(180, ...) here silently
+        # inflated the drawn frame up to 140px wider / whatever taller than
+        # the size the *position* was computed from — and since the sprite
+        # is placed by the real Tk content frame's anchor='se' geometry
+        # (its se corner pinned to the floating button), that extra width
+        # pushed the frame's se corner ~140px right/down of the button
+        # instead of onto it: the frame rendered "shifted down-right,
+        # doesn't wrap the real content, should be further up-left". Same
+        # floor as the caller → drawn size == positioned size, always.
+        content_w = max(120, int(content_w))
+        content_h = max(120, int(content_h))
         screen_w = max(1, int(screen_w))
         screen_h = max(1, int(screen_h))
 
-        static = self._get_static_layer(
+        static = self._get_static_layer_gpu(
             content_w, content_h, screen_w, screen_h)
         # v2.2.25: reuse a single scratch RGBA image across frames. The
         # previous `static.copy()` allocated a fresh PIL Image (~840 KB
@@ -344,7 +457,7 @@ class MenuHudSpriteRenderer:
         frame = scratch
 
         cx1, cy1, cx2, cy2, scan_y, dot_y_l, dot_y_r = _CY_UI.popup_hud_dynamic(
-            content_w, content_h, phase, self._PLATE_PAD,
+            content_w, content_h, phase, self.gpu_pad,
             self._HUD_MARGIN, self._BRACKET_LEN)
 
         now = _dt.datetime.now()
@@ -365,7 +478,7 @@ class MenuHudSpriteRenderer:
                            self._stamp_text)
         self._pil_frame_sig = frame_sig
         self._pil_frame_cache = frame
-        self._pil_frame_off = (-self._PLATE_PAD, -self._PLATE_PAD)
+        self._pil_frame_off = (-self.gpu_pad, -self.gpu_pad)
         return frame, self._pil_frame_off
 
     def _get_static_photo(self, content_w: int, content_h: int,
@@ -401,9 +514,12 @@ class MenuHudSpriteRenderer:
 
         img_w = content_w + self._PLATE_PAD * 2
         img_h = content_h + self._PLATE_PAD * 2
-        # Keep the menu HUD transparent-only on Windows transparentcolor
-        # overlays. A dark translucent plate behind the content produces a
-        # visible black fringe around the floating menu and child options.
+        # Keep this layer transparent-only — it backs the legacy
+        # Toplevel(-transparentcolor) chroma-key Canvas fallback, where a
+        # translucent plate behind the content produces a visible black
+        # fringe around the floating menu and child options. The GPU path
+        # (MenuHudOverlay, a real per-pixel-alpha window) gets the glass
+        # backdrop instead via _get_static_layer_gpu below.
         layer = Image.new('RGBA', (img_w, img_h), (0, 0, 0, 0))
 
         draw = ImageDraw.Draw(layer)
@@ -417,6 +533,37 @@ class MenuHudSpriteRenderer:
 
         self._static_key = key
         self._static_img = layer
+        return layer
+
+    def _get_static_layer_gpu(self, content_w: int, content_h: int,
+                              screen_w: int, screen_h: int) -> Image.Image:
+        """Same static HUD layer as :meth:`_get_static_layer`, but with the
+        glass backdrop shell composited underneath — safe here because the
+        GPU overlay (MenuHudOverlay) is a real per-pixel-alpha layered
+        window, not a chroma-key surface, so a translucent plate doesn't
+        produce the black-fringe artifact the legacy path avoids. Uses its
+        own cache slot so this never leaks into the chroma-key fallback.
+        """
+        key = (content_w, content_h, screen_w, screen_h)
+        if self._static_key_gpu == key and self._static_img_gpu is not None:
+            return self._static_img_gpu
+
+        gpu_pad = self.gpu_pad
+        img_w = content_w + gpu_pad * 2
+        img_h = content_h + gpu_pad * 2
+        layer = self._build_shell(img_w, img_h, body_pad=self._shell_body_pad)
+
+        draw = ImageDraw.Draw(layer)
+        cx1 = gpu_pad - self._HUD_MARGIN
+        cy1 = gpu_pad - self._HUD_MARGIN
+        cx2 = gpu_pad + content_w + self._HUD_MARGIN
+        cy2 = gpu_pad + content_h + self._HUD_MARGIN
+        self._draw_brackets(draw, cx1, cy1, cx2, cy2)
+        self._draw_rails(draw, cx1, cy1, cx2, cy2)
+        self._draw_static_labels(draw, cx1, cy1, cx2, cy2, screen_w, screen_h)
+
+        self._static_key_gpu = key
+        self._static_img_gpu = layer
         return layer
 
     def _draw_dynamic(self, frame: Image.Image,
@@ -463,25 +610,33 @@ class MenuHudSpriteRenderer:
         self._stamp_sprite_size = (w, h)
         return sprite
 
-    def _build_shell(self, img_w: int, img_h: int) -> Image.Image:
+    def _build_shell(self, img_w: int, img_h: int, body_pad: Optional[int] = None) -> Image.Image:
+        pad = self._PLATE_PAD if body_pad is None else body_pad
         if _gpu_shell is not None:
             shell = _gpu_shell(
                 img_w,
                 img_h,
-                body_pad=self._PLATE_PAD,
+                body_pad=pad,
                 radius=44.0,
-                color_a=(10, 16, 24, 180),
-                color_b=(14, 20, 30, 140),
-                edge=(110, 210, 240, 60),
-                inner=(160, 230, 255, 36),
+                color_a=self._SHELL_FILL_OUTER,
+                color_b=self._SHELL_FILL_INNER,
+                edge=self._SHELL_EDGE_OUTER,
+                inner=self._SHELL_EDGE_INNER,
                 scan=(0, 0, 0, 0),
+                # Shadow extent (dy + ~2*sigma) must stay inside the
+                # canvas margin left outside the plate (_shell_body_pad,
+                # 15px) — a larger reach ran off the image's right/bottom
+                # edge and got hard-truncated there, reading as a clipped
+                # / squared-off bottom-right corner while the top-left
+                # (where the shadow tucks under the plate) stayed soft.
                 shadow=self._SHELL_SHADOW,
-                shadow_dx=4.0,
-                shadow_dy=6.0,
-                shadow_sigma=7.0,
+                shadow_dx=2.0,
+                shadow_dy=3.0,
+                shadow_sigma=4.0,
                 shadow_radius=30.0,
             )
             if shell is not None:
+                shell = _unpremultiply_rgba(shell)
                 shell.alpha_composite(self._build_gloss(img_w, img_h))
                 return shell
 
@@ -489,31 +644,31 @@ class MenuHudSpriteRenderer:
         shadow = Image.new('RGBA', (img_w, img_h), (0, 0, 0, 0))
         sdraw = ImageDraw.Draw(shadow)
         sdraw.rounded_rectangle(
-            (self._PLATE_PAD + 6, self._PLATE_PAD + 8,
-             img_w - self._PLATE_PAD + 6, img_h - self._PLATE_PAD + 8),
+            (pad + 2, pad + 3,
+             img_w - pad + 2, img_h - pad + 3),
             radius=34,
             fill=self._SHELL_SHADOW,
         )
-        shadow = self._blur(shadow, 7)
+        shadow = self._blur(shadow, 4)
         layer.alpha_composite(shadow)
 
         draw = ImageDraw.Draw(layer)
-        outer = (self._PLATE_PAD, self._PLATE_PAD,
-                 img_w - self._PLATE_PAD, img_h - self._PLATE_PAD)
-        inner = (self._PLATE_PAD + 10, self._PLATE_PAD + 10,
-                 img_w - self._PLATE_PAD - 10, img_h - self._PLATE_PAD - 10)
+        outer = (pad, pad,
+                 img_w - pad, img_h - pad)
+        inner = (pad + 10, pad + 10,
+                 img_w - pad - 10, img_h - pad - 10)
         draw.rounded_rectangle(
             outer,
             radius=34,
-            fill=(10, 16, 24, 180),
-            outline=(110, 210, 240, 60),
+            fill=self._SHELL_FILL_OUTER,
+            outline=self._SHELL_EDGE_OUTER,
             width=1,
         )
         draw.rounded_rectangle(
             inner,
             radius=28,
-            fill=(14, 20, 30, 140),
-            outline=(160, 230, 255, 36),
+            fill=self._SHELL_FILL_INNER,
+            outline=self._SHELL_EDGE_INNER,
             width=1,
         )
         layer.alpha_composite(self._build_gloss(img_w, img_h))
@@ -527,7 +682,7 @@ class MenuHudSpriteRenderer:
              img_w - self._PLATE_PAD - 12,
              int(self._PLATE_PAD + (img_h - self._PLATE_PAD * 2) * 0.40)),
             radius=24,
-            fill=(200, 240, 255, 18),
+            fill=(255, 255, 255, 18),
         )
         return self._blur(gloss, 10)
 
@@ -634,6 +789,14 @@ class MenuCircleButtonRenderer:
         self._image_cache: Dict[Tuple[int, str, str, str, str, str], Image.Image] = {}
         self._font_cache: Dict[Tuple[str, int], ImageFont.FreeTypeFont] = {}
 
+    def _blur(self, img: Image.Image, radius: float) -> Image.Image:
+        if _gpu_blur is not None:
+            try:
+                return _gpu_blur(img, radius)
+            except Exception:
+                pass
+        return img.filter(ImageFilter.GaussianBlur(radius))
+
     def render(self, size: int, icon_text: str,
                border_hex: str, fill_hex: str, icon_hex: str,
                bg_hex: str) -> Image.Image:
@@ -679,6 +842,23 @@ class MenuCircleButtonRenderer:
                           outline=border_rgb + (255,))
             self._image_cache[key] = final
             return final
+
+        # Soft drop shadow behind the ring for a little depth — kept inside
+        # the existing (size,size) canvas (no expansion) so both callers
+        # (SAOCircleButton's subpixel composite and MenuBarGpuPainter's
+        # slot placement) keep positioning the sprite exactly as before.
+        # Both render paths sit on the real per-pixel-alpha GpuOverlayWindow
+        # (confirmed for MenuHudOverlay and MenuBarGpuPainter), not a
+        # chroma-key surface, so this soft alpha is safe here.
+        dy = max(2, size * 0.06) * scale
+        blur_r = max(2, size * 0.10) * scale
+        shadow_layer = Image.new('RGBA', (canvas, canvas), (0, 0, 0, 0))
+        ImageDraw.Draw(shadow_layer).ellipse(
+            (inset, inset + dy, canvas - inset - 1, canvas - inset - 1 + dy),
+            fill=(76, 122, 138, 26),
+        )
+        image.alpha_composite(self._blur(shadow_layer, blur_r))
+
         draw.ellipse(
             (inset, inset, canvas - inset - 1, canvas - inset - 1),
             outline=border_rgb + (255,),
