@@ -22559,6 +22559,137 @@ def test_vscode_api() -> None:
                and ns.runtime_context_snapshot().get("inDebugMode") is False
                and ns.runtime_context_snapshot().get("debugState")
                == "inactive")
+
+        # 长期计划相关小缺口: vscode.debug API 之前缺 addBreakpoints/
+        # removeBreakpoints/stopDebugging/onDidChangeActiveDebugSession/
+        # onDidReceiveDebugSessionCustomEvent/registerDebugAdapterDescriptorFactory/
+        # registerDebugAdapterTrackerFactory - Node extension host 早就有,
+        # Python 侧插件完全没有 (调用会直接 KeyError/TypeError)。
+        bp_changes = []
+        api["debug"]["onDidChangeBreakpoints"](lambda e: bp_changes.append(dict(e)))
+        bp_a, bp_b = object(), object()
+        api["debug"]["addBreakpoints"]([bp_a, bp_b])
+        _check("debug.addBreakpoints adds real breakpoints and fires onDidChangeBreakpoints",
+               api["debug"]["breakpoints"] == [bp_a, bp_b]
+               and len(bp_changes) == 1
+               and bp_changes[0]["added"] == [bp_a, bp_b]
+               and bp_changes[0]["removed"] == [])
+        api["debug"]["addBreakpoints"]([bp_a])
+        _check("debug.addBreakpoints does not duplicate an already-added breakpoint",
+               api["debug"]["breakpoints"] == [bp_a, bp_b]
+               and len(bp_changes) == 1)
+        api["debug"]["removeBreakpoints"]([bp_a])
+        _check("debug.removeBreakpoints removes a breakpoint and fires onDidChangeBreakpoints",
+               api["debug"]["breakpoints"] == [bp_b]
+               and len(bp_changes) == 2
+               and bp_changes[1]["removed"] == [bp_a]
+               and bp_changes[1]["added"] == [])
+        api["debug"]["removeBreakpoints"]([bp_b])
+
+        active_sessions = []
+        api["debug"]["onDidChangeActiveDebugSession"](lambda s: active_sessions.append(s))
+        stop_target = os.path.join(tmpdir, "debug_stop_target.py")
+        with open(stop_target, "w", encoding="utf-8") as fh:
+            fh.write("import time\ntime.sleep(5)\n")
+        stop_started = api["debug"]["startDebugging"](None, {
+            "type": "python", "name": "selftest-stop-debug", "program": stop_target,
+        })
+        stop_session_active = _wait_until(
+            lambda: api["debug"]["activeDebugSession"] is not None)
+        _check("debug.startDebugging fires onDidChangeActiveDebugSession with the new session",
+               stop_started is True and stop_session_active
+               and len(active_sessions) >= 1 and active_sessions[-1] is not None)
+        api["debug"]["stopDebugging"](api["debug"]["activeDebugSession"])
+        stop_session_cleared = _wait_until(
+            lambda: api["debug"]["activeDebugSession"] is None, timeout=3.0)
+        _check("debug.stopDebugging terminates a long-running session early and fires onDidChangeActiveDebugSession(None)",
+               stop_session_cleared
+               and active_sessions[-1] is None)
+
+        class _AdapterFactory:
+            def createDebugAdapterDescriptor(self, session, executable):
+                return None
+        adapter_disposable = api["debug"]["registerDebugAdapterDescriptorFactory"](
+            "selftest-adapter", _AdapterFactory())
+        tracker_disposable = api["debug"]["registerDebugAdapterTrackerFactory"](
+            "selftest-adapter", object())
+        _check("debug.registerDebugAdapterDescriptorFactory/TrackerFactory register without raising",
+               "selftest-adapter" in ns._debug_adapter_descriptor_factories
+               and "selftest-adapter" in ns._debug_adapter_tracker_factories)
+        adapter_disposable.dispose()
+        tracker_disposable.dispose()
+        _check("debug adapter factory disposables actually remove their registration",
+               "selftest-adapter" not in ns._debug_adapter_descriptor_factories
+               and not ns._debug_adapter_tracker_factories.get("selftest-adapter"))
+
+        replace_calls = []
+        hide_calls = []
+        clear_calls = []
+
+        class _OutputBridgeStub:
+            def show_output(self, channel_name, content):
+                replace_calls.append(("show", channel_name, content))
+
+            def clear_output(self, channel_name):
+                clear_calls.append(channel_name)
+
+            def hide_output(self, channel_name):
+                hide_calls.append(channel_name)
+
+            def dispose_output(self, channel_name):
+                pass
+        stub_bridge = _OutputBridgeStub()
+        from ai_editor.vscode_api import _OutputChannel
+        output_channel = _OutputChannel("selftest-output", stub_bridge)
+        output_channel.append("stale content")
+        output_channel.replace("fresh content")
+        _check("OutputChannel.replace clears then shows the new content, not appends",
+               output_channel._value == "fresh content"
+               and clear_calls == ["selftest-output"]
+               and replace_calls == [("show", "selftest-output", "fresh content")])
+        output_channel.hide()
+        _check("OutputChannel.hide calls the bridge's hide_output",
+               hide_calls == ["selftest-output"])
+
+        class _LinkProvider:
+            def provideTerminalLinks(self, context, token):
+                return []
+
+        class _NoLinkMethodProvider:
+            pass
+        link_disposable = api["window"]["registerTerminalLinkProvider"](_LinkProvider())
+        _check("registerTerminalLinkProvider registers a valid provider",
+               len(ns._terminal_link_providers) == 1)
+        link_disposable.dispose()
+        _check("terminal link provider disposal actually removes it",
+               len(ns._terminal_link_providers) == 0)
+        try:
+            api["window"]["registerTerminalLinkProvider"](_NoLinkMethodProvider())
+            link_provider_validated = False
+        except TypeError:
+            link_provider_validated = True
+        _check("registerTerminalLinkProvider rejects a provider missing provideTerminalLinks",
+               link_provider_validated)
+
+        class _ProfileProvider:
+            def provideTerminalProfile(self, token):
+                return None
+        profile_disposable = api["window"]["registerTerminalProfileProvider"](
+            "selftest-profile", _ProfileProvider())
+        _check("registerTerminalProfileProvider registers under its id",
+               "selftest-profile" in ns._terminal_profile_providers)
+        try:
+            api["window"]["registerTerminalProfileProvider"](
+                "selftest-profile", _ProfileProvider())
+            duplicate_profile_rejected = False
+        except ValueError:
+            duplicate_profile_rejected = True
+        _check("registerTerminalProfileProvider rejects a duplicate id",
+               duplicate_profile_rejected)
+        profile_disposable.dispose()
+        _check("terminal profile provider disposal actually removes it",
+               "selftest-profile" not in ns._terminal_profile_providers)
+
         scm.dispose()
         _check("scm.dispose clears provider runtime context",
                ns.runtime_context_snapshot().get("scmProvider") is None

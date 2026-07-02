@@ -2172,6 +2172,7 @@ class UIBridge(Protocol):
     # -- Output channel --
     def show_output(self, channel_name: str, content: str) -> None: ...
     def clear_output(self, channel_name: str) -> None: ...
+    def hide_output(self, channel_name: str) -> None: ...
     def dispose_output(self, channel_name: str) -> None: ...
 
     # -- Terminal --
@@ -2314,7 +2315,12 @@ class VscodeNamespace:
             Callable[[Dict[str, Any]], None]
         ] = None
         self._task_providers: Dict[str, Any] = {}
+        self._terminal_link_providers: List[Any] = []
+        self._terminal_profile_providers: Dict[str, Any] = {}
         self._debug_providers: Dict[str, Any] = {}
+        self._debug_adapter_descriptor_factories: Dict[str, Any] = {}
+        self._debug_adapter_tracker_factories: Dict[str, Any] = {}
+        self._debug_breakpoints: List[Any] = []
         self._task_executions: List[_TaskExecution] = []
         self._debug_sessions: List[_DebugSession] = []
         self._workspace_watchers: List[_FileSystemWatcher] = []
@@ -2324,6 +2330,9 @@ class VscodeNamespace:
         self._debug_start_emitter = EventEmitter()
         self._debug_terminate_emitter = EventEmitter()
         self._debug_breakpoints_emitter = EventEmitter()
+        self._debug_active_session_emitter = EventEmitter()
+        self._debug_custom_event_emitter = EventEmitter()
+        self._debug_active_session_last: Optional["_DebugSession"] = None
         self._config_change_emitter = EventEmitter()
         self._tools_change_emitter = EventEmitter()
         self._models_change_emitter = EventEmitter()
@@ -4566,6 +4575,8 @@ class VscodeNamespace:
                 "registerWebviewViewProvider": self._register_webview_view_provider,
                 "registerFileDecorationProvider": self._register_file_decoration_provider,
                 "createTerminal": self._create_terminal,
+                "registerTerminalLinkProvider": self._register_terminal_link_provider,
+                "registerTerminalProfileProvider": self._register_terminal_profile_provider,
                 "withProgress": lambda opts, task: task(_UIProgress(self._ui_bridge), CancellationToken.NONE),
                 "activeTextEditor": None,
                 "visibleTextEditors": [],
@@ -4872,6 +4883,36 @@ class VscodeNamespace:
             self._sync_window_state()
             self._window_active_terminal_emitter.fire(self._active_terminal)
             self._window_close_terminal_emitter.fire(terminal)
+
+    def _register_terminal_link_provider(self, provider: Any) -> Disposable:
+        # Registry-only: bookkeeping/validation matches the Node extension
+        # host's contract (see node_ext_host.js registerTerminalLinkProvider),
+        # but this Python-side terminal is a scrollback transcript, not a
+        # live-rendered pane a provider's links get spliced into — actually
+        # parsing terminal output for clickable links is a separate,
+        # larger feature not wired here.
+        if not hasattr(provider, "provideTerminalLinks"):
+            raise TypeError(
+                "TerminalLinkProvider must implement provideTerminalLinks")
+        self._terminal_link_providers.append(provider)
+        return Disposable(
+            lambda: self._terminal_link_providers.remove(provider)
+            if provider in self._terminal_link_providers else None)
+
+    def _register_terminal_profile_provider(
+            self, profile_id: str, provider: Any) -> Disposable:
+        normalized = str(profile_id or "")
+        if not normalized:
+            raise ValueError("Terminal profile provider id is required")
+        if not hasattr(provider, "provideTerminalProfile"):
+            raise TypeError(
+                "TerminalProfileProvider must implement provideTerminalProfile")
+        if normalized in self._terminal_profile_providers:
+            raise ValueError(
+                f'Terminal profile provider "{normalized}" already registered')
+        self._terminal_profile_providers[normalized] = provider
+        return Disposable(
+            lambda: self._terminal_profile_providers.pop(normalized, None))
 
     # ── workspace ──
 
@@ -6262,13 +6303,20 @@ class VscodeNamespace:
         if self._debug_api is None:
             self._debug_api = {
                 "registerDebugConfigurationProvider": self._register_debug_provider,
+                "registerDebugAdapterDescriptorFactory": self._register_debug_adapter_descriptor_factory,
+                "registerDebugAdapterTrackerFactory": self._register_debug_adapter_tracker_factory,
                 "startDebugging": self._start_debugging,
+                "stopDebugging": self._stop_debugging,
+                "addBreakpoints": self._add_breakpoints,
+                "removeBreakpoints": self._remove_breakpoints,
                 "activeDebugSession": None,
-                "breakpoints": [],
+                "breakpoints": self._debug_breakpoints,
                 "debuggers": [],
                 "onDidStartDebugSession": self._debug_start_emitter.event,
                 "onDidTerminateDebugSession": self._debug_terminate_emitter.event,
                 "onDidChangeBreakpoints": self._debug_breakpoints_emitter.event,
+                "onDidChangeActiveDebugSession": self._debug_active_session_emitter.event,
+                "onDidReceiveDebugSessionCustomEvent": self._debug_custom_event_emitter.event,
             }
         self._sync_debug_state()
         return self._debug_api
@@ -6280,6 +6328,57 @@ class VscodeNamespace:
         }
         return Disposable(lambda: self._debug_providers.pop(debug_type, None))
 
+    def _register_debug_adapter_descriptor_factory(
+            self, debug_type: str, factory: Any) -> Disposable:
+        key = str(debug_type or "")
+        self._debug_adapter_descriptor_factories[key] = factory
+        return Disposable(
+            lambda: self._debug_adapter_descriptor_factories.pop(key, None))
+
+    def _register_debug_adapter_tracker_factory(
+            self, debug_type: str, factory: Any) -> Disposable:
+        key = str(debug_type or "*")
+        entry = {"type": key, "factory": factory}
+        self._debug_adapter_tracker_factories.setdefault(key, []).append(entry)
+
+        def _dispose() -> None:
+            entries = self._debug_adapter_tracker_factories.get(key)
+            if entries and entry in entries:
+                entries.remove(entry)
+        return Disposable(_dispose)
+
+    def _add_breakpoints(self, breakpoints: Any) -> None:
+        added = []
+        for bp in list(breakpoints) if isinstance(breakpoints, (list, tuple)) else []:
+            if bp in self._debug_breakpoints:
+                continue
+            self._debug_breakpoints.append(bp)
+            added.append(bp)
+        if added:
+            if self._debug_api is not None:
+                self._debug_api["breakpoints"] = self._debug_breakpoints
+            self._debug_breakpoints_emitter.fire(
+                {"added": added, "removed": [], "changed": []})
+
+    def _remove_breakpoints(self, breakpoints: Any) -> None:
+        removed = []
+        for bp in list(breakpoints) if isinstance(breakpoints, (list, tuple)) else []:
+            if bp not in self._debug_breakpoints:
+                continue
+            self._debug_breakpoints.remove(bp)
+            removed.append(bp)
+        if removed:
+            if self._debug_api is not None:
+                self._debug_api["breakpoints"] = self._debug_breakpoints
+            self._debug_breakpoints_emitter.fire(
+                {"added": [], "removed": removed, "changed": []})
+
+    def _stop_debugging(self, session: Any = None) -> None:
+        targets = [session] if session is not None else list(self._debug_sessions)
+        for target in targets:
+            if isinstance(target, _DebugSession) and not target.terminated:
+                target.terminate()
+
     def _sync_debug_state(self) -> None:
         if self._debug_api is None:
             return
@@ -6287,6 +6386,9 @@ class VscodeNamespace:
         self._debug_api["activeDebugSession"] = active
         self._debug_api["debuggers"] = list(
             self._host.ext_points.all_contributions.get("debuggers", []))
+        if self._debug_active_session_last is not active:
+            self._debug_active_session_last = active
+            self._debug_active_session_emitter.fire(active)
 
     def _active_debug_session(self) -> Optional["_DebugSession"]:
         active = None
@@ -7018,10 +7120,26 @@ class _OutputChannel:
             except Exception:
                 pass
 
+    def replace(self, value: str) -> None:
+        self._value = str(value)
+        if self._bridge is not None:
+            try:
+                self._bridge.clear_output(self.name)
+                self._bridge.show_output(self.name, self._value)
+            except Exception:
+                pass
+
     def show(self, **kw) -> None:
         if self._bridge is not None:
             try:
                 self._bridge.show_output(self.name, self._value)
+            except Exception:
+                pass
+
+    def hide(self) -> None:
+        if self._bridge is not None:
+            try:
+                self._bridge.hide_output(self.name)
             except Exception:
                 pass
 
@@ -7742,6 +7860,10 @@ class _DebugSession:
         self.processId = getattr(process, "pid", None)
         self.exitStatus: Optional[Dict[str, Any]] = None
         self.terminated = False
+
+    def terminate(self) -> None:
+        if self.process and self.process.poll() is None:
+            self.process.terminate()
 
     def start_waiter(self, on_finish: Callable[[], None]) -> None:
         def _wait() -> None:
