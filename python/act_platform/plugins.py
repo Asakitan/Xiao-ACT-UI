@@ -1337,6 +1337,21 @@ class PluginContext:
         dc = getattr(overlay, "_dcomp", None)
         return bool(dc is not None and getattr(dc, "gl_interop_active", False))
 
+    def compositor_display_refresh_hz(self) -> int:
+        """The primary monitor's detected refresh rate the compositor's
+        own render/present loop is already paced to (clamped 60-240 Hz,
+        60 as a safe fallback when detection fails). Generic: any plugin
+        driving its own per-frame state (position, animation) off a
+        fixed-rate timer can use this instead of guessing/hardcoding a
+        cap — a timer capped below this rate updates its state less
+        often than the compositor presents, so frames repeat stale
+        values between updates (visible as judder/stutter on fast
+        motion, worse the bigger the gap from the real display rate)."""
+        overlay = self._get_compositor_overlay()
+        if overlay is None:
+            return 60
+        return int(getattr(overlay, "_default_fps", 60) or 60)
+
     def compositor_layer_shared_texture_active(self, name: str) -> bool:
         """Whether *name*'s layer is actually drawing from a registered
         GPU shared texture right now. Setting a handle can still fail

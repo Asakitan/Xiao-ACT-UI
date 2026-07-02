@@ -689,6 +689,9 @@ class _CSharpProxy:
     def compositor_layer_shared_texture_active(self, name):
         return bool(self._ctx.compositor_layer_shared_texture_active(str(name)))
 
+    def compositor_display_refresh_hz(self):
+        return int(self._ctx.compositor_display_refresh_hz())
+
     def set_compositor_layer_position(self, name, x, y):
         self._ctx.set_compositor_layer_position(str(name), int(x), int(y))
 
