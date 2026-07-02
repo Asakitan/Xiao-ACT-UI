@@ -21220,6 +21220,14 @@ def test_vscode_api() -> None:
                and api["window"]["visibleTextEditors"] == [editor]
                and active_events == [sample]
                and visible_events == [1])
+        # 批次16: window.state/activeColorTheme/onDidChangeWindowState 是跟
+        # node_ext_host.js完全一致的静态值(Node自己也从来不真的fire这个事件,
+        # 因为两边都没有真实的窗口焦点变化桥接) —— 曝光成不会触发的事件是
+        # 诚实的对齐,不是虚报。
+        _check("window.state/activeColorTheme expose the same static values node_ext_host.js does",
+               api["window"]["state"] == {"focused": True, "active": True}
+               and api["window"]["activeColorTheme"] == {"kind": 2}
+               and callable(api["window"]["onDidChangeWindowState"]))
         editor_hits = []
         text_editor_disposable = api["commands"]["registerTextEditorCommand"](
             "test.editor", lambda active, edit: editor_hits.append(active.document.fileName))

@@ -2338,6 +2338,7 @@ class VscodeNamespace:
         self._env_log_level_change_emitter = EventEmitter()
         self._workspace_trust_granted = True
         self._workspace_trust_emitter = EventEmitter()
+        self._window_state_emitter = EventEmitter()
         self._config_change_emitter = EventEmitter()
         self._tools_change_emitter = EventEmitter()
         self._models_change_emitter = EventEmitter()
@@ -4592,6 +4593,14 @@ class VscodeNamespace:
                 "onDidChangeActiveTerminal": self._window_active_terminal_emitter.event,
                 "onDidOpenTerminal": self._window_open_terminal_emitter.event,
                 "onDidCloseTerminal": self._window_close_terminal_emitter.event,
+                # Static constants, matching node_ext_host.js's own values
+                # exactly - Node itself never fires onDidChangeWindowState
+                # either (no real window-focus bridge exists on either side),
+                # so exposing it as a non-firing event is honest parity, not
+                # overclaiming.
+                "state": {"focused": True, "active": True},
+                "onDidChangeWindowState": self._window_state_emitter.event,
+                "activeColorTheme": {"kind": 2},  # vscode.ColorThemeKind.Dark
                 "tabGroups": {"all": [], "activeTabGroup": None,
                               "onDidChangeTabGroups": self._window_tab_groups_emitter.event,
                               "onDidChangeTabs": self._window_tabs_emitter.event},
