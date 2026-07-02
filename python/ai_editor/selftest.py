@@ -21240,6 +21240,62 @@ def test_vscode_api() -> None:
         _check("env.openExternal returns bool without launching browser",
                isinstance(ext_result, bool) and open_external_mock.call_count == 1)
 
+        # 继续挖小缺口(批次15): vscode.env/workspace/chat 里 node_ext_host.js
+        # 有而 Python 侧完全没有的字段/方法, 逐条核对后补上。
+        _check("env exposes shell/uiKind/logLevel/appHost/remoteName/isAppPortable",
+               api["env"]["shell"] == ("powershell.exe" if os.name == "nt" else "/bin/bash")
+               and api["env"]["uiKind"] == 1
+               and api["env"]["logLevel"] == 3
+               and api["env"]["appHost"] == "desktop"
+               and api["env"]["remoteName"] is None
+               and api["env"]["isAppPortable"] is False)
+        telemetry_events = []
+        telemetry_errors = []
+
+        class _TelemetrySender:
+            def sendEventData(self, event_name, data):
+                telemetry_events.append((event_name, data))
+
+            def sendErrorData(self, error, data):
+                telemetry_errors.append((error, data))
+        logger = api["env"]["createTelemetryLogger"](_TelemetrySender())
+        logger.logUsage("selftest.event", {"k": "v"})
+        logger.logError("boom", {"k": "v2"})
+        _check("env.createTelemetryLogger forwards logUsage/logError to the sender",
+               telemetry_events == [("selftest.event", {"k": "v"})]
+               and telemetry_errors == [("boom", {"k": "v2"})])
+        logger.dispose()
+        logger.logUsage("after-dispose", {})
+        _check("telemetry logger stops forwarding after dispose",
+               len(telemetry_events) == 1)
+
+        real_workspace_folder = api["workspace"]["workspaceFolders"][0]
+        inside_workspace_path = os.path.join(
+            real_workspace_folder["uri"].fs_path, "inside_workspace_selftest.py")
+        _check("workspace.getWorkspaceFolder resolves a uri inside the real workspace root, and None outside it",
+               api["workspace"]["getWorkspaceFolder"](Uri.file(inside_workspace_path)) is not None
+               and api["workspace"]["getWorkspaceFolder"](Uri.file(sample)) is None)
+        _check("workspace.isTrusted defaults to True (no trust prompt UI exists)",
+               api["workspace"]["isTrusted"] is True)
+        trust_events = []
+        api["workspace"]["onDidGrantWorkspaceTrust"](lambda _e=None: trust_events.append(1))
+        trust_result = api["workspace"]["requestWorkspaceTrust"]()
+        _check("workspace.requestWorkspaceTrust resolves True and does not re-fire when already trusted",
+               trust_result is True and trust_events == [])
+
+        chat_legacy_calls = []
+
+        class _LegacyContextProvider:
+            def provideContext(self, *a):
+                chat_legacy_calls.append(a)
+        legacy_chat_disposable = api["chat"]["registerChatContextProvider"](
+            {"scheme": "file"}, "selftest.legacy", _LegacyContextProvider())
+        _check("chat.registerChatContextProvider (legacy 3-arg form) registers under the legacy bucket",
+               "selftest.legacy" in api["chat"]["contextProviders"].get("legacy", {}))
+        legacy_chat_disposable.dispose()
+        _check("legacy chat context provider disposal removes it",
+               "selftest.legacy" not in api["chat"]["contextProviders"].get("legacy", {}))
+
         diagnostics = api["languages"]["createDiagnosticCollection"]("selftest")
         diagnostics.set("file:///tmp/a.py", [{"message": "bad"}])
         _check("languages.createDiagnosticCollection stores diagnostics",

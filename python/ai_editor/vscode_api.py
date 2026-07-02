@@ -2333,6 +2333,11 @@ class VscodeNamespace:
         self._debug_active_session_emitter = EventEmitter()
         self._debug_custom_event_emitter = EventEmitter()
         self._debug_active_session_last: Optional["_DebugSession"] = None
+        self._env_telemetry_change_emitter = EventEmitter()
+        self._env_shell_change_emitter = EventEmitter()
+        self._env_log_level_change_emitter = EventEmitter()
+        self._workspace_trust_granted = True
+        self._workspace_trust_emitter = EventEmitter()
         self._config_change_emitter = EventEmitter()
         self._tools_change_emitter = EventEmitter()
         self._models_change_emitter = EventEmitter()
@@ -4940,10 +4945,41 @@ class VscodeNamespace:
                 "onDidDeleteFiles": self._workspace_delete_files_emitter.event,
                 "onDidRenameFiles": self._workspace_rename_files_emitter.event,
                 "onDidChangeWorkspaceFolders": self._workspace_folders_change_emitter.event,
+                "getWorkspaceFolder": self._get_workspace_folder_for_uri,
+                "isTrusted": self._workspace_trust_granted,
+                "requestWorkspaceTrust": self._request_workspace_trust,
+                "onDidGrantWorkspaceTrust": self._workspace_trust_emitter.event,
                 "textDocuments": [],
             }
         self._sync_workspace_state()
         return self._workspace_api
+
+    def _get_workspace_folder_for_uri(self, uri: Any) -> Optional[Dict[str, Any]]:
+        target = _coerce_uri(uri)
+        if target is None:
+            return None
+        try:
+            target_path = os.path.abspath(target.fs_path)
+        except Exception:
+            return None
+        for folder in self._get_workspace_folders():
+            try:
+                folder_path = os.path.abspath(folder["uri"].fs_path)
+            except Exception:
+                continue
+            if target_path == folder_path or target_path.startswith(
+                    folder_path + os.sep):
+                return folder
+        return None
+
+    def _request_workspace_trust(self, *_a: Any, **_kw: Any) -> bool:
+        was_trusted = self._workspace_trust_granted
+        self._workspace_trust_granted = True
+        if self._workspace_api is not None:
+            self._workspace_api["isTrusted"] = True
+        if not was_trusted:
+            self._workspace_trust_emitter.fire(None)
+        return True
 
     def _sync_workspace_state(self) -> None:
         if self._workspace_api is None:
@@ -5435,6 +5471,7 @@ class VscodeNamespace:
     def _build_env(self) -> Dict[str, Any]:
         return {
             "appName": "SAO AI Editor",
+            "appHost": "desktop",
             "appRoot": self._get_root_path(),
             "language": "zh-cn",
             "uriScheme": "sao-editor",
@@ -5444,8 +5481,17 @@ class VscodeNamespace:
             "asExternalUri": lambda uri, *a, **kw: uri,
             "machineId": "sao-" + os.environ.get("COMPUTERNAME", "local"),
             "sessionId": "",
+            "remoteName": None,
             "isNewAppInstall": False,
+            "isAppPortable": False,
             "isTelemetryEnabled": False,
+            "shell": "powershell.exe" if os.name == "nt" else "/bin/bash",
+            "uiKind": 1,  # vscode.UIKind.Desktop
+            "logLevel": 3,  # vscode.LogLevel.Info
+            "onDidChangeTelemetryEnabled": self._env_telemetry_change_emitter.event,
+            "onDidChangeShell": self._env_shell_change_emitter.event,
+            "onDidChangeLogLevel": self._env_log_level_change_emitter.event,
+            "createTelemetryLogger": self._create_telemetry_logger,
         }
 
     def _read_clipboard(self) -> str:
@@ -5453,6 +5499,9 @@ class VscodeNamespace:
 
     def _write_clipboard(self, text: str) -> None:
         self._clipboard_text = str(text or "")
+
+    def _create_telemetry_logger(self, sender: Any = None, *_a: Any, **_kw: Any) -> "_TelemetryLogger":
+        return _TelemetryLogger(sender)
 
     def _open_external(self, uri: Any) -> bool:
         """Open a URI in the system default browser / handler."""
@@ -6840,6 +6889,9 @@ class VscodeNamespace:
             "registerChatResourceContextProvider": (
                 lambda provider_id, provider: self._register_chat_context_provider(
                     "resource", provider_id, provider)),
+            "registerChatContextProvider": (
+                lambda selector, provider_id, provider: self._register_chat_context_provider(
+                    "legacy", provider_id, provider)),
             "contextProviders": self._chat_context_providers,
         }
 
@@ -7096,6 +7148,36 @@ def _lm_message(role: int, content: str) -> Dict:
     """Legacy helper — use LanguageModelChatMessage class instead."""
     roles = {0: "system", 1: "user", 2: "assistant"}
     return {"role": roles.get(role, "user"), "content": content}
+
+
+class _TelemetryLogger:
+    """Mirrors node_ext_host.js's _createTelemetryLogger: a no-op-once-disposed
+    logger that forwards to a TelemetrySender-shaped object's sendEventData/
+    sendErrorData methods, if present."""
+
+    def __init__(self, sender: Any = None) -> None:
+        self._sender = sender if sender is not None else {}
+        self._disposed = False
+
+    def _send(self, method: str, *args: Any) -> None:
+        if self._disposed:
+            return
+        fn = (self._sender.get(method) if isinstance(self._sender, dict)
+              else getattr(self._sender, method, None))
+        if callable(fn):
+            try:
+                fn(*args)
+            except Exception:
+                pass
+
+    def logUsage(self, event_name: str, data: Any = None) -> None:
+        self._send("sendEventData", str(event_name or ""), data or {})
+
+    def logError(self, error_or_event_name: Any, data: Any = None) -> None:
+        self._send("sendErrorData", error_or_event_name, data or {})
+
+    def dispose(self) -> None:
+        self._disposed = True
 
 
 class _OutputChannel:
