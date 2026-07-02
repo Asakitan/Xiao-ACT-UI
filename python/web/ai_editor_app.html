@@ -32368,6 +32368,14 @@ window._onEditorEvent=function(event,data){
     renderQuickInputEvent(data);
     return;
   }
+  if(event==='node_runtime_install_progress'){
+    onNodeRuntimeInstallProgress(data);
+    return;
+  }
+  if(event==='node_runtime_install_done'){
+    onNodeRuntimeInstallDone(data);
+    return;
+  }
   if(event==='extension_task_lifecycle'){
     updateExtensionRuntimeTaskLifecycle(data);
     return;
@@ -48856,6 +48864,39 @@ async function installExtensionFromDir(){
 }
 window.installExtensionFromDir=installExtensionFromDir;
 
+// Node.js is a real local-machine dependency some installed extensions
+// need to run at all. Never downloaded silently - always asks first, then
+// runs the ~70MB download in the background and reports back via events.
+let _nodeRuntimeInstallToastId=0;
+async function offerNodeRuntimeInstall(reason){
+  const ok=confirm((reason||'This extension needs Node.js to run.')
+    +'\n\nDownload the Node.js runtime now (~70MB, one-time)?');
+  if(!ok)return false;
+  const res=await call('install_node_runtime');
+  if(!res||res.ok===false){
+    showToast('Could not start Node.js install: '+((res&&res.error)||'unknown error'),'error',3200);
+    return false;
+  }
+  showToast('Downloading Node.js runtime…','info',2000);
+  return true;
+}
+function onNodeRuntimeInstallProgress(data){
+  const total=Number(data&&data.total)||0;
+  const done=Number(data&&data.done)||0;
+  const pct=total>0?Math.round(done/total*100):null;
+  setStatus(pct!==null?('Downloading Node.js runtime… '+pct+'%'):'Downloading Node.js runtime…');
+}
+function onNodeRuntimeInstallDone(data){
+  if(data&&data.ok){
+    showToast('Node.js runtime installed. Extensions can now activate.','success',3000);
+    setStatus('Node.js runtime installed');
+    renderExtensionActivityBar();
+  }else{
+    showToast('Node.js install failed: '+((data&&data.error)||'unknown error'),'error',3600);
+    setStatus('Node.js install failed');
+  }
+}
+
 // Verify live activation of the JS extensions installed UNDER THIS PLATFORM
 // (never the global ~/.vscode set). Runs them for real on the live Node
 // host and reports per-extension pass/fail, so a user can confirm an
@@ -48864,6 +48905,10 @@ async function verifyInstalledExtensionActivation(){
   setStatus('Verifying installed extension activation…');
   const res=await call('verify_installed_extension_activation',true);
   if(!res||res.ok===false){
+    if(res&&res.needsNodeInstall){
+      await offerNodeRuntimeInstall(res.error);
+      return res;
+    }
     showToast('Extension activation check: '+((res&&res.error)||'Node extension host not running'),'error',3200);
     return res;
   }
@@ -48872,10 +48917,19 @@ async function verifyInstalledExtensionActivation(){
   const modal=document.createElement('div');modal.className='modal-bg';modal.classList.add('open');
   const rows=(res.extensions||[]).map(ext=>{
     const ok=ext.activated;
+    const degraded=!ok&&ext.degraded;
+    const marker=ok?'✓':(degraded?'⚠':'✗');
+    const markerColor=ok?'var(--fg-success,#98c379)':(degraded?'var(--fg-warning,#e5c07b)':'var(--fg-error,#f44)');
+    let detail='';
+    if(!ok){
+      detail=degraded
+        ?'<div style="font-size:11px;color:var(--fg-warning,#e5c07b);word-break:break-word">'+esc(ext.degraded.message)+'</div>'
+        :'<div style="font-size:11px;color:var(--fg-error,#f44);word-break:break-word">'+esc(ext.error||'activation failed')+'</div>';
+    }
     return '<div style="display:flex;gap:8px;align-items:baseline;padding:5px 0;border-bottom:1px solid color-mix(in srgb,var(--border) 50%,transparent)">'
-      +'<span style="flex-shrink:0;color:'+(ok?'var(--fg-success,#98c379)':'var(--fg-error,#f44)')+'">'+(ok?'✓':'✗')+'</span>'
+      +'<span style="flex-shrink:0;color:'+markerColor+'">'+marker+'</span>'
       +'<span style="flex:1;min-width:0"><div style="font-weight:600">'+esc(ext.displayName||ext.id)+' <span style="color:var(--fg-dim);font-weight:400;font-size:11px">'+esc(ext.version||'')+'</span></div>'
-      +(ok?'':'<div style="font-size:11px;color:var(--fg-error,#f44);word-break:break-word">'+esc(ext.error||'activation failed')+'</div>')
+      +detail
       +'</span></div>';
   }).join('');
   modal.innerHTML='<div class="modal"><h2>Extension Activation</h2>'

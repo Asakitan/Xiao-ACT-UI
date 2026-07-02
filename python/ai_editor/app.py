@@ -16758,6 +16758,29 @@ class AIEditorAPI:
             "categories": {},
         }
 
+    @staticmethod
+    def _extension_activation_degraded_reason(error: str) -> Optional[Dict[str, str]]:
+        """Classify a real, known-unfixable activation failure so the UI can
+        show an honest, specific status instead of a raw stack trace.
+
+        Confirmed by tracing the actual failing extension's own code
+        (2026-07-03): Microsoft's C# Dev Kit and C++ DevTools deliberately
+        refuse to run outside a genuine Microsoft product (their own
+        license text, not a bug here to bypass) - returning None for
+        anything else keeps the real error/stack trace visible for genuine
+        bugs. (ms-dotnettools.csharp's "No runtime dependencies found" -
+        the other environment-looking failure in this same extension pack -
+        turned out to be a real shim bug, not a missing runtime: fixed by
+        passing each extension's full raw package.json through as
+        packageJSON instead of a curated subset.)"""
+        text = str(error or "")
+        if "may be used only with" in text and "Visual Studio Code" in text:
+            return {
+                "kind": "requires_vscode",
+                "message": "Requires a genuine Microsoft Visual Studio Code/Codespaces environment",
+            }
+        return None
+
     def verify_installed_extension_activation(self, force: bool = True) -> Dict:
         """Live-activate + verify the JS extensions installed UNDER THIS
         PLATFORM (ai_editor_extensions / ~/.sao/extensions, per
@@ -16783,10 +16806,20 @@ class AIEditorAPI:
         self._ensure_engine()
         host = getattr(self, "_node_ext_host", None)
         if host is None or not getattr(host, "is_running", False):
+            pending_js = [
+                ext for ext in self._ext_host.registry.list_all()
+                if getattr(ext, "main", "") and getattr(ext, "enabled", True)]
+            from ai_editor.node_runtime import is_available as _node_available
+            needs_install = bool(pending_js) and not _node_available()
             return {
                 "ok": False,
                 "running": False,
-                "error": "Node extension host is not running (no JS extensions installed, or Node.js unavailable)",
+                "error": (
+                    f"{len(pending_js)} installed extension(s) need Node.js "
+                    "to run, but it isn't available on this machine."
+                    if needs_install else
+                    "Node extension host is not running (no JS extensions installed)"),
+                "needsNodeInstall": needs_install,
                 "extensions": [],
             }
         # JS extensions from the platform's OWN registry (already scanned
@@ -16811,12 +16844,14 @@ class AIEditorAPI:
             is_active = host.is_extension_activated(ext.id)
             if is_active:
                 activated_count += 1
+            error = "" if is_active else host.activation_error(ext.id)
             results.append({
                 "id": ext.id,
                 "displayName": getattr(ext, "display_name", "") or ext.id,
                 "version": getattr(ext, "version", ""),
                 "activated": is_active,
-                "error": "" if is_active else host.activation_error(ext.id),
+                "error": error,
+                "degraded": None if is_active else self._extension_activation_degraded_reason(error),
             })
         results.sort(key=lambda r: (r["activated"], r["id"].casefold()))
         return {
@@ -16827,6 +16862,51 @@ class AIEditorAPI:
             "failed": len(js_exts) - activated_count,
             "extensions": results,
         }
+
+    def get_node_runtime_status(self) -> Dict:
+        """Is Node.js available, and does anything installed actually need it."""
+        from ai_editor.node_runtime import get_node_path, is_available
+        self._ensure_engine()
+        pending_js = [
+            ext for ext in self._ext_host.registry.list_all()
+            if getattr(ext, "main", "") and getattr(ext, "enabled", True)]
+        return {
+            "available": is_available(),
+            "path": get_node_path() or "",
+            "pendingJsExtensions": len(pending_js),
+            "installing": bool(getattr(self, "_node_install_thread", None)
+                               and self._node_install_thread.is_alive()),
+        }
+
+    def install_node_runtime(self) -> Dict:
+        """Download the embedded node.exe (~70MB) in the background.
+
+        User-initiated only (confirmed via a dialog on the frontend first,
+        matching the same "ask before touching the local machine" pattern
+        the user asked for) - never runs on its own. Progress/completion
+        are pushed via node_runtime_install_progress/_done events since the
+        download can take a while and this must not block the UI thread."""
+        existing = getattr(self, "_node_install_thread", None)
+        if existing and existing.is_alive():
+            return {"ok": False, "started": False, "error": "Install already in progress"}
+
+        def _run() -> None:
+            from ai_editor.node_runtime import ensure_node
+
+            def _progress(done: int, total: int) -> None:
+                self._emit("node_runtime_install_progress", {"done": done, "total": total})
+            try:
+                path = ensure_node(progress=_progress)
+                self._emit("node_runtime_install_done", {"ok": True, "path": path})
+                self._try_start_node_extension_host()
+            except Exception as exc:
+                self._emit("node_runtime_install_done", {"ok": False, "error": str(exc)})
+
+        thread = threading.Thread(
+            target=_run, name="node-runtime-install", daemon=True)
+        self._node_install_thread = thread
+        thread.start()
+        return {"ok": True, "started": True}
 
     def set_extension_host_diagnostics(self, enabled: bool) -> Dict:
         """Persist and apply the default-off Node extension diagnostics flag."""

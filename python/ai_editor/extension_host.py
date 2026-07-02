@@ -59,6 +59,7 @@ class ExtensionDescription:
     extension_kind: str = "workspace"
     is_builtin: bool = False
     enabled: bool = True
+    raw_manifest: Dict[str, Any] = field(default_factory=dict)
 
     @classmethod
     def from_package_json(cls, pkg: Dict[str, Any],
@@ -81,6 +82,13 @@ class ExtensionDescription:
             contributes=dict(pkg.get("contributes", {})),
             extension_path=ext_path,
             extension_kind=_parse_kind(pkg.get("extensionKind")),
+            # Real VS Code exposes an extension's FULL, raw package.json via
+            # vscode.extensions.getExtension(id).packageJSON - keeping only
+            # a curated subset of fields broke ms-dotnettools.csharp, which
+            # reads its own package.json's "runtimeDependencies" (a real,
+            # if unusual, top-level manifest field we never modeled as a
+            # dataclass field) straight off context.extension.packageJSON.
+            raw_manifest=dict(pkg),
         )
 
     def to_dict(self) -> Dict[str, Any]:
@@ -2089,7 +2097,12 @@ class NodeExtensionHost:
 
     @staticmethod
     def extension_manifest(ext: ExtensionDescription) -> Dict[str, Any]:
-        return {
+        # Every raw package.json field first (runtimeDependencies, engines,
+        # etc. - whatever an extension's own code reads straight off
+        # context.extension.packageJSON), then our curated/normalized
+        # fields on top so they still win where we explicitly compute them.
+        manifest = dict(ext.raw_manifest)
+        manifest.update({
             "name": ext.name,
             "displayName": ext.display_name,
             "publisher": ext.publisher,
@@ -2103,7 +2116,8 @@ class NodeExtensionHost:
             "extensionDependencies": list(ext.extension_dependencies),
             "extensionKind": ext.extension_kind,
             "contributes": ext.contributes,
-        }
+        })
+        return manifest
 
     def register_extensions(self, extensions: List[ExtensionDescription]) -> int:
         """Sync known Node extension descriptions without activating them."""

@@ -18093,6 +18093,58 @@ console.log("command palette quick access helpers ok");
            "id:'workbench.extensions.action.verifyActivation'" in html
            and "function verifyInstalledExtensionActivation()" in html
            and "call('verify_installed_extension_activation',true)" in html)
+    # 2026-07-03: ms-dotnettools.csdevkit/ms-vscode.cpp-devtools's real
+    # activation failure (Microsoft's own license text) is not a shim gap -
+    # classify it so the UI shows an honest "needs environment" status
+    # instead of a raw stack trace. Exact error string captured from the
+    # real extensions' actual failures, not paraphrased.
+    _degraded_vscode = AIEditorAPI._extension_activation_degraded_reason(
+        "The C# Dev Kit extension may be used only with Microsoft Visual "
+        "Studio Code, vscode.dev, GitHub Codespaces from GitHub, Inc., and "
+        "successor Microsoft, GitHub, and other Microsoft affiliates' "
+        "products and services")
+    _check("csdevkit/cpp-devtools' real license-restriction error classifies as requires_vscode",
+           _degraded_vscode is not None and _degraded_vscode["kind"] == "requires_vscode")
+    _check("a genuine, unclassified activation error is left as None (real bug stays visible)",
+           AIEditorAPI._extension_activation_degraded_reason(
+               "Cannot read properties of undefined (reading 'isActive')") is None
+           and AIEditorAPI._extension_activation_degraded_reason("") is None
+           and AIEditorAPI._extension_activation_degraded_reason(
+               "No runtime dependencies found") is None)
+    _check("degraded reason surfaces through the activation-verify frontend rendering",
+           "const degraded=!ok&&ext.degraded;" in html
+           and "esc(ext.degraded.message)" in html
+           and "markerColor=ok?'var(--fg-success,#98c379)':(degraded?'var(--fg-warning,#e5c07b)'" in html)
+    # 2026-07-03: Node.js is a real local-machine dependency some installed
+    # extensions need. Never auto-downloaded silently - always a confirm
+    # dialog first, matching the pattern the user asked for generally
+    # ("if a stub needs something on the local machine, ask before
+    # installing it"). install_node_runtime()/get_node_runtime_status() are
+    # only checked structurally here (no real download in the automated
+    # suite); ensure_node() itself is pre-existing, pinned elsewhere.
+    _node_status_api = AIEditorAPI(_SettingsGui({"ai_editor": {}}))
+    _node_status = _node_status_api.get_node_runtime_status()
+    _check("get_node_runtime_status reports availability/path/pending count",
+           isinstance(_node_status.get("available"), bool)
+           and "pendingJsExtensions" in _node_status
+           and _node_status.get("installing") is False)
+    _check("install_node_runtime rejects a concurrent second install",
+           hasattr(_node_status_api, "install_node_runtime"))
+    _install_in_progress_api = AIEditorAPI(_SettingsGui({"ai_editor": {}}))
+    _fake_thread = threading.Thread(target=lambda: time.sleep(0.3))
+    _fake_thread.start()
+    _install_in_progress_api._node_install_thread = _fake_thread
+    _second_install = _install_in_progress_api.install_node_runtime()
+    _fake_thread.join()
+    _check("a second install_node_runtime call while one is running is rejected, not started twice",
+           _second_install.get("ok") is False and _second_install.get("started") is not True)
+    _check("Node.js runtime install is confirm-gated on the frontend, never silent",
+           "async function offerNodeRuntimeInstall(reason){" in html
+           and "confirm(" in html.split("async function offerNodeRuntimeInstall")[1][:400]
+           and "function onNodeRuntimeInstallProgress(data){" in html
+           and "function onNodeRuntimeInstallDone(data){" in html
+           and "if(res&&res.needsNodeInstall){" in html
+           and "await offerNodeRuntimeInstall(res.error);" in html)
     _check("extension default keybindings are dispatched with user-custom precedence (KB-003)",
            "function _rebuildExtensionKeybindingMap()" in html
            and "function dispatchExtensionKeybinding(combo)" in html
@@ -20891,6 +20943,32 @@ def test_extension_host() -> None:
     _check("retracting one extension never touches a sibling's contributions",
            any(c.get("command") == "selftest.sibling.cmd"
                for c in retract_host.ext_points.all_contributions["commands"]))
+
+    # 2026-07-03: extension_manifest() only forwarded a curated subset of
+    # package.json fields to the Node side, so context.extension.packageJSON
+    # was missing anything outside that subset. Real repro: ms-dotnettools.
+    # csharp reads its own package.json's "runtimeDependencies" straight off
+    # packageJSON and crashed with "No runtime dependencies found" the
+    # moment that field silently vanished. Fixed by keeping the full raw
+    # package.json (ExtensionDescription.raw_manifest) and merging our
+    # curated/normalized fields on top of it, not instead of it.
+    raw_manifest_desc = ExtensionDescription.from_package_json({
+        "name": "raw-manifest-fixture", "publisher": "selftest", "version": "1.0.0",
+        "runtimeDependencies": [{"id": "SomeNativeTool", "url": "https://example.test/tool.zip"}],
+        "engines": {"vscode": "^1.80.0"},
+        "activationEvents": ["onStartupFinished"],
+    }, "/fake/ext/path")
+    _check("ExtensionDescription captures the full raw package.json alongside curated fields",
+           raw_manifest_desc.raw_manifest.get("runtimeDependencies")
+           and raw_manifest_desc.raw_manifest["runtimeDependencies"][0]["id"] == "SomeNativeTool"
+           and raw_manifest_desc.raw_manifest.get("engines") == {"vscode": "^1.80.0"})
+    raw_manifest_out = NodeExtensionHost.extension_manifest(raw_manifest_desc)
+    _check("extension_manifest() forwards raw-only fields (runtimeDependencies/engines) "
+           "the same way real VS Code's context.extension.packageJSON would",
+           raw_manifest_out.get("runtimeDependencies")
+           and raw_manifest_out["runtimeDependencies"][0]["id"] == "SomeNativeTool"
+           and raw_manifest_out.get("engines") == {"vscode": "^1.80.0"}
+           and raw_manifest_out.get("activationEvents") == ["onStartupFinished"])
 
     node_event_host = NodeExtensionHost(node_path="", script_path="")
     file_decoration_events = []
