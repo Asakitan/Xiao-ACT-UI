@@ -4853,6 +4853,17 @@ pre.code-block { overflow:visible; }
   <span class="sb-item" id="status-model">-</span>
   <span class="sb-item" id="status-tokens">0 tok</span>
   <span class="sb-ext-right" id="sb-ext-right"></span>
+  <span class="sb-item" id="status-notifications" data-i18n-title="notifications" title="Notifications" style="cursor:pointer;position:relative" onclick="toggleNotificationCenter()">🔔<span id="status-notifications-badge" style="display:none;position:absolute;top:-2px;right:-6px;background:var(--fg-error,#f44);color:#fff;border-radius:8px;font-size:9px;line-height:1;padding:2px 4px;min-width:8px;text-align:center"></span></span>
+</div>
+
+<!-- Notification center popover -->
+<div id="notification-center" style="display:none;position:fixed;right:8px;bottom:30px;width:340px;max-height:60vh;background:var(--bg2);border:1px solid var(--border);border-radius:6px;box-shadow:0 6px 24px rgba(0,0,0,.4);z-index:400;flex-direction:column">
+  <div style="display:flex;align-items:center;padding:8px 12px;border-bottom:1px solid var(--border)">
+    <b data-i18n="notifications" style="font-size:12px">Notifications</b>
+    <span style="flex:1"></span>
+    <span class="sb-action" style="cursor:pointer;font-size:11px" data-i18n="clear_all" onclick="clearNotificationHistory()">Clear All</span>
+  </div>
+  <div id="notification-center-list" style="overflow:auto;flex:1;padding:4px 0"></div>
 </div>
 
 <!-- Find/Replace bar (hidden by default) -->
@@ -24545,10 +24556,78 @@ function _trimTerminalScrollback(el){
   }
   return {trimmedNodes,trimmedChars};
 }
+// ── Terminal link detection. Applied at the DOM level (text nodes only,
+// after ansiToHtml's escaping) so no raw output can inject markup. URLs
+// open externally; file paths (absolute or relative-with-extension, with
+// an optional :line suffix) open in the editor and jump to the line.
+const _TERMINAL_LINK_RE=/(https?:\/\/[^\s<>"'`)\]]+)|((?:[A-Za-z]:[\\/])(?:[^\s:*?"<>|]+[\\/])*[^\s:*?"<>|]+(?::\d+)?)|((?:[\w.-]+[\\/])+[\w.-]+\.\w{1,8}(?::\d+)?)/g;
+function _linkifyTerminalFragment(root){
+  const walker=document.createTreeWalker(root,NodeFilter.SHOW_TEXT,null);
+  const textNodes=[];
+  let node;
+  while((node=walker.nextNode()))textNodes.push(node);
+  textNodes.forEach(textNode=>{
+    if(textNode.parentElement&&textNode.parentElement.closest('a'))return;
+    const text=textNode.nodeValue||'';
+    _TERMINAL_LINK_RE.lastIndex=0;
+    if(!_TERMINAL_LINK_RE.test(text))return;
+    _TERMINAL_LINK_RE.lastIndex=0;
+    const frag=document.createDocumentFragment();
+    let last=0,match;
+    while((match=_TERMINAL_LINK_RE.exec(text))){
+      if(match.index>last)frag.appendChild(document.createTextNode(text.slice(last,match.index)));
+      const value=match[0];
+      const a=document.createElement('a');
+      a.className='terminal-link';
+      a.textContent=value;
+      a.href='#';
+      a.style.cssText='color:var(--fg-accent);text-decoration:underline;cursor:pointer';
+      if(match[1]){
+        a.title=value;
+        a.onclick=e=>{e.preventDefault();call('open_external_uri',value)};
+      }else{
+        a.title='Open in editor: '+value;
+        a.onclick=e=>{e.preventDefault();openTerminalPathLink(value)};
+      }
+      frag.appendChild(a);
+      last=match.index+value.length;
+    }
+    if(last<text.length)frag.appendChild(document.createTextNode(text.slice(last)));
+    textNode.parentNode.replaceChild(frag,textNode);
+  });
+}
+async function openTerminalPathLink(value){
+  let path=String(value||'');
+  let line=0;
+  const lineMatch=path.match(/:(\d+)$/);
+  if(lineMatch){line=parseInt(lineMatch[1],10);path=path.slice(0,-lineMatch[0].length)}
+  const isAbsolute=/^[A-Za-z]:[\\/]/.test(path);
+  const res=isAbsolute?await call('open_text_resource',path):await call('open_workspace_file',path.replace(/\\/g,'/'));
+  if(!res||res.error){showToast((res&&res.error)||t('workspace_load_failed'),'error',2400);return}
+  if(res.workspace&&typeof updateWorkspaceChrome==='function')updateWorkspaceChrome(res);
+  const opened=typeof openEditorOpenResult==='function'?openEditorOpenResult(res,path):null;
+  if(line>0){
+    const ta=$('editor-text');
+    if(ta){
+      const lines=ta.value.split('\n');
+      const idx=Math.min(Math.max(0,line-1),lines.length-1);
+      let pos=0;
+      for(let i=0;i<idx;i++)pos+=lines[i].length+1;
+      ta.selectionStart=ta.selectionEnd=pos;
+      ta.focus();updateCursorPos();
+      const style=getComputedStyle(ta);
+      const lh=parseFloat(style.lineHeight)||parseFloat(style.fontSize)*1.5;
+      ta.scrollTop=Math.max(0,(idx-8)*lh);
+    }
+  }
+  return opened;
+}
+window.openTerminalPathLink=openTerminalPathLink;
 function _appendTerminalHtml(el,html){
   if(!el)return;
   const started=typeof performance!=='undefined'&&performance.now?performance.now():Date.now();
   const frag=document.createElement('div');frag.innerHTML=html;
+  _linkifyTerminalFragment(frag);
   while(frag.firstChild)el.appendChild(frag.firstChild);
   const trimmed=_trimTerminalScrollback(el);
   const root=_terminalOutputRoot(el);
@@ -24564,6 +24643,7 @@ function _appendTerminalHtml(el,html){
   }
 }
 function logTerminal(text){const el=$('terminal-output');_appendTerminalHtml(el,ansiToHtml('> '+text)+'\n')}
+window.logTerminal=logTerminal;
 
 // ── Sidebar ──
 function extensionContainerIdFromPanel(panel){
@@ -49607,9 +49687,73 @@ init=async function(){
 window.toggleTheme=toggleTheme;
 
 // ── Toast notifications ──
+// ── Notification center: every toast is also recorded here so errors that
+// auto-dismiss after a few seconds can still be reviewed afterwards.
+const _NOTIFICATION_HISTORY_MAX=100;
+let _notificationHistory=[];
+let _notificationUnread=0;
+function _recordNotification(msg,type){
+  _notificationHistory.push({message:String(msg||''),type:String(type||'info'),at:Date.now()});
+  if(_notificationHistory.length>_NOTIFICATION_HISTORY_MAX)_notificationHistory.shift();
+  const center=$('notification-center');
+  if(center&&center.style.display!=='none'){renderNotificationCenter();return}
+  _notificationUnread++;
+  _updateNotificationBadge();
+}
+function _updateNotificationBadge(){
+  const badge=$('status-notifications-badge');if(!badge)return;
+  badge.style.display=_notificationUnread>0?'':'none';
+  badge.textContent=_notificationUnread>99?'99+':String(_notificationUnread);
+}
+function renderNotificationCenter(){
+  const list=$('notification-center-list');if(!list)return;
+  list.innerHTML='';
+  if(!_notificationHistory.length){
+    const empty=document.createElement('div');
+    empty.style.cssText='padding:14px 12px;color:var(--fg-dim);font-size:12px;text-align:center';
+    empty.textContent=t('no_notifications');
+    list.appendChild(empty);return;
+  }
+  _notificationHistory.slice().reverse().forEach(item=>{
+    const row=document.createElement('div');
+    row.style.cssText='padding:6px 12px;border-bottom:1px solid color-mix(in srgb,var(--border) 50%,transparent);font-size:12px';
+    const head=document.createElement('div');
+    head.style.cssText='display:flex;gap:6px;align-items:center;color:var(--fg-dim);font-size:10px';
+    const dot=document.createElement('span');
+    dot.style.cssText='width:7px;height:7px;border-radius:50%;flex-shrink:0;background:'+(item.type==='error'?'var(--fg-error,#f44)':item.type==='warning'?'var(--fg-warning,#e5c07b)':item.type==='success'?'var(--fg-success,#98c379)':'var(--fg-accent)');
+    const when=document.createElement('span');
+    const d=new Date(item.at);
+    when.textContent=('0'+d.getHours()).slice(-2)+':'+('0'+d.getMinutes()).slice(-2)+':'+('0'+d.getSeconds()).slice(-2);
+    head.appendChild(dot);head.appendChild(when);
+    const body=document.createElement('div');
+    body.style.cssText='margin-top:2px;word-break:break-word';
+    body.textContent=item.message;
+    row.appendChild(head);row.appendChild(body);
+    list.appendChild(row);
+  });
+}
+function toggleNotificationCenter(){
+  const center=$('notification-center');if(!center)return;
+  const opening=center.style.display==='none';
+  center.style.display=opening?'flex':'none';
+  if(opening){
+    _notificationUnread=0;
+    _updateNotificationBadge();
+    renderNotificationCenter();
+  }
+}
+function clearNotificationHistory(){
+  _notificationHistory=[];
+  _notificationUnread=0;
+  _updateNotificationBadge();
+  renderNotificationCenter();
+}
+window.toggleNotificationCenter=toggleNotificationCenter;
+window.clearNotificationHistory=clearNotificationHistory;
 function showToast(msg,type,duration,opts){
   type=type||'info';duration=duration||3000;
   opts=opts||{};
+  _recordNotification(msg,type);
   const container=$('toast-container');
   const toast=document.createElement('div');toast.className='toast '+type;
   let messageItems=[],messageOptions={},messageRequestId='';

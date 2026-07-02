@@ -18028,6 +18028,22 @@ console.log("command palette quick access helpers ok");
     # Live Playwright verified the full behavior (default combo fires
     # execute_command; user reassignment kills the default combo); this
     # static check pins the wiring so a refactor can't silently drop it.
+    # Notification center (toast history) + terminal link detection: both
+    # live-verified via Playwright (badge count/unread reset/clear; URL ->
+    # open_external_uri, path:line -> open_text_resource + cursor jump).
+    # These static pins keep a refactor from silently dropping the wiring.
+    _check("notification center records toast history with an unread badge",
+           "function _recordNotification(msg,type)" in html
+           and "_recordNotification(msg,type);" in html
+           and "function toggleNotificationCenter()" in html
+           and "function clearNotificationHistory()" in html
+           and 'id="status-notifications-badge"' in html
+           and 'id="notification-center-list"' in html)
+    _check("terminal output linkifies URLs and file paths at the DOM level",
+           "function _linkifyTerminalFragment(root)" in html
+           and "_linkifyTerminalFragment(frag);" in html
+           and "function openTerminalPathLink(value)" in html
+           and "call('open_external_uri',value)" in html)
     _check("extension default keybindings are dispatched with user-custom precedence (KB-003)",
            "function _rebuildExtensionKeybindingMap()" in html
            and "function dispatchExtensionKeybinding(combo)" in html
