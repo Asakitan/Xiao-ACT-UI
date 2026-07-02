@@ -198,6 +198,70 @@ _TOOLS: List[Dict[str, Any]] = [
 
 
 # =========================================================================
+# Prompts — MCP's own mechanism for teaching a connecting client how to
+# use this server, fetched via prompts/list + prompts/get instead of
+# living only in human-facing docs.
+# =========================================================================
+
+_HOW_TO_USE_PROMPT_TEXT = """\
+You are connected to the SAO AI Editor MCP server ("sao-ai-editor"). It \
+exposes a real, running instance of the editor - not a sandbox - so \
+file/terminal tools act on the user's actual project and chat/agent/\
+workflow tools use the user's actual configured LLM provider.
+
+When to use which tool group:
+
+- read_file / edit_file / list_files / search_files: your default for any \
+direct code change or lookup. Paths may be relative - they resolve \
+against the editor's OPEN WORKSPACE, not your own cwd.
+- run_terminal: run a real shell command in that same workspace. Prefer \
+the most direct command; don't chain unrelated steps into one call.
+- chat / chat_with_agent / run_workflow: use these instead of doing the \
+work yourself when the user specifically wants the EDITOR's own \
+configured model/agent/workflow to answer - e.g. "have your \
+code-reviewer agent look at this" should call chat_with_agent with \
+agent_id="code-reviewer", not a plain read_file + your own review. \
+Call list_agents / list_workflows first if you're not sure an id exists.
+- get_config / set_config: read or change the editor's own settings \
+(provider, model, temperature, etc.) - only call set_config when the \
+user explicitly asked to change a setting.
+- get_instructions / save_instructions: the editor's own custom \
+instructions (system/workspace/plugin scopes) - read these if you want \
+to understand project-specific conventions the user has already set up.
+- engine / sdk_dumper: SAO ACT platform-specific tools (process/plugin \
+introspection, game engine SDK extraction from a running process). Only \
+relevant if the user is actually working on that platform or reverse \
+engineering a running process - not general-purpose.
+- web_fetch: fetch a URL when the user needs live external data.
+- list_mcp_servers: see what OTHER MCP servers this editor is itself \
+connected to as a client, in case their tools are relevant too.
+
+General guidance: this is a real, stateful editor a human may be looking \
+at right now. Prefer small, explainable, reversible actions over broad \
+ones, and don't use engine/sdk_dumper/run_terminal for anything outside \
+what the user actually asked for.
+"""
+
+_PROMPTS: List[Dict[str, Any]] = [
+    {
+        "name": "how_to_use_sao_ai_editor",
+        "description": "How to use the SAO AI Editor's tools effectively - which "
+                        "tool group to reach for and when.",
+        "arguments": [],
+    },
+]
+
+
+def _prompt_messages(name: str) -> Optional[List[Dict[str, Any]]]:
+    if name == "how_to_use_sao_ai_editor":
+        return [{
+            "role": "user",
+            "content": {"type": "text", "text": _HOW_TO_USE_PROMPT_TEXT},
+        }]
+    return None
+
+
+# =========================================================================
 # Headless runtime — initializes AI Editor subsystems without GUI/pywebview
 # =========================================================================
 
@@ -244,6 +308,7 @@ class McpRuntime:
         self._mcp_manager = None
         self._config = None
         self._lock = threading.Lock()
+        self.workspace_root = ""
 
     def _ensure_engine(self) -> None:
         if self._engine is not None:
@@ -327,12 +392,108 @@ class McpRuntime:
             return {"error": traceback.format_exc(limit=5)}
 
 
+class LiveMcpRuntime:
+    """MCP runtime backed by the ALREADY-RUNNING AIEditorAPI instance, so
+    tool calls act on the real, live editor a user has open (its actual
+    workspace, provider config, agents/workflows, sub-MCP connections) -
+    not a second, disconnected headless one. This is what start_mcp_server()
+    uses; the standalone ``--mcp-server`` CLI flag still uses McpRuntime
+    (there is no running editor for it to attach to).
+
+    Exposes the same attribute surface _TOOL_HANDLERS already expects
+    (_engine/_registry/_agent_registry/_wf_registry/_wf_engine/_mcp_manager/
+    _gui/_config), each read live off the wrapped api so it stays correct
+    even if the user changes providers or reloads config while connected.
+    """
+
+    def __init__(self, api: Any) -> None:
+        self._api = api
+
+    def _ensure_engine(self) -> None:
+        self._api._ensure_engine()
+
+    @property
+    def workspace_root(self) -> str:
+        try:
+            return self._api._workspace_root()
+        except Exception:
+            return ""
+
+    @property
+    def _engine(self) -> Any:
+        return getattr(self._api, "_engine", None)
+
+    @property
+    def _registry(self) -> Any:
+        return getattr(self._api, "_registry", None)
+
+    @property
+    def _agent_registry(self) -> Any:
+        return getattr(self._api, "_agent_registry", None)
+
+    @property
+    def _wf_registry(self) -> Any:
+        return getattr(self._api, "_wf_registry", None)
+
+    @property
+    def _wf_engine(self) -> Any:
+        return getattr(self._api, "_wf_engine", None)
+
+    @property
+    def _mcp_manager(self) -> Any:
+        return getattr(self._api, "_mcp", None)
+
+    @property
+    def _gui(self) -> Any:
+        return _LiveGuiAdapter(self._api)
+
+    @property
+    def _config(self) -> Any:
+        engine = self._engine
+        return getattr(engine, "config", None) if engine is not None else None
+
+    def handle_tool(self, name: str, arguments: Dict[str, Any]) -> Any:
+        self._ensure_engine()
+        handler = _TOOL_HANDLERS.get(name)
+        if not handler:
+            return {"error": f"Unknown tool: {name}"}
+        try:
+            return handler(self, arguments)
+        except Exception:
+            return {"error": traceback.format_exc(limit=5)}
+
+
+class _LiveGuiAdapter:
+    """Thin ``rt._gui.settings``-shaped view over the live api's own
+    settings source, for the get_config/set_config tool handlers."""
+
+    def __init__(self, api: Any) -> None:
+        self._api = api
+
+    @property
+    def settings(self) -> Any:
+        from ai_editor.app import _resolve_settings
+        return _resolve_settings(getattr(self._api, "_gui_ref", None))
+
+
 # =========================================================================
 # Tool handler implementations
 # =========================================================================
 
+def _resolve_path(rt: "McpRuntime", raw: str) -> str:
+    """Resolve a tool-supplied path against the runtime's workspace root
+    when relative, so tools operate on the actual open project when this
+    server is running live inside the editor (not just the process CWD,
+    which is what a standalone headless --mcp-server has instead)."""
+    text = str(raw or "")
+    if os.path.isabs(text):
+        return text
+    root = getattr(rt, "workspace_root", "") or os.getcwd()
+    return os.path.abspath(os.path.join(root, text)) if text else root
+
+
 def _h_read_file(rt: McpRuntime, args: Dict[str, Any]) -> Any:
-    path = os.path.abspath(args.get("path", ""))
+    path = _resolve_path(rt, args.get("path", ""))
     start = int(args.get("start_line", 0))
     end = int(args.get("end_line", 0))
     try:
@@ -352,7 +513,7 @@ def _h_read_file(rt: McpRuntime, args: Dict[str, Any]) -> Any:
 
 
 def _h_edit_file(rt: McpRuntime, args: Dict[str, Any]) -> Any:
-    path = os.path.abspath(args.get("path", ""))
+    path = _resolve_path(rt, args.get("path", ""))
     content = args.get("content", "")
     start = int(args.get("start_line", 0))
     end = int(args.get("end_line", 0))
@@ -377,7 +538,7 @@ def _h_edit_file(rt: McpRuntime, args: Dict[str, Any]) -> Any:
 
 def _h_list_files(rt: McpRuntime, args: Dict[str, Any]) -> Any:
     import glob as _glob
-    path = os.path.abspath(args.get("path", "."))
+    path = _resolve_path(rt, args.get("path", "."))
     pattern = args.get("pattern", "")
     recursive = bool(args.get("recursive", False))
     limit = int(args.get("limit", 200))
@@ -414,7 +575,7 @@ def _h_search_files(rt: McpRuntime, args: Dict[str, Any]) -> Any:
     import re
     import glob as _glob
     query = args.get("query", "")
-    path = os.path.abspath(args.get("path", "."))
+    path = _resolve_path(rt, args.get("path", "."))
     pattern = args.get("pattern", "")
     case_sensitive = bool(args.get("case_sensitive", False))
     use_regex = bool(args.get("regex", False))
@@ -452,8 +613,8 @@ def _h_run_terminal(rt: McpRuntime, args: Dict[str, Any]) -> Any:
     try:
         kwargs: Dict[str, Any] = {"shell": True, "capture_output": True,
                                   "text": True, "timeout": timeout}
-        if cwd:
-            kwargs["cwd"] = os.path.abspath(cwd)
+        kwargs["cwd"] = _resolve_path(rt, cwd) if cwd else (
+            getattr(rt, "workspace_root", "") or None)
         result = subprocess.run(command, **kwargs)
         return {"exitCode": result.returncode,
                 "stdout": (result.stdout or "")[:16000],
@@ -859,7 +1020,14 @@ class McpServer:
             elif method == "resources/read":
                 _write_response(_make_error(req_id, -32601, "No resources available"))
             elif method == "prompts/list":
-                _write_response(_make_response(req_id, {"prompts": []}))
+                _write_response(_make_response(req_id, {"prompts": _PROMPTS}))
+            elif method == "prompts/get":
+                name = str(params.get("name", ""))
+                messages = _prompt_messages(name)
+                if messages is None:
+                    _write_response(_make_error(req_id, -32602, f"Unknown prompt: {name}"))
+                else:
+                    _write_response(_make_response(req_id, {"messages": messages}))
             elif method == "ping":
                 _write_response(_make_response(req_id, {}))
             elif req_id is not None:
@@ -912,9 +1080,10 @@ class McpServer:
 class McpHttpServer:
     """Minimal HTTP server for SSE transport mode."""
 
-    def __init__(self, port: int = 9820) -> None:
+    def __init__(self, port: int = 9820, runtime: Optional[Any] = None) -> None:
         self._port = port
-        self._runtime = McpRuntime()
+        self._runtime = runtime if runtime is not None else McpRuntime()
+        self._server = None
 
     def run(self) -> None:
         from http.server import HTTPServer, BaseHTTPRequestHandler
@@ -939,7 +1108,7 @@ class McpHttpServer:
                 if method == "initialize":
                     self._send_json(200, _make_response(req_id, {
                         "protocolVersion": _PROTOCOL_VERSION,
-                        "capabilities": {"tools": {"listChanged": False}},
+                        "capabilities": {"tools": {"listChanged": False}, "prompts": {}},
                         "serverInfo": {"name": _SERVER_NAME, "version": _SERVER_VERSION},
                     }))
                 elif method == "tools/list":
@@ -949,6 +1118,15 @@ class McpHttpServer:
                     arguments = params.get("arguments") or {}
                     result = runtime.handle_tool(name, arguments)
                     self._send_json(200, _make_response(req_id, _tool_result_content(result)))
+                elif method == "prompts/list":
+                    self._send_json(200, _make_response(req_id, {"prompts": _PROMPTS}))
+                elif method == "prompts/get":
+                    prompt_name = str(params.get("name", ""))
+                    messages = _prompt_messages(prompt_name)
+                    if messages is None:
+                        self._send_json(200, _make_error(req_id, -32602, f"Unknown prompt: {prompt_name}"))
+                    else:
+                        self._send_json(200, _make_response(req_id, {"messages": messages}))
                 elif method == "ping":
                     self._send_json(200, _make_response(req_id, {}))
                 else:
@@ -966,13 +1144,23 @@ class McpHttpServer:
                 _log(fmt % a)
 
         server = HTTPServer(("127.0.0.1", port), Handler)
-        _log(f"HTTP MCP server listening on http://127.0.0.1:{port}")
+        self._server = server
+        self._port = server.server_address[1]
+        _log(f"HTTP MCP server listening on http://127.0.0.1:{self._port}")
         try:
             server.serve_forever()
         except KeyboardInterrupt:
             _log("HTTP server stopped")
         finally:
             server.server_close()
+
+    @property
+    def port(self) -> int:
+        return self._port
+
+    def stop(self) -> None:
+        if self._server is not None:
+            self._server.shutdown()
 
 
 # =========================================================================

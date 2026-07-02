@@ -41769,6 +41769,103 @@ def test_webview_view_resolves_and_surfaces_real_html() -> None:
         uninstall_extension(ext_id)
 
 
+def test_live_mcp_server() -> None:
+    """2026-07-03: user wants their RUNNING editor - once started - usable
+    as an MCP server external CLI AI can connect to, distinct from the
+    pre-existing standalone ``--mcp-server`` CLI flag (ai_editor.mcp_server
+    .McpServer/McpRuntime), which builds a second, disconnected, headless
+    instance with no real workspace. AIEditorAPI.start_mcp_server() wraps
+    the LIVE api instance itself (mcp_server.LiveMcpRuntime) over real HTTP,
+    so tool calls act on what's actually open - proven here by resolving a
+    relative path against a fake workspace root and getting the real file
+    back, not something resolved against the test process's own cwd."""
+    print("── Live MCP server (2026-07-03) ──")
+    import urllib.request
+    from ai_editor.app import AIEditorAPI
+
+    workspace_dir = tempfile.mkdtemp(prefix="sao_live_mcp_workspace_")
+    try:
+        with open(os.path.join(workspace_dir, "marker.txt"), "w", encoding="utf-8") as fh:
+            fh.write("live mcp workspace marker\n")
+
+        api = AIEditorAPI(_SettingsGui({"ai_editor": {}}))
+        api._workspace_root = lambda: workspace_dir
+        no_status = api.get_mcp_server_status()
+        _check("MCP server reports not running before start_mcp_server is called",
+               no_status.get("running") is False and no_status.get("port") == 0)
+
+        start_result = api.start_mcp_server(port=0)
+        _check("start_mcp_server binds a real port and reports it back",
+               start_result.get("ok") is True and start_result.get("port", 0) > 0)
+        port = start_result.get("port", 0)
+
+        def _rpc(method: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+            body = json.dumps({"jsonrpc": "2.0", "id": 1, "method": method,
+                                "params": params or {}}).encode("utf-8")
+            req = urllib.request.Request(
+                f"http://127.0.0.1:{port}", data=body,
+                headers={"Content-Type": "application/json"})
+            with urllib.request.urlopen(req, timeout=5) as resp:
+                return json.loads(resp.read())
+
+        init = _rpc("initialize", {"clientInfo": {"name": "selftest", "version": "1"}})
+        _check("live server answers real JSON-RPC initialize over HTTP",
+               init.get("result", {}).get("serverInfo", {}).get("name") == "sao-ai-editor")
+
+        tools = _rpc("tools/list")
+        tool_names = {t["name"] for t in tools.get("result", {}).get("tools", [])}
+        _check("live server exposes the real, full tool set (not a stub subset)",
+               {"read_file", "edit_file", "chat_with_agent", "run_workflow",
+                "engine", "get_config"} <= tool_names)
+
+        read_result = _rpc("tools/call", {
+            "name": "read_file", "arguments": {"path": "marker.txt"}})
+        read_text = read_result["result"]["content"][0]["text"]
+        _check("a workspace-relative path resolves against the LIVE editor's "
+               "actual open workspace, not this test process's own cwd",
+               "live mcp workspace marker" in read_text, read_text[:300])
+
+        prompts = _rpc("prompts/list")
+        prompt_names = [p["name"] for p in prompts.get("result", {}).get("prompts", [])]
+        _check("live server exposes the how-to-use-these-tools prompt",
+               "how_to_use_sao_ai_editor" in prompt_names)
+        prompt_get = _rpc("prompts/get", {"name": "how_to_use_sao_ai_editor"})
+        prompt_text = prompt_get.get("result", {}).get(
+            "messages", [{}])[0].get("content", {}).get("text", "")
+        _check("the prompt actually teaches tool-group usage, not a placeholder",
+               "chat_with_agent" in prompt_text and "read_file" in prompt_text
+               and len(prompt_text) > 500)
+        _check("an unknown prompt name is a real error, not silently empty",
+               "error" in _rpc("prompts/get", {"name": "does-not-exist"}))
+
+        running_status = api.get_mcp_server_status()
+        _check("MCP server status reflects running=True with the real bound port",
+               running_status.get("running") is True and running_status.get("port") == port)
+
+        second_start = api.start_mcp_server(port=0)
+        _check("starting a second time while already running is rejected, not silently restarted",
+               second_start.get("ok") is False)
+
+        stop_result = api.stop_mcp_server()
+        _check("stop_mcp_server stops the real server", stop_result.get("ok") is True)
+        _check("MCP server status reflects running=False after stop",
+               api.get_mcp_server_status().get("running") is False)
+        _check("stopping an already-stopped server is a clean no-op error, not a crash",
+               api.stop_mcp_server().get("ok") is False)
+    finally:
+        shutil.rmtree(workspace_dir, ignore_errors=True)
+
+    html_path = os.path.join(
+        os.path.dirname(os.path.dirname(__file__)), "web", "ai_editor_app.html")
+    with open(html_path, "r", encoding="utf-8") as fh:
+        frontend_html = fh.read()
+    _check("MCP server start/stop is a real command-palette action, not silent/automatic",
+           "id:'sao.mcp.startServer'" in frontend_html
+           and "async function toggleLiveMcpServer(){" in frontend_html
+           and "call('start_mcp_server',0)" in frontend_html
+           and "call('stop_mcp_server')" in frontend_html)
+
+
 def test_node_vscode_api_shim_gaps() -> None:
     """2026-07-02: a real sweep of 17 genuinely-installed VS Code extensions
     (Python, Pylance, C++, PowerShell, Vue, Svelte, ChatGPT, cmake-tools...)
@@ -42223,6 +42320,7 @@ def main() -> None:
         ("Node vscode.* API Shim Gaps", test_node_vscode_api_shim_gaps),
         ("Install Extension Dir Persists Across Restart", test_install_extension_dir_persists_across_restart),
         ("Webview View Resolves And Surfaces Real HTML", test_webview_view_resolves_and_surfaces_real_html),
+        ("Live MCP Server", test_live_mcp_server),
         ("Real Extension Smoke", test_real_extension_smoke),
         ("Real Extension Live Theme Activation", test_real_extension_live_theme_activation),
         ("Frontend Health Parity Snapshot", test_frontend_health_parity_snapshot),

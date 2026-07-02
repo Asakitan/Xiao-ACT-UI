@@ -48960,6 +48960,26 @@ async function verifyInstalledExtensionActivation(){
 }
 window.verifyInstalledExtensionActivation=verifyInstalledExtensionActivation;
 
+// Expose THIS running editor - its real workspace/provider config/agents -
+// as an MCP server external CLI AI can connect to, distinct from the
+// standalone --mcp-server CLI flag (a second, disconnected instance).
+async function toggleLiveMcpServer(){
+  const status=await call('get_mcp_server_status').catch(()=>null);
+  if(status&&status.running){
+    const r=await call('stop_mcp_server');
+    showToast(r&&r.ok?'MCP server stopped':'Failed to stop MCP server','info',2400);
+    return r;
+  }
+  const r=await call('start_mcp_server',0);
+  if(r&&r.ok){
+    showToast('MCP server running on http://127.0.0.1:'+r.port+' - run this command again to stop it','success',5000);
+  }else{
+    showToast('Failed to start MCP server: '+((r&&r.error)||'unknown error'),'error',3200);
+  }
+  return r;
+}
+window.toggleLiveMcpServer=toggleLiveMcpServer;
+
 // EXT-03: Hardcoded recommended extensions for AI coding
 const RECOMMENDED_EXTENSIONS=[
   {id:'github.copilot',displayName:'GitHub Copilot',publisher:'GitHub',description:'AI pair programmer — code completions and chat powered by OpenAI models.',iconUrl:'',version:'',installed:false},
@@ -50012,6 +50032,7 @@ const COMMANDS=[
   {id:'workbench.action.quickOpen',label:'Go to File...',shortcut:'Ctrl+P',category:'Navigation',description:'Fuzzy-search workspace files by name and open one.',action:()=>openQuickOpenPicker()},
   {id:'workbench.action.findInFiles',label:'Search: Find in Files',shortcut:'Ctrl+Shift+F',category:'Search',description:'Search for text across all workspace files.',action:()=>openSearchSidebar()},
   {id:'workbench.extensions.action.verifyActivation',label:'Extensions: Verify Installed Extension Activation',shortcut:'',category:'Extensions',description:'Live-activate the JS extensions installed under this platform and report which succeeded.',action:()=>verifyInstalledExtensionActivation()},
+  {id:'sao.mcp.startServer',label:'MCP: Expose This Editor as an MCP Server',shortcut:'',category:'MCP',description:'Let external CLI AI (Claude Code, Codex CLI, etc.) connect to this running editor and use its tools.',action:()=>toggleLiveMcpServer()},
   {id:'workbench.action.tasks.runTask',label:'Tasks: Run Task...',shortcut:'',category:'Tasks',description:'Pick and run a task contributed by an installed extension.',action:()=>openTaskRunnerPicker()},
   {id:'workbench.action.tasks.terminate',label:'Tasks: Terminate Task',shortcut:'',category:'Tasks',description:'Cancel the currently running task, if any.',action:()=>cancelActiveTask()},
   {id:'workbench.view.debug',label:'View: Show Run and Debug',shortcut:'',category:'Debug',description:'Open the Run and Debug sidebar.',action:()=>{if(typeof switchSidebar==='function')switchSidebar('debug-runner')}},

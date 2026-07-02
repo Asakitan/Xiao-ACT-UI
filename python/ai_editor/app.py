@@ -16863,6 +16863,56 @@ class AIEditorAPI:
             "extensions": results,
         }
 
+    def get_mcp_server_status(self) -> Dict:
+        """Is this running editor currently exposed as an MCP server."""
+        server = getattr(self, "_mcp_http_server", None)
+        return {
+            "running": server is not None,
+            "port": getattr(server, "port", 0) if server is not None else 0,
+        }
+
+    def start_mcp_server(self, port: int = 0) -> Dict:
+        """Expose THIS running editor - its real workspace, provider config,
+        agents/workflows, sub-MCP connections - as an MCP server external
+        CLI AI (Claude Code, Codex CLI, etc.) can connect to over HTTP.
+
+        Distinct from the standalone ``--mcp-server`` CLI flag (ai_editor.
+        mcp_server.McpServer/McpRuntime), which spins up a second, headless,
+        disconnected instance with its own fresh engine/registry and no
+        workspace - useful for CI/automation, but not "my open editor".
+        This one wraps the live AIEditorAPI instance itself
+        (mcp_server.LiveMcpRuntime) so tool calls act on what's actually
+        open right now.
+        """
+        existing = getattr(self, "_mcp_http_server", None)
+        if existing is not None:
+            return {"ok": False, "error": "MCP server is already running", "port": existing.port}
+        self._ensure_engine()
+        from ai_editor.mcp_server import LiveMcpRuntime, McpHttpServer
+        runtime = LiveMcpRuntime(self)
+        server = McpHttpServer(port=port, runtime=runtime)
+        thread = threading.Thread(
+            target=server.run, name="mcp-http-server", daemon=True)
+        self._mcp_http_server = server
+        self._mcp_http_thread = thread
+        thread.start()
+        deadline = time.monotonic() + 3.0
+        while server.port == 0 and time.monotonic() < deadline:
+            time.sleep(0.02)
+        return {"ok": True, "port": server.port}
+
+    def stop_mcp_server(self) -> Dict:
+        server = getattr(self, "_mcp_http_server", None)
+        if server is None:
+            return {"ok": False, "error": "MCP server is not running"}
+        server.stop()
+        thread = getattr(self, "_mcp_http_thread", None)
+        if thread is not None:
+            thread.join(timeout=3.0)
+        self._mcp_http_server = None
+        self._mcp_http_thread = None
+        return {"ok": True}
+
     def get_node_runtime_status(self) -> Dict:
         """Is Node.js available, and does anything installed actually need it."""
         from ai_editor.node_runtime import get_node_path, is_available
