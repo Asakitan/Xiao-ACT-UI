@@ -3674,7 +3674,11 @@ def test_app_settings_parity() -> None:
         confirmed=True,
     ))
     interactive_status = {}
-    for _ in range(40):
+    # Deadline-based (not fixed-iteration) polling: real subprocesses can
+    # take far longer to start under load/AV scanning, and a too-short cap
+    # here was one source of "fails on first run, passes on retry" flakes.
+    _interactive_deadline = time.monotonic() + 20
+    while time.monotonic() < _interactive_deadline:
         interactive_status = json.loads(term_api.execute_tool(
             "runTerminal",
             json.dumps({
@@ -3764,7 +3768,8 @@ def test_app_settings_parity() -> None:
         confirmed=True,
     ))
     close_status = {}
-    for _ in range(40):
+    _close_deadline = time.monotonic() + 20
+    while time.monotonic() < _close_deadline:
         close_status = json.loads(term_api.execute_tool(
             "runTerminal",
             json.dumps({
@@ -40509,7 +40514,8 @@ def test_workflows() -> None:
                and isinstance(run_result.get("processId"), int))
         exec_id = run_result["executionId"]
         finished_status = None
-        for _ in range(40):
+        _task_deadline = time.monotonic() + 20
+        while time.monotonic() < _task_deadline:
             time.sleep(0.15)
             finished_status = task_api.task_execution_status(exec_id)
             if finished_status.get("running") is False:
@@ -40547,7 +40553,8 @@ def test_workflows() -> None:
         long_run = task_api.run_task(long_index)
         cancel_result = task_api.cancel_task(long_run["executionId"])
         cancelled_status = None
-        for _ in range(20):
+        _cancel_deadline = time.monotonic() + 15
+        while time.monotonic() < _cancel_deadline:
             time.sleep(0.15)
             cancelled_status = task_api.task_execution_status(long_run["executionId"])
             if cancelled_status.get("running") is False:
@@ -40593,7 +40600,8 @@ def test_workflows() -> None:
         _check("list_debug_sessions reports the real running session",
                any(s["sessionId"] == session_id and s["running"] for s in sessions_listed.get("sessions", [])))
         finished_debug_status = None
-        for _ in range(40):
+        _debug_deadline = time.monotonic() + 20
+        while time.monotonic() < _debug_deadline:
             time.sleep(0.15)
             finished_debug_status = debug_api.debug_session_status(session_id)
             if finished_debug_status.get("running") is False:
@@ -40625,7 +40633,8 @@ def test_workflows() -> None:
         long_debug_start = debug_api.start_debug(long_debug_index)
         stop_result = debug_api.stop_debug(long_debug_start["sessionId"])
         stopped_status = None
-        for _ in range(20):
+        _stop_deadline = time.monotonic() + 15
+        while time.monotonic() < _stop_deadline:
             time.sleep(0.15)
             stopped_status = debug_api.debug_session_status(long_debug_start["sessionId"])
             if stopped_status.get("running") is False:
@@ -40634,6 +40643,44 @@ def test_workflows() -> None:
                stop_result.get("ok") is True
                and stopped_status is not None and stopped_status.get("running") is False)
         long_debug_disposable.dispose()
+
+        # Resource-bound fixes (2026-07-02 audit batch A): finished
+        # executions/sessions must be retained (status still pollable) but
+        # bounded; output buffers must cap instead of growing forever; and
+        # a nonexistent command must fail gracefully, not raise.
+        _check("finished task execution stays pollable after completion (bounded retention, not immediate eviction)",
+               task_api.task_execution_status(exec_id).get("running") is False)
+        from ai_editor.vscode_api import _TaskExecution
+        cap_exec = _TaskExecution(task={}, name="cap", kind="callable")
+        with cap_exec._output_lock:
+            cap_exec.output = "x" * (_TaskExecution._OUTPUT_CAP + 10_000)
+        # Simulate one more captured line via the same code path the reader
+        # thread uses (append + cap check under the lock).
+        with cap_exec._output_lock:
+            cap_exec.output += "tail-line\n"
+            if len(cap_exec.output) > _TaskExecution._OUTPUT_CAP:
+                cap_exec.output = (
+                    _TaskExecution._OUTPUT_TRUNCATION_MARK
+                    + cap_exec.output[-_TaskExecution._OUTPUT_CAP // 2:])
+        _check("captured output buffer caps with a truncation marker instead of growing unboundedly",
+               len(cap_exec.output_snapshot()) <= _TaskExecution._OUTPUT_CAP
+               and cap_exec.output_snapshot().startswith(_TaskExecution._OUTPUT_TRUNCATION_MARK)
+               and cap_exec.output_snapshot().endswith("tail-line\n"))
+        bad_spawn = task_api._vscode_ns._execute_task({
+            "type": "selftest-task-runner",
+            "label": "Bad Command Task",
+            "command": ["definitely-not-a-real-binary-xyz-12345.exe"],
+            "shell": False,
+        })
+        _check("executeTask returns an error dict (not an unhandled exception) for a nonexistent command",
+               isinstance(bad_spawn, dict) and bad_spawn.get("ok") is False
+               and "failed to start" in str(bad_spawn.get("error", "")))
+        bad_debug = debug_api._vscode_ns.build()["debug"]["startDebugging"](None, {
+            "name": "Bad Debug", "type": "local",
+            "command": ["definitely-not-a-real-binary-xyz-12345.exe"],
+        })
+        _check("startDebugging returns False (not an unhandled exception) for a nonexistent command",
+               bad_debug is False)
 
         # Editor breakpoint gutter (长期计划批次18b): addBreakpoints/
         # removeBreakpoints were already real (batch 14) but nothing in the

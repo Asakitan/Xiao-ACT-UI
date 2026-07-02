@@ -6394,7 +6394,10 @@ class VscodeNamespace:
                 "ok": False,
                 "error": "Task has no runnable local command. Provide command/args, execution, or run().",
             }
-        process = self._spawn_local_process(**spec, capture_output=True)
+        try:
+            process = self._spawn_local_process(**spec, capture_output=True)
+        except (OSError, subprocess.SubprocessError) as exc:
+            return {"ok": False, "error": f"Task process failed to start: {exc}"}
         execution = _TaskExecution(
             task=resolved,
             name=str(spec.get("name") or "task"),
@@ -6589,7 +6592,12 @@ class VscodeNamespace:
         spec = self._debug_command_spec(config)
         if not spec:
             return False
-        process = self._spawn_local_process(**spec, capture_output=True)
+        try:
+            process = self._spawn_local_process(**spec, capture_output=True)
+        except (OSError, subprocess.SubprocessError):
+            # Nonexistent program/command must not blow up an extension's
+            # startDebugging() call - False is the API's failure contract.
+            return False
         session = _DebugSession(
             name=str(config.get("name") or spec.get("name") or "debug"),
             debug_type=str(config.get("type") or "local"),
@@ -6604,6 +6612,16 @@ class VscodeNamespace:
         return True
 
     def _on_debug_finished(self, session: "_DebugSession") -> None:
+        # Bounded retention (NOT immediate removal like _on_task_finished):
+        # the frontend's final debug_session_status poll and the Run/Debug
+        # sidebar's session history both still read terminated sessions.
+        # Without a cap, every session ever run - plus its captured output
+        # buffer - stays alive for the app's whole lifetime.
+        terminated = [s for s in self._debug_sessions if s.terminated and s is not session]
+        if len(terminated) > 32:
+            drop = set(id(s) for s in terminated[:len(terminated) - 32])
+            self._debug_sessions = [
+                s for s in self._debug_sessions if id(s) not in drop]
         self._sync_debug_state()
         self._debug_terminate_emitter.fire(session)
 
@@ -8016,26 +8034,21 @@ class _FileSystemWatcher:
             self._on_dispose()
 
 
-class _TaskExecution:
-    def __init__(self, task: Any, name: str, kind: str,
-                 process: Optional[subprocess.Popen] = None) -> None:
-        self.id = str(uuid.uuid4())
-        self.task = task
-        self.name = name
-        self.kind = kind
-        self.process = process
-        self.processId = getattr(process, "pid", None)
-        self.exitStatus: Optional[Dict[str, Any]] = None
-        self.state = {"isInteractedWith": False}
-        # Incrementally captured stdout+stderr (merged) for "process"-kind
-        # tasks, so the AI Editor's Task Runner UI can show real output
-        # instead of the previous DEVNULL-everything behavior. Read under
-        # _output_lock since a background reader thread appends to it.
+class _CapturedOutputMixin:
+    """Shared incremental stdout+stderr capture for task executions and
+    debug sessions. The buffer is capped: a chatty long-running process
+    used to grow the string unboundedly (with quadratic reallocation cost
+    on every `+=`); past the cap the oldest half is dropped and a marker
+    prepended, so status polls always see the most recent output."""
+
+    _OUTPUT_CAP = 400_000
+    _OUTPUT_TRUNCATION_MARK = "[... earlier output truncated ...]\n"
+
+    def _init_output_capture(self, process: Optional[subprocess.Popen]) -> None:
         self.output = ""
         self._output_lock = threading.Lock()
         if process is not None and getattr(process, "stdout", None) is not None:
-            threading.Thread(
-                target=self._read_output, daemon=True).start()
+            threading.Thread(target=self._read_output, daemon=True).start()
 
     def _read_output(self) -> None:
         try:
@@ -8044,6 +8057,10 @@ class _TaskExecution:
                     break
                 with self._output_lock:
                     self.output += line
+                    if len(self.output) > self._OUTPUT_CAP:
+                        self.output = (
+                            self._OUTPUT_TRUNCATION_MARK
+                            + self.output[-self._OUTPUT_CAP // 2:])
         except Exception:
             pass
 
@@ -8055,10 +8072,26 @@ class _TaskExecution:
         if self.process and self.process.poll() is None:
             self.process.terminate()
 
+
+class _TaskExecution(_CapturedOutputMixin):
+    def __init__(self, task: Any, name: str, kind: str,
+                 process: Optional[subprocess.Popen] = None) -> None:
+        self.id = str(uuid.uuid4())
+        self.task = task
+        self.name = name
+        self.kind = kind
+        self.process = process
+        self.processId = getattr(process, "pid", None)
+        self.exitStatus: Optional[Dict[str, Any]] = None
+        self.terminated = False
+        self.state = {"isInteractedWith": False}
+        self._init_output_capture(process)
+
     def start_waiter(self, on_finish: Callable[[], None]) -> None:
         def _wait() -> None:
             code = self.process.wait() if self.process else 0
             self.exitStatus = {"code": code}
+            self.terminated = True
             on_finish()
         threading.Thread(target=_wait, daemon=True).start()
 
@@ -8071,11 +8104,12 @@ class _TaskExecution:
             except Exception:
                 code = 1
             self.exitStatus = {"code": code}
+            self.terminated = True
             on_finish()
         threading.Thread(target=_run, daemon=True).start()
 
 
-class _DebugSession:
+class _DebugSession(_CapturedOutputMixin):
     def __init__(self, name: str, debug_type: str,
                  configuration: Dict[str, Any],
                  process: subprocess.Popen,
@@ -8089,32 +8123,7 @@ class _DebugSession:
         self.processId = getattr(process, "pid", None)
         self.exitStatus: Optional[Dict[str, Any]] = None
         self.terminated = False
-        # Real captured stdout+stderr (merged), same pattern as
-        # _TaskExecution - the Run/Debug console needs actual output, not
-        # a hollow shell, and _spawn_local_process now passes
-        # capture_output=True for debug sessions too.
-        self.output = ""
-        self._output_lock = threading.Lock()
-        if process is not None and getattr(process, "stdout", None) is not None:
-            threading.Thread(target=self._read_output, daemon=True).start()
-
-    def _read_output(self) -> None:
-        try:
-            for line in iter(self.process.stdout.readline, ""):
-                if not line:
-                    break
-                with self._output_lock:
-                    self.output += line
-        except Exception:
-            pass
-
-    def output_snapshot(self) -> str:
-        with self._output_lock:
-            return self.output
-
-    def terminate(self) -> None:
-        if self.process and self.process.poll() is None:
-            self.process.terminate()
+        self._init_output_capture(process)
 
     def start_waiter(self, on_finish: Callable[[], None]) -> None:
         def _wait() -> None:

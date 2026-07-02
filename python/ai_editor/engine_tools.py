@@ -1234,6 +1234,12 @@ def _terminal_job_snapshot(job_id: str, since_seq: int = 0) -> Dict[str, Any]:
                 job["state"] = "done" if polled == 0 else "error"
                 job["durationMs"] = int((time.monotonic() - float(job.get("started") or time.monotonic())) * 1000)
                 job["finishedWall"] = time.time()
+                # This poll-side exit detection races the waiter thread's
+                # _terminal_finish_job; whoever flips the state first must
+                # also release the PTY wrapper temp script, because the
+                # loser early-returns on the already-terminal state and
+                # would otherwise leave the file behind forever.
+                _cleanup_pty_temp_script(job)
         _terminal_prune_jobs_locked()
         chunks = [
             dict(chunk) for chunk in job.get("chunks", [])

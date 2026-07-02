@@ -619,10 +619,19 @@ def load_manifest_chat_providers() -> List[Dict[str, Any]]:
         except Exception:
             continue
         for entry in pdata.get("chatProviders") or []:
-            if not isinstance(entry, dict) or not str(entry.get("id") or "").strip():
+            if not isinstance(entry, dict):
+                continue
+            raw_id = str(entry.get("id") or "").strip()
+            # Same file-safe-identifier contract as agents.py's
+            # _validate_agent_id: a manifest-supplied id must never be able
+            # to smuggle path segments (provider ids can end up in
+            # persisted per-provider state paths downstream).
+            if (not raw_id or raw_id != os.path.basename(raw_id)
+                    or any(sep in raw_id for sep in ("/", "\\"))
+                    or ".." in raw_id):
                 continue
             declared = dict(entry)
-            declared["id"] = f"{pname}.{declared['id']}"
+            declared["id"] = f"{pname}.{raw_id}"
             providers.append(declared)
     return providers
 

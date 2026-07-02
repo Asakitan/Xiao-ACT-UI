@@ -962,6 +962,7 @@ def load_mcp_configs(settings_get: Callable = None) -> List[McpServerConfig]:
     seen_ids: set[str] = set()
     discovery_enabled = True
     normalized_autostart = False
+    has_mcp_settings = False
     collision_behavior = "first"
 
     # From settings

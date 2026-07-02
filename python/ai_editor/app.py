@@ -2311,12 +2311,15 @@ class _AIEditorUIBridge:
 # ---------------------------------------------------------------------------
 
 _GIT_EXECUTABLE_CACHE: Dict[str, Any] = {"resolved": False, "path": None}
+_GIT_EXECUTABLE_LOCK = threading.Lock()
 
 
 def _git_executable() -> Optional[str]:
     if not _GIT_EXECUTABLE_CACHE["resolved"]:
-        _GIT_EXECUTABLE_CACHE["path"] = shutil.which("git")
-        _GIT_EXECUTABLE_CACHE["resolved"] = True
+        with _GIT_EXECUTABLE_LOCK:
+            if not _GIT_EXECUTABLE_CACHE["resolved"]:
+                _GIT_EXECUTABLE_CACHE["path"] = shutil.which("git")
+                _GIT_EXECUTABLE_CACHE["resolved"] = True
     return _GIT_EXECUTABLE_CACHE["path"]
 
 
@@ -2429,6 +2432,8 @@ class AIEditorAPI:
         self._engine: Optional[LLMEngine] = None
         self._registry: Optional[ToolRegistry] = None
         self._controller: Optional[ChatController] = None
+        self._ensure_engine_lock = threading.Lock()
+        self._engine_init_done = False
         self._window = None  # set after window creation
         self._ready = threading.Event()
         self._delta_buf: List[str] = []
@@ -3139,8 +3144,25 @@ class AIEditorAPI:
     # ── Init ──
 
     def _ensure_engine(self) -> None:
-        if self._controller is not None:
+        # Double-checked locking: every JS bridge method calls this, and two
+        # concurrent calls (e.g. two UI actions racing at startup) used to
+        # both see _controller is None and each build a full LLMEngine/
+        # ToolRegistry/McpManager - the loser's MCP connections leaked with
+        # no shutdown. The fast path checks a completion flag set at the
+        # very END of init, so a concurrent caller can never return early
+        # while another thread is still mid-initialization.
+        if self._engine_init_done:
             return
+        with self._ensure_engine_lock:
+            if self._engine_init_done or self._controller is not None:
+                # _controller check preserves the old semantics for a
+                # partially-failed init: don't build a second engine.
+                self._engine_init_done = True
+                return
+            self._ensure_engine_impl()
+            self._engine_init_done = True
+
+    def _ensure_engine_impl(self) -> None:
         config = self._load_config_obj()
         self._engine = LLMEngine(config)
         self._registry = ToolRegistry()
@@ -9683,6 +9705,7 @@ class AIEditorAPI:
         if not hasattr(execution, "id"):
             return {"error": "Task did not start"}
         self._task_runner_executions[execution.id] = execution
+        self._prune_finished_executions(self._task_runner_executions)
         return {
             "executionId": execution.id,
             "name": execution.name,
@@ -9690,12 +9713,28 @@ class AIEditorAPI:
             "processId": execution.processId,
         }
 
+    @staticmethod
+    def _prune_finished_executions(executions: Dict[str, Any],
+                                   keep_finished: int = 32) -> None:
+        """Bounded retention: finished executions must stay queryable for a
+        while (the frontend's final status poll and history views read
+        them), but without a cap the dict - and each execution's captured
+        output buffer - grows for the whole app lifetime."""
+        finished = [key for key, item in executions.items()
+                    if getattr(item, "exitStatus", None) is not None]
+        for key in finished[:-keep_finished] if len(finished) > keep_finished else []:
+            executions.pop(key, None)
+
     def task_execution_status(self, execution_id: str) -> Dict:
         """Task Runner: poll a running/finished task's captured output
         (stdout+stderr merged) and exit state."""
         execution = self._task_runner_executions.get(str(execution_id or ""))
         if execution is None:
             return {"error": "Unknown task execution"}
+        # `terminated` is set AFTER exitStatus in the waiter thread, so
+        # running=False guarantees exitCode is already readable (the old
+        # `exitStatus is None` check had a window where the reverse held).
+        running = not getattr(execution, "terminated", False)
         exit_status = execution.exitStatus
         output_fn = getattr(execution, "output_snapshot", None)
         return {
@@ -9703,7 +9742,7 @@ class AIEditorAPI:
             "name": execution.name,
             "kind": execution.kind,
             "processId": execution.processId,
-            "running": exit_status is None,
+            "running": running,
             "output": output_fn() if callable(output_fn) else "",
             "exitCode": exit_status.get("code") if isinstance(exit_status, dict) else None,
         }
@@ -10563,6 +10602,13 @@ class AIEditorAPI:
             return
 
         self._node_ext_host = host
+        # Interpreter exit (including an unhandled crash unwinding) must not
+        # leave the Node subprocess orphaned - _shutdown_node_extension_host
+        # is otherwise only called on the explicit window-close path.
+        if not getattr(self, "_node_ext_host_atexit_registered", False):
+            self._node_ext_host_atexit_registered = True
+            import atexit
+            atexit.register(self._shutdown_node_extension_host_quiet)
         self._vscode_ns.set_language_provider_request_callback(
             self._request_node_language_provider)
         self._vscode_ns.set_file_decoration_request_callback(
@@ -11555,6 +11601,13 @@ class AIEditorAPI:
             "event": "file_decoration_changed",
             "change": change,
         })
+
+    def _shutdown_node_extension_host_quiet(self) -> None:
+        """atexit-safe wrapper: never raise during interpreter teardown."""
+        try:
+            self._shutdown_node_extension_host()
+        except Exception:
+            pass
 
     def _shutdown_node_extension_host(self) -> None:
         """Stop the Node extension host if running."""
