@@ -349,17 +349,27 @@ def action_button(parent: tk.Misc, text: str, command: Optional[Callable[[], Any
     return _RoundedButton(parent, text, command, kind=kind, **kwargs)
 
 
-def dropdown_button(parent: tk.Misc, text: str, items: Iterable[Any], *, kind: str = "normal") -> tk.Button:
+def dropdown_button(parent: tk.Misc, text: str, items: Iterable[Any], *, kind: str = "normal",
+                    menu_bg: Optional[str] = None, menu_fg: Optional[str] = None,
+                    menu_active_bg: Optional[str] = None, menu_active_fg: Optional[str] = None,
+                    **button_kwargs) -> tk.Button:
     """聚合按钮：点击弹出条目菜单，把同排过密的相似动作收进一个父按钮。
 
     ``items`` 为 ``(label, command)`` 序列；条目为 ``'-'``（或 label 为 '-'）时
-    插入分隔线。菜单配色走面板调色板，主题切换无需重建。
+    插入分隔线。默认菜单配色走面板调色板，主题切换无需重建；``menu_*`` 参数可
+    显式覆盖(供带自有品牌配色的面板使用，如 Workshop 的白金皮肤)。其余
+    ``button_kwargs``(fill/fill_hover/border/fg/canvas_bg/active...) 原样透传给
+    ``action_button``。返回的按钮挂了 ``_sao_dropdown_menu`` 活引用，调用方可以
+    在数据变化时直接 ``btn._sao_dropdown_menu.delete(0, 'end')`` 重建条目，不需要
+    整个按钮重建。
     """
-    btn = action_button(parent, f'{text} ▾', None, kind=kind)
+    btn = action_button(parent, f'{text} ▾', None, kind=kind, **button_kwargs)
     menu = tk.Menu(
         btn, tearoff=0,
-        bg=_pc('control_bg', '#fafbfb'), fg=_pc('value_fg', ui._SAO_PANEL_VALUE_FG),
-        activebackground=_accent(kind), activeforeground=_pc('active_fg', '#ffffff'),
+        bg=menu_bg if menu_bg is not None else _pc('control_bg', '#fafbfb'),
+        fg=menu_fg if menu_fg is not None else _pc('value_fg', ui._SAO_PANEL_VALUE_FG),
+        activebackground=menu_active_bg if menu_active_bg is not None else _accent(kind),
+        activeforeground=menu_active_fg if menu_active_fg is not None else _pc('active_fg', '#ffffff'),
         relief='flat', bd=0, font=FONT_BODY,
     )
     for entry in items or []:

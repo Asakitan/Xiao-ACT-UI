@@ -38,6 +38,7 @@ from gui_modules.sao_panel_ui import (
 )
 from gui_modules.sao_panel_components import (
     action_button as _sao_action_button,
+    dropdown_button as _sao_dropdown_button,
     rounded_panel as _sao_rounded_panel,
     sao_scrollbar as _sao_scrollbar,
     status_badge as _sao_status_badge,
@@ -219,6 +220,33 @@ def _wg_badge(parent, text, *, fill, border, fg):
 
 def _wg_scrollbar(parent, command):
     return _sao_scrollbar(parent, command, track_bg=_WG_BODY_BG, thumb=_WG_BORDER)
+
+
+def _wg_dropdown(parent, text, items, *, active: bool = False):
+    """Gold-skinned aggregate dropdown (按游戏/按标签 filters use this)."""
+    fill, fill_hover, border, fg = _WG_CARD_BG, _WG_GOLD_SOFT, _WG_BORDER, _WG_TEXT
+    return _sao_dropdown_button(
+        parent, text, items, fill=fill, fill_hover=fill_hover, border=border, fg=fg,
+        canvas_bg=_WG_BODY_BG, radius=6, padx=8, pady=3, active=active,
+        active_fill=_WG_GOLD, active_fg='#FFFFFF', active_border=_WG_GOLD,
+        menu_bg=_WG_CARD_BG, menu_fg=_WG_TEXT, menu_active_bg=_WG_GOLD, menu_active_fg='#FFFFFF',
+    )
+
+
+def _bind_mousewheel_recursive(widget, canvas):
+    """Bind ``<MouseWheel>`` on ``widget`` and every descendant so scrolling
+    works no matter which child (card, label, badge...) is under the cursor —
+    Tk only delivers the wheel event to the exact widget the pointer is over,
+    it doesn't bubble up to the scrollable canvas by itself.
+    """
+    def _on_wheel(e):
+        canvas.yview_scroll(int(-1 * (e.delta / 120)), 'units')
+    try:
+        widget.bind('<MouseWheel>', _on_wheel)
+    except tk.TclError:
+        return
+    for child in widget.winfo_children():
+        _bind_mousewheel_recursive(child, canvas)
 
 
 def _wg_search_bar(parent, var):
@@ -482,6 +510,12 @@ class WorkshopPanel:
         self._per_page = 30
         self._total = 0
         self._zoom = 1.0
+        self._game_filter = ''
+        self._tag_filter = ''
+        self._game_ids_agg: dict[str, int] = {}
+        self._tags_agg: dict[str, int] = {}
+        self._game_filter_btn: Optional[Any] = None
+        self._tag_filter_btn: Optional[Any] = None
         self._resize_start: Optional[tuple] = None
         self._active_tab = 'store'
         self._tab_buttons: dict[str, Any] = {}
@@ -506,6 +540,7 @@ class WorkshopPanel:
         self._list_frame: Optional[tk.Frame] = None
         self._local_frame: Optional[tk.Frame] = None
         self._local_list: Optional[tk.Frame] = None
+        self._local_canvas: Optional[tk.Canvas] = None
 
     def show(self) -> None:
         if self._win is None or not self._exists():
@@ -662,6 +697,10 @@ class WorkshopPanel:
         _wg_button(zoom_frame, '−', self._zoom_out, kind='ghost', small=True).pack(side='left', padx=2)
         _wg_button(zoom_frame, '+', self._zoom_in, kind='ghost', small=True).pack(side='left', padx=2)
 
+        self._filter_frame = tk.Frame(parent, bg=_WG_BODY_BG)
+        self._filter_frame.pack(fill='x', padx=14, pady=(0, 4))
+        self._render_filters()
+
         body = tk.Frame(parent, bg=_WG_BODY_BG)
         body.pack(fill='both', expand=True)
         canvas = tk.Canvas(body, bg=_WG_BODY_BG, highlightthickness=0, bd=0)
@@ -677,6 +716,59 @@ class WorkshopPanel:
         scrollbar.pack(side='right', fill='y', padx=(0, 4), pady=(4, 0))
         canvas.bind('<MouseWheel>', lambda e: canvas.yview_scroll(int(-1 * (e.delta / 120)), 'units'))
         self._canvas = canvas
+
+    def _render_filters(self):
+        """按游戏/按标签筛选下拉，条目和计数来自最近一次 catalog() 响应里的
+        game_ids/tags 聚合(见 _on_loaded)。首次(数据还没到)只有"全部"一项。
+        """
+        parent = getattr(self, '_filter_frame', None)
+        if parent is None:
+            return
+        for w in parent.winfo_children():
+            w.destroy()
+
+        def _game_items():
+            items = [('全部游戏', lambda: self._set_game_filter(''))]
+            for gid, count in sorted(self._game_ids_agg.items(), key=lambda kv: -kv[1]):
+                items.append((f'{gid} ({count})', lambda g=gid: self._set_game_filter(g)))
+            return items
+
+        def _tag_items():
+            items = [('全部标签', lambda: self._set_tag_filter(''))]
+            for tag, count in sorted(self._tags_agg.items(), key=lambda kv: -kv[1]):
+                items.append((f'{tag} ({count})', lambda t=tag: self._set_tag_filter(t)))
+            return items
+
+        game_label = f'游戏: {self._game_filter}' if self._game_filter else '按游戏'
+        tag_label = f'标签: {self._tag_filter}' if self._tag_filter else '按标签'
+        self._game_filter_btn = _wg_dropdown(parent, game_label, _game_items(),
+                                             active=bool(self._game_filter))
+        self._game_filter_btn.pack(side='left', padx=(0, 4))
+        self._tag_filter_btn = _wg_dropdown(parent, tag_label, _tag_items(),
+                                            active=bool(self._tag_filter))
+        self._tag_filter_btn.pack(side='left', padx=(0, 4))
+        if self._game_filter or self._tag_filter:
+            _wg_button(parent, '清除筛选', self._clear_filters,
+                      kind='ghost', small=True).pack(side='left')
+
+    def _set_game_filter(self, game_id: str):
+        self._game_filter = game_id
+        self._page = 1
+        self._render_filters()
+        self._load_catalog()
+
+    def _set_tag_filter(self, tag: str):
+        self._tag_filter = tag
+        self._page = 1
+        self._render_filters()
+        self._load_catalog()
+
+    def _clear_filters(self):
+        self._game_filter = ''
+        self._tag_filter = ''
+        self._page = 1
+        self._render_filters()
+        self._load_catalog()
 
     def _build_local_tab(self, parent: tk.Frame):
         toolbar = tk.Frame(parent, bg=_WG_BODY_BG)
@@ -701,6 +793,7 @@ class WorkshopPanel:
         canvas.pack(side='left', fill='both', expand=True, padx=(14, 0), pady=(4, 0))
         scrollbar.pack(side='right', fill='y', padx=(0, 4), pady=(4, 0))
         canvas.bind('<MouseWheel>', lambda e: canvas.yview_scroll(int(-1 * (e.delta / 120)), 'units'))
+        self._local_canvas = canvas
 
     def _build_publish_tab(self, parent: tk.Frame):
         outer = tk.Frame(parent, bg=_WG_BODY_BG)
@@ -876,12 +969,15 @@ class WorkshopPanel:
             try:
                 query = self._search_var.get().strip()
                 result = client.catalog(search=query, page=self._page,
-                                        per_page=self._per_page)
+                                        per_page=self._per_page,
+                                        game_id=self._game_filter, tag=self._tag_filter)
                 if isinstance(result, dict) and result.get('ok') is not False:
                     plugins = result.get('plugins') or []
                     total = _finite_int(result.get('total'), len(plugins), lo=0)
-                    self.root.after(0, lambda p=plugins, t=total:
-                                   self._on_loaded(p, t))
+                    game_ids = result.get('game_ids') if isinstance(result.get('game_ids'), dict) else {}
+                    tags = result.get('tags') if isinstance(result.get('tags'), dict) else {}
+                    self.root.after(0, lambda p=plugins, t=total, g=game_ids, tg=tags:
+                                   self._on_loaded(p, t, g, tg))
                 else:
                     err = str((result or {}).get('error', 'Unknown error'))
                     self.root.after(0, lambda e=err: self._on_error(e))
@@ -891,13 +987,21 @@ class WorkshopPanel:
 
         threading.Thread(target=_fetch, daemon=True).start()
 
-    def _on_loaded(self, plugins: list, total: int):
+    def _on_loaded(self, plugins: list, total: int, game_ids: dict | None = None,
+                  tags: dict | None = None):
         self._loading = False
         self._plugins = list(plugins)
         self._total = total
         if self._status_dot is not None:
             self._status_dot.configure(fg=_WG_GREEN)
         self._status_var.set(f'{total} plugins available')
+        # game_ids/tags 聚合是覆盖全量 catalog 算的(不受当前筛选影响，见
+        # workshop_routes.catalog())，用来填充下拉菜单选项，跟着每次响应刷新。
+        if game_ids is not None:
+            self._game_ids_agg = dict(game_ids)
+        if tags is not None:
+            self._tags_agg = dict(tags)
+        self._render_filters()
         self._render_grid(plugins)
         self._render_pagination()
 
@@ -941,6 +1045,11 @@ class WorkshopPanel:
             self._render_store_card(self._grid_frame, plugin, idx // cols, idx % cols, card_w, z)
         for c in range(cols):
             self._grid_frame.columnconfigure(c, weight=1, uniform='wscard')
+        # 卡片内容(标题/描述/徽章/按钮)铺满了画布可见区域——鼠标滚轮事件只会
+        # 发给指针正下方的那个具体控件，不会自动冒泡到外层 canvas，不递归绑定
+        # 的话悬停在卡片上滚轮就是失灵的，只有画布本身露出的窄边才响应。
+        if self._canvas is not None:
+            _bind_mousewheel_recursive(self._grid_frame, self._canvas)
 
     def _render_store_card(self, parent, plugin, row, col, card_w, z):
         pid = str(plugin.get('plugin_id') or '')
@@ -1107,6 +1216,8 @@ class WorkshopPanel:
         self._status_var.set(f'{len(self._local_plugins)} user plugins')
         for idx, plugin in enumerate(self._local_plugins):
             self._render_local_card(parent, plugin, idx)
+        if self._local_canvas is not None:
+            _bind_mousewheel_recursive(parent, self._local_canvas)
 
     def _render_local_card(self, parent, plugin: dict, idx: int):
         pid = str(plugin.get('id') or '')
