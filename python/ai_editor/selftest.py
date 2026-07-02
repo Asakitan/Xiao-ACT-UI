@@ -41494,6 +41494,12 @@ function activate(context) {
         const cancelErr = new vscode.CancellationError();
         result.cancellationError = { isError: cancelErr instanceof Error, message: cancelErr.message };
 
+        result.chatEditingSessionActionOutcome = {
+            accepted: vscode.ChatEditingSessionActionOutcome.Accepted,
+            rejected: vscode.ChatEditingSessionActionOutcome.Rejected,
+            saved: vscode.ChatEditingSessionActionOutcome.Saved,
+        };
+
         let detachedFireResult = null;
         const emitter = new vscode.EventEmitter();
         emitter.event((data) => { detachedFireResult = data; });
@@ -41600,6 +41606,10 @@ module.exports = { activate };
                 ce = result.get("cancellationError") or {}
                 _check("vscode.CancellationError is a real Error with the real message",
                        ce.get("isError") is True and ce.get("message") == "Canceled")
+                ceao = result.get("chatEditingSessionActionOutcome") or {}
+                _check("vscode.ChatEditingSessionActionOutcome has the real Accepted/Rejected/Saved values "
+                       "(root cause of GitHub.copilot-chat's real activation crash)",
+                       ceao.get("accepted") == 1 and ceao.get("rejected") == 2 and ceao.get("saved") == 3)
                 _check("EventEmitter.fire stays correctly bound even called via a bare detached reference",
                        (result.get("eventEmitterDetachedFire") or {}).get("ok") is True)
                 tl = result.get("telemetryLogger") or {}
