@@ -6386,6 +6386,32 @@ class VscodeNamespace:
         }
         return Disposable(lambda: self._debug_providers.pop(debug_type, None))
 
+    def _fetch_debug_configurations(self, folder: Any = None) -> List[Dict[str, Any]]:
+        """Not part of the public vscode.debug API (real VS Code reads these
+        from launch.json) - this app has no launch.json, so the Run/Debug
+        sidebar needs a way to list what registered
+        DebugConfigurationProviders can offer. Mirrors _fetch_tasks's
+        provider-aggregation shape."""
+        configs: List[Dict[str, Any]] = []
+        for debug_type, entry in list(self._debug_providers.items()):
+            provider = entry.get("provider") if isinstance(entry, dict) else None
+            if provider is None:
+                continue
+            if hasattr(provider, "provideDebugConfigurations"):
+                provided = provider.provideDebugConfigurations(folder)
+            elif hasattr(provider, "provide_debug_configurations"):
+                provided = provider.provide_debug_configurations(folder)
+            else:
+                provided = None
+            for config in list(provided or []):
+                if not isinstance(config, dict):
+                    continue
+                normalized = dict(config)
+                normalized.setdefault("type", debug_type)
+                normalized.setdefault("name", f"{debug_type} debug")
+                configs.append(normalized)
+        return configs
+
     def _register_debug_adapter_descriptor_factory(
             self, debug_type: str, factory: Any) -> Disposable:
         key = str(debug_type or "")
@@ -6477,7 +6503,7 @@ class VscodeNamespace:
         spec = self._debug_command_spec(config)
         if not spec:
             return False
-        process = self._spawn_local_process(**spec)
+        process = self._spawn_local_process(**spec, capture_output=True)
         session = _DebugSession(
             name=str(config.get("name") or spec.get("name") or "debug"),
             debug_type=str(config.get("type") or "local"),
@@ -7977,6 +8003,28 @@ class _DebugSession:
         self.processId = getattr(process, "pid", None)
         self.exitStatus: Optional[Dict[str, Any]] = None
         self.terminated = False
+        # Real captured stdout+stderr (merged), same pattern as
+        # _TaskExecution - the Run/Debug console needs actual output, not
+        # a hollow shell, and _spawn_local_process now passes
+        # capture_output=True for debug sessions too.
+        self.output = ""
+        self._output_lock = threading.Lock()
+        if process is not None and getattr(process, "stdout", None) is not None:
+            threading.Thread(target=self._read_output, daemon=True).start()
+
+    def _read_output(self) -> None:
+        try:
+            for line in iter(self.process.stdout.readline, ""):
+                if not line:
+                    break
+                with self._output_lock:
+                    self.output += line
+        except Exception:
+            pass
+
+    def output_snapshot(self) -> str:
+        with self._output_lock:
+            return self.output
 
     def terminate(self) -> None:
         if self.process and self.process.poll() is None:

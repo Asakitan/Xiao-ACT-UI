@@ -40463,6 +40463,84 @@ def test_workflows() -> None:
                and cancelled_status is not None and cancelled_status.get("running") is False)
         long_disposable.dispose()
 
+        # Run/Debug sidebar (长期计划批次18a): vscode.debug backend
+        # (registerDebugConfigurationProvider/startDebugging/stopDebugging)
+        # was already real, but this app has no launch.json so there was no
+        # way to list what configs are runnable, and _DebugSession never
+        # captured output (same DEVNULL gap _spawn_local_process had for
+        # tasks, fixed the same way: opt-in capture_output=True just for
+        # the debug spawn site, not shared with the task path's own flag).
+        debug_api = AIEditorAPI(_SettingsGui({"ai_editor": {}}))
+        debug_api._ensure_engine()
+        debug_target = os.path.join(tmpdir, "debug_target.py")
+        with open(debug_target, "w", encoding="utf-8") as fh:
+            fh.write("print('debug line one')\nprint('debug line two')\n")
+
+        class _SelftestDebugProvider:
+            def provideDebugConfigurations(self, folder):
+                return [{
+                    "name": "Selftest Debug",
+                    "program": debug_target,
+                    "python": py_exe,
+                }]
+        debug_disposable = debug_api._vscode_ns.build()["debug"]["registerDebugConfigurationProvider"](
+            "python", _SelftestDebugProvider())
+        listed_configs = debug_api.list_debug_configurations()
+        _check("list_debug_configurations surfaces a real provider-supplied config",
+               len(listed_configs.get("configs", [])) == 1
+               and listed_configs["configs"][0]["label"] == "Selftest Debug"
+               and listed_configs["configs"][0]["type"] == "python")
+        debug_start = debug_api.start_debug(0)
+        _check("start_debug launches a real debug session and returns a sessionId",
+               "sessionId" in debug_start and debug_start.get("type") == "python"
+               and isinstance(debug_start.get("processId"), int))
+        session_id = debug_start["sessionId"]
+        sessions_listed = debug_api.list_debug_sessions()
+        _check("list_debug_sessions reports the real running session",
+               any(s["sessionId"] == session_id and s["running"] for s in sessions_listed.get("sessions", [])))
+        finished_debug_status = None
+        for _ in range(40):
+            time.sleep(0.15)
+            finished_debug_status = debug_api.debug_session_status(session_id)
+            if finished_debug_status.get("running") is False:
+                break
+        _check("debug_session_status reports real captured output and exit code",
+               finished_debug_status is not None and finished_debug_status.get("running") is False
+               and finished_debug_status.get("exitCode") == 0
+               and "debug line one" in finished_debug_status.get("output", "")
+               and "debug line two" in finished_debug_status.get("output", ""))
+        debug_disposable.dispose()
+        _check("start_debug rejects an out-of-range index", "error" in debug_api.start_debug(99))
+        _check("debug_session_status rejects an unknown session id",
+               "error" in debug_api.debug_session_status("not-a-real-session"))
+        _check("stop_debug rejects an unknown session id",
+               "error" in debug_api.stop_debug("not-a-real-session"))
+
+        long_debug_target = os.path.join(tmpdir, "long_debug_target.py")
+        with open(long_debug_target, "w", encoding="utf-8") as fh:
+            fh.write("import time\ntime.sleep(5)\n")
+
+        class _LongDebugProviderForStop:
+            def provideDebugConfigurations(self, folder):
+                return [{"name": "Long Selftest Debug", "program": long_debug_target, "python": py_exe}]
+        long_debug_disposable = debug_api._vscode_ns.build()["debug"]["registerDebugConfigurationProvider"](
+            "python", _LongDebugProviderForStop())
+        long_debug_listed = debug_api.list_debug_configurations()
+        long_debug_index = next(
+            i for i, c in enumerate(long_debug_listed["configs"]) if c["label"] == "Long Selftest Debug")
+        long_debug_start = debug_api.start_debug(long_debug_index)
+        stop_result = debug_api.stop_debug(long_debug_start["sessionId"])
+        stopped_status = None
+        for _ in range(20):
+            time.sleep(0.15)
+            stopped_status = debug_api.debug_session_status(long_debug_start["sessionId"])
+            if stopped_status.get("running") is False:
+                break
+        _check("stop_debug terminates a long-running debug session early rather than waiting the full 5s",
+               stop_result.get("ok") is True
+               and stopped_status is not None and stopped_status.get("running") is False)
+        long_debug_disposable.dispose()
+
         class _Resp:
             def __init__(self, content: str, error: str = "") -> None:
                 self.content = content

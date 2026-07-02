@@ -2389,6 +2389,7 @@ class AIEditorAPI:
         self._workflow_pause_events: Dict[str, threading.Event] = {}
         self._task_runner_cache: List[Dict[str, Any]] = []
         self._task_runner_executions: Dict[str, Any] = {}
+        self._debug_runner_configs: List[Dict[str, Any]] = []
         self._workflow_confirm_lock = threading.Lock()
         self._workflow_confirmations: Dict[Tuple[str, int], Dict[str, Any]] = {}
         self._extension_dynamic_ui_lock = threading.Lock()
@@ -9650,6 +9651,109 @@ class AIEditorAPI:
         terminate = getattr(execution, "terminate", None)
         if callable(terminate):
             terminate()
+        return {"ok": True}
+
+    def list_debug_configurations(self) -> Dict:
+        """Run/Debug sidebar: list configs offered by registered
+        vscode.debug.registerDebugConfigurationProvider providers. This app
+        has no launch.json, so provider-supplied configs are the only
+        source (see VscodeNamespace._fetch_debug_configurations)."""
+        self._ensure_engine()
+        vscode_ns = getattr(self, "_vscode_ns", None)
+        if vscode_ns is None:
+            return {"configs": []}
+        try:
+            raw_configs = vscode_ns._fetch_debug_configurations(None)
+        except Exception as exc:
+            return {"configs": [], "error": str(exc)}
+        self._debug_runner_configs = list(raw_configs)
+        configs = []
+        for index, config in enumerate(self._debug_runner_configs):
+            detail_bits = [
+                str(config.get("type") or ""),
+                str(config.get("program") or config.get("command") or ""),
+            ]
+            configs.append({
+                "index": index,
+                "type": str(config.get("type") or ""),
+                "label": str(config.get("name") or f"Debug {index + 1}"),
+                "detail": " · ".join(bit for bit in detail_bits if bit),
+            })
+        return {"configs": configs}
+
+    def start_debug(self, index: Any) -> Dict:
+        """Run/Debug sidebar: launch the config at the index list_debug_configurations() returned."""
+        self._ensure_engine()
+        vscode_ns = getattr(self, "_vscode_ns", None)
+        try:
+            idx = int(index)
+        except (TypeError, ValueError):
+            return {"error": "Invalid debug configuration index"}
+        configs = getattr(self, "_debug_runner_configs", None) or []
+        if vscode_ns is None or idx < 0 or idx >= len(configs):
+            return {"error": "Unknown debug configuration"}
+        config = configs[idx]
+        try:
+            started = vscode_ns.build()["debug"]["startDebugging"](None, config)
+        except Exception as exc:
+            return {"error": str(exc)}
+        if not started:
+            return {"error": "Debug session did not start"}
+        sessions = getattr(vscode_ns, "_debug_sessions", None) or []
+        if not sessions:
+            return {"error": "Debug session did not start"}
+        session = sessions[-1]
+        return {
+            "sessionId": session.id,
+            "name": session.name,
+            "type": session.type,
+            "processId": session.processId,
+        }
+
+    def list_debug_sessions(self) -> Dict:
+        """Run/Debug sidebar: list all debug sessions started this run (real, not a stub)."""
+        vscode_ns = getattr(self, "_vscode_ns", None)
+        sessions = getattr(vscode_ns, "_debug_sessions", None) or [] if vscode_ns else []
+        rows = []
+        for session in sessions:
+            exit_status = session.exitStatus
+            rows.append({
+                "sessionId": session.id,
+                "name": session.name,
+                "type": session.type,
+                "processId": session.processId,
+                "running": not session.terminated,
+                "exitCode": exit_status.get("code") if isinstance(exit_status, dict) else None,
+            })
+        return {"sessions": rows}
+
+    def debug_session_status(self, session_id: str) -> Dict:
+        """Run/Debug sidebar: poll a session's real captured output + exit state."""
+        vscode_ns = getattr(self, "_vscode_ns", None)
+        sessions = getattr(vscode_ns, "_debug_sessions", None) or [] if vscode_ns else []
+        session = next((s for s in sessions if s.id == str(session_id or "")), None)
+        if session is None:
+            return {"error": "Unknown debug session"}
+        exit_status = session.exitStatus
+        output_fn = getattr(session, "output_snapshot", None)
+        return {
+            "sessionId": session.id,
+            "name": session.name,
+            "type": session.type,
+            "processId": session.processId,
+            "running": not session.terminated,
+            "output": output_fn() if callable(output_fn) else "",
+            "exitCode": exit_status.get("code") if isinstance(exit_status, dict) else None,
+        }
+
+    def stop_debug(self, session_id: str) -> Dict:
+        """Run/Debug sidebar: terminate a running debug session early."""
+        vscode_ns = getattr(self, "_vscode_ns", None)
+        sessions = getattr(vscode_ns, "_debug_sessions", None) or [] if vscode_ns else []
+        session = next((s for s in sessions if s.id == str(session_id or "")), None)
+        if session is None:
+            return {"error": "Unknown debug session"}
+        session.terminate()
         return {"ok": True}
 
     def save_workflow(self, data: Dict) -> Dict:
