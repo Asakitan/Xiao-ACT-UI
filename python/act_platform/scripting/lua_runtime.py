@@ -60,6 +60,14 @@ def _ensure_lupa():
             "Lua runtime requires the 'lupa' package. "
             "Install with: pip install lupa"
         )
+    # lupa 顶层默认绑定最新 Lua(当前为 5.5 beta), 其 Python 对象属性缓存会
+    # 间歇性把某次方法调用的返回值错挂到其他属性名下; 锁定成熟的 5.4 绑定
+    try:
+        from lupa import lua54 as _lua54_mod
+        _lupa = _lua54_mod
+        _LuaRuntime_cls = _lua54_mod.LuaRuntime
+    except ImportError:
+        pass
 
 
 class _LuaProxy:
