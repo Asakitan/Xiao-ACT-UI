@@ -17916,6 +17916,40 @@ console.log("command palette quick access helpers ok");
         requirements_source = f.read()
     _check("requirements.txt documents the build-time-only deps build_nuitka.bat's pipeline actually calls (阶段8 打包审计)",
            "setuptools" in requirements_source and "pefile" in requirements_source)
+    # SCM quick-diff gutter (长期计划批次20): this app has zero other built-in
+    # git integration - get_scm_quick_diff_baseline is a small, self-contained
+    # resolver that seeds the ALREADY-EXISTING dirty-diff gutter with the
+    # real git HEAD content for tracked files, instead of just "content when
+    # this editor session opened the file" (silently wrong if the file was
+    # already dirty on disk before being opened). Tested against a real git
+    # repo (init/add/commit via subprocess), not mocked.
+    scm_tmpdir = tempfile.mkdtemp(prefix="sao_scm_baseline_")
+    scm_file = os.path.join(scm_tmpdir, "tracked.py")
+    with open(scm_file, "w", encoding="utf-8") as fh:
+        fh.write("committed content\n")
+    git_identity = ["-c", "user.email=selftest@example.com", "-c", "user.name=Selftest"]
+    subprocess.run(["git"] + git_identity + ["init", "-q"], cwd=scm_tmpdir, check=True)
+    subprocess.run(["git"] + git_identity + ["add", "tracked.py"], cwd=scm_tmpdir, check=True)
+    subprocess.run(["git"] + git_identity + ["commit", "-q", "-m", "initial"], cwd=scm_tmpdir, check=True)
+    with open(scm_file, "w", encoding="utf-8") as fh:
+        fh.write("uncommitted local edit made before this editor session ever opened the file\n")
+    scm_api = AIEditorAPI(_SettingsGui({"ai_editor": {}}))
+    baseline = scm_api.get_scm_quick_diff_baseline(scm_file)
+    _check("get_scm_quick_diff_baseline returns the real git HEAD content, not the dirty-on-disk content",
+           baseline.get("available") is True and baseline.get("content") == "committed content\n")
+    untracked_file = os.path.join(scm_tmpdir, "untracked.py")
+    with open(untracked_file, "w", encoding="utf-8") as fh:
+        fh.write("new file\n")
+    _check("get_scm_quick_diff_baseline reports unavailable for an untracked file (frontend falls back to session-open baseline)",
+           scm_api.get_scm_quick_diff_baseline(untracked_file).get("available") is False)
+    outside_repo_dir = tempfile.mkdtemp(prefix="sao_scm_not_a_repo_")
+    outside_repo_file = os.path.join(outside_repo_dir, "plain.py")
+    with open(outside_repo_file, "w", encoding="utf-8") as fh:
+        fh.write("no repo here\n")
+    _check("get_scm_quick_diff_baseline reports unavailable outside any git repository",
+           scm_api.get_scm_quick_diff_baseline(outside_repo_file).get("available") is False)
+    _check("get_scm_quick_diff_baseline reports unavailable for non-local schemes",
+           scm_api.get_scm_quick_diff_baseline("untitled:Untitled-1").get("available") is False)
     _check("editor dirty diff decorations render while editing",
            "editor-dirty-diff-line" in html
            and "editor-dirty-diff-gutter" in html

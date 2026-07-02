@@ -20,6 +20,8 @@ import mimetypes
 import os
 import re
 import secrets
+import shutil
+import subprocess
 import sys
 import threading
 import time
@@ -2297,6 +2299,69 @@ class _AIEditorUIBridge:
                 "cancelled": True,
             })
             return {"error": str(exc), "cancelled": True}
+
+
+# ---------------------------------------------------------------------------
+# SCM quick-diff baseline (git HEAD content for a tracked file). This app has
+# no other built-in git integration - the Source Control sidebar is entirely
+# extension-driven - so this is a small, self-contained resolver used only to
+# seed the editor's dirty-diff gutter with the real git baseline instead of
+# "content when this editor session opened the file" for files that were
+# already dirty on disk before the file was opened.
+# ---------------------------------------------------------------------------
+
+_GIT_EXECUTABLE_CACHE: Dict[str, Any] = {"resolved": False, "path": None}
+
+
+def _git_executable() -> Optional[str]:
+    if not _GIT_EXECUTABLE_CACHE["resolved"]:
+        _GIT_EXECUTABLE_CACHE["path"] = shutil.which("git")
+        _GIT_EXECUTABLE_CACHE["resolved"] = True
+    return _GIT_EXECUTABLE_CACHE["path"]
+
+
+def _run_git(args: List[str], cwd: str, timeout: float = 4.0) -> "subprocess.CompletedProcess":
+    git_exe = _git_executable()
+    return subprocess.run(
+        [git_exe] + args, cwd=cwd, capture_output=True,
+        timeout=timeout, creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+
+
+def _git_head_content(file_path: str) -> Dict[str, Any]:
+    """Return {"available": True, "content": str} with the file's content at
+    git HEAD, or {"available": False, "reason": "..."} - callers should fall
+    back to their existing non-SCM baseline behavior on any unavailable
+    result, never treat it as an error."""
+    if not _git_executable():
+        return {"available": False, "reason": "git not installed"}
+    abs_path = os.path.abspath(str(file_path or ""))
+    directory = os.path.dirname(abs_path) or "."
+    if not os.path.isdir(directory):
+        return {"available": False, "reason": "not a directory"}
+    try:
+        root_result = _run_git(["rev-parse", "--show-toplevel"], cwd=directory)
+    except (OSError, subprocess.SubprocessError):
+        return {"available": False, "reason": "git rev-parse failed to run"}
+    if root_result.returncode != 0:
+        return {"available": False, "reason": "not inside a git repository"}
+    repo_root = root_result.stdout.decode("utf-8", errors="replace").strip()
+    if not repo_root:
+        return {"available": False, "reason": "not inside a git repository"}
+    try:
+        rel_path = os.path.relpath(abs_path, repo_root)
+    except ValueError:
+        return {"available": False, "reason": "file is on a different drive than the repo root"}
+    git_rel_path = rel_path.replace(os.sep, "/")
+    try:
+        show_result = _run_git(["show", f"HEAD:{git_rel_path}"], cwd=repo_root)
+    except (OSError, subprocess.SubprocessError):
+        return {"available": False, "reason": "git show failed to run"}
+    if show_result.returncode != 0:
+        return {"available": False, "reason": "file is untracked or has no committed version yet"}
+    return {
+        "available": True,
+        "content": show_result.stdout.decode("utf-8", errors="replace"),
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -9827,6 +9892,22 @@ class AIEditorAPI:
             return {"ok": False}
         changed = vscode_ns.update_active_text_editor_visible_ranges(ranges)
         return {"ok": True, "changed": changed}
+
+    def get_scm_quick_diff_baseline(self, file_path: str) -> Dict:
+        """SCM quick-diff gutter: return the file's content at git HEAD, so
+        the editor's dirty-diff gutter (already built - computeEditorDirtyDiff/
+        editorDirtyDiffHunks/the .editor-dirty-diff-gutter overlay) can diff
+        against the real SCM baseline for tracked files, instead of just
+        "content when this editor session opened the file" (which silently
+        misses changes made before the file was ever opened this session -
+        e.g. by another tool, or a previous unclosed session)."""
+        path = str(file_path or "").strip()
+        if not path or path.startswith(("untitled:", "http:", "https:")):
+            return {"available": False, "reason": "not a local file"}
+        try:
+            return _git_head_content(path)
+        except Exception as exc:
+            return {"available": False, "reason": str(exc)}
 
     def save_workflow(self, data: Dict) -> Dict:
         self._ensure_engine()

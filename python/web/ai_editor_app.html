@@ -20489,6 +20489,29 @@ async function toggleEditorBreakpointAtClientY(clientY){
 if($('editor-breakpoint-layer'))$('editor-breakpoint-layer').onclick=e=>toggleEditorBreakpointAtClientY(e.clientY);
 window.refreshEditorBreakpoints=refreshEditorBreakpoints;
 window.renderEditorBreakpointLayer=renderEditorBreakpointLayer;
+// ── SCM quick-diff gutter. The dirty-diff overlay above (computeEditorDirtyDiff/
+// editorDirtyDiffHunks/.editor-dirty-diff-gutter) already exists and was
+// diffing against tab.originalContent = "file content when this editor
+// session opened the tab" - correct for the common case (clean file, edits
+// made in this session) but silently wrong if the file already had
+// uncommitted changes before it was opened (e.g. edited by another tool).
+// This replaces that baseline with the real git HEAD content when the file
+// is tracked, reusing the entire existing diff/render pipeline as-is.
+async function refreshEditorScmBaseline(tabId,filePath){
+  if(!filePath)return;
+  const result=await call('get_scm_quick_diff_baseline',filePath);
+  if(!result||!result.available)return;
+  const tab=tabs.find(t=>t.id===tabId);
+  if(!tab||tab.filePath!==filePath)return;
+  if(tab.originalContent===result.content)return;
+  tab.originalContent=result.content;
+  tab.scmBaselineSource='git-head';
+  if(activeTab===tabId){
+    _editorDirtyDiffCache={key:'',decorations:[],summary:null,changes:[]};
+    if(typeof renderEditorVisualDecorations==='function')renderEditorVisualDecorations();
+  }
+}
+window.refreshEditorScmBaseline=refreshEditorScmBaseline;
 async function requestEditorDiagnostics(quiet){
   const wrap=$('editor-container');
   if(!ed||!wrap||wrap.style.display==='none')return;
@@ -48659,6 +48682,7 @@ function switchTab(id){
     updateLineNums();updateCursorPos();
     $('editor-welcome').style.display='none';$('editor-container').style.display='flex';
     if(typeof refreshEditorBreakpoints==='function')refreshEditorBreakpoints();
+    if(typeof refreshEditorScmBaseline==='function')refreshEditorScmBaseline(tab.id,tab.filePath);
     if(typeof scheduleEditorInlayHints==='function')scheduleEditorInlayHints(160);
     if(typeof scheduleEditorInlineCompletions==='function')scheduleEditorInlineCompletions(220);
     if(typeof scheduleEditorCodeLenses==='function')scheduleEditorCodeLenses(280);
