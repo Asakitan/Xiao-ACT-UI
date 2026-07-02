@@ -1,0 +1,66 @@
+{
+  "config_version": "cs2-dumper-2026-06-head",
+  "_source": "a2x/cs2-dumper HEAD (June 2026 .hpp + client_dll.json)",
+  "_warning": "offsets change on every Steam update — prefer pattern scan",
+  "target_process": "cs2.exe",
+  "module": "client.dll",
+  "offsets": {
+    "dwEntityList": "0x24E76A0",
+    "dwLocalPlayerPawn": "0x2341698",
+    "dwLocalPlayerController": "0x2320720",
+    "dwViewMatrix": "0x2346B30",
+    "dwViewAngles": "0x23568C8",
+    "dwCSGOInput": "0x2356240",
+    "dwGlobalVars": "0x20616D0",
+    "dwGameRules": "0x2341158"
+  },
+  "entity_fields": {
+    "m_iHealth": "0x34C",
+    "m_iTeamNum": "0x3EB",
+    "m_lifeState": "0x354",
+    "m_fFlags": "0x3F8",
+    "m_pGameSceneNode": "0x330",
+    "m_angEyeAngles": "0x3320",
+    "m_vecViewOffset": "0xE70",
+    "m_aimPunchAngle": "0x171C",
+    "m_iShotsFired": "0x1C64",
+    "m_iIDEntIndex": "0x33FC",
+    "m_bIsScoped": "0x1C50",
+    "m_entitySpottedState": "0x1C38",
+    "m_ArmorValue": "0x1C7C",
+    "m_pClippingWeapon": "0x1620",
+    "m_vecVelocity": "0x400",
+    "m_fAccuracyPenalty": "0x19C0",
+    "m_iItemDefinitionIndex": "0x1BA"
+  },
+  "scene_node_fields": {
+    "m_vecOrigin": "0x80",
+    "m_vecAbsOrigin": "0xC8",
+    "m_bDormant": "0x103"
+  },
+  "spotted_fields": {
+    "m_bSpotted": "0x8",
+    "m_bSpottedByMask": "0xC"
+  },
+  "controller_fields": {
+    "m_hPawn": "0x62C",
+    "m_hPlayerPawn": "0x904",
+    "m_iszPlayerName": "0x6F0"
+  },
+  "constants": {
+    "max_entities": 64,
+    "entity_chunk_stride": 8,
+    "entity_chunk_size": 512,
+    "entity_identity_stride": 120,
+    "entity_list_offset": 16,
+    "pentity_offset": 0,
+    "bone_array_offset": 128,
+    "model_state_offset": 368,
+    "head_bone_index": 6,
+    "bone_count": 28
+  },
+  "patterns": {
+    "dwEntityList": "48 89 0D {rip} E9 ?? ?? ?? ?? CC",
+    "dwViewMatrix": "48 8D 0D {rip} 48 C1 E0 06"
+  }
+}

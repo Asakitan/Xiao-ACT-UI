@@ -10,6 +10,7 @@ import time
 from PIL import Image
 
 from . import menu_bar_layout, child_bar_layout, hud_layout
+from utils.perf_probe import probe as _probe
 
 try:
     import _sao_cy_pixels as _CY_PIXELS  # type: ignore[import-not-found]
@@ -85,11 +86,13 @@ def compose_rgba(state, hud_phase: float, screen_w: int, screen_h: int,
     # 1) HUD layer (brackets/rails/scan/dots/stamp). Sprite origin is
     #    relative to the *content* top-left, which is (HUD_PAD, HUD_PAD).
     try:
-        hud_img, (ox, oy) = hud_layout.compose(iw, ih, screen_w, screen_h, hud_phase)
+        with _probe('ui.popup.compose_hud'):
+            hud_img, (ox, oy) = hud_layout.compose(iw, ih, screen_w, screen_h, hud_phase)
         # origin is (-PLATE_PAD, -PLATE_PAD) which lines up with HUD_PAD
         # if we paste the sprite at (HUD_PAD + ox, HUD_PAD + oy).
         px, py = HUD_PAD + ox + dx, HUD_PAD + oy + dy
-        frame.alpha_composite(hud_img, (max(0, px), max(0, py)))
+        with _probe('ui.popup.paste_hud'):
+            frame.alpha_composite(hud_img, (max(0, px), max(0, py)))
     except Exception as exc:
         # HUD 层缺席不该无声 — 60s 限频报一次, 其余帧继续静默降级
         global _HUD_FAIL_LOG_AT
@@ -99,14 +102,18 @@ def compose_rgba(state, hud_phase: float, screen_w: int, screen_h: int,
             print(f'[GPU] popup HUD layer compose failed (degraded frame): {exc}')
 
     # 2) Menu bar column
-    menu_img = menu_bar_layout.compose(state)
+    with _probe('ui.popup.compose_menu_bar'):
+        menu_img = menu_bar_layout.compose(state)
     if menu_img.size != (1, 1):
-        frame.alpha_composite(menu_img, menu_origin(state))
+        with _probe('ui.popup.paste_menu_bar'):
+            frame.alpha_composite(menu_img, menu_origin(state))
 
     # 3) Child bar column
-    child_img = child_bar_layout.compose(state)
+    with _probe('ui.popup.compose_child_bar'):
+        child_img = child_bar_layout.compose(state)
     if child_img.size != (1, 1):
-        frame.alpha_composite(child_img, child_origin(state))
+        with _probe('ui.popup.paste_child_bar'):
+            frame.alpha_composite(child_img, child_origin(state))
 
     return frame
 

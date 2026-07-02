@@ -54,6 +54,7 @@ from gui_modules.sao_panel_ui import (
     _bind_panel_drag,
     _sao_panel_body,
     _sao_panel_header,
+    run_native_dialog,
 )
 
 
@@ -137,6 +138,12 @@ class PluginManagerPanel:
         if self._win is not None:
             try:
                 self._win.withdraw()
+            except Exception:
+                pass
+        maybe_stop_fisheye = getattr(self.owner, '_maybe_stop_fisheye', None)
+        if callable(maybe_stop_fisheye):
+            try:
+                maybe_stop_fisheye()
             except Exception:
                 pass
 
@@ -616,7 +623,8 @@ class PluginManagerPanel:
 
     def _import_plugin(self) -> None:
         try:
-            path = filedialog.askopenfilename(
+            path = run_native_dialog(
+                filedialog.askopenfilename,
                 parent=self._win,
                 title='导入插件 Import plugin',
                 filetypes=(
@@ -776,6 +784,12 @@ class PluginDetachedPanel:
                 self._win.withdraw()
             except Exception:
                 pass
+        maybe_stop_fisheye = getattr(self.owner, '_maybe_stop_fisheye', None)
+        if callable(maybe_stop_fisheye):
+            try:
+                maybe_stop_fisheye()
+            except Exception:
+                pass
 
     def destroy(self) -> None:
         self._stop()
@@ -897,7 +911,7 @@ class PluginDetachedPanel:
                 act_plugin_ui_action(self.owner, panel_id, action, payload)
             except Exception:
                 pass
-            if not str(action).startswith("drag_"):
+            if not (str(action).startswith("drag_") or str(action).startswith("slide_")):
                 self._dirty = True
         return _handler
 

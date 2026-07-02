@@ -724,6 +724,12 @@ class ProcessSelectorPanel:
                 self._win.withdraw()
             except Exception:
                 pass
+        maybe_stop_fisheye = getattr(self.owner, '_maybe_stop_fisheye', None)
+        if callable(maybe_stop_fisheye):
+            try:
+                maybe_stop_fisheye()
+            except Exception:
+                pass
 
     def is_visible(self) -> bool:
         if not self._exists():

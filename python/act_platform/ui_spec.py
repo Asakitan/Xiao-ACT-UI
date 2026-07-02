@@ -58,7 +58,7 @@ MAX_INPUT_VAL = 2000
 CONTAINER_KINDS = ("panel", "section", "card", "row", "group")
 LEAF_KINDS = (
     "text", "kv", "bar", "badge", "divider", "spacer",
-    "button", "input", "table", "canvas", "rgba_frame",
+    "button", "input", "slider", "table", "canvas", "rgba_frame",
 )
 NODE_KINDS = CONTAINER_KINDS + LEAF_KINDS
 
@@ -315,6 +315,17 @@ def _normalize_node(node: Any, depth: int, budget: list[int]) -> Optional[dict]:
             d["hi"] = float(node.get("hi", 1.0))
             d["step"] = float(node.get("step", 0.0))
         return d
+    if kind == "slider":
+        return {
+            "type": "slider",
+            "label": _s(node.get("label"), 200),
+            "id": _s(node.get("id"), 80),
+            "value": float(node.get("value", 0)),
+            "lo": float(node.get("lo", 0)),
+            "hi": float(node.get("hi", 1)),
+            "step": float(node.get("step", 0.01)),
+            "color": _choice(node.get("color"), BAR_COLORS, "cyan"),
+        }
     if kind == "badge":
         return {
             "type": "badge",
@@ -447,6 +458,14 @@ class UI:
     def bar(label: Any = "", pct: float = 0.0, color: str = "cyan", caption: Any = "") -> dict:
         return {"type": "bar", "label": _s(label, 200), "pct": _clamp01(pct),
                 "color": color, "caption": _s(caption, 200)}
+
+    @staticmethod
+    def slider(label: Any = "", id: str = "", value: float = 0.0,
+               lo: float = 0.0, hi: float = 1.0, step: float = 0.01,
+               color: str = "cyan") -> dict:
+        return {"type": "slider", "label": _s(label, 200), "id": _s(id, 80),
+                "value": float(value), "lo": float(lo), "hi": float(hi),
+                "step": float(step), "color": color}
 
     @staticmethod
     def badge(text: Any, style: str = "muted") -> dict:

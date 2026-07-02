@@ -1,0 +1,7720 @@
+[
+ {
+  "pos": [
+   -1049.16,
+   -969.26,
+   0.03
+  ],
+  "ang": [
+   -0.16,
+   153.46
+  ],
+  "map": "de_overpass",
+  "name": "[Hide-Shots] spot",
+  "grenade": "molotov",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -1218.71,
+   -952.86,
+   5.88
+  ],
+  "ang": [
+   -3.97,
+   108.61
+  ],
+  "map": "de_overpass",
+  "name": "Heaven",
+  "grenade": "molotov",
+  "throw_type": "run",
+  "duck": false,
+  "description": "SAFE"
+ },
+ {
+  "pos": [
+   -1247.22,
+   -946.59,
+   7.92
+  ],
+  "ang": [
+   -3.78,
+   77.03
+  ],
+  "map": "de_overpass",
+  "name": "Pillar",
+  "grenade": "he",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -1421.07,
+   -1004.98,
+   8.81
+  ],
+  "ang": [
+   3.5,
+   68.87
+  ],
+  "map": "de_overpass",
+  "name": "Pillar",
+  "grenade": "molotov",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -598.95,
+   -1536.24,
+   145.03
+  ],
+  "ang": [
+   -17.34,
+   99.86
+  ],
+  "map": "de_overpass",
+  "name": "Wood",
+  "grenade": "smoke",
+  "throw_type": "jump",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -1230.79,
+   -873.58,
+   9.88
+  ],
+  "ang": [
+   0.26,
+   77.14
+  ],
+  "map": "de_overpass",
+  "name": "Barrels",
+  "grenade": "molotov",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -1230.78,
+   -873.47,
+   9.88
+  ],
+  "ang": [
+   -25.76,
+   76.84
+  ],
+  "map": "de_overpass",
+  "name": "Pillar",
+  "grenade": "molotov",
+  "throw_type": "normal",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -1230.78,
+   -873.47,
+   9.88
+  ],
+  "ang": [
+   -25.59,
+   84.71
+  ],
+  "map": "de_overpass",
+  "name": "Water",
+  "grenade": "molotov",
+  "throw_type": "normal",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -611.46,
+   -1076.5,
+   39.01
+  ],
+  "ang": [
+   -29.89,
+   99.08
+  ],
+  "map": "de_overpass",
+  "name": "Barrels | Pillar",
+  "grenade": "smoke",
+  "throw_type": "normal",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -1567.97,
+   -1087.8,
+   0.03
+  ],
+  "ang": [
+   -30.25,
+   73.79
+  ],
+  "map": "de_overpass",
+  "name": "Plant",
+  "grenade": "smoke",
+  "throw_type": "normal",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -573.54,
+   -1131.64,
+   57.03
+  ],
+  "ang": [
+   -22.93,
+   123.57
+  ],
+  "map": "de_overpass",
+  "name": "Box",
+  "grenade": "molotov",
+  "throw_type": "normal",
+  "duck": false,
+  "description": "Box/Underwater"
+ },
+ {
+  "pos": [
+   -573.38,
+   -1131.8,
+   57.08
+  ],
+  "ang": [
+   -24.86,
+   102.65
+  ],
+  "map": "de_overpass",
+  "name": "Pillar",
+  "grenade": "molotov",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -572.98,
+   -1131.62,
+   57.02
+  ],
+  "ang": [
+   2.82,
+   114.72
+  ],
+  "map": "de_overpass",
+  "name": "Water",
+  "grenade": "molotov",
+  "throw_type": "run",
+  "duck": false,
+  "description": "+underwater"
+ },
+ {
+  "pos": [
+   -1400.53,
+   -903.67,
+   21.6
+  ],
+  "ang": [
+   -24.0,
+   60.94
+  ],
+  "map": "de_overpass",
+  "name": "st1vaha",
+  "grenade": "molotov",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -538.12,
+   -1163.88,
+   73.97
+  ],
+  "ang": [
+   5.73,
+   123.79
+  ],
+  "map": "de_overpass",
+  "name": "Box",
+  "grenade": "he",
+  "throw_type": "run",
+  "duck": false,
+  "description": "Max DMG"
+ },
+ {
+  "pos": [
+   -538.11,
+   -1163.46,
+   73.76
+  ],
+  "ang": [
+   5.24,
+   103.95
+  ],
+  "map": "de_overpass",
+  "name": "Pillar",
+  "grenade": "he",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -525.99,
+   -1551.95,
+   144.6
+  ],
+  "ang": [
+   -36.14,
+   116.93
+  ],
+  "map": "de_overpass",
+  "name": "Bridge",
+  "grenade": "smoke",
+  "throw_type": "normal",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -509.84,
+   -1142.81,
+   57.26
+  ],
+  "ang": [
+   -19.52,
+   135.96
+  ],
+  "map": "de_overpass",
+  "name": "[Hide-Shots] spot",
+  "grenade": "he",
+  "throw_type": "normal",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -508.91,
+   -1119.89,
+   49.85
+  ],
+  "ang": [
+   -5.77,
+   127.35
+  ],
+  "map": "de_overpass",
+  "name": "Heaven",
+  "grenade": "molotov",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -508.8,
+   -1119.87,
+   49.83
+  ],
+  "ang": [
+   -20.89,
+   132.47
+  ],
+  "map": "de_overpass",
+  "name": "[Hide-Shots] Spot",
+  "grenade": "molotov",
+  "throw_type": "normal",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -501.58,
+   -1732.22,
+   144.47
+  ],
+  "ang": [
+   -18.47,
+   140.3
+  ],
+  "map": "de_overpass",
+  "name": "Park",
+  "grenade": "molotov",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -1546.76,
+   -841.96,
+   63.04
+  ],
+  "ang": [
+   -6.82,
+   60.08
+  ],
+  "map": "de_overpass",
+  "name": "Barrels",
+  "grenade": "he",
+  "throw_type": "run",
+  "duck": false,
+  "description": "max dmg"
+ },
+ {
+  "pos": [
+   -1189.17,
+   -638.97,
+   53.52
+  ],
+  "ang": [
+   -30.62,
+   76.44
+  ],
+  "map": "de_overpass",
+  "name": "Barrels",
+  "grenade": "molotov",
+  "throw_type": "run",
+  "duck": false,
+  "description": "safe"
+ },
+ {
+  "pos": [
+   -1190.58,
+   -638.91,
+   53.4
+  ],
+  "ang": [
+   -21.88,
+   95.17
+  ],
+  "map": "de_overpass",
+  "name": "[Under | Water]",
+  "grenade": "molotov",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -1191.8,
+   -638.98,
+   53.29
+  ],
+  "ang": [
+   -32.39,
+   40.06
+  ],
+  "map": "de_overpass",
+  "name": "Pillar | Plant",
+  "grenade": "smoke",
+  "throw_type": "normal",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -1144.85,
+   -638.84,
+   74.7
+  ],
+  "ang": [
+   10.18,
+   98.26
+  ],
+  "map": "de_overpass",
+  "name": "Barrels",
+  "grenade": "he",
+  "throw_type": "run",
+  "duck": false,
+  "description": "UNSAFE"
+ },
+ {
+  "pos": [
+   -1203.58,
+   -638.96,
+   51.64
+  ],
+  "ang": [
+   -23.42,
+   78.89
+  ],
+  "map": "de_overpass",
+  "name": "[Water | Pillar]",
+  "grenade": "molotov",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -1151.01,
+   -636.43,
+   71.5
+  ],
+  "ang": [
+   -17.26,
+   78.83
+  ],
+  "map": "de_overpass",
+  "name": "Barrels",
+  "grenade": "molotov",
+  "throw_type": "run",
+  "duck": false,
+  "description": "semi-safe"
+ },
+ {
+  "pos": [
+   -1150.88,
+   -636.42,
+   71.56
+  ],
+  "ang": [
+   -7.2,
+   97.0
+  ],
+  "map": "de_overpass",
+  "name": "Water",
+  "grenade": "molotov",
+  "throw_type": "run",
+  "duck": false,
+  "description": "semi-safe"
+ },
+ {
+  "pos": [
+   -1151.09,
+   -636.33,
+   71.46
+  ],
+  "ang": [
+   -5.61,
+   72.33
+  ],
+  "map": "de_overpass",
+  "name": "Pillar",
+  "grenade": "molotov",
+  "throw_type": "run",
+  "duck": false,
+  "description": "semi-safe"
+ },
+ {
+  "pos": [
+   -1154.15,
+   -635.46,
+   69.88
+  ],
+  "ang": [
+   -38.76,
+   78.87
+  ],
+  "map": "de_overpass",
+  "name": "Pillar",
+  "grenade": "he",
+  "throw_type": "run",
+  "duck": false,
+  "description": "semi-safe"
+ },
+ {
+  "pos": [
+   -1024.24,
+   -638.9,
+   96.03
+  ],
+  "ang": [
+   -4.83,
+   75.42
+  ],
+  "map": "de_overpass",
+  "name": "Barrels",
+  "grenade": "he",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -1559.97,
+   -778.26,
+   63.04
+  ],
+  "ang": [
+   -20.29,
+   57.73
+  ],
+  "map": "de_overpass",
+  "name": "Barrels | Pillar",
+  "grenade": "smoke",
+  "throw_type": "normal",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -856.02,
+   -637.44,
+   96.03
+  ],
+  "ang": [
+   -23.22,
+   127.51
+  ],
+  "map": "de_overpass",
+  "name": "Heaven",
+  "grenade": "molotov",
+  "throw_type": "run",
+  "duck": false,
+  "description": "SAFE"
+ },
+ {
+  "pos": [
+   -1117.01,
+   -603.51,
+   86.76
+  ],
+  "ang": [
+   9.51,
+   101.22
+  ],
+  "map": "de_overpass",
+  "name": "Water",
+  "grenade": "he",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -1061.64,
+   -578.14,
+   96.03
+  ],
+  "ang": [
+   -0.37,
+   84.7
+  ],
+  "map": "de_overpass",
+  "name": "Water",
+  "grenade": "he",
+  "throw_type": "run",
+  "duck": false,
+  "description": "unsafe"
+ },
+ {
+  "pos": [
+   -1061.62,
+   -578.12,
+   96.03
+  ],
+  "ang": [
+   -10.83,
+   82.91
+  ],
+  "map": "de_overpass",
+  "name": "Under-Water",
+  "grenade": "he",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -856.41,
+   -575.94,
+   96.03
+  ],
+  "ang": [
+   -17.07,
+   114.61
+  ],
+  "map": "de_overpass",
+  "name": "Water",
+  "grenade": "he",
+  "throw_type": "normal",
+  "duck": false,
+  "description": "Low HP"
+ },
+ {
+  "pos": [
+   -1588.86,
+   -722.79,
+   136.03
+  ],
+  "ang": [
+   -9.51,
+   54.64
+  ],
+  "map": "de_overpass",
+  "name": "[Barrels | Pillar]",
+  "grenade": "molotov",
+  "throw_type": "run",
+  "duck": false,
+  "description": "unsafe"
+ },
+ {
+  "pos": [
+   -1124.2,
+   -526.3,
+   79.11
+  ],
+  "ang": [
+   -12.48,
+   -102.82
+  ],
+  "map": "de_overpass",
+  "name": "Box",
+  "grenade": "he",
+  "throw_type": "run",
+  "duck": false,
+  "description": "Max DMG"
+ },
+ {
+  "pos": [
+   -1136.32,
+   -525.21,
+   72.99
+  ],
+  "ang": [
+   -17.9,
+   173.81
+  ],
+  "map": "de_overpass",
+  "name": "",
+  "grenade": "flash",
+  "throw_type": "normal",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -863.65,
+   -550.98,
+   96.03
+  ],
+  "ang": [
+   -19.47,
+   87.93
+  ],
+  "map": "de_overpass",
+  "name": "Barrels",
+  "grenade": "molotov",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -863.73,
+   -550.91,
+   96.03
+  ],
+  "ang": [
+   -22.4,
+   116.41
+  ],
+  "map": "de_overpass",
+  "name": "Water",
+  "grenade": "molotov",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -1202.07,
+   -519.49,
+   49.88
+  ],
+  "ang": [
+   -18.7,
+   -61.89
+  ],
+  "map": "de_overpass",
+  "name": "st1vaha",
+  "grenade": "molotov",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -856.16,
+   -536.49,
+   96.03
+  ],
+  "ang": [
+   -33.23,
+   129.91
+  ],
+  "map": "de_overpass",
+  "name": "CT",
+  "grenade": "smoke",
+  "throw_type": "normal",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -204.44,
+   -1027.66,
+   21.22
+  ],
+  "ang": [
+   -1.16,
+   151.56
+  ],
+  "map": "de_overpass",
+  "name": "Guestello",
+  "grenade": "molotov",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -550.1,
+   -449.8,
+   6.33
+  ],
+  "ang": [
+   -12.41,
+   134.97
+  ],
+  "map": "de_overpass",
+  "name": "Barrels",
+  "grenade": "he",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -550.02,
+   -449.76,
+   6.33
+  ],
+  "ang": [
+   -13.84,
+   134.98
+  ],
+  "map": "de_overpass",
+  "name": "Barrels",
+  "grenade": "molotov",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -549.82,
+   -449.54,
+   6.33
+  ],
+  "ang": [
+   -10.65,
+   127.84
+  ],
+  "map": "de_overpass",
+  "name": "Pillar",
+  "grenade": "molotov",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -432.03,
+   -2300.11,
+   152.03
+  ],
+  "ang": [
+   -3.32,
+   102.68
+  ],
+  "map": "de_overpass",
+  "name": "Pillar | Bridge",
+  "grenade": "smoke",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -1452.41,
+   -338.64,
+   25.3
+  ],
+  "ang": [
+   2.24,
+   57.25
+  ],
+  "map": "de_overpass",
+  "name": "Cement",
+  "grenade": "smoke",
+  "throw_type": "normal",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -958.28,
+   -242.01,
+   96.03
+  ],
+  "ang": [
+   -44.98,
+   3.41
+  ],
+  "map": "de_overpass",
+  "name": "Monster",
+  "grenade": "molotov",
+  "throw_type": "normal",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -1130.17,
+   -201.99,
+   99.03
+  ],
+  "ang": [
+   -31.78,
+   -11.52
+  ],
+  "map": "de_overpass",
+  "name": "Monster",
+  "grenade": "molotov",
+  "throw_type": "normal",
+  "duck": false,
+  "description": "exit"
+ },
+ {
+  "pos": [
+   -411.52,
+   -288.76,
+   26.13
+  ],
+  "ang": [
+   -39.37,
+   163.81
+  ],
+  "map": "de_overpass",
+  "name": "Box [Back]",
+  "grenade": "molotov",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -898.18,
+   -104.72,
+   96.03
+  ],
+  "ang": [
+   -8.59,
+   71.3
+  ],
+  "map": "de_overpass",
+  "name": "Barrels",
+  "grenade": "molotov",
+  "throw_type": "normal",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -1075.06,
+   -70.76,
+   99.03
+  ],
+  "ang": [
+   -54.0,
+   -174.5
+  ],
+  "map": "de_overpass",
+  "name": "Park",
+  "grenade": "molotov",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -633.83,
+   -92.95,
+   9.98
+  ],
+  "ang": [
+   -16.28,
+   167.25
+  ],
+  "map": "de_overpass",
+  "name": "Under-Water",
+  "grenade": "he",
+  "throw_type": "run",
+  "duck": false,
+  "description": "Center"
+ },
+ {
+  "pos": [
+   -633.29,
+   -93.09,
+   9.81
+  ],
+  "ang": [
+   -23.43,
+   167.36
+  ],
+  "map": "de_overpass",
+  "name": "Under-Water",
+  "grenade": "molotov",
+  "throw_type": "run",
+  "duck": false,
+  "description": "max radius"
+ },
+ {
+  "pos": [
+   -2421.48,
+   -1379.32,
+   432.28
+  ],
+  "ang": [
+   -10.22,
+   79.76
+  ],
+  "map": "de_overpass",
+  "name": "Stairs",
+  "grenade": "smoke",
+  "throw_type": "jump",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -2165.99,
+   -592.03,
+   390.63
+  ],
+  "ang": [
+   -30.82,
+   100.7
+  ],
+  "map": "de_overpass",
+  "name": "Bank",
+  "grenade": "smoke",
+  "throw_type": "normal",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -2335.98,
+   -847.45,
+   388.37
+  ],
+  "ang": [
+   -31.83,
+   91.0
+  ],
+  "map": "de_overpass",
+  "name": "Plant",
+  "grenade": "smoke",
+  "throw_type": "normal",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -814.28,
+   54.41,
+   95.18
+  ],
+  "ang": [
+   -10.84,
+   -140.92
+  ],
+  "map": "de_overpass",
+  "name": "Box",
+  "grenade": "he",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -814.33,
+   54.54,
+   95.2
+  ],
+  "ang": [
+   -7.21,
+   122.89
+  ],
+  "map": "de_overpass",
+  "name": "Under-Water",
+  "grenade": "he",
+  "throw_type": "run",
+  "duck": false,
+  "description": "Right"
+ },
+ {
+  "pos": [
+   -821.19,
+   65.36,
+   96.03
+  ],
+  "ang": [
+   -25.85,
+   117.72
+  ],
+  "map": "de_overpass",
+  "name": "Under Water",
+  "grenade": "molotov",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -928.64,
+   162.86,
+   96.03
+  ],
+  "ang": [
+   3.3,
+   -147.46
+  ],
+  "map": "de_overpass",
+  "name": "Back of Pillar",
+  "grenade": "molotov",
+  "throw_type": "normal",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -928.64,
+   162.86,
+   96.03
+  ],
+  "ang": [
+   3.3,
+   -147.46
+  ],
+  "map": "de_overpass",
+  "name": "Back of Pillar",
+  "grenade": "he",
+  "throw_type": "normal",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -924.45,
+   219.59,
+   96.03
+  ],
+  "ang": [
+   7.77,
+   -88.92
+  ],
+  "map": "de_overpass",
+  "name": "Back of Monster",
+  "grenade": "molotov",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -1223.48,
+   280.58,
+   14.34
+  ],
+  "ang": [
+   -17.6,
+   -59.61
+  ],
+  "map": "de_overpass",
+  "name": "Short",
+  "grenade": "he",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -1223.5,
+   280.65,
+   14.35
+  ],
+  "ang": [
+   -21.83,
+   -55.19
+  ],
+  "map": "de_overpass",
+  "name": "Short",
+  "grenade": "molotov",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -957.24,
+   281.43,
+   96.03
+  ],
+  "ang": [
+   -34.28,
+   -105.0
+  ],
+  "map": "de_overpass",
+  "name": "Short",
+  "grenade": "he",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -1231.48,
+   298.94,
+   20.99
+  ],
+  "ang": [
+   -29.91,
+   -89.04
+  ],
+  "map": "de_overpass",
+  "name": "Tunnel",
+  "grenade": "molotov",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -1962.31,
+   107.99,
+   128.03
+  ],
+  "ang": [
+   8.25,
+   -37.87
+  ],
+  "map": "de_overpass",
+  "name": "Monster",
+  "grenade": "molotov",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -2753.09,
+   -1689.46,
+   463.2
+  ],
+  "ang": [
+   17.38,
+   38.45
+  ],
+  "map": "de_overpass",
+  "name": "Connector",
+  "grenade": "molotov",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -841.49,
+   494.94,
+   96.03
+  ],
+  "ang": [
+   5.0,
+   -68.67
+  ],
+  "map": "de_overpass",
+  "name": "Monster [Far]",
+  "grenade": "he",
+  "throw_type": "run",
+  "duck": false,
+  "description": "unsafe"
+ },
+ {
+  "pos": [
+   -2384.09,
+   -79.04,
+   411.28
+  ],
+  "ang": [
+   -73.04,
+   61.63
+  ],
+  "map": "de_overpass",
+  "name": "Car",
+  "grenade": "molotov",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -2384.25,
+   -79.11,
+   411.28
+  ],
+  "ang": [
+   -16.67,
+   96.5
+  ],
+  "map": "de_overpass",
+  "name": "Bank",
+  "grenade": "molotov",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -2957.07,
+   -1924.25,
+   474.24
+  ],
+  "ang": [
+   -57.42,
+   154.18
+  ],
+  "map": "de_overpass",
+  "name": "Rock",
+  "grenade": "molotov",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -2957.21,
+   -1924.29,
+   474.25
+  ],
+  "ang": [
+   -61.71,
+   158.46
+  ],
+  "map": "de_overpass",
+  "name": "Rock",
+  "grenade": "he",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -3171.97,
+   -1494.64,
+   522.73
+  ],
+  "ang": [
+   0.72,
+   43.27
+  ],
+  "map": "de_overpass",
+  "name": "Water | UnderWater",
+  "grenade": "molotov",
+  "throw_type": "jump",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -2075.12,
+   597.75,
+   513.56
+  ],
+  "ang": [
+   -75.24,
+   -114.45
+  ],
+  "map": "de_overpass",
+  "name": "Park [FD]",
+  "grenade": "molotov",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -2075.17,
+   597.84,
+   513.56
+  ],
+  "ang": [
+   -14.63,
+   -176.49
+  ],
+  "map": "de_overpass",
+  "name": "Long",
+  "grenade": "molotov",
+  "throw_type": "normal",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -2075.16,
+   597.91,
+   513.55
+  ],
+  "ang": [
+   18.0,
+   -47.06
+  ],
+  "map": "de_overpass",
+  "name": "Push B [Short]",
+  "grenade": "molotov",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -3245.02,
+   -2361.37,
+   472.02
+  ],
+  "ang": [
+   -7.63,
+   43.19
+  ],
+  "map": "de_overpass",
+  "name": "St1vaha",
+  "grenade": "molotov",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -3082.09,
+   424.21,
+   472.8
+  ],
+  "ang": [
+   -11.21,
+   28.6
+  ],
+  "map": "de_overpass",
+  "name": "Stairs",
+  "grenade": "molotov",
+  "throw_type": "run",
+  "duck": false,
+  "description": "fast"
+ },
+ {
+  "pos": [
+   -3329.89,
+   132.15,
+   516.65
+  ],
+  "ang": [
+   0.61,
+   33.64
+  ],
+  "map": "de_overpass",
+  "name": "Stairs [FD]",
+  "grenade": "he",
+  "throw_type": "run",
+  "duck": false,
+  "description": "low dmg"
+ },
+ {
+  "pos": [
+   -3307.3,
+   187.08,
+   513.29
+  ],
+  "ang": [
+   5.39,
+   -93.76
+  ],
+  "map": "de_overpass",
+  "name": "Rock",
+  "grenade": "molotov",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -3307.37,
+   187.16,
+   513.3
+  ],
+  "ang": [
+   8.58,
+   15.41
+  ],
+  "map": "de_overpass",
+  "name": "Car",
+  "grenade": "molotov",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -3307.38,
+   187.16,
+   513.3
+  ],
+  "ang": [
+   5.17,
+   32.49
+  ],
+  "map": "de_overpass",
+  "name": "Stairs [FD]",
+  "grenade": "molotov",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -16.03,
+   -2095.97,
+   185.75
+  ],
+  "ang": [
+   -29.49,
+   148.73
+  ],
+  "map": "de_overpass",
+  "name": "Lower Park",
+  "grenade": "smoke",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -304.11,
+   -2039.33,
+   145.55
+  ],
+  "ang": [
+   1.3,
+   129.75
+  ],
+  "map": "de_overpass",
+  "name": "Guestello",
+  "grenade": "molotov",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -404.85,
+   -2069.53,
+   145.35
+  ],
+  "ang": [
+   3.63,
+   113.77
+  ],
+  "map": "de_overpass",
+  "name": "Scafford",
+  "grenade": "molotov",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -529.37,
+   -2036.35,
+   147.61
+  ],
+  "ang": [
+   3.0,
+   99.0
+  ],
+  "map": "de_overpass",
+  "name": "Wood",
+  "grenade": "molotov",
+  "throw_type": "run",
+  "duck": false,
+  "description": "121212"
+ },
+ {
+  "pos": [
+   -428.54,
+   -1551.98,
+   144.03
+  ],
+  "ang": [
+   -14.2,
+   104.35
+  ],
+  "map": "de_overpass",
+  "name": "Pillar",
+  "grenade": "he",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -666.68,
+   -1906.38,
+   144.97
+  ],
+  "ang": [
+   -0.09,
+   107.4
+  ],
+  "map": "de_overpass",
+  "name": "Short",
+  "grenade": "molotov",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -448.71,
+   -1488.22,
+   144.03
+  ],
+  "ang": [
+   -17.43,
+   102.25
+  ],
+  "map": "de_overpass",
+  "name": "Barrels / Pillar",
+  "grenade": "molotov",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -704.29,
+   -1973.82,
+   146.81
+  ],
+  "ang": [
+   3.95,
+   91.47
+  ],
+  "map": "de_overpass",
+  "name": "Wood",
+  "grenade": "molotov",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -704.33,
+   -1973.78,
+   146.81
+  ],
+  "ang": [
+   -6.56,
+   106.53
+  ],
+  "map": "de_overpass",
+  "name": "Scafford",
+  "grenade": "molotov",
+  "throw_type": "run",
+  "duck": false,
+  "description": "FD"
+ },
+ {
+  "pos": [
+   -743.86,
+   -1926.33,
+   198.66
+  ],
+  "ang": [
+   -18.57,
+   93.5
+  ],
+  "map": "de_overpass",
+  "name": "Short",
+  "grenade": "molotov",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -770.15,
+   -1887.57,
+   198.66
+  ],
+  "ang": [
+   -14.83,
+   102.35
+  ],
+  "map": "de_overpass",
+  "name": "Short",
+  "grenade": "molotov",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -613.29,
+   -1473.61,
+   192.28
+  ],
+  "ang": [
+   -26.74,
+   137.21
+  ],
+  "map": "de_overpass",
+  "name": "Construction",
+  "grenade": "flash",
+  "throw_type": "normal",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -403.05,
+   -1201.42,
+   31.38
+  ],
+  "ang": [
+   -25.12,
+   109.23
+  ],
+  "map": "de_overpass",
+  "name": "Pillar",
+  "grenade": "molotov",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -338.73,
+   -1168.86,
+   16.86
+  ],
+  "ang": [
+   -11.32,
+   131.07
+  ],
+  "map": "de_overpass",
+  "name": "Scafford",
+  "grenade": "he",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -454.55,
+   -1222.89,
+   51.95
+  ],
+  "ang": [
+   1.22,
+   125.45
+  ],
+  "map": "de_overpass",
+  "name": "Scafford",
+  "grenade": "he",
+  "throw_type": "run",
+  "duck": false,
+  "description": "Max DMG"
+ },
+ {
+  "pos": [
+   -454.55,
+   -1222.87,
+   51.94
+  ],
+  "ang": [
+   -7.86,
+   141.98
+  ],
+  "map": "de_overpass",
+  "name": "Gustello",
+  "grenade": "he",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -498.07,
+   -1170.11,
+   60.84
+  ],
+  "ang": [
+   4.66,
+   117.02
+  ],
+  "map": "de_overpass",
+  "name": "Water / Under Water",
+  "grenade": "molotov",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -588.18,
+   -1211.99,
+   98.02
+  ],
+  "ang": [
+   -1.14,
+   97.42
+  ],
+  "map": "de_overpass",
+  "name": "Barrels",
+  "grenade": "he",
+  "throw_type": "run",
+  "duck": false,
+  "description": "Max DMG"
+ },
+ {
+  "pos": [
+   -588.25,
+   -1212.01,
+   98.03
+  ],
+  "ang": [
+   -0.44,
+   101.41
+  ],
+  "map": "de_overpass",
+  "name": "Pillar",
+  "grenade": "he",
+  "throw_type": "run",
+  "duck": false,
+  "description": "Left"
+ },
+ {
+  "pos": [
+   -588.8,
+   -1211.73,
+   97.89
+  ],
+  "ang": [
+   0.67,
+   112.31
+  ],
+  "map": "de_overpass",
+  "name": "Water",
+  "grenade": "he",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -588.82,
+   -1211.71,
+   97.89
+  ],
+  "ang": [
+   1.7,
+   108.4
+  ],
+  "map": "de_overpass",
+  "name": "Pillar",
+  "grenade": "he",
+  "throw_type": "run",
+  "duck": false,
+  "description": "Right"
+ },
+ {
+  "pos": [
+   -509.82,
+   -1142.84,
+   57.24
+  ],
+  "ang": [
+   -18.3,
+   127.2
+  ],
+  "map": "de_overpass",
+  "name": "Corner",
+  "grenade": "he",
+  "throw_type": "jump",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -581.79,
+   -1154.18,
+   64.7
+  ],
+  "ang": [
+   4.7,
+   99.57
+  ],
+  "map": "de_overpass",
+  "name": "Pillar/Barrels",
+  "grenade": "molotov",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -242.46,
+   -1006.22,
+   14.76
+  ],
+  "ang": [
+   -6.33,
+   111.64
+  ],
+  "map": "de_overpass",
+  "name": "Barrels",
+  "grenade": "molotov",
+  "throw_type": "jump",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -242.48,
+   -1006.17,
+   14.75
+  ],
+  "ang": [
+   -2.48,
+   118.71
+  ],
+  "map": "de_overpass",
+  "name": "Pillar",
+  "grenade": "molotov",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -242.53,
+   -1006.17,
+   14.75
+  ],
+  "ang": [
+   -28.49,
+   137.2
+  ],
+  "map": "de_overpass",
+  "name": "Scafford",
+  "grenade": "molotov",
+  "throw_type": "normal",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -242.52,
+   -1006.14,
+   14.75
+  ],
+  "ang": [
+   -29.74,
+   124.71
+  ],
+  "map": "de_overpass",
+  "name": "Wood",
+  "grenade": "molotov",
+  "throw_type": "normal",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -573.19,
+   -1132.29,
+   57.25
+  ],
+  "ang": [
+   -0.1,
+   157.7
+  ],
+  "map": "de_overpass",
+  "name": "Guestello",
+  "grenade": "molotov",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -572.92,
+   -1131.62,
+   57.01
+  ],
+  "ang": [
+   -12.94,
+   128.26
+  ],
+  "map": "de_overpass",
+  "name": "Under Water",
+  "grenade": "molotov",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -618.02,
+   -1128.13,
+   62.34
+  ],
+  "ang": [
+   -19.14,
+   102.84
+  ],
+  "map": "de_overpass",
+  "name": "Wood",
+  "grenade": "he",
+  "throw_type": "normal",
+  "duck": false,
+  "description": "Fakeduck"
+ },
+ {
+  "pos": [
+   -618.03,
+   -1128.11,
+   62.34
+  ],
+  "ang": [
+   1.75,
+   146.13
+  ],
+  "map": "de_overpass",
+  "name": "Scafford",
+  "grenade": "he",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -580.92,
+   -1100.34,
+   46.54
+  ],
+  "ang": [
+   -45.44,
+   119.46
+  ],
+  "map": "de_overpass",
+  "name": "Short",
+  "grenade": "molotov",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -612.32,
+   -1086.28,
+   43.81
+  ],
+  "ang": [
+   -24.38,
+   128.04
+  ],
+  "map": "de_overpass",
+  "name": "Short",
+  "grenade": "molotov",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -613.59,
+   -1084.59,
+   43.21
+  ],
+  "ang": [
+   -26.19,
+   104.1
+  ],
+  "map": "de_overpass",
+  "name": "Wood",
+  "grenade": "molotov",
+  "throw_type": "normal",
+  "duck": false,
+  "description": "Fakeduck"
+ },
+ {
+  "pos": [
+   -405.71,
+   -954.22,
+   11.99
+  ],
+  "ang": [
+   -28.6,
+   130.96
+  ],
+  "map": "de_overpass",
+  "name": "Plant",
+  "grenade": "molotov",
+  "throw_type": "normal",
+  "duck": false,
+  "description": "DEFAULT"
+ },
+ {
+  "pos": [
+   -405.74,
+   -954.2,
+   11.99
+  ],
+  "ang": [
+   0.31,
+   -175.4
+  ],
+  "map": "de_overpass",
+  "name": "Connector",
+  "grenade": "molotov",
+  "throw_type": "run",
+  "duck": false,
+  "description": "Stairs"
+ },
+ {
+  "pos": [
+   -261.63,
+   -906.58,
+   27.04
+  ],
+  "ang": [
+   -14.6,
+   156.6
+  ],
+  "map": "de_overpass",
+  "name": "Gustello Spot",
+  "grenade": "he",
+  "throw_type": "run",
+  "duck": false,
+  "description": "60HP"
+ },
+ {
+  "pos": [
+   -262.97,
+   -906.22,
+   27.0
+  ],
+  "ang": [
+   -11.19,
+   157.75
+  ],
+  "map": "de_overpass",
+  "name": "Gustello Wall",
+  "grenade": "he",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -234.1,
+   -844.23,
+   49.65
+  ],
+  "ang": [
+   -26.0,
+   158.3
+  ],
+  "map": "de_overpass",
+  "name": "Short",
+  "grenade": "molotov",
+  "throw_type": "normal",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -234.17,
+   -844.23,
+   49.64
+  ],
+  "ang": [
+   -25.0,
+   122.91
+  ],
+  "map": "de_overpass",
+  "name": "Pillar",
+  "grenade": "molotov",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -237.57,
+   -826.68,
+   50.19
+  ],
+  "ang": [
+   -0.99,
+   156.86
+  ],
+  "map": "de_overpass",
+  "name": "Gustello",
+  "grenade": "molotov",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -237.52,
+   -826.67,
+   50.35
+  ],
+  "ang": [
+   -0.11,
+   174.5
+  ],
+  "map": "de_overpass",
+  "name": "R8 spot",
+  "grenade": "molotov",
+  "throw_type": "run",
+  "duck": false,
+  "description": "anti-glock glock glock"
+ },
+ {
+  "pos": [
+   -703.52,
+   -912.0,
+   23.89
+  ],
+  "ang": [
+   -9.45,
+   -67.58
+  ],
+  "map": "de_overpass",
+  "name": "Barrel",
+  "grenade": "molotov",
+  "throw_type": "run",
+  "duck": true,
+  "description": ""
+ },
+ {
+  "pos": [
+   -286.33,
+   -729.75,
+   60.0
+  ],
+  "ang": [
+   -23.0,
+   173.51
+  ],
+  "map": "de_overpass",
+  "name": "Short",
+  "grenade": "he",
+  "throw_type": "normal",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -291.11,
+   -721.72,
+   60.01
+  ],
+  "ang": [
+   -1.32,
+   164.99
+  ],
+  "map": "de_overpass",
+  "name": "Short",
+  "grenade": "molotov",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -290.36,
+   -712.38,
+   63.31
+  ],
+  "ang": [
+   3.89,
+   -166.62
+  ],
+  "map": "de_overpass",
+  "name": "Stairs",
+  "grenade": "molotov",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -1059.78,
+   -982.89,
+   0.03
+  ],
+  "ang": [
+   1.06,
+   49.97
+  ],
+  "map": "de_overpass",
+  "name": "Barrels",
+  "grenade": "molotov",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -1048.28,
+   -968.87,
+   0.03
+  ],
+  "ang": [
+   0.06,
+   153.54
+  ],
+  "map": "de_overpass",
+  "name": "Short",
+  "grenade": "he",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -1049.14,
+   -969.27,
+   0.03
+  ],
+  "ang": [
+   -2.42,
+   60.65
+  ],
+  "map": "de_overpass",
+  "name": "Water / Under Water",
+  "grenade": "molotov",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -1049.16,
+   -969.26,
+   0.03
+  ],
+  "ang": [
+   -0.16,
+   153.46
+  ],
+  "map": "de_overpass",
+  "name": "Short",
+  "grenade": "molotov",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -1049.2,
+   -969.26,
+   0.03
+  ],
+  "ang": [
+   -5.62,
+   51.13
+  ],
+  "map": "de_overpass",
+  "name": "Pillar",
+  "grenade": "molotov",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -1218.59,
+   -952.88,
+   5.89
+  ],
+  "ang": [
+   -26.77,
+   79.35
+  ],
+  "map": "de_overpass",
+  "name": "Pillar",
+  "grenade": "molotov",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -1218.6,
+   -952.89,
+   5.89
+  ],
+  "ang": [
+   -2.01,
+   41.59
+  ],
+  "map": "de_overpass",
+  "name": "Wood",
+  "grenade": "molotov",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -1218.6,
+   -952.82,
+   5.9
+  ],
+  "ang": [
+   -37.14,
+   93.57
+  ],
+  "map": "de_overpass",
+  "name": "Under Water",
+  "grenade": "molotov",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -1218.63,
+   -952.84,
+   5.9
+  ],
+  "ang": [
+   -23.29,
+   91.17
+  ],
+  "map": "de_overpass",
+  "name": "Scafford",
+  "grenade": "molotov",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -1219.11,
+   -952.71,
+   5.93
+  ],
+  "ang": [
+   -1.64,
+   57.21
+  ],
+  "map": "de_overpass",
+  "name": "Barrels",
+  "grenade": "molotov",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -856.03,
+   -638.97,
+   96.03
+  ],
+  "ang": [
+   -23.72,
+   125.05
+  ],
+  "map": "de_overpass",
+  "name": "Heaven",
+  "grenade": "smoke",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -891.53,
+   -638.97,
+   96.03
+  ],
+  "ang": [
+   -24.59,
+   123.92
+  ],
+  "map": "de_overpass",
+  "name": "Balcony",
+  "grenade": "molotov",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -891.56,
+   -638.97,
+   96.03
+  ],
+  "ang": [
+   1.71,
+   124.63
+  ],
+  "map": "de_overpass",
+  "name": "Heaven",
+  "grenade": "molotov",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -891.52,
+   -638.94,
+   96.03
+  ],
+  "ang": [
+   -30.17,
+   114.9
+  ],
+  "map": "de_overpass",
+  "name": "Scafford",
+  "grenade": "molotov",
+  "throw_type": "normal",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -891.6,
+   -638.96,
+   96.03
+  ],
+  "ang": [
+   -19.08,
+   145.88
+  ],
+  "map": "de_overpass",
+  "name": "CT Spawn",
+  "grenade": "molotov",
+  "throw_type": "normal",
+  "duck": false,
+  "description": "Walkway / Door"
+ },
+ {
+  "pos": [
+   -859.75,
+   -617.69,
+   96.03
+  ],
+  "ang": [
+   1.81,
+   129.17
+  ],
+  "map": "de_overpass",
+  "name": "Heaven",
+  "grenade": "he",
+  "throw_type": "run",
+  "duck": false,
+  "description": "not fd"
+ },
+ {
+  "pos": [
+   -859.76,
+   -617.68,
+   96.03
+  ],
+  "ang": [
+   -14.91,
+   168.4
+  ],
+  "map": "de_overpass",
+  "name": "Walkway",
+  "grenade": "he",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -861.0,
+   -617.12,
+   96.03
+  ],
+  "ang": [
+   4.06,
+   147.63
+  ],
+  "map": "de_overpass",
+  "name": "CT Spawn",
+  "grenade": "he",
+  "throw_type": "run",
+  "duck": false,
+  "description": "Walkway / Door"
+ },
+ {
+  "pos": [
+   -550.84,
+   -449.71,
+   6.29
+  ],
+  "ang": [
+   -2.34,
+   117.42
+  ],
+  "map": "de_overpass",
+  "name": "Pillar",
+  "grenade": "he",
+  "throw_type": "run",
+  "duck": false,
+  "description": "Unsafe"
+ },
+ {
+  "pos": [
+   -554.77,
+   -450.16,
+   6.71
+  ],
+  "ang": [
+   -4.26,
+   116.71
+  ],
+  "map": "de_overpass",
+  "name": "Pillar",
+  "grenade": "molotov",
+  "throw_type": "run",
+  "duck": false,
+  "description": "Unsafe"
+ },
+ {
+  "pos": [
+   -557.54,
+   -450.42,
+   7.17
+  ],
+  "ang": [
+   -10.37,
+   144.43
+  ],
+  "map": "de_overpass",
+  "name": "Water",
+  "grenade": "he",
+  "throw_type": "run",
+  "duck": false,
+  "description": "unsafe / peek"
+ },
+ {
+  "pos": [
+   -557.51,
+   -450.41,
+   7.17
+  ],
+  "ang": [
+   -10.37,
+   144.43
+  ],
+  "map": "de_overpass",
+  "name": "Water",
+  "grenade": "molotov",
+  "throw_type": "run",
+  "duck": false,
+  "description": "FUKIN UNSAFE"
+ },
+ {
+  "pos": [
+   -870.13,
+   -587.34,
+   96.03
+  ],
+  "ang": [
+   -8.17,
+   91.77
+  ],
+  "map": "de_overpass",
+  "name": "Wood",
+  "grenade": "he",
+  "throw_type": "normal",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -870.12,
+   -587.29,
+   96.03
+  ],
+  "ang": [
+   -9.97,
+   87.6
+  ],
+  "map": "de_overpass",
+  "name": "Barrels",
+  "grenade": "he",
+  "throw_type": "normal",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -870.78,
+   -568.6,
+   96.03
+  ],
+  "ang": [
+   -37.24,
+   87.63
+  ],
+  "map": "de_overpass",
+  "name": "Pillar",
+  "grenade": "he",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -870.76,
+   -568.57,
+   96.03
+  ],
+  "ang": [
+   -38.97,
+   102.64
+  ],
+  "map": "de_overpass",
+  "name": "Pillar",
+  "grenade": "he",
+  "throw_type": "run",
+  "duck": false,
+  "description": "Left"
+ },
+ {
+  "pos": [
+   -862.11,
+   -560.68,
+   96.03
+  ],
+  "ang": [
+   -24.26,
+   88.03
+  ],
+  "map": "de_overpass",
+  "name": "Barrels | Pillar",
+  "grenade": "molotov",
+  "throw_type": "normal",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -871.23,
+   -555.56,
+   96.03
+  ],
+  "ang": [
+   -31.1,
+   87.2
+  ],
+  "map": "de_overpass",
+  "name": "Pillar",
+  "grenade": "molotov",
+  "throw_type": "normal",
+  "duck": false,
+  "description": "Right"
+ },
+ {
+  "pos": [
+   -871.16,
+   -555.51,
+   96.03
+  ],
+  "ang": [
+   -22.28,
+   -174.25
+  ],
+  "map": "de_overpass",
+  "name": "Walkway",
+  "grenade": "molotov",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -871.24,
+   -555.49,
+   96.03
+  ],
+  "ang": [
+   -22.73,
+   93.09
+  ],
+  "map": "de_overpass",
+  "name": "Wood",
+  "grenade": "molotov",
+  "throw_type": "normal",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -871.24,
+   -555.48,
+   96.03
+  ],
+  "ang": [
+   -31.3,
+   102.93
+  ],
+  "map": "de_overpass",
+  "name": "Pillar",
+  "grenade": "molotov",
+  "throw_type": "normal",
+  "duck": false,
+  "description": "LEFT"
+ },
+ {
+  "pos": [
+   -863.73,
+   -550.91,
+   96.03
+  ],
+  "ang": [
+   -22.4,
+   116.41
+  ],
+  "map": "de_overpass",
+  "name": "Water",
+  "grenade": "molotov",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -856.08,
+   -536.86,
+   96.03
+  ],
+  "ang": [
+   -18.94,
+   147.81
+  ],
+  "map": "de_overpass",
+  "name": "CT Spawn",
+  "grenade": "he",
+  "throw_type": "run",
+  "duck": false,
+  "description": "Walkway"
+ },
+ {
+  "pos": [
+   -856.12,
+   -536.85,
+   96.03
+  ],
+  "ang": [
+   -0.79,
+   171.12
+  ],
+  "map": "de_overpass",
+  "name": "Walkway",
+  "grenade": "he",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -1405.12,
+   -988.74,
+   9.56
+  ],
+  "ang": [
+   -24.7,
+   63.01
+  ],
+  "map": "de_overpass",
+  "name": "Wood",
+  "grenade": "he",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -1404.87,
+   -988.36,
+   9.59
+  ],
+  "ang": [
+   3.51,
+   69.8
+  ],
+  "map": "de_overpass",
+  "name": "Pillar",
+  "grenade": "he",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -1304.49,
+   -828.65,
+   11.22
+  ],
+  "ang": [
+   -1.5,
+   56.9
+  ],
+  "map": "de_overpass",
+  "name": "Wood",
+  "grenade": "he",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -1304.54,
+   -828.64,
+   11.21
+  ],
+  "ang": [
+   -8.3,
+   83.09
+  ],
+  "map": "de_overpass",
+  "name": "Pillar",
+  "grenade": "he",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -1096.43,
+   -638.93,
+   96.03
+  ],
+  "ang": [
+   -14.06,
+   83.22
+  ],
+  "map": "de_overpass",
+  "name": "Pillar",
+  "grenade": "molotov",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -1096.43,
+   -638.89,
+   96.03
+  ],
+  "ang": [
+   -4.18,
+   86.53
+  ],
+  "map": "de_overpass",
+  "name": "Water / Pillar",
+  "grenade": "molotov",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -1096.56,
+   -638.95,
+   96.03
+  ],
+  "ang": [
+   -24.6,
+   83.35
+  ],
+  "map": "de_overpass",
+  "name": "Barrels",
+  "grenade": "molotov",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -1105.77,
+   -638.9,
+   94.25
+  ],
+  "ang": [
+   14.59,
+   98.26
+  ],
+  "map": "de_overpass",
+  "name": "Under Water",
+  "grenade": "he",
+  "throw_type": "run",
+  "duck": false,
+  "description": "unsafe / peek"
+ },
+ {
+  "pos": [
+   -1414.84,
+   -950.18,
+   19.03
+  ],
+  "ang": [
+   -27.25,
+   82.72
+  ],
+  "map": "de_overpass",
+  "name": "Water / Under Water",
+  "grenade": "molotov",
+  "throw_type": "normal",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -1414.85,
+   -950.15,
+   19.03
+  ],
+  "ang": [
+   -26.97,
+   69.06
+  ],
+  "map": "de_overpass",
+  "name": "Barrels",
+  "grenade": "molotov",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -1414.84,
+   -950.12,
+   19.04
+  ],
+  "ang": [
+   -22.69,
+   61.95
+  ],
+  "map": "de_overpass",
+  "name": "Wood",
+  "grenade": "molotov",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -1414.85,
+   -950.11,
+   19.04
+  ],
+  "ang": [
+   -24.5,
+   -38.2
+  ],
+  "map": "de_overpass",
+  "name": "Barrel",
+  "grenade": "molotov",
+  "throw_type": "run",
+  "duck": false,
+  "description": "Spawn T"
+ },
+ {
+  "pos": [
+   -1414.85,
+   -950.1,
+   19.04
+  ],
+  "ang": [
+   -22.45,
+   68.38
+  ],
+  "map": "de_overpass",
+  "name": "Pillar",
+  "grenade": "molotov",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -1109.96,
+   -638.91,
+   92.15
+  ],
+  "ang": [
+   -10.71,
+   101.01
+  ],
+  "map": "de_overpass",
+  "name": "Barrels",
+  "grenade": "he",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -1110.39,
+   -638.98,
+   91.94
+  ],
+  "ang": [
+   -12.87,
+   82.95
+  ],
+  "map": "de_overpass",
+  "name": "Pillar",
+  "grenade": "he",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -1110.22,
+   -638.85,
+   92.01
+  ],
+  "ang": [
+   -20.97,
+   106.84
+  ],
+  "map": "de_overpass",
+  "name": "Scafford",
+  "grenade": "he",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -1110.37,
+   -638.95,
+   91.95
+  ],
+  "ang": [
+   -27.34,
+   94.87
+  ],
+  "map": "de_overpass",
+  "name": "Water",
+  "grenade": "he",
+  "throw_type": "run",
+  "duck": false,
+  "description": "SAFE"
+ },
+ {
+  "pos": [
+   -1110.4,
+   -638.96,
+   91.94
+  ],
+  "ang": [
+   -14.53,
+   102.28
+  ],
+  "map": "de_overpass",
+  "name": "Under Water",
+  "grenade": "molotov",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -1110.43,
+   -638.97,
+   91.92
+  ],
+  "ang": [
+   0.75,
+   99.06
+  ],
+  "map": "de_overpass",
+  "name": "Water",
+  "grenade": "molotov",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -1110.52,
+   -638.85,
+   91.87
+  ],
+  "ang": [
+   -23.21,
+   116.53
+  ],
+  "map": "de_overpass",
+  "name": "Scafford",
+  "grenade": "molotov",
+  "throw_type": "run",
+  "duck": false,
+  "description": "FD"
+ },
+ {
+  "pos": [
+   -414.57,
+   -296.72,
+   27.58
+  ],
+  "ang": [
+   -47.85,
+   -153.99
+  ],
+  "map": "de_overpass",
+  "name": "Constraction",
+  "grenade": "molotov",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -414.69,
+   -296.68,
+   27.36
+  ],
+  "ang": [
+   2.17,
+   128.13
+  ],
+  "map": "de_overpass",
+  "name": "Water / Under Water",
+  "grenade": "molotov",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -1079.19,
+   -606.08,
+   96.03
+  ],
+  "ang": [
+   -28.94,
+   106.8
+  ],
+  "map": "de_overpass",
+  "name": "Under Water",
+  "grenade": "he",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -1079.33,
+   -605.96,
+   96.03
+  ],
+  "ang": [
+   -20.99,
+   95.2
+  ],
+  "map": "de_overpass",
+  "name": "Scafford",
+  "grenade": "he",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -1133.99,
+   -638.91,
+   80.14
+  ],
+  "ang": [
+   -11.52,
+   80.09
+  ],
+  "map": "de_overpass",
+  "name": "Pillar",
+  "grenade": "he",
+  "throw_type": "run",
+  "duck": false,
+  "description": "Safe"
+ },
+ {
+  "pos": [
+   -1412.38,
+   -916.94,
+   22.38
+  ],
+  "ang": [
+   2.7,
+   52.8
+  ],
+  "map": "de_overpass",
+  "name": "Barrels",
+  "grenade": "he",
+  "throw_type": "jump",
+  "duck": false,
+  "description": "Movement [safe]"
+ },
+ {
+  "pos": [
+   -1145.64,
+   -638.2,
+   74.28
+  ],
+  "ang": [
+   -18.28,
+   102.56
+  ],
+  "map": "de_overpass",
+  "name": "Scafford",
+  "grenade": "molotov",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -1085.85,
+   -591.95,
+   96.03
+  ],
+  "ang": [
+   10.48,
+   102.19
+  ],
+  "map": "de_overpass",
+  "name": "Water Rush",
+  "grenade": "molotov",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -869.69,
+   -448.9,
+   96.03
+  ],
+  "ang": [
+   -20.06,
+   176.6
+  ],
+  "map": "de_overpass",
+  "name": "Walkway",
+  "grenade": "he",
+  "throw_type": "run",
+  "duck": false,
+  "description": "Wall"
+ },
+ {
+  "pos": [
+   -869.71,
+   -448.88,
+   96.03
+  ],
+  "ang": [
+   -20.97,
+   179.68
+  ],
+  "map": "de_overpass",
+  "name": "Walkway",
+  "grenade": "molotov",
+  "throw_type": "run",
+  "duck": false,
+  "description": "Wall"
+ },
+ {
+  "pos": [
+   -869.75,
+   -448.86,
+   96.03
+  ],
+  "ang": [
+   -23.17,
+   156.47
+  ],
+  "map": "de_overpass",
+  "name": "CT Spawn",
+  "grenade": "molotov",
+  "throw_type": "normal",
+  "duck": false,
+  "description": "Walkway / Door"
+ },
+ {
+  "pos": [
+   -378.65,
+   -228.77,
+   31.51
+  ],
+  "ang": [
+   0.58,
+   159.21
+  ],
+  "map": "de_overpass",
+  "name": "Scafford",
+  "grenade": "he",
+  "throw_type": "run",
+  "duck": false,
+  "description": "Unsafe"
+ },
+ {
+  "pos": [
+   -1259.21,
+   -680.36,
+   27.72
+  ],
+  "ang": [
+   -49.04,
+   72.84
+  ],
+  "map": "de_overpass",
+  "name": "Pillar",
+  "grenade": "molotov",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -1215.23,
+   -638.4,
+   48.84
+  ],
+  "ang": [
+   -1.86,
+   31.45
+  ],
+  "map": "de_overpass",
+  "name": "Scafford",
+  "grenade": "he",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -1215.23,
+   -638.4,
+   48.83
+  ],
+  "ang": [
+   -17.3,
+   57.99
+  ],
+  "map": "de_overpass",
+  "name": "Wood",
+  "grenade": "he",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -1215.46,
+   -637.5,
+   48.92
+  ],
+  "ang": [
+   -17.3,
+   57.94
+  ],
+  "map": "de_overpass",
+  "name": "Wood",
+  "grenade": "molotov",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -1215.48,
+   -637.49,
+   48.92
+  ],
+  "ang": [
+   -45.6,
+   95.27
+  ],
+  "map": "de_overpass",
+  "name": "Scafford",
+  "grenade": "molotov",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -1586.06,
+   -1087.97,
+   136.03
+  ],
+  "ang": [
+   -21.98,
+   -24.77
+  ],
+  "map": "de_overpass",
+  "name": "Barrel",
+  "grenade": "molotov",
+  "throw_type": "normal",
+  "duck": false,
+  "description": "Spawn T"
+ },
+ {
+  "pos": [
+   -1586.09,
+   -1087.99,
+   136.03
+  ],
+  "ang": [
+   -13.17,
+   64.22
+  ],
+  "map": "de_overpass",
+  "name": "Pillar",
+  "grenade": "molotov",
+  "throw_type": "normal",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -1586.09,
+   -1087.99,
+   136.03
+  ],
+  "ang": [
+   -20.13,
+   64.43
+  ],
+  "map": "de_overpass",
+  "name": "Barrels",
+  "grenade": "molotov",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -1586.1,
+   -1087.99,
+   136.03
+  ],
+  "ang": [
+   -15.55,
+   72.88
+  ],
+  "map": "de_overpass",
+  "name": "Scafford",
+  "grenade": "molotov",
+  "throw_type": "normal",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -1586.1,
+   -1087.98,
+   136.03
+  ],
+  "ang": [
+   -12.06,
+   76.38
+  ],
+  "map": "de_overpass",
+  "name": "Under Water",
+  "grenade": "molotov",
+  "throw_type": "normal",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -1586.1,
+   -1087.97,
+   136.03
+  ],
+  "ang": [
+   -8.67,
+   76.29
+  ],
+  "map": "de_overpass",
+  "name": "Water / Under Water",
+  "grenade": "molotov",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -1586.13,
+   -1087.99,
+   136.03
+  ],
+  "ang": [
+   -17.93,
+   57.78
+  ],
+  "map": "de_overpass",
+  "name": "Wood",
+  "grenade": "molotov",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -1091.73,
+   -529.3,
+   95.5
+  ],
+  "ang": [
+   8.17,
+   103.42
+  ],
+  "map": "de_overpass",
+  "name": "Barrels",
+  "grenade": "molotov",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -1392.22,
+   -792.4,
+   23.3
+  ],
+  "ang": [
+   -29.73,
+   66.81
+  ],
+  "map": "de_overpass",
+  "name": "Pillar",
+  "grenade": "molotov",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -1392.24,
+   -792.41,
+   23.3
+  ],
+  "ang": [
+   -13.78,
+   81.24
+  ],
+  "map": "de_overpass",
+  "name": "Barrels",
+  "grenade": "molotov",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -1108.49,
+   -527.68,
+   87.04
+  ],
+  "ang": [
+   -26.31,
+   -101.0
+  ],
+  "map": "de_overpass",
+  "name": "Scafford | Under Water",
+  "grenade": "molotov",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -1554.01,
+   -900.07,
+   54.96
+  ],
+  "ang": [
+   6.84,
+   61.99
+  ],
+  "map": "de_overpass",
+  "name": "Barrels",
+  "grenade": "he",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -1553.98,
+   -899.98,
+   54.99
+  ],
+  "ang": [
+   -17.45,
+   75.53
+  ],
+  "map": "de_overpass",
+  "name": "Water",
+  "grenade": "he",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -1553.96,
+   -899.92,
+   55.02
+  ],
+  "ang": [
+   -21.79,
+   61.33
+  ],
+  "map": "de_overpass",
+  "name": "Pillar",
+  "grenade": "he",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -1734.72,
+   -1195.86,
+   96.03
+  ],
+  "ang": [
+   -54.04,
+   -174.9
+  ],
+  "map": "de_overpass",
+  "name": "CONNECTOR HIDE",
+  "grenade": "molotov",
+  "throw_type": "normal",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -1823.66,
+   -1333.62,
+   97.52
+  ],
+  "ang": [
+   8.68,
+   59.85
+  ],
+  "map": "de_overpass",
+  "name": "Pillar",
+  "grenade": "molotov",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -1814.67,
+   -1283.29,
+   96.03
+  ],
+  "ang": [
+   6.97,
+   60.15
+  ],
+  "map": "de_overpass",
+  "name": "Barrels",
+  "grenade": "molotov",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -598.01,
+   -139.95,
+   9.75
+  ],
+  "ang": [
+   -53.24,
+   160.56
+  ],
+  "map": "de_overpass",
+  "name": "Under Water",
+  "grenade": "he",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -1823.98,
+   -1281.54,
+   96.03
+  ],
+  "ang": [
+   8.68,
+   54.31
+  ],
+  "map": "de_overpass",
+  "name": "Wood",
+  "grenade": "molotov",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -599.64,
+   -138.69,
+   10.22
+  ],
+  "ang": [
+   -25.1,
+   167.46
+  ],
+  "map": "de_overpass",
+  "name": "CT Spawn",
+  "grenade": "he",
+  "throw_type": "run",
+  "duck": false,
+  "description": "Door / Walkway"
+ },
+ {
+  "pos": [
+   -627.19,
+   -139.98,
+   14.56
+  ],
+  "ang": [
+   -45.79,
+   153.29
+  ],
+  "map": "de_overpass",
+  "name": "Short",
+  "grenade": "molotov",
+  "throw_type": "normal",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -1559.8,
+   -728.96,
+   51.97
+  ],
+  "ang": [
+   -26.36,
+   60.32
+  ],
+  "map": "de_overpass",
+  "name": "Pillar",
+  "grenade": "molotov",
+  "throw_type": "run",
+  "duck": true,
+  "description": ""
+ },
+ {
+  "pos": [
+   -1559.84,
+   -728.96,
+   51.97
+  ],
+  "ang": [
+   -25.03,
+   48.0
+  ],
+  "map": "de_overpass",
+  "name": "Wood",
+  "grenade": "molotov",
+  "throw_type": "run",
+  "duck": true,
+  "description": ""
+ },
+ {
+  "pos": [
+   -1559.96,
+   -728.85,
+   51.96
+  ],
+  "ang": [
+   -21.76,
+   69.01
+  ],
+  "map": "de_overpass",
+  "name": "Water",
+  "grenade": "molotov",
+  "throw_type": "run",
+  "duck": true,
+  "description": ""
+ },
+ {
+  "pos": [
+   -1559.98,
+   -728.79,
+   51.94
+  ],
+  "ang": [
+   -4.67,
+   66.01
+  ],
+  "map": "de_overpass",
+  "name": "Barrels",
+  "grenade": "molotov",
+  "throw_type": "run",
+  "duck": true,
+  "description": ""
+ },
+ {
+  "pos": [
+   -912.58,
+   -187.59,
+   96.03
+  ],
+  "ang": [
+   -6.61,
+   74.35
+  ],
+  "map": "de_overpass",
+  "name": "Barrels",
+  "grenade": "he",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -641.09,
+   -62.74,
+   10.42
+  ],
+  "ang": [
+   -47.56,
+   -154.55
+  ],
+  "map": "de_overpass",
+  "name": "Construction / Short",
+  "grenade": "molotov",
+  "throw_type": "normal",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -641.08,
+   -62.73,
+   10.41
+  ],
+  "ang": [
+   -21.51,
+   -167.95
+  ],
+  "map": "de_overpass",
+  "name": "Walkway",
+  "grenade": "molotov",
+  "throw_type": "run",
+  "duck": true,
+  "description": ""
+ },
+ {
+  "pos": [
+   -641.1,
+   -62.69,
+   10.42
+  ],
+  "ang": [
+   -25.36,
+   178.13
+  ],
+  "map": "de_overpass",
+  "name": "CT Spawn",
+  "grenade": "molotov",
+  "throw_type": "run",
+  "duck": true,
+  "description": "Walkway / Door"
+ },
+ {
+  "pos": [
+   -1839.97,
+   -1071.99,
+   96.03
+  ],
+  "ang": [
+   -46.58,
+   179.67
+  ],
+  "map": "de_overpass",
+  "name": "Water",
+  "grenade": "flash",
+  "throw_type": "normal",
+  "duck": true,
+  "description": "Popflash"
+ },
+ {
+  "pos": [
+   -1928.29,
+   -2603.93,
+   428.97
+  ],
+  "ang": [
+   -28.71,
+   86.87
+  ],
+  "map": "de_overpass",
+  "name": "Gustello",
+  "grenade": "molotov",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -1944.2,
+   -1225.54,
+   240.03
+  ],
+  "ang": [
+   -32.8,
+   -161.2
+  ],
+  "map": "de_overpass",
+  "name": "Party",
+  "grenade": "molotov",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -1944.23,
+   -1225.59,
+   240.03
+  ],
+  "ang": [
+   -22.63,
+   -161.77
+  ],
+  "map": "de_overpass",
+  "name": "Middle",
+  "grenade": "molotov",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -1944.24,
+   -1225.59,
+   240.03
+  ],
+  "ang": [
+   -22.63,
+   -161.77
+  ],
+  "map": "de_overpass",
+  "name": "Middle",
+  "grenade": "he",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -1130.14,
+   -202.04,
+   99.03
+  ],
+  "ang": [
+   -3.2,
+   -47.3
+  ],
+  "map": "de_overpass",
+  "name": "Monster",
+  "grenade": "molotov",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -2012.97,
+   -1232.0,
+   240.03
+  ],
+  "ang": [
+   3.0,
+   69.14
+  ],
+  "map": "de_overpass",
+  "name": "Connector Anti-peek",
+  "grenade": "he",
+  "throw_type": "normal",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -2022.69,
+   -1264.05,
+   295.16
+  ],
+  "ang": [
+   -9.5,
+   -165.63
+  ],
+  "map": "de_overpass",
+  "name": "Middle",
+  "grenade": "molotov",
+  "throw_type": "run",
+  "duck": false,
+  "description": "unsafe"
+ },
+ {
+  "pos": [
+   -2022.7,
+   -1264.05,
+   295.16
+  ],
+  "ang": [
+   -9.5,
+   -165.63
+  ],
+  "map": "de_overpass",
+  "name": "Middle",
+  "grenade": "he",
+  "throw_type": "run",
+  "duck": false,
+  "description": "unsafe"
+ },
+ {
+  "pos": [
+   -2022.4,
+   -2589.48,
+   450.19
+  ],
+  "ang": [
+   -33.4,
+   85.15
+  ],
+  "map": "de_overpass",
+  "name": "CT walkway",
+  "grenade": "molotov",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -785.77,
+   42.62,
+   80.91
+  ],
+  "ang": [
+   7.85,
+   122.53
+  ],
+  "map": "de_overpass",
+  "name": "Under Water",
+  "grenade": "molotov",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -785.78,
+   42.65,
+   80.92
+  ],
+  "ang": [
+   2.11,
+   -143.51
+  ],
+  "map": "de_overpass",
+  "name": "Walkway",
+  "grenade": "molotov",
+  "throw_type": "run",
+  "duck": false,
+  "description": "Safe"
+ },
+ {
+  "pos": [
+   -785.73,
+   42.7,
+   80.9
+  ],
+  "ang": [
+   -16.88,
+   -131.84
+  ],
+  "map": "de_overpass",
+  "name": "Scafford",
+  "grenade": "molotov",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -785.8,
+   42.68,
+   80.93
+  ],
+  "ang": [
+   -10.49,
+   167.8
+  ],
+  "map": "de_overpass",
+  "name": "Heaven",
+  "grenade": "molotov",
+  "throw_type": "run",
+  "duck": false,
+  "description": "UNSAFE"
+ },
+ {
+  "pos": [
+   -1203.47,
+   -160.07,
+   99.33
+  ],
+  "ang": [
+   -1.81,
+   -65.0
+  ],
+  "map": "de_overpass",
+  "name": "Barrel",
+  "grenade": "molotov",
+  "throw_type": "run",
+  "duck": false,
+  "description": "Spawn T"
+ },
+ {
+  "pos": [
+   -831.92,
+   32.6,
+   96.03
+  ],
+  "ang": [
+   -13.99,
+   175.81
+  ],
+  "map": "de_overpass",
+  "name": "Walkway",
+  "grenade": "he",
+  "throw_type": "run",
+  "duck": false,
+  "description": "unsafe"
+ },
+ {
+  "pos": [
+   -832.01,
+   32.61,
+   96.03
+  ],
+  "ang": [
+   -3.3,
+   158.58
+  ],
+  "map": "de_overpass",
+  "name": "CT walkway",
+  "grenade": "he",
+  "throw_type": "run",
+  "duck": false,
+  "description": "unsafe"
+ },
+ {
+  "pos": [
+   -791.3,
+   50.09,
+   83.68
+  ],
+  "ang": [
+   -9.97,
+   -137.66
+  ],
+  "map": "de_overpass",
+  "name": "Under Water",
+  "grenade": "molotov",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -1207.6,
+   -139.55,
+   194.03
+  ],
+  "ang": [
+   -11.26,
+   147.53
+  ],
+  "map": "de_overpass",
+  "name": "Plant",
+  "grenade": "molotov",
+  "throw_type": "run",
+  "duck": false,
+  "description": "A Site"
+ },
+ {
+  "pos": [
+   -1384.95,
+   -238.35,
+   118.14
+  ],
+  "ang": [
+   -47.18,
+   117.65
+  ],
+  "map": "de_overpass",
+  "name": "Stairs FD",
+  "grenade": "smoke",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -725.29,
+   121.09,
+   50.68
+  ],
+  "ang": [
+   -8.03,
+   171.5
+  ],
+  "map": "de_overpass",
+  "name": "Under Water",
+  "grenade": "he",
+  "throw_type": "normal",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -171.55,
+   227.6,
+   26.44
+  ],
+  "ang": [
+   -8.14,
+   168.23
+  ],
+  "map": "de_overpass",
+  "name": "[Full] Heaven",
+  "grenade": "molotov",
+  "throw_type": "run",
+  "duck": false,
+  "description": "stairs"
+ },
+ {
+  "pos": [
+   -1559.29,
+   -361.31,
+   32.34
+  ],
+  "ang": [
+   -62.83,
+   7.94
+  ],
+  "map": "de_overpass",
+  "name": "Gustella",
+  "grenade": "molotov",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -1559.31,
+   -361.31,
+   32.34
+  ],
+  "ang": [
+   -62.83,
+   7.94
+  ],
+  "map": "de_overpass",
+  "name": "Gustella",
+  "grenade": "he",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -1262.16,
+   -125.6,
+   194.03
+  ],
+  "ang": [
+   -9.74,
+   -56.68
+  ],
+  "map": "de_overpass",
+  "name": "Stairs",
+  "grenade": "molotov",
+  "throw_type": "normal",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -1262.16,
+   -125.6,
+   195.03
+  ],
+  "ang": [
+   -37.2,
+   145.94
+  ],
+  "map": "de_overpass",
+  "name": "Corner",
+  "grenade": "molotov",
+  "throw_type": "normal",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -280.5,
+   301.97,
+   31.93
+  ],
+  "ang": [
+   -6.55,
+   172.08
+  ],
+  "map": "de_overpass",
+  "name": "Heaven",
+  "grenade": "molotov",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -280.51,
+   301.97,
+   31.92
+  ],
+  "ang": [
+   -3.98,
+   173.79
+  ],
+  "map": "de_overpass",
+  "name": "Balcony",
+  "grenade": "molotov",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -1444.15,
+   -149.62,
+   130.03
+  ],
+  "ang": [
+   11.63,
+   -49.52
+  ],
+  "map": "de_overpass",
+  "name": "Stairs",
+  "grenade": "he",
+  "throw_type": "run",
+  "duck": false,
+  "description": "Fakeduck"
+ },
+ {
+  "pos": [
+   -1444.2,
+   -149.6,
+   130.03
+  ],
+  "ang": [
+   -58.56,
+   169.07
+  ],
+  "map": "de_overpass",
+  "name": "Lower Park",
+  "grenade": "molotov",
+  "throw_type": "normal",
+  "duck": true,
+  "description": ""
+ },
+ {
+  "pos": [
+   -1444.21,
+   -149.6,
+   131.03
+  ],
+  "ang": [
+   9.44,
+   -51.74
+  ],
+  "map": "de_overpass",
+  "name": "Stairs",
+  "grenade": "molotov",
+  "throw_type": "run",
+  "duck": false,
+  "description": "Fakeduck"
+ },
+ {
+  "pos": [
+   -1061.89,
+   97.8,
+   99.03
+  ],
+  "ang": [
+   8.62,
+   -117.13
+  ],
+  "map": "de_overpass",
+  "name": "Connector",
+  "grenade": "molotov",
+  "throw_type": "run",
+  "duck": false,
+  "description": "door (down)"
+ },
+ {
+  "pos": [
+   -1061.74,
+   98.09,
+   99.03
+  ],
+  "ang": [
+   -18.7,
+   -132.69
+  ],
+  "map": "de_overpass",
+  "name": "Connector",
+  "grenade": "molotov",
+  "throw_type": "run",
+  "duck": false,
+  "description": "door (up)"
+ },
+ {
+  "pos": [
+   -474.82,
+   348.55,
+   15.3
+  ],
+  "ang": [
+   -13.67,
+   -162.11
+  ],
+  "map": "de_overpass",
+  "name": "Under Water",
+  "grenade": "molotov",
+  "throw_type": "normal",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -1970.41,
+   -616.58,
+   131.81
+  ],
+  "ang": [
+   -13.16,
+   44.38
+  ],
+  "map": "de_overpass",
+  "name": "Bags",
+  "grenade": "molotov",
+  "throw_type": "normal",
+  "duck": false,
+  "description": "Plant"
+ },
+ {
+  "pos": [
+   -1970.4,
+   -616.54,
+   131.81
+  ],
+  "ang": [
+   5.5,
+   45.72
+  ],
+  "map": "de_overpass",
+  "name": "Bags",
+  "grenade": "he",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -469.45,
+   357.5,
+   16.08
+  ],
+  "ang": [
+   -14.14,
+   -158.61
+  ],
+  "map": "de_overpass",
+  "name": "Under Water",
+  "grenade": "he",
+  "throw_type": "normal",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -472.08,
+   363.85,
+   16.65
+  ],
+  "ang": [
+   -24.36,
+   -154.41
+  ],
+  "map": "de_overpass",
+  "name": "Water",
+  "grenade": "molotov",
+  "throw_type": "normal",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -1743.97,
+   -328.73,
+   167.61
+  ],
+  "ang": [
+   -49.95,
+   142.15
+  ],
+  "map": "de_overpass",
+  "name": "Lower Park",
+  "grenade": "molotov",
+  "throw_type": "normal",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -2229.58,
+   -1151.59,
+   405.33
+  ],
+  "ang": [
+   -1.9,
+   85.42
+  ],
+  "map": "de_overpass",
+  "name": "Stairs",
+  "grenade": "molotov",
+  "throw_type": "run",
+  "duck": false,
+  "description": "Safe"
+ },
+ {
+  "pos": [
+   -459.58,
+   369.91,
+   16.36
+  ],
+  "ang": [
+   -12.74,
+   -154.54
+  ],
+  "map": "de_overpass",
+  "name": "Water",
+  "grenade": "he",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -459.56,
+   369.92,
+   16.36
+  ],
+  "ang": [
+   -19.5,
+   -148.99
+  ],
+  "map": "de_overpass",
+  "name": "Barrels",
+  "grenade": "he",
+  "throw_type": "normal",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -475.8,
+   367.21,
+   17.34
+  ],
+  "ang": [
+   -24.04,
+   -148.45
+  ],
+  "map": "de_overpass",
+  "name": "Barrels",
+  "grenade": "molotov",
+  "throw_type": "normal",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -1603.4,
+   -180.52,
+   128.03
+  ],
+  "ang": [
+   10.67,
+   -62.48
+  ],
+  "map": "de_overpass",
+  "name": "Stairs",
+  "grenade": "he",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -1288.02,
+   59.53,
+   21.95
+  ],
+  "ang": [
+   -50.62,
+   -176.42
+  ],
+  "map": "de_overpass",
+  "name": "Lower Park",
+  "grenade": "molotov",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -486.1,
+   383.89,
+   21.92
+  ],
+  "ang": [
+   -18.81,
+   -134.4
+  ],
+  "map": "de_overpass",
+  "name": "Scafford",
+  "grenade": "molotov",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -488.9,
+   385.05,
+   22.58
+  ],
+  "ang": [
+   -19.03,
+   -133.8
+  ],
+  "map": "de_overpass",
+  "name": "Scafford",
+  "grenade": "he",
+  "throw_type": "run",
+  "duck": false,
+  "description": "unsafe"
+ },
+ {
+  "pos": [
+   -821.04,
+   316.35,
+   147.03
+  ],
+  "ang": [
+   -16.96,
+   150.67
+  ],
+  "map": "de_overpass",
+  "name": "Stairs FD",
+  "grenade": "smoke",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -921.64,
+   296.83,
+   96.02
+  ],
+  "ang": [
+   6.7,
+   -54.34
+  ],
+  "map": "de_overpass",
+  "name": "Monster",
+  "grenade": "he",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -960.55,
+   282.25,
+   96.03
+  ],
+  "ang": [
+   -14.97,
+   -119.38
+  ],
+  "map": "de_overpass",
+  "name": "Under Short / Pipe",
+  "grenade": "he",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -960.55,
+   282.25,
+   96.03
+  ],
+  "ang": [
+   -14.5,
+   -103.41
+  ],
+  "map": "de_overpass",
+  "name": "Short",
+  "grenade": "he",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -2008.99,
+   -539.38,
+   133.59
+  ],
+  "ang": [
+   6.9,
+   29.28
+  ],
+  "map": "de_overpass",
+  "name": "plant",
+  "grenade": "he",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -2009.02,
+   -539.39,
+   133.59
+  ],
+  "ang": [
+   7.0,
+   30.0
+  ],
+  "map": "de_overpass",
+  "name": "plant",
+  "grenade": "molotov",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -955.6,
+   304.7,
+   96.03
+  ],
+  "ang": [
+   -15.4,
+   -103.38
+  ],
+  "map": "de_overpass",
+  "name": "Short",
+  "grenade": "molotov",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -955.54,
+   304.9,
+   96.03
+  ],
+  "ang": [
+   -15.62,
+   -118.91
+  ],
+  "map": "de_overpass",
+  "name": "Under Short / Pipe",
+  "grenade": "molotov",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -1612.0,
+   -89.43,
+   128.03
+  ],
+  "ang": [
+   -12.77,
+   -42.54
+  ],
+  "map": "de_overpass",
+  "name": "Stairs",
+  "grenade": "he",
+  "throw_type": "run",
+  "duck": false,
+  "description": "push"
+ },
+ {
+  "pos": [
+   -808.04,
+   370.21,
+   147.03
+  ],
+  "ang": [
+   -11.17,
+   -81.38
+  ],
+  "map": "de_overpass",
+  "name": "Stairs",
+  "grenade": "he",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -787.54,
+   394.06,
+   96.03
+  ],
+  "ang": [
+   -10.36,
+   -148.37
+  ],
+  "map": "de_overpass",
+  "name": "Gustello",
+  "grenade": "smoke",
+  "throw_type": "normal",
+  "duck": true,
+  "description": ""
+ },
+ {
+  "pos": [
+   -787.48,
+   394.12,
+   96.03
+  ],
+  "ang": [
+   -8.14,
+   -152.81
+  ],
+  "map": "de_overpass",
+  "name": "Gustello",
+  "grenade": "smoke",
+  "throw_type": "normal",
+  "duck": true,
+  "description": ""
+ },
+ {
+  "pos": [
+   -784.01,
+   401.27,
+   96.03
+  ],
+  "ang": [
+   -45.41,
+   -99.94
+  ],
+  "map": "de_overpass",
+  "name": "Pillar Back",
+  "grenade": "molotov",
+  "throw_type": "normal",
+  "duck": true,
+  "description": ""
+ },
+ {
+  "pos": [
+   -2474.97,
+   -1987.76,
+   515.57
+  ],
+  "ang": [
+   -13.23,
+   82.04
+  ],
+  "map": "de_overpass",
+  "name": "toilet",
+  "grenade": "molotov",
+  "throw_type": "normal",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -2474.97,
+   -1987.76,
+   515.57
+  ],
+  "ang": [
+   -13.23,
+   82.04
+  ],
+  "map": "de_overpass",
+  "name": "toilet",
+  "grenade": "he",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -1196.57,
+   256.01,
+   22.66
+  ],
+  "ang": [
+   -2.64,
+   20.07
+  ],
+  "map": "de_overpass",
+  "name": "Barrels",
+  "grenade": "smoke",
+  "throw_type": "run",
+  "duck": true,
+  "description": ""
+ },
+ {
+  "pos": [
+   -798.62,
+   421.99,
+   96.03
+  ],
+  "ang": [
+   12.42,
+   -143.9
+  ],
+  "map": "de_overpass",
+  "name": "Water",
+  "grenade": "smoke",
+  "throw_type": "normal",
+  "duck": true,
+  "description": ""
+ },
+ {
+  "pos": [
+   -2386.29,
+   -1103.76,
+   432.09
+  ],
+  "ang": [
+   -1.6,
+   80.7
+  ],
+  "map": "de_overpass",
+  "name": "Stairs",
+  "grenade": "molotov",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -858.32,
+   440.95,
+   96.03
+  ],
+  "ang": [
+   -51.75,
+   154.14
+  ],
+  "map": "de_overpass",
+  "name": "Stairs FD",
+  "grenade": "smoke",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -823.26,
+   455.87,
+   96.03
+  ],
+  "ang": [
+   -15.67,
+   -121.34
+  ],
+  "map": "de_overpass",
+  "name": "Under Short",
+  "grenade": "he",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -823.24,
+   455.9,
+   96.03
+  ],
+  "ang": [
+   -3.8,
+   -98.58
+  ],
+  "map": "de_overpass",
+  "name": "Bhop",
+  "grenade": "he",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -823.25,
+   455.89,
+   96.03
+  ],
+  "ang": [
+   -1.33,
+   -69.55
+  ],
+  "map": "de_overpass",
+  "name": "Tunnel",
+  "grenade": "he",
+  "throw_type": "normal",
+  "duck": true,
+  "description": "Monster"
+ },
+ {
+  "pos": [
+   -823.24,
+   455.9,
+   96.03
+  ],
+  "ang": [
+   -3.8,
+   -98.58
+  ],
+  "map": "de_overpass",
+  "name": "Bhop",
+  "grenade": "molotov",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -823.25,
+   455.89,
+   96.03
+  ],
+  "ang": [
+   7.48,
+   -77.29
+  ],
+  "map": "de_overpass",
+  "name": "Short",
+  "grenade": "he",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -823.21,
+   455.92,
+   96.03
+  ],
+  "ang": [
+   -1.45,
+   -69.56
+  ],
+  "map": "de_overpass",
+  "name": "Tunnel",
+  "grenade": "molotov",
+  "throw_type": "normal",
+  "duck": true,
+  "description": "Monster"
+ },
+ {
+  "pos": [
+   -823.32,
+   455.88,
+   96.03
+  ],
+  "ang": [
+   6.8,
+   -82.11
+  ],
+  "map": "de_overpass",
+  "name": "Stairs",
+  "grenade": "he",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -823.24,
+   455.94,
+   96.03
+  ],
+  "ang": [
+   7.29,
+   -77.15
+  ],
+  "map": "de_overpass",
+  "name": "Short",
+  "grenade": "molotov",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -823.23,
+   455.95,
+   96.03
+  ],
+  "ang": [
+   -15.61,
+   -121.26
+  ],
+  "map": "de_overpass",
+  "name": "Under Short",
+  "grenade": "molotov",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -823.97,
+   455.77,
+   96.03
+  ],
+  "ang": [
+   10.56,
+   -85.72
+  ],
+  "map": "de_overpass",
+  "name": "Tunnel",
+  "grenade": "he",
+  "throw_type": "run",
+  "duck": false,
+  "description": "Pipe"
+ },
+ {
+  "pos": [
+   -823.41,
+   457.93,
+   96.03
+  ],
+  "ang": [
+   -18.61,
+   -83.6
+  ],
+  "map": "de_overpass",
+  "name": "Stairs",
+  "grenade": "molotov",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -1121.86,
+   343.45,
+   55.1
+  ],
+  "ang": [
+   -20.28,
+   -72.12
+  ],
+  "map": "de_overpass",
+  "name": "Stairs",
+  "grenade": "molotov",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -1121.95,
+   343.74,
+   55.06
+  ],
+  "ang": [
+   0.54,
+   -70.5
+  ],
+  "map": "de_overpass",
+  "name": "Stairs",
+  "grenade": "he",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -1221.57,
+   301.36,
+   23.23
+  ],
+  "ang": [
+   -49.07,
+   -97.24
+  ],
+  "map": "de_overpass",
+  "name": "Scafford",
+  "grenade": "molotov",
+  "throw_type": "normal",
+  "duck": false,
+  "description": "Enemy!"
+ },
+ {
+  "pos": [
+   -1221.11,
+   302.26,
+   23.66
+  ],
+  "ang": [
+   -10.13,
+   -134.49
+  ],
+  "map": "de_overpass",
+  "name": "Gustello",
+  "grenade": "smoke",
+  "throw_type": "normal",
+  "duck": true,
+  "description": ""
+ },
+ {
+  "pos": [
+   -1224.19,
+   304.65,
+   24.28
+  ],
+  "ang": [
+   -19.62,
+   -126.54
+  ],
+  "map": "de_overpass",
+  "name": "Gustello",
+  "grenade": "smoke",
+  "throw_type": "normal",
+  "duck": true,
+  "description": ""
+ },
+ {
+  "pos": [
+   -1962.44,
+   -265.04,
+   128.03
+  ],
+  "ang": [
+   -21.31,
+   -59.45
+  ],
+  "map": "de_overpass",
+  "name": "Short Hide spot",
+  "grenade": "molotov",
+  "throw_type": "normal",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -2444.95,
+   -1173.94,
+   433.91
+  ],
+  "ang": [
+   -1.0,
+   -91.88
+  ],
+  "map": "de_overpass",
+  "name": "Fountain",
+  "grenade": "molotov",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -814.47,
+   495.71,
+   96.03
+  ],
+  "ang": [
+   6.95,
+   -76.36
+  ],
+  "map": "de_overpass",
+  "name": "Monster",
+  "grenade": "molotov",
+  "throw_type": "run",
+  "duck": false,
+  "description": "Back"
+ },
+ {
+  "pos": [
+   -1126.21,
+   377.74,
+   55.35
+  ],
+  "ang": [
+   -17.26,
+   -93.59
+  ],
+  "map": "de_overpass",
+  "name": "Tunnel",
+  "grenade": "he",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -2308.95,
+   -772.31,
+   384.28
+  ],
+  "ang": [
+   -3.64,
+   80.02
+  ],
+  "map": "de_overpass",
+  "name": "Truck",
+  "grenade": "molotov",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -1743.65,
+   -10.35,
+   128.03
+  ],
+  "ang": [
+   10.26,
+   -44.24
+  ],
+  "map": "de_overpass",
+  "name": "Stairs",
+  "grenade": "he",
+  "throw_type": "run",
+  "duck": false,
+  "description": "PUSH"
+ },
+ {
+  "pos": [
+   -922.54,
+   489.79,
+   96.03
+  ],
+  "ang": [
+   -13.15,
+   -101.86
+  ],
+  "map": "de_overpass",
+  "name": "Tunnel",
+  "grenade": "he",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -2325.64,
+   -759.13,
+   406.5
+  ],
+  "ang": [
+   -27.36,
+   -97.5
+  ],
+  "map": "de_overpass",
+  "name": "Fountain",
+  "grenade": "molotov",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -1287.29,
+   364.04,
+   27.17
+  ],
+  "ang": [
+   -27.12,
+   -67.66
+  ],
+  "map": "de_overpass",
+  "name": "Construction",
+  "grenade": "molotov",
+  "throw_type": "normal",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -1287.22,
+   364.1,
+   27.19
+  ],
+  "ang": [
+   -22.59,
+   -80.68
+  ],
+  "map": "de_overpass",
+  "name": "Short",
+  "grenade": "he",
+  "throw_type": "normal",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -1287.28,
+   364.08,
+   27.18
+  ],
+  "ang": [
+   -22.44,
+   -82.53
+  ],
+  "map": "de_overpass",
+  "name": "Short",
+  "grenade": "molotov",
+  "throw_type": "normal",
+  "duck": false,
+  "description": "Safe"
+ },
+ {
+  "pos": [
+   -1287.22,
+   364.12,
+   27.19
+  ],
+  "ang": [
+   -31.86,
+   -64.94
+  ],
+  "map": "de_overpass",
+  "name": "Construction",
+  "grenade": "he",
+  "throw_type": "run",
+  "duck": false,
+  "description": "Safe"
+ },
+ {
+  "pos": [
+   -1844.75,
+   -22.72,
+   128.03
+  ],
+  "ang": [
+   10.08,
+   -38.76
+  ],
+  "map": "de_overpass",
+  "name": "Stairs",
+  "grenade": "he",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -2596.31,
+   -1396.97,
+   434.78
+  ],
+  "ang": [
+   -12.78,
+   -108.07
+  ],
+  "map": "de_overpass",
+  "name": "Fountain",
+  "grenade": "molotov",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -2257.18,
+   -508.16,
+   384.28
+  ],
+  "ang": [
+   -27.02,
+   -98.89
+  ],
+  "map": "de_overpass",
+  "name": "Fountain",
+  "grenade": "molotov",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -1860.93,
+   27.66,
+   128.03
+  ],
+  "ang": [
+   -9.09,
+   -38.43
+  ],
+  "map": "de_overpass",
+  "name": "Plant",
+  "grenade": "molotov",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -1860.93,
+   27.75,
+   128.03
+  ],
+  "ang": [
+   -10.8,
+   -38.39
+  ],
+  "map": "de_overpass",
+  "name": "Plant",
+  "grenade": "he",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -2004.44,
+   -48.35,
+   135.76
+  ],
+  "ang": [
+   -16.83,
+   -44.88
+  ],
+  "map": "de_overpass",
+  "name": "Alley",
+  "grenade": "smoke",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -2276.35,
+   -405.83,
+   384.28
+  ],
+  "ang": [
+   -1.75,
+   -86.99
+  ],
+  "map": "de_overpass",
+  "name": "Playground",
+  "grenade": "molotov",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -2336.84,
+   -504.02,
+   419.25
+  ],
+  "ang": [
+   0.07,
+   -48.91
+  ],
+  "map": "de_overpass",
+  "name": "T Stairs",
+  "grenade": "molotov",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -1288.47,
+   495.97,
+   34.47
+  ],
+  "ang": [
+   0.13,
+   -63.02
+  ],
+  "map": "de_overpass",
+  "name": "Monster",
+  "grenade": "molotov",
+  "throw_type": "run",
+  "duck": false,
+  "description": "Back"
+ },
+ {
+  "pos": [
+   -2022.93,
+   -48.03,
+   139.69
+  ],
+  "ang": [
+   8.18,
+   -25.18
+  ],
+  "map": "de_overpass",
+  "name": "Tracks",
+  "grenade": "flash",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -2351.96,
+   -405.63,
+   429.91
+  ],
+  "ang": [
+   1.68,
+   76.77
+  ],
+  "map": "de_overpass",
+  "name": "Stairs",
+  "grenade": "molotov",
+  "throw_type": "run",
+  "duck": false,
+  "description": "FAKEDUCK"
+ },
+ {
+  "pos": [
+   -2333.41,
+   -378.54,
+   501.94
+  ],
+  "ang": [
+   8.41,
+   80.99
+  ],
+  "map": "de_overpass",
+  "name": "Fakeduck",
+  "grenade": "he",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -2212.13,
+   -167.77,
+   385.74
+  ],
+  "ang": [
+   1.64,
+   -79.29
+  ],
+  "map": "de_overpass",
+  "name": "Tunnels",
+  "grenade": "molotov",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -2808.08,
+   -2677.07,
+   477.37
+  ],
+  "ang": [
+   -24.61,
+   130.14
+  ],
+  "map": "de_overpass",
+  "name": "A Long Tree",
+  "grenade": "molotov",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -2924.69,
+   -1869.68,
+   484.47
+  ],
+  "ang": [
+   -28.47,
+   143.71
+  ],
+  "map": "de_overpass",
+  "name": "Rock",
+  "grenade": "molotov",
+  "throw_type": "run",
+  "duck": false,
+  "description": "Left"
+ },
+ {
+  "pos": [
+   -2949.83,
+   -1969.08,
+   473.03
+  ],
+  "ang": [
+   -44.89,
+   150.27
+  ],
+  "map": "de_overpass",
+  "name": "Rock",
+  "grenade": "molotov",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -2805.17,
+   -1044.97,
+   440.37
+  ],
+  "ang": [
+   -22.56,
+   -49.93
+  ],
+  "map": "de_overpass",
+  "name": "Tunnels",
+  "grenade": "molotov",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -2315.48,
+   -134.92,
+   397.73
+  ],
+  "ang": [
+   -63.0,
+   65.74
+  ],
+  "map": "de_overpass",
+  "name": "Truck",
+  "grenade": "molotov",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -2957.1,
+   -1924.54,
+   474.17
+  ],
+  "ang": [
+   5.83,
+   111.0
+  ],
+  "map": "de_overpass",
+  "name": "Wall",
+  "grenade": "he",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -2957.1,
+   -1924.2,
+   474.26
+  ],
+  "ang": [
+   0.66,
+   110.51
+  ],
+  "map": "de_overpass",
+  "name": "Wall",
+  "grenade": "molotov",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -2969.63,
+   -1824.75,
+   502.45
+  ],
+  "ang": [
+   -62.9,
+   166.62
+  ],
+  "map": "de_overpass",
+  "name": "Rock",
+  "grenade": "he",
+  "throw_type": "run",
+  "duck": false,
+  "description": "Right"
+ },
+ {
+  "pos": [
+   -1691.83,
+   528.63,
+   256.03
+  ],
+  "ang": [
+   9.03,
+   -95.95
+  ],
+  "map": "de_overpass",
+  "name": "Gustello",
+  "grenade": "smoke",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -3019.71,
+   -2264.37,
+   475.03
+  ],
+  "ang": [
+   1.61,
+   136.69
+  ],
+  "map": "de_overpass",
+  "name": "Rock",
+  "grenade": "molotov",
+  "throw_type": "run",
+  "duck": false,
+  "description": "Left"
+ },
+ {
+  "pos": [
+   -2298.08,
+   48.56,
+   477.03
+  ],
+  "ang": [
+   -55.55,
+   62.92
+  ],
+  "map": "de_overpass",
+  "name": "Truck",
+  "grenade": "molotov",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -3083.79,
+   -1820.32,
+   512.03
+  ],
+  "ang": [
+   6.32,
+   32.06
+  ],
+  "map": "de_overpass",
+  "name": "Connector",
+  "grenade": "molotov",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -3052.0,
+   -1501.69,
+   521.03
+  ],
+  "ang": [
+   -50.15,
+   -171.89
+  ],
+  "map": "de_overpass",
+  "name": "Long X Rock",
+  "grenade": "molotov",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -2033.4,
+   399.13,
+   105.03
+  ],
+  "ang": [
+   -10.68,
+   58.36
+  ],
+  "map": "de_overpass",
+  "name": "UP",
+  "grenade": "molotov",
+  "throw_type": "normal",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -3102.98,
+   -2246.64,
+   472.03
+  ],
+  "ang": [
+   -58.63,
+   126.81
+  ],
+  "map": "de_overpass",
+  "name": "Rock",
+  "grenade": "he",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -3106.52,
+   -2220.04,
+   469.23
+  ],
+  "ang": [
+   7.58,
+   170.07
+  ],
+  "map": "de_overpass",
+  "name": "Rock",
+  "grenade": "he",
+  "throw_type": "run",
+  "duck": false,
+  "description": "Right"
+ },
+ {
+  "pos": [
+   -1830.85,
+   572.84,
+   256.03
+  ],
+  "ang": [
+   -11.9,
+   -53.11
+  ],
+  "map": "de_overpass",
+  "name": "Stairs",
+  "grenade": "molotov",
+  "throw_type": "run",
+  "duck": false,
+  "description": "UNDER"
+ },
+ {
+  "pos": [
+   -2357.99,
+   70.97,
+   476.03
+  ],
+  "ang": [
+   -1.27,
+   -25.12
+  ],
+  "map": "de_overpass",
+  "name": "Short",
+  "grenade": "molotov",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -2131.8,
+   358.35,
+   128.03
+  ],
+  "ang": [
+   -3.91,
+   -48.11
+  ],
+  "map": "de_overpass",
+  "name": "Under Water",
+  "grenade": "smoke",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -1798.94,
+   615.37,
+   256.03
+  ],
+  "ang": [
+   0.44,
+   -68.36
+  ],
+  "map": "de_overpass",
+  "name": "Tunnel",
+  "grenade": "he",
+  "throw_type": "run",
+  "duck": false,
+  "description": "PUSH,UNSAFE"
+ },
+ {
+  "pos": [
+   -2405.7,
+   48.16,
+   421.7
+  ],
+  "ang": [
+   -18.34,
+   88.6
+  ],
+  "map": "de_overpass",
+  "name": "Trash",
+  "grenade": "he",
+  "throw_type": "run",
+  "duck": true,
+  "description": "ctrl"
+ },
+ {
+  "pos": [
+   -2422.65,
+   35.15,
+   421.09
+  ],
+  "ang": [
+   -20.52,
+   90.89
+  ],
+  "map": "de_overpass",
+  "name": "Trash / Bank",
+  "grenade": "molotov",
+  "throw_type": "normal",
+  "duck": true,
+  "description": "Ctrl"
+ },
+ {
+  "pos": [
+   -2422.66,
+   35.13,
+   422.16
+  ],
+  "ang": [
+   -64.87,
+   69.16
+  ],
+  "map": "de_overpass",
+  "name": "Truck",
+  "grenade": "molotov",
+  "throw_type": "run",
+  "duck": false,
+  "description": "Behind"
+ },
+ {
+  "pos": [
+   -2020.92,
+   477.09,
+   256.03
+  ],
+  "ang": [
+   -3.37,
+   5.67
+  ],
+  "map": "de_overpass",
+  "name": "Sandbags",
+  "grenade": "molotov",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -1828.27,
+   625.23,
+   256.03
+  ],
+  "ang": [
+   -4.02,
+   -62.28
+  ],
+  "map": "de_overpass",
+  "name": "Short",
+  "grenade": "he",
+  "throw_type": "run",
+  "duck": false,
+  "description": "safe"
+ },
+ {
+  "pos": [
+   -1826.37,
+   629.17,
+   256.03
+  ],
+  "ang": [
+   -6.07,
+   -62.84
+  ],
+  "map": "de_overpass",
+  "name": "Construction",
+  "grenade": "molotov",
+  "throw_type": "run",
+  "duck": false,
+  "description": "DEEP"
+ },
+ {
+  "pos": [
+   -1942.9,
+   566.85,
+   256.03
+  ],
+  "ang": [
+   0.09,
+   -28.58
+  ],
+  "map": "de_overpass",
+  "name": "Default A",
+  "grenade": "he",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -1942.91,
+   566.86,
+   256.03
+  ],
+  "ang": [
+   -3.69,
+   -28.54
+  ],
+  "map": "de_overpass",
+  "name": "Default A",
+  "grenade": "molotov",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -2045.89,
+   490.23,
+   256.03
+  ],
+  "ang": [
+   -1.61,
+   5.62
+  ],
+  "map": "de_overpass",
+  "name": "Sandbags",
+  "grenade": "he",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -2446.11,
+   81.76,
+   425.33
+  ],
+  "ang": [
+   -17.84,
+   66.55
+  ],
+  "map": "de_overpass",
+  "name": "Stairs",
+  "grenade": "molotov",
+  "throw_type": "normal",
+  "duck": true,
+  "description": "Trash A"
+ },
+ {
+  "pos": [
+   -2441.77,
+   95.09,
+   426.51
+  ],
+  "ang": [
+   -16.95,
+   66.34
+  ],
+  "map": "de_overpass",
+  "name": "Stairs",
+  "grenade": "he",
+  "throw_type": "run",
+  "duck": true,
+  "description": "70HP"
+ },
+ {
+  "pos": [
+   -2069.88,
+   501.47,
+   256.03
+  ],
+  "ang": [
+   0.35,
+   -2.74
+  ],
+  "map": "de_overpass",
+  "name": "Barrels",
+  "grenade": "smoke",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -1755.79,
+   703.12,
+   480.03
+  ],
+  "ang": [
+   16.4,
+   -13.63
+  ],
+  "map": "de_overpass",
+  "name": "Barrels",
+  "grenade": "he",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -1761.44,
+   706.45,
+   480.03
+  ],
+  "ang": [
+   -12.33,
+   -17.3
+  ],
+  "map": "de_overpass",
+  "name": "Barrels",
+  "grenade": "molotov",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -3220.62,
+   -2201.36,
+   471.84
+  ],
+  "ang": [
+   -17.59,
+   167.88
+  ],
+  "map": "de_overpass",
+  "name": "Rock",
+  "grenade": "molotov",
+  "throw_type": "run",
+  "duck": false,
+  "description": "Right"
+ },
+ {
+  "pos": [
+   -3218.46,
+   -2299.22,
+   469.72
+  ],
+  "ang": [
+   -12.91,
+   129.45
+  ],
+  "map": "de_overpass",
+  "name": "Rock",
+  "grenade": "he",
+  "throw_type": "run",
+  "duck": false,
+  "description": "Left"
+ },
+ {
+  "pos": [
+   -2034.62,
+   563.99,
+   256.03
+  ],
+  "ang": [
+   1.88,
+   -5.57
+  ],
+  "map": "de_overpass",
+  "name": "Barrels",
+  "grenade": "smoke",
+  "throw_type": "normal",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -2173.17,
+   442.41,
+   480.03
+  ],
+  "ang": [
+   -15.11,
+   56.96
+  ],
+  "map": "de_overpass",
+  "name": "Stairs",
+  "grenade": "he",
+  "throw_type": "run",
+  "duck": true,
+  "description": ""
+ },
+ {
+  "pos": [
+   -2173.16,
+   442.44,
+   480.03
+  ],
+  "ang": [
+   -15.1,
+   56.98
+  ],
+  "map": "de_overpass",
+  "name": "Stairs",
+  "grenade": "molotov",
+  "throw_type": "normal",
+  "duck": true,
+  "description": ""
+ },
+ {
+  "pos": [
+   -2478.57,
+   150.52,
+   431.14
+  ],
+  "ang": [
+   -15.81,
+   62.85
+  ],
+  "map": "de_overpass",
+  "name": "Stairs",
+  "grenade": "he",
+  "throw_type": "normal",
+  "duck": true,
+  "description": "FakeDuck"
+ },
+ {
+  "pos": [
+   -1856.97,
+   722.49,
+   480.03
+  ],
+  "ang": [
+   17.04,
+   -14.33
+  ],
+  "map": "de_overpass",
+  "name": "Barrels",
+  "grenade": "smoke",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -2061.65,
+   597.97,
+   513.55
+  ],
+  "ang": [
+   11.0,
+   -49.74
+  ],
+  "map": "de_overpass",
+  "name": "Construction",
+  "grenade": "he",
+  "throw_type": "jump",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -2137.8,
+   540.05,
+   515.43
+  ],
+  "ang": [
+   -4.47,
+   52.47
+  ],
+  "map": "de_overpass",
+  "name": "Stairs",
+  "grenade": "he",
+  "throw_type": "normal",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -2445.9,
+   260.75,
+   492.03
+  ],
+  "ang": [
+   -2.96,
+   -74.79
+  ],
+  "map": "de_overpass",
+  "name": "Tunnels",
+  "grenade": "smoke",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -2171.91,
+   547.77,
+   475.28
+  ],
+  "ang": [
+   -53.24,
+   -3.36
+  ],
+  "map": "de_overpass",
+  "name": "smoke by Rikuda",
+  "grenade": "smoke",
+  "throw_type": "normal",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -2246.96,
+   508.14,
+   480.03
+  ],
+  "ang": [
+   -4.19,
+   -116.05
+  ],
+  "map": "de_overpass",
+  "name": "Flower",
+  "grenade": "he",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -2246.96,
+   508.15,
+   480.03
+  ],
+  "ang": [
+   -4.19,
+   -116.05
+  ],
+  "map": "de_overpass",
+  "name": "Flower",
+  "grenade": "molotov",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -2081.6,
+   825.52,
+   256.03
+  ],
+  "ang": [
+   2.27,
+   -45.43
+  ],
+  "map": "de_overpass",
+  "name": "Sandbags",
+  "grenade": "molotov",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -2231.98,
+   729.25,
+   256.03
+  ],
+  "ang": [
+   -3.08,
+   -28.54
+  ],
+  "map": "de_overpass",
+  "name": "Default",
+  "grenade": "molotov",
+  "throw_type": "run",
+  "duck": false,
+  "description": "Scafford"
+ },
+ {
+  "pos": [
+   -2112.07,
+   843.72,
+   256.03
+  ],
+  "ang": [
+   2.18,
+   -45.03
+  ],
+  "map": "de_overpass",
+  "name": "Sandbags (70)",
+  "grenade": "he",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -1840.32,
+   1027.42,
+   481.03
+  ],
+  "ang": [
+   0.6,
+   -27.26
+  ],
+  "map": "de_overpass",
+  "name": "Barrels",
+  "grenade": "molotov",
+  "throw_type": "normal",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -2128.95,
+   834.82,
+   480.03
+  ],
+  "ang": [
+   -9.45,
+   -16.44
+  ],
+  "map": "de_overpass",
+  "name": "Water",
+  "grenade": "smoke",
+  "throw_type": "normal",
+  "duck": false,
+  "description": "FAKEDUCK"
+ },
+ {
+  "pos": [
+   -3544.14,
+   -2028.02,
+   479.08
+  ],
+  "ang": [
+   -62.85,
+   26.5
+  ],
+  "map": "de_overpass",
+  "name": "Party",
+  "grenade": "he",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -3564.79,
+   -2021.14,
+   478.75
+  ],
+  "ang": [
+   -60.26,
+   18.94
+  ],
+  "map": "de_overpass",
+  "name": "Party",
+  "grenade": "molotov",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -3564.82,
+   -2021.11,
+   478.74
+  ],
+  "ang": [
+   -44.55,
+   1.17
+  ],
+  "map": "de_overpass",
+  "name": "Fountain",
+  "grenade": "molotov",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -2064.42,
+   938.79,
+   531.97
+  ],
+  "ang": [
+   19.43,
+   -58.52
+  ],
+  "map": "de_overpass",
+  "name": "Short / Construction",
+  "grenade": "molotov",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -2229.98,
+   867.23,
+   256.03
+  ],
+  "ang": [
+   -1.45,
+   -32.87
+  ],
+  "map": "de_overpass",
+  "name": "Water",
+  "grenade": "smoke",
+  "throw_type": "normal",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -2229.99,
+   867.24,
+   256.03
+  ],
+  "ang": [
+   -1.14,
+   -38.65
+  ],
+  "map": "de_overpass",
+  "name": "Under Water",
+  "grenade": "smoke",
+  "throw_type": "normal",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -2755.67,
+   335.42,
+   492.03
+  ],
+  "ang": [
+   -14.56,
+   -28.0
+  ],
+  "map": "de_overpass",
+  "name": "Short",
+  "grenade": "molotov",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -1980.3,
+   1020.29,
+   477.59
+  ],
+  "ang": [
+   -23.0,
+   -142.41
+  ],
+  "map": "de_overpass",
+  "name": "LongAnti T",
+  "grenade": "molotov",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -1779.47,
+   1167.06,
+   332.73
+  ],
+  "ang": [
+   -24.42,
+   -146.51
+  ],
+  "map": "de_overpass",
+  "name": "Planting",
+  "grenade": "he",
+  "throw_type": "normal",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -1744.09,
+   1192.41,
+   349.64
+  ],
+  "ang": [
+   -21.0,
+   -158.79
+  ],
+  "map": "de_overpass",
+  "name": "A Plant (75)",
+  "grenade": "he",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -3620.9,
+   -1686.82,
+   489.4
+  ],
+  "ang": [
+   -46.2,
+   4.89
+  ],
+  "map": "de_overpass",
+  "name": "Mid",
+  "grenade": "molotov",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -2085.62,
+   977.67,
+   533.03
+  ],
+  "ang": [
+   21.96,
+   -64.08
+  ],
+  "map": "de_overpass",
+  "name": "Tunnels",
+  "grenade": "molotov",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -2178.43,
+   961.61,
+   256.03
+  ],
+  "ang": [
+   -3.96,
+   -49.4
+  ],
+  "map": "de_overpass",
+  "name": "water",
+  "grenade": "smoke",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -2178.47,
+   961.69,
+   256.03
+  ],
+  "ang": [
+   2.66,
+   -48.98
+  ],
+  "map": "de_overpass",
+  "name": "Under Water",
+  "grenade": "smoke",
+  "throw_type": "normal",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -1746.37,
+   1224.15,
+   353.09
+  ],
+  "ang": [
+   -23.3,
+   -125.45
+  ],
+  "map": "de_overpass",
+  "name": "Toilets",
+  "grenade": "molotov",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -3288.63,
+   -358.97,
+   536.09
+  ],
+  "ang": [
+   -21.68,
+   61.47
+  ],
+  "map": "de_overpass",
+  "name": "Truck",
+  "grenade": "smoke",
+  "throw_type": "normal",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -3288.63,
+   -358.97,
+   536.09
+  ],
+  "ang": [
+   -17.83,
+   59.77
+  ],
+  "map": "de_overpass",
+  "name": "Container",
+  "grenade": "smoke",
+  "throw_type": "normal",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -2001.44,
+   1094.23,
+   445.61
+  ],
+  "ang": [
+   -11.48,
+   -114.92
+  ],
+  "map": "de_overpass",
+  "name": "Grass Fakeduck",
+  "grenade": "molotov",
+  "throw_type": "normal",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -1744.03,
+   1307.97,
+   355.44
+  ],
+  "ang": [
+   -18.03,
+   -124.94
+  ],
+  "map": "de_overpass",
+  "name": "Default",
+  "grenade": "molotov",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -1744.03,
+   1307.97,
+   355.45
+  ],
+  "ang": [
+   -36.12,
+   -142.13
+  ],
+  "map": "de_overpass",
+  "name": "Site",
+  "grenade": "molotov",
+  "throw_type": "normal",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -3721.31,
+   -1764.61,
+   476.5
+  ],
+  "ang": [
+   -9.23,
+   37.49
+  ],
+  "map": "de_overpass",
+  "name": "Barrels",
+  "grenade": "smoke",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -1795.73,
+   1307.96,
+   355.2
+  ],
+  "ang": [
+   -27.13,
+   -120.74
+  ],
+  "map": "de_overpass",
+  "name": "fakeduck",
+  "grenade": "molotov",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -1859.4,
+   1307.98,
+   352.74
+  ],
+  "ang": [
+   0.96,
+   -115.86
+  ],
+  "map": "de_overpass",
+  "name": "Lower park / Fakeduck",
+  "grenade": "molotov",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -1908.97,
+   1307.99,
+   354.18
+  ],
+  "ang": [
+   -21.41,
+   -113.71
+  ],
+  "map": "de_overpass",
+  "name": "FD nades",
+  "grenade": "he",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -2096.43,
+   1191.04,
+   403.22
+  ],
+  "ang": [
+   12.54,
+   -29.61
+  ],
+  "map": "de_overpass",
+  "name": "Water",
+  "grenade": "smoke",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -2096.42,
+   1191.05,
+   403.22
+  ],
+  "ang": [
+   6.52,
+   -30.24
+  ],
+  "map": "de_overpass",
+  "name": "Barrels",
+  "grenade": "smoke",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -2333.98,
+   1022.95,
+   532.89
+  ],
+  "ang": [
+   -12.64,
+   -22.15
+  ],
+  "map": "de_overpass",
+  "name": "Barrels",
+  "grenade": "smoke",
+  "throw_type": "normal",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -3157.54,
+   194.81,
+   503.48
+  ],
+  "ang": [
+   1.92,
+   2.67
+  ],
+  "map": "de_overpass",
+  "name": "Plant",
+  "grenade": "molotov",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -3157.55,
+   194.84,
+   503.47
+  ],
+  "ang": [
+   -11.08,
+   35.98
+  ],
+  "map": "de_overpass",
+  "name": "Truck / Corner",
+  "grenade": "molotov",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -3157.57,
+   194.84,
+   503.48
+  ],
+  "ang": [
+   -16.15,
+   51.91
+  ],
+  "map": "de_overpass",
+  "name": "Trash / Bank",
+  "grenade": "molotov",
+  "throw_type": "normal",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -3157.55,
+   194.88,
+   503.47
+  ],
+  "ang": [
+   -30.32,
+   35.13
+  ],
+  "map": "de_overpass",
+  "name": "Stairs",
+  "grenade": "molotov",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -3157.6,
+   194.84,
+   503.48
+  ],
+  "ang": [
+   -12.9,
+   -5.0
+  ],
+  "map": "de_overpass",
+  "name": "Lower Park",
+  "grenade": "molotov",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -3230.92,
+   92.2,
+   513.49
+  ],
+  "ang": [
+   11.91,
+   48.99
+  ],
+  "map": "de_overpass",
+  "name": "Trash",
+  "grenade": "he",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -3853.0,
+   -1881.5,
+   497.52
+  ],
+  "ang": [
+   -9.07,
+   41.34
+  ],
+  "map": "de_overpass",
+  "name": "Water",
+  "grenade": "smoke",
+  "throw_type": "run",
+  "duck": false,
+  "description": "FAKEDUCK"
+ },
+ {
+  "pos": [
+   -3652.95,
+   -740.6,
+   488.5
+  ],
+  "ang": [
+   2.57,
+   57.2
+  ],
+  "map": "de_overpass",
+  "name": "Corner",
+  "grenade": "molotov",
+  "throw_type": "run",
+  "duck": false,
+  "description": "AWP hold"
+ },
+ {
+  "pos": [
+   -2701.76,
+   768.73,
+   480.03
+  ],
+  "ang": [
+   -18.87,
+   -124.37
+  ],
+  "map": "de_overpass",
+  "name": "Boost Long",
+  "grenade": "he",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -3851.96,
+   -1652.69,
+   496.91
+  ],
+  "ang": [
+   -16.87,
+   12.06
+  ],
+  "map": "de_overpass",
+  "name": "Connector",
+  "grenade": "molotov",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -3699.14,
+   -824.16,
+   488.96
+  ],
+  "ang": [
+   6.72,
+   60.35
+  ],
+  "map": "de_overpass",
+  "name": "Corner",
+  "grenade": "he",
+  "throw_type": "run",
+  "duck": false,
+  "description": "AWP hold"
+ },
+ {
+  "pos": [
+   -3497.38,
+   -257.85,
+   519.13
+  ],
+  "ang": [
+   -16.84,
+   -107.41
+  ],
+  "map": "de_overpass",
+  "name": "Rock",
+  "grenade": "molotov",
+  "throw_type": "normal",
+  "duck": false,
+  "description": "Left"
+ },
+ {
+  "pos": [
+   -3770.03,
+   -851.73,
+   498.41
+  ],
+  "ang": [
+   3.85,
+   55.83
+  ],
+  "map": "de_overpass",
+  "name": "S.W.A.T / Trash",
+  "grenade": "molotov",
+  "throw_type": "run",
+  "duck": false,
+  "description": "SAFE"
+ },
+ {
+  "pos": [
+   -3323.17,
+   146.98,
+   516.13
+  ],
+  "ang": [
+   -16.32,
+   23.04
+  ],
+  "map": "de_overpass",
+  "name": "Truck ",
+  "grenade": "he",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -3300.92,
+   199.93,
+   512.26
+  ],
+  "ang": [
+   -1.74,
+   36.58
+  ],
+  "map": "de_overpass",
+  "name": "Stairs",
+  "grenade": "he",
+  "throw_type": "run",
+  "duck": false,
+  "description": "30hp"
+ },
+ {
+  "pos": [
+   -3948.96,
+   -1575.32,
+   509.81
+  ],
+  "ang": [
+   -15.15,
+   4.38
+  ],
+  "map": "de_overpass",
+  "name": "Mid",
+  "grenade": "molotov",
+  "throw_type": "normal",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -3591.74,
+   -220.53,
+   515.69
+  ],
+  "ang": [
+   -14.06,
+   -84.23
+  ],
+  "map": "de_overpass",
+  "name": "Rock",
+  "grenade": "molotov",
+  "throw_type": "run",
+  "duck": false,
+  "description": "Right"
+ },
+ {
+  "pos": [
+   -3585.71,
+   -130.56,
+   511.36
+  ],
+  "ang": [
+   5.68,
+   35.83
+  ],
+  "map": "de_overpass",
+  "name": "Stairs",
+  "grenade": "molotov",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -2503.97,
+   1200.0,
+   356.02
+  ],
+  "ang": [
+   -63.16,
+   -89.64
+  ],
+  "map": "de_overpass",
+  "name": "Bank / Trash",
+  "grenade": "molotov",
+  "throw_type": "normal",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -2457.94,
+   1218.05,
+   480.03
+  ],
+  "ang": [
+   -16.96,
+   -127.74
+  ],
+  "map": "de_overpass",
+  "name": "Long",
+  "grenade": "molotov",
+  "throw_type": "run",
+  "duck": false,
+  "description": "ANTI-NADE"
+ },
+ {
+  "pos": [
+   -2604.01,
+   1102.23,
+   480.03
+  ],
+  "ang": [
+   -57.8,
+   -84.77
+  ],
+  "map": "de_overpass",
+  "name": "Plant",
+  "grenade": "molotov",
+  "throw_type": "run",
+  "duck": false,
+  "description": "A Site"
+ },
+ {
+  "pos": [
+   -2869.74,
+   955.94,
+   475.03
+  ],
+  "ang": [
+   -4.4,
+   -13.19
+  ],
+  "map": "de_overpass",
+  "name": "Water",
+  "grenade": "smoke",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -2480.58,
+   1304.11,
+   481.03
+  ],
+  "ang": [
+   -14.94,
+   -121.12
+  ],
+  "map": "de_overpass",
+  "name": "Long",
+  "grenade": "molotov",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -2645.31,
+   1465.44,
+   445.74
+  ],
+  "ang": [
+   -11.59,
+   -62.41
+  ],
+  "map": "de_overpass",
+  "name": "Plant",
+  "grenade": "molotov",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -2645.36,
+   1465.5,
+   445.69
+  ],
+  "ang": [
+   -8.19,
+   -62.6
+  ],
+  "map": "de_overpass",
+  "name": "Lower Park",
+  "grenade": "molotov",
+  "throw_type": "run",
+  "duck": false,
+  "description": "Fakeduck"
+ },
+ {
+  "pos": [
+   -1218.92,
+   -933.26,
+   8.92
+  ],
+  "ang": [
+   -24.29,
+   111.87
+  ],
+  "map": "de_overpass",
+  "name": "Stairs [A Plant]",
+  "grenade": "molotov",
+  "throw_type": "jump",
+  "duck": false,
+  "description": "Custom"
+ },
+ {
+  "pos": [
+   -480.84,
+   -1198.18,
+   58.79
+  ],
+  "ang": [
+   5.28,
+   113.19
+  ],
+  "map": "de_overpass",
+  "name": "Pillar L",
+  "grenade": "he",
+  "throw_type": "jump",
+  "duck": false,
+  "description": "Custom"
+ },
+ {
+  "pos": [
+   -581.76,
+   -1122.26,
+   53.94
+  ],
+  "ang": [
+   -24.85,
+   86.6
+  ],
+  "map": "de_overpass",
+  "name": "Pillar L",
+  "grenade": "molotov",
+  "throw_type": "normal",
+  "duck": false,
+  "description": "Custom"
+ },
+ {
+  "pos": [
+   -1758.2,
+   -282.53,
+   150.2
+  ],
+  "ang": [
+   1.76,
+   -33.53
+  ],
+  "map": "de_overpass",
+  "name": "Stairs [UNSAFE]",
+  "grenade": "he",
+  "throw_type": "jump",
+  "duck": false,
+  "description": "Custom"
+ },
+ {
+  "pos": [
+   -1147.47,
+   -203.1,
+   99.03
+  ],
+  "ang": [
+   -10.91,
+   -59.89
+  ],
+  "map": "de_overpass",
+  "name": "Stairs",
+  "grenade": "molotov",
+  "throw_type": "jump",
+  "duck": false,
+  "description": "Custom"
+ },
+ {
+  "pos": [
+   -2071.02,
+   1039.83,
+   423.01
+  ],
+  "ang": [
+   0.0,
+   0.0
+  ],
+  "map": "de_overpass",
+  "name": "FakeDuck",
+  "grenade": "smoke",
+  "throw_type": "run",
+  "duck": false,
+  "description": "Custom"
+ },
+ {
+  "pos": [
+   -1154.57,
+   256.01,
+   38.75
+  ],
+  "ang": [
+   -2.7,
+   -76.1
+  ],
+  "map": "de_overpass",
+  "name": "Short [FD]",
+  "grenade": "smoke",
+  "throw_type": "run",
+  "duck": false,
+  "description": "Custom"
+ },
+ {
+  "pos": [
+   -815.25,
+   391.47,
+   96.03
+  ],
+  "ang": [
+   7.9,
+   -68.4
+  ],
+  "map": "de_overpass",
+  "name": "Monster",
+  "grenade": "smoke",
+  "throw_type": "run",
+  "duck": false,
+  "description": "Custom"
+ },
+ {
+  "pos": [
+   -954.61,
+   160.39,
+   96.03
+  ],
+  "ang": [
+   -2.7,
+   -154.2
+  ],
+  "map": "de_overpass",
+  "name": "Gustello",
+  "grenade": "smoke",
+  "throw_type": "run",
+  "duck": false,
+  "description": "Custom"
+ }
+]

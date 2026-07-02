@@ -162,11 +162,6 @@ class SAOPlayerGUIPanelsMixin:
         if self._process_selector_panel.is_visible():
             self._process_selector_panel.hide()
         else:
-            # Process selector and fisheye are mutually exclusive
-            try:
-                self._stop_fisheye_overlay()
-            except Exception:
-                pass
             self._apply_act_panel_theme()
             self._process_selector_panel.show()
             self.root.after(120, lambda: self._raise_panel_window(self._process_selector_panel))
@@ -180,12 +175,6 @@ class SAOPlayerGUIPanelsMixin:
         if self._act_plugin_manager_panel.is_visible():
             self._act_plugin_manager_panel.hide()
         else:
-            try:
-                self._sao_panel_transition_until = 0.0
-                self._destroy_fisheye_hit_layer()
-                self._stop_fisheye_overlay()
-            except Exception:
-                pass
             self._act_plugin_manager_panel.show()
             self._apply_act_panel_theme()
             self.root.after(120, lambda: self._raise_panel_window(self._act_plugin_manager_panel))
@@ -193,12 +182,6 @@ class SAOPlayerGUIPanelsMixin:
     def _open_act_plugin_manager(self, tab='manage'):
         """打开插件管理面板并切到指定页签 (manage / panels)."""
         self._dismiss_sao_menu_for_panel()
-        try:
-            self._sao_panel_transition_until = 0.0
-            self._destroy_fisheye_hit_layer()
-            self._stop_fisheye_overlay()
-        except Exception:
-            pass
         self._ensure_plugin_window_bridge()
         if not self._act_plugin_manager_panel:
             self._act_plugin_manager_panel = PluginManagerPanel(self.root, self)
@@ -341,7 +324,12 @@ class SAOPlayerGUIPanelsMixin:
             self._hidden_panels_snapshot = []
             for name, p in panels:
                 try:
-                    if p and p.winfo_exists():
+                    # Only snapshot panels that were actually visible —
+                    # otherwise a panel the user already closed on their own
+                    # gets swept into the snapshot too (winfo_exists() stays
+                    # True forever once a panel has been built once) and the
+                    # restore pass below wrongly deiconifies it again.
+                    if p and p.winfo_exists() and str(p.state()) != 'withdrawn':
                         self._hidden_panels_snapshot.append(name)
                         p.withdraw()
                 except Exception:

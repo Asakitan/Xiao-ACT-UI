@@ -11,6 +11,14 @@ from sao_theme.colors import SAOColors
 from sao_theme.animator import Animator
 from sao_theme.utils import ease_out, lerp, _make_aa_icon_button
 
+# Mirror z for dialogs registered on the unified overlay compositor — must
+# sit above the default panel z (500, see render/tk_mirror.py's
+# SaoToplevel(mirror_z=500) default) so an alert opened from a panel always
+# renders/receives input above that panel instead of fighting over OS
+# topmost order.
+_SAO_DIALOG_MIRROR_Z = 2000
+_sao_dialog_counter = 0
+
 # ──────────────────── SAO 对话框 (Alert) ────────────────────
 class SAODialog:
     """
@@ -42,9 +50,31 @@ class SAODialog:
     @staticmethod
     def _show(parent, title, message, show_icon=True,
               on_ok=None, on_cancel=None):
-        dlg = tk.Toplevel(parent)
+        # A plain tk.Toplevel here competes for the OS-level "always on top"
+        # z-band directly against the compositor host (which re-asserts its
+        # own topmost status every couple seconds — see
+        # render/overlay_compositor.py's _enforce_z_order). Whichever one
+        # last won that band wins the front, so a plugin-manager alert like
+        # this could end up visually buried under its own parent panel.
+        # Registering it as a SaoToplevel instead makes it a compositor
+        # layer with an explicit, always-higher z — no OS topmost fight.
+        global _sao_dialog_counter
+        _sao_dialog_counter += 1
+        dlg = None
+        try:
+            from render.tk_mirror import SaoToplevel
+            dlg = SaoToplevel(
+                parent, mirror_name=f'sao_dialog_{_sao_dialog_counter}',
+                mirror_z=_SAO_DIALOG_MIRROR_Z)
+        except Exception:
+            dlg = None
+        if dlg is None:
+            dlg = tk.Toplevel(parent)
         dlg.overrideredirect(True)
-        dlg.attributes('-topmost', True)
+        try:
+            dlg.attributes('-topmost', True)
+        except Exception:
+            pass
 
         try:
             dlg.update_idletasks()
@@ -124,6 +154,15 @@ class SAODialog:
             close_btn.pack(side=tk.LEFT, padx=20)
         else:
             dlg.bind('<Button-1>', lambda e: do_close())
+
+        # SaoToplevel only attaches its compositor mirror (and starts
+        # pushing captured frames) once deiconified — do this now, right
+        # before the reveal animation starts, so the whole grow/reveal
+        # sequence is actually visible instead of only the final frame.
+        try:
+            dlg.deiconify()
+        except Exception:
+            pass
 
         # 展开动画
         anim = Animator(dlg)
@@ -219,6 +258,8 @@ def _close_alert(dlg: tk.Toplevel):
 
     anim = Animator(dlg)
 
+    mirror = getattr(dlg, '_mirror', None)
+
     def shrink(t):
         if not dlg.winfo_exists():
             return
@@ -226,7 +267,10 @@ def _close_alert(dlg: tk.Toplevel):
         x = cur_x + (cur_w - w) // 2
         try:
             dlg.geometry(f'{w}x{cur_h}+{x}+{cur_y}')
-            dlg.attributes('-alpha', 1.0 - t)
+            if mirror is not None:
+                mirror.set_alpha(1.0 - t)
+            else:
+                dlg.attributes('-alpha', 1.0 - t)
         except Exception:
             pass
 
@@ -256,9 +300,22 @@ class SAOLeaderboardDialog:
         self._self_rank = None
         self._focus_rank = None
 
-        self._dlg = tk.Toplevel(parent)
+        global _sao_dialog_counter
+        _sao_dialog_counter += 1
+        dlg = None
+        try:
+            from render.tk_mirror import SaoToplevel
+            dlg = SaoToplevel(
+                parent, mirror_name=f'sao_leaderboard_{_sao_dialog_counter}',
+                mirror_z=_SAO_DIALOG_MIRROR_Z)
+        except Exception:
+            dlg = None
+        self._dlg = dlg if dlg is not None else tk.Toplevel(parent)
         self._dlg.overrideredirect(True)
-        self._dlg.attributes('-topmost', True)
+        try:
+            self._dlg.attributes('-topmost', True)
+        except Exception:
+            pass
         self._dlg.configure(bg='#d9dde3')
 
         try:
@@ -351,6 +408,13 @@ class SAOLeaderboardDialog:
         for w in (header, self._title_lbl):
             w.bind('<Button-1>', self._start_drag)
             w.bind('<B1-Motion>', self._do_drag)
+
+        # See SAODialog._show — SaoToplevel only attaches its compositor
+        # mirror (and starts pushing captured frames) once deiconified.
+        try:
+            self._dlg.deiconify()
+        except Exception:
+            pass
 
         self._animate_expand()
         self.set_loading('加载中...')

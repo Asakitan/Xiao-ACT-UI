@@ -83,9 +83,20 @@ def compose(state, bg_hex: str = '#010101') -> Image.Image:
         if is_active:
             border, inner, icon_c = _ACTIVE_BORDER, _ACTIVE_BG, _ACTIVE_ICON
         else:
-            border = _color_lerp(_BORDER, _ACTIVE_BORDER, t)
-            inner = _color_lerp(_BG, _HOVER_BG, t)
-            icon_c = _color_lerp(_ICON, _HOVER_ICON, t)
+            # MenuCircleButtonRenderer caches sprites by the exact hex
+            # colors it's called with. A raw continuous `t` produces a
+            # different color string almost every frame while hovering
+            # (measured: this button's supersampled+LANCZOS render costs
+            # multiple ms, and with a raw t it never hits the cache for
+            # the whole transition — up to ~9 buttons doing this at once
+            # is most of the ~4-10ms compose_worker cost). Quantizing to
+            # 1/20 steps is well below perceptible color-blend
+            # granularity but turns most repeated frames (especially as
+            # the lerp settles near its target) into cache hits.
+            t_q = round(t * 20.0) / 20.0
+            border = _color_lerp(_BORDER, _ACTIVE_BORDER, t_q)
+            inner = _color_lerp(_BG, _HOVER_BG, t_q)
+            icon_c = _color_lerp(_ICON, _HOVER_ICON, t_q)
         # MenuCircleButtonRenderer returns RGBA with transparent corners;
         # bg_hex is only used for cache keying (legacy chroma path).
         sprite = _renderer.render(size, item.get('icon', '●') or '●',

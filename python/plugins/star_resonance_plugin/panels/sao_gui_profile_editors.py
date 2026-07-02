@@ -34,6 +34,7 @@ from sao_web_panel_common import (
     place_corner_accents,
 )
 from plugins.star_resonance_plugin.panels.sao_gui_bossraid import _BossReactionsEditorMixin, _MechanicsEditorMixin
+from gui_modules.sao_panel_ui import run_native_dialog
 
 from plugins.star_resonance_plugin.engines.auto_key_engine import (
     clone_profile as clone_auto_key_profile,
@@ -796,7 +797,8 @@ class AutoKeyDetailPanel(_DetailEditorBase):
         self._set_status(f'Exported: {path}')
 
     def _import_profile(self) -> None:
-        path = filedialog.askopenfilename(
+        path = run_native_dialog(
+            filedialog.askopenfilename,
             parent=self._win,
             title='Import AutoKey Profile',
             filetypes=(('JSON files', '*.json'), ('All files', '*.*')),
@@ -1357,7 +1359,8 @@ class BossRaidDetailPanel(_MechanicsEditorMixin, _BossReactionsEditorMixin, _Det
                 default_dir = ''
         except Exception:
             default_dir = ''
-        path = filedialog.askopenfilename(
+        path = run_native_dialog(
+            filedialog.askopenfilename,
             parent=self._win,
             title='Import BossRaid Profile',
             initialdir=default_dir or None,

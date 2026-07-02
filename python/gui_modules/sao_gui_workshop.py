@@ -27,6 +27,7 @@ from gui_modules.sao_panel_ui import (
     _apply_panel_style,
     _apply_window_icon,
     _bind_panel_drag,
+    run_native_dialog,
 )
 
 # ── White + Gold palette ────────────────────────────────────────────
@@ -503,6 +504,12 @@ class WorkshopPanel:
         if self._win is not None:
             try:
                 self._win.withdraw()
+            except Exception:
+                pass
+        maybe_stop_fisheye = getattr(self.owner, '_maybe_stop_fisheye', None)
+        if callable(maybe_stop_fisheye):
+            try:
+                maybe_stop_fisheye()
             except Exception:
                 pass
 
@@ -1186,7 +1193,8 @@ class WorkshopPanel:
 
     def _import_local(self):
         try:
-            path = filedialog.askopenfilename(
+            path = run_native_dialog(
+                filedialog.askopenfilename,
                 parent=self._win,
                 title='导入插件 Import plugin',
                 filetypes=(('SAO 插件包', '*.zip *.saoplugin'), ('All files', '*.*')),
@@ -1319,7 +1327,8 @@ class WorkshopPanel:
 
     def _browse_zip(self):
         try:
-            path = filedialog.askopenfilename(
+            path = run_native_dialog(
+                filedialog.askopenfilename,
                 parent=self._win,
                 title='选择插件包',
                 filetypes=(('ZIP files', '*.zip'), ('All files', '*.*')),

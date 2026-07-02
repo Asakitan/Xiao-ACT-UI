@@ -283,6 +283,18 @@ class TkMirrorLayer:
         if self._layer:
             self._layer.hide()
         self._sync_host_input()
+
+    def set_alpha(self, value: float) -> None:
+        """Fade the compositor layer directly.
+
+        ``SaoToplevel.attributes('-alpha', ...)`` is a no-op once mirrored
+        (see below) — the real Tk window's alpha is pinned at 0.01 so it
+        never becomes visible on the desktop. Callers that want a fade
+        (e.g. a close animation) need to fade the compositor layer instead.
+        """
+        if self._layer is not None:
+            self._layer.alpha = max(0.0, min(1.0, value))
+            self._layer._dirty = True
         # A layer that hides mid-press (e.g. its own close button) never
         # gets the matching button-up — the compositor's capture routing
         # sees .visible go False and stops delivering to this layer at all.
@@ -352,16 +364,32 @@ class TkMirrorLayer:
                                 self._screen_x, self._screen_y, aw, ah)
                         except Exception:
                             pass
-                bgra = _capture_window(
-                    self._hwnd, self._width, self._height)
+                # Snapshot once and reuse for capture + mask + upload.
+                # self._width/_height can be written concurrently from the
+                # Tk thread (set_geometry(), driven by e.g. a dialog's
+                # open/close resize animation firing every ~16ms) — reading
+                # them twice (once for the capture call, again for the
+                # upload call) let the buffer be captured at one size but
+                # labeled with a different, newer size, which crashed
+                # _ensure_texture's ctx.texture() with a data/size mismatch.
+                cap_w, cap_h = self._width, self._height
+                # An uncaught exception here escapes the while loop and
+                # silently kills this whole background thread (Python's
+                # default behavior for an unhandled thread exception is to
+                # print a traceback and exit — no auto-restart), permanently
+                # freezing this panel's mirror until it's closed and
+                # reopened. A single bad frame shouldn't take the thread
+                # down; skip it and retry next tick instead.
+                try:
+                    bgra = _capture_window(self._hwnd, cap_w, cap_h)
+                except Exception:
+                    bgra = None
                 if bgra and layer is not None:
                     try:
                         if self._corner_radius > 0:
                             bgra = _apply_corner_mask(
-                                bgra, self._width, self._height,
-                                self._corner_radius)
-                        layer.upload_bgra(
-                            bgra, self._width, self._height)
+                                bgra, cap_w, cap_h, self._corner_radius)
+                        layer.upload_bgra(bgra, cap_w, cap_h)
                         layer.request_redraw()
                     except Exception:
                         pass
@@ -713,6 +741,25 @@ class SaoToplevel(tk.Toplevel):
         return super().attributes(*args)
 
     wm_attributes = attributes
+
+    def state(self, *args):
+        """Report 'withdrawn' based on mirror visibility, not real Tk state.
+
+        Once a mirror is attached, ``withdraw()`` never calls
+        ``super().withdraw()`` (see below) — the real Tk window has to stay
+        mapped for PrintWindow capture to keep working even while the panel
+        is "closed" from the compositor's point of view. That means plain
+        ``tk.Toplevel.state()`` never reports 'withdrawn' again for the rest
+        of this window's life, which broke every panel's own
+        ``is_visible()`` (they almost all check ``win.state() !=
+        'withdrawn'``) and any code that re-shows panels based on that check
+        — a panel the user had already closed would get silently
+        re-deiconified as a side effect of unrelated panel/state-restore
+        logic elsewhere reading a stale 'not withdrawn' state.
+        """
+        if self._mirror is not None and not args:
+            return 'normal' if self._mirror._visible else 'withdrawn'
+        return super().state(*args)
 
     def deiconify(self) -> None:
         self._ensure_mirror()

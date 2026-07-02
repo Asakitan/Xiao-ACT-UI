@@ -167,6 +167,254 @@ def make_shared_pattern_texture(dev, w, h):
     return tex, handle.value
 
 
+IID_IDXGIKeyedMutex = _guid('9d8e1289-d7b3-465f-8126-250e349af85d')
+_IDXGIKeyedMutex_AcquireSync = 8
+_IDXGIKeyedMutex_ReleaseSync = 9
+_D3D11_RESOURCE_MISC_SHARED_KEYEDMUTEX = 0x10
+
+
+def qi_keyed_mutex(tex):
+    out = c_void_p()
+    hr = _vc(tex, 0, HRESULT, (POINTER(GUID), POINTER(c_void_p)),
+             byref(IID_IDXGIKeyedMutex), byref(out))
+    return out if hr >= 0 and out.value else None
+
+
+def km_acquire(km, key=0, ms=100) -> bool:
+    # S_OK(0) = acquired; WAIT_TIMEOUT(0x102)/WAIT_ABANDONED are >0.
+    hr = _vc(km, _IDXGIKeyedMutex_AcquireSync, HRESULT,
+             (ctypes.c_uint64, c_uint), key, ms)
+    return hr == 0
+
+
+def km_release(km, key=0) -> None:
+    _vc(km, _IDXGIKeyedMutex_ReleaseSync, HRESULT, (ctypes.c_uint64,), key)
+
+
+def make_solid_texture(dev, w, h, rgba):
+    buf = bytes(rgba) * (w * h)
+    cbuf = (ctypes.c_ubyte * len(buf)).from_buffer_copy(buf)
+    init = _D3D11_SUBRESOURCE_DATA(ctypes.addressof(cbuf), w * 4, 0)
+    td = _D3D11_TEXTURE2D_DESC()
+    td.Width = w
+    td.Height = h
+    td.MipLevels = 1
+    td.ArraySize = 1
+    td.Format = _DXGI_FORMAT_R8G8B8A8_UNORM
+    td.SampleDesc = _DXGI_SAMPLE_DESC(1, 0)
+    td.Usage = _D3D11_USAGE_DEFAULT
+    td.BindFlags = _D3D11_BIND_SHADER_RESOURCE
+    td.CPUAccessFlags = 0
+    td.MiscFlags = 0
+    tex = c_void_p()
+    hr = _vc(dev, _ID3D11Device_CreateTexture2D, HRESULT,
+             (POINTER(_D3D11_TEXTURE2D_DESC),
+              POINTER(_D3D11_SUBRESOURCE_DATA), POINTER(c_void_p)),
+             byref(td), byref(init), byref(tex))
+    if hr < 0 or not tex.value:
+        raise OSError(f'solid CreateTexture2D 0x{hr & 0xFFFFFFFF:08X}')
+    return tex
+
+
+def make_shared_blank_texture(dev, w, h, misc):
+    td = _D3D11_TEXTURE2D_DESC()
+    td.Width = w
+    td.Height = h
+    td.MipLevels = 1
+    td.ArraySize = 1
+    td.Format = _DXGI_FORMAT_R8G8B8A8_UNORM
+    td.SampleDesc = _DXGI_SAMPLE_DESC(1, 0)
+    td.Usage = _D3D11_USAGE_DEFAULT
+    td.BindFlags = _D3D11_BIND_SHADER_RESOURCE
+    td.CPUAccessFlags = 0
+    td.MiscFlags = misc
+    tex = c_void_p()
+    hr = _vc(dev, _ID3D11Device_CreateTexture2D, HRESULT,
+             (POINTER(_D3D11_TEXTURE2D_DESC), c_void_p, POINTER(c_void_p)),
+             byref(td), None, byref(tex))
+    if hr < 0 or not tex.value:
+        raise OSError(f'shared CreateTexture2D 0x{hr & 0xFFFFFFFF:08X}')
+    out = c_void_p()
+    hr = _vc(tex, 0, HRESULT, (POINTER(GUID), POINTER(c_void_p)),
+             byref(IID_IDXGIResource), byref(out))
+    if hr < 0 or not out.value:
+        _release(tex)
+        raise OSError('QI IDXGIResource failed')
+    handle = c_void_p()
+    hr = _vc(out, _IDXGIResource_GetSharedHandle, HRESULT,
+             (POINTER(c_void_p),), byref(handle))
+    _release(out)
+    if hr < 0 or not handle.value:
+        _release(tex)
+        raise OSError(f'GetSharedHandle 0x{hr & 0xFFFFFFFF:08X}')
+    return tex, handle.value
+
+
+def run_tear_stress(ctx, dc, sw, sh, use_mutex, n_frames=240):
+    """Producer thread hammers alternating solid red/blue full-texture
+    copies into a shared texture while the consumer draws it through
+    the exact production path (mutex-acquire → interop lock → GL draw →
+    unlock → release) and reads the result back. A frame whose sampled
+    pixels are not one uniform color is a torn read.
+
+    Returns (torn_frames, sampled_frames, note); a non-empty note means
+    setup failed (e.g. the driver refused to register a keyed-mutex
+    texture with WGL_NV_DX_interop2)."""
+    import threading
+    import moderngl as _mgl
+    from render.dcomp_bridge import (
+        gl_gen_texture, gl_delete_texture, gl_bind_texture_unit0,
+        gl_set_bound_texture_linear, release_com)
+
+    TW = TH = 1024
+    misc = (_D3D11_RESOURCE_MISC_SHARED_KEYEDMUTEX if use_mutex
+            else _D3D11_RESOURCE_MISC_SHARED)
+    pdev, pctx_ = make_producer_device()
+    shared = tex_red = tex_blue = None
+    p_km = c_km = None
+    opened = None
+    hobj = None
+    gl_id = 0
+    try:
+        shared, handle = make_shared_blank_texture(pdev, TW, TH, misc)
+        tex_red = make_solid_texture(pdev, TW, TH, (255, 0, 0, 255))
+        tex_blue = make_solid_texture(pdev, TW, TH, (0, 0, 255, 255))
+        if use_mutex:
+            p_km = qi_keyed_mutex(shared)
+            if p_km is None:
+                return 0, 0, 'producer QI IDXGIKeyedMutex failed'
+
+        opened = dc.open_shared_texture(handle)
+        if opened is None:
+            return 0, 0, 'OpenSharedResource failed'
+        if use_mutex:
+            c_km = qi_keyed_mutex(opened)
+            if c_km is None:
+                return 0, 0, 'consumer QI IDXGIKeyedMutex failed'
+        gl_id = gl_gen_texture()
+        hobj = dc.register_external_texture(opened.value, gl_id)
+        if hobj is None:
+            return 0, 0, ('wglDXRegisterObjectNV refused the '
+                          + ('keyed-mutex' if use_mutex else 'plain')
+                          + ' texture')
+        if dc.lock_external_texture(hobj):
+            try:
+                gl_bind_texture_unit0(gl_id)
+                gl_set_bound_texture_linear()
+            finally:
+                dc.unlock_external_texture(hobj)
+
+        prog_tex = ctx.program(vertex_shader=VERT, fragment_shader=FRAG_TEX)
+        vbo = ctx.buffer(struct.pack(
+            '16f',
+            0.0, 0.0, 0.0, 0.0,
+            1.0, 0.0, 1.0, 0.0,
+            0.0, 1.0, 0.0, 1.0,
+            1.0, 1.0, 1.0, 1.0,
+        ))
+        vao_tex = ctx.vertex_array(
+            prog_tex, [(vbo, '2f 2f', 'in_pos', 'in_uv')])
+
+        stop = threading.Event()
+        stats = {'copies': 0, 'acq_fail': 0}
+
+        def producer():
+            i = 0
+            while not stop.is_set():
+                src = tex_red if (i & 1) == 0 else tex_blue
+                if p_km is not None:
+                    if not km_acquire(p_km, 0, 100):
+                        stats['acq_fail'] += 1
+                        continue
+                _vc(pctx_, _ID3D11DeviceContext_CopyResource, None,
+                    (c_void_p, c_void_p), shared.value, src.value)
+                if p_km is not None:
+                    km_release(p_km, 0)
+                _vc(pctx_, _ID3D11DeviceContext_Flush, None, ())
+                stats['copies'] += 1
+                i += 1
+
+        th = threading.Thread(target=producer, daemon=True)
+        th.start()
+
+        RED = (255, 0, 0)
+        BLUE = (0, 0, 255)
+        torn = 0
+        sampled = 0
+        consumer_acq_fail = 0
+        for _ in range(n_frames):
+            if not dc.render_to_gpu_texture_begin():
+                continue
+            drew = False
+            try:
+                wrapped = ctx.detect_framebuffer(dc._gpu_fbo_id)
+                wrapped.use()
+                ctx.viewport = (0, 0, sw, sh)
+                ctx.clear(0.0, 0.0, 0.0, 0.0)
+                acquired = True
+                if c_km is not None:
+                    acquired = km_acquire(c_km, 0, 100)
+                    if not acquired:
+                        consumer_acq_fail += 1
+                if acquired:
+                    try:
+                        if dc.lock_external_texture(hobj):
+                            try:
+                                gl_bind_texture_unit0(gl_id)
+                                prog_tex['u_tex'].value = 0
+                                vao_tex.render(_mgl.TRIANGLE_STRIP)
+                                drew = True
+                            finally:
+                                dc.unlock_external_texture(hobj)
+                    finally:
+                        if c_km is not None:
+                            km_release(c_km, 0)
+            finally:
+                dc.render_to_gpu_texture_end()
+            if not drew:
+                continue
+            ctypes.windll.opengl32.glFinish()
+            raw, pitch = read_d3d_texture(
+                dc._d3d_dev, dc._d3d_ctx, dc._gpu_tex, sw, sh)
+            pts = [
+                px(raw, pitch, sw // 8, sh // 8)[:3],
+                px(raw, pitch, 7 * sw // 8, sh // 8)[:3],
+                px(raw, pitch, sw // 2, sh // 2)[:3],
+                px(raw, pitch, sw // 8, 7 * sh // 8)[:3],
+                px(raw, pitch, 7 * sw // 8, 7 * sh // 8)[:3],
+            ]
+            if any(p not in (RED, BLUE) for p in pts):
+                continue  # producer hasn't written yet (all-clear frame)
+            sampled += 1
+            if len(set(pts)) > 1:
+                torn += 1
+
+        stop.set()
+        th.join(timeout=2)
+        note = ''
+        if sampled == 0:
+            note = 'no valid frames sampled'
+        print(f'  producer copies={stats["copies"]} '
+              f'acq_fail={stats["acq_fail"]} '
+              f'consumer_acq_fail={consumer_acq_fail}', flush=True)
+        return torn, sampled, note
+    finally:
+        if hobj is not None:
+            dc.unregister_external_texture(hobj)
+        if gl_id:
+            gl_delete_texture(gl_id)
+        for obj in (c_km, p_km):
+            if obj is not None:
+                _release(obj)
+        if opened is not None:
+            release_com(opened)
+        for obj in (tex_red, tex_blue, shared):
+            if obj is not None:
+                _release(obj)
+        _release(pctx_)
+        _release(pdev)
+
+
 VERT = '''
 #version 330
 in vec2 in_pos;
@@ -367,6 +615,30 @@ def main() -> int:
     _release(ptex)
     _release(pctx)
     _release(pdev)
+
+    # ── check 5: tearing under concurrent producer writes ──
+    # A producer thread hammers alternating solid colors into the shared
+    # texture while the consumer samples it: any sampled frame containing
+    # BOTH colors is a torn read. Run once without a keyed mutex
+    # (documents the tear the pet showed on fast motion) and once with
+    # D3D11_RESOURCE_MISC_SHARED_KEYEDMUTEX + AcquireSync on both sides
+    # (the fix): mutexed run must be tear-free.
+    print('[5] tear stress: plain shared vs keyed mutex', flush=True)
+    for use_mutex in (False, True):
+        torn, frames, note = run_tear_stress(ctx, dc, sw, sh, use_mutex)
+        label = 'keyed-mutex' if use_mutex else 'plain-shared'
+        if note:
+            report(f'tear stress [{label}] ran', False, note)
+            continue
+        print(f'  [{label}] {torn}/{frames} torn frames', flush=True)
+        if use_mutex:
+            report('keyed-mutex sampling is tear-free', torn == 0,
+                   f'{torn}/{frames} torn')
+        else:
+            # informational — tearing here is the expected baseline; its
+            # absence just means the box is too fast to catch the race.
+            print(f'  [{label}] baseline (informational, no gate)',
+                  flush=True)
 
     dc.destroy()
     host.destroy()

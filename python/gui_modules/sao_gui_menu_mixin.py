@@ -443,15 +443,38 @@ class SAOPlayerGUIMenuMixin:
         return result
 
     def _dismiss_sao_menu_for_panel(self):
-        """SAO 菜单关掉再弹面板, 避免 topmost overlay 压在面板上看不见."""
+        """SAO 菜单关掉再弹面板, 避免 topmost overlay 压在面板上看不见.
+
+        Mirrors ``_close_sao_menu_from_background``: suppress any pending
+        fisheye (re)start race (the 140ms-delayed ``_start_fisheye_with_retry``
+        scheduled by ``_on_sao_menu_open`` would otherwise still fire and spin
+        up a fisheye behind the panel that just opened) and request a
+        graceful fade instead of an abrupt destroy, so opening a panel from
+        inside the menu plays the same close animation as a normal menu
+        close — no more dirty afterimage left on the desktop.
+        """
         try:
             self._sao_panel_transition_until = time.time() + 0.9
+            self._fisheye_close_suppress_until = time.time() + 1.4
             menu = getattr(self, '_sao_menu', None)
             if menu is not None and getattr(menu, 'visible', False):
+                try:
+                    play_sound('menu_close')
+                except Exception:
+                    pass
                 menu.close()
                 try:
                     from render.overlay_scheduler import get_scheduler as _get_sched
                     _get_sched(self.root).set_menu_open(False)
+                except Exception:
+                    pass
+            self._destroy_fisheye_hit_layer()
+            ov = getattr(self, '_fisheye_ov', None)
+            self._release_fisheye_input_zorder(ov)
+            request_fadeout = getattr(ov, '_request_fadeout', None)
+            if callable(request_fadeout):
+                try:
+                    request_fadeout()
                 except Exception:
                     pass
         except Exception:
@@ -914,10 +937,6 @@ class SAOPlayerGUIMenuMixin:
 
     def _open_workshop_panel(self):
         self._dismiss_sao_menu_for_panel()
-        try:
-            self._stop_fisheye_overlay()
-        except Exception:
-            pass
         panel = getattr(self, '_workshop_panel', None)
         if panel is None:
             from gui_modules.sao_gui_workshop import WorkshopPanel

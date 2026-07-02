@@ -39,6 +39,7 @@ from gui_modules.sao_panel_ui import (
     _make_panel_close_button,
     _sao_panel_body,
     _sao_panel_header,
+    run_native_dialog,
 )
 
 
@@ -124,7 +125,8 @@ class OfflineImportPanel:
 
     def choose_file(self) -> Dict[str, Any]:
         try:
-            selected = filedialog.askopenfilename(
+            selected = run_native_dialog(
+                filedialog.askopenfilename,
                 parent=self._win,
                 title='Import ACT replay/report',
                 filetypes=(

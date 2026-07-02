@@ -1,0 +1,5646 @@
+[
+ {
+  "pos": [
+   -1007.97,
+   -538.02,
+   11611.03
+  ],
+  "ang": [
+   10.24,
+   -72.16
+  ],
+  "map": "de_vertigo",
+  "name": "Box [Full]",
+  "grenade": "molotov",
+  "throw_type": "normal",
+  "duck": true,
+  "description": "ctrl"
+ },
+ {
+  "pos": [
+   -841.93,
+   -1359.98,
+   11648.03
+  ],
+  "ang": [
+   -7.92,
+   52.06
+  ],
+  "map": "de_vertigo",
+  "name": "Box [Center]",
+  "grenade": "molotov",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -841.93,
+   -1359.95,
+   11648.03
+  ],
+  "ang": [
+   -32.89,
+   51.47
+  ],
+  "map": "de_vertigo",
+  "name": "Double Box",
+  "grenade": "molotov",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -607.99,
+   -1210.84,
+   11664.03
+  ],
+  "ang": [
+   -19.09,
+   35.71
+  ],
+  "map": "de_vertigo",
+  "name": "Box [Center]",
+  "grenade": "he",
+  "throw_type": "run",
+  "duck": false,
+  "description": "Box [Center]"
+ },
+ {
+  "pos": [
+   -2081.59,
+   -17.16,
+   11552.03
+  ],
+  "ang": [
+   -34.65,
+   132.69
+  ],
+  "map": "de_vertigo",
+  "name": "[2D box | Cement]",
+  "grenade": "molotov",
+  "throw_type": "normal",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -2082.83,
+   21.31,
+   11552.03
+  ],
+  "ang": [
+   -33.99,
+   148.92
+  ],
+  "map": "de_vertigo",
+  "name": "Wall",
+  "grenade": "molotov",
+  "throw_type": "run",
+  "duck": false,
+  "description": "safe"
+ },
+ {
+  "pos": [
+   -577.49,
+   -1253.2,
+   11674.2
+  ],
+  "ang": [
+   -27.12,
+   54.53
+  ],
+  "map": "de_vertigo",
+  "name": "Double Box",
+  "grenade": "molotov",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -577.46,
+   -1253.33,
+   11674.21
+  ],
+  "ang": [
+   -25.91,
+   42.26
+  ],
+  "map": "de_vertigo",
+  "name": "Box [Center]",
+  "grenade": "molotov",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -577.44,
+   -1253.23,
+   11674.22
+  ],
+  "ang": [
+   -21.89,
+   54.45
+  ],
+  "map": "de_vertigo",
+  "name": "Double Box",
+  "grenade": "he",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -2207.76,
+   -23.3,
+   11552.03
+  ],
+  "ang": [
+   -34.27,
+   121.67
+  ],
+  "map": "de_vertigo",
+  "name": "[2D box | Cement]",
+  "grenade": "molotov",
+  "throw_type": "normal",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -564.71,
+   -1190.08,
+   11678.46
+  ],
+  "ang": [
+   -28.5,
+   117.07
+  ],
+  "map": "de_vertigo",
+  "name": "Elevator",
+  "grenade": "molotov",
+  "throw_type": "normal",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -2270.37,
+   -14.73,
+   11552.03
+  ],
+  "ang": [
+   -24.55,
+   111.71
+  ],
+  "map": "de_vertigo",
+  "name": "Cement",
+  "grenade": "he",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -2261.19,
+   -42.94,
+   11557.0
+  ],
+  "ang": [
+   -53.29,
+   73.95
+  ],
+  "map": "de_vertigo",
+  "name": "Wall",
+  "grenade": "he",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -2196.75,
+   -91.05,
+   11581.05
+  ],
+  "ang": [
+   -26.5,
+   116.38
+  ],
+  "map": "de_vertigo",
+  "name": "Double Box",
+  "grenade": "he",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -2235.98,
+   -83.05,
+   11577.05
+  ],
+  "ang": [
+   -47.9,
+   89.73
+  ],
+  "map": "de_vertigo",
+  "name": "Wall",
+  "grenade": "molotov",
+  "throw_type": "normal",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -2242.73,
+   -201.8,
+   11616.03
+  ],
+  "ang": [
+   -20.45,
+   89.26
+  ],
+  "map": "de_vertigo",
+  "name": "Back [Box]",
+  "grenade": "he",
+  "throw_type": "normal",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -1135.83,
+   -1149.47,
+   11776.03
+  ],
+  "ang": [
+   -24.64,
+   35.62
+  ],
+  "map": "de_vertigo",
+  "name": "Double Box",
+  "grenade": "molotov",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -1135.83,
+   -1149.45,
+   11776.03
+  ],
+  "ang": [
+   -1.32,
+   34.23
+  ],
+  "map": "de_vertigo",
+  "name": "Box [Center]",
+  "grenade": "molotov",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -1083.71,
+   -763.87,
+   11776.03
+  ],
+  "ang": [
+   -19.03,
+   1.57
+  ],
+  "map": "de_vertigo",
+  "name": "Box [Center]",
+  "grenade": "molotov",
+  "throw_type": "run",
+  "duck": false,
+  "description": "UNSAFE"
+ },
+ {
+  "pos": [
+   -2006.11,
+   -697.99,
+   11776.03
+  ],
+  "ang": [
+   5.73,
+   61.78
+  ],
+  "map": "de_vertigo",
+  "name": "Push Stay",
+  "grenade": "he",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -1889.75,
+   -527.88,
+   11776.03
+  ],
+  "ang": [
+   -31.1,
+   99.78
+  ],
+  "map": "de_vertigo",
+  "name": "Box [Left]",
+  "grenade": "he",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -1953.47,
+   -552.61,
+   11776.03
+  ],
+  "ang": [
+   -42.41,
+   77.04
+  ],
+  "map": "de_vertigo",
+  "name": "HS [Push]",
+  "grenade": "he",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -2007.18,
+   -569.82,
+   11776.03
+  ],
+  "ang": [
+   -2.6,
+   66.6
+  ],
+  "map": "de_vertigo",
+  "name": "Barrels [Near]",
+  "grenade": "he",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -2052.78,
+   -592.04,
+   11776.03
+  ],
+  "ang": [
+   -21.16,
+   59.97
+  ],
+  "map": "de_vertigo",
+  "name": "[Barrels | Cement]",
+  "grenade": "molotov",
+  "throw_type": "normal",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -2047.97,
+   -558.95,
+   11776.03
+  ],
+  "ang": [
+   -23.37,
+   55.86
+  ],
+  "map": "de_vertigo",
+  "name": "Box [up]",
+  "grenade": "molotov",
+  "throw_type": "normal",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -1541.83,
+   -138.84,
+   11776.03
+  ],
+  "ang": [
+   -8.39,
+   151.76
+  ],
+  "map": "de_vertigo",
+  "name": "Barrels [Safe]",
+  "grenade": "molotov",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -1543.02,
+   -94.85,
+   11776.03
+  ],
+  "ang": [
+   -29.15,
+   168.05
+  ],
+  "map": "de_vertigo",
+  "name": "Box",
+  "grenade": "molotov",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -1543.06,
+   -94.84,
+   11776.03
+  ],
+  "ang": [
+   2.64,
+   167.5
+  ],
+  "map": "de_vertigo",
+  "name": "Box",
+  "grenade": "he",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -1693.59,
+   -55.84,
+   11776.03
+  ],
+  "ang": [
+   -39.69,
+   129.09
+  ],
+  "map": "de_vertigo",
+  "name": "Wall",
+  "grenade": "he",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -1827.3,
+   -100.84,
+   11776.03
+  ],
+  "ang": [
+   -20.55,
+   47.36
+  ],
+  "map": "de_vertigo",
+  "name": "Corner",
+  "grenade": "molotov",
+  "throw_type": "normal",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -1793.7,
+   -69.99,
+   11776.03
+  ],
+  "ang": [
+   -22.1,
+   50.54
+  ],
+  "map": "de_vertigo",
+  "name": "Barrels",
+  "grenade": "molotov",
+  "throw_type": "normal",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -1793.61,
+   -69.87,
+   11776.03
+  ],
+  "ang": [
+   -26.18,
+   49.09
+  ],
+  "map": "de_vertigo",
+  "name": "Cement [FD]",
+  "grenade": "he",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -1694.91,
+   -14.89,
+   11776.03
+  ],
+  "ang": [
+   -18.43,
+   143.09
+  ],
+  "map": "de_vertigo",
+  "name": "Cement | 2D boxes",
+  "grenade": "molotov",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -1811.37,
+   -71.91,
+   11776.03
+  ],
+  "ang": [
+   -18.74,
+   46.7
+  ],
+  "map": "de_vertigo",
+  "name": "Corner",
+  "grenade": "he",
+  "throw_type": "normal",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -1732.06,
+   9.39,
+   11776.03
+  ],
+  "ang": [
+   -26.2,
+   46.5
+  ],
+  "map": "de_vertigo",
+  "name": "Hide-Shots spot [semi-safe]",
+  "grenade": "molotov",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -1259.35,
+   294.46,
+   11776.03
+  ],
+  "ang": [
+   5.05,
+   42.23
+  ],
+  "map": "de_vertigo",
+  "name": "CT Spot",
+  "grenade": "he",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -1389.42,
+   292.78,
+   11776.03
+  ],
+  "ang": [
+   -17.0,
+   167.59
+  ],
+  "map": "de_vertigo",
+  "name": "2D | Wall",
+  "grenade": "molotov",
+  "throw_type": "normal",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -1557.85,
+   265.11,
+   11776.03
+  ],
+  "ang": [
+   -6.55,
+   73.74
+  ],
+  "map": "de_vertigo",
+  "name": "CT Spot",
+  "grenade": "molotov",
+  "throw_type": "normal",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -1377.33,
+   342.59,
+   11776.03
+  ],
+  "ang": [
+   -9.57,
+   125.37
+  ],
+  "map": "de_vertigo",
+  "name": "Wall [Safe]",
+  "grenade": "molotov",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -1374.45,
+   355.86,
+   11776.03
+  ],
+  "ang": [
+   -16.71,
+   126.49
+  ],
+  "map": "de_vertigo",
+  "name": "Wall [Safe]",
+  "grenade": "he",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -1545.21,
+   321.49,
+   11776.03
+  ],
+  "ang": [
+   -6.66,
+   73.24
+  ],
+  "map": "de_vertigo",
+  "name": "Wall [CT]",
+  "grenade": "he",
+  "throw_type": "normal",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -1133.48,
+   415.86,
+   11776.03
+  ],
+  "ang": [
+   -5.39,
+   -178.13
+  ],
+  "map": "de_vertigo",
+  "name": "Mid",
+  "grenade": "he",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -1133.47,
+   415.89,
+   11776.03
+  ],
+  "ang": [
+   -5.33,
+   -178.0
+  ],
+  "map": "de_vertigo",
+  "name": "Mid",
+  "grenade": "molotov",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -1938.27,
+   300.34,
+   11776.03
+  ],
+  "ang": [
+   -45.65,
+   148.64
+  ],
+  "map": "de_vertigo",
+  "name": "Wall",
+  "grenade": "he",
+  "throw_type": "normal",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -1098.97,
+   499.43,
+   11777.03
+  ],
+  "ang": [
+   -43.7,
+   178.37
+  ],
+  "map": "de_vertigo",
+  "name": "Wall",
+  "grenade": "smoke",
+  "throw_type": "jump",
+  "duck": false,
+  "description": "[Slow] TeamHelp"
+ },
+ {
+  "pos": [
+   -1798.47,
+   386.79,
+   11776.03
+  ],
+  "ang": [
+   8.2,
+   178.1
+  ],
+  "map": "de_vertigo",
+  "name": "Wall / Cement",
+  "grenade": "molotov",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -1799.12,
+   387.35,
+   11776.03
+  ],
+  "ang": [
+   11.1,
+   178.26
+  ],
+  "map": "de_vertigo",
+  "name": "[Cement | Wall]",
+  "grenade": "he",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -2156.42,
+   219.87,
+   11776.03
+  ],
+  "ang": [
+   7.6,
+   88.34
+  ],
+  "map": "de_vertigo",
+  "name": "3D",
+  "grenade": "he",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -1993.87,
+   318.15,
+   11776.03
+  ],
+  "ang": [
+   -60.89,
+   175.23
+  ],
+  "map": "de_vertigo",
+  "name": "Wall",
+  "grenade": "molotov",
+  "throw_type": "normal",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -2375.02,
+   318.95,
+   11744.03
+  ],
+  "ang": [
+   -26.17,
+   56.01
+  ],
+  "map": "de_vertigo",
+  "name": "Elevator [Green]",
+  "grenade": "molotov",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -956.96,
+   673.43,
+   11776.03
+  ],
+  "ang": [
+   3.37,
+   -178.42
+  ],
+  "map": "de_vertigo",
+  "name": "Double-Box",
+  "grenade": "molotov",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -2581.22,
+   250.65,
+   11748.6
+  ],
+  "ang": [
+   3.26,
+   9.1
+  ],
+  "map": "de_vertigo",
+  "name": "CT Start",
+  "grenade": "molotov",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -2581.5,
+   251.14,
+   11748.64
+  ],
+  "ang": [
+   1.22,
+   31.62
+  ],
+  "map": "de_vertigo",
+  "name": "CT Start [Wall]",
+  "grenade": "molotov",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -2597.66,
+   279.72,
+   11750.62
+  ],
+  "ang": [
+   4.36,
+   29.04
+  ],
+  "map": "de_vertigo",
+  "name": "CT Start [Wall]",
+  "grenade": "he",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -925.3,
+   740.81,
+   11776.03
+  ],
+  "ang": [
+   -24.74,
+   -175.79
+  ],
+  "map": "de_vertigo",
+  "name": "Elevator [Green]",
+  "grenade": "he",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -2369.82,
+   579.82,
+   11744.03
+  ],
+  "ang": [
+   -29.53,
+   -43.15
+  ],
+  "map": "de_vertigo",
+  "name": "Box | Middle room",
+  "grenade": "he",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -2262.07,
+   645.97,
+   11744.03
+  ],
+  "ang": [
+   -20.02,
+   -51.84
+  ],
+  "map": "de_vertigo",
+  "name": "Box | Middle room",
+  "grenade": "molotov",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -880.63,
+   830.9,
+   11776.03
+  ],
+  "ang": [
+   3.97,
+   -171.74
+  ],
+  "map": "de_vertigo",
+  "name": "Wall [Far]",
+  "grenade": "molotov",
+  "throw_type": "run",
+  "duck": false,
+  "description": "semi double-box"
+ },
+ {
+  "pos": [
+   -880.76,
+   831.08,
+   11776.03
+  ],
+  "ang": [
+   4.35,
+   -164.98
+  ],
+  "map": "de_vertigo",
+  "name": "Wall [Far] / Cement",
+  "grenade": "molotov",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -1719.05,
+   746.92,
+   11776.03
+  ],
+  "ang": [
+   -12.99,
+   -144.15
+  ],
+  "map": "de_vertigo",
+  "name": "Double-Box",
+  "grenade": "molotov",
+  "throw_type": "normal",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -1444.95,
+   408.91,
+   11845.03
+  ],
+  "ang": [
+   -17.36,
+   119.07
+  ],
+  "map": "de_vertigo",
+  "name": "Vent",
+  "grenade": "molotov",
+  "throw_type": "normal",
+  "duck": false,
+  "description": "semi-safe"
+ },
+ {
+  "pos": [
+   -933.4,
+   846.56,
+   11776.03
+  ],
+  "ang": [
+   -21.49,
+   176.21
+  ],
+  "map": "de_vertigo",
+  "name": "Plant box [right]",
+  "grenade": "he",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -1772.52,
+   742.73,
+   11776.03
+  ],
+  "ang": [
+   -24.81,
+   -124.22
+  ],
+  "map": "de_vertigo",
+  "name": "Right [Box]",
+  "grenade": "molotov",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -1582.36,
+   799.02,
+   11776.03
+  ],
+  "ang": [
+   -2.79,
+   -153.07
+  ],
+  "map": "de_vertigo",
+  "name": "[Double-Box] far",
+  "grenade": "he",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -1592.51,
+   799.19,
+   11776.03
+  ],
+  "ang": [
+   -16.51,
+   -164.18
+  ],
+  "map": "de_vertigo",
+  "name": "Back Wall",
+  "grenade": "he",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -1592.54,
+   799.2,
+   11776.03
+  ],
+  "ang": [
+   -13.25,
+   -149.97
+  ],
+  "map": "de_vertigo",
+  "name": "wall",
+  "grenade": "he",
+  "throw_type": "normal",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -1622.06,
+   797.11,
+   11776.03
+  ],
+  "ang": [
+   2.17,
+   -156.43
+  ],
+  "map": "de_vertigo",
+  "name": "Cement",
+  "grenade": "molotov",
+  "throw_type": "jump",
+  "duck": false,
+  "description": "[Wall]"
+ },
+ {
+  "pos": [
+   -1636.88,
+   794.01,
+   11776.03
+  ],
+  "ang": [
+   -34.91,
+   -170.67
+  ],
+  "map": "de_vertigo",
+  "name": "[Double-Box]",
+  "grenade": "he",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -1673.3,
+   786.53,
+   11776.03
+  ],
+  "ang": [
+   -22.05,
+   -147.65
+  ],
+  "map": "de_vertigo",
+  "name": "wall",
+  "grenade": "molotov",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -2147.74,
+   594.27,
+   11777.54
+  ],
+  "ang": [
+   23.6,
+   -89.08
+  ],
+  "map": "de_vertigo",
+  "name": "Cement",
+  "grenade": "he",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -2140.39,
+   611.67,
+   11779.03
+  ],
+  "ang": [
+   -52.08,
+   -111.74
+  ],
+  "map": "de_vertigo",
+  "name": "One-way [FD]",
+  "grenade": "molotov",
+  "throw_type": "run",
+  "duck": false,
+  "description": "cement"
+ },
+ {
+  "pos": [
+   -1460.59,
+   897.48,
+   11776.03
+  ],
+  "ang": [
+   -4.51,
+   -154.89
+  ],
+  "map": "de_vertigo",
+  "name": "Cement",
+  "grenade": "molotov",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -2626.58,
+   488.43,
+   11754.17
+  ],
+  "ang": [
+   -25.01,
+   20.15
+  ],
+  "map": "de_vertigo",
+  "name": "Elevator | Wall",
+  "grenade": "molotov",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -1389.36,
+   911.1,
+   11776.03
+  ],
+  "ang": [
+   6.04,
+   -155.74
+  ],
+  "map": "de_vertigo",
+  "name": "[Wall | Cement]",
+  "grenade": "he",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -1541.58,
+   830.63,
+   11786.66
+  ],
+  "ang": [
+   -23.05,
+   -156.38
+  ],
+  "map": "de_vertigo",
+  "name": "Cement",
+  "grenade": "he",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -1082.63,
+   935.16,
+   11776.03
+  ],
+  "ang": [
+   -22.81,
+   -161.5
+  ],
+  "map": "de_vertigo",
+  "name": "Wall / Cement",
+  "grenade": "molotov",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -2633.97,
+   490.41,
+   11755.92
+  ],
+  "ang": [
+   -21.89,
+   15.56
+  ],
+  "map": "de_vertigo",
+  "name": "Green [Elevator]",
+  "grenade": "he",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -1280.62,
+   959.42,
+   11776.03
+  ],
+  "ang": [
+   5.99,
+   -175.24
+  ],
+  "map": "de_vertigo",
+  "name": "Right [Box]",
+  "grenade": "he",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -1349.58,
+   967.91,
+   11776.03
+  ],
+  "ang": [
+   6.22,
+   -165.88
+  ],
+  "map": "de_vertigo",
+  "name": "Double Box  /\\ Right Box",
+  "grenade": "molotov",
+  "throw_type": "run",
+  "duck": false,
+  "description": "debug [TEST]"
+ },
+ {
+  "pos": [
+   -1383.37,
+   970.42,
+   11776.03
+  ],
+  "ang": [
+   -21.28,
+   -160.78
+  ],
+  "map": "de_vertigo",
+  "name": "[2D box | Wall]",
+  "grenade": "molotov",
+  "throw_type": "normal",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -1383.87,
+   970.62,
+   11776.03
+  ],
+  "ang": [
+   -34.92,
+   -176.98
+  ],
+  "map": "de_vertigo",
+  "name": "Box [ Right ]",
+  "grenade": "molotov",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -1398.51,
+   976.79,
+   11776.03
+  ],
+  "ang": [
+   -24.5,
+   -162.3
+  ],
+  "map": "de_vertigo",
+  "name": "[Double-Box]",
+  "grenade": "he",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -2084.0,
+   954.73,
+   11744.03
+  ],
+  "ang": [
+   -3.36,
+   -142.59
+  ],
+  "map": "de_vertigo",
+  "name": "[Wall | Cement]",
+  "grenade": "molotov",
+  "throw_type": "normal",
+  "duck": true,
+  "description": ""
+ },
+ {
+  "pos": [
+   -2085.96,
+   961.51,
+   11744.03
+  ],
+  "ang": [
+   -3.63,
+   -141.76
+  ],
+  "map": "de_vertigo",
+  "name": "Wall",
+  "grenade": "he",
+  "throw_type": "normal",
+  "duck": true,
+  "description": ""
+ },
+ {
+  "pos": [
+   -2094.78,
+   958.44,
+   11744.03
+  ],
+  "ang": [
+   -6.93,
+   -123.56
+  ],
+  "map": "de_vertigo",
+  "name": "Wall <--",
+  "grenade": "molotov",
+  "throw_type": "run",
+  "duck": true,
+  "description": ""
+ },
+ {
+  "pos": [
+   -2092.36,
+   963.33,
+   11744.03
+  ],
+  "ang": [
+   -7.1,
+   -123.31
+  ],
+  "map": "de_vertigo",
+  "name": "Wall [Left]",
+  "grenade": "he",
+  "throw_type": "normal",
+  "duck": true,
+  "description": ""
+ },
+ {
+  "pos": [
+   -2069.51,
+   919.65,
+   11776.03
+  ],
+  "ang": [
+   -27.14,
+   -97.57
+  ],
+  "map": "de_vertigo",
+  "name": "Wall",
+  "grenade": "he",
+  "throw_type": "normal",
+  "duck": true,
+  "description": ""
+ },
+ {
+  "pos": [
+   -1490.72,
+   624.57,
+   11874.53
+  ],
+  "ang": [
+   -9.4,
+   -113.39
+  ],
+  "map": "de_vertigo",
+  "name": "Middle",
+  "grenade": "he",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -1477.94,
+   643.4,
+   11876.02
+  ],
+  "ang": [
+   5.2,
+   -113.3
+  ],
+  "map": "de_vertigo",
+  "name": "Middle [Far]",
+  "grenade": "molotov",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -1477.94,
+   643.4,
+   11876.02
+  ],
+  "ang": [
+   5.2,
+   -113.3
+  ],
+  "map": "de_vertigo",
+  "name": "Middle [Far]",
+  "grenade": "he",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -1563.62,
+   640.03,
+   11876.02
+  ],
+  "ang": [
+   12.1,
+   -170.71
+  ],
+  "map": "de_vertigo",
+  "name": "Push",
+  "grenade": "smoke",
+  "throw_type": "normal",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -2051.03,
+   846.62,
+   11829.03
+  ],
+  "ang": [
+   -5.42,
+   -115.84
+  ],
+  "map": "de_vertigo",
+  "name": "Cement",
+  "grenade": "he",
+  "throw_type": "jump",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -1088.31,
+   -121.33,
+   11488.03
+  ],
+  "ang": [
+   -51.6,
+   53.96
+  ],
+  "map": "de_vertigo",
+  "name": "Elevator",
+  "grenade": "molotov",
+  "throw_type": "normal",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -641.33,
+   -1359.96,
+   11652.92
+  ],
+  "ang": [
+   -30.84,
+   57.51
+  ],
+  "map": "de_vertigo",
+  "name": "3D",
+  "grenade": "molotov",
+  "throw_type": "normal",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -626.96,
+   -1359.95,
+   11657.71
+  ],
+  "ang": [
+   -23.93,
+   55.71
+  ],
+  "map": "de_vertigo",
+  "name": "A site",
+  "grenade": "he",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -632.26,
+   -1270.6,
+   11655.95
+  ],
+  "ang": [
+   -17.28,
+   38.24
+  ],
+  "map": "de_vertigo",
+  "name": "Plant",
+  "grenade": "he",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -879.99,
+   -862.39,
+   11611.63
+  ],
+  "ang": [
+   -24.4,
+   -36.12
+  ],
+  "map": "de_vertigo",
+  "name": "Sandbags",
+  "grenade": "he",
+  "throw_type": "normal",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -879.97,
+   -857.42,
+   11611.38
+  ],
+  "ang": [
+   -23.82,
+   -37.52
+  ],
+  "map": "de_vertigo",
+  "name": "Sandbags",
+  "grenade": "molotov",
+  "throw_type": "normal",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -657.3,
+   -989.79,
+   11643.48
+  ],
+  "ang": [
+   -25.84,
+   174.91
+  ],
+  "map": "de_vertigo",
+  "name": "Back",
+  "grenade": "molotov",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -879.97,
+   -1232.07,
+   11648.03
+  ],
+  "ang": [
+   -33.88,
+   48.58
+  ],
+  "map": "de_vertigo",
+  "name": "Boxes",
+  "grenade": "molotov",
+  "throw_type": "normal",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -547.44,
+   -1236.89,
+   11684.22
+  ],
+  "ang": [
+   -26.58,
+   57.99
+  ],
+  "map": "de_vertigo",
+  "name": "A Site",
+  "grenade": "molotov",
+  "throw_type": "normal",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -547.53,
+   -1215.76,
+   11684.19
+  ],
+  "ang": [
+   -19.02,
+   39.15
+  ],
+  "map": "de_vertigo",
+  "name": "Plant",
+  "grenade": "he",
+  "throw_type": "run",
+  "duck": false,
+  "description": "Max DMG"
+ },
+ {
+  "pos": [
+   -2278.46,
+   -1205.46,
+   11488.03
+  ],
+  "ang": [
+   -39.52,
+   -4.66
+  ],
+  "map": "de_vertigo",
+  "name": "Sandbags",
+  "grenade": "smoke",
+  "throw_type": "run",
+  "duck": false,
+  "description": "Ramp"
+ },
+ {
+  "pos": [
+   -510.37,
+   -1214.89,
+   11696.57
+  ],
+  "ang": [
+   -6.57,
+   132.69
+  ],
+  "map": "de_vertigo",
+  "name": "AWP Corner [full safe]",
+  "grenade": "molotov",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -511.49,
+   -1198.39,
+   11696.2
+  ],
+  "ang": [
+   -19.49,
+   55.61
+  ],
+  "map": "de_vertigo",
+  "name": "A Site",
+  "grenade": "he",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -2276.95,
+   -1077.31,
+   11488.03
+  ],
+  "ang": [
+   -57.19,
+   90.52
+  ],
+  "map": "de_vertigo",
+  "name": "B Bombsite",
+  "grenade": "smoke",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -1008.0,
+   -538.01,
+   11611.03
+  ],
+  "ang": [
+   12.94,
+   -71.46
+  ],
+  "map": "de_vertigo",
+  "name": "Box",
+  "grenade": "molotov",
+  "throw_type": "normal",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -2400.5,
+   -1426.56,
+   11488.03
+  ],
+  "ang": [
+   -28.73,
+   81.09
+  ],
+  "map": "de_vertigo",
+  "name": "B Window",
+  "grenade": "smoke",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -958.43,
+   -779.45,
+   11648.03
+  ],
+  "ang": [
+   -17.44,
+   -97.09
+  ],
+  "map": "de_vertigo",
+  "name": "FD Spot [Right Side]",
+  "grenade": "he",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -959.48,
+   -775.77,
+   11648.03
+  ],
+  "ang": [
+   -49.25,
+   -85.04
+  ],
+  "map": "de_vertigo",
+  "name": "FD Spot [Right SIde]",
+  "grenade": "molotov",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -873.94,
+   -1359.91,
+   11713.97
+  ],
+  "ang": [
+   0.12,
+   51.87
+  ],
+  "map": "de_vertigo",
+  "name": "Cement",
+  "grenade": "molotov",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -2507.97,
+   -1258.04,
+   11488.03
+  ],
+  "ang": [
+   -26.07,
+   2.84
+  ],
+  "map": "de_vertigo",
+  "name": "A Ramp",
+  "grenade": "smoke",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -88.03,
+   -1439.97,
+   11776.03
+  ],
+  "ang": [
+   -4.79,
+   141.46
+  ],
+  "map": "de_vertigo",
+  "name": "A Ramp",
+  "grenade": "molotov",
+  "throw_type": "normal",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -2322.4,
+   -595.02,
+   11488.03
+  ],
+  "ang": [
+   -57.87,
+   91.95
+  ],
+  "map": "de_vertigo",
+  "name": "Stairs",
+  "grenade": "molotov",
+  "throw_type": "normal",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -2331.77,
+   -528.89,
+   11488.03
+  ],
+  "ang": [
+   -65.45,
+   85.62
+  ],
+  "map": "de_vertigo",
+  "name": "Stairs",
+  "grenade": "he",
+  "throw_type": "normal",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -1007.98,
+   -1247.33,
+   11750.03
+  ],
+  "ang": [
+   -38.53,
+   48.98
+  ],
+  "map": "de_vertigo",
+  "name": "Lobby",
+  "grenade": "smoke",
+  "throw_type": "normal",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -555.97,
+   -1116.63,
+   11776.03
+  ],
+  "ang": [
+   -23.2,
+   64.02
+  ],
+  "map": "de_vertigo",
+  "name": "Plant",
+  "grenade": "he",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -1089.9,
+   -1136.22,
+   11776.03
+  ],
+  "ang": [
+   -26.5,
+   35.54
+  ],
+  "map": "de_vertigo",
+  "name": "Cement",
+  "grenade": "molotov",
+  "throw_type": "normal",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -1135.98,
+   -1159.92,
+   11776.03
+  ],
+  "ang": [
+   -19.35,
+   33.26
+  ],
+  "map": "de_vertigo",
+  "name": "Plant",
+  "grenade": "molotov",
+  "throw_type": "normal",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -1135.97,
+   -1106.7,
+   11776.03
+  ],
+  "ang": [
+   -20.14,
+   -14.43
+  ],
+  "map": "de_vertigo",
+  "name": "Sandbags",
+  "grenade": "molotov",
+  "throw_type": "normal",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -1879.83,
+   -4.12,
+   11552.03
+  ],
+  "ang": [
+   -20.77,
+   164.95
+  ],
+  "map": "de_vertigo",
+  "name": "Stairs",
+  "grenade": "molotov",
+  "throw_type": "run",
+  "duck": false,
+  "description": "FAKEDUCK"
+ },
+ {
+  "pos": [
+   -887.14,
+   -741.55,
+   11776.03
+  ],
+  "ang": [
+   -4.52,
+   90.42
+  ],
+  "map": "de_vertigo",
+  "name": "Elevator",
+  "grenade": "molotov",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -887.14,
+   -741.54,
+   11776.03
+  ],
+  "ang": [
+   -4.52,
+   90.42
+  ],
+  "map": "de_vertigo",
+  "name": "Elevator",
+  "grenade": "he",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -998.42,
+   -692.54,
+   11776.03
+  ],
+  "ang": [
+   1.87,
+   88.36
+  ],
+  "map": "de_vertigo",
+  "name": "Scaffolding",
+  "grenade": "he",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -1118.86,
+   -785.85,
+   11776.03
+  ],
+  "ang": [
+   -23.31,
+   50.91
+  ],
+  "map": "de_vertigo",
+  "name": "Elevator",
+  "grenade": "he",
+  "throw_type": "normal",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -1008.96,
+   -689.99,
+   11776.03
+  ],
+  "ang": [
+   -2.12,
+   90.51
+  ],
+  "map": "de_vertigo",
+  "name": "Scaffolding",
+  "grenade": "molotov",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -1165.97,
+   -822.18,
+   11776.03
+  ],
+  "ang": [
+   -21.77,
+   49.15
+  ],
+  "map": "de_vertigo",
+  "name": "Elevator",
+  "grenade": "molotov",
+  "throw_type": "normal",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -1165.97,
+   -780.02,
+   11776.03
+  ],
+  "ang": [
+   -23.64,
+   26.71
+  ],
+  "map": "de_vertigo",
+  "name": "Plant",
+  "grenade": "molotov",
+  "throw_type": "normal",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -1027.48,
+   -645.99,
+   11776.03
+  ],
+  "ang": [
+   -11.48,
+   -26.27
+  ],
+  "map": "de_vertigo",
+  "name": "A Ramp",
+  "grenade": "molotov",
+  "throw_type": "normal",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -1071.38,
+   -679.78,
+   11776.03
+  ],
+  "ang": [
+   8.25,
+   -43.2
+  ],
+  "map": "de_vertigo",
+  "name": "A Ramp [FD]",
+  "grenade": "molotov",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -1071.38,
+   -679.78,
+   11776.03
+  ],
+  "ang": [
+   8.05,
+   -38.87
+  ],
+  "map": "de_vertigo",
+  "name": "A Ramp [FD]",
+  "grenade": "he",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -1119.09,
+   -680.86,
+   11776.03
+  ],
+  "ang": [
+   0.45,
+   -82.47
+  ],
+  "map": "de_vertigo",
+  "name": "Scaffolding",
+  "grenade": "he",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -97.67,
+   -257.87,
+   11776.03
+  ],
+  "ang": [
+   -17.87,
+   -119.54
+  ],
+  "map": "de_vertigo",
+  "name": "A Ramp",
+  "grenade": "molotov",
+  "throw_type": "normal",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -776.15,
+   -528.0,
+   11799.03
+  ],
+  "ang": [
+   -83.01,
+   -91.58
+  ],
+  "map": "de_vertigo",
+  "name": "A Ramp",
+  "grenade": "smoke",
+  "throw_type": "normal",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -558.28,
+   -238.96,
+   11776.03
+  ],
+  "ang": [
+   2.71,
+   -34.88
+  ],
+  "map": "de_vertigo",
+  "name": "Plant",
+  "grenade": "smoke",
+  "throw_type": "normal",
+  "duck": false,
+  "description": "teamhelp"
+ },
+ {
+  "pos": [
+   -2467.04,
+   -334.97,
+   11552.03
+  ],
+  "ang": [
+   -26.43,
+   75.57
+  ],
+  "map": "de_vertigo",
+  "name": "Back of B",
+  "grenade": "smoke",
+  "throw_type": "normal",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -613.03,
+   -236.24,
+   11776.03
+  ],
+  "ang": [
+   -17.07,
+   -24.7
+  ],
+  "map": "de_vertigo",
+  "name": "B Siteoxes",
+  "grenade": "molotov",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -1838.51,
+   -1519.67,
+   11776.03
+  ],
+  "ang": [
+   -11.67,
+   110.03
+  ],
+  "map": "de_vertigo",
+  "name": "Close Box",
+  "grenade": "smoke",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -597.86,
+   -201.6,
+   11776.03
+  ],
+  "ang": [
+   -12.9,
+   -135.12
+  ],
+  "map": "de_vertigo",
+  "name": "Ramp / Bags",
+  "grenade": "molotov",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -644.39,
+   -208.14,
+   11776.03
+  ],
+  "ang": [
+   -1.2,
+   -35.74
+  ],
+  "map": "de_vertigo",
+  "name": "Plant",
+  "grenade": "he",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -2500.97,
+   -335.0,
+   11552.03
+  ],
+  "ang": [
+   -58.26,
+   60.85
+  ],
+  "map": "de_vertigo",
+  "name": "Doorway",
+  "grenade": "smoke",
+  "throw_type": "run",
+  "duck": true,
+  "description": ""
+ },
+ {
+  "pos": [
+   -2500.97,
+   -334.97,
+   11552.03
+  ],
+  "ang": [
+   -30.31,
+   62.32
+  ],
+  "map": "de_vertigo",
+  "name": "B Window",
+  "grenade": "smoke",
+  "throw_type": "normal",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -965.03,
+   -346.95,
+   11776.03
+  ],
+  "ang": [
+   -4.8,
+   -92.2
+  ],
+  "map": "de_vertigo",
+  "name": "Scaffolding",
+  "grenade": "molotov",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -552.79,
+   -167.22,
+   11776.03
+  ],
+  "ang": [
+   -3.46,
+   -61.98
+  ],
+  "map": "de_vertigo",
+  "name": "Bombsite fence",
+  "grenade": "molotov",
+  "throw_type": "run",
+  "duck": false,
+  "description": "Corner"
+ },
+ {
+  "pos": [
+   -552.79,
+   -167.22,
+   11776.03
+  ],
+  "ang": [
+   -3.46,
+   -61.98
+  ],
+  "map": "de_vertigo",
+  "name": "Bombsite fence",
+  "grenade": "he",
+  "throw_type": "run",
+  "duck": false,
+  "description": "Corner"
+ },
+ {
+  "pos": [
+   -980.87,
+   -347.41,
+   11776.03
+  ],
+  "ang": [
+   -3.77,
+   -61.01
+  ],
+  "map": "de_vertigo",
+  "name": "Ramp",
+  "grenade": "molotov",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -980.9,
+   -347.4,
+   11776.03
+  ],
+  "ang": [
+   -45.49,
+   -88.66
+  ],
+  "map": "de_vertigo",
+  "name": "Bombside fence",
+  "grenade": "he",
+  "throw_type": "normal",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -980.9,
+   -347.39,
+   11776.03
+  ],
+  "ang": [
+   -45.49,
+   -88.66
+  ],
+  "map": "de_vertigo",
+  "name": "Bombside fence",
+  "grenade": "molotov",
+  "throw_type": "normal",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -980.92,
+   -347.39,
+   11776.03
+  ],
+  "ang": [
+   -41.61,
+   -60.57
+  ],
+  "map": "de_vertigo",
+  "name": "Bombside fence",
+  "grenade": "molotov",
+  "throw_type": "normal",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -980.92,
+   -347.39,
+   11776.03
+  ],
+  "ang": [
+   -41.61,
+   -60.57
+  ],
+  "map": "de_vertigo",
+  "name": "Bombside fence",
+  "grenade": "he",
+  "throw_type": "normal",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -2261.33,
+   -50.39,
+   11560.72
+  ],
+  "ang": [
+   -53.16,
+   99.46
+  ],
+  "map": "de_vertigo",
+  "name": "2D",
+  "grenade": "molotov",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -2261.33,
+   -50.54,
+   11560.81
+  ],
+  "ang": [
+   -45.36,
+   84.49
+  ],
+  "map": "de_vertigo",
+  "name": "Wall",
+  "grenade": "molotov",
+  "throw_type": "normal",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -2172.56,
+   -105.55,
+   11588.31
+  ],
+  "ang": [
+   -17.98,
+   126.88
+  ],
+  "map": "de_vertigo",
+  "name": "walkway",
+  "grenade": "molotov",
+  "throw_type": "normal",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -2233.68,
+   -76.87,
+   11573.97
+  ],
+  "ang": [
+   -51.75,
+   86.9
+  ],
+  "map": "de_vertigo",
+  "name": "Wall",
+  "grenade": "he",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -2374.26,
+   -110.06,
+   11552.03
+  ],
+  "ang": [
+   -34.11,
+   79.23
+  ],
+  "map": "de_vertigo",
+  "name": "3D",
+  "grenade": "molotov",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -651.53,
+   -151.18,
+   11776.03
+  ],
+  "ang": [
+   4.3,
+   -44.18
+  ],
+  "map": "de_vertigo",
+  "name": "Ramp",
+  "grenade": "molotov",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -871.24,
+   -228.46,
+   11776.03
+  ],
+  "ang": [
+   -29.74,
+   -97.01
+  ],
+  "map": "de_vertigo",
+  "name": "Tunnel",
+  "grenade": "he",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -2400.2,
+   -111.73,
+   11552.03
+  ],
+  "ang": [
+   -6.9,
+   77.66
+  ],
+  "map": "de_vertigo",
+  "name": "3D",
+  "grenade": "he",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -2293.96,
+   23.85,
+   11552.03
+  ],
+  "ang": [
+   -47.69,
+   110.71
+  ],
+  "map": "de_vertigo",
+  "name": "Back of B Box",
+  "grenade": "molotov",
+  "throw_type": "normal",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -98.59,
+   -379.52,
+   11831.03
+  ],
+  "ang": [
+   18.66,
+   -133.0
+  ],
+  "map": "de_vertigo",
+  "name": "Plant",
+  "grenade": "smoke",
+  "throw_type": "normal",
+  "duck": false,
+  "description": "teamhelp"
+ },
+ {
+  "pos": [
+   -705.28,
+   -116.14,
+   11776.03
+  ],
+  "ang": [
+   -1.93,
+   -116.59
+  ],
+  "map": "de_vertigo",
+  "name": "Scaffolding ",
+  "grenade": "molotov",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -144.95,
+   -365.96,
+   11831.03
+  ],
+  "ang": [
+   -20.72,
+   -32.13
+  ],
+  "map": "de_vertigo",
+  "name": "Plant",
+  "grenade": "smoke",
+  "throw_type": "normal",
+  "duck": true,
+  "description": "teamhelp | unsafe"
+ },
+ {
+  "pos": [
+   -2226.14,
+   -231.75,
+   11616.03
+  ],
+  "ang": [
+   -20.9,
+   96.72
+  ],
+  "map": "de_vertigo",
+  "name": "WALL",
+  "grenade": "he",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -2238.35,
+   -129.44,
+   11601.25
+  ],
+  "ang": [
+   -32.04,
+   85.64
+  ],
+  "map": "de_vertigo",
+  "name": "3D",
+  "grenade": "molotov",
+  "throw_type": "normal",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -1058.16,
+   -137.39,
+   11776.03
+  ],
+  "ang": [
+   -0.33,
+   -65.67
+  ],
+  "map": "de_vertigo",
+  "name": "A Ramp",
+  "grenade": "molotov",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -2437.27,
+   79.1,
+   11552.03
+  ],
+  "ang": [
+   -37.3,
+   32.07
+  ],
+  "map": "de_vertigo",
+  "name": "Barrels",
+  "grenade": "molotov",
+  "throw_type": "run",
+  "duck": false,
+  "description": "HALF"
+ },
+ {
+  "pos": [
+   -1686.21,
+   -521.15,
+   11776.03
+  ],
+  "ang": [
+   -34.76,
+   115.88
+  ],
+  "map": "de_vertigo",
+  "name": "Wall",
+  "grenade": "molotov",
+  "throw_type": "jump",
+  "duck": false,
+  "description": "ESP"
+ },
+ {
+  "pos": [
+   -441.44,
+   205.03,
+   11776.03
+  ],
+  "ang": [
+   -15.0,
+   -53.05
+  ],
+  "map": "de_vertigo",
+  "name": "Bombsite Boxes",
+  "grenade": "molotov",
+  "throw_type": "normal",
+  "duck": false,
+  "description": "Left"
+ },
+ {
+  "pos": [
+   -441.49,
+   205.08,
+   11776.03
+  ],
+  "ang": [
+   -16.99,
+   -53.05
+  ],
+  "map": "de_vertigo",
+  "name": "B Siteoxes",
+  "grenade": "molotov",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -999.62,
+   85.33,
+   11776.03
+  ],
+  "ang": [
+   -18.9,
+   -78.22
+  ],
+  "map": "de_vertigo",
+  "name": "Scaffolding",
+  "grenade": "molotov",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -999.68,
+   85.32,
+   11776.03
+  ],
+  "ang": [
+   -17.24,
+   167.62
+  ],
+  "map": "de_vertigo",
+  "name": "Wall",
+  "grenade": "molotov",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -2371.69,
+   130.63,
+   11585.03
+  ],
+  "ang": [
+   -42.36,
+   31.31
+  ],
+  "map": "de_vertigo",
+  "name": "Barrels",
+  "grenade": "molotov",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -1766.86,
+   -415.2,
+   11776.03
+  ],
+  "ang": [
+   -63.96,
+   95.37
+  ],
+  "map": "de_vertigo",
+  "name": "Push",
+  "grenade": "molotov",
+  "throw_type": "normal",
+  "duck": false,
+  "description": "Wall"
+ },
+ {
+  "pos": [
+   -2304.06,
+   -1424.75,
+   11776.03
+  ],
+  "ang": [
+   -40.95,
+   83.53
+  ],
+  "map": "de_vertigo",
+  "name": "Generator / Corner",
+  "grenade": "smoke",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -2304.13,
+   -1424.75,
+   11776.03
+  ],
+  "ang": [
+   -26.43,
+   85.07
+  ],
+  "map": "de_vertigo",
+  "name": "Pillar",
+  "grenade": "smoke",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -1774.82,
+   -416.33,
+   11776.03
+  ],
+  "ang": [
+   -63.19,
+   83.11
+  ],
+  "map": "de_vertigo",
+  "name": "Wall",
+  "grenade": "he",
+  "throw_type": "normal",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -1570.59,
+   -211.43,
+   11776.03
+  ],
+  "ang": [
+   -15.98,
+   130.84
+  ],
+  "map": "de_vertigo",
+  "name": "2D",
+  "grenade": "he",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -2006.11,
+   -697.99,
+   11776.03
+  ],
+  "ang": [
+   5.5,
+   61.78
+  ],
+  "map": "de_vertigo",
+  "name": "Push Stay",
+  "grenade": "molotov",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -2515.6,
+   -231.15,
+   11620.03
+  ],
+  "ang": [
+   -31.59,
+   67.39
+  ],
+  "map": "de_vertigo",
+  "name": "Wall",
+  "grenade": "he",
+  "throw_type": "normal",
+  "duck": true,
+  "description": ""
+ },
+ {
+  "pos": [
+   -1945.81,
+   -583.15,
+   11776.03
+  ],
+  "ang": [
+   -34.13,
+   57.31
+  ],
+  "map": "de_vertigo",
+  "name": "Push",
+  "grenade": "molotov",
+  "throw_type": "normal",
+  "duck": true,
+  "description": ""
+ },
+ {
+  "pos": [
+   -1577.2,
+   -180.71,
+   11776.03
+  ],
+  "ang": [
+   -0.62,
+   127.54
+  ],
+  "map": "de_vertigo",
+  "name": "Vents",
+  "grenade": "molotov",
+  "throw_type": "jump",
+  "duck": false,
+  "description": "Safe"
+ },
+ {
+  "pos": [
+   -1983.26,
+   -617.42,
+   11776.03
+  ],
+  "ang": [
+   -27.62,
+   54.5
+  ],
+  "map": "de_vertigo",
+  "name": "Push",
+  "grenade": "he",
+  "throw_type": "normal",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -2559.57,
+   -179.81,
+   11608.03
+  ],
+  "ang": [
+   -20.8,
+   69.72
+  ],
+  "map": "de_vertigo",
+  "name": "3D",
+  "grenade": "molotov",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -2554.96,
+   -242.43,
+   11620.03
+  ],
+  "ang": [
+   -23.3,
+   75.8
+  ],
+  "map": "de_vertigo",
+  "name": "Wall",
+  "grenade": "molotov",
+  "throw_type": "normal",
+  "duck": true,
+  "description": ""
+ },
+ {
+  "pos": [
+   -2058.07,
+   -696.66,
+   11776.03
+  ],
+  "ang": [
+   -19.76,
+   66.1
+  ],
+  "map": "de_vertigo",
+  "name": "Barrels",
+  "grenade": "molotov",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -1985.57,
+   -583.33,
+   11776.03
+  ],
+  "ang": [
+   -24.01,
+   50.29
+  ],
+  "map": "de_vertigo",
+  "name": "51st Floor",
+  "grenade": "flash",
+  "throw_type": "normal",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -1611.89,
+   -169.05,
+   11776.03
+  ],
+  "ang": [
+   -9.92,
+   147.83
+  ],
+  "map": "de_vertigo",
+  "name": "Barrels",
+  "grenade": "molotov",
+  "throw_type": "run",
+  "duck": false,
+  "description": "unsafe"
+ },
+ {
+  "pos": [
+   -2546.09,
+   -130.83,
+   11608.03
+  ],
+  "ang": [
+   -17.16,
+   69.9
+  ],
+  "map": "de_vertigo",
+  "name": "3D",
+  "grenade": "he",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -2036.06,
+   -648.18,
+   11776.03
+  ],
+  "ang": [
+   4.4,
+   66.8
+  ],
+  "map": "de_vertigo",
+  "name": "Barrels [Far]",
+  "grenade": "he",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -2073.58,
+   -704.84,
+   11776.03
+  ],
+  "ang": [
+   18.36,
+   44.91
+  ],
+  "map": "de_vertigo",
+  "name": "Door [CT Push]",
+  "grenade": "he",
+  "throw_type": "jump",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -1604.42,
+   -153.31,
+   11777.03
+  ],
+  "ang": [
+   -17.74,
+   130.32
+  ],
+  "map": "de_vertigo",
+  "name": "2D",
+  "grenade": "molotov",
+  "throw_type": "normal",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -1639.35,
+   -175.53,
+   11776.03
+  ],
+  "ang": [
+   1.08,
+   110.82
+  ],
+  "map": "de_vertigo",
+  "name": "3D",
+  "grenade": "molotov",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -1427.36,
+   7.98,
+   11776.03
+  ],
+  "ang": [
+   -24.3,
+   -137.04
+  ],
+  "map": "de_vertigo",
+  "name": "Generator",
+  "grenade": "molotov",
+  "throw_type": "normal",
+  "duck": false,
+  "description": "T Stairs"
+ },
+ {
+  "pos": [
+   -1651.98,
+   -160.44,
+   11776.03
+  ],
+  "ang": [
+   -16.94,
+   126.69
+  ],
+  "map": "de_vertigo",
+  "name": "B Plant",
+  "grenade": "he",
+  "throw_type": "normal",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -1646.95,
+   -124.83,
+   11776.03
+  ],
+  "ang": [
+   -38.03,
+   128.5
+  ],
+  "map": "de_vertigo",
+  "name": "Wall",
+  "grenade": "he",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -1633.23,
+   -111.01,
+   11776.03
+  ],
+  "ang": [
+   -16.27,
+   129.99
+  ],
+  "map": "de_vertigo",
+  "name": "Wall",
+  "grenade": "molotov",
+  "throw_type": "normal",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -277.8,
+   -21.79,
+   11873.03
+  ],
+  "ang": [
+   10.12,
+   128.19
+  ],
+  "map": "de_vertigo",
+  "name": "CT spot",
+  "grenade": "molotov",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -1688.33,
+   -102.98,
+   11776.03
+  ],
+  "ang": [
+   -26.69,
+   83.02
+  ],
+  "map": "de_vertigo",
+  "name": "Barrels",
+  "grenade": "molotov",
+  "throw_type": "normal",
+  "duck": false,
+  "description": "safe"
+ },
+ {
+  "pos": [
+   -1807.12,
+   -183.46,
+   11776.03
+  ],
+  "ang": [
+   -14.16,
+   63.05
+  ],
+  "map": "de_vertigo",
+  "name": "Behind Platform",
+  "grenade": "he",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -1807.24,
+   -183.43,
+   11776.03
+  ],
+  "ang": [
+   -15.49,
+   62.05
+  ],
+  "map": "de_vertigo",
+  "name": "Behind Platform",
+  "grenade": "molotov",
+  "throw_type": "normal",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -1270.02,
+   231.52,
+   11776.03
+  ],
+  "ang": [
+   -7.48,
+   126.89
+  ],
+  "map": "de_vertigo",
+  "name": "CT spot",
+  "grenade": "he",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -1289.08,
+   230.4,
+   11776.03
+  ],
+  "ang": [
+   4.09,
+   44.99
+  ],
+  "map": "de_vertigo",
+  "name": "CT spot",
+  "grenade": "molotov",
+  "throw_type": "run",
+  "duck": false,
+  "description": "safe"
+ },
+ {
+  "pos": [
+   -2553.06,
+   38.06,
+   11608.03
+  ],
+  "ang": [
+   -28.94,
+   64.73
+  ],
+  "map": "de_vertigo",
+  "name": "3D",
+  "grenade": "molotov",
+  "throw_type": "normal",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -2543.23,
+   -3.97,
+   11619.03
+  ],
+  "ang": [
+   -20.7,
+   66.6
+  ],
+  "map": "de_vertigo",
+  "name": "3D",
+  "grenade": "he",
+  "throw_type": "normal",
+  "duck": false,
+  "description": "Bug"
+ },
+ {
+  "pos": [
+   -1343.68,
+   220.63,
+   11776.03
+  ],
+  "ang": [
+   -14.92,
+   167.38
+  ],
+  "map": "de_vertigo",
+  "name": "Wall",
+  "grenade": "molotov",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -1831.76,
+   -140.02,
+   11776.03
+  ],
+  "ang": [
+   -17.86,
+   53.08
+  ],
+  "map": "de_vertigo",
+  "name": "Barrels 1v1",
+  "grenade": "he",
+  "throw_type": "normal",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -1681.05,
+   2.17,
+   11776.03
+  ],
+  "ang": [
+   -11.62,
+   144.65
+  ],
+  "map": "de_vertigo",
+  "name": "Cement Wall",
+  "grenade": "he",
+  "throw_type": "jump",
+  "duck": false,
+  "description": "[Close Wall]"
+ },
+ {
+  "pos": [
+   -1063.39,
+   387.99,
+   11776.03
+  ],
+  "ang": [
+   0.26,
+   -160.4
+  ],
+  "map": "de_vertigo",
+  "name": "Middle | Corridor",
+  "grenade": "he",
+  "throw_type": "normal",
+  "duck": false,
+  "description": "MEGA UNSAFE"
+ },
+ {
+  "pos": [
+   -1751.41,
+   -43.17,
+   11776.03
+  ],
+  "ang": [
+   -16.0,
+   107.5
+  ],
+  "map": "de_vertigo",
+  "name": "3D",
+  "grenade": "molotov",
+  "throw_type": "jump",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -1746.34,
+   -35.4,
+   11776.03
+  ],
+  "ang": [
+   -37.29,
+   53.9
+  ],
+  "map": "de_vertigo",
+  "name": "Bags",
+  "grenade": "molotov",
+  "throw_type": "run",
+  "duck": false,
+  "description": "Fakeduck"
+ },
+ {
+  "pos": [
+   -1746.38,
+   -35.41,
+   11776.03
+  ],
+  "ang": [
+   -29.48,
+   127.63
+  ],
+  "map": "de_vertigo",
+  "name": "Wall",
+  "grenade": "molotov",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -1746.36,
+   -35.28,
+   11776.03
+  ],
+  "ang": [
+   -22.14,
+   68.58
+  ],
+  "map": "de_vertigo",
+  "name": "Barrels",
+  "grenade": "molotov",
+  "throw_type": "run",
+  "duck": false,
+  "description": "Fakeduck"
+ },
+ {
+  "pos": [
+   -1793.69,
+   -69.97,
+   11776.03
+  ],
+  "ang": [
+   -19.88,
+   48.8
+  ],
+  "map": "de_vertigo",
+  "name": "Corner",
+  "grenade": "molotov",
+  "throw_type": "normal",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -1793.69,
+   -69.92,
+   11776.03
+  ],
+  "ang": [
+   -24.57,
+   65.34
+  ],
+  "map": "de_vertigo",
+  "name": "Barrels",
+  "grenade": "he",
+  "throw_type": "normal",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -974.02,
+   442.03,
+   11776.03
+  ],
+  "ang": [
+   -21.78,
+   159.31
+  ],
+  "map": "de_vertigo",
+  "name": "3D",
+  "grenade": "molotov",
+  "throw_type": "normal",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -1090.85,
+   395.86,
+   11776.03
+  ],
+  "ang": [
+   -1.96,
+   -159.29
+  ],
+  "map": "de_vertigo",
+  "name": "Corridor",
+  "grenade": "he",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -1090.85,
+   395.86,
+   11776.03
+  ],
+  "ang": [
+   -1.96,
+   -159.29
+  ],
+  "map": "de_vertigo",
+  "name": "Corridor",
+  "grenade": "molotov",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -1754.07,
+   -25.59,
+   11776.03
+  ],
+  "ang": [
+   -24.57,
+   137.13
+  ],
+  "map": "de_vertigo",
+  "name": "Sandbags",
+  "grenade": "molotov",
+  "throw_type": "normal",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -1758.7,
+   -24.95,
+   11776.03
+  ],
+  "ang": [
+   -4.61,
+   48.9
+  ],
+  "map": "de_vertigo",
+  "name": "Corner",
+  "grenade": "molotov",
+  "throw_type": "run",
+  "duck": false,
+  "description": "CT Spawn"
+ },
+ {
+  "pos": [
+   -1308.99,
+   299.4,
+   11776.03
+  ],
+  "ang": [
+   -23.42,
+   122.71
+  ],
+  "map": "de_vertigo",
+  "name": "Vent",
+  "grenade": "molotov",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -2384.61,
+   -139.53,
+   11690.77
+  ],
+  "ang": [
+   -44.79,
+   -80.97
+  ],
+  "map": "de_vertigo",
+  "name": "TUNNEL",
+  "grenade": "he",
+  "throw_type": "normal",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -1365.34,
+   310.57,
+   11776.03
+  ],
+  "ang": [
+   -9.83,
+   124.31
+  ],
+  "map": "de_vertigo",
+  "name": "CT spot",
+  "grenade": "molotov",
+  "throw_type": "run",
+  "duck": false,
+  "description": "safe"
+ },
+ {
+  "pos": [
+   -1132.65,
+   432.34,
+   11776.03
+  ],
+  "ang": [
+   -33.54,
+   135.52
+  ],
+  "map": "de_vertigo",
+  "name": "Balcony",
+  "grenade": "smoke",
+  "throw_type": "normal",
+  "duck": false,
+  "description": "TeamHelp"
+ },
+ {
+  "pos": [
+   -1779.02,
+   21.32,
+   11776.03
+  ],
+  "ang": [
+   -5.38,
+   28.45
+  ],
+  "map": "de_vertigo",
+  "name": "Corner",
+  "grenade": "he",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -1094.03,
+   457.83,
+   11777.03
+  ],
+  "ang": [
+   -5.28,
+   -150.89
+  ],
+  "map": "de_vertigo",
+  "name": "Middle Push",
+  "grenade": "molotov",
+  "throw_type": "run",
+  "duck": false,
+  "description": "Safe"
+ },
+ {
+  "pos": [
+   -974.01,
+   522.4,
+   11776.03
+  ],
+  "ang": [
+   -21.18,
+   -155.19
+  ],
+  "map": "de_vertigo",
+  "name": "Middle",
+  "grenade": "molotov",
+  "throw_type": "jump",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -1789.14,
+   59.92,
+   11776.03
+  ],
+  "ang": [
+   -28.93,
+   24.43
+  ],
+  "map": "de_vertigo",
+  "name": "Corner",
+  "grenade": "molotov",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -1680.03,
+   155.03,
+   11777.03
+  ],
+  "ang": [
+   -13.41,
+   157.59
+  ],
+  "map": "de_vertigo",
+  "name": "Sandbags",
+  "grenade": "molotov",
+  "throw_type": "normal",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -1056.16,
+   514.81,
+   11777.03
+  ],
+  "ang": [
+   -34.75,
+   157.43
+  ],
+  "map": "de_vertigo",
+  "name": "3D",
+  "grenade": "smoke",
+  "throw_type": "run",
+  "duck": false,
+  "description": "[Slow] TeamHelp"
+ },
+ {
+  "pos": [
+   -1955.42,
+   -38.28,
+   11776.03
+  ],
+  "ang": [
+   -12.99,
+   26.19
+  ],
+  "map": "de_vertigo",
+  "name": "CT Start",
+  "grenade": "molotov",
+  "throw_type": "normal",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -2387.5,
+   -71.65,
+   11712.03
+  ],
+  "ang": [
+   -31.54,
+   -81.58
+  ],
+  "map": "de_vertigo",
+  "name": "TUNNEL",
+  "grenade": "molotov",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -1711.81,
+   267.18,
+   11776.03
+  ],
+  "ang": [
+   3.49,
+   35.75
+  ],
+  "map": "de_vertigo",
+  "name": "Vents",
+  "grenade": "he",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -955.39,
+   742.29,
+   11776.03
+  ],
+  "ang": [
+   -3.3,
+   -179.63
+  ],
+  "map": "de_vertigo",
+  "name": "Vent",
+  "grenade": "molotov",
+  "throw_type": "jump",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -955.34,
+   742.42,
+   11776.03
+  ],
+  "ang": [
+   -21.16,
+   170.94
+  ],
+  "map": "de_vertigo",
+  "name": "3D",
+  "grenade": "molotov",
+  "throw_type": "normal",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -1678.54,
+   385.21,
+   11776.03
+  ],
+  "ang": [
+   -16.34,
+   22.88
+  ],
+  "map": "de_vertigo",
+  "name": "Vents",
+  "grenade": "molotov",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -1544.9,
+   382.23,
+   11799.65
+  ],
+  "ang": [
+   2.39,
+   35.8
+  ],
+  "map": "de_vertigo",
+  "name": "Vent",
+  "grenade": "he",
+  "throw_type": "jump",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -1020.23,
+   755.27,
+   11776.03
+  ],
+  "ang": [
+   -4.01,
+   149.05
+  ],
+  "map": "de_vertigo",
+  "name": "Vent | Push",
+  "grenade": "he",
+  "throw_type": "jump",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -1555.48,
+   438.97,
+   11793.26
+  ],
+  "ang": [
+   -38.39,
+   8.75
+  ],
+  "map": "de_vertigo",
+  "name": "CT",
+  "grenade": "he",
+  "throw_type": "normal",
+  "duck": true,
+  "description": ""
+ },
+ {
+  "pos": [
+   -1074.44,
+   777.44,
+   11776.03
+  ],
+  "ang": [
+   -24.87,
+   147.78
+  ],
+  "map": "de_vertigo",
+  "name": "Vents ",
+  "grenade": "molotov",
+  "throw_type": "run",
+  "duck": false,
+  "description": "r side"
+ },
+ {
+  "pos": [
+   -1938.29,
+   300.38,
+   11776.03
+  ],
+  "ang": [
+   8.79,
+   140.2
+  ],
+  "map": "de_vertigo",
+  "name": "2D",
+  "grenade": "he",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -1938.61,
+   300.62,
+   11776.03
+  ],
+  "ang": [
+   -32.44,
+   142.23
+  ],
+  "map": "de_vertigo",
+  "name": "2D",
+  "grenade": "molotov",
+  "throw_type": "normal",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -951.09,
+   577.04,
+   11840.02
+  ],
+  "ang": [
+   -15.29,
+   170.31
+  ],
+  "map": "de_vertigo",
+  "name": "Vents",
+  "grenade": "he",
+  "throw_type": "normal",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -979.95,
+   887.25,
+   11776.03
+  ],
+  "ang": [
+   -13.35,
+   -178.58
+  ],
+  "map": "de_vertigo",
+  "name": "3D",
+  "grenade": "molotov",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -923.03,
+   945.45,
+   11776.03
+  ],
+  "ang": [
+   -36.78,
+   -59.08
+  ],
+  "map": "de_vertigo",
+  "name": "Cement",
+  "grenade": "smoke",
+  "throw_type": "normal",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -923.03,
+   945.46,
+   11776.03
+  ],
+  "ang": [
+   -35.46,
+   -61.39
+  ],
+  "map": "de_vertigo",
+  "name": "Elevator",
+  "grenade": "smoke",
+  "throw_type": "normal",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -1394.02,
+   440.12,
+   11845.66
+  ],
+  "ang": [
+   -10.33,
+   178.75
+  ],
+  "map": "de_vertigo",
+  "name": "Wall + Cement",
+  "grenade": "molotov",
+  "throw_type": "normal",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -874.54,
+   565.92,
+   11873.03
+  ],
+  "ang": [
+   -8.21,
+   170.46
+  ],
+  "map": "de_vertigo",
+  "name": "Vents",
+  "grenade": "molotov",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -2551.46,
+   -715.95,
+   11842.89
+  ],
+  "ang": [
+   8.75,
+   73.74
+  ],
+  "map": "de_vertigo",
+  "name": "Back Site",
+  "grenade": "molotov",
+  "throw_type": "run",
+  "duck": false,
+  "description": "only AIRAA 100+"
+ },
+ {
+  "pos": [
+   -869.59,
+   993.98,
+   11776.03
+  ],
+  "ang": [
+   3.83,
+   -166.23
+  ],
+  "map": "de_vertigo",
+  "name": "2D + walkway",
+  "grenade": "molotov",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -957.56,
+   972.96,
+   11776.03
+  ],
+  "ang": [
+   2.82,
+   -162.32
+  ],
+  "map": "de_vertigo",
+  "name": "Box",
+  "grenade": "molotov",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -1394.08,
+   451.0,
+   11853.05
+  ],
+  "ang": [
+   -7.8,
+   -178.17
+  ],
+  "map": "de_vertigo",
+  "name": "Cement Full",
+  "grenade": "molotov",
+  "throw_type": "normal",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -2151.03,
+   293.99,
+   11776.03
+  ],
+  "ang": [
+   -2.39,
+   88.59
+  ],
+  "map": "de_vertigo",
+  "name": "3D",
+  "grenade": "molotov",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -869.01,
+   600.65,
+   11873.03
+  ],
+  "ang": [
+   8.51,
+   -161.45
+  ],
+  "map": "de_vertigo",
+  "name": "Wall+2D",
+  "grenade": "molotov",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -1649.31,
+   688.87,
+   11776.03
+  ],
+  "ang": [
+   -9.21,
+   -32.41
+  ],
+  "map": "de_vertigo",
+  "name": "Platform bug",
+  "grenade": "molotov",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -1128.18,
+   957.69,
+   11776.03
+  ],
+  "ang": [
+   11.48,
+   -175.62
+  ],
+  "map": "de_vertigo",
+  "name": "3D",
+  "grenade": "he",
+  "throw_type": "run",
+  "duck": false,
+  "description": "Right"
+ },
+ {
+  "pos": [
+   -2288.25,
+   385.35,
+   11744.03
+  ],
+  "ang": [
+   -47.63,
+   31.39
+  ],
+  "map": "de_vertigo",
+  "name": "CT Close",
+  "grenade": "molotov",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -1394.01,
+   474.79,
+   11865.11
+  ],
+  "ang": [
+   -15.31,
+   -133.29
+  ],
+  "map": "de_vertigo",
+  "name": "Corridor",
+  "grenade": "he",
+  "throw_type": "normal",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -2046.97,
+   -39.97,
+   11868.03
+  ],
+  "ang": [
+   -9.08,
+   92.89
+  ],
+  "map": "de_vertigo",
+  "name": "3D",
+  "grenade": "smoke",
+  "throw_type": "normal",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -2331.8,
+   363.27,
+   11744.03
+  ],
+  "ang": [
+   -28.8,
+   30.84
+  ],
+  "map": "de_vertigo",
+  "name": "Vent",
+  "grenade": "he",
+  "throw_type": "jump",
+  "duck": false,
+  "description": "Safe"
+ },
+ {
+  "pos": [
+   -1907.76,
+   570.7,
+   11776.03
+  ],
+  "ang": [
+   -16.52,
+   -172.61
+  ],
+  "map": "de_vertigo",
+  "name": "Wall",
+  "grenade": "he",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -2046.97,
+   -40.0,
+   11869.03
+  ],
+  "ang": [
+   -3.39,
+   92.7
+  ],
+  "map": "de_vertigo",
+  "name": "3D",
+  "grenade": "he",
+  "throw_type": "normal",
+  "duck": false,
+  "description": "100HP NO ARMOR"
+ },
+ {
+  "pos": [
+   -2046.97,
+   -39.99,
+   11869.03
+  ],
+  "ang": [
+   -11.15,
+   92.72
+  ],
+  "map": "de_vertigo",
+  "name": "3D",
+  "grenade": "molotov",
+  "throw_type": "normal",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -1712.92,
+   706.29,
+   11776.03
+  ],
+  "ang": [
+   3.45,
+   -155.05
+  ],
+  "map": "de_vertigo",
+  "name": "Under Boost",
+  "grenade": "molotov",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -2195.87,
+   342.4,
+   11776.03
+  ],
+  "ang": [
+   -49.71,
+   19.8
+  ],
+  "map": "de_vertigo",
+  "name": "Barrels",
+  "grenade": "molotov",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -1658.36,
+   750.64,
+   11776.03
+  ],
+  "ang": [
+   -15.61,
+   -148.68
+  ],
+  "map": "de_vertigo",
+  "name": "2D",
+  "grenade": "he",
+  "throw_type": "run",
+  "duck": false,
+  "description": "max dmg"
+ },
+ {
+  "pos": [
+   -1358.52,
+   915.17,
+   11776.03
+  ],
+  "ang": [
+   4.86,
+   -160.06
+  ],
+  "map": "de_vertigo",
+  "name": "Wall",
+  "grenade": "molotov",
+  "throw_type": "run",
+  "duck": false,
+  "description": "FULL"
+ },
+ {
+  "pos": [
+   -1409.98,
+   890.2,
+   11777.03
+  ],
+  "ang": [
+   -25.73,
+   164.95
+  ],
+  "map": "de_vertigo",
+  "name": "3D",
+  "grenade": "molotov",
+  "throw_type": "normal",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -1601.83,
+   796.24,
+   11776.03
+  ],
+  "ang": [
+   -42.5,
+   -169.8
+  ],
+  "map": "de_vertigo",
+  "name": "2D + walkway",
+  "grenade": "molotov",
+  "throw_type": "normal",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -1255.55,
+   966.61,
+   11776.03
+  ],
+  "ang": [
+   -14.76,
+   -165.79
+  ],
+  "map": "de_vertigo",
+  "name": "3D",
+  "grenade": "molotov",
+  "throw_type": "normal",
+  "duck": false,
+  "description": "Right"
+ },
+ {
+  "pos": [
+   -785.07,
+   967.97,
+   11818.03
+  ],
+  "ang": [
+   -36.78,
+   -69.5
+  ],
+  "map": "de_vertigo",
+  "name": "Plant",
+  "grenade": "smoke",
+  "throw_type": "normal",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -1730.21,
+   739.65,
+   11776.03
+  ],
+  "ang": [
+   -15.3,
+   -135.78
+  ],
+  "map": "de_vertigo",
+  "name": "2D+3D",
+  "grenade": "molotov",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -1333.29,
+   967.99,
+   11776.03
+  ],
+  "ang": [
+   4.79,
+   -114.28
+  ],
+  "map": "de_vertigo",
+  "name": "Tunnel",
+  "grenade": "he",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -1358.32,
+   961.49,
+   11776.03
+  ],
+  "ang": [
+   -19.89,
+   -148.18
+  ],
+  "map": "de_vertigo",
+  "name": "Wall",
+  "grenade": "he",
+  "throw_type": "normal",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -1773.11,
+   743.14,
+   11776.03
+  ],
+  "ang": [
+   -19.97,
+   -122.17
+  ],
+  "map": "de_vertigo",
+  "name": "3D",
+  "grenade": "molotov",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -1763.2,
+   752.21,
+   11776.03
+  ],
+  "ang": [
+   -17.04,
+   -125.5
+  ],
+  "map": "de_vertigo",
+  "name": "3D",
+  "grenade": "he",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -1380.8,
+   963.83,
+   11776.03
+  ],
+  "ang": [
+   -20.66,
+   -145.78
+  ],
+  "map": "de_vertigo",
+  "name": "2D",
+  "grenade": "molotov",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -2324.61,
+   482.69,
+   11744.03
+  ],
+  "ang": [
+   -18.96,
+   30.08
+  ],
+  "map": "de_vertigo",
+  "name": "CT",
+  "grenade": "smoke",
+  "throw_type": "normal",
+  "duck": false,
+  "description": "teamhelp"
+ },
+ {
+  "pos": [
+   -1672.09,
+   838.95,
+   11776.03
+  ],
+  "ang": [
+   -30.41,
+   -142.65
+  ],
+  "map": "de_vertigo",
+  "name": "Wall",
+  "grenade": "molotov",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -1672.04,
+   838.99,
+   11776.03
+  ],
+  "ang": [
+   -27.54,
+   -142.85
+  ],
+  "map": "de_vertigo",
+  "name": "Wall",
+  "grenade": "he",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -1672.08,
+   839.03,
+   11776.03
+  ],
+  "ang": [
+   -26.18,
+   -150.56
+  ],
+  "map": "de_vertigo",
+  "name": "Wall + Cement",
+  "grenade": "molotov",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -1415.88,
+   550.06,
+   11874.53
+  ],
+  "ang": [
+   -10.91,
+   -126.12
+  ],
+  "map": "de_vertigo",
+  "name": "T corridor[BUG]",
+  "grenade": "he",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -1433.41,
+   972.87,
+   11776.03
+  ],
+  "ang": [
+   -8.86,
+   -134.87
+  ],
+  "map": "de_vertigo",
+  "name": "3D",
+  "grenade": "he",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -1457.23,
+   541.27,
+   11874.53
+  ],
+  "ang": [
+   -14.88,
+   139.74
+  ],
+  "map": "de_vertigo",
+  "name": "3D",
+  "grenade": "molotov",
+  "throw_type": "normal",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -1766.44,
+   806.11,
+   11776.03
+  ],
+  "ang": [
+   16.18,
+   150.61
+  ],
+  "map": "de_vertigo",
+  "name": "3D",
+  "grenade": "smoke",
+  "throw_type": "normal",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -2420.83,
+   449.29,
+   11744.03
+  ],
+  "ang": [
+   3.69,
+   -0.21
+  ],
+  "map": "de_vertigo",
+  "name": "platform push",
+  "grenade": "molotov",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -2420.83,
+   449.29,
+   11744.03
+  ],
+  "ang": [
+   3.69,
+   -0.21
+  ],
+  "map": "de_vertigo",
+  "name": "platform push",
+  "grenade": "he",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -2189.76,
+   574.08,
+   11764.28
+  ],
+  "ang": [
+   4.49,
+   -17.02
+  ],
+  "map": "de_vertigo",
+  "name": "Mid push",
+  "grenade": "molotov",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -1542.8,
+   540.35,
+   11873.53
+  ],
+  "ang": [
+   0.5,
+   -104.81
+  ],
+  "map": "de_vertigo",
+  "name": "T corridor[BUG]",
+  "grenade": "molotov",
+  "throw_type": "run",
+  "duck": true,
+  "description": ""
+ },
+ {
+  "pos": [
+   -1496.59,
+   1000.97,
+   11776.03
+  ],
+  "ang": [
+   -10.6,
+   -142.09
+  ],
+  "map": "de_vertigo",
+  "name": "Vents",
+  "grenade": "he",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -1496.62,
+   1000.97,
+   11776.03
+  ],
+  "ang": [
+   -10.6,
+   -142.09
+  ],
+  "map": "de_vertigo",
+  "name": "Vents",
+  "grenade": "molotov",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -1567.84,
+   990.39,
+   11776.03
+  ],
+  "ang": [
+   -27.21,
+   -20.82
+  ],
+  "map": "de_vertigo",
+  "name": "Vent",
+  "grenade": "molotov",
+  "throw_type": "run",
+  "duck": false,
+  "description": "skeet bug trace"
+ },
+ {
+  "pos": [
+   -1755.87,
+   889.46,
+   11776.03
+  ],
+  "ang": [
+   -8.21,
+   -151.94
+  ],
+  "map": "de_vertigo",
+  "name": "WALL Hazzard",
+  "grenade": "molotov",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -2107.01,
+   654.64,
+   11776.03
+  ],
+  "ang": [
+   -6.04,
+   -103.69
+  ],
+  "map": "de_vertigo",
+  "name": "Boost",
+  "grenade": "he",
+  "throw_type": "jump",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -1935.42,
+   781.86,
+   11776.03
+  ],
+  "ang": [
+   -13.62,
+   32.83
+  ],
+  "map": "de_vertigo",
+  "name": "CT",
+  "grenade": "he",
+  "throw_type": "run",
+  "duck": false,
+  "description": "left"
+ },
+ {
+  "pos": [
+   -2144.74,
+   614.82,
+   11778.47
+  ],
+  "ang": [
+   -28.5,
+   -149.0
+  ],
+  "map": "de_vertigo",
+  "name": "Under Boost",
+  "grenade": "molotov",
+  "throw_type": "normal",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -1958.1,
+   770.9,
+   11776.03
+  ],
+  "ang": [
+   -15.36,
+   30.09
+  ],
+  "map": "de_vertigo",
+  "name": "Close Box",
+  "grenade": "molotov",
+  "throw_type": "normal",
+  "duck": false,
+  "description": "Left"
+ },
+ {
+  "pos": [
+   -1975.1,
+   767.55,
+   11776.03
+  ],
+  "ang": [
+   -13.68,
+   29.42
+  ],
+  "map": "de_vertigo",
+  "name": "CT",
+  "grenade": "smoke",
+  "throw_type": "normal",
+  "duck": false,
+  "description": "teamhelp"
+ },
+ {
+  "pos": [
+   -2380.52,
+   586.24,
+   11744.03
+  ],
+  "ang": [
+   1.22,
+   -44.4
+  ],
+  "map": "de_vertigo",
+  "name": "Middle",
+  "grenade": "molotov",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -1520.66,
+   629.53,
+   11874.53
+  ],
+  "ang": [
+   13.32,
+   147.31
+  ],
+  "map": "de_vertigo",
+  "name": "3D",
+  "grenade": "smoke",
+  "throw_type": "normal",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -1465.54,
+   655.28,
+   11876.02
+  ],
+  "ang": [
+   -8.69,
+   -116.38
+  ],
+  "map": "de_vertigo",
+  "name": "Corridor",
+  "grenade": "molotov",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -1500.69,
+   653.49,
+   11875.5
+  ],
+  "ang": [
+   -9.41,
+   -106.62
+  ],
+  "map": "de_vertigo",
+  "name": "T corridor",
+  "grenade": "he",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -2614.77,
+   341.17,
+   11752.72
+  ],
+  "ang": [
+   8.11,
+   4.87
+  ],
+  "map": "de_vertigo",
+  "name": "platform push",
+  "grenade": "he",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -1994.45,
+   802.64,
+   11776.03
+  ],
+  "ang": [
+   -46.66,
+   -20.84
+  ],
+  "map": "de_vertigo",
+  "name": "Platform",
+  "grenade": "molotov",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -1575.65,
+   641.83,
+   11876.02
+  ],
+  "ang": [
+   14.2,
+   -167.48
+  ],
+  "map": "de_vertigo",
+  "name": "Wall",
+  "grenade": "smoke",
+  "throw_type": "normal",
+  "duck": false,
+  "description": "fast"
+ },
+ {
+  "pos": [
+   -1542.08,
+   665.8,
+   11875.61
+  ],
+  "ang": [
+   -19.18,
+   -104.96
+  ],
+  "map": "de_vertigo",
+  "name": "Middle Box",
+  "grenade": "molotov",
+  "throw_type": "jump",
+  "duck": false,
+  "description": "Safe"
+ },
+ {
+  "pos": [
+   -2633.97,
+   391.01,
+   11755.92
+  ],
+  "ang": [
+   -3.93,
+   3.06
+  ],
+  "map": "de_vertigo",
+  "name": "CT Spawn",
+  "grenade": "molotov",
+  "throw_type": "jump",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -2020.95,
+   986.24,
+   11744.03
+  ],
+  "ang": [
+   -22.91,
+   -135.38
+  ],
+  "map": "de_vertigo",
+  "name": "Under Boost",
+  "grenade": "molotov",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -2517.21,
+   600.03,
+   11744.03
+  ],
+  "ang": [
+   -14.95,
+   2.71
+  ],
+  "map": "de_vertigo",
+  "name": "Balcony",
+  "grenade": "smoke",
+  "throw_type": "normal",
+  "duck": false,
+  "description": "[Bug] TeamHelp"
+ },
+ {
+  "pos": [
+   -2100.91,
+   954.03,
+   11744.03
+  ],
+  "ang": [
+   -17.71,
+   -99.93
+  ],
+  "map": "de_vertigo",
+  "name": "Lower",
+  "grenade": "molotov",
+  "throw_type": "normal",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -2633.98,
+   448.47,
+   11755.92
+  ],
+  "ang": [
+   -13.1,
+   44.79
+  ],
+  "map": "de_vertigo",
+  "name": "3D",
+  "grenade": "molotov",
+  "throw_type": "jump",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -2113.72,
+   960.79,
+   11744.03
+  ],
+  "ang": [
+   -7.51,
+   -112.39
+  ],
+  "map": "de_vertigo",
+  "name": "Pit",
+  "grenade": "molotov",
+  "throw_type": "normal",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -2112.27,
+   965.11,
+   11744.03
+  ],
+  "ang": [
+   -5.37,
+   -108.54
+  ],
+  "map": "de_vertigo",
+  "name": "Cement",
+  "grenade": "he",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -2633.96,
+   466.11,
+   11755.92
+  ],
+  "ang": [
+   -18.71,
+   40.47
+  ],
+  "map": "de_vertigo",
+  "name": "3D",
+  "grenade": "he",
+  "throw_type": "jump",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -2145.43,
+   956.44,
+   11744.03
+  ],
+  "ang": [
+   -16.49,
+   -22.26
+  ],
+  "map": "de_vertigo",
+  "name": "Balcony",
+  "grenade": "smoke",
+  "throw_type": "normal",
+  "duck": true,
+  "description": "[fast] teamhelp"
+ },
+ {
+  "pos": [
+   -2216.54,
+   902.79,
+   11745.03
+  ],
+  "ang": [
+   -21.22,
+   7.94
+  ],
+  "map": "de_vertigo",
+  "name": "CT Spot",
+  "grenade": "molotov",
+  "throw_type": "normal",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -2633.98,
+   486.12,
+   11755.92
+  ],
+  "ang": [
+   3.99,
+   56.54
+  ],
+  "map": "de_vertigo",
+  "name": "3D",
+  "grenade": "he",
+  "throw_type": "run",
+  "duck": false,
+  "description": "Down"
+ },
+ {
+  "pos": [
+   -2044.32,
+   1038.56,
+   11747.91
+  ],
+  "ang": [
+   -17.31,
+   -101.64
+  ],
+  "map": "de_vertigo",
+  "name": "Stairs [lower]",
+  "grenade": "molotov",
+  "throw_type": "normal",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -2044.36,
+   1038.56,
+   11747.91
+  ],
+  "ang": [
+   -7.33,
+   -112.79
+  ],
+  "map": "de_vertigo",
+  "name": "Stairs",
+  "grenade": "molotov",
+  "throw_type": "normal",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -2085.64,
+   1036.02,
+   11747.59
+  ],
+  "ang": [
+   -16.02,
+   -30.32
+  ],
+  "map": "de_vertigo",
+  "name": "Barrels",
+  "grenade": "smoke",
+  "throw_type": "normal",
+  "duck": false,
+  "description": "TeamHelp"
+ },
+ {
+  "pos": [
+   -2556.65,
+   668.99,
+   11745.58
+  ],
+  "ang": [
+   -18.22,
+   -39.43
+  ],
+  "map": "de_vertigo",
+  "name": "T corridor",
+  "grenade": "molotov",
+  "throw_type": "normal",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -2623.5,
+   561.85,
+   11754.79
+  ],
+  "ang": [
+   -27.27,
+   33.12
+  ],
+  "map": "de_vertigo",
+  "name": "Push",
+  "grenade": "molotov",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -2525.33,
+   747.41,
+   11744.03
+  ],
+  "ang": [
+   -17.78,
+   -46.53
+  ],
+  "map": "de_vertigo",
+  "name": "T corridor",
+  "grenade": "he",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -2391.04,
+   684.46,
+   11797.03
+  ],
+  "ang": [
+   -20.39,
+   20.65
+  ],
+  "map": "de_vertigo",
+  "name": "CT",
+  "grenade": "molotov",
+  "throw_type": "normal",
+  "duck": true,
+  "description": ""
+ },
+ {
+  "pos": [
+   -2394.54,
+   681.76,
+   11797.03
+  ],
+  "ang": [
+   -10.4,
+   -27.53
+  ],
+  "map": "de_vertigo",
+  "name": "Vents",
+  "grenade": "he",
+  "throw_type": "run",
+  "duck": true,
+  "description": ""
+ },
+ {
+  "pos": [
+   -2119.92,
+   891.26,
+   11829.03
+  ],
+  "ang": [
+   -13.73,
+   -21.36
+  ],
+  "map": "de_vertigo",
+  "name": "Platform",
+  "grenade": "molotov",
+  "throw_type": "normal",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -2119.91,
+   891.3,
+   11829.03
+  ],
+  "ang": [
+   -17.38,
+   0.85
+  ],
+  "map": "de_vertigo",
+  "name": "CT Spot",
+  "grenade": "molotov",
+  "throw_type": "normal",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -2320.35,
+   724.13,
+   11849.03
+  ],
+  "ang": [
+   -4.66,
+   -56.23
+  ],
+  "map": "de_vertigo",
+  "name": "Corridor [Left]",
+  "grenade": "molotov",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -2320.4,
+   724.11,
+   11849.03
+  ],
+  "ang": [
+   -4.66,
+   -56.21
+  ],
+  "map": "de_vertigo",
+  "name": "Corridor [Left]",
+  "grenade": "he",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -2369.14,
+   686.72,
+   11849.03
+  ],
+  "ang": [
+   -5.14,
+   -50.0
+  ],
+  "map": "de_vertigo",
+  "name": "mid",
+  "grenade": "he",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -1394.05,
+   673.02,
+   11841.02
+  ],
+  "ang": [
+   9.68,
+   -125.15
+  ],
+  "map": "de_vertigo",
+  "name": "Tunnel",
+  "grenade": "molotov",
+  "throw_type": "jump",
+  "duck": false,
+  "description": "Custom"
+ },
+ {
+  "pos": [
+   -2057.46,
+   954.04,
+   11744.03
+  ],
+  "ang": [
+   -19.78,
+   -97.72
+  ],
+  "map": "de_vertigo",
+  "name": "Wall",
+  "grenade": "molotov",
+  "throw_type": "normal",
+  "duck": false,
+  "description": "Custom"
+ },
+ {
+  "pos": [
+   -1501.96,
+   395.98,
+   11825.59
+  ],
+  "ang": [
+   -10.53,
+   89.97
+  ],
+  "map": "de_vertigo",
+  "name": "Vent | Safe",
+  "grenade": "molotov",
+  "throw_type": "run",
+  "duck": false,
+  "description": "Custom"
+ }
+]

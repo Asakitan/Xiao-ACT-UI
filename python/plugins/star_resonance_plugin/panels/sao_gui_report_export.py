@@ -39,6 +39,7 @@ from gui_modules.sao_panel_ui import (
     _sao_panel_body,
     _sao_panel_header,
     _sao_pill,
+    run_native_dialog,
 )
 
 
@@ -242,7 +243,8 @@ class ReportExportPanel:
         selected = str(path or '').strip()
         if not selected:
             try:
-                selected = filedialog.askopenfilename(
+                selected = run_native_dialog(
+                    filedialog.askopenfilename,
                     parent=self._win,
                     title='Import ACT replay/report',
                     filetypes=(

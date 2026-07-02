@@ -110,10 +110,26 @@ _gdi32.DeleteObject.restype = wt.BOOL
 _gdi32.DeleteDC.argtypes = [wt.HDC]
 _gdi32.DeleteDC.restype = wt.BOOL
 
-_gdi32.GetDIBits.argtypes = [
+
+# ``ctypes.windll.gdi32`` is a single WinDLL object cached and shared by the
+# whole process — ``.argtypes`` on its GetDIBits is a mutable attribute any
+# importer can overwrite. At least one user plugin (razorworks/rw_cyber.py)
+# defines its own structurally-identical-but-distinct ``_BITMAPINFO`` class
+# and sets this same shared ``.argtypes`` with ``POINTER(their_class)`` at
+# import time. Whichever module's assignment ran last then makes every
+# *other* caller's ``ctypes.byref(bmi)`` (built from a different class)
+# fail with "expected LP__BITMAPINFO instance instead of pointer to
+# _BITMAPINFO" — which silently killed this module's own capture thread the
+# first time it ran after such a plugin's import. Declaring the BITMAPINFO
+# arg as plain ``c_void_p`` sidesteps the class-identity check entirely
+# (any pointer-like value works), and re-asserting it immediately before
+# every call in ``_capture_window`` (below) guards against a later import
+# still overwriting it back to a class-specific POINTER type in between.
+_GETDIBITS_ARGTYPES = [
     wt.HDC, wt.HBITMAP, wt.UINT, wt.UINT,
-    ctypes.c_void_p, ctypes.POINTER(_BITMAPINFO), wt.UINT,
+    ctypes.c_void_p, ctypes.c_void_p, wt.UINT,
 ]
+_gdi32.GetDIBits.argtypes = _GETDIBITS_ARGTYPES
 _gdi32.GetDIBits.restype = ctypes.c_int
 
 
@@ -143,6 +159,8 @@ def _capture_window(hwnd: int, w: int, h: int) -> Optional[bytes]:
         bmi.bmiHeader.biCompression = BI_RGB
 
         buf = ctypes.create_string_buffer(w * h * 4)
+        # Re-assert every call — see the comment on _GETDIBITS_ARGTYPES.
+        _gdi32.GetDIBits.argtypes = _GETDIBITS_ARGTYPES
         got = _gdi32.GetDIBits(
             hdc_mem, hbmp, 0, h,
             ctypes.cast(buf, ctypes.c_void_p),

@@ -317,9 +317,7 @@ class SpecRenderer:
             return ("title" in rn.parts) == bool(str(ns.get("title") or ""))
         if t == "table":
             return _table_key(rn.spec or {}) == _table_key(ns)
-        if t == "input":
-            # Reuse only when the id matches, so two inputs never swap identity
-            # (and the live tk.Entry / user text survives the redraw).
+        if t == "input" or t == "slider":
             return str((rn.spec or {}).get("id") or "") == str(ns.get("id") or "")
         return True
 
@@ -331,7 +329,7 @@ class SpecRenderer:
             "text": self._build_text, "kv": self._build_kv, "bar": self._build_bar,
             "badge": self._build_badge, "divider": self._build_divider,
             "spacer": self._build_spacer, "button": self._build_button,
-            "input": self._build_input,
+            "input": self._build_input, "slider": self._build_slider,
             "table": self._build_table, "canvas": self._build_canvas,
         }.get(t)
         return builder(parent, ns, pal) if builder else None
@@ -354,6 +352,8 @@ class SpecRenderer:
             self._update_button(rn, ns, pal)
         elif t == "input":
             self._update_input(rn, ns, pal)
+        elif t == "slider":
+            self._update_slider(rn, ns, pal)
         elif t == "table":
             self._update_table(rn, ns, pal)
         elif t == "canvas":
@@ -452,6 +452,69 @@ class SpecRenderer:
             pct = _finite_float(ns.get("pct"), 0.0, lo=0.0, hi=1.0)
             rn.parts["caption"].config(text=str(ns.get("caption") or ""))
             rn.parts["fill"].place_configure(relwidth=pct)
+
+    def _build_slider(self, parent, ns, pal) -> _RNode:
+        sid = str(ns.get("id") or "")
+        lo = float(ns.get("lo", 0))
+        hi = float(ns.get("hi", 1))
+        step = float(ns.get("step", 0.01))
+        val = float(ns.get("value", lo))
+        color = _bar_color(str(ns.get("color") or "cyan"), pal)
+        bg = parent["bg"]
+
+        w = tk.Frame(parent, bg=bg)
+        lbl = tk.Label(w, text=str(ns.get("label") or ""), bg=bg,
+                       fg=pal["label"], anchor="w", font=("Segoe UI", 9))
+        lbl.pack(side="left", padx=(0, 6))
+
+        val_lbl = tk.Label(w, text=self._fmt_slider_val(val, lo, hi),
+                           bg=bg, fg=pal["value"], anchor="e",
+                           font=("Segoe UI", 9, "bold"), width=7)
+        val_lbl.pack(side="right", padx=(4, 0))
+
+        resolution = step if step > 0 else (hi - lo) / 200
+        scale = tk.Scale(w, from_=lo, to=hi, resolution=resolution,
+                         orient="horizontal", showvalue=False,
+                         bg=bg, fg=color, troughcolor=pal["sep"],
+                         highlightthickness=0, bd=0, sliderrelief="flat",
+                         activebackground=color, length=180)
+        scale.set(val)
+        scale.pack(side="left", fill="x", expand=True, pady=2)
+
+        on_act = self._on_action
+        def _on_slide(new_val):
+            v = float(new_val)
+            val_lbl.config(text=self._fmt_slider_val(v, lo, hi))
+            if on_act and sid:
+                on_act(f"slide_{sid}", {"value": v})
+        scale.config(command=_on_slide)
+
+        return _RNode("slider", w,
+                      parts={"label": lbl, "scale": scale, "val_lbl": val_lbl},
+                      spec=ns, pack_kw={"fill": "x", "pady": 1})
+
+    def _update_slider(self, rn, ns, pal) -> None:
+        rn.parts["label"].config(text=str(ns.get("label") or ""))
+        # Don't overwrite scale position if user is dragging
+        scale = rn.parts["scale"]
+        try:
+            if not scale.winfo_ismapped():
+                return
+            state = str(scale.cget("state"))
+            if state == "active":
+                return
+        except Exception:
+            pass
+
+    @staticmethod
+    def _fmt_slider_val(v, lo, hi):
+        if hi <= 1.01 and lo >= 0:
+            return f"{v:.0%}"
+        if abs(v) < 100 and (hi - lo) < 10:
+            return f"{v:.2f}"
+        if abs(v) < 1000:
+            return f"{v:.1f}"
+        return f"{int(v)}"
 
     def _build_badge(self, parent, ns, pal) -> _RNode:
         fg = _badge_fg(str(ns.get("style") or "muted"), pal)

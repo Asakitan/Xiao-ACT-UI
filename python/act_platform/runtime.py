@@ -683,7 +683,7 @@ def act_plugin_uninstall(owner: Any, plugin_id: str) -> dict[str, Any]:
             "status": status, "errors": []}
 
 
-_SCRIPT_MENU_LANGUAGES = {"lua", "csharp", "angelscript", "emma"}
+_SCRIPT_MENU_LANGUAGES = {"lua", "csharp", "angelscript", "emma", "python"}
 _SCRIPT_MENU_ACTION = "script.overlay.set_enabled"
 _SCRIPT_MENU_SETTING = "overlay_enabled"
 

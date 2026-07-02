@@ -1,0 +1,16 @@
+{
+  "id": "razorworks",
+  "name": "Razorworks",
+  "version": "2.0.0",
+  "entry": "plugin.py",
+  "description": "Razorworks 分析套件: 高级游戏数据分析与覆盖。引擎 A 数据源 + 引擎 E 输入(可选)。",
+  "enabled": false,
+  "requires": [],
+  "subscriptions": [],
+  "capabilities": [
+    "plugin_manager",
+    {"id": "ui_panels", "title": "Razorworks panel", "actions": ["start", "stop", "reload", "clear", "reset_stats"]},
+    {"id": "automation", "title": "Analysis automation (read + input)"}
+  ],
+  "permissions": ["engine_access"]
+}

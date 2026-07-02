@@ -24,7 +24,8 @@ Contents:
   * Helpers: ``_apply_panel_style``, ``_hex_rgba``,
     ``_make_panel_close_button``, ``_sao_panel_header``,
     ``_bind_panel_drag``, ``_sao_panel_body``,
-    ``_sao_panel_hud_canvas``, ``_sao_row``, ``_sao_pill``
+    ``_sao_panel_hud_canvas``, ``_sao_row``, ``_sao_pill``,
+    ``run_native_dialog``
   * Internal state: ``_close_btn_photo_cache`` (PhotoImage cache
     keyed by ``f'{size}_{bg}'`` so multiple panels reuse the same
     Image objects)
@@ -585,6 +586,43 @@ def _bind_panel_drag(hdr, close_lbl=None, start_fn=None, move_fn=None):
         for ch in w.winfo_children():
             _do(ch)
     _do(hdr)
+
+
+def run_native_dialog(fn, *args, **kwargs):
+    """Run a blocking native dialog (filedialog.askopenfilename etc.) with
+    the compositor host hidden for the duration.
+
+    The compositor host is WS_EX_TOPMOST and, whenever any mirrored Tk panel
+    is visible, its clickable region is set to full-screen (see
+    ``_sync_host_rgn``/``_has_visible_interactive_layers`` in
+    render/overlay_compositor.py) so it can route clicks to that panel. A
+    native dialog (explorer's file picker) is a separate, non-topmost HWND —
+    left as-is, the host keeps intercepting clicks meant for the dialog and
+    visually sits on top of it (its z-order gets re-asserted every couple
+    seconds by ``_enforce_z_order()``), making the dialog look dead and, even
+    once clicks reach it, still visually buried. Hiding the host outright
+    for the call's duration avoids both problems at once; it's restored
+    right after the (blocking) dialog call returns.
+    """
+    overlay = None
+    try:
+        from render.gpu_overlay_window import (
+            get_unified_overlay_mode, _unified_overlay_instance,
+        )
+        if get_unified_overlay_mode() and _unified_overlay_instance is not None:
+            overlay = _unified_overlay_instance
+            overlay.force_host_hidden(True)
+    except Exception:
+        overlay = None
+    try:
+        return fn(*args, **kwargs)
+    finally:
+        if overlay is not None:
+            try:
+                overlay.force_host_hidden(False)
+                overlay.sync_host_input_mode()
+            except Exception:
+                pass
 
 
 def _sao_panel_body(parent, *, flat=False):

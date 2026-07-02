@@ -1,0 +1,34 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>Razorworks Cyber Menu</title>
+<link rel="stylesheet" href="rw_cyber_dashboard.css">
+</head>
+<body>
+<div class="rw-shell">
+  <header class="rw-topbar">
+    <div class="rw-brand">RAZORWORKS <span class="rw-brand-sub">CYBER</span></div>
+    <div id="rw-status-pill" class="rw-status-pill">READY</div>
+  </header>
+
+  <main class="rw-body">
+    <section id="rw-content" class="rw-content"></section>
+
+    <nav id="rw-rail" class="rw-rail"></nav>
+  </main>
+
+  <footer class="rw-footer">
+    <button id="rw-cta-main" class="rw-cta rw-cta-main">Start</button>
+    <button id="rw-cta-save" class="rw-cta rw-cta-secondary">保存</button>
+    <div class="rw-mini-actions">
+      <button class="rw-mini-btn" data-cmd="reload" title="重载">⟳</button>
+      <button class="rw-mini-btn" data-cmd="reset" title="重置">↺</button>
+      <button class="rw-mini-btn" data-cmd="reset_stats" title="清零">⌀</button>
+    </div>
+  </footer>
+</div>
+
+<script src="rw_cyber_dashboard.js"></script>
+</body>
+</html>

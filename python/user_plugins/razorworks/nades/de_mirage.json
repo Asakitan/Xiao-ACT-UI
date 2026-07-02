@@ -1,0 +1,10049 @@
+[
+ {
+  "pos": [
+   -1074.0,
+   -1431.04,
+   -169.59
+  ],
+  "ang": [
+   12.88,
+   -29.92
+  ],
+  "map": "de_mirage",
+  "name": "Plant [FD]",
+  "grenade": "he",
+  "throw_type": "run",
+  "duck": false,
+  "description": "semi-safe"
+ },
+ {
+  "pos": [
+   -1070.86,
+   -1432.64,
+   -169.4
+  ],
+  "ang": [
+   -13.91,
+   -29.81
+  ],
+  "map": "de_mirage",
+  "name": "Plant [FD]",
+  "grenade": "molotov",
+  "throw_type": "run",
+  "duck": false,
+  "description": "semi-safe"
+ },
+ {
+  "pos": [
+   -543.73,
+   -1381.92,
+   -123.23
+  ],
+  "ang": [
+   -5.16,
+   -71.51
+  ],
+  "map": "de_mirage",
+  "name": "Plant",
+  "grenade": "he",
+  "throw_type": "normal",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -527.46,
+   -1448.62,
+   -69.86
+  ],
+  "ang": [
+   10.69,
+   -3.61
+  ],
+  "map": "de_mirage",
+  "name": "Tetris",
+  "grenade": "he",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -527.46,
+   -1448.62,
+   -69.86
+  ],
+  "ang": [
+   8.98,
+   -2.95
+  ],
+  "map": "de_mirage",
+  "name": "Tetris",
+  "grenade": "molotov",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -718.49,
+   -905.58,
+   -231.17
+  ],
+  "ang": [
+   -6.2,
+   41.42
+  ],
+  "map": "de_mirage",
+  "name": "Rip-esp [Box]",
+  "grenade": "molotov",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -639.49,
+   -800.69,
+   -263.97
+  ],
+  "ang": [
+   -21.26,
+   -87.68
+  ],
+  "map": "de_mirage",
+  "name": "Bombsite A [FD]",
+  "grenade": "molotov",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -345.09,
+   -1690.06,
+   -167.97
+  ],
+  "ang": [
+   -13.71,
+   130.83
+  ],
+  "map": "de_mirage",
+  "name": "Palace Hold",
+  "grenade": "he",
+  "throw_type": "jump",
+  "duck": false,
+  "description": "Corner"
+ },
+ {
+  "pos": [
+   -142.97,
+   -1418.03,
+   -72.18
+  ],
+  "ang": [
+   -5.54,
+   -57.16
+  ],
+  "map": "de_mirage",
+  "name": "Stairs",
+  "grenade": "molotov",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -1192.74,
+   -2412.54,
+   -178.22
+  ],
+  "ang": [
+   -24.2,
+   28.48
+  ],
+  "map": "de_mirage",
+  "name": "Box [FD]",
+  "grenade": "molotov",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -1133.78,
+   -2462.51,
+   -167.97
+  ],
+  "ang": [
+   -24.31,
+   41.5
+  ],
+  "map": "de_mirage",
+  "name": "Tetris",
+  "grenade": "molotov",
+  "throw_type": "normal",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -1136.61,
+   -2476.46,
+   -167.97
+  ],
+  "ang": [
+   -26.72,
+   42.81
+  ],
+  "map": "de_mirage",
+  "name": "Tetris",
+  "grenade": "he",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -211.69,
+   -2149.18,
+   -169.86
+  ],
+  "ang": [
+   -12.31,
+   141.21
+  ],
+  "map": "de_mirage",
+  "name": "Stairs [Bug molly]",
+  "grenade": "molotov",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -1015.99,
+   -305.79,
+   -367.97
+  ],
+  "ang": [
+   -22.38,
+   -102.18
+  ],
+  "map": "de_mirage",
+  "name": "Ladder [UNSAFE]",
+  "grenade": "he",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -1024.71,
+   -303.63,
+   -367.97
+  ],
+  "ang": [
+   -16.49,
+   -100.78
+  ],
+  "map": "de_mirage",
+  "name": "Ladder",
+  "grenade": "molotov",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -1040.77,
+   -258.2,
+   -367.97
+  ],
+  "ang": [
+   -17.35,
+   -71.18
+  ],
+  "map": "de_mirage",
+  "name": "Short",
+  "grenade": "molotov",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   99.26,
+   -1574.78,
+   -173.69
+  ],
+  "ang": [
+   -23.4,
+   178.6
+  ],
+  "map": "de_mirage",
+  "name": "Bug Molly [Stairs]",
+  "grenade": "molotov",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -1045.44,
+   -228.22,
+   -367.97
+  ],
+  "ang": [
+   -46.75,
+   -76.82
+  ],
+  "map": "de_mirage",
+  "name": "Short",
+  "grenade": "he",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   16.05,
+   -2239.75,
+   -39.97
+  ],
+  "ang": [
+   -13.9,
+   16.54
+  ],
+  "map": "de_mirage",
+  "name": "Bombsite A",
+  "grenade": "he",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -748.02,
+   35.38,
+   -165.25
+  ],
+  "ang": [
+   -9.89,
+   164.2
+  ],
+  "map": "de_mirage",
+  "name": "Plant [Left]",
+  "grenade": "molotov",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -1793.91,
+   -106.14,
+   -168.13
+  ],
+  "ang": [
+   -2.24,
+   120.28
+  ],
+  "map": "de_mirage",
+  "name": "Car",
+  "grenade": "molotov",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   439.37,
+   -1455.09,
+   -175.97
+  ],
+  "ang": [
+   -5.93,
+   -149.45
+  ],
+  "map": "de_mirage",
+  "name": "Plant [FD]",
+  "grenade": "molotov",
+  "throw_type": "run",
+  "duck": false,
+  "description": "50/50"
+ },
+ {
+  "pos": [
+   -1821.27,
+   -48.09,
+   -166.0
+  ],
+  "ang": [
+   1.87,
+   148.84
+  ],
+  "map": "de_mirage",
+  "name": "Wall [Left]",
+  "grenade": "he",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -1904.95,
+   -10.5,
+   -165.72
+  ],
+  "ang": [
+   -13.64,
+   140.15
+  ],
+  "map": "de_mirage",
+  "name": "Wall [Right]",
+  "grenade": "he",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -2367.91,
+   -415.1,
+   -167.97
+  ],
+  "ang": [
+   -5.55,
+   62.0
+  ],
+  "map": "de_mirage",
+  "name": "Wall [Left + Right]",
+  "grenade": "molotov",
+  "throw_type": "run",
+  "duck": false,
+  "description": "rip esp"
+ },
+ {
+  "pos": [
+   -2367.96,
+   -406.7,
+   -167.97
+  ],
+  "ang": [
+   -5.22,
+   60.65
+  ],
+  "map": "de_mirage",
+  "name": "Wall [Right]",
+  "grenade": "he",
+  "throw_type": "run",
+  "duck": false,
+  "description": "rip esp"
+ },
+ {
+  "pos": [
+   -2168.55,
+   -166.38,
+   -169.53
+  ],
+  "ang": [
+   0.89,
+   97.57
+  ],
+  "map": "de_mirage",
+  "name": "Car",
+  "grenade": "molotov",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -1776.9,
+   111.06,
+   -165.72
+  ],
+  "ang": [
+   -12.37,
+   129.82
+  ],
+  "map": "de_mirage",
+  "name": "Wall [Left]",
+  "grenade": "molotov",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -1012.1,
+   289.75,
+   -367.97
+  ],
+  "ang": [
+   -1.25,
+   -8.6
+  ],
+  "map": "de_mirage",
+  "name": "Back Alley",
+  "grenade": "he",
+  "throw_type": "run",
+  "duck": false,
+  "description": "UNSAFE"
+ },
+ {
+  "pos": [
+   -2194.54,
+   -8.1,
+   -165.72
+  ],
+  "ang": [
+   -12.92,
+   41.2
+  ],
+  "map": "de_mirage",
+  "name": "Wall [Left]",
+  "grenade": "molotov",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   274.48,
+   -211.9,
+   -163.34
+  ],
+  "ang": [
+   15.06,
+   173.08
+  ],
+  "map": "de_mirage",
+  "name": "Short",
+  "grenade": "molotov",
+  "throw_type": "run",
+  "duck": false,
+  "description": "semi-safe"
+ },
+ {
+  "pos": [
+   -2234.55,
+   -4.47,
+   -167.29
+  ],
+  "ang": [
+   -17.98,
+   24.52
+  ],
+  "map": "de_mirage",
+  "name": "Wall [Right]",
+  "grenade": "molotov",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   831.63,
+   -1192.5,
+   -108.97
+  ],
+  "ang": [
+   -0.27,
+   -148.62
+  ],
+  "map": "de_mirage",
+  "name": "Firebox [Albus]",
+  "grenade": "molotov",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -2286.69,
+   92.19,
+   -167.97
+  ],
+  "ang": [
+   -35.53,
+   -55.96
+  ],
+  "map": "de_mirage",
+  "name": "Wall [Right]",
+  "grenade": "molotov",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -1765.9,
+   498.5,
+   -165.72
+  ],
+  "ang": [
+   -15.45,
+   -117.38
+  ],
+  "map": "de_mirage",
+  "name": "Wall [Right]",
+  "grenade": "he",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   1014.75,
+   -1181.23,
+   -257.08
+  ],
+  "ang": [
+   0.9,
+   67.9
+  ],
+  "map": "de_mirage",
+  "name": "Ramp [FD]",
+  "grenade": "molotov",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -1902.95,
+   525.05,
+   -165.72
+  ],
+  "ang": [
+   -15.07,
+   -139.24
+  ],
+  "map": "de_mirage",
+  "name": "Wall [Left]",
+  "grenade": "he",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   398.98,
+   189.45,
+   -253.68
+  ],
+  "ang": [
+   -29.8,
+   157.05
+  ],
+  "map": "de_mirage",
+  "name": "Fake Duck [Under]",
+  "grenade": "he",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -2185.46,
+   517.21,
+   -167.02
+  ],
+  "ang": [
+   -13.64,
+   -41.71
+  ],
+  "map": "de_mirage",
+  "name": "Wall [Right]",
+  "grenade": "molotov",
+  "throw_type": "normal",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -2193.22,
+   534.73,
+   -165.72
+  ],
+  "ang": [
+   -15.12,
+   -41.21
+  ],
+  "map": "de_mirage",
+  "name": "Wall [Right]",
+  "grenade": "he",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -2227.62,
+   520.4,
+   -165.72
+  ],
+  "ang": [
+   -19.08,
+   -27.93
+  ],
+  "map": "de_mirage",
+  "name": "Wall [Left]",
+  "grenade": "molotov",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -1.52,
+   766.6,
+   -135.97
+  ],
+  "ang": [
+   -29.16,
+   -176.39
+  ],
+  "map": "de_mirage",
+  "name": "Alley [Window]",
+  "grenade": "molotov",
+  "throw_type": "run",
+  "duck": true,
+  "description": ""
+ },
+ {
+  "pos": [
+   1264.41,
+   -142.22,
+   -167.97
+  ],
+  "ang": [
+   -36.56,
+   -169.08
+  ],
+  "map": "de_mirage",
+  "name": "Window",
+  "grenade": "smoke",
+  "throw_type": "run",
+  "duck": false,
+  "description": "Fast"
+ },
+ {
+  "pos": [
+   1369.63,
+   -129.76,
+   -167.15
+  ],
+  "ang": [
+   -35.08,
+   173.9
+  ],
+  "map": "de_mirage",
+  "name": "Short",
+  "grenade": "smoke",
+  "throw_type": "run",
+  "duck": false,
+  "description": "View B Window"
+ },
+ {
+  "pos": [
+   1359.3,
+   519.97,
+   -258.4
+  ],
+  "ang": [
+   -41.84,
+   -166.5
+  ],
+  "map": "de_mirage",
+  "name": "Kitchen",
+  "grenade": "smoke",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -39.18,
+   -1973.69,
+   -39.97
+  ],
+  "ang": [
+   -30.35,
+   -20.83
+  ],
+  "map": "de_mirage",
+  "name": "Roof",
+  "grenade": "he",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -27.07,
+   -1891.14,
+   -39.97
+  ],
+  "ang": [
+   2.43,
+   69.12
+  ],
+  "map": "de_mirage",
+  "name": "Ramp",
+  "grenade": "molotov",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -44.65,
+   -1922.03,
+   -167.97
+  ],
+  "ang": [
+   -13.1,
+   104.1
+  ],
+  "map": "de_mirage",
+  "name": "A Ramp",
+  "grenade": "flash",
+  "throw_type": "normal",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -122.57,
+   -1923.88,
+   -167.97
+  ],
+  "ang": [
+   15.09,
+   132.3
+  ],
+  "map": "de_mirage",
+  "name": "Connector (Right)",
+  "grenade": "molotov",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -122.53,
+   -1923.81,
+   -167.97
+  ],
+  "ang": [
+   -12.78,
+   131.92
+  ],
+  "map": "de_mirage",
+  "name": "Connector Fakeduck",
+  "grenade": "molotov",
+  "throw_type": "normal",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -122.59,
+   -1923.88,
+   -167.97
+  ],
+  "ang": [
+   15.09,
+   132.23
+  ],
+  "map": "de_mirage",
+  "name": "Connector (Right)",
+  "grenade": "he",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   151.0,
+   -1914.03,
+   -39.97
+  ],
+  "ang": [
+   -80.63,
+   -166.75
+  ],
+  "map": "de_mirage",
+  "name": "Tetris",
+  "grenade": "flash",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   63.43,
+   -2087.29,
+   -167.97
+  ],
+  "ang": [
+   -5.94,
+   90.63
+  ],
+  "map": "de_mirage",
+  "name": "A Ramp",
+  "grenade": "flash",
+  "throw_type": "normal",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   150.97,
+   -2071.97,
+   -37.97
+  ],
+  "ang": [
+   -1.7,
+   103.69
+  ],
+  "map": "de_mirage",
+  "name": "Palace",
+  "grenade": "flash",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   87.95,
+   -2166.67,
+   -35.97
+  ],
+  "ang": [
+   -2.81,
+   -176.77
+  ],
+  "map": "de_mirage",
+  "name": "Boost",
+  "grenade": "he",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   87.97,
+   -2171.26,
+   -35.97
+  ],
+  "ang": [
+   -1.48,
+   -178.0
+  ],
+  "map": "de_mirage",
+  "name": "Boost Oneway",
+  "grenade": "molotov",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   150.97,
+   -1914.03,
+   -167.97
+  ],
+  "ang": [
+   -5.51,
+   -165.25
+  ],
+  "map": "de_mirage",
+  "name": "A Ramp",
+  "grenade": "flash",
+  "throw_type": "normal",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   150.97,
+   -1914.03,
+   -167.97
+  ],
+  "ang": [
+   -9.13,
+   -104.61
+  ],
+  "map": "de_mirage",
+  "name": "Ramp",
+  "grenade": "flash",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   150.97,
+   -1914.03,
+   -167.97
+  ],
+  "ang": [
+   -44.99,
+   -104.78
+  ],
+  "map": "de_mirage",
+  "name": "A Ramp",
+  "grenade": "flash",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   87.97,
+   -2165.97,
+   -110.23
+  ],
+  "ang": [
+   45.8,
+   -158.05
+  ],
+  "map": "de_mirage",
+  "name": "A Ramp",
+  "grenade": "smoke",
+  "throw_type": "run",
+  "duck": true,
+  "description": "Oneway"
+ },
+ {
+  "pos": [
+   150.97,
+   -2071.97,
+   -167.97
+  ],
+  "ang": [
+   -74.52,
+   -91.29
+  ],
+  "map": "de_mirage",
+  "name": "Balcony",
+  "grenade": "molotov",
+  "throw_type": "normal",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   150.97,
+   -2071.97,
+   -167.97
+  ],
+  "ang": [
+   -48.97,
+   101.38
+  ],
+  "map": "de_mirage",
+  "name": "Palace",
+  "grenade": "he",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   150.97,
+   -2071.97,
+   -167.97
+  ],
+  "ang": [
+   -24.19,
+   101.71
+  ],
+  "map": "de_mirage",
+  "name": "Tetris/Palace",
+  "grenade": "flash",
+  "throw_type": "normal",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   150.97,
+   -2071.97,
+   -167.97
+  ],
+  "ang": [
+   -8.22,
+   117.21
+  ],
+  "map": "de_mirage",
+  "name": "Tetris",
+  "grenade": "he",
+  "throw_type": "normal",
+  "duck": false,
+  "description": "Aim bottom of the dot"
+ },
+ {
+  "pos": [
+   150.97,
+   -2071.97,
+   -167.97
+  ],
+  "ang": [
+   -32.79,
+   101.52
+  ],
+  "map": "de_mirage",
+  "name": "Palace",
+  "grenade": "molotov",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   150.97,
+   -2071.97,
+   -167.97
+  ],
+  "ang": [
+   -8.23,
+   117.33
+  ],
+  "map": "de_mirage",
+  "name": "Ramp",
+  "grenade": "flash",
+  "throw_type": "normal",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   151.0,
+   -2071.97,
+   -167.97
+  ],
+  "ang": [
+   -8.28,
+   117.29
+  ],
+  "map": "de_mirage",
+  "name": "Tetris",
+  "grenade": "molotov",
+  "throw_type": "normal",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -22.29,
+   -1742.99,
+   -167.97
+  ],
+  "ang": [
+   -15.31,
+   66.81
+  ],
+  "map": "de_mirage",
+  "name": "T ramp",
+  "grenade": "molotov",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   16.03,
+   -2237.46,
+   -39.97
+  ],
+  "ang": [
+   -3.24,
+   15.78
+  ],
+  "map": "de_mirage",
+  "name": "A Boxes",
+  "grenade": "molotov",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -301.47,
+   -2042.12,
+   -36.97
+  ],
+  "ang": [
+   5.54,
+   47.31
+  ],
+  "map": "de_mirage",
+  "name": "T Roof",
+  "grenade": "molotov",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   91.93,
+   -2211.32,
+   -39.97
+  ],
+  "ang": [
+   -6.24,
+   160.91
+  ],
+  "map": "de_mirage",
+  "name": "Rip ESP",
+  "grenade": "molotov",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   16.09,
+   -2256.3,
+   -39.97
+  ],
+  "ang": [
+   -13.61,
+   20.62
+  ],
+  "map": "de_mirage",
+  "name": "Bombsite A",
+  "grenade": "molotov",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   18.06,
+   -1719.79,
+   -167.97
+  ],
+  "ang": [
+   -84.16,
+   -22.92
+  ],
+  "map": "de_mirage",
+  "name": "BEST SMOKE EVER",
+  "grenade": "smoke",
+  "throw_type": "normal",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -253.97,
+   -2134.08,
+   -172.89
+  ],
+  "ang": [
+   -77.17,
+   113.32
+  ],
+  "map": "de_mirage",
+  "name": "Stairs",
+  "grenade": "smoke",
+  "throw_type": "normal",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -253.97,
+   -2134.08,
+   -172.95
+  ],
+  "ang": [
+   -1.3,
+   112.65
+  ],
+  "map": "de_mirage",
+  "name": "Stairs",
+  "grenade": "he",
+  "throw_type": "run",
+  "duck": false,
+  "description": "unsafe"
+ },
+ {
+  "pos": [
+   -253.97,
+   -2134.07,
+   -172.96
+  ],
+  "ang": [
+   -20.84,
+   136.46
+  ],
+  "map": "de_mirage",
+  "name": "Jungle (Deep)",
+  "grenade": "molotov",
+  "throw_type": "normal",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   272.03,
+   -1960.03,
+   -39.97
+  ],
+  "ang": [
+   69.97,
+   135.56
+  ],
+  "map": "de_mirage",
+  "name": "Balcony",
+  "grenade": "smoke",
+  "throw_type": "normal",
+  "duck": false,
+  "description": "Bug"
+ },
+ {
+  "pos": [
+   -159.52,
+   -2239.04,
+   -167.97
+  ],
+  "ang": [
+   5.84,
+   136.07
+  ],
+  "map": "de_mirage",
+  "name": "Connector",
+  "grenade": "molotov",
+  "throw_type": "run",
+  "duck": false,
+  "description": "Push"
+ },
+ {
+  "pos": [
+   -157.24,
+   -2241.17,
+   -167.97
+  ],
+  "ang": [
+   7.42,
+   136.6
+  ],
+  "map": "de_mirage",
+  "name": "Connector",
+  "grenade": "he",
+  "throw_type": "run",
+  "duck": false,
+  "description": "Push"
+ },
+ {
+  "pos": [
+   272.03,
+   -2075.78,
+   -39.97
+  ],
+  "ang": [
+   75.37,
+   -175.48
+  ],
+  "map": "de_mirage",
+  "name": "Balcony",
+  "grenade": "smoke",
+  "throw_type": "normal",
+  "duck": false,
+  "description": "Bug"
+ },
+ {
+  "pos": [
+   116.74,
+   -1693.1,
+   -166.97
+  ],
+  "ang": [
+   -18.45,
+   163.48
+  ],
+  "map": "de_mirage",
+  "name": "Connector",
+  "grenade": "molotov",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   181.97,
+   -1717.97,
+   -167.97
+  ],
+  "ang": [
+   -9.01,
+   100.46
+  ],
+  "map": "de_mirage",
+  "name": "Balcony",
+  "grenade": "he",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   181.97,
+   -1717.97,
+   -167.97
+  ],
+  "ang": [
+   -12.52,
+   100.73
+  ],
+  "map": "de_mirage",
+  "name": "Balcony",
+  "grenade": "molotov",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   174.64,
+   -2280.16,
+   -39.97
+  ],
+  "ang": [
+   16.68,
+   110.42
+  ],
+  "map": "de_mirage",
+  "name": "Stairs",
+  "grenade": "he",
+  "throw_type": "run",
+  "duck": false,
+  "description": "unsafe"
+ },
+ {
+  "pos": [
+   177.28,
+   -2281.87,
+   -39.97
+  ],
+  "ang": [
+   16.86,
+   111.54
+  ],
+  "map": "de_mirage",
+  "name": "Stairs",
+  "grenade": "molotov",
+  "throw_type": "run",
+  "duck": false,
+  "description": "UNSAFE"
+ },
+ {
+  "pos": [
+   -319.57,
+   -1753.78,
+   -167.97
+  ],
+  "ang": [
+   -11.98,
+   127.28
+  ],
+  "map": "de_mirage",
+  "name": "Connector",
+  "grenade": "molotov",
+  "throw_type": "run",
+  "duck": false,
+  "description": "FD"
+ },
+ {
+  "pos": [
+   151.89,
+   -1655.06,
+   -167.97
+  ],
+  "ang": [
+   17.82,
+   -13.96
+  ],
+  "map": "de_mirage",
+  "name": "Ramp",
+  "grenade": "he",
+  "throw_type": "run",
+  "duck": false,
+  "description": "UNSAFE"
+ },
+ {
+  "pos": [
+   -314.99,
+   -2226.42,
+   -169.23
+  ],
+  "ang": [
+   -7.7,
+   113.07
+  ],
+  "map": "de_mirage",
+  "name": "Connector",
+  "grenade": "he",
+  "throw_type": "run",
+  "duck": false,
+  "description": "DOOR"
+ },
+ {
+  "pos": [
+   -315.01,
+   -2226.71,
+   -169.19
+  ],
+  "ang": [
+   -7.7,
+   113.07
+  ],
+  "map": "de_mirage",
+  "name": "Connector",
+  "grenade": "molotov",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -315.02,
+   -2226.73,
+   -169.19
+  ],
+  "ang": [
+   -9.44,
+   107.17
+  ],
+  "map": "de_mirage",
+  "name": "Mid",
+  "grenade": "molotov",
+  "throw_type": "run",
+  "duck": false,
+  "description": "push"
+ },
+ {
+  "pos": [
+   184.16,
+   -2302.72,
+   -39.97
+  ],
+  "ang": [
+   -5.86,
+   114.47
+  ],
+  "map": "de_mirage",
+  "name": "Connector Wall",
+  "grenade": "molotov",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   221.59,
+   -2280.08,
+   -39.97
+  ],
+  "ang": [
+   -10.84,
+   104.66
+  ],
+  "map": "de_mirage",
+  "name": "Palace FD",
+  "grenade": "molotov",
+  "throw_type": "run",
+  "duck": false,
+  "description": "UNSAFE"
+ },
+ {
+  "pos": [
+   149.61,
+   -2332.82,
+   -39.97
+  ],
+  "ang": [
+   -6.38,
+   130.37
+  ],
+  "map": "de_mirage",
+  "name": "Connector Wall",
+  "grenade": "he",
+  "throw_type": "run",
+  "duck": false,
+  "description": "57HP"
+ },
+ {
+  "pos": [
+   32.01,
+   -2375.96,
+   -39.97
+  ],
+  "ang": [
+   4.91,
+   59.56
+  ],
+  "map": "de_mirage",
+  "name": "Balcony",
+  "grenade": "smoke",
+  "throw_type": "normal",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   32.03,
+   -2375.98,
+   -39.97
+  ],
+  "ang": [
+   -10.51,
+   82.79
+  ],
+  "map": "de_mirage",
+  "name": "Jungle",
+  "grenade": "smoke",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   32.03,
+   -2375.99,
+   -39.97
+  ],
+  "ang": [
+   -57.3,
+   96.77
+  ],
+  "map": "de_mirage",
+  "name": "A Bombsite",
+  "grenade": "flash",
+  "throw_type": "normal",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   272.03,
+   -2245.51,
+   -39.97
+  ],
+  "ang": [
+   -10.81,
+   -121.23
+  ],
+  "map": "de_mirage",
+  "name": "Balcony",
+  "grenade": "smoke",
+  "throw_type": "normal",
+  "duck": false,
+  "description": "ONEWAY TO CT"
+ },
+ {
+  "pos": [
+   107.17,
+   -2375.97,
+   -39.97
+  ],
+  "ang": [
+   17.61,
+   114.91
+  ],
+  "map": "de_mirage",
+  "name": "Firebox",
+  "grenade": "he",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   107.19,
+   -2375.97,
+   -39.97
+  ],
+  "ang": [
+   17.62,
+   114.93
+  ],
+  "map": "de_mirage",
+  "name": "Firebox",
+  "grenade": "molotov",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   14.53,
+   -1562.02,
+   -171.03
+  ],
+  "ang": [
+   37.88,
+   0.15
+  ],
+  "map": "de_mirage",
+  "name": "T roof",
+  "grenade": "he",
+  "throw_type": "run",
+  "duck": false,
+  "description": "HOLD JUMP + MOVE LEFT AFTER THROW"
+ },
+ {
+  "pos": [
+   68.87,
+   -1572.2,
+   -173.95
+  ],
+  "ang": [
+   -21.96,
+   -94.3
+  ],
+  "map": "de_mirage",
+  "name": "Palace (Further back)",
+  "grenade": "he",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   141.24,
+   -2375.97,
+   -39.97
+  ],
+  "ang": [
+   9.36,
+   120.65
+  ],
+  "map": "de_mirage",
+  "name": "CT",
+  "grenade": "smoke",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   141.26,
+   -2375.97,
+   -39.97
+  ],
+  "ang": [
+   -6.88,
+   124.3
+  ],
+  "map": "de_mirage",
+  "name": "Stairs",
+  "grenade": "smoke",
+  "throw_type": "normal",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -459.02,
+   -2032.99,
+   -179.97
+  ],
+  "ang": [
+   3.26,
+   -17.52
+  ],
+  "map": "de_mirage",
+  "name": "Palace",
+  "grenade": "he",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   154.84,
+   -2375.88,
+   -39.97
+  ],
+  "ang": [
+   6.58,
+   112.87
+  ],
+  "map": "de_mirage",
+  "name": "Default Box",
+  "grenade": "molotov",
+  "throw_type": "run",
+  "duck": false,
+  "description": "Fakeduck"
+ },
+ {
+  "pos": [
+   367.97,
+   -2157.83,
+   -39.97
+  ],
+  "ang": [
+   -9.45,
+   -127.68
+  ],
+  "map": "de_mirage",
+  "name": "Under Palace",
+  "grenade": "smoke",
+  "throw_type": "normal",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -92.1,
+   -1528.33,
+   -53.97
+  ],
+  "ang": [
+   -13.11,
+   -1.07
+  ],
+  "map": "de_mirage",
+  "name": "T roof",
+  "grenade": "he",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -91.99,
+   -1528.29,
+   -53.97
+  ],
+  "ang": [
+   2.02,
+   10.42
+  ],
+  "map": "de_mirage",
+  "name": "T Roof",
+  "grenade": "he",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -88.54,
+   -1527.35,
+   -53.97
+  ],
+  "ang": [
+   -7.19,
+   15.83
+  ],
+  "map": "de_mirage",
+  "name": "T Roof",
+  "grenade": "he",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   170.08,
+   -1590.86,
+   -172.09
+  ],
+  "ang": [
+   -12.19,
+   174.21
+  ],
+  "map": "de_mirage",
+  "name": "Jungle Corner",
+  "grenade": "he",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -25.45,
+   -1532.87,
+   -167.98
+  ],
+  "ang": [
+   -46.0,
+   177.84
+  ],
+  "map": "de_mirage",
+  "name": "Stairs",
+  "grenade": "molotov",
+  "throw_type": "normal",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -451.49,
+   -1814.83,
+   -176.32
+  ],
+  "ang": [
+   18.29,
+   115.46
+  ],
+  "map": "de_mirage",
+  "name": "Connector R",
+  "grenade": "he",
+  "throw_type": "run",
+  "duck": false,
+  "description": "UNSAFE"
+ },
+ {
+  "pos": [
+   -451.5,
+   -1814.82,
+   -176.32
+  ],
+  "ang": [
+   18.29,
+   115.46
+  ],
+  "map": "de_mirage",
+  "name": "Connector R",
+  "grenade": "molotov",
+  "throw_type": "run",
+  "duck": false,
+  "description": "UNSAFE"
+ },
+ {
+  "pos": [
+   -16.84,
+   -1527.04,
+   -167.97
+  ],
+  "ang": [
+   -45.73,
+   178.61
+  ],
+  "map": "de_mirage",
+  "name": "Stairs",
+  "grenade": "he",
+  "throw_type": "normal",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -129.52,
+   -2413.97,
+   -163.97
+  ],
+  "ang": [
+   -16.51,
+   110.26
+  ],
+  "map": "de_mirage",
+  "name": "Stairs",
+  "grenade": "smoke",
+  "throw_type": "normal",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -129.52,
+   -2413.97,
+   -163.97
+  ],
+  "ang": [
+   -3.15,
+   166.32
+  ],
+  "map": "de_mirage",
+  "name": "CT",
+  "grenade": "smoke",
+  "throw_type": "normal",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -129.52,
+   -2413.97,
+   -163.97
+  ],
+  "ang": [
+   -14.94,
+   117.22
+  ],
+  "map": "de_mirage",
+  "name": "Connector",
+  "grenade": "smoke",
+  "throw_type": "normal",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   367.97,
+   -2207.2,
+   -39.91
+  ],
+  "ang": [
+   -9.95,
+   -131.95
+  ],
+  "map": "de_mirage",
+  "name": "Balcony",
+  "grenade": "flash",
+  "throw_type": "normal",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   367.99,
+   -2207.67,
+   -39.97
+  ],
+  "ang": [
+   -12.26,
+   -132.4
+  ],
+  "map": "de_mirage",
+  "name": "Under Balcony",
+  "grenade": "flash",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   241.97,
+   -2351.53,
+   -39.97
+  ],
+  "ang": [
+   -5.99,
+   116.18
+  ],
+  "map": "de_mirage",
+  "name": "Palace FD",
+  "grenade": "he",
+  "throw_type": "run",
+  "duck": false,
+  "description": "UNSAFE"
+ },
+ {
+  "pos": [
+   72.75,
+   -1535.64,
+   -175.97
+  ],
+  "ang": [
+   -18.14,
+   -94.66
+  ],
+  "map": "de_mirage",
+  "name": "Palace",
+  "grenade": "molotov",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -249.08,
+   -1541.72,
+   -53.97
+  ],
+  "ang": [
+   -2.17,
+   0.06
+  ],
+  "map": "de_mirage",
+  "name": "T Roof",
+  "grenade": "molotov",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   223.97,
+   -2375.97,
+   -39.97
+  ],
+  "ang": [
+   -12.76,
+   149.0
+  ],
+  "map": "de_mirage",
+  "name": "Stairs",
+  "grenade": "flash",
+  "throw_type": "normal",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   223.97,
+   -2375.97,
+   -39.97
+  ],
+  "ang": [
+   -2.26,
+   137.99
+  ],
+  "map": "de_mirage",
+  "name": "Jungle",
+  "grenade": "smoke",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -408.41,
+   -1644.17,
+   -39.97
+  ],
+  "ang": [
+   -13.1,
+   23.7
+  ],
+  "map": "de_mirage",
+  "name": "L Alley",
+  "grenade": "molotov",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -408.77,
+   -1644.4,
+   -38.97
+  ],
+  "ang": [
+   7.36,
+   16.56
+  ],
+  "map": "de_mirage",
+  "name": "Ramp Corner",
+  "grenade": "molotov",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -261.39,
+   -1546.36,
+   -167.91
+  ],
+  "ang": [
+   -68.41,
+   -7.95
+  ],
+  "map": "de_mirage",
+  "name": "Stairs",
+  "grenade": "smoke",
+  "throw_type": "normal",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -438.57,
+   -1699.95,
+   -170.06
+  ],
+  "ang": [
+   -25.1,
+   162.17
+  ],
+  "map": "de_mirage",
+  "name": "Stairs",
+  "grenade": "he",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -109.96,
+   -1476.1,
+   -69.18
+  ],
+  "ang": [
+   31.72,
+   160.17
+  ],
+  "map": "de_mirage",
+  "name": "Stairs",
+  "grenade": "molotov",
+  "throw_type": "run",
+  "duck": false,
+  "description": "UNSAFE"
+ },
+ {
+  "pos": [
+   -109.95,
+   -1476.09,
+   -69.18
+  ],
+  "ang": [
+   59.89,
+   150.39
+  ],
+  "map": "de_mirage",
+  "name": "Stairs",
+  "grenade": "he",
+  "throw_type": "run",
+  "duck": false,
+  "description": "unsafe"
+ },
+ {
+  "pos": [
+   355.89,
+   -1698.96,
+   -189.91
+  ],
+  "ang": [
+   -12.99,
+   122.71
+  ],
+  "map": "de_mirage",
+  "name": "FD",
+  "grenade": "he",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   361.25,
+   -1703.66,
+   -192.59
+  ],
+  "ang": [
+   -12.69,
+   124.58
+  ],
+  "map": "de_mirage",
+  "name": "Fakeduck",
+  "grenade": "molotov",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -284.48,
+   -2413.97,
+   -163.97
+  ],
+  "ang": [
+   -6.11,
+   108.13
+  ],
+  "map": "de_mirage",
+  "name": "Connector",
+  "grenade": "smoke",
+  "throw_type": "normal",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -284.48,
+   -2414.0,
+   -163.97
+  ],
+  "ang": [
+   -7.2,
+   165.13
+  ],
+  "map": "de_mirage",
+  "name": "B Site",
+  "grenade": "smoke",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -284.48,
+   -2414.0,
+   -163.97
+  ],
+  "ang": [
+   -16.63,
+   100.91
+  ],
+  "map": "de_mirage",
+  "name": "Stairs",
+  "grenade": "smoke",
+  "throw_type": "normal",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -468.77,
+   -1694.59,
+   -172.51
+  ],
+  "ang": [
+   -30.25,
+   163.33
+  ],
+  "map": "de_mirage",
+  "name": "Stairs",
+  "grenade": "molotov",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -554.97,
+   -2103.69,
+   -179.97
+  ],
+  "ang": [
+   -10.48,
+   48.57
+  ],
+  "map": "de_mirage",
+  "name": "A Ramp",
+  "grenade": "smoke",
+  "throw_type": "normal",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -91.09,
+   -1418.03,
+   -115.97
+  ],
+  "ang": [
+   -30.19,
+   -115.61
+  ],
+  "map": "de_mirage",
+  "name": "Connector",
+  "grenade": "smoke",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -91.09,
+   -1418.03,
+   -115.97
+  ],
+  "ang": [
+   -1.03,
+   -106.8
+  ],
+  "map": "de_mirage",
+  "name": "Boxes",
+  "grenade": "smoke",
+  "throw_type": "normal",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -91.09,
+   -1418.03,
+   -115.97
+  ],
+  "ang": [
+   -31.76,
+   -62.54
+  ],
+  "map": "de_mirage",
+  "name": "Stairs",
+  "grenade": "smoke",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -91.09,
+   -1418.01,
+   -115.97
+  ],
+  "ang": [
+   -28.22,
+   -114.38
+  ],
+  "map": "de_mirage",
+  "name": "CT",
+  "grenade": "smoke",
+  "throw_type": "normal",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -91.09,
+   -1418.0,
+   -115.97
+  ],
+  "ang": [
+   -14.34,
+   -63.88
+  ],
+  "map": "de_mirage",
+  "name": "Stairs",
+  "grenade": "molotov",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -143.0,
+   -1418.28,
+   -72.18
+  ],
+  "ang": [
+   -67.4,
+   -175.86
+  ],
+  "map": "de_mirage",
+  "name": "Jungle",
+  "grenade": "smoke",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -142.97,
+   -1418.03,
+   -72.18
+  ],
+  "ang": [
+   -20.77,
+   -56.91
+  ],
+  "map": "de_mirage",
+  "name": "Stairs",
+  "grenade": "smoke",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -31.92,
+   -1418.03,
+   -167.97
+  ],
+  "ang": [
+   -15.77,
+   -110.91
+  ],
+  "map": "de_mirage",
+  "name": "Between Stairs & Jungle",
+  "grenade": "smoke",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -31.92,
+   -1418.03,
+   -167.97
+  ],
+  "ang": [
+   -40.13,
+   -117.24
+  ],
+  "map": "de_mirage",
+  "name": "CT",
+  "grenade": "smoke",
+  "throw_type": "normal",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -31.92,
+   -1418.02,
+   -167.97
+  ],
+  "ang": [
+   -70.89,
+   -177.9
+  ],
+  "map": "de_mirage",
+  "name": "Jungle",
+  "grenade": "smoke",
+  "throw_type": "normal",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -31.92,
+   -1418.01,
+   -167.97
+  ],
+  "ang": [
+   -34.52,
+   -112.79
+  ],
+  "map": "de_mirage",
+  "name": "Jungle",
+  "grenade": "smoke",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -458.37,
+   -1562.03,
+   -39.97
+  ],
+  "ang": [
+   0.61,
+   99.68
+  ],
+  "map": "de_mirage",
+  "name": "Droproom",
+  "grenade": "molotov",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -458.39,
+   -1561.89,
+   -39.97
+  ],
+  "ang": [
+   3.08,
+   96.14
+  ],
+  "map": "de_mirage",
+  "name": "Short",
+  "grenade": "molotov",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -532.53,
+   -2264.22,
+   -175.53
+  ],
+  "ang": [
+   15.65,
+   51.73
+  ],
+  "map": "de_mirage",
+  "name": "Ramp",
+  "grenade": "he",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   457.97,
+   -1712.0,
+   -240.95
+  ],
+  "ang": [
+   -10.48,
+   133.14
+  ],
+  "map": "de_mirage",
+  "name": "T Ramp",
+  "grenade": "smoke",
+  "throw_type": "normal",
+  "duck": false,
+  "description": "Oneway"
+ },
+ {
+  "pos": [
+   428.6,
+   -1613.51,
+   -226.26
+  ],
+  "ang": [
+   -16.18,
+   174.94
+  ],
+  "map": "de_mirage",
+  "name": "Jungle Door",
+  "grenade": "molotov",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   479.9,
+   -1650.71,
+   -251.91
+  ],
+  "ang": [
+   -13.0,
+   47.46
+  ],
+  "map": "de_mirage",
+  "name": "T Spawn Ramp",
+  "grenade": "he",
+  "throw_type": "normal",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   478.55,
+   -1640.04,
+   -251.24
+  ],
+  "ang": [
+   5.64,
+   169.75
+  ],
+  "map": "de_mirage",
+  "name": "Stairs",
+  "grenade": "he",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -496.0,
+   -1471.1,
+   -51.88
+  ],
+  "ang": [
+   10.8,
+   -103.49
+  ],
+  "map": "de_mirage",
+  "name": "Stairs",
+  "grenade": "smoke",
+  "throw_type": "run",
+  "duck": false,
+  "description": "Oneway"
+ },
+ {
+  "pos": [
+   519.54,
+   -1650.35,
+   -263.97
+  ],
+  "ang": [
+   -25.57,
+   169.15
+  ],
+  "map": "de_mirage",
+  "name": "Stairs",
+  "grenade": "molotov",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -496.12,
+   -1447.07,
+   -71.1
+  ],
+  "ang": [
+   0.75,
+   22.77
+  ],
+  "map": "de_mirage",
+  "name": "Ramp",
+  "grenade": "he",
+  "throw_type": "run",
+  "duck": false,
+  "description": "UNSAFE"
+ },
+ {
+  "pos": [
+   424.57,
+   -1465.07,
+   -175.97
+  ],
+  "ang": [
+   -5.08,
+   -149.6
+  ],
+  "map": "de_mirage",
+  "name": "Site Fakeduck",
+  "grenade": "he",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   580.2,
+   -1719.07,
+   -258.5
+  ],
+  "ang": [
+   -7.32,
+   174.13
+  ],
+  "map": "de_mirage",
+  "name": "A Bombsite",
+  "grenade": "flash",
+  "throw_type": "normal",
+  "duck": false,
+  "description": "Popflash"
+ },
+ {
+  "pos": [
+   -578.57,
+   -1518.24,
+   -167.97
+  ],
+  "ang": [
+   -39.57,
+   -17.61
+  ],
+  "map": "de_mirage",
+  "name": "Sandwich",
+  "grenade": "molotov",
+  "throw_type": "run",
+  "duck": true,
+  "description": ""
+ },
+ {
+  "pos": [
+   -578.7,
+   -1518.22,
+   -167.97
+  ],
+  "ang": [
+   -34.49,
+   0.01
+  ],
+  "map": "de_mirage",
+  "name": "Ramp",
+  "grenade": "molotov",
+  "throw_type": "run",
+  "duck": true,
+  "description": ""
+ },
+ {
+  "pos": [
+   -612.08,
+   -1524.99,
+   -167.97
+  ],
+  "ang": [
+   -38.88,
+   3.3
+  ],
+  "map": "de_mirage",
+  "name": "Tetris",
+  "grenade": "molotov",
+  "throw_type": "normal",
+  "duck": false,
+  "description": "under"
+ },
+ {
+  "pos": [
+   -612.05,
+   -1524.93,
+   -167.97
+  ],
+  "ang": [
+   -36.92,
+   3.26
+  ],
+  "map": "de_mirage",
+  "name": "Tetris",
+  "grenade": "he",
+  "throw_type": "normal",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -496.0,
+   -1392.27,
+   -114.94
+  ],
+  "ang": [
+   -47.82,
+   93.07
+  ],
+  "map": "de_mirage",
+  "name": "A Bombsite",
+  "grenade": "flash",
+  "throw_type": "normal",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -534.06,
+   -1378.45,
+   -126.01
+  ],
+  "ang": [
+   -7.59,
+   -72.38
+  ],
+  "map": "de_mirage",
+  "name": "Bombsite A [Full]",
+  "grenade": "molotov",
+  "throw_type": "normal",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -779.13,
+   -1669.73,
+   -172.54
+  ],
+  "ang": [
+   0.4,
+   13.99
+  ],
+  "map": "de_mirage",
+  "name": "L roof",
+  "grenade": "molotov",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -496.03,
+   -1309.03,
+   -159.97
+  ],
+  "ang": [
+   -44.64,
+   103.07
+  ],
+  "map": "de_mirage",
+  "name": "Ramp",
+  "grenade": "flash",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -496.03,
+   -1309.03,
+   -159.97
+  ],
+  "ang": [
+   -60.07,
+   -77.06
+  ],
+  "map": "de_mirage",
+  "name": "A Bombsite",
+  "grenade": "flash",
+  "throw_type": "normal",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -496.03,
+   -1309.03,
+   -159.97
+  ],
+  "ang": [
+   -65.18,
+   -10.26
+  ],
+  "map": "de_mirage",
+  "name": "Connector",
+  "grenade": "flash",
+  "throw_type": "normal",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   619.53,
+   -1507.7,
+   -263.97
+  ],
+  "ang": [
+   20.61,
+   174.98
+  ],
+  "map": "de_mirage",
+  "name": "Ramp ",
+  "grenade": "molotov",
+  "throw_type": "run",
+  "duck": false,
+  "description": "UNSAFE"
+ },
+ {
+  "pos": [
+   619.61,
+   -1507.69,
+   -263.97
+  ],
+  "ang": [
+   20.78,
+   176.28
+  ],
+  "map": "de_mirage",
+  "name": "Ramp",
+  "grenade": "he",
+  "throw_type": "run",
+  "duck": false,
+  "description": "UNSAFE"
+ },
+ {
+  "pos": [
+   -552.37,
+   -1309.03,
+   -163.97
+  ],
+  "ang": [
+   -77.32,
+   -17.64
+  ],
+  "map": "de_mirage",
+  "name": "A Ramp",
+  "grenade": "smoke",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   743.97,
+   -1719.28,
+   -249.58
+  ],
+  "ang": [
+   -5.38,
+   176.14
+  ],
+  "map": "de_mirage",
+  "name": "A Bombsite",
+  "grenade": "flash",
+  "throw_type": "normal",
+  "duck": false,
+  "description": "Popflash"
+ },
+ {
+  "pos": [
+   743.88,
+   -1682.75,
+   -251.74
+  ],
+  "ang": [
+   -24.5,
+   170.11
+  ],
+  "map": "de_mirage",
+  "name": "A Stairs",
+  "grenade": "molotov",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   743.9,
+   -1682.74,
+   -251.74
+  ],
+  "ang": [
+   -24.37,
+   170.11
+  ],
+  "map": "de_mirage",
+  "name": "Stairs",
+  "grenade": "he",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   578.03,
+   -1408.41,
+   -256.65
+  ],
+  "ang": [
+   -2.53,
+   41.34
+  ],
+  "map": "de_mirage",
+  "name": "Palace Entry",
+  "grenade": "molotov",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   578.03,
+   -1408.41,
+   -256.65
+  ],
+  "ang": [
+   -2.53,
+   41.34
+  ],
+  "map": "de_mirage",
+  "name": "Palace Entry",
+  "grenade": "he",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   637.13,
+   -1442.29,
+   -262.97
+  ],
+  "ang": [
+   -11.59,
+   -131.14
+  ],
+  "map": "de_mirage",
+  "name": "Pit",
+  "grenade": "molotov",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -879.97,
+   -2264.02,
+   -171.08
+  ],
+  "ang": [
+   -9.08,
+   33.31
+  ],
+  "map": "de_mirage",
+  "name": "A Ramp",
+  "grenade": "smoke",
+  "throw_type": "normal",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   811.73,
+   -1618.21,
+   -108.97
+  ],
+  "ang": [
+   -3.61,
+   154.0
+  ],
+  "map": "de_mirage",
+  "name": "Pit Holder",
+  "grenade": "molotov",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -676.34,
+   -1294.25,
+   -167.97
+  ],
+  "ang": [
+   -18.52,
+   -50.45
+  ],
+  "map": "de_mirage",
+  "name": "Palace",
+  "grenade": "he",
+  "throw_type": "run",
+  "duck": false,
+  "description": "Corner R"
+ },
+ {
+  "pos": [
+   814.97,
+   -1549.01,
+   -108.97
+  ],
+  "ang": [
+   -27.97,
+   163.55
+  ],
+  "map": "de_mirage",
+  "name": "Under Balcony",
+  "grenade": "smoke",
+  "throw_type": "normal",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   814.97,
+   -1549.01,
+   -108.97
+  ],
+  "ang": [
+   -68.45,
+   -178.43
+  ],
+  "map": "de_mirage",
+  "name": "Stairs",
+  "grenade": "smoke",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   814.97,
+   -1549.01,
+   -108.97
+  ],
+  "ang": [
+   -66.25,
+   -178.43
+  ],
+  "map": "de_mirage",
+  "name": "Jungle",
+  "grenade": "smoke",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   814.95,
+   -1537.37,
+   -108.97
+  ],
+  "ang": [
+   1.27,
+   178.55
+  ],
+  "map": "de_mirage",
+  "name": "Stairs",
+  "grenade": "molotov",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -858.43,
+   -1480.59,
+   -167.97
+  ],
+  "ang": [
+   1.71,
+   50.9
+  ],
+  "map": "de_mirage",
+  "name": "L Mid",
+  "grenade": "molotov",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -727.81,
+   -1306.9,
+   -167.97
+  ],
+  "ang": [
+   24.87,
+   76.53
+  ],
+  "map": "de_mirage",
+  "name": "Middle",
+  "grenade": "flash",
+  "throw_type": "normal",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -769.68,
+   -1306.03,
+   -167.97
+  ],
+  "ang": [
+   -18.09,
+   -47.61
+  ],
+  "map": "de_mirage",
+  "name": "Palace",
+  "grenade": "molotov",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   816.0,
+   -1457.76,
+   -108.97
+  ],
+  "ang": [
+   -24.3,
+   166.74
+  ],
+  "map": "de_mirage",
+  "name": "A Ramp",
+  "grenade": "flash",
+  "throw_type": "normal",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   815.97,
+   -1457.4,
+   -108.91
+  ],
+  "ang": [
+   -26.92,
+   -174.37
+  ],
+  "map": "de_mirage",
+  "name": "Jungle",
+  "grenade": "smoke",
+  "throw_type": "normal",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -1017.0,
+   -2232.0,
+   -112.9
+  ],
+  "ang": [
+   -68.33,
+   77.03
+  ],
+  "map": "de_mirage",
+  "name": "Connector",
+  "grenade": "flash",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -1017.03,
+   -2232.0,
+   -112.9
+  ],
+  "ang": [
+   -79.25,
+   81.26
+  ],
+  "map": "de_mirage",
+  "name": "A Site",
+  "grenade": "flash",
+  "throw_type": "normal",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   592.03,
+   -1200.03,
+   -223.97
+  ],
+  "ang": [
+   -68.43,
+   -159.98
+  ],
+  "map": "de_mirage",
+  "name": "Jungle",
+  "grenade": "smoke",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -716.31,
+   -1212.08,
+   -167.97
+  ],
+  "ang": [
+   4.3,
+   -52.49
+  ],
+  "map": "de_mirage",
+  "name": "Palace [Far]",
+  "grenade": "molotov",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -716.31,
+   -1212.08,
+   -167.97
+  ],
+  "ang": [
+   4.3,
+   -52.49
+  ],
+  "map": "de_mirage",
+  "name": "Palace [Jump]",
+  "grenade": "he",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -1040.57,
+   -2232.0,
+   -123.2
+  ],
+  "ang": [
+   -73.08,
+   44.4
+  ],
+  "map": "de_mirage",
+  "name": "A Site",
+  "grenade": "flash",
+  "throw_type": "normal",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   560.83,
+   -1128.03,
+   -127.97
+  ],
+  "ang": [
+   -71.41,
+   -155.88
+  ],
+  "map": "de_mirage",
+  "name": "Stairs",
+  "grenade": "smoke",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -833.18,
+   -1306.03,
+   -167.97
+  ],
+  "ang": [
+   0.53,
+   -92.14
+  ],
+  "map": "de_mirage",
+  "name": "Ticketbooth",
+  "grenade": "he",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -911.74,
+   -2534.9,
+   -167.97
+  ],
+  "ang": [
+   -66.03,
+   43.08
+  ],
+  "map": "de_mirage",
+  "name": "A Ramp",
+  "grenade": "smoke",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -911.74,
+   -2534.9,
+   -167.97
+  ],
+  "ang": [
+   -16.3,
+   68.12
+  ],
+  "map": "de_mirage",
+  "name": "Connector",
+  "grenade": "smoke",
+  "throw_type": "normal",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -1046.52,
+   -2232.03,
+   -167.97
+  ],
+  "ang": [
+   -78.58,
+   37.23
+  ],
+  "map": "de_mirage",
+  "name": "A Site",
+  "grenade": "flash",
+  "throw_type": "normal",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   744.0,
+   -1290.02,
+   -255.4
+  ],
+  "ang": [
+   -60.08,
+   -168.62
+  ],
+  "map": "de_mirage",
+  "name": "Jungle",
+  "grenade": "smoke",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   744.0,
+   -1290.02,
+   -255.4
+  ],
+  "ang": [
+   -68.54,
+   -165.91
+  ],
+  "map": "de_mirage",
+  "name": "Stairs",
+  "grenade": "smoke",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -859.22,
+   -1306.01,
+   -167.97
+  ],
+  "ang": [
+   2.22,
+   -89.09
+  ],
+  "map": "de_mirage",
+  "name": "CT [Box]",
+  "grenade": "molotov",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -964.06,
+   -2489.52,
+   -167.97
+  ],
+  "ang": [
+   -41.93,
+   -10.77
+  ],
+  "map": "de_mirage",
+  "name": "CT",
+  "grenade": "smoke",
+  "throw_type": "run",
+  "duck": false,
+  "description": "Oneway"
+ },
+ {
+  "pos": [
+   1026.36,
+   -1878.98,
+   -71.97
+  ],
+  "ang": [
+   -10.06,
+   -150.21
+  ],
+  "map": "de_mirage",
+  "name": "Palace",
+  "grenade": "molotov",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   1026.36,
+   -1878.98,
+   -71.97
+  ],
+  "ang": [
+   -10.03,
+   -150.21
+  ],
+  "map": "de_mirage",
+  "name": "Palace",
+  "grenade": "he",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -807.97,
+   -1235.97,
+   -167.97
+  ],
+  "ang": [
+   2.47,
+   70.07
+  ],
+  "map": "de_mirage",
+  "name": "Cat",
+  "grenade": "smoke",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -807.97,
+   -1235.97,
+   -167.97
+  ],
+  "ang": [
+   6.94,
+   48.2
+  ],
+  "map": "de_mirage",
+  "name": "Underpass",
+  "grenade": "smoke",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -879.97,
+   -1306.03,
+   -167.97
+  ],
+  "ang": [
+   -72.48,
+   -11.12
+  ],
+  "map": "de_mirage",
+  "name": "A Ramp",
+  "grenade": "smoke",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   144.54,
+   -907.37,
+   -39.97
+  ],
+  "ang": [
+   -5.28,
+   -126.27
+  ],
+  "map": "de_mirage",
+  "name": "Connector",
+  "grenade": "molotov",
+  "throw_type": "run",
+  "duck": false,
+  "description": "Wall"
+ },
+ {
+  "pos": [
+   -243.86,
+   -915.74,
+   -166.4
+  ],
+  "ang": [
+   -15.38,
+   109.04
+  ],
+  "map": "de_mirage",
+  "name": "Connector",
+  "grenade": "molotov",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -1013.33,
+   -1510.24,
+   -166.03
+  ],
+  "ang": [
+   -33.0,
+   38.74
+  ],
+  "map": "de_mirage",
+  "name": "Chair",
+  "grenade": "molotov",
+  "throw_type": "jump",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -930.82,
+   -2590.34,
+   -167.97
+  ],
+  "ang": [
+   -4.86,
+   79.32
+  ],
+  "map": "de_mirage",
+  "name": "connector",
+  "grenade": "he",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -930.82,
+   -2590.34,
+   -167.97
+  ],
+  "ang": [
+   -4.86,
+   79.32
+  ],
+  "map": "de_mirage",
+  "name": "Connector",
+  "grenade": "molotov",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   130.57,
+   -882.98,
+   -39.97
+  ],
+  "ang": [
+   5.8,
+   -157.25
+  ],
+  "map": "de_mirage",
+  "name": "Stairs",
+  "grenade": "molotov",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   96.99,
+   -877.74,
+   -39.97
+  ],
+  "ang": [
+   9.8,
+   -154.4
+  ],
+  "map": "de_mirage",
+  "name": "Jungle",
+  "grenade": "molotov",
+  "throw_type": "run",
+  "duck": false,
+  "description": "Hide spot"
+ },
+ {
+  "pos": [
+   -991.33,
+   -2544.25,
+   -167.97
+  ],
+  "ang": [
+   -26.14,
+   124.72
+  ],
+  "map": "de_mirage",
+  "name": "CT oneway",
+  "grenade": "molotov",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   688.8,
+   -1130.03,
+   -127.97
+  ],
+  "ang": [
+   -56.63,
+   -148.36
+  ],
+  "map": "de_mirage",
+  "name": "Firebox",
+  "grenade": "smoke",
+  "throw_type": "normal",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   691.5,
+   -1130.15,
+   -127.97
+  ],
+  "ang": [
+   -3.07,
+   -157.58
+  ],
+  "map": "de_mirage",
+  "name": "Tetris",
+  "grenade": "molotov",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   691.64,
+   -1130.11,
+   -127.97
+  ],
+  "ang": [
+   -1.87,
+   -136.27
+  ],
+  "map": "de_mirage",
+  "name": "Scaffolding Box",
+  "grenade": "molotov",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -807.97,
+   -1152.03,
+   -120.18
+  ],
+  "ang": [
+   29.45,
+   12.47
+  ],
+  "map": "de_mirage",
+  "name": "Connector",
+  "grenade": "smoke",
+  "throw_type": "run",
+  "duck": false,
+  "description": "Oneway"
+ },
+ {
+  "pos": [
+   782.4,
+   -1199.52,
+   -108.97
+  ],
+  "ang": [
+   -1.03,
+   -143.48
+  ],
+  "map": "de_mirage",
+  "name": "Box [FD]",
+  "grenade": "molotov",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -608.08,
+   -1007.7,
+   -215.97
+  ],
+  "ang": [
+   -24.01,
+   -99.01
+  ],
+  "map": "de_mirage",
+  "name": "Under Ticket",
+  "grenade": "molotov",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -1028.17,
+   -2531.49,
+   -167.97
+  ],
+  "ang": [
+   -3.83,
+   64.43
+  ],
+  "map": "de_mirage",
+  "name": "Stairs",
+  "grenade": "he",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   700.05,
+   -1127.96,
+   -251.04
+  ],
+  "ang": [
+   -53.79,
+   -141.1
+  ],
+  "map": "de_mirage",
+  "name": "CT",
+  "grenade": "smoke",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -1037.73,
+   -2526.96,
+   -167.97
+  ],
+  "ang": [
+   -10.26,
+   62.12
+  ],
+  "map": "de_mirage",
+  "name": "Stairs",
+  "grenade": "molotov",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -1145.01,
+   -2289.33,
+   -176.88
+  ],
+  "ang": [
+   -25.34,
+   6.39
+  ],
+  "map": "de_mirage",
+  "name": "Palace",
+  "grenade": "molotov",
+  "throw_type": "normal",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -1083.91,
+   -1483.3,
+   -163.12
+  ],
+  "ang": [
+   -10.13,
+   -4.96
+  ],
+  "map": "de_mirage",
+  "name": "Ramp",
+  "grenade": "he",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -1084.05,
+   -1483.27,
+   -163.11
+  ],
+  "ang": [
+   3.09,
+   116.84
+  ],
+  "map": "de_mirage",
+  "name": "Jungle",
+  "grenade": "molotov",
+  "throw_type": "run",
+  "duck": false,
+  "description": "Fakeduck"
+ },
+ {
+  "pos": [
+   -1084.05,
+   -1483.27,
+   -163.11
+  ],
+  "ang": [
+   3.09,
+   116.84
+  ],
+  "map": "de_mirage",
+  "name": "Jungle",
+  "grenade": "he",
+  "throw_type": "run",
+  "duck": false,
+  "description": "Fakeduck"
+ },
+ {
+  "pos": [
+   -992.03,
+   -1304.81,
+   -156.13
+  ],
+  "ang": [
+   -42.04,
+   -116.1
+  ],
+  "map": "de_mirage",
+  "name": "Connector",
+  "grenade": "flash",
+  "throw_type": "normal",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -1119.97,
+   -1527.04,
+   -156.02
+  ],
+  "ang": [
+   -12.79,
+   -0.66
+  ],
+  "map": "de_mirage",
+  "name": "A Ramp",
+  "grenade": "smoke",
+  "throw_type": "normal",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -1119.99,
+   -1527.06,
+   -156.07
+  ],
+  "ang": [
+   -16.12,
+   0.23
+  ],
+  "map": "de_mirage",
+  "name": "Tetris",
+  "grenade": "flash",
+  "throw_type": "normal",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   324.6,
+   -859.04,
+   -163.48
+  ],
+  "ang": [
+   -18.9,
+   90.88
+  ],
+  "map": "de_mirage",
+  "name": "Window",
+  "grenade": "molotov",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   875.95,
+   -1220.66,
+   -108.97
+  ],
+  "ang": [
+   -2.6,
+   -164.44
+  ],
+  "map": "de_mirage",
+  "name": "Pit Holder",
+  "grenade": "molotov",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   875.93,
+   -1220.53,
+   -108.97
+  ],
+  "ang": [
+   -21.52,
+   -164.0
+  ],
+  "map": "de_mirage",
+  "name": "Stairs",
+  "grenade": "molotov",
+  "throw_type": "normal",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   875.97,
+   -1209.72,
+   -108.97
+  ],
+  "ang": [
+   -26.96,
+   -152.68
+  ],
+  "map": "de_mirage",
+  "name": "Triple Box",
+  "grenade": "smoke",
+  "throw_type": "normal",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   875.97,
+   -1209.69,
+   -108.91
+  ],
+  "ang": [
+   -55.02,
+   -152.19
+  ],
+  "map": "de_mirage",
+  "name": "Bomb A",
+  "grenade": "smoke",
+  "throw_type": "normal",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   875.97,
+   -1209.69,
+   -108.91
+  ],
+  "ang": [
+   -21.65,
+   -149.34
+  ],
+  "map": "de_mirage",
+  "name": "Middle of Boxes in A",
+  "grenade": "smoke",
+  "throw_type": "normal",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   875.97,
+   -1209.26,
+   -108.97
+  ],
+  "ang": [
+   -0.22,
+   -149.67
+  ],
+  "map": "de_mirage",
+  "name": "Firebox",
+  "grenade": "molotov",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   875.95,
+   -1205.41,
+   -108.97
+  ],
+  "ang": [
+   -21.52,
+   -116.77
+  ],
+  "map": "de_mirage",
+  "name": "Plant",
+  "grenade": "molotov",
+  "throw_type": "run",
+  "duck": false,
+  "description": "Boxes"
+ },
+ {
+  "pos": [
+   921.69,
+   -1240.27,
+   -108.97
+  ],
+  "ang": [
+   3.17,
+   -165.77
+  ],
+  "map": "de_mirage",
+  "name": "Stairs",
+  "grenade": "he",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -719.97,
+   -982.82,
+   -215.97
+  ],
+  "ang": [
+   -16.9,
+   -70.21
+  ],
+  "map": "de_mirage",
+  "name": "BombA",
+  "grenade": "he",
+  "throw_type": "run",
+  "duck": false,
+  "description": "53HP"
+ },
+ {
+  "pos": [
+   916.04,
+   -1211.87,
+   -108.97
+  ],
+  "ang": [
+   -28.58,
+   -150.37
+  ],
+  "map": "de_mirage",
+  "name": "Midle of Boxes in A",
+  "grenade": "smoke",
+  "throw_type": "normal",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -646.82,
+   -909.74,
+   -229.1
+  ],
+  "ang": [
+   0.23,
+   76.07
+  ],
+  "map": "de_mirage",
+  "name": "Chair (unsafe)",
+  "grenade": "he",
+  "throw_type": "run",
+  "duck": false,
+  "description": "45Hp"
+ },
+ {
+  "pos": [
+   -653.65,
+   -906.84,
+   -230.55
+  ],
+  "ang": [
+   -0.53,
+   71.96
+  ],
+  "map": "de_mirage",
+  "name": "Chair",
+  "grenade": "molotov",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   951.88,
+   -1197.2,
+   -108.97
+  ],
+  "ang": [
+   -19.8,
+   -154.68
+  ],
+  "map": "de_mirage",
+  "name": "Pit",
+  "grenade": "he",
+  "throw_type": "normal",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -1216.03,
+   -1526.97,
+   -155.28
+  ],
+  "ang": [
+   -64.25,
+   117.78
+  ],
+  "map": "de_mirage",
+  "name": "Window",
+  "grenade": "smoke",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -1216.03,
+   -1526.97,
+   -155.28
+  ],
+  "ang": [
+   -55.04,
+   97.02
+  ],
+  "map": "de_mirage",
+  "name": "Arch",
+  "grenade": "smoke",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   984.52,
+   -1227.92,
+   -108.97
+  ],
+  "ang": [
+   -18.37,
+   -165.56
+  ],
+  "map": "de_mirage",
+  "name": "Stairs",
+  "grenade": "molotov",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   984.5,
+   -1227.88,
+   -108.97
+  ],
+  "ang": [
+   6.76,
+   -166.24
+  ],
+  "map": "de_mirage",
+  "name": "Pit Holder",
+  "grenade": "molotov",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   973.41,
+   -1182.57,
+   -258.91
+  ],
+  "ang": [
+   -4.89,
+   53.5
+  ],
+  "map": "de_mirage",
+  "name": "T Garbage",
+  "grenade": "molotov",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -374.26,
+   -718.18,
+   -271.84
+  ],
+  "ang": [
+   5.83,
+   124.69
+  ],
+  "map": "de_mirage",
+  "name": "Short",
+  "grenade": "he",
+  "throw_type": "run",
+  "duck": false,
+  "description": "PUSH"
+ },
+ {
+  "pos": [
+   -374.27,
+   -718.17,
+   -271.84
+  ],
+  "ang": [
+   5.83,
+   124.69
+  ],
+  "map": "de_mirage",
+  "name": "Short",
+  "grenade": "molotov",
+  "throw_type": "run",
+  "duck": false,
+  "description": "PUSH"
+ },
+ {
+  "pos": [
+   370.09,
+   -720.52,
+   -162.49
+  ],
+  "ang": [
+   35.38,
+   124.14
+  ],
+  "map": "de_mirage",
+  "name": "Middle",
+  "grenade": "smoke",
+  "throw_type": "run",
+  "duck": false,
+  "description": "Oneway"
+ },
+ {
+  "pos": [
+   -1309.72,
+   -2314.03,
+   -208.18
+  ],
+  "ang": [
+   -11.41,
+   -4.48
+  ],
+  "map": "de_mirage",
+  "name": "A Default",
+  "grenade": "molotov",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -1201.47,
+   -1342.46,
+   -174.46
+  ],
+  "ang": [
+   0.41,
+   -31.51
+  ],
+  "map": "de_mirage",
+  "name": "Palace",
+  "grenade": "molotov",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -683.07,
+   -828.46,
+   -263.97
+  ],
+  "ang": [
+   -13.65,
+   -94.52
+  ],
+  "map": "de_mirage",
+  "name": "FPS Abuser",
+  "grenade": "he",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   1015.99,
+   -1183.95,
+   -256.63
+  ],
+  "ang": [
+   5.67,
+   68.96
+  ],
+  "map": "de_mirage",
+  "name": "Stairs",
+  "grenade": "molotov",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -1275.81,
+   -1464.37,
+   -155.41
+  ],
+  "ang": [
+   -11.67,
+   -3.82
+  ],
+  "map": "de_mirage",
+  "name": "Ramp",
+  "grenade": "molotov",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -1275.53,
+   -1461.33,
+   -155.89
+  ],
+  "ang": [
+   -11.59,
+   -4.77
+  ],
+  "map": "de_mirage",
+  "name": "Ramp",
+  "grenade": "he",
+  "throw_type": "run",
+  "duck": false,
+  "description": "CLOSE"
+ },
+ {
+  "pos": [
+   -710.97,
+   -831.88,
+   -263.97
+  ],
+  "ang": [
+   -16.51,
+   -77.79
+  ],
+  "map": "de_mirage",
+  "name": "A Default",
+  "grenade": "molotov",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -1278.76,
+   -2472.46,
+   -191.42
+  ],
+  "ang": [
+   9.3,
+   29.2
+  ],
+  "map": "de_mirage",
+  "name": "FD",
+  "grenade": "he",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   360.06,
+   -691.98,
+   -162.49
+  ],
+  "ang": [
+   -23.5,
+   162.36
+  ],
+  "map": "de_mirage",
+  "name": "Short",
+  "grenade": "smoke",
+  "throw_type": "normal",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   360.08,
+   -691.97,
+   -162.5
+  ],
+  "ang": [
+   -46.36,
+   -153.71
+  ],
+  "map": "de_mirage",
+  "name": "Connector",
+  "grenade": "smoke",
+  "throw_type": "normal",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   360.08,
+   -691.97,
+   -162.5
+  ],
+  "ang": [
+   -32.53,
+   177.9
+  ],
+  "map": "de_mirage",
+  "name": "Window",
+  "grenade": "smoke",
+  "throw_type": "normal",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   348.12,
+   -678.84,
+   -87.0
+  ],
+  "ang": [
+   2.91,
+   -153.68
+  ],
+  "map": "de_mirage",
+  "name": "Stairs",
+  "grenade": "molotov",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -682.24,
+   -798.46,
+   -263.97
+  ],
+  "ang": [
+   -15.01,
+   -94.64
+  ],
+  "map": "de_mirage",
+  "name": "Firebox",
+  "grenade": "molotov",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -696.25,
+   -797.53,
+   -263.97
+  ],
+  "ang": [
+   0.06,
+   -92.8
+  ],
+  "map": "de_mirage",
+  "name": "Ticket Box",
+  "grenade": "molotov",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   1225.43,
+   -1467.88,
+   -167.97
+  ],
+  "ang": [
+   4.72,
+   52.56
+  ],
+  "map": "de_mirage",
+  "name": "Fakeduck",
+  "grenade": "molotov",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   1225.45,
+   -1467.92,
+   -167.97
+  ],
+  "ang": [
+   12.04,
+   60.35
+  ],
+  "map": "de_mirage",
+  "name": "Fakeduck",
+  "grenade": "he",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   936.04,
+   -1032.01,
+   -257.95
+  ],
+  "ang": [
+   -12.78,
+   -143.92
+  ],
+  "map": "de_mirage",
+  "name": "CT",
+  "grenade": "smoke",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   1127.98,
+   -1208.0,
+   -108.97
+  ],
+  "ang": [
+   -26.37,
+   166.51
+  ],
+  "map": "de_mirage",
+  "name": "Window",
+  "grenade": "smoke",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   502.98,
+   -686.5,
+   -160.0
+  ],
+  "ang": [
+   -14.28,
+   179.62
+  ],
+  "map": "de_mirage",
+  "name": "Window",
+  "grenade": "molotov",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -470.64,
+   -660.07,
+   -274.12
+  ],
+  "ang": [
+   -22.46,
+   123.01
+  ],
+  "map": "de_mirage",
+  "name": "Catwalk",
+  "grenade": "he",
+  "throw_type": "normal",
+  "duck": false,
+  "description": "53HP"
+ },
+ {
+  "pos": [
+   343.3,
+   -621.62,
+   -163.43
+  ],
+  "ang": [
+   -14.39,
+   -171.28
+  ],
+  "map": "de_mirage",
+  "name": "Connector",
+  "grenade": "flash",
+  "throw_type": "normal",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   1127.98,
+   -1183.97,
+   -253.83
+  ],
+  "ang": [
+   -23.6,
+   -176.84
+  ],
+  "map": "de_mirage",
+  "name": "Connector",
+  "grenade": "smoke",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   1148.4,
+   -1183.96,
+   -205.57
+  ],
+  "ang": [
+   -32.25,
+   153.79
+  ],
+  "map": "de_mirage",
+  "name": "Short",
+  "grenade": "smoke",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   1148.4,
+   -1183.96,
+   -205.57
+  ],
+  "ang": [
+   -43.18,
+   -165.26
+  ],
+  "map": "de_mirage",
+  "name": "Stairs",
+  "grenade": "smoke",
+  "throw_type": "normal",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -1396.28,
+   -2408.52,
+   -219.19
+  ],
+  "ang": [
+   -9.27,
+   98.97
+  ],
+  "map": "de_mirage",
+  "name": "CT Hiding Spot",
+  "grenade": "molotov",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -1396.28,
+   -2408.52,
+   -219.19
+  ],
+  "ang": [
+   -9.27,
+   98.97
+  ],
+  "map": "de_mirage",
+  "name": "CT Hiding Spot",
+  "grenade": "he",
+  "throw_type": "run",
+  "duck": false,
+  "description": "Molly is better"
+ },
+ {
+  "pos": [
+   -1278.53,
+   -1258.4,
+   -167.97
+  ],
+  "ang": [
+   -4.13,
+   35.06
+  ],
+  "map": "de_mirage",
+  "name": "FD",
+  "grenade": "he",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -1237.84,
+   -1171.91,
+   -167.97
+  ],
+  "ang": [
+   2.74,
+   74.98
+  ],
+  "map": "de_mirage",
+  "name": "Underpass",
+  "grenade": "molotov",
+  "throw_type": "run",
+  "duck": true,
+  "description": ""
+ },
+ {
+  "pos": [
+   -1237.84,
+   -1171.91,
+   -167.97
+  ],
+  "ang": [
+   2.74,
+   74.98
+  ],
+  "map": "de_mirage",
+  "name": "Underpass",
+  "grenade": "he",
+  "throw_type": "run",
+  "duck": true,
+  "description": ""
+ },
+ {
+  "pos": [
+   446.3,
+   -611.88,
+   -159.97
+  ],
+  "ang": [
+   -15.33,
+   -179.23
+  ],
+  "map": "de_mirage",
+  "name": "Window",
+  "grenade": "smoke",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -787.39,
+   -726.52,
+   -266.48
+  ],
+  "ang": [
+   -21.4,
+   -48.94
+  ],
+  "map": "de_mirage",
+  "name": "Connector",
+  "grenade": "molotov",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -787.39,
+   -726.52,
+   -266.48
+  ],
+  "ang": [
+   -21.4,
+   -48.94
+  ],
+  "map": "de_mirage",
+  "name": "Connector",
+  "grenade": "he",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -787.42,
+   -726.53,
+   -266.48
+  ],
+  "ang": [
+   -21.56,
+   99.79
+  ],
+  "map": "de_mirage",
+  "name": "Short",
+  "grenade": "molotov",
+  "throw_type": "normal",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -787.4,
+   -726.51,
+   -266.49
+  ],
+  "ang": [
+   -20.55,
+   100.21
+  ],
+  "map": "de_mirage",
+  "name": "Catwalk",
+  "grenade": "he",
+  "throw_type": "normal",
+  "duck": false,
+  "description": "53hp"
+ },
+ {
+  "pos": [
+   -493.71,
+   -593.41,
+   -276.7
+  ],
+  "ang": [
+   -13.57,
+   -119.29
+  ],
+  "map": "de_mirage",
+  "name": "Connector",
+  "grenade": "molotov",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -1120.0,
+   -967.66,
+   -167.97
+  ],
+  "ang": [
+   -15.61,
+   90.01
+  ],
+  "map": "de_mirage",
+  "name": "Middle",
+  "grenade": "flash",
+  "throw_type": "normal",
+  "duck": true,
+  "description": ""
+ },
+ {
+  "pos": [
+   -1120.02,
+   -967.65,
+   -167.97
+  ],
+  "ang": [
+   -3.84,
+   114.55
+  ],
+  "map": "de_mirage",
+  "name": "Underpass",
+  "grenade": "molotov",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -1120.01,
+   -967.64,
+   -167.97
+  ],
+  "ang": [
+   -3.28,
+   114.42
+  ],
+  "map": "de_mirage",
+  "name": "Underpass",
+  "grenade": "he",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   1092.57,
+   -1011.45,
+   -257.49
+  ],
+  "ang": [
+   -15.34,
+   -144.81
+  ],
+  "map": "de_mirage",
+  "name": "CT",
+  "grenade": "smoke",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   1266.03,
+   -1205.97,
+   -45.97
+  ],
+  "ang": [
+   6.28,
+   154.93
+  ],
+  "map": "de_mirage",
+  "name": "Top Mid",
+  "grenade": "molotov",
+  "throw_type": "run",
+  "duck": false,
+  "description": "oneway cat"
+ },
+ {
+  "pos": [
+   1271.18,
+   -1206.29,
+   -45.97
+  ],
+  "ang": [
+   4.85,
+   155.27
+  ],
+  "map": "de_mirage",
+  "name": "Top Mid",
+  "grenade": "he",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   1137.16,
+   -1038.83,
+   -262.29
+  ],
+  "ang": [
+   -10.56,
+   -159.84
+  ],
+  "map": "de_mirage",
+  "name": "Stairs",
+  "grenade": "molotov",
+  "throw_type": "jump",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -410.05,
+   -499.26,
+   -143.97
+  ],
+  "ang": [
+   -3.79,
+   -22.33
+  ],
+  "map": "de_mirage",
+  "name": "Palace",
+  "grenade": "molotov",
+  "throw_type": "run",
+  "duck": false,
+  "description": "Door"
+ },
+ {
+  "pos": [
+   1239.97,
+   -1159.97,
+   -246.27
+  ],
+  "ang": [
+   -48.66,
+   -173.19
+  ],
+  "map": "de_mirage",
+  "name": "Jungle",
+  "grenade": "smoke",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -1512.72,
+   -2347.42,
+   -243.67
+  ],
+  "ang": [
+   -10.29,
+   1.16
+  ],
+  "map": "de_mirage",
+  "name": "Plant",
+  "grenade": "molotov",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -1360.84,
+   -1174.0,
+   -117.11
+  ],
+  "ang": [
+   -12.46,
+   136.14
+  ],
+  "map": "de_mirage",
+  "name": "B Site",
+  "grenade": "flash",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   139.71,
+   -441.12,
+   -167.11
+  ],
+  "ang": [
+   -26.53,
+   -42.72
+  ],
+  "map": "de_mirage",
+  "name": "T ramp",
+  "grenade": "molotov",
+  "throw_type": "normal",
+  "duck": false,
+  "description": "Palace Alley"
+ },
+ {
+  "pos": [
+   -1513.18,
+   -1515.22,
+   -259.97
+  ],
+  "ang": [
+   -15.29,
+   142.05
+  ],
+  "map": "de_mirage",
+  "name": "Kitchen b site door",
+  "grenade": "molotov",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -1120.0,
+   -854.41,
+   -167.97
+  ],
+  "ang": [
+   -14.28,
+   88.37
+  ],
+  "map": "de_mirage",
+  "name": "Middle",
+  "grenade": "flash",
+  "throw_type": "normal",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -1120.0,
+   -854.38,
+   -167.97
+  ],
+  "ang": [
+   -42.45,
+   135.65
+  ],
+  "map": "de_mirage",
+  "name": "Middle",
+  "grenade": "flash",
+  "throw_type": "normal",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   76.22,
+   -412.47,
+   -180.07
+  ],
+  "ang": [
+   7.8,
+   103.97
+  ],
+  "map": "de_mirage",
+  "name": "Window Inside",
+  "grenade": "molotov",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -1051.07,
+   -789.0,
+   -263.97
+  ],
+  "ang": [
+   -0.94,
+   101.59
+  ],
+  "map": "de_mirage",
+  "name": "Jungle",
+  "grenade": "molotov",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -1051.07,
+   -789.0,
+   -263.97
+  ],
+  "ang": [
+   -5.16,
+   106.73
+  ],
+  "map": "de_mirage",
+  "name": "Ladder",
+  "grenade": "molotov",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   1375.6,
+   -1294.81,
+   -167.97
+  ],
+  "ang": [
+   -28.44,
+   164.93
+  ],
+  "map": "de_mirage",
+  "name": "T roof",
+  "grenade": "molotov",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -1055.92,
+   -788.98,
+   -263.97
+  ],
+  "ang": [
+   -51.88,
+   38.47
+  ],
+  "map": "de_mirage",
+  "name": "T Side Alley",
+  "grenade": "molotov",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   1205.97,
+   -997.41,
+   -262.2
+  ],
+  "ang": [
+   -5.15,
+   -161.76
+  ],
+  "map": "de_mirage",
+  "name": "Sandvich",
+  "grenade": "molotov",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -195.03,
+   -387.69,
+   -167.83
+  ],
+  "ang": [
+   2.59,
+   -32.35
+  ],
+  "map": "de_mirage",
+  "name": "Stairs [20HP]",
+  "grenade": "he",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -1611.03,
+   -2189.35,
+   -255.29
+  ],
+  "ang": [
+   2.42,
+   -8.86
+  ],
+  "map": "de_mirage",
+  "name": "Plant",
+  "grenade": "molotov",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -1372.2,
+   -1095.97,
+   -167.97
+  ],
+  "ang": [
+   -14.17,
+   171.48
+  ],
+  "map": "de_mirage",
+  "name": "Jungle",
+  "grenade": "flash",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -1120.01,
+   -796.0,
+   -167.97
+  ],
+  "ang": [
+   8.23,
+   85.8
+  ],
+  "map": "de_mirage",
+  "name": "Window",
+  "grenade": "smoke",
+  "throw_type": "normal",
+  "duck": false,
+  "description": "Oneway"
+ },
+ {
+  "pos": [
+   -754.24,
+   -532.84,
+   -48.09
+  ],
+  "ang": [
+   5.1,
+   39.33
+  ],
+  "map": "de_mirage",
+  "name": "Aps Door",
+  "grenade": "molotov",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -1209.08,
+   -873.27,
+   -167.91
+  ],
+  "ang": [
+   -48.21,
+   66.4
+  ],
+  "map": "de_mirage",
+  "name": "Window",
+  "grenade": "smoke",
+  "throw_type": "normal",
+  "duck": false,
+  "description": "Oneway"
+ },
+ {
+  "pos": [
+   1398.97,
+   -1255.97,
+   -167.97
+  ],
+  "ang": [
+   -32.29,
+   159.6
+  ],
+  "map": "de_mirage",
+  "name": "B Bombsite",
+  "grenade": "smoke",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   1398.97,
+   -1255.97,
+   -167.97
+  ],
+  "ang": [
+   -41.43,
+   155.2
+  ],
+  "map": "de_mirage",
+  "name": "B Default",
+  "grenade": "smoke",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   1398.97,
+   -1255.97,
+   -167.97
+  ],
+  "ang": [
+   -46.0,
+   159.9
+  ],
+  "map": "de_mirage",
+  "name": "Kitchen Window",
+  "grenade": "smoke",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -1434.03,
+   -1173.99,
+   -167.97
+  ],
+  "ang": [
+   -59.95,
+   99.88
+  ],
+  "map": "de_mirage",
+  "name": "B Arch",
+  "grenade": "smoke",
+  "throw_type": "normal",
+  "duck": false,
+  "description": "for Short"
+ },
+ {
+  "pos": [
+   -1434.03,
+   -1173.97,
+   -167.97
+  ],
+  "ang": [
+   -58.46,
+   125.68
+  ],
+  "map": "de_mirage",
+  "name": "Kitchen Door",
+  "grenade": "smoke",
+  "throw_type": "normal",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -1434.03,
+   -1173.97,
+   -167.97
+  ],
+  "ang": [
+   -62.73,
+   117.42
+  ],
+  "map": "de_mirage",
+  "name": "Kitchen Window",
+  "grenade": "smoke",
+  "throw_type": "normal",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   1280.04,
+   -1052.6,
+   -167.97
+  ],
+  "ang": [
+   -26.72,
+   -172.25
+  ],
+  "map": "de_mirage",
+  "name": "Connector",
+  "grenade": "smoke",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -1196.71,
+   -856.03,
+   -167.97
+  ],
+  "ang": [
+   -62.75,
+   62.11
+  ],
+  "map": "de_mirage",
+  "name": "Middle",
+  "grenade": "flash",
+  "throw_type": "normal",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -709.4,
+   -500.5,
+   -48.09
+  ],
+  "ang": [
+   -3.16,
+   -161.85
+  ],
+  "map": "de_mirage",
+  "name": "Kitchen Box",
+  "grenade": "molotov",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -1361.62,
+   -1020.38,
+   -167.97
+  ],
+  "ang": [
+   9.34,
+   -136.81
+  ],
+  "map": "de_mirage",
+  "name": "CT Hiding Spot",
+  "grenade": "molotov",
+  "throw_type": "run",
+  "duck": false,
+  "description": "Takes time to fill, HE is better"
+ },
+ {
+  "pos": [
+   -1361.62,
+   -1020.38,
+   -167.97
+  ],
+  "ang": [
+   9.34,
+   -136.81
+  ],
+  "map": "de_mirage",
+  "name": "CT Hiding Spot",
+  "grenade": "he",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -197.28,
+   -344.03,
+   -163.97
+  ],
+  "ang": [
+   -52.38,
+   -176.4
+  ],
+  "map": "de_mirage",
+  "name": "Short",
+  "grenade": "flash",
+  "throw_type": "normal",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -1653.79,
+   -2183.48,
+   -256.05
+  ],
+  "ang": [
+   -21.65,
+   -7.88
+  ],
+  "map": "de_mirage",
+  "name": "Firebox",
+  "grenade": "he",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   1244.2,
+   -911.55,
+   -45.97
+  ],
+  "ang": [
+   10.72,
+   179.85
+  ],
+  "map": "de_mirage",
+  "name": "Chair",
+  "grenade": "molotov",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   1270.7,
+   -911.6,
+   -45.97
+  ],
+  "ang": [
+   13.63,
+   179.52
+  ],
+  "map": "de_mirage",
+  "name": "Chair",
+  "grenade": "he",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -1563.23,
+   -1268.6,
+   -261.67
+  ],
+  "ang": [
+   -14.84,
+   55.45
+  ],
+  "map": "de_mirage",
+  "name": "Jungle Door",
+  "grenade": "molotov",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   1257.79,
+   -871.97,
+   -143.97
+  ],
+  "ang": [
+   -42.51,
+   -160.45
+  ],
+  "map": "de_mirage",
+  "name": "Jungle",
+  "grenade": "smoke",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   1257.79,
+   -871.97,
+   -143.97
+  ],
+  "ang": [
+   -21.82,
+   -144.34
+  ],
+  "map": "de_mirage",
+  "name": "CT",
+  "grenade": "smoke",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -874.65,
+   -485.45,
+   -93.98
+  ],
+  "ang": [
+   -21.78,
+   -66.3
+  ],
+  "map": "de_mirage",
+  "name": "Stairs",
+  "grenade": "molotov",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -1710.36,
+   -1686.68,
+   -264.06
+  ],
+  "ang": [
+   -20.88,
+   75.41
+  ],
+  "map": "de_mirage",
+  "name": "Under Window",
+  "grenade": "smoke",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -1541.86,
+   -1161.2,
+   -244.56
+  ],
+  "ang": [
+   -10.62,
+   39.74
+  ],
+  "map": "de_mirage",
+  "name": "Windows",
+  "grenade": "molotov",
+  "throw_type": "normal",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   206.16,
+   -270.48,
+   -168.95
+  ],
+  "ang": [
+   -6.12,
+   164.33
+  ],
+  "map": "de_mirage",
+  "name": "Underpass",
+  "grenade": "he",
+  "throw_type": "run",
+  "duck": false,
+  "description": "UNSAFE"
+ },
+ {
+  "pos": [
+   -1043.95,
+   -590.58,
+   -287.97
+  ],
+  "ang": [
+   -25.8,
+   55.73
+  ],
+  "map": "de_mirage",
+  "name": "Drop",
+  "grenade": "he",
+  "throw_type": "run",
+  "duck": false,
+  "description": "Ladder"
+ },
+ {
+  "pos": [
+   1391.97,
+   -1011.24,
+   -167.97
+  ],
+  "ang": [
+   -49.6,
+   172.19
+  ],
+  "map": "de_mirage",
+  "name": "Window",
+  "grenade": "smoke",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -1710.96,
+   -1559.87,
+   -259.67
+  ],
+  "ang": [
+   -52.08,
+   -3.07
+  ],
+  "map": "de_mirage",
+  "name": "A Ramp",
+  "grenade": "smoke",
+  "throw_type": "normal",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -1247.99,
+   -710.28,
+   -128.97
+  ],
+  "ang": [
+   0.97,
+   -36.77
+  ],
+  "map": "de_mirage",
+  "name": "Jungle",
+  "grenade": "molotov",
+  "throw_type": "run",
+  "duck": false,
+  "description": "Fakeduck spot"
+ },
+ {
+  "pos": [
+   -1247.98,
+   -710.21,
+   -128.97
+  ],
+  "ang": [
+   0.97,
+   -37.11
+  ],
+  "map": "de_mirage",
+  "name": "Jungle",
+  "grenade": "he",
+  "throw_type": "run",
+  "duck": false,
+  "description": "Fakeduck spot"
+ },
+ {
+  "pos": [
+   -1710.97,
+   -1489.33,
+   -257.91
+  ],
+  "ang": [
+   -56.86,
+   -1.2
+  ],
+  "map": "de_mirage",
+  "name": "A Ramp",
+  "grenade": "smoke",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -1003.62,
+   -514.27,
+   -287.97
+  ],
+  "ang": [
+   -1.39,
+   -119.41
+  ],
+  "map": "de_mirage",
+  "name": "FD",
+  "grenade": "molotov",
+  "throw_type": "run",
+  "duck": true,
+  "description": ""
+ },
+ {
+  "pos": [
+   1391.97,
+   -930.08,
+   -167.97
+  ],
+  "ang": [
+   -21.04,
+   -151.2
+  ],
+  "map": "de_mirage",
+  "name": "Firebox",
+  "grenade": "smoke",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -1438.03,
+   -848.03,
+   -167.97
+  ],
+  "ang": [
+   -52.76,
+   -71.04
+  ],
+  "map": "de_mirage",
+  "name": "CT",
+  "grenade": "smoke",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -903.97,
+   -376.03,
+   -158.43
+  ],
+  "ang": [
+   -17.03,
+   -60.07
+  ],
+  "map": "de_mirage",
+  "name": "Palace",
+  "grenade": "smoke",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   283.7,
+   -174.94,
+   -165.86
+  ],
+  "ang": [
+   -18.51,
+   -152.59
+  ],
+  "map": "de_mirage",
+  "name": "Window",
+  "grenade": "molotov",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -942.69,
+   -380.18,
+   -48.09
+  ],
+  "ang": [
+   2.21,
+   -146.46
+  ],
+  "map": "de_mirage",
+  "name": "Jungle FD",
+  "grenade": "molotov",
+  "throw_type": "run",
+  "duck": false,
+  "description": "Jungle Fakeduck Spot"
+ },
+ {
+  "pos": [
+   270.74,
+   -162.34,
+   -166.77
+  ],
+  "ang": [
+   11.1,
+   -145.21
+  ],
+  "map": "de_mirage",
+  "name": "Underpass",
+  "grenade": "molotov",
+  "throw_type": "run",
+  "duck": false,
+  "description": "SAFE"
+ },
+ {
+  "pos": [
+   -944.03,
+   -380.03,
+   -263.97
+  ],
+  "ang": [
+   -12.88,
+   -117.78
+  ],
+  "map": "de_mirage",
+  "name": "Jungle (Deep)",
+  "grenade": "he",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -1710.97,
+   -1208.03,
+   -255.08
+  ],
+  "ang": [
+   -48.81,
+   67.43
+  ],
+  "map": "de_mirage",
+  "name": "Alley",
+  "grenade": "smoke",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -1711.0,
+   -1208.03,
+   -255.08
+  ],
+  "ang": [
+   -37.69,
+   45.55
+  ],
+  "map": "de_mirage",
+  "name": "Middle",
+  "grenade": "flash",
+  "throw_type": "normal",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -1067.88,
+   -447.5,
+   -263.97
+  ],
+  "ang": [
+   5.39,
+   6.22
+  ],
+  "map": "de_mirage",
+  "name": "Upper Mid",
+  "grenade": "molotov",
+  "throw_type": "run",
+  "duck": true,
+  "description": ""
+ },
+ {
+  "pos": [
+   1385.88,
+   -777.31,
+   -167.97
+  ],
+  "ang": [
+   -11.78,
+   -137.87
+  ],
+  "map": "de_mirage",
+  "name": "Plant Area Thingy",
+  "grenade": "molotov",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   1385.88,
+   -777.31,
+   -167.97
+  ],
+  "ang": [
+   -11.78,
+   -137.87
+  ],
+  "map": "de_mirage",
+  "name": "Plant Area Thingy",
+  "grenade": "he",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -1120.03,
+   -456.03,
+   -167.97
+  ],
+  "ang": [
+   -0.23,
+   -83.08
+  ],
+  "map": "de_mirage",
+  "name": "Underpass",
+  "grenade": "molotov",
+  "throw_type": "normal",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -1120.03,
+   -456.03,
+   -167.97
+  ],
+  "ang": [
+   -0.32,
+   -83.12
+  ],
+  "map": "de_mirage",
+  "name": "Underpass",
+  "grenade": "he",
+  "throw_type": "normal",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -1120.03,
+   -456.03,
+   -167.97
+  ],
+  "ang": [
+   10.68,
+   -79.26
+  ],
+  "map": "de_mirage",
+  "name": "Underpass (Deep)",
+  "grenade": "he",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -1120.03,
+   -456.0,
+   -167.97
+  ],
+  "ang": [
+   54.42,
+   -81.43
+  ],
+  "map": "de_mirage",
+  "name": "Window",
+  "grenade": "smoke",
+  "throw_type": "normal",
+  "duck": false,
+  "description": "Oneway"
+ },
+ {
+  "pos": [
+   -968.03,
+   -380.01,
+   -345.96
+  ],
+  "ang": [
+   -44.95,
+   -76.87
+  ],
+  "map": "de_mirage",
+  "name": "Short",
+  "grenade": "smoke",
+  "throw_type": "normal",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -968.03,
+   -379.99,
+   -345.97
+  ],
+  "ang": [
+   -59.77,
+   -76.18
+  ],
+  "map": "de_mirage",
+  "name": "Jungle",
+  "grenade": "smoke",
+  "throw_type": "normal",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   1395.73,
+   -780.22,
+   -167.97
+  ],
+  "ang": [
+   -12.51,
+   -146.25
+  ],
+  "map": "de_mirage",
+  "name": "Middle of Boxes in A",
+  "grenade": "smoke",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -1055.99,
+   -412.09,
+   -263.97
+  ],
+  "ang": [
+   -24.91,
+   -30.26
+  ],
+  "map": "de_mirage",
+  "name": "Chair",
+  "grenade": "molotov",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -1712.0,
+   -1128.03,
+   -187.97
+  ],
+  "ang": [
+   -35.03,
+   34.84
+  ],
+  "map": "de_mirage",
+  "name": "Middle",
+  "grenade": "flash",
+  "throw_type": "normal",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -1071.78,
+   -400.44,
+   -263.97
+  ],
+  "ang": [
+   -29.7,
+   -30.38
+  ],
+  "map": "de_mirage",
+  "name": "Chair",
+  "grenade": "he",
+  "throw_type": "run",
+  "duck": true,
+  "description": "unsafe"
+ },
+ {
+  "pos": [
+   -1053.84,
+   -380.1,
+   -263.97
+  ],
+  "ang": [
+   -6.11,
+   -98.59
+  ],
+  "map": "de_mirage",
+  "name": "Vents",
+  "grenade": "he",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -1053.87,
+   -380.02,
+   -263.97
+  ],
+  "ang": [
+   -14.89,
+   -99.94
+  ],
+  "map": "de_mirage",
+  "name": "Jungle",
+  "grenade": "molotov",
+  "throw_type": "normal",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -976.98,
+   -349.49,
+   -361.22
+  ],
+  "ang": [
+   -9.38,
+   100.12
+  ],
+  "map": "de_mirage",
+  "name": "Short",
+  "grenade": "molotov",
+  "throw_type": "run",
+  "duck": true,
+  "description": "semi door"
+ },
+ {
+  "pos": [
+   1364.87,
+   -693.79,
+   -167.97
+  ],
+  "ang": [
+   1.75,
+   -132.99
+  ],
+  "map": "de_mirage",
+  "name": "T Ramp",
+  "grenade": "he",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   1364.87,
+   -693.79,
+   -167.97
+  ],
+  "ang": [
+   -0.23,
+   -133.02
+  ],
+  "map": "de_mirage",
+  "name": "T Ramp",
+  "grenade": "molotov",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   399.97,
+   -120.58,
+   -165.97
+  ],
+  "ang": [
+   -17.01,
+   -153.08
+  ],
+  "map": "de_mirage",
+  "name": "Window",
+  "grenade": "molotov",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -1071.97,
+   -380.03,
+   -263.97
+  ],
+  "ang": [
+   -61.86,
+   -71.79
+  ],
+  "map": "de_mirage",
+  "name": "Jungle",
+  "grenade": "smoke",
+  "throw_type": "normal",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -1071.97,
+   -380.03,
+   -263.97
+  ],
+  "ang": [
+   -5.57,
+   -46.36
+  ],
+  "map": "de_mirage",
+  "name": "Connector",
+  "grenade": "smoke",
+  "throw_type": "normal",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -1071.97,
+   -380.03,
+   -263.97
+  ],
+  "ang": [
+   -28.04,
+   -50.06
+  ],
+  "map": "de_mirage",
+  "name": "Tetris",
+  "grenade": "smoke",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -1071.97,
+   -380.03,
+   -263.97
+  ],
+  "ang": [
+   -38.11,
+   -56.26
+  ],
+  "map": "de_mirage",
+  "name": "Palace",
+  "grenade": "smoke",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -968.02,
+   -313.98,
+   -367.97
+  ],
+  "ang": [
+   -50.29,
+   -109.91
+  ],
+  "map": "de_mirage",
+  "name": "Window",
+  "grenade": "smoke",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -997.0,
+   -323.95,
+   -367.97
+  ],
+  "ang": [
+   -32.68,
+   -110.65
+  ],
+  "map": "de_mirage",
+  "name": "Window",
+  "grenade": "he",
+  "throw_type": "normal",
+  "duck": false,
+  "description": "Jungle/Vents"
+ },
+ {
+  "pos": [
+   -837.93,
+   -178.19,
+   -169.05
+  ],
+  "ang": [
+   7.05,
+   -38.06
+  ],
+  "map": "de_mirage",
+  "name": "Carts (Right)",
+  "grenade": "he",
+  "throw_type": "run",
+  "duck": false,
+  "description": "Molly is better"
+ },
+ {
+  "pos": [
+   -1031.82,
+   -297.05,
+   -367.97
+  ],
+  "ang": [
+   -29.71,
+   -100.82
+  ],
+  "map": "de_mirage",
+  "name": "Jungle",
+  "grenade": "he",
+  "throw_type": "normal",
+  "duck": false,
+  "description": "Door"
+ },
+ {
+  "pos": [
+   -962.31,
+   -244.93,
+   -363.97
+  ],
+  "ang": [
+   -30.79,
+   -108.27
+  ],
+  "map": "de_mirage",
+  "name": "Vent",
+  "grenade": "molotov",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -2026.36,
+   -2029.97,
+   -299.07
+  ],
+  "ang": [
+   -29.43,
+   86.93
+  ],
+  "map": "de_mirage",
+  "name": "B Bombsite",
+  "grenade": "smoke",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -2026.4,
+   -2029.97,
+   -299.12
+  ],
+  "ang": [
+   -46.23,
+   35.1
+  ],
+  "map": "de_mirage",
+  "name": "Middle",
+  "grenade": "smoke",
+  "throw_type": "run",
+  "duck": false,
+  "description": "Deep"
+ },
+ {
+  "pos": [
+   -2026.4,
+   -2029.97,
+   -299.13
+  ],
+  "ang": [
+   -23.96,
+   -3.84
+  ],
+  "map": "de_mirage",
+  "name": "Palace",
+  "grenade": "smoke",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -2026.4,
+   -2029.97,
+   -299.12
+  ],
+  "ang": [
+   -39.59,
+   81.18
+  ],
+  "map": "de_mirage",
+  "name": "B Apartments",
+  "grenade": "smoke",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -2026.4,
+   -2029.97,
+   -299.12
+  ],
+  "ang": [
+   -40.59,
+   67.98
+  ],
+  "map": "de_mirage",
+  "name": "B Alley",
+  "grenade": "smoke",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -2031.97,
+   -1957.02,
+   -300.43
+  ],
+  "ang": [
+   -37.83,
+   88.81
+  ],
+  "map": "de_mirage",
+  "name": "B Default",
+  "grenade": "smoke",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   399.97,
+   -17.06,
+   -199.76
+  ],
+  "ang": [
+   -47.09,
+   -174.25
+  ],
+  "map": "de_mirage",
+  "name": "Short",
+  "grenade": "smoke",
+  "throw_type": "normal",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   160.03,
+   39.98,
+   -206.58
+  ],
+  "ang": [
+   -31.15,
+   -31.54
+  ],
+  "map": "de_mirage",
+  "name": "Window",
+  "grenade": "flash",
+  "throw_type": "normal",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -893.02,
+   -133.7,
+   -167.97
+  ],
+  "ang": [
+   8.4,
+   -38.67
+  ],
+  "map": "de_mirage",
+  "name": "Rip Esp",
+  "grenade": "molotov",
+  "throw_type": "run",
+  "duck": false,
+  "description": "MIDDLE"
+ },
+ {
+  "pos": [
+   -752.05,
+   -57.38,
+   -162.3
+  ],
+  "ang": [
+   10.6,
+   141.88
+  ],
+  "map": "de_mirage",
+  "name": "Short ",
+  "grenade": "molotov",
+  "throw_type": "run",
+  "duck": false,
+  "description": "Corner"
+ },
+ {
+  "pos": [
+   1385.21,
+   -502.86,
+   -167.97
+  ],
+  "ang": [
+   -0.63,
+   -126.13
+  ],
+  "map": "de_mirage",
+  "name": "T roof",
+  "grenade": "he",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   1385.29,
+   -502.77,
+   -167.97
+  ],
+  "ang": [
+   -4.2,
+   -126.11
+  ],
+  "map": "de_mirage",
+  "name": "T roof / ramp",
+  "grenade": "molotov",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -1711.97,
+   -761.03,
+   -167.97
+  ],
+  "ang": [
+   -32.66,
+   -38.86
+  ],
+  "map": "de_mirage",
+  "name": "Palace",
+  "grenade": "smoke",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -752.79,
+   -33.9,
+   -161.36
+  ],
+  "ang": [
+   -40.47,
+   86.81
+  ],
+  "map": "de_mirage",
+  "name": "Apss",
+  "grenade": "he",
+  "throw_type": "run",
+  "duck": true,
+  "description": ""
+ },
+ {
+  "pos": [
+   -794.39,
+   -46.8,
+   -168.54
+  ],
+  "ang": [
+   15.62,
+   176.32
+  ],
+  "map": "de_mirage",
+  "name": "Short",
+  "grenade": "he",
+  "throw_type": "run",
+  "duck": false,
+  "description": "Corner"
+ },
+ {
+  "pos": [
+   399.97,
+   50.16,
+   -212.96
+  ],
+  "ang": [
+   -47.28,
+   -154.82
+  ],
+  "map": "de_mirage",
+  "name": "Mid",
+  "grenade": "flash",
+  "throw_type": "normal",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -1036.97,
+   -167.88,
+   -367.97
+  ],
+  "ang": [
+   -9.82,
+   -78.01
+  ],
+  "map": "de_mirage",
+  "name": "Cat",
+  "grenade": "smoke",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -1036.99,
+   -167.89,
+   -367.97
+  ],
+  "ang": [
+   -9.44,
+   95.11
+  ],
+  "map": "de_mirage",
+  "name": "Short",
+  "grenade": "molotov",
+  "throw_type": "normal",
+  "duck": false,
+  "description": "BUG"
+ },
+ {
+  "pos": [
+   -1200.0,
+   -235.12,
+   -53.84
+  ],
+  "ang": [
+   41.13,
+   -77.3
+  ],
+  "map": "de_mirage",
+  "name": "Tunnel",
+  "grenade": "he",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -1669.93,
+   -670.81,
+   -167.97
+  ],
+  "ang": [
+   13.81,
+   117.16
+  ],
+  "map": "de_mirage",
+  "name": "Bombsite [Right]",
+  "grenade": "he",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -1037.81,
+   -164.8,
+   -367.97
+  ],
+  "ang": [
+   15.1,
+   -78.49
+  ],
+  "map": "de_mirage",
+  "name": "Cat",
+  "grenade": "smoke",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -750.98,
+   -7.46,
+   -161.41
+  ],
+  "ang": [
+   -42.39,
+   86.73
+  ],
+  "map": "de_mirage",
+  "name": "Palace",
+  "grenade": "molotov",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -1701.86,
+   -695.93,
+   -167.97
+  ],
+  "ang": [
+   -10.46,
+   118.24
+  ],
+  "map": "de_mirage",
+  "name": "Car",
+  "grenade": "molotov",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -1681.5,
+   -666.76,
+   -167.97
+  ],
+  "ang": [
+   -7.46,
+   122.99
+  ],
+  "map": "de_mirage",
+  "name": "Site A and Short",
+  "grenade": "molotov",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   224.03,
+   121.69,
+   -234.55
+  ],
+  "ang": [
+   -45.58,
+   -95.48
+  ],
+  "map": "de_mirage",
+  "name": "Top Middle",
+  "grenade": "flash",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -838.0,
+   -13.04,
+   -168.12
+  ],
+  "ang": [
+   -67.01,
+   133.2
+  ],
+  "map": "de_mirage",
+  "name": "Short",
+  "grenade": "flash",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   1422.97,
+   -368.0,
+   -167.97
+  ],
+  "ang": [
+   -30.38,
+   179.07
+  ],
+  "map": "de_mirage",
+  "name": "Short",
+  "grenade": "smoke",
+  "throw_type": "run",
+  "duck": false,
+  "description": "Deep"
+ },
+ {
+  "pos": [
+   1423.0,
+   -368.0,
+   -167.97
+  ],
+  "ang": [
+   -39.44,
+   174.79
+  ],
+  "map": "de_mirage",
+  "name": "Short",
+  "grenade": "smoke",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   1422.97,
+   -367.97,
+   -167.97
+  ],
+  "ang": [
+   -29.57,
+   -173.8
+  ],
+  "map": "de_mirage",
+  "name": "Window",
+  "grenade": "smoke",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   1423.0,
+   -367.97,
+   -167.97
+  ],
+  "ang": [
+   -52.62,
+   -176.43
+  ],
+  "map": "de_mirage",
+  "name": "Short",
+  "grenade": "smoke",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -1067.85,
+   -56.09,
+   -167.97
+  ],
+  "ang": [
+   12.09,
+   -109.15
+  ],
+  "map": "de_mirage",
+  "name": "Underpass",
+  "grenade": "he",
+  "throw_type": "run",
+  "duck": false,
+  "description": "DESTROY OBJ"
+ },
+ {
+  "pos": [
+   -1067.8,
+   -56.06,
+   -167.97
+  ],
+  "ang": [
+   -14.5,
+   -109.35
+  ],
+  "map": "de_mirage",
+  "name": "Underpass",
+  "grenade": "molotov",
+  "throw_type": "normal",
+  "duck": false,
+  "description": "destroy obj"
+ },
+ {
+  "pos": [
+   -1103.95,
+   -56.03,
+   -167.97
+  ],
+  "ang": [
+   9.11,
+   -102.06
+  ],
+  "map": "de_mirage",
+  "name": "Window",
+  "grenade": "molotov",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -1103.97,
+   -56.03,
+   -167.97
+  ],
+  "ang": [
+   12.86,
+   -98.87
+  ],
+  "map": "de_mirage",
+  "name": "Jungle (Deep)",
+  "grenade": "molotov",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -1103.97,
+   -56.03,
+   -167.97
+  ],
+  "ang": [
+   -41.73,
+   -16.79
+  ],
+  "map": "de_mirage",
+  "name": "Triple Box",
+  "grenade": "smoke",
+  "throw_type": "run",
+  "duck": false,
+  "description": "Oneway (after plant oneway go to short)"
+ },
+ {
+  "pos": [
+   -1103.97,
+   -56.02,
+   -167.97
+  ],
+  "ang": [
+   -13.81,
+   -96.81
+  ],
+  "map": "de_mirage",
+  "name": "Jungle",
+  "grenade": "he",
+  "throw_type": "normal",
+  "duck": false,
+  "description": "destroy obj"
+ },
+ {
+  "pos": [
+   -1103.97,
+   -56.02,
+   -167.97
+  ],
+  "ang": [
+   -13.81,
+   -96.81
+  ],
+  "map": "de_mirage",
+  "name": "Jungle",
+  "grenade": "molotov",
+  "throw_type": "normal",
+  "duck": false,
+  "description": "DESTROY OBJ"
+ },
+ {
+  "pos": [
+   -1103.98,
+   -56.0,
+   -167.97
+  ],
+  "ang": [
+   12.77,
+   -98.84
+  ],
+  "map": "de_mirage",
+  "name": "Jungle (Deep)",
+  "grenade": "he",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   398.97,
+   174.53,
+   -248.87
+  ],
+  "ang": [
+   -47.13,
+   -136.79
+  ],
+  "map": "de_mirage",
+  "name": "Connector",
+  "grenade": "smoke",
+  "throw_type": "normal",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -856.77,
+   79.29,
+   -165.97
+  ],
+  "ang": [
+   -46.25,
+   -63.19
+  ],
+  "map": "de_mirage",
+  "name": "Middle",
+  "grenade": "flash",
+  "throw_type": "normal",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -909.97,
+   78.03,
+   -165.97
+  ],
+  "ang": [
+   -28.15,
+   -16.31
+  ],
+  "map": "de_mirage",
+  "name": "Short",
+  "grenade": "flash",
+  "throw_type": "normal",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   1422.97,
+   -248.03,
+   -167.97
+  ],
+  "ang": [
+   -25.72,
+   -170.5
+  ],
+  "map": "de_mirage",
+  "name": "Window",
+  "grenade": "smoke",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   1422.99,
+   -248.01,
+   -167.97
+  ],
+  "ang": [
+   -46.5,
+   162.48
+  ],
+  "map": "de_mirage",
+  "name": "Balcony",
+  "grenade": "smoke",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   399.56,
+   280.4,
+   -254.61
+  ],
+  "ang": [
+   -25.4,
+   -125.45
+  ],
+  "map": "de_mirage",
+  "name": "Middle",
+  "grenade": "flash",
+  "throw_type": "normal",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   399.55,
+   280.41,
+   -254.61
+  ],
+  "ang": [
+   -48.54,
+   -119.69
+  ],
+  "map": "de_mirage",
+  "name": "Jungle",
+  "grenade": "smoke",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   399.55,
+   280.41,
+   -254.61
+  ],
+  "ang": [
+   -73.77,
+   -133.29
+  ],
+  "map": "de_mirage",
+  "name": "Cat",
+  "grenade": "smoke",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -1031.64,
+   102.74,
+   -367.97
+  ],
+  "ang": [
+   -48.94,
+   127.95
+  ],
+  "map": "de_mirage",
+  "name": "Short",
+  "grenade": "molotov",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -148.03,
+   353.03,
+   -34.43
+  ],
+  "ang": [
+   -47.48,
+   178.95
+  ],
+  "map": "de_mirage",
+  "name": "B Default",
+  "grenade": "smoke",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -148.03,
+   353.03,
+   -34.43
+  ],
+  "ang": [
+   -45.79,
+   -177.84
+  ],
+  "map": "de_mirage",
+  "name": "Bench",
+  "grenade": "smoke",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -148.03,
+   353.03,
+   -34.43
+  ],
+  "ang": [
+   -60.37,
+   -179.84
+  ],
+  "map": "de_mirage",
+  "name": "Ninja Box",
+  "grenade": "smoke",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -148.03,
+   353.03,
+   -34.43
+  ],
+  "ang": [
+   -56.72,
+   167.45
+  ],
+  "map": "de_mirage",
+  "name": "Balcony",
+  "grenade": "smoke",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -148.06,
+   353.03,
+   -34.43
+  ],
+  "ang": [
+   -51.41,
+   174.26
+  ],
+  "map": "de_mirage",
+  "name": "Car Crate",
+  "grenade": "smoke",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -229.16,
+   368.56,
+   -76.6
+  ],
+  "ang": [
+   -60.64,
+   -172.23
+  ],
+  "map": "de_mirage",
+  "name": "B Arch",
+  "grenade": "smoke",
+  "throw_type": "normal",
+  "duck": true,
+  "description": "Left"
+ },
+ {
+  "pos": [
+   -148.03,
+   379.97,
+   -34.43
+  ],
+  "ang": [
+   -59.37,
+   -172.42
+  ],
+  "map": "de_mirage",
+  "name": "B Arch",
+  "grenade": "smoke",
+  "throw_type": "normal",
+  "duck": false,
+  "description": "Left"
+ },
+ {
+  "pos": [
+   -926.77,
+   240.83,
+   -171.58
+  ],
+  "ang": [
+   -1.34,
+   -75.77
+  ],
+  "map": "de_mirage",
+  "name": "Stairs",
+  "grenade": "molotov",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   1455.97,
+   -104.05,
+   -147.97
+  ],
+  "ang": [
+   -34.77,
+   173.68
+  ],
+  "map": "de_mirage",
+  "name": "Short",
+  "grenade": "smoke",
+  "throw_type": "run",
+  "duck": false,
+  "description": "Connector View"
+ },
+ {
+  "pos": [
+   1455.99,
+   -104.03,
+   -147.97
+  ],
+  "ang": [
+   -35.08,
+   -152.78
+  ],
+  "map": "de_mirage",
+  "name": "Stairs",
+  "grenade": "smoke",
+  "throw_type": "run",
+  "duck": true,
+  "description": ""
+ },
+ {
+  "pos": [
+   -1013.86,
+   219.59,
+   -173.17
+  ],
+  "ang": [
+   -17.11,
+   -56.82
+  ],
+  "map": "de_mirage",
+  "name": "Chair",
+  "grenade": "molotov",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   441.59,
+   380.54,
+   -251.97
+  ],
+  "ang": [
+   -52.24,
+   176.9
+  ],
+  "map": "de_mirage",
+  "name": "Fakeduck",
+  "grenade": "he",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   441.62,
+   380.53,
+   -251.97
+  ],
+  "ang": [
+   -50.19,
+   177.23
+  ],
+  "map": "de_mirage",
+  "name": "Fakeduck",
+  "grenade": "molotov",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   1422.97,
+   -55.97,
+   -167.97
+  ],
+  "ang": [
+   -32.32,
+   -140.8
+  ],
+  "map": "de_mirage",
+  "name": "Between Jungle & Stairs",
+  "grenade": "smoke",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -1143.37,
+   189.89,
+   -171.77
+  ],
+  "ang": [
+   -14.62,
+   143.5
+  ],
+  "map": "de_mirage",
+  "name": "truck",
+  "grenade": "he",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -416.05,
+   429.64,
+   -106.67
+  ],
+  "ang": [
+   -40.28,
+   -4.31
+  ],
+  "map": "de_mirage",
+  "name": "Side Alley",
+  "grenade": "molotov",
+  "throw_type": "run",
+  "duck": false,
+  "description": "Wallbang"
+ },
+ {
+  "pos": [
+   -416.0,
+   430.37,
+   -106.64
+  ],
+  "ang": [
+   -40.28,
+   -4.31
+  ],
+  "map": "de_mirage",
+  "name": "Side Alley",
+  "grenade": "he",
+  "throw_type": "run",
+  "duck": false,
+  "description": "Wallbang"
+ },
+ {
+  "pos": [
+   -1020.74,
+   236.11,
+   -367.97
+  ],
+  "ang": [
+   -37.61,
+   18.63
+  ],
+  "map": "de_mirage",
+  "name": "Kitchen door",
+  "grenade": "molotov",
+  "throw_type": "run",
+  "duck": false,
+  "description": "UP / UNSAFE"
+ },
+ {
+  "pos": [
+   -2061.5,
+   -611.95,
+   -167.97
+  ],
+  "ang": [
+   3.33,
+   71.16
+  ],
+  "map": "de_mirage",
+  "name": "Plant R wall",
+  "grenade": "he",
+  "throw_type": "normal",
+  "duck": false,
+  "description": "50HP"
+ },
+ {
+  "pos": [
+   -982.27,
+   285.28,
+   -167.86
+  ],
+  "ang": [
+   15.44,
+   -74.85
+  ],
+  "map": "de_mirage",
+  "name": "Connector",
+  "grenade": "he",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -1128.73,
+   229.23,
+   -171.93
+  ],
+  "ang": [
+   -11.23,
+   142.35
+  ],
+  "map": "de_mirage",
+  "name": "push",
+  "grenade": "molotov",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -990.48,
+   295.73,
+   -165.95
+  ],
+  "ang": [
+   -8.79,
+   -73.49
+  ],
+  "map": "de_mirage",
+  "name": "Stairs",
+  "grenade": "smoke",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -1044.05,
+   296.0,
+   -159.97
+  ],
+  "ang": [
+   -9.59,
+   -58.27
+  ],
+  "map": "de_mirage",
+  "name": "Chair",
+  "grenade": "he",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   1418.71,
+   34.75,
+   -167.97
+  ],
+  "ang": [
+   -27.23,
+   -165.97
+  ],
+  "map": "de_mirage",
+  "name": "Market Door",
+  "grenade": "smoke",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   1422.99,
+   34.83,
+   -167.97
+  ],
+  "ang": [
+   -26.16,
+   -166.36
+  ],
+  "map": "de_mirage",
+  "name": "Window",
+  "grenade": "smoke",
+  "throw_type": "run",
+  "duck": true,
+  "description": ""
+ },
+ {
+  "pos": [
+   1422.99,
+   34.83,
+   -167.97
+  ],
+  "ang": [
+   -22.8,
+   162.61
+  ],
+  "map": "de_mirage",
+  "name": "Window",
+  "grenade": "smoke",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   1422.99,
+   34.83,
+   -167.97
+  ],
+  "ang": [
+   -34.74,
+   -128.13
+  ],
+  "map": "de_mirage",
+  "name": "CT",
+  "grenade": "smoke",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -976.02,
+   313.57,
+   -367.97
+  ],
+  "ang": [
+   -18.38,
+   -118.21
+  ],
+  "map": "de_mirage",
+  "name": "Short",
+  "grenade": "molotov",
+  "throw_type": "normal",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -316.51,
+   517.39,
+   -80.17
+  ],
+  "ang": [
+   9.65,
+   -165.35
+  ],
+  "map": "de_mirage",
+  "name": "Door",
+  "grenade": "molotov",
+  "throw_type": "normal",
+  "duck": true,
+  "description": "bug"
+ },
+ {
+  "pos": [
+   -866.0,
+   372.08,
+   -358.63
+  ],
+  "ang": [
+   -30.3,
+   -166.39
+  ],
+  "map": "de_mirage",
+  "name": "Door",
+  "grenade": "molotov",
+  "throw_type": "normal",
+  "duck": true,
+  "description": ""
+ },
+ {
+  "pos": [
+   -2127.17,
+   -587.5,
+   -167.97
+  ],
+  "ang": [
+   -13.71,
+   53.75
+  ],
+  "map": "de_mirage",
+  "name": "Bombsite [Left]",
+  "grenade": "molotov",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -2127.27,
+   -587.49,
+   -167.97
+  ],
+  "ang": [
+   11.56,
+   53.6
+  ],
+  "map": "de_mirage",
+  "name": "Bombsite B [Left]",
+  "grenade": "he",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -1039.64,
+   306.9,
+   -367.97
+  ],
+  "ang": [
+   -35.22,
+   21.18
+  ],
+  "map": "de_mirage",
+  "name": "Fakeduck",
+  "grenade": "he",
+  "throw_type": "run",
+  "duck": false,
+  "description": "unsafe"
+ },
+ {
+  "pos": [
+   -1039.72,
+   307.2,
+   -367.97
+  ],
+  "ang": [
+   -35.22,
+   21.18
+  ],
+  "map": "de_mirage",
+  "name": "Fakeduck",
+  "grenade": "molotov",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   1422.97,
+   70.97,
+   -112.9
+  ],
+  "ang": [
+   -64.76,
+   -141.52
+  ],
+  "map": "de_mirage",
+  "name": "Jungle",
+  "grenade": "smoke",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   1422.98,
+   70.97,
+   -112.9
+  ],
+  "ang": [
+   -32.65,
+   -163.53
+  ],
+  "map": "de_mirage",
+  "name": "Cat",
+  "grenade": "smoke",
+  "throw_type": "normal",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   1182.72,
+   218.58,
+   -231.56
+  ],
+  "ang": [
+   5.15,
+   132.55
+  ],
+  "map": "de_mirage",
+  "name": "Oneway",
+  "grenade": "he",
+  "throw_type": "run",
+  "duck": false,
+  "description": "WALLBANG"
+ },
+ {
+  "pos": [
+   1182.7,
+   218.6,
+   -231.57
+  ],
+  "ang": [
+   -1.64,
+   132.57
+  ],
+  "map": "de_mirage",
+  "name": "Oneway",
+  "grenade": "molotov",
+  "throw_type": "run",
+  "duck": false,
+  "description": "WALLBANG"
+ },
+ {
+  "pos": [
+   -1872.54,
+   -247.97,
+   -163.91
+  ],
+  "ang": [
+   15.7,
+   -141.92
+  ],
+  "map": "de_mirage",
+  "name": "Kitchen",
+  "grenade": "smoke",
+  "throw_type": "normal",
+  "duck": false,
+  "description": "Oneway"
+ },
+ {
+  "pos": [
+   -539.65,
+   520.03,
+   -81.26
+  ],
+  "ang": [
+   -41.71,
+   -178.89
+  ],
+  "map": "de_mirage",
+  "name": "Bench",
+  "grenade": "smoke",
+  "throw_type": "normal",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -161.03,
+   576.04,
+   -69.9
+  ],
+  "ang": [
+   -8.16,
+   -154.48
+  ],
+  "map": "de_mirage",
+  "name": "Window",
+  "grenade": "smoke",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -595.42,
+   520.07,
+   -83.03
+  ],
+  "ang": [
+   -50.2,
+   171.48
+  ],
+  "map": "de_mirage",
+  "name": "Balcony",
+  "grenade": "smoke",
+  "throw_type": "normal",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -1264.13,
+   271.4,
+   -165.75
+  ],
+  "ang": [
+   -12.07,
+   151.79
+  ],
+  "map": "de_mirage",
+  "name": "Truck",
+  "grenade": "molotov",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -1038.03,
+   390.03,
+   -79.97
+  ],
+  "ang": [
+   -14.96,
+   -111.08
+  ],
+  "map": "de_mirage",
+  "name": "Car",
+  "grenade": "flash",
+  "throw_type": "normal",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -161.03,
+   612.86,
+   -71.97
+  ],
+  "ang": [
+   7.33,
+   -161.5
+  ],
+  "map": "de_mirage",
+  "name": "Underpass",
+  "grenade": "he",
+  "throw_type": "normal",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -732.43,
+   524.03,
+   -78.72
+  ],
+  "ang": [
+   -33.32,
+   140.99
+  ],
+  "map": "de_mirage",
+  "name": "Arch",
+  "grenade": "smoke",
+  "throw_type": "run",
+  "duck": false,
+  "description": "left"
+ },
+ {
+  "pos": [
+   -678.63,
+   553.6,
+   -83.87
+  ],
+  "ang": [
+   -60.07,
+   -102.65
+  ],
+  "map": "de_mirage",
+  "name": "Short",
+  "grenade": "molotov",
+  "throw_type": "normal",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   494.66,
+   583.6,
+   -124.0
+  ],
+  "ang": [
+   -53.8,
+   -176.55
+  ],
+  "map": "de_mirage",
+  "name": "B Arch",
+  "grenade": "smoke",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -2320.0,
+   -695.97,
+   -167.97
+  ],
+  "ang": [
+   -21.94,
+   87.38
+  ],
+  "map": "de_mirage",
+  "name": "Site",
+  "grenade": "flash",
+  "throw_type": "normal",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -161.03,
+   644.45,
+   -71.97
+  ],
+  "ang": [
+   13.27,
+   -152.23
+  ],
+  "map": "de_mirage",
+  "name": "Underpass Corner",
+  "grenade": "he",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -902.76,
+   479.97,
+   -367.97
+  ],
+  "ang": [
+   -6.53,
+   -112.7
+  ],
+  "map": "de_mirage",
+  "name": "Tunnel",
+  "grenade": "he",
+  "throw_type": "run",
+  "duck": false,
+  "description": "unsafe for up"
+ },
+ {
+  "pos": [
+   -902.74,
+   479.98,
+   -367.97
+  ],
+  "ang": [
+   -6.53,
+   -112.7
+  ],
+  "map": "de_mirage",
+  "name": "Tunnel",
+  "grenade": "molotov",
+  "throw_type": "run",
+  "duck": false,
+  "description": "unsafe for up"
+ },
+ {
+  "pos": [
+   -1326.44,
+   308.19,
+   -167.97
+  ],
+  "ang": [
+   -9.26,
+   141.5
+  ],
+  "map": "de_mirage",
+  "name": "Plant",
+  "grenade": "he",
+  "throw_type": "run",
+  "duck": false,
+  "description": "46HP"
+ },
+ {
+  "pos": [
+   -1326.44,
+   308.19,
+   -167.97
+  ],
+  "ang": [
+   -9.26,
+   141.5
+  ],
+  "map": "de_mirage",
+  "name": "Plant",
+  "grenade": "molotov",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -292.96,
+   651.05,
+   -79.91
+  ],
+  "ang": [
+   -38.38,
+   -168.91
+  ],
+  "map": "de_mirage",
+  "name": "B Bombsite",
+  "grenade": "smoke",
+  "throw_type": "normal",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -1265.35,
+   366.27,
+   -166.48
+  ],
+  "ang": [
+   12.55,
+   145.61
+  ],
+  "map": "de_mirage",
+  "name": "B Apps",
+  "grenade": "he",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -463.82,
+   641.89,
+   -80.81
+  ],
+  "ang": [
+   -48.38,
+   -115.03
+  ],
+  "map": "de_mirage",
+  "name": "Window",
+  "grenade": "smoke",
+  "throw_type": "normal",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -607.88,
+   615.94,
+   -78.98
+  ],
+  "ang": [
+   -34.47,
+   -112.23
+  ],
+  "map": "de_mirage",
+  "name": "Short",
+  "grenade": "he",
+  "throw_type": "run",
+  "duck": true,
+  "description": ""
+ },
+ {
+  "pos": [
+   -607.95,
+   615.95,
+   -78.98
+  ],
+  "ang": [
+   -34.47,
+   -112.23
+  ],
+  "map": "de_mirage",
+  "name": "Short",
+  "grenade": "flash",
+  "throw_type": "run",
+  "duck": true,
+  "description": ""
+ },
+ {
+  "pos": [
+   -623.92,
+   615.97,
+   -78.97
+  ],
+  "ang": [
+   -72.73,
+   -167.91
+  ],
+  "map": "de_mirage",
+  "name": "B Arch",
+  "grenade": "smoke",
+  "throw_type": "normal",
+  "duck": false,
+  "description": "Right"
+ },
+ {
+  "pos": [
+   -624.24,
+   615.99,
+   -78.97
+  ],
+  "ang": [
+   -51.6,
+   -109.42
+  ],
+  "map": "de_mirage",
+  "name": "Window",
+  "grenade": "smoke",
+  "throw_type": "normal",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -1435.97,
+   283.97,
+   -167.97
+  ],
+  "ang": [
+   -6.47,
+   -131.31
+  ],
+  "map": "de_mirage",
+  "name": "Kitchen",
+  "grenade": "smoke",
+  "throw_type": "normal",
+  "duck": false,
+  "description": "Oneway"
+ },
+ {
+  "pos": [
+   -1068.41,
+   478.51,
+   -79.97
+  ],
+  "ang": [
+   -8.84,
+   36.51
+  ],
+  "map": "de_mirage",
+  "name": "Tunnel Stairs",
+  "grenade": "molotov",
+  "throw_type": "normal",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -1068.4,
+   478.52,
+   -79.97
+  ],
+  "ang": [
+   -8.84,
+   36.51
+  ],
+  "map": "de_mirage",
+  "name": "Tunnel Stairs",
+  "grenade": "he",
+  "throw_type": "normal",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -216.49,
+   692.29,
+   -99.98
+  ],
+  "ang": [
+   11.72,
+   -141.4
+  ],
+  "map": "de_mirage",
+  "name": "Underpass",
+  "grenade": "molotov",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -1008.03,
+   520.03,
+   -79.97
+  ],
+  "ang": [
+   -5.72,
+   142.89
+  ],
+  "map": "de_mirage",
+  "name": "B Bombsite",
+  "grenade": "flash",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -369.21,
+   687.1,
+   -79.97
+  ],
+  "ang": [
+   -49.26,
+   -99.13
+  ],
+  "map": "de_mirage",
+  "name": "Connector",
+  "grenade": "smoke",
+  "throw_type": "normal",
+  "duck": true,
+  "description": ""
+ },
+ {
+  "pos": [
+   1168.63,
+   415.22,
+   -262.65
+  ],
+  "ang": [
+   -21.11,
+   -84.83
+  ],
+  "map": "de_mirage",
+  "name": "Palace",
+  "grenade": "molotov",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   447.97,
+   679.97,
+   -165.97
+  ],
+  "ang": [
+   -50.93,
+   -113.19
+  ],
+  "map": "de_mirage",
+  "name": "CT",
+  "grenade": "smoke",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   459.99,
+   680.0,
+   -123.97
+  ],
+  "ang": [
+   -43.58,
+   179.52
+  ],
+  "map": "de_mirage",
+  "name": "Apartment Balcony",
+  "grenade": "smoke",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -784.01,
+   623.97,
+   -75.97
+  ],
+  "ang": [
+   -56.8,
+   -158.06
+  ],
+  "map": "de_mirage",
+  "name": "Back of B",
+  "grenade": "smoke",
+  "throw_type": "normal",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -784.01,
+   623.97,
+   -75.97
+  ],
+  "ang": [
+   -60.94,
+   -151.42
+  ],
+  "map": "de_mirage",
+  "name": "Kitchen Window",
+  "grenade": "smoke",
+  "throw_type": "normal",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -161.03,
+   728.35,
+   -71.97
+  ],
+  "ang": [
+   -38.05,
+   -96.34
+  ],
+  "map": "de_mirage",
+  "name": "A Spot",
+  "grenade": "smoke",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -161.03,
+   728.35,
+   -71.97
+  ],
+  "ang": [
+   -39.57,
+   -179.46
+  ],
+  "map": "de_mirage",
+  "name": "Car",
+  "grenade": "smoke",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   496.03,
+   679.97,
+   -135.97
+  ],
+  "ang": [
+   -35.76,
+   -115.82
+  ],
+  "map": "de_mirage",
+  "name": "Stairs",
+  "grenade": "smoke",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   496.03,
+   679.97,
+   -135.97
+  ],
+  "ang": [
+   -45.7,
+   -165.33
+  ],
+  "map": "de_mirage",
+  "name": "B Arch",
+  "grenade": "smoke",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   625.29,
+   657.07,
+   -135.97
+  ],
+  "ang": [
+   -2.7,
+   -137.51
+  ],
+  "map": "de_mirage",
+  "name": "Mid",
+  "grenade": "flash",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -871.57,
+   613.9,
+   -79.77
+  ],
+  "ang": [
+   -66.39,
+   -139.49
+  ],
+  "map": "de_mirage",
+  "name": "Window",
+  "grenade": "smoke",
+  "throw_type": "run",
+  "duck": false,
+  "description": "Oneway"
+ },
+ {
+  "pos": [
+   -1024.04,
+   620.77,
+   -79.97
+  ],
+  "ang": [
+   -7.74,
+   169.5
+  ],
+  "map": "de_mirage",
+  "name": "Car",
+  "grenade": "molotov",
+  "throw_type": "run",
+  "duck": false,
+  "description": "semi-safe"
+ },
+ {
+  "pos": [
+   -1024.06,
+   621.06,
+   -79.97
+  ],
+  "ang": [
+   -6.7,
+   169.61
+  ],
+  "map": "de_mirage",
+  "name": "Car",
+  "grenade": "he",
+  "throw_type": "run",
+  "duck": false,
+  "description": "semi-safe"
+ },
+ {
+  "pos": [
+   -1165.97,
+   568.98,
+   -79.97
+  ],
+  "ang": [
+   -3.57,
+   -80.9
+  ],
+  "map": "de_mirage",
+  "name": "Car",
+  "grenade": "flash",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -1106.02,
+   599.2,
+   -79.97
+  ],
+  "ang": [
+   -7.9,
+   -171.29
+  ],
+  "map": "de_mirage",
+  "name": "Car",
+  "grenade": "he",
+  "throw_type": "run",
+  "duck": false,
+  "description": "UNSAFE"
+ },
+ {
+  "pos": [
+   -1106.18,
+   599.79,
+   -79.97
+  ],
+  "ang": [
+   -4.44,
+   -171.01
+  ],
+  "map": "de_mirage",
+  "name": "Car",
+  "grenade": "molotov",
+  "throw_type": "run",
+  "duck": false,
+  "description": "unsafe"
+ },
+ {
+  "pos": [
+   -36.23,
+   821.32,
+   -134.97
+  ],
+  "ang": [
+   -8.64,
+   -150.74
+  ],
+  "map": "de_mirage",
+  "name": "under",
+  "grenade": "molotov",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   886.68,
+   679.98,
+   -236.68
+  ],
+  "ang": [
+   -47.92,
+   -143.98
+  ],
+  "map": "de_mirage",
+  "name": "Lower Mid",
+  "grenade": "molotov",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   895.94,
+   679.93,
+   -236.69
+  ],
+  "ang": [
+   -49.02,
+   -144.75
+  ],
+  "map": "de_mirage",
+  "name": "TOP MID FD",
+  "grenade": "molotov",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -1129.58,
+   627.19,
+   -79.97
+  ],
+  "ang": [
+   3.16,
+   -12.49
+  ],
+  "map": "de_mirage",
+  "name": "Underpass",
+  "grenade": "molotov",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -1129.58,
+   627.19,
+   -79.97
+  ],
+  "ang": [
+   3.16,
+   -12.49
+  ],
+  "map": "de_mirage",
+  "name": "Underpass",
+  "grenade": "he",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -1862.97,
+   176.02,
+   -159.97
+  ],
+  "ang": [
+   -42.82,
+   21.95
+  ],
+  "map": "de_mirage",
+  "name": "Alley",
+  "grenade": "smoke",
+  "throw_type": "normal",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -2313.88,
+   -255.91,
+   -167.97
+  ],
+  "ang": [
+   -21.76,
+   52.77
+  ],
+  "map": "de_mirage",
+  "name": "B Apps",
+  "grenade": "he",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -2313.93,
+   -255.89,
+   -167.97
+  ],
+  "ang": [
+   -24.7,
+   52.64
+  ],
+  "map": "de_mirage",
+  "name": "B Apps",
+  "grenade": "molotov",
+  "throw_type": "normal",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -2001.03,
+   105.02,
+   -89.97
+  ],
+  "ang": [
+   -4.69,
+   55.05
+  ],
+  "map": "de_mirage",
+  "name": "B Apps",
+  "grenade": "molotov",
+  "throw_type": "normal",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -160.03,
+   887.97,
+   -135.33
+  ],
+  "ang": [
+   -36.5,
+   -101.47
+  ],
+  "map": "de_mirage",
+  "name": "A Jungle",
+  "grenade": "smoke",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -160.03,
+   887.97,
+   -135.33
+  ],
+  "ang": [
+   -54.86,
+   -120.49
+  ],
+  "map": "de_mirage",
+  "name": "Middle Window",
+  "grenade": "smoke",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -160.03,
+   887.97,
+   -135.33
+  ],
+  "ang": [
+   -69.6,
+   -120.61
+  ],
+  "map": "de_mirage",
+  "name": "Short",
+  "grenade": "smoke",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -160.03,
+   887.97,
+   -135.33
+  ],
+  "ang": [
+   -58.86,
+   -159.51
+  ],
+  "map": "de_mirage",
+  "name": "B Site",
+  "grenade": "smoke",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -160.03,
+   887.97,
+   -135.33
+  ],
+  "ang": [
+   -45.01,
+   -152.88
+  ],
+  "map": "de_mirage",
+  "name": "Market Door",
+  "grenade": "smoke",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -160.03,
+   887.97,
+   -135.33
+  ],
+  "ang": [
+   -50.38,
+   -146.49
+  ],
+  "map": "de_mirage",
+  "name": "Market Window",
+  "grenade": "smoke",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -160.03,
+   887.98,
+   -135.27
+  ],
+  "ang": [
+   -44.56,
+   -134.52
+  ],
+  "map": "de_mirage",
+  "name": "B Short",
+  "grenade": "smoke",
+  "throw_type": "normal",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   1359.3,
+   519.97,
+   -258.4
+  ],
+  "ang": [
+   -75.99,
+   -130.96
+  ],
+  "map": "de_mirage",
+  "name": "Stairs",
+  "grenade": "smoke",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -1158.52,
+   674.34,
+   -79.97
+  ],
+  "ang": [
+   -4.89,
+   -24.48
+  ],
+  "map": "de_mirage",
+  "name": "Window",
+  "grenade": "molotov",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -1158.53,
+   674.34,
+   -79.97
+  ],
+  "ang": [
+   -5.51,
+   -24.43
+  ],
+  "map": "de_mirage",
+  "name": "Window",
+  "grenade": "he",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -351.97,
+   887.97,
+   -124.97
+  ],
+  "ang": [
+   -39.91,
+   -98.97
+  ],
+  "map": "de_mirage",
+  "name": "A CT",
+  "grenade": "smoke",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   1135.97,
+   647.98,
+   -261.33
+  ],
+  "ang": [
+   -28.57,
+   -140.28
+  ],
+  "map": "de_mirage",
+  "name": "Connector",
+  "grenade": "smoke",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   1135.97,
+   647.98,
+   -261.39
+  ],
+  "ang": [
+   -25.7,
+   -163.04
+  ],
+  "map": "de_mirage",
+  "name": "Short",
+  "grenade": "smoke",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   1135.99,
+   647.97,
+   -261.39
+  ],
+  "ang": [
+   -43.86,
+   -156.65
+  ],
+  "map": "de_mirage",
+  "name": "Short",
+  "grenade": "smoke",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   1135.97,
+   648.0,
+   -261.38
+  ],
+  "ang": [
+   -20.43,
+   -163.92
+  ],
+  "map": "de_mirage",
+  "name": "Market Window",
+  "grenade": "smoke",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -459.97,
+   887.99,
+   -71.97
+  ],
+  "ang": [
+   -37.57,
+   -91.08
+  ],
+  "map": "de_mirage",
+  "name": "A Stairs",
+  "grenade": "smoke",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -2411.97,
+   -247.97,
+   -164.74
+  ],
+  "ang": [
+   5.51,
+   55.76
+  ],
+  "map": "de_mirage",
+  "name": "B Apartaments",
+  "grenade": "molotov",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -2199.55,
+   23.97,
+   -167.97
+  ],
+  "ang": [
+   -14.13,
+   -76.63
+  ],
+  "map": "de_mirage",
+  "name": "B Site",
+  "grenade": "flash",
+  "throw_type": "normal",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -1863.97,
+   335.97,
+   -159.97
+  ],
+  "ang": [
+   -45.5,
+   -68.28
+  ],
+  "map": "de_mirage",
+  "name": "A CT",
+  "grenade": "smoke",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -1863.97,
+   335.97,
+   -159.97
+  ],
+  "ang": [
+   -31.19,
+   -51.15
+  ],
+  "map": "de_mirage",
+  "name": "Palace",
+  "grenade": "smoke",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -1359.97,
+   664.03,
+   -79.97
+  ],
+  "ang": [
+   -4.9,
+   139.82
+  ],
+  "map": "de_mirage",
+  "name": "B Site",
+  "grenade": "flash",
+  "throw_type": "normal",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -2199.97,
+   88.04,
+   -159.97
+  ],
+  "ang": [
+   -24.44,
+   7.71
+  ],
+  "map": "de_mirage",
+  "name": "Kitchen Door",
+  "grenade": "flash",
+  "throw_type": "normal",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -1471.97,
+   664.03,
+   -47.97
+  ],
+  "ang": [
+   -7.07,
+   113.41
+  ],
+  "map": "de_mirage",
+  "name": "B Site",
+  "grenade": "flash",
+  "throw_type": "normal",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -1284.23,
+   759.39,
+   -79.97
+  ],
+  "ang": [
+   -5.39,
+   -163.66
+  ],
+  "map": "de_mirage",
+  "name": "Back Right Wall",
+  "grenade": "he",
+  "throw_type": "normal",
+  "duck": true,
+  "description": ""
+ },
+ {
+  "pos": [
+   -1377.83,
+   731.1,
+   -79.97
+  ],
+  "ang": [
+   -0.83,
+   -163.86
+  ],
+  "map": "de_mirage",
+  "name": "Bench",
+  "grenade": "molotov",
+  "throw_type": "normal",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -2415.97,
+   -115.76,
+   -157.97
+  ],
+  "ang": [
+   -17.47,
+   24.73
+  ],
+  "map": "de_mirage",
+  "name": "B Apartments Entrance",
+  "grenade": "smoke",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -2416.0,
+   -115.76,
+   -157.97
+  ],
+  "ang": [
+   -28.17,
+   44.12
+  ],
+  "map": "de_mirage",
+  "name": "B Apartments",
+  "grenade": "smoke",
+  "throw_type": "normal",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -1520.03,
+   680.03,
+   -47.97
+  ],
+  "ang": [
+   -6.11,
+   105.38
+  ],
+  "map": "de_mirage",
+  "name": "Kitchen Window",
+  "grenade": "smoke",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -1520.03,
+   680.1,
+   -47.97
+  ],
+  "ang": [
+   -3.56,
+   102.89
+  ],
+  "map": "de_mirage",
+  "name": "B Site",
+  "grenade": "flash",
+  "throw_type": "normal",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -1987.03,
+   372.72,
+   -159.97
+  ],
+  "ang": [
+   -6.18,
+   131.3
+  ],
+  "map": "de_mirage",
+  "name": "B Apps",
+  "grenade": "flash",
+  "throw_type": "normal",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -1347.67,
+   815.97,
+   -79.97
+  ],
+  "ang": [
+   -7.59,
+   -149.71
+  ],
+  "map": "de_mirage",
+  "name": "Plant [FD]",
+  "grenade": "molotov",
+  "throw_type": "run",
+  "duck": false,
+  "description": "Fakeduck"
+ },
+ {
+  "pos": [
+   -1382.55,
+   800.28,
+   -78.27
+  ],
+  "ang": [
+   -4.66,
+   -148.55
+  ],
+  "map": "de_mirage",
+  "name": "FD spot",
+  "grenade": "he",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -2327.54,
+   91.74,
+   -167.97
+  ],
+  "ang": [
+   -19.13,
+   43.53
+  ],
+  "map": "de_mirage",
+  "name": "Short",
+  "grenade": "molotov",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -1367.97,
+   815.99,
+   -79.97
+  ],
+  "ang": [
+   -3.81,
+   -160.38
+  ],
+  "map": "de_mirage",
+  "name": "Short",
+  "grenade": "smoke",
+  "throw_type": "normal",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -1401.78,
+   807.96,
+   -65.45
+  ],
+  "ang": [
+   -7.96,
+   -144.84
+  ],
+  "map": "de_mirage",
+  "name": "Back Left Wall",
+  "grenade": "molotov",
+  "throw_type": "normal",
+  "duck": true,
+  "description": ""
+ },
+ {
+  "pos": [
+   -1422.17,
+   807.96,
+   -51.86
+  ],
+  "ang": [
+   5.28,
+   -141.73
+  ],
+  "map": "de_mirage",
+  "name": "Pillar",
+  "grenade": "molotov",
+  "throw_type": "run",
+  "duck": false,
+  "description": "SAFE"
+ },
+ {
+  "pos": [
+   -1422.17,
+   807.96,
+   -51.85
+  ],
+  "ang": [
+   5.28,
+   -141.73
+  ],
+  "map": "de_mirage",
+  "name": "Pillar",
+  "grenade": "he",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -2351.41,
+   274.64,
+   -166.97
+  ],
+  "ang": [
+   -22.67,
+   23.63
+  ],
+  "map": "de_mirage",
+  "name": "push",
+  "grenade": "molotov",
+  "throw_type": "normal",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -1952.03,
+   650.89,
+   -43.97
+  ],
+  "ang": [
+   0.25,
+   -112.93
+  ],
+  "map": "de_mirage",
+  "name": "Kitchen Door",
+  "grenade": "molotov",
+  "throw_type": "run",
+  "duck": false,
+  "description": "Deep (you will fall after throw)"
+ },
+ {
+  "pos": [
+   -1952.03,
+   651.14,
+   -43.97
+  ],
+  "ang": [
+   -12.88,
+   -87.54
+  ],
+  "map": "de_mirage",
+  "name": "Kitchen Window",
+  "grenade": "molotov",
+  "throw_type": "run",
+  "duck": false,
+  "description": "you will fall after throw"
+ },
+ {
+  "pos": [
+   -1952.06,
+   691.34,
+   -47.97
+  ],
+  "ang": [
+   0.97,
+   -85.29
+  ],
+  "map": "de_mirage",
+  "name": "Kitchen Window",
+  "grenade": "he",
+  "throw_type": "run",
+  "duck": false,
+  "description": "U WILL FALL AFTER THROW"
+ },
+ {
+  "pos": [
+   -2473.11,
+   243.8,
+   -92.97
+  ],
+  "ang": [
+   8.31,
+   26.3
+  ],
+  "map": "de_mirage",
+  "name": "B Apps",
+  "grenade": "molotov",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -1793.29,
+   840.0,
+   -47.97
+  ],
+  "ang": [
+   6.24,
+   -50.61
+  ],
+  "map": "de_mirage",
+  "name": "Short",
+  "grenade": "smoke",
+  "throw_type": "normal",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -2074.05,
+   654.47,
+   -43.97
+  ],
+  "ang": [
+   -7.0,
+   -17.88
+  ],
+  "map": "de_mirage",
+  "name": "Top Mid",
+  "grenade": "molotov",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -2114.03,
+   706.46,
+   -134.96
+  ],
+  "ang": [
+   -1.55,
+   173.0
+  ],
+  "map": "de_mirage",
+  "name": "B Apartments",
+  "grenade": "flash",
+  "throw_type": "normal",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -2391.91,
+   597.27,
+   -127.97
+  ],
+  "ang": [
+   -42.61,
+   16.19
+  ],
+  "map": "de_mirage",
+  "name": "B Apartments",
+  "grenade": "flash",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -2114.01,
+   830.58,
+   -121.58
+  ],
+  "ang": [
+   -63.69,
+   32.03
+  ],
+  "map": "de_mirage",
+  "name": "B Apartments",
+  "grenade": "flash",
+  "throw_type": "normal",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -2130.6,
+   828.57,
+   -123.04
+  ],
+  "ang": [
+   14.06,
+   -26.46
+  ],
+  "map": "de_mirage",
+  "name": "Short Corner",
+  "grenade": "molotov",
+  "throw_type": "run",
+  "duck": true,
+  "description": ""
+ },
+ {
+  "pos": [
+   -2258.06,
+   783.58,
+   -125.97
+  ],
+  "ang": [
+   -5.02,
+   -25.03
+  ],
+  "map": "de_mirage",
+  "name": "Short",
+  "grenade": "molotov",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -2258.07,
+   783.6,
+   -125.98
+  ],
+  "ang": [
+   -5.48,
+   -24.85
+  ],
+  "map": "de_mirage",
+  "name": "Short",
+  "grenade": "he",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -2655.97,
+   447.97,
+   -167.87
+  ],
+  "ang": [
+   -65.63,
+   -42.09
+  ],
+  "map": "de_mirage",
+  "name": "Jungle",
+  "grenade": "smoke",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -2316.07,
+   795.84,
+   -123.68
+  ],
+  "ang": [
+   -5.17,
+   -23.08
+  ],
+  "map": "de_mirage",
+  "name": "Short Corner",
+  "grenade": "molotov",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -2316.07,
+   795.84,
+   -123.68
+  ],
+  "ang": [
+   8.84,
+   -70.34
+  ],
+  "map": "de_mirage",
+  "name": "Kitchen",
+  "grenade": "molotov",
+  "throw_type": "run",
+  "duck": true,
+  "description": "Start"
+ },
+ {
+  "pos": [
+   -2600.02,
+   535.97,
+   -159.97
+  ],
+  "ang": [
+   -16.58,
+   -50.82
+  ],
+  "map": "de_mirage",
+  "name": "Kitchen",
+  "grenade": "smoke",
+  "throw_type": "normal",
+  "duck": false,
+  "description": "Oneway"
+ },
+ {
+  "pos": [
+   -2325.22,
+   811.77,
+   -119.84
+  ],
+  "ang": [
+   -20.16,
+   -50.81
+  ],
+  "map": "de_mirage",
+  "name": "Stairs",
+  "grenade": "smoke",
+  "throw_type": "run",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -2325.23,
+   811.78,
+   -119.84
+  ],
+  "ang": [
+   -14.88,
+   -94.34
+  ],
+  "map": "de_mirage",
+  "name": "Kitchen Door",
+  "grenade": "smoke",
+  "throw_type": "normal",
+  "duck": false,
+  "description": ""
+ },
+ {
+  "pos": [
+   -2364.14,
+   808.31,
+   -80.26
+  ],
+  "ang": [
+   -10.1,
+   -160.89
+  ],
+  "map": "de_mirage",
+  "name": "Car",
+  "grenade": "smoke",
+  "throw_type": "run",
+  "duck": false,
+  "description": "Oneway"
+ },
+ {
+  "pos": [
+   -174.61,
+   -2302.91,
+   -167.97
+  ],
+  "ang": [
+   9.72,
+   64.35
+  ],
+  "map": "de_mirage",
+  "name": "Palace",
+  "grenade": "he",
+  "throw_type": "jump",
+  "duck": false,
+  "description": "Custom"
+ },
+ {
+  "pos": [
+   -880.61,
+   -2266.8,
+   -170.9
+  ],
+  "ang": [
+   1.0,
+   33.3
+  ],
+  "map": "de_mirage",
+  "name": "ESPRIP",
+  "grenade": "smoke",
+  "throw_type": "run",
+  "duck": false,
+  "description": "Custom"
+ },
+ {
+  "pos": [
+   -972.3,
+   -2454.68,
+   -167.97
+  ],
+  "ang": [
+   0.0,
+   0.0
+  ],
+  "map": "de_mirage",
+  "name": "ESP RIP",
+  "grenade": "smoke",
+  "throw_type": "run",
+  "duck": false,
+  "description": "Custom"
+ },
+ {
+  "pos": [
+   -288.87,
+   -2099.3,
+   -100.97
+  ],
+  "ang": [
+   0.0,
+   0.0
+  ],
+  "map": "de_mirage",
+  "name": "Pit [FD]",
+  "grenade": "smoke",
+  "throw_type": "run",
+  "duck": false,
+  "description": "Custom"
+ },
+ {
+  "pos": [
+   87.67,
+   -1717.99,
+   -167.97
+  ],
+  "ang": [
+   0.3,
+   -147.3
+  ],
+  "map": "de_mirage",
+  "name": "CT FD",
+  "grenade": "smoke",
+  "throw_type": "run",
+  "duck": false,
+  "description": "Custom"
+ },
+ {
+  "pos": [
+   -775.89,
+   -1174.34,
+   -120.18
+  ],
+  "ang": [
+   -3.6,
+   -51.5
+  ],
+  "map": "de_mirage",
+  "name": "Palace [FD]",
+  "grenade": "smoke",
+  "throw_type": "run",
+  "duck": false,
+  "description": "Custom"
+ },
+ {
+  "pos": [
+   -2005.05,
+   70.95,
+   -89.97
+  ],
+  "ang": [
+   -0.1,
+   51.2
+  ],
+  "map": "de_mirage",
+  "name": "Palace [FD]",
+  "grenade": "smoke",
+  "throw_type": "run",
+  "duck": false,
+  "description": "Custom"
+ },
+ {
+  "pos": [
+   -2294.49,
+   773.73,
+   -126.22
+  ],
+  "ang": [
+   -1.2,
+   -1.2
+  ],
+  "map": "de_mirage",
+  "name": "Palace [FD]",
+  "grenade": "smoke",
+  "throw_type": "run",
+  "duck": false,
+  "description": "Custom"
+ },
+ {
+  "pos": [
+   318.69,
+   766.03,
+   -135.97
+  ],
+  "ang": [
+   5.4,
+   -96.3
+  ],
+  "map": "de_mirage",
+  "name": "One-Way",
+  "grenade": "smoke",
+  "throw_type": "run",
+  "duck": false,
+  "description": "Custom"
+ },
+ {
+  "pos": [
+   -1161.7,
+   288.05,
+   -164.92
+  ],
+  "ang": [
+   18.0,
+   25.8
+  ],
+  "map": "de_mirage",
+  "name": "Stairs",
+  "grenade": "smoke",
+  "throw_type": "run",
+  "duck": false,
+  "description": "Custom"
+ }
+]
