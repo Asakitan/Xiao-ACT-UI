@@ -738,6 +738,14 @@ class PluginRecord:
     added_sys_paths: list[str] = field(default_factory=list)
     #: {dist: 'libs'|'vendor'|'pip→libs'|'site(fallback)'|'missing'} after deps bootstrap.
     deps_summary: dict[str, str] = field(default_factory=dict)
+    #: True for workshop-built "closed source" plugins: entry is an AES-GCM
+    #: encrypted native ``.pyd`` blob, decrypted+loaded via act_platform.protect.
+    protected: bool = False
+    #: Relative path (inside the plugin dir) to the encrypted native blob.
+    native_entry: str = ""
+    #: ``sysconfig.get_config_var("EXT_SUFFIX")`` of the build server's Python —
+    #: must match this host's interpreter for the .pyd to be ABI-loadable.
+    native_abi: str = ""
 
     def localized_name(self, locale: Any = "") -> str:
         value = _localized_value(self.locales, locale, "name", self.name)
@@ -1426,6 +1434,50 @@ class PluginContext:
         layer.set_input_callbacks(
             cursor_pos_fn, cursor_leave_fn, mouse_button_fn, scroll_fn,
         )
+
+    def set_compositor_layer_input_proxy(self, name: str, enabled: bool = True) -> bool:
+        """Attach (or remove) a Tk input proxy for an interactive layer.
+
+        A ``click_through=False`` layer with no input proxy forces the whole
+        full-screen overlay host to stop passing clicks through, so the entire
+        desktop stops responding. The proxy is a tiny transparent Tk window
+        pinned to the layer's rect that routes real clicks into the layer's
+        input callbacks, while the host stays click-through everywhere else.
+        Runs the Tk work on the main thread; safe to call from any thread.
+        """
+        layers = getattr(self, "_compositor_layers", None)
+        if not layers:
+            return False
+        layer = layers.get(str(name))
+        if layer is None:
+            return False
+        owner = self.owner
+        root = getattr(owner, "root", None) if owner is not None else None
+        if root is None:
+            return False
+        overlay = self._get_compositor_overlay()
+
+        def _apply():
+            try:
+                if enabled:
+                    layer.create_input_proxy(root)
+                    layer.sync_input_proxy()
+                else:
+                    layer.destroy_input_proxy()
+                if overlay is not None:
+                    overlay.force_host_input_passthrough()
+            except Exception:
+                pass
+
+        after = getattr(root, "after", None)
+        if callable(after):
+            try:
+                after(0, _apply)
+                return True
+            except Exception:
+                pass
+        _apply()
+        return True
 
     def _cleanup_compositor_layers(self) -> None:
         """Destroy all compositor layers owned by this plugin."""
@@ -3229,6 +3281,9 @@ class PluginManager:
             settings_schema=manifest.get("settings_schema") if isinstance(manifest.get("settings_schema"), dict) else {},
             sao_menu=_normalize_sao_menu(manifest.get("sao_menu")),
             locales=locales,
+            protected=bool(manifest.get("protected", False)),
+            native_entry=str(manifest.get("native_entry") or ""),
+            native_abi=str(manifest.get("native_abi") or ""),
         )
 
     def _prepare_plugin_sys_path(self, record: PluginRecord) -> None:
@@ -3258,8 +3313,10 @@ class PluginManager:
                 record.added_sys_paths.append(path)
 
     def _load_module(self, record: PluginRecord) -> ModuleType:
-        entry_path = os.path.abspath(os.path.join(record.path, record.entry))
         module_name = f"act_plugin_{record.plugin_id.replace('-', '_').replace('.', '_')}"
+        if record.protected:
+            return self._load_protected_module(record, module_name)
+        entry_path = os.path.abspath(os.path.join(record.path, record.entry))
         if module_name in sys.modules:
             del sys.modules[module_name]
         spec = importlib.util.spec_from_file_location(module_name, entry_path)
@@ -3269,6 +3326,41 @@ class PluginManager:
         sys.modules[module_name] = module
         spec.loader.exec_module(module)
         return module
+
+    def _load_protected_module(self, record: PluginRecord, module_name: str) -> ModuleType:
+        """Fetch this build's content key from the workshop server, decrypt the
+        native ``.pyd`` blob in memory and load it. Requires network — a
+        closed-source workshop plugin is only ever readable while the app is
+        running and talking to the server, never as static bytes on disk.
+        """
+        native_entry = record.native_entry or record.entry
+        blob_path = os.path.abspath(os.path.join(record.path, native_entry))
+        if not os.path.isfile(blob_path):
+            raise FileNotFoundError(f"protected plugin blob missing: {blob_path}")
+
+        import sysconfig
+        local_abi = sysconfig.get_config_var("EXT_SUFFIX") or ""
+        if record.native_abi and record.native_abi != local_abi:
+            raise RuntimeError(
+                f"插件 {record.plugin_id} 的原生构建 ABI ({record.native_abi}) "
+                f"与本机 Python ({local_abi}) 不匹配，请更新到匹配版本的客户端")
+
+        from workshop.client import WorkshopClient
+        from workshop.app import _get_server_url, _get_api_key, _is_paid_user, get_workshop_token
+        client = WorkshopClient(
+            base_url=_get_server_url(),
+            api_key=_get_api_key(),
+            is_paid=_is_paid_user(),
+            workshop_token=get_workshop_token(),
+        )
+        try:
+            content_key = client.fetch_content_key(record.plugin_id, record.version)
+        except Exception as exc:
+            raise RuntimeError(
+                f"无法从服务器获取插件密钥 (需要联网): {record.plugin_id} — {exc}") from exc
+
+        from act_platform.protect.native_loader import load_protected_module
+        return load_protected_module(module_name, blob_path, content_key)
 
     def _load_script_module(self, record: PluginRecord) -> ModuleType:
         """Load a non-Python plugin via its language's ScriptRuntime."""

@@ -119,13 +119,19 @@ def install_plugin_archive(archive_path: str, user_plugins_dir: str, *,
         if not plugin_id:
             return {"ok": False, "message": "plugin.json 缺少有效的 id", "errors": ["invalid plugin id"]}
 
-        entry = str(manifest.get("entry") or "plugin.py").strip() or "plugin.py"
-        entry_abs = os.path.abspath(os.path.join(root, entry))
-        if not _is_within(root, entry_abs):
+        # 受保护(native+加密)构建：真正随包的是 native_entry 指向的加密 blob，
+        # entry 只是留作展示的语义名，源码文件在服务端构建时已被删除。
+        protected = bool(manifest.get("protected", False))
+        check_name = str(manifest.get("native_entry") or "").strip() if protected else ""
+        if not check_name:
+            check_name = str(manifest.get("entry") or "plugin.py").strip() or "plugin.py"
+        check_abs = os.path.abspath(os.path.join(root, check_name))
+        if not _is_within(root, check_abs):
             return {"ok": False, "id": plugin_id, "message": "entry 越出插件目录",
                     "errors": ["entry escapes plugin dir"]}
-        if not os.path.isfile(entry_abs):
-            return {"ok": False, "id": plugin_id, "message": f"入口文件缺失: {entry}",
+        if not os.path.isfile(check_abs):
+            missing_kind = "受保护构建文件" if protected else "入口文件"
+            return {"ok": False, "id": plugin_id, "message": f"{missing_kind}缺失: {check_name}",
                     "errors": ["entry file missing"]}
 
         target = os.path.join(user_plugins_dir, plugin_id)

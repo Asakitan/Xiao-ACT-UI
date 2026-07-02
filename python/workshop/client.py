@@ -24,6 +24,15 @@ def _get_json(url: str, timeout: float = _TIMEOUT) -> dict:
         return json.loads(resp.read().decode("utf-8"))
 
 
+def _get_json_auth(url: str, api_key: str, is_paid: bool = False, timeout: float = _TIMEOUT) -> dict:
+    headers = {"User-Agent": _UA, "Accept": "application/json", "X-API-Key": api_key}
+    if is_paid:
+        headers["X-Paid-User"] = "true"
+    req = urllib.request.Request(url, headers=headers)
+    with urllib.request.urlopen(req, timeout=timeout) as resp:
+        return json.loads(resp.read().decode("utf-8"))
+
+
 def _post_json(url: str, api_key: str, body: bytes = b"",
                content_type: str = "application/octet-stream",
                timeout: float = _TIMEOUT) -> dict:
@@ -131,6 +140,7 @@ class WorkshopClient:
             "minimum_app_version": metadata.get("minimum_app_version", ""),
             "requires": json.dumps(metadata.get("requires", [])),
             "permissions": json.dumps(metadata.get("permissions", [])),
+            "open_source": "true" if metadata.get("open_source", True) else "false",
         }
 
         token = self.workshop_token or self.api_key
@@ -157,3 +167,26 @@ class WorkshopClient:
 
         complete_qs = urllib.parse.urlencode({"upload_id": upload_id})
         return _post_json(f"{self.base}/api/workshop/publish/complete?{complete_qs}", token)
+
+    def fetch_content_key(self, plugin_id: str, version: str = "") -> bytes:
+        """Fetch the AES-256 content key for a closed-source (protected) plugin
+        build. Requires network + a valid workshop token every call — no local
+        caching by design: a protected plugin is only ever decryptable while
+        the app is live and talking to the server.
+        """
+        import base64
+        params = {}
+        if version:
+            params["version"] = version
+        qs = urllib.parse.urlencode(params) if params else ""
+        url = f"{self.base}/api/workshop/key/{urllib.parse.quote(plugin_id)}"
+        if qs:
+            url += f"?{qs}"
+        token = self.workshop_token or self.api_key
+        resp = _get_json_auth(url, token, is_paid=self.is_paid)
+        if not resp.get("ok"):
+            raise RuntimeError(resp.get("detail") or "key fetch failed")
+        key = base64.b64decode(resp["key_b64"])
+        if len(key) != 32:
+            raise ValueError(f"unexpected content key length: {len(key)}")
+        return key

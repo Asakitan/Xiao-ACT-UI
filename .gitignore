@@ -91,6 +91,13 @@ license_tool.py
 *.license
 license.db
 
+# —— Plugin native protection (encryption/anti-tamper, local only, never commit) ──
+python/act_platform/protect/
+python/update_host/build_service.py
+python/update_host/toolchain_bootstrap.py
+*.pyd.sao
+*.native_cache/
+
 # ── AI Editor (user conversation history, local only) ──
 python/ai_editor_history/
 python/.sao/chat_history/

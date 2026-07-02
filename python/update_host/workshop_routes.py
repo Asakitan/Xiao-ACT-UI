@@ -23,13 +23,26 @@ _AUTH_FN = None
 _ACTIVE_UPLOADS: dict = {}
 _UPLOAD_TTL = 600
 _CHUNK_DIR: str = ""
+#: Sibling of ``release_dir`` (NOT a subdirectory) — the ``/downloads`` static
+#: mount only serves ``release_dir`` and below, so this stays unreachable over
+#: HTTP no matter what ends up in it. Holds: raw source zips for closed-source
+#: plugins + their AES content keys. Never referenced by any download route.
+_WORKSHOP_PRIVATE_DIR: str = ""
 
 
 def init_workshop(release_dir: str, auth_fn):
-    global _WORKSHOP_DIR, _AUTH_FN, _CHUNK_DIR
+    global _WORKSHOP_DIR, _AUTH_FN, _CHUNK_DIR, _WORKSHOP_PRIVATE_DIR
     _WORKSHOP_DIR = os.path.join(release_dir, "workshop")
     _CHUNK_DIR = os.path.join(release_dir, "_workshop_chunks")
+    _WORKSHOP_PRIVATE_DIR = os.path.join(
+        os.path.dirname(os.path.abspath(release_dir.rstrip("/\\"))), "_workshop_private")
     _AUTH_FN = auth_fn
+
+
+def _private_dir(plugin_id: str) -> str:
+    d = os.path.join(_WORKSHOP_PRIVATE_DIR, _safe_id(plugin_id))
+    os.makedirs(d, exist_ok=True)
+    return d
 
 
 def _ws_dir() -> str:
@@ -68,6 +81,19 @@ def _save_json(path: str, data):
         json.dump(data, f, ensure_ascii=False, indent=2)
 
 
+def _sha256_and_size(path: str) -> tuple[str, int]:
+    hasher = hashlib.sha256()
+    size = 0
+    with open(path, "rb") as fp:
+        while True:
+            chunk = fp.read(1024 * 1024)
+            if not chunk:
+                break
+            hasher.update(chunk)
+            size += len(chunk)
+    return hasher.hexdigest(), size
+
+
 def _catalog_path() -> str:
     return os.path.join(_ws_dir(), "catalog.json")
 
@@ -95,6 +121,8 @@ def _rebuild_catalog_entry(plugin_id: str, meta: dict) -> dict:
         "download_count": meta.get("download_count", 0),
         "size": meta.get("size", 0),
         "access_level": meta.get("access_level", "free"),
+        "open_source": bool(meta.get("open_source", True)),
+        "protected": bool(meta.get("protected", False)),
         "published_at": meta.get("published_at", ""),
         "updated_at": meta.get("updated_at", ""),
     }
@@ -107,6 +135,47 @@ def _upsert_catalog(plugin_id: str, meta: dict):
     catalog.append(entry)
     catalog.sort(key=lambda e: e.get("updated_at", ""), reverse=True)
     _save_catalog(catalog)
+
+
+def _protect_uploaded_plugin(plugin_id: str, version: str, meta: dict, public_zip_path: str) -> None:
+    """Move the just-uploaded raw zip out of the public tree, compile it into a
+    native+encrypted artifact, and put *that* back at ``public_zip_path``.
+
+    Raises :class:`HTTPException` on any failure — a closed-source publish
+    must never silently fall back to shipping the plaintext source, and must
+    never leave the public slot pointing at a file that no longer exists
+    without the caller finding out.
+    """
+    private_dir = _private_dir(plugin_id)
+    raw_private_path = os.path.join(private_dir, f"plugin-{version}.source.zip")
+    try:
+        shutil.move(public_zip_path, raw_private_path)
+    except Exception as exc:
+        raise HTTPException(500, f"failed to isolate source archive: {exc}") from exc
+
+    from update_host import build_service
+    build_log: list[str] = []
+    result = build_service.build_protected_plugin(
+        raw_private_path, private_dir, log=build_log.append)
+
+    if not result.get("ok"):
+        raise HTTPException(
+            400,
+            f"closed-source build failed for {plugin_id} v{version}: {result.get('message')} "
+            f"— log: {'; '.join(build_log[-10:])}",
+        )
+
+    try:
+        shutil.move(result["artifact_path"], public_zip_path)
+    except Exception as exc:
+        raise HTTPException(500, f"failed to publish protected artifact: {exc}") from exc
+
+    key_path = os.path.join(private_dir, f"{version}.key")
+    with open(key_path, "wb") as fp:
+        fp.write(result["content_key"])
+
+    meta["protected"] = True
+    meta["native_abi"] = result.get("native_abi", "")
 
 
 def _cleanup_stale_uploads():
@@ -222,6 +291,46 @@ def download(request: Request, plugin_id: str, version: str = ""):
                         filename=f"{safe}-{version}.zip")
 
 
+@router.get("/key/{plugin_id}")
+def get_content_key(request: Request, plugin_id: str, version: str = ""):
+    """Issue the AES-256 content key for a closed-source (protected) plugin
+    build. Requires a workshop token (``X-API-Key``, device-bound — see
+    ``workshop.app.get_workshop_token``) on every call; no caching anywhere
+    server-side per-caller, so this is a live network dependency by design,
+    not a one-time unlock.
+    """
+    token = _get_workshop_token(request)
+    safe = _safe_id(plugin_id)
+    pdir = os.path.join(_ws_dir(), safe)
+    meta = _load_json(os.path.join(pdir, "meta.json"))
+    if not isinstance(meta, dict):
+        raise HTTPException(404, f"plugin {safe} not found")
+    if not meta.get("protected"):
+        raise HTTPException(400, f"plugin {safe} is not a protected build")
+
+    if meta.get("access_level") == "paid":
+        client_paid = request.headers.get("X-Paid-User", "").lower() in ("true", "1")
+        if not client_paid:
+            raise HTTPException(403, "This plugin requires a paid license")
+
+    if not version:
+        manifest = _load_json(os.path.join(pdir, "manifest.json"))
+        version = manifest.get("version", "") if manifest else ""
+    safe_ver = _safe_ver(version)
+
+    key_path = os.path.join(_private_dir(safe), f"{safe_ver}.key")
+    if not os.path.isfile(key_path):
+        raise HTTPException(404, f"no content key for {safe} v{safe_ver}")
+
+    import base64
+    with open(key_path, "rb") as fp:
+        key_bytes = fp.read()
+    # 服务器不落任何"谁在什么时候取过这把 key"的日志之外的东西 —— 密钥本身
+    # 从不缓存到磁盘之外的地方，每次请求都是一次活的握手。token 只用来判断
+    # "有没有资格拿"，不代表这把 key 之后就能离线复用。
+    return JSONResponse({"ok": True, "key_b64": base64.b64encode(key_bytes).decode("ascii")})
+
+
 # ── Write endpoints (workshop token auth) ────────────────────────
 
 
@@ -264,6 +373,7 @@ async def publish_init(
     minimum_app_version: str = "",
     requires: str = "[]",
     permissions: str = "[]",
+    open_source: str = "true",
 ):
     token = _get_workshop_token(request)
     _check_plugin_owner(plugin_id, token)
@@ -308,6 +418,7 @@ async def publish_init(
             "requires": _parse_json_list(requires),
             "permissions": _parse_json_list(permissions),
             "uploader_token": token,
+            "open_source": str(open_source).strip().lower() not in ("false", "0", "no"),
         },
     }
 
@@ -418,6 +529,12 @@ async def publish_complete(request: Request, upload_id: str):
                 meta["icon_url"] = f"/downloads/workshop/{safe_id}/icon{ext}"
     except Exception:
         pass
+
+    if not meta.get("open_source", True):
+        _protect_uploaded_plugin(safe_id, safe_ver, meta, dst)
+        # dst 现在是编译+加密后的产物，跟原始上传字节完全不同 — sha256/size
+        # 必须对最终真正会被下发的文件重新计算，否则客户端下载后校验必挂。
+        digest, size = _sha256_and_size(dst)
 
     existing_meta = _load_json(os.path.join(pdir, "meta.json"))
     prev_count = 0
