@@ -2,9 +2,32 @@
 
 SAO AI Editor 内置 MCP (Model Context Protocol) 服务器，允许外部 IDE 的 AI 助手（Claude Code、GitHub Copilot、Cursor、Windsurf 等）直接接入并使用 AI Editor 的全部能力。
 
+**两种运行模式，选一种：**
+
+| 模式 | 是什么 | 什么时候用 |
+|------|--------|-----------|
+| **Live（推荐）** | 你正在用的、已经打开的那个编辑器窗口本身，额外监听一个 HTTP 端口 | 你想让外部 AI 操作**你当前实际打开的项目**——真实工作区、真实已配置的 provider/agent/workflow |
+| **Standalone headless** | `--mcp-server` 命令行参数启动的独立进程，不带界面，自己重新建一套全新的引擎/工具注册表 | CI/自动化脚本，没有也不需要一个真正打开的编辑器窗口 |
+
+两者共享同一套 18 个工具定义，区别只在于工具执行时"背后是谁"。
+
 ---
 
-## 快速开始
+## 快速开始 — Live 模式（在已打开的编辑器里开启）
+
+1. 打开命令面板（`Ctrl+Shift+P`）
+2. 运行 **"MCP: Expose This Editor as an MCP Server"**
+3. 右下角会弹出实际监听的端口，例如 `http://127.0.0.1:53210`
+4. 把这个端口填进外部 AI 工具的 MCP 配置（见下方"IDE 接入配置"，把 `command`/`args` 换成 HTTP 连接方式，或直接用支持 `url` 字段的 MCP 客户端指向这个地址）
+5. 再次运行同一个命令即可停止
+
+Live 模式下，`read_file`/`list_files`/`search_files`/`edit_file` 的相对路径按**这个编辑器窗口实际打开的工作区**解析，`chat_with_agent`/`run_workflow` 用的是**这个窗口里实际配置好的** provider/agent/workflow——不是另起一套。
+
+> 目前只有命令面板入口，还没有设置面板里的开关/自动启动选项。
+
+---
+
+## 快速开始 — Standalone headless 模式
 
 ### 1. 确定启动命令
 
@@ -21,9 +44,11 @@ MCP 服务器是主程序的一个运行模式，通过命令行参数启动：
 XiaoACTUI.exe --mcp-server --help
 ```
 
+这个模式下工具在一个全新的、无界面的进程里运行，`read_file` 这类相对路径按**进程的当前工作目录**解析（用 `cwd` 参数或绝对路径更可靠），LLM 相关工具从 `settings.json` 读取配置，跟"当前有没有编辑器窗口打开"完全无关。
+
 ### 2. 在 IDE 中配置接入
 
-见下方各 IDE 的配置示例。
+见下方各 IDE 的配置示例（stdio 方式，两种模式通用；Live 模式额外支持 HTTP）。
 
 ---
 
@@ -180,6 +205,18 @@ MCP 服务器暴露以下 18 个工具，覆盖 AI Editor 的全部核心能力�
 
 ---
 
+## Prompts — 教 AI 怎么用这些工具
+
+除了工具列表，服务器还通过 MCP 协议本身暴露了一个 prompt（`prompts/list` + `prompts/get`），支持的客户端会自动发现：
+
+| Prompt | 内容 |
+|--------|------|
+| `how_to_use_sao_ai_editor` | 每组工具该在什么场景下用——文件类工具默认优先；`chat_with_agent`/`run_workflow` 只在用户明确要"用编辑器自己配置的 agent/workflow"时才调用（而不是自己读完文件直接分析）；`engine`/`sdk_dumper` 是 SAO ACT 平台专用（进程内存/游戏引擎逆向），不是通用工具；改配置前先确认用户真的要求了 |
+
+支持 `prompts/get` 的客户端（比如 Claude Code）连接后会自动看到这个 prompt；不支持的客户端可以手动发 `prompts/get {"name": "how_to_use_sao_ai_editor"}` 拿到完整文本。
+
+---
+
 ## 使用示例
 
 ### 在 Claude Code 中使用
@@ -332,7 +369,7 @@ MCP 服务器以 headless 模式运行，不启动主界面。它直接初始化
   - `initialize` / `notifications/initialized`
   - `tools/list` / `tools/call`
   - `resources/list`（返回空）
-  - `prompts/list`（返回空）
+  - `prompts/list` / `prompts/get`（见上方"Prompts"一节）
   - `ping`
 
 ---

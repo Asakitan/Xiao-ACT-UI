@@ -36,6 +36,55 @@ SAO ACT UI 内置的 AI 编辑器是一个独立窗口，提供多模型 LLM 对
 
 ---
 
+## 编辑器核心功能
+
+### 资源管理器
+
+左侧边栏的文件树。右键菜单支持新建文件/新建文件夹/重命名/删除（真实文件系统操作，删除需二次确认，不进回收站）。文件被重命名/删除时，已打开的标签页会同步更新路径或标记为未保存。
+
+### 全文搜索
+
+`Ctrl+Shift+F` 或命令面板 "Search: Find in Files"。按文件分组显示匹配结果，支持正则/大小写/全字匹配，点击结果精确跳到匹配位置。
+
+### 快速打开文件
+
+`Ctrl+P`，模糊匹配工作区内文件名，回车打开。
+
+### 源代码管理（SCM）
+
+改动条（gutter 上的颜色条）对比的是真实 git HEAD，保存文件后改动条会重新计算，不会因为保存就清零。
+
+### 终端
+
+集成终端是真实 PTY（Windows 下走 ConPTY），支持交互式程序（如 `python`/`node` REPL、`vim` 等），不只是单次命令执行。
+
+### 调试
+
+Run and Debug 侧边栏 + 真实调试控制台。在编辑器 gutter 点击可设置断点。调试配置来自 `launch.json` 风格的配置或已安装扩展贡献的 debugger。
+
+### 任务运行器（Task Runner）
+
+命令面板 "Tasks: Run Task..."，运行已安装扩展贡献的 task（`contributes.tasks`），有独立面板展示运行状态和输出。
+
+### 通知中心
+
+状态栏铃铛图标，点击查看历史通知（error/warning/info 分色），显示未读数量角标。
+
+### 终端/输出面板超链接
+
+终端和输出面板里的 URL 和"文件路径:行号"格式文本会自动变成可点击链接——URL 用系统浏览器打开，文件路径在编辑器里打开并跳到对应行。
+
+### 扩展 (Extensions)
+
+左侧边栏"插件"面板，兼容真实 VS Code Marketplace 扩展格式（`package.json` + `contributes`）：
+
+- **安装来源**：Marketplace 搜索安装、或"Install from Folder..."（📁 图标）从本地文件夹安装——两种方式都会把扩展**持久化拷贝**进这个平台自己的扩展目录，重启编辑器后扩展仍然在，不需要重新安装。
+- **JS/TypeScript 扩展真激活**：带 `main` 字段的扩展会在真实 Node.js 子进程里运行，真调用 `activate()`，注册的命令/菜单/侧边栏图标/Webview 面板都是真实可用的，不是清单展示。命令面板 "Extensions: Verify Installed Extension Activation" 可以对已安装的扩展跑一次真激活检查，逐个报告成功/失败；对"需要真实 Microsoft Visual Studio Code 环境"这类无法绕过的许可证限制（如 C# Dev Kit），会显示诚实的"需要该环境"提示而不是原始报错堆栈。
+- **需要 Node.js**：如果安装的扩展需要 Node.js 但本机没装，会弹窗询问是否下载内置运行时（约 70MB），确认后才下载，不会静默进行。
+- **侧边栏 Webview 面板**：扩展贡献的 Webview 类型侧边栏视图，点击图标时会真实请求扩展渲染内容并显示。
+
+---
+
 ## 设置配置
 
 点击活动栏底部的 ⚙ 齿轮图标打开设置面板。
@@ -289,6 +338,12 @@ AI Editor 支持连接 MCP 服务器，扩展 LLM 可用的工具。配置来源
 4. 插件 manifest 中声明的 MCP 服务器
 
 支持 stdio、HTTP+SSE、内部 Python 三种传输方式。
+
+### 把 AI Editor 自己暴露成 MCP 服务器
+
+反过来，也可以让外部 CLI AI（Claude Code、Codex CLI 等）连进这个正在运行的编辑器，使用它的文件/终端/chat/agent/workflow 等全部能力。命令面板运行 "MCP: Expose This Editor as an MCP Server" 即可开启（再运行一次关闭），会提示实际监听的端口。工具调用作用于**这个编辑器窗口真实打开的工作区**，不是另起一个空环境。
+
+还有一个独立的、无界面的 `--mcp-server` 命令行模式，适合 CI/自动化场景。两种模式的区别、完整工具列表、各 IDE 接入配置，见 [AI_EDITOR_MCP.md](AI_EDITOR_MCP.md)。
 
 ---
 
