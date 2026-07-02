@@ -18001,6 +18001,27 @@ console.log("command palette quick access helpers ok");
     _check("search_workspace_text regex mode works and invalid regex reports an error instead of raising",
            len(qo_api.search_workspace_text("hel+o", {"regex": True})["results"]) == 3
            and "error" in qo_api.search_workspace_text("[bad", {"regex": True}))
+    # Explorer file operations (context menu backend).
+    created = qo_api.create_workspace_file("src/newfile.py")
+    _check("create_workspace_file creates an empty file and refuses to overwrite",
+           created.get("ok") is True
+           and os.path.isfile(os.path.join(qo_tmpdir, "src", "newfile.py"))
+           and "error" in qo_api.create_workspace_file("src/newfile.py"))
+    created_dir = qo_api.create_workspace_directory("src/subdir")
+    _check("create_workspace_directory creates a directory",
+           created_dir.get("ok") is True
+           and os.path.isdir(os.path.join(qo_tmpdir, "src", "subdir")))
+    renamed = qo_api.rename_workspace_entry("src/newfile.py", "renamed.py")
+    _check("rename_workspace_entry renames in place and rejects path separators in the new name",
+           renamed.get("ok") is True and renamed.get("path") == "src/renamed.py"
+           and os.path.isfile(os.path.join(qo_tmpdir, "src", "renamed.py"))
+           and "error" in qo_api.rename_workspace_entry("src/renamed.py", "../escape.py"))
+    deleted = qo_api.delete_workspace_entry("src/renamed.py")
+    _check("delete_workspace_entry deletes files, refuses the workspace root, and errors on traversal",
+           deleted.get("ok") is True
+           and not os.path.exists(os.path.join(qo_tmpdir, "src", "renamed.py"))
+           and "error" in qo_api.delete_workspace_entry("")
+           and "error" in qo_api.delete_workspace_entry("../outside"))
     # Extension-contributed DEFAULT keybindings must actually dispatch
     # (contributes.keybindings were parsed and shown in the shortcut editor
     # but only user-customized bindings ever fired - 2026-07-02 audit).

@@ -8159,6 +8159,8 @@ en:{
   go_to_file:'Go to File...',no_matching_files:'No matching files',
   notifications:'Notifications',clear_all:'Clear All',no_notifications:'No notifications yet',
   search_title:'Search',search_placeholder:'Search in files',no_search_results:'No results',
+  new_folder_action:'New Folder',rename_action:'Rename',delete_action:'Delete',
+  confirm_delete_entry:'Delete permanently? This cannot be undone.',deleted_entry:'Deleted',
   go_to_line:'Go to Line...',run_selection:'Run Selection',new_terminal:'New Terminal',system_info:'System Info',about:'About',
   chat:'Assistant',explorer:'Explorer',tools:'Engine Tools',extensions:'Extensions',history:'History',instructions:'Instructions',agents_wf:'Agents & Workflows',settings:'Settings',
   send:'Send',stop:'Stop',ask_placeholder:'Ask anything... (/ commands, @ context, # tools)',
@@ -8318,6 +8320,8 @@ zh:{
   go_to_file:'转到文件...',no_matching_files:'没有匹配的文件',
   notifications:'通知',clear_all:'清空',no_notifications:'暂无通知',
   search_title:'搜索',search_placeholder:'在文件中搜索',no_search_results:'无结果',
+  new_folder_action:'新建文件夹',rename_action:'重命名',delete_action:'删除',
+  confirm_delete_entry:'确定永久删除？此操作无法撤销。',deleted_entry:'已删除',
   go_to_line:'转到行...',run_selection:'运行选中代码',new_terminal:'新建终端',system_info:'系统信息',about:'关于',
   chat:'助手',explorer:'资源管理器',tools:'引擎工具',extensions:'扩展',history:'历史记录',instructions:'自定义指令',agents_wf:'代理 & 工作流',settings:'设置',
   send:'发送',stop:'停止',ask_placeholder:'输入问题... (/ 命令, @ 上下文, # 工具)',
@@ -27331,7 +27335,84 @@ function createExplorerNode(entry,depth,isRoot,activePath=''){
   }else{
     row.onclick=()=>openWorkspaceFile(entry.path);
   }
+  row.addEventListener('contextmenu',ev=>{
+    ev.preventDefault();ev.stopPropagation();
+    showExplorerContextMenu(ev.clientX,ev.clientY,entry,row,label);
+  });
   return node;
+}
+
+// ── Explorer file operations (right-click menu). Backend does the actual
+// filesystem work with workspace-escape validation; rename/new use an
+// inline input that temporarily replaces the row label (no window.prompt).
+function showExplorerContextMenu(x,y,entry,row,labelEl){
+  const isDir=entry.type==='directory';
+  const dirPath=isDir?(entry.path||''):String(entry.path||'').split('/').slice(0,-1).join('/');
+  const actions=[
+    {title:t('new_file_action'),command:'explorer.newFile',groupName:'1_new'},
+    {title:t('new_folder_action'),command:'explorer.newFolder',groupName:'1_new'},
+    {title:t('rename_action'),command:'explorer.rename',groupName:'2_modify'},
+    {title:t('delete_action'),command:'explorer.delete',groupName:'3_danger'},
+  ];
+  showExtensionActionMenu(x,y,actions,async action=>{
+    if(action.command==='explorer.newFile'||action.command==='explorer.newFolder'){
+      const isFolder=action.command==='explorer.newFolder';
+      explorerInlineNameInput(row,'',async name=>{
+        const relPath=(dirPath?dirPath+'/':'')+name;
+        const res=await call(isFolder?'create_workspace_directory':'create_workspace_file',relPath);
+        if(!res||res.error){showToast((res&&res.error)||t('workspace_load_failed'),'error',2600);return}
+        await refreshExplorer();
+        if(!isFolder)openWorkspaceFile(res.path);
+      });
+      return;
+    }
+    if(action.command==='explorer.rename'){
+      explorerInlineNameInput(row,entry.name,async name=>{
+        if(name===entry.name)return;
+        const res=await call('rename_workspace_entry',entry.path,name);
+        if(!res||res.error){showToast((res&&res.error)||t('workspace_load_failed'),'error',2600);return}
+        // Keep open tabs pointing at the renamed file/directory prefix.
+        tabs.forEach(tb=>{
+          if(tb.workspacePath===res.oldPath)tb.workspacePath=res.path;
+          if(tb.workspacePath&&tb.workspacePath.startsWith(res.oldPath+'/'))tb.workspacePath=res.path+tb.workspacePath.slice(res.oldPath.length);
+        });
+        await refreshExplorer();
+      });
+      return;
+    }
+    if(action.command==='explorer.delete'){
+      if(!confirm(t('confirm_delete_entry')+'\n'+(entry.path||entry.name)))return;
+      const res=await call('delete_workspace_entry',entry.path);
+      if(!res||res.error){showToast((res&&res.error)||t('workspace_load_failed'),'error',2600);return}
+      showToast(t('deleted_entry')+': '+(entry.path||entry.name),'success',2000);
+      await refreshExplorer();
+      return;
+    }
+  });
+}
+function explorerInlineNameInput(row,initialValue,onSubmit){
+  const input=document.createElement('input');
+  input.value=String(initialValue||'');
+  input.style.cssText='flex:1;min-width:0;background:var(--bg3);color:var(--fg);border:1px solid var(--border-focus);border-radius:2px;padding:0 4px;font:inherit';
+  const label=row.querySelector('.tree-label');
+  if(!label)return;
+  label.style.display='none';
+  label.after(input);
+  input.focus();input.select();
+  let done=false;
+  const finish=submit=>{
+    if(done)return;done=true;
+    const value=input.value.trim();
+    input.remove();label.style.display='';
+    if(submit&&value)onSubmit(value);
+  };
+  input.addEventListener('keydown',e=>{
+    e.stopPropagation();
+    if(e.key==='Enter'){e.preventDefault();finish(true)}
+    else if(e.key==='Escape'){e.preventDefault();finish(false)}
+  });
+  input.addEventListener('blur',()=>finish(false));
+  input.addEventListener('click',e=>e.stopPropagation());
 }
 
 function isExtensionCustomEditorOpenResult(res){

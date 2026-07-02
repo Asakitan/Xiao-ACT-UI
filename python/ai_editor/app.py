@@ -6772,6 +6772,96 @@ class AIEditorAPI:
             "truncated": truncated or len(scored) > max_results,
         }
 
+    @staticmethod
+    def _validate_workspace_entry_name(name: str) -> str:
+        cleaned = str(name or "").strip()
+        if not cleaned:
+            raise ValueError("Name is required")
+        if (cleaned != os.path.basename(cleaned)
+                or any(sep in cleaned for sep in ("/", "\\"))
+                or cleaned in (".", "..")):
+            raise ValueError("Name must be a plain file name (no path separators)")
+        return cleaned
+
+    def create_workspace_file(self, rel_path: str) -> Dict:
+        """Explorer context menu: create an empty file. Refuses to overwrite."""
+        try:
+            full = self._resolve_workspace_path(rel_path)
+            self._validate_workspace_entry_name(os.path.basename(full))
+        except ValueError as exc:
+            return {"error": str(exc)}
+        if os.path.exists(full):
+            return {"error": "Already exists: " + str(rel_path)}
+        try:
+            os.makedirs(os.path.dirname(full), exist_ok=True)
+            with open(full, "x", encoding="utf-8"):
+                pass
+        except OSError as exc:
+            return {"error": str(exc)}
+        return {"ok": True, "path": self._workspace_rel_path(self._workspace_root(), full)}
+
+    def create_workspace_directory(self, rel_path: str) -> Dict:
+        """Explorer context menu: create a directory."""
+        try:
+            full = self._resolve_workspace_path(rel_path)
+            self._validate_workspace_entry_name(os.path.basename(full))
+        except ValueError as exc:
+            return {"error": str(exc)}
+        if os.path.exists(full):
+            return {"error": "Already exists: " + str(rel_path)}
+        try:
+            os.makedirs(full)
+        except OSError as exc:
+            return {"error": str(exc)}
+        return {"ok": True, "path": self._workspace_rel_path(self._workspace_root(), full)}
+
+    def rename_workspace_entry(self, rel_path: str, new_name: str) -> Dict:
+        """Explorer context menu: rename a file or directory in place."""
+        try:
+            full = self._resolve_workspace_path(rel_path)
+            cleaned = self._validate_workspace_entry_name(new_name)
+        except ValueError as exc:
+            return {"error": str(exc)}
+        if not os.path.exists(full):
+            return {"error": "Not found: " + str(rel_path)}
+        target = os.path.join(os.path.dirname(full), cleaned)
+        root = self._workspace_root()
+        if not self._is_workspace_safe_path(root, target):
+            return {"error": "Path escapes workspace"}
+        if os.path.exists(target):
+            return {"error": "Already exists: " + cleaned}
+        try:
+            os.rename(full, target)
+        except OSError as exc:
+            return {"error": str(exc)}
+        return {
+            "ok": True,
+            "oldPath": self._workspace_rel_path(root, full),
+            "path": self._workspace_rel_path(root, target),
+        }
+
+    def delete_workspace_entry(self, rel_path: str) -> Dict:
+        """Explorer context menu: delete a file or directory tree. The
+        frontend runs a two-step confirmation before calling this; deletion
+        is permanent (no recycle-bin dependency)."""
+        try:
+            full = self._resolve_workspace_path(rel_path)
+        except ValueError as exc:
+            return {"error": str(exc)}
+        root = self._workspace_root()
+        if os.path.abspath(full) == os.path.abspath(root):
+            return {"error": "Refusing to delete the workspace root"}
+        if not os.path.exists(full):
+            return {"error": "Not found: " + str(rel_path)}
+        try:
+            if os.path.isdir(full):
+                shutil.rmtree(full)
+            else:
+                os.remove(full)
+        except OSError as exc:
+            return {"error": str(exc)}
+        return {"ok": True, "path": self._workspace_rel_path(root, full)}
+
     def search_workspace_text(self, query: str,
                               options: Optional[Dict[str, Any]] = None) -> Dict:
         """Find-in-files (Ctrl+Shift+F) backend: bounded workspace text
