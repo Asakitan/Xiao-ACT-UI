@@ -274,12 +274,18 @@ class SAOPlayerGUIPanelsMixin:
         import tkinter as tk
 
         from act_platform.runtime import act_plugin_menu
+        from gui_modules.sao_panel_components import _pc, _accent, FONT_BODY
         self._dismiss_sao_menu_for_panel()
         try:
             data = act_plugin_menu(self)
         except Exception:
             data = {'ok': False, 'plugins': []}
-        menu = tk.Menu(self.root, tearoff=0)
+        menu_style = dict(
+            bg=_pc('control_bg', '#fafbfb'), fg=_pc('value_fg', '#3b3a3c'),
+            activebackground=_accent(), activeforeground=_pc('active_fg', '#ffffff'),
+            relief='flat', bd=0, font=FONT_BODY,
+        )
+        menu = tk.Menu(self.root, tearoff=0, **menu_style)
         menu.add_command(label='⚙ 插件管理面板 Manage',
                          command=lambda: self._open_act_plugin_manager('manage'))
         menu.add_command(label='⬢ 插件面板 Panels',
@@ -293,7 +299,7 @@ class SAOPlayerGUIPanelsMixin:
             name = str(it.get('label') or pid)
             enabled = bool(it.get('enabled'))
             pinned = bool(it.get('pinned'))
-            sub = tk.Menu(menu, tearoff=0)
+            sub = tk.Menu(menu, tearoff=0, **menu_style)
             sub.add_command(label=('禁用 Disable' if enabled else '启用 Enable'),
                             command=lambda p=pid, en=enabled: self._toggle_plugin_enabled(p, en))
             sub.add_command(label=('取消置顶 Unpin' if pinned else '置顶 Pin'),

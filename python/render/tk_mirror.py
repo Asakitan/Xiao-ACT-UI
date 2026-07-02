@@ -34,52 +34,76 @@ _user32.GetCursorPos.restype = wt.BOOL
 #: precedent in this codebase uses 10-14px for whole-panel rounding).
 DEFAULT_MIRROR_CORNER_RADIUS = 12
 
-_corner_mask_cache: Dict[Tuple[int, int, int], np.ndarray] = {}
+#: Feather width (px) for the anti-aliased corner edge — wide enough to erase
+#: the binary-cutoff staircase at the default 12px radius, narrow enough not
+#: to visibly eat into the arc.
+_CORNER_FEATHER_PX = 1.0
+
+# Keyed by radius only, not (w, h, radius): the quarter-circle coverage
+# pattern depends solely on the radius (circle center is fixed at
+# (r-0.5, r-0.5) within the block); w/h only decide where the block gets
+# mirrored to. Every panel on the platform shares the same default radius,
+# so this cache is effectively a single entry — unlike the old (w, h, radius)
+# key, which got evicted every resize/open-close animation tick as w/h
+# changed, defeating the cache exactly when it mattered most.
+_corner_alpha_cache: Dict[int, np.ndarray] = {}
 
 
-def _corner_cut_mask(w: int, h: int, radius: int) -> Optional[np.ndarray]:
-    """Boolean (h, w) mask of pixels OUTSIDE the rounded-rect corners.
+def _corner_quadrant_alpha(r: int) -> Optional[np.ndarray]:
+    """(r, r) float32 coverage ramp for one rounded corner, in [0, 1].
 
-    True where the pixel should be cut (alpha zeroed). Only the four
-    ``radius``x``radius`` corner blocks are non-trivial; cached per
-    (w, h, radius) since a captured panel keeps the same size across most
-    frames and only changes on resize.
+    1.0 well inside the arc, 0.0 well outside, with a ~1px linear feather
+    across the boundary instead of a hard cutoff. The other three corners
+    reuse this same array via axis flips when applied.
     """
-    if radius <= 0 or w <= 0 or h <= 0:
-        return None
-    r = min(radius, w // 2, h // 2)
     if r <= 0:
         return None
-    key = (w, h, r)
-    cached = _corner_mask_cache.get(key)
+    cached = _corner_alpha_cache.get(r)
     if cached is not None:
         return cached
-    yy, xx = np.mgrid[0:r, 0:r]
-    dist = np.sqrt((xx - r + 0.5) ** 2 + (yy - r + 0.5) ** 2)
-    corner_cut = dist > r  # True = outside the circle → cut
-    mask = np.zeros((h, w), dtype=bool)
-    mask[:r, :r] = corner_cut
-    mask[:r, w - r:] = corner_cut[:, ::-1]
-    mask[h - r:, :r] = corner_cut[::-1, :]
-    mask[h - r:, w - r:] = corner_cut[::-1, ::-1]
-    if len(_corner_mask_cache) > 32:
-        _corner_mask_cache.clear()
-    _corner_mask_cache[key] = mask
-    return mask
+    yy, xx = np.mgrid[0:r, 0:r].astype(np.float32)
+    c = r - 0.5
+    dist = np.sqrt((xx - c) ** 2 + (yy - c) ** 2)
+    fw = _CORNER_FEATHER_PX
+    alpha = np.clip((r + fw * 0.5 - dist) / fw, 0.0, 1.0).astype(np.float32)
+    if len(_corner_alpha_cache) > 8:
+        _corner_alpha_cache.clear()
+    _corner_alpha_cache[r] = alpha
+    return alpha
 
 
 def _apply_corner_mask(bgra: bytes, w: int, h: int, radius: int) -> bytes:
-    """Zero out (premultiplied) BGRA pixels outside the rounded-rect corners."""
-    mask = _corner_cut_mask(w, h, radius)
-    if mask is None:
+    """Feather (premultiplied) BGRA pixels outside the rounded-rect corners.
+
+    Only the four ``r``x``r`` corner blocks are touched (not the whole
+    frame): each channel of a premultiplied pixel scales linearly with a
+    coverage factor in [0, 1], so multiplying all four BGRA bytes by the
+    same per-pixel factor is a correct edge-to-transparent blend without an
+    unpremultiply/re-premultiply round trip.
+    """
+    if radius <= 0 or w <= 0 or h <= 0:
+        return bgra
+    r = min(int(radius), w // 2, h // 2)
+    quad = _corner_quadrant_alpha(r)
+    if quad is None:
         return bgra
     expected = w * h * 4
     arr = np.frombuffer(bgra, dtype=np.uint8)
     if arr.size != expected:
         return bgra
-    arr = arr.reshape(h, w, 4).copy()
-    arr[mask] = 0
-    return arr.tobytes()
+    img = arr.reshape(h, w, 4).copy()
+    a = quad[:, :, None]  # (r, r, 1) — broadcasts across all 4 BGRA channels
+
+    def _scale(block: np.ndarray, coeff: np.ndarray) -> np.ndarray:
+        # np.rint (not truncation) — truncating float->uint8 is systematically
+        # biased dark by ~0.5/255 per channel at the feathered edge.
+        return np.rint(block.astype(np.float32) * coeff).astype(np.uint8)
+
+    img[:r, :r] = _scale(img[:r, :r], a)
+    img[:r, w - r:] = _scale(img[:r, w - r:], a[:, ::-1])
+    img[h - r:, :r] = _scale(img[h - r:, :r], a[::-1, :])
+    img[h - r:, w - r:] = _scale(img[h - r:, w - r:], a[::-1, ::-1])
+    return img.tobytes()
 
 
 class TkMirrorLayer:

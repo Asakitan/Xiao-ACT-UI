@@ -8,7 +8,7 @@ from gui_modules.sao_menu_hud import MenuCircleButtonRenderer
 import _sao_cy_uihelpers as _CY_UI  # type: ignore[import-not-found]
 from sao_theme.colors import SAOColors
 from sao_theme.animator import Animator
-from sao_theme.utils import lerp
+from sao_theme.utils import lerp, ease_out_back_lite
 
 # ──────────────────── 圆形图标按钮 ────────────────────
 class SAOCircleButton(tk.Canvas):
@@ -160,8 +160,13 @@ class SAOCircleButton(tk.Canvas):
 
     def _on_enter(self, e=None):
         self._hovering = True
+        # Snappier "settle" curve than the default ease_out — reads as a
+        # touch of spring on hover-in. Stays within [0,1] the whole way (see
+        # ease_out_back_lite docstring) so it passes cleanly through
+        # _set_hover_t's clamp and the Cython color lerp downstream.
         self._anim.animate('hover', 200,
-                           lambda t: self._set_hover_t(t))
+                           lambda t: self._set_hover_t(t),
+                           easing=ease_out_back_lite)
 
     def _on_leave(self, e=None):
         self._hovering = False

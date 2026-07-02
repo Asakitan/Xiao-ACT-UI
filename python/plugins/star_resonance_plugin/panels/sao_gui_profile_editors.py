@@ -315,6 +315,9 @@ class _DetailEditorBase:
                       activeforeground=TEXT_MAIN, relief=tk.FLAT,
                       highlightthickness=1, highlightbackground=PANEL_EDGE,
                       font=panel_font(9))
+        opt['menu'].configure(bg=PANEL_CARD_ALT, fg=TEXT_MAIN,
+                              activebackground=PANEL_HEADER, activeforeground=TEXT_MAIN,
+                              relief=tk.FLAT, bd=0, font=panel_font(9))
         opt.pack(fill=tk.X)
         return opt
 

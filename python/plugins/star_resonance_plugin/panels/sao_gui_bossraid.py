@@ -289,6 +289,9 @@ class _BossReactionsEditorMixin:
                 self._rx_rerender()
             som = _tk.OptionMenu(scene_row, svar, *sopts.keys(), command=_pick_scene)
             som.config(font=panel_font(8), bg=PANEL_CARD, fg=TEXT_MAIN, highlightthickness=0)
+            som['menu'].configure(bg=PANEL_CARD_ALT, fg=TEXT_MAIN,
+                                  activebackground=GOLD, activeforeground=PANEL_BG,
+                                  relief='flat', bd=0)
             som.pack(side=tk.LEFT, padx=(6, 6))
 
         # ── boss selector (scene-scoped) ──
@@ -313,6 +316,9 @@ class _BossReactionsEditorMixin:
                 self._rx_rerender()
             om = _tk.OptionMenu(sel_row, var, *opts.keys(), command=_pick)
             om.config(font=panel_font(8), bg=PANEL_CARD, fg=TEXT_MAIN, highlightthickness=0)
+            om['menu'].configure(bg=PANEL_CARD_ALT, fg=TEXT_MAIN,
+                                 activebackground=GOLD, activeforeground=PANEL_BG,
+                                 relief='flat', bd=0)
             om.pack(side=tk.LEFT, padx=(6, 6))
         make_action_button(sel_row, '从内存导入', lambda: self._rx_rerender()).pack(side=tk.RIGHT)
 
@@ -848,6 +854,9 @@ class _MechanicsEditorMixin:
             om = _tk.OptionMenu(card, var, *mech_opts.keys(), command=_bind)
             om.config(font=panel_font(8), bg=PANEL_CARD_ALT, fg=TEXT_MAIN,
                       highlightthickness=0)
+            om['menu'].configure(bg=PANEL_CARD_ALT, fg=TEXT_MAIN,
+                                 activebackground=GOLD, activeforeground=PANEL_BG,
+                                 relief='flat', bd=0)
             om.pack(side=tk.RIGHT, padx=(4, 0))
 
         def _create(_sid=sid, _nm=nm, _dur=dur):
@@ -915,6 +924,9 @@ class _MechanicsEditorMixin:
                             command=_pick_test)
         tm.config(font=panel_font(8), bg=PANEL_CARD_ALT, fg=TEXT_MAIN,
                   highlightthickness=0)
+        tm['menu'].configure(bg=PANEL_CARD_ALT, fg=TEXT_MAIN,
+                             activebackground=GOLD, activeforeground=PANEL_BG,
+                             relief='flat', bd=0)
         tm.pack(side=tk.RIGHT, padx=(3, 0))
 
         summary = mech.get('summary') or {}
@@ -1135,6 +1147,9 @@ class _MechanicsEditorMixin:
             om = _tk.OptionMenu(add_row, ovar, *obs_opts.keys(), command=_add_obs)
             om.config(font=panel_font(8), bg=PANEL_CARD, fg=TEXT_MAIN,
                       highlightthickness=0)
+            om['menu'].configure(bg=PANEL_CARD_ALT, fg=TEXT_MAIN,
+                                 activebackground=GOLD, activeforeground=PANEL_BG,
+                                 relief='flat', bd=0)
             om.pack(side=tk.LEFT, padx=(0, 6))
         manual_var = _field(add_row, '技能ID', 'manual_sid', '', 9)
 
@@ -1198,6 +1213,9 @@ class _MechanicsEditorMixin:
                      font=panel_font(8)).pack(side=tk.LEFT)
             smenu = _tk.OptionMenu(adv1, svar, *[l for l, _ in self._DETECT_SOURCES])
             smenu.config(font=panel_font(8), bg=PANEL_CARD, fg=TEXT_MAIN, highlightthickness=0)
+            smenu['menu'].configure(bg=PANEL_CARD_ALT, fg=TEXT_MAIN,
+                                    activebackground=GOLD, activeforeground=PANEL_BG,
+                                    relief='flat', bd=0)
             smenu.pack(side=tk.LEFT, padx=(2, 8))
             _field(adv1, '限定BossID', 'detect_boss_base_id', det.get('boss_base_id', 0), 8)
             adv2 = _row(form)
@@ -1211,6 +1229,9 @@ class _MechanicsEditorMixin:
                      font=panel_font(8)).pack(side=tk.LEFT)
             emenu = _tk.OptionMenu(adv2, evar, *[l for l, _ in self._DETECT_EVENTS])
             emenu.config(font=panel_font(8), bg=PANEL_CARD, fg=TEXT_MAIN, highlightthickness=0)
+            emenu['menu'].configure(bg=PANEL_CARD_ALT, fg=TEXT_MAIN,
+                                    activebackground=GOLD, activeforeground=PANEL_BG,
+                                    relief='flat', bd=0)
             emenu.pack(side=tk.LEFT, padx=(2, 0))
             adv3 = _row(form)
             _field(adv3, '阶段计时s', 'detect_time_into_phase_s', det.get('time_into_phase_s', 0.0), 5)
@@ -1270,6 +1291,9 @@ class _MechanicsEditorMixin:
                 self._mx_rerender()
             pm = _tk.OptionMenu(d1, pvar, *self._DODGE_PRESETS, command=_preset_pick)
             pm.config(font=panel_font(8), bg=PANEL_CARD, fg=TEXT_MAIN, highlightthickness=0)
+            pm['menu'].configure(bg=PANEL_CARD_ALT, fg=TEXT_MAIN,
+                                 activebackground=GOLD, activeforeground=PANEL_BG,
+                                 relief='flat', bd=0)
             pm.pack(side=tk.LEFT, padx=(0, 8))
             _field(d1, '提前ms', 'lead_ms', inline.get('lead_ms', 300), 6)
             preset_lbl = pvar.get()
@@ -1347,6 +1371,9 @@ class _MechanicsEditorMixin:
             dmenu = _tk.OptionMenu(mv, dvar, *[l for l, _ in directions])
             dmenu.config(font=panel_font(8), bg=PANEL_CARD, fg=TEXT_MAIN,
                          highlightthickness=0, state=st)
+            dmenu['menu'].configure(bg=PANEL_CARD_ALT, fg=TEXT_MAIN,
+                                    activebackground=GOLD, activeforeground=PANEL_BG,
+                                    relief='flat', bd=0)
             dmenu.pack(side=tk.LEFT, padx=(2, 8))
             _field(mv, '超时ms', 'move_ms', inline.get('move_ms', 600), 6)
             if cur_dir.startswith('away'):   # 仅"远离"类才显示精准出圈余量
@@ -1388,6 +1415,9 @@ class _MechanicsEditorMixin:
                      font=panel_font(8)).pack(side=tk.LEFT)
             gmenu = _tk.OptionMenu(gv, gvar, *[l for l, _ in self._GEOMETRY_SHAPES])
             gmenu.config(font=panel_font(8), bg=PANEL_CARD, fg=TEXT_MAIN, highlightthickness=0)
+            gmenu['menu'].configure(bg=PANEL_CARD_ALT, fg=TEXT_MAIN,
+                                    activebackground=GOLD, activeforeground=PANEL_BG,
+                                    relief='flat', bd=0)
             gmenu.pack(side=tk.LEFT, padx=(2, 8))
             _field(gv, '半径m', 'geom_radius', geom.get('radius', 0.0), 5)
             _field(gv, '内径m', 'geom_inner', geom.get('inner', 0.0), 5)
@@ -1418,6 +1448,9 @@ class _MechanicsEditorMixin:
                  font=panel_font(8)).pack(side=tk.LEFT)
         phm = _tk.OptionMenu(ph_row, phvar, *ph_opts.keys())
         phm.config(font=panel_font(8), bg=PANEL_CARD, fg=TEXT_MAIN, highlightthickness=0)
+        phm['menu'].configure(bg=PANEL_CARD_ALT, fg=TEXT_MAIN,
+                              activebackground=GOLD, activeforeground=PANEL_BG,
+                              relief='flat', bd=0)
         phm.pack(side=tk.LEFT, padx=(4, 0))
 
         btns = _row(form)

@@ -60,6 +60,24 @@ def ease_in(t: float) -> float:
 def ease_in_out(t: float) -> float:
     return 3 * t ** 2 - 2 * t ** 3
 
+def ease_out_back_lite(t: float) -> float:
+    """Snappier ease-out with a springy feel — but clamped to never exceed
+    1.0, unlike a true "back" ease. Safe to feed into color-lerp paths that
+    hard-clamp their input to [0,1] (this project's Cython
+    ``lerp_hex_color`` does), where a real overshoot curve would just get
+    flattened and produce no visible bounce at all.
+
+    Uses the standard easeOutBack cubic (which normally overshoots past 1.0
+    around t≈0.7-0.8 before settling back to 1.0 at t=1) and clips the
+    overshoot to a flat plateau at 1.0 instead — reads as a quick snap-in
+    followed by a brief settle, rather than a linear/cubic glide.
+    """
+    t = max(0.0, min(1.0, t))
+    c1 = 1.70158
+    c3 = c1 + 1.0
+    back = 1.0 + c3 * (t - 1.0) ** 3 + c1 * (t - 1.0) ** 2
+    return min(1.0, back)
+
 def lerp(a: float, b: float, t: float) -> float:
     return a + (b - a) * t
 

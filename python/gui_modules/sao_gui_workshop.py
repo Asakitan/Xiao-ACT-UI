@@ -1355,6 +1355,9 @@ class WorkshopPanel:
             om.configure(bg=_WG_CARD_BG, fg=_WG_TEXT, font=get_cjk_font(9),
                          highlightthickness=1, highlightbackground=_WG_BORDER,
                          relief='flat')
+            om['menu'].configure(bg=_WG_CARD_BG, fg=_WG_TEXT,
+                                 activebackground=_WG_GOLD, activeforeground='#FFFFFF',
+                                 relief='flat', bd=0, font=get_cjk_font(9))
             om.pack(side='left')
         except Exception:
             pass
