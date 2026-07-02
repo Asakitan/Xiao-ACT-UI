@@ -18634,7 +18634,7 @@ class AIEditorAPI:
                     else getattr(webview_view, "badge", None)),
                 "titleActions": self._view_title_actions(view_id),
                 "welcome": welcome,
-                "html": getattr(webview, "html", ""),
+                "html": getattr(webview, "html", "") or node_webview_state.get("html", ""),
                 "state": getattr(webview, "state", None),
                 "options": dict(webview_options),
                 "retainContextWhenHidden": bool(
@@ -20554,6 +20554,22 @@ class AIEditorAPI:
         """Return activity bar view containers contributed by extensions."""
         containers = self.list_extension_view_containers("activitybar")
         return {"items": containers.get("items", [])}
+
+    def resolve_extension_webview_view(self, view_id: str) -> Dict:
+        """Ask the extension that registered ``view_id`` to resolve it now.
+
+        Real VS Code only calls an extension's resolveWebviewView when the
+        view actually becomes visible - not eagerly at activation. Real gap
+        found 2026-07-03 verifying a real extension's sidebar: nothing in
+        this platform's production code ever sent this trigger, so a
+        webview-view's content was never requested when a user opened it
+        (only test fixtures did this, directly, bypassing the app).
+        """
+        host = getattr(self, "_node_ext_host", None)
+        if host is None or not getattr(host, "is_running", False):
+            return {"ok": False, "error": "Node extension host is not running"}
+        sent = host.resolve_webview_view(view_id)
+        return {"ok": bool(sent)}
 
     def list_extension_view_containers(self, location: str = "") -> Dict:
         """Return extension view containers contributed to VS Code locations."""

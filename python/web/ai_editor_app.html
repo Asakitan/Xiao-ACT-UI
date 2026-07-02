@@ -47481,8 +47481,25 @@ function activateExtensionActivityItem(item){
       appendExtensionContainerTitleActions(header,item);
     }
     renderExtensionContainerContent(item);
+    resolveUnresolvedExtensionWebviewViews(item);
   }
   $('sidebar').classList.remove('hidden');
+}
+// Real VS Code only resolves a webview-view's content when it actually
+// becomes visible, not at extension activation time. Trigger that now for
+// any view in this container that's registered but has no HTML yet, then
+// refresh so the real content (once the extension's provider sets it)
+// replaces the "provider registered" placeholder.
+async function resolveUnresolvedExtensionWebviewViews(item){
+  const views=Array.isArray(item&&item.views)?item.views:[];
+  const pending=views.filter(v=>v&&v.runtimeKind==='webviewView'&&v.runtimeAvailable
+    &&!((v.runtimeState||{}).html));
+  if(!pending.length)return;
+  await Promise.all(pending.map(v=>call('resolve_extension_webview_view',v.id).catch(()=>null)));
+  if(_activeSidebarPanel!=='ext-vc-'+item.id)return;
+  const r=await call('list_extension_activity_bar_items').catch(()=>null);
+  const fresh=(r&&r.items||[]).find(i=>i.id===item.id);
+  if(fresh&&_activeSidebarPanel==='ext-vc-'+fresh.id)renderExtensionContainerContent(fresh);
 }
 function createExtensionActivityButton(item){
   const btn=document.createElement('div');

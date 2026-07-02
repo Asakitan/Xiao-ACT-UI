@@ -41662,6 +41662,113 @@ def test_install_extension_dir_persists_across_restart() -> None:
         uninstall_extension(ext_id)
 
 
+def test_webview_view_resolves_and_surfaces_real_html() -> None:
+    """2026-07-03: user asked whether an activated extension's own
+    registered sidebar panel actually renders. Verified against the user's
+    real, installed Anthropic.claude-code extension and found two real,
+    stacked bugs, both fixed here:
+
+    1. Nothing in production code ever asked Node to resolveWebviewView a
+       sidebar's webview - real VS Code only calls this lazily when the
+       view becomes visible, and only selftest fixtures were ever sending
+       that trigger directly, bypassing the app entirely. Fixed by adding
+       NodeExtensionHost.resolve_webview_view()/AIEditorAPI.
+       resolve_extension_webview_view(), wired to the activity-bar click
+       handler on the frontend.
+    2. Even once resolved, the extension's webview.html setter update
+       landed in a completely different, ephemera-handle-keyed state store
+       (the editor-panel webview tracking) than the one the activity-bar/
+       sidebar UI actually reads (_webview_view_provider_states, keyed by
+       the STABLE viewType) - so the real HTML never reached the UI even
+       after resolution genuinely ran. Fixed by also updating
+       _webview_view_provider_states[view_type]["html"] on the "webview_html"
+       message, and by having _extension_view_snapshot's "html" field fall
+       back to that store for Node-registered (not Python-native) views.
+
+    This reproduces the full real chain with a synthetic fixture (install,
+    activate, is undiscovered/unrendered before the fix, resolve, then
+    real HTML surfaces through the exact same API the frontend renders
+    from) - confirmed against the real Anthropic.claude-code extension
+    manually (2945 bytes of real HTML), which is not repeated here to keep
+    this test hermetic and independent of what's installed on the machine.
+    """
+    print("── webview-view resolves and surfaces real HTML (2026-07-03) ──")
+    from ai_editor.app import AIEditorAPI
+    from ai_editor.extensions import uninstall_extension
+
+    ext_dir = tempfile.mkdtemp(prefix="sao_webview_resolve_fixture_")
+    ext_id = "selftest.webview-resolve-fixture"
+    api = None
+    try:
+        with open(os.path.join(ext_dir, "package.json"), "w", encoding="utf-8") as fh:
+            json.dump({
+                "name": "webview-resolve-fixture", "publisher": "selftest", "version": "1.0.0",
+                "main": "./extension.js", "activationEvents": ["onStartupFinished"],
+                "contributes": {
+                    "viewsContainers": {"activitybar": [
+                        {"id": "wrfContainer", "title": "WRF", "icon": "$(beaker)"}]},
+                    "views": {"wrfContainer": [
+                        {"type": "webview", "id": "wrfView", "name": "WRF View"}]},
+                },
+            }, fh)
+        with open(os.path.join(ext_dir, "extension.js"), "w", encoding="utf-8") as fh:
+            fh.write(
+                "const vscode = require('vscode');\n"
+                "function activate(context) {\n"
+                "  vscode.window.registerWebviewViewProvider('wrfView', {\n"
+                "    resolveWebviewView(webviewView) {\n"
+                "      webviewView.webview.html = "
+                "'<html><body>REAL RESOLVED CONTENT</body></html>';\n"
+                "    }\n"
+                "  });\n"
+                "}\n"
+                "module.exports = { activate };\n")
+
+        api = AIEditorAPI(_SettingsGui({"ai_editor": {"extensions": {"confirm_install": False}}}))
+        install_result = api.install_extension_dir(ext_dir)
+        _check("webview-view fixture installs", install_result.get("ok") is True)
+        verify = api.verify_installed_extension_activation(force=True)
+        _check("webview-view fixture activates for real",
+               verify.get("activated") == 1, json.dumps(verify, default=str))
+
+        def _find_view() -> Dict[str, Any]:
+            items = api.list_extension_activity_bar_items().get("items", [])
+            container = next((i for i in items if i.get("id") == "wrfContainer"), {})
+            return next((v for v in container.get("views", []) if v.get("id") == "wrfView"), {})
+
+        _check("resolve_extension_webview_view sends the resolve trigger",
+               api.resolve_extension_webview_view("wrfView").get("ok") is True)
+        deadline = time.monotonic() + 5.0
+        html = ""
+        while time.monotonic() < deadline:
+            html = (_find_view().get("runtimeState") or {}).get("html", "")
+            if html:
+                break
+            time.sleep(0.1)
+        _check("the extension's real resolveWebviewView HTML surfaces through "
+               "the exact API the activity-bar/sidebar frontend renders from",
+               html == "<html><body>REAL RESOLVED CONTENT</body></html>")
+        _check("resolve_extension_webview_view fails safe with no Node host",
+               AIEditorAPI(_SettingsGui({"ai_editor": {}}))
+               .resolve_extension_webview_view("anything").get("ok") is False)
+        frontend_html_path = os.path.join(
+            os.path.dirname(os.path.dirname(__file__)), "web", "ai_editor_app.html")
+        with open(frontend_html_path, "r", encoding="utf-8") as fh:
+            frontend_html = fh.read()
+        _check("frontend triggers resolution when opening a container with unresolved webview views",
+               "async function resolveUnresolvedExtensionWebviewViews(item){" in frontend_html
+               and "resolveUnresolvedExtensionWebviewViews(item);" in frontend_html
+               and "call('resolve_extension_webview_view',v.id)" in frontend_html)
+    finally:
+        shutil.rmtree(ext_dir, ignore_errors=True)
+        try:
+            if api is not None:
+                api._ext_host.unregister_extension(ext_id)
+        except Exception:
+            pass
+        uninstall_extension(ext_id)
+
+
 def test_node_vscode_api_shim_gaps() -> None:
     """2026-07-02: a real sweep of 17 genuinely-installed VS Code extensions
     (Python, Pylance, C++, PowerShell, Vue, Svelte, ChatGPT, cmake-tools...)
@@ -42115,6 +42222,7 @@ def main() -> None:
         ("Terminal Real PTY", test_terminal_pty),
         ("Node vscode.* API Shim Gaps", test_node_vscode_api_shim_gaps),
         ("Install Extension Dir Persists Across Restart", test_install_extension_dir_persists_across_restart),
+        ("Webview View Resolves And Surfaces Real HTML", test_webview_view_resolves_and_surfaces_real_html),
         ("Real Extension Smoke", test_real_extension_smoke),
         ("Real Extension Live Theme Activation", test_real_extension_live_theme_activation),
         ("Frontend Health Parity Snapshot", test_frontend_health_parity_snapshot),

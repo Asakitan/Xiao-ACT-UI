@@ -2186,6 +2186,22 @@ class NodeExtensionHost:
             "extensionId": extension_id,
         })
 
+    def resolve_webview_view(self, view_type: str, state: Any = None) -> bool:
+        """Ask the extension that registered this view to actually resolve
+        it (real VS Code semantics: resolveWebviewView is lazy, called
+        when the view becomes visible - not at activation time). Real gap
+        found 2026-07-03 verifying a real extension's sidebar: this message
+        type existed on the Node side and was only ever sent by selftest
+        fixtures, never by any production code path, so a webview-view's
+        content was never actually requested when a user opened it."""
+        if not self.is_running or not view_type:
+            return False
+        return self._send({
+            "type": "resolve_webview_view",
+            "viewType": str(view_type),
+            "state": state,
+        })
+
     def wait_for_activation(
             self, extension_ids: List[str], timeout: float = 5.0) -> bool:
         """Wait until all extension ids are activated in the Node host."""
@@ -2416,6 +2432,17 @@ class NodeExtensionHost:
             title = str(msg.get("title", ""))
             view_type = str(msg.get("viewType", ""))
             options = msg.get("options", {})
+            # Real gap found 2026-07-03 verifying a real extension's
+            # sidebar: this message (the webview.html setter) only ever
+            # updated the *editor-panel* webview state (keyed by the
+            # ephemeral, auto-incrementing Node view handle) - a
+            # completely separate store from _webview_view_provider_states
+            # (keyed by the STABLE viewType), which is what the activity
+            # bar/sidebar UI actually reads for a webview VIEW's runtime
+            # state. So a sidebar webview-view's real HTML never reached
+            # the UI even after resolveWebviewView ran and set it.
+            if view_type and view_type in self._webview_view_provider_states:
+                self._webview_view_provider_states[view_type]["html"] = html
             if self._ui_bridge and view_id:
                 try:
                     self._ui_bridge.render_webview_panel(
