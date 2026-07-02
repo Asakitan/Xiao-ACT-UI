@@ -9795,6 +9795,39 @@ class AIEditorAPI:
             debug_ns["addBreakpoints"]([{"uri": uri, "line": line_number, "enabled": True}])
         return self.list_breakpoints(uri)
 
+    def report_editor_selection(self, uri: str, content: str, language: str,
+                                 selection: Dict[str, Any]) -> Dict:
+        """Real cursor/selection bridge: called (debounced ~150ms) whenever
+        the caret/selection moves in the editor textarea, so
+        vscode.window.onDidChangeTextEditorSelection fires for real instead
+        of vscode_api.py's _TextEditor.selection never being mutated after
+        construction. window.activeTextEditor was ALSO never kept in sync
+        with whatever file the user has open in the UI (only set when a
+        Python extension explicitly calls showTextDocument) - fixed here as
+        a side effect: lazily calls showTextDocument only when the active
+        editor's document identity actually differs from this uri, so
+        normal selection ticks for the same file don't reset/refire it."""
+        self._ensure_engine()
+        vscode_ns = getattr(self, "_vscode_ns", None)
+        if vscode_ns is None:
+            return {"ok": False}
+        document = vscode_ns.update_text_document_snapshot(uri, content, language or "plaintext")
+        active = getattr(vscode_ns, "_active_text_editor", None)
+        if active is None or active.document is not document:
+            vscode_ns.build()["window"]["showTextDocument"](document)
+        changed = vscode_ns.update_active_text_editor_selection(selection)
+        return {"ok": True, "changed": changed}
+
+    def report_editor_visible_ranges(self, ranges: Any) -> Dict:
+        """Real cursor/selection bridge companion: scroll position, wired
+        from the same frontend scroll handler that already repositions the
+        diagnostics/breakpoint gutter overlays."""
+        vscode_ns = getattr(self, "_vscode_ns", None)
+        if vscode_ns is None:
+            return {"ok": False}
+        changed = vscode_ns.update_active_text_editor_visible_ranges(ranges)
+        return {"ok": True, "changed": changed}
+
     def save_workflow(self, data: Dict) -> Dict:
         self._ensure_engine()
         from ai_editor.workflows import WorkflowDef

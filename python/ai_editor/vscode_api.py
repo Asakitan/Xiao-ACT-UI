@@ -2285,6 +2285,8 @@ class VscodeNamespace:
         self._diagnostics_change_emitter = EventEmitter()
         self._window_active_text_editor_emitter = EventEmitter()
         self._window_visible_text_editors_emitter = EventEmitter()
+        self._text_editor_selection_emitter = EventEmitter()
+        self._text_editor_visible_ranges_emitter = EventEmitter()
         self._window_active_terminal_emitter = EventEmitter()
         self._window_open_terminal_emitter = EventEmitter()
         self._window_close_terminal_emitter = EventEmitter()
@@ -4590,6 +4592,8 @@ class VscodeNamespace:
                 "terminals": [],
                 "onDidChangeActiveTextEditor": self._window_active_text_editor_emitter.event,
                 "onDidChangeVisibleTextEditors": self._window_visible_text_editors_emitter.event,
+                "onDidChangeTextEditorSelection": self._text_editor_selection_emitter.event,
+                "onDidChangeTextEditorVisibleRanges": self._text_editor_visible_ranges_emitter.event,
                 "onDidChangeActiveTerminal": self._window_active_terminal_emitter.event,
                 "onDidOpenTerminal": self._window_open_terminal_emitter.event,
                 "onDidCloseTerminal": self._window_close_terminal_emitter.event,
@@ -4615,6 +4619,64 @@ class VscodeNamespace:
         self._window_api["visibleTextEditors"] = list(self._visible_text_editors)
         self._window_api["activeTerminal"] = self._active_terminal
         self._window_api["terminals"] = list(self._terminals)
+
+    @staticmethod
+    def _position_equal(a: "Position", b: "Position") -> bool:
+        return a.line == b.line and a.character == b.character
+
+    def _range_equal(self, a: "Range", b: "Range") -> bool:
+        return (self._position_equal(a.start, b.start)
+                and self._position_equal(a.end, b.end))
+
+    def update_active_text_editor_selection(self, selection: Dict[str, Any]) -> bool:
+        """Real cursor/selection bridge: the frontend calls this (via
+        app.py) whenever the caret/selection moves in the actual editor
+        textarea, so vscode.window.onDidChangeTextEditorSelection fires for
+        real instead of never firing at all. Only .selection/.selections are
+        wired here - .viewColumn is always 1 (this app has no split-editor
+        groups, so there's nothing for it to ever change to) and .options
+        has no backing per-file tab-size/insert-spaces state to report."""
+        editor = self._active_text_editor
+        if editor is None:
+            return False
+        start = selection.get("start") if isinstance(selection, dict) else None
+        end = selection.get("end") if isinstance(selection, dict) else None
+        if not isinstance(start, dict) or not isinstance(end, dict):
+            return False
+        new_range = Range(
+            Position(int(start.get("line", 0)), int(start.get("character", 0))),
+            Position(int(end.get("line", 0)), int(end.get("character", 0))))
+        if self._range_equal(editor.selection, new_range):
+            return False
+        editor.selection = new_range
+        editor.selections = [new_range]
+        self._text_editor_selection_emitter.fire({
+            "textEditor": editor, "selections": [new_range], "kind": None})
+        return True
+
+    def update_active_text_editor_visible_ranges(self, ranges: Any) -> bool:
+        """Real cursor/selection bridge companion: scroll position, wired
+        from the same frontend scroll handler that already repositions the
+        diagnostics/breakpoint gutter overlays."""
+        editor = self._active_text_editor
+        if editor is None:
+            return False
+        new_ranges = []
+        for item in list(ranges or []):
+            if not isinstance(item, dict):
+                continue
+            start = item.get("start") or {}
+            end = item.get("end") or {}
+            new_ranges.append(Range(
+                Position(int(start.get("line", 0)), int(start.get("character", 0))),
+                Position(int(end.get("line", 0)), int(end.get("character", 0)))))
+        if len(new_ranges) == len(editor.visibleRanges) and all(
+                self._range_equal(a, b) for a, b in zip(new_ranges, editor.visibleRanges)):
+            return False
+        editor.visibleRanges = new_ranges
+        self._text_editor_visible_ranges_emitter.fire({
+            "textEditor": editor, "visibleRanges": new_ranges})
+        return True
 
     def _register_file_decoration_provider(self, provider: Any) -> Disposable:
         self._file_decoration_providers.append(provider)

@@ -21245,6 +21245,34 @@ def test_vscode_api() -> None:
                api["window"]["state"] == {"focused": True, "active": True}
                and api["window"]["activeColorTheme"] == {"kind": 2}
                and callable(api["window"]["onDidChangeWindowState"]))
+        # 批次18d/19 (real cursor/selection bridge, previously deferred in
+        # batch 16 because Python's _TextEditor.selection was never mutated
+        # after construction - now it really is, via the frontend's
+        # debounced report_editor_selection/report_editor_visible_ranges
+        # bridge calls in app.py).
+        selection_events = []
+        visible_range_events = []
+        api["window"]["onDidChangeTextEditorSelection"](
+            lambda e: selection_events.append((e["selections"][0].start.line, e["selections"][0].start.character,
+                                                e["selections"][0].end.line, e["selections"][0].end.character)))
+        api["window"]["onDidChangeTextEditorVisibleRanges"](
+            lambda e: visible_range_events.append(len(e["visibleRanges"])))
+        changed_1 = ns.update_active_text_editor_selection(
+            {"start": {"line": 2, "character": 4}, "end": {"line": 2, "character": 9}})
+        _check("update_active_text_editor_selection mutates the real active editor's selection and fires the event",
+               changed_1 is True
+               and editor.selection.start.line == 2 and editor.selection.start.character == 4
+               and editor.selection.end.line == 2 and editor.selection.end.character == 9
+               and selection_events == [(2, 4, 2, 9)])
+        changed_again_same = ns.update_active_text_editor_selection(
+            {"start": {"line": 2, "character": 4}, "end": {"line": 2, "character": 9}})
+        _check("update_active_text_editor_selection is a no-op (no duplicate event) when the selection hasn't actually changed",
+               changed_again_same is False and len(selection_events) == 1)
+        changed_2 = ns.update_active_text_editor_visible_ranges(
+            [{"start": {"line": 0, "character": 0}, "end": {"line": 30, "character": 0}}])
+        _check("update_active_text_editor_visible_ranges mutates visibleRanges and fires the event",
+               changed_2 is True and len(editor.visibleRanges) == 1
+               and editor.visibleRanges[0].end.line == 30 and visible_range_events == [1])
         editor_hits = []
         text_editor_disposable = api["commands"]["registerTextEditorCommand"](
             "test.editor", lambda active, edit: editor_hits.append(active.document.fileName))
@@ -40581,6 +40609,36 @@ def test_workflows() -> None:
                toggled_off.get("breakpoints") == [{"uri": file_a, "line": 9, "enabled": True}])
         _check("toggle_breakpoint rejects a non-integer line",
                "error" in bp_api.toggle_breakpoint(file_a, "not-a-line"))
+
+        # Real cursor/selection bridge (长期计划批次19): report_editor_selection
+        # also has to establish window.activeTextEditor for the CURRENT file
+        # as a side effect, since app.py never did that anywhere on its own
+        # (only an explicit vscode.window.showTextDocument() call from a
+        # Python extension ever did) - verify both effects together.
+        sel_api = AIEditorAPI(_SettingsGui({"ai_editor": {}}))
+        sel_api._ensure_engine()
+        sel_uri = "C:/proj/sel.py"
+        first = sel_api.report_editor_selection(
+            sel_uri, "line1\nline2\nline3\n", "python",
+            {"start": {"line": 1, "character": 0}, "end": {"line": 1, "character": 5}})
+        active_editor = sel_api._vscode_ns._active_text_editor
+        _check("report_editor_selection lazily establishes activeTextEditor for the reported file",
+               first.get("ok") is True and first.get("changed") is True
+               and active_editor is not None
+               and active_editor.document.fileName.replace("\\", "/") == sel_uri
+               and active_editor.selection.start.line == 1 and active_editor.selection.end.character == 5)
+        same_editor_after_second_call = sel_api.report_editor_selection(
+            sel_uri, "line1\nline2\nline3\n", "python",
+            {"start": {"line": 2, "character": 0}, "end": {"line": 2, "character": 3}})
+        _check("report_editor_selection does not recreate the editor object for the same file (would reset selection state)",
+               sel_api._vscode_ns._active_text_editor is active_editor
+               and same_editor_after_second_call.get("changed") is True
+               and active_editor.selection.start.line == 2)
+        visible_result = sel_api.report_editor_visible_ranges(
+            [{"start": {"line": 0, "character": 0}, "end": {"line": 10, "character": 0}}])
+        _check("report_editor_visible_ranges updates the same active editor's visibleRanges",
+               visible_result.get("ok") is True and visible_result.get("changed") is True
+               and len(active_editor.visibleRanges) == 1 and active_editor.visibleRanges[0].end.line == 10)
 
         class _Resp:
             def __init__(self, content: str, error: str = "") -> None:
