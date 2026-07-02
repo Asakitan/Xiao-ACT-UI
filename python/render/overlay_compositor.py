@@ -1952,6 +1952,7 @@ class UnifiedOverlay:
     def _compute_dirty_rect(
         self, sw: int, sh: int, ox: int, oy: int,
         snapshots: Dict[str, Tuple[int, int, int, int]],
+        layers: List['CompositorLayer'],
     ) -> Optional[Tuple[int, int, int, int]]:
         """Union bounding rect (host-relative, top-left origin) of every
         screen area that actually needs re-presenting this frame.
@@ -1972,7 +1973,12 @@ class UnifiedOverlay:
         """
         x0 = y0 = x1 = y1 = None
         pad = 2  # small defensive margin against off-by-one rect edges
-        for layer in self._z_sorted:
+        # *layers* is the caller's per-tick capture of _z_sorted — the
+        # same list `snapshots` was built from. Re-reading self._z_sorted
+        # here instead would race _rebuild_z_order() replacing it from
+        # another thread (layer created/destroyed mid-tick) and hit a
+        # KeyError on a layer that isn't in `snapshots`.
+        for layer in layers:
             visible_now = layer.visible and layer.alpha > 0.001
             cur_rect = None
             if visible_now:
@@ -2034,9 +2040,23 @@ class UnifiedOverlay:
         # because the rect that got read back/presented doesn't cover
         # where it was actually drawn. Snapshotting once keeps both
         # consumers looking at the exact same values for this tick.
+        # Capture the layer list itself ONCE too. _rebuild_z_order()
+        # (another thread creating/destroying a layer, e.g. fisheye's
+        # dynamic sao_fisheye_gpu_N panels) REPLACES self._z_sorted with
+        # a new list under _lock — it never mutates in place — so this
+        # local reference is a stable per-tick view. The snapshot dict,
+        # _compute_dirty_rect, and the draw loop below must all iterate
+        # THIS list: re-reading self._z_sorted in each let a layer
+        # created between two reads show up in a later loop but not in
+        # `snapshots`, KeyError-ing the frame mid-render (and, before
+        # the try/finally below existed, leaking the interop lock —
+        # every subsequent begin() then failed while present_gpu kept
+        # presenting the last good frame: the whole overlay froze until
+        # restart, e.g. "fisheye won't open anymore").
+        layers = self._z_sorted
         snapshots: Dict[str, Tuple[int, int, int, int]] = {
             layer.name: (layer.x, layer.y, layer.width, layer.height)
-            for layer in self._z_sorted
+            for layer in layers
         }
         # _sync_host_rgn is a THIRD consumer of layer position (besides
         # _compute_dirty_rect and this method's own draw loop, both of
@@ -2054,7 +2074,8 @@ class UnifiedOverlay:
         # three consumers agree on one immutable position per tick.
         self._last_render_snapshots = snapshots
 
-        dirty_rect = self._compute_dirty_rect(sw, sh, ox, oy, snapshots)
+        dirty_rect = self._compute_dirty_rect(sw, sh, ox, oy, snapshots,
+                                              layers)
 
         # Part A: render straight into the interop-registered D3D11
         # texture when available, so present_frame() can CopyResource
@@ -2063,25 +2084,47 @@ class UnifiedOverlay:
         # the exact same path used when interop was never enabled.
         dc = self._dcomp
         gpu_target_active = dc is not None and dc.render_to_gpu_texture_begin()
-        if gpu_target_active:
-            # Bind through a moderngl wrap so moderngl's framebuffer
-            # state tracking agrees with reality — see the field's
-            # comment in __init__ for why a raw bind is not enough.
-            gen = dc.gpu_target_generation
-            if self._gpu_fbo_wrap is None or self._gpu_fbo_wrap_gen != gen:
-                self._gpu_fbo_wrap = ctx.detect_framebuffer(dc.gpu_fbo_id)
-                self._gpu_fbo_wrap_gen = gen
-            self._gpu_fbo_wrap.use()
-            ctx.viewport = (0, 0, sw, sh)
-        else:
-            ctx.screen.use()
-            ctx.viewport = (0, 0, sw, sh)
-        ctx.clear(0.0, 0.0, 0.0, 0.0)
+        try:
+            if gpu_target_active:
+                # Bind through a moderngl wrap so moderngl's framebuffer
+                # state tracking agrees with reality — see the field's
+                # comment in __init__ for why a raw bind is not enough.
+                gen = dc.gpu_target_generation
+                if self._gpu_fbo_wrap is None or self._gpu_fbo_wrap_gen != gen:
+                    self._gpu_fbo_wrap = ctx.detect_framebuffer(dc.gpu_fbo_id)
+                    self._gpu_fbo_wrap_gen = gen
+                self._gpu_fbo_wrap.use()
+                ctx.viewport = (0, 0, sw, sh)
+            else:
+                ctx.screen.use()
+                ctx.viewport = (0, 0, sw, sh)
+            ctx.clear(0.0, 0.0, 0.0, 0.0)
 
-        from render.dcomp_bridge import (
-            gl_bind_texture_unit0, keyed_mutex_acquire, keyed_mutex_release)
+            from render.dcomp_bridge import (
+                gl_bind_texture_unit0, keyed_mutex_acquire,
+                keyed_mutex_release)
 
-        for layer in self._z_sorted:
+            self._draw_layers(
+                ctx, dc, gpu_target_active, layers, snapshots,
+                sw, sh, ox, oy, t,
+                gl_bind_texture_unit0, keyed_mutex_acquire,
+                keyed_mutex_release)
+        finally:
+            # MUST run even if a draw throws: begin() locked the interop
+            # object, and a leaked lock makes every future begin() fail
+            # while present_gpu() keeps presenting the stale gpu texture
+            # — the overlay freezes permanently (observed live when the
+            # pre-`layers`-capture KeyError above fired).
+            if gpu_target_active:
+                dc.render_to_gpu_texture_end()
+
+        return dirty_rect
+
+    def _draw_layers(self, ctx, dc, gpu_target_active, layers, snapshots,
+                     sw, sh, ox, oy, t,
+                     gl_bind_texture_unit0, keyed_mutex_acquire,
+                     keyed_mutex_release) -> None:
+        for layer in layers:
             if not layer.visible or layer.alpha <= 0.001:
                 layer._dirty = False
                 continue
@@ -2160,11 +2203,6 @@ class UnifiedOverlay:
                 vao.render(moderngl.TRIANGLE_STRIP)
 
             layer._dirty = False
-
-        if gpu_target_active:
-            dc.render_to_gpu_texture_end()
-
-        return dirty_rect
 
     def _cleanup_gl(self) -> None:
         dc = self._dcomp
