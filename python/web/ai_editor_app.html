@@ -20512,6 +20512,18 @@ async function refreshEditorScmBaseline(tabId,filePath){
   }
 }
 window.refreshEditorScmBaseline=refreshEditorScmBaseline;
+// TextEditor.options (tabSize/insertSpaces) real bridge companion. Unlike
+// selection/visibleRanges this doesn't need its own async round-trip to
+// derive a value - editorFormatOptions() already resolves the real
+// per-language editor.tabSize/editor.insertSpaces settings synchronously.
+// Reported on file/language switch (the common real-world trigger); a live
+// settings-panel edit while a file stays open won't re-report until the
+// next switch - a deliberate, documented scope boundary, not an oversight.
+function reportEditorOptions(){
+  if(typeof call!=='function'||typeof editorFormatOptions!=='function')return;
+  call('report_editor_options',editorFormatOptions());
+}
+window.reportEditorOptions=reportEditorOptions;
 async function requestEditorDiagnostics(quiet){
   const wrap=$('editor-container');
   if(!ed||!wrap||wrap.style.display==='none')return;
@@ -48683,6 +48695,7 @@ function switchTab(id){
     $('editor-welcome').style.display='none';$('editor-container').style.display='flex';
     if(typeof refreshEditorBreakpoints==='function')refreshEditorBreakpoints();
     if(typeof refreshEditorScmBaseline==='function')refreshEditorScmBaseline(tab.id,tab.filePath);
+    if(typeof reportEditorOptions==='function')reportEditorOptions();
     if(typeof scheduleEditorInlayHints==='function')scheduleEditorInlayHints(160);
     if(typeof scheduleEditorInlineCompletions==='function')scheduleEditorInlineCompletions(220);
     if(typeof scheduleEditorCodeLenses==='function')scheduleEditorCodeLenses(280);

@@ -2287,6 +2287,7 @@ class VscodeNamespace:
         self._window_visible_text_editors_emitter = EventEmitter()
         self._text_editor_selection_emitter = EventEmitter()
         self._text_editor_visible_ranges_emitter = EventEmitter()
+        self._text_editor_options_emitter = EventEmitter()
         self._window_active_terminal_emitter = EventEmitter()
         self._window_open_terminal_emitter = EventEmitter()
         self._window_close_terminal_emitter = EventEmitter()
@@ -4594,6 +4595,7 @@ class VscodeNamespace:
                 "onDidChangeVisibleTextEditors": self._window_visible_text_editors_emitter.event,
                 "onDidChangeTextEditorSelection": self._text_editor_selection_emitter.event,
                 "onDidChangeTextEditorVisibleRanges": self._text_editor_visible_ranges_emitter.event,
+                "onDidChangeTextEditorOptions": self._text_editor_options_emitter.event,
                 "onDidChangeActiveTerminal": self._window_active_terminal_emitter.event,
                 "onDidOpenTerminal": self._window_open_terminal_emitter.event,
                 "onDidCloseTerminal": self._window_close_terminal_emitter.event,
@@ -4676,6 +4678,28 @@ class VscodeNamespace:
         editor.visibleRanges = new_ranges
         self._text_editor_visible_ranges_emitter.fire({
             "textEditor": editor, "visibleRanges": new_ranges})
+        return True
+
+    def update_active_text_editor_options(self, options: Dict[str, Any]) -> bool:
+        """Real cursor/selection bridge companion: .options (tabSize/
+        insertSpaces) DOES have real backing state on the frontend (the
+        editor.tabSize/editor.insertSpaces settings, resolved per-language
+        via editorEffectiveSection) - unlike .viewColumn, which has nothing
+        to ever change to in this single-pane app."""
+        editor = self._active_text_editor
+        if editor is None:
+            return False
+        if not isinstance(options, dict):
+            return False
+        new_options = {
+            "tabSize": int(options.get("tabSize", 4)),
+            "insertSpaces": bool(options.get("insertSpaces", True)),
+        }
+        if editor.options == new_options:
+            return False
+        editor.options = new_options
+        self._text_editor_options_emitter.fire({
+            "textEditor": editor, "options": new_options})
         return True
 
     def _register_file_decoration_provider(self, provider: Any) -> Disposable:

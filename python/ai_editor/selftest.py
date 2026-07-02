@@ -21307,6 +21307,21 @@ def test_vscode_api() -> None:
         _check("update_active_text_editor_visible_ranges mutates visibleRanges and fires the event",
                changed_2 is True and len(editor.visibleRanges) == 1
                and editor.visibleRanges[0].end.line == 30 and visible_range_events == [1])
+        # .options DOES have real backing state (editor.tabSize/insertSpaces
+        # settings resolved per-language on the frontend) unlike .viewColumn,
+        # which was correctly left alone since this app has no split-editor
+        # groups for it to ever change to.
+        options_events = []
+        api["window"]["onDidChangeTextEditorOptions"](
+            lambda e: options_events.append(dict(e["options"])))
+        changed_3 = ns.update_active_text_editor_options({"tabSize": 2, "insertSpaces": False})
+        _check("update_active_text_editor_options mutates the real active editor's options and fires the event",
+               changed_3 is True
+               and editor.options == {"tabSize": 2, "insertSpaces": False}
+               and options_events == [{"tabSize": 2, "insertSpaces": False}])
+        changed_3_again = ns.update_active_text_editor_options({"tabSize": 2, "insertSpaces": False})
+        _check("update_active_text_editor_options is a no-op when options haven't actually changed",
+               changed_3_again is False and len(options_events) == 1)
         editor_hits = []
         text_editor_disposable = api["commands"]["registerTextEditorCommand"](
             "test.editor", lambda active, edit: editor_hits.append(active.document.fileName))
@@ -40673,6 +40688,10 @@ def test_workflows() -> None:
         _check("report_editor_visible_ranges updates the same active editor's visibleRanges",
                visible_result.get("ok") is True and visible_result.get("changed") is True
                and len(active_editor.visibleRanges) == 1 and active_editor.visibleRanges[0].end.line == 10)
+        options_result = sel_api.report_editor_options({"tabSize": 2, "insertSpaces": False})
+        _check("report_editor_options updates the same active editor's options",
+               options_result.get("ok") is True and options_result.get("changed") is True
+               and active_editor.options == {"tabSize": 2, "insertSpaces": False})
 
         class _Resp:
             def __init__(self, content: str, error: str = "") -> None:

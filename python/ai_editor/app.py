@@ -9893,6 +9893,17 @@ class AIEditorAPI:
         changed = vscode_ns.update_active_text_editor_visible_ranges(ranges)
         return {"ok": True, "changed": changed}
 
+    def report_editor_options(self, options: Dict[str, Any]) -> Dict:
+        """Real cursor/selection bridge companion: .options (tabSize/
+        insertSpaces), resolved on the frontend from the real per-language
+        editor.tabSize/editor.insertSpaces settings (editorFormatOptions())
+        and reported whenever the active file/language changes."""
+        vscode_ns = getattr(self, "_vscode_ns", None)
+        if vscode_ns is None:
+            return {"ok": False}
+        changed = vscode_ns.update_active_text_editor_options(options)
+        return {"ok": True, "changed": changed}
+
     def get_scm_quick_diff_baseline(self, file_path: str) -> Dict:
         """SCM quick-diff gutter: return the file's content at git HEAD, so
         the editor's dirty-diff gutter (already built - computeEditorDirtyDiff/
