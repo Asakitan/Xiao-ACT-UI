@@ -49735,6 +49735,7 @@ function commandPaletteNormalizeDynamicCommand(raw,builtinIds){
     description:description,
     source:raw.source||'extension',
     extensionId:raw.extensionId||'',
+    shortcut:String(raw.primaryKeybinding||raw.shortcut||raw.key||''),
     runtimeAvailable:raw.runtimeAvailable!==false,
     needsExtensionRuntime:!!raw.needsExtensionRuntime,
     enablement:raw.enablement||'',
@@ -49793,6 +49794,7 @@ async function refreshCommandPaletteDynamicCommands(){
   const builtinIds=commandPaletteBuiltinIdSet();
   const rawCommands=result&&Array.isArray(result.commands)?result.commands:[];
   _cmdPaletteDynamicCommands=rawCommands.map(raw=>commandPaletteNormalizeDynamicCommand(raw,builtinIds)).filter(Boolean);
+  if(typeof invalidateExtensionKeybindingMap==='function')invalidateExtensionKeybindingMap();
   if($('cmd-palette').classList.contains('open')&&!$('cmd-palette').dataset.mode)filterCommands();
 }
 function commandPaletteNormalizeQuery(value){
@@ -50084,12 +50086,15 @@ document.addEventListener('keydown',e=>{
   // KB-002: Global shortcuts shown in menus (Ctrl+N/O/S/B/L)
   const globalAction=_GLOBAL_SHORTCUT_MAP[combo];
   if(globalAction){e.preventDefault();globalAction();return}
+  // KB-003: Extension-contributed default keybindings (lowest precedence -
+  // user-customized bindings and built-in shortcuts above always win).
+  if(dispatchExtensionKeybinding(combo)){e.preventDefault();return}
 });
 
 // ── SETTINGS-05: Keyboard shortcuts editor ──
 const _KB_STORAGE_KEY='sao-custom-keybindings';
 function _loadCustomKeybindings(){try{return JSON.parse(localStorage.getItem(_KB_STORAGE_KEY)||'{}');}catch(e){return {};}}
-function _saveCustomKeybindings(map){try{localStorage.setItem(_KB_STORAGE_KEY,JSON.stringify(map))}catch(e){}}
+function _saveCustomKeybindings(map){try{localStorage.setItem(_KB_STORAGE_KEY,JSON.stringify(map))}catch(e){}if(typeof invalidateExtensionKeybindingMap==='function')invalidateExtensionKeybindingMap()}
 let _keybindingDynamicCommands=[];
 let _keybindingDynamicRefresh=0;
 function keybindingCommandKey(command){
@@ -50148,6 +50153,50 @@ function keybindingRunCommand(key){
   if(commandKey&&commandKey.includes('.')){call('execute_command',commandKey);return true}
   return false;
 }
+// Extension-contributed DEFAULT keybindings (contributes.keybindings).
+// These were parsed and shown in the shortcut editor but never dispatched -
+// only user-customized bindings from localStorage fired. Cache rebuilt
+// whenever the dynamic command list refreshes; user custom bindings and the
+// hardcoded built-ins keep precedence (checked earlier in the dispatcher).
+let _extensionKeybindingMap=null;
+function _normalizeShortcutLabel(value){
+  return String(value||'').trim().toLowerCase().split('+').map(part=>part.trim()).filter(Boolean)
+    .sort((a,b)=>{
+      const order=token=>token==='ctrl'?0:token==='shift'?1:token==='alt'?2:token==='meta'||token==='cmd'?3:4;
+      return order(a)-order(b)||a.localeCompare(b);
+    }).join('+');
+}
+function _rebuildExtensionKeybindingMap(){
+  const map={};
+  const custom=_loadCustomKeybindings();
+  keybindingCommandRows().forEach(command=>{
+    if(!(command&&(command.extensionId||keybindingCommandSource(command)==='extension')))return;
+    const key=keybindingCommandKey(command);
+    if(!key)return;
+    // A user reassignment in the shortcut editor supersedes the manifest
+    // default entirely - the custom-map dispatcher handles the new combo,
+    // and the old default combo must go dead, not keep firing.
+    if(Object.prototype.hasOwnProperty.call(custom,key)
+       ||Object.prototype.hasOwnProperty.call(custom,keybindingCommandLabel(command)))return;
+    const shortcut=_normalizeShortcutLabel(command.shortcut||command.primaryKeybinding||'');
+    if(!shortcut)return;
+    if(!map[shortcut])map[shortcut]=key;
+  });
+  _extensionKeybindingMap=map;
+  return map;
+}
+function invalidateExtensionKeybindingMap(){_extensionKeybindingMap=null}
+function dispatchExtensionKeybinding(combo){
+  const normalized=_normalizeShortcutLabel(combo);
+  if(!normalized)return false;
+  // Only fire on modified combos / F-keys - a bare letter binding must
+  // never steal typing from the editor or inputs.
+  if(!/ctrl|alt|meta|cmd/.test(normalized)&&!/^f\d{1,2}$/.test(normalized))return false;
+  const map=_extensionKeybindingMap||_rebuildExtensionKeybindingMap();
+  const target=map[normalized];
+  if(!target)return false;
+  return keybindingRunCommand(target);
+}
 async function refreshKeybindingsDynamicCommands(){
   const requestId=++_keybindingDynamicRefresh;
   const result=await call('list_command_palette_commands',commandPaletteContext());
@@ -50155,6 +50204,7 @@ async function refreshKeybindingsDynamicCommands(){
   const builtinIds=commandPaletteBuiltinIdSet();
   const rawCommands=result&&Array.isArray(result.commands)?result.commands:[];
   _keybindingDynamicCommands=rawCommands.map(raw=>commandPaletteNormalizeDynamicCommand(raw,builtinIds)).filter(Boolean);
+  if(typeof invalidateExtensionKeybindingMap==='function')invalidateExtensionKeybindingMap();
   if($('kb-shortcuts-modal')&&$('kb-shortcuts-modal').classList.contains('open'))renderKeybindingTable();
   return _keybindingDynamicCommands;
 }

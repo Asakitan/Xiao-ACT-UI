@@ -17955,6 +17955,18 @@ console.log("command palette quick access helpers ok");
            scm_api.get_scm_quick_diff_baseline(outside_repo_file).get("available") is False)
     _check("get_scm_quick_diff_baseline reports unavailable for non-local schemes",
            scm_api.get_scm_quick_diff_baseline("untitled:Untitled-1").get("available") is False)
+    # Extension-contributed DEFAULT keybindings must actually dispatch
+    # (contributes.keybindings were parsed and shown in the shortcut editor
+    # but only user-customized bindings ever fired - 2026-07-02 audit).
+    # Live Playwright verified the full behavior (default combo fires
+    # execute_command; user reassignment kills the default combo); this
+    # static check pins the wiring so a refactor can't silently drop it.
+    _check("extension default keybindings are dispatched with user-custom precedence (KB-003)",
+           "function _rebuildExtensionKeybindingMap()" in html
+           and "function dispatchExtensionKeybinding(combo)" in html
+           and "if(dispatchExtensionKeybinding(combo)){e.preventDefault();return}" in html
+           and "function invalidateExtensionKeybindingMap()" in html
+           and "shortcut:String(raw.primaryKeybinding||raw.shortcut||raw.key||'')" in html)
     _check("editor dirty diff decorations render while editing",
            "editor-dirty-diff-line" in html
            and "editor-dirty-diff-gutter" in html
