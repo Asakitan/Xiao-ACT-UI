@@ -18044,6 +18044,29 @@ console.log("command palette quick access helpers ok");
            and "_linkifyTerminalFragment(frag);" in html
            and "function openTerminalPathLink(value)" in html
            and "call('open_external_uri',value)" in html)
+    # Live extension activation is scoped to the PLATFORM's own install dirs
+    # (never the global ~/.vscode set) and lives in-platform now (an
+    # AIEditorAPI method + command-palette trigger), not a smoke-only
+    # script. The activation itself runs real extension code so it stays
+    # out of the automated suite (verified manually against real Node); the
+    # method's existence + platform-scoping + queryable error store are
+    # pinned here. verify_installed_extension_activation reads from
+    # _ext_host.registry (platform-scanned) and the error dict absence for
+    # an unknown id must be "" not a raise.
+    from ai_editor.extension_host import NodeExtensionHost
+    _verify_api = AIEditorAPI(_SettingsGui({"ai_editor": {}}))
+    _check("verify_installed_extension_activation exists and fails safe when no Node host runs",
+           hasattr(_verify_api, "verify_installed_extension_activation")
+           and _verify_api.verify_installed_extension_activation().get("running") is False)
+    _errstore_host = NodeExtensionHost(node_path="", script_path="")
+    _check("NodeExtensionHost exposes a queryable per-extension activation error store",
+           hasattr(_errstore_host, "activation_error")
+           and _errstore_host.activation_error("never.registered") == ""
+           and hasattr(_errstore_host, "registered_extension_ids"))
+    _check("verify activation is a command-palette action scoped to platform-installed extensions",
+           "id:'workbench.extensions.action.verifyActivation'" in html
+           and "function verifyInstalledExtensionActivation()" in html
+           and "call('verify_installed_extension_activation',true)" in html)
     _check("extension default keybindings are dispatched with user-custom precedence (KB-003)",
            "function _rebuildExtensionKeybindingMap()" in html
            and "function dispatchExtensionKeybinding(combo)" in html

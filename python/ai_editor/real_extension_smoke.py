@@ -159,6 +159,154 @@ def attempt_theme_live_activation(reports: List[Dict[str, Any]]) -> Dict[str, An
     }
 
 
+def _platform_extension_dirs() -> List[str]:
+    """The platform's OWN extension install dirs (not the global VS Code
+    set). Mirrors AIEditorAPI._extension_scan_dirs' platform entries."""
+    dirs: List[str] = []
+    try:
+        from ai_editor.scopes import _base_dir
+        base = _base_dir()
+    except Exception:
+        base = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    for candidate in (
+            os.path.join(base, "ai_editor_extensions"),
+            os.path.join(os.path.expanduser("~"), ".sao", "extensions")):
+        if os.path.isdir(candidate):
+            dirs.append(candidate)
+    return dirs
+
+
+def attempt_js_live_activation(
+        directory: str = "",
+        per_extension_timeout: float = 20.0,
+        extension_ids: Any = None) -> Dict[str, Any]:
+    """OPT-IN offline live activation of JS extensions installed under the
+    PLATFORM (ai_editor_extensions / ~/.sao/extensions) - NOT the global
+    ~/.vscode/extensions set (those are arbitrary published extensions that
+    expect the full VS Code API and mostly fail against this host's shim;
+    the in-app ``AIEditorAPI.verify_installed_extension_activation`` is the
+    primary, live-host home of this check).
+
+    Pass ``directory`` to point at a specific extension folder; the default
+    sweeps the platform's own install dirs. Stays OUT of the automated
+    selftest suite: it executes real extension code, which is machine-
+    dependent and may do real work (telemetry, file scans). Isolation
+    applied:
+
+    - the Node host gets an EMPTY temp workspace root, so extensions cannot
+      see or touch the real workspace;
+    - a temp storage root, so globalState/workspaceState writes land in a
+      throwaway directory;
+    - a per-extension activation timeout, so one hanging extension cannot
+      stall the sweep;
+    - errors are recorded per extension, never raised.
+
+    Run via ``python -m ai_editor.real_extension_smoke --live-js`` (the user
+    explicitly opting in to run their own installed extensions' code - the
+    same code VS Code itself runs on their machine every day).
+    """
+    import shutil
+    import tempfile
+    import time
+
+    from ai_editor.extension_host import ExtensionScanner, NodeExtensionHost
+    from ai_editor.node_runtime import get_node_path
+
+    scan_dirs = [directory] if directory else _platform_extension_dirs()
+    summary: Dict[str, Any] = {
+        "directory": scan_dirs[0] if scan_dirs else "",
+        "scanDirs": scan_dirs,
+        "nodeAvailable": False,
+        "attempted": 0,
+        "activated": 0,
+        "failed": 0,
+        "results": [],
+    }
+    node_path = get_node_path()
+    if not node_path:
+        summary["error"] = "Node.js not found - cannot run JS extensions"
+        return summary
+    summary["nodeAvailable"] = True
+    if not scan_dirs:
+        summary["error"] = "No platform extension directories exist yet"
+        return summary
+
+    descriptions = [
+        ext
+        for scan_dir in scan_dirs
+        for ext in ExtensionScanner.scan_directory(scan_dir)
+        if ext.main]
+    wanted = {str(x) for x in (extension_ids or []) if str(x)}
+    if wanted:
+        descriptions = [ext for ext in descriptions if ext.id in wanted]
+    if not descriptions:
+        summary["error"] = "No JS (main-entry) extensions found to activate"
+        return summary
+
+    script_path = os.path.join(
+        os.path.dirname(os.path.abspath(__file__)), "node_ext_host.js")
+    if not os.path.isfile(script_path):
+        summary["error"] = f"node_ext_host.js not found at {script_path!r}"
+        return summary
+
+    storage_tmp = tempfile.mkdtemp(prefix="sao_js_live_storage_")
+    workspace_tmp = tempfile.mkdtemp(prefix="sao_js_live_workspace_")
+    errors_by_ext: Dict[str, str] = {}
+    host = NodeExtensionHost(
+        node_path=node_path,
+        script_path=script_path,
+        ui_bridge=None,
+        storage_root=storage_tmp,
+        workspace_root=workspace_tmp,
+    )
+    host.on_error(lambda ext_id, message: errors_by_ext.setdefault(
+        str(ext_id), str(message)))
+    try:
+        if not host.start():
+            summary["error"] = "Node extension host failed to start"
+            return summary
+        host.register_extensions(descriptions)
+        for ext in descriptions:
+            entry: Dict[str, Any] = {
+                "id": ext.id,
+                "version": ext.version,
+                "activationEvents": ext.activation_events[:8],
+            }
+            summary["attempted"] += 1
+            started = time.monotonic()
+            sent = host.activate(
+                ext.extension_path, ext.id, host.extension_manifest(ext))
+            if not sent:
+                entry["activated"] = False
+                entry["error"] = "activate message could not be sent"
+            else:
+                activated = host.wait_for_activation(
+                    [ext.id], timeout=per_extension_timeout)
+                entry["activated"] = bool(activated)
+                if not activated:
+                    entry["error"] = errors_by_ext.get(
+                        ext.id, f"not activated within {per_extension_timeout}s")
+            entry["durationMs"] = int((time.monotonic() - started) * 1000)
+            if entry["activated"]:
+                summary["activated"] += 1
+            else:
+                summary["failed"] += 1
+            summary["results"].append(entry)
+        for ext in descriptions:
+            try:
+                host.deactivate(ext.id)
+            except Exception:
+                pass
+    finally:
+        try:
+            host.stop()
+        except Exception:
+            pass
+        for tmp in (storage_tmp, workspace_tmp):
+            shutil.rmtree(tmp, ignore_errors=True)
+    return summary
+
+
 def run_real_extension_smoke(
         directory: str = "", write_results: bool = True,
         include_live_activation: bool = False) -> Dict[str, Any]:
@@ -186,7 +334,10 @@ def run_real_extension_smoke(
     return summary
 
 
-def main() -> int:
+def main(argv: Any = None) -> int:
+    import sys
+    args = list(sys.argv[1:] if argv is None else argv)
+    live_js = "--live-js" in args
     summary = run_real_extension_smoke(include_live_activation=True)
     if not summary["directoryAvailable"]:
         print(f"No VS Code extensions directory found at {summary['directory']!r} "
@@ -207,6 +358,27 @@ def main() -> int:
             print(f"  - {entry['id']}: installed={entry['installed']} "
                   f"themes discovered={entry['themesDiscovered']} "
                   f"readable={entry['themesReadable']}")
+    if live_js:
+        print("Live JS activation (--live-js: activating PLATFORM-installed "
+              "extensions' real code in an isolated temp workspace; the global "
+              "~/.vscode set is intentionally NOT touched)...")
+        js_summary = attempt_js_live_activation()
+        summary["jsLiveActivation"] = js_summary
+        if js_summary.get("error"):
+            print(f"  {js_summary['error']}")
+        for entry in js_summary.get("results", []):
+            state = "activated" if entry.get("activated") else (
+                "FAILED: " + str(entry.get("error", "")))
+            print(f"  - {entry['id']} v{entry['version']}: {state} "
+                  f"({entry['durationMs']}ms)")
+        print(f"  JS live activation: {js_summary.get('activated', 0)}/"
+              f"{js_summary.get('attempted', 0)} activated")
+        try:
+            RESULTS_PATH.write_text(
+                json.dumps(summary, indent=2, ensure_ascii=False),
+                encoding="utf-8")
+        except OSError:
+            pass
     print(f"Results written to {RESULTS_PATH}")
     return 0
 

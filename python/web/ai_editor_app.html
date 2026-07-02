@@ -48856,6 +48856,39 @@ async function installExtensionFromDir(){
 }
 window.installExtensionFromDir=installExtensionFromDir;
 
+// Verify live activation of the JS extensions installed UNDER THIS PLATFORM
+// (never the global ~/.vscode set). Runs them for real on the live Node
+// host and reports per-extension pass/fail, so a user can confirm an
+// extension they installed actually activates here.
+async function verifyInstalledExtensionActivation(){
+  setStatus('Verifying installed extension activation…');
+  const res=await call('verify_installed_extension_activation',true);
+  if(!res||res.ok===false){
+    showToast('Extension activation check: '+((res&&res.error)||'Node extension host not running'),'error',3200);
+    return res;
+  }
+  const total=res.total||0;
+  if(!total){showToast('No JS extensions are installed under this platform.','info',2800);return res}
+  const modal=document.createElement('div');modal.className='modal-bg';modal.classList.add('open');
+  const rows=(res.extensions||[]).map(ext=>{
+    const ok=ext.activated;
+    return '<div style="display:flex;gap:8px;align-items:baseline;padding:5px 0;border-bottom:1px solid color-mix(in srgb,var(--border) 50%,transparent)">'
+      +'<span style="flex-shrink:0;color:'+(ok?'var(--fg-success,#98c379)':'var(--fg-error,#f44)')+'">'+(ok?'✓':'✗')+'</span>'
+      +'<span style="flex:1;min-width:0"><div style="font-weight:600">'+esc(ext.displayName||ext.id)+' <span style="color:var(--fg-dim);font-weight:400;font-size:11px">'+esc(ext.version||'')+'</span></div>'
+      +(ok?'':'<div style="font-size:11px;color:var(--fg-error,#f44);word-break:break-word">'+esc(ext.error||'activation failed')+'</div>')
+      +'</span></div>';
+  }).join('');
+  modal.innerHTML='<div class="modal"><h2>Extension Activation</h2>'
+    +'<div style="color:var(--fg-dim);font-size:12px;margin-bottom:6px">'+res.activated+' / '+total+' activated</div>'
+    +'<div style="max-height:340px;overflow:auto">'+rows+'</div>'
+    +'<div class="modal-btns"><button class="send-btn" onclick="this.closest(\'.modal-bg\').remove()">Close</button></div></div>';
+  document.body.appendChild(modal);
+  modal.onclick=e=>{if(e.target===modal)modal.remove()};
+  showToast('Extension activation: '+res.activated+'/'+total+' activated',res.failed?'warning':'success',2600);
+  return res;
+}
+window.verifyInstalledExtensionActivation=verifyInstalledExtensionActivation;
+
 // EXT-03: Hardcoded recommended extensions for AI coding
 const RECOMMENDED_EXTENSIONS=[
   {id:'github.copilot',displayName:'GitHub Copilot',publisher:'GitHub',description:'AI pair programmer — code completions and chat powered by OpenAI models.',iconUrl:'',version:'',installed:false},
@@ -49907,6 +49940,7 @@ const COMMANDS=[
   {id:'workbench.action.openGlobalKeybindings',label:'Preferences: Open Keyboard Shortcuts',shortcut:'Ctrl+K Ctrl+S',category:'Preferences',description:'Open keyboard shortcuts.',action:()=>openKeybindings()},
   {id:'workbench.action.quickOpen',label:'Go to File...',shortcut:'Ctrl+P',category:'Navigation',description:'Fuzzy-search workspace files by name and open one.',action:()=>openQuickOpenPicker()},
   {id:'workbench.action.findInFiles',label:'Search: Find in Files',shortcut:'Ctrl+Shift+F',category:'Search',description:'Search for text across all workspace files.',action:()=>openSearchSidebar()},
+  {id:'workbench.extensions.action.verifyActivation',label:'Extensions: Verify Installed Extension Activation',shortcut:'',category:'Extensions',description:'Live-activate the JS extensions installed under this platform and report which succeeded.',action:()=>verifyInstalledExtensionActivation()},
   {id:'workbench.action.tasks.runTask',label:'Tasks: Run Task...',shortcut:'',category:'Tasks',description:'Pick and run a task contributed by an installed extension.',action:()=>openTaskRunnerPicker()},
   {id:'workbench.action.tasks.terminate',label:'Tasks: Terminate Task',shortcut:'',category:'Tasks',description:'Cancel the currently running task, if any.',action:()=>cancelActiveTask()},
   {id:'workbench.view.debug',label:'View: Show Run and Debug',shortcut:'',category:'Debug',description:'Open the Run and Debug sidebar.',action:()=>{if(typeof switchSidebar==='function')switchSidebar('debug-runner')}},

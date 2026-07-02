@@ -1844,6 +1844,11 @@ class NodeExtensionHost:
         self._lock = threading.Lock()
         self._activated_ids: Set[str] = set()
         self._activation_sent_ids: Set[str] = set()
+        # Last activation error per extension id - the on_error callbacks are
+        # fire-and-forget, so without this the reason an extension failed to
+        # activate is unqueryable after the fact (needed by the platform's
+        # "verify installed extension activation" surface).
+        self._activation_errors: Dict[str, str] = {}
         self._output_channels: Dict[str, List[str]] = {}
         self._command_service: Optional[CommandService] = None
         self._node_registered_commands: Dict[str, Dict[str, Any]] = {}
@@ -2313,6 +2318,7 @@ class NodeExtensionHost:
             if bool(msg.get("ok", True)):
                 self._activated_ids.add(ext_id)
                 self._activation_sent_ids.add(ext_id)
+                self._activation_errors.pop(ext_id, None)
                 _log.info("[NodeExtHost] Extension activated: %s", ext_id)
                 for cb in self._on_activated_callbacks:
                     try:
@@ -2323,10 +2329,13 @@ class NodeExtensionHost:
             else:
                 self._activated_ids.discard(ext_id)
                 self._activation_sent_ids.discard(ext_id)
+                fail_message = str(
+                    msg.get("error") or msg.get("message") or "Unknown error")
+                if ext_id:
+                    self._activation_errors[ext_id] = fail_message[:500]
                 _log.warning(
                     "[NodeExtHost] Extension activation failed: %s (%s)",
-                    ext_id,
-                    msg.get("error") or msg.get("message") or "Unknown error")
+                    ext_id, fail_message)
 
         elif msg_type == "error":
             ext_id = str(msg.get("extensionId", ""))
@@ -2334,6 +2343,7 @@ class NodeExtensionHost:
                 msg.get("message") or msg.get("error") or "Unknown error")
             if ext_id and ext_id not in self._activated_ids:
                 self._activation_sent_ids.discard(ext_id)
+                self._activation_errors[ext_id] = message[:500]
             _log.error("[NodeExtHost] Extension error (%s): %s",
                        ext_id, message)
             for cb in self._on_error_callbacks:
@@ -6366,6 +6376,13 @@ class NodeExtensionHost:
 
     def list_activated(self) -> List[str]:
         return sorted(self._activated_ids)
+
+    def activation_error(self, extension_id: str) -> str:
+        """Last recorded activation error for an extension, or '' if none."""
+        return self._activation_errors.get(str(extension_id), "")
+
+    def registered_extension_ids(self) -> List[str]:
+        return sorted(self._registered_extensions.keys())
 
     def list_node_registered_commands(self) -> List[Dict[str, Any]]:
         """Return commands registered dynamically by the Node extension host."""

@@ -16758,6 +16758,76 @@ class AIEditorAPI:
             "categories": {},
         }
 
+    def verify_installed_extension_activation(self, force: bool = True) -> Dict:
+        """Live-activate + verify the JS extensions installed UNDER THIS
+        PLATFORM (ai_editor_extensions / ~/.sao/extensions, per
+        _extension_scan_dirs) on the already-running Node host.
+
+        This is the in-platform home of what used to be a standalone smoke
+        script scoped to the user's global ~/.vscode/extensions - which was
+        the wrong target: those are arbitrary published extensions that
+        expect the full VS Code API and mostly fail against this host's
+        shim. Extensions a user installs into the platform (via the .zip/
+        install-from-folder path) are the ones whose activation we actually
+        own, so those are what we verify. Only the platform's own scan dirs
+        are touched; the global VS Code extension dir is never activated
+        here (it's manifest-scanned elsewhere only when the user opts in via
+        allowed_publishers).
+
+        With ``force=True`` (default) every not-yet-activated JS extension is
+        activated regardless of its activation events, so the check reflects
+        "can it activate at all" rather than "did a startup event fire". The
+        Node host stays running afterward - this uses the live host, not a
+        throwaway one.
+        """
+        self._ensure_engine()
+        host = getattr(self, "_node_ext_host", None)
+        if host is None or not getattr(host, "is_running", False):
+            return {
+                "ok": False,
+                "running": False,
+                "error": "Node extension host is not running (no JS extensions installed, or Node.js unavailable)",
+                "extensions": [],
+            }
+        # JS extensions from the platform's OWN registry (already scanned
+        # from _extension_scan_dirs by _init_extension_host), never the
+        # global ~/.vscode set.
+        js_exts = [
+            ext for ext in self._ext_host.registry.list_all()
+            if getattr(ext, "main", "") and getattr(ext, "enabled", True)]
+        results: List[Dict[str, Any]] = []
+        to_wait: List[str] = []
+        for ext in js_exts:
+            already = host.is_extension_activated(ext.id)
+            if not already and force:
+                host.activate(ext.extension_path, ext.id,
+                              host.extension_manifest(ext))
+                to_wait.append(ext.id)
+        if to_wait:
+            host.wait_for_activation(to_wait, timeout=15.0)
+            self._sync_settings_to_node_host()
+        activated_count = 0
+        for ext in js_exts:
+            is_active = host.is_extension_activated(ext.id)
+            if is_active:
+                activated_count += 1
+            results.append({
+                "id": ext.id,
+                "displayName": getattr(ext, "display_name", "") or ext.id,
+                "version": getattr(ext, "version", ""),
+                "activated": is_active,
+                "error": "" if is_active else host.activation_error(ext.id),
+            })
+        results.sort(key=lambda r: (r["activated"], r["id"].casefold()))
+        return {
+            "ok": True,
+            "running": True,
+            "total": len(js_exts),
+            "activated": activated_count,
+            "failed": len(js_exts) - activated_count,
+            "extensions": results,
+        }
+
     def set_extension_host_diagnostics(self, enabled: bool) -> Dict:
         """Persist and apply the default-off Node extension diagnostics flag."""
         settings = _resolve_settings(self._gui_ref)
