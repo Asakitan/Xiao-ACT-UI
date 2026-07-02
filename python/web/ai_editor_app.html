@@ -14494,11 +14494,23 @@ function updateCursorPos(){
   if(typeof reportEditorSelectionChange==='function')reportEditorSelectionChange();
 }
 let _selectionReportTimer=null;
+function _editorSelectionReportEligible(){
+  // Diff/notebook/custom-editor tabs blank #editor-text but still run the
+  // updateCursorPos chain - reporting an empty document + a diff tab's
+  // name-derived uri to the backend is misleading noise, skip it.
+  const tab=(typeof activeEditorTab==='function'?activeEditorTab():null);
+  if(!tab)return false;
+  if(typeof isDiffEditorTab==='function'&&isDiffEditorTab(tab))return false;
+  if(typeof isExtensionCustomEditorTab==='function'&&isExtensionCustomEditorTab(tab))return false;
+  if(typeof isExtensionNotebookTab==='function'&&isExtensionNotebookTab(tab))return false;
+  return true;
+}
 function reportEditorSelectionChange(){
   clearTimeout(_selectionReportTimer);
   _selectionReportTimer=setTimeout(()=>{
     const ta=$('editor-text'),wrap=$('editor-container');
     if(!ta||!wrap||wrap.style.display==='none')return;
+    if(!_editorSelectionReportEligible())return;
     const uri=editorCurrentFileUri();
     if(!uri)return;
     const val=ta.value;
@@ -14513,6 +14525,7 @@ function reportEditorSelectionChange(){
 function reportEditorVisibleRanges(){
   const ta=$('editor-text');
   if(!ta||ta.offsetParent===null)return;
+  if(!_editorSelectionReportEligible())return;
   const style=getComputedStyle(ta);
   const lineHeight=parseFloat(style.lineHeight)||parseFloat(style.fontSize)*1.5;
   const paddingTop=parseFloat(style.paddingTop)||8;
@@ -20479,7 +20492,10 @@ async function toggleEditorBreakpointAtClientY(clientY){
   const rect=nums.getBoundingClientRect();
   const y=clientY-rect.top+nums.scrollTop-metrics.paddingTop;
   const line=Math.max(0,Math.floor(y/metrics.lineHeight));
-  const uri=editorCurrentFileUri();
+  // Require a real saved file: editorCurrentFileUri() falls back to the tab
+  // NAME ('untitled'), which is truthy and used to slip past this guard.
+  const bpTab=(typeof activeEditorTab==='function'?activeEditorTab():null)||{};
+  const uri=bpTab.filePath||'';
   if(!uri){showToast('Open a file to set breakpoints','info',2000);return}
   const result=await call('toggle_breakpoint',uri,line);
   if(!result||result.error)return;
@@ -20521,6 +20537,7 @@ window.refreshEditorScmBaseline=refreshEditorScmBaseline;
 // next switch - a deliberate, documented scope boundary, not an oversight.
 function reportEditorOptions(){
   if(typeof call!=='function'||typeof editorFormatOptions!=='function')return;
+  if(typeof _editorSelectionReportEligible==='function'&&!_editorSelectionReportEligible())return;
   call('report_editor_options',editorFormatOptions());
 }
 window.reportEditorOptions=reportEditorOptions;
@@ -48609,6 +48626,10 @@ function closeTab(id,event){
 }
 
 function closeEditorTransientUi(){
+  // Diff/notebook/custom-editor tabs early-return before the normal-file
+  // branch's refreshEditorBreakpoints() - without clearing here, the
+  // previous file's breakpoint dots stay rendered on top of their surface.
+  if(typeof _editorBreakpoints!=='undefined'){_editorBreakpoints=[];if(typeof renderEditorBreakpointLayer==='function')renderEditorBreakpointLayer()}
   if(typeof closeEditorSuggest==='function')closeEditorSuggest();
   if(typeof closeEditorHover==='function')closeEditorHover();
   if(typeof closeEditorSignatureHelp==='function')closeEditorSignatureHelp();
@@ -49488,21 +49509,27 @@ async function runSelectedTask(index){
     showToast('Task failed to start','error',2600);
     return;
   }
+  clearTimeout(_taskRunnerPollTimer);
   _taskRunnerActiveExecutionId=result.executionId;
   setStatus('Running task: '+(result.name||'task'));
   pollTaskExecution(result.executionId);
 }
 async function pollTaskExecution(executionId){
+  // Only the ACTIVE execution may keep polling: starting a second task
+  // while the first is still running used to leave two poll chains alive,
+  // fighting over #output-content and confusing cancelActiveTask.
+  if(_taskRunnerActiveExecutionId!==executionId)return;
   clearTimeout(_taskRunnerPollTimer);
   const status=await call('task_execution_status',executionId);
   if(!status||status.error)return;
+  if(_taskRunnerActiveExecutionId!==executionId)return;
   const oc=$('output-content');
   if(oc)oc.innerHTML=ansiToHtml(status.output||'')||'(no output yet)';
   if(status.running){
     _taskRunnerPollTimer=setTimeout(()=>pollTaskExecution(executionId),400);
   }else{
     setStatus('Task finished: exit code '+String(status.exitCode));
-    if(_taskRunnerActiveExecutionId===executionId)_taskRunnerActiveExecutionId='';
+    _taskRunnerActiveExecutionId='';
   }
 }
 async function cancelActiveTask(){
@@ -49599,7 +49626,7 @@ function _watchDebugSession(sessionId,name){
 }
 async function pollDebugSessionOutput(sessionId,name){
   const status=await call('debug_session_status',sessionId);
-  if(!status||status.error){_debugRunnerWatched.delete(sessionId);return}
+  if(!status||status.error){_debugRunnerWatched.delete(sessionId);delete _debugRunnerOutputLengths[sessionId];return}
   const seen=_debugRunnerOutputLengths[sessionId]||0;
   const full=String(status.output||'');
   if(full.length>seen){
@@ -49610,6 +49637,7 @@ async function pollDebugSessionOutput(sessionId,name){
     setTimeout(()=>pollDebugSessionOutput(sessionId,name),400);
   }else{
     _debugRunnerWatched.delete(sessionId);
+    delete _debugRunnerOutputLengths[sessionId];
     setStatus('Debug session finished: exit code '+String(status.exitCode));
     refreshDebugRunnerSessions();
   }
@@ -51678,7 +51706,18 @@ async function saveFile(options){
     if(r==null){if(!opts.autoSave)showToast('Save failed: backend unavailable','error');return {ok:false,error:'backend unavailable'}}
     if(r){try{const d=JSON.parse(r);if(d.error){if(!opts.autoSave)showToast('Save failed: '+d.error,'error');return {ok:false,error:d.error}}}catch(e){}}
     editorDirty=false;
-    if(tab){tab.originalContent=content;tab.content=content}
+    if(tab){
+      tab.content=content;
+      // A git-HEAD SCM baseline must survive saves: overwriting it with the
+      // just-saved text would blank the dirty-diff gutter even though the
+      // file still differs from HEAD. Re-fetch instead (falls back to the
+      // saved content if git is unavailable for this file).
+      if(tab.scmBaselineSource==='git-head'&&typeof refreshEditorScmBaseline==='function'){
+        refreshEditorScmBaseline(tab.id,tab.filePath);
+      }else{
+        tab.originalContent=content;
+      }
+    }
     _editorDirtyDiffCache={key:'',decorations:[],summary:null,changes:[]};
     renderEditorVisualDecorations();
     const tabEl=document.querySelector('.tab[data-tab-id="'+activeTab+'"]');if(tabEl)tabEl.classList.remove('dirty');

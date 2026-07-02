@@ -3393,7 +3393,10 @@ class AIEditorAPI:
         }
 
     def list_editor_grammars(self) -> Dict:
-        """Return VS Code TextMate grammar metadata contributed by extensions."""
+        """Return VS Code TextMate grammar metadata contributed by extensions.
+
+        No frontend caller as of the 2026-07-02 contract audit (selftest/API surface only).
+        """
         self._ensure_engine()
         grammars = self._editor_grammar_entries()
         return {
@@ -9186,7 +9189,9 @@ class AIEditorAPI:
             payload["providers"] = self.list_chat_providers().get("providers", [])
         except Exception:
             pass
-        self._emit("chat_providers_changed", payload)
+        # (a redundant "chat_providers_changed" emit with this same payload
+        # used to precede this - zero listeners existed anywhere, removed
+        # in the 2026-07-02 contract audit)
         self._emit("provider_tabs_changed", payload)
         self._eval_js(
             "(function(){if(typeof renderProviderTabs==='function')"
@@ -13437,7 +13442,10 @@ class AIEditorAPI:
         return {"diagnostics": rows, "count": len(rows)}
 
     def get_extension_contributions(self) -> Dict:
-        """Return processed VSCode contribution details with runtime metadata."""
+        """Return processed VSCode contribution details with runtime metadata.
+
+        No frontend caller as of the 2026-07-02 contract audit (selftest/API surface only).
+        """
         self._ensure_engine()
         self._sync_extension_tools()
         contributions = self._decorate_extension_contributions(
@@ -16483,7 +16491,10 @@ class AIEditorAPI:
         return json.loads(json.dumps(payload, ensure_ascii=False, default=str))
 
     def get_extension_host_diagnostics(self, reset: bool = False) -> Dict:
-        """Return lightweight Node extension host request diagnostics."""
+        """Return lightweight Node extension host request diagnostics.
+
+        No frontend caller as of the 2026-07-02 contract audit (the setter is used; this getter is selftest/API surface only).
+        """
         host = getattr(self, "_node_ext_host", None)
         if host is None:
             return {
@@ -16567,7 +16578,10 @@ class AIEditorAPI:
         return state
 
     def list_custom_editor_states(self) -> Dict:
-        """Return state snapshots for Node extension custom editors."""
+        """Return state snapshots for Node extension custom editors.
+
+        No frontend caller as of the 2026-07-02 contract audit (selftest/API surface only).
+        """
         host = getattr(self, "_node_ext_host", None)
         if host is None or not getattr(host, "is_running", False):
             return {"ok": False, "states": [],
