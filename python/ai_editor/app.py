@@ -6772,6 +6772,78 @@ class AIEditorAPI:
             "truncated": truncated or len(scored) > max_results,
         }
 
+    def search_workspace_text(self, query: str,
+                              options: Optional[Dict[str, Any]] = None) -> Dict:
+        """Find-in-files (Ctrl+Shift+F) backend: bounded workspace text
+        search. Pure Python line scan - fast enough at this workspace scale,
+        no ripgrep dependency. Skips binary-looking (NUL byte) and >1MB
+        files; stops at maxResults matches and flags truncation."""
+        opts = options if isinstance(options, dict) else {}
+        raw_query = str(query or "")
+        if not raw_query:
+            return {"results": [], "truncated": False, "fileCount": 0}
+        root = self._workspace_root()
+        if not root or not os.path.isdir(root):
+            return {"results": [], "truncated": False, "fileCount": 0}
+        use_regex = bool(opts.get("regex"))
+        case_sensitive = bool(opts.get("caseSensitive"))
+        whole_word = bool(opts.get("wholeWord"))
+        max_results = max(1, min(int(opts.get("maxResults") or 500), 2000))
+        pattern_text = raw_query if use_regex else re.escape(raw_query)
+        if whole_word:
+            pattern_text = r"\b(?:" + pattern_text + r")\b"
+        try:
+            pattern = re.compile(
+                pattern_text, 0 if case_sensitive else re.IGNORECASE)
+        except re.error as exc:
+            return {"results": [], "truncated": False, "fileCount": 0,
+                    "error": f"Invalid regex: {exc}"}
+        results: List[Dict[str, Any]] = []
+        matched_files: Set[str] = set()
+        truncated = False
+        for dirpath, dirnames, filenames in os.walk(root):
+            dirnames[:] = [
+                d for d in dirnames
+                if d.casefold() not in _WORKSPACE_TREE_IGNORED_DIRS
+                and not d.startswith(".")]
+            for name in filenames:
+                full = os.path.join(dirpath, name)
+                try:
+                    if os.path.getsize(full) > 1_000_000:
+                        continue
+                    with open(full, "rb") as fh:
+                        blob = fh.read()
+                except OSError:
+                    continue
+                if b"\x00" in blob:
+                    continue
+                text = blob.decode("utf-8", errors="replace")
+                rel = self._workspace_rel_path(root, full)
+                for line_number, line in enumerate(text.splitlines()):
+                    match = pattern.search(line)
+                    if not match:
+                        continue
+                    matched_files.add(rel)
+                    results.append({
+                        "file": rel,
+                        "line": line_number,
+                        "column": match.start(),
+                        "lineText": line[:400],
+                        "matchLength": max(1, match.end() - match.start()),
+                    })
+                    if len(results) >= max_results:
+                        truncated = True
+                        break
+                if truncated:
+                    break
+            if truncated:
+                break
+        return {
+            "results": results,
+            "truncated": truncated,
+            "fileCount": len(matched_files),
+        }
+
     def workspace_file_decorations(self, rel_path: str) -> Dict[str, Any]:
         try:
             full = self._resolve_workspace_path(rel_path)

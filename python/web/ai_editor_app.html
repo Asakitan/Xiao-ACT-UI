@@ -4338,6 +4338,7 @@ pre.code-block { overflow:visible; }
   <!-- Activity bar -->
   <div class="activity-bar">
     <div class="ab-icon" data-panel="explorer" data-i18n-title="explorer" title="Explorer"><svg width="20" height="20" viewBox="0 0 20 20" fill="none"><path d="M2.75 5.25A1.75 1.75 0 014.5 3.5h3.2l1.5 1.5h6.3a1.75 1.75 0 011.75 1.75v7.75A1.75 1.75 0 0115.5 16.25h-11A1.75 1.75 0 012.75 14.5v-9.25z" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/></svg></div>
+    <div class="ab-icon" data-panel="search" title="Search"><svg width="20" height="20" viewBox="0 0 20 20" fill="none"><circle cx="9" cy="9" r="5.2" stroke="currentColor" stroke-width="1.5"/><path d="M13 13l4 4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg></div>
     <div class="ab-icon" data-panel="scm" title="Source Control"><svg width="20" height="20" viewBox="0 0 20 20" fill="none"><circle cx="6" cy="5" r="2" stroke="currentColor" stroke-width="1.5"/><circle cx="14" cy="15" r="2" stroke="currentColor" stroke-width="1.5"/><circle cx="6" cy="15" r="2" stroke="currentColor" stroke-width="1.5"/><path d="M6 7v6M8 5h2.5A3.5 3.5 0 0114 8.5V13" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg></div>
     <div class="ab-icon" data-panel="debug-runner" title="Run and Debug"><svg width="20" height="20" viewBox="0 0 20 20" fill="none"><path d="M6 4l9 6-9 6V4z" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/></svg></div>
     <div class="ab-icon active" data-panel="chat" data-i18n-title="chat" title="Assistant"><svg width="20" height="20" viewBox="0 0 20 20" fill="none"><path d="M4 4h12a2 2 0 012 2v7a2 2 0 01-2 2H8l-4 3v-3a2 2 0 01-2-2V6a2 2 0 012-2z" stroke="currentColor" stroke-width="1.5"/></svg></div>
@@ -4415,6 +4416,26 @@ pre.code-block { overflow:visible; }
     <div class="sb-view" id="sb-tools" style="display:none">
       <div class="sb-header"><span data-i18n="tools">Engine Tools</span></div>
       <div class="sb-section" id="tools-list"></div>
+    </div>
+    <!-- Search sidebar (find in files) -->
+    <div class="sb-view" id="sb-search" style="display:none">
+      <div class="sb-header"><span data-i18n="search_title">Search</span> <span class="spacer"></span>
+        <span class="sb-action" onclick="runWorkspaceSearch()" data-i18n-title="refresh" title="Refresh">↻</span>
+      </div>
+      <div class="sb-section" style="padding:8px 10px 4px">
+        <div style="display:flex;gap:4px;align-items:center">
+          <input id="ws-search-input" data-i18n="search_placeholder" placeholder="Search in files" aria-label="Search in files"
+            style="flex:1;background:var(--bg3);color:var(--fg);border:1px solid var(--border);border-radius:3px;padding:4px 6px;min-width:0">
+        </div>
+        <div style="display:flex;gap:4px;margin-top:4px">
+          <span class="find-toggle" id="ws-search-regex" onclick="this.classList.toggle('active');runWorkspaceSearch()" title="Use Regular Expression">.*</span>
+          <span class="find-toggle" id="ws-search-case" onclick="this.classList.toggle('active');runWorkspaceSearch()" title="Match Case">Aa</span>
+          <span class="find-toggle" id="ws-search-word" onclick="this.classList.toggle('active');runWorkspaceSearch()" title="Match Whole Word">ab|</span>
+          <span class="spacer" style="flex:1"></span>
+          <span id="ws-search-count" style="font-size:11px;color:var(--fg-dim);align-self:center"></span>
+        </div>
+      </div>
+      <div class="sb-section" id="ws-search-results" style="overflow:auto"></div>
     </div>
     <!-- Run and Debug sidebar -->
     <div class="sb-view" id="sb-debug-runner" style="display:none">
@@ -8137,6 +8158,7 @@ en:{
   close_tab:'Close',close_others:'Close Others',close_right:'Close to the Right',close_all:'Close All',
   go_to_file:'Go to File...',no_matching_files:'No matching files',
   notifications:'Notifications',clear_all:'Clear All',no_notifications:'No notifications yet',
+  search_title:'Search',search_placeholder:'Search in files',no_search_results:'No results',
   go_to_line:'Go to Line...',run_selection:'Run Selection',new_terminal:'New Terminal',system_info:'System Info',about:'About',
   chat:'Assistant',explorer:'Explorer',tools:'Engine Tools',extensions:'Extensions',history:'History',instructions:'Instructions',agents_wf:'Agents & Workflows',settings:'Settings',
   send:'Send',stop:'Stop',ask_placeholder:'Ask anything... (/ commands, @ context, # tools)',
@@ -8295,6 +8317,7 @@ zh:{
   close_tab:'关闭',close_others:'关闭其他',close_right:'关闭右侧',close_all:'全部关闭',
   go_to_file:'转到文件...',no_matching_files:'没有匹配的文件',
   notifications:'通知',clear_all:'清空',no_notifications:'暂无通知',
+  search_title:'搜索',search_placeholder:'在文件中搜索',no_search_results:'无结果',
   go_to_line:'转到行...',run_selection:'运行选中代码',new_terminal:'新建终端',system_info:'系统信息',about:'关于',
   chat:'助手',explorer:'资源管理器',tools:'引擎工具',extensions:'扩展',history:'历史记录',instructions:'自定义指令',agents_wf:'代理 & 工作流',settings:'设置',
   send:'发送',stop:'停止',ask_placeholder:'输入问题... (/ 命令, @ 上下文, # 工具)',
@@ -25373,6 +25396,7 @@ function switchSidebar(panel){
   }
   if(panel==='scm')refreshScmSidebar(true);
   if(panel==='debug-runner')refreshDebugRunnerSidebar();
+  if(panel==='search'){const wsInput=$('ws-search-input');if(wsInput)setTimeout(()=>wsInput.focus(),0)}
   if(panel==='instructions')refreshInstructions();
   if(panel==='agents')refreshAgents();
   if(panel==='premium')loadPremiumGuide();
@@ -49657,6 +49681,7 @@ const COMMANDS=[
   {id:'workbench.action.terminal.runSelfCheck',label:'Developer: Run Terminal UI Self Check',shortcut:'',category:'Developer',description:'Run the integrated terminal UI self-check.',action:async()=>{const snap=await terminalUiSelfCheckSnapshot();showToast(snap&&snap.pass?'Terminal self-check passed':'Terminal self-check failed',snap&&snap.pass?'success':'error',2600)}},
   {id:'workbench.action.openGlobalKeybindings',label:'Preferences: Open Keyboard Shortcuts',shortcut:'Ctrl+K Ctrl+S',category:'Preferences',description:'Open keyboard shortcuts.',action:()=>openKeybindings()},
   {id:'workbench.action.quickOpen',label:'Go to File...',shortcut:'Ctrl+P',category:'Navigation',description:'Fuzzy-search workspace files by name and open one.',action:()=>openQuickOpenPicker()},
+  {id:'workbench.action.findInFiles',label:'Search: Find in Files',shortcut:'Ctrl+Shift+F',category:'Search',description:'Search for text across all workspace files.',action:()=>openSearchSidebar()},
   {id:'workbench.action.tasks.runTask',label:'Tasks: Run Task...',shortcut:'',category:'Tasks',description:'Pick and run a task contributed by an installed extension.',action:()=>openTaskRunnerPicker()},
   {id:'workbench.action.tasks.terminate',label:'Tasks: Terminate Task',shortcut:'',category:'Tasks',description:'Cancel the currently running task, if any.',action:()=>cancelActiveTask()},
   {id:'workbench.view.debug',label:'View: Show Run and Debug',shortcut:'',category:'Debug',description:'Open the Run and Debug sidebar.',action:()=>{if(typeof switchSidebar==='function')switchSidebar('debug-runner')}},
@@ -49868,6 +49893,102 @@ window.refreshDebugRunnerSidebar=refreshDebugRunnerSidebar;
 window.startSelectedDebugConfig=startSelectedDebugConfig;
 window.stopDebugSession=stopDebugSession;
 window.stopAllDebugSessions=stopAllDebugSessions;
+
+// ── Find in files (Ctrl+Shift+F). Backend search_workspace_text does the
+// bounded walk + regex/case/whole-word matching; results render grouped by
+// file, click opens the file and jumps to the match line.
+let _wsSearchTimer=null,_wsSearchRequest=0;
+function scheduleWorkspaceSearch(delay){
+  clearTimeout(_wsSearchTimer);
+  _wsSearchTimer=setTimeout(()=>runWorkspaceSearch(),delay==null?300:delay);
+}
+async function runWorkspaceSearch(){
+  const input=$('ws-search-input'),resultsEl=$('ws-search-results'),countEl=$('ws-search-count');
+  if(!input||!resultsEl)return;
+  const query=String(input.value||'');
+  if(!query.trim()){resultsEl.innerHTML='';if(countEl)countEl.textContent='';return}
+  const requestId=++_wsSearchRequest;
+  const res=await call('search_workspace_text',query,{
+    regex:$('ws-search-regex')&&$('ws-search-regex').classList.contains('active'),
+    caseSensitive:$('ws-search-case')&&$('ws-search-case').classList.contains('active'),
+    wholeWord:$('ws-search-word')&&$('ws-search-word').classList.contains('active'),
+    maxResults:500,
+  });
+  if(requestId!==_wsSearchRequest)return;
+  resultsEl.innerHTML='';
+  if(res&&res.error){
+    const err=document.createElement('div');
+    err.style.cssText='padding:8px 10px;color:var(--fg-error);font-size:12px';
+    err.textContent=res.error;
+    resultsEl.appendChild(err);
+    if(countEl)countEl.textContent='';
+    return;
+  }
+  const rows=(res&&Array.isArray(res.results))?res.results:[];
+  if(countEl)countEl.textContent=rows.length
+    ?rows.length+((res&&res.truncated)?'+':'')+' / '+(res?res.fileCount:0)+' files'
+    :t('no_search_results');
+  if(!rows.length)return;
+  const byFile=new Map();
+  rows.forEach(row=>{
+    if(!byFile.has(row.file))byFile.set(row.file,[]);
+    byFile.get(row.file).push(row);
+  });
+  byFile.forEach((matches,file)=>{
+    const header=document.createElement('div');
+    header.className='sb-group';
+    header.style.cssText='cursor:pointer;padding:6px 10px 2px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap';
+    header.textContent=file+' ('+matches.length+')';
+    header.title=file;
+    header.onclick=()=>{const body=header.nextElementSibling;if(body)body.style.display=body.style.display==='none'?'':'none'};
+    resultsEl.appendChild(header);
+    const body=document.createElement('div');
+    matches.forEach(match=>{
+      const item=document.createElement('div');
+      item.className='sb-item';
+      item.style.cssText='padding:2px 10px 2px 18px;cursor:pointer;font-size:12px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap';
+      const lineNo=document.createElement('span');
+      lineNo.style.cssText='color:var(--fg-dim);margin-right:6px';
+      lineNo.textContent=String((Number(match.line)||0)+1)+':';
+      const text=document.createElement('span');
+      const lineText=String(match.lineText||'');
+      const col=Math.max(0,Number(match.column)||0);
+      const len=Math.max(1,Number(match.matchLength)||1);
+      text.appendChild(document.createTextNode(lineText.slice(0,col)));
+      const mark=document.createElement('mark');
+      mark.style.cssText='background:color-mix(in srgb,var(--fg-accent) 30%,transparent);color:inherit;border-radius:2px';
+      mark.textContent=lineText.slice(col,col+len);
+      text.appendChild(mark);
+      text.appendChild(document.createTextNode(lineText.slice(col+len)));
+      item.appendChild(lineNo);item.appendChild(text);
+      item.title=file+':'+((Number(match.line)||0)+1);
+      item.onclick=()=>openWorkspaceSearchResult(match);
+      body.appendChild(item);
+    });
+    resultsEl.appendChild(body);
+  });
+}
+async function openWorkspaceSearchResult(match){
+  const res=await openWorkspaceFile(match.file);
+  if(!res)return;
+  const ta=$('editor-text');if(!ta)return;
+  const lines=ta.value.split('\n');
+  const line=Math.min(Math.max(0,Number(match.line)||0),lines.length-1);
+  let pos=0;
+  for(let i=0;i<line;i++)pos+=lines[i].length+1;
+  pos+=Math.min(Math.max(0,Number(match.column)||0),(lines[line]||'').length);
+  ta.selectionStart=pos;ta.selectionEnd=pos+Math.max(1,Number(match.matchLength)||1);
+  ta.focus();updateCursorPos();
+  const style=getComputedStyle(ta);
+  const lineHeight=parseFloat(style.lineHeight)||parseFloat(style.fontSize)*1.5;
+  ta.scrollTop=Math.max(0,(line-8)*lineHeight);
+}
+function openSearchSidebar(){
+  if(typeof switchSidebar==='function')switchSidebar('search');
+  const input=$('ws-search-input');if(input)input.focus();
+}
+window.runWorkspaceSearch=runWorkspaceSearch;
+window.openSearchSidebar=openSearchSidebar;
 
 function openCommandPalette(initialValue){
   openCommandPaletteWithValue(initialValue==null?'>':initialValue);
@@ -50245,6 +50366,10 @@ if($('quick-open-input')){
   $('quick-open-input').addEventListener('input',()=>scheduleQuickOpenSearch());
   $('quick-open-input').addEventListener('keydown',handleQuickOpenKey);
 }
+if($('ws-search-input')){
+  $('ws-search-input').addEventListener('input',()=>scheduleWorkspaceSearch());
+  $('ws-search-input').addEventListener('keydown',e=>{if(e.key==='Enter'){e.preventDefault();runWorkspaceSearch()}});
+}
 $('workspace-symbol-palette').addEventListener('click',e=>{if(e.target.id==='workspace-symbol-palette')closeWorkspaceSymbolPicker()});
 $('document-symbol-input').addEventListener('input',filterDocumentSymbols);
 $('document-symbol-input').addEventListener('keydown',handleDocumentSymbolKey);
@@ -50269,6 +50394,7 @@ const _GLOBAL_SHORTCUT_MAP={
 document.addEventListener('keydown',e=>{
   if(assistantHandleInputPartShortcut(e))return;
   if(e.key==='P'&&e.ctrlKey&&e.shiftKey){e.preventDefault();openCommandPalette()}
+  if((e.key==='F'||e.key==='f')&&e.ctrlKey&&e.shiftKey&&!e.altKey){e.preventDefault();openSearchSidebar();return}
   if(e.key==='p'&&e.ctrlKey&&!e.shiftKey&&!e.altKey){e.preventDefault();openQuickOpenPicker();return}
   if((e.key==='='||e.key==='+')&&e.ctrlKey&&!e.altKey){e.preventDefault();adjustEditorFontSize(1);return}
   if(e.key==='-'&&e.ctrlKey&&!e.shiftKey&&!e.altKey){e.preventDefault();adjustEditorFontSize(-1);return}

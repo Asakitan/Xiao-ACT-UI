@@ -17979,6 +17979,28 @@ console.log("command palette quick access helpers ok");
     qo_exact = qo_api.list_workspace_files("alpha")
     _check("list_workspace_files substring match beats subsequence noise",
            qo_exact["files"] and qo_exact["files"][0]["name"] == "alpha_module.py")
+    # Find-in-files backend (search_workspace_text).
+    with open(os.path.join(qo_tmpdir, "src", "alpha_module.py"), "w", encoding="utf-8") as fh:
+        fh.write("def hello():\n    return HELLO_WORLD\n")
+    with open(os.path.join(qo_tmpdir, "notes.txt"), "w", encoding="utf-8") as fh:
+        fh.write("hello there\nnothing here\n")
+    with open(os.path.join(qo_tmpdir, "binary.dat"), "wb") as fh:
+        fh.write(b"hello\x00binary")
+    ws_all = qo_api.search_workspace_text("hello")
+    _check("search_workspace_text finds case-insensitive matches with file/line/column and skips binary files",
+           ws_all["fileCount"] == 2
+           and all("binary.dat" != r["file"] for r in ws_all["results"])
+           and any(r["file"] == "src/alpha_module.py" and r["line"] == 1 and r["column"] == 11
+                   for r in ws_all["results"]))
+    _check("search_workspace_text caseSensitive excludes uppercase-only matches",
+           len(qo_api.search_workspace_text("hello", {"caseSensitive": True})["results"]) == 2)
+    _check("search_workspace_text wholeWord excludes identifier-embedded matches",
+           all("HELLO_WORLD" not in r["lineText"] or r["column"] != 11
+               for r in qo_api.search_workspace_text("hello", {"wholeWord": True})["results"])
+           and len(qo_api.search_workspace_text("hello", {"wholeWord": True})["results"]) == 2)
+    _check("search_workspace_text regex mode works and invalid regex reports an error instead of raising",
+           len(qo_api.search_workspace_text("hel+o", {"regex": True})["results"]) == 3
+           and "error" in qo_api.search_workspace_text("[bad", {"regex": True}))
     # Extension-contributed DEFAULT keybindings must actually dispatch
     # (contributes.keybindings were parsed and shown in the shortcut editor
     # but only user-customized bindings ever fired - 2026-07-02 audit).
