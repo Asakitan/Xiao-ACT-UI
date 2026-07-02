@@ -116,7 +116,7 @@ def _anchor_xy(draw: Any, text: str, font: Any, x: int, y: int, anchor: str) -> 
     ax = str(anchor or "nw").lower()
     px = int(x)
     py = int(y)
-    if "e" in ax:
+    if ax in ("e", "ne", "se"):
         px -= width
     elif ax in ("n", "center", "s"):
         px -= width // 2
