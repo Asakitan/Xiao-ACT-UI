@@ -20037,15 +20037,30 @@ class AIEditorAPI:
         return {"running": False}
 
     def install_extension_dir(self, ext_dir: str) -> Dict:
+        """Install from an arbitrary local folder (e.g. another VS Code
+        install's extensions dir). Copies into this platform's own
+        ai_editor_extensions first, matching the marketplace install path -
+        without the copy, the extension would vanish on next launch since
+        _extension_scan_dirs only ever re-scans the platform's own dirs."""
         self._ensure_engine()
-        desc = self._ext_host.install_from_dir(ext_dir)
+        from ai_editor.extensions import install_extension_from_local_dir, uninstall_extension
+        copy_result = install_extension_from_local_dir(ext_dir)
+        if not copy_result.get("ok"):
+            return {"error": copy_result.get("error") or "Failed to install from directory"}
+        desc = self._ext_host.install_from_dir(copy_result["ext_dir"])
         if desc:
             if not self._extension_allowed(desc):
+                self._ext_host.unregister_extension(desc.id)
+                uninstall_extension(desc.id)
                 return {"error": f"Extension blocked by trust policy: {desc.id}"}
             self._try_start_node_extension_host()
             self._activate_workspace_contains_extensions()
             self._register_ext_tools()
-            return {"ok": True, "id": desc.id, "name": desc.display_name}
+            return {
+                "ok": True, "id": desc.id, "name": desc.display_name,
+                "extDir": copy_result["ext_dir"],
+            }
+        uninstall_extension(copy_result.get("id", ""))
         return {"error": "Failed to install from directory"}
 
     def install_extension_from_dir_dialog(self) -> Dict:

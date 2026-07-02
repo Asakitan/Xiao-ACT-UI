@@ -298,6 +298,45 @@ def _extract_vsix_to_dir(vsix_path: str, dest_dir: str) -> None:
                 dst.write(src.read())
 
 
+def install_extension_from_local_dir(source_dir: str) -> Dict[str, Any]:
+    """Copy an already-unpacked extension folder into this platform's own
+    extension directory, so "install from folder" persists across restarts
+    the same way a marketplace install does (source_dir itself, e.g. another
+    VS Code install's extensions folder, is never referenced again)."""
+    try:
+        source_dir = os.path.abspath(str(source_dir or ""))
+        manifest_path = os.path.join(source_dir, "package.json")
+        if not os.path.isfile(manifest_path):
+            return {"error": f"No package.json found in {source_dir}"}
+        with open(manifest_path, "r", encoding="utf-8") as f:
+            manifest = json.load(f)
+        publisher = str(manifest.get("publisher", "")).strip()
+        name = str(manifest.get("name", "")).strip()
+        if not publisher or not name:
+            return {"error": "package.json is missing publisher/name"}
+        ext_id = f"{publisher}.{name}"
+        ext_dir = os.path.join(_extensions_dir(), ext_id)
+        if os.path.isdir(ext_dir):
+            shutil.rmtree(ext_dir)
+        shutil.copytree(source_dir, ext_dir)
+
+        state_path = os.path.join(_extensions_dir(), f"{ext_id}.json")
+        state = {
+            "id": ext_id,
+            "installed_at": time.time(),
+            "manifest": manifest,
+            "ext_dir": ext_dir,
+            "manifest_path": os.path.join(ext_dir, "package.json"),
+            "source": "local_dir",
+            "source_dir": source_dir,
+        }
+        with open(state_path, "w", encoding="utf-8") as f:
+            json.dump(state, f, ensure_ascii=False, indent=1)
+        return {"ok": True, "id": ext_id, "has_manifest": True, "ext_dir": ext_dir}
+    except Exception as exc:
+        return {"error": str(exc)}
+
+
 def uninstall_extension(ext_id: str) -> Dict[str, Any]:
     """Remove an installed extension."""
     d = _extensions_dir()

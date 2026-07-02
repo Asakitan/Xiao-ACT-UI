@@ -877,6 +877,7 @@ def run_probe(extension_dir: str, keep_copy: bool = False) -> Dict[str, Any]:
     rendered: Dict[str, Dict[str, Any]] = {}
     events: List[Dict[str, Any]] = []
     copied_extension_dir = ""
+    install_result: Dict[str, Any] = {}
     tmpdir = tempfile.mkdtemp(prefix="sao_real_ext_probe_")
     try:
         workspace_dir = os.path.join(tmpdir, "workspace")
@@ -1097,6 +1098,16 @@ def run_probe(extension_dir: str, keep_copy: bool = False) -> Dict[str, Any]:
     finally:
         if not keep_copy:
             shutil.rmtree(tmpdir, ignore_errors=True)
+            # install_extension_dir copies into this platform's own,
+            # persistent ai_editor_extensions (2026-07-02) rather than
+            # registering the temp source dir in place - without this,
+            # the copy (and its real, activated Node subprocess/
+            # contributions) silently survives this probe and gets
+            # rediscovered and reactivated by every later AIEditorAPI()
+            # instance in the same process.
+            if install_result.get("ok") and install_result.get("id"):
+                from ai_editor.extensions import uninstall_extension
+                uninstall_extension(install_result["id"])
 
 
 def run_builtin_smoke_probe(
@@ -1105,6 +1116,7 @@ def run_builtin_smoke_probe(
     """Run a reproducible dynamic WebviewView/custom editor smoke probe."""
     rendered: Dict[str, Dict[str, Any]] = {}
     events: List[Dict[str, Any]] = []
+    install_result: Dict[str, Any] = {}
     requested_fixture_dir = (
         os.path.abspath(visual_fixture_dir)
         if str(visual_fixture_dir or "").strip() else "")
@@ -1549,6 +1561,11 @@ def run_builtin_smoke_probe(
     finally:
         if not keep_copy:
             shutil.rmtree(tmpdir, ignore_errors=True)
+            # See the matching comment in run_probe()'s finally block -
+            # install_extension_dir now persists into ai_editor_extensions.
+            if install_result.get("ok") and install_result.get("id"):
+                from ai_editor.extensions import uninstall_extension
+                uninstall_extension(install_result["id"])
 
 
 def main() -> int:

@@ -104,6 +104,9 @@ python/ai_editor_history/
 python/.sao/chat_history/
 .vscode/handoff/
 
+# ── AI Editor installed extensions (machine-specific, can be 100s of MB) ──
+python/ai_editor_extensions/
+
 # ── AI Editor real-VSIX smoke test output (machine-specific, regenerated) ──
 python/ai_editor/real_extension_smoke_results.json
 

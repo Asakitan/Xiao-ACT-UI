@@ -1081,6 +1081,47 @@ class ExtensionPoints:
                             m["_extensionId"] = eid
                             self._menus.setdefault(ctx, []).append(m)
 
+    def retract(self, ext_id: str) -> None:
+        """Remove every contribution this extension added via process().
+
+        Symmetric counterpart to process() - every item process() appends
+        anywhere carries "_extensionId", so this is a generic sweep rather
+        than one removal per contribution type. Without this, uninstalling
+        or unregistering an extension left its commands/menus/views
+        permanently active in this shared, process-wide ExtensionPoints
+        instance until the app restarted (found via a real repro: an
+        extension installed then removed still shadowed a later
+        extension's editor/title menu resolution).
+        """
+        self._contributions_by_extension.pop(ext_id, None)
+        self._command_index = {
+            command: record
+            for command, record in self._command_index.items()
+            if record.get("_extensionId") != ext_id
+        }
+        for name, value in list(vars(self).items()):
+            if name in ("_contributions_by_extension", "_command_index"):
+                continue
+            if isinstance(value, list):
+                filtered = [
+                    item for item in value
+                    if not (isinstance(item, dict)
+                            and item.get("_extensionId") == ext_id)
+                ]
+                if len(filtered) != len(value):
+                    setattr(self, name, filtered)
+            elif isinstance(value, dict):
+                for key, sub in list(value.items()):
+                    if not isinstance(sub, list):
+                        continue
+                    filtered = [
+                        item for item in sub
+                        if not (isinstance(item, dict)
+                                and item.get("_extensionId") == ext_id)
+                    ]
+                    if len(filtered) != len(sub):
+                        value[key] = filtered
+
     @property
     def command_contributions(self) -> List[Dict[str, Any]]:
         return list(self._command_contributions)
@@ -1716,6 +1757,7 @@ class ExtensionHost:
             return False
         self.activator.deactivate(ext_id)
         self.registry.unregister(ext_id)
+        self.ext_points.retract(ext_id)
         return True
 
     def start(self) -> List[ActivatedExtension]:

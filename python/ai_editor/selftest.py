@@ -3546,6 +3546,19 @@ def test_app_settings_parity() -> None:
                "blocked" in blocked_dir_result.get("error", "").lower(),
                json.dumps(blocked_dir_result, ensure_ascii=False))
 
+        # install_extension_dir now copies into this platform's own,
+        # persistent ai_editor_extensions (2026-07-02) rather than
+        # registering dir_ext_path in place - without this, the copy
+        # survives this test and gets rediscovered and reregistered by
+        # every later AIEditorAPI() instance in the same process.
+        if dir_installed.get("ok") and dir_installed.get("id"):
+            try:
+                dir_install_api._ext_host.unregister_extension(dir_installed["id"])
+            except Exception:
+                pass
+            from ai_editor.extensions import uninstall_extension as _cleanup_dir_install
+            _cleanup_dir_install(dir_installed["id"])
+
     unsupported_tool_api = AIEditorAPI(_SettingsGui({"ai_editor": {}}))
     unsupported_tool_api._ensure_engine()
     unsupported_tool_api._vscode_ns._register_tool_definition(
@@ -4403,6 +4416,19 @@ def test_app_settings_parity() -> None:
                }, ensure_ascii=False, default=str))
     finally:
         shutil.rmtree(fixture_ext_dir, ignore_errors=True)
+        # install_extension_dir now copies into the platform's own
+        # ai_editor_extensions (2026-07-02 persistence fix) rather than
+        # registering fixture_ext_dir in place, and unregister_extension
+        # now retracts contributions too (2026-07-02 fix for a real bug:
+        # they used to survive forever in the shared, process-wide
+        # ExtensionPoints instance) - clean up both or this leaks into
+        # every later selftest function running in the same process.
+        from ai_editor.extensions import uninstall_extension as _cleanup_uninstall
+        _cleanup_uninstall("selftest.surface-fixture")
+        try:
+            fixture_api._ext_host.unregister_extension("selftest.surface-fixture")
+        except Exception:
+            pass
 
     controls_gui = _SettingsGui({"ai_editor": {
         "provider": "openai",
@@ -20819,6 +20845,53 @@ def test_extension_host() -> None:
     ee.event(lambda v: fired.append(v))
     ee.fire(42)
     _check("EventEmitter", fired == [42])
+
+    # 2026-07-02: unregister_extension used to only remove the extension
+    # from the registry - its contributions (commands/menus/views/etc)
+    # stayed permanently active in the shared, process-wide ExtensionPoints
+    # instance until the app restarted. Found via a real repro: installing
+    # then removing a folder-based extension left it shadowing a later
+    # extension's editor/title menu resolution for the rest of the process.
+    retract_host = ExtensionHost()
+    retract_desc = ExtensionDescription(
+        id="selftest.retract-fixture", name="retract-fixture",
+        publisher="selftest", version="1.0.0", display_name="Retract Fixture",
+        extension_path="", main="",
+        contributes={
+            "commands": [{"command": "selftest.retract.cmd", "title": "Retract Cmd"}],
+            "menus": {"editor/title": [{"command": "selftest.retract.cmd", "when": "true"}]},
+            "views": {"explorer": [{"id": "selftest.retract.view", "name": "Retract View"}]},
+        })
+    retract_host.registry.register(retract_desc)
+    retract_host.ext_points.process(retract_desc)
+    _check("ExtensionPoints.process contributes commands/menus/views",
+           any(c.get("command") == "selftest.retract.cmd"
+               for c in retract_host.ext_points.all_contributions["commands"])
+           and retract_host.ext_points.all_contributions["menus"].get("editor/title")
+           and retract_host.ext_points.all_contributions["views"].get("explorer"))
+    _check("unregister_extension retracts every contribution it added",
+           retract_host.unregister_extension("selftest.retract-fixture") is True
+           and not any(
+               c.get("command") == "selftest.retract.cmd"
+               for c in retract_host.ext_points.all_contributions["commands"])
+           and not retract_host.ext_points.all_contributions["menus"].get(
+               "editor/title")
+           and not retract_host.ext_points.all_contributions["views"].get(
+               "explorer")
+           and "selftest.retract.cmd" not in retract_host.ext_points._command_index,
+           json.dumps(retract_host.ext_points.all_contributions, default=str))
+    other_desc = ExtensionDescription(
+        id="selftest.retract-sibling", name="retract-sibling",
+        publisher="selftest", version="1.0.0", display_name="Retract Sibling",
+        extension_path="", main="",
+        contributes={"commands": [{"command": "selftest.sibling.cmd", "title": "Sibling"}]})
+    retract_host.registry.register(other_desc)
+    retract_host.ext_points.process(other_desc)
+    retract_host.unregister_extension("selftest.retract-fixture")
+    _check("retracting one extension never touches a sibling's contributions",
+           any(c.get("command") == "selftest.sibling.cmd"
+               for c in retract_host.ext_points.all_contributions["commands"]))
+
     node_event_host = NodeExtensionHost(node_path="", script_path="")
     file_decoration_events = []
     node_event_host.on_file_decoration_event(
@@ -41431,6 +41504,86 @@ def test_terminal_pty() -> None:
            default_result.get("exitCode") == 0 and "QUOTED_OK" in (default_result.get("stdout") or ""))
 
 
+def test_install_extension_dir_persists_across_restart() -> None:
+    """2026-07-02: the user has real Anthropic.claude-code and openai.chatgpt
+    extensions installed under another VS Code install's extensions folder
+    and asked how to make them usable in this platform. install_extension_dir
+    (the "Install from Folder" action) registered straight from the given
+    path with no copy - so it worked for the current session only, and
+    vanished on next launch since _extension_scan_dirs only ever re-scans
+    this platform's own ai_editor_extensions/~/.sao/extensions. Fixed by
+    copying into ai_editor_extensions first (install_extension_from_local_dir
+    in extensions.py), matching what the marketplace install path already
+    does. This proves persistence directly: install, delete the original
+    source entirely, then build a FRESH AIEditorAPI (simulating an app
+    restart) and confirm it still finds the extension and its sidebar view
+    container - without calling install again."""
+    print("── install_extension_dir persists across restart (2026-07-02) ──")
+    from ai_editor.app import AIEditorAPI
+    from ai_editor.extensions import _extensions_dir, uninstall_extension
+
+    source_dir = tempfile.mkdtemp(prefix="sao_persist_ext_src_")
+    ext_id = "selftest.persist-fixture"
+    api1 = None
+    try:
+        with open(os.path.join(source_dir, "package.json"), "w", encoding="utf-8") as fh:
+            json.dump({
+                "name": "persist-fixture", "publisher": "selftest", "version": "1.0.0",
+                "displayName": "Persist Fixture",
+                "contributes": {
+                    "viewsContainers": {"activitybar": [
+                        {"id": "persistFixtureContainer", "title": "Persist Fixture", "icon": "$(beaker)"},
+                    ]},
+                    "views": {"persistFixtureContainer": [
+                        {"id": "persistFixtureView", "name": "Persist Fixture View"},
+                    ]},
+                },
+            }, fh)
+
+        api1 = AIEditorAPI(_SettingsGui({"ai_editor": {"extensions": {"confirm_install": False}}}))
+        install_result = api1.install_extension_dir(source_dir)
+        _check("install_extension_dir succeeds for a real local folder",
+               install_result.get("ok") is True and install_result.get("id") == ext_id,
+               json.dumps(install_result))
+
+        copy_dir = os.path.join(_extensions_dir(), ext_id)
+        _check("install_extension_dir copies into this platform's own ai_editor_extensions "
+               "(not just a live reference to the original folder)",
+               install_result.get("extDir") == copy_dir and os.path.isdir(copy_dir)
+               and os.path.isfile(os.path.join(copy_dir, "package.json")))
+
+        # Prove independence from the source: delete it entirely.
+        shutil.rmtree(source_dir, ignore_errors=True)
+        _check("the copy survives even after the original source folder is deleted",
+               os.path.isdir(copy_dir))
+
+        # Simulate an app restart: a brand new AIEditorAPI instance, never
+        # told about this extension directly, must discover it purely by
+        # re-scanning its own ai_editor_extensions directory.
+        api2 = AIEditorAPI(_SettingsGui({"ai_editor": {}}))
+        installed = api2.list_installed_extensions().get("extensions", [])
+        found = next((e for e in installed if e.get("id") == ext_id), None)
+        _check("a fresh AIEditorAPI instance (simulated restart) finds the "
+               "extension again without any install call",
+               found is not None, json.dumps(installed[:5], default=str))
+
+        activity_items = api2.list_extension_activity_bar_items().get("items", [])
+        container = next(
+            (item for item in activity_items if item.get("id") == "persistFixtureContainer"), None)
+        _check("the extension's sidebar view container survives the simulated restart too",
+               container is not None
+               and any(v.get("id") == "persistFixtureView" for v in container.get("views", [])),
+               json.dumps(activity_items, default=str))
+    finally:
+        shutil.rmtree(source_dir, ignore_errors=True)
+        try:
+            if api1 is not None:
+                api1._ext_host.unregister_extension(ext_id)
+        except Exception:
+            pass
+        uninstall_extension(ext_id)
+
+
 def test_node_vscode_api_shim_gaps() -> None:
     """2026-07-02: a real sweep of 17 genuinely-installed VS Code extensions
     (Python, Pylance, C++, PowerShell, Vue, Svelte, ChatGPT, cmake-tools...)
@@ -41883,6 +42036,7 @@ def main() -> None:
         ("Workflows", test_workflows),
         ("Terminal Real PTY", test_terminal_pty),
         ("Node vscode.* API Shim Gaps", test_node_vscode_api_shim_gaps),
+        ("Install Extension Dir Persists Across Restart", test_install_extension_dir_persists_across_restart),
         ("Real Extension Smoke", test_real_extension_smoke),
         ("Real Extension Live Theme Activation", test_real_extension_live_theme_activation),
         ("Frontend Health Parity Snapshot", test_frontend_health_parity_snapshot),
