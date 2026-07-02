@@ -49,6 +49,7 @@ def _guid(s: str) -> GUID:
 IID_IDXGIDevice = _guid('54ec77fa-1377-44e6-8c32-88fd5f44c84c')
 IID_IDXGIFactory2 = _guid('50c83a1c-e072-4c48-87b0-3630fa36a6d0')
 IID_ID3D11Texture2D = _guid('6f15aaf2-d208-4e89-9ab4-489535d34f9c')
+IID_IDXGIKeyedMutex = _guid('9d8e1289-d7b3-465f-8126-250e349af85d')
 IID_IDCompositionDevice = _guid('C37EA93A-E7AA-450D-B16F-9746CB0407F3')
 
 # ── COM vtable call ─────────────────────────────────────────────
@@ -443,6 +444,53 @@ def gl_set_bound_texture_linear() -> None:
 def release_com(obj) -> None:
     """Public alias for the module's IUnknown::Release helper."""
     _release(obj)
+
+
+# ── IDXGIKeyedMutex (cross-process read/write exclusion) ────────
+#
+# Shared textures created with D3D11_RESOURCE_MISC_SHARED_KEYEDMUTEX
+# carry a GPU-side mutex: the producer holds key 0 while writing, the
+# consumer holds it while sampling, so a reader can never observe a
+# half-written texture (plain MISC_SHARED has no synchronization at
+# all — the mid-copy overlap shows as horizontal tearing on fast-moving
+# content). Whether a given texture has one is detected by QI, so
+# plain-shared producers keep working unchanged.
+
+_IDXGIKeyedMutex_AcquireSync = 8
+_IDXGIKeyedMutex_ReleaseSync = 9
+
+
+def open_keyed_mutex(tex):
+    """QI IDXGIKeyedMutex from an opened shared texture.
+
+    Returns a ``c_void_p`` the caller must ``release_com()``, or None
+    when the texture was created without the keyed-mutex flag."""
+    if tex is None or not tex.value:
+        return None
+    try:
+        return _qi(tex, IID_IDXGIKeyedMutex)
+    except Exception:
+        return None
+
+
+def keyed_mutex_acquire(km, key: int = 0, timeout_ms: int = 8) -> bool:
+    """AcquireSync — True only on S_OK (WAIT_TIMEOUT is a positive
+    HRESULT). The producer holds the key only for one CopyResource, so
+    a short timeout only fires if the other side died mid-hold."""
+    try:
+        hr = _vc(km, _IDXGIKeyedMutex_AcquireSync, HRESULT,
+                 (ctypes.c_uint64, c_uint), key, timeout_ms)
+        return hr == 0
+    except Exception:
+        return False
+
+
+def keyed_mutex_release(km, key: int = 0) -> None:
+    try:
+        _vc(km, _IDXGIKeyedMutex_ReleaseSync, HRESULT,
+            (ctypes.c_uint64,), key)
+    except Exception:
+        pass
 
 
 # ── DCompBridge ─────────────────────────────────────────────────

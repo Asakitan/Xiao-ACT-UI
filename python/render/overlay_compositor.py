@@ -357,6 +357,7 @@ class CompositorLayer:
         self._shared_d3d_tex = None    # c_void_p from open_shared_texture()
         self._shared_gl_tex_id = 0
         self._shared_hobj = None       # interop object handle (lock/unlock)
+        self._shared_keyed_mutex = None  # IDXGIKeyedMutex (None = unsynced producer)
         self._shared_attempt_failed = False  # a set handle failed to register
 
         # Optional render-to-FBO callback
@@ -684,7 +685,7 @@ class CompositorLayer:
         """
         from render.dcomp_bridge import (
             gl_gen_texture, gl_delete_texture, gl_bind_texture_unit0,
-            gl_set_bound_texture_linear, release_com)
+            gl_set_bound_texture_linear, open_keyed_mutex, release_com)
 
         with self._lock:
             handle = self._shared_tex_handle
@@ -741,6 +742,11 @@ class CompositorLayer:
             finally:
                 dc.unlock_external_texture(hobj)
 
+        # Producers that created the texture with the keyed-mutex flag
+        # get tear-free sampling (acquire around the draw); detected by
+        # QI so plain-shared producers need no protocol change.
+        self._shared_keyed_mutex = open_keyed_mutex(d3d_tex)
+
         self._shared_d3d_tex = d3d_tex
         self._shared_gl_tex_id = gl_id
         self._shared_hobj = hobj
@@ -750,7 +756,9 @@ class CompositorLayer:
         self.height = h
         self._dirty = True
         print(f'[Compositor] layer {self.name!r}: GPU shared texture '
-              f'0x{handle:X} registered ({w}x{h})', flush=True)
+              f'0x{handle:X} registered ({w}x{h}, '
+              f'{"keyed-mutex" if self._shared_keyed_mutex else "unsynced"})',
+              flush=True)
         return True
 
     def _log_shared_fail(self, handle: int, why: str) -> None:
@@ -785,6 +793,9 @@ class CompositorLayer:
         if self._shared_gl_tex_id:
             gl_delete_texture(self._shared_gl_tex_id)
             self._shared_gl_tex_id = 0
+        if self._shared_keyed_mutex is not None:
+            release_com(self._shared_keyed_mutex)
+            self._shared_keyed_mutex = None
         if self._shared_d3d_tex is not None:
             release_com(self._shared_d3d_tex)
             self._shared_d3d_tex = None
@@ -1385,7 +1396,19 @@ class UnifiedOverlay:
                 old = prev.get(layer.name)
                 layer_moving = bool(
                     old and (old[0] != layer.x or old[1] != layer.y))
-                pad = self._RGN_PAD_MOVE if layer_moving else self._RGN_PAD_STILL
+                if layer_moving:
+                    # Scale the pad to the actual per-tick movement: the
+                    # region is applied by DWM up to a frame out of step
+                    # with the presented pixels, so a fast drag (easily
+                    # 50-100 px/tick) overruns a fixed 32 px pad and the
+                    # stale region visibly clips the sprite's leading
+                    # edge — reads as "tearing" on fast motion. Capped:
+                    # the pad is also the area where clicks over empty
+                    # pixels get swallowed while the layer moves.
+                    step = max(abs(layer.x - old[0]), abs(layer.y - old[1]))
+                    pad = min(256, max(self._RGN_PAD_MOVE, step * 2))
+                else:
+                    pad = self._RGN_PAD_STILL
 
                 fb = layer._frame_bytes
                 fw = layer._frame_w
@@ -2003,7 +2026,8 @@ class UnifiedOverlay:
             ctx.viewport = (0, 0, sw, sh)
         ctx.clear(0.0, 0.0, 0.0, 0.0)
 
-        from render.dcomp_bridge import gl_bind_texture_unit0
+        from render.dcomp_bridge import (
+            gl_bind_texture_unit0, keyed_mutex_acquire, keyed_mutex_release)
 
         for layer in self._z_sorted:
             if not layer.visible or layer.alpha <= 0.001:
@@ -2061,12 +2085,24 @@ class UnifiedOverlay:
             prog['u_rect'].value = (rx, ry, rw, rh)
             prog['u_alpha'].value = layer.alpha
             if is_shared:
-                if dc.lock_external_texture(layer._shared_hobj):
-                    try:
-                        gl_bind_texture_unit0(layer._shared_gl_tex_id)
-                        vao.render(moderngl.TRIANGLE_STRIP)
-                    finally:
-                        dc.unlock_external_texture(layer._shared_hobj)
+                # Keyed mutex (when the producer created one): hold key 0
+                # across the sampled draw so the producer's CopyResource
+                # can't overwrite the texture mid-read — that overlap was
+                # visible as horizontal tearing on fast pet motion. On the
+                # rare acquire timeout (producer died mid-hold) draw
+                # unsynced rather than blink the layer out for a frame.
+                km = layer._shared_keyed_mutex
+                km_held = km is not None and keyed_mutex_acquire(km)
+                try:
+                    if dc.lock_external_texture(layer._shared_hobj):
+                        try:
+                            gl_bind_texture_unit0(layer._shared_gl_tex_id)
+                            vao.render(moderngl.TRIANGLE_STRIP)
+                        finally:
+                            dc.unlock_external_texture(layer._shared_hobj)
+                finally:
+                    if km_held:
+                        keyed_mutex_release(km)
             else:
                 tex.use(location=0)
                 vao.render(moderngl.TRIANGLE_STRIP)

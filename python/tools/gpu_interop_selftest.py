@@ -167,10 +167,11 @@ def make_shared_pattern_texture(dev, w, h):
     return tex, handle.value
 
 
+_ID3D11DeviceContext_Flush = 111
 IID_IDXGIKeyedMutex = _guid('9d8e1289-d7b3-465f-8126-250e349af85d')
 _IDXGIKeyedMutex_AcquireSync = 8
 _IDXGIKeyedMutex_ReleaseSync = 9
-_D3D11_RESOURCE_MISC_SHARED_KEYEDMUTEX = 0x10
+_D3D11_RESOURCE_MISC_SHARED_KEYEDMUTEX = 0x100
 
 
 def qi_keyed_mutex(tex):
