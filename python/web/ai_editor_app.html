@@ -16961,6 +16961,9 @@ function editorLanguageStatusPanelFeatureRows(){
   const s=_editorLanguageFeatureState||{};
   const rows=[
     ['diagnostics','Diagnostics'],
+    ['hover','Hover'],
+    ['definition','Definition'],
+    ['references','References'],
     ['codeActions','Code Actions'],
     ['formatting','Formatting'],
     ['selectionRanges','Selection Ranges'],
@@ -16976,6 +16979,7 @@ function editorLanguageStatusPanelFeatureRows(){
     const detail=[
       state.message||'',
       key==='diagnostics'&&state.count?String(state.errors||0)+' errors, '+String(state.warnings||0)+' warnings':'',
+      (key==='hover'||key==='definition'||key==='references')&&state.count?String(state.count)+' result(s)':'',
       key==='codeActions'&&state.count?String(state.quickfix||0)+' quick, '+String(state.source||0)+' source':'',
       key==='formatting'&&state.providerId?'provider '+String(state.providerId):'',
       key==='selectionRanges'?[
@@ -17572,23 +17576,33 @@ async function editorRequestLanguageProvider(kind,payload,options){
   const opts=isPlainObject(options)?options:{};
   const label=opts.label||editorLanguageProviderKindLabel(kind);
   const quiet=opts.quiet===true;
-  if(!quiet)updateEditorLanguageProviderStatus('running',{kind,label,message:label+'...',detail:'Running '+label.toLowerCase()+' providers'});
+  // LANG-01: updateEditorLanguageProviderStatus is a single transient slot
+  // shared by every provider kind - a hover result overwrites a prior
+  // definition/references empty-state before the user ever sees it. Also
+  // persist per-kind into _editorLanguageFeatureState so "no provider
+  // installed for X" survives being overwritten by an unrelated request and
+  // can show up as its own row in the language status panel.
+  const setStatus=(state,info)=>{
+    updateEditorLanguageProviderStatus(state,info);
+    updateEditorLanguageFeatureState(kind,state,info);
+  };
+  if(!quiet)setStatus('running',{kind,label,message:label+'...',detail:'Running '+label.toLowerCase()+' providers'});
   const _providerT0=performance.now();
   const res=await call('editor_language_provider',payload||editorProviderPayload(kind));
   recordAiEditorPerfSample('languageProvider',performance.now()-_providerT0);
   if(typeof opts.isCurrent==='function'&&!opts.isCurrent())return res;
   if(quiet)return res;
   if(editorProviderResultCancelled(res)){
-    updateEditorLanguageProviderStatus('cancelled',{kind,label,message:label+' cancelled',detail:String((res&&res.reason)||'cancelled'),requestId:res&&res.requestId});
+    setStatus('cancelled',{kind,label,message:label+' cancelled',detail:String((res&&res.reason)||'cancelled'),requestId:res&&res.requestId});
     return res;
   }
   if(editorProviderResultSkipped(res)){
-    updateEditorLanguageProviderStatus('warning',{kind,label,message:editorLanguageProviderFailureMessage(kind,res),detail:String((res&&res.message)||'Large file provider request skipped'),requestId:res&&res.requestId});
+    setStatus('warning',{kind,label,message:editorLanguageProviderFailureMessage(kind,res),detail:String((res&&res.message)||'Large file provider request skipped'),requestId:res&&res.requestId});
     return res;
   }
   if(!res||res.error||res.ok===false){
     const state=res&&res.timeout?'warning':'error';
-    updateEditorLanguageProviderStatus(state,{kind,label,message:editorLanguageProviderFailureMessage(kind,res),detail:callFailedMessage(res,'provider unavailable'),requestId:res&&res.requestId});
+    setStatus(state,{kind,label,message:editorLanguageProviderFailureMessage(kind,res),detail:callFailedMessage(res,'provider unavailable'),requestId:res&&res.requestId});
     return res||{error:'provider unavailable'};
   }
   const countKey=opts.countKey||'';
@@ -17601,8 +17615,8 @@ async function editorRequestLanguageProvider(kind,payload,options){
     const count=editorProviderResultCount(res,countKey);
     if(count>0){
       const itemLabel=opts.itemLabel||label.toLowerCase();
-      updateEditorLanguageProviderStatus(providerErrorSummary?'warning':'ready',{
-        kind,label,
+      setStatus(providerErrorSummary?'warning':'ready',{
+        kind,label,count,
         message:count+' '+itemLabel+(count===1?'':'s')+(providerErrorSummary?' with provider warning':''),
         detail:providerErrorSummary||label+' completed',
         requestId:res.requestId,
@@ -17610,9 +17624,9 @@ async function editorRequestLanguageProvider(kind,payload,options){
         providerErrors:providerHardErrorCount
       });
     }else{
-      updateEditorLanguageProviderStatus(providerErrorSummary?'error':'empty',{
-        kind,label,
-        message:providerErrorSummary?editorLanguageProviderFailureMessage(kind,res):'No '+label.toLowerCase(),
+      setStatus(providerErrorSummary?'error':'empty',{
+        kind,label,count:0,
+        message:providerErrorSummary?editorLanguageProviderFailureMessage(kind,res):'No '+label.toLowerCase()+' - no extension provides it for this language',
         detail:providerErrorSummary||label+' returned no results',
         requestId:res.requestId,
         providerWarnings:providerErrorCount,
@@ -17620,7 +17634,7 @@ async function editorRequestLanguageProvider(kind,payload,options){
       });
     }
   }else{
-    updateEditorLanguageProviderStatus(providerErrorSummary?'warning':'ready',{kind,label,message:providerErrorSummary?label+' provider warning':label+' ready',detail:providerErrorSummary||label+' completed',requestId:res.requestId,providerWarnings:providerErrorCount,providerErrors:providerHardErrorCount});
+    setStatus(providerErrorSummary?'warning':'ready',{kind,label,message:providerErrorSummary?label+' provider warning':label+' ready',detail:providerErrorSummary||label+' completed',requestId:res.requestId,providerWarnings:providerErrorCount,providerErrors:providerHardErrorCount});
   }
   return res;
 }

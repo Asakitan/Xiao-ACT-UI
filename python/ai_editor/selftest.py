@@ -10552,7 +10552,8 @@ async function call(method,payload){
 
   callResponses = [{ ok:true, hovers:[] }];
   await editorRequestLanguageProvider("hover", null, { countKey:"hovers", itemLabel:"hover" });
-  assert(languageStatus.className.includes("empty") && languageStatus.textContent === "No hover",
+  assert(languageStatus.className.includes("empty")
+         && languageStatus.textContent === "No hover - no extension provides it for this language",
          "empty provider status is visible");
 
   callResponses = [{ ok:true, items:[{ label:"stale" }] }];
@@ -18233,6 +18234,107 @@ console.log("command palette quick access helpers ok");
            and "data-editor-language-section=\"providers\"" in html
            and "providerRows.length?providerRows.map" in html
            and "providerErrors?providerErrors+' provider errors':''" in html)
+    if not node_path:
+        _check("frontend hover/definition/references have dedicated no-provider status rows skipped without Node.js",
+               True)
+    else:
+        # 长期计划C项: "provider failure 聚合进 health 但没有专门的UI提示这个功能
+        # 的扩展没装/失败了" - real gap, verified by reading the code (unlike a
+        # prior session's B-item assumption, this one held up). hover/definition/
+        # references only ever wrote into the single shared
+        # _editorLanguageProviderStatus slot, so an unrelated later request
+        # silently erased any earlier "no provider for X" evidence before a user
+        # could see it. Fixed by also persisting per-kind into
+        # _editorLanguageFeatureState (the same mechanism diagnostics/formatting/
+        # codeActions already use) and giving hover/definition/references their
+        # own status panel rows.
+        lang_status_functions = [
+            "editorRequestLanguageProvider",
+            "updateEditorLanguageProviderStatus",
+            "updateEditorLanguageFeatureState",
+            "editorLanguageProviderKindLabel",
+            "editorProviderResultCount",
+            "editorLanguageProviderErrorSummary",
+            "editorLanguageProviderFailureMessage",
+            "editorProviderResultCancelled",
+            "editorProviderResultSkipped",
+            "editorLanguageStatusPanelFeatureRows",
+        ]
+        lang_status_js_functions = "\n".join(
+            _extract_js_function(html, name)
+            for name in lang_status_functions)
+        js = r"""
+function assert(ok,label){ if(!ok){ throw new Error(label); } }
+function isPlainObject(value){return !!value&&typeof value==='object'&&!Array.isArray(value)}
+function callFailedMessage(result,fallback){return (result&&result.error)||fallback}
+let _editorLanguageProviderStatus={};
+let _editorLanguageFeatureState={};
+function renderEditorLanguageFeatureStatus(){}
+function $(id){return null}
+""" + lang_status_js_functions + r"""
+global.performance={now:()=>Date.now()};
+function editorProviderPayload(kind){return {kind}}
+function recordAiEditorPerfSample(){}
+let mockCallResult=null;
+async function call(method,payload){return mockCallResult}
+
+(async () => {
+  mockCallResult={ok:true,hovers:[]};
+  await editorRequestLanguageProvider('hover',editorProviderPayload('hover'),{countKey:'hovers',itemLabel:'hover'});
+  assert(_editorLanguageFeatureState.hover.state==='empty',"hover with zero results persists as empty state");
+  assert(_editorLanguageFeatureState.hover.message.includes('no extension provides it'),"hover empty message explains no extension provides it");
+
+  mockCallResult={ok:true,definitions:[{uri:'file:///a.ts'}]};
+  await editorRequestLanguageProvider('definition',editorProviderPayload('definition'),{countKey:'definitions',itemLabel:'definition',label:'Definition'});
+  assert(_editorLanguageFeatureState.definition.state==='ready',"definition with a result is ready");
+  assert(_editorLanguageFeatureState.definition.count===1,"definition count persisted");
+
+  mockCallResult={ok:true,hovers:[{contents:'x'}]};
+  await editorRequestLanguageProvider('hover',editorProviderPayload('hover'),{countKey:'hovers',itemLabel:'hover'});
+  assert(_editorLanguageFeatureState.hover.state==='ready',"hover updates to ready on its own next run");
+  assert(_editorLanguageFeatureState.definition.state==='ready'&&_editorLanguageFeatureState.definition.count===1,
+         "definition state survives an unrelated later hover request (the actual regression this fixes)");
+
+  mockCallResult={ok:true,references:[],providerErrors:[{message:'ext crashed',level:'error'}]};
+  await editorRequestLanguageProvider('references',editorProviderPayload('references'),{countKey:'references',itemLabel:'reference'});
+  assert(_editorLanguageFeatureState.references.state==='error',"references with a provider error is flagged error, not just empty");
+
+  const rows=editorLanguageStatusPanelFeatureRows();
+  const byKey=Object.fromEntries(rows.map(r=>[r.key,r]));
+  assert(byKey.hover&&byKey.hover.state==='ready',"status panel exposes a Hover row reflecting live state");
+  assert(byKey.definition&&byKey.definition.state==='ready'&&byKey.definition.detail.includes('result'),"status panel Definition row shows a result count");
+  assert(byKey.references&&byKey.references.state==='error',"status panel References row reflects the provider error");
+
+  console.log("frontend hover/definition/references have dedicated no-provider status rows ok");
+})().catch(e => { console.error(e.message); process.exit(1); });
+"""
+        js_path = ""
+        try:
+            with tempfile.NamedTemporaryFile(
+                    "w", encoding="utf-8", suffix=".js", delete=False) as fh:
+                js_path = fh.name
+                fh.write(js)
+            result = subprocess.run(
+                [node_path, js_path],
+                cwd=os.path.dirname(os.path.dirname(os.path.dirname(__file__))),
+                capture_output=True,
+                text=True,
+                timeout=10,
+                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+            )
+            _check_subprocess_result(
+                "frontend hover/definition/references have dedicated no-provider status rows",
+                result,
+                "frontend hover/definition/references have dedicated no-provider status rows ok",
+            )
+        except Exception as exc:
+            _check("frontend hover/definition/references have dedicated no-provider status rows", False, str(exc))
+        finally:
+            if js_path:
+                try:
+                    os.unlink(js_path)
+                except OSError:
+                    pass
     if not node_path:
         _check("frontend built-in language fallback behavior skipped without Node.js",
                True)
