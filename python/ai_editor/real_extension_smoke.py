@@ -209,7 +209,7 @@ def attempt_js_live_activation(
     import tempfile
     import time
 
-    from ai_editor.extension_host import ExtensionScanner, NodeExtensionHost
+    from ai_editor.extension_host import CommandService, ExtensionScanner, NodeExtensionHost
     from ai_editor.node_runtime import get_node_path
 
     scan_dirs = [directory] if directory else _platform_extension_dirs()
@@ -261,6 +261,13 @@ def attempt_js_live_activation(
     )
     host.on_error(lambda ext_id, message: errors_by_ext.setdefault(
         str(ext_id), str(message)))
+    # Real extensions commonly call vscode.commands.executeCommand/
+    # registerCommand synchronously during activation (e.g. to check for
+    # another extension's command, or self-register commands) - without a
+    # command service the Node side reports "Command service is not
+    # available" and activation fails, even though the gap is this harness
+    # never wiring one up (the real in-platform host always has one).
+    host.set_command_service(CommandService())
     try:
         if not host.start():
             summary["error"] = "Node extension host failed to start"

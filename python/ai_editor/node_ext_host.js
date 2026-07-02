@@ -78,12 +78,22 @@ class EventEmitter {
         if (Array.isArray(disposables)) disposables.push(disposable);
         return disposable;
     }
-    fire(data) {
+    // Arrow-function class fields (auto-bound to `this` regardless of how
+    // the reference is later called) rather than regular prototype
+    // methods: real gap, confirmed root cause of "this._listeners is not
+    // iterable" in ms-vscode.cmake-tools (2026-07-02 sweep) - it passes a
+    // bare `someEmitter.fire` reference around as a plain callback (a very
+    // common JS pattern; VS Code's own real EventEmitter is implemented
+    // defensively for exactly this reason), and a regular method loses its
+    // `this` binding when called that way, so `this._listeners` resolved
+    // against the WRONG object. Converting fire/dispose to bound fields
+    // makes detached references safe no matter who holds them.
+    fire = (data) => {
         for (const fn of [...this._listeners]) {
             try { fn(data); } catch (e) { log('EventEmitter listener error:', e.message); }
         }
-    }
-    dispose() { this._listeners.length = 0; }
+    };
+    dispose = () => { this._listeners.length = 0; };
 }
 
 // -------------------------------------------------------------------------
@@ -227,6 +237,54 @@ function _fileSystemErrorMessage(messageOrUri) {
     return String(messageOrUri);
 }
 
+// vscode.l10n was entirely missing - real gap, confirmed as the shared root
+// cause of "Cannot read properties of undefined (reading 't')" across SIX
+// real installed extensions (2026-07-02 sweep): GitHub.copilot-chat,
+// ms-dotnettools.csharp, ms-python.debugpy, ms-python.python,
+// ms-python.vscode-pylance, ms-python.vscode-python-envs. Every major
+// Microsoft extension bundles @vscode/l10n and calls l10n.t(...) at MODULE
+// LOAD TIME (building static string tables), before activate() even runs -
+// so a missing l10n.t crashed the require() itself. There's no translation
+// bundle to look up here, so this mirrors real VS Code's own fallback
+// behavior when no translation matches the current locale: return the
+// original message with {0}/{name} placeholders substituted from args.
+function _l10nFormatMessage(message, args) {
+    const text = String(message ?? '');
+    let record = null;
+    let list = args;
+    if (args.length === 1 && args[0] && typeof args[0] === 'object' && !Array.isArray(args[0])) {
+        record = args[0];
+        list = [];
+    }
+    return text.replace(/\{([^{}]+)\}/g, (match, key) => {
+        if (record && Object.prototype.hasOwnProperty.call(record, key)) {
+            return String(record[key]);
+        }
+        const idx = Number(key);
+        if (Number.isInteger(idx) && idx >= 0 && idx < list.length) {
+            return String(list[idx]);
+        }
+        return match;
+    });
+}
+const l10n = {
+    t(messageOrOptions, ...args) {
+        if (messageOrOptions && typeof messageOrOptions === 'object' && !Array.isArray(messageOrOptions)) {
+            const optArgs = messageOrOptions.args;
+            // _l10nFormatMessage's own args-array param already treats a
+            // single plain-object ELEMENT as the named-placeholder record -
+            // so a named `options.args` object must be wrapped in an array,
+            // while a positional `options.args` array is passed through.
+            const wrapped = Array.isArray(optArgs) ? optArgs
+                : (optArgs && typeof optArgs === 'object') ? [optArgs] : [];
+            return _l10nFormatMessage(messageOrOptions.message, wrapped);
+        }
+        return _l10nFormatMessage(messageOrOptions, args);
+    },
+    bundle: undefined,
+    uri: undefined,
+};
+
 class FileSystemError extends Error {
     constructor(messageOrUri, code = 'Unknown') {
         super(_fileSystemErrorMessage(messageOrUri));
@@ -239,6 +297,18 @@ class FileSystemError extends Error {
     static FileIsADirectory(messageOrUri) { return new FileSystemError(messageOrUri, 'FileIsADirectory'); }
     static NoPermissions(messageOrUri) { return new FileSystemError(messageOrUri, 'NoPermissions'); }
     static Unavailable(messageOrUri) { return new FileSystemError(messageOrUri, 'Unavailable'); }
+}
+
+// vscode.CancellationError: thrown to signal a cancelled operation. Also
+// entirely missing - real gap, confirmed as the second (of at least two)
+// root cause of Vue.volar's activation failure, subclassed by its
+// vscode-languageclient-derived bundle (e.g. `class LSPCancellationError
+// extends vscode.CancellationError`).
+class CancellationError extends Error {
+    constructor() {
+        super('Canceled');
+        this.name = 'Canceled';
+    }
 }
 
 const WEBVIEW_RESOURCE_AUTHORITY_SUFFIX = '.vscode-resource.webview.local';
@@ -2391,11 +2461,42 @@ function _markCustomTextEditorsSaved(document, kind = 'save') {
 // OutputChannel
 // -------------------------------------------------------------------------
 class OutputChannel {
-    constructor(name, languageId = '') {
+    constructor(name, languageId = '', isLog = false) {
         this.name = name;
         this.languageId = languageId || '';
         this._lines = [];
         this._disposed = false;
+        // vscode.window.createOutputChannel(name, {log:true}) returns a
+        // LogOutputChannel (trace/debug/info/warn/error + logLevel). This
+        // was entirely missing - real gap, confirmed as the shared root
+        // cause of "this.channel.error/.info is not a function" and
+        // "r.trace is not a function" across ms-python.python/debugpy/
+        // vscode-pylance/vscode-python-envs and ms-dotnettools.csharp
+        // (2026-07-02 sweep) - all use a log channel as their internal
+        // logger, called during activation before any real work happens.
+        if (isLog) {
+            this.logLevel = _envLogLevel;
+            this.onDidChangeLogLevel = _onDidChangeLogLevelEmitter.event;
+            const levelLine = (level, message, args) => {
+                const rest = (args || []).map((a) => {
+                    if (a instanceof Error) return a.stack || a.message || String(a);
+                    if (typeof a === 'object' && a !== null) { try { return JSON.stringify(a); } catch { return String(a); } }
+                    return String(a);
+                });
+                const text = [String(message ?? ''), ...rest].filter((s) => s !== '').join(' ');
+                this.appendLine(`${new Date().toISOString()} [${level}] ${text}`);
+            };
+            this.trace = (message, ...args) => levelLine('trace', message, args);
+            this.debug = (message, ...args) => levelLine('debug', message, args);
+            this.info = (message, ...args) => levelLine('info', message, args);
+            this.warn = (message, ...args) => levelLine('warn', message, args);
+            this.error = (errorOrMessage, ...args) => {
+                const message = errorOrMessage instanceof Error
+                    ? (errorOrMessage.stack || errorOrMessage.message)
+                    : errorOrMessage;
+                levelLine('error', message, args);
+            };
+        }
     }
     get _content() { return this._lines.join(''); }
     append(text) {
@@ -2439,6 +2540,125 @@ class OutputChannel {
         send({ type: 'output_dispose', channelName: this.name });
     }
 }
+
+// vscode.tests (the Testing API) was entirely missing - real gap, confirmed
+// shared root cause of "Cannot read properties of undefined (reading
+// 'createTestController')" for BOTH ms-python.python and
+// ms-python.vscode-pylance (2026-07-02 sweep) - Python's pytest/unittest
+// discovery integration builds its test tree through this API during
+// activation. This app has no Test Explorer UI panel to visually run/
+// display tests (a separate, much larger feature), so this is scoped like
+// registerDebugAdapterTrackerFactory elsewhere in this file: a real,
+// functioning registry/object graph matching VS Code's actual shape (so
+// extensions that build a test tree and register run profiles don't crash)
+// without a UI consumer wired up yet.
+class TestTag {
+    constructor(id) { this.id = String(id ?? ''); }
+}
+class TestMessage {
+    constructor(message) {
+        this.message = message;
+        this.expectedOutput = undefined;
+        this.actualOutput = undefined;
+        this.location = undefined;
+        this.contextValue = undefined;
+    }
+    static diff(message, expected, actual) {
+        const m = new TestMessage(message);
+        m.expectedOutput = expected;
+        m.actualOutput = actual;
+        return m;
+    }
+}
+class TestRunRequest {
+    constructor(include, exclude, profile, continuous) {
+        this.include = include || undefined;
+        this.exclude = exclude || undefined;
+        this.profile = profile;
+        this.continuous = !!continuous;
+    }
+}
+class TestItemCollection {
+    constructor() { this._map = new Map(); }
+    get size() { return this._map.size; }
+    add(item) { if (item && item.id !== undefined) this._map.set(String(item.id), item); }
+    delete(id) { this._map.delete(String(id)); }
+    get(id) { return this._map.get(String(id)); }
+    forEach(callback, thisArg) {
+        this._map.forEach((value) => callback.call(thisArg, value, this));
+    }
+    replace(items) {
+        this._map.clear();
+        for (const item of (items || [])) this.add(item);
+    }
+    [Symbol.iterator]() { return this._map.values(); }
+}
+function _createTestItem(controllerId, id, label, uri) {
+    return {
+        id: String(id ?? ''),
+        label: String(label ?? ''),
+        uri,
+        busy: false,
+        canResolveChildren: false,
+        description: undefined,
+        sortText: undefined,
+        tags: [],
+        range: undefined,
+        error: undefined,
+        parent: undefined,
+        children: new TestItemCollection(),
+    };
+}
+function _createTestRun(request, name, persist) {
+    const tokenSource = new CancellationTokenSource();
+    return {
+        name: name || '',
+        token: tokenSource.token,
+        isPersisted: persist !== false,
+        enqueued() {}, started() {}, skipped() {},
+        failed() {}, errored() {}, passed() {},
+        appendOutput() {}, appendMessage() {},
+        end() { tokenSource.dispose(); },
+    };
+}
+function _createTestController(id, label) {
+    const items = new TestItemCollection();
+    const profiles = new Set();
+    const controller = {
+        id: String(id ?? ''),
+        label: String(label ?? ''),
+        items,
+        refreshHandler: undefined,
+        resolveHandler: undefined,
+        createTestItem(itemId, itemLabel, uri) {
+            return _createTestItem(controller.id, itemId, itemLabel, uri);
+        },
+        createRunProfile(profileLabel, kind, runHandler, isDefault, tag, supportsContinuousRun) {
+            const changeEmitter = new EventEmitter();
+            const profile = {
+                label: String(profileLabel ?? ''),
+                kind: kind === undefined ? 1 : kind,
+                isDefault: !!isDefault,
+                tag,
+                supportsContinuousRun: !!supportsContinuousRun,
+                runHandler: typeof runHandler === 'function' ? runHandler : (() => {}),
+                configureHandler: undefined,
+                onDidChangeDefault: changeEmitter.event,
+                dispose() { profiles.delete(profile); },
+            };
+            profiles.add(profile);
+            return profile;
+        },
+        createTestRun(request, name, persist) {
+            return _createTestRun(request, name, persist);
+        },
+        invalidateTestResults() {},
+        dispose() { _testControllers.delete(controller.id); },
+    };
+    _testControllers.set(controller.id, controller);
+    return controller;
+}
+const _testControllers = new Map(); // id -> TestController
 
 class ProcessExecution {
     constructor(processValue, argsOrOptions, options) {
@@ -2661,6 +2881,22 @@ const _extensionActivationRequests = new Map(); // requestId -> pending activati
 const _extensionActivationInFlight = new Map(); // extensionId -> pending activation request
 const _activationEventInFlight = new Map(); // activationEvent -> Promise<number>
 const _commands = new Map();             // commandId -> handler
+// 'setContext' is a core VS Code built-in command (vscode.commands.
+// executeCommand('setContext', key, value), used to set "when"-clause
+// context keys) - it was entirely missing, so any extension calling it
+// (very common - many extensions gate a command/view on their own state)
+// hit "Command not found: setContext" via the Python round-trip. Real gap,
+// confirmed shared root cause for ms-vscode.cmake-tools and
+// ms-vscode.cpptools (2026-07-02 sweep), both call it during activation.
+// Stored here (not wired to the frontend's own separate when-clause
+// evaluation yet - a further step, not needed to unblock activation) so
+// the command exists and functions rather than crashing.
+const _contextKeys = new Map();
+const _onDidChangeContextEmitter = new EventEmitter();
+_commands.set('setContext', (key, value) => {
+    _contextKeys.set(String(key ?? ''), value);
+    _onDidChangeContextEmitter.fire({ key: String(key ?? ''), value });
+});
 const _pythonCommandRequests = new Map(); // requestId -> { resolve, reject, timer }
 const _pythonLmRequests = new Map();      // requestId -> { resolve, reject, timer }
 const _windowDialogRequests = new Map();  // requestId -> { resolve, timer, cleanup, kind }
@@ -2791,6 +3027,8 @@ const _diagnosticCollections = new Map(); // name -> DiagnosticCollection
 const _onDidChangeDiagnosticsEmitter = new EventEmitter();
 let _nextCustomEditorEditHandle = 1;
 const _debugAdapterFactories = new Map();   // type -> factory
+const _debugVisualizationTreeProviders = new Map(); // id -> provider
+const _debugVisualizationProviders = new Map();     // id -> provider
 const _debugConfigProviders = new Map();    // type -> provider
 const _taskProviders = new Map();           // type -> provider
 const _taskProviderStates = new Map();      // type -> provider metadata
@@ -2804,6 +3042,21 @@ const _authenticationProviders = new Map(); // id -> { label, provider, options,
 const _authenticationSessions = new Map();  // id -> AuthenticationSession[]
 const _onDidChangeAuthenticationSessionsEmitter = new EventEmitter();
 const _onDidChangeConfigurationEmitter = new EventEmitter();
+// workspace.onDid/onWill{Create,Delete,Rename}Files were entirely missing -
+// real gap, confirmed shared root cause of "workspace.onDidDeleteFiles is
+// not a function" (ms-python.vscode-python-envs, 2026-07-02 sweep), which
+// subscribes during activation. This app has no workspace-wide recursive
+// file-system watcher (createFileSystemWatcher is per-glob, not global), so
+// these honestly never fire yet - same "declared but not wired" pattern
+// already used for window.onDidChangeWindowState - not overclaiming.
+const _onWillCreateFilesEmitter = new EventEmitter();
+const _onDidCreateFilesEmitter = new EventEmitter();
+const _onWillDeleteFilesEmitter = new EventEmitter();
+const _onDidDeleteFilesEmitter = new EventEmitter();
+const _onWillRenameFilesEmitter = new EventEmitter();
+const _onDidRenameFilesEmitter = new EventEmitter();
+const _portAttributesProviders = new Map(); // handle -> { provider, portSelector }
+let _nextPortAttributesProviderHandle = 1;
 const _windowState = Object.freeze({ focused: true, active: true });
 const _onDidChangeWindowStateEmitter = new EventEmitter();
 const _envLogLevel = 3; // vscode.LogLevel.Info
@@ -4206,7 +4459,21 @@ function _telemetryErrorObject(value) {
 function _createTelemetryLogger(sender) {
     let disposed = false;
     const safeSender = sender && typeof sender === 'object' ? sender : {};
+    // onDidChangeEnableStates/isUsageEnabled/isErrorsEnabled were entirely
+    // missing - real gap (this IS a documented TelemetryLogger member, not
+    // a misunderstanding), confirmed shared root cause of
+    // "this.telemetryLogger.onDidChangeEnableStates is not a function"
+    // across ms-dotnettools.csharp, ms-dotnettools.vscode-dotnet-runtime,
+    // and ms-vscode.powershell (2026-07-02 sweep) - all three subscribe to
+    // it right after creating their telemetry logger during activation.
+    // Telemetry is never actually enabled in this host, so both flags are
+    // false and the event correctly never needs to fire (no real state
+    // change source exists) - honest static values, not overclaiming.
+    const changeEmitter = new EventEmitter();
     return {
+        isUsageEnabled: false,
+        isErrorsEnabled: false,
+        onDidChangeEnableStates: changeEmitter.event,
         logUsage(eventName, data) {
             if (disposed || typeof safeSender.sendEventData !== 'function') return;
             try {
@@ -10283,6 +10550,15 @@ function buildVscodeModule(extDesc, extensionPath, storageRoot) {
 
     // Build the vscode namespace
     const vscode = {
+        l10n,
+        // vscode.version was entirely missing - real gap, confirmed root
+        // cause of cpptools' "Cannot read properties of undefined (reading
+        // 'split')" (its own getVsCodeVersion() does vscode.version.
+        // split('.')) - extensions commonly parse this as SemVer to gate
+        // features. A recent, real VS Code release string so >= comparisons
+        // against modern feature checks behave the way they would in a
+        // genuinely up-to-date VS Code.
+        version: '1.95.0',
         // --- Types ---
         Uri,
         Position,
@@ -10363,6 +10639,12 @@ function buildVscodeModule(extDesc, extensionPath, storageRoot) {
         ExtensionMode: { Production: 1, Development: 2, Test: 3 },
         EnvironmentVariableMutatorType,
         DiagnosticSeverity: { Error: 0, Warning: 1, Information: 2, Hint: 3 },
+        // languages.setLanguageConfiguration's onEnterRules use this enum -
+        // real gap, confirmed shared root cause across ms-python.python,
+        // ms-python.vscode-pylance, and ms-vscode.cpptools (2026-07-02
+        // sweep) - all three build a language configuration referencing
+        // IndentAction at module load time.
+        IndentAction: { None: 0, Indent: 1, IndentOutdent: 2, Outdent: 3 },
         LanguageStatusSeverity: { Information: 0, Warning: 1, Error: 2 },
         NotebookCellKind,
         NotebookCellStatusBarAlignment,
@@ -10633,7 +10915,8 @@ function buildVscodeModule(extDesc, extensionPath, storageRoot) {
                 const languageId = typeof options === 'string'
                     ? options
                     : (options && typeof options.languageId === 'string' ? options.languageId : '');
-                const ch = new OutputChannel(name, languageId);
+                const isLog = !!(options && typeof options === 'object' && options.log === true);
+                const ch = new OutputChannel(name, languageId, isLog);
                 _outputChannels.set(ch.name, ch);
                 return ch;
             },
@@ -10993,6 +11276,17 @@ function buildVscodeModule(extDesc, extensionPath, storageRoot) {
             },
             onDidChangeConfiguration: _onDidChangeConfigurationEmitter.event,
             onDidChangeWorkspaceFolders: _onDidChangeWorkspaceFoldersEmitter.event,
+            onWillCreateFiles: _onWillCreateFilesEmitter.event,
+            onDidCreateFiles: _onDidCreateFilesEmitter.event,
+            onWillDeleteFiles: _onWillDeleteFilesEmitter.event,
+            onDidDeleteFiles: _onDidDeleteFilesEmitter.event,
+            onWillRenameFiles: _onWillRenameFilesEmitter.event,
+            onDidRenameFiles: _onDidRenameFilesEmitter.event,
+            registerPortAttributesProvider(portSelector, provider) {
+                const handle = _nextPortAttributesProviderHandle++;
+                _portAttributesProviders.set(handle, { provider, portSelector });
+                return new Disposable(() => _portAttributesProviders.delete(handle));
+            },
             updateWorkspaceFolders(start, deleteCount, ...workspaceFoldersToAdd) {
                 return _workspaceUpdateWorkspaceFolders(
                     start, deleteCount, ...workspaceFoldersToAdd);
@@ -12250,6 +12544,27 @@ function buildVscodeModule(extDesc, extensionPath, storageRoot) {
                         });
                     });
                 },
+                // registerDebugVisualizationTreeProvider/
+                // registerDebugVisualizationProvider were entirely missing -
+                // real gap, confirmed root cause of "r.debug.
+                // registerDebugVisualizationTreeProvider is not a function"
+                // in ms-python.debugpy (2026-07-02 sweep), which registers
+                // its variable-visualization tree during activation. Same
+                // scope as the tracker/adapter factory registries above:
+                // a real registry so activation doesn't crash, without a
+                // Debug Console variable-visualization UI to consume it
+                // (this app has no such panel yet - a separate, larger
+                // feature).
+                registerDebugVisualizationTreeProvider(id, provider) {
+                    const key = String(id || '');
+                    _debugVisualizationTreeProviders.set(key, provider);
+                    return new Disposable(() => _debugVisualizationTreeProviders.delete(key));
+                },
+                registerDebugVisualizationProvider(id, provider) {
+                    const key = String(id || '');
+                    _debugVisualizationProviders.set(key, provider);
+                    return new Disposable(() => _debugVisualizationProviders.delete(key));
+                },
                 registerDebugConfigurationProvider(type, provider, triggerKind = 1) {
                     const key = String(type || '');
                     const handle = _nextDebugConfigProviderHandle++;
@@ -12626,6 +12941,17 @@ function buildVscodeModule(extDesc, extensionPath, storageRoot) {
             };
         })(),
 
+        // --- Namespace: tests (Testing API) ---
+        tests: {
+            createTestController(id, label) {
+                return _createTestController(id, label);
+            },
+        },
+        TestRunProfileKind: { Run: 1, Debug: 2, Coverage: 3 },
+        TestTag,
+        TestMessage,
+        TestRunRequest,
+
         // --- Types used by some extensions ---
         ThemeIcon,
         ThemeColor,
@@ -12676,6 +13002,50 @@ function buildVscodeModule(extDesc, extensionPath, storageRoot) {
         CodeActionTriggerKind,
         Hover: class { constructor(contents, range) { this.contents = Array.isArray(contents) ? contents : [contents]; this.range = range; } },
         DocumentLink: class { constructor(range, target) { this.range = range; this.target = target; } },
+        // vscode.Diagnostic/DiagnosticRelatedInformation/DiagnosticTag/
+        // SnippetString were entirely missing from this module - a real,
+        // very commonly used constructable type (any extension building its
+        // own diagnostics client-side, or subclassing Diagnostic, hit
+        // "Class extends value undefined" on this exact export). Confirmed
+        // root cause of Vue.volar's activation failure (2026-07-02 real
+        // extension sweep); several other language-support extensions hit
+        // the identical error class and likely share this same gap.
+        Diagnostic: class {
+            constructor(range, message, severity) {
+                this.range = range;
+                this.message = message;
+                this.severity = severity === undefined || severity === null ? 0 : severity;
+                this.source = undefined;
+                this.code = undefined;
+                this.relatedInformation = undefined;
+                this.tags = undefined;
+            }
+        },
+        DiagnosticRelatedInformation: class {
+            constructor(location, message) { this.location = location; this.message = message; }
+        },
+        DiagnosticTag: { Unnecessary: 1, Deprecated: 2 },
+        SnippetString: class {
+            constructor(value) { this.value = value === undefined || value === null ? '' : String(value); }
+            appendText(text) { this.value += String(text ?? '').replace(/\$|}|\\/g, '\\$&'); return this; }
+            appendTabstop(number) { this.value += '$' + (number ?? 0); return this; }
+            appendPlaceholder(value, number) {
+                const n = number ?? 0;
+                const text = typeof value === 'function' ? '' : String(value ?? '');
+                this.value += '${' + n + ':' + text.replace(/\$|}|\\/g, '\\$&') + '}';
+                return this;
+            }
+            appendChoice(values, number) {
+                const n = number ?? 0;
+                this.value += '${' + n + '|' + (Array.isArray(values) ? values : []).join(',') + '|}';
+                return this;
+            }
+            appendVariable(name, defaultValueOrFn) {
+                const dv = typeof defaultValueOrFn === 'function' ? '' : String(defaultValueOrFn ?? '');
+                this.value += dv ? ('${' + name + ':' + dv + '}') : ('$' + '{' + name + '}');
+                return this;
+            }
+        },
         DocumentDropOrPasteEditKind,
         DocumentDropEdit,
         DocumentPasteEdit,
@@ -12736,6 +13106,7 @@ function buildVscodeModule(extDesc, extensionPath, storageRoot) {
         FileChangeType,
         FilePermission: { Readonly: 1 },
         FileSystemError,
+        CancellationError,
         EndOfLine: { LF: 1, CRLF: 2 },
         TextEditorRevealType: { Default: 0, InCenter: 1, InCenterIfOutsideViewport: 2, AtTop: 3 },
 
