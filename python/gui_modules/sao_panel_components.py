@@ -244,18 +244,29 @@ def _bind_hover(row: tk.Misc, base_bg: str, hover_bg: str) -> None:
     row.bind('<Leave>', _leave, add='+')
 
 
-def status_badge(parent: tk.Misc, text: str, *, kind: str = "gold") -> tk.Canvas:
-    """Rounded pill badge (canvas) — matches the web panel badge style."""
+def status_badge(parent: tk.Misc, text: str, *, kind: str = "gold",
+                 bg: Optional[str] = None, fill: Optional[str] = None,
+                 border: Optional[str] = None, fg: Optional[str] = None) -> tk.Canvas:
+    """Rounded pill badge (canvas) — matches the web panel badge style.
+
+    ``bg``/``fill``/``border``/``fg`` let a caller with its own brand palette
+    (e.g. Workshop's gold/ivory skin) skin the badge directly instead of
+    going through the global light/dark token lookup — omit them and the
+    badge behaves exactly as before.
+    """
     fontspec = get_cjk_font(8)
     f = tkfont.Font(font=fontspec)
     txt = str(text or "-")
     w = f.measure(txt) + 2 * 9
     h = f.metrics('linespace') + 2 * 3
-    c = tk.Canvas(parent, width=w, height=h, bg=_pc('body_bg', ui._SAO_PANEL_BODY_BG),
-                  highlightthickness=0, bd=0)
+    canvas_bg = bg if bg is not None else _pc('body_bg', ui._SAO_PANEL_BODY_BG)
+    fill_c = fill if fill is not None else _accent_soft(kind)
+    border_c = border if border is not None else _accent(kind)
+    fg_c = fg if fg is not None else _accent_text(kind)
+    c = tk.Canvas(parent, width=w, height=h, bg=canvas_bg, highlightthickness=0, bd=0)
     c.create_polygon(_round_pts(1, 1, w - 1, h - 1, min(9, h / 2)), smooth=True, splinesteps=16,
-                     fill=_accent_soft(kind), outline=_accent(kind), width=1)
-    c.create_text(w // 2, h // 2 + 1, text=txt, fill=_accent_text(kind), font=fontspec)
+                     fill=fill_c, outline=border_c, width=1)
+    c.create_text(w // 2, h // 2 + 1, text=txt, fill=fg_c, font=fontspec)
     return c
 
 
@@ -263,21 +274,33 @@ class _RoundedButton(tk.Canvas):
     """Rounded flat button (canvas) — Tk has no rounded Button. Matches web panel buttons.
 
     Supports ``configure(command=…)`` / ``configure(text=…)`` so existing callers
-    (e.g. dropdown_button) keep working.
+    (e.g. dropdown_button) keep working. ``fill``/``fill_hover``/``border``/``fg``/
+    ``canvas_bg`` let a caller skin the button with an explicit brand palette
+    instead of the global theme tokens (all default to the prior token-driven
+    look when omitted). ``active``/``active_fill``/``active_fg``/``active_border``
+    add an optional toggled-on appearance (tab bars, segmented mode pickers)
+    driven by ``set_active()`` instead of hand-rolled bg/fg swapping per caller.
     """
 
-    def __init__(self, parent, text='', command=None, *, kind='normal', radius=7, padx=12, pady=5):
+    def __init__(self, parent, text='', command=None, *, kind='normal', radius=7, padx=12, pady=5,
+                 fill=None, fill_hover=None, border=None, fg=None, canvas_bg=None,
+                 active=False, active_fill=None, active_fg=None, active_border=None):
         self._radius = radius
         self._text = str(text)
         self._command = command
         self._font = tkfont.Font(font=get_cjk_font(9, True))
-        self._fill = _pc('control_bg', _pc('card_bg', ui._SAO_PANEL_BODY_BG))
-        self._fill_hover = _pc('card_bg_alt', _pc('header_bg', ui._SAO_PANEL_HEADER_BG))
-        self._border = _pc('border', ui._SAO_PANEL_BORDER) if kind == 'normal' else _accent(kind)
-        self._fg = _pc('value_fg', ui._SAO_PANEL_VALUE_FG) if kind == 'normal' else _accent_text(kind)
+        self._fill = fill if fill is not None else _pc('control_bg', _pc('card_bg', ui._SAO_PANEL_BODY_BG))
+        self._fill_hover = fill_hover if fill_hover is not None else _pc('card_bg_alt', _pc('header_bg', ui._SAO_PANEL_HEADER_BG))
+        self._border = border if border is not None else (_pc('border', ui._SAO_PANEL_BORDER) if kind == 'normal' else _accent(kind))
+        self._fg = fg if fg is not None else (_pc('value_fg', ui._SAO_PANEL_VALUE_FG) if kind == 'normal' else _accent_text(kind))
+        self._active = bool(active)
+        self._active_fill = active_fill if active_fill is not None else self._border
+        self._active_fg = active_fg if active_fg is not None else '#ffffff'
+        self._active_border = active_border if active_border is not None else self._active_fill
         w = self._font.measure(self._text) + 2 * padx
         h = self._font.metrics('linespace') + 2 * pady
-        super().__init__(parent, width=w, height=h, bg=_pc('body_bg', ui._SAO_PANEL_BODY_BG),
+        canvas_bg_c = canvas_bg if canvas_bg is not None else _pc('body_bg', ui._SAO_PANEL_BODY_BG)
+        super().__init__(parent, width=w, height=h, bg=canvas_bg_c,
                          highlightthickness=0, bd=0, cursor='hand2' if command else '')
         self.bind('<Configure>', lambda _e: self._draw())
         self.bind('<Button-1>', self._on_click)
@@ -289,14 +312,24 @@ class _RoundedButton(tk.Canvas):
         self.delete('all')
         w = self.winfo_width() or int(self['width'])
         h = self.winfo_height() or int(self['height'])
+        if self._active:
+            fill, border, fg = self._active_fill, self._active_border, self._active_fg
+        else:
+            fill = self._fill_hover if hover else self._fill
+            border = _accent('cyan') if hover else self._border
+            fg = self._fg
         self.create_polygon(_round_pts(1, 1, w - 1, h - 1, self._radius), smooth=True, splinesteps=16,
-                            fill=self._fill_hover if hover else self._fill,
-                            outline=_accent('cyan') if hover else self._border, width=1)
-        self.create_text(w // 2, h // 2, text=self._text, fill=self._fg, font=self._font)
+                            fill=fill, outline=border, width=1)
+        self.create_text(w // 2, h // 2, text=self._text, fill=fg, font=self._font)
 
     def _on_click(self, _e):
         if callable(self._command):
             self._command()
+
+    def set_active(self, active: bool) -> None:
+        """Toggle the pre-styled 'selected' look (tab bars, segmented pickers)."""
+        self._active = bool(active)
+        self._draw()
 
     def configure(self, cnf=None, **kw):
         if 'command' in kw:
@@ -311,8 +344,9 @@ class _RoundedButton(tk.Canvas):
     config = configure
 
 
-def action_button(parent: tk.Misc, text: str, command: Optional[Callable[[], Any]] = None, *, kind: str = "normal"):
-    return _RoundedButton(parent, text, command, kind=kind)
+def action_button(parent: tk.Misc, text: str, command: Optional[Callable[[], Any]] = None, *,
+                  kind: str = "normal", **kwargs):
+    return _RoundedButton(parent, text, command, kind=kind, **kwargs)
 
 
 def dropdown_button(parent: tk.Misc, text: str, items: Iterable[Any], *, kind: str = "normal") -> tk.Button:
@@ -427,15 +461,19 @@ def _round_pts(x1, y1, x2, y2, r):
     ]
 
 
-def rounded_panel(parent, *, bg, border, radius=8, rail=None, rail_w=3, pad=10, height=None):
+def rounded_panel(parent, *, bg, border, radius=8, rail=None, rail_w=3, pad=10, height=None, canvas_bg=None):
     """Canvas-backed rounded card (Tk has no rounded Frame). Returns (canvas, inner).
 
     Draws a smooth rounded rect (fill ``bg``, 1px ``border``) and, when ``rail``
     is set, a flat colored left rail (rounded to follow the corner) like the web
     ``border-left`` accent. Content goes in the returned ``inner`` frame, inset by
     ``pad`` so the rounded edge stays visible.
+
+    ``canvas_bg`` overrides the backing canvas fill (visible at the rounded
+    corners) — pass it when ``bg``/``border`` are an explicit brand palette
+    that doesn't match the current global theme's body background.
     """
-    body_bg = _pc('body_bg', ui._SAO_PANEL_BODY_BG)
+    body_bg = canvas_bg if canvas_bg is not None else _pc('body_bg', ui._SAO_PANEL_BODY_BG)
     canvas = tk.Canvas(parent, bg=body_bg, highlightthickness=0, bd=0)
     if height:
         canvas.configure(height=height)
@@ -483,10 +521,12 @@ class _SaoScroll(tk.Canvas):
     Windows — it stays white/split). Drop-in: pass as ``yscrollcommand=sb.set`` and
     ``command=canvas.yview``. Thumb auto-hides when everything fits."""
 
-    def __init__(self, parent, command, *, width=9):
-        super().__init__(parent, width=width, bg=_pc('body_bg', ui._SAO_PANEL_BODY_BG),
+    def __init__(self, parent, command, *, width=9, track_bg=None, thumb=None):
+        bg = track_bg if track_bg is not None else _pc('body_bg', ui._SAO_PANEL_BODY_BG)
+        super().__init__(parent, width=width, bg=bg,
                          highlightthickness=0, bd=0, takefocus=0)
         self._command = command
+        self._thumb = thumb if thumb is not None else _pc('border', ui._SAO_PANEL_BORDER)
         self._f0, self._f1 = 0.0, 1.0
         self.bind('<Configure>', lambda _e: self._draw())
         self.bind('<Button-1>', self._on_drag)
@@ -512,7 +552,7 @@ class _SaoScroll(tk.Canvas):
             y2 = min(h - 1.0, y1 + 12)
         r = max(2.0, (w - 3) / 2.0)
         self.create_polygon(_round_pts(2, y1, w - 1, y2, r), smooth=True, splinesteps=14,
-                            fill=_pc('border', ui._SAO_PANEL_BORDER), outline='')
+                            fill=self._thumb, outline='')
 
     def _on_drag(self, e):
         h = self.winfo_height() or 1
@@ -523,8 +563,8 @@ class _SaoScroll(tk.Canvas):
         return 'break'
 
 
-def sao_scrollbar(parent, command, *, width=9):
-    return _SaoScroll(parent, command, width=width)
+def sao_scrollbar(parent, command, *, width=9, track_bg=None, thumb=None):
+    return _SaoScroll(parent, command, width=width, track_bg=track_bg, thumb=thumb)
 
 
 def bind_canvas_mousewheel(canvas: Optional[tk.Canvas], *widgets: Optional[tk.Misc]) -> None:

@@ -15,7 +15,7 @@ from gui_modules.sao_panel_ui import (
     _SAO_PANEL_LABEL_FG, _SAO_PANEL_VALUE_FG,
     _SAO_PANEL_SEP, _theme_color,
 )
-from gui_modules.sao_panel_components import action_button
+from gui_modules.sao_panel_components import action_button, rounded_panel, sao_scrollbar
 
 def _list_processes_primary() -> Optional[List[dict]]:
     try:
@@ -208,26 +208,27 @@ class ProcessSelectorPanel:
         body.configure(bg=body_bg)
 
         # ── Search bar ──
-        search_frame = tk.Frame(body, bg=body_bg)
-        search_frame.pack(fill=tk.X, padx=12, pady=(10, 4))
-
-        search_icon = tk.Label(search_frame, text="🔍", bg=body_bg,
-                               fg=_tc('label_fg', _SAO_PANEL_LABEL_FG),
-                               font=_cjk_font(10))
-        search_icon.pack(side=tk.LEFT, padx=(0, 6))
         ctrl_bg = _tc('control_bg', '#fafbfb')
         val_fg = _tc('value_fg', _SAO_PANEL_VALUE_FG)
         placeholder_fg = _tc('label_fg', _SAO_PANEL_LABEL_FG)
+
+        search_card, search_inner = rounded_panel(
+            body, bg=ctrl_bg, border=_tc('border', _SAO_PANEL_BORDER),
+            radius=8, pad=6, height=32,
+        )
+        search_card.pack(fill=tk.X, padx=12, pady=(10, 4))
+
+        search_icon = tk.Label(search_inner, text="🔍", bg=ctrl_bg,
+                               fg=placeholder_fg, font=_cjk_font(10))
+        search_icon.pack(side=tk.LEFT, padx=(2, 6))
         search_entry = tk.Entry(
-            search_frame, textvariable=self._search_var,
+            search_inner, textvariable=self._search_var,
             bg=ctrl_bg, fg=val_fg,
             insertbackground=val_fg,
             relief=tk.FLAT, font=_sao_font(10),
-            highlightthickness=1,
-            highlightcolor=_tc('accent', _SAO_PANEL_ACCENT),
-            highlightbackground=_tc('border', _SAO_PANEL_BORDER),
+            highlightthickness=0, bd=0,
         )
-        search_entry.pack(side=tk.LEFT, fill=tk.X, expand=True, ipady=4)
+        search_entry.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, pady=2)
         self._search_entry = search_entry
 
         self._placeholder_active = True
@@ -259,16 +260,14 @@ class ProcessSelectorPanel:
         self._mod_buttons = {}
         for mode, label in [(MODULE_NONE, "None"), (MODULE_PRIMARY, "Primary"),
                             (MODULE_SELECTED, "Selected"), (MODULE_ALL, "All")]:
-            btn = tk.Label(
-                mod_frame, text=label,
-                bg=_tc('control_bg', '#fafbfb'),
-                fg=_tc('value_fg', _SAO_PANEL_VALUE_FG),
-                font=_sao_font(8), padx=10, pady=3, cursor="hand2",
-                relief=tk.FLAT, highlightthickness=1,
-                highlightbackground=_tc('border', _SAO_PANEL_BORDER),
+            btn = action_button(
+                mod_frame, label, lambda m=mode: self._set_module_mode(m),
+                kind='normal', padx=10, pady=3,
+                active_fill=_tc('accent', _SAO_PANEL_ACCENT),
+                active_border=_tc('accent', _SAO_PANEL_ACCENT),
+                active_fg='#000000',
             )
             btn.pack(side=tk.LEFT, padx=2)
-            btn.bind("<Button-1>", lambda e, m=mode: self._set_module_mode(m))
             self._mod_buttons[mode] = btn
         self._update_module_buttons()
 
@@ -290,7 +289,7 @@ class ProcessSelectorPanel:
         card_bg = _tc('card_bg', '#ffffff')
         canvas = tk.Canvas(list_frame, bg=card_bg, highlightthickness=1,
                            highlightbackground=_tc('border', _SAO_PANEL_BORDER), bd=0)
-        scrollbar = tk.Scrollbar(list_frame, orient=tk.VERTICAL, command=canvas.yview)
+        scrollbar = sao_scrollbar(list_frame, canvas.yview)
         inner = tk.Frame(canvas, bg=card_bg)
 
         inner.bind("<Configure>", lambda e: canvas.configure(scrollregion=canvas.bbox("all")))
@@ -410,15 +409,7 @@ class ProcessSelectorPanel:
 
     def _update_module_buttons(self):
         for m, btn in self._mod_buttons.items():
-            if m == self._module_mode:
-                btn.configure(
-                    bg=_tc('accent', _SAO_PANEL_ACCENT), fg="#000000",
-                    highlightbackground=_tc('accent', _SAO_PANEL_ACCENT))
-            else:
-                btn.configure(
-                    bg=_tc('control_bg', '#fafbfb'),
-                    fg=_tc('value_fg', _SAO_PANEL_VALUE_FG),
-                    highlightbackground=_tc('border', _SAO_PANEL_BORDER))
+            btn.set_active(m == self._module_mode)
 
     def _schedule_filter(self):
         if self._filter_after_id is not None:
