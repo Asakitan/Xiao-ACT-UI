@@ -522,6 +522,14 @@ body.window-resizing * { cursor:inherit !important; }
 .editor-textarea { flex:1; background:var(--bg-editor); color:var(--fg-code); font:13px/1.5 var(--mono);
   padding:8px 12px; border:none; outline:none; resize:none; tab-size:4; white-space:pre;
   overflow:auto; caret-color:var(--fg-accent); position:relative; z-index:2; }
+/* Editor zoom (Ctrl+= / Ctrl+- / Ctrl+0 / Ctrl+wheel): every text layer of
+   the editor stack MUST share the same font-size or the absolutely
+   positioned overlays (diagnostics, breakpoints, inlay hints...) drift off
+   the textarea's line grid. line-height is relative (1.5) so it scales. */
+.editor-textarea,.editor-syntax-layer,.editor-visual-layer,.editor-whitespace-layer,
+.editor-highlight-layer,.editor-diagnostic-layer,.editor-inlay-layer,.editor-ghost-layer,
+.editor-color-layer,.editor-sticky-scroll { font-size:var(--editor-font-size,13px); }
+.line-numbers { font-size:calc(var(--editor-font-size,13px) - 1px); }
 .editor-custom-webview-host { position:absolute; inset:0; z-index:24; display:none; flex-direction:column;
   background:var(--bg-editor); overflow:hidden; }
 .editor-custom-webview-host.active { display:flex; }
@@ -4410,14 +4418,14 @@ pre.code-block { overflow:visible; }
     </div>
     <!-- Run and Debug sidebar -->
     <div class="sb-view" id="sb-debug-runner" style="display:none">
-      <div class="sb-header"><span>Run and Debug</span> <span class="spacer"></span>
-        <span class="sb-action" onclick="refreshDebugRunnerSidebar()" title="Refresh">↻</span>
+      <div class="sb-header"><span data-i18n="run_and_debug">Run and Debug</span> <span class="spacer"></span>
+        <span class="sb-action" onclick="refreshDebugRunnerSidebar()" data-i18n-title="refresh" title="Refresh">↻</span>
       </div>
       <div class="sb-section" style="padding:8px 10px">
         <select id="debug-runner-config-select" style="width:100%;margin-bottom:6px;background:var(--bg3);color:var(--fg);border:1px solid var(--border);border-radius:3px;padding:4px"></select>
-        <button class="send-btn" id="debug-runner-start-btn" onclick="startSelectedDebugConfig()" style="width:100%">&#9654; Start Debugging</button>
+        <button class="send-btn" id="debug-runner-start-btn" onclick="startSelectedDebugConfig()" style="width:100%">&#9654; <span data-i18n="start_debugging">Start Debugging</span></button>
       </div>
-      <div class="sb-header"><span>Sessions</span></div>
+      <div class="sb-header"><span data-i18n="debug_sessions">Sessions</span></div>
       <div class="sb-section" id="debug-runner-sessions"></div>
     </div>
     <!-- History sidebar -->
@@ -5493,6 +5501,11 @@ pre.code-block { overflow:visible; }
 <div class="workspace-symbol-palette document-symbol-palette" id="document-symbol-palette" role="dialog" aria-label="Document symbols">
   <input id="document-symbol-input" placeholder="Type the name of a symbol to go to." aria-label="Search document symbols">
   <div class="workspace-symbol-list" id="document-symbol-list" role="listbox"></div>
+</div>
+
+<div class="workspace-symbol-palette" id="quick-open-palette" role="dialog" aria-label="Go to file">
+  <input id="quick-open-input" placeholder="Search files by name" aria-label="Search files by name">
+  <div class="workspace-symbol-list" id="quick-open-list" role="listbox"></div>
 </div>
 
 <!-- SETTINGS-05: Keyboard shortcuts editor modal -->
@@ -8116,6 +8129,14 @@ en:{
   new_file:'New File',open_file:'Open File...',save:'Save',export_chat:'Export Chat...',preferences:'Preferences',
   undo:'Undo',redo:'Redo',cut:'Cut',copy:'Copy',paste:'Paste',find:'Find',replace:'Replace',select_all:'Select All',select_word:'Select Word',
   cmd_palette:'Command Palette',toggle_sidebar:'Toggle Sidebar',toggle_editor:'Toggle Editor',toggle_chat:'Toggle Chat Panel',toggle_theme:'Toggle Theme',
+  confirm_close_dirty:'Discard unsaved changes?',
+  run_and_debug:'Run and Debug',debug_sessions:'Sessions',start_debugging:'Start Debugging',
+  no_debug_configs:'No debug configurations available',no_debug_sessions:'No debug sessions yet.',
+  run_task_title:'Run Task',no_tasks_found:'No tasks found (no installed extension registers a task provider)',
+  task_started:'Running task',task_failed_start:'Task failed to start',task_cancelled:'Task cancelled',no_task_running:'No task is currently running',
+  close_tab:'Close',close_others:'Close Others',close_right:'Close to the Right',close_all:'Close All',
+  go_to_file:'Go to File...',no_matching_files:'No matching files',
+  notifications:'Notifications',clear_all:'Clear All',no_notifications:'No notifications yet',
   go_to_line:'Go to Line...',run_selection:'Run Selection',new_terminal:'New Terminal',system_info:'System Info',about:'About',
   chat:'Assistant',explorer:'Explorer',tools:'Engine Tools',extensions:'Extensions',history:'History',instructions:'Instructions',agents_wf:'Agents & Workflows',settings:'Settings',
   send:'Send',stop:'Stop',ask_placeholder:'Ask anything... (/ commands, @ context, # tools)',
@@ -8266,6 +8287,14 @@ zh:{
   new_file:'新建文件',open_file:'打开文件...',save:'保存',export_chat:'导出对话...',preferences:'偏好设置',
   undo:'撤销',redo:'重做',cut:'剪切',copy:'复制',paste:'粘贴',find:'查找',replace:'替换',select_all:'全选',select_word:'选择单词',
   cmd_palette:'命令面板',toggle_sidebar:'切换侧栏',toggle_editor:'切换编辑器',toggle_chat:'切换聊天面板',toggle_theme:'切换主题',
+  confirm_close_dirty:'未保存的更改将丢失，确定关闭？',
+  run_and_debug:'运行和调试',debug_sessions:'会话',start_debugging:'开始调试',
+  no_debug_configs:'没有可用的调试配置',no_debug_sessions:'还没有调试会话。',
+  run_task_title:'运行任务',no_tasks_found:'未找到任务（没有已安装扩展注册任务提供者）',
+  task_started:'任务运行中',task_failed_start:'任务启动失败',task_cancelled:'任务已取消',no_task_running:'当前没有正在运行的任务',
+  close_tab:'关闭',close_others:'关闭其他',close_right:'关闭右侧',close_all:'全部关闭',
+  go_to_file:'转到文件...',no_matching_files:'没有匹配的文件',
+  notifications:'通知',clear_all:'清空',no_notifications:'暂无通知',
   go_to_line:'转到行...',run_selection:'运行选中代码',new_terminal:'新建终端',system_info:'系统信息',about:'关于',
   chat:'助手',explorer:'资源管理器',tools:'引擎工具',extensions:'扩展',history:'历史记录',instructions:'自定义指令',agents_wf:'代理 & 工作流',settings:'设置',
   send:'发送',stop:'停止',ask_placeholder:'输入问题... (/ 命令, @ 上下文, # 工具)',
@@ -10080,8 +10109,14 @@ function assistantSessionBeforeUnloadMessage(){
 }
 window.addEventListener('beforeunload',event=>{
   flushAssistantSessionState();
-  if(!assistantSessionHasInProgressWork())return;
-  const message=assistantSessionBeforeUnloadMessage();
+  // Dirty editor tabs guard the window close too - previously only an
+  // in-progress assistant session did, so unsaved edits were lost silently.
+  // (isTextTabDirty reads the live textarea for the active tab, so no
+  // saveCurrentTab flush is needed first.)
+  const hasDirtyTabs=typeof tabs!=='undefined'&&typeof isTextTabDirty==='function'
+    &&tabs.some(isTextTabDirty);
+  if(!assistantSessionHasInProgressWork()&&!hasDirtyTabs)return;
+  const message=hasDirtyTabs?'You have unsaved editor changes.':assistantSessionBeforeUnloadMessage();
   event.preventDefault();
   event.returnValue=message;
   return message;
@@ -20663,6 +20698,90 @@ function scheduleWorkspaceSymbolSearch(delay){
   clearTimeout(_workspaceSymbolTimer);
   _workspaceSymbolTimer=setTimeout(()=>requestWorkspaceSymbols(true),delay==null?180:delay);
 }
+// ── Quick open (Ctrl+P): fuzzy file-by-name picker, same UI shell as the
+// workspace-symbol palette. Backend list_workspace_files does the bounded
+// walk + fuzzy scoring; selection opens via the existing openWorkspaceFile.
+let _quickOpenFiles=[],_quickOpenIndex=0,_quickOpenTimer=null,_quickOpenRequest=0;
+function isQuickOpenPickerOpen(){
+  const box=$('quick-open-palette');return !!(box&&box.classList.contains('open'));
+}
+function closeQuickOpenPicker(){
+  const box=$('quick-open-palette');if(!box)return;
+  box.classList.remove('open');box.style.display='none';
+  clearTimeout(_quickOpenTimer);_quickOpenFiles=[];_quickOpenIndex=0;
+}
+function setQuickOpenIndex(index){
+  if(!_quickOpenFiles.length)return;
+  _quickOpenIndex=(index+_quickOpenFiles.length)%_quickOpenFiles.length;
+  document.querySelectorAll('#quick-open-list .workspace-symbol-item').forEach((el,i)=>{
+    el.classList.toggle('active',i===_quickOpenIndex);
+    el.setAttribute('aria-selected',i===_quickOpenIndex?'true':'false');
+    if(i===_quickOpenIndex)el.scrollIntoView({block:'nearest'});
+  });
+}
+function renderQuickOpenFiles(files,truncated){
+  const list=$('quick-open-list');if(!list)return;
+  list.innerHTML='';
+  _quickOpenFiles=(Array.isArray(files)?files:[]).slice(0,120);
+  _quickOpenIndex=0;
+  if(!_quickOpenFiles.length){
+    const empty=document.createElement('div');empty.className='workspace-symbol-empty';
+    empty.textContent=t('no_matching_files');
+    list.appendChild(empty);return;
+  }
+  _quickOpenFiles.forEach((file,index)=>{
+    const row=document.createElement('div');row.className='workspace-symbol-item'+(index===0?' active':'');
+    row.setAttribute('role','option');row.setAttribute('aria-selected',index===0?'true':'false');
+    const kind=document.createElement('div');kind.className='workspace-symbol-kind';kind.textContent='□';
+    const body=document.createElement('div');
+    const title=document.createElement('div');title.className='workspace-symbol-title';title.textContent=String(file.name||'');
+    const detail=document.createElement('div');detail.className='workspace-symbol-detail';detail.textContent=String(file.path||'');
+    body.appendChild(title);body.appendChild(detail);row.appendChild(kind);row.appendChild(body);
+    row.onmousedown=e=>{e.preventDefault();applyQuickOpenFile(file)};
+    list.appendChild(row);
+  });
+  if(truncated){
+    const note=document.createElement('div');note.className='workspace-symbol-empty';
+    note.textContent='…';note.title='More files exist - type more to narrow the search';
+    list.appendChild(note);
+  }
+}
+async function requestQuickOpenFiles(){
+  const input=$('quick-open-input');if(!input)return;
+  const query=String(input.value||'').trim();
+  const requestId=++_quickOpenRequest;
+  const res=await call('list_workspace_files',query,120);
+  if(requestId!==_quickOpenRequest||!isQuickOpenPickerOpen())return;
+  renderQuickOpenFiles(res&&Array.isArray(res.files)?res.files:[],!!(res&&res.truncated));
+}
+function scheduleQuickOpenSearch(delay){
+  clearTimeout(_quickOpenTimer);
+  _quickOpenTimer=setTimeout(()=>requestQuickOpenFiles(),delay==null?160:delay);
+}
+async function applyQuickOpenFile(file){
+  if(!file||!file.path)return false;
+  closeQuickOpenPicker();
+  const res=await openWorkspaceFile(file.path);
+  if(res)setStatus('Opened: '+file.path);
+  return !!res;
+}
+function handleQuickOpenKey(e){
+  if(!isQuickOpenPickerOpen())return false;
+  if(e.key==='ArrowDown'){e.preventDefault();setQuickOpenIndex(_quickOpenIndex+1);return true}
+  if(e.key==='ArrowUp'){e.preventDefault();setQuickOpenIndex(_quickOpenIndex-1);return true}
+  if(e.key==='Enter'||e.key==='Tab'){e.preventDefault();applyQuickOpenFile(_quickOpenFiles[_quickOpenIndex]);return true}
+  if(e.key==='Escape'){e.preventDefault();closeQuickOpenPicker();return true}
+  return false;
+}
+function openQuickOpenPicker(query){
+  showEditorArea();
+  closeCommandPalette();closeWorkspaceSymbolPicker();closeDocumentSymbolPicker();
+  const box=$('quick-open-palette'),input=$('quick-open-input');if(!box||!input)return;
+  box.style.display='block';requestAnimationFrame(()=>box.classList.add('open'));
+  input.value=String(query||'');input.focus();renderQuickOpenFiles([],false);
+  requestQuickOpenFiles();
+}
+window.openQuickOpenPicker=openQuickOpenPicker;
 function openWorkspaceSymbolPicker(query){
   showEditorArea();
   closeCommandPalette();closeDocumentSymbolPicker();
@@ -21808,6 +21927,7 @@ ed.addEventListener('click',e=>{editorCancelSnippetSession(false);closeEditorDro
 ed.addEventListener('dblclick',()=>editorSelectWordAtCursor());
 ed.addEventListener('keyup',e=>{updateCursorPos();renderEditorInlineCompletion();scheduleEditorDocumentHighlights();scheduleEditorLinkedEditingRanges();scheduleEditorHover(e)});
 ed.addEventListener('scroll',function(){$('line-nums').scrollTop=this.scrollTop;syncEditorSyntaxScroll();renderEditorInlayHints(_editorInlayHints);renderEditorDocumentHighlights(_editorDocumentHighlights);renderEditorDiagnostics(_editorDiagnostics);renderEditorBreakpointLayer();if(_editorSemanticTokensRangeActive)scheduleEditorSemanticTokens(260);updateCursorPos();reportEditorVisibleRanges();closeEditorHover();closeEditorSignatureHelp();closeEditorCodeActions();closeEditorDropPasteOptions();closeEditorReferences();closeEditorHierarchy();closeEditorLinks();closeEditorColorPresentationMenu()});
+ed.addEventListener('wheel',function(e){if(e.ctrlKey){e.preventDefault();adjustEditorFontSize(e.deltaY<0?1:-1)}},{passive:false});
 ed.addEventListener('mousedown',handleEditorUnfoldOnClickAfterEndOfLine);
 ed.addEventListener('keydown',function(e){
   if(handleEditorDropPasteOptionsKey(e))return;
@@ -48620,6 +48740,12 @@ function closeTab(id,event){
   if(event)event.stopPropagation();
   if(tabs.length<=1)return;
   saveCurrentTab();
+  const closing=tabs.find(t=>t.id===id);
+  // Unsaved changes used to be silently discarded on close - data loss.
+  if(closing&&isTextTabDirty(closing)){
+    const label=closing.filePath||closing.name||'untitled';
+    if(!confirm(t('confirm_close_dirty')+'\n'+label))return;
+  }
   tabs=tabs.filter(t=>t.id!==id);
   if(activeTab===id)switchTab(tabs[0].id);
   renderTabs();
@@ -48696,7 +48822,7 @@ function switchTab(id){
     _editorDirtyDiffCache={key:'',decorations:[],summary:null,changes:[]};
     setEditorLanguage(tab.language);
     $('editor-text').selectionStart=$('editor-text').selectionEnd=tab.cursor;
-    _undoStack.length=0;_redoStack.length=0;_undoPush(true);
+    restoreTabUndoState(tab);
     if(typeof closeEditorSuggest==='function')closeEditorSuggest();
     if(typeof closeEditorHover==='function')closeEditorHover();
     if(typeof closeEditorSignatureHelp==='function')closeEditorSignatureHelp();
@@ -48734,7 +48860,72 @@ function saveCurrentTab(){
   if(isDiffEditorTab(tab))return;
   if(isExtensionCustomEditorTab(tab))return;
   if(isExtensionNotebookTab(tab)){tab.notebook=readNotebookFromSurface(tab);return}
-  if(tab){tab.content=$('editor-text').value;tab.language=editorLang;tab.cursor=$('editor-text').selectionStart;if(tab.originalContent===undefined)tab.originalContent=tab.content||''}
+  if(tab){
+    tab.content=$('editor-text').value;tab.language=editorLang;tab.cursor=$('editor-text').selectionStart;
+    if(tab.originalContent===undefined)tab.originalContent=tab.content||'';
+    // Per-tab undo history: stash the live stacks so switching away and
+    // back doesn't wipe them (they used to be global and reset on every
+    // switchTab).
+    tab._undoState={undo:_undoStack.slice(),redo:_redoStack.slice()};
+  }
+}
+function restoreTabUndoState(tab){
+  _undoStack.length=0;_redoStack.length=0;
+  const st=tab&&tab._undoState;
+  if(st&&Array.isArray(st.undo))st.undo.forEach(x=>_undoStack.push(x));
+  if(st&&Array.isArray(st.redo))st.redo.forEach(x=>_redoStack.push(x));
+  if(!_undoStack.length)_undoPush(true);
+}
+// ── Editor font zoom ──
+const _EDITOR_FONT_KEY='sao-editor-font-size';
+function editorZoomFontSize(){
+  let v=13;
+  try{v=parseInt(localStorage.getItem(_EDITOR_FONT_KEY)||'13',10)}catch(e){}
+  return (v>=8&&v<=32)?v:13;
+}
+function setEditorFontSize(px){
+  const v=Math.max(8,Math.min(32,Math.trunc(Number(px))||13));
+  try{localStorage.setItem(_EDITOR_FONT_KEY,String(v))}catch(e){}
+  document.documentElement.style.setProperty('--editor-font-size',v+'px');
+  // Overlay layers position from measured line-height - re-render them all.
+  if(typeof updateLineNums==='function')updateLineNums();
+  if(typeof updateCursorPos==='function')updateCursorPos();
+  if(typeof renderEditorDiagnostics==='function'&&typeof _editorDiagnostics!=='undefined')renderEditorDiagnostics(_editorDiagnostics);
+  if(typeof renderEditorBreakpointLayer==='function')renderEditorBreakpointLayer();
+  if(typeof syncEditorSyntaxScroll==='function')syncEditorSyntaxScroll();
+  setStatus('Editor font size: '+v+'px');
+  return v;
+}
+function adjustEditorFontSize(delta){return setEditorFontSize(editorZoomFontSize()+delta)}
+document.documentElement.style.setProperty('--editor-font-size',editorZoomFontSize()+'px');
+window.setEditorFontSize=setEditorFontSize;window.adjustEditorFontSize=adjustEditorFontSize;
+function showTabContextMenu(x,y,tabId){
+  const index=tabs.findIndex(tb=>tb.id===tabId);
+  if(index<0)return;
+  const actions=[
+    {title:t('close_tab'),command:'tab.close',groupName:'1_close'},
+    {title:t('close_others'),command:'tab.closeOthers',groupName:'1_close',disabled:tabs.length<=1},
+    {title:t('close_right'),command:'tab.closeRight',groupName:'1_close',disabled:index>=tabs.length-1},
+    {title:t('close_all'),command:'tab.closeAll',groupName:'1_close',disabled:tabs.length<=1},
+  ];
+  showExtensionActionMenu(x,y,actions,action=>{
+    // Batch closes reuse closeTab so its dirty-state confirmation runs per
+    // tab; iterate over a snapshot since closeTab mutates the tabs array.
+    if(action.command==='tab.close'){closeTab(tabId);return}
+    if(action.command==='tab.closeOthers'){
+      tabs.filter(tb=>tb.id!==tabId).forEach(tb=>closeTab(tb.id));
+      if(activeTab!==tabId&&tabs.some(tb=>tb.id===tabId))switchTab(tabId);
+      return;
+    }
+    if(action.command==='tab.closeRight'){
+      tabs.slice(index+1).forEach(tb=>closeTab(tb.id));
+      return;
+    }
+    if(action.command==='tab.closeAll'){
+      tabs.slice().forEach(tb=>closeTab(tb.id));
+      return;
+    }
+  });
 }
 
 function renderTabs(){
@@ -48749,6 +48940,7 @@ function renderTabs(){
     el.innerHTML=esc(t.name)+'<span class="dot"></span> <span class="close" onclick="closeTab('+t.id+',event)">×</span>';
     el.onclick=()=>switchTab(t.id);
     el.addEventListener('auxclick',ev=>{if(ev.button===1){ev.preventDefault();closeTab(t.id)}});
+    el.addEventListener('contextmenu',ev=>{ev.preventDefault();showTabContextMenu(ev.clientX,ev.clientY,t.id)});
     bar.appendChild(el);
   });
   const add=document.createElement('div');add.className='tab-add';add.textContent='+';
@@ -49464,6 +49656,7 @@ const COMMANDS=[
   {id:'workbench.action.switchWorkspace',label:'Workspaces: Switch Workspace...',shortcut:'',category:'Workspaces',description:'Open the workspace switcher.',action:()=>openWorkspaceSwitcher()},
   {id:'workbench.action.terminal.runSelfCheck',label:'Developer: Run Terminal UI Self Check',shortcut:'',category:'Developer',description:'Run the integrated terminal UI self-check.',action:async()=>{const snap=await terminalUiSelfCheckSnapshot();showToast(snap&&snap.pass?'Terminal self-check passed':'Terminal self-check failed',snap&&snap.pass?'success':'error',2600)}},
   {id:'workbench.action.openGlobalKeybindings',label:'Preferences: Open Keyboard Shortcuts',shortcut:'Ctrl+K Ctrl+S',category:'Preferences',description:'Open keyboard shortcuts.',action:()=>openKeybindings()},
+  {id:'workbench.action.quickOpen',label:'Go to File...',shortcut:'Ctrl+P',category:'Navigation',description:'Fuzzy-search workspace files by name and open one.',action:()=>openQuickOpenPicker()},
   {id:'workbench.action.tasks.runTask',label:'Tasks: Run Task...',shortcut:'',category:'Tasks',description:'Pick and run a task contributed by an installed extension.',action:()=>openTaskRunnerPicker()},
   {id:'workbench.action.tasks.terminate',label:'Tasks: Terminate Task',shortcut:'',category:'Tasks',description:'Cancel the currently running task, if any.',action:()=>cancelActiveTask()},
   {id:'workbench.view.debug',label:'View: Show Run and Debug',shortcut:'',category:'Debug',description:'Open the Run and Debug sidebar.',action:()=>{if(typeof switchSidebar==='function')switchSidebar('debug-runner')}},
@@ -49480,23 +49673,43 @@ let _taskRunnerPollTimer=null;
 async function openTaskRunnerPicker(){
   const result=await call('list_tasks');
   const tasks=(result&&Array.isArray(result.tasks))?result.tasks:[];
-  if(!tasks.length){showToast('No tasks found (no installed extension registers a task provider)','info',2600);return}
+  if(!tasks.length){showToast(t('no_tasks_found'),'info',2600);return}
   const modal=document.createElement('div');modal.className='modal-bg';modal.classList.add('open');
-  modal.innerHTML='<div class="modal"><h2>Run Task</h2>'
+  modal.innerHTML='<div class="modal"><h2>'+esc(t('run_task_title'))+'</h2>'
     +'<div id="task-picker-list" style="max-height:320px;overflow:auto;margin:8px 0"></div>'
     +'<div class="modal-btns"><span class="toolbar-btn" style="border:1px solid var(--border);padding:6px 14px;border-radius:var(--radius);cursor:pointer" onclick="this.closest(\'.modal-bg\').remove()">Cancel</span></div>'
     +'</div>';
   document.body.appendChild(modal);
   modal.onclick=e=>{if(e.target===modal)modal.remove()};
   const list=modal.querySelector('#task-picker-list');
-  tasks.forEach(task=>{
+  let selected=0;
+  const rows=[];
+  const applySelection=()=>rows.forEach((row,i)=>{
+    row.style.background=i===selected?'var(--bg3)':'';
+    row.setAttribute('aria-selected',i===selected?'true':'false');
+    if(i===selected)row.scrollIntoView({block:'nearest'});
+  });
+  tasks.forEach((task,i)=>{
     const row=document.createElement('div');
     row.className='sb-item';
+    row.setAttribute('role','option');
     row.style.cssText='padding:8px 10px;cursor:pointer;border-bottom:1px solid var(--border)';
     row.innerHTML='<div style="font-weight:600">'+esc(task.label)+'</div>'
       +(task.detail?'<div style="font-size:11px;color:var(--fg-dim)">'+esc(task.detail)+'</div>':'');
     row.onclick=()=>{modal.remove();runSelectedTask(task.index)};
+    row.onmouseenter=()=>{selected=i;applySelection()};
+    rows.push(row);
     list.appendChild(row);
+  });
+  applySelection();
+  // Keyboard navigation: the modal itself takes focus so arrows/Enter work
+  // without a text input.
+  modal.tabIndex=-1;modal.focus();
+  modal.addEventListener('keydown',e=>{
+    if(e.key==='ArrowDown'){e.preventDefault();selected=(selected+1)%tasks.length;applySelection()}
+    else if(e.key==='ArrowUp'){e.preventDefault();selected=(selected-1+tasks.length)%tasks.length;applySelection()}
+    else if(e.key==='Enter'){e.preventDefault();const task=tasks[selected];modal.remove();runSelectedTask(task.index)}
+    else if(e.key==='Escape'){e.preventDefault();modal.remove()}
   });
 }
 async function runSelectedTask(index){
@@ -49506,12 +49719,12 @@ async function runSelectedTask(index){
   const result=await call('run_task',index);
   if(!result||result.error){
     if(oc)oc.textContent='Task failed to start: '+((result&&result.error)||'unknown error');
-    showToast('Task failed to start','error',2600);
+    showToast(t('task_failed_start'),'error',2600);
     return;
   }
   clearTimeout(_taskRunnerPollTimer);
   _taskRunnerActiveExecutionId=result.executionId;
-  setStatus('Running task: '+(result.name||'task'));
+  setStatus(t('task_started')+': '+(result.name||'task'));
   pollTaskExecution(result.executionId);
 }
 async function pollTaskExecution(executionId){
@@ -49533,9 +49746,9 @@ async function pollTaskExecution(executionId){
   }
 }
 async function cancelActiveTask(){
-  if(!_taskRunnerActiveExecutionId){showToast('No task is currently running','info',2000);return}
+  if(!_taskRunnerActiveExecutionId){showToast(t('no_task_running'),'info',2000);return}
   await call('cancel_task',_taskRunnerActiveExecutionId);
-  showToast('Task cancelled','info',2000);
+  showToast(t('task_cancelled'),'info',2000);
 }
 window.openTaskRunnerPicker=openTaskRunnerPicker;
 window.runSelectedTask=runSelectedTask;
@@ -49555,7 +49768,7 @@ async function refreshDebugRunnerSidebar(){
   if(select){
     select.innerHTML='';
     if(!_debugRunnerConfigs.length){
-      const opt=document.createElement('option');opt.textContent='No debug configurations available';opt.disabled=true;
+      const opt=document.createElement('option');opt.textContent=t('no_debug_configs');opt.disabled=true;
       select.appendChild(opt);
     }else{
       _debugRunnerConfigs.forEach(cfg=>{
@@ -49576,7 +49789,7 @@ async function refreshDebugRunnerSessions(){
   if(!sessions.length){
     const empty=document.createElement('div');
     empty.style.cssText='padding:8px 10px;color:var(--fg-dim);font-size:12px';
-    empty.textContent='No debug sessions yet.';
+    empty.textContent=t('no_debug_sessions');
     list.appendChild(empty);
   }
   sessions.slice().reverse().forEach(session=>{
@@ -50028,6 +50241,10 @@ $('cmd-input').addEventListener('keydown',e=>{
 $('cmd-palette').addEventListener('click',e=>{if(e.target.id==='cmd-palette')closeCommandPalette()});
 $('workspace-symbol-input').addEventListener('input',()=>scheduleWorkspaceSymbolSearch());
 $('workspace-symbol-input').addEventListener('keydown',handleWorkspaceSymbolKey);
+if($('quick-open-input')){
+  $('quick-open-input').addEventListener('input',()=>scheduleQuickOpenSearch());
+  $('quick-open-input').addEventListener('keydown',handleQuickOpenKey);
+}
 $('workspace-symbol-palette').addEventListener('click',e=>{if(e.target.id==='workspace-symbol-palette')closeWorkspaceSymbolPicker()});
 $('document-symbol-input').addEventListener('input',filterDocumentSymbols);
 $('document-symbol-input').addEventListener('keydown',handleDocumentSymbolKey);
@@ -50052,6 +50269,10 @@ const _GLOBAL_SHORTCUT_MAP={
 document.addEventListener('keydown',e=>{
   if(assistantHandleInputPartShortcut(e))return;
   if(e.key==='P'&&e.ctrlKey&&e.shiftKey){e.preventDefault();openCommandPalette()}
+  if(e.key==='p'&&e.ctrlKey&&!e.shiftKey&&!e.altKey){e.preventDefault();openQuickOpenPicker();return}
+  if((e.key==='='||e.key==='+')&&e.ctrlKey&&!e.altKey){e.preventDefault();adjustEditorFontSize(1);return}
+  if(e.key==='-'&&e.ctrlKey&&!e.shiftKey&&!e.altKey){e.preventDefault();adjustEditorFontSize(-1);return}
+  if(e.key==='0'&&e.ctrlKey&&!e.shiftKey&&!e.altKey){e.preventDefault();setEditorFontSize(13);return}
   if(e.key==='t'&&e.ctrlKey&&!e.shiftKey&&!e.altKey){e.preventDefault();openWorkspaceSymbolPicker();return}
   if((e.key==='o'||e.key==='O')&&e.ctrlKey&&e.shiftKey&&!e.altKey){e.preventDefault();openDocumentSymbolPicker();return}
   if(isExtensionCustomEditorTab(tabs.find(t=>t.id===activeTab))){
@@ -50061,6 +50282,7 @@ document.addEventListener('keydown',e=>{
   if(e.key==='Escape'&&$('cmd-palette').classList.contains('open')){e.preventDefault();closeCommandPalette()}
   if(e.key==='Escape'&&_editorColorPresentationMenu){e.preventDefault();closeEditorColorPresentationMenu();return}
   if(e.key==='Escape'&&isWorkspaceSymbolPickerOpen()){e.preventDefault();closeWorkspaceSymbolPicker();return}
+  if(e.key==='Escape'&&isQuickOpenPickerOpen()){e.preventDefault();closeQuickOpenPicker();return}
   if(e.key==='Escape'&&isDocumentSymbolPickerOpen()){e.preventDefault();closeDocumentSymbolPicker();return}
   if(e.key==='Escape'&&$('fold-region-picker').classList.contains('open')){e.preventDefault();closeFoldRegionPicker();return}
   // Ctrl+W → close active tab (TAB-004)

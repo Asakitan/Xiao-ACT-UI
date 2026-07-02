@@ -6551,7 +6551,10 @@ def test_phase1_ai_editor_regressions() -> None:
            and "function assistantSessionHasInProgressWork()" in html
            and "function assistantSessionBeforeUnloadMessage()" in html
            and "window.addEventListener('beforeunload',event=>" in html
-           and "flushAssistantSessionState();\n  if(!assistantSessionHasInProgressWork())return;" in html
+           # The guard now also covers dirty editor tabs (2026-07-02 D1 fix),
+           # not just an in-progress assistant session.
+           and "if(!assistantSessionHasInProgressWork()&&!hasDirtyTabs)return;" in html
+           and "tabs.some(isTextTabDirty)" in html
            and "event.returnValue=message;" in html
            and "saveAssistantSessionState({immediate:true});" in html
            and "if(document.visibilityState==='hidden'){flushAssistantSessionState();" in html
@@ -17955,6 +17958,27 @@ console.log("command palette quick access helpers ok");
            scm_api.get_scm_quick_diff_baseline(outside_repo_file).get("available") is False)
     _check("get_scm_quick_diff_baseline reports unavailable for non-local schemes",
            scm_api.get_scm_quick_diff_baseline("untitled:Untitled-1").get("available") is False)
+    # Quick-open (Ctrl+P) backend: bounded fuzzy file listing.
+    qo_tmpdir = tempfile.mkdtemp(prefix="sao_quick_open_")
+    os.makedirs(os.path.join(qo_tmpdir, "src"), exist_ok=True)
+    os.makedirs(os.path.join(qo_tmpdir, "node_modules", "dep"), exist_ok=True)
+    for rel in ("src/alpha_module.py", "src/beta_module.py", "readme.md",
+                "node_modules/dep/hidden.js"):
+        with open(os.path.join(qo_tmpdir, rel.replace("/", os.sep)), "w", encoding="utf-8") as fh:
+            fh.write("x\n")
+    qo_api = AIEditorAPI(_SettingsGui({"ai_editor": {}}))
+    qo_api._workspace_root = lambda: qo_tmpdir
+    qo_all = qo_api.list_workspace_files("")
+    qo_names = {f["path"] for f in qo_all["files"]}
+    _check("list_workspace_files walks the workspace and skips ignored dirs (node_modules)",
+           "src/alpha_module.py" in qo_names and "readme.md" in qo_names
+           and not any("node_modules" in p for p in qo_names))
+    qo_sub = qo_api.list_workspace_files("bmod")  # subsequence of beta_module
+    _check("list_workspace_files fuzzy subsequence matching ranks the intended file first",
+           qo_sub["files"] and qo_sub["files"][0]["path"] == "src/beta_module.py")
+    qo_exact = qo_api.list_workspace_files("alpha")
+    _check("list_workspace_files substring match beats subsequence noise",
+           qo_exact["files"] and qo_exact["files"][0]["name"] == "alpha_module.py")
     # Extension-contributed DEFAULT keybindings must actually dispatch
     # (contributes.keybindings were parsed and shown in the shortcut editor
     # but only user-customized bindings ever fired - 2026-07-02 audit).

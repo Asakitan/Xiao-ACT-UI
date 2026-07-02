@@ -6705,6 +6705,73 @@ class AIEditorAPI:
             "entries": entries,
         }
 
+    def list_workspace_files(self, query: str = "", limit: int = 200) -> Dict:
+        """Quick-open (Ctrl+P) backend: bounded recursive workspace file
+        listing with subsequence fuzzy matching. Walk is capped at 5000
+        files so a giant workspace can't hang the picker; the result flags
+        truncation so the frontend can say so."""
+        root = self._workspace_root()
+        if not root or not os.path.isdir(root):
+            return {"files": [], "truncated": False}
+        needle = str(query or "").strip().lower()
+        max_results = max(1, min(int(limit or 200), 500))
+        walk_cap = 5000
+        walked = 0
+        truncated = False
+        scored: List[Tuple[float, str]] = []
+
+        def _fuzzy_score(rel: str) -> float:
+            if not needle:
+                return 0.0
+            hay = rel.lower()
+            base = os.path.basename(hay)
+            # Plain substring beats subsequence; basename hits beat
+            # directory hits.
+            idx = base.find(needle)
+            if idx >= 0:
+                return 1000.0 - idx - len(base) * 0.01
+            idx = hay.find(needle)
+            if idx >= 0:
+                return 500.0 - idx * 0.1 - len(hay) * 0.01
+            # Subsequence match with mild consecutive-run weighting.
+            score = 0.0
+            pos = 0
+            run = 0
+            for ch in needle:
+                found = hay.find(ch, pos)
+                if found < 0:
+                    return -1.0
+                run = run + 1 if found == pos else 1
+                score += run
+                pos = found + 1
+            return score - len(hay) * 0.01
+
+        for dirpath, dirnames, filenames in os.walk(root):
+            dirnames[:] = [
+                d for d in dirnames
+                if d.casefold() not in _WORKSPACE_TREE_IGNORED_DIRS
+                and not d.startswith(".")]
+            for name in filenames:
+                walked += 1
+                if walked > walk_cap:
+                    truncated = True
+                    break
+                rel = self._workspace_rel_path(
+                    root, os.path.join(dirpath, name))
+                score = _fuzzy_score(rel)
+                if score < 0:
+                    continue
+                scored.append((score, rel))
+            if truncated:
+                break
+        scored.sort(key=lambda item: (-item[0], item[1].casefold()))
+        files = [{"path": rel, "name": os.path.basename(rel)}
+                 for _, rel in scored[:max_results]]
+        return {
+            "files": files,
+            "truncated": truncated or len(scored) > max_results,
+        }
+
     def workspace_file_decorations(self, rel_path: str) -> Dict[str, Any]:
         try:
             full = self._resolve_workspace_path(rel_path)
