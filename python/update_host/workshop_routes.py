@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import hashlib
+import hmac
 import json
 import os
 import secrets
@@ -355,6 +356,35 @@ def _check_plugin_owner(plugin_id: str, token: str):
             raise HTTPException(403, "only the original uploader or admin can update this plugin")
 
 
+def _authorize_delete(request: Request, plugin_id: str) -> None:
+    """原始上传者凭自己的 workshop token 能删自己的；管理员 key 能删任何插件。
+
+    ★先查 ownership 再兜底查 _AUTH_FN，顺序不能反：_authorize_publish_request
+    在管理员 key 还没绑定过的全新部署上会把"第一个打进来的请求"的 key 直接
+    收编成管理员 key(参见 app.py _bind_publish_api_key) —— 如果先调它，
+    随便一个陌生 token 删别人的插件也会先把自己'扶正'成 admin 再放行，
+    实测过一次踩中这个坑(见 workshop delete owner 测试)。ownership 检查零
+    副作用，永远排第一。
+    """
+    token = (request.headers.get("X-API-Key") or "").strip()
+    if not token:
+        raise HTTPException(401, "missing workshop token (X-API-Key header)")
+
+    safe = _safe_id(plugin_id)
+    meta = _load_json(os.path.join(_ws_dir(), safe, "meta.json"))
+    if not isinstance(meta, dict):
+        raise HTTPException(404, f"plugin {safe} not found")
+    owner = meta.get("uploader_token", "")
+    if owner and hmac.compare_digest(str(owner), str(token)):
+        return
+
+    if _AUTH_FN:
+        _AUTH_FN(request)
+        return
+
+    raise HTTPException(403, "only the original uploader or admin can delete this plugin")
+
+
 @router.post("/publish/init")
 async def publish_init(
     request: Request,
@@ -579,8 +609,10 @@ async def publish_complete(request: Request, upload_id: str):
 
 @router.delete("/plugin/{plugin_id}")
 def delete_plugin(request: Request, plugin_id: str, version: str = ""):
-    if _AUTH_FN:
-        _AUTH_FN(request)
+    """删自己上传的插件：管理员 key 能删任何插件；原始上传者(自己的 workshop
+    token 匹配发布时记录的 uploader_token) 只能删自己的，见 _authorize_delete。
+    """
+    _authorize_delete(request, plugin_id)
 
     safe = _safe_id(plugin_id)
     pdir = os.path.join(_ws_dir(), safe)
@@ -594,6 +626,7 @@ def delete_plugin(request: Request, plugin_id: str, version: str = ""):
         for f in (zip_path, manifest_path):
             if os.path.isfile(f):
                 os.remove(f)
+        _delete_private_version_data(safe, safe_ver)
         versions_path = os.path.join(pdir, "versions.json")
         versions = _load_json(versions_path)
         if isinstance(versions, list) and safe_ver in versions:
@@ -604,13 +637,25 @@ def delete_plugin(request: Request, plugin_id: str, version: str = ""):
             latest_manifest = _load_json(os.path.join(pdir, f"manifest-{latest}.json"))
             if latest_manifest:
                 _save_json(os.path.join(pdir, "manifest.json"), latest_manifest)
+                _upsert_catalog(safe, latest_manifest)
             return JSONResponse({"ok": True, "deleted_version": safe_ver, "remaining": versions})
 
     shutil.rmtree(pdir, ignore_errors=True)
+    if os.path.isdir(_WORKSHOP_PRIVATE_DIR):
+        shutil.rmtree(os.path.join(_WORKSHOP_PRIVATE_DIR, safe), ignore_errors=True)
     catalog = _load_catalog()
     catalog = [e for e in catalog if e.get("plugin_id") != safe]
     _save_catalog(catalog)
     return JSONResponse({"ok": True, "deleted": safe})
+
+
+def _delete_private_version_data(plugin_id: str, version: str) -> None:
+    """删掉某个版本在私有目录下的明文源码 zip + AES 内容密钥(如果是受保护构建)。"""
+    private_dir = os.path.join(_WORKSHOP_PRIVATE_DIR, plugin_id)
+    for name in (f"plugin-{version}.source.zip", f"{version}.key"):
+        path = os.path.join(private_dir, name)
+        if os.path.isfile(path):
+            os.remove(path)
 
 
 @router.get("/manage")

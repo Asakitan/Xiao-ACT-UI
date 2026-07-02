@@ -46,6 +46,21 @@ def _post_json(url: str, api_key: str, body: bytes = b"",
         return json.loads(resp.read().decode("utf-8"))
 
 
+def _delete_json(url: str, api_key: str, timeout: float = _TIMEOUT) -> dict:
+    req = urllib.request.Request(url, method="DELETE", headers={
+        "User-Agent": _UA, "Accept": "application/json", "X-API-Key": api_key,
+    })
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            return json.loads(resp.read().decode("utf-8"))
+    except urllib.error.HTTPError as exc:
+        try:
+            detail = json.loads(exc.read().decode("utf-8")).get("detail", str(exc))
+        except Exception:
+            detail = str(exc)
+        raise RuntimeError(f"delete failed ({exc.code}): {detail}") from exc
+
+
 class WorkshopClient:
     def __init__(self, base_url: str, api_key: str = "", is_paid: bool = False, workshop_token: str = ""):
         self.base = base_url.rstrip("/")
@@ -167,6 +182,18 @@ class WorkshopClient:
 
         complete_qs = urllib.parse.urlencode({"upload_id": upload_id})
         return _post_json(f"{self.base}/api/workshop/publish/complete?{complete_qs}", token)
+
+    def delete(self, plugin_id: str, version: str = "") -> dict:
+        """删除自己上传的插件(或某一个版本)。服务端只认 X-API-Key 是否等于
+        发布时记录的 uploader_token，跟自己上传时用的是同一个 workshop_token
+        就行，不需要另外的账号系统。``version`` 留空删整个插件。
+        """
+        token = self.workshop_token or self.api_key
+        qs = urllib.parse.urlencode({"version": version}) if version else ""
+        url = f"{self.base}/api/workshop/plugin/{urllib.parse.quote(plugin_id)}"
+        if qs:
+            url += f"?{qs}"
+        return _delete_json(url, token)
 
     def fetch_content_key(self, plugin_id: str, version: str = "") -> bytes:
         """Fetch the AES-256 content key for a closed-source (protected) plugin
