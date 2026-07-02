@@ -78,7 +78,14 @@ class WorkshopClient:
         if tag:
             params["tag"] = tag
         qs = urllib.parse.urlencode(params)
-        return _get_json(f"{self.base}/api/workshop/catalog?{qs}")
+        url = f"{self.base}/api/workshop/catalog?{qs}"
+        token = self.workshop_token or self.api_key
+        # 带上 token 是为了让每个条目的 is_mine 能算出来(方便 GUI 只在自己
+        # 上传的插件卡片上显示删除按钮)；catalog 本身不要求登录，不带 token
+        # 一样能拿到完整列表，只是 is_mine 全是 False。
+        if token:
+            return _get_json_auth(url, token, is_paid=self.is_paid)
+        return _get_json(url)
 
     def detail(self, plugin_id: str) -> dict:
         return _get_json(f"{self.base}/api/workshop/detail/{urllib.parse.quote(plugin_id)}")

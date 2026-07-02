@@ -126,6 +126,9 @@ def _rebuild_catalog_entry(plugin_id: str, meta: dict) -> dict:
         "protected": bool(meta.get("protected", False)),
         "published_at": meta.get("published_at", ""),
         "updated_at": meta.get("updated_at", ""),
+        # 内部字段, 只用来在 catalog() 里按调用方 token 算 is_mine, 从不
+        # 直接出现在对外的 JSON 响应里(见 catalog() 的裁剪逻辑)。
+        "_uploader_token": meta.get("uploader_token", ""),
     }
 
 
@@ -193,8 +196,17 @@ def _cleanup_stale_uploads():
 # ── Read endpoints (no auth) ──────────────────────────────────────
 
 
+def _present_catalog_entry(entry: dict, caller_token: str) -> dict:
+    """外部可见版本: 剥掉内部 _uploader_token, 换成一个不泄露原值的 is_mine 布尔。"""
+    out = {k: v for k, v in entry.items() if k != "_uploader_token"}
+    owner = entry.get("_uploader_token", "")
+    out["is_mine"] = bool(caller_token) and bool(owner) and hmac.compare_digest(str(owner), str(caller_token))
+    return out
+
+
 @router.get("/catalog")
 def catalog(
+    request: Request,
     game_id: str = "",
     tag: str = "",
     search: str = "",
@@ -203,6 +215,7 @@ def catalog(
     page: int = 1,
     per_page: int = 40,
 ):
+    caller_token = (request.headers.get("X-API-Key") or "").strip()
     entries = _load_catalog()
 
     if game_id:
@@ -242,7 +255,7 @@ def catalog(
         "total": total,
         "page": page,
         "per_page": per_page,
-        "plugins": page_entries,
+        "plugins": [_present_catalog_entry(e, caller_token) for e in page_entries],
         "game_ids": all_game_ids,
         "tags": all_tags,
     })
