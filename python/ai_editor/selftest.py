@@ -17899,6 +17899,23 @@ console.log("command palette quick access helpers ok");
            and "--include-data-files=%WINPTY_DIR%\\winpty-agent.exe=winpty/winpty-agent.exe" in nuitka_bat_source
            and "%WINPTY_NUITKA_FLAGS%" in nuitka_bat_source
            and "pywinpty not installed" in nuitka_bat_source)
+    # 阶段8 系统性打包审计: opencv-python ships its ffmpeg backend as a loose
+    # DLL sibling to cv2.pyd inside the package dir, not a link-time dep
+    # Nuitka's DLL walker would follow - same class of gap as pywinpty's
+    # ConPTY binaries above, found by cross-checking every requirements.txt
+    # entry against build_nuitka.bat's --include-* flags (no build actually
+    # run - the fix is verified by reading both files' source, matching how
+    # the pywinpty fix itself was verified in this same test).
+    _check("build_nuitka.bat resolves and bundles cv2's ffmpeg backend DLL (阶段8 打包审计)",
+           "CV2_NUITKA_FLAGS" in nuitka_bat_source
+           and "find_spec('cv2')" in nuitka_bat_source
+           and "--include-data-files=%CV2_DIR%\\opencv_videoio_ffmpeg*.dll=cv2/" in nuitka_bat_source
+           and "%CV2_NUITKA_FLAGS%" in nuitka_bat_source)
+    requirements_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), "requirements.txt")
+    with open(requirements_path, "r", encoding="utf-8") as f:
+        requirements_source = f.read()
+    _check("requirements.txt documents the build-time-only deps build_nuitka.bat's pipeline actually calls (阶段8 打包审计)",
+           "setuptools" in requirements_source and "pefile" in requirements_source)
     _check("editor dirty diff decorations render while editing",
            "editor-dirty-diff-line" in html
            and "editor-dirty-diff-gutter" in html

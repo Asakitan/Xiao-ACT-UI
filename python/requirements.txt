@@ -15,6 +15,8 @@ moderngl-window>=2.5            # 透明 borderless overlay 窗口 (替代 Tk To
 glfw>=2.7                       # moderngl-window GLFW backend (Win32 borderless transparent overlay)
 skia-python>=144                # GPU 2D 矢量 / 文字 atlas 烘焙 (BSD-3, Skia m144)
 Cython>=3.0                     # build-time: mandatory _sao_cy*.pyd accelerators
+setuptools                      # build-time: build_cython_ext.py build_ext (阶段8 打包审计发现漏列)
+pefile                          # build-time: post_build_harden.py 加固 Nuitka 产物 (阶段8 打包审计发现漏列)
 
 # ═══ 识图 ═══
 opencv-python>=4.5              # 颜色过滤、固定 ROI 条形/视觉状态检测
