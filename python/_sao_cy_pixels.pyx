@@ -11,6 +11,7 @@ Cython compilation and is easier to keep correct in Python.
 """
 
 import numpy as _np
+from libc.math cimport floor, ceil
 
 
 cpdef bytes premultiply_bgra_ndarray(object rgba):
@@ -1399,6 +1400,20 @@ cpdef list bgra_alpha_spans(const unsigned char[:] bgra,
     ``bgra`` is a flat BGRA byte buffer of size ``fw * fh * 4``.
     ``(lx, ly)`` is the layer's top-left screen position.
     ``(sx, sy)`` is the framebuffer→screen scale factor.
+
+    Span edges are floored on the low side and ceil'd on the high side
+    (not truncated/cast) so a scaled-up span always fully *covers* its
+    source pixel run instead of sometimes falling short of it. A plain
+    ``<int>`` cast truncates toward zero, which floors the high edge too
+    (e.g. ``x1 * sx`` landing at 47.8 truncates to 47, silently dropping
+    the last ~0.8 scaled pixels off every opaque run's trailing edge) —
+    for the display upscale of a small MMF source frame to a much larger
+    on-screen sprite (``sx``/``sy`` well above 1) that under-coverage
+    compounds into a real, visible sliver missing off the trailing edge
+    of every span, most noticeable on thin fast-moving silhouette bits
+    (fingers/hair strands) where a couple of missing pixels can eat the
+    whole visible width. Ceil-ing the high edge instead means the region
+    always fully contains what was actually rendered.
     """
     cdef Py_ssize_t row, x, x0
     cdef Py_ssize_t stride = fw * 4
@@ -1420,10 +1435,10 @@ cpdef list bgra_alpha_spans(const unsigned char[:] bgra,
                         x += 1
                     with gil:
                         spans.append((
-                            <int>(lx + x0 * sx) - pad,
-                            <int>(ly + row * sy) - pad,
-                            <int>(lx + x * sx) + pad,
-                            <int>(ly + (row + 1) * sy) + pad))
+                            <int>floor(lx + x0 * sx) - pad,
+                            <int>floor(ly + row * sy) - pad,
+                            <int>ceil(lx + x * sx) + pad,
+                            <int>ceil(ly + (row + 1) * sy) + pad))
                 else:
                     x += 1
     return spans

@@ -14,6 +14,7 @@ onto the full-screen window.
 """
 from __future__ import annotations
 
+import math
 import os
 import queue
 import struct as _struct
@@ -22,6 +23,7 @@ import time
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
 import moderngl
+import numpy as np
 
 import ctypes as _ct
 import ctypes.wintypes as _wt
@@ -876,6 +878,13 @@ except Exception:
     pass
 
 
+#: Reused across calls so a complex frame (many spans) doesn't force a
+#: fresh heap allocation every tick — grown (never shrunk) on demand.
+#: See _build_region_from_rects for why this matters on fast pet motion.
+_region_buf: Optional[_ct.Array] = None
+_region_buf_cap: int = 0
+
+
 def _build_region_from_rects(rects: list):
     """Build an HRGN as the union of *rects* in a single GDI call.
 
@@ -887,27 +896,52 @@ def _build_region_from_rects(rects: list):
     the entire rect list in one kernel transition and produces the
     identical union shape (verified via RGN_XOR against the iterative
     form), ~13x faster.
+
+    The rect buffer itself is also a per-call cost worth avoiding: a
+    fast-moving, hairy/fuzzy silhouette (a desktop pet mid-animation)
+    can peak at thousands of spans, and the previous version allocated
+    a fresh ``create_string_buffer`` *and* filled it via a Python-level
+    ``for`` loop constructing one ``RECT`` per span every single tick —
+    exactly on the frames where span count spikes (fast motion), which
+    read as an occasional single-frame hitch. Reusing a module-level
+    buffer (grown, never shrunk) plus a bulk ``memmove`` from a numpy
+    array (``wintypes.RECT`` is 4 contiguous ``LONG`` fields — bit-
+    identical layout to an int32 (left, top, right, bottom) row, so a
+    raw memory copy is exact, not an approximation) turns an O(n)
+    Python loop + allocation into one C-level block copy.
     """
+    global _region_buf, _region_buf_cap
     n = len(rects)
     if n == 0:
         return _gdi32.CreateRectRgn(0, 0, 0, 0)
     header_size = _ct.sizeof(_RGNDATAHEADER)
     rect_size = _ct.sizeof(_wt.RECT)
-    buf = _ct.create_string_buffer(header_size + n * rect_size)
-    minx = min(r[0] for r in rects)
-    miny = min(r[1] for r in rects)
-    maxx = max(r[2] for r in rects)
-    maxy = max(r[3] for r in rects)
+    needed = header_size + n * rect_size
+    if _region_buf is None or _region_buf_cap < needed:
+        # Grow with slack so a slightly-larger next frame doesn't
+        # immediately force another reallocation.
+        _region_buf_cap = needed + rect_size * 256
+        _region_buf = _ct.create_string_buffer(_region_buf_cap)
+    buf = _region_buf
+
+    arr = np.asarray(rects, dtype=np.int32)  # (n, 4): x0, y0, x1, y1
+    minx = int(arr[:, 0].min())
+    miny = int(arr[:, 1].min())
+    maxx = int(arr[:, 2].max())
+    maxy = int(arr[:, 3].max())
+
     hdr = _RGNDATAHEADER.from_buffer(buf, 0)
     hdr.dwSize = header_size
     hdr.iType = _RDH_RECTANGLES
     hdr.nCount = n
     hdr.nRgnSize = 0
     hdr.rcBound = _wt.RECT(minx, miny, maxx, maxy)
-    rect_arr = (_wt.RECT * n).from_buffer(buf, header_size)
-    for i, r in enumerate(rects):
-        rect_arr[i] = _wt.RECT(*r)
-    hrgn = _gdi32.ExtCreateRegion(None, len(buf), _ct.byref(buf))
+
+    if not arr.flags['C_CONTIGUOUS']:
+        arr = np.ascontiguousarray(arr)
+    _ct.memmove(_ct.addressof(buf) + header_size, arr.ctypes.data, n * rect_size)
+
+    hrgn = _gdi32.ExtCreateRegion(None, needed, _ct.byref(buf))
     return hrgn if hrgn else _gdi32.CreateRectRgn(0, 0, 0, 0)
 
 
@@ -1481,11 +1515,19 @@ class UnifiedOverlay:
                                     x += 1
                                     while x < fw and mv[row_off + x * 4] > 0:
                                         x += 1
+                                    # floor the low edge / ceil the high
+                                    # edge (not a plain int() truncation)
+                                    # so an upscaled span always fully
+                                    # covers its source pixel run — see
+                                    # bgra_alpha_spans' docstring in
+                                    # _sao_cy_pixels.pyx for why a
+                                    # truncated high edge silently drops
+                                    # the trailing pixels of every span.
                                     layer_spans.append((
-                                        int(lx + x0 * sx),
-                                        int(ly + row * sy),
-                                        int(lx + x * sx),
-                                        int(ly + (row + 1) * sy)))
+                                        int(math.floor(lx + x0 * sx)),
+                                        int(math.floor(ly + row * sy)),
+                                        int(math.ceil(lx + x * sx)),
+                                        int(math.ceil(ly + (row + 1) * sy))))
                                 else:
                                     x += 1
                     layer._rgn_cached_spans = layer_spans
