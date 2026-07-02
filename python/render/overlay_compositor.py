@@ -1015,6 +1015,14 @@ class UnifiedOverlay:
         # the scan entirely) — consumed by the overlay loop.
         self._layers_changed = False
 
+        # This tick's position/size snapshot from _render_frame, shared
+        # with _sync_host_rgn so the clip region always agrees with what
+        # was actually drawn (see _render_frame's docstring on why a
+        # second live read of layer.x/y races a plugin's position
+        # writes).
+        self._last_render_snapshots: Optional[
+            Dict[str, Tuple[int, int, int, int]]] = None
+
         # DirectComposition bridge (replaces SwapBuffers for WDA)
         self._dcomp = None
         self._dcomp_buf: bytearray | None = None
@@ -1331,7 +1339,10 @@ class UnifiedOverlay:
     _RGN_PAD_STILL = 0
     _RGN_PAD_MOVE = 32
 
-    def _sync_host_rgn(self, has_visible: bool) -> None:
+    def _sync_host_rgn(
+        self, has_visible: bool,
+        snapshots: Optional[Dict[str, Tuple[int, int, int, int]]] = None,
+    ) -> None:
         """Per-pixel click passthrough via SetWindowRgn.
 
         Optimisations vs naive full-scan:
@@ -1352,6 +1363,18 @@ class UnifiedOverlay:
           them. The scan itself is the cheap part (nogil Cython over
           already-decoded RGBA); it only runs when *this* layer's content
           or position actually changed.
+
+        *snapshots*: the SAME per-tick position/size snapshot
+        ``_render_frame`` used to draw and compute the dirty rect (see
+        its docstring). Position is mutated unsynchronized from another
+        thread (a desktop pet's plugin Tick, up to 60Hz during walking
+        or a fast drag) — re-reading ``layer.x``/``layer.y`` live here
+        instead of using that same snapshot let the clip region disagree
+        with what was actually drawn this tick, clipping the sprite
+        against the wrong rect for one frame (visible as a torn/bitten
+        edge exactly on fast motion). ``None`` (the "nothing changed
+        this tick" caller) falls back to live reads — safe there because
+        no position write means no ``_dirty``, so nothing to race.
         """
         if self._host is None:
             return
@@ -1383,19 +1406,32 @@ class UnifiedOverlay:
             for layer in self._z_sorted:
                 if not layer.visible or layer.alpha < 0.01:
                     continue
-                cur_pos[layer.name] = (layer.x, layer.y)
+                if snapshots is not None and layer.name in snapshots:
+                    sx0, sy0, _sw0, _sh0 = snapshots[layer.name]
+                else:
+                    sx0, sy0 = layer.x, layer.y
+                cur_pos[layer.name] = (sx0, sy0)
             self._rgn_prev_pos = cur_pos
             spans: list = []
             _cy = _cy_alpha_spans
             for layer in self._z_sorted:
                 if not layer.visible or layer.alpha < 0.01:
                     continue
-                lx = layer.x - ox
-                ly = layer.y - oy
+                # Use the exact position/size _render_frame drew this
+                # tick with, not a fresh (possibly already-stale-or-not)
+                # read of layer.x/y/width/height — see the snapshots
+                # param docstring above for why the two can disagree.
+                if snapshots is not None and layer.name in snapshots:
+                    layer_x, layer_y, layer_w, layer_h = snapshots[layer.name]
+                else:
+                    layer_x, layer_y = layer.x, layer.y
+                    layer_w, layer_h = layer.width, layer.height
+                lx = layer_x - ox
+                ly = layer_y - oy
 
                 old = prev.get(layer.name)
                 layer_moving = bool(
-                    old and (old[0] != layer.x or old[1] != layer.y))
+                    old and (old[0] != layer_x or old[1] != layer_y))
                 if layer_moving:
                     # Scale the pad to the actual per-tick movement: the
                     # region is applied by DWM up to a frame out of step
@@ -1405,7 +1441,7 @@ class UnifiedOverlay:
                     # edge — reads as "tearing" on fast motion. Capped:
                     # the pad is also the area where clicks over empty
                     # pixels get swallowed while the layer moves.
-                    step = max(abs(layer.x - old[0]), abs(layer.y - old[1]))
+                    step = max(abs(layer_x - old[0]), abs(layer_y - old[1]))
                     pad = min(256, max(self._RGN_PAD_MOVE, step * 2))
                 else:
                     pad = self._RGN_PAD_STILL
@@ -1416,8 +1452,8 @@ class UnifiedOverlay:
                 if not fb or fw <= 0 or fh <= 0:
                     spans.append((
                         lx - pad, ly - pad,
-                        lx + layer.width + pad,
-                        ly + layer.height + pad))
+                        lx + layer_w + pad,
+                        ly + layer_h + pad))
                     continue
 
                 # Per-layer span cache, keyed only on content + position —
@@ -1428,8 +1464,8 @@ class UnifiedOverlay:
                 if layer._rgn_cache_key == cache_key:
                     layer_spans = layer._rgn_cached_spans
                 else:
-                    sx = max(1, layer.width / fw)
-                    sy = max(1, layer.height / fh)
+                    sx = max(1, layer_w / fw)
+                    sy = max(1, layer_h / fh)
                     if _cy is not None:
                         layer_spans = list(_cy(fb, fw, fh, lx, ly, sx, sy, 0))
                     else:
@@ -1745,7 +1781,8 @@ class UnifiedOverlay:
                     with _probe('compositor.render_frame'):
                         dirty_rect = self._render_frame(now - t0)
                     with _probe('compositor.sync_host_rgn'):
-                        self._sync_host_rgn(has_visible)
+                        self._sync_host_rgn(
+                            has_visible, self._last_render_snapshots)
                     with _probe('compositor.present_frame'):
                         self._present_frame(dirty_rect)
                 except Exception as _exc:
@@ -2001,6 +2038,21 @@ class UnifiedOverlay:
             layer.name: (layer.x, layer.y, layer.width, layer.height)
             for layer in self._z_sorted
         }
+        # _sync_host_rgn is a THIRD consumer of layer position (besides
+        # _compute_dirty_rect and this method's own draw loop, both of
+        # which already share `snapshots` per the comment above) — it
+        # used to re-read layer.x/layer.y live, which raced against
+        # set_compositor_layer_position() being called from another
+        # thread (the desktop pet's plugin Tick, which writes position
+        # unsynchronized and at up to 60Hz during walking/dragging — see
+        # CompositorLayer.set_position). The clip region computed from a
+        # position that had already moved past what was actually drawn
+        # this tick — or vice versa — clipped the sprite against the
+        # WRONG rect for one frame, visible as a torn/bitten edge
+        # exactly on fast motion. Stashing the snapshot here and having
+        # _sync_host_rgn consume it (see its call site below) makes all
+        # three consumers agree on one immutable position per tick.
+        self._last_render_snapshots = snapshots
 
         dirty_rect = self._compute_dirty_rect(sw, sh, ox, oy, snapshots)
 
