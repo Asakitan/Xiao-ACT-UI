@@ -17878,6 +17878,26 @@ console.log("command palette quick access helpers ok");
            and "binaries=GPU_RENDER_BINARIES + CYTHON_ACCEL_BINARIES + PYWINPTY_BINARIES" in spec_source
            and "] + GPU_RENDER_DATAS + PYWINPTY_DATAS," in spec_source
            and "'winpty'," in spec_source)
+    # The actually-shipped build pipeline is Nuitka (build_nuitka.bat), not
+    # PyInstaller (XiaoACTUI.spec is a separate, not currently used path) -
+    # corrected after the user pointed this out. Nuitka's own DLL-dependency
+    # walker only follows link-time deps of compiled extension modules, so
+    # the same four sibling native files need the same explicit treatment,
+    # resolved dynamically since the pywinpty install path is machine/venv
+    # specific (no equivalent of PyInstaller's collect_dynamic_libs exists).
+    nuitka_bat_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), "build_nuitka.bat")
+    with open(nuitka_bat_path, "r", encoding="utf-8") as f:
+        nuitka_bat_source = f.read()
+    _check("build_nuitka.bat (the real build pipeline) resolves and bundles pywinpty's native binaries",
+           "WINPTY_NUITKA_FLAGS" in nuitka_bat_source
+           and "find_spec('winpty')" in nuitka_bat_source
+           and "--include-module=winpty" in nuitka_bat_source
+           and "--include-data-files=%WINPTY_DIR%\\conpty.dll=winpty/conpty.dll" in nuitka_bat_source
+           and "--include-data-files=%WINPTY_DIR%\\winpty.dll=winpty/winpty.dll" in nuitka_bat_source
+           and "--include-data-files=%WINPTY_DIR%\\OpenConsole.exe=winpty/OpenConsole.exe" in nuitka_bat_source
+           and "--include-data-files=%WINPTY_DIR%\\winpty-agent.exe=winpty/winpty-agent.exe" in nuitka_bat_source
+           and "%WINPTY_NUITKA_FLAGS%" in nuitka_bat_source
+           and "pywinpty not installed" in nuitka_bat_source)
     _check("editor dirty diff decorations render while editing",
            "editor-dirty-diff-line" in html
            and "editor-dirty-diff-gutter" in html
