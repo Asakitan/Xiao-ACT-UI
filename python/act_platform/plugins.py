@@ -1848,7 +1848,7 @@ class _PluginTimer:
     """
 
     __slots__ = ("_manager", "plugin_id", "token", "_fn", "_seconds", "_repeat",
-                 "_cancelled", "_timer")
+                 "_cancelled", "_timer", "_stop_evt")
 
     def __init__(self, manager: "PluginManager", plugin_id: str, token: str,
                  fn: Callable[[], Any], seconds: float, repeat: bool) -> None:
@@ -1856,15 +1856,42 @@ class _PluginTimer:
         self.plugin_id = plugin_id
         self.token = token
         self._fn = fn
-        self._seconds = max(0.02, float(seconds or 0.0))
+        self._seconds = max(0.01, float(seconds or 0.0))
         self._repeat = bool(repeat)
         self._cancelled = False
         self._timer: Optional[threading.Timer] = None
+        self._stop_evt = threading.Event()
 
     def start(self) -> "_PluginTimer":
         # Armed once at creation, before the timer is shared — no lock needed.
-        self._arm()
+        if self._repeat:
+            # 常驻线程 + 绝对 deadline: threading.Timer 链每次 fire 重建
+            # 线程且间隔=等待+回调执行, 漂移累积把 60fps 游戏 tick 拖到
+            # ~25fps。deadline 补偿保持标称频率; 回调超时则跳帧不追帧。
+            thread = threading.Thread(
+                target=self._run_repeat, daemon=True,
+                name=f"plugin-timer-{self.plugin_id}-{self.token}")
+            thread.start()
+        else:
+            self._arm()
         return self
+
+    def _run_repeat(self) -> None:
+        next_t = time.monotonic() + self._seconds
+        while True:
+            delay = next_t - time.monotonic()
+            if delay > 0 and self._stop_evt.wait(delay):
+                return
+            if self._cancelled:
+                return
+            try:
+                self._fn()
+            except Exception as exc:  # noqa: BLE001 - isolation is intentional
+                self._manager._record_failure(self.plugin_id, exc)
+            next_t += self._seconds
+            now = time.monotonic()
+            if next_t < now:
+                next_t = now + self._seconds
 
     def _arm(self) -> None:
         if self._cancelled:
@@ -1880,24 +1907,18 @@ class _PluginTimer:
             self._fn()
         except Exception as exc:  # noqa: BLE001 - isolation is intentional
             self._manager._record_failure(self.plugin_id, exc)
-        # Decide rearm under the shared lock so a concurrent cancel() (from
-        # unload) cannot slip between the _cancelled check and re-arming, which
-        # would otherwise orphan a daemon timer that survives unload.
-        forget = False
+        # One-shot only (repeat runs on the resident thread): forget after fire
+        # under the shared lock so a concurrent cancel() cannot race.
         with self._manager._timers_lock:
             if self._cancelled:
-                pass
-            elif self._repeat:
-                self._arm()
-            else:
-                forget = True
-        if forget:
-            self._manager._forget_timer(self.plugin_id, self.token)
+                return
+        self._manager._forget_timer(self.plugin_id, self.token)
 
     def cancel(self) -> None:
         with self._manager._timers_lock:
             self._cancelled = True
             timer = self._timer
+        self._stop_evt.set()
         if timer is not None:
             try:
                 timer.cancel()

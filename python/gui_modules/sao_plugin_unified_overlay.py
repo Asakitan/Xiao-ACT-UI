@@ -426,7 +426,7 @@ class PluginUnifiedOverlayHost:
     state is untouched.
     """
 
-    def __init__(self, owner: Any, *, surface: str = "unioverlay", interval_ms: int = 33) -> None:
+    def __init__(self, owner: Any, *, surface: str = "unioverlay", interval_ms: int = 16) -> None:
         self.owner = owner
         self.root = getattr(owner, "root", None)
         self.surface = str(surface or "unioverlay")
