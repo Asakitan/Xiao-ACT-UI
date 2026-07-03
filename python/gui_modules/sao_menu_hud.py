@@ -284,6 +284,10 @@ class MenuHudSpriteRenderer:
         self._pil_frame_sig: Optional[Tuple[int, ...]] = None
         self._pil_frame_cache: Optional[Image.Image] = None
         self._pil_frame_off: Tuple[int, int] = (0, 0)
+        # Pre-rendered scan-sweep sprite (gradient afterglow + hot core),
+        # cached by bracket-box width.
+        self._scan_sprite: Optional[Image.Image] = None
+        self._scan_sprite_w: int = 0
         self._scan_color_hex = _rgba_to_hex(self._CYAN)
         self._trail_colors_hex = (
             _rgba_to_hex(self._SCAN_TRAIL[0]),
@@ -315,6 +319,8 @@ class MenuHudSpriteRenderer:
         self._pil_frame_sig = None
         self._pil_frame_cache = None
         self._pil_frame_off = (0, 0)
+        self._scan_sprite = None
+        self._scan_sprite_w = 0
 
     @_probe.decorate('ui.menu.render_canvas')
     def render(self, content_w: int, content_h: int,
@@ -439,6 +445,30 @@ class MenuHudSpriteRenderer:
         screen_w = max(1, int(screen_w))
         screen_h = max(1, int(screen_h))
 
+        cx1, cy1, cx2, cy2, scan_y, dot_y_l, dot_y_r = _CY_UI.popup_hud_dynamic(
+            content_w, content_h, phase, self.gpu_pad,
+            self._HUD_MARGIN, self._BRACKET_LEN)
+
+        now = _dt.datetime.now()
+        now_second = int(now.timestamp())
+        frame_sig = (
+            content_w, content_h, screen_w, screen_h,
+            cx1, cy1, cx2, cy2, scan_y, dot_y_l, dot_y_r,
+            now_second,
+        )
+        # Cache check MUST happen before the scratch buffer is touched:
+        # the cached frame IS the scratch object, so blitting the static
+        # layer first wipes the scan line / dots / clock off the very
+        # image a cache hit is about to return. At 60 Hz the int-quantized
+        # scan/dot positions repeat across adjacent frames constantly, so
+        # roughly every other presented frame lost its dynamic elements —
+        # visible as the scan line / glow dots / timestamp flickering.
+        if frame_sig == self._pil_frame_sig and self._pil_frame_cache is not None:
+            return self._pil_frame_cache, self._pil_frame_off
+        if self._stamp_second != now_second:
+            self._stamp_second = now_second
+            self._stamp_text = now.strftime('%H:%M:%S')
+
         static = self._get_static_layer_gpu(
             content_w, content_h, screen_w, screen_h)
         # v2.2.25: reuse a single scratch RGBA image across frames. The
@@ -455,23 +485,6 @@ class MenuHudSpriteRenderer:
         scratch = self._scratch
         scratch.paste(static, (0, 0))
         frame = scratch
-
-        cx1, cy1, cx2, cy2, scan_y, dot_y_l, dot_y_r = _CY_UI.popup_hud_dynamic(
-            content_w, content_h, phase, self.gpu_pad,
-            self._HUD_MARGIN, self._BRACKET_LEN)
-
-        now = _dt.datetime.now()
-        now_second = int(now.timestamp())
-        frame_sig = (
-            content_w, content_h, screen_w, screen_h,
-            cx1, cy1, cx2, cy2, scan_y, dot_y_l, dot_y_r,
-            now_second,
-        )
-        if frame_sig == self._pil_frame_sig and self._pil_frame_cache is not None:
-            return self._pil_frame_cache, self._pil_frame_off
-        if self._stamp_second != now_second:
-            self._stamp_second = now_second
-            self._stamp_text = now.strftime('%H:%M:%S')
 
         self._draw_dynamic(frame, cx1, cy1, cx2, cy2,
                            scan_y, dot_y_l, dot_y_r,
@@ -571,10 +584,20 @@ class MenuHudSpriteRenderer:
                       scan_y: int, dot_y_l: int, dot_y_r: int,
                       stamp: str) -> None:
         draw = ImageDraw.Draw(frame)
-        draw.line((cx1, scan_y, cx2, scan_y), fill=self._CYAN, width=1)
-        for idx, color in enumerate(self._SCAN_TRAIL):
-            trail_y = scan_y - 3 - idx * 3
-            draw.line((cx1, trail_y, cx2, trail_y), fill=color, width=1)
+        # Scan sweep: gradient afterglow band rising into a hot core with
+        # a short lead glow beneath, clipped to the bracket box so the
+        # glow never spills past the top/bottom frame lines.
+        sweep = self._get_scan_sprite(max(1, cx2 - cx1))
+        top = scan_y - self._SCAN_TRAIL_H
+        y0 = max(top, cy1 + 1)
+        y1 = min(top + sweep.height, cy2)
+        if y1 > y0:
+            if y0 > top or y1 < top + sweep.height:
+                sweep = sweep.crop((0, y0 - top, sweep.width, y1 - top))
+            frame.alpha_composite(sweep, (cx1, y0))
+        # End ticks where the sweep core meets the rails.
+        draw.line((cx1, scan_y - 2, cx1, scan_y + 2), fill=self._CYAN, width=1)
+        draw.line((cx2, scan_y - 2, cx2, scan_y + 2), fill=self._CYAN, width=1)
 
         rail_x_l = cx1 - self._RAIL_OFFSET
         rail_x_r = cx2 + self._RAIL_OFFSET
@@ -589,6 +612,32 @@ class MenuHudSpriteRenderer:
             sx = cx2 - 4 - self._stamp_sprite_size[0]
             sy = cy2 + 4
             frame.alpha_composite(sprite, dest=(sx, sy))
+
+    _SCAN_TRAIL_H = 26   # afterglow band height above the sweep core
+    _SCAN_LEAD_H = 5     # faint lead glow below the core
+
+    def _get_scan_sprite(self, width: int) -> Image.Image:
+        """Scan-sweep sprite: a vertical gradient afterglow that rises
+        into a 2px hot core (near-white leading edge) with a short lead
+        glow beneath. Built once per bracket-box width and cached — the
+        per-frame cost is a single C-level alpha_composite."""
+        if self._scan_sprite is not None and self._scan_sprite_w == width:
+            return self._scan_sprite
+        r, g, b = self._CYAN[:3]
+        h = self._SCAN_TRAIL_H + 2 + self._SCAN_LEAD_H
+        col = np.zeros((h, 4), dtype=np.uint8)
+        for i in range(self._SCAN_TRAIL_H):
+            t = (i + 1) / self._SCAN_TRAIL_H
+            col[i] = (r, g, b, int(80 * t ** 1.7))
+        col[self._SCAN_TRAIL_H] = (176, 228, 242, 235)
+        col[self._SCAN_TRAIL_H + 1] = (r, g, b, 150)
+        for i in range(self._SCAN_LEAD_H):
+            t = 1.0 - (i + 1) / self._SCAN_LEAD_H
+            col[self._SCAN_TRAIL_H + 2 + i] = (r, g, b, int(46 * t ** 1.5))
+        arr = np.repeat(col[:, None, :], width, axis=1)
+        self._scan_sprite = Image.fromarray(arr, 'RGBA')
+        self._scan_sprite_w = width
+        return self._scan_sprite
 
     def _get_stamp_sprite(self, stamp: str) -> Optional[Image.Image]:
         if not stamp:
