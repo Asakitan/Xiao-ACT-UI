@@ -21,7 +21,16 @@ import _sao_cy_uihelpers as _CY_UI  # type: ignore[import-not-found]
 
 # Layout offsets within the GPU window.  The window covers the menu_bar
 # column + child_bar column + a HUD margin all the way around.
-HUD_PAD = 24                            # outer breathing room for HUD
+# The margin MUST equal the HUD sprite's own pad (hud_layout.sprite_pad,
+# i.e. MenuHudSpriteRenderer.gpu_pad): the sprite is content + pad on
+# every side with origin (-pad, -pad), so it is pasted at
+# (HUD_PAD - pad, ...). Any HUD_PAD smaller than the sprite pad makes
+# that offset negative — the max(0, px) clamp then shifts the whole
+# HUD down-right AND PIL crops the sprite at the frame's right/bottom
+# edge (glass plate corner cut square, right rail / bottom labels
+# missing). A hardcoded 24 broke exactly this way when the sprite pad
+# grew to 40 for the glass backdrop.
+HUD_PAD = hud_layout.sprite_pad()
 GAP_MENU_CHILD = 25                     # px between menu column and child column
 
 MENU_X = HUD_PAD
@@ -88,8 +97,8 @@ def compose_rgba(state, hud_phase: float, screen_w: int, screen_h: int,
     try:
         with _probe('ui.popup.compose_hud'):
             hud_img, (ox, oy) = hud_layout.compose(iw, ih, screen_w, screen_h, hud_phase)
-        # origin is (-PLATE_PAD, -PLATE_PAD) which lines up with HUD_PAD
-        # if we paste the sprite at (HUD_PAD + ox, HUD_PAD + oy).
+        # origin is (-sprite_pad, -sprite_pad) and HUD_PAD == sprite_pad,
+        # so the sprite lands at (dx, dy) covering the whole frame.
         px, py = HUD_PAD + ox + dx, HUD_PAD + oy + dy
         with _probe('ui.popup.paste_hud'):
             frame.alpha_composite(hud_img, (max(0, px), max(0, py)))

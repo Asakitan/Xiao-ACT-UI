@@ -15,6 +15,14 @@ from gui_modules.sao_menu_hud import MenuHudSpriteRenderer
 _renderer = MenuHudSpriteRenderer()
 
 
+def sprite_pad() -> int:
+    """Margin the HUD sprite extends beyond the content rect on every
+    side (= sprite origin offset magnitude). The composer's window pad
+    must be at least this, or pasting the sprite at a negative offset
+    gets clamped/cropped by PIL."""
+    return _renderer.gpu_pad
+
+
 def compose(content_w: int, content_h: int,
             screen_w: int, screen_h: int,
             phase: float) -> Tuple[Image.Image, Tuple[int, int]]:
