@@ -211,6 +211,13 @@ class TkMirrorLayer:
                 mouse_button_fn=self._on_mouse_button,
                 scroll_fn=self._on_scroll,
             )
+            # A mirrored Tk panel is a solid window: hit-test its whole
+            # rect, not the captured per-pixel alpha. PrintWindow gives
+            # native Entry/Text controls a zero alpha byte, so an
+            # alpha-span click region would exclude exactly the text
+            # fields (opaque custom-drawn buttons stayed clickable) —
+            # that is the "text boxes can't be clicked" regression.
+            layer.rect_hit = True
         except Exception:
             if layer is not None:
                 try:

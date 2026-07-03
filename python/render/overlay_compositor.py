@@ -329,6 +329,16 @@ class CompositorLayer:
         self.visible = False
         self.alpha = 1.0
         self.click_through = click_through
+        # When True, _sync_host_rgn uses this layer's whole bounding rect
+        # for the host click region instead of scanning its frame's
+        # per-pixel alpha. Solid rectangular interactive layers (mirrored
+        # Tk panels via TkMirrorLayer) set this: their PrintWindow capture
+        # has no reliable alpha byte for native child controls, so an
+        # alpha-span region would punch holes over exactly those controls
+        # (Entry/Text fields) and make them unclickable while opaque
+        # custom-drawn widgets still worked. Irregular sprite layers (the
+        # desktop pet, HUD) leave this False to keep per-pixel passthrough.
+        self.rect_hit = False
         self.bgra_swizzle = bgra_swizzle
         self.high_fps = high_fps
         self.target_fps = target_fps
@@ -1548,6 +1558,17 @@ class UnifiedOverlay:
                     pad = min(256, max(self._RGN_PAD_MOVE, step * 2))
                 else:
                     pad = self._RGN_PAD_STILL
+
+                if layer.rect_hit:
+                    # Solid rectangular interactive layer — trust the
+                    # bounding rect, not the (unreliable) captured alpha.
+                    # See CompositorLayer.rect_hit for why. Matches
+                    # hit_test(), which already routes the whole rect here.
+                    spans.append((
+                        lx - pad, ly - pad,
+                        lx + layer_w + pad,
+                        ly + layer_h + pad))
+                    continue
 
                 fb = layer._frame_bytes
                 fw = layer._frame_w
