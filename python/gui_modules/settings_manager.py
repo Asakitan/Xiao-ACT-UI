@@ -29,12 +29,14 @@ import tempfile
 from typing import Any, Mapping
 
 import settings_crypto
-from config import DEFAULT_HOTKEYS
+from config import BASE_DIR, DEFAULT_HOTKEYS
 
 
-_HERE = os.path.dirname(os.path.abspath(__file__))  # …/sao_auto/gui_modules
-_SAO_AUTO_DIR = os.path.dirname(_HERE)              # …/sao_auto
-CONFIG_FILE = os.path.join(_SAO_AUTO_DIR, 'settings.json')
+# config.BASE_DIR is frozen-aware: in the packaged layout the compiled
+# modules live under <root>\runtime\ while user data belongs at <root>\
+# (a __file__-derived path would land settings.json inside runtime\).
+# In dev mode BASE_DIR equals this package's parent directory anyway.
+CONFIG_FILE = os.path.join(BASE_DIR, 'settings.json')
 
 
 def _json_safe(value: Any) -> Any:

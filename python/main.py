@@ -58,12 +58,13 @@ def _early_dpi_aware():
 
 _early_dpi_aware()
 
-# Nuitka: redirect all output to log file (no console window)
+# Nuitka: optionally redirect all output to a log file (no console window).
+# Off by default; set XIAOACT_DEBUG_LOG=1 before launch to enable.
 # --mcp-server 模式依赖 stdout 做 JSON-RPC 通信，必须跳过重定向
 _is_compiled = not os.path.isfile(os.path.abspath(__file__))
 if _is_compiled:
     sys.frozen = True
-    if '--mcp-server' not in sys.argv:
+    if '--mcp-server' not in sys.argv and os.environ.get('XIAOACT_DEBUG_LOG'):
         _log_path = os.path.join(os.path.dirname(os.path.abspath(sys.executable)), '_nuitka.log')
         try:
             _log_f = open(_log_path, 'w', encoding='utf-8', buffering=1)

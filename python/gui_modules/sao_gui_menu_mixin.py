@@ -911,7 +911,6 @@ class SAOPlayerGUIMenuMixin:
             self.settings.save()
         except Exception:
             pass
-
         def _apply_bg():
             try:
                 from render.overlay_compositor import get_unified_overlay

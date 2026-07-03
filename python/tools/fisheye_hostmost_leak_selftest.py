@@ -87,11 +87,27 @@ def main() -> int:
     u = ctypes.windll.user32
     cx, cy = 936, 536
 
+    def _diag(label):
+        delegate = btn._win._delegate
+        layer = delegate.layer
+        proxy = layer._input_proxy
+        proxy_hwnd = u.GetAncestor(proxy.winfo_id(), 2) if proxy else 0
+        host_ex = u.GetWindowLongPtrW(uo.hwnd, -20)
+        proxy_ex = u.GetWindowLongPtrW(proxy_hwnd, -20) if proxy_hwnd else 0
+        wfp = u.WindowFromPoint(_PT(cx, cy))
+        print(f'  [DIAG {label}] host_topmost={bool(host_ex & 8)} '
+              f'proxy_topmost={bool(proxy_ex & 8)} '
+              f'WFP={_win_class(u, wfp)} (0x{wfp & 0xFFFFFFFF:08X}) '
+              f'proxy_hwnd=0x{proxy_hwnd & 0xFFFFFFFF:08X} '
+              f'host_hwnd=0x{uo.hwnd & 0xFFFFFFFF:08X}', flush=True)
+
     def _click_and_check(tag):
         got['ng'] = 0
+        _diag(f'{tag} :: pre-WFP')
         wfp_class = _win_class(u, u.WindowFromPoint(_PT(cx, cy)))
         u.SetCursorPos(cx, cy)
         time.sleep(0.08)
+        _diag(f'{tag} :: pre-mousedown')
         u.mouse_event(0x0002, 0, 0, 0, 0)
         time.sleep(0.05)
         u.mouse_event(0x0004, 0, 0, 0, 0)

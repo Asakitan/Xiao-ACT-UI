@@ -21,15 +21,21 @@ from plugins.star_resonance_plugin.engines.buff_uptime import BuffUptimeTracker
 # ═══════════════════════════════════════════════
 #  Player cache path
 # ═══════════════════════════════════════════════
-# 打包环境下 __file__ 位于只读的 _MEIPASS 临时目录，
-# 需要将可写文件放在 exe 同级目录 (sys.executable)
-_BASE_DIR = (
-    os.path.dirname(sys.executable)
-    if getattr(sys, 'frozen', False)
-    else os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-)
+# 可写缓存归应用根目录: config.BASE_DIR 是 frozen-aware 的（打包布局下
+# exe 在 <root>\runtime\，用户数据归 <root>\）。
+try:
+    from config import BASE_DIR as _BASE_DIR
+except Exception:
+    _BASE_DIR = (
+        os.path.dirname(sys.executable)
+        if getattr(sys, 'frozen', False)
+        else os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    )
 _PLAYER_CACHE_PATH = os.path.join(_BASE_DIR, 'player_cache.json')
-_SKILL_FIGHT_LEVEL_TABLE_PATH = os.path.join(_BASE_DIR, 'assets', 'SkillFightLevelTable.json')
+# 只读资产表跟着插件目录走 (打包时 plugins/ 整棵以源码形式抬到顶层,
+# __file__ 两种布局下都是真实路径)。
+_PLUGIN_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+_SKILL_FIGHT_LEVEL_TABLE_PATH = os.path.join(_PLUGIN_ROOT, 'assets', 'SkillFightLevelTable.json')
 _SKILL_LEVEL_TO_EFFECT: Optional[Dict[int, int]] = None
 
 

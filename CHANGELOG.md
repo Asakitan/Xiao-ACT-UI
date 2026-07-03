@@ -2,6 +2,19 @@
 
 逐版本变更记录, 最新在前。本文件由 config.py 内联的历史注释迁出。
 
+## v5.2.10: 应用根路径收口、桌宠置顶修复与捕获排障自测补强.
+
+  - **运行时路径 / 打包布局**:
+    - settings、profile、WebView 资源、Workshop 数据与本地服务端资源继续统一优先走 `config.BASE_DIR`, 避免打包后误落到 `runtime/`。
+    - updater 对 `update.exe` / `update_apply.exe` 的查找改为优先应用根目录, 兼容新的发布布局。
+    - `main.py` 默认不再强制把 stdout/stderr 重定向到 `_nuitka.log`, 仅在显式调试环境变量开启时启用。
+  - **overlay / desktop pet**:
+    - 无游戏句柄时 overlay host 改为真实 `HWND_TOPMOST`, 修复桌宠在普通桌面窗口前景切换后被压住的问题。
+    - 输入代理抬升逻辑升级为 `SetWindowPos(HWND_TOPMOST)` + `.lift()`, 并减少 video fence 触发时的 hide/show 闪烁。
+    - capture exclusion 路径继续收口, `streaming_mode` 打开时优先走 display-affinity + scrub。
+  - **自测 / 诊断**:
+    - 新增桌宠 stay-on-top 自测, 并强化 fisheye/跨进程点击目标的 topmost 与命中诊断输出。
+
 ## v5.2.9: AI Editor 只读 Mem Viewer、Nuitka 原生依赖打包策略修正与 Cython 产物刷新.
 
   - **AI Editor / Mem Viewer**:

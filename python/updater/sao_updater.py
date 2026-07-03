@@ -810,7 +810,16 @@ def _resolve_apply_helper() -> str:
     candidates = []
     try:
         if getattr(sys, "frozen", False):
+            # config.BASE_DIR is frozen-aware: update.exe is promoted to
+            # the app root, one level above the runtime\ dir with the EXE.
+            try:
+                from config import BASE_DIR as _app_root
+            except Exception:
+                _app_root = ""
             exe_dir = os.path.dirname(sys.executable)
+            if _app_root and _app_root != exe_dir:
+                candidates.append(os.path.join(_app_root, "update.exe"))
+                candidates.append(os.path.join(_app_root, "update_apply.exe"))
             candidates.append(os.path.join(exe_dir, "update.exe"))
             candidates.append(os.path.join(exe_dir, "update_apply.exe"))
             candidates.append(os.path.join(exe_dir, "update_apply.py"))

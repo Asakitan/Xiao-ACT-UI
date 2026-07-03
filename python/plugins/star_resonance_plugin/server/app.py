@@ -19,10 +19,15 @@ from pydantic import BaseModel, Field
 
 from plugins.star_resonance_plugin.engines.dps_history import DpsHistoryStore
 
-if getattr(sys, 'frozen', False):
-    BASE_DIR = os.path.dirname(sys.executable)
-else:
-    BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+# frozen-aware 应用根目录 (打包布局下 exe 在 <root>\runtime\, 可写
+# data\ 归 <root>\); 独立部署 (无宿主 config) 时回退旧逻辑。
+try:
+    from config import BASE_DIR
+except Exception:
+    if getattr(sys, 'frozen', False):
+        BASE_DIR = os.path.dirname(sys.executable)
+    else:
+        BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 DATA_DIR = os.path.join(BASE_DIR, "data")
 DB_PATH = os.path.join(DATA_DIR, "scripts.db")
 UPLOAD_SECRET_PATH = os.path.join(DATA_DIR, "upload_secret.txt")

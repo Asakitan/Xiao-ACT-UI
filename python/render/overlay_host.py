@@ -733,8 +733,7 @@ class OverlayHost:
             else:
                 _ac_remove(self.hwnd)
                 self._capture_excluded = False
-        except Exception as exc:
-            print(f'[OverlayHost] set_capture_mode failed: {exc}', flush=True)
+        except Exception:
             self._capture_excluded = False
 
     def _hide_topmost_flag(self) -> None:

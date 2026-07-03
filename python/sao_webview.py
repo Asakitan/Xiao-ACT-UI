@@ -270,10 +270,15 @@ class SettingsManager:
     when the process is killed via os._exit() during shutdown.
     """
     def __init__(self):
-        if getattr(sys, 'frozen', False):
-            base = os.path.dirname(sys.executable)
-        else:
-            base = os.path.dirname(os.path.abspath(__file__))
+        # config.BASE_DIR is frozen-aware (packaged: the EXE lives in
+        # <root>\runtime\ but user data belongs at <root>\).
+        try:
+            from config import BASE_DIR as base
+        except Exception:
+            if getattr(sys, 'frozen', False):
+                base = os.path.dirname(sys.executable)
+            else:
+                base = os.path.dirname(os.path.abspath(__file__))
         self._path = os.path.join(base, 'settings.json')
         self._data = {}
         self._load()

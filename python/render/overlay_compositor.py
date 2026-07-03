@@ -337,6 +337,10 @@ _user32_subcls.CallWindowProcW.argtypes = [
 _user32_subcls.DefWindowProcW.restype = _ct.c_longlong
 _user32_subcls.DefWindowProcW.argtypes = [
     _wt.HWND, _ct.c_uint, _wt.WPARAM, _wt.LPARAM]
+_user32_subcls.SetWindowPos.restype = _wt.BOOL
+_user32_subcls.SetWindowPos.argtypes = [
+    _wt.HWND, _wt.HWND, _ct.c_int, _ct.c_int, _ct.c_int, _ct.c_int,
+    _ct.c_uint]
 _PROXY_WNDPROC = _ct.WINFUNCTYPE(
     _ct.c_longlong, _wt.HWND, _ct.c_uint, _wt.WPARAM, _wt.LPARAM)
 # ctypes WndProc callbacks pinned for the process lifetime: a subclassed
@@ -1307,6 +1311,7 @@ class UnifiedOverlay:
 
         # Video fence (frame validation gate)
         self._vf = None
+        self._vf_dirty = False
 
         # Tk callback queue (overlay thread → Tk main thread)
         self._tk_q: queue.Queue = queue.Queue()
@@ -1435,25 +1440,38 @@ class UnifiedOverlay:
              memory — invisible to user-mode API hooks.
           2. User-mode fallback: SetWindowPos(HWND_TOPMOST) if R3
              is unavailable (no driver loaded / calibration failed).
-          3. HWND_TOP if no game HWND is set.
+          3. Real HWND_TOPMOST if no game HWND is set.
 
-        Case 3 explicitly demotes via HWND_NOTOPMOST before HWND_TOP.
-        HWND_TOP ("top of the z order") is NOT the same request as
-        HWND_NOTOPMOST ("clear WS_EX_TOPMOST, sit above all non-topmost
-        windows") — measured live: if the host is CURRENTLY topmost (a
-        stale push from elsewhere outliving its reason — e.g. a popup
-        menu or the fisheye hit layer's own topmost need, see
-        SAOPopUpMenu._demote_compositor_host_from_popup_topmost /
-        SAOPlayerGUIFisheyeMixin._demote_compositor_host_from_fisheye_topmost),
-        SetWindowPos(host, HWND_TOP, ...) alone leaves it stuck topmost.
-        This branch only ever runs when there's no game to track, so
-        there's never a legitimate reason for the host to be topmost
-        here — safe to unconditionally clear it. HWND_NOTOPMOST alone
-        isn't enough either: per its own contract it's a no-op once the
-        window is already non-topmost, so it won't actively push the
-        host back above other windows opened since the last tick —
-        HWND_TOP still does that active "move to the front" work
-        afterward.
+        Case 3 uses REAL WS_EX_TOPMOST, not the weaker HWND_TOP ("top
+        of the current z-order, reasserted every tick") this branch
+        used before. The whole reason this class avoids real TOPMOST
+        elsewhere is anti-cheat evasion — a game's anti-cheat scanning
+        for suspicious always-on-top overlay windows — but that risk
+        only exists while a game IS actually attached; this branch by
+        definition only runs when it isn't (desktop-pet-only usage,
+        the common case with no game running at all). HWND_TOP has no
+        such detection risk to justify its weakness: it only wins the
+        z-order race AT THE MOMENT of the call, and ANY other app
+        activating a window (a perfectly normal desktop interaction,
+        e.g. clicking through the pet's own click_through pixels to
+        whatever sits behind it) climbs back above it until the next
+        tick — measured live as "click the desktop pet a few times and
+        the compositor vanishes behind other apps, only popping back
+        in front when the fisheye menu opens" (fisheye briefly forces
+        real TOPMOST for its own hit-layer's sake — see
+        SAOPlayerGUIFisheyeMixin._raise_compositor_above_fisheye_hit_layer
+        — which is what was masking this the whole time).
+
+        Real TOPMOST here reintroduces the proxy-burial risk this
+        session's other fixes were about (a Tk input proxy is ALSO
+        real-topmost; whichever of the two most recently joined the
+        topmost band sits above the other) — so every call also
+        schedules ``lift_all_input_proxies`` on the Tk thread
+        immediately after, keeping active proxies re-asserted above
+        the host every time its own topmost status gets refreshed.
+        ``lift_all_input_proxies`` touches Tk widgets and must not run
+        on this (the compositor render) thread — ``post_to_tk`` marshals
+        it to the Tk main loop.
         """
         host = self._host
         if host is None:
@@ -1494,14 +1512,36 @@ class UnifiedOverlay:
                         _ct.c_void_p(comp_hwnd), _ct.c_void_p(game),
                         0, 0, 0, 0, _SWP)
             else:
-                _HWND_NOTOPMOST = -2
-                _HWND_TOP = 0
+                _HWND_TOPMOST = -1
                 u32.SetWindowPos(
-                    _ct.c_void_p(comp_hwnd), _ct.c_void_p(_HWND_NOTOPMOST),
+                    _ct.c_void_p(comp_hwnd), _ct.c_void_p(_HWND_TOPMOST),
                     0, 0, 0, 0, _SWP)
-                u32.SetWindowPos(
-                    _ct.c_void_p(comp_hwnd), _ct.c_void_p(_HWND_TOP),
-                    0, 0, 0, 0, _SWP)
+                # Re-lift proxies to counter this call re-inserting the
+                # host at the FRONT of the topmost band, possibly above
+                # a proxy last lifted before this tick. lift_all_input_
+                # proxies touches Tk widgets — safe to call directly
+                # only when already on the Tk thread (the normal case
+                # when this method is invoked from a UI event handler,
+                # e.g. the fisheye/popup close-time demote calls, where
+                # queuing via post_to_tk would leave a real gap: the
+                # SetWindowPos above already landed, so a click arriving
+                # before the queued lift drains (up to 8ms later, one
+                # Tk poller tick) could land on the host instead of the
+                # proxy — measured live as an intermittent "first close
+                # after the fisheye/popup misses the click, the next one
+                # doesn't" flake). When called from the compositor's own
+                # render thread (its periodic tick), we're NOT on the Tk
+                # thread and must marshal via post_to_tk instead.
+                if threading.current_thread() is not self._thread:
+                    try:
+                        self.lift_all_input_proxies()
+                    except Exception:
+                        pass
+                else:
+                    try:
+                        self.post_to_tk(self.lift_all_input_proxies)
+                    except Exception:
+                        pass
         except Exception:
             pass
 
@@ -1523,12 +1563,34 @@ class UnifiedOverlay:
 
     def lift_all_input_proxies(self) -> None:
         """Re-lift all input proxies in z-order so higher-z layers
-        receive clicks above lower-z layers (e.g., popup above fisheye)."""
+        receive clicks above lower-z layers (e.g., popup above fisheye),
+        and so a proxy stays above the host after the host (re-)joins
+        the real topmost band (see _enforce_z_order's no-game branch).
+
+        Tk's own ``.lift()`` is NOT enough for that last case: measured
+        live, it did not reliably out-rank a host that had JUST been
+        given ``SetWindowPos(..., HWND_TOPMOST, ...)`` — two already-
+        topmost windows' relative order isn't something ``.lift()``'s
+        (weaker, "top of the current z-order") request reshuffles
+        reliably; only the same explicit HWND_TOPMOST insertion the
+        host itself uses does. Must be called from the Tk thread (this
+        touches the proxy's Tk object for winfo_id()/.lift(), even
+        though the SetWindowPos call itself is thread-safe)."""
+        _HWND_TOPMOST = -1
+        _SWP = 0x0002 | 0x0001 | 0x0010  # NOMOVE | NOSIZE | NOACTIVATE
         for layer in self._z_sorted:
             if (layer._input_proxy is not None
                     and layer.visible and not layer.click_through):
+                proxy = layer._input_proxy
                 try:
-                    layer._input_proxy.lift()
+                    hwnd = _user32_subcls.GetAncestor(proxy.winfo_id(), 2)
+                    if hwnd:
+                        _user32_subcls.SetWindowPos(
+                            hwnd, _HWND_TOPMOST, 0, 0, 0, 0, _SWP)
+                except Exception:
+                    pass
+                try:
+                    proxy.lift()
                 except Exception:
                     pass
 
@@ -2292,6 +2354,9 @@ class UnifiedOverlay:
             if self._layers_changed:
                 self._layers_changed = False
                 any_dirty = True
+            if self._vf_dirty:
+                self._vf_dirty = False
+                any_dirty = True
 
             has_visible = any(l.visible for l in self._z_sorted)
             if any_dirty:
@@ -2310,11 +2375,9 @@ class UnifiedOverlay:
                     self._sync_host_rgn(has_visible)
             vf = self._vf
             if vf is not None and vf.poll():
-                self._host.hide()
-                _t0 = time.perf_counter()
-                while time.perf_counter() - _t0 < 0.0005:
-                    pass
-                self._host.show()
+                self._ctx.clear(0.0, 0.0, 0.0, 0.0)
+                self._host.swap_buffers()
+                self._vf_dirty = True
                 vf.release()
 
             interval = self._frame_interval if has_visible else 0.05

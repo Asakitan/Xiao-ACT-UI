@@ -221,12 +221,19 @@ import os
 import sys
 
 def _get_config_dir():
-    """获取配置文件目录（打包后使用exe所在目录，开发时使用脚本目录）"""
+    """获取配置文件目录。
+
+    优先 config.BASE_DIR (frozen-aware 应用根: 打包布局下 exe 在
+    <root>\\runtime\\ 而用户数据归 <root>\\); 宿主不可用时回退旧逻辑。
+    """
+    try:
+        from config import BASE_DIR
+        return BASE_DIR
+    except Exception:
+        pass
     if getattr(sys, 'frozen', False):
-        # PyInstaller打包后，使用exe所在目录
         return os.path.dirname(sys.executable)
     else:
-        # 开发环境，使用脚本目录
         return os.path.dirname(__file__)
 
 CONFIG_FILE = os.path.join(_get_config_dir(), 'settings.json')

@@ -31,7 +31,12 @@ def _html_path() -> str:
         os.path.join(_ROOT, "web", "workshop.html"),
     ]
     if getattr(sys, "frozen", False):
-        base = os.path.dirname(sys.executable)
+        # config.BASE_DIR is frozen-aware: packaged web\ lives at the
+        # app root, one level above the runtime\ dir holding the EXE.
+        try:
+            from config import BASE_DIR as base
+        except Exception:
+            base = os.path.dirname(sys.executable)
         candidates.insert(0, os.path.join(base, "web", "workshop.html"))
         candidates.insert(1, os.path.join(base, "runtime", "web", "workshop.html"))
     for c in candidates:
