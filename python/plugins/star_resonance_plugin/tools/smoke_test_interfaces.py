@@ -291,8 +291,8 @@ section("Phase C — Smoke-call key entry points")
 
 def smoke_config():
     import config
+    import settings_crypto
     from plugins.star_resonance_plugin import sr_config as srcfg
-    import json
     import os
     import tempfile
     assert isinstance(config.APP_VERSION, str)
@@ -304,8 +304,9 @@ def smoke_config():
         sm = config.SettingsManager(path)
         sm.set("probe", "ok")
         sm.save()
-        with open(path, "r", encoding="utf-8") as handle:
-            assert json.load(handle).get("probe") == "ok"
+        with open(path, "rb") as handle:
+            decoded = settings_crypto.decode_settings(handle.read())
+        assert decoded.get("probe") == "ok"
 
 
 def smoke_uihelpers_layout():

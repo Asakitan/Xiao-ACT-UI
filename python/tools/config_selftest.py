@@ -5,9 +5,14 @@ from __future__ import annotations
 
 import json
 import os
+import sys
 import tempfile
 import traceback
 
+# runs from tools/ — the importable package root is python/ (parent)
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+import settings_crypto
 from config import SettingsManager
 
 _FAILURE_DETAIL_LINE_LIMIT = 80
@@ -62,8 +67,11 @@ def run_selftest() -> dict:
         settings.save()
         assert settings.get_load_error() == "", (
             "a successful save should clear the load-error flag")
-        with open(path, "r", encoding="utf-8") as handle:
-            repaired = json.load(handle)
+        with open(path, "rb") as handle:
+            saved_raw = handle.read()
+        assert not settings_crypto.is_legacy_plaintext(saved_raw), (
+            "save() must write the encrypted envelope, not plaintext JSON")
+        repaired = settings_crypto.decode_settings(saved_raw)
         assert repaired == {"act_plugin_enabled": {}, "act_plugin_settings": {}}, repaired
 
         clean_path = os.path.join(root, "clean_settings.json")
@@ -71,13 +79,23 @@ def run_selftest() -> dict:
             json.dump({"foo": "bar"}, handle)
         clean_settings = SettingsManager(clean_path)
         assert clean_settings.get_load_error() == "", (
-            "loading a well-formed settings file must not report a load error")
+            "loading a well-formed legacy plaintext settings file must not report a load error")
+        assert clean_settings.get("foo") == "bar", "legacy plaintext values must load correctly"
+        with open(clean_path, "rb") as handle:
+            migrated_raw = handle.read()
+        assert not settings_crypto.is_legacy_plaintext(migrated_raw), (
+            "loading a legacy plaintext settings file must immediately re-save it encrypted, "
+            "instead of waiting for the next explicit save()")
+        assert settings_crypto.decode_settings(migrated_raw) == {"foo": "bar"}, (
+            "auto-migrated file must decrypt back to the original legacy content")
 
     return {
         "ok": True,
         "settings_corrupt_backup": True,
         "settings_save_json": True,
         "settings_load_error_getter": True,
+        "settings_encrypted_at_rest": True,
+        "settings_legacy_plaintext_auto_migrated": True,
     }
 
 

@@ -17,6 +17,8 @@ import time
 import tkinter as tk
 from typing import Optional, Tuple
 
+import settings_crypto
+
 # ═══════════════════════════════════════════════
 #  职业数据 (来源: StarResonanceDamageCounter)
 # ═══════════════════════════════════════════════
@@ -98,36 +100,12 @@ def _default_profile() -> dict:
 
 def _read_settings() -> dict:
     """Read the full settings.json blob; returns {} on any failure."""
-    try:
-        if os.path.exists(_SETTINGS_FILE):
-            with open(_SETTINGS_FILE, 'r', encoding='utf-8') as f:
-                data = json.load(f)
-                if isinstance(data, dict):
-                    return data
-    except Exception:
-        pass
-    return {}
+    return settings_crypto.read_settings_file(_SETTINGS_FILE, migrate=True)
 
 
 def _write_settings(data: dict) -> bool:
     """Atomically write settings.json. Returns True on success."""
-    if not isinstance(data, dict):
-        return False
-    try:
-        dir_name = os.path.dirname(_SETTINGS_FILE) or '.'
-        tmp_path = _SETTINGS_FILE + '.tmp'
-        with open(tmp_path, 'w', encoding='utf-8') as f:
-            json.dump(data, f, ensure_ascii=False, indent=2)
-        os.replace(tmp_path, _SETTINGS_FILE)
-        return True
-    except Exception:
-        # Last-ditch direct write
-        try:
-            with open(_SETTINGS_FILE, 'w', encoding='utf-8') as f:
-                json.dump(data, f, ensure_ascii=False, indent=2)
-            return True
-        except Exception:
-            return False
+    return settings_crypto.write_settings_file(_SETTINGS_FILE, data)
 
 
 def _load_profile_stats(settings: dict) -> tuple[dict, bool]:

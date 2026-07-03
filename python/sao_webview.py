@@ -15,6 +15,8 @@ import numpy as np
 import logging
 from pathlib import Path
 
+import settings_crypto
+
 logger = logging.getLogger(__name__)
 from typing import Any, Dict, List, Optional
 
@@ -291,8 +293,14 @@ class SettingsManager:
             pass
         try:
             if os.path.exists(self._path):
-                with open(self._path, 'r', encoding='utf-8') as f:
-                    self._data = json.load(f)
+                with open(self._path, 'rb') as f:
+                    raw = f.read()
+                data = settings_crypto.decode_settings(raw)
+                if not isinstance(data, dict):
+                    raise ValueError('settings root must be an object')
+                self._data = data
+                if settings_crypto.is_legacy_plaintext(raw):
+                    self.save()
         except Exception:
             self._data = {}
 
@@ -307,14 +315,16 @@ class SettingsManager:
 
         Prevents truncation when os._exit() kills the process mid-write.
         """
+        tmp_path = ''
         try:
             import tempfile
+            blob = settings_crypto.encode_settings(self._data)
             dir_name = os.path.dirname(self._path) or os.getcwd()
             with tempfile.NamedTemporaryFile(
-                mode='w', dir=dir_name, delete=False,
-                encoding='utf-8', suffix='.tmp.json'
+                mode='wb', dir=dir_name, delete=False,
+                suffix='.tmp.json'
             ) as tmp:
-                json.dump(self._data, tmp, indent=2, ensure_ascii=False)
+                tmp.write(blob)
                 tmp.flush()
                 os.fsync(tmp.fileno())
                 tmp_path = tmp.name
@@ -328,8 +338,9 @@ class SettingsManager:
                 pass
             # fallback to direct write
             try:
-                with open(self._path, 'w', encoding='utf-8') as f:
-                    json.dump(self._data, f, indent=2, ensure_ascii=False)
+                blob = settings_crypto.encode_settings(self._data)
+                with open(self._path, 'wb') as f:
+                    f.write(blob)
                     f.flush()
                     os.fsync(f.fileno())
             except Exception:

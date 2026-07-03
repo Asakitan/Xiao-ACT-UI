@@ -2,6 +2,20 @@
 
 逐版本变更记录, 最新在前。本文件由 config.py 内联的历史注释迁出。
 
+## v5.2.8: Razorworks 用户插件接入、插件 UI 交互增强与设置/镜像细节修整.
+
+  - **Razorworks user plugin**:
+    - 新增 `python/user_plugins/razorworks/` 插件树, 包含 manifest、运行模块、地图投掷物数据、offsets 与 Cyber Dashboard Web 资源。
+  - **插件 UI / 平台交互**:
+    - `ui_spec` / `sao_plugin_ui_render` 补强插件面板交互控件能力, 菜单/面板/进程选择器/对话框布局与交互继续细化。
+    - AI Editor / Workshop / WebView 代理 / Tk mirror 的拖拽与点击转发路径继续修整, 减少正文区域误拖窗与镜像命中偏差。
+    - 插件管理与 detached panel 主题/刷新时序持续收口。
+  - **配置 / 运行时**:
+    - `midi_piano_plugin` 与 Star Resonance 的角色/设置读取链继续统一到加密 settings 流程。
+    - `config_selftest` 挪入 `tools/`, 新增 settings 加密相关辅助资源与自测入口。
+  - **渲染 / 资源**:
+    - composer / menu bar layout / dialogs 与底部 HUD 调整继续完善 UI 细节。
+
 ## v5.2.7: AI Editor 消息回传 / 本地代理、镜像点击修复与 overlay 区域生成提速.
 
   - **AI Editor / 扩展宿主**:

@@ -10,6 +10,12 @@ the same ``settings.json`` file on disk in dev mode, but the three
 classes have slightly different APIs (atomic save, legacy-key pruning
 sets, etc.) so we keep them as distinct classes.
 
+On disk the file is an AES-256-GCM + DPAPI encrypted envelope (see
+``settings_crypto``), not plain JSON. All readers/writers of this file
+— the three SettingsManager classes plus a couple of plugin modules
+that poke it directly — must go through ``settings_crypto`` or they'll
+either corrupt the shared file or fail to parse it.
+
 CONFIG_FILE is resolved relative to the package's parent directory
 (``sao_auto/``) — matching the original path computation in sao_gui.
 """
@@ -22,6 +28,7 @@ import shutil
 import tempfile
 from typing import Any, Mapping
 
+import settings_crypto
 from config import DEFAULT_HOTKEYS
 
 
@@ -85,11 +92,14 @@ class SettingsManager:
         dirty = False
         try:
             if os.path.exists(CONFIG_FILE):
-                with open(CONFIG_FILE, 'r', encoding='utf-8') as f:
-                    loaded = json.load(f)
+                with open(CONFIG_FILE, 'rb') as f:
+                    raw = f.read()
+                loaded = settings_crypto.decode_settings(raw)
                 if not isinstance(loaded, dict):
                     raise ValueError('settings root must be an object')
                 self.settings.update(loaded)
+                if settings_crypto.is_legacy_plaintext(raw):
+                    dirty = True
         except Exception as exc:
             self._backup_corrupt_file(exc)
         if self.settings.get('ui_mode') == 'sao':
@@ -107,12 +117,12 @@ class SettingsManager:
             safe_settings = _json_safe(self.settings)
             if not isinstance(safe_settings, dict):
                 raise ValueError('settings root must be an object')
-            blob = json.dumps(safe_settings, indent=2, ensure_ascii=False)
+            blob = settings_crypto.encode_settings(safe_settings)
             dir_name = os.path.dirname(CONFIG_FILE) or os.getcwd()
             os.makedirs(dir_name, exist_ok=True)
             with tempfile.NamedTemporaryFile(
-                mode='w', dir=dir_name, delete=False,
-                encoding='utf-8', suffix='.tmp.json',
+                mode='wb', dir=dir_name, delete=False,
+                suffix='.tmp.json',
             ) as tmp:
                 tmp.write(blob)
                 tmp.flush()

@@ -575,55 +575,36 @@ class MidiPlayer:
     
     def _load_proficiency_data(self):
         """从settings.json加载熟练度数据、C调直转设置和连音重叠设置"""
-        import json
+        import settings_crypto
         from mp_config import CONFIG_FILE
-        try:
-            with open(CONFIG_FILE, 'r', encoding='utf-8') as f:
-                data = json.load(f)
-                self._song_play_counts = data.get('song_play_counts', {})
-                # 加载C调直转模式设置
-                self._direct_c_mode = data.get('direct_c_mode', False)
-                # 加载连音重叠设置
-                self._legato_overlap_enabled = data.get('legato_overlap', LEGATO_OVERLAP_ENABLED)
-        except Exception:
-            self._song_play_counts = {}
-            self._direct_c_mode = False
-            self._legato_overlap_enabled = LEGATO_OVERLAP_ENABLED
+        data = settings_crypto.read_settings_file(CONFIG_FILE, migrate=True)
+        self._song_play_counts = data.get('song_play_counts', {})
+        # 加载C调直转模式设置
+        self._direct_c_mode = data.get('direct_c_mode', False)
+        # 加载连音重叠设置
+        self._legato_overlap_enabled = data.get('legato_overlap', LEGATO_OVERLAP_ENABLED)
     
     def _save_proficiency_data(self):
         """保存熟练度数据到settings.json"""
-        import json
+        import settings_crypto
         from mp_config import CONFIG_FILE
-        try:
-            with open(CONFIG_FILE, 'r', encoding='utf-8') as f:
-                data = json.load(f)
-        except Exception as e:
-            print(f"[熟练度] 读取配置失败: {e}")
-            data = {}
+        data = settings_crypto.read_settings_file(CONFIG_FILE)
         data['song_play_counts'] = self._song_play_counts
-        try:
-            with open(CONFIG_FILE, 'w', encoding='utf-8') as f:
-                json.dump(data, f, ensure_ascii=False, indent=2)
+        if settings_crypto.write_settings_file(CONFIG_FILE, data):
             print(f"[熟练度] 已保存到 {CONFIG_FILE}")
-        except Exception as e:
-            print(f"[熟练度] 保存失败: {e}")
+        else:
+            print("[熟练度] 保存失败")
     
     def _save_direct_c_mode(self):
         """保存C调直转模式设置到settings.json"""
-        import json
+        import settings_crypto
         from mp_config import CONFIG_FILE
-        try:
-            with open(CONFIG_FILE, 'r', encoding='utf-8') as f:
-                data = json.load(f)
-        except Exception as e:
-            data = {}
+        data = settings_crypto.read_settings_file(CONFIG_FILE)
         data['direct_c_mode'] = self._direct_c_mode
-        try:
-            with open(CONFIG_FILE, 'w', encoding='utf-8') as f:
-                json.dump(data, f, ensure_ascii=False, indent=2)
+        if settings_crypto.write_settings_file(CONFIG_FILE, data):
             print(f"[C调直转] 设置已保存: {'开启' if self._direct_c_mode else '关闭'}")
-        except Exception as e:
-            print(f"[C调直转] 保存设置失败: {e}")
+        else:
+            print("[C调直转] 保存设置失败")
     
     def toggle_legato_overlap(self) -> bool:
         """切换连音重叠（延音到下个音符）开关，返回切换后的状态"""
@@ -658,20 +639,14 @@ class MidiPlayer:
     
     def _save_legato_overlap(self):
         """保存连音重叠设置到settings.json"""
-        import json
+        import settings_crypto
         from mp_config import CONFIG_FILE
-        try:
-            with open(CONFIG_FILE, 'r', encoding='utf-8') as f:
-                data = json.load(f)
-        except Exception:
-            data = {}
+        data = settings_crypto.read_settings_file(CONFIG_FILE)
         data['legato_overlap'] = self._legato_overlap_enabled
-        try:
-            with open(CONFIG_FILE, 'w', encoding='utf-8') as f:
-                json.dump(data, f, ensure_ascii=False, indent=2)
+        if settings_crypto.write_settings_file(CONFIG_FILE, data):
             print(f"[连音重叠] 设置已保存: {'开启' if self._legato_overlap_enabled else '关闭'}")
-        except Exception as e:
-            print(f"[连音重叠] 保存设置失败: {e}")
+        else:
+            print("[连音重叠] 保存设置失败")
     
     # ==================== 物理延音踏板（空格键） ====================
     

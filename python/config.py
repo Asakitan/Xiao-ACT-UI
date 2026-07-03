@@ -2,7 +2,6 @@
 """Shared configuration and settings helpers for SAO Auto."""
 
 import filecmp
-import json
 import os
 import shutil
 import sys
@@ -401,7 +400,7 @@ UPDATE_TARGET = "windows-x64"
 
 WINDOW_TITLE = "SAO Auto - Game HUD"
 WINDOW_SIZE = "900x980"
-APP_VERSION = "5.2.7"
+APP_VERSION = "5.2.8"
 APP_VERSION_LABEL = f"v{APP_VERSION}"
 # 完整版本历史见 CHANGELOG.md。
 
@@ -594,6 +593,8 @@ def _get_config_dir():
 
 CONFIG_FILE = os.path.join(_get_config_dir(), "settings.json")
 
+import settings_crypto
+
 
 class SettingsManager:
     _LEGACY_KEYS = ("last_file", "speed", "transpose", "chord_mode")
@@ -631,11 +632,14 @@ class SettingsManager:
             pass
         try:
             if os.path.exists(self._path):
-                with open(self._path, "r", encoding="utf-8") as handle:
-                    self._data = json.load(handle)
+                with open(self._path, "rb") as handle:
+                    raw = handle.read()
+                self._data = settings_crypto.decode_settings(raw)
                 if not isinstance(self._data, dict):
                     raise ValueError("settings root must be an object")
                 self._load_error = ""
+                if settings_crypto.is_legacy_plaintext(raw):
+                    self.save()
         except Exception as exc:
             self._load_error = str(exc)
             self._backup_corrupt_file(exc)
@@ -667,13 +671,13 @@ class SettingsManager:
         with self._lock:
             for legacy_key in self._LEGACY_KEYS:
                 self._data.pop(legacy_key, None)
-            blob = json.dumps(self._data, indent=2, ensure_ascii=False)
+            blob = settings_crypto.encode_settings(self._data)
         tmp_path = ""
         try:
             dir_name = os.path.dirname(self._path) or os.getcwd()
             os.makedirs(dir_name, exist_ok=True)
             with tempfile.NamedTemporaryFile(
-                mode="w", dir=dir_name, delete=False, encoding="utf-8", suffix=".tmp.json"
+                mode="wb", dir=dir_name, delete=False, suffix=".tmp.json"
             ) as tmp:
                 tmp.write(blob)
                 tmp.flush()
