@@ -352,6 +352,9 @@ class CompositorLayer:
         self._frame_bytes: Optional[bytes] = None
         self._frame_w = 0
         self._frame_h = 0
+        # (bytes, w, h, seq) 原子快照: RGN 扫描与 upload 跨线程, 分别读
+        # 三个字段会撕裂 (旧 buffer + 新尺寸) 并让 Cython 扫描越界崩溃
+        self._frame_snapshot: Optional[tuple] = None
         self._frame_seq = 0
         self._uploaded_seq = -1
         self._lock = threading.Lock()
@@ -446,6 +449,7 @@ class CompositorLayer:
             self._frame_w = w
             self._frame_h = h
             self._frame_seq += 1
+            self._frame_snapshot = (bgra, w, h, self._frame_seq)
             self._dirty = True
 
     def set_mmf_source(self, mmf_name: Optional[str]) -> None:
@@ -668,6 +672,7 @@ class CompositorLayer:
         self._frame_bytes = frame
         self._frame_w = w
         self._frame_h = h
+        self._frame_snapshot = (frame, w, h, self._frame_seq)
         return True
 
     def _ensure_texture(self, ctx: moderngl.Context) -> None:
@@ -1570,10 +1575,19 @@ class UnifiedOverlay:
                         ly + layer_h + pad))
                     continue
 
-                fb = layer._frame_bytes
-                fw = layer._frame_w
-                fh = layer._frame_h
-                if not fb or fw <= 0 or fh <= 0:
+                # 一次性读原子快照: upload_bgra 在别的线程写入, 分别读
+                # _frame_bytes/_frame_w/_frame_h 会撕裂出旧 buffer + 新尺寸,
+                # 传给 Cython 扫描就是越界读 (进程级崩溃)
+                snapshot = layer._frame_snapshot
+                if snapshot is not None:
+                    fb, fw, fh, fseq = snapshot
+                else:
+                    fb = layer._frame_bytes
+                    fw = layer._frame_w
+                    fh = layer._frame_h
+                    fseq = layer._frame_seq
+                if (not fb or fw <= 0 or fh <= 0
+                        or len(fb) < fw * fh * 4):
                     spans.append((
                         lx - pad, ly - pad,
                         lx + layer_w + pad,
@@ -1584,7 +1598,7 @@ class UnifiedOverlay:
                 # padding is NOT part of the key, so another layer's move
                 # (or this layer's own moving flag flipping) never forces a
                 # re-scan when the actual pixels haven't changed.
-                cache_key = (layer._frame_seq, lx, ly)
+                cache_key = (fseq, lx, ly)
                 if layer._rgn_cache_key == cache_key:
                     layer_spans = layer._rgn_cached_spans
                     content_changed = False
