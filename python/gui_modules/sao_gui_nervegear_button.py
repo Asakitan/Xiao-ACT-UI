@@ -345,6 +345,46 @@ class GpuNerveGearButton:
     def raise_topmost(self) -> None:
         if self._destroyed:
             return
+        delegate = getattr(self._win, '_delegate', None)
+        if delegate is not None:
+            # Unified compositor: self._win._hwnd is uo.hwnd — the ONE
+            # shared host window every layer draws into, not a window
+            # of this button's own. The legacy GLFW-era path below
+            # (SetWindowPos(hwnd, HWND_TOPMOST, ...)) would push that
+            # SHARED host to real WS_EX_TOPMOST, directly above this
+            # button's Tk input proxy. Host and proxy live on DIFFERENT
+            # THREADS (compositor render thread vs. Tk main thread) —
+            # measured live: 3 calls of the old path were enough to
+            # make WindowFromPoint start reporting the host instead of
+            # the proxy at the ball's coordinates, and the button
+            # stopped receiving clicks entirely (the same same-thread-
+            # only limitation as HTTRANSPARENT — see
+            # OverlayHost.set_input_passthrough's docstring — applies
+            # to a same-process cross-thread WS_EX_TRANSPARENT hand-off
+            # too, not just cross-process). Called every 2s by
+            # _start_topmost_loop, this reliably broke the button
+            # within seconds of it appearing. OverlayHost is
+            # deliberately created WITHOUT WS_EX_TOPMOST for exactly
+            # this reason ("z-order managed by compositor
+            # _enforce_z_order", never real Windows topmost) — nothing
+            # should be forcing it there.
+            #
+            # "Stay on top" in unified mode instead means: bump this
+            # layer's compositing order (internal z_order bookkeeping,
+            # touches no real HWND) and keep the proxy itself — which
+            # actually owns the clicks — in the topmost band.
+            try:
+                delegate.raise_to_top()
+            except Exception:
+                pass
+            try:
+                proxy = delegate.layer._input_proxy
+                if proxy is not None:
+                    proxy.attributes('-topmost', True)
+                    proxy.lift()
+            except Exception:
+                pass
+            return
         hwnd = getattr(self._win, '_hwnd', 0)
         if not hwnd:
             return
