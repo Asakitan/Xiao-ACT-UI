@@ -1484,15 +1484,23 @@ class UnifiedOverlay:
                 except Exception:
                     pass
             return
-        if self._has_visible_interactive_layers():
-            if self._host_rgn_key != 'full':
-                self._host_rgn_key = 'full'
-                try:
-                    _ct.windll.user32.SetWindowRgn(
-                        self._host.hwnd, None, False)
-                except Exception:
-                    pass
-            return
+        # NOTE: visible interactive layers used to short-circuit to a FULL
+        # window region here ("host must receive input everywhere, NCHITTEST
+        # filters per-point"). That model is broken cross-process: outside
+        # an interactive layer's rect the WndProc returns HTTRANSPARENT,
+        # which only forwards hit-testing to windows of the SAME thread —
+        # clicks over the game/desktop landed on the full-region host and
+        # died there. A persistent small interactive layer (the NerveGear
+        # trigger button) therefore made the ENTIRE screen unclickable.
+        # Interactive layers instead fall through to the span loop below,
+        # contributing their bounding rect (render_fn layers carry no
+        # frame bytes, so the no-fb branch handles them): clicks inside
+        # the rect reach the host and route to the layer, clicks anywhere
+        # else fall outside the window region and the OS hit-tests the
+        # next real window natively. Modal outside-click behavior does not
+        # depend on the full region either — the GPU popup closes via
+        # foreground-HWND polling (_poll_foreground), which the now-passed-
+        # through click triggers naturally.
         try:
             ox = self._host.origin_x
             oy = self._host.origin_y
