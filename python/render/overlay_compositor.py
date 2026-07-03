@@ -317,6 +317,15 @@ _PROXY_SHAPE_COLOR = '#010101'
 # process-shared ctypes.windll.user32 function objects other call sites
 # rely on.
 _user32_subcls = _ct.WinDLL('user32')
+# HWND args/returns MUST be pointer-width. Left as the ctypes default
+# (c_int, 32-bit) these truncate a 64-bit HWND — GetAncestor then reads
+# and returns garbage, so the "already shielded this hwnd?" guard below
+# sees a different value every tick, re-subclasses the WndProc every
+# 200ms, and each re-arm chains CallWindowProc through the PREVIOUS
+# proc. The chain deepens until the per-message stack overflows and the
+# process crashes with no Python traceback ("freeze then crash-exit").
+_user32_subcls.GetAncestor.restype = _wt.HWND
+_user32_subcls.GetAncestor.argtypes = [_wt.HWND, _ct.c_uint]
 _user32_subcls.SetWindowLongPtrW.restype = _ct.c_longlong
 _user32_subcls.SetWindowLongPtrW.argtypes = [
     _wt.HWND, _ct.c_int, _ct.c_longlong]
@@ -325,8 +334,15 @@ _user32_subcls.GetWindowLongPtrW.argtypes = [_wt.HWND, _ct.c_int]
 _user32_subcls.CallWindowProcW.restype = _ct.c_longlong
 _user32_subcls.CallWindowProcW.argtypes = [
     _ct.c_longlong, _wt.HWND, _ct.c_uint, _wt.WPARAM, _wt.LPARAM]
+_user32_subcls.DefWindowProcW.restype = _ct.c_longlong
+_user32_subcls.DefWindowProcW.argtypes = [
+    _wt.HWND, _ct.c_uint, _wt.WPARAM, _wt.LPARAM]
 _PROXY_WNDPROC = _ct.WINFUNCTYPE(
     _ct.c_longlong, _wt.HWND, _ct.c_uint, _wt.WPARAM, _wt.LPARAM)
+# ctypes WndProc callbacks pinned for the process lifetime: a subclassed
+# window can be handed a message after the Python proxy is gone, so the
+# callback must never be GC'd (that would be a use-after-free crash).
+_PROXY_WNDPROC_REFS: list = []
 
 
 def _proxy_shield_activation(proxy) -> None:
@@ -336,15 +352,22 @@ def _proxy_shield_activation(proxy) -> None:
     message handling still promotes the window to foreground on click
     (measured live: the proxy became GetForegroundWindow() with the
     style set). Answering WM_MOUSEACTIVATE with MA_NOACTIVATE at the
-    WndProc level stops that while mouse events keep flowing — the
-    same contract OverlayHost's WndProc uses. Re-entrant per hwnd: Tk
-    recreates the native window when it reapplies wm state to an
-    override-redirect toplevel, dropping both the style and the
-    subclass, so the caller re-invokes this from a slow tick and it
-    re-arms only when the hwnd actually changed."""
-    hwnd = _user32_subcls.GetAncestor(proxy.winfo_id(), 2)  # GA_ROOT
-    if not hwnd or getattr(proxy, '_sao_shield_hwnd', 0) == hwnd:
+    WndProc level stops that while mouse events keep flowing — the same
+    contract OverlayHost's WndProc uses.
+
+    Armed at most ONCE per proxy: re-subclassing on a tick is how the
+    CallWindowProc chain-of-death forms (see the truncation note on
+    _user32_subcls). The shape tick still calls this every 200ms, but
+    the _sao_shielded guard makes every call after the first a no-op."""
+    if getattr(proxy, '_sao_shielded', False):
         return
+    hwnd = _user32_subcls.GetAncestor(proxy.winfo_id(), 2)  # GA_ROOT
+    if not hwnd:
+        return  # window not realized yet — try again next tick
+    # Mark BEFORE subclassing: even if a step below throws, we must not
+    # loop back and re-subclass (the chain-of-death). One shot only.
+    proxy._sao_shielded = True
+
     GWL_EXSTYLE = -20
     WS_EX_NOACTIVATE = 0x08000000
     ex = _user32_subcls.GetWindowLongPtrW(hwnd, GWL_EXSTYLE)
@@ -360,15 +383,15 @@ def _proxy_shield_activation(proxy) -> None:
     def _proc(h, msg, wp, lp):
         if msg == WM_MOUSEACTIVATE:
             return MA_NOACTIVATE
-        return _user32_subcls.CallWindowProcW(state['orig'], h, msg, wp, lp)
+        orig = state['orig']
+        if orig:
+            return _user32_subcls.CallWindowProcW(orig, h, msg, wp, lp)
+        return _user32_subcls.DefWindowProcW(h, msg, wp, lp)
 
     proc_ref = _PROXY_WNDPROC(_proc)
+    _PROXY_WNDPROC_REFS.append(proc_ref)  # never GC
     state['orig'] = _user32_subcls.SetWindowLongPtrW(
         hwnd, GWLP_WNDPROC, _ct.cast(proc_ref, _ct.c_void_p).value)
-    # The ctypes callback must outlive the hwnd or the next message is a
-    # use-after-free crash — pin it on the Tk object it guards.
-    proxy._sao_shield_ref = proc_ref
-    proxy._sao_shield_hwnd = hwnd
 
 
 # ── CompositorLayer ──────────────────────────────────────────────
@@ -679,16 +702,14 @@ class CompositorLayer:
         self._proxy_rgn_key = None
         self._proxy_rgn_seq = -1
 
-        # A slow upkeep tick for two properties one-shot setup can't
-        # hold, self-healing within 200ms of any Tk-side reset:
-        #  * the anti-focus-steal shield — a click on the proxy must
-        #    not deactivate the game ("every key stops working"); Tk
-        #    drops the native window (style, subclass and all) when it
-        #    reapplies wm state to an override-redirect toplevel, so
-        #    the shield re-arms whenever the hwnd changes. See
-        #    _proxy_shield_activation.
-        #  * the hit-shape canvas tracking the layer's current frame
-        #    (a sprite that changes silhouette, e.g. hover growth).
+        # Slow upkeep tick:
+        #  * arm the anti-focus-steal shield once the window is
+        #    realized — a click on the proxy must not deactivate the
+        #    game ("every key stops working"). Idempotent after the
+        #    first success (see _proxy_shield_activation — re-arming is
+        #    what caused the crash, so it must stay one-shot).
+        #  * repaint the hit-shape canvas to track the layer's current
+        #    frame (a sprite that changes silhouette, e.g. hover growth).
         def _shape_tick():
             if self._input_proxy is not proxy:
                 return  # destroyed/replaced — stop the loop
