@@ -190,6 +190,58 @@ class SAOPlayerGUIFisheyeMixin:
                     layer.destroy()
             except Exception:
                 pass
+            self._demote_compositor_host_from_fisheye_topmost()
+
+    def _demote_compositor_host_from_fisheye_topmost(self) -> None:
+        """Undo _raise_compositor_above_fisheye_hit_layer's HWND_TOPMOST push.
+
+        The fisheye hit layer is a full-screen, real WS_EX_TOPMOST Tk
+        window (see _create_fisheye_hit_layer); for the compositor's
+        WM_NCHITTEST-based fallthrough to reach it, the shared host HWND
+        has to sit ABOVE it — which, since the hit layer is topmost,
+        means the host must join the real topmost band too (a non-
+        topmost HWND_TOP chain can't out-rank an actually-topmost
+        window). _raise_compositor_above_fisheye_hit_layer does exactly
+        that, every time the hit layer (re)appears.
+
+        Nothing undid it: _release_fisheye_input_zorder/
+        _restore_fisheye_exit_zorder both early-return in unified mode
+        on the (once-true) assumption that the compositor host is never
+        made topmost there. Once _raise_compositor_above_fisheye_hit_layer
+        started doing exactly that, the host stayed pinned to
+        WS_EX_TOPMOST for the rest of the session after the FIRST fisheye
+        open — OverlayHost is deliberately created WITHOUT WS_EX_TOPMOST
+        (z-order is meant to be managed only by the compositor's own
+        HWND_TOP chaining in _enforce_z_order), and any Tk toplevel
+        created at that point (e.g. a NerveGear/plugin input proxy, also
+        real-topmost) ends up BELOW the now-permanently-topmost host in
+        the topmost band — permanently breaking its clicks, invisibly,
+        for the rest of the run, not just while the fisheye is up.
+
+        Called whenever the hit layer is torn down (full close, or the
+        panel-mode swap in _prepare_fisheye_backdrop_for_panels) — the
+        single choke point for "the hit layer no longer justifies the
+        host being topmost".
+        """
+        try:
+            from render.overlay_compositor import get_unified_overlay
+            uo = get_unified_overlay()
+            host_hwnd = uo.hwnd
+            if not host_hwnd:
+                return
+        except Exception:
+            return
+        try:
+            import ctypes as _ct
+            _u32 = _ct.windll.user32
+            _HWND_NOTOPMOST = -2
+            _SWP = 0x0002 | 0x0001 | 0x0010  # NOMOVE | NOSIZE | NOACTIVATE
+            _u32.SetWindowPos(
+                _ct.wintypes.HWND(host_hwnd), _ct.wintypes.HWND(_HWND_NOTOPMOST),
+                0, 0, 0, 0, _SWP,
+            )
+        except Exception:
+            pass
 
     def _set_fisheye_hit_layer_clickthrough(self, enabled: bool) -> None:
         layer = getattr(self, '_fisheye_hit_layer', None)
