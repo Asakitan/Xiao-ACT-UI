@@ -6,19 +6,31 @@ region around the pet" scenario, asserting the fix at the deterministic
 layer — the host window's SetWindowRgn state — rather than via flaky
 synthetic clicks:
 
-  1. Pet only (click_through=True): host is WS_EX_TRANSPARENT and has NO
-     window region (C1 skips the per-pixel scan). A NULL region + ex-
-     transparent means clicks pass through the whole window — no halo,
-     and no 60Hz region scan burning CPU (the long-run freeze).
+  1. Pet only (click_through=True): host is WS_EX_TRANSPARENT (nothing
+     truly interactive is open) and the region is a REAL, tight scan
+     result reflecting the pet's actual silhouette — NOT a NULL/full-
+     screen shape. A NULL region here was an earlier, incorrect
+     "optimization" (removed): per _sync_host_rgn's own docstring,
+     SetWindowRgn's exclusion — not WS_EX_TRANSPARENT alone — is what
+     reliably lets a click reach the game process; a NULL region means
+     the host's shape covers the WHOLE screen with nothing excluded,
+     which swallows clicks meant for the desktop/game regardless of the
+     ex-style. See host_region_cross_process_selftest.py for the direct
+     cross-process proof.
 
-  2. Pet + NerveGear-style interactive layer WITH an input proxy (C2):
-     host STAYS passthrough, region STAYS NULL. The proxy carries the
-     button's clicks, so the button no longer forces the host to gate
-     input through SetWindowRgn — the pet halo never appears.
+  2. Pet + NerveGear-style interactive layer WITH an input proxy: host
+     STAYS passthrough (True) — the proxy carries the button's clicks,
+     so the button no longer forces the host to gate input through
+     SetWindowRgn. This is the actual fix for the original pet-halo
+     report: the halo came from a proxyless NerveGear forcing the host
+     out of passthrough, not from the region scan running.
 
   3. Counter-test — an interactive layer WITHOUT a proxy: host correctly
      drops out of passthrough and a real region appears (menus/panels
      that still rely on host-HWND routing keep working).
+
+  4. Hiding that layer returns the host to passthrough, region rescans
+     to reflect what's still actually visible.
 
 Needs a GPU/DWM desktop session (same as the app).
 """
@@ -93,6 +105,15 @@ def main() -> int:
     host = uo.host
     failures = []
 
+    def _check_never_null(tag, kind):
+        # A NULL region is the exact signature of the removed Stage-C1
+        # bug (host shape = entire screen, nothing excluded) regardless
+        # of which passthrough state produced it.
+        if kind == 'NULL':
+            failures.append(f'[{tag}] region is NULL (full-screen, no '
+                            f'exclusions) — this is the click-passthrough-'
+                            f'breaking regression, not a valid state ever')
+
     # ── 1. Pet only ────────────────────────────────────────────────
     PW, PH = 240, 360
     pet = uo.create_layer('pet', PW, PH, x=600, y=300, z=200,
@@ -107,10 +128,11 @@ def main() -> int:
     if pass1 is not True:
         failures.append('[1] host should be passthrough with only a '
                         f'click_through pet (got {pass1})')
-    if kind1 != 'NO_REGION':
-        failures.append(f'[1] region should be cleared (NO_REGION) in '
-                        f'passthrough — got {kind1}; the pet halo/scan '
-                        f'would still be live')
+    _check_never_null('1', kind1)
+    if kind1 in ('NO_REGION',):
+        failures.append(f'[1] expected a real region tightly scoped to the '
+                        f'pet silhouette — got {kind1} (no region at all; '
+                        f'the scan should still find the pet\'s pixels)')
 
     # ── 2. Pet + interactive layer WITH input proxy (NerveGear) ────
     from render.overlay_adapter import CompositorOverlayWindow
@@ -135,9 +157,7 @@ def main() -> int:
         failures.append('[2] host must STAY passthrough when the interactive '
                         f'layer has a proxy (got {pass2}) — otherwise the pet '
                         f'halo returns')
-    if kind2 != 'NO_REGION':
-        failures.append(f'[2] region must STAY cleared with a proxied '
-                        f'interactive layer — got {kind2}')
+    _check_never_null('2', kind2)
 
     # ── 3. Counter-test: interactive layer WITHOUT a proxy ─────────
     panel = CompositorOverlayWindow(uo, w=300, h=200, x=200, y=200,
@@ -152,9 +172,10 @@ def main() -> int:
     if pass3 is not False:
         failures.append('[3] host must drop out of passthrough when a '
                         f'proxy-less interactive layer is visible (got {pass3})')
-    if kind3 in ('NO_REGION', 'NULL'):
+    if kind3 == 'NO_REGION':
         failures.append('[3] a real clip region must appear so host-routed '
                         f'panels still receive input — got {kind3}')
+    _check_never_null('3', kind3)
 
     # ── 4. Hide the proxy-less panel → back to passthrough ─────────
     panel.hide()
@@ -165,9 +186,7 @@ def main() -> int:
     if pass4 is not True:
         failures.append('[4] host should return to passthrough after the '
                         f'proxy-less panel hides (got {pass4})')
-    if kind4 != 'NO_REGION':
-        failures.append(f'[4] region should clear again on return to '
-                        f'passthrough — got {kind4}')
+    _check_never_null('4', kind4)
 
     try:
         ng.destroy()

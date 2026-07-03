@@ -1731,26 +1731,29 @@ class UnifiedOverlay:
         """
         if self._host is None:
             return
-        # Click-through-everywhere mode (WS_EX_TRANSPARENT set): the
-        # SetWindowRgn clip region has no job to do. Cross-process input
-        # passes through the whole window via the ex-style, and per-pixel
-        # visual transparency is already DWM alpha. Scanning a per-pixel
-        # region here would only burn a full alpha pass every animated
-        # pet frame (the 60Hz freeze) and — because the region ALSO clips
-        # the window shape, forcing the anti-tear pad — leave a halo of
-        # transparent-but-in-region pixels that turns into a click/cursor
-        # dead zone the instant another layer flips the host out of
-        # passthrough. Drop the region (NULL = natural full-window shape)
-        # and skip the scan entirely while passthrough holds.
-        if getattr(self._host, 'input_passthrough', False):
-            if self._host_rgn_key != 'full':
-                self._host_rgn_key = 'full'
-                try:
-                    _ct.windll.user32.SetWindowRgn(
-                        self._host.hwnd, None, False)
-                except Exception:
-                    pass
-            return
+        # NOTE: this used to short-circuit to a NULL (unclipped, full-
+        # screen) region whenever host.input_passthrough was True,
+        # reasoning that WS_EX_TRANSPARENT alone would let clicks fall
+        # through everywhere. That reasoning was backwards: per this
+        # method's own docstring above, SetWindowRgn's EXCLUSION is the
+        # ONLY reliable way a click reaches the game process — WS_EX_
+        # TRANSPARENT does not work cross-process/cross-thread by
+        # itself (see OverlayHost.set_input_passthrough's docstring). A
+        # NULL region means the host's SHAPE is the entire screen (no
+        # exclusions at all), so regardless of the ex-style, the OS
+        # still considers the host to be sitting over every pixel —
+        # game/desktop clicks landed on the host and died there instead
+        # of falling through. This is why "desktop stayed unclickable"
+        # persisted even with no interactive layers open and the host
+        # correctly WS_EX_TRANSPARENT: the shortcut had thrown away the
+        # actual passthrough mechanism. The scan below must always run
+        # and build a real (non-null) region — tightly excluding
+        # everything but actual layer content — regardless of
+        # input_passthrough. (The pet halo this shortcut was originally
+        # added for was a symptom of NerveGear forcing the host out of
+        # passthrough unnecessarily; that's fixed at the source now by
+        # giving it a Tk input proxy — see attach_layer_input_proxy —
+        # so it no longer needs a scan-side workaround here.)
         if not has_visible:
             if self._host_rgn_key != 'empty':
                 self._host_rgn_key = 'empty'

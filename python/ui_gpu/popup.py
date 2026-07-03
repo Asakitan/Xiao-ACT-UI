@@ -657,6 +657,7 @@ class SAOPopUpMenu:
                 except Exception:
                     pass
                 self._gpu_win = None
+        self._demote_compositor_host_from_popup_topmost()
         if self._presenter is not None and not keep_gpu:
             try:
                 self._presenter.release()
@@ -1379,6 +1380,59 @@ class SAOPopUpMenu:
                 wintypes.HWND(hwnd), wintypes.HWND(HWND_NOTOPMOST),
                 0, 0, 0, 0,
                 SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_NOOWNERZORDER)
+        except Exception:
+            pass
+
+    def _demote_compositor_host_from_popup_topmost(self) -> None:
+        """Undo _raise_to_top's HWND_TOPMOST push on the SHARED compositor
+        host (unified mode only — the legacy branch's own window is
+        handled by _release_input_zorder above).
+
+        ``_raise_to_top`` (called on every tick while the popup is open,
+        e.g. line ~612/773) reads ``self._gpu_win._hwnd`` — in unified
+        mode this is ``uo.hwnd``, the ONE host window every layer draws
+        into, not a window owned by this popup — and pushes it to real
+        ``HWND_TOPMOST``. ``_release_input_zorder`` is the intended
+        undo, called from both ``close()`` and
+        ``force_destroy_overlay()``, but it early-returns whenever
+        ``self._gpu_win._unified`` is True, on the same stale
+        "unified mode never makes the host topmost" assumption that bit
+        the fisheye hit layer (see
+        SAOPlayerGUIFisheyeMixin._demote_compositor_host_from_fisheye_topmost
+        for the sibling fix and full postmortem). Left unfixed here,
+        the host stays pinned to WS_EX_TOPMOST for the rest of the
+        session after the first time this popup opens — burying any
+        Tk input proxy created after that point (NerveGear, a plugin
+        draggable layer) permanently below it, independent of whatever
+        WS_EX_TRANSPARENT/SetWindowRgn state the host is otherwise in.
+
+        Called from ``_destroy_window`` — the single point every close
+        path (``close()``'s fade-then-teardown, and
+        ``force_destroy_overlay()``'s immediate teardown) funnels
+        through once the popup is actually gone.
+        """
+        if sys.platform != 'win32':
+            return
+        try:
+            from render.overlay_compositor import get_unified_overlay
+            uo = get_unified_overlay()
+            host_hwnd = uo.hwnd
+            if not host_hwnd:
+                return
+        except Exception:
+            return
+        try:
+            import ctypes
+            from ctypes import wintypes
+            user32 = ctypes.windll.user32
+            HWND_NOTOPMOST = -2
+            SWP_NOMOVE = 0x0002
+            SWP_NOSIZE = 0x0001
+            SWP_NOACTIVATE = 0x0010
+            user32.SetWindowPos(
+                wintypes.HWND(host_hwnd), wintypes.HWND(HWND_NOTOPMOST),
+                0, 0, 0, 0,
+                SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE)
         except Exception:
             pass
 
