@@ -325,6 +325,13 @@ class OverlayHost:
         self.hwnd: int = 0
         self.hdc: int = 0
         self.hglrc: int = 0
+        # Whether the window is currently click-through everywhere
+        # (WS_EX_TRANSPARENT set). The window is created with that style
+        # (see _create_window), so it starts True. set_input_passthrough
+        # keeps this in sync — the compositor reads it to decide whether
+        # a per-pixel SetWindowRgn clip region is needed at all (it isn't
+        # while the whole window passes clicks through).
+        self.input_passthrough: bool = True
         self.ctx: Any = None  # moderngl.Context
         self._owner_hwnd: int = 0
         self._class_name: str = ''
@@ -716,6 +723,7 @@ class OverlayHost:
             new_ex = ex & ~WS_EX_TRANSPARENT
         if new_ex != ex:
             _user32.SetWindowLongPtrW(self.hwnd, GWL_EXSTYLE, new_ex)
+        self.input_passthrough = bool(passthrough)
 
     def set_capture_mode(self, exclude: bool) -> None:
         try:

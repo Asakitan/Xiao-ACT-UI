@@ -1418,6 +1418,43 @@ class UnifiedOverlay:
                 self._host.set_input_passthrough(True)
         self._cmd_q.put(_set)
 
+    def attach_layer_input_proxy(self, name: str) -> bool:
+        """Give an interactive (non-click-through) layer a Tk input proxy
+        so the host HWND can stay WS_EX_TRANSPARENT (click-through
+        everywhere) instead of capturing input via SetWindowRgn.
+
+        A proxy-less interactive layer forces the whole host out of
+        passthrough; every OTHER visible layer's SetWindowRgn spans then
+        gate input, so a click_through desktop pet's anti-tear pad turns
+        into a flickering click/cursor dead zone around it and cross-
+        process clicks over the pet die. Routing this layer's input
+        through a tiny pinned Tk proxy (the same mechanism plugin
+        draggable layers already use) keeps the host fully click-through.
+        Idempotent — ``create_input_proxy`` no-ops if one already exists.
+        Safe from any thread; the proxy is built on the Tk main thread.
+        Returns False when there's no Tk root to parent the proxy to, in
+        which case the caller keeps the legacy host-HWND input routing.
+        """
+        root = self._root
+        if root is None:
+            return False
+        layer = self._layers.get(name)
+        if layer is None or layer.click_through:
+            return False
+
+        def _apply():
+            try:
+                layer.create_input_proxy(root)
+                layer.sync_input_proxy()
+                self.sync_host_input_mode()
+            except Exception:
+                pass
+        try:
+            root.after(0, _apply)
+        except Exception:
+            _apply()
+        return True
+
     def force_host_hidden(self, hidden: bool) -> None:
         """Temporarily hide/show the host window itself.
 
@@ -1487,6 +1524,26 @@ class UnifiedOverlay:
         no position write means no ``_dirty``, so nothing to race.
         """
         if self._host is None:
+            return
+        # Click-through-everywhere mode (WS_EX_TRANSPARENT set): the
+        # SetWindowRgn clip region has no job to do. Cross-process input
+        # passes through the whole window via the ex-style, and per-pixel
+        # visual transparency is already DWM alpha. Scanning a per-pixel
+        # region here would only burn a full alpha pass every animated
+        # pet frame (the 60Hz freeze) and — because the region ALSO clips
+        # the window shape, forcing the anti-tear pad — leave a halo of
+        # transparent-but-in-region pixels that turns into a click/cursor
+        # dead zone the instant another layer flips the host out of
+        # passthrough. Drop the region (NULL = natural full-window shape)
+        # and skip the scan entirely while passthrough holds.
+        if getattr(self._host, 'input_passthrough', False):
+            if self._host_rgn_key != 'full':
+                self._host_rgn_key = 'full'
+                try:
+                    _ct.windll.user32.SetWindowRgn(
+                        self._host.hwnd, None, False)
+                except Exception:
+                    pass
             return
         if not has_visible:
             if self._host_rgn_key != 'empty':
@@ -1718,7 +1775,20 @@ class UnifiedOverlay:
                 return
             self._host_rgn_key = key
             rgn = _build_region_from_rects(spans)
-            _ct.windll.user32.SetWindowRgn(self._host.hwnd, rgn, False)
+            ok = _ct.windll.user32.SetWindowRgn(self._host.hwnd, rgn, False)
+            if not ok:
+                # SetWindowRgn only assumes ownership of the HRGN on
+                # success. On failure the region would leak; one leak per
+                # failed frame drains the process GDI handle table over a
+                # long animated-pet session (every frame rebuilds the
+                # region), and once GDI handles run out the whole UI
+                # freezes. Free it and drop the cached key so the next
+                # tick rebuilds instead of trusting this never-applied one.
+                try:
+                    _gdi32.DeleteObject(rgn)
+                except Exception:
+                    pass
+                self._host_rgn_key = None
         except Exception:
             pass
 

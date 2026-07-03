@@ -260,6 +260,17 @@ class GpuNerveGearButton:
             cursor_leave_fn=self._handle_cursor_leave,
             mouse_button_fn=self._handle_mouse_button,
         )
+        # Persistent interactive layer: route its input through a Tk
+        # proxy so the shared overlay host stays click-through
+        # everywhere. Otherwise this button alone forces the host out of
+        # passthrough and every other layer's click region starts gating
+        # input — a running desktop pet then shows a flickering
+        # click/cursor dead-zone halo and clicks over it stop reaching
+        # the game. No-op on the legacy GLFW path (own window).
+        try:
+            self._win.enable_input_proxy()
+        except Exception:
+            pass
         # Don't show or stage frames yet — LinkStart animation controls
         # visibility via set_alpha / deiconify at the right moment.
         self._stage_frame(force=True)

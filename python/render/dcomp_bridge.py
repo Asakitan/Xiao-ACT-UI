@@ -144,6 +144,22 @@ _D3D11_BIND_RENDER_TARGET = 0x20
 _D3D11_CPU_ACCESS_WRITE = 0x10000
 _D3D11_MAP_WRITE = 2
 
+# DXGI present status / error codes (unsigned HRESULT form). A monitor
+# powering off (DPMS) usually surfaces as the benign OCCLUDED *success*
+# status — the present simply didn't reach the panel; the device is
+# fine. A GPU TDR / driver re-init (which a display-mode switch or a
+# power transition can trigger) surfaces as one of the DEVICE_* errors,
+# after which every D3D11/DXGI COM pointer we hold is dangling.
+_DXGI_STATUS_OCCLUDED = 0x087A0001
+_DXGI_ERROR_DEVICE_REMOVED = 0x887A0005
+_DXGI_ERROR_DEVICE_HUNG = 0x887A0006
+_DXGI_ERROR_DEVICE_RESET = 0x887A0007
+_DEVICE_LOST_CODES = frozenset((
+    _DXGI_ERROR_DEVICE_REMOVED,
+    _DXGI_ERROR_DEVICE_HUNG,
+    _DXGI_ERROR_DEVICE_RESET,
+))
+
 # ── COM vtable indices ──────────────────────────────────────────
 # Counted from the C++ header declaration order (IUnknown = 0‑2).
 
@@ -188,10 +204,14 @@ def _hr_ok(hr: int, label: str) -> int:
     return hr
 
 
-# Zero-copy pointer to bytes internal buffer
-_PyBytes_AsString = ctypes.pythonapi.PyBytes_AsString
-_PyBytes_AsString.restype = c_void_p
-_PyBytes_AsString.argtypes = [ctypes.py_object]
+# Zero-copy pointer to bytes internal buffer. Deliberately NOT
+# ctypes.pythonapi.PyBytes_AsString: with a statically linked CPython
+# runtime (Nuitka standalone) the host EXE exports no Python C API
+# symbols, so any pythonapi attribute lookup raises AttributeError at
+# import time. c_char_p conversion of a bytes object references the
+# same internal buffer (no copy) through plain ctypes machinery.
+def _bytes_ptr(b: bytes) -> int:
+    return ctypes.cast(ctypes.c_char_p(b), c_void_p).value
 
 # ── WGL_NV_DX_interop2 bridge (Part A: GPU-to-GPU present) ──────
 #
@@ -915,6 +935,38 @@ class DCompBridge:
 
     # ── per-frame ────────────────────────────────────────────────
 
+    def _note_present_hr(self, hr: int) -> bool:
+        """Inspect a ``Present`` HRESULT and, on a lost device, put the
+        bridge into a safe dead state.
+
+        A removed/reset/hung device means the display adapter re-
+        initialised — the D3D11 device, swapchain, and every COM
+        pointer derived from them are now dangling. Continuing to call
+        ``Map``/``GetBuffer``/``CopyResource``/``Present`` into them is
+        an access violation in native code that the Python ``try`` here
+        cannot catch (observed as the whole app crash-exiting when the
+        screen powers off / the GPU resets). Marking ``_alive = False``
+        makes every present method short-circuit at its opening guard,
+        so ``_present_frame`` falls back to plain ``SwapBuffers`` (which
+        stays valid — the WGL window context survives a mere monitor
+        power event) and the overlay keeps running instead of dying.
+
+        ``DXGI_STATUS_OCCLUDED`` (a *positive* success code, so the
+        ``hr < 0`` guards elsewhere never see it) is NOT a loss — the
+        monitor is just off; the present was accepted but not shown. We
+        return False and keep presenting so the overlay is already
+        correct the instant the display comes back.
+        """
+        code = hr & 0xFFFFFFFF
+        if code in _DEVICE_LOST_CODES:
+            if self._alive:
+                print(f'[DComp] device lost (0x{code:08X}) — reverting to '
+                      f'SwapBuffers present path', flush=True)
+            self._teardown_gl_interop_state()
+            self._alive = False
+            return True
+        return False
+
     def present(self, pixels, width: int, height: int) -> bool:
         """Upload RGBA pixel data and present via DComp.
 
@@ -933,7 +985,7 @@ class DCompBridge:
         if isinstance(pixels, bytes):
             if len(pixels) < total:
                 return False
-            src_ptr = _PyBytes_AsString(pixels)
+            src_ptr = _bytes_ptr(pixels)
         elif isinstance(pixels, bytearray):
             if len(pixels) < total:
                 return False
@@ -975,8 +1027,10 @@ class DCompBridge:
                 (c_void_p, c_void_p), bb.value, self._staging.value)
             _release(bb)
 
-            _vc(self._swap, _IDXGISwapChain_Present, HRESULT,
-                (c_uint, c_uint), 0, 0)
+            phr = _vc(self._swap, _IDXGISwapChain_Present, HRESULT,
+                      (c_uint, c_uint), 0, 0)
+            if self._note_present_hr(phr):
+                return False
             _vc(self._dc_dev, _IDCompositionDevice_Commit, HRESULT, ())
             return True
 
@@ -1019,7 +1073,7 @@ class DCompBridge:
         if isinstance(pixels, bytes):
             if len(pixels) < total:
                 return False
-            src_ptr = _PyBytes_AsString(pixels)
+            src_ptr = _bytes_ptr(pixels)
         elif isinstance(pixels, bytearray):
             if len(pixels) < total:
                 return False
@@ -1059,8 +1113,10 @@ class DCompBridge:
                 (c_void_p, c_void_p), bb.value, self._staging.value)
             _release(bb)
 
-            _vc(self._swap, _IDXGISwapChain_Present, HRESULT,
-                (c_uint, c_uint), 0, 0)
+            phr = _vc(self._swap, _IDXGISwapChain_Present, HRESULT,
+                      (c_uint, c_uint), 0, 0)
+            if self._note_present_hr(phr):
+                return False
             _vc(self._dc_dev, _IDCompositionDevice_Commit, HRESULT, ())
             return True
 
@@ -1088,8 +1144,10 @@ class DCompBridge:
                 (c_void_p, c_void_p), bb.value, self._gpu_tex.value)
             _release(bb)
 
-            _vc(self._swap, _IDXGISwapChain_Present, HRESULT,
-                (c_uint, c_uint), 0, 0)
+            phr = _vc(self._swap, _IDXGISwapChain_Present, HRESULT,
+                      (c_uint, c_uint), 0, 0)
+            if self._note_present_hr(phr):
+                return False
             _vc(self._dc_dev, _IDCompositionDevice_Commit, HRESULT, ())
             return True
         except Exception as exc:

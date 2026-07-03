@@ -1433,6 +1433,19 @@ class GpuOverlayWindow:
         if self._win is not None:
             self._pump.post_cmd(self._install_input_callbacks)
 
+    def enable_input_proxy(self) -> bool:
+        """Unified compositor only: route this interactive window's input
+        through a pinned Tk proxy so the shared host overlay stays
+        click-through everywhere (see CompositorOverlayWindow.
+        enable_input_proxy). No-op / False on the legacy GLFW path, which
+        already owns its own top-level window for input."""
+        if self._unified and self._delegate is not None:
+            try:
+                return self._delegate.enable_input_proxy()
+            except Exception:
+                return False
+        return False
+
     def request_redraw(self) -> None:
         """Thread-safe: mark dirty so next pump tick draws."""
         if self._unified:

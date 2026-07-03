@@ -192,6 +192,23 @@ class CompositorOverlayWindow:
         except Exception:
             pass
 
+    def enable_input_proxy(self) -> bool:
+        """Route this (non-click-through) layer's input through a pinned
+        Tk proxy so the host stays click-through everywhere.
+
+        For a persistent interactive layer such as the NerveGear trigger
+        button: without this it forces the whole host out of
+        WS_EX_TRANSPARENT, and every other layer's SetWindowRgn spans
+        start gating input — a click_through desktop pet then grows a
+        flickering click/cursor dead-zone halo (its anti-tear pad) and
+        cross-process clicks over it die. See
+        UnifiedOverlay.attach_layer_input_proxy. Returns False if there's
+        no Tk root (legacy host-HWND routing kept)."""
+        try:
+            return self._compositor.attach_layer_input_proxy(self._name)
+        except Exception:
+            return False
+
     # ── Fade / Alpha ─────────────────────────────────────────
 
     def set_alpha(self, alpha: float) -> None:
