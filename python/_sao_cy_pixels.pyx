@@ -1489,3 +1489,98 @@ cpdef list pad_and_merge_row_spans(list spans, int pad):
             cy1 = y1
     merged.append((cx0, cy0, cx1, cy1))
     return merged
+
+
+cpdef int span_row_extent_step(list cur, list prev):
+    """Max silhouette-motion step (px) between two span lists.
+
+    Both lists are (x0, y0, x1, y1) spans in screen coordinates as
+    emitted by ``bgra_alpha_spans()``. Returns the largest of:
+
+    * per-row horizontal extent delta — ``|Δmin_x0|`` / ``|Δmax_x1|``
+      of each row's aggregate extent, over rows present in both lists;
+    * global vertical row-range delta — ``|Δfirst_row|`` / ``|Δlast_row|``.
+
+    This measures how far the content's *silhouette edge* moved between
+    two consecutive frames, which is exactly what a predictive
+    SetWindowRgn pad has to cover: the clip region and the presented
+    pixels are applied by two unsynchronized pipelines, so the region
+    built from frame N can be paired with frame N±1's pixels for one
+    composition. Interior motion that doesn't move the silhouette can't
+    be clipped and correctly measures 0.
+    """
+    cdef Py_ssize_t n = len(cur)
+    cdef Py_ssize_t m = len(prev)
+    if n == 0 or m == 0:
+        return 0
+    cdef dict rows_cur = {}
+    cdef dict rows_prev = {}
+    cdef Py_ssize_t i
+    cdef tuple t
+    cdef long x0, y0, x1
+    cdef long step = 0, d0, d1
+    cdef long cy0, cy1, py0, py1
+    cdef list v, pv
+    cdef object obj, vobj, pobj
+
+    for i in range(m):
+        t = <tuple>prev[i]
+        x0 = <long>t[0]
+        y0 = <long>t[1]
+        x1 = <long>t[2]
+        obj = rows_prev.get(y0)
+        if obj is None:
+            rows_prev[y0] = [x0, x1]
+        else:
+            v = <list>obj
+            if x0 < <long>v[0]:
+                v[0] = x0
+            if x1 > <long>v[1]:
+                v[1] = x1
+    for i in range(n):
+        t = <tuple>cur[i]
+        x0 = <long>t[0]
+        y0 = <long>t[1]
+        x1 = <long>t[2]
+        obj = rows_cur.get(y0)
+        if obj is None:
+            rows_cur[y0] = [x0, x1]
+        else:
+            v = <list>obj
+            if x0 < <long>v[0]:
+                v[0] = x0
+            if x1 > <long>v[1]:
+                v[1] = x1
+
+    for obj, vobj in rows_cur.items():
+        pobj = rows_prev.get(obj)
+        if pobj is None:
+            continue
+        v = <list>vobj
+        pv = <list>pobj
+        d0 = <long>v[0] - <long>pv[0]
+        if d0 < 0:
+            d0 = -d0
+        d1 = <long>v[1] - <long>pv[1]
+        if d1 < 0:
+            d1 = -d1
+        if d0 > step:
+            step = d0
+        if d1 > step:
+            step = d1
+
+    cy0 = <long>min(rows_cur)
+    cy1 = <long>max(rows_cur)
+    py0 = <long>min(rows_prev)
+    py1 = <long>max(rows_prev)
+    d0 = cy0 - py0
+    if d0 < 0:
+        d0 = -d0
+    if d0 > step:
+        step = d0
+    d1 = cy1 - py1
+    if d1 < 0:
+        d1 = -d1
+    if d1 > step:
+        step = d1
+    return <int>step

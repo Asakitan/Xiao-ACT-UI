@@ -45,6 +45,11 @@ try:
 except ImportError:
     _cy_pad_merge_spans = None
 
+try:
+    from _sao_cy_pixels import span_row_extent_step as _cy_span_step
+except ImportError:
+    _cy_span_step = None
+
 
 _REFRESH_MIN_HZ = 60
 _REFRESH_MAX_HZ = 240
@@ -404,6 +409,13 @@ class CompositorLayer:
         # Per-layer RGN span cache (avoids re-scanning unchanged frames)
         self._rgn_cache_key: Any = None
         self._rgn_cached_spans: list = []
+        # Temporal-union state for the host RGN skew cover (see
+        # _sync_host_rgn): the previous distinct span set (screen
+        # coords, unpadded), the spans actually emitted for this layer
+        # last sync, and how many syncs the layer has been unchanged.
+        self._rgn_union_prev: list = []
+        self._rgn_emit_spans: list = []
+        self._rgn_static_ticks: int = 0
 
     def upload_bgra(self, bgra: bytes, w: int, h: int) -> None:
         """Upload premultiplied BGRA frame data (thread-safe).
@@ -980,6 +992,52 @@ def _pad_and_merge_row_spans(spans: list, pad: int) -> list:
     return _pad_and_merge_row_spans_py(spans, pad)
 
 
+def _span_row_extent_step_py(cur: list, prev: list) -> int:
+    """Pure-Python fallback for ``_sao_cy_pixels.span_row_extent_step``
+    (used only when the Cython accelerator isn't built).
+
+    Max silhouette-motion step (px) between two (x0, y0, x1, y1) span
+    lists: the largest per-row horizontal extent delta over rows present
+    in both, or global vertical row-range delta. See the Cython
+    docstring for why this is the quantity a predictive RGN pad covers.
+    """
+    if not cur or not prev:
+        return 0
+    rows_cur: dict = {}
+    rows_prev: dict = {}
+    for spans, rows in ((prev, rows_prev), (cur, rows_cur)):
+        for x0, y0, x1, _y1 in spans:
+            v = rows.get(y0)
+            if v is None:
+                rows[y0] = [x0, x1]
+            else:
+                if x0 < v[0]:
+                    v[0] = x0
+                if x1 > v[1]:
+                    v[1] = x1
+    step = 0
+    for y0, (mn, mx) in rows_cur.items():
+        v = rows_prev.get(y0)
+        if v is None:
+            continue
+        d = abs(mn - v[0])
+        if d > step:
+            step = d
+        d = abs(mx - v[1])
+        if d > step:
+            step = d
+    step = max(step,
+               abs(min(rows_cur) - min(rows_prev)),
+               abs(max(rows_cur) - max(rows_prev)))
+    return step
+
+
+def _span_row_extent_step(cur: list, prev: list) -> int:
+    if _cy_span_step is not None:
+        return _cy_span_step(cur, prev)
+    return _span_row_extent_step_py(cur, prev)
+
+
 # ── UnifiedOverlay ───────────────────────────────────────────────
 class UnifiedOverlay:
     """Manages the single overlay window and composites all layers.
@@ -1372,6 +1430,9 @@ class UnifiedOverlay:
     _RGN_STEP = 1
     _RGN_PAD_STILL = 0
     _RGN_PAD_MOVE = 32
+    _RGN_PAD_ANIM_MIN = 8
+    _RGN_PAD_ANIM_CAP = 128
+    _RGN_STATIC_SETTLE = 3
 
     def _sync_host_rgn(
         self, has_visible: bool,
@@ -1497,7 +1558,9 @@ class UnifiedOverlay:
                 cache_key = (layer._frame_seq, lx, ly)
                 if layer._rgn_cache_key == cache_key:
                     layer_spans = layer._rgn_cached_spans
+                    content_changed = False
                 else:
+                    content_changed = True
                     sx = max(1, layer_w / fw)
                     sy = max(1, layer_h / fh)
                     if _cy is not None:
@@ -1533,10 +1596,79 @@ class UnifiedOverlay:
                     layer._rgn_cached_spans = layer_spans
                     layer._rgn_cache_key = cache_key
 
-                if pad:
-                    spans.extend(_pad_and_merge_row_spans(layer_spans, pad))
+                if content_changed:
+                    # Content and/or position changed this tick. The
+                    # clip region and the presented pixels are applied
+                    # by two unsynchronized pipelines (SetWindowRgn via
+                    # USER32/DWM vs the DComp commit), so the region
+                    # built from THIS frame can be paired on screen with
+                    # the PREVIOUS frame's pixels — or the next frame's,
+                    # one tick from now. An exact-fit region then clips
+                    # whatever moved between the two frames: thick
+                    # shapes just lose a 1-3px sliver off the leading
+                    # edge (invisible), but thin fast-moving bits (hair
+                    # strands, a heel mid-swing) travel further per
+                    # frame than their own width, so the stale region
+                    # has ZERO overlap with their new position and the
+                    # whole feature vanishes while the animation runs.
+                    # The position-move pad above can't help: it scales
+                    # with the LAYER's translation (1-2px/tick during a
+                    # walk), not with intra-sprite limb motion (30-60px
+                    # per pet frame at the extremities), and is 0 when
+                    # the pet animates in place. Two-part cover:
+                    #  * temporal union — also emit the previous span
+                    #    set, so a backward pairing (old pixels under a
+                    #    new region) is covered exactly, including the
+                    #    old position during a move;
+                    #  * predictive pad — sized to the MEASURED
+                    #    silhouette motion between the two frames (x2
+                    #    headroom), covering a forward pairing (new
+                    #    pixels under a stale region) unless the motion
+                    #    more than doubles in a single frame. Scales
+                    #    down to a few px for idle sway: the pad is also
+                    #    the area where clicks over empty pixels get
+                    #    swallowed, so it must not sit at a fixed
+                    #    worst-case width.
+                    prev_spans = layer._rgn_union_prev
+                    if prev_spans:
+                        cstep = _span_row_extent_step(
+                            layer_spans, prev_spans)
+                        pad = max(pad, min(self._RGN_PAD_ANIM_CAP,
+                                           max(self._RGN_PAD_ANIM_MIN,
+                                               cstep * 2)))
+                    else:
+                        pad = max(pad, self._RGN_PAD_MOVE)
+                    if pad:
+                        emit = _pad_and_merge_row_spans(layer_spans, pad)
+                        if prev_spans:
+                            emit.extend(
+                                _pad_and_merge_row_spans(prev_spans, pad))
+                    else:
+                        emit = list(layer_spans)
+                        if prev_spans:
+                            emit.extend(prev_spans)
+                    layer._rgn_union_prev = layer_spans
+                    layer._rgn_emit_spans = emit
+                    layer._rgn_static_ticks = 0
+                    spans.extend(emit)
+                elif layer._rgn_static_ticks < self._RGN_STATIC_SETTLE:
+                    # Unchanged this tick, but the last change is still
+                    # within the pairing-skew window — hold the padded
+                    # union so a late-applying region can't clip the
+                    # final frame. Reusing the emitted list verbatim
+                    # also keeps the SetWindowRgn key stable between pet
+                    # frames instead of oscillating union->exact->union.
+                    layer._rgn_static_ticks += 1
+                    spans.extend(layer._rgn_emit_spans)
                 else:
-                    spans.extend(layer_spans)
+                    # Quiescent past the skew window: settle back to the
+                    # exact-fit spans so idle click-through stays
+                    # per-pixel precise (no permanent pad halo).
+                    if pad:
+                        spans.extend(
+                            _pad_and_merge_row_spans(layer_spans, pad))
+                    else:
+                        spans.extend(layer_spans)
 
             key = hash(tuple(spans)) if spans else 0
             if key == self._host_rgn_key:
