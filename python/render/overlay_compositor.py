@@ -305,6 +305,72 @@ void main() {
 '''
 
 
+# Input-proxy color-key hit shape (see CompositorLayer.create_input_proxy):
+# key color = click-through at the system level, shape color = clickable.
+# The key is an unlikely-to-collide magenta; the shape is near-black and
+# sits under the proxy's 0.01 window alpha, so neither is visible.
+_PROXY_KEY_COLOR = '#FE00FE'
+_PROXY_SHAPE_COLOR = '#010101'
+
+# Dedicated user32 instance for the proxy WndProc subclass: 64-bit-safe
+# Get/SetWindowLongPtrW signatures without mutating the argtypes of the
+# process-shared ctypes.windll.user32 function objects other call sites
+# rely on.
+_user32_subcls = _ct.WinDLL('user32')
+_user32_subcls.SetWindowLongPtrW.restype = _ct.c_longlong
+_user32_subcls.SetWindowLongPtrW.argtypes = [
+    _wt.HWND, _ct.c_int, _ct.c_longlong]
+_user32_subcls.GetWindowLongPtrW.restype = _ct.c_longlong
+_user32_subcls.GetWindowLongPtrW.argtypes = [_wt.HWND, _ct.c_int]
+_user32_subcls.CallWindowProcW.restype = _ct.c_longlong
+_user32_subcls.CallWindowProcW.argtypes = [
+    _ct.c_longlong, _wt.HWND, _ct.c_uint, _wt.WPARAM, _wt.LPARAM]
+_PROXY_WNDPROC = _ct.WINFUNCTYPE(
+    _ct.c_longlong, _wt.HWND, _ct.c_uint, _wt.WPARAM, _wt.LPARAM)
+
+
+def _proxy_shield_activation(proxy) -> None:
+    """Keep a click on the input proxy from stealing foreground focus.
+
+    WS_EX_NOACTIVATE alone is NOT enough for a Tk toplevel — Tk's own
+    message handling still promotes the window to foreground on click
+    (measured live: the proxy became GetForegroundWindow() with the
+    style set). Answering WM_MOUSEACTIVATE with MA_NOACTIVATE at the
+    WndProc level stops that while mouse events keep flowing — the
+    same contract OverlayHost's WndProc uses. Re-entrant per hwnd: Tk
+    recreates the native window when it reapplies wm state to an
+    override-redirect toplevel, dropping both the style and the
+    subclass, so the caller re-invokes this from a slow tick and it
+    re-arms only when the hwnd actually changed."""
+    hwnd = _user32_subcls.GetAncestor(proxy.winfo_id(), 2)  # GA_ROOT
+    if not hwnd or getattr(proxy, '_sao_shield_hwnd', 0) == hwnd:
+        return
+    GWL_EXSTYLE = -20
+    WS_EX_NOACTIVATE = 0x08000000
+    ex = _user32_subcls.GetWindowLongPtrW(hwnd, GWL_EXSTYLE)
+    if not (ex & WS_EX_NOACTIVATE):
+        _user32_subcls.SetWindowLongPtrW(
+            hwnd, GWL_EXSTYLE, ex | WS_EX_NOACTIVATE)
+
+    WM_MOUSEACTIVATE = 0x0021
+    MA_NOACTIVATE = 3
+    GWLP_WNDPROC = -4
+    state = {'orig': 0}
+
+    def _proc(h, msg, wp, lp):
+        if msg == WM_MOUSEACTIVATE:
+            return MA_NOACTIVATE
+        return _user32_subcls.CallWindowProcW(state['orig'], h, msg, wp, lp)
+
+    proc_ref = _PROXY_WNDPROC(_proc)
+    state['orig'] = _user32_subcls.SetWindowLongPtrW(
+        hwnd, GWLP_WNDPROC, _ct.cast(proc_ref, _ct.c_void_p).value)
+    # The ctypes callback must outlive the hwnd or the next message is a
+    # use-after-free crash — pin it on the Tk object it guards.
+    proxy._sao_shield_ref = proc_ref
+    proxy._sao_shield_hwnd = hwnd
+
+
 # ── CompositorLayer ──────────────────────────────────────────────
 class CompositorLayer:
     """A virtual window in the unified overlay compositor.
@@ -392,6 +458,10 @@ class CompositorLayer:
 
         # Tk input proxy (invisible Tk window for mouse events)
         self._input_proxy = None
+        # Per-pixel hit-region state for the proxy (see
+        # _apply_proxy_region): last applied span hash + frame seq.
+        self._proxy_rgn_key: Any = None
+        self._proxy_rgn_seq: int = -1
 
         # Mouse event callbacks
         self._on_cursor_pos: Optional[
@@ -553,7 +623,24 @@ class CompositorLayer:
         proxy.attributes('-alpha', 0.01)
         proxy.geometry(f'{self.width}x{self.height}'
                        f'+{self.x}+{self.y}')
-        proxy.configure(bg='black')
+        # Per-pixel hit shape via LWA_COLORKEY: color-keyed pixels are
+        # click-through at the SYSTEM level (works cross-process), so
+        # only the sprite silhouette painted in _PROXY_SHAPE_COLOR takes
+        # clicks — the transparent padding of the rect (e.g. the corners
+        # around a round button) passes through to the game. This is the
+        # only shaping that works here: the -alpha 0.01 above makes the
+        # proxy a WS_EX_LAYERED window, and SetWindowRgn is silently
+        # ignored on layered windows (verified live: a region applied
+        # right after creation reads back NO_REGION once mapped). The
+        # shape canvas starts empty = fully color-keyed; layers with
+        # frame bytes get their alpha silhouette painted by
+        # _apply_proxy_shape, render_fn-only layers get the full rect.
+        proxy.configure(bg=_PROXY_KEY_COLOR)
+        proxy.attributes('-transparentcolor', _PROXY_KEY_COLOR)
+        shape_canvas = _tk.Canvas(
+            proxy, highlightthickness=0, bd=0, bg=_PROXY_KEY_COLOR)
+        shape_canvas.pack(fill='both', expand=True)
+        proxy._sao_shape_canvas = shape_canvas
 
         def _pos(e):
             if self._on_cursor_pos:
@@ -589,6 +676,101 @@ class CompositorLayer:
         proxy.bind('<ButtonRelease-3>', _release)
         proxy.bind('<MouseWheel>', _scroll)
         self._input_proxy = proxy
+        self._proxy_rgn_key = None
+        self._proxy_rgn_seq = -1
+
+        # A slow upkeep tick for two properties one-shot setup can't
+        # hold, self-healing within 200ms of any Tk-side reset:
+        #  * the anti-focus-steal shield — a click on the proxy must
+        #    not deactivate the game ("every key stops working"); Tk
+        #    drops the native window (style, subclass and all) when it
+        #    reapplies wm state to an override-redirect toplevel, so
+        #    the shield re-arms whenever the hwnd changes. See
+        #    _proxy_shield_activation.
+        #  * the hit-shape canvas tracking the layer's current frame
+        #    (a sprite that changes silhouette, e.g. hover growth).
+        def _shape_tick():
+            if self._input_proxy is not proxy:
+                return  # destroyed/replaced — stop the loop
+            try:
+                _proxy_shield_activation(proxy)
+                self._apply_proxy_shape(proxy)
+            except Exception:
+                pass
+            try:
+                proxy.after(200, _shape_tick)
+            except Exception:
+                pass
+        _shape_tick()
+
+    def _apply_proxy_shape(self, proxy, force: bool = False) -> None:
+        """Paint this layer's alpha silhouette onto the proxy's
+        color-key hit canvas (see create_input_proxy for why a window
+        region can't do this on a layered window).
+
+        Layers without frame bytes (render_fn-only) keep the full rect.
+        Skips both the alpha scan (keyed by frame seq) and the repaint
+        (keyed by span hash) when nothing changed — at the idle steady
+        state this is two integer compares per tick. Tk-main-thread
+        only (same affinity as everything else touching the proxy)."""
+        canvas = getattr(proxy, '_sao_shape_canvas', None)
+        if canvas is None:
+            return
+        snapshot = self._frame_snapshot
+        if snapshot is None:
+            # No pixels to scan — render_fn layer: solid full rect.
+            if self._proxy_rgn_key != 'rect':
+                self._proxy_rgn_key = 'rect'
+                canvas.delete('shape')
+                canvas.create_rectangle(
+                    0, 0, self.width, self.height,
+                    fill=_PROXY_SHAPE_COLOR, outline='', tags='shape')
+            return
+        fb, fw, fh, fseq = snapshot
+        if not fb or fw <= 0 or fh <= 0 or len(fb) < fw * fh * 4:
+            return
+        if not force and fseq == self._proxy_rgn_seq:
+            return
+        self._proxy_rgn_seq = fseq
+        sx = max(1, self.width / fw)
+        sy = max(1, self.height / fh)
+        if _cy_alpha_spans is not None:
+            spans = list(_cy_alpha_spans(fb, fw, fh, 0, 0, sx, sy, 0))
+        else:
+            spans = []
+            stride = fw * 4
+            mv = memoryview(fb)
+            for row in range(fh):
+                row_off = row * stride + 3
+                x = 0
+                while x < fw:
+                    if mv[row_off + x * 4] > 0:
+                        x0 = x
+                        x += 1
+                        while x < fw and mv[row_off + x * 4] > 0:
+                            x += 1
+                        spans.append((
+                            int(math.floor(x0 * sx)),
+                            int(math.floor(row * sy)),
+                            int(math.ceil(x * sx)),
+                            int(math.ceil((row + 1) * sy))))
+                    else:
+                        x += 1
+        # Small pad: forgiving click target at the sprite edge, and it
+        # merges hairline spans so the repaint stays cheap.
+        spans = _pad_and_merge_row_spans(spans, 2)
+        key = hash(tuple(spans)) if spans else 0
+        if not force and key == self._proxy_rgn_key:
+            return
+        self._proxy_rgn_key = key
+        try:
+            canvas.delete('shape')
+            for x0, y0, x1, y1 in spans:
+                canvas.create_rectangle(
+                    x0, y0, x1, y1,
+                    fill=_PROXY_SHAPE_COLOR, outline='', tags='shape')
+        except Exception:
+            self._proxy_rgn_key = None
 
     def sync_input_proxy(self) -> None:
         """Update the input proxy position/size/visibility."""
@@ -602,6 +784,9 @@ class CompositorLayer:
                 proxy.deiconify()
                 proxy.attributes('-topmost', True)
                 proxy.lift()
+                # Geometry may have rescaled the sprite — refresh the
+                # per-pixel hit shape against the new size.
+                self._apply_proxy_shape(proxy, force=True)
             else:
                 proxy.withdraw()
         except Exception:

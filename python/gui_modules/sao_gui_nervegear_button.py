@@ -432,7 +432,22 @@ class GpuNerveGearButton:
             except Exception:
                 img = img.resize((self._w, self._h), Image.LANCZOS)
         try:
-            self._presenter.set_frame(_premultiply_bgra(img), self._w, self._h)
+            bgra = _premultiply_bgra(img)
+            self._presenter.set_frame(bgra, self._w, self._h)
+            # Unified compositor: also hand the frame to the layer
+            # itself. This layer renders via render_fn (the presenter),
+            # so these bytes are never drawn — they exist purely as the
+            # alpha-silhouette source for the input proxy's per-pixel
+            # hit shape (clicks on the transparent corners of the 72px
+            # square must fall through to the game; only the disc is
+            # clickable). Same pattern as Part B layers keeping an MMF
+            # attached only for its alpha byte.
+            delegate = getattr(self._win, '_delegate', None)
+            if delegate is not None:
+                try:
+                    delegate.layer.upload_bgra(bgra, self._w, self._h)
+                except Exception:
+                    pass
             self._win.request_redraw()
             self._last_sig = sig
             self.last_error = None
