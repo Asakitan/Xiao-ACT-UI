@@ -1041,6 +1041,12 @@ class PluginUnifiedOverlayHost:
             key = str(drawable.get("key") or "")
             if not key:
                 continue
+            if key in self._drag_state:
+                # 正在拖拽的层冻结 spec 应用: 拖拽把 state x/y 抢走了,
+                # 此时重建/重上传会使拖拽闭包引用失效层并放大帧竞态;
+                # 松手后下一次 refresh 恢复正常
+                active_keys.add(key)
+                continue
             input_signature = _drawable_input_signature(drawable, pal)
             state = self._layers.get(key)
             if state is not None and state.get("has_frame") and state.get("input_signature") == input_signature:
