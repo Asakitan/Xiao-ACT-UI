@@ -900,6 +900,27 @@ class WorkshopPanel:
                        font=lbl_font, activebackground=_WG_BODY_BG,
                        activeforeground='#ffc040').pack(side='left')
 
+        # Source protection: open-source (downloadable .py) vs closed-source
+        # (server compiles to native + AES-encrypts; source not downloadable).
+        # Sent as the `open_source` publish attribute the client/server
+        # already accept.
+        prot_frame = tk.Frame(body, bg=_WG_BODY_BG)
+        prot_frame.pack(fill='x', pady=(0, 2))
+        tk.Label(prot_frame, text='源码保护', bg=_WG_BODY_BG, fg=_WG_MUTED,
+                 font=lbl_font, width=12, anchor='e').pack(side='left', padx=(0, 6))
+        self._pub_open_source_var = tk.StringVar(value='open')
+        tk.Radiobutton(prot_frame, text='开源 (可下载源码)', variable=self._pub_open_source_var,
+                       value='open', bg=_WG_BODY_BG, fg=_WG_TEXT, selectcolor=_WG_CARD_BG,
+                       font=lbl_font, activebackground=_WG_BODY_BG,
+                       activeforeground=_WG_TEXT).pack(side='left', padx=(0, 12))
+        tk.Radiobutton(prot_frame, text='🔒 闭源加密 (编译保护)', variable=self._pub_open_source_var,
+                       value='protected', bg=_WG_BODY_BG, fg='#5ec8d8', selectcolor=_WG_CARD_BG,
+                       font=lbl_font, activebackground=_WG_BODY_BG,
+                       activeforeground='#5ec8d8').pack(side='left')
+        tk.Label(body, text='闭源加密: 上传后由服务器编译为原生模块并加密，其他用户可安装运行但无法查看或下载源码。',
+                 bg=_WG_BODY_BG, fg=_WG_MUTED, font=get_cjk_font(8),
+                 anchor='w', wraplength=600, justify='left').pack(fill='x', padx=(96, 0), pady=(0, 6))
+
         tk.Frame(body, bg=_WG_SEP, height=1).pack(fill='x', pady=(4, 8))
 
         # Zip file selector
@@ -1380,6 +1401,11 @@ class WorkshopPanel:
         self._pub_desc_var.set(plugin.get('description', ''))
         self._pub_games_var.set(', '.join(plugin.get('game_ids', [])))
         self._pub_author_var.set(plugin.get('author', ''))
+        # Reflect the manifest's source-protection intent if it declares one
+        # (open_source: false → closed-source/encrypted).
+        if getattr(self, '_pub_open_source_var', None) is not None:
+            self._pub_open_source_var.set(
+                'open' if plugin.get('open_source', True) else 'protected')
 
     def _collect_publish_meta(self) -> dict:
         def _split(s): return [x.strip() for x in s.split(',') if x.strip()]
@@ -1406,6 +1432,11 @@ class WorkshopPanel:
             'game_ids': _split(self._pub_games_var.get()),
             'tags': _split(self._pub_tags_var.get()),
             'access_level': self._pub_access_var.get().strip() or 'free',
+            # 'protected' → closed-source (open_source=False); server
+            # compiles native + AES-encrypts. Default 'open' keeps the
+            # source downloadable.
+            'open_source': (getattr(self, '_pub_open_source_var', None) is None
+                            or self._pub_open_source_var.get().strip() != 'protected'),
         }
 
     def _browse_zip(self):
