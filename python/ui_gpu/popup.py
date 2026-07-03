@@ -1410,29 +1410,27 @@ class SAOPopUpMenu:
         path (``close()``'s fade-then-teardown, and
         ``force_destroy_overlay()``'s immediate teardown) funnels
         through once the popup is actually gone.
+
+        Does NOT unconditionally force HWND_NOTOPMOST — an earlier
+        version of this fix did, and that was itself a regression (see
+        the sibling fisheye fix's docstring for the full postmortem):
+        the compositor's ``_enforce_z_order`` decides whether the host
+        SHOULD be topmost (it puts the host into the real topmost band
+        specifically when the attached game window is itself topmost).
+        Forcing NOTOPMOST here unconditionally fights that — if the
+        game (or another topmost overlay) is topmost, this would drop
+        the host BEHIND it. Re-invoking the compositor's own z-order
+        decision clears the stale "popup no longer justifies topmost"
+        state without overriding a legitimate one.
         """
         if sys.platform != 'win32':
             return
         try:
             from render.overlay_compositor import get_unified_overlay
             uo = get_unified_overlay()
-            host_hwnd = uo.hwnd
-            if not host_hwnd:
+            if not uo.hwnd:
                 return
-        except Exception:
-            return
-        try:
-            import ctypes
-            from ctypes import wintypes
-            user32 = ctypes.windll.user32
-            HWND_NOTOPMOST = -2
-            SWP_NOMOVE = 0x0002
-            SWP_NOSIZE = 0x0001
-            SWP_NOACTIVATE = 0x0010
-            user32.SetWindowPos(
-                wintypes.HWND(host_hwnd), wintypes.HWND(HWND_NOTOPMOST),
-                0, 0, 0, 0,
-                SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE)
+            uo._enforce_z_order()
         except Exception:
             pass
 

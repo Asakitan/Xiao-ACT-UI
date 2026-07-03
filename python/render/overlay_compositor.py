@@ -1436,6 +1436,24 @@ class UnifiedOverlay:
           2. User-mode fallback: SetWindowPos(HWND_TOPMOST) if R3
              is unavailable (no driver loaded / calibration failed).
           3. HWND_TOP if no game HWND is set.
+
+        Case 3 explicitly demotes via HWND_NOTOPMOST before HWND_TOP.
+        HWND_TOP ("top of the z order") is NOT the same request as
+        HWND_NOTOPMOST ("clear WS_EX_TOPMOST, sit above all non-topmost
+        windows") — measured live: if the host is CURRENTLY topmost (a
+        stale push from elsewhere outliving its reason — e.g. a popup
+        menu or the fisheye hit layer's own topmost need, see
+        SAOPopUpMenu._demote_compositor_host_from_popup_topmost /
+        SAOPlayerGUIFisheyeMixin._demote_compositor_host_from_fisheye_topmost),
+        SetWindowPos(host, HWND_TOP, ...) alone leaves it stuck topmost.
+        This branch only ever runs when there's no game to track, so
+        there's never a legitimate reason for the host to be topmost
+        here — safe to unconditionally clear it. HWND_NOTOPMOST alone
+        isn't enough either: per its own contract it's a no-op once the
+        window is already non-topmost, so it won't actively push the
+        host back above other windows opened since the last tick —
+        HWND_TOP still does that active "move to the front" work
+        afterward.
         """
         host = self._host
         if host is None:
@@ -1476,7 +1494,11 @@ class UnifiedOverlay:
                         _ct.c_void_p(comp_hwnd), _ct.c_void_p(game),
                         0, 0, 0, 0, _SWP)
             else:
+                _HWND_NOTOPMOST = -2
                 _HWND_TOP = 0
+                u32.SetWindowPos(
+                    _ct.c_void_p(comp_hwnd), _ct.c_void_p(_HWND_NOTOPMOST),
+                    0, 0, 0, 0, _SWP)
                 u32.SetWindowPos(
                     _ct.c_void_p(comp_hwnd), _ct.c_void_p(_HWND_TOP),
                     0, 0, 0, 0, _SWP)

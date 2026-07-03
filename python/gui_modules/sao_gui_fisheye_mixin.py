@@ -222,24 +222,32 @@ class SAOPlayerGUIFisheyeMixin:
         panel-mode swap in _prepare_fisheye_backdrop_for_panels) — the
         single choke point for "the hit layer no longer justifies the
         host being topmost".
+
+        Does NOT unconditionally force HWND_NOTOPMOST — an earlier
+        version of this fix did, and that was itself a regression: the
+        compositor's own ``_enforce_z_order`` (its periodic ~2s tick)
+        decides whether the host SHOULD be topmost — e.g. it puts the
+        host into the real topmost band via the R3 kernel path (or a
+        plain SetWindowPos fallback) specifically when the attached
+        game window is itself topmost. Blindly forcing NOTOPMOST here
+        fights that decision: if the game (or another topmost overlay,
+        Discord/Steam/etc.) is topmost, NOTOPMOST drops the host BEHIND
+        it — "the compositor doesn't stay in front anymore, other
+        windows cover it". The bug this function targets isn't "the
+        host must never be topmost" — it's "the host got topmost from a
+        stale, one-off push (the fisheye hit layer's own needs) that
+        outlived its reason to exist". Re-invoking the compositor's own
+        z-order decision is what actually clears that stale state
+        without overriding a legitimate topmost need — it's the same
+        call ``_enforce_z_order`` runs unconditionally every tick, just
+        pulled forward so the correction doesn't wait for the next one.
         """
         try:
             from render.overlay_compositor import get_unified_overlay
             uo = get_unified_overlay()
-            host_hwnd = uo.hwnd
-            if not host_hwnd:
+            if not uo.hwnd:
                 return
-        except Exception:
-            return
-        try:
-            import ctypes as _ct
-            _u32 = _ct.windll.user32
-            _HWND_NOTOPMOST = -2
-            _SWP = 0x0002 | 0x0001 | 0x0010  # NOMOVE | NOSIZE | NOACTIVATE
-            _u32.SetWindowPos(
-                _ct.wintypes.HWND(host_hwnd), _ct.wintypes.HWND(_HWND_NOTOPMOST),
-                0, 0, 0, 0, _SWP,
-            )
+            uo._enforce_z_order()
         except Exception:
             pass
 
