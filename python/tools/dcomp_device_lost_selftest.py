@@ -83,6 +83,59 @@ def main() -> int:
         failures.append('idempotent: expected _alive=False')
     print(f'  idempotent-2x    alive={b._alive} teardown={b._teardown_calls}')
 
+    # ── device_removed(): proactive GetDeviceRemovedReason probe used
+    # before the un-timeout'd interop lock (wglDXLockObjectsNV has no
+    # timeout parameter and is driver-defined against an already-lost
+    # device — see render_to_gpu_texture_begin's docstring). Mocks
+    # db._vc so no real D3D11 device/COM pointer is needed.
+    orig_vc = db._vc
+    try:
+        b = _make_bridge()
+        b._d3d_dev = object()  # any non-None sentinel; _vc is mocked
+        db._vc = lambda *a, **k: (
+            db._DXGI_ERROR_DEVICE_REMOVED - 0x100000000)
+        removed = b.device_removed()
+        print(f'  device_removed() on a lost device: {removed} '
+              f'(expect True), alive={b._alive} '
+              f'teardown={b._teardown_calls}', flush=True)
+        if not removed or b._alive or b._teardown_calls != 1:
+            failures.append('device_removed(): did not classify a lost '
+                            'device correctly')
+
+        b2 = _make_bridge()
+        b2._d3d_dev = object()
+        db._vc = lambda *a, **k: 0  # S_OK
+        removed2 = b2.device_removed()
+        print(f'  device_removed() on a healthy device: {removed2} '
+              f'(expect False), alive={b2._alive}', flush=True)
+        if removed2 or not b2._alive or b2._teardown_calls != 0:
+            failures.append('device_removed(): a healthy device was '
+                            'misclassified as lost')
+    finally:
+        db._vc = orig_vc
+
+    # render_to_gpu_texture_begin() must check device_removed() BEFORE
+    # ever calling self._interop.lock() — a poisoned _interop (raises if
+    # touched) proves the short-circuit actually prevents reaching the
+    # risky call, not just that the method happens to return False.
+    class _PoisonInterop:
+        def lock(self, *_a, **_k):
+            raise AssertionError(
+                'interop.lock() was called despite a lost device')
+
+    b3 = _make_bridge()
+    b3._gl_interop_active = True
+    b3._interop = _PoisonInterop()
+    b3._gpu_tex_dx_handle = object()
+    b3.device_removed = lambda: True  # simulate a confirmed-lost device
+    began = b3.render_to_gpu_texture_begin()
+    print(f'  render_to_gpu_texture_begin() with a lost device: '
+          f'began={began} (expect False, no AssertionError above)',
+          flush=True)
+    if began:
+        failures.append('render_to_gpu_texture_begin(): returned True '
+                        'despite device_removed() reporting loss')
+
     if failures:
         print('\nFAIL:')
         for f in failures:

@@ -2044,10 +2044,36 @@ class SAOPlayerGUIFisheyeMixin:
             gw = getattr(_ov, 'gpu_win', None)
             presenter = getattr(_ov, 'presenter', None)
             if gw is not None:
+                # gw.destroy() (CompositorOverlayWindow.destroy() in
+                # unified mode) should remove this overlay's compositor
+                # layer via UnifiedOverlay.destroy_layer(). Every fisheye
+                # open allocates a fresh, never-reused layer name (see
+                # overlay_adapter._gen_layer_name) — if anything in the
+                # destroy() chain threw partway through, the except below
+                # swallows it and NOTHING else will ever clean up that
+                # exact name; it pins its own GPU FBO+texture forever.
+                # Over a long session with many fisheye opens, each such
+                # miss compounds: _sync_host_rgn and _render_frame both
+                # scan every layer every tick, so more zombies means a
+                # slower tick, and enough of them accumulate into "running
+                # for a while, it hangs".
+                # Retry the compositor-side cleanup directly by name as a
+                # fallback — idempotent (destroy_layer no-ops if the name
+                # is already gone), so this is safe whether or not
+                # gw.destroy() above actually succeeded.
+                _fisheye_layer_name = getattr(
+                    getattr(gw, '_delegate', None), '_name', None)
                 try:
                     gw.destroy()
                 except Exception:
                     pass
+                if _fisheye_layer_name:
+                    try:
+                        from render import gpu_overlay_window as _gow2
+                        _gow2._get_unified_overlay(
+                            _root_ref).destroy_layer(_fisheye_layer_name)
+                    except Exception:
+                        pass
                 try:
                     _ov.gpu_win = None
                 except Exception:

@@ -129,7 +129,14 @@ class CompositorOverlayWindow:
             return
         self._destroyed = True
         self._visible = False
-        self._layer.destroy_input_proxy()
+        # destroy_input_proxy() must not be able to block destroy_layer()
+        # below — self._destroyed is already True, so a caller that sees
+        # an exception here and never retries would otherwise leak this
+        # layer (and its GPU FBO/texture) forever.
+        try:
+            self._layer.destroy_input_proxy()
+        except Exception:
+            pass
         self._compositor.destroy_layer(self._name)
         try:
             self._compositor.sync_host_input_mode()

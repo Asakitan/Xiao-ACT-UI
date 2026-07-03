@@ -2,6 +2,17 @@
 
 逐版本变更记录, 最新在前。本文件由 config.py 内联的历史注释迁出。
 
+## v5.2.11: DComp 设备丢失提前降级、共享纹理生产者健康门控与图层泄漏兜底.
+
+  - **DComp / device lost**:
+    - `dcomp_bridge` 在进入 interop lock 前主动检查 `GetDeviceRemovedReason`, 设备丢失时直接走 teardown / fallback, 降低渲染线程卡死风险。
+  - **overlay / shared texture**:
+    - `overlay_compositor` 为共享纹理生产者引入 MMF 心跳健康门控, 只有生产者仍在输出时才进入外部纹理锁定/绘制路径。
+    - host region padding 略微收窄, 并补上空 region 创建失败路径的 GDI 句柄释放。
+  - **layer cleanup / selftests**:
+    - `overlay_adapter` 与 fisheye 销毁路径增加图层名兜底清理, 避免 proxy 异常时残留 zombie layer / FBO 泄漏。
+    - 新增并扩展 DComp / layer leak / shared producer 相关 focused selftest。
+
 ## v5.2.10: 应用根路径收口、桌宠置顶修复与捕获排障自测补强.
 
   - **运行时路径 / 打包布局**:

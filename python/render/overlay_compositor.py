@@ -472,6 +472,11 @@ class CompositorLayer:
         self._shared_hobj = None       # interop object handle (lock/unlock)
         self._shared_keyed_mutex = None  # IDXGIKeyedMutex (None = unsynced producer)
         self._shared_attempt_failed = False  # a set handle failed to register
+        # Producer heartbeat, stamped from the MMF side-channel (see
+        # _poll_mmf) — used by _draw_layers to skip locking the shared
+        # texture when the producer looks stuck. 0.0 = no heartbeat
+        # observed yet (not the same as "proven stale").
+        self._shared_producer_last_seen = 0.0
 
         # Optional render-to-FBO callback
         self._render_fn: Optional[
@@ -859,6 +864,11 @@ class CompositorLayer:
         frame = mmf.poll()
         if frame is None:
             return False
+        # A genuinely new frame from this producer process is the
+        # heartbeat _shared_producer_healthy() checks before locking
+        # the (separately attached) GPU-shared texture from the SAME
+        # producer — see that method's docstring.
+        self._shared_producer_last_seen = time.perf_counter()
         w, h = mmf.fw, mmf.fh
         # A layer with an active GPU shared-texture color source (Part B)
         # only needs this MMF frame for its alpha byte (RGN click-through
@@ -910,6 +920,47 @@ class CompositorLayer:
         else:
             self._texture.write(data)
         self._uploaded_seq = seq
+
+    _SHARED_PRODUCER_STALE_S = 1.0
+
+    def _shared_producer_healthy(self) -> bool:
+        """Guard before locking a GPU-shared external texture (see
+        ``_draw_layers``'s ``is_shared`` branch).
+
+        ``wglDXLockObjectsNV`` (``DCompBridge.lock_external_texture``)
+        has no timeout parameter — unlike the keyed-mutex acquire right
+        next to it in the same draw branch, which uses an explicit 8ms
+        timeout specifically because "the producer holds the key only
+        for one CopyResource, so a short timeout only fires if the
+        other side died mid-hold" (see ``keyed_mutex_acquire``'s
+        docstring). If the producer process gets stuck holding the
+        D3D11 resource, this lock can block the render thread
+        indefinitely with no way to time out — reproduced live as
+        "开着桌宠跑一会就卡死, 鱼眼菜单打不开" (running with the desktop
+        pet, it freezes after a while, the fisheye menu won't open):
+        the whole render loop stops (nothing pumps messages, nothing
+        else renders) and only Task Manager can end it.
+
+        The MMF side-channel attached alongside the shared texture for
+        its alpha byte (see ``_poll_mmf``) comes from the SAME producer
+        process, so a recent MMF frame is a cheap, independent signal
+        that the producer is currently alive and responsive. This does
+        NOT fully close the race — the producer could still wedge in
+        the instant between a healthy MMF poll and this tick's lock —
+        but it turns "any transient producer hiccup, ever, in an
+        unbounded-length session" into "a hiccup lasting longer than
+        ``_SHARED_PRODUCER_STALE_S``", which is a much smaller window.
+        A layer with no MMF attached can't be health-checked this way
+        (no independent signal to check) — always healthy rather than
+        silently refusing to ever draw it.
+        """
+        if self._mmf_name is None:
+            return True
+        last_seen = self._shared_producer_last_seen
+        if last_seen == 0.0:
+            return True  # no heartbeat observed yet, not proven stale
+        return (time.perf_counter() - last_seen
+                < self._SHARED_PRODUCER_STALE_S)
 
     def _ensure_shared_texture(self, dc) -> bool:
         """Register/refresh this layer's GPU-shared texture source
@@ -1771,9 +1822,17 @@ class UnifiedOverlay:
 
     _RGN_STEP = 1
     _RGN_PAD_STILL = 0
-    _RGN_PAD_MOVE = 32
-    _RGN_PAD_ANIM_MIN = 8
-    _RGN_PAD_ANIM_CAP = 128
+    # Trimmed ~25% from the original 32/8/128 tuning on request — the
+    # click-through margin around a moving/animating sprite felt too
+    # generous. Kept as a moderate cut, not a removal: _sync_host_rgn's
+    # docstring and the content_changed branch's comments document real,
+    # previously-observed failures (torn/bitten sprite edges, vanishing
+    # fast-moving thin features like hair strands) when this pad was too
+    # small relative to the RGN-vs-present pipeline skew — cut further
+    # only after watching a real fast-motion session for those symptoms.
+    _RGN_PAD_MOVE = 24
+    _RGN_PAD_ANIM_MIN = 6
+    _RGN_PAD_ANIM_CAP = 96
     _RGN_STATIC_SETTLE = 3
 
     def _sync_host_rgn(
@@ -1842,10 +1901,15 @@ class UnifiedOverlay:
             if self._host_rgn_key != 'empty':
                 self._host_rgn_key = 'empty'
                 try:
-                    _ct.windll.user32.SetWindowRgn(
-                        self._host.hwnd,
-                        _ct.windll.gdi32.CreateRectRgn(0, 0, 0, 0),
-                        False)
+                    # SetWindowRgn only takes ownership of the HRGN on
+                    # success — unlike the main per-frame path below,
+                    # this call used to ignore the return value, leaking
+                    # one GDI region handle every time this branch fires
+                    # (visible -> fully hidden) if it ever failed.
+                    empty_rgn = _ct.windll.gdi32.CreateRectRgn(0, 0, 0, 0)
+                    if not _ct.windll.user32.SetWindowRgn(
+                            self._host.hwnd, empty_rgn, False):
+                        _ct.windll.gdi32.DeleteObject(empty_rgn)
                 except Exception:
                     pass
             return
@@ -2717,9 +2781,13 @@ class UnifiedOverlay:
             # moderngl Texture object involved, so this branch handles
             # its own bind/draw further down instead of setting a
             # (tex, prog, vao) triple for the shared tail.
+            # _shared_producer_healthy() must run last (short-circuit):
+            # it's only meaningful once _ensure_shared_texture confirms
+            # a registration actually exists.
             is_shared = (
                 layer._shared_tex_handle is not None
-                and layer._ensure_shared_texture(dc))
+                and layer._ensure_shared_texture(dc)
+                and layer._shared_producer_healthy())
             if is_shared:
                 prog = self._shared_prog
                 vao = self._quad_vao_shared

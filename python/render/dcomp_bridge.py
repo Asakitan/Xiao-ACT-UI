@@ -171,6 +171,7 @@ _IDXGISwapChain_GetBuffer = 9
 _IDXGISwapChain_ResizeBuffers = 13
 _ID3D11Device_CreateTexture2D = 5
 _ID3D11Device_OpenSharedResource = 28
+_ID3D11Device_GetDeviceRemovedReason = 39
 _ID3D11DeviceContext_Map = 14
 _ID3D11DeviceContext_Unmap = 15
 _ID3D11DeviceContext_CopyResource = 47
@@ -835,6 +836,12 @@ class DCompBridge:
         """
         if not self._gl_interop_active:
             return False
+        # Proactive device-loss check BEFORE the interop lock, not
+        # after — see device_removed()'s docstring for why the lock
+        # itself can't be trusted to fail cleanly/promptly against an
+        # already-dead device.
+        if self.device_removed():
+            return False
         if not self._interop.lock(self._gpu_tex_dx_handle):
             return False
         self._gl_fbo_fns['glBindFramebuffer'](GL_FRAMEBUFFER, self._gpu_fbo_id)
@@ -935,6 +942,50 @@ class DCompBridge:
 
     # ── per-frame ────────────────────────────────────────────────
 
+    def _handle_device_loss(self, reason: str) -> None:
+        """Put the bridge into a safe dead state after the D3D11 device
+        is confirmed gone. Shared by ``_note_present_hr`` (reactive —
+        after a Present() already failed) and ``device_removed()``
+        (proactive — checked before risking a call that has no failure
+        path at all, see that method's docstring)."""
+        if self._alive:
+            print(f'[DComp] device lost ({reason}) — reverting to '
+                  f'SwapBuffers present path', flush=True)
+        self._teardown_gl_interop_state()
+        self._alive = False
+
+    def device_removed(self) -> bool:
+        """Cheap, always-non-blocking D3D11 device health probe.
+
+        ``ID3D11Device::GetDeviceRemovedReason`` just reads a stored
+        flag — unlike a ``Present()`` call (which only surfaces a lost
+        device reactively, after already trying to submit a frame) or
+        ``wglDXLockObjectsNV`` (``WglDxInterop.lock``/``render_to_gpu_
+        texture_begin``/``lock_external_texture``): that call has NO
+        timeout parameter in the extension spec at all, and its
+        behavior against an already-lost D3D device is driver-defined
+        — observed live as a sustained CPU+GPU usage spike that reads
+        as a full hang ("开着桌宠挂机久了会突然卡死, 不用开菜单也会",
+        both on display sleep/wake AND with the display continuously
+        on — i.e. any GPU TDR, not just a power-state transition).
+        Call this BEFORE attempting the interop lock each frame so a
+        confirmed-dead device tears down and falls back to plain GL
+        rendering (``ctx.screen``, matching the present path's existing
+        ``swap_buffers`` fallback) instead of the render thread ever
+        reaching that unbounded call again this session.
+        """
+        if self._d3d_dev is None:
+            return False
+        try:
+            hr = _vc(self._d3d_dev, _ID3D11Device_GetDeviceRemovedReason,
+                     HRESULT, ())
+        except Exception:
+            return False
+        if (hr & 0xFFFFFFFF) in _DEVICE_LOST_CODES:
+            self._handle_device_loss(f'0x{hr & 0xFFFFFFFF:08X}')
+            return True
+        return False
+
     def _note_present_hr(self, hr: int) -> bool:
         """Inspect a ``Present`` HRESULT and, on a lost device, put the
         bridge into a safe dead state.
@@ -959,11 +1010,7 @@ class DCompBridge:
         """
         code = hr & 0xFFFFFFFF
         if code in _DEVICE_LOST_CODES:
-            if self._alive:
-                print(f'[DComp] device lost (0x{code:08X}) — reverting to '
-                      f'SwapBuffers present path', flush=True)
-            self._teardown_gl_interop_state()
-            self._alive = False
+            self._handle_device_loss(f'0x{code:08X}')
             return True
         return False
 
