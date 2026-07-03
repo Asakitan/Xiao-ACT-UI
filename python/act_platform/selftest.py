@@ -312,34 +312,10 @@ dictionary@ state()
         os.path.join(workspace_base, os.pardir, os.pardir, "plugins", "script_cutegirl_csharp", "plugin.json")
     )
     if os.path.isfile(workspace_cutegirl_manifest):
+        # 对照当前 Unity/VRM 桌宠 (Xiao-ACT-peto) 的 manifest 契约。
+        # 旧 Tomurai FBX 版的 avatar_contract 字段随插件重写移除, 运行时
+        # 从未消费过该字段, 动作/手势/表情现走引擎侧 IPC 不经 manifest。
         from .runtime import default_plugin_dirs
-
-        with open(workspace_cutegirl_manifest, "r", encoding="utf-8") as f:
-            cutegirl_manifest_data = json.load(f)
-        avatar_contract = cutegirl_manifest_data.get("avatar_contract") or {}
-        action_slots = avatar_contract.get("action_slots") or []
-        for required_action in (
-            "idle",
-            "blink-look",
-            "speaking",
-            "listening",
-            "thinking",
-            "typing",
-            "wave",
-            "happy",
-            "confused",
-            "error",
-            "success",
-            "dance",
-            "dragged",
-            "dropped",
-        ):
-            assert required_action in action_slots, avatar_contract
-        assert "K_Peace" in (avatar_contract.get("hand_sign_slots") or []), avatar_contract
-        assert "Blink_Enable" in (avatar_contract.get("expression_slots") or []), avatar_contract
-        assert "action_surface" in (avatar_contract.get("diagnostics") or []), avatar_contract
-        assert "retarget_surface" in (avatar_contract.get("diagnostics") or []), avatar_contract
-        assert "retarget_calibration" in (avatar_contract.get("diagnostics") or []), avatar_contract
 
         workspace_settings = FakeSettings({"act_plugin_locale": "zh-CN"})
         workspace_bus = EventBus()
@@ -359,32 +335,21 @@ dictionary@ state()
         ), cutegirl_record.path
         assert "act_platform>=1.0" in cutegirl_record.requires, cutegirl_record.requires
         assert "runtime_feature:unioverlay" in cutegirl_record.requires, cutegirl_record.requires
-        assert "runtime_feature:rgba_frame" in cutegirl_record.requires, cutegirl_record.requires
         cutegirl_schema = cutegirl_record.localized_settings_schema("zh-CN")
-        assert cutegirl_schema.get("ssaa", {}).get("default") == 4, cutegirl_schema
-        assert cutegirl_schema.get("target_fps", {}).get("default") == 60, cutegirl_schema
-        assert cutegirl_schema.get("model_path", {}).get("default") == "assets/tomurai_1_00/FBX/Tomurai.fbx", cutegirl_schema
+        assert cutegirl_schema.get("overlay_enabled", {}).get("default") is True, cutegirl_schema
+        assert cutegirl_schema.get("target_fps", {}).get("default") == 90, cutegirl_schema
+        assert cutegirl_schema.get("model_path", {}).get("default") == "", cutegirl_schema
         cutegirl_menu = cutegirl_record.localized_sao_menu("zh-CN")
-        action_ids = {
-            str(action.get("id") or "")
-            for action in cutegirl_menu.get("actions", [])
-            if isinstance(action, dict)
-        }
         assert cutegirl_menu.get("surface") == "unioverlay", cutegirl_menu
-        assert "script.avatar.expression" in action_ids, cutegirl_menu
-        assert "script.avatar.action" in action_ids, cutegirl_menu
-        assert "script.avatar.hand_sign" in action_ids, cutegirl_menu
-        assert "script.avatar.say" in action_ids, cutegirl_menu
-        assert "script.physics.probe" in action_ids, cutegirl_menu
-        assert "script.render.set_quality" in action_ids, cutegirl_menu
+        assert cutegirl_menu.get("setting") == "overlay_enabled", cutegirl_menu
         cutegirl_record.enabled = True
         menu_entry = next(
             item for item in workspace_manager.list_script_menu_entries("zh-CN")
             if item.get("id") == "script_cutegirl_csharp"
         )
         assert menu_entry.get("surface") == "unioverlay", menu_entry
-        assert menu_entry.get("overlay_enabled") is False, menu_entry
-        assert menu_entry.get("menu", {}).get("name") == "GPU桌宠", menu_entry
+        assert menu_entry.get("overlay_enabled") is True, menu_entry
+        assert menu_entry.get("menu", {}).get("name") == "桌宠", menu_entry
         workspace_cutegirl_contract = True
 
     with tempfile.TemporaryDirectory(prefix="act_plugin_selftest_") as root:
