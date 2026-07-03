@@ -4343,6 +4343,7 @@ pre.code-block { overflow:visible; }
     <div class="ab-icon" data-panel="debug-runner" title="Run and Debug"><svg width="20" height="20" viewBox="0 0 20 20" fill="none"><path d="M6 4l9 6-9 6V4z" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/></svg></div>
     <div class="ab-icon active" data-panel="chat" data-i18n-title="chat" title="Assistant"><svg width="20" height="20" viewBox="0 0 20 20" fill="none"><path d="M4 4h12a2 2 0 012 2v7a2 2 0 01-2 2H8l-4 3v-3a2 2 0 01-2-2V6a2 2 0 012-2z" stroke="currentColor" stroke-width="1.5"/></svg></div>
     <div class="ab-icon" data-panel="tools" data-i18n-title="tools" title="Tools"><svg width="20" height="20" viewBox="0 0 20 20" fill="none"><path d="M11.5 2.5l2.5 2.5-7 7-3.5.5.5-3.5 7-7z" stroke="currentColor" stroke-width="1.5"/><path d="M14 8l3-3" stroke="currentColor" stroke-width="1.5"/></svg></div>
+    <div class="ab-icon" data-panel="memviewer" title="Mem Viewer"><svg width="20" height="20" viewBox="0 0 20 20" fill="none"><rect x="4" y="4" width="12" height="12" rx="1.2" stroke="currentColor" stroke-width="1.5"/><path d="M7 4V2M10 4V2M13 4V2M7 18v-2M10 18v-2M13 18v-2M4 7H2M4 10H2M4 13H2M18 7h-2M18 10h-2M18 13h-2" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/></svg></div>
     <div class="ab-icon" data-panel="extensions" data-i18n-title="extensions" title="Extensions"><svg width="20" height="20" viewBox="0 0 20 20" fill="none"><rect x="3" y="8" width="5" height="5" rx="1" stroke="currentColor" stroke-width="1.5"/><rect x="8" y="3" width="5" height="5" rx="1" stroke="currentColor" stroke-width="1.5"/><rect x="8" y="12" width="5" height="5" rx="1" stroke="currentColor" stroke-width="1.5"/><rect x="13" y="8" width="5" height="5" rx="1" stroke="currentColor" stroke-width="1.5"/></svg></div>
     <div class="ab-icon" data-panel="instructions" data-i18n-title="instructions" title="Custom Instructions"><svg width="20" height="20" viewBox="0 0 20 20" fill="none"><path d="M5 3h10a1 1 0 011 1v12a1 1 0 01-1 1H5a1 1 0 01-1-1V4a1 1 0 011-1z" stroke="currentColor" stroke-width="1.5"/><path d="M7 7h6M7 10h6M7 13h4" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/></svg></div>
     <div class="ab-icon" data-panel="agents" data-i18n-title="agents_wf" title="Agents & Workflows"><svg width="20" height="20" viewBox="0 0 20 20" fill="none"><circle cx="10" cy="7" r="3" stroke="currentColor" stroke-width="1.5"/><path d="M4 17c0-3.3 2.7-6 6-6s6 2.7 6 6" stroke="currentColor" stroke-width="1.5"/></svg></div>
@@ -4416,6 +4417,38 @@ pre.code-block { overflow:visible; }
     <div class="sb-view" id="sb-tools" style="display:none">
       <div class="sb-header"><span data-i18n="tools">Engine Tools</span></div>
       <div class="sb-section" id="tools-list"></div>
+    </div>
+    <!-- MemViewer sidebar -->
+    <div class="sb-view" id="sb-memviewer" style="display:none">
+      <div class="sb-header"><span>Mem Viewer</span> <span class="spacer"></span>
+        <span class="sb-action" onclick="refreshMemViewer()" title="Refresh">↻</span>
+      </div>
+      <div class="sb-section" style="padding:8px 10px">
+        <div id="memviewer-status" style="font-size:11px;color:var(--fg-dim);margin-bottom:8px">Not attached</div>
+        <div class="sb-group" style="margin-top:0">Address</div>
+        <input id="memviewer-addr" placeholder="0x7FF6A1230000" style="width:100%;background:var(--bg3);color:var(--fg);
+          border:1px solid var(--border);border-radius:3px;padding:4px 6px;font:12px var(--mono);margin-bottom:6px">
+        <div style="display:flex;gap:6px;align-items:center;margin-bottom:6px">
+          <input id="memviewer-len" type="number" value="256" min="1" max="4096" style="width:72px;background:var(--bg3);
+            color:var(--fg);border:1px solid var(--border);border-radius:3px;padding:4px 6px">
+          <button class="send-btn" onclick="memViewerRead()" style="flex:1">Read Bytes</button>
+        </div>
+        <div style="display:flex;gap:6px;align-items:center;margin-bottom:8px">
+          <select id="memviewer-dtype" style="background:var(--bg3);color:var(--fg);border:1px solid var(--border);
+            border-radius:3px;padding:4px">
+            <option value="u8">u8</option><option value="i8">i8</option>
+            <option value="u16">u16</option><option value="i16">i16</option>
+            <option value="u32" selected>u32</option><option value="i32">i32</option>
+            <option value="u64">u64</option><option value="i64">i64</option>
+            <option value="f32">f32</option><option value="f64">f64</option>
+          </select>
+          <button class="send-btn" onclick="memViewerReadValue()" style="flex:1">Read Value</button>
+        </div>
+        <div class="sb-group">Result</div>
+        <div id="memviewer-result" style="font-size:11px;color:var(--fg-dim);max-height:320px;overflow:auto;
+          white-space:pre-wrap;word-break:break-all;background:var(--bg);padding:6px;border-radius:3px;
+          border:1px solid var(--border);font-family:var(--mono)"></div>
+      </div>
     </div>
     <!-- Search sidebar (find in files) -->
     <div class="sb-view" id="sb-search" style="display:none">
@@ -25478,6 +25511,7 @@ function switchSidebar(panel){
   if(panel==='tools'&&!$('tools-list').children.length){
     call('list_tools').then(t=>renderToolsSidebar(t&&t.tools?t.tools:[]));
   }
+  if(panel==='memviewer')refreshMemViewer();
   if(panel==='scm')refreshScmSidebar(true);
   if(panel==='debug-runner')refreshDebugRunnerSidebar();
   if(panel==='search'){const wsInput=$('ws-search-input');if(wsInput)setTimeout(()=>wsInput.focus(),0)}
@@ -25589,6 +25623,53 @@ function renderToolsSidebar(toolList){
     item.onclick=()=>{const inp=$('chat-input');const cur=inp.value;const prefix=cur&&!cur.endsWith(' ')?cur+' ':cur;setChatInputValue(prefix+'#'+tool.name+' ')};
     list.appendChild(item);
   });
+}
+
+async function refreshMemViewer(){
+  const statusEl=$('memviewer-status');if(!statusEl)return;
+  try{
+    const r=await call('memviewer_status');
+    if(r&&r.attached){
+      statusEl.textContent='Attached: '+r.name+' (pid '+r.pid+', engine '+r.engine+')';
+      statusEl.style.color='var(--fg-success,var(--fg))';
+    }else{
+      statusEl.textContent='Not attached — use Process Selector to attach a process first';
+      statusEl.style.color='var(--fg-dim)';
+    }
+  }catch(e){statusEl.textContent='Status unavailable: '+esc(String(e));statusEl.style.color='var(--fg-error)'}
+}
+function memViewerRenderResult(r){
+  const out=$('memviewer-result');if(!out)return;
+  if(!r||!r.ok){out.textContent='Error: '+String((r&&r.error)||'unknown');return}
+  if('hex' in r){
+    const bytesPerLine=16;const hex=r.hex;const lines=[];
+    for(let i=0;i<hex.length;i+=bytesPerLine*2){
+      const chunk=hex.slice(i,i+bytesPerLine*2);
+      const pairs=[];for(let j=0;j<chunk.length;j+=2)pairs.push(chunk.slice(j,j+2));
+      const offset=(i/2).toString(16).padStart(4,'0');
+      const ascii=r.ascii.slice(i/2,i/2+bytesPerLine);
+      lines.push(offset+'  '+pairs.join(' ').padEnd(bytesPerLine*3-1,' ')+'  '+ascii);
+    }
+    out.textContent=r.address+' ('+r.length+' bytes)\n'+lines.join('\n');
+  }else if('value' in r){
+    out.textContent=r.address+'  ['+r.dtype+']  = '+r.value;
+  }else{
+    out.textContent=JSON.stringify(r,null,2);
+  }
+}
+async function memViewerRead(){
+  const addr=($('memviewer-addr')&&$('memviewer-addr').value||'').trim();
+  const len=parseInt(($('memviewer-len')&&$('memviewer-len').value)||'256',10);
+  if(!addr){memViewerRenderResult({ok:false,error:'address is required'});return}
+  try{memViewerRenderResult(await call('memviewer_read',addr,len))}
+  catch(e){memViewerRenderResult({ok:false,error:String(e)})}
+}
+async function memViewerReadValue(){
+  const addr=($('memviewer-addr')&&$('memviewer-addr').value||'').trim();
+  const dtype=($('memviewer-dtype')&&$('memviewer-dtype').value)||'u32';
+  if(!addr){memViewerRenderResult({ok:false,error:'address is required'});return}
+  try{memViewerRenderResult(await call('memviewer_read_value',addr,dtype))}
+  catch(e){memViewerRenderResult({ok:false,error:String(e)})}
 }
 
 let _historySelectedIndex=0;

@@ -2,6 +2,17 @@
 
 逐版本变更记录, 最新在前。本文件由 config.py 内联的历史注释迁出。
 
+## v5.2.9: AI Editor 只读 Mem Viewer、Nuitka 原生依赖打包策略修正与 Cython 产物刷新.
+
+  - **AI Editor / Mem Viewer**:
+    - 新增只读内存查看链路：`mem_probe.mem_viewer`、AI Editor API / engine tool、以及 Web 侧 `Mem Viewer` 面板。
+    - Process Selector 缓存附加进程名称、PID 与引擎层级，供只读内存查看复用。
+  - **打包 / 自检**:
+    - `build_nuitka.bat` 改为依赖 Nuitka `dll-files` 插件处理 `pywinpty` / `cv2` 原生依赖，移除重复手工 data-file 打包，并加入编译阶段代码页兼容切换。
+    - `ai_editor.selftest` 同步更新为新的打包预期断言。
+  - **Star Resonance / binary refresh**:
+    - 刷新 `_sao_cy_combat` / `_sao_cy_packet` / `_sao_cy_skillfx` / `_sao_cy_sr_uihelpers` 二进制产物。
+
 ## v5.2.8: Razorworks 用户插件接入、插件 UI 交互增强与设置/镜像细节修整.
 
   - **Razorworks user plugin**:

@@ -68,38 +68,32 @@ echo   OK: %LAUNCHER_OUT%\XiaoACTUI.exe
 echo [3/7] Nuitka compilation...
 if exist "%NUITKA_OUT%" rmdir /s /q "%NUITKA_OUT%"
 
-:: AI Editor real terminal PTY (pywinpty, optional dependency, 长期计划A项).
-:: conpty.dll/winpty.dll are sibling files _winpty.pyd loads at runtime (not
-:: link-time deps Nuitka's DLL walker would follow), and OpenConsole.exe/
-:: winpty-agent.exe are standalone executables ConPTY spawns as subprocesses
-:: -- none of the four are Python modules, so they're invisible to Nuitka's
-:: import-following no matter how the module itself is declared. Resolved via
-:: Python at build time since the site-packages path varies per machine/venv.
+:: AI Editor real terminal PTY (pywinpty, optional dependency). Only the
+:: Python modules need explicit inclusion (imported conditionally, so the
+:: import follower misses them). The four native binaries (conpty.dll,
+:: winpty.dll, OpenConsole.exe, winpty-agent.exe) are auto-bundled by
+:: Nuitka's dll-files plugin (built-in winpty package config); listing them
+:: again via --include-data-files makes the build fail with a conflict.
+:: cv2's opencv_videoio ffmpeg DLL is covered the same way.
 set "WINPTY_NUITKA_FLAGS="
 set "WINPTY_DIR="
 for /f "usebackq tokens=*" %%W in (`python -c "import importlib.util as u,os; s=u.find_spec('winpty'); print(os.path.dirname(s.origin)) if s and s.origin else print('')" 2^>nul`) do set "WINPTY_DIR=%%W"
 if defined WINPTY_DIR if not "%WINPTY_DIR%"=="" (
-    echo   pywinpty found at %WINPTY_DIR%, bundling ConPTY binaries
-    set "WINPTY_NUITKA_FLAGS=--include-module=winpty --include-module=winpty.ptyprocess --include-module=winpty.enums --include-data-files=%WINPTY_DIR%\conpty.dll=winpty/conpty.dll --include-data-files=%WINPTY_DIR%\winpty.dll=winpty/winpty.dll --include-data-files=%WINPTY_DIR%\OpenConsole.exe=winpty/OpenConsole.exe --include-data-files=%WINPTY_DIR%\winpty-agent.exe=winpty/winpty-agent.exe"
+    echo   pywinpty found, including winpty modules
+    set "WINPTY_NUITKA_FLAGS=--include-module=winpty --include-module=winpty.ptyprocess --include-module=winpty.enums"
 ) else (
     echo   pywinpty not installed - this build will fall back to pipe-mode terminal only
 )
 
-:: opencv-python (cv2) ships its ffmpeg backend as a loose DLL sibling to
-:: cv2.pyd inside the package directory, not a link-time dependency Nuitka's
-:: DLL walker would follow (阶段8 packaging audit finding) - resolved via
-:: Python at build time same as pywinpty above, since the exact filename is
-:: version-suffixed (e.g. opencv_videoio_ffmpeg4100_64.dll).
-set "CV2_NUITKA_FLAGS="
-set "CV2_DIR="
-for /f "usebackq tokens=*" %%C in (`python -c "import importlib.util as u,os; s=u.find_spec('cv2'); print(os.path.dirname(s.origin)) if s and s.origin else print('')" 2^>nul`) do set "CV2_DIR=%%C"
-if defined CV2_DIR if not "%CV2_DIR%"=="" if exist "%CV2_DIR%\opencv_videoio_ffmpeg*.dll" (
-    echo   cv2 found at %CV2_DIR%, bundling ffmpeg backend DLL
-    set "CV2_NUITKA_FLAGS=--include-data-files=%CV2_DIR%\opencv_videoio_ffmpeg*.dll=cv2/"
-)
-
-python -m nuitka --standalone --assume-yes-for-downloads --windows-console-mode=disable --windows-icon-from-ico=icon.ico --windows-uac-admin --output-dir=%DIST%\nuitka --output-filename=XiaoACTUI.exe --no-prefer-source-code --no-deployment-flag=excluded-module-usage --enable-plugin=tk-inter --include-package=gui_modules --include-package=utils --include-package=render --include-package=updater --include-package=sao_theme --include-package=act_platform --include-package=ui_gpu --include-package=ai_editor --include-package=workshop --include-package=license --include-package=mem_probe --include-module=sao_gui --include-module=sao_webview --include-module=sao_web_panel_common --include-package=google.protobuf --include-package=clr_loader --include-module=clr --include-module=pythonnet --include-module=pygame --include-module=pygame.mixer --include-module=pygame._sdl2 --include-module=cv2 --include-module=PIL.Image --include-module=PIL.ImageDraw --include-module=PIL.ImageFont --include-module=PIL.ImageFilter --include-module=mss --include-module=mss.windows --include-module=windows_capture --include-module=pynput --include-module=pynput.keyboard --include-module=pynput.keyboard._win32 --include-module=pynput.mouse --include-module=pynput.mouse._win32 --include-module=moderngl --include-module=moderngl_window --include-module=moderngl_window.context.glfw --include-module=moderngl_window.context.headless --include-module=glfw --include-module=skia --include-module=zstandard --include-package=lupa --include-data-files=act_platform/scripting/roslyn/*.dll=act_platform/scripting/roslyn/ %WINPTY_NUITKA_FLAGS% %CV2_NUITKA_FLAGS% --nofollow-import-to=matplotlib --nofollow-import-to=scipy --nofollow-import-to=pandas --nofollow-import-to=torch --nofollow-import-to=tensorflow --nofollow-import-to=test --nofollow-import-to=unittest --nofollow-import-to=xmlrpc --nofollow-import-to=doctest --nofollow-import-to=pydoc --nofollow-import-to=webview.platforms.android --nofollow-import-to=webview.platforms.gtk --nofollow-import-to=webview.platforms.cocoa --nofollow-import-to=webview.platforms.qt --nofollow-import-to=ai_editor.selftest --jobs=8 main.py
-if errorlevel 1 (
+:: Localized MSVC (Chinese-only clui resources) emits diagnostics in the
+:: console codepage; under chcp 65001 that is UTF-8, which Nuitka's scons
+:: decodes as mbcs (cp936) and crashes with UnicodeDecodeError. Match the
+:: console CP to the ANSI CP for the compile, restore afterwards.
+chcp 936 >nul 2>&1
+python -m nuitka --standalone --assume-yes-for-downloads --windows-console-mode=disable --windows-icon-from-ico=icon.ico --windows-uac-admin --output-dir=%DIST%\nuitka --output-filename=XiaoACTUI.exe --no-prefer-source-code --no-deployment-flag=excluded-module-usage --enable-plugin=tk-inter --include-package=gui_modules --include-package=utils --include-package=render --include-package=updater --include-package=sao_theme --include-package=act_platform --include-package=ui_gpu --include-package=ai_editor --include-package=workshop --include-package=license --include-package=mem_probe --include-module=sao_gui --include-module=sao_webview --include-module=sao_web_panel_common --include-package=google.protobuf --include-package=clr_loader --include-module=clr --include-module=pythonnet --include-module=pygame --include-module=pygame.mixer --include-module=pygame._sdl2 --include-module=cv2 --include-module=PIL.Image --include-module=PIL.ImageDraw --include-module=PIL.ImageFont --include-module=PIL.ImageFilter --include-module=mss --include-module=mss.windows --include-module=windows_capture --include-module=pynput --include-module=pynput.keyboard --include-module=pynput.keyboard._win32 --include-module=pynput.mouse --include-module=pynput.mouse._win32 --include-module=moderngl --include-module=moderngl_window --include-module=moderngl_window.context.glfw --include-module=moderngl_window.context.headless --include-module=glfw --include-module=skia --include-module=zstandard --include-package=lupa --include-data-files=act_platform/scripting/roslyn/*.dll=act_platform/scripting/roslyn/ %WINPTY_NUITKA_FLAGS% --nofollow-import-to=matplotlib --nofollow-import-to=scipy --nofollow-import-to=pandas --nofollow-import-to=torch --nofollow-import-to=tensorflow --nofollow-import-to=test --nofollow-import-to=unittest --nofollow-import-to=xmlrpc --nofollow-import-to=doctest --nofollow-import-to=pydoc --nofollow-import-to=webview.platforms.android --nofollow-import-to=webview.platforms.gtk --nofollow-import-to=webview.platforms.cocoa --nofollow-import-to=webview.platforms.qt --nofollow-import-to=ai_editor.selftest --jobs=8 main.py
+set "NUITKA_RC=%errorlevel%"
+chcp 65001 >nul 2>&1
+if not "%NUITKA_RC%"=="0" (
     echo ERROR: Nuitka compilation failed
     goto :fail
 )
@@ -141,6 +135,13 @@ if exist "%RELEASE%\runtime\act_platform\scripting\roslyn\Microsoft.CodeAnalysis
     echo   OK: Roslyn compiler bundled
 ) else (
     echo   WARNING: Roslyn DLLs not found in distribution
+)
+if defined WINPTY_DIR if not "%WINPTY_DIR%"=="" (
+    if exist "%RELEASE%\runtime\winpty\conpty.dll" (
+        echo   OK: ConPTY binaries bundled
+    ) else (
+        echo   WARNING: winpty native binaries missing - PTY terminal will fall back to pipe mode
+    )
 )
 
 :: ---- [7/7] Verify ----

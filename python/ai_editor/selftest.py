@@ -17915,36 +17915,47 @@ console.log("command palette quick access helpers ok");
            and "'winpty'," in spec_source)
     # The actually-shipped build pipeline is Nuitka (build_nuitka.bat), not
     # PyInstaller (XiaoACTUI.spec is a separate, not currently used path) -
-    # corrected after the user pointed this out. Nuitka's own DLL-dependency
-    # walker only follows link-time deps of compiled extension modules, so
-    # the same four sibling native files need the same explicit treatment,
-    # resolved dynamically since the pywinpty install path is machine/venv
-    # specific (no equivalent of PyInstaller's collect_dynamic_libs exists).
+    # corrected after the user pointed this out.
+    #
+    # An earlier version of this check asserted explicit
+    # --include-data-files flags for pywinpty's four native binaries
+    # (conpty.dll, winpty.dll, OpenConsole.exe, winpty-agent.exe) and for
+    # cv2's opencv_videoio ffmpeg DLL, reasoning by analogy to PyInstaller's
+    # collect_dynamic_libs without ever running a real Nuitka build. A real
+    # build proved that reasoning wrong: Nuitka's own dll-files plugin
+    # already auto-bundles both sets of native siblings from their built-in
+    # per-package configs, and manually re-listing them via
+    # --include-data-files makes the build FAIL with a file-conflict error
+    # (see build_nuitka.bat's own comment block right above
+    # WINPTY_NUITKA_FLAGS). So the correct, verified-working state is to
+    # NOT add those flags - only the Python modules need explicit
+    # inclusion, since the import follower can't see pywinpty's conditional
+    # import. Check for the real, working shape instead.
     nuitka_bat_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), "build_nuitka.bat")
     with open(nuitka_bat_path, "r", encoding="utf-8") as f:
         nuitka_bat_source = f.read()
-    _check("build_nuitka.bat (the real build pipeline) resolves and bundles pywinpty's native binaries",
+    _check("build_nuitka.bat (the real build pipeline) includes pywinpty's Python modules "
+           "and relies on Nuitka's dll-files plugin for the native binaries (not manual "
+           "--include-data-files, which conflicts with that plugin)",
            "WINPTY_NUITKA_FLAGS" in nuitka_bat_source
            and "find_spec('winpty')" in nuitka_bat_source
            and "--include-module=winpty" in nuitka_bat_source
-           and "--include-data-files=%WINPTY_DIR%\\conpty.dll=winpty/conpty.dll" in nuitka_bat_source
-           and "--include-data-files=%WINPTY_DIR%\\winpty.dll=winpty/winpty.dll" in nuitka_bat_source
-           and "--include-data-files=%WINPTY_DIR%\\OpenConsole.exe=winpty/OpenConsole.exe" in nuitka_bat_source
-           and "--include-data-files=%WINPTY_DIR%\\winpty-agent.exe=winpty/winpty-agent.exe" in nuitka_bat_source
            and "%WINPTY_NUITKA_FLAGS%" in nuitka_bat_source
-           and "pywinpty not installed" in nuitka_bat_source)
-    # 阶段8 系统性打包审计: opencv-python ships its ffmpeg backend as a loose
-    # DLL sibling to cv2.pyd inside the package dir, not a link-time dep
-    # Nuitka's DLL walker would follow - same class of gap as pywinpty's
-    # ConPTY binaries above, found by cross-checking every requirements.txt
-    # entry against build_nuitka.bat's --include-* flags (no build actually
-    # run - the fix is verified by reading both files' source, matching how
-    # the pywinpty fix itself was verified in this same test).
-    _check("build_nuitka.bat resolves and bundles cv2's ffmpeg backend DLL (阶段8 打包审计)",
-           "CV2_NUITKA_FLAGS" in nuitka_bat_source
-           and "find_spec('cv2')" in nuitka_bat_source
-           and "--include-data-files=%CV2_DIR%\\opencv_videoio_ffmpeg*.dll=cv2/" in nuitka_bat_source
-           and "%CV2_NUITKA_FLAGS%" in nuitka_bat_source)
+           and "pywinpty not installed" in nuitka_bat_source
+           and "dll-files plugin" in nuitka_bat_source
+           and "--include-data-files=%WINPTY_DIR%" not in nuitka_bat_source)
+    # cv2 ships its ffmpeg backend the same way pywinpty ships its native
+    # binaries - as a loose DLL sibling, not a link-time dep. Same
+    # conclusion as above: Nuitka's dll-files plugin already covers it
+    # (build_nuitka.bat documents this in the same comment block), plain
+    # --include-module=cv2 is correct and sufficient, and adding
+    # --include-data-files for opencv_videoio_ffmpeg*.dll would hit the
+    # same plugin conflict.
+    _check("build_nuitka.bat includes cv2 as a plain module and documents that its ffmpeg "
+           "DLL is covered by Nuitka's dll-files plugin (not manual --include-data-files)",
+           "--include-module=cv2" in nuitka_bat_source
+           and "cv2's opencv_videoio ffmpeg DLL is covered the same way" in nuitka_bat_source
+           and "--include-data-files=%CV2_DIR%" not in nuitka_bat_source)
     requirements_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), "requirements.txt")
     with open(requirements_path, "r", encoding="utf-8") as f:
         requirements_source = f.read()

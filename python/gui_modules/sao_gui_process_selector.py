@@ -55,15 +55,37 @@ MODULE_ALL = "all"
 
 _sp_ref = None
 _gp_ref = None
+_name_ref = ""
+_pid_ref = 0
 
 
-def _cache_result(sp, gp):
-    global _sp_ref, _gp_ref
+def _cache_result(sp, gp, name: str = "", pid: int = 0):
+    global _sp_ref, _gp_ref, _name_ref, _pid_ref
     _sp_ref, _gp_ref = sp, gp
+    _name_ref, _pid_ref = str(name or ""), int(pid or 0)
 
 
 def get_cached_gp():
     return _gp_ref
+
+
+def get_cached_process_info() -> dict:
+    """Engine-A attach info (name/pid/tier) for consumers outside this panel
+    (e.g. AI Editor's memviewer). Empty/zeroed fields when nothing attached."""
+    gp = _gp_ref
+    tier = ""
+    if gp is not None:
+        try:
+            tier = gp.memory_tier
+        except Exception:
+            tier = ""
+    return {
+        "attached": gp is not None,
+        "engine": "A" if gp is not None else "",
+        "name": _name_ref,
+        "pid": _pid_ref,
+        "tier": tier,
+    }
 
 
 # ── Palette helpers (theme-aware) ──
@@ -626,7 +648,7 @@ class ProcessSelectorPanel:
                 if result:
                     found_pid, cr3 = result
                     gp = sp.as_game_process(found_pid)
-                    _cache_result(sp, gp)
+                    _cache_result(sp, gp, name=name, pid=found_pid)
                     primary_ok = True
             except Exception:
                 pass

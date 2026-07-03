@@ -8748,6 +8748,32 @@ class AIEditorAPI:
             self._controller.conversation.system_prompt = self._default_system_prompt()
         return result
 
+    # ── MemViewer API (raw process memory via Process Selector's engine A) ──
+
+    def memviewer_status(self) -> Dict:
+        """Attach status of the process picked in the platform's Process Selector."""
+        from mem_probe.mem_viewer import status
+        try:
+            return status()
+        except Exception as exc:
+            return {"attached": False, "error": str(exc)}
+
+    def memviewer_read(self, address: str, length: int = 256) -> Dict:
+        """Read raw bytes at `address` (hex string) as hex + ASCII dump."""
+        from mem_probe.mem_viewer import read_bytes
+        try:
+            return read_bytes(address, length)
+        except Exception as exc:
+            return {"ok": False, "error": str(exc)}
+
+    def memviewer_read_value(self, address: str, dtype: str = "u32") -> Dict:
+        """Read one typed scalar (u8/i8/u16/i16/u32/i32/u64/i64/f32/f64) at `address`."""
+        from mem_probe.mem_viewer import read_value
+        try:
+            return read_value(address, dtype)
+        except Exception as exc:
+            return {"ok": False, "error": str(exc)}
+
     # ── Mode & Permission API ──
 
     def get_mode(self, mode: str = "") -> Dict:

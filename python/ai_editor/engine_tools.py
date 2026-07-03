@@ -339,6 +339,42 @@ def register_engine_tools(registry: ToolRegistry, gui_ref: Any, api_ref: Any = N
     )
 
     # ==================================================================
+    # MemViewer — raw process memory via the platform's Process Selector
+    # (engine A / driver-based handle). Read-only, no game-state decoding.
+    # ==================================================================
+
+    registry.register(
+        name="readProcessMemory",
+        description=(
+            "Read raw memory from the process currently attached via the "
+            "platform's Process Selector panel (engine A). Actions:\n"
+            "  status — attach info: process name/pid, whether attached\n"
+            "  bytes — hex+ASCII dump of `length` bytes at `address` (max 4096)\n"
+            "  value — one typed scalar at `address` (pass `dtype`)\n"
+            "`address` is a hex string, e.g. '0x7FF6A1230000'.\n"
+            "Nothing is attached until the user selects a process in the "
+            "Process Selector panel — call `status` first."
+        ),
+        parameters={
+            "type": "object",
+            "properties": {
+                "action": {"type": "string", "description": "status | bytes | value",
+                           "enum": ["status", "bytes", "value"]},
+                "address": {"type": "string", "description": "Hex address, e.g. '0x1400000'", "default": ""},
+                "length": {"type": "integer", "description": "Byte count for action=bytes (max 4096)", "default": 256},
+                "dtype": {"type": "string",
+                          "description": "Scalar type for action=value: u8/i8/u16/i16/u32/i32/u64/i64/f32/f64",
+                          "default": "u32"},
+            },
+            "required": ["action"],
+        },
+        handler=lambda action, address="", length=256, dtype="u32": _read_process_memory(
+            action, address, int(length), dtype),
+        category="engine",
+        tags={"readOnly": True},
+    )
+
+    # ==================================================================
     # Engine aggregate — single entry point for platform/plugin queries
     # ==================================================================
 
@@ -1878,6 +1914,22 @@ def _list_processes() -> Dict:
         procs = list_processes()
         return {"ok": True, "count": len(procs),
                 "processes": [{"name": p["name"], "pid": p["pid"]} for p in procs[:200]]}
+    except Exception as exc:
+        return {"error": str(exc)}
+
+
+def _read_process_memory(action: str, address: str = "", length: int = 256,
+                         dtype: str = "u32") -> Dict:
+    from mem_probe import mem_viewer
+    action = str(action or "").strip().lower()
+    try:
+        if action == "status":
+            return mem_viewer.status()
+        if action == "bytes":
+            return mem_viewer.read_bytes(address, length)
+        if action == "value":
+            return mem_viewer.read_value(address, dtype)
+        return {"error": f"Unknown action: {action}", "available": ["status", "bytes", "value"]}
     except Exception as exc:
         return {"error": str(exc)}
 
