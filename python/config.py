@@ -456,6 +456,10 @@ HOTKEY_FKEY_VK = {
     "HOME": 0x24, "END": 0x23,
     "PAGEUP": 0x21, "PAGEDOWN": 0x22,
 }
+# 字母/数字主键 (插件快捷键, 如 CTRL+SHIFT+F)。裸键会被日常打字误触,
+# parse_hotkey 要求这类主键至少搭配一个修饰键。
+HOTKEY_CHAR_VK = {chr(c): c for c in range(0x41, 0x5B)}  # A-Z (VK==ord)
+HOTKEY_CHAR_VK.update({chr(c): c for c in range(0x30, 0x3A)})  # 0-9
 # 修饰键 VK 组: pynput 上报左右具体码 (162/163 等), GetAsyncKeyState
 # 轮询路径用通用码 (17/18/16), 两路都要认。
 HOTKEY_MODIFIER_VKS = {
@@ -474,8 +478,8 @@ def parse_hotkey(spec):
     接受 ``"F5"`` / ``"CTRL+F5"`` / ``"Ctrl+Alt+F12"`` 字符串,
     ``{'vk': N[, 'mods': [...]]}`` 自定义 VK dict, 以及插件映射的
     ``{'key': 'CTRL+F8'}`` 形式。字符串主键限 ``HOTKEY_FKEY_VK`` 中的命名键
-    (如 F1-F12 / HOME 等; dict 的 vk 不限);
-    解析失败返回 None, 该绑定不触发。
+    (如 F1-F12 / HOME 等) 或 ``HOTKEY_CHAR_VK`` 的字母/数字 (必须搭配
+    修饰键; dict 的 vk 不限); 解析失败返回 None, 该绑定不触发。
     """
     if isinstance(spec, dict):
         raw_vk = spec.get("vk")
@@ -496,20 +500,27 @@ def parse_hotkey(spec):
         return None
     mods = set()
     vk = None
+    char_main = False
     for part in spec.upper().split("+"):
         part = _HOTKEY_MOD_ALIASES.get(part.strip(), part.strip())
         if part in HOTKEY_MODIFIER_VKS:
             mods.add(part)
         elif part in HOTKEY_FKEY_VK and vk is None:
             vk = HOTKEY_FKEY_VK[part]
+        elif part in HOTKEY_CHAR_VK and vk is None:
+            vk = HOTKEY_CHAR_VK[part]
+            char_main = True
         else:
             return None
     if vk is None:
+        return None
+    if char_main and not mods:
         return None
     return {"vk": vk, "mods": frozenset(mods)}
 
 
 _HOTKEY_VK_TO_FKEY = {v: k for k, v in HOTKEY_FKEY_VK.items()}
+_HOTKEY_VK_TO_FKEY.update({v: k for k, v in HOTKEY_CHAR_VK.items()})
 
 # GetAsyncKeyState 句柄: 修饰键实测状态的权威来源。pynput 的 WH_KEYBOARD_LL
 # 钩子在安全桌面 (UAC/Win+L) 和独占输入游戏下会丢 key-up, 残留在 pressed
@@ -532,6 +543,9 @@ def normalize_hotkey(spec):
         return None
     name = _HOTKEY_VK_TO_FKEY.get(parsed["vk"])
     if not name:
+        return None
+    if name in HOTKEY_CHAR_VK and not parsed["mods"]:
+        # 裸字母/数字 parse_hotkey 拒收 — 规范形式必须能 parse 回去
         return None
     mods = [m for m in ("CTRL", "ALT", "SHIFT") if m in parsed["mods"]]
     return "+".join(mods + [name])

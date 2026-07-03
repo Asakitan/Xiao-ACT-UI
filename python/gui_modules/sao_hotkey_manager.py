@@ -19,6 +19,7 @@ from typing import Any, Dict
 
 from config import (
     DEFAULT_HOTKEYS,
+    HOTKEY_CHAR_VK,
     HOTKEY_FKEY_VK,
     HOTKEY_MOD_ALL_VKS,
     HOTKEY_MODIFIER_VKS,
@@ -26,7 +27,11 @@ from config import (
     select_hotkey_match,
 )
 
-_ALL_HOTKEY_VKS = frozenset(HOTKEY_FKEY_VK.values()) | HOTKEY_MOD_ALL_VKS
+# 字母/数字 VK 也要进 GAKS 轮询集 — 插件可绑 CTRL+SHIFT+F 这类组合,
+# pynput 钩子挂掉 (Py3.11 ctypes bug / UIPI) 时轮询是唯一触发路径。
+_ALL_HOTKEY_VKS = (frozenset(HOTKEY_FKEY_VK.values())
+                   | frozenset(HOTKEY_CHAR_VK.values())
+                   | HOTKEY_MOD_ALL_VKS)
 
 # ── pynput is an optional runtime dependency. When absent, the hotkey
 # listener silently no-ops so the rest of the GUI still runs. Mirrors

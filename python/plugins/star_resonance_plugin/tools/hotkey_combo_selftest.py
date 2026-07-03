@@ -76,9 +76,20 @@ class ParseHotkeyTests(unittest.TestCase):
         self.assertEqual(parse_hotkey({"name": "F6"}),
                          {"vk": HOTKEY_FKEY_VK["F6"], "mods": frozenset()})
 
+    def test_char_main_keys(self) -> None:
+        # 字母/数字主键 (插件快捷键): 必须搭配修饰键
+        self.assertEqual(parse_hotkey("CTRL+SHIFT+F"),
+                         {"vk": 0x46, "mods": frozenset({"CTRL", "SHIFT"})})
+        self.assertEqual(parse_hotkey("ctrl+shift+4"),
+                         {"vk": 0x34, "mods": frozenset({"CTRL", "SHIFT"})})
+        self.assertEqual(parse_hotkey({"key": "CTRL+SHIFT+L"}),
+                         {"vk": 0x4C, "mods": frozenset({"CTRL", "SHIFT"})})
+
     def test_invalid(self) -> None:
-        for bad in ("", None, "CTRL", "CTRL+A", "F13", "F5+F6", "CTRL+",
-                    {"vk": "x"}, {"key": ""}, {"vk": 65, "mods": ["hyper"]}, 5):
+        # 裸字母/数字 ("A"/"7") 会被日常打字误触, 拒绝
+        for bad in ("", None, "CTRL", "A", "7", "F13", "F5+F6", "CTRL+",
+                    {"vk": "x"}, {"key": ""}, {"vk": 65, "mods": ["hyper"]},
+                    {"key": "F"}, 5):
             self.assertIsNone(parse_hotkey(bad), repr(bad))
 
 
@@ -90,11 +101,19 @@ class NormalizeHotkeyTests(unittest.TestCase):
         # 修饰键固定 CTRL,ALT,SHIFT 序 (与拼写顺序无关)
         self.assertEqual(normalize_hotkey("shift+ctrl+F5"), "CTRL+SHIFT+F5")
 
+    def test_char_main_canonical(self) -> None:
+        # 字母/数字主键: 带修饰键可规范化, 规范形式能 parse 回去
+        self.assertEqual(normalize_hotkey("shift+ctrl+f"), "CTRL+SHIFT+F")
+        self.assertEqual(normalize_hotkey({"vk": 65, "mods": ["ctrl"]}), "CTRL+A")
+        self.assertIsNotNone(parse_hotkey(normalize_hotkey("ctrl+shift+4")))
+
     def test_non_canonicalizable(self) -> None:
-        self.assertIsNone(normalize_hotkey("CTRL+A"))
         self.assertIsNone(normalize_hotkey(""))
-        # 自定义 VK (非 F1-F12) 没有规范名
+        # 裸字母 (无修饰) parse 拒收, 规范名同样不给 — 保持闭环
+        self.assertIsNone(normalize_hotkey("A"))
         self.assertIsNone(normalize_hotkey({"vk": 65}))
+        # 无规范名的自定义 VK (如空格 0x20)
+        self.assertIsNone(normalize_hotkey({"vk": 0x20}))
 
 
 class HotkeyMatchesTests(_NoLiveModsMixin):
@@ -184,9 +203,11 @@ class HotkeyManagerDispatchTests(_NoLiveModsMixin):
         self.assertEqual(fired, ["dodge", "hs"])
 
     def test_panic_fires_while_shift_injected(self) -> None:
-        # 躲避自动化按住 SHIFT 冲刺时, F12 急停必须照常触发。
+        # 躲避自动化按住 SHIFT 冲刺时, F12 急停必须照常触发。急停键已随
+        # 插件化迁出 DEFAULT_HOTKEYS, 绑定经 saved dict 显式提供。
         fired = []
-        mgr = self._mgr({}, {"toggle_auto_dodge": lambda: fired.append("dodge")})
+        mgr = self._mgr({"toggle_auto_dodge": "F12"},
+                        {"toggle_auto_dodge": lambda: fired.append("dodge")})
         mgr._pressed_keys = {VK_F12, VK_SHIFT_L}
         mgr._check_combos()
         self.assertEqual(fired, ["dodge"])
@@ -234,6 +255,23 @@ class HotkeyManagerDispatchTests(_NoLiveModsMixin):
         mgr._check_combos()
         self.assertEqual(fired, ["recog"])
 
+    def test_char_main_plugin_hotkey_fires(self) -> None:
+        # 脚本插件的字母/数字主键 (如飞鸟 CTRL+SHIFT+F): 监听器可触发,
+        # GAKS 轮询集也要含字母/数字 VK — pynput 钩子挂掉时轮询是唯一路径。
+        from gui_modules.sao_hotkey_manager import _ALL_HOTKEY_VKS
+        fired = []
+        mgr = self._mgr({}, {}, provider=lambda: {
+            "plugin.flappy.flap": {"key": "CTRL+SHIFT+F",
+                                   "callback": lambda: fired.append("flap")},
+            "plugin.snake.up": {"key": "CTRL+SHIFT+I",
+                                "callback": lambda: fired.append("up")},
+        })
+        mgr._pressed_keys = {0x46, VK_CTRL_L, VK_SHIFT_L}
+        mgr._check_combos()
+        self.assertEqual(fired, ["flap"])
+        self.assertIn(0x46, _ALL_HOTKEY_VKS)  # 'F'
+        self.assertIn(0x34, _ALL_HOTKEY_VKS)  # '4'
+
     def test_shadowing_gone_for_distinct_combos(self) -> None:
         # 审计修复的核心: 插件键挪到 CTRL+ 组合后不再被同号内置 F 键遮蔽。
         fired = []
@@ -261,8 +299,10 @@ class ShippedDefaultsConflictFreeTests(unittest.TestCase):
     def test_shipped_plugin_defaults_avoid_builtins(self) -> None:
         # 静态扫描内置插件的 register_hotkey 默认键: 必须可规范化且不与
         # 内置 DEFAULT_HOTKEYS、也不互相撞键。
-        plugins_dir = os.path.join(os.path.dirname(os.path.dirname(
-            os.path.abspath(__file__))), "plugins")
+        # tools/ 下三层 dirname 才回到 python/plugins (selftest 曾在
+        # star_resonance_plugin/ 根下, 搬进 tools/ 后少了一层)。
+        plugins_dir = os.path.dirname(os.path.dirname(os.path.dirname(
+            os.path.abspath(__file__))))
         pattern = re.compile(
             r"register_hotkey\(\s*\"[^\"]+\"\s*,[^)]*?default_key=\"([^\"]+)\"")
         taken = {normalize_hotkey(v): f"builtin:{a}"
