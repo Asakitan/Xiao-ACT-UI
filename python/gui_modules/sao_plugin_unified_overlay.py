@@ -4,6 +4,7 @@ from __future__ import annotations
 import base64
 import json
 import re
+import threading
 from collections.abc import Mapping
 from typing import Any, Optional
 
@@ -240,6 +241,22 @@ def _iter_layer_drawables(overlays: list[Mapping[str, Any]]) -> list[dict[str, A
                 stack[0:0] = list(node.get("children") or [])
     out.sort(key=lambda item: (int(item.get("z") or 0), int(item.get("order") or 0)))
     return out
+
+
+def _pointer_button_down() -> bool:
+    """物理鼠标主键是否按着 (GetAsyncKeyState 实测)。
+
+    Tk input proxy 没有指针 grab, press 之后在 proxy 外释放 / colorkey
+    shape 突变穿透都会丢 ButtonRelease — _drag_state 残留会把之后每次
+    划过面板都当成拖拽 (层追鼠标跑 + 游戏被误暂停 + 隐形 proxy 吞输入)。
+    读物理键态做残留自愈; 探测失败按"按着"处理维持原行为。
+    """
+    try:
+        import ctypes
+        gaks = ctypes.windll.user32.GetAsyncKeyState
+        return bool((gaks(0x01) | gaks(0x02)) & 0x8000)
+    except Exception:
+        return True
 
 
 def _image_to_bgra(image: Any, width: int, height: int) -> bytes:
@@ -547,6 +564,13 @@ class PluginUnifiedOverlayHost:
     def _schedule(self, delay_ms: int | None = None) -> None:
         if self._destroyed or self.root is None:
             return
+        if threading.current_thread() is not threading.main_thread():
+            # 插件 timer (daemon 线程) 的 invalidate 曾在这里跨线程
+            # root.after: Tcl 定时器登记进调用线程的 notifier 可能永不
+            # 触发, 僵尸 _after_id 还会挡住之后主线程的所有排队 → 刷新
+            # 永久停摆 (实测: 游戏一开跑画面就冻结)。非 Tk 线程只保留
+            # _dirty, 由 _tick 的 interval_ms 心跳捡起。
+            return
         if self._after_id is not None:
             return
         try:
@@ -727,6 +751,16 @@ class PluginUnifiedOverlayHost:
         def _motion(local_x: float, local_y: float) -> None:
             drag = self._drag_state.get(key)
             if not drag:
+                return
+            if not _pointer_button_down():
+                # ButtonRelease 丢失后的残留: 物理键已抬起, 视同释放收尾。
+                # 已经发生的误拖不保留 — 清 override 让层弹回 spec 位置。
+                self._drag_state.pop(key, None)
+                if bool(drag.get("moved", False)):
+                    self._position_overrides.pop(key, None)
+                    _pointer_event("release", local_x, local_y)
+                    self._dirty = True
+                    self._schedule(0)
                 return
             cur_x = int(state.get("x") or 0) + int(round(local_x))
             cur_y = int(state.get("y") or 0) + int(round(local_y))
@@ -1042,11 +1076,17 @@ class PluginUnifiedOverlayHost:
             if not key:
                 continue
             if key in self._drag_state:
-                # 正在拖拽的层冻结 spec 应用: 拖拽把 state x/y 抢走了,
-                # 此时重建/重上传会使拖拽闭包引用失效层并放大帧竞态;
-                # 松手后下一次 refresh 恢复正常
-                active_keys.add(key)
-                continue
+                if _pointer_button_down():
+                    # 正在拖拽的层冻结 spec 应用: 拖拽把 state x/y 抢走了,
+                    # 此时重建/重上传会使拖拽闭包引用失效层并放大帧竞态;
+                    # 松手后下一次 refresh 恢复正常
+                    active_keys.add(key)
+                    continue
+                # ButtonRelease 丢失的残留 — 物理键已抬起, 解除冻结并
+                # 撤销误拖 (层回 spec 位置), 否则该层被永久跳过。
+                drag = self._drag_state.pop(key, None) or {}
+                if bool(drag.get("moved", False)):
+                    self._position_overrides.pop(key, None)
             input_signature = _drawable_input_signature(drawable, pal)
             state = self._layers.get(key)
             if state is not None and state.get("has_frame") and state.get("input_signature") == input_signature:
@@ -1151,12 +1191,14 @@ class PluginUnifiedOverlayHost:
         if self._destroyed:
             return
         if self._hidden:
+            # restore() 在主线程重启心跳
             return
         if self._dirty:
             self._dirty = False
             self._refresh_now()
-        if self._dirty:
-            self._schedule(0)
+        # 永续心跳: 跨线程 invalidate 只置 _dirty (见 _schedule), 这里
+        # 按 interval_ms 自轮询捡起; 无脏时空转 O(1)。
+        self._schedule(0 if self._dirty else None)
 
 
 __all__ = ["PluginUnifiedOverlayHost"]
