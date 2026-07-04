@@ -168,19 +168,35 @@ class AlertOverlay:
         base_img = self._render_frame(title, message)
 
         win = tk.Toplevel(self.root)
-        win.overrideredirect(True)
-        win.attributes('-topmost', True)
-        win.geometry(f'1x1+{self._center_x}+{self._center_y}')
-        win.update_idletasks()
-
         try:
-            hwnd = ctypes.windll.user32.GetParent(win.winfo_id()) or win.winfo_id()
-        except Exception:
-            hwnd = win.winfo_id()
+            win.overrideredirect(True)
+            win.attributes('-topmost', True)
+            win.geometry(f'1x1+{self._center_x}+{self._center_y}')
+            win.update_idletasks()
 
-        ex = _user32.GetWindowLongW(ctypes.c_void_p(hwnd), GWL_EXSTYLE)
-        _user32.SetWindowLongW(ctypes.c_void_p(hwnd), GWL_EXSTYLE,
-                               ex | WS_EX_LAYERED | WS_EX_TOOLWINDOW | WS_EX_TOPMOST | WS_EX_TRANSPARENT)
+            try:
+                hwnd = ctypes.windll.user32.GetParent(win.winfo_id()) or win.winfo_id()
+            except Exception:
+                hwnd = win.winfo_id()
+
+            ex = _user32.GetWindowLongW(ctypes.c_void_p(hwnd), GWL_EXSTYLE)
+            _user32.SetWindowLongW(ctypes.c_void_p(hwnd), GWL_EXSTYLE,
+                                   ex | WS_EX_LAYERED | WS_EX_TOOLWINDOW | WS_EX_TOPMOST | WS_EX_TRANSPARENT)
+        except Exception:
+            # win only becomes reachable for future cleanup once it's
+            # wrapped into `entry` and stored on self._active below —
+            # an exception anywhere above (this UI constantly juggles
+            # -topmost/lift() across many overlay windows, so a TclError
+            # here is plausible) would otherwise orphan this Toplevel
+            # with no path left to ever destroy() it, called via
+            # root.after() on every boss mechanic/timer alert during a
+            # raid. Clean up what was already created, then preserve
+            # the existing propagate-and-let-Tk-log-it behavior.
+            try:
+                win.destroy()
+            except Exception:
+                pass
+            raise
         # 防御性清理：移除可能被 _apply_panel_style() 设置的 CS_DROPSHADOW
         try:
             _GCL_STYLE, _CS_DS = -26, 0x00020000

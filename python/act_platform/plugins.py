@@ -1490,7 +1490,14 @@ class PluginContext:
                 after(0, _apply)
                 return True
             except Exception:
-                pass
+                # root.after() itself failing (Tk shutting down, etc.) —
+                # do NOT fall through to calling _apply() directly here:
+                # it touches Tk widgets (create_input_proxy/
+                # destroy_input_proxy, documented as main-thread-only)
+                # and must run on the Tk thread, the exact guarantee
+                # this branch exists to provide. Report failure instead
+                # of running off-thread.
+                return False
         _apply()
         return True
 
@@ -1724,9 +1731,17 @@ class PluginContext:
         if callable(after):
             try:
                 after(0, callback)
-                return
-            except Exception:
-                pass
+            except Exception as exc:
+                # root.after() itself raising (Tk shutting down, etc.) is
+                # a DIFFERENT failure mode from "no Tk root/after at all"
+                # below — falling through to calling callback() directly
+                # here would run Tk-touching code off the Tk thread,
+                # exactly what this method exists to prevent.
+                self._manager._record_failure(self._record.plugin_id, exc)
+            return
+        # No Tk root/after available at all (headless/test context) —
+        # running on the caller's own thread is the only option and is
+        # the documented, intended behavior for that case.
         try:
             callback()
         except Exception as exc:

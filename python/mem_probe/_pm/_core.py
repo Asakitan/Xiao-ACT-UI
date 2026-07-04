@@ -4,7 +4,7 @@ import struct
 from typing import List, Optional, Tuple
 from mem_probe import rt_io
 
-_kv8, _kv4, _kvb = rt_io._r1_v8, rt_io._r1_v4, lambda va, n: rt_io._r1_r(va, n, 2)
+_kv8, _kv4, _kvb = rt_io._r1_pv8, rt_io._r1_pv4, rt_io._r1_pvb
 
 
 class PageResolver:

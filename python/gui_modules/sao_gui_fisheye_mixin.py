@@ -1657,6 +1657,21 @@ class SAOPlayerGUIFisheyeMixin:
             except Exception as _gl_init_err:
                 print(f'[SAO-UI] fisheye GL init failed: {_gl_init_err}', flush=True)
                 import traceback; traceback.print_exc()
+                # create_standalone_context() itself failing (the exact
+                # case in the log above — CreateWindow failed) leaves
+                # _ctx at its pre-try-block None, so this is a no-op
+                # then. But if context creation SUCCEEDED and a LATER
+                # statement in this same block (shader compile, texture/
+                # buffer/framebuffer alloc) raised instead, _ctx still
+                # holds a real, live context — dropping it here without
+                # release() orphans its hidden WGL window for the rest
+                # of the process, on every fisheye open that hits this
+                # path.
+                if _ctx is not None:
+                    try:
+                        _ctx.release()
+                    except Exception:
+                        pass
                 _ctx = None
 
             # ── numpy 后备 ──

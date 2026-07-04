@@ -313,7 +313,20 @@ class SAOPlayerGUIPanelsMixin:
             menu.add_cascade(label=prefix + name, menu=sub)
         x = self.root.winfo_pointerx()
         y = self.root.winfo_pointery()
-        menu.tk_popup(x, y)
+        try:
+            menu.tk_popup(x, y)
+        finally:
+            # menu is parented to self.root (which lives for the whole
+            # app session), not to anything torn down on its own — with
+            # no explicit destroy(), the widget (and every per-plugin
+            # `sub` cascade menu, all children of `menu`) would persist
+            # until process exit. destroy() cascades to children, so
+            # this alone cleans up every sub menu built above. Every
+            # call to this function (bound to a hotkey — pressed
+            # repeatedly over a long session) previously leaked 1 +
+            # plugin_count Win32 menu resources with 100% certainty.
+            menu.grab_release()
+            menu.destroy()
 
     def _toggle_hide_all_panels(self):
         """一键隐藏/显示所有浮动面板 (不销毁, 只是 withdraw/deiconify)"""

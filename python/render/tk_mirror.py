@@ -305,6 +305,17 @@ class TkMirrorLayer:
 
     def show(self) -> None:
         self._visible = True
+        if self._hwnd:
+            # Undo hide()'s off-screen park before the capture loop (see
+            # below) resumes reading this window — otherwise the first
+            # captured frame(s) after reopening would show whatever sat
+            # at (-32000, -32000), not the panel's actual content.
+            try:
+                _user32.MoveWindow(
+                    self._hwnd, self._screen_x, self._screen_y,
+                    self._width, self._height, False)
+            except Exception:
+                pass
         if self._layer:
             self._layer.show()
         self._sync_host_input()
@@ -313,6 +324,23 @@ class TkMirrorLayer:
         self._visible = False
         if self._layer:
             self._layer.hide()
+        if self._hwnd:
+            # The real backing Tk window has to stay MAPPED (not
+            # iconic/withdrawn) for PrintWindow to keep capturing
+            # correctly the next time show() runs — see attach()'s
+            # comment on why it's pinned at alpha=0.01 instead of
+            # actually withdrawn. That's a reason to keep it non-
+            # iconic, not a reason to leave it sitting at its normal
+            # on-screen rect for the rest of the session while the
+            # panel is "closed": park it off-screen instead, same
+            # technique already used elsewhere in this codebase for a
+            # window that must stay alive but never actually visible.
+            try:
+                _user32.MoveWindow(
+                    self._hwnd, -32000, -32000,
+                    self._width, self._height, False)
+            except Exception:
+                pass
         self._sync_host_input()
 
     def set_alpha(self, value: float) -> None:

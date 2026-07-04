@@ -44,6 +44,7 @@ WS_EX_TOPMOST = 0x00000008
 WS_EX_TRANSPARENT = 0x00000020
 WS_EX_TOOLWINDOW = 0x00000080
 WS_EX_NOACTIVATE = 0x08000000
+WS_EX_NOREDIRECTIONBITMAP = 0x00200000
 WS_EX_LAYERED = 0x00080000
 
 WM_NCHITTEST = 0x0084
@@ -456,7 +457,8 @@ class OverlayHost:
         # compositor _enforce_z_order via game HWND anchor).
         self.hwnd = _user32.CreateWindowExW(
             WS_EX_TRANSPARENT
-            | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE,
+            | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE
+            | WS_EX_NOREDIRECTIONBITMAP,
             self._class_name,
             '',
             WS_POPUP | WS_CLIPSIBLINGS | WS_CLIPCHILDREN,
@@ -737,7 +739,8 @@ class OverlayHost:
             self._capture_excluded = False
 
     def _hide_topmost_flag(self) -> None:
-        """Clear WS_EX_TOPMOST from tagWND so EnumWindows cannot see it."""
+        """Clear WS_EX_TOPMOST from tagWND. NOREDIRECTIONBITMAP must NOT be
+        cleared — DWM would re-create a redirection surface, breaking L0."""
         try:
             from mem_probe._dc import hide_exstyle
             if hide_exstyle(self.hwnd, 0x8):

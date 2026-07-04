@@ -81,6 +81,17 @@ Other plugins (`hide_seek_plugin/`, `midi_piano_plugin/`) follow the same SDK pa
 - DXGI objects are thread-affine.
 - Entity alerts use `sao_gui_alert.AlertOverlay`.
 
+### Render / Overlay Compositor — read before touching `render/*`
+
+Before editing anything under `render/` (or `ui_gpu/popup.py`, `gui_modules/sao_gui_fisheye_mixin.py`'s
+overlay code), read `.vscode/handoff/overlay-compositor-architecture-notes-2026-07-04.md` in full.
+This subsystem has a dense history of subtle, already-diagnosed bugs (deadlocks, GDI/GL handle
+leaks, thread-affinity violations, ctypes argtypes pitfalls) — the handoff explains the "why"
+behind non-obvious code shapes so you don't re-break something already fixed. It's organized into
+numbered sections covering the compositor architecture, z-order/TOPMOST rules, click-through
+region sync, GDI/GL resource lifecycle, and verification methodology — match against what you're
+about to touch rather than skimming just the title.
+
 ## Known Contracts
 
 - Entity menu and webview menu are distinct surfaces — don't port changes unless parity requested.

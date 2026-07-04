@@ -455,8 +455,19 @@ class AutoKeyDetailPanel(_DetailEditorBase):
             menu.add_separator()
             menu.add_command(label='删除 Delete',
                              command=lambda: self._delete_profile(pid))
-            menu.tk_popup(btn.winfo_rootx(),
-                          btn.winfo_rooty() + btn.winfo_height())
+            try:
+                menu.tk_popup(btn.winfo_rootx(),
+                              btn.winfo_rooty() + btn.winfo_height())
+            finally:
+                # A fresh tk.Menu is built on every click with no reuse
+                # (unlike gui_modules/sao_panel_components.py's
+                # dropdown_button, which builds once and reuses) — with
+                # no explicit destroy(), it's only reclaimed when the
+                # whole profile list re-renders, so browsing several
+                # profiles' menus without triggering a re-render
+                # accumulates orphaned Win32 menu resources.
+                menu.grab_release()
+                menu.destroy()
 
         btn = make_action_button(parent, '更多 ▾', _post, width=6)
         holder['btn'] = btn

@@ -143,37 +143,43 @@ def _capture_window(hwnd: int, w: int, h: int) -> Optional[bytes]:
     hdc_mem = _gdi32.CreateCompatibleDC(hdc_screen)
     hbmp = _gdi32.CreateCompatibleBitmap(hdc_screen, w, h)
     old = _gdi32.SelectObject(hdc_mem, hbmp)
+    try:
+        ok = _user32.PrintWindow(hwnd, hdc_mem, PW_RENDERFULLCONTENT)
+        if not ok:
+            ok = _user32.PrintWindow(hwnd, hdc_mem, 0)
 
-    ok = _user32.PrintWindow(hwnd, hdc_mem, PW_RENDERFULLCONTENT)
-    if not ok:
-        ok = _user32.PrintWindow(hwnd, hdc_mem, 0)
+        result = None
+        if ok:
+            bmi = _BITMAPINFO()
+            bmi.bmiHeader.biSize = ctypes.sizeof(_BITMAPINFOHEADER)
+            bmi.bmiHeader.biWidth = w
+            bmi.bmiHeader.biHeight = -h  # top-down
+            bmi.bmiHeader.biPlanes = 1
+            bmi.bmiHeader.biBitCount = 32
+            bmi.bmiHeader.biCompression = BI_RGB
 
-    result = None
-    if ok:
-        bmi = _BITMAPINFO()
-        bmi.bmiHeader.biSize = ctypes.sizeof(_BITMAPINFOHEADER)
-        bmi.bmiHeader.biWidth = w
-        bmi.bmiHeader.biHeight = -h  # top-down
-        bmi.bmiHeader.biPlanes = 1
-        bmi.bmiHeader.biBitCount = 32
-        bmi.bmiHeader.biCompression = BI_RGB
-
-        buf = ctypes.create_string_buffer(w * h * 4)
-        # Re-assert every call — see the comment on _GETDIBITS_ARGTYPES.
-        _gdi32.GetDIBits.argtypes = _GETDIBITS_ARGTYPES
-        got = _gdi32.GetDIBits(
-            hdc_mem, hbmp, 0, h,
-            ctypes.cast(buf, ctypes.c_void_p),
-            ctypes.byref(bmi), DIB_RGB_COLORS,
-        )
-        if got > 0:
-            result = bytes(buf)
-
-    _gdi32.SelectObject(hdc_mem, old)
-    _gdi32.DeleteObject(hbmp)
-    _gdi32.DeleteDC(hdc_mem)
-    _user32.ReleaseDC(0, hdc_screen)
-    return result
+            buf = ctypes.create_string_buffer(w * h * 4)
+            # Re-assert every call — see the comment on _GETDIBITS_ARGTYPES.
+            _gdi32.GetDIBits.argtypes = _GETDIBITS_ARGTYPES
+            got = _gdi32.GetDIBits(
+                hdc_mem, hbmp, 0, h,
+                ctypes.cast(buf, ctypes.c_void_p),
+                ctypes.byref(bmi), DIB_RGB_COLORS,
+            )
+            if got > 0:
+                result = bytes(buf)
+        return result
+    finally:
+        # MUST run even if anything above raises — these 3 GDI handles
+        # (a screen DC, a memory DC, a bitmap) leak permanently otherwise,
+        # one full set per failed capture. GetDC/ReleaseDC and GDI object
+        # counts are both per-process-limited; a capture loop calling this
+        # every tick with no upstream guard can exhaust that limit over a
+        # long session.
+        _gdi32.SelectObject(hdc_mem, old)
+        _gdi32.DeleteObject(hbmp)
+        _gdi32.DeleteDC(hdc_mem)
+        _user32.ReleaseDC(0, hdc_screen)
 
 
 def _make_lparam(x: int, y: int) -> int:
@@ -293,8 +299,20 @@ class WebViewProxy:
     def _capture_loop(self) -> None:
         while self._running:
             if self._visible and self._layer:
-                bgra = _capture_window(
-                    self._hwnd, self._width, self._height)
+                # An uncaught exception here escapes the while loop and
+                # silently kills this whole background thread (Python's
+                # default behavior for an unhandled thread exception is to
+                # print a traceback and exit — no auto-restart), permanently
+                # freezing this webview's mirror until stop()/start() cycles
+                # it (see tk_mirror.py's TkMirrorLayer._capture_loop, which
+                # already guards the same call for the same reason). A
+                # single bad frame shouldn't take the thread down; skip it
+                # and retry next tick instead.
+                try:
+                    bgra = _capture_window(
+                        self._hwnd, self._width, self._height)
+                except Exception:
+                    bgra = None
                 if bgra:
                     self._layer.upload_bgra(bgra, self._width, self._height)
                     self._layer.request_redraw()

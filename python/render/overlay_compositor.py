@@ -1025,6 +1025,20 @@ class CompositorLayer:
         # registered texture has one level, so it would be INCOMPLETE and
         # sample black without explicit filters. GL may only touch the
         # object while locked.
+        #
+        # This lock call is a SEPARATE call site from the one guarded in
+        # render_to_gpu_texture_begin() — that guard only covers the
+        # steady-state per-frame path; this one only runs on a (rarer)
+        # new/changed handle registration, so it needs its own proactive
+        # device_removed() check for the same reason (wglDXLockObjectsNV
+        # has no timeout and is driver-defined against an already-lost
+        # device — see DCompBridge.device_removed's docstring).
+        if dc.device_removed():
+            gl_delete_texture(gl_id)
+            release_com(d3d_tex)
+            self._shared_attempt_failed = True
+            self._log_shared_fail(handle, 'device lost during registration')
+            return False
         if dc.lock_external_texture(hobj):
             try:
                 gl_bind_texture_unit0(gl_id)
@@ -1171,6 +1185,10 @@ except Exception:
 #: See _build_region_from_rects for why this matters on fast pet motion.
 _region_buf: Optional[_ct.Array] = None
 _region_buf_cap: int = 0
+
+#: Last HRGN actually applied via SetWindowRgn — freed once superseded
+#: (see _sync_host_rgn; details in overlay-compositor-architecture-notes).
+_prev_host_rgn: int = 0
 
 
 def _build_region_from_rects(rects: list):
@@ -1423,6 +1441,17 @@ class UnifiedOverlay:
                      bgra_swizzle: bool = True,
                      high_fps: bool = False,
                      target_fps: int = 0) -> CompositorLayer:
+        # A caller creating a layer under a name that's still registered
+        # (e.g. re-triggered before a previous instance's own timed
+        # destroy_layer() call ran — observed live with the fisheye
+        # backdrop's '_motion_blur' layer on a fast open-then-close) would
+        # otherwise silently overwrite self._layers[name] below, dropping
+        # the OLD CompositorLayer's GL FBO/texture and any live Tk input
+        # proxy without ever releasing them — destroy_layer is the only
+        # path that queues _release_gl on the correct thread/context.
+        # Safe to call unconditionally: a no-op if nothing is registered
+        # under this name yet.
+        self.destroy_layer(name)
         layer = CompositorLayer(
             name, width, height, x, y, z, click_through, bgra_swizzle,
             high_fps=high_fps, target_fps=target_fps,
@@ -1482,6 +1511,36 @@ class UnifiedOverlay:
         """Set the game window HWND. The z-order pulse positions the
         compositor just above this window."""
         self._game_hwnd = int(hwnd) if hwnd else 0
+
+    def _z_order_stale(self) -> bool:
+        """Check if the compositor has been bumped below its target."""
+        host = self._host
+        if host is None:
+            return False
+        comp = host.hwnd
+        if not comp:
+            return False
+        try:
+            u32 = _ct.windll.user32
+            GW_HWNDPREV = 3
+            game = self._game_hwnd
+            if game and u32.IsWindow(game):
+                prev = u32.GetWindow(comp, GW_HWNDPREV)
+                if prev == game:
+                    return False
+                above = comp
+                for _ in range(8):
+                    above = u32.GetWindow(above, GW_HWNDPREV)
+                    if not above:
+                        return False
+                    if above == game:
+                        return False
+                return True
+            else:
+                prev = u32.GetWindow(comp, GW_HWNDPREV)
+                return prev != 0
+        except Exception:
+            return True
 
     def _enforce_z_order(self) -> None:
         """Position the compositor host just above the game window.
@@ -1874,6 +1933,7 @@ class UnifiedOverlay:
         """
         if self._host is None:
             return
+        global _prev_host_rgn
         # NOTE: this used to short-circuit to a NULL (unclipped, full-
         # screen) region whenever host.input_passthrough was True,
         # reasoning that WS_EX_TRANSPARENT alone would let clicks fall
@@ -1899,17 +1959,31 @@ class UnifiedOverlay:
         # so it no longer needs a scan-side workaround here.)
         if not has_visible:
             if self._host_rgn_key != 'empty':
-                self._host_rgn_key = 'empty'
                 try:
-                    # SetWindowRgn only takes ownership of the HRGN on
-                    # success — unlike the main per-frame path below,
-                    # this call used to ignore the return value, leaking
-                    # one GDI region handle every time this branch fires
-                    # (visible -> fully hidden) if it ever failed.
+                    try:
+                        _OBJ_REGION = 8
+                        _gdi32.GetObjectType.restype = _ct.c_int
+                        _gdi32.GetObjectType.argtypes = [_ct.c_void_p]
+                        if _prev_host_rgn and _gdi32.GetObjectType(
+                                _ct.c_void_p(_prev_host_rgn)) == _OBJ_REGION:
+                            _gdi32.DeleteObject(_ct.c_void_p(_prev_host_rgn))
+                    except Exception:
+                        pass
                     empty_rgn = _ct.windll.gdi32.CreateRectRgn(0, 0, 0, 0)
-                    if not _ct.windll.user32.SetWindowRgn(
-                            self._host.hwnd, empty_rgn, False):
-                        _ct.windll.gdi32.DeleteObject(empty_rgn)
+                    try:
+                        _u32e = _ct.windll.user32
+                        _u32e.SetWindowRgn.restype = _wt.BOOL
+                        _u32e.SetWindowRgn.argtypes = [_wt.HWND, _wt.HWND, _wt.BOOL]
+                        empty_ok = bool(_u32e.SetWindowRgn(
+                            _ct.c_void_p(self._host.hwnd),
+                            _ct.c_void_p(empty_rgn), False))
+                    except Exception:
+                        empty_ok = False
+                    if empty_ok:
+                        _prev_host_rgn = empty_rgn
+                        self._host_rgn_key = 'empty'
+                    else:
+                        _gdi32.DeleteObject(_ct.c_void_p(empty_rgn))
                 except Exception:
                     pass
             return
@@ -2130,22 +2204,40 @@ class UnifiedOverlay:
             key = hash(tuple(spans)) if spans else 0
             if key == self._host_rgn_key:
                 return
-            self._host_rgn_key = key
             rgn = _build_region_from_rects(spans)
-            ok = _ct.windll.user32.SetWindowRgn(self._host.hwnd, rgn, False)
-            if not ok:
-                # SetWindowRgn only assumes ownership of the HRGN on
-                # success. On failure the region would leak; one leak per
-                # failed frame drains the process GDI handle table over a
-                # long animated-pet session (every frame rebuilds the
-                # region), and once GDI handles run out the whole UI
-                # freezes. Free it and drop the cached key so the next
-                # tick rebuilds instead of trusting this never-applied one.
+            # HWND/HRGN argtypes must be explicit (pointer-sized) — see
+            # overlay-compositor-architecture-notes for why an untyped
+            # call here both leaked GDI regions and could permanently
+            # stall click-through at NO_REGION.
+            try:
+                _u32 = _ct.windll.user32
+                _u32.SetWindowRgn.restype = _wt.BOOL
+                _u32.SetWindowRgn.argtypes = [_wt.HWND, _wt.HWND, _wt.BOOL]
+                ok = bool(_u32.SetWindowRgn(
+                    _ct.c_void_p(self._host.hwnd), _ct.c_void_p(rgn), False))
+            except Exception:
+                ok = False
+            if ok:
                 try:
-                    _gdi32.DeleteObject(rgn)
+                    _OBJ_REGION = 8
+                    _gdi32.GetObjectType.restype = _ct.c_int
+                    _gdi32.GetObjectType.argtypes = [_ct.c_void_p]
+                    if (_prev_host_rgn and _prev_host_rgn != rgn
+                            and _gdi32.GetObjectType(
+                                _ct.c_void_p(_prev_host_rgn)) == _OBJ_REGION):
+                        _gdi32.DeleteObject(_ct.c_void_p(_prev_host_rgn))
                 except Exception:
                     pass
-                self._host_rgn_key = None
+                _prev_host_rgn = rgn
+                self._host_rgn_key = key
+            else:
+                # SetWindowRgn only assumes ownership of the HRGN on
+                # success. self._host_rgn_key is deliberately left
+                # untouched so the next tick's span computation retries.
+                try:
+                    _gdi32.DeleteObject(_ct.c_void_p(rgn))
+                except Exception:
+                    pass
         except Exception:
             pass
 
@@ -2371,13 +2463,12 @@ class UnifiedOverlay:
             # Process Win32 messages
             self._host.process_messages()
 
-            # Z-order pulse: enforce the registered priority order.
-            # Uses HWND_TOP chaining (not TOPMOST) so Tk panels stay
-            # above the compositor without z-order flickering.
+            # Z-order check: only re-assert when actually bumped down.
             now = time.perf_counter()
             if now - self._last_topmost >= self._topmost_interval:
-                self._enforce_z_order()
                 self._last_topmost = now
+                if self._z_order_stale():
+                    self._enforce_z_order()
 
             # Poll MMF-sourced layers for new frames (zero-copy)
             ctx = self._host.ctx
@@ -2439,9 +2530,14 @@ class UnifiedOverlay:
                     self._sync_host_rgn(has_visible)
             vf = self._vf
             if vf is not None and vf.poll():
-                self._ctx.clear(0.0, 0.0, 0.0, 0.0)
-                self._host.swap_buffers()
-                self._vf_dirty = True
+                try:
+                    dc = self._dcomp
+                    if dc and dc.alive:
+                        w, h = self._host.width, self._host.height
+                        dc.present(b'\x00' * (w * h * 4), w, h)
+                    self._vf_dirty = True
+                except Exception:
+                    pass
                 vf.release()
 
             interval = self._frame_interval if has_visible else 0.05

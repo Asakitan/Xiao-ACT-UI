@@ -2,6 +2,18 @@
 
 逐版本变更记录, 最新在前。本文件由 config.py 内联的历史注释迁出。
 
+## v5.2.12: 覆盖层/GDI 泄漏兜底、Tk 线程契约收紧与桌宠诊断工具补齐.
+
+  - **overlay / resource cleanup**:
+    - `overlay_compositor` 在重复层名、host region、共享纹理注册与 stale z-order 路径继续补泄漏与异常兜底。
+    - `dcomp_bridge`、`gpu_overlay_window`、`overlay_host`、`tk_mirror`、`webview_proxy` 进一步收紧 DComp/TopMost/捕获/跨线程资源释放路径。
+  - **Tk / plugin runtime**:
+    - `act_platform.plugins` 对 `root.after()` 失败不再错误回退到当前线程执行 Tk 回调，降低跨线程 UI 调用风险。
+    - fisheye、alert、profile editor 等面板销毁/菜单释放补上兜底清理，减少 zombie layer / menu 资源积累。
+  - **recognition / diagnostics**:
+    - recognition 在长期无目标窗口时降低空转轮询频率。
+    - 新增 duplicate-layer leak、GDI 类型分解、handle count 监控等诊断/自测工具。
+
 ## v5.2.11: DComp 设备丢失提前降级、共享纹理生产者健康门控与图层泄漏兜底.
 
   - **DComp / device lost**:

@@ -553,7 +553,28 @@ class DCompBridge:
         self._gpu_target_gen: int = 0  # bumped every render-target (re)create
         self._gl_interop_active = False
 
-        self._init()
+        try:
+            self._init()
+        except Exception:
+            # _init() raising partway through still leaves every COM
+            # object acquired UP TO that point holding a real refcount.
+            # Nothing else will ever call destroy() on this now-half-
+            # built, about-to-be-discarded instance (the caller catches
+            # this same exception and drops the only reference — see
+            # overlay_compositor._run()'s DComp init try/except setting
+            # self._dcomp = None), so those COM objects (D3D11 device/
+            # context, DXGI device/adapter/factory, possibly the
+            # swapchain/DComp device/target/visual) would otherwise leak
+            # for the rest of the process's life — destroy() itself
+            # early-returns on `not self._alive`, which is exactly this
+            # state, so it can't be relied on here. Release everything
+            # directly instead; _release() already tolerates None/null.
+            for obj in (self._staging, self._dc_vis, self._dc_tgt,
+                        self._dc_dev, self._swap, self._dxgi_fac,
+                        self._dxgi_adp, self._dxgi_dev,
+                        self._d3d_ctx, self._d3d_dev):
+                _release(obj)
+            raise
 
     # ── setup ────────────────────────────────────────────────────
 

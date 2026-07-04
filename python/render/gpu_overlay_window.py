@@ -276,11 +276,39 @@ SW_HIDE = 0
 SW_SHOWNOACTIVATE = 4
 
 
+def _reassert_topmost(hwnd: int) -> None:
+    """The SetWindowPos half of _apply_click_through/_apply_interactive,
+    split out so a caller on a thread OTHER than the one that owns
+    ``hwnd`` can defer just this part instead of calling it directly.
+
+    SetWindowPos is not the fire-and-forget call SetWindowLongPtrW is:
+    cross-thread, Windows dispatches WM_WINDOWPOSCHANGING/CHANGED
+    synchronously, blocking the caller until hwnd's owning thread's
+    message loop processes it — see set_click_through's docstring for
+    where this mattered live (a legacy GLFW overlay's hwnd is owned by
+    the pump thread, not the Tk thread that toggles click-through)."""
+    if sys.platform != 'win32':
+        return
+    _user32.SetWindowPos(
+        hwnd, HWND_TOPMOST, 0, 0, 0, 0,
+        SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE)
+
+
 def _apply_click_through(hwnd: int) -> None:
     """Belt-and-suspenders: GLFW 3.4 ``MOUSE_PASSTHROUGH`` already sets
     ``WS_EX_TRANSPARENT`` on Windows, but some drivers/DWM configs miss
     the layered-attributes call. Re-apply explicitly so DWM treats the
-    framebuffer alpha as the per-pixel mask."""
+    framebuffer alpha as the per-pixel mask.
+
+    Callers on the hwnd's own owning thread (window creation, below)
+    can call this directly. A caller on a DIFFERENT thread should call
+    _apply_click_through_exstyle + defer _reassert_topmost separately —
+    see set_click_through."""
+    _apply_click_through_exstyle(hwnd)
+    _reassert_topmost(hwnd)
+
+
+def _apply_click_through_exstyle(hwnd: int) -> None:
     if sys.platform != 'win32':
         return
     cur = _user32.GetWindowLongPtrW(hwnd, GWL_EXSTYLE)
@@ -288,12 +316,15 @@ def _apply_click_through(hwnd: int) -> None:
            | WS_EX_TOOLWINDOW | WS_EX_TOPMOST | WS_EX_NOACTIVATE)
     _user32.SetWindowLongPtrW(hwnd, GWL_EXSTYLE, new)
     _user32.SetLayeredWindowAttributes(hwnd, 0, 255, LWA_ALPHA)
-    _user32.SetWindowPos(
-        hwnd, HWND_TOPMOST, 0, 0, 0, 0,
-        SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE)
 
 
 def _apply_interactive(hwnd: int) -> None:
+    """See _apply_click_through's docstring re: thread affinity."""
+    _apply_interactive_exstyle(hwnd)
+    _reassert_topmost(hwnd)
+
+
+def _apply_interactive_exstyle(hwnd: int) -> None:
     if sys.platform != 'win32':
         return
     cur = _user32.GetWindowLongPtrW(hwnd, GWL_EXSTYLE)
@@ -301,9 +332,6 @@ def _apply_interactive(hwnd: int) -> None:
            & ~WS_EX_TRANSPARENT & ~WS_EX_NOACTIVATE)
     _user32.SetWindowLongPtrW(hwnd, GWL_EXSTYLE, new)
     _user32.SetLayeredWindowAttributes(hwnd, 0, 255, LWA_ALPHA)
-    _user32.SetWindowPos(
-        hwnd, HWND_TOPMOST, 0, 0, 0, 0,
-        SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE)
 
 
 def _apply_dwm_transparency(hwnd: int) -> None:
@@ -1375,12 +1403,35 @@ class GpuOverlayWindow:
         if not hwnd:
             return
 
-        # Fast path: Win32 ex-style toggle, synchronous, thread-safe.
+        # Fast path: Win32 ex-style toggle, synchronous, thread-safe
+        # (SetWindowLongPtrW/SetLayeredWindowAttributes only — no cross-
+        # thread SetWindowPos here, see _reassert_topmost below).
         try:
             if click:
-                _apply_click_through(hwnd)
+                _apply_click_through_exstyle(hwnd)
             else:
-                _apply_interactive(hwnd)
+                _apply_interactive_exstyle(hwnd)
+        except Exception:
+            pass
+
+        # hwnd is owned by the pump thread, not this (Tk) calling thread.
+        # SetWindowPos cross-thread is not fire-and-forget like
+        # SetWindowLongPtrW — Windows dispatches WM_WINDOWPOSCHANGING/
+        # CHANGED synchronously, blocking this thread until the pump's
+        # message loop processes it, which can stall for as long as the
+        # pump is busy elsewhere (rendering, or worse, blocked itself —
+        # see DCompBridge.device_removed's docstring for the analogous
+        # compositor-side case). Re-asserting HWND_TOPMOST a tick later
+        # is imperceptible; defer it onto the pump like the GLFW
+        # attribute mirror below already does, instead of calling it
+        # directly from here.
+        def _reassert_topmost_on_pump() -> None:
+            try:
+                _reassert_topmost(hwnd)
+            except Exception:
+                pass
+        try:
+            self._pump.post_cmd(_reassert_topmost_on_pump)
         except Exception:
             pass
 

@@ -792,6 +792,11 @@ class RecognitionEngine:
         self._sta_offline_since: float = 0.0     # first low-confidence timestamp
         self._sta_online_since: float = 0.0      # first good-confidence after offline
         self._sta_warmup_until: float = 0.0      # suppress offline during startup warmup
+        # 0.0 = currently has (or has never lost) a target window. Set the
+        # first tick find_target_window() comes back empty; cleared the
+        # moment it succeeds again. _current_fps() uses this to back off
+        # hard once it's been empty for a while — see that method.
+        self._no_window_since: float = 0.0
 
     def set_debug_callback(self, cb):
         self._debug_callback = cb
@@ -890,14 +895,32 @@ class RecognitionEngine:
             elapsed = time.time() - start
             time.sleep(max(0.01, (1.0 / self._current_fps()) - elapsed))
 
+    # Poll rate once the game window has been missing this long — this
+    # engine is started unconditionally at plugin load (plugin.py), with
+    # no check for whether the Star Resonance game process is even
+    # running, so a pure-desktop-pet session (no game at all, possibly
+    # for the entire process lifetime) would otherwise hammer
+    # find_target_window() at _fps_active (10-20 Hz) forever. That's the
+    # right rate for "game just alt-tabbed away, reappearing any
+    # instant" but pure waste — and unnecessary risk exposure to
+    # anything else in this tick's call chain — once it's clear there's
+    # no game to find at all.
+    _NO_WINDOW_BACKOFF_AFTER_S = 3.0
+    _NO_WINDOW_BACKOFF_FPS = 0.5
+
     def _current_fps(self) -> float:
-        """Adaptive cap: drop tick rate when STA hasn't moved for a while.
+        """Adaptive cap: drop tick rate when STA hasn't moved for a while,
+        or hard-drop it when there's no game window at all.
 
         PrintWindow + DwmFlush dominate this thread's wall time; running them
         at 10 Hz when nothing on screen is changing wastes CPU/GPU and DWM
         bandwidth. We keep ramp-up free — any change in STA value resets us
         immediately back to the fast tier.
         """
+        if (self._no_window_since != 0.0
+                and (time.time() - self._no_window_since)
+                >= self._NO_WINDOW_BACKOFF_AFTER_S):
+            return self._NO_WINDOW_BACKOFF_FPS
         if not self._fps_idle_until_change:
             return float(self._fps_active)
         cur = self._sta_filtered_pct
@@ -920,6 +943,8 @@ class RecognitionEngine:
         result = self._locator.find_target_window()
         if result is None:
             _set_capture_target(0, None)
+            if self._no_window_since == 0.0:
+                self._no_window_since = _tick_now
             if not self._no_window_logged:
                 self._no_window_logged = True
                 print("[Vision] game window not found")
@@ -930,6 +955,7 @@ class RecognitionEngine:
             )
             return
 
+        self._no_window_since = 0.0
         self._no_window_logged = False
         hwnd, _title, rect = result
         _set_capture_target(hwnd, rect)
