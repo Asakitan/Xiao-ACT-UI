@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""Static guards for commander webview rendering safety."""
+# Static guards for commander webview rendering safety.
 
 from pathlib import Path
 

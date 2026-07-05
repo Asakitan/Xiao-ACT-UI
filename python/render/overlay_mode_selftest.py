@@ -1,4 +1,4 @@
-"""Regression tests for unified overlay mode fallback behavior."""
+# Regression tests for unified overlay mode fallback behavior.
 
 from __future__ import annotations
 

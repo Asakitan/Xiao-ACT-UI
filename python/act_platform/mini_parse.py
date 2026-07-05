@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""Mini-Parse / clipboard formatter registry for ACT reports."""
+# Mini-Parse / clipboard formatter registry for ACT reports.
 
 from __future__ import annotations
 
@@ -82,7 +82,7 @@ class MiniParseFormatter:
 
 
 class MiniParseFormatterRegistry:
-    """Registry for compact ACT clipboard/live text formatters."""
+    # Registry for compact ACT clipboard/live text formatters.
 
     def __init__(self) -> None:
         self._formatters: dict[str, MiniParseFormatter] = {}

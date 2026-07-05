@@ -78,10 +78,13 @@ drivers/
 locale/
 driver_*.py
 rt_io.py
+_dc.py
+_vf.py
 post_build_harden.py
 _sao_cy_wnd.pyx
 _encrypt_drivers.py
 _build_driver.py
+_convert_docstrings.py
 
 # —— License system (local only, never commit) ────────────────────────
 python/license/

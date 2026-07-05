@@ -1,19 +1,18 @@
 # -*- coding: utf-8 -*-
-"""Phase 5 contract test for FieldAuthority + PacketBridge publish gating.
-
-Validates:
-  - Per-component source granularity: one field in TCP doesn't force another
-    field out of MEMORY.
-  - Classified-failure backoff: SCAN_IN_PROGRESS and PROCESS_MISSING do NOT
-    count as failures (the latent bug Phase 5 fixes).
-  - Threshold-based degrade (3 counted fails), exponential backoff schedule.
-  - Back-compat shim: set_field_authority(None) restores the legacy single-bool
-    behavior exactly — no test breakage.
-
-Run::
-
-    python -m mem_probe.il2cpp.test_field_authority
-"""
+# Phase 5 contract test for FieldAuthority + PacketBridge publish gating.
+#
+# Validates:
+# - Per-component source granularity: one field in TCP doesn't force another
+# field out of MEMORY.
+# - Classified-failure backoff: SCAN_IN_PROGRESS and PROCESS_MISSING do NOT
+# count as failures (the latent bug Phase 5 fixes).
+# - Threshold-based degrade (3 counted fails), exponential backoff schedule.
+# - Back-compat shim: set_field_authority(None) restores the legacy single-bool
+# behavior exactly — no test breakage.
+#
+# Run::
+#
+# python -m mem_probe.il2cpp.test_field_authority
 from __future__ import annotations
 
 import os
@@ -175,8 +174,8 @@ def test_report_shape():
 # instantiation requires the cython packet module and is covered by replay fixtures.
 
 def test_packet_bridge_helper_with_no_authority_falls_back_to_bool():
-    """When set_field_authority(None) is called, _component_source_for_publish
-    must consult the legacy single bool — no behavior change vs pre-Phase-5."""
+    # When set_field_authority(None) is called, _component_source_for_publish
+    # must consult the legacy single bool — no behavior change vs pre-Phase-5.
     # Build a minimal stub mirroring only the two attributes the helper reads.
     class _BridgeStub:
         _field_authority = None

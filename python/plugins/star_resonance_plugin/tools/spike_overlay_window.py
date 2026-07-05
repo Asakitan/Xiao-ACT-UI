@@ -1,17 +1,15 @@
-"""
-Spike: GLFW borderless transparent click-through always-on-top overlay window
-on Windows + moderngl context, render an animated SDF beam, and verify mouse
-input passes through to underlying windows (game).
-
-This is the proposed replacement for Tk Toplevel + UpdateLayeredWindow ULW
-path used by SkillFX / HP / BOSSHP overlays.
-
-Run:
-    cd e:/VC/SAO-UI/sao_auto/tools && e:/Py/python.exe spike_overlay_window.py
-
-Press ESC or close to exit. Move mouse over the window; clicks should reach
-whatever is under it (NOT the overlay).
-"""
+# Spike: GLFW borderless transparent click-through always-on-top overlay window
+# on Windows + moderngl context, render an animated SDF beam, and verify mouse
+# input passes through to underlying windows (game).
+#
+# This is the proposed replacement for Tk Toplevel + UpdateLayeredWindow ULW
+# path used by SkillFX / HP / BOSSHP overlays.
+#
+# Run:
+# cd e:/VC/SAO-UI/sao_auto/tools && e:/Py/python.exe spike_overlay_window.py
+#
+# Press ESC or close to exit. Move mouse over the window; clicks should reach
+# whatever is under it (NOT the overlay).
 from __future__ import annotations
 
 import ctypes
@@ -56,7 +54,7 @@ user32.SetWindowPos.argtypes = [wintypes.HWND, wintypes.HWND, ctypes.c_int,
 
 
 def make_window_overlay(hwnd: int) -> None:
-    """Apply layered + transparent + toolwindow ex-styles for click-through."""
+    # Apply layered + transparent + toolwindow ex-styles for click-through.
     cur = user32.GetWindowLongPtrW(hwnd, GWL_EXSTYLE)
     new = (cur | WS_EX_LAYERED | WS_EX_TRANSPARENT
            | WS_EX_TOOLWINDOW | WS_EX_TOPMOST | WS_EX_NOACTIVATE)

@@ -1,7 +1,5 @@
 # -*- coding: utf-8 -*-
-"""
-播放器模块 - 负责控制MIDI/JS播放和键盘模拟，支持和弦
-"""
+# 播放器模块 - 负责控制MIDI/JS播放和键盘模拟，支持和弦
 
 import time
 import threading
@@ -99,7 +97,7 @@ PIANO_PHRASE_END_STRETCH = 1.40  # 乐句末尾音符充分拉伸，句尾自然
 
 @dataclass
 class PlaybackState:
-    """播放状态"""
+    # 播放状态
     is_playing: bool = False
     is_paused: bool = False
     current_time: float = 0.0
@@ -108,7 +106,7 @@ class PlaybackState:
 
 
 class KeyboardSimulator:
-    """键盘模拟器（支持SHIFT/CTRL三模式切换扩展音域）"""
+    # 键盘模拟器（支持SHIFT/CTRL三模式切换扩展音域）
     
     def __init__(self):
         self.use_keyboard = KEYBOARD_AVAILABLE
@@ -135,7 +133,7 @@ class KeyboardSimulator:
             self.controller = Controller()
     
     def _do_press(self, key: str):
-        """实际按下按键，返回按下代数（用于释放时验证）"""
+        # 实际按下按键，返回按下代数（用于释放时验证）
         now = time.monotonic()
         last = self._last_press_time.get(key, 0.0)
         elapsed_ms = (now - last) * 1000.0
@@ -186,7 +184,7 @@ class KeyboardSimulator:
         return gen
     
     def _do_release(self, key: str):
-        """实际释放按键"""
+        # 实际释放按键
         try:
             if key in self._active_keys:
                 if self.use_keyboard and KEYBOARD_AVAILABLE:
@@ -201,7 +199,7 @@ class KeyboardSimulator:
             print(f"按键释放失败: {e}")
     
     def set_sustain_pedal(self, held: bool):
-        """设置物理延音踏板状态（空格键按住/释放）"""
+        # 设置物理延音踏板状态（空格键按住/释放）
         self._sustain_pedal_held = held
         if not held:
             # 踏板释放 → 通知所有等待的释放线程继续
@@ -211,11 +209,11 @@ class KeyboardSimulator:
             self._sustain_pedal_event.clear()
     
     def set_sustain_pedal_enabled(self, enabled: bool):
-        """启用/禁用物理延音踏板功能"""
+        # 启用/禁用物理延音踏板功能
         self._sustain_pedal_enabled = enabled
     
     def _schedule_release(self, keys_with_gen: list, delay: float):
-        """安排延迟释放按键，带代数检查防止误释放，支持延音踏板保持"""
+        # 安排延迟释放按键，带代数检查防止误释放，支持延音踏板保持
         def release_keys():
             time.sleep(delay)
             # 延音踏板保持：如果空格键被按住，等待直到释放后再松键
@@ -237,7 +235,7 @@ class KeyboardSimulator:
             self._timer_cleanup_counter = 0
     
     def _cleanup_timers(self):
-        """清理已完成的释放定时器线程，防止内存泄漏"""
+        # 清理已完成的释放定时器线程，防止内存泄漏
         before = len(self._release_timers)
         self._release_timers = [t for t in self._release_timers if t.is_alive()]
         cleaned = before - len(self._release_timers)
@@ -245,7 +243,7 @@ class KeyboardSimulator:
             print(f"[内存] 清理了 {cleaned} 个已完成的定时器线程")
             
     def press_key(self, key: str, duration: float = KEY_PRESS_DURATION):
-        """模拟单个按键（阻塞模式）"""
+        # 模拟单个按键（阻塞模式）
         try:
             if self.use_keyboard and KEYBOARD_AVAILABLE:
                 keyboard.press(key)
@@ -259,14 +257,14 @@ class KeyboardSimulator:
             print(f"按键模拟失败: {e}")
     
     def press_key_async(self, key: str, duration: float = KEY_PRESS_DURATION):
-        """模拟单个按键（非阻塞模式，按键在后台延迟释放）"""
+        # 模拟单个按键（非阻塞模式，按键在后台延迟释放）
         gen = self._do_press(key)
         if gen == 0:  # 速率限制丢弃
             return
         self._schedule_release([(key, gen)], duration)
     
     def press_keys_async(self, keys: List[str], duration: float = KEY_PRESS_DURATION):
-        """同时按下多个键（非阻塞模式）"""
+        # 同时按下多个键（非阻塞模式）
         if not keys:
             return
         keys_with_gen = []
@@ -281,7 +279,7 @@ class KeyboardSimulator:
         self._schedule_release(keys_with_gen, duration)
             
     def press_keys(self, keys: List[str], duration: float = KEY_PRESS_DURATION):
-        """同时按下多个键（阻塞模式）"""
+        # 同时按下多个键（阻塞模式）
         if not keys:
             return
             
@@ -307,7 +305,7 @@ class KeyboardSimulator:
             print(f"按键模拟失败: {e}")
     
     def release_all(self):
-        """释放所有当前按下的键"""
+        # 释放所有当前按下的键
         for key in list(self._active_keys):
             self._do_release(key)
         self._active_keys_order.clear()  # 清理顺序列表
@@ -316,11 +314,10 @@ class KeyboardSimulator:
         self._cleanup_timers()
     
     def _toggle_modifier_key(self, key_name: str):
-        """按下并释放一个修饰键。无死区：仅阻塞物理按键时长(≈35ms)。
-        OS键盘事件队列FIFO，模式键已先于后续音符键入队，游戏将按顺序处理。
-
-        key_name 支持: 'left shift', 'left ctrl', ',', '.'
-        """
+        # 按下并释放一个修饰键。无死区：仅阻塞物理按键时长(≈35ms)。
+        # OS键盘事件队列FIFO，模式键已先于后续音符键入队，游戏将按顺序处理。
+        #
+        # key_name 支持: 'left shift', 'left ctrl', ',', '.'
         try:
             key_press_sec = MODE_KEY_PRESS_MS / 1000.0
             if self.use_keyboard and KEYBOARD_AVAILABLE:
@@ -349,7 +346,7 @@ class KeyboardSimulator:
             print(f"[MODE] {key_name} 切换失败: {e}")
 
     def toggle_shift(self):
-        """切换SHIFT模式（向后兼容）"""
+        # 切换SHIFT模式（向后兼容）
         self._toggle_modifier_key('left shift')
         if self._current_mode == 'shift':
             self._current_mode = 'normal'
@@ -357,7 +354,7 @@ class KeyboardSimulator:
             self._current_mode = 'shift'
 
     def toggle_ctrl(self):
-        """切换CTRL模式"""
+        # 切换CTRL模式
         self._toggle_modifier_key('left ctrl')
         if self._current_mode == 'ctrl':
             self._current_mode = 'normal'
@@ -365,7 +362,7 @@ class KeyboardSimulator:
             self._current_mode = 'ctrl'
     
     def toggle_lt(self):
-        """切换<模式"""
+        # 切换<模式
         self._toggle_modifier_key(',')
         if self._current_mode == 'lt':
             self._current_mode = 'normal'
@@ -373,7 +370,7 @@ class KeyboardSimulator:
             self._current_mode = 'lt'
     
     def toggle_gt(self):
-        """切换>模式"""
+        # 切换>模式
         self._toggle_modifier_key('.')
         if self._current_mode == 'gt':
             self._current_mode = 'normal'
@@ -381,23 +378,22 @@ class KeyboardSimulator:
             self._current_mode = 'gt'
     
     def ensure_mode(self, target_mode: str):
-        """确保当前处于指定模式。
-
-        classic 模式 (ctrl/shift): 游戏允许直接按目标键切换，无需先退出当前模式。
-          normal ↔ ctrl:  按 left ctrl
-          normal ↔ shift: 按 left shift
-          ctrl  → shift:  只按 left shift（游戏直接切过去）
-          shift → ctrl:   只按 left ctrl（同理）
-
-        extended 模式 (lt/gt): < 和 > 是相对方向键，每按一次移动一个档位。
-          > 永远向高音方向走一步，< 永远向低音方向走一步。
-          normal → lt:  按 , (向下一步)
-          normal → gt:  按 . (向上一步)
-          lt → normal:  按 . (向上一步，回来)
-          gt → normal:  按 , (向下一步，回来)
-          lt → gt:      按 . (lt→normal) 再按 . (normal→gt)
-          gt → lt:      按 , (gt→normal) 再按 , (normal→lt)
-        """
+        # 确保当前处于指定模式。
+        #
+        # classic 模式 (ctrl/shift): 游戏允许直接按目标键切换，无需先退出当前模式。
+        # normal ↔ ctrl:  按 left ctrl
+        # normal ↔ shift: 按 left shift
+        # ctrl  → shift:  只按 left shift（游戏直接切过去）
+        # shift → ctrl:   只按 left ctrl（同理）
+        #
+        # extended 模式 (lt/gt): < 和 > 是相对方向键，每按一次移动一个档位。
+        # > 永远向高音方向走一步，< 永远向低音方向走一步。
+        # normal → lt:  按 , (向下一步)
+        # normal → gt:  按 . (向上一步)
+        # lt → normal:  按 . (向上一步，回来)
+        # gt → normal:  按 , (向下一步，回来)
+        # lt → gt:      按 . (lt→normal) 再按 . (normal→gt)
+        # gt → lt:      按 , (gt→normal) 再按 , (normal→lt)
         if self._current_mode == target_mode:
             return
 
@@ -439,11 +435,11 @@ class KeyboardSimulator:
             self._force_reset_mode(target=target_mode)
 
     def ensure_shift_state(self, need_shift: bool):
-        """确保SHIFT处于指定状态（向后兼容）"""
+        # 确保SHIFT处于指定状态（向后兼容）
         self.ensure_mode('shift' if need_shift else 'normal')
 
     def _force_reset_mode(self, target: str = 'normal'):
-        """强制重置到已知模式状态，用于防漂移。先归零计数再调 ensure_mode，避免递归。"""
+        # 强制重置到已知模式状态，用于防漂移。先归零计数再调 ensure_mode，避免递归。
         print(f"[MODE] 累积{self._mode_toggle_count}次切换，执行防漂移重置 → {target}")
         # 先归零，防止 ensure_mode 内再次触发 _force_reset_mode
         self._mode_toggle_count = 0
@@ -456,15 +452,15 @@ class KeyboardSimulator:
             self.ensure_mode(target)
 
     def _force_reset_shift(self, target: bool = False):
-        """强制重置SHIFT状态（向后兼容）"""
+        # 强制重置SHIFT状态（向后兼容）
         self._force_reset_mode(target='shift' if target else 'normal')
     
     def reset_shift(self):
-        """重置为普通模式（向后兼容）"""
+        # 重置为普通模式（向后兼容）
         self.reset_mode()
     
     def reset_mode(self):
-        """重置为普通模式 - 可靠版本"""
+        # 重置为普通模式 - 可靠版本
         if self._current_mode != 'normal':
             self.ensure_mode('normal')
             # 安全验证：如果切换次数很多，做强制重置
@@ -478,7 +474,7 @@ class KeyboardSimulator:
 
 
 class MidiPlayer:
-    """MIDI播放器 - 支持和弦"""
+    # MIDI播放器 - 支持和弦
     
     def __init__(self):
         self.parser = MidiParser()
@@ -574,7 +570,7 @@ class MidiPlayer:
     # ==================== 熟练度系统 ====================
     
     def _load_proficiency_data(self):
-        """从settings.json加载熟练度数据、C调直转设置和连音重叠设置"""
+        # 从settings.json加载熟练度数据、C调直转设置和连音重叠设置
         import settings_crypto
         from mp_config import CONFIG_FILE
         data = settings_crypto.read_settings_file(CONFIG_FILE, migrate=True)
@@ -585,7 +581,7 @@ class MidiPlayer:
         self._legato_overlap_enabled = data.get('legato_overlap', LEGATO_OVERLAP_ENABLED)
     
     def _save_proficiency_data(self):
-        """保存熟练度数据到settings.json"""
+        # 保存熟练度数据到settings.json
         import settings_crypto
         from mp_config import CONFIG_FILE
         data = settings_crypto.read_settings_file(CONFIG_FILE)
@@ -596,7 +592,7 @@ class MidiPlayer:
             print("[熟练度] 保存失败")
     
     def _save_direct_c_mode(self):
-        """保存C调直转模式设置到settings.json"""
+        # 保存C调直转模式设置到settings.json
         import settings_crypto
         from mp_config import CONFIG_FILE
         data = settings_crypto.read_settings_file(CONFIG_FILE)
@@ -607,38 +603,38 @@ class MidiPlayer:
             print("[C调直转] 保存设置失败")
     
     def toggle_legato_overlap(self) -> bool:
-        """切换连音重叠（延音到下个音符）开关，返回切换后的状态"""
+        # 切换连音重叠（延音到下个音符）开关，返回切换后的状态
         self._legato_overlap_enabled = not self._legato_overlap_enabled
         self._save_legato_overlap()
         self._update_space_pedal_state()
         return self._legato_overlap_enabled
     
     def set_legato_overlap(self, enabled: bool, save: bool = True):
-        """设置连音重叠开关"""
+        # 设置连音重叠开关
         self._legato_overlap_enabled = enabled
         self._update_space_pedal_state()
         if save:
             self._save_legato_overlap()
     
     def get_legato_overlap(self) -> bool:
-        """获取当前连音重叠状态"""
+        # 获取当前连音重叠状态
         return self._legato_overlap_enabled
 
     def set_long_sustain_pedal(self, enabled: bool, save: bool = True):
-        """兼容新版UI的Space踏板开关；旧播放逻辑不再用它改变后端延音。"""
+        # 兼容新版UI的Space踏板开关；旧播放逻辑不再用它改变后端延音。
         self._long_sustain_pedal_enabled = bool(enabled)
 
     def get_long_sustain_pedal(self) -> bool:
-        """获取兼容状态，供UI显示使用。"""
+        # 获取兼容状态，供UI显示使用。
         return getattr(self, '_long_sustain_pedal_enabled', False)
 
     def toggle_long_sustain_pedal(self) -> bool:
-        """切换兼容状态，供UI显示使用。"""
+        # 切换兼容状态，供UI显示使用。
         self.set_long_sustain_pedal(not self.get_long_sustain_pedal())
         return self.get_long_sustain_pedal()
     
     def _save_legato_overlap(self):
-        """保存连音重叠设置到settings.json"""
+        # 保存连音重叠设置到settings.json
         import settings_crypto
         from mp_config import CONFIG_FILE
         data = settings_crypto.read_settings_file(CONFIG_FILE)
@@ -651,12 +647,12 @@ class MidiPlayer:
     # ==================== 物理延音踏板（空格键） ====================
     
     def _update_space_pedal_state(self):
-        """根据连音重叠状态决定是否启用空格延音踏板"""
+        # 根据连音重叠状态决定是否启用空格延音踏板
         # 连音重叠关闭时，启用空格键作为物理延音踏板
         self.simulator.set_sustain_pedal_enabled(not self._legato_overlap_enabled)
     
     def _start_space_listener(self):
-        """启动空格键监听器（用pynput监听物理按键）"""
+        # 启动空格键监听器（用pynput监听物理按键）
         if self._space_listener is not None:
             return  # 已在运行
         if not PYNPUT_AVAILABLE:
@@ -685,7 +681,7 @@ class MidiPlayer:
         self._space_listener.start()
     
     def _stop_space_listener(self):
-        """停止空格键监听器"""
+        # 停止空格键监听器
         if self._space_listener is not None:
             try:
                 self._space_listener.stop()
@@ -694,7 +690,7 @@ class MidiPlayer:
             self._space_listener = None
     
     def _calculate_song_hash(self, filepath: str) -> str:
-        """计算曲目的唯一标识（基于文件名+音符数+时长）"""
+        # 计算曲目的唯一标识（基于文件名+音符数+时长）
         import os
         import hashlib
         filename = os.path.basename(filepath)
@@ -705,7 +701,7 @@ class MidiPlayer:
         return hashlib.md5(key.encode()).hexdigest()[:12]
     
     def _update_proficiency(self):
-        """更新当前曲目的熟练度"""
+        # 更新当前曲目的熟练度
         if not self._current_song_hash:
             return
         
@@ -716,7 +712,7 @@ class MidiPlayer:
         self._current_proficiency = min(0.99, play_count * 0.05)
         
     def _increment_play_count(self):
-        """增加当前曲目的播放次数"""
+        # 增加当前曲目的播放次数
         if not self._current_song_hash:
             return
         count = self._song_play_counts.get(self._current_song_hash, 0)
@@ -726,7 +722,7 @@ class MidiPlayer:
         print(f"[熟练度] 播放次数: {count + 1}, 熟练度: {self._current_proficiency*100:.0f}%")
     
     def get_proficiency_info(self) -> dict:
-        """获取当前曲目的熟练度信息"""
+        # 获取当前曲目的熟练度信息
         play_count = self._song_play_counts.get(self._current_song_hash, 0) if self._current_song_hash else 0
         return {
             'play_count': play_count,
@@ -735,12 +731,12 @@ class MidiPlayer:
         }
     
     def set_proficiency_enabled(self, enabled: bool):
-        """设置是否启用熟练度模拟"""
+        # 设置是否启用熟练度模拟
         self._proficiency_enabled = enabled
         print(f"[熟练度] {'启用' if enabled else '禁用'}熟练度模拟")
         
     def reset_proficiency(self):
-        """重置当前曲目的熟练度"""
+        # 重置当前曲目的熟练度
         if self._current_song_hash:
             self._song_play_counts[self._current_song_hash] = 0
             self._current_proficiency = 0.0
@@ -748,16 +744,14 @@ class MidiPlayer:
             print(f"[熟练度] 已重置当前曲目熟练度")
     
     def _apply_proficiency_effect(self, key: str, duration: float, is_chord: bool) -> tuple:
-        """
-        应用熟练度效果
-        
-        不熟练时的效果：
-        - 按键时间变化（偏长或偏短）
-        - 小概率按错相邻键
-        - 节奏微微不稳
-        
-        返回: (实际按键, 实际时长)
-        """
+        # 应用熟练度效果
+        #
+        # 不熟练时的效果：
+        # - 按键时间变化（偏长或偏短）
+        # - 小概率按错相邻键
+        # - 节奏微微不稳
+        #
+        # 返回: (实际按键, 实际时长)
         if not self._proficiency_enabled:
             return key, duration
         
@@ -804,18 +798,18 @@ class MidiPlayer:
     # ==================== 音部设置 ====================
         
     def set_part_filter(self, play_melody: bool, play_bass: bool):
-        """设置音部过滤"""
+        # 设置音部过滤
         self.play_melody = play_melody
         self.play_bass = play_bass
     
     def set_bass_density(self, density: float):
-        """设置伴奏密度 (1.0=全部, 0.5=一半, 0.33=三分之一)"""
+        # 设置伴奏密度 (1.0=全部, 0.5=一半, 0.33=三分之一)
         self.bass_density = max(0.1, min(1.0, density))
         self._bass_skip_counter = 0
         print(f"[伴奏] 密度设置为 {self.bass_density:.0%}")
         
     def load_midi(self, filepath: str) -> bool:
-        """加载MIDI或JS文件"""
+        # 加载MIDI或JS文件
         # 加载前先重置模式状态，防止上一首残留导致后续曲目映射错乱
         self.simulator.reset_mode()
         # 重置屏幕防漂移计数
@@ -827,7 +821,7 @@ class MidiPlayer:
             return self._load_midi(filepath)
     
     def _load_midi(self, filepath: str) -> bool:
-        """加载MIDI文件"""
+        # 加载MIDI文件
         self._is_js_file = False
         # 确保使用 MidiParser
         if not isinstance(self.parser, MidiParser):
@@ -858,7 +852,7 @@ class MidiPlayer:
         return success
     
     def _load_js(self, filepath: str) -> bool:
-        """加载JS谱面文件"""
+        # 加载JS谱面文件
         self._is_js_file = True
         js_parser = JSParser()
         success = js_parser.load_file(filepath)
@@ -873,7 +867,7 @@ class MidiPlayer:
         return success
     
     def _setup_js_mapping(self):
-        """设置JS文件的直接映射（JS已经是游戏格式）"""
+        # 设置JS文件的直接映射（JS已经是游戏格式）
         self.mapper.set_transpose(0)
         self._note_remap = {}
         
@@ -899,19 +893,17 @@ class MidiPlayer:
             print(f"[JS映射] 直接使用游戏内键位，无需转换")
     
     def _detect_key_transpose(self, notes: list) -> int:
-        """
-        检测歌曲调性并返回最优移调值
-        
-        36键全音阶电子琴可以弹所有半音，不再需要移调到C大调。
-        只需要做八度移动让音域尽量落在可弹奏范围内。
-        使用对称评分，不偏向任何音区，保留原始音高特征。
-        
-        Args:
-            notes: MIDI音符列表
-            
-        Returns:
-            移调半音数（12的倍数，纯八度移动）
-        """
+        # 检测歌曲调性并返回最优移调值
+        #
+        # 36键全音阶电子琴可以弹所有半音，不再需要移调到C大调。
+        # 只需要做八度移动让音域尽量落在可弹奏范围内。
+        # 使用对称评分，不偏向任何音区，保留原始音高特征。
+        #
+        # Args:
+        # notes: MIDI音符列表
+        #
+        # Returns:
+        # 移调半音数（12的倍数，纯八度移动）
         if not notes:
             return 0
         
@@ -939,15 +931,13 @@ class MidiPlayer:
         return octave_adjust
     
     def _analyze_and_setup_mapping(self):
-        """
-        分析音域并建立智能映射方案（根据模式系统选择范围）
-        
-        classic 模式: C2-B6 (MIDI 36-95, 5八度, CTRL/SHIFT)
-        extended 模式: A0-C8 (MIDI 21-108, 88键, </>)
-        
-        使用对称评分算法：以可弹奏范围的真实中心为目标，
-        不偏向任何音区，优先保持原始音高。
-        """
+        # 分析音域并建立智能映射方案（根据模式系统选择范围）
+        #
+        # classic 模式: C2-B6 (MIDI 36-95, 5八度, CTRL/SHIFT)
+        # extended 模式: A0-C8 (MIDI 21-108, 88键, </>)
+        #
+        # 使用对称评分算法：以可弹奏范围的真实中心为目标，
+        # 不偏向任何音区，优先保持原始音高。
         # 如果启用了C调直转模式，跳过
         if self._direct_c_mode:
             print("[智能映射] 跳过 - C调直转模式已启用")
@@ -1093,18 +1083,16 @@ class MidiPlayer:
             print(f"[智能映射] 扩展区: <区{ext_low}个 + >区{ext_high}个")
     
     def _analyze_song_sustain_profile(self):
-        """
-        动态分析整首歌曲的延音特征，为每个段落计算最佳延音参数
-        
-        分析内容：
-        1. 歌曲整体节奏密度（慢歌需要更长延音）
-        2. 每个段落的音符密度和时值分布
-        3. BPM和拍号对延音的影响
-        4. 长音符/短音符比例
-        
-        Returns:
-            dict: 歌曲延音特征
-        """
+        # 动态分析整首歌曲的延音特征，为每个段落计算最佳延音参数
+        #
+        # 分析内容：
+        # 1. 歌曲整体节奏密度（慢歌需要更长延音）
+        # 2. 每个段落的音符密度和时值分布
+        # 3. BPM和拍号对延音的影响
+        # 4. 长音符/短音符比例
+        #
+        # Returns:
+        # dict: 歌曲延音特征
         if not self.parser.notes:
             return None
         
@@ -1180,16 +1168,14 @@ class MidiPlayer:
         return profile
     
     def _analyze_bass_solo_sections(self):
-        """
-        分析低音部独奏段落（过渡段用低音当主旋律的情况）
-        
-        检测条件：
-        1. 某段时间内只有低音部的音符
-        2. 低音部音符形成连续的旋律线
-        3. 高音部在该段时间内无音符或极少
-        
-        结果保存到 self._bass_solo_sections 和 self._integrated_bass_notes
-        """
+        # 分析低音部独奏段落（过渡段用低音当主旋律的情况）
+        #
+        # 检测条件：
+        # 1. 某段时间内只有低音部的音符
+        # 2. 低音部音符形成连续的旋律线
+        # 3. 高音部在该段时间内无音符或极少
+        #
+        # 结果保存到 self._bass_solo_sections 和 self._integrated_bass_notes
         if not self.parser.notes or not self.parser.melody_notes:
             self._bass_solo_sections = []
             self._integrated_bass_notes = set()
@@ -1258,17 +1244,15 @@ class MidiPlayer:
             print(f"[低音分析] 已标记 {len(self._integrated_bass_notes)} 个低音整合到主旋律")
     
     def _select_bass_for_integration(self):
-        """
-        当自动关闭低音部后，选取一部分低音音符整合到主旋律中
-        
-        选取算法（加强版）：
-        1. 低音独奏段的所有音符（已在 _analyze_bass_solo_sections 中标记）
-        2. 每个小节的第一拍和第三拍低音（标记节拍重音根音）
-        3. 旋律有间隙时的低音填充（降低间隙门槛到1拍）
-        4. 力度较强的低音（和弦根音）
-        5. 持续时间较长的低音（通常是旋律性低音）
-        6. 旋律与低音同步出现的低音（已被编曲者认为是旋律的一部分）
-        """
+        # 当自动关闭低音部后，选取一部分低音音符整合到主旋律中
+        #
+        # 选取算法（加强版）：
+        # 1. 低音独奏段的所有音符（已在 _analyze_bass_solo_sections 中标记）
+        # 2. 每个小节的第一拍和第三拍低音（标记节拍重音根音）
+        # 3. 旋律有间隙时的低音填充（降低间隙门槛到1拍）
+        # 4. 力度较强的低音（和弦根音）
+        # 5. 持续时间较长的低音（通常是旋律性低音）
+        # 6. 旋律与低音同步出现的低音（已被编曲者认为是旋律的一部分）
         if not self.parser.bass_notes or not self.parser.melody_notes:
             return
         
@@ -1331,21 +1315,18 @@ class MidiPlayer:
         print(f"[低音整合] 共选取 {len(self._integrated_bass_notes)} 个低音整合到主旋律 (共{len(sorted_bass)}个低音)")
     
     def set_transpose(self, semitones: int):
-        """
-        设置额外移调（在智能映射基础上的额外偏移）
-        
-        智能映射已自动检测调性并映射，此功能用于用户微调。
-        例如：自动检测到需要-6半音，用户还可以额外+2或-2微调。
-        """
+        # 设置额外移调（在智能映射基础上的额外偏移）
+        #
+        # 智能映射已自动检测调性并映射，此功能用于用户微调。
+        # 例如：自动检测到需要-6半音，用户还可以额外+2或-2微调。
         self._user_transpose = semitones
         print(f"[用户移调] 设置额外移调: {semitones:+d} 半音")
     
     def set_mode_system(self, system: str):
-        """设置模式系统: 'classic' (L Shift/L Ctrl) 或 'extended' (</>)
-        
-        classic模式: C2-B6 (MIDI 36-95, 60键)
-        extended模式: A0-C8 (MIDI 21-108, 88键/全钢琴)
-        """
+        # 设置模式系统: 'classic' (L Shift/L Ctrl) 或 'extended' (</>)
+        #
+        # classic模式: C2-B6 (MIDI 36-95, 60键)
+        # extended模式: A0-C8 (MIDI 21-108, 88键/全钢琴)
         self._mode_system = system
         self.mapper.set_mode_system(system)
         self.simulator._mode_system = system
@@ -1355,32 +1336,30 @@ class MidiPlayer:
         print(f"[模式系统] 切换为: {system} ({'CTRL/SHIFT' if system == 'classic' else '</>全键盘'})")
         
     def get_mode_system(self) -> str:
-        """获取当前模式系统"""
+        # 获取当前模式系统
         return self._mode_system
         
     def set_speed(self, speed: float):
-        """设置播放速度"""
+        # 设置播放速度
         self.state.speed = max(0.1, min(3.0, speed))
         
     # ==================== C调直转模式 ====================
     
     def set_direct_c_mode(self, enabled: bool, save: bool = True):
-        """
-        设置C调直转模式
-        
-        开启后：
-        - 自动检测原曲调性
-        - 将音符按音级(1234567)直接映射到C大调
-        - 禁用传统的半音偏移和八度偏移
-        - 低音自动用和弦键替代
-        
-        关闭后：
-        - 使用传统的智能映射方式
-        
-        Args:
-            enabled: 是否启用
-            save: 是否保存设置到配置文件
-        """
+        # 设置C调直转模式
+        #
+        # 开启后：
+        # - 自动检测原曲调性
+        # - 将音符按音级(1234567)直接映射到C大调
+        # - 禁用传统的半音偏移和八度偏移
+        # - 低音自动用和弦键替代
+        #
+        # 关闭后：
+        # - 使用传统的智能映射方式
+        #
+        # Args:
+        # enabled: 是否启用
+        # save: 是否保存设置到配置文件
         self._direct_c_mode = enabled
         if enabled and self.parser.notes:
             # 清除传统移调设置
@@ -1402,31 +1381,29 @@ class MidiPlayer:
             self._save_direct_c_mode()
     
     def is_direct_c_mode(self) -> bool:
-        """获取C调直转模式状态"""
+        # 获取C调直转模式状态
         return self._direct_c_mode
     
     def _get_key_name(self, key: int) -> str:
-        """获取调性名称"""
+        # 获取调性名称
         key_names = ['C', 'C#/Db', 'D', 'D#/Eb', 'E', 'F', 'F#/Gb', 'G', 'G#/Ab', 'A', 'A#/Bb', 'B']
         return key_names[key % 12]
     
     def _detect_song_key(self, notes: list, note_events: list = None) -> tuple:
-        """
-        使用改进的调性检测算法（借鉴music21的多种权重方案）
-        
-        改进点：
-        1. 优先使用MIDI文件内嵌的调号信息（最准确）
-        2. 考虑音符时值（持续时间），不只是出现次数
-        3. 使用皮尔逊相关系数代替简单加权求和
-        4. 支持多种权重模板，选择最适合的
-        
-        Args:
-            notes: MIDI音符号列表
-            note_events: NoteEvent对象列表（包含时值信息）
-            
-        Returns:
-            (key, mode, confidence): key为0-11表示C-B，mode为'major'或'minor'，confidence为置信度
-        """
+        # 使用改进的调性检测算法（借鉴music21的多种权重方案）
+        #
+        # 改进点：
+        # 1. 优先使用MIDI文件内嵌的调号信息（最准确）
+        # 2. 考虑音符时值（持续时间），不只是出现次数
+        # 3. 使用皮尔逊相关系数代替简单加权求和
+        # 4. 支持多种权重模板，选择最适合的
+        #
+        # Args:
+        # notes: MIDI音符号列表
+        # note_events: NoteEvent对象列表（包含时值信息）
+        #
+        # Returns:
+        # (key, mode, confidence): key为0-11表示C-B，mode为'major'或'minor'，confidence为置信度
         if not notes:
             return 0, 'major'
         
@@ -1475,7 +1452,7 @@ class MidiPlayer:
         BB_MINOR = [18.16, 0.69, 12.99, 13.34, 1.07, 11.15, 1.38, 21.07, 7.49, 1.53, 0.92, 10.21]
         
         def pearson_correlation(x, y):
-            """计算皮尔逊相关系数"""
+            # 计算皮尔逊相关系数
             n = len(x)
             mean_x = sum(x) / n
             mean_y = sum(y) / n
@@ -1490,7 +1467,7 @@ class MidiPlayer:
             return numerator / denominator
         
         def analyze_with_weights(major_weights, minor_weights, name):
-            """使用指定权重进行分析"""
+            # 使用指定权重进行分析
             best_key = 0
             best_mode = 'major'
             best_corr = -2
@@ -1571,37 +1548,35 @@ class MidiPlayer:
         return best_key, best_mode
     
     def _setup_direct_c_mapping(self):
-        """
-        设置C调直转映射
-        
-        核心原理：
-        1. 检测原曲调性（如G大调、D小调）
-        2. 计算需要移调多少才能变成C大调/A小调（白键调）
-        3. 直接把音符移调到对应的C大调白键位置
-        4. 根据原音高选择使用中音/中高音/高音区
-        5. 低音部分用和弦键替代
-        
-        关键改进：对于任何调性，都先转到C大调/A小调（白键调），
-        然后直接映射到对应的白键，保持相对音高关系。
-        
-        36键布局 + SHIFT扩展（全音阶，4八度）：
-        普通模式：
-        - 高音区 (Q-U + I,O,P,[,]): C5-B5  -> MIDI 72-83
-        - 中音区 (A-J + 6-0):       C4-B4  -> MIDI 60-71
-        - 低音区 (Z-M + 1-5):       C3-B3  -> MIDI 48-59
-        SHIFT模式扩展：
-        - 高音区 (Q-U + I,O,P,[,]): C6-B6  -> MIDI 84-95
-        
-        === 改进算法：基于音级的智能映射 ===
-        
-        不是简单移调，而是分析每个音符在原调中的"功能角色"（音级），
-        然后将该角色映射到C大调中对应的音符。
-        
-        例如：F大调的Bb（降7级）在旋律中作为"第4音"，
-        应该映射到C大调的F（第4音），而不是随意吸附。
-        
-        这样能保持旋律的"级进"和"跳进"关系，听起来更自然。
-        """
+        # 设置C调直转映射
+        #
+        # 核心原理：
+        # 1. 检测原曲调性（如G大调、D小调）
+        # 2. 计算需要移调多少才能变成C大调/A小调（白键调）
+        # 3. 直接把音符移调到对应的C大调白键位置
+        # 4. 根据原音高选择使用中音/中高音/高音区
+        # 5. 低音部分用和弦键替代
+        #
+        # 关键改进：对于任何调性，都先转到C大调/A小调（白键调），
+        # 然后直接映射到对应的白键，保持相对音高关系。
+        #
+        # 36键布局 + SHIFT扩展（全音阶，4八度）：
+        # 普通模式：
+        # - 高音区 (Q-U + I,O,P,[,]): C5-B5  -> MIDI 72-83
+        # - 中音区 (A-J + 6-0):       C4-B4  -> MIDI 60-71
+        # - 低音区 (Z-M + 1-5):       C3-B3  -> MIDI 48-59
+        # SHIFT模式扩展：
+        # - 高音区 (Q-U + I,O,P,[,]): C6-B6  -> MIDI 84-95
+        #
+        # === 改进算法：基于音级的智能映射 ===
+        #
+        # 不是简单移调，而是分析每个音符在原调中的"功能角色"（音级），
+        # 然后将该角色映射到C大调中对应的音符。
+        #
+        # 例如：F大调的Bb（降7级）在旋律中作为"第4音"，
+        # 应该映射到C大调的F（第4音），而不是随意吸附。
+        #
+        # 这样能保持旋律的"级进"和"跳进"关系，听起来更自然。
         if not self.parser.notes:
             return
         
@@ -1668,11 +1643,9 @@ class MidiPlayer:
         # 3. 在目标调中应用相同的变化
         
         def get_degree_and_alteration(pitch_class):
-            """
-            分析音符在原调中的角色
-            返回: (基础音级, 变化类型)
-            变化类型: 0=自然音阶音, +1=升高, -1=降低
-            """
+            # 分析音符在原调中的角色
+            # 返回: (基础音级, 变化类型)
+            # 变化类型: 0=自然音阶音, +1=升高, -1=降低
             degree = original_scale_degrees[pitch_class]
             if degree != -1:
                 return degree, 0  # 自然音阶音
@@ -1770,7 +1743,7 @@ class MidiPlayer:
         print(f"[C调直转] 音阶音: {perfect_count}, 变化音: {altered_count} ({perfect_count/(perfect_count+altered_count)*100:.1f}% 自然音)")
     
     def get_direct_c_info(self) -> dict:
-        """获取C调直转模式的信息"""
+        # 获取C调直转模式的信息
         return {
             'enabled': self._direct_c_mode,
             'detected_key': self._detected_key,
@@ -1782,15 +1755,13 @@ class MidiPlayer:
         }
         
     def _map_note_direct_c(self, midi_note: int) -> tuple:
-        """
-        C调直转模式下的音符映射
-        
-        Returns:
-            (key, is_chord, chord_name): 
-            - key: 按键字符
-            - is_chord: 是否是和弦
-            - chord_name: 如果是和弦，返回和弦名；否则为None
-        """
+        # C调直转模式下的音符映射
+        #
+        # Returns:
+        # (key, is_chord, chord_name):
+        # - key: 按键字符
+        # - is_chord: 是否是和弦
+        # - chord_name: 如果是和弦，返回和弦名；否则为None
         # 优先检查是否在和弦映射中
         if midi_note in self._direct_c_chord_map:
             chord_key, chord_name, degree = self._direct_c_chord_map[midi_note]
@@ -1809,16 +1780,16 @@ class MidiPlayer:
         return key, False, None
         
     def get_coverage_info(self) -> dict:
-        """获取音符覆盖信息"""
+        # 获取音符覆盖信息
         notes = [n.note for n in self.parser.notes]
         return self.mapper.analyze_coverage(notes)
     
     def get_chord_info(self) -> dict:
-        """获取和弦信息"""
+        # 获取和弦信息
         return self.parser.get_chord_summary()
     
     def play(self, start_from: float = 0.0):
-        """开始播放"""
+        # 开始播放
         if self.state.is_playing and not self.state.is_paused:
             return
             
@@ -1856,15 +1827,15 @@ class MidiPlayer:
         self._play_thread.start()
         
     def pause(self):
-        """暂停播放"""
+        # 暂停播放
         self.state.is_paused = True
         
     def resume(self):
-        """恢复播放"""
+        # 恢复播放
         self.state.is_paused = False
         
     def stop(self):
-        """停止播放 - 增强版，确保模式状态完全重置"""
+        # 停止播放 - 增强版，确保模式状态完全重置
         self._stop_event.set()
         self.state.is_paused = False
         
@@ -1892,7 +1863,7 @@ class MidiPlayer:
             self.on_sustain_change(False)
             
     def _play_loop_v2(self):
-        """播放循环 (使用PlayEvent) - 精确时序控制"""
+        # 播放循环 (使用PlayEvent) - 精确时序控制
         events = self.parser.get_play_events()
         total_time = self.parser.total_time
         
@@ -2018,18 +1989,16 @@ class MidiPlayer:
                 self.on_playback_end()
     
     def _analyze_song_character(self) -> dict:
-        """
-        分析歌曲特征：调性、节奏、情绪
-        
-        Returns:
-            {
-                'key': 调性根音 (0-11, 0=C),
-                'mode': 'major' 或 'minor',
-                'tempo_feel': 'slow', 'medium', 'fast', 'very_fast',
-                'energy': 'calm', 'moderate', 'energetic', 'intense',
-                'rhythm_pattern': 'flowing', 'punchy', 'waltz', 'march'
-            }
-        """
+        # 分析歌曲特征：调性、节奏、情绪
+        #
+        # Returns:
+        # {
+        # 'key': 调性根音 (0-11, 0=C),
+        # 'mode': 'major' 或 'minor',
+        # 'tempo_feel': 'slow', 'medium', 'fast', 'very_fast',
+        # 'energy': 'calm', 'moderate', 'energetic', 'intense',
+        # 'rhythm_pattern': 'flowing', 'punchy', 'waltz', 'march'
+        # }
         result = {
             'key': 0,  # 默认C
             'mode': 'major',
@@ -2145,26 +2114,24 @@ class MidiPlayer:
         return result
     
     def _calculate_ending_params(self, song_char: dict, bpm: float) -> dict:
-        """
-        根据歌曲内容计算结尾滑奏的自适应参数
-        
-        这是让滑奏更自然的核心函数，根据：
-        - 歌曲的情感氛围（大调欢快/小调忧伤）
-        - 歌曲的能量水平（安静/激烈）
-        - 歌曲的速度感（慢板/快板）
-        - 歌曲的节奏型（华尔兹/进行曲/流畅）
-        - 歌曲的总时长和复杂度
-        
-        Returns:
-            dict: 包含以下参数
-            - phrase_length: 滑奏片段的音符数量 (短/中/长)
-            - breath_time: 段落间的呼吸时间（秒）
-            - final_hold: 最终和弦的持续时间（秒）
-            - ritardando: 渐慢程度 (0.0-1.0)
-            - diminuendo: 渐弱程度 (0.0-1.0)
-            - chord_count: 结尾和弦数量
-            - ending_style: 结尾风格建议 ('gentle', 'majestic', 'dramatic', 'intimate')
-        """
+        # 根据歌曲内容计算结尾滑奏的自适应参数
+        #
+        # 这是让滑奏更自然的核心函数，根据：
+        # - 歌曲的情感氛围（大调欢快/小调忧伤）
+        # - 歌曲的能量水平（安静/激烈）
+        # - 歌曲的速度感（慢板/快板）
+        # - 歌曲的节奏型（华尔兹/进行曲/流畅）
+        # - 歌曲的总时长和复杂度
+        #
+        # Returns:
+        # dict: 包含以下参数
+        # - phrase_length: 滑奏片段的音符数量 (短/中/长)
+        # - breath_time: 段落间的呼吸时间（秒）
+        # - final_hold: 最终和弦的持续时间（秒）
+        # - ritardando: 渐慢程度 (0.0-1.0)
+        # - diminuendo: 渐弱程度 (0.0-1.0)
+        # - chord_count: 结尾和弦数量
+        # - ending_style: 结尾风格建议 ('gentle', 'majestic', 'dramatic', 'intimate')
         energy = song_char.get('energy', 'moderate')
         tempo_feel = song_char.get('tempo_feel', 'medium')
         rhythm = song_char.get('rhythm_pattern', 'flowing')
@@ -2300,17 +2267,15 @@ class MidiPlayer:
         return params
     
     def _extract_melody_phrase(self) -> List[int]:
-        """
-        提取主旋律中最有代表性的片段
-        
-        策略：
-        1. 找出主旋律中最高潮的部分（音高最高、力度最大）
-        2. 找出重复出现的音型模式
-        3. 提取一段连续上行或下行的旋律线
-        
-        Returns:
-            主旋律片段的MIDI音符列表（已映射到游戏范围）
-        """
+        # 提取主旋律中最有代表性的片段
+        #
+        # 策略：
+        # 1. 找出主旋律中最高潮的部分（音高最高、力度最大）
+        # 2. 找出重复出现的音型模式
+        # 3. 提取一段连续上行或下行的旋律线
+        #
+        # Returns:
+        # 主旋律片段的MIDI音符列表（已映射到游戏范围）
         if not self.parser.melody_notes:
             return []
         
@@ -2371,11 +2336,9 @@ class MidiPlayer:
     
     def _play_key_chord_ending(self, song_key: int, song_mode: str, interval: float, 
                                duration: float, energy: str):
-        """
-        根据调性播放和弦进行收尾
-        
-        使用该调的 I-IV-V-I 或 i-iv-V-i 进行
-        """
+        # 根据调性播放和弦进行收尾
+        #
+        # 使用该调的 I-IV-V-I 或 i-iv-V-i 进行
         # 和弦键映射 (根据游戏的Z-M和弦)
         # Z=C, X=Dm, C=Em, V=F, B=G, N=Am, M=G7
         
@@ -2441,16 +2404,14 @@ class MidiPlayer:
         self.simulator.press_keys([final_chord, 'a', 'q'], duration * 4)
     
     def _play_glissando(self):
-        """
-        播放结尾滑奏(Glissando) - 钢琴家谢幕风格 (增强版)
-        
-        设计理念：
-        1. 【核心】BPM与原曲一致 - 滑奏节奏感和主曲统一，不突兀
-        2. 慢歌延音更长 - BPM低时按键时间自动变长，更抒情
-        3. 抒情歌按抒情方式结束 - 根据能量自动选择风格
-        4. 渐慢(ritardando) - 结尾逐渐放慢，更有仪式感
-        5. 装饰音点缀 - 增加华丽感
-        """
+        # 播放结尾滑奏(Glissando) - 钢琴家谢幕风格 (增强版)
+        #
+        # 设计理念：
+        # 1. 【核心】BPM与原曲一致 - 滑奏节奏感和主曲统一，不突兀
+        # 2. 慢歌延音更长 - BPM低时按键时间自动变长，更抒情
+        # 3. 抒情歌按抒情方式结束 - 根据能量自动选择风格
+        # 4. 渐慢(ritardando) - 结尾逐渐放慢，更有仪式感
+        # 5. 装饰音点缀 - 增加华丽感
         import random
         
         if self._stop_event.is_set():
@@ -2600,7 +2561,7 @@ class MidiPlayer:
                                    tonic_chord, subdominant, dominant)
     
     def _get_scale_keys(self, song_key: int, song_mode: str) -> list:
-        """根据调性获取音阶对应的按键序列"""
+        # 根据调性获取音阶对应的按键序列
         if song_mode == 'major':
             scale_steps = [0, 2, 4, 5, 7, 9, 11]
         else:
@@ -2622,12 +2583,12 @@ class MidiPlayer:
         return scale_keys if scale_keys else ['z', 'x', 'c', 'v', 'b', 'a', 's', 'd', 'f', 'g', 'q', 'w', 'e']
     
     def _humanize_timing(self, base_interval: float, variation: float = 0.15) -> float:
-        """模拟人类演奏的微小timing变化"""
+        # 模拟人类演奏的微小timing变化
         import random
         return base_interval * (1 + random.uniform(-variation, variation))
     
     def _play_with_expression(self, key: str, base_duration: float, expression: str = 'normal'):
-        """带表情的音符演奏"""
+        # 带表情的音符演奏
         if expression == 'accent':
             duration = base_duration * 1.3
         elif expression == 'soft':
@@ -2642,14 +2603,12 @@ class MidiPlayer:
     
     def _play_romantic_ending(self, base_interval: float, song_char: dict, scale_keys: list,
                               tonic: str, subdominant: str, dominant: str):
-        """
-        浪漫收尾 - 像肖邦的夜曲结尾（抒情歌最佳选择）
-        
-        核心设计：
-        1. BPM越慢，音符越长，更有抒情感
-        2. 呼吸时间和BPM同步，不会突兀
-        3. 渐慢渐弱的自然收尾
-        """
+        # 浪漫收尾 - 像肖邦的夜曲结尾（抒情歌最佳选择）
+        #
+        # 核心设计：
+        # 1. BPM越慢，音符越长，更有抒情感
+        # 2. 呼吸时间和BPM同步，不会突兀
+        # 3. 渐慢渐弱的自然收尾
         import random
         
         # 获取自适应参数
@@ -2756,10 +2715,8 @@ class MidiPlayer:
     
     def _play_grand_ending(self, base_interval: float, song_char: dict, scale_keys: list,
                            tonic: str, subdominant: str, dominant: str):
-        """
-        华丽大结局 - 像拉赫玛尼诺夫
-        特点：渐强到高潮，然后壮丽收尾
-        """
+        # 华丽大结局 - 像拉赫玛尼诺夫
+        # 特点：渐强到高潮，然后壮丽收尾
         import random
         
         # 获取自适应参数
@@ -2838,9 +2795,7 @@ class MidiPlayer:
     
     def _play_finale_ending(self, base_interval: float, song_char: dict, scale_keys: list,
                             tonic: str, subdominant: str, dominant: str):
-        """
-        终极谢幕 - 交响乐结尾风格（适合气势磅礴的曲目）
-        """
+        # 终极谢幕 - 交响乐结尾风格（适合气势磅礴的曲目）
         # 获取自适应参数
         params = song_char.get('ending_params', {})
         phrase_len = params.get('phrase_length', 10)
@@ -2923,9 +2878,7 @@ class MidiPlayer:
     
     def _play_virtuoso_ending(self, base_interval: float, song_char: dict, scale_keys: list,
                               tonic: str, subdominant: str, dominant: str):
-        """
-        炫技结尾 - 李斯特风格（适合激昂曲目）
-        """
+        # 炫技结尾 - 李斯特风格（适合激昂曲目）
         # 获取自适应参数
         params = song_char.get('ending_params', {})
         phrase_len = params.get('phrase_length', 12)
@@ -3005,9 +2958,7 @@ class MidiPlayer:
     
     def _play_arpeggio_ending(self, base_interval: float, song_char: dict, scale_keys: list,
                               tonic: str, subdominant: str, dominant: str):
-        """
-        琶音结尾 - 优雅的分解和弦（适合抒情歌）
-        """
+        # 琶音结尾 - 优雅的分解和弦（适合抒情歌）
         # 获取自适应参数
         params = song_char.get('ending_params', {})
         phrase_len = params.get('phrase_length', 8)
@@ -3064,9 +3015,7 @@ class MidiPlayer:
     
     def _play_theme_glissando_enhanced(self, base_interval: float, song_char: dict, scale_keys: list,
                                        tonic: str, subdominant: str, dominant: str):
-        """
-        主旋律回顾增强版 - 提取歌曲精华，用更有表情的方式演绎
-        """
+        # 主旋律回顾增强版 - 提取歌曲精华，用更有表情的方式演绎
         melody_phrase = self._extract_melody_phrase()
         
         if not melody_phrase or len(melody_phrase) < 4:
@@ -3173,7 +3122,7 @@ class MidiPlayer:
     
     def _play_simple_glissando(self, style: str, base_interval: float, song_char: dict, 
                                all_keys: list, tonic: str, subdominant: str, dominant: str):
-        """简单滑奏风格：up, down, updown, wave - 也使用自适应参数"""
+        # 简单滑奏风格：up, down, updown, wave - 也使用自适应参数
         # 获取自适应参数
         params = song_char.get('ending_params', {})
         phrase_len = params.get('phrase_length', 10)
@@ -3244,28 +3193,26 @@ class MidiPlayer:
                                     current_key: Optional[str] = None, 
                                     next_keys: Optional[set] = None,
                                     is_phrase_end: bool = False) -> float:
-        """
-        计算按键持续时长 - 游戏用按键时长做延音踏板
-        
-        核心原则：按键时长 ≈ MIDI音符时长，让游戏内置延音自然工作。
-        钢琴家模拟通过力度、音区、rubato、乐句呼吸来细化表情。
-        
-        同键防吞音由 KeyboardSimulator._do_press() 处理：
-        - 如果同一个键还在按下状态，会先释放等待 SAME_KEY_RELEASE_GAP_MS 再重新按下
-        
-        Args:
-            base_duration: MIDI音符原始时长(秒)
-            current_time: 当前音符开始时间
-            next_event_time: 下一个音符的开始时间
-            midi_note: MIDI音符号（用于判断音区）
-            velocity: MIDI力度值 (0-127)
-            current_key: 当前音符使用的键
-            next_keys: 下一个事件要按的键集合
-            is_phrase_end: 是否为乐句末尾
-            
-        Returns:
-            调整后的按键持续时长(秒)
-        """
+        # 计算按键持续时长 - 游戏用按键时长做延音踏板
+        #
+        # 核心原则：按键时长 ≈ MIDI音符时长，让游戏内置延音自然工作。
+        # 钢琴家模拟通过力度、音区、rubato、乐句呼吸来细化表情。
+        #
+        # 同键防吞音由 KeyboardSimulator._do_press() 处理：
+        # - 如果同一个键还在按下状态，会先释放等待 SAME_KEY_RELEASE_GAP_MS 再重新按下
+        #
+        # Args:
+        # base_duration: MIDI音符原始时长(秒)
+        # current_time: 当前音符开始时间
+        # next_event_time: 下一个音符的开始时间
+        # midi_note: MIDI音符号（用于判断音区）
+        # velocity: MIDI力度值 (0-127)
+        # current_key: 当前音符使用的键
+        # next_keys: 下一个事件要按的键集合
+        # is_phrase_end: 是否为乐句末尾
+        #
+        # Returns:
+        # 调整后的按键持续时长(秒)
         if not SUSTAIN_ENABLED:
             # 延音关闭时，使用固定短时长
             return max(SUSTAIN_MIN_MS / 1000.0, min(0.15, base_duration * 0.5))
@@ -3351,10 +3298,8 @@ class MidiPlayer:
     # ==================== 屏幕防漂移检测 ====================
 
     def _get_game_window_rect(self):
-        """
-        尝试查找游戏窗口（Star.exe）的屏幕矩形。
-        返回 (left, top, right, bottom) 或 None。
-        """
+        # 尝试查找游戏窗口（Star.exe）的屏幕矩形。
+        # 返回 (left, top, right, bottom) 或 None。
         if not WIN32GUI_AVAILABLE:
             return None
         try:
@@ -3377,21 +3322,19 @@ class MidiPlayer:
         return None
 
     def _check_screen_mode_drift(self):
-        """
-        每 _screen_check_interval 个音符后，截取游戏窗口右下角的模式指示器区域，
-        检测 钢琴(normal)/高八度(shift)/低八度(ctrl) 三行哪行最亮，
-        与 simulator._current_mode 比较；若不一致则强制纠正。
-
-        按钮排布（从截图确认，自上而下）：
-            index 0 → 钢琴   [F9]      → normal
-            index 1 → 高八度 [L Shift] → shift
-            index 2 → 低八度 [L Ctrl]  → ctrl
-
-        采样区域（基于 1920×1080 参考坐标 左上1662,431 右下1897,553）：
-            x: 窗口宽度的 86.6% ~ 98.8%
-            y: 窗口高度的 39.9% ~ 51.2%
-        仅在 classic 模式下启用。
-        """
+        # 每 _screen_check_interval 个音符后，截取游戏窗口右下角的模式指示器区域，
+        # 检测 钢琴(normal)/高八度(shift)/低八度(ctrl) 三行哪行最亮，
+        # 与 simulator._current_mode 比较；若不一致则强制纠正。
+        #
+        # 按钮排布（从截图确认，自上而下）：
+        # index 0 → 钢琴   [F9]      → normal
+        # index 1 → 高八度 [L Shift] → shift
+        # index 2 → 低八度 [L Ctrl]  → ctrl
+        #
+        # 采样区域（基于 1920×1080 参考坐标 左上1662,431 右下1897,553）：
+        # x: 窗口宽度的 86.6% ~ 98.8%
+        # y: 窗口高度的 39.9% ~ 51.2%
+        # 仅在 classic 模式下启用。
         if not self._screen_drift_enabled:
             return
         if self._mode_system != 'classic':
@@ -3484,16 +3427,14 @@ class MidiPlayer:
             print(f"[防漂移] 屏幕检测失败（已忽略）: {e}")
 
     def _play_events(self, events: List[PlayEvent], next_event_time: Optional[float] = None):
-        """
-        播放一组事件 - 单音直接映射 + 按键时长延音 + SHIFT/CTRL三模式切换
-        
-        策略：
-        1. 收集所有同时发声的MIDI音符
-        2. 映射到目标MIDI值（36-95范围）
-        3. 判断演奏模式（36-47仅CTRL，48-59 CTRL或普通，60-71三模式，72-83普通或SHIFT，84-95仅SHIFT）
-        4. 按键时长 = MIDI音符时长 × 各种缩放（踏板加成/力度/音区/rubato）
-        5. 钢琴家模拟：力度/音区/rubato/乐句呼吸 细化表情
-        """
+        # 播放一组事件 - 单音直接映射 + 按键时长延音 + SHIFT/CTRL三模式切换
+        #
+        # 策略：
+        # 1. 收集所有同时发声的MIDI音符
+        # 2. 映射到目标MIDI值（36-95范围）
+        # 3. 判断演奏模式（36-47仅CTRL，48-59 CTRL或普通，60-71三模式，72-83普通或SHIFT，84-95仅SHIFT）
+        # 4. 按键时长 = MIDI音符时长 × 各种缩放（踏板加成/力度/音区/rubato）
+        # 5. 钢琴家模拟：力度/音区/rubato/乐句呼吸 细化表情
         
         # 获取当前事件时间
         current_time = events[0].time if events else 0
@@ -3857,14 +3798,12 @@ class MidiPlayer:
                 t.start()
                 
     def _smart_chord_simplify(self, keys_to_press: dict, max_keys: int) -> dict:
-        """
-        智能和弦简化：保留和弦骨架音
-        
-        策略：
-        1. 始终保留最低音（根音/bass）
-        2. 始终保留最高音（旋律）
-        3. 中间音按高音优先+力度重要性选择 (MELODY_PRIORITY)
-        """
+        # 智能和弦简化：保留和弦骨架音
+        #
+        # 策略：
+        # 1. 始终保留最低音（根音/bass）
+        # 2. 始终保留最高音（旋律）
+        # 3. 中间音按高音优先+力度重要性选择 (MELODY_PRIORITY)
         if len(keys_to_press) <= max_keys:
             return keys_to_press
         
@@ -3908,19 +3847,19 @@ class MidiPlayer:
         return preserved
     
     def get_state(self) -> PlaybackState:
-        """获取播放状态"""
+        # 获取播放状态
         return self.state
     
     def get_total_time(self) -> float:
-        """获取总时长"""
+        # 获取总时长
         return self.parser.total_time
     
     def get_midi_info(self) -> dict:
-        """获取MIDI信息"""
+        # 获取MIDI信息
         return self.parser.get_info()
     
     def seek(self, time_sec: float):
-        """跳转到指定时间"""
+        # 跳转到指定时间
         was_playing = self.state.is_playing and not self.state.is_paused
         
         if self.state.is_playing:

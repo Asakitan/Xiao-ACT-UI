@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""Numeric guard checks for the Tk plugin UI renderer."""
+# Numeric guard checks for the Tk plugin UI renderer.
 
 from __future__ import annotations
 

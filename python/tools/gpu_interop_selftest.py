@@ -1,21 +1,20 @@
 # -*- coding: utf-8 -*-
-"""GPU interop present-path selftest (Part A + Part B plumbing).
-
-Verifies, on the real driver:
-  1. WGL_NV_DX_interop2 availability + DCompBridge.enable_gl_interop().
-  2. That GL draws issued the way overlay_compositor._render_frame
-     issues them actually land in the interop D3D11 render target
-     (regression test for moderngl framebuffer-state-tracking clashes
-     with the raw glBindFramebuffer the bridge does).
-  3. That a legacy shared-handle texture created on a *different* D3D11
-     device (stand-in for an external producer process) can be opened +
-     registered + sampled through the same code path CompositorLayer
-     uses, and reports which way up it comes out.
-
-Run:  python gpu_interop_selftest.py
-Exit code 0 = all runnable checks passed (unsupported-driver skips are
-not failures — the CPU fallback path covers those machines).
-"""
+# GPU interop present-path selftest (Part A + Part B plumbing).
+#
+# Verifies, on the real driver:
+# 1. WGL_NV_DX_interop2 availability + DCompBridge.enable_gl_interop().
+# 2. That GL draws issued the way overlay_compositor._render_frame
+# issues them actually land in the interop D3D11 render target
+# (regression test for moderngl framebuffer-state-tracking clashes
+# with the raw glBindFramebuffer the bridge does).
+# 3. That a legacy shared-handle texture created on a *different* D3D11
+# device (stand-in for an external producer process) can be opened +
+# registered + sampled through the same code path CompositorLayer
+# uses, and reports which way up it comes out.
+#
+# Run:  python gpu_interop_selftest.py
+# Exit code 0 = all runnable checks passed (unsupported-driver skips are
+# not failures — the CPU fallback path covers those machines).
 from __future__ import annotations
 
 import ctypes
@@ -60,7 +59,7 @@ class _D3D11_SUBRESOURCE_DATA(Structure):
 
 
 def read_d3d_texture(dev, dctx, tex, w, h):
-    """CopyResource → staging → Map(READ) → bytes (RGBA rows, top-down)."""
+    # CopyResource → staging → Map(READ) → bytes (RGBA rows, top-down).
     td = _D3D11_TEXTURE2D_DESC()
     td.Width = w
     td.Height = h
@@ -118,8 +117,8 @@ def make_producer_device():
 
 
 def make_shared_pattern_texture(dev, w, h):
-    """Create a MISC_SHARED texture: top-left quadrant red, rest blue
-    (opaque). Row 0 of the initial data = D3D row 0 = TOP row."""
+    # Create a MISC_SHARED texture: top-left quadrant red, rest blue
+    # (opaque). Row 0 of the initial data = D3D row 0 = TOP row.
     buf = bytearray(w * h * 4)
     for y in range(h):
         for x in range(w):
@@ -252,15 +251,15 @@ def make_shared_blank_texture(dev, w, h, misc):
 
 
 def run_tear_stress(ctx, dc, sw, sh, use_mutex, n_frames=240):
-    """Producer thread hammers alternating solid red/blue full-texture
-    copies into a shared texture while the consumer draws it through
-    the exact production path (mutex-acquire → interop lock → GL draw →
-    unlock → release) and reads the result back. A frame whose sampled
-    pixels are not one uniform color is a torn read.
-
-    Returns (torn_frames, sampled_frames, note); a non-empty note means
-    setup failed (e.g. the driver refused to register a keyed-mutex
-    texture with WGL_NV_DX_interop2)."""
+    # Producer thread hammers alternating solid red/blue full-texture
+    # copies into a shared texture while the consumer draws it through
+    # the exact production path (mutex-acquire → interop lock → GL draw →
+    # unlock → release) and reads the result back. A frame whose sampled
+    # pixels are not one uniform color is a torn read.
+    #
+    # Returns (torn_frames, sampled_frames, note); a non-empty note means
+    # setup failed (e.g. the driver refused to register a keyed-mutex
+    # texture with WGL_NV_DX_interop2).
     import threading
     import moderngl as _mgl
     from render.dcomp_bridge import (

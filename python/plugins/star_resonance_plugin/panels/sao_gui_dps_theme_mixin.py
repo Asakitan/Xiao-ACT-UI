@@ -1,53 +1,51 @@
 # -*- coding: utf-8 -*-
-"""
-SAOPlayerGUIDpsThemeMixin — eighth mixin extracted from SAOPlayerGUI
-(round 46 of the sao_gui split refactor). 19 methods, ~227 lines.
-
-Combines two related concerns that share the menu-refresh + overlay-
-update pattern:
-
-DPS cluster (16 methods, ~204 lines):
-  Timeouts + idle reset:
-    * _combat_damage_timeout_s — user-configurable fade timeout
-    * _boss_hp_hold_timeout_s — boss HP hold timeout (DPS-relative)
-    * _cancel_dps_idle_reset_after — cancel pending idle reset
-    * _schedule_dps_idle_reset_after_fade — schedule idle reset
-  Snapshot factories:
-    * _empty_dps_snapshot (staticmethod) — zero-state snapshot
-    * _request_dps_live_snapshot — current live snapshot from tracker
-    * _get_dps_last_report / _request_dps_last_report — last report
-    * _request_dps_entity_detail — entity skill breakdown
-  Report availability:
-    * _get_dps_last_report_available — bool query
-    * _sync_dps_report_availability — push availability to overlay +
-      refresh menu when transitioning
-  Overlay show paths:
-    * _show_dps_live_snapshot — show live mode
-    * _show_dps_last_report — show last-report mode
-    * _show_last_dps_report_menu — menu handler (fallback alert if
-      no report)
-  Reset + toggle:
-    * _reset_dps_tracker — full tracker reset
-    * _toggle_dps_enabled — toggle the dps_enabled setting
-
-Theme cluster (3 methods, ~33 lines):
-  * _toggle_panel_theme(key) — cycle a single overlay's light/dark
-  * _set_all_themes(theme) — apply same theme to every overlay
-  * _apply_theme_to_overlay(key, theme) — internal helper used by
-    both toggle paths
-
-Required SAOPlayerGUI attrs:
-  * self._dps_tracker, self._dps_overlay, self._dps_mode,
-    self._dps_visible, self._dps_faded, self._dps_last_report_available
-  * self._dps_idle_reset_after_id
-  * self._THEME_OVERLAY_MAP (class attribute on SAOPlayerGUI)
-  * self.root, self.settings, self._cfg_settings_ref, self._sao_menu
-
-Required SAOPlayerGUI methods (via MRO):
-  * _get_setting, _set_setting (SAOPlayerGUI)
-  * _show_entity_alert (SAOPlayerGUI)
-  * _refresh_menu_if_open, _refresh_menu_immediate (Menu mixin)
-"""
+# SAOPlayerGUIDpsThemeMixin — eighth mixin extracted from SAOPlayerGUI
+# (round 46 of the sao_gui split refactor). 19 methods, ~227 lines.
+#
+# Combines two related concerns that share the menu-refresh + overlay-
+# update pattern:
+#
+# DPS cluster (16 methods, ~204 lines):
+# Timeouts + idle reset:
+# * _combat_damage_timeout_s — user-configurable fade timeout
+# * _boss_hp_hold_timeout_s — boss HP hold timeout (DPS-relative)
+# * _cancel_dps_idle_reset_after — cancel pending idle reset
+# * _schedule_dps_idle_reset_after_fade — schedule idle reset
+# Snapshot factories:
+# * _empty_dps_snapshot (staticmethod) — zero-state snapshot
+# * _request_dps_live_snapshot — current live snapshot from tracker
+# * _get_dps_last_report / _request_dps_last_report — last report
+# * _request_dps_entity_detail — entity skill breakdown
+# Report availability:
+# * _get_dps_last_report_available — bool query
+# * _sync_dps_report_availability — push availability to overlay +
+# refresh menu when transitioning
+# Overlay show paths:
+# * _show_dps_live_snapshot — show live mode
+# * _show_dps_last_report — show last-report mode
+# * _show_last_dps_report_menu — menu handler (fallback alert if
+# no report)
+# Reset + toggle:
+# * _reset_dps_tracker — full tracker reset
+# * _toggle_dps_enabled — toggle the dps_enabled setting
+#
+# Theme cluster (3 methods, ~33 lines):
+# * _toggle_panel_theme(key) — cycle a single overlay's light/dark
+# * _set_all_themes(theme) — apply same theme to every overlay
+# * _apply_theme_to_overlay(key, theme) — internal helper used by
+# both toggle paths
+#
+# Required SAOPlayerGUI attrs:
+# * self._dps_tracker, self._dps_overlay, self._dps_mode,
+# self._dps_visible, self._dps_faded, self._dps_last_report_available
+# * self._dps_idle_reset_after_id
+# * self._THEME_OVERLAY_MAP (class attribute on SAOPlayerGUI)
+# * self.root, self.settings, self._cfg_settings_ref, self._sao_menu
+#
+# Required SAOPlayerGUI methods (via MRO):
+# * _get_setting, _set_setting (SAOPlayerGUI)
+# * _show_entity_alert (SAOPlayerGUI)
+# * _refresh_menu_if_open, _refresh_menu_immediate (Menu mixin)
 
 from __future__ import annotations
 
@@ -66,10 +64,10 @@ _ACT_SNAP_MIN_INTERVAL_S = 0.07
 
 
 class SAOPlayerGUIDpsThemeMixin:
-    """Mixin bundling the DPS + Theme toggle/setup helpers."""
+    # Mixin bundling the DPS + Theme toggle/setup helpers.
 
     def _toggle_panel_theme(self, key: str) -> None:
-        """切换某个面板的 Light/Dark 主题。"""
+        # 切换某个面板的 Light/Dark 主题。
         cfg = self._cfg_settings_ref or self.settings
         themes = dict(cfg.get('panel_themes', {}))
         current = themes.get(key, 'dark')
@@ -81,7 +79,7 @@ class SAOPlayerGUIDpsThemeMixin:
         self._refresh_menu_immediate()
 
     def _set_all_themes(self, theme: str) -> None:
-        """将所有面板设置为同一主题。"""
+        # 将所有面板设置为同一主题。
         overlay_map = getattr(self, '_THEME_OVERLAY_MAP', None)
         if not overlay_map:
             try:
@@ -99,7 +97,7 @@ class SAOPlayerGUIDpsThemeMixin:
         self._refresh_menu_immediate()
 
     def _apply_theme_to_overlay(self, key: str, theme: str) -> None:
-        """将主题应用到 overlay 实例（如果已创建）。"""
+        # 将主题应用到 overlay 实例（如果已创建）。
         if key == 'act':
             try:
                 self._apply_act_panel_theme(theme)
@@ -195,13 +193,12 @@ class SAOPlayerGUIDpsThemeMixin:
             pass
 
     def _boss_hp_hold_timeout_s(self) -> float:
-        """BossHP should survive death/revive and long mechanic downtime.
-
-        v2.5.5: drop the 180 s floor — users reported BossHP refusing to fade
-        for several minutes after an encounter went idle or after a map change.
-        Now the user-set value wins (with a 1 s minimum); the only enforced
-        floor is the dps fade timeout, so BB can never disappear before DPS.
-        """
+        # BossHP should survive death/revive and long mechanic downtime.
+        #
+        # v2.5.5: drop the 180 s floor — users reported BossHP refusing to fade
+        # for several minutes after an encounter went idle or after a map change.
+        # Now the user-set value wins (with a 1 s minimum); the only enforced
+        # floor is the dps fade timeout, so BB can never disappear before DPS.
         try:
             raw = self._get_setting('boss_hp_hold_timeout_s', 5)
             v = float(raw if raw is not None else 5)
@@ -271,7 +268,7 @@ class SAOPlayerGUIDpsThemeMixin:
             return None
 
     def _on_dps_report_finalized(self, report):
-        """Persist finalized DPS reports for Entity/Tk ACT history/export."""
+        # Persist finalized DPS reports for Entity/Tk ACT history/export.
         try:
             store = getattr(self, '_dps_history_store', None)
             if store is None:
@@ -364,11 +361,10 @@ class SAOPlayerGUIDpsThemeMixin:
         return report
 
     def _request_dps_entity_detail(self, uid):
-        """Fetch detail+skill breakdown for `uid`. Returns dict or None.
-
-        Mirrors sao_webview.py DpsAPI.get_entity_detail. Called by the
-        entity DpsOverlay when the user clicks an entity row in live mode.
-        """
+        # Fetch detail+skill breakdown for `uid`. Returns dict or None.
+        #
+        # Mirrors sao_webview.py DpsAPI.get_entity_detail. Called by the
+        # entity DpsOverlay when the user clicks an entity row in live mode.
         tracker = getattr(self, '_dps_tracker', None)
         if not tracker:
             return None

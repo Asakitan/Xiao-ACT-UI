@@ -1,22 +1,21 @@
 # -*- coding: utf-8 -*-
-"""mem_entity_provider - live entity HP snapshots for the app (read-only).
-
-Ties the version-robust ZEntityMgr locator (EntityMgrReader, klass resolved by
-name) to the combat-attr reader (EntityCombatReader) and exposes a simple
-snapshot of every entity that currently has an HP bar:
-
-    prov = MemEntityProvider(static_dps_source, self_uid=...)
-    for e in prov.snapshot():
-        # {uuid, config_uuid, kind, cur_hp, max_hp, hp_pct, obj}
-        ...
-    boss = prov.boss()   # the highest-max-HP combat entity (boss/dummy)
-
-This is the unique value memory adds over TCP: real-time HP + combat state
-(breaking_stage / overdrive / stun / cast_skill_id, decoded by attr id from the
-ZAttrCacheSlim index) for ALL visible entities, including pre-pull / off-screen
-targets the packet stream hasn't reported yet. Display names come from the
-entity BaseId via the offline name table (callers resolve).
-"""
+# mem_entity_provider - live entity HP snapshots for the app (read-only).
+#
+# Ties the version-robust ZEntityMgr locator (EntityMgrReader, klass resolved by
+# name) to the combat-attr reader (EntityCombatReader) and exposes a simple
+# snapshot of every entity that currently has an HP bar:
+#
+# prov = MemEntityProvider(static_dps_source, self_uid=...)
+# for e in prov.snapshot():
+# # {uuid, config_uuid, kind, cur_hp, max_hp, hp_pct, obj}
+# ...
+# boss = prov.boss()   # the highest-max-HP combat entity (boss/dummy)
+#
+# This is the unique value memory adds over TCP: real-time HP + combat state
+# (breaking_stage / overdrive / stun / cast_skill_id, decoded by attr id from the
+# ZAttrCacheSlim index) for ALL visible entities, including pre-pull / off-screen
+# targets the packet stream hasn't reported yet. Display names come from the
+# entity BaseId via the offline name table (callers resolve).
 from __future__ import annotations
 
 from typing import List, Optional
@@ -26,7 +25,7 @@ from plugins.star_resonance_plugin.mem.il2cpp.mem_entity_combat import EntityCom
 
 
 class MemEntityProvider:
-    """Read-only live entity HP snapshots, resolved structurally (no fixed base)."""
+    # Read-only live entity HP snapshots, resolved structurally (no fixed base).
 
     def __init__(self, dps_source, *, self_uid: int = 0):
         self._src = dps_source
@@ -41,12 +40,12 @@ class MemEntityProvider:
         self._self_uid = int(uid or 0)
 
     def locate(self, *, force: bool = False) -> int:
-        """Return the live ZEntityMgr address (cached, klass+uuid revalidated)."""
+        # Return the live ZEntityMgr address (cached, klass+uuid revalidated).
         return int(self._emr.locate(self._self_uid, force_rescan=force) or 0)
 
     def snapshot(self, *, include_monsters: bool = True, include_npcs: bool = False,
                  max_per_dict: int = 128) -> List[dict]:
-        """Return one dict per combat entity (entity that has an HP bar)."""
+        # Return one dict per combat entity (entity that has an HP bar).
         mgr = self.locate()
         if not mgr:
             return []
@@ -109,12 +108,11 @@ class MemEntityProvider:
 
     def enumerate_ids(self, *, include_monsters: bool = True, include_npcs: bool = True,
                       max_per_dict: int = 128) -> List[dict]:
-        """Return [{uuid, base_id, kind}] for entities WITHOUT the HP gate.
-
-        ``snapshot()`` only returns combat entities (those with an HP bar), so it
-        drops non-combat NPCs. The nameplate name harvest needs those NPCs too, keyed
-        by uuid -> base_id (template id @0xE0). Read-only; ids batched in one RPM call.
-        """
+        # Return [{uuid, base_id, kind}] for entities WITHOUT the HP gate.
+        #
+        # ``snapshot()`` only returns combat entities (those with an HP bar), so it
+        # drops non-combat NPCs. The nameplate name harvest needs those NPCs too, keyed
+        # by uuid -> base_id (template id @0xE0). Read-only; ids batched in one RPM call.
         mgr = self.locate()
         if not mgr:
             return []
@@ -156,16 +154,16 @@ class MemEntityProvider:
         return out
 
     def read_name(self, ent_addr: int) -> str:
-        """The game's resolved display name for an entity (its NAME attr), or '' if absent
-        (many monsters carry only a template id). Authoritative for the JSON self-heal --
-        read straight from the game's own memory, independent of our offline tables."""
+        # The game's resolved display name for an entity (its NAME attr), or '' if absent
+        # (many monsters carry only a template id). Authoritative for the JSON self-heal --
+        # read straight from the game's own memory, independent of our offline tables.
         try:
             return self._ecr.read_name_attr(int(ent_addr or 0)) if ent_addr else ""
         except Exception:
             return ""
 
     def boss(self) -> Optional[dict]:
-        """Best boss candidate: a bossDict entry, else the highest-max-HP entity."""
+        # Best boss candidate: a bossDict entry, else the highest-max-HP entity.
         snap = self.snapshot()
         if not snap:
             return None
@@ -174,7 +172,7 @@ class MemEntityProvider:
         return max(pool, key=lambda e: e["max_hp"])
 
     def entity_hp(self, uuid: int) -> Optional[dict]:
-        """HP snapshot for one uuid (None if not currently shown)."""
+        # HP snapshot for one uuid (None if not currently shown).
         uuid = int(uuid or 0)
         for e in self.snapshot():
             if e["uuid"] == uuid:

@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""AI editor engine actions owned by the Star Resonance plugin."""
+# AI editor engine actions owned by the Star Resonance plugin.
 
 from __future__ import annotations
 

@@ -1,20 +1,19 @@
-"""bokura_extract - 诊断: 用 bokura_decode 的锚点对齐, 报告 m0.pkg 主名字池能对齐
-出多少【高置信】id->中文名, 并与 crib 交叉验证。
-
-为什么默认【不写入】assets/name_tables/:
-  穷尽逆向后实证 (见 bokura_decode 顶注 + README_bokura.md):
-  m0.pkg 离线无法重建【完整且准确】的 id->name 表 ——
-    * 池只装了部分名字 (技能名仅 20% 在池里);
-    * 池里无 id 列、无名字偏移指针, 名字仅按 id 升序紧密拼接;
-    * 因此对齐只能产出 crib 的一个【子集】(交叉验证 100% 一致, 但 0 新增),
-      对 NameResolver 没有覆盖提升, 且跳号/缺名处等长巧合会引入错位风险。
-  => 写出去是冗余 + 有污染风险, 故本工具默认仅诊断。
-     传 --write 可强制写入子集 (一般不需要)。
-
-用法:
-    python -m tools.tablekit.bokura_extract            # 仅诊断, 不写文件
-    python -m tools.tablekit.bokura_extract --write     # 强制写子集(不推荐)
-"""
+# bokura_extract - 诊断: 用 bokura_decode 的锚点对齐, 报告 m0.pkg 主名字池能对齐
+# 出多少【高置信】id->中文名, 并与 crib 交叉验证。
+#
+# 为什么默认【不写入】assets/name_tables/:
+# 穷尽逆向后实证 (见 bokura_decode 顶注 + README_bokura.md):
+# m0.pkg 离线无法重建【完整且准确】的 id->name 表 ——
+# * 池只装了部分名字 (技能名仅 20% 在池里);
+# * 池里无 id 列、无名字偏移指针, 名字仅按 id 升序紧密拼接;
+# * 因此对齐只能产出 crib 的一个【子集】(交叉验证 100% 一致, 但 0 新增),
+# 对 NameResolver 没有覆盖提升, 且跳号/缺名处等长巧合会引入错位风险。
+# => 写出去是冗余 + 有污染风险, 故本工具默认仅诊断。
+# 传 --write 可强制写入子集 (一般不需要)。
+#
+# 用法:
+# python -m tools.tablekit.bokura_extract            # 仅诊断, 不写文件
+# python -m tools.tablekit.bokura_extract --write     # 强制写子集(不推荐)
 from __future__ import annotations
 
 import json

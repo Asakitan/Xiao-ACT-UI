@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""Regression tests for Entity report/export panel render caches."""
+# Regression tests for Entity report/export panel render caches.
 
 from __future__ import annotations
 

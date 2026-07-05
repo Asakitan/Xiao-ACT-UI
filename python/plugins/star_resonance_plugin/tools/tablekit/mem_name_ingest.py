@@ -1,31 +1,30 @@
 # -*- coding: utf-8 -*-
-"""Ingest the in-memory localization string pool into our runtime name tables.
-
-The MEM dump ``live_string_pool_all_localization.json`` is a raw ``index -> text``
-pool (≈108k strings) with **no game ids**. To place a name into an id->name
-table we need an *id <-> string-index* bridge. Two bridges are supported:
-
-  1. route-2 ``live_id_name_index.json`` — produced by the extended C# mem probe
-     that walks the IL2CPP SkillTable/BuffTable arrays (id + NameStringIndex).
-     Shape: ``{"<id_space>": {"<id>": <string_index>, ...}, ...}``.
-     This is the only way to mint *new* ids purely from memory (see
-     ``.vscode/handoff`` route-2 design).
-
-  2. ``live_probe_act_matched_rows.json`` — the existing matched rows that already
-     carry ``text`` + ``primary_match{id_space,id}`` (anchored historically). Used
-     as a fallback / demo bridge.
-
-Both are funnelled through the SAME compact builders the runtime already uses
-(``build_index_from_live_rows`` + ``sanitize_shared_cache``) and folded onto the
-on-disk tables via ``hybrid_name_tables.overlay_cache_into_existing_tables`` — so
-classification and placement reuse the self-contained classifier; nothing here
-re-implements an id->kind path.
-
-Usage:
-    python -m tools.tablekit.mem_name_ingest --dry-run
-    python -m tools.tablekit.mem_name_ingest --apply
-    python -m tools.tablekit.mem_name_ingest --pool <pool.json> --idmap <id_name_index.json> --apply
-"""
+# Ingest the in-memory localization string pool into our runtime name tables.
+#
+# The MEM dump ``live_string_pool_all_localization.json`` is a raw ``index -> text``
+# pool (≈108k strings) with **no game ids**. To place a name into an id->name
+# table we need an *id <-> string-index* bridge. Two bridges are supported:
+#
+# 1. route-2 ``live_id_name_index.json`` — produced by the extended C# mem probe
+# that walks the IL2CPP SkillTable/BuffTable arrays (id + NameStringIndex).
+# Shape: ``{"<id_space>": {"<id>": <string_index>, ...}, ...}``.
+# This is the only way to mint *new* ids purely from memory (see
+# ``.vscode/handoff`` route-2 design).
+#
+# 2. ``live_probe_act_matched_rows.json`` — the existing matched rows that already
+# carry ``text`` + ``primary_match{id_space,id}`` (anchored historically). Used
+# as a fallback / demo bridge.
+#
+# Both are funnelled through the SAME compact builders the runtime already uses
+# (``build_index_from_live_rows`` + ``sanitize_shared_cache``) and folded onto the
+# on-disk tables via ``hybrid_name_tables.overlay_cache_into_existing_tables`` — so
+# classification and placement reuse the self-contained classifier; nothing here
+# re-implements an id->kind path.
+#
+# Usage:
+# python -m tools.tablekit.mem_name_ingest --dry-run
+# python -m tools.tablekit.mem_name_ingest --apply
+# python -m tools.tablekit.mem_name_ingest --pool <pool.json> --idmap <id_name_index.json> --apply
 from __future__ import annotations
 
 import argparse
@@ -64,7 +63,7 @@ def _load_json(path: str) -> Any:
 
 
 def _discover(names: tuple[str, ...]) -> str:
-    """Find a dump by name under assets/name_tables or any C# bin output."""
+    # Find a dump by name under assets/name_tables or any C# bin output.
     for name in names:
         local = os.path.join(_NAME_TABLES, name)
         if os.path.isfile(local):
@@ -95,7 +94,7 @@ def _pool_index_to_text(pool: Any) -> dict[int, str]:
 
 
 def _rows_from_idmap(idmap: Any, index_to_text: dict[int, str]) -> list[dict[str, Any]]:
-    """Build synthetic live-rows from a route-2 id->string_index map."""
+    # Build synthetic live-rows from a route-2 id->string_index map.
     rows: list[dict[str, Any]] = []
     if not isinstance(idmap, dict):
         return rows
@@ -118,7 +117,7 @@ def _rows_from_idmap(idmap: Any, index_to_text: dict[int, str]) -> list[dict[str
 
 
 def build_mem_cache(pool_path: str = "", idmap_path: str = "", matched_path: str = "") -> dict[str, Any]:
-    """Build a compact by-kind cache (tcp_preparse schema) from MEM dumps."""
+    # Build a compact by-kind cache (tcp_preparse schema) from MEM dumps.
     pool_path = pool_path or _discover(_POOL_NAMES)
     idmap_path = idmap_path or _discover(_IDMAP_NAMES)
     matched_path = matched_path or _discover(_MATCHED_NAMES)

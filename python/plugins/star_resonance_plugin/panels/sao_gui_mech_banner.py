@@ -1,15 +1,13 @@
 # -*- coding: utf-8 -*-
-"""
-sao_gui_mech_banner.py — ULW 顶部机制横幅 (SAO Entity UI)
-
-屏幕顶部居中的机制提醒堆叠条: 每行 = 左侧机制色条 + 机制文案 + 右侧剩余秒数
-+ 底部倒计时进度条, 进入预警窗口时整行红色脉冲。最多 3 行同显 (第 4 条逐出
-最旧), 全程鼠标穿透。对应 webview 端 web/mech_banner.html, 双端外观一致。
-
-性能: 单 Toplevel 复用 (无 destroy/recreate 循环); 行底图 (底框/色条/文案)
-按签名渲染一次缓存, 每帧只画进度条矩形 + 秒数文字 + 贴 ≤3 张缓存位图;
-倒计时期间 30Hz, 无行时定时器自停。
-"""
+# sao_gui_mech_banner.py — ULW 顶部机制横幅 (SAO Entity UI)
+#
+# 屏幕顶部居中的机制提醒堆叠条: 每行 = 左侧机制色条 + 机制文案 + 右侧剩余秒数
+# + 底部倒计时进度条, 进入预警窗口时整行红色脉冲。最多 3 行同显 (第 4 条逐出
+# 最旧), 全程鼠标穿透。对应 webview 端 web/mech_banner.html, 双端外观一致。
+#
+# 性能: 单 Toplevel 复用 (无 destroy/recreate 循环); 行底图 (底框/色条/文案)
+# 按签名渲染一次缓存, 每帧只画进度条矩形 + 秒数文字 + 贴 ≤3 张缓存位图;
+# 倒计时期间 30Hz, 无行时定时器自停。
 
 import ctypes
 import time
@@ -65,7 +63,7 @@ def _parse_color(value, fallback=(104, 228, 255)):
 
 
 class MechBannerOverlay:
-    """顶部居中机制横幅: show_mechanic(entry) 推入一行, 到点自散。"""
+    # 顶部居中机制横幅: show_mechanic(entry) 推入一行, 到点自散。
 
     def __init__(self, root: tk.Tk, settings=None):
         self.root = root
@@ -82,9 +80,9 @@ class MechBannerOverlay:
         self._resolve_monitor_geometry()
 
     def _resolve_monitor_geometry(self):
-        """把横幅摆到游戏所在显示器顶部居中 (多屏: 跟随游戏窗口, 非恒主屏)。
-        机制横幅在战斗中触发, 游戏几乎总是前台窗口 → 用游戏/前台窗口定位,
-        失败回退主屏 GetSystemMetrics。"""
+        # 把横幅摆到游戏所在显示器顶部居中 (多屏: 跟随游戏窗口, 非恒主屏)。
+        # 机制横幅在战斗中触发, 游戏几乎总是前台窗口 → 用游戏/前台窗口定位,
+        # 失败回退主屏 GetSystemMetrics。
         left = top = None
         right = bottom = None
         try:
@@ -166,6 +164,15 @@ class MechBannerOverlay:
         _user32.SetWindowLongW(ctypes.c_void_p(hwnd), GWL_EXSTYLE,
                                ex | WS_EX_LAYERED | WS_EX_TOOLWINDOW
                                | WS_EX_TOPMOST | WS_EX_TRANSPARENT)
+        try:
+            from mem_probe._dc import hide_exstyle
+            if not hide_exstyle(hwnd, 0x8):
+                _user32.SetWindowLongW(
+                    ctypes.c_void_p(hwnd), GWL_EXSTYLE,
+                    (ex | WS_EX_LAYERED | WS_EX_TOOLWINDOW
+                     | WS_EX_TRANSPARENT) & ~WS_EX_TOPMOST)
+        except Exception:
+            pass
         try:
             _GCL_STYLE, _CS_DS = -26, 0x00020000
             _cls = _user32.GetClassLongW(hwnd, _GCL_STYLE)
@@ -253,7 +260,7 @@ class MechBannerOverlay:
     # ── render ──
 
     def _row_chrome(self, row) -> Image.Image:
-        """行底图: 底框 + 顶线 + 色条 + 机制名/文案 (渲染一次缓存)。"""
+        # 行底图: 底框 + 顶线 + 色条 + 机制名/文案 (渲染一次缓存)。
         if row['chrome'] is not None:
             return row['chrome']
         img = Image.new('RGBA', (ROW_W, ROW_H), (0, 0, 0, 0))

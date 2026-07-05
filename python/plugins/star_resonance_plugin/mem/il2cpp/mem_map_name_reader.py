@@ -1,25 +1,24 @@
 # -*- coding: utf-8 -*-
-"""mem_map_name_reader - read the current map/scene DISPLAY name from memory.
-
-The offline scene table has no entry for many scenes (training/open-world ids), so
-the editor showed "场景#<id>". The localized name shown in the game's top-left UI
-(e.g. "协会活动中心") lives in the client's own config table + localization pool. This
-reads it straight from memory, resolving every IL2CPP class + field offset BY NAME
-(version-robust, no hard-coded RVAs) — only the IL2CPP/.NET structural layouts
-(string / array / NativeArray / Dictionary) are stable constants.
-
-Chain (RE'd + verified live, dump 7068f8aa):
-  scene id  (= CharSerialize.SceneData.MapId, read by the bridge)
-    -> Bokura.SceneTableBase rows: find_instances(klass) -> per-row ReadProxy blob
-       (route2 MemConfigTableReader._row_blob); blob col0 = Id, name_mlid in a column
-       auto-detected by "which column's mlid resolves to a CJK string".
-    -> Panda.Module.StringPoolRuntimeImpl: allLocalizationString_ (string[]) indexed
-       by array slot; indexes_ (NativeArray<KV<int,int>>) maps name_mlid -> slot.
-    -> the localized CN name.
-
-Heavy one-shot build (two heap scans + blob reads); run it on a background thread and
-cache. Read-only; never raises.
-"""
+# mem_map_name_reader - read the current map/scene DISPLAY name from memory.
+#
+# The offline scene table has no entry for many scenes (training/open-world ids), so
+# the editor showed "场景#<id>". The localized name shown in the game's top-left UI
+# (e.g. "协会活动中心") lives in the client's own config table + localization pool. This
+# reads it straight from memory, resolving every IL2CPP class + field offset BY NAME
+# (version-robust, no hard-coded RVAs) — only the IL2CPP/.NET structural layouts
+# (string / array / NativeArray / Dictionary) are stable constants.
+#
+# Chain (RE'd + verified live, dump 7068f8aa):
+# scene id  (= CharSerialize.SceneData.MapId, read by the bridge)
+# -> Bokura.SceneTableBase rows: find_instances(klass) -> per-row ReadProxy blob
+# (route2 MemConfigTableReader._row_blob); blob col0 = Id, name_mlid in a column
+# auto-detected by "which column's mlid resolves to a CJK string".
+# -> Panda.Module.StringPoolRuntimeImpl: allLocalizationString_ (string[]) indexed
+# by array slot; indexes_ (NativeArray<KV<int,int>>) maps name_mlid -> slot.
+# -> the localized CN name.
+#
+# Heavy one-shot build (two heap scans + blob reads); run it on a background thread and
+# cache. Read-only; never raises.
 from __future__ import annotations
 
 from typing import Dict, Optional
@@ -45,7 +44,7 @@ _RPC_SCENECFG = "SceneConfigMgr"
 
 
 class MapNameReader:
-    """Read-only resolver: scene id -> localized map name. Build once, cache."""
+    # Read-only resolver: scene id -> localized map name. Build once, cache.
 
     def __init__(self, dps_source):
         self._src = dps_source
@@ -135,7 +134,7 @@ class MapNameReader:
     SCENECFG_FIRST_TABLE_OFF = 0x50  # monsterTable_ (first of ~18 consecutive ZTable ptrs)
 
     def _scene_cfg_off(self, field: str, fallback: int) -> int:
-        """Auto-offset a SceneConfigMgr field by name (live field table -> literal)."""
+        # Auto-offset a SceneConfigMgr field by name (live field table -> literal).
         try:
             k = self._resolve_klass(self.SCENECFG_CLS)
             if k:
@@ -155,7 +154,7 @@ class MapNameReader:
         self._scene_cfg_offsets_ready = True
 
     def _validate_scene_cfg(self, obj: int, sset: set) -> bool:
-        """One block read of 0x50..0xE4 + local checks (was 14 single RPMs)."""
+        # One block read of 0x50..0xE4 + local checks (was 14 single RPMs).
         if obj < 0:
             return False
         self._resolve_scene_cfg_offsets()
@@ -182,16 +181,15 @@ class MapNameReader:
         return cur in sset
 
     def _locate_scene_cfg(self, hint_scene_id: int = 0) -> int:
-        """SceneConfigMgr singleton (klass not pointer-scannable in the GA image, so
-        located structurally): an object carrying a long run of heap-pointer table
-        fields (0x50..0xD8) AND a known scene id at curSceneId_(0xE0).
-
-        ``hint_scene_id`` (the TCP-known current scene id, when available) makes the
-        heap value-scan a single-needle search instead of an N-way set scan, and is
-        the most specific anchor; the cython kernel + a reused scratch buffer replace
-        the per-region numpy copy. A confirmed object's region is remembered so a
-        re-locate after invalidation re-scans it first.
-        """
+        # SceneConfigMgr singleton (klass not pointer-scannable in the GA image, so
+        # located structurally): an object carrying a long run of heap-pointer table
+        # fields (0x50..0xD8) AND a known scene id at curSceneId_(0xE0).
+        #
+        # ``hint_scene_id`` (the TCP-known current scene id, when available) makes the
+        # heap value-scan a single-needle search instead of an N-way set scan, and is
+        # the most specific anchor; the cython kernel + a reused scratch buffer replace
+        # the per-region numpy copy. A confirmed object's region is remembered so a
+        # re-locate after invalidation re-scans it first.
         self._resolve_scene_cfg_offsets()
         sset = set(self._scene_names.keys())
         if not sset:
@@ -292,7 +290,7 @@ class MapNameReader:
 
     # ── public ────────────────────────────────────────────────────────────────
     def build(self) -> bool:
-        """One-shot heavy resolve (two heap scans). Returns True if names are ready."""
+        # One-shot heavy resolve (two heap scans). Returns True if names are ready.
         try:
             # Resolve every class this reader needs in ONE shared-index pass (the
             # union), so first launch scans the GA image once instead of 3x; warm

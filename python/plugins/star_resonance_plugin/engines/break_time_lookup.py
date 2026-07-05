@@ -1,14 +1,13 @@
 # -*- coding: utf-8 -*-
-"""break_time_lookup - MonsterTable BreakingContinueTime lookup by template_id.
-
-Resolution order:
-  1. Local cache file (assets/break_time_cache.json) — fast, persistent
-  2. Offline raid dump (exports/boss_raids/full_raid_mechanics_dump.json) — legacy seed
-  3. Live MEM reading via MemConfigTableReader — on cache miss, auto-saves result
-
-The cache covers ALL monsters (not just raid bosses). First run with the game
-attached builds the full cache; subsequent launches use the file directly.
-"""
+# break_time_lookup - MonsterTable BreakingContinueTime lookup by template_id.
+#
+# Resolution order:
+# 1. Local cache file (assets/break_time_cache.json) — fast, persistent
+# 2. Offline raid dump (exports/boss_raids/full_raid_mechanics_dump.json) — legacy seed
+# 3. Live MEM reading via MemConfigTableReader — on cache miss, auto-saves result
+#
+# The cache covers ALL monsters (not just raid bosses). First run with the game
+# attached builds the full cache; subsequent launches use the file directly.
 from __future__ import annotations
 
 import json
@@ -100,7 +99,7 @@ def _save_cache() -> None:
 
 
 def _resolve_col_offset() -> Optional[int]:
-    """Resolve the BreakingContinueTime column offset from table_columns."""
+    # Resolve the BreakingContinueTime column offset from table_columns.
     global _COL_BREAKING_CONTINUE_TIME
     if _COL_BREAKING_CONTINUE_TIME is not None:
         return _COL_BREAKING_CONTINUE_TIME
@@ -118,7 +117,7 @@ def _resolve_col_offset() -> Optional[int]:
 
 
 def _read_live(template_id: int) -> float:
-    """Try to read BreakingContinueTime from live memory for one monster."""
+    # Try to read BreakingContinueTime from live memory for one monster.
     global _dirty
     try:
         from plugins.star_resonance_plugin.mem.il2cpp.mem_config_table_reader import MemConfigTableReader, TABLE_CLASS
@@ -145,7 +144,7 @@ def _read_live(template_id: int) -> float:
 
 
 def get_break_recovery_time(template_id: int) -> float:
-    """Return BreakingContinueTime in seconds for a monster template_id, or 0.0."""
+    # Return BreakingContinueTime in seconds for a monster template_id, or 0.0.
     if not template_id:
         return 0.0
     with _lock:
@@ -158,10 +157,9 @@ def get_break_recovery_time(template_id: int) -> float:
 
 
 def build_full_cache() -> int:
-    """Iterate ALL MonsterTable rows and cache BreakingContinueTime. Requires game attached.
-
-    Returns the number of entries written. Call from tools or on first attach.
-    """
+    # Iterate ALL MonsterTable rows and cache BreakingContinueTime. Requires game attached.
+    #
+    # Returns the number of entries written. Call from tools or on first attach.
     global _dirty
     _load()
     try:

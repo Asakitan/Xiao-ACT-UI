@@ -1,28 +1,26 @@
 # -*- coding: utf-8 -*-
-"""
-配置模块 - 60键电子琴配置（含黑键/半音，支持SHIFT/CTRL三模式切换）
-
-游戏实际布局（36物理键 × 3模式 = 60唯一音位，C2-B6 完整5八度）：
-  普通模式（无修饰键）：C3-B5 (MIDI 48-83)
-  SHIFT模式（按L Shift切换高八度）：C4-B6 (MIDI 60-95)
-  CTRL模式（按L Ctrl切换低八度）：C2-B4 (MIDI 36-71)
-
-物理按键不变（36键），修饰键改变八度映射：
-             CTRL模式(-12)   普通模式        SHIFT模式(+12)
-- Z-M白键:   C2-B2(36-47)   C3-B3(48-59)   C4-B4(60-71)
-- A-J白键:   C3-B3(48-59)   C4-B4(60-71)   C5-B5(72-83)
-- Q-U白键:   C4-B4(60-71)   C5-B5(72-83)   C6-B6(84-95)
-- 1-5黑键:   C#2-A#2        C#3-A#3        C#4-A#4
-- 6-0黑键:   C#3-A#3        C#4-A#4        C#5-A#5
-- I,O,P,[,]黑键: C#4-A#4    C#5-A#5        C#6-A#6
-
-总音域：C2-B6 (MIDI 36-95, 5个八度, 60个半音)
-  MIDI 36-47: C2-B2 仅CTRL模式可达
-  MIDI 48-59: CTRL或普通模式可达 (C3-B3)
-  MIDI 60-71: 三种模式均可达 (C4-B4)
-  MIDI 72-83: 普通或SHIFT模式可达 (C5-B5)
-  MIDI 84-95: 仅SHIFT模式可达 (C6-B6)
-"""
+# 配置模块 - 60键电子琴配置（含黑键/半音，支持SHIFT/CTRL三模式切换）
+#
+# 游戏实际布局（36物理键 × 3模式 = 60唯一音位，C2-B6 完整5八度）：
+# 普通模式（无修饰键）：C3-B5 (MIDI 48-83)
+# SHIFT模式（按L Shift切换高八度）：C4-B6 (MIDI 60-95)
+# CTRL模式（按L Ctrl切换低八度）：C2-B4 (MIDI 36-71)
+#
+# 物理按键不变（36键），修饰键改变八度映射：
+# CTRL模式(-12)   普通模式        SHIFT模式(+12)
+# - Z-M白键:   C2-B2(36-47)   C3-B3(48-59)   C4-B4(60-71)
+# - A-J白键:   C3-B3(48-59)   C4-B4(60-71)   C5-B5(72-83)
+# - Q-U白键:   C4-B4(60-71)   C5-B5(72-83)   C6-B6(84-95)
+# - 1-5黑键:   C#2-A#2        C#3-A#3        C#4-A#4
+# - 6-0黑键:   C#3-A#3        C#4-A#4        C#5-A#5
+# - I,O,P,[,]黑键: C#4-A#4    C#5-A#5        C#6-A#6
+#
+# 总音域：C2-B6 (MIDI 36-95, 5个八度, 60个半音)
+# MIDI 36-47: C2-B2 仅CTRL模式可达
+# MIDI 48-59: CTRL或普通模式可达 (C3-B3)
+# MIDI 60-71: 三种模式均可达 (C4-B4)
+# MIDI 72-83: 普通或SHIFT模式可达 (C5-B5)
+# MIDI 84-95: 仅SHIFT模式可达 (C6-B6)
 
 # 键盘映射配置
 KEYBOARD_LAYOUT = {
@@ -221,11 +219,10 @@ import os
 import sys
 
 def _get_config_dir():
-    """获取配置文件目录。
-
-    优先 config.BASE_DIR (frozen-aware 应用根: 打包布局下 exe 在
-    <root>\\runtime\\ 而用户数据归 <root>\\); 宿主不可用时回退旧逻辑。
-    """
+    # 获取配置文件目录。
+    #
+    # 优先 config.BASE_DIR (frozen-aware 应用根: 打包布局下 exe 在
+    # <root>\runtime\ 而用户数据归 <root>\); 宿主不可用时回退旧逻辑。
     try:
         from config import BASE_DIR
         return BASE_DIR
@@ -240,11 +237,10 @@ CONFIG_FILE = os.path.join(_get_config_dir(), 'settings.json')
 
 
 def _resource_dir(*parts):
-    """解析只读资源目录 (字体/音效等), 兼容开发环境与 PyInstaller 打包。
-
-    依次尝试: onefile 解包目录 (_MEIPASS) → exe 同级目录 → 脚本目录,
-    返回第一个真实存在的路径; 都不存在时回退到脚本相对路径。
-    """
+    # 解析只读资源目录 (字体/音效等), 兼容开发环境与 PyInstaller 打包。
+    #
+    # 依次尝试: onefile 解包目录 (_MEIPASS) → exe 同级目录 → 脚本目录,
+    # 返回第一个真实存在的路径; 都不存在时回退到脚本相对路径。
     candidates = []
     if getattr(sys, 'frozen', False):
         meipass = getattr(sys, '_MEIPASS', None)

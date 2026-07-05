@@ -1,10 +1,9 @@
 # -*- coding: utf-8 -*-
-"""Measure the actual pixel bounds of the menu HUD glass shell.
-
-Renders MenuHudSpriteRenderer's static GPU layer offline and reports,
-for each edge, where opaque plate pixels start — expected symmetric at
-_shell_body_pad from every canvas edge.
-"""
+# Measure the actual pixel bounds of the menu HUD glass shell.
+#
+# Renders MenuHudSpriteRenderer's static GPU layer offline and reports,
+# for each edge, where opaque plate pixels start — expected symmetric at
+# _shell_body_pad from every canvas edge.
 import os
 import sys
 

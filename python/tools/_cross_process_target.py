@@ -1,16 +1,15 @@
 # -*- coding: utf-8 -*-
-"""Standalone target process for cross-process click-passthrough tests.
-
-Runs as its OWN separate process (not a thread, not another Tk toplevel
-in the same interpreter) — a plain, ordinary top-level window at a
-known screen rect. Writes 'CLICKED' to the given file the first time it
-receives a real left-button click, then exits shortly after.
-
-This exists because every earlier test in this investigation used
-same-process Tk windows to represent "the game", which cannot catch
-bugs specific to cross-process/cross-thread click delivery (the exact
-class of bug this session's SetWindowRgn regression falls into).
-"""
+# Standalone target process for cross-process click-passthrough tests.
+#
+# Runs as its OWN separate process (not a thread, not another Tk toplevel
+# in the same interpreter) — a plain, ordinary top-level window at a
+# known screen rect. Writes 'CLICKED' to the given file the first time it
+# receives a real left-button click, then exits shortly after.
+#
+# This exists because every earlier test in this investigation used
+# same-process Tk windows to represent "the game", which cannot catch
+# bugs specific to cross-process/cross-thread click delivery (the exact
+# class of bug this session's SetWindowRgn regression falls into).
 import sys
 import tkinter as tk
 

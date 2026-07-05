@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""Regression coverage for ACT Selective Parsing policy helpers."""
+# Regression coverage for ACT Selective Parsing policy helpers.
 
 from __future__ import annotations
 

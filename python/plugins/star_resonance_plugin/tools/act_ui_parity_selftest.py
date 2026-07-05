@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""Unittest regression coverage for the ACT dual-UI parity contract."""
+# Unittest regression coverage for the ACT dual-UI parity contract.
 
 from __future__ import annotations
 

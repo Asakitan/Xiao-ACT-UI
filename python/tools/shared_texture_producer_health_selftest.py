@@ -1,27 +1,26 @@
 # -*- coding: utf-8 -*-
-"""Selftest: CompositorLayer._shared_producer_healthy() and its
-heartbeat stamp in _poll_mmf().
-
-Context: DCompBridge.lock_external_texture() (wglDXLockObjectsNV) has
-no timeout parameter, unlike the keyed-mutex acquire beside it in the
-same _draw_layers draw branch (which uses an explicit 8ms timeout
-specifically because a stuck producer can hold the resource forever).
-If the shared-texture producer process (the desktop pet) gets stuck
-holding the D3D11 resource, that lock call can block the render thread
-indefinitely — reproduced live as "开着桌宠跑一会就卡死, 鱼眼菜单打不开"
-(running with the desktop pet, it freezes after a while, the fisheye
-menu won't open), requiring Task Manager to end the whole process.
-
-_shared_producer_healthy() uses the MMF side-channel (attached
-alongside the shared texture for its alpha byte, polled once per tick
-in _run()'s loop before _draw_layers runs) as an independent liveness
-signal from the SAME producer process, so _draw_layers can skip the
-un-timeout'd lock when the producer hasn't delivered a frame recently.
-
-This is a pure logic test — CompositorLayer's constructor and these
-two methods touch no GL/Tk/window state, so no compositor, GPU context,
-or display is needed.
-"""
+# Selftest: CompositorLayer._shared_producer_healthy() and its
+# heartbeat stamp in _poll_mmf().
+#
+# Context: DCompBridge.lock_external_texture() (wglDXLockObjectsNV) has
+# no timeout parameter, unlike the keyed-mutex acquire beside it in the
+# same _draw_layers draw branch (which uses an explicit 8ms timeout
+# specifically because a stuck producer can hold the resource forever).
+# If the shared-texture producer process (the desktop pet) gets stuck
+# holding the D3D11 resource, that lock call can block the render thread
+# indefinitely — reproduced live as "开着桌宠跑一会就卡死, 鱼眼菜单打不开"
+# (running with the desktop pet, it freezes after a while, the fisheye
+# menu won't open), requiring Task Manager to end the whole process.
+#
+# _shared_producer_healthy() uses the MMF side-channel (attached
+# alongside the shared texture for its alpha byte, polled once per tick
+# in _run()'s loop before _draw_layers runs) as an independent liveness
+# signal from the SAME producer process, so _draw_layers can skip the
+# un-timeout'd lock when the producer hasn't delivered a frame recently.
+#
+# This is a pure logic test — CompositorLayer's constructor and these
+# two methods touch no GL/Tk/window state, so no compositor, GPU context,
+# or display is needed.
 import os
 import sys
 import time

@@ -1,39 +1,38 @@
 # -*- coding: utf-8 -*-
-"""Integration selftest: desktop-pet click halo + passthrough region.
-
-Boots the real unified compositor and reproduces the "flickering click
-region around the pet" scenario, asserting the fix at the deterministic
-layer — the host window's SetWindowRgn state — rather than via flaky
-synthetic clicks:
-
-  1. Pet only (click_through=True): host is WS_EX_TRANSPARENT (nothing
-     truly interactive is open) and the region is a REAL, tight scan
-     result reflecting the pet's actual silhouette — NOT a NULL/full-
-     screen shape. A NULL region here was an earlier, incorrect
-     "optimization" (removed): per _sync_host_rgn's own docstring,
-     SetWindowRgn's exclusion — not WS_EX_TRANSPARENT alone — is what
-     reliably lets a click reach the game process; a NULL region means
-     the host's shape covers the WHOLE screen with nothing excluded,
-     which swallows clicks meant for the desktop/game regardless of the
-     ex-style. See host_region_cross_process_selftest.py for the direct
-     cross-process proof.
-
-  2. Pet + NerveGear-style interactive layer WITH an input proxy: host
-     STAYS passthrough (True) — the proxy carries the button's clicks,
-     so the button no longer forces the host to gate input through
-     SetWindowRgn. This is the actual fix for the original pet-halo
-     report: the halo came from a proxyless NerveGear forcing the host
-     out of passthrough, not from the region scan running.
-
-  3. Counter-test — an interactive layer WITHOUT a proxy: host correctly
-     drops out of passthrough and a real region appears (menus/panels
-     that still rely on host-HWND routing keep working).
-
-  4. Hiding that layer returns the host to passthrough, region rescans
-     to reflect what's still actually visible.
-
-Needs a GPU/DWM desktop session (same as the app).
-"""
+# Integration selftest: desktop-pet click halo + passthrough region.
+#
+# Boots the real unified compositor and reproduces the "flickering click
+# region around the pet" scenario, asserting the fix at the deterministic
+# layer — the host window's SetWindowRgn state — rather than via flaky
+# synthetic clicks:
+#
+# 1. Pet only (click_through=True): host is WS_EX_TRANSPARENT (nothing
+# truly interactive is open) and the region is a REAL, tight scan
+# result reflecting the pet's actual silhouette — NOT a NULL/full-
+# screen shape. A NULL region here was an earlier, incorrect
+# "optimization" (removed): per _sync_host_rgn's own docstring,
+# SetWindowRgn's exclusion — not WS_EX_TRANSPARENT alone — is what
+# reliably lets a click reach the game process; a NULL region means
+# the host's shape covers the WHOLE screen with nothing excluded,
+# which swallows clicks meant for the desktop/game regardless of the
+# ex-style. See host_region_cross_process_selftest.py for the direct
+# cross-process proof.
+#
+# 2. Pet + NerveGear-style interactive layer WITH an input proxy: host
+# STAYS passthrough (True) — the proxy carries the button's clicks,
+# so the button no longer forces the host to gate input through
+# SetWindowRgn. This is the actual fix for the original pet-halo
+# report: the halo came from a proxyless NerveGear forcing the host
+# out of passthrough, not from the region scan running.
+#
+# 3. Counter-test — an interactive layer WITHOUT a proxy: host correctly
+# drops out of passthrough and a real region appears (menus/panels
+# that still rely on host-HWND routing keep working).
+#
+# 4. Hiding that layer returns the host to passthrough, region rescans
+# to reflect what's still actually visible.
+#
+# Needs a GPU/DWM desktop session (same as the app).
 import os
 import sys
 import time
@@ -57,8 +56,8 @@ def _region_kind(hwnd: int):
 
 
 def _pet_bgra(w: int, h: int) -> bytes:
-    """Opaque center with a transparent left/right/top margin — the exact
-    silhouette shape whose margin used to become a click dead-zone."""
+    # Opaque center with a transparent left/right/top margin — the exact
+    # silhouette shape whose margin used to become a click dead-zone.
     buf = bytearray(w * h * 4)
     mx = w // 4          # left/right transparent margin
     my = h // 3          # top transparent margin (feet at the bottom)
@@ -73,7 +72,7 @@ def _pet_bgra(w: int, h: int) -> bytes:
 
 
 def _pump(root, uo, secs: float):
-    """Pump Tk + let the overlay thread drain its command queue."""
+    # Pump Tk + let the overlay thread drain its command queue.
     t0 = time.perf_counter()
     while time.perf_counter() - t0 < secs:
         try:

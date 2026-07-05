@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""Small contract tests for mem_probe.unified_source.UnifiedDataSource."""
+# Small contract tests for mem_probe.unified_source.UnifiedDataSource.
 
 from __future__ import annotations
 

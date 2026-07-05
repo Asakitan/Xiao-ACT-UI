@@ -1,27 +1,25 @@
 # -*- coding: utf-8 -*-
-"""
-SAO-UI 接口冒烟测试
-Smoke test for every importable module + key public surfaces.
-
-Strategy:
-  Phase A — Import every .py module (platform + Star Resonance plugin).
-  Phase B — Verify Cython .pyd modules expose their documented API.
-  Phase C — Smoke-call a representative entry point of every key subsystem
-            with safe dummy inputs (no network, no Tk, no game window).
-  Phase D — Iterate all SAOPlayerGUI mixins, confirm class + method count.
-
-Updated for the 5.0.0 platform/plugin split:
-  * Platform tree:   sao_gui / sao_webview / gui_modules / render / act_platform / ...
-  * Plugin tree:     plugins/star_resonance_plugin/{engines,net,vision,protocol,
-                      panels,render,cython,...}
-    * Cython binaries: platform-side ``_sao_cy_uihelpers``/``_sao_cy_memscan``
-                                         live next to ``main.py``; plugin-side ``_sao_cy_packet/
-                                         _sao_cy_combat/_sao_cy_pixels/_sao_cy_skillfx/
-                                         _sao_cy_sr_uihelpers`` live under
-                                         ``plugins/star_resonance_plugin/cython/``.
-
-Exit code 0 if every probe passes, 1 otherwise.
-"""
+# SAO-UI 接口冒烟测试
+# Smoke test for every importable module + key public surfaces.
+#
+# Strategy:
+# Phase A — Import every .py module (platform + Star Resonance plugin).
+# Phase B — Verify Cython .pyd modules expose their documented API.
+# Phase C — Smoke-call a representative entry point of every key subsystem
+# with safe dummy inputs (no network, no Tk, no game window).
+# Phase D — Iterate all SAOPlayerGUI mixins, confirm class + method count.
+#
+# Updated for the 5.0.0 platform/plugin split:
+# * Platform tree:   sao_gui / sao_webview / gui_modules / render / act_platform / ...
+# * Plugin tree:     plugins/star_resonance_plugin/{engines,net,vision,protocol,
+# panels,render,cython,...}
+# * Cython binaries: platform-side ``_sao_cy_uihelpers``/``_sao_cy_memscan``
+# live next to ``main.py``; plugin-side ``_sao_cy_packet/
+# _sao_cy_combat/_sao_cy_pixels/_sao_cy_skillfx/
+# _sao_cy_sr_uihelpers`` live under
+# ``plugins/star_resonance_plugin/cython/``.
+#
+# Exit code 0 if every probe passes, 1 otherwise.
 
 from __future__ import annotations
 
@@ -70,7 +68,7 @@ def section(title: str) -> None:
 
 
 def probe(name: str, fn, *args, **kwargs) -> None:
-    """Run fn(*args, **kwargs); record OK/FAIL with traceback head."""
+    # Run fn(*args, **kwargs); record OK/FAIL with traceback head.
     try:
         fn(*args, **kwargs)
         print(f"  OK    {name}")

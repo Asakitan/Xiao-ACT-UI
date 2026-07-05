@@ -1,13 +1,12 @@
-"""SAO AI Editor — VSCode-style LLM chat + tool-calling panel.
-
-Standalone Tk Toplevel window opened from the SAO menu.  Features:
-* Multi-provider LLM chat with streaming
-* Tool calling (engine APIs exposed as LLM functions)
-* Code-block rendering with syntax tags
-* Collapsible tool-call result panels
-* API-key / model / provider settings dialog
-* Conversation history sidebar
-"""
+# SAO AI Editor — VSCode-style LLM chat + tool-calling panel.
+#
+# Standalone Tk Toplevel window opened from the SAO menu.  Features:
+# * Multi-provider LLM chat with streaming
+# * Tool calling (engine APIs exposed as LLM functions)
+# * Code-block rendering with syntax tags
+# * Collapsible tool-call result panels
+# * API-key / model / provider settings dialog
+# * Conversation history sidebar
 
 from __future__ import annotations
 
@@ -98,7 +97,7 @@ def _font_exists(name: str) -> bool:
 # =====================================================================
 
 class AIEditorPanel:
-    """Standalone Tk window for AI-assisted editing."""
+    # Standalone Tk window for AI-assisted editing.
 
     def __init__(self, root: tk.Tk, gui_ref: Any) -> None:
         self.root = root
@@ -584,7 +583,7 @@ class AIEditorPanel:
         self._append_text("\n")
 
     def _render_markdown(self, text: str) -> None:
-        """Parse markdown and render with tags. Handles code blocks, inline code, bold."""
+        # Parse markdown and render with tags. Handles code blocks, inline code, bold.
         parts = re.split(r'(```[\s\S]*?```)', text)
         for part in parts:
             if part.startswith("```") and part.endswith("```"):

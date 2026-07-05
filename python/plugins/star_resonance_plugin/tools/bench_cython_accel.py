@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""Bench and parity-check the mandatory Cython pixel accelerators."""
+# Bench and parity-check the mandatory Cython pixel accelerators.
 from __future__ import annotations
 
 import argparse

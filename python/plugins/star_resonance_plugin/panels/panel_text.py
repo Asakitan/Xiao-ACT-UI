@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""Star Resonance ACT text labels for Tk panels."""
+# Star Resonance ACT text labels for Tk panels.
 
 from __future__ import annotations
 

@@ -1,9 +1,8 @@
 # -*- coding: utf-8 -*-
-"""Watch boss buffs live: print every buff that appears on a boss + resolve its
-name (boss_skill / mechanic / buff). Boss cast-bar skills live in the buff list.
-
-    python tools/watch_boss_buffs.py [seconds]
-"""
+# Watch boss buffs live: print every buff that appears on a boss + resolve its
+# name (boss_skill / mechanic / buff). Boss cast-bar skills live in the buff list.
+#
+# python tools/watch_boss_buffs.py [seconds]
 from __future__ import annotations
 
 import os

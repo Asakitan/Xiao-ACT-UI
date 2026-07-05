@@ -1,17 +1,16 @@
 # -*- coding: utf-8 -*-
-"""SAO Auto - 外部更新应用器
-
-由 sao_updater.schedule_apply_on_exit() 在主进程退出前 detach 启动。
-
-读取 BASE_DIR/staging/pending.json，等待主进程退出后：
-  - runtime-delta: 解压模块更新到 BASE_DIR/
-  - full-package: 替换完整客户端文件
-
-本版本为可视化 SAO 风格 updater：
-  - 显示接管、备份、替换、重启四个阶段
-  - 带进度条与状态动画
-  - full-package 下会对 update.exe 自身使用延迟自替换，避免运行中覆盖失败
-"""
+# SAO Auto - 外部更新应用器
+#
+# 由 sao_updater.schedule_apply_on_exit() 在主进程退出前 detach 启动。
+#
+# 读取 BASE_DIR/staging/pending.json，等待主进程退出后：
+# - runtime-delta: 解压模块更新到 BASE_DIR/
+# - full-package: 替换完整客户端文件
+#
+# 本版本为可视化 SAO 风格 updater：
+# - 显示接管、备份、替换、重启四个阶段
+# - 带进度条与状态动画
+# - full-package 下会对 update.exe 自身使用延迟自替换，避免运行中覆盖失败
 
 from __future__ import annotations
 
@@ -89,7 +88,7 @@ def _emit(progress_cb: Optional[Callable[[Dict[str, object]], None]], **data):
 
 
 def _wait_for_exit(pid: int, timeout: float = WAIT_TIMEOUT) -> bool:
-    """等待主进程退出。仅 Windows: 通过 OpenProcess 检查。"""
+    # 等待主进程退出。仅 Windows: 通过 OpenProcess 检查。
     if pid <= 0:
         return True
     deadline = time.time() + timeout
@@ -134,17 +133,16 @@ def _normalize_rel(rel_path: str) -> str:
 
 
 def _replace_with_retry(src: str, dst: str, retries: int = 6, delay: float = 0.4) -> None:
-    """Robust os.replace for Windows-locked files (fonts, dlls, ...).
-
-    Retries with backoff. If still locked, falls back to:
-      - rename(dst -> dst+'.old-<ts>') to release the lock holder's reference
-        (Windows allows renaming most files with open handles), then move src
-        into place.
-      - if even rename fails, schedule a delayed replace via MoveFileEx
-        (DELAY_UNTIL_REBOOT) so it succeeds on next boot, and (best-effort)
-        write src to dst+'.new' so subsequent runs can pick it up.
-    Never raises for the tmp-staged delete cleanup branch.
-    """
+    # Robust os.replace for Windows-locked files (fonts, dlls, ...).
+    #
+    # Retries with backoff. If still locked, falls back to:
+    # - rename(dst -> dst+'.old-<ts>') to release the lock holder's reference
+    # (Windows allows renaming most files with open handles), then move src
+    # into place.
+    # - if even rename fails, schedule a delayed replace via MoveFileEx
+    # (DELAY_UNTIL_REBOOT) so it succeeds on next boot, and (best-effort)
+    # write src to dst+'.new' so subsequent runs can pick it up.
+    # Never raises for the tmp-staged delete cleanup branch.
     last_err: Optional[Exception] = None
     for attempt in range(retries):
         try:
@@ -223,11 +221,10 @@ def _collect_entries(zf: zipfile.ZipFile, base: str, allow_top_level_exe: bool) 
 
 
 def _read_zip_remove_hints(zip_path: str) -> List[str]:
-    """Pull the ``__remove_files__.json`` sidecar from a delta zip, if present.
-
-    v2.4.32: Used as a fallback channel when ``meta.removed_files`` is missing
-    (e.g. legacy publishers that only embedded the hint in the zip).
-    """
+    # Pull the ``__remove_files__.json`` sidecar from a delta zip, if present.
+    #
+    # v2.4.32: Used as a fallback channel when ``meta.removed_files`` is missing
+    # (e.g. legacy publishers that only embedded the hint in the zip).
     out: List[str] = []
     try:
         with zipfile.ZipFile(zip_path, "r") as zf:
@@ -253,12 +250,11 @@ def _read_zip_remove_hints(zip_path: str) -> List[str]:
 
 
 def _safe_remove_orphan(base: str, rel: str) -> Tuple[bool, str]:
-    """Remove a single orphan file declared by manifest.removed_files.
-
-    Returns ``(removed, reason)``. Refuses to act on paths that escape the
-    install root, on top-level executables, and on the launcher exe itself.
-    Missing files are treated as already-clean and return ``(True, 'absent')``.
-    """
+    # Remove a single orphan file declared by manifest.removed_files.
+    #
+    # Returns ``(removed, reason)``. Refuses to act on paths that escape the
+    # install root, on top-level executables, and on the launcher exe itself.
+    # Missing files are treated as already-clean and return ``(True, 'absent')``.
     try:
         norm = _normalize_rel(rel)
     except Exception as exc:
@@ -289,10 +285,9 @@ def _apply_removed_files(
     backup_root: str,
     progress_cb: Optional[Callable[[Dict[str, object]], None]] = None,
 ) -> Tuple[List[str], List[Tuple[str, str]]]:
-    """Delete orphan files declared by manifest, backing them up first.
-
-    Returns ``(removed_rels, backups)`` so the caller can restore on rollback.
-    """
+    # Delete orphan files declared by manifest, backing them up first.
+    #
+    # Returns ``(removed_rels, backups)`` so the caller can restore on rollback.
     if not rels:
         return [], []
     seen: set = set()
@@ -455,11 +450,10 @@ def _apply_zip_package(
     backed_up: Optional[List[Tuple[str, str]]] = None,
     created_files: Optional[List[str]] = None,
 ) -> Tuple[List[str], List[Tuple[str, str]], List[str], Optional[Tuple[str, str]]]:
-    """应用 zip 更新包，返回 (已应用列表, 备份列表, 新建文件列表, 延迟自替换文件)。
-
-    ``backed_up``/``created_files`` 可由调用方传入共享列表: 中途抛异常时
-    已完成的备份/新建记录仍保留在调用方手里, 回滚才能覆盖部分进度。
-    """
+    # 应用 zip 更新包，返回 (已应用列表, 备份列表, 新建文件列表, 延迟自替换文件)。
+    #
+    # ``backed_up``/``created_files`` 可由调用方传入共享列表: 中途抛异常时
+    # 已完成的备份/新建记录仍保留在调用方手里, 回滚才能覆盖部分进度。
     allow_top_level_exe = package_type == "full-package"
     backup_root = os.path.join(base, "backup", version)
     if allow_top_level_exe:
@@ -1016,7 +1010,7 @@ class UpdateApplyWindow:
             pass
 
     def _apply_rounded_corners(self):
-        """Win11 原生圆角 + Win10/旧系统 SetWindowRgn fallback."""
+        # Win11 原生圆角 + Win10/旧系统 SetWindowRgn fallback.
         if sys.platform != "win32":
             return
         try:

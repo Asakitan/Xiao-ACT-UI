@@ -1,15 +1,14 @@
-"""Star Resonance skillfx_pipeline — GPU SDF shader pipeline (plugin-local).
-
-Moved from platform ``render/skillfx_pipeline.py`` in the 5.0.0 platform/plugin
-separation pass.  The shader file now lives with the Star Resonance plugin at
-``plugins/star_resonance_plugin/shaders/skillfx.frag``; the path resolver below
-prefers that plugin-local asset and keeps platform-root paths only as legacy
-compatibility fallbacks.
-
-Public API (preserved):
-    pipe = get_skillfx_pipeline()           # None if GPU unavailable
-    rgba = pipe.render(width, height, params_dict)   # PIL.Image RGBA or None
-"""
+# Star Resonance skillfx_pipeline — GPU SDF shader pipeline (plugin-local).
+#
+# Moved from platform ``render/skillfx_pipeline.py`` in the 5.0.0 platform/plugin
+# separation pass.  The shader file now lives with the Star Resonance plugin at
+# ``plugins/star_resonance_plugin/shaders/skillfx.frag``; the path resolver below
+# prefers that plugin-local asset and keeps platform-root paths only as legacy
+# compatibility fallbacks.
+#
+# Public API (preserved):
+# pipe = get_skillfx_pipeline()           # None if GPU unavailable
+# rgba = pipe.render(width, height, params_dict)   # PIL.Image RGBA or None
 from __future__ import annotations
 
 import os
@@ -30,13 +29,12 @@ assert hasattr(_CY_UI, 'unpack_skillfx_params'), (
 
 
 def _resolve_shader_path() -> str:
-    """Find the plugin-owned ``skillfx.frag`` shader asset.
-
-    Dev mode:   sao_auto/python/plugins/star_resonance_plugin/render/  → plugin root
-    Frozen:     runtime/plugins/star_resonance_plugin/render/          → plugin root
-    Also checks sys._MEIPASS and exe dir for frozen plugin layouts, then legacy
-    platform-root shader paths for fallback compatibility.
-    """
+    # Find the plugin-owned ``skillfx.frag`` shader asset.
+    #
+    # Dev mode:   sao_auto/python/plugins/star_resonance_plugin/render/  → plugin root
+    # Frozen:     runtime/plugins/star_resonance_plugin/render/          → plugin root
+    # Also checks sys._MEIPASS and exe dir for frozen plugin layouts, then legacy
+    # platform-root shader paths for fallback compatibility.
     HERE = os.path.dirname(os.path.abspath(__file__))
     plugin_root = os.path.dirname(HERE)
     runtime_root = os.path.dirname(os.path.dirname(plugin_root))
@@ -91,7 +89,7 @@ def _load_fragment() -> str:
 
 
 class SkillFXShaderPipeline:
-    """One instance per render-lane thread (created via get_skillfx_pipeline)."""
+    # One instance per render-lane thread (created via get_skillfx_pipeline).
 
     def __init__(self, ctx: Any) -> None:
         self._ctx = ctx
@@ -128,8 +126,8 @@ class SkillFXShaderPipeline:
 
     def render(self, width: int, height: int,
                params: Dict[str, Any]) -> Optional[Image.Image]:
-        """Render one frame of ring+beam+glow. Returns PIL RGBA (straight
-        alpha) or None on any error (caller must fall back to CPU path)."""
+        # Render one frame of ring+beam+glow. Returns PIL RGBA (straight
+        # alpha) or None on any error (caller must fall back to CPU path).
         if width <= 0 or height <= 0:
             return None
         try:
@@ -233,7 +231,7 @@ class SkillFXShaderPipeline:
 
 
 def get_skillfx_pipeline() -> Optional[SkillFXShaderPipeline]:
-    """Get-or-create the calling thread's SkillFXShaderPipeline."""
+    # Get-or-create the calling thread's SkillFXShaderPipeline.
     pipe = getattr(_tls, 'pipe', None)
     if pipe is not None:
         return pipe

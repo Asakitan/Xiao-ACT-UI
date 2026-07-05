@@ -1,29 +1,28 @@
 # -*- coding: utf-8 -*-
-"""enum_raid_boss_skills - enumerate a raid dungeon's boss skill list straight from
-the game's own config tables (read-only memory; works for skills never observed
-in combat).
-
-Chain:
-  RaidDungeonTable  rows filtered by DungeonId -> difficulty rows (Difficult,
-                    localized Name) -> chosen row's BossId[] (one id per phase)
-  MonsterTable      boss row by Id -> Name(mlid), SkillIds[], BornSkillId
-  SkillTable        each skill id -> Name(mlid)
-  StringPool        mlid -> localized CN string
-
-Column offsets come from table_columns (getter-thunk extraction with versioned
-cache + curated fallback + live self-check); class fields go through
-auto_offsets inside MemConfigTableReader.
-
-Usage:
-  python -m tools.enum_raid_boss_skills --dungeon 13023 --list-difficulties
-  python -m tools.enum_raid_boss_skills --dungeon 13023 --difficulty 4 --dry-run
-  python -m tools.enum_raid_boss_skills --dungeon 13023 --difficulty 4 --all-phases --dry-run
-  python -m tools.enum_raid_boss_skills --dungeon 13023 --difficulty 4 --apply
-
---dry-run prints + writes the exports JSON only. --apply additionally records
-every skill into the BossSkillStore observation library and overlays the
-skill/monster names onto the runtime name tables.
-"""
+# enum_raid_boss_skills - enumerate a raid dungeon's boss skill list straight from
+# the game's own config tables (read-only memory; works for skills never observed
+# in combat).
+#
+# Chain:
+# RaidDungeonTable  rows filtered by DungeonId -> difficulty rows (Difficult,
+# localized Name) -> chosen row's BossId[] (one id per phase)
+# MonsterTable      boss row by Id -> Name(mlid), SkillIds[], BornSkillId
+# SkillTable        each skill id -> Name(mlid)
+# StringPool        mlid -> localized CN string
+#
+# Column offsets come from table_columns (getter-thunk extraction with versioned
+# cache + curated fallback + live self-check); class fields go through
+# auto_offsets inside MemConfigTableReader.
+#
+# Usage:
+# python -m tools.enum_raid_boss_skills --dungeon 13023 --list-difficulties
+# python -m tools.enum_raid_boss_skills --dungeon 13023 --difficulty 4 --dry-run
+# python -m tools.enum_raid_boss_skills --dungeon 13023 --difficulty 4 --all-phases --dry-run
+# python -m tools.enum_raid_boss_skills --dungeon 13023 --difficulty 4 --apply
+#
+# --dry-run prints + writes the exports JSON only. --apply additionally records
+# every skill into the BossSkillStore observation library and overlays the
+# skill/monster names onto the runtime name tables.
 from __future__ import annotations
 
 import argparse
@@ -68,7 +67,7 @@ def _dungeon_offline_name(dungeon_id: int) -> str:
 
 
 class RaidSkillEnumerator:
-    """Read-only enumeration over RaidDungeon/Monster/Skill config tables."""
+    # Read-only enumeration over RaidDungeon/Monster/Skill config tables.
 
     def __init__(self, src, log=print):
         self.src = src
@@ -130,8 +129,8 @@ class RaidSkillEnumerator:
         }
 
     def all_raid_rows(self) -> List[Dict]:
-        """Every RaidDungeon row: validated ZLoader walk first (full serialized
-        set), heap scan merged for anything the walk missed."""
+        # Every RaidDungeon row: validated ZLoader walk first (full serialized
+        # set), heap scan merged for anything the walk missed.
         seen: Dict[int, Dict] = {}
         n_loader = 0
         for _key, zl, blob in self.rd.iter_rows_via_loader(RAID_CLS):
@@ -152,8 +151,8 @@ class RaidSkillEnumerator:
                       key=lambda r: (r["group_id"] or 0, r["difficulty"] or 0))
 
     def family_rows(self, dungeon_id: int) -> Tuple[List[Dict], List[Dict]]:
-        """(exact-DungeonId rows, GroupId family rows). A raid's difficulties
-        live in SIBLING rows sharing GroupId, each with its own DungeonId."""
+        # (exact-DungeonId rows, GroupId family rows). A raid's difficulties
+        # live in SIBLING rows sharing GroupId, each with its own DungeonId.
         rows = self.all_raid_rows()
         exact = [r for r in rows if r["dungeon_id"] == dungeon_id]
         gids = {r["group_id"] for r in exact if r["group_id"]}
@@ -162,8 +161,8 @@ class RaidSkillEnumerator:
 
     # ── monster / skill lookups ───────────────────────────────────────────────
     def _build_index(self, cls: str) -> Dict[int, Tuple[int, int]]:
-        """id -> (zloader, blob) over the FULL table (loader walk first — it has
-        every serialized row — heap scan merged on top)."""
+        # id -> (zloader, blob) over the FULL table (loader walk first — it has
+        # every serialized row — heap scan merged on top).
         c_id = self._col(cls, "Id")
         out: Dict[int, Tuple[int, int]] = {}
         for key, zl, blob in self.rd.iter_rows_via_loader(cls):
@@ -213,9 +212,9 @@ class RaidSkillEnumerator:
         return info
 
     def skill_name(self, skill_id: int) -> Tuple[str, str]:
-        """(name, source). Boss mechanic skills usually have an EMPTY localized
-        Name; the designer name (NameDesign, raw string column) is the real
-        label then."""
+        # (name, source). Boss mechanic skills usually have an EMPTY localized
+        # Name; the designer name (NameDesign, raw string column) is the real
+        # label then.
         ent = self.skill_index().get(int(skill_id))
         if not ent:
             return "", "missing"
@@ -227,7 +226,7 @@ class RaidSkillEnumerator:
         return (nd, "design") if nd else ("", "empty")
 
     def monsters_by_name(self, terms: List[str]) -> List[Dict]:
-        """Fallback (A): full monster-table scan filtered by name substrings."""
+        # Fallback (A): full monster-table scan filtered by name substrings.
         c_name = self._col(MONSTER_CLS, "Name")
         out = []
         for rid, (zl, blob) in self.monster_index().items():

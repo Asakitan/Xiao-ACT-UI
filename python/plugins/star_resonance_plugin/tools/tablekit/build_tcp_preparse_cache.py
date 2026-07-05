@@ -1,9 +1,8 @@
 # -*- coding: utf-8 -*-
-"""Build compact TCP pre-parse name cache from live probe matched rows.
-
-This keeps the full live_probe_act_matched_rows.json as provenance and writes a
-small runtime cache consumed by tools.tablekit.name_tables and PacketBridge.
-"""
+# Build compact TCP pre-parse name cache from live probe matched rows.
+#
+# This keeps the full live_probe_act_matched_rows.json as provenance and writes a
+# small runtime cache consumed by tools.tablekit.name_tables and PacketBridge.
 from __future__ import annotations
 
 import argparse

@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""Static and helper checks for the Tk plugin manager panel."""
+# Static and helper checks for the Tk plugin manager panel.
 
 from __future__ import annotations
 

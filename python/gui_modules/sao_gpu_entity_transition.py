@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""Direct-GPU Entity entry/exit transition overlay."""
+# Direct-GPU Entity entry/exit transition overlay.
 
 from __future__ import annotations
 
@@ -160,7 +160,7 @@ void main() {
 
 
 class EntityTransitionGpuOverlay:
-    """Small direct-present GPU transition used between LinkStart and Entity UI."""
+    # Small direct-present GPU transition used between LinkStart and Entity UI.
 
     def __init__(
         self,
@@ -185,7 +185,7 @@ class EntityTransitionGpuOverlay:
         self._h = 1
 
     def _to_gl_point(self, point: Tuple[float, float]) -> Tuple[float, float]:
-        """Convert top-left screen coordinates to bottom-left GL pixels."""
+        # Convert top-left screen coordinates to bottom-left GL pixels.
         return (float(point[0]), float(self._h) - float(point[1]))
 
     def start(self) -> bool:

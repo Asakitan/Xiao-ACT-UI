@@ -1,14 +1,13 @@
 # -*- coding: utf-8 -*-
-"""mem_zone_reader - 读 AOE 危险区(ZoneEnt)的**成员判定**, 精准出圈零误差.
-
-★精确不靠估算半径(主人: 范围错了会害死人): 服务端自己在 ZoneComp.entitiesIdInZone_
-(ZList<long uuid>) 里维护"谁在这个区域内"——game 自己说玩家在不在圈里。精准出圈=
-玩家 uuid 从危险区成员列表消失即停, 而不是算半径+距离(半径在配置/native里逆不干净)。
-
-链路(全 auto-offset, 用活对象 klass 字段表): ZoneEnt(zoneDict_) → compList_ 里 ZoneComp
-→ entitiesIdInZone_(ZList) → items_/size_ → long uuid[]; ZoneEnt.zoneType_ 分危险/安全。
-实测: 玩家站区域内时其 uuid 确在 entitiesIdInZone_ 列表里(size=1 ids=[player_uuid])。
-"""
+# mem_zone_reader - 读 AOE 危险区(ZoneEnt)的**成员判定**, 精准出圈零误差.
+#
+# ★精确不靠估算半径(主人: 范围错了会害死人): 服务端自己在 ZoneComp.entitiesIdInZone_
+# (ZList<long uuid>) 里维护"谁在这个区域内"——game 自己说玩家在不在圈里。精准出圈=
+# 玩家 uuid 从危险区成员列表消失即停, 而不是算半径+距离(半径在配置/native里逆不干净)。
+#
+# 链路(全 auto-offset, 用活对象 klass 字段表): ZoneEnt(zoneDict_) → compList_ 里 ZoneComp
+# → entitiesIdInZone_(ZList) → items_/size_ → long uuid[]; ZoneEnt.zoneType_ 分危险/安全。
+# 实测: 玩家站区域内时其 uuid 确在 entitiesIdInZone_ 列表里(size=1 ids=[player_uuid])。
 from __future__ import annotations
 
 from typing import Dict, List, Optional, Set
@@ -67,7 +66,7 @@ class ZoneReader:
             return ""
 
     def _zc_fmap(self, zonecomp: int) -> Dict[str, int]:
-        """活 ZoneComp 对象 klass 字段表 (auto-offset), 缓存。"""
+        # 活 ZoneComp 对象 klass 字段表 (auto-offset), 缓存。
         if getattr(self, "_zc_fields", None) is None:
             self._zc_fields = {}
             try:
@@ -79,7 +78,7 @@ class ZoneReader:
         return self._zc_fields
 
     def _resolve_entsinzone_off(self, zonecomp: int) -> int:
-        """从活 ZoneComp 对象的 klass 字段表解 entitiesIdInZone_ 偏移 (auto-offset)。"""
+        # 从活 ZoneComp 对象的 klass 字段表解 entitiesIdInZone_ 偏移 (auto-offset)。
         if self._off_entsinzone:
             return self._off_entsinzone
         off = self._zc_fmap(zonecomp).get("entitiesIdInZone_")
@@ -87,7 +86,7 @@ class ZoneReader:
         return self._off_entsinzone
 
     def _resolve_group_off(self, zonecomp: int) -> int:
-        """ZoneComp.zoneGroupId_ 偏移 (auto-offset), 缓存。同批编号圈共享 group id。"""
+        # ZoneComp.zoneGroupId_ 偏移 (auto-offset), 缓存。同批编号圈共享 group id。
         if self._off_group:
             return self._off_group
         off = self._zc_fmap(zonecomp).get("zoneGroupId_")
@@ -122,7 +121,7 @@ class ZoneReader:
 
     def zones_containing(self, mgr_addr: int, player_uuid: int,
                          zone_dict_off: int = 0) -> List[Dict]:
-        """返回玩家当前所在的全部区域 [{zone_uuid, zone_type, members_n}]。"""
+        # 返回玩家当前所在的全部区域 [{zone_uuid, zone_type, members_n}]。
         zoff = zone_dict_off or self._off_zone_dict
         out = []
         try:
@@ -143,8 +142,8 @@ class ZoneReader:
         return out
 
     def snapshot(self, mgr_addr: int, zone_dict_off: int = 0) -> List[Dict]:
-        """一次快照全部活动区域: [{zone_uuid, base_id, group_id, zone_type, members:set}]。
-        编号圈追踪器消费此快照按出现顺序编号 + 用 members 做命中归属。O(zones), 区域少。"""
+        # 一次快照全部活动区域: [{zone_uuid, base_id, group_id, zone_type, members:set}]。
+        # 编号圈追踪器消费此快照按出现顺序编号 + 用 members 做命中归属。O(zones), 区域少。
         zoff = zone_dict_off or self._off_zone_dict
         out = []
         try:

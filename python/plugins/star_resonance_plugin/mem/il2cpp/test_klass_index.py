@@ -1,10 +1,9 @@
 # -*- coding: utf-8 -*-
-"""Deterministic tests for the shared, version-keyed klass index.
-
-No live process: a fake pm backs a flat address space and the GA scan is
-monkeypatched so we exercise the cache / persisted-RVA / negative-cache logic
-directly.
-"""
+# Deterministic tests for the shared, version-keyed klass index.
+#
+# No live process: a fake pm backs a flat address space and the GA scan is
+# monkeypatched so we exercise the cache / persisted-RVA / negative-cache logic
+# directly.
 from __future__ import annotations
 
 import os
@@ -27,7 +26,7 @@ class _Mod:
 
 
 class FakePm:
-    """Flat fake address space: u64 slots + byte blobs, GameAssembly module."""
+    # Flat fake address space: u64 slots + byte blobs, GameAssembly module.
 
     def __init__(self, klass_names: dict):
         self.pid = 4321

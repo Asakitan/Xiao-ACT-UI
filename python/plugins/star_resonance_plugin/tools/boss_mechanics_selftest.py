@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
-"""Selftest: boss raid profile mechanics — schema v2 normalize, cast/buff/event/
-hp/time matching, cooldown dedup, binding inbox, enrage milestones, and the
-linkage mechanic trigger + inline dodge dispatch."""
+# Selftest: boss raid profile mechanics — schema v2 normalize, cast/buff/event/
+# hp/time matching, cooldown dedup, binding inbox, enrage milestones, and the
+# linkage mechanic trigger + inline dodge dispatch.
 from __future__ import annotations
 
 import os

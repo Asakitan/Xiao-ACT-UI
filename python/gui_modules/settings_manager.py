@@ -1,24 +1,22 @@
 # -*- coding: utf-8 -*-
-"""
-SettingsManager — sao_gui's settings.json persistence layer.
-
-Extracted from sao_gui.py (round 29 of the split refactor). This is the
-SAO Entity-mode `SettingsManager`; the codebase also has separate
-``config.SettingsManager`` (used by automation/recognition) and
-``sao_webview.SettingsManager`` (used by the WebView UI). They share
-the same ``settings.json`` file on disk in dev mode, but the three
-classes have slightly different APIs (atomic save, legacy-key pruning
-sets, etc.) so we keep them as distinct classes.
-
-On disk the file is an AES-256-GCM + DPAPI encrypted envelope (see
-``settings_crypto``), not plain JSON. All readers/writers of this file
-— the three SettingsManager classes plus a couple of plugin modules
-that poke it directly — must go through ``settings_crypto`` or they'll
-either corrupt the shared file or fail to parse it.
-
-CONFIG_FILE is resolved relative to the package's parent directory
-(``sao_auto/``) — matching the original path computation in sao_gui.
-"""
+# SettingsManager — sao_gui's settings.json persistence layer.
+#
+# Extracted from sao_gui.py (round 29 of the split refactor). This is the
+# SAO Entity-mode `SettingsManager`; the codebase also has separate
+# ``config.SettingsManager`` (used by automation/recognition) and
+# ``sao_webview.SettingsManager`` (used by the WebView UI). They share
+# the same ``settings.json`` file on disk in dev mode, but the three
+# classes have slightly different APIs (atomic save, legacy-key pruning
+# sets, etc.) so we keep them as distinct classes.
+#
+# On disk the file is an AES-256-GCM + DPAPI encrypted envelope (see
+# ``settings_crypto``), not plain JSON. All readers/writers of this file
+# — the three SettingsManager classes plus a couple of plugin modules
+# that poke it directly — must go through ``settings_crypto`` or they'll
+# either corrupt the shared file or fail to parse it.
+#
+# CONFIG_FILE is resolved relative to the package's parent directory
+# (``sao_auto/``) — matching the original path computation in sao_gui.
 
 from __future__ import annotations
 

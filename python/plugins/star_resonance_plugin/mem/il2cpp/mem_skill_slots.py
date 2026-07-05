@@ -1,14 +1,13 @@
-"""mem_skill_slots - 把内存读出的 SkillCD 列表转成 GameState.skill_slots 格式.
-
-复用 packet_bridge._build_packet_skill_slots 的成熟逻辑 (CD 计算 / 槽位推断 /
-普攻/职业/大招锚点等), 通过构造一个 stub PlayerData 输入.
-
-对外接口:
-    convert(skill_cds, profession_id, server_time_offset_ms=None) -> list[dict]
-
-skill_cds: List[SkillCD] (来自 SelfSnapshot.skill_cds)
-profession_id: int (来自 SelfSnapshot.profession_id)
-"""
+# mem_skill_slots - 把内存读出的 SkillCD 列表转成 GameState.skill_slots 格式.
+#
+# 复用 packet_bridge._build_packet_skill_slots 的成熟逻辑 (CD 计算 / 槽位推断 /
+# 普攻/职业/大招锚点等), 通过构造一个 stub PlayerData 输入.
+#
+# 对外接口:
+# convert(skill_cds, profession_id, server_time_offset_ms=None) -> list[dict]
+#
+# skill_cds: List[SkillCD] (来自 SelfSnapshot.skill_cds)
+# profession_id: int (来自 SelfSnapshot.profession_id)
 from __future__ import annotations
 
 import os
@@ -44,7 +43,7 @@ def _ensure_imports():
 def _make_stub_player(skill_cds: Iterable, profession_id: int,
                      server_time_offset_ms: Optional[float],
                      observed_at_ms: int) -> object:
-    """构造一个最小可用的 PlayerData, 只填 _build_packet_skill_slots 需要的字段."""
+    # 构造一个最小可用的 PlayerData, 只填 _build_packet_skill_slots 需要的字段.
     _ensure_imports()
     p = _PlayerData(uid=0)
     p.profession_id = int(profession_id or 0)
@@ -90,7 +89,7 @@ def _make_stub_player(skill_cds: Iterable, profession_id: int,
 
 def convert(skill_cds, profession_id: int = 0,
             server_time_offset_ms: Optional[float] = None) -> List[dict]:
-    """SkillCD list → HUD skill_slots list. 失败返回 []."""
+    # SkillCD list → HUD skill_slots list. 失败返回 [].
     if not skill_cds:
         return []
     try:

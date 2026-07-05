@@ -1,11 +1,10 @@
 # -*- coding: utf-8 -*-
-"""Offline parity test for the fixed->auto offset conversion.
-
-Loads the curated on-disk bundle's DumpCsIndex and asserts that every offset a
-reader now resolves BY NAME equals the verified literal it used to hardcode. This
-validates the field names (incl. C# <Name>k__BackingField forms) and the fallback
-logic WITHOUT a running game. Run:  python -m mem_probe.il2cpp.test_auto_offsets
-"""
+# Offline parity test for the fixed->auto offset conversion.
+#
+# Loads the curated on-disk bundle's DumpCsIndex and asserts that every offset a
+# reader now resolves BY NAME equals the verified literal it used to hardcode. This
+# validates the field names (incl. C# <Name>k__BackingField forms) and the fallback
+# logic WITHOUT a running game. Run:  python -m mem_probe.il2cpp.test_auto_offsets
 from __future__ import annotations
 
 import json
@@ -96,8 +95,8 @@ def _build_dci(path):
 
 
 def _full_dump_dci():
-    """The complete on-disk dump_cs_index (newest), for classes not yet curated into
-    the shipping bundle (e.g. DamageDataMgr/BuffItem until the next rebuild)."""
+    # The complete on-disk dump_cs_index (newest), for classes not yet curated into
+    # the shipping bundle (e.g. DamageDataMgr/BuffItem until the next rebuild).
     import glob
     cands = sorted(glob.glob(os.path.join(os.path.dirname(_HERE), "il2cpp", "out",
                                           "*", "dump_cs_index.json")),

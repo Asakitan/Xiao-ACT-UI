@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""Entity-mode ACT action-log panel."""
+# Entity-mode ACT action-log panel.
 
 from __future__ import annotations
 
@@ -83,7 +83,7 @@ _TOPIC_FG: Dict[str, str] = {
 
 
 def _fmt_rel_ms(ms_value: Any) -> str:
-    """Relative milliseconds → MM:SS.mmm display (e.g. 4182 → '00:04.182')."""
+    # Relative milliseconds → MM:SS.mmm display (e.g. 4182 → '00:04.182').
     try:
         ms = max(0, int(ms_value or 0))
     except Exception:
@@ -97,10 +97,9 @@ def _fmt_rel_ms(ms_value: Any) -> str:
 
 
 def _fmt_comma(value: Any) -> str:
-    """Format a numeric value with comma separators (e.g. 126000 → '126,000').
-
-    Returns '---' for None/empty, and formats floats to 2 decimal places.
-    """
+    # Format a numeric value with comma separators (e.g. 126000 → '126,000').
+    #
+    # Returns '---' for None/empty, and formats floats to 2 decimal places.
     if value is None or value == '':
         return '---'
     try:
@@ -115,7 +114,7 @@ def _fmt_comma(value: Any) -> str:
 
 
 def _table_source(value: Any) -> str:
-    """Source field → table display label (memory→内存, packet→TCP, etc.)."""
+    # Source field → table display label (memory→内存, packet→TCP, etc.).
     text = str(value or '').strip().lower()
     return _TABLE_SOURCE.get(text, str(value or '---'))
 
@@ -144,7 +143,7 @@ def _finite_int(value: Any, default: int = 0, *, lo: int | None = None, hi: int 
 
 
 class ActionLogPanel:
-    """SAO-styled compact searchable ACT action log for Entity/Tk."""
+    # SAO-styled compact searchable ACT action log for Entity/Tk.
 
     def __init__(self, root: tk.Misc, owner: Any):
         self.root = root
@@ -642,8 +641,8 @@ class ActionLogPanel:
                 self._render_group_details(body, group)
 
     def _render_group_details(self, parent: tk.Misc, group: Mapping[str, Any]) -> None:
-        """Representative rows under an expanded group (was a missing method that
-        crashed every group expand — the user's '点开进不去')."""
+        # Representative rows under an expanded group (was a missing method that
+        # crashed every group expand — the user's '点开进不去').
         accent = 'danger' if str(group.get('kind') or '') in {'damage', 'monster', 'target'} else 'gold'
         rows = [row for row in list(group.get('rows') or []) if isinstance(row, Mapping)][:8]
         for ridx, row in enumerate(rows):

@@ -1,16 +1,15 @@
 # -*- coding: utf-8 -*-
-"""v2.3.0 Phase 3+ — GPU-presented SAOLeftInfo panel.
-
-Mirrors :mod:`sao_menu_bar_gpu`. The popup's left info panel is two
-stacked Canvases (top + bottom) that paint cached PIL plates with an
-optional sweep highlight on open / close / sync_pulse.
-
-Entity left-info/player/session visuals are GPU-required. The Tk
-Canvases are kept at chroma-key bg with no ``create_image`` so they
-stay invisible, and panel plates are composed into BGRA frames on the
-heavy ``AsyncFrameWorker`` lane. Presentation goes through
-``GpuOverlayWindow``; no Tk visual fallback is selected.
-"""
+# v2.3.0 Phase 3+ — GPU-presented SAOLeftInfo panel.
+#
+# Mirrors :mod:`sao_menu_bar_gpu`. The popup's left info panel is two
+# stacked Canvases (top + bottom) that paint cached PIL plates with an
+# optional sweep highlight on open / close / sync_pulse.
+#
+# Entity left-info/player/session visuals are GPU-required. The Tk
+# Canvases are kept at chroma-key bg with no ``create_image`` so they
+# stay invisible, and panel plates are composed into BGRA frames on the
+# heavy ``AsyncFrameWorker`` lane. Presentation goes through
+# ``GpuOverlayWindow``; no Tk visual fallback is selected.
 from __future__ import annotations
 
 import math
@@ -105,7 +104,7 @@ def _pair_ints(value: Any) -> Tuple[int, int]:
 
 
 class _LeftInfoSnapshot:
-    """Plain-data carrier built on the Tk thread, consumed on worker."""
+    # Plain-data carrier built on the Tk thread, consumed on worker.
 
     __slots__ = (
         'username', 'description',
@@ -129,9 +128,9 @@ class _LeftInfoSnapshot:
 
 
 class LeftInfoGpuPainter:
-    """Owns one ``GpuOverlayWindow`` + ``AsyncFrameWorker`` for the
-    full left info panel. Top + bottom plates compose into a single
-    sprite each tick on the worker."""
+    # Owns one ``GpuOverlayWindow`` + ``AsyncFrameWorker`` for the
+    # full left info panel. Top + bottom plates compose into a single
+    # sprite each tick on the worker.
 
     def __init__(self, root: tk.Tk):
         self._root = root

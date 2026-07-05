@@ -1,10 +1,9 @@
-"""Scan read-only pointer references to live Il2CppString objects.
-
-The output intentionally records pointer locations without pretending to know
-owner class names when no current IL2CPP dump/bundle is available.  It is a
-safe bridge from runtime string candidates to later table/container owner
-analysis.
-"""
+# Scan read-only pointer references to live Il2CppString objects.
+#
+# The output intentionally records pointer locations without pretending to know
+# owner class names when no current IL2CPP dump/bundle is available.  It is a
+# safe bridge from runtime string candidates to later table/container owner
+# analysis.
 
 from __future__ import annotations
 

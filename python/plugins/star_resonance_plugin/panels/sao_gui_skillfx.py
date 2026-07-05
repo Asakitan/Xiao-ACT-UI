@@ -1,32 +1,30 @@
 # -*- coding: utf-8 -*-
-"""
-sao_gui_skillfx.py — SAO "Burst Mode Ready" overlay (tkinter + ULW).
-
-Pixel-level port of `web/skillfx.html`. Draws the three visible elements of
-the original webview:
-
-  * Target ring at the active skill slot (cyan outer / gold inner /
-    halo / core pulse).
-  * Beam line connecting the ring to the caption panel with a cyan→gold
-    gradient.
-    * GPU glow layer behind the callout, matching the webview's `#gl-fx`
-        beam / anchor / panel energy pass when ModernGL is available.
-  * Caption panel (angular clipped hexagon) with "SYSTEM CALL" tag, big
-      "BRUST MODE READY" headline, sub-line, 3 progress bars and the small
-    accent circle on the top-right.
-
-60 FPS tick with static-layer caching: the caption geometry is baked once
-per (width, height) and only the enter/exit alpha + pulsing glow are
-redrawn per frame.
-
-Public API (mirrors the JS surface called from `sao_gui.py`):
-
-    BurstReadyOverlay(root, settings=None)
-      .set_layout(layout)         # dict with 'window','viewport','slots'
-      .show_burst(slot_index)
-      .hide_burst()
-      .destroy()
-"""
+# sao_gui_skillfx.py — SAO "Burst Mode Ready" overlay (tkinter + ULW).
+#
+# Pixel-level port of `web/skillfx.html`. Draws the three visible elements of
+# the original webview:
+#
+# * Target ring at the active skill slot (cyan outer / gold inner /
+# halo / core pulse).
+# * Beam line connecting the ring to the caption panel with a cyan→gold
+# gradient.
+# * GPU glow layer behind the callout, matching the webview's `#gl-fx`
+# beam / anchor / panel energy pass when ModernGL is available.
+# * Caption panel (angular clipped hexagon) with "SYSTEM CALL" tag, big
+# "BRUST MODE READY" headline, sub-line, 3 progress bars and the small
+# accent circle on the top-right.
+#
+# 60 FPS tick with static-layer caching: the caption geometry is baked once
+# per (width, height) and only the enter/exit alpha + pulsing glow are
+# redrawn per frame.
+#
+# Public API (mirrors the JS surface called from `sao_gui.py`):
+#
+# BurstReadyOverlay(root, settings=None)
+# .set_layout(layout)         # dict with 'window','viewport','slots'
+# .show_burst(slot_index)
+# .hide_burst()
+# .destroy()
 
 from __future__ import annotations
 
@@ -126,7 +124,7 @@ MOTION_SAMPLES_STEADY = ((0.0, 1.0),)
 
 
 def _skillfx_gpu_enabled() -> bool:
-    """SkillFX requires the shader/GPU compose path."""
+    # SkillFX requires the shader/GPU compose path.
     try:
         from sr_config import USE_GPU_SKILLFX  # type: ignore
     except Exception:
@@ -195,7 +193,7 @@ def _scale_alpha_image(img: Image.Image, alpha_mul: float) -> Image.Image:
 # ═══════════════════════════════════════════════
 
 class BurstReadyOverlay:
-    """Animated SAO 'Burst Mode Ready' callout."""
+    # Animated SAO 'Burst Mode Ready' callout.
 
     def __init__(self, root: tk.Tk, settings: Any = None):
         self.root = root
@@ -297,7 +295,7 @@ class BurstReadyOverlay:
     # ── Theme ──
 
     def _apply_theme(self, theme_name: str) -> None:
-        """切换 SkillFX 面板主题并清除所有渲染缓存。"""
+        # 切换 SkillFX 面板主题并清除所有渲染缓存。
         from sao_theme import get_panel_theme
         theme = get_panel_theme('skillfx', theme_name)
         if not theme:
@@ -665,9 +663,9 @@ void main() {
     # ──────────────────────────────────────────
 
     def set_layout(self, layout: Dict[str, Any]) -> None:
-        """Update the game-window relative layout. Called whenever the
-        client rect changes. `layout` follows the same shape as the
-        webview's `SkillFX.setViewport` / layout payload."""
+        # Update the game-window relative layout. Called whenever the
+        # client rect changes. `layout` follows the same shape as the
+        # webview's `SkillFX.setViewport` / layout payload.
         if not isinstance(layout, dict):
             return
         win = layout.get('window') or {}
@@ -774,12 +772,11 @@ void main() {
         self._schedule_tick(immediate=True)
 
     def set_custom_slots(self, custom_slots: List[Dict[str, Any]]) -> None:
-        """Push custom skill CD monitor state (slots 10-14).
-
-        Draws a small floating CD indicator overlay near the skill bar.
-        Each custom slot shows: name, CD ring, remaining time.
-        Parent-grouped slots show a small badge on the parent slot.
-        """
+        # Push custom skill CD monitor state (slots 10-14).
+        #
+        # Draws a small floating CD indicator overlay near the skill bar.
+        # Each custom slot shows: name, CD ring, remaining time.
+        # Parent-grouped slots show a small badge on the parent slot.
         visual = [s for s in (custom_slots or []) if s.get('visual_enabled')]
         sig = str([(s.get('index'), s.get('state'), s.get('cooldown_pct'),
                     s.get('remaining_ms'), s.get('parent_slot')) for s in visual])
@@ -790,7 +787,7 @@ void main() {
         self._render_custom_overlay()
 
     def _render_custom_overlay(self):
-        """Render custom CD indicators as a lightweight Tk overlay."""
+        # Render custom CD indicators as a lightweight Tk overlay.
         slots = self._custom_slots
         if not slots:
             if self._custom_overlay_win:
@@ -949,7 +946,7 @@ void main() {
 
     @_probe.decorate('ui.skillfx.tick')
     def _tick_sched(self, now: float) -> None:
-        """Called by overlay_scheduler at 60 FPS."""
+        # Called by overlay_scheduler at 60 FPS.
         if self._win is None:
             return
         if self._clear_pending_frames > 0 and not self._active:
@@ -1062,14 +1059,13 @@ void main() {
                 self._get_ring_layer(r_out, sample_pulse)
 
     def _get_layer_buf(self, name: str, w: int, h: int) -> Image.Image:
-        """Get-or-allocate a recycled full-screen RGBA buffer.
-
-        v2.2.11 Phase 2: replaces the per-frame ``Image.new('RGBA', (W,H))``
-        in each of compose_frame's 4 layers, eliminating ~32 MB / frame
-        allocator churn at 1080p (≈2 GB/s at 60 Hz). The buffer is
-        alpha-zeroed in place before return; safe because each layer name
-        is rendered by a single task at a time.
-        """
+        # Get-or-allocate a recycled full-screen RGBA buffer.
+        #
+        # v2.2.11 Phase 2: replaces the per-frame ``Image.new('RGBA', (W,H))``
+        # in each of compose_frame's 4 layers, eliminating ~32 MB / frame
+        # allocator churn at 1080p (≈2 GB/s at 60 Hz). The buffer is
+        # alpha-zeroed in place before return; safe because each layer name
+        # is rendered by a single task at a time.
         cache = getattr(self, '_layer_bufs', None)
         if cache is None:
             cache = {}
@@ -1145,12 +1141,11 @@ void main() {
 
     @_probe.decorate('ui.skillfx.compose.gpu')
     def _compose_frame_gpu(self, now: float) -> Optional[Image.Image]:
-        """Phase 1 SDF-shader compose path. Keeps ring + beam on the
-        consolidated shader, then overlays the legacy GLFX energy layer
-        for visual parity. Caption still PIL (Phase 1.4 will atlas it via
-        skia). Returns None if the pipeline can't render — caller must
-        fall back to the PIL path.
-        """
+        # Phase 1 SDF-shader compose path. Keeps ring + beam on the
+        # consolidated shader, then overlays the legacy GLFX energy layer
+        # for visual parity. Caption still PIL (Phase 1.4 will atlas it via
+        # skia). Returns None if the pipeline can't render — caller must
+        # fall back to the PIL path.
         try:
             from plugins.star_resonance_plugin.render.skillfx_pipeline import get_skillfx_pipeline
         except Exception:
@@ -1847,7 +1842,7 @@ void main() {
                     )
 
     def _fast_beam(self, L: int, H: int) -> Image.Image:
-        """Cython linear-gradient beam with vertical glow falloff."""
+        # Cython linear-gradient beam with vertical glow falloff.
         arr = _jit_fast_beam_rgba(L, H)
         return Image.fromarray(arr, 'RGBA')
 

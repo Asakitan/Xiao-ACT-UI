@@ -1,11 +1,10 @@
 # -*- coding: utf-8 -*-
-"""Synthetic-memory test for EntityCombatReader.read_name_attr / _read_il2cpp_string.
-
-Builds a fake ZEntity -> ZAttrCollection -> Burst index -> _values -> ZAttr<string>
--> Il2CppString layout in a flat dict-backed 'process memory' and asserts the NAME attr
-(id=1) decodes to the expected CN string. Verifies the index walk + UTF-16 string decode
-without the game running.  Run: python -m mem_probe.il2cpp.test_name_attr_decode
-"""
+# Synthetic-memory test for EntityCombatReader.read_name_attr / _read_il2cpp_string.
+#
+# Builds a fake ZEntity -> ZAttrCollection -> Burst index -> _values -> ZAttr<string>
+# -> Il2CppString layout in a flat dict-backed 'process memory' and asserts the NAME attr
+# (id=1) decodes to the expected CN string. Verifies the index walk + UTF-16 string decode
+# without the game running.  Run: python -m mem_probe.il2cpp.test_name_attr_decode
 from plugins.star_resonance_plugin.mem.il2cpp.mem_entity_combat import (
     EntityCombatReader, ENT_ATTRS_OFF, COLL_INDEXPART_OFF, COLL_VALUES_OFF,
     INDEX_KEYSEG_OFF, INDEX_VALIDX_OFF, KEYSEG_COUNT_OFF, ARRAY_ELEMS_OFF,

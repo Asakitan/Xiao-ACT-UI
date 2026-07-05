@@ -437,7 +437,7 @@ class AutoKeyDetailPanel(_DetailEditorBase):
                            add='+')
 
     def _make_profile_more_button(self, parent: tk.Widget, pid: str) -> tk.Widget:
-        """「更多 ▾」聚合按钮: 弹 tk.Menu 收纳复制/导出/删除(与插件管理器同款)。"""
+        # 「更多 ▾」聚合按钮: 弹 tk.Menu 收纳复制/导出/删除(与插件管理器同款)。
         holder: Dict[str, Any] = {}
 
         def _post() -> None:
@@ -1097,7 +1097,7 @@ class BossRaidDetailPanel(_MechanicsEditorMixin, _BossReactionsEditorMixin, _Det
             self._render_detail_mechanics()
 
     def _render_detail_reactions(self) -> None:
-        """Re-render ONLY the reactions sub-frame (keeps profile/phase edits)."""
+        # Re-render ONLY the reactions sub-frame (keeps profile/phase edits).
         frame = getattr(self, '_reactions_frame', None)
         if frame is None:
             return
@@ -1109,7 +1109,7 @@ class BossRaidDetailPanel(_MechanicsEditorMixin, _BossReactionsEditorMixin, _Det
             pass
 
     def _render_detail_mechanics(self) -> None:
-        """Re-render ONLY the mechanics sub-frame (keeps profile/phase edits)."""
+        # Re-render ONLY the mechanics sub-frame (keeps profile/phase edits).
         frame = getattr(self, '_mechanics_frame', None)
         if frame is None:
             return
@@ -1345,8 +1345,8 @@ class BossRaidDetailPanel(_MechanicsEditorMixin, _BossReactionsEditorMixin, _Det
         self._reload(keep_selected=True)
 
     def _adopt_store_mechanics(self, config: dict) -> None:
-        """mechanics 由机制编辑器直写仓库, 本面板不编辑 — 保存/导出前取仓库当前值,
-        防止打开面板时的旧快照把别处刚保存的机制整体回滚。"""
+        # mechanics 由机制编辑器直写仓库, 本面板不编辑 — 保存/导出前取仓库当前值,
+        # 防止打开面板时的旧快照把别处刚保存的机制整体回滚。
         current = find_boss_raid_profile(config, str(self._draft.get('id') or ''))
         if current is not None:
             self._draft['mechanics'] = _clone(current.get('mechanics') or [])

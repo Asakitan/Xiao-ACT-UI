@@ -1,10 +1,9 @@
-"""Compatibility facade for legacy mem_probe scan helpers.
-
-The historical mem_probe tools import ``mem_probe.cy_memscan``.  The compiled
-extension is now checked in at the repository root as ``_sao_cy_memscan`` (and
-may also exist in build outputs), so this module forwards to it when available
-and provides slow pure-Python fallbacks for read-only diagnostics.
-"""
+# Compatibility facade for legacy mem_probe scan helpers.
+#
+# The historical mem_probe tools import ``mem_probe.cy_memscan``.  The compiled
+# extension is now checked in at the repository root as ``_sao_cy_memscan`` (and
+# may also exist in build outputs), so this module forwards to it when available
+# and provides slow pure-Python fallbacks for read-only diagnostics.
 from __future__ import annotations
 
 from typing import Iterable, List, Sequence, Tuple
@@ -28,13 +27,12 @@ def _as_bytes(buf) -> bytes:
 
 
 def _writable_view(buf):
-    """Return a writable memoryview of ``buf``.
-
-    Legacy-compat only: old compiled extensions demanded a writable buffer,
-    forcing a full copy of every ``bytes`` chunk scanned.  Current builds use
-    ``const`` memoryviews and take read-only buffers directly (zero copy);
-    this helper is kept as the fallback when an old .pyd is on sys.path.
-    """
+    # Return a writable memoryview of ``buf``.
+    #
+    # Legacy-compat only: old compiled extensions demanded a writable buffer,
+    # forcing a full copy of every ``bytes`` chunk scanned.  Current builds use
+    # ``const`` memoryviews and take read-only buffers directly (zero copy);
+    # this helper is kept as the fallback when an old .pyd is on sys.path.
     if isinstance(buf, memoryview):
         return buf if not buf.readonly else memoryview(bytes(buf))
     if isinstance(buf, (bytes, bytearray)):
@@ -50,7 +48,7 @@ def _writable_view(buf):
 
 
 def _probe_readonly_support() -> bool:
-    """One-time probe: does the loaded extension accept read-only buffers?"""
+    # One-time probe: does the loaded extension accept read-only buffers?
     if _fast is None or not hasattr(_fast, "find_aligned_u64"):
         return False
     try:
@@ -64,7 +62,7 @@ _READONLY_OK = _probe_readonly_support()
 
 
 def _call_fast(fn, buf, *args):
-    """Invoke a scan kernel, passing ``buf`` zero-copy when supported."""
+    # Invoke a scan kernel, passing ``buf`` zero-copy when supported.
     if _READONLY_OK:
         return fn(buf, *args)
     view = _writable_view(buf)
@@ -90,7 +88,7 @@ def _driver_status() -> dict:
 
 
 def backend_info() -> dict:
-    """Return JSON-safe diagnostics for the active memscan backend."""
+    # Return JSON-safe diagnostics for the active memscan backend.
     features = dict(cpu_features() or {})
     fallback = str(features.get("fallback") or "")
     if _fast is None:
@@ -124,11 +122,10 @@ def force_enable_avx2() -> None:
 
 
 def read_words_many(handle: int, addrs, word_size: int):
-    """Batch cross-process read of N scattered addresses in one nogil C loop.
-
-    Returns a list of unsigned ints (None where the read failed), or None when
-    the Cython extension is unavailable (caller should use its own fallback).
-    """
+    # Batch cross-process read of N scattered addresses in one nogil C loop.
+    #
+    # Returns a list of unsigned ints (None where the read failed), or None when
+    # the Cython extension is unavailable (caller should use its own fallback).
     if _fast is not None and hasattr(_fast, "read_words_many"):
         return _fast.read_words_many(int(handle), list(addrs), int(word_size))
     return None
@@ -139,11 +136,10 @@ def has_batch_read() -> bool:
 
 
 def read_slab_many(handle: int, base_addrs, offsets, word_size: int = 8):
-    """Slab batch read: one RPM per base covering all offsets.
-
-    Returns flat list of ``len(base_addrs) * len(offsets)`` values, or None
-    when the Cython extension lacks it.
-    """
+    # Slab batch read: one RPM per base covering all offsets.
+    #
+    # Returns flat list of ``len(base_addrs) * len(offsets)`` values, or None
+    # when the Cython extension lacks it.
     if _fast is not None and hasattr(_fast, "read_slab_many"):
         return _fast.read_slab_many(int(handle), list(base_addrs),
                                      list(offsets), int(word_size))
@@ -155,27 +151,27 @@ def has_slab_read() -> bool:
 
 
 def driver_attach(pid: int) -> bool:
-    """Activate driver read for all Cython _rpm() calls."""
+    # Activate driver read for all Cython _rpm() calls.
     if _fast is not None and hasattr(_fast, "driver_attach"):
         return bool(_fast.driver_attach(int(pid)))
     return False
 
 
 def driver_detach() -> None:
-    """Deactivate driver read in Cython, revert to NtRVM/RPM."""
+    # Deactivate driver read in Cython, revert to NtRVM/RPM.
     if _fast is not None and hasattr(_fast, "driver_detach"):
         _fast.driver_detach()
 
 
 def driver_active() -> bool:
-    """Return whether the Cython driver fast-path is active."""
+    # Return whether the Cython driver fast-path is active.
     if _fast is not None and hasattr(_fast, "driver_active"):
         return bool(_fast.driver_active())
     return False
 
 
 def mem_read_backend() -> str:
-    """Return which cross-process read backend is active."""
+    # Return which cross-process read backend is active.
     if _fast is not None and hasattr(_fast, "mem_read_backend"):
         return _fast.mem_read_backend()
     ds = _driver_status()
@@ -283,10 +279,9 @@ def narrow_u64_batch(packed, expected: int):
 
 
 def collect_aligned_u64_in_range(buf, lo: int, hi: int, max_out: int = 1 << 20) -> List[int]:
-    """Unique 8-aligned u64 values in [lo, hi] (GA klass-pointer pre-filter).
-
-    Cython kernel preferred; numpy vectorised fallback; pure-Python last resort.
-    """
+    # Unique 8-aligned u64 values in [lo, hi] (GA klass-pointer pre-filter).
+    #
+    # Cython kernel preferred; numpy vectorised fallback; pure-Python last resort.
     if _fast is not None and hasattr(_fast, "collect_aligned_u64_in_range"):
         return list(_call_fast(_fast.collect_aligned_u64_in_range, buf,
                                int(lo), int(hi), int(max_out)))
@@ -316,10 +311,9 @@ def collect_aligned_u64_in_range(buf, lo: int, hi: int, max_out: int = 1 << 20) 
 
 
 def decode_i32_kv_pairs(buf, vmin: int, vmax: int) -> dict:
-    """Packed (i32 key, i32 value) pairs -> {key: value}, keeping vmin <= v < vmax.
-
-    Cython kernel preferred; numpy fallback; pure-Python last resort.
-    """
+    # Packed (i32 key, i32 value) pairs -> {key: value}, keeping vmin <= v < vmax.
+    #
+    # Cython kernel preferred; numpy fallback; pure-Python last resort.
     if _fast is not None and hasattr(_fast, "decode_i32_kv_pairs"):
         return _call_fast(_fast.decode_i32_kv_pairs, buf, int(vmin), int(vmax))
     data = _as_bytes(buf)

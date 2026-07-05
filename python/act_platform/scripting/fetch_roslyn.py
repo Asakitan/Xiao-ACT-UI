@@ -1,16 +1,15 @@
 # -*- coding: utf-8 -*-
-"""Download Roslyn (Microsoft.CodeAnalysis.CSharp) NuGet packages.
-
-Run as::
-
-    python -m act_platform.scripting.fetch_roslyn
-
-Downloads the required DLLs into ``scripting/roslyn/`` so that .cs plugin
-compilation works without an installed .NET SDK.
-
-The total size is ~12-15 MB.  These DLLs ship with the application
-(added to the PyInstaller spec / build_release as data files).
-"""
+# Download Roslyn (Microsoft.CodeAnalysis.CSharp) NuGet packages.
+#
+# Run as::
+#
+# python -m act_platform.scripting.fetch_roslyn
+#
+# Downloads the required DLLs into ``scripting/roslyn/`` so that .cs plugin
+# compilation works without an installed .NET SDK.
+#
+# The total size is ~12-15 MB.  These DLLs ship with the application
+# (added to the PyInstaller spec / build_release as data files).
 
 from __future__ import annotations
 
@@ -42,7 +41,7 @@ TARGET_DIR = os.path.join(os.path.dirname(__file__), "roslyn")
 
 
 def _best_lib_dir(zf: zipfile.ZipFile, preferred_tfm: str) -> str:
-    """Find the best lib/ subfolder inside a .nupkg zip."""
+    # Find the best lib/ subfolder inside a .nupkg zip.
     lib_dirs: list[str] = []
     for info in zf.infolist():
         parts = info.filename.replace("\\", "/").split("/")
@@ -63,10 +62,9 @@ def _best_lib_dir(zf: zipfile.ZipFile, preferred_tfm: str) -> str:
 
 
 def fetch(target_dir: str | None = None, version: str | None = None) -> list[str]:
-    """Download Roslyn NuGet packages and extract DLLs.
-
-    Returns a list of extracted file paths.
-    """
+    # Download Roslyn NuGet packages and extract DLLs.
+    #
+    # Returns a list of extracted file paths.
     dest = target_dir or TARGET_DIR
     os.makedirs(dest, exist_ok=True)
     extracted: list[str] = []

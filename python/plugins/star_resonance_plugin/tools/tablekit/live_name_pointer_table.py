@@ -1,11 +1,10 @@
-"""Expand live Il2CppString pointer tables and attach known TCP/config IDs.
-
-This is a read-only runtime evidence tool.  It starts from pointer locations
-found by ``live_name_owner_refs.py`` and walks adjacent qword slots while they
-look like ``System.String`` object pointers.  Heap addresses in the output are
-volatile and must not be treated as stable anchors until an owner/container
-class root is resolved.
-"""
+# Expand live Il2CppString pointer tables and attach known TCP/config IDs.
+#
+# This is a read-only runtime evidence tool.  It starts from pointer locations
+# found by ``live_name_owner_refs.py`` and walks adjacent qword slots while they
+# look like ``System.String`` object pointers.  Heap addresses in the output are
+# volatile and must not be treated as stable anchors until an owner/container
+# class root is resolved.
 
 from __future__ import annotations
 

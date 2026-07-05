@@ -1,21 +1,20 @@
 # -*- coding: utf-8 -*-
-"""一键回归门：运行 tools/ 下全部 ``*_selftest.py`` 并汇总通过/失败。
-
-为什么需要它：各 selftest 既要 ``import _bootstrap``（在 tools/ 内，靠脚本
-自身目录进 sys.path 自动满足），又有进程隔离用例会 spawn
-``python -m act_platform.parser_worker``（需要 **仓库根** 在 cwd / 可导入）。
-因此每个子测试必须以脚本绝对路径形式、cwd=python 源码根
-运行——直接 ``python <name>.py``（cwd=tools/）会让进程隔离子进程找不到
-``act_platform`` 而假阳性。本 runner 固定该正确姿势，避免每次手搓时踩坑。
-
-用法（在 sao_auto 仓库根）：
-
-    python tools/run_selftests.py            # 跑全部
-    python tools/run_selftests.py act_       # 只跑名字含 act_ 的
-    python tools/run_selftests.py --timeout 90
-
-退出码 0=全绿，1=有失败/超时，便于当 CI / 提交门。
-"""
+# 一键回归门：运行 tools/ 下全部 ``*_selftest.py`` 并汇总通过/失败。
+#
+# 为什么需要它：各 selftest 既要 ``import _bootstrap``（在 tools/ 内，靠脚本
+# 自身目录进 sys.path 自动满足），又有进程隔离用例会 spawn
+# ``python -m act_platform.parser_worker``（需要 **仓库根** 在 cwd / 可导入）。
+# 因此每个子测试必须以脚本绝对路径形式、cwd=python 源码根
+# 运行——直接 ``python <name>.py``（cwd=tools/）会让进程隔离子进程找不到
+# ``act_platform`` 而假阳性。本 runner 固定该正确姿势，避免每次手搓时踩坑。
+#
+# 用法（在 sao_auto 仓库根）：
+#
+# python tools/run_selftests.py            # 跑全部
+# python tools/run_selftests.py act_       # 只跑名字含 act_ 的
+# python tools/run_selftests.py --timeout 90
+#
+# 退出码 0=全绿，1=有失败/超时，便于当 CI / 提交门。
 from __future__ import annotations
 
 import argparse

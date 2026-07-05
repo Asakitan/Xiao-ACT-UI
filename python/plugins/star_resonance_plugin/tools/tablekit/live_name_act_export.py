@@ -1,11 +1,10 @@
-"""Export ACT-focused rows from live runtime name pointer tables.
-
-This tool reads the runtime evidence produced by ``live_name_pointer_table.py``
-and keeps only rows that already have known TCP/config/community matches.  The
-export is intentionally marked as volatile: heap addresses and table indices are
-runtime evidence until an owner/static root is resolved for the current game
-build.
-"""
+# Export ACT-focused rows from live runtime name pointer tables.
+#
+# This tool reads the runtime evidence produced by ``live_name_pointer_table.py``
+# and keeps only rows that already have known TCP/config/community matches.  The
+# export is intentionally marked as volatile: heap addresses and table indices are
+# runtime evidence until an owner/static root is resolved for the current game
+# build.
 
 from __future__ import annotations
 

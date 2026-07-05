@@ -1,11 +1,10 @@
-"""通用进程附加与基础读取封装.
-
-只暴露 ``GameProcess`` 一个类, 内部用驱动后端完成内存读取。
-所有读操作均包裹 try/except, 失败返回 None 而不是抛,
-因为内存扫描场景下触碰未映射页是常态。
-
-进程名通过构造函数 ``process_name`` / ``process_names`` 参数指定。
-"""
+# 通用进程附加与基础读取封装.
+#
+# 只暴露 ``GameProcess`` 一个类, 内部用驱动后端完成内存读取。
+# 所有读操作均包裹 try/except, 失败返回 None 而不是抛,
+# 因为内存扫描场景下触碰未映射页是常态。
+#
+# 进程名通过构造函数 ``process_name`` / ``process_names`` 参数指定。
 
 from __future__ import annotations
 
@@ -74,7 +73,7 @@ except Exception:
 
 
 def _mem_read(handle, addr, buf, size, p_got):
-    """Read via driver backend only. No user-mode API fallback."""
+    # Read via driver backend only. No user-mode API fallback.
     global _DRIVER_OK, _DRIVER_TRIED
     if _drv is not None:
         if _DRIVER_OK:
@@ -113,10 +112,9 @@ class _UNICODE_STRING(ctypes.Structure):
 
 
 def _iter_process_entries_wide() -> Iterator[tuple[str, int]]:
-    """Enumerate processes via NtQuerySystemInformation(SystemProcessInformation).
-
-    Avoids CreateToolhelp32Snapshot which is commonly monitored by anti-cheat.
-    """
+    # Enumerate processes via NtQuerySystemInformation(SystemProcessInformation).
+    #
+    # Avoids CreateToolhelp32Snapshot which is commonly monitored by anti-cheat.
     _ntdll = ctypes.windll.ntdll
     _SPI = 5  # SystemProcessInformation
     buf_size = 0x100000  # 1 MB initial
@@ -202,7 +200,7 @@ class GameProcessError(RuntimeError):
 
 
 class GameProcess:
-    """对目标进程的只读包装 (进程名由调用方显式指定)."""
+    # 对目标进程的只读包装 (进程名由调用方显式指定).
 
     def __init__(self, process_name: Optional[str] = None,
                  process_names: Optional[List[str]] = None) -> None:
@@ -401,11 +399,10 @@ class GameProcess:
         only_readable: bool = True,
         only_private: bool = True,
     ) -> Iterator[MemoryRegion]:
-        """遍历目标进程的虚拟地址空间.
-
-        默认只返回可读 + private commit 的区域 (排除 image / mapped /
-        guard / noaccess), 这是值搜索常用的"堆数据"集合。
-        """
+        # 遍历目标进程的虚拟地址空间.
+        #
+        # 默认只返回可读 + private commit 的区域 (排除 image / mapped /
+        # guard / noaccess), 这是值搜索常用的"堆数据"集合。
         VirtualQueryEx = ctypes.windll.kernel32.VirtualQueryEx
         VirtualQueryEx.argtypes = [
             wintypes.HANDLE,
@@ -463,12 +460,11 @@ class GameProcess:
             return None
 
     def read_bytes_into(self, addr: int, buf, n: Optional[int] = None) -> int:
-        """把目标进程内存直接读进调用方提供的可写缓冲 (bytearray/memoryview).
-
-        跳过 pymem 的 create_string_buffer + .raw 两次拷贝, 扫堆循环配合一块
-        复用缓冲可把每 chunk 的分配/拷贝开销整段去掉。返回实际读到的字节数
-        (失败返回 0; 与 read_bytes 一样, RPM 碰到不可读页时整次失败)。
-        """
+        # 把目标进程内存直接读进调用方提供的可写缓冲 (bytearray/memoryview).
+        #
+        # 跳过 pymem 的 create_string_buffer + .raw 两次拷贝, 扫堆循环配合一块
+        # 复用缓冲可把每 chunk 的分配/拷贝开销整段去掉。返回实际读到的字节数
+        # (失败返回 0; 与 read_bytes 一样, RPM 碰到不可读页时整次失败)。
         want = len(buf) if n is None else int(n)
         if want <= 0:
             return 0
@@ -519,11 +515,10 @@ class GameProcess:
 
     # ───── 批量读 (跨进程 0 延迟优化) ─────
     def read_u64_many(self, addrs) -> list:
-        """Batch-read 8-byte words at each address -> list (None on fail).
-
-        Uses the Cython nogil batch RPM (one GIL release for the whole batch,
-        no per-read ctypes/pymem overhead); falls back to a direct-ctypes loop.
-        """
+        # Batch-read 8-byte words at each address -> list (None on fail).
+        #
+        # Uses the Cython nogil batch RPM (one GIL release for the whole batch,
+        # no per-read ctypes/pymem overhead); falls back to a direct-ctypes loop.
         return self._read_words_many(addrs, 8)
 
     def read_u32_many(self, addrs) -> list:
@@ -559,11 +554,11 @@ class GameProcess:
         return out
 
     def read_ptr(self, addr: int) -> Optional[int]:
-        """读 64-bit 指针 (x64 Windows 用户态地址)."""
+        # 读 64-bit 指针 (x64 Windows 用户态地址).
         return self.read_u64(addr)
 
     def read_cstr(self, addr: int, max_len: int = 256) -> Optional[str]:
-        """读 ASCII/UTF-8 0-终止字符串."""
+        # 读 ASCII/UTF-8 0-终止字符串.
         b = self.read_bytes(addr, max_len)
         if b is None:
             return None
@@ -616,7 +611,7 @@ class GameProcess:
     def cached_regions(
         self, *, ttl: float = 5.0, only_readable: bool = True, only_private: bool = True,
     ) -> List[MemoryRegion]:
-        """Return cached region list (refreshed every *ttl* seconds)."""
+        # Return cached region list (refreshed every *ttl* seconds).
         now = time.monotonic()
         if self._region_cache is not None and now - self._region_cache_time < ttl:
             return self._region_cache
@@ -631,7 +626,7 @@ class GameProcess:
         self._region_cache_time = 0.0
 
     def prefetch_regions(self, regions, *, max_entries: int = 64) -> None:
-        """Hint the OS to page-in target memory before batch reads (Win8+)."""
+        # Hint the OS to page-in target memory before batch reads (Win8+).
         if _PrefetchVM is None or not regions:
             return
         n = min(len(regions), max_entries)
@@ -646,11 +641,10 @@ class GameProcess:
             pass
 
     def read_slab_many(self, base_addrs, offsets, word_size: int = 8) -> list:
-        """For each base addr, read one block covering all offsets, extract values.
-
-        Returns flat list of ``len(base_addrs) * len(offsets)`` values (None on fail).
-        Cython-accelerated when available; fallback to individual reads.
-        """
+        # For each base addr, read one block covering all offsets, extract values.
+        #
+        # Returns flat list of ``len(base_addrs) * len(offsets)`` values (None on fail).
+        # Cython-accelerated when available; fallback to individual reads.
         try:
             from mem_probe import cy_memscan as _cy
             res = _cy.read_slab_many(self._handle, list(base_addrs), list(offsets), word_size)
@@ -686,7 +680,7 @@ class GameProcess:
 
 # ───────────────────────── 工具函数 ─────────────────────────
 def is_admin() -> bool:
-    """当前 Python 进程是否拥有管理员权限. 非管理员下大概率 attach 失败."""
+    # 当前 Python 进程是否拥有管理员权限. 非管理员下大概率 attach 失败.
     try:
         return bool(ctypes.windll.shell32.IsUserAnAdmin())
     except Exception:
@@ -694,11 +688,10 @@ def is_admin() -> bool:
 
 
 def find_pid_by_name(process_name: str) -> Optional[int]:
-    """轻量探测: 不开进程, 仅枚举 PID; 用于 attach 前预检.
-
-    Uses the Unicode Win32 process enumeration path so a non-UTF-8 executable
-    name from any unrelated process cannot abort game process discovery.
-    """
+    # 轻量探测: 不开进程, 仅枚举 PID; 用于 attach 前预检.
+    #
+    # Uses the Unicode Win32 process enumeration path so a non-UTF-8 executable
+    # name from any unrelated process cannot abort game process discovery.
     return _find_pid_by_name_wide(process_name)
 
 

@@ -1,4 +1,4 @@
-"""Popup animation state."""
+# Popup animation state.
 
 from __future__ import annotations
 

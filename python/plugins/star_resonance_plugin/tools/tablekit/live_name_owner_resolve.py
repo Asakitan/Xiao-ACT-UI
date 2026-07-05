@@ -1,14 +1,13 @@
-"""Resolve managed owner/class evidence for live name pointer tables.
-
-This tool combines runtime pointer-table evidence with the current Il2CppDumper
-``script.json``.  It builds a full runtime ``Il2CppClass* -> class name`` index
-from ``*_TypeInfo`` RVAs, verifies the live ``System.String`` klass, and searches
-near table bases for managed object headers.  It also optionally scans private
-heap pointers to candidate table/array objects to find parent owners.
-
-All addresses in the output are runtime evidence.  A persistent anchor requires a
-resolved module RVA/static field or a reproducible owner chain.
-"""
+# Resolve managed owner/class evidence for live name pointer tables.
+#
+# This tool combines runtime pointer-table evidence with the current Il2CppDumper
+# ``script.json``.  It builds a full runtime ``Il2CppClass* -> class name`` index
+# from ``*_TypeInfo`` RVAs, verifies the live ``System.String`` klass, and searches
+# near table bases for managed object headers.  It also optionally scans private
+# heap pointers to candidate table/array objects to find parent owners.
+#
+# All addresses in the output are runtime evidence.  A persistent anchor requires a
+# resolved module RVA/static field or a reproducible owner chain.
 
 from __future__ import annotations
 

@@ -1,11 +1,10 @@
 # -*- coding: utf-8 -*-
-"""Deterministic test for MemDamageReader's batched entries[] block decode.
-
-A fake pm backs a flat address space holding a ZDictionary entries slab; the
-block-read path must produce the same {uuid: total} / {skill: value} the
-per-slot path would, validating the struct formats against the documented
-ZDictionary entry layout.
-"""
+# Deterministic test for MemDamageReader's batched entries[] block decode.
+#
+# A fake pm backs a flat address space holding a ZDictionary entries slab; the
+# block-read path must produce the same {uuid: total} / {skill: value} the
+# per-slot path would, validating the struct formats against the documented
+# ZDictionary entry layout.
 from __future__ import annotations
 
 import os
@@ -63,7 +62,7 @@ class FakePm:
 
 
 def _build_zdict(pm, addr, entries_addr, entries: list, stride: int):
-    """entries: list of raw entry bytes (each `stride` long)."""
+    # entries: list of raw entry bytes (each `stride` long).
     # dict header: count @ COUNT_OFF, entries ptr @ ENTRIES_OFF
     pm.write(addr + ZDICT_COUNT_OFF, struct.pack("<i", len(entries)))
     pm.write(addr + ZDICT_ENTRIES_OFF, struct.pack("<Q", entries_addr))

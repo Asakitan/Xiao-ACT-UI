@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""Entity-mode ACT timeline/VCR panel."""
+# Entity-mode ACT timeline/VCR panel.
 
 from __future__ import annotations
 
@@ -66,7 +66,7 @@ def _finite_int(value: Any, default: int = 0, *, lo: int | None = None, hi: int 
 
 
 class TimelineVcrPanel:
-    """SAO-styled compact timeline/VCR control panel for Entity/Tk."""
+    # SAO-styled compact timeline/VCR control panel for Entity/Tk.
 
     def __init__(self, root: tk.Misc, owner: Any):
         self.root = root
@@ -169,7 +169,7 @@ class TimelineVcrPanel:
                 pass
 
     def _schedule_filter(self) -> None:
-        """输入防抖：停止键入 300ms 后自动应用筛选（与 Web 端即时搜索一致）。"""
+        # 输入防抖：停止键入 300ms 后自动应用筛选（与 Web 端即时搜索一致）。
         if self._win is None:
             return
         self._cancel_pending_filter()
@@ -312,7 +312,7 @@ class TimelineVcrPanel:
         self._render_keyframes_section(events)
 
     def _render_transport(self, status: Mapping[str, Any], events: list[Any]) -> None:
-        """Playback transport bar: |<< [PLAY] >>| cursor ===o=== total."""
+        # Playback transport bar: |<< [PLAY] >>| cursor ===o=== total.
         if self._events is None:
             return
         cursor_ms = _finite_int(status.get('cursor_ms'), 0, lo=0)
@@ -385,7 +385,7 @@ class TimelineVcrPanel:
         track.after(10, _draw_track)
 
     def _render_summary_pills(self, status: Mapping[str, Any], events: list[Any]) -> None:
-        """Summary pills row: N 个事件 | N 个关键帧 | N 次死亡."""
+        # Summary pills row: N 个事件 | N 个关键帧 | N 次死亡.
         if self._events is None:
             return
         n_events = len(events)
@@ -407,7 +407,7 @@ class TimelineVcrPanel:
             status_badge(row, f"{n_deaths} 次死亡", kind='danger').pack(side='left', padx=(0, 6))
 
     def _render_keyframes_section(self, events: list[Any]) -> None:
-        """KEYFRAMES section: colored dot + relative time + label per event."""
+        # KEYFRAMES section: colored dot + relative time + label per event.
         if self._events is None:
             return
         # Section header
@@ -456,7 +456,7 @@ class TimelineVcrPanel:
 
     def _render_keyframe(self, event: Mapping[str, Any], parent: Optional[tk.Misc] = None,
                          base_ms: int = 0) -> None:
-        """Render a single keyframe card: colored dot + relative time + label."""
+        # Render a single keyframe card: colored dot + relative time + label.
         parent = parent or self._events
         if parent is None:
             return
@@ -508,7 +508,7 @@ class TimelineVcrPanel:
 
     @staticmethod
     def _fmt_kf_time(ms: int) -> str:
-        """Format milliseconds as MM:SS.d (e.g. 01:10.4) for keyframe timestamps."""
+        # Format milliseconds as MM:SS.d (e.g. 01:10.4) for keyframe timestamps.
         total_s = max(0.0, ms / 1000.0)
         minutes = int(total_s // 60)
         seconds = total_s - minutes * 60
@@ -516,7 +516,7 @@ class TimelineVcrPanel:
 
     @staticmethod
     def _events_base_ms(events: list[Any]) -> int:
-        """Return the earliest event time_ms as the encounter base for relative times."""
+        # Return the earliest event time_ms as the encounter base for relative times.
         base = 0
         for e in events:
             if isinstance(e, Mapping):

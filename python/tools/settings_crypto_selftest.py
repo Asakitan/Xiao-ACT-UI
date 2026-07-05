@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""Focused selftest for settings_crypto (AES-256-GCM + DPAPI envelope)."""
+# Focused selftest for settings_crypto (AES-256-GCM + DPAPI envelope).
 
 from __future__ import annotations
 

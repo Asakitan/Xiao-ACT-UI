@@ -1,29 +1,27 @@
 # -*- coding: utf-8 -*-
-"""Off-thread frame composition for ULW overlays.
-
-The main-thread scheduler calls _tick → _advance (animate) → _render.
-Previously, _render did **compose_frame** (PIL/numpy heavy, ~3-8 ms) +
-**_ulw_update** (premultiply + Win32 commit, ~1-2 ms) all on the Tk
-thread, which blocks the event loop and causes visible tearing/jank.
-
-This module provides ``AsyncFrameWorker`` handles backed by shared fixed
-render lanes. Each overlay worker is pinned to one background thread, so
-thread-affine resources such as standalone GL contexts remain stable while
-multiple overlays can still render in parallel across CPU cores.
-
-Architecture:
-    Main thread                 Render lanes / CPU task pool
-    ──────────                  ────────────────────────────
-    _advance(now)
-    submit_compose(fn, now)  →  pinned lane: fn(now) → premultiply → store result
-                ⋮ (returns immediately)
-    if result ready:
-        _ulw_commit(hwnd, result)  ← (GDI only, <0.3 ms)
-
-PIL and NumPy release the GIL in their C routines, so these background
-jobs genuinely run on other cores.
-
-"""
+# Off-thread frame composition for ULW overlays.
+#
+# The main-thread scheduler calls _tick → _advance (animate) → _render.
+# Previously, _render did **compose_frame** (PIL/numpy heavy, ~3-8 ms) +
+# **_ulw_update** (premultiply + Win32 commit, ~1-2 ms) all on the Tk
+# thread, which blocks the event loop and causes visible tearing/jank.
+#
+# This module provides ``AsyncFrameWorker`` handles backed by shared fixed
+# render lanes. Each overlay worker is pinned to one background thread, so
+# thread-affine resources such as standalone GL contexts remain stable while
+# multiple overlays can still render in parallel across CPU cores.
+#
+# Architecture:
+# Main thread                 Render lanes / CPU task pool
+# ──────────                  ────────────────────────────
+# _advance(now)
+# submit_compose(fn, now)  →  pinned lane: fn(now) → premultiply → store result
+# ⋮ (returns immediately)
+# if result ready:
+# _ulw_commit(hwnd, result)  ← (GDI only, <0.3 ms)
+#
+# PIL and NumPy release the GIL in their C routines, so these background
+# jobs genuinely run on other cores.
 from __future__ import annotations
 
 import ctypes
@@ -89,7 +87,7 @@ class _BITMAPINFOHEADER(ctypes.Structure):
 # ── Premultiplied BGRA buffer ready for UpdateLayeredWindow ──
 
 class FrameBuffer:
-    """Immutable result of off-thread composition."""
+    # Immutable result of off-thread composition.
     __slots__ = ('bgra_bytes', 'width', 'height', 'x', 'y')
 
     def __init__(self, bgra: bytes, w: int, h: int, x: int, y: int):
@@ -112,7 +110,7 @@ def _cache_premult_bgra(img: Image.Image, out: bytes) -> bytes:
 
 
 def _np_premultiply_bgra(rgba: np.ndarray) -> bytes:
-    """Pure-numpy fallback for premultiply_bgra_ndarray."""
+    # Pure-numpy fallback for premultiply_bgra_ndarray.
     r, g, b, a = rgba[..., 0], rgba[..., 1], rgba[..., 2], rgba[..., 3]
     a16 = a.astype(np.uint16)
     out = np.empty(rgba.shape, dtype=np.uint8)
@@ -124,7 +122,7 @@ def _np_premultiply_bgra(rgba: np.ndarray) -> bytes:
 
 
 def _premultiply_to_bgra(img: Image.Image) -> bytes:
-    """RGBA PIL → premultiplied BGRA bytes (Cython fast path + numpy fallback)."""
+    # RGBA PIL → premultiplied BGRA bytes (Cython fast path + numpy fallback).
     if getattr(img, '_sao_premult_safe', False):
         try:
             version = getattr(img, '_sao_content_version', None)
@@ -145,7 +143,7 @@ def _premultiply_to_bgra(img: Image.Image) -> bytes:
 
 
 def multiply_alpha_image(img: Image.Image, alpha: float) -> Image.Image:
-    """Return an RGBA image with only the alpha channel multiplied."""
+    # Return an RGBA image with only the alpha channel multiplied.
     try:
         value = float(alpha)
     except Exception:
@@ -165,7 +163,7 @@ def multiply_alpha_image(img: Image.Image, alpha: float) -> Image.Image:
 
 
 def clip_alpha_image(img: Image.Image, mask: Image.Image) -> Image.Image:
-    """Return RGBA ``img`` with its alpha channel multiplied by ``mask``."""
+    # Return RGBA ``img`` with its alpha channel multiplied by ``mask``.
     if img.size != mask.size:
         mask = mask.resize(img.size)
     if mask.mode != 'L':
@@ -220,7 +218,7 @@ _AFFINITY_FAILED = False
 
 
 def _pin_current_thread_to_core(slot: int) -> None:
-    """Pin the calling thread to a single CPU core on Windows."""
+    # Pin the calling thread to a single CPU core on Windows.
     global _AFFINITY_FAILED
     if not _RENDER_AFFINITY_ENABLED:
         return
@@ -261,11 +259,10 @@ _cpu_task_pool = ThreadPoolExecutor(
 
 
 def run_cpu_tasks(tasks: Sequence[Callable[[], T]]) -> List[T]:
-    """Run CPU-only layer tasks on the shared pool.
-
-    Task bodies must not touch thread-affine GL contexts. This is intended
-    for PIL/numpy image composition that benefits from extra CPU cores.
-    """
+    # Run CPU-only layer tasks on the shared pool.
+    #
+    # Task bodies must not touch thread-affine GL contexts. This is intended
+    # for PIL/numpy image composition that benefits from extra CPU cores.
     if not tasks:
         return []
     if len(tasks) == 1 or _cpu_task_workers <= 1:
@@ -276,11 +273,10 @@ def run_cpu_tasks(tasks: Sequence[Callable[[], T]]) -> List[T]:
 
 def ulw_commit(hwnd: int, fb: FrameBuffer, alpha: int = 255,
                allow_during_capture: bool = False) -> bool:
-    """Blit a pre-composed FrameBuffer to a layered window.
-
-    Only does the GDI DIBSection + UpdateLayeredWindow call — no numpy,
-    no PIL.  Safe (and required) to call from the Tk main thread.
-    """
+    # Blit a pre-composed FrameBuffer to a layered window.
+    #
+    # Only does the GDI DIBSection + UpdateLayeredWindow call — no numpy,
+    # no PIL.  Safe (and required) to call from the Tk main thread.
     if (not allow_during_capture) and (not wait_until_capture_idle(0.010)):
         return False
     w, h = fb.width, fb.height
@@ -388,16 +384,15 @@ def _ensure_ulw_thread() -> None:
 
 def submit_ulw_commit(hwnd: int, fb: FrameBuffer, alpha: int = 255,
                       allow_during_capture: bool = False) -> bool:
-    """Enqueue a frame for the ulw-commit worker thread.
-
-    Drops any earlier-but-not-yet-committed frame for the same HWND so
-    the worker always presents the freshest content. When the async
-    queue is disabled (env ``SAO_ASYNC_ULW=0``) this falls through to
-    a synchronous commit on the calling thread.
-
-    Returns True when the frame was enqueued (or committed synchronously
-    successfully).
-    """
+    # Enqueue a frame for the ulw-commit worker thread.
+    #
+    # Drops any earlier-but-not-yet-committed frame for the same HWND so
+    # the worker always presents the freshest content. When the async
+    # queue is disabled (env ``SAO_ASYNC_ULW=0``) this falls through to
+    # a synchronous commit on the calling thread.
+    #
+    # Returns True when the frame was enqueued (or committed synchronously
+    # successfully).
     if not _ULW_QUEUE_ENABLED:
         try:
             return ulw_commit(hwnd, fb, alpha=alpha,
@@ -413,7 +408,7 @@ def submit_ulw_commit(hwnd: int, fb: FrameBuffer, alpha: int = 255,
 
 
 def drop_pending_ulw_for(hwnd: int) -> None:
-    """Discard any pending async ULW frame for ``hwnd`` (used on hide/destroy)."""
+    # Discard any pending async ULW frame for ``hwnd`` (used on hide/destroy).
     if not _ULW_QUEUE_ENABLED:
         return
     with _ulw_cond:
@@ -699,12 +694,11 @@ def _record_worker_wall(worker_id: int, wall_ms: float) -> None:
 
 
 def peak_recent_worker_wall_ms(window_sec: float = 0.75) -> float:
-    """Return the highest recent compose wall (EWMA) across all lanes.
-
-    Walls older than ``window_sec`` are ignored so an idle worker doesn't
-    keep the pressure pinned after a burst ends. Returns 0.0 when no
-    fresh sample is available.
-    """
+    # Return the highest recent compose wall (EWMA) across all lanes.
+    #
+    # Walls older than ``window_sec`` are ignored so an idle worker doesn't
+    # keep the pressure pinned after a burst ends. Returns 0.0 when no
+    # fresh sample is available.
     cutoff = time.perf_counter() - window_sec
     peak = 0.0
     with _worker_walls_lock:
@@ -726,12 +720,11 @@ def _get_shared_backend() -> _SharedRenderBackend:
 
 
 class AsyncFrameWorker:
-    """Handle onto the shared overlay render thread.
-
-    Each overlay keeps an isolated latest-frame queue, but all heavy CPU
-    rendering is funneled through one shared render thread so recognition
-    and rendering stay on separate lanes.
-    """
+    # Handle onto the shared overlay render thread.
+    #
+    # Each overlay keeps an isolated latest-frame queue, but all heavy CPU
+    # rendering is funneled through one shared render thread so recognition
+    # and rendering stay on separate lanes.
 
     def __init__(self, prefer_isolation: bool = False):
         self._worker_id = next(_worker_id_counter)

@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""Selftest for ACT event bus and in-process Python plugin manager."""
+# Selftest for ACT event bus and in-process Python plugin manager.
 
 from __future__ import annotations
 

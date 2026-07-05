@@ -1,18 +1,17 @@
-"""refresh - 游戏更新后一键刷新基址 + 偏移库.
-
-完整流水线:
-  1. 探测当前游戏 game_key (检查是否已注册)
-  2. 调 dump_tool: mem dump metadata + Il2CppDumper → dump.cs/script.json
-  3. 调 dump_cs_parser → dump_cs_index.json
-  4. 调 bundle_build (用预设 class 列表 + 1 阶展开)
-  5. 调 bundle_store.register → 写入 store
-  6. 清除旧 instance_cache (因为 klass_ptr 变了)
-
-CLI:
-    python -m tools.mem_probe.il2cpp.refresh
-    python -m tools.mem_probe.il2cpp.refresh --force        # 已注册也重做
-    python -m tools.mem_probe.il2cpp.refresh --skip-mem-dump  # 用现有 metadata
-"""
+# refresh - 游戏更新后一键刷新基址 + 偏移库.
+#
+# 完整流水线:
+# 1. 探测当前游戏 game_key (检查是否已注册)
+# 2. 调 dump_tool: mem dump metadata + Il2CppDumper → dump.cs/script.json
+# 3. 调 dump_cs_parser → dump_cs_index.json
+# 4. 调 bundle_build (用预设 class 列表 + 1 阶展开)
+# 5. 调 bundle_store.register → 写入 store
+# 6. 清除旧 instance_cache (因为 klass_ptr 变了)
+#
+# CLI:
+# python -m tools.mem_probe.il2cpp.refresh
+# python -m tools.mem_probe.il2cpp.refresh --force        # 已注册也重做
+# python -m tools.mem_probe.il2cpp.refresh --skip-mem-dump  # 用现有 metadata
 from __future__ import annotations
 
 import argparse
@@ -37,22 +36,21 @@ DEFAULT_BUNDLE_CLASSES = bundle_build.DEFAULT_CLASSES
 
 def ensure_current(*, auto_dump: bool = False, background: bool = True,
                    game_dir: str = r"E:\星痕共鸣(2001991)") -> str:
-    """Make sure the running game's version has a registered offset bundle.
-
-    The intelligent path needs NO action: offsets are resolved live from the game's
-    metadata (live_field_resolver), so a weekly patch self-heals at runtime even
-    with a stale/absent bundle. This helper only keeps the *optional* fallback
-    bundle fresh (faster klass RVA + offline analysis), and only in a full dev
-    install that ships Il2CppDumper.
-
-    Returns:
-      'current'     — a bundle for this version is already registered.
-      'healed-live' — no bundle/dumper for this version; the live resolver carries
-                      offsets at runtime (nothing to do — the normal frozen case).
-      'rebuilding'  — auto_dump + dumper present: a background re-dump+rebuild started.
-      'rebuilt'     — same, run synchronously (background=False).
-      'no-game'     — Star.exe not running.
-    """
+    # Make sure the running game's version has a registered offset bundle.
+    #
+    # The intelligent path needs NO action: offsets are resolved live from the game's
+    # metadata (live_field_resolver), so a weekly patch self-heals at runtime even
+    # with a stale/absent bundle. This helper only keeps the *optional* fallback
+    # bundle fresh (faster klass RVA + offline analysis), and only in a full dev
+    # install that ships Il2CppDumper.
+    #
+    # Returns:
+    # 'current'     — a bundle for this version is already registered.
+    # 'healed-live' — no bundle/dumper for this version; the live resolver carries
+    # offsets at runtime (nothing to do — the normal frozen case).
+    # 'rebuilding'  — auto_dump + dumper present: a background re-dump+rebuild started.
+    # 'rebuilt'     — same, run synchronously (background=False).
+    # 'no-game'     — Star.exe not running.
     info = bundle_store.compute_running_game_key()
     if info is None:
         return "no-game"

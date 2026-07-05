@@ -1,14 +1,13 @@
 # -*- coding: utf-8 -*-
-"""Offline selftest for F-A self-relocation engine (no live game required).
-
-Covers the deterministic, stub-friendly parts of AnchorMemoryReader:
-  - _score_region ordering (GC-heap-first heuristic)
-  - _ranked_regions full coverage + ordering
-  - _owning_region containment
-  - klass-sentinel session cache guards (klass / pid / ga_base) in _cache_check
-
-Run:  python tools/mem_relocation_selftest.py
-"""
+# Offline selftest for F-A self-relocation engine (no live game required).
+#
+# Covers the deterministic, stub-friendly parts of AnchorMemoryReader:
+# - _score_region ordering (GC-heap-first heuristic)
+# - _ranked_regions full coverage + ordering
+# - _owning_region containment
+# - klass-sentinel session cache guards (klass / pid / ga_base) in _cache_check
+#
+# Run:  python tools/mem_relocation_selftest.py
 from __future__ import annotations
 
 import os

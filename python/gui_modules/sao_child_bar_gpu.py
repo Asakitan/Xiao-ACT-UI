@@ -1,34 +1,32 @@
 # -*- coding: utf-8 -*-
-"""
-sao_child_bar_gpu.py — GPU-presented child bar (popup submenu) for
-SAOChildBar in `sao_theme.py`.
-
-Phase 3+++ of the v2.3.0 overlay perf pass. Mirrors the same pattern
-as `sao_menu_bar_gpu` and `sao_left_info_gpu`:
-
-  * Tk widgets (the line/arrow Canvases, the row tk.Frames + Labels)
-    stay alive for hit-testing (Enter/Leave/click bindings still
-    fire). Their backgrounds are forced to chroma-key `#010101` so
-    Tk paints nothing visible.
-  * One GLFW transparent click-through window covers the full
-    child-bar bounding box and presents the row strip via
-    `BgraPresenter`.
-  * The painter computes its own bbox from the snapshot (line column +
-    arrow column + max row width) and walks the GpuOverlayWindow
-    geometry on every dispatch so it tracks open/switch animations.
-
-The compose closure uses pure PIL + ImageDraw (no Tk) and runs on the
-shared `AsyncFrameWorker` lane. A signature dedup skips redundant
-uploads when nothing visible changed.
-
-Public API:
-
-    gpu_child_bar_enabled() -> bool
-    ChildBarGpuPainter(root)
-        .tick(sx, sy, snap)        — dispatch one paint
-        .clear()                   — present an empty frame
-        .destroy()
-"""
+# sao_child_bar_gpu.py — GPU-presented child bar (popup submenu) for
+# SAOChildBar in `sao_theme.py`.
+#
+# Phase 3+++ of the v2.3.0 overlay perf pass. Mirrors the same pattern
+# as `sao_menu_bar_gpu` and `sao_left_info_gpu`:
+#
+# * Tk widgets (the line/arrow Canvases, the row tk.Frames + Labels)
+# stay alive for hit-testing (Enter/Leave/click bindings still
+# fire). Their backgrounds are forced to chroma-key `#010101` so
+# Tk paints nothing visible.
+# * One GLFW transparent click-through window covers the full
+# child-bar bounding box and presents the row strip via
+# `BgraPresenter`.
+# * The painter computes its own bbox from the snapshot (line column +
+# arrow column + max row width) and walks the GpuOverlayWindow
+# geometry on every dispatch so it tracks open/switch animations.
+#
+# The compose closure uses pure PIL + ImageDraw (no Tk) and runs on the
+# shared `AsyncFrameWorker` lane. A signature dedup skips redundant
+# uploads when nothing visible changed.
+#
+# Public API:
+#
+# gpu_child_bar_enabled() -> bool
+# ChildBarGpuPainter(root)
+# .tick(sx, sy, snap)        — dispatch one paint
+# .clear()                   — present an empty frame
+# .destroy()
 
 from __future__ import annotations
 
@@ -58,7 +56,7 @@ from gui_modules.sao_menu_hud import _PIL_DRAW_LOCK
 # ═══════════════════════════════════════════════
 
 def gpu_child_bar_enabled() -> bool:
-    """Child bar requires the shared Entity GPU backend."""
+    # Child bar requires the shared Entity GPU backend.
     return require_entity_gpu('ChildBarGpuPainter', _gow)
 
 
@@ -128,8 +126,8 @@ class _ChildBarSnapshot:
 
 
 class BarColors:
-    """Captures palette + lerp helper as plain values so the worker
-    closure has no Tk/sao_theme dependency."""
+    # Captures palette + lerp helper as plain values so the worker
+    # closure has no Tk/sao_theme dependency.
     __slots__ = ('child_bg', 'child_hover', 'child_text', 'child_hover_fg',
                  'child_icon', 'active_border', 'lerp')
 
@@ -169,8 +167,8 @@ _MISSING_GLYPH_PROBES = ('\u0378', '\u0380', '\ufdd0', '\U000f0000')
 
 
 def _resolve_font_path(filename: str) -> Optional[str]:
-    """Resolve a font filename to an absolute path under FONTS_DIR or
-    a Windows system font path. Returns None if not found."""
+    # Resolve a font filename to an absolute path under FONTS_DIR or
+    # a Windows system font path. Returns None if not found.
     cached = _FONT_PATH_CACHE.get(filename)
     if cached is not None:
         return cached if cached else None
@@ -292,7 +290,7 @@ def _missing_glyph_signatures(font: ImageFont.FreeTypeFont) -> set:
 
 
 def _glyph_supported(font: ImageFont.FreeTypeFont, ch: str) -> bool:
-    """Return True if the font has a real glyph for `ch` (not tofu)."""
+    # Return True if the font has a real glyph for `ch` (not tofu).
     if not ch or ch.isspace():
         return True
     try:
@@ -307,9 +305,9 @@ def _glyph_supported(font: ImageFont.FreeTypeFont, ch: str) -> bool:
 
 def _draw_text_with_fallback(draw: ImageDraw.ImageDraw, xy, text: str,
                              chain: list, fill) -> int:
-    """Draw `text` left-to-right; per character pick the first font in
-    `chain` that has a glyph. Whitespace is always allowed via the
-    primary font. Returns the advanced x offset from the starting xy."""
+    # Draw `text` left-to-right; per character pick the first font in
+    # `chain` that has a glyph. Whitespace is always allowed via the
+    # primary font. Returns the advanced x offset from the starting xy.
     if not text or not chain:
         return 0
     primary = chain[0]
@@ -446,7 +444,7 @@ def _compose_child_bar(snap: _ChildBarSnapshot, total_w: int, total_h: int) -> I
 # ═══════════════════════════════════════════════
 
 class ChildBarGpuPainter:
-    """Owns one GpuOverlayWindow + AsyncFrameWorker for the child bar."""
+    # Owns one GpuOverlayWindow + AsyncFrameWorker for the child bar.
 
     def __init__(self, root: tk.Misc):
         self._root = root

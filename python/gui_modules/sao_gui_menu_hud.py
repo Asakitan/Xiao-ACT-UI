@@ -1,26 +1,25 @@
 # -*- coding: utf-8 -*-
-"""v2.2.12 — Per-pixel-alpha layered window for the SAO menu HUD.
-
-The legacy HUD lived on a fullscreen ``Toplevel(-transparentcolor='#010101')
-+ Canvas`` chroma-key surface, which has two structural problems:
-
-1. Windows DWM does **not** vsync chroma-key composites, so any per-frame
-   geometry change (the menu's breathing motion) tears.
-2. The canvas-native HUD primitives (scan line, trail lines, dot ovals,
-   timestamp text) are mutated on the Tk main thread every frame,
-   competing with packet capture / parser work.
-
-This module hosts ``MenuHudOverlay`` which replaces the HUD half of the
-menu surface with a GPU overlay window plus off-thread compose path.
-
-The widget Toplevel (``SAOPopUpMenu._overlay``) keeps its chroma-key
-surface for hosting actual Tk widgets (buttons, labels, frames) — those
-need real Tk widgetry for accessibility / focus / IME, which ULW does
-not support. The two windows are siblings; the ULW sits beneath the
-widget Toplevel so widget hit-testing is unchanged.
-
-Entity HUD rendering is GPU-required; do not fall back to Tk/ULW.
-"""
+# v2.2.12 — Per-pixel-alpha layered window for the SAO menu HUD.
+#
+# The legacy HUD lived on a fullscreen ``Toplevel(-transparentcolor='#010101')
+# + Canvas`` chroma-key surface, which has two structural problems:
+#
+# 1. Windows DWM does **not** vsync chroma-key composites, so any per-frame
+# geometry change (the menu's breathing motion) tears.
+# 2. The canvas-native HUD primitives (scan line, trail lines, dot ovals,
+# timestamp text) are mutated on the Tk main thread every frame,
+# competing with packet capture / parser work.
+#
+# This module hosts ``MenuHudOverlay`` which replaces the HUD half of the
+# menu surface with a GPU overlay window plus off-thread compose path.
+#
+# The widget Toplevel (``SAOPopUpMenu._overlay``) keeps its chroma-key
+# surface for hosting actual Tk widgets (buttons, labels, frames) — those
+# need real Tk widgetry for accessibility / focus / IME, which ULW does
+# not support. The two windows are siblings; the ULW sits beneath the
+# widget Toplevel so widget hit-testing is unchanged.
+#
+# Entity HUD rendering is GPU-required; do not fall back to Tk/ULW.
 from __future__ import annotations
 
 import ctypes
@@ -57,7 +56,7 @@ WS_EX_NOACTIVATE = 0x08000000
 
 
 def gpu_menu_hud_enabled() -> bool:
-    """Menu HUD requires the shared Entity GPU backend."""
+    # Menu HUD requires the shared Entity GPU backend.
     try:
         from config import USE_GPU_MENU_HUD  # type: ignore
     except Exception:
@@ -68,7 +67,7 @@ def gpu_menu_hud_enabled() -> bool:
 
 
 class MenuHudOverlay:
-    """Click-through GPU window driving the menu HUD off-thread."""
+    # Click-through GPU window driving the menu HUD off-thread.
 
     def __init__(self, root: tk.Tk):
         self.root = root
@@ -162,12 +161,11 @@ class MenuHudOverlay:
     def set_geometry(self, anchor_x: int, anchor_y: int,
                      content_w: int, content_h: int,
                      screen_w: int, screen_h: int) -> None:
-        """Update the HUD's anchor (top-left of the content frame in
-        screen coords) and the content/screen dimensions used by the
-        renderer to lay out brackets and rails.
-
-        Cheap to call every tick — only stores values, no allocation.
-        """
+        # Update the HUD's anchor (top-left of the content frame in
+        # screen coords) and the content/screen dimensions used by the
+        # renderer to lay out brackets and rails.
+        #
+        # Cheap to call every tick — only stores values, no allocation.
         self._anchor_x = int(anchor_x)
         self._anchor_y = int(anchor_y)
         self._content_w = max(120, int(content_w))
@@ -181,7 +179,7 @@ class MenuHudOverlay:
 
     @_probe.decorate('ui.menu.compose')
     def compose_frame(self, now: float, phase: float) -> Image.Image:
-        """Worker-thread entry point. Returns a fresh RGBA PIL Image."""
+        # Worker-thread entry point. Returns a fresh RGBA PIL Image.
         img, off = self._renderer.render_pil(
             self._content_w, self._content_h,
             self._screen_w, self._screen_h,
@@ -198,12 +196,11 @@ class MenuHudOverlay:
 
     @_probe.decorate('ui.menu.tick')
     def tick(self, now: float, dx: int, dy: int, phase: float) -> None:
-        """Drain the previous frame (if ready) and submit a new compose.
-
-        ``dx``/``dy`` are the breathing offsets — they are added to the
-        anchor position when committing, so the HUD visibly drifts
-        without any window geometry mutation between commits.
-        """
+        # Drain the previous frame (if ready) and submit a new compose.
+        #
+        # ``dx``/``dy`` are the breathing offsets — they are added to the
+        # anchor position when committing, so the HUD visibly drifts
+        # without any window geometry mutation between commits.
         if self._destroyed:
             return
         if self._win is None:
@@ -277,9 +274,9 @@ class MenuHudOverlay:
             pass
 
     def _compose(self, now: float) -> Image.Image:
-        """Worker-thread entry. The phase is (now - first_call) so
-        animations advance with wall-clock time and are stable across
-        whatever scheduling jitter the lane sees."""
+        # Worker-thread entry. The phase is (now - first_call) so
+        # animations advance with wall-clock time and are stable across
+        # whatever scheduling jitter the lane sees.
         if self._phase_t0 == 0.0:
             self._phase_t0 = now
         phase = max(0.0, now - self._phase_t0)

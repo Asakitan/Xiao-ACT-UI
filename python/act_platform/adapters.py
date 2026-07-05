@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""ACT parser adapter contracts and built-in parser wrappers."""
+# ACT parser adapter contracts and built-in parser wrappers.
 
 from __future__ import annotations
 
@@ -63,7 +63,7 @@ def _json_worker_safe(value: Any) -> Any:
 
 @dataclass(frozen=True)
 class ParserAdapterMetadata:
-    """Serializable description of a parser/game adapter."""
+    # Serializable description of a parser/game adapter.
 
     adapter_id: str
     game_id: str
@@ -104,7 +104,7 @@ class ParserAdapterMetadata:
 
 
 class ParserAdapter(ABC):
-    """Small runtime contract for parser/game integrations."""
+    # Small runtime contract for parser/game integrations.
 
     def __init__(self, metadata: ParserAdapterMetadata) -> None:
         self.metadata = metadata
@@ -172,7 +172,7 @@ class ParserAdapter(ABC):
 
 
 class PluginParserAdapter(ParserAdapter):
-    """Controlled runtime wrapper for plugin-declared parser adapters."""
+    # Controlled runtime wrapper for plugin-declared parser adapters.
 
     def __init__(self, manager: Any, metadata: Mapping[str, Any] | ParserAdapterMetadata,
                  *, time_budget_ms: float = 25.0) -> None:

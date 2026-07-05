@@ -1,66 +1,64 @@
 # -*- coding: utf-8 -*-
-"""
-SAOPlayerGUIStatusUpdaterMixin — tenth mixin extracted from
-SAOPlayerGUI (round 50 of the sao_gui split refactor). 20 methods,
-~775 lines.
-
-Bundles the two floating panels that are tightly coupled around
-the auto-updater event chain:
-
-Status panel (2 methods) — small panel showing recognition state +
-data source + updater status:
-  * _toggle_status_panel — open/close; builds the panel UI when
-    opening (uses the panel-UI helpers from gui_modules.sao_panel_ui)
-  * _update_status_panel — refresh the panel's content rows from
-    current state + updater snapshot
-
-Updater event chain (18 methods):
-  Snapshot + view:
-    * _get_update_snapshot — sao_updater.get_manager().snapshot()
-    * _get_update_view(snapshot=None) — formats the snapshot into
-      status_text / progress_text / colors for the panel (139 lines —
-      the biggest method here; lots of state-text formatting)
-  Listener wiring:
-    * _ensure_updater_listener — installs the snapshot listener;
-      lazy-init on first use
-    * _on_update_snapshot — listener body, dispatches refresh +
-      popup logic on the Tk main thread via root.after(0, ...)
-  Update popup:
-    * _mark_update_popup_ready — flips the ready flag; flushes
-      pending snapshot
-    * _build_update_popup_payload — builds the SAODialog payload
-    * _maybe_show_update_popup — gates the popup behind state +
-      ready + force-required logic
-  Action helpers:
-    * _start_update_download, _start_update_check,
-      _skip_update_version, _apply_downloaded_update
-    * _resolve_update_action(action_name) — string → callable
-    * _set_update_button — install a labelled button on the panel
-  Update panel:
-    * _open_update_panel — builds the panel UI (111 lines)
-    * _refresh_update_panel — re-populate based on snapshot
-    * _close_update_panel — fade out + persist hidden flag
-  Menu hooks:
-    * _check_for_updates_interactive — menu handler
-    * _prompt_update_available — show the SAODialog promo
-
-Required SAOPlayerGUI attrs (extensive):
-  * self._status_panel, self._status_recog_lbl, self._status_source_lbl,
-    self._status_update_lbl, self._status_update_progress_lbl
-  * self._update_panel, self._update_snapshot,
-    self._update_panel_hidden, self._update_panel_state_key,
-    self._update_listener_installed, self._update_listener,
-    self._updater_mgr, self._update_popup_ready,
-    self._pending_update_popup_snapshot
-  * self._float, self._fw, self._panels_hidden, self.root, self.settings,
-    self._cfg_settings_ref
-
-Required SAOPlayerGUI methods (via MRO):
-  * _fade_panel_in, _fade_panel_out, _raise_panel_window,
-    _attach_sao_panel_fx, _attach_panel_float (SAOPlayerGUI)
-  * _refresh_menu_if_open (Menu mixin)
-  * _show_entity_alert, _get_setting, _set_setting (SAOPlayerGUI)
-"""
+# SAOPlayerGUIStatusUpdaterMixin — tenth mixin extracted from
+# SAOPlayerGUI (round 50 of the sao_gui split refactor). 20 methods,
+# ~775 lines.
+#
+# Bundles the two floating panels that are tightly coupled around
+# the auto-updater event chain:
+#
+# Status panel (2 methods) — small panel showing recognition state +
+# data source + updater status:
+# * _toggle_status_panel — open/close; builds the panel UI when
+# opening (uses the panel-UI helpers from gui_modules.sao_panel_ui)
+# * _update_status_panel — refresh the panel's content rows from
+# current state + updater snapshot
+#
+# Updater event chain (18 methods):
+# Snapshot + view:
+# * _get_update_snapshot — sao_updater.get_manager().snapshot()
+# * _get_update_view(snapshot=None) — formats the snapshot into
+# status_text / progress_text / colors for the panel (139 lines —
+# the biggest method here; lots of state-text formatting)
+# Listener wiring:
+# * _ensure_updater_listener — installs the snapshot listener;
+# lazy-init on first use
+# * _on_update_snapshot — listener body, dispatches refresh +
+# popup logic on the Tk main thread via root.after(0, ...)
+# Update popup:
+# * _mark_update_popup_ready — flips the ready flag; flushes
+# pending snapshot
+# * _build_update_popup_payload — builds the SAODialog payload
+# * _maybe_show_update_popup — gates the popup behind state +
+# ready + force-required logic
+# Action helpers:
+# * _start_update_download, _start_update_check,
+# _skip_update_version, _apply_downloaded_update
+# * _resolve_update_action(action_name) — string → callable
+# * _set_update_button — install a labelled button on the panel
+# Update panel:
+# * _open_update_panel — builds the panel UI (111 lines)
+# * _refresh_update_panel — re-populate based on snapshot
+# * _close_update_panel — fade out + persist hidden flag
+# Menu hooks:
+# * _check_for_updates_interactive — menu handler
+# * _prompt_update_available — show the SAODialog promo
+#
+# Required SAOPlayerGUI attrs (extensive):
+# * self._status_panel, self._status_recog_lbl, self._status_source_lbl,
+# self._status_update_lbl, self._status_update_progress_lbl
+# * self._update_panel, self._update_snapshot,
+# self._update_panel_hidden, self._update_panel_state_key,
+# self._update_listener_installed, self._update_listener,
+# self._updater_mgr, self._update_popup_ready,
+# self._pending_update_popup_snapshot
+# * self._float, self._fw, self._panels_hidden, self.root, self.settings,
+# self._cfg_settings_ref
+#
+# Required SAOPlayerGUI methods (via MRO):
+# * _fade_panel_in, _fade_panel_out, _raise_panel_window,
+# _attach_sao_panel_fx, _attach_panel_float (SAOPlayerGUI)
+# * _refresh_menu_if_open (Menu mixin)
+# * _show_entity_alert, _get_setting, _set_setting (SAOPlayerGUI)
 
 from __future__ import annotations
 
@@ -99,10 +97,10 @@ def _finite_float(value: Any, default: float = 0.0, *, lo: Optional[float] = Non
 
 
 class SAOPlayerGUIStatusUpdaterMixin:
-    """Mixin bundling status panel + updater event chain + update panel."""
+    # Mixin bundling status panel + updater event chain + update panel.
 
     def _toggle_status_panel(self):
-        """Invoke a plugin-owned status panel callback, if one is registered."""
+        # Invoke a plugin-owned status panel callback, if one is registered.
         resolver = getattr(self, '_first_plugin_menu_surface_callable', None)
         handler = resolver('status_toggle') if callable(resolver) else None
         if callable(handler):
@@ -110,7 +108,7 @@ class SAOPlayerGUIStatusUpdaterMixin:
         return None
 
     def _update_status_panel(self):
-        """Refresh a plugin-owned status panel, if one is registered."""
+        # Refresh a plugin-owned status panel, if one is registered.
         resolver = getattr(self, '_first_plugin_menu_surface_callable', None)
         handler = resolver('status_update') if callable(resolver) else None
         if callable(handler):
@@ -651,7 +649,7 @@ class SAOPlayerGUIStatusUpdaterMixin:
         self._set_update_button(self._update_secondary_btn, view['secondary_text'], view['secondary_action'], side=tk.RIGHT)
 
     def _is_update_dialog_safe(self) -> bool:
-        """True when menu/fisheye close animations are no longer tearing down."""
+        # True when menu/fisheye close animations are no longer tearing down.
         if getattr(self, '_destroyed', False):
             return False
         if getattr(self, '_sao_menu_close_pending', False):
@@ -710,7 +708,7 @@ class SAOPlayerGUIStatusUpdaterMixin:
             callback()
 
     def _defer_update_check_until_menu_closed(self, callback: Callable[[], None]) -> bool:
-        """Delay manual update UI until the GPU popup has finished closing."""
+        # Delay manual update UI until the GPU popup has finished closing.
         if getattr(self, '_destroyed', False):
             return True
         if self._is_update_dialog_safe():

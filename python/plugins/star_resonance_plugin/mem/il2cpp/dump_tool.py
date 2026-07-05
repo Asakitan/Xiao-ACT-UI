@@ -1,15 +1,14 @@
-"""一键流水线: 抓 metadata → 调 Il2CppDumper → 检查输出.
-
-步骤:
-  1. 调 mem_dump_metadata 抓 global-metadata.dat 到 out/<sha8>/
-  2. 调 Il2CppDumper.exe 输入 (磁盘 GameAssembly.dll, 内存 dump 出的 metadata)
-     输出 dump.cs / script.json / il2cpp.h / DummyDll/ 到同一 out/<sha8>/dumper_out/
-  3. 报告各文件 size, 提示下一步跑 metadata_builder
-
-CLI:
-    python -m tools.mem_probe.il2cpp.dump_tool
-    python -m tools.mem_probe.il2cpp.dump_tool --skip-mem-dump   # metadata 已存在
-"""
+# 一键流水线: 抓 metadata → 调 Il2CppDumper → 检查输出.
+#
+# 步骤:
+# 1. 调 mem_dump_metadata 抓 global-metadata.dat 到 out/<sha8>/
+# 2. 调 Il2CppDumper.exe 输入 (磁盘 GameAssembly.dll, 内存 dump 出的 metadata)
+# 输出 dump.cs / script.json / il2cpp.h / DummyDll/ 到同一 out/<sha8>/dumper_out/
+# 3. 报告各文件 size, 提示下一步跑 metadata_builder
+#
+# CLI:
+# python -m tools.mem_probe.il2cpp.dump_tool
+# python -m tools.mem_probe.il2cpp.dump_tool --skip-mem-dump   # metadata 已存在
 
 from __future__ import annotations
 

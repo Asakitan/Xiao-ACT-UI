@@ -1,10 +1,9 @@
 # -*- coding: utf-8 -*-
-"""scan_pkg_tables - 扫游戏 .pkg(UnityFS bundle) 定位配置表/几何资源 (离线, 游戏可关).
-
-.pkg = 24B自定义header + 标准 UnityFS bundle(无加密)。UnityPy 解每个 pkg 的对象类型分布 +
-TextAsset/MonoBehaviour 名字, 找含 table/config/skill/bullet/shape/zone 的 = 配置表所在 pkg。
-多进程并行。输出 exports/pkg_table_scan.json (pkg → 类型分布 + 命中的配置表资源名)。
-"""
+# scan_pkg_tables - 扫游戏 .pkg(UnityFS bundle) 定位配置表/几何资源 (离线, 游戏可关).
+#
+# .pkg = 24B自定义header + 标准 UnityFS bundle(无加密)。UnityPy 解每个 pkg 的对象类型分布 +
+# TextAsset/MonoBehaviour 名字, 找含 table/config/skill/bullet/shape/zone 的 = 配置表所在 pkg。
+# 多进程并行。输出 exports/pkg_table_scan.json (pkg → 类型分布 + 命中的配置表资源名)。
 from __future__ import annotations
 
 import json

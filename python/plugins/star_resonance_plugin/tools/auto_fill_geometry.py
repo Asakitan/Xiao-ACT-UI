@@ -1,10 +1,9 @@
 # -*- coding: utf-8 -*-
-"""auto_fill_geometry - 游戏开时自动把读到的几何智能填进 boss 机制示例。
-
-跑一次: 连游戏 → 读 FieldTable 领域几何(FieldGeometryReader) → 对 assets/boss_raids 所有示例
-按名字相似度自动填 (auto_fill_from_fields, 高分且同boss才填, 不覆盖已填) → 写回 + 报告。
-游戏关则提示。运行时瞬时招几何(skill_id 时间关联)由战斗采集器在打 boss 时自动填(更准)。
-"""
+# auto_fill_geometry - 游戏开时自动把读到的几何智能填进 boss 机制示例。
+#
+# 跑一次: 连游戏 → 读 FieldTable 领域几何(FieldGeometryReader) → 对 assets/boss_raids 所有示例
+# 按名字相似度自动填 (auto_fill_from_fields, 高分且同boss才填, 不覆盖已填) → 写回 + 报告。
+# 游戏关则提示。运行时瞬时招几何(skill_id 时间关联)由战斗采集器在打 boss 时自动填(更准)。
 from __future__ import annotations
 
 import glob

@@ -1,10 +1,8 @@
 # -*- coding: utf-8 -*-
-"""
-SAO Auto — Npcap 网络抓包 + TCP 流重组
-
-通过 ctypes 调用 wpcap.dll (Npcap/WinPcap)，抓取以太网帧，
-解析 IP/TCP 层，按序列号重组 TCP 流，输出完整的游戏协议帧。
-"""
+# SAO Auto — Npcap 网络抓包 + TCP 流重组
+#
+# 通过 ctypes 调用 wpcap.dll (Npcap/WinPcap)，抓取以太网帧，
+# 解析 IP/TCP 层，按序列号重组 TCP 流，输出完整的游戏协议帧。
 
 import struct
 import threading
@@ -29,7 +27,7 @@ _wpcap_dll = None
 
 
 def _load_wpcap():
-    """懒加载 wpcap.dll"""
+    # 懒加载 wpcap.dll
     global _wpcap_dll
     if _wpcap_dll is not None:
         return _wpcap_dll
@@ -47,7 +45,7 @@ def _load_wpcap():
 
 
 class _PcapIf(ctypes.Structure):
-    """pcap_if_t 前四个字段"""
+    # pcap_if_t 前四个字段
     pass
 
 
@@ -74,7 +72,7 @@ class _PcapPkthdr(ctypes.Structure):
 # ═══════════════════════════════════════════════
 
 def list_devices() -> List[Dict[str, str]]:
-    """列出所有 Npcap 网络设备，返回 [{name, description}]"""
+    # 列出所有 Npcap 网络设备，返回 [{name, description}]
     dll = _load_wpcap()
     alldevs = ctypes.POINTER(_PcapIf)()
     errbuf = ctypes.create_string_buffer(256)
@@ -99,7 +97,7 @@ def list_devices() -> List[Dict[str, str]]:
 
 
 def auto_select_device() -> Optional[Dict[str, str]]:
-    """自动选择默认网络设备（排除虚拟适配器，优选真实网卡）"""
+    # 自动选择默认网络设备（排除虚拟适配器，优选真实网卡）
     devs = list_devices()
     if not devs:
         return None
@@ -148,13 +146,12 @@ def auto_select_device() -> Optional[Dict[str, str]]:
 
 
 def select_capture_devices() -> List[Dict[str, str]]:
-    """选择要同时抓的网卡: 物理 NIC + 加速器/VPN 虚拟网卡 (TAP/TUN/WireGuard 等)。
-
-    背景: 网游加速器会把开放世界(主城/高原等)流量经其虚拟网卡明文进出, 再在物理
-    网卡上加密成隧道。只抓物理网卡时, 开放世界看到的全是加密外壳(无 c3SB)→ 识别不
-    到服务器 → 没数据; 副本(直连物理网卡, 有 c3SB)才正常。故必须把加速器虚拟网卡
-    也一起抓 —— 那块网卡上游戏帧是明文。返回去重后的设备列表。
-    """
+    # 选择要同时抓的网卡: 物理 NIC + 加速器/VPN 虚拟网卡 (TAP/TUN/WireGuard 等)。
+    #
+    # 背景: 网游加速器会把开放世界(主城/高原等)流量经其虚拟网卡明文进出, 再在物理
+    # 网卡上加密成隧道。只抓物理网卡时, 开放世界看到的全是加密外壳(无 c3SB)→ 识别不
+    # 到服务器 → 没数据; 副本(直连物理网卡, 有 c3SB)才正常。故必须把加速器虚拟网卡
+    # 也一起抓 —— 那块网卡上游戏帧是明文。返回去重后的设备列表。
     devs = list_devices()
     if not devs:
         return []
@@ -194,7 +191,7 @@ def select_capture_devices() -> List[Dict[str, str]]:
 # ═══════════════════════════════════════════════
 
 class _IpFragmentCache:
-    """IPv4 分片缓存，30 秒超时自动清理"""
+    # IPv4 分片缓存，30 秒超时自动清理
     TIMEOUT = 30.0
 
     def __init__(self):
@@ -238,10 +235,8 @@ class _IpFragmentCache:
 # ═══════════════════════════════════════════════
 
 def _parse_eth_ip_tcp(raw: bytes) -> Optional[Tuple[bytes, bytes, int, int, int, bytes, int, int, bool]]:
-    """
-    解析以太网帧 → IPv4 → TCP。
-    返回 (src_ip, dst_ip, sport, dport, seq, payload, ip_id, frag_offset, more_frag)
-    """
+    # 解析以太网帧 → IPv4 → TCP。
+    # 返回 (src_ip, dst_ip, sport, dport, seq, payload, ip_id, frag_offset, more_frag)
     return _CY_PACKET.parse_eth_ip_tcp(raw)
 
 
@@ -288,7 +283,7 @@ _ETH_V6_HDR = b'\x00' * 12 + b'\x86\xdd'    # IPv6 ethertype
 
 
 def _ip_to_eth(ip_pkt: bytes) -> bytes:
-    """给裸 IP 包补一个以太网头 (按 IP 版本选 ethertype)。"""
+    # 给裸 IP 包补一个以太网头 (按 IP 版本选 ethertype)。
     if not ip_pkt:
         return ip_pkt
     ver = ip_pkt[0] >> 4
@@ -296,7 +291,7 @@ def _ip_to_eth(ip_pkt: bytes) -> bytes:
 
 
 def _normalize_link_frame(raw: bytes, dlt: int) -> bytes:
-    """把非以太网链路层的抓包帧统一成以太网帧 (供 _parse_eth_ip_tcp)。"""
+    # 把非以太网链路层的抓包帧统一成以太网帧 (供 _parse_eth_ip_tcp)。
     if dlt == 1:                      # EN10MB: 已是以太网
         return raw
     if dlt in (12, 14, 101):         # RAW: 帧本身就是 IP 包
@@ -340,11 +335,9 @@ def _dump_raw_cap(meta, seq, payload, is_server, strict, loose, dev='', dlt=1):
 
 
 class TcpReassembler:
-    """
-    单向 TCP 流重组 + 游戏帧提取。
-    识别游戏服务器后，对下行流重组并按 [4B-size][payload] 切割游戏帧。
-    支持场景服务器切换检测 (切换地图/副本时游戏连接新的场景服务器)。
-    """
+    # 单向 TCP 流重组 + 游戏帧提取。
+    # 识别游戏服务器后，对下行流重组并按 [4B-size][payload] 切割游戏帧。
+    # 支持场景服务器切换检测 (切换地图/副本时游戏连接新的场景服务器)。
 
     def __init__(self, on_game_packet: Callable[[bytes], None],
                  on_server_change: Optional[Callable[[], None]] = None):
@@ -417,7 +410,7 @@ class TcpReassembler:
             self._gap_since = 0.0
 
     def force_reconnect(self, reason: str = 'watchdog') -> bool:
-        """Drop the current endpoint lock so the next packet can re-detect it."""
+        # Drop the current endpoint lock so the next packet can re-detect it.
         now = time.time()
         if now - self._last_force_reconnect_ts < self._FORCE_RECONNECT_COOLDOWN:
             return False
@@ -442,7 +435,7 @@ class TcpReassembler:
 
     # ─── 主入口 ───
     def feed_raw_frame(self, raw: bytes):
-        """接收一个原始以太网帧"""
+        # 接收一个原始以太网帧
         self.stats['raw_frames'] += 1
         parsed = _parse_eth_ip_tcp(raw)
         if parsed is None:
@@ -682,21 +675,20 @@ class TcpReassembler:
 
     def _replay_recent_for_addr(self, addr: str, exclude_seq: int,
                                  seq_window: int = 0) -> int:
-        """v2.1.18: 把 _recent_pkts 里属于该 addr、seq 不等于 exclude_seq 的包按 seq
-        升序回放给 _feed_tcp, 用于 server-change / 同服重连后追回切换瞬间被丢的包.
-
-        v2.3.3: 新增 ``seq_window`` 参数. 同服重连场景中, ``_recent_pkts``
-        会同时包含**重连前**(旧 ISN seq) 和**重连后**(新 ISN seq) 的包,
-        addr 完全相同无法区分. 若不过滤, replay 会把旧 ISN seq 喂入
-        ``_feed_tcp``, ``_next_seq`` 落到旧 ISN 区域, 后续真正的新 ISN 包
-        立即触发 ``_seq_anomalous`` 又被识别为重连, 形成无限重连循环
-        (用户报告: 反复刷"⚡ 检测到同服重连").
-        当 ``seq_window > 0`` 时, 只回放与 ``exclude_seq`` 距离不超过
-        ``seq_window`` 的包 (双向, 处理 wraparound). 服务器切换 (新 addr)
-        不需要过滤, 用 ``seq_window=0`` 表示全量回放.
-
-        返回回放的包数量.
-        """
+        # v2.1.18: 把 _recent_pkts 里属于该 addr、seq 不等于 exclude_seq 的包按 seq
+        # 升序回放给 _feed_tcp, 用于 server-change / 同服重连后追回切换瞬间被丢的包.
+        #
+        # v2.3.3: 新增 ``seq_window`` 参数. 同服重连场景中, ``_recent_pkts``
+        # 会同时包含**重连前**(旧 ISN seq) 和**重连后**(新 ISN seq) 的包,
+        # addr 完全相同无法区分. 若不过滤, replay 会把旧 ISN seq 喂入
+        # ``_feed_tcp``, ``_next_seq`` 落到旧 ISN 区域, 后续真正的新 ISN 包
+        # 立即触发 ``_seq_anomalous`` 又被识别为重连, 形成无限重连循环
+        # (用户报告: 反复刷"⚡ 检测到同服重连").
+        # 当 ``seq_window > 0`` 时, 只回放与 ``exclude_seq`` 距离不超过
+        # ``seq_window`` 的包 (双向, 处理 wraparound). 服务器切换 (新 addr)
+        # 不需要过滤, 用 ``seq_window=0`` 表示全量回放.
+        #
+        # 返回回放的包数量.
         try:
             candidates = [(s, p) for (a, s, p) in self._recent_pkts
                           if a == addr and s != exclude_seq]
@@ -733,27 +725,25 @@ class TcpReassembler:
 
     # ─── 服务器识别 ───
     def _try_identify(self, data: bytes, addr: str) -> bool:
-        """包是否携带任意 c3SB 证据 (含松散方法). 兼容旧调用点.
-
-        v2.3.6: 不再有副作用 — 旧版本会直接 ``self._server_addr = addr``,
-        导致跨 addr 调用时即便上层判定逻辑想拒绝, addr 也已经被偷换.
-        现在统一返回 bool, 由调用方决定是否切换 ``_server_addr``.
-        """
+        # 包是否携带任意 c3SB 证据 (含松散方法). 兼容旧调用点.
+        #
+        # v2.3.6: 不再有副作用 — 旧版本会直接 ``self._server_addr = addr``,
+        # 导致跨 addr 调用时即便上层判定逻辑想拒绝, addr 也已经被偷换.
+        # 现在统一返回 bool, 由调用方决定是否切换 ``_server_addr``.
         return self._identify_strict(data) or self._identify_loose(data)
 
     def _identify_strict(self, data: bytes) -> bool:
-        """严格识别: FrameDown(type=6) 嵌套含 c3SB 签名, Login Return,
-        或 zstd-wrapped FrameDown.
-
-        v2.3.15: 修复某些地下城场景服务器切换时首包不被识别的问题.
-        原版只检查 data[4]==0 && data[5]==6 (非压缩 FrameDown), 但
-        某些场景切换首包的 type=0x8006 (zstd 压缩的 FrameDown),
-        此时 data[4]=0x80, data[5]=0x06, 旧判断 data[4]==0 失败.
-        修复: 提取 msg_type 并检查 & 0x7FFF == 6.
-        对于 zstd FrameDown, 嵌套帧被压缩, 无法扫描 c3SB 字面量,
-        但 zstd + FrameDown 组合在非游戏流量中几乎不可能出现, 视为
-        足够严格.
-        """
+        # 严格识别: FrameDown(type=6) 嵌套含 c3SB 签名, Login Return,
+        # 或 zstd-wrapped FrameDown.
+        #
+        # v2.3.15: 修复某些地下城场景服务器切换时首包不被识别的问题.
+        # 原版只检查 data[4]==0 && data[5]==6 (非压缩 FrameDown), 但
+        # 某些场景切换首包的 type=0x8006 (zstd 压缩的 FrameDown),
+        # 此时 data[4]=0x80, data[5]=0x06, 旧判断 data[4]==0 失败.
+        # 修复: 提取 msg_type 并检查 & 0x7FFF == 6.
+        # 对于 zstd FrameDown, 嵌套帧被压缩, 无法扫描 c3SB 字面量,
+        # 但 zstd + FrameDown 组合在非游戏流量中几乎不可能出现, 视为
+        # 足够严格.
         # 方法 1: FrameDown (type=6, zstd or plain) 嵌套含 c3SB
         if len(data) > 6:
             _pkt_type_raw = struct.unpack_from('>H', data, 4)[0]
@@ -776,21 +766,20 @@ class TcpReassembler:
         return False
 
     def _identify_loose(self, data: bytes) -> bool:
-        """松散识别: payload 中包含 4 字节字面量 ``c3SB``.
-
-        4 字节字面量在大流量下随机命中概率不可忽略 (ZSTD 字典 / 玩家名 /
-        buff icon ID 都可能含). 仅用于:
-          (1) 初始识别 (``_server_addr is None``) — 此时没有锚点, 必须接受
-              松散信号才能完成首次绑定;
-          (2) 同服重连判定 — 已经被 v2.3.4 的 ``_seq_anomalous`` (双向
-              seq > 1MB) 过滤, 不会被乱序 mid-stream 段误触发.
-        **绝不可用于跨 addr 的服务器切换判定**, 否则任何带 c3SB 的非游戏
-        TCP 流都会把 ``_server_addr`` 偷换走 → BossHP 反复刷新最后失踪.
-        """
+        # 松散识别: payload 中包含 4 字节字面量 ``c3SB``.
+        #
+        # 4 字节字面量在大流量下随机命中概率不可忽略 (ZSTD 字典 / 玩家名 /
+        # buff icon ID 都可能含). 仅用于:
+        # (1) 初始识别 (``_server_addr is None``) — 此时没有锚点, 必须接受
+        # 松散信号才能完成首次绑定;
+        # (2) 同服重连判定 — 已经被 v2.3.4 的 ``_seq_anomalous`` (双向
+        # seq > 1MB) 过滤, 不会被乱序 mid-stream 段误触发.
+        # **绝不可用于跨 addr 的服务器切换判定**, 否则任何带 c3SB 的非游戏
+        # TCP 流都会把 ``_server_addr`` 偷换走 → BossHP 反复刷新最后失踪.
         return C3SB_SHORT in data
 
     def _scan_c3sb(self, data: bytes) -> bool:
-        """在嵌套帧数据中扫描 c3SB 签名"""
+        # 在嵌套帧数据中扫描 c3SB 签名
         return bool(_CY_PACKET.scan_c3sb_nested(data))
 
     # ─── TCP 重组 (参考 C# SRDPS TcpStreamProcessor) ───
@@ -894,11 +883,10 @@ class TcpReassembler:
         self._extract_frames()
 
     def _extract_frames(self):
-        """从 _buf 中切出完整 [4B-size] 帧
-
-        v2.3.9: 使用 offset 指针一次性前进, 一批抽取完所有可用帧, 最后才切片,
-        避免 busy map 下每帧一次 self._buf[pkt_size:] 的 O(n) 复制.
-        """
+        # 从 _buf 中切出完整 [4B-size] 帧
+        #
+        # v2.3.9: 使用 offset 指针一次性前进, 一批抽取完所有可用帧, 最后才切片,
+        # 避免 busy map 下每帧一次 self._buf[pkt_size:] 的 O(n) 复制.
         while True:
             frames: list = []
             metadata: Dict[str, Any] = {}
@@ -963,10 +951,8 @@ class TcpReassembler:
 # ═══════════════════════════════════════════════
 
 class PacketCapture:
-    """
-    Npcap 抓包主类。
-    start() 后在后台线程持续抓包，每收到一个完整游戏帧就调用 on_game_packet 回调。
-    """
+    # Npcap 抓包主类。
+    # start() 后在后台线程持续抓包，每收到一个完整游戏帧就调用 on_game_packet 回调。
 
     def __init__(self, on_game_packet: Callable[[bytes], None],
                  device: Optional[Dict[str, str]] = None,
@@ -1047,11 +1033,10 @@ class PacketCapture:
         self._reassembler = self._reassemblers[0]  # 兼容旧引用
 
     def _enqueue(self, item: "tuple[str, Any]") -> None:
-        """Put a ('f', frame) or ('c', None) item on the consumer queue.
-
-        On overload, drop the OLDEST frame ('f') to bound latency; server-change
-        sentinels ('c') are never dropped.
-        """
+        # Put a ('f', frame) or ('c', None) item on the consumer queue.
+        #
+        # On overload, drop the OLDEST frame ('f') to bound latency; server-change
+        # sentinels ('c') are never dropped.
         q = self._frame_q
         try:
             q.put_nowait(item)
@@ -1081,12 +1066,11 @@ class PacketCapture:
                 self._frame_drops += 1
 
     def _is_duplicate_frame(self, frame: bytes, now: float) -> bool:
-        """True if this exact game frame was just delivered by another NIC.
-
-        Runs only on the single consumer thread, so no lock is needed. Only
-        small (damage/skill-sized) frames are tracked; large state-sync frames
-        are idempotent and skipped to avoid hashing megabytes per frame.
-        """
+        # True if this exact game frame was just delivered by another NIC.
+        #
+        # Runs only on the single consumer thread, so no lock is needed. Only
+        # small (damage/skill-sized) frames are tracked; large state-sync frames
+        # are idempotent and skipped to avoid hashing megabytes per frame.
         if not self._dedup_enabled:
             return False
         n = len(frame)
@@ -1110,7 +1094,7 @@ class PacketCapture:
         return False
 
     def _consume_loop(self):
-        """Single consumer: drain the frame queue and run parse + callbacks."""
+        # Single consumer: drain the frame queue and run parse + callbacks.
         q = self._frame_q
         while self._running or not q.empty():
             try:

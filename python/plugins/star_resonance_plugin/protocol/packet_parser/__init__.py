@@ -1,21 +1,20 @@
 # -*- coding: utf-8 -*-
-"""packet_parser package.
-
-Physical split of the former single-file ``packet_parser.py`` (5099 lines).
-The public surface is 100% backward compatible: ``from packet_parser import
-PacketParser, PlayerData, MonsterData`` and ``import packet_parser`` followed
-by attribute access (``packet_parser.PacketParser`` etc.) keep working exactly
-as before.
-
-Submodules (import them in topological order — enums/skills have no internal
-deps, helpers depends on enums, data depends on helpers, parser depends on
-all of them):
-  - enums.py    : MessageType / NotifyMethod / AttrType / ... enum classes
-  - skills.py   : PROFESSION_* / SUB_PROFESSION_* mapping tables
-  - helpers.py  : Cython bindings, lazy loaders, decode / level helpers
-  - data.py     : MonsterData / PlayerData state dataclasses
-  - parser.py   : PacketParser main class
-"""
+# packet_parser package.
+#
+# Physical split of the former single-file ``packet_parser.py`` (5099 lines).
+# The public surface is 100% backward compatible: ``from packet_parser import
+# PacketParser, PlayerData, MonsterData`` and ``import packet_parser`` followed
+# by attribute access (``packet_parser.PacketParser`` etc.) keep working exactly
+# as before.
+#
+# Submodules (import them in topological order — enums/skills have no internal
+# deps, helpers depends on enums, data depends on helpers, parser depends on
+# all of them):
+# - enums.py    : MessageType / NotifyMethod / AttrType / ... enum classes
+# - skills.py   : PROFESSION_* / SUB_PROFESSION_* mapping tables
+# - helpers.py  : Cython bindings, lazy loaders, decode / level helpers
+# - data.py     : MonsterData / PlayerData state dataclasses
+# - parser.py   : PacketParser main class
 
 # ── enums / constants ──────────────────────────────────────────────────────
 from plugins.star_resonance_plugin.protocol.packet_parser.enums import (

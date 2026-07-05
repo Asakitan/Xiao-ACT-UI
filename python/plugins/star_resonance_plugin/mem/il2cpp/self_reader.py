@@ -1,14 +1,13 @@
-"""self_reader — 端到端读 self 玩家数据 (HP/MaxHP/UID).
-
-工作流程:
-  1. script.json → CharSerialize klass = *(GA + RVA(CharSerialize_TypeInfo))
-  2. 全堆扫: 找首 8 字节 == klass 的对象 (CharSerialize 实例)
-  3. 对每个实例验证 Attr@+0x88 指向有效 UserFightAttr (其 obj+0 == UserFightAttr klass)
-  4. 读 CharId@+0x10 (UID), Attr→CurHp@+0x10, Attr→MaxHp@+0x18
-  5. 校验 CharId == 已知 UID
-
-CharSerialize 实例可能在 >256MB 的大私有区里, 必须扫所有可读私有区.
-"""
+# self_reader — 端到端读 self 玩家数据 (HP/MaxHP/UID).
+#
+# 工作流程:
+# 1. script.json → CharSerialize klass = *(GA + RVA(CharSerialize_TypeInfo))
+# 2. 全堆扫: 找首 8 字节 == klass 的对象 (CharSerialize 实例)
+# 3. 对每个实例验证 Attr@+0x88 指向有效 UserFightAttr (其 obj+0 == UserFightAttr klass)
+# 4. 读 CharId@+0x10 (UID), Attr→CurHp@+0x10, Attr→MaxHp@+0x18
+# 5. 校验 CharId == 已知 UID
+#
+# CharSerialize 实例可能在 >256MB 的大私有区里, 必须扫所有可读私有区.
 from __future__ import annotations
 
 import argparse
@@ -34,10 +33,9 @@ USERFIGHTATTR_MAXHP_OFF = 0x18
 
 def scan_objs_with_klass(pm, klass_ptr: int, max_region: Optional[int] = None,
                          max_hits: int = 1024) -> List[int]:
-    """全私有读区扫描 *(addr) == klass_ptr.
-
-    内层走 cy_memscan.find_aligned_u64 (AVX2: ~16 GB/s).
-    """
+    # 全私有读区扫描 *(addr) == klass_ptr.
+    #
+    # 内层走 cy_memscan.find_aligned_u64 (AVX2: ~16 GB/s).
     hits: List[int] = []
     klass = klass_ptr & 0xFFFFFFFFFFFFFFFF
     for r in pm.iter_regions(only_readable=True, only_private=True):

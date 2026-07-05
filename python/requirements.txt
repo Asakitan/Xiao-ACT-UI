@@ -12,7 +12,7 @@ pythonnet>=3.0                  # .NET WinForms 透明 (clr, System.Drawing)
 # ═══ 特效 / GPU 渲染 (v2.3.0 GUI 渲染链路重置) ═══
 moderngl>=5.12                  # LinkStart 3D 粒子隧道 + 插件渲染 shader (OpenGL)
 moderngl-window>=2.5            # 透明 borderless overlay 窗口 (替代 Tk Toplevel + ULW 路径)
-glfw>=2.7                       # moderngl-window GLFW backend (Win32 borderless transparent overlay)
+# glfw removed — all overlays route through the unified DWM compositor
 skia-python>=144                # GPU 2D 矢量 / 文字 atlas 烘焙 (BSD-3, Skia m144)
 Cython>=3.0                     # build-time: mandatory _sao_cy*.pyd accelerators
 setuptools                      # build-time: build_cython_ext.py build_ext (阶段8 打包审计发现漏列)

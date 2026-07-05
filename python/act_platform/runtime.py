@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""Helpers for wiring ACT platform services into both UI runtimes."""
+# Helpers for wiring ACT platform services into both UI runtimes.
 
 from __future__ import annotations
 
@@ -33,8 +33,8 @@ ACT_AGGREGATE_DIMENSIONS = [
 
 def _aggregate_dimension(summary: Mapping[str, Any], rows: list[dict[str, Any]],
                          group_by: str, group_field: str, top_n: int) -> list[dict[str, Any]]:
-    """Active workbench dimension. Reuses the summary's already-computed
-    skill/monster folds; computes actor/topic/custom-field fresh."""
+    # Active workbench dimension. Reuses the summary's already-computed
+    # skill/monster folds; computes actor/topic/custom-field fresh.
     group_by = str(group_by or "skill").strip().lower()
     if group_by == "monster":
         return list(summary.get("monster_damage") or [])
@@ -73,15 +73,14 @@ def default_plugin_dirs(base_dir: str) -> list[str]:
 
 
 def _discover_workspace_root_plugins_dir(base_dir: str) -> str | None:
-    """Best-effort upward scan for a workspace-root ``plugins`` directory.
-
-    Keeps the existing ``python/plugins`` + ``python/user_plugins`` roots, then
-    adds one extra root-level ``plugins`` directory when the current base dir
-    lives inside a larger workspace checkout (e.g. ``E:/VC/SAO-UI/plugins``).
-    Missing intermediate parents are ignored; a missing workspace-root plugins
-    dir is still returned when the parent clearly looks like the workspace root
-    so future drop-in script plugins are discovered without changing code.
-    """
+    # Best-effort upward scan for a workspace-root ``plugins`` directory.
+    #
+    # Keeps the existing ``python/plugins`` + ``python/user_plugins`` roots, then
+    # adds one extra root-level ``plugins`` directory when the current base dir
+    # lives inside a larger workspace checkout (e.g. ``E:/VC/SAO-UI/plugins``).
+    # Missing intermediate parents are ignored; a missing workspace-root plugins
+    # dir is still returned when the parent clearly looks like the workspace root
+    # so future drop-in script plugins are discovered without changing code.
     current_plugin_dir = os.path.abspath(os.path.join(base_dir, "plugins"))
     current_user_dir = os.path.abspath(os.path.join(base_dir, "user_plugins"))
     workspace_candidate: str | None = None
@@ -116,16 +115,15 @@ def _looks_like_workspace_root(path: str) -> bool:
 
 
 def project_base_dir() -> str:
-    """插件根目录解析 (打包友好 / onedir-aware)。
-
-    冻结 onedir 下本模块在 ``<exe>/runtime/act_platform/runtime.pyc``, 但 plugins/ 与
-    web/assets/proto 一样由 build_release.bat 提升到 exe 顶层 (= ``config.BASE_DIR``)。
-    把根目录解析到 BASE_DIR 而非 ``__file__`` 有两个好处:
-      1. 用户把自带插件放顶层 ``plugins/`` 或 ``user_plugins/`` 不会被更新覆盖
-         (runtime/ 树每次更新都会被整体重写);
-      2. 与 config.resource_path / 名字表读取器的 BASE_DIR-first 约定一致。
-    非冻结(dev 树)回退到 ``__file__`` 相对 = ``sao_auto`` 项目根。
-    """
+    # 插件根目录解析 (打包友好 / onedir-aware)。
+    #
+    # 冻结 onedir 下本模块在 ``<exe>/runtime/act_platform/runtime.pyc``, 但 plugins/ 与
+    # web/assets/proto 一样由 build_release.bat 提升到 exe 顶层 (= ``config.BASE_DIR``)。
+    # 把根目录解析到 BASE_DIR 而非 ``__file__`` 有两个好处:
+    # 1. 用户把自带插件放顶层 ``plugins/`` 或 ``user_plugins/`` 不会被更新覆盖
+    # (runtime/ 树每次更新都会被整体重写);
+    # 2. 与 config.resource_path / 名字表读取器的 BASE_DIR-first 约定一致。
+    # 非冻结(dev 树)回退到 ``__file__`` 相对 = ``sao_auto`` 项目根。
     if getattr(sys, "frozen", False):
         try:
             from config import BASE_DIR  # = dirname(sys.executable), exe 顶层
@@ -201,14 +199,13 @@ def _settings_set(owner: Any, key: str, value: Any) -> None:
 
 
 def _dispatch_trigger_action(owner: Any, name: str, *args: Any, **kwargs: Any) -> Any:
-    """Forward a game-specific trigger action to the plugin's runtime bridge.
-
-    The platform deliberately owns no trigger engine logic — every
-    ``act_trigger_*`` function dispatches to the
-    plugin-contributed handler registered via ``register_extension_runtime``.
-    If no game plugin is loaded, returns a generic "unavailable" payload so
-    upstream UIs degrade gracefully.
-    """
+    # Forward a game-specific trigger action to the plugin's runtime bridge.
+    #
+    # The platform deliberately owns no trigger engine logic — every
+    # ``act_trigger_*`` function dispatches to the
+    # plugin-contributed handler registered via ``register_extension_runtime``.
+    # If no game plugin is loaded, returns a generic "unavailable" payload so
+    # upstream UIs degrade gracefully.
     handler = _extension_runtime_handler(name)
     if callable(handler):
         try:
@@ -252,25 +249,23 @@ _EXTENSION_RUNTIME_PROVIDER: Callable[[str], Callable[..., Any] | None] | None =
 
 
 def register_extension_runtime(provider: Callable[[str], Callable[..., Any] | None]) -> None:
-    """Inject an extension-runtime dispatch provider contributed by a plugin.
-
-    Plugins call this from ``on_load`` to expose
-    their trigger-engine / DPS-history / name-resolver handlers to the platform.
-
-    The platform never imports plugin code; it only invokes the provider to
-    look up a named handler and then calls it with ``(owner, ...)``.
-    """
+    # Inject an extension-runtime dispatch provider contributed by a plugin.
+    #
+    # Plugins call this from ``on_load`` to expose
+    # their trigger-engine / DPS-history / name-resolver handlers to the platform.
+    #
+    # The platform never imports plugin code; it only invokes the provider to
+    # look up a named handler and then calls it with ``(owner, ...)``.
     global _EXTENSION_RUNTIME_PROVIDER
     if callable(provider):
         _EXTENSION_RUNTIME_PROVIDER = provider
 
 
 def register_webview_extension(owner: Any, extension: Any) -> Any:
-    """Attach a plugin-contributed WebView extension to the current host owner.
-
-    The platform stores the extension behind a generic owner attribute and
-    dispatches by method name without importing plugin modules.
-    """
+    # Attach a plugin-contributed WebView extension to the current host owner.
+    #
+    # The platform stores the extension behind a generic owner attribute and
+    # dispatches by method name without importing plugin modules.
     if owner is not None:
         try:
             setattr(owner, "_webview_extension", extension)
@@ -280,7 +275,7 @@ def register_webview_extension(owner: Any, extension: Any) -> Any:
 
 
 def _extension_runtime_handler(name: str) -> Callable[..., Any] | None:
-    """Return the plugin-contributed handler for ``name`` or ``None``."""
+    # Return the plugin-contributed handler for ``name`` or ``None``.
     provider = _EXTENSION_RUNTIME_PROVIDER
     if not callable(provider):
         return None
@@ -293,7 +288,7 @@ def _extension_runtime_handler(name: str) -> Callable[..., Any] | None:
 
 def _extension_runtime_value(owner: Any, name: str, default: Any = None,
                              *args: Any, **kwargs: Any) -> Any:
-    """Call a plugin-contributed value provider without importing plugin code."""
+    # Call a plugin-contributed value provider without importing plugin code.
     handler = _extension_runtime_handler(name)
     if not callable(handler):
         return default
@@ -341,7 +336,7 @@ def build_plugin_manager(
 
 
 def _user_plugins_dir() -> str:
-    """The update-safe, writable dir where one-click-imported plugins live."""
+    # The update-safe, writable dir where one-click-imported plugins live.
     return os.path.join(project_base_dir(), "user_plugins")
 
 
@@ -447,7 +442,7 @@ def _read_selective_policy(owner: Any) -> dict[str, Any]:
 
 
 def should_record_owner_combat_event(owner: Any, event: Mapping[str, Any]) -> dict[str, Any]:
-    """Return a selective-parsing decision for a live/replay combat event."""
+    # Return a selective-parsing decision for a live/replay combat event.
     policy = _read_selective_policy(owner)
     if not policy.get("enabled"):
         result = {"record": True, "reason": "record_all_default", "policy": policy}
@@ -556,13 +551,12 @@ def act_plugin_reload(owner: Any, plugin_id: str = "") -> dict[str, Any]:
 
 
 def act_plugin_import(owner: Any, archive_path: str, *, enable: bool = True) -> dict[str, Any]:
-    """一键导入：把一个 ``.zip`` 插件包装进 ``user_plugins/`` 并（默认）启用即用。
-
-    纯 Python 插件无需编译——加载器在 dev 与 onedir 冻结态都直接运行时 import 原始
-    ``.py``。带原生扩展(.pyd)或第三方依赖的插件需由**作者**预编译 / vendor 进包。
-    流程：安装(防穿越解压→user_plugins/<id>) → 依赖引导 → 单插件 refresh(不动其他
-    有状态插件) → 启用加载 → 回状态。
-    """
+    # 一键导入：把一个 ``.zip`` 插件包装进 ``user_plugins/`` 并（默认）启用即用。
+    #
+    # 纯 Python 插件无需编译——加载器在 dev 与 onedir 冻结态都直接运行时 import 原始
+    # ``.py``。带原生扩展(.pyd)或第三方依赖的插件需由**作者**预编译 / vendor 进包。
+    # 流程：安装(防穿越解压→user_plugins/<id>) → 依赖引导 → 单插件 refresh(不动其他
+    # 有状态插件) → 启用加载 → 回状态。
     archive_path = str(archive_path or "").strip()
     if not archive_path:
         return {"ok": False, "message": "未提供插件包路径", "errors": ["no path"]}
@@ -631,7 +625,7 @@ def act_plugin_import(owner: Any, archive_path: str, *, enable: bool = True) -> 
 
 
 def act_plugin_import_dialog(owner: Any) -> dict[str, Any]:
-    """弹原生文件选择器选 ``.zip`` 插件包并导入(Entity / WebView 两端均可)。"""
+    # 弹原生文件选择器选 ``.zip`` 插件包并导入(Entity / WebView 两端均可)。
     try:
         path = native_dialog.open_plugin_archive(initial_dir=_user_plugins_dir())
     except Exception as exc:
@@ -651,7 +645,7 @@ def act_open_workshop(owner: Any) -> dict[str, Any]:
 
 
 def act_plugin_uninstall(owner: Any, plugin_id: str) -> dict[str, Any]:
-    """卸载一个**用户安装**的插件(卸载并删除其 user_plugins 目录)。内置插件不可删。"""
+    # 卸载一个**用户安装**的插件(卸载并删除其 user_plugins 目录)。内置插件不可删。
     plugin_id = str(plugin_id or "").strip()
     if not plugin_id:
         return {"ok": False, "message": "未提供插件 id", "errors": ["no id"]}
@@ -789,12 +783,11 @@ def _script_menu_summary(manager: PluginManager,
 
 
 def act_plugin_menu(owner: Any) -> dict[str, Any]:
-    """Data for the dedicated plugin menu (Entity + WebView).
-
-    Plugins are returned pinned-first; each item carries enable/active state,
-    whether it ``declares_panel`` (manifest), its registered panel ids and its
-    hotkey count so the host can build a rich, toggle-able plugin board.
-    """
+    # Data for the dedicated plugin menu (Entity + WebView).
+    #
+    # Plugins are returned pinned-first; each item carries enable/active state,
+    # whether it ``declares_panel`` (manifest), its registered panel ids and its
+    # hotkey count so the host can build a rich, toggle-able plugin board.
     try:
         manager = ensure_act_plugin_manager(owner, load=False)
         _sync_plugin_discovery(manager)
@@ -853,7 +846,7 @@ def act_plugin_menu(owner: Any) -> dict[str, Any]:
 
 
 def act_plugin_script_menus(owner: Any) -> dict[str, Any]:
-    """Return script-plugin SAO popup descriptors for enabled plugins."""
+    # Return script-plugin SAO popup descriptors for enabled plugins.
     try:
         manager = ensure_act_plugin_manager(owner, load=False)
         _sync_plugin_discovery(manager)
@@ -863,7 +856,7 @@ def act_plugin_script_menus(owner: Any) -> dict[str, Any]:
 
 
 def act_plugin_menu_surfaces(owner: Any, surface_id: str = "") -> dict[str, Any]:
-    """Return active plugin-owned descriptors for a generic menu surface."""
+    # Return active plugin-owned descriptors for a generic menu surface.
     try:
         manager = ensure_act_plugin_manager(owner, load=False)
         _sync_plugin_discovery(manager)
@@ -874,7 +867,7 @@ def act_plugin_menu_surfaces(owner: Any, surface_id: str = "") -> dict[str, Any]
 
 def act_plugin_action(owner: Any, action_id: str, payload: Any = None,
                       plugin_id: str = "") -> dict[str, Any]:
-    """Dispatch an opaque plugin action without platform-side action knowledge."""
+    # Dispatch an opaque plugin action without platform-side action knowledge.
     try:
         manager = ensure_act_plugin_manager(owner, load=False)
         _sync_plugin_discovery(manager)
@@ -885,7 +878,7 @@ def act_plugin_action(owner: Any, action_id: str, payload: Any = None,
 
 
 def act_plugin_pin(owner: Any, plugin_id: str, pinned: bool = True) -> dict[str, Any]:
-    """Pin/unpin a plugin so it is promoted to the top of the plugin menu."""
+    # Pin/unpin a plugin so it is promoted to the top of the plugin menu.
     try:
         manager = ensure_act_plugin_manager(owner)
         return {"ok": True, "pinned": manager.set_pinned(str(plugin_id or ""), bool(pinned))}
@@ -894,11 +887,10 @@ def act_plugin_pin(owner: Any, plugin_id: str, pinned: bool = True) -> dict[str,
 
 
 def act_plugin_hotkeys(owner: Any) -> dict[str, Any]:
-    """List plugin-registered hotkeys (for the keybinding editor + menu).
-
-    ``occupied`` 给改键 UI 置灰用: {键: 归属} 含内置动作现值与 active
-    插件键现值 (调用方需把动作自身的现值豁免)。
-    """
+    # List plugin-registered hotkeys (for the keybinding editor + menu).
+    #
+    # ``occupied`` 给改键 UI 置灰用: {键: 归属} 含内置动作现值与 active
+    # 插件键现值 (调用方需把动作自身的现值豁免)。
     try:
         manager = ensure_act_plugin_manager(owner, load=False)
         _sync_plugin_discovery(manager)
@@ -909,7 +901,7 @@ def act_plugin_hotkeys(owner: Any) -> dict[str, Any]:
 
 
 def act_plugin_hotkey_dispatch(owner: Any, action: str) -> dict[str, Any]:
-    """Fire a plugin hotkey action by id (host hotkey-manager entry point)."""
+    # Fire a plugin hotkey action by id (host hotkey-manager entry point).
     try:
         manager = ensure_act_plugin_manager(owner)
         return {"ok": bool(manager.dispatch_hotkey(str(action or "")))}
@@ -918,7 +910,7 @@ def act_plugin_hotkey_dispatch(owner: Any, action: str) -> dict[str, Any]:
 
 
 def act_plugin_set_hotkey(owner: Any, action: str, key: str = "") -> dict[str, Any]:
-    """Rebind a plugin hotkey (shared settings['hotkeys']; '' clears to default)."""
+    # Rebind a plugin hotkey (shared settings['hotkeys']; '' clears to default).
     try:
         manager = ensure_act_plugin_manager(owner)
         ok = manager.set_hotkey(str(action or ""), str(key or ""))
@@ -942,7 +934,7 @@ def _coerce_payload(payload: Any) -> dict[str, Any]:
 
 
 def act_plugin_ui_panels(owner: Any) -> dict[str, Any]:
-    """List redrawable plugin UI panels registered by active plugins."""
+    # List redrawable plugin UI panels registered by active plugins.
     try:
         manager = ensure_act_plugin_manager(owner, load=False)
         _sync_plugin_discovery(manager)
@@ -952,7 +944,7 @@ def act_plugin_ui_panels(owner: Any) -> dict[str, Any]:
 
 
 def act_plugin_ui_render(owner: Any, panel_id: str, payload: Any = None) -> dict[str, Any]:
-    """Render a single plugin UI panel to a normalized spec for the host."""
+    # Render a single plugin UI panel to a normalized spec for the host.
     try:
         manager = ensure_act_plugin_manager(owner, load=False)
         _sync_plugin_discovery(manager)
@@ -963,7 +955,7 @@ def act_plugin_ui_render(owner: Any, panel_id: str, payload: Any = None) -> dict
 
 
 def act_plugin_ui_action(owner: Any, panel_id: str, action_id: str, payload: Any = None) -> dict[str, Any]:
-    """Dispatch a button action from a rendered plugin UI panel."""
+    # Dispatch a button action from a rendered plugin UI panel.
     try:
         manager = ensure_act_plugin_manager(owner, load=False)
         _sync_plugin_discovery(manager)
@@ -975,7 +967,7 @@ def act_plugin_ui_action(owner: Any, panel_id: str, action_id: str, payload: Any
 # ── Render hooks + overlays (intercept any UI surface, both renderers) ─────────
 
 def render_surfaces(owner: Any) -> dict[str, Any]:
-    """Report which surfaces have plugin hooks/overlays attached."""
+    # Report which surfaces have plugin hooks/overlays attached.
     try:
         manager = ensure_act_plugin_manager(owner, load=False)
         _sync_plugin_discovery(manager)
@@ -985,12 +977,11 @@ def render_surfaces(owner: Any) -> dict[str, Any]:
 
 
 def render_apply_hooks(owner: Any, surface: str, payload: Any = None) -> dict[str, Any]:
-    """Run the plugin render-hook chain for ``surface`` over ``payload``.
-
-    Hosts call this just before rendering: the returned ``payload`` may have
-    been mutated or replaced by plugins, and ``override`` carries a full
-    take-over spec when a hook set ``payload[OVERRIDE_KEY]``.
-    """
+    # Run the plugin render-hook chain for ``surface`` over ``payload``.
+    #
+    # Hosts call this just before rendering: the returned ``payload`` may have
+    # been mutated or replaced by plugins, and ``override`` carries a full
+    # take-over spec when a hook set ``payload[OVERRIDE_KEY]``.
     from .render_hooks import OVERRIDE_KEY
     from .ui_spec import normalize_ui_spec
     try:
@@ -1012,7 +1003,7 @@ def render_apply_hooks(owner: Any, surface: str, payload: Any = None) -> dict[st
 
 
 def render_overlays(owner: Any, surface: str) -> dict[str, Any]:
-    """Return plugin overlay specs for ``surface`` (drawn over native content)."""
+    # Return plugin overlay specs for ``surface`` (drawn over native content).
     try:
         manager = ensure_act_plugin_manager(owner)
         _sync_plugin_discovery(manager)
@@ -1023,7 +1014,7 @@ def render_overlays(owner: Any, surface: str) -> dict[str, Any]:
 
 
 def render_surface(owner: Any, surface: str, payload: Any = None) -> dict[str, Any]:
-    """One-shot helper: apply hooks *and* collect overlays for ``surface``."""
+    # One-shot helper: apply hooks *and* collect overlays for ``surface``.
     hooked = render_apply_hooks(owner, surface, payload)
     overlays = render_overlays(owner, surface)
     return {
@@ -1126,7 +1117,7 @@ def _show_plugin_report(owner: Any, report: Mapping[str, Any]) -> bool:
 
 
 def act_history_status(owner: Any, *, limit: int = 20, query: str = "") -> dict[str, Any]:
-    """Return ACT history browser payload shared by WebView and Entity/Tk."""
+    # Return ACT history browser payload shared by WebView and Entity/Tk.
     store, errors = _owner_history_store(owner)
     encounters: list[Any] = []
     if store is not None:
@@ -1165,7 +1156,7 @@ def act_history_status(owner: Any, *, limit: int = 20, query: str = "") -> dict[
 
 
 def act_history_load(owner: Any, *, index: int = 0, show: bool = True) -> dict[str, Any]:
-    """Load one finalized encounter report from history and optionally show it."""
+    # Load one finalized encounter report from history and optionally show it.
     store, errors = _owner_history_store(owner)
     if store is None:
         return {
@@ -1201,7 +1192,7 @@ def act_history_load(owner: Any, *, index: int = 0, show: bool = True) -> dict[s
 
 
 def act_history_delete(owner: Any, *, index: int | None = None, clear: bool = False) -> dict[str, Any]:
-    """Delete a finalized encounter from history, or clear history when explicit."""
+    # Delete a finalized encounter from history, or clear history when explicit.
     store, errors = _owner_history_store(owner)
     if store is None:
         return {"ok": False, "message": "; ".join(errors), "deleted": None, "errors": errors}
@@ -1470,12 +1461,11 @@ def _persist_offline_import_report(store: Any, report: Mapping[str, Any]) -> tup
 def _import_exported_report_file(owner: Any, path: str, *, persist: bool,
                                  show: bool, history_limit: int,
                                  initial_errors: Iterable[Any] = ()) -> dict[str, Any] | None:
-    """Dispatch shipped-report import to the active game plugin's runtime bridge.
-
-    The platform deliberately owns no game-specific report loader. The plugin
-    that owns ``DpsHistoryStore.load_exported_report_file`` registers its importer
-    here via ``register_extension_runtime('_import_exported_report_file', ...)``.
-    """
+    # Dispatch shipped-report import to the active game plugin's runtime bridge.
+    #
+    # The platform deliberately owns no game-specific report loader. The plugin
+    # that owns ``DpsHistoryStore.load_exported_report_file`` registers its importer
+    # here via ``register_extension_runtime('_import_exported_report_file', ...)``.
     handler = _extension_runtime_handler("_import_exported_report_file")
     if not callable(handler):
         return None
@@ -1591,7 +1581,7 @@ def _set_offline_import_state(owner: Any, *, selected_file: str | None = None,
 
 
 def act_offline_import_status(owner: Any, *, history_limit: int = 20) -> dict[str, Any]:
-    """Return standalone offline-import wizard state shared by WebView and Entity/Tk."""
+    # Return standalone offline-import wizard state shared by WebView and Entity/Tk.
     state = _offline_import_state(owner)
     last_result = state.get("last_result") if isinstance(state.get("last_result"), Mapping) else {}
     errors = list(last_result.get("errors") or []) if isinstance(last_result, Mapping) else []
@@ -1615,7 +1605,7 @@ def act_offline_import_status(owner: Any, *, history_limit: int = 20) -> dict[st
 
 def act_offline_import_file(owner: Any, path: str, *, persist: bool = True,
                             show: bool = False, history_limit: int = 20) -> dict[str, Any]:
-    """Replay a normalized ACT import file and optionally persist it to history."""
+    # Replay a normalized ACT import file and optionally persist it to history.
 
     _set_offline_import_state(owner, selected_file=str(path or ""), progress=0.0, status="importing")
 
@@ -1915,7 +1905,7 @@ def _timeline_replay_status(owner: Any, *, state: Mapping[str, Any], limit: int,
 
 
 def act_timeline_status(owner: Any, *, limit: int = 80, query: str = "") -> dict[str, Any]:
-    """Return compact ACT timeline/VCR state shared by WebView and Entity/Tk."""
+    # Return compact ACT timeline/VCR state shared by WebView and Entity/Tk.
     state = _timeline_state(owner)
     errors: list[str] = []
     encounter_id = _timeline_encounter_id(owner, state)
@@ -2165,8 +2155,8 @@ def _is_system_event(row: Mapping[str, Any]) -> bool:
 
 
 def _combat_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """Authoritative combat events only (drops plugin/ui echoes) — for the
-    aggregate workbench and the damage graph."""
+    # Authoritative combat events only (drops plugin/ui echoes) — for the
+    # aggregate workbench and the damage graph.
     return [row for row in rows if not _is_system_event(row)]
 
 
@@ -2221,11 +2211,10 @@ def _payload_first_int(payload: Mapping[str, Any], keys: Iterable[str]) -> int:
 
 
 def _friendly_unknown(kind_label: str, uid: Any) -> str:
-    """Stable fallback for unresolved entities.
-
-    Action Log groups must keep the full UID visible so users can copy/search
-    the exact entity and so generated labels never masquerade as resolved names.
-    """
+    # Stable fallback for unresolved entities.
+    #
+    # Action Log groups must keep the full UID visible so users can copy/search
+    # the exact entity and so generated labels never masquerade as resolved names.
     text = str(uid or "").strip()
     if not text:
         return kind_label
@@ -2265,12 +2254,11 @@ def _payload_first_name_text(payload: Mapping[str, Any], keys: Iterable[str]) ->
 
 
 def _resolve_name(kind: str, value: Any) -> str:
-    """Resolve a game entity name (skill/monster/dungeon) through the plugin.
-
-    Returns "" when no game plugin is loaded (callers fall back to bare ids).
-    The plugin runtime provider's name resolver is the registered
-    handler; the plugin owns its own tablekit/tables.
-    """
+    # Resolve a game entity name (skill/monster/dungeon) through the plugin.
+    #
+    # Returns "" when no game plugin is loaded (callers fall back to bare ids).
+    # The plugin runtime provider's name resolver is the registered
+    # handler; the plugin owns its own tablekit/tables.
     if value is None or not str(value or "").strip():
         return ""
     handler = _extension_runtime_handler("resolve_name")
@@ -2283,13 +2271,12 @@ def _resolve_name(kind: str, value: Any) -> str:
 
 
 def _resolve_skill_name_from_detail(skill: Mapping[str, Any]) -> str:
-    """Best-effort skill name for a DPS-tracker skill detail row.
-
-    Tries every id form the tracker carries (base/semantic/level/raw) through
-    the shared name resolver, retrying with //100 so composite/level ids resolve
-    against the base-keyed tables. Returns "" when nothing resolves so callers
-    keep their existing bare-id fallback.
-    """
+    # Best-effort skill name for a DPS-tracker skill detail row.
+    #
+    # Tries every id form the tracker carries (base/semantic/level/raw) through
+    # the shared name resolver, retrying with //100 so composite/level ids resolve
+    # against the base-keyed tables. Returns "" when nothing resolves so callers
+    # keep their existing bare-id fallback.
     name = _truthy_text(skill.get("skill_name")) or _truthy_text(skill.get("name"))
     if name:
         return name
@@ -2395,12 +2382,11 @@ def _lookup_monster_identity(owner: Any, *, uuid: int = 0, template_id: int = 0)
 
 def enrich_action_log_event(event: Mapping[str, Any] | None, *, owner: Any = None,
                             topic: str = "") -> dict[str, Any]:
-    """Add best-effort display names/ids for ACT action-log consumers.
-
-    The helper is intentionally additive: existing parser payload fields are
-    preserved, and UI/runtime code can still fall back to raw IDs when a name
-    is not available yet.
-    """
+    # Add best-effort display names/ids for ACT action-log consumers.
+    #
+    # The helper is intentionally additive: existing parser payload fields are
+    # preserved, and UI/runtime code can still fall back to raw IDs when a name
+    # is not available yet.
     payload = dict(event or {})
     topic_text = str(topic or payload.get("topic") or "").strip().lower()
     if topic_text in {"monster", "boss", "boss_state"}:
@@ -2724,7 +2710,7 @@ def act_action_log_status(owner: Any, *, limit: int = 80, query: str | None = No
                           topic: str | None = None, cursor_ms: int | None = None,
                           source: str | None = None, encounter_id: str | None = None,
                           offset: int | None = None) -> dict[str, Any]:
-    """Return searchable ACT action-log rows shared by WebView and Entity/Tk."""
+    # Return searchable ACT action-log rows shared by WebView and Entity/Tk.
     state = _action_log_state(owner)
     filters = dict(state.get("filters") or {})
     if query is not None:
@@ -2853,12 +2839,11 @@ def act_aggregate_status(owner: Any, *, limit: int = 1000, query: str | None = "
                          source: str | None = "live", window_ms: int = 1000,
                          top_n: int = 20, encounter_id: str | None = None,
                          group_by: str | None = "skill", group_field: str | None = "") -> dict[str, Any]:
-    """Return semantic ACT aggregate groups for the primary cockpit panel.
-
-    group_by selects the active workbench dimension (skill/monster/actor/topic/
-    field) so plugin debuggers can re-group the same events without re-querying;
-    group_field is the payload field name when group_by == 'field'.
-    """
+    # Return semantic ACT aggregate groups for the primary cockpit panel.
+    #
+    # group_by selects the active workbench dimension (skill/monster/actor/topic/
+    # field) so plugin debuggers can re-group the same events without re-querying;
+    # group_field is the payload field name when group_by == 'field'.
     errors: list[str] = []
     row_limit = max(1, min(int(limit or 1000), 5000))
     source_mode = _normalize_action_log_source(source)
@@ -3174,7 +3159,7 @@ def _death_recap_summary(rows: list[dict[str, Any]]) -> dict[str, Any]:
 
 def act_death_recap_status(owner: Any, *, limit: int = 80, window_s: float = 8.0,
                            entity_id: Any = None) -> dict[str, Any]:
-    """Return a compact death-recap window from recent ACT events."""
+    # Return a compact death-recap window from recent ACT events.
     row_limit = max(1, min(int(limit or 80), 500))
     window_ms = max(1000, int(float(window_s or 8.0) * 1000.0))
     requested_id = _coerce_int(entity_id, 0) if entity_id is not None else 0
@@ -3364,7 +3349,7 @@ def _build_graph_series(rows: list[dict[str, Any]], selected_metric: str) -> dic
 
 
 def act_graph_timeseries_status(owner: Any, *, metric: str | None = None, limit: int = 120, query: str | None = None, topic: str | None = None, time_range_ms: int | None = None) -> dict[str, Any]:
-    """Return compact ACT graph/timeseries data shared by WebView and Entity/Tk."""
+    # Return compact ACT graph/timeseries data shared by WebView and Entity/Tk.
     state = _graph_timeseries_state(owner)
     if metric is not None:
         state["metric"] = _normalize_graph_metric(metric)
@@ -3573,7 +3558,7 @@ def _combatant_skill_rows(detail: Mapping[str, Any], *, query: str = "") -> list
 
 
 def act_combatant_drilldown_status(owner: Any, *, combatant_id: str | int | None = None, query: str | None = None, focus_target: str | int | None = None) -> dict[str, Any]:
-    """Return one combatant drilldown payload shared by WebView and Entity/Tk."""
+    # Return one combatant drilldown payload shared by WebView and Entity/Tk.
     state = _combatant_drilldown_state(owner)
     if combatant_id is not None:
         state["combatant_id"] = str(combatant_id or "")
@@ -3783,7 +3768,7 @@ def _skill_timeline_refs(owner: Any, *, skill_id: str, query: str = "", limit: i
 
 
 def act_skill_drilldown_status(owner: Any, *, combatant_id: str | int | None = None, skill_id: str | int | None = None, query: str | None = None, limit: int = 80) -> dict[str, Any]:
-    """Return one skill drilldown payload shared by WebView and Entity/Tk."""
+    # Return one skill drilldown payload shared by WebView and Entity/Tk.
     state = _skill_drilldown_state(owner)
     if combatant_id is not None:
         state["combatant_id"] = str(combatant_id or "")
@@ -3946,7 +3931,7 @@ def _normalize_export_format(fmt: str | None) -> str:
 
 
 def act_report_status(owner: Any, *, limit: int = 20, fmt: str = "json") -> dict[str, Any]:
-    """Return export-ready report status and preview for both ACT UIs."""
+    # Return export-ready report status and preview for both ACT UIs.
     selected = _normalize_export_format(fmt)
     errors: list[str] = []
     store = _extension_runtime_value(owner, "owner_history_store", None)
@@ -3987,7 +3972,7 @@ def act_report_status(owner: Any, *, limit: int = 20, fmt: str = "json") -> dict
 
 
 def act_report_export(owner: Any, *, fmt: str = "json") -> dict[str, Any]:
-    """Save the latest ACT/DPS report using the existing DpsHistoryStore exporter."""
+    # Save the latest ACT/DPS report using the existing DpsHistoryStore exporter.
     selected = _normalize_export_format(fmt)
     store = _extension_runtime_value(owner, "owner_history_store", None)
     if store is None:
@@ -4008,7 +3993,7 @@ def act_report_export(owner: Any, *, fmt: str = "json") -> dict[str, Any]:
 
 
 def act_report_copy(owner: Any, *, fmt: str = "json") -> dict[str, Any]:
-    """Return a clipboard-friendly JSON report payload without writing a file."""
+    # Return a clipboard-friendly JSON report payload without writing a file.
     selected = _normalize_export_format(fmt)
     status = act_report_status(owner, fmt=selected)
     payload = {
@@ -4181,7 +4166,7 @@ def _owner_data_source(owner: Any) -> str:
 
 
 def act_data_source_health(owner: Any, *, now: float | None = None) -> dict[str, Any]:
-    """Return a parity-friendly data source health payload for both UIs."""
+    # Return a parity-friendly data source health payload for both UIs.
     now_ts = float(now if now is not None else time.time())
     engine = _extension_runtime_value(owner, "owner_packet_bridge", None)
     errors: list[str] = []
@@ -4258,7 +4243,7 @@ def act_data_source_health(owner: Any, *, now: float | None = None) -> dict[str,
 
 
 def act_data_source_diagnose(owner: Any, *, now: float | None = None) -> dict[str, Any]:
-    """Return health plus user-facing diagnostic hints."""
+    # Return health plus user-facing diagnostic hints.
     payload = act_data_source_health(owner, now=now)
     diagnostics: list[dict[str, str]] = []
     if not payload.get("available"):
@@ -4284,7 +4269,7 @@ def act_data_source_diagnose(owner: Any, *, now: float | None = None) -> dict[st
 # ── Memory-scan access (read-only facade for plugins + the Mem Scope panel) ────
 
 class _NullMemAccess:
-    """Fallback when game plugin hasn't registered mem_access."""
+    # Fallback when game plugin hasn't registered mem_access.
     def __getattr__(self, name):
         def _noop(**kw):
             return {"ok": False, "reason": "no_plugin", "hint": "游戏插件未加载"}
@@ -4376,7 +4361,7 @@ def act_mem_search_list(owner: Any, **_: Any) -> dict[str, Any]:
 
 def act_mem_scope_status(owner: Any, *, query: str = "", dtype: str = "i32",
                          job_id: str = "", **_: Any) -> dict[str, Any]:
-    """One-shot Mem Scope panel refresh: status + catalog + live data (+ search job)."""
+    # One-shot Mem Scope panel refresh: status + catalog + live data (+ search job).
     ma = _mem_access(owner)
     status = ma.status()
     out: dict[str, Any] = {

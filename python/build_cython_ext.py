@@ -1,21 +1,20 @@
 # -*- coding: utf-8 -*-
-"""Build local Cython accelerators in-place.
-
-Usage:
-    python build_cython_ext.py build_ext --inplace
-
-The generated .pyd files are ABI-specific and mandatory at runtime. The
-checked-in binaries target the current release environment; other Python
-versions should rebuild locally.
-
-Layout (5.0.0 platform/plugin split):
-        Platform accelerators live next to this script:
-      _sao_cy_uihelpers.pyx           — generic UI helpers
-      mem_probe/_sao_cy_memscan.pyx   — AVX2 memory scanner
-
-        Plugin accelerators are discovered dynamically from:
-            plugins/*/cython/_sao_cy*.pyx
-"""
+# Build local Cython accelerators in-place.
+#
+# Usage:
+# python build_cython_ext.py build_ext --inplace
+#
+# The generated .pyd files are ABI-specific and mandatory at runtime. The
+# checked-in binaries target the current release environment; other Python
+# versions should rebuild locally.
+#
+# Layout (5.0.0 platform/plugin split):
+# Platform accelerators live next to this script:
+# _sao_cy_uihelpers.pyx           — generic UI helpers
+# mem_probe/_sao_cy_memscan.pyx   — AVX2 memory scanner
+#
+# Plugin accelerators are discovered dynamically from:
+# plugins/*/cython/_sao_cy*.pyx
 from __future__ import annotations
 
 import os
@@ -56,7 +55,7 @@ def _plugin_cython_extensions() -> list[Extension]:
 
 
 def _relocate_plugin_pyds() -> None:
-    """Move plugin .pyd from source root back to their plugin cython/ dirs."""
+    # Move plugin .pyd from source root back to their plugin cython/ dirs.
     import sysconfig
     suffix = sysconfig.get_config_var('EXT_SUFFIX') or '.pyd'
     plugin_srcs = glob(os.path.join(HERE, 'plugins', '*', 'cython', '_sao_cy*.pyx'))

@@ -1,11 +1,10 @@
 # -*- coding: utf-8 -*-
-"""prerender_bossraid_panels - 离屏构造 BossRaid 简单/详细面板, 切到机制页,
-导入示例档案, 截图保存到 temp/prerender/。用来在不进游戏的前提下确认 notes
-全文渲染、卡片布局、编辑表单不报错。
-
-run: python -m tools.prerender_bossraid_panels
-out: temp/prerender/bossraid_simple_mech.png / bossraid_detail_mech.png
-"""
+# prerender_bossraid_panels - 离屏构造 BossRaid 简单/详细面板, 切到机制页,
+# 导入示例档案, 截图保存到 temp/prerender/。用来在不进游戏的前提下确认 notes
+# 全文渲染、卡片布局、编辑表单不报错。
+#
+# run: python -m tools.prerender_bossraid_panels
+# out: temp/prerender/bossraid_simple_mech.png / bossraid_detail_mech.png
 from __future__ import annotations
 
 import json
@@ -25,7 +24,7 @@ OUT_DIR = os.path.join(_ROOT, "temp", "prerender")
 
 
 class _Settings:
-    """In-memory settings double with the get/set/save the editors expect."""
+    # In-memory settings double with the get/set/save the editors expect.
 
     def __init__(self):
         self._d = {}
@@ -77,7 +76,7 @@ def _mech_api(settings):
 
 
 def _grab(win, path):
-    """Screenshot the toplevel by its on-screen bbox (PIL ImageGrab, all-screen)."""
+    # Screenshot the toplevel by its on-screen bbox (PIL ImageGrab, all-screen).
     try:
         from PIL import ImageGrab
     except Exception as e:
@@ -99,7 +98,7 @@ def _grab(win, path):
 
 
 def _audit_mechanics_state(settings):
-    """Headless contract audit (no Tk): every card renders notes + chips?"""
+    # Headless contract audit (no Tk): every card renders notes + chips?
     from plugins.star_resonance_plugin.engines import boss_mechanics_state as bms
     st = bms.build_mechanics_state(settings, None, None)
     problems = []

@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""HTTP client for the workshop API — zero external dependencies."""
+# HTTP client for the workshop API — zero external dependencies.
 
 from __future__ import annotations
 
@@ -191,10 +191,9 @@ class WorkshopClient:
         return _post_json(f"{self.base}/api/workshop/publish/complete?{complete_qs}", token)
 
     def delete(self, plugin_id: str, version: str = "") -> dict:
-        """删除自己上传的插件(或某一个版本)。服务端只认 X-API-Key 是否等于
-        发布时记录的 uploader_token，跟自己上传时用的是同一个 workshop_token
-        就行，不需要另外的账号系统。``version`` 留空删整个插件。
-        """
+        # 删除自己上传的插件(或某一个版本)。服务端只认 X-API-Key 是否等于
+        # 发布时记录的 uploader_token，跟自己上传时用的是同一个 workshop_token
+        # 就行，不需要另外的账号系统。``version`` 留空删整个插件。
         token = self.workshop_token or self.api_key
         qs = urllib.parse.urlencode({"version": version}) if version else ""
         url = f"{self.base}/api/workshop/plugin/{urllib.parse.quote(plugin_id)}"
@@ -203,11 +202,10 @@ class WorkshopClient:
         return _delete_json(url, token)
 
     def fetch_content_key(self, plugin_id: str, version: str = "") -> bytes:
-        """Fetch the AES-256 content key for a closed-source (protected) plugin
-        build. Requires network + a valid workshop token every call — no local
-        caching by design: a protected plugin is only ever decryptable while
-        the app is live and talking to the server.
-        """
+        # Fetch the AES-256 content key for a closed-source (protected) plugin
+        # build. Requires network + a valid workshop token every call — no local
+        # caching by design: a protected plugin is only ever decryptable while
+        # the app is live and talking to the server.
         import base64
         params = {}
         if version:

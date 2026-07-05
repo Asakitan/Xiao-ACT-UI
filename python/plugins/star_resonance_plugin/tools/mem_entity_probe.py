@@ -1,21 +1,20 @@
 # -*- coding: utf-8 -*-
-"""Live probe — verify F-B/F-C against the running game (read-only).
-
-This is the live-calibration gate for the memory-backed entity/boss data layer.
-It cannot run offline; point it at the running game to confirm that:
-  1. ZEntityMgr is located and boss/monster entities enumerate (F-C v1).
-  2. ZAttrReader calibrates a per-klass Value offset from a known HP (F-B).
-  3. Boss HP / breaking_stage / overdrive read correctly from memory.
-
-Calibration anchor: by default we use the SELF entity's own HP/MaxHp (which the
-existing self path already reads from UserFightAttr) to calibrate, then read
-boss values with the calibrated offsets. You can also pass a known boss value:
-
-    python tools/mem_entity_probe.py                 # self-HP calibration
-    python tools/mem_entity_probe.py --max-hp 5000000000   # explicit MAX_HP anchor
-
-Read-only. No writes, no injection.
-"""
+# Live probe — verify F-B/F-C against the running game (read-only).
+#
+# This is the live-calibration gate for the memory-backed entity/boss data layer.
+# It cannot run offline; point it at the running game to confirm that:
+# 1. ZEntityMgr is located and boss/monster entities enumerate (F-C v1).
+# 2. ZAttrReader calibrates a per-klass Value offset from a known HP (F-B).
+# 3. Boss HP / breaking_stage / overdrive read correctly from memory.
+#
+# Calibration anchor: by default we use the SELF entity's own HP/MaxHp (which the
+# existing self path already reads from UserFightAttr) to calibrate, then read
+# boss values with the calibrated offsets. You can also pass a known boss value:
+#
+# python tools/mem_entity_probe.py                 # self-HP calibration
+# python tools/mem_entity_probe.py --max-hp 5000000000   # explicit MAX_HP anchor
+#
+# Read-only. No writes, no injection.
 from __future__ import annotations
 
 import argparse

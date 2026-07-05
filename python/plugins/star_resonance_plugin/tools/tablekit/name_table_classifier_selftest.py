@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""Selftest for semantic runtime name table classification."""
+# Selftest for semantic runtime name table classification.
 from __future__ import annotations
 
 import os

@@ -1,15 +1,14 @@
 # -*- coding: utf-8 -*-
-"""Element / damage-property metadata for the ACT element breakdown.
-
-Maps the opaque ``element`` int carried by damage events (proto
-``EDamageProperty``: 0 GENERAL, 1 FIRE, 2 WATER, 3 ELECTRICITY, 4 WOOD,
-5 WIND, 6 ROCK, 7 LIGHT, 8 DARK) to ``{name(CN), color(hex), icon(emoji)}``.
-
-Loaded once and RAM-cached (lru_cache). The ``element.json`` asset is
-hand-curated and is intentionally NOT one of hybrid_name_tables._RUNTIME_KINDS,
-so the cross-repo name-table build/regenerate flow never touches it.
-A built-in fallback table keeps the feature working if the asset is missing.
-"""
+# Element / damage-property metadata for the ACT element breakdown.
+#
+# Maps the opaque ``element`` int carried by damage events (proto
+# ``EDamageProperty``: 0 GENERAL, 1 FIRE, 2 WATER, 3 ELECTRICITY, 4 WOOD,
+# 5 WIND, 6 ROCK, 7 LIGHT, 8 DARK) to ``{name(CN), color(hex), icon(emoji)}``.
+#
+# Loaded once and RAM-cached (lru_cache). The ``element.json`` asset is
+# hand-curated and is intentionally NOT one of hybrid_name_tables._RUNTIME_KINDS,
+# so the cross-repo name-table build/regenerate flow never touches it.
+# A built-in fallback table keeps the feature working if the asset is missing.
 
 from __future__ import annotations
 
@@ -19,13 +18,12 @@ from functools import lru_cache
 from typing import Dict
 
 def _resolve_element_asset() -> str:
-    """element.json 路径解析 (onedir 友好)。
-
-    冻结 onedir 下 assets/ 被 build_release.bat 提升到 BASE_DIR(exe 顶层),
-    而本模块 __file__ 落在 runtime/tools/tablekit/ → __file__ 相对的 runtime/assets
-    已被搬空, 直接读会 FileNotFoundError 回退内置表。优先用 config.resource_path
-    (BASE_DIR 优先, BUNDLE_DIR 回退), 找不到再回退 __file__ 相对路径(dev 树/未冻结)。
-    """
+    # element.json 路径解析 (onedir 友好)。
+    #
+    # 冻结 onedir 下 assets/ 被 build_release.bat 提升到 BASE_DIR(exe 顶层),
+    # 而本模块 __file__ 落在 runtime/tools/tablekit/ → __file__ 相对的 runtime/assets
+    # 已被搬空, 直接读会 FileNotFoundError 回退内置表。优先用 config.resource_path
+    # (BASE_DIR 优先, BUNDLE_DIR 回退), 找不到再回退 __file__ 相对路径(dev 树/未冻结)。
     try:
         from config import resource_path  # BASE_DIR-first, BUNDLE_DIR fallback
         cand = resource_path('assets', 'name_tables', 'element.json')
@@ -58,7 +56,7 @@ _DEFAULT_COLOR = "#B0B8C4"
 
 @lru_cache(maxsize=1)
 def element_table() -> Dict[int, Dict[str, str]]:
-    """Return the {element_id: {name, color, icon}} map (asset over fallback)."""
+    # Return the {element_id: {name, color, icon}} map (asset over fallback).
     table: Dict[int, Dict[str, str]] = {k: dict(v) for k, v in _FALLBACK.items()}
     try:
         with open(_ASSET, 'r', encoding='utf-8') as f:
@@ -83,7 +81,7 @@ def element_table() -> Dict[int, Dict[str, str]]:
 
 
 def element_meta(element_id) -> Dict[str, str]:
-    """Return {name, color, icon} for an element id, with a safe default."""
+    # Return {name, color, icon} for an element id, with a safe default.
     try:
         eid = int(element_id or 0)
     except (TypeError, ValueError):
@@ -95,5 +93,5 @@ def element_meta(element_id) -> Dict[str, str]:
 
 
 def element_name(element_id) -> str:
-    """Return the CN element name for an element id."""
+    # Return the CN element name for an element id.
     return element_meta(element_id)['name']

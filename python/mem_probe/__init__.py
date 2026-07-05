@@ -1,4 +1,4 @@
-"""Generic memory scanning infrastructure."""
+# Generic memory scanning infrastructure.
 from __future__ import annotations
 
 # Re-export the Cython facade so ``from mem_probe import cy_memscan`` works

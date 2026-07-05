@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""Selftest: numbered_zone_tracker — 编号圈出现顺序编号 + 成员命中归属(纯逻辑, 合成快照)。"""
+# Selftest: numbered_zone_tracker — 编号圈出现顺序编号 + 成员命中归属(纯逻辑, 合成快照)。
 from __future__ import annotations
 
 import os

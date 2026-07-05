@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""Offline import helpers for normalized ACT replay files."""
+# Offline import helpers for normalized ACT replay files.
 
 from __future__ import annotations
 
@@ -57,7 +57,7 @@ def _load_events_json(path: str | Path) -> Tuple[int, List[Dict[str, Any]]]:
 
 
 def load_normalized_import(path: str | Path) -> Tuple[int, List[Dict[str, Any]]]:
-    """Load normalized ACT replay events from JSONL/NDJSON or JSON."""
+    # Load normalized ACT replay events from JSONL/NDJSON or JSON.
 
     src = Path(path)
     suffix = src.suffix.lower()
@@ -69,7 +69,7 @@ def load_normalized_import(path: str | Path) -> Tuple[int, List[Dict[str, Any]]]
 
 
 def import_normalized_file(path: str | Path) -> dict[str, Any]:
-    """Return a JSON-safe import summary and normalized event list."""
+    # Return a JSON-safe import summary and normalized event list.
 
     src = Path(path)
     try:

@@ -1,25 +1,24 @@
-"""mem_self_state_provider - 用内存替代 TCP 提供 self 状态.
-
-后台线程定期读 StaticDpsSource.get_self_snapshot_nowait():
-  - UID 变化 → 触发回调 (主程序据此更新 dps_tracker.set_self_uid 等)
-  - HP/MaxHp 变化 → 触发回调
-
-TCP 回退策略:
-  - 内存源连续 N 次失败 (>5s) → 切到 TCP 模式 (set_provider("tcp")), 让原 packet
-    parser 接管. 仅当用户/主程序明确调用时才会切回内存.
-  - 默认模式: "memory" (启动时尝试内存, 失败提示用户).
-
-主程序集成:
-    from plugins.star_resonance_plugin.mem.il2cpp.mem_self_state_provider import MemSelfStateProvider
-    provider = MemSelfStateProvider(
-        on_uid_change=lambda uid: dps_tracker.set_self_uid(uid),
-        on_hp_change=lambda cur,mx: hp_overlay.update(cur,mx),
-        on_status_change=lambda mode,err: ui.set_data_source(mode,err),
-    )
-    provider.start()
-    ...
-    provider.stop()
-"""
+# mem_self_state_provider - 用内存替代 TCP 提供 self 状态.
+#
+# 后台线程定期读 StaticDpsSource.get_self_snapshot_nowait():
+# - UID 变化 → 触发回调 (主程序据此更新 dps_tracker.set_self_uid 等)
+# - HP/MaxHp 变化 → 触发回调
+#
+# TCP 回退策略:
+# - 内存源连续 N 次失败 (>5s) → 切到 TCP 模式 (set_provider("tcp")), 让原 packet
+# parser 接管. 仅当用户/主程序明确调用时才会切回内存.
+# - 默认模式: "memory" (启动时尝试内存, 失败提示用户).
+#
+# 主程序集成:
+# from plugins.star_resonance_plugin.mem.il2cpp.mem_self_state_provider import MemSelfStateProvider
+# provider = MemSelfStateProvider(
+# on_uid_change=lambda uid: dps_tracker.set_self_uid(uid),
+# on_hp_change=lambda cur,mx: hp_overlay.update(cur,mx),
+# on_status_change=lambda mode,err: ui.set_data_source(mode,err),
+# )
+# provider.start()
+# ...
+# provider.stop()
 from __future__ import annotations
 
 import os
@@ -129,7 +128,7 @@ class MemSelfStateProvider:
         self._anchor_reader = None
 
     def force_mode(self, mode: str):
-        """主程序可调来强制切到 'tcp' 或 'memory'."""
+        # 主程序可调来强制切到 'tcp' 或 'memory'.
         with self._lock:
             self.mode = mode
             self._consecutive_fails = 0
@@ -211,13 +210,12 @@ class MemSelfStateProvider:
             self._stop_evt.wait(self.poll_interval)
 
     def _get_snapshot_nowait(self) -> Optional[SelfSnapshot]:
-        """Prefer TCP-anchor memory lookup, then fall back to static cache.
-
-        The anchor path is only attempted when the PacketParser has a strong
-        semantic pack (uid + level/profession/skills).  It never writes to the
-        target process and it reuses the same StarProcess handle as the static
-        source.
-        """
+        # Prefer TCP-anchor memory lookup, then fall back to static cache.
+        #
+        # The anchor path is only attempted when the PacketParser has a strong
+        # semantic pack (uid + level/profession/skills).  It never writes to the
+        # target process and it reuses the same StarProcess handle as the static
+        # source.
         self._last_snap_skip_weak = False
         if self.anchor_source and self._anchor_reader and self._src:
             try:

@@ -1,12 +1,11 @@
 # -*- coding: utf-8 -*-
-"""offline_fill_raid_gaps - 离线填充raid示例中的未绑定mechanic skill/buff。
-
-纯离线: 从已有name table交叉分析缺口, 直接写入raid示例JSON。
-
-Usage:
-  python -m tools.offline_fill_raid_gaps --dry-run     # 仅打印变更
-  python -m tools.offline_fill_raid_gaps --apply        # 写入文件
-"""
+# offline_fill_raid_gaps - 离线填充raid示例中的未绑定mechanic skill/buff。
+#
+# 纯离线: 从已有name table交叉分析缺口, 直接写入raid示例JSON。
+#
+# Usage:
+# python -m tools.offline_fill_raid_gaps --dry-run     # 仅打印变更
+# python -m tools.offline_fill_raid_gaps --apply        # 写入文件
 from __future__ import annotations
 
 import argparse
@@ -88,7 +87,7 @@ def _make_mechanic(name: str, skill_ids: List[int] = None, buff_ids: List[int] =
 # ── changes per file ─────────────────────────────────────────────────────────
 
 def _apply_鸣角之野(mechs: List[dict]) -> List[dict]:
-    """双子: 11 uncovered skills + key buffs."""
+    # 双子: 11 uncovered skills + key buffs.
     changes = []
 
     mech_by_id = {m["id"]: m for m in mechs}
@@ -196,7 +195,7 @@ def _apply_鸣角之野(mechs: List[dict]) -> List[dict]:
 
 
 def _apply_石骸之庭(mechs: List[dict]) -> List[dict]:
-    """石头人: 2 uncovered skills."""
+    # 石头人: 2 uncovered skills.
     changes = []
     for m in mechs:
         # 石头人分摊 → 石头人压团血
@@ -228,7 +227,7 @@ def _apply_石骸之庭(mechs: List[dict]) -> List[dict]:
 
 
 def _apply_蚀影之渊(mechs: List[dict]) -> List[dict]:
-    """蚀花: 6 uncovered skills + key buffs."""
+    # 蚀花: 6 uncovered skills + key buffs.
     changes = []
 
     for m in mechs:
@@ -280,7 +279,7 @@ def _apply_蚀影之渊(mechs: List[dict]) -> List[dict]:
 # ── 13003 buff gap fills ─────────────────────────────────────────────────────
 
 def _apply_永冻的异想天(mechs: List[dict]) -> List[dict]:
-    """冰龙: fill key mechanic buffs."""
+    # 冰龙: fill key mechanic buffs.
     changes = []
     for m in mechs:
         if "雪崩" in m["name"]:
@@ -300,7 +299,7 @@ def _apply_永冻的异想天(mechs: List[dict]) -> List[dict]:
 
 
 def _apply_阴骨之地(mechs: List[dict]) -> List[dict]:
-    """虚蚀龙: fill key mechanic buffs."""
+    # 虚蚀龙: fill key mechanic buffs.
     changes = []
     for m in mechs:
         if "分摊" in m["name"] and "虚蚀" in m.get("notes", m["name"]):
@@ -332,7 +331,7 @@ def _apply_阴骨之地(mechs: List[dict]) -> List[dict]:
 
 
 def _apply_天启的神槛(mechs: List[dict]) -> List[dict]:
-    """光龙: fill key mechanic buffs."""
+    # 光龙: fill key mechanic buffs.
     changes = []
     for m in mechs:
         if "终焉" in m["name"] or "秒杀" in m.get("kind", ""):

@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""FastAPI server for SAO auto-key profile repository."""
+# FastAPI server for SAO auto-key profile repository.
 
 import base64
 import hashlib

@@ -1,51 +1,50 @@
 # -*- coding: utf-8 -*-
-"""AngelScript scripting runtime via ctypes binding.
-
-Plugin entry is an ``.as`` file with C-like AngelScript syntax::
-
-    // plugin.as
-
-    PluginContext@ ctx;
-
-    void on_load(PluginContext@ c)
-    {
-        @ctx = c;
-        ctx.log("Hello from AngelScript!");
-        ctx.register_ui_panel("as_panel",
-            dictionary = {{"title", "AS Panel"}},
-            @render_panel, @on_action);
-    }
-
-    dictionary@ render_panel(dictionary@ payload)
-    {
-        return ctx.ui_panel("AngelScript Plugin", {
-            ctx.ui_text("Hello from AngelScript!")
-        });
-    }
-
-    dictionary@ on_action(string action_id, dictionary@ payload)
-    {
-        ctx.log("action: " + action_id);
-        dictionary d;
-        d["ok"] = true;
-        return d;
-    }
-
-    void on_unload()
-    {
-        ctx.log("Bye from AngelScript!");
-    }
-
-AngelScript is embedded via a ctypes wrapper around the AngelScript SDK
-DLL. The DLL (``angelscript.dll`` / ``libangelscript.so``) must be
-placed in the plugin's directory, ``vendor/``, or on the system PATH.
-
-Since the native AngelScript SDK is not always available, this runtime
-falls back to a **pure-Python AngelScript subset interpreter** that
-parses and executes a practical subset of AngelScript syntax. This
-guarantees plugins work even without the native DLL, at the cost of
-performance on heavy computation.
-"""
+# AngelScript scripting runtime via ctypes binding.
+#
+# Plugin entry is an ``.as`` file with C-like AngelScript syntax::
+#
+# // plugin.as
+#
+# PluginContext@ ctx;
+#
+# void on_load(PluginContext@ c)
+# {
+# @ctx = c;
+# ctx.log("Hello from AngelScript!");
+# ctx.register_ui_panel("as_panel",
+# dictionary = {{"title", "AS Panel"}},
+# @render_panel, @on_action);
+# }
+#
+# dictionary@ render_panel(dictionary@ payload)
+# {
+# return ctx.ui_panel("AngelScript Plugin", {
+# ctx.ui_text("Hello from AngelScript!")
+# });
+# }
+#
+# dictionary@ on_action(string action_id, dictionary@ payload)
+# {
+# ctx.log("action: " + action_id);
+# dictionary d;
+# d["ok"] = true;
+# return d;
+# }
+#
+# void on_unload()
+# {
+# ctx.log("Bye from AngelScript!");
+# }
+#
+# AngelScript is embedded via a ctypes wrapper around the AngelScript SDK
+# DLL. The DLL (``angelscript.dll`` / ``libangelscript.so``) must be
+# placed in the plugin's directory, ``vendor/``, or on the system PATH.
+#
+# Since the native AngelScript SDK is not always available, this runtime
+# falls back to a **pure-Python AngelScript subset interpreter** that
+# parses and executes a practical subset of AngelScript syntax. This
+# guarantees plugins work even without the native DLL, at the cost of
+# performance on heavy computation.
 
 from __future__ import annotations
 
@@ -63,16 +62,15 @@ if TYPE_CHECKING:
 
 
 class _AngelScriptInterpreter:
-    """Minimal pure-Python AngelScript-subset interpreter.
-
-    Supports enough syntax for plugin lifecycle hooks:
-    - Global variables and function declarations
-    - String, int, float, bool, dictionary, array types
-    - Function calls on registered host objects (ctx.method(...))
-    - if/else, while, for, return statements
-    - Basic expressions (+, -, *, /, ==, !=, <, >, <=, >=, &&, ||, !)
-    - String concatenation and interpolation
-    """
+    # Minimal pure-Python AngelScript-subset interpreter.
+    #
+    # Supports enough syntax for plugin lifecycle hooks:
+    # - Global variables and function declarations
+    # - String, int, float, bool, dictionary, array types
+    # - Function calls on registered host objects (ctx.method(...))
+    # - if/else, while, for, return statements
+    # - Basic expressions (+, -, *, /, ==, !=, <, >, <=, >=, &&, ||, !)
+    # - String concatenation and interpolation
 
     def __init__(self) -> None:
         self._globals: dict[str, Any] = {}
@@ -597,7 +595,7 @@ def _tokenize(source: str) -> list[str]:
 
 
 class _AngelScriptProxy:
-    """Wraps PluginContext for AngelScript consumption."""
+    # Wraps PluginContext for AngelScript consumption.
 
     def __init__(self, ctx: "PluginContext") -> None:
         self._ctx = ctx
@@ -823,7 +821,7 @@ class _AngelScriptProxy:
 
 
 class AngelScriptRuntime(ScriptRuntime):
-    """Load ``.as`` AngelScript plugin scripts."""
+    # Load ``.as`` AngelScript plugin scripts.
 
     def __init__(self) -> None:
         self._interpreters: dict[str, _AngelScriptInterpreter] = {}

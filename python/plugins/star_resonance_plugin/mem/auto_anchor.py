@@ -1,16 +1,15 @@
-"""自动重定位 self HP/MaxHP/UID anchor.
-
-作为 reader.py 的"安全网": 当 anchors.json 中所有 fingerprint/chain 都失效时
-(典型场景: 跨重启 player 对象重新分配, fingerprint 不再唯一/匹配),
-本模块复用 auto_locate 的内部函数 (locate_uid / locate_hp / locate_max_hp)
-直接基于 PacketBridge TCP 真值在当前进程上重新扫描, 写回 anchors.json.
-
-主要入口:
-    relocate_now(pm, src) -> dict | None
-        在已 attach 的 StarProcess + 已 ready 的 _TcpSource 上跑一次完整定位,
-        返回 {hp_addr, max_hp_addr, uid_addr} 或 None (失败).
-        副作用: 更新 anchors.json (合并写, 不覆盖 fingerprint 字段).
-"""
+# 自动重定位 self HP/MaxHP/UID anchor.
+#
+# 作为 reader.py 的"安全网": 当 anchors.json 中所有 fingerprint/chain 都失效时
+# (典型场景: 跨重启 player 对象重新分配, fingerprint 不再唯一/匹配),
+# 本模块复用 auto_locate 的内部函数 (locate_uid / locate_hp / locate_max_hp)
+# 直接基于 PacketBridge TCP 真值在当前进程上重新扫描, 写回 anchors.json.
+#
+# 主要入口:
+# relocate_now(pm, src) -> dict | None
+# 在已 attach 的 StarProcess + 已 ready 的 _TcpSource 上跑一次完整定位,
+# 返回 {hp_addr, max_hp_addr, uid_addr} 或 None (失败).
+# 副作用: 更新 anchors.json (合并写, 不覆盖 fingerprint 字段).
 
 from __future__ import annotations
 
@@ -49,10 +48,9 @@ def relocate_now(
     hp_timeout: float = 60.0,
     require_tcp_ready: bool = True,
 ) -> Optional[Dict[str, int]]:
-    """重新定位 self HP/MaxHP/UID. 必须在 PacketBridge 已 ready 时调用.
-
-    返回 {"hp_addr": int, "max_hp_addr": int, "uid_addr": int|None} 或 None.
-    """
+    # 重新定位 self HP/MaxHP/UID. 必须在 PacketBridge 已 ready 时调用.
+    #
+    # 返回 {"hp_addr": int, "max_hp_addr": int, "uid_addr": int|None} 或 None.
     if require_tcp_ready:
         snap = src.snapshot()
         if not snap.get("packet_active") or snap.get("uid", 0) <= 0 or snap.get("hp", 0) <= 0:
@@ -120,7 +118,7 @@ def relocate_now(
 
 
 def is_addr_sane(pm: StarProcess, hp_addr: int, max_hp_addr: int) -> bool:
-    """快速校验当前 anchor 是否还合理 (HP 在 [0, max_hp] 范围, max_hp > 0)."""
+    # 快速校验当前 anchor 是否还合理 (HP 在 [0, max_hp] 范围, max_hp > 0).
     hp = pm.read_i32(hp_addr)
     mh = pm.read_i32(max_hp_addr)
     if hp is None or mh is None:

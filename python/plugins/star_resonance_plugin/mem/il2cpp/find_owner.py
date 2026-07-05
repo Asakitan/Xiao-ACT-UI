@@ -1,9 +1,8 @@
-"""find_owner — 反向扫描堆找谁持有指向已知对象的指针.
-
-对每个候选所有者:
-  - 报告地址 + 该指针所在偏移
-  - 读所有者首 8 字节 (klass), 反查 script.json 得到类名
-"""
+# find_owner — 反向扫描堆找谁持有指向已知对象的指针.
+#
+# 对每个候选所有者:
+# - 报告地址 + 该指针所在偏移
+# - 读所有者首 8 字节 (klass), 反查 script.json 得到类名
 from __future__ import annotations
 
 import argparse
@@ -22,7 +21,7 @@ from plugins.star_resonance_plugin.mem.il2cpp.script_parser import ScriptIndex
 
 
 def build_klass_index(si: ScriptIndex, ga_base: int, pm: StarProcess) -> Dict[int, str]:
-    """读所有 *_TypeInfo RVA 解出 runtime klass_ptr → class_name 反查表."""
+    # 读所有 *_TypeInfo RVA 解出 runtime klass_ptr → class_name 反查表.
     out: Dict[int, str] = {}
     for name, rva in si.klass_rva.items():
         kp = pm.read_u64(ga_base + rva)
@@ -34,7 +33,7 @@ def build_klass_index(si: ScriptIndex, ga_base: int, pm: StarProcess) -> Dict[in
 
 def scan_pointers_to(pm: StarProcess, target: int, max_region: int = 512 * 1024 * 1024,
                      max_hits: int = 5000) -> List[int]:
-    """全扫描私有读区, 找 8 字节 == target 的位置 (cy_memscan AVX2)."""
+    # 全扫描私有读区, 找 8 字节 == target 的位置 (cy_memscan AVX2).
     from mem_probe import cy_memscan as _cy
     hits: List[int] = []
     t0 = time.time()

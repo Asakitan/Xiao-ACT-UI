@@ -1,16 +1,15 @@
 # -*- coding: utf-8 -*-
-"""Regression coverage for hotkey combo parsing / matching / dispatch.
-
-Covers ``config.parse_hotkey`` / ``normalize_hotkey`` / ``hotkey_matches``
-(子集匹配) / ``select_hotkey_match`` (最特异优先) — the shared logic behind
-SAOHotkeyManager, the sao_webview dual-path listener and the headless
-automation listener — plus SAOHotkeyManager dispatch behaviour (built-in vs
-plugin, plain F-key vs CTRL combo coexistence, modifier retention after fire,
-stale-modifier immunity, partial settings dict not killing built-ins) and the
-shipped default keymap being conflict-free.
-
-Run from the repo root: ``python -m tools.hotkey_combo_selftest``
-"""
+# Regression coverage for hotkey combo parsing / matching / dispatch.
+#
+# Covers ``config.parse_hotkey`` / ``normalize_hotkey`` / ``hotkey_matches``
+# (子集匹配) / ``select_hotkey_match`` (最特异优先) — the shared logic behind
+# SAOHotkeyManager, the sao_webview dual-path listener and the headless
+# automation listener — plus SAOHotkeyManager dispatch behaviour (built-in vs
+# plugin, plain F-key vs CTRL combo coexistence, modifier retention after fire,
+# stale-modifier immunity, partial settings dict not killing built-ins) and the
+# shipped default keymap being conflict-free.
+#
+# Run from the repo root: ``python -m tools.hotkey_combo_selftest``
 
 from __future__ import annotations
 
@@ -40,8 +39,8 @@ VK_SHIFT_L = 160
 
 
 class _NoLiveModsMixin(unittest.TestCase):
-    """强制 hotkey_mods_down 走 pressed 集合推断 (测试机的真实键盘状态
-    不能影响断言)。"""
+    # 强制 hotkey_mods_down 走 pressed 集合推断 (测试机的真实键盘状态
+    # 不能影响断言)。
 
     def setUp(self):
         self._gaks = _config._HOTKEY_GAKS
@@ -176,7 +175,7 @@ class _Settings:
 
 
 class HotkeyManagerDispatchTests(_NoLiveModsMixin):
-    """SAOHotkeyManager._check_combos 行为 (无 pynput 依赖, 直接喂按键集)。"""
+    # SAOHotkeyManager._check_combos 行为 (无 pynput 依赖, 直接喂按键集)。
 
     def _mgr(self, saved, actions, provider=None):
         from gui_modules.sao_hotkey_manager import SAOHotkeyManager

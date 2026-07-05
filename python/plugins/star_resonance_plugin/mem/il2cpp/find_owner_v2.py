@@ -1,4 +1,4 @@
-"""find_owner_v2 — 输出写文件,stdout 仅汇总."""
+# find_owner_v2 — 输出写文件,stdout 仅汇总.
 from __future__ import annotations
 
 import argparse

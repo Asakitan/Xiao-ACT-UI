@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""Regression tests for shared ACT combatant drilldown helpers."""
+# Regression tests for shared ACT combatant drilldown helpers.
 
 from __future__ import annotations
 

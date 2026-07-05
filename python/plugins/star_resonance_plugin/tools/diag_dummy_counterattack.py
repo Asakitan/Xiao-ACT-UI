@@ -1,12 +1,11 @@
 # -*- coding: utf-8 -*-
-"""Diagnostic: what memory signal does the 精英守护木桩 counterattack produce?
-
-Locates the dummy (base_id 122) and polls its full attr_map + actor_state +
-BuffComp at high rate, logging every value that changes -- so we can see which
-attr id / state / buff its ~1/sec counterattack actually flips (attr 100 did not).
-
-    python tools/diag_dummy_counterattack.py [seconds] [base_id]
-"""
+# Diagnostic: what memory signal does the 精英守护木桩 counterattack produce?
+#
+# Locates the dummy (base_id 122) and polls its full attr_map + actor_state +
+# BuffComp at high rate, logging every value that changes -- so we can see which
+# attr id / state / buff its ~1/sec counterattack actually flips (attr 100 did not).
+#
+# python tools/diag_dummy_counterattack.py [seconds] [base_id]
 from __future__ import annotations
 
 import os

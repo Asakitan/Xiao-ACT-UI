@@ -1,33 +1,32 @@
-"""dump_cs_parser - 流式解析 Il2CppDumper dump.cs, 抽 class -> field offsets.
-
-dump.cs 格式:
-  // Namespace: <ns>
-  [Attribute]
-  <modifiers> class|struct|enum|interface <Name> [: <bases>] // TypeDefIndex: NNN
-  {
-      // Fields
-      <modifiers> <type> <name>; // 0xOFFSET
-      ...
-      // Methods
-      // RVA: 0x... Offset: 0x... VA: 0x...
-      <signature>
-      ...
-  }
-
-输出 JSON:
-  {
-    "Zproto.CharSerialize": {
-        "namespace": "Zproto",
-        "type_def_index": 10518,
-        "bases": "IMessage<CharSerialize>, ...",
-        "fields": [
-            {"name": "CharId", "type": "long", "offset": 16, "is_static": false, "modifiers": "public"},
-            ...
-        ]
-    },
-    ...
-  }
-"""
+# dump_cs_parser - 流式解析 Il2CppDumper dump.cs, 抽 class -> field offsets.
+#
+# dump.cs 格式:
+# // Namespace: <ns>
+# [Attribute]
+# <modifiers> class|struct|enum|interface <Name> [: <bases>] // TypeDefIndex: NNN
+# {
+# // Fields
+# <modifiers> <type> <name>; // 0xOFFSET
+# ...
+# // Methods
+# // RVA: 0x... Offset: 0x... VA: 0x...
+# <signature>
+# ...
+# }
+#
+# 输出 JSON:
+# {
+# "Zproto.CharSerialize": {
+# "namespace": "Zproto",
+# "type_def_index": 10518,
+# "bases": "IMessage<CharSerialize>, ...",
+# "fields": [
+# {"name": "CharId", "type": "long", "offset": 16, "is_static": false, "modifiers": "public"},
+# ...
+# ]
+# },
+# ...
+# }
 from __future__ import annotations
 
 import argparse

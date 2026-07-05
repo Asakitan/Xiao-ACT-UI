@@ -1,11 +1,10 @@
 # -*- coding: utf-8 -*-
-"""Selftest for the extended BossAutoKeyLinkage (mem boss-action driven).
-
-Covers mapping back-compat, on_boss_action matching by skill_id/base_id, the
-offensive rising-edge windows, cooldown, and delay/sequence dispatch. No game.
-
-    python tools/boss_reactions_linkage_selftest.py
-"""
+# Selftest for the extended BossAutoKeyLinkage (mem boss-action driven).
+#
+# Covers mapping back-compat, on_boss_action matching by skill_id/base_id, the
+# offensive rising-edge windows, cooldown, and delay/sequence dispatch. No game.
+#
+# python tools/boss_reactions_linkage_selftest.py
 from __future__ import annotations
 
 import os

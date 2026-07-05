@@ -1,31 +1,30 @@
 # -*- coding: utf-8 -*-
-"""mem_damage_reader - read the game's own per-player damage table from memory.
-
-The game keeps its full DPS table in DamageDataMgr (ZSingleton). So damage is NOT
-only a TCP event stream -- the aggregated per-player / per-skill table the game itself
-renders is live in memory:
-
-  DamageDataMgr (Panda.ZGame.DamageDataMgr), dump.cs TypeDefIndex 5257:
-    damageValue_      @0xB0 : ZDictionary<long uuid, ZDictionary<int skillId, DamageData>>
-    takeDamageValue_  @0xB8 : (same shape, damage taken)
-    healValue_        @0xC0 : (same shape, healing)
-    totalPlayerValue_ @0xD0 : ZDictionary<DamageShowTotalType, ZDictionary<long uuid, long>>
-    playerUuidList_   @0xF0 : ZList<long>
-    IsActive          @0xA0
-
-  ZDictionary<K,V> (TypeDefIndex 27652): buckets_@0x18, entries_@0x20, count_@0x38.
-  Entry { uint hashCode@0x0; int next@0x4; K key@0x8; V value@0x10 } stride 0x18
-  (holds for <int,ptr> and <long,long> -- 8-aligned key/value).
-
-  DamageData struct (TypeDefIndex 5254): playerUuid@0x0, skillId@0x8, damageId@0x10,
-  actualValue@0x18.
-
-  DamageShowTotalType: Damage=1, Cure=2, TakeDamage=3, DamageSecond=4, CureSecond=5.
-
-Offsets are IL2CPP field offsets (stable across base/ASLR); the DamageDataMgr klass is
-resolved by name via auto_registration_locator (version-robust). The singleton instance
-is found by a klass-sentinel heap scan and cached (revalidated each call).
-"""
+# mem_damage_reader - read the game's own per-player damage table from memory.
+#
+# The game keeps its full DPS table in DamageDataMgr (ZSingleton). So damage is NOT
+# only a TCP event stream -- the aggregated per-player / per-skill table the game itself
+# renders is live in memory:
+#
+# DamageDataMgr (Panda.ZGame.DamageDataMgr), dump.cs TypeDefIndex 5257:
+# damageValue_      @0xB0 : ZDictionary<long uuid, ZDictionary<int skillId, DamageData>>
+# takeDamageValue_  @0xB8 : (same shape, damage taken)
+# healValue_        @0xC0 : (same shape, healing)
+# totalPlayerValue_ @0xD0 : ZDictionary<DamageShowTotalType, ZDictionary<long uuid, long>>
+# playerUuidList_   @0xF0 : ZList<long>
+# IsActive          @0xA0
+#
+# ZDictionary<K,V> (TypeDefIndex 27652): buckets_@0x18, entries_@0x20, count_@0x38.
+# Entry { uint hashCode@0x0; int next@0x4; K key@0x8; V value@0x10 } stride 0x18
+# (holds for <int,ptr> and <long,long> -- 8-aligned key/value).
+#
+# DamageData struct (TypeDefIndex 5254): playerUuid@0x0, skillId@0x8, damageId@0x10,
+# actualValue@0x18.
+#
+# DamageShowTotalType: Damage=1, Cure=2, TakeDamage=3, DamageSecond=4, CureSecond=5.
+#
+# Offsets are IL2CPP field offsets (stable across base/ASLR); the DamageDataMgr klass is
+# resolved by name via auto_registration_locator (version-robust). The singleton instance
+# is found by a klass-sentinel heap scan and cached (revalidated each call).
 from __future__ import annotations
 
 import time
@@ -72,7 +71,7 @@ def _plaus(p: Optional[int]) -> bool:
 
 
 class MemDamageReader:
-    """Reads the in-memory per-player damage table (the game's own DPS aggregation)."""
+    # Reads the in-memory per-player damage table (the game's own DPS aggregation).
 
     def __init__(self, dps_source):
         self._src = dps_source
@@ -121,8 +120,8 @@ class MemDamageReader:
         return self._klass
 
     def _scan_region_for_inst(self, r, kp: int) -> int:
-        """Cython klass-sentinel scan of one region (chunked, zero-copy). Returns
-        the validated DamageDataMgr instance address or 0."""
+        # Cython klass-sentinel scan of one region (chunked, zero-copy). Returns
+        # the validated DamageDataMgr instance address or 0.
         read_into = getattr(self.pm, "read_bytes_into", None)
         chunk = 16 * 1024 * 1024
         if self._scratch is None or len(self._scratch) < min(chunk, r.size):
@@ -150,12 +149,11 @@ class MemDamageReader:
         return 0
 
     def locate(self, *, force: bool = False) -> int:
-        """Return the live DamageDataMgr instance (cached, klass-sentinel revalidated).
-
-        Backs off after a miss so out-of-combat ticks (table not yet allocated) do
-        not re-sweep the heap every tick. A confirmed hit's region is the warm hint
-        for the next cold acquisition.
-        """
+        # Return the live DamageDataMgr instance (cached, klass-sentinel revalidated).
+        #
+        # Backs off after a miss so out-of-combat ticks (table not yet allocated) do
+        # not re-sweep the heap every tick. A confirmed hit's region is the warm hint
+        # for the next cold acquisition.
         if self._inst and not force:
             if self.pm.read_u64(self._inst) == self._klass and self._klass:
                 return self._inst
@@ -193,11 +191,10 @@ class MemDamageReader:
         return 0
 
     def _entry_addrs(self, zdict: int, stride: int = ENTRY_STRIDE):
-        """Yield each Entry address of a ZDictionary (key@+0x8, value@+0x10).
-
-        ``stride`` is the Entry size: 0x18 for primitive/ref value (long/ptr), larger
-        when the value is an inline struct (e.g. DamageData -> 0x30).
-        """
+        # Yield each Entry address of a ZDictionary (key@+0x8, value@+0x10).
+        #
+        # ``stride`` is the Entry size: 0x18 for primitive/ref value (long/ptr), larger
+        # when the value is an inline struct (e.g. DamageData -> 0x30).
         if not _plaus(zdict):
             return
         cnt = self.pm.read_i32(zdict + ZDICT_COUNT_OFF) or 0
@@ -212,11 +209,10 @@ class MemDamageReader:
             yield base + i * stride
 
     def _entries_block(self, zdict: int, stride: int = ENTRY_STRIDE) -> Optional[bytes]:
-        """Read a ZDictionary's whole entries[] slab in ONE read_bytes.
-
-        Returns the raw entry bytes (n*stride) for local decode, or None. Collapses
-        the per-entry single-RPM walk (O(entries) syscalls/tick) into one block read.
-        """
+        # Read a ZDictionary's whole entries[] slab in ONE read_bytes.
+        #
+        # Returns the raw entry bytes (n*stride) for local decode, or None. Collapses
+        # the per-entry single-RPM walk (O(entries) syscalls/tick) into one block read.
         if not _plaus(zdict):
             return None
         import struct as _st
@@ -254,7 +250,7 @@ class MemDamageReader:
         return 0
 
     def read_player_totals(self, total_type: int = TOTAL_DAMAGE) -> Dict[int, int]:
-        """{playerUuid: total} from totalPlayerValue_[total_type] (Damage by default)."""
+        # {playerUuid: total} from totalPlayerValue_[total_type] (Damage by default).
         inst = self.locate()
         if not inst:
             return {}
@@ -275,7 +271,7 @@ class MemDamageReader:
         return out
 
     def read_player_skill_damage(self, uuid: int) -> Dict[int, int]:
-        """{skillId: actualValue} for one player from damageValue_[uuid]."""
+        # {skillId: actualValue} for one player from damageValue_[uuid].
         inst = self.locate()
         if not inst:
             return {}

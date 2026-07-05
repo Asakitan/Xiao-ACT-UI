@@ -1,28 +1,26 @@
 # -*- coding: utf-8 -*-
-"""
-SAOPlayerGUIEngineTogglesMixin — seventh mixin extracted from
-SAOPlayerGUI (round 44 of the sao_gui split refactor).
-
-Burst cluster (burst-skill trigger):
-  * _pick_burst_trigger_slot — cython state-machine delegate
-  * _normalize_watched_skill_slots — cython delegate
-  * _reset_burst_tracking_state — clears last_burst_* caches
-  * _toggle_burst_enabled — toggles `burst_enabled` setting
-  * _toggle_burst_slot — adds/removes a slot from `watched_skill_slots`
-
-NOTE: the auto hide-and-seek cluster used to live here; it has been
-extracted into the self-contained ``plugins/hide_seek_plugin`` example.
-
-Required SAOPlayerGUI attrs:
-  * self._last_burst_slot, self._last_burst_ready,
-    self._last_burst_slot_shown
-  * self.root, self._destroyed
-
-Required SAOPlayerGUI methods (via MRO):
-  * _show_entity_alert (SAOPlayerGUI)
-  * _refresh_menu_if_open (Menu mixin)
-  * _get_setting, _set_setting (SAOPlayerGUI)
-"""
+# SAOPlayerGUIEngineTogglesMixin — seventh mixin extracted from
+# SAOPlayerGUI (round 44 of the sao_gui split refactor).
+#
+# Burst cluster (burst-skill trigger):
+# * _pick_burst_trigger_slot — cython state-machine delegate
+# * _normalize_watched_skill_slots — cython delegate
+# * _reset_burst_tracking_state — clears last_burst_* caches
+# * _toggle_burst_enabled — toggles `burst_enabled` setting
+# * _toggle_burst_slot — adds/removes a slot from `watched_skill_slots`
+#
+# NOTE: the auto hide-and-seek cluster used to live here; it has been
+# extracted into the self-contained ``plugins/hide_seek_plugin`` example.
+#
+# Required SAOPlayerGUI attrs:
+# * self._last_burst_slot, self._last_burst_ready,
+# self._last_burst_slot_shown
+# * self.root, self._destroyed
+#
+# Required SAOPlayerGUI methods (via MRO):
+# * _show_entity_alert (SAOPlayerGUI)
+# * _refresh_menu_if_open (Menu mixin)
+# * _get_setting, _set_setting (SAOPlayerGUI)
 
 from __future__ import annotations
 
@@ -35,7 +33,7 @@ except ImportError:
 
 
 class SAOPlayerGUIEngineTogglesMixin:
-    """Mixin bundling Burst engine toggles + state (hide-and-seek is a plugin)."""
+    # Mixin bundling Burst engine toggles + state (hide-and-seek is a plugin).
 
     def _pick_burst_trigger_slot(self, gs):
         watched = self._get_setting(
@@ -179,6 +177,6 @@ class SAOPlayerGUIEngineTogglesMixin:
             monitors, cd_map, server_offset, player_attrs, prev)
 
     def _open_skill_picker(self):
-        """技能选择器 — 游戏插件覆盖此方法。"""
+        # 技能选择器 — 游戏插件覆盖此方法。
         pass
 

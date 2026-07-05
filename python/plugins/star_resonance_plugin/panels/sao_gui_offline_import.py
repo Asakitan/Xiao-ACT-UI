@@ -1,4 +1,4 @@
-"""Entity-mode ACT offline import wizard panel."""
+# Entity-mode ACT offline import wizard panel.
 
 from __future__ import annotations
 
@@ -62,7 +62,7 @@ _STEP_LABELS = ('① 选择文件', '② 解析预览', '③ 映射字段', '④
 
 
 class OfflineImportPanel:
-    """SAO-styled standalone ACT offline import/history playback wizard."""
+    # SAO-styled standalone ACT offline import/history playback wizard.
 
     def __init__(self, root: tk.Misc, owner: Any):
         self.root = root

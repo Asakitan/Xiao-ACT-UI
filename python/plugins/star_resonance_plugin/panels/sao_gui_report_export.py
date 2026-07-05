@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""Entity-mode ACT report/export panel."""
+# Entity-mode ACT report/export panel.
 
 from __future__ import annotations
 
@@ -59,7 +59,7 @@ def _finite_int(value: Any, default: int = 0, *, lo: int | None = None, hi: int 
 
 
 class ReportExportPanel:
-    """SAO-styled Toplevel for ACT report preview and export."""
+    # SAO-styled Toplevel for ACT report preview and export.
 
     def __init__(self, root: tk.Misc, owner: Any):
         self.root = root
@@ -387,7 +387,7 @@ class ReportExportPanel:
         self._reset_render_cache()
 
     def _wire_clear_confirm(self, btn: tk.Button) -> None:
-        """两段式确认：第一次点击进入「确认清空?」态，3 秒内再点才真正清空。"""
+        # 两段式确认：第一次点击进入「确认清空?」态，3 秒内再点才真正清空。
         state = {'armed': False, 'after': None}
 
         def _disarm() -> None:

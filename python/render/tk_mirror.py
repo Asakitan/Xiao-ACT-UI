@@ -1,15 +1,14 @@
 # -*- coding: utf-8 -*-
-"""tk_mirror — capture Tk Toplevel windows and present via compositor.
-
-Mirrors a Tk Toplevel through the unified overlay compositor:
-  1. Makes the real Tk window invisible (alpha≈0, WS_EX_TRANSPARENT)
-  2. Captures its rendered content via PrintWindow → BGRA at target FPS
-  3. Uploads the BGRA to a compositor layer (protected by WDA)
-  4. Forwards mouse events by walking this window's own Tk widget geometry
-     to resolve the hit widget (GetCursorPos coords) and synthesizing the
-     event directly onto it with event_generate()
-  5. Intercepts geometry() calls so drag operations move the compositor layer
-"""
+# tk_mirror — capture Tk Toplevel windows and present via compositor.
+#
+# Mirrors a Tk Toplevel through the unified overlay compositor:
+# 1. Makes the real Tk window invisible (alpha≈0, WS_EX_TRANSPARENT)
+# 2. Captures its rendered content via PrintWindow → BGRA at target FPS
+# 3. Uploads the BGRA to a compositor layer (protected by WDA)
+# 4. Forwards mouse events by walking this window's own Tk widget geometry
+# to resolve the hit widget (GetCursorPos coords) and synthesizing the
+# event directly onto it with event_generate()
+# 5. Intercepts geometry() calls so drag operations move the compositor layer
 from __future__ import annotations
 
 import ctypes
@@ -50,12 +49,11 @@ _corner_alpha_cache: Dict[int, np.ndarray] = {}
 
 
 def _corner_quadrant_alpha(r: int) -> Optional[np.ndarray]:
-    """(r, r) float32 coverage ramp for one rounded corner, in [0, 1].
-
-    1.0 well inside the arc, 0.0 well outside, with a ~1px linear feather
-    across the boundary instead of a hard cutoff. The other three corners
-    reuse this same array via axis flips when applied.
-    """
+    # (r, r) float32 coverage ramp for one rounded corner, in [0, 1].
+    #
+    # 1.0 well inside the arc, 0.0 well outside, with a ~1px linear feather
+    # across the boundary instead of a hard cutoff. The other three corners
+    # reuse this same array via axis flips when applied.
     if r <= 0:
         return None
     cached = _corner_alpha_cache.get(r)
@@ -73,14 +71,13 @@ def _corner_quadrant_alpha(r: int) -> Optional[np.ndarray]:
 
 
 def _apply_corner_mask(bgra: bytes, w: int, h: int, radius: int) -> bytes:
-    """Feather (premultiplied) BGRA pixels outside the rounded-rect corners.
-
-    Only the four ``r``x``r`` corner blocks are touched (not the whole
-    frame): each channel of a premultiplied pixel scales linearly with a
-    coverage factor in [0, 1], so multiplying all four BGRA bytes by the
-    same per-pixel factor is a correct edge-to-transparent blend without an
-    unpremultiply/re-premultiply round trip.
-    """
+    # Feather (premultiplied) BGRA pixels outside the rounded-rect corners.
+    #
+    # Only the four ``r``x``r`` corner blocks are touched (not the whole
+    # frame): each channel of a premultiplied pixel scales linearly with a
+    # coverage factor in [0, 1], so multiplying all four BGRA bytes by the
+    # same per-pixel factor is a correct edge-to-transparent blend without an
+    # unpremultiply/re-premultiply round trip.
     if radius <= 0 or w <= 0 or h <= 0:
         return bgra
     r = min(int(radius), w // 2, h // 2)
@@ -107,17 +104,16 @@ def _apply_corner_mask(bgra: bytes, w: int, h: int, radius: int) -> bytes:
 
 
 class TkMirrorLayer:
-    """Mirrors a Tk Toplevel through the compositor.
-
-    Usage::
-
-        mirror = TkMirrorLayer(tk_toplevel, 'ai_editor', z=500)
-        mirror.attach()   # hides Tk window, starts capture
-        mirror.show()     # compositor layer visible
-        # ...
-        mirror.hide()
-        mirror.detach()   # stops capture, restores Tk window
-    """
+    # Mirrors a Tk Toplevel through the compositor.
+    #
+    # Usage::
+    #
+    # mirror = TkMirrorLayer(tk_toplevel, 'ai_editor', z=500)
+    # mirror.attach()   # hides Tk window, starts capture
+    # mirror.show()     # compositor layer visible
+    # # ...
+    # mirror.hide()
+    # mirror.detach()   # stops capture, restores Tk window
 
     def __init__(self, tk_win, name: str, z: int = 500,
                  capture_fps: float = 30.0,
@@ -344,13 +340,12 @@ class TkMirrorLayer:
         self._sync_host_input()
 
     def set_alpha(self, value: float) -> None:
-        """Fade the compositor layer directly.
-
-        ``SaoToplevel.attributes('-alpha', ...)`` is a no-op once mirrored
-        (see below) — the real Tk window's alpha is pinned at 0.01 so it
-        never becomes visible on the desktop. Callers that want a fade
-        (e.g. a close animation) need to fade the compositor layer instead.
-        """
+        # Fade the compositor layer directly.
+        #
+        # ``SaoToplevel.attributes('-alpha', ...)`` is a no-op once mirrored
+        # (see below) — the real Tk window's alpha is pinned at 0.01 so it
+        # never becomes visible on the desktop. Callers that want a fade
+        # (e.g. a close animation) need to fade the compositor layer instead.
         if self._layer is not None:
             self._layer.alpha = max(0.0, min(1.0, value))
             self._layer._dirty = True
@@ -388,7 +383,7 @@ class TkMirrorLayer:
             _user32.MoveWindow(self._hwnd, x, y, w, h, True)
 
     def sync_from_window(self) -> None:
-        """Sync layer size from actual Win32 window rect."""
+        # Sync layer size from actual Win32 window rect.
         if not self._hwnd or self._layer is None:
             return
         rect = wt.RECT()
@@ -687,7 +682,7 @@ _mirror_lock = threading.Lock()
 
 def mirror_tk_panel(tk_win, name: str, z: int = 500,
                     capture_fps: float = 30.0) -> TkMirrorLayer:
-    """Create and attach a TkMirrorLayer for a Tk Toplevel."""
+    # Create and attach a TkMirrorLayer for a Tk Toplevel.
     with _mirror_lock:
         old = _mirrors.get(name)
         if old is not None:
@@ -735,7 +730,7 @@ def _compositor_tk_panels_enabled() -> bool:
 
 
 def _tk_root_for(widget) -> Optional[Any]:
-    """Return the Tk root required for compositor input proxy windows."""
+    # Return the Tk root required for compositor input proxy windows.
     try:
         root_fn = getattr(widget, '_root', None)
         if callable(root_fn):
@@ -754,14 +749,13 @@ def _tk_root_for(widget) -> Optional[Any]:
 
 
 class SaoToplevel(tk.Toplevel):
-    """Tk Toplevel that automatically renders through the compositor.
-
-    Drop-in replacement: ``SaoToplevel(root, mirror_name='panel')``
-    instead of ``tk.Toplevel(root)``.  Show/hide/destroy route through
-    TkMirrorLayer transparently.  Falls back to normal Tk rendering
-    when ``compositor_tk_panels`` config is False or compositor is
-    unavailable.
-    """
+    # Tk Toplevel that automatically renders through the compositor.
+    #
+    # Drop-in replacement: ``SaoToplevel(root, mirror_name='panel')``
+    # instead of ``tk.Toplevel(root)``.  Show/hide/destroy route through
+    # TkMirrorLayer transparently.  Falls back to normal Tk rendering
+    # when ``compositor_tk_panels`` config is False or compositor is
+    # unavailable.
 
     def __init__(self, *args, mirror_name: Optional[str] = None,
                  mirror_z: int = 500, mirror_fps: float = 30.0,
@@ -802,20 +796,19 @@ class SaoToplevel(tk.Toplevel):
     wm_attributes = attributes
 
     def state(self, *args):
-        """Report 'withdrawn' based on mirror visibility, not real Tk state.
-
-        Once a mirror is attached, ``withdraw()`` never calls
-        ``super().withdraw()`` (see below) — the real Tk window has to stay
-        mapped for PrintWindow capture to keep working even while the panel
-        is "closed" from the compositor's point of view. That means plain
-        ``tk.Toplevel.state()`` never reports 'withdrawn' again for the rest
-        of this window's life, which broke every panel's own
-        ``is_visible()`` (they almost all check ``win.state() !=
-        'withdrawn'``) and any code that re-shows panels based on that check
-        — a panel the user had already closed would get silently
-        re-deiconified as a side effect of unrelated panel/state-restore
-        logic elsewhere reading a stale 'not withdrawn' state.
-        """
+        # Report 'withdrawn' based on mirror visibility, not real Tk state.
+        #
+        # Once a mirror is attached, ``withdraw()`` never calls
+        # ``super().withdraw()`` (see below) — the real Tk window has to stay
+        # mapped for PrintWindow capture to keep working even while the panel
+        # is "closed" from the compositor's point of view. That means plain
+        # ``tk.Toplevel.state()`` never reports 'withdrawn' again for the rest
+        # of this window's life, which broke every panel's own
+        # ``is_visible()`` (they almost all check ``win.state() !=
+        # 'withdrawn'``) and any code that re-shows panels based on that check
+        # — a panel the user had already closed would get silently
+        # re-deiconified as a side effect of unrelated panel/state-restore
+        # logic elsewhere reading a stale 'not withdrawn' state.
         if self._mirror is not None and not args:
             return 'normal' if self._mirror._visible else 'withdrawn'
         return super().state(*args)

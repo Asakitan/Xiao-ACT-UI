@@ -1,13 +1,12 @@
 # -*- coding: utf-8 -*-
-"""SAO Creative Workshop — pywebview GUI application.
-
-Launch:
-    python -m workshop.app            # standalone
-    XiaoACTUI.exe --workshop          # from frozen app
-
-From Plugin Manager, the "创意工坊" tab calls ``launch()`` which opens
-the pywebview window in a subprocess (Tk owns main thread).
-"""
+# SAO Creative Workshop — pywebview GUI application.
+#
+# Launch:
+# python -m workshop.app            # standalone
+# XiaoACTUI.exe --workshop          # from frozen app
+#
+# From Plugin Manager, the "创意工坊" tab calls ``launch()`` which opens
+# the pywebview window in a subprocess (Tk owns main thread).
 
 from __future__ import annotations
 
@@ -82,7 +81,7 @@ def _get_server_url() -> str:
 
 
 class WorkshopAPI:
-    """Python backend exposed to JS via ``window.pywebview.api.*``."""
+    # Python backend exposed to JS via ``window.pywebview.api.*``.
 
     def __init__(self, gui_ref: Any = None):
         self._gui_ref = gui_ref

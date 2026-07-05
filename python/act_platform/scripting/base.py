@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""Abstract base for multi-language script runtimes and the bridge proxy."""
+# Abstract base for multi-language script runtimes and the bridge proxy.
 
 from __future__ import annotations
 
@@ -15,13 +15,12 @@ if TYPE_CHECKING:
 
 
 def resolve_local_script_path(plugin_base: str, relative_path: str) -> str:
-    """Resolve a plugin-relative script path, enforcing sandbox containment.
-
-    Used by Emma/Lua/AngelScript runtimes to let a plugin ``import``/``dofile``
-    sibling script files (``.emma``/``.lua``/``.as``) from its own directory.
-    The resolved path must stay inside ``plugin_base``; otherwise a ValueError
-    is raised so plugins cannot escape their directory via ``..`` traversal.
-    """
+    # Resolve a plugin-relative script path, enforcing sandbox containment.
+    #
+    # Used by Emma/Lua/AngelScript runtimes to let a plugin ``import``/``dofile``
+    # sibling script files (``.emma``/``.lua``/``.as``) from its own directory.
+    # The resolved path must stay inside ``plugin_base``; otherwise a ValueError
+    # is raised so plugins cannot escape their directory via ``..`` traversal.
     base = os.path.abspath(plugin_base)
     target = os.path.abspath(os.path.join(base, str(relative_path or "")))
     if os.path.commonpath([base, target]) != base:
@@ -32,7 +31,7 @@ def resolve_local_script_path(plugin_base: str, relative_path: str) -> str:
 
 
 class ScriptRuntime(abc.ABC):
-    """Language-specific runtime that loads foreign scripts as plugin modules."""
+    # Language-specific runtime that loads foreign scripts as plugin modules.
 
     @property
     @abc.abstractmethod
@@ -45,25 +44,25 @@ class ScriptRuntime(abc.ABC):
     @abc.abstractmethod
     def load_script(self, entry_path: str, record: "PluginRecord",
                     ctx: "PluginContext") -> ModuleType:
-        """Load *entry_path* and return a Python ``ModuleType``-like object.
-
-        The returned module must expose any lifecycle hooks the script defines
-        (``on_load``, ``on_enable``, ``on_disable``, ``on_unload``) as
-        regular callable attributes so ``PluginManager._call_hook`` works
-        unchanged.
-        """
+        # Load *entry_path* and return a Python ``ModuleType``-like object.
+        #
+        # The returned module must expose any lifecycle hooks the script defines
+        # (``on_load``, ``on_enable``, ``on_disable``, ``on_unload``) as
+        # regular callable attributes so ``PluginManager._call_hook`` works
+        # unchanged.
+        ...
 
     def unload_script(self, record: "PluginRecord") -> None:
-        """Optional cleanup when the plugin unloads."""
+        # Optional cleanup when the plugin unloads.
+        pass
 
 
 class ScriptModule(ModuleType):
-    """Thin Python module wrapper around a foreign-language plugin.
-
-    ``PluginManager._call_hook`` reads ``getattr(module, hook_name)``
-    and calls it. This class stores callables discovered from the
-    foreign runtime and exposes them as attributes.
-    """
+    # Thin Python module wrapper around a foreign-language plugin.
+    #
+    # ``PluginManager._call_hook`` reads ``getattr(module, hook_name)``
+    # and calls it. This class stores callables discovered from the
+    # foreign runtime and exposes them as attributes.
 
     def __init__(self, name: str, language: str, entry_path: str) -> None:
         super().__init__(name)
@@ -82,13 +81,12 @@ class ScriptModule(ModuleType):
 
 
 class ContextProxy:
-    """Flat proxy of :class:`PluginContext` for foreign-language consumption.
-
-    Lua/AngelScript/Emma scripts see this object as ``ctx`` and can call
-    any method directly. Type marshalling between the host language and
-    Python is handled by the specific runtime; this proxy guarantees
-    that only JSON-safe data crosses the boundary when needed.
-    """
+    # Flat proxy of :class:`PluginContext` for foreign-language consumption.
+    #
+    # Lua/AngelScript/Emma scripts see this object as ``ctx`` and can call
+    # any method directly. Type marshalling between the host language and
+    # Python is handled by the specific runtime; this proxy guarantees
+    # that only JSON-safe data crosses the boundary when needed.
 
     _PASSTHROUGH_METHODS = (
         "log", "subscribe", "subscribe_once", "unsubscribe",
@@ -147,7 +145,7 @@ class ContextProxy:
 
 
 def wrap_callback(fn: Any, language: str, log_fn: Optional[Callable] = None) -> Callable:
-    """Wrap a foreign-language callable so exceptions are caught and logged."""
+    # Wrap a foreign-language callable so exceptions are caught and logged.
 
     def _wrapper(*args: Any, **kwargs: Any) -> Any:
         try:
@@ -166,7 +164,7 @@ def wrap_callback(fn: Any, language: str, log_fn: Optional[Callable] = None) -> 
 
 
 def to_json_safe(value: Any) -> Any:
-    """Recursively coerce a value to JSON-safe Python types."""
+    # Recursively coerce a value to JSON-safe Python types.
     if value is None or isinstance(value, (bool, int, float, str)):
         return value
     if isinstance(value, bytes):

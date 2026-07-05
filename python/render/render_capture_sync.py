@@ -1,4 +1,4 @@
-"""Synchronization utilities for render capture operations."""
+# Synchronization utilities for render capture operations.
 
 from __future__ import annotations
 

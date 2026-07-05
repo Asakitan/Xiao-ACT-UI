@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
-"""Selftest: BossSkillStore persistence/dedup/tag-derivation + engine recording of
-skills, mechanics, and state onsets into the per-scene/per-boss aggregate."""
+# Selftest: BossSkillStore persistence/dedup/tag-derivation + engine recording of
+# skills, mechanics, and state onsets into the per-scene/per-boss aggregate.
 from __future__ import annotations
 
 import os
@@ -187,7 +187,7 @@ class EngineRecordingTest(unittest.TestCase):
 
 
 class ContractUnitTest(unittest.TestCase):
-    """Pure-function coverage for the reactions contract (no game/engine)."""
+    # Pure-function coverage for the reactions contract (no game/engine).
 
     def test_name_helpers_never_throw(self):
         from plugins.star_resonance_plugin.engines.boss_autokey_linkage import (

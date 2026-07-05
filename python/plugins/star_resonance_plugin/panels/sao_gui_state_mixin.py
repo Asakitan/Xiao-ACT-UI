@@ -1,26 +1,24 @@
 # -*- coding: utf-8 -*-
-"""
-SAOPlayerGUIStateMixin — second mixin extracted from SAOPlayerGUI
-(round 32 of the sao_gui split refactor). 730 lines moved out.
-
-This is the heart of the user's combat-lag complaint:
-  * ``_on_game_state_update`` — GameStateManager listener; runs on
-    whichever thread called ``state_mgr.update()`` (bridge worker,
-    recognition worker, etc.).
-  * ``_apply_fast_state_update`` — main-thread continuation of
-    identity / level changes, dispatched via ``root.after(0, ...)``.
-  * ``_push_packet_overlays`` — the big main-thread per-tick push
-    (DPS / Boss HP / commander / HP overlay / SkillFX), called from
-    ``_recognition_loop``.
-  * ``_recognition_loop`` — the 200 ms Tk-after-driven main-thread
-    loop that pulls game state and triggers overlay refreshes.
-
-All four are methods on SAOPlayerGUI; they remain methods on the
-SAOPlayerGUI MRO via this mixin. Combat-lag fix work will land
-inside this module in later rounds (the goal is to push the heavy
-compute portions of `_push_packet_overlays` onto a background
-worker, leaving only Tk widget mutations on main).
-"""
+# SAOPlayerGUIStateMixin — second mixin extracted from SAOPlayerGUI
+# (round 32 of the sao_gui split refactor). 730 lines moved out.
+#
+# This is the heart of the user's combat-lag complaint:
+# * ``_on_game_state_update`` — GameStateManager listener; runs on
+# whichever thread called ``state_mgr.update()`` (bridge worker,
+# recognition worker, etc.).
+# * ``_apply_fast_state_update`` — main-thread continuation of
+# identity / level changes, dispatched via ``root.after(0, ...)``.
+# * ``_push_packet_overlays`` — the big main-thread per-tick push
+# (DPS / Boss HP / commander / HP overlay / SkillFX), called from
+# ``_recognition_loop``.
+# * ``_recognition_loop`` — the 200 ms Tk-after-driven main-thread
+# loop that pulls game state and triggers overlay refreshes.
+#
+# All four are methods on SAOPlayerGUI; they remain methods on the
+# SAOPlayerGUI MRO via this mixin. Combat-lag fix work will land
+# inside this module in later rounds (the goal is to push the heavy
+# compute portions of `_push_packet_overlays` onto a background
+# worker, leaving only Tk widget mutations on main).
 
 from __future__ import annotations
 
@@ -71,8 +69,8 @@ def _unit_pct(value: Any, default: float = 0.0) -> float:
 
 
 def _boss_bar_main_key(_m, _recent_targets):
-    """Boss-bar primary-target sort key. Hoisted from _compute_boss_hp_delta
-    so the daemon worker doesn't rebind a fresh closure per tick."""
+    # Boss-bar primary-target sort key. Hoisted from _compute_boss_hp_delta
+    # so the daemon worker doesn't rebind a fresh closure per tick.
     _max_hp = _finite_int(getattr(_m, 'max_hp', 0), 0, lo=0)
     _hp = _finite_int(getattr(_m, 'hp', 0), 0, lo=0)
     _mh_for_pct = _max_hp if _max_hp > 0 else (_hp if _hp > 0 else 1)
@@ -85,13 +83,12 @@ _BB_BAD_NAMES = frozenset({'', 'unit', 'target'})
 
 
 def _bb_resolve_unit_name(direct_data, target_uuid, tracker):
-    """Best-effort CN name for the boss-bar enemy slot.
-
-    Order: explicit name on the monster object -> MonsterTable/BossTable lookup
-    by template_id -> tracker uuid->name side map (fed by update_monster_info).
-    Only READS the name tables, so it never conflicts with the cross-repo
-    name-table regeneration flow.
-    """
+    # Best-effort CN name for the boss-bar enemy slot.
+    #
+    # Order: explicit name on the monster object -> MonsterTable/BossTable lookup
+    # by template_id -> tracker uuid->name side map (fed by update_monster_info).
+    # Only READS the name tables, so it never conflicts with the cross-repo
+    # name-table regeneration flow.
     if direct_data:
         nm = str(direct_data.get('name') or direct_data.get('monster_name')
                  or direct_data.get('display_name') or '').strip()
@@ -123,11 +120,10 @@ def _bb_resolve_unit_name(direct_data, target_uuid, tracker):
     return ''
 
 def _mem_supplement_additional(bridge, existing, main_uuid, tracker, max_total=4):
-    """Fill additional-unit slots from MEM entity snapshot.
-
-    TCP recent_targets only has entities the player personally hit.
-    MEM has ALL visible combat entities — use them for sub-boss panels.
-    """
+    # Fill additional-unit slots from MEM entity snapshot.
+    #
+    # TCP recent_targets only has entities the player personally hit.
+    # MEM has ALL visible combat entities — use them for sub-boss panels.
     if len(existing) >= max_total:
         return existing
     try:
@@ -214,16 +210,15 @@ except Exception:  # pragma: no cover - defensive for stripped plugin builds
 
 
 class SAOPlayerGUIStateMixin:
-    """State-pull + overlay-push helpers (recognition_loop + push_packet_overlays + fast-state).
-
-    SAOPlayerGUI must initialise the broad set of ``self.X`` attributes
-    these methods touch (overlays, signature caches, throttle
-    timestamps, dps tracker handle, boss-HP tracker, etc.) in its
-    ``__init__`` — this mixin only contains method definitions.
-    """
+    # State-pull + overlay-push helpers (recognition_loop + push_packet_overlays + fast-state).
+    #
+    # SAOPlayerGUI must initialise the broad set of ``self.X`` attributes
+    # these methods touch (overlays, signature caches, throttle
+    # timestamps, dps tracker handle, boss-HP tracker, etc.) in its
+    # ``__init__`` — this mixin only contains method definitions.
 
     def _on_game_state_update(self, gs):
-        """Fast path for identity/level updates from packet or vision threads."""
+        # Fast path for identity/level updates from packet or vision threads.
         if self._destroyed or gs is None:
             return
         # Buff 监视器 (自身):
@@ -357,12 +352,11 @@ class SAOPlayerGUIStateMixin:
 
     @_probe.decorate('ui.push_packet_overlays')
     def _push_packet_overlays(self, gs):
-        """始终运行的 DPS / Boss HP 覆盖板推送 — 数据完全由 packet on_damage 回调驱动,
-        与 recognition_ok / packet_active 闸门解耦, 避免抓包链路里任何一处中断都拖累弹出.
-
-        v2.3.16: consolidated DPS tracker access into a single lock acquisition
-        via poll_overlay_state() to reduce lock contention from 9 → 1.
-        """
+        # 始终运行的 DPS / Boss HP 覆盖板推送 — 数据完全由 packet on_damage 回调驱动,
+        # 与 recognition_ok / packet_active 闸门解耦, 避免抓包链路里任何一处中断都拖累弹出.
+        #
+        # v2.3.16: consolidated DPS tracker access into a single lock acquisition
+        # via poll_overlay_state() to reduce lock contention from 9 → 1.
         # ── DPS tracker: 更新自身玩家信息 ──
         _pp_now = time.time()
         # v3.1.8 round 20: throttle the in-session roster sync to 4 Hz.
@@ -547,15 +541,14 @@ class SAOPlayerGUIStateMixin:
     # ------------------------------------------------------------------
     @_probe.decorate('ui.compute_boss_hp_delta')
     def _compute_boss_hp_delta(self, gs, _pp_now):
-        """Compute the boss-HP overlay payload for one tick.
-
-        Returns the dict to pass to ``self._boss_hp_overlay.update(...)``,
-        or ``None`` if no push is needed (sig unchanged, no overlay, or
-        gs missing). Mutates ``self._bb_*`` state in-place to track the
-        target lock + motion sig — these mutations are still on main
-        thread today; round 35 will relocate them when this method
-        moves to a worker.
-        """
+        # Compute the boss-HP overlay payload for one tick.
+        #
+        # Returns the dict to pass to ``self._boss_hp_overlay.update(...)``,
+        # or ``None`` if no push is needed (sig unchanged, no overlay, or
+        # gs missing). Mutates ``self._bb_*`` state in-place to track the
+        # target lock + motion sig — these mutations are still on main
+        # thread today; round 35 will relocate them when this method
+        # moves to a worker.
         if not self._boss_hp_overlay or gs is None:
             return None
         try:
@@ -929,29 +922,26 @@ class SAOPlayerGUIStateMixin:
                 self._boss_hp_worker_output = payload
 
     def _enqueue_boss_hp_compute(self, gs, now):
-        """Push the latest (gs, now) into the worker mailbox (latest-wins)
-        and wake the worker. O(1) main-thread cost.
-        """
+        # Push the latest (gs, now) into the worker mailbox (latest-wins)
+        # and wake the worker. O(1) main-thread cost.
         with self._boss_hp_worker_input_lock:
             self._boss_hp_worker_input = (gs, now)
         self._boss_hp_worker_signal.set()
 
     def _consume_boss_hp_payload(self):
-        """Read + clear the worker's latest output slot. Returns the
-        overlay payload dict (to pass to ``self._boss_hp_overlay.update``)
-        or ``None`` if the worker hasn't produced one since last consume.
-        """
+        # Read + clear the worker's latest output slot. Returns the
+        # overlay payload dict (to pass to ``self._boss_hp_overlay.update``)
+        # or ``None`` if the worker hasn't produced one since last consume.
         with self._boss_hp_worker_output_lock:
             out = self._boss_hp_worker_output
             self._boss_hp_worker_output = None
         return out
 
     def _stop_boss_hp_worker(self):
-        """Signal the worker to exit. Safe to call multiple times.
-        Called from _finalize_close. The thread is daemon so it dies with
-        the process anyway, but explicit shutdown lets it clean up
-        promptly.
-        """
+        # Signal the worker to exit. Safe to call multiple times.
+        # Called from _finalize_close. The thread is daemon so it dies with
+        # the process anyway, but explicit shutdown lets it clean up
+        # promptly.
         if not getattr(self, '_boss_hp_worker_started', False):
             return
         try:
@@ -962,14 +952,13 @@ class SAOPlayerGUIStateMixin:
 
     @_probe.decorate('ui.recognition_loop')
     def _recognition_loop(self):
-        """后台识别循环 — 读取 GameStateManager 并更新 HP 条 + 体力覆盖板 + DPS + Boss.
-
-        注意: v2.1.2-f 起完全去除外层 `_recognition_active` 闸门 —
-        即使 vision/packet 引擎初始化中途失败 (engines 列表为空导致
-        `_recognition_active=False`), 只要 GameStateManager 还在运行,
-        就应继续刷新 overlay。子模块 (DPS/Boss HP/BurstReady/HP overlay)
-        各自做空数据检查, 不会因为闸门翻成 False 而集体卡死。
-        """
+        # 后台识别循环 — 读取 GameStateManager 并更新 HP 条 + 体力覆盖板 + DPS + Boss.
+        #
+        # 注意: v2.1.2-f 起完全去除外层 `_recognition_active` 闸门 —
+        # 即使 vision/packet 引擎初始化中途失败 (engines 列表为空导致
+        # `_recognition_active=False`), 只要 GameStateManager 还在运行,
+        # 就应继续刷新 overlay。子模块 (DPS/Boss HP/BurstReady/HP overlay)
+        # 各自做空数据检查, 不会因为闸门翻成 False 而集体卡死。
         if self._destroyed:
             return
         if self._state_mgr is not None:

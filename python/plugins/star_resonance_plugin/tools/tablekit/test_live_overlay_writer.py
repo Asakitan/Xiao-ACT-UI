@@ -1,9 +1,8 @@
 # -*- coding: utf-8 -*-
-"""Plain-script tests for LiveNameOverlayWriter.
-
-Run:
-    python -m tools.tablekit.test_live_overlay_writer
-"""
+# Plain-script tests for LiveNameOverlayWriter.
+#
+# Run:
+# python -m tools.tablekit.test_live_overlay_writer
 from __future__ import annotations
 
 import os

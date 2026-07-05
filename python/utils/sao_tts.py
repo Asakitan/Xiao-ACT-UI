@@ -1,10 +1,9 @@
 # -*- coding: utf-8 -*-
-"""通用 TTS 播报：SAPI 离线合成 + 文件缓存 + 预合成 + 优先级打断。
-
-战斗路径设计为纯缓存命中：机制文案在档案加载/保存时预合成到
-temp/tts_cache/，speak_text 只做一次 dict/磁盘查找后丢给 sao_sound
-的专用 TTS 通道播放（高优先级自然打断低优先级）。
-"""
+# 通用 TTS 播报：SAPI 离线合成 + 文件缓存 + 预合成 + 优先级打断。
+#
+# 战斗路径设计为纯缓存命中：机制文案在档案加载/保存时预合成到
+# temp/tts_cache/，speak_text 只做一次 dict/磁盘查找后丢给 sao_sound
+# 的专用 TTS 通道播放（高优先级自然打断低优先级）。
 
 import base64
 import hashlib
@@ -87,7 +86,7 @@ def _encoded_command(script: str) -> str:
 
 
 def _synthesize(text: str, output_path: str) -> bool:
-    """SAPI 合成到 wav；中文文本请求 zh-CN 声音 (失败回系统默认声音)。"""
+    # SAPI 合成到 wav；中文文本请求 zh-CN 声音 (失败回系统默认声音)。
     os.makedirs(os.path.dirname(output_path), exist_ok=True)
     culture = _culture_for(text)
     safe_output = output_path.replace("'", "''")
@@ -139,7 +138,7 @@ def _probe_zh_voice() -> bool:
 
 
 def get_tts_health() -> Dict[str, Any]:
-    """编辑器健康检查：zh_voice=None 表示尚未探测 (首次调用会同步探测)。"""
+    # 编辑器健康检查：zh_voice=None 表示尚未探测 (首次调用会同步探测)。
     global _zh_voice_available
     if _zh_voice_available is None:
         with _zh_voice_lock:
@@ -150,7 +149,7 @@ def get_tts_health() -> Dict[str, Any]:
 
 
 def peek_tts_health() -> Dict[str, Any]:
-    """非阻塞版健康检查：zh_voice 未探测时返回 None 并触发后台探测。"""
+    # 非阻塞版健康检查：zh_voice 未探测时返回 None 并触发后台探测。
     global _zh_voice_available
     if _zh_voice_available is None:
         def _bg():
@@ -216,7 +215,7 @@ def _enqueue_synth(text: str, path: str,
 
 def presynthesize(texts: List[str],
                   on_progress: Optional[Callable[[str, bool], None]] = None):
-    """后台预合成一批文案 (档案加载/保存/raid start 时调用)，重复文案去重。"""
+    # 后台预合成一批文案 (档案加载/保存/raid start 时调用)，重复文案去重。
     seen = set()
     for text in texts or []:
         text = str(text or "").strip()
@@ -269,10 +268,9 @@ def _drain_pending():
 
 def speak_text(text: str, priority: str = "normal",
                volume: Optional[float] = None) -> str:
-    """非阻塞播报。返回 'played' | 'queued' | 'synthesizing' | 'disabled' | 'error'。
-
-    high 打断一切；normal 不打断正在播的 high (排队 ≤2 条、过期即弃)。
-    """
+    # 非阻塞播报。返回 'played' | 'queued' | 'synthesizing' | 'disabled' | 'error'。
+    #
+    # high 打断一切；normal 不打断正在播的 high (排队 ≤2 条、过期即弃)。
     text = str(text or "").strip()
     if not text:
         return "error"
@@ -304,7 +302,7 @@ def speak_text(text: str, priority: str = "normal",
 
 
 def collect_profile_tts_texts(profile: Dict[str, Any]) -> List[str]:
-    """收集一个 boss raid 档案需要预合成的全部 TTS 文案 (机制 + 狂暴里程碑)。"""
+    # 收集一个 boss raid 档案需要预合成的全部 TTS 文案 (机制 + 狂暴里程碑)。
     texts: List[str] = []
     if not isinstance(profile, dict):
         return texts

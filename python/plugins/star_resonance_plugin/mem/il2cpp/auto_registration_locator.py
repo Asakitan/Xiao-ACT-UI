@@ -1,22 +1,21 @@
 # -*- coding: utf-8 -*-
-"""auto_registration_locator - derive klass pointers by NAME, in-memory (no dump).
-
-The per-version data that breaks on every game patch is the klass RVA (the address
-of the static Il2CppClass* in GameAssembly's .data). The Il2CppClass objects
-themselves carry their name (+0x10) and namespace (+0x18), and GameAssembly's
-.data is full of pointers to them. So we can rebuild a name -> klass_ptr index
-purely from process memory:
-
-    scan GameAssembly's image for 8-aligned u64 pointing into the klass region,
-    deref, validate the target as an Il2CppClass by reading an ASCII name, and
-    match the (namespace.name) against the wanted set.
-
-No script.json, no Il2CppDumper, no 250MB dump, no hard-coded RVA -> version-robust
-and onedir-safe. The klass region is auto-discovered (no hard-coded address): we
-validate every candidate by name, so wrong regions simply yield no valid names.
-
-Field offsets still come from the per-version bundle (layout-stable, name-keyed).
-"""
+# auto_registration_locator - derive klass pointers by NAME, in-memory (no dump).
+#
+# The per-version data that breaks on every game patch is the klass RVA (the address
+# of the static Il2CppClass* in GameAssembly's .data). The Il2CppClass objects
+# themselves carry their name (+0x10) and namespace (+0x18), and GameAssembly's
+# .data is full of pointers to them. So we can rebuild a name -> klass_ptr index
+# purely from process memory:
+#
+# scan GameAssembly's image for 8-aligned u64 pointing into the klass region,
+# deref, validate the target as an Il2CppClass by reading an ASCII name, and
+# match the (namespace.name) against the wanted set.
+#
+# No script.json, no Il2CppDumper, no 250MB dump, no hard-coded RVA -> version-robust
+# and onedir-safe. The klass region is auto-discovered (no hard-coded address): we
+# validate every candidate by name, so wrong regions simply yield no valid names.
+#
+# Field offsets still come from the per-version bundle (layout-stable, name-keyed).
 from __future__ import annotations
 
 import re
@@ -63,7 +62,7 @@ def _read_cstr(pm, addr: int, n: int = 160) -> Optional[bytes]:
 
 
 def klass_fullname(pm, kp: int) -> Optional[str]:
-    """Return 'namespace.Name' for a candidate Il2CppClass*, or None if not one."""
+    # Return 'namespace.Name' for a candidate Il2CppClass*, or None if not one.
     name = _read_cstr(pm, pm.read_u64(kp + CLASS_NAME_OFF), 128)
     if not name or not _IDENT.match(name):
         return None
@@ -78,12 +77,11 @@ def klass_fullname(pm, kp: int) -> Optional[str]:
 def build_live_class_index(pm, wanted: Set[str], *, ga_module=None,
                            klass_lo: int = KLASS_LO, klass_hi: int = KLASS_HI,
                            time_budget_s: float = 60.0) -> Dict[str, int]:
-    """Resolve ``wanted`` full class names -> klass_ptr by scanning GameAssembly.
-
-    Validates every candidate by reading its name; early-exits once all wanted
-    names are found. Caller should cache the result for the session (and the
-    discovered RVAs keyed by game_key for instant next-launch resolution).
-    """
+    # Resolve ``wanted`` full class names -> klass_ptr by scanning GameAssembly.
+    #
+    # Validates every candidate by reading its name; early-exits once all wanted
+    # names are found. Caller should cache the result for the session (and the
+    # discovered RVAs keyed by game_key for instant next-launch resolution).
     ga = ga_module or find_ga_module(pm)
     if ga is None:
         return {}
@@ -153,7 +151,7 @@ def build_live_class_index(pm, wanted: Set[str], *, ga_module=None,
 
 
 class LiveKlassResolver:
-    """A name -> klass_ptr resolver backed by an in-memory index (cached)."""
+    # A name -> klass_ptr resolver backed by an in-memory index (cached).
 
     def __init__(self, pm, wanted: Set[str], *, time_budget_s: float = 60.0):
         self.pm = pm

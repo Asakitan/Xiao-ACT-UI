@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""Regression tests for Star Resonance panel text helpers."""
+# Regression tests for Star Resonance panel text helpers.
 
 from __future__ import annotations
 

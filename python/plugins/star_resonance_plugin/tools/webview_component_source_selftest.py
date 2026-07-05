@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""Regression checks for WebView component source settings propagation."""
+# Regression checks for WebView component source settings propagation.
 
 from __future__ import annotations
 

@@ -1,24 +1,23 @@
 # -*- coding: utf-8 -*-
-"""Selftest: UnifiedOverlay.create_layer() called twice under the SAME
-name must release the old layer's resources, not silently overwrite it.
-
-Context: create_layer() used to do `self._layers[name] = layer`
-unconditionally, with no check for a pre-existing entry. Any caller that
-creates a layer under a fixed, reused name — e.g. SAOPlayerGUIFloatChrome
-Mixin._play_motion_blur's hardcoded '_motion_blur' layer, re-triggered by
-an ordinary fast menu-open-then-close click sequence well within its own
-~0.4s animation lifetime — silently dropped the OLD CompositorLayer object
-out of both _layers and _z_sorted. The only place that releases a layer's
-GL FBO/texture (_release_gl, queued via destroy_layer's _cmd_q closure) was
-never reached for that orphan, leaking one screen-sized GPU texture+
-framebuffer per overlapping re-trigger, accumulating over a session. Any
-other caller re-using a fixed layer name (e.g. a plugin's
-create_compositor_layer bridge) hits the exact same gap.
-
-Pure logic test — UnifiedOverlay's layer dict/lock plumbing needs no GPU
-context, GLFW window, or Tk root; only .start() (never called here)
-touches any of that.
-"""
+# Selftest: UnifiedOverlay.create_layer() called twice under the SAME
+# name must release the old layer's resources, not silently overwrite it.
+#
+# Context: create_layer() used to do `self._layers[name] = layer`
+# unconditionally, with no check for a pre-existing entry. Any caller that
+# creates a layer under a fixed, reused name — e.g. SAOPlayerGUIFloatChrome
+# Mixin._play_motion_blur's hardcoded '_motion_blur' layer, re-triggered by
+# an ordinary fast menu-open-then-close click sequence well within its own
+# ~0.4s animation lifetime — silently dropped the OLD CompositorLayer object
+# out of both _layers and _z_sorted. The only place that releases a layer's
+# GL FBO/texture (_release_gl, queued via destroy_layer's _cmd_q closure) was
+# never reached for that orphan, leaking one screen-sized GPU texture+
+# framebuffer per overlapping re-trigger, accumulating over a session. Any
+# other caller re-using a fixed layer name (e.g. a plugin's
+# create_compositor_layer bridge) hits the exact same gap.
+#
+# Pure logic test — UnifiedOverlay's layer dict/lock plumbing needs no GPU
+# context, GLFW window, or Tk root; only .start() (never called here)
+# touches any of that.
 import os
 import sys
 

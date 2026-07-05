@@ -1,9 +1,8 @@
 # -*- coding: utf-8 -*-
-"""Minimal entry stub — compiled to native EXE by Nuitka.
-
-All application code lives in runtime/*.pyd (independently updatable).
-This stub only bootstraps sys.path and hands off to main.pyd.
-"""
+# Minimal entry stub — compiled to native EXE by Nuitka.
+#
+# All application code lives in runtime/*.pyd (independently updatable).
+# This stub only bootstraps sys.path and hands off to main.pyd.
 import os
 import sys
 

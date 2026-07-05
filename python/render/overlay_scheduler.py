@@ -1,22 +1,21 @@
-"""overlay_scheduler.py - Shared display-synced frame pacer for Tk ULW overlays.
-
-Design (v2.3.10+):
-- One ``root.after`` loop ticks at the monitor's refresh rate (auto-detected
-  on Windows; clamps to 60-240 Hz). Uses a high-resolution perf-counter
-  deadline so the cadence does not drift.
-- On Windows, ``winmm.timeBeginPeriod(1)`` is engaged while the scheduler is
-  running. Without it, Tk's ``after`` rounds up to the default ~15.6 ms
-  scheduler quantum and overlays degrade to ~10 Hz under load. With it,
-  sleep/after resolution is ~1 ms, which is what a 60/120/144 Hz cadence
-  actually needs.
-- Each overlay registers ``tick_fn(now)``; scheduler calls it on the Tk main
-  thread every frame. The previous aggressive busy-time idle-panel guardian
-  (idle_skip_n up to 14 → ~4 Hz) has been replaced with milder tiers
-  (max idle_skip_n=4 → ~25 Hz under heavy load). This prevents main-thread
-  blockage during GPU fisheye enable and keeps HP panel animation smooth.
-  Full-rate for animating panels; idle panels adapt based on combat/menu
-  pressure. GPU migration made the old aggressive throttle unnecessary.
-"""
+# overlay_scheduler.py - Shared display-synced frame pacer for Tk ULW overlays.
+#
+# Design (v2.3.10+):
+# - One ``root.after`` loop ticks at the monitor's refresh rate (auto-detected
+# on Windows; clamps to 60-240 Hz). Uses a high-resolution perf-counter
+# deadline so the cadence does not drift.
+# - On Windows, ``winmm.timeBeginPeriod(1)`` is engaged while the scheduler is
+# running. Without it, Tk's ``after`` rounds up to the default ~15.6 ms
+# scheduler quantum and overlays degrade to ~10 Hz under load. With it,
+# sleep/after resolution is ~1 ms, which is what a 60/120/144 Hz cadence
+# actually needs.
+# - Each overlay registers ``tick_fn(now)``; scheduler calls it on the Tk main
+# thread every frame. The previous aggressive busy-time idle-panel guardian
+# (idle_skip_n up to 14 → ~4 Hz) has been replaced with milder tiers
+# (max idle_skip_n=4 → ~25 Hz under heavy load). This prevents main-thread
+# blockage during GPU fisheye enable and keeps HP panel animation smooth.
+# Full-rate for animating panels; idle panels adapt based on combat/menu
+# pressure. GPU migration made the old aggressive throttle unnecessary.
 from __future__ import annotations
 
 import ctypes
@@ -35,7 +34,7 @@ _SLACK_SEC = 0.0010
 
 
 def _detect_refresh_hz() -> int:
-    """Best-effort refresh-rate detection. Falls back to 60 Hz."""
+    # Best-effort refresh-rate detection. Falls back to 60 Hz.
     if os.name != 'nt':
         return _DEFAULT_HZ
     try:
@@ -57,15 +56,14 @@ def _detect_refresh_hz() -> int:
 
 
 class _WinTimerResolution:
-    """RAII-ish wrapper around ``timeBeginPeriod(1)`` on Windows.
-
-    The default scheduler tick on Windows is ~15.6 ms, which clamps any
-    ``root.after(1, ...)`` to the same 15.6 ms quantum. That bottoms out Tk
-    overlays at ~64 Hz at best and ~10-20 Hz under load. Raising the multimedia
-    timer resolution to 1 ms lets ``after`` actually pace at the monitor
-    refresh rate. We release it on ``stop()`` so the process doesn't leave the
-    system-wide timer pinned high.
-    """
+    # RAII-ish wrapper around ``timeBeginPeriod(1)`` on Windows.
+    #
+    # The default scheduler tick on Windows is ~15.6 ms, which clamps any
+    # ``root.after(1, ...)`` to the same 15.6 ms quantum. That bottoms out Tk
+    # overlays at ~64 Hz at best and ~10-20 Hz under load. Raising the multimedia
+    # timer resolution to 1 ms lets ``after`` actually pace at the monitor
+    # refresh rate. We release it on ``stop()`` so the process doesn't leave the
+    # system-wide timer pinned high.
 
     def __init__(self) -> None:
         self._engaged = False
@@ -206,38 +204,37 @@ class OverlayScheduler:
             self.stop()
 
     def set_combat_load(self, active: bool) -> None:
-        """Hint that a heavy short-lived panel is
-        currently composing. v2.3.10+: now uses milder idle_skip_n=3~4
-        (instead of 10/14) so main thread stays responsive while still
-        prioritizing burst/menu."""
+        # Hint that a heavy short-lived panel is
+        # currently composing. v2.3.10+: now uses milder idle_skip_n=3~4
+        # (instead of 10/14) so main thread stays responsive while still
+        # prioritizing burst/menu.
         self._combat_load = bool(active)
 
     def set_menu_open(self, active: bool) -> None:
-        """v2.2.18: SAO menu open/close hook. v2.3.10+: now uses milder
-        idle_skip_n=3~4 (instead of 8/14) to prevent main-thread blockage
-        during fisheye enable and HP animation."""
+        # v2.2.18: SAO menu open/close hook. v2.3.10+: now uses milder
+        # idle_skip_n=3~4 (instead of 8/14) to prevent main-thread blockage
+        # during fisheye enable and HP animation.
         self._menu_open = bool(active)
 
     def set_render_pressure(self, level: Optional[int]) -> None:
-        """v2.2.18: explicit pressure level. ``None`` means auto.
-        0=normal, 1=combat-equivalent, 2=menu-equivalent, 3=combat+menu.
-        Workers can write here based on observed wall time."""
+        # v2.2.18: explicit pressure level. ``None`` means auto.
+        # 0=normal, 1=combat-equivalent, 2=menu-equivalent, 3=combat+menu.
+        # Workers can write here based on observed wall time.
         self._render_pressure = level if level is None else int(level)
 
     def _poll_worker_wall_pressure(self) -> None:
-        """v2.2.21: closed loop — read worker compose wall and lift the
-        wall-pressure floor when any panel blows past the frame budget.
-
-        Mapping (per 60 Hz frame_sec=16.7 ms):
-          peak <= 12 ms    → floor 0  (everything fits)
-          peak <= 25 ms    → floor 1  (one panel pushed past budget)
-          peak <= 50 ms    → floor 2  (sustained 30 fps composes)
-          peak  > 50 ms    → floor 3  (heavy burst + combined load)
-
-        We only POLL once every 6 frames (~100 ms at 60 Hz) so the poll
-        itself stays cheap, and we use a slow decay (max-of(prev, new)
-        with -1 step on miss) so the floor doesn't ping-pong.
-        """
+        # v2.2.21: closed loop — read worker compose wall and lift the
+        # wall-pressure floor when any panel blows past the frame budget.
+        #
+        # Mapping (per 60 Hz frame_sec=16.7 ms):
+        # peak <= 12 ms    → floor 0  (everything fits)
+        # peak <= 25 ms    → floor 1  (one panel pushed past budget)
+        # peak <= 50 ms    → floor 2  (sustained 30 fps composes)
+        # peak  > 50 ms    → floor 3  (heavy burst + combined load)
+        #
+        # We only POLL once every 6 frames (~100 ms at 60 Hz) so the poll
+        # itself stays cheap, and we use a slow decay (max-of(prev, new)
+        # with -1 step on miss) so the floor doesn't ping-pong.
         self._wall_poll_frame_idx += 1
         if (self._wall_poll_frame_idx % 6) != 0:
             return

@@ -1,11 +1,10 @@
 # -*- coding: utf-8 -*-
-"""Offline repro harness for the SAO popup-menu glass HUD alignment bug.
-
-Boots the real SAOPopUpMenu (GPU HUD path) against a fake floating anchor,
-then dumps the ground-truth numbers from every stage of the geometry
-pipeline (Tk content frame -> MenuHudOverlay -> GpuOverlayWindow ->
-compositor layer) plus a full-screen screenshot for visual measurement.
-"""
+# Offline repro harness for the SAO popup-menu glass HUD alignment bug.
+#
+# Boots the real SAOPopUpMenu (GPU HUD path) against a fake floating anchor,
+# then dumps the ground-truth numbers from every stage of the geometry
+# pipeline (Tk content frame -> MenuHudOverlay -> GpuOverlayWindow ->
+# compositor layer) plus a full-screen screenshot for visual measurement.
 import os
 import sys
 import json

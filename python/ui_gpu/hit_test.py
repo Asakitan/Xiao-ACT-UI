@@ -1,4 +1,4 @@
-"""Cursor → (kind, idx) hit testing for the popup GLFW window."""
+# Cursor → (kind, idx) hit testing for the popup GLFW window.
 
 from __future__ import annotations
 

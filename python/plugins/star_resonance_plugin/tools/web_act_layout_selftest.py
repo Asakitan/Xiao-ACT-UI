@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""Static layout regression checks for ACT WebView panels."""
+# Static layout regression checks for ACT WebView panels.
 
 from __future__ import annotations
 

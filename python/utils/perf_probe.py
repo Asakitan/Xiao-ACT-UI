@@ -1,34 +1,33 @@
-"""perf_probe.py — Lightweight per-section profiler for sao_auto.
-
-Goals
------
-* Zero (or near-zero) cost when disabled.
-* Pure Python / stdlib only — safe to ship via PyInstaller.
-* Drop-in instrumentation for hot paths via context manager or decorator.
-* Periodic dump of count / p50 / p95 / p99 / max wall-time and (when
-  available) per-section thread-CPU time, plus optional backlog gauges.
-
-Activation
-----------
-Disabled by default. 
-
-The instrumentation call sites stay in the code permanently; they collapse
-to a couple of attribute checks when the probe is disabled.
-
-Usage
------
-    from utils.perf_probe import probe, gauge
-
-    with probe('parser.process_packet'):
-        ...
-
-    @probe.decorate('boss.on_damage_event')
-    def on_damage_event(self, event): ...
-
-    gauge('parser.delta_batch_size', len(batch))
-
-The dump runs on a daemon thread; it is started lazily on first use.
-"""
+# perf_probe.py — Lightweight per-section profiler for sao_auto.
+#
+# Goals
+# -----
+# * Zero (or near-zero) cost when disabled.
+# * Pure Python / stdlib only — safe to ship via PyInstaller.
+# * Drop-in instrumentation for hot paths via context manager or decorator.
+# * Periodic dump of count / p50 / p95 / p99 / max wall-time and (when
+# available) per-section thread-CPU time, plus optional backlog gauges.
+#
+# Activation
+# ----------
+# Disabled by default.
+#
+# The instrumentation call sites stay in the code permanently; they collapse
+# to a couple of attribute checks when the probe is disabled.
+#
+# Usage
+# -----
+# from utils.perf_probe import probe, gauge
+#
+# with probe('parser.process_packet'):
+# ...
+#
+# @probe.decorate('boss.on_damage_event')
+# def on_damage_event(self, event): ...
+#
+# gauge('parser.delta_batch_size', len(batch))
+#
+# The dump runs on a daemon thread; it is started lazily on first use.
 
 from __future__ import annotations
 
@@ -62,13 +61,12 @@ _FAULT_LOG_PATH: str = ''
 
 
 def _load_config() -> None:
-    """Lazy one-time read from SettingsManager (config.py / settings.json).
-
-    Deferred import avoids circular-import issues because perf_probe.py is
-    imported by packet_parser and other modules that themselves import config.
-    Calling this on first probe/gauge use instead of at module load time keeps
-    the import graph clean.
-    """
+    # Lazy one-time read from SettingsManager (config.py / settings.json).
+    #
+    # Deferred import avoids circular-import issues because perf_probe.py is
+    # imported by packet_parser and other modules that themselves import config.
+    # Calling this on first probe/gauge use instead of at module load time keeps
+    # the import graph clean.
     global _ENABLED, _DUMP_SEC, _WINDOW, _LOG_PATH, _PHASE_WINDOW
     global _PHASE_IMMEDIATE, _PHASE_LOG_PATH, _FAULT_LOG_PATH
     if _ENABLED is not None:
@@ -117,7 +115,7 @@ def is_enabled() -> bool:
 
 
 class _Section:
-    """Per-name bounded ring buffers for wall + CPU time samples."""
+    # Per-name bounded ring buffers for wall + CPU time samples.
 
     __slots__ = ('name', 'wall_ns', 'cpu_ns', 'count', '_lock')
 
@@ -259,12 +257,11 @@ def gauge(name: str, value: float) -> None:
 
 
 def phase(name: str, detail: str = '') -> None:
-    """Record a low-overhead phase marker into an in-memory ring buffer.
-
-    Intended for crash diagnosis around state transitions and native
-    boundaries (click dispatch, worker submit, GL init, present path).
-    The marker is dumped by :func:`dump_now` when probing is enabled.
-    """
+    # Record a low-overhead phase marker into an in-memory ring buffer.
+    #
+    # Intended for crash diagnosis around state transitions and native
+    # boundaries (click dispatch, worker submit, GL init, present path).
+    # The marker is dumped by :func:`dump_now` when probing is enabled.
     global _phase_seq
     if _ENABLED is None:
         _load_config()
@@ -305,7 +302,7 @@ F = TypeVar('F', bound=Callable[..., object])
 
 
 def decorate(name: str) -> Callable[[F], F]:
-    """Decorator form of probe()."""
+    # Decorator form of probe().
     def wrap(fn: F) -> F:
         # NOTE: do NOT check _ENABLED here — it may not be loaded yet at
         # decoration time (module import).  The check is deferred to inner().
@@ -434,7 +431,7 @@ def _ensure_fault_handler() -> None:
 
 
 def dump_now() -> None:
-    """Force a snapshot dump (also used by the periodic thread)."""
+    # Force a snapshot dump (also used by the periodic thread).
     global _phase_dump_seq
     if _ENABLED is None:
         _load_config()

@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""ACT-facing combat analytics snapshot facade."""
+# ACT-facing combat analytics snapshot facade.
 
 from __future__ import annotations
 
@@ -63,13 +63,12 @@ def _normalize_source(source: Dict[str, Any], fallback_data_source: str) -> Dict
 def _build_sources(source_probe: Any = None,
                    packet_probe: Any = None,
                    memory_probe: Any = None) -> Dict[str, Any]:
-    """Build explicit ACT source metadata.
-
-    ``source_probe`` is the legacy single-source argument.  New runtime callers
-    should pass ``packet_probe`` and ``memory_probe`` separately so the UI can
-    display TCP-primary + memory-fallback instead of collapsing both into the
-    packet slot.
-    """
+    # Build explicit ACT source metadata.
+    #
+    # ``source_probe`` is the legacy single-source argument.  New runtime callers
+    # should pass ``packet_probe`` and ``memory_probe`` separately so the UI can
+    # display TCP-primary + memory-fallback instead of collapsing both into the
+    # packet slot.
     legacy = packet_probe is None and memory_probe is None and source_probe is not None
     packet = _source_probe_to_dict(packet_probe)
     memory = _source_probe_to_dict(memory_probe)
@@ -135,13 +134,12 @@ def _safe_float(value: Any, default: float = 0.0) -> float:
 
 
 def boss_state_from_monster_update(monster_data: Optional[Dict[str, Any]]) -> Dict[str, Any]:
-    """Convert parser ``MonsterData.to_dict()`` payloads into ACT boss fields.
-
-    Runtime BossHP can render a directly attacked monster from packet data even
-    when the BossRaid engine is inactive.  ACT snapshots are GameState-based,
-    so keep the same packet HP/break/shield facts in the shared state without
-    marking the raid engine active.
-    """
+    # Convert parser ``MonsterData.to_dict()`` payloads into ACT boss fields.
+    #
+    # Runtime BossHP can render a directly attacked monster from packet data even
+    # when the BossRaid engine is inactive.  ACT snapshots are GameState-based,
+    # so keep the same packet HP/break/shield facts in the shared state without
+    # marking the raid engine active.
     data = monster_data or {}
     uuid = _safe_int(data.get("uuid"), 0)
     hp = max(0, _safe_int(data.get("hp"), 0))
@@ -170,14 +168,13 @@ def boss_state_from_monster_update(monster_data: Optional[Dict[str, Any]]) -> Di
 
 
 def mem_boss_break_override(bridge: Any):
-    """Resolve the MEM boss-break override for the boss-HP feeders.
-
-    Returns ``(breaking_stage, has_break_data, extinction_pct, stop_breaking_ticking)``
-    when MEM currently owns the boss break signal (hybrid/auto/memory + correct base
-    acquired) AND has a live boss, else ``None``. Callers keep TCP shield untouched —
-    shield is never sourced from MEM. A ``None`` result means "leave the existing TCP
-    break fields as-is" (TCP mode, before base acquisition, or no live MEM boss).
-    """
+    # Resolve the MEM boss-break override for the boss-HP feeders.
+    #
+    # Returns ``(breaking_stage, has_break_data, extinction_pct, stop_breaking_ticking)``
+    # when MEM currently owns the boss break signal (hybrid/auto/memory + correct base
+    # acquired) AND has a live boss, else ``None``. Callers keep TCP shield untouched —
+    # shield is never sourced from MEM. A ``None`` result means "leave the existing TCP
+    # break fields as-is" (TCP mode, before base acquisition, or no live MEM boss).
     if not bridge:
         return None
     try:
@@ -260,7 +257,7 @@ def build_act_render_spec(live: Optional[Dict[str, Any]] = None,
                           context: Optional[Dict[str, Any]] = None,
                           encounter: Optional[Dict[str, Any]] = None,
                           sources: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
-    """Build the shared WebView/Entity ACT render contract."""
+    # Build the shared WebView/Entity ACT render contract.
     live = live or {}
     last_report = last_report or {}
     history = history or []
@@ -351,20 +348,19 @@ def build_act_snapshot(dps_tracker: Any = None,
                        history_limit: int = 20,
                        lite: bool = False,
                        live_max_age_ms: float = 150.0) -> Dict[str, Any]:
-    """Build a single ACT snapshot for UI/API consumers.
-
-    This function deliberately delegates locking to the source objects so it can
-    be called from pywebview workers without taking unrelated locks together.
-
-    ``lite=True`` is the high-rate live-push path (Entity overlay set_act_snapshot
-    + WebView DpsMeter.showActSnapshot + act_snapshot plugin subscribers). Those
-    consumers only read ``render_spec`` / ``sources`` / ``triggers`` — never the
-    per-entity skill breakdown, the full ``last_report``, or ``history`` — so in
-    lite mode we use the 150ms-cached, skill-free snapshot and skip the per-event
-    deepcopy of the last report + 20-report history while a fight is live. The
-    default ``lite=False`` path is byte-for-byte the original behaviour (used by
-    the offline replay harness and any consumer that wants the full payload).
-    """
+    # Build a single ACT snapshot for UI/API consumers.
+    #
+    # This function deliberately delegates locking to the source objects so it can
+    # be called from pywebview workers without taking unrelated locks together.
+    #
+    # ``lite=True`` is the high-rate live-push path (Entity overlay set_act_snapshot
+    # + WebView DpsMeter.showActSnapshot + act_snapshot plugin subscribers). Those
+    # consumers only read ``render_spec`` / ``sources`` / ``triggers`` — never the
+    # per-entity skill breakdown, the full ``last_report``, or ``history`` — so in
+    # lite mode we use the 150ms-cached, skill-free snapshot and skip the per-event
+    # deepcopy of the last report + 20-report history while a fight is live. The
+    # default ``lite=False`` path is byte-for-byte the original behaviour (used by
+    # the offline replay harness and any consumer that wants the full payload).
     live: Optional[Dict[str, Any]] = None
     last_report: Optional[Dict[str, Any]] = None
     history = []

@@ -1,10 +1,9 @@
 # -*- coding: utf-8 -*-
-"""Entity-mode plugin manager panel.
-
-This panel mirrors the WebView plugin manager surface while calling the same
-``act_platform.runtime`` helpers as the web API.  It is intentionally small and
-read-only except for enable/disable/reload actions.
-"""
+# Entity-mode plugin manager panel.
+#
+# This panel mirrors the WebView plugin manager surface while calling the same
+# ``act_platform.runtime`` helpers as the web API.  It is intentionally small and
+# read-only except for enable/disable/reload actions.
 
 from __future__ import annotations
 
@@ -71,7 +70,7 @@ _CATEGORY_KEYWORDS: list[tuple[tuple[str, ...], str, str]] = [
 
 
 def _plugin_category(plugin_id: str, plugin: Mapping[str, Any]) -> tuple[str, str]:
-    """Derive a short category label + badge kind from plugin id/capabilities."""
+    # Derive a short category label + badge kind from plugin id/capabilities.
     pid = plugin_id.lower()
     for keywords, label, kind in _CATEGORY_KEYWORDS:
         for kw in keywords:
@@ -95,7 +94,7 @@ def _finite_int(value: Any, default: int = 0, *, lo: int | None = None, hi: int 
 
 
 class PluginManagerPanel:
-    """SAO-styled Toplevel for Python plugin management."""
+    # SAO-styled Toplevel for Python plugin management.
 
     def __init__(self, root: tk.Misc, owner: Any):
         self.root = root
@@ -198,14 +197,13 @@ class PluginManagerPanel:
         return self._last_status
 
     def refresh_async(self) -> None:
-        """Run plugin discovery off the Tk thread, then apply the result.
-
-        ``act_plugin_status`` performs filesystem discovery (os.stat/listdir
-        per plugin dir) which can take seconds. Running it on the Tk thread
-        stalls the mainloop's ``after()`` polling, which is what drains
-        compositor-forwarded mouse events for mirrored panels — so a slow
-        scan looked like the whole panel had stopped responding to clicks.
-        """
+        # Run plugin discovery off the Tk thread, then apply the result.
+        #
+        # ``act_plugin_status`` performs filesystem discovery (os.stat/listdir
+        # per plugin dir) which can take seconds. Running it on the Tk thread
+        # stalls the mainloop's ``after()`` polling, which is what drains
+        # compositor-forwarded mouse events for mirrored panels — so a slow
+        # scan looked like the whole panel had stopped responding to clicks.
         if self._refresh_busy:
             return
         self._refresh_busy = True
@@ -413,11 +411,11 @@ class PluginManagerPanel:
                     self._panel_list.stop()
 
     def _on_search(self) -> None:
-        """Re-render the card grid filtered by the search term."""
+        # Re-render the card grid filtered by the search term.
         self._render_status(self._last_status)
 
     def _cycle_next(self) -> None:
-        """Toggle the next disabled plugin on (or first enabled off if all on)."""
+        # Toggle the next disabled plugin on (or first enabled off if all on).
         plugins = list(self._last_status.get('plugins') or [])
         for p in plugins:
             if not p.get('enabled'):
@@ -484,7 +482,7 @@ class PluginManagerPanel:
         box.pack(fill='x', pady=8, padx=4)
 
     def _render_grid(self, plugins: List[Mapping[str, Any]]) -> None:
-        """Render plugin cards in a responsive column grid layout."""
+        # Render plugin cards in a responsive column grid layout.
         if self._list is None:
             return
         try:
@@ -507,7 +505,7 @@ class PluginManagerPanel:
 
     def _render_card(self, parent: tk.Frame, plugin: Mapping[str, Any],
                      row_idx: int, col_idx: int) -> None:
-        """Render one plugin card as a rounded panel in the grid."""
+        # Render one plugin card as a rounded panel in the grid.
         card_bg = _pc('card_bg', '#162233')
         border = _pc('border', '#2d5e6f')
         gold = _pc('gold', '#f0c456')
@@ -606,16 +604,15 @@ class PluginManagerPanel:
                      font=get_cjk_font(8), padx=6, pady=2).pack(fill='x', pady=(SP_XS, 0))
 
     def _deferred_refresh(self) -> None:
-        """Schedule refresh for the next event-loop tick.
-
-        Action callbacks (enable / disable / reload …) run inside a Canvas
-        ``<Button-1>`` handler.  Calling ``refresh()`` synchronously destroys
-        the clicked widget mid-event, which can cause Tk to dispatch residual
-        ``<B1-Motion>`` events to the header drag handler — moving the window
-        to the mouse position.  Deferring by one tick lets the click handler
-        finish cleanly before any widget is destroyed.  Uses the async path
-        so the discovery scan itself doesn't also stall the mainloop.
-        """
+        # Schedule refresh for the next event-loop tick.
+        #
+        # Action callbacks (enable / disable / reload …) run inside a Canvas
+        # ``<Button-1>`` handler.  Calling ``refresh()`` synchronously destroys
+        # the clicked widget mid-event, which can cause Tk to dispatch residual
+        # ``<B1-Motion>`` events to the header drag handler — moving the window
+        # to the mouse position.  Deferring by one tick lets the click handler
+        # finish cleanly before any widget is destroyed.  Uses the async path
+        # so the discovery scan itself doesn't also stall the mainloop.
         try:
             self.root.after(1, self.refresh_async)
         except Exception:
@@ -725,13 +722,12 @@ _HK_DEFAULT = '默认 Default'
 
 
 class PluginDetachedPanel:
-    """A detached, per-plugin SAO panel window.
-
-    Renders one plugin's declarative ``ui_panel`` spec(s) — the plugin's own GUI
-    (the default GUI is whatever the plugin's render handler returns) — plus a
-    hotkey-config section that rebinds the plugin's hotkeys through the shared
-    ``settings['hotkeys']`` namespace. Auto-refreshes on ``plugin_ui_invalidate``.
-    """
+    # A detached, per-plugin SAO panel window.
+    #
+    # Renders one plugin's declarative ``ui_panel`` spec(s) — the plugin's own GUI
+    # (the default GUI is whatever the plugin's render handler returns) — plus a
+    # hotkey-config section that rebinds the plugin's hotkeys through the shared
+    # ``settings['hotkeys']`` namespace. Auto-refreshes on ``plugin_ui_invalidate``.
 
     def __init__(self, root: tk.Misc, owner: Any, plugin_id: str,
                  panel_id: str = '', width: int = 0, height: int = 0):
@@ -829,7 +825,7 @@ class PluginDetachedPanel:
             return []
 
     def _target_panel_meta(self) -> Dict[str, Any]:
-        """The meta of the panel this window shows (declared size lives here)."""
+        # The meta of the panel this window shows (declared size lives here).
         panels = self._panels_for_plugin()
         if self.panel_id:
             for p in panels:

@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""Star Resonance ACT parser adapter owned by the plugin."""
+# Star Resonance ACT parser adapter owned by the plugin.
 
 from __future__ import annotations
 
@@ -23,7 +23,7 @@ def _noop(*_args: Any, **_kwargs: Any) -> None:
 
 
 class StarResonanceParserAdapter(ParserAdapter):
-    """Plugin-local wrapper around the Star Resonance TCP PacketParser."""
+    # Plugin-local wrapper around the Star Resonance TCP PacketParser.
 
     def __init__(self) -> None:
         super().__init__(ParserAdapterMetadata(

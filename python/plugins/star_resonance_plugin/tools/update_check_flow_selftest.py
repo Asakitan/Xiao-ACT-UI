@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""Focused self-test for updater popup/manual-check edge cases."""
+# Focused self-test for updater popup/manual-check edge cases.
 
 from __future__ import annotations
 

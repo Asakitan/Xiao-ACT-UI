@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""Creative Workshop API routes — plugin marketplace on update_host."""
+# Creative Workshop API routes — plugin marketplace on update_host.
 
 from __future__ import annotations
 
@@ -142,14 +142,13 @@ def _upsert_catalog(plugin_id: str, meta: dict):
 
 
 def _protect_uploaded_plugin(plugin_id: str, version: str, meta: dict, public_zip_path: str) -> None:
-    """Move the just-uploaded raw zip out of the public tree, compile it into a
-    native+encrypted artifact, and put *that* back at ``public_zip_path``.
-
-    Raises :class:`HTTPException` on any failure — a closed-source publish
-    must never silently fall back to shipping the plaintext source, and must
-    never leave the public slot pointing at a file that no longer exists
-    without the caller finding out.
-    """
+    # Move the just-uploaded raw zip out of the public tree, compile it into a
+    # native+encrypted artifact, and put *that* back at ``public_zip_path``.
+    #
+    # Raises :class:`HTTPException` on any failure — a closed-source publish
+    # must never silently fall back to shipping the plaintext source, and must
+    # never leave the public slot pointing at a file that no longer exists
+    # without the caller finding out.
     private_dir = _private_dir(plugin_id)
     raw_private_path = os.path.join(private_dir, f"plugin-{version}.source.zip")
     try:
@@ -197,7 +196,7 @@ def _cleanup_stale_uploads():
 
 
 def _present_catalog_entry(entry: dict, caller_token: str) -> dict:
-    """外部可见版本: 剥掉内部 _uploader_token, 换成一个不泄露原值的 is_mine 布尔。"""
+    # 外部可见版本: 剥掉内部 _uploader_token, 换成一个不泄露原值的 is_mine 布尔。
     out = {k: v for k, v in entry.items() if k != "_uploader_token"}
     owner = entry.get("_uploader_token", "")
     out["is_mine"] = bool(caller_token) and bool(owner) and hmac.compare_digest(str(owner), str(caller_token))
@@ -307,12 +306,11 @@ def download(request: Request, plugin_id: str, version: str = ""):
 
 @router.get("/key/{plugin_id}")
 def get_content_key(request: Request, plugin_id: str, version: str = ""):
-    """Issue the AES-256 content key for a closed-source (protected) plugin
-    build. Requires a workshop token (``X-API-Key``, device-bound — see
-    ``workshop.app.get_workshop_token``) on every call; no caching anywhere
-    server-side per-caller, so this is a live network dependency by design,
-    not a one-time unlock.
-    """
+    # Issue the AES-256 content key for a closed-source (protected) plugin
+    # build. Requires a workshop token (``X-API-Key``, device-bound — see
+    # ``workshop.app.get_workshop_token``) on every call; no caching anywhere
+    # server-side per-caller, so this is a live network dependency by design,
+    # not a one-time unlock.
     token = _get_workshop_token(request)
     safe = _safe_id(plugin_id)
     pdir = os.path.join(_ws_dir(), safe)
@@ -370,15 +368,14 @@ def _check_plugin_owner(plugin_id: str, token: str):
 
 
 def _authorize_delete(request: Request, plugin_id: str) -> None:
-    """原始上传者凭自己的 workshop token 能删自己的；管理员 key 能删任何插件。
-
-    ★先查 ownership 再兜底查 _AUTH_FN，顺序不能反：_authorize_publish_request
-    在管理员 key 还没绑定过的全新部署上会把"第一个打进来的请求"的 key 直接
-    收编成管理员 key(参见 app.py _bind_publish_api_key) —— 如果先调它，
-    随便一个陌生 token 删别人的插件也会先把自己'扶正'成 admin 再放行，
-    实测过一次踩中这个坑(见 workshop delete owner 测试)。ownership 检查零
-    副作用，永远排第一。
-    """
+    # 原始上传者凭自己的 workshop token 能删自己的；管理员 key 能删任何插件。
+    #
+    # ★先查 ownership 再兜底查 _AUTH_FN，顺序不能反：_authorize_publish_request
+    # 在管理员 key 还没绑定过的全新部署上会把"第一个打进来的请求"的 key 直接
+    # 收编成管理员 key(参见 app.py _bind_publish_api_key) —— 如果先调它，
+    # 随便一个陌生 token 删别人的插件也会先把自己'扶正'成 admin 再放行，
+    # 实测过一次踩中这个坑(见 workshop delete owner 测试)。ownership 检查零
+    # 副作用，永远排第一。
     token = (request.headers.get("X-API-Key") or "").strip()
     if not token:
         raise HTTPException(401, "missing workshop token (X-API-Key header)")
@@ -622,9 +619,8 @@ async def publish_complete(request: Request, upload_id: str):
 
 @router.delete("/plugin/{plugin_id}")
 def delete_plugin(request: Request, plugin_id: str, version: str = ""):
-    """删自己上传的插件：管理员 key 能删任何插件；原始上传者(自己的 workshop
-    token 匹配发布时记录的 uploader_token) 只能删自己的，见 _authorize_delete。
-    """
+    # 删自己上传的插件：管理员 key 能删任何插件；原始上传者(自己的 workshop
+    # token 匹配发布时记录的 uploader_token) 只能删自己的，见 _authorize_delete。
     _authorize_delete(request, plugin_id)
 
     safe = _safe_id(plugin_id)
@@ -663,7 +659,7 @@ def delete_plugin(request: Request, plugin_id: str, version: str = ""):
 
 
 def _delete_private_version_data(plugin_id: str, version: str) -> None:
-    """删掉某个版本在私有目录下的明文源码 zip + AES 内容密钥(如果是受保护构建)。"""
+    # 删掉某个版本在私有目录下的明文源码 zip + AES 内容密钥(如果是受保护构建)。
     private_dir = os.path.join(_WORKSHOP_PRIVATE_DIR, plugin_id)
     for name in (f"plugin-{version}.source.zip", f"{version}.key"):
         path = os.path.join(private_dir, name)

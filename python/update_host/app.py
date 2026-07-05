@@ -1,30 +1,29 @@
 # -*- coding: utf-8 -*-
-"""SAO Auto - 远程更新服务 (独立 FastAPI)
-
-部署:
-  uvicorn sao_auto.update_host.app:app --host 0.0.0.0 --port 9973
-
-配置 (环境变量或 update_host_config.json):
-  UPDATE_HOST_RELEASE_DIR  : 发布包根目录, 内含 channel/<channel>/manifest.json + 包文件
-  UPDATE_HOST_DOWNLOADS    : 下载根目录 (默认同 RELEASE_DIR)
-
-manifest 文件: <RELEASE_DIR>/<channel>/<target>/manifest.json
-{
-  "version": "2.1.0",
-  "minimum_version": "2.0.1",
-  "force_update": false,
-  "package_type": "runtime-delta",
-  "target": "windows-x64",
-  "channel": "stable",
-  "download_url": "/downloads/stable/windows-x64/update-2.1.0.zip",
-  "sha256": "...",
-  "size": 12345,
-  "notes": "...",
-  "published_at": "2026-04-19T12:00:00Z"
-}
-
-发布脚本: 见 publish_release.py
-"""
+# SAO Auto - 远程更新服务 (独立 FastAPI)
+#
+# 部署:
+# uvicorn sao_auto.update_host.app:app --host 0.0.0.0 --port 9973
+#
+# 配置 (环境变量或 update_host_config.json):
+# UPDATE_HOST_RELEASE_DIR  : 发布包根目录, 内含 channel/<channel>/manifest.json + 包文件
+# UPDATE_HOST_DOWNLOADS    : 下载根目录 (默认同 RELEASE_DIR)
+#
+# manifest 文件: <RELEASE_DIR>/<channel>/<target>/manifest.json
+# {
+# "version": "2.1.0",
+# "minimum_version": "2.0.1",
+# "force_update": false,
+# "package_type": "runtime-delta",
+# "target": "windows-x64",
+# "channel": "stable",
+# "download_url": "/downloads/stable/windows-x64/update-2.1.0.zip",
+# "sha256": "...",
+# "size": 12345,
+# "notes": "...",
+# "published_at": "2026-04-19T12:00:00Z"
+# }
+#
+# 发布脚本: 见 publish_release.py
 
 from __future__ import annotations
 
@@ -336,7 +335,7 @@ def _save_versions_index(channel: str, target: str, versions: list):
 
 
 def _find_next_version(versions: list, current: str) -> str:
-    """Return the first version in the sorted list that is > current."""
+    # Return the first version in the sorted list that is > current.
     for v in versions:
         if compare_versions(v, current) > 0:
             return v
@@ -503,8 +502,8 @@ def _build_fullpack_plus_delta_manifest(
     current: str,
     latest_manifest: dict,
 ) -> Optional[dict]:
-    """当用户版本低于最后一个 full-package 时, 把该 fullpack + 后续
-    runtime-delta 合并成一个 zip 一次性下发, 避免客户端多轮更新."""
+    # 当用户版本低于最后一个 full-package 时, 把该 fullpack + 后续
+    # runtime-delta 合并成一个 zip 一次性下发, 避免客户端多轮更新.
     safe_ch, safe_tg = _safe_channel_target(channel, target)
     latest_ver = str(latest_manifest.get("version") or "").strip()
     if not current or not latest_ver:
@@ -693,17 +692,16 @@ def latest(
     target: str = "windows-x64",
     current: Optional[str] = None,
 ):
-    """按版本链顺序下发更新.
-
-    规则:
-      1. current 未提供 → 返回最新 manifest (向后兼容)
-      2. current >= latest.version → available=false (已是最新)
-      3. latest.minimum_version 存在且 current < minimum_version → 返回最新 (强制跳版本)
-      4. 尝试累积 delta (全链 runtime-delta 时合并成一个 zip)
-      5. 链中存在 full-package → 合并最后一个 fullpack + 后续 delta 为一个 zip
-      6. 否则 → 从 versions.json 找到 current 的下一个版本, 返回对应 manifest
-      7. 找不到 / 文件缺失 → 回退返回最新 manifest
-    """
+    # 按版本链顺序下发更新.
+    #
+    # 规则:
+    # 1. current 未提供 → 返回最新 manifest (向后兼容)
+    # 2. current >= latest.version → available=false (已是最新)
+    # 3. latest.minimum_version 存在且 current < minimum_version → 返回最新 (强制跳版本)
+    # 4. 尝试累积 delta (全链 runtime-delta 时合并成一个 zip)
+    # 5. 链中存在 full-package → 合并最后一个 fullpack + 后续 delta 为一个 zip
+    # 6. 否则 → 从 versions.json 找到 current 的下一个版本, 返回对应 manifest
+    # 7. 找不到 / 文件缺失 → 回退返回最新 manifest
     safe_ch, safe_tg = _safe_channel_target(channel, target)
     latest_manifest = _load_manifest(safe_ch, safe_tg)
     if not latest_manifest:
@@ -765,7 +763,7 @@ def latest(
 
 @app.get("/api/update/summary")
 def summary():
-    """列出所有 channel/target 的最新版本."""
+    # 列出所有 channel/target 的最新版本.
     out = []
     if not os.path.isdir(DEFAULT_RELEASE_DIR):
         return {"channels": []}
@@ -876,7 +874,7 @@ async def publish(
     anchor_commit_short: str = "",
     anchor_version: str = "",
 ):
-    """接收 dev_publish.py 上传的 zip 包并写入 releases/."""
+    # 接收 dev_publish.py 上传的 zip 包并写入 releases/.
     _authorize_publish_request(request)
 
     # ── Sanitize ──

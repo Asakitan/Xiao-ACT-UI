@@ -1,9 +1,8 @@
 # -*- coding: utf-8 -*-
-"""Semantic classification for runtime name tables.
-
-The classifier consumes stable static tables only.  It never uses live heap
-addresses and returns simple ID -> text maps for runtime resolver assets.
-"""
+# Semantic classification for runtime name tables.
+#
+# The classifier consumes stable static tables only.  It never uses live heap
+# addresses and returns simple ID -> text maps for runtime resolver assets.
 from __future__ import annotations
 
 import json
@@ -19,9 +18,9 @@ _REPO = os.path.dirname(_SAO)
 
 
 def _resolve_assets_dir() -> str:
-    """assets/ 根目录解析 (onedir 友好)。冻结后 assets/ 被提升到 BASE_DIR(exe 顶层),
-    而 __file__ 落在 runtime/tools/tablekit/ → runtime/assets 已被搬空。优先
-    config.resource_path(BASE_DIR 优先, BUNDLE_DIR 回退), 回退 __file__ 相对(dev 树)。"""
+    # assets/ 根目录解析 (onedir 友好)。冻结后 assets/ 被提升到 BASE_DIR(exe 顶层),
+    # 而 __file__ 落在 runtime/tools/tablekit/ → runtime/assets 已被搬空。优先
+    # config.resource_path(BASE_DIR 优先, BUNDLE_DIR 回退), 回退 __file__ 相对(dev 树)。
     try:
         from config import resource_path  # BASE_DIR-first, BUNDLE_DIR fallback
         cand = resource_path("assets")
@@ -345,7 +344,7 @@ def _skill_name_text(skill_id: int, row: Mapping[str, Any] | None = None) -> str
 
 @lru_cache(maxsize=1)
 def _cache_by_kind() -> dict[str, dict[int, str]]:
-    """id->name per kind from our own MEM/TCP parse cache (shared + local)."""
+    # id->name per kind from our own MEM/TCP parse cache (shared + local).
     out: dict[str, dict[int, str]] = {}
     for path in (_SHARED_CACHE, _LOCAL_CACHE):
         data = _load_json(path)
@@ -368,8 +367,8 @@ def _cache_by_kind() -> dict[str, dict[int, str]]:
 
 @lru_cache(maxsize=1)
 def _our_index() -> tuple[dict[int, str], dict[int, str], dict[int, str]]:
-    """Build (skill_id->kind, buff_id->kind, id->name) from OUR project data only:
-    committed per-kind tables + the MEM/TCP parse cache. No neighbour repo."""
+    # Build (skill_id->kind, buff_id->kind, id->name) from OUR project data only:
+    # committed per-kind tables + the MEM/TCP parse cache. No neighbour repo.
     skill_idx: dict[int, str] = {}
     buff_idx: dict[int, str] = {}
     names: dict[int, str] = {}
@@ -592,9 +591,9 @@ def _to_runtime(entries: Mapping[int, str]) -> dict[str, dict[str, str]]:
 
 @lru_cache(maxsize=1)
 def load_classified_tables() -> dict[str, dict[str, dict[str, str]]]:
-    """Materialise each kind table from OUR data only: committed ``<kind>.json``
-    overlaid with the MEM/TCP parse cache, plus combat_preparse boss mechanics.
-    No neighbour repo, so a missing StarResonanceDps never empties a table."""
+    # Materialise each kind table from OUR data only: committed ``<kind>.json``
+    # overlaid with the MEM/TCP parse cache, plus combat_preparse boss mechanics.
+    # No neighbour repo, so a missing StarResonanceDps never empties a table.
     result: dict[str, dict[str, dict[str, str]]] = {}
     cache = _cache_by_kind()
     for kind in _SKILL_DOMAIN_KINDS + _BUFF_DOMAIN_KINDS + _AGGREGATE_AND_BOSS_KINDS:

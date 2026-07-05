@@ -1,12 +1,11 @@
 # -*- coding: utf-8 -*-
-"""Offline replay harness for ACT/GameState/DPS integration.
-
-This module is deliberately small and side-effect free: it consumes normalized
-event dictionaries that mirror the parser/PacketBridge callbacks, then updates
-``GameStateManager`` and ``DpsTracker`` the same way runtime UI callbacks do.
-It gives future tests and manual diagnostics a stable TCP-first contract without
-requiring Npcap, protobuf payload construction, or a running game.
-"""
+# Offline replay harness for ACT/GameState/DPS integration.
+#
+# This module is deliberately small and side-effect free: it consumes normalized
+# event dictionaries that mirror the parser/PacketBridge callbacks, then updates
+# ``GameStateManager`` and ``DpsTracker`` the same way runtime UI callbacks do.
+# It gives future tests and manual diagnostics a stable TCP-first contract without
+# requiring Npcap, protobuf payload construction, or a running game.
 
 from __future__ import annotations
 
@@ -53,12 +52,11 @@ def _safe_float(value: Any, default: float = 0.0) -> float:
 
 
 class ActReplayHarness:
-    """Small offline ACT replay surface.
-
-    Parameters are injectable so later tests can share a real ``DpsTracker`` or
-    a fixture ``GameStateManager``.  By default it creates both and wires them
-    through the existing ``build_act_snapshot`` facade.
-    """
+    # Small offline ACT replay surface.
+    #
+    # Parameters are injectable so later tests can share a real ``DpsTracker`` or
+    # a fixture ``GameStateManager``.  By default it creates both and wires them
+    # through the existing ``build_act_snapshot`` facade.
 
     def __init__(self,
                  state_mgr: Optional[GameStateManager] = None,
@@ -98,11 +96,10 @@ class ActReplayHarness:
             self.state_mgr.update(player_id=str(uid))
 
     def emit_dungeon_event(self, event: Dict[str, Any]) -> Dict[str, Any]:
-        """Apply a normalized dungeon/scene event to ``GameState``.
-
-        Unknown names are kept empty/pending: this harness must never fabricate
-        CN names before runtime ZTable extraction provides authoritative maps.
-        """
+        # Apply a normalized dungeon/scene event to ``GameState``.
+        #
+        # Unknown names are kept empty/pending: this harness must never fabricate
+        # CN names before runtime ZTable extraction provides authoritative maps.
         event = dict(event or {})
         event.setdefault("timestamp", time.time())
         event.setdefault("source", "replay")
@@ -214,7 +211,7 @@ class ActReplayHarness:
         return event
 
     def replay(self, events: Iterable[Dict[str, Any]]) -> Dict[str, Any]:
-        """Replay a sequence of normalized events and return the ACT snapshot."""
+        # Replay a sequence of normalized events and return the ACT snapshot.
         for event in events:
             kind = str((event or {}).get("kind") or (event or {}).get("type") or "").lower()
             if kind in (
@@ -249,7 +246,7 @@ class ActReplayHarness:
         return snap
 
     def assert_minimal_act_contract(self) -> Dict[str, Any]:
-        """Raise ``AssertionError`` if the core ACT snapshot contract regresses."""
+        # Raise ``AssertionError`` if the core ACT snapshot contract regresses.
         snap = self.snapshot()
         context = snap.get("context") or {}
         live = snap.get("live") or {}

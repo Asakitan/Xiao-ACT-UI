@@ -1,12 +1,11 @@
 # -*- coding: utf-8 -*-
-"""Selftest for the declarative `input` leaf (Tk + ui_spec parity bits).
-
-Covers normalize bounds, the UI.input builder, and — when a display is available
-— the Tk SpecRenderer round-trip: typed text survives a redraw with an empty
-server value (clobber guard) and a button fire collects payload["inputs"].
-
-    python tools/mem_scope_ui_selftest.py
-"""
+# Selftest for the declarative `input` leaf (Tk + ui_spec parity bits).
+#
+# Covers normalize bounds, the UI.input builder, and — when a display is available
+# — the Tk SpecRenderer round-trip: typed text survives a redraw with an empty
+# server value (clobber guard) and a button fire collects payload["inputs"].
+#
+# python tools/mem_scope_ui_selftest.py
 from __future__ import annotations
 
 import os

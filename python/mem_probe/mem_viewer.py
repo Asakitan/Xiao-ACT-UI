@@ -1,12 +1,11 @@
 # -*- coding: utf-8 -*-
-"""mem_viewer — read-only raw memory viewer over the Process Selector's
-cached engine-A handle (mem_probe._pm._core._MP).
-
-Standalone module: does not touch game-specific state (no plugin owner,
-no MemStateBridge). Consumers just call status()/read_bytes()/read_value()
-after a user has attached a process via the Process Selector panel
-(gui_modules.sao_gui_process_selector).
-"""
+# mem_viewer — read-only raw memory viewer over the Process Selector's
+# cached engine-A handle (mem_probe._pm._core._MP).
+#
+# Standalone module: does not touch game-specific state (no plugin owner,
+# no MemStateBridge). Consumers just call status()/read_bytes()/read_value()
+# after a user has attached a process via the Process Selector panel
+# (gui_modules.sao_gui_process_selector).
 from __future__ import annotations
 
 import struct
@@ -30,7 +29,7 @@ def _get_gp():
 
 
 def status() -> Dict[str, Any]:
-    """Attach status for the cached engine-A process handle."""
+    # Attach status for the cached engine-A process handle.
     from gui_modules.sao_gui_process_selector import get_cached_process_info
     return get_cached_process_info()
 
@@ -45,7 +44,7 @@ def _parse_address(address: Any) -> int:
 
 
 def read_bytes(address: Any, length: int) -> Dict[str, Any]:
-    """Read raw bytes at `address`, returned as hex + printable-ASCII dump."""
+    # Read raw bytes at `address`, returned as hex + printable-ASCII dump.
     gp = _get_gp()
     if gp is None:
         return {"ok": False, "error": "no process attached (use Process Selector)"}
@@ -71,7 +70,7 @@ def read_bytes(address: Any, length: int) -> Dict[str, Any]:
 
 
 def read_value(address: Any, dtype: str = "u32") -> Dict[str, Any]:
-    """Read one typed scalar (u8/i8/u16/i16/u32/i32/u64/i64/f32/f64) at `address`."""
+    # Read one typed scalar (u8/i8/u16/i16/u32/i32/u64/i64/f32/f64) at `address`.
     gp = _get_gp()
     if gp is None:
         return {"ok": False, "error": "no process attached (use Process Selector)"}

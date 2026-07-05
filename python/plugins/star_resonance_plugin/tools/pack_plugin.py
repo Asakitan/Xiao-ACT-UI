@@ -1,24 +1,23 @@
 # -*- coding: utf-8 -*-
-"""pack_plugin — 把一个插件目录打成可「一键导入」的 ``.zip`` 包（作者工具）。
-
-用法:
-    python tools/pack_plugin.py plugins/midi_piano_plugin
-    python tools/pack_plugin.py path/to/my_plugin -o dist/my_plugin.zip
-    python tools/pack_plugin.py path/to/my_plugin --include-libs
-
-校验 ``plugin.json`` / 入口存在后，把整个目录压成 ``<id>-<version>.zip``（清单落在
-压缩包根部）。用户在「插件管理 → 导入」选这个 zip 即可装入 ``user_plugins/`` 并启用
-即用，无需编译（纯 Python 插件）。
-
-打包约定（与 :mod:`act_platform.plugin_install` / :mod:`act_platform.plugin_deps` 对齐）：
-  * 纯 Python：直接打包，运行时 import 原始 .py（dev + onedir 冻结态都行）。
-  * 第三方依赖：写进 ``requirements.txt`` 并把**纯 Python 副本** vendor 进 ``vendor/``
-    （冻结态没有 pip，必须 vendor）；加载器会自动把 ``vendor/``/``libs/`` 前插 sys.path。
-  * 原生扩展(.pyd / Cython)：由作者**预编译**匹配目标 ``cp3xx`` + ``win_amd64`` 后随包，
-    用户端不编译；建议同时留纯 Python 回退。
-  * 默认**排除** ``libs/``（dev 期 pip --target 的本地缓存）、``__pycache__``、``.git`` 等；
-    ``--include-libs`` 可强制带上 ``libs/``。
-"""
+# pack_plugin — 把一个插件目录打成可「一键导入」的 ``.zip`` 包（作者工具）。
+#
+# 用法:
+# python tools/pack_plugin.py plugins/midi_piano_plugin
+# python tools/pack_plugin.py path/to/my_plugin -o dist/my_plugin.zip
+# python tools/pack_plugin.py path/to/my_plugin --include-libs
+#
+# 校验 ``plugin.json`` / 入口存在后，把整个目录压成 ``<id>-<version>.zip``（清单落在
+# 压缩包根部）。用户在「插件管理 → 导入」选这个 zip 即可装入 ``user_plugins/`` 并启用
+# 即用，无需编译（纯 Python 插件）。
+#
+# 打包约定（与 :mod:`act_platform.plugin_install` / :mod:`act_platform.plugin_deps` 对齐）：
+# * 纯 Python：直接打包，运行时 import 原始 .py（dev + onedir 冻结态都行）。
+# * 第三方依赖：写进 ``requirements.txt`` 并把**纯 Python 副本** vendor 进 ``vendor/``
+# （冻结态没有 pip，必须 vendor）；加载器会自动把 ``vendor/``/``libs/`` 前插 sys.path。
+# * 原生扩展(.pyd / Cython)：由作者**预编译**匹配目标 ``cp3xx`` + ``win_amd64`` 后随包，
+# 用户端不编译；建议同时留纯 Python 回退。
+# * 默认**排除** ``libs/``（dev 期 pip --target 的本地缓存）、``__pycache__``、``.git`` 等；
+# ``--include-libs`` 可强制带上 ``libs/``。
 
 from __future__ import annotations
 

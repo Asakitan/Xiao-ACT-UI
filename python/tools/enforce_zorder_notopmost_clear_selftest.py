@@ -1,24 +1,23 @@
 # -*- coding: utf-8 -*-
-"""Selftest: does UnifiedOverlay._enforce_z_order() actually clear a
-STUCK WS_EX_TOPMOST bit on the host when the attached "game" window is
-NOT itself topmost?
-
-This is the load-bearing assumption behind the sao_gui_fisheye_mixin.py
-/ ui_gpu/popup.py fix (this session): instead of unconditionally
-forcing HWND_NOTOPMOST (which fought _enforce_z_order's own decision
-and caused a NEW regression — "compositor doesn't stay in front,
-other windows cover it" — when the game IS legitimately topmost),
-those "demote" functions now just re-invoke _enforce_z_order() and
-trust it to pick the correct z-state. If _enforce_z_order's non-
-topmost branch (SetWindowPos with an explicit game HWND as
-hWndInsertAfter) does NOT clear a pre-existing WS_EX_TOPMOST bit on
-the host, that fix does nothing and the original NerveGear-buried-
-under-host bug comes back.
-
-Also verifies the OTHER branch: when the game IS topmost,
-_enforce_z_order puts the host back into the topmost band (so it
-doesn't fall behind).
-"""
+# Selftest: does UnifiedOverlay._enforce_z_order() actually clear a
+# STUCK WS_EX_TOPMOST bit on the host when the attached "game" window is
+# NOT itself topmost?
+#
+# This is the load-bearing assumption behind the sao_gui_fisheye_mixin.py
+# / ui_gpu/popup.py fix (this session): instead of unconditionally
+# forcing HWND_NOTOPMOST (which fought _enforce_z_order's own decision
+# and caused a NEW regression — "compositor doesn't stay in front,
+# other windows cover it" — when the game IS legitimately topmost),
+# those "demote" functions now just re-invoke _enforce_z_order() and
+# trust it to pick the correct z-state. If _enforce_z_order's non-
+# topmost branch (SetWindowPos with an explicit game HWND as
+# hWndInsertAfter) does NOT clear a pre-existing WS_EX_TOPMOST bit on
+# the host, that fix does nothing and the original NerveGear-buried-
+# under-host bug comes back.
+#
+# Also verifies the OTHER branch: when the game IS topmost,
+# _enforce_z_order puts the host back into the topmost band (so it
+# doesn't fall behind).
 import os
 import sys
 import time

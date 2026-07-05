@@ -1,23 +1,22 @@
 # -*- coding: utf-8 -*-
-"""Render-hook + overlay registry shared by every SAO UI surface.
-
-A *surface* is any addressable UI region — an Entity (Tk) overlay or a WebView
-window.  Plugins gain three powers over a surface, all funneled through this
-registry so Entity and WebView behave identically:
-
-* **hooks**   — ``hook(surface, payload) -> payload | None`` runs in a priority
-  chain *before* the host renders.  A hook may mutate the payload, return a new
-  payload, or fully take over the surface by setting
-  ``payload[OVERRIDE_KEY] = <ui_spec>`` (the host then renders that spec instead
-  of its native content).
-* **overlays** — a declarative ``ui_spec`` drawn in a plugin layer *on top of*
-  the native content.
-* (UI panels live in the plugin manager surface and are handled separately.)
-
-The registry is deliberately host-agnostic: it owns no Tk/web objects, only
-JSON-safe data and callables, so it can be unit-tested headless and reused by
-both renderers.
-"""
+# Render-hook + overlay registry shared by every SAO UI surface.
+#
+# A *surface* is any addressable UI region — an Entity (Tk) overlay or a WebView
+# window.  Plugins gain three powers over a surface, all funneled through this
+# registry so Entity and WebView behave identically:
+#
+# * **hooks**   — ``hook(surface, payload) -> payload | None`` runs in a priority
+# chain *before* the host renders.  A hook may mutate the payload, return a new
+# payload, or fully take over the surface by setting
+# ``payload[OVERRIDE_KEY] = <ui_spec>`` (the host then renders that spec instead
+# of its native content).
+# * **overlays** — a declarative ``ui_spec`` drawn in a plugin layer *on top of*
+# the native content.
+# * (UI panels live in the plugin manager surface and are handled separately.)
+#
+# The registry is deliberately host-agnostic: it owns no Tk/web objects, only
+# JSON-safe data and callables, so it can be unit-tested headless and reused by
+# both renderers.
 
 from __future__ import annotations
 
@@ -58,7 +57,7 @@ class _Hook:
 
 
 class RenderHookRegistry:
-    """Per-surface render hooks and overlay specs with isolation + cleanup."""
+    # Per-surface render hooks and overlay specs with isolation + cleanup.
 
     def __init__(self, *, slow_hook_ms: float = 12.0) -> None:
         self._lock = threading.RLock()
@@ -153,11 +152,10 @@ class RenderHookRegistry:
 
     def apply(self, surface: str, payload: Any,
               on_error: Optional[Callable[[str, BaseException], None]] = None) -> dict:
-        """Run the hook chain for ``surface`` and return the final payload dict.
-
-        Hook errors are isolated: a failing hook is skipped (and reported via
-        ``on_error``) without aborting the chain or the host render.
-        """
+        # Run the hook chain for ``surface`` and return the final payload dict.
+        #
+        # Hook errors are isolated: a failing hook is skipped (and reported via
+        # ``on_error``) without aborting the chain or the host render.
         data: dict = dict(payload) if isinstance(payload, Mapping) else {"value": payload}
         for hook in self._chain_for(surface):
             start = time.perf_counter()

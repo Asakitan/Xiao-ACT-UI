@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""Regression tests for SAO panel theme sync and restyling helpers."""
+# Regression tests for SAO panel theme sync and restyling helpers.
 
 from __future__ import annotations
 

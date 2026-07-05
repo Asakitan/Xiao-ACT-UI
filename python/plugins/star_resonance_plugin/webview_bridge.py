@@ -1,9 +1,8 @@
 # -*- coding: utf-8 -*-
-"""Star Resonance WebView bridge.
-
-Game-specific WebView API and engine lifecycle hooks live here so the
-platform-level ``sao_webview.py`` can stay game-agnostic.
-"""
+# Star Resonance WebView bridge.
+#
+# Game-specific WebView API and engine lifecycle hooks live here so the
+# platform-level ``sao_webview.py`` can stay game-agnostic.
 
 from __future__ import annotations
 
@@ -3435,7 +3434,7 @@ class StarResonanceWebViewBridge:
             pass
 
     def _push_mech_banner(self, entry):
-        """机制横幅推一行 (懒显示窗口, 常驻鼠标穿透覆盖层)。"""
+        # 机制横幅推一行 (懒显示窗口, 常驻鼠标穿透覆盖层)。
         o = self.owner
         try:
             if not getattr(o, 'mech_banner_win', None):
@@ -3454,7 +3453,7 @@ class StarResonanceWebViewBridge:
             pass
 
     def _setup_mech_banner_click_through(self, _wait_retries: int = 20):
-        """Make mechanic banner overlay fully click-through (纯覆盖层)。"""
+        # Make mechanic banner overlay fully click-through (纯覆盖层)。
         self.owner._set_plugin_surface_click_through(
             'mech_banner', enabled=True, wait_retries=_wait_retries)
         self._sync_surface_hwnd_attr('mech_banner', '_mech_banner_hwnd')
@@ -3603,7 +3602,7 @@ class StarResonanceWebViewBridge:
     # ── Map-name banner (切换地图中央横幅) ──
 
     def _position_mapbanner_window(self):
-        """把横幅窗口居中到游戏所在显示器的正中央。"""
+        # 把横幅窗口居中到游戏所在显示器的正中央。
         o = self.owner
         if not getattr(o, 'mapbanner_win', None):
             return
@@ -3633,12 +3632,11 @@ class StarResonanceWebViewBridge:
             pass
 
     def _schedule_map_banner(self, name: str):
-        """检测到切换地图 → 延迟 3 秒后在屏幕中央淡入地图名 (WebView)。
-
-        去重改为时间窗 (5s): 同名且距上次调度 < 5s 视为同一次进图的重复抓包,
-        吞掉防止狂闪; 超过 5s 再次进入同一场景会重新弹 (满足"第二次切入同场景
-        也要刷出名字")。快速连切到别的图时取消上一个未触发的延迟, 只显示最新。
-        """
+        # 检测到切换地图 → 延迟 3 秒后在屏幕中央淡入地图名 (WebView)。
+        #
+        # 去重改为时间窗 (5s): 同名且距上次调度 < 5s 视为同一次进图的重复抓包,
+        # 吞掉防止狂闪; 超过 5s 再次进入同一场景会重新弹 (满足"第二次切入同场景
+        # 也要刷出名字")。快速连切到别的图时取消上一个未触发的延迟, 只显示最新。
         o = self.owner
         name = (name or '').strip()
         if not name or not getattr(o, 'mapbanner_win', None):
@@ -3720,21 +3718,20 @@ class StarResonanceWebViewBridge:
         threading.Timer(0.6, _finish_hide).start()
 
     def _setup_alert_click_through(self):
-        """Make alert window fully click-through (WS_EX_TRANSPARENT).
-
-        Default state: always click-through. Temporarily removed
-        when an alert is actively showing so buttons can be clicked.
-        """
+        # Make alert window fully click-through (WS_EX_TRANSPARENT).
+        #
+        # Default state: always click-through. Temporarily removed
+        # when an alert is actively showing so buttons can be clicked.
         self.owner._set_plugin_surface_click_through('alert', enabled=True)
         self._sync_surface_hwnd_attr('alert', '_alert_hwnd')
 
     def _remove_alert_click_through(self):
-        """Temporarily remove WS_EX_TRANSPARENT so alert buttons are clickable."""
+        # Temporarily remove WS_EX_TRANSPARENT so alert buttons are clickable.
         self.owner._set_plugin_surface_click_through('alert', enabled=False)
         self._sync_surface_hwnd_attr('alert', '_alert_hwnd')
 
     def _setup_mapbanner_click_through(self, _wait_retries: int = 20):
-        """Make Map-name banner overlay fully click-through (纯覆盖层, 永不挡点击)."""
+        # Make Map-name banner overlay fully click-through (纯覆盖层, 永不挡点击).
         self.owner._set_plugin_surface_click_through(
             'mapbanner', enabled=True, wait_retries=_wait_retries, ensure_on_top=True)
         self._sync_surface_hwnd_attr('mapbanner', '_mapbanner_hwnd')
@@ -5342,7 +5339,7 @@ class StarResonanceWebViewBridge:
 
 
 class StarResonanceDpsWindowAPI:
-    """pywebview js_api for the DPS meter window."""
+    # pywebview js_api for the DPS meter window.
 
     def __init__(self, gui):
         self._g = gui
@@ -5464,7 +5461,7 @@ class StarResonanceDpsWindowAPI:
 
 
 class StarResonanceRaidEditorAPI:
-    """pywebview js_api for the raid editor overlay."""
+    # pywebview js_api for the raid editor overlay.
 
     def __init__(self, gui):
         self._g = gui
@@ -5547,7 +5544,7 @@ class StarResonanceRaidEditorAPI:
 
 
 class StarResonanceCommanderAPI:
-    """pywebview js_api for the commander panel."""
+    # pywebview js_api for the commander panel.
 
     def __init__(self, gui):
         self._g = gui
@@ -5579,7 +5576,7 @@ class StarResonanceCommanderAPI:
 
 
 class StarResonanceAutoKeyEditorAPI:
-    """pywebview js_api for the AutoKey editor overlay."""
+    # pywebview js_api for the AutoKey editor overlay.
 
     def __init__(self, gui):
         self._g = gui

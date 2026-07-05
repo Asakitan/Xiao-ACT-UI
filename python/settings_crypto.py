@@ -1,34 +1,33 @@
 # -*- coding: utf-8 -*-
-"""settings_crypto — settings.json 的加密编解码层 (AES-256-GCM + DPAPI)。
-
-被三份 SettingsManager (config.py / gui_modules/settings_manager.py /
-sao_webview.py) 以及两处直接读写 settings.json 的插件模块
-(star_resonance_plugin.engines.character_profile /
-midi_piano_plugin.engine.mp_player) 共用 —— 全部指向同一份磁盘文件,
-编解码逻辑必须集中在这一处, 否则任何一处漏改就会把其它读者手里的密文
-当明文解析, 互相踩坏数据。
-
-设计:
-  - AES key 每次 :func:`encode_settings` 都用 ``os.urandom`` 重新生成
-    (AES-256-GCM, Windows CNG/bcrypt.dll 做加解密原语), 用 Windows DPAPI
-    (``CryptProtectData``, 当前用户范围) 把这把 key 封起来一起存盘。
-    DPAPI 解封只在同一台机器同一个 Windows 账户下才成功 —— 换机器/换
-    账户后旧文件视为不可解, 抛 :class:`SettingsCryptoError`, 调用方按
-    既有的"损坏文件"逻辑处理 (备份 + 回退默认值), 不会崩溃。
-  - 磁盘上仍是一份 JSON, 只是套了层信封::
-
-        {"_enc": "v1", "key": "<base64 DPAPI-protected AES key>",
-         "data": "<base64 nonce(12)+tag(16)+ciphertext>"}
-
-    没有 ``"_enc"`` 标记的旧版明文 settings.json (或任意合法 JSON)
-    原样按 JSON 解析返回; 三份 SettingsManager 在 load 成功后都会用
-    :func:`is_legacy_plaintext` 检查一次, 命中就立刻强制 save 一次
-    (不等用户下次改设置) —— 老文件一读就地原地加密, 不丢已有配置。
-  - 纯 Windows-only, 零第三方依赖 (只用 ctypes 直调 bcrypt.dll /
-    crypt32.dll), 与项目里 act_platform/protect/crypto.py 的既有风格
-    一致但不相互 import (那份挂在插件保护子系统的包初始化链上, 直接
-    依赖会把整个 ACT 插件体系当成 settings 层的导入副作用, 犯不上)。
-"""
+# settings_crypto — settings.json 的加密编解码层 (AES-256-GCM + DPAPI)。
+#
+# 被三份 SettingsManager (config.py / gui_modules/settings_manager.py /
+# sao_webview.py) 以及两处直接读写 settings.json 的插件模块
+# (star_resonance_plugin.engines.character_profile /
+# midi_piano_plugin.engine.mp_player) 共用 —— 全部指向同一份磁盘文件,
+# 编解码逻辑必须集中在这一处, 否则任何一处漏改就会把其它读者手里的密文
+# 当明文解析, 互相踩坏数据。
+#
+# 设计:
+# - AES key 每次 :func:`encode_settings` 都用 ``os.urandom`` 重新生成
+# (AES-256-GCM, Windows CNG/bcrypt.dll 做加解密原语), 用 Windows DPAPI
+# (``CryptProtectData``, 当前用户范围) 把这把 key 封起来一起存盘。
+# DPAPI 解封只在同一台机器同一个 Windows 账户下才成功 —— 换机器/换
+# 账户后旧文件视为不可解, 抛 :class:`SettingsCryptoError`, 调用方按
+# 既有的"损坏文件"逻辑处理 (备份 + 回退默认值), 不会崩溃。
+# - 磁盘上仍是一份 JSON, 只是套了层信封::
+#
+# {"_enc": "v1", "key": "<base64 DPAPI-protected AES key>",
+# "data": "<base64 nonce(12)+tag(16)+ciphertext>"}
+#
+# 没有 ``"_enc"`` 标记的旧版明文 settings.json (或任意合法 JSON)
+# 原样按 JSON 解析返回; 三份 SettingsManager 在 load 成功后都会用
+# :func:`is_legacy_plaintext` 检查一次, 命中就立刻强制 save 一次
+# (不等用户下次改设置) —— 老文件一读就地原地加密, 不丢已有配置。
+# - 纯 Windows-only, 零第三方依赖 (只用 ctypes 直调 bcrypt.dll /
+# crypt32.dll), 与项目里 act_platform/protect/crypto.py 的既有风格
+# 一致但不相互 import (那份挂在插件保护子系统的包初始化链上, 直接
+# 依赖会把整个 ACT 插件体系当成 settings 层的导入副作用, 犯不上)。
 
 from __future__ import annotations
 
@@ -47,7 +46,8 @@ _TAG_LEN = 16
 
 
 class SettingsCryptoError(Exception):
-    """settings.json 无法解密 (损坏 / 非本机本账户加密 / 密钥不符)。"""
+    # settings.json 无法解密 (损坏 / 非本机本账户加密 / 密钥不符)。
+    pass
 
 
 # ══════════════════════════════════════════════════════════
@@ -95,7 +95,7 @@ def _open_aes_gcm_key(bcrypt, key: bytes):
 
 
 def _aes_gcm_encrypt(key: bytes, plaintext: bytes) -> bytes:
-    """AES-256-GCM 加密, 返回 nonce(12)+tag(16)+ciphertext 拼接的 blob。"""
+    # AES-256-GCM 加密, 返回 nonce(12)+tag(16)+ciphertext 拼接的 blob。
     bcrypt = ctypes.WinDLL("bcrypt")
     h_alg, h_key = _open_aes_gcm_key(bcrypt, key)
     try:
@@ -128,7 +128,7 @@ def _aes_gcm_encrypt(key: bytes, plaintext: bytes) -> bytes:
 
 
 def _aes_gcm_decrypt(key: bytes, blob: bytes) -> Optional[bytes]:
-    """解密 :func:`_aes_gcm_encrypt` 产出的 blob；校验失败(密钥错/被篡改)返回 None。"""
+    # 解密 :func:`_aes_gcm_encrypt` 产出的 blob；校验失败(密钥错/被篡改)返回 None。
     if len(blob) < _NONCE_LEN + _TAG_LEN:
         return None
     nonce = blob[:_NONCE_LEN]
@@ -175,8 +175,8 @@ _CRYPTPROTECT_UI_FORBIDDEN = 0x01
 
 
 def _make_blob(data: bytes):
-    """构造 DATA_BLOB; 返回 (blob, 底层buffer) —— 调用方必须在 DPAPI 调用
-    结束前一直持有 buffer 的引用, 否则 blob.pbData 会指向已回收的内存。"""
+    # 构造 DATA_BLOB; 返回 (blob, 底层buffer) —— 调用方必须在 DPAPI 调用
+    # 结束前一直持有 buffer 的引用, 否则 blob.pbData 会指向已回收的内存。
     buf = (ctypes.c_ubyte * len(data))(*data)
     blob = _DATA_BLOB(len(data), ctypes.cast(buf, ctypes.POINTER(ctypes.c_ubyte)))
     return blob, buf
@@ -229,7 +229,7 @@ def _dpapi_unprotect(data: bytes) -> Optional[bytes]:
 #  公开 API —— dict <-> 加密 bytes
 # ══════════════════════════════════════════════════════════
 def encode_settings(data: dict) -> bytes:
-    """dict -> 加密信封 JSON (utf-8 bytes)。每次调用都换一把新 AES key。"""
+    # dict -> 加密信封 JSON (utf-8 bytes)。每次调用都换一把新 AES key。
     plaintext = json.dumps(data, ensure_ascii=False).encode("utf-8")
     aes_key = os.urandom(32)
     cipher_blob = _aes_gcm_encrypt(aes_key, plaintext)
@@ -243,13 +243,12 @@ def encode_settings(data: dict) -> bytes:
 
 
 def decode_settings(raw: bytes) -> dict:
-    """加密信封 bytes -> dict。
-
-    非信封格式 (没有 ``"_enc"`` 标记, 即旧版明文 settings.json 或任意
-    合法 JSON) 原样按 JSON 解析返回, 交给调用方在下次 save 时自动迁移
-    成加密格式。信封格式但解不开 (换机器/换账户、被篡改) 抛
-    :class:`SettingsCryptoError`, 调用方按现有"损坏文件"逻辑处理。
-    """
+    # 加密信封 bytes -> dict。
+    #
+    # 非信封格式 (没有 ``"_enc"`` 标记, 即旧版明文 settings.json 或任意
+    # 合法 JSON) 原样按 JSON 解析返回, 交给调用方在下次 save 时自动迁移
+    # 成加密格式。信封格式但解不开 (换机器/换账户、被篡改) 抛
+    # :class:`SettingsCryptoError`, 调用方按现有"损坏文件"逻辑处理。
     obj = json.loads(raw.decode("utf-8"))
     if not isinstance(obj, dict):
         raise SettingsCryptoError("settings root must be an object")
@@ -274,14 +273,13 @@ def decode_settings(raw: bytes) -> dict:
 
 
 def is_legacy_plaintext(raw: bytes) -> bool:
-    """True when ``raw`` parses as JSON but is *not* our encrypted envelope.
-
-    Callers use this right after a successful :func:`decode_settings` load
-    to decide whether to force an immediate re-save — migrating an old
-    plaintext (or otherwise unencrypted) settings.json to the encrypted
-    format on the very next load instead of waiting for the next
-    user-triggered settings change.
-    """
+    # True when ``raw`` parses as JSON but is *not* our encrypted envelope.
+    #
+    # Callers use this right after a successful :func:`decode_settings` load
+    # to decide whether to force an immediate re-save — migrating an old
+    # plaintext (or otherwise unencrypted) settings.json to the encrypted
+    # format on the very next load instead of waiting for the next
+    # user-triggered settings change.
     try:
         obj = json.loads(raw.decode("utf-8"))
     except Exception:
@@ -295,13 +293,12 @@ def is_legacy_plaintext(raw: bytes) -> bool:
 #  这里统一成一次原子写, 语义仍是"失败就返回空/False", 不抛异常)
 # ══════════════════════════════════════════════════════════
 def read_settings_file(path: str, *, migrate: bool = False) -> dict:
-    """读整份 settings.json; 任何失败 (不存在/损坏/解不开) 都返回 {}。
-
-    ``migrate=True`` 时, 命中旧版明文会用同一次读到的字节原地改写成
-    加密格式再返回 (不重复打开文件); 只读不写的调用点 (比如插件的
-    "读取角色缓存") 传这个才会主动帮着迁移, 否则老文件要等下一次有人
-    写入时才会顺带被加密。
-    """
+    # 读整份 settings.json; 任何失败 (不存在/损坏/解不开) 都返回 {}。
+    #
+    # ``migrate=True`` 时, 命中旧版明文会用同一次读到的字节原地改写成
+    # 加密格式再返回 (不重复打开文件); 只读不写的调用点 (比如插件的
+    # "读取角色缓存") 传这个才会主动帮着迁移, 否则老文件要等下一次有人
+    # 写入时才会顺带被加密。
     try:
         if not os.path.exists(path):
             return {}
@@ -318,7 +315,7 @@ def read_settings_file(path: str, *, migrate: bool = False) -> dict:
 
 
 def write_settings_file(path: str, data: dict) -> bool:
-    """原子写入加密后的 settings.json。成功返回 True。"""
+    # 原子写入加密后的 settings.json。成功返回 True。
     if not isinstance(data, dict):
         return False
     tmp_path = ""

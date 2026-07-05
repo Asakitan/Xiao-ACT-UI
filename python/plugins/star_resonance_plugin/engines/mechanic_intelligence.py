@@ -1,13 +1,12 @@
 # -*- coding: utf-8 -*-
-"""mechanic_intelligence - boss 机制智能分析器: 招名 → 应对策略 (本地, 无需几何).
-
-★为什么靠招名: 实测 boss 机制几何(半径/形状)不在可静态读的配置表(在AI脚本/prefab里),
-但**机制类型从官方招名 100% 能判断**(炎光环形aoe=圆圈远离, 领地分摊=集合抱团, 角斗-开冲=
-冲锋侧闪)。配合 curSkillId_ 实时读 boss 在出什么招 → 自动分类应对, 任意 boss 任意招不用手配。
-
-输出策略不依赖几何半径: 躲避走招式生命周期判停(这招结束即停), 集合走靠拢队友(队友位可读)。
-分类是**可解释的分层规则**, 不是机械关键词: 先排非机制(普攻/位移), 再按机制语义分类, 带置信度。
-"""
+# mechanic_intelligence - boss 机制智能分析器: 招名 → 应对策略 (本地, 无需几何).
+#
+# ★为什么靠招名: 实测 boss 机制几何(半径/形状)不在可静态读的配置表(在AI脚本/prefab里),
+# 但**机制类型从官方招名 100% 能判断**(炎光环形aoe=圆圈远离, 领地分摊=集合抱团, 角斗-开冲=
+# 冲锋侧闪)。配合 curSkillId_ 实时读 boss 在出什么招 → 自动分类应对, 任意 boss 任意招不用手配。
+#
+# 输出策略不依赖几何半径: 躲避走招式生命周期判停(这招结束即停), 集合走靠拢队友(队友位可读)。
+# 分类是**可解释的分层规则**, 不是机械关键词: 先排非机制(普攻/位移), 再按机制语义分类, 带置信度。
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -123,7 +122,7 @@ _RULES: List[Tuple[Tuple[str, ...], str, str, str, str, str]] = [
 
 
 class MechanicClassifier:
-    """招名 → 应对策略。纯逻辑可测, 无内存/几何依赖。"""
+    # 招名 → 应对策略。纯逻辑可测, 无内存/几何依赖。
 
     def classify(self, skill_name: str) -> MechAdvice:
         name = (skill_name or "").strip()
@@ -157,9 +156,9 @@ _CD = {"raidwide": 8, "lethal": 8, "summon": 8, "timestop": 8, "stack": 5,
 
 def build_mechanic_shell(skill_id: int, skill_name: str,
                          boss_base_id: int = 0) -> Optional[dict]:
-    """智能分析 → 机制壳子 (boss_raid schema 的原始 dict; 调用方再 normalize_mechanic)。
-    需范围(needs_geometry)的自动躲避机制, dodge.inline.geometry 留**占位**(shape=建议形状,
-    radius=0, source='') —— 等几何到手用 fill_geometry 填入。非机制返回 None。"""
+    # 智能分析 → 机制壳子 (boss_raid schema 的原始 dict; 调用方再 normalize_mechanic)。
+    # 需范围(needs_geometry)的自动躲避机制, dodge.inline.geometry 留**占位**(shape=建议形状,
+    # radius=0, source='') —— 等几何到手用 fill_geometry 填入。非机制返回 None。
     a = MechanicClassifier().classify(skill_name)
     if not a.is_mechanic:
         return None
@@ -188,8 +187,8 @@ def build_mechanic_shell(skill_id: int, skill_name: str,
 def fill_geometry(mechanic: dict, *, shape: str, radius: float, inner: float = 0.0,
                   angle: float = 0.0, width: float = 0.0, center: str = "boss",
                   source: str = "reverse") -> bool:
-    """把"实际范围"填进机制壳子的 geometry (几何到手后调用; 填后自动躲避按精确范围出圈)。
-    成功返回 True。机制无 dodge.inline 时自动建。"""
+    # 把"实际范围"填进机制壳子的 geometry (几何到手后调用; 填后自动躲避按精确范围出圈)。
+    # 成功返回 True。机制无 dodge.inline 时自动建。
     try:
         dodge = mechanic.setdefault("dodge", {})
         inline = dodge.setdefault("inline", {})

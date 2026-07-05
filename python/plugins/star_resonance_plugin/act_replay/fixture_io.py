@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""JSONL fixture helpers for offline ACT replay diagnostics."""
+# JSONL fixture helpers for offline ACT replay diagnostics.
 
 from __future__ import annotations
 
@@ -24,11 +24,10 @@ def fixture_path(name: str) -> Path:
 
 
 def load_events_jsonl(path: str | Path) -> Tuple[int, List[Dict[str, Any]]]:
-    """Load normalized replay events from a JSONL fixture.
-
-    The first non-empty line may be a metadata object with
-    ``{"kind":"meta","self_uid":...}``; all other lines are replay events.
-    """
+    # Load normalized replay events from a JSONL fixture.
+    #
+    # The first non-empty line may be a metadata object with
+    # ``{"kind":"meta","self_uid":...}``; all other lines are replay events.
     events: List[Dict[str, Any]] = []
     self_uid = 0
     with Path(path).open("r", encoding="utf-8") as fh:

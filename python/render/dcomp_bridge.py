@@ -1,23 +1,22 @@
 # -*- coding: utf-8 -*-
-"""DirectComposition presentation bridge — GL pixels → DComp → DWM.
-
-Replaces WGL SwapBuffers for overlay anti-capture. GL rendering stays
-on the existing WGL context; pixel data is read via moderngl read()
-and uploaded to a DXGI swap chain bound to a DirectComposition visual.
-
-DWM manages DirectComposition content so SetWindowDisplayAffinity
-(WDA) can exclude the overlay from screen capture.
-
-Setup chain:
-  D3D11 device → IDXGIDevice → IDXGIAdapter → IDXGIFactory2
-    → CreateSwapChainForComposition
-  DCompositionCreateDevice → CreateTargetForHwnd → CreateVisual
-    → SetContent(swapchain) → SetRoot → Commit
-
-Per-frame:
-  glReadPixels → Map staging texture → flip+copy → Unmap
-    → CopyResource(backbuf, staging) → Present → Commit
-"""
+# DirectComposition presentation bridge — GL pixels → DComp → DWM.
+#
+# Replaces WGL SwapBuffers for overlay anti-capture. GL rendering stays
+# on the existing WGL context; pixel data is read via moderngl read()
+# and uploaded to a DXGI swap chain bound to a DirectComposition visual.
+#
+# DWM manages DirectComposition content so SetWindowDisplayAffinity
+# (WDA) can exclude the overlay from screen capture.
+#
+# Setup chain:
+# D3D11 device → IDXGIDevice → IDXGIAdapter → IDXGIFactory2
+# → CreateSwapChainForComposition
+# DCompositionCreateDevice → CreateTargetForHwnd → CreateVisual
+# → SetContent(swapchain) → SetRoot → Commit
+#
+# Per-frame:
+# glReadPixels → Map staging texture → flip+copy → Unmap
+# → CopyResource(backbuf, staging) → Present → Commit
 from __future__ import annotations
 
 import ctypes
@@ -58,7 +57,7 @@ _PTR_SZ = sizeof(c_void_p)  # 8 on x64
 
 
 def _vc(this, idx, ret, argtypes, *args):
-    """Call COM vtable method *idx* on *this* (int or c_void_p)."""
+    # Call COM vtable method *idx* on *this* (int or c_void_p).
     addr = this.value if isinstance(this, c_void_p) else int(this)
     vtbl = c_void_p.from_address(addr).value
     fp = c_void_p.from_address(vtbl + idx * _PTR_SZ).value
@@ -66,7 +65,7 @@ def _vc(this, idx, ret, argtypes, *args):
 
 
 def _qi(obj, iid):
-    """QueryInterface → c_void_p on success, None on failure."""
+    # QueryInterface → c_void_p on success, None on failure.
     out = c_void_p()
     hr = _vc(obj, 0, HRESULT, (POINTER(GUID), POINTER(c_void_p)),
              byref(iid), byref(out))
@@ -74,7 +73,7 @@ def _qi(obj, iid):
 
 
 def _release(obj):
-    """IUnknown::Release — safe for None / null pointer."""
+    # IUnknown::Release — safe for None / null pointer.
     if obj is None:
         return
     addr = obj.value if isinstance(obj, c_void_p) else obj
@@ -259,12 +258,11 @@ _gl_proc_cache: dict[str, Any] = {}
 
 
 def _gl_proc(name: str, restype, argtypes):
-    """Resolve a WGL/GL extension entry point via wglGetProcAddress.
-
-    Returns None if the current thread has no current WGL context, or
-    the driver doesn't export *name* — callers must treat None as
-    "interop unavailable" and fall back to the existing CPU path.
-    """
+    # Resolve a WGL/GL extension entry point via wglGetProcAddress.
+    #
+    # Returns None if the current thread has no current WGL context, or
+    # the driver doesn't export *name* — callers must treat None as
+    # "interop unavailable" and fall back to the existing CPU path.
     cached = _gl_proc_cache.get(name)
     if cached is not None:
         return cached
@@ -277,7 +275,7 @@ def _gl_proc(name: str, restype, argtypes):
 
 
 def _wgl_dx_interop2_supported(hdc: int) -> bool:
-    """Query WGL_NV_DX_interop2 support on the current WGL context."""
+    # Query WGL_NV_DX_interop2 support on the current WGL context.
     get_ext = _gl_proc('wglGetExtensionsStringARB', ctypes.c_char_p, [wt.HDC])
     if get_ext is None:
         return False
@@ -290,12 +288,11 @@ def _wgl_dx_interop2_supported(hdc: int) -> bool:
 
 
 class WglDxInterop:
-    """Thin wrapper around the WGL_NV_DX_interop2 entry points.
-
-    One instance owns exactly one interop-open D3D11 device handle.
-    All methods must be called with the target WGL context current on
-    the calling thread (same requirement as the rest of this module).
-    """
+    # Thin wrapper around the WGL_NV_DX_interop2 entry points.
+    #
+    # One instance owns exactly one interop-open D3D11 device handle.
+    # All methods must be called with the target WGL context current on
+    # the calling thread (same requirement as the rest of this module).
 
     def __init__(self) -> None:
         self._hdevice: c_void_p | None = None
@@ -372,11 +369,11 @@ class WglDxInterop:
 
 
 def _resolve_gl_fbo_fns() -> dict[str, Any] | None:
-    """Resolve the handful of GL_ARB_framebuffer_object entry points
-    needed to attach an interop-registered texture as a render target.
-    ``glGenTextures``/``glBindTexture``/``glDeleteTextures`` are GL 1.1
-    core and already available directly on ``_opengl32`` — only the
-    FBO functions need wglGetProcAddress (GL 3.0+ / ARB extension)."""
+    # Resolve the handful of GL_ARB_framebuffer_object entry points
+    # needed to attach an interop-registered texture as a render target.
+    # ``glGenTextures``/``glBindTexture``/``glDeleteTextures`` are GL 1.1
+    # core and already available directly on ``_opengl32`` — only the
+    # FBO functions need wglGetProcAddress (GL 3.0+ / ARB extension).
     sigs = {
         'glGenFramebuffers': (None, [GLsizei, POINTER(GLuint)]),
         'glDeleteFramebuffers': (None, [GLsizei, POINTER(GLuint)]),
@@ -405,7 +402,7 @@ _glActiveTexture_fn: Any = None
 
 
 def gl_gen_texture() -> int:
-    """Allocate one GL texture name (glGenTextures). Returns 0 on failure."""
+    # Allocate one GL texture name (glGenTextures). Returns 0 on failure.
     tid = GLuint(0)
     try:
         _opengl32.glGenTextures(1, byref(tid))
@@ -425,11 +422,11 @@ def gl_delete_texture(tex_id: int) -> None:
 
 
 def gl_bind_texture_unit0(tex_id: int) -> None:
-    """Bind *tex_id* as GL_TEXTURE_2D on texture unit 0 — matches the
-    ``location=0`` convention moderngl's ``Texture.use()`` follows, so
-    an externally-registered interop texture can be sampled by a
-    moderngl ``Program``/``VertexArray`` exactly like a moderngl-owned
-    texture, with no other state changes needed."""
+    # Bind *tex_id* as GL_TEXTURE_2D on texture unit 0 — matches the
+    # ``location=0`` convention moderngl's ``Texture.use()`` follows, so
+    # an externally-registered interop texture can be sampled by a
+    # moderngl ``Program``/``VertexArray`` exactly like a moderngl-owned
+    # texture, with no other state changes needed.
     global _glActiveTexture_fn
     if _glActiveTexture_fn is None:
         _glActiveTexture_fn = _gl_proc('glActiveTexture', None, [GLenum])
@@ -448,11 +445,11 @@ _opengl32.glTexParameteri.argtypes = [GLenum, GLenum, GLint]
 
 
 def gl_set_bound_texture_linear() -> None:
-    """Set non-mipmapped LINEAR filtering on the currently bound
-    GL_TEXTURE_2D. A raw ``glGenTextures`` name defaults to a
-    mipmapping min-filter; an interop-registered texture has exactly
-    one level, so without this the texture is INCOMPLETE and every
-    sample silently returns black."""
+    # Set non-mipmapped LINEAR filtering on the currently bound
+    # GL_TEXTURE_2D. A raw ``glGenTextures`` name defaults to a
+    # mipmapping min-filter; an interop-registered texture has exactly
+    # one level, so without this the texture is INCOMPLETE and every
+    # sample silently returns black.
     try:
         _opengl32.glTexParameteri(
             GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR)
@@ -463,7 +460,7 @@ def gl_set_bound_texture_linear() -> None:
 
 
 def release_com(obj) -> None:
-    """Public alias for the module's IUnknown::Release helper."""
+    # Public alias for the module's IUnknown::Release helper.
     _release(obj)
 
 
@@ -482,10 +479,10 @@ _IDXGIKeyedMutex_ReleaseSync = 9
 
 
 def open_keyed_mutex(tex):
-    """QI IDXGIKeyedMutex from an opened shared texture.
-
-    Returns a ``c_void_p`` the caller must ``release_com()``, or None
-    when the texture was created without the keyed-mutex flag."""
+    # QI IDXGIKeyedMutex from an opened shared texture.
+    #
+    # Returns a ``c_void_p`` the caller must ``release_com()``, or None
+    # when the texture was created without the keyed-mutex flag.
     if tex is None or not tex.value:
         return None
     try:
@@ -495,9 +492,9 @@ def open_keyed_mutex(tex):
 
 
 def keyed_mutex_acquire(km, key: int = 0, timeout_ms: int = 8) -> bool:
-    """AcquireSync — True only on S_OK (WAIT_TIMEOUT is a positive
-    HRESULT). The producer holds the key only for one CopyResource, so
-    a short timeout only fires if the other side died mid-hold."""
+    # AcquireSync — True only on S_OK (WAIT_TIMEOUT is a positive
+    # HRESULT). The producer holds the key only for one CopyResource, so
+    # a short timeout only fires if the other side died mid-hold.
     try:
         hr = _vc(km, _IDXGIKeyedMutex_AcquireSync, HRESULT,
                  (ctypes.c_uint64, c_uint), key, timeout_ms)
@@ -518,11 +515,10 @@ def keyed_mutex_release(km, key: int = 0) -> None:
 
 
 class DCompBridge:
-    """Present GL-rendered pixels via DirectComposition.
-
-    All methods must be called from the compositor thread (same
-    thread that owns the WGL context).
-    """
+    # Present GL-rendered pixels via DirectComposition.
+    #
+    # All methods must be called from the compositor thread (same
+    # thread that owns the WGL context).
 
     def __init__(self, hwnd: int, width: int, height: int) -> None:
         self._hwnd = hwnd
@@ -675,7 +671,7 @@ class DCompBridge:
               f'D3D FL={feat.value:#x}', flush=True)
 
     def _set_flip_transform(self) -> None:
-        """Set Y-flip on the DComp visual so GL bottom-up rows display top-down."""
+        # Set Y-flip on the DComp visual so GL bottom-up rows display top-down.
         flip = _D2D_MATRIX_3X2_F(1.0, 0.0, 0.0, -1.0, 0.0, float(self._height))
         _vc(self._dc_vis, _IDCompositionVisual_SetTransform_Matrix, HRESULT,
             (POINTER(_D2D_MATRIX_3X2_F),), byref(flip))
@@ -848,13 +844,12 @@ class DCompBridge:
         self._gl_fbo_fns = None
 
     def render_to_gpu_texture_begin(self) -> bool:
-        """Bind the interop GL FBO as the current render target.
-
-        Caller must issue its GL draw calls, then call
-        ``render_to_gpu_texture_end()`` before touching D3D11 again.
-        Returns False (and leaves nothing bound) on any failure — the
-        caller must fall back to rendering to ``ctx.screen`` instead.
-        """
+        # Bind the interop GL FBO as the current render target.
+        #
+        # Caller must issue its GL draw calls, then call
+        # ``render_to_gpu_texture_end()`` before touching D3D11 again.
+        # Returns False (and leaves nothing bound) on any failure — the
+        # caller must fall back to rendering to ``ctx.screen`` instead.
         if not self._gl_interop_active:
             return False
         # Proactive device-loss check BEFORE the interop lock, not
@@ -877,13 +872,13 @@ class DCompBridge:
             self._interop.unlock(self._gpu_tex_dx_handle)
 
     def rebind_gpu_texture_target(self) -> None:
-        """Re-bind the interop FBO without touching the lock.
-
-        For callers that must temporarily bind a *different* FBO
-        in-between (e.g. a layer's own render-to-texture pass) while
-        still inside a ``render_to_gpu_texture_begin/end`` bracket —
-        the interop object stays locked for the whole bracket, only
-        the GL_FRAMEBUFFER binding changes."""
+        # Re-bind the interop FBO without touching the lock.
+        #
+        # For callers that must temporarily bind a *different* FBO
+        # in-between (e.g. a layer's own render-to-texture pass) while
+        # still inside a ``render_to_gpu_texture_begin/end`` bracket —
+        # the interop object stays locked for the whole bracket, only
+        # the GL_FRAMEBUFFER binding changes.
         if not self._gl_interop_active:
             return
         self._gl_fbo_fns['glBindFramebuffer'](GL_FRAMEBUFFER, self._gpu_fbo_id)
@@ -894,15 +889,15 @@ class DCompBridge:
 
     @property
     def gpu_fbo_id(self) -> int:
-        """GL FBO name of the interop render target (0 if inactive).
-        Valid only between ``render_to_gpu_texture_begin/end`` for GL
-        use — the interop object must be locked while GL touches it."""
+        # GL FBO name of the interop render target (0 if inactive).
+        # Valid only between ``render_to_gpu_texture_begin/end`` for GL
+        # use — the interop object must be locked while GL touches it.
         return self._gpu_fbo_id
 
     @property
     def gpu_target_generation(self) -> int:
-        """Bumped whenever the interop render target is (re)created —
-        cache keys derived from ``gpu_fbo_id`` must include this."""
+        # Bumped whenever the interop render target is (re)created —
+        # cache keys derived from ``gpu_fbo_id`` must include this.
         return self._gpu_target_gen
 
     # ── external (cross-process) shared textures — Part B ──────────
@@ -915,15 +910,14 @@ class DCompBridge:
     # handle it's given.
 
     def open_shared_texture(self, handle: int):
-        """OpenSharedResource(handle) on this bridge's D3D11 device.
-
-        *handle* is a legacy D3D11 shared handle value (from another
-        process's ``IDXGIResource::GetSharedHandle()``) — same-session
-        processes can open it directly, no DuplicateHandle needed.
-        Returns a ``c_void_p`` to the opened ``ID3D11Texture2D`` on
-        success, or ``None`` on failure. Caller owns the returned
-        reference and must ``release_com()`` it when done.
-        """
+        # OpenSharedResource(handle) on this bridge's D3D11 device.
+        #
+        # *handle* is a legacy D3D11 shared handle value (from another
+        # process's ``IDXGIResource::GetSharedHandle()``) — same-session
+        # processes can open it directly, no DuplicateHandle needed.
+        # Returns a ``c_void_p`` to the opened ``ID3D11Texture2D`` on
+        # success, or ``None`` on failure. Caller owns the returned
+        # reference and must ``release_com()`` it when done.
         if not self._alive or not handle:
             return None
         tex = c_void_p()
@@ -936,14 +930,13 @@ class DCompBridge:
 
     def register_external_texture(self, d3d_tex_ptr: int, gl_tex_id: int,
                                    access: int = WGL_ACCESS_READ_ONLY_NV):
-        """Register an externally-opened D3D11 texture as a GL texture.
-
-        Requires ``gl_interop_active`` (the interop device from
-        ``enable_gl_interop()`` is reused — legacy shared handles can
-        only be opened/registered against a device that is itself
-        interop-open). Returns the interop object handle for
-        lock/unlock, or ``None`` on failure.
-        """
+        # Register an externally-opened D3D11 texture as a GL texture.
+        #
+        # Requires ``gl_interop_active`` (the interop device from
+        # ``enable_gl_interop()`` is reused — legacy shared handles can
+        # only be opened/registered against a device that is itself
+        # interop-open). Returns the interop object handle for
+        # lock/unlock, or ``None`` on failure.
         if not self._gl_interop_active or self._interop is None:
             return None
         return self._interop.register_texture(d3d_tex_ptr, gl_tex_id, access)
@@ -964,11 +957,11 @@ class DCompBridge:
     # ── per-frame ────────────────────────────────────────────────
 
     def _handle_device_loss(self, reason: str) -> None:
-        """Put the bridge into a safe dead state after the D3D11 device
-        is confirmed gone. Shared by ``_note_present_hr`` (reactive —
-        after a Present() already failed) and ``device_removed()``
-        (proactive — checked before risking a call that has no failure
-        path at all, see that method's docstring)."""
+        # Put the bridge into a safe dead state after the D3D11 device
+        # is confirmed gone. Shared by ``_note_present_hr`` (reactive —
+        # after a Present() already failed) and ``device_removed()``
+        # (proactive — checked before risking a call that has no failure
+        # path at all, see that method's docstring).
         if self._alive:
             print(f'[DComp] device lost ({reason}) — reverting to '
                   f'SwapBuffers present path', flush=True)
@@ -976,25 +969,24 @@ class DCompBridge:
         self._alive = False
 
     def device_removed(self) -> bool:
-        """Cheap, always-non-blocking D3D11 device health probe.
-
-        ``ID3D11Device::GetDeviceRemovedReason`` just reads a stored
-        flag — unlike a ``Present()`` call (which only surfaces a lost
-        device reactively, after already trying to submit a frame) or
-        ``wglDXLockObjectsNV`` (``WglDxInterop.lock``/``render_to_gpu_
-        texture_begin``/``lock_external_texture``): that call has NO
-        timeout parameter in the extension spec at all, and its
-        behavior against an already-lost D3D device is driver-defined
-        — observed live as a sustained CPU+GPU usage spike that reads
-        as a full hang ("开着桌宠挂机久了会突然卡死, 不用开菜单也会",
-        both on display sleep/wake AND with the display continuously
-        on — i.e. any GPU TDR, not just a power-state transition).
-        Call this BEFORE attempting the interop lock each frame so a
-        confirmed-dead device tears down and falls back to plain GL
-        rendering (``ctx.screen``, matching the present path's existing
-        ``swap_buffers`` fallback) instead of the render thread ever
-        reaching that unbounded call again this session.
-        """
+        # Cheap, always-non-blocking D3D11 device health probe.
+        #
+        # ``ID3D11Device::GetDeviceRemovedReason`` just reads a stored
+        # flag — unlike a ``Present()`` call (which only surfaces a lost
+        # device reactively, after already trying to submit a frame) or
+        # ``wglDXLockObjectsNV`` (``WglDxInterop.lock``/``render_to_gpu_
+        # texture_begin``/``lock_external_texture``): that call has NO
+        # timeout parameter in the extension spec at all, and its
+        # behavior against an already-lost D3D device is driver-defined
+        # — observed live as a sustained CPU+GPU usage spike that reads
+        # as a full hang ("开着桌宠挂机久了会突然卡死, 不用开菜单也会",
+        # both on display sleep/wake AND with the display continuously
+        # on — i.e. any GPU TDR, not just a power-state transition).
+        # Call this BEFORE attempting the interop lock each frame so a
+        # confirmed-dead device tears down and falls back to plain GL
+        # rendering (``ctx.screen``, matching the present path's existing
+        # ``swap_buffers`` fallback) instead of the render thread ever
+        # reaching that unbounded call again this session.
         if self._d3d_dev is None:
             return False
         try:
@@ -1008,27 +1000,26 @@ class DCompBridge:
         return False
 
     def _note_present_hr(self, hr: int) -> bool:
-        """Inspect a ``Present`` HRESULT and, on a lost device, put the
-        bridge into a safe dead state.
-
-        A removed/reset/hung device means the display adapter re-
-        initialised — the D3D11 device, swapchain, and every COM
-        pointer derived from them are now dangling. Continuing to call
-        ``Map``/``GetBuffer``/``CopyResource``/``Present`` into them is
-        an access violation in native code that the Python ``try`` here
-        cannot catch (observed as the whole app crash-exiting when the
-        screen powers off / the GPU resets). Marking ``_alive = False``
-        makes every present method short-circuit at its opening guard,
-        so ``_present_frame`` falls back to plain ``SwapBuffers`` (which
-        stays valid — the WGL window context survives a mere monitor
-        power event) and the overlay keeps running instead of dying.
-
-        ``DXGI_STATUS_OCCLUDED`` (a *positive* success code, so the
-        ``hr < 0`` guards elsewhere never see it) is NOT a loss — the
-        monitor is just off; the present was accepted but not shown. We
-        return False and keep presenting so the overlay is already
-        correct the instant the display comes back.
-        """
+        # Inspect a ``Present`` HRESULT and, on a lost device, put the
+        # bridge into a safe dead state.
+        #
+        # A removed/reset/hung device means the display adapter re-
+        # initialised — the D3D11 device, swapchain, and every COM
+        # pointer derived from them are now dangling. Continuing to call
+        # ``Map``/``GetBuffer``/``CopyResource``/``Present`` into them is
+        # an access violation in native code that the Python ``try`` here
+        # cannot catch (observed as the whole app crash-exiting when the
+        # screen powers off / the GPU resets). Marking ``_alive = False``
+        # makes every present method short-circuit at its opening guard,
+        # so ``_present_frame`` falls back to plain ``SwapBuffers`` (which
+        # stays valid — the WGL window context survives a mere monitor
+        # power event) and the overlay keeps running instead of dying.
+        #
+        # ``DXGI_STATUS_OCCLUDED`` (a *positive* success code, so the
+        # ``hr < 0`` guards elsewhere never see it) is NOT a loss — the
+        # monitor is just off; the present was accepted but not shown. We
+        # return False and keep presenting so the overlay is already
+        # correct the instant the display comes back.
         code = hr & 0xFFFFFFFF
         if code in _DEVICE_LOST_CODES:
             self._handle_device_loss(f'0x{code:08X}')
@@ -1036,12 +1027,11 @@ class DCompBridge:
         return False
 
     def present(self, pixels, width: int, height: int) -> bool:
-        """Upload RGBA pixel data and present via DComp.
-
-        *pixels*: ``bytes``, ``bytearray``, or ``int`` (raw pointer).
-        The DComp visual has a Y-flip transform, so rows are copied
-        straight (no reversal needed).  Returns True on success.
-        """
+        # Upload RGBA pixel data and present via DComp.
+        #
+        # *pixels*: ``bytes``, ``bytearray``, or ``int`` (raw pointer).
+        # The DComp visual has a Y-flip transform, so rows are copied
+        # straight (no reversal needed).  Returns True on success.
         if not self._alive:
             return False
         if width != self._width or height != self._height:
@@ -1108,24 +1098,23 @@ class DCompBridge:
 
     def present_partial(self, pixels, full_width: int, full_height: int,
                          gl_x: int, gl_y: int, w: int, h: int) -> bool:
-        """Update only a sub-rectangle of the swapchain, then present.
-
-        *pixels* is a tightly-packed ``w*h*4`` RGBA buffer in the same
-        bottom-up GL row order ``Framebuffer.read_into(viewport=...)``
-        produces — row 0 of *pixels* is GL row *gl_y*. ``(gl_x, gl_y)``
-        are GL viewport coordinates (bottom-left origin), matching the
-        viewport passed to that ``read_into`` call.
-
-        The staging texture is never recreated between calls (only on
-        ``resize()``), so rows/columns outside this sub-rect keep
-        whatever was correctly written on their last actual update — a
-        D3D11 ``STAGING`` resource's CPU-visible memory persists across
-        ``Map``/``Unmap`` cycles (unlike a ``DYNAMIC`` resource mapped
-        with ``WRITE_DISCARD``, which may rename the allocation). This
-        is only safe if *full_width*/*full_height* still match the
-        current swapchain size — on any real resize the caller must use
-        ``present()`` for a full refresh first.
-        """
+        # Update only a sub-rectangle of the swapchain, then present.
+        #
+        # *pixels* is a tightly-packed ``w*h*4`` RGBA buffer in the same
+        # bottom-up GL row order ``Framebuffer.read_into(viewport=...)``
+        # produces — row 0 of *pixels* is GL row *gl_y*. ``(gl_x, gl_y)``
+        # are GL viewport coordinates (bottom-left origin), matching the
+        # viewport passed to that ``read_into`` call.
+        #
+        # The staging texture is never recreated between calls (only on
+        # ``resize()``), so rows/columns outside this sub-rect keep
+        # whatever was correctly written on their last actual update — a
+        # D3D11 ``STAGING`` resource's CPU-visible memory persists across
+        # ``Map``/``Unmap`` cycles (unlike a ``DYNAMIC`` resource mapped
+        # with ``WRITE_DISCARD``, which may rename the allocation). This
+        # is only safe if *full_width*/*full_height* still match the
+        # current swapchain size — on any real resize the caller must use
+        # ``present()`` for a full refresh first.
         if not self._alive:
             return False
         if full_width != self._width or full_height != self._height:
@@ -1193,12 +1182,12 @@ class DCompBridge:
             return False
 
     def present_gpu(self) -> bool:
-        """Present the GPU render target (filled between a
-        ``render_to_gpu_texture_begin/end`` pair) with no CPU touch:
-        pure D3D11 ``CopyResource`` into the backbuffer + ``Present``.
-        Caller must have already unlocked the interop object (i.e.
-        call this after ``render_to_gpu_texture_end()``, not inside
-        the begin/end bracket)."""
+        # Present the GPU render target (filled between a
+        # ``render_to_gpu_texture_begin/end`` pair) with no CPU touch:
+        # pure D3D11 ``CopyResource`` into the backbuffer + ``Present``.
+        # Caller must have already unlocked the interop object (i.e.
+        # call this after ``render_to_gpu_texture_end()``, not inside
+        # the begin/end bracket).
         if not self._gl_interop_active or not self._alive:
             return False
         try:

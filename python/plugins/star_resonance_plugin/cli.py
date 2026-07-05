@@ -1,17 +1,16 @@
 # -*- coding: utf-8 -*-
-"""Star Resonance standalone CLI entry points.
-
-The platform's ``main.py`` (``--test`` / ``--headless`` flags) used to import
-this plugin's engines directly. In 5.0.0 that coupling was removed — these CLI
-entry points now live inside the plugin, and ``main.py`` dispatches to them via
-``ensure_act_plugin_manager`` + this module's ``run_test`` / ``run_headless``
-function.
-
-The host discovers them by ``manager.runtime('cli_test')`` /
-``manager.runtime('cli_headless')`` or directly via a plugin-provided hook;
-this module is intentionally importable by both dev and frozen PyInstaller
-trees (it lives under the plugin's package path).
-"""
+# Star Resonance standalone CLI entry points.
+#
+# The platform's ``main.py`` (``--test`` / ``--headless`` flags) used to import
+# this plugin's engines directly. In 5.0.0 that coupling was removed — these CLI
+# entry points now live inside the plugin, and ``main.py`` dispatches to them via
+# ``ensure_act_plugin_manager`` + this module's ``run_test`` / ``run_headless``
+# function.
+#
+# The host discovers them by ``manager.runtime('cli_test')`` /
+# ``manager.runtime('cli_headless')`` or directly via a plugin-provided hook;
+# this module is intentionally importable by both dev and frozen PyInstaller
+# trees (it lives under the plugin's package path).
 
 from __future__ import annotations
 
@@ -24,7 +23,7 @@ def _settings():
 
 
 def run_test() -> None:
-    """单次截图测试: 截取游戏窗口，执行一次识别，打印结果。"""
+    # 单次截图测试: 截取游戏窗口，执行一次识别，打印结果。
     from plugins.star_resonance_plugin.engines.game_state import GameStateManager
     from plugins.star_resonance_plugin.vision.recognition import RecognitionEngine
 
@@ -59,7 +58,7 @@ def run_test() -> None:
 
 
 def run_headless() -> None:
-    """无 HUD 模式: 仅终端输出识别结果。"""
+    # 无 HUD 模式: 仅终端输出识别结果。
     from plugins.star_resonance_plugin.engines.game_state import GameState, GameStateManager
     from plugins.star_resonance_plugin.engines.automation import AutomationCore
 
@@ -93,12 +92,11 @@ def run_headless() -> None:
 
 
 def install_cli_runtime(ctx) -> None:
-    """Register ``cli_test`` / ``cli_headless`` runtime hooks.
-
-    The platform's ``main.py`` resolves these through the extension runtime
-    provider (see ``act_runtime_bridge``), so this is the only registration
-    entry the host needs.
-    """
+    # Register ``cli_test`` / ``cli_headless`` runtime hooks.
+    #
+    # The platform's ``main.py`` resolves these through the extension runtime
+    # provider (see ``act_runtime_bridge``), so this is the only registration
+    # entry the host needs.
     # The dispatch table in ``act_runtime_bridge.EXTENSION_RUNTIME_HANDLERS``
     # exposes these as ``cli_test`` / ``cli_headless`` to keep the table
     # in one place.

@@ -1,14 +1,13 @@
 # -*- coding: utf-8 -*-
-"""mp_input — ctypes 扫描码键盘注入后端（`keyboard` 库 API 兼容垫片）。
-
-SAO-UI 不依赖 PyPI 的 `keyboard` 库，且扫描码注入对
-游戏（DirectInput / RawInput 读扫描码）兼容性最好。本模块只暴露 mp_player.py
-真正用到的两个函数——`press(name)` / `release(name)`——签名与 `keyboard` 库一致，
-因此 `import mp_input as keyboard` 后，KeyboardSimulator 的全部落键调用零改动直通。
-
-实现参考主程序 engines/auto_key_engine.py 的 SendInput 用法，但改走
-KEYEVENTF_SCANCODE（wVk=0, wScan=扫描码），即发送物理扫描码而非虚拟键码。
-"""
+# mp_input — ctypes 扫描码键盘注入后端（`keyboard` 库 API 兼容垫片）。
+#
+# SAO-UI 不依赖 PyPI 的 `keyboard` 库，且扫描码注入对
+# 游戏（DirectInput / RawInput 读扫描码）兼容性最好。本模块只暴露 mp_player.py
+# 真正用到的两个函数——`press(name)` / `release(name)`——签名与 `keyboard` 库一致，
+# 因此 `import mp_input as keyboard` 后，KeyboardSimulator 的全部落键调用零改动直通。
+#
+# 实现参考主程序 engines/auto_key_engine.py 的 SendInput 用法，但改走
+# KEYEVENTF_SCANCODE（wVk=0, wScan=扫描码），即发送物理扫描码而非虚拟键码。
 
 from __future__ import annotations
 
@@ -87,7 +86,7 @@ _EXTENDED = {0x36: False, 0x1D: False}
 
 
 def _resolve(name) -> tuple:
-    """把 keyboard 库式名称解析成 (scan_code, is_extended)。返回 (None, False) 表示未知。"""
+    # 把 keyboard 库式名称解析成 (scan_code, is_extended)。返回 (None, False) 表示未知。
     if name is None:
         return None, False
     key = str(name).strip().lower()
@@ -116,19 +115,19 @@ def _send(scan: int, keyup: bool, extended: bool = False) -> bool:
 
 # ── keyboard 库兼容 API ─────────────────────────────────────────────────────
 def press(name) -> bool:
-    """按下（不释放）。与 keyboard.press 同名同义。"""
+    # 按下（不释放）。与 keyboard.press 同名同义。
     scan, ext = _resolve(name)
     return _send(scan, keyup=False, extended=ext)
 
 
 def release(name) -> bool:
-    """释放。与 keyboard.release 同名同义。"""
+    # 释放。与 keyboard.release 同名同义。
     scan, ext = _resolve(name)
     return _send(scan, keyup=True, extended=ext)
 
 
 def tap(name, hold: float = 0.0):
-    """按下→（可选保持）→释放，便于独立测试。"""
+    # 按下→（可选保持）→释放，便于独立测试。
     import time as _t
     press(name)
     if hold > 0:
@@ -137,7 +136,7 @@ def tap(name, hold: float = 0.0):
 
 
 def supported(name) -> bool:
-    """该名称是否可注入（用于自检 / 单测）。"""
+    # 该名称是否可注入（用于自检 / 单测）。
     scan, _ = _resolve(name)
     return scan is not None
 

@@ -1,30 +1,29 @@
 # -*- coding: utf-8 -*-
-"""Offline selftest for EntityCombatReader (no live game).
-
-Synthesises the REAL ZAttrCacheSlim layout the production decoder walks:
-
-    ZEntity.attrs_ -> ZAttrCollection.cacheSlim_
-      _indexPart (Burst block): KeySegment*[32] @+0x10 (uint Keys[8] + int Count
-        @+0x20 each), parallel int*[32] valueIndices @+0x110; segments live
-        INSIDE the indexPart allocation (mirrors the live Burst block, which is
-        what makes is_combat_entity's blob grep work)
-      _values: ValueTuple<uint, object[]>[] -- value vidx resolves to
-        _values[vidx>>5].Item2[vidx&31] (stride 0x10, Item2 @+0x8, page 32)
-    ZAttr objects: klass @+0x0 (Il2CppClass.name @+0x10), LongAttr value_ @+0x18,
-    IntAttr value_ @+0x14.
-
-Covers read_combat (structured Burst walk + layout cache), read_attr_map,
-is_combat_entity, the read_hp HP-pair-invariant fallback, the implausible-value
-rebuild path, and read_combat_batch's Python fallback.
-
-History: the original version of this file (52e071a) synthesised only loose
-LongAttr objects + raw ids sprinkled in a blob -- the layout of the pre-5fe3573
-HP-invariant read_combat. After the structured Burst-index rewrite (5fe3573 /
-7d3aa54) that fake no longer matched what read_combat walks, so 5 checks went
-permanently red. This rewrite builds the real structure instead.
-
-Run: python tools/mem_entity_combat_selftest.py
-"""
+# Offline selftest for EntityCombatReader (no live game).
+#
+# Synthesises the REAL ZAttrCacheSlim layout the production decoder walks:
+#
+# ZEntity.attrs_ -> ZAttrCollection.cacheSlim_
+# _indexPart (Burst block): KeySegment*[32] @+0x10 (uint Keys[8] + int Count
+# @+0x20 each), parallel int*[32] valueIndices @+0x110; segments live
+# INSIDE the indexPart allocation (mirrors the live Burst block, which is
+# what makes is_combat_entity's blob grep work)
+# _values: ValueTuple<uint, object[]>[] -- value vidx resolves to
+# _values[vidx>>5].Item2[vidx&31] (stride 0x10, Item2 @+0x8, page 32)
+# ZAttr objects: klass @+0x0 (Il2CppClass.name @+0x10), LongAttr value_ @+0x18,
+# IntAttr value_ @+0x14.
+#
+# Covers read_combat (structured Burst walk + layout cache), read_attr_map,
+# is_combat_entity, the read_hp HP-pair-invariant fallback, the implausible-value
+# rebuild path, and read_combat_batch's Python fallback.
+#
+# History: the original version of this file (52e071a) synthesised only loose
+# LongAttr objects + raw ids sprinkled in a blob -- the layout of the pre-5fe3573
+# HP-invariant read_combat. After the structured Burst-index rewrite (5fe3573 /
+# 7d3aa54) that fake no longer matched what read_combat walks, so 5 checks went
+# permanently red. This rewrite builds the real structure instead.
+#
+# Run: python tools/mem_entity_combat_selftest.py
 from __future__ import annotations
 import os, struct, sys
 _HERE=os.path.dirname(os.path.abspath(__file__)); _ROOT=os.path.dirname(_HERE)
@@ -75,8 +74,8 @@ def _mk_attr_obj(m, klass, type_char, value):
 
 
 class EntityBuilder:
-    """Synthesise one entity with a real Burst index. Shares klass objects per
-    FakeMem so the reader's klass-name cache behaves like live (same ptr reused)."""
+    # Synthesise one entity with a real Burst index. Shares klass objects per
+    # FakeMem so the reader's klass-name cache behaves like live (same ptr reused).
 
     def __init__(self, m: FakeMem):
         self.m=m
@@ -84,13 +83,12 @@ class EntityBuilder:
         self.k_int=_mk_klass(m,"IntAttr")
 
     def build(self, attr_values, extra_longs=()):
-        """attr_values: {attr_id: ('L'|'I', value)} -> ent_addr.
-
-        The ZAttr objects for attr_values land in the paged _values object[]
-        (multiple pages when >32, pinning the 0x10 tuple stride and vidx>>5
-        paging); extra_longs are appended as additional LongAttr objects (no
-        index entry) so read_hp's invariant scan sees them too.
-        """
+        # attr_values: {attr_id: ('L'|'I', value)} -> ent_addr.
+        #
+        # The ZAttr objects for attr_values land in the paged _values object[]
+        # (multiple pages when >32, pinning the 0x10 tuple stride and vidx>>5
+        # paging); extra_longs are appended as additional LongAttr objects (no
+        # index entry) so read_hp's invariant scan sees them too.
         m=self.m
         items=list(attr_values.items())
         n_objs=len(items)+len(extra_longs)

@@ -1,7 +1,4 @@
-"""
-SAO-UI WebView GUI 
-
-"""
+# SAO-UI WebView GUI
 
 import os
 import sys
@@ -136,7 +133,7 @@ _COLORREF_KEY = 0x00010001  # RGB(1,0,1) → COLORREF 0x00BBGGRR
 
 
 def _make_transparent_ctypes(hwnd: int):
-    """Win32 LWA_COLORKEY 透明 (ctypes 降级方案)"""
+    # Win32 LWA_COLORKEY 透明 (ctypes 降级方案)
     try:
         u = ctypes.windll.user32
         ex = u.GetWindowLongW(hwnd, _GWL_EXSTYLE)
@@ -147,12 +144,11 @@ def _make_transparent_ctypes(hwnd: int):
 
 
 def _setup_dotnet_transparency(form):
-    """用 .NET / WinForms 设置色键透明 + WebView2 透明背景.
-
-    TransparencyKey 让颜色 rgb(1,0,1) 的区域桌面穿透;
-    DefaultBackgroundColor=Transparent 让 WebView2 不遮盖 Form 背景.
-    注意: 必须在 GUI 线程调用 (或通过 _invoke_dotnet_transparency 封装).
-    """
+    # 用 .NET / WinForms 设置色键透明 + WebView2 透明背景.
+    #
+    # TransparencyKey 让颜色 rgb(1,0,1) 的区域桌面穿透;
+    # DefaultBackgroundColor=Transparent 让 WebView2 不遮盖 Form 背景.
+    # 注意: 必须在 GUI 线程调用 (或通过 _invoke_dotnet_transparency 封装).
     try:
         form_key = None
         try:
@@ -179,21 +175,20 @@ def _setup_dotnet_transparency(form):
 
 
 def _invoke_dotnet_transparency(win_obj, _retries_left=60):
-    """从后台线程安全地在 GUI 线程设置 Form 色键透明.
-
-    原理:
-      HTML transparent 区域穿透到 Form 背景色.
-      原本 Form BackColor = 白色 → 白底可见.
-      设置 BackColor = TransparencyKey = rgb(1,0,1) 后,
-      Form 背景变成 key color, Win32 COLORKEY 再将 key color 穿透到桌面.
-
-    win_obj.native 是 pywebview BrowserForm 实例
-    (winforms.py BrowserForm.__init__: self.pywebview_window.native = self).
-    通过 form.Invoke 投递到 GUI 线程执行, 避免跨线程 .NET 访问死锁.
-
-    冷启动时 WebView2 初始化可能需要 10-30 秒, native 和 Handle
-    都不会立即就绪, 因此需要持续重试 (最多 ~30 秒).
-    """
+    # 从后台线程安全地在 GUI 线程设置 Form 色键透明.
+    #
+    # 原理:
+    # HTML transparent 区域穿透到 Form 背景色.
+    # 原本 Form BackColor = 白色 → 白底可见.
+    # 设置 BackColor = TransparencyKey = rgb(1,0,1) 后,
+    # Form 背景变成 key color, Win32 COLORKEY 再将 key color 穿透到桌面.
+    #
+    # win_obj.native 是 pywebview BrowserForm 实例
+    # (winforms.py BrowserForm.__init__: self.pywebview_window.native = self).
+    # 通过 form.Invoke 投递到 GUI 线程执行, 避免跨线程 .NET 访问死锁.
+    #
+    # 冷启动时 WebView2 初始化可能需要 10-30 秒, native 和 Handle
+    # 都不会立即就绪, 因此需要持续重试 (最多 ~30 秒).
     try:
         form = getattr(win_obj, 'native', None)
         if form is None:
@@ -264,11 +259,10 @@ def _capture_fisheye_base64(strength: float = 0.25, quality: int = 60) -> Option
 #  Settings (共用)
 # ════════════════════════════════════════════════
 class SettingsManager:
-    """Lightweight settings manager for webview mode.
-
-    Uses atomic write (write-to-temp + os.replace) to prevent data loss
-    when the process is killed via os._exit() during shutdown.
-    """
+    # Lightweight settings manager for webview mode.
+    #
+    # Uses atomic write (write-to-temp + os.replace) to prevent data loss
+    # when the process is killed via os._exit() during shutdown.
     def __init__(self):
         # config.BASE_DIR is frozen-aware (packaged: the EXE lives in
         # <root>\runtime\ but user data belongs at <root>\).
@@ -316,10 +310,9 @@ class SettingsManager:
         self._data[key] = value
 
     def save(self):
-        """Atomic write: write to temp file, then os.replace to target.
-
-        Prevents truncation when os._exit() kills the process mid-write.
-        """
+        # Atomic write: write to temp file, then os.replace to target.
+        #
+        # Prevents truncation when os._exit() kills the process mid-write.
         tmp_path = ''
         try:
             import tempfile
@@ -356,7 +349,7 @@ class SettingsManager:
 #  JS API Bridge
 # ════════════════════════════════════════════════
 class SAOWebAPI:
-    """pywebview js_api — 暴露给 JavaScript 的 Python 接口."""
+    # pywebview js_api — 暴露给 JavaScript 的 Python 接口.
 
     def __init__(self, gui: 'SAOWebViewGUI'):
         self._g = gui
@@ -389,12 +382,11 @@ class SAOWebAPI:
         threading.Thread(target=self._g._menu_action, args=(action,), daemon=True).start()
 
     def cmd(self, name: str, payload=None):
-        """Generic WebView command entrypoint for dynamically injected plugin UI.
-
-        Platform-owned commands are handled here. Feature/game commands are
-        forwarded to the registered WebView extension instead of being
-        declared as platform API names.
-        """
+        # Generic WebView command entrypoint for dynamically injected plugin UI.
+        #
+        # Platform-owned commands are handled here. Feature/game commands are
+        # forwarded to the registered WebView extension instead of being
+        # declared as platform API names.
         command = str(name or '').strip()
         data = self._command_payload(payload)
         try:
@@ -514,15 +506,15 @@ class SAOWebAPI:
         return json.dumps(act_plugin_pin(self._g, str(plugin_id or ''), bool(pinned)), ensure_ascii=False)
 
     def import_plugin_dialog(self):
-        """Open a native file picker for a .zip plugin and one-click import it."""
+        # Open a native file picker for a .zip plugin and one-click import it.
         return json.dumps(act_plugin_import_dialog(self._g), ensure_ascii=False)
 
     def import_plugin(self, archive_path=''):
-        """Import a .zip plugin by path (no dialog)."""
+        # Import a .zip plugin by path (no dialog).
         return json.dumps(act_plugin_import(self._g, str(archive_path or '')), ensure_ascii=False)
 
     def uninstall_plugin(self, plugin_id):
-        """Uninstall a user-installed plugin (delete its user_plugins dir)."""
+        # Uninstall a user-installed plugin (delete its user_plugins dir).
         return json.dumps(act_plugin_uninstall(self._g, str(plugin_id or '')), ensure_ascii=False)
 
     def _open_workshop(self):
@@ -545,7 +537,7 @@ class SAOWebAPI:
         return json.dumps(platform_render_surfaces(self._g), ensure_ascii=False)
 
     def toggle_plugin_manager(self):
-        """Show/hide the plugin manager overlay."""
+        # Show/hide the plugin manager overlay.
         def _do():
             if self._g._plugin_manager_visible:
                 self._g._hide_plugin_manager()
@@ -554,7 +546,7 @@ class SAOWebAPI:
         threading.Thread(target=_do, daemon=True).start()
 
     def switch_to_entity(self):
-        """切换到 Entity (tkinter) UI 模式."""
+        # 切换到 Entity (tkinter) UI 模式.
         threading.Thread(target=lambda: self._g._transition_with_animation('entity'), daemon=True).start()
 
     # ---- 远程更新 ----
@@ -584,7 +576,7 @@ class SAOWebAPI:
             return False
 
     def apply_update(self):
-        """应用已下载的更新包，会退出当前进程。"""
+        # 应用已下载的更新包，会退出当前进程。
         try:
             from updater.sao_updater import has_pending_update, schedule_apply_on_exit
             if not has_pending_update():
@@ -607,7 +599,7 @@ class SAOWebAPI:
 
     # ---- 面板主题 ----
     def get_panel_themes(self):
-        """返回当前面板主题设置 (JS 调用获取初始主题)."""
+        # 返回当前面板主题设置 (JS 调用获取初始主题).
         try:
             cfg = getattr(self._g, '_cfg_settings_ref', None) or self._g.settings
             defaults = {}
@@ -624,7 +616,7 @@ class SAOWebAPI:
             return {}
 
     def set_panel_theme(self, panel: str, theme: str):
-        """从 JS 端设置面板主题并保存."""
+        # 从 JS 端设置面板主题并保存.
         try:
             panel = str(panel or '').lower()
             theme = str(theme or '').lower()
@@ -654,11 +646,11 @@ class SAOWebAPI:
             return json.dumps({'ok': False, 'message': str(e)}, ensure_ascii=False)
 
     def window_drag(self, dx, dy):
-        """HP 窗口固定, 不允许拖拽 — 此方法保留但不执行."""
+        # HP 窗口固定, 不允许拖拽 — 此方法保留但不执行.
         pass
 
     def resize_window(self, width, height):
-        """Resize the plugin manager window (called from plugin_manager.html resize handle)."""
+        # Resize the plugin manager window (called from plugin_manager.html resize handle).
         try:
             win = getattr(self._g, 'plugin_manager_win', None)
             if win:
@@ -667,13 +659,13 @@ class SAOWebAPI:
             pass
 
     def set_ctx_menu_active(self, active, bounds=None):
-        """控制 HP 窗口 click-through 区域 (右键菜单开关)"""
+        # 控制 HP 窗口 click-through 区域 (右键菜单开关)
         self._g._ctx_menu_active = bool(active)
         self._g._ctx_menu_bounds = bounds if active and isinstance(bounds, dict) else None
         self._g._set_hp_region(expanded=bool(active), menu_bounds=self._g._ctx_menu_bounds)
 
     def set_hit_regions(self, regions):
-        """接收前端上报的实际可点击 UI 区域"""
+        # 接收前端上报的实际可点击 UI 区域
         if isinstance(regions, str):
             try:
                 regions = json.loads(regions)
@@ -735,7 +727,7 @@ class SAOWebAPI:
 
     # ── Sound settings ──
     def set_sound_enabled(self, enabled):
-        """Global SFX on/off."""
+        # Global SFX on/off.
         state = _setting_bool_value(enabled)
         try:
             from utils.sao_sound import set_sound_enabled
@@ -746,7 +738,7 @@ class SAOWebAPI:
             return json.dumps({'ok': False, 'enabled': state, 'message': str(e)}, ensure_ascii=False)
 
     def set_sound_volume(self, volume_pct):
-        """Global volume 0-100."""
+        # Global volume 0-100.
         volume = _sound_volume_value(volume_pct)
         try:
             from utils.sao_sound import set_sound_volume
@@ -757,7 +749,7 @@ class SAOWebAPI:
             return json.dumps({'ok': False, 'volume': volume, 'message': str(e)}, ensure_ascii=False)
 
     def browse_dir(self, path: str) -> str:
-        """文件选择器: 返回目录内容 JSON"""
+        # 文件选择器: 返回目录内容 JSON
         try:
             items = sorted(os.listdir(path), key=lambda x: x.lower())
             parent = os.path.dirname(path)
@@ -781,7 +773,7 @@ class SAOWebAPI:
 #  面板 JS API Bridge
 # ════════════════════════════════════════════════
 class PanelAPI:
-    """pywebview js_api for panel windows (control/piano/status/viz)."""
+    # pywebview js_api for panel windows (control/piano/status/viz).
 
     def __init__(self, gui: 'SAOWebViewGUI', panel_type: str):
         self._g = gui
@@ -811,13 +803,12 @@ class PanelAPI:
 #  主类
 # ════════════════════════════════════════════════
 class SAOWebViewGUI:
-    """基于 pywebview 的 SAO-UI 自动化覆盖层.
-
-    窗口:
-      hp_win  — 悬浮 HP 栏 (430×500, 色键透明, 上部 68px 可见, 固定位置)
-      menu_win — 全屏 SAO 菜单 (初始隐藏)
-    LinkStart 使用 SAOLinkStart (tkinter / ModernGL) 在 webview 启动前运行.
-    """
+    # 基于 pywebview 的 SAO-UI 自动化覆盖层.
+    #
+    # 窗口:
+    # hp_win  — 悬浮 HP 栏 (430×500, 色键透明, 上部 68px 可见, 固定位置)
+    # menu_win — 全屏 SAO 菜单 (初始隐藏)
+    # LinkStart 使用 SAOLinkStart (tkinter / ModernGL) 在 webview 启动前运行.
 
     def __init__(self):
         _ensure_webview()
@@ -938,7 +929,7 @@ class SAOWebViewGUI:
                 pass
 
     def _set_setting(self, key: str, value):
-        """Persist a setting to cfg_settings and save."""
+        # Persist a setting to cfg_settings and save.
         if hasattr(self, '_cfg_settings_ref') and self._cfg_settings_ref:
             self._cfg_settings_ref.set(key, value)
             try:
@@ -954,7 +945,7 @@ class SAOWebViewGUI:
                     self._eval_menu('SAO.showToast("设置保存失败 — 修改重启后会丢失")')
 
     def _get_setting(self, key: str, default=None):
-        """Read a setting."""
+        # Read a setting.
         if hasattr(self, '_cfg_settings_ref') and self._cfg_settings_ref:
             return self._cfg_settings_ref.get(key, default)
         return default
@@ -1033,7 +1024,7 @@ class SAOWebViewGUI:
             return default
 
     def _register_plugin_surface(self, surface: str, win, title: str = None, **meta):
-        """Register a plugin-owned WebView window without teaching the platform its game semantics."""
+        # Register a plugin-owned WebView window without teaching the platform its game semantics.
         key = str(surface or '').strip()
         if not key:
             return None
@@ -1310,10 +1301,9 @@ class SAOWebViewGUI:
                     surface, enabled=True, ensure_on_top=bool(meta.get('on_top', False)))
 
     def _proxy_surfaces_to_compositor(self) -> None:
-        """In unified overlay mode, proxy all webview windows through
-        the compositor. Each window is moved off-screen and captured
-        via PrintWindow; content is presented as a compositor layer.
-        """
+        # In unified overlay mode, proxy all webview windows through
+        # the compositor. Each window is moved off-screen and captured
+        # via PrintWindow; content is presented as a compositor layer.
         try:
             from render.gpu_overlay_window import get_unified_overlay_mode
             if not get_unified_overlay_mode():
@@ -1441,7 +1431,7 @@ class SAOWebViewGUI:
             self._recognition_active = False
 
     def _reconfigure_data_engines(self, restart_packet: bool = True):
-        """Restart packet/vision engines to match the current per-component source map."""
+        # Restart packet/vision engines to match the current per-component source map.
         try:
             return self._webview_extension_call('_reconfigure_data_engines', restart_packet)
         except Exception as exc:
@@ -1642,7 +1632,7 @@ class SAOWebViewGUI:
         return scale
 
     def _calc_hud_target(self, sw: int = 0, sh: int = 0, left: Optional[int] = None, top: Optional[int] = None) -> tuple:
-        """计算 HUD 目标位置 (x, y) — 与 Entity 模式对齐: x=4%屏宽, y=目标显示器底部。"""
+        # 计算 HUD 目标位置 (x, y) — 与 Entity 模式对齐: x=4%屏宽, y=目标显示器底部。
         monitor_rect = getattr(self, '_hud_monitor_rect', None)
         if (left is None or top is None) and isinstance(monitor_rect, (list, tuple)) and len(monitor_rect) == 4:
             if left is None:
@@ -1774,13 +1764,12 @@ class SAOWebViewGUI:
 
     # ─── 透明设置 ───
     def _apply_webview2_transparency(self):
-        """Win32 LWA_COLORKEY + .NET Form BackColor 色键透明.
-
-        两路并用:
-          1. Win32 COLORKEY — rgb(1,0,1) 像素穿透到桌面
-          2. .NET via Invoke — form.BackColor = key color, 让 HTML 透明区域
-             穿透 Form 背景色, 再由 Win32 COLORKEY 穿透到桌面, 彻底消除白底.
-        """
+        # Win32 LWA_COLORKEY + .NET Form BackColor 色键透明.
+        #
+        # 两路并用:
+        # 1. Win32 COLORKEY — rgb(1,0,1) 像素穿透到桌面
+        # 2. .NET via Invoke — form.BackColor = key color, 让 HTML 透明区域
+        # 穿透 Form 背景色, 再由 Win32 COLORKEY 穿透到桌面, 彻底消除白底.
         def _apply_for(title: str, win_obj):
             # 方案1: Win32 色键
             try:
@@ -1798,7 +1787,7 @@ class SAOWebViewGUI:
         self._apply_plugin_surfaces_transparency()
 
     def _reassert_hp_transparency(self, alpha: float = 1.0, retries: int = 4, delay: float = 0.18):
-        """反复重置 HP 窗口透明状态，修复热切换后偶发白底。"""
+        # 反复重置 HP 窗口透明状态，修复热切换后偶发白底。
         def _apply_once():
             try:
                 self._apply_webview2_transparency()
@@ -1816,7 +1805,7 @@ class SAOWebViewGUI:
             threading.Timer(delay * i, _apply_once).start()
 
     def _request_hp_hit_regions(self):
-        """主动向前端请求重新上报可点击区域."""
+        # 主动向前端请求重新上报可点击区域.
         try:
             self._eval_hp(
                 'if (window.scheduleHitRegionReport) { scheduleHitRegionReport(); }'
@@ -1906,7 +1895,7 @@ class SAOWebViewGUI:
         threading.Thread(target=_loop, daemon=True).start()
 
     def _default_hp_display_regions(self):
-        """Fallback display regions contributed by the active plugin."""
+        # Fallback display regions contributed by the active plugin.
         try:
             win_w = int(getattr(self, '_win_w_phys', 0) or 0)
             win_h = int(getattr(self, '_win_h_phys', 0) or 0)
@@ -1920,12 +1909,11 @@ class SAOWebViewGUI:
             return []
 
     def _default_hp_hot_regions(self):
-        """Fallback clickable regions when JS hit-regions have not registered yet.
-
-        返回所有 display regions 作为默认热区, 确保整个 HP 面板内容区域
-        在 JS 报告真实点击区域之前就可以接收点击事件,
-        从而触发 JS 注册精确的 hit regions.
-        """
+        # Fallback clickable regions when JS hit-regions have not registered yet.
+        #
+        # 返回所有 display regions 作为默认热区, 确保整个 HP 面板内容区域
+        # 在 JS 报告真实点击区域之前就可以接收点击事件,
+        # 从而触发 JS 注册精确的 hit regions.
         try:
             display_regions = self._default_hp_display_regions()
             if not display_regions:
@@ -1997,11 +1985,10 @@ class SAOWebViewGUI:
             print(f"[SAO] click-through setup failed: {e}")
 
     def _ensure_hp_clickable(self):
-        """安全检查: 确保 HP 窗口未被意外设为鼠标穿透.
-
-        当 passthrough poller 已在运行时, 穿透状态完全由 poller 管理, 此方法不干预.
-        仅在 poller 未启用时才移除 WS_EX_TRANSPARENT.
-        """
+        # 安全检查: 确保 HP 窗口未被意外设为鼠标穿透.
+        #
+        # 当 passthrough poller 已在运行时, 穿透状态完全由 poller 管理, 此方法不干预.
+        # 仅在 poller 未启用时才移除 WS_EX_TRANSPARENT.
         if not self._hp_hwnd:
             return
         # passthrough poller 已接管, 不干预
@@ -2018,10 +2005,9 @@ class SAOWebViewGUI:
             pass
 
     def _ensure_hidden_panels_passthrough(self):
-        """确保所有当前隐藏的面板窗口保持 WS_EX_TRANSPARENT, 防止意外拦截点击.
-
-        在 position guard 中周期性调用.
-        """
+        # 确保所有当前隐藏的面板窗口保持 WS_EX_TRANSPARENT, 防止意外拦截点击.
+        #
+        # 在 position guard 中周期性调用.
         for win, surface in list(self._plugin_surface_items()):
             try:
                 meta = self._plugin_surface_meta.get(surface, {}) or {}
@@ -2042,12 +2028,11 @@ class SAOWebViewGUI:
                 pass
 
     def _wait_and_apply_click_through(self, title: str, timeout: float = 2.0):
-        """Block (up to *timeout* seconds) until the window hwnd is findable.
-
-        This ensures that FindWindowW-based click-through setup can succeed
-        before the window is shown, preventing a brief non-passthrough window.
-        Intended to be called from background init thread only.
-        """
+        # Block (up to *timeout* seconds) until the window hwnd is findable.
+        #
+        # This ensures that FindWindowW-based click-through setup can succeed
+        # before the window is shown, preventing a brief non-passthrough window.
+        # Intended to be called from background init thread only.
         try:
             user32 = ctypes.windll.user32
             deadline = time.time() + max(0.1, float(timeout))
@@ -2276,7 +2261,7 @@ class SAOWebViewGUI:
         self._maintain_plugin_surfaces()
 
     def _force_hp_to_bottom(self, force: bool = False, quiet: bool = False):
-        """用 GetWindowRect + SetWindowPos 强制 HP 窗口贴屏幕底部 (物理像素)。"""
+        # 用 GetWindowRect + SetWindowPos 强制 HP 窗口贴屏幕底部 (物理像素)。
         if not self._hp_hwnd:
             return
         if not force and self._is_hp_position_locked():
@@ -2348,7 +2333,7 @@ class SAOWebViewGUI:
                 print(f'[SAO] force position error: {e}')
 
     def _set_window_alpha(self, title, alpha):
-        """Win32 LWA_ALPHA — 设置窗口整体透明度 (0.0~1.0), 保留色键透明."""
+        # Win32 LWA_ALPHA — 设置窗口整体透明度 (0.0~1.0), 保留色键透明.
         try:
             user32 = ctypes.windll.user32
             hwnd = user32.FindWindowW(None, title)
@@ -2492,12 +2477,11 @@ class SAOWebViewGUI:
 
     # ─── WebView 就绪 ───
     def _plugin_layer_window_map(self):
-        """Map every SAO WebView window to its plugin render-surface id.
-
-        Injecting ``plugin_layer.js`` into each window gives plugins a universal
-        overlay layer (and, for opt-in pages, render-hook taps) on the main UI
-        and every floating window — not just plugin-owned panels.
-        """
+        # Map every SAO WebView window to its plugin render-surface id.
+        #
+        # Injecting ``plugin_layer.js`` into each window gives plugins a universal
+        # overlay layer (and, for opt-in pages, render-hook taps) on the main UI
+        # and every floating window — not just plugin-owned panels.
         items = []
         seen = set()
         for win, surface in self._plugin_surface_items():
@@ -2523,7 +2507,7 @@ class SAOWebViewGUI:
         return src
 
     def _inject_all_plugin_layers(self):
-        """Inject plugin_layer.js into every live WebView window (idempotent)."""
+        # Inject plugin_layer.js into every live WebView window (idempotent).
         src = self._plugin_layer_source()
         if not src:
             return
@@ -2669,7 +2653,7 @@ class SAOWebViewGUI:
         self._setup_hotkeys()
 
     def _start_recognition(self):
-        """启动游戏数据引擎 (抓包 + 纯识图)"""
+        # 启动游戏数据引擎 (抓包 + 纯识图)
         try:
             self._bootstrap_runtime_state()
             cfg_settings = self._cfg_settings_ref
@@ -2712,7 +2696,7 @@ class SAOWebViewGUI:
             self._recognition_active = False
 
     def _toggle_recognition(self):
-        """切换识别开关 — 线程安全"""
+        # 切换识别开关 — 线程安全
         with self._recog_lock:
             self._recognition_active = not self._recognition_active
             state = "ON" if self._recognition_active else "OFF"
@@ -2787,11 +2771,10 @@ class SAOWebViewGUI:
             pass
 
     def _hk_plugin_map(self):
-        """插件快捷键 {action: {'key': 'CTRL+F8', 'callback': fn}} — 镜像
-        Entity 端 _plugin_hotkey_map。用户在 settings['hotkeys'] 的覆盖优先
-        于插件声明的 default_key; 每次按键现解析, 热加载的插件即时生效。
-        webview 无 Tk 主循环, 回调在监听/轮询线程直接派发。
-        """
+        # 插件快捷键 {action: {'key': 'CTRL+F8', 'callback': fn}} — 镜像
+        # Entity 端 _plugin_hotkey_map。用户在 settings['hotkeys'] 的覆盖优先
+        # 于插件声明的 default_key; 每次按键现解析, 热加载的插件即时生效。
+        # webview 无 Tk 主循环, 回调在监听/轮询线程直接派发。
         out = {}
         try:
             from act_platform.runtime import ensure_act_plugin_manager
@@ -2824,8 +2807,8 @@ class SAOWebViewGUI:
                             if k in HOTKEY_MOD_ALL_VKS}
 
     def _hk_bindings(self):
-        """全部活动绑定 [(parsed, (callback, vk))] — 内置在前 (并列特异度时
-        内置优先), 插件映射在后; 每次按键/轮询现解析。"""
+        # 全部活动绑定 [(parsed, (callback, vk))] — 内置在前 (并列特异度时
+        # 内置优先), 插件映射在后; 每次按键/轮询现解析。
         saved = getattr(self, '_cfg_settings_ref', None)
         user_hotkeys = {} if saved is None else (saved.get('hotkeys') or {})
         # Merge saved hotkeys with defaults so newly added keys are always
@@ -2858,11 +2841,10 @@ class SAOWebViewGUI:
             self._hk_clear_pressed_main()
 
     def _hk_poll_tick(self):
-        """Poll GetAsyncKeyState for F-key presses (called from recognition loop).
-
-        This is a fallback for when pynput's keyboard hook fails to receive events
-        (common with DirectInput games). Detects rising edges only.
-        """
+        # Poll GetAsyncKeyState for F-key presses (called from recognition loop).
+        #
+        # This is a fallback for when pynput's keyboard hook fails to receive events
+        # (common with DirectInput games). Detects rising edges only.
         if not getattr(self, '_hk_poll_ok', False):
             return
         try:
@@ -2912,7 +2894,7 @@ class SAOWebViewGUI:
             pass
 
     def _on_mechanic_event(self, evt):
-        """引擎机制事件 → TTS + 顶部横幅 (controller 缺位时静默丢弃)。"""
+        # 引擎机制事件 → TTS + 顶部横幅 (controller 缺位时静默丢弃)。
         controller = getattr(self, '_mech_alert_controller', None)
         if controller is not None:
             try:
@@ -2927,7 +2909,7 @@ class SAOWebViewGUI:
         return s.replace('\\', '\\\\').replace('"', '\\"').replace("'", "\\'").replace('\n', '\\n')
 
     def _resolved_hotkey(self, action: str, fallback: str) -> str:
-        """热键标签按 {**DEFAULT_HOTKEYS, **saved} 解析 — 标签跟随用户改键不漂移。"""
+        # 热键标签按 {**DEFAULT_HOTKEYS, **saved} 解析 — 标签跟随用户改键不漂移。
         try:
             from config import DEFAULT_HOTKEYS
             saved = (self._cfg_settings_ref.get('hotkeys', {})
@@ -2948,7 +2930,7 @@ class SAOWebViewGUI:
             pass
 
     def _ensure_plugin_manager_clickable(self):
-        """Remove WS_EX_TRANSPARENT so the plugin manager receives clicks."""
+        # Remove WS_EX_TRANSPARENT so the plugin manager receives clicks.
         try:
             hwnd = ctypes.windll.user32.FindWindowW(None, 'SAO-PluginManager')
             if not hwnd:
@@ -3040,7 +3022,7 @@ class SAOWebViewGUI:
             return (0, 0, int(sw), int(sh))
 
     def _viewport_to_css(self, viewport: dict) -> dict:
-        """Convert viewport/callout coords from physical pixels to CSS pixels for JS rendering."""
+        # Convert viewport/callout coords from physical pixels to CSS pixels for JS rendering.
         dpi_s = max(1.0, float(getattr(self, '_dpi_scale', 1.0) or 1.0))
         if dpi_s <= 1.001:
             return viewport
@@ -3067,7 +3049,7 @@ class SAOWebViewGUI:
         return int(round(px / dpi_s))
 
     def _rect_to_css(self, rect: dict) -> dict:
-        """Convert a slot rect from physical pixels to CSS pixels."""
+        # Convert a slot rect from physical pixels to CSS pixels.
         dpi_s = max(1.0, float(getattr(self, '_dpi_scale', 1.0) or 1.0))
         if dpi_s <= 1.001:
             return rect
@@ -3350,7 +3332,7 @@ class SAOWebViewGUI:
 
     # ─── 鱼眼截屏 ───
     def _capture_current_monitor_b64(self, quality=82):
-        """快速截屏 → 低分辨率 JPEG base64，用于 WebGL 鱼眼纹理 (目标 <10ms)"""
+        # 快速截屏 → 低分辨率 JPEG base64，用于 WebGL 鱼眼纹理 (目标 <10ms)
         try:
             import base64 as b64mod, io
             from PIL import Image
@@ -3428,7 +3410,7 @@ class SAOWebViewGUI:
             self._eval_menu(js)
 
     def _fisheye_loop(self, gen: int):
-        """实时鱼眼背景循环 — 目标 16ms (60fps) 刷新"""
+        # 实时鱼眼背景循环 — 目标 16ms (60fps) 刷新
         import time as _time
         while (self._fisheye_active and self._menu_visible
                and gen == self._fisheye_gen
@@ -3589,7 +3571,7 @@ class SAOWebViewGUI:
         self._ensure_updater_listener()
 
     def _push_update_state(self, snapshot=None):
-        """将 UpdateManager 快照推送到 menu (SAO.updateUpdaterState)。"""
+        # 将 UpdateManager 快照推送到 menu (SAO.updateUpdaterState)。
         try:
             if snapshot is None:
                 from updater.sao_updater import get_manager
@@ -3710,7 +3692,7 @@ class SAOWebViewGUI:
             pass
 
     def _sync_menu_settings(self):
-        """Push current settings to menu so UI toggles reflect saved state."""
+        # Push current settings to menu so UI toggles reflect saved state.
         try:
             cfg = {
                 'hotkey_labels': {
@@ -3792,7 +3774,7 @@ class SAOWebViewGUI:
     #  识别状态循环
     # ════════════════════════════════════════
     def _recognition_loop(self):
-        """后台识别循环 — 读取状态并调用插件渲染钩子。"""
+        # 后台识别循环 — 读取状态并调用插件渲染钩子。
         _panel_tick = 0
         while True:
             time.sleep(0.05)
@@ -3845,7 +3827,7 @@ class SAOWebViewGUI:
     #  退出
     # ════════════════════════════════════════
     def _do_hot_switch(self, target: str):
-        """热切换到目标 UI 模式 (entity)."""
+        # 热切换到目标 UI 模式 (entity).
         if target != 'entity':
             print(f'[SAO WebView] Unknown switch target: {target}')
             return

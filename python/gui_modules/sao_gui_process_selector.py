@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""Process Selector Panel — platform-level process attach + module filter."""
+# Process Selector Panel — platform-level process attach + module filter.
 from __future__ import annotations
 
 import os
@@ -70,8 +70,8 @@ def get_cached_gp():
 
 
 def get_cached_process_info() -> dict:
-    """Engine-A attach info (name/pid/tier) for consumers outside this panel
-    (e.g. AI Editor's memviewer). Empty/zeroed fields when nothing attached."""
+    # Engine-A attach info (name/pid/tier) for consumers outside this panel
+    # (e.g. AI Editor's memviewer). Empty/zeroed fields when nothing attached.
     gp = _gp_ref
     tier = ""
     if gp is not None:

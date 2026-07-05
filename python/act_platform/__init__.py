@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""ACT platform primitives shared by WebView, Entity, replay, and plugins."""
+# ACT platform primitives shared by WebView, Entity, replay, and plugins.
 
 from .event_bus import EventBus
 from .events import ACT_EVENT_TOPICS, ACT_EVENT_SCHEMA_VERSION, make_event

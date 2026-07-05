@@ -1,14 +1,13 @@
 # -*- coding: utf-8 -*-
-"""build_name_cache - 离线把全配置表 (skill/buff/monster) 的 id→中文名读出来, 落本地静态
-缓存 (assets/name_tables/static_id_name_cache.json), 只读内存, 房间里/不打 boss 也能跑。
-
-名字优先级: 本地化 Name(mlid 走 StringPoolBridge) > NameDesign(原始字符串, boss 内部技能用
-这个, 如 '炎光角斗-开冲')。另解析指定 boss(MonsterTable.SkillIds/BornSkillId) 的技能名。
-
-用法:
-  python -m tools.build_name_cache                 # 全表枚举 + 写缓存
-  python -m tools.build_name_cache --boss 102800 102801   # 另输出这些 boss 的技能名
-"""
+# build_name_cache - 离线把全配置表 (skill/buff/monster) 的 id→中文名读出来, 落本地静态
+# 缓存 (assets/name_tables/static_id_name_cache.json), 只读内存, 房间里/不打 boss 也能跑。
+#
+# 名字优先级: 本地化 Name(mlid 走 StringPoolBridge) > NameDesign(原始字符串, boss 内部技能用
+# 这个, 如 '炎光角斗-开冲')。另解析指定 boss(MonsterTable.SkillIds/BornSkillId) 的技能名。
+#
+# 用法:
+# python -m tools.build_name_cache                 # 全表枚举 + 写缓存
+# python -m tools.build_name_cache --boss 102800 102801   # 另输出这些 boss 的技能名
 from __future__ import annotations
 
 import argparse
@@ -76,7 +75,7 @@ def enumerate_table(rd, pool, kind: str, log) -> dict:
 
 
 def boss_skills(rd, pool, boss_ids, log) -> dict:
-    """MonsterTable[boss].SkillIds + BornSkillId → 各技能 id→名 (走已建的 skill 索引)。"""
+    # MonsterTable[boss].SkillIds + BornSkillId → 各技能 id→名 (走已建的 skill 索引)。
     mcls, scls = TABLE_CLASS["monster"], TABLE_CLASS["skill"]
     mcols = {k: v[0] for k, v in table_columns.load_columns([mcls], log=lambda *a: None)[mcls].items()}
     scols = table_columns.load_columns([scls], log=lambda *a: None)[scls]
@@ -106,8 +105,8 @@ def boss_skills(rd, pool, boss_ids, log) -> dict:
 
 
 def enumerate_raids(rd, pool, log) -> dict:
-    """RaidDungeonTable → {dungeon_id: {name, difficulty, group_id, bosses[]}}; 只留有名
-    有 boss 的真 raid 行 (滤掉空名/活动占位行)。返回 (raids, all_boss_ids)。"""
+    # RaidDungeonTable → {dungeon_id: {name, difficulty, group_id, bosses[]}}; 只留有名
+    # 有 boss 的真 raid 行 (滤掉空名/活动占位行)。返回 (raids, all_boss_ids)。
     cls = TABLE_CLASS["raid_dungeon"]
     C = {k: v[0] for k, v in table_columns.load_columns([cls], log=lambda *a: None)[cls].items()}
     raids, all_boss = {}, set()

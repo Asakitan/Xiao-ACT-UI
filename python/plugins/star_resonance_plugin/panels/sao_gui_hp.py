@@ -1,32 +1,30 @@
 # -*- coding: utf-8 -*-
-"""
-sao_gui_hp.py — SAO Player HP / STA / Identity overlay (tkinter + ULW).
-
-Pixel-level port of `web/hp.html` to tkinter. Draws the three side-by-side
-elements from the original HUD:
-
-  * Identity Plate (left): SYSTEM | PROF · Lv.X · Name · UID · NErVGear ─
-    LINK OK, with centre-overlay BOSS TIMER / SYSTEM CLOCK and the cyan /
-    gold scan-line overlay animation.
-  * HP Bar (right): olive "XTBox" with diagonal clip-path, skewed leading
-    edge on the fill, green / yellow / red ramp, hp-bg-cover shell with
-    cyan TL and gold BR corner brackets.
-  * STA Bar (below HP): gold SAO stamina gauge.
-
-60 FPS tick with aggressive static-layer caching: cover / plate / bar
-geometry are baked once and only dynamic layers (fills, text, fx) are
-redrawn per frame. Idle-tick back-off cuts CPU when nothing animates.
-
-Public API (mirrors the webview's JS surface, called from sao_gui.py):
-    HpOverlay(root, settings=None)
-      .show() / .hide() / .destroy()
-      .update_hp(current, total, level)
-      .set_username(name)
-      .set_player_info(info)           # {profession, uid, name}
-      .set_boss_timer(text, urgency)   # '' → clock; 'urgent' → red pulse
-      .update_sta(current, total)
-      .set_sta_offline(offline: bool)
-"""
+# sao_gui_hp.py — SAO Player HP / STA / Identity overlay (tkinter + ULW).
+#
+# Pixel-level port of `web/hp.html` to tkinter. Draws the three side-by-side
+# elements from the original HUD:
+#
+# * Identity Plate (left): SYSTEM | PROF · Lv.X · Name · UID · NErVGear ─
+# LINK OK, with centre-overlay BOSS TIMER / SYSTEM CLOCK and the cyan /
+# gold scan-line overlay animation.
+# * HP Bar (right): olive "XTBox" with diagonal clip-path, skewed leading
+# edge on the fill, green / yellow / red ramp, hp-bg-cover shell with
+# cyan TL and gold BR corner brackets.
+# * STA Bar (below HP): gold SAO stamina gauge.
+#
+# 60 FPS tick with aggressive static-layer caching: cover / plate / bar
+# geometry are baked once and only dynamic layers (fills, text, fx) are
+# redrawn per frame. Idle-tick back-off cuts CPU when nothing animates.
+#
+# Public API (mirrors the webview's JS surface, called from sao_gui.py):
+# HpOverlay(root, settings=None)
+# .show() / .hide() / .destroy()
+# .update_hp(current, total, level)
+# .set_username(name)
+# .set_player_info(info)           # {profession, uid, name}
+# .set_boss_timer(text, urgency)   # '' → clock; 'urgent' → red pulse
+# .update_sta(current, total)
+# .set_sta_offline(offline: bool)
 
 from __future__ import annotations
 
@@ -165,7 +163,7 @@ def _get_screen_metrics() -> Tuple[int, int]:
 
 
 def _recompute_layout(sw: Optional[int] = None) -> None:
-    """Mirror the webview CSS layout using the current screen width."""
+    # Mirror the webview CSS layout using the current screen width.
     global STAGE_W, PANEL_W, ID_X, ID_W, COVER_X, BOX_X, STA_X
 
     if sw is None:
@@ -277,7 +275,7 @@ def _glyph_w(draw: ImageDraw.ImageDraw, ch: str, font) -> float:
 
 def _draw_tracked(draw: ImageDraw.ImageDraw, xy, text: str,
                   font, fill, spacing: float = 1.0) -> int:
-    """CSS letter-spacing: draw glyphs one-by-one. Returns total width."""
+    # CSS letter-spacing: draw glyphs one-by-one. Returns total width.
     x, y = xy
     x0 = x
     last_idx = len(text) - 1
@@ -290,7 +288,7 @@ def _draw_tracked(draw: ImageDraw.ImageDraw, xy, text: str,
 
 def _tracked_width(draw: ImageDraw.ImageDraw, text: str,
                    font, spacing: float = 1.0) -> int:
-    """Measure width of tracked text without drawing."""
+    # Measure width of tracked text without drawing.
     total = 0.0
     last_idx = len(text) - 1
     for i, ch in enumerate(text):
@@ -301,7 +299,7 @@ def _tracked_width(draw: ImageDraw.ImageDraw, text: str,
 def _draw_text_shadow(img: Image.Image, xy, text: str, font,
                       shadow_color: Tuple[int, int, int, int],
                       blur: int = 3) -> None:
-    """CSS text-shadow: render text in shadow_color, blur, composite."""
+    # CSS text-shadow: render text in shadow_color, blur, composite.
     if not text:
         return
     blur = max(0, int(blur))
@@ -359,13 +357,12 @@ def _get_thread_compositor():
 def _apply_inset_shadow_gpu(img: Image.Image, mask: Image.Image,
                             color: Tuple[int, int, int],
                             alpha: int, blur_radius: float) -> bool:
-    """v2.2.12: single-pass GPU inset shadow.
-
-    Mirrors `sao_gui_bosshp._apply_inset_shadow_gpu` exactly — keeps the
-    entire inverted-mask → blur → clip → composite chain on the GPU,
-    eliminating two PIL↔numpy roundtrips per call. Returns False to let
-    the CPU path take over on any failure.
-    """
+    # v2.2.12: single-pass GPU inset shadow.
+    #
+    # Mirrors `sao_gui_bosshp._apply_inset_shadow_gpu` exactly — keeps the
+    # entire inverted-mask → blur → clip → composite chain on the GPU,
+    # eliminating two PIL↔numpy roundtrips per call. Returns False to let
+    # the CPU path take over on any failure.
     try:
         from render.gpu_compositor import LayerCompositor  # noqa: F401
     except Exception:
@@ -424,13 +421,12 @@ def _apply_inset_shadow_gpu(img: Image.Image, mask: Image.Image,
 def _apply_inset_shadow(img: Image.Image, mask: Image.Image,
                         color: Tuple[int, int, int],
                         alpha: int, blur_radius: float) -> None:
-    """CSS-style `inset 0 0 Npx rgba(color, alpha)` glow on `img`,
-    clipped by `mask`.
-
-    v2.2.12: tries the fused GPU shader first (saves 2 PIL roundtrips
-    + numpy mask invert + numpy alpha multiply); falls back to the
-    original CPU/PIL pipeline on any error so the panel always renders.
-    """
+    # CSS-style `inset 0 0 Npx rgba(color, alpha)` glow on `img`,
+    # clipped by `mask`.
+    #
+    # v2.2.12: tries the fused GPU shader first (saves 2 PIL roundtrips
+    # + numpy mask invert + numpy alpha multiply); falls back to the
+    # original CPU/PIL pipeline on any error so the panel always renders.
     if _apply_inset_shadow_gpu(img, mask, color, alpha, blur_radius):
         return
     inv = Image.eval(mask, lambda v: 255 - v)
@@ -461,9 +457,9 @@ def _multiply_alpha_regions(img: Image.Image,
 
 
 def _make_scanline_texture(w: int, h: int, alpha: int = 10) -> Image.Image:
-    """Web-parity horizontal scan-line overlay: 2px transparent + 1px white at
-    the given alpha (CSS repeating-linear-gradient 0deg 0-2px transparent,
-    2-3px rgba(255,255,255,0.04))."""
+    # Web-parity horizontal scan-line overlay: 2px transparent + 1px white at
+    # the given alpha (CSS repeating-linear-gradient 0deg 0-2px transparent,
+    # 2-3px rgba(255,255,255,0.04)).
     if w <= 0 or h <= 0:
         return Image.new('RGBA', (1, 1), (0, 0, 0, 0))
     raw = _CY_PIXELS.scanline_texture_rgba_bytes(w, h, alpha)
@@ -483,7 +479,7 @@ def _make_skew_cap(h: int,
                    col: Tuple[int, int, int, int],
                    skew_px: int = 6,
                    extra: int = 7) -> Image.Image:
-    """Build the CSS `::after { right:-11px; skewX(-14deg) }` angled tip."""
+    # Build the CSS `::after { right:-11px; skewX(-14deg) }` angled tip.
     w = max(18, skew_px * 2 + extra)
     img = Image.new('RGBA', (w, h), (0, 0, 0, 0))
     ImageDraw.Draw(img).polygon(
@@ -557,7 +553,7 @@ register_panel_theme('hp', 'dark', HP_THEME_DARK)
 # ═══════════════════════════════════════════════
 
 class HpOverlay:
-    """Animated SAO-styled Player HP / Identity / STA overlay."""
+    # Animated SAO-styled Player HP / Identity / STA overlay.
 
     WIDTH = PANEL_W
     HEIGHT = PANEL_H
@@ -734,7 +730,7 @@ class HpOverlay:
     # ── Theme ──
 
     def _apply_theme(self, theme_name: str) -> None:
-        """切换 HP 面板主题并清除所有渲染缓存。"""
+        # 切换 HP 面板主题并清除所有渲染缓存。
         from sao_theme import get_panel_theme
         theme = get_panel_theme('hp', theme_name)
         if not theme:
@@ -773,7 +769,7 @@ class HpOverlay:
         return stage_screen_x, max(0, sh - PANEL_H)
 
     def _sync_layout(self) -> None:
-        """Keep the entity overlay geometry in lockstep with webview CSS."""
+        # Keep the entity overlay geometry in lockstep with webview CSS.
         sw, sh = _get_screen_metrics()
         sig = (sw, sh)
         if sig == self._screen_sig:
@@ -1117,13 +1113,12 @@ class HpOverlay:
         )
 
     def _compose_signature(self, now: float, is_animating: Optional[bool] = None) -> Optional[tuple]:
-        """Coarse output fingerprint for pre-submit dirty-skip.
-
-        Returns None while an animation is actively moving, which forces
-        a normal submit path. In steady state we quantize all visible
-        idle effects so unchanged output does not re-run compose,
-        premultiply, or ULW enqueue.
-        """
+        # Coarse output fingerprint for pre-submit dirty-skip.
+        #
+        # Returns None while an animation is actively moving, which forces
+        # a normal submit path. In steady state we quantize all visible
+        # idle effects so unchanged output does not re-run compose,
+        # premultiply, or ULW enqueue.
         if is_animating is None:
             is_animating = self._is_animating()
         if is_animating:
@@ -1340,7 +1335,7 @@ class HpOverlay:
 
     @_probe.decorate('ui.hp.compose')
     def compose_frame(self, now: Optional[float] = None) -> Image.Image:
-        """Render one HP frame to an RGBA PIL image without touching Win32."""
+        # Render one HP frame to an RGBA PIL image without touching Win32.
         if now is None:
             now = time.time()
         w, h = self.WIDTH, self.HEIGHT
@@ -1485,23 +1480,22 @@ class HpOverlay:
         return img
 
     def _compute_frame_sig(self, now: float, y_off: int) -> Optional[tuple]:
-        """Build a quantized signature of all per-frame pixel inputs.
-
-        Returns None if any input is in a regime where caching would be
-        unsafe (e.g. no spawn time, freshly resized).  Otherwise returns
-        a hashable tuple suitable for self._frame_sig comparison.
-
-        Quantization rationale:
-        - Animation phases (bracket/scanline/root pulses) bucket to
-          intervals where 1-bucket alpha/position deltas are below the
-          ~1 / 255 luminance step on already-soft glow primitives.
-        - HP and STA fills quantize to integer pixel widths because the
-          underlying bar is rendered with subpixel_bar_width \u2014 sub-pixel
-          changes within the same integer width are lost in the cap blit.
-        - Continuous tweens (hp_pct_disp, sta_pct_disp) become integers
-          so steady-state combat doesn't churn the cache on every micro-
-          tween step.
-        """
+        # Build a quantized signature of all per-frame pixel inputs.
+        #
+        # Returns None if any input is in a regime where caching would be
+        # unsafe (e.g. no spawn time, freshly resized).  Otherwise returns
+        # a hashable tuple suitable for self._frame_sig comparison.
+        #
+        # Quantization rationale:
+        # - Animation phases (bracket/scanline/root pulses) bucket to
+        # intervals where 1-bucket alpha/position deltas are below the
+        # ~1 / 255 luminance step on already-soft glow primitives.
+        # - HP and STA fills quantize to integer pixel widths because the
+        # underlying bar is rendered with subpixel_bar_width — sub-pixel
+        # changes within the same integer width are lost in the cap blit.
+        # - Continuous tweens (hp_pct_disp, sta_pct_disp) become integers
+        # so steady-state combat doesn't churn the cache on every micro-
+        # tween step.
         if self.WIDTH <= 0 or self.HEIGHT <= 0:
             return None
         if self._spawn_time <= 0:
@@ -1756,11 +1750,10 @@ class HpOverlay:
     # ── panel drop shadows (drawn BEFORE any content) ─────────────
 
     def _draw_panel_shadows(self, img: Image.Image, y_off: int) -> None:
-        """Draw drop shadows for both id-plate and cover panels.
-
-        Must be called BEFORE any panel content is composited so that
-        shadows always sit below content in the z-order.
-        """
+        # Draw drop shadows for both id-plate and cover panels.
+        #
+        # Must be called BEFORE any panel content is composited so that
+        # shadows always sit below content in the z-order.
         w, h = self.WIDTH, self.HEIGHT
         all_mask = self._all_content_mask(y_off)
         inv_mask = 255 - np.asarray(all_mask, dtype=np.uint8)
@@ -1793,9 +1786,9 @@ class HpOverlay:
     # ── content-element shadows (between panel bg and bar shell) ──
 
     def _draw_content_shadows(self, img: Image.Image, y_off: int) -> None:
-        """Bar-shell + number-plate shadows.  Drawn ABOVE panel bg but
-        BELOW bar-shell content so they sit on the cover surface without
-        darkening through the bar-shell polygons."""
+        # Bar-shell + number-plate shadows.  Drawn ABOVE panel bg but
+        # BELOW bar-shell content so they sit on the cover surface without
+        # darkening through the bar-shell polygons.
         w, h = self.WIDTH, self.HEIGHT
         shadows = Image.new('RGBA', (w, h), (0, 0, 0, 0))
         sd = ImageDraw.Draw(shadows)
@@ -1851,7 +1844,7 @@ class HpOverlay:
     # ── identity plate background ───────────────────────────────────
 
     def _id_plate_mask(self, y_off: int) -> Image.Image:
-        """Rounded-rect mask for id-plate (cached per y_off)."""
+        # Rounded-rect mask for id-plate (cached per y_off).
         c = getattr(self, '_id_plate_mask_cache', {})
         if y_off in c:
             return c[y_off]
@@ -1866,12 +1859,11 @@ class HpOverlay:
         return m
 
     def _all_content_mask(self, y_off: int) -> Image.Image:
-        """Combined mask of all HP panel content areas (id-plate + cover).
-
-        Used for shadow clipping so that *no* drop shadow composites on top
-        of *any* content surface, even when one element's shadow blur extends
-        into a neighbouring element's region.  Cached per y_off.
-        """
+        # Combined mask of all HP panel content areas (id-plate + cover).
+        #
+        # Used for shadow clipping so that *no* drop shadow composites on top
+        # of *any* content surface, even when one element's shadow blur extends
+        # into a neighbouring element's region.  Cached per y_off.
         c = getattr(self, '_all_content_mask_cache', {})
         if y_off in c:
             return c[y_off]
@@ -1948,7 +1940,7 @@ class HpOverlay:
 
     def _draw_brackets(self, img: Image.Image, y_off: int,
                        now: float) -> None:
-        """Animated corner brackets: 2.5s sine pulse (web parity)."""
+        # Animated corner brackets: 2.5s sine pulse (web parity).
         d = ImageDraw.Draw(img, 'RGBA')
 
         def _corner_dot(x: int, y: int, col: Tuple[int, int, int, int]) -> None:
@@ -2002,14 +1994,13 @@ class HpOverlay:
 
     def _draw_id_plate_scanline(self, img: Image.Image, y_off: int,
                                 now: float) -> None:
-        """Vertical cyan scan band that travels top→bottom in 3.5 s.
-
-        H3: cache the FINAL _clip_alpha(band, cropped_mask) image keyed by
-        (y_off, by, band_h) so the per-frame ID plate scanline costs 1 dict
-        get + 1 alpha_composite. The band position quantises to ID_H/3.5s/
-        60Hz ≈ 7-9 distinct by values that repeat 6-9 frames each. Cache
-        is reset on panel resize (clear_panel_cache) and bounded.
-        """
+        # Vertical cyan scan band that travels top→bottom in 3.5 s.
+        #
+        # H3: cache the FINAL _clip_alpha(band, cropped_mask) image keyed by
+        # (y_off, by, band_h) so the per-frame ID plate scanline costs 1 dict
+        # get + 1 alpha_composite. The band position quantises to ID_H/3.5s/
+        # 60Hz ≈ 7-9 distinct by values that repeat 6-9 frames each. Cache
+        # is reset on panel resize (clear_panel_cache) and bounded.
         t = (now - self._spawn_time) / 3.5
         t = t % 1.0
         band_y = int(ID_H * t) + ID_Y + y_off
@@ -2525,7 +2516,7 @@ class HpOverlay:
         return None
 
     def _hp_group_clickable(self) -> bool:
-        """Return whether the HP/STA group should accept pointer input."""
+        # Return whether the HP/STA group should accept pointer input.
         return not bool(self._hp_group_hidden or self._hp_group_fade_t > 0.0)
 
     def _input_hwnd(self) -> int:
@@ -3277,8 +3268,8 @@ class HpOverlay:
             pass
 
     def _point_in_click_zones(self, lx: int, ly: int) -> bool:
-        """Web parity: only id-plate and hp-bar (XTBox) regions are
-        clickable. Cover, STA row, and blank gutters are inert."""
+        # Web parity: only id-plate and hp-bar (XTBox) regions are
+        # clickable. Cover, STA row, and blank gutters are inert.
         if ID_X <= lx <= ID_X + ID_W and ID_Y <= ly <= ID_Y + ID_H:
             return True
         if (self._hp_group_clickable()
@@ -3369,7 +3360,7 @@ class HpOverlay:
                 pass
 
     def restore_position(self) -> None:
-        """Reset panel to its default (web-matching) location."""
+        # Reset panel to its default (web-matching) location.
         self._sync_layout()
         self._x, self._y = self._default_panel_pos()
         if self._gpu_managed and self._gpu_window is not None:

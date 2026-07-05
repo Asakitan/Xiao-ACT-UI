@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""Regression coverage for bundled ACT example plugins."""
+# Regression coverage for bundled ACT example plugins.
 
 from __future__ import annotations
 

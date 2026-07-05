@@ -1,14 +1,13 @@
 # -*- coding: utf-8 -*-
-"""Runtime TCP name correspondence cache.
-
-The local runtime cache records already decoded TCP/MEM facts (Chinese names,
-IDs and server endpoints) for pre-parse lookup and later diagnostics. It
-deliberately stores no raw packet payloads.
-
-The checked-in shared cache is a different contract: it is a generalized
-ID-to-name bucket only, with local endpoints/player/session/source provenance
-removed before it is committed.
-"""
+# Runtime TCP name correspondence cache.
+#
+# The local runtime cache records already decoded TCP/MEM facts (Chinese names,
+# IDs and server endpoints) for pre-parse lookup and later diagnostics. It
+# deliberately stores no raw packet payloads.
+#
+# The checked-in shared cache is a different contract: it is a generalized
+# ID-to-name bucket only, with local endpoints/player/session/source provenance
+# removed before it is committed.
 from __future__ import annotations
 
 import copy
@@ -42,10 +41,10 @@ _SAO = os.path.dirname(_HERE)
 
 
 def _resolve_name_tables_dir() -> str:
-    """assets/name_tables/ 解析 (onedir 友好)。冻结后 assets/ 被 build_release.bat
-    提升到 BASE_DIR(exe 顶层), 而本模块 __file__ 在 runtime/net/ → _SAO/assets=runtime/assets
-    已被搬空, 权威 tcp_preparse_name_cache.json 读不到。优先 config.resource_path
-    (BASE_DIR 优先, BUNDLE_DIR 回退), 回退 __file__ 相对(dev 树/未冻结)。"""
+    # assets/name_tables/ 解析 (onedir 友好)。冻结后 assets/ 被 build_release.bat
+    # 提升到 BASE_DIR(exe 顶层), 而本模块 __file__ 在 runtime/net/ → _SAO/assets=runtime/assets
+    # 已被搬空, 权威 tcp_preparse_name_cache.json 读不到。优先 config.resource_path
+    # (BASE_DIR 优先, BUNDLE_DIR 回退), 回退 __file__ 相对(dev 树/未冻结)。
     try:
         from config import resource_path  # BASE_DIR-first, BUNDLE_DIR fallback
         cand = resource_path("assets", "name_tables")
@@ -121,12 +120,12 @@ def default_cache_path() -> str:
 
 
 def shared_cache_path() -> str:
-    """Return the checked-in generalized cache path."""
+    # Return the checked-in generalized cache path.
     return _SHARED_CACHE_PATH
 
 
 def runtime_cache_path() -> str:
-    """Return the ignored local runtime cache path."""
+    # Return the ignored local runtime cache path.
     return _RUNTIME_CACHE_PATH
 
 
@@ -188,7 +187,7 @@ def _merge_unique_list(old: Any, items: list[Any], *, limit: int = 16) -> list[A
 
 
 def _stable_context_from_live_row(row: Mapping[str, Any], match: Mapping[str, Any], id_space: str) -> dict[str, Any]:
-    """Return stable preparse context without session-specific heap pointers."""
+    # Return stable preparse context without session-specific heap pointers.
     runtime = row.get("runtime") if isinstance(row.get("runtime"), Mapping) else {}
     stable_runtime = {
         key: value
@@ -224,12 +223,11 @@ def empty_shared_snapshot() -> dict[str, Any]:
 
 
 def sanitize_shared_cache(data: Any) -> dict[str, Any]:
-    """Strip local/session provenance from a cache before committing it.
-
-    Shared assets must be reusable across users.  Keep only semantic kind/id,
-    text, and optional confidence; discard endpoints, players, contexts,
-    timestamps, source paths, and every other local diagnostic field.
-    """
+    # Strip local/session provenance from a cache before committing it.
+    #
+    # Shared assets must be reusable across users.  Keep only semantic kind/id,
+    # text, and optional confidence; discard endpoints, players, contexts,
+    # timestamps, source paths, and every other local diagnostic field.
     out = empty_shared_snapshot()
     if isinstance(data, Mapping):
         try:
@@ -271,7 +269,7 @@ def sanitize_shared_cache(data: Any) -> dict[str, Any]:
 
 
 def build_index_from_live_rows(rows_obj: Any, *, confidence: set[str] | None = None) -> dict[str, Any]:
-    """Build a compact by-kind index from live_probe_act_matched_rows data."""
+    # Build a compact by-kind index from live_probe_act_matched_rows data.
     accepted = confidence or {"high", "medium"}
     out = empty_shared_snapshot()
     rows = rows_obj.get("rows") if isinstance(rows_obj, Mapping) else rows_obj
@@ -300,7 +298,7 @@ def build_index_from_live_rows(rows_obj: Any, *, confidence: set[str] | None = N
 
 
 class TcpNameCache:
-    """Small JSON-backed correspondence cache for TCP/MEM decoded names."""
+    # Small JSON-backed correspondence cache for TCP/MEM decoded names.
 
     def __init__(self, path: str | None = None, *, autosave_interval_s: float = 5.0,
                  max_entries_per_kind: int = 4096,

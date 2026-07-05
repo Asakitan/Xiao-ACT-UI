@@ -1,9 +1,7 @@
 # -*- coding: utf-8 -*-
-"""
-SAO 音效管理器 + 升级特效
-使用 winsound (Windows) 或 pygame 播放 SAO-UI 原版音效
-升级用经典 8-bit 音效 (procedurally generated via winsound.Beep)
-"""
+# SAO 音效管理器 + 升级特效
+# 使用 winsound (Windows) 或 pygame 播放 SAO-UI 原版音效
+# 升级用经典 8-bit 音效 (procedurally generated via winsound.Beep)
 
 import os
 import threading
@@ -140,7 +138,7 @@ _BURST_TTS_PROC = os.path.join(_BURST_TTS_DIR, 'burst_ready_scifi.wav')
 
 
 def _init_pygame():
-    """懒初始化 pygame mixer"""
+    # 懒初始化 pygame mixer
     global _pygame_inited, _has_pygame
     if _has_pygame is not None:
         return _has_pygame
@@ -159,13 +157,13 @@ def _init_pygame():
 
 
 def set_sound_enabled(enabled: bool):
-    """Set global sound enabled/disabled."""
+    # Set global sound enabled/disabled.
     global _sound_enabled
     _sound_enabled = bool(enabled)
 
 
 def set_sound_volume(volume_pct: int):
-    """Set global volume (0-100)."""
+    # Set global volume (0-100).
     global _sound_volume
     _sound_volume = max(0.0, min(1.0, volume_pct / 100.0))
 
@@ -290,13 +288,11 @@ def _ensure_burst_ready_tts() -> Optional[str]:
 
 
 def play_sound(name: str, volume: float = 0.7):
-    """
-    播放 SAO 音效 (非阻塞)
-    
-    Args:
-        name: 音效名 (见 SAO_SOUNDS)
-        volume: 0.0~1.0 音量 (会被全局音量和开关覆盖)
-    """
+    # 播放 SAO 音效 (非阻塞)
+    #
+    # Args:
+    # name: 音效名 (见 SAO_SOUNDS)
+    # volume: 0.0~1.0 音量 (会被全局音量和开关覆盖)
     if not _sound_enabled:
         return
     path = SAO_SOUNDS.get(name, '')
@@ -317,7 +313,7 @@ def play_sound(name: str, volume: float = 0.7):
 
 
 def play_tts_file(path: str, volume: float):
-    """播放一段 TTS wav (非阻塞, 专用通道, 新播报打断旧播报)。"""
+    # 播放一段 TTS wav (非阻塞, 专用通道, 新播报打断旧播报)。
     if not _sound_enabled:
         return
     if not path or not os.path.exists(path):
@@ -334,7 +330,7 @@ def play_tts_file(path: str, volume: float):
 # ═══════════════════════════════════════════════
 
 def play_levelup_sfx():
-    """播放经典 8-bit 升级音效 (winsound.Beep 合成)"""
+    # 播放经典 8-bit 升级音效 (winsound.Beep 合成)
     def _beep_sequence():
         try:
             import winsound
@@ -362,17 +358,15 @@ def play_levelup_sfx():
 # ═══════════════════════════════════════════════
 
 class LevelUpEffect:
-    """
-    SAO 风格升级特效
-    - 全屏金色闪光 (flash)  
-    - "LEVEL UP!" 文字从中心放大弹出
-    - 等级数字显示
-    - 经典 8-bit 升级音效
-    """
+    # SAO 风格升级特效
+    # - 全屏金色闪光 (flash)
+    # - "LEVEL UP!" 文字从中心放大弹出
+    # - 等级数字显示
+    # - 经典 8-bit 升级音效
 
     @staticmethod
     def show(root: tk.Tk, old_level: int, new_level: int):
-        """显示升级特效"""
+        # 显示升级特效
         # 播放升级音效
         play_levelup_sfx()
 
@@ -470,7 +464,7 @@ _loaded_font_paths: list = []
 
 
 def load_sao_fonts():
-    """加载 SAO-UI 字体 (Windows: AddFontResourceExW)"""
+    # 加载 SAO-UI 字体 (Windows: AddFontResourceExW)
     global _fonts_loaded
     if _fonts_loaded:
         return
@@ -490,7 +484,7 @@ def load_sao_fonts():
 
 
 def unload_sao_fonts():
-    """卸载 SAO-UI 字体 (Windows: RemoveFontResourceExW)"""
+    # 卸载 SAO-UI 字体 (Windows: RemoveFontResourceExW)
     global _fonts_loaded
     if not _loaded_font_paths:
         return
@@ -505,7 +499,7 @@ def unload_sao_fonts():
 
 
 def _font_available(name):
-    """检查字体是否在 tkinter 可用"""
+    # 检查字体是否在 tkinter 可用
     try:
         import tkinter.font as tkfont
         return name in tkfont.families()
@@ -514,7 +508,7 @@ def _font_available(name):
 
 
 def _tk_font_query_ready():
-    """Return whether tkinter can enumerate font families right now."""
+    # Return whether tkinter can enumerate font families right now.
     try:
         return tk._default_root is not None
     except Exception:
@@ -526,7 +520,7 @@ _resolved_cjk_family: str = ''
 
 
 def get_sao_font(size: int = 12, bold: bool = False):
-    """获取 SAO 字体族名 (回退到 Segoe UI)"""
+    # 获取 SAO 字体族名 (回退到 Segoe UI)
     global _resolved_sao_family
     load_sao_fonts()
     if _resolved_sao_family:
@@ -542,7 +536,7 @@ def get_sao_font(size: int = 12, bold: bool = False):
 
 
 def get_cjk_font(size: int = 10, bold: bool = False):
-    """获取中文圆体字体 (回退到 Microsoft YaHei UI)"""
+    # 获取中文圆体字体 (回退到 Microsoft YaHei UI)
     global _resolved_cjk_family
     load_sao_fonts()
     if _resolved_cjk_family:

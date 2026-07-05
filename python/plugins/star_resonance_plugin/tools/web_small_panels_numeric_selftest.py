@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""Static guards for small Web panel numeric rendering."""
+# Static guards for small Web panel numeric rendering.
 
 from __future__ import annotations
 

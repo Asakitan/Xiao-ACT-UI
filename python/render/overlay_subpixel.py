@@ -1,23 +1,22 @@
-"""overlay_subpixel.py - sub-pixel paste / bar-width helpers for ULW overlays.
-
-PIL `Image.alpha_composite` only accepts integer offsets and `int(round(...))`
-on a width snaps every animation to a 1-pixel grid. Slow tweens (HP drains,
-caption drift, fisheye breathing) are then visibly stair-stepped because the
-on-screen position only updates 1 px every several frames. These helpers let
-those animations move smoothly between integer pixels by either:
-
-* `subpixel_alpha_composite(dst, src, x, y)` - shifts `src` by the
-  fractional remainder of (x, y) using PIL's bilinear AFFINE transform,
-  then composites at the integer base. Single transform + composite, ~0.3-1 ms
-  for typical 100-500 px sprites.
-* `subpixel_bar_width(bar_img, frac_w)` - returns `bar_img` cropped to
-  ceil(frac_w) px wide with the trailing column's alpha modulated by the
-  fractional part, so a bar growing from 100.0 -> 100.99 px visibly fades the
-  101st column in instead of jumping at 100.5.
-
-Both are pure helpers - they never mutate inputs and can be safely called
-from the render worker thread.
-"""
+# overlay_subpixel.py - sub-pixel paste / bar-width helpers for ULW overlays.
+#
+# PIL `Image.alpha_composite` only accepts integer offsets and `int(round(...))`
+# on a width snaps every animation to a 1-pixel grid. Slow tweens (HP drains,
+# caption drift, fisheye breathing) are then visibly stair-stepped because the
+# on-screen position only updates 1 px every several frames. These helpers let
+# those animations move smoothly between integer pixels by either:
+#
+# * `subpixel_alpha_composite(dst, src, x, y)` - shifts `src` by the
+# fractional remainder of (x, y) using PIL's bilinear AFFINE transform,
+# then composites at the integer base. Single transform + composite, ~0.3-1 ms
+# for typical 100-500 px sprites.
+# * `subpixel_bar_width(bar_img, frac_w)` - returns `bar_img` cropped to
+# ceil(frac_w) px wide with the trailing column's alpha modulated by the
+# fractional part, so a bar growing from 100.0 -> 100.99 px visibly fades the
+# 101st column in instead of jumping at 100.5.
+#
+# Both are pure helpers - they never mutate inputs and can be safely called
+# from the render worker thread.
 from __future__ import annotations
 
 import math
@@ -38,16 +37,15 @@ _EPS = 1.0 / 512.0
 def subpixel_alpha_composite(dst: Image.Image, src: Image.Image,
                              x: float, y: float,
                              eps: float = _EPS) -> None:
-    """Composite `src` into `dst` at fractional position (x, y).
-
-    Falls back to a plain integer composite when the fractional part is
-    smaller than ``eps`` (default 1/512 px) so cached layouts that happen
-    to land on an integer don't pay the transform cost. v2.2.27: callers
-    rendering large sprites can pass a larger
-    threshold like 0.15 px since the perceptual cost of snapping a sub-
-    pixel shift on a big sprite is below the eye's discrimination limit
-    while the AFFINE BILINEAR transform on the same sprite costs ~30 ms.
-    """
+    # Composite `src` into `dst` at fractional position (x, y).
+    #
+    # Falls back to a plain integer composite when the fractional part is
+    # smaller than ``eps`` (default 1/512 px) so cached layouts that happen
+    # to land on an integer don't pay the transform cost. v2.2.27: callers
+    # rendering large sprites can pass a larger
+    # threshold like 0.15 px since the perceptual cost of snapping a sub-
+    # pixel shift on a big sprite is below the eye's discrimination limit
+    # while the AFFINE BILINEAR transform on the same sprite costs ~30 ms.
     ix = int(math.floor(x))
     iy = int(math.floor(y))
     fx = x - ix
@@ -90,13 +88,12 @@ def subpixel_alpha_composite(dst: Image.Image, src: Image.Image,
 
 def subpixel_bar_width(bar_img: Image.Image,
                        frac_w: float) -> Optional[Image.Image]:
-    """Trim `bar_img` to a fractional width.
-
-    Returns ``None`` when ``frac_w <= 0``. Otherwise returns an image of
-    ``ceil(frac_w)`` px width whose final column has its alpha multiplied by
-    the fractional remainder. Caller is expected to paste at the regular
-    integer left edge.
-    """
+    # Trim `bar_img` to a fractional width.
+    #
+    # Returns ``None`` when ``frac_w <= 0``. Otherwise returns an image of
+    # ``ceil(frac_w)`` px width whose final column has its alpha multiplied by
+    # the fractional remainder. Caller is expected to paste at the regular
+    # integer left edge.
     if frac_w <= 0.0:
         return None
     fw_int = int(math.ceil(frac_w))

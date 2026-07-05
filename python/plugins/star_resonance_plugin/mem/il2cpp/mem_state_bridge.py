@@ -1,20 +1,19 @@
-"""mem_state_bridge - 把 MemSelfStateProvider 接到现有 game_state / dps_tracker.
-
-主程序集成 (在 sao_gui 初始化 packet_engine + dps_tracker 之后):
-
-    from plugins.star_resonance_plugin.mem.il2cpp.mem_state_bridge import MemStateBridge
-    self._mem_bridge = MemStateBridge(
-        state_mgr=self._state_mgr,        # game_state.GameStateManager
-        dps_tracker=self._dps_tracker,    # 可 None
-    )
-    self._mem_bridge.start()
-
-设计要点:
-  - 内存源失败时自动转 TCP (MemSelfStateProvider 内置)
-  - 任意子组件 (dps_tracker / state_mgr) 缺失都不会崩
-  - 全部回调内部 try/except, 避免回调异常影响内存源主循环
-  - 读不到 bundle 时 start() 不抛, 只把 mode 标 'error' 并打日志
-"""
+# mem_state_bridge - 把 MemSelfStateProvider 接到现有 game_state / dps_tracker.
+#
+# 主程序集成 (在 sao_gui 初始化 packet_engine + dps_tracker 之后):
+#
+# from plugins.star_resonance_plugin.mem.il2cpp.mem_state_bridge import MemStateBridge
+# self._mem_bridge = MemStateBridge(
+# state_mgr=self._state_mgr,        # game_state.GameStateManager
+# dps_tracker=self._dps_tracker,    # 可 None
+# )
+# self._mem_bridge.start()
+#
+# 设计要点:
+# - 内存源失败时自动转 TCP (MemSelfStateProvider 内置)
+# - 任意子组件 (dps_tracker / state_mgr) 缺失都不会崩
+# - 全部回调内部 try/except, 避免回调异常影响内存源主循环
+# - 读不到 bundle 时 start() 不抛, 只把 mode 标 'error' 并打日志
 from __future__ import annotations
 
 import os
@@ -35,7 +34,7 @@ from plugins.star_resonance_plugin.mem.il2cpp.field_authority import FieldAuthor
 
 
 class MemStateBridge:
-    """把内存读出的 self 状态 push 到 game_state / dps_tracker."""
+    # 把内存读出的 self 状态 push 到 game_state / dps_tracker.
 
     def __init__(self,
                  state_mgr: Any = None,
@@ -164,7 +163,7 @@ class MemStateBridge:
     # ───────── public ─────────
 
     def start(self) -> bool:
-        """启动后台线程. 失败返回 False (不抛). 成功返回 True."""
+        # 启动后台线程. 失败返回 False (不抛). 成功返回 True.
         if self._provider is not None:
             return True
         try:
@@ -209,27 +208,27 @@ class MemStateBridge:
         return str(getattr(self.packet_bridge, "_data_source_mode", "") or "").lower()
 
     def _mem_is_supplement(self) -> bool:
-        """True when memory is NOT the primary source (TCP-primary modes: hybrid /
-        auto / tcp). Mirrors dps_tracker.set_mem_primary(ds == 'memory'): in these
-        modes mem only supplements TCP, so its O(N) work backs off."""
+        # True when memory is NOT the primary source (TCP-primary modes: hybrid /
+        # auto / tcp). Mirrors dps_tracker.set_mem_primary(ds == 'memory'): in these
+        # modes mem only supplements TCP, so its O(N) work backs off.
         return self._mode() != "memory"
 
     def _next_entity_interval(self) -> float:
-        """Entity-loop sleep. Memory mode keeps the full 1s scan. A TCP-primary mode
-        backs the O(N) snapshot+damage harvest off to the slow interval once a boss is
-        located and the base is acquired — but stays fast while cold so boss-locate /
-        base acquisition (which flips boss-break ownership to MEM) isn't delayed; a boss
-        despawn (last_boss_mem→None) auto-re-tightens to fast."""
+        # Entity-loop sleep. Memory mode keeps the full 1s scan. A TCP-primary mode
+        # backs the O(N) snapshot+damage harvest off to the slow interval once a boss is
+        # located and the base is acquired — but stays fast while cold so boss-locate /
+        # base acquisition (which flips boss-break ownership to MEM) isn't delayed; a boss
+        # despawn (last_boss_mem→None) auto-re-tightens to fast.
         if not self._mem_is_supplement():
             return self._entity_interval_fast
         cold = (self.last_boss_mem is None) or (not self._base_acquired)
         return self._entity_interval_fast if cold else self._entity_interval_slow
 
     def _boss_obj_is(self, prov, obj: int, uuid: int) -> bool:
-        """O(1) guard that the cached boss obj still hosts `uuid` (pool reuse between
-        slow snapshots would otherwise let read_combat report a recycled occupant's HP
-        as the boss). Can't verify (no pm) → don't block (status quo); read error →
-        treat stale and yield to the slow loop's relocation."""
+        # O(1) guard that the cached boss obj still hosts `uuid` (pool reuse between
+        # slow snapshots would otherwise let read_combat report a recycled occupant's HP
+        # as the boss). Can't verify (no pm) → don't block (status quo); read error →
+        # treat stale and yield to the slow loop's relocation.
         try:
             pm = getattr(prov, "_pm", None)
             if pm is None:
@@ -241,11 +240,11 @@ class MemStateBridge:
             return False
 
     def _boss_fast_push(self, boss: dict, c: dict) -> None:
-        """O(1) boss bar / break from the read_combat dict the cast loop already has.
-        Keeps the cached boss dict fresh between slow snapshots, and (throttled ~3.5Hz)
-        recomputes last_boss_break + pushes boss HP — self-gated identically to the slow
-        entity loop (writes boss_hp_source='memory' only when TCP isn't owning the bar).
-        Supplement-mode only; in memory mode the 1Hz entity loop owns these."""
+        # O(1) boss bar / break from the read_combat dict the cast loop already has.
+        # Keeps the cached boss dict fresh between slow snapshots, and (throttled ~3.5Hz)
+        # recomputes last_boss_break + pushes boss HP — self-gated identically to the slow
+        # entity loop (writes boss_hp_source='memory' only when TCP isn't owning the bar).
+        # Supplement-mode only; in memory mode the 1Hz entity loop owns these.
         for k in ("cur_hp", "max_hp", "hp_pct", "breaking_stage", "extinction",
                   "max_extinction", "stun", "max_stun", "stop_breaking_ticking"):
             if c.get(k) is not None:
@@ -293,13 +292,12 @@ class MemStateBridge:
             pass
 
     def _entity_loop(self):
-        """Poll ZEntityMgr for live entity/boss HP and fill the boss bar pre-pull.
-
-        Additive only: pushes boss HP with source='memory' ONLY when TCP is not
-        actively owning the boss bar (source in none/memory/estimate), so it never
-        overrides a live packet HP during combat. Surfaces ``last_entities`` for
-        plugins/UI (all visible mobs, real-time, including off-screen/pre-pull).
-        """
+        # Poll ZEntityMgr for live entity/boss HP and fill the boss bar pre-pull.
+        #
+        # Additive only: pushes boss HP with source='memory' ONLY when TCP is not
+        # actively owning the boss bar (source in none/memory/estimate), so it never
+        # overrides a live packet HP during combat. Surfaces ``last_entities`` for
+        # plugins/UI (all visible mobs, real-time, including off-screen/pre-pull).
         prov = None
         while not self._entity_stop.is_set():
             try:
@@ -465,18 +463,18 @@ class MemStateBridge:
             self._entity_stop.wait(self._next_entity_interval())
 
     def _mem_name_cache(self):
-        """The shared TcpNameCache (PacketBridge owns it) used as the name overlay sink.
-        Lazily fetched once; None when unavailable (then the self-heal simply no-ops)."""
+        # The shared TcpNameCache (PacketBridge owns it) used as the name overlay sink.
+        # Lazily fetched once; None when unavailable (then the self-heal simply no-ops).
         if not self._name_cache_checked:
             self._name_cache_checked = True
             self._name_cache = getattr(self.packet_bridge, "tcp_name_cache", None)
         return self._name_cache
 
     def _poll_mem_damage(self) -> None:
-        """Read the game's DamageDataMgr table -> dps_tracker (cross-check badge / memory
-        mode). Independent of the entity snapshot, so it runs BEFORE the slow first
-        ZEntityMgr scan and the MEM badge appears within ~1-2s. uid = playerUuid >> 16
-        (== CharSerialize.CharId; dps_tracker keys entities by uuid>>16)."""
+        # Read the game's DamageDataMgr table -> dps_tracker (cross-check badge / memory
+        # mode). Independent of the entity snapshot, so it runs BEFORE the slow first
+        # ZEntityMgr scan and the MEM badge appears within ~1-2s. uid = playerUuid >> 16
+        # (== CharSerialize.CharId; dps_tracker keys entities by uuid>>16).
         # NOTE: print() directly (not self._log) -- in hybrid the bridge's on_log is
         # UnifiedDataSource._on_bridge_log, which swallows messages. Direct prints are
         # the only way the user sees what this path does. One-shot per outcome.
@@ -524,7 +522,7 @@ class MemStateBridge:
                 print(f"[MemBridge.dmg] read failed: {exc}")
 
     def _on_boss_action_event(self, rec: dict) -> None:
-        """Forward a boss cast/state edge to the boss raid engine (skill_id-accurate)."""
+        # Forward a boss cast/state edge to the boss raid engine (skill_id-accurate).
         eng = self.boss_raid_engine
         if eng is None:
             return
@@ -536,12 +534,11 @@ class MemStateBridge:
                 traceback.print_exc()
 
     def _boss_cast_loop(self):
-        """Low-latency boss-only cast poll (~12.5Hz).
-
-        Three-phase nogil batch: all RPM calls go through Cython read_u64_many /
-        read_u32_many / read_combat_batch so the GIL is never held during cross-
-        process reads.  The UI thread (Tk mainloop) is never blocked by this loop.
-        """
+        # Low-latency boss-only cast poll (~12.5Hz).
+        #
+        # Three-phase nogil batch: all RPM calls go through Cython read_u64_many /
+        # read_u32_many / read_combat_batch so the GIL is never held during cross-
+        # process reads.  The UI thread (Tk mainloop) is never blocked by this loop.
         while not self._boss_cast_stop.is_set():
             try:
                 tr = self._boss_action_tracker
@@ -557,12 +554,11 @@ class MemStateBridge:
             self._boss_cast_stop.wait(self._boss_cast_interval)
 
     def _boss_cast_tick(self, obj: int, uuid: int, boss: dict, prov, tr) -> None:
-        """Single boss-cast tick with batched nogil RPM reads.
-
-        Phase 1: read_boss_combat(obj) — cached fast path (9 RPMs hot / ~26 cold)
-        Phase 2: read_u64_many([uuid_addr, sm_addr, comp_addr]) — nogil batch
-        Phase 3: read_u32_many([curstate_addr, skill_addr, stage_addr]) — nogil batch
-        """
+        # Single boss-cast tick with batched nogil RPM reads.
+        #
+        # Phase 1: read_boss_combat(obj) — cached fast path (9 RPMs hot / ~26 cold)
+        # Phase 2: read_u64_many([uuid_addr, sm_addr, comp_addr]) — nogil batch
+        # Phase 3: read_u32_many([curstate_addr, skill_addr, stage_addr]) — nogil batch
         _MINP, _MAXP = 0x10000, 0x7FFF_FFFF_FFFF
         ecr = getattr(prov, "_ecr", None)
         pm = getattr(prov, "_pm", None)
@@ -671,12 +667,12 @@ class MemStateBridge:
             self._provider = None
 
     def force_mode(self, mode: str):
-        """'tcp' 或 'memory' — 主程序可强制切换."""
+        # 'tcp' 或 'memory' — 主程序可强制切换.
         if self._provider:
             self._provider.force_mode(mode)
 
     def _name_resolver(self):
-        """Lazily fetch the app's offline id->name resolver (cached; None if absent)."""
+        # Lazily fetch the app's offline id->name resolver (cached; None if absent).
         if not self._nr_tried:
             self._nr_tried = True
             try:
@@ -687,10 +683,10 @@ class MemStateBridge:
         return self._nr
 
     def _current_scene_named(self):
-        """(scene_id, localized_name) for the current scene. Prefers the live
-        SceneTable name via SceneConfigMgr.curSceneId_ (reliable); the reader's first
-        build is heavy (heap scans) so it runs once on a background thread, until then
-        we fall back to the provider's scene id + the offline dungeon table."""
+        # (scene_id, localized_name) for the current scene. Prefers the live
+        # SceneTable name via SceneConfigMgr.curSceneId_ (reliable); the reader's first
+        # build is heavy (heap scans) so it runs once on a background thread, until then
+        # we fall back to the provider's scene id + the offline dungeon table.
         # The TCP/provider-known scene id (read straight from CharSerialize.SceneData
         # by the self provider) is the most specific anchor for the SceneConfigMgr
         # value-scan: passing it turns an N-way known-id set scan into a single-needle
@@ -711,8 +707,8 @@ class MemStateBridge:
         return smid, nm
 
     def _boss_skill_state(self):
-        """Lazy BossSkillStateReader: boss ZStateSkillComp.curSkillId_ 当 cast_skill_id
-        attr 不可靠时的兜底出招源 (comp ptr 缓存, 热路径 O(1))。无源时 None。"""
+        # Lazy BossSkillStateReader: boss ZStateSkillComp.curSkillId_ 当 cast_skill_id
+        # attr 不可靠时的兜底出招源 (comp ptr 缓存, 热路径 O(1))。无源时 None。
         r = getattr(self, "_boss_skill_reader", None)
         if r is not None:
             return r
@@ -748,7 +744,7 @@ class MemStateBridge:
             self._map_reader_busy = False
 
     def _harvest_pm(self):
-        """The shared StarProcess handle for the nameplate sweep (or None)."""
+        # The shared StarProcess handle for the nameplate sweep (or None).
         pm = getattr(self._entity_provider, "_pm", None)
         if pm is not None:
             return pm
@@ -757,7 +753,7 @@ class MemStateBridge:
         return getattr(sr, "pm", None)
 
     def _maybe_build_break_cache(self) -> None:
-        """One-shot background build of the full MonsterTable BreakingContinueTime cache."""
+        # One-shot background build of the full MonsterTable BreakingContinueTime cache.
         try:
             import threading
             from plugins.star_resonance_plugin.engines.break_time_lookup import build_full_cache, _cache
@@ -768,14 +764,13 @@ class MemStateBridge:
             pass
 
     def _maybe_harvest_nameplates(self, snap) -> None:
-        """Trigger a (throttled, background) nameplate name harvest.
-
-        Fires when a visible monster base_id isn't confirmed yet, once to bootstrap
-        NPCs (the snap carries no npcs), and on a slow idle timer to catch new
-        mobs/npcs. The over-head name is the authority the JSON should match; this
-        corrects the JSON (e.g. 114 '木桩' -> '敌方木桩') and fills gaps (npc names),
-        all auto-offset, no TCP.
-        """
+        # Trigger a (throttled, background) nameplate name harvest.
+        #
+        # Fires when a visible monster base_id isn't confirmed yet, once to bootstrap
+        # NPCs (the snap carries no npcs), and on a slow idle timer to catch new
+        # mobs/npcs. The over-head name is the authority the JSON should match; this
+        # corrects the JSON (e.g. 114 '木桩' -> '敌方木桩') and fills gaps (npc names),
+        # all auto-offset, no TCP.
         try:
             snap_bases = {int(e.get("base_id") or 0) for e in snap}
             snap_bases.discard(0)
@@ -797,11 +792,10 @@ class MemStateBridge:
             traceback.print_exc()
 
     def _run_nameplate_harvest(self, pm) -> None:
-        """Worker: enumerate monsters+npcs, sweep their nameplate widgets, and overlay
-        the corrected/missing name -- routed to the 'monster' kind for mobs and the
-        'npc' kind for NPCs (the plate-type field picks the NPC name over its title).
-        Monster names are also pushed to the live panel; NPCs are JSON-only.
-        """
+        # Worker: enumerate monsters+npcs, sweep their nameplate widgets, and overlay
+        # the corrected/missing name -- routed to the 'monster' kind for mobs and the
+        # 'npc' kind for NPCs (the plate-type field picks the NPC name over its title).
+        # Monster names are also pushed to the live panel; NPCs are JSON-only.
         try:
             prov = self._entity_provider
             # no HP gate -- include non-combat NPCs that snapshot() filters out
@@ -875,7 +869,7 @@ class MemStateBridge:
             self._np_harvest_busy = False
 
     def _build_anchor_pack(self) -> AnchorPack:
-        """Build a semantic anchor pack from the live PacketBridge parser."""
+        # Build a semantic anchor pack from the live PacketBridge parser.
         parser = getattr(self.packet_bridge, '_parser', None) if self.packet_bridge is not None else None
         if parser is None:
             return AnchorPack()
@@ -945,7 +939,7 @@ class MemStateBridge:
             traceback.print_exc()
 
     def _on_identity(self, ident: dict):
-        """level_base / season_exp / season_medal_level / fight_point."""
+        # level_base / season_exp / season_medal_level / fight_point.
         if self.state_mgr is None:
             return
         try:
@@ -1031,13 +1025,12 @@ class MemStateBridge:
 
     @staticmethod
     def _classify_probe_failure(mode: str, err: str) -> ProbeReason:
-        """Map provider status text to the Phase-5 typed failure reason.
-
-        The current provider still reports status as `(mode, err)` strings, so this
-        bridge performs a conservative text classification until the provider emits
-        typed ProbeFailure values directly. Importantly, scan-in-progress and missing
-        process are NOT counted as field failures by FieldAuthority.
-        """
+        # Map provider status text to the Phase-5 typed failure reason.
+        #
+        # The current provider still reports status as `(mode, err)` strings, so this
+        # bridge performs a conservative text classification until the provider emits
+        # typed ProbeFailure values directly. Importantly, scan-in-progress and missing
+        # process are NOT counted as field failures by FieldAuthority.
         text = f"{mode or ''} {err or ''}".lower()
         if "scan" in text and ("progress" in text or "in_progress" in text or "running" in text):
             return ProbeReason.SCAN_IN_PROGRESS
@@ -1086,15 +1079,15 @@ class MemStateBridge:
     # ───────── 查询 ─────────
 
     def base_acquired(self) -> bool:
-        """True once a non-empty entity snapshot has been read (correct base latched)."""
+        # True once a non-empty entity snapshot has been read (correct base latched).
         return self._base_acquired
 
     def boss_break(self) -> Optional[dict]:
-        """Latest MEM boss break {breaking_stage, extinction_pct, has_break_data}, or None."""
+        # Latest MEM boss break {breaking_stage, extinction_pct, has_break_data}, or None.
         return self.last_boss_break
 
     def snapshot(self):
-        """返回内存源的最新原始 SelfSnapshot (含 skill_cds/resources 等)."""
+        # 返回内存源的最新原始 SelfSnapshot (含 skill_cds/resources 等).
         if self._provider is None:
             return None
         return self._provider.last_snap
@@ -1126,8 +1119,8 @@ class MemStateBridge:
 # ───────── selftest ─────────
 
 def _unit_selftest() -> int:
-    """No-process unit checks for the TCP-primary-supplement cadence + O(1) boss push
-    (run: python mem_probe/il2cpp/mem_state_bridge.py --unit)."""
+    # No-process unit checks for the TCP-primary-supplement cadence + O(1) boss push
+    # (run: python mem_probe/il2cpp/mem_state_bridge.py --unit).
     passed = [0]
     failed = [0]
 

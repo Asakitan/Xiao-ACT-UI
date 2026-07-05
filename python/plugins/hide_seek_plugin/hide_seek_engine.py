@@ -1,19 +1,16 @@
-"""
-Hide & Seek (躲猫猫) Automation Engine.
-
-Sequential image-detection flow with color-filtered template matching.
-All ROI coordinates are relative (0.0-1.0) for resolution independence.
-Reference resolution: 1920×1080 — positions converted at design time.
-
-
-Flow:
-  Step 0 → detect 1.png (white area)    → Alt+Click → Step 1
-  Step 1 → detect 2.png (gray buttons)  → Click     → Step 2
-  Step 2 → detect 3.png (gray buttons)  → Click     → Step 3
-  Step 3 → detect 4.png (gray buttons)  → Click     → Step 4
-  Step 4 → detect 5.png (gray buttons)  → Click     → Step 0  (loop)
-
-"""
+# Hide & Seek (躲猫猫) Automation Engine.
+#
+# Sequential image-detection flow with color-filtered template matching.
+# All ROI coordinates are relative (0.0-1.0) for resolution independence.
+# Reference resolution: 1920×1080 — positions converted at design time.
+#
+#
+# Flow:
+# Step 0 → detect 1.png (white area)    → Alt+Click → Step 1
+# Step 1 → detect 2.png (gray buttons)  → Click     → Step 2
+# Step 2 → detect 3.png (gray buttons)  → Click     → Step 3
+# Step 3 → detect 4.png (gray buttons)  → Click     → Step 4
+# Step 4 → detect 5.png (gray buttons)  → Click     → Step 0  (loop)
 
 from __future__ import annotations
 
@@ -80,7 +77,7 @@ class INPUT(ctypes.Structure):
 # "br" = bottom-right anchor, "sz" = box size → tl = br - sz
 
 def _br_to_rel(br_x, br_y, w, h, ref_w=1920, ref_h=1080):
-    """Convert bottom-right anchor + size to relative TL + size."""
+    # Convert bottom-right anchor + size to relative TL + size.
     tl_x = (br_x - w) / ref_w
     tl_y = (br_y - h) / ref_h
     return (tl_x, tl_y, w / ref_w, h / ref_h)
@@ -157,22 +154,19 @@ _CLICK_GLOBAL_CD_S = 2.0
 
 
 class HideSeekEngine:
-    """自动躲猫猫引擎 — CV模板匹配 + 颜色过滤的自动化序列.
-
-    Uses recognition.py's capture functions for screenshots and
-    WindowLocator for game window discovery.
-    """
+    # 自动躲猫猫引擎 — CV模板匹配 + 颜色过滤的自动化序列.
+    #
+    # Uses recognition.py's capture functions for screenshots and
+    # WindowLocator for game window discovery.
 
     def __init__(
         self,
         locator,
         on_status: Optional[Callable[[str, int], None]] = None,
     ):
-        """
-        Args:
-            locator: WindowLocator instance.
-            on_status: Callback(message, step_index) for status updates.
-        """
+        # Args:
+        # locator: WindowLocator instance.
+        # on_status: Callback(message, step_index) for status updates.
         self._locator = locator
         self._on_status = on_status
         self._running = False
@@ -220,7 +214,7 @@ class HideSeekEngine:
 
     @property
     def thread_alive(self) -> bool:
-        """True only if the background thread is actually alive."""
+        # True only if the background thread is actually alive.
         t = self._thread
         return t is not None and t.is_alive()
 
@@ -250,7 +244,7 @@ class HideSeekEngine:
     # ── Template loading ──
 
     def _load_templates(self):
-        """Pre-load all reference images from assets/."""
+        # Pre-load all reference images from assets/.
         self._templates.clear()
         for step in STEPS:
             img_name = step['image']
@@ -266,10 +260,9 @@ class HideSeekEngine:
             self._log(f'template missing {img_name} path={path}')
 
     def resume(self):
-        """Re-launch the worker thread WITHOUT resetting the current step.
-
-        Used by the external watchdog when the thread died unexpectedly.
-        """
+        # Re-launch the worker thread WITHOUT resetting the current step.
+        #
+        # Used by the external watchdog when the thread died unexpectedly.
         self._running = False
         t = self._thread
         if t and t.is_alive():
@@ -285,7 +278,7 @@ class HideSeekEngine:
             f'Resumed at Step {self._current_step}', self._current_step)
 
     def restart(self):
-        """Full restart — reset to step 0."""
+        # Full restart — reset to step 0.
         self.stop()
         self.start()
 
@@ -398,10 +391,9 @@ class HideSeekEngine:
         cl: int,
         ct: int,
     ) -> Optional[Tuple[int, int, int, float]]:
-        """Try to detect a specific step in the screenshot.
-
-        Returns (step_idx, click_x, click_y, confidence) on success, else None.
-        """
+        # Try to detect a specific step in the screenshot.
+        #
+        # Returns (step_idx, click_x, click_y, confidence) on success, else None.
         step = STEPS[step_idx]
         tpl = self._templates.get(step['image'])
         if tpl is None:
@@ -534,7 +526,7 @@ class HideSeekEngine:
         method: str,
         detected: bool,
     ):
-        """Rate-limited save of ROI/filtered/template images for debugging."""
+        # Rate-limited save of ROI/filtered/template images for debugging.
         if not _DEBUG_SAVE:
             return
         now = time.time()
@@ -560,9 +552,9 @@ class HideSeekEngine:
 
     def _verify_color_presence(self, roi_img: np.ndarray, colors: list,
                                step_idx: int) -> bool:
-        """Check that the ROI contains enough pixels matching the step's
-        expected colors.  Returns False if the dialog is not actually present
-        (e.g. SQDIFF matched against a blank/wrong area)."""
+        # Check that the ROI contains enough pixels matching the step's
+        # expected colors.  Returns False if the dialog is not actually present
+        # (e.g. SQDIFF matched against a blank/wrong area).
         mask = self._build_color_mask(roi_img, colors)
         total = max(1, mask.shape[0] * mask.shape[1])
         hits = int(cv2.countNonZero(mask))
@@ -582,10 +574,9 @@ class HideSeekEngine:
         tpl: np.ndarray,
         scales: Optional[list] = None,
     ) -> Tuple[Optional[Tuple[int, int]], float, float]:
-        """Try template match at multiple scales.
-
-        Returns (match_pos, confidence, best_scale) or (None, 0.0, 1.0).
-        """
+        # Try template match at multiple scales.
+        #
+        # Returns (match_pos, confidence, best_scale) or (None, 0.0, 1.0).
         if scales is None:
             scales = [0.75, 0.80, 0.85, 0.90, 0.95, 1.05, 1.10, 1.15, 1.20, 1.25]
         ih, iw = img.shape[:2]
@@ -640,7 +631,7 @@ class HideSeekEngine:
     def _capture(
         self, hwnd: int, client_rect: Tuple[int, int, int, int]
     ) -> Optional[np.ndarray]:
-        """Capture client area of game window → BGR numpy array."""
+        # Capture client area of game window → BGR numpy array.
         try:
             from plugins.star_resonance_plugin.vision.recognition import _capture_hwnd_client
             img, method = _capture_hwnd_client(hwnd, client_rect)
@@ -671,7 +662,7 @@ class HideSeekEngine:
 
     @staticmethod
     def _coerce_bgr_array(img) -> Optional[np.ndarray]:
-        """Best-effort normalize capture output to a contiguous BGR ndarray."""
+        # Best-effort normalize capture output to a contiguous BGR ndarray.
         def _from_array(arr) -> Optional[np.ndarray]:
             try:
                 arr = np.asarray(arr)
@@ -707,10 +698,9 @@ class HideSeekEngine:
         img: np.ndarray,
         colors: list,
     ) -> np.ndarray:
-        """Build a combined binary mask for pixels matching any of the given colors.
-
-        Each color entry: ((B, G, R), tolerance)
-        """
+        # Build a combined binary mask for pixels matching any of the given colors.
+        #
+        # Each color entry: ((B, G, R), tolerance)
         original_type = type(img)
         img = HideSeekEngine._coerce_bgr_array(img)
         if img is None:
@@ -753,7 +743,7 @@ class HideSeekEngine:
         tpl: np.ndarray,
         roi_shape: Tuple[int, int],
     ) -> Optional[np.ndarray]:
-        """Resize template if it's larger than the ROI; scale down proportionally."""
+        # Resize template if it's larger than the ROI; scale down proportionally.
         th, tw = tpl.shape[:2]
         rh, rw = roi_shape
         if th > rh or tw > rw:
@@ -770,7 +760,7 @@ class HideSeekEngine:
         img: np.ndarray,
         tpl: np.ndarray,
     ) -> Tuple[Optional[Tuple[int, int]], float]:
-        """Run template matching (TM_CCOEFF_NORMED). Returns ((x, y), confidence) or (None, 0.0)."""
+        # Run template matching (TM_CCOEFF_NORMED). Returns ((x, y), confidence) or (None, 0.0).
         if img is None or tpl is None:
             return None, 0.0
         ih, iw = img.shape[:2]
@@ -794,15 +784,14 @@ class HideSeekEngine:
         img: np.ndarray,
         tpl: np.ndarray,
     ) -> Tuple[Optional[Tuple[int, int]], float]:
-        """Run TM_SQDIFF_NORMED template matching.
-
-        Better than CCOEFF for low-contrast templates (e.g. white button with
-        dark text) because it measures pixel-level difference rather than
-        variance-normalised correlation.
-
-        Returns ((x, y), sqdiff_value) where LOWER = more similar.
-        Returns (None, 1.0) on failure.
-        """
+        # Run TM_SQDIFF_NORMED template matching.
+        #
+        # Better than CCOEFF for low-contrast templates (e.g. white button with
+        # dark text) because it measures pixel-level difference rather than
+        # variance-normalised correlation.
+        #
+        # Returns ((x, y), sqdiff_value) where LOWER = more similar.
+        # Returns (None, 1.0) on failure.
         if img is None or tpl is None:
             return None, 1.0
         ih, iw = img.shape[:2]
@@ -824,7 +813,7 @@ class HideSeekEngine:
 
     @staticmethod
     def _set_thread_dpi_awareness():
-        """Match recognition thread DPI behavior in packaged onedir builds."""
+        # Match recognition thread DPI behavior in packaged onedir builds.
         try:
             user32 = ctypes.windll.user32
             user32.SetThreadDpiAwarenessContext.restype = ctypes.c_void_p
@@ -837,7 +826,7 @@ class HideSeekEngine:
 
     @staticmethod
     def _send_mouse_click(screen_x: int, screen_y: int):
-        """Send a left mouse click at absolute screen coordinates via SendInput."""
+        # Send a left mouse click at absolute screen coordinates via SendInput.
         user32 = ctypes.windll.user32
         vx = user32.GetSystemMetrics(SM_XVIRTUALSCREEN)
         vy = user32.GetSystemMetrics(SM_YVIRTUALSCREEN)
@@ -916,12 +905,12 @@ class HideSeekEngine:
 
     @classmethod
     def _click(cls, screen_x: int, screen_y: int):
-        """Simple left click at screen coords."""
+        # Simple left click at screen coords.
         cls._send_mouse_click(screen_x, screen_y)
 
     @classmethod
     def _alt_click(cls, screen_x: int, screen_y: int):
-        """Alt + left click at screen coords."""
+        # Alt + left click at screen coords.
         cls._send_key(VK_MENU, up=False)
         time.sleep(0.05)
         cls._send_mouse_click(screen_x, screen_y)

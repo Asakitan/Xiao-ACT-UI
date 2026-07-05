@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""Regression tests for the Entity trigger/timer manager renderer."""
+# Regression tests for the Entity trigger/timer manager renderer.
 
 from __future__ import annotations
 

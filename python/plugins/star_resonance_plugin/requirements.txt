@@ -14,7 +14,7 @@ opencv-python-headless>=4.8
 
 # ── GPU rendering ──
 moderngl>=5.8
-glfw>=2.6
+# glfw removed — unified compositor
 skia-python>=87.0
 
 # ── Network / protocol ──

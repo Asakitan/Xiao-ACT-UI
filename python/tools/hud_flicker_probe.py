@@ -1,8 +1,8 @@
 # -*- coding: utf-8 -*-
-"""Burst-capture the open popup menu and verify the dynamic HUD
-elements (cyan scan line / dots, gold timestamp) are present in every
-frame — before the scratch-order fix roughly every other frame lost
-them (visible flicker)."""
+# Burst-capture the open popup menu and verify the dynamic HUD
+# elements (cyan scan line / dots, gold timestamp) are present in every
+# frame — before the scratch-order fix roughly every other frame lost
+# them (visible flicker).
 import time
 
 import numpy as np

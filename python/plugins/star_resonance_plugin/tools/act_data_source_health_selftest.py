@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""Regression tests for shared ACT data-source health helpers."""
+# Regression tests for shared ACT data-source health helpers.
 
 from __future__ import annotations
 

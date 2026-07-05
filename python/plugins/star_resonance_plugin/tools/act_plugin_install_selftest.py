@@ -1,11 +1,10 @@
 # -*- coding: utf-8 -*-
-"""Regression coverage for one-click plugin import (.zip → user_plugins → live).
-
-Covers: zip-slip-safe install, flat + nested archive layouts, vendored-dep
-auto-import (sys.path managed by the manager), requirements bootstrap, the
-non-disruptive single-plugin refresh+enable path, upgrade-in-place, uninstall
-(user-only), and the end-to-end ``act_plugin_import`` runtime action.
-"""
+# Regression coverage for one-click plugin import (.zip → user_plugins → live).
+#
+# Covers: zip-slip-safe install, flat + nested archive layouts, vendored-dep
+# auto-import (sys.path managed by the manager), requirements bootstrap, the
+# non-disruptive single-plugin refresh+enable path, upgrade-in-place, uninstall
+# (user-only), and the end-to-end ``act_plugin_import`` runtime action.
 
 from __future__ import annotations
 
@@ -41,7 +40,7 @@ class DictSettings:
 
 def _write_plugin_tree(plugin_dir: str, *, plugin_id: str, version: str = "1.0.0",
                        dep_module: str = "", entry_extra: str = "") -> None:
-    """Author a plugin directory: plugin.json + plugin.py (+ vendor dep)."""
+    # Author a plugin directory: plugin.json + plugin.py (+ vendor dep).
     os.makedirs(plugin_dir, exist_ok=True)
     manifest = {
         "id": plugin_id,
@@ -75,7 +74,7 @@ def _write_plugin_tree(plugin_dir: str, *, plugin_id: str, version: str = "1.0.0
 
 
 def _zip_dir(src_dir: str, zip_path: str, *, arc_prefix: str = "") -> str:
-    """Zip the contents of src_dir. arc_prefix='' → flat (manifest at root)."""
+    # Zip the contents of src_dir. arc_prefix='' → flat (manifest at root).
     with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as zf:
         for base, _dirs, files in os.walk(src_dir):
             for name in files:

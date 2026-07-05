@@ -1,10 +1,9 @@
 # -*- coding: utf-8 -*-
-"""Entity/Tk menu bridge for the Star Resonance plugin.
-
-The platform owns only the generic SAO menu shell. This bridge injects the
-game-specific left panel, player/session state, and plugin status hooks at
-runtime through owner attributes.
-"""
+# Entity/Tk menu bridge for the Star Resonance plugin.
+#
+# The platform owns only the generic SAO menu shell. This bridge injects the
+# game-specific left panel, player/session state, and plugin status hooks at
+# runtime through owner attributes.
 
 from __future__ import annotations
 
@@ -14,7 +13,7 @@ from typing import Any
 
 
 def _bind_via_sdk(ctx, name: str, callback) -> None:
-    """Bind a bridge method onto the platform owner through the SDK."""
+    # Bind a bridge method onto the platform owner through the SDK.
     def _wrapped(*args, **kwargs):
         return callback(*args, **kwargs)
     _wrapped.__name__ = name
@@ -22,12 +21,11 @@ def _bind_via_sdk(ctx, name: str, callback) -> None:
 
 
 def _bind_mixin_methods_via_sdk(ctx, owner: Any) -> None:
-    """Bind plugin-owned Tk mixin methods onto the platform owner via SDK.
-
-    Uses ctx.engine.set_owner_attr() instead of raw setattr/MethodType,
-    keeping the platform class free of game mixins while going through the
-    proper SDK registration pathway.
-    """
+    # Bind plugin-owned Tk mixin methods onto the platform owner via SDK.
+    #
+    # Uses ctx.engine.set_owner_attr() instead of raw setattr/MethodType,
+    # keeping the platform class free of game mixins while going through the
+    # proper SDK registration pathway.
     mixin_paths = (
         'plugins.star_resonance_plugin.panels.sao_gui_state_mixin:SAOPlayerGUIStateMixin',
         'plugins.star_resonance_plugin.panels.sao_gui_actions_mixin:SAOPlayerGUIActionsMixin',

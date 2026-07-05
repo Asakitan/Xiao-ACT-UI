@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""Regression tests for game window title matching."""
+# Regression tests for game window title matching.
 
 from __future__ import annotations
 

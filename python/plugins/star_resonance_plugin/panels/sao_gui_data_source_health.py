@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""Entity-mode ACT data-source health panel."""
+# Entity-mode ACT data-source health panel.
 
 from __future__ import annotations
 
@@ -53,7 +53,7 @@ def _finite_int(value: Any, default: int = 0, *, lo: Optional[int] = None, hi: O
 
 
 class DataSourceHealthPanel:
-    """SAO-styled Toplevel for ACT data-source observability."""
+    # SAO-styled Toplevel for ACT data-source observability.
 
     def __init__(self, root: tk.Misc, owner: Any):
         self.root = root
@@ -318,7 +318,7 @@ class DataSourceHealthPanel:
 
     @staticmethod
     def _condensed_snapshot(status: Mapping[str, Any]) -> dict:
-        """Build a compact summary matching the webref snapshot format."""
+        # Build a compact summary matching the webref snapshot format.
         sources = status.get('sources') or {}
         summary = sources.get('summary') or {}
         packet = sources.get('packet') or {}

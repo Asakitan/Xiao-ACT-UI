@@ -1,12 +1,11 @@
 # -*- coding: utf-8 -*-
-"""Offline test for table_columns thunk extraction against real dump artifacts.
-
-Uses out/fdc7111b (dump.cs + GameAssembly.dll) and asserts the extracted
-column offsets/types match the independently verified layout. Skips (exit 0)
-when the artifacts are not present on this machine.
-
-Run: python -m mem_probe.il2cpp.test_table_columns
-"""
+# Offline test for table_columns thunk extraction against real dump artifacts.
+#
+# Uses out/fdc7111b (dump.cs + GameAssembly.dll) and asserts the extracted
+# column offsets/types match the independently verified layout. Skips (exit 0)
+# when the artifacts are not present on this machine.
+#
+# Run: python -m mem_probe.il2cpp.test_table_columns
 import os
 
 from plugins.star_resonance_plugin.mem.il2cpp.table_columns import (

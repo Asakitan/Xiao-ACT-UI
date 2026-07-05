@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""Regression tests for live Tk panel render signatures and numeric guards."""
+# Regression tests for live Tk panel render signatures and numeric guards.
 
 from __future__ import annotations
 

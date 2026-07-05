@@ -1,16 +1,15 @@
-"""static_dps_source - 主程序使用的高层接口.
-
-封装:
-  - 资源加载 (优先 bundle, 回退到完整 script.json + dump_cs_index)
-  - 实例缓存 (避免每次 200s 全堆扫)
-  - 高层数据 API: get_self_snapshot() -> SelfSnapshot
-
-主程序集成示例:
-    from plugins.star_resonance_plugin.mem.il2cpp.static_dps_source import StaticDpsSource
-    src = StaticDpsSource()             # 自动选 bundle / 完整 dump
-    snap = src.get_self_snapshot()      # 第一次 ~200s, 之后 <1ms
-    print(snap.uid, snap.cur_hp, snap.max_hp)
-"""
+# static_dps_source - 主程序使用的高层接口.
+#
+# 封装:
+# - 资源加载 (优先 bundle, 回退到完整 script.json + dump_cs_index)
+# - 实例缓存 (避免每次 200s 全堆扫)
+# - 高层数据 API: get_self_snapshot() -> SelfSnapshot
+#
+# 主程序集成示例:
+# from plugins.star_resonance_plugin.mem.il2cpp.static_dps_source import StaticDpsSource
+# src = StaticDpsSource()             # 自动选 bundle / 完整 dump
+# snap = src.get_self_snapshot()      # 第一次 ~200s, 之后 <1ms
+# print(snap.uid, snap.cur_hp, snap.max_hp)
 from __future__ import annotations
 
 import os
@@ -44,7 +43,7 @@ class SkillCD:
     cd_type: int           # SkillCDType (0=普通, 1=充能型可能)
 
     def remaining_ms(self, now_ms: int) -> int:
-        """剩余 CD 毫秒 (now_ms = 服务器时间). 0 表示 ready."""
+        # 剩余 CD 毫秒 (now_ms = 服务器时间). 0 表示 ready.
         if self.duration_ms <= 0 or self.begin_ms <= 0:
             return 0
         end = self.begin_ms + self.duration_ms
@@ -82,7 +81,7 @@ class SelfSnapshot:
 
 
 class StaticDpsSource:
-    """主程序对接口."""
+    # 主程序对接口.
 
     SELF_CLASS = "Zproto.CharSerialize"
     SELF_SENTINEL_FIELD = "Attr"
@@ -143,15 +142,14 @@ class StaticDpsSource:
     # ───────── 异步扫描 ─────────
 
     def get_self_snapshot_nowait(self) -> Optional[SelfSnapshot]:
-        """非阻塞: 缓存命中直接返回; 未命中则启动后台扫描并立即返回 None.
-
-        典型用法 (主循环里轮询):
-            snap = src.get_self_snapshot_nowait()
-            if snap is None:
-                ...显示 "正在扫描..."
-            else:
-                ...用 snap 数据
-        """
+        # 非阻塞: 缓存命中直接返回; 未命中则启动后台扫描并立即返回 None.
+        #
+        # 典型用法 (主循环里轮询):
+        # snap = src.get_self_snapshot_nowait()
+        # if snap is None:
+        # ...显示 "正在扫描..."
+        # else:
+        # ...用 snap 数据
         sr = self.sr
         # 先尝试用现有缓存命中 (不触发扫描)
         with self._sr_lock:
@@ -230,7 +228,7 @@ class StaticDpsSource:
     # ───────── 扩展读取 (Boss Raid + AutoKey 用) ─────────
 
     def fill_extended(self, snap: SelfSnapshot) -> SelfSnapshot:
-        """在现有 snap 上补充 SkillCD/Resources/Profession/Name 等扩展信息."""
+        # 在现有 snap 上补充 SkillCD/Resources/Profession/Name 等扩展信息.
         if snap is None:
             return snap
         sr = self.sr
@@ -302,7 +300,7 @@ class StaticDpsSource:
         return snap
 
     def get_extended_snapshot(self, force_rescan: bool = False) -> Optional[SelfSnapshot]:
-        """一次性拿到全字段 (HP + SkillCD + Resources + Profession)."""
+        # 一次性拿到全字段 (HP + SkillCD + Resources + Profession).
         snap = self.get_self_snapshot(force_rescan=force_rescan)
         if snap:
             self.fill_extended(snap)

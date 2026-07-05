@@ -1,10 +1,9 @@
 # -*- coding: utf-8 -*-
-"""fill_buff_markers - 离线把机制 buff 智能填进 boss 机制示例的 detect.buff_ids。
-
-数据源=assets/name_tables/static_id_name_cache.json 的 buff 全表(游戏关着也能跑)。
-对 assets/boss_raids 全部示例: 人工对照表(CURATED)+段内自动匹配 → 追加去重写回 + 报告。
-0.5~0.8 分的只列「待确认」不写入。
-"""
+# fill_buff_markers - 离线把机制 buff 智能填进 boss 机制示例的 detect.buff_ids。
+#
+# 数据源=assets/name_tables/static_id_name_cache.json 的 buff 全表(游戏关着也能跑)。
+# 对 assets/boss_raids 全部示例: 人工对照表(CURATED)+段内自动匹配 → 追加去重写回 + 报告。
+# 0.5~0.8 分的只列「待确认」不写入。
 from __future__ import annotations
 
 import glob

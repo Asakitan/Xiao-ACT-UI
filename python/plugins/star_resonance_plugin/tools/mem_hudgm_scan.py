@@ -1,11 +1,10 @@
 # -*- coding: utf-8 -*-
-"""Structural heap scan for HudGm objects (NO klass resolution needed).
-
-HudGm layout: State@0x70(int) MaxHp@0x78(long) CurHp@0x80(long) MaxBreak@0x88(int)
-CurBreak@0x8C(int) HateList@0x90(ptr) uuid@0xA0(long) configId@0xA8(int), klass@0x0.
-We scan readable private regions for that signature -> the displayed combat HP of
-every monster/boss/dummy, found purely by structure ("find that local block").
-"""
+# Structural heap scan for HudGm objects (NO klass resolution needed).
+#
+# HudGm layout: State@0x70(int) MaxHp@0x78(long) CurHp@0x80(long) MaxBreak@0x88(int)
+# CurBreak@0x8C(int) HateList@0x90(ptr) uuid@0xA0(long) configId@0xA8(int), klass@0x0.
+# We scan readable private regions for that signature -> the displayed combat HP of
+# every monster/boss/dummy, found purely by structure ("find that local block").
 from __future__ import annotations
 import struct, sys, os, time
 _HERE=os.path.dirname(os.path.abspath(__file__)); _ROOT=os.path.dirname(_HERE)

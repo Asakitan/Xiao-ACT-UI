@@ -1,51 +1,49 @@
 # -*- coding: utf-8 -*-
-"""
-skill_cd_monitor — 自定义技能 CD 监控引擎.
-
-在标准 9 个装备槽之外, 允许用户额外监控最多 5 个技能的 CD 状态.
-支持:
-  - 从 skill_cd_map (TCP/MEM) 实时读取任意技能 CD
-  - 用户手动指定天赋→父槽位归属
-  - 独立/分组两种提醒模式
-  - CD 进度条 + 就绪亮灯 + 可选 TTS
-
-数据契约 — custom_skill_monitors 配置项:
-  [
-    {
-      "slot": 10,                   # display index 10-14
-      "skill_level_id": 240601,     # 监控的 skill_level_id
-      "skill_id": 2406,             # base skill_id (= skill_level_id // 100)
-      "name": "先锋追击",           # 缓存的显示名
-      "parent_slot": 2,             # 归属的父槽位 (0=独立)
-      "tts_enabled": True,
-      "tts_text": "",               # 自定义 TTS 文本 (空=用 name)
-      "visual_enabled": True,
-    },
-    ...
-  ]
-
-输出 — custom_skill_slots (与 GameState.skill_slots 同格式):
-  [
-    {
-      "index": 10,
-      "skill_level_id": 240601,
-      "skill_id": 2406,
-      "name": "先锋追击",
-      "state": "ready" | "cooldown",
-      "cooldown_pct": 0.0,
-      "remaining_ms": 0,
-      "total_cd_ms": 12000,
-      "charge_count": 0,
-      "active": False,
-      "parent_slot": 2,
-      "tts_enabled": True,
-      "visual_enabled": True,
-      "custom": True,
-      "ready_edge": False,
-    },
-    ...
-  ]
-"""
+# skill_cd_monitor — 自定义技能 CD 监控引擎.
+#
+# 在标准 9 个装备槽之外, 允许用户额外监控最多 5 个技能的 CD 状态.
+# 支持:
+# - 从 skill_cd_map (TCP/MEM) 实时读取任意技能 CD
+# - 用户手动指定天赋→父槽位归属
+# - 独立/分组两种提醒模式
+# - CD 进度条 + 就绪亮灯 + 可选 TTS
+#
+# 数据契约 — custom_skill_monitors 配置项:
+# [
+# {
+# "slot": 10,                   # display index 10-14
+# "skill_level_id": 240601,     # 监控的 skill_level_id
+# "skill_id": 2406,             # base skill_id (= skill_level_id // 100)
+# "name": "先锋追击",           # 缓存的显示名
+# "parent_slot": 2,             # 归属的父槽位 (0=独立)
+# "tts_enabled": True,
+# "tts_text": "",               # 自定义 TTS 文本 (空=用 name)
+# "visual_enabled": True,
+# },
+# ...
+# ]
+#
+# 输出 — custom_skill_slots (与 GameState.skill_slots 同格式):
+# [
+# {
+# "index": 10,
+# "skill_level_id": 240601,
+# "skill_id": 2406,
+# "name": "先锋追击",
+# "state": "ready" | "cooldown",
+# "cooldown_pct": 0.0,
+# "remaining_ms": 0,
+# "total_cd_ms": 12000,
+# "charge_count": 0,
+# "active": False,
+# "parent_slot": 2,
+# "tts_enabled": True,
+# "visual_enabled": True,
+# "custom": True,
+# "ready_edge": False,
+# },
+# ...
+# ]
 from __future__ import annotations
 
 import time
@@ -83,7 +81,7 @@ def _resolve_skill_name(skill_id: int, skill_level_id: int) -> str:
 
 
 def validate_monitors(monitors: Any) -> List[dict]:
-    """校验并规范化 custom_skill_monitors 配置."""
+    # 校验并规范化 custom_skill_monitors 配置.
     if not isinstance(monitors, list):
         return []
     result = []
@@ -120,7 +118,7 @@ def validate_monitors(monitors: Any) -> List[dict]:
 
 
 def next_available_slot(monitors: List[dict]) -> int:
-    """返回下一个可用的自定义槽位号, 无可用返回 0."""
+    # 返回下一个可用的自定义槽位号, 无可用返回 0.
     used = {_safe_int(m.get('slot'), 0) for m in monitors}
     for s in range(CUSTOM_SLOT_MIN, CUSTOM_SLOT_MAX + 1):
         if s not in used:
@@ -135,26 +133,25 @@ def compute_custom_skill_slots(
     player_attrs: Optional[dict] = None,
     prev_slots: Optional[List[dict]] = None,
 ) -> List[dict]:
-    """从 skill_cd_map 计算自定义槽位的 CD 状态.
-
-    Parameters
-    ----------
-    monitors : list
-        validated custom_skill_monitors config
-    skill_cd_map : dict
-        skill_level_id -> CD state dict (from TCP or MEM)
-    server_time_offset_ms : float | None
-        server clock offset
-    player_attrs : dict | None
-        {attr_skill_cd, attr_skill_cd_pct, ...} for CD computation
-    prev_slots : list | None
-        previous frame's custom_skill_slots (for edge detection)
-
-    Returns
-    -------
-    list[dict]
-        custom skill slot entries in GameState.skill_slots format
-    """
+    # 从 skill_cd_map 计算自定义槽位的 CD 状态.
+    #
+    # Parameters
+    # ----------
+    # monitors : list
+    # validated custom_skill_monitors config
+    # skill_cd_map : dict
+    # skill_level_id -> CD state dict (from TCP or MEM)
+    # server_time_offset_ms : float | None
+    # server clock offset
+    # player_attrs : dict | None
+    # {attr_skill_cd, attr_skill_cd_pct, ...} for CD computation
+    # prev_slots : list | None
+    # previous frame's custom_skill_slots (for edge detection)
+    #
+    # Returns
+    # -------
+    # list[dict]
+    # custom skill slot entries in GameState.skill_slots format
     if not monitors:
         return []
 
@@ -259,7 +256,7 @@ def _fallback_cd_calc(
     now_server_ms: int,
     now_local_ms: int,
 ) -> Tuple[str, float, int]:
-    """Pure-Python fallback when Cython unavailable."""
+    # Pure-Python fallback when Cython unavailable.
     total = _safe_int(cd_info.get('duration'), 0)
     if total <= 0:
         return ('ready', 0.0, 0)
@@ -287,11 +284,10 @@ def enumerate_available_skills(
     skill_seen_ids: Optional[list] = None,
     equipped_slids: Optional[set] = None,
 ) -> List[dict]:
-    """枚举所有可用于自定义监控的技能.
-
-    Returns list of {skill_level_id, skill_id, name, has_cd, remaining_ms}
-    sorted by name.
-    """
+    # 枚举所有可用于自定义监控的技能.
+    #
+    # Returns list of {skill_level_id, skill_id, name, has_cd, remaining_ms}
+    # sorted by name.
     all_slids: set = set()
     if skill_cd_map:
         all_slids.update(skill_cd_map.keys())

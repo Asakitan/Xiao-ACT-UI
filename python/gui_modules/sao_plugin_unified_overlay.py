@@ -244,13 +244,12 @@ def _iter_layer_drawables(overlays: list[Mapping[str, Any]]) -> list[dict[str, A
 
 
 def _pointer_button_down() -> bool:
-    """物理鼠标主键是否按着 (GetAsyncKeyState 实测)。
-
-    Tk input proxy 没有指针 grab, press 之后在 proxy 外释放 / colorkey
-    shape 突变穿透都会丢 ButtonRelease — _drag_state 残留会把之后每次
-    划过面板都当成拖拽 (层追鼠标跑 + 游戏被误暂停 + 隐形 proxy 吞输入)。
-    读物理键态做残留自愈; 探测失败按"按着"处理维持原行为。
-    """
+    # 物理鼠标主键是否按着 (GetAsyncKeyState 实测)。
+    #
+    # Tk input proxy 没有指针 grab, press 之后在 proxy 外释放 / colorkey
+    # shape 突变穿透都会丢 ButtonRelease — _drag_state 残留会把之后每次
+    # 划过面板都当成拖拽 (层追鼠标跑 + 游戏被误暂停 + 隐形 proxy 吞输入)。
+    # 读物理键态做残留自愈; 探测失败按"按着"处理维持原行为。
     try:
         import ctypes
         gaks = ctypes.windll.user32.GetAsyncKeyState
@@ -390,11 +389,10 @@ def _drawable_input_signature(
 
 
 def _compose_overlay_frame(overlays: list[Mapping[str, Any]]) -> tuple[str, bytes, int, int] | None:
-    """Compatibility helper used by focused tests.
-
-    Runtime uses per-node compositor layers, but this still returns the first
-    drawable frame so older smoke checks that imported the helper keep working.
-    """
+    # Compatibility helper used by focused tests.
+    #
+    # Runtime uses per-node compositor layers, but this still returns the first
+    # drawable frame so older smoke checks that imported the helper keep working.
     drawables = _iter_layer_drawables(overlays)
     if not drawables:
         return None
@@ -418,13 +416,12 @@ def _iter_canvas_nodes(spec: Mapping[str, Any]) -> list[Mapping[str, Any]]:
 
 
 class PluginUnifiedOverlayHost:
-    """Bridge plugin positioned overlay nodes into the unified GPU overlay.
-
-    Each canvas/rgba_frame node is rendered into its own compositor layer keyed
-    by plugin id plus node id (or a stable order fallback for invalid specs).
-    Menu open events only hide these layers temporarily; plugin enabled/disabled
-    state is untouched.
-    """
+    # Bridge plugin positioned overlay nodes into the unified GPU overlay.
+    #
+    # Each canvas/rgba_frame node is rendered into its own compositor layer keyed
+    # by plugin id plus node id (or a stable order fallback for invalid specs).
+    # Menu open events only hide these layers temporarily; plugin enabled/disabled
+    # state is untouched.
 
     def __init__(self, owner: Any, *, surface: str = "unioverlay", interval_ms: int = 16) -> None:
         self.owner = owner
@@ -607,13 +604,12 @@ class PluginUnifiedOverlayHost:
 
     @staticmethod
     def _force_real_host_passthrough(overlay: Any) -> bool:
-        """Keep plugin draggable layers local to their Tk input proxies.
-
-        Plugin positioned layers use Tk input proxies, so the overlay host
-        HWND must stay WS_EX_TRANSPARENT.  We call ``force_host_input_passthrough``
-        which queues the change on the compositor cmd_q, avoiding races with
-        ``sync_host_input_mode`` calls from overlay adapters.
-        """
+        # Keep plugin draggable layers local to their Tk input proxies.
+        #
+        # Plugin positioned layers use Tk input proxies, so the overlay host
+        # HWND must stay WS_EX_TRANSPARENT.  We call ``force_host_input_passthrough``
+        # which queues the change on the compositor cmd_q, avoiding races with
+        # ``sync_host_input_mode`` calls from overlay adapters.
         fn = getattr(overlay, "force_host_input_passthrough", None)
         if callable(fn):
             try:
@@ -719,7 +715,7 @@ class PluginUnifiedOverlayHost:
 
     @staticmethod
     def _alpha_hit(state: dict[str, Any], local_x: float, local_y: float, threshold: int = 10) -> bool:
-        """Return True if pixel at (local_x, local_y) has alpha above threshold."""
+        # Return True if pixel at (local_x, local_y) has alpha above threshold.
         bgra = state.get("frame_bgra")
         if bgra is None:
             return True

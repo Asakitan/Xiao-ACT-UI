@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""Regression coverage for Entity fisheye + floating panel interaction."""
+# Regression coverage for Entity fisheye + floating panel interaction.
 
 from __future__ import annotations
 

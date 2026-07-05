@@ -1,19 +1,18 @@
 # -*- coding: utf-8 -*-
-"""rewrite_raid_mechanics - 用全量dump数据重写raid机制示例的几何/检测/躲避链路。
-
-数据源:
-  exports/boss_raids/full_raid_mechanics_dump.json   (在线技能全量)
-  exports/boss_raids/deep_probe_results.json         (弹道形状/buff详情)
-  exports/boss_raids/raid_skill_geometry.json         (AI范围)
-  assets/name_tables/buff.json                       (buff名字)
-  assets/boss_raids/*机制示例.json                     (现有示例)
-
-链路:
-  Skill name ←→ Bullet name (fuzzy match) → BulletShape → geometry
-  AI range → fallback radius
-  Buff data → detect.buff_ids enrichment
-  ShapeType → dodge direction
-"""
+# rewrite_raid_mechanics - 用全量dump数据重写raid机制示例的几何/检测/躲避链路。
+#
+# 数据源:
+# exports/boss_raids/full_raid_mechanics_dump.json   (在线技能全量)
+# exports/boss_raids/deep_probe_results.json         (弹道形状/buff详情)
+# exports/boss_raids/raid_skill_geometry.json         (AI范围)
+# assets/name_tables/buff.json                       (buff名字)
+# assets/boss_raids/*机制示例.json                     (现有示例)
+#
+# 链路:
+# Skill name ←→ Bullet name (fuzzy match) → BulletShape → geometry
+# AI range → fallback radius
+# Buff data → detect.buff_ids enrichment
+# ShapeType → dodge direction
 from __future__ import annotations
 
 import argparse
@@ -56,7 +55,7 @@ SHAPE_DODGE = {
 
 
 def _shape_to_geometry(stype: int, sdata: List[float]) -> Dict:
-    """Convert BulletShape (type, data) → geometry dict."""
+    # Convert BulletShape (type, data) → geometry dict.
     shape_name = SHAPE_TYPE_NAME.get(stype, "")
     if not shape_name or not sdata:
         return {}
@@ -99,7 +98,7 @@ def _shape_to_geometry(stype: int, sdata: List[float]) -> Dict:
 
 
 def _ai_range_to_geometry(ai: List[float]) -> Dict:
-    """AiReleaseSkillRange [min, optMin, optMax, max] → rough geometry."""
+    # AiReleaseSkillRange [min, optMin, optMax, max] → rough geometry.
     if not ai or len(ai) < 4:
         return {}
     opt_max = ai[2]
@@ -119,7 +118,7 @@ def _normalize(s: str) -> str:
 
 
 def _match_score(skill_name: str, bullet_name: str) -> float:
-    """Fuzzy match score between a skill name and bullet name."""
+    # Fuzzy match score between a skill name and bullet name.
     sn = _normalize(skill_name)
     bn = _normalize(bullet_name)
     if not sn or not bn:
@@ -131,7 +130,7 @@ def _match_score(skill_name: str, bullet_name: str) -> float:
 
 
 def build_bullet_shape_map(deep: Dict) -> Dict[str, Dict]:
-    """bullet_name → best shape geometry."""
+    # bullet_name → best shape geometry.
     shapes = deep.get("bullet_shapes", {})
     bullets = deep.get("raid_bullets", {})
     result: Dict[str, Dict] = {}
@@ -159,7 +158,7 @@ def build_bullet_shape_map(deep: Dict) -> Dict[str, Dict]:
 
 def find_geometry_for_skill(skill_name: str, bullet_map: Dict[str, Dict],
                             ai_range: Optional[List[float]] = None) -> Dict:
-    """Find best geometry for a skill: bullet shape match → AI range fallback."""
+    # Find best geometry for a skill: bullet shape match → AI range fallback.
     best_score = 0.3
     best_geom = {}
     for bname, geom in bullet_map.items():
@@ -180,7 +179,7 @@ def find_geometry_for_skill(skill_name: str, bullet_map: Dict[str, Dict],
 
 def rewrite_file(filepath: str, dump: Dict, deep: Dict, geom_data: Dict,
                  buffs: Dict, dry_run: bool) -> int:
-    """Rewrite a single raid example file. Returns change count."""
+    # Rewrite a single raid example file. Returns change count.
     with open(filepath, "r", encoding="utf-8") as f:
         data = json.load(f)
 
@@ -311,7 +310,7 @@ def rewrite_file(filepath: str, dump: Dict, deep: Dict, geom_data: Dict,
 
 
 def _extract_keywords(mech_name: str) -> List[str]:
-    """Extract matching keywords from a mechanic name for buff lookup."""
+    # Extract matching keywords from a mechanic name for buff lookup.
     kw_map = {
         "分摊": ["分摊"],
         "致死": ["致死", "秒杀", "死亡"],

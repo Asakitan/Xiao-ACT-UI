@@ -1,17 +1,16 @@
 # -*- coding: utf-8 -*-
-"""Live probe: read displayed combat HP/break/state via Panda.Hud.HudGmRender.
-
-Resolves classes by NAME via Il2CppMetadataRegistration.types[] (the il2cpp global
-type table) -> works for HudGm/HudGmRender which aren't in script.json's TypeInfo
-list. Version-robust except the MR address, which is passed in (from the dumper:
-MetadataRegistration VA 0x1888b20d0 - image base 0x180000000 = RVA 0x88b20d0).
-
-Structural path:
-  HudGmRender (ZSingleton)  hudGmDict_ : ZDictionary<long, HudGm> @ +0x10
-  HudGm  gmData_@0x70 -> State@0x70 MaxHp@0x78 CurHp@0x80 MaxBreak@0x88 CurBreak@0x8C
-         uuid_@0xA0  configId_@0xA8
-ZDictionary<long,V>: entries_@+0x20, count_@+0x38; Entry{hash@0,next@4,key@8,val@0x10,sz0x18}
-"""
+# Live probe: read displayed combat HP/break/state via Panda.Hud.HudGmRender.
+#
+# Resolves classes by NAME via Il2CppMetadataRegistration.types[] (the il2cpp global
+# type table) -> works for HudGm/HudGmRender which aren't in script.json's TypeInfo
+# list. Version-robust except the MR address, which is passed in (from the dumper:
+# MetadataRegistration VA 0x1888b20d0 - image base 0x180000000 = RVA 0x88b20d0).
+#
+# Structural path:
+# HudGmRender (ZSingleton)  hudGmDict_ : ZDictionary<long, HudGm> @ +0x10
+# HudGm  gmData_@0x70 -> State@0x70 MaxHp@0x78 CurHp@0x80 MaxBreak@0x88 CurBreak@0x8C
+# uuid_@0xA0  configId_@0xA8
+# ZDictionary<long,V>: entries_@+0x20, count_@+0x38; Entry{hash@0,next@4,key@8,val@0x10,sz0x18}
 from __future__ import annotations
 import argparse, sys, os
 _HERE=os.path.dirname(os.path.abspath(__file__)); _ROOT=os.path.dirname(_HERE)

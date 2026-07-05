@@ -1,11 +1,10 @@
 # -*- coding: utf-8 -*-
-"""Shared ACT trigger/timer evaluator for WebView and Entity modes.
-
-The engine consumes the normalized ``render_spec`` produced by
-``combat_analytics`` and emits small alert/timer event dictionaries.  It has no
-UI dependency: webview and tkinter/entity overlays can display the same events
-without duplicating trigger logic.
-"""
+# Shared ACT trigger/timer evaluator for WebView and Entity modes.
+#
+# The engine consumes the normalized ``render_spec`` produced by
+# ``combat_analytics`` and emits small alert/timer event dictionaries.  It has no
+# UI dependency: webview and tkinter/entity overlays can display the same events
+# without duplicating trigger logic.
 
 from __future__ import annotations
 
@@ -127,7 +126,7 @@ def normalize_trigger_rule(raw: Any, fallback_index: int = 0) -> Dict[str, Any]:
 
 
 class ActTriggerEngine:
-    """Thread-safe evaluator for ACT alert/timer rules."""
+    # Thread-safe evaluator for ACT alert/timer rules.
 
     def __init__(self, rules: Optional[Iterable[Dict[str, Any]]] = None,
                  max_recent: int = 100,

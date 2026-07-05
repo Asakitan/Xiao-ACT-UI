@@ -1,8 +1,8 @@
 # -*- coding: utf-8 -*-
-"""Persisted aggregation of observed boss skills/mechanics, keyed scene → boss →
-observation. Survives restarts so the reaction editor can browse every boss seen
-on every map. Skill identity is the memory/TCP base_id (authoritative); names and
-type tags are best-effort. Atomic writes + RLock mirror net.tcp_name_cache."""
+# Persisted aggregation of observed boss skills/mechanics, keyed scene → boss →
+# observation. Survives restarts so the reaction editor can browse every boss seen
+# on every map. Skill identity is the memory/TCP base_id (authoritative); names and
+# type tags are best-effort. Atomic writes + RLock mirror net.tcp_name_cache.
 from __future__ import annotations
 
 import json
@@ -41,7 +41,7 @@ def _now() -> float:
 
 
 class BossSkillStore:
-    """Thread-safe, disk-backed scene→boss→observation aggregation."""
+    # Thread-safe, disk-backed scene→boss→observation aggregation.
 
     def __init__(self, path: Optional[str] = None, autosave_interval: float = 5.0):
         self._lock = threading.RLock()
@@ -103,8 +103,8 @@ class BossSkillStore:
                 tags: Optional[List[str]] = None, duration_ms: Optional[int] = None,
                 hp_pct: Optional[float] = None, elapsed_s: Optional[float] = None,
                 max_hp: int = 0) -> None:
-        """Upsert one observation. Counts repeats, unions tags, tracks HP%/time
-        spread so the editor can mark blood-line / timed cues."""
+        # Upsert one observation. Counts repeats, unions tags, tracks HP%/time
+        # spread so the editor can mark blood-line / timed cues.
         scene_key = str(scene_key or "0")
         with self._lock:
             scenes = self._data.setdefault("scenes", {})
@@ -198,9 +198,9 @@ class BossSkillStore:
             return sorted(out, key=lambda b: -b["last_seen"])
 
     def observations(self, scene_key: Optional[str], boss_base_id: int) -> List[Dict[str, Any]]:
-        """Display-ready observations for one boss (optionally scoped to a scene),
-        with derived blood-line / timed tags merged in. Sorted mechanics/states
-        first, then by count."""
+        # Display-ready observations for one boss (optionally scoped to a scene),
+        # with derived blood-line / timed tags merged in. Sorted mechanics/states
+        # first, then by count.
         bkey = str(int(boss_base_id or 0))
         with self._lock:
             scenes = self._data.get("scenes", {})

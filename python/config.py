@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""Shared configuration and settings helpers for SAO Auto."""
+# Shared configuration and settings helpers for SAO Auto.
 
 import filecmp
 import os
@@ -74,7 +74,7 @@ except Exception:
 
 
 def _files_are_identical(left: str, right: str) -> bool:
-    """Return True only when two files are byte-for-byte identical."""
+    # Return True only when two files are byte-for-byte identical.
     try:
         return filecmp.cmp(left, right, shallow=False)
     except Exception:
@@ -82,12 +82,11 @@ def _files_are_identical(left: str, right: str) -> bool:
 
 
 def _is_main_app_host() -> bool:
-    """v2.1.2-k: 只有当宿主进程是 XiaoACTUI 主程序时, 才允许动 update.exe.
-
-    update.exe 自己也会 import config (它被 PyInstaller 一起打包),
-    如果在 update.exe 进程里跑 promote 逻辑, 会 rename/replace 自己,
-    导致 update.exe 启动后 "凭空消失"。
-    """
+    # v2.1.2-k: 只有当宿主进程是 XiaoACTUI 主程序时, 才允许动 update.exe.
+    #
+    # update.exe 自己也会 import config (它被 PyInstaller 一起打包),
+    # 如果在 update.exe 进程里跑 promote 逻辑, 会 rename/replace 自己,
+    # 导致 update.exe 启动后 "凭空消失"。
     if not getattr(sys, "frozen", False):
         return False
     try:
@@ -101,7 +100,7 @@ def _is_main_app_host() -> bool:
 
 
 def _promote_update_exe_new_early() -> bool:
-    """Finalize update.exe.new at process bootstrap without touching old update.exe otherwise."""
+    # Finalize update.exe.new at process bootstrap without touching old update.exe otherwise.
     try:
         if not _is_main_app_host():
             return False
@@ -163,16 +162,15 @@ def _promote_update_exe_new_early() -> bool:
 
 
 def _promote_runtime_update_exe_early() -> bool:
-    """v2.1.2-h: bootstrap 把 runtime/update.exe 提升到顶层.
-
-    与 sao_updater.promote_runtime_update_exe 等价, 但放在 config 里
-    保证最早被调用 (大多数模块都 import config). 解决用户反馈的
-    "升级后 update.exe 没替换" — 之前依赖 sao_updater 的延迟 import
-    路径, 在 webview/atexit 没触发时就跑不到。
-
-    v2.1.2-k: 仅在主程序 (XiaoACTUI) 进程里运行, 防止 update.exe
-    自己 promote 自己导致被删除。
-    """
+    # v2.1.2-h: bootstrap 把 runtime/update.exe 提升到顶层.
+    #
+    # 与 sao_updater.promote_runtime_update_exe 等价, 但放在 config 里
+    # 保证最早被调用 (大多数模块都 import config). 解决用户反馈的
+    # "升级后 update.exe 没替换" — 之前依赖 sao_updater 的延迟 import
+    # 路径, 在 webview/atexit 没触发时就跑不到。
+    #
+    # v2.1.2-k: 仅在主程序 (XiaoACTUI) 进程里运行, 防止 update.exe
+    # 自己 promote 自己导致被删除。
     try:
         if not _is_main_app_host():
             return False
@@ -217,19 +215,18 @@ except Exception:
 
 
 def _promote_pending_replacements() -> int:
-    """v2.1.2-j: 扫描 BASE_DIR 下所有 *.new 文件并 finalize.
-
-    场景:
-      - 旧 update.exe 用 os.replace 覆盖 SAOUI.ttf 失败 → 我们的新 update_apply
-        把它 stage 到 SAOUI.ttf.new。
-      - 旧 update.exe 处理 update.exe 自身时, 失败时 fallback 留下 update.exe.new
-        (之前由 MoveFileEx DELAY_UNTIL_REBOOT 排队, 但用户要求重启前完成)。
-    主程序 XiaoACTUI 启动到这里时, 之前持锁的进程已完全退出, 可以直接 rename。
-    返回 finalize 成功的文件数。
-
-    v2.1.2-k: 仅在主程序 (XiaoACTUI) 进程里运行 — update.exe 自己 import
-    config 时若 finalize update.exe.new 会删除自己。
-    """
+    # v2.1.2-j: 扫描 BASE_DIR 下所有 *.new 文件并 finalize.
+    #
+    # 场景:
+    # - 旧 update.exe 用 os.replace 覆盖 SAOUI.ttf 失败 → 我们的新 update_apply
+    # 把它 stage 到 SAOUI.ttf.new。
+    # - 旧 update.exe 处理 update.exe 自身时, 失败时 fallback 留下 update.exe.new
+    # (之前由 MoveFileEx DELAY_UNTIL_REBOOT 排队, 但用户要求重启前完成)。
+    # 主程序 XiaoACTUI 启动到这里时, 之前持锁的进程已完全退出, 可以直接 rename。
+    # 返回 finalize 成功的文件数。
+    #
+    # v2.1.2-k: 仅在主程序 (XiaoACTUI) 进程里运行 — update.exe 自己 import
+    # config 时若 finalize update.exe.new 会删除自己。
     if not _is_main_app_host():
         return 0
     finalized = 0
@@ -279,11 +276,11 @@ except Exception:
 
 
 def _cleanup_old_renamed_targets() -> int:
-    """v2.1.2-n: 清理 schedule_apply_on_exit 留下的 ``<name>.old-<ts>`` 文件.
-
-    主程序在退出前 rename 字体/DLL 让老 update.exe 能直接 os.replace,
-    本进程持有的 GDI/loader handle 在主进程退出后释放, 重新启动时
-    这些 .old-<ts> 文件已经无人持有, 可以安全删除避免堆积。"""
+    # v2.1.2-n: 清理 schedule_apply_on_exit 留下的 ``<name>.old-<ts>`` 文件.
+    #
+    # 主程序在退出前 rename 字体/DLL 让老 update.exe 能直接 os.replace,
+    # 本进程持有的 GDI/loader handle 在主进程退出后释放, 重新启动时
+    # 这些 .old-<ts> 文件已经无人持有, 可以安全删除避免堆积。
     if not _is_main_app_host():
         return 0
     import re as _re
@@ -314,12 +311,12 @@ except Exception:
 
 
 def _cleanup_orphan_swap_scripts() -> int:
-    """v2.1.2-n: 清理 BASE_DIR 下残留的 _swap_update_*.cmd.
-
-    update.exe 自己被覆盖时, _schedule_self_replace 会 spawn 一个 cmd 脚本,
-    脚本末尾 `del /f /q "%~f0"` 应自删, 但偶尔 cmd.exe 没释放句柄就退出
-    (用户截图能看到 _swap_update_<ts>.cmd 残留)。主程序启动时, 旧 update.exe
-    及其 spawn 的 cmd 都已彻底退出, 直接清掉。"""
+    # v2.1.2-n: 清理 BASE_DIR 下残留的 _swap_update_*.cmd.
+    #
+    # update.exe 自己被覆盖时, _schedule_self_replace 会 spawn 一个 cmd 脚本,
+    # 脚本末尾 `del /f /q "%~f0"` 应自删, 但偶尔 cmd.exe 没释放句柄就退出
+    # (用户截图能看到 _swap_update_<ts>.cmd 残留)。主程序启动时, 旧 update.exe
+    # 及其 spawn 的 cmd 都已彻底退出, 直接清掉。
     if not _is_main_app_host():
         return 0
     cleaned = 0
@@ -343,10 +340,9 @@ except Exception:
     pass
 
 def get_main_executable() -> str:
-    """Return the path to the main application EXE.
-
-    Nuitka sets sys.executable to python.exe, not the compiled binary.
-    """
+    # Return the path to the main application EXE.
+    #
+    # Nuitka sets sys.executable to python.exe, not the compiled binary.
     exe = sys.executable
     if _is_frozen and os.path.basename(exe).lower() == 'python.exe':
         candidate = os.path.join(os.path.dirname(exe), 'XiaoACTUI.exe')
@@ -367,7 +363,7 @@ UPDATE_STATE_FILE = os.path.join(BASE_DIR, "update_state.json")
 
 
 def _runtime_first(*parts: str) -> str:
-    """返回资源路径: 优先 BASE_DIR (顶层模块化文件夹), 不存在则回退 BUNDLE_DIR."""
+    # 返回资源路径: 优先 BASE_DIR (顶层模块化文件夹), 不存在则回退 BUNDLE_DIR.
     if not parts:
         return BASE_DIR
     top = os.path.join(BASE_DIR, *parts)
@@ -400,7 +396,7 @@ UPDATE_TARGET = "windows-x64"
 
 WINDOW_TITLE = "SAO Auto - Game HUD"
 WINDOW_SIZE = "900x980"
-APP_VERSION = "5.2.12"
+APP_VERSION = "5.2.13"
 APP_VERSION_LABEL = f"v{APP_VERSION}"
 # 完整版本历史见 CHANGELOG.md。
 
@@ -473,14 +469,13 @@ _HOTKEY_MOD_ALIASES = {"CONTROL": "CTRL", "MENU": "ALT"}
 
 
 def parse_hotkey(spec):
-    """解析快捷键定义 → ``{'vk': int, 'mods': frozenset[str]}`` 或 None。
-
-    接受 ``"F5"`` / ``"CTRL+F5"`` / ``"Ctrl+Alt+F12"`` 字符串,
-    ``{'vk': N[, 'mods': [...]]}`` 自定义 VK dict, 以及插件映射的
-    ``{'key': 'CTRL+F8'}`` 形式。字符串主键限 ``HOTKEY_FKEY_VK`` 中的命名键
-    (如 F1-F12 / HOME 等) 或 ``HOTKEY_CHAR_VK`` 的字母/数字 (必须搭配
-    修饰键; dict 的 vk 不限); 解析失败返回 None, 该绑定不触发。
-    """
+    # 解析快捷键定义 → ``{'vk': int, 'mods': frozenset[str]}`` 或 None。
+    #
+    # 接受 ``"F5"`` / ``"CTRL+F5"`` / ``"Ctrl+Alt+F12"`` 字符串,
+    # ``{'vk': N[, 'mods': [...]]}`` 自定义 VK dict, 以及插件映射的
+    # ``{'key': 'CTRL+F8'}`` 形式。字符串主键限 ``HOTKEY_FKEY_VK`` 中的命名键
+    # (如 F1-F12 / HOME 等) 或 ``HOTKEY_CHAR_VK`` 的字母/数字 (必须搭配
+    # 修饰键; dict 的 vk 不限); 解析失败返回 None, 该绑定不触发。
     if isinstance(spec, dict):
         raw_vk = spec.get("vk")
         if raw_vk:
@@ -533,11 +528,10 @@ except Exception:
 
 
 def normalize_hotkey(spec):
-    """规范化拼写 → ``'CTRL+ALT+F5'`` (修饰键固定 CTRL,ALT,SHIFT 序)。
-
-    'control + f8' / 'MENU+F5' 等别名拼写都收敛到唯一形式, 占用表和
-    冲突拒绝才能按字符串比较。主键不是已支持的命名键或解析失败返回 None。
-    """
+    # 规范化拼写 → ``'CTRL+ALT+F5'`` (修饰键固定 CTRL,ALT,SHIFT 序)。
+    #
+    # 'control + f8' / 'MENU+F5' 等别名拼写都收敛到唯一形式, 占用表和
+    # 冲突拒绝才能按字符串比较。主键不是已支持的命名键或解析失败返回 None。
     parsed = parse_hotkey(spec)
     if not parsed:
         return None
@@ -552,11 +546,10 @@ def normalize_hotkey(spec):
 
 
 def hotkey_mods_down(pressed_vks=frozenset()):
-    """当前按住的修饰键集合 (如 ``{'CTRL'}``)。
-
-    优先 GetAsyncKeyState 实测; 不可用 (非 Windows / ctypes 失败) 时
-    回退从 ``pressed_vks`` 推断。
-    """
+    # 当前按住的修饰键集合 (如 ``{'CTRL'}``)。
+    #
+    # 优先 GetAsyncKeyState 实测; 不可用 (非 Windows / ctypes 失败) 时
+    # 回退从 ``pressed_vks`` 推断。
     if _HOTKEY_GAKS is not None:
         try:
             return {m for m, vks in HOTKEY_MODIFIER_VKS.items()
@@ -568,13 +561,12 @@ def hotkey_mods_down(pressed_vks=frozenset()):
 
 
 def hotkey_matches(parsed, pressed_vks, mods_down=None):
-    """子集匹配: 主键按下 + 要求的修饰键全按住; 多余的修饰键不挡触发。
-
-    多余修饰键不挡是刻意的: 躲避自动化会注入 SHIFT, 急停键 (纯 F12)
-    必须在 Shift 被按住时照样触发。'F5' 与 'CTRL+F5' 的互斥共存由调度
-    方负责 — 同主键多个候选命中时用 ``select_hotkey_match`` 取修饰键
-    最多的 (最特异优先), Ctrl+F5 命中组合而不是裸键。
-    """
+    # 子集匹配: 主键按下 + 要求的修饰键全按住; 多余的修饰键不挡触发。
+    #
+    # 多余修饰键不挡是刻意的: 躲避自动化会注入 SHIFT, 急停键 (纯 F12)
+    # 必须在 Shift 被按住时照样触发。'F5' 与 'CTRL+F5' 的互斥共存由调度
+    # 方负责 — 同主键多个候选命中时用 ``select_hotkey_match`` 取修饰键
+    # 最多的 (最特异优先), Ctrl+F5 命中组合而不是裸键。
     if not parsed or parsed["vk"] not in pressed_vks:
         return False
     if mods_down is None:
@@ -583,11 +575,10 @@ def hotkey_matches(parsed, pressed_vks, mods_down=None):
 
 
 def select_hotkey_match(candidates, pressed_vks, mods_down=None):
-    """从 ``[(parsed, payload), ...]`` 里选出命中的最特异绑定的 payload。
-
-    并列特异度取先出现的 — 调用方把内置绑定排在插件绑定前面即保持
-    内置优先的既有语义。无命中返回 None。
-    """
+    # 从 ``[(parsed, payload), ...]`` 里选出命中的最特异绑定的 payload。
+    #
+    # 并列特异度取先出现的 — 调用方把内置绑定排在插件绑定前面即保持
+    # 内置优先的既有语义。无命中返回 None。
     if mods_down is None:
         mods_down = hotkey_mods_down(pressed_vks)
     best = None
@@ -660,8 +651,8 @@ class SettingsManager:
             self._data = {}
 
     def get_load_error(self) -> str:
-        """Non-empty if settings.json failed to parse at load time and was
-        reset to defaults (a .corrupt backup was written alongside it)."""
+        # Non-empty if settings.json failed to parse at load time and was
+        # reset to defaults (a .corrupt backup was written alongside it).
         return self._load_error
 
     def get(self, key: str, default: Any = None) -> Any:

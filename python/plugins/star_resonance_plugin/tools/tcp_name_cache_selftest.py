@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""Contract tests for net.tcp_name_cache."""
+# Contract tests for net.tcp_name_cache.
 from __future__ import annotations
 
 import json
@@ -342,9 +342,9 @@ class TcpNameCacheTests(unittest.TestCase):
         self.assertFalse(os.path.exists(os.path.join(out_dir, "boss_status.json")))
 
     def test_full_rebuild_is_self_contained_without_neighbour_repo(self) -> None:
-        """A full rebuild must rely ONLY on our project (committed tables + parse
-        cache): with the neighbour StarResonanceDps/resonance dirs pointed at an
-        empty path, it must not empty our tables (no classifier degradation)."""
+        # A full rebuild must rely ONLY on our project (committed tables + parse
+        # cache): with the neighbour StarResonanceDps/resonance dirs pointed at an
+        # empty path, it must not empty our tables (no classifier degradation).
         from tools.tablekit import hybrid_name_tables
         import shutil
 

@@ -1,9 +1,8 @@
 # -*- coding: utf-8 -*-
-"""Audit live name-table mapping effectiveness.
-
-The audit intentionally treats runtime pointers as evidence only.  Consumers
-must use stable fields such as kind/id/text/confidence/index, not heap addresses.
-"""
+# Audit live name-table mapping effectiveness.
+#
+# The audit intentionally treats runtime pointers as evidence only.  Consumers
+# must use stable fields such as kind/id/text/confidence/index, not heap addresses.
 from __future__ import annotations
 
 import argparse

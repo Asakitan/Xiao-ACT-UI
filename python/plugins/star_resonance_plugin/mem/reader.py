@@ -1,20 +1,19 @@
-"""MemoryReader — 双轨对比 PoC.
-
-从 anchors.json 读取已定位的 self HP / MaxHP / (可选) UID 地址,
-后台轮询 ReadProcessMemory, 与 PacketBridge 提供的 TCP ground truth 比对,
-结果只写入日志, 不接入 GUI / DPS / Boss 任何主链路。
-
-启动方式:
-    1. 命令行独立: python -m tools.mem_probe.reader  (会自启 PacketBridge 做对比)
-    2. 主程序集成: 当 config.MEM_PROBE_ENABLED=True, main.py 在 bridge 启动后
-       调用 attach_to(state_mgr, parser_provider) 启动后台对比线程
-       (本 PoC 阶段不在 main.py 接入, 留 hook)
-
-输出:
-    sao_auto/perf_probe.log 风格, 每条:
-        [mem-vs-tcp] ts=... hp mem=12345 tcp=12345 dt=2ms
-        [mem-vs-tcp] DRIFT hp mem=12300 tcp=12345 (game updated, mem stale)
-"""
+# MemoryReader — 双轨对比 PoC.
+#
+# 从 anchors.json 读取已定位的 self HP / MaxHP / (可选) UID 地址,
+# 后台轮询 ReadProcessMemory, 与 PacketBridge 提供的 TCP ground truth 比对,
+# 结果只写入日志, 不接入 GUI / DPS / Boss 任何主链路。
+#
+# 启动方式:
+# 1. 命令行独立: python -m tools.mem_probe.reader  (会自启 PacketBridge 做对比)
+# 2. 主程序集成: 当 config.MEM_PROBE_ENABLED=True, main.py 在 bridge 启动后
+# 调用 attach_to(state_mgr, parser_provider) 启动后台对比线程
+# (本 PoC 阶段不在 main.py 接入, 留 hook)
+#
+# 输出:
+# sao_auto/perf_probe.log 风格, 每条:
+# [mem-vs-tcp] ts=... hp mem=12345 tcp=12345 dt=2ms
+# [mem-vs-tcp] DRIFT hp mem=12300 tcp=12345 (game updated, mem stale)
 
 from __future__ import annotations
 
@@ -38,10 +37,9 @@ DEFAULT_LOG = os.path.join(_SAO_AUTO_ROOT, "perf_probe.log")
 
 # ───────────────────────── Reader ─────────────────────────
 class MemoryReader:
-    """50ms 轮询 self HP/MaxHP 的后台线程, 通过回调暴露读到的值.
-
-    读失败/进程消失时自动停, 不抛。
-    """
+    # 50ms 轮询 self HP/MaxHP 的后台线程, 通过回调暴露读到的值.
+    #
+    # 读失败/进程消失时自动停, 不抛。
 
     def __init__(
         self,

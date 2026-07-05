@@ -1,49 +1,48 @@
 # -*- coding: utf-8 -*-
-"""mem_config_table_reader - route-2: read the game's own config tables (id -> name).
-
-The offline JSON name tables have gaps. The game itself holds the authoritative id->name
-in its config tables (MonsterTable / NpcTable / DummyTable / SkillTable / BuffTable). This
-reads them straight from memory so we can overlay-fill the JSON.
-
-Structure (RE'd from dump fdc7111b + il2cpp.h disasm, see route2 research):
-
-  SceneConfigMgr (ZSingleton, dump.cs:65596) holds the scene tables as fields:
-    monsterTable_ @0x50  npcTable_ @0x58  dummyTable_ @0x80  ...  : ZTable<int, *TableBase>
-  ZTable<K,V> (dump.cs:920090): _datas @0x28 is a std .NET Dictionary<long, object>
-    (the row store; reuse the standard dict walk).
-  Each dict value is a *TableBase row object that is FIELDLESS ({klass@0, monitor@8}).
-  The row's data lives in a serialized ZLoader blob; a ReadProxy id is cached in the row's
-  MONITOR slot (row+0x8). Resolve it through TableProxyManager static fields:
-    id   = read_i32(row+0x8)                         # >0 (0 == never loaded -> skip)
-    page = (id-1) >> 10 ; slot = (id-1) & 0x3FF
-    sf      = read_u64(proxymgr_klass + STATIC_FIELDS_OFF)
-    proxies = read_u64(sf + 0x8)                      # object[][]
-    inner   = read_u64(proxies + 0x20 + page*8)      # object[]
-    proxy   = inner + 0x20 + slot*12                  # ReadProxy{loaderIdx@0, baseOff@4, len@8}
-    loaders = read_u64(sf + 0x18)                     # object[] of ZLoader
-    zloader = read_u64(loaders + 0x20 + loaderIdx*8)
-    mem     = read_u64(zloader + 0x108)               # ZLoader.Memory._object (byte[])
-    midx    = read_i32(zloader + 0x110)               # ZLoader.Memory._index
-    blob    = mem + 0x20 + midx + baseOff             # row's serialized columns
-    Id   = read_i32(blob + ID_COL)                    # col 0 for all tables
-    NameMlId = read_i32(blob + NAME_COL[kind])        # MLString id (NOT a string ptr)
-  NameMlId -> CN string is resolved via MLStringPoolBridge (the extra hop, TODO/verify).
-
-Class-FIELD offsets (SceneConfigMgr tables, TableProxyManager statics, ZLoader
-members) resolve through auto_offsets (live field table -> dump bundle -> the
-literals below). Row blob COLUMN offsets are not class fields; they come from
-table_columns (getter-thunk extraction, versioned cache, curated fallback).
-
-Beyond the original selftest walk this module provides:
-  - col_i32 / col_mlid / col_i32_array: typed column readers over a row blob
-    (Int32Array columns decode through ZLoader.IntArrayPool).
-  - iter_rows(class_full_name): heap-scan row instances -> (row, zloader, blob).
-  - iter_rows_via_loader(class_full_name): walk ZLoader._offsets (the full
-    serialized row set, including rows the game never instantiated).
-  - TABLE_CLASS: kind -> row-class registry for the global config tables.
-
-Run:  python -m mem_probe.il2cpp.mem_config_table_reader
-"""
+# mem_config_table_reader - route-2: read the game's own config tables (id -> name).
+#
+# The offline JSON name tables have gaps. The game itself holds the authoritative id->name
+# in its config tables (MonsterTable / NpcTable / DummyTable / SkillTable / BuffTable). This
+# reads them straight from memory so we can overlay-fill the JSON.
+#
+# Structure (RE'd from dump fdc7111b + il2cpp.h disasm, see route2 research):
+#
+# SceneConfigMgr (ZSingleton, dump.cs:65596) holds the scene tables as fields:
+# monsterTable_ @0x50  npcTable_ @0x58  dummyTable_ @0x80  ...  : ZTable<int, *TableBase>
+# ZTable<K,V> (dump.cs:920090): _datas @0x28 is a std .NET Dictionary<long, object>
+# (the row store; reuse the standard dict walk).
+# Each dict value is a *TableBase row object that is FIELDLESS ({klass@0, monitor@8}).
+# The row's data lives in a serialized ZLoader blob; a ReadProxy id is cached in the row's
+# MONITOR slot (row+0x8). Resolve it through TableProxyManager static fields:
+# id   = read_i32(row+0x8)                         # >0 (0 == never loaded -> skip)
+# page = (id-1) >> 10 ; slot = (id-1) & 0x3FF
+# sf      = read_u64(proxymgr_klass + STATIC_FIELDS_OFF)
+# proxies = read_u64(sf + 0x8)                      # object[][]
+# inner   = read_u64(proxies + 0x20 + page*8)      # object[]
+# proxy   = inner + 0x20 + slot*12                  # ReadProxy{loaderIdx@0, baseOff@4, len@8}
+# loaders = read_u64(sf + 0x18)                     # object[] of ZLoader
+# zloader = read_u64(loaders + 0x20 + loaderIdx*8)
+# mem     = read_u64(zloader + 0x108)               # ZLoader.Memory._object (byte[])
+# midx    = read_i32(zloader + 0x110)               # ZLoader.Memory._index
+# blob    = mem + 0x20 + midx + baseOff             # row's serialized columns
+# Id   = read_i32(blob + ID_COL)                    # col 0 for all tables
+# NameMlId = read_i32(blob + NAME_COL[kind])        # MLString id (NOT a string ptr)
+# NameMlId -> CN string is resolved via MLStringPoolBridge (the extra hop, TODO/verify).
+#
+# Class-FIELD offsets (SceneConfigMgr tables, TableProxyManager statics, ZLoader
+# members) resolve through auto_offsets (live field table -> dump bundle -> the
+# literals below). Row blob COLUMN offsets are not class fields; they come from
+# table_columns (getter-thunk extraction, versioned cache, curated fallback).
+#
+# Beyond the original selftest walk this module provides:
+# - col_i32 / col_mlid / col_i32_array: typed column readers over a row blob
+# (Int32Array columns decode through ZLoader.IntArrayPool).
+# - iter_rows(class_full_name): heap-scan row instances -> (row, zloader, blob).
+# - iter_rows_via_loader(class_full_name): walk ZLoader._offsets (the full
+# serialized row set, including rows the game never instantiated).
+# - TABLE_CLASS: kind -> row-class registry for the global config tables.
+#
+# Run:  python -m mem_probe.il2cpp.mem_config_table_reader
 from __future__ import annotations
 
 import struct
@@ -130,7 +129,7 @@ def _plaus(p: Optional[int]) -> bool:
 
 
 class MemConfigTableReader:
-    """Read-only walker over the game's config tables (selftest/diagnostic stage)."""
+    # Read-only walker over the game's config tables (selftest/diagnostic stage).
 
     def __init__(self, dps_source):
         self._src = dps_source
@@ -269,7 +268,7 @@ class MemConfigTableReader:
 
     # ---- row blob resolution via ReadProxy + ZLoader ----
     def _row_proxy(self, row: int) -> Tuple[int, int]:
-        """row object -> (zloader, blob). (0, 0) when the row was never loaded."""
+        # row object -> (zloader, blob). (0, 0) when the row was never loaded.
         sf = self._proxymgr_static_fields()
         if not sf:
             return 0, 0
@@ -302,7 +301,7 @@ class MemConfigTableReader:
         return self._row_proxy(row)[1]
 
     def _loader_blob(self, zloader: int, base_off: int) -> int:
-        """ZLoader + blob offset -> absolute blob address (0 on failure)."""
+        # ZLoader + blob offset -> absolute blob address (0 on failure).
         off = self._offsets()
         mbase = zloader + off["zloader_mem"]
         mhdr = self.pm.read_bytes(mbase, POOL_MEM_IDX_OFF + 4)
@@ -321,11 +320,11 @@ class MemConfigTableReader:
         return self.pm.read_i32(blob + col)
 
     def col_u8(self, blob: int, col: Optional[int]) -> Optional[int]:
-        """单字节列 (bool / 小枚举如 IsAoe / SkillRangeType)。
-
-        ★bool/枚举列必须按 1 字节读: getter-thunk 的列偏移(table_columns auto-offset)
-        是对的, 但用 col_i32 读 4 字节会把相邻字段读进来(IsAoe 实测会读成 14592=
-        byte0+byte1<<8)。这是类型读法问题不是 offset 错。"""
+        # 单字节列 (bool / 小枚举如 IsAoe / SkillRangeType)。
+        #
+        # ★bool/枚举列必须按 1 字节读: getter-thunk 的列偏移(table_columns auto-offset)
+        # 是对的, 但用 col_i32 读 4 字节会把相邻字段读进来(IsAoe 实测会读成 14592=
+        # byte0+byte1<<8)。这是类型读法问题不是 offset 错。
         if not blob or col is None or col < 0:
             return None
         b = self.pm.read_bytes(blob + col, 1)
@@ -349,13 +348,13 @@ class MemConfigTableReader:
         return None if v is None else bool(v)
 
     def col_mlid(self, blob: int, col: Optional[int]) -> Optional[int]:
-        """MLString columns store an mlid (resolve via StringPoolBridge)."""
+        # MLString columns store an mlid (resolve via StringPoolBridge).
         return self.col_i32(blob, col)
 
     def col_i32_array(self, zloader: int, blob: int, col: Optional[int]) -> List[int]:
-        """Int32Array column: the i32 at blob+col is an offset into the row's
-        ZLoader.IntArrayPool; the pooled payload is i16 count + count*4 bytes.
-        Returns [] on any bound/plausibility failure."""
+        # Int32Array column: the i32 at blob+col is an offset into the row's
+        # ZLoader.IntArrayPool; the pooled payload is i16 count + count*4 bytes.
+        # Returns [] on any bound/plausibility failure.
         pool_off = self.col_i32(blob, col)
         if pool_off is None or pool_off < 0 or not _plaus(zloader):
             return []
@@ -383,8 +382,8 @@ class MemConfigTableReader:
         return list(struct.unpack(f"<{count}i", data))
 
     def col_f32_array(self, zloader: int, blob: int, col: Optional[int]) -> List[float]:
-        """NumberArray column: same layout as Int32Array but in NumberArrayPool
-        and values are IEEE 754 floats. Pool at ZLoader+0x48."""
+        # NumberArray column: same layout as Int32Array but in NumberArrayPool
+        # and values are IEEE 754 floats. Pool at ZLoader+0x48.
         pool_off = self.col_i32(blob, col)
         if pool_off is None or pool_off < 0 or not _plaus(zloader):
             return []
@@ -412,9 +411,9 @@ class MemConfigTableReader:
         return [round(v, 6) for v in struct.unpack(f"<{count}f", data)]
 
     def col_string(self, zloader: int, blob: int, col: Optional[int]) -> str:
-        """String column: the i32 at blob+col is an offset into the row's
-        ZLoader.StringPool; the pooled payload is i16 length + utf8 bytes.
-        Returns "" on any bound/plausibility failure."""
+        # String column: the i32 at blob+col is an offset into the row's
+        # ZLoader.StringPool; the pooled payload is i16 length + utf8 bytes.
+        # Returns "" on any bound/plausibility failure.
         pool_off = self.col_i32(blob, col)
         if pool_off is None or pool_off < 0 or not _plaus(zloader):
             return ""
@@ -450,10 +449,10 @@ class MemConfigTableReader:
 
     def iter_rows(self, class_full_name: str, limit: Optional[int] = None,
                   max_hits: int = 100000) -> Iterator[Tuple[int, int, int]]:
-        """Heap-scan instantiated rows of a table class.
-
-        Yields (row_ptr, zloader, blob); rows whose ReadProxy was never loaded
-        (or klass-metadata false hits) are skipped."""
+        # Heap-scan instantiated rows of a table class.
+        #
+        # Yields (row_ptr, zloader, blob); rows whose ReadProxy was never loaded
+        # (or klass-metadata false hits) are skipped.
         kp = self._resolve_row_klass(class_full_name)
         if not kp or not self._proxymgr_static_fields():
             return
@@ -469,8 +468,8 @@ class MemConfigTableReader:
 
     def _loader_key_check(self, zloader: int, sample: int = 8,
                           min_ratio: float = 0.75) -> bool:
-        """A loader serves the table we think it does when its _offsets walk is
-        self-consistent: blob col0 (the row id) equals the dictionary key."""
+        # A loader serves the table we think it does when its _offsets walk is
+        # self-consistent: blob col0 (the row id) equals the dictionary key.
         n = ok = 0
         for key, _zl, blob in self.iter_rows_via_loader("", zloader=zloader):
             v = self.col_i32(blob, 0)
@@ -481,12 +480,12 @@ class MemConfigTableReader:
         return n > 0 and (ok / n) >= min_ratio
 
     def find_loader(self, class_full_name: str) -> int:
-        """The ZLoader serving a table class.
-
-        Resolved from instantiated rows' ReadProxy entries. Stale heap objects
-        can carry RECYCLED proxy ids that point into another table's loader, so
-        candidates are ranked by frequency and validated with _loader_key_check
-        before being trusted."""
+        # The ZLoader serving a table class.
+        #
+        # Resolved from instantiated rows' ReadProxy entries. Stale heap objects
+        # can carry RECYCLED proxy ids that point into another table's loader, so
+        # candidates are ranked by frequency and validated with _loader_key_check
+        # before being trusted.
         zl = self._loader_cache.get(class_full_name)
         if zl:
             return zl
@@ -507,7 +506,7 @@ class MemConfigTableReader:
         return ranked[0]
 
     def _dict_entries_i32(self, d: int) -> Iterator[Tuple[int, int]]:
-        """std .NET Dictionary<long, int> walk -> (key, value)."""
+        # std .NET Dictionary<long, int> walk -> (key, value).
         if not _plaus(d):
             return
         cnt = self.pm.read_i32(d + DICT_COUNT_OFF) or 0
@@ -530,12 +529,12 @@ class MemConfigTableReader:
 
     def iter_rows_via_loader(self, class_full_name: str,
                              zloader: int = 0) -> Iterator[Tuple[int, int, int]]:
-        """Walk the table's ZLoader._offsets (row key -> record index).
-
-        Covers EVERY serialized row, including ones the game never instantiated
-        (no heap object, ReadProxy id 0). Mirrors ZLoader.GetRowData:
-        ``blob = Memory + _bufferRange.offset + _offsets[key] * DataSize``.
-        Yields (row_key, zloader, blob)."""
+        # Walk the table's ZLoader._offsets (row key -> record index).
+        #
+        # Covers EVERY serialized row, including ones the game never instantiated
+        # (no heap object, ReadProxy id 0). Mirrors ZLoader.GetRowData:
+        # ``blob = Memory + _bufferRange.offset + _offsets[key] * DataSize``.
+        # Yields (row_key, zloader, blob).
         zl = zloader or self.find_loader(class_full_name)
         if not _plaus(zl):
             return
@@ -557,7 +556,7 @@ class MemConfigTableReader:
                 yield (key, zl, blob)
 
     def walk_raw(self, kind: str, limit: int = 20):
-        """Yield (dict_key, row_ptr, blob, Id, name_mlid) for the first rows (diagnostic)."""
+        # Yield (dict_key, row_ptr, blob, Id, name_mlid) for the first rows (diagnostic).
         mgr = self.locate_scenecfg()
         if not mgr:
             print("[cfgtable] SceneConfigMgr not located")

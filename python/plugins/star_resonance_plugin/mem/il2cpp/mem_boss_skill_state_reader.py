@@ -1,17 +1,16 @@
 # -*- coding: utf-8 -*-
-"""mem_boss_skill_state_reader - 读 boss 状态机当前出招 (ZStateSkillComp).
-
-★为什么需要它 (主人: 距离兜底肯定错): 很多 boss 的预警圈不是可读的 ZoneEnt(在 ECS/技能
-特效里), zoneDict_ 读不到 → 精准出圈无信号源。但 boss **正在出什么招**是状态机里实时可读的:
-`ZStateSkillComp.curSkillId_`(当前技能id) + `curStageId_`(阶段)。这就是机制/预警圈的真正
-驱动源——boss 出招=预警圈出现, 招结束=圈消失。
-
-于是躲避停止条件可以从"距离"(错: 锥/线/扇形到圆心距离无意义)换成**"招式生命周期"**:
-boss 出危险招时躲, curSkillId_ 变回待机(0/1)或换招即停。无论圈什么形状都对。
-
-全 auto-offset: curSkillId_/curStageId_ 偏移从活 ZStateSkillComp 对象 klass 字段表解。
-实测活体: boss 出招 skill=6920001(stage 0↔1)/6920012; 待机 curSkillId_∈{0,1}。
-"""
+# mem_boss_skill_state_reader - 读 boss 状态机当前出招 (ZStateSkillComp).
+#
+# ★为什么需要它 (主人: 距离兜底肯定错): 很多 boss 的预警圈不是可读的 ZoneEnt(在 ECS/技能
+# 特效里), zoneDict_ 读不到 → 精准出圈无信号源。但 boss **正在出什么招**是状态机里实时可读的:
+# `ZStateSkillComp.curSkillId_`(当前技能id) + `curStageId_`(阶段)。这就是机制/预警圈的真正
+# 驱动源——boss 出招=预警圈出现, 招结束=圈消失。
+#
+# 于是躲避停止条件可以从"距离"(错: 锥/线/扇形到圆心距离无意义)换成**"招式生命周期"**:
+# boss 出危险招时躲, curSkillId_ 变回待机(0/1)或换招即停。无论圈什么形状都对。
+#
+# 全 auto-offset: curSkillId_/curStageId_ 偏移从活 ZStateSkillComp 对象 klass 字段表解。
+# 实测活体: boss 出招 skill=6920001(stage 0↔1)/6920012; 待机 curSkillId_∈{0,1}。
 from __future__ import annotations
 
 from typing import Dict, Optional
@@ -57,12 +56,12 @@ class BossSkillStateReader:
             return 0
 
     def cached_comp(self, ent_obj: int) -> tuple:
-        """返回缓存的 (comp_ptr, klass_ptr)，无缓存返回 (0, 0)。"""
+        # 返回缓存的 (comp_ptr, klass_ptr)，无缓存返回 (0, 0)。
         return self._comp_cache.get(ent_obj, (0, 0))
 
     def validate_comp_fast(self, comp: int, klass_val: int) -> bool:
-        """O(1) klass 指针比较验证 (0 RPM — klass_val 由调用方 batch 读出)。
-        klass ptr 变化(entity 池化复用)时返回 False, 调用方走完整 _skill_comp 重扫。"""
+        # O(1) klass 指针比较验证 (0 RPM — klass_val 由调用方 batch 读出)。
+        # klass ptr 变化(entity 池化复用)时返回 False, 调用方走完整 _skill_comp 重扫。
         for _k, (cp, kp) in self._comp_cache.items():
             if cp == comp:
                 return kp != 0 and kp == klass_val
@@ -102,18 +101,18 @@ class BossSkillStateReader:
             self._off_stage = 0x64
 
     def ensure_offsets(self, comp: int = 0) -> None:
-        """确保 _off_skill/_off_stage 已解析 (供外部 batch 路径调用)。"""
+        # 确保 _off_skill/_off_stage 已解析 (供外部 batch 路径调用)。
         self._resolve_offsets(comp)
 
     def read_skill_fields(self, comp: int) -> tuple:
-        """直接读 skill/stage 字段, 不做 comp 验证 (调用方已验证)。返回 (skill_id, stage_id)。"""
+        # 直接读 skill/stage 字段, 不做 comp 验证 (调用方已验证)。返回 (skill_id, stage_id)。
         self._resolve_offsets(comp)
         sid = self._pm.read_i32(comp + self._off_skill)
         stage = self._pm.read_i32(comp + self._off_stage)
         return (int(sid) if sid is not None else 0, int(stage or 0))
 
     def read_skill_cast(self, ent_obj: int) -> Optional[Dict]:
-        """返回 {skill_id, stage_id} (boss 当前出招); 待机/读不到返回 None。"""
+        # 返回 {skill_id, stage_id} (boss 当前出招); 待机/读不到返回 None。
         try:
             comp = self._skill_comp(ent_obj)
             if not comp:

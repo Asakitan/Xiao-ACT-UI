@@ -1,21 +1,20 @@
-"""static_resolver - 统一 API: dump.cs 偏移 + script.json RVA + 进程内存读.
-
-核心抽象:
-    sr = StaticResolver(pm, ga_base, script_index, dump_cs_index)
-    klass = sr.resolve_klass("Zproto.CharSerialize")    # *(GA + RVA)
-    objs  = sr.find_instances(klass)                    # heap scan
-    cid   = sr.read_field(obj, "CharSerialize", "CharId")
-    attr  = sr.read_ptr_field(obj, "CharSerialize", "Attr")
-    hp    = sr.read_field(attr, "UserFightAttr", "CurHp")
-
-字段类型 → 读法 (常用):
-    long / ulong / Int64 / UInt64        → i64 / u64
-    int  / uint  / Int32 / UInt32        → i32 / u32
-    float / Single                       → f32
-    bool / Boolean                       → u8 (1=true)
-    引用类型 (class)                     → ptr (u64)
-    string                               → ptr → utf16 length-prefixed
-"""
+# static_resolver - 统一 API: dump.cs 偏移 + script.json RVA + 进程内存读.
+#
+# 核心抽象:
+# sr = StaticResolver(pm, ga_base, script_index, dump_cs_index)
+# klass = sr.resolve_klass("Zproto.CharSerialize")    # *(GA + RVA)
+# objs  = sr.find_instances(klass)                    # heap scan
+# cid   = sr.read_field(obj, "CharSerialize", "CharId")
+# attr  = sr.read_ptr_field(obj, "CharSerialize", "Attr")
+# hp    = sr.read_field(attr, "UserFightAttr", "CurHp")
+#
+# 字段类型 → 读法 (常用):
+# long / ulong / Int64 / UInt64        → i64 / u64
+# int  / uint  / Int32 / UInt32        → i32 / u32
+# float / Single                       → f32
+# bool / Boolean                       → u8 (1=true)
+# 引用类型 (class)                     → ptr (u64)
+# string                               → ptr → utf16 length-prefixed
 from __future__ import annotations
 
 import os
@@ -91,7 +90,7 @@ class StaticResolver:
     }
 
     def _live_resolve(self, class_name: str) -> int:
-        """In-memory klass-by-name fallback (version-robust, no dump, onedir-safe)."""
+        # In-memory klass-by-name fallback (version-robust, no dump, onedir-safe).
         if self._live_index is None:
             try:
                 # Shared process index: one GA scan for the union of critical
@@ -131,10 +130,9 @@ class StaticResolver:
 
     def find_instances(self, klass_ptr: int, max_region: Optional[int] = None,
                        max_hits: int = 4096, progress: bool = False) -> List[int]:
-        """全私有读区扫描 *(addr) == klass_ptr.
-
-        内层走 cy_memscan.find_aligned_u64 (AVX2: ~16 GB/s).
-        """
+        # 全私有读区扫描 *(addr) == klass_ptr.
+        #
+        # 内层走 cy_memscan.find_aligned_u64 (AVX2: ~16 GB/s).
         hits: List[int] = []
         t0 = time.time()
         bytes_scanned = 0
@@ -176,10 +174,9 @@ class StaticResolver:
 
     def find_self(self, class_name: str, sentinel_field: str,
                   sentinel_class: str, max_hits: int = 2048) -> List[tuple]:
-        """找 class 实例, 用 sentinel_field@offset 解引用必须指向 sentinel_class.
-
-        返回 [(obj, sentinel_obj), ...]. 通常 sentinel 验证后只剩 1 个真实对象.
-        """
+        # 找 class 实例, 用 sentinel_field@offset 解引用必须指向 sentinel_class.
+        #
+        # 返回 [(obj, sentinel_obj), ...]. 通常 sentinel 验证后只剩 1 个真实对象.
         kp = self.resolve_klass(class_name)
         skp = self.resolve_klass(sentinel_class)
         if kp is None or skp is None:
@@ -207,7 +204,7 @@ class StaticResolver:
         return None
 
     def read_field(self, obj: int, class_name: str, field_name: str):
-        """根据字段类型自动选择读法. 引用类型返回 ptr."""
+        # 根据字段类型自动选择读法. 引用类型返回 ptr.
         f = self._field(class_name, field_name)
         if f is None or obj == 0:
             return None
@@ -236,7 +233,7 @@ class StaticResolver:
         return self.pm.read_u64(obj + f.offset)
 
     def read_string(self, str_obj: int) -> Optional[str]:
-        """Il2CppString: +0x10=length(int), +0x14=utf16 chars."""
+        # Il2CppString: +0x10=length(int), +0x14=utf16 chars.
         if not str_obj:
             return None
         ln = self.pm.read_i32(str_obj + 0x10)
@@ -255,7 +252,7 @@ class StaticResolver:
     ARRAY_ELEMS_OFF = 0x20
 
     def read_repeated_count(self, rf_obj: int) -> int:
-        """RepeatedField<T> 元素个数. 0 表示空/无效."""
+        # RepeatedField<T> 元素个数. 0 表示空/无效.
         if not rf_obj:
             return 0
         c = self.pm.read_u32(rf_obj + self.REPEATED_COUNT_OFF) or 0
@@ -263,15 +260,14 @@ class StaticResolver:
 
     def read_repeated_elements(self, rf_obj: int, elem_size: int = 8,
                                 max_count: int = 1024) -> List[int]:
-        """读 RepeatedField<T> 的所有元素地址 (引用类型) 或值 (基本类型).
-
-        elem_size:
-          8 → ref/T*/long/ulong/double  (read_u64)
-          4 → int/uint/float            (read_u32)
-          2 → short/ushort              (read_u16)
-          1 → byte/sbyte/bool           (read_u8)
-        返回值类型由调用者解读. 引用类型: 拿到的是 T 实例地址.
-        """
+        # 读 RepeatedField<T> 的所有元素地址 (引用类型) 或值 (基本类型).
+        #
+        # elem_size:
+        # 8 → ref/T*/long/ulong/double  (read_u64)
+        # 4 → int/uint/float            (read_u32)
+        # 2 → short/ushort              (read_u16)
+        # 1 → byte/sbyte/bool           (read_u8)
+        # 返回值类型由调用者解读. 引用类型: 拿到的是 T 实例地址.
         cnt = self.read_repeated_count(rf_obj)
         if cnt == 0:
             return []
@@ -302,7 +298,7 @@ class StaticResolver:
 
     def read_repeated_field(self, obj: int, class_name: str, field_name: str,
                              elem_size: int = 8, max_count: int = 1024) -> List[int]:
-        """便捷: obj.field 是 RepeatedField<T>, 一次读所有元素."""
+        # 便捷: obj.field 是 RepeatedField<T>, 一次读所有元素.
         rf = self.read_ptr_field(obj, class_name, field_name)
         if not rf:
             return []
@@ -310,11 +306,10 @@ class StaticResolver:
 
     def read_repeated_struct_array(self, rf_obj: int, struct_size: int,
                                     max_count: int = 1024) -> List[bytes]:
-        """RepeatedField<T> 包含 struct in-place, 不是引用.
-
-        常见于 Google.Protobuf RepeatedField<Primitive> / RepeatedField<SmallMessage>
-        (IL2CPP 不会把每个元素独立 new). 返回的元素 bytes 长度 == struct_size.
-        """
+        # RepeatedField<T> 包含 struct in-place, 不是引用.
+        #
+        # 常见于 Google.Protobuf RepeatedField<Primitive> / RepeatedField<SmallMessage>
+        # (IL2CPP 不会把每个元素独立 new). 返回的元素 bytes 长度 == struct_size.
         cnt = self.read_repeated_count(rf_obj)
         if cnt == 0 or struct_size <= 0:
             return []
@@ -345,7 +340,7 @@ class StaticResolver:
 # ---------- factory ----------
 
 def open_resolver(dump_id: str = "ef9ef95a") -> StaticResolver:
-    """便捷工厂: 自动加载当前 dump 的 script.json + dump_cs_index.json."""
+    # 便捷工厂: 自动加载当前 dump 的 script.json + dump_cs_index.json.
     here = os.path.dirname(os.path.abspath(__file__))
     sj = os.path.join(here, "out", dump_id, "dumper_out", "script.json")
     dci_json = os.path.join(here, "out", dump_id, "dump_cs_index.json")

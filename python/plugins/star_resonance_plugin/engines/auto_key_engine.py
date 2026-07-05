@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""Auto-key script model, storage helpers, and runtime engine."""
+# Auto-key script model, storage helpers, and runtime engine.
 
 import copy
 import ctypes
@@ -664,10 +664,10 @@ class AutoKeyEngine:
         self._slot_map_cache = None
 
     def _get_normalized_config(self, gs) -> Dict[str, Any]:
-        """Return the auto-key config, reusing the cached normalized form
-        when neither the raw settings dict nor the author identity has
-        changed. ~20 Hz tick previously paid `normalize_auto_key_config`
-        every iteration."""
+        # Return the auto-key config, reusing the cached normalized form
+        # when neither the raw settings dict nor the author identity has
+        # changed. ~20 Hz tick previously paid `normalize_auto_key_config`
+        # every iteration.
         raw_cfg = self._settings.get("auto_key", {}) or {}
         raw_id = id(raw_cfg)
         author_key = (
@@ -800,7 +800,7 @@ class AutoKeyEngine:
             return False
 
     def is_game_foreground(self) -> bool:
-        """Foreground gate shared with the boss-mechanic dodge dispatcher."""
+        # Foreground gate shared with the boss-mechanic dodge dispatcher.
         return self._is_game_foreground()
 
     def _slot_map(self, gs) -> Dict[int, Dict[str, Any]]:
@@ -1034,19 +1034,18 @@ class AutoKeyEngine:
     # ── Burst-ready actions (from visual editor) ──
 
     def set_burst_actions(self, actions: list):
-        """Set burst-ready → skill trigger actions from the visual editor.
-
-        Each action: {trigger_slot: int, action_slot: int}
-        These are converted to autokey actions with burst_ready_is=True condition
-        and appended to the active profile as virtual actions.
-        """
+        # Set burst-ready → skill trigger actions from the visual editor.
+        #
+        # Each action: {trigger_slot: int, action_slot: int}
+        # These are converted to autokey actions with burst_ready_is=True condition
+        # and appended to the active profile as virtual actions.
         self._burst_visual_actions = list(actions or [])
 
     def get_burst_actions(self) -> list:
         return list(getattr(self, '_burst_visual_actions', []) or [])
 
     def _get_burst_virtual_actions(self) -> list:
-        """Convert visual editor burst actions to virtual autokey actions."""
+        # Convert visual editor burst actions to virtual autokey actions.
         raw = getattr(self, '_burst_visual_actions', []) or []
         result = []
         # Slot index → default key mapping (1-9 → keys 1-9)

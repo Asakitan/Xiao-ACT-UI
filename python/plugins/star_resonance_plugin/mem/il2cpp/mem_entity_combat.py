@@ -1,22 +1,21 @@
 # -*- coding: utf-8 -*-
-"""mem_entity_combat - read live combat HP/state from a ZEntity (read-only).
-
-The displayed monster/boss HP lives in the entity's attribute cache:
-  ZEntity.attrs_ (@+0x48) -> ZAttrCollection.cacheSlim_._values (@+0x20)
-    -> ValueTuple<uint, object[]>[]  (element0.Item2 @ array+0x28 is the object[])
-  each object[] slot is a typed ZAttr<T>:
-    ZAttr<T> = { bool isDefault_; T value_; object bindWatchers_ } after the 0x10
-    il2cpp header -> value_ @ obj+0x14 (Int/Float/Bool) or obj+0x18 (Long/String/ref).
-
-attr_id -> value is decoded structurally from the Burst _indexPart (@attrs+0x18):
-KeySegment*[32] (8 attr ids + count each) parallel to int*[32] valueIndices, then the
-value index pages into _values (32/page). read_attr_map() returns the full {attr_id:
-value} map, so HP/breaking/overdrive/stun/cast are read deterministically by attr id
-(== packet_parser.enums.AttrType). The HP invariant remains a fallback in read_hp.
-
-All offsets are field offsets within IL2CPP objects (stable across base/ASLR); the
-only version-sensitive inputs are the class layout, taken from the live dump.
-"""
+# mem_entity_combat - read live combat HP/state from a ZEntity (read-only).
+#
+# The displayed monster/boss HP lives in the entity's attribute cache:
+# ZEntity.attrs_ (@+0x48) -> ZAttrCollection.cacheSlim_._values (@+0x20)
+# -> ValueTuple<uint, object[]>[]  (element0.Item2 @ array+0x28 is the object[])
+# each object[] slot is a typed ZAttr<T>:
+# ZAttr<T> = { bool isDefault_; T value_; object bindWatchers_ } after the 0x10
+# il2cpp header -> value_ @ obj+0x14 (Int/Float/Bool) or obj+0x18 (Long/String/ref).
+#
+# attr_id -> value is decoded structurally from the Burst _indexPart (@attrs+0x18):
+# KeySegment*[32] (8 attr ids + count each) parallel to int*[32] valueIndices, then the
+# value index pages into _values (32/page). read_attr_map() returns the full {attr_id:
+# value} map, so HP/breaking/overdrive/stun/cast are read deterministically by attr id
+# (== packet_parser.enums.AttrType). The HP invariant remains a fallback in read_hp.
+#
+# All offsets are field offsets within IL2CPP objects (stable across base/ASLR); the
+# only version-sensitive inputs are the class layout, taken from the live dump.
 from __future__ import annotations
 import struct
 from typing import Dict, List, Optional, Tuple
@@ -85,8 +84,8 @@ def _plaus(p: Optional[int]) -> bool:
 
 
 class EntityCombatReader:
-    """Reads HP/state from a ZEntity's attribute cache. ``pm`` needs read_u64/i64/
-    u32/i32/bytes."""
+    # Reads HP/state from a ZEntity's attribute cache. ``pm`` needs read_u64/i64/
+    # u32/i32/bytes.
 
     def __init__(self, pm, *, resolver=None):
         self.pm = pm
@@ -126,7 +125,7 @@ class EntityCombatReader:
         return nm
 
     def _object_array(self, ent_addr: int):
-        """Return (arr_addr, length) of the entity's cacheSlim object[] (or (0,0))."""
+        # Return (arr_addr, length) of the entity's cacheSlim object[] (or (0,0)).
         attrs = self.pm.read_u64(ent_addr + self.off_ent_attrs)
         if not _plaus(attrs):
             return 0, 0, 0
@@ -140,7 +139,7 @@ class EntityCombatReader:
         return arr, min(int(n), 256), attrs
 
     def read_typed_attrs(self, ent_addr: int) -> List[Tuple[int, str, object]]:
-        """Return [(slot, type_name, value), ...] for the entity's attr objects."""
+        # Return [(slot, type_name, value), ...] for the entity's attr objects.
         arr, n, _ = self._object_array(ent_addr)
         out: List[Tuple[int, str, object]] = []
         for j in range(n):
@@ -161,7 +160,7 @@ class EntityCombatReader:
         return out
 
     def _attr_value(self, o: int):
-        """Decode a ZAttr<T> object to its scalar value (or None for ref types)."""
+        # Decode a ZAttr<T> object to its scalar value (or None for ref types).
         if not _plaus(o):
             return None
         t = self._kname(self.pm.read_u64(o))
@@ -178,7 +177,7 @@ class EntityCombatReader:
         return None
 
     def _value_at(self, vals: int, vidx: int):
-        """_values[vidx>>5].Item2[vidx&31] -> scalar attr value (paged by 32)."""
+        # _values[vidx>>5].Item2[vidx&31] -> scalar attr value (paged by 32).
         if vidx < 0:
             return None
         arrp = self.pm.read_u64(vals + ARRAY_ELEMS_OFF
@@ -189,12 +188,11 @@ class EntityCombatReader:
         return self._attr_value(o)
 
     def read_attr_map(self, ent_addr: int) -> Dict[int, object]:
-        """Decode the entity's full {attr_id: value} map from the Burst index.
-
-        Walks the KeySegment*[32] keys (8 attr ids + count each) parallel to the
-        int*[32] valueIndices, then resolves each value index into the paged _values.
-        Deterministic (attr_id-keyed) -- the structural decode of ZAttrCacheSlim.
-        """
+        # Decode the entity's full {attr_id: value} map from the Burst index.
+        #
+        # Walks the KeySegment*[32] keys (8 attr ids + count each) parallel to the
+        # int*[32] valueIndices, then resolves each value index into the paged _values.
+        # Deterministic (attr_id-keyed) -- the structural decode of ZAttrCacheSlim.
         import struct as _st
         ahdr = self.pm.read_bytes(ent_addr + self.off_ent_attrs, 8)
         if not ahdr or len(ahdr) < 8:
@@ -243,7 +241,7 @@ class EntityCombatReader:
         return out
 
     def _attr_object_at(self, vals: int, vidx: int) -> int:
-        """Return the raw ZAttr object pointer for a value index (undecoded), or 0."""
+        # Return the raw ZAttr object pointer for a value index (undecoded), or 0.
         if vidx is None or vidx < 0:
             return 0
         arrp = self.pm.read_u64(vals + ARRAY_ELEMS_OFF
@@ -253,8 +251,8 @@ class EntityCombatReader:
         return self.pm.read_u64(arrp + ARRAY_ELEMS_OFF + (vidx & 31) * 8)
 
     def _read_il2cpp_string(self, sp: int) -> str:
-        """Decode an Il2CppString object -> str. Layout (x64): length @+0x10 (int32),
-        UTF-16LE chars @+0x14. Sanity-capped so a non-string pointer just yields ''."""
+        # Decode an Il2CppString object -> str. Layout (x64): length @+0x10 (int32),
+        # UTF-16LE chars @+0x14. Sanity-capped so a non-string pointer just yields ''.
         if not _plaus(sp):
             return ""
         n = self.pm.read_u32(sp + STR_LEN_OFF) or 0
@@ -273,9 +271,9 @@ class EntityCombatReader:
         return s
 
     def read_name_attr(self, ent_addr: int) -> str:
-        """Read the entity's NAME attr (id=1) as the game's resolved display-name string,
-        independent of our JSON tables. '' when the entity has no NAME attr (many monsters
-        carry only a template id). The authoritative source for the JSON self-heal."""
+        # Read the entity's NAME attr (id=1) as the game's resolved display-name string,
+        # independent of our JSON tables. '' when the entity has no NAME attr (many monsters
+        # carry only a template id). The authoritative source for the JSON self-heal.
         attrs = self.pm.read_u64(ent_addr + self.off_ent_attrs)
         if not _plaus(attrs):
             return ""
@@ -304,7 +302,7 @@ class EntityCombatReader:
         return ""
 
     def is_combat_entity(self, ent_addr: int) -> bool:
-        """True if the entity's _indexPart carries the HP attr ids (has an HP bar)."""
+        # True if the entity's _indexPart carries the HP attr ids (has an HP bar).
         attrs = self.pm.read_u64(ent_addr + self.off_ent_attrs)
         if not _plaus(attrs):
             return False
@@ -318,12 +316,11 @@ class EntityCombatReader:
         return A_HP in ids and A_MAX_HP in ids
 
     def read_hp(self, ent_addr: int) -> Optional[Tuple[int, int]]:
-        """Return (cur_hp, max_hp) for a combat entity, else None.
-
-        HP invariant: the two HP-range LongAttr where 0 <= cur <= max. MaxHp = the
-        larger, CurHp = the smaller (equal at full HP). Server-time longs are excluded
-        by the HP-plausibility cap.
-        """
+        # Return (cur_hp, max_hp) for a combat entity, else None.
+        #
+        # HP invariant: the two HP-range LongAttr where 0 <= cur <= max. MaxHp = the
+        # larger, CurHp = the smaller (equal at full HP). Server-time longs are excluded
+        # by the HP-plausibility cap.
         longs = [(s, v) for (s, t, v) in self.read_typed_attrs(ent_addr)
                  if t == "LongAttr" and isinstance(v, int) and 0 <= v <= MAX_HP_PLAUSIBLE]
         if not longs:
@@ -342,11 +339,10 @@ class EntityCombatReader:
         return int(cur), int(maxhp)
 
     def _build_layout(self, ip: int, vals: int, wanted) -> Dict[int, tuple]:
-        """Decode the Burst index ONCE -> {attr_id: (obj_ptr, val_off, type_char)}.
-
-        Caches the resolved ZAttr OBJECT pointer (the object persists; only its
-        value_ mutates), so each per-tick read is 1 RPM/attr -- no pointer chasing.
-        """
+        # Decode the Burst index ONCE -> {attr_id: (obj_ptr, val_off, type_char)}.
+        #
+        # Caches the resolved ZAttr OBJECT pointer (the object persists; only its
+        # value_ mutates), so each per-tick read is 1 RPM/attr -- no pointer chasing.
         want = set(wanted)
         lay: Dict[int, tuple] = {}
         for k in range(INDEX_SEG_COUNT):
@@ -381,7 +377,7 @@ class EntityCombatReader:
 
     @staticmethod
     def _interp(raw, tc: str):
-        """Interpret an 8-byte batch read as the typed attr value."""
+        # Interpret an 8-byte batch read as the typed attr value.
         if raw is None:
             return None
         if tc == "L":
@@ -396,7 +392,7 @@ class EntityCombatReader:
         return None
 
     def _layout_for(self, ent_addr: int):
-        """Return (ip, layout) for an entity (layout cached by _indexPart ptr)."""
+        # Return (ip, layout) for an entity (layout cached by _indexPart ptr).
         attrs = self.pm.read_u64(ent_addr + self.off_ent_attrs)
         if not _plaus(attrs):
             return 0, None
@@ -442,7 +438,7 @@ class EntityCombatReader:
         }
 
     def read_combat(self, ent_addr: int) -> Optional[dict]:
-        """Single-entity combat snapshot (HP + state), via the cached obj-ptr layout."""
+        # Single-entity combat snapshot (HP + state), via the cached obj-ptr layout.
         ip, lay = self._layout_for(ent_addr)
         # non-combat entity (no HP attr in the index) -> cheap reject, no value reads
         if not lay or A_HP not in lay or A_MAX_HP not in lay:
@@ -460,13 +456,12 @@ class EntityCombatReader:
         return None
 
     def read_combat_batch(self, ent_addrs) -> Dict[int, Optional[dict]]:
-        """Combat (HP + state) for many entities. Returns {ent_addr: dict} (combat only).
-
-        Fast path: the whole decode (reads + index walk + value reads) runs in one
-        Cython nogil pass (read_entity_combat_many) -> no per-entity Python/GIL cost.
-        Fallback: the single obj-ptr loop (cached layout, pymem reads) -- this beats a
-        Python-orchestrated batch, whose per-entity dict building dominates the cost.
-        """
+        # Combat (HP + state) for many entities. Returns {ent_addr: dict} (combat only).
+        #
+        # Fast path: the whole decode (reads + index walk + value reads) runs in one
+        # Cython nogil pass (read_entity_combat_many) -> no per-entity Python/GIL cost.
+        # Fallback: the single obj-ptr loop (cached layout, pymem reads) -- this beats a
+        # Python-orchestrated batch, whose per-entity dict building dominates the cost.
         ent_addrs = list(ent_addrs)
         if not ent_addrs:
             return {}
@@ -511,12 +506,11 @@ class EntityCombatReader:
         return out2
 
     def read_boss_combat(self, ent_addr: int) -> Optional[dict]:
-        """Boss-only fast path with obj-pointer caching between ticks.
-
-        Hot path: 9 RPMs (verify + 8 leaves).
-        Cold path: ~26 RPMs (full walk, populates cache).
-        Falls back to read_combat_batch([ent_addr]) if kernel unavailable.
-        """
+        # Boss-only fast path with obj-pointer caching between ticks.
+        #
+        # Hot path: 9 RPMs (verify + 8 leaves).
+        # Cold path: ~26 RPMs (full walk, populates cache).
+        # Falls back to read_combat_batch([ent_addr]) if kernel unavailable.
         if _HAS_BOSS_CACHED and _cymem is not None:
             try:
                 flat = _cyc.read_boss_combat_cached(

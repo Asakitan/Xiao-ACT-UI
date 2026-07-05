@@ -1,13 +1,12 @@
-"""Compose a live all-name + TCP/config correspondence audit table.
-
-Inputs:
-- live StringPool full export (all localization rows)
-- ACT matched runtime rows (TCP/config/community matches)
-- TcpNameCache compact/runtime endpoint cache
-
-The output keeps all localization names while annotating entries that have known
-TCP/config ID matches or runtime endpoint observations.
-"""
+# Compose a live all-name + TCP/config correspondence audit table.
+#
+# Inputs:
+# - live StringPool full export (all localization rows)
+# - ACT matched runtime rows (TCP/config/community matches)
+# - TcpNameCache compact/runtime endpoint cache
+#
+# The output keeps all localization names while annotating entries that have known
+# TCP/config ID matches or runtime endpoint observations.
 
 from __future__ import annotations
 

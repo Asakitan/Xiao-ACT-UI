@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""Regression coverage for Entity menu motion-blur z-order handling."""
+# Regression coverage for Entity menu motion-blur z-order handling.
 
 from __future__ import annotations
 

@@ -1,13 +1,12 @@
-"""Phase 0.1 — 从已知 self_hp_addr 反查所属 Il2CppClass + 字段偏移.
-
-两种模式:
-  A) --hp <addr>: 直接给 hp 地址 (anchors.json 还有效时用)
-  B) --scan-hp <int> [--scan-max-hp <int>]: 给当前 HP 数值, 全堆扫 i32 找候选,
-     对每个候选反查 klass + 前后看 max_hp 是否相邻, 自动筛出唯一 obj.
-     dev 可以从游戏 UI 上直接读出 HP/MaxHP 数值, 无需 TCP / 旧 anchors.
-
-输出 JSON 到 il2cpp/discovery_notes.json + 人类可读摘要.
-"""
+# Phase 0.1 — 从已知 self_hp_addr 反查所属 Il2CppClass + 字段偏移.
+#
+# 两种模式:
+# A) --hp <addr>: 直接给 hp 地址 (anchors.json 还有效时用)
+# B) --scan-hp <int> [--scan-max-hp <int>]: 给当前 HP 数值, 全堆扫 i32 找候选,
+# 对每个候选反查 klass + 前后看 max_hp 是否相邻, 自动筛出唯一 obj.
+# dev 可以从游戏 UI 上直接读出 HP/MaxHP 数值, 无需 TCP / 旧 anchors.
+#
+# 输出 JSON 到 il2cpp/discovery_notes.json + 人类可读摘要.
 
 from __future__ import annotations
 
@@ -78,7 +77,7 @@ def _read_namespace(pm: StarProcess, klass_ptr: int) -> Optional[str]:
 
 
 def _ga_module(pm: StarProcess) -> Tuple[int, int]:
-    """返回 (GameAssembly.dll base, size)."""
+    # 返回 (GameAssembly.dll base, size).
     for m in pm.list_modules():
         if m.name.lower() == "gameassembly.dll":
             return m.base, m.size
@@ -86,7 +85,7 @@ def _ga_module(pm: StarProcess) -> Tuple[int, int]:
 
 
 def scan_i32(pm: StarProcess, value: int, *, max_hits: int = 200_000) -> List[int]:
-    """全堆扫 i32 == value (cy_memscan AVX2). value<0 自动转 unsigned 同字节匹配."""
+    # 全堆扫 i32 == value (cy_memscan AVX2). value<0 自动转 unsigned 同字节匹配.
     from mem_probe import cy_memscan as _cy
     needle_u = int(value) & 0xFFFFFFFF
     hits: List[int] = []
@@ -105,7 +104,7 @@ def scan_i32(pm: StarProcess, value: int, *, max_hits: int = 200_000) -> List[in
 
 
 def scan_i64(pm: StarProcess, value: int, *, max_hits: int = 200_000) -> List[int]:
-    """全堆扫 i64 == value (cy_memscan AVX2), 返回 8-aligned 命中地址."""
+    # 全堆扫 i64 == value (cy_memscan AVX2), 返回 8-aligned 命中地址.
     from mem_probe import cy_memscan as _cy
     needle_u = int(value) & 0xFFFFFFFFFFFFFFFF
     hits: List[int] = []
@@ -133,12 +132,11 @@ def find_object_base(
     fwd: int = SEARCH_FWD_BYTES,
     step: int = STEP,
 ) -> List[Dict[str, Any]]:
-    """在 field_addr 周围找疑似对象基址.
-
-    返回所有满足"首 qword 是合法 Il2CppClass*"的候选, 按距离 field_addr 排序.
-    每个候选 = {"obj_base", "klass_ptr", "klass_name", "klass_namespace",
-               "field_offset", "distance"}
-    """
+    # 在 field_addr 周围找疑似对象基址.
+    #
+    # 返回所有满足"首 qword 是合法 Il2CppClass*"的候选, 按距离 field_addr 排序.
+    # 每个候选 = {"obj_base", "klass_ptr", "klass_name", "klass_namespace",
+    # "field_offset", "distance"}
     ga_end = ga_base + ga_size
     out: List[Dict[str, Any]] = []
     seen_klass: set = set()

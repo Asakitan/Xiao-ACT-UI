@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""Regression coverage for normalized ACT offline imports."""
+# Regression coverage for normalized ACT offline imports.
 
 from __future__ import annotations
 

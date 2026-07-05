@@ -1,20 +1,19 @@
 # -*- coding: utf-8 -*-
-"""Plugin package install — 一键导入一个 ``.zip`` 插件包。
-
-可分享的插件 = 一个 ``.zip``，其内容构成**一个插件目录**：
-
-    plugin.json (清单, 必需) + plugin.py (入口, 必需)
-    [+ requirements.txt + vendor/ + libs/ + assets/ ...]
-
-清单可以位于压缩包根部，也可以位于唯一的一层顶级文件夹内
-(``my_plugin.zip/plugin.json`` 与 ``my_plugin.zip/my_plugin/plugin.json`` 都接受)。
-压缩包先以 **zip-slip 防穿越**方式解压到临时目录，校验后移动进
-``<base>/user_plugins/<plugin_id>/``（更新不被覆盖的用户目录）。
-
-**纯 Python 插件无需任何编译**：加载器在运行时用 ``importlib`` 直接吃原始
-``.py``，dev 态与 onedir 冻结态都一样（冻结 exe 内嵌完整 CPython）。需要原生
-扩展 (.pyd) 或第三方依赖的插件，由**作者**预编译 / vendor 进包，用户端零编译。
-"""
+# Plugin package install — 一键导入一个 ``.zip`` 插件包。
+#
+# 可分享的插件 = 一个 ``.zip``，其内容构成**一个插件目录**：
+#
+# plugin.json (清单, 必需) + plugin.py (入口, 必需)
+# [+ requirements.txt + vendor/ + libs/ + assets/ ...]
+#
+# 清单可以位于压缩包根部，也可以位于唯一的一层顶级文件夹内
+# (``my_plugin.zip/plugin.json`` 与 ``my_plugin.zip/my_plugin/plugin.json`` 都接受)。
+# 压缩包先以 **zip-slip 防穿越**方式解压到临时目录，校验后移动进
+# ``<base>/user_plugins/<plugin_id>/``（更新不被覆盖的用户目录）。
+#
+# **纯 Python 插件无需任何编译**：加载器在运行时用 ``importlib`` 直接吃原始
+# ``.py``，dev 态与 onedir 冻结态都一样（冻结 exe 内嵌完整 CPython）。需要原生
+# 扩展 (.pyd) 或第三方依赖的插件，由**作者**预编译 / vendor 进包，用户端零编译。
 
 from __future__ import annotations
 
@@ -29,7 +28,7 @@ from .plugins import MANIFEST_FILE, _safe_id
 
 
 def _is_within(base: str, target: str) -> bool:
-    """``target`` 是否落在 ``base`` 之内（跨盘符 / 非法路径一律视为不安全）。"""
+    # ``target`` 是否落在 ``base`` 之内（跨盘符 / 非法路径一律视为不安全）。
     try:
         base_abs = os.path.abspath(base)
         return os.path.commonpath([base_abs, os.path.abspath(target)]) == base_abs
@@ -39,7 +38,7 @@ def _is_within(base: str, target: str) -> bool:
 
 
 def _extract_safe(zip_path: str, dest_dir: str) -> None:
-    """解压 ``zip_path`` 到 ``dest_dir``，拒绝任何越出目标目录的成员 (zip slip)。"""
+    # 解压 ``zip_path`` 到 ``dest_dir``，拒绝任何越出目标目录的成员 (zip slip)。
     dest_abs = os.path.abspath(dest_dir)
     with zipfile.ZipFile(zip_path) as zf:
         for member in zf.namelist():
@@ -58,7 +57,7 @@ def _read_manifest_dict(manifest_path: str) -> dict[str, Any]:
 
 
 def _locate_plugin_root(extract_dir: str) -> Optional[str]:
-    """在解压目录中定位含 ``plugin.json`` 的插件根：根部优先，否则下探一层。"""
+    # 在解压目录中定位含 ``plugin.json`` 的插件根：根部优先，否则下探一层。
     if os.path.isfile(os.path.join(extract_dir, MANIFEST_FILE)):
         return extract_dir
     try:
@@ -75,11 +74,10 @@ def _locate_plugin_root(extract_dir: str) -> Optional[str]:
 def install_plugin_archive(archive_path: str, user_plugins_dir: str, *,
                            log: Optional[Callable[[str], None]] = None,
                            allow_replace: bool = True) -> dict[str, Any]:
-    """把一个 ``.zip`` 插件包装进 ``user_plugins_dir/<plugin_id>/``。
-
-    返回 ``{ok, id, name, version, path, replaced, previous_version, message, errors}``。
-    不加载、不启用——交由调用方 (runtime) 在 PluginManager 上 discover + enable。
-    """
+    # 把一个 ``.zip`` 插件包装进 ``user_plugins_dir/<plugin_id>/``。
+    #
+    # 返回 ``{ok, id, name, version, path, replaced, previous_version, message, errors}``。
+    # 不加载、不启用——交由调用方 (runtime) 在 PluginManager 上 discover + enable。
     def _log(message: str) -> None:
         if callable(log):
             try:
@@ -175,7 +173,7 @@ def install_plugin_archive(archive_path: str, user_plugins_dir: str, *,
 
 
 def remove_installed_plugin(plugin_path: str, user_plugins_dir: str) -> dict[str, Any]:
-    """删除一个**用户安装**的插件目录。内置 ``plugins/`` 永不允许删除。"""
+    # 删除一个**用户安装**的插件目录。内置 ``plugins/`` 永不允许删除。
     plugin_path = os.path.abspath(str(plugin_path or ""))
     user_plugins_dir = os.path.abspath(str(user_plugins_dir or ""))
     if plugin_path == user_plugins_dir or not _is_within(user_plugins_dir, plugin_path):

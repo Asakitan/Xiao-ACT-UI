@@ -1,24 +1,23 @@
 # -*- coding: utf-8 -*-
-"""Star Resonance plugin's ACT runtime bridge.
-
-These trigger-engine + DPS history importer + name-resolver runtime handlers
-used to live in ``act_platform/runtime.py``. They were moved here in 5.0.0 so
-the platform can stay strictly game-agnostic: the platform no longer imports
-the plugin's trigger engine, no longer hard-codes ``owner._act_trigger_engine``
-/ ``owner._act_trigger_normalizer`` / ``owner._dps_report_loader`` lookups, and
-no longer holds a module-level ``_NAME_RESOLVER`` callback.
-
-The plugin exposes these handlers to the platform through two SDK surfaces:
-
-1. ``ctx.engine.set_owner_attr('_act_extension_runtime', extension_runtime_provider)``
-   registers a ``name -> callable`` provider so ``ctx.engine.runtime(name, **kw)``
-   dispatches plugin-defined runtime actions (``act_trigger_*``,
-   ``_import_exported_report_file``) without the platform importing anything.
-2. ``ctx.register_formatter('act_resolve_name', ...)`` exposes the game's
-   ``skill/monster/dungeon`` name resolver through the standard extension
-   registry; the platform looks it up via ``manager.invoke_extension`` only
-   when a renderer needs a name, and never imports the plugin's name tables.
-"""
+# Star Resonance plugin's ACT runtime bridge.
+#
+# These trigger-engine + DPS history importer + name-resolver runtime handlers
+# used to live in ``act_platform/runtime.py``. They were moved here in 5.0.0 so
+# the platform can stay strictly game-agnostic: the platform no longer imports
+# the plugin's trigger engine, no longer hard-codes ``owner._act_trigger_engine``
+# / ``owner._act_trigger_normalizer`` / ``owner._dps_report_loader`` lookups, and
+# no longer holds a module-level ``_NAME_RESOLVER`` callback.
+#
+# The plugin exposes these handlers to the platform through two SDK surfaces:
+#
+# 1. ``ctx.engine.set_owner_attr('_act_extension_runtime', extension_runtime_provider)``
+# registers a ``name -> callable`` provider so ``ctx.engine.runtime(name, **kw)``
+# dispatches plugin-defined runtime actions (``act_trigger_*``,
+# ``_import_exported_report_file``) without the platform importing anything.
+# 2. ``ctx.register_formatter('act_resolve_name', ...)`` exposes the game's
+# ``skill/monster/dungeon`` name resolver through the standard extension
+# registry; the platform looks it up via ``manager.invoke_extension`` only
+# when a renderer needs a name, and never imports the plugin's name tables.
 
 from __future__ import annotations
 
@@ -305,12 +304,11 @@ def _configure_trigger_engine_plugins(owner: Any, engine: Any) -> None:
 
 
 def ensure_act_trigger_engine(owner: Any) -> ActTriggerEngine:
-    """Return the trigger engine contributed by the Star Resonance plugin.
-
-    Plugin-private helper: this module lives in the plugin tree, so reading an
-    owner attribute set by the same plugin is fine — the platform itself never
-    reads ``owner._act_trigger_engine`` and never imports ``ActTriggerEngine``.
-    """
+    # Return the trigger engine contributed by the Star Resonance plugin.
+    #
+    # Plugin-private helper: this module lives in the plugin tree, so reading an
+    # owner attribute set by the same plugin is fine — the platform itself never
+    # reads ``owner._act_trigger_engine`` and never imports ``ActTriggerEngine``.
     engine = getattr(owner, "_act_trigger_engine", None)
     if isinstance(engine, ActTriggerEngine):
         _configure_trigger_engine_plugins(owner, engine)
@@ -568,13 +566,12 @@ def act_trigger_test(owner: Any, rule_id: str) -> dict[str, Any]:
 def import_exported_report_file(owner: Any, path: str, *, persist: bool,
                                  show: bool, history_limit: int,
                                  initial_errors: Iterable[Any] = ()) -> dict[str, Any] | None:
-    """Import one game-specific exported ACT report (XML/XML.GZ/XML.ZIP).
-
-    The platform's ``act_offline_import_file`` calls this via the extension
-    runtime provider instead of importing the plugin's ``dps_history`` loader
-    directly. ``None`` means "this importer did not match the file"; the
-    platform falls back to the generic normalized-event importer.
-    """
+    # Import one game-specific exported ACT report (XML/XML.GZ/XML.ZIP).
+    #
+    # The platform's ``act_offline_import_file`` calls this via the extension
+    # runtime provider instead of importing the plugin's ``dps_history`` loader
+    # directly. ``None`` means "this importer did not match the file"; the
+    # platform falls back to the generic normalized-event importer.
     try:
         from plugins.star_resonance_plugin.engines.dps_history import load_exported_report_file
     except Exception:
@@ -656,14 +653,13 @@ def import_exported_report_file(owner: Any, path: str, *, persist: bool,
 
 
 def resolve_name_handler(*, kind: str = "monster", id: Any = 0, default: str = "", **_: Any) -> str:
-    """Game name resolver exposed via ``register_extension_runtime('resolve_name')``.
-
-    Platform render helpers (``act_platform.runtime._resolve_name``) call this
-    through ``_extension_runtime_handler`` so they never touch the plugin's
-    name tables directly. The handler is a strict wrapper around the plugin's
-    tablekit ``names.resolve`` and returns "" on miss so callers fall back to
-    bare ids.
-    """
+    # Game name resolver exposed via ``register_extension_runtime('resolve_name')``.
+    #
+    # Platform render helpers (``act_platform.runtime._resolve_name``) call this
+    # through ``_extension_runtime_handler`` so they never touch the plugin's
+    # name tables directly. The handler is a strict wrapper around the plugin's
+    # tablekit ``names.resolve`` and returns "" on miss so callers fall back to
+    # bare ids.
     try:
         from plugins.star_resonance_plugin.tools.tablekit.name_tables import names
     except Exception:
@@ -704,10 +700,9 @@ EXTENSION_RUNTIME_HANDLERS: dict[str, Callable[..., Any]] = {
 
 
 def extension_runtime_provider(name: str) -> Callable[..., Any] | None:
-    """Return the plugin-contributed handler for the given platform runtime name.
-
-    The platform dispatcher (``ctx.engine.runtime``) calls this before falling
-    back to ``act_platform.runtime.<act_*>``. Returning ``None`` lets the
-    platform's own (game-agnostic) handler run, so the platform can stay tiny.
-    """
+    # Return the plugin-contributed handler for the given platform runtime name.
+    #
+    # The platform dispatcher (``ctx.engine.runtime``) calls this before falling
+    # back to ``act_platform.runtime.<act_*>``. Returning ``None`` lets the
+    # platform's own (game-agnostic) handler run, so the platform can stay tiny.
     return EXTENSION_RUNTIME_HANDLERS.get(str(name or ""))

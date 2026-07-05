@@ -1,11 +1,10 @@
-"""Scan module image ranges for pointers to runtime table addresses.
-
-``live_name_owner_refs.py`` scans private heap by default.  Static roots for a
-runtime pointer table can live in module image/data ranges, so this helper scans
-loaded modules directly and reports module-relative pointer locations.  It is
-read-only and only records evidence; heap targets remain volatile until the
-owning field/static root is proven.
-"""
+# Scan module image ranges for pointers to runtime table addresses.
+#
+# ``live_name_owner_refs.py`` scans private heap by default.  Static roots for a
+# runtime pointer table can live in module image/data ranges, so this helper scans
+# loaded modules directly and reports module-relative pointer locations.  It is
+# read-only and only records evidence; heap targets remain volatile until the
+# owning field/static root is proven.
 
 from __future__ import annotations
 

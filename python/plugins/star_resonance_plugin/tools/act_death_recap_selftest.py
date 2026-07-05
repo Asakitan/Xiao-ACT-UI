@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""Regression coverage for shared ACT death recap helpers."""
+# Regression coverage for shared ACT death recap helpers.
 
 from __future__ import annotations
 

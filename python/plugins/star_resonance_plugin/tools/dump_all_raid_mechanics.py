@@ -1,26 +1,25 @@
 # -*- coding: utf-8 -*-
-"""dump_all_raid_mechanics - 从内存配置表一次性提取全部bossraid机制数据。
-
-读取链:
-  RaidDungeonTable  → 所有raid副本 + 难度 + BossId[]
-  MonsterTable      → 每个boss的SkillIds[], BornClientBuffs[], DeadClientBuffs[],
-                       BreakingContinueTime, FractureDuration, WeeknessDuration,
-                       BloodMark[], BloodTubeCount
-  SkillTable        → 每个技能的 Name, IsDangerSkill, IsAoe, IsFractureSkill,
-                       EffectIDs[], SkillType, TargetType, SkillRangeType,
-                       NextSkillId, SkillDamType, CoolTimeType
-  SkillEffectTable  → EffectRange[], InstallSkillAddBuffs[], SkillDamageDistance
-  BuffTable         → buff名字, SkillId反查, BuffType, BuffAbilityType, Tags[]
-  FieldTable        → Size[], SkillId (AOE地面场)
-  DungeonStageTable → PhaseName
-
-不需要进副本: ZLoader序列化数据在大厅就已加载。
-
-Usage:
-  python -m tools.dump_all_raid_mechanics --dry-run
-  python -m tools.dump_all_raid_mechanics --apply
-  python -m tools.dump_all_raid_mechanics --dungeon 13023 --dry-run
-"""
+# dump_all_raid_mechanics - 从内存配置表一次性提取全部bossraid机制数据。
+#
+# 读取链:
+# RaidDungeonTable  → 所有raid副本 + 难度 + BossId[]
+# MonsterTable      → 每个boss的SkillIds[], BornClientBuffs[], DeadClientBuffs[],
+# BreakingContinueTime, FractureDuration, WeeknessDuration,
+# BloodMark[], BloodTubeCount
+# SkillTable        → 每个技能的 Name, IsDangerSkill, IsAoe, IsFractureSkill,
+# EffectIDs[], SkillType, TargetType, SkillRangeType,
+# NextSkillId, SkillDamType, CoolTimeType
+# SkillEffectTable  → EffectRange[], InstallSkillAddBuffs[], SkillDamageDistance
+# BuffTable         → buff名字, SkillId反查, BuffType, BuffAbilityType, Tags[]
+# FieldTable        → Size[], SkillId (AOE地面场)
+# DungeonStageTable → PhaseName
+#
+# 不需要进副本: ZLoader序列化数据在大厅就已加载。
+#
+# Usage:
+# python -m tools.dump_all_raid_mechanics --dry-run
+# python -m tools.dump_all_raid_mechanics --apply
+# python -m tools.dump_all_raid_mechanics --dungeon 13023 --dry-run
 from __future__ import annotations
 
 import argparse
@@ -95,7 +94,7 @@ _CATEGORY_RULES = [
 
 
 def _classify(name: str) -> Tuple[str, bool]:
-    """(category, is_mechanic). Non-mechanics get category='normal'."""
+    # (category, is_mechanic). Non-mechanics get category='normal'.
     if not name:
         return "unknown", False
     for kw in _NON_MECHANIC:
@@ -111,7 +110,7 @@ def _classify(name: str) -> Tuple[str, bool]:
 # ── main enumerator ─────────────────────────────────────────────────────────
 
 class FullRaidEnumerator:
-    """One-shot comprehensive enumerator of all raid mechanic data from config tables."""
+    # One-shot comprehensive enumerator of all raid mechanic data from config tables.
 
     def __init__(self, src, log=print):
         self.src = src
@@ -167,7 +166,7 @@ class FullRaidEnumerator:
         return out
 
     def _resolve_name(self, cls: str, blob: int, zl: int) -> Tuple[str, str]:
-        """(name, source). Try MLString Name, then raw string NameDesign."""
+        # (name, source). Try MLString Name, then raw string NameDesign.
         c_name = self._col(cls, "Name")
         nm = self.pool.resolve(self.rd.col_mlid(blob, c_name)) if c_name is not None else ""
         if nm:
@@ -204,7 +203,7 @@ class FullRaidEnumerator:
         }
 
     def raid_families(self) -> Dict[int, List[Dict]]:
-        """group_id → list of difficulty rows."""
+        # group_id → list of difficulty rows.
         by_group: Dict[int, List[Dict]] = {}
         for r in self.all_raid_rows():
             gid = r.get("group_id") or 0
@@ -372,7 +371,7 @@ class FullRaidEnumerator:
     # ── buff reverse mapping ─────────────────────────────────────────────────
 
     def _buff_reverse_map(self, skill_ids: Set[int]) -> Dict[int, List[Dict]]:
-        """skill_id → [{buff_id, name, ...}]  via BuffTable.SkillId back-ref."""
+        # skill_id → [{buff_id, name, ...}]  via BuffTable.SkillId back-ref.
         c_id = self._col(BUFF_CLS, "Id")
         c_skill = self._col(BUFF_CLS, "SkillId")
         if c_skill is None:
@@ -412,7 +411,7 @@ class FullRaidEnumerator:
         return name
 
     def buff_cluster(self, anchor_ids: List[int], radius: int = 100) -> List[Dict]:
-        """Named buffs in the id-cluster around anchors (born/dead client buffs)."""
+        # Named buffs in the id-cluster around anchors (born/dead client buffs).
         anchors = [b for b in anchor_ids if b and b > 0]
         if not anchors:
             return []
@@ -429,7 +428,7 @@ class FullRaidEnumerator:
     # ── field (AOE ground) ───────────────────────────────────────────────────
 
     def field_for_skill(self, skill_id: int) -> List[Dict]:
-        """Fields spawned by a skill (FieldTable.SkillId → match)."""
+        # Fields spawned by a skill (FieldTable.SkillId → match).
         try:
             idx = self._build_index(FIELD_CLS)
         except Exception:
@@ -455,7 +454,7 @@ class FullRaidEnumerator:
     # ── main dump ────────────────────────────────────────────────────────────
 
     def dump_raid(self, dungeon_id: int, difficulty: Optional[int] = None) -> Dict:
-        """Complete mechanics dump for one raid dungeon."""
+        # Complete mechanics dump for one raid dungeon.
         rows = self.all_raid_rows()
         exact = [r for r in rows if r["dungeon_id"] == dungeon_id]
         gids = {r["group_id"] for r in exact if r["group_id"]}
@@ -535,7 +534,7 @@ class FullRaidEnumerator:
 
     def _build_summary(self, phases: List[Dict],
                        buff_reverse: Dict[int, List[Dict]]) -> Dict:
-        """Summarize: mechanic skills, danger skills, phase transitions."""
+        # Summarize: mechanic skills, danger skills, phase transitions.
         total_skills = 0
         mechanic_skills = []
         danger_skills = []
@@ -582,7 +581,7 @@ class FullRaidEnumerator:
         }
 
     def dump_all_raids(self, target_dungeons: Optional[List[int]] = None) -> Dict:
-        """Dump ALL known raid dungeons, or a specific set."""
+        # Dump ALL known raid dungeons, or a specific set.
         families = self.raid_families()
         raids = {}
         for gid, rows in families.items():

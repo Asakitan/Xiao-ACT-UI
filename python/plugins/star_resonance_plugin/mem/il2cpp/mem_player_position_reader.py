@@ -1,19 +1,18 @@
 # -*- coding: utf-8 -*-
-"""mem_player_position_reader - 玩家/实体世界坐标读取 (read-only, auto-offset).
-
-链路 (全部按名解析, dump/literal 兜底, 补丁自愈):
-  ZEntity.moveModuleComp_   -> MoveModuleComp*           (+0x88 fallback)
-  MoveModuleComp.lastPosition_ -> Vector3 (3×float32)    (+0x98 fallback)
-
-活体实证 (game 2022.3.59f1 / IL2CPP): PlayerEnt.moveModuleComp_ 指向 MoveModuleComp,
-其 lastPosition_ = (x, y_height, z), 与 ZStateMoveComp.oldGoPosition_ 同值互证。
-
-坐标系: X/Z 为水平面, Y 为高度。两点水平距离 = hypot(dx, dz)。
-
-用法:
-    rd = PlayerPositionReader(dps_source)
-    pos = rd.read_entity_pos(entity_obj_addr)   # -> (x, y, z) 或 None
-"""
+# mem_player_position_reader - 玩家/实体世界坐标读取 (read-only, auto-offset).
+#
+# 链路 (全部按名解析, dump/literal 兜底, 补丁自愈):
+# ZEntity.moveModuleComp_   -> MoveModuleComp*           (+0x88 fallback)
+# MoveModuleComp.lastPosition_ -> Vector3 (3×float32)    (+0x98 fallback)
+#
+# 活体实证 (game 2022.3.59f1 / IL2CPP): PlayerEnt.moveModuleComp_ 指向 MoveModuleComp,
+# 其 lastPosition_ = (x, y_height, z), 与 ZStateMoveComp.oldGoPosition_ 同值互证。
+#
+# 坐标系: X/Z 为水平面, Y 为高度。两点水平距离 = hypot(dx, dz)。
+#
+# 用法:
+# rd = PlayerPositionReader(dps_source)
+# pos = rd.read_entity_pos(entity_obj_addr)   # -> (x, y, z) 或 None
 from __future__ import annotations
 
 import math
@@ -39,12 +38,12 @@ Vec3 = Tuple[float, float, float]
 
 
 def horiz_dist(a: Vec3, b: Vec3) -> float:
-    """水平面 (X/Z) 距离, 忽略高度 Y。"""
+    # 水平面 (X/Z) 距离, 忽略高度 Y。
     return math.hypot(a[0] - b[0], a[2] - b[2])
 
 
 class PlayerPositionReader:
-    """实体世界坐标读取 (玩家/boss/队友通用), 偏移按名 auto-offset 一次后缓存。"""
+    # 实体世界坐标读取 (玩家/boss/队友通用), 偏移按名 auto-offset 一次后缓存。
 
     def __init__(self, dps_source):
         self._src = dps_source
@@ -84,11 +83,11 @@ class PlayerPositionReader:
         return (x, y, z)
 
     def read_entity_pos(self, entity_obj: int) -> Optional[Vec3]:
-        """读一个 ZEntity 对象的当前世界坐标 (x, y_height, z)。
-
-        主路 stateMoveComp_.oldGoPosition_ 对本地玩家和远程 boss/怪都更新 (实测 boss
-        房两只狼+小怪坐标全读到); 远程实体不写 moveModuleComp_.lastPosition_, 故仅
-        当主路读到全零 (未初始化) 才回退本地路。"""
+        # 读一个 ZEntity 对象的当前世界坐标 (x, y_height, z)。
+        #
+        # 主路 stateMoveComp_.oldGoPosition_ 对本地玩家和远程 boss/怪都更新 (实测 boss
+        # 房两只狼+小怪坐标全读到); 远程实体不写 moveModuleComp_.lastPosition_, 故仅
+        # 当主路读到全零 (未初始化) 才回退本地路。
         if not (_MIN_PTR <= (entity_obj or 0) <= _MAX_PTR):
             return None
         off = self._resolve()

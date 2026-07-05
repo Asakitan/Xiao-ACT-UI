@@ -1,15 +1,14 @@
-"""pkg_container - 解析星痕共鸣 container/*.pkg, 列出内含的 Lua 脚本清单.
-
-m0.pkg / m1.pkg 内部 = 一串定制 Lua 5.3 字节码 chunk (format=0x01, size_t=4).
-每个 chunk 头后跟源码名字符串, 形如:
-  @D:/panda/panda-client/../panda-ab/Standalone/container/lua/zcontainer/<name>.lua
-
-本工具只读, mmap + 正则扫描 (正则引擎在 C, 不在 Python 内层循环), 一次性离线用.
-
-用法:
-    python -m tools.tablekit.pkg_container --pkg "...\\container\\m0.pkg"
-    python -m tools.tablekit.pkg_container --pkg "...\\m0.pkg" --filter table dungeon monster skill buff
-"""
+# pkg_container - 解析星痕共鸣 container/*.pkg, 列出内含的 Lua 脚本清单.
+#
+# m0.pkg / m1.pkg 内部 = 一串定制 Lua 5.3 字节码 chunk (format=0x01, size_t=4).
+# 每个 chunk 头后跟源码名字符串, 形如:
+# @D:/panda/panda-client/../panda-ab/Standalone/container/lua/zcontainer/<name>.lua
+#
+# 本工具只读, mmap + 正则扫描 (正则引擎在 C, 不在 Python 内层循环), 一次性离线用.
+#
+# 用法:
+# python -m tools.tablekit.pkg_container --pkg "...\container\m0.pkg"
+# python -m tools.tablekit.pkg_container --pkg "...\m0.pkg" --filter table dungeon monster skill buff
 from __future__ import annotations
 
 import argparse
@@ -23,7 +22,7 @@ SRC_NAME = re.compile(rb"@[\x20-\x7e]{1,300}?\.lua")
 
 
 def iter_lua_chunks(path: str):
-    """yield (chunk_offset, source_name_str). 用 mmap 流式扫, 不全读进 RAM."""
+    # yield (chunk_offset, source_name_str). 用 mmap 流式扫, 不全读进 RAM.
     size = os.path.getsize(path)
     with open(path, "rb") as f:
         mm = mmap.mmap(f.fileno(), 0, access=mmap.ACCESS_READ)
@@ -43,7 +42,7 @@ _STR_RE = re.compile(rb"[\x20-\x7e]{4,}")
 
 
 def dump_chunk_at(path: str, at: int, max_window: int = 8 * 1024 * 1024):
-    """从 at(chunk 起点)读到下一个 LUA53_SIG, 打印结构 + ASCII 字符串."""
+    # 从 at(chunk 起点)读到下一个 LUA53_SIG, 打印结构 + ASCII 字符串.
     with open(path, "rb") as f:
         f.seek(at)
         blob = f.read(max_window)

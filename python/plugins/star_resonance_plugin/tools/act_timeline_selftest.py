@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""Regression tests for shared ACT timeline/VCR helpers."""
+# Regression tests for shared ACT timeline/VCR helpers.
 
 from __future__ import annotations
 

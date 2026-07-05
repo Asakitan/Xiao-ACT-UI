@@ -1,20 +1,18 @@
-"""gpu_renderer.py — Shared moderngl-backed GPU acceleration for overlays.
-
-Goal: offload the expensive per-frame CPU pixel ops to the GPU while keeping
-the existing ULW + PIL pipeline intact.  Each render-lane thread lazily
-creates its own standalone moderngl context on first use (WGL contexts are
-thread-affine).  FBOs and shader programs are cached per-thread.
-
-Public entry points (all fall back to CPU if the GPU context fails):
-    gpu_available()                              → bool
-    gaussian_blur_rgba(img, sigma)               → PIL.Image
-    render_shell_rgba(params)                    → PIL.Image
-    premultiply_bgra_bytes(rgba_np)              → bytes   (BGRA, premult'd)
-
-Threading: Each thread that calls these functions gets its own GL context
-lazily.  Safe to call from any render-lane thread or the Tk main thread.
-
-"""
+# gpu_renderer.py — Shared moderngl-backed GPU acceleration for overlays.
+#
+# Goal: offload the expensive per-frame CPU pixel ops to the GPU while keeping
+# the existing ULW + PIL pipeline intact.  Each render-lane thread lazily
+# creates its own standalone moderngl context on first use (WGL contexts are
+# thread-affine).  FBOs and shader programs are cached per-thread.
+#
+# Public entry points (all fall back to CPU if the GPU context fails):
+# gpu_available()                              → bool
+# gaussian_blur_rgba(img, sigma)               → PIL.Image
+# render_shell_rgba(params)                    → PIL.Image
+# premultiply_bgra_bytes(rgba_np)              → bytes   (BGRA, premult'd)
+#
+# Threading: Each thread that calls these functions gets its own GL context
+# lazily.  Safe to call from any render-lane thread or the Tk main thread.
 
 from __future__ import annotations
 
@@ -91,10 +89,9 @@ _tls = threading.local()  # per-thread: .ctx, .blur_prog, .blur_quad,
 # ---------------------------------------------------------------------------
 
 def _try_init() -> bool:
-    """Ensure the current thread has its own moderngl context.
-
-    Returns True when the thread-local context is ready.
-    """
+    # Ensure the current thread has its own moderngl context.
+    #
+    # Returns True when the thread-local context is ready.
     global _global_failed
     if _DISABLED or _global_failed:
         return False
@@ -287,7 +284,7 @@ void main() {
 
 
 def _build_programs_tls() -> None:
-    """Build shader programs for the current thread's GL context."""
+    # Build shader programs for the current thread's GL context.
     ctx = _tls.ctx
     assert ctx is not None
     quad = np.array([-1, -1,  1, -1, -1,  1,
@@ -329,12 +326,11 @@ def _get_fbo(w: int, h: int, tag: str = 'rgba'):
 
 
 def _get_src_tex(w: int, h: int, tag: str, filt=(0x2600, 0x2600)):
-    """Per-thread, per-tag source texture cache.
-
-    Reuses the GL texture object across calls (glTexSubImage2D via
-    ``.write()``) instead of create+release every invocation. Only
-    reallocates when the requested size changes.
-    """
+    # Per-thread, per-tag source texture cache.
+    #
+    # Reuses the GL texture object across calls (glTexSubImage2D via
+    # ``.write()``) instead of create+release every invocation. Only
+    # reallocates when the requested size changes.
     cache = _tls.src_tex_cache
     entry = cache.get(tag)
     if entry is not None and entry[0] == w and entry[1] == h:
@@ -367,10 +363,9 @@ def _to_rgba_np(img) -> np.ndarray:
 # ---------------------------------------------------------------------------
 
 def gaussian_blur_rgba(img, sigma: float) -> Image.Image:
-    """GPU-accelerated gaussian blur. Returns a PIL RGBA image.
-
-    Falls back to PIL.ImageFilter.GaussianBlur on any failure.
-    """
+    # GPU-accelerated gaussian blur. Returns a PIL RGBA image.
+    #
+    # Falls back to PIL.ImageFilter.GaussianBlur on any failure.
     pil_in = img if hasattr(img, 'filter') and callable(img.filter) else None
     if sigma <= 0.05:
         return pil_in.copy() if pil_in is not None else Image.fromarray(
@@ -448,11 +443,10 @@ def render_shell_rgba(
     shadow_dx: float = 0.0, shadow_dy: float = 0.0,
     shadow_sigma: float = 0.0, shadow_radius: Optional[float] = None,
 ) -> Optional[Image.Image]:
-    """Render the static shell in a single shader pass.
-
-    Returns a PIL RGBA image. Returns None (caller should fall back to CPU
-    path) if the GPU context is unavailable.
-    """
+    # Render the static shell in a single shader pass.
+    #
+    # Returns a PIL RGBA image. Returns None (caller should fall back to CPU
+    # path) if the GPU context is unavailable.
     if not _try_init():
         return None
     try:
@@ -499,12 +493,11 @@ def render_shell_rgba(
 # ---------------------------------------------------------------------------
 
 def premultiply_bgra_bytes(rgba: np.ndarray) -> Optional[bytes]:
-    """GPU-accelerated RGBA → premultiplied BGRA conversion for ULW upload.
-
-    Returns the raw byte buffer (top-down) suitable for the DIB section, or
-    None if the GPU path is unavailable. Only worth calling for larger
-    surfaces; for ~260×220 panels numpy is already fast enough.
-    """
+    # GPU-accelerated RGBA → premultiplied BGRA conversion for ULW upload.
+    #
+    # Returns the raw byte buffer (top-down) suitable for the DIB section, or
+    # None if the GPU path is unavailable. Only worth calling for larger
+    # surfaces; for ~260×220 panels numpy is already fast enough.
     if _PREMULT_DISABLED:
         _phase_trace('gpu.premult.disabled')
         return None

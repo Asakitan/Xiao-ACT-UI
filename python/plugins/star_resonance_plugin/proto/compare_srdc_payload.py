@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
-"""Compare Python zstd output with the optional Node22 SRDC parity helper."""
+# Compare Python zstd output with the optional Node22 SRDC parity helper.
 
 from __future__ import annotations
 

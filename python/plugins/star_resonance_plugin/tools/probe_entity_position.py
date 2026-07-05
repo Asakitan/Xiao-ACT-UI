@@ -1,14 +1,13 @@
 # -*- coding: utf-8 -*-
-"""probe_entity_position - 探索 ZEntity 的位置/坐标字段 (read-only, 活体).
-
-链路: ZEntityMgr(堆扫) -> playerEnt_ -> 玩家实体对象 -> 活字段表逐字段解引用,
-读出每个指针字段指向对象的 klass 名 -> 找 Move/Transform/Position 类组件 ->
-dump 组件字段表 -> 候选 float 三元组按数值合理性打印。
-
-用法:
-  python -m tools.probe_entity_position                # 字段地图
-  python -m tools.probe_entity_position --watch 0x...  # 监视一个地址的 float 三元组
-"""
+# probe_entity_position - 探索 ZEntity 的位置/坐标字段 (read-only, 活体).
+#
+# 链路: ZEntityMgr(堆扫) -> playerEnt_ -> 玩家实体对象 -> 活字段表逐字段解引用,
+# 读出每个指针字段指向对象的 klass 名 -> 找 Move/Transform/Position 类组件 ->
+# dump 组件字段表 -> 候选 float 三元组按数值合理性打印。
+#
+# 用法:
+# python -m tools.probe_entity_position                # 字段地图
+# python -m tools.probe_entity_position --watch 0x...  # 监视一个地址的 float 三元组
 from __future__ import annotations
 
 import argparse

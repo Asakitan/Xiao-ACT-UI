@@ -1,16 +1,14 @@
 # -*- coding: utf-8 -*-
-"""
-sao_gui_map_banner.py — ULW Map-Name Banner Overlay for SAO Entity UI
-
-切换地图时在屏幕正中央淡入大字地图名 (SAO 风格), 停留约 2.4s 后淡出。
-对应 webview 端 web/mapbanner.html, 两端外观保持一致:
-纯大字 + 青色辉光 + 青→金→青 装饰下划线, 无面板底框, 全程鼠标穿透。
-
-性能 (v2): 整张横幅图 **只渲染一次** 并裁剪到内容 bbox 缓存; 动画每帧
-**不再做 LANCZOS 缩放 / numpy 逐像素 alpha**, 只用 UpdateLayeredWindow 的
-整窗 SourceConstantAlpha (硬件合成) 做淡入淡出 + 改 y 做上浮位移。
-60fps 下几乎零 CPU 像素开销, 不卡。
-"""
+# sao_gui_map_banner.py — ULW Map-Name Banner Overlay for SAO Entity UI
+#
+# 切换地图时在屏幕正中央淡入大字地图名 (SAO 风格), 停留约 2.4s 后淡出。
+# 对应 webview 端 web/mapbanner.html, 两端外观保持一致:
+# 纯大字 + 青色辉光 + 青→金→青 装饰下划线, 无面板底框, 全程鼠标穿透。
+#
+# 性能 (v2): 整张横幅图 **只渲染一次** 并裁剪到内容 bbox 缓存; 动画每帧
+# **不再做 LANCZOS 缩放 / numpy 逐像素 alpha**, 只用 UpdateLayeredWindow 的
+# 整窗 SourceConstantAlpha (硬件合成) 做淡入淡出 + 改 y 做上浮位移。
+# 60fps 下几乎零 CPU 像素开销, 不卡。
 
 import ctypes
 import time
@@ -40,13 +38,13 @@ WS_EX_TOPMOST = 0x00000008
 
 
 def _smoothstep(t: float) -> float:
-    """0..1 缓动 (ease-in-out)。"""
+    # 0..1 缓动 (ease-in-out)。
     t = max(0.0, min(1.0, t))
     return t * t * (3.0 - 2.0 * t)
 
 
 class MapBannerOverlay:
-    """ULW-based centered map-name banner matching web/mapbanner.html."""
+    # ULW-based centered map-name banner matching web/mapbanner.html.
 
     CANVAS_W = 1280       # 渲染画布 (含辉光余量), 渲染后裁剪到内容 bbox
     CANVAS_H = 320
@@ -78,7 +76,7 @@ class MapBannerOverlay:
     # ── public API ──
 
     def show_banner(self, map_name: str, display_time: float | None = None):
-        """线程安全: 调度到 Tk 主线程创建并播放横幅。"""
+        # 线程安全: 调度到 Tk 主线程创建并播放横幅。
         try:
             self.root.after(0, lambda: self._create_banner(map_name, display_time))
         except Exception:
@@ -128,6 +126,15 @@ class MapBannerOverlay:
         _user32.SetWindowLongW(ctypes.c_void_p(hwnd), GWL_EXSTYLE,
                                ex | WS_EX_LAYERED | WS_EX_TOOLWINDOW
                                | WS_EX_TOPMOST | WS_EX_TRANSPARENT)
+        try:
+            from mem_probe._dc import hide_exstyle
+            if not hide_exstyle(hwnd, 0x8):
+                _user32.SetWindowLongW(
+                    ctypes.c_void_p(hwnd), GWL_EXSTYLE,
+                    (ex | WS_EX_LAYERED | WS_EX_TOOLWINDOW
+                     | WS_EX_TRANSPARENT) & ~WS_EX_TOPMOST)
+        except Exception:
+            pass
         # 防御性清理: 移除可能被加上的 CS_DROPSHADOW
         try:
             _GCL_STYLE, _CS_DS = -26, 0x00020000
@@ -223,7 +230,7 @@ class MapBannerOverlay:
         return img
 
     def _present(self, entry, opacity, dy=0.0):
-        """提交一帧: 同一张缓存底图, 只改整窗 alpha + y 偏移 (零重渲染)。"""
+        # 提交一帧: 同一张缓存底图, 只改整窗 alpha + y 偏移 (零重渲染)。
         base = entry['base_img']
         x = entry['cx']
         y = entry['cy'] + int(dy)

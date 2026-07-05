@@ -1,16 +1,15 @@
 # -*- coding: utf-8 -*-
-"""Contract tests for the mem_probe AVX2 memory scanner.
-
-Covers the heap-scan hot paths optimised for speed:
-  - find_aligned_u64 / find_aligned_u32  (real AVX2 vs scalar parity)
-  - find_aligned_u64_in_set / find_aligned_u32_in_set  (Bloom prefilter +
-    C++ unordered_set; collision-but-absent values must NOT match)
-  - read-only buffer acceptance (bytes go in zero-copy, no bytearray copy)
-  - find_aligned_u64_with_anchor (SIMD anchor prefilter vs scalar walk)
-  - read_entity_combat_many (synthetic Burst index in our own process,
-    read back through the real ReadProcessMemory batch path)
-against planted needles, and verifies the AVX2 and scalar code paths agree.
-"""
+# Contract tests for the mem_probe AVX2 memory scanner.
+#
+# Covers the heap-scan hot paths optimised for speed:
+# - find_aligned_u64 / find_aligned_u32  (real AVX2 vs scalar parity)
+# - find_aligned_u64_in_set / find_aligned_u32_in_set  (Bloom prefilter +
+# C++ unordered_set; collision-but-absent values must NOT match)
+# - read-only buffer acceptance (bytes go in zero-copy, no bytearray copy)
+# - find_aligned_u64_with_anchor (SIMD anchor prefilter vs scalar walk)
+# - read_entity_combat_many (synthetic Burst index in our own process,
+# read back through the real ReadProcessMemory batch path)
+# against planted needles, and verifies the AVX2 and scalar code paths agree.
 from __future__ import annotations
 
 import ctypes
@@ -169,8 +168,8 @@ class MemScanTests(unittest.TestCase):
 
 @unittest.skipIf(fast is None, "_sao_cy_memscan extension not built")
 class ReadEntityCombatManyTests(unittest.TestCase):
-    """Synthetic ZAttrCacheSlim Burst index laid out in our own process,
-    read back via the real cross-process batch decoder (pseudo-handle -1)."""
+    # Synthetic ZAttrCacheSlim Burst index laid out in our own process,
+    # read back via the real cross-process batch decoder (pseudo-handle -1).
 
     OFF_ATTRS = 0x48
     OFF_INDEXPART = 0x18
@@ -203,7 +202,7 @@ class ReadEntityCombatManyTests(unittest.TestCase):
         return o
 
     def _mk_entity(self, attr_values: dict) -> int:
-        """attr_values: {attr_id: (is_long, value)} laid out across segments."""
+        # attr_values: {attr_id: (is_long, value)} laid out across segments.
         ent = self._alloc(0x60)
         attrs = self._alloc(0x40)
         ip = self._alloc(0x310)

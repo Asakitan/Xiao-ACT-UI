@@ -1,11 +1,10 @@
 # -*- coding: utf-8 -*-
-"""Regression coverage for the reconciling Tk plugin renderer (SpecRenderer).
-
-The renderer must update widgets IN PLACE when the spec structure is unchanged
-(so animated panels don't flicker and interactive buttons aren't destroyed under
-the user's cursor during playback), and only rebuild subtrees that change shape.
-Needs a Tk display (works headless on Windows).
-"""
+# Regression coverage for the reconciling Tk plugin renderer (SpecRenderer).
+#
+# The renderer must update widgets IN PLACE when the spec structure is unchanged
+# (so animated panels don't flicker and interactive buttons aren't destroyed under
+# the user's cursor during playback), and only rebuild subtrees that change shape.
+# Needs a Tk display (works headless on Windows).
 
 from __future__ import annotations
 

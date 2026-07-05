@@ -1,14 +1,13 @@
-"""pkg_probe - 摸清星痕共鸣 Star_Data/StreamingAssets/container/*.pkg 自定义容器格式.
-
-只读探针, 不改游戏文件. 目的:
-  1. 判断 info/audio/Patch 是清单还是数据
-  2. 解析 .pkg 头部结构 (magic 76 20 AF E1)
-  3. 定位 Lua 5.3 字节码块 (\\x1bLua\\x53 ... \\x19\\x93)
-  4. 扫 ASCII 字符串找表名 (MonsterTable / DungeonTable / SkillTable ...)
-
-用法:
-    python -m tools.tablekit.pkg_probe --dir "E:\\星痕共鸣(2001991)\\Star_Data\\StreamingAssets\\container"
-"""
+# pkg_probe - 摸清星痕共鸣 Star_Data/StreamingAssets/container/*.pkg 自定义容器格式.
+#
+# 只读探针, 不改游戏文件. 目的:
+# 1. 判断 info/audio/Patch 是清单还是数据
+# 2. 解析 .pkg 头部结构 (magic 76 20 AF E1)
+# 3. 定位 Lua 5.3 字节码块 (\x1bLua\x53 ... \x19\x93)
+# 4. 扫 ASCII 字符串找表名 (MonsterTable / DungeonTable / SkillTable ...)
+#
+# 用法:
+# python -m tools.tablekit.pkg_probe --dir "E:\星痕共鸣(2001991)\Star_Data\StreamingAssets\container"
 from __future__ import annotations
 
 import argparse

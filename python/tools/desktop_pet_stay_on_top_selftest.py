@@ -1,28 +1,27 @@
 # -*- coding: utf-8 -*-
-"""Selftest: with NO game attached (pure desktop-pet usage — the common
-case for this feature), the compositor host must reliably stay in
-front of other, ordinary desktop applications — not just win the
-z-order race for the instant of _enforce_z_order()'s own SetWindowPos
-call and then lose it the moment any other app activates a window.
-
-Reproduces the user's report: "compositor 莫名其妙会被各种桌面软件遮住,
-点一点桌宠就看不到了" (the compositor mysteriously gets covered by
-various desktop apps, clicking the pet a bit makes it disappear) —
-"只有打开home(鱼眼菜单)才会重新置顶弹出来" (only opening the fisheye
-menu brings it back to front). That second detail pins the root cause
-precisely: the fisheye briefly forces the host to real WS_EX_TOPMOST
-for its own hit-layer's sake, which was masking a genuine weakness in
-_enforce_z_order's "no game attached" fallback — it only used
-HWND_TOP (a one-shot, easily-beaten z-order request), never real
-TOPMOST, reasoning that real TOPMOST risks anti-cheat detection. That
-risk only applies while a game IS attached; this branch runs
-specifically when one ISN'T.
-
-Also verifies the fix doesn't reintroduce the NerveGear-proxy-buried-
-under-host regression this session already fixed twice: a Tk input
-proxy is ALSO real-topmost, so making the host real-topmost too could
-bury it again unless proxies get re-lifted every time.
-"""
+# Selftest: with NO game attached (pure desktop-pet usage — the common
+# case for this feature), the compositor host must reliably stay in
+# front of other, ordinary desktop applications — not just win the
+# z-order race for the instant of _enforce_z_order()'s own SetWindowPos
+# call and then lose it the moment any other app activates a window.
+#
+# Reproduces the user's report: "compositor 莫名其妙会被各种桌面软件遮住,
+# 点一点桌宠就看不到了" (the compositor mysteriously gets covered by
+# various desktop apps, clicking the pet a bit makes it disappear) —
+# "只有打开home(鱼眼菜单)才会重新置顶弹出来" (only opening the fisheye
+# menu brings it back to front). That second detail pins the root cause
+# precisely: the fisheye briefly forces the host to real WS_EX_TOPMOST
+# for its own hit-layer's sake, which was masking a genuine weakness in
+# _enforce_z_order's "no game attached" fallback — it only used
+# HWND_TOP (a one-shot, easily-beaten z-order request), never real
+# TOPMOST, reasoning that real TOPMOST risks anti-cheat detection. That
+# risk only applies while a game IS attached; this branch runs
+# specifically when one ISN'T.
+#
+# Also verifies the fix doesn't reintroduce the NerveGear-proxy-buried-
+# under-host regression this session already fixed twice: a Tk input
+# proxy is ALSO real-topmost, so making the host real-topmost too could
+# bury it again unless proxies get re-lifted every time.
 import os
 import sys
 import time

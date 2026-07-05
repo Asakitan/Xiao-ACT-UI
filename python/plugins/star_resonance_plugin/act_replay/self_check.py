@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""Compatibility entry point for the ACT replay smoke test."""
+# Compatibility entry point for the ACT replay smoke test.
 
 from .selftest import build_demo_events, main
 

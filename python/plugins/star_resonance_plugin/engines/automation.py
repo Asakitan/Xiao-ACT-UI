@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""Headless automation entrypoint that reuses the shared auto-key engine."""
+# Headless automation entrypoint that reuses the shared auto-key engine.
 
 import threading
 

@@ -1,24 +1,23 @@
-"""anchors.json 二次精化.
-
-前置: 先跑 auto_locate.py 拿到 anchors.json (含 uid/hp/max_hp 候选集)。
-
-工作流程:
-    1. 复用 anchors.json + 重新 attach Star.exe
-    2. 启动 PacketBridge 监控 HP 实时变化
-    3. 提示玩家"现在请挨一下小怪让 HP 真正下降" (满血时 HP==MaxHP 无法区分)
-    4. HP 下降后:
-       - 用新 HP narrow → 真 self_hp 地址集 (期望 1~3)
-       - MaxHP 集仍按旧值, 用 narrow 验证 (大概率不变)
-       - 求 hp 候选与 maxhp 候选的"邻接对" (offset ±4/±8/±0x10/±0x18 等典型布局)
-       - 对每个邻接对, 在其 ±0x800 范围内找 uid 候选 → 唯一锁定 Player struct
-
-输出:
-    覆盖 anchors.json, 新增字段:
-        - self_hp_addr: int (single)
-        - self_max_hp_addr: int (single)
-        - self_uid_addr: int (single, 在 Player struct 内)
-        - player_struct_base_guess: int (推测 hp_addr 所在的对象起点)
-"""
+# anchors.json 二次精化.
+#
+# 前置: 先跑 auto_locate.py 拿到 anchors.json (含 uid/hp/max_hp 候选集)。
+#
+# 工作流程:
+# 1. 复用 anchors.json + 重新 attach Star.exe
+# 2. 启动 PacketBridge 监控 HP 实时变化
+# 3. 提示玩家"现在请挨一下小怪让 HP 真正下降" (满血时 HP==MaxHP 无法区分)
+# 4. HP 下降后:
+# - 用新 HP narrow → 真 self_hp 地址集 (期望 1~3)
+# - MaxHP 集仍按旧值, 用 narrow 验证 (大概率不变)
+# - 求 hp 候选与 maxhp 候选的"邻接对" (offset ±4/±8/±0x10/±0x18 等典型布局)
+# - 对每个邻接对, 在其 ±0x800 范围内找 uid 候选 → 唯一锁定 Player struct
+#
+# 输出:
+# 覆盖 anchors.json, 新增字段:
+# - self_hp_addr: int (single)
+# - self_max_hp_addr: int (single)
+# - self_uid_addr: int (single, 在 Player struct 内)
+# - player_struct_base_guess: int (推测 hp_addr 所在的对象起点)
 
 from __future__ import annotations
 
@@ -56,7 +55,7 @@ def _save_anchors(path: str, data: dict) -> None:
 
 
 def _wait_any_hp_change(src: _TcpSource, *, baseline: int, timeout: float):
-    """等到至少看到一个与 baseline 不同的 HP. 返回 (changed_hp, latest_max_hp)."""
+    # 等到至少看到一个与 baseline 不同的 HP. 返回 (changed_hp, latest_max_hp).
     print(f"[wait] baseline HP={baseline}")
     print("[wait] >>> 请在游戏内让 HP 变动 (挨打/吃药/施放消耗都行) <<<")
     deadline = time.time() + timeout
@@ -79,13 +78,12 @@ def _verify_lockstep(
     interval: float = 0.1,
     min_match_ratio: float = 0.6,
 ) -> List[Tuple[int, int]]:
-    """对每个 candidate 在 N 次 TCP 采样的同一瞬间读内存, 计 read==tcp 命中数.
-
-    HP 抖动场景下, 真正 self_hp 地址会与 TCP 完全同步; 只要内存读和 TCP 报到一致,
-    就算几乎所有时刻 HP 都在变, 真地址也会高分。
-
-    返回 [(addr, score)] 按 score 倒序; 只保留 score >= samples * min_match_ratio。
-    """
+    # 对每个 candidate 在 N 次 TCP 采样的同一瞬间读内存, 计 read==tcp 命中数.
+    #
+    # HP 抖动场景下, 真正 self_hp 地址会与 TCP 完全同步; 只要内存读和 TCP 报到一致,
+    # 就算几乎所有时刻 HP 都在变, 真地址也会高分。
+    #
+    # 返回 [(addr, score)] 按 score 倒序; 只保留 score >= samples * min_match_ratio。
     if not candidates:
         return []
     score = {a: 0 for a in candidates}
@@ -122,11 +120,10 @@ def _multi_scan_hp(
     snapshot_window: float = 3.0,
     snapshot_interval: float = 0.15,
 ) -> List[int]:
-    """在 snapshot_window 秒内收集若干个不同 HP 值, 各扫一次取并集.
-
-    HP 一直跳的角色, 单次扫描扫到一半 HP 就变了 → 命中数极少。
-    多 HP 并集能保证真实 hp_addr 一定在结果集中 (它必然在某个时刻等于其中之一)。
-    """
+    # 在 snapshot_window 秒内收集若干个不同 HP 值, 各扫一次取并集.
+    #
+    # HP 一直跳的角色, 单次扫描扫到一半 HP 就变了 → 命中数极少。
+    # 多 HP 并集能保证真实 hp_addr 一定在结果集中 (它必然在某个时刻等于其中之一)。
     from .scanner import scan as _scan
     deadline = time.time() + snapshot_window
     seen: List[int] = []
@@ -161,11 +158,10 @@ def _stream_narrow(
     timeout: float = 120.0,
     poll: float = 0.2,
 ) -> List[int]:
-    """持续监听 TCP HP, 每次新值出现就 narrow; 候选 ≤ target_count 立即返回.
-
-    第一帧无论 candidates 数量都先做一次基线 narrow 来剔除 unreadable 地址,
-    避免上次会话的陈旧地址被误当成 "already converged".
-    """
+    # 持续监听 TCP HP, 每次新值出现就 narrow; 候选 ≤ target_count 立即返回.
+    #
+    # 第一帧无论 candidates 数量都先做一次基线 narrow 来剔除 unreadable 地址,
+    # 避免上次会话的陈旧地址被误当成 "already converged".
     candidates = list(initial)
     cur0 = src.snapshot()["hp"]
     if cur0 > 0 and candidates:
@@ -203,7 +199,7 @@ def _stream_narrow(
 def _find_pairs(
     hp_addrs: List[int], maxhp_addrs: List[int]
 ) -> List[Tuple[int, int, int]]:
-    """返回 [(hp_addr, maxhp_addr, delta)], delta = maxhp - hp."""
+    # 返回 [(hp_addr, maxhp_addr, delta)], delta = maxhp - hp.
     sorted_max = sorted(maxhp_addrs)
     pairs: List[Tuple[int, int, int]] = []
     for h in hp_addrs:
@@ -227,7 +223,7 @@ def _find_nearby_uid(
 def _local_find_i32(
     pm, anchor: int, target: int, *, radius: int = 0x200
 ) -> List[int]:
-    """以 anchor 为中心读 ±radius 字节, 4 字节对齐扫描 i32==target 的所有偏移地址."""
+    # 以 anchor 为中心读 ±radius 字节, 4 字节对齐扫描 i32==target 的所有偏移地址.
     base = anchor - radius
     blob = pm.read_bytes(base, radius * 2)
     if blob is None:
@@ -246,7 +242,7 @@ def _local_find_i32(
 
 
 def _dump_i32_grid(pm, anchor: int, *, radius: int = 0x80) -> str:
-    """在 anchor 附近以 i32 形式打印 (offset / hex / signed-int) 三列。"""
+    # 在 anchor 附近以 i32 形式打印 (offset / hex / signed-int) 三列。
     import struct
     base = anchor - radius
     blob = pm.read_bytes(base, radius * 2)

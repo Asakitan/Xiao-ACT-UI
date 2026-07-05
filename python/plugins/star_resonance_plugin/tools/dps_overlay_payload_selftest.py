@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""Regression tests for DPS overlay payload numeric guards."""
+# Regression tests for DPS overlay payload numeric guards.
 
 from __future__ import annotations
 

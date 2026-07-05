@@ -1,10 +1,9 @@
 # -*- coding: utf-8 -*-
-"""Normalized ACT replay event helpers.
-
-The parser already emits dictionaries for dungeon and skill lifecycle events.
-These helpers keep replay fixtures close to that shape while making small smoke
-tests easier to read and harder to typo.
-"""
+# Normalized ACT replay event helpers.
+#
+# The parser already emits dictionaries for dungeon and skill lifecycle events.
+# These helpers keep replay fixtures close to that shape while making small smoke
+# tests easier to read and harder to typo.
 
 from __future__ import annotations
 

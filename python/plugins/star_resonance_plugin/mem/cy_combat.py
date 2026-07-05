@@ -1,9 +1,8 @@
 # -*- coding: utf-8 -*-
-"""Game-specific Cython combat facades (thin wrappers over _sao_cy_memscan).
-
-Extracted from platform cy_memscan.py — these functions decode Star Resonance
-Il2Cpp entity/boss combat structures and skill-CD arrays.
-"""
+# Game-specific Cython combat facades (thin wrappers over _sao_cy_memscan).
+#
+# Extracted from platform cy_memscan.py — these functions decode Star Resonance
+# Il2Cpp entity/boss combat structures and skill-CD arrays.
 from __future__ import annotations
 
 from typing import Iterable, List, Sequence

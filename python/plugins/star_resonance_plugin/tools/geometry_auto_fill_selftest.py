@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""Selftest: geometry_auto_fill — skill_id 精确填 + 名字相似度领域填(纯逻辑)。"""
+# Selftest: geometry_auto_fill — skill_id 精确填 + 名字相似度领域填(纯逻辑)。
 from __future__ import annotations
 
 import os

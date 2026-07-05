@@ -1,19 +1,17 @@
 # -*- coding: utf-8 -*-
-"""
-SAOSessionPlayersPanel — left-stack panel listing all players seen during
-the current login session (in-game encountered roster).
-
-Moved into the Star Resonance plugin so the platform owns no session-player panel. The panel
-is GPU-painted when ``sao_left_info_gpu`` reports availability and
-silently no-ops otherwise (the original ``ENTITY_GPU_ONLY`` invariant
-is preserved).
-
-Public surface (unchanged from the original):
-  * ``SAOSessionPlayersPanel(parent, rows_provider=None, **kw)``
-  * ``.update_rows(rows=None, force=False)``
-  * ``.prepare_open_animation()`` / ``.play_open_animation()`` / ``.sync_pulse()``
-  * ``.bind_global_wheel_fallback()`` / ``.unbind_global_wheel_fallback()``
-"""
+# SAOSessionPlayersPanel — left-stack panel listing all players seen during
+# the current login session (in-game encountered roster).
+#
+# Moved into the Star Resonance plugin so the platform owns no session-player panel. The panel
+# is GPU-painted when ``sao_left_info_gpu`` reports availability and
+# silently no-ops otherwise (the original ``ENTITY_GPU_ONLY`` invariant
+# is preserved).
+#
+# Public surface (unchanged from the original):
+# * ``SAOSessionPlayersPanel(parent, rows_provider=None, **kw)``
+# * ``.update_rows(rows=None, force=False)``
+# * ``.prepare_open_animation()`` / ``.play_open_animation()`` / ``.sync_pulse()``
+# * ``.bind_global_wheel_fallback()`` / ``.unbind_global_wheel_fallback()``
 
 from __future__ import annotations
 
@@ -34,7 +32,7 @@ _SESSION_WHEEL_ROOTS: Dict[int, Dict[str, Any]] = {}
 
 
 def _session_rows_render_signature(rows) -> tuple[Any, tuple[str, ...]]:
-    """Track Cython row identity plus the power text actually rendered."""
+    # Track Cython row identity plus the power text actually rendered.
     power_text = []
     for row in rows or []:
         if not isinstance(row, dict):
@@ -61,7 +59,7 @@ def _dispatch_session_wheel(root, event):
 
 
 class SAOSessionPlayersPanel(tk.Frame):
-    """SAO 菜单内的本次登录玩家列表。"""
+    # SAO 菜单内的本次登录玩家列表。
 
     ENTITY_GPU_ONLY = True
     PANEL_W = 304
@@ -538,7 +536,7 @@ class SAOSessionPlayersPanel(tk.Frame):
             pass
 
     def play_open_animation(self):
-        """Tiny SAO-style slide/glint so the list follows menu open."""
+        # Tiny SAO-style slide/glint so the list follows menu open.
         if self._gpu_managed:
             self._cached_screen_xy = None
             try:

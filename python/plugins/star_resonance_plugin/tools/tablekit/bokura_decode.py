@@ -1,28 +1,27 @@
-"""bokura_decode - 星痕共鸣 m0.pkg "Bokura" 配置表字符串池解码器 (离线).
-
-================================================================================
-重要结论 (经穷尽逆向后实证, 见 tools/tablekit/README_bokura.md):
---------------------------------------------------------------------------------
-m0.pkg 不是一个能"离线完整解码 id->中文名"的容器。实测如下:
-
-  1. 文件 = 4713 个 Lua 5.3 字节码 chunk + 它们之间的"数据缝隙"(共 ~1.18GB)。
-     缝隙才是 Bokura 表数据区 (Lua chunk 本身只占几十 MB)。
-  2. 中文名以 <1字节长度><UTF-8> 紧密拼接, 堆在一个主缝隙 gap@0x124DE0AA
-     (8.6MB) 里, 顺序 ~= 各表的 id 升序 (实测怪物锚点 97.8% 单调递增)。
-  3. 但是: 池里【没有】与名字行序对应的 id 列, 【没有】绝对/相对偏移指针
-     (833 个怪物名的绝对偏移在全文件 0 次作为 u32 出现)。
-     => 每个名字 token 的"确切 id"无法离线唯一确定 (id 有跳号且未知)。
-  4. 池只装了部分名字: 怪物名 94% 在池里, 但技能名仅 20% 在池里。
-
-因此本模块能做的是【锚点对齐】: 用已知正确的 crib (id->name) 当锚点, 借助
-"池按 id 升序"的性质, 把池 token 对齐回 id, 产出一个【高置信子集】(交叉验证
-100% 一致)。它【不能】产出比 crib 更完整的表 —— 完整表需读运行时 ZTable
-(IL2CPP, 见报告)。
-
-本模块仍是可复用的: 它给出 gap 地图、字符串池 token 化、crib 锚点对齐三件套,
-可用于任何"有 crib + 名字在池中按 id 升序"的表。
-================================================================================
-"""
+# bokura_decode - 星痕共鸣 m0.pkg "Bokura" 配置表字符串池解码器 (离线).
+#
+# ================================================================================
+# 重要结论 (经穷尽逆向后实证, 见 tools/tablekit/README_bokura.md):
+# --------------------------------------------------------------------------------
+# m0.pkg 不是一个能"离线完整解码 id->中文名"的容器。实测如下:
+#
+# 1. 文件 = 4713 个 Lua 5.3 字节码 chunk + 它们之间的"数据缝隙"(共 ~1.18GB)。
+# 缝隙才是 Bokura 表数据区 (Lua chunk 本身只占几十 MB)。
+# 2. 中文名以 <1字节长度><UTF-8> 紧密拼接, 堆在一个主缝隙 gap@0x124DE0AA
+# (8.6MB) 里, 顺序 ~= 各表的 id 升序 (实测怪物锚点 97.8% 单调递增)。
+# 3. 但是: 池里【没有】与名字行序对应的 id 列, 【没有】绝对/相对偏移指针
+# (833 个怪物名的绝对偏移在全文件 0 次作为 u32 出现)。
+# => 每个名字 token 的"确切 id"无法离线唯一确定 (id 有跳号且未知)。
+# 4. 池只装了部分名字: 怪物名 94% 在池里, 但技能名仅 20% 在池里。
+#
+# 因此本模块能做的是【锚点对齐】: 用已知正确的 crib (id->name) 当锚点, 借助
+# "池按 id 升序"的性质, 把池 token 对齐回 id, 产出一个【高置信子集】(交叉验证
+# 100% 一致)。它【不能】产出比 crib 更完整的表 —— 完整表需读运行时 ZTable
+# (IL2CPP, 见报告)。
+#
+# 本模块仍是可复用的: 它给出 gap 地图、字符串池 token 化、crib 锚点对齐三件套,
+# 可用于任何"有 crib + 名字在池中按 id 升序"的表。
+# ================================================================================
 from __future__ import annotations
 
 import bisect
@@ -73,7 +72,7 @@ def _rd_string(r: _R):
 
 
 def _parse_function(r: _R):
-    """解析一个 Lua 5.3 Proto (header 已知: int=4,size_t=4,inst=4,luaint=8,luanum=8)."""
+    # 解析一个 Lua 5.3 Proto (header 已知: int=4,size_t=4,inst=4,luaint=8,luanum=8).
     _rd_string(r)               # source
     r.u32(); r.u32()            # linedefined, lastlinedefined
     r.u8(); r.u8(); r.u8()      # numparams, is_vararg, maxstacksize
@@ -113,7 +112,7 @@ def _chunk_end(mm, off: int) -> int:
 
 
 def build_gap_map(mm) -> List[Tuple[int, int]]:
-    """返回 [(gap_start, gap_end), ...] —— Lua chunk 之间的纯数据缝隙."""
+    # 返回 [(gap_start, gap_end), ...] —— Lua chunk 之间的纯数据缝隙.
     size = mm.size()
     offs = [m.start() for m in _LUA_SIG.finditer(mm)]
     ends = []
@@ -135,7 +134,7 @@ def build_gap_map(mm) -> List[Tuple[int, int]]:
 # 2) 字符串池 token 化: <1字节长度><UTF-8> 紧密序列
 # ---------------------------------------------------------------------------
 def tokenize_gap(mm, gs: int, ge: int, only_cjk: bool = False) -> List[Tuple[int, str]]:
-    """把一个 gap 解析成 [(file_offset, text), ...] 的 <len><utf8> token 流."""
+    # 把一个 gap 解析成 [(file_offset, text), ...] 的 <len><utf8> token 流.
     data = mm[gs:ge]
     out = []
     i = 0
@@ -165,8 +164,8 @@ def tokenize_gap(mm, gs: int, ge: int, only_cjk: bool = False) -> List[Tuple[int
 
 
 def main_pool_gap(gaps: List[Tuple[int, int]]) -> Tuple[int, int]:
-    """主名字池缝隙: 经实测固定为 gap@0x124DE0AA..0x12D41D0D。
-    若结构变化, 回退为含该地址的 gap, 否则取最大 gap。"""
+    # 主名字池缝隙: 经实测固定为 gap@0x124DE0AA..0x12D41D0D。
+    # 若结构变化, 回退为含该地址的 gap, 否则取最大 gap。
     target = 0x124DE0AA
     for gs, ge in gaps:
         if gs <= target < ge:
@@ -178,7 +177,7 @@ def main_pool_gap(gaps: List[Tuple[int, int]]) -> Tuple[int, int]:
 # 3) crib 锚点对齐: 池 token 按 id 升序 <-> crib(id->name) 升序
 # ---------------------------------------------------------------------------
 def _lis_indices(vals: List[int]) -> List[int]:
-    """最长严格递增子序列, 返回选中的下标 (用于剔除非单调离群锚点)."""
+    # 最长严格递增子序列, 返回选中的下标 (用于剔除非单调离群锚点).
     tails: List[int] = []
     tails_idx: List[int] = []
     prev = [-1] * len(vals)
@@ -204,14 +203,13 @@ def _lis_indices(vals: List[int]) -> List[int]:
 
 def align_table(tokens: List[Tuple[int, str]],
                 crib: Dict[int, str]) -> Tuple[Dict[int, str], dict]:
-    """用 crib 锚点把池 tokens 对齐到 id。
-
-    返回 (result{id:name}, stats)。result 仅含【高置信】条目:
-      - LIS 单调清洗后的唯一名锚点 (本身就是 crib 的 id, 100% 准);
-      - 锚点区间内, 当 池子段名字序列 与 crib 对应 id 段名字序列【逐一相等】时,
-        填入该段 (零容错, 任何不符就整段跳过)。
-    这样保证产出每条都与 crib 一致 (交叉验证 100%), 不引入瞎猜。
-    """
+    # 用 crib 锚点把池 tokens 对齐到 id。
+    #
+    # 返回 (result{id:name}, stats)。result 仅含【高置信】条目:
+    # - LIS 单调清洗后的唯一名锚点 (本身就是 crib 的 id, 100% 准);
+    # - 锚点区间内, 当 池子段名字序列 与 crib 对应 id 段名字序列【逐一相等】时,
+    # 填入该段 (零容错, 任何不符就整段跳过)。
+    # 这样保证产出每条都与 crib 一致 (交叉验证 100%), 不引入瞎猜。
     from collections import defaultdict
     name2ids = defaultdict(list)
     for i, nm in crib.items():
@@ -266,7 +264,7 @@ def open_pkg(path: str = PKG_DEFAULT):
 
 
 def load_pool_tokens(path: str = PKG_DEFAULT) -> List[Tuple[int, str]]:
-    """打开 m0.pkg, 建 gap 地图, token 化主名字池, 返回 token 流."""
+    # 打开 m0.pkg, 建 gap 地图, token 化主名字池, 返回 token 流.
     f, mm = open_pkg(path)
     try:
         gaps = build_gap_map(mm)

@@ -1,16 +1,15 @@
 # -*- coding: utf-8 -*-
-"""Selftest: DCompBridge._note_present_hr device-loss handling.
-
-Verifies the Present-HRESULT classifier that keeps a monitor power-off /
-GPU reset from crash-exiting the app:
-  - DXGI_ERROR_DEVICE_REMOVED / RESET / HUNG  → device lost: bridge is
-    marked dead (so every present() short-circuits to SwapBuffers) and
-    the GL interop state is torn down.
-  - DXGI_STATUS_OCCLUDED (monitor off, device fine) and S_OK           → NOT a loss: bridge stays alive, keeps presenting.
-
-Pure logic — constructs the bridge via object.__new__ to skip the real
-D3D11/DComp device creation, so it needs no GPU.
-"""
+# Selftest: DCompBridge._note_present_hr device-loss handling.
+#
+# Verifies the Present-HRESULT classifier that keeps a monitor power-off /
+# GPU reset from crash-exiting the app:
+# - DXGI_ERROR_DEVICE_REMOVED / RESET / HUNG  → device lost: bridge is
+# marked dead (so every present() short-circuits to SwapBuffers) and
+# the GL interop state is torn down.
+# - DXGI_STATUS_OCCLUDED (monitor off, device fine) and S_OK           → NOT a loss: bridge stays alive, keeps presenting.
+#
+# Pure logic — constructs the bridge via object.__new__ to skip the real
+# D3D11/DComp device creation, so it needs no GPU.
 import os
 import sys
 
@@ -20,8 +19,8 @@ from render import dcomp_bridge as db  # noqa: E402
 
 
 def _make_bridge():
-    """A DCompBridge with just the fields _note_present_hr touches, no
-    real device (object.__new__ bypasses __init__'s D3D creation)."""
+    # A DCompBridge with just the fields _note_present_hr touches, no
+    # real device (object.__new__ bypasses __init__'s D3D creation).
     b = object.__new__(db.DCompBridge)
     b._alive = True
     b._teardown_calls = 0

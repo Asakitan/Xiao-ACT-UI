@@ -1,12 +1,11 @@
-"""Visual + perf A/B comparison: PIL SkillFX render vs new shader pipeline.
-
-Renders one steady-state burst frame (slot index = 1) at 1920×1080, dumps:
-  - tools/out/skillfx_pil.png        (existing PIL/numpy compose path)
-  - tools/out/skillfx_gpu.png        (new SkillFXShaderPipeline)
-  - tools/out/skillfx_diff.png       (per-pixel abs-diff x4 for visibility)
-
-Prints timing for both paths over N iterations to compare CPU/wall cost.
-"""
+# Visual + perf A/B comparison: PIL SkillFX render vs new shader pipeline.
+#
+# Renders one steady-state burst frame (slot index = 1) at 1920×1080, dumps:
+# - tools/out/skillfx_pil.png        (existing PIL/numpy compose path)
+# - tools/out/skillfx_gpu.png        (new SkillFXShaderPipeline)
+# - tools/out/skillfx_diff.png       (per-pixel abs-diff x4 for visibility)
+#
+# Prints timing for both paths over N iterations to compare CPU/wall cost.
 from __future__ import annotations
 
 import os
@@ -61,7 +60,7 @@ def render_gpu() -> Image.Image:
 
 
 def render_pil_via_overlay() -> Image.Image:
-    """Drive the real BurstReadyOverlay.compose_frame to produce reference."""
+    # Drive the real BurstReadyOverlay.compose_frame to produce reference.
     # Create a fake Tk root (headless) — sao_gui_skillfx imports tkinter and
     # uses _user32 / FrameWorker. We construct only what compose_frame needs.
     import tkinter as tk

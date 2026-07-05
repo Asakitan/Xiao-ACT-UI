@@ -1,43 +1,42 @@
-"""把 Il2CppDumper 的 dump.cs + script.json 转为我们运行时用的 metadata.json.
-
-dump.cs 格式 (relevant 行):
-    public class Foo : Bar // TypeDefIndex: 1234
-    {
-        // Fields
-        public int CurHp; // 0x10
-        private static int _instance; // 0x0
-        public const int Bar = 5;       // 无 offset, 跳过
-        ...
-    }
-
-script.json sections:
-    ScriptMetadata: [{Address, Name, Signature}]
-        Name 形如 "Foo_TypeInfo"  → Il2CppClass*  (Address 是 GameAssembly.dll 内 RVA)
-        Name 形如 "Foo_var"       → Il2CppType*
-
-输出 metadata.json schema:
-{
-  "version": 1,
-  "metadata_version": 31,
-  "game_assembly_sha8": "...",
-  "type_info_map": {                  # 全量保留 (轻量, 字典)
-      "<ClassFullName>": <RVA int>,
-      ...
-  },
-  "classes": {                        # 仅按 --class-regex 过滤
-      "<ClassFullName>": {
-          "type_def_index": int,
-          "base": str | null,
-          "fields": [{"name": str, "offset": int, "type": str, "static": bool}, ...]
-      },
-      ...
-  }
-}
-
-CLI:
-    python -m tools.mem_probe.il2cpp.metadata_builder --dumper-out <dir>
-    python -m tools.mem_probe.il2cpp.metadata_builder --dumper-out <dir> --class-regex "Player|Hero|Avatar"
-"""
+# 把 Il2CppDumper 的 dump.cs + script.json 转为我们运行时用的 metadata.json.
+#
+# dump.cs 格式 (relevant 行):
+# public class Foo : Bar // TypeDefIndex: 1234
+# {
+# // Fields
+# public int CurHp; // 0x10
+# private static int _instance; // 0x0
+# public const int Bar = 5;       // 无 offset, 跳过
+# ...
+# }
+#
+# script.json sections:
+# ScriptMetadata: [{Address, Name, Signature}]
+# Name 形如 "Foo_TypeInfo"  → Il2CppClass*  (Address 是 GameAssembly.dll 内 RVA)
+# Name 形如 "Foo_var"       → Il2CppType*
+#
+# 输出 metadata.json schema:
+# {
+# "version": 1,
+# "metadata_version": 31,
+# "game_assembly_sha8": "...",
+# "type_info_map": {                  # 全量保留 (轻量, 字典)
+# "<ClassFullName>": <RVA int>,
+# ...
+# },
+# "classes": {                        # 仅按 --class-regex 过滤
+# "<ClassFullName>": {
+# "type_def_index": int,
+# "base": str | null,
+# "fields": [{"name": str, "offset": int, "type": str, "static": bool}, ...]
+# },
+# ...
+# }
+# }
+#
+# CLI:
+# python -m tools.mem_probe.il2cpp.metadata_builder --dumper-out <dir>
+# python -m tools.mem_probe.il2cpp.metadata_builder --dumper-out <dir> --class-regex "Player|Hero|Avatar"
 
 from __future__ import annotations
 
@@ -93,7 +92,7 @@ _IMAGE_PREFIX = "// Image "
 
 
 def parse_dump_cs(path: str, class_regex: Optional[re.Pattern]) -> Dict[str, dict]:
-    """流式解析 dump.cs. 仅保留匹配 class_regex 的类的字段."""
+    # 流式解析 dump.cs. 仅保留匹配 class_regex 的类的字段.
     classes: Dict[str, dict] = {}
     cur: Optional[dict] = None
     in_fields = False
@@ -180,7 +179,7 @@ _SUFFIX_TYPEINFO = "_TypeInfo"
 
 
 def parse_script_json_typeinfo(path: str) -> Dict[str, int]:
-    """从 script.json 流式抽取所有 *_TypeInfo. 返回 {full_class_name: rva}."""
+    # 从 script.json 流式抽取所有 *_TypeInfo. 返回 {full_class_name: rva}.
     type_info: Dict[str, int] = {}
     # 先定位 ScriptMetadata 段, 再增量扫. script.json 是单行 JSON, 数百 MB.
     target_marker = b'"ScriptMetadata"'
@@ -220,7 +219,7 @@ def parse_script_json_typeinfo(path: str) -> Dict[str, int]:
 
 
 def align_typeinfo(classes: Dict[str, dict], typeinfo_map: Dict[str, int]) -> int:
-    """将 typeinfo RVA 写入 classes 字典. 返回成功对齐的数量."""
+    # 将 typeinfo RVA 写入 classes 字典. 返回成功对齐的数量.
     aligned = 0
     for cls_name, info in classes.items():
         if cls_name in typeinfo_map:

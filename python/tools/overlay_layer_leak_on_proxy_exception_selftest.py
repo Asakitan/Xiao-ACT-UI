@@ -1,23 +1,22 @@
 # -*- coding: utf-8 -*-
-"""Selftest: CompositorOverlayWindow.destroy() must remove the
-compositor layer even when destroy_input_proxy() raises.
-
-Context: destroy() used to call self._layer.destroy_input_proxy()
-UNGUARDED, immediately before self._compositor.destroy_layer(self._name)
-on the very next line. self._destroyed was already flipped True before
-either call, so if destroy_input_proxy() ever threw, destroy_layer()
-never ran, AND destroy()'s own early-return guard (`if self._destroyed:
-return`) meant a second .destroy() call would silently no-op instead of
-retrying — the layer (and its GPU FBO/texture) would leak for the rest
-of the process's life. Every overlay window that uses this adapter
-(fisheye, popup menu, panels — see overlay_adapter._gen_layer_name)
-allocates a fresh, never-reused layer name each time it's constructed,
-so nothing else would ever clean that specific name up either.
-
-This is a pure logic test — UnifiedOverlay's layer dict/lock plumbing
-needs no GPU context, GLFW window, or Tk root; only .start() (never
-called here) touches any of that.
-"""
+# Selftest: CompositorOverlayWindow.destroy() must remove the
+# compositor layer even when destroy_input_proxy() raises.
+#
+# Context: destroy() used to call self._layer.destroy_input_proxy()
+# UNGUARDED, immediately before self._compositor.destroy_layer(self._name)
+# on the very next line. self._destroyed was already flipped True before
+# either call, so if destroy_input_proxy() ever threw, destroy_layer()
+# never ran, AND destroy()'s own early-return guard (`if self._destroyed:
+# return`) meant a second .destroy() call would silently no-op instead of
+# retrying — the layer (and its GPU FBO/texture) would leak for the rest
+# of the process's life. Every overlay window that uses this adapter
+# (fisheye, popup menu, panels — see overlay_adapter._gen_layer_name)
+# allocates a fresh, never-reused layer name each time it's constructed,
+# so nothing else would ever clean that specific name up either.
+#
+# This is a pure logic test — UnifiedOverlay's layer dict/lock plumbing
+# needs no GPU context, GLFW window, or Tk root; only .start() (never
+# called here) touches any of that.
 import os
 import sys
 

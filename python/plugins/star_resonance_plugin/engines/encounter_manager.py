@@ -1,11 +1,10 @@
 # -*- coding: utf-8 -*-
-"""Encounter lifecycle manager for TCP-first ACT analytics.
-
-``DpsTracker`` owns counters.  ``EncounterManager`` owns lifecycle metadata:
-why an encounter started, which scene/dungeon it belongs to, whether a reset is
-pending, and when a report was finalized.  It intentionally has no dependency
-on UI objects so replay tests, webview, and entity overlays can share it.
-"""
+# Encounter lifecycle manager for TCP-first ACT analytics.
+#
+# ``DpsTracker`` owns counters.  ``EncounterManager`` owns lifecycle metadata:
+# why an encounter started, which scene/dungeon it belongs to, whether a reset is
+# pending, and when a report was finalized.  It intentionally has no dependency
+# on UI objects so replay tests, webview, and entity overlays can share it.
 
 from __future__ import annotations
 
@@ -95,7 +94,7 @@ class EncounterSnapshot:
 
 
 class EncounterManager:
-    """Thread-safe encounter lifecycle state machine."""
+    # Thread-safe encounter lifecycle state machine.
 
     def __init__(self,
                  idle_timeout_s: float = 15.0,

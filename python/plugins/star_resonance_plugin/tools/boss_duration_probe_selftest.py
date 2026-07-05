@@ -1,12 +1,11 @@
 # -*- coding: utf-8 -*-
-"""Selftest for BossDurationProbe (BuffComp Duration path + actor state).
-
-Synthesizes a BuffComp -> ZList<BuffItem> chain in a fake address space and
-verifies the probe reads BuffItem.Duration and picks a plausible cast buff.
-No game / pymem needed.
-
-    python tools/boss_duration_probe_selftest.py
-"""
+# Selftest for BossDurationProbe (BuffComp Duration path + actor state).
+#
+# Synthesizes a BuffComp -> ZList<BuffItem> chain in a fake address space and
+# verifies the probe reads BuffItem.Duration and picks a plausible cast buff.
+# No game / pymem needed.
+#
+# python tools/boss_duration_probe_selftest.py
 from __future__ import annotations
 
 import os
@@ -72,7 +71,7 @@ class _FakeMem:
 
 
 def _build(items):
-    """Lay out ENT -> BuffComp -> ZList -> BuffItem[]. Returns (mem, ent_addr)."""
+    # Lay out ENT -> BuffComp -> ZList -> BuffItem[]. Returns (mem, ent_addr).
     mem = _FakeMem()
     ENT, COMP, ZLIST, ARR = 0x100000, 0x200000, 0x300000, 0x400000
     SM = 0x600000

@@ -1,9 +1,8 @@
 # -*- coding: utf-8 -*-
-"""Small ACT event bus with callback isolation.
-
-The bus is synchronous by default so replay tests are deterministic.  Callback
-errors are isolated and recorded instead of bubbling into parser/DPS code.
-"""
+# Small ACT event bus with callback isolation.
+#
+# The bus is synchronous by default so replay tests are deterministic.  Callback
+# errors are isolated and recorded instead of bubbling into parser/DPS code.
 
 from __future__ import annotations
 
@@ -36,7 +35,7 @@ class Subscription:
 
 
 class EventBus:
-    """Thread-safe publish/subscribe bus for canonical ACT events."""
+    # Thread-safe publish/subscribe bus for canonical ACT events.
 
     def __init__(self, max_recent: int = 200, slow_callback_ms: float = 25.0,
                  ephemeral_topics: Optional[set[str]] = None) -> None:
@@ -78,16 +77,16 @@ class EventBus:
 
     @property
     def published(self) -> int:
-        """Monotonic count of all published events."""
+        # Monotonic count of all published events.
         return self._published
 
     @property
     def retained(self) -> int:
-        """Monotonic count of events actually kept in ``_recent`` (excludes
-        ephemeral topics like act_snapshot). This is the precise freshness token
-        for the aggregate, which folds only the retained slice — so an unchanged
-        value means the aggregate cannot have changed, even if high-rate
-        ephemeral pushes bumped ``published``."""
+        # Monotonic count of events actually kept in ``_recent`` (excludes
+        # ephemeral topics like act_snapshot). This is the precise freshness token
+        # for the aggregate, which folds only the retained slice — so an unchanged
+        # value means the aggregate cannot have changed, even if high-rate
+        # ephemeral pushes bumped ``published``.
         return self._retained
 
     def unsubscribe(self, token: str) -> bool:

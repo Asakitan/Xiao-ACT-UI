@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""Regression coverage for high-freedom ACT plugin engine access."""
+# Regression coverage for high-freedom ACT plugin engine access.
 
 from __future__ import annotations
 

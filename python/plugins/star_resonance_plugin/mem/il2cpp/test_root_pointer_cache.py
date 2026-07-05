@@ -1,17 +1,16 @@
 # -*- coding: utf-8 -*-
-"""O(1) steady-state contract test for RootPointerCache.
-
-The user's central requirement: the per-tick poll must be **near-instant**,
-i.e. **O(chain depth)** syscalls = bounded small constant K, INDEPENDENT of
-heap size, scene entity count, dump version, or buff count.
-
-This script enforces that contract with a *counting* mock `pm`. It deliberately
-avoids any third-party test framework (matches the project's
-``python -m mem_probe.il2cpp.test_*`` plain-script convention) so it runs on the
-minimal install. Run::
-
-    python -m mem_probe.il2cpp.test_root_pointer_cache
-"""
+# O(1) steady-state contract test for RootPointerCache.
+#
+# The user's central requirement: the per-tick poll must be **near-instant**,
+# i.e. **O(chain depth)** syscalls = bounded small constant K, INDEPENDENT of
+# heap size, scene entity count, dump version, or buff count.
+#
+# This script enforces that contract with a *counting* mock `pm`. It deliberately
+# avoids any third-party test framework (matches the project's
+# ``python -m mem_probe.il2cpp.test_*`` plain-script convention) so it runs on the
+# minimal install. Run::
+#
+# python -m mem_probe.il2cpp.test_root_pointer_cache
 from __future__ import annotations
 
 import json
@@ -33,9 +32,9 @@ GAME_KEY = "deadbeef" * 8
 
 
 class CountingPM:
-    """Mock pm exposing the ``read_u64(addr)`` contract validate() uses.
-
-    Counts every read so the O(1) assertion can inspect syscall counts."""
+    # Mock pm exposing the ``read_u64(addr)`` contract validate() uses.
+    #
+    # Counts every read so the O(1) assertion can inspect syscall counts.
 
     def __init__(self, mapping: Optional[Dict[int, int]] = None):
         self._map = dict(mapping or {})
@@ -61,7 +60,7 @@ def check(name: str, cond: bool, detail: str = "") -> None:
 
 
 def setup_fresh() -> str:
-    """Point RootPointerCache at a fresh temp dir + clear in-memory mirror."""
+    # Point RootPointerCache at a fresh temp dir + clear in-memory mirror.
     tmp = tempfile.mkdtemp(prefix="rpc_test_")
     _rpc._CACHE_DIR = tmp
     _rpc.reload()
@@ -170,8 +169,8 @@ def test_invalidate_unknown_is_noop():
 # ── 5. corrupted / mismatched disk cache is ignored ───────────────────────────
 
 def test_mismatched_game_key_on_disk_is_ignored():
-    """A cache file whose stored game_key != requested key must NOT be loaded —
-    this is the auto-invalidation guarantee on a game-patch."""
+    # A cache file whose stored game_key != requested key must NOT be loaded —
+    # this is the auto-invalidation guarantee on a game-patch.
     stale_path = os.path.join(_rpc._CACHE_DIR, f"root_ptrs_{GAME_KEY}.json")
     with open(stale_path, "w", encoding="utf-8") as f:
         json.dump({"game_key": "different", "version": 1,

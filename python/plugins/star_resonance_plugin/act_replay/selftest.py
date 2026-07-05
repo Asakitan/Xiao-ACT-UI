@@ -1,14 +1,13 @@
 # -*- coding: utf-8 -*-
-"""Smoke test for the offline ACT replay / TCP parser contract.
-
-Run from ``sao_auto``:
-
-    python -m act_replay.selftest
-
-This is intentionally not under ``tests/`` because the repository currently
-ignores that directory.  It is a lightweight validation command for agents and
-developers working on the TCP-first ACT stack.
-"""
+# Smoke test for the offline ACT replay / TCP parser contract.
+#
+# Run from ``sao_auto``:
+#
+# python -m act_replay.selftest
+#
+# This is intentionally not under ``tests/`` because the repository currently
+# ignores that directory.  It is a lightweight validation command for agents and
+# developers working on the TCP-first ACT stack.
 
 from __future__ import annotations
 
@@ -35,7 +34,7 @@ from .harness import ActReplayHarness
 
 
 class _FakePb:
-    """Tiny protobuf stand-in for parser handler contract checks."""
+    # Tiny protobuf stand-in for parser handler contract checks.
 
     def SyncClientUseSkill(self):
         return SimpleNamespace(
@@ -102,7 +101,7 @@ class _FakePb:
 
 
 class _FakeDpsActGui(SAOPlayerGUIDpsThemeMixin):
-    """No-Tk stand-in for Entity/Tk ACT snapshot source-priority checks."""
+    # No-Tk stand-in for Entity/Tk ACT snapshot source-priority checks.
 
     def __init__(self) -> None:
         self._dps_tracker = None
@@ -114,7 +113,7 @@ class _FakeDpsActGui(SAOPlayerGUIDpsThemeMixin):
 
 
 class _FakeRuntimeActGui(SAOPlayerGUIPacketCallbacksMixin, SAOPlayerGUIDpsThemeMixin):
-    """No-Tk stand-in for Entity/Tk packet callback → ACT snapshot checks."""
+    # No-Tk stand-in for Entity/Tk packet callback → ACT snapshot checks.
 
     def __init__(self) -> None:
         self._dps_tracker = DpsTracker()
@@ -165,7 +164,7 @@ class _FakeRuntimeActGui(SAOPlayerGUIPacketCallbacksMixin, SAOPlayerGUIDpsThemeM
 
 
 class _FakeWebViewRuntimeActGui:
-    """No-window stand-in for WebView packet callback → ACT snapshot checks."""
+    # No-window stand-in for WebView packet callback → ACT snapshot checks.
 
     def __init__(self) -> None:
         self._dps_tracker = DpsTracker()
@@ -211,7 +210,7 @@ class _FakeWebViewRuntimeActGui:
 
 
 class _MemoryHistoryStore:
-    """Tiny in-memory report store for encounter finalize contract checks."""
+    # Tiny in-memory report store for encounter finalize contract checks.
 
     def __init__(self) -> None:
         self.reports = []

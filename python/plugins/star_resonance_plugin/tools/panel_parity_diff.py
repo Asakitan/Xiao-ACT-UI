@@ -1,14 +1,13 @@
 # -*- coding: utf-8 -*-
-"""Pixel-diff supplied ACT WebView reference PNGs against Entity/Tk renders.
-
-Run from repository root:
-
-    python sao_auto/tools/panel_parity_diff.py
-
-The tool treats root-level ``_webref_{panel}.png`` files as immutable targets,
-compares them with root-level ``_entity_{panel}.png`` renders, writes
-``_diff_{panel}.png`` images, and emits ``_panel_parity_report.json``.
-"""
+# Pixel-diff supplied ACT WebView reference PNGs against Entity/Tk renders.
+#
+# Run from repository root:
+#
+# python sao_auto/tools/panel_parity_diff.py
+#
+# The tool treats root-level ``_webref_{panel}.png`` files as immutable targets,
+# compares them with root-level ``_entity_{panel}.png`` renders, writes
+# ``_diff_{panel}.png`` images, and emits ``_panel_parity_report.json``.
 
 from __future__ import annotations
 

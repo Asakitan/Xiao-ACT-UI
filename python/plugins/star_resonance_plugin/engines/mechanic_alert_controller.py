@@ -1,10 +1,9 @@
 # -*- coding: utf-8 -*-
-"""机制提醒协调器：引擎 on_mechanic 事件 → TTS 播报 + 顶部横幅。
-
-每个 UI 进程持有一个实例 (Tk 端横幅走 MechBannerOverlay, Web 端走
-'SAO MechBanner' 窗口推送)。躲避按键不经此处 —— 引擎的 forward 直接进
-BossAutoKeyLinkage。本模块还提供编辑器的试发入口 (战斗外干跑)。
-"""
+# 机制提醒协调器：引擎 on_mechanic 事件 → TTS 播报 + 顶部横幅。
+#
+# 每个 UI 进程持有一个实例 (Tk 端横幅走 MechBannerOverlay, Web 端走
+# 'SAO MechBanner' 窗口推送)。躲避按键不经此处 —— 引擎的 forward 直接进
+# BossAutoKeyLinkage。本模块还提供编辑器的试发入口 (战斗外干跑)。
 
 import threading
 import time
@@ -18,18 +17,16 @@ def _s(v: Any) -> str:
 
 
 class MechanicAlertController:
-    """on_mechanic(evt) 消费者: 按事件的 alert_type 分发 TTS 与横幅。"""
+    # on_mechanic(evt) 消费者: 按事件的 alert_type 分发 TTS 与横幅。
 
     def __init__(self,
                  on_banner: Optional[Callable[[Dict[str, Any]], None]] = None,
                  speak: Optional[Callable[..., Any]] = None,
                  banner_enabled_fn: Optional[Callable[[], bool]] = None):
-        """
-        Args:
-            on_banner: callback(entry) → 顶部横幅推一行 (Tk overlay / Web push)
-            speak: TTS 入口, 默认 sao_tts.speak_text
-            banner_enabled_fn: 返回横幅总开关 (None = 恒开)
-        """
+        # Args:
+        # on_banner: callback(entry) → 顶部横幅推一行 (Tk overlay / Web push)
+        # speak: TTS 入口, 默认 sao_tts.speak_text
+        # banner_enabled_fn: 返回横幅总开关 (None = 恒开)
         self._on_banner = on_banner
         self._speak = speak or sao_tts.speak_text
         self._banner_enabled_fn = banner_enabled_fn
@@ -37,7 +34,7 @@ class MechanicAlertController:
     # ── runtime path ──
 
     def on_mechanic(self, evt: Dict[str, Any]):
-        """引擎机制事件 (已在引擎锁外的线程上)。"""
+        # 引擎机制事件 (已在引擎锁外的线程上)。
         if not isinstance(evt, dict) or not evt.get("alert_enabled", True):
             return
         alert_type = _s(evt.get("alert_type")) or "both"
@@ -82,7 +79,7 @@ class MechanicAlertController:
 
     def test_mechanic(self, mech: Dict[str, Any],
                       kinds: Iterable[str] = ("tts", "banner")) -> Dict[str, Any]:
-        """试发一个机制配置的提醒部分; 按键试发走 linkage.fire_mapping_test。"""
+        # 试发一个机制配置的提醒部分; 按键试发走 linkage.fire_mapping_test。
         result: Dict[str, Any] = {"ok": True}
         if not isinstance(mech, dict):
             return {"ok": False, "error": "bad mechanic"}
@@ -111,7 +108,7 @@ class MechanicAlertController:
         return result
 
     def presynthesize_profile(self, profile: Dict[str, Any]):
-        """档案加载/保存后台预合成全部 TTS 文案 (战斗路径纯缓存命中)。"""
+        # 档案加载/保存后台预合成全部 TTS 文案 (战斗路径纯缓存命中)。
         try:
             texts = sao_tts.collect_profile_tts_texts(profile)
             if texts:

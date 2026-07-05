@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""SAO Auto target-window locator utilities."""
+# SAO Auto target-window locator utilities.
 
 import ctypes
 import ctypes.wintypes
@@ -57,8 +57,8 @@ _ENUM_CB = _ENUM_PROC(_enum_windows_cb)
 
 
 def _get_client_rect_screen(hwnd: int) -> Optional[Tuple[int, int, int, int]]:
-    """获取窗口客户区在屏幕上的绝对坐标 (left, top, right, bottom)。
-    使用 GetClientRect + ClientToScreen 避免 GetWindowRect 包含标题栏/边框。"""
+    # 获取窗口客户区在屏幕上的绝对坐标 (left, top, right, bottom)。
+    # 使用 GetClientRect + ClientToScreen 避免 GetWindowRect 包含标题栏/边框。
     try:
         cr = ctypes.wintypes.RECT()
         user32.GetClientRect(hwnd, ctypes.byref(cr))
@@ -73,30 +73,29 @@ def _get_client_rect_screen(hwnd: int) -> Optional[Tuple[int, int, int, int]]:
 
 
 def _enum_windows() -> List[Tuple[int, str, tuple]]:
-    """枚举所有可见窗口: [(hwnd, title, (l,t,r,b)), ...]
-    返回的 rect 是 **客户区** 的屏幕坐标 (不含标题栏/边框)。
-
-    NOTE: callback thunk + results bucket are CACHED at module level
-    (not recreated per call). Recreating a ``ctypes.WINFUNCTYPE``
-    callback on every recognition tick (10 Hz) allocates a fresh
-    native trampoline each time and pumps ctypes' callback registry,
-    which churns gilstate-related globals.  When that 10 Hz churn
-    overlaps a GIL-released window on the main thread (Tk
-    ``update_idletasks`` reentry inside the menu-click cb dispatching
-    GLFW pump ticks → ``glfw.swap_buffers`` / ``make_context_current``
-    ctypes calls), the result is the
-    ``Fatal Python error: PyEval_RestoreThread: ... NULL tstate``
-    crash on the next ``Py_END_ALLOW_THREADS`` checkpoint in Tcl.
-
-    DO NOT add a ``threading.Lock`` around the EnumWindows call.
-    EnumWindows synchronously dispatches ``GetWindowTextW`` →
-    ``WM_GETTEXT`` to every visible top-level window, including
-    Tk-owned HWNDs.  WM_GETTEXT blocks on the owning thread's message
-    pump, so locking from a worker thread while the Tk main thread
-    is also locator-bound deadlocks the entire app at startup.
-    Thread isolation is achieved instead via ``threading.local()``
-    for the results bucket — no lock needed.
-    """
+    # 枚举所有可见窗口: [(hwnd, title, (l,t,r,b)), ...]
+    # 返回的 rect 是 **客户区** 的屏幕坐标 (不含标题栏/边框)。
+    #
+    # NOTE: callback thunk + results bucket are CACHED at module level
+    # (not recreated per call). Recreating a ``ctypes.WINFUNCTYPE``
+    # callback on every recognition tick (10 Hz) allocates a fresh
+    # native trampoline each time and pumps ctypes' callback registry,
+    # which churns gilstate-related globals.  When that 10 Hz churn
+    # overlaps a GIL-released window on the main thread (Tk
+    # ``update_idletasks`` reentry inside the menu-click cb dispatching
+    # GLFW pump ticks → ``glfw.swap_buffers`` / ``make_context_current``
+    # ctypes calls), the result is the
+    # ``Fatal Python error: PyEval_RestoreThread: ... NULL tstate``
+    # crash on the next ``Py_END_ALLOW_THREADS`` checkpoint in Tcl.
+    #
+    # DO NOT add a ``threading.Lock`` around the EnumWindows call.
+    # EnumWindows synchronously dispatches ``GetWindowTextW`` →
+    # ``WM_GETTEXT`` to every visible top-level window, including
+    # Tk-owned HWNDs.  WM_GETTEXT blocks on the owning thread's message
+    # pump, so locking from a worker thread while the Tk main thread
+    # is also locator-bound deadlocks the entire app at startup.
+    # Thread isolation is achieved instead via ``threading.local()``
+    # for the results bucket — no lock needed.
     bucket = _enum_tls.__dict__.setdefault('results', [])
     bucket.clear()
     user32.EnumWindows(_ENUM_CB, 0)
@@ -107,7 +106,7 @@ def _enum_windows() -> List[Tuple[int, str, tuple]]:
 #  进程名辅助
 # ═══════════════════════════════════════════════
 def _get_process_name(hwnd: int) -> str:
-    """通过 hwnd → pid → OpenProcess → QueryFullProcessImageNameW 获取 exe 名。"""
+    # 通过 hwnd → pid → OpenProcess → QueryFullProcessImageNameW 获取 exe 名。
     try:
         pid = ctypes.wintypes.DWORD(0)
         user32.GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
@@ -130,12 +129,11 @@ def _get_process_name(hwnd: int) -> str:
 
 
 def _keyword_matches_title(keyword: str, title_lower: str) -> bool:
-    """Return True when a configured title keyword safely matches a title.
-
-    ASCII keywords must match on alphanumeric word boundaries.  A plain
-    substring check can match inside an unrelated word.
-    Non-ASCII keywords keep the historical substring behavior.
-    """
+    # Return True when a configured title keyword safely matches a title.
+    #
+    # ASCII keywords must match on alphanumeric word boundaries.  A plain
+    # substring check can match inside an unrelated word.
+    # Non-ASCII keywords keep the historical substring behavior.
     kw = (keyword or '').strip().lower()
     if not kw:
         return False
@@ -145,16 +143,15 @@ def _keyword_matches_title(keyword: str, title_lower: str) -> bool:
 
 
 def _matches_process_name(exe: str, process_names: List[str]) -> bool:
-    """Return True when ``exe`` is one of the configured target processes."""
+    # Return True when ``exe`` is one of the configured target processes.
     return bool(exe) and exe.lower() in process_names
 
 
 class WindowLocator:
-    """Target-window locator.
-
-    Callers must provide their own title keywords or process names.  The
-    platform keeps no game-specific defaults.
-    """
+    # Target-window locator.
+    #
+    # Callers must provide their own title keywords or process names.  The
+    # platform keeps no game-specific defaults.
 
     def __init__(self, keywords: Optional[List[str]] = None,
                  process_names: Optional[List[str]] = None):
@@ -165,7 +162,7 @@ class WindowLocator:
         self._log_once = True
 
     def _match(self, hwnd: int, title: str) -> bool:
-        """标题关键词 **或** 进程名匹配 → True"""
+        # 标题关键词 **或** 进程名匹配 → True
         return self._match_process(hwnd) or self._match_title(title)
 
     def _match_process(self, hwnd: int) -> bool:
@@ -178,12 +175,10 @@ class WindowLocator:
         return any(_keyword_matches_title(kw, title_lower) for kw in self._keywords)
 
     def find_target_window(self) -> Optional[Tuple[int, str, tuple]]:
-        """
-        查找目标窗口。返回客户区坐标。
-
-        Returns:
-            (hwnd, title, (left, top, right, bottom)) 或 None
-        """
+        # 查找目标窗口。返回客户区坐标。
+        #
+        # Returns:
+        # (hwnd, title, (left, top, right, bottom)) 或 None
         # 优先检查缓存句柄是否仍有效
         if self._cached_hwnd:
             if user32.IsWindow(self._cached_hwnd) and user32.IsWindowVisible(self._cached_hwnd):
@@ -234,28 +229,26 @@ class WindowLocator:
         return None
 
     def get_rect(self) -> Optional[Tuple[int, int, int, int]]:
-        """获取窗口客户区矩形 (left, top, right, bottom)"""
+        # 获取窗口客户区矩形 (left, top, right, bottom)
         result = self.find_target_window()
         return result[2] if result else None
 
     def get_size(self) -> Optional[Tuple[int, int]]:
-        """获取窗口客户区宽高"""
+        # 获取窗口客户区宽高
         rect = self.get_rect()
         if rect:
             return (rect[2] - rect[0], rect[3] - rect[1])
         return None
 
     def roi_to_pixels(self, roi: dict, rect: Optional[tuple] = None) -> Optional[Tuple[int, int, int, int]]:
-        """
-        将百分比 ROI 转换为像素坐标 bbox。
-
-        Args:
-            roi: {'x': float, 'y': float, 'w': float, 'h': float}  (0.0~1.0)
-            rect: 窗口客户区矩形，None 则自动获取
-
-        Returns:
-            (left, top, right, bottom) 绝对屏幕坐标，或 None
-        """
+        # 将百分比 ROI 转换为像素坐标 bbox。
+        #
+        # Args:
+        # roi: {'x': float, 'y': float, 'w': float, 'h': float}  (0.0~1.0)
+        # rect: 窗口客户区矩形，None 则自动获取
+        #
+        # Returns:
+        # (left, top, right, bottom) 绝对屏幕坐标，或 None
         if rect is None:
             rect = self.get_rect()
         if rect is None:
@@ -274,5 +267,5 @@ class WindowLocator:
 
     @staticmethod
     def get_screen_size() -> Tuple[int, int]:
-        """主屏幕分辨率"""
+        # 主屏幕分辨率
         return (user32.GetSystemMetrics(0), user32.GetSystemMetrics(1))

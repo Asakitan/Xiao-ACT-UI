@@ -1,10 +1,9 @@
 # -*- coding: utf-8 -*-
-"""Selftest for shared combat preparse/enrichment facts.
-
-Run from ``sao_auto``:
-
-    python -m tools.combat_preparse_selftest
-"""
+# Selftest for shared combat preparse/enrichment facts.
+#
+# Run from ``sao_auto``:
+#
+# python -m tools.combat_preparse_selftest
 
 from __future__ import annotations
 

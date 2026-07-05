@@ -1,10 +1,9 @@
 # -*- coding: utf-8 -*-
-"""Star Resonance (星痕共鸣) game adapter plugin.
-
-Creates all game-specific engines, data sources, and overlay windows
-during on_load, installing them onto the platform host via the plugin SDK.
-The platform has ZERO imports from this plugin.
-"""
+# Star Resonance (星痕共鸣) game adapter plugin.
+#
+# Creates all game-specific engines, data sources, and overlay windows
+# during on_load, installing them onto the platform host via the plugin SDK.
+# The platform has ZERO imports from this plugin.
 
 from __future__ import annotations
 
@@ -42,7 +41,7 @@ _GAME_SETTING_DEFAULTS = {
 
 
 def _owner_get(key, default=None):
-    """Read a game setting from the owner's top-level settings (backward compat)."""
+    # Read a game setting from the owner's top-level settings (backward compat).
     if _ctx is None:
         return default
     owner = _ctx.engine.owner
@@ -53,13 +52,12 @@ def _owner_get(key, default=None):
 
 
 def _ensure_toplevel_defaults(ctx):
-    """Ensure game settings exist at the top level of settings.json.
-
-    Old installs already have these keys at the top level — this just fills in
-    any missing ones for fresh installs. The plugin reads/writes these through
-    the owner's _get_setting/_set_setting so the platform and plugin always
-    see the same values.
-    """
+    # Ensure game settings exist at the top level of settings.json.
+    #
+    # Old installs already have these keys at the top level — this just fills in
+    # any missing ones for fresh installs. The plugin reads/writes these through
+    # the owner's _get_setting/_set_setting so the platform and plugin always
+    # see the same values.
     owner = ctx.engine.owner
     cfg = getattr(owner, '_cfg_settings_ref', None)
     if cfg is None:
@@ -78,7 +76,7 @@ def _ensure_toplevel_defaults(ctx):
 
 
 def _init_game_engines(ctx):
-    """Create GameState + PacketBridge + AutoKey + BossRaid + all overlays."""
+    # Create GameState + PacketBridge + AutoKey + BossRaid + all overlays.
     global _engines_started
     owner = ctx.engine.owner
     if owner is None or _engines_started:
@@ -506,13 +504,12 @@ def _build_panel_items():
 
 
 def _inject_game_constants():
-    """Register plugin-owned runtime modules at load time.
-
-    Registers plugin-owned mem_access / unified_source into sys.modules under
-    the ``mem_probe.*`` namespace so platform code that does
-    ``from mem_probe.mem_access import MemAccess`` still works after the files
-    moved from platform to plugin.
-    """
+    # Register plugin-owned runtime modules at load time.
+    #
+    # Registers plugin-owned mem_access / unified_source into sys.modules under
+    # the ``mem_probe.*`` namespace so platform code that does
+    # ``from mem_probe.mem_access import MemAccess`` still works after the files
+    # moved from platform to plugin.
     import sys
     from plugins.star_resonance_plugin.sr_config import GAME_MAIN_MODULE
 
@@ -570,7 +567,7 @@ def _inject_game_constants():
 
 
 def on_load(ctx):
-    """Plugin entry point — register menu categories and initialize game engines."""
+    # Plugin entry point — register menu categories and initialize game engines.
     global _ctx
     _ctx = ctx
 

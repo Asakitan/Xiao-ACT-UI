@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""Entity-mode ACT semantic aggregate cockpit panel."""
+# Entity-mode ACT semantic aggregate cockpit panel.
 
 from __future__ import annotations
 
@@ -74,8 +74,8 @@ def _finite_int(value: Any, default: int = 0, *, lo: int | None = None, hi: int 
 
 
 class ActAggregatePanel:
-    """ACT 聚合工作台：插件开发者按维度(技能/怪物/参与者/事件类型/自定义字段)聚合事件，
-    可读为主、点开看原始 payload，是给插件调试/抓数据用的检查器。"""
+    # ACT 聚合工作台：插件开发者按维度(技能/怪物/参与者/事件类型/自定义字段)聚合事件，
+    # 可读为主、点开看原始 payload，是给插件调试/抓数据用的检查器。
 
     # 聚合维度选择器：中文标签 ↔ 后端 group_by id
     _DIMENSION_LABELS = ("技能", "怪物/目标", "参与者", "事件类型", "自定义字段")
@@ -191,7 +191,7 @@ class ActAggregatePanel:
                 pass
 
     def _schedule_filter(self) -> None:
-        """搜索输入防抖：停止键入 300ms 后自动过滤（与 Web 端行为一致）。"""
+        # 搜索输入防抖：停止键入 300ms 后自动过滤（与 Web 端行为一致）。
         if self._win is None:
             return
         self._cancel_pending_filter()
@@ -296,12 +296,12 @@ class ActAggregatePanel:
 
     @staticmethod
     def _source_display(source_value: str) -> str:
-        """Translate source identifier to display label (parity with JS ActText.source)."""
+        # Translate source identifier to display label (parity with JS ActText.source).
         return source_cn(source_value)
 
     @staticmethod
     def _source_mix_label(mix: list[Any]) -> str:
-        """Build a combined data-source label from source_mix list, e.g. 'TCP+内存'."""
+        # Build a combined data-source label from source_mix list, e.g. 'TCP+内存'.
         names: list[str] = []
         for item in (mix or []):
             if isinstance(item, Mapping):
@@ -510,7 +510,7 @@ class ActAggregatePanel:
                 self._render_raw_payload(detail, row)
 
     def _render_raw_payload(self, parent: tk.Misc, row: Mapping[str, Any]) -> None:
-        """The full event as the plugin sees it — raw payload + raw UIDs + epoch time."""
+        # The full event as the plugin sees it — raw payload + raw UIDs + epoch time.
         raw = dict(row.get('payload') if isinstance(row.get('payload'), Mapping) else {})
         # 行级解析名键是 'skill'/'monster' (_action_log_group_metadata),
         # 'skill_name'/'monster_name' 只可能来自 payload 本身
@@ -552,8 +552,8 @@ class ActAggregatePanel:
                           value=self._fmt(latest), ratio=ratio, accent=accent).pack(fill='x', pady=2)
 
     def _readable_event_line(self, row: Mapping[str, Any]) -> str:
-        """One representative event as a human line: 时钟 · 类型 · 来源→目标 · 标签 · 值
-        (drops the meaningless 'tcp → x · 0' noise: source-as-actor humanized, 0 value hidden)."""
+        # One representative event as a human line: 时钟 · 类型 · 来源→目标 · 标签 · 值
+        # (drops the meaningless 'tcp → x · 0' noise: source-as-actor humanized, 0 value hidden).
         clock = fmt_clock(row.get('time_ms'))
         topic = topic_cn(row.get('topic'))
         actor = str(row.get('actor') or '').strip()

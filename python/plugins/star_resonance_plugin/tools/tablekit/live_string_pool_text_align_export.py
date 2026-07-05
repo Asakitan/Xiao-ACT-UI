@@ -1,11 +1,10 @@
-"""Export live StringPool by aligning a current pointer-table slice to a prior full table.
-
-This is a fallback for sessions where the IL2CPP TypeInfo/static singleton chain
-is stale but the decoded runtime pointer table matches a known allLocalization
-text slice exactly. It reads the inferred allLocalizationString_ array from the
-live process and writes the same full-table schema shape as static export, while
-marking the anchor as text-aligned fallback instead of a static singleton proof.
-"""
+# Export live StringPool by aligning a current pointer-table slice to a prior full table.
+#
+# This is a fallback for sessions where the IL2CPP TypeInfo/static singleton chain
+# is stale but the decoded runtime pointer table matches a known allLocalization
+# text slice exactly. It reads the inferred allLocalizationString_ array from the
+# live process and writes the same full-table schema shape as static export, while
+# marking the anchor as text-aligned fallback instead of a static singleton proof.
 
 from __future__ import annotations
 

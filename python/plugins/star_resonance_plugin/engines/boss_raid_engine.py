@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""Boss Raid timeline engine — profile model, state machine, DPS tracking."""
+# Boss Raid timeline engine — profile model, state machine, DPS tracking.
 
 import copy
 import json
@@ -178,7 +178,7 @@ def normalize_timeline(raw: Any) -> Dict[str, Any]:
 
 
 def _coerce_id_list(raw: Any, cap: int = 64) -> List[int]:
-    """Sorted unique positive-int id list (skill/buff bindings)."""
+    # Sorted unique positive-int id list (skill/buff bindings).
     out: List[int] = []
     if isinstance(raw, (list, tuple, set)):
         for v in raw:
@@ -199,7 +199,7 @@ def _coerce_str_list(raw: Any, cap: int = 64) -> List[str]:
 
 
 def normalize_dodge_step(raw: Any) -> Optional[Dict[str, Any]]:
-    """One auto-dodge sequence step: key + pre-delay + optional hold duration."""
+    # One auto-dodge sequence step: key + pre-delay + optional hold duration.
     if not isinstance(raw, dict):
         return None
     key = _string(raw.get("key")).upper()
@@ -222,8 +222,8 @@ def _normalize_cam_direction(raw: Any, default: str = "") -> str:
 
 
 def _normalize_dodge_direction(raw: Any) -> str:
-    """方向值: 空 / 相机相对8向 / world:dx,dz / away_point:x,z / away_boss|away_nearest /
-    自动走位 goto_teammate|goto_circle|walk_sequence / goto_point:x,z。"""
+    # 方向值: 空 / 相机相对8向 / world:dx,dz / away_point:x,z / away_boss|away_nearest /
+    # 自动走位 goto_teammate|goto_circle|walk_sequence / goto_point:x,z。
     v = _string(raw).strip()
     if not v:
         return ""
@@ -267,7 +267,7 @@ def make_default_dodge_inline() -> Dict[str, Any]:
 
 
 def make_default_geometry() -> Dict[str, Any]:
-    """机制实际范围占位 (待填)。shape 空 / source 空 = 未填。"""
+    # 机制实际范围占位 (待填)。shape 空 / source 空 = 未填。
     return {
         "shape": "",       # circle/ring/cone/line/cross/'' (空=未定)
         "radius": 0.0,     # 主半径(圆/环外径/锥半径/线长) 米
@@ -628,7 +628,7 @@ def normalize_boss_raid_config(raw: Any,
 
 
 def _backfill_map_names(config: Dict[str, Any]) -> bool:
-    """给旧版导入的 profile 补 map_name (从 profile_name 取括号前的地图名)。"""
+    # 给旧版导入的 profile 补 map_name (从 profile_name 取括号前的地图名)。
     changed = False
     for p in config.get("profiles") or []:
         if _string(p.get("map_name")):
@@ -645,7 +645,7 @@ def _backfill_map_names(config: Dict[str, Any]) -> bool:
 
 
 def _seed_from_assets(config: Dict[str, Any]) -> bool:
-    """首次启动: 把 assets/boss_raids/ 下的 *_机制示例.json 自动导入 (仅在0个档案时)。"""
+    # 首次启动: 把 assets/boss_raids/ 下的 *_机制示例.json 自动导入 (仅在0个档案时)。
     if config.get("profiles"):
         return _backfill_map_names(config)
     try:
@@ -732,8 +732,8 @@ def delete_profile(config: Dict[str, Any], profile_id: str) -> Dict[str, Any]:
 
 
 def _reissue_profile_ids(profile: Dict[str, Any]) -> None:
-    """Re-id phases/timelines/mechanics in place, remapping the phase-id
-    references carried by mechanics[].phase_ids and enrage.phase_id."""
+    # Re-id phases/timelines/mechanics in place, remapping the phase-id
+    # references carried by mechanics[].phase_ids and enrage.phase_id.
     id_map: Dict[str, str] = {}
     for phase in profile.get("phases", []) or []:
         old = _string(phase.get("id"))
@@ -807,7 +807,7 @@ def find_mechanic(profile: Dict[str, Any], mechanic_id: str) -> Optional[Dict[st
 
 
 def bind_mechanic_skill(profile: Dict[str, Any], mechanic_id: str, skill_id: Any) -> bool:
-    """Append a skill id to a mechanic's detect.skill_ids (in place)."""
+    # Append a skill id to a mechanic's detect.skill_ids (in place).
     mech = find_mechanic(profile, mechanic_id)
     sid = _coerce_int(skill_id, 0)
     if not mech or sid <= 0:
@@ -949,11 +949,10 @@ class BossRaidCloudClient:
 # ═══════════════════════════════════════════════
 
 class BossRaidEngine:
-    """State-machine engine for Boss Raid timeline tracking.
-
-    States: IDLE → RUNNING → COMPLETED / manually RESET
-    Phases advance by manual hotkey, elapsed time, accumulated DPS, or boss HP%.
-    """
+    # State-machine engine for Boss Raid timeline tracking.
+    #
+    # States: IDLE → RUNNING → COMPLETED / manually RESET
+    # Phases advance by manual hotkey, elapsed time, accumulated DPS, or boss HP%.
 
     STATE_IDLE = "idle"
     STATE_RUNNING = "running"
@@ -966,18 +965,16 @@ class BossRaidEngine:
                  on_entity_update: Optional[Callable[[List[Dict[str, Any]]], None]] = None,
                  on_boss_action: Optional[Callable[[Dict[str, Any]], None]] = None,
                  on_mechanic: Optional[Callable[[Dict[str, Any]], None]] = None):
-        """
-        Args:
-            state_mgr: GameStateManager instance
-            settings: SettingsManager instance
-            on_alert: callback(title, message) for visual alert
-            on_sound: callback(sound_name) for playing sound
-            on_entity_update: callback([entity_dict, ...]) for visual editor entity list
-            on_boss_action: callback(action_record) forwarding the mem boss-action
-                feed to the auto-key linkage (skill_id-accurate, gated by the host)
-            on_mechanic: callback(mechanic_event) for the TTS/banner notification
-                stack; when absent, mechanic fires degrade to on_alert/on_sound
-        """
+        # Args:
+        # state_mgr: GameStateManager instance
+        # settings: SettingsManager instance
+        # on_alert: callback(title, message) for visual alert
+        # on_sound: callback(sound_name) for playing sound
+        # on_entity_update: callback([entity_dict, ...]) for visual editor entity list
+        # on_boss_action: callback(action_record) forwarding the mem boss-action
+        # feed to the auto-key linkage (skill_id-accurate, gated by the host)
+        # on_mechanic: callback(mechanic_event) for the TTS/banner notification
+        # stack; when absent, mechanic fires degrade to on_alert/on_sound
         self._state_mgr = state_mgr
         self._settings = settings
         self._on_alert = on_alert
@@ -1096,7 +1093,7 @@ class BossRaidEngine:
     # ── Public API ──
 
     def start(self, profile: Optional[Dict[str, Any]] = None):
-        """Start (or restart) a boss raid with the given profile."""
+        # Start (or restart) a boss raid with the given profile.
         with self._lock:
             if profile:
                 self._profile = normalize_profile(copy.deepcopy(profile))
@@ -1140,7 +1137,7 @@ class BossRaidEngine:
         self._fire_sound("boss_phase")
 
     def stop(self):
-        """Stop the engine and reset state."""
+        # Stop the engine and reset state.
         self._running = False
         thread = self._thread
         if thread and thread.is_alive():
@@ -1165,14 +1162,14 @@ class BossRaidEngine:
         self._push_game_state_clear()
 
     def next_phase(self):
-        """Manually advance to next phase."""
+        # Manually advance to next phase.
         with self._lock:
             if self._state != self.STATE_RUNNING:
                 return
             self._advance_phase()
 
     def reset(self):
-        """Reset to idle without stopping the engine thread."""
+        # Reset to idle without stopping the engine thread.
         with self._lock:
             self._state = self.STATE_IDLE
             self._total_damage = 0
@@ -1221,12 +1218,11 @@ class BossRaidEngine:
         self._obs_prev_invincible = False
 
     def set_entity_role(self, uuid: int, role: str):
-        """Set entity role: 'boss' or 'enemy'. Called from visual editor overlay.
-
-        When a user explicitly marks a UUID as 'boss', the old boss (if any)
-        is demoted to 'enemy', and all future boss-tracking fields update
-        to the newly-designated boss.
-        """
+        # Set entity role: 'boss' or 'enemy'. Called from visual editor overlay.
+        #
+        # When a user explicitly marks a UUID as 'boss', the old boss (if any)
+        # is demoted to 'enemy', and all future boss-tracking fields update
+        # to the newly-designated boss.
         uuid = int(uuid or 0)
         if not uuid or role not in ('boss', 'enemy'):
             return
@@ -1259,12 +1255,12 @@ class BossRaidEngine:
             self._fire_entity_update_locked()
 
     def get_entities(self) -> List[Dict[str, Any]]:
-        """Return ordered list of tracked entities with their roles + stats."""
+        # Return ordered list of tracked entities with their roles + stats.
         with self._lock:
             return self._get_entities_locked()
 
     def _get_entities_locked(self) -> List[Dict[str, Any]]:
-        """Build entity list (called under lock)."""
+        # Build entity list (called under lock).
         result = []
         for uuid in self._entity_order:
             ent = self._entities.get(uuid)
@@ -1289,7 +1285,7 @@ class BossRaidEngine:
         return result
 
     def _fire_entity_update_locked(self):
-        """Notify visual editor of entity list change (call under lock)."""
+        # Notify visual editor of entity list change (call under lock).
         if self._on_entity_update_cb:
             entities = self._get_entities_locked()
             try:
@@ -1299,13 +1295,12 @@ class BossRaidEngine:
 
     @_probe.decorate('boss.on_damage_event')
     def on_damage_event(self, event: Dict[str, Any]):
-        """Called from packet_parser damage callback. Accumulates boss damage and detects invincibility.
-
-        Multi-entity auto-detect logic:
-        - First attacked monster UUID becomes the boss
-        - Subsequent unique UUIDs become enemies (mechanic adds)
-        - Users can override roles via the visual editor
-        """
+        # Called from packet_parser damage callback. Accumulates boss damage and detects invincibility.
+        #
+        # Multi-entity auto-detect logic:
+        # - First attacked monster UUID becomes the boss
+        # - Subsequent unique UUIDs become enemies (mechanic adds)
+        # - Users can override roles via the visual editor
         if not event:
             return
         with self._lock:
@@ -1383,10 +1378,9 @@ class BossRaidEngine:
 
     @_probe.decorate('boss.on_monster_update')
     def on_monster_update(self, monster_data: Dict[str, Any]):
-        """Called from packet_parser monster update callback. Updates real boss HP/shield/breaking.
-
-        Also updates multi-entity tracking for all known monsters.
-        """
+        # Called from packet_parser monster update callback. Updates real boss HP/shield/breaking.
+        #
+        # Also updates multi-entity tracking for all known monsters.
         if not monster_data:
             return
         tcp_forwards: List[Dict[str, Any]] = []
@@ -1449,7 +1443,7 @@ class BossRaidEngine:
         self._dispatch_mech_forwards()
 
     def on_boss_event(self, event: Dict[str, Any]):
-        """Called from packet_parser boss event callback. Handles buff-based phase triggers."""
+        # Called from packet_parser boss event callback. Handles buff-based phase triggers.
         if not event:
             return
         with self._lock:
@@ -1521,11 +1515,11 @@ class BossRaidEngine:
     MEM_PRIORITY_WINDOW = 3.0
 
     def on_mem_boss_action(self, action: Dict[str, Any]):
-        """Consume a memory boss-action record (cast edge + state). Updates cast
-        state, records observed skills, fires boss_skill phase triggers, pushes
-        GameState, and forwards to the auto-key linkage with rising-edge flags.
-        Runs even when not RUNNING so free-combat observation + offensive windows
-        work (mirrors on_monster_update tracking while idle)."""
+        # Consume a memory boss-action record (cast edge + state). Updates cast
+        # state, records observed skills, fires boss_skill phase triggers, pushes
+        # GameState, and forwards to the auto-key linkage with rising-edge flags.
+        # Runs even when not RUNNING so free-combat observation + offensive windows
+        # work (mirrors on_monster_update tracking while idle).
         if not action:
             return
         forward = None
@@ -1540,9 +1534,9 @@ class BossRaidEngine:
         self._dispatch_mech_forwards()
 
     def _apply_boss_action_locked(self, action: Dict[str, Any]) -> Optional[Dict[str, Any]]:
-        """Shared body for memory + TCP boss actions (caller holds the lock).
-        Returns the linkage-forward dict (or None). skill_id is the buff/skill
-        base_id read from the data source (memory or TCP BuffInfoSync)."""
+        # Shared body for memory + TCP boss actions (caller holds the lock).
+        # Returns the linkage-forward dict (or None). skill_id is the buff/skill
+        # base_id read from the data source (memory or TCP BuffInfoSync).
         base_id = _coerce_int(action.get("boss_base_id"), 0)
         if base_id:
             self._boss_base_id = int(base_id)
@@ -1622,10 +1616,10 @@ class BossRaidEngine:
 
     def _tcp_detect_boss_skills_locked(self, uuid: int,
                                        monster_data: Dict[str, Any]) -> List[Dict[str, Any]]:
-        """Pure-TCP equivalent of the memory buff-skill feed: a NEW base_id in the
-        boss's BuffInfoSync-fed buff_list = a skill/mechanic cast. Suppressed while
-        a memory feed is live (hybrid → memory is authoritative). Returns the
-        linkage-forward dicts to dispatch outside the lock."""
+        # Pure-TCP equivalent of the memory buff-skill feed: a NEW base_id in the
+        # boss's BuffInfoSync-fed buff_list = a skill/mechanic cast. Suppressed while
+        # a memory feed is live (hybrid → memory is authoritative). Returns the
+        # linkage-forward dicts to dispatch outside the lock.
         if time.time() - self._last_mem_boss_action_ts < self.MEM_PRIORITY_WINDOW:
             return []
         buff_list = monster_data.get("buff_list")
@@ -1722,10 +1716,10 @@ class BossRaidEngine:
     # ── profile mechanics runtime ───────────────────────────────────────────────
 
     def _rebuild_mechanic_index_locked(self, preserve_runtime: bool = False):
-        """Prebuild O(1) lookup structures from the active profile's mechanics
-        (called from start/reset; never per tick). `preserve_runtime` keeps
-        cooldowns / fire counters / countdown rows / binding inbox alive so an
-        editor save can hot-apply mid-fight without resetting state."""
+        # Prebuild O(1) lookup structures from the active profile's mechanics
+        # (called from start/reset; never per tick). `preserve_runtime` keeps
+        # cooldowns / fire counters / countdown rows / binding inbox alive so an
+        # editor save can hot-apply mid-fight without resetting state.
         self._mech_index_by_skill = {}
         self._mech_event_anchored = []
         self._mech_time_anchored = []
@@ -1775,7 +1769,7 @@ class BossRaidEngine:
         return cur_id in {_string(p) for p in pids}
 
     def _maybe_anchor_enrage_locked(self):
-        """Arm the enrage countdown when its anchor point is reached."""
+        # Arm the enrage countdown when its anchor point is reached.
         profile = self._profile or {}
         enrage = profile.get("enrage") if isinstance(profile.get("enrage"), dict) else {}
         anchor = _string(enrage.get("anchor")) or "fight"
@@ -1801,12 +1795,11 @@ class BossRaidEngine:
 
     def _update_runtime_enrage_from_buffs_locked(self, monster_data: Dict[str, Any],
                                                  now: float) -> None:
-        """Use live Boss hard-enrage timer buff when present.
-
-        BuffInfoSync carries BeginTime + Duration for the hard-enrage timer; this
-        is more accurate than profile fallback seconds and survives difficulty HP
-        differences.  Absence in a later partial sync does not clear the clock.
-        """
+        # Use live Boss hard-enrage timer buff when present.
+        #
+        # BuffInfoSync carries BeginTime + Duration for the hard-enrage timer; this
+        # is more accurate than profile fallback seconds and survives difficulty HP
+        # differences.  Absence in a later partial sync does not clear the clock.
         buff_list = monster_data.get("buff_list")
         if not isinstance(buff_list, list):
             return
@@ -1846,7 +1839,7 @@ class BossRaidEngine:
         self._runtime_enrage_source = f"buff:{bid}" if bid else "buff"
 
     def _enrage_state_locked(self, now: float) -> Dict[str, Any]:
-        """Unified enrage countdown state for tick + status + HUD tiers."""
+        # Unified enrage countdown state for tick + status + HUD tiers.
         profile = self._profile or {}
         enrage = profile.get("enrage") if isinstance(profile.get("enrage"), dict) else {}
         time_s = _coerce_int(enrage.get("time_s"), 0, 0) \
@@ -1888,7 +1881,7 @@ class BossRaidEngine:
 
     def _note_unbound_skill_locked(self, skill_id: int, name: str = "",
                                    dur: Any = None):
-        """Binding inbox: a detected cast no mechanic is bound to (bounded 64)."""
+        # Binding inbox: a detected cast no mechanic is bound to (bounded 64).
         sid = int(skill_id or 0)
         if sid <= 0:
             return
@@ -1913,11 +1906,11 @@ class BossRaidEngine:
                                        cast_duration_ms: int,
                                        name: str = "",
                                        feed: str = "boss") -> Optional[Dict[str, Any]]:
-        """Resolve a cast skill id / buff base_id to a profile mechanic; returns
-        the linkage-forward extras dict (mechanic_id/dodge) or None. `feed` is the
-        carrier the id came from ('boss' = boss buff/cast list, 'self' = the local
-        player's buff list); a mechanic only matches when its detect.source is
-        'any' or equals `feed`."""
+        # Resolve a cast skill id / buff base_id to a profile mechanic; returns
+        # the linkage-forward extras dict (mechanic_id/dodge) or None. `feed` is the
+        # carrier the id came from ('boss' = boss buff/cast list, 'self' = the local
+        # player's buff list); a mechanic only matches when its detect.source is
+        # 'any' or equals `feed`.
         if skill_id <= 0 or self._profile is None:
             return None
         mechs = self._mech_index_by_skill.get(int(skill_id))
@@ -1942,10 +1935,10 @@ class BossRaidEngine:
         return None
 
     def on_self_buff_change(self, buff_ids):
-        """Feed the local player's current buff base_ids. New ids (since the last
-        snapshot) are matched against self/any-source mechanics so point-named
-        mechanics (你被点了分摊/分散/死刑) fire off YOUR buff list, which the boss
-        feed never sees. Reuses the existing self_buffs snapshot — no new reads."""
+        # Feed the local player's current buff base_ids. New ids (since the last
+        # snapshot) are matched against self/any-source mechanics so point-named
+        # mechanics (你被点了分摊/分散/死刑) fire off YOUR buff list, which the boss
+        # feed never sees. Reuses the existing self_buffs snapshot — no new reads.
         try:
             cur = set(int(b) for b in (buff_ids or []) if int(b) > 0)
         except Exception:
@@ -1974,7 +1967,7 @@ class BossRaidEngine:
                 pass
 
     def _match_mechanic_on_state_edge_locked(self, edge_name: str):
-        """Event-anchored mechanics on breaking/overdrive/stun rising edges."""
+        # Event-anchored mechanics on breaking/overdrive/stun rising edges.
         if self._state != self.STATE_RUNNING or not self._mech_event_anchored:
             return
         for mech in self._mech_event_anchored:
@@ -1988,7 +1981,7 @@ class BossRaidEngine:
 
     def _match_mechanic_on_event_locked(self, event_type: int, mechanic_key: str,
                                         mechanic_label: str, trigger_family: str):
-        """Event-anchored mechanics on packet boss events (text/key matched)."""
+        # Event-anchored mechanics on packet boss events (text/key matched).
         if self._state != self.STATE_RUNNING or not self._mech_event_anchored:
             return
         for mech in self._mech_event_anchored:
@@ -2011,8 +2004,8 @@ class BossRaidEngine:
     def _fire_mechanic_locked(self, mech: Dict[str, Any], source: str,
                               cast_duration_ms: Any = None,
                               skill_id: int = 0) -> Optional[Dict[str, Any]]:
-        """Fire one mechanic: cooldown dedup, countdown row, notification event,
-        and the linkage-forward extras for auto-dodge. Caller holds the lock."""
+        # Fire one mechanic: cooldown dedup, countdown row, notification event,
+        # and the linkage-forward extras for auto-dodge. Caller holds the lock.
         now = time.time()
         mid = _string(mech.get("id"))
         alert = mech.get("alert") or {}
@@ -2083,9 +2076,9 @@ class BossRaidEngine:
         return fwd
 
     def _fire_mechanic_event_unlocked(self, evt: Dict[str, Any]):
-        """Dispatch the mechanic notification off-lock (the engine lock is
-        non-reentrant). Falls back to the legacy alert/sound pipeline when no
-        notification stack is wired."""
+        # Dispatch the mechanic notification off-lock (the engine lock is
+        # non-reentrant). Falls back to the legacy alert/sound pipeline when no
+        # notification stack is wired.
         if self._on_mechanic is not None:
             cb = self._on_mechanic
             payload = dict(evt)
@@ -2132,8 +2125,8 @@ class BossRaidEngine:
                 pass
 
     def _refresh_countdown_push_locked(self, now: float, force: bool = False):
-        """Maintain the JSON-safe countdown list pushed to GameState; rebuilt
-        only when the int-second signature changes."""
+        # Maintain the JSON-safe countdown list pushed to GameState; rebuilt
+        # only when the int-second signature changes.
         if self._mech_countdowns:
             self._mech_countdowns = [c for c in self._mech_countdowns
                                      if c["ends_at"] > now]
@@ -2149,8 +2142,8 @@ class BossRaidEngine:
             for c in self._mech_countdowns]
 
     def _tick_mechanics_locked(self, now: float, elapsed: float, phase_elapsed: float):
-        """4Hz upkeep: HP-crossing anchors, time anchors (early by countdown_s,
-        with repeats), countdown rows, enrage TTS milestones."""
+        # 4Hz upkeep: HP-crossing anchors, time anchors (early by countdown_s,
+        # with repeats), countdown rows, enrage TTS milestones.
         # HP-crossing anchors (one-shot per mechanic)
         if self._mech_hp_anchored and self._boss_max_hp > 0:
             hp_pct = self._boss_hp / self._boss_max_hp * 100.0
@@ -2231,9 +2224,9 @@ class BossRaidEngine:
                 break
 
     def reload_active_profile(self, profile: Dict[str, Any]) -> bool:
-        """Hot-apply edited mechanics/enrage to the loaded profile without
-        restarting the raid: editor saves and inbox bindings take effect
-        immediately, while runtime counters/cooldowns/inbox survive."""
+        # Hot-apply edited mechanics/enrage to the loaded profile without
+        # restarting the raid: editor saves and inbox bindings take effect
+        # immediately, while runtime counters/cooldowns/inbox survive.
         if not isinstance(profile, dict):
             return False
         with self._lock:
@@ -2250,7 +2243,7 @@ class BossRaidEngine:
         return True
 
     def get_unbound_skills(self) -> List[Dict[str, Any]]:
-        """Binding inbox for the mechanics editor (newest first)."""
+        # Binding inbox for the mechanics editor (newest first).
         with self._lock:
             rows = sorted(self._unbound_skills.values(),
                           key=lambda r: r["last_ts"], reverse=True)
@@ -2291,8 +2284,8 @@ class BossRaidEngine:
         return None
 
     def _derive_state_tags_locked(self) -> List[str]:
-        """Tag a cast with the boss's concurrent special state so the editor can
-        mark e.g. a shield/enrage/invincible-coincident skill."""
+        # Tag a cast with the boss's concurrent special state so the editor can
+        # mark e.g. a shield/enrage/invincible-coincident skill.
         tags: List[str] = []
         if self._boss_in_overdrive:
             tags.append("enrage")
@@ -2331,8 +2324,8 @@ class BossRaidEngine:
         self._observe_to_store_locked(int(event_type or 0), nm, KIND_MECHANIC, tags=[tag])
 
     def _observe_state_transitions_locked(self) -> None:
-        """Record enrage / invincibility ONSET (rising edge) with the HP%/elapsed
-        at which it happened, so the editor can mark blood-line / timed states."""
+        # Record enrage / invincibility ONSET (rising edge) with the HP%/elapsed
+        # at which it happened, so the editor can mark blood-line / timed states.
         if not self._boss_base_id:
             return
         od = bool(self._boss_in_overdrive)
@@ -2345,14 +2338,14 @@ class BossRaidEngine:
         self._obs_prev_invincible = inv
 
     def get_observed_scenes(self) -> List[Dict[str, Any]]:
-        """Editor scene selector: [{scene_key, scene_id, dungeon_id, name, boss_count}]."""
+        # Editor scene selector: [{scene_key, scene_id, dungeon_id, name, boss_count}].
         return self._skill_store.scenes()
 
     def get_observed_boss_skills(self, base_id: Optional[int] = None,
                                  scene_key: Optional[str] = None) -> Dict[int, List[Dict[str, Any]]]:
-        """Editor data source: {base_id: [observation, ...]} from the persisted
-        store, optionally scoped to a scene. Observations carry tags / hp-line /
-        timed markers."""
+        # Editor data source: {base_id: [observation, ...]} from the persisted
+        # store, optionally scoped to a scene. Observations carry tags / hp-line /
+        # timed markers.
         store = self._skill_store
         if base_id is not None:
             return {int(base_id): store.observations(scene_key, int(base_id))}
@@ -2364,25 +2357,25 @@ class BossRaidEngine:
         return out
 
     def get_observed_bosses(self, scene_key: Optional[str] = None) -> List[Dict[str, Any]]:
-        """Editor boss selector: [{base_id, name, scene_key, observed_count}]."""
+        # Editor boss selector: [{base_id, name, scene_key, observed_count}].
         return self._skill_store.bosses(scene_key)
 
     def on_self_dead_change(self, is_dead: bool):
-        """Mem bridge -> player death gate. Suppresses auto-dodge/offense while dead."""
+        # Mem bridge -> player death gate. Suppresses auto-dodge/offense while dead.
         with self._lock:
             self._self_dead = bool(is_dead)
 
     def get_profile_phases(self) -> List[Dict[str, Any]]:
-        """当前档案的 phases 副本 — UI 全量推送用 (updateFull 契约要 phases 数组)。"""
+        # 当前档案的 phases 副本 — UI 全量推送用 (updateFull 契约要 phases 数组)。
         with self._lock:
             return [dict(p) for p in (self._profile or {}).get("phases") or []]
 
     def get_status(self, include_entities: bool = True) -> Dict[str, Any]:
-        """Return current engine status dict. `include_entities=False` skips the
-        O(N) per-entity list build — used by the boss-reactions editor path and
-        the 250ms game-state push, which need only the boss scalars (this is the
-        crowd / 20-player lag fix: the entity build no longer runs under the lock
-        for consumers that never read it)."""
+        # Return current engine status dict. `include_entities=False` skips the
+        # O(N) per-entity list build — used by the boss-reactions editor path and
+        # the 250ms game-state push, which need only the boss scalars (this is the
+        # crowd / 20-player lag fix: the entity build no longer runs under the lock
+        # for consumers that never read it).
         with self._lock:
             return self._build_status_locked(include_entities=include_entities)
 
@@ -2626,7 +2619,7 @@ class BossRaidEngine:
         self._push_game_state_locked(now)
 
     def _advance_phase(self):
-        """Advance to next phase (called under lock)."""
+        # Advance to next phase (called under lock).
         profile = self._profile or {}
         phases = list(profile.get("phases") or [])
         if self._current_phase_idx >= len(phases) - 1:
@@ -2643,7 +2636,7 @@ class BossRaidEngine:
         self._fire_sound_unlocked("boss_phase")
 
     def _push_game_state_locked(self, now: float):
-        """Push boss raid fields to GameStateManager (called under lock)."""
+        # Push boss raid fields to GameStateManager (called under lock).
         if self._state_mgr is None:
             return
         status = self._build_status_locked(include_entities=False)
@@ -2690,7 +2683,7 @@ class BossRaidEngine:
         )
 
     def _push_game_state_clear(self):
-        """Clear boss raid fields from GameState."""
+        # Clear boss raid fields from GameState.
         self._state_mgr.update(
             boss_raid_active=False,
             boss_raid_phase=0,
@@ -2729,14 +2722,14 @@ class BossRaidEngine:
                 pass
 
     def _fire_alert_unlocked(self, title: str, message: str):
-        """Fire alert — safe to call from within locked context (deferred to thread)."""
+        # Fire alert — safe to call from within locked context (deferred to thread).
         if self._on_alert:
             threading.Thread(target=self._fire_alert, args=(title, message),
                              daemon=True).start()
 
     @staticmethod
     def _eval_comparator(current: float, comp: str, target: float) -> bool:
-        """Evaluate a numeric comparator for timeline conditions."""
+        # Evaluate a numeric comparator for timeline conditions.
         if comp == ">=":
             return current >= target
         elif comp == "<=":

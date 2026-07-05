@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""Regression tests for local ACT report/history HTTP API."""
+# Regression tests for local ACT report/history HTTP API.
 
 from __future__ import annotations
 

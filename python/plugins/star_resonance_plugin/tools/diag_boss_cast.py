@@ -1,13 +1,12 @@
 # -*- coding: utf-8 -*-
-"""Diagnostic: can we capture a (field) boss's casts / attacks / skills?
-
-Re-locates the boss (max-HP entity, or by name) each ~0.5s (so obj relocation
-can't poison the reads), then watches its actor_state, cast_skill_id (attr 100),
-skill-start-time (attr 106), breaking/overdrive, and BuffComp -- distinguishing
-Singing(1) = a CAST BAR (has a duration window) from Skill(2) = instant.
-
-    python tools/diag_boss_cast.py [seconds] [name_substr]
-"""
+# Diagnostic: can we capture a (field) boss's casts / attacks / skills?
+#
+# Re-locates the boss (max-HP entity, or by name) each ~0.5s (so obj relocation
+# can't poison the reads), then watches its actor_state, cast_skill_id (attr 100),
+# skill-start-time (attr 106), breaking/overdrive, and BuffComp -- distinguishing
+# Singing(1) = a CAST BAR (has a duration window) from Skill(2) = instant.
+#
+# python tools/diag_boss_cast.py [seconds] [name_substr]
 from __future__ import annotations
 
 import os

@@ -1,12 +1,10 @@
 # -*- coding: utf-8 -*-
-"""
-Lightweight OpenCV acceleration helpers.
-
-This keeps screen-vision preprocessing on the built-in OpenCV/OpenCL path
-
-when the local machine supports it, without introducing extra packaged GPU
-dependencies.
-"""
+# Lightweight OpenCV acceleration helpers.
+#
+# This keeps screen-vision preprocessing on the built-in OpenCV/OpenCL path
+#
+# when the local machine supports it, without introducing extra packaged GPU
+# dependencies.
 
 from __future__ import annotations
 

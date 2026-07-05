@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""NerveGear button — visible circular GPU entry point for the SAO menu."""
+# NerveGear button — visible circular GPU entry point for the SAO menu.
 
 from __future__ import annotations
 
@@ -75,7 +75,7 @@ def render_button(
         hover: bool = False,
         pressed: bool = False,
         alpha: float = 1.0) -> Optional["Image.Image"]:
-    """Render a SIZE×SIZE RGBA NerveGear button — SAO-style clean disc."""
+    # Render a SIZE×SIZE RGBA NerveGear button — SAO-style clean disc.
     if Image is None:
         return None
     colors = _DARK if theme == 'dark' else _LIGHT
@@ -211,7 +211,7 @@ def _premultiply_bgra(img: "Image.Image") -> bytes:
 
 
 class GpuNerveGearButton:
-    """Interactive GPU overlay for the floating SAO menu trigger."""
+    # Interactive GPU overlay for the floating SAO menu trigger.
 
     def __init__(self, root, x: int, y: int, theme: str = 'dark',
                  on_click: Optional[Callable[[], None]] = None,

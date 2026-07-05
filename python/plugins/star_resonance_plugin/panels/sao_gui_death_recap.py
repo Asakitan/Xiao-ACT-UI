@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""Entity-mode ACT death recap panel."""
+# Entity-mode ACT death recap panel.
 
 from __future__ import annotations
 
@@ -70,7 +70,7 @@ def _mapping_rows(value: Any) -> list[Mapping[str, Any]]:
 
 
 class DeathRecapPanel:
-    """Compact death recap window for Entity/Tk."""
+    # Compact death recap window for Entity/Tk.
 
     def __init__(self, root: tk.Misc, owner: Any):
         self.root = root
@@ -447,7 +447,7 @@ class DeathRecapPanel:
 
     @staticmethod
     def _fmt_comma(value: Any) -> str:
-        """Format number with comma separators (e.g. -42,800)."""
+        # Format number with comma separators (e.g. -42,800).
         try:
             number = int(float(value or 0))
         except Exception:
@@ -456,7 +456,7 @@ class DeathRecapPanel:
 
     @staticmethod
     def _fmt_mmss(time_ms: Any) -> str:
-        """Epoch-ms or relative-ms to MM:SS.f display (e.g. 00:48.2)."""
+        # Epoch-ms or relative-ms to MM:SS.f display (e.g. 00:48.2).
         try:
             ms = int(time_ms or 0)
         except Exception:
@@ -481,7 +481,7 @@ class DeathRecapPanel:
 
     @staticmethod
     def _fmt_hp_change(payload: Mapping[str, Any]) -> str:
-        """Format HP change from payload: 'HP 22% -> 0' style."""
+        # Format HP change from payload: 'HP 22% -> 0' style.
         hp_keys = ('hp', 'current_hp', 'target_hp', 'player_hp')
         max_hp_keys = ('max_hp', 'target_max_hp', 'player_max_hp')
         hp = 0

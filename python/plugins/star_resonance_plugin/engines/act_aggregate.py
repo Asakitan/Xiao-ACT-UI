@@ -1,10 +1,9 @@
 # -*- coding: utf-8 -*-
-"""Pure ACT semantic aggregation helpers.
-
-The functions in this module intentionally know nothing about Tk/WebView.  They
-turn recent ACT event/action rows into readable semantic groups so UI surfaces do
-not have to render one raw event per line by default.
-"""
+# Pure ACT semantic aggregation helpers.
+#
+# The functions in this module intentionally know nothing about Tk/WebView.  They
+# turn recent ACT event/action rows into readable semantic groups so UI surfaces do
+# not have to render one raw event per line by default.
 
 from __future__ import annotations
 
@@ -155,7 +154,7 @@ def _counter_top(counter: Counter[str], *, limit: int = 5) -> list[dict[str, Any
 
 
 def normalize_act_event_row(event_or_row: Mapping[str, Any], *, index: int = 0) -> dict[str, Any]:
-    """Normalize a live event envelope, action-log row, or history row."""
+    # Normalize a live event envelope, action-log row, or history row.
     item = event_or_row if isinstance(event_or_row, Mapping) else {}
     payload = _mapping(item.get("payload"))
     combat_fact = _mapping(payload.get("combat_fact")) or _mapping(item.get("combat_fact"))
@@ -382,7 +381,7 @@ def aggregate_action_log(rows: Iterable[Mapping[str, Any]], *, top_n: int = 20,
 
 def aggregate_by_actor(rows: Iterable[Mapping[str, Any]], *, top_n: int = 20,
                        _pre_normalized: bool = False) -> list[dict[str, Any]]:
-    """Group events by the acting combatant (参与者) — useful plugin-debug dimension."""
+    # Group events by the acting combatant (参与者) — useful plugin-debug dimension.
     groups: dict[str, dict[str, Any]] = {}
     for row in (rows if _pre_normalized else normalize_rows(rows)):
         if not (row.get("actor") or row.get("actor_uid")):
@@ -396,7 +395,7 @@ def aggregate_by_actor(rows: Iterable[Mapping[str, Any]], *, top_n: int = 20,
 
 def aggregate_by_topic(rows: Iterable[Mapping[str, Any]], *, top_n: int = 20,
                        _pre_normalized: bool = False) -> list[dict[str, Any]]:
-    """Group events by topic/event-type (事件类型). name kept raw — UI humanizes via topic_cn."""
+    # Group events by topic/event-type (事件类型). name kept raw — UI humanizes via topic_cn.
     groups: dict[str, dict[str, Any]] = {}
     for row in (rows if _pre_normalized else normalize_rows(rows)):
         topic = str(row.get("topic") or "event")
@@ -408,8 +407,8 @@ def aggregate_by_topic(rows: Iterable[Mapping[str, Any]], *, top_n: int = 20,
 
 def aggregate_by_field(rows: Iterable[Mapping[str, Any]], field: str, *, top_n: int = 20,
                        _pre_normalized: bool = False) -> list[dict[str, Any]]:
-    """Group events by ANY normalized-row or payload field (the plugin-debug power tool:
-    'group by skill_id / target_uuid / damage_source / …')."""
+    # Group events by ANY normalized-row or payload field (the plugin-debug power tool:
+    # 'group by skill_id / target_uuid / damage_source / …').
     field = str(field or "").strip()
     if not field:
         return []

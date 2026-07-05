@@ -1,21 +1,20 @@
 # -*- coding: utf-8 -*-
-"""Proves _sync_host_rgn no longer races _render_frame's position
-snapshot (the residual tearing on fast pet motion/dragging).
-
-Simulates the exact race: a "plugin thread" calls
-CompositorLayer.set_position() between _render_frame's snapshot and
-_sync_host_rgn's own read of layer.x/y. Before the fix, _sync_host_rgn
-computed the clip region for the NEW (post-race) position while pixels
-were drawn for the OLD position — a torn/bitten edge for that frame.
-After the fix, _sync_host_rgn is handed the exact same snapshot dict
-_render_frame used, so it can never observe an in-between value.
-
-No Win32/GL required — this drives the pure-Python position/snapshot
-dataflow directly, monkeypatching out everything that touches real
-GPU/window state.
-
-Run: python rgn_snapshot_race_test.py
-"""
+# Proves _sync_host_rgn no longer races _render_frame's position
+# snapshot (the residual tearing on fast pet motion/dragging).
+#
+# Simulates the exact race: a "plugin thread" calls
+# CompositorLayer.set_position() between _render_frame's snapshot and
+# _sync_host_rgn's own read of layer.x/y. Before the fix, _sync_host_rgn
+# computed the clip region for the NEW (post-race) position while pixels
+# were drawn for the OLD position — a torn/bitten edge for that frame.
+# After the fix, _sync_host_rgn is handed the exact same snapshot dict
+# _render_frame used, so it can never observe an in-between value.
+#
+# No Win32/GL required — this drives the pure-Python position/snapshot
+# dataflow directly, monkeypatching out everything that touches real
+# GPU/window state.
+#
+# Run: python rgn_snapshot_race_test.py
 from __future__ import annotations
 
 import os
@@ -34,10 +33,10 @@ class _FakeHost:
 
 
 def race_once(overlay_like, layer, race_writer_positions):
-    """Reproduce one tick's ordering: build the _render_frame-style
-    snapshot, let the racing writer run, THEN call the (real)
-    _sync_host_rgn-equivalent extraction logic both with and without
-    the snapshot, and compare."""
+    # Reproduce one tick's ordering: build the _render_frame-style
+    # snapshot, let the racing writer run, THEN call the (real)
+    # _sync_host_rgn-equivalent extraction logic both with and without
+    # the snapshot, and compare.
     # Step 1: _render_frame's snapshot (position at draw time)
     snapshot = {layer.name: (layer.x, layer.y, layer.width, layer.height)}
     drawn_pos = (layer.x, layer.y)

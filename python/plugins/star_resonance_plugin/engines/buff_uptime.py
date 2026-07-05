@@ -1,18 +1,17 @@
 # -*- coding: utf-8 -*-
-"""Per-buff uptime accumulator for the ACT buff/debuff coverage panel.
-
-Fed by the periodic ``self_buffs`` snapshots that the packet bridge already
-packs into ``GameState.self_buffs`` (each ``{id, uuid, begin_ms, duration_ms,
-layer, count, name}``). This runs at player-update frequency (a few Hz, well
-under 30 buffs) — NOT a per-damage-event hot path — so a pure-Python
-snapshot-diff accumulator is the right tool (the project's Cython rule targets
-per-event / heap-scan hot loops, which this is not).
-
-Uptime model: on each snapshot the elapsed interval since the previous snapshot
-is credited to every buff that was active in the previous snapshot. ``uptime_pct``
-= accumulated active time / encounter window. A buff seen for the first time
-increments ``apply_count`` (refresh/re-application counter).
-"""
+# Per-buff uptime accumulator for the ACT buff/debuff coverage panel.
+#
+# Fed by the periodic ``self_buffs`` snapshots that the packet bridge already
+# packs into ``GameState.self_buffs`` (each ``{id, uuid, begin_ms, duration_ms,
+# layer, count, name}``). This runs at player-update frequency (a few Hz, well
+# under 30 buffs) — NOT a per-damage-event hot path — so a pure-Python
+# snapshot-diff accumulator is the right tool (the project's Cython rule targets
+# per-event / heap-scan hot loops, which this is not).
+#
+# Uptime model: on each snapshot the elapsed interval since the previous snapshot
+# is credited to every buff that was active in the previous snapshot. ``uptime_pct``
+# = accumulated active time / encounter window. A buff seen for the first time
+# increments ``apply_count`` (refresh/re-application counter).
 
 from __future__ import annotations
 
@@ -26,7 +25,7 @@ def _now_ms() -> float:
 
 
 class BuffUptimeTracker:
-    """Accumulate per-buff uptime over an encounter window from snapshots."""
+    # Accumulate per-buff uptime over an encounter window from snapshots.
 
     def __init__(self) -> None:
         self._lock = threading.Lock()
@@ -46,7 +45,7 @@ class BuffUptimeTracker:
 
     def update(self, buffs: Optional[List[Dict[str, Any]]],
                now_ms: Optional[float] = None) -> None:
-        """Ingest one ``self_buffs`` snapshot."""
+        # Ingest one ``self_buffs`` snapshot.
         ts = float(now_ms if now_ms is not None else _now_ms())
         with self._lock:
             if self._t0 <= 0.0:
@@ -90,8 +89,8 @@ class BuffUptimeTracker:
             self._last_t = ts
 
     def snapshot(self, now_ms: Optional[float] = None) -> Dict[str, Any]:
-        """Return {elapsed_ms, buffs:[{buff_id,name,uptime_ms,uptime_pct,
-        apply_count,layer,max_layer,active}]} sorted by uptime desc."""
+        # Return {elapsed_ms, buffs:[{buff_id,name,uptime_ms,uptime_pct,
+        # apply_count,layer,max_layer,active}]} sorted by uptime desc.
         ts = float(now_ms if now_ms is not None else _now_ms())
         with self._lock:
             elapsed = max(1.0, ts - self._t0) if self._t0 > 0.0 else 1.0

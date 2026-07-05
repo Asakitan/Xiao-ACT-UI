@@ -1,7 +1,6 @@
-"""Composes the full popup frame from layout sub-images.
-
-Produces premultiplied BGRA bytes ready for ``BgraPresenter``.
-"""
+# Composes the full popup frame from layout sub-images.
+#
+# Produces premultiplied BGRA bytes ready for ``BgraPresenter``.
 
 from __future__ import annotations
 
@@ -40,7 +39,7 @@ _HUD_FAIL_LOG_AT = 0.0  # HUD 层合成失败的 60s 限频日志哨兵
 
 
 def content_shift(state) -> tuple[int, int]:
-    """Small master slide used during popup open/close."""
+    # Small master slide used during popup open/close.
     return _CY_UI.popup_content_shift(getattr(state, 'fade_alpha', 1.0))
 
 
@@ -57,8 +56,8 @@ def child_origin(state) -> tuple[int, int]:
 
 
 def content_size(state) -> tuple:
-    """Return (content_w, content_h) — the inner box that excludes
-    the HUD margin."""
+    # Return (content_w, content_h) — the inner box that excludes
+    # the HUD margin.
     return _CY_UI.popup_content_size(
         len(state.menu_items), len(state.child_rows), menu_bar_layout.MAX_VISIBLE,
         menu_bar_layout.SLOT, child_bar_layout.ROW_STRIDE,
@@ -71,10 +70,10 @@ def window_size(state) -> tuple:
 
 
 def window_size_reserved(state, reserved_rows: int) -> tuple:
-    """Like ``window_size`` but sized for at least ``reserved_rows``
-    child rows. Used at open() time to bake in a fixed window size
-    big enough for the worst-case menu, so switching menus never
-    requires a GPU window resize."""
+    # Like ``window_size`` but sized for at least ``reserved_rows``
+    # child rows. Used at open() time to bake in a fixed window size
+    # big enough for the worst-case menu, so switching menus never
+    # requires a GPU window resize.
     return _CY_UI.popup_window_size(
         len(state.menu_items), len(state.child_rows), reserved_rows,
         menu_bar_layout.MAX_VISIBLE, menu_bar_layout.SLOT,

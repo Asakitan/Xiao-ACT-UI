@@ -1,7 +1,5 @@
 # -*- coding: utf-8 -*-
-"""
-MIDI解析模块 - 负责解析MIDI文件、JS文件和识别和弦
-"""
+# MIDI解析模块 - 负责解析MIDI文件、JS文件和识别和弦
 
 import mido
 import mido.midifiles.meta as _mido_meta
@@ -20,7 +18,7 @@ from mp_config import (PRESS_RATE_LIMIT_ENABLED, ARRANGE_MELODY_MIN_STEP_S,
 _original_build_meta_message = _mido_meta.build_meta_message
 
 def _safe_build_meta_message(meta_type, data, delta):
-    """安全版本：遇到损坏的 meta 事件时返回空文本事件而非崩溃"""
+    # 安全版本：遇到损坏的 meta 事件时返回空文本事件而非崩溃
     try:
         return _original_build_meta_message(meta_type, data, delta)
     except (IndexError, ValueError, KeyError):
@@ -34,7 +32,7 @@ _mido_files.build_meta_message = _safe_build_meta_message
 
 @dataclass
 class SustainPedalEvent:
-    """延音踏板事件（MIDI CC64）"""
+    # 延音踏板事件（MIDI CC64）
     time: float         # 绝对时间(秒)
     is_on: bool         # True=踩下踏板, False=抬起踏板
     channel: int        # MIDI通道
@@ -43,7 +41,7 @@ class SustainPedalEvent:
 
 @dataclass
 class NoteEvent:
-    """音符事件"""
+    # 音符事件
     note: int           # MIDI音符号 (0-127)
     velocity: int       # 力度 (0-127)
     time: float         # 绝对时间(秒)
@@ -53,7 +51,7 @@ class NoteEvent:
 
 @dataclass
 class ChordEvent:
-    """和弦事件"""
+    # 和弦事件
     chord_key: str          # 和弦对应的按键 (z, x, c, v, b, n, m)
     chord_name: str         # 和弦名称 (C, Dm, Em, F, G, Am, G7)
     notes: List[int]        # 组成音符
@@ -64,7 +62,7 @@ class ChordEvent:
 
 @dataclass
 class GlissandoEvent:
-    """滑奏事件"""
+    # 滑奏事件
     time: float             # 开始时间
     duration: float         # 持续时间
     direction: str          # 方向: 'up', 'down', 'updown'
@@ -77,7 +75,7 @@ class GlissandoEvent:
 
 @dataclass  
 class PlayEvent:
-    """统一的播放事件"""
+    # 统一的播放事件
     time: float
     duration: float
     is_chord: bool
@@ -88,15 +86,13 @@ class PlayEvent:
 
 
 class ChordDetector:
-    """
-    增强版和弦检测器
-    
-    支持：
-    1. 识别同时发声的音符是否构成已知和弦
-    2. 支持移调后的和弦识别（歌曲移调到C大调后）
-    3. 返回对应的Z-M和弦键
-    4. 扩展识别：将更多和弦映射到最接近的游戏和弦
-    """
+    # 增强版和弦检测器
+    #
+    # 支持：
+    # 1. 识别同时发声的音符是否构成已知和弦
+    # 2. 支持移调后的和弦识别（歌曲移调到C大调后）
+    # 3. 返回对应的Z-M和弦键
+    # 4. 扩展识别：将更多和弦映射到最接近的游戏和弦
     
     # 音符名称
     NOTE_NAMES = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B']
@@ -229,7 +225,7 @@ class ChordDetector:
             self.interval_lookup[intervals].append((key, name, root))
     
     def _identify_chord_type(self, intervals: tuple) -> Optional[str]:
-        """识别和弦类型"""
+        # 识别和弦类型
         # 精确匹配
         if intervals in self.INTERVAL_PATTERNS:
             return self.INTERVAL_PATTERNS[intervals]
@@ -259,16 +255,14 @@ class ChordDetector:
         return None
     
     def detect_chord(self, notes: List[int], transpose: int = 0) -> Optional[Tuple[str, str, List[int]]]:
-        """
-        检测和弦
-        
-        Args:
-            notes: MIDI音符列表（原始值，未移调）
-            transpose: 当前的移调值（用于将和弦映射到C大调）
-            
-        Returns:
-            (按键, 和弦名称, 和弦音符列表) 或 None
-        """
+        # 检测和弦
+        #
+        # Args:
+        # notes: MIDI音符列表（原始值，未移调）
+        # transpose: 当前的移调值（用于将和弦映射到C大调）
+        #
+        # Returns:
+        # (按键, 和弦名称, 和弦音符列表) 或 None
         if len(notes) < 3:
             return None
         
@@ -343,18 +337,18 @@ class ChordDetector:
         return None
     
     def get_chord_key(self, chord_name: str) -> Optional[str]:
-        """获取和弦对应的按键"""
+        # 获取和弦对应的按键
         if chord_name in self.GAME_CHORDS:
             return self.GAME_CHORDS[chord_name][0]
         return None
     
     def get_all_chord_keys(self) -> Dict[str, str]:
-        """获取所有和弦到按键的映射"""
+        # 获取所有和弦到按键的映射
         return {name: info[0] for name, info in self.GAME_CHORDS.items()}
 
 
 class MidiParser:
-    """MIDI文件解析器 - 支持和弦识别和智能通道分析"""
+    # MIDI文件解析器 - 支持和弦识别和智能通道分析
     
     # GM乐器分类
     INSTRUMENT_CATEGORIES = {
@@ -437,7 +431,7 @@ class MidiParser:
         self.arrange_quantize: bool = ARRANGE_QUANTIZE
         
     def load_file(self, filepath: str) -> bool:
-        """加载MIDI文件"""
+        # 加载MIDI文件
         try:
             # clip=True: 自动修正超出0-127范围的数据字节，兼容更多MIDI文件
             self.midi_file = mido.MidiFile(filepath, clip=True)
@@ -480,18 +474,16 @@ class MidiParser:
             return False
     
     def _smart_rearrange(self):
-        """
-        智能精简过密曲目
-        
-        当音符密度过高（人手无法弹奏）时，自动重新编曲：
-        1. 保留旋律线（每个时刻的最高音）
-        2. 保留低音基础（每个节拍的最低音）
-        3. 去除快速重复音
-        4. 简化过密和弦（保留骨架音）
-        5. 合并过近的同音
-        
-        触发条件：平均密度 > 12 notes/sec（人手极限约 10-15 notes/sec）
-        """
+        # 智能精简过密曲目
+        #
+        # 当音符密度过高（人手无法弹奏）时，自动重新编曲：
+        # 1. 保留旋律线（每个时刻的最高音）
+        # 2. 保留低音基础（每个节拍的最低音）
+        # 3. 去除快速重复音
+        # 4. 简化过密和弦（保留骨架音）
+        # 5. 合并过近的同音
+        #
+        # 触发条件：平均密度 > 12 notes/sec（人手极限约 10-15 notes/sec）
         if not self.notes or self.total_time <= 0:
             return
         
@@ -643,24 +635,22 @@ class MidiParser:
         self.notes = kept_notes
     
     def _intelligent_arrange(self):
-        """
-        智能编曲算法 - 清理杂乱无章的歌曲，保留主旋律
-        
-        借鉴专业编曲软件的思路（如MuseScore的音符简化、Band-in-a-Box的智能编曲）：
-        
-        核心原则：
-        1. 主旋律神圣不可侵犯 - 只清理伴奏，不改变旋律走向
-        2. 保留和声骨架 - 每个和弦保留根音、三度、五度
-        3. 删除装饰性噪音 - 快速经过音、无规律的伴奏碎片
-        4. 保持节奏脉搏 - 保留强拍低音和规律节奏型
-        5. 动态密度控制 - 安静段落保留更多细节，密集段适当简化
-        
-        目标：让杂乱的曲子弹起来更干净好听，同时不失去原曲特色
-        
-        触发条件：
-        - 音符密度 > 8 notes/sec 的段落占比 > 40%
-        - 或同时发声音符经常 > 6个
-        """
+        # 智能编曲算法 - 清理杂乱无章的歌曲，保留主旋律
+        #
+        # 借鉴专业编曲软件的思路（如MuseScore的音符简化、Band-in-a-Box的智能编曲）：
+        #
+        # 核心原则：
+        # 1. 主旋律神圣不可侵犯 - 只清理伴奏，不改变旋律走向
+        # 2. 保留和声骨架 - 每个和弦保留根音、三度、五度
+        # 3. 删除装饰性噪音 - 快速经过音、无规律的伴奏碎片
+        # 4. 保持节奏脉搏 - 保留强拍低音和规律节奏型
+        # 5. 动态密度控制 - 安静段落保留更多细节，密集段适当简化
+        #
+        # 目标：让杂乱的曲子弹起来更干净好听，同时不失去原曲特色
+        #
+        # 触发条件：
+        # - 音符密度 > 8 notes/sec 的段落占比 > 40%
+        # - 或同时发声音符经常 > 6个
         if not self.notes or self.total_time <= 0:
             return
         
@@ -814,17 +804,15 @@ class MidiParser:
             print(f"[智能编曲] 歌曲结构良好，保持原样")
     
     def _extract_skyline_melody(self, sorted_notes: list, beat_duration: float) -> list:
-        """
-        Skyline算法提取主旋律线
-        
-        原理：在每个时间窗口取最高音，然后用声部追踪(voice leading)
-        确保旋律线连贯。避免把伴奏中偶尔出现的高音当作旋律。
-        
-        改进：
-        1. 连续性检查：旋律跳跃不应过大（>12半音可疑）
-        2. 力度检查：旋律通常力度较强
-        3. 通道一致性：同一通道的音符更可能是同一声部
-        """
+        # Skyline算法提取主旋律线
+        #
+        # 原理：在每个时间窗口取最高音，然后用声部追踪(voice leading)
+        # 确保旋律线连贯。避免把伴奏中偶尔出现的高音当作旋律。
+        #
+        # 改进：
+        # 1. 连续性检查：旋律跳跃不应过大（>12半音可疑）
+        # 2. 力度检查：旋律通常力度较强
+        # 3. 通道一致性：同一通道的音符更可能是同一声部
         if not sorted_notes:
             return []
         
@@ -882,14 +870,12 @@ class MidiParser:
         return melody
     
     def _extract_bass_line(self, sorted_notes: list, beat_duration: float) -> list:
-        """
-        提取低音根音线
-        
-        策略：
-        1. 每个小节的强拍（第1拍、第3拍）保留最低音
-        2. 连续的低音线条保留（行进低音）
-        3. 力度强的低音保留（和弦根音）
-        """
+        # 提取低音根音线
+        #
+        # 策略：
+        # 1. 每个小节的强拍（第1拍、第3拍）保留最低音
+        # 2. 连续的低音线条保留（行进低音）
+        # 3. 力度强的低音保留（和弦根音）
         if not sorted_notes:
             return []
         
@@ -915,20 +901,18 @@ class MidiParser:
         return bass_notes
     
     def _humanize_speed(self):
-        """
-        极速段检测与时间拉伸 - 让超人速度的段落变得人类可弹
-        
-        检测逻辑：
-        1. 滑动窗口扫描，找出音符密度 > 15 notes/sec 的段落
-        2. 在这些段落中，将音符时间微调（拉伸），使密度降到 ~12 notes/sec
-        3. 不改变整体时长，只对局部极速段做时间扩展
-        4. 保持音符间的相对时序关系
-        
-        核心原则：
-        - 只处理真正不可能弹奏的速度（>15n/s）
-        - 拉伸幅度最小化，尽量不影响听感
-        - 不删除音符，只调整时间
-        """
+        # 极速段检测与时间拉伸 - 让超人速度的段落变得人类可弹
+        #
+        # 检测逻辑：
+        # 1. 滑动窗口扫描，找出音符密度 > 15 notes/sec 的段落
+        # 2. 在这些段落中，将音符时间微调（拉伸），使密度降到 ~12 notes/sec
+        # 3. 不改变整体时长，只对局部极速段做时间扩展
+        # 4. 保持音符间的相对时序关系
+        #
+        # 核心原则：
+        # - 只处理真正不可能弹奏的速度（>15n/s）
+        # - 拉伸幅度最小化，尽量不影响听感
+        # - 不删除音符，只调整时间
         if not self.notes or self.total_time <= 0:
             return
         # 自动改编开启时跳过：改编会把密度降到 ~3/s，时间拉伸既多余、又会把音符推离
@@ -1032,7 +1016,7 @@ class MidiParser:
                   f"BPM变化: {bpm_ratio:.2%} (范围: 85%~115%)")
     
     def set_press_rate_limit(self, enabled: bool, interval: float = None):
-        """运行期开关/调节自动改编（需重新 load_file 生效）。interval=旋律相邻音最小间隔(秒)。"""
+        # 运行期开关/调节自动改编（需重新 load_file 生效）。interval=旋律相邻音最小间隔(秒)。
         self.press_rate_limit_enabled = enabled
         if interval is not None and interval > 0:
             self.arrange_melody_min_step = interval
@@ -1040,7 +1024,7 @@ class MidiParser:
     # ----- 自动改编辅助 -----
     @staticmethod
     def _press_onsets(notes, w=0.05):
-        """把音符按 w 秒归并成按键时刻，返回起音时间列表(升序)。"""
+        # 把音符按 w 秒归并成按键时刻，返回起音时间列表(升序)。
         ns = sorted(notes, key=lambda n: n.time)
         out = []
         i, N = 0, len(ns)
@@ -1055,7 +1039,7 @@ class MidiParser:
 
     @staticmethod
     def _max_polyphony(sorted_notes, w=0.03):
-        """同时起音(w秒窗)的最大音符数——衡量织体厚度。"""
+        # 同时起音(w秒窗)的最大音符数——衡量织体厚度。
         times = [n.time for n in sorted_notes]
         mp, j = 1, 0
         for i in range(len(times)):
@@ -1065,17 +1049,15 @@ class MidiParser:
         return mp
 
     def _arrange_extract_melody(self, sorted_notes, beat, mel_step, mel_channels=None):
-        """
-        提取主旋律线（Viterbi 声部追踪 + 音区锚定）：每 mel_step 网格槽取一个音。
-
-        关键设计（修复"旋律塌成低音单调嗡鸣""伴奏尖峰带偏""低音漏进旋律"）：
-        - 转移代价按"八度等价"算：跳一个八度几乎免费(只看音级距离)，让追踪器能爬到真旋律；
-        - 音区锚定：先用滑窗中位数估计旋律所在音区，发射奖励偏向落在该音区±7半音内的音，
-          压制比音区低很多(伴奏低音漏入)或高很多(琶音尖峰)的音；
-        - 网格原点 t=0（与量化一致，修掉"旋律晚半格"）；候选放宽到前4个音 + 旋律通道音；
-        - 后处理：把明显落在低音区(远低于旋律音区且 < 低音分界)的音剔除，给旋律留"呼吸/休止"，
-          避免低音脉冲被当成旋律。
-        """
+        # 提取主旋律线（Viterbi 声部追踪 + 音区锚定）：每 mel_step 网格槽取一个音。
+        #
+        # 关键设计（修复"旋律塌成低音单调嗡鸣""伴奏尖峰带偏""低音漏进旋律"）：
+        # - 转移代价按"八度等价"算：跳一个八度几乎免费(只看音级距离)，让追踪器能爬到真旋律；
+        # - 音区锚定：先用滑窗中位数估计旋律所在音区，发射奖励偏向落在该音区±7半音内的音，
+        # 压制比音区低很多(伴奏低音漏入)或高很多(琶音尖峰)的音；
+        # - 网格原点 t=0（与量化一致，修掉"旋律晚半格"）；候选放宽到前4个音 + 旋律通道音；
+        # - 后处理：把明显落在低音区(远低于旋律音区且 < 低音分界)的音剔除，给旋律留"呼吸/休止"，
+        # 避免低音脉冲被当成旋律。
         if not sorted_notes:
             return []
         mel_channels = set(mel_channels) if mel_channels else set()
@@ -1173,14 +1155,12 @@ class MidiParser:
         return chosen
 
     def _arrange_extract_bass(self, sorted_notes, beat, bass_step_beats):
-        """
-        提取低音脉冲：每 bass_step 拍一个低音根音。
-
-        修复（"鼓点当低音""根音乱跳/选到转位经过音""同音机关枪"）：
-        - 来源优先用 bass_channels（不含鼓 ch9），否则用相对音高分界取低声部；
-        - 每拍取"时值占比最高的低音音级"的最低实例作为根音（比单纯最低音更像真正的根）；
-        - 抑制连续完全相同音高的重复敲击，减少机关枪式重复。
-        """
+        # 提取低音脉冲：每 bass_step 拍一个低音根音。
+        #
+        # 修复（"鼓点当低音""根音乱跳/选到转位经过音""同音机关枪"）：
+        # - 来源优先用 bass_channels（不含鼓 ch9），否则用相对音高分界取低声部；
+        # - 每拍取"时值占比最高的低音音级"的最低实例作为根音（比单纯最低音更像真正的根）；
+        # - 抑制连续完全相同音高的重复敲击，减少机关枪式重复。
         if not sorted_notes:
             return []
         bass_step = beat * max(bass_step_beats, 0.25)
@@ -1219,10 +1199,9 @@ class MidiParser:
         return out
 
     def _arrange_merge(self, melody, bass):
-        """合并旋律+低音：按硬下限归并按键组 → 每组最多2键(高音+低音)。
-
-        音符已在调用方按各自网格(旋律=细分, 低音=拍)对齐过，这里只做归并去重。
-        """
+        # 合并旋律+低音：按硬下限归并按键组 → 每组最多2键(高音+低音)。
+        #
+        # 音符已在调用方按各自网格(旋律=细分, 低音=拍)对齐过，这里只做归并去重。
         alln = list(melody) + list(bass)
         if not alln:
             return []
@@ -1254,16 +1233,14 @@ class MidiParser:
         return final
 
     def _auto_arrange(self):
-        """
-        自动改编 —— 把复杂多声部 MIDI 重编成"清晰旋律 + 干净低音脉冲"的可弹版本。
-
-        参考自动钢琴缩谱(piano reduction)/难度可控简化的标准做法：
-        1. Skyline 提取主旋律线，规整到统一细分(八分/十六分)，连续成线、绝不打散；
-        2. 按拍生成低音根音脉冲(boom)，替换原曲杂乱内声部；
-        3. 旋律+低音合并(每次最多2键)，轻量对齐节拍网格稳住节奏，加按键硬下限保护。
-
-        本来就简单/稀疏的曲子(儿歌、教学曲、简单版)原样不动。
-        """
+        # 自动改编 —— 把复杂多声部 MIDI 重编成"清晰旋律 + 干净低音脉冲"的可弹版本。
+        #
+        # 参考自动钢琴缩谱(piano reduction)/难度可控简化的标准做法：
+        # 1. Skyline 提取主旋律线，规整到统一细分(八分/十六分)，连续成线、绝不打散；
+        # 2. 按拍生成低音根音脉冲(boom)，替换原曲杂乱内声部；
+        # 3. 旋律+低音合并(每次最多2键)，轻量对齐节拍网格稳住节奏，加按键硬下限保护。
+        #
+        # 本来就简单/稀疏的曲子(儿歌、教学曲、简单版)原样不动。
         if not self.press_rate_limit_enabled:
             return
         if not self.notes or self.total_time <= 0 or len(self.notes) < 8:
@@ -1328,16 +1305,14 @@ class MidiParser:
               f"≈{pr:.1f}组/秒, 厚度{poly}→≤2)")
 
     def _analyze_pitch_parts(self):
-        """
-        智能音部分析 - 多因子分割（不只按音高）
-        
-        改进策略（解决低音太多扰乱主旋律的问题）：
-        1. Skyline旋律追踪：用声部追踪算法识别真正的旋律线
-        2. 通道分析：MIDI通道信息辅助判断（不同通道通常是不同声部）
-        3. 节奏角色分析：持续低音 vs 旋律性低音
-        4. 密度感知：某段时间只有低音时，那是旋律不是伴奏
-        5. 力度模式：旋律通常力度更强且有变化
-        """
+        # 智能音部分析 - 多因子分割（不只按音高）
+        #
+        # 改进策略（解决低音太多扰乱主旋律的问题）：
+        # 1. Skyline旋律追踪：用声部追踪算法识别真正的旋律线
+        # 2. 通道分析：MIDI通道信息辅助判断（不同通道通常是不同声部）
+        # 3. 节奏角色分析：持续低音 vs 旋律性低音
+        # 4. 密度感知：某段时间只有低音时，那是旋律不是伴奏
+        # 5. 力度模式：旋律通常力度更强且有变化
         if not self.notes:
             return
         
@@ -1589,7 +1564,7 @@ class MidiParser:
             print(f"[音部分析] ! 高低音撕裂严重，推荐只播放主旋律")
     
     def get_pitch_analysis(self) -> dict:
-        """获取音高分析结果"""
+        # 获取音高分析结果
         note_names = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B']
         def midi_to_name(m):
             return f"{note_names[m % 12]}{m // 12 - 1}"
@@ -1616,7 +1591,7 @@ class MidiParser:
         return result
     
     def _scan_instruments(self):
-        """扫描乐器信息"""
+        # 扫描乐器信息
         if self.midi_file is None:
             return
         
@@ -1640,14 +1615,14 @@ class MidiParser:
                             break
     
     def _get_instrument_category(self, program: int) -> str:
-        """获取乐器类别"""
+        # 获取乐器类别
         for category, programs in self.INSTRUMENT_CATEGORIES.items():
             if program in programs:
                 return category
         return 'unknown'
     
     def _analyze_channels(self):
-        """智能分析通道，根据音高分布和乐器类型分类"""
+        # 智能分析通道，根据音高分布和乐器类型分类
         self.melody_channels = []
         self.harmony_channels = []
         self.bass_channels = []
@@ -1731,7 +1706,7 @@ class MidiParser:
                 self.recommended_global_octave_shift = 0
     
     def _scan_tempo(self):
-        """预扫描MIDI文件获取tempo信息"""
+        # 预扫描MIDI文件获取tempo信息
         if self.midi_file is None:
             return
         
@@ -1757,7 +1732,7 @@ class MidiParser:
             self.bpm = mido.tempo2bpm(first_tempo)
     
     def _scan_key_signatures(self):
-        """预扫描MIDI文件获取调号信息"""
+        # 预扫描MIDI文件获取调号信息
         if self.midi_file is None:
             return
         
@@ -1853,7 +1828,7 @@ class MidiParser:
                 print(f"[MIDI调号] 共有{len(parsed_sigs)}个调号变化")
     
     def _parse_notes(self):
-        """解析音符"""
+        # 解析音符
         self.notes = []
         self.tempo_changes = []
         
@@ -1931,16 +1906,14 @@ class MidiParser:
             self._detect_sustain_heuristic()
     
     def _debounce_sustain_events(self, events: list) -> list:
-        """
-        延音踏板智能防抖：只合并机械抖动，保留有意义的踏板编排
-        
-        策略：
-        1. OFF→ON 间隔 < 0.06秒：纯MIDI机械抖动（量化误差），合并为持续踩下
-        2. 其余事件完整保留，尊重原始MIDI的踏板编排（包括短踏板触碰）
-        3. 去除连续重复状态（如连续两个ON）
-        
-        不删除短ON→OFF对！短踏板是音乐家有意为之的 踩——松——踩 节奏。
-        """
+        # 延音踏板智能防抖：只合并机械抖动，保留有意义的踏板编排
+        #
+        # 策略：
+        # 1. OFF→ON 间隔 < 0.06秒：纯MIDI机械抖动（量化误差），合并为持续踩下
+        # 2. 其余事件完整保留，尊重原始MIDI的踏板编排（包括短踏板触碰）
+        # 3. 去除连续重复状态（如连续两个ON）
+        #
+        # 不删除短ON→OFF对！短踏板是音乐家有意为之的 踩——松——踩 节奏。
         if len(events) < 2:
             return events
         
@@ -1978,18 +1951,16 @@ class MidiParser:
         return cleaned
     
     def _detect_sustain_heuristic(self):
-        """
-        启发式延音踏板检测 - 模拟真实钢琴家的踏板习惯
-        
-        结合音符时长、力度和密度来智能决定踏板行为：
-        - 连奏/长音段落：保持踏板踩下，充分共鸣
-        - 断奏/快速段落：模拟音乐家 踩——松——踩 节奏性换踏板
-          · 高力度: 每3拍换一次（更多共鸣）
-          · 中力度: 每2拍换一次
-          · 低力度: 每1.5拍换一次（更清晰）
-        - 乐句间隙(>1拍)：抬起踏板清理共鸣
-        - 曲末自动关闭踏板
-        """
+        # 启发式延音踏板检测 - 模拟真实钢琴家的踏板习惯
+        #
+        # 结合音符时长、力度和密度来智能决定踏板行为：
+        # - 连奏/长音段落：保持踏板踩下，充分共鸣
+        # - 断奏/快速段落：模拟音乐家 踩——松——踩 节奏性换踏板
+        # · 高力度: 每3拍换一次（更多共鸣）
+        # · 中力度: 每2拍换一次
+        # · 低力度: 每1.5拍换一次（更清晰）
+        # - 乐句间隙(>1拍)：抬起踏板清理共鸣
+        # - 曲末自动关闭踏板
         beat_duration = 60.0 / max(self.bpm, 60)
         
         sorted_notes = sorted(self.notes, key=lambda n: n.time)
@@ -2115,19 +2086,17 @@ class MidiParser:
                   f"共{len(self.sustain_events)}个事件")
     
     def get_sustain_events(self) -> List[SustainPedalEvent]:
-        """获取延音踏板事件列表"""
+        # 获取延音踏板事件列表
         return self.sustain_events
     
     def _detect_glissandos(self):
-        """
-        检测滑奏片段 - 快速连续的音阶上行/下行
-        
-        滑奏特征：
-        1. 连续5个以上音符
-        2. 每个音符间隔 < 100ms
-        3. 音符连续上行或下行（允许半音/全音）
-        4. 音域跨度 >= 一个八度
-        """
+        # 检测滑奏片段 - 快速连续的音阶上行/下行
+        #
+        # 滑奏特征：
+        # 1. 连续5个以上音符
+        # 2. 每个音符间隔 < 100ms
+        # 3. 音符连续上行或下行（允许半音/全音）
+        # 4. 音域跨度 >= 一个八度
         self.glissandos = []
         
         if not self.glissando_detection_enabled or not self.notes:
@@ -2229,7 +2198,7 @@ class MidiParser:
             print(f"[滑奏检测] 共检测到 {len(self.glissandos)} 个滑奏片段")
             
     def _detect_chords(self):
-        """检测和弦 - 支持同时和弦和琶音和弦检测"""
+        # 检测和弦 - 支持同时和弦和琶音和弦检测
         self.chords = []
         
         if not self.chord_detection_enabled or not self.notes:
@@ -2309,14 +2278,12 @@ class MidiParser:
         self._chord_used_notes = used_notes
     
     def _detect_arpeggio_chords(self, used_notes: Set[int]):
-        """
-        琶音和弦检测 - 从连续快速音符中推断和弦
-        
-        原理：
-        1. 使用滑动窗口（时间窗口约0.3-0.5秒）收集连续音符
-        2. 检查窗口内的音符是否形成已知和弦模式
-        3. 如果形成和弦，标记并输出
-        """
+        # 琶音和弦检测 - 从连续快速音符中推断和弦
+        #
+        # 原理：
+        # 1. 使用滑动窗口（时间窗口约0.3-0.5秒）收集连续音符
+        # 2. 检查窗口内的音符是否形成已知和弦模式
+        # 3. 如果形成和弦，标记并输出
         if not self.notes:
             return
         
@@ -2403,7 +2370,7 @@ class MidiParser:
         self.chords.sort(key=lambda c: c.time)
         
     def _build_play_events(self):
-        """构建统一的播放事件列表"""
+        # 构建统一的播放事件列表
         self.play_events = []
         
         # 收集被滑奏覆盖的音符ID
@@ -2477,37 +2444,37 @@ class MidiParser:
         self.play_events.sort(key=lambda x: x.time)
         
     def set_chord_detection(self, enabled: bool):
-        """设置是否启用和弦检测"""
+        # 设置是否启用和弦检测
         self.chord_detection_enabled = enabled
         if self.notes:
             self._detect_chords()
             self._build_play_events()
     
     def get_notes(self) -> List[NoteEvent]:
-        """获取所有音符"""
+        # 获取所有音符
         return self.notes
     
     def get_chords(self) -> List[ChordEvent]:
-        """获取检测到的和弦"""
+        # 获取检测到的和弦
         return self.chords
     
     def get_play_events(self) -> List[PlayEvent]:
-        """获取播放事件列表"""
+        # 获取播放事件列表
         return self.play_events
     
     def get_total_time(self) -> float:
-        """获取总时长"""
+        # 获取总时长
         return self.total_time
     
     def get_note_range(self) -> Tuple[int, int]:
-        """获取音符范围"""
+        # 获取音符范围
         if not self.notes:
             return (48, 60)
         notes = [n.note for n in self.notes]
         return (min(notes), max(notes))
     
     def get_info(self) -> dict:
-        """获取MIDI信息"""
+        # 获取MIDI信息
         return {
             'total_notes': len(self.notes),
             'total_chords': len(self.chords),
@@ -2529,7 +2496,7 @@ class MidiParser:
         }
     
     def get_instrument_info(self) -> dict:
-        """获取乐器信息"""
+        # 获取乐器信息
         GM_INSTRUMENT_NAMES = [
             'Acoustic Grand Piano', 'Bright Acoustic Piano', 'Electric Grand Piano', 'Honky-tonk Piano',
             'Electric Piano 1', 'Electric Piano 2', 'Harpsichord', 'Clavinet',
@@ -2564,30 +2531,27 @@ class MidiParser:
         return result
     
     def get_bpm(self) -> float:
-        """获取MIDI文件的BPM"""
+        # 获取MIDI文件的BPM
         return self.bpm
     
     def get_tempo_changes(self) -> List[Tuple[float, int, float]]:
-        """获取所有tempo变化点
-        
-        Returns:
-            [(时间秒, tempo微秒/拍, bpm), ...]
-        """
+        # 获取所有tempo变化点
+        #
+        # Returns:
+        # [(时间秒, tempo微秒/拍, bpm), ...]
         return self.tempo_changes
     
     def get_channels_info(self) -> dict:
-        """
-        获取各通道的信息
-        
-        Returns:
-            {
-                channel: {
-                    'note_count': 音符数量,
-                    'note_range': (最低音, 最高音),
-                    'avg_note': 平均音高,
-                }
-            }
-        """
+        # 获取各通道的信息
+        #
+        # Returns:
+        # {
+        # channel: {
+        # 'note_count': 音符数量,
+        # 'note_range': (最低音, 最高音),
+        # 'avg_note': 平均音高,
+        # }
+        # }
         channels = {}
         for note in self.notes:
             ch = note.channel
@@ -2612,11 +2576,11 @@ class MidiParser:
         return result
     
     def get_notes_by_channel(self, channel: int) -> List[NoteEvent]:
-        """获取指定通道的所有音符"""
+        # 获取指定通道的所有音符
         return [n for n in self.notes if n.channel == channel]
     
     def get_chord_summary(self) -> dict:
-        """获取和弦统计"""
+        # 获取和弦统计
         chord_counts = {}
         for chord in self.chords:
             name = chord.chord_name
@@ -2628,18 +2592,16 @@ class MidiParser:
 
 
 class JSParser:
-    """
-    JS谱面文件解析器
-    
-    解析格式: parseGenshinImpactMusic("曲名", "{A4}<170>{B4}<170>...", 2)
-    
-    格式说明:
-    - {音符} 表示按键，如 {A4} 表示A4键
-    - <时间> 表示延迟（毫秒）
-    - 连续的 {音符}{音符} 表示同时按下
-    
-    JS文件中的音符已经是游戏内映射好的，可以直接使用！
-    """
+    # JS谱面文件解析器
+    #
+    # 解析格式: parseGenshinImpactMusic("曲名", "{A4}<170>{B4}<170>...", 2)
+    #
+    # 格式说明:
+    # - {音符} 表示按键，如 {A4} 表示A4键
+    # - <时间> 表示延迟（毫秒）
+    # - 连续的 {音符}{音符} 表示同时按下
+    #
+    # JS文件中的音符已经是游戏内映射好的，可以直接使用！
     
     # 音符名转MIDI偏移
     NOTE_MAP = {'C': 0, 'C#': 1, 'D': 2, 'D#': 3, 'E': 4, 'F': 5, 
@@ -2694,7 +2656,7 @@ class JSParser:
         self.glissando_detection_enabled: bool = False
         
     def load_file(self, filepath: str) -> bool:
-        """加载JS谱面文件"""
+        # 加载JS谱面文件
         try:
             with open(filepath, 'r', encoding='utf-8') as f:
                 content = f.read()
@@ -2706,7 +2668,7 @@ class JSParser:
             return False
     
     def _parse_content(self, content: str) -> bool:
-        """解析JS内容"""
+        # 解析JS内容
         # 提取曲名
         title_match = re.search(r'parseGenshinImpactMusic\s*\(\s*"([^"]*)"', content)
         if title_match:
@@ -2802,7 +2764,7 @@ class JSParser:
         return True
     
     def _note_str_to_midi(self, note_str: str) -> Optional[int]:
-        """将音符字符串转换为MIDI音符号"""
+        # 将音符字符串转换为MIDI音符号
         # 格式: A4, C#3, etc.
         if '#' in note_str:
             note_name = note_str[:2]
@@ -2821,7 +2783,7 @@ class JSParser:
         return midi_note
     
     def _build_play_events(self):
-        """构建播放事件（不做和弦检测，JS文件已经是最终格式）"""
+        # 构建播放事件（不做和弦检测，JS文件已经是最终格式）
         self.play_events = []
         
         # 按时间分组
@@ -2847,7 +2809,7 @@ class JSParser:
                 self.play_events.append(event)
     
     def get_info(self) -> dict:
-        """获取文件信息"""
+        # 获取文件信息
         note_range = (min(n.note for n in self.notes), max(n.note for n in self.notes)) if self.notes else (0, 0)
         return {
             'type': 'js',
@@ -2859,37 +2821,37 @@ class JSParser:
         }
     
     def set_chord_detection(self, enabled: bool):
-        """设置和弦检测（JS文件不需要，仅为兼容）"""
+        # 设置和弦检测（JS文件不需要，仅为兼容）
         self.chord_detection_enabled = enabled
     
     def get_chord_summary(self) -> dict:
-        """获取和弦摘要（JS文件没有和弦概念）"""
+        # 获取和弦摘要（JS文件没有和弦概念）
         return {'chord_count': 0, 'chord_types': {}}
     
     def get_bpm(self) -> float:
-        """获取BPM"""
+        # 获取BPM
         return self.bpm
     
     def get_tempo_changes(self) -> list:
-        """获取tempo变化（JS文件无此概念）"""
+        # 获取tempo变化（JS文件无此概念）
         return []
     
     def get_channels_info(self) -> dict:
-        """获取通道信息（JS文件无此概念）"""
+        # 获取通道信息（JS文件无此概念）
         return {}
     
     def get_notes_by_channel(self, channel: int) -> List[NoteEvent]:
-        """获取指定通道的音符（JS文件只有一个通道）"""
+        # 获取指定通道的音符（JS文件只有一个通道）
         if channel == 0:
             return self.notes
         return []
     
     def get_play_events(self) -> List[PlayEvent]:
-        """获取播放事件列表"""
+        # 获取播放事件列表
         return self.play_events
     
     def get_pitch_analysis(self) -> dict:
-        """获取音高分析结果（JS文件兼容stub）"""
+        # 获取音高分析结果（JS文件兼容stub）
         result = {
             'melody_count': len(self.melody_notes),
             'bass_count': len(self.bass_notes),
@@ -2904,12 +2866,12 @@ class JSParser:
         return result
     
     def get_instrument_info(self) -> dict:
-        """获取乐器信息（JS文件无乐器概念）"""
+        # 获取乐器信息（JS文件无乐器概念）
         return {}
 
 
 def analyze_midi(filepath: str) -> dict:
-    """分析MIDI文件"""
+    # 分析MIDI文件
     parser = MidiParser()
     if parser.load_file(filepath):
         info = parser.get_info()
@@ -2924,7 +2886,7 @@ def analyze_midi(filepath: str) -> dict:
     return {}
 
 def debug_midi(filepath: str) -> str:
-    """详细调试MIDI文件，返回诊断报告"""
+    # 详细调试MIDI文件，返回诊断报告
     import mido
     
     try:

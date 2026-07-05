@@ -1,13 +1,11 @@
 # -*- coding: utf-8 -*-
-"""
-SAOPlayerPanel — Star Resonance menu's top-left info panel
-(username + level/exp + HP/STA).
-
-Moved out of gui_modules so game-specific Entity/Tk menu UI stays inside
-the Star Resonance plugin. Public surface remains:
-``SAOPlayerPanel(parent, username, profession, panel_width=None, **kw)``
-plus ``update_level()`` and animation hooks.
-"""
+# SAOPlayerPanel — Star Resonance menu's top-left info panel
+# (username + level/exp + HP/STA).
+#
+# Moved out of gui_modules so game-specific Entity/Tk menu UI stays inside
+# the Star Resonance plugin. Public surface remains:
+# ``SAOPlayerPanel(parent, username, profession, panel_width=None, **kw)``
+# plus ``update_level()`` and animation hooks.
 
 from __future__ import annotations
 
@@ -22,15 +20,13 @@ from utils.sao_sound import get_sao_font, get_cjk_font
 
 
 class SAOPlayerPanel(tk.Frame):
-    """
-    SAO 风格左侧信息面板 — 对标 SAO-UI LeftInfo + HP 组件
-
-    结构:
-    - Top 区 (白色, 240×280): 用户名/分隔线/等级/EXP/HP/STA
-    - Bottom 区 (灰色, 240×120): 菜单模式状态
-    - 右三角指示器 (连接 MenuBar)
-    - 下三角装饰 (连接 top/bottom)
-    """
+    # SAO 风格左侧信息面板 — 对标 SAO-UI LeftInfo + HP 组件
+    #
+    # 结构:
+    # - Top 区 (白色, 240×280): 用户名/分隔线/等级/EXP/HP/STA
+    # - Bottom 区 (灰色, 240×120): 菜单模式状态
+    # - 右三角指示器 (连接 MenuBar)
+    # - 下三角装饰 (连接 top/bottom)
 
     ENTITY_GPU_ONLY = True
 
@@ -170,7 +166,7 @@ class SAOPlayerPanel(tk.Frame):
 
     def update_profile(self, username=None, profession=None,
                        repaint: bool = True) -> bool:
-        """Update displayed player identity and repaint the top plate."""
+        # Update displayed player identity and repaint the top plate.
         next_username = self._username if username is None else str(username)
         next_profession = self._profession if profession is None else str(profession)
         if next_username == self._username and next_profession == self._profession:
@@ -182,7 +178,7 @@ class SAOPlayerPanel(tk.Frame):
         return True
 
     def update_vitals(self, hp=None, sta=None, repaint: bool = True) -> bool:
-        """Update HP/STA values shown in the player panel."""
+        # Update HP/STA values shown in the player panel.
         cur_hp = self._coerce_stat_pair(getattr(self, '_sta_hp', (0, 0)))
         cur_sta = self._coerce_stat_pair(getattr(self, '_sta_sta', (0, 0)))
         next_hp = cur_hp if hp is None else self._coerce_stat_pair(hp, cur_hp)
@@ -197,7 +193,7 @@ class SAOPlayerPanel(tk.Frame):
 
     def update_level(self, level: int, level_extra: int = 0,
                      season_exp: Optional[int] = None):
-        """更新等级/赛季等级/EXP 信息。"""
+        # 更新等级/赛季等级/EXP 信息。
         level = max(1, int(level or 1))
         level_extra = max(0, int(level_extra or 0))
         next_exp = self._season_exp if season_exp is None else max(0, int(season_exp or 0))
@@ -272,7 +268,7 @@ class SAOPlayerPanel(tk.Frame):
         self._anim.animate('close', 200, fade)
 
     def _redraw_top(self, w, h):
-        """SAO 系统信息面板 .top — HUD 风格"""
+        # SAO 系统信息面板 .top — HUD 风格
         if self._gpu_managed:
             # External callers (e.g. sao_gui's profile pull) might call
             # this with the final target size. In GPU mode just push a
@@ -409,7 +405,7 @@ class SAOPlayerPanel(tk.Frame):
                                        fill=CYAN, outline='')
 
     def _redraw_bottom(self, w, h):
-        """SAO 系统信息面板 .bottom — 状态描述区"""
+        # SAO 系统信息面板 .bottom — 状态描述区
         if self._gpu_managed:
             self._anim_bot_w = max(self._anim_bot_w, int(w))
             self._anim_bot_h = max(self._anim_bot_h, int(h))

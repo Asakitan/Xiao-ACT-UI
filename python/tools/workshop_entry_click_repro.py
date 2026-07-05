@@ -1,14 +1,13 @@
 # -*- coding: utf-8 -*-
-"""Faithful repro: real WorkshopPanel publish-tab Entry click + alpha.
-
-Constructs the actual WorkshopPanel (real SaoToplevel mirror, light
-theme, canvas-scrolled publish form), switches to the publish tab, then:
-  - measures the captured frame's alpha over a real Entry field
-  - PtInRegion-tests the host click region at the Entry center
-  - synthesizes a real click and checks the Entry receives focus
-Runs the fix (rect_hit on) and, with SAO_NO_RECT_HIT=1, the old
-per-pixel-alpha path for a direct before/after.
-"""
+# Faithful repro: real WorkshopPanel publish-tab Entry click + alpha.
+#
+# Constructs the actual WorkshopPanel (real SaoToplevel mirror, light
+# theme, canvas-scrolled publish form), switches to the publish tab, then:
+# - measures the captured frame's alpha over a real Entry field
+# - PtInRegion-tests the host click region at the Entry center
+# - synthesizes a real click and checks the Entry receives focus
+# Runs the fix (rect_hit on) and, with SAO_NO_RECT_HIT=1, the old
+# per-pixel-alpha path for a direct before/after.
 import os
 import sys
 import ctypes

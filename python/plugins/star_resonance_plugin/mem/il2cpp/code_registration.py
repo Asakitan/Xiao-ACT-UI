@@ -1,50 +1,49 @@
-"""IL2CPP CodeRegistration / CodeGenModule 解析 - 拿运行时 Il2CppClass*.
-
-CodeRegistration v31 layout (Il2CppDumper Il2CppCodeRegistration.cs):
-    intptr_t reversePInvokeWrappersCount;       // +0x00
-    void*    reversePInvokeWrappers;            // +0x08
-    intptr_t genericMethodPointersCount;        // +0x10
-    void**   genericMethodPointers;             // +0x18
-    void**   genericAdjustorThunks;             // +0x20  (v22+)
-    intptr_t invokerPointersCount;              // +0x28
-    void**   invokerPointers;                   // +0x30
-    intptr_t unresolvedVirtualCallCount;        // +0x38  (deprecated)
-    void**   unresolvedVirtualCallPointers;     // +0x40
-    intptr_t unresolvedInstanceCallCount;       // +0x48  (v29.1+)  ← v31 有
-    void**   unresolvedInstanceCallPointers;    // +0x50
-    intptr_t unresolvedStaticCallCount;         // +0x58
-    void**   unresolvedStaticCallPointers;      // +0x60
-    intptr_t interopDataCount;                  // +0x68
-    void*    interopData;                       // +0x70
-    intptr_t windowsRuntimeFactoryCount;        // +0x78
-    void*    windowsRuntimeFactoryTable;        // +0x80
-    intptr_t codeGenModulesCount;               // +0x88   ← 关键
-    Il2CppCodeGenModule** codeGenModules;       // +0x90   ← 关键
-
-(v31 字段顺序参考: Il2CppDumper/Il2CppDumper/Il2Cpp/Il2CppExecutor.cs +
- unity-2022.x il2cpp/libil2cpp/vm-utils/RegistrationHelper.h)
-
-Il2CppCodeGenModule v31:
-    const char* moduleName;                  // +0x00
-    uint32_t  methodPointerCount;            // +0x08
-    Il2CppMethodPointer* methodPointers;     // +0x10
-    uint32_t  adjustorThunkCount;            // +0x18
-    AdjustorThunk* adjustorThunks;           // +0x20
-    int32_t*  invokerIndices;                // +0x28
-    uint32_t  reversePInvokeWrapperCount;    // +0x30
-    CustomAttributesCacheGenerator* customAttributes;  // +0x38
-    Il2CppTokenRangePair* rgctxRanges;       // +0x40
-    uint32_t  rgctxRangesCount;              // +0x48
-    Il2CppRGCTXDefinition* rgctxs;           // +0x50
-    uint32_t  rgctxsCount;                   // +0x58
-    Il2CppDebuggerMetadataRegistration* debuggerMetadataRegistration;  // +0x60
-    Il2CppMethodPointer moduleInitializer;   // +0x68
-    void*     staticConstructorTypeIndices;  // +0x70  (i32*)
-    Il2CppMetadataRange* metadataRangeArray; // +0x78
-    Il2CppClass** pTypeInfoTable;            // +0x80   ← 真正的 klass 表 (按 typeIdx 索引)
-
-注意: pTypeInfoTable 是按 module-local typeDefIndex 索引的, 不是全局 typeIndex.
-"""
+# IL2CPP CodeRegistration / CodeGenModule 解析 - 拿运行时 Il2CppClass*.
+#
+# CodeRegistration v31 layout (Il2CppDumper Il2CppCodeRegistration.cs):
+# intptr_t reversePInvokeWrappersCount;       // +0x00
+# void*    reversePInvokeWrappers;            // +0x08
+# intptr_t genericMethodPointersCount;        // +0x10
+# void**   genericMethodPointers;             // +0x18
+# void**   genericAdjustorThunks;             // +0x20  (v22+)
+# intptr_t invokerPointersCount;              // +0x28
+# void**   invokerPointers;                   // +0x30
+# intptr_t unresolvedVirtualCallCount;        // +0x38  (deprecated)
+# void**   unresolvedVirtualCallPointers;     // +0x40
+# intptr_t unresolvedInstanceCallCount;       // +0x48  (v29.1+)  ← v31 有
+# void**   unresolvedInstanceCallPointers;    // +0x50
+# intptr_t unresolvedStaticCallCount;         // +0x58
+# void**   unresolvedStaticCallPointers;      // +0x60
+# intptr_t interopDataCount;                  // +0x68
+# void*    interopData;                       // +0x70
+# intptr_t windowsRuntimeFactoryCount;        // +0x78
+# void*    windowsRuntimeFactoryTable;        // +0x80
+# intptr_t codeGenModulesCount;               // +0x88   ← 关键
+# Il2CppCodeGenModule** codeGenModules;       // +0x90   ← 关键
+#
+# (v31 字段顺序参考: Il2CppDumper/Il2CppDumper/Il2Cpp/Il2CppExecutor.cs +
+# unity-2022.x il2cpp/libil2cpp/vm-utils/RegistrationHelper.h)
+#
+# Il2CppCodeGenModule v31:
+# const char* moduleName;                  // +0x00
+# uint32_t  methodPointerCount;            // +0x08
+# Il2CppMethodPointer* methodPointers;     // +0x10
+# uint32_t  adjustorThunkCount;            // +0x18
+# AdjustorThunk* adjustorThunks;           // +0x20
+# int32_t*  invokerIndices;                // +0x28
+# uint32_t  reversePInvokeWrapperCount;    // +0x30
+# CustomAttributesCacheGenerator* customAttributes;  // +0x38
+# Il2CppTokenRangePair* rgctxRanges;       // +0x40
+# uint32_t  rgctxRangesCount;              // +0x48
+# Il2CppRGCTXDefinition* rgctxs;           // +0x50
+# uint32_t  rgctxsCount;                   // +0x58
+# Il2CppDebuggerMetadataRegistration* debuggerMetadataRegistration;  // +0x60
+# Il2CppMethodPointer moduleInitializer;   // +0x68
+# void*     staticConstructorTypeIndices;  // +0x70  (i32*)
+# Il2CppMetadataRange* metadataRangeArray; // +0x78
+# Il2CppClass** pTypeInfoTable;            // +0x80   ← 真正的 klass 表 (按 typeIdx 索引)
+#
+# 注意: pTypeInfoTable 是按 module-local typeDefIndex 索引的, 不是全局 typeIndex.
 
 from __future__ import annotations
 
@@ -188,7 +187,7 @@ def _read_cstring(pm: StarProcess, addr: int, max_len: int = 256) -> Optional[st
 
 def build_class_index(pm: StarProcess, mods: List[CodeGenModule],
                       *, max_per_module: int = 100000) -> Dict[str, List[ClassEntry]]:
-    """扫所有 module 的 pTypeInfoTable, 读 klass 的 name/namespace, 建索引."""
+    # 扫所有 module 的 pTypeInfoTable, 读 klass 的 name/namespace, 建索引.
     index: Dict[str, List[ClassEntry]] = {}
     t0 = time.time()
     n_total = 0

@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""Entity-mode ACT graph/timeseries panel."""
+# Entity-mode ACT graph/timeseries panel.
 
 from __future__ import annotations
 
@@ -83,7 +83,7 @@ def _mapping_points(value: Any) -> list[Mapping[str, Any]]:
 
 
 class GraphTimeseriesPanel:
-    """SAO-styled compact graph/timeseries panel for Entity/Tk."""
+    # SAO-styled compact graph/timeseries panel for Entity/Tk.
 
     def __init__(self, root: tk.Misc, owner: Any):
         self.root = root
@@ -377,7 +377,7 @@ class GraphTimeseriesPanel:
             self._render_lane_canvas(card, metric_id, lane_points, color)
 
     def _render_lane_canvas(self, parent: tk.Misc, metric_id: str, lane_points: list[Mapping[str, Any]], color: str) -> None:
-        """Draw a single bar-chart lane inside its section_card."""
+        # Draw a single bar-chart lane inside its section_card.
         canvas = tk.Canvas(parent, height=140, bg=_SAO_PANEL_BODY_BG, bd=0, highlightthickness=0)
         canvas.pack(fill='x', expand=False, padx=4, pady=4)
 
@@ -405,7 +405,7 @@ class GraphTimeseriesPanel:
         canvas.after_idle(_draw)
 
     def _open_action_log_at(self, time_ms: int, topic: str) -> None:
-        """Drill a graph point into the Action Log focused at that point's time."""
+        # Drill a graph point into the Action Log focused at that point's time.
         owner = self.owner
         try:
             opener = getattr(owner, '_plugin_open_action_log_at', None)

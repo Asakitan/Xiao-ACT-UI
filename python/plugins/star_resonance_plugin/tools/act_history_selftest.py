@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""Regression tests for shared ACT history-browser helpers."""
+# Regression tests for shared ACT history-browser helpers.
 
 from __future__ import annotations
 

@@ -1,39 +1,37 @@
 # -*- coding: utf-8 -*-
-"""
-SAOPlayerGUIMenuMixin — fourth mixin extracted from SAOPlayerGUI
-(round 40 of the sao_gui split refactor). 17 methods, ~526 lines.
-
-Holds the SAO PopUpMenu lifecycle + refresh + signature-caching logic:
-  * ``_setup_sao_menu`` — constructs the SAOPopUpMenu with 7 categories.
-  * ``_toggle_sao_menu`` — open/close handler (with motion blur + sounds).
-  * ``_close_sao_menu_from_background`` / ``_clear_sao_menu_close_pending``
-    — outside-click close path with fisheye z-order release.
-  * ``_on_sao_menu_open`` / ``_on_sao_menu_close`` — open/close hooks
-    that drive fisheye overlay + breath animation + entity-menu state
-    persistence.
-  * ``_refresh_menu_if_open`` / ``_refresh_menu_immediate`` —
-    debounced + immediate refresh paths.
-  * ``_apply_menu_refresh_if_open`` — main-thread continuation invoked
-    by the debounce after().
-  * ``_compute_menu_refresh_signature`` — 200 ms-cached signature for
-    detecting whether the menu actually needs to rebuild.
-  * ``_get_menu_children_cached`` — sig-cached menu children dict.
-  * ``_cancel_pending_menu_refresh`` — cancel a pending debounce.
-  * ``_build_menu_children`` — the 7-category dict builder (the
-    biggest method in the cluster at ~139 lines).
-  * ``_persist_entity_menu_state`` / ``_restore_entity_menu_state`` —
-    remember which child menu was last active across menu close/open.
-  * ``_dismiss_sao_menu_for_panel`` — close the SAO menu before
-    showing a floating panel (avoid topmost overlay covering it).
-  * ``_build_update_menu_label`` — formats the updater status string
-    for the menu's "关于" → "检查更新" entry.
-
-All 17 methods are SAOPlayerGUI instance methods today; this mixin
-holds the definitions. SAOPlayerGUI's __init__ still owns the
-relevant state (``self._sao_menu``, ``self._menu_icons``,
-``self._menu_refresh_after_id``, signature caches, etc.) — the mixin
-only contains method bodies that access ``self.X``.
-"""
+# SAOPlayerGUIMenuMixin — fourth mixin extracted from SAOPlayerGUI
+# (round 40 of the sao_gui split refactor). 17 methods, ~526 lines.
+#
+# Holds the SAO PopUpMenu lifecycle + refresh + signature-caching logic:
+# * ``_setup_sao_menu`` — constructs the SAOPopUpMenu with 7 categories.
+# * ``_toggle_sao_menu`` — open/close handler (with motion blur + sounds).
+# * ``_close_sao_menu_from_background`` / ``_clear_sao_menu_close_pending``
+# — outside-click close path with fisheye z-order release.
+# * ``_on_sao_menu_open`` / ``_on_sao_menu_close`` — open/close hooks
+# that drive fisheye overlay + breath animation + entity-menu state
+# persistence.
+# * ``_refresh_menu_if_open`` / ``_refresh_menu_immediate`` —
+# debounced + immediate refresh paths.
+# * ``_apply_menu_refresh_if_open`` — main-thread continuation invoked
+# by the debounce after().
+# * ``_compute_menu_refresh_signature`` — 200 ms-cached signature for
+# detecting whether the menu actually needs to rebuild.
+# * ``_get_menu_children_cached`` — sig-cached menu children dict.
+# * ``_cancel_pending_menu_refresh`` — cancel a pending debounce.
+# * ``_build_menu_children`` — the 7-category dict builder (the
+# biggest method in the cluster at ~139 lines).
+# * ``_persist_entity_menu_state`` / ``_restore_entity_menu_state`` —
+# remember which child menu was last active across menu close/open.
+# * ``_dismiss_sao_menu_for_panel`` — close the SAO menu before
+# showing a floating panel (avoid topmost overlay covering it).
+# * ``_build_update_menu_label`` — formats the updater status string
+# for the menu's "关于" → "检查更新" entry.
+#
+# All 17 methods are SAOPlayerGUI instance methods today; this mixin
+# holds the definitions. SAOPlayerGUI's __init__ still owns the
+# relevant state (``self._sao_menu``, ``self._menu_icons``,
+# ``self._menu_refresh_after_id``, signature caches, etc.) — the mixin
+# only contains method bodies that access ``self.X``.
 
 from __future__ import annotations
 
@@ -96,26 +94,25 @@ def _mapping_items(value: Any) -> list[Mapping[str, Any]]:
 
 
 class SAOPlayerGUIMenuMixin:
-    """Mixin providing the SAO PopUpMenu lifecycle + refresh logic.
-
-    SAOPlayerGUI must initialise the following attributes in its
-    ``__init__`` (this is the existing contract — the mixin does not
-    seed them):
-
-      * ``self._sao_menu`` (SAOPopUpMenu or None until first toggle)
-      * ``self._menu_icons`` (list[dict] — set by _setup_sao_menu)
-      * ``self._menu_refresh_after_id`` (int or None)
-      * ``self._menu_refresh_force`` (bool)
-      * ``self._menu_children_cache`` (dict or None)
-      * ``self._menu_children_cache_sig`` (tuple or None)
-      * ``self._last_menu_refresh_sig`` (tuple or None)
-      * ``self._last_menu_refresh_sig_time`` (float)
-      * ``self._sao_menu_close_pending`` (bool)
-      * ``self._fisheye_close_suppress_until`` (float)
-
-    Plus all the other ``self.X`` fields the methods read (which are
-    initialised by SAOPlayerGUI proper).
-    """
+    # Mixin providing the SAO PopUpMenu lifecycle + refresh logic.
+    #
+    # SAOPlayerGUI must initialise the following attributes in its
+    # ``__init__`` (this is the existing contract — the mixin does not
+    # seed them):
+    #
+    # * ``self._sao_menu`` (SAOPopUpMenu or None until first toggle)
+    # * ``self._menu_icons`` (list[dict] — set by _setup_sao_menu)
+    # * ``self._menu_refresh_after_id`` (int or None)
+    # * ``self._menu_refresh_force`` (bool)
+    # * ``self._menu_children_cache`` (dict or None)
+    # * ``self._menu_children_cache_sig`` (tuple or None)
+    # * ``self._last_menu_refresh_sig`` (tuple or None)
+    # * ``self._last_menu_refresh_sig_time`` (float)
+    # * ``self._sao_menu_close_pending`` (bool)
+    # * ``self._fisheye_close_suppress_until`` (float)
+    #
+    # Plus all the other ``self.X`` fields the methods read (which are
+    # initialised by SAOPlayerGUI proper).
 
     def _persist_entity_menu_state(self, save_now: bool = False):
         settings = getattr(self, '_cfg_settings_ref', None)
@@ -264,7 +261,7 @@ class SAOPlayerGUIMenuMixin:
         self._update_float_status()
 
     def _build_menu_children(self):
-        """动态构建子菜单 (支持状态反映) — SAO Auto (7 categories)"""
+        # 动态构建子菜单 (支持状态反映) — SAO Auto (7 categories)
         hk = self.settings.get('hotkeys', DEFAULT_HOTKEYS)
 
         def _k(key_id):
@@ -345,13 +342,12 @@ class SAOPlayerGUIMenuMixin:
             return {'ok': False, 'message': str(exc), 'plugin_count': 0, 'active_count': 0, 'plugins': []}
 
     def _build_plugin_menu_items(self):
-        """专属「插件」分类条目: 管理/面板/重载 + 置顶插件优先 + 全部插件(点按开关)。
-
-        - 插件按 pin 置顶 (act_plugin_menu 已排序), ★=置顶 ●=运行 ○=已停。
-        - ▣ 表示插件声明了面板; ⌨N 表示注册了 N 个热键。
-        - 点插件行 = 启用/禁用切换 (「常用插件菜单可开关」)。pin/打开面板/热键
-          细配在「插件管理面板」或 F11 popup 子菜单里。
-        """
+        # 专属「插件」分类条目: 管理/面板/重载 + 置顶插件优先 + 全部插件(点按开关)。
+        #
+        # - 插件按 pin 置顶 (act_plugin_menu 已排序), ★=置顶 ●=运行 ○=已停。
+        # - ▣ 表示插件声明了面板; ⌨N 表示注册了 N 个热键。
+        # - 点插件行 = 启用/禁用切换 (「常用插件菜单可开关」)。pin/打开面板/热键
+        # 细配在「插件管理面板」或 F11 popup 子菜单里。
         try:
             data = act_plugin_menu(self)
         except Exception:
@@ -386,7 +382,7 @@ class SAOPlayerGUIMenuMixin:
         return items
 
     def _pin_plugin_from_menu(self, plugin_id, pinned):
-        """切换插件置顶 (供 popup 子菜单调用)。"""
+        # 切换插件置顶 (供 popup 子菜单调用)。
         try:
             act_plugin_pin(self, plugin_id, bool(pinned))
         except Exception:
@@ -443,16 +439,15 @@ class SAOPlayerGUIMenuMixin:
         return result
 
     def _dismiss_sao_menu_for_panel(self):
-        """SAO 菜单关掉再弹面板, 避免 topmost overlay 压在面板上看不见.
-
-        Mirrors ``_close_sao_menu_from_background``: suppress any pending
-        fisheye (re)start race (the 140ms-delayed ``_start_fisheye_with_retry``
-        scheduled by ``_on_sao_menu_open`` would otherwise still fire and spin
-        up a fisheye behind the panel that just opened) and request a
-        graceful fade instead of an abrupt destroy, so opening a panel from
-        inside the menu plays the same close animation as a normal menu
-        close — no more dirty afterimage left on the desktop.
-        """
+        # SAO 菜单关掉再弹面板, 避免 topmost overlay 压在面板上看不见.
+        #
+        # Mirrors ``_close_sao_menu_from_background``: suppress any pending
+        # fisheye (re)start race (the 140ms-delayed ``_start_fisheye_with_retry``
+        # scheduled by ``_on_sao_menu_open`` would otherwise still fire and spin
+        # up a fisheye behind the panel that just opened) and request a
+        # graceful fade instead of an abrupt destroy, so opening a panel from
+        # inside the menu plays the same close animation as a normal menu
+        # close — no more dirty afterimage left on the desktop.
         try:
             self._sao_panel_transition_until = time.time() + 0.9
             self._fisheye_close_suppress_until = time.time() + 1.4
@@ -489,7 +484,7 @@ class SAOPlayerGUIMenuMixin:
     ]
 
     def _build_menu_icons(self):
-        """平台固定图标 + 插件动态贡献的分类图标。"""
+        # 平台固定图标 + 插件动态贡献的分类图标。
         icons = list(self._PLATFORM_MENU_ICONS)
         platform_names = {ic['name'] for ic in icons}
         for _ext_id, cat in self._collect_plugin_menu_categories().items():
@@ -796,7 +791,7 @@ class SAOPlayerGUIMenuMixin:
         return result
 
     def _collect_plugin_menu_categories(self):
-        """从 PluginManager 拉取所有插件贡献的菜单分类。"""
+        # 从 PluginManager 拉取所有插件贡献的菜单分类。
         pm = getattr(self, '_act_plugin_manager', None)
         if pm is None:
             return {}
@@ -944,7 +939,7 @@ class SAOPlayerGUIMenuMixin:
         panel.show()
 
     def _setup_sao_menu(self):
-        """构建 SAO PopUpMenu 菜单 = 平台分类 + 插件动态贡献分类"""
+        # 构建 SAO PopUpMenu 菜单 = 平台分类 + 插件动态贡献分类
         self._ensure_plugin_lifecycle_subscription()
         self._ensure_plugin_ui_invalidate_subscription()
         self._ensure_plugin_unified_overlay_host()
@@ -975,6 +970,12 @@ class SAOPlayerGUIMenuMixin:
         self._sao_menu_needs_rebuild = False
 
     def _toggle_sao_menu(self, allow_close: bool = False):
+        # Debounce: ignore a second toggle within 300ms of the last one.
+        _now = time.time()
+        _last = getattr(self, '_toggle_sao_menu_t', 0.0)
+        if _now - _last < 0.3:
+            return
+        self._toggle_sao_menu_t = _now
         # Lazy-init: build menu on first toggle (deferred from __init__)
         if (self._sao_menu is not None
                 and not getattr(self._sao_menu, 'visible', False)
@@ -1144,14 +1145,13 @@ class SAOPlayerGUIMenuMixin:
                 self._sao_menu_close_pending = False
 
     def _close_sao_menu_for_external_command(self):
-        """Close menu input surfaces immediately before opening native UI.
-
-        Normal menu closes keep the GPU popup alive for its fade-out. That is
-        visually nicer, but a native file dialog opened from a row command can
-        appear while popup/fisheye input windows are still topmost. For those
-        commands we tear down the input surfaces synchronously, then let the
-        command run on the existing short delay.
-        """
+        # Close menu input surfaces immediately before opening native UI.
+        #
+        # Normal menu closes keep the GPU popup alive for its fade-out. That is
+        # visually nicer, but a native file dialog opened from a row command can
+        # appear while popup/fisheye input windows are still topmost. For those
+        # commands we tear down the input surfaces synchronously, then let the
+        # command run on the existing short delay.
         if self._exit_animating or self._close_finalized:
             return
         menu = getattr(self, '_sao_menu', None)
@@ -1202,7 +1202,7 @@ class SAOPlayerGUIMenuMixin:
         self._sao_menu_close_pending = False
 
     def _on_sao_menu_open(self):
-        """SAO 菜单打开时 — 停止呼吸, 启动持久鱼眼 (Win32 z-order 接管)"""
+        # SAO 菜单打开时 — 停止呼吸, 启动持久鱼眼 (Win32 z-order 接管)
         self._stop_float_breath()
         self._lift_loop_active = False
         try:
@@ -1223,7 +1223,7 @@ class SAOPlayerGUIMenuMixin:
             pass
 
     def _on_sao_menu_close(self):
-        """SAO 菜单关闭时 — 重启呼吸动画; 面板仍开时保持鱼眼, 否则渐隐销毁"""
+        # SAO 菜单关闭时 — 重启呼吸动画; 面板仍开时保持鱼眼, 否则渐隐销毁
         self._lift_loop_active = False
         self._cancel_pending_menu_refresh()
         self._persist_entity_menu_state(save_now=False)
@@ -1234,13 +1234,12 @@ class SAOPlayerGUIMenuMixin:
             pass  # 呼吸动画已禁用 (固定位置)
 
     def _refresh_menu_if_open(self, force: bool = False):
-        """如果菜单打开, 刷新子菜单和面板
-
-        v2.3.15: changed from after_idle to after(100) for debounced
-        batch execution. Multiple calls within 100ms are merged into
-        a single refresh, reducing main-thread callback churn from
-        16+ call sites.
-        """
+        # 如果菜单打开, 刷新子菜单和面板
+        #
+        # v2.3.15: changed from after_idle to after(100) for debounced
+        # batch execution. Multiple calls within 100ms are merged into
+        # a single refresh, reducing main-thread callback churn from
+        # 16+ call sites.
         menu = getattr(self, '_sao_menu', None)
         if self._destroyed:
             return
@@ -1257,7 +1256,7 @@ class SAOPlayerGUIMenuMixin:
             self._apply_menu_refresh_if_open()
 
     def _refresh_menu_immediate(self):
-        """Refresh menu child-bar without debounce (used for theme switch)."""
+        # Refresh menu child-bar without debounce (used for theme switch).
         menu = getattr(self, '_sao_menu', None)
         if self._destroyed or not (menu and menu.visible):
             return

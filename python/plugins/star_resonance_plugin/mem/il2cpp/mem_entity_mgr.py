@@ -1,32 +1,31 @@
-"""Phase 4 — Panda.ZGame.ZEntityMgr reader.
-
-通过堆扫描定位 ZEntityMgr 单例实例 (用已知 player_uuid 作锚点),
-然后读 bossDict_/monsterDict_/npcDict_ (.NET Dictionary<long, ZEntity>) 列出实体.
-
-ZEntityMgr 字段 (verified against dump fdc7111b):
-  +0x10  long                       playerUuid_
-  +0x18  PlayerEnt                  playerEnt_
-  +0x28  Dictionary<long, ZEntity>  entityDict_
-  +0x60  Dictionary<long, ZEntity>  bossDict_         ← BOSS HP 主源
-  +0x68  Dictionary<long, ZEntity>  monsterDict_
-  +0x70  Dictionary<long, ZEntity>  npcDict_
-
-ZEntity 字段 (verified against dump fdc7111b):
-  +0x28  EEntityState                                 entityState_
-  +0x48  ZAttrCollection                              attrs_
-  +0xC0  long                                         Uuid
-  +0xC8  long                                         ConfigUuid  (template id → 名字表)
-  +0xD8  long                                         CharId
-
-ZAttrCollection (HP/状态/仇恨等数值走 attrs):
-  +0x18  ZAttrCacheSlim              cacheSlim_   (Burst/SIMD cache — 不解码)
-  +0x28  Dictionary<uint, IMixAttr>  mixItemDict_  ← 由 mem_attr_reader.ZAttrReader 解码
-
-v2: 接入 ZAttrReader 后可输出 HP/MaxHp/breaking_stage/extinction/stunned/overdrive/
-hated_char 等数值 (attr id = packet_parser.enums.AttrType)。ZAttr 的 Value 偏移随
-ZMixAttr<T> 的 T 变化, 故 ZAttrReader 在运行时用 TCP 已知值按 klass 标定一次。
-未提供/未标定 reader 时退回 v1 行为 (uuid + config_uuid + state)。
-"""
+# Phase 4 — Panda.ZGame.ZEntityMgr reader.
+#
+# 通过堆扫描定位 ZEntityMgr 单例实例 (用已知 player_uuid 作锚点),
+# 然后读 bossDict_/monsterDict_/npcDict_ (.NET Dictionary<long, ZEntity>) 列出实体.
+#
+# ZEntityMgr 字段 (verified against dump fdc7111b):
+# +0x10  long                       playerUuid_
+# +0x18  PlayerEnt                  playerEnt_
+# +0x28  Dictionary<long, ZEntity>  entityDict_
+# +0x60  Dictionary<long, ZEntity>  bossDict_         ← BOSS HP 主源
+# +0x68  Dictionary<long, ZEntity>  monsterDict_
+# +0x70  Dictionary<long, ZEntity>  npcDict_
+#
+# ZEntity 字段 (verified against dump fdc7111b):
+# +0x28  EEntityState                                 entityState_
+# +0x48  ZAttrCollection                              attrs_
+# +0xC0  long                                         Uuid
+# +0xC8  long                                         ConfigUuid  (template id → 名字表)
+# +0xD8  long                                         CharId
+#
+# ZAttrCollection (HP/状态/仇恨等数值走 attrs):
+# +0x18  ZAttrCacheSlim              cacheSlim_   (Burst/SIMD cache — 不解码)
+# +0x28  Dictionary<uint, IMixAttr>  mixItemDict_  ← 由 mem_attr_reader.ZAttrReader 解码
+#
+# v2: 接入 ZAttrReader 后可输出 HP/MaxHp/breaking_stage/extinction/stunned/overdrive/
+# hated_char 等数值 (attr id = packet_parser.enums.AttrType)。ZAttr 的 Value 偏移随
+# ZMixAttr<T> 的 T 变化, 故 ZAttrReader 在运行时用 TCP 已知值按 klass 标定一次。
+# 未提供/未标定 reader 时退回 v1 行为 (uuid + config_uuid + state)。
 from __future__ import annotations
 
 import glob
@@ -143,12 +142,11 @@ class EntityMgrSnap:
 
 
 class EntityMgrReader:
-    """寻找并读取 ZEntityMgr 单例.
-
-    使用方式:
-        emr = EntityMgrReader(dps_source)
-        snap = emr.read(player_uuid=36668136)
-    """
+    # 寻找并读取 ZEntityMgr 单例.
+    #
+    # 使用方式:
+    # emr = EntityMgrReader(dps_source)
+    # snap = emr.read(player_uuid=36668136)
 
     def __init__(self, dps_source: StaticDpsSource):
         self._src = dps_source
@@ -213,7 +211,7 @@ class EntityMgrReader:
                 self._mgr_klass = klass
 
     def _klass_name(self, kp: int) -> str:
-        """Read an Il2CppClass name (klass+0x10 -> char*) for validation."""
+        # Read an Il2CppClass name (klass+0x10 -> char*) for validation.
         try:
             pm = self._src.sr.pm
             np = pm.read_u64(kp + 0x10)
@@ -225,14 +223,13 @@ class EntityMgrReader:
             return ""
 
     def _resolve_mgr_klass(self) -> int:
-        """Resolve ZEntityMgr's Il2CppClass* robustly, version-independently.
-
-        Tries the active bundle, then EVERY on-disk dump's script.json (newest
-        first), validating each candidate by reading the live klass name. No
-        hard-coded dump_id (which drifts on every game update); the result is
-        cached and re-validated so a relaunch/patch can't silently use a stale
-        klass.
-        """
+        # Resolve ZEntityMgr's Il2CppClass* robustly, version-independently.
+        #
+        # Tries the active bundle, then EVERY on-disk dump's script.json (newest
+        # first), validating each candidate by reading the live klass name. No
+        # hard-coded dump_id (which drifts on every game update); the result is
+        # cached and re-validated so a relaunch/patch can't silently use a stale
+        # klass.
         if self._mgr_klass and self._klass_name(self._mgr_klass) == "ZEntityMgr":
             return self._mgr_klass
         self._mgr_klass = 0
@@ -285,18 +282,17 @@ class EntityMgrReader:
     # ---------- 锚点扫描 ----------
 
     def _scan_one_region_for_mgr(self, r, klass_ptr: int, player_uuid: int):
-        """Scan one region for the ZEntityMgr instance.
-
-        Returns ``(obj, score)`` for the best klass-sentinel hit in this region
-        whose 4 dict fields are distinct heap pointers and whose entityDict_.count
-        is sane, or ``(0, -1)``. An exact playerUuid_ match returns immediately
-        with score = 1<<62 so the caller stops the whole sweep.
-
-        The klass-pointer hunt runs in the Cython AVX2 kernel over a reused scratch
-        buffer (zero-copy); only the handful of aligned hits pay the inline field
-        decode. (Was a pure-Python ``bytes.find`` walk + per-hit Python decode — the
-        single heaviest Python full-heap scan in the probe.)
-        """
+        # Scan one region for the ZEntityMgr instance.
+        #
+        # Returns ``(obj, score)`` for the best klass-sentinel hit in this region
+        # whose 4 dict fields are distinct heap pointers and whose entityDict_.count
+        # is sane, or ``(0, -1)``. An exact playerUuid_ match returns immediately
+        # with score = 1<<62 so the caller stops the whole sweep.
+        #
+        # The klass-pointer hunt runs in the Cython AVX2 kernel over a reused scratch
+        # buffer (zero-copy); only the handful of aligned hits pay the inline field
+        # decode. (Was a pure-Python ``bytes.find`` walk + per-hit Python decode — the
+        # single heaviest Python full-heap scan in the probe.)
         pm = self._src.sr.pm
         MIN_HEAP = 0x0000_0000_0010_0000
         MAX_HEAP = 0x0000_7FFF_FFFF_FFFF
@@ -366,11 +362,10 @@ class EntityMgrReader:
         return best_obj, best_score
 
     def _scan_for_mgr(self, player_uuid: int) -> Optional[int]:
-        """单遍扫描堆: 找 *(addr)==klass_ptr 且 bd/md/nd 都是有效堆指针 + entityDict_.count 合理.
-
-        早退条件: playerUuid_ 字段匹配 (绝对真身); 否则收集 best-by-count.
-        命中 region 记为 warm hint, 下次冷定位先扫它。
-        """
+        # 单遍扫描堆: 找 *(addr)==klass_ptr 且 bd/md/nd 都是有效堆指针 + entityDict_.count 合理.
+        #
+        # 早退条件: playerUuid_ 字段匹配 (绝对真身); 否则收集 best-by-count.
+        # 命中 region 记为 warm hint, 下次冷定位先扫它。
         sr = self._src.sr
         pm = sr.pm
         klass_ptr = self._resolve_mgr_klass()
@@ -405,13 +400,12 @@ class EntityMgrReader:
         return best_obj or None
 
     def locate(self, player_uuid: int, force_rescan: bool = False) -> Optional[int]:
-        """返回 ZEntityMgr 实例地址. 缓存已找到的 mgr_addr, 用 player_uuid 校验依然有效.
-
-        Phase 4 O(1) steady-state: when the in-memory addr is set, validation is a
-        SINGLE read_u64 + klass compare (no scan, no _resolve_mgr_klass metadata
-        walk). On failure the addr is dropped to the slow Stage-A path. The hot
-        tick therefore pays at most one syscall per call when warm.
-        """
+        # 返回 ZEntityMgr 实例地址. 缓存已找到的 mgr_addr, 用 player_uuid 校验依然有效.
+        #
+        # Phase 4 O(1) steady-state: when the in-memory addr is set, validation is a
+        # SINGLE read_u64 + klass compare (no scan, no _resolve_mgr_klass metadata
+        # walk). On failure the addr is dropped to the slow Stage-A path. The hot
+        # tick therefore pays at most one syscall per call when warm.
         if not force_rescan and self._mgr_addr and self._mgr_klass:
             # Stage-B trust check: one read_u64(addr) == cached klass pointer.
             # RootPointerCache.validate() contracts exactly this and is the only
@@ -466,11 +460,10 @@ class EntityMgrReader:
     # ---------- 字典读 ----------
 
     def _read_dict_entries(self, dict_addr: int, max_entries: int = 256) -> List[Tuple[int, int]]:
-        """读 .NET Dictionary<long, ref> 的 (key, value_ptr) 列表.
-
-        entries[] 整块一次 read_bytes 进来本地解码 (struct), 取代每槽 3 笔单读 RPM —
-        每 tick 把 ~1.5k 次系统调用收成 1 次大读 + 本地循环。
-        """
+        # 读 .NET Dictionary<long, ref> 的 (key, value_ptr) 列表.
+        #
+        # entries[] 整块一次 read_bytes 进来本地解码 (struct), 取代每槽 3 笔单读 RPM —
+        # 每 tick 把 ~1.5k 次系统调用收成 1 次大读 + 本地循环。
         if not dict_addr:
             return []
         pm = self._src.sr.pm
@@ -552,7 +545,7 @@ class EntityMgrReader:
     # ---------- v2: ZAttr 数值 ----------
 
     def _entity_attrs_obj(self, ent_addr: int) -> int:
-        """Return the entity's ``ZAttrCollection`` pointer (attrs_ @ +0x48)."""
+        # Return the entity's ``ZAttrCollection`` pointer (attrs_ @ +0x48).
         if not ent_addr:
             return 0
         try:
@@ -562,12 +555,11 @@ class EntityMgrReader:
 
     def calibrate_attrs(self, ent_addr: int, attr_reader, known: dict,
                         ga_base: int = 0) -> int:
-        """Calibrate ``attr_reader`` against this entity using TCP-known values.
-
-        ``known`` = ``{attr_id: expected_value}`` (e.g. ``{A_MAX_HP: boss_max_hp}``
-        from the TCP parser). Returns the number of klasses calibrated. Done once
-        per session; the reader then decodes every same-typed attr.
-        """
+        # Calibrate ``attr_reader`` against this entity using TCP-known values.
+        #
+        # ``known`` = ``{attr_id: expected_value}`` (e.g. ``{A_MAX_HP: boss_max_hp}``
+        # from the TCP parser). Returns the number of klasses calibrated. Done once
+        # per session; the reader then decodes every same-typed attr.
         attrs = self._entity_attrs_obj(ent_addr)
         if not attrs or attr_reader is None:
             return 0
@@ -577,11 +569,10 @@ class EntityMgrReader:
             return 0
 
     def fill_entity_numeric(self, snap: EntitySnap, attr_reader) -> EntitySnap:
-        """Fill ``snap``'s numeric fields from memory via a calibrated reader.
-
-        No-op (leaves zeros, ``attrs_read=False``) when the reader is missing or
-        not yet calibrated — callers then fall back to TCP for those fields.
-        """
+        # Fill ``snap``'s numeric fields from memory via a calibrated reader.
+        #
+        # No-op (leaves zeros, ``attrs_read=False``) when the reader is missing or
+        # not yet calibrated — callers then fall back to TCP for those fields.
         if snap is None or attr_reader is None or not snap.obj_addr:
             return snap
         attrs = self._entity_attrs_obj(snap.obj_addr)
@@ -607,7 +598,7 @@ class EntityMgrReader:
         return snap
 
     def read_entity_numeric(self, ent_addr: int, attr_reader=None) -> Optional[EntitySnap]:
-        """Read one entity with v1 identity + (if reader calibrated) numeric attrs."""
+        # Read one entity with v1 identity + (if reader calibrated) numeric attrs.
         snap = self._read_entity(ent_addr)
         if snap is None:
             return None

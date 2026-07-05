@@ -1,58 +1,56 @@
 # -*- coding: utf-8 -*-
-"""
-SAOPlayerGUILifecycleMixin — sixteenth mixin extracted from
-SAOPlayerGUI (round 62 of the sao_gui split refactor). 7 methods,
-~324 lines.
-
-The application teardown + restore-on-startup helpers — the
-ordered shutdown sequence that brings down engines, panels,
-overlays, hotkeys, and the float button in the right order so
-no Tk after-id leaks past mainloop quit.
-
-Methods:
-  * _restore_panels (13) — on startup, re-open panels that were
-    visible last session (respects _panels_hidden flag).
-  * _cleanup_entry_overlay (23) — destroys the SAO link-start
-    entry-animation overlay.
-  * _cleanup_exit_overlay (24) — destroys the exit-animation
-    overlay.
-  * _finalize_close (128) — the ordered destroy sequence:
-      1. set _destroyed/_close_finalized, stop breath/lift loops
-      2. cancel all root.after IDs (panel float, menu refresh,
-         shared fx tick on the class)
-      3. remove updater listener
-      4. unbind SAOHotkeyManager + optional plugin state manager
-      5. stop fisheye overlay
-      6. close + destroy SAO menu overlay
-      7. stop recognition engines + persist optional plugin cache
-      8. destroy floating panels and ULW overlays
-      9. quit root.mainloop()
-  * _run_exit_animation (124) — confirm + fade-out + exit overlay
-    + scheduled hard-exit/finalize after the animation.
-  * _on_close (3) — top-level handler: delegate to
-    _run_exit_animation.
-
-Round-62 fix: references to `SAOPlayerGUI._sao_fx_after_id` (the
-shared panel-fx class attr) are rewritten to `type(self)._sao_fx_after_id`
-so the mixin doesn't need to import the not-yet-defined SAOPlayerGUI
-class. MRO + class-attr lookup keeps the semantics identical.
-
-Required SAOPlayerGUI attrs:
-  * self._destroyed, self._close_finalized, self._exit_animating,
-    self._breath_active, self._lift_loop_active, self._panels_hidden
-  * self.root, self.settings, self._float, self._sao_menu,
-    self._cfg_settings_ref, self._updater_mgr,
-    self._update_listener, self._update_listener_installed,
-    self._hotkey_mgr, self._cache_loop_stop, self._after_shutdown
-    * self._update_panel, self._fisheye_ov
-  * Class attr: SAOPlayerGUI._sao_fx_after_id (accessed via type(self))
-
-Required SAOPlayerGUI methods (via MRO):
-  * _persist_entity_menu_state (Menu mixin)
-  * Optional plugin cache/recognition hooks when installed
-  * _stop_fisheye_overlay (Fisheye mixin)
-  * _toggle_status_panel (StatusUpdater mixin)
-"""
+# SAOPlayerGUILifecycleMixin — sixteenth mixin extracted from
+# SAOPlayerGUI (round 62 of the sao_gui split refactor). 7 methods,
+# ~324 lines.
+#
+# The application teardown + restore-on-startup helpers — the
+# ordered shutdown sequence that brings down engines, panels,
+# overlays, hotkeys, and the float button in the right order so
+# no Tk after-id leaks past mainloop quit.
+#
+# Methods:
+# * _restore_panels (13) — on startup, re-open panels that were
+# visible last session (respects _panels_hidden flag).
+# * _cleanup_entry_overlay (23) — destroys the SAO link-start
+# entry-animation overlay.
+# * _cleanup_exit_overlay (24) — destroys the exit-animation
+# overlay.
+# * _finalize_close (128) — the ordered destroy sequence:
+# 1. set _destroyed/_close_finalized, stop breath/lift loops
+# 2. cancel all root.after IDs (panel float, menu refresh,
+# shared fx tick on the class)
+# 3. remove updater listener
+# 4. unbind SAOHotkeyManager + optional plugin state manager
+# 5. stop fisheye overlay
+# 6. close + destroy SAO menu overlay
+# 7. stop recognition engines + persist optional plugin cache
+# 8. destroy floating panels and ULW overlays
+# 9. quit root.mainloop()
+# * _run_exit_animation (124) — confirm + fade-out + exit overlay
+# + scheduled hard-exit/finalize after the animation.
+# * _on_close (3) — top-level handler: delegate to
+# _run_exit_animation.
+#
+# Round-62 fix: references to `SAOPlayerGUI._sao_fx_after_id` (the
+# shared panel-fx class attr) are rewritten to `type(self)._sao_fx_after_id`
+# so the mixin doesn't need to import the not-yet-defined SAOPlayerGUI
+# class. MRO + class-attr lookup keeps the semantics identical.
+#
+# Required SAOPlayerGUI attrs:
+# * self._destroyed, self._close_finalized, self._exit_animating,
+# self._breath_active, self._lift_loop_active, self._panels_hidden
+# * self.root, self.settings, self._float, self._sao_menu,
+# self._cfg_settings_ref, self._updater_mgr,
+# self._update_listener, self._update_listener_installed,
+# self._hotkey_mgr, self._cache_loop_stop, self._after_shutdown
+# * self._update_panel, self._fisheye_ov
+# * Class attr: SAOPlayerGUI._sao_fx_after_id (accessed via type(self))
+#
+# Required SAOPlayerGUI methods (via MRO):
+# * _persist_entity_menu_state (Menu mixin)
+# * Optional plugin cache/recognition hooks when installed
+# * _stop_fisheye_overlay (Fisheye mixin)
+# * _toggle_status_panel (StatusUpdater mixin)
 
 from __future__ import annotations
 
@@ -65,10 +63,10 @@ from sao_theme import ease_out, ease_in_out
 
 
 class SAOPlayerGUILifecycleMixin:
-    """Mixin bundling teardown + restore-on-startup helpers."""
+    # Mixin bundling teardown + restore-on-startup helpers.
 
     def _restore_panels(self):
-        """Restore platform-owned floating panels only."""
+        # Restore platform-owned floating panels only.
         if self._panels_hidden:
             return
 

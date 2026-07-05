@@ -1,14 +1,13 @@
 # -*- coding: utf-8 -*-
-"""Selftest for GPU presenter frame-dedupe sequencing.
-
-The BGRA/fisheye presenters must dedup texture uploads by a monotonic
-frame sequence carried in an atomic (bytes, w, h, seq) snapshot — not by
-``id()`` of the bytes object: same-size frame buffers are freed and
-reallocated at the same address frequently, so an id collision with the
-last uploaded object silently skips a real frame.
-
-    python tools/gpu_presenter_dedupe_selftest.py
-"""
+# Selftest for GPU presenter frame-dedupe sequencing.
+#
+# The BGRA/fisheye presenters must dedup texture uploads by a monotonic
+# frame sequence carried in an atomic (bytes, w, h, seq) snapshot — not by
+# ``id()`` of the bytes object: same-size frame buffers are freed and
+# reallocated at the same address frequently, so an id collision with the
+# last uploaded object silently skips a real frame.
+#
+# python tools/gpu_presenter_dedupe_selftest.py
 from __future__ import annotations
 
 import sys

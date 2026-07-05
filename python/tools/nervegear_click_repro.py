@@ -1,12 +1,11 @@
 # -*- coding: utf-8 -*-
-"""Repro harness for the NerveGear full-screen click-block bug.
-
-Boots the unified compositor + a real GpuNerveGearButton (interactive
-layer, click_through=False) exactly like NervGear-ON mode. While it
-runs, a separate process (tools/click_passthrough_probe.py) verifies
-that clicks OUTSIDE the button still reach other windows, and a
-synthetic click on the button itself must fire its on_click.
-"""
+# Repro harness for the NerveGear full-screen click-block bug.
+#
+# Boots the unified compositor + a real GpuNerveGearButton (interactive
+# layer, click_through=False) exactly like NervGear-ON mode. While it
+# runs, a separate process (tools/click_passthrough_probe.py) verifies
+# that clicks OUTSIDE the button still reach other windows, and a
+# synthetic click on the button itself must fire its on_click.
 import os
 import sys
 import tkinter as tk

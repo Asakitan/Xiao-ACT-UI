@@ -1,53 +1,51 @@
 # -*- coding: utf-8 -*-
-"""
-SAOPlayerGUIPacketCallbacksMixin — thirteenth mixin extracted from
-SAOPlayerGUI (round 55 of the sao_gui split refactor). 9 methods,
-~358 lines.
-
-The packet event callback surface — these are the functions the
-PacketBridge calls back into when it observes a game event:
-
-  * _send_linked_key — boss-raid alert -> AutoKey key press. Uses
-    Win32 SendInput via auto_key_engine VK_NAME_MAP. The hop the
-    BossAutoKeyLinkage takes when it converts a 'boss alert' event
-    into a synthesised keypress.
-  * _on_packet_damage(event) — fires for every player-vs-monster
-    damage tick. Updates the boss-HP target lock and the cached
-    last-damage timestamp; this is what keeps the boss HP bar
-    visible during a fight.
-  * _is_dead_state(gs) — cython-backed predicate (player dead?).
-  * _bump_boss_hp_target_hold(reason) — refresh the recent-targets
-    map for the current locked target. Called on revive / scene
-    re-entry to prevent the bar from fading immediately after
-    death.
-  * _boss_monster_usable(monster) — predicate + UUID-reuse revive
-    side effect (cython core, plus the in-Python is_dead/last_update
-    write because we don't want the monster handle leaking into
-    native code).
-  * _sync_boss_hp_revive_hold(gs) — detects dead → alive transition
-    and bumps the target hold.
-  * _on_monster_update(monster_data) — packet observed a monster
-    update; refresh _bb_recent_targets for the target if the
-    monster is usable.
-  * _on_boss_event(event) — packet observed a boss-raid event;
-    delegates to the boss_raid_engine.
-  * _on_scene_change(scene_event) — packet observed a scene
-    transition; arm pending combat reset + clear caches.
-
-Required SAOPlayerGUI attrs:
-  * self._packet_engine, self._boss_raid_engine,
-    self._boss_autokey_linkage
-  * self._bb_recent_targets, self._bb_last_target_uuid,
-    self._bb_last_damage_ts, self._last_boss_hp_push_sig
-  * self._last_dead_state
-  * self._alert_overlay, self.root
-
-Required SAOPlayerGUI methods (via MRO):
-  * _arm_pending_combat_reset, _refresh_session_players_panel,
-    _push_packet_overlays (and other helpers SAOPlayerGUI defines
-    inline)
-  * _get_setting / _set_setting (SAOPlayerGUI)
-"""
+# SAOPlayerGUIPacketCallbacksMixin — thirteenth mixin extracted from
+# SAOPlayerGUI (round 55 of the sao_gui split refactor). 9 methods,
+# ~358 lines.
+#
+# The packet event callback surface — these are the functions the
+# PacketBridge calls back into when it observes a game event:
+#
+# * _send_linked_key — boss-raid alert -> AutoKey key press. Uses
+# Win32 SendInput via auto_key_engine VK_NAME_MAP. The hop the
+# BossAutoKeyLinkage takes when it converts a 'boss alert' event
+# into a synthesised keypress.
+# * _on_packet_damage(event) — fires for every player-vs-monster
+# damage tick. Updates the boss-HP target lock and the cached
+# last-damage timestamp; this is what keeps the boss HP bar
+# visible during a fight.
+# * _is_dead_state(gs) — cython-backed predicate (player dead?).
+# * _bump_boss_hp_target_hold(reason) — refresh the recent-targets
+# map for the current locked target. Called on revive / scene
+# re-entry to prevent the bar from fading immediately after
+# death.
+# * _boss_monster_usable(monster) — predicate + UUID-reuse revive
+# side effect (cython core, plus the in-Python is_dead/last_update
+# write because we don't want the monster handle leaking into
+# native code).
+# * _sync_boss_hp_revive_hold(gs) — detects dead → alive transition
+# and bumps the target hold.
+# * _on_monster_update(monster_data) — packet observed a monster
+# update; refresh _bb_recent_targets for the target if the
+# monster is usable.
+# * _on_boss_event(event) — packet observed a boss-raid event;
+# delegates to the boss_raid_engine.
+# * _on_scene_change(scene_event) — packet observed a scene
+# transition; arm pending combat reset + clear caches.
+#
+# Required SAOPlayerGUI attrs:
+# * self._packet_engine, self._boss_raid_engine,
+# self._boss_autokey_linkage
+# * self._bb_recent_targets, self._bb_last_target_uuid,
+# self._bb_last_damage_ts, self._last_boss_hp_push_sig
+# * self._last_dead_state
+# * self._alert_overlay, self.root
+#
+# Required SAOPlayerGUI methods (via MRO):
+# * _arm_pending_combat_reset, _refresh_session_players_panel,
+# _push_packet_overlays (and other helpers SAOPlayerGUI defines
+# inline)
+# * _get_setting / _set_setting (SAOPlayerGUI)
 
 from __future__ import annotations
 
@@ -75,10 +73,10 @@ def _finite_int(value: Any, default: int = 0, *, lo: Optional[int] = None) -> in
 
 
 class SAOPlayerGUIPacketCallbacksMixin:
-    """Mixin bundling packet event callbacks + boss-HP target helpers."""
+    # Mixin bundling packet event callbacks + boss-HP target helpers.
 
     def _push_monster_boss_state_to_act(self, monster_data):
-        """Mirror packet monster HP/break state into GameState for ACT."""
+        # Mirror packet monster HP/break state into GameState for ACT.
         try:
             updates = boss_state_from_monster_update(monster_data)
             if updates and getattr(self, '_state_mgr', None):
@@ -88,7 +86,7 @@ class SAOPlayerGUIPacketCallbacksMixin:
             pass
 
     def _on_skill_event(self, event):
-        """Normalized TCP skill lifecycle event → shared ACT context."""
+        # Normalized TCP skill lifecycle event → shared ACT context.
         try:
             event = dict(event or {})
             fact = enrich_skill_event(event)
@@ -110,7 +108,7 @@ class SAOPlayerGUIPacketCallbacksMixin:
             pass
 
     def _on_dungeon_event(self, event):
-        """Normalized TCP dungeon/scene event → shared ACT context."""
+        # Normalized TCP dungeon/scene event → shared ACT context.
         try:
             event = dict(event or {})
             fact = enrich_dungeon_event(event)
@@ -178,14 +176,13 @@ class SAOPlayerGUIPacketCallbacksMixin:
             pass
 
     def _schedule_map_banner(self, name: str):
-        """检测到切换地图 → 延迟 3 秒后在屏幕中央淡入地图名 (Entity ULW)。
-
-        去重改为时间窗 (5s): 同名且距上次调度 < 5s 视为同一次进图的重复抓包,
-        吞掉防止狂闪; 超过 5s 再次进入同一场景会重新弹 (满足"第二次切入同场景
-        也要刷出名字")。快速连切到别的图时取消上一个未触发的延迟, 只显示最新。
-        本方法可能在抓包线程被调用, 故用 threading.Timer 计时, 真正渲染由
-        MapBannerOverlay.show_banner 内部 root.after(0) 调度回主线程。
-        """
+        # 检测到切换地图 → 延迟 3 秒后在屏幕中央淡入地图名 (Entity ULW)。
+        #
+        # 去重改为时间窗 (5s): 同名且距上次调度 < 5s 视为同一次进图的重复抓包,
+        # 吞掉防止狂闪; 超过 5s 再次进入同一场景会重新弹 (满足"第二次切入同场景
+        # 也要刷出名字")。快速连切到别的图时取消上一个未触发的延迟, 只显示最新。
+        # 本方法可能在抓包线程被调用, 故用 threading.Timer 计时, 真正渲染由
+        # MapBannerOverlay.show_banner 内部 root.after(0) 调度回主线程。
         name = (name or '').strip()
         if not name:
             return
@@ -222,8 +219,8 @@ class SAOPlayerGUIPacketCallbacksMixin:
 
     def _send_linked_key(self, key: str, press_mode: str = "tap",
                          hold_ms: int = 80, press_count: int = 1):
-        """发送联动按键 (Boss→AutoKey linkage)。用 scancode (移动/Shift冲刺/E走等
-        躲避键游戏只认扫描码, wVk 不响应)。"""
+        # 发送联动按键 (Boss→AutoKey linkage)。用 scancode (移动/Shift冲刺/E走等
+        # 躲避键游戏只认扫描码, wVk 不响应)。
         try:
             from plugins.star_resonance_plugin.engines.auto_key_engine import VK_NAME_MAP, INPUT, KEYBDINPUT, INPUT_KEYBOARD, KEYEVENTF_KEYUP
             import ctypes as _ct
@@ -256,11 +253,11 @@ class SAOPlayerGUIPacketCallbacksMixin:
             print(f"[Linkage] send_key error: {e}")
 
     def _send_key_event(self, key: str, down: bool):
-        """低层按下/松开 (定向躲避按住 WASD 用)。
-
-        ★关键: 游戏移动只认 **scancode (扫描码)** 不认 wVk (虚拟键)——用 wVk 发 WASD
-        游戏完全不响应(实测)。这里用 MapVirtualKey 把 vk 转成 scancode, 加
-        KEYEVENTF_SCANCODE 标志发送, WASD 才会真正驱动人物移动。"""
+        # 低层按下/松开 (定向躲避按住 WASD 用)。
+        #
+        # ★关键: 游戏移动只认 **scancode (扫描码)** 不认 wVk (虚拟键)——用 wVk 发 WASD
+        # 游戏完全不响应(实测)。这里用 MapVirtualKey 把 vk 转成 scancode, 加
+        # KEYEVENTF_SCANCODE 标志发送, WASD 才会真正驱动人物移动。
         try:
             from plugins.star_resonance_plugin.engines.auto_key_engine import (
                 VK_NAME_MAP, INPUT, KEYBDINPUT, INPUT_KEYBOARD, KEYEVENTF_KEYUP)
@@ -286,7 +283,7 @@ class SAOPlayerGUIPacketCallbacksMixin:
             print(f"[Dodge] key_event error: {e}")
 
     def _on_packet_damage(self, event):
-        """Damage event callback from packet_parser → boss raid engine + DPS tracker."""
+        # Damage event callback from packet_parser → boss raid engine + DPS tracker.
         event = self._normalize_damage_event_for_self(event)
         event = self._normalize_damage_event_target_for_entity(event)
         event = enrich_action_log_event(event, owner=self, topic='damage')
@@ -453,7 +450,7 @@ class SAOPlayerGUIPacketCallbacksMixin:
         self._last_dead_state = dead_now
 
     def _on_monster_update(self, monster_data):
-        """Monster update from packet_parser → boss raid engine + BossHP pretrack."""
+        # Monster update from packet_parser → boss raid engine + BossHP pretrack.
         try:
             if isinstance(monster_data, dict):
                 fact = enrich_monster_event(monster_data)
@@ -540,7 +537,7 @@ class SAOPlayerGUIPacketCallbacksMixin:
             pass
 
     def _on_boss_event(self, event):
-        """Boss buff/event callback from packet_parser → boss raid engine."""
+        # Boss buff/event callback from packet_parser → boss raid engine.
         try:
             event = dict(event or {})
             fact = enrich_boss_event(event)
@@ -560,7 +557,7 @@ class SAOPlayerGUIPacketCallbacksMixin:
             except Exception: pass
 
     def _on_scene_change(self, scene_event=None):
-        """Packet parser scene/retry callback: clear DPS/BossHP encounter state."""
+        # Packet parser scene/retry callback: clear DPS/BossHP encounter state.
         _scene_kind = ''
         _scene_reason = ''
         _preserve_combat = False

@@ -1,9 +1,8 @@
-"""Probe runtime string-pool owners for the decoded live name table.
-
-Read-only IL2CPP probe.  It uses the current Il2CppDumper script/dump index to
-find likely string-pool classes, scans their live instances, and inspects
-string[] fields/dictionaries for ACT-relevant Chinese names.
-"""
+# Probe runtime string-pool owners for the decoded live name table.
+#
+# Read-only IL2CPP probe.  It uses the current Il2CppDumper script/dump index to
+# find likely string-pool classes, scans their live instances, and inspects
+# string[] fields/dictionaries for ACT-relevant Chinese names.
 
 from __future__ import annotations
 

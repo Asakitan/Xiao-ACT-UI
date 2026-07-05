@@ -1,27 +1,26 @@
 # -*- coding: utf-8 -*-
-"""Read-only memory-access facade for the plugin platform and the Mem Scope panel.
-
-Exposes every memory-scan-readable resource through one stable, hybrid-gated API
-plus an asynchronous manual value search. Borrows the readers the live
-``MemStateBridge`` already built on its background threads, so it never opens a
-second process handle and never blocks the UI thread for the heavy first scans.
-
-Invariants:
-  - READ ONLY. The process handle is ``PROCESS_VM_READ`` only (see
-    ``mem_probe.process.GameProcess``); no write path is imported or reachable.
-  - Every public method returns a JSON-safe dict and never raises. When memory is
-    inactive it returns ``{"ok": False, "reason": <code>, "hint": <human text>}``.
-  - 64-bit addresses are emitted as hex strings and uuids/large words as strings
-    so JS Number precision (2**53) can never corrupt them.
-
-Live engine reachability (resolved fresh on every call, mode can flip at runtime):
-  owner._packet_engine._mem_source._bridge   (hybrid / auto / memory-with-TCP)
-  owner._mem_bridge                          (memory-only without TCP)
-from the bridge:
-  ._entity_provider._pm / ._damage_reader.pm  -> shared GameProcess (already open)
-  ._entity_provider._ecr                       -> EntityCombatReader
-  ._provider._src.sr.pm                        -> force-open path (worker thread only)
-"""
+# Read-only memory-access facade for the plugin platform and the Mem Scope panel.
+#
+# Exposes every memory-scan-readable resource through one stable, hybrid-gated API
+# plus an asynchronous manual value search. Borrows the readers the live
+# ``MemStateBridge`` already built on its background threads, so it never opens a
+# second process handle and never blocks the UI thread for the heavy first scans.
+#
+# Invariants:
+# - READ ONLY. The process handle is ``PROCESS_VM_READ`` only (see
+# ``mem_probe.process.GameProcess``); no write path is imported or reachable.
+# - Every public method returns a JSON-safe dict and never raises. When memory is
+# inactive it returns ``{"ok": False, "reason": <code>, "hint": <human text>}``.
+# - 64-bit addresses are emitted as hex strings and uuids/large words as strings
+# so JS Number precision (2**53) can never corrupt them.
+#
+# Live engine reachability (resolved fresh on every call, mode can flip at runtime):
+# owner._packet_engine._mem_source._bridge   (hybrid / auto / memory-with-TCP)
+# owner._mem_bridge                          (memory-only without TCP)
+# from the bridge:
+# ._entity_provider._pm / ._damage_reader.pm  -> shared GameProcess (already open)
+# ._entity_provider._ecr                       -> EntityCombatReader
+# ._provider._src.sr.pm                        -> force-open path (worker thread only)
 from __future__ import annotations
 
 import math
@@ -49,7 +48,7 @@ def _plaus(addr: Any) -> bool:
 
 
 def _num(v: Any) -> Any:
-    """JSON-safe number: stringify ints that exceed JS 2**53 precision."""
+    # JSON-safe number: stringify ints that exceed JS 2**53 precision.
     if isinstance(v, bool):
         return v
     if isinstance(v, int) and abs(v) > _JS_SAFE:
@@ -78,7 +77,7 @@ def _err(reason: str, hint: str = "") -> dict:
 # ───────────────────────── engine resolution ─────────────────────────
 
 def resolve_bridge(owner: Any) -> Optional[Any]:
-    """Return the live ``MemStateBridge`` wherever it currently lives, else None."""
+    # Return the live ``MemStateBridge`` wherever it currently lives, else None.
     if owner is None:
         return None
     pe = getattr(owner, "_packet_engine", None) or getattr(owner, "_packet_bridge", None)
@@ -103,7 +102,7 @@ def _bridge_kind(owner: Any, bridge: Any) -> str:
 
 
 def resolve_pm(bridge: Any) -> Optional[Any]:
-    """Non-blocking GameProcess: reuse a handle the background loop already opened."""
+    # Non-blocking GameProcess: reuse a handle the background loop already opened.
     if bridge is None:
         return None
     ep = getattr(bridge, "_entity_provider", None)
@@ -121,7 +120,7 @@ def resolve_pm(bridge: Any) -> Optional[Any]:
 
 
 def resolve_pm_blocking(bridge: Any) -> Optional[Any]:
-    """GameProcess, forcing the resolver open if needed. Worker-thread only."""
+    # GameProcess, forcing the resolver open if needed. Worker-thread only.
     pm = resolve_pm(bridge)
     if pm is not None:
         return pm
@@ -143,13 +142,13 @@ _ECR_FACTORY = None
 
 
 def set_game_main_module(name: str) -> None:
-    """Plugin injection: set the game's main module name at runtime."""
+    # Plugin injection: set the game's main module name at runtime.
     global _GAME_MAIN_MODULE
     _GAME_MAIN_MODULE = str(name or "")
 
 
 def set_ecr_factory(factory) -> None:
-    """Plugin injection: set EntityCombatReader constructor for attr_map()."""
+    # Plugin injection: set EntityCombatReader constructor for attr_map().
     global _ECR_FACTORY
     _ECR_FACTORY = factory
 
@@ -174,12 +173,12 @@ _GA_BS_CACHE: dict = {}
 
 
 def _ga_base_size(pm: Any, modules=None):
-    """Return cached (base, size) for the game's main module.
-
-    On a cache miss enumerates modules (using ``modules`` if already fetched by the
-    caller, else ``pm.list_modules()``) and derives base+size once. Only a
-    successful resolve is cached, keyed by process identity so a re-attach (new
-    handle) naturally re-resolves rather than serving a stale base."""
+    # Return cached (base, size) for the game's main module.
+    #
+    # On a cache miss enumerates modules (using ``modules`` if already fetched by the
+    # caller, else ``pm.list_modules()``) and derives base+size once. Only a
+    # successful resolve is cached, keyed by process identity so a re-attach (new
+    # handle) naturally re-resolves rather than serving a stale base.
     try:
         key = (id(pm), int(getattr(pm, "pid", 0) or 0), int(getattr(pm, "_handle", 0) or 0))
     except Exception:
@@ -230,7 +229,7 @@ def _locate(addr: int, modules) -> dict:
 
 
 def decode_hint(pm: Any, addr: int, modules=None, *, ga: tuple = (0, 0)) -> dict:
-    """Decode one address many ways and locate it. Never raises. JSON-safe."""
+    # Decode one address many ways and locate it. Never raises. JSON-safe.
     out: dict = {"addr": _hex(addr)}
     if not _plaus(addr):
         out["valid"] = False
@@ -296,13 +295,13 @@ class _SearchJob:
 
 
 class MemSearchManager:
-    """Background value-scan / narrow jobs over the live process. Never blocks UI.
-
-    One per owner (stashed as ``owner._mem_search_mgr``) so the per-call facade and
-    a cached ``ctx.mem`` share one job registry. The shared GameProcess handle is
-    read-only and ReadProcessMemory is thread-safe per call, so the worker reads
-    concurrently with the entity loop without a lock (it never calls the heavy
-    snapshot path that ``_sr_lock`` guards)."""
+    # Background value-scan / narrow jobs over the live process. Never blocks UI.
+    #
+    # One per owner (stashed as ``owner._mem_search_mgr``) so the per-call facade and
+    # a cached ``ctx.mem`` share one job registry. The shared GameProcess handle is
+    # read-only and ReadProcessMemory is thread-safe per call, so the worker reads
+    # concurrently with the entity loop without a lock (it never calls the heavy
+    # snapshot path that ``_sr_lock`` guards).
 
     MAX_CONCURRENT = 2
     MAX_TOTAL_HITS = 200_000
@@ -472,7 +471,7 @@ class MemSearchManager:
             job.error = f"process_gone: {exc}"
 
     def _scan(self, pm: Any, value, job: _SearchJob) -> list:
-        """Region-by-region scan with real progress + cooperative cancel."""
+        # Region-by-region scan with real progress + cooperative cancel.
         from mem_probe import scanner
         from mem_probe import cy_memscan as _cy
         dtype = job.dtype
@@ -534,7 +533,7 @@ def get_search_manager(owner: Any) -> MemSearchManager:
 # ───────────────────────── the facade ─────────────────────────
 
 class MemAccess:
-    """Read-only, hybrid-gated facade over every memory-scan-readable resource."""
+    # Read-only, hybrid-gated facade over every memory-scan-readable resource.
 
     def __init__(self, owner: Any):
         self._owner = owner

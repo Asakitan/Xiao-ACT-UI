@@ -1,11 +1,10 @@
-"""instance_cache - 缓存已找到的对象地址, 跨帧 / 跨脚本运行复用.
-
-策略:
-  - cache key = (pid, ga_base, class_name, sentinel_field)
-  - 校验: 重新读 obj+0 == 当前 klass_ptr & sentinel_field deref 仍 == sentinel klass
-  - pid 变 (游戏重启) → 自动失效, 触发全堆扫
-  - 缓存文件: sao_auto/tools/mem_probe/il2cpp/_cache/instances.json
-"""
+# instance_cache - 缓存已找到的对象地址, 跨帧 / 跨脚本运行复用.
+#
+# 策略:
+# - cache key = (pid, ga_base, class_name, sentinel_field)
+# - 校验: 重新读 obj+0 == 当前 klass_ptr & sentinel_field deref 仍 == sentinel klass
+# - pid 变 (游戏重启) → 自动失效, 触发全堆扫
+# - 缓存文件: sao_auto/tools/mem_probe/il2cpp/_cache/instances.json
 from __future__ import annotations
 
 import json
@@ -58,14 +57,13 @@ def get_or_find_self(sr: StaticResolver, class_name: str,
                      sentinel_field: str, sentinel_class: str,
                      cache_path: str = _DEFAULT_CACHE,
                      force_rescan: bool = False) -> Optional[tuple]:
-    """返回 (obj, sentinel_obj). 缓存命中时跳过 200s 全堆扫.
-
-    校验流程:
-      1. 加载 cache, 找匹配 key + pid + ga_base
-      2. 重读 obj+0 → 必须等于当前 klass_ptr (实时解析)
-      3. 重读 sentinel_field deref → 必须指向有效 sentinel_klass
-      4. 任一失败 → 重新 find_self + 写盘
-    """
+    # 返回 (obj, sentinel_obj). 缓存命中时跳过 200s 全堆扫.
+    #
+    # 校验流程:
+    # 1. 加载 cache, 找匹配 key + pid + ga_base
+    # 2. 重读 obj+0 → 必须等于当前 klass_ptr (实时解析)
+    # 3. 重读 sentinel_field deref → 必须指向有效 sentinel_klass
+    # 4. 任一失败 → 重新 find_self + 写盘
     cache = _load(cache_path)
     key = _key(class_name, sentinel_field)
     cur_klass = sr.resolve_klass(class_name)
@@ -112,7 +110,7 @@ def clear_cache(cache_path: str = _DEFAULT_CACHE) -> None:
 def validate_cache_entry(sr: StaticResolver, class_name: str,
                          sentinel_field: str, sentinel_class: str,
                          cache_path: str = _DEFAULT_CACHE) -> bool:
-    """只做校验, 不扫描. True = 缓存仍有效, False = 应重扫."""
+    # 只做校验, 不扫描. True = 缓存仍有效, False = 应重扫.
     cache = _load(cache_path)
     e = cache.get(_key(class_name, sentinel_field))
     if not e:

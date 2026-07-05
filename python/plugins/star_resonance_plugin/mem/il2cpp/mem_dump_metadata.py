@@ -1,16 +1,15 @@
-"""从运行中的 Star.exe 抓取解密后的 IL2CPP global metadata.
-
-腾讯 ACE 把磁盘上的 global-metadata.dat 掏空 (0 字节), 真实 metadata 在游戏启动时
-解密到内存中。本工具:
-  1. 扫描 Star.exe 全部可读 PRIVATE 区域, 找魔数 0xFAB11BAF (Il2CppGlobalMetadataHeader.sanity)
-  2. 对每个候选解析 header, 确定 metadata 版本与总长度
-  3. 校验所有 (offset, size) 对都在合理范围内, 选最大的有效候选
-  4. dump 到磁盘 (默认: tools/mem_probe/il2cpp/out/<game_sha8>/global-metadata.dat)
-
-CLI:
-    python -m tools.mem_probe.il2cpp.mem_dump_metadata
-    python -m tools.mem_probe.il2cpp.mem_dump_metadata --out custom/path.dat
-"""
+# 从运行中的 Star.exe 抓取解密后的 IL2CPP global metadata.
+#
+# 腾讯 ACE 把磁盘上的 global-metadata.dat 掏空 (0 字节), 真实 metadata 在游戏启动时
+# 解密到内存中。本工具:
+# 1. 扫描 Star.exe 全部可读 PRIVATE 区域, 找魔数 0xFAB11BAF (Il2CppGlobalMetadataHeader.sanity)
+# 2. 对每个候选解析 header, 确定 metadata 版本与总长度
+# 3. 校验所有 (offset, size) 对都在合理范围内, 选最大的有效候选
+# 4. dump 到磁盘 (默认: tools/mem_probe/il2cpp/out/<game_sha8>/global-metadata.dat)
+#
+# CLI:
+# python -m tools.mem_probe.il2cpp.mem_dump_metadata
+# python -m tools.mem_probe.il2cpp.mem_dump_metadata --out custom/path.dat
 
 from __future__ import annotations
 
@@ -45,7 +44,7 @@ _MAX_REGION_SIZE = 512 * 1024 * 1024
 
 
 def _parse_header(blob: bytes, off: int) -> Optional[Tuple[int, int]]:
-    """解析 metadata header, 返回 (version, total_size). 失败返 None."""
+    # 解析 metadata header, 返回 (version, total_size). 失败返 None.
     if off + 8 > len(blob):
         return None
     sanity, version = struct.unpack_from("<Ii", blob, off)
@@ -82,7 +81,7 @@ def _parse_header(blob: bytes, off: int) -> Optional[Tuple[int, int]]:
 
 
 def find_metadata_in_process(pm: StarProcess, *, verbose: bool = True) -> List[Tuple[int, int, int]]:
-    """扫整个进程, 返回 [(addr, version, total_size), ...] 按 size 降序."""
+    # 扫整个进程, 返回 [(addr, version, total_size), ...] 按 size 降序.
     candidates: List[Tuple[int, int, int]] = []
     region_count = 0
     scanned = 0
@@ -121,7 +120,7 @@ def find_metadata_in_process(pm: StarProcess, *, verbose: bool = True) -> List[T
 
 
 def dump_metadata(pm: StarProcess, addr: int, total: int, out_path: str) -> bool:
-    """从 addr 读 total 字节, 写到 out_path. 分块读以容忍部分页失败."""
+    # 从 addr 读 total 字节, 写到 out_path. 分块读以容忍部分页失败.
     os.makedirs(os.path.dirname(os.path.abspath(out_path)), exist_ok=True)
     chunk = 4 * 1024 * 1024
     with open(out_path, "wb") as f:
@@ -145,7 +144,7 @@ def dump_metadata(pm: StarProcess, addr: int, total: int, out_path: str) -> bool
 
 
 def _game_assembly_sha8(game_dir: str) -> str:
-    """取 GameAssembly.dll 前 64MB 的 sha256 前 8 字符 (避免 213MB 全文件 hash)."""
+    # 取 GameAssembly.dll 前 64MB 的 sha256 前 8 字符 (避免 213MB 全文件 hash).
     p = os.path.join(game_dir, "GameAssembly.dll")
     if not os.path.isfile(p):
         return "unknown"

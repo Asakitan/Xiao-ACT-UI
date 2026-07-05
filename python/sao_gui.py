@@ -1,10 +1,8 @@
 # -*- coding: utf-8 -*-
-"""
-SAO Utils 风格完整 GUI — 独立 UI 壳
-
-包含 SAO PopUpMenu 菜单系统, 通用提示对话框,
-LINK START 入场动画, SAO 风格文件选择器
-"""
+# SAO Utils 风格完整 GUI — 独立 UI 壳
+#
+# 包含 SAO PopUpMenu 菜单系统, 通用提示对话框,
+# LINK START 入场动画, SAO 风格文件选择器
 
 import tkinter as tk
 from tkinter import ttk
@@ -127,14 +125,12 @@ from gui_modules.sao_gui_misc_mixin import SAOPlayerGUIMiscMixin  # noqa: E402
 
 
 class SAOPlayerGUI(SAOPlayerGUIMenuMixin, SAOPlayerGUIFisheyeMixin, SAOPlayerGUIPanelsMixin, SAOPlayerGUIStatusUpdaterMixin, SAOPlayerGUIDialogsMixin, SAOPlayerGUIFloatChromeMixin, SAOPlayerGUIFloatHandlersMixin, SAOPlayerGUILifecycleMixin, SAOPlayerGUIPanelFxMixin, SAOPlayerGUILinkAnimationMixin, SAOPlayerGUIMiscMixin):
-    """
-    纯悬浮 SAO Utils 风格 GUI — 没有传统窗口！
-    - 常驻: 小型悬浮触发按钮 (Toplevel)
-    - 展开: SAO PopUpMenu 全屏菜单 = 主界面
-    - 菜单按钮: 平台分类 + 插件动态分类
-    - 子菜单: 实时工具与面板控制
-    - 可选: 浮动钢琴/可视化面板
-    """
+    # 纯悬浮 SAO Utils 风格 GUI — 没有传统窗口！
+    # - 常驻: 小型悬浮触发按钮 (Toplevel)
+    # - 展开: SAO PopUpMenu 全屏菜单 = 主界面
+    # - 菜单按钮: 平台分类 + 插件动态分类
+    # - 子菜单: 实时工具与面板控制
+    # - 可选: 浮动钢琴/可视化面板
 
     def __init__(self):
         _set_process_app_id('sao.auto.platform.ui')
@@ -226,7 +222,7 @@ class SAOPlayerGUI(SAOPlayerGUIMenuMixin, SAOPlayerGUIFisheyeMixin, SAOPlayerGUI
         self.root.after(100, self._play_link_start)
 
     def _set_setting(self, key: str, value):
-        """Persist a setting to cfg_settings and save."""
+        # Persist a setting to cfg_settings and save.
         if hasattr(self, '_cfg_settings_ref') and self._cfg_settings_ref:
             self._cfg_settings_ref.set(key, value)
             try:
@@ -247,7 +243,7 @@ class SAOPlayerGUI(SAOPlayerGUIMenuMixin, SAOPlayerGUIFisheyeMixin, SAOPlayerGUI
                         pass
 
     def _get_setting(self, key: str, default=None):
-        """Read a setting."""
+        # Read a setting.
         if hasattr(self, '_cfg_settings_ref') and self._cfg_settings_ref:
             return self._cfg_settings_ref.get(key, default)
         return default

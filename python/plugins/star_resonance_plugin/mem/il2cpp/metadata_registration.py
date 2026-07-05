@@ -1,35 +1,34 @@
-"""IL2CPP MetadataRegistration 解析器 (走 typeInfoTable / types[] 路径).
-
-GameAssembly.dll 内有两个全局结构: Il2CppCodeRegistration, Il2CppMetadataRegistration.
-本文件用 MetadataRegistration.types[] (即 Il2CppType** 全局表) 来枚举所有类型.
-
-v31 layout (from Il2CppDumper Il2CppMetadataRegistration.cs):
-    intptr_t genericClassesCount;            // +0x00
-    void**   genericClasses;                 // +0x08
-    intptr_t genericInstsCount;              // +0x10
-    void**   genericInsts;                   // +0x18
-    intptr_t genericMethodTableCount;        // +0x20
-    void*    genericMethodTable;             // +0x28
-    intptr_t typesCount;                     // +0x30   ← 关键
-    Il2CppType** types;                      // +0x38   ← 关键
-    intptr_t methodSpecsCount;               // +0x40
-    void*    methodSpecs;                    // +0x48
-    intptr_t fieldOffsetsCount;              // +0x50
-    int32_t**fieldOffsets;                   // +0x58
-    intptr_t typeDefinitionsSizesCount;      // +0x60
-    void**   typeDefinitionsSizes;           // +0x68
-    size_t   metadataUsagesCount;            // +0x70
-    void***  metadataUsages;                 // +0x78
-
-Il2CppType (16 字节):
-    void* data;        // +0x00  对 TYPE_CLASS/VALUETYPE: 运行时是 Il2CppClass*
-    uint32_t bits;     // +0x08  低 16 位 attrs, 16-23 type, 24-29 num_mods, 30 byref, 31 pinned
-
-Type enum (relevant):
-    0x11 VALUETYPE
-    0x12 CLASS
-    0x15 GENERICINST
-"""
+# IL2CPP MetadataRegistration 解析器 (走 typeInfoTable / types[] 路径).
+#
+# GameAssembly.dll 内有两个全局结构: Il2CppCodeRegistration, Il2CppMetadataRegistration.
+# 本文件用 MetadataRegistration.types[] (即 Il2CppType** 全局表) 来枚举所有类型.
+#
+# v31 layout (from Il2CppDumper Il2CppMetadataRegistration.cs):
+# intptr_t genericClassesCount;            // +0x00
+# void**   genericClasses;                 // +0x08
+# intptr_t genericInstsCount;              // +0x10
+# void**   genericInsts;                   // +0x18
+# intptr_t genericMethodTableCount;        // +0x20
+# void*    genericMethodTable;             // +0x28
+# intptr_t typesCount;                     // +0x30   ← 关键
+# Il2CppType** types;                      // +0x38   ← 关键
+# intptr_t methodSpecsCount;               // +0x40
+# void*    methodSpecs;                    // +0x48
+# intptr_t fieldOffsetsCount;              // +0x50
+# int32_t**fieldOffsets;                   // +0x58
+# intptr_t typeDefinitionsSizesCount;      // +0x60
+# void**   typeDefinitionsSizes;           // +0x68
+# size_t   metadataUsagesCount;            // +0x70
+# void***  metadataUsages;                 // +0x78
+#
+# Il2CppType (16 字节):
+# void* data;        // +0x00  对 TYPE_CLASS/VALUETYPE: 运行时是 Il2CppClass*
+# uint32_t bits;     // +0x08  低 16 位 attrs, 16-23 type, 24-29 num_mods, 30 byref, 31 pinned
+#
+# Type enum (relevant):
+# 0x11 VALUETYPE
+# 0x12 CLASS
+# 0x15 GENERICINST
 
 from __future__ import annotations
 
@@ -137,7 +136,7 @@ def _read_cstring(pm: StarProcess, addr: int, max_len: int = 256) -> Optional[st
 
 def iter_types(pm: StarProcess, mr: MetadataRegistration,
                *, only_class: bool = True) -> Iterator[TypeEntry]:
-    """枚举 MetadataRegistration.types[] 中的所有类型."""
+    # 枚举 MetadataRegistration.types[] 中的所有类型.
     # 一次读完整张 Il2CppType** 表 (8 字节指针 × count)
     ptrs_blob = pm.read_bytes(mr.types_ptr, mr.types_count * 8)
     if ptrs_blob is None:
@@ -167,7 +166,7 @@ def iter_types(pm: StarProcess, mr: MetadataRegistration,
 
 def build_class_index(pm: StarProcess, mr: MetadataRegistration,
                       *, progress_every: int = 5000) -> Dict[str, List[TypeEntry]]:
-    """枚举所有 CLASS/VALUETYPE 类型, 解析 name+namespace, 构建 fullname → TypeEntry list."""
+    # 枚举所有 CLASS/VALUETYPE 类型, 解析 name+namespace, 构建 fullname → TypeEntry list.
     index: Dict[str, List[TypeEntry]] = {}
     t0 = time.time()
     n_total = 0

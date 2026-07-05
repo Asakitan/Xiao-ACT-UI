@@ -1,14 +1,12 @@
 # -*- coding: utf-8 -*-
-"""
-SAOHotkeyManager — global F-key hotkey listener for SAO Entity GUI.
-
-Extracted from sao_gui.py (round 25) to start the long-running refactor
-that breaks the 9682-line monolith into focused submodules.
-
-The class is unchanged from the original (same public surface, same
-behaviour). Dependencies that live at sao_gui module level have been
-re-imported here so this module is self-contained.
-"""
+# SAOHotkeyManager — global F-key hotkey listener for SAO Entity GUI.
+#
+# Extracted from sao_gui.py (round 25) to start the long-running refactor
+# that breaks the 9682-line monolith into focused submodules.
+#
+# The class is unchanged from the original (same public surface, same
+# behaviour). Dependencies that live at sao_gui module level have been
+# re-imported here so this module is self-contained.
 
 from __future__ import annotations
 
@@ -85,15 +83,14 @@ _install_pynput_excepthook()
 
 
 class SAOHotkeyManager:
-    """全局快捷键管理 (与 gui.py HotkeyPanel 逻辑一致).
-
-    Tracks pressed keys via a pynput listener and fires the matching
-    action callback from ``actions`` when the saved hotkey VK is in
-    the pressed set. ``settings`` is duck-typed — any object with a
-    ``get(key, default)`` method works (the original was a
-    SAO-specific SettingsManager, but the class never relied on the
-    concrete type).
-    """
+    # 全局快捷键管理 (与 gui.py HotkeyPanel 逻辑一致).
+    #
+    # Tracks pressed keys via a pynput listener and fires the matching
+    # action callback from ``actions`` when the saved hotkey VK is in
+    # the pressed set. ``settings`` is duck-typed — any object with a
+    # ``get(key, default)`` method works (the original was a
+    # SAO-specific SettingsManager, but the class never relied on the
+    # concrete type).
 
     # F键虚拟键码表 (Windows VK codes) — 共享表在 config.HOTKEY_FKEY_VK
     _FKEY_VK = HOTKEY_FKEY_VK
@@ -122,8 +119,8 @@ class SAOHotkeyManager:
         self._start_gaks_poll()
 
     def _start_gaks_poll(self):
-        """GetAsyncKeyState polling fallback — works even when pynput hooks
-        fail (admin/UIPI, Python 3.11 ctypes bug)."""
+        # GetAsyncKeyState polling fallback — works even when pynput hooks
+        # fail (admin/UIPI, Python 3.11 ctypes bug).
         if sys.platform != 'win32':
             return
         import threading as _th

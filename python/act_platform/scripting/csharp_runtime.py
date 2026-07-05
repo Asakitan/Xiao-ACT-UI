@@ -1,61 +1,60 @@
 # -*- coding: utf-8 -*-
-"""C# scripting runtime via *pythonnet* (CLR hosting).
-
-Supports two modes:
-
-1. **Source mode** (``.cs``): auto-compiles a ``.cs`` file using one of:
-   - ``csc.exe`` / ``dotnet`` from .NET SDK (if installed)
-   - Windows built-in .NET Framework ``csc.exe`` (Win10/11, always present)
-   - Bundled Roslyn in-process compiler (``scripting/roslyn/`` DLLs,
-     fetch via ``python -m act_platform.scripting.fetch_roslyn``)
-   Users do NOT need a .NET SDK installed.
-
-2. **Assembly mode** (``.dll``): directly loads a pre-compiled .NET
-   assembly. The manifest ``entry`` should point at the ``.dll``.
-
-The plugin class must be ``public`` and reside in the default or
-declared namespace. Lifecycle hooks map to static or instance methods::
-
-    // plugin.cs
-    using System;
-    using System.Collections.Generic;
-
-    public class Plugin
-    {
-        private dynamic _ctx;
-
-        // --- lifecycle hooks (static or instance) ---
-        public void OnLoad(dynamic ctx)
-        {
-            _ctx = ctx;
-            ctx.log("Hello from C#!");
-            ctx.register_ui_panel("cs_panel",
-                new Dictionary<string, object> { {"title", "C# Panel"} },
-                new Func<object, object>(Render),
-                new Func<string, object, object>(OnAction)
-            );
-        }
-
-        public void OnEnable()  { }
-        public void OnDisable() { }
-        public void OnUnload()  { }
-
-        public object Render(object payload)
-        {
-            return _ctx.ui.panel("C# Plugin", new object[] {
-                _ctx.ui.text("Hello from C#!"),
-            });
-        }
-
-        public object OnAction(string actionId, object payload)
-        {
-            _ctx.log("C# action: " + actionId);
-            return new Dictionary<string, object> { {"ok", true} };
-        }
-    }
-
-Requires: ``pip install pythonnet`` and .NET 6.0+ runtime (or .NET Framework on Windows).
-"""
+# C# scripting runtime via *pythonnet* (CLR hosting).
+#
+# Supports two modes:
+#
+# 1. **Source mode** (``.cs``): auto-compiles a ``.cs`` file using one of:
+# - ``csc.exe`` / ``dotnet`` from .NET SDK (if installed)
+# - Windows built-in .NET Framework ``csc.exe`` (Win10/11, always present)
+# - Bundled Roslyn in-process compiler (``scripting/roslyn/`` DLLs,
+# fetch via ``python -m act_platform.scripting.fetch_roslyn``)
+# Users do NOT need a .NET SDK installed.
+#
+# 2. **Assembly mode** (``.dll``): directly loads a pre-compiled .NET
+# assembly. The manifest ``entry`` should point at the ``.dll``.
+#
+# The plugin class must be ``public`` and reside in the default or
+# declared namespace. Lifecycle hooks map to static or instance methods::
+#
+# // plugin.cs
+# using System;
+# using System.Collections.Generic;
+#
+# public class Plugin
+# {
+# private dynamic _ctx;
+#
+# // --- lifecycle hooks (static or instance) ---
+# public void OnLoad(dynamic ctx)
+# {
+# _ctx = ctx;
+# ctx.log("Hello from C#!");
+# ctx.register_ui_panel("cs_panel",
+# new Dictionary<string, object> { {"title", "C# Panel"} },
+# new Func<object, object>(Render),
+# new Func<string, object, object>(OnAction)
+# );
+# }
+#
+# public void OnEnable()  { }
+# public void OnDisable() { }
+# public void OnUnload()  { }
+#
+# public object Render(object payload)
+# {
+# return _ctx.ui.panel("C# Plugin", new object[] {
+# _ctx.ui.text("Hello from C#!"),
+# });
+# }
+#
+# public object OnAction(string actionId, object payload)
+# {
+# _ctx.log("C# action: " + actionId);
+# return new Dictionary<string, object> { {"ok", true} };
+# }
+# }
+#
+# Requires: ``pip install pythonnet`` and .NET 6.0+ runtime (or .NET Framework on Windows).
 
 from __future__ import annotations
 
@@ -173,12 +172,11 @@ def _ensure_reference_assemblies(references: list[str]) -> None:
 
 
 def _find_csc() -> str | None:
-    """Locate csc.exe or dotnet for source compilation.
-
-    Search order: PATH → dotnet SDK → Windows built-in .NET Framework csc.exe.
-    The Framework csc.exe ships with every Windows 10/11 installation so it
-    serves as a reliable fallback even when no SDK is installed.
-    """
+    # Locate csc.exe or dotnet for source compilation.
+    #
+    # Search order: PATH → dotnet SDK → Windows built-in .NET Framework csc.exe.
+    # The Framework csc.exe ships with every Windows 10/11 installation so it
+    # serves as a reliable fallback even when no SDK is installed.
     csc = shutil.which("csc") or shutil.which("csc.exe")
     if csc:
         return csc
@@ -216,14 +214,13 @@ def _python_runtime_reference() -> str | None:
 
 
 def _default_target_framework() -> str:
-    """Return the TFM used for temporary C# source projects.
-
-    Must match the CLR that pythonnet hosts.  When the active runtime is
-    .NET Framework 4.x (``Environment.Version.Major < 5``), compile for
-    ``netstandard2.0`` so the resulting assembly loads without
-    ``System.Runtime`` mismatches.  For .NET 6+ runtimes the TFM matches
-    the runtime major version.
-    """
+    # Return the TFM used for temporary C# source projects.
+    #
+    # Must match the CLR that pythonnet hosts.  When the active runtime is
+    # .NET Framework 4.x (``Environment.Version.Major < 5``), compile for
+    # ``netstandard2.0`` so the resulting assembly loads without
+    # ``System.Runtime`` mismatches.  For .NET 6+ runtimes the TFM matches
+    # the runtime major version.
     override = str(os.environ.get("SAO_CSHARP_TARGET_FRAMEWORK") or "").strip()
     if override:
         return override
@@ -264,7 +261,7 @@ _ROSLYN_AVAILABLE: bool | None = None
 
 
 def _roslyn_dir() -> str | None:
-    """Locate bundled Roslyn DLLs (Microsoft.CodeAnalysis.CSharp + deps)."""
+    # Locate bundled Roslyn DLLs (Microsoft.CodeAnalysis.CSharp + deps).
     candidates = [
         os.path.join(os.path.dirname(__file__), "roslyn"),
         os.path.join(os.path.dirname(__file__), "..", "..", "vendor", "roslyn"),
@@ -283,7 +280,7 @@ def _roslyn_dir() -> str | None:
 
 
 def _load_roslyn_assemblies() -> bool:
-    """Load Roslyn DLLs into the CLR. Returns True on success."""
+    # Load Roslyn DLLs into the CLR. Returns True on success.
     global _ROSLYN_LOADED, _ROSLYN_AVAILABLE
     if _ROSLYN_LOADED:
         return True
@@ -316,7 +313,7 @@ def _load_roslyn_assemblies() -> bool:
 
 
 def _collect_bcl_reference_paths() -> list[str]:
-    """Discover .NET BCL assembly paths for Roslyn compilation references."""
+    # Discover .NET BCL assembly paths for Roslyn compilation references.
     paths: dict[str, str] = {}
     probe_names = [
         "System.Private.CoreLib", "System.Runtime", "System.Console",
@@ -347,11 +344,10 @@ def _collect_bcl_reference_paths() -> list[str]:
 
 def _compile_cs_roslyn(source_path: str,
                        references: list[str] | None = None) -> Any | None:
-    """Compile .cs source to an in-memory Assembly via Roslyn.
-
-    Returns the loaded Assembly on success, None if Roslyn is unavailable,
-    or raises RuntimeError on compilation failure.
-    """
+    # Compile .cs source to an in-memory Assembly via Roslyn.
+    #
+    # Returns the loaded Assembly on success, None if Roslyn is unavailable,
+    # or raises RuntimeError on compilation failure.
     if not _load_roslyn_assemblies():
         return None
 
@@ -422,7 +418,7 @@ def _compile_cs_roslyn(source_path: str,
 
 
 def _compile_cs(source_path: str, output_dir: str, references: list[str] | None = None) -> str:
-    """Compile a .cs file to a .dll assembly. Returns the output path."""
+    # Compile a .cs file to a .dll assembly. Returns the output path.
     stem = os.path.splitext(os.path.basename(source_path))[0]
     output_dll = os.path.join(output_dir, f"{stem}.dll")
 
@@ -534,13 +530,12 @@ def _generate_csproj(name: str, source_path: str,
 
 
 class _CSharpProxy:
-    """Wraps PluginContext so C# code sees a dynamic-friendly object.
-
-    pythonnet passes Python objects to C# as ``dynamic``, so instance
-    methods and properties are accessible. This proxy ensures naming
-    conventions match (``log``, ``register_ui_panel``, etc.) and wraps
-    C# delegates back to Python callables.
-    """
+    # Wraps PluginContext so C# code sees a dynamic-friendly object.
+    #
+    # pythonnet passes Python objects to C# as ``dynamic``, so instance
+    # methods and properties are accessible. This proxy ensures naming
+    # conventions match (``log``, ``register_ui_panel``, etc.) and wraps
+    # C# delegates back to Python callables.
 
     def __init__(self, ctx: "PluginContext") -> None:
         self._ctx = ctx
@@ -838,7 +833,7 @@ class _CSharpProxy:
 
 
 def _clr_to_python(obj: Any) -> Any:
-    """Best-effort conversion of .NET objects to Python types."""
+    # Best-effort conversion of .NET objects to Python types.
     if obj is None:
         return None
     if _System is None:
@@ -863,7 +858,7 @@ def _clr_to_python(obj: Any) -> Any:
 
 
 class CSharpRuntime(ScriptRuntime):
-    """Load ``.cs`` or ``.dll`` plugin scripts via pythonnet."""
+    # Load ``.cs`` or ``.dll`` plugin scripts via pythonnet.
 
     def __init__(self) -> None:
         _ensure_pythonnet()
@@ -1018,8 +1013,8 @@ class CSharpRuntime(ScriptRuntime):
 
     @staticmethod
     def _evict_source_cache_for(record: "PluginRecord") -> None:
-        """Remove any _SOURCE_ASSEMBLY_CACHE entries whose source lives
-        under this plugin's directory so a reinstall picks up fresh code."""
+        # Remove any _SOURCE_ASSEMBLY_CACHE entries whose source lives
+        # under this plugin's directory so a reinstall picks up fresh code.
         plugin_dir = os.path.abspath(str(getattr(record, "path", "") or ""))
         if not plugin_dir:
             return

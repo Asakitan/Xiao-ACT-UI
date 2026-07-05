@@ -1,10 +1,9 @@
 # -*- coding: utf-8 -*-
-"""Canonical ACT event envelope helpers.
-
-The envelope is intentionally plain ``dict`` data so existing parser, replay,
-WebView, Entity, and plugin code can consume it without taking a dependency on
-UI-specific classes.
-"""
+# Canonical ACT event envelope helpers.
+#
+# The envelope is intentionally plain ``dict`` data so existing parser, replay,
+# WebView, Entity, and plugin code can consume it without taking a dependency on
+# UI-specific classes.
 
 from __future__ import annotations
 
@@ -62,7 +61,7 @@ def make_event(
     observed_at: Optional[float] = None,
     event_id: Optional[str] = None,
 ) -> dict[str, Any]:
-    """Build a versioned ACT event envelope."""
+    # Build a versioned ACT event envelope.
 
     src = dict(payload or {})
     ts = observed_at
@@ -87,7 +86,7 @@ def make_event(
 
 
 def clone_event(event: Mapping[str, Any]) -> dict[str, Any]:
-    """Return a defensive copy of an event envelope."""
+    # Return a defensive copy of an event envelope.
 
     return _clone_payload(dict(event or {}))
 

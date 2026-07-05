@@ -1,19 +1,18 @@
 # -*- coding: utf-8 -*-
-"""live_overlay_writer - verified local name-overlay writer.
-
-Runtime memory/TCP readers discover authoritative in-game Chinese names that may
-be missing or stale in the checked-in static tables. This helper writes ONLY to
-the local runtime TCP preparse cache (`tcp_preparse_name_cache.local.json` via
-`TcpNameCache.observe_name`) after validation.
-
-Safety rules:
-  - never writes the shared `tcp_preparse_name_cache.json`;
-    - validates text is printable and non-empty;
-  - validates id/kind against TcpNameCache's normal observe_name path;
-  - can require N consistent observations before persisting (default 1 to preserve
-    existing immediate nameplate overlay behavior; callers can pass 3 for stricter
-    confirmation without changing the storage contract).
-"""
+# live_overlay_writer - verified local name-overlay writer.
+#
+# Runtime memory/TCP readers discover authoritative in-game Chinese names that may
+# be missing or stale in the checked-in static tables. This helper writes ONLY to
+# the local runtime TCP preparse cache (`tcp_preparse_name_cache.local.json` via
+# `TcpNameCache.observe_name`) after validation.
+#
+# Safety rules:
+# - never writes the shared `tcp_preparse_name_cache.json`;
+# - validates text is printable and non-empty;
+# - validates id/kind against TcpNameCache's normal observe_name path;
+# - can require N consistent observations before persisting (default 1 to preserve
+# existing immediate nameplate overlay behavior; callers can pass 3 for stricter
+# confirmation without changing the storage contract).
 from __future__ import annotations
 
 import re
@@ -24,12 +23,11 @@ _CONTROL_RE = re.compile(r"[\x00-\x1f\x7f]")
 
 
 class LiveNameOverlayWriter:
-    """Validated adapter around `TcpNameCache.observe_name`.
-
-    The writer is intentionally tiny: it does not own paths or JSON format; it
-    delegates persistence to the existing TcpNameCache so load order, autosave,
-    sanitization, and `.local.json` path behavior stay unchanged.
-    """
+    # Validated adapter around `TcpNameCache.observe_name`.
+    #
+    # The writer is intentionally tiny: it does not own paths or JSON format; it
+    # delegates persistence to the existing TcpNameCache so load order, autosave,
+    # sanitization, and `.local.json` path behavior stay unchanged.
 
     def __init__(self, cache, *, min_confirmations: int = 1,
                  source: str = "mem_nameplate", confidence: str = "mem") -> None:
@@ -60,12 +58,11 @@ class LiveNameOverlayWriter:
             return False
 
     def observe(self, kind: Any, id_: Any, text: Any, *, context: dict | None = None) -> bool:
-        """Validate and maybe persist one name.
-
-        Returns True only when the observation was persisted (i.e. the consistency
-        threshold was reached and observe_name was called successfully). False means
-        validation failed or more confirmations are needed.
-        """
+        # Validate and maybe persist one name.
+        #
+        # Returns True only when the observation was persisted (i.e. the consistency
+        # threshold was reached and observe_name was called successfully). False means
+        # validation failed or more confirmations are needed.
         if self.cache is None:
             return False
         if not (self.valid_kind(kind) and self.valid_id(id_) and self.valid_text(text)):

@@ -96,18 +96,17 @@ def _rgba_to_hex(color: Tuple[int, int, int, int]) -> str:
 
 
 def _unpremultiply_rgba(img: Image.Image) -> Image.Image:
-    """Convert a premultiplied-alpha RGBA image to straight alpha.
-
-    ``render_shell_rgba``'s GPU shader writes premultiplied output (its RGB
-    channels are already scaled by alpha, the convention its own blend
-    pipeline expects), but every PIL-side consumer downstream —
-    ``Image.alpha_composite``, plain ``ImageDraw`` fills for the brackets/
-    rails drawn on top — assumes straight (non-premultiplied) alpha like
-    the rest of this module's PIL fallback path. Left unconverted, any
-    color drawn through this path reads darker/muddier the more transparent
-    it is (e.g. white at alpha 180/255 renders as ~176 gray instead of
-    ~249 near-white) instead of the requested color.
-    """
+    # Convert a premultiplied-alpha RGBA image to straight alpha.
+    #
+    # ``render_shell_rgba``'s GPU shader writes premultiplied output (its RGB
+    # channels are already scaled by alpha, the convention its own blend
+    # pipeline expects), but every PIL-side consumer downstream —
+    # ``Image.alpha_composite``, plain ``ImageDraw`` fills for the brackets/
+    # rails drawn on top — assumes straight (non-premultiplied) alpha like
+    # the rest of this module's PIL fallback path. Left unconverted, any
+    # color drawn through this path reads darker/muddier the more transparent
+    # it is (e.g. white at alpha 180/255 renders as ~176 gray instead of
+    # ~249 near-white) instead of the requested color.
     arr = np.asarray(img).astype(np.float32)
     alpha = arr[..., 3:4]
     safe_alpha = np.where(alpha > 0, alpha, 1.0)
@@ -117,9 +116,9 @@ def _unpremultiply_rgba(img: Image.Image) -> Image.Image:
 
 
 def _tk_font_spec(kind: str, size: int) -> Tuple:
-    """Return a Tk font spec, preferring the installed SAO UI/CJK face so
-    the Canvas stamp looks identical to the PIL-rendered version. Falls
-    back to a system font if sao_sound.get_sao_font is unavailable."""
+    # Return a Tk font spec, preferring the installed SAO UI/CJK face so
+    # the Canvas stamp looks identical to the PIL-rendered version. Falls
+    # back to a system font if sao_sound.get_sao_font is unavailable.
     try:
         if kind == 'sao':
             from utils.sao_sound import get_sao_font as _gs
@@ -133,12 +132,12 @@ def _tk_font_spec(kind: str, size: int) -> Tuple:
 
 @dataclass
 class MenuHudFrame:
-    """Lightweight per-frame descriptor for the menu HUD.
-
-    Instead of a single composited PhotoImage, this splits the HUD into
-    a static background photo + a handful of dynamic primitives that the
-    caller renders via Canvas-native items (lines, images, text). This
-    keeps the per-frame cost at a few coords()/itemconfigure() calls."""
+    # Lightweight per-frame descriptor for the menu HUD.
+    #
+    # Instead of a single composited PhotoImage, this splits the HUD into
+    # a static background photo + a handful of dynamic primitives that the
+    # caller renders via Canvas-native items (lines, images, text). This
+    # keeps the per-frame cost at a few coords()/itemconfigure() calls.
 
     static_photo: ImageTk.PhotoImage
     static_size: Tuple[int, int]
@@ -215,19 +214,19 @@ class MenuHudSpriteRenderer:
 
     @property
     def gpu_pad(self) -> int:
-        """Canvas/window margin (px) for the GPU-path sprite — purely how
-        much transparent room + off-screen slack the render surface has;
-        does not affect the plate's or bracket frame's visible size or
-        position relative to content (see _PLATE_MARGIN for that)."""
+        # Canvas/window margin (px) for the GPU-path sprite — purely how
+        # much transparent room + off-screen slack the render surface has;
+        # does not affect the plate's or bracket frame's visible size or
+        # position relative to content (see _PLATE_MARGIN for that).
         return self._PLATE_PAD + self._SHELL_GROW_PAD
 
     @property
     def _shell_body_pad(self) -> int:
-        """Inset (px) of the glass plate's edge from the GPU canvas edge.
-        Derived so the plate's actual visible size is
-        ``content + 2*_PLATE_MARGIN`` regardless of gpu_pad — grow
-        _PLATE_MARGIN to make the plate itself bigger; grow gpu_pad only
-        to give the sprite/window more surrounding room."""
+        # Inset (px) of the glass plate's edge from the GPU canvas edge.
+        # Derived so the plate's actual visible size is
+        # ``content + 2*_PLATE_MARGIN`` regardless of gpu_pad — grow
+        # _PLATE_MARGIN to make the plate itself bigger; grow gpu_pad only
+        # to give the sprite/window more surrounding room.
         return max(0, self.gpu_pad - self._PLATE_MARGIN)
     _DOT_RADIUS = 2
     _CYAN = (94, 184, 202, 255)
@@ -326,21 +325,20 @@ class MenuHudSpriteRenderer:
     def render(self, content_w: int, content_h: int,
                screen_w: int, screen_h: int,
                phase: float) -> 'MenuHudFrame':
-        """Return a lightweight frame descriptor that can be drawn with
-        Canvas-native primitives (lines, images, text).
-
-        The previous implementation composited the full HUD into a single
-        PhotoImage every tick, which required `static.copy()` + PIL draw
-        ops + `PhotoImage.paste()` (~2.7 ms/frame at 60 Hz). By splitting
-        the static background from the dynamic scan/dot/clock elements
-        and letting Tk's Canvas animate them natively, we keep the exact
-        visual output while cutting the per-frame cost ~>25x.
-
-        Held under :data:`_PIL_DRAW_LOCK`: this entry point can be
-        reached from the Tk main thread (Canvas fallback) while another
-        worker is mid-render_pil — without the lock the two collide in
-        FreeType.
-        """
+        # Return a lightweight frame descriptor that can be drawn with
+        # Canvas-native primitives (lines, images, text).
+        #
+        # The previous implementation composited the full HUD into a single
+        # PhotoImage every tick, which required `static.copy()` + PIL draw
+        # ops + `PhotoImage.paste()` (~2.7 ms/frame at 60 Hz). By splitting
+        # the static background from the dynamic scan/dot/clock elements
+        # and letting Tk's Canvas animate them natively, we keep the exact
+        # visual output while cutting the per-frame cost ~>25x.
+        #
+        # Held under :data:`_PIL_DRAW_LOCK`: this entry point can be
+        # reached from the Tk main thread (Canvas fallback) while another
+        # worker is mid-render_pil — without the lock the two collide in
+        # FreeType.
         with _PIL_DRAW_LOCK:
             return self._render_locked(content_w, content_h, screen_w, screen_h, phase)
 
@@ -409,20 +407,19 @@ class MenuHudSpriteRenderer:
     def render_pil(self, content_w: int, content_h: int,
                    screen_w: int, screen_h: int,
                    phase: float) -> Tuple[Image.Image, Tuple[int, int]]:
-        """v2.2.12: compose the entire HUD into a single RGBA PIL.Image.
-
-        Used by ``MenuHudOverlay`` (sao_gui_menu_hud) to drive a layered
-        per-pixel-alpha window from a worker thread instead of the
-        ``Toplevel(-transparentcolor) + Canvas`` chroma-key path. Touches
-        no Tk objects so it is safe to call off the main thread.
-
-        Returns ``(image, sprite_origin_offset)`` where the offset is the
-        sprite's top-left relative to the content frame's top-left
-        (``-PLATE_PAD, -PLATE_PAD``). The caller adds it to the desired
-        on-screen position before submitting via ``ulw_commit``.
-
-        Held under :data:`_PIL_DRAW_LOCK` — see module docstring.
-        """
+        # v2.2.12: compose the entire HUD into a single RGBA PIL.Image.
+        #
+        # Used by ``MenuHudOverlay`` (sao_gui_menu_hud) to drive a layered
+        # per-pixel-alpha window from a worker thread instead of the
+        # ``Toplevel(-transparentcolor) + Canvas`` chroma-key path. Touches
+        # no Tk objects so it is safe to call off the main thread.
+        #
+        # Returns ``(image, sprite_origin_offset)`` where the offset is the
+        # sprite's top-left relative to the content frame's top-left
+        # (``-PLATE_PAD, -PLATE_PAD``). The caller adds it to the desired
+        # on-screen position before submitting via ``ulw_commit``.
+        #
+        # Held under :data:`_PIL_DRAW_LOCK` — see module docstring.
         with _PIL_DRAW_LOCK:
             return self._render_pil_locked(content_w, content_h, screen_w, screen_h, phase)
 
@@ -550,13 +547,12 @@ class MenuHudSpriteRenderer:
 
     def _get_static_layer_gpu(self, content_w: int, content_h: int,
                               screen_w: int, screen_h: int) -> Image.Image:
-        """Same static HUD layer as :meth:`_get_static_layer`, but with the
-        glass backdrop shell composited underneath — safe here because the
-        GPU overlay (MenuHudOverlay) is a real per-pixel-alpha layered
-        window, not a chroma-key surface, so a translucent plate doesn't
-        produce the black-fringe artifact the legacy path avoids. Uses its
-        own cache slot so this never leaks into the chroma-key fallback.
-        """
+        # Same static HUD layer as :meth:`_get_static_layer`, but with the
+        # glass backdrop shell composited underneath — safe here because the
+        # GPU overlay (MenuHudOverlay) is a real per-pixel-alpha layered
+        # window, not a chroma-key surface, so a translucent plate doesn't
+        # produce the black-fringe artifact the legacy path avoids. Uses its
+        # own cache slot so this never leaks into the chroma-key fallback.
         key = (content_w, content_h, screen_w, screen_h)
         if self._static_key_gpu == key and self._static_img_gpu is not None:
             return self._static_img_gpu
@@ -617,10 +613,10 @@ class MenuHudSpriteRenderer:
     _SCAN_LEAD_H = 5     # faint lead glow below the core
 
     def _get_scan_sprite(self, width: int) -> Image.Image:
-        """Scan-sweep sprite: a vertical gradient afterglow that rises
-        into a 2px hot core (near-white leading edge) with a short lead
-        glow beneath. Built once per bracket-box width and cached — the
-        per-frame cost is a single C-level alpha_composite."""
+        # Scan-sweep sprite: a vertical gradient afterglow that rises
+        # into a 2px hot core (near-white leading edge) with a short lead
+        # glow beneath. Built once per bracket-box width and cached — the
+        # per-frame cost is a single C-level alpha_composite.
         if self._scan_sprite is not None and self._scan_sprite_w == width:
             return self._scan_sprite
         r, g, b = self._CYAN[:3]
@@ -1397,10 +1393,10 @@ class MenuLeftInfoRenderer:
     def render_top_pil(self, username: str, width: int, height: int,
                        sweep_phase: float = 0.0,
                        sweep_strength: float = 0.0) -> Image.Image:
-        """Worker-safe variant of :meth:`render_top` returning a raw
-        PIL Image. Does not touch Tk — safe to call from any thread.
-        Bypasses the Tk PhotoImage cache; the GPU path keeps its own
-        signature dedup."""
+        # Worker-safe variant of :meth:`render_top` returning a raw
+        # PIL Image. Does not touch Tk — safe to call from any thread.
+        # Bypasses the Tk PhotoImage cache; the GPU path keeps its own
+        # signature dedup.
         with _PIL_DRAW_LOCK:
             return self._render_top_pil_locked(username, width, height,
                                                 sweep_phase, sweep_strength)
@@ -1508,8 +1504,8 @@ class MenuLeftInfoRenderer:
     def render_bottom_pil(self, description: str, width: int, height: int,
                           sweep_phase: float = 0.0,
                           sweep_strength: float = 0.0) -> Image.Image:
-        """Worker-safe variant of :meth:`render_bottom`. See
-        :meth:`render_top_pil`."""
+        # Worker-safe variant of :meth:`render_bottom`. See
+        # :meth:`render_top_pil`.
         with _PIL_DRAW_LOCK:
             return self._render_bottom_pil_locked(description, width, height,
                                                    sweep_phase, sweep_strength)

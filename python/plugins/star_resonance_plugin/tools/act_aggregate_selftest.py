@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""Regression tests for ACT semantic aggregation helpers."""
+# Regression tests for ACT semantic aggregation helpers.
 
 from __future__ import annotations
 

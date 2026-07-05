@@ -1,35 +1,34 @@
 # -*- coding: utf-8 -*-
-"""Lua scripting runtime via *lupa* (LuaJIT / Lua 5.x binding).
-
-Plugin entry is a ``.lua`` file that defines lifecycle functions::
-
-    -- plugin.lua
-    function on_load(ctx)
-        ctx:log("Hello from Lua!")
-        ctx:register_ui_panel("my_panel", {title = "Lua Panel"},
-            function(payload)
-                return ctx.ui.panel("Lua Demo", {
-                    ctx.ui.text("Hello from Lua!"),
-                    ctx.ui.button("Click", "click_action"),
-                })
-            end,
-            function(action_id, payload)
-                ctx:log("action: " .. tostring(action_id))
-                return {ok = true}
-            end
-        )
-    end
-
-    function on_unload()
-        -- cleanup
-    end
-
-Lua tables map to Python dicts via lupa's automatic conversion.
-Python objects (``ctx``, ``ctx.ui``) are accessible from Lua with
-colon-syntax method calls (``ctx:method(...)``).
-
-Requires: ``pip install lupa``
-"""
+# Lua scripting runtime via *lupa* (LuaJIT / Lua 5.x binding).
+#
+# Plugin entry is a ``.lua`` file that defines lifecycle functions::
+#
+# -- plugin.lua
+# function on_load(ctx)
+# ctx:log("Hello from Lua!")
+# ctx:register_ui_panel("my_panel", {title = "Lua Panel"},
+# function(payload)
+# return ctx.ui.panel("Lua Demo", {
+# ctx.ui.text("Hello from Lua!"),
+# ctx.ui.button("Click", "click_action"),
+# })
+# end,
+# function(action_id, payload)
+# ctx:log("action: " .. tostring(action_id))
+# return {ok = true}
+# end
+# )
+# end
+#
+# function on_unload()
+# -- cleanup
+# end
+#
+# Lua tables map to Python dicts via lupa's automatic conversion.
+# Python objects (``ctx``, ``ctx.ui``) are accessible from Lua with
+# colon-syntax method calls (``ctx:method(...)``).
+#
+# Requires: ``pip install lupa``
 
 from __future__ import annotations
 
@@ -71,13 +70,12 @@ def _ensure_lupa():
 
 
 class _LuaProxy:
-    """Wraps PluginContext for Lua consumption.
-
-    lupa makes Python objects callable from Lua by default, but
-    we add convenience helpers for table↔dict conversion and
-    ensure the ``ui`` builder works from Lua (it returns Python
-    dicts which are already Lua-table compatible via lupa).
-    """
+    # Wraps PluginContext for Lua consumption.
+    #
+    # lupa makes Python objects callable from Lua by default, but
+    # we add convenience helpers for table↔dict conversion and
+    # ensure the ``ui`` builder works from Lua (it returns Python
+    # dicts which are already Lua-table compatible via lupa).
 
     def __init__(self, ctx: "PluginContext", lua_runtime) -> None:
         self._ctx = ctx
@@ -315,7 +313,7 @@ class _LuaProxy:
 
 
 def _table_to_python(table) -> Any:
-    """Recursively convert a Lua table to Python dict/list."""
+    # Recursively convert a Lua table to Python dict/list.
     if _lupa is None or _lupa.lua_type(table) != "table":
         return table
     keys = list(table.keys())
@@ -335,7 +333,7 @@ def _table_to_python(table) -> Any:
 
 
 class LuaRuntime(ScriptRuntime):
-    """Load ``.lua`` plugin scripts via lupa."""
+    # Load ``.lua`` plugin scripts via lupa.
 
     def __init__(self) -> None:
         _ensure_lupa()

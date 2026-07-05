@@ -1,8 +1,7 @@
-"""HUD layout: brackets, rails, scan line, dots, clock stamp.
-
-Wraps ``MenuHudSpriteRenderer`` from ``sao_menu_hud`` so we get a single
-RGBA frame plus a sprite origin offset relative to the content rect.
-"""
+# HUD layout: brackets, rails, scan line, dots, clock stamp.
+#
+# Wraps ``MenuHudSpriteRenderer`` from ``sao_menu_hud`` so we get a single
+# RGBA frame plus a sprite origin offset relative to the content rect.
 
 from __future__ import annotations
 
@@ -16,18 +15,18 @@ _renderer = MenuHudSpriteRenderer()
 
 
 def sprite_pad() -> int:
-    """Margin the HUD sprite extends beyond the content rect on every
-    side (= sprite origin offset magnitude). The composer's window pad
-    must be at least this, or pasting the sprite at a negative offset
-    gets clamped/cropped by PIL."""
+    # Margin the HUD sprite extends beyond the content rect on every
+    # side (= sprite origin offset magnitude). The composer's window pad
+    # must be at least this, or pasting the sprite at a negative offset
+    # gets clamped/cropped by PIL.
     return _renderer.gpu_pad
 
 
 def compose(content_w: int, content_h: int,
             screen_w: int, screen_h: int,
             phase: float) -> Tuple[Image.Image, Tuple[int, int]]:
-    """Return (rgba_image, (origin_dx, origin_dy)) where the sprite is
-    drawn at ``(content_x + origin_dx, content_y + origin_dy)``."""
+    # Return (rgba_image, (origin_dx, origin_dy)) where the sprite is
+    # drawn at ``(content_x + origin_dx, content_y + origin_dy)``.
     img, origin = _renderer.render_pil(content_w, content_h,
                                        screen_w, screen_h, phase)
     return img, origin

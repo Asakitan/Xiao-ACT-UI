@@ -1,15 +1,14 @@
 # -*- coding: utf-8 -*-
-"""resolve_raid_scene_names - 读每场 raid 战斗的地图名 (游戏开着即可, 不用进图)。
-
-实证结论(2026-06): 战斗子图名不在 SceneTable/SceneAreaTable, DungeonsTable.SceneID→
-SceneTable.SubScene 链路为空(已弃用)。权威源=StringPoolRuntimeImpl 全池字符串:
-  每周任务串「【每周】<本名>·<图名>」 — 与传送串「前往<图名>」双源一致,
-  「鸣角之野」(双子场, 用户实证) 为校验锚。
-
-用法: python tools/resolve_raid_scene_names.py [--apply]
-  打印三个 raid 的「本名·图名」串与传送串; --apply 不覆盖人工整理的
-  assets/boss_raids/raid_scene_names.json, 只写 exports/raid_scene_strings.json 供比对。
-"""
+# resolve_raid_scene_names - 读每场 raid 战斗的地图名 (游戏开着即可, 不用进图)。
+#
+# 实证结论(2026-06): 战斗子图名不在 SceneTable/SceneAreaTable, DungeonsTable.SceneID→
+# SceneTable.SubScene 链路为空(已弃用)。权威源=StringPoolRuntimeImpl 全池字符串:
+# 每周任务串「【每周】<本名>·<图名>」 — 与传送串「前往<图名>」双源一致,
+# 「鸣角之野」(双子场, 用户实证) 为校验锚。
+#
+# 用法: python tools/resolve_raid_scene_names.py [--apply]
+# 打印三个 raid 的「本名·图名」串与传送串; --apply 不覆盖人工整理的
+# assets/boss_raids/raid_scene_names.json, 只写 exports/raid_scene_strings.json 供比对。
 from __future__ import annotations
 
 import json

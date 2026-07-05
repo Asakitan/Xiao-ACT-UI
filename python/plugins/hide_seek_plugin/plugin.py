@@ -1,26 +1,25 @@
 # -*- coding: utf-8 -*-
-"""Auto Hide & Seek — self-contained example plugin.
-
-This was originally wired directly into the main program (Entity mixin + WebView
-bridge, an F11 toggle and a persistent alert).  It is now a **self-contained
-plugin** that ships its own CV automation engine (``hide_seek_engine.py``) and
-drives it entirely through the plugin engine, exercising a lot of the plugin↔host
-surface:
-
-* ``ctx.load_local("hide_seek_engine.py")`` — load the bundled engine module
-  (its own ``import cv2 / numpy / config / utils.window_locator`` still resolve
-  from the shared main-program process).
-* ``ctx.get_engine("window_locator")`` — reuse the host's shared WindowLocator.
-* ``ctx.set_interval`` — the 50 s persistent-alert refresh loop.
-* ``ctx.notify`` / ``ctx.dismiss_notify`` — the owner-agnostic alert that works
-  on both Entity and WebView.
-* ``register_ui_panel`` — start/stop control + live status, shown in the plugin
-  panel surface and reachable from the plugin popup menu.
-
-The automation only runs when the user toggles it on (same opt-in behaviour as
-the old F11 switch); loading the plugin is cheap (the heavy ``cv2`` import is
-deferred until start).
-"""
+# Auto Hide & Seek — self-contained example plugin.
+#
+# This was originally wired directly into the main program (Entity mixin + WebView
+# bridge, an F11 toggle and a persistent alert).  It is now a **self-contained
+# plugin** that ships its own CV automation engine (``hide_seek_engine.py``) and
+# drives it entirely through the plugin engine, exercising a lot of the plugin↔host
+# surface:
+#
+# * ``ctx.load_local("hide_seek_engine.py")`` — load the bundled engine module
+# (its own ``import cv2 / numpy / config / utils.window_locator`` still resolve
+# from the shared main-program process).
+# * ``ctx.get_engine("window_locator")`` — reuse the host's shared WindowLocator.
+# * ``ctx.set_interval`` — the 50 s persistent-alert refresh loop.
+# * ``ctx.notify`` / ``ctx.dismiss_notify`` — the owner-agnostic alert that works
+# on both Entity and WebView.
+# * ``register_ui_panel`` — start/stop control + live status, shown in the plugin
+# panel surface and reachable from the plugin popup menu.
+#
+# The automation only runs when the user toggles it on (same opt-in behaviour as
+# the old F11 switch); loading the plugin is cheap (the heavy ``cv2`` import is
+# deferred until start).
 
 REFRESH_S = 50.0  # re-show the persistent alert before its 60 s auto-hide
 ALERT_KIND = "hide_seek"

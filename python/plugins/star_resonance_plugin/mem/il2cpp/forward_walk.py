@@ -1,17 +1,16 @@
-"""forward_walk — 用 dump 元数据正向走 CharSerialize 找 self.
-
-策略 (Phase 1+2 雏形):
-    1. 加载 script.json, 取 CharSerialize_TypeInfo, UserFightAttr_TypeInfo 的 RVA
-    2. 解 *(GA + RVA) 得到运行时 klass_ptr (klass 在游戏自定义堆里)
-    3. 全堆扫: 找首 8 字节 == CharSerialize klass_ptr 的对象 → 候选 self
-    4. 对每个候选, 读 CharId @ +0x10, 比对已知 UID 366681365. 命中后, 沿 Attr (offset 0x88) 的指针走到 UserFightAttr 实例
-    6. 读 UserFightAttr.CurHp @ +0x10, MaxHp @ +0x18 验证
-
-输出: 完整的 [GA+RVA→klass→scan_for_obj_with_klass→+0x88→deref→+0x10] 链.
-
-CLI:
-    python -m tools.mem_probe.il2cpp.forward_walk
-"""
+# forward_walk — 用 dump 元数据正向走 CharSerialize 找 self.
+#
+# 策略 (Phase 1+2 雏形):
+# 1. 加载 script.json, 取 CharSerialize_TypeInfo, UserFightAttr_TypeInfo 的 RVA
+# 2. 解 *(GA + RVA) 得到运行时 klass_ptr (klass 在游戏自定义堆里)
+# 3. 全堆扫: 找首 8 字节 == CharSerialize klass_ptr 的对象 → 候选 self
+# 4. 对每个候选, 读 CharId @ +0x10, 比对已知 UID 366681365. 命中后, 沿 Attr (offset 0x88) 的指针走到 UserFightAttr 实例
+# 6. 读 UserFightAttr.CurHp @ +0x10, MaxHp @ +0x18 验证
+#
+# 输出: 完整的 [GA+RVA→klass→scan_for_obj_with_klass→+0x88→deref→+0x10] 链.
+#
+# CLI:
+# python -m tools.mem_probe.il2cpp.forward_walk
 from __future__ import annotations
 
 import argparse
@@ -39,7 +38,7 @@ _MAX_REGION_SIZE = 256 * 1024 * 1024
 
 
 def scan_objects_with_klass(pm: StarProcess, klass_ptr: int, max_hits: int = 256) -> List[int]:
-    """全私有堆扫描: 找首 8 字节 == klass_ptr 的对象. 返回 obj_base 列表 (cy_memscan AVX2)."""
+    # 全私有堆扫描: 找首 8 字节 == klass_ptr 的对象. 返回 obj_base 列表 (cy_memscan AVX2).
     from mem_probe import cy_memscan as _cy
     hits: List[int] = []
     t0 = time.time()

@@ -1,10 +1,9 @@
 # -*- coding: utf-8 -*-
-"""Verify the dodge-timing the feed gives for a real boss: detect each attack
-start AND whether a usable cast_duration_ms is captured (learned from the
-attack's actor-state window) so a dodge can be timed with lead_ms.
-
-    python tools/verify_boss_dodge_timing.py [seconds] [name_substr]
-"""
+# Verify the dodge-timing the feed gives for a real boss: detect each attack
+# start AND whether a usable cast_duration_ms is captured (learned from the
+# attack's actor-state window) so a dodge can be timed with lead_ms.
+#
+# python tools/verify_boss_dodge_timing.py [seconds] [name_substr]
 from __future__ import annotations
 
 import os

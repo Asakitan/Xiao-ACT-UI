@@ -1,8 +1,7 @@
-"""bundle_loader - 从轻量 bundle (build by bundle_build.py) 构造 StaticResolver.
-
-bundle 加载比 script.json (248MB) + dump_cs_index (15MB) 快几个数量级,
-适合打包到主程序里发布.
-"""
+# bundle_loader - 从轻量 bundle (build by bundle_build.py) 构造 StaticResolver.
+#
+# bundle 加载比 script.json (248MB) + dump_cs_index (15MB) 快几个数量级,
+# 适合打包到主程序里发布.
 from __future__ import annotations
 
 import json

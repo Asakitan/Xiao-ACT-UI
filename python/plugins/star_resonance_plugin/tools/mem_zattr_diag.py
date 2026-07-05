@@ -1,17 +1,16 @@
 # -*- coding: utf-8 -*-
-"""Live ZAttr diagnostic — discover the real ZMixItem<T> Value offset (read-only).
-
-Does NOT use the (stale) static self path. It:
-  1. opens the process + GameAssembly via StaticDpsSource.sr,
-  2. resolves the Panda.ZGame.ZEntityMgr klass (bundle, else on-disk script.json),
-  3. locates ZEntityMgr by best-entity-count (no self uid needed),
-  4. enumerates bossDict_/monsterDict_ entities,
-  5. for the entity carrying a MAX_HP (11320) attribute near a target value,
-     dumps the IMixAttr object bytes so the real Value offset is visible.
-
-Usage (game running, boss in scene):
-    python tools/mem_zattr_diag.py --target-hp 17800000 --tol 1500000
-"""
+# Live ZAttr diagnostic — discover the real ZMixItem<T> Value offset (read-only).
+#
+# Does NOT use the (stale) static self path. It:
+# 1. opens the process + GameAssembly via StaticDpsSource.sr,
+# 2. resolves the Panda.ZGame.ZEntityMgr klass (bundle, else on-disk script.json),
+# 3. locates ZEntityMgr by best-entity-count (no self uid needed),
+# 4. enumerates bossDict_/monsterDict_ entities,
+# 5. for the entity carrying a MAX_HP (11320) attribute near a target value,
+# dumps the IMixAttr object bytes so the real Value offset is visible.
+#
+# Usage (game running, boss in scene):
+# python tools/mem_zattr_diag.py --target-hp 17800000 --tol 1500000
 from __future__ import annotations
 
 import argparse
@@ -38,12 +37,11 @@ A_HP, A_MAX_HP, A_BREAKING_STAGE = 11310, 11320, 455
 
 
 def _candidate_mgr_klasses(src):
-    """Return [(klass_ptr, source_str), ...] candidates, newest script.json first.
-
-    The on-disk dumps may include stale versions whose RVA points to garbage for
-    the running game, so we yield every plausible candidate and let the caller
-    validate each by actually locating ZEntityMgr.
-    """
+    # Return [(klass_ptr, source_str), ...] candidates, newest script.json first.
+    #
+    # The on-disk dumps may include stale versions whose RVA points to garbage for
+    # the running game, so we yield every plausible candidate and let the caller
+    # validate each by actually locating ZEntityMgr.
     sr = src.sr
     ga = int(sr.ga)
     cands = []
@@ -73,7 +71,7 @@ def _candidate_mgr_klasses(src):
 
 
 def _walk_attr_dict(pm, attrs_obj):
-    """attrs_obj -> {attr_id: imixattr_ptr} (Dictionary<uint, IMixAttr> @ +0x28)."""
+    # attrs_obj -> {attr_id: imixattr_ptr} (Dictionary<uint, IMixAttr> @ +0x28).
     r = ZAttrReader(pm)
     return r.read_attr_ptrs(attrs_obj)
 

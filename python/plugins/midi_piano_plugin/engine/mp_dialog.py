@@ -1,12 +1,11 @@
 # -*- coding: utf-8 -*-
-"""mp_dialog — 原生「打开文件」对话框（Windows comdlg32），跨 UI 模式可用。
-
-平台插件面板是声明式(button/table)的，没有文件选择控件。host 自己用 tkinter.filedialog，
-但那需要存在 Tk root（纯 WebView 模式可能没有）。这里直接调 Windows 通用对话框
-`comdlg32.GetOpenFileNameW`，不依赖 Tk，Entity / WebView 两种模式都能弹出资源管理器选 MIDI。
-
-可在后台线程调用（对话框自带模态消息循环），返回所选绝对路径或 None。
-"""
+# mp_dialog — 原生「打开文件」对话框（Windows comdlg32），跨 UI 模式可用。
+#
+# 平台插件面板是声明式(button/table)的，没有文件选择控件。host 自己用 tkinter.filedialog，
+# 但那需要存在 Tk root（纯 WebView 模式可能没有）。这里直接调 Windows 通用对话框
+# `comdlg32.GetOpenFileNameW`，不依赖 Tk，Entity / WebView 两种模式都能弹出资源管理器选 MIDI。
+#
+# 可在后台线程调用（对话框自带模态消息循环），返回所选绝对路径或 None。
 
 from __future__ import annotations
 
@@ -53,7 +52,7 @@ class _OPENFILENAMEW(ctypes.Structure):
 
 def open_midi(initial_dir: str = "", title: str = "选择 MIDI 文件",
               hwnd_owner: int = 0) -> Optional[str]:
-    """弹出资源管理器选 MIDI，返回绝对路径或 None（取消/失败）。"""
+    # 弹出资源管理器选 MIDI，返回绝对路径或 None（取消/失败）。
     try:
         comdlg32 = ctypes.windll.comdlg32
     except Exception:

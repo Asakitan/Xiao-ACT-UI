@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""Regression tests for Entity menu ACT summary labels."""
+# Regression tests for Entity menu ACT summary labels.
 
 from __future__ import annotations
 

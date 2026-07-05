@@ -1,10 +1,9 @@
-"""Read-only live probe for Chinese name/localization strings in Star.exe.
-
-This diagnostic intentionally uses only PROCESS_VM_READ via ``StarProcess``.
-It searches screenshot/crib terms as UTF-16, reconstructs candidate
-Il2CppString objects, and samples nearby string-pool ranges so runtime table
-extraction work can start from concrete live addresses instead of guesses.
-"""
+# Read-only live probe for Chinese name/localization strings in Star.exe.
+#
+# This diagnostic intentionally uses only PROCESS_VM_READ via ``StarProcess``.
+# It searches screenshot/crib terms as UTF-16, reconstructs candidate
+# Il2CppString objects, and samples nearby string-pool ranges so runtime table
+# extraction work can start from concrete live addresses instead of guesses.
 
 from __future__ import annotations
 

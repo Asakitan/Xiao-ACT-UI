@@ -1,19 +1,18 @@
 # -*- coding: utf-8 -*-
-"""bootstrap — 插件自带「外置 requirements」依赖引导。
-
-设计目标：依赖完全自包含在**插件自己的目录**里，并从那里 import，
-不依赖、不污染主程序的全局 site-packages。
-
-满足顺序（优先级从高到低，全部落在插件目录内）：
-  1. libs/    —— `pip install --target libs` 装到插件本地（开发态联网时自动拉取）
-  2. vendor/  —— 插件随包自带的纯 Python 副本（冻结态 / 离线兜底）
-  （仅当插件目录内都没有、且本地安装失败时，才最后退回主程序环境，避免直接报错）
-
-实现要点：
-  * 把 engine/、libs/、vendor/ 放到 sys.path 最前 → 插件目录内的副本优先于 site-packages；
-  * import 后校验 __file__ 确实落在插件目录内，否则视作“非本地”，触发本地安装；
-  * 返回记录供 on_unload 还原 sys.path，避免主进程残留。
-"""
+# bootstrap — 插件自带「外置 requirements」依赖引导。
+#
+# 设计目标：依赖完全自包含在**插件自己的目录**里，并从那里 import，
+# 不依赖、不污染主程序的全局 site-packages。
+#
+# 满足顺序（优先级从高到低，全部落在插件目录内）：
+# 1. libs/    —— `pip install --target libs` 装到插件本地（开发态联网时自动拉取）
+# 2. vendor/  —— 插件随包自带的纯 Python 副本（冻结态 / 离线兜底）
+# （仅当插件目录内都没有、且本地安装失败时，才最后退回主程序环境，避免直接报错）
+#
+# 实现要点：
+# * 把 engine/、libs/、vendor/ 放到 sys.path 最前 → 插件目录内的副本优先于 site-packages；
+# * import 后校验 __file__ 确实落在插件目录内，否则视作“非本地”，触发本地安装；
+# * 返回记录供 on_unload 还原 sys.path，避免主进程残留。
 
 from __future__ import annotations
 
@@ -62,7 +61,7 @@ def _parse_requirements(req_file: str):
 
 
 def _module_origin(mod_name: str):
-    """返回模块文件路径（未加载也能查），找不到返回 None。"""
+    # 返回模块文件路径（未加载也能查），找不到返回 None。
     try:
         spec = importlib.util.find_spec(mod_name)
     except Exception:
@@ -86,7 +85,7 @@ def _is_inside(path: str, root: str) -> bool:
 
 
 def _fresh_import(mod_name: str) -> bool:
-    """清掉缓存后重新解析+导入，确保从当前 sys.path（插件本地）加载。"""
+    # 清掉缓存后重新解析+导入，确保从当前 sys.path（插件本地）加载。
     for k in list(sys.modules):
         if k == mod_name or k.startswith(mod_name + "."):
             del sys.modules[k]
@@ -99,7 +98,7 @@ def _fresh_import(mod_name: str) -> bool:
 
 
 def _pip_install_target(req_file: str, libs_dir: str, ctx=None) -> bool:
-    """`pip install --target <插件>/libs -r requirements.txt`；冻结态/无 pip → False。"""
+    # `pip install --target <插件>/libs -r requirements.txt`；冻结态/无 pip → False。
     if getattr(sys, "frozen", False):
         return False
     import subprocess
@@ -120,10 +119,9 @@ def _pip_install_target(req_file: str, libs_dir: str, ctx=None) -> bool:
 
 
 def ensure_requirements(plugin_dir: str, ctx=None, install: bool = True) -> dict:
-    """确保 requirements.txt 的依赖**存在于插件目录内并从那里 import**。
-
-    返回 {"added":[paths...], "deps":{name:'libs'|'vendor'|'pip→libs'|'site(fallback)'|'missing'}}
-    """
+    # 确保 requirements.txt 的依赖**存在于插件目录内并从那里 import**。
+    #
+    # 返回 {"added":[paths...], "deps":{name:'libs'|'vendor'|'pip→libs'|'site(fallback)'|'missing'}}
     plugin_dir = os.path.abspath(plugin_dir)
     engine_dir = os.path.join(plugin_dir, "engine")
     libs_dir = os.path.join(plugin_dir, "libs")
@@ -172,7 +170,7 @@ def ensure_requirements(plugin_dir: str, ctx=None, install: bool = True) -> dict
 
 
 def restore_paths(rec: dict):
-    """on_unload 还原 sys.path，移除本插件加入的目录。"""
+    # on_unload 还原 sys.path，移除本插件加入的目录。
     if not rec:
         return
     for p in rec.get("added", []):

@@ -1,20 +1,19 @@
 # -*- coding: utf-8 -*-
-"""Standalone Win32 handle-count monitor — no changes to the main app.
-
-Logs USER objects / GDI objects / total handle count for a target
-process every few seconds to a CSV, so a long real-usage session can be
-correlated against the exact moment a hang/CPU+GPU-spike happens
-without needing Task Manager's "USER objects"/"GDI objects" columns
-added manually (they're not shown by default).
-
-Usage:
-    python tools/handle_count_monitor.py --pid 12345
-    python tools/handle_count_monitor.py --title SAO
-    python tools/handle_count_monitor.py            # auto-detect by title
-
-Ctrl+C to stop. Writes to tools/handle_count_log_<pid>.csv (append mode
-— safe to stop/restart without losing history from this run).
-"""
+# Standalone Win32 handle-count monitor — no changes to the main app.
+#
+# Logs USER objects / GDI objects / total handle count for a target
+# process every few seconds to a CSV, so a long real-usage session can be
+# correlated against the exact moment a hang/CPU+GPU-spike happens
+# without needing Task Manager's "USER objects"/"GDI objects" columns
+# added manually (they're not shown by default).
+#
+# Usage:
+# python tools/handle_count_monitor.py --pid 12345
+# python tools/handle_count_monitor.py --title SAO
+# python tools/handle_count_monitor.py            # auto-detect by title
+#
+# Ctrl+C to stop. Writes to tools/handle_count_log_<pid>.csv (append mode
+# — safe to stop/restart without losing history from this run).
 import argparse
 import csv
 import ctypes

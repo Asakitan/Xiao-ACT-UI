@@ -1,22 +1,21 @@
 # -*- coding: utf-8 -*-
-"""Microbenchmarks for the v2.2.11 GPU compositor work.
-
-Runs three benches off the Tk main thread (each test runs on a worker
-thread because ModernGL contexts are thread-affine):
-
-1. ``LayerCompositor.render`` throughput for the 10 shaders.
-2. ``LayerCompositor.blur_tex`` (Phase 3 refinement) vs the prior
-   PIL-roundtrip blur path.
-3. BossHP ``_apply_inset_shadow_gpu`` vs the CPU fallback.
-
-Reports p50/p95/p99 ms. No Tk involvement, so it's safe to run from
-``python tools/bench_compose.py`` in any shell.
-
-Targets (per the plan):
-    LayerCompositor.render single pass : p95 < 0.5 ms
-    blur_tex sigma=11 on 220x60        : p95 < 1.0 ms
-    inset_shadow_gpu  vs cpu           : >= 2x speed-up at sigma 11
-"""
+# Microbenchmarks for the v2.2.11 GPU compositor work.
+#
+# Runs three benches off the Tk main thread (each test runs on a worker
+# thread because ModernGL contexts are thread-affine):
+#
+# 1. ``LayerCompositor.render`` throughput for the 10 shaders.
+# 2. ``LayerCompositor.blur_tex`` (Phase 3 refinement) vs the prior
+# PIL-roundtrip blur path.
+# 3. BossHP ``_apply_inset_shadow_gpu`` vs the CPU fallback.
+#
+# Reports p50/p95/p99 ms. No Tk involvement, so it's safe to run from
+# ``python tools/bench_compose.py`` in any shell.
+#
+# Targets (per the plan):
+# LayerCompositor.render single pass : p95 < 0.5 ms
+# blur_tex sigma=11 on 220x60        : p95 < 1.0 ms
+# inset_shadow_gpu  vs cpu           : >= 2x speed-up at sigma 11
 from __future__ import annotations
 
 import os
@@ -37,7 +36,7 @@ from PIL import Image, ImageDraw, ImageFilter  # noqa: E402
 
 
 def _run_on_worker(fn: Callable[[], List[float]]) -> List[float]:
-    """Run ``fn`` on a fresh daemon thread and return its result."""
+    # Run ``fn`` on a fresh daemon thread and return its result.
     out: List[List[float]] = []
 
     def target() -> None:
@@ -217,12 +216,11 @@ def _bench_inset_shadow() -> None:
 
 
 def _bench_menu_hud() -> None:
-    """v2.2.12: time MenuHudSpriteRenderer.render_pil end-to-end on the
-    same isolated worker lane the live ULW path uses.
-
-    Targets (1080p, 320×220 content frame):
-       avg < 1.5 ms, p95 < 3 ms.
-    """
+    # v2.2.12: time MenuHudSpriteRenderer.render_pil end-to-end on the
+    # same isolated worker lane the live ULW path uses.
+    #
+    # Targets (1080p, 320×220 content frame):
+    # avg < 1.5 ms, p95 < 3 ms.
     print('\n[4] MenuHudSpriteRenderer.render_pil — full HUD compose')
 
     def body() -> List[float]:

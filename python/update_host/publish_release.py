@@ -1,19 +1,13 @@
 # -*- coding: utf-8 -*-
-"""发布脚本: 把一个目录或 zip 包注册为某 channel/target 的最新版本.
-
-用法:
-  python publish_release.py --version 2.1.0 \
-      --package path/to/update-2.1.0.zip \
-      --type runtime-delta \
-      [--minimum 2.0.1] [--force] [--notes "修复..."] \
-      [--channel stable] [--target windows-x64] \
-      [--release-dir releases]
-
-会:
-  1. 把 zip 复制到 <release-dir>/<channel>/<target>/update-<version>-<type>.zip
-  2. 计算 SHA256
-  3. 写入 <release-dir>/<channel>/<target>/manifest.json
-"""
+# 发布脚本: 把一个目录或 zip 包注册为某 channel/target 的最新版本.
+#
+# 用法:
+# python publish_release.py --version 2.1.0       --package path/to/update-2.1.0.zip       --type runtime-delta       [--minimum 2.0.1] [--force] [--notes "修复..."]       [--channel stable] [--target windows-x64]       [--release-dir releases]
+#
+# 会:
+# 1. 把 zip 复制到 <release-dir>/<channel>/<target>/update-<version>-<type>.zip
+# 2. 计算 SHA256
+# 3. 写入 <release-dir>/<channel>/<target>/manifest.json
 
 from __future__ import annotations
 

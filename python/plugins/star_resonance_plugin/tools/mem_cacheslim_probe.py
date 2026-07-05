@@ -1,12 +1,11 @@
 # -*- coding: utf-8 -*-
-"""Live probe: decode ZAttrCacheSlim by locating the ordered attr-id keys.
-
-ZAttr<T> = { bool isDefault_; T value_; object bindWatchers_ } after the 0x10
-il2cpp header -> value_ at obj+0x14 (4B types) / obj+0x18 (8B types/refs).
-The object lacks an Id, so object[] order maps to keys via _indexPart. This
-probe dumps a target entity's typed attr array and scans _indexPart for known
-attr ids to find the keys layout.
-"""
+# Live probe: decode ZAttrCacheSlim by locating the ordered attr-id keys.
+#
+# ZAttr<T> = { bool isDefault_; T value_; object bindWatchers_ } after the 0x10
+# il2cpp header -> value_ at obj+0x14 (4B types) / obj+0x18 (8B types/refs).
+# The object lacks an Id, so object[] order maps to keys via _indexPart. This
+# probe dumps a target entity's typed attr array and scans _indexPart for known
+# attr ids to find the keys layout.
 from __future__ import annotations
 import struct, sys, os
 _HERE=os.path.dirname(os.path.abspath(__file__)); _ROOT=os.path.dirname(_HERE)

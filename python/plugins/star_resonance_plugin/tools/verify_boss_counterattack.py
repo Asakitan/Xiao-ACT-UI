@@ -1,12 +1,11 @@
 # -*- coding: utf-8 -*-
-"""Live verification: detect a boss/dummy counterattack via the boss-action feed.
-
-Attaches read-only to star.exe, locates visible entities, fast-polls each one's
-cast_skill_id (attr 100) + actor_state, and reports every cast edge the
-BossActionTracker emits -- i.e. each counterattack the dummy performs.
-
-    python tools/verify_boss_counterattack.py [seconds]
-"""
+# Live verification: detect a boss/dummy counterattack via the boss-action feed.
+#
+# Attaches read-only to star.exe, locates visible entities, fast-polls each one's
+# cast_skill_id (attr 100) + actor_state, and reports every cast edge the
+# BossActionTracker emits -- i.e. each counterattack the dummy performs.
+#
+# python tools/verify_boss_counterattack.py [seconds]
 from __future__ import annotations
 
 import os

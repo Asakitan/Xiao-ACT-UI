@@ -1,39 +1,37 @@
 # -*- coding: utf-8 -*-
-"""
-SAOPlayerGUIFloatHandlersMixin — fifteenth mixin extracted from
-SAOPlayerGUI (round 58 of the sao_gui split refactor). 9 methods,
-~138 lines.
-
-A grab-bag for the remaining small handlers on / around the
-floating SAO trigger button: drag / hover / context-menu /
-z-order maintenance + a handful of unrelated small helpers that
-didn't have a natural home in the earlier mixins.
-
-Methods:
-  * _float_enter(e) — mouse enter (hover state on).
-  * _float_leave(e) — mouse leave (hover state off).
-  * _lift_float_loop — periodic root.after lift() loop to keep
-    the float button above the fisheye overlay (Win32 z-order
-    maintenance fallback).
-  * _raise_panel_window(panel) — bring a floating panel to the
-    front + take focus.
-  * _setup_hotkeys — wire the SAOHotkeyManager to its 7 handlers.
-
-Required SAOPlayerGUI attrs:
-  * self._float, self._float_hwnd, self._float_alpha,
-    self._float_drag_origin, self._float_drag_active,
-    self._ctx_menu_open, self._lift_loop_active
-  * self._fisheye_ov, self._sao_menu, self._panels_hidden,
-    self.root, self.settings
-  * self._hotkey_mgr
-
-Required SAOPlayerGUI methods (via MRO):
-  * _toggle_sao_menu (Menu mixin)
-  * _toggle_recognition_menu, _toggle_topmost,
-    _toggle_hide_all_panels (Panels mixin)
-  * Game-specific toggles provided by plugin
-  * _show_plugin_popup_menu (Panels mixin)
-"""
+# SAOPlayerGUIFloatHandlersMixin — fifteenth mixin extracted from
+# SAOPlayerGUI (round 58 of the sao_gui split refactor). 9 methods,
+# ~138 lines.
+#
+# A grab-bag for the remaining small handlers on / around the
+# floating SAO trigger button: drag / hover / context-menu /
+# z-order maintenance + a handful of unrelated small helpers that
+# didn't have a natural home in the earlier mixins.
+#
+# Methods:
+# * _float_enter(e) — mouse enter (hover state on).
+# * _float_leave(e) — mouse leave (hover state off).
+# * _lift_float_loop — periodic root.after lift() loop to keep
+# the float button above the fisheye overlay (Win32 z-order
+# maintenance fallback).
+# * _raise_panel_window(panel) — bring a floating panel to the
+# front + take focus.
+# * _setup_hotkeys — wire the SAOHotkeyManager to its 7 handlers.
+#
+# Required SAOPlayerGUI attrs:
+# * self._float, self._float_hwnd, self._float_alpha,
+# self._float_drag_origin, self._float_drag_active,
+# self._ctx_menu_open, self._lift_loop_active
+# * self._fisheye_ov, self._sao_menu, self._panels_hidden,
+# self.root, self.settings
+# * self._hotkey_mgr
+#
+# Required SAOPlayerGUI methods (via MRO):
+# * _toggle_sao_menu (Menu mixin)
+# * _toggle_recognition_menu, _toggle_topmost,
+# _toggle_hide_all_panels (Panels mixin)
+# * Game-specific toggles provided by plugin
+# * _show_plugin_popup_menu (Panels mixin)
 
 from __future__ import annotations
 
@@ -55,7 +53,7 @@ _user32 = ctypes.windll.user32
 
 
 class SAOPlayerGUIFloatHandlersMixin:
-    """Mixin bundling float-button drag handlers + small misc helpers."""
+    # Mixin bundling float-button drag handlers + small misc helpers.
 
     # Round 76 of sao_gui split refactor: _float_click / _float_drag /
     # _float_release were dead code. _create_floating_widget binds the
@@ -66,7 +64,7 @@ class SAOPlayerGUIFloatHandlersMixin:
     # Removed to fix the latent AttributeError + clear the noise.
 
     def _float_enter(self, e):
-        """高亮悬浮菜单按钮"""
+        # 高亮悬浮菜单按钮
         try:
             self._float_hover = True
             self._float_alpha = 1.0
@@ -75,7 +73,7 @@ class SAOPlayerGUIFloatHandlersMixin:
             pass
 
     def _float_leave(self, e):
-        """恢复默认色"""
+        # 恢复默认色
         try:
             self._float_hover = False
             self._float_alpha = 1.0   # 完全不透明 — 覆盖游戏原生条
@@ -84,15 +82,14 @@ class SAOPlayerGUIFloatHandlersMixin:
             pass
 
     def _lift_float_loop(self):
-        """SAO 菜单开启时持续将悬浮按钮保持在最上层.
-
-        v3.1.9 round 22: cadence bumped from 150 ms (6.7 Hz) to 250 ms
-        (4 Hz). The float button is the small floating menu/status badge
-        and the user can't perceive the 100 ms-longer cover-recovery
-        delay, but cutting the per-second SetWindowPos calls from ~7
-        to ~4 trims ~100-300 us/sec of main-thread work whenever the
-        SAO menu is open.
-        """
+        # SAO 菜单开启时持续将悬浮按钮保持在最上层.
+        #
+        # v3.1.9 round 22: cadence bumped from 150 ms (6.7 Hz) to 250 ms
+        # (4 Hz). The float button is the small floating menu/status badge
+        # and the user can't perceive the 100 ms-longer cover-recovery
+        # delay, but cutting the per-second SetWindowPos calls from ~7
+        # to ~4 trims ~100-300 us/sec of main-thread work whenever the
+        # SAO menu is open.
         if self._destroyed or not self._lift_loop_active:
             return
         try:
@@ -107,7 +104,7 @@ class SAOPlayerGUIFloatHandlersMixin:
             pass
 
     def _raise_panel_window(self, panel):
-        """把面板提到最前并取焦, 防止被 SAO overlay 或其他 topmost 挡住."""
+        # 把面板提到最前并取焦, 防止被 SAO overlay 或其他 topmost 挡住.
         if panel is None:
             return
         win = getattr(panel, '_win', None)
@@ -150,12 +147,11 @@ class SAOPlayerGUIFloatHandlersMixin:
         }, hotkey_provider=self._plugin_hotkey_map)
 
     def _plugin_hotkey_map(self):
-        """Resolve plugin-registered hotkeys for the hotkey listener.
-
-        Returns ``{action: {'key': 'F6', 'callback': fn}}`` for active plugins,
-        honouring a user override in ``settings['hotkeys']`` over the plugin's
-        declared default. Plugin callbacks are marshalled to the Tk thread.
-        """
+        # Resolve plugin-registered hotkeys for the hotkey listener.
+        #
+        # Returns ``{action: {'key': 'F6', 'callback': fn}}`` for active plugins,
+        # honouring a user override in ``settings['hotkeys']`` over the plugin's
+        # declared default. Plugin callbacks are marshalled to the Tk thread.
         out = {}
         try:
             from act_platform.runtime import ensure_act_plugin_manager
@@ -181,12 +177,11 @@ class SAOPlayerGUIFloatHandlersMixin:
         return out
 
     def _create_floating_widget(self):
-        """NerveGear 按钮 — SAO 菜单可见入口 (GPU 绘制).
-
-        左键打开 SAO 菜单, 右键迷你上下文菜单 (主题切换/关于/退出).
-        位置: 屏幕右下角, 可拖动, 位置持久化到 settings.
-        空闲时有呼吸辉光动画.
-        """
+        # NerveGear 按钮 — SAO 菜单可见入口 (GPU 绘制).
+        #
+        # 左键打开 SAO 菜单, 右键迷你上下文菜单 (主题切换/关于/退出).
+        # 位置: 屏幕右下角, 可拖动, 位置持久化到 settings.
+        # 空闲时有呼吸辉光动画.
         from gui_modules.sao_gui_nervegear_button import SIZE as NG_SIZE, GpuNerveGearButton
 
         try:
@@ -360,7 +355,7 @@ class SAOPlayerGUIFloatHandlersMixin:
             pass
 
     def _ensure_float_button_visible(self):
-        """Fail-safe: show the GPU trigger if startup animation stalls."""
+        # Fail-safe: show the GPU trigger if startup animation stalls.
         if getattr(self, '_destroyed', False):
             return
         nervgear_on = bool(getattr(self, '_get_setting', lambda *a: True)('nervgear_mode', True))
@@ -380,12 +375,11 @@ class SAOPlayerGUIFloatHandlersMixin:
         self._sync_float_button_geometry(show=True)
 
     def _start_topmost_loop(self):
-        """Re-assert TOPMOST on the GPU trigger button every 2s.
-
-        Skip while SAO menu or fisheye is active — the menu's own
-        z-order management handles topmost, and re-raising the trigger
-        button here would push it above panels rendered on the fisheye.
-        """
+        # Re-assert TOPMOST on the GPU trigger button every 2s.
+        #
+        # Skip while SAO menu or fisheye is active — the menu's own
+        # z-order management handles topmost, and re-raising the trigger
+        # button here would push it above panels rendered on the fisheye.
         if getattr(self, '_destroyed', False):
             return
         menu = getattr(self, '_sao_menu', None)
@@ -404,7 +398,7 @@ class SAOPlayerGUIFloatHandlersMixin:
             pass
 
     def _toggle_float_button_visibility(self):
-        """Insert key: hide/show ALL overlay layers (compositor + button)."""
+        # Insert key: hide/show ALL overlay layers (compositor + button).
         try:
             from render.gpu_overlay_window import (
                 get_unified_overlay_mode, _unified_overlay_instance)
@@ -433,7 +427,7 @@ class SAOPlayerGUIFloatHandlersMixin:
             self._float_button_hidden = False
 
     def _toggle_nervegear_theme(self):
-        """Toggle NerveGear button between dark and light theme."""
+        # Toggle NerveGear button between dark and light theme.
         self._ng_theme = 'light' if getattr(self, '_ng_theme', 'dark') == 'dark' else 'dark'
         try:
             self._set_setting('nervegear_theme', self._ng_theme)
@@ -444,7 +438,7 @@ class SAOPlayerGUIFloatHandlersMixin:
             render_fn()
 
     def _start_nervegear_glow(self):
-        """Breathing glow animation for the NerveGear button."""
+        # Breathing glow animation for the NerveGear button.
         if getattr(self, '_ng_breath_after', None) is not None:
             return
         import math

@@ -1,43 +1,41 @@
 # -*- coding: utf-8 -*-
-"""
-SAOPlayerGUIPanelsMixin — ninth mixin extracted from SAOPlayerGUI
-(round 47 of the sao_gui split refactor). 11 methods, ~190 lines.
-
-Combines the remaining panel-toggle helpers and small settings
-toggles that didn't have a natural home in earlier mixins:
-
-Panel visibility (1):
-  * _toggle_hide_all_panels — one-shot withdraw / restore of every
-    floating panel. Snapshots which panels were visible so restore can
-    re-show only those.
-
-Recognition (1):
-  * _toggle_recognition_menu — menu entry that flips the
-    recognition_active flag (or starts the engines on first toggle)
-
-Settings toggles:
-  * _toggle_sound_enabled — sound on/off (delegates to sao_sound)
-  * _adj_sound_volume(delta) — sound volume +/-
-  * _toggle_topmost — toggles -topmost on the float + status panels
-
-Required SAOPlayerGUI attrs:
-  * self._status_panel, self._update_panel
-  * self._panels_hidden, self._hidden_panels_snapshot
-  * self._float, self.root
-  * self._recog_lock, self._recognition_active,
-    self._recognition_engine, self._recognition_engines
-  * self._fisheye_ov
-
-Required SAOPlayerGUI methods (via MRO):
-  * _dismiss_sao_menu_for_panel (Menu mixin)
-  * _raise_panel_window (SAOPlayerGUI)
-  * _maybe_stop_fisheye, _any_panel_open, _start_fisheye_overlay
-    (Fisheye mixin)
-  * _refresh_menu_if_open (Menu mixin)
-  * _get_setting, _set_setting (SAOPlayerGUI)
-    * _start_recognition,
-    _update_status_panel (SAOPlayerGUI)
-"""
+# SAOPlayerGUIPanelsMixin — ninth mixin extracted from SAOPlayerGUI
+# (round 47 of the sao_gui split refactor). 11 methods, ~190 lines.
+#
+# Combines the remaining panel-toggle helpers and small settings
+# toggles that didn't have a natural home in earlier mixins:
+#
+# Panel visibility (1):
+# * _toggle_hide_all_panels — one-shot withdraw / restore of every
+# floating panel. Snapshots which panels were visible so restore can
+# re-show only those.
+#
+# Recognition (1):
+# * _toggle_recognition_menu — menu entry that flips the
+# recognition_active flag (or starts the engines on first toggle)
+#
+# Settings toggles:
+# * _toggle_sound_enabled — sound on/off (delegates to sao_sound)
+# * _adj_sound_volume(delta) — sound volume +/-
+# * _toggle_topmost — toggles -topmost on the float + status panels
+#
+# Required SAOPlayerGUI attrs:
+# * self._status_panel, self._update_panel
+# * self._panels_hidden, self._hidden_panels_snapshot
+# * self._float, self.root
+# * self._recog_lock, self._recognition_active,
+# self._recognition_engine, self._recognition_engines
+# * self._fisheye_ov
+#
+# Required SAOPlayerGUI methods (via MRO):
+# * _dismiss_sao_menu_for_panel (Menu mixin)
+# * _raise_panel_window (SAOPlayerGUI)
+# * _maybe_stop_fisheye, _any_panel_open, _start_fisheye_overlay
+# (Fisheye mixin)
+# * _refresh_menu_if_open (Menu mixin)
+# * _get_setting, _set_setting (SAOPlayerGUI)
+# * _start_recognition,
+# _update_status_panel (SAOPlayerGUI)
 
 from __future__ import annotations
 
@@ -66,10 +64,10 @@ def _finite_int(value: Any, default: int = 0, *, lo: Optional[int] = None, hi: O
 
 
 class SAOPlayerGUIPanelsMixin:
-    """Mixin bundling plugin-panel visibility and settings toggles."""
+    # Mixin bundling plugin-panel visibility and settings toggles.
 
     def _toggle_ai_editor_panel(self):
-        """启动独立 AI Editor GUI 窗口 (pywebview)."""
+        # 启动独立 AI Editor GUI 窗口 (pywebview).
         close_external = getattr(self, '_close_sao_menu_for_external_command', None)
         if callable(close_external):
             close_external()
@@ -167,7 +165,7 @@ class SAOPlayerGUIPanelsMixin:
             self.root.after(120, lambda: self._raise_panel_window(self._process_selector_panel))
 
     def _toggle_act_plugin_manager_panel(self):
-        """打开/关闭插件管理面板 (tkinter)."""
+        # 打开/关闭插件管理面板 (tkinter).
         self._dismiss_sao_menu_for_panel()
         if not self._act_plugin_manager_panel:
             self._act_plugin_manager_panel = PluginManagerPanel(self.root, self)
@@ -180,7 +178,7 @@ class SAOPlayerGUIPanelsMixin:
             self.root.after(120, lambda: self._raise_panel_window(self._act_plugin_manager_panel))
 
     def _open_act_plugin_manager(self, tab='manage'):
-        """打开插件管理面板并切到指定页签 (manage / panels)."""
+        # 打开插件管理面板并切到指定页签 (manage / panels).
         self._dismiss_sao_menu_for_panel()
         self._ensure_plugin_window_bridge()
         if not self._act_plugin_manager_panel:
@@ -196,12 +194,11 @@ class SAOPlayerGUIPanelsMixin:
         self.root.after(120, lambda: self._raise_panel_window(panel))
 
     def _ensure_plugin_window_bridge(self):
-        """订阅 ``plugin_open_window``：让插件用 ``ctx.open_window`` 弹出独立窗口。
-
-        幂等。插件按钮动作在 Tk 主线程触发，发布的事件在此同线程回调；为稳妥仍
-        marshal 到 ``root.after``。任何面板可见前都会先经过 manager / 分离面板 /
-        popup 三个入口之一，故此处必被激活。
-        """
+        # 订阅 ``plugin_open_window``：让插件用 ``ctx.open_window`` 弹出独立窗口。
+        #
+        # 幂等。插件按钮动作在 Tk 主线程触发，发布的事件在此同线程回调；为稳妥仍
+        # marshal 到 ``root.after``。任何面板可见前都会先经过 manager / 分离面板 /
+        # popup 三个入口之一，故此处必被激活。
         if getattr(self, '_plugin_window_bridge_token', None):
             return
         try:
@@ -227,7 +224,7 @@ class SAOPlayerGUIPanelsMixin:
             self._plugin_window_bridge_token = ''
 
     def _open_plugin_detached_panel(self, plugin_id, panel_id='', width=0, height=0):
-        """打开某插件某面板的独立窗口 (一个面板一个窗口；尺寸由插件声明，缺省则默认)."""
+        # 打开某插件某面板的独立窗口 (一个面板一个窗口；尺寸由插件声明，缺省则默认).
         self._dismiss_sao_menu_for_panel()
         self._ensure_plugin_window_bridge()
         panels = getattr(self, '_plugin_detached_panels', None)
@@ -249,7 +246,7 @@ class SAOPlayerGUIPanelsMixin:
             pass
 
     def _toggle_plugin_enabled(self, plugin_id, enabled):
-        """启用/禁用某个插件 (供 popup 菜单调用)."""
+        # 启用/禁用某个插件 (供 popup 菜单调用).
         from act_platform.runtime import act_plugin_disable, act_plugin_enable
         try:
             if enabled:
@@ -270,7 +267,7 @@ class SAOPlayerGUIPanelsMixin:
             pass
 
     def _show_plugin_popup_menu(self):
-        """SAO 插件 popup 菜单 — 插件管理 + 各插件(打开面板/启停/置顶)."""
+        # SAO 插件 popup 菜单 — 插件管理 + 各插件(打开面板/启停/置顶).
         import tkinter as tk
 
         from act_platform.runtime import act_plugin_menu
@@ -329,7 +326,7 @@ class SAOPlayerGUIPanelsMixin:
             menu.destroy()
 
     def _toggle_hide_all_panels(self):
-        """一键隐藏/显示所有浮动面板 (不销毁, 只是 withdraw/deiconify)"""
+        # 一键隐藏/显示所有浮动面板 (不销毁, 只是 withdraw/deiconify)
         panels = []
         for attr in vars(self):
             if attr.endswith('_panel') and attr.startswith('_'):
@@ -390,7 +387,7 @@ class SAOPlayerGUIPanelsMixin:
             return 'dark'
 
     def _apply_act_panel_theme(self, theme: Optional[str] = None) -> None:
-        """Apply the grouped panel theme to all registered Tk plugin panels."""
+        # Apply the grouped panel theme to all registered Tk plugin panels.
         theme = 'light' if str(theme or self._act_panel_theme()).lower() == 'light' else 'dark'
         try:
             _set_sao_panel_theme(theme, repaint_registered=True)
@@ -424,7 +421,7 @@ class SAOPlayerGUIPanelsMixin:
                     pass
 
     def _toggle_recognition_menu(self):
-        """切换插件识别开关。"""
+        # 切换插件识别开关。
         with self._recog_lock:
             if not self._recognition_active:
                 if not self._recognition_engine and not self._recognition_engines:

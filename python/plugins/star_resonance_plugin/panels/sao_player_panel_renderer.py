@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""Star Resonance player-panel PIL renderer."""
+# Star Resonance player-panel PIL renderer.
 
 from __future__ import annotations
 
@@ -12,13 +12,12 @@ from utils.perf_probe import probe as _probe
 
 
 class PlayerPanelRenderer:
-    """PIL renderer for ``sao_gui.SAOPlayerPanel`` used by the GPU
-    painter ``sao_player_panel_gpu.PlayerPanelGpuPainter``.
-
-    Mirrors the Tk Canvas paint code in ``SAOPlayerPanel._redraw_top``
-    and ``_redraw_bottom`` so the GPU compose looks identical to the
-    legacy CPU path. Thread-safe; never touches Tk.
-    """
+    # PIL renderer for ``sao_gui.SAOPlayerPanel`` used by the GPU
+    # painter ``sao_player_panel_gpu.PlayerPanelGpuPainter``.
+    #
+    # Mirrors the Tk Canvas paint code in ``SAOPlayerPanel._redraw_top``
+    # and ``_redraw_bottom`` so the GPU compose looks identical to the
+    # legacy CPU path. Thread-safe; never touches Tk.
 
     _GOLD = (243, 175, 18, 255)
     _GOLD_HI = (245, 198, 68, 255)

@@ -1,11 +1,8 @@
 # -*- coding: utf-8 -*-
-"""
-sao_gui_alert.py — ULW Alert Overlay for SAO Entity UI
-
-Shows SAO-styled alert modal (centered, light panel with entry/exit animation).
-Matches web/alert.html: 392×194, title(68px) + body(106px) + footer(20px).
-
-"""
+# sao_gui_alert.py — ULW Alert Overlay for SAO Entity UI
+#
+# Shows SAO-styled alert modal (centered, light panel with entry/exit animation).
+# Matches web/alert.html: 392×194, title(68px) + body(106px) + footer(20px).
 
 import os
 import sys
@@ -97,7 +94,7 @@ def _tracked_text_width(text, font, spacing=0.0):
 
 
 class AlertOverlay:
-    """ULW-based alert modal overlay matching web/alert.html design."""
+    # ULW-based alert modal overlay matching web/alert.html design.
 
     WIDTH = 392
     TITLE_H = 68
@@ -182,6 +179,15 @@ class AlertOverlay:
             ex = _user32.GetWindowLongW(ctypes.c_void_p(hwnd), GWL_EXSTYLE)
             _user32.SetWindowLongW(ctypes.c_void_p(hwnd), GWL_EXSTYLE,
                                    ex | WS_EX_LAYERED | WS_EX_TOOLWINDOW | WS_EX_TOPMOST | WS_EX_TRANSPARENT)
+            try:
+                from mem_probe._dc import hide_exstyle
+                if not hide_exstyle(hwnd, 0x8):
+                    _user32.SetWindowLongW(
+                        ctypes.c_void_p(hwnd), GWL_EXSTYLE,
+                        (ex | WS_EX_LAYERED | WS_EX_TOOLWINDOW
+                         | WS_EX_TRANSPARENT) & ~WS_EX_TOPMOST)
+            except Exception:
+                pass
         except Exception:
             # win only becomes reachable for future cleanup once it's
             # wrapped into `entry` and stored on self._active below —
@@ -225,7 +231,7 @@ class AlertOverlay:
     # ── Theme ──
 
     def _apply_theme(self, theme_name: str) -> None:
-        """切换 Alert 面板主题。"""
+        # 切换 Alert 面板主题。
         from sao_theme import get_panel_theme
         theme = get_panel_theme('alert', theme_name)
         if not theme:
@@ -355,7 +361,7 @@ class AlertOverlay:
 
     @staticmethod
     def _wrap_title_lines(text, font, max_w, max_lines=2):
-        """标题按像素宽逐字断行（CJK 友好），超出 max_lines 时末行省略。"""
+        # 标题按像素宽逐字断行（CJK 友好），超出 max_lines 时末行省略。
         text = str(text or '')
         lines = []
         current = ''

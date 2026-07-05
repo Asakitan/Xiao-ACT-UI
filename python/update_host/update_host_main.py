@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""Frozen entrypoint for SAO Auto Update Host."""
+# Frozen entrypoint for SAO Auto Update Host.
 
 from __future__ import annotations
 

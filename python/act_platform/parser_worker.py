@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""One-shot process worker for plugin parser-adapter handlers."""
+# One-shot process worker for plugin parser-adapter handlers.
 
 from __future__ import annotations
 

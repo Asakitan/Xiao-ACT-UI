@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""Entity-mode ACT trigger/timer manager panel."""
+# Entity-mode ACT trigger/timer manager panel.
 
 from __future__ import annotations
 
@@ -64,7 +64,7 @@ def _format_number(value: Any, default: float = 0.0, *, lo: float | None = None,
 
 
 class TriggerTimerManagerPanel:
-    """SAO-styled Toplevel for ACT alert/timer rule management."""
+    # SAO-styled Toplevel for ACT alert/timer rule management.
 
     def __init__(self, root: tk.Misc, owner: Any):
         self.root = root
@@ -267,7 +267,7 @@ class TriggerTimerManagerPanel:
 
     @staticmethod
     def _timer_countdown(item: Mapping[str, Any]) -> str:
-        """Format a timer item's remaining/duration as MM:SS countdown text."""
+        # Format a timer item's remaining/duration as MM:SS countdown text.
         import time as _time
         dur = _finite_float(item.get('duration_s') or item.get('threshold'), 0.0, lo=0.0)
         created = _finite_float(item.get('created_at'), 0.0, lo=0.0)
@@ -284,7 +284,7 @@ class TriggerTimerManagerPanel:
 
     @staticmethod
     def _timer_ratio(item: Mapping[str, Any]) -> float:
-        """Compute progress ratio (0..1) for a timer bar."""
+        # Compute progress ratio (0..1) for a timer bar.
         import time as _time
         dur = _finite_float(item.get('duration_s') or item.get('threshold'), 0.0, lo=0.0)
         if dur <= 0:
@@ -366,7 +366,7 @@ class TriggerTimerManagerPanel:
 
     @staticmethod
     def _display_rules(status: Mapping[str, Any]) -> list[Mapping[str, Any]]:
-        """Merge trigger rows with timer-only rows while avoiding duplicate IDs."""
+        # Merge trigger rows with timer-only rows while avoiding duplicate IDs.
         merged: list[Mapping[str, Any]] = []
         seen: set[str] = set()
         for source in (status.get('triggers') or [], status.get('timers') or []):

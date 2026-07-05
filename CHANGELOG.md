@@ -2,6 +2,17 @@
 
 逐版本变更记录, 最新在前。本文件由 config.py 内联的历史注释迁出。
 
+## v5.2.13: 平台/插件契约梳理、ACT/内存/TCP 读路径整理与旧辅助文件清理.
+
+  - **platform / plugin foundation**:
+    - `act_platform/*`、`main.py`、`settings_manager.py`、`sao_plugin_ui_render.py` 等路径同步收口平台/插件边界、CLI/runtime 入口与声明式 UI 说明，减少跨层耦合歧义。
+  - **Star Resonance runtime / ACT stack**:
+    - `net/*`、`act_runtime_bridge.py`、`engines/*`、`panels/*`、`vision/*`、大量 `tools/*selftest.py` 一并整理，覆盖 ACT 快照、Boss 机制、自动躲避、联动按键、实体/面板契约与离线回放工具链。
+  - **memory / IL2CPP / probe tooling**:
+    - `mem_probe/*` 与 `plugins/star_resonance_plugin/mem/**` 路径批量整理只读内存读取、anchor/klass/offset/bundle 缓存、实体/伤害/场景/名称/区域解析说明，并清理旧的实验/辅助文件。
+  - **cleanup**:
+    - 移除不再使用的旧探针/实验文件与重复 vendored GLFW 辅助项，统一当前源码树。
+
 ## v5.2.12: 覆盖层/GDI 泄漏兜底、Tk 线程契约收紧与桌宠诊断工具补齐.
 
   - **overlay / resource cleanup**:

@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""Focused PacketBridge watchdog regression tests."""
+# Focused PacketBridge watchdog regression tests.
 from __future__ import annotations
 
 import os

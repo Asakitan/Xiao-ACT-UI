@@ -1,10 +1,7 @@
 # -*- coding: utf-8 -*-
-"""
-SAO Auto — 统一游戏状态模型
-
-所有识别结果汇总到 GameState，UI 只订阅此对象。
-
-"""
+# SAO Auto — 统一游戏状态模型
+#
+# 所有识别结果汇总到 GameState，UI 只订阅此对象。
 
 import copy as _copy
 import time
@@ -36,7 +33,7 @@ _CACHE_IDENTITY_FIELDS = frozenset((
 
 
 def compute_burst_ready(skill_slots, watched_slots) -> bool:
-    """Return True when every watched slot is ready and at least one matched."""
+    # Return True when every watched slot is ready and at least one matched.
     if _CY_PACKET is not None:
         try:
             return bool(_CY_PACKET.burst_ready(skill_slots, watched_slots))
@@ -97,7 +94,7 @@ def compute_burst_ready(skill_slots, watched_slots) -> bool:
 
 @dataclass
 class GameState:
-    """游戏状态快照 — 所有字段由识别层写入，UI 层只读。"""
+    # 游戏状态快照 — 所有字段由识别层写入，UI 层只读。
 
     # ── 身份信息 ──
     player_name: str = ''
@@ -206,7 +203,7 @@ class GameState:
 
     @property
     def level_text(self) -> str:
-        """格式化等级文本: 60(+12)"""
+        # 格式化等级文本: 60(+12)
         if self.level_extra > 0:
             return f'{self.level_base}(+{self.level_extra})'
         return str(self.level_base)
@@ -285,7 +282,7 @@ class GameState:
 
 
 class GameStateManager:
-    """线程安全的状态管理器，支持订阅通知。"""
+    # 线程安全的状态管理器，支持订阅通知。
 
     def __init__(self):
         self._state = GameState()
@@ -298,19 +295,18 @@ class GameStateManager:
             return self._state
 
     def snapshot(self) -> GameState:
-        """Return a shallow immutable-style copy of the current state.
-
-        Consumers such as ACT analytics and replay tests need a stable view
-        without holding the manager lock while they serialize or render.  The
-        dataclass mostly contains primitives/lists/dicts; callers that mutate
-        nested structures should still copy those structures explicitly.
-        """
+        # Return a shallow immutable-style copy of the current state.
+        #
+        # Consumers such as ACT analytics and replay tests need a stable view
+        # without holding the manager lock while they serialize or render.  The
+        # dataclass mostly contains primitives/lists/dicts; callers that mutate
+        # nested structures should still copy those structures explicitly.
         with self._lock:
             return _copy.copy(self._state)
 
     @_probe.decorate('state.update')
     def update(self, **kwargs):
-        """部分更新状态字段并通知所有监听器 (含范围校验)"""
+        # 部分更新状态字段并通知所有监听器 (含范围校验)
         with self._lock:
             # ── 预过滤: 拦截 HP/LV/STA 的 0 值, 在 setattr 之前保护 ──
             allow_zero_hp = False
@@ -473,7 +469,7 @@ class GameStateManager:
     # ── 缓存持久化 ──
 
     def load_cache(self, settings):
-        """从 settings 加载上次缓存的游戏状态 (启动时调用)"""
+        # 从 settings 加载上次缓存的游戏状态 (启动时调用)
         cache = settings.get('game_cache', {})
         if not cache or not isinstance(cache, dict):
             return
@@ -503,14 +499,13 @@ class GameStateManager:
                 pass
 
     def save_cache(self, settings, *, persist: bool = True):
-        """将当前状态持久化到 settings (定期调用)
-
-        身份类字段 (name/level/profession) 仅在收到有效值时才覆写缓存,
-        避免工具中途启动时用默认 0/空字符串覆盖上次缓存的值。
-
-        persist=False 时只写 settings dict 不落盘, 由调用方统一 save()
-        避免同一批写入中出现多次磁盘 I/O。
-        """
+        # 将当前状态持久化到 settings (定期调用)
+        #
+        # 身份类字段 (name/level/profession) 仅在收到有效值时才覆写缓存,
+        # 避免工具中途启动时用默认 0/空字符串覆盖上次缓存的值。
+        #
+        # persist=False 时只写 settings dict 不落盘, 由调用方统一 save()
+        # 避免同一批写入中出现多次磁盘 I/O。
         with self._lock:
             cache = dict(settings.get('game_cache', {}) or {})
             for k in _CACHE_FIELDS:

@@ -1,28 +1,27 @@
-"""name_tables - 统一 "ID -> 中文名" 解析器.
-
-所有显示层(TCP 解析 / 面板)都经此把数字 ID 变中文名, 杜绝裸数字。
-
-数据源(运行时合并, 优先级 高->低, 高覆盖低):
-    1. assets/name_tables/tcp_preparse_name_cache(.local).json
-       ← 我们从游戏内存/TCP 实测解析出的名字(权威): text=内存真名, id=指针表/锚定匹配。
-         运行时最后合并, 故覆盖 <kind>.json。
-    2. assets/name_tables/<kind>.json, {id: name}
-       ← 已固化的稳定名字表。由 tools.tablekit.hybrid_name_tables 生成: 以上面的解析
-         结果(cache)为权威, 隔壁 StarResonanceDps/resonance-logs-cn 静态表仅兜底缺失 id。
-         注意: hybrid --overlay-only 把 cache 安全叠加到本表(不触发分类器重建)。
-    3. 生成期参考: StarResonanceDps/resonance-logs-cn 静态表(隔壁工程, 可能过时/不全)。
-
-注意: ``skill`` 是兼容入口, 只做语义分流和兜底标签, 不再对应 runtime
-``skill.json`` 资产。所有技能 ID 必须进入更明确的 *_skill 分类。
-
-kind: skill / monster / boss / buff / dungeon / boss_mechanic / npc / item ...
-
-用法:
-    from tools.tablekit.name_tables import names
-    names.skill(1101)            -> "场地标记01"  (或 "技能#1101" 兜底)
-    names.resolve("dungeon", id) -> 中文名 或 兜底
-    names.coverage()             -> {kind: count}
-"""
+# name_tables - 统一 "ID -> 中文名" 解析器.
+#
+# 所有显示层(TCP 解析 / 面板)都经此把数字 ID 变中文名, 杜绝裸数字。
+#
+# 数据源(运行时合并, 优先级 高->低, 高覆盖低):
+# 1. assets/name_tables/tcp_preparse_name_cache(.local).json
+# ← 我们从游戏内存/TCP 实测解析出的名字(权威): text=内存真名, id=指针表/锚定匹配。
+# 运行时最后合并, 故覆盖 <kind>.json。
+# 2. assets/name_tables/<kind>.json, {id: name}
+# ← 已固化的稳定名字表。由 tools.tablekit.hybrid_name_tables 生成: 以上面的解析
+# 结果(cache)为权威, 隔壁 StarResonanceDps/resonance-logs-cn 静态表仅兜底缺失 id。
+# 注意: hybrid --overlay-only 把 cache 安全叠加到本表(不触发分类器重建)。
+# 3. 生成期参考: StarResonanceDps/resonance-logs-cn 静态表(隔壁工程, 可能过时/不全)。
+#
+# 注意: ``skill`` 是兼容入口, 只做语义分流和兜底标签, 不再对应 runtime
+# ``skill.json`` 资产。所有技能 ID 必须进入更明确的 *_skill 分类。
+#
+# kind: skill / monster / boss / buff / dungeon / boss_mechanic / npc / item ...
+#
+# 用法:
+# from tools.tablekit.name_tables import names
+# names.skill(1101)            -> "场地标记01"  (或 "技能#1101" 兜底)
+# names.resolve("dungeon", id) -> 中文名 或 兜底
+# names.coverage()             -> {kind: count}
 from __future__ import annotations
 
 import json
@@ -38,13 +37,12 @@ _REPO = os.path.dirname(_SAO)
 
 
 def _resolve_assets_dir() -> str:
-    """assets/ 根目录解析 (onedir 友好)。
-
-    冻结 onedir 下 assets/ 被 build_release.bat 提升到 BASE_DIR(exe 顶层), 而本模块
-    __file__ 在 runtime/tools/tablekit/ → _SAO/assets=runtime/assets 已被搬空, 所有
-    name_table json 读不到 → names 全部回退 "技能#<id>" 占位。优先 config.resource_path
-    (BASE_DIR 优先, BUNDLE_DIR 回退), 找不到再回退 __file__ 相对(dev 树/未冻结)。
-    """
+    # assets/ 根目录解析 (onedir 友好)。
+    #
+    # 冻结 onedir 下 assets/ 被 build_release.bat 提升到 BASE_DIR(exe 顶层), 而本模块
+    # __file__ 在 runtime/tools/tablekit/ → _SAO/assets=runtime/assets 已被搬空, 所有
+    # name_table json 读不到 → names 全部回退 "技能#<id>" 占位。优先 config.resource_path
+    # (BASE_DIR 优先, BUNDLE_DIR 回退), 找不到再回退 __file__ 相对(dev 树/未冻结)。
     try:
         from config import resource_path  # BASE_DIR-first, BUNDLE_DIR fallback
         cand = resource_path("assets")
@@ -167,7 +165,7 @@ def _semantic_kind(kind: str, id_: object) -> str:
 
 
 def _coerce_table(obj) -> Dict[int, str]:
-    """把 {id:name} 或 {id:{Name:..}} 统一成 {int_id: str_name}."""
+    # 把 {id:name} 或 {id:{Name:..}} 统一成 {int_id: str_name}.
     out: Dict[int, str] = {}
     if not isinstance(obj, dict):
         return out
@@ -205,7 +203,7 @@ _STATIC_CACHE_LOADED = False
 
 
 def _load_static_cache(kind: str) -> Dict[int, str]:
-    """静态全表缓存里该 kind 段的 {id:name} (一次性加载, 最低优先级基线)。"""
+    # 静态全表缓存里该 kind 段的 {id:name} (一次性加载, 最低优先级基线)。
     global _STATIC_CACHE_LOADED
     section = _STATIC_KIND_SECTION.get(kind)
     if section is None:
@@ -285,13 +283,12 @@ def _load_tcp_preparse_cache(kind: str) -> Dict[int, str]:
 
 
 def _load_live_act_matches(kind: str) -> Dict[int, str]:
-    """Backward-compatible view of live-assisted stable name matches.
-
-    Historical ACT replay checks imported this private helper directly.  The
-    volatile ``live_probe_act_matched_rows.json`` dump is intentionally local;
-    the reusable result now lives in the stable per-kind tables plus sanitized
-    TCP preparse cache.
-    """
+    # Backward-compatible view of live-assisted stable name matches.
+    #
+    # Historical ACT replay checks imported this private helper directly.  The
+    # volatile ``live_probe_act_matched_rows.json`` dump is intentionally local;
+    # the reusable result now lives in the stable per-kind tables plus sanitized
+    # TCP preparse cache.
     return NameResolver().kind_map(kind)
 
 

@@ -1,11 +1,10 @@
 # -*- coding: utf-8 -*-
-"""Shared combat semantic enrichment for ACT, AutoKey, and BossRaid.
-
-This module turns parser runtime events into small, stable ``facts`` rows.
-It does not own packet parsing and does not store raw payload bytes; callers can
-attach the returned dictionaries to ACT event payloads, runtime caches, or
-diagnostic snapshots.
-"""
+# Shared combat semantic enrichment for ACT, AutoKey, and BossRaid.
+#
+# This module turns parser runtime events into small, stable ``facts`` rows.
+# It does not own packet parsing and does not store raw payload bytes; callers can
+# attach the returned dictionaries to ACT event payloads, runtime caches, or
+# diagnostic snapshots.
 
 from __future__ import annotations
 

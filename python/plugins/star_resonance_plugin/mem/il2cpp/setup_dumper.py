@@ -1,9 +1,8 @@
-"""自动下载并解压 Il2CppDumper 到 bin/.
-
-CLI:
-    python -m tools.mem_probe.il2cpp.setup_dumper
-    python -m tools.mem_probe.il2cpp.setup_dumper --version v6.7.46
-"""
+# 自动下载并解压 Il2CppDumper 到 bin/.
+#
+# CLI:
+# python -m tools.mem_probe.il2cpp.setup_dumper
+# python -m tools.mem_probe.il2cpp.setup_dumper --version v6.7.46
 
 from __future__ import annotations
 
@@ -32,7 +31,7 @@ def _fetch_release(version: Optional[str]) -> dict:
 
 
 def _pick_asset(release: dict) -> dict:
-    """挑 net6 windows 版本."""
+    # 挑 net6 windows 版本.
     candidates = []
     for a in release.get("assets", []):
         n = a["name"].lower()

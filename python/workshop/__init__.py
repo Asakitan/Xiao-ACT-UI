@@ -1,1 +1,1 @@
-"""SAO Creative Workshop — community plugin marketplace."""
+# SAO Creative Workshop — community plugin marketplace.

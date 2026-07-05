@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""Entity-mode ACT skill drilldown panel."""
+# Entity-mode ACT skill drilldown panel.
 
 from __future__ import annotations
 
@@ -82,7 +82,7 @@ def _list_count(value: Any) -> int:
 
 
 class SkillDrilldownPanel:
-    """SAO-styled per-skill detail panel for Entity/Tk."""
+    # SAO-styled per-skill detail panel for Entity/Tk.
 
     def __init__(self, root: tk.Misc, owner: Any):
         self.root = root
@@ -353,7 +353,7 @@ class SkillDrilldownPanel:
                          font=get_cjk_font(8), anchor='w', wraplength=220).pack(fill='x', pady=1)
 
     def _render_skill_card(self, parent: tk.Frame, name: str, amount: float, *, active: bool = False) -> None:
-        """Render a sidebar skill card row with name and damage pill (webref style)."""
+        # Render a sidebar skill card row with name and damage pill (webref style).
         card_bg = _pc('card_bg_alt', _SAO_PANEL_HEADER_BG) if active else _SAO_PANEL_BODY_BG
         card = tk.Frame(parent, bg=card_bg, highlightthickness=1,
                         highlightbackground=_SAO_PANEL_BORDER)
@@ -516,7 +516,7 @@ class SkillDrilldownPanel:
 
     @staticmethod
     def _fmt_rel_ms(time_ms: Any, base_ms: int) -> str:
-        """Format time_ms as relative offset MM:SS.mmm from base_ms."""
+        # Format time_ms as relative offset MM:SS.mmm from base_ms.
         try:
             ms = int(time_ms or 0)
         except Exception:

@@ -1,9 +1,6 @@
 # -*- coding: utf-8 -*-
-"""
-Pure-vision recognition ipeline for stamina.
-This module provides a standalone function `detect_stamina_pct` that takes a BGR image of the stamina bar region and returns the detected fill percentage and confidence.
-
-"""
+# Pure-vision recognition ipeline for stamina.
+# This module provides a standalone function `detect_stamina_pct` that takes a BGR image of the stamina bar region and returns the detected fill percentage and confidence.
 
 from __future__ import annotations
 
@@ -125,12 +122,11 @@ except Exception:
 
 
 def _dwm_flush() -> None:
-    """Wait for the current DWM composition cycle to finish.
-
-    This greatly reduces the chance of capturing a blank/stale frame when
-    the compositor is busy redrawing overlay windows (entity-mode ULW at
-    60 fps).
-    """
+    # Wait for the current DWM composition cycle to finish.
+    #
+    # This greatly reduces the chance of capturing a blank/stale frame when
+    # the compositor is busy redrawing overlay windows (entity-mode ULW at
+    # 60 fps).
     try:
         if _dwmapi is not None:
             _dwmapi.DwmFlush()
@@ -144,13 +140,12 @@ _preferred_pw_flags: Optional[int] = None
 
 
 class _GDICaptureContext:
-    """Thread-local cache of GDI resources used by PrintWindow capture.
-
-    Re-creating GetWindowDC / CompatibleDC / CompatibleBitmap / pixel buffer
-    every tick costs ~1–2 ms on its own and contributes to the per-tick wall
-    time on top of the PrintWindow render. We keep the same handles around
-    until the (hwnd, width, height) signature changes.
-    """
+    # Thread-local cache of GDI resources used by PrintWindow capture.
+    #
+    # Re-creating GetWindowDC / CompatibleDC / CompatibleBitmap / pixel buffer
+    # every tick costs ~1–2 ms on its own and contributes to the per-tick wall
+    # time on top of the PrintWindow render. We keep the same handles around
+    # until the (hwnd, width, height) signature changes.
 
     __slots__ = (
         'hwnd', 'width', 'height',
@@ -393,7 +388,7 @@ def _grab_region(bbox: Tuple[int, int, int, int]) -> Optional[np.ndarray]:
 
 
 def _subpixel_threshold_crossing(score: np.ndarray, threshold: float, last_filled_idx: int) -> float:
-    """Find sub-pixel boundary where score crosses threshold near last_filled_idx."""
+    # Find sub-pixel boundary where score crosses threshold near last_filled_idx.
     eff_w = score.shape[0]
     if last_filled_idx >= eff_w - 1:
         return float(last_filled_idx + 1)
@@ -406,15 +401,14 @@ def _subpixel_threshold_crossing(score: np.ndarray, threshold: float, last_fille
 
 
 def _gradient_edge_pct(smooth_score: np.ndarray, eff_w: int, dynamic_range: float) -> Optional[float]:
-    """Find the fill→empty boundary via the sharpest negative gradient.
-
-    Returns sub-pixel percentage or None if no clear edge was found.
-
-    v3.1.3 round 5: delegates to ``_sao_cy_pixels.gradient_edge_pct``. The
-    cython kernel does np.diff + 7-wide convolution + argmin + sub-pixel
-    mid-score crossing in one nogil pass — ~4x faster than the pure-numpy
-    version, parity-exact on the realistic bar-detection test cases.
-    """
+    # Find the fill→empty boundary via the sharpest negative gradient.
+    #
+    # Returns sub-pixel percentage or None if no clear edge was found.
+    #
+    # v3.1.3 round 5: delegates to ``_sao_cy_pixels.gradient_edge_pct``. The
+    # cython kernel does np.diff + 7-wide convolution + argmin + sub-pixel
+    # mid-score crossing in one nogil pass — ~4x faster than the pure-numpy
+    # version, parity-exact on the realistic bar-detection test cases.
     if smooth_score.dtype != np.float64:
         smooth_score = np.ascontiguousarray(smooth_score, dtype=np.float64)
     return _CY_PIXELS.gradient_edge_pct(smooth_score, int(eff_w), float(dynamic_range))
@@ -424,15 +418,14 @@ def _row_independent_pct(
     sat: np.ndarray, val: np.ndarray,
     hue_mask: np.ndarray, threshold: float,
 ) -> Optional[float]:
-    """Compute per-row fill percentage and return the median.
-
-    Provides outlier-resistant estimation by treating each row independently.
-    Returns None if fewer than 2 usable rows.
-
-    v3.1.7 round 15: dropped the unused `hue` / `fill_hue_ref` arguments
-    after the round-4 cython migration of the inner per-row loop. The
-    cython kernel scores by val/sat/mask only.
-    """
+    # Compute per-row fill percentage and return the median.
+    #
+    # Provides outlier-resistant estimation by treating each row independently.
+    # Returns None if fewer than 2 usable rows.
+    #
+    # v3.1.7 round 15: dropped the unused `hue` / `fill_hue_ref` arguments
+    # after the round-4 cython migration of the inner per-row loop. The
+    # cython kernel scores by val/sat/mask only.
     n_rows, eff_w = val.shape
     if n_rows < 2 or eff_w <= 4:
         return None
@@ -455,12 +448,11 @@ _STA_COL_FILL_NEAR_FULL = 0.07  # relaxed threshold for rightmost columns near 1
 
 @_probe.decorate('vision._detect_stamina_pct')
 def _detect_stamina_pct(img: np.ndarray) -> Tuple[float, float]:
-    """Detect STA bar fill % by exact BGR colour matching.
-
-    Returns (pct, confidence) where:
-      pct        – 0.0 .. 1.0 fill ratio
-      confidence – 0.0 .. 1.0 (high when bar present, ~0 when absent)
-    """
+    # Detect STA bar fill % by exact BGR colour matching.
+    #
+    # Returns (pct, confidence) where:
+    # pct        – 0.0 .. 1.0 fill ratio
+    # confidence – 0.0 .. 1.0 (high when bar present, ~0 when absent)
     try:
         h, w = img.shape[:2]
         if h < 2 or w < 4:
@@ -545,15 +537,14 @@ def _detect_stamina_pct(img: np.ndarray) -> Tuple[float, float]:
 
 
 def _detect_bar_pct(img: np.ndarray, color_cfg: dict) -> Tuple[float, float]:
-    """Detect bar fill percentage using gradient edge detection + threshold voting.
-
-    Improvements over simple threshold-only approach:
-    1. Bilateral filter preserves sharp edges while reducing noise
-    2. Gradient analysis finds the fill→empty boundary with sub-pixel precision
-    3. Per-row median voting rejects outlier rows (glows, particles)
-    4. Sub-pixel interpolation at threshold crossings
-    5. Three estimates are combined: gradient, multi-row median, and threshold
-    """
+    # Detect bar fill percentage using gradient edge detection + threshold voting.
+    #
+    # Improvements over simple threshold-only approach:
+    # 1. Bilateral filter preserves sharp edges while reducing noise
+    # 2. Gradient analysis finds the fill→empty boundary with sub-pixel precision
+    # 3. Per-row median voting rejects outlier rows (glows, particles)
+    # 4. Sub-pixel interpolation at threshold crossings
+    # 5. Three estimates are combined: gradient, multi-row median, and threshold
     try:
         # --- Pre-processing: bilateral filter preserves the fill boundary edge ---
         try:
@@ -909,14 +900,13 @@ class RecognitionEngine:
     _NO_WINDOW_BACKOFF_FPS = 0.5
 
     def _current_fps(self) -> float:
-        """Adaptive cap: drop tick rate when STA hasn't moved for a while,
-        or hard-drop it when there's no game window at all.
-
-        PrintWindow + DwmFlush dominate this thread's wall time; running them
-        at 10 Hz when nothing on screen is changing wastes CPU/GPU and DWM
-        bandwidth. We keep ramp-up free — any change in STA value resets us
-        immediately back to the fast tier.
-        """
+        # Adaptive cap: drop tick rate when STA hasn't moved for a while,
+        # or hard-drop it when there's no game window at all.
+        #
+        # PrintWindow + DwmFlush dominate this thread's wall time; running them
+        # at 10 Hz when nothing on screen is changing wastes CPU/GPU and DWM
+        # bandwidth. We keep ramp-up free — any change in STA value resets us
+        # immediately back to the fast tier.
         if (self._no_window_since != 0.0
                 and (time.time() - self._no_window_since)
                 >= self._NO_WINDOW_BACKOFF_AFTER_S):

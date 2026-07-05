@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""Regression tests for Commander Tk data propagation and render signatures."""
+# Regression tests for Commander Tk data propagation and render signatures.
 
 from __future__ import annotations
 

@@ -1,9 +1,8 @@
 # -*- coding: utf-8 -*-
-"""sao_gui_license — SAO 风格授权验证弹窗 (Tk 端)
-
-启动时由 main.py / sao_gui.py 调用, 显示当前授权状态。
-未授权用户可输入激活码; 免费用户可跳过 (仅引擎 A)。
-"""
+# sao_gui_license — SAO 风格授权验证弹窗 (Tk 端)
+#
+# 启动时由 main.py / sao_gui.py 调用, 显示当前授权状态。
+# 未授权用户可输入激活码; 免费用户可跳过 (仅引擎 A)。
 from __future__ import annotations
 
 import ctypes
@@ -43,12 +42,11 @@ _ACCENT_CYAN = '#68e4ff'
 
 def show_license_dialog(parent: Optional[tk.Tk] = None,
                         on_done: Optional[Callable] = None):
-    """弹出 SAO 风格授权验证面板。
-
-    Args:
-        parent: Tk root (可为 None, 会临时创建)
-        on_done: 面板关闭后回调 (无论激活与否)
-    """
+    # 弹出 SAO 风格授权验证面板。
+    #
+    # Args:
+    # parent: Tk root (可为 None, 会临时创建)
+    # on_done: 面板关闭后回调 (无论激活与否)
     own_root = False
     if parent is None:
         parent = tk.Tk()

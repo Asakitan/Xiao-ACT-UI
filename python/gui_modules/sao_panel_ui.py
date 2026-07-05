@@ -1,35 +1,33 @@
 # -*- coding: utf-8 -*-
-"""
-SAO-style floating panel UI primitives — extracted from sao_gui.py
-in round 49 of the sao_gui split refactor.
-
-The constants and helpers in this module are used by floating
-panels that live on the SAO HUD, including platform panels and
-plugin-owned panels. Pulling them into a focused utility
-module:
-
-  1. removes 10+ module-level constants + 8 helper functions from
-     sao_gui.py (~190 lines), and
-  2. unblocks future mixin extractions of panel handlers that
-     reference these helpers (e.g. ``_toggle_status_panel``) —
-     those previously could not move out because importing the
-     helpers from ``sao_gui`` would have been a circular import.
-
-Contents:
-  * Constants: ``_SAO_PANEL_BG``, ``_SAO_PANEL_HEADER_BG``,
-    ``_SAO_PANEL_HEADER_FG``, ``_SAO_PANEL_BORDER``,
-    ``_SAO_PANEL_ACCENT``, ``_SAO_PANEL_GOLD``, ``_SAO_PANEL_SEP``,
-    ``_SAO_PANEL_BODY_BG``, ``_SAO_PANEL_LABEL_FG``,
-    ``_SAO_PANEL_VALUE_FG``
-  * Helpers: ``_apply_panel_style``, ``_hex_rgba``,
-    ``_make_panel_close_button``, ``_sao_panel_header``,
-    ``_bind_panel_drag``, ``_sao_panel_body``,
-    ``_sao_panel_hud_canvas``, ``_sao_row``, ``_sao_pill``,
-    ``run_native_dialog``
-  * Internal state: ``_close_btn_photo_cache`` (PhotoImage cache
-    keyed by ``f'{size}_{bg}'`` so multiple panels reuse the same
-    Image objects)
-"""
+# SAO-style floating panel UI primitives — extracted from sao_gui.py
+# in round 49 of the sao_gui split refactor.
+#
+# The constants and helpers in this module are used by floating
+# panels that live on the SAO HUD, including platform panels and
+# plugin-owned panels. Pulling them into a focused utility
+# module:
+#
+# 1. removes 10+ module-level constants + 8 helper functions from
+# sao_gui.py (~190 lines), and
+# 2. unblocks future mixin extractions of panel handlers that
+# reference these helpers (e.g. ``_toggle_status_panel``) —
+# those previously could not move out because importing the
+# helpers from ``sao_gui`` would have been a circular import.
+#
+# Contents:
+# * Constants: ``_SAO_PANEL_BG``, ``_SAO_PANEL_HEADER_BG``,
+# ``_SAO_PANEL_HEADER_FG``, ``_SAO_PANEL_BORDER``,
+# ``_SAO_PANEL_ACCENT``, ``_SAO_PANEL_GOLD``, ``_SAO_PANEL_SEP``,
+# ``_SAO_PANEL_BODY_BG``, ``_SAO_PANEL_LABEL_FG``,
+# ``_SAO_PANEL_VALUE_FG``
+# * Helpers: ``_apply_panel_style``, ``_hex_rgba``,
+# ``_make_panel_close_button``, ``_sao_panel_header``,
+# ``_bind_panel_drag``, ``_sao_panel_body``,
+# ``_sao_panel_hud_canvas``, ``_sao_row``, ``_sao_pill``,
+# ``run_native_dialog``
+# * Internal state: ``_close_btn_photo_cache`` (PhotoImage cache
+# keyed by ``f'{size}_{bg}'`` so multiple panels reuse the same
+# Image objects)
 
 from __future__ import annotations
 
@@ -51,17 +49,16 @@ _user32 = ctypes.windll.user32
 
 
 def _get_icon_path():
-    """Locate the runtime icon.ico path; returns None if missing."""
+    # Locate the runtime icon.ico path; returns None if missing.
     p = resource_path('icon.ico')
     return p if os.path.exists(p) else None
 
 
 def _set_process_app_id(app_id: str):
-    """Set the Windows AppUserModelID for the current process so taskbar
-    grouping uses our app-specific identity instead of the python.exe
-    default. Best-effort; silently no-ops on non-Windows or when the
-    shell32 call fails (older Windows versions etc.).
-    """
+    # Set the Windows AppUserModelID for the current process so taskbar
+    # grouping uses our app-specific identity instead of the python.exe
+    # default. Best-effort; silently no-ops on non-Windows or when the
+    # shell32 call fails (older Windows versions etc.).
     try:
         ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(app_id)
     except Exception:
@@ -69,10 +66,10 @@ def _set_process_app_id(app_id: str):
 
 
 def _apply_window_icon(win):
-    """Apply the runtime icon.ico to a Tk Toplevel (both the title bar
-    bitmap via iconbitmap and the taskbar HICON via Win32 WM_SETICON
-    so the icon shows up in Alt+Tab / taskbar even for overrideredirect
-    Toplevels)."""
+    # Apply the runtime icon.ico to a Tk Toplevel (both the title bar
+    # bitmap via iconbitmap and the taskbar HICON via Win32 WM_SETICON
+    # so the icon shows up in Alt+Tab / taskbar even for overrideredirect
+    # Toplevels).
     icon_path = _get_icon_path()
     if not icon_path:
         return
@@ -103,7 +100,7 @@ def _apply_window_icon(win):
 
 
 def _set_clickthrough_style(win):
-    """给装饰/条带窗口设置 Win32 透明点击穿透样式。"""
+    # 给装饰/条带窗口设置 Win32 透明点击穿透样式。
     try:
         user32 = ctypes.windll.user32
         GWL_EXSTYLE = -20
@@ -119,7 +116,7 @@ def _set_clickthrough_style(win):
 
 
 def _disable_native_window_shadow(win):
-    """关闭透明/异形窗口的系统矩形阴影，避免阴影落到错误区域。"""
+    # 关闭透明/异形窗口的系统矩形阴影，避免阴影落到错误区域。
     try:
         win.update_idletasks()
         hwnd = int(_user32.GetParent(ctypes.c_void_p(win.winfo_id())) or win.winfo_id())
@@ -130,7 +127,7 @@ def _disable_native_window_shadow(win):
 
 
 def _apply_panel_style(panel):
-    """为浮动 Toplevel 面板添加 DWM 圆角 — 增强浮动质感"""
+    # 为浮动 Toplevel 面板添加 DWM 圆角 — 增强浮动质感
     try:
         panel.update_idletasks()
         hwnd = int(_user32.GetParent(ctypes.c_void_p(panel.winfo_id())))
@@ -389,7 +386,7 @@ def _style_sao_panel_tree(root) -> None:
 
 
 def _set_sao_panel_theme(theme: str, root=None, repaint_registered: bool = False) -> str:
-    """Set Tk SAO panel theme and repaint registered panel roots."""
+    # Set Tk SAO panel theme and repaint registered panel roots.
     _apply_sao_panel_palette(theme)
     targets = [root] if root is not None else (list(_SAO_PANEL_ROOTS) if repaint_registered else [])
     for target in targets:
@@ -403,7 +400,7 @@ def _set_sao_panel_theme(theme: str, root=None, repaint_registered: bool = False
 
 
 def _enable_frameless_panel(win):
-    """Best-effort custom SAO chrome for Toplevel panels."""
+    # Best-effort custom SAO chrome for Toplevel panels.
     try:
         if isinstance(win, tk.Toplevel):
             _remember_sao_panel_root(win)
@@ -467,14 +464,13 @@ def _make_panel_close_button(parent, command, bg=_SAO_PANEL_HEADER_BG, *, flat=F
 
 
 def _sao_panel_header(parent, title_icon, title_text=None, close_cmd=None, on_close=None, *, flat=False):
-    """创建 SAO 风格深色标题栏，返回 header。
-
-    Legacy callers pass ``(parent, icon, title, close_cmd)`` and unpack
-    ``(header, close_label)``.  New flat panels pass ``(parent, title,
-    on_close=...)`` and use the returned object as a frame.  Return a small
-    tuple-like proxy so both styles stay compatible without duplicating panel
-    chrome code.
-    """
+    # 创建 SAO 风格深色标题栏，返回 header。
+    #
+    # Legacy callers pass ``(parent, icon, title, close_cmd)`` and unpack
+    # ``(header, close_label)``.  New flat panels pass ``(parent, title,
+    # on_close=...)`` and use the returned object as a frame.  Return a small
+    # tuple-like proxy so both styles stay compatible without duplicating panel
+    # chrome code.
     if title_text is None:
         title_text = str(title_icon or '')
         title_icon = '◉'
@@ -549,7 +545,7 @@ def _sao_panel_header(parent, title_icon, title_text=None, close_cmd=None, on_cl
 
 
 def _bind_panel_drag(hdr, close_lbl=None, start_fn=None, move_fn=None):
-    """递归绑定拖拽事件到标题栏的所有子组件 (排除关闭按钮)"""
+    # 递归绑定拖拽事件到标题栏的所有子组件 (排除关闭按钮)
     drag_root = None
     if start_fn is None and move_fn is None and hasattr(close_lbl, 'frame') and hasattr(close_lbl, 'close_label'):
         drag_root = hdr
@@ -589,21 +585,20 @@ def _bind_panel_drag(hdr, close_lbl=None, start_fn=None, move_fn=None):
 
 
 def run_native_dialog(fn, *args, **kwargs):
-    """Run a blocking native dialog (filedialog.askopenfilename etc.) with
-    the compositor host hidden for the duration.
-
-    The compositor host is WS_EX_TOPMOST and, whenever any mirrored Tk panel
-    is visible, its clickable region is set to full-screen (see
-    ``_sync_host_rgn``/``_has_visible_interactive_layers`` in
-    render/overlay_compositor.py) so it can route clicks to that panel. A
-    native dialog (explorer's file picker) is a separate, non-topmost HWND —
-    left as-is, the host keeps intercepting clicks meant for the dialog and
-    visually sits on top of it (its z-order gets re-asserted every couple
-    seconds by ``_enforce_z_order()``), making the dialog look dead and, even
-    once clicks reach it, still visually buried. Hiding the host outright
-    for the call's duration avoids both problems at once; it's restored
-    right after the (blocking) dialog call returns.
-    """
+    # Run a blocking native dialog (filedialog.askopenfilename etc.) with
+    # the compositor host hidden for the duration.
+    #
+    # The compositor host is WS_EX_TOPMOST and, whenever any mirrored Tk panel
+    # is visible, its clickable region is set to full-screen (see
+    # ``_sync_host_rgn``/``_has_visible_interactive_layers`` in
+    # render/overlay_compositor.py) so it can route clicks to that panel. A
+    # native dialog (explorer's file picker) is a separate, non-topmost HWND —
+    # left as-is, the host keeps intercepting clicks meant for the dialog and
+    # visually sits on top of it (its z-order gets re-asserted every couple
+    # seconds by ``_enforce_z_order()``), making the dialog look dead and, even
+    # once clicks reach it, still visually buried. Hiding the host outright
+    # for the call's duration avoids both problems at once; it's restored
+    # right after the (blocking) dialog call returns.
     overlay = None
     try:
         from render.gpu_overlay_window import (
@@ -626,7 +621,7 @@ def run_native_dialog(fn, *args, **kwargs):
 
 
 def _sao_panel_body(parent, *, flat=False):
-    """创建 SAO 风格面板内容区。flat=True 时去掉 2px 青条/角块/焦点辉光（扁平面板）。"""
+    # 创建 SAO 风格面板内容区。flat=True 时去掉 2px 青条/角块/焦点辉光（扁平面板）。
     if not flat:
         tk.Frame(parent, bg=_SAO_PANEL_SEP, height=1).pack(fill=tk.X)
     if not flat:
@@ -693,7 +688,7 @@ def _has_mixed_scripts(text: str) -> bool:
 
 
 def _apply_auto_font(widget):
-    """Set font on a non-Label widget: pure English→SAO, otherwise→CJK."""
+    # Set font on a non-Label widget: pure English→SAO, otherwise→CJK.
     import tkinter.font as _tkfont
     try:
         f = _tkfont.Font(font=widget.cget('font'))
@@ -715,11 +710,10 @@ def _apply_auto_font(widget):
 
 
 def _auto_split_label_fonts(label):
-    """Replace a mixed-script Label with a Frame of split Labels (SAO+CJK).
-
-    Skips multi-line text, wrapped text, and image labels to avoid breaking
-    complex layouts like JSON previews.
-    """
+    # Replace a mixed-script Label with a Frame of split Labels (SAO+CJK).
+    #
+    # Skips multi-line text, wrapped text, and image labels to avoid breaking
+    # complex layouts like JSON previews.
     import tkinter.font as _tkfont
     try:
         f = _tkfont.Font(font=label.cget('font'))
@@ -762,7 +756,7 @@ def _auto_split_label_fonts(label):
 
 
 def _style_panel_descendants(root):
-    """Apply one-shot SAO styling to simple Tk controls created in a panel."""
+    # Apply one-shot SAO styling to simple Tk controls created in a panel.
     try:
         children = list(root.winfo_children())
     except Exception:
@@ -863,7 +857,7 @@ def _style_panel_descendants(root):
 
 
 def _sao_panel_hud_canvas(parent):
-    """在面板底部添加一个 HUD 装饰画布层"""
+    # 在面板底部添加一个 HUD 装饰画布层
     cv = tk.Canvas(parent, height=16, bg=_SAO_PANEL_BODY_BG,
                    highlightthickness=0, bd=0)
     cv.pack(fill=tk.X, side=tk.BOTTOM)
@@ -871,7 +865,7 @@ def _sao_panel_hud_canvas(parent):
 
 
 def _sao_row(parent, label_text, value_text='', value_fg=None, value_font=None):
-    """创建 SAO 风格的 标签: 值 行"""
+    # 创建 SAO 风格的 标签: 值 行
     row = tk.Frame(parent, bg=_SAO_PANEL_BODY_BG)
     row.pack(fill=tk.X, pady=2)
     tk.Label(row, text=label_text, bg=_SAO_PANEL_BODY_BG,
@@ -885,12 +879,11 @@ def _sao_row(parent, label_text, value_text='', value_fg=None, value_font=None):
 
 
 def _sao_pill(parent, text, active=None, command=None):
-    """创建 SAO 风格切换按钮/徽章。
-
-    Older callers used this as a clickable toggle and passed ``active`` plus
-    ``command``.  Panels also use it as a static badge, so both arguments
-    are optional and the visual state is inferred from common status labels.
-    """
+    # 创建 SAO 风格切换按钮/徽章。
+    #
+    # Older callers used this as a clickable toggle and passed ``active`` plus
+    # ``command``.  Panels also use it as a static badge, so both arguments
+    # are optional and the visual state is inferred from common status labels.
     token = str(text or '').upper()
     if active is None:
         active = token in {'ACTIVE', 'ENABLED', 'READY', 'RUNNING', 'OK'} or 'SDK' in token

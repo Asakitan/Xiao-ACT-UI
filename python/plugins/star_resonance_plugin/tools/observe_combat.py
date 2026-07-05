@@ -1,14 +1,13 @@
 # -*- coding: utf-8 -*-
-"""observe_combat - 战斗中采样实体/区域(zone)/位置, 抓 boss 施法时新增的预警圈.
-
-红圈/AOE 预警是 boss 施法时新增的 ZoneEnt(zoneDict_) 或召唤怪(monsterDict_)。本工具
-~4Hz 采样 bossDict/monsterDict/zoneDict/levelEntityDict, 记录"新出现"的实体(按 uuid)
-+ 类名 + BaseId + 世界坐标 + 到玩家距离 + ZoneEnt 的 zoneType_/collider, 落 JSONL 供逆向。
-
-用法 (开着游戏在 boss 房, 跑这个然后开打):
-  python -m tools.observe_combat --seconds 120
-out: exports/combat_observe.jsonl  (每条新实体一行)
-"""
+# observe_combat - 战斗中采样实体/区域(zone)/位置, 抓 boss 施法时新增的预警圈.
+#
+# 红圈/AOE 预警是 boss 施法时新增的 ZoneEnt(zoneDict_) 或召唤怪(monsterDict_)。本工具
+# ~4Hz 采样 bossDict/monsterDict/zoneDict/levelEntityDict, 记录"新出现"的实体(按 uuid)
+# + 类名 + BaseId + 世界坐标 + 到玩家距离 + ZoneEnt 的 zoneType_/collider, 落 JSONL 供逆向。
+#
+# 用法 (开着游戏在 boss 房, 跑这个然后开打):
+# python -m tools.observe_combat --seconds 120
+# out: exports/combat_observe.jsonl  (每条新实体一行)
 from __future__ import annotations
 
 import json
@@ -44,8 +43,8 @@ def _kn(pm, o):
 
 
 def _zone_collider_center(pm, lfr, ent):
-    """ZoneEnt → compList_ 里的 ZoneComp → collider_ → 试读 Unity collider 世界中心。
-    native collider 数据偏移脆弱, 失败返回 None (仅作辅助标注)。"""
+    # ZoneEnt → compList_ 里的 ZoneComp → collider_ → 试读 Unity collider 世界中心。
+    # native collider 数据偏移脆弱, 失败返回 None (仅作辅助标注)。
     try:
         cl = pm.read_u64(ent + 0x60) or 0   # compList_
         if not (_MINP <= cl <= _MAXP):

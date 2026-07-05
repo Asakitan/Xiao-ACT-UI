@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""Cursor-based timeline reconstruction for normalized ACT replay events."""
+# Cursor-based timeline reconstruction for normalized ACT replay events.
 
 from __future__ import annotations
 
@@ -126,7 +126,7 @@ def _compact_replay_event(event: Mapping[str, Any], index: int, base_ts: float, 
 def replay_timeline_status(events: Iterable[Mapping[str, Any]], *, self_uid: int = 0,
                            cursor_ms: int = 0, limit: int = 80,
                            query: str = "") -> dict[str, Any]:
-    """Replay normalized fixture events up to ``cursor_ms`` and return VCR data."""
+    # Replay normalized fixture events up to ``cursor_ms`` and return VCR data.
     normalized = _normalize_events(events)
     cursor = max(0, _safe_int(cursor_ms))
     row_limit = max(1, min(_safe_int(limit, 80), 500))

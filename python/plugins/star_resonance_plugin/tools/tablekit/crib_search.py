@@ -1,10 +1,9 @@
-"""crib_search - 在容器/资源文件里搜已知中文名(明文对照), 定位 Bokura 表数据二进制位置.
-
-只读, mmap. 支持 UTF-8 与 UTF-16LE 两种编码搜索。
-
-用法:
-    python -m tools.tablekit.crib_search --file "...\\m0.pkg" --needles 木桩 场地标记01
-"""
+# crib_search - 在容器/资源文件里搜已知中文名(明文对照), 定位 Bokura 表数据二进制位置.
+#
+# 只读, mmap. 支持 UTF-8 与 UTF-16LE 两种编码搜索。
+#
+# 用法:
+# python -m tools.tablekit.crib_search --file "...\m0.pkg" --needles 木桩 场地标记01
 from __future__ import annotations
 import argparse, mmap, os
 

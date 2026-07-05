@@ -1,19 +1,18 @@
-"""值搜索 / 多帧收敛.
-
-核心思想:
-    第 1 帧: 全内存搜索目标值 → 拿到 N 个候选地址 (通常成百上千)
-    第 2 帧: 目标值变了之后, 在候选集中再搜新值 → 收敛到 < 10 个
-    第 3 帧: 再变一次 → 通常剩 1 个
-
-公开 API:
-    encode_value(value, dtype) -> bytes    # 拼出 little-endian 字节串
-    scan(pm, value, dtype) -> list[int]    # 全内存首次扫描
-    narrow(pm, addrs, value, dtype) -> list[int]  # 在候选集中再扫
-
-加速:
-    i32/u32/i64/u64 的 scan 内层走 cy_memscan (AVX2: ~16 GB/s).
-    f32/f64/utf16 仍走 bytes.find 标量路径 (调用频次极低)。
-"""
+# 值搜索 / 多帧收敛.
+#
+# 核心思想:
+# 第 1 帧: 全内存搜索目标值 → 拿到 N 个候选地址 (通常成百上千)
+# 第 2 帧: 目标值变了之后, 在候选集中再搜新值 → 收敛到 < 10 个
+# 第 3 帧: 再变一次 → 通常剩 1 个
+#
+# 公开 API:
+# encode_value(value, dtype) -> bytes    # 拼出 little-endian 字节串
+# scan(pm, value, dtype) -> list[int]    # 全内存首次扫描
+# narrow(pm, addrs, value, dtype) -> list[int]  # 在候选集中再扫
+#
+# 加速:
+# i32/u32/i64/u64 的 scan 内层走 cy_memscan (AVX2: ~16 GB/s).
+# f32/f64/utf16 仍走 bytes.find 标量路径 (调用频次极低)。
 
 from __future__ import annotations
 
@@ -42,12 +41,11 @@ VALID_DTYPES = tuple(_STRUCT_FMT.keys()) + ("utf16",)
 
 
 def encode_value(value, dtype: str) -> bytes:
-    """把一个 Python 值编码成内存里的 little-endian 字节串.
-
-    对 i32/i64, 若 value 超出 signed 范围但落在 unsigned 范围内 (常见于
-    游戏 UID 用 uint64 表示但被解析成 Python int), 自动按 unsigned 编码,
-    bytes 表示一致。
-    """
+    # 把一个 Python 值编码成内存里的 little-endian 字节串.
+    #
+    # 对 i32/i64, 若 value 超出 signed 范围但落在 unsigned 范围内 (常见于
+    # 游戏 UID 用 uint64 表示但被解析成 Python int), 自动按 unsigned 编码,
+    # bytes 表示一致。
     if dtype == "utf16":
         if not isinstance(value, str):
             raise TypeError(f"utf16 dtype requires str, got {type(value).__name__}")
@@ -71,7 +69,7 @@ def encode_value(value, dtype: str) -> bytes:
 
 # ───────────────────────── 扫描 ─────────────────────────
 def _find_all_in_chunk(buf: bytes, needle: bytes, *, align: int = 1) -> Iterable[int]:
-    """在一段缓冲里找 needle 的所有偏移."""
+    # 在一段缓冲里找 needle 的所有偏移.
     if not needle:
         return
     start = 0
@@ -94,18 +92,17 @@ def scan(
     max_hits: int = 200_000,
     max_region_size: int = 256 * 1024 * 1024,
 ) -> List[int]:
-    """全内存首次扫描.
-
-    返回所有匹配地址的列表。
-
-    Parameters
-    ----------
-    align: 对齐字节. 0 表示 dtype 默认对齐 (i32/f32=4, i64/f64=8, u32=4 等),
-           1 表示不对齐, 任意字节边界。
-    max_hits: 命中数上限, 超过即停止扫描 (避免内存爆炸; 通常 utf16 短串才会触发)。
-    max_region_size: 跳过过大的区域 (默认 256 MiB), 主要是大型模块映像
-           的 IL2CPP 元数据段, 静态数据扫描没意义又拖慢速度。
-    """
+    # 全内存首次扫描.
+    #
+    # 返回所有匹配地址的列表。
+    #
+    # Parameters
+    # ----------
+    # align: 对齐字节. 0 表示 dtype 默认对齐 (i32/f32=4, i64/f64=8, u32=4 等),
+    # 1 表示不对齐, 任意字节边界。
+    # max_hits: 命中数上限, 超过即停止扫描 (避免内存爆炸; 通常 utf16 短串才会触发)。
+    # max_region_size: 跳过过大的区域 (默认 256 MiB), 主要是大型模块映像
+    # 的 IL2CPP 元数据段, 静态数据扫描没意义又拖慢速度。
     needle = encode_value(value, dtype)
     if align == 0:
         align = _default_align(dtype)
@@ -133,7 +130,7 @@ def scan(
 
 
 def _scan_one_region(pm, region_base, region_size, v, find_fn, chunk, max_per):
-    """Worker: scan one region, return list of absolute addresses."""
+    # Worker: scan one region, return list of absolute addresses.
     hits: List[int] = []
     read_into = getattr(pm, "read_bytes_into", None)
     scratch = bytearray(chunk) if read_into is not None else None
@@ -169,12 +166,11 @@ def _scan_aligned_int(
     *,
     width: int,
 ) -> List[int]:
-    """对齐 i32/u32/i64/u64 的 cy_memscan 加速路径.
-
-    分块 + read_bytes_into 复用 scratch 零拷贝喂内核 (取代每 region 整块 read_bytes
-    的两次拷贝), 与 fingerprint_v2.locate_v2 同款姿势。
-    多 region 时并行扫描 + PrefetchVirtualMemory 预取。
-    """
+    # 对齐 i32/u32/i64/u64 的 cy_memscan 加速路径.
+    #
+    # 分块 + read_bytes_into 复用 scratch 零拷贝喂内核 (取代每 region 整块 read_bytes
+    # 的两次拷贝), 与 fingerprint_v2.locate_v2 同款姿势。
+    # 多 region 时并行扫描 + PrefetchVirtualMemory 预取。
     if width == 8:
         v = value & 0xFFFFFFFFFFFFFFFF
         find_fn = _cy.find_aligned_u64
@@ -226,13 +222,12 @@ def narrow(
     value,
     dtype: str,
 ) -> List[int]:
-    """在已有候选集中再搜目标值, 返回仍然匹配的子集.
-
-    第 1 帧 scan 后候选集可达 max_hits (~2e5-3e5) 个地址; 逐个 read_bytes 会发
-    同样多次跨进程 RPC。对定宽整型/浮点 (4/8 字节, 按原始位比较), 改为一次
-    read_words_many 批量 nogil 读 + 进程内比较 (N 次 RPC → 1 次)。utf16/变长仍走
-    逐地址回退。
-    """
+    # 在已有候选集中再搜目标值, 返回仍然匹配的子集.
+    #
+    # 第 1 帧 scan 后候选集可达 max_hits (~2e5-3e5) 个地址; 逐个 read_bytes 会发
+    # 同样多次跨进程 RPC。对定宽整型/浮点 (4/8 字节, 按原始位比较), 改为一次
+    # read_words_many 批量 nogil 读 + 进程内比较 (N 次 RPC → 1 次)。utf16/变长仍走
+    # 逐地址回退。
     needle = encode_value(value, dtype)
     n = len(needle)
     addrs = list(addrs)

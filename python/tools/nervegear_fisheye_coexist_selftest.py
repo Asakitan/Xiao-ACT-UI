@@ -1,21 +1,20 @@
 # -*- coding: utf-8 -*-
-"""Selftest: NerveGear opened WHILE the fisheye menu is up must not crash.
-
-Reproduces the user's crash scenario ("open the NerveGear button and the
-compositor freezes then crash-exits, no error"):
-  - a proxyless interactive layer (stand-in for the fisheye menu) forces
-    the host OUT of passthrough, so the per-pixel region scan is live;
-  - then a real GpuNerveGearButton opens on top, arming its input proxy
-    + WndProc activation shield while its glow animation drives frame
-    changes every tick;
-  - the 200ms shield/shape tick runs for several seconds.
-
-The freeze+crash was the shield re-subclassing the proxy WndProc every
-tick (a truncated 64-bit HWND broke the "already armed?" guard), each
-re-arm chaining CallWindowProc through the previous proc until the
-per-message call stack overflowed. Assert the shield arms exactly ONCE
-(WndProc ref count grows by 1, not per-tick) and the run stays alive.
-"""
+# Selftest: NerveGear opened WHILE the fisheye menu is up must not crash.
+#
+# Reproduces the user's crash scenario ("open the NerveGear button and the
+# compositor freezes then crash-exits, no error"):
+# - a proxyless interactive layer (stand-in for the fisheye menu) forces
+# the host OUT of passthrough, so the per-pixel region scan is live;
+# - then a real GpuNerveGearButton opens on top, arming its input proxy
+# + WndProc activation shield while its glow animation drives frame
+# changes every tick;
+# - the 200ms shield/shape tick runs for several seconds.
+#
+# The freeze+crash was the shield re-subclassing the proxy WndProc every
+# tick (a truncated 64-bit HWND broke the "already armed?" guard), each
+# re-arm chaining CallWindowProc through the previous proc until the
+# per-message call stack overflowed. Assert the shield arms exactly ONCE
+# (WndProc ref count grows by 1, not per-tick) and the run stays alive.
 import os
 import sys
 import time

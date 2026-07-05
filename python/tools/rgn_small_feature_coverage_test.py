@@ -1,30 +1,29 @@
 # -*- coding: utf-8 -*-
-"""Proves the host RGN can no longer swallow thin fast-moving features
-(a heel mid-swing, a 1px hair strand) on content that changes every
-frame.
-
-The clip region (SetWindowRgn, USER32/DWM pipeline) and the presented
-pixels (DComp commit pipeline) are applied by two unsynchronized paths,
-so the region built from frame N is routinely paired on screen with
-frame N-1's or N+1's pixels for one composition. An exact-fit region
-then clips whatever moved between the frames — thick shapes lose an
-invisible 1-3px sliver, but a feature thinner than its own per-frame
-travel has ZERO overlap with the stale region and vanishes outright.
-
-The fix under test (overlay_compositor._sync_host_rgn):
-  * temporal union — the region also contains the PREVIOUS frame's
-    spans, covering backward pairing exactly;
-  * predictive pad — sized to the measured silhouette motion between
-    the two frames (x2 headroom), covering forward pairing;
-  * settle — after _RGN_STATIC_SETTLE unchanged ticks the region
-    returns to exact-fit spans (no permanent click-swallow halo).
-
-Drives the REAL UnifiedOverlay._sync_host_rgn with synthetic BGRA
-frames; only _build_region_from_rects and the host handle are faked
-(no Win32 window or GL needed).
-
-Run: python rgn_small_feature_coverage_test.py
-"""
+# Proves the host RGN can no longer swallow thin fast-moving features
+# (a heel mid-swing, a 1px hair strand) on content that changes every
+# frame.
+#
+# The clip region (SetWindowRgn, USER32/DWM pipeline) and the presented
+# pixels (DComp commit pipeline) are applied by two unsynchronized paths,
+# so the region built from frame N is routinely paired on screen with
+# frame N-1's or N+1's pixels for one composition. An exact-fit region
+# then clips whatever moved between the frames — thick shapes lose an
+# invisible 1-3px sliver, but a feature thinner than its own per-frame
+# travel has ZERO overlap with the stale region and vanishes outright.
+#
+# The fix under test (overlay_compositor._sync_host_rgn):
+# * temporal union — the region also contains the PREVIOUS frame's
+# spans, covering backward pairing exactly;
+# * predictive pad — sized to the measured silhouette motion between
+# the two frames (x2 headroom), covering forward pairing;
+# * settle — after _RGN_STATIC_SETTLE unchanged ticks the region
+# returns to exact-fit spans (no permanent click-swallow halo).
+#
+# Drives the REAL UnifiedOverlay._sync_host_rgn with synthetic BGRA
+# frames; only _build_region_from_rects and the host handle are faked
+# (no Win32 window or GL needed).
+#
+# Run: python rgn_small_feature_coverage_test.py
 from __future__ import annotations
 
 import os
@@ -42,8 +41,8 @@ HAIR_W, HAIR_STEP = 1, 6         # 1px feature moving 6px/frame
 
 
 def make_frame(i: int) -> bytes:
-    """Synthetic BGRA frame: static body + two thin features whose
-    per-frame travel exceeds their own width (the swallow scenario)."""
+    # Synthetic BGRA frame: static body + two thin features whose
+    # per-frame travel exceeds their own width (the swallow scenario).
     buf = bytearray(W * H * 4)
 
     def fill(x0, y0, x1, y1):
@@ -71,7 +70,7 @@ def opaque_pixels(frame: bytes) -> set:
 
 
 def feature_pixels(frame: bytes) -> set:
-    """Only the thin-feature pixels (everything outside the body box)."""
+    # Only the thin-feature pixels (everything outside the body box).
     return {(x, y) for (x, y) in opaque_pixels(frame)
             if not (BODY[0] <= x < BODY[2] and BODY[1] <= y < BODY[3])}
 

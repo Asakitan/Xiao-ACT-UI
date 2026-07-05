@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""Regression coverage for GPU overlay teardown ordering."""
+# Regression coverage for GPU overlay teardown ordering.
 
 from __future__ import annotations
 

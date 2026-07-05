@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""List small visible top-level windows (find the SAO floating ball)."""
+# List small visible top-level windows (find the SAO floating ball).
 import ctypes
 from ctypes import wintypes
 

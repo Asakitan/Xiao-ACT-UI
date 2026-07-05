@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""Regression coverage for plugin extension registry helpers."""
+# Regression coverage for plugin extension registry helpers.
 
 from __future__ import annotations
 

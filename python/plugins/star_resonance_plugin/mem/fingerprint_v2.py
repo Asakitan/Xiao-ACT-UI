@@ -1,30 +1,29 @@
-"""模块相对指纹 v2 — 使用模块内指针 (typeinfo / vtable) 作为稳定锚.
-
-核心洞察:
-    Player struct (实为 Attribute 列表) 包含若干指向 GameAssembly.dll 静态段的
-    typeinfo / vtable 指针。这些指针每次启动都因 ASLR 而变, 但相对模块基址的
-    偏移是稳定的。
-
-    用模块名 + 偏移 描述这些"指针槽", locate 时用当前模块基址重建预期字节,
-    再做掩码扫描。
-
-数据格式 (anchors.json: fingerprint_v2):
-    {
-        "size": 128,
-        "before": 64,
-        "delta_max_hp": -32,
-        "fixed": [{"off": 8, "bytes": "1300000000000000"}, ...],  # 8 字节对齐, 必须等于
-        "module_rel": [
-            {"off": 16, "module": "GameAssembly.dll", "module_offset": 0x...},
-            ...
-        ],
-        # 其余字节不参与匹配 (HP 值 / 时变状态)
-    }
-
-CLI:
-    python -m tools.mem_probe.fingerprint_v2 capture
-    python -m tools.mem_probe.fingerprint_v2 locate
-"""
+# 模块相对指纹 v2 — 使用模块内指针 (typeinfo / vtable) 作为稳定锚.
+#
+# 核心洞察:
+# Player struct (实为 Attribute 列表) 包含若干指向 GameAssembly.dll 静态段的
+# typeinfo / vtable 指针。这些指针每次启动都因 ASLR 而变, 但相对模块基址的
+# 偏移是稳定的。
+#
+# 用模块名 + 偏移 描述这些"指针槽", locate 时用当前模块基址重建预期字节,
+# 再做掩码扫描。
+#
+# 数据格式 (anchors.json: fingerprint_v2):
+# {
+# "size": 128,
+# "before": 64,
+# "delta_max_hp": -32,
+# "fixed": [{"off": 8, "bytes": "1300000000000000"}, ...],  # 8 字节对齐, 必须等于
+# "module_rel": [
+# {"off": 16, "module": "GameAssembly.dll", "module_offset": 0x...},
+# ...
+# ],
+# # 其余字节不参与匹配 (HP 值 / 时变状态)
+# }
+#
+# CLI:
+# python -m tools.mem_probe.fingerprint_v2 capture
+# python -m tools.mem_probe.fingerprint_v2 locate
 
 from __future__ import annotations
 
@@ -89,10 +88,9 @@ def _mod_base(mods: List[ModuleInfo], name: str) -> Optional[int]:
 
 # ───────────────────────── capture ─────────────────────────
 def capture_v2(pm: StarProcess, anchors: dict, *, mask_value_offsets: List[int]) -> Optional[dict]:
-    """返回 fingerprint_v2 dict.
-
-    mask_value_offsets: 在 fingerprint 中"会变的字段"的偏移 (i32 起始位置), 例如 HP/MaxHP。
-    """
+    # 返回 fingerprint_v2 dict.
+    #
+    # mask_value_offsets: 在 fingerprint 中"会变的字段"的偏移 (i32 起始位置), 例如 HP/MaxHP。
     hp_addr = int(anchors["self_hp_addr"], 16)
     max_hp_addr = int(anchors["self_max_hp_addr"], 16)
     delta_max = max_hp_addr - hp_addr
@@ -152,7 +150,7 @@ def capture_v2(pm: StarProcess, anchors: dict, *, mask_value_offsets: List[int])
 
 # ───────────────────────── locate ─────────────────────────
 def locate_v2(pm: StarProcess, fp: dict) -> List[int]:
-    """全堆扫指纹 v2, 返回所有匹配的 HP 地址."""
+    # 全堆扫指纹 v2, 返回所有匹配的 HP 地址.
     mods = pm.list_modules()
     size = fp["size"]
     before = fp["before"]

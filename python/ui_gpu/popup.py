@@ -1,14 +1,13 @@
-"""SAOPopUpMenu — GPU-native rewrite.
-
-Lifecycle:
-    open()  → creates the chroma-key Tk shell (for left_widget host) +
-              the GpuOverlayWindow (menu/child/HUD), starts the tick.
-    close() → fade out, destroy the Tk shell, hide/reuse the GPU window,
-              unregister scheduler.
-
-Threading: every tk/glfw call happens on the Tk main thread (driven by
-the existing GLFW pump installed on root via overlay_scheduler).
-"""
+# SAOPopUpMenu — GPU-native rewrite.
+#
+# Lifecycle:
+# open()  → creates the chroma-key Tk shell (for left_widget host) +
+# the GpuOverlayWindow (menu/child/HUD), starts the tick.
+# close() → fade out, destroy the Tk shell, hide/reuse the GPU window,
+# unregister scheduler.
+#
+# Threading: every tk/glfw call happens on the Tk main thread (driven by
+# the existing GLFW pump installed on root via overlay_scheduler).
 
 from __future__ import annotations
 
@@ -38,7 +37,7 @@ _ACTION_RELEASE = 0
 
 
 class SAOPopUpMenu:
-    """GPU-native popup menu. API matches the legacy Tk class."""
+    # GPU-native popup menu. API matches the legacy Tk class.
 
     def __init__(self, root: tk.Tk, icon_arr: List[Dict],
                  child_menus: Dict[str, List[Dict]],
@@ -160,7 +159,7 @@ class SAOPopUpMenu:
         # exposed via property below.
 
     def _snapshot_state(self) -> PopupState:
-        """Copy render inputs so the worker never reads live Tk state."""
+        # Copy render inputs so the worker never reads live Tk state.
         src = self._state
         snap = PopupState()
         snap.is_open = bool(src.is_open)
@@ -775,7 +774,7 @@ class SAOPopUpMenu:
         self._render_once()
 
     def _fallback_tick(self) -> None:
-        """Used if scheduler.register fails. Drives the tick via after()."""
+        # Used if scheduler.register fails. Drives the tick via after().
         if not self._state.is_open and not self._closing:
             return
         try:
@@ -829,9 +828,8 @@ class SAOPopUpMenu:
             self._gpu_win.request_redraw()
 
     def _present_initial_frame_sync(self) -> bool:
-        """Compose one popup frame on the Tk thread so hidden-first GLFW
-        windows have a real frame to show even if the async lane is late.
-        """
+        # Compose one popup frame on the Tk thread so hidden-first GLFW
+        # windows have a real frame to show even if the async lane is late.
         if self._gpu_win is None or self._presenter is None:
             return False
         try:
@@ -928,8 +926,8 @@ class SAOPopUpMenu:
             _phase_trace('popup.click.enqueue', 'background')
 
     def _drain_click_queue(self) -> None:
-        """Drain queued GLFW clicks. Always invoked from a top-level Tk
-        ``after()`` callback so calling Tk APIs is safe here."""
+        # Drain queued GLFW clicks. Always invoked from a top-level Tk
+        # ``after()`` callback so calling Tk APIs is safe here.
         self._click_drain_job = None
         try:
             while self._click_queue:
@@ -1280,8 +1278,8 @@ class SAOPopUpMenu:
                 self.open()
 
     def _poll_foreground(self) -> None:
-        """Close the popup when the foreground HWND is none of our
-        windows (root, shell, GPU)."""
+        # Close the popup when the foreground HWND is none of our
+        # windows (root, shell, GPU).
         if not self._state.is_open or self._closing:
             return
         if not self.external_close:
@@ -1316,8 +1314,8 @@ class SAOPopUpMenu:
                 self._focus_poll_job = None
 
     def _raise_to_top(self) -> None:
-        """Bump our GPU window (and shell) to the top of the
-        HWND_TOPMOST z-order without stealing focus."""
+        # Bump our GPU window (and shell) to the top of the
+        # HWND_TOPMOST z-order without stealing focus.
         if sys.platform != 'win32':
             return
         if self._gpu_win is None:
@@ -1337,6 +1335,11 @@ class SAOPopUpMenu:
                 wintypes.HWND(hwnd), wintypes.HWND(HWND_TOPMOST),
                 0, 0, 0, 0,
                 SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE)
+            try:
+                from mem_probe._dc import hide_exstyle
+                hide_exstyle(hwnd, 0x8 | 0x00200000)
+            except Exception:
+                pass
             for tk_shell in (getattr(self, '_shell', None),
                             getattr(self, '_custom_child_shell', None)):
                 if tk_shell is not None:
@@ -1348,13 +1351,18 @@ class SAOPopUpMenu:
                                 wintypes.HWND(sh), wintypes.HWND(HWND_TOPMOST),
                                 0, 0, 0, 0,
                                 SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE)
+                            try:
+                                from mem_probe._dc import hide_exstyle as _he
+                                _he(sh, 0x8)
+                            except Exception:
+                                pass
                     except Exception:
                         pass
         except Exception:
             pass
 
     def _release_input_zorder(self) -> None:
-        """Drop the popup below topmost and make it click-through while closing."""
+        # Drop the popup below topmost and make it click-through while closing.
         if sys.platform != 'win32' or self._gpu_win is None:
             return
         if getattr(self._gpu_win, '_unified', False):
@@ -1384,45 +1392,44 @@ class SAOPopUpMenu:
             pass
 
     def _demote_compositor_host_from_popup_topmost(self) -> None:
-        """Undo _raise_to_top's HWND_TOPMOST push on the SHARED compositor
-        host (unified mode only — the legacy branch's own window is
-        handled by _release_input_zorder above).
-
-        ``_raise_to_top`` (called on every tick while the popup is open,
-        e.g. line ~612/773) reads ``self._gpu_win._hwnd`` — in unified
-        mode this is ``uo.hwnd``, the ONE host window every layer draws
-        into, not a window owned by this popup — and pushes it to real
-        ``HWND_TOPMOST``. ``_release_input_zorder`` is the intended
-        undo, called from both ``close()`` and
-        ``force_destroy_overlay()``, but it early-returns whenever
-        ``self._gpu_win._unified`` is True, on the same stale
-        "unified mode never makes the host topmost" assumption that bit
-        the fisheye hit layer (see
-        SAOPlayerGUIFisheyeMixin._demote_compositor_host_from_fisheye_topmost
-        for the sibling fix and full postmortem). Left unfixed here,
-        the host stays pinned to WS_EX_TOPMOST for the rest of the
-        session after the first time this popup opens — burying any
-        Tk input proxy created after that point (NerveGear, a plugin
-        draggable layer) permanently below it, independent of whatever
-        WS_EX_TRANSPARENT/SetWindowRgn state the host is otherwise in.
-
-        Called from ``_destroy_window`` — the single point every close
-        path (``close()``'s fade-then-teardown, and
-        ``force_destroy_overlay()``'s immediate teardown) funnels
-        through once the popup is actually gone.
-
-        Does NOT unconditionally force HWND_NOTOPMOST — an earlier
-        version of this fix did, and that was itself a regression (see
-        the sibling fisheye fix's docstring for the full postmortem):
-        the compositor's ``_enforce_z_order`` decides whether the host
-        SHOULD be topmost (it puts the host into the real topmost band
-        specifically when the attached game window is itself topmost).
-        Forcing NOTOPMOST here unconditionally fights that — if the
-        game (or another topmost overlay) is topmost, this would drop
-        the host BEHIND it. Re-invoking the compositor's own z-order
-        decision clears the stale "popup no longer justifies topmost"
-        state without overriding a legitimate one.
-        """
+        # Undo _raise_to_top's HWND_TOPMOST push on the SHARED compositor
+        # host (unified mode only — the legacy branch's own window is
+        # handled by _release_input_zorder above).
+        #
+        # ``_raise_to_top`` (called on every tick while the popup is open,
+        # e.g. line ~612/773) reads ``self._gpu_win._hwnd`` — in unified
+        # mode this is ``uo.hwnd``, the ONE host window every layer draws
+        # into, not a window owned by this popup — and pushes it to real
+        # ``HWND_TOPMOST``. ``_release_input_zorder`` is the intended
+        # undo, called from both ``close()`` and
+        # ``force_destroy_overlay()``, but it early-returns whenever
+        # ``self._gpu_win._unified`` is True, on the same stale
+        # "unified mode never makes the host topmost" assumption that bit
+        # the fisheye hit layer (see
+        # SAOPlayerGUIFisheyeMixin._demote_compositor_host_from_fisheye_topmost
+        # for the sibling fix and full postmortem). Left unfixed here,
+        # the host stays pinned to WS_EX_TOPMOST for the rest of the
+        # session after the first time this popup opens — burying any
+        # Tk input proxy created after that point (NerveGear, a plugin
+        # draggable layer) permanently below it, independent of whatever
+        # WS_EX_TRANSPARENT/SetWindowRgn state the host is otherwise in.
+        #
+        # Called from ``_destroy_window`` — the single point every close
+        # path (``close()``'s fade-then-teardown, and
+        # ``force_destroy_overlay()``'s immediate teardown) funnels
+        # through once the popup is actually gone.
+        #
+        # Does NOT unconditionally force HWND_NOTOPMOST — an earlier
+        # version of this fix did, and that was itself a regression (see
+        # the sibling fisheye fix's docstring for the full postmortem):
+        # the compositor's ``_enforce_z_order`` decides whether the host
+        # SHOULD be topmost (it puts the host into the real topmost band
+        # specifically when the attached game window is itself topmost).
+        # Forcing NOTOPMOST here unconditionally fights that — if the
+        # game (or another topmost overlay) is topmost, this would drop
+        # the host BEHIND it. Re-invoking the compositor's own z-order
+        # decision clears the stale "popup no longer justifies topmost"
+        # state without overriding a legitimate one.
         if sys.platform != 'win32':
             return
         try:
@@ -1435,10 +1442,10 @@ class SAOPopUpMenu:
             pass
 
     def _is_our_foreground(self) -> bool:
-        """Return True when the OS foreground window belongs to this
-        process. Compares process IDs rather than HWNDs so that other
-        toplevels of our own app (the main float window, dialogs, etc.)
-        all count as 'ours' and don't trigger an auto-close."""
+        # Return True when the OS foreground window belongs to this
+        # process. Compares process IDs rather than HWNDs so that other
+        # toplevels of our own app (the main float window, dialogs, etc.)
+        # all count as 'ours' and don't trigger an auto-close.
         if sys.platform != 'win32':
             return True  # only guard on Windows
         try:

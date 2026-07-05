@@ -1,10 +1,9 @@
 # -*- coding: utf-8 -*-
-"""Promote stable live name cross-reference matches into compact runtime cache.
-
-This tool consumes ``live_probe_id_candidates.json`` and writes only stable
-``id_space -> id -> text`` matches into ``tcp_preparse_name_cache.json``.  Raw
-runtime pointers and heap addresses are intentionally discarded.
-"""
+# Promote stable live name cross-reference matches into compact runtime cache.
+#
+# This tool consumes ``live_probe_id_candidates.json`` and writes only stable
+# ``id_space -> id -> text`` matches into ``tcp_preparse_name_cache.json``.  Raw
+# runtime pointers and heap addresses are intentionally discarded.
 from __future__ import annotations
 
 import argparse

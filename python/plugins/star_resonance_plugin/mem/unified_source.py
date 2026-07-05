@@ -1,19 +1,18 @@
 # -*- coding: utf-8 -*-
-"""Unified memory/TCP data source entry point.
-
-This module is intentionally conservative. It provides the missing
-`UnifiedDataSource` surface expected by `net.packet_bridge.PacketBridge`,
-while delegating read-only memory self-state work to `MemStateBridge`.
-
-Current scope:
-- self player identity / HP / stamina / skill CD / resources via memory-first
-  `MemStateBridge` with its built-in fallback behavior.
-- boss, monster, scene, and damage streams remain PacketBridge/TCP-owned until
-  their memory readers are proven live-safe.
-
-The class does not create another PacketBridge, so hybrid/auto startup cannot
-recurse.
-"""
+# Unified memory/TCP data source entry point.
+#
+# This module is intentionally conservative. It provides the missing
+# `UnifiedDataSource` surface expected by `net.packet_bridge.PacketBridge`,
+# while delegating read-only memory self-state work to `MemStateBridge`.
+#
+# Current scope:
+# - self player identity / HP / stamina / skill CD / resources via memory-first
+# `MemStateBridge` with its built-in fallback behavior.
+# - boss, monster, scene, and damage streams remain PacketBridge/TCP-owned until
+# their memory readers are proven live-safe.
+#
+# The class does not create another PacketBridge, so hybrid/auto startup cannot
+# recurse.
 
 from __future__ import annotations
 
@@ -31,12 +30,12 @@ _root_pointer_cache_fn = None
 
 
 def set_root_pointer_cache_fn(fn) -> None:
-    """Plugin injection: set the root pointer cache health callback."""
+    # Plugin injection: set the root pointer cache health callback.
     global _root_pointer_cache_fn
     _root_pointer_cache_fn = fn
 
 def set_bridge_classes(state_bridge_cls, self_state_provider_cls):
-    """Plugin injection point: register game-specific bridge classes."""
+    # Plugin injection point: register game-specific bridge classes.
     global _MemStateBridge, _MemSelfStateProvider
     _MemStateBridge = state_bridge_cls
     _MemSelfStateProvider = self_state_provider_cls
@@ -46,12 +45,11 @@ SelfCallback = Callable[[dict], None]
 
 
 class UnifiedDataSource:
-    """Small fail-safe adapter used by PacketBridge memory/hybrid/auto modes.
-
-    Parameters mirror the older PacketBridge expectation so this can be used as
-    a drop-in data source. Unsupported callback streams are retained for future
-    expansion and reported as TCP-owned in `health()`.
-    """
+    # Small fail-safe adapter used by PacketBridge memory/hybrid/auto modes.
+    #
+    # Parameters mirror the older PacketBridge expectation so this can be used as
+    # a drop-in data source. Unsupported callback streams are retained for future
+    # expansion and reported as TCP-owned in `health()`.
 
     def __init__(
         self,
@@ -123,37 +121,37 @@ class UnifiedDataSource:
     # ───────── public API expected by PacketBridge ─────────
 
     def set_dps_tracker(self, tracker) -> None:
-        """Forward a late-bound DPS tracker to the underlying MemStateBridge so its
-        entity loop can push the MEM damage table / per-skill breakdown."""
+        # Forward a late-bound DPS tracker to the underlying MemStateBridge so its
+        # entity loop can push the MEM damage table / per-skill breakdown.
         try:
             self._bridge.dps_tracker = tracker
         except Exception:
             pass
 
     def set_boss_raid_engine(self, engine) -> None:
-        """Forward a late-bound boss raid engine so the mem boss-action feed reaches
-        on_mem_boss_action (auto-dodge / offensive automation)."""
+        # Forward a late-bound boss raid engine so the mem boss-action feed reaches
+        # on_mem_boss_action (auto-dodge / offensive automation).
         try:
             self._bridge.boss_raid_engine = engine
         except Exception:
             pass
 
     def base_acquired(self) -> bool:
-        """True once the MEM bridge has read a valid entity snapshot (correct base)."""
+        # True once the MEM bridge has read a valid entity snapshot (correct base).
         try:
             return bool(self._bridge.base_acquired())
         except Exception:
             return False
 
     def boss_break(self):
-        """Latest MEM boss break dict {breaking_stage, extinction_pct, has_break_data} or None."""
+        # Latest MEM boss break dict {breaking_stage, extinction_pct, has_break_data} or None.
         try:
             return self._bridge.boss_break()
         except Exception:
             return None
 
     def start(self, *, defer: Optional[bool] = None) -> bool:
-        """Start or arm the underlying read-only memory self-state bridge."""
+        # Start or arm the underlying read-only memory self-state bridge.
         if self._started:
             return True
         if not self._policy["start_allowed"]:
@@ -170,7 +168,7 @@ class UnifiedDataSource:
         return self.start_bridge(trigger="start", context={})
 
     def start_bridge(self, *, trigger: str = "", context: Optional[dict] = None) -> bool:
-        """Idempotently start the heavy MemStateBridge after a TCP trigger."""
+        # Idempotently start the heavy MemStateBridge after a TCP trigger.
         with self._start_lock:
             if self._started:
                 return True
@@ -202,7 +200,7 @@ class UnifiedDataSource:
             return True
 
     def stop(self) -> None:
-        """Stop the underlying bridge. Never raises."""
+        # Stop the underlying bridge. Never raises.
         try:
             self._bridge.stop()
         except Exception as exc:
@@ -212,7 +210,7 @@ class UnifiedDataSource:
         self._notify_status("stopped", self._last_error)
 
     def health(self) -> dict:
-        """Return a JSON-serializable health snapshot."""
+        # Return a JSON-serializable health snapshot.
         mode = str(getattr(self._bridge, "mode", "") or self._last_status or "init")
         err = str(getattr(self._bridge, "last_error", "") or self._last_error or "")
         snap = self._safe_snapshot_dict()

@@ -1,49 +1,47 @@
 # -*- coding: utf-8 -*-
-"""
-SAOPlayerGUIPanelFxMixin — seventeenth mixin extracted from
-SAOPlayerGUI (round 64 of the sao_gui split refactor). 2 methods +
-2 class attributes + 1 module-level helper, ~150 lines.
-
-The SAO HUD panel-fx shared scheduler — the bit that draws the
-faint left/right ornamental sliders on every floating panel and
-ticks them together on one shared after(90 ms) loop so multiple
-floating panels share a single main-thread callback.
-
-Methods + class attrs:
-  * Class attr ``_sao_fx_panels: list[tuple]`` — active panel
-    list, items are ``(panel, body_canvas, pw, ph)``.
-  * Class attr ``_sao_fx_after_id: int | None`` — shared after()
-    ID (None when no panels are registered).
-  * ``_attach_sao_panel_fx(self, panel, header, inner, accent)`` —
-    register a Tk floating panel for the shared HUD scheduler.
-    Sets up:
-      - one HUD canvas under the header + one under the body
-        (via ``_make_sao_panel_hud``)
-      - signature cache (sao_fx_last_sig) so a tick with no
-        coordinate change skips Canvas operations entirely
-      - destroy binding to auto-remove the panel from the
-        registry when its Toplevel goes away
-      - starts the shared tick if this is the first registration
-  * ``_sao_fx_shared_tick(self_ref)`` (staticmethod, ``@_probe``-
-    decorated) — the 90 ms shared loop. Iterates the active panels
-    list, computes per-panel coordinates via
-    ``_CY_UI.sao_fx_coords``, and only moves Canvas items whose
-    sig changed. Re-schedules itself via ``self_ref.root.after``.
-
-Required SAOPlayerGUI attrs:
-  * self.root, self._destroyed
-
-These class attributes previously lived on
-``SAOPlayerGUIFloatChromeMixin`` (incidentally — they were declared
-there because they had been on SAOPlayerGUI proper and survived
-the round-56 extraction). Round 64 relocates them to their
-proper home with the methods that use them. Existing
-``SAOPlayerGUI._sao_fx_*`` references inside the methods are
-rewritten to ``type(self)._sao_fx_*`` / ``type(self_ref)._sao_fx_*``
-so the mixin doesn't need to import the not-yet-defined
-SAOPlayerGUI class (semantics identical via MRO + class-attr
-lookup).
-"""
+# SAOPlayerGUIPanelFxMixin — seventeenth mixin extracted from
+# SAOPlayerGUI (round 64 of the sao_gui split refactor). 2 methods +
+# 2 class attributes + 1 module-level helper, ~150 lines.
+#
+# The SAO HUD panel-fx shared scheduler — the bit that draws the
+# faint left/right ornamental sliders on every floating panel and
+# ticks them together on one shared after(90 ms) loop so multiple
+# floating panels share a single main-thread callback.
+#
+# Methods + class attrs:
+# * Class attr ``_sao_fx_panels: list[tuple]`` — active panel
+# list, items are ``(panel, body_canvas, pw, ph)``.
+# * Class attr ``_sao_fx_after_id: int | None`` — shared after()
+# ID (None when no panels are registered).
+# * ``_attach_sao_panel_fx(self, panel, header, inner, accent)`` —
+# register a Tk floating panel for the shared HUD scheduler.
+# Sets up:
+# - one HUD canvas under the header + one under the body
+# (via ``_make_sao_panel_hud``)
+# - signature cache (sao_fx_last_sig) so a tick with no
+# coordinate change skips Canvas operations entirely
+# - destroy binding to auto-remove the panel from the
+# registry when its Toplevel goes away
+# - starts the shared tick if this is the first registration
+# * ``_sao_fx_shared_tick(self_ref)`` (staticmethod, ``@_probe``-
+# decorated) — the 90 ms shared loop. Iterates the active panels
+# list, computes per-panel coordinates via
+# ``_CY_UI.sao_fx_coords``, and only moves Canvas items whose
+# sig changed. Re-schedules itself via ``self_ref.root.after``.
+#
+# Required SAOPlayerGUI attrs:
+# * self.root, self._destroyed
+#
+# These class attributes previously lived on
+# ``SAOPlayerGUIFloatChromeMixin`` (incidentally — they were declared
+# there because they had been on SAOPlayerGUI proper and survived
+# the round-56 extraction). Round 64 relocates them to their
+# proper home with the methods that use them. Existing
+# ``SAOPlayerGUI._sao_fx_*`` references inside the methods are
+# rewritten to ``type(self)._sao_fx_*`` / ``type(self_ref)._sao_fx_*``
+# so the mixin doesn't need to import the not-yet-defined
+# SAOPlayerGUI class (semantics identical via MRO + class-attr
+# lookup).
 
 from __future__ import annotations
 
@@ -57,7 +55,7 @@ import _sao_cy_uihelpers as _CY_UI  # type: ignore[import-not-found]
 
 
 def _make_sao_panel_hud(parent, width: int, height: int, alpha: float = 0.18):
-    """生成一个轻量 SAO HUD 画布，提供左右错层飘移装饰。"""
+    # 生成一个轻量 SAO HUD 画布，提供左右错层飘移装饰。
     cv = tk.Canvas(parent, width=width, height=height, bg=parent.cget('bg'),
                    highlightthickness=0, bd=0)
     cv.place(x=0, y=0, relwidth=1, relheight=1)
@@ -66,19 +64,18 @@ def _make_sao_panel_hud(parent, width: int, height: int, alpha: float = 0.18):
 
 
 class SAOPlayerGUIPanelFxMixin:
-    """Mixin bundling the SAO HUD panel-fx shared scheduler + state."""
+    # Mixin bundling the SAO HUD panel-fx shared scheduler + state.
 
     _sao_fx_panels = []       # [(panel, body_cv, pw, ph)] — 活跃面板列表
     _sao_fx_after_id = None   # 共享 after ID
 
     def _attach_sao_panel_fx(self, panel, header, inner, accent='#86dfff'):
-        """给 Tk 浮动面板附加 SAO 风格 HUD 装饰 (共享调度 + 签名缓存).
-
-        v2.3.15 优化:
-        - 所有面板共用一个 after(66) 循环 (合并去重)
-        - Canvas 内容按坐标签名缓存, 整数坐标不变时跳过 delete+rebuild
-        - 从 33ms/panel → 66ms/global, 多面板时主线程开销从 O(N) 降到 O(1)
-        """
+        # 给 Tk 浮动面板附加 SAO 风格 HUD 装饰 (共享调度 + 签名缓存).
+        #
+        # v2.3.15 优化:
+        # - 所有面板共用一个 after(66) 循环 (合并去重)
+        # - Canvas 内容按坐标签名缓存, 整数坐标不变时跳过 delete+rebuild
+        # - 从 33ms/panel → 66ms/global, 多面板时主线程开销从 O(N) 降到 O(1)
         try:
             panel.update_idletasks()
             pw = max(80, panel.winfo_width())
@@ -136,11 +133,10 @@ class SAOPlayerGUIPanelFxMixin:
     @staticmethod
     @_probe.decorate('ui.sao_fx_shared_tick')
     def _sao_fx_shared_tick(self_ref):
-        """共享 HUD 装饰 tick — 66ms 一次驱动所有面板.
-
-        比旧方案 (每面板独立 after(33)) 省 N-1 个 after 回调.
-        签名缓存确保仅坐标变化时才执行 Canvas 操作.
-        """
+        # 共享 HUD 装饰 tick — 66ms 一次驱动所有面板.
+        #
+        # 比旧方案 (每面板独立 after(33)) 省 N-1 个 after 回调.
+        # 签名缓存确保仅坐标变化时才执行 Canvas 操作.
         if self_ref._destroyed or not type(self_ref)._sao_fx_panels:
             type(self_ref)._sao_fx_after_id = None
             return

@@ -1,31 +1,30 @@
 # -*- coding: utf-8 -*-
-"""v2.3.0 Phase 3+ — GPU-presented SAOMenuBar fisheye row.
-
-The vertical menu sidebar (``SAOMenuBar``) lives inside the chroma-key
-``SAOPopUpMenu`` Toplevel. Each ``SAOCircleButton`` is a ``tk.Canvas``
-that paints a per-button PIL sprite + ``ImageTk.PhotoImage`` upload +
-``itemconfigure`` on the **Tk main thread** every fisheye tick. With 8
-buttons that's measurably the dominant cost of ``ui.menu.fisheye_tick``
-(~16 ms p99 on the user's box).
-
-This module replaces that visual layer with:
-
-- A single **GPU overlay window** (GLFW + ``moderngl``) sized to the
-  menubar rect, sitting **on top of** the chroma-key popup. Because
-  the popup's bg is ``#010101`` chroma-keyed and the SAOCircleButton
-  Canvases also inherit that bg, the area occupied by the menubar is
-  fully see-through, letting the GPU layer show through.
-- An **off-thread compose** path that snapshots all 8 button visual
-  states each tick and composites the entire strip into one BGRA frame
-  on the heavy ``AsyncFrameWorker`` lane.
-- The ``SAOCircleButton`` widgets remain in place as **invisible
-  hit-test rectangles** — their ``_draw`` is no-op'd when the painter
-  is attached, so no per-button PIL/PhotoImage work runs on the main
-  thread. Click/Enter/Leave bindings still fire because the widget
-  area exists.
-
-Entity menu bar rendering is GPU-required; do not fall back to Tk/ULW.
-"""
+# v2.3.0 Phase 3+ — GPU-presented SAOMenuBar fisheye row.
+#
+# The vertical menu sidebar (``SAOMenuBar``) lives inside the chroma-key
+# ``SAOPopUpMenu`` Toplevel. Each ``SAOCircleButton`` is a ``tk.Canvas``
+# that paints a per-button PIL sprite + ``ImageTk.PhotoImage`` upload +
+# ``itemconfigure`` on the **Tk main thread** every fisheye tick. With 8
+# buttons that's measurably the dominant cost of ``ui.menu.fisheye_tick``
+# (~16 ms p99 on the user's box).
+#
+# This module replaces that visual layer with:
+#
+# - A single **GPU overlay window** (GLFW + ``moderngl``) sized to the
+# menubar rect, sitting **on top of** the chroma-key popup. Because
+# the popup's bg is ``#010101`` chroma-keyed and the SAOCircleButton
+# Canvases also inherit that bg, the area occupied by the menubar is
+# fully see-through, letting the GPU layer show through.
+# - An **off-thread compose** path that snapshots all 8 button visual
+# states each tick and composites the entire strip into one BGRA frame
+# on the heavy ``AsyncFrameWorker`` lane.
+# - The ``SAOCircleButton`` widgets remain in place as **invisible
+# hit-test rectangles** — their ``_draw`` is no-op'd when the painter
+# is attached, so no per-button PIL/PhotoImage work runs on the main
+# thread. Click/Enter/Leave bindings still fire because the widget
+# area exists.
+#
+# Entity menu bar rendering is GPU-required; do not fall back to Tk/ULW.
 from __future__ import annotations
 
 import math
@@ -49,7 +48,7 @@ except Exception:  # pragma: no cover - optional dep
 
 
 def gpu_menu_bar_enabled() -> bool:
-    """Menu bar requires the shared Entity GPU backend."""
+    # Menu bar requires the shared Entity GPU backend.
     return require_entity_gpu('MenuBarGpuPainter', _gow)
 
 
@@ -74,9 +73,9 @@ def _finite_float(
 
 
 class _ButtonSnapshot:
-    """Plain data carrier for a single button's visual state. Built
-    on the main thread under the Tk lock and consumed on the worker —
-    it must not touch any Tk widget."""
+    # Plain data carrier for a single button's visual state. Built
+    # on the main thread under the Tk lock and consumed on the worker —
+    # it must not touch any Tk widget.
 
     __slots__ = ('size', 'hover_t', 'active', 'icon')
 
@@ -88,15 +87,14 @@ class _ButtonSnapshot:
 
 
 class MenuBarGpuPainter:
-    """Owns one ``GpuOverlayWindow`` + ``AsyncFrameWorker`` for the
-    SAOMenuBar fisheye strip. Composes all buttons into one BGRA
-    frame per tick on the worker lane and presents via moderngl.
-
-    The painter is a **passive** consumer of state: SAOMenuBar's
-    ``_tick_float`` snapshots its buttons after updating sizes and
-    feeds the snapshot in via :meth:`tick`. The painter handles its
-    own no-op deduping based on the snapshot signature.
-    """
+    # Owns one ``GpuOverlayWindow`` + ``AsyncFrameWorker`` for the
+    # SAOMenuBar fisheye strip. Composes all buttons into one BGRA
+    # frame per tick on the worker lane and presents via moderngl.
+    #
+    # The painter is a **passive** consumer of state: SAOMenuBar's
+    # ``_tick_float`` snapshots its buttons after updating sizes and
+    # feeds the snapshot in via :meth:`tick`. The painter handles its
+    # own no-op deduping based on the snapshot signature.
 
     def __init__(self, root: tk.Tk, slot_px: int, max_size: int,
                  hover_cb: Optional[Callable[[int], None]] = None,
@@ -319,10 +317,9 @@ class MenuBarGpuPainter:
              strip_w: int, strip_h: int,
              snapshots: List[_ButtonSnapshot],
              color_fns: 'BarColorFns') -> None:
-        """Drain the previous frame and (if state changed) submit a
-        new compose. Cheap to call every tick — does no PIL work and
-        early-outs when the snapshot signature is unchanged.
-        """
+        # Drain the previous frame and (if state changed) submit a
+        # new compose. Cheap to call every tick — does no PIL work and
+        # early-outs when the snapshot signature is unchanged.
         if self._destroyed or not snapshots:
             return
         # Defer window creation until Tk has reported a real screen
@@ -417,9 +414,9 @@ class MenuBarGpuPainter:
 
 
 class BarColorFns:
-    """Frozen color helpers + palette shared with SAOCircleButton.
-    Captured once per painter so the worker closure doesn't need to
-    import sao_theme (avoids circular import + Tk-touch surface)."""
+    # Frozen color helpers + palette shared with SAOCircleButton.
+    # Captured once per painter so the worker closure doesn't need to
+    # import sao_theme (avoids circular import + Tk-touch surface).
 
     __slots__ = (
         'border', 'bg', 'icon',

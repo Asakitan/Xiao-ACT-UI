@@ -1,52 +1,50 @@
 # -*- coding: utf-8 -*-
-"""
-SAOPlayerGUILinkAnimationMixin — seventeenth mixin extracted from
-SAOPlayerGUI (round 65 of the sao_gui split refactor). 12 methods,
-~851 lines.
-
-The full-screen SAO link-start / link-end overlay animations —
-the entry boot sequence shown when the app first appears + the
-exit pulse animation shown when the user clicks exit. Both use a
-moderngl standalone context to render at full resolution + a Tk
-Toplevel with WS_EX_LAYERED to composite over the desktop.
-
-Methods (in source order):
-  * _play_link_start (68) — top-level entry animation entry point.
-    Suspends GPU overlay creation, creates the entry Toplevel,
-    runs the boot animation, then resumes overlays + animates the
-    float button into its final position.
-  * _init_entry_boot_gl (101) — moderngl context + shader program
-    setup for the entry boot effect (vertex + fragment GLSL).
-  * _draw_entry_boot_gl (31) — per-frame GPU draw call.
-  * _create_entry_overlay (30) — Tk Toplevel construction for the
-    entry-animation overlay (with WS_EX_LAYERED + alpha).
-  * _draw_entry_overlay (107) — main-thread animation loop that
-    drives the GPU draw + alpha fade + text reveal.
-  * _run_entry_animation (66) — bridges the entry overlay into the
-    actual app startup (delays + completion callback).
-  * _init_exit_pulse_gl (107) — exit pulse moderngl setup (mirrors
-    the entry boot pattern).
-  * _draw_exit_pulse_gl (31) — exit GPU draw call.
-  * _get_exit_banner (17) — picks the exit-overlay text from
-    settings ("EXIT" / "SWITCH" / custom).
-  * _create_exit_overlay (42) — Tk Toplevel for the exit overlay.
-  * _draw_exit_overlay (141) — exit animation loop (longest in
-    this cluster).
-  * _collect_exit_windows (110) — enumerates every visible Tk
-    Toplevel + ULW window the exit animation needs to fade.
-
-Required SAOPlayerGUI attrs:
-  * self.root, self._float, self._fw, self._fh, self.settings
-  * self._exit_overlay, self._entry_overlay,
-    self._exit_overlay_gl_state, self._entry_overlay_gl_state
-  * self._after_shutdown
-
-Required SAOPlayerGUI methods (via MRO):
-    * _animate_float_to (FloatChrome mixin)
-  * _create_floating_widget (FloatHandlers mixin)
-    * _start_float_breath (FloatChrome mixin)
-  * _get_setting (SAOPlayerGUI)
-"""
+# SAOPlayerGUILinkAnimationMixin — seventeenth mixin extracted from
+# SAOPlayerGUI (round 65 of the sao_gui split refactor). 12 methods,
+# ~851 lines.
+#
+# The full-screen SAO link-start / link-end overlay animations —
+# the entry boot sequence shown when the app first appears + the
+# exit pulse animation shown when the user clicks exit. Both use a
+# moderngl standalone context to render at full resolution + a Tk
+# Toplevel with WS_EX_LAYERED to composite over the desktop.
+#
+# Methods (in source order):
+# * _play_link_start (68) — top-level entry animation entry point.
+# Suspends GPU overlay creation, creates the entry Toplevel,
+# runs the boot animation, then resumes overlays + animates the
+# float button into its final position.
+# * _init_entry_boot_gl (101) — moderngl context + shader program
+# setup for the entry boot effect (vertex + fragment GLSL).
+# * _draw_entry_boot_gl (31) — per-frame GPU draw call.
+# * _create_entry_overlay (30) — Tk Toplevel construction for the
+# entry-animation overlay (with WS_EX_LAYERED + alpha).
+# * _draw_entry_overlay (107) — main-thread animation loop that
+# drives the GPU draw + alpha fade + text reveal.
+# * _run_entry_animation (66) — bridges the entry overlay into the
+# actual app startup (delays + completion callback).
+# * _init_exit_pulse_gl (107) — exit pulse moderngl setup (mirrors
+# the entry boot pattern).
+# * _draw_exit_pulse_gl (31) — exit GPU draw call.
+# * _get_exit_banner (17) — picks the exit-overlay text from
+# settings ("EXIT" / "SWITCH" / custom).
+# * _create_exit_overlay (42) — Tk Toplevel for the exit overlay.
+# * _draw_exit_overlay (141) — exit animation loop (longest in
+# this cluster).
+# * _collect_exit_windows (110) — enumerates every visible Tk
+# Toplevel + ULW window the exit animation needs to fade.
+#
+# Required SAOPlayerGUI attrs:
+# * self.root, self._float, self._fw, self._fh, self.settings
+# * self._exit_overlay, self._entry_overlay,
+# self._exit_overlay_gl_state, self._entry_overlay_gl_state
+# * self._after_shutdown
+#
+# Required SAOPlayerGUI methods (via MRO):
+# * _animate_float_to (FloatChrome mixin)
+# * _create_floating_widget (FloatHandlers mixin)
+# * _start_float_breath (FloatChrome mixin)
+# * _get_setting (SAOPlayerGUI)
 
 from __future__ import annotations
 
@@ -65,10 +63,10 @@ from gui_modules.sao_panel_ui import _disable_native_window_shadow
 
 
 class SAOPlayerGUILinkAnimationMixin:
-    """Mixin bundling SAO link-start / link-end full-screen animations."""
+    # Mixin bundling SAO link-start / link-end full-screen animations.
 
     def _entity_transition_focus_center(self, fallback_x=None, fallback_y=None):
-        """Return the generic Entity transition focus center."""
+        # Return the generic Entity transition focus center.
         if fallback_x is not None and fallback_y is not None:
             return (float(fallback_x), float(fallback_y))
         try:

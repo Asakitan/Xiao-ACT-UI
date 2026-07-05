@@ -1,10 +1,8 @@
 # -*- coding: utf-8 -*-
-"""
-SAO Auto — Npcap 自动安装
-
-检测系统是否安装了 Npcap (wpcap.dll),
-未安装时自动下载并静默安装。
-"""
+# SAO Auto — Npcap 自动安装
+#
+# 检测系统是否安装了 Npcap (wpcap.dll),
+# 未安装时自动下载并静默安装。
 
 import os
 import sys
@@ -25,17 +23,15 @@ NPCAP_DLL_PATH = os.path.join(
 
 
 def is_npcap_installed() -> bool:
-    """检查 Npcap 是否已安装"""
+    # 检查 Npcap 是否已安装
     return os.path.isfile(NPCAP_DLL_PATH)
 
 
 def ensure_npcap(silent: bool = True) -> tuple:
-    """
-    确保 Npcap 已安装。
-
-    Returns:
-        (success: bool, message: str)
-    """
+    # 确保 Npcap 已安装。
+    #
+    # Returns:
+    # (success: bool, message: str)
     if is_npcap_installed():
         logger.info(f'[Npcap] 已安装: {NPCAP_DLL_PATH}')
         return True, 'Npcap 已安装'

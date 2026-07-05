@@ -1,19 +1,18 @@
 # -*- coding: utf-8 -*-
-"""Diagnose: NerveGear input proxy — what actually swallows clicks.
-
-Boots the real compositor + real GpuNerveGearButton (which now attaches
-a Tk input proxy), then measures ground truth instead of guessing:
-
-  - host WS_EX_TRANSPARENT + window region
-  - the proxy toplevel's real HWND geometry
-  - WindowFromPoint at: ball center, near-ball, far corner, screen
-    center — prints WHICH window owns each point (class + rect), so a
-    click-swallower is identified by name
-  - synthesizes a click on a probe Tk window far from the ball:
-    PROBE_CLICKED / PROBE_BLOCKED
-  - synthesizes a click on the ball: NG_CLICKED? and whether foreground
-    focus got stolen
-"""
+# Diagnose: NerveGear input proxy — what actually swallows clicks.
+#
+# Boots the real compositor + real GpuNerveGearButton (which now attaches
+# a Tk input proxy), then measures ground truth instead of guessing:
+#
+# - host WS_EX_TRANSPARENT + window region
+# - the proxy toplevel's real HWND geometry
+# - WindowFromPoint at: ball center, near-ball, far corner, screen
+# center — prints WHICH window owns each point (class + rect), so a
+# click-swallower is identified by name
+# - synthesizes a click on a probe Tk window far from the ball:
+# PROBE_CLICKED / PROBE_BLOCKED
+# - synthesizes a click on the ball: NG_CLICKED? and whether foreground
+# focus got stolen
 import os
 import sys
 import time

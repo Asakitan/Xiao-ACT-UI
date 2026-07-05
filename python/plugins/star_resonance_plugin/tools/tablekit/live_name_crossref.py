@@ -1,10 +1,9 @@
-"""Cross-reference live runtime Chinese name candidates with known ID tables.
-
-This tool does not promote live memory strings into authoritative tables.  It
-merges ``assets/name_tables/live_probe_candidates.json`` with existing TCP and
-community/config sources, then emits a confidence-scored draft that keeps every
-claim tied to its source.
-"""
+# Cross-reference live runtime Chinese name candidates with known ID tables.
+#
+# This tool does not promote live memory strings into authoritative tables.  It
+# merges ``assets/name_tables/live_probe_candidates.json`` with existing TCP and
+# community/config sources, then emits a confidence-scored draft that keeps every
+# claim tied to its source.
 
 from __future__ import annotations
 

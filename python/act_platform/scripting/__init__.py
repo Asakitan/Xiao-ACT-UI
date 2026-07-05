@@ -1,19 +1,18 @@
 # -*- coding: utf-8 -*-
-"""Multi-language scripting runtime registry.
-
-Discovers and manages language runtimes (Lua, C#, AngelScript, Emma)
-so that plugins can be written in any supported language while calling
-the full platform SDK through a unified bridge.
-
-Usage from PluginManager::
-
-    from act_platform.scripting import get_runtime, LANGUAGE_PYTHON
-
-    lang = manifest.get("language", LANGUAGE_PYTHON)
-    if lang != LANGUAGE_PYTHON:
-        runtime = get_runtime(lang)
-        module  = runtime.load_script(entry_path, record, ctx)
-"""
+# Multi-language scripting runtime registry.
+#
+# Discovers and manages language runtimes (Lua, C#, AngelScript, Emma)
+# so that plugins can be written in any supported language while calling
+# the full platform SDK through a unified bridge.
+#
+# Usage from PluginManager::
+#
+# from act_platform.scripting import get_runtime, LANGUAGE_PYTHON
+#
+# lang = manifest.get("language", LANGUAGE_PYTHON)
+# if lang != LANGUAGE_PYTHON:
+# runtime = get_runtime(lang)
+# module  = runtime.load_script(entry_path, record, ctx)
 
 from __future__ import annotations
 
@@ -50,11 +49,10 @@ _runtime_lock = threading.RLock()
 
 
 def get_runtime(language: str) -> "ScriptRuntime":
-    """Return (and lazily create) the runtime for *language*.
-
-    Raises ``ValueError`` for unknown languages, ``RuntimeError`` if
-    the runtime's native dependency is missing.
-    """
+    # Return (and lazily create) the runtime for *language*.
+    #
+    # Raises ``ValueError`` for unknown languages, ``RuntimeError`` if
+    # the runtime's native dependency is missing.
     lang = _normalize(language)
     if lang == LANGUAGE_PYTHON:
         raise ValueError("Python plugins use the native loader, not a ScriptRuntime")
@@ -72,7 +70,7 @@ def get_runtime(language: str) -> "ScriptRuntime":
 
 
 def get_cached_runtime(language: str) -> Optional["ScriptRuntime"]:
-    """Return an already-created non-Python runtime without instantiating it."""
+    # Return an already-created non-Python runtime without instantiating it.
     lang = _normalize(language)
     if lang == LANGUAGE_PYTHON:
         return None
@@ -81,12 +79,11 @@ def get_cached_runtime(language: str) -> Optional["ScriptRuntime"]:
 
 
 def release_runtime(language: str) -> bool:
-    """Drop a cached language runtime after its last plugin unloads.
-
-    Per-plugin resources are released by ``runtime.unload_script(record)``.
-    This function releases the shared wrapper so status/menu reads do not keep
-    a language runtime alive after all scripts using it were disabled/unloaded.
-    """
+    # Drop a cached language runtime after its last plugin unloads.
+    #
+    # Per-plugin resources are released by ``runtime.unload_script(record)``.
+    # This function releases the shared wrapper so status/menu reads do not keep
+    # a language runtime alive after all scripts using it were disabled/unloaded.
     lang = _normalize(language)
     if lang == LANGUAGE_PYTHON:
         return False
@@ -106,7 +103,7 @@ def release_runtime(language: str) -> bool:
 
 
 def runtime_loaded(language: str) -> bool:
-    """Return whether a non-Python runtime wrapper is currently cached."""
+    # Return whether a non-Python runtime wrapper is currently cached.
     lang = _normalize(language)
     if lang == LANGUAGE_PYTHON:
         return True
@@ -115,7 +112,7 @@ def runtime_loaded(language: str) -> bool:
 
 
 def runtime_available(language: str) -> bool:
-    """Check whether *language*'s runtime can be instantiated."""
+    # Check whether *language*'s runtime can be instantiated.
     lang = _normalize(language)
     if lang == LANGUAGE_PYTHON:
         return True
@@ -129,7 +126,7 @@ def runtime_available(language: str) -> bool:
 
 
 def detect_language(entry: str, manifest_language: str = "") -> str:
-    """Infer plugin language from manifest ``language`` field or entry extension."""
+    # Infer plugin language from manifest ``language`` field or entry extension.
     if manifest_language:
         lang = _normalize(manifest_language)
         if lang in SUPPORTED_LANGUAGES:
@@ -140,12 +137,11 @@ def detect_language(entry: str, manifest_language: str = "") -> str:
 
 
 def list_runtimes(*, probe: bool = False) -> dict[str, dict]:
-    """Return status of language runtimes.
-
-    By default this is introspection-only: it reports cached runtimes without
-    instantiating Lua/C#/AngelScript/Emma.  Pass ``probe=True`` from an explicit
-    diagnostics UI when dependency availability should be tested.
-    """
+    # Return status of language runtimes.
+    #
+    # By default this is introspection-only: it reports cached runtimes without
+    # instantiating Lua/C#/AngelScript/Emma.  Pass ``probe=True`` from an explicit
+    # diagnostics UI when dependency availability should be tested.
     out = {}
     for lang in SUPPORTED_LANGUAGES:
         if lang == LANGUAGE_PYTHON:

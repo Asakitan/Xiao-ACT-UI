@@ -94,7 +94,7 @@ def _fmt_time(seconds: Any) -> str:
 
 
 def _next_phase_key() -> str:
-    """手动切阶段热键标签 — 取默认表, 不硬编码键名 (默认表改了标签跟着走)。"""
+    # 手动切阶段热键标签 — 取默认表, 不硬编码键名 (默认表改了标签跟着走)。
     try:
         from config import DEFAULT_HOTKEYS
         return str(DEFAULT_HOTKEYS.get('boss_raid_next_phase') or 'F8').upper()
@@ -133,11 +133,11 @@ def _trigger_text(trigger: Optional[Dict[str, Any]]) -> str:
 
 
 class _BossReactionsEditorMixin:
-    """Shared scene→boss→observed-skill reaction editor, used by both the quick
-    BossRaid panel and the detailed editor. Container-agnostic: each host sets
-    self._rx_container (the frame to render into) + self._rx_rerender (a re-render
-    callback) via _render_reactions(); reaction state lives on the host
-    (_react_state / _react_boss / _react_scene / _load_reactions / _save_reaction)."""
+    # Shared scene→boss→observed-skill reaction editor, used by both the quick
+    # BossRaid panel and the detailed editor. Container-agnostic: each host sets
+    # self._rx_container (the frame to render into) + self._rx_rerender (a re-render
+    # callback) via _render_reactions(); reaction state lives on the host
+    # (_react_state / _react_boss / _react_scene / _load_reactions / _save_reaction).
 
     _TAG_BADGE = {
         'cast': ('施法', '#2b6f8a'), 'enrage': ('狂暴', '#c0392b'),
@@ -193,9 +193,9 @@ class _BossReactionsEditorMixin:
         return '%s ×%d · %s' % (head, cnt, dur)
 
     def _render_reactions(self, container, rerender) -> None:
-        """Render the full reactions editor into `container`; `rerender` re-runs
-        the host's render after scene/boss changes + saves. Observations come back
-        name-resolved + grouped (casts / mechanics / timeline) per selected boss."""
+        # Render the full reactions editor into `container`; `rerender` re-runs
+        # the host's render after scene/boss changes + saves. Observations come back
+        # name-resolved + grouped (casts / mechanics / timeline) per selected boss.
         import tkinter as _tk
         self._rx_container = container
         self._rx_rerender = rerender
@@ -387,8 +387,8 @@ class _BossReactionsEditorMixin:
         self._render_badges(card, t)
 
     def _render_obs_info(self, label: str, rec: Dict[str, Any]) -> None:
-        """Non-skill observation (mechanic / state) — marked with badges, info only.
-        Reactions for breaking/overdrive/stun are bound in the offensive section."""
+        # Non-skill observation (mechanic / state) — marked with badges, info only.
+        # Reactions for breaking/overdrive/stun are bound in the offensive section.
         card = tk.Frame(self._rx_container, bg=PANEL_CARD, highlightbackground=PANEL_EDGE,
                         highlightthickness=1, padx=8, pady=4)
         card.pack(fill=tk.X, pady=(0, 4))
@@ -473,10 +473,10 @@ class _BossReactionsEditorMixin:
 
 
 class _MechanicsEditorMixin:
-    """机制编辑器 (容器无关), 简单面板 / 详细编辑器 / Web 三处共用同一数据契约
-    (engines.boss_mechanics_state.build_mechanics_state)。宿主提供
-    self._mech_api: {'load','save_mech','delete_mech','test','set_master',
-    'create_from_skill','bind','unbind','search_catalog'} 可调用集合。"""
+    # 机制编辑器 (容器无关), 简单面板 / 详细编辑器 / Web 三处共用同一数据契约
+    # (engines.boss_mechanics_state.build_mechanics_state)。宿主提供
+    # self._mech_api: {'load','save_mech','delete_mech','test','set_master',
+    # 'create_from_skill','bind','unbind','search_catalog'} 可调用集合。
 
     _MECH_COLORS = ('#ef684e', '#dea620', '#68e4ff', '#9ad334', '#8e44ad', '#2e6fb0')
     _DODGE_PRESETS = ('无', '轻点按键', '按住按键', '连续冲刺', '按键序列')
@@ -522,7 +522,7 @@ class _MechanicsEditorMixin:
 
     @staticmethod
     def _dash_sequence(key='SHIFT', count=3, interval_ms=300):
-        """连续冲刺: 同一键每 interval_ms 触发一次, 共 count 次 (第一步无前延)。"""
+        # 连续冲刺: 同一键每 interval_ms 触发一次, 共 count 次 (第一步无前延)。
         key = (key or 'SHIFT').strip().upper() or 'SHIFT'
         try:
             count = max(1, min(8, int(count)))
@@ -561,7 +561,7 @@ class _MechanicsEditorMixin:
 
     def _mech_group_header(self, parent, key: str, title: str,
                            summary: str, has_content: bool) -> bool:
-        """可点开合的分组标题; 收起时把摘要带在标题后。返回当前是否展开。"""
+        # 可点开合的分组标题; 收起时把摘要带在标题后。返回当前是否展开。
         open_ = self._mech_sec_is_open(key, has_content)
         txt = ('▾ ' if open_ else '▸ ') + title
         if not open_ and summary:
@@ -575,7 +575,7 @@ class _MechanicsEditorMixin:
         return open_
 
     def _mech_adv_summary(self, det: Dict[str, Any]) -> str:
-        """高级触发收起时的一行摘要 (与 Web _mAdvSummary 逐字一致)。"""
+        # 高级触发收起时的一行摘要 (与 Web _mAdvSummary 逐字一致)。
         parts = []
         src = str(det.get('source') or 'any')
         if src == 'boss':
@@ -600,7 +600,7 @@ class _MechanicsEditorMixin:
 
     def _mech_dodge_summary(self, dodge: Dict[str, Any],
                             inline: Dict[str, Any]) -> str:
-        """躲避组收起时的一行摘要 (与 Web _mDodgeSummary 逐字一致)。"""
+        # 躲避组收起时的一行摘要 (与 Web _mDodgeSummary 逐字一致)。
         parts = []
         seq = list(inline.get('sequence') or [])
         key = str(inline.get('action_key') or '').strip()
@@ -631,7 +631,7 @@ class _MechanicsEditorMixin:
         return ' · '.join(parts) if parts else '未配置'
 
     def _mech_toast(self, msg: str, error: bool = False) -> None:
-        """面板内浮动反馈条 (2.6s 自散), 与 Web _mechNotice 同款配色。"""
+        # 面板内浮动反馈条 (2.6s 自散), 与 Web _mechNotice 同款配色。
         if not msg:
             return
         old = getattr(self, '_mech_toast_win', None)
@@ -666,8 +666,8 @@ class _MechanicsEditorMixin:
                          'create_from_skill', 'bind', 'unbind')
 
     def _mech_profile_id(self) -> str:
-        """机制操作的目标档案 id; 空=激活档案。详细面板覆写为当前选中档案,
-        否则「选了A档编辑, 实际改的是B档」。"""
+        # 机制操作的目标档案 id; 空=激活档案。详细面板覆写为当前选中档案,
+        # 否则「选了A档编辑, 实际改的是B档」。
         return ''
 
     def _mech_call(self, name: str, *args, _toast_error: bool = False, **kw):
@@ -1467,7 +1467,7 @@ class _MechanicsEditorMixin:
                            kind='danger', width=8).pack(side=tk.LEFT)
 
     def _mech_collect_draft(self) -> Dict[str, Any]:
-        """把当前表单变量回收进草稿 (供重渲染/试发/保存共用)。"""
+        # 把当前表单变量回收进草稿 (供重渲染/试发/保存共用)。
         v = self._mech_vars or {}
         draft = self._mech_draft or {}
         det = draft.setdefault('detect', {})

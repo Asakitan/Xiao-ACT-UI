@@ -1,20 +1,19 @@
-"""bundle_store - 版本化 bundle 仓库 (基址库 + 偏移库).
-
-设计:
-  ─ bundles/                                   ← 版本仓库根
-       index.json                              ← 摘要: {ga_size, sha256: bundle_id}
-       <bundle_id>.json                        ← 完整 bundle (按 ga 内容寻址)
-       <bundle_id>.meta.json                   ← 创建时间, dump_id, 类列表
-
-GA-key 计算:
-  game_key = sha256(GameAssembly.dll[:1MB])  — 文件首 1MB 哈希就能锁定版本
-
-工作流:
-  1. 启动: 探测当前 Star.exe 的 GameAssembly.dll, 算 game_key
-  2. 查 index.json: 命中 → 加载对应 bundle (~ms)
-  3. 未命中: 提示用户 dump (或自动调 Il2CppDumper, 若 EXE 路径已配置)
-  4. dump 完后用 bundle_build 生成新 bundle, 注册到 index.json
-"""
+# bundle_store - 版本化 bundle 仓库 (基址库 + 偏移库).
+#
+# 设计:
+# ─ bundles/                                   ← 版本仓库根
+# index.json                              ← 摘要: {ga_size, sha256: bundle_id}
+# <bundle_id>.json                        ← 完整 bundle (按 ga 内容寻址)
+# <bundle_id>.meta.json                   ← 创建时间, dump_id, 类列表
+#
+# GA-key 计算:
+# game_key = sha256(GameAssembly.dll[:1MB])  — 文件首 1MB 哈希就能锁定版本
+#
+# 工作流:
+# 1. 启动: 探测当前 Star.exe 的 GameAssembly.dll, 算 game_key
+# 2. 查 index.json: 命中 → 加载对应 bundle (~ms)
+# 3. 未命中: 提示用户 dump (或自动调 Il2CppDumper, 若 EXE 路径已配置)
+# 4. dump 完后用 bundle_build 生成新 bundle, 注册到 index.json
 from __future__ import annotations
 
 import hashlib
@@ -31,7 +30,7 @@ _DEFAULT_STORE = os.path.join(_HERE, "_cache", "bundles")
 
 
 def compute_game_key(ga_path: str, prefix_bytes: int = 1024 * 1024) -> str:
-    """对 GA 文件首 1MB 取 sha256, 作为版本指纹."""
+    # 对 GA 文件首 1MB 取 sha256, 作为版本指纹.
     h = hashlib.sha256()
     with open(ga_path, "rb") as f:
         h.update(f.read(prefix_bytes))
@@ -39,10 +38,9 @@ def compute_game_key(ga_path: str, prefix_bytes: int = 1024 * 1024) -> str:
 
 
 def compute_running_game_key() -> Optional[tuple]:
-    """运行时探测 Star.exe 的 GameAssembly.dll 路径并算 game_key.
-
-    返回 (game_key, ga_path, ga_size) or None.
-    """
+    # 运行时探测 Star.exe 的 GameAssembly.dll 路径并算 game_key.
+    #
+    # 返回 (game_key, ga_path, ga_size) or None.
     try:
         import psutil  # type: ignore
     except ImportError:
@@ -120,7 +118,7 @@ def list_bundles(store_dir: str = _DEFAULT_STORE) -> List[BundleEntry]:
 
 def find_bundle_for_key(game_key: str,
                         store_dir: str = _DEFAULT_STORE) -> Optional[str]:
-    """返回匹配 game_key 的 bundle 文件路径, 没有则 None."""
+    # 返回匹配 game_key 的 bundle 文件路径, 没有则 None.
     idx = _load_index(store_dir)
     e = idx.get(game_key)
     if not e:
@@ -130,10 +128,9 @@ def find_bundle_for_key(game_key: str,
 
 
 def find_bundle_for_running_game(store_dir: str = _DEFAULT_STORE) -> Optional[tuple]:
-    """返回 (bundle_path, game_key, ga_path) or None.
-
-    None 表示当前游戏版本没有对应 bundle, 需要 dump+build.
-    """
+    # 返回 (bundle_path, game_key, ga_path) or None.
+    #
+    # None 表示当前游戏版本没有对应 bundle, 需要 dump+build.
     info = compute_running_game_key()
     if info is None:
         return None
@@ -145,7 +142,7 @@ def find_bundle_for_running_game(store_dir: str = _DEFAULT_STORE) -> Optional[tu
 
 
 def register_bundle(bundle_path: str, store_dir: str = _DEFAULT_STORE) -> BundleEntry:
-    """把已生成的 bundle 文件注册进 store. 用 game_key 作为索引."""
+    # 把已生成的 bundle 文件注册进 store. 用 game_key 作为索引.
     with open(bundle_path, "r", encoding="utf-8") as f:
         bundle = json.load(f)
     meta = bundle.get("meta", {})

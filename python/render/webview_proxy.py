@@ -1,16 +1,15 @@
 # -*- coding: utf-8 -*-
-"""webview_proxy — capture pywebview windows and present via compositor.
-
-Instead of showing pywebview windows directly (which creates detectable
-overlay HWNDs), this module:
-  1. Moves pywebview windows off-screen (invisible to external window enumeration)
-  2. Captures their rendered content via PrintWindow → BGRA
-  3. Uploads the BGRA to compositor layers (single DWM overlay)
-  4. Forwards mouse/keyboard events from the layer to the hidden window
-
-The result: WebView content renders in the unified overlay, no extra
-overlay-style windows visible to EnumWindows.
-"""
+# webview_proxy — capture pywebview windows and present via compositor.
+#
+# Instead of showing pywebview windows directly (which creates detectable
+# overlay HWNDs), this module:
+# 1. Moves pywebview windows off-screen (invisible to external window enumeration)
+# 2. Captures their rendered content via PrintWindow → BGRA
+# 3. Uploads the BGRA to compositor layers (single DWM overlay)
+# 4. Forwards mouse/keyboard events from the layer to the hidden window
+#
+# The result: WebView content renders in the unified overlay, no extra
+# overlay-style windows visible to EnumWindows.
 from __future__ import annotations
 
 import ctypes
@@ -134,11 +133,10 @@ _gdi32.GetDIBits.restype = ctypes.c_int
 
 
 def _capture_window(hwnd: int, w: int, h: int) -> Optional[bytes]:
-    """Capture a window's content via PrintWindow → BGRA bytes.
-
-    Returns premultiplied BGRA bytes (top-down) or None on failure.
-    Uses PW_RENDERFULLCONTENT to capture WebView2/DComp content.
-    """
+    # Capture a window's content via PrintWindow → BGRA bytes.
+    #
+    # Returns premultiplied BGRA bytes (top-down) or None on failure.
+    # Uses PW_RENDERFULLCONTENT to capture WebView2/DComp content.
     hdc_screen = _user32.GetDC(0)
     hdc_mem = _gdi32.CreateCompatibleDC(hdc_screen)
     hbmp = _gdi32.CreateCompatibleBitmap(hdc_screen, w, h)
@@ -183,18 +181,17 @@ def _capture_window(hwnd: int, w: int, h: int) -> Optional[bytes]:
 
 
 def _make_lparam(x: int, y: int) -> int:
-    """Pack (x, y) into LPARAM for mouse messages."""
+    # Pack (x, y) into LPARAM for mouse messages.
     return (y & 0xFFFF) << 16 | (x & 0xFFFF)
 
 
 # ── WebViewProxy ─────────────────────────────────────────────────
 class WebViewProxy:
-    """Proxies a pywebview window through the unified overlay compositor.
-
-    Captures the window's rendered content and presents it as a
-    compositor layer. Forwards input events from the layer to the
-    hidden window.
-    """
+    # Proxies a pywebview window through the unified overlay compositor.
+    #
+    # Captures the window's rendered content and presents it as a
+    # compositor layer. Forwards input events from the layer to the
+    # hidden window.
 
     def __init__(self, hwnd: int, name: str,
                  width: int, height: int,
@@ -218,7 +215,7 @@ class WebViewProxy:
         self._visible = False
 
     def start(self) -> None:
-        """Start capturing and presenting the webview window."""
+        # Start capturing and presenting the webview window.
         if self._running:
             return
 
@@ -359,7 +356,7 @@ def register_webview_proxy(
     click_through: bool = True,
     capture_fps: float = 15.0,
 ) -> WebViewProxy:
-    """Register a pywebview window for compositor proxying."""
+    # Register a pywebview window for compositor proxying.
     with _proxy_lock:
         if name in _proxies:
             _proxies[name].stop()

@@ -1,10 +1,9 @@
 # -*- coding: utf-8 -*-
-"""Build and update lightweight runtime name tables.
-
-These tables are the small assets consumed by ``NameResolver`` at runtime.  They
-store stable ID -> name mappings only and intentionally ignore live dump
-provenance files such as full StringPool exports or pointer-table scans.
-"""
+# Build and update lightweight runtime name tables.
+#
+# These tables are the small assets consumed by ``NameResolver`` at runtime.  They
+# store stable ID -> name mappings only and intentionally ignore live dump
+# provenance files such as full StringPool exports or pointer-table scans.
 from __future__ import annotations
 
 import argparse
@@ -218,13 +217,12 @@ def _classified_entries(kind: str) -> dict[str, dict[str, str]]:
 
 
 def _community_entries(kind: str) -> dict[str, dict[str, str]]:
-    """Per-kind base names from OUR project only (no neighbour repo).
-
-    Classified kinds come from the self-contained classifier; boss mechanics from
-    combat_preparse; every other kind falls back to our own committed
-    ``<kind>.json`` so a missing StarResonanceDps/resonance checkout never empties
-    a table.
-    """
+    # Per-kind base names from OUR project only (no neighbour repo).
+    #
+    # Classified kinds come from the self-contained classifier; boss mechanics from
+    # combat_preparse; every other kind falls back to our own committed
+    # ``<kind>.json`` so a missing StarResonanceDps/resonance checkout never empties
+    # a table.
     if kind in _CLASSIFIED_KINDS:
         classified = _classified_entries(kind)
         if classified:
@@ -286,14 +284,13 @@ def merge_entries(existing: Mapping[str, Mapping[str, str]], incoming: Mapping[s
 
 
 def _overlay_entries(base: Mapping[str, Mapping[str, str]], overlay: Mapping[str, Mapping[str, str]]) -> dict[str, dict[str, str]]:
-    """Force ``overlay`` on top of ``base``: overlay wins every id collision.
-
-    ``base`` is the neighbouring reference data (StarResonanceDps DataTools /
-    resonance-logs-cn static tables) used only to fill ids we have not parsed.
-    ``overlay`` is our own live MEM/TCP parse (the runtime name cache, whose text
-    is the in-memory display name and whose id is pointer-table/anchor matched),
-    which is authoritative and therefore overrides the reference name on conflict.
-    """
+    # Force ``overlay`` on top of ``base``: overlay wins every id collision.
+    #
+    # ``base`` is the neighbouring reference data (StarResonanceDps DataTools /
+    # resonance-logs-cn static tables) used only to fill ids we have not parsed.
+    # ``overlay`` is our own live MEM/TCP parse (the runtime name cache, whose text
+    # is the in-memory display name and whose id is pointer-table/anchor matched),
+    # which is authoritative and therefore overrides the reference name on conflict.
     out = {
         str(k): {"text": str(v.get("text") or ""), "confidence": str(v.get("confidence") or "static")}
         for k, v in base.items() if v.get("text")
@@ -361,14 +358,13 @@ def update_runtime_tables(cache_path: str = _DEFAULT_CACHE, *, output_dir: str =
 
 def overlay_cache_into_existing_tables(cache_path: str = _DEFAULT_CACHE, *, output_dir: str = _NAME_TABLES,
                                        write: bool = True, include_local_cache: bool = False) -> dict[str, Any]:
-    """Fold our live MEM/TCP parse (the name cache) onto the existing on-disk tables.
-
-    Unlike :func:`update_runtime_tables`, this does NOT re-run the semantic
-    classifier and does NOT pull neighbouring reference tables.  It only writes
-    the names we parsed from memory (cache ``text``) over the ids they belong to,
-    leaving every other on-disk entry untouched.  Use this to align the runtime
-    tables with the authoritative cache without risking classifier drift.
-    """
+    # Fold our live MEM/TCP parse (the name cache) onto the existing on-disk tables.
+    #
+    # Unlike :func:`update_runtime_tables`, this does NOT re-run the semantic
+    # classifier and does NOT pull neighbouring reference tables.  It only writes
+    # the names we parsed from memory (cache ``text``) over the ids they belong to,
+    # leaving every other on-disk entry untouched.  Use this to align the runtime
+    # tables with the authoritative cache without risking classifier drift.
     cache = _load_json(cache_path)
     if include_local_cache and os.path.abspath(cache_path) == os.path.abspath(_DEFAULT_CACHE):
         cache = _merge_cache_payloads(cache, _load_json(_LOCAL_CACHE))

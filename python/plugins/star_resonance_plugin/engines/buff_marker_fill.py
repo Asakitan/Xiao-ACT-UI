@@ -1,18 +1,17 @@
 # -*- coding: utf-8 -*-
-"""buff_marker_fill - 机制 buff 智能填入 detect.buff_ids (离线, 静态名字缓存即可).
-
-boss 出招会给玩家/boss 挂机制标记 buff(点名/分摊/衰减...), TCP BuffInfoSync 实时下发,
-引擎 detect.buff_ids 已支持 OR 匹配 → 填上 buff_ids 检测路径立刻可用。
-
-三层填法 (按可信度):
-  1. CURATED: 逐 boss 人工对照表 (名字不同义/跨词序的配对, 分析定论) — 强制绑定。
-  2. 自动匹配: boss buff 段内, 名字归一(剥 boss 前缀/点名/标记等) 后
-     精确==1.0 / 包含=0.8 / 2-gram Dice; **逐 buff 对全机制取 argmax**(防 分摊/幻分摊 串绑),
-     ≥0.8 才绑; 0.5~0.8 只进报告(待人工确认)不写入。
-  3. 黑名单 token: 天生/出生/中转/虚拟体/计数/弱点研究 等内部簿记 buff 不参与自动绑定。
-
-合并不覆盖: 已有 buff_ids 保留, 只追加去重(13023终 已手工分析的不动)。
-"""
+# buff_marker_fill - 机制 buff 智能填入 detect.buff_ids (离线, 静态名字缓存即可).
+#
+# boss 出招会给玩家/boss 挂机制标记 buff(点名/分摊/衰减...), TCP BuffInfoSync 实时下发,
+# 引擎 detect.buff_ids 已支持 OR 匹配 → 填上 buff_ids 检测路径立刻可用。
+#
+# 三层填法 (按可信度):
+# 1. CURATED: 逐 boss 人工对照表 (名字不同义/跨词序的配对, 分析定论) — 强制绑定。
+# 2. 自动匹配: boss buff 段内, 名字归一(剥 boss 前缀/点名/标记等) 后
+# 精确==1.0 / 包含=0.8 / 2-gram Dice; **逐 buff 对全机制取 argmax**(防 分摊/幻分摊 串绑),
+# ≥0.8 才绑; 0.5~0.8 只进报告(待人工确认)不写入。
+# 3. 黑名单 token: 天生/出生/中转/虚拟体/计数/弱点研究 等内部簿记 buff 不参与自动绑定。
+#
+# 合并不覆盖: 已有 buff_ids 保留, 只追加去重(13023终 已手工分析的不动)。
 from __future__ import annotations
 
 import re
@@ -98,7 +97,7 @@ CURATED_GEOMETRY: Dict[str, Dict] = {
 
 
 def normalize_name(s: str) -> str:
-    """剥 boss 前缀/角色词/标点 → 机制语义核心。"""
+    # 剥 boss 前缀/角色词/标点 → 机制语义核心。
     s = _PUNCT_RE.sub("", str(s or ""))
     return _STRIP_RE.sub("", s)
 
@@ -108,7 +107,7 @@ def _bigrams(s: str) -> set:
 
 
 def match_score(mech_name: str, buff_name: str) -> float:
-    """归一后: 精确=1.0; 互相包含=0.8; 否则 2-gram Dice。"""
+    # 归一后: 精确=1.0; 互相包含=0.8; 否则 2-gram Dice。
     a, b = normalize_name(mech_name), normalize_name(buff_name)
     if not a or not b or len(a) < 2 or len(b) < 2:
         return 0.0
@@ -130,8 +129,8 @@ def _is_blacklisted(buff_name: str, extra: Tuple[str, ...] = ()) -> bool:
 def auto_match_buffs(profile: dict, buff_names: Dict[int, str],
                      bind_threshold: float = 0.8,
                      report_threshold: float = 0.5) -> Dict[str, List]:
-    """段内逐 buff 对全机制 argmax 自动匹配。返回 {bound:[(mech_id,buff_id,buff_name,score)],
-    suggest:[同形, 0.5~0.8 待确认不写入]}。不修改 profile。"""
+    # 段内逐 buff 对全机制 argmax 自动匹配。返回 {bound:[(mech_id,buff_id,buff_name,score)],
+    # suggest:[同形, 0.5~0.8 待确认不写入]}。不修改 profile。
     pat = (profile or {}).get("target_name_pattern", "")
     segs = BOSS_BUFF_SEGMENTS.get(pat)
     mechs = (profile or {}).get("mechanics", []) or []
@@ -158,8 +157,8 @@ def auto_match_buffs(profile: dict, buff_names: Dict[int, str],
 
 
 def apply_fill(profile: dict, buff_names: Dict[int, str]) -> Dict[str, List]:
-    """CURATED + 自动匹配 → 合并写入 detect.buff_ids (追加去重, 不删已有)。
-    返回 {filled:[(mech_id,added_ids,rule)], suggest:[...], geometry:[mech_id]}。"""
+    # CURATED + 自动匹配 → 合并写入 detect.buff_ids (追加去重, 不删已有)。
+    # 返回 {filled:[(mech_id,added_ids,rule)], suggest:[...], geometry:[mech_id]}。
     res = auto_match_buffs(profile, buff_names)
     add_map: Dict[str, Dict[int, str]] = {}
     for mid, bid, _bn, _sc in res["bound"]:

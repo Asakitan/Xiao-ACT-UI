@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
-"""Selftest: auto_dodge_director — camera-relative + world-vector → WASD mapping,
-camera reader quaternion math, and the move dispatch (down/up pairing)."""
+# Selftest: auto_dodge_director — camera-relative + world-vector → WASD mapping,
+# camera reader quaternion math, and the move dispatch (down/up pairing).
 from __future__ import annotations
 
 import math

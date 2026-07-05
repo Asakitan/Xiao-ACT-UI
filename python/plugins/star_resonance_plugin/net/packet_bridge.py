@@ -1,19 +1,17 @@
 # -*- coding: utf-8 -*-
-"""
-SAO Auto — 网络抓包数据桥接
-
-PacketBridge 与 RecognitionEngine 接口一致，可直接替换。
-通过 Npcap 抓包获取游戏数据，更新到 GameStateManager。
-
-用法:
-    from plugins.star_resonance_plugin.engines.game_state import GameStateManager
-    from plugins.star_resonance_plugin.net.packet_bridge import PacketBridge
-
-    mgr = GameStateManager()
-    bridge = PacketBridge(mgr)
-    bridge.start()   # 后台抓包 + 解析 + 推送
-    bridge.stop()
-"""
+# SAO Auto — 网络抓包数据桥接
+#
+# PacketBridge 与 RecognitionEngine 接口一致，可直接替换。
+# 通过 Npcap 抓包获取游戏数据，更新到 GameStateManager。
+#
+# 用法:
+# from plugins.star_resonance_plugin.engines.game_state import GameStateManager
+# from plugins.star_resonance_plugin.net.packet_bridge import PacketBridge
+#
+# mgr = GameStateManager()
+# bridge = PacketBridge(mgr)
+# bridge.start()   # 后台抓包 + 解析 + 推送
+# bridge.stop()
 
 import threading
 import time
@@ -54,7 +52,7 @@ from utils.perf_probe import probe as _probe
 logger = logging.getLogger('sao_auto.bridge')
 
 def _get_skill_name(skill_id: int) -> str:
-    """Resolve a numeric skill_id through the runtime NameResolver."""
+    # Resolve a numeric skill_id through the runtime NameResolver.
     skill_id = int(skill_id or 0)
     if skill_id <= 0:
         return ''
@@ -101,11 +99,10 @@ def _get_skill_id_for_level(player: PlayerData, skill_level_id: int) -> int:
 
 
 def _infer_slot_map_from_cds(player: PlayerData) -> dict:
-    """When ProfessionList is missed, infer a synthetic slot map from observed skill CDs.
-
-    Uses profession-specific anchor tables to pin normal attack to slot 1
-    and ultimate to slot 7 when the profession is known.
-    """
+    # When ProfessionList is missed, infer a synthetic slot map from observed skill CDs.
+    #
+    # Uses profession-specific anchor tables to pin normal attack to slot 1
+    # and ultimate to slot 7 when the profession is known.
     cd_map = getattr(player, 'skill_cd_map', {}) or {}
     seen_ids = list(getattr(player, 'skill_seen_ids', []) or [])
     last_use = getattr(player, 'skill_last_use_at', {}) or {}
@@ -186,7 +183,7 @@ _SLOT_DISPLAY_ORDER: dict = {
 
 
 def _remap_slot_index(internal_slot: int) -> int:
-    """Map internal ProfessionList slot number to HUD display position."""
+    # Map internal ProfessionList slot number to HUD display position.
     try:
         idx = int(internal_slot or 0)
     except Exception:
@@ -195,17 +192,16 @@ def _remap_slot_index(internal_slot: int) -> int:
 
 
 def _build_packet_skill_slots(player: PlayerData):
-    """Convert packet skill mappings + cooldown state into the HUD slot format.
-
-    Proto semantics (SkillCDInfo / SkillCD):
-      - duration   : total cooldown length in ms
-      - begin_time : server timestamp (ms) when the CD started
-      - valid_cd_time : elapsed cooldown time in ms (increases over time)
-      - charge_count : charges remaining (for charge-type skills)
-
-    When ProfessionList is not available (full sync missed), falls back to
-    inferring a slot map from observed skill CDs and usage history.
-    """
+    # Convert packet skill mappings + cooldown state into the HUD slot format.
+    #
+    # Proto semantics (SkillCDInfo / SkillCD):
+    # - duration   : total cooldown length in ms
+    # - begin_time : server timestamp (ms) when the CD started
+    # - valid_cd_time : elapsed cooldown time in ms (increases over time)
+    # - charge_count : charges remaining (for charge-type skills)
+    #
+    # When ProfessionList is not available (full sync missed), falls back to
+    # inferring a slot map from observed skill CDs and usage history.
     slot_map = dict(getattr(player, 'skill_slot_map', {}) or {})
     inferred = False
     if not slot_map:
@@ -346,15 +342,13 @@ def _build_packet_skill_slots(player: PlayerData):
 
 
 class PacketBridge:
-    """
-    与 RecognitionEngine 同接口的抓包数据桥。
-
-    Interface:
-      - __init__(state_mgr, settings=None)
-      - start()
-      - stop()
-      - single_capture() -> Optional[dict]
-    """
+    # 与 RecognitionEngine 同接口的抓包数据桥。
+    #
+    # Interface:
+    # - __init__(state_mgr, settings=None)
+    # - start()
+    # - stop()
+    # - single_capture() -> Optional[dict]
 
     # ── 节流参数 ──
     _PUBLISH_MIN_INTERVAL = 0.08     # 非 tick 推送最小间隔 (秒), 约 12fps
@@ -366,14 +360,12 @@ class PacketBridge:
                  data_source: str = 'tcp',
                  on_skill_event=None, on_dungeon_event=None,
                  plugin_manager=None, event_bus: EventBus | None = None):
-        """
-        data_source:
-            'tcp'    — current behavior, full TCP packet parsing
-            'memory' — strict mem_probe only; no TCP damage fallback
-            'hybrid' — mem_probe for self/scene/entity/combat;
-                       TCP only for damage events (PATH B)
-            'auto'   — try memory; fall back to tcp on failure
-        """
+        # data_source:
+        # 'tcp'    — current behavior, full TCP packet parsing
+        # 'memory' — strict mem_probe only; no TCP damage fallback
+        # 'hybrid' — mem_probe for self/scene/entity/combat;
+        # TCP only for damage events (PATH B)
+        # 'auto'   — try memory; fall back to tcp on failure
         self._state_mgr = state_mgr
         self._settings = settings
         self._on_damage = on_damage
@@ -449,7 +441,7 @@ class PacketBridge:
         self._error_msg = ''
 
     def _on_tcp_name_cache_saved(self, path: str) -> None:
-        """Refresh lightweight name tables and resolver after compact TCP names are saved."""
+        # Refresh lightweight name tables and resolver after compact TCP names are saved.
         now = time.time()
         if now - self._last_name_resolver_reload_ts < 1.0:
             return
@@ -463,7 +455,7 @@ class PacketBridge:
             logger.debug(f'[Bridge] runtime name table refresh failed after tcp name cache save: {exc}')
 
     def _get_watched_slots(self):
-        """Return set of watched skill slot indices from settings."""
+        # Return set of watched skill slot indices from settings.
         if self._settings:
             watched = self._settings.get('watched_skill_slots', None)
             if isinstance(watched, list) and watched:
@@ -483,34 +475,33 @@ class PacketBridge:
         return self._get_component_source(component, 'packet') == 'packet'
 
     def set_mem_authoritative(self, value: bool) -> None:
-        """Called by the mem bridge: True when the memory source owns real-time self
-        state (hybrid). TCP then defers self hp/stamina/skills/level to memory and
-        keeps only identity/anchor + damage events. Auto-cleared on mem->TCP fallback.
-
-        Phase 5 back-compat shim: when ``mem_per_field_authority`` is enabled in
-        settings, the bridge prefers ``set_field_authority`` (granular per-field
-        map) and this method becomes a no-op that only updates the bool mirror.
-        """
+        # Called by the mem bridge: True when the memory source owns real-time self
+        # state (hybrid). TCP then defers self hp/stamina/skills/level to memory and
+        # keeps only identity/anchor + damage events. Auto-cleared on mem->TCP fallback.
+        #
+        # Phase 5 back-compat shim: when ``mem_per_field_authority`` is enabled in
+        # settings, the bridge prefers ``set_field_authority`` (granular per-field
+        # map) and this method becomes a no-op that only updates the bool mirror.
         self._mem_authoritative = bool(value)
 
     def set_field_authority(self, authority) -> None:
-        """Phase 5: install the granular per-field authority map.
-
-        When set, ``_publish_player_update`` consults ``authority.source(comp)``
-        per component instead of the single ``_mem_authoritative`` bool. Each
-        component can independently be Source.TCP / Source.MEMORY / Source.EITHER,
-        so one reader in backoff no longer flips the whole subsystem to TCP.
-
-        Passing ``None`` reverts to legacy single-bool behavior (back-compat)."""
+        # Phase 5: install the granular per-field authority map.
+        #
+        # When set, ``_publish_player_update`` consults ``authority.source(comp)``
+        # per component instead of the single ``_mem_authoritative`` bool. Each
+        # component can independently be Source.TCP / Source.MEMORY / Source.EITHER,
+        # so one reader in backoff no longer flips the whole subsystem to TCP.
+        #
+        # Passing ``None`` reverts to legacy single-bool behavior (back-compat).
         self._field_authority = authority
 
     def _component_source_for_publish(self, component: str) -> str:
-        """Return 'tcp' or 'memory' for one component at publish time.
-
-        Honors the granular FieldAuthority map when installed; otherwise falls back
-        to the legacy single-bool signal (mem_auth => all of hp/level/stamina/skills
-        belong to memory). 'memory' tells the publish path to skip writing that
-        component (the mem bridge owns it)."""
+        # Return 'tcp' or 'memory' for one component at publish time.
+        #
+        # Honors the granular FieldAuthority map when installed; otherwise falls back
+        # to the legacy single-bool signal (mem_auth => all of hp/level/stamina/skills
+        # belong to memory). 'memory' tells the publish path to skip writing that
+        # component (the mem bridge owns it).
         fa = self._field_authority
         try:
             if self._settings is not None and hasattr(self._settings, 'get') \
@@ -531,13 +522,12 @@ class PacketBridge:
         return 'memory' if bool(getattr(self, '_mem_authoritative', False)) else 'tcp'
 
     def start(self):
-        """启动抓包，后台线程运行.
-
-        data_source='memory'  → 跑 UnifiedDataSource, 不启动 TCP 抓包/伤害兜底
-        data_source='hybrid'  → UnifiedDataSource 补自身状态 + 保留 TCP 战斗/实体/Boss 兜底
-        data_source='auto'    → 尝试 memory; 失败则降级 TCP
-        data_source='tcp'     → 当前默认行为, 完整 TCP 抓包
-        """
+        # 启动抓包，后台线程运行.
+        #
+        # data_source='memory'  → 跑 UnifiedDataSource, 不启动 TCP 抓包/伤害兜底
+        # data_source='hybrid'  → UnifiedDataSource 补自身状态 + 保留 TCP 战斗/实体/Boss 兜底
+        # data_source='auto'    → 尝试 memory; 失败则降级 TCP
+        # data_source='tcp'     → 当前默认行为, 完整 TCP 抓包
         if self._running:
             return
         self._running = True
@@ -571,9 +561,9 @@ class PacketBridge:
     _name_tables_warmed = False
 
     def _warm_name_tables_async(self) -> None:
-        """Eagerly build the name-table classifier index + resolver kind tables on
-        a background daemon thread so the first combat event does not pay the
-        ~1.5MB JSON parse on the parse/capture thread (S3 self-heal root cause)."""
+        # Eagerly build the name-table classifier index + resolver kind tables on
+        # a background daemon thread so the first combat event does not pay the
+        # ~1.5MB JSON parse on the parse/capture thread (S3 self-heal root cause).
         if PacketBridge._name_tables_warmed:
             return
         PacketBridge._name_tables_warmed = True
@@ -597,10 +587,10 @@ class PacketBridge:
             PacketBridge._name_tables_warmed = False
 
     def set_dps_tracker(self, tracker) -> None:
-        """Wire the DPS tracker so the (lazily-created) memory source can push the
-        MEM damage table / per-skill breakdown into the DPS panel. The mem source is
-        created on the first TCP scene trigger -- usually after this is called -- but
-        forward to a live source too in case the order ever flips."""
+        # Wire the DPS tracker so the (lazily-created) memory source can push the
+        # MEM damage table / per-skill breakdown into the DPS panel. The mem source is
+        # created on the first TCP scene trigger -- usually after this is called -- but
+        # forward to a live source too in case the order ever flips.
         self._dps_tracker = tracker
         ms = self._mem_source
         if ms is not None:
@@ -610,9 +600,9 @@ class PacketBridge:
                 logger.warning('[Bridge] set_dps_tracker passthrough to mem source failed', exc_info=True)
 
     def set_boss_raid_engine(self, engine) -> None:
-        """Wire the boss raid engine so the (lazily-created) memory source can push
-        the boss-action feed (cast_skill_id edge -> on_mem_boss_action). The mem
-        source is created on the first TCP scene trigger, usually after this call."""
+        # Wire the boss raid engine so the (lazily-created) memory source can push
+        # the boss-action feed (cast_skill_id edge -> on_mem_boss_action). The mem
+        # source is created on the first TCP scene trigger, usually after this call.
         self._boss_raid_engine = engine
         ms = self._mem_source
         if ms is not None:
@@ -622,7 +612,7 @@ class PacketBridge:
                 logger.warning('[Bridge] set_boss_raid_engine passthrough to mem source failed', exc_info=True)
 
     def _start_memory_source(self) -> bool:
-        """Lazy-import + start UnifiedDataSource. Returns True on success."""
+        # Lazy-import + start UnifiedDataSource. Returns True on success.
         try:
             from mem_probe.unified_source import UnifiedDataSource
         except ImportError as e:
@@ -650,7 +640,7 @@ class PacketBridge:
             return False
 
     def _on_mem_status_change(self, status: str, error: str = "") -> None:
-        """Forward mem_probe status into state_mgr's health flags."""
+        # Forward mem_probe status into state_mgr's health flags.
         try:
             self._state_mgr.update(
                 packet_active=(status == "running"),
@@ -660,7 +650,7 @@ class PacketBridge:
             pass
 
     def stop(self):
-        """停止抓包"""
+        # 停止抓包
         self._running = False
         if self._mem_source is not None:
             try:
@@ -683,11 +673,11 @@ class PacketBridge:
             self._thread = None
 
     def single_capture(self):
-        """返回当前快照 (兼容 RecognitionEngine 接口)"""
+        # 返回当前快照 (兼容 RecognitionEngine 接口)
         return self._state_mgr.state.to_dict()
 
     def health(self) -> dict:
-        """Phase 10: unified health status across all data sources."""
+        # Phase 10: unified health status across all data sources.
         out = {
             "data_source": self._data_source_mode,
             "running": self._running,
@@ -730,24 +720,23 @@ class PacketBridge:
         return out
 
     def get_alive_monsters(self) -> list:
-        """Return list of alive monster dicts from the parser."""
+        # Return list of alive monster dicts from the parser.
         if self._parser:
             return self._parser.get_alive_monsters()
         return []
 
     def get_monster(self, uuid: int):
-        """Return a single MonsterData by uuid, or None."""
+        # Return a single MonsterData by uuid, or None.
         if self._parser:
             return self._parser.get_monsters().get(uuid)
         return None
 
     def boss_break_source(self) -> str:
-        """Who owns the boss break signal right now: 'mem' or 'tcp'.
-
-        TCP mode -> always 'tcp' (no mem source). hybrid/auto/memory -> 'mem' once the
-        MEM bridge has acquired a correct base (sticky), else 'tcp'. Shield is NOT
-        covered here — shield always comes from TCP regardless of this result.
-        """
+        # Who owns the boss break signal right now: 'mem' or 'tcp'.
+        #
+        # TCP mode -> always 'tcp' (no mem source). hybrid/auto/memory -> 'mem' once the
+        # MEM bridge has acquired a correct base (sticky), else 'tcp'. Shield is NOT
+        # covered here — shield always comes from TCP regardless of this result.
         if self._data_source_mode == 'tcp':
             return 'tcp'
         ms = self._mem_source
@@ -759,7 +748,7 @@ class PacketBridge:
         return 'tcp'
 
     def get_boss_break_mem(self):
-        """MEM boss break dict {breaking_stage, extinction_pct, has_break_data} or None."""
+        # MEM boss break dict {breaking_stage, extinction_pct, has_break_data} or None.
         ms = self._mem_source
         if ms is None:
             return None
@@ -769,7 +758,7 @@ class PacketBridge:
             return None
 
     def get_players(self) -> dict:
-        """Return all tracked players {uid → PlayerData} from the parser."""
+        # Return all tracked players {uid → PlayerData} from the parser.
         if self._parser:
             return self._parser.get_players()
         return {}
@@ -777,7 +766,7 @@ class PacketBridge:
     # ─── 内部 ───
 
     def _run(self):
-        """主运行流程"""
+        # 主运行流程
         try:
             self._run_inner()
         except Exception as e:
@@ -1177,13 +1166,12 @@ class PacketBridge:
                 logger.debug('[Bridge] on_scene_change callback error', exc_info=True)
 
     def _create_live_parser_adapter(self, *, preferred_uid: int = 0):
-        """Create the live TCP parser adapter with plugin opt-in + safe fallback.
-
-        The built-in adapter remains the default because it owns the existing
-        PacketParser state used by player/monster cache compatibility methods.
-        Plugin adapters are accepted only when explicitly selected and their
-        metadata declares packet-source support.
-        """
+        # Create the live TCP parser adapter with plugin opt-in + safe fallback.
+        #
+        # The built-in adapter remains the default because it owns the existing
+        # PacketParser state used by player/monster cache compatibility methods.
+        # Plugin adapters are accepted only when explicitly selected and their
+        # metadata declares packet-source support.
         requested_id = self._requested_live_parser_adapter_id()
         if requested_id in ('', 'star_resonance_tcp'):
             return self._builtin_live_parser_adapter(preferred_uid=preferred_uid, requested_id=requested_id)
@@ -1328,7 +1316,7 @@ class PacketBridge:
         self._last_parser_progress_t = time.time()
 
     def _run_inner(self):
-        """主运行流程 (实际逻辑)"""
+        # 主运行流程 (实际逻辑)
         logger.info('[Bridge] 启动网络抓包数据桥...')
 
         # ── Npcap 自动安装 ──
@@ -1552,11 +1540,10 @@ class PacketBridge:
                 logger.warning(f'[Bridge] capture handle restart request failed: {e}')
 
     def _on_server_change(self):
-        """抓包层回调: 检测到场景服务器切换 (切换地图/副本)。
-
-        重置解析器场景数据 (清除旧怪物)，
-        并重置 bridge 内部状态以等待新场景的数据。
-        """
+        # 抓包层回调: 检测到场景服务器切换 (切换地图/副本)。
+        #
+        # 重置解析器场景数据 (清除旧怪物)，
+        # 并重置 bridge 内部状态以等待新场景的数据。
         logger.info('[Bridge] 场景服务器切换 — 重置场景数据')
         print('[Bridge] ⚡ 场景服务器切换 — 清理旧场景数据，等待新场景同步', flush=True)
         # 1. 让解析器清理怪物缓存 (会触发 on_scene_change → webview)
@@ -1598,13 +1585,12 @@ class PacketBridge:
     # ═══════════════════════════════════════
 
     def get_commander_data(self) -> dict:
-        """Build a snapshot for the Commander Panel.
-
-        Returns dict with:
-          team_id, leader_uid, members (list of member dicts with is_self flag),
-          self_skill_slots (computed CDs for self player),
-          dungeon_id, dungeon scene info.
-        """
+        # Build a snapshot for the Commander Panel.
+        #
+        # Returns dict with:
+        # team_id, leader_uid, members (list of member dicts with is_self flag),
+        # self_skill_slots (computed CDs for self player),
+        # dungeon_id, dungeon scene info.
         if not self._parser:
             return {'team_id': 0, 'leader_uid': 0, 'members': [],
                     'self_skill_slots': [], 'dungeon_id': 0}
@@ -1664,7 +1650,7 @@ class PacketBridge:
         }
 
     def _on_player_update(self, player: PlayerData):
-        """解析器回调: 当前玩家数据变更 (节流: 跳过高频重复推送)"""
+        # 解析器回调: 当前玩家数据变更 (节流: 跳过高频重复推送)
         now = time.time()
         with self._lock:
             if self._last_update_t == 0:
@@ -1982,7 +1968,7 @@ class PacketBridge:
         self._state_mgr.update(recognition_ok=False, error_msg=msg)
 
     def _stabilize_packet_stamina(self, current: int, stamina_max: int, energy_priority: int) -> int:
-        """Hold packet-only STA spikes until they repeat, instead of showing instant jumps."""
+        # Hold packet-only STA spikes until they repeat, instead of showing instant jumps.
         (result_cur,
          self._stable_sta_current,
          self._stable_sta_max,

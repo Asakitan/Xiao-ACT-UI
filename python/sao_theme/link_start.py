@@ -663,12 +663,17 @@ void main() {
         return False
 
     def _render_gpu_present_frame(self, ctx, _pump_t: float) -> None:
-        """GpuOverlayWindow 回调：在 pump 拥有的 GL context 中直接渲染到屏幕。"""
+        # GpuOverlayWindow render callback.
         if getattr(self, '_gpu_present_done', False):
             return
         if not getattr(self, '_gpu_present_frame_requested', False):
             return
         try:
+            # Compositor binds the layer FBO before calling this callback.
+            # Capture it so _copy_present_tex_to_screen writes to the
+            # correct target (not ctx.screen which is the host window).
+            self._gpu_target_fbo = ctx.detect_framebuffer(
+                ctx.fbo.glo) if hasattr(ctx, 'detect_framebuffer') else ctx.screen
             if self._gl_ctx is not ctx:
                 self._init_gl(ctx=ctx)
                 self._gpu_present_ready = True
@@ -679,7 +684,7 @@ void main() {
                 self._gpu_present_frame_requested = False
                 self._post_gpu_present_finish()
                 return
-            self._render_linkstart_gl_frame(elapsed, target_fbo=ctx.screen, readback_canvas=None)
+            self._render_linkstart_gl_frame(elapsed, target_fbo=self._gpu_target_fbo, readback_canvas=None)
             alpha = 1.0
             if scene_t >= self._P4_START and scene_t >= self._DURATION - 1.5:
                 ft = min(1.0, (scene_t - (self._DURATION - 1.5)) / 1.5)
@@ -719,12 +724,12 @@ void main() {
             self._finish()
 
     def _copy_present_tex_to_screen(self, alpha: float = 1.0) -> None:
-        """把后处理 ping-pong 输出纹理直接 blit 到 GLFW framebuffer。"""
         if not self._gl_ctx or not hasattr(self, '_gl_copyvao'):
             return
         src_tex = self._gl_ptex_a if ((self._gl_pframe - 1) & 1) == 0 else self._gl_ptex_b
-        self._gl_ctx.screen.use()
-        self._gl_ctx.viewport = (0, 0, self._sw, self._sh)
+        target = getattr(self, '_gpu_target_fbo', None) or self._gl_ctx.screen
+        target.use()
+        self._gl_ctx.viewport = (0, 0, target.width, target.height)
         src_tex.use(location=0)
         self._gl_copyprog['u_tex'].value = 0
         self._gl_copyprog['u_alpha'].value = max(0.0, min(1.0, float(alpha)))

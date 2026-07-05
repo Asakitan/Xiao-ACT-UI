@@ -1,13 +1,11 @@
-"""
-Spike: verify skia-python (CPU SkSurface for text/atlas baking) + moderngl
-(standalone GL context for SDF shader rendering) can coexist in one process,
-and that a skia-rendered RGBA atlas uploads cleanly into a moderngl texture.
-
-Run:
-    e:/Py/python.exe -m sao_auto.tools.spike_skia_moderngl
-or:
-    cd e:/VC/SAO-UI/sao_auto/tools && e:/Py/python.exe spike_skia_moderngl.py
-"""
+# Spike: verify skia-python (CPU SkSurface for text/atlas baking) + moderngl
+# (standalone GL context for SDF shader rendering) can coexist in one process,
+# and that a skia-rendered RGBA atlas uploads cleanly into a moderngl texture.
+#
+# Run:
+# e:/Py/python.exe -m sao_auto.tools.spike_skia_moderngl
+# or:
+# cd e:/VC/SAO-UI/sao_auto/tools && e:/Py/python.exe spike_skia_moderngl.py
 from __future__ import annotations
 
 import os
@@ -29,7 +27,7 @@ W, H = 256, 64
 
 
 def bake_skia_atlas() -> bytes:
-    """CPU-side skia: draw 'BURST READY' to RGBA bytes."""
+    # CPU-side skia: draw 'BURST READY' to RGBA bytes.
     info = skia.ImageInfo.Make(W, H, skia.ColorType.kRGBA_8888_ColorType,
                                skia.AlphaType.kPremul_AlphaType)
     surf = skia.Surface.MakeRaster(info)
@@ -44,7 +42,7 @@ def bake_skia_atlas() -> bytes:
 
 
 def upload_to_moderngl(rgba: bytes) -> tuple[float, float]:
-    """Create standalone GL context, upload texture, render to FBO, read back."""
+    # Create standalone GL context, upload texture, render to FBO, read back.
     t0 = time.perf_counter()
     ctx = moderngl.create_standalone_context(require=330)
     t1 = time.perf_counter()

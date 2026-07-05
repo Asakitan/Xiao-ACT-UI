@@ -1,8 +1,8 @@
 # -*- coding: utf-8 -*-
-"""Click-passthrough probe: creates a normal (non-topmost) Tk window,
-synthesizes a real mouse click on it, and reports whether the click
-arrived. With the fullscreen compositor host above it, the click only
-gets through if the host's window region has a hole there."""
+# Click-passthrough probe: creates a normal (non-topmost) Tk window,
+# synthesizes a real mouse click on it, and reports whether the click
+# arrived. With the fullscreen compositor host above it, the click only
+# gets through if the host's window region has a hole there.
 import sys
 import ctypes
 import tkinter as tk

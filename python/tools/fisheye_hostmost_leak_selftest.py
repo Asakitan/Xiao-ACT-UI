@@ -1,36 +1,35 @@
 # -*- coding: utf-8 -*-
-"""Selftest: closing the fisheye menu must not leave NerveGear (or any
-other unified-mode Tk input proxy) permanently unclickable.
-
-Reproduces the user's report: "关闭鱼眼菜单后点击穿透还是失效，nervgear
-还是没法点击" (after CLOSING the fisheye menu, click passthrough is STILL
-broken, NerveGear STILL can't be clicked) — a DIFFERENT, deeper bug than
-the raise_topmost() one already fixed (a90adbf), on a totally separate
-code path.
-
-Root cause: SAOPlayerGUIFisheyeMixin._raise_compositor_above_fisheye_hit_layer
-does SetWindowPos(uo.hwnd, HWND_TOPMOST, ...) every time the fisheye's
-full-screen hit layer (re)appears (_create_fisheye_hit_layer calls it via
-_set_fisheye_hit_layer_clickthrough(False) right after creating the
-layer) — necessary, since the hit layer is itself real WS_EX_TOPMOST and
-covers the whole screen, so the host must join the topmost band to sit
-above it. But _release_fisheye_input_zorder / _restore_fisheye_exit_zorder
-— the intended "undo" pair — both early-return whenever
-`gpu_win._unified` is True, on the (once-true, now-stale) assumption
-that unified mode never makes the host topmost. Once
-_raise_compositor_above_fisheye_hit_layer started doing exactly that,
-NOTHING ever demoted the host back — it stays pinned to real
-WS_EX_TOPMOST for the rest of the session after the very FIRST fisheye
-open, permanently sitting above any Tk input proxy (NerveGear's, a
-plugin's) created from that point on.
-
-Constructs a minimal stub carrying only what the two real (unbound)
-mixin methods touch (_fisheye_hit_layer), drives the REAL
-_create_fisheye_hit_layer-equivalent SetWindowPos call (same win32
-sequence, since building a real Tk-backed hit layer needs the full GUI
-class) and the REAL _destroy_fisheye_hit_layer, and checks a REAL
-NerveGear proxy's clickability across the open -> close cycle.
-"""
+# Selftest: closing the fisheye menu must not leave NerveGear (or any
+# other unified-mode Tk input proxy) permanently unclickable.
+#
+# Reproduces the user's report: "关闭鱼眼菜单后点击穿透还是失效，nervgear
+# 还是没法点击" (after CLOSING the fisheye menu, click passthrough is STILL
+# broken, NerveGear STILL can't be clicked) — a DIFFERENT, deeper bug than
+# the raise_topmost() one already fixed (a90adbf), on a totally separate
+# code path.
+#
+# Root cause: SAOPlayerGUIFisheyeMixin._raise_compositor_above_fisheye_hit_layer
+# does SetWindowPos(uo.hwnd, HWND_TOPMOST, ...) every time the fisheye's
+# full-screen hit layer (re)appears (_create_fisheye_hit_layer calls it via
+# _set_fisheye_hit_layer_clickthrough(False) right after creating the
+# layer) — necessary, since the hit layer is itself real WS_EX_TOPMOST and
+# covers the whole screen, so the host must join the topmost band to sit
+# above it. But _release_fisheye_input_zorder / _restore_fisheye_exit_zorder
+# — the intended "undo" pair — both early-return whenever
+# `gpu_win._unified` is True, on the (once-true, now-stale) assumption
+# that unified mode never makes the host topmost. Once
+# _raise_compositor_above_fisheye_hit_layer started doing exactly that,
+# NOTHING ever demoted the host back — it stays pinned to real
+# WS_EX_TOPMOST for the rest of the session after the very FIRST fisheye
+# open, permanently sitting above any Tk input proxy (NerveGear's, a
+# plugin's) created from that point on.
+#
+# Constructs a minimal stub carrying only what the two real (unbound)
+# mixin methods touch (_fisheye_hit_layer), drives the REAL
+# _create_fisheye_hit_layer-equivalent SetWindowPos call (same win32
+# sequence, since building a real Tk-backed hit layer needs the full GUI
+# class) and the REAL _destroy_fisheye_hit_layer, and checks a REAL
+# NerveGear proxy's clickability across the open -> close cycle.
 import os
 import sys
 import time

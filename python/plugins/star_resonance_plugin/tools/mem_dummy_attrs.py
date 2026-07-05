@@ -1,11 +1,10 @@
 # -*- coding: utf-8 -*-
-"""Find the dummy entity (MaxHp ~1.78M) in ZEntityMgr and dump ALL its typed attrs.
-
-Combat HP lives in ZEntity.attrs_ (ZAttrCollection) -> cacheSlim_._values @ attrs+0x20
-(ValueTuple<uint,object[]>[]). Each object[] element is a typed ZAttr<T>:
-value_ @ obj+0x14 (Int/Float/Bool), @ obj+0x18 (Long/String). We dump every slot so
-MaxHp(=~1.78M) and CurHp(=~200-300K) are visible, plus the matching slot indices.
-"""
+# Find the dummy entity (MaxHp ~1.78M) in ZEntityMgr and dump ALL its typed attrs.
+#
+# Combat HP lives in ZEntity.attrs_ (ZAttrCollection) -> cacheSlim_._values @ attrs+0x20
+# (ValueTuple<uint,object[]>[]). Each object[] element is a typed ZAttr<T>:
+# value_ @ obj+0x14 (Int/Float/Bool), @ obj+0x18 (Long/String). We dump every slot so
+# MaxHp(=~1.78M) and CurHp(=~200-300K) are visible, plus the matching slot indices.
 from __future__ import annotations
 import struct, sys, os
 _HERE=os.path.dirname(os.path.abspath(__file__)); _ROOT=os.path.dirname(_HERE)

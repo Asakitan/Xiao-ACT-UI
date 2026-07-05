@@ -6,10 +6,9 @@ import ctypes
 def apply_native_chrome(win, *, dark_caption: bool = True,
                         rounded: bool = True,
                         shadow: bool = True) -> None:
-    """Apply native Windows chrome tweaks to a Tk toplevel.
-
-    Safe no-op on unsupported systems.
-    """
+    # Apply native Windows chrome tweaks to a Tk toplevel.
+    #
+    # Safe no-op on unsupported systems.
     try:
         win.update_idletasks()
         user32 = ctypes.windll.user32

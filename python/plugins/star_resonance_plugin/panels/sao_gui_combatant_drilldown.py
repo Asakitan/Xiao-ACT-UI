@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""Entity-mode ACT combatant drilldown panel."""
+# Entity-mode ACT combatant drilldown panel.
 
 from __future__ import annotations
 
@@ -82,7 +82,7 @@ def _list_count(value: Any) -> int:
 
 
 class CombatantDrilldownPanel:
-    """SAO-styled combatant detail panel for Entity/Tk."""
+    # SAO-styled combatant detail panel for Entity/Tk.
 
     def __init__(self, root: tk.Misc, owner: Any):
         self.root = root
@@ -326,7 +326,7 @@ class CombatantDrilldownPanel:
                     '可从 DPS 面板或 ACT 数据中选择角色。').pack(fill='x', padx=4, pady=10)
 
     def _render_metrics(self, summary: Mapping[str, Any]) -> None:
-        """Render the 4 KPI metric tiles row."""
+        # Render the 4 KPI metric tiles row.
         if self._rows is None:
             return
         hits = _finite_int(summary.get('hits'), 0, lo=0)
@@ -346,7 +346,7 @@ class CombatantDrilldownPanel:
                 row=0, column=idx, sticky='nsew', padx=3, pady=3)
 
     def _render_skills(self, skills: list[Mapping[str, Any]]) -> None:
-        """Render collapsible skill breakdown section using aggregate_row."""
+        # Render collapsible skill breakdown section using aggregate_row.
         if self._rows is None:
             return
         box = section_card(self._rows,
@@ -408,7 +408,7 @@ class CombatantDrilldownPanel:
         self._status_var.set(f'OPEN SKILL {sid}')
 
     def _render_interactions(self, status: Mapping[str, Any]) -> None:
-        """Render outgoing / incoming / focus section using section_card + aggregate_row."""
+        # Render outgoing / incoming / focus section using section_card + aggregate_row.
         if self._rows is None:
             return
         filters = status.get('filters') if isinstance(status.get('filters'), Mapping) else {}
@@ -460,7 +460,7 @@ class CombatantDrilldownPanel:
                 ).pack(fill='x', pady=1)
 
     def _render_sidebar(self, status: Mapping[str, Any]) -> None:
-        """Render the right sidebar with party member cards (name + class + damage)."""
+        # Render the right sidebar with party member cards (name + class + damage).
         side = getattr(self, '_side', None)
         if side is None:
             return
@@ -494,7 +494,7 @@ class CombatantDrilldownPanel:
                          font=get_cjk_font(9), anchor='w').pack(fill='x', pady=6)
 
     def _gather_party_members(self, status: Mapping[str, Any]) -> list[dict[str, Any]]:
-        """Collect party member list from the DPS tracker / report for sidebar display."""
+        # Collect party member list from the DPS tracker / report for sidebar display.
         members: list[dict[str, Any]] = []
         try:
             tracker = getattr(self.owner, '_dps_tracker', None)
@@ -524,7 +524,7 @@ class CombatantDrilldownPanel:
 
     def _sidebar_card(self, parent: tk.Misc, name: str, value: str, *,
                        profession: str = '', highlight: bool = False) -> None:
-        """One player card in the sidebar: name + class subtitle + right-aligned damage."""
+        # One player card in the sidebar: name + class subtitle + right-aligned damage.
         bg = _SAO_PANEL_HEADER_BG if highlight else _SAO_PANEL_BODY_BG
         card = tk.Frame(parent, bg=bg, highlightthickness=1,
                         highlightbackground=_SAO_PANEL_GOLD if highlight else _SAO_PANEL_BORDER)
@@ -557,7 +557,7 @@ class CombatantDrilldownPanel:
 
     @staticmethod
     def _pct_int(value: Any) -> str:
-        """Integer-format percentage (e.g. 38%) matching the webref tile style."""
+        # Integer-format percentage (e.g. 38%) matching the webref tile style.
         return f"{int(round(_finite_float(value, 0.0, lo=0.0, hi=1.0) * 100))}%"
 
     @staticmethod

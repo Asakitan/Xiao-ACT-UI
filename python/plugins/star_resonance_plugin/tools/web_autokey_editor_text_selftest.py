@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""Static checks for user-visible editor text and basic tags."""
+# Static checks for user-visible editor text and basic tags.
 
 from __future__ import annotations
 

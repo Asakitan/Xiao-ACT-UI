@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""Regression coverage for ACT plugin capability metadata."""
+# Regression coverage for ACT plugin capability metadata.
 
 from __future__ import annotations
 

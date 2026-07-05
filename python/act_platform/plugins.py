@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""In-process Python plugin manager for ACT platform extensions."""
+# In-process Python plugin manager for ACT platform extensions.
 
 from __future__ import annotations
 
@@ -508,7 +508,7 @@ def _setting_value_ids(setting: Mapping[str, Any]) -> set[str]:
 
 
 def _normalize_sao_menu(value: Any) -> dict[str, Any]:
-    """Normalize optional manifest-declared SAO menu metadata."""
+    # Normalize optional manifest-declared SAO menu metadata.
     if not isinstance(value, Mapping):
         return {}
     safe = _json_safe(value)
@@ -577,14 +577,13 @@ def _normalize_sao_menu(value: Any) -> dict[str, Any]:
 
 
 def _normalize_requires(value: Any) -> tuple[str, ...]:
-    """Normalize manifest requirements into stable string tokens.
-
-    Older built-in plugin manifests use a plain list such as
-    ``["star_resonance"]``. Workspace-root script plugins may use a mapping
-    with a platform version and runtime features:
-    ``{"act_platform": ">=1.0", "runtime_features": ["rgba_frame"]}``.
-    Keep both forms discoverable without loading the plugin.
-    """
+    # Normalize manifest requirements into stable string tokens.
+    #
+    # Older built-in plugin manifests use a plain list such as
+    # ``["star_resonance"]``. Workspace-root script plugins may use a mapping
+    # with a platform version and runtime features:
+    # ``{"act_platform": ">=1.0", "runtime_features": ["rgba_frame"]}``.
+    # Keep both forms discoverable without loading the plugin.
     out: list[str] = []
 
     def add(raw: Any) -> None:
@@ -823,7 +822,7 @@ class PluginRecord:
 
 
 class EngineAccess:
-    """Trusted in-process plugin bridge to SAO Auto owner/runtime engines."""
+    # Trusted in-process plugin bridge to SAO Auto owner/runtime engines.
 
     def __init__(self, manager: "PluginManager", record: Optional[PluginRecord] = None) -> None:
         self._manager = manager
@@ -964,7 +963,7 @@ class EngineAccess:
 
 
 class PluginContext:
-    """Small SDK object passed to in-process plugins."""
+    # Small SDK object passed to in-process plugins.
 
     def __init__(self, manager: "PluginManager", record: PluginRecord) -> None:
         self._manager = manager
@@ -986,7 +985,7 @@ class PluginContext:
         return self._stop_event.is_set()
 
     def register_thread(self, thread: threading.Thread) -> None:
-        """Register a worker thread so it gets joined on plugin unload."""
+        # Register a worker thread so it gets joined on plugin unload.
         if isinstance(thread, threading.Thread):
             self._registered_threads.append(thread)
 
@@ -1002,13 +1001,12 @@ class PluginContext:
 
     @property
     def mem(self) -> Any:
-        """Read-only memory-scan facade (see :mod:`mem_probe.mem_access`).
-
-        Hybrid-gated: in TCP-only mode every method returns
-        ``{"ok": False, "reason": "mode_tcp", ...}``.  In hybrid/auto/memory it
-        exposes ``self_state/entities/boss/damage_totals/skill_damage/attr_map/
-        resolve_name/read_at/search/...`` plus ``catalog()`` and ``status()``.
-        """
+        # Read-only memory-scan facade (see :mod:`mem_probe.mem_access`).
+        #
+        # Hybrid-gated: in TCP-only mode every method returns
+        # ``{"ok": False, "reason": "mode_tcp", ...}``.  In hybrid/auto/memory it
+        # exposes ``self_state/entities/boss/damage_totals/skill_damage/attr_map/
+        # resolve_name/read_at/search/...`` plus ``catalog()`` and ``status()``.
         facade = self._mem_access
         if facade is None:
             try:
@@ -1021,20 +1019,19 @@ class PluginContext:
 
     @property
     def web_path(self) -> str:
-        """Absolute path to this plugin's ``web/`` directory (may not exist)."""
+        # Absolute path to this plugin's ``web/`` directory (may not exist).
         return os.path.join(self._record.path, "web")
 
     @property
     def assets_path(self) -> str:
-        """Absolute path to this plugin's ``assets/`` directory (may not exist)."""
+        # Absolute path to this plugin's ``assets/`` directory (may not exist).
         return os.path.join(self._record.path, "assets")
 
     def resolve_web(self, filename: str) -> Optional[str]:
-        """Resolve a web resource file inside this plugin's ``web/`` dir.
-
-        Returns the absolute path if the file exists, else None.
-        The host's webview can use this to load plugin HTML panels.
-        """
+        # Resolve a web resource file inside this plugin's ``web/`` dir.
+        #
+        # Returns the absolute path if the file exists, else None.
+        # The host's webview can use this to load plugin HTML panels.
         target = os.path.abspath(os.path.join(self.web_path, str(filename or "")))
         base = os.path.abspath(self.web_path)
         if os.path.commonpath([base, target]) != base:
@@ -1065,7 +1062,7 @@ class PluginContext:
         self._manager._append_log(self._record.plugin_id, str(message))
 
     def on(self, topic: str, callback: Optional[Callable[[dict[str, Any]], None]] = None):
-        """Subscribe to an ACT topic, or use as ``@ctx.on('damage')``."""
+        # Subscribe to an ACT topic, or use as ``@ctx.on('damage')``.
         if callback is None:
             def _decorator(func: Callable[[dict[str, Any]], None]):
                 self.subscribe(topic, func)
@@ -1217,29 +1214,27 @@ class PluginContext:
                           metadata: Optional[Mapping[str, Any]] = None,
                           render: Optional[Callable[..., Any]] = None,
                           on_action: Optional[Callable[..., Any]] = None) -> dict[str, Any]:
-        """Register a redrawable plugin UI panel.
-
-        ``render(payload) -> ui_spec`` is called whenever the host needs the
-        panel's content; ``on_action(action_id, payload) -> result`` handles
-        button presses from the rendered spec.  Call :meth:`request_redraw` to
-        ask the host to re-fetch and repaint.
-        """
+        # Register a redrawable plugin UI panel.
+        #
+        # ``render(payload) -> ui_spec`` is called whenever the host needs the
+        # panel's content; ``on_action(action_id, payload) -> result`` handles
+        # button presses from the rendered spec.  Call :meth:`request_redraw` to
+        # ask the host to re-fetch and repaint.
         return self._manager._register_ui_panel(
             self._record.plugin_id, panel_id, metadata, render, on_action)
 
     def register_render_hook(self, surface: str, callback: Callable[[str, dict], Any],
                              priority: float = 0.0) -> str:
-        """Intercept a surface's render payload before the host draws it.
-
-        ``callback(surface, payload) -> payload | None`` may mutate the payload,
-        return a replacement, or take the surface over entirely by setting
-        ``payload[OVERRIDE_KEY] = ctx.ui.panel(...)``.
-        """
+        # Intercept a surface's render payload before the host draws it.
+        #
+        # ``callback(surface, payload) -> payload | None`` may mutate the payload,
+        # return a replacement, or take the surface over entirely by setting
+        # ``payload[OVERRIDE_KEY] = ctx.ui.panel(...)``.
         return self._manager._register_render_hook(
             self._record.plugin_id, surface, callback, priority)
 
     def set_overlay(self, surface: str, spec: Any) -> dict[str, Any]:
-        """Draw a declarative spec in ``surface``'s plugin overlay layer."""
+        # Draw a declarative spec in ``surface``'s plugin overlay layer.
         return self._manager._set_overlay(self._record.plugin_id, surface, spec)
 
     def clear_overlay(self, surface: Optional[str] = None) -> None:
@@ -1248,7 +1243,7 @@ class PluginContext:
     # -- direct compositor layer API (bypass base64 rgba_frame path) --------
 
     def _get_compositor_overlay(self) -> Any:
-        """Get the singleton compositor overlay instance."""
+        # Get the singleton compositor overlay instance.
         try:
             from render.overlay_compositor import get_unified_overlay
             return get_unified_overlay()
@@ -1262,7 +1257,7 @@ class PluginContext:
         high_fps: bool = False,
         target_fps: int = 0,
     ) -> dict[str, Any]:
-        """Create a compositor layer owned by this plugin for direct BGRA frame upload."""
+        # Create a compositor layer owned by this plugin for direct BGRA frame upload.
         import sys
         overlay = self._get_compositor_overlay()
         if overlay is None:
@@ -1287,11 +1282,10 @@ class PluginContext:
     def set_compositor_layer_mmf_source(
         self, name: str, mmf_name: str,
     ) -> None:
-        """Attach an MMF zero-copy source to a compositor layer.
-
-        The compositor render thread will read frames directly from
-        the named shared memory, bypassing upload_compositor_frame().
-        """
+        # Attach an MMF zero-copy source to a compositor layer.
+        #
+        # The compositor render thread will read frames directly from
+        # the named shared memory, bypassing upload_compositor_frame().
         layers = getattr(self, "_compositor_layers", None)
         if not layers:
             return
@@ -1305,16 +1299,15 @@ class PluginContext:
     def set_compositor_layer_shared_texture_source(
         self, name: str, handle: int, width: int, height: int,
     ) -> None:
-        """Attach a GPU-shared D3D11 texture as a compositor layer's
-        color source (zero-copy, GPU-to-GPU — no CPU pixel touch).
-
-        *handle* is a legacy D3D11 shared handle value from the
-        producer process's own ``IDXGIResource::GetSharedHandle()``.
-        Requires ``compositor_gpu_interop_available()`` to be True —
-        callers should check that first and keep using
-        ``set_compositor_layer_mmf_source`` if it's False. Generic:
-        any plugin can call this, not tied to any particular producer.
-        """
+        # Attach a GPU-shared D3D11 texture as a compositor layer's
+        # color source (zero-copy, GPU-to-GPU — no CPU pixel touch).
+        #
+        # *handle* is a legacy D3D11 shared handle value from the
+        # producer process's own ``IDXGIResource::GetSharedHandle()``.
+        # Requires ``compositor_gpu_interop_available()`` to be True —
+        # callers should check that first and keep using
+        # ``set_compositor_layer_mmf_source`` if it's False. Generic:
+        # any plugin can call this, not tied to any particular producer.
         layers = getattr(self, "_compositor_layers", None)
         if not layers:
             return
@@ -1326,11 +1319,11 @@ class PluginContext:
             layer.show()
 
     def compositor_gpu_interop_available(self) -> bool:
-        """Whether the compositor's GPU interop path (WGL_NV_DX_interop2)
-        is active. Callers must check this before ever attempting
-        ``set_compositor_layer_shared_texture_source`` — if False, the
-        platform/driver doesn't support it and the caller should keep
-        using the MMF/upload path instead."""
+        # Whether the compositor's GPU interop path (WGL_NV_DX_interop2)
+        # is active. Callers must check this before ever attempting
+        # ``set_compositor_layer_shared_texture_source`` — if False, the
+        # platform/driver doesn't support it and the caller should keep
+        # using the MMF/upload path instead.
         overlay = self._get_compositor_overlay()
         if overlay is None:
             return False
@@ -1338,28 +1331,28 @@ class PluginContext:
         return bool(dc is not None and getattr(dc, "gl_interop_active", False))
 
     def compositor_display_refresh_hz(self) -> int:
-        """The primary monitor's detected refresh rate the compositor's
-        own render/present loop is already paced to (clamped 60-240 Hz,
-        60 as a safe fallback when detection fails). Generic: any plugin
-        driving its own per-frame state (position, animation) off a
-        fixed-rate timer can use this instead of guessing/hardcoding a
-        cap — a timer capped below this rate updates its state less
-        often than the compositor presents, so frames repeat stale
-        values between updates (visible as judder/stutter on fast
-        motion, worse the bigger the gap from the real display rate)."""
+        # The primary monitor's detected refresh rate the compositor's
+        # own render/present loop is already paced to (clamped 60-240 Hz,
+        # 60 as a safe fallback when detection fails). Generic: any plugin
+        # driving its own per-frame state (position, animation) off a
+        # fixed-rate timer can use this instead of guessing/hardcoding a
+        # cap — a timer capped below this rate updates its state less
+        # often than the compositor presents, so frames repeat stale
+        # values between updates (visible as judder/stutter on fast
+        # motion, worse the bigger the gap from the real display rate).
         overlay = self._get_compositor_overlay()
         if overlay is None:
             return 60
         return int(getattr(overlay, "_default_fps", 60) or 60)
 
     def compositor_layer_shared_texture_active(self, name: str) -> bool:
-        """Whether *name*'s layer is actually drawing from a registered
-        GPU shared texture right now. Setting a handle can still fail
-        later on the render thread (driver refuses the cross-process
-        registration, interop disabled after a device loss, ...) —
-        producers should poll this for a while after handing over a
-        handle and, if it stays False, clear the source (handle=0) and
-        resume their CPU/MMF publishing path."""
+        # Whether *name*'s layer is actually drawing from a registered
+        # GPU shared texture right now. Setting a handle can still fail
+        # later on the render thread (driver refuses the cross-process
+        # registration, interop disabled after a device loss, ...) —
+        # producers should poll this for a while after handing over a
+        # handle and, if it stays False, clear the source (handle=0) and
+        # resume their CPU/MMF publishing path.
         layers = getattr(self, "_compositor_layers", None)
         if not layers:
             return False
@@ -1374,7 +1367,7 @@ class PluginContext:
         self, name: str, bgra_bytes: Any, width: int, height: int,
         x: Any = None, y: Any = None,
     ) -> None:
-        """Upload premultiplied BGRA frame bytes directly to a compositor layer."""
+        # Upload premultiplied BGRA frame bytes directly to a compositor layer.
         import sys
         layers = getattr(self, "_compositor_layers", None)
         if not layers:
@@ -1399,7 +1392,7 @@ class PluginContext:
             self._upload_log_count += 1
 
     def set_compositor_layer_position(self, name: str, x: int, y: int) -> None:
-        """Update the screen position of a compositor layer (no frame data)."""
+        # Update the screen position of a compositor layer (no frame data).
         layers = getattr(self, "_compositor_layers", None)
         if not layers:
             return
@@ -1408,7 +1401,7 @@ class PluginContext:
             layer.set_position(int(x), int(y))
 
     def destroy_compositor_layer(self, name: str) -> None:
-        """Destroy a compositor layer owned by this plugin."""
+        # Destroy a compositor layer owned by this plugin.
         layers = getattr(self, "_compositor_layers", None)
         if not layers:
             return
@@ -1439,7 +1432,7 @@ class PluginContext:
         cursor_pos_fn: Any = None, mouse_button_fn: Any = None,
         cursor_leave_fn: Any = None, scroll_fn: Any = None,
     ) -> None:
-        """Register mouse callbacks on a compositor layer."""
+        # Register mouse callbacks on a compositor layer.
         layers = getattr(self, "_compositor_layers", None)
         if not layers:
             return
@@ -1451,15 +1444,14 @@ class PluginContext:
         )
 
     def set_compositor_layer_input_proxy(self, name: str, enabled: bool = True) -> bool:
-        """Attach (or remove) a Tk input proxy for an interactive layer.
-
-        A ``click_through=False`` layer with no input proxy forces the whole
-        full-screen overlay host to stop passing clicks through, so the entire
-        desktop stops responding. The proxy is a tiny transparent Tk window
-        pinned to the layer's rect that routes real clicks into the layer's
-        input callbacks, while the host stays click-through everywhere else.
-        Runs the Tk work on the main thread; safe to call from any thread.
-        """
+        # Attach (or remove) a Tk input proxy for an interactive layer.
+        #
+        # A ``click_through=False`` layer with no input proxy forces the whole
+        # full-screen overlay host to stop passing clicks through, so the entire
+        # desktop stops responding. The proxy is a tiny transparent Tk window
+        # pinned to the layer's rect that routes real clicks into the layer's
+        # input callbacks, while the host stays click-through everywhere else.
+        # Runs the Tk work on the main thread; safe to call from any thread.
         layers = getattr(self, "_compositor_layers", None)
         if not layers:
             return False
@@ -1502,7 +1494,7 @@ class PluginContext:
         return True
 
     def _cleanup_compositor_layers(self) -> None:
-        """Destroy all compositor layers owned by this plugin."""
+        # Destroy all compositor layers owned by this plugin.
         layers = getattr(self, "_compositor_layers", None)
         if not layers:
             return
@@ -1517,25 +1509,23 @@ class PluginContext:
 
     def register_hotkey(self, hotkey_id: str, callback: Callable[[], Any],
                         default_key: str = "", label: str = "") -> str:
-        """Register a customizable global hotkey for this plugin.
-
-        Returns the action id ``plugin.<plugin_id>.<hotkey_id>``. The default key
-        (e.g. ``"F6"``) seeds the shared hotkey settings; the user can rebind it
-        in the normal keybinding editor. ``callback()`` fires when pressed.
-        """
+        # Register a customizable global hotkey for this plugin.
+        #
+        # Returns the action id ``plugin.<plugin_id>.<hotkey_id>``. The default key
+        # (e.g. ``"F6"``) seeds the shared hotkey settings; the user can rebind it
+        # in the normal keybinding editor. ``callback()`` fires when pressed.
         return self._manager._register_hotkey(
             self._record.plugin_id, hotkey_id, callback, default_key, label)
 
     def register_menu_category(self, name: str, icon: str,
                                builder: Callable[[], list],
                                priority: float = 0.0) -> str:
-        """Register a named menu category populated by a callback.
-
-        ``builder() -> list[dict]`` returns items in the same format as
-        ``_build_menu_children`` entries (icon/label/command dicts). The
-        platform merges plugin-contributed categories into the SAO menu
-        alongside the built-in ones. Returns the extension id.
-        """
+        # Register a named menu category populated by a callback.
+        #
+        # ``builder() -> list[dict]`` returns items in the same format as
+        # ``_build_menu_children`` entries (icon/label/command dicts). The
+        # platform merges plugin-contributed categories into the SAO menu
+        # alongside the built-in ones. Returns the extension id.
         ext_id = _safe_id(name) or _safe_id(f"{self._record.plugin_id}_{name}")
         if not ext_id:
             raise ValueError(f"invalid menu category name: {name!r}")
@@ -1557,26 +1547,24 @@ class PluginContext:
     def register_menu_surface(self, surface_id: str,
                               descriptor: Mapping[str, Any],
                               priority: float = 0.0) -> str:
-        """Register plugin-owned content for a generic host menu surface.
-
-        ``descriptor`` may contain callbacks such as ``header_provider``,
-        ``left_widget_factory``, ``on_open`` and ``on_close``. The platform
-        stores the descriptor opaquely and invokes callbacks without knowing
-        the plugin's domain schema.
-        """
+        # Register plugin-owned content for a generic host menu surface.
+        #
+        # ``descriptor`` may contain callbacks such as ``header_provider``,
+        # ``left_widget_factory``, ``on_open`` and ``on_close``. The platform
+        # stores the descriptor opaquely and invokes callbacks without knowing
+        # the plugin's domain schema.
         return self._manager._register_menu_surface(
             self._record.plugin_id, surface_id, descriptor, priority)
 
     def register_action_handler(self, handler: Callable[[str, Mapping[str, Any]], Any]) -> str:
-        """Register an opaque action dispatcher for this plugin."""
+        # Register an opaque action dispatcher for this plugin.
         return self._manager._register_action_handler(self._record.plugin_id, handler)
 
     def register_engine(self, name: str, engine: Any) -> None:
-        """Register a named engine that the platform and other plugins can query.
-
-        The engine becomes available via ``ctx.get_engine(name)`` for all
-        plugins and via ``EngineAccess.get(name)`` for the platform.
-        """
+        # Register a named engine that the platform and other plugins can query.
+        #
+        # The engine becomes available via ``ctx.get_engine(name)`` for all
+        # plugins and via ``EngineAccess.get(name)`` for the platform.
         key = _normalize_engine_name(name)
         if not key:
             raise ValueError(f"invalid engine name: {name!r}")
@@ -1587,11 +1575,10 @@ class PluginContext:
                              metadata: Optional[Mapping[str, Any]] = None,
                              start: Optional[Callable[[], Any]] = None,
                              stop: Optional[Callable[[], Any]] = None) -> dict[str, Any]:
-        """Register a data source (packet capture, memory reader, etc.).
-
-        ``start()`` / ``stop()`` control the source lifecycle. The platform's
-        data-source-health panel auto-discovers registered sources.
-        """
+        # Register a data source (packet capture, memory reader, etc.).
+        #
+        # ``start()`` / ``stop()`` control the source lifecycle. The platform's
+        # data-source-health panel auto-discovers registered sources.
         meta = dict(metadata or {}) if isinstance(metadata, Mapping) else {}
         meta.setdefault("title", str(source_id))
         meta.setdefault("description", f"Data source from {self._record.name}")
@@ -1607,7 +1594,7 @@ class PluginContext:
         return normalized
 
     def request_redraw(self, surface: str = "", reason: str = "") -> dict[str, Any]:
-        """Ask all host surfaces (or one) to repaint plugin content."""
+        # Ask all host surfaces (or one) to repaint plugin content.
         return self.emit("plugin_ui_invalidate", {
             "plugin_id": self._record.plugin_id,
             "surface": str(surface or ""),
@@ -1615,15 +1602,14 @@ class PluginContext:
         })
 
     def open_window(self, panel_id: str = "", width: int = 0, height: int = 0) -> dict[str, Any]:
-        """Ask the host to open one of this plugin's panels in its own window.
-
-        ``panel_id`` selects which registered ``ui_panel`` to show (defaults to
-        the plugin's primary panel); ``width``/``height`` override the panel's
-        declared size for this window (0 = use the panel meta size, else the host
-        default). The host opens a real, freely-movable window — not an in-place
-        view. Entity mode opens a detached Tk window; both renderers listen for
-        the emitted ``plugin_open_window`` event.
-        """
+        # Ask the host to open one of this plugin's panels in its own window.
+        #
+        # ``panel_id`` selects which registered ``ui_panel`` to show (defaults to
+        # the plugin's primary panel); ``width``/``height`` override the panel's
+        # declared size for this window (0 = use the panel meta size, else the host
+        # default). The host opens a real, freely-movable window — not an in-place
+        # view. Entity mode opens a detached Tk window; both renderers listen for
+        # the emitted ``plugin_open_window`` event.
         return self.emit("plugin_open_window", {
             "plugin_id": self._record.plugin_id,
             "panel_id": str(panel_id or ""),
@@ -1633,13 +1619,12 @@ class PluginContext:
 
     def open_file(self, filters: Any = None, title: str = "选择文件",
                   initial_dir: str = "", hwnd_owner: int = 0) -> str:
-        """Open a platform-native file picker and return the selected path.
-
-        ``filters`` accepts ``[(label, pattern), ...]`` or small mappings with
-        ``label``/``pattern`` keys. An empty string means cancelled or failed.
-        Pass ``hwnd_owner < 0`` to force an unowned dialog; this is useful when
-        opening after transient GPU/overlay UI that may still be foreground.
-        """
+        # Open a platform-native file picker and return the selected path.
+        #
+        # ``filters`` accepts ``[(label, pattern), ...]`` or small mappings with
+        # ``label``/``pattern`` keys. An empty string means cancelled or failed.
+        # Pass ``hwnd_owner < 0`` to force an unowned dialog; this is useful when
+        # opening after transient GPU/overlay UI that may still be foreground.
         try:
             from . import native_dialog
         except Exception as exc:
@@ -1713,18 +1698,18 @@ class PluginContext:
 
     # ── schedulers / loops (timing primitives for heavy plugins) ──────────
     def set_interval(self, callback: Callable[[], Any], seconds: float) -> str:
-        """Call ``callback`` every ``seconds`` on a daemon thread until cleared."""
+        # Call ``callback`` every ``seconds`` on a daemon thread until cleared.
         return self._manager._add_timer(self._record.plugin_id, callback, seconds, True)
 
     def set_timeout(self, callback: Callable[[], Any], seconds: float) -> str:
-        """Call ``callback`` once after ``seconds`` on a daemon thread."""
+        # Call ``callback`` once after ``seconds`` on a daemon thread.
         return self._manager._add_timer(self._record.plugin_id, callback, seconds, False)
 
     def clear_timer(self, token: str) -> bool:
         return self._manager._clear_timer(self._record.plugin_id, str(token or ""))
 
     def run_on_ui(self, callback: Callable[[], Any]) -> None:
-        """Marshal ``callback`` onto the host UI thread (Tk root.after if present)."""
+        # Marshal ``callback`` onto the host UI thread (Tk root.after if present).
         owner = self.owner
         root = getattr(owner, "root", None)
         after = getattr(root, "after", None)
@@ -1750,11 +1735,10 @@ class PluginContext:
     # ── owner-agnostic notifications (Entity + WebView alert bridge) ───────
     def notify(self, title: str, message: str, duration_s: float = 60.0,
                kind: str = "plugin") -> bool:
-        """Show a persistent SAO alert via whichever alert API the host owns.
-
-        Works on both the Entity (``_show_entity_alert``) and WebView
-        (``_show_identity_alert_window``) owners, marshaled to the UI thread.
-        """
+        # Show a persistent SAO alert via whichever alert API the host owns.
+        #
+        # Works on both the Entity (``_show_entity_alert``) and WebView
+        # (``_show_identity_alert_window``) owners, marshaled to the UI thread.
         owner = self.owner
         if owner is None:
             return False
@@ -1773,7 +1757,7 @@ class PluginContext:
         return False
 
     def dismiss_notify(self) -> bool:
-        """Dismiss a persistent WebView alert (Entity alerts auto-expire)."""
+        # Dismiss a persistent WebView alert (Entity alerts auto-expire).
         owner = self.owner
         fn = getattr(owner, "_hide_identity_alert_window", None)
         if callable(fn):
@@ -1794,7 +1778,7 @@ class PluginContext:
         return False
 
     def toast(self, message: str) -> bool:
-        """Best-effort transient toast (WebView menu toast, else an entity alert)."""
+        # Best-effort transient toast (WebView menu toast, else an entity alert).
         owner = self.owner
         eval_menu = getattr(owner, "_eval_menu", None)
         if callable(eval_menu):
@@ -1807,15 +1791,14 @@ class PluginContext:
         return self.notify("PLUGIN", str(message), duration_s=3.0)
 
     def ensure_requirements(self, install: bool = True) -> dict[str, Any]:
-        """Satisfy this plugin's ``requirements.txt`` from its own ``vendor/``/``libs/``.
-
-        Generalized dependency bootstrap (see :mod:`act_platform.plugin_deps`):
-        prepends the plugin's ``engine/`` ``libs/`` ``vendor/`` to ``sys.path`` so
-        a bundled (vendored) pure-Python dep imports without touching the global
-        site-packages; in a non-frozen dev tree it can ``pip install --target``
-        into ``libs/`` first. Paths are restored on unload. ``install=False``
-        skips the pip step (validate/path-prepend only).
-        """
+        # Satisfy this plugin's ``requirements.txt`` from its own ``vendor/``/``libs/``.
+        #
+        # Generalized dependency bootstrap (see :mod:`act_platform.plugin_deps`):
+        # prepends the plugin's ``engine/`` ``libs/`` ``vendor/`` to ``sys.path`` so
+        # a bundled (vendored) pure-Python dep imports without touching the global
+        # site-packages; in a non-frozen dev tree it can ``pip install --target``
+        # into ``libs/`` first. Paths are restored on unload. ``install=False``
+        # skips the pip step (validate/path-prepend only).
         from . import plugin_deps
         rec = plugin_deps.ensure_requirements(self._record.path, log=self.log, install=bool(install))
         for path in rec.get("added", []) or []:
@@ -1827,13 +1810,12 @@ class PluginContext:
         return rec
 
     def load_local(self, relative_path: str) -> ModuleType:
-        """Load a Python module bundled inside this plugin's own directory.
-
-        Lets a plugin ship its own engine/helper ``.py`` files alongside
-        ``plugin.py`` (sandboxed to the plugin dir, loaded under a unique module
-        name).  The loaded module still imports main-program packages
-        (``cv2``, ``config``, ``utils.*`` …) from the shared process normally.
-        """
+        # Load a Python module bundled inside this plugin's own directory.
+        #
+        # Lets a plugin ship its own engine/helper ``.py`` files alongside
+        # ``plugin.py`` (sandboxed to the plugin dir, loaded under a unique module
+        # name).  The loaded module still imports main-program packages
+        # (``cv2``, ``config``, ``utils.*`` …) from the shared process normally.
         base = os.path.abspath(self._record.path)
         target = os.path.abspath(os.path.join(base, str(relative_path or "")))
         if os.path.commonpath([base, target]) != base:
@@ -1855,12 +1837,11 @@ class PluginContext:
 
 
 class _PluginTimer:
-    """A cancellable one-shot or repeating daemon timer owned by a plugin.
-
-    Callbacks run on a background daemon thread; exceptions are isolated and
-    recorded against the plugin.  All of a plugin's timers are cancelled when it
-    unloads, so a plugin cannot leak a thread after being disabled.
-    """
+    # A cancellable one-shot or repeating daemon timer owned by a plugin.
+    #
+    # Callbacks run on a background daemon thread; exceptions are isolated and
+    # recorded against the plugin.  All of a plugin's timers are cancelled when it
+    # unloads, so a plugin cannot leak a thread after being disabled.
 
     __slots__ = ("_manager", "plugin_id", "token", "_fn", "_seconds", "_repeat",
                  "_cancelled", "_timer", "_stop_evt")
@@ -1942,7 +1923,7 @@ class _PluginTimer:
 
 
 class PluginManager:
-    """Discover and manage in-process Python plugins."""
+    # Discover and manage in-process Python plugins.
 
     def __init__(self, plugin_dirs: Optional[Iterable[str]] = None,
                  event_bus: Optional[EventBus] = None,
@@ -2007,7 +1988,7 @@ class PluginManager:
         self._discovery_signature_cache: tuple[Any, ...] | None = None
 
     def _discovery_signature(self) -> tuple[Any, ...]:
-        """Return a cheap signature of plugin manifests under all roots."""
+        # Return a cheap signature of plugin manifests under all roots.
         rows: list[Any] = []
         for root in self.plugin_dirs:
             root_abs = os.path.abspath(str(root or ""))
@@ -2045,7 +2026,7 @@ class PluginManager:
         return tuple(rows)
 
     def sync_discovery(self, *, force: bool = False) -> list[PluginRecord]:
-        """Refresh manifest records when plugin roots changed, without loading plugins."""
+        # Refresh manifest records when plugin roots changed, without loading plugins.
         try:
             signature = self._discovery_signature()
         except Exception:
@@ -2144,14 +2125,13 @@ class PluginManager:
         return list(self._records.values())
 
     def refresh_plugin(self, plug_dir: str) -> Optional[PluginRecord]:
-        """(Re)read a single plugin directory and register/replace its record.
-
-        Used by one-click import to add a freshly installed plugin **without** a
-        full :meth:`reload_all` (which would restart every other stateful
-        plugin). Raises if the manifest is missing/invalid so the caller can
-        surface the error. Upgrading an already-loaded plugin unloads the old
-        copy first (running its ``on_unload``/releasing subscriptions+timers).
-        """
+        # (Re)read a single plugin directory and register/replace its record.
+        #
+        # Used by one-click import to add a freshly installed plugin **without** a
+        # full :meth:`reload_all` (which would restart every other stateful
+        # plugin). Raises if the manifest is missing/invalid so the caller can
+        # surface the error. Upgrading an already-loaded plugin unloads the old
+        # copy first (running its ``on_unload``/releasing subscriptions+timers).
         plug_dir = os.path.abspath(str(plug_dir or ""))
         manifest_path = os.path.join(plug_dir, MANIFEST_FILE)
         if not os.path.isfile(manifest_path):
@@ -2186,7 +2166,7 @@ class PluginManager:
         return False
 
     def _topo_sorted_ids(self) -> list[str]:
-        """Return plugin ids sorted so that ``requires`` dependencies load first."""
+        # Return plugin ids sorted so that ``requires`` dependencies load first.
         ids = sorted(self._records)
         loaded: set[str] = set()
         ordered: list[str] = []
@@ -2224,11 +2204,10 @@ class PluginManager:
         return self.status()
 
     def load_pending_enabled(self) -> dict[str, Any]:
-        """Load enabled plugins that are not currently active.
-
-        Used after hot discovery so newly dropped or manifest-changed enabled
-        plugins become available without restarting already active plugins.
-        """
+        # Load enabled plugins that are not currently active.
+        #
+        # Used after hot discovery so newly dropped or manifest-changed enabled
+        # plugins become available without restarting already active plugins.
         if not self._records:
             self.discover()
         for plugin_id in self._topo_sorted_ids():
@@ -2332,7 +2311,7 @@ class PluginManager:
         return True
 
     def forget_plugin(self, plugin_id: str) -> bool:
-        """Unload and drop a plugin's record entirely (used after uninstall)."""
+        # Unload and drop a plugin's record entirely (used after uninstall).
         plugin_id = str(plugin_id or "")
         record = self._records.get(plugin_id)
         if record is None:
@@ -2425,11 +2404,10 @@ class PluginManager:
         return out
 
     def list_script_menu_entries(self, locale: Any = "") -> list[dict[str, Any]]:
-        """Return manifest-declared SAO popup buttons for script-like plugins.
-
-        Only enabled plugins are exposed here. Disabled scripts stay
-        discoverable/manageable without being launchable from the popup.
-        """
+        # Return manifest-declared SAO popup buttons for script-like plugins.
+        #
+        # Only enabled plugins are exposed here. Disabled scripts stay
+        # discoverable/manageable without being launchable from the popup.
         locale_id = _normalize_locale(locale) or self.current_locale()
         entries: list[dict[str, Any]] = []
         script_languages = {"lua", "csharp", "angelscript", "emma", "python"}
@@ -2501,7 +2479,7 @@ class PluginManager:
         }
 
     def resolve_plugin_web(self, plugin_id: str, filename: str) -> Optional[str]:
-        """Resolve a web resource from a specific plugin's ``web/`` dir."""
+        # Resolve a web resource from a specific plugin's ``web/`` dir.
         record = self._records.get(str(plugin_id or ""))
         if record is None:
             return None
@@ -2512,12 +2490,11 @@ class PluginManager:
         return target if os.path.isfile(target) else None
 
     def get_menu_categories(self) -> dict[str, dict[str, Any]]:
-        """Return all plugin-contributed menu categories sorted by priority.
-
-        Each value: {plugin_id, name, icon, builder, priority}. The ``builder``
-        is a callable ``() -> list[dict]`` that returns items in the same
-        format as ``_build_menu_children`` entries.
-        """
+        # Return all plugin-contributed menu categories sorted by priority.
+        #
+        # Each value: {plugin_id, name, icon, builder, priority}. The ``builder``
+        # is a callable ``() -> list[dict]`` that returns items in the same
+        # format as ``_build_menu_children`` entries.
         active: dict[str, dict[str, Any]] = {}
         for ext_id, cat in self._menu_categories.items():
             pid = str(cat.get("plugin_id") or "")
@@ -2592,7 +2569,7 @@ class PluginManager:
         return {"ok": False, "action_id": action, "message": "no plugin handled action", "errors": errors}
 
     def list_data_sources(self) -> list[dict[str, Any]]:
-        """Return all plugin-contributed data sources with their status."""
+        # Return all plugin-contributed data sources with their status.
         out: list[dict[str, Any]] = []
         for src_id, src in self._data_sources.items():
             pid = str(src.get("plugin_id") or "")
@@ -2900,14 +2877,13 @@ class PluginManager:
         return default_key
 
     def occupied_hotkeys(self, exclude_action: str = "") -> dict[str, str]:
-        """当前已占用的快捷键 {键: 归属} — 改键 UI 置灰 + set_hotkey 拒冲突。
-
-        内置动作取 settings 覆盖后的现值 (归属为动作 id), 插件取
-        list_hotkeys 现值且仅计 active 的 (归属为 label)。键经
-        normalize_hotkey 规范化 ('Control+F8'→'CTRL+F8'), 与改键 UI 的
-        选项字符串可直接比较; 不可规范化的键按原样大写记录。
-        ``exclude_action`` 把正在改键的动作自身排除在外。
-        """
+        # 当前已占用的快捷键 {键: 归属} — 改键 UI 置灰 + set_hotkey 拒冲突。
+        #
+        # 内置动作取 settings 覆盖后的现值 (归属为动作 id), 插件取
+        # list_hotkeys 现值且仅计 active 的 (归属为 label)。键经
+        # normalize_hotkey 规范化 ('Control+F8'→'CTRL+F8'), 与改键 UI 的
+        # 选项字符串可直接比较; 不可规范化的键按原样大写记录。
+        # ``exclude_action`` 把正在改键的动作自身排除在外。
         from config import DEFAULT_HOTKEYS, normalize_hotkey
         exclude_action = str(exclude_action or "").lower()
         raw: Mapping = {}
@@ -2939,7 +2915,7 @@ class PluginManager:
         return occupied
 
     def hotkey_actions(self) -> dict[str, Callable[[], Any]]:
-        """{action: dispatch} for the host hotkey manager (active plugins only)."""
+        # {action: dispatch} for the host hotkey manager (active plugins only).
         out: dict[str, Callable[[], Any]] = {}
         with self._hotkeys_lock:
             items = list(self._hotkeys.items())
@@ -2975,17 +2951,16 @@ class PluginManager:
                 self._hotkeys.pop(action, None)
 
     def set_hotkey(self, action: str, key: str) -> bool:
-        """Rebind a plugin hotkey through the shared ``settings['hotkeys']``.
-
-        Only registered plugin hotkeys may be rebound (so a plugin panel cannot
-        clobber a built-in binding). An empty / 'default' key clears the override
-        so the plugin's declared default applies again — refused when that
-        default is meanwhile occupied by another action. Keys are stored in the
-        canonical ``"F8"`` / ``"CTRL+F8"`` spelling (``config.normalize_hotkey``)
-        that the listeners parse via ``config.parse_hotkey``. Unparseable keys
-        and keys already bound elsewhere (built-in action or another active
-        plugin hotkey) are rejected with ``False``.
-        """
+        # Rebind a plugin hotkey through the shared ``settings['hotkeys']``.
+        #
+        # Only registered plugin hotkeys may be rebound (so a plugin panel cannot
+        # clobber a built-in binding). An empty / 'default' key clears the override
+        # so the plugin's declared default applies again — refused when that
+        # default is meanwhile occupied by another action. Keys are stored in the
+        # canonical ``"F8"`` / ``"CTRL+F8"`` spelling (``config.normalize_hotkey``)
+        # that the listeners parse via ``config.parse_hotkey``. Unparseable keys
+        # and keys already bound elsewhere (built-in action or another active
+        # plugin hotkey) are rejected with ``False``.
         from config import normalize_hotkey
         # Hotkey actions are stored lowercase (_safe_id); normalize callers'
         # input so a mixed-case action id still matches.
@@ -3065,7 +3040,7 @@ class PluginManager:
         self._store_persisted_enabled(current)
 
     def clear_persisted_enabled(self, plugin_id: str) -> None:
-        """卸载后清掉该插件的持久化启用标记, 避免同名插件复用旧状态."""
+        # 卸载后清掉该插件的持久化启用标记, 避免同名插件复用旧状态.
         current = self._persisted_enabled()
         if str(plugin_id or "") not in current:
             return
@@ -3086,7 +3061,7 @@ class PluginManager:
 
     def _publish_plugin_lifecycle(self, record: PluginRecord, action: str,
                                   **extra: Any) -> None:
-        """Broadcast plugin lifecycle changes to menus and overlay hosts."""
+        # Broadcast plugin lifecycle changes to menus and overlay hosts.
         payload: dict[str, Any] = {
             "plugin_id": record.plugin_id,
             "action": str(action or ""),
@@ -3338,19 +3313,18 @@ class PluginManager:
         )
 
     def _prepare_plugin_sys_path(self, record: PluginRecord) -> None:
-        """Prepend the plugin's own ``vendor/`` + ``libs/`` so bundled deps win.
-
-        Lets an author ship a pure-Python dependency in ``vendor/`` (or fetched
-        into ``libs/`` via ``ctx.ensure_requirements``) and just ``import`` it —
-        no global install. Added entries are tracked on the record and removed on
-        unload (see :meth:`_unregister_plugin_extensions`).
-
-        Packages already loaded in the host (e.g. PIL, numpy) are protected:
-        if the plugin ships a copy of such a package, the loader would create
-        a second, incompatible module object.  The insertion index is chosen
-        so that sys.path entries that already provide those packages stay
-        ahead.
-        """
+        # Prepend the plugin's own ``vendor/`` + ``libs/`` so bundled deps win.
+        #
+        # Lets an author ship a pure-Python dependency in ``vendor/`` (or fetched
+        # into ``libs/`` via ``ctx.ensure_requirements``) and just ``import`` it —
+        # no global install. Added entries are tracked on the record and removed on
+        # unload (see :meth:`_unregister_plugin_extensions`).
+        #
+        # Packages already loaded in the host (e.g. PIL, numpy) are protected:
+        # if the plugin ships a copy of such a package, the loader would create
+        # a second, incompatible module object.  The insertion index is chosen
+        # so that sys.path entries that already provide those packages stay
+        # ahead.
         from act_platform.plugin_deps import _safe_plugin_insert_index
         for sub in ("vendor", "libs"):
             path = os.path.abspath(os.path.join(record.path, sub))
@@ -3379,11 +3353,10 @@ class PluginManager:
         return module
 
     def _load_protected_module(self, record: PluginRecord, module_name: str) -> ModuleType:
-        """Fetch this build's content key from the workshop server, decrypt the
-        native ``.pyd`` blob in memory and load it. Requires network — a
-        closed-source workshop plugin is only ever readable while the app is
-        running and talking to the server, never as static bytes on disk.
-        """
+        # Fetch this build's content key from the workshop server, decrypt the
+        # native ``.pyd`` blob in memory and load it. Requires network — a
+        # closed-source workshop plugin is only ever readable while the app is
+        # running and talking to the server, never as static bytes on disk.
         native_entry = record.native_entry or record.entry
         blob_path = os.path.abspath(os.path.join(record.path, native_entry))
         if not os.path.isfile(blob_path):
@@ -3414,7 +3387,7 @@ class PluginManager:
         return load_protected_module(module_name, blob_path, content_key)
 
     def _load_script_module(self, record: PluginRecord) -> ModuleType:
-        """Load a non-Python plugin via its language's ScriptRuntime."""
+        # Load a non-Python plugin via its language's ScriptRuntime.
         from .scripting import get_runtime
         runtime = get_runtime(record.language)
         entry_path = os.path.abspath(os.path.join(record.path, record.entry))
@@ -3423,7 +3396,7 @@ class PluginManager:
         return module
 
     def _unload_script_runtime(self, record: PluginRecord) -> None:
-        """Release a script runtime even after a partial or failed load."""
+        # Release a script runtime even after a partial or failed load.
         language = str(record.language or "").lower()
         if language == "python":
             return

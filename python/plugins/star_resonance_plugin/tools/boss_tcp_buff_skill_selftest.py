@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
-"""Selftest: pure-TCP boss-skill detection (diff monster.buff_list for new base_ids)
-+ the memory-priority gate (memory is authoritative in hybrid, suppressing TCP)."""
+# Selftest: pure-TCP boss-skill detection (diff monster.buff_list for new base_ids)
+# + the memory-priority gate (memory is authoritative in hybrid, suppressing TCP).
 from __future__ import annotations
 
 import os

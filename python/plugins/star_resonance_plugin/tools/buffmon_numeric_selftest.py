@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""Numeric guard checks for BuffMon overlay row and payload handling."""
+# Numeric guard checks for BuffMon overlay row and payload handling.
 
 from __future__ import annotations
 

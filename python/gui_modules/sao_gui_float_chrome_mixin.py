@@ -1,35 +1,33 @@
 # -*- coding: utf-8 -*-
-"""
-SAOPlayerGUIFloatChromeMixin — fourteenth mixin extracted from
-SAOPlayerGUI (round 56 of the sao_gui split refactor). 20 methods,
-~409 lines.
-
-The two clusters bundled together because they're both peripheral chrome around
-the platform float button and menu animations. Game-specific overlay handlers
-are installed by plugins.
-
-Float button + breath + animation:
-  * _set_float_alpha — Win32 SetLayeredWindowAttributes wrapper
-  * _start_float_breath / _breath_step / _stop_float_breath —
-    idle-state ~2 Hz vertical sine wobble
-  * _attach_panel_float / _panel_float_shared_tick — wire a
-    panel into the shared 30 fps panel-float scheduler
-    * _update_float_display / _update_float_status — trigger refresh helpers
-  * _animate_float_to — drag-end snap animation
-  * _play_motion_blur (146 lines — biggest in this cluster) —
-    radial blur effect on SAO menu open/close (background-threaded
-    screen grab + radial blur + main-thread fade)
-
-Required SAOPlayerGUI attrs:
-    * self._float, self._fw, self._fh, self._float_name_lbl
-  * self._breath_active, self._breath_after_id, self._breath_base_x,
-    self._breath_base_y, self._breath_phase, self._breath_amp
-  * self._panel_float_after_id, self._panel_float_attached
-    * self._sao_menu, self.root, self.settings
-
-Required SAOPlayerGUI methods (via MRO):
-  * _toggle_sao_menu (Menu mixin)
-"""
+# SAOPlayerGUIFloatChromeMixin — fourteenth mixin extracted from
+# SAOPlayerGUI (round 56 of the sao_gui split refactor). 20 methods,
+# ~409 lines.
+#
+# The two clusters bundled together because they're both peripheral chrome around
+# the platform float button and menu animations. Game-specific overlay handlers
+# are installed by plugins.
+#
+# Float button + breath + animation:
+# * _set_float_alpha — Win32 SetLayeredWindowAttributes wrapper
+# * _start_float_breath / _breath_step / _stop_float_breath —
+# idle-state ~2 Hz vertical sine wobble
+# * _attach_panel_float / _panel_float_shared_tick — wire a
+# panel into the shared 30 fps panel-float scheduler
+# * _update_float_display / _update_float_status — trigger refresh helpers
+# * _animate_float_to — drag-end snap animation
+# * _play_motion_blur (146 lines — biggest in this cluster) —
+# radial blur effect on SAO menu open/close (background-threaded
+# screen grab + radial blur + main-thread fade)
+#
+# Required SAOPlayerGUI attrs:
+# * self._float, self._fw, self._fh, self._float_name_lbl
+# * self._breath_active, self._breath_after_id, self._breath_base_x,
+# self._breath_base_y, self._breath_phase, self._breath_amp
+# * self._panel_float_after_id, self._panel_float_attached
+# * self._sao_menu, self.root, self.settings
+#
+# Required SAOPlayerGUI methods (via MRO):
+# * _toggle_sao_menu (Menu mixin)
 
 from __future__ import annotations
 
@@ -44,10 +42,10 @@ from sao_theme import ease_out
 
 
 class SAOPlayerGUIFloatChromeMixin:
-    """Mixin bundling float button, breath, motion blur and panel-float animations."""
+    # Mixin bundling float button, breath, motion blur and panel-float animations.
 
     def _refresh_float_layered(self):
-        """Refresh the GPU-presented NerveGear trigger, if attached."""
+        # Refresh the GPU-presented NerveGear trigger, if attached.
         render_fn = getattr(self, '_render_ng', None)
         if callable(render_fn):
             try:
@@ -56,11 +54,10 @@ class SAOPlayerGUIFloatChromeMixin:
                 pass
 
     def _sync_float_button_geometry(self, show: Optional[bool] = None) -> None:
-        """Keep the hidden Tk anchor and GPU button in sync.
-
-        The GPU button is the source of truth for position (user drags it).
-        The Tk anchor follows so menu positioning (anchor_widget) is correct.
-        """
+        # Keep the hidden Tk anchor and GPU button in sync.
+        #
+        # The GPU button is the source of truth for position (user drags it).
+        # The Tk anchor follows so menu positioning (anchor_widget) is correct.
         gpu_btn = getattr(self, '_float_gpu_button', None)
         anchor = getattr(self, '_float', None)
         if gpu_btn is None or anchor is None:
@@ -87,7 +84,7 @@ class SAOPlayerGUIFloatChromeMixin:
             pass
 
     def _set_float_alpha(self, alpha):
-        """Set visible GPU trigger alpha; hidden Tk anchor stays invisible."""
+        # Set visible GPU trigger alpha; hidden Tk anchor stays invisible.
         self._float_alpha = alpha
         gpu_btn = getattr(self, '_float_gpu_button', None)
         if gpu_btn is not None:
@@ -102,7 +99,7 @@ class SAOPlayerGUIFloatChromeMixin:
     # MRO lookup still resolves them via SAOPlayerGUI's inheritance chain.
 
     def _start_float_breath(self):
-        """idle 状态下轻微上下浮动 (模仿 SAO 菜单呼吸动画)"""
+        # idle 状态下轻微上下浮动 (模仿 SAO 菜单呼吸动画)
         if self._breath_active:
             return
         self._breath_active = True
@@ -141,7 +138,7 @@ class SAOPlayerGUIFloatChromeMixin:
             pass
 
     def _attach_panel_float(self, panel, phase: float = 0.0, amp: float = 2.5):
-        """给浮动面板附加轻微漂浮动画，且不再叠加额外 HUD 小条。"""
+        # 给浮动面板附加轻微漂浮动画，且不再叠加额外 HUD 小条。
         key = id(panel)
         if key in self._panel_float_entries:
             return
@@ -236,14 +233,14 @@ class SAOPlayerGUIFloatChromeMixin:
                 self._panel_float_after_id = None
 
     def _update_float_display(self):
-        """Refresh the platform float display."""
+        # Refresh the platform float display.
         self._refresh_float_layered()
 
     def _update_float_status(self):
         self._update_float_display()
 
     def _animate_float_to(self, x0, y0, x1, y1, ms=700):
-        """将悬浮窗口从 (x0,y0) 平滑动画到 (x1,y1)"""
+        # 将悬浮窗口从 (x0,y0) 平滑动画到 (x1,y1)
         steps = max(1, ms // 16)
         step = [0]
         def tick():
@@ -273,7 +270,7 @@ class SAOPlayerGUIFloatChromeMixin:
         tick()
 
     def _raise_sao_menu_above_motion_blur(self):
-        """Keep the already-open SAO popup above the async blur overlay."""
+        # Keep the already-open SAO popup above the async blur overlay.
         try:
             menu = getattr(self, '_sao_menu', None)
             if menu is None or not getattr(menu, 'visible', False):
@@ -285,7 +282,7 @@ class SAOPlayerGUIFloatChromeMixin:
             pass
 
     def _raise_fisheye_panels_above_motion_blur(self):
-        """Keep visible Entity panels above the async closing blur overlay."""
+        # Keep visible Entity panels above the async closing blur overlay.
         raise_panel = getattr(self, '_raise_panel_window', None)
         iter_panels = getattr(self, '_iter_fisheye_panels', None)
         is_visible = getattr(self, '_is_fisheye_panel_visible', None)
@@ -303,7 +300,7 @@ class SAOPlayerGUIFloatChromeMixin:
                 pass
 
     def _mark_motion_blur_active(self, ttl: float = 0.9) -> None:
-        """Track async motion-blur teardown so dialogs wait for it."""
+        # Track async motion-blur teardown so dialogs wait for it.
         try:
             count = int(getattr(self, '_motion_blur_active_count', 0) or 0)
         except Exception:
@@ -330,15 +327,13 @@ class SAOPlayerGUIFloatChromeMixin:
     #  点击悬浮按钮 → 径向运动模糊闪现
     # ══════════════════════════════════════════════════════════════
     def _play_motion_blur(self, closing=False):
-        """
-        悬浮按钮点击时的径向运动模糊效果 (SAO 菜单展开/收起).
-
-        以悬浮按钮为中心, 截取屏幕 → 径向缩放模糊 → 叠加层渐隐.
-        • 后台线程: 截屏 + 径向模糊
-        • 主线程: 显示结果 + 渐隐动画
-        • 捕获排除: 防止鱼眼层捕获到此叠加层 (消除撕裂)
-        • BILINEAR 缩放: 减少锯齿/马赛克感
-        """
+        # 悬浮按钮点击时的径向运动模糊效果 (SAO 菜单展开/收起).
+        #
+        # 以悬浮按钮为中心, 截取屏幕 → 径向缩放模糊 → 叠加层渐隐.
+        # • 后台线程: 截屏 + 径向模糊
+        # • 主线程: 显示结果 + 渐隐动画
+        # • 捕获排除: 防止鱼眼层捕获到此叠加层 (消除撕裂)
+        # • BILINEAR 缩放: 减少锯齿/马赛克感
         try:
             from PIL import ImageGrab, Image, ImageTk, ImageFilter
         except ImportError:
@@ -364,7 +359,7 @@ class SAOPlayerGUIFloatChromeMixin:
             fx, fy = sw // 2, sh // 2
 
         def _build_and_show():
-            """后台: 截屏 + 径向模糊 → 主线程显示."""
+            # 后台: 截屏 + 径向模糊 → 主线程显示.
             # 截屏
             shot = None
             try:
@@ -430,7 +425,7 @@ class SAOPlayerGUIFloatChromeMixin:
                 _clear_blur()
 
         def _display(pil_img):
-            """主线程: 显示模糊图 + 350ms ease-out 渐隐."""
+            # 主线程: 显示模糊图 + 350ms ease-out 渐隐.
             # ── Unified overlay path ──
             try:
                 from render.gpu_overlay_window import get_unified_overlay_mode
@@ -539,7 +534,7 @@ class SAOPlayerGUIFloatChromeMixin:
             mb_ov.after(1, _mblur_anim)
 
         def _display_unified(pil_img):
-            """Unified overlay: display blur as a compositor layer."""
+            # Unified overlay: display blur as a compositor layer.
             import numpy as np
             from render.gpu_overlay_window import _get_unified_overlay
 
@@ -594,7 +589,7 @@ class SAOPlayerGUIFloatChromeMixin:
     #  持久鱼眼叠加层 (菜单开启时常驻, 关闭时销毁)
     # ══════════════════════════════════════════════════════════════
     def _update_float_title(self):
-        """Refresh the platform HUD label."""
+        # Refresh the platform HUD label.
         try:
             self._refresh_float_layered()
         except Exception:

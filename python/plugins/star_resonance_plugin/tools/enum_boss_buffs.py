@@ -1,33 +1,32 @@
 # -*- coding: utf-8 -*-
-"""enum_boss_buffs - reverse-map a boss's skills to the buff ids those skills cast.
-
-Runtime buff detection keys on BuffItem.BuffBaseId (the buff id a boss carries),
-which is NOT the same number as the skill id in SkillTable. The bridge between
-them is the BuffTable's own ``SkillId`` column: every buff row records which
-skill spawned it. This walks the full BuffTable straight from memory (read-only),
-filters rows whose SkillId belongs to the target boss, and aggregates per skill.
-
-Chain:
-  MonsterTable   boss row by Id -> SkillIds[] (skill ids 10330001..10330014),
-                 BornClientBuffs[] / DeadClientBuffs[] (self-cast buff ids)
-  BuffTable      every row -> Id, Name(mlstring)/NameDesign(string), SkillId,
-                 Duration*; rows whose SkillId is in the boss skill set are the
-                 buffs that boss's skills apply
-  SkillTable     skill id -> Name (label for the aggregation header)
-  StringPool     mlid -> localized CN string
-
-Column offsets come from table_columns (getter-thunk extraction with versioned
-cache + curated literal fallback + live self-check). Class field offsets resolve
-through auto_offsets inside MemConfigTableReader. Nothing is hardcoded.
-
-Usage:
-  python -m tools.enum_boss_buffs --boss 103309 --dry-run
-  python -m tools.enum_boss_buffs --boss 103309 --apply     # last, persists names
-
---dry-run (default) prints every skill's reverse-mapped buff ids + names and
-writes the exports JSON. --apply additionally overlays the buff names onto the
-runtime name tables (id_space "buff_id").
-"""
+# enum_boss_buffs - reverse-map a boss's skills to the buff ids those skills cast.
+#
+# Runtime buff detection keys on BuffItem.BuffBaseId (the buff id a boss carries),
+# which is NOT the same number as the skill id in SkillTable. The bridge between
+# them is the BuffTable's own ``SkillId`` column: every buff row records which
+# skill spawned it. This walks the full BuffTable straight from memory (read-only),
+# filters rows whose SkillId belongs to the target boss, and aggregates per skill.
+#
+# Chain:
+# MonsterTable   boss row by Id -> SkillIds[] (skill ids 10330001..10330014),
+# BornClientBuffs[] / DeadClientBuffs[] (self-cast buff ids)
+# BuffTable      every row -> Id, Name(mlstring)/NameDesign(string), SkillId,
+# Duration*; rows whose SkillId is in the boss skill set are the
+# buffs that boss's skills apply
+# SkillTable     skill id -> Name (label for the aggregation header)
+# StringPool     mlid -> localized CN string
+#
+# Column offsets come from table_columns (getter-thunk extraction with versioned
+# cache + curated literal fallback + live self-check). Class field offsets resolve
+# through auto_offsets inside MemConfigTableReader. Nothing is hardcoded.
+#
+# Usage:
+# python -m tools.enum_boss_buffs --boss 103309 --dry-run
+# python -m tools.enum_boss_buffs --boss 103309 --apply     # last, persists names
+#
+# --dry-run (default) prints every skill's reverse-mapped buff ids + names and
+# writes the exports JSON. --apply additionally overlays the buff names onto the
+# runtime name tables (id_space "buff_id").
 from __future__ import annotations
 
 import argparse
@@ -82,7 +81,7 @@ def _strip_tags(s: str) -> str:
 
 
 class BossBuffEnumerator:
-    """Read-only reverse mapping of boss skills to the buffs those skills cast."""
+    # Read-only reverse mapping of boss skills to the buffs those skills cast.
 
     def __init__(self, src, log=print):
         self.src = src
@@ -120,9 +119,9 @@ class BossBuffEnumerator:
 
     def _validate_buff_columns(self, cols: Dict[str, Tuple[int, str]],
                                sample: int = 400) -> bool:
-        """Confirm Id(col0,i32)>0 and at least one buff Name/NameDesign resolves
-        to a CJK string over a live sample. Returns False only when the buff
-        table itself reads as garbage (column extraction badly wrong)."""
+        # Confirm Id(col0,i32)>0 and at least one buff Name/NameDesign resolves
+        # to a CJK string over a live sample. Returns False only when the buff
+        # table itself reads as garbage (column extraction badly wrong).
         c_id = cols.get("Id", (0, ""))[0]
         c_name = cols.get("Name", (None, ""))[0]
         c_nd = cols.get("NameDesign", (None, ""))[0]
@@ -150,7 +149,7 @@ class BossBuffEnumerator:
         return ent[0] if ent else None
 
     def column_report(self) -> Dict[str, Dict[str, List]]:
-        """For the final report: each used column's (offset, type) + source."""
+        # For the final report: each used column's (offset, type) + source.
         out: Dict[str, Dict[str, List]] = {}
         lit = "buff_columns_literal" in self.fallbacks_used
         for cls, props in (
@@ -203,7 +202,7 @@ class BossBuffEnumerator:
         return self._skill_index
 
     def boss_info(self, boss_id: int) -> Optional[Dict]:
-        """MonsterTable row for the boss: name, skill ids, self-cast buff ids."""
+        # MonsterTable row for the boss: name, skill ids, self-cast buff ids.
         ent = self.monster_index().get(int(boss_id))
         if not ent:
             return None
@@ -221,8 +220,8 @@ class BossBuffEnumerator:
         return info
 
     def skill_name(self, skill_id: int) -> Tuple[str, str]:
-        """(name, source). Boss mechanic skills often have an empty localized
-        Name; NameDesign (raw string column) is the real label then."""
+        # (name, source). Boss mechanic skills often have an empty localized
+        # Name; NameDesign (raw string column) is the real label then.
         ent = self.skill_index().get(int(skill_id))
         if not ent:
             return "", "missing"
@@ -235,8 +234,8 @@ class BossBuffEnumerator:
 
     # -- buff table -----------------------------------------------------------
     def _buff_name(self, zl: int, blob: int) -> Tuple[str, str]:
-        """(name, source). Prefer the localized Name(mlstring); fall back to the
-        raw NameDesign string column (mechanic buffs frequently have no Name)."""
+        # (name, source). Prefer the localized Name(mlstring); fall back to the
+        # raw NameDesign string column (mechanic buffs frequently have no Name).
         nm = self.pool.resolve(self.rd.col_mlid(blob, self._col(BUFF_CLS, "Name")))
         if nm:
             return nm, "mlstring"
@@ -245,11 +244,11 @@ class BossBuffEnumerator:
         return (nd, "design") if nd else ("", "empty")
 
     def scan_buffs(self) -> List[Dict]:
-        """Full BuffTable walk -> list of {id, name, name_src, skill_id, dur?}.
-
-        One pass over the loader's serialized rows (covers buffs the game never
-        instantiated). The per-row buff name is resolved lazily by callers, so
-        here we capture id + skill_id + the row handle for later naming."""
+        # Full BuffTable walk -> list of {id, name, name_src, skill_id, dur?}.
+        #
+        # One pass over the loader's serialized rows (covers buffs the game never
+        # instantiated). The per-row buff name is resolved lazily by callers, so
+        # here we capture id + skill_id + the row handle for later naming.
         c_id = self._col(BUFF_CLS, "Id")
         c_skill = self._col(BUFF_CLS, "SkillId")
         c_dur = self._col(BUFF_CLS, "Duration")  # absent in this schema -> None
@@ -280,7 +279,7 @@ class BossBuffEnumerator:
         return rows
 
     def name_buff_row(self, row: Dict) -> Dict:
-        """Attach the resolved buff name to a scanned row (drops handles)."""
+        # Attach the resolved buff name to a scanned row (drops handles).
         nm, src = self._buff_name(row["_zl"], row["_blob"])
         out = {"id": row["id"], "name": nm, "name_src": src,
                "skill_id": row.get("skill_id")}
@@ -290,10 +289,10 @@ class BossBuffEnumerator:
 
     def buff_id_cluster(self, named_rows: List[Dict], pivot_ids: List[int],
                         radius: int = 80) -> Tuple[int, int, List[Dict]]:
-        """Boss mechanic buffs are authored as one contiguous id block. Given
-        anchor buff ids (e.g. the boss's own self-research buffs), return the
-        (lo, hi, rows) window of every named buff inside that block. Empty
-        anchors -> empty window."""
+        # Boss mechanic buffs are authored as one contiguous id block. Given
+        # anchor buff ids (e.g. the boss's own self-research buffs), return the
+        # (lo, hi, rows) window of every named buff inside that block. Empty
+        # anchors -> empty window.
         anchors = [b for b in pivot_ids if b and b > 0]
         if not anchors:
             return 0, 0, []
@@ -305,11 +304,11 @@ class BossBuffEnumerator:
 # -- apply: name-table overlay ------------------------------------------------
 
 def _apply(result: Dict, log=print) -> Dict:
-    """Overlay every reverse-mapped buff name onto the runtime name tables.
-
-    Same funnel as tools.tablekit.mem_name_ingest: buff ids go through the
-    live-rows builder under id_space "buff_id" (the classifier refines the buff
-    sub-kind), then overlay_cache_into_existing_tables writes <kind>.json."""
+    # Overlay every reverse-mapped buff name onto the runtime name tables.
+    #
+    # Same funnel as tools.tablekit.mem_name_ingest: buff ids go through the
+    # live-rows builder under id_space "buff_id" (the classifier refines the buff
+    # sub-kind), then overlay_cache_into_existing_tables writes <kind>.json.
     report: Dict = {}
     name_rows: List[Dict] = []
     seen: set = set()

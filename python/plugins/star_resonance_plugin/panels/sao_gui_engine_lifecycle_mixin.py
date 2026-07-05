@@ -1,66 +1,64 @@
 # -*- coding: utf-8 -*-
-"""
-SAOPlayerGUIEngineLifecycleMixin — twelfth mixin extracted from
-SAOPlayerGUI (round 53 of the sao_gui split refactor). 4 methods,
-~350 lines.
-
-The recognition + data engine bring-up + teardown + cache helpers.
-These methods are the heaviest single block remaining in
-SAOPlayerGUI's __init__ flow.
-
-Methods:
-  * _stop_recognition_engines — stops AutoKey, BossRaid, packet/vision
-    engines + clears all references (hide-and-seek now lives in a plugin).
-  * _reconfigure_data_engines (80 lines) — restarts the
-    packet+vision engines for the current data source. Reads
-    `mem_data_source` setting to pick TCP/memory/hybrid/auto path.
-    Resolves DPS skill names through the shared runtime NameResolver.
-  * _start_recognition (204 lines — the biggest method here) —
-    full bring-up sequence:
-      1. instantiate GameStateManager + CfgSettings + subscribe
-         _on_game_state_update
-      2. restore cached player_name, sound settings
-      3. call _reconfigure_data_engines
-      4. AutoKeyEngine + burst actions
-      5. BossRaidEngine + BossAutoKeyLinkage with alert linkage
-      6. all overlay windows (DPS, BossHP, HP, Alert, SkillFX, Buffs)
-      7. 30 s cache-saver background thread
-  * _persist_cached_identity_state (34 lines) — write current
-    player_name / profession / level / season_exp / player_id /
-    fight_point into the cfg_settings game_cache dict.
-
-Round 53+ follow-up: DPS skill-name lookup now goes through the shared
-NameResolver/TCP name_tables path instead of reading a standalone
-skill_names.json bundle during engine startup.
-
-Required SAOPlayerGUI attrs:
-  * self.root, self.settings, self._cfg_settings_ref, self._state_mgr
-  * self._cache_loop_stop (threading.Event)
-  * self._username, self._profession, self._level, self._level_extra,
-    self._season_exp, self._game_state, self._hp_display_name
-  * self._auto_key_engine, self._boss_raid_engine,
-    self._boss_autokey_linkage
-  * self._recognition_engine, self._recognition_engines,
-    self._recognition_active, self._packet_engine, self._vision_engine
-  * self._dps_tracker, self._dps_overlay, self._dps_enabled,
-    self._dps_visible
-  * self._hp_overlay, self._hp_ov_visible, self._boss_hp_overlay,
-    self._alert_overlay, self._skillfx_overlay,
-    self._self_buff_overlay, self._boss_buff_overlay
-
-Required SAOPlayerGUI methods (via MRO):
-  * _on_game_state_update (State mixin)
-  * _on_packet_damage, _on_monster_update, _on_boss_event,
-    _on_scene_change, _send_linked_key (SAOPlayerGUI)
-  * _load_autokey_burst_actions (Actions mixin)
-  * _request_dps_live_snapshot, _request_dps_last_report,
-    _reset_dps_tracker, _get_dps_last_report_available,
-    _request_dps_entity_detail (DpsTheme mixin)
-  * _show_entity_alert (Dialogs mixin)
-  * _hp_overlay_on_click, _hp_overlay_on_menu (Dialogs / SAOPlayerGUI)
-  * _should_show_sta_offline, _reset_sta_offline_state (SAOPlayerGUI)
-  * _get_setting (SAOPlayerGUI)
-"""
+# SAOPlayerGUIEngineLifecycleMixin — twelfth mixin extracted from
+# SAOPlayerGUI (round 53 of the sao_gui split refactor). 4 methods,
+# ~350 lines.
+#
+# The recognition + data engine bring-up + teardown + cache helpers.
+# These methods are the heaviest single block remaining in
+# SAOPlayerGUI's __init__ flow.
+#
+# Methods:
+# * _stop_recognition_engines — stops AutoKey, BossRaid, packet/vision
+# engines + clears all references (hide-and-seek now lives in a plugin).
+# * _reconfigure_data_engines (80 lines) — restarts the
+# packet+vision engines for the current data source. Reads
+# `mem_data_source` setting to pick TCP/memory/hybrid/auto path.
+# Resolves DPS skill names through the shared runtime NameResolver.
+# * _start_recognition (204 lines — the biggest method here) —
+# full bring-up sequence:
+# 1. instantiate GameStateManager + CfgSettings + subscribe
+# _on_game_state_update
+# 2. restore cached player_name, sound settings
+# 3. call _reconfigure_data_engines
+# 4. AutoKeyEngine + burst actions
+# 5. BossRaidEngine + BossAutoKeyLinkage with alert linkage
+# 6. all overlay windows (DPS, BossHP, HP, Alert, SkillFX, Buffs)
+# 7. 30 s cache-saver background thread
+# * _persist_cached_identity_state (34 lines) — write current
+# player_name / profession / level / season_exp / player_id /
+# fight_point into the cfg_settings game_cache dict.
+#
+# Round 53+ follow-up: DPS skill-name lookup now goes through the shared
+# NameResolver/TCP name_tables path instead of reading a standalone
+# skill_names.json bundle during engine startup.
+#
+# Required SAOPlayerGUI attrs:
+# * self.root, self.settings, self._cfg_settings_ref, self._state_mgr
+# * self._cache_loop_stop (threading.Event)
+# * self._username, self._profession, self._level, self._level_extra,
+# self._season_exp, self._game_state, self._hp_display_name
+# * self._auto_key_engine, self._boss_raid_engine,
+# self._boss_autokey_linkage
+# * self._recognition_engine, self._recognition_engines,
+# self._recognition_active, self._packet_engine, self._vision_engine
+# * self._dps_tracker, self._dps_overlay, self._dps_enabled,
+# self._dps_visible
+# * self._hp_overlay, self._hp_ov_visible, self._boss_hp_overlay,
+# self._alert_overlay, self._skillfx_overlay,
+# self._self_buff_overlay, self._boss_buff_overlay
+#
+# Required SAOPlayerGUI methods (via MRO):
+# * _on_game_state_update (State mixin)
+# * _on_packet_damage, _on_monster_update, _on_boss_event,
+# _on_scene_change, _send_linked_key (SAOPlayerGUI)
+# * _load_autokey_burst_actions (Actions mixin)
+# * _request_dps_live_snapshot, _request_dps_last_report,
+# _reset_dps_tracker, _get_dps_last_report_available,
+# _request_dps_entity_detail (DpsTheme mixin)
+# * _show_entity_alert (Dialogs mixin)
+# * _hp_overlay_on_click, _hp_overlay_on_menu (Dialogs / SAOPlayerGUI)
+# * _should_show_sta_offline, _reset_sta_offline_state (SAOPlayerGUI)
+# * _get_setting (SAOPlayerGUI)
 
 from __future__ import annotations
 
@@ -71,11 +69,11 @@ from act_platform.runtime import ensure_act_event_bus, ensure_act_plugin_manager
 
 
 class SAOPlayerGUIEngineLifecycleMixin:
-    """Mixin bundling recognition+data engine bring-up + teardown +
-    cache persistence."""
+    # Mixin bundling recognition+data engine bring-up + teardown +
+    # cache persistence.
 
     def _stop_recognition_engines(self):
-        """停止所有识别/数据引擎."""
+        # 停止所有识别/数据引擎.
         if getattr(self, '_mem_bridge', None):
             try: self._mem_bridge.stop()
             except Exception: pass
@@ -104,7 +102,7 @@ class SAOPlayerGUIEngineLifecycleMixin:
         self._reset_sta_offline_state()
 
     def _reconfigure_data_engines(self):
-        """重启引擎。所有引擎/数据源/overlay 由插件 on_load 创建。"""
+        # 重启引擎。所有引擎/数据源/overlay 由插件 on_load 创建。
         self._stop_recognition_engines()
         ensure_act_event_bus(self)
         ensure_act_plugin_manager(self, load=True)
@@ -114,7 +112,7 @@ class SAOPlayerGUIEngineLifecycleMixin:
             getattr(self, '_packet_engine', None) or getattr(self, '_vision_engine', None))
 
     def _start_recognition(self):
-        """启动平台引擎 + 加载游戏插件（游戏引擎/overlay 由插件 on_load 创建）。"""
+        # 启动平台引擎 + 加载游戏插件（游戏引擎/overlay 由插件 on_load 创建）。
         try:
             from config import SettingsManager as CfgSettings
             cfg_settings = CfgSettings()
@@ -145,8 +143,8 @@ class SAOPlayerGUIEngineLifecycleMixin:
             self._recognition_active = False
 
     def _on_mechanic_event(self, evt):
-        """Engine mechanic event → TTS + top banner (controller may lag engine
-        creation during bring-up; events before it exists are dropped)."""
+        # Engine mechanic event → TTS + top banner (controller may lag engine
+        # creation during bring-up; events before it exists are dropped).
         controller = getattr(self, '_mech_alert_controller', None)
         if controller is not None:
             try:
@@ -155,10 +153,10 @@ class SAOPlayerGUIEngineLifecycleMixin:
                 pass
 
     def _on_boss_action_with_gate(self, action):
-        """Gate the memory boss-action feed before driving the auto-key linkage.
-
-        Mirrors the AutoKeyEngine gate: only react while recognition is active and
-        the player is alive (suppress auto-dodge / offense while dead)."""
+        # Gate the memory boss-action feed before driving the auto-key linkage.
+        #
+        # Mirrors the AutoKeyEngine gate: only react while recognition is active and
+        # the player is alive (suppress auto-dodge / offense while dead).
         if not bool(getattr(self, '_recognition_active', False)):
             return
         gs = getattr(self._state_mgr, 'state', None) if getattr(self, '_state_mgr', None) else None
@@ -174,16 +172,16 @@ class SAOPlayerGUIEngineLifecycleMixin:
         self._kick_numbered_zone_capture(action)
 
     def get_numbered_zone_summary(self):
-        """编号圈(1/2/3)统计供面板读取: 每个圈的序号/组/命中名单/存活时长。
-        无追踪器(没遇到机制圈)时返回 []。纯读取, 不触发内存扫描。"""
+        # 编号圈(1/2/3)统计供面板读取: 每个圈的序号/组/命中名单/存活时长。
+        # 无追踪器(没遇到机制圈)时返回 []。纯读取, 不触发内存扫描。
         t = getattr(self, '_numbered_zone_tracker', None)
         return t.summary() if t is not None else []
 
     def _kick_numbered_zone_capture(self, action):
-        """机制触发时, 在机制窗口内短时(默认12s @4Hz)采样活动区域喂编号圈追踪器:
-        按出现顺序编号 + 用区域成员(entitiesIdInZone_=服务端命中判定)做精确归属。
-        纯读取无按键, 不受躲避总开关限制(统计安全); 仅前台采样。窗口内重复触发只延长
-        截止时间不另起线程。"""
+        # 机制触发时, 在机制窗口内短时(默认12s @4Hz)采样活动区域喂编号圈追踪器:
+        # 按出现顺序编号 + 用区域成员(entitiesIdInZone_=服务端命中判定)做精确归属。
+        # 纯读取无按键, 不受躲避总开关限制(统计安全); 仅前台采样。窗口内重复触发只延长
+        # 截止时间不另起线程。
         import time as _t
         import threading as _th
         try:
@@ -229,13 +227,13 @@ class SAOPlayerGUIEngineLifecycleMixin:
             pass
 
     def _get_auto_dodge_director(self):
-        """Lazy AutoDodgeDirector (定向躲避): 自带只读 mem 源, 相机基/玩家位/boss位
-        三个已逆向读取器收口。首次创建会开一个只读进程句柄 (与 ACE 兼容)。"""
+        # Lazy AutoDodgeDirector (定向躲避): 自带只读 mem 源, 相机基/玩家位/boss位
+        # 三个已逆向读取器收口。首次创建会开一个只读进程句柄 (与 ACE 兼容)。
         return getattr(self, '_auto_dodge_director', None)
 
     def _maybe_directional_dodge(self, action):
-        """机制躲避带 direction 时, 把人物按 WASD 挪开 (主开关
-        directional_dodge_enabled, 默认关; 与 linkage dodge_enabled / F12 共用急停)。"""
+        # 机制躲避带 direction 时, 把人物按 WASD 挪开 (主开关
+        # directional_dodge_enabled, 默认关; 与 linkage dodge_enabled / F12 共用急停)。
         try:
             if not bool(self._get_setting('directional_dodge_enabled', False)):
                 return
@@ -329,14 +327,14 @@ class SAOPlayerGUIEngineLifecycleMixin:
             print(f'[Dodge] directional dodge failed: {e}')
 
     def _run_auto_walk(self, director, ctx, inline, direction):
-        """自动走位(走向目标, 与躲避的远离相反)。独立总开关 auto_walk_enabled 默认关
-        (走位比躲避更激进的 bot 行为); 前台门 + F12 与躲避共用。
-
-          goto_teammate          靠拢最近队友 (抱团/分摊机制)
-          goto_point:x,z         走向固定世界坐标点
-          goto_circle            走向当前第一个编号圈
-          walk_sequence          按编号顺序走完全部编号圈 (进圈靠区域成员判定推进)
-        ★安全: 目标位置读不到 → director.walk_to 内部直接停, 绝不盲走。"""
+        # 自动走位(走向目标, 与躲避的远离相反)。独立总开关 auto_walk_enabled 默认关
+        # (走位比躲避更激进的 bot 行为); 前台门 + F12 与躲避共用。
+        #
+        # goto_teammate          靠拢最近队友 (抱团/分摊机制)
+        # goto_point:x,z         走向固定世界坐标点
+        # goto_circle            走向当前第一个编号圈
+        # walk_sequence          按编号顺序走完全部编号圈 (进圈靠区域成员判定推进)
+        # ★安全: 目标位置读不到 → director.walk_to 内部直接停, 绝不盲走。
         try:
             if ctx is None or director is None:
                 return                 # 审查 #12: 引擎已停/ctx 失效 → 不走
@@ -371,8 +369,8 @@ class SAOPlayerGUIEngineLifecycleMixin:
 
     def _walk_numbered_sequence(self, director, ctx, inline, walk_gate=None,
                                 single=False):
-        """按编号顺序走完编号圈: 一个闭环走向当前目标圈; 玩家进圈(区域成员判定)→推进到
-        下一个; 全部走完或超时即停。圈位置取自追踪器(炸圈 DamagePos 补), 未知则该 tick 停。"""
+        # 按编号顺序走完编号圈: 一个闭环走向当前目标圈; 玩家进圈(区域成员判定)→推进到
+        # 下一个; 全部走完或超时即停。圈位置取自追踪器(炸圈 DamagePos 补), 未知则该 tick 停。
         tracker = getattr(self, '_numbered_zone_tracker', None)
         if tracker is None:
             print('[走位] 编号圈追踪器未就绪(尚未遇到机制圈)')

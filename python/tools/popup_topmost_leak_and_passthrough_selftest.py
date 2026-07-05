@@ -1,27 +1,26 @@
 # -*- coding: utf-8 -*-
-"""Selftest: a real SAOPopUpMenu open->close cycle must not leave the
-shared compositor host stuck at real WS_EX_TOPMOST (burying NerveGear's
-Tk proxy) NOR leave the desktop/game unable to receive clicks.
-
-This is the THIRD independent "host pushed to HWND_TOPMOST and never
-demoted" source found in this investigation (after
-GpuNerveGearButton.raise_topmost — a90adbf — and the fisheye hit layer
-— c208715): SAOPopUpMenu._raise_to_top (ui_gpu/popup.py) operates on
-self._gpu_win._hwnd, which in unified mode is uo.hwnd — the ONE shared
-host window, not a window owned by this popup — and pushes it to real
-HWND_TOPMOST on every tick while the popup is open. The intended undo,
-_release_input_zorder, early-returns whenever `_gpu_win._unified` is
-True (the same stale "unified mode never makes host topmost"
-assumption that bit the fisheye hit layer). Fixed by demoting inside
-_destroy_window, the single choke point every close path funnels
-through.
-
-Also exercises the Stage-C1 architecture fix (this session): after
-close, host.input_passthrough must be True with a REAL (non-null, or
-at minimum a legitimately absent/'empty') region — not a NULL/full-
-screen shape that would swallow clicks meant for a genuinely separate
-process. Uses tools/_cross_process_target.py as that separate process.
-"""
+# Selftest: a real SAOPopUpMenu open->close cycle must not leave the
+# shared compositor host stuck at real WS_EX_TOPMOST (burying NerveGear's
+# Tk proxy) NOR leave the desktop/game unable to receive clicks.
+#
+# This is the THIRD independent "host pushed to HWND_TOPMOST and never
+# demoted" source found in this investigation (after
+# GpuNerveGearButton.raise_topmost — a90adbf — and the fisheye hit layer
+# — c208715): SAOPopUpMenu._raise_to_top (ui_gpu/popup.py) operates on
+# self._gpu_win._hwnd, which in unified mode is uo.hwnd — the ONE shared
+# host window, not a window owned by this popup — and pushes it to real
+# HWND_TOPMOST on every tick while the popup is open. The intended undo,
+# _release_input_zorder, early-returns whenever `_gpu_win._unified` is
+# True (the same stale "unified mode never makes host topmost"
+# assumption that bit the fisheye hit layer). Fixed by demoting inside
+# _destroy_window, the single choke point every close path funnels
+# through.
+#
+# Also exercises the Stage-C1 architecture fix (this session): after
+# close, host.input_passthrough must be True with a REAL (non-null, or
+# at minimum a legitimately absent/'empty') region — not a NULL/full-
+# screen shape that would swallow clicks meant for a genuinely separate
+# process. Uses tools/_cross_process_target.py as that separate process.
 import os
 import sys
 import time

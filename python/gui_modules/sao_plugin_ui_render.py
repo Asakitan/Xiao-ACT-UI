@@ -1,23 +1,22 @@
 # -*- coding: utf-8 -*-
-"""Entity (Tk) renderer for the declarative plugin UI spec.
-
-This is the Tk twin of ``web/plugin_layer.js``: both consume the same normalized
-spec from :mod:`act_platform.ui_spec` so a plugin draws identically on the Entity
-overlay and the WebView windows.
-
-The renderer **reconciles**: :class:`SpecRenderer` keeps the widget tree across
-renders and updates widgets *in place* (text, bar %, canvas ops, button state…)
-whenever the spec structure is unchanged, only tearing down + rebuilding the
-subtrees that actually changed shape. This keeps animated panels (e.g. a note
-roll) smooth and — crucially — never destroys interactive widgets (buttons) out
-from under the user during playback, so clicks are never lost and nothing flickers.
-
-Public surface:
-    SpecRenderer(mount, on_action)                  -> persistent reconciling renderer
-    render_spec_into(parent, spec, on_action=None)  -> one-shot (clear + build)
-    PluginPanelList(parent, owner)                  -> auto-redrawing panel list
-    attach_overlay_layer(toplevel, surface, owner)  -> plugin overlay on a window
-"""
+# Entity (Tk) renderer for the declarative plugin UI spec.
+#
+# This is the Tk twin of ``web/plugin_layer.js``: both consume the same normalized
+# spec from :mod:`act_platform.ui_spec` so a plugin draws identically on the Entity
+# overlay and the WebView windows.
+#
+# The renderer **reconciles**: :class:`SpecRenderer` keeps the widget tree across
+# renders and updates widgets *in place* (text, bar %, canvas ops, button state…)
+# whenever the spec structure is unchanged, only tearing down + rebuilding the
+# subtrees that actually changed shape. This keeps animated panels (e.g. a note
+# roll) smooth and — crucially — never destroys interactive widgets (buttons) out
+# from under the user during playback, so clicks are never lost and nothing flickers.
+#
+# Public surface:
+# SpecRenderer(mount, on_action)                  -> persistent reconciling renderer
+# render_spec_into(parent, spec, on_action=None)  -> one-shot (clear + build)
+# PluginPanelList(parent, owner)                  -> auto-redrawing panel list
+# attach_overlay_layer(toplevel, surface, owner)  -> plugin overlay on a window
 
 from __future__ import annotations
 
@@ -63,8 +62,8 @@ def _finite_int(value: Any, default: int = 0, *, lo: int | None = None, hi: int 
 
 
 def _validate_number(proposed: str) -> bool:
-    """Soft numeric guard for input_type=number: allow empty / sign / digits /
-    one dot / hex-ish chars (so 0x.. addresses can be typed). Never hard-blocks."""
+    # Soft numeric guard for input_type=number: allow empty / sign / digits /
+    # one dot / hex-ish chars (so 0x.. addresses can be typed). Never hard-blocks.
     if proposed in ("", "-", "+", "0x", "0X"):
         return True
     allowed = set("0123456789abcdefABCDEFxX.-+")
@@ -85,7 +84,7 @@ def _input_pack_kw(width: Any) -> dict:
 
 
 def _pal() -> dict:
-    """Resolve the live SAO panel palette (respects runtime theme switches)."""
+    # Resolve the live SAO panel palette (respects runtime theme switches).
     g = lambda name, fallback: getattr(_theme, name, fallback)
     return {
         "body": g("_SAO_PANEL_BODY_BG", "#f6f7f7"),
@@ -136,7 +135,7 @@ def _btn_fg(style: str, pal: dict) -> str:
 
 
 def _canvas_fill(value: Any, pal: dict, default: str = "") -> str:
-    """Map a canvas color token (or #hex passthrough) to a concrete Tk color."""
+    # Map a canvas color token (or #hex passthrough) to a concrete Tk color.
     text = str(value or "")
     if not text:
         return default
@@ -154,7 +153,7 @@ def _canvas_fill(value: Any, pal: dict, default: str = "") -> str:
 
 
 def _draw_canvas_ops(cv: tk.Canvas, node: Mapping[str, Any], pal: dict) -> None:
-    """(Re)draw a canvas node's ops into ``cv`` in place (clear + redraw)."""
+    # (Re)draw a canvas node's ops into ``cv`` in place (clear + redraw).
     cv.delete("all")
     anchors = {"nw": "nw", "n": "n", "ne": "ne", "w": "w", "center": "center",
                "e": "e", "sw": "sw", "s": "s", "se": "se"}
@@ -186,14 +185,14 @@ def _draw_canvas_ops(cv: tk.Canvas, node: Mapping[str, Any], pal: dict) -> None:
 
 
 def _table_key(spec: Mapping[str, Any]):
-    """Identity of a table's shape — used to decide in-place update vs rebuild."""
+    # Identity of a table's shape — used to decide in-place update vs rebuild.
     cols = spec.get("columns") or []
     return (tuple((c.get("key"), c.get("title"), c.get("align")) for c in cols),
             len(spec.get("rows") or []))
 
 
 class _RNode:
-    """A rendered node: its top Tk widget + handles for in-place updates."""
+    # A rendered node: its top Tk widget + handles for in-place updates.
     __slots__ = ("type", "widget", "parts", "children", "spec", "pack_kw")
 
     def __init__(self, ntype: str, widget: Any, parts: Optional[dict] = None,
@@ -208,13 +207,12 @@ class _RNode:
 
 
 class SpecRenderer:
-    """Reconciling renderer: keeps the widget tree and updates it in place.
-
-    Call :meth:`render` repeatedly with fresh specs; widgets are reused (only
-    their values change) when the structure matches, so interactive/animated
-    panels never flicker or lose clicks. ``on_action(action, payload)`` fires on
-    button presses and may be swapped any time via :meth:`set_on_action`.
-    """
+    # Reconciling renderer: keeps the widget tree and updates it in place.
+    #
+    # Call :meth:`render` repeatedly with fresh specs; widgets are reused (only
+    # their values change) when the structure matches, so interactive/animated
+    # panels never flicker or lose clicks. ``on_action(action, payload)`` fires on
+    # button presses and may be swapped any time via :meth:`set_on_action`.
 
     def __init__(self, mount: tk.Misc, on_action: Optional[Callable[[str, dict], None]] = None) -> None:
         self.mount = mount
@@ -829,7 +827,7 @@ class SpecRenderer:
 
 def render_spec_into(parent: tk.Misc, spec: Any,
                      on_action: Optional[Callable[[str, dict], None]] = None) -> None:
-    """One-shot: clear ``parent`` and render a normalized plugin UI spec into it."""
+    # One-shot: clear ``parent`` and render a normalized plugin UI spec into it.
     for child in list(parent.winfo_children()):
         try:
             child.destroy()
@@ -844,12 +842,11 @@ def render_spec_into(parent: tk.Misc, spec: Any,
 # ── auto-redrawing panel list (manager "Panels" tab) ─────────────────────────
 
 class PluginPanelList:
-    """A scrollable, auto-redrawing list of plugin UI panels.
-
-    Each panel keeps its own :class:`SpecRenderer`, so a redraw reconciles in
-    place (smooth, no flicker, buttons stay live). The card scaffolding is only
-    rebuilt when the *set* of shown panels changes.
-    """
+    # A scrollable, auto-redrawing list of plugin UI panels.
+    #
+    # Each panel keeps its own :class:`SpecRenderer`, so a redraw reconciles in
+    # place (smooth, no flicker, buttons stay live). The card scaffolding is only
+    # rebuilt when the *set* of shown panels changes.
 
     def __init__(self, parent: tk.Misc, owner: Any, *, interval_ms: int = 700) -> None:
         self.parent = parent
@@ -1003,12 +1000,12 @@ class PluginPanelList:
 
 def attach_overlay_layer(toplevel: tk.Toplevel, surface: str, owner: Any,
                          *, interval_ms: int = 700) -> "OverlayLayer":
-    """Attach a plugin overlay layer (top-anchored) to an existing Tk window."""
+    # Attach a plugin overlay layer (top-anchored) to an existing Tk window.
     return OverlayLayer(toplevel, surface, owner, interval_ms=interval_ms)
 
 
 class OverlayLayer:
-    """A thin frame placed at the top of a host window that paints overlays."""
+    # A thin frame placed at the top of a host window that paints overlays.
 
     def __init__(self, toplevel: tk.Misc, surface: str, owner: Any, *, interval_ms: int = 700) -> None:
         self.toplevel = toplevel

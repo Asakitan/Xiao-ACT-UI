@@ -1,59 +1,58 @@
 # -*- coding: utf-8 -*-
-"""Emma scripting runtime — lightweight embedded scripting language.
-
-Emma is a minimal, zero-dependency scripting language designed for
-plugin authoring. It has Python-like readability with explicit block
-delimiters, and direct access to the full platform SDK.
-
-Plugin entry is an ``.emma`` file::
-
-    -- plugin.emma
-
-    let timer_token = ""
-
-    fn on_load(ctx)
-        ctx.log("Hello from Emma!")
-        ctx.register_ui_panel("emma_panel",
-            {title: "Emma Panel", description: "A demo panel"},
-            render, on_action)
-    end
-
-    fn render(payload)
-        return ctx.ui.panel("Emma Demo", [
-            ctx.ui.text("Hello from Emma!"),
-            ctx.ui.kv("Status", "Running"),
-            ctx.ui.button("Click Me", "click"),
-        ])
-    end
-
-    fn on_action(action_id, payload)
-        ctx.log("action: " + action_id)
-        return {ok: true}
-    end
-
-    fn on_unload()
-        ctx.log("Bye from Emma!")
-    end
-
-Syntax summary:
-    -- line comment
-    let name = expr            variable declaration
-    name = expr                assignment
-    fn name(args) ... end      function
-    if expr ... elif ... else ... end
-    while expr ... end
-    for name in expr ... end
-    return expr
-    expr.attr                  attribute access
-    expr.method(args)          method call
-    expr[key]                  index access
-    [a, b, c]                  array literal
-    {k: v, k2: v2}            dict literal
-    "string" or 'string'      string literal
-    true false nil             constants
-    + - * / % == != < > <= >= and or not
-    ..                         string concatenation
-"""
+# Emma scripting runtime — lightweight embedded scripting language.
+#
+# Emma is a minimal, zero-dependency scripting language designed for
+# plugin authoring. It has Python-like readability with explicit block
+# delimiters, and direct access to the full platform SDK.
+#
+# Plugin entry is an ``.emma`` file::
+#
+# -- plugin.emma
+#
+# let timer_token = ""
+#
+# fn on_load(ctx)
+# ctx.log("Hello from Emma!")
+# ctx.register_ui_panel("emma_panel",
+# {title: "Emma Panel", description: "A demo panel"},
+# render, on_action)
+# end
+#
+# fn render(payload)
+# return ctx.ui.panel("Emma Demo", [
+# ctx.ui.text("Hello from Emma!"),
+# ctx.ui.kv("Status", "Running"),
+# ctx.ui.button("Click Me", "click"),
+# ])
+# end
+#
+# fn on_action(action_id, payload)
+# ctx.log("action: " + action_id)
+# return {ok: true}
+# end
+#
+# fn on_unload()
+# ctx.log("Bye from Emma!")
+# end
+#
+# Syntax summary:
+# -- line comment
+# let name = expr            variable declaration
+# name = expr                assignment
+# fn name(args) ... end      function
+# if expr ... elif ... else ... end
+# while expr ... end
+# for name in expr ... end
+# return expr
+# expr.attr                  attribute access
+# expr.method(args)          method call
+# expr[key]                  index access
+# [a, b, c]                  array literal
+# {k: v, k2: v2}            dict literal
+# "string" or 'string'      string literal
+# true false nil             constants
+# + - * / % == != < > <= >= and or not
+# ..                         string concatenation
 
 from __future__ import annotations
 
@@ -913,10 +912,9 @@ class _EmmaInterpreter:
 # ── proxy ──────────────────────────────────────────────────────────────
 
 class _EmmaProxy:
-    """Wraps PluginContext for Emma consumption.
-
-    Emma scripts call methods directly: ctx.log("msg"), ctx.ui.panel(...)
-    """
+    # Wraps PluginContext for Emma consumption.
+    #
+    # Emma scripts call methods directly: ctx.log("msg"), ctx.ui.panel(...)
 
     def __init__(self, ctx: "PluginContext") -> None:
         self._ctx = ctx
@@ -1113,7 +1111,7 @@ class _EmmaProxy:
 # ── runtime entry ──────────────────────────────────────────────────────
 
 class EmmaRuntime(ScriptRuntime):
-    """Load ``.emma`` plugin scripts via the built-in Emma interpreter."""
+    # Load ``.emma`` plugin scripts via the built-in Emma interpreter.
 
     def __init__(self) -> None:
         self._interpreters: dict[str, _EmmaInterpreter] = {}

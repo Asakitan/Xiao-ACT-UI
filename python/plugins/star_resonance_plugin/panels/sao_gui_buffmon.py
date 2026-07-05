@@ -1,15 +1,13 @@
 # -*- coding: utf-8 -*-
-"""
-sao_gui_buffmon.py — SAO 主面板风格 Buff 监视器 (ULW + PIL)
-
-提供两个 overlay:
-  - SelfBuffOverlay : 自身 "奥义/幻想 buff" 监视器, 锚定在 HpOverlay (ID 面板) 上方
-  - BossBuffOverlay : 当前锁定 boss 的 buff 监视器, 锚定在 BossHpOverlay 右侧
-
-风格沿用 DpsOverlay 的奶油渐变 shell + 青/金角标 + 微扫描线 + 浅胶囊行。
-有 buff → 滑入 (淡入 + 12 px 横滑), 没有 buff → 滑出 (淡出) → ShowWindow(SW_HIDE).
-鼠标穿透, 不抢焦点。
-"""
+# sao_gui_buffmon.py — SAO 主面板风格 Buff 监视器 (ULW + PIL)
+#
+# 提供两个 overlay:
+# - SelfBuffOverlay : 自身 "奥义/幻想 buff" 监视器, 锚定在 HpOverlay (ID 面板) 上方
+# - BossBuffOverlay : 当前锁定 boss 的 buff 监视器, 锚定在 BossHpOverlay 右侧
+#
+# 风格沿用 DpsOverlay 的奶油渐变 shell + 青/金角标 + 微扫描线 + 浅胶囊行。
+# 有 buff → 滑入 (淡入 + 12 px 横滑), 没有 buff → 滑出 (淡出) → ShowWindow(SW_HIDE).
+# 鼠标穿透, 不抢焦点。
 from __future__ import annotations
 
 import time
@@ -47,7 +45,7 @@ except Exception:  # pragma: no cover
 
 
 def _gpu_buffmon_enabled() -> bool:
-    """BuffMon requires the shared Entity GPU backend."""
+    # BuffMon requires the shared Entity GPU backend.
     try:
         from sr_config import USE_GPU_BUFFMON as _flag
     except Exception:
@@ -118,11 +116,10 @@ _ULT_ID_SET = None
 
 
 def _ultimate_skill_id_set():
-    """游戏真实「幻想技能」大招技能ID集 (ACT 分类器单一源头, 懒加载缓存)。
-
-    = name_table_classifier.ultimate_skill_ids() (aoyi_skill_names +
-    PROFESSION_ULTIMATE)，让面板按游戏真实分类而非纯关键词猜测。
-    """
+    # 游戏真实「幻想技能」大招技能ID集 (ACT 分类器单一源头, 懒加载缓存)。
+    #
+    # = name_table_classifier.ultimate_skill_ids() (aoyi_skill_names +
+    # PROFESSION_ULTIMATE)，让面板按游戏真实分类而非纯关键词猜测。
     global _ULT_ID_SET
     if _ULT_ID_SET is None:
         try:
@@ -134,11 +131,10 @@ def _ultimate_skill_id_set():
 
 
 def is_ultimate_buff(name: str, buff_id: int = 0) -> bool:
-    """True 当 buff 属于「幻想技能」(绝技/奥义/职业大招)。
-
-    判定优先级: ① buff_id 命中游戏真实大招技能ID集 (权威, 名字缺失也能识别)
-    → ② buff 名命中完整关键词集。
-    """
+    # True 当 buff 属于「幻想技能」(绝技/奥义/职业大招)。
+    #
+    # 判定优先级: ① buff_id 命中游戏真实大招技能ID集 (权威, 名字缺失也能识别)
+    # → ② buff 名命中完整关键词集。
     buff_id = _finite_int(buff_id, 0, lo=0)
     if buff_id and buff_id in _ultimate_skill_id_set():
         return True
@@ -154,10 +150,9 @@ def is_ultimate_buff(name: str, buff_id: int = 0) -> bool:
 #  通用 base class
 # ─────────────────────────────────────────
 class _BuffPanelBase:
-    """主面板风格 buff 倒计时面板的基础实现。
-
-    子类需要重写 `_resolve_anchor_xy()` 决定屏幕位置。
-    """
+    # 主面板风格 buff 倒计时面板的基础实现。
+    #
+    # 子类需要重写 `_resolve_anchor_xy()` 决定屏幕位置。
 
     # ── 几何 ──
     WIDTH = 220
@@ -347,7 +342,7 @@ class _BuffPanelBase:
             return 'dark'
 
     def _apply_theme(self, theme: str):
-        """切换 light/dark 调色板并失效所有渲染缓存 (菜单皮肤切换入口)。"""
+        # 切换 light/dark 调色板并失效所有渲染缓存 (菜单皮肤切换入口)。
         theme = 'light' if str(theme or '').lower() == 'light' else 'dark'
         palette = self._PALETTES.get(theme) or self._PALETTES['dark']
         for attr, value in palette.items():
@@ -370,7 +365,7 @@ class _BuffPanelBase:
     #  Window — GPU (优先路径)
     # ─────────────────────────────────────
     def _ensure_gpu_window(self, x: int, y: int, w: int, h: int) -> bool:
-        """惰性创建 GpuOverlayWindow + BgraPresenter。"""
+        # 惰性创建 GpuOverlayWindow + BgraPresenter。
         if self._gpu_window is not None:
             return True
         require_entity_gpu(f'BuffMon {self._name}', _gow)
@@ -534,7 +529,7 @@ class _BuffPanelBase:
     #  Render
     # ─────────────────────────────────────
     def _shell_polygon(self, sx: int, sy: int, sw: int, sh: int, inset: int = 0):
-        """web/dps.html clip-path 风格: 右上 + 左下 各切 14px 对角。"""
+        # web/dps.html clip-path 风格: 右上 + 左下 各切 14px 对角。
         c = max(2, self.SHELL_CUT - inset)
         x0, y0 = sx + inset, sy + inset
         x1, y1 = sx + sw - 1 - inset, sy + sh - 1 - inset
@@ -548,10 +543,10 @@ class _BuffPanelBase:
         ]
 
     def _shell_parts(self, sw: int, sh: int) -> dict:
-        """渐变/mask/sheen/scan/底线是 (尺寸, 主题) 的纯函数 — 单槽缓存。
-        base 重建在倒计时期间高达 10Hz (签名含 0.1s 秒数桶), 高斯模糊 +
-        numpy 渐变 + 逐像素底线循环不该每次重算。部件用 tile 本地坐标,
-        贴回时带 (sx, sy) 偏移, 输出逐像素等价。"""
+        # 渐变/mask/sheen/scan/底线是 (尺寸, 主题) 的纯函数 — 单槽缓存。
+        # base 重建在倒计时期间高达 10Hz (签名含 0.1s 秒数桶), 高斯模糊 +
+        # numpy 渐变 + 逐像素底线循环不该每次重算。部件用 tile 本地坐标,
+        # 贴回时带 (sx, sy) 偏移, 输出逐像素等价。
         key = (sw, sh, self._theme)
         cached = getattr(self, '_shell_parts_cache', None)
         if cached is not None and cached[0] == key:
@@ -638,7 +633,7 @@ class _BuffPanelBase:
 
     def _draw_corners(self, draw: ImageDraw.ImageDraw,
                        sx: int, sy: int, sw: int, sh: int):
-        """高亮 cut-corner 转折点 (top-left full + 两对角切口 + bottom-right full)。"""
+        # 高亮 cut-corner 转折点 (top-left full + 两对角切口 + bottom-right full)。
         c = self.SHELL_CUT
         cs = self.CORNER_SIZE
         # Top-left full corner — bright cyan
@@ -706,7 +701,7 @@ class _BuffPanelBase:
         )
 
     def _row_polygon(self, x0: int, y0: int, x1: int, y1: int):
-        """web/dps.html .entity-row 风格切角: 左上 + 右下各切。"""
+        # web/dps.html .entity-row 风格切角: 左上 + 右下各切。
         b = self.PILL_BEVEL
         return [
             (x0 + b, y0),
@@ -881,7 +876,7 @@ class _BuffPanelBase:
         )
 
     def _row_sig(self, rows: List[dict]) -> Tuple:
-        """变化 signature — 只在可见内容/秒数(0.1s 桶)变化时重画 base_img。"""
+        # 变化 signature — 只在可见内容/秒数(0.1s 桶)变化时重画 base_img。
         return (
             self._header_sig(),
             tuple(
@@ -973,10 +968,9 @@ class _BuffPanelBase:
             print(f'[BuffMon:{self._name}] ULW update error: {e}')
 
     def _present_gpu(self, base_img: Image.Image, x: int, y: int, alpha: int):
-        """GPU 路径: 后台 worker 合成 (alpha pre-multiply 进 PIL), GpuOverlayWindow 显示。
-
-        compose_fn 在 worker 线程跑, 所以要把所有变量按值捕获。
-        """
+        # GPU 路径: 后台 worker 合成 (alpha pre-multiply 进 PIL), GpuOverlayWindow 显示。
+        #
+        # compose_fn 在 worker 线程跑, 所以要把所有变量按值捕获。
         w, h = base_img.size
         if w <= 0 or h <= 0:
             self._hide_window()
@@ -1047,7 +1041,7 @@ class _BuffPanelBase:
 #  自身 buff overlay
 # ─────────────────────────────────────────
 class SelfBuffOverlay(_BuffPanelBase):
-    """锚定在 HpOverlay (ID 面板) 上方, 仅显示奥义/幻想 buff。"""
+    # 锚定在 HpOverlay (ID 面板) 上方, 仅显示奥义/幻想 buff。
 
     WIDTH = 220
     HEADER_LABEL = 'AURA'
@@ -1074,14 +1068,13 @@ class SelfBuffOverlay(_BuffPanelBase):
 
     def update_buffs(self, raw_buffs: list, server_offset_ms: float = 0.0,
                      uptime=None):
-        """Upsert 进 _buff_cache; 旧的 buff 由 duration 自然过期, 不被新推送清空。
-
-        这样即使服务器偶发只发部分 buff (例如 AoiSyncDelta 只带 1 个 '箭雨'),
-        奥义 buff 也不会被误清, 不再闪烁。
-
-        ``uptime`` = dps_tracker.get_buff_uptime() 快照 (ACT 本场覆盖率),
-        合并进行渲染: 每个 buff 的 uptime%/触发次数。
-        """
+        # Upsert 进 _buff_cache; 旧的 buff 由 duration 自然过期, 不被新推送清空。
+        #
+        # 这样即使服务器偶发只发部分 buff (例如 AoiSyncDelta 只带 1 个 '箭雨'),
+        # 奥义 buff 也不会被误清, 不再闪烁。
+        #
+        # ``uptime`` = dps_tracker.get_buff_uptime() 快照 (ACT 本场覆盖率),
+        # 合并进行渲染: 每个 buff 的 uptime%/触发次数。
         if not isinstance(raw_buffs, list):
             raw_buffs = []
         try:
@@ -1131,7 +1124,7 @@ class SelfBuffOverlay(_BuffPanelBase):
             del self._buff_cache[k]
 
     def set_filter_mode(self, mode: str):
-        """'ultimate' (默认, 仅奥义/幻想) 或 'all' (全部 self buff)。"""
+        # 'ultimate' (默认, 仅奥义/幻想) 或 'all' (全部 self buff)。
         self._filter_mode = str(mode or 'ultimate').lower()
 
     def get_rows(self) -> List[dict]:
@@ -1219,7 +1212,7 @@ class SelfBuffOverlay(_BuffPanelBase):
 #  Boss buff overlay
 # ─────────────────────────────────────────
 class BossBuffOverlay(_BuffPanelBase):
-    """锚定在 BossHpOverlay 右侧, 显示当前锁定 boss 的所有 buff。"""
+    # 锚定在 BossHpOverlay 右侧, 显示当前锁定 boss 的所有 buff。
 
     WIDTH = 240
     HEADER_LABEL = 'TARGET'

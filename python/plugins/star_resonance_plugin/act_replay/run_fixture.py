@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""Run a normalized ACT replay JSON/JSONL fixture and print a summary."""
+# Run a normalized ACT replay JSON/JSONL fixture and print a summary.
 
 from __future__ import annotations
 

@@ -1,11 +1,10 @@
 # -*- coding: utf-8 -*-
-"""Targeted scan for the live combat HP-bar object (HudGmData) of the dummy.
-
-Known: MaxHp ~1.78M, CurHp ~200-300K. HudGmData is inline at HudGm+0x70:
-  State@HudGm+0x70  MaxHp@+0x78  CurHp@+0x80  MaxBreak@+0x88  CurBreak@+0x8C
-  HateList@+0x90  uuid@+0xA0  configId@+0xA8 ; klass@+0x0.
-Anchor on MaxHp in a narrow band, verify CurHp, then validate the klass by name.
-"""
+# Targeted scan for the live combat HP-bar object (HudGmData) of the dummy.
+#
+# Known: MaxHp ~1.78M, CurHp ~200-300K. HudGmData is inline at HudGm+0x70:
+# State@HudGm+0x70  MaxHp@+0x78  CurHp@+0x80  MaxBreak@+0x88  CurBreak@+0x8C
+# HateList@+0x90  uuid@+0xA0  configId@+0xA8 ; klass@+0x0.
+# Anchor on MaxHp in a narrow band, verify CurHp, then validate the klass by name.
 from __future__ import annotations
 import argparse, struct, sys, os, time
 _HERE=os.path.dirname(os.path.abspath(__file__)); _ROOT=os.path.dirname(_HERE)

@@ -1,24 +1,23 @@
-"""半自动锚点定位.
-
-工作模式 (CLI 交互):
-
-    python -m tools.mem_probe.triangulate i32        # 找一个 int32 (如 HP)
-    python -m tools.mem_probe.triangulate i64        # 找一个 int64 (如 UID)
-    python -m tools.mem_probe.triangulate utf16      # 找一个字符串 (如 角色名)
-
-    步骤:
-        1. 在游戏内查看当前值 (如 HP=12345), 输入到脚本
-        2. 脚本全内存扫描该值, 报候选数
-        3. 在游戏内改变该值 (如挨一下 HP=12200), 输入新值
-        4. 脚本在候选集中再扫
-        5. 重复直到收敛 (通常 2~4 帧)
-        6. 输出最终地址 + RVA + 周边 hex dump
-
-为什么不直接调 packet_bridge:
-    triangulate 是离线诊断工具, 不依赖主程序运行时, 也不引入 Npcap/protobuf
-    重型依赖。一旦内存方案投入使用, reader.py 会引用 GameStateManager
-    做对比, 但定位过程本身只需要 ReadProcessMemory + 用户眼睛。
-"""
+# 半自动锚点定位.
+#
+# 工作模式 (CLI 交互):
+#
+# python -m tools.mem_probe.triangulate i32        # 找一个 int32 (如 HP)
+# python -m tools.mem_probe.triangulate i64        # 找一个 int64 (如 UID)
+# python -m tools.mem_probe.triangulate utf16      # 找一个字符串 (如 角色名)
+#
+# 步骤:
+# 1. 在游戏内查看当前值 (如 HP=12345), 输入到脚本
+# 2. 脚本全内存扫描该值, 报候选数
+# 3. 在游戏内改变该值 (如挨一下 HP=12200), 输入新值
+# 4. 脚本在候选集中再扫
+# 5. 重复直到收敛 (通常 2~4 帧)
+# 6. 输出最终地址 + RVA + 周边 hex dump
+#
+# 为什么不直接调 packet_bridge:
+# triangulate 是离线诊断工具, 不依赖主程序运行时, 也不引入 Npcap/protobuf
+# 重型依赖。一旦内存方案投入使用, reader.py 会引用 GameStateManager
+# 做对比, 但定位过程本身只需要 ReadProcessMemory + 用户眼睛。
 
 from __future__ import annotations
 

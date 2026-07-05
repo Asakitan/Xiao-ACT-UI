@@ -1,9 +1,8 @@
 # -*- coding: utf-8 -*-
-"""Regression check for WebView -> Entity UI switching.
-
-The WebView host should spawn Entity directly after the exit animation instead
-of waiting for ``webview.start()`` to return.
-"""
+# Regression check for WebView -> Entity UI switching.
+#
+# The WebView host should spawn Entity directly after the exit animation instead
+# of waiting for ``webview.start()`` to return.
 
 from __future__ import annotations
 

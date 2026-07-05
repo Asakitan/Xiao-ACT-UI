@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""Static regression checks for the WebView SAO menu column layout."""
+# Static regression checks for the WebView SAO menu column layout.
 
 from __future__ import annotations
 

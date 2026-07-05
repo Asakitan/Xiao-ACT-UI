@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""Regression coverage for entity packet callback payload tolerance."""
+# Regression coverage for entity packet callback payload tolerance.
 
 from __future__ import annotations
 

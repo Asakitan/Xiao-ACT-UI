@@ -1,16 +1,14 @@
 # -*- coding: utf-8 -*-
-"""
-sao_gui_skill_picker — 自定义技能 CD 监控选择器 (Tk).
-
-弹出面板, 列出所有可用技能 CD, 允许用户:
-  - 搜索/筛选技能
-  - 添加到自定义监控槽位 (10-14)
-  - 设置父槽位归属 (天赋分组)
-  - 开关 TTS / 视觉提醒
-  - 管理已配置的监控项
-
-WebView 对等版: web/skill_picker.html
-"""
+# sao_gui_skill_picker — 自定义技能 CD 监控选择器 (Tk).
+#
+# 弹出面板, 列出所有可用技能 CD, 允许用户:
+# - 搜索/筛选技能
+# - 添加到自定义监控槽位 (10-14)
+# - 设置父槽位归属 (天赋分组)
+# - 开关 TTS / 视觉提醒
+# - 管理已配置的监控项
+#
+# WebView 对等版: web/skill_picker.html
 from __future__ import annotations
 
 import tkinter as tk
@@ -50,7 +48,7 @@ def _pc(key: str, fallback: str = '') -> str:
 
 
 class SkillPickerPanel:
-    """Tk 技能选择器面板 — 管理自定义 CD 监控."""
+    # Tk 技能选择器面板 — 管理自定义 CD 监控.
 
     def __init__(self, root: tk.Misc, owner: Any):
         self.root = root

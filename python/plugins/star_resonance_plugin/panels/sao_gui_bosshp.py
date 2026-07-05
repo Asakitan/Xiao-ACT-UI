@@ -1,31 +1,29 @@
 # -*- coding: utf-8 -*-
-"""
-sao_gui_bosshp.py — SAO Boss HP Bar overlay (tkinter + ULW)
-
-Pixel-level port of `web/boss_hp.html` to tkinter. Drawn via PIL onto a
-layered window, animated at 60 FPS:
-
-  * Olive cover with cyan / gold corner brackets and scan-lines
-  * Slanted "name plate" with diagonal cuts (clip-path approximation)
-  * HP bar with skewed leading edge and lagging trail (~280 ms latency)
-  * Colour-ramp fill (green → yellow → red)
-  * Shield overlay with moving light sweep, fracture burst on break
-  * Damage flash, break burst particles, overdrive glow
-  * Break / extinction sub-bar
-  * Enter / exit animations (cubic-bezier slide+fade)
-
-Public API (kept backward-compatible with sao_gui.py):
-    BossHpOverlay(root, settings=None)
-    .show() / .hide() / .destroy()
-    .update(data)
-
-`data` dict keys consumed (all optional unless noted):
-    active, boss_name,
-    hp_pct, current_hp, total_hp, hp_source,
-    shield_active, shield_pct,
-    breaking_stage, extinction_pct,
-    in_overdrive, invincible
-"""
+# sao_gui_bosshp.py — SAO Boss HP Bar overlay (tkinter + ULW)
+#
+# Pixel-level port of `web/boss_hp.html` to tkinter. Drawn via PIL onto a
+# layered window, animated at 60 FPS:
+#
+# * Olive cover with cyan / gold corner brackets and scan-lines
+# * Slanted "name plate" with diagonal cuts (clip-path approximation)
+# * HP bar with skewed leading edge and lagging trail (~280 ms latency)
+# * Colour-ramp fill (green → yellow → red)
+# * Shield overlay with moving light sweep, fracture burst on break
+# * Damage flash, break burst particles, overdrive glow
+# * Break / extinction sub-bar
+# * Enter / exit animations (cubic-bezier slide+fade)
+#
+# Public API (kept backward-compatible with sao_gui.py):
+# BossHpOverlay(root, settings=None)
+# .show() / .hide() / .destroy()
+# .update(data)
+#
+# `data` dict keys consumed (all optional unless noted):
+# active, boss_name,
+# hp_pct, current_hp, total_hp, hp_source,
+# shield_active, shield_pct,
+# breaking_stage, extinction_pct,
+# in_overdrive, invincible
 
 from __future__ import annotations
 
@@ -127,8 +125,8 @@ def _unit_pct(value: Any, default: float = 0.0) -> float:
 
 
 def _clip_alpha(img: Image.Image, mask: Image.Image) -> Image.Image:
-    """Return `img` with its alpha multiplied by `mask` (L-mode). Used to
-    clip arbitrary layers to the rounded-rect panel interior."""
+    # Return `img` with its alpha multiplied by `mask` (L-mode). Used to
+    # clip arbitrary layers to the rounded-rect panel interior.
     return clip_alpha_image(img, mask)
 
 
@@ -148,8 +146,8 @@ _BOSSHP_ADD_MINI_LINE_CACHE: Dict[int, Image.Image] = {}
 def _bosshp_additional_bg(add_w: int, add_h: int,
                           cover_a: Tuple[int, int, int],
                           cover_b: Tuple[int, int, int]) -> Image.Image:
-    """Static cream BG gradient for additional units. Vectorized numpy
-    replaces the per-row Python loop."""
+    # Static cream BG gradient for additional units. Vectorized numpy
+    # replaces the per-row Python loop.
     key = (add_w, add_h, cover_a, cover_b)
     hit = _BOSSHP_ADD_BG_CACHE.get(key)
     if hit is not None:
@@ -168,7 +166,7 @@ def _bosshp_additional_bg(add_w: int, add_h: int,
 
 
 def _bosshp_additional_mini_line(line_w: int) -> Image.Image:
-    """Static cyan→gold mini gradient line for additional unit bottom edge."""
+    # Static cyan→gold mini gradient line for additional unit bottom edge.
     hit = _BOSSHP_ADD_MINI_LINE_CACHE.get(line_w)
     if hit is not None:
         return hit
@@ -270,18 +268,17 @@ def _offset_poly(points, dx: int, dy: int):
 def _apply_inset_shadow(img: Image.Image, mask: Image.Image,
                         color: Tuple[int, int, int],
                         alpha: int, blur_radius: float) -> None:
-    """Composite a CSS-style `inset 0 0 Npx rgba(color, alpha)` glow
-    onto `img`, clipped by `mask`. The glow is bright at the rim of the
-    shape and fades inward, exactly like a CSS inset box-shadow.
-
-    Implementation: blur the *inverted* mask (so brightness leaks from
-    outside into the shape) and clip back to the original mask.
-
-    v2.2.11 Phase 3: prefer the fused GPU path
-    (`_apply_inset_shadow_gpu`) when the per-thread compositor is
-    available. Falls back to the CPU/PIL path on any failure so older
-    GPUs / RDP sessions keep working.
-    """
+    # Composite a CSS-style `inset 0 0 Npx rgba(color, alpha)` glow
+    # onto `img`, clipped by `mask`. The glow is bright at the rim of the
+    # shape and fades inward, exactly like a CSS inset box-shadow.
+    #
+    # Implementation: blur the *inverted* mask (so brightness leaks from
+    # outside into the shape) and clip back to the original mask.
+    #
+    # v2.2.11 Phase 3: prefer the fused GPU path
+    # (`_apply_inset_shadow_gpu`) when the per-thread compositor is
+    # available. Falls back to the CPU/PIL path on any failure so older
+    # GPUs / RDP sessions keep working.
     if _apply_inset_shadow_gpu(img, mask, color, alpha, blur_radius):
         return
     # CPU fallback (original implementation): invert mask → write into RGBA
@@ -307,17 +304,16 @@ def _apply_inset_shadow(img: Image.Image, mask: Image.Image,
 def _apply_inset_shadow_gpu(img: Image.Image, mask: Image.Image,
                             color: Tuple[int, int, int],
                             alpha: int, blur_radius: float) -> bool:
-    """Single-pass GPU implementation of the inset shadow.
-
-    Returns True on success, False to let the caller use the CPU path.
-
-    v2.2.11 Phase 3 refinement: the entire pipeline now stays on the
-    GPU — invert mask → upload → ``blur_tex`` (compositor-resident
-    two-pass separable) → upload shape mask → ``inset_shadow`` shader
-    → download → composite.  Removes 2 PIL↔GPU roundtrips compared to
-    the initial implementation.  Net win: ~0.8–1.5 ms per BossHP frame
-    over the original CPU path.
-    """
+    # Single-pass GPU implementation of the inset shadow.
+    #
+    # Returns True on success, False to let the caller use the CPU path.
+    #
+    # v2.2.11 Phase 3 refinement: the entire pipeline now stays on the
+    # GPU — invert mask → upload → ``blur_tex`` (compositor-resident
+    # two-pass separable) → upload shape mask → ``inset_shadow`` shader
+    # → download → composite.  Removes 2 PIL↔GPU roundtrips compared to
+    # the initial implementation.  Net win: ~0.8–1.5 ms per BossHP frame
+    # over the original CPU path.
     try:
         from render.gpu_compositor import LayerCompositor  # noqa: F401
     except Exception:
@@ -396,7 +392,7 @@ def _get_thread_compositor():
 # ═══════════════════════════════════════════════
 
 class BossHpOverlay:
-    """Animated SAO-styled boss HP overlay (ULW + PIL)."""
+    # Animated SAO-styled boss HP overlay (ULW + PIL).
 
     # Canvas size: 560×88 root panel plus the same outer FX bleed used by
     # web/boss_hp.html (`break-burst-layer` is 620×108 at -30,-10).
@@ -668,7 +664,7 @@ class BossHpOverlay:
         self._x, self._y = self._fixed_position()
 
     def _apply_theme(self, theme_name: str) -> None:
-        """切换 BossHP 面板主题并清除所有渲染缓存。"""
+        # 切换 BossHP 面板主题并清除所有渲染缓存。
         from sao_theme import get_panel_theme
         theme = get_panel_theme('bosshp', theme_name)
         if not theme:
@@ -807,7 +803,7 @@ class BossHpOverlay:
 
     @_probe.decorate('ui.bosshp.update')
     def update(self, data: dict) -> None:
-        """Ingest a snapshot; drive the animation loop."""
+        # Ingest a snapshot; drive the animation loop.
         if not isinstance(data, dict):
             return
         if not data.get('active', False):
@@ -981,8 +977,8 @@ class BossHpOverlay:
     # ──────────────────────────────────────────
 
     def _enter_broken(self) -> None:
-        """Enter broken state: bar forced to 0%, burst VFX fires. Stays broken until the
-        break signal clears (breaking_stage leaves 0) — no auto-advance hold timer."""
+        # Enter broken state: bar forced to 0%, burst VFX fires. Stays broken until the
+        # break signal clears (breaking_stage leaves 0) — no auto-advance hold timer.
         self._break_state = 'broken'
         self._break_entered_ts = time.time()
         self._refill_completed_ts = 0.0
@@ -996,7 +992,7 @@ class BossHpOverlay:
         self._trigger_break_burst_fx()
 
     def _begin_recovery(self) -> None:
-        """Transition from broken to recovering with interpolation."""
+        # Transition from broken to recovering with interpolation.
         self._break_state = 'recovering'
         self._recover_phase = 'filling'
         self._recover_start_ts = time.time()
@@ -1006,11 +1002,10 @@ class BossHpOverlay:
         self._trigger_break_recovery_fx('recovering')
 
     def _begin_timed_recovery(self, duration_s: float) -> None:
-        """Start a single-phase timed recovery (0%→100% over duration_s).
-
-        Used when BreakingContinueTime is known from MonsterTable, giving
-        an accurate visual countdown of the break window.
-        """
+        # Start a single-phase timed recovery (0%→100% over duration_s).
+        #
+        # Used when BreakingContinueTime is known from MonsterTable, giving
+        # an accurate visual countdown of the break window.
         self._break_state = 'recovering'
         self._recover_phase = 'timed'
         self._recover_start_ts = time.time()
@@ -1021,7 +1016,7 @@ class BossHpOverlay:
         self._trigger_break_recovery_fx('recovering')
 
     def _trigger_recover_fastfill(self) -> None:
-        """Jump to fastfill sub-phase (final 420ms cubic ease to 100%)."""
+        # Jump to fastfill sub-phase (final 420ms cubic ease to 100%).
         if self._recover_phase == 'fastfill':
             return
         self._recover_cap_timer = 0.0
@@ -1031,7 +1026,7 @@ class BossHpOverlay:
         self._recover_interpolating = True
 
     def _cancel_recover(self) -> None:
-        """Cancel any active recovery interpolation."""
+        # Cancel any active recovery interpolation.
         self._recover_interpolating = False
         self._recover_current_pct = 0.0
         self._recover_phase = 'idle'
@@ -1039,7 +1034,7 @@ class BossHpOverlay:
         self._recover_cap_timer = 0.0
 
     def _enter_refilled(self) -> None:
-        """Break bar fully recovered → hold at 100% briefly then → normal."""
+        # Break bar fully recovered → hold at 100% briefly then → normal.
         self._break_state = 'refilled'
         self._cancel_recover()
         self._target_break_pct = 1.0
@@ -1049,15 +1044,14 @@ class BossHpOverlay:
         self._refill_completed_ts = time.time() + self.REFILLED_HOLD_S
 
     def _update_break_state(self, break_pct: float, stage: int, stop_ticking: bool = False) -> None:
-        """Signal-driven break state machine.
-
-        Primary trigger: ``stop_breaking_ticking`` False→True = boss just broke,
-        immediately start timed recovery animation using ``_break_recovery_time``
-        (from MonsterTable BreakingContinueTime).
-
-        Fallback trigger: ``breaking_stage`` transitions (0 = Breaking, 1 = BreakEnd)
-        used when stop_breaking_ticking is unavailable.
-        """
+        # Signal-driven break state machine.
+        #
+        # Primary trigger: ``stop_breaking_ticking`` False→True = boss just broke,
+        # immediately start timed recovery animation using ``_break_recovery_time``
+        # (from MonsterTable BreakingContinueTime).
+        #
+        # Fallback trigger: ``breaking_stage`` transitions (0 = Breaking, 1 = BreakEnd)
+        # used when stop_breaking_ticking is unavailable.
         now = time.time()
         prev_stage = self._last_breaking_stage
         ticking_entered = (not self._stop_breaking_ticking and stop_ticking)
@@ -1090,7 +1084,7 @@ class BossHpOverlay:
                 self._break_state = 'normal'
 
     def _advance_recovery(self, now: float) -> None:
-        """Advance the recovering sub-phase interpolation (called from _advance)."""
+        # Advance the recovering sub-phase interpolation (called from _advance).
         if self._break_state != 'recovering' or not self._recover_interpolating:
             return
 
@@ -1156,14 +1150,14 @@ class BossHpOverlay:
                 self._enter_refilled()
 
     def _trigger_flash(self, flash_type: str) -> None:
-        """Start a flash overlay (webview-parity 5-type flash system)."""
+        # Start a flash overlay (webview-parity 5-type flash system).
         self._flash_type = flash_type
         self._flash_start = time.time()
 
     def trigger_break_effect(self, effect_type: str) -> None:
-        """TCP break buff-event (a real signal, not a heuristic). When MEM owns break in
-        hybrid, the per-tick breaking_stage drives the state machine and self-corrects
-        any stale double-trigger from this entry within one tick."""
+        # TCP break buff-event (a real signal, not a heuristic). When MEM owns break in
+        # hybrid, the per-tick breaking_stage drives the state machine and self-corrects
+        # any stale double-trigger from this entry within one tick.
         if not self._visible:
             return
         if effect_type in ('enter_breaking', 'into_fracture_state'):
@@ -1361,7 +1355,7 @@ class BossHpOverlay:
 
     @_probe.decorate('ui.bosshp.compose')
     def compose_frame(self, now: Optional[float] = None) -> Image.Image:
-        """Render one boss-HP frame to an RGBA PIL image without touching Win32."""
+        # Render one boss-HP frame to an RGBA PIL image without touching Win32.
         if now is None:
             now = time.time()
         w, h = self.WIDTH, self.HEIGHT
@@ -1475,12 +1469,11 @@ class BossHpOverlay:
 
     def _compute_frame_sig(self, now: float,
                             y_off: int) -> Optional[tuple]:
-        """Quantized signature of all per-frame pixel inputs for BossHP.
-
-        Returns None when caching would be unsafe. Quantization buckets
-        are sized below the perceptual threshold so visual quality is
-        unaffected.
-        """
+        # Quantized signature of all per-frame pixel inputs for BossHP.
+        #
+        # Returns None when caching would be unsafe. Quantization buckets
+        # are sized below the perceptual threshold so visual quality is
+        # unaffected.
         return _CY_UI.bosshp_frame_signature(
             self._visible, self.WIDTH, self.HEIGHT, y_off,
             self._boss_name, self._hp_source,
@@ -1735,7 +1728,7 @@ class BossHpOverlay:
     # ── boss-box name plate ─────────────────────────────────────────
 
     def _draw_boss_box(self, img: Image.Image, y_off: int) -> None:
-        """Faithful port of web/boss_hp.html xt_left + xt_right + number_xt."""
+        # Faithful port of web/boss_hp.html xt_left + xt_right + number_xt.
         draw = ImageDraw.Draw(img, 'RGBA')
         bx = self.BOX_X
         by = self.BOX_Y + y_off
@@ -1853,8 +1846,8 @@ class BossHpOverlay:
         draw.line((ox, oy, ox, oy + 25), fill=self.LINE, width=1)
 
     def _fit_name_lines(self, draw, name: str, max_w: int, base_size: int):
-        """智能分行 + 自适应字号: 单行放得下就缩字号保持单行, 否则均分 2 行
-        并缩到两行都能放下。返回 (lines, font, size)。"""
+        # 智能分行 + 自适应字号: 单行放得下就缩字号保持单行, 否则均分 2 行
+        # 并缩到两行都能放下。返回 (lines, font, size)。
         name = (name or '').strip()
         if not name:
             return [''], _pick_font('', base_size), base_size
@@ -1904,8 +1897,8 @@ class BossHpOverlay:
     # ── HP bar ──────────────────────────────────────────────────────
 
     def _bar_mask(self) -> Image.Image:
-        """The HP bar region with a diagonal cut at the right-bottom
-        corner (matches xt_border clip-path). Cached — static geometry."""
+        # The HP bar region with a diagonal cut at the right-bottom
+        # corner (matches xt_border clip-path). Cached — static geometry.
         if self._cache_bar_mask is not None:
             return self._cache_bar_mask
         mask = Image.new('L', (self.WIDTH, self.HEIGHT), 0)
@@ -2072,7 +2065,7 @@ class BossHpOverlay:
 
     def _draw_shield_break(self, img: Image.Image, y_off: int,
                            now: float) -> None:
-        """Webview shield breaking-ghost shell retained after shield loss."""
+        # Webview shield breaking-ghost shell retained after shield loss.
         age = now - self._shield_break_start
         t = age / self.SHIELD_BREAK
         if t >= 1.0:
@@ -2415,7 +2408,7 @@ class BossHpOverlay:
 
     def _draw_break_burst(self, img: Image.Image, y_off: int,
                           now: float) -> None:
-        """Webview break-burst-layer: crack scan then HUD-slice shatter."""
+        # Webview break-burst-layer: crack scan then HUD-slice shatter.
         age = now - self._break_burst_start
         total_s = self.BREAK_BURST_FX_S
         if age >= total_s:
@@ -2536,7 +2529,7 @@ class BossHpOverlay:
 
     def _draw_flash_overlay(self, img: Image.Image, y_off: int,
                             now: float) -> None:
-        """Webview-parity flash overlay system (5 types)."""
+        # Webview-parity flash overlay system (5 types).
         if not self._flash_type or not self._flash_start:
             return
         age = now - self._flash_start
@@ -2641,7 +2634,7 @@ class BossHpOverlay:
             img.alpha_composite(_clip_alpha(fx, bar_mask))
 
     def _clear_lower_stray_alpha(self, img: Image.Image, y_off: int) -> None:
-        """Trim wide blurred FX from the lower transparent mini-panel area."""
+        # Trim wide blurred FX from the lower transparent mini-panel area.
         cut_y = int(self.PANEL_Y + self.PANEL_H + 2 + y_off)
         cut_y = max(0, min(self.HEIGHT, cut_y))
         if cut_y >= self.HEIGHT:
@@ -2809,7 +2802,7 @@ class BossHpOverlay:
 
     def _draw_invincible_glow(self, img: Image.Image, y_off: int,
                               now: float) -> None:
-        """Red inner glow on cover when boss is invincible (webview .invincible)."""
+        # Red inner glow on cover when boss is invincible (webview .invincible).
         glow = Image.new('RGBA', (self.WIDTH, self.HEIGHT), (0, 0, 0, 0))
         ImageDraw.Draw(glow).rounded_rectangle(
             (self.PANEL_X + 2, self.PANEL_Y + 2 + y_off,
@@ -2827,7 +2820,7 @@ class BossHpOverlay:
 
     def _draw_overdrive_glow(self, img: Image.Image, y_off: int,
                              now: float) -> None:
-        """Gold inner glow on cover when in overdrive (webview .overdrive)."""
+        # Gold inner glow on cover when in overdrive (webview .overdrive).
         glow = Image.new('RGBA', (self.WIDTH, self.HEIGHT), (0, 0, 0, 0))
         ImageDraw.Draw(glow).rounded_rectangle(
             (self.PANEL_X + 2, self.PANEL_Y + 2 + y_off,
@@ -2893,7 +2886,7 @@ def _make_gradient_bar(w: int, h: int,
                        cb: Tuple[int, int, int, int],
                        cc: Optional[Tuple[int, int, int, int]] = None
                        ) -> Image.Image:
-    """Horizontal 2- or 3-stop linear gradient."""
+    # Horizontal 2- or 3-stop linear gradient.
     if w <= 0 or h <= 0:
         return Image.new('RGBA', (1, 1), (0, 0, 0, 0))
     xs = np.linspace(0, 1, w)[None, :]
@@ -2928,9 +2921,9 @@ def _make_skew_cap(h: int,
                    ca: Tuple[int, int, int, int],
                    cb: Tuple[int, int, int, int],
                    skew_px: int = 7) -> Image.Image:
-    """Build the CSS `::after { right:-11px; skewX(-14deg) }` leading
-    edge of the fill bar — a parallelogram that juts past the fill
-    end to give the bar its signature angled tip."""
+    # Build the CSS `::after { right:-11px; skewX(-14deg) }` leading
+    # edge of the fill bar — a parallelogram that juts past the fill
+    # end to give the bar its signature angled tip.
     w = 18
     img = Image.new('RGBA', (w, h), (0, 0, 0, 0))
     d = ImageDraw.Draw(img)
@@ -2964,8 +2957,8 @@ def _rotated_shard_polygon(cx: float, cy: float, w: float, h: float,
 
 
 def _make_light_sweep(w: int, h: int, phase: float) -> Image.Image:
-    """A skewed highlight band sweeping left→right over the shield fill.
-    phase ∈ [0,1) controls its position."""
+    # A skewed highlight band sweeping left→right over the shield fill.
+    # phase ∈ [0,1) controls its position.
     if w <= 0 or h <= 0:
         return Image.new('RGBA', (max(w, 1), max(h, 1)), (0, 0, 0, 0))
     img = Image.new('RGBA', (w, h), (0, 0, 0, 0))

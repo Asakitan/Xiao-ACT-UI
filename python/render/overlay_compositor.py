@@ -1,17 +1,16 @@
 # -*- coding: utf-8 -*-
-"""overlay_compositor — virtual layer system for the unified overlay.
-
-Each UI element (DPS panel, menu, fisheye, float button, etc.)
-registers as a CompositorLayer. The UnifiedOverlay manages a
-dedicated render thread that:
-  1. Processes Win32 messages for the single overlay window
-  2. Composites all visible layers in z-order
-  3. Presents the result via SwapBuffers
-
-Layers upload BGRA bytes (same as BgraPresenter) or render to an
-FBO via a callback. The master compositor draws all layer textures
-onto the full-screen window.
-"""
+# overlay_compositor — virtual layer system for the unified overlay.
+#
+# Each UI element (DPS panel, menu, fisheye, float button, etc.)
+# registers as a CompositorLayer. The UnifiedOverlay manages a
+# dedicated render thread that:
+# 1. Processes Win32 messages for the single overlay window
+# 2. Composites all visible layers in z-order
+# 3. Presents the result via SwapBuffers
+#
+# Layers upload BGRA bytes (same as BgraPresenter) or render to an
+# FBO via a callback. The master compositor draws all layer textures
+# onto the full-screen window.
 from __future__ import annotations
 
 import math
@@ -57,15 +56,14 @@ _REFRESH_DEFAULT_HZ = 60
 
 
 def _detect_refresh_hz() -> int:
-    """Best-effort primary-monitor refresh-rate detection.
-
-    Same approach as ``overlay_scheduler._detect_refresh_hz`` (GDI
-    ``GetDeviceCaps(VREFRESH)``, clamped 60-240 Hz, falls back to 60
-    on failure or when a driver reports the RDP-style ``1`` sentinel).
-    Duplicated locally (13 lines, no shared deps) rather than imported
-    to avoid coupling this module's render-thread startup to the Tk
-    scheduler module's import order.
-    """
+    # Best-effort primary-monitor refresh-rate detection.
+    #
+    # Same approach as ``overlay_scheduler._detect_refresh_hz`` (GDI
+    # ``GetDeviceCaps(VREFRESH)``, clamped 60-240 Hz, falls back to 60
+    # on failure or when a driver reports the RDP-style ``1`` sentinel).
+    # Duplicated locally (13 lines, no shared deps) rather than imported
+    # to avoid coupling this module's render-thread startup to the Tk
+    # scheduler module's import order.
     if os.name != 'nt':
         return _REFRESH_DEFAULT_HZ
     try:
@@ -105,11 +103,10 @@ except Exception:
 
 
 class _MMFReader:
-    """Zero-copy reader for the pet engine's shared memory frame buffer.
-
-    Opens a named Win32 file mapping created by XiaoACTPeto.exe,
-    reads BGRA frames directly via memoryview (no Python bytes alloc).
-    """
+    # Zero-copy reader for the pet engine's shared memory frame buffer.
+    #
+    # Opens a named Win32 file mapping created by XiaoACTPeto.exe,
+    # reads BGRA frames directly via memoryview (no Python bytes alloc).
     __slots__ = (
         '_name', '_hmap', '_ptr', '_view',
         'fw', 'fh', 'slot_count', 'slot_stride', '_last_seq',
@@ -168,7 +165,7 @@ class _MMFReader:
             return False
 
     def poll(self) -> Optional[memoryview]:
-        """Return frame memoryview if a new frame is available, else None."""
+        # Return frame memoryview if a new frame is available, else None.
         v = self._view
         if v is None:
             return None
@@ -183,7 +180,7 @@ class _MMFReader:
         return v[off:off + sz]
 
     def peek(self) -> Optional[memoryview]:
-        """Return the current read-slot frame without advancing seq."""
+        # Return the current read-slot frame without advancing seq.
         v = self._view
         if v is None:
             return None
@@ -226,8 +223,8 @@ except Exception:
 
 def _msg_wait_sleep(host: OverlayHost, seconds: float,
                     stop_evt: threading.Event) -> None:
-    """Sleep for up to `seconds` while remaining responsive to Win32
-    messages. Wakes early if stop_evt is set or a message arrives."""
+    # Sleep for up to `seconds` while remaining responsive to Win32
+    # messages. Wakes early if stop_evt is set or a message arrives.
     if not _MSG_WAIT_OK:
         # Fallback: short sleeps with message pumping
         deadline = time.perf_counter() + seconds
@@ -350,19 +347,19 @@ _PROXY_WNDPROC_REFS: list = []
 
 
 def _proxy_shield_activation(proxy) -> None:
-    """Keep a click on the input proxy from stealing foreground focus.
-
-    WS_EX_NOACTIVATE alone is NOT enough for a Tk toplevel — Tk's own
-    message handling still promotes the window to foreground on click
-    (measured live: the proxy became GetForegroundWindow() with the
-    style set). Answering WM_MOUSEACTIVATE with MA_NOACTIVATE at the
-    WndProc level stops that while mouse events keep flowing — the same
-    contract OverlayHost's WndProc uses.
-
-    Armed at most ONCE per proxy: re-subclassing on a tick is how the
-    CallWindowProc chain-of-death forms (see the truncation note on
-    _user32_subcls). The shape tick still calls this every 200ms, but
-    the _sao_shielded guard makes every call after the first a no-op."""
+    # Keep a click on the input proxy from stealing foreground focus.
+    #
+    # WS_EX_NOACTIVATE alone is NOT enough for a Tk toplevel — Tk's own
+    # message handling still promotes the window to foreground on click
+    # (measured live: the proxy became GetForegroundWindow() with the
+    # style set). Answering WM_MOUSEACTIVATE with MA_NOACTIVATE at the
+    # WndProc level stops that while mouse events keep flowing — the same
+    # contract OverlayHost's WndProc uses.
+    #
+    # Armed at most ONCE per proxy: re-subclassing on a tick is how the
+    # CallWindowProc chain-of-death forms (see the truncation note on
+    # _user32_subcls). The shape tick still calls this every 200ms, but
+    # the _sao_shielded guard makes every call after the first a no-op.
     if getattr(proxy, '_sao_shielded', False):
         return
     hwnd = _user32_subcls.GetAncestor(proxy.winfo_id(), 2)  # GA_ROOT
@@ -400,12 +397,11 @@ def _proxy_shield_activation(proxy) -> None:
 
 # ── CompositorLayer ──────────────────────────────────────────────
 class CompositorLayer:
-    """A virtual window in the unified overlay compositor.
-
-    Each layer has a position, size, z-order, and visibility state.
-    Content is updated by calling upload_bgra() with premultiplied
-    BGRA bytes, or by setting a render callback.
-    """
+    # A virtual window in the unified overlay compositor.
+    #
+    # Each layer has a position, size, z-order, and visibility state.
+    # Content is updated by calling upload_bgra() with premultiplied
+    # BGRA bytes, or by setting a render callback.
 
     def __init__(self, name: str, width: int, height: int,
                  x: int = 0, y: int = 0, z: int = 0,
@@ -533,17 +529,16 @@ class CompositorLayer:
         self._rgn_static_ticks: int = 0
 
     def upload_bgra(self, bgra: bytes, w: int, h: int) -> None:
-        """Upload premultiplied BGRA frame data (thread-safe).
-
-        Rejects a (w, h) that doesn't match ``len(bgra)`` instead of storing
-        it — callers race their own dimension fields against a background
-        capture in flight (a resize/animation mid-capture) often enough
-        that this shouldn't be treated as exceptional. Storing a mismatched
-        pair here would otherwise crash the render thread's
-        ``ctx.texture()`` call on every frame until the next successful
-        upload overwrites it; skipping just keeps showing the last good
-        frame for one tick.
-        """
+        # Upload premultiplied BGRA frame data (thread-safe).
+        #
+        # Rejects a (w, h) that doesn't match ``len(bgra)`` instead of storing
+        # it — callers race their own dimension fields against a background
+        # capture in flight (a resize/animation mid-capture) often enough
+        # that this shouldn't be treated as exceptional. Storing a mismatched
+        # pair here would otherwise crash the render thread's
+        # ``ctx.texture()`` call on every frame until the next successful
+        # upload overwrites it; skipping just keeps showing the last good
+        # frame for one tick.
         if w <= 0 or h <= 0 or len(bgra) != w * h * 4:
             return
         with self._lock:
@@ -555,7 +550,7 @@ class CompositorLayer:
             self._dirty = True
 
     def set_mmf_source(self, mmf_name: Optional[str]) -> None:
-        """Attach an MMF zero-copy frame source (thread-safe)."""
+        # Attach an MMF zero-copy frame source (thread-safe).
         with self._lock:
             self._mmf_name = mmf_name
             if mmf_name is None and self._mmf is not None:
@@ -564,12 +559,12 @@ class CompositorLayer:
         self._dirty = True
 
     def set_shared_texture_source(self, handle: int, width: int, height: int) -> None:
-        """Attach a GPU-shared D3D11 texture as this layer's color
-        source (thread-safe). ``handle <= 0`` clears it — the render
-        thread unregisters/releases whatever was registered on its
-        next tick. Does not touch ``_mmf_name``: a layer can keep an
-        MMF source attached purely for its alpha byte (RGN scanning)
-        while its color comes from the shared texture instead."""
+        # Attach a GPU-shared D3D11 texture as this layer's color
+        # source (thread-safe). ``handle <= 0`` clears it — the render
+        # thread unregisters/releases whatever was registered on its
+        # next tick. Does not touch ``_mmf_name``: a layer can keep an
+        # MMF source attached purely for its alpha byte (RGN scanning)
+        # while its color comes from the shared texture instead.
         with self._lock:
             h = int(handle) if handle else 0
             self._shared_tex_handle = h if h > 0 else None
@@ -581,7 +576,7 @@ class CompositorLayer:
     def set_render_fn(
         self, fn: Optional[Callable[[moderngl.Context, float], None]],
     ) -> None:
-        """Set a render callback for FBO-based layers."""
+        # Set a render callback for FBO-based layers.
         self._render_fn = fn
         self._dirty = True
 
@@ -630,7 +625,7 @@ class CompositorLayer:
         ] = None,
         scroll_fn: Optional[Callable[[float, float], None]] = None,
     ) -> None:
-        """Set mouse event callbacks (same signature as GpuOverlayWindow)."""
+        # Set mouse event callbacks (same signature as GpuOverlayWindow).
         self._on_cursor_pos = cursor_pos_fn
         self._on_cursor_leave = cursor_leave_fn
         self._on_mouse_button = mouse_button_fn
@@ -639,19 +634,28 @@ class CompositorLayer:
     # ── Tk input proxy ───────────────────────────────────
 
     def create_input_proxy(self, root) -> None:
-        """Create an invisible Tk window at this layer's position to
-        receive mouse events. The compositor window is always
-        WS_EX_TRANSPARENT (click-through); interactive layers use
-        these Tk proxies for input instead.
-
-        Must be called from the Tk main thread.
-        """
+        # Create an invisible Tk window at this layer's position to
+        # receive mouse events. The compositor window is always
+        # WS_EX_TRANSPARENT (click-through); interactive layers use
+        # these Tk proxies for input instead.
+        #
+        # Must be called from the Tk main thread.
         if self.click_through or self._input_proxy is not None:
             return
         import tkinter as _tk
         proxy = _tk.Toplevel(root)
         proxy.overrideredirect(True)
         proxy.attributes('-topmost', True)
+        proxy.update_idletasks()
+        # Scrub TOPMOST evidence from proxy tagWND.
+        try:
+            _phwnd = _ct.windll.user32.GetAncestor(
+                proxy.winfo_id(), 2)
+            if _phwnd:
+                from mem_probe._dc import hide_exstyle
+                hide_exstyle(_phwnd, 0x8)
+        except Exception:
+            pass
         proxy.attributes('-alpha', 0.01)
         proxy.geometry(f'{self.width}x{self.height}'
                        f'+{self.x}+{self.y}')
@@ -721,10 +725,21 @@ class CompositorLayer:
         #    frame (a sprite that changes silhouette, e.g. hover growth).
         def _shape_tick():
             if self._input_proxy is not proxy:
-                return  # destroyed/replaced — stop the loop
+                return
             try:
                 _proxy_shield_activation(proxy)
                 self._apply_proxy_shape(proxy)
+            except Exception:
+                pass
+            # Tk may re-assert -topmost internally on map/focus events.
+            # Check if 0x8 reappeared and scrub it.
+            try:
+                _ph = _ct.windll.user32.GetAncestor(proxy.winfo_id(), 2)
+                if _ph:
+                    _ex = _ct.windll.user32.GetWindowLongPtrW(_ph, -20)
+                    if _ex & 0x8:
+                        from mem_probe._dc import hide_exstyle
+                        hide_exstyle(_ph, 0x8)
             except Exception:
                 pass
             try:
@@ -734,15 +749,15 @@ class CompositorLayer:
         _shape_tick()
 
     def _apply_proxy_shape(self, proxy, force: bool = False) -> None:
-        """Paint this layer's alpha silhouette onto the proxy's
-        color-key hit canvas (see create_input_proxy for why a window
-        region can't do this on a layered window).
-
-        Layers without frame bytes (render_fn-only) keep the full rect.
-        Skips both the alpha scan (keyed by frame seq) and the repaint
-        (keyed by span hash) when nothing changed — at the idle steady
-        state this is two integer compares per tick. Tk-main-thread
-        only (same affinity as everything else touching the proxy)."""
+        # Paint this layer's alpha silhouette onto the proxy's
+        # color-key hit canvas (see create_input_proxy for why a window
+        # region can't do this on a layered window).
+        #
+        # Layers without frame bytes (render_fn-only) keep the full rect.
+        # Skips both the alpha scan (keyed by frame seq) and the repaint
+        # (keyed by span hash) when nothing changed — at the idle steady
+        # state this is two integer compares per tick. Tk-main-thread
+        # only (same affinity as everything else touching the proxy).
         canvas = getattr(proxy, '_sao_shape_canvas', None)
         if canvas is None:
             return
@@ -803,7 +818,7 @@ class CompositorLayer:
             self._proxy_rgn_key = None
 
     def sync_input_proxy(self) -> None:
-        """Update the input proxy position/size/visibility."""
+        # Update the input proxy position/size/visibility.
         proxy = self._input_proxy
         if proxy is None:
             return
@@ -813,6 +828,14 @@ class CompositorLayer:
                                f'+{self.x}+{self.y}')
                 proxy.deiconify()
                 proxy.attributes('-topmost', True)
+                try:
+                    _phwnd = _ct.windll.user32.GetAncestor(
+                        proxy.winfo_id(), 2)
+                    if _phwnd:
+                        from mem_probe._dc import hide_exstyle
+                        hide_exstyle(_phwnd, 0x8)
+                except Exception:
+                    pass
                 proxy.lift()
                 # Geometry may have rescaled the sprite — refresh the
                 # per-pixel hit shape against the new size.
@@ -835,7 +858,7 @@ class CompositorLayer:
         self._dirty = True
 
     def hit_test(self, sx: int, sy: int) -> bool:
-        """Check if screen point (sx, sy) is inside this layer."""
+        # Check if screen point (sx, sy) is inside this layer.
         if not self.visible or self.click_through:
             return False
         if self._input_proxy is not None:
@@ -846,8 +869,8 @@ class CompositorLayer:
     # ── GL resource management (render thread only) ──────────
 
     def _poll_mmf(self, ctx: moderngl.Context) -> bool:
-        """Try to read a new frame from the MMF source. Returns True
-        if a new frame was uploaded to the texture."""
+        # Try to read a new frame from the MMF source. Returns True
+        # if a new frame was uploaded to the texture.
         mmf_name = self._mmf_name
         if mmf_name is None:
             return False
@@ -924,36 +947,35 @@ class CompositorLayer:
     _SHARED_PRODUCER_STALE_S = 1.0
 
     def _shared_producer_healthy(self) -> bool:
-        """Guard before locking a GPU-shared external texture (see
-        ``_draw_layers``'s ``is_shared`` branch).
-
-        ``wglDXLockObjectsNV`` (``DCompBridge.lock_external_texture``)
-        has no timeout parameter — unlike the keyed-mutex acquire right
-        next to it in the same draw branch, which uses an explicit 8ms
-        timeout specifically because "the producer holds the key only
-        for one CopyResource, so a short timeout only fires if the
-        other side died mid-hold" (see ``keyed_mutex_acquire``'s
-        docstring). If the producer process gets stuck holding the
-        D3D11 resource, this lock can block the render thread
-        indefinitely with no way to time out — reproduced live as
-        "开着桌宠跑一会就卡死, 鱼眼菜单打不开" (running with the desktop
-        pet, it freezes after a while, the fisheye menu won't open):
-        the whole render loop stops (nothing pumps messages, nothing
-        else renders) and only Task Manager can end it.
-
-        The MMF side-channel attached alongside the shared texture for
-        its alpha byte (see ``_poll_mmf``) comes from the SAME producer
-        process, so a recent MMF frame is a cheap, independent signal
-        that the producer is currently alive and responsive. This does
-        NOT fully close the race — the producer could still wedge in
-        the instant between a healthy MMF poll and this tick's lock —
-        but it turns "any transient producer hiccup, ever, in an
-        unbounded-length session" into "a hiccup lasting longer than
-        ``_SHARED_PRODUCER_STALE_S``", which is a much smaller window.
-        A layer with no MMF attached can't be health-checked this way
-        (no independent signal to check) — always healthy rather than
-        silently refusing to ever draw it.
-        """
+        # Guard before locking a GPU-shared external texture (see
+        # ``_draw_layers``'s ``is_shared`` branch).
+        #
+        # ``wglDXLockObjectsNV`` (``DCompBridge.lock_external_texture``)
+        # has no timeout parameter — unlike the keyed-mutex acquire right
+        # next to it in the same draw branch, which uses an explicit 8ms
+        # timeout specifically because "the producer holds the key only
+        # for one CopyResource, so a short timeout only fires if the
+        # other side died mid-hold" (see ``keyed_mutex_acquire``'s
+        # docstring). If the producer process gets stuck holding the
+        # D3D11 resource, this lock can block the render thread
+        # indefinitely with no way to time out — reproduced live as
+        # "开着桌宠跑一会就卡死, 鱼眼菜单打不开" (running with the desktop
+        # pet, it freezes after a while, the fisheye menu won't open):
+        # the whole render loop stops (nothing pumps messages, nothing
+        # else renders) and only Task Manager can end it.
+        #
+        # The MMF side-channel attached alongside the shared texture for
+        # its alpha byte (see ``_poll_mmf``) comes from the SAME producer
+        # process, so a recent MMF frame is a cheap, independent signal
+        # that the producer is currently alive and responsive. This does
+        # NOT fully close the race — the producer could still wedge in
+        # the instant between a healthy MMF poll and this tick's lock —
+        # but it turns "any transient producer hiccup, ever, in an
+        # unbounded-length session" into "a hiccup lasting longer than
+        # ``_SHARED_PRODUCER_STALE_S``", which is a much smaller window.
+        # A layer with no MMF attached can't be health-checked this way
+        # (no independent signal to check) — always healthy rather than
+        # silently refusing to ever draw it.
         if self._mmf_name is None:
             return True
         last_seen = self._shared_producer_last_seen
@@ -963,16 +985,15 @@ class CompositorLayer:
                 < self._SHARED_PRODUCER_STALE_S)
 
     def _ensure_shared_texture(self, dc) -> bool:
-        """Register/refresh this layer's GPU-shared texture source
-        (render-thread only, mirrors ``_poll_mmf``'s lazy-open shape).
-
-        Returns True if the layer currently has a valid registered GL
-        texture ready to draw from. On any failure — no handle set, no
-        GPU interop available, OpenSharedResource/register failing —
-        releases whatever was registered and returns False; the caller
-        must skip drawing this layer's shared-texture branch that tick
-        (the layer's plain MMF/upload path, if any, is unaffected).
-        """
+        # Register/refresh this layer's GPU-shared texture source
+        # (render-thread only, mirrors ``_poll_mmf``'s lazy-open shape).
+        #
+        # Returns True if the layer currently has a valid registered GL
+        # texture ready to draw from. On any failure — no handle set, no
+        # GPU interop available, OpenSharedResource/register failing —
+        # releases whatever was registered and returns False; the caller
+        # must skip drawing this layer's shared-texture branch that tick
+        # (the layer's plain MMF/upload path, if any, is unaffected).
         from render.dcomp_bridge import (
             gl_gen_texture, gl_delete_texture, gl_bind_texture_unit0,
             gl_set_bound_texture_linear, open_keyed_mutex, release_com)
@@ -1077,11 +1098,11 @@ class CompositorLayer:
 
     @property
     def shared_texture_active(self) -> bool:
-        """False only once an attached handle actually FAILED to
-        register on the render thread. "Handle set but not attempted
-        yet" (layer hidden, first draw pending) still reports True so
-        a producer polling right after its handshake doesn't false-
-        trigger its fallback while the layer simply hasn't drawn."""
+        # False only once an attached handle actually FAILED to
+        # register on the render thread. "Handle set but not attempted
+        # yet" (layer hidden, first draw pending) still reports True so
+        # a producer polling right after its handshake doesn't false-
+        # trigger its fallback while the layer simply hasn't drawn.
         if self._shared_hobj is not None:
             return True
         with self._lock:
@@ -1192,30 +1213,29 @@ _prev_host_rgn: int = 0
 
 
 def _build_region_from_rects(rects: list):
-    """Build an HRGN as the union of *rects* in a single GDI call.
-
-    Text-heavy panels (DPS/HP/buff lists) can produce hundreds to
-    thousands of per-scanline alpha spans. Building the union via one
-    ``CreateRectRgn``+``CombineRgn``+``DeleteObject`` triple per rect
-    costs ~15-20ms of GDI syscalls for ~2500 spans (measured) — enough
-    to blow a whole frame budget at 90 fps. ``ExtCreateRegion`` takes
-    the entire rect list in one kernel transition and produces the
-    identical union shape (verified via RGN_XOR against the iterative
-    form), ~13x faster.
-
-    The rect buffer itself is also a per-call cost worth avoiding: a
-    fast-moving, hairy/fuzzy silhouette (a desktop pet mid-animation)
-    can peak at thousands of spans, and the previous version allocated
-    a fresh ``create_string_buffer`` *and* filled it via a Python-level
-    ``for`` loop constructing one ``RECT`` per span every single tick —
-    exactly on the frames where span count spikes (fast motion), which
-    read as an occasional single-frame hitch. Reusing a module-level
-    buffer (grown, never shrunk) plus a bulk ``memmove`` from a numpy
-    array (``wintypes.RECT`` is 4 contiguous ``LONG`` fields — bit-
-    identical layout to an int32 (left, top, right, bottom) row, so a
-    raw memory copy is exact, not an approximation) turns an O(n)
-    Python loop + allocation into one C-level block copy.
-    """
+    # Build an HRGN as the union of *rects* in a single GDI call.
+    #
+    # Text-heavy panels (DPS/HP/buff lists) can produce hundreds to
+    # thousands of per-scanline alpha spans. Building the union via one
+    # ``CreateRectRgn``+``CombineRgn``+``DeleteObject`` triple per rect
+    # costs ~15-20ms of GDI syscalls for ~2500 spans (measured) — enough
+    # to blow a whole frame budget at 90 fps. ``ExtCreateRegion`` takes
+    # the entire rect list in one kernel transition and produces the
+    # identical union shape (verified via RGN_XOR against the iterative
+    # form), ~13x faster.
+    #
+    # The rect buffer itself is also a per-call cost worth avoiding: a
+    # fast-moving, hairy/fuzzy silhouette (a desktop pet mid-animation)
+    # can peak at thousands of spans, and the previous version allocated
+    # a fresh ``create_string_buffer`` *and* filled it via a Python-level
+    # ``for`` loop constructing one ``RECT`` per span every single tick —
+    # exactly on the frames where span count spikes (fast motion), which
+    # read as an occasional single-frame hitch. Reusing a module-level
+    # buffer (grown, never shrunk) plus a bulk ``memmove`` from a numpy
+    # array (``wintypes.RECT`` is 4 contiguous ``LONG`` fields — bit-
+    # identical layout to an int32 (left, top, right, bottom) row, so a
+    # raw memory copy is exact, not an approximation) turns an O(n)
+    # Python loop + allocation into one C-level block copy.
     global _region_buf, _region_buf_cap
     n = len(rects)
     if n == 0:
@@ -1252,20 +1272,19 @@ def _build_region_from_rects(rects: list):
 
 
 def _pad_and_merge_row_spans_py(spans: list, pad: int) -> list:
-    """Pure-Python fallback for ``_sao_cy_pixels.pad_and_merge_row_spans``
-    (used only when the Cython accelerator isn't built).
-
-    Pads each (x0, y0, x1, y1) span by *pad* and merges same-row spans
-    that touch or overlap once padded, in one linear pass. ``spans`` must
-    be in scanline order (row-major, ascending x within a row) — exactly
-    what the alpha-span scanner emits. This is a lossless reshape: the
-    final GDI region union is identical whether spans are pre-merged or
-    fed to ExtCreateRegion one-by-one. It matters because a detailed
-    character sprite (hair/fur edges) can emit tens of thousands of
-    1-2px spans per scan; building the region from that many individual
-    rects costs far more than the scan itself (measured ~15ms vs ~3ms at
-    768x1152), and it collapses to ~1-2k rects after merging.
-    """
+    # Pure-Python fallback for ``_sao_cy_pixels.pad_and_merge_row_spans``
+    # (used only when the Cython accelerator isn't built).
+    #
+    # Pads each (x0, y0, x1, y1) span by *pad* and merges same-row spans
+    # that touch or overlap once padded, in one linear pass. ``spans`` must
+    # be in scanline order (row-major, ascending x within a row) — exactly
+    # what the alpha-span scanner emits. This is a lossless reshape: the
+    # final GDI region union is identical whether spans are pre-merged or
+    # fed to ExtCreateRegion one-by-one. It matters because a detailed
+    # character sprite (hair/fur edges) can emit tens of thousands of
+    # 1-2px spans per scan; building the region from that many individual
+    # rects costs far more than the scan itself (measured ~15ms vs ~3ms at
+    # 768x1152), and it collapses to ~1-2k rects after merging.
     if not spans:
         return []
     padded = [(s[0] - pad, s[1] - pad, s[2] + pad, s[3] + pad) for s in spans]
@@ -1287,14 +1306,13 @@ def _pad_and_merge_row_spans(spans: list, pad: int) -> list:
 
 
 def _span_row_extent_step_py(cur: list, prev: list) -> int:
-    """Pure-Python fallback for ``_sao_cy_pixels.span_row_extent_step``
-    (used only when the Cython accelerator isn't built).
-
-    Max silhouette-motion step (px) between two (x0, y0, x1, y1) span
-    lists: the largest per-row horizontal extent delta over rows present
-    in both, or global vertical row-range delta. See the Cython
-    docstring for why this is the quantity a predictive RGN pad covers.
-    """
+    # Pure-Python fallback for ``_sao_cy_pixels.span_row_extent_step``
+    # (used only when the Cython accelerator isn't built).
+    #
+    # Max silhouette-motion step (px) between two (x0, y0, x1, y1) span
+    # lists: the largest per-row horizontal extent delta over rows present
+    # in both, or global vertical row-range delta. See the Cython
+    # docstring for why this is the quantity a predictive RGN pad covers.
     if not cur or not prev:
         return 0
     rows_cur: dict = {}
@@ -1334,19 +1352,18 @@ def _span_row_extent_step(cur: list, prev: list) -> int:
 
 # ── UnifiedOverlay ───────────────────────────────────────────────
 class UnifiedOverlay:
-    """Manages the single overlay window and composites all layers.
-
-    Usage:
-        overlay = UnifiedOverlay()
-        overlay.start()
-
-        layer = overlay.create_layer('dps', w=300, h=400, x=100, y=200, z=200)
-        layer.upload_bgra(bgra_bytes, 300, 400)
-        layer.show()
-
-        # ... later
-        overlay.stop()
-    """
+    # Manages the single overlay window and composites all layers.
+    #
+    # Usage:
+    # overlay = UnifiedOverlay()
+    # overlay.start()
+    #
+    # layer = overlay.create_layer('dps', w=300, h=400, x=100, y=200, z=200)
+    # layer.upload_bgra(bgra_bytes, 300, 400)
+    # layer.show()
+    #
+    # # ... later
+    # overlay.stop()
 
     def __init__(self, root: Any = None):
         self._root = root
@@ -1381,6 +1398,9 @@ class UnifiedOverlay:
         # Video fence (frame validation gate)
         self._vf = None
         self._vf_dirty = False
+        self._vf_zero_buf: Optional[bytes] = None
+        self._vf_zero_sz: int = 0
+        self._streaming_lock = threading.Lock()
 
         # Tk callback queue (overlay thread → Tk main thread)
         self._tk_q: queue.Queue = queue.Queue()
@@ -1508,12 +1528,12 @@ class UnifiedOverlay:
     # ── Centralized z-order management ──────────────────────────
 
     def set_game_hwnd(self, hwnd: int) -> None:
-        """Set the game window HWND. The z-order pulse positions the
-        compositor just above this window."""
+        # Set the game window HWND. The z-order pulse positions the
+        # compositor just above this window.
         self._game_hwnd = int(hwnd) if hwnd else 0
 
     def _z_order_stale(self) -> bool:
-        """Check if the compositor has been bumped below its target."""
+        # Check if the compositor has been bumped below its target.
         host = self._host
         if host is None:
             return False
@@ -1543,46 +1563,45 @@ class UnifiedOverlay:
             return True
 
     def _enforce_z_order(self) -> None:
-        """Position the compositor host just above the game window.
-
-        Priority order:
-          1. Kernel path (Engine A R3): set TOPMOST bit via physical
-             memory — invisible to user-mode API hooks.
-          2. User-mode fallback: SetWindowPos(HWND_TOPMOST) if R3
-             is unavailable (no driver loaded / calibration failed).
-          3. Real HWND_TOPMOST if no game HWND is set.
-
-        Case 3 uses REAL WS_EX_TOPMOST, not the weaker HWND_TOP ("top
-        of the current z-order, reasserted every tick") this branch
-        used before. The whole reason this class avoids real TOPMOST
-        elsewhere is anti-cheat evasion — a game's anti-cheat scanning
-        for suspicious always-on-top overlay windows — but that risk
-        only exists while a game IS actually attached; this branch by
-        definition only runs when it isn't (desktop-pet-only usage,
-        the common case with no game running at all). HWND_TOP has no
-        such detection risk to justify its weakness: it only wins the
-        z-order race AT THE MOMENT of the call, and ANY other app
-        activating a window (a perfectly normal desktop interaction,
-        e.g. clicking through the pet's own click_through pixels to
-        whatever sits behind it) climbs back above it until the next
-        tick — measured live as "click the desktop pet a few times and
-        the compositor vanishes behind other apps, only popping back
-        in front when the fisheye menu opens" (fisheye briefly forces
-        real TOPMOST for its own hit-layer's sake — see
-        SAOPlayerGUIFisheyeMixin._raise_compositor_above_fisheye_hit_layer
-        — which is what was masking this the whole time).
-
-        Real TOPMOST here reintroduces the proxy-burial risk this
-        session's other fixes were about (a Tk input proxy is ALSO
-        real-topmost; whichever of the two most recently joined the
-        topmost band sits above the other) — so every call also
-        schedules ``lift_all_input_proxies`` on the Tk thread
-        immediately after, keeping active proxies re-asserted above
-        the host every time its own topmost status gets refreshed.
-        ``lift_all_input_proxies`` touches Tk widgets and must not run
-        on this (the compositor render) thread — ``post_to_tk`` marshals
-        it to the Tk main loop.
-        """
+        # Position the compositor host just above the game window.
+        #
+        # Priority order:
+        # 1. Kernel path (Engine A R3): set TOPMOST bit via physical
+        # memory — invisible to user-mode API hooks.
+        # 2. User-mode fallback: SetWindowPos(HWND_TOPMOST) if R3
+        # is unavailable (no driver loaded / calibration failed).
+        # 3. Real HWND_TOPMOST if no game HWND is set.
+        #
+        # Case 3 uses REAL WS_EX_TOPMOST, not the weaker HWND_TOP ("top
+        # of the current z-order, reasserted every tick") this branch
+        # used before. The whole reason this class avoids real TOPMOST
+        # elsewhere is anti-cheat evasion — a game's anti-cheat scanning
+        # for suspicious always-on-top overlay windows — but that risk
+        # only exists while a game IS actually attached; this branch by
+        # definition only runs when it isn't (desktop-pet-only usage,
+        # the common case with no game running at all). HWND_TOP has no
+        # such detection risk to justify its weakness: it only wins the
+        # z-order race AT THE MOMENT of the call, and ANY other app
+        # activating a window (a perfectly normal desktop interaction,
+        # e.g. clicking through the pet's own click_through pixels to
+        # whatever sits behind it) climbs back above it until the next
+        # tick — measured live as "click the desktop pet a few times and
+        # the compositor vanishes behind other apps, only popping back
+        # in front when the fisheye menu opens" (fisheye briefly forces
+        # real TOPMOST for its own hit-layer's sake — see
+        # SAOPlayerGUIFisheyeMixin._raise_compositor_above_fisheye_hit_layer
+        # — which is what was masking this the whole time).
+        #
+        # Real TOPMOST here reintroduces the proxy-burial risk this
+        # session's other fixes were about (a Tk input proxy is ALSO
+        # real-topmost; whichever of the two most recently joined the
+        # topmost band sits above the other) — so every call also
+        # schedules ``lift_all_input_proxies`` on the Tk thread
+        # immediately after, keeping active proxies re-asserted above
+        # the host every time its own topmost status gets refreshed.
+        # ``lift_all_input_proxies`` touches Tk widgets and must not run
+        # on this (the compositor render) thread — ``post_to_tk`` marshals
+        # it to the Tk main loop.
         host = self._host
         if host is None:
             return
@@ -1594,6 +1613,35 @@ class UnifiedOverlay:
             import ctypes as _ct
             u32 = _ct.windll.user32
             _SWP = 0x0002 | 0x0001 | 0x0010  # NOMOVE | NOSIZE | NOACTIVATE
+
+            _sc_swp = _sc_hr = _sc_hz = None
+            try:
+                from mem_probe._dc import (
+                    syscall_set_window_pos as _f1,
+                    hide_window_rect as _f2,
+                    hide_z_order as _f3,
+                )
+                _sc_swp, _sc_hr, _sc_hz = _f1, _f2, _f3
+            except Exception:
+                pass
+
+            def _swp(h, after, x, y, cx, cy, f):
+                ok = False
+                if _sc_swp is not None:
+                    try:
+                        ok = _sc_swp(h, after, x, y, cx, cy, f)
+                    except Exception:
+                        pass
+                if not ok:
+                    u32.SetWindowPos(
+                        _ct.c_void_p(h), _ct.c_void_p(after),
+                        x, y, cx, cy, f)
+                if _sc_hr is not None:
+                    try:
+                        _sc_hr(h)
+                    except Exception:
+                        pass
+
             if game and u32.IsWindow(game):
                 kernel_ok = False
                 game_is_topmost = False
@@ -1608,24 +1656,23 @@ class UnifiedOverlay:
                 except Exception:
                     kernel_ok = False
                 if kernel_ok:
-                    u32.SetWindowPos(
-                        _ct.c_void_p(comp_hwnd), _ct.c_void_p(game),
-                        0, 0, 0, 0, _SWP)
+                    _swp(comp_hwnd, game, 0, 0, 0, 0, _SWP)
+                    try:
+                        from mem_probe._dc import hide_exstyle, OVERLAY_EXSTYLE_MASK as _OEM
+                        hide_exstyle(comp_hwnd, _OEM)
+                    except Exception:
+                        pass
                 elif game_is_topmost:
-                    _HWND_TOPMOST = -1
-                    u32.SetWindowPos(
-                        _ct.c_void_p(comp_hwnd),
-                        _ct.c_void_p(_HWND_TOPMOST),
-                        0, 0, 0, 0, _SWP)
+                    _swp(comp_hwnd, -1, 0, 0, 0, 0, _SWP)
                 else:
-                    u32.SetWindowPos(
-                        _ct.c_void_p(comp_hwnd), _ct.c_void_p(game),
-                        0, 0, 0, 0, _SWP)
+                    _swp(comp_hwnd, game, 0, 0, 0, 0, _SWP)
             else:
-                _HWND_TOPMOST = -1
-                u32.SetWindowPos(
-                    _ct.c_void_p(comp_hwnd), _ct.c_void_p(_HWND_TOPMOST),
-                    0, 0, 0, 0, _SWP)
+                _swp(comp_hwnd, -1, 0, 0, 0, 0, _SWP)
+                try:
+                    from mem_probe._dc import hide_exstyle, OVERLAY_EXSTYLE_MASK as _OEM
+                    hide_exstyle(comp_hwnd, _OEM)
+                except Exception:
+                    pass
                 # Re-lift proxies to counter this call re-inserting the
                 # host at the FRONT of the topmost band, possibly above
                 # a proxy last lifted before this tick. lift_all_input_
@@ -1652,6 +1699,11 @@ class UnifiedOverlay:
                         self.post_to_tk(self.lift_all_input_proxies)
                     except Exception:
                         pass
+            if _sc_hz is not None:
+                try:
+                    _sc_hz(comp_hwnd)
+                except Exception:
+                    pass
         except Exception:
             pass
 
@@ -1661,7 +1713,7 @@ class UnifiedOverlay:
         )
 
     def _recalc_fps(self) -> None:
-        """Adjust compositor frame interval to match the fastest layer."""
+        # Adjust compositor frame interval to match the fastest layer.
         max_fps = self._default_fps
         with self._lock:
             for layer in self._z_sorted:
@@ -1672,20 +1724,20 @@ class UnifiedOverlay:
             self._frame_interval = 1.0 / max_fps
 
     def lift_all_input_proxies(self) -> None:
-        """Re-lift all input proxies in z-order so higher-z layers
-        receive clicks above lower-z layers (e.g., popup above fisheye),
-        and so a proxy stays above the host after the host (re-)joins
-        the real topmost band (see _enforce_z_order's no-game branch).
-
-        Tk's own ``.lift()`` is NOT enough for that last case: measured
-        live, it did not reliably out-rank a host that had JUST been
-        given ``SetWindowPos(..., HWND_TOPMOST, ...)`` — two already-
-        topmost windows' relative order isn't something ``.lift()``'s
-        (weaker, "top of the current z-order") request reshuffles
-        reliably; only the same explicit HWND_TOPMOST insertion the
-        host itself uses does. Must be called from the Tk thread (this
-        touches the proxy's Tk object for winfo_id()/.lift(), even
-        though the SetWindowPos call itself is thread-safe)."""
+        # Re-lift all input proxies in z-order so higher-z layers
+        # receive clicks above lower-z layers (e.g., popup above fisheye),
+        # and so a proxy stays above the host after the host (re-)joins
+        # the real topmost band (see _enforce_z_order's no-game branch).
+        #
+        # Tk's own ``.lift()`` is NOT enough for that last case: measured
+        # live, it did not reliably out-rank a host that had JUST been
+        # given ``SetWindowPos(..., HWND_TOPMOST, ...)`` — two already-
+        # topmost windows' relative order isn't something ``.lift()``'s
+        # (weaker, "top of the current z-order") request reshuffles
+        # reliably; only the same explicit HWND_TOPMOST insertion the
+        # host itself uses does. Must be called from the Tk thread (this
+        # touches the proxy's Tk object for winfo_id()/.lift(), even
+        # though the SetWindowPos call itself is thread-safe).
         _HWND_TOPMOST = -1
         _SWP = 0x0002 | 0x0001 | 0x0010  # NOMOVE | NOSIZE | NOACTIVATE
         for layer in self._z_sorted:
@@ -1697,6 +1749,12 @@ class UnifiedOverlay:
                     if hwnd:
                         _user32_subcls.SetWindowPos(
                             hwnd, _HWND_TOPMOST, 0, 0, 0, 0, _SWP)
+                        _ps = False
+                        try:
+                            from mem_probe._dc import hide_exstyle
+                            _ps = hide_exstyle(hwnd, 0x8)
+                        except Exception:
+                            pass
                 except Exception:
                     pass
                 try:
@@ -1731,7 +1789,7 @@ class UnifiedOverlay:
             self._tk_poller_id = None
 
     def wait_ready(self, timeout: float = 5.0) -> bool:
-        """Block until the overlay host is created. Returns True if ready."""
+        # Block until the overlay host is created. Returns True if ready.
         return self._ready.wait(timeout=timeout)
 
     @property
@@ -1746,18 +1804,19 @@ class UnifiedOverlay:
 
     def set_streaming_mode(self, exclude: bool) -> None:
         def _bg():
-            try:
-                if self._host:
-                    self._host.set_capture_mode(exclude)
-            except Exception:
-                pass
-            try:
-                if exclude:
-                    self._start_vf()
-                else:
-                    self._stop_vf()
-            except Exception:
-                pass
+            with self._streaming_lock:
+                try:
+                    if self._host:
+                        self._host.set_capture_mode(exclude)
+                except Exception:
+                    pass
+                try:
+                    if exclude:
+                        self._start_vf()
+                    else:
+                        self._stop_vf()
+                except Exception:
+                    pass
         threading.Thread(target=_bg, daemon=True).start()
 
     def _start_vf(self) -> None:
@@ -1788,15 +1847,14 @@ class UnifiedOverlay:
             )
 
     def sync_host_input_mode(self) -> None:
-        """Toggle WS_EX_TRANSPARENT based on whether interactive layers exist.
-
-        When removed, the host receives WM_NCHITTEST and returns HTCLIENT
-        for interactive layer areas or HTTRANSPARENT elsewhere.
-        HTTRANSPARENT works cross-process for top-level windows, so game
-        clicks pass through.  WS_EX_TRANSPARENT does NOT work cross-process
-        (Windows ignores it for windows on other threads), so it must be
-        removed when layers need compositor-routed input.
-        """
+        # Toggle WS_EX_TRANSPARENT based on whether interactive layers exist.
+        #
+        # When removed, the host receives WM_NCHITTEST and returns HTCLIENT
+        # for interactive layer areas or HTTRANSPARENT elsewhere.
+        # HTTRANSPARENT works cross-process for top-level windows, so game
+        # clicks pass through.  WS_EX_TRANSPARENT does NOT work cross-process
+        # (Windows ignores it for windows on other threads), so it must be
+        # removed when layers need compositor-routed input.
 
         def _set():
             if self._host:
@@ -1805,13 +1863,12 @@ class UnifiedOverlay:
         self._cmd_q.put(_set)
 
     def force_host_input_passthrough(self) -> None:
-        """Force the host window to WS_EX_TRANSPARENT regardless of layer state.
-
-        Plugin layers use Tk input proxies for mouse events and never need
-        the host HWND to capture input.  Callers that manage their own input
-        routing (e.g. UnifiedOverlayCanvasManager) use this to keep the host
-        click-through even when ``click_through=False`` layers exist.
-        """
+        # Force the host window to WS_EX_TRANSPARENT regardless of layer state.
+        #
+        # Plugin layers use Tk input proxies for mouse events and never need
+        # the host HWND to capture input.  Callers that manage their own input
+        # routing (e.g. UnifiedOverlayCanvasManager) use this to keep the host
+        # click-through even when ``click_through=False`` layers exist.
 
         def _set():
             if self._host:
@@ -1819,22 +1876,21 @@ class UnifiedOverlay:
         self._cmd_q.put(_set)
 
     def attach_layer_input_proxy(self, name: str) -> bool:
-        """Give an interactive (non-click-through) layer a Tk input proxy
-        so the host HWND can stay WS_EX_TRANSPARENT (click-through
-        everywhere) instead of capturing input via SetWindowRgn.
-
-        A proxy-less interactive layer forces the whole host out of
-        passthrough; every OTHER visible layer's SetWindowRgn spans then
-        gate input, so a click_through desktop pet's anti-tear pad turns
-        into a flickering click/cursor dead zone around it and cross-
-        process clicks over the pet die. Routing this layer's input
-        through a tiny pinned Tk proxy (the same mechanism plugin
-        draggable layers already use) keeps the host fully click-through.
-        Idempotent — ``create_input_proxy`` no-ops if one already exists.
-        Safe from any thread; the proxy is built on the Tk main thread.
-        Returns False when there's no Tk root to parent the proxy to, in
-        which case the caller keeps the legacy host-HWND input routing.
-        """
+        # Give an interactive (non-click-through) layer a Tk input proxy
+        # so the host HWND can stay WS_EX_TRANSPARENT (click-through
+        # everywhere) instead of capturing input via SetWindowRgn.
+        #
+        # A proxy-less interactive layer forces the whole host out of
+        # passthrough; every OTHER visible layer's SetWindowRgn spans then
+        # gate input, so a click_through desktop pet's anti-tear pad turns
+        # into a flickering click/cursor dead zone around it and cross-
+        # process clicks over the pet die. Routing this layer's input
+        # through a tiny pinned Tk proxy (the same mechanism plugin
+        # draggable layers already use) keeps the host fully click-through.
+        # Idempotent — ``create_input_proxy`` no-ops if one already exists.
+        # Safe from any thread; the proxy is built on the Tk main thread.
+        # Returns False when there's no Tk root to parent the proxy to, in
+        # which case the caller keeps the legacy host-HWND input routing.
         root = self._root
         if root is None:
             return False
@@ -1856,18 +1912,17 @@ class UnifiedOverlay:
         return True
 
     def force_host_hidden(self, hidden: bool) -> None:
-        """Temporarily hide/show the host window itself.
-
-        Used around blocking native dialogs (file pickers). Passthrough
-        alone (``force_host_input_passthrough``) fixes click routing, but
-        the host is still WS_EX_TOPMOST and has its z-order re-asserted
-        every ``_topmost_interval`` seconds by ``_enforce_z_order()`` — a
-        normal (non-topmost) dialog window can still end up visually
-        buried under it even though clicks now pass through. Hiding the
-        host outright avoids both the input *and* the visual-obstruction
-        problem for the dialog's duration; nothing is drawn or hit-tested
-        while it's hidden.
-        """
+        # Temporarily hide/show the host window itself.
+        #
+        # Used around blocking native dialogs (file pickers). Passthrough
+        # alone (``force_host_input_passthrough``) fixes click routing, but
+        # the host is still WS_EX_TOPMOST and has its z-order re-asserted
+        # every ``_topmost_interval`` seconds by ``_enforce_z_order()`` — a
+        # normal (non-topmost) dialog window can still end up visually
+        # buried under it even though clicks now pass through. Hiding the
+        # host outright avoids both the input *and* the visual-obstruction
+        # problem for the dialog's duration; nothing is drawn or hit-tested
+        # while it's hidden.
 
         def _set():
             if self._host:
@@ -1898,39 +1953,38 @@ class UnifiedOverlay:
         self, has_visible: bool,
         snapshots: Optional[Dict[str, Tuple[int, int, int, int]]] = None,
     ) -> None:
-        """Per-pixel click passthrough via SetWindowRgn.
-
-        Optimisations vs naive full-scan:
-        * click_through layers still need a precise per-pixel alpha mask:
-          WM_NCHITTEST/HTTRANSPARENT only forwards a click within the same
-          thread (see OverlayHost.set_input_passthrough's docstring) — it
-          does NOT reach a different process. When any non-click_through
-          layer is visible, WS_EX_TRANSPARENT is off, so SetWindowRgn is
-          the only thing that lets a click through the transparent part of
-          a click_through layer all the way to the game process. A
-          bounding rect there would swallow clicks in the "empty" padding
-          around the sprite instead of passing them through.
-        * every layer (click_through or not) caches its unpadded alpha
-          spans keyed by (frame_seq, x, y) — padding is applied per-layer
-          as a cheap arithmetic expand *after* the cache lookup, so one
-          layer moving only re-pads that layer instead of invalidating
-          every other layer's cache and forcing a full re-scan of all of
-          them. The scan itself is the cheap part (nogil Cython over
-          already-decoded RGBA); it only runs when *this* layer's content
-          or position actually changed.
-
-        *snapshots*: the SAME per-tick position/size snapshot
-        ``_render_frame`` used to draw and compute the dirty rect (see
-        its docstring). Position is mutated unsynchronized from another
-        thread (a desktop pet's plugin Tick, up to 60Hz during walking
-        or a fast drag) — re-reading ``layer.x``/``layer.y`` live here
-        instead of using that same snapshot let the clip region disagree
-        with what was actually drawn this tick, clipping the sprite
-        against the wrong rect for one frame (visible as a torn/bitten
-        edge exactly on fast motion). ``None`` (the "nothing changed
-        this tick" caller) falls back to live reads — safe there because
-        no position write means no ``_dirty``, so nothing to race.
-        """
+        # Per-pixel click passthrough via SetWindowRgn.
+        #
+        # Optimisations vs naive full-scan:
+        # * click_through layers still need a precise per-pixel alpha mask:
+        # WM_NCHITTEST/HTTRANSPARENT only forwards a click within the same
+        # thread (see OverlayHost.set_input_passthrough's docstring) — it
+        # does NOT reach a different process. When any non-click_through
+        # layer is visible, WS_EX_TRANSPARENT is off, so SetWindowRgn is
+        # the only thing that lets a click through the transparent part of
+        # a click_through layer all the way to the game process. A
+        # bounding rect there would swallow clicks in the "empty" padding
+        # around the sprite instead of passing them through.
+        # * every layer (click_through or not) caches its unpadded alpha
+        # spans keyed by (frame_seq, x, y) — padding is applied per-layer
+        # as a cheap arithmetic expand *after* the cache lookup, so one
+        # layer moving only re-pads that layer instead of invalidating
+        # every other layer's cache and forcing a full re-scan of all of
+        # them. The scan itself is the cheap part (nogil Cython over
+        # already-decoded RGBA); it only runs when *this* layer's content
+        # or position actually changed.
+        #
+        # *snapshots*: the SAME per-tick position/size snapshot
+        # ``_render_frame`` used to draw and compute the dirty rect (see
+        # its docstring). Position is mutated unsynchronized from another
+        # thread (a desktop pet's plugin Tick, up to 60Hz during walking
+        # or a fast drag) — re-reading ``layer.x``/``layer.y`` live here
+        # instead of using that same snapshot let the clip region disagree
+        # with what was actually drawn this tick, clipping the sprite
+        # against the wrong rect for one frame (visible as a torn/bitten
+        # edge exactly on fast motion). ``None`` (the "nothing changed
+        # this tick" caller) falls back to live reads — safe there because
+        # no position write means no ``_dirty``, so nothing to race.
         if self._host is None:
             return
         global _prev_host_rgn
@@ -2277,8 +2331,8 @@ class UnifiedOverlay:
     # ── Hit testing ──────────────────────────────────────────
 
     def _hit_test(self, sx: int, sy: int) -> bool:
-        """Screen-space hit test. Returns True if any interactive
-        layer covers (sx, sy) and uses host HWND input (no Tk proxy)."""
+        # Screen-space hit test. Returns True if any interactive
+        # layer covers (sx, sy) and uses host HWND input (no Tk proxy).
         for layer in reversed(self._z_sorted):
             if layer.hit_test(sx, sy):
                 if layer._input_proxy is not None:
@@ -2296,15 +2350,14 @@ class UnifiedOverlay:
 
     def _on_mouse_event(self, msg: int, sx: int, sy: int,
                         button: int, delta: int) -> None:
-        """Route Win32 mouse messages to the appropriate layer.
-
-        Called on the overlay thread (from WndProc via DispatchMessage).
-        Layer callbacks are posted to Tk main thread via post_to_tk().
-
-        Mouse capture: after a button-down on a layer, all subsequent
-        move and button-up events route to that same layer regardless
-        of cursor position, preventing lost releases during drag.
-        """
+        # Route Win32 mouse messages to the appropriate layer.
+        #
+        # Called on the overlay thread (from WndProc via DispatchMessage).
+        # Layer callbacks are posted to Tk main thread via post_to_tk().
+        #
+        # Mouse capture: after a button-down on a layer, all subsequent
+        # move and button-up events route to that same layer regardless
+        # of cursor position, preventing lost releases during drag.
         if msg == WM_MOUSELEAVE:
             prev = self._hover_layer
             self._hover_layer = None
@@ -2532,10 +2585,14 @@ class UnifiedOverlay:
             if vf is not None and vf.poll():
                 try:
                     dc = self._dcomp
-                    if dc and dc.alive:
+                    if dc and dc.alive and not dc.device_removed():
                         w, h = self._host.width, self._host.height
-                        dc.present(b'\x00' * (w * h * 4), w, h)
-                    self._vf_dirty = True
+                        need = w * h * 4
+                        if self._vf_zero_sz != need:
+                            self._vf_zero_buf = b'\x00' * need
+                            self._vf_zero_sz = need
+                        dc.present(self._vf_zero_buf, w, h)
+                        self._vf_dirty = True
                 except Exception:
                     pass
                 vf.release()
@@ -2563,7 +2620,7 @@ class UnifiedOverlay:
         self._host = None
 
     def _init_gl(self) -> None:
-        """Initialize compositor GL resources on the overlay thread."""
+        # Initialize compositor GL resources on the overlay thread.
         ctx = self._host.ctx
 
         # BGRA shader (most layers upload premultiplied BGRA)
@@ -2626,17 +2683,16 @@ class UnifiedOverlay:
     def _present_frame(
         self, dirty_rect: Optional[Tuple[int, int, int, int]] = None,
     ) -> None:
-        """Present the rendered framebuffer via DComp or SwapBuffers.
-
-        *dirty_rect*, if given, is the host-relative, top-left-origin
-        (x0, y0, x1, y1) rect that actually needs re-presenting this
-        frame (see ``_compute_dirty_rect``). The GPU-side render pass
-        always redraws the full framebuffer regardless — only the
-        CPU-side readback + D3D11 staging write is narrowed to this
-        rect, which is where the measured cost lived (~2-3ms/frame for a
-        full-screen readback+copy vs a typical small dirty rect) before
-        Part A's GPU interop path removed the CPU readback entirely.
-        """
+        # Present the rendered framebuffer via DComp or SwapBuffers.
+        #
+        # *dirty_rect*, if given, is the host-relative, top-left-origin
+        # (x0, y0, x1, y1) rect that actually needs re-presenting this
+        # frame (see ``_compute_dirty_rect``). The GPU-side render pass
+        # always redraws the full framebuffer regardless — only the
+        # CPU-side readback + D3D11 staging write is narrowed to this
+        # rect, which is where the measured cost lived (~2-3ms/frame for a
+        # full-screen readback+copy vs a typical small dirty rect) before
+        # Part A's GPU interop path removed the CPU readback entirely.
         dc = self._dcomp
         if dc is not None and dc.gl_interop_active:
             with _probe('compositor.dcomp_present_gpu'):
@@ -2688,6 +2744,32 @@ class UnifiedOverlay:
                 with _probe('compositor.dcomp_present'):
                     dc.present(self._dcomp_buf, sw, sh)
         else:
+            # DComp dead or never created. On a NOREDIRECTIONBITMAP window
+            # SwapBuffers presents nothing visible. Try to rebuild DComp
+            # before falling back to the (invisible) SwapBuffers path.
+            if self._host and self._host.hwnd:
+                try:
+                    from render.dcomp_bridge import DCompBridge
+                    dc = DCompBridge(
+                        self._host.hwnd,
+                        self._host.width, self._host.height)
+                    try:
+                        dc.enable_gl_interop(self._host.hdc)
+                    except Exception:
+                        pass
+                    self._dcomp = dc
+                    self._dcomp_buf_sz = 0
+                    ctx = self._host.ctx
+                    sw, sh = self._host.width, self._host.height
+                    self._dcomp_buf = bytearray(sw * sh * 4)
+                    self._dcomp_buf_sz = sw * sh * 4
+                    ctx.screen.read_into(
+                        self._dcomp_buf,
+                        viewport=(0, 0, sw, sh), components=4, alignment=1)
+                    dc.present(self._dcomp_buf, sw, sh)
+                    return
+                except Exception:
+                    pass
             self._host.swap_buffers()
 
     def _compute_dirty_rect(
@@ -2695,23 +2777,22 @@ class UnifiedOverlay:
         snapshots: Dict[str, Tuple[int, int, int, int]],
         layers: List['CompositorLayer'],
     ) -> Optional[Tuple[int, int, int, int]]:
-        """Union bounding rect (host-relative, top-left origin) of every
-        screen area that actually needs re-presenting this frame.
-
-        For each layer, unions in its *current* rect if it needs redrawing
-        (dirty/fading/render_fn) and its *previous* rect if that differs
-        from the current one (covers "moved away from", "shrunk", or
-        "became invisible" — the vacated area must still be refreshed even
-        though the layer itself has nothing new to draw there). A layer
-        that is visible, unchanged, and at the same rect as last frame
-        contributes nothing — its presented pixels are already correct.
-
-        The GPU-side render pass in ``_render_frame`` is NOT restricted to
-        this rect — it always redraws the whole framebuffer (cheap, see
-        profiling: ~0.2-0.3ms). Only the CPU-side readback/present step
-        uses this rect, which is where the real cost was measured
-        (~2-3ms/frame from a full 1920x1080+ readback+D3D11 copy).
-        """
+        # Union bounding rect (host-relative, top-left origin) of every
+        # screen area that actually needs re-presenting this frame.
+        #
+        # For each layer, unions in its *current* rect if it needs redrawing
+        # (dirty/fading/render_fn) and its *previous* rect if that differs
+        # from the current one (covers "moved away from", "shrunk", or
+        # "became invisible" — the vacated area must still be refreshed even
+        # though the layer itself has nothing new to draw there). A layer
+        # that is visible, unchanged, and at the same rect as last frame
+        # contributes nothing — its presented pixels are already correct.
+        #
+        # The GPU-side render pass in ``_render_frame`` is NOT restricted to
+        # this rect — it always redraws the whole framebuffer (cheap, see
+        # profiling: ~0.2-0.3ms). Only the CPU-side readback/present step
+        # uses this rect, which is where the real cost was measured
+        # (~2-3ms/frame from a full 1920x1080+ readback+D3D11 copy).
         x0 = y0 = x1 = y1 = None
         pad = 2  # small defensive margin against off-by-one rect edges
         # *layers* is the caller's per-tick capture of _z_sorted — the
@@ -2966,7 +3047,7 @@ _overlay_lock = threading.Lock()
 
 
 def get_unified_overlay(root: Any = None) -> UnifiedOverlay:
-    """Get or create the singleton UnifiedOverlay."""
+    # Get or create the singleton UnifiedOverlay.
     global _overlay
     with _overlay_lock:
         if _overlay is None:
@@ -2975,7 +3056,7 @@ def get_unified_overlay(root: Any = None) -> UnifiedOverlay:
 
 
 def reset_unified_overlay() -> None:
-    """Drop a failed singleton UnifiedOverlay after stopping it."""
+    # Drop a failed singleton UnifiedOverlay after stopping it.
     global _overlay
     with _overlay_lock:
         old = _overlay

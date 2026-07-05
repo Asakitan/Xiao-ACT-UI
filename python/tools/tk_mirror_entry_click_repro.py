@@ -1,13 +1,12 @@
 # -*- coding: utf-8 -*-
-"""Repro/verify: a mirrored Tk panel's text Entry must be clickable.
-
-Boots the unified compositor + a SaoToplevel (real TkMirrorLayer path)
-containing a Tk Entry and a Button. Reports the host window region box
-and synthesizes a real click on the Entry, checking it receives focus
-and the ButtonPress binding fires. Before the rect_hit fix the Entry's
-zero-alpha capture pixels were punched out of the region and the click
-never reached it.
-"""
+# Repro/verify: a mirrored Tk panel's text Entry must be clickable.
+#
+# Boots the unified compositor + a SaoToplevel (real TkMirrorLayer path)
+# containing a Tk Entry and a Button. Reports the host window region box
+# and synthesizes a real click on the Entry, checking it receives focus
+# and the ButtonPress binding fires. Before the rect_hit fix the Entry's
+# zero-alpha capture pixels were punched out of the region and the click
+# never reached it.
 import os
 import sys
 import ctypes

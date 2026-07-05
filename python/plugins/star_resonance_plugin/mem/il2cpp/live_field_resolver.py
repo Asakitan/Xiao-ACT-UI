@@ -1,27 +1,26 @@
 # -*- coding: utf-8 -*-
-"""live_field_resolver - resolve IL2CPP field offsets BY NAME from the live process.
-
-This is the "intelligent base+offset" path: it needs NO dump, NO Il2CppDumper, NO
-bundle rebuild. Each Il2CppClass carries its own field table in memory:
-
-    klass + 0x80  -> Il2CppFieldInfo[]   (fields)
-    Il2CppFieldInfo (stride 0x20):
-        +0x00  const char*      name
-        +0x08  Il2CppType*      type
-        +0x10  Il2CppClass*     parent   (== this klass for its own fields)
-        +0x18  int32_t          offset   (field offset from the object start)
-
-So we resolve the klass by name (validated bundle RVA, else an in-memory name
-scan -- both already version-robust), then read its field table into
-``{name: offset}``. Because this IS the running game's own metadata, the offsets
-are always current: a weekly patch self-heals automatically with zero tooling.
-
-The field array is walked until ``FieldInfo.parent != klass`` (layout-independent
-stop -- no need to know the version-specific field_count offset). Static fields
-report offset 0 / a thread-static sentinel; the readers only ever query instance
-fields, and ``offset()`` rejects an implausible 0 so a name collision can't poison
-a real layout. Read-only; caches per-klass field maps for the session.
-"""
+# live_field_resolver - resolve IL2CPP field offsets BY NAME from the live process.
+#
+# This is the "intelligent base+offset" path: it needs NO dump, NO Il2CppDumper, NO
+# bundle rebuild. Each Il2CppClass carries its own field table in memory:
+#
+# klass + 0x80  -> Il2CppFieldInfo[]   (fields)
+# Il2CppFieldInfo (stride 0x20):
+# +0x00  const char*      name
+# +0x08  Il2CppType*      type
+# +0x10  Il2CppClass*     parent   (== this klass for its own fields)
+# +0x18  int32_t          offset   (field offset from the object start)
+#
+# So we resolve the klass by name (validated bundle RVA, else an in-memory name
+# scan -- both already version-robust), then read its field table into
+# ``{name: offset}``. Because this IS the running game's own metadata, the offsets
+# are always current: a weekly patch self-heals automatically with zero tooling.
+#
+# The field array is walked until ``FieldInfo.parent != klass`` (layout-independent
+# stop -- no need to know the version-specific field_count offset). Static fields
+# report offset 0 / a thread-static sentinel; the readers only ever query instance
+# fields, and ``offset()`` rejects an implausible 0 so a name collision can't poison
+# a real layout. Read-only; caches per-klass field maps for the session.
 from __future__ import annotations
 
 from typing import Dict, Optional
@@ -37,7 +36,7 @@ _MAX_PTR = 0x7FFF_FFFF_FFFF
 
 
 class LiveFieldResolver:
-    """``class_name``/``field_name`` -> offset, read live from the process metadata."""
+    # ``class_name``/``field_name`` -> offset, read live from the process metadata.
 
     def __init__(self, pm, *, klass_resolver=None, time_budget_s: float = 20.0):
         self.pm = pm
@@ -103,8 +102,8 @@ class LiveFieldResolver:
         return m
 
     def field_offset(self, class_name: str, field_name: str) -> Optional[int]:
-        """Live offset of ``class_name.field_name`` (tries the auto-property backing
-        field), or None when the klass/field can't be resolved from memory."""
+        # Live offset of ``class_name.field_name`` (tries the auto-property backing
+        # field), or None when the klass/field can't be resolved from memory.
         kp = self._resolve_klass(class_name)
         if not kp:
             return None

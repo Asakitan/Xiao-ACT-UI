@@ -1,4 +1,4 @@
-"""诊断: 打印 HP 周围 ±256 字节每个 8 字节槽的分类 (零 / 模块指针 / 堆指针 / 小整数)."""
+# 诊断: 打印 HP 周围 ±256 字节每个 8 字节槽的分类 (零 / 模块指针 / 堆指针 / 小整数).
 from __future__ import annotations
 import bisect, json, os, sys
 

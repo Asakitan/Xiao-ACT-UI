@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""Regression coverage for ergonomic ACT Python plugin SDK helpers."""
+# Regression coverage for ergonomic ACT Python plugin SDK helpers.
 
 from __future__ import annotations
 

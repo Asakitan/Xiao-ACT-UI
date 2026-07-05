@@ -1,8 +1,7 @@
-"""Menu bar layout: 9-slot vertical column of fisheye circular buttons.
-
-Renders to a single PIL.Image and exposes ``hit_rects`` so the
-``HitTester`` can map cursor positions back to button indexes.
-"""
+# Menu bar layout: 9-slot vertical column of fisheye circular buttons.
+#
+# Renders to a single PIL.Image and exposes ``hit_rects`` so the
+# ``HitTester`` can map cursor positions back to button indexes.
 
 from __future__ import annotations
 
@@ -53,8 +52,8 @@ _TRANSPARENT = (0, 0, 0, 0)
 
 
 def advance_animation(state) -> bool:
-    """Tick fisheye + hover lerp toward targets. Returns True if still
-    animating (caller should re-render next frame)."""
+    # Tick fisheye + hover lerp toward targets. Returns True if still
+    # animating (caller should re-render next frame).
     return bool(_CY_UI.popup_advance_menu_animation(
         state.btn_size, state.btn_hover_t, state.hover_btn_idx,
         len(state.menu_items), MAX_VISIBLE, float(SIZE), SIZE_EPS,
@@ -62,12 +61,12 @@ def advance_animation(state) -> bool:
 
 
 def hit_rects(state, x_off: int, y_off: int) -> List[Tuple[Tuple[int, int, int, int], int]]:
-    """Return [((x1,y1,x2,y2), idx), ...] for each visible button slot."""
+    # Return [((x1,y1,x2,y2), idx), ...] for each visible button slot.
     return _CY_UI.popup_menu_hit_rects(len(state.menu_items), MAX_VISIBLE, SLOT, x_off, y_off)
 
 
 def compose(state, bg_hex: str = '#010101') -> Image.Image:
-    """Render the menu column as RGBA. Width = MAX_SIZE; height = SLOT*N."""
+    # Render the menu column as RGBA. Width = MAX_SIZE; height = SLOT*N.
     n = visible_count(state)
     if n == 0:
         return Image.new('RGBA', (1, 1), _TRANSPARENT)

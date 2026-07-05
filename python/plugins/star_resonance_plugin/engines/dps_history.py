@@ -1,10 +1,9 @@
 # -*- coding: utf-8 -*-
-"""Finalized DPS encounter history storage.
-
-This module intentionally stays off the parser/DPS hot path: callers feed it
-already-finalized encounter reports, and it writes a compact rolling history
-with atomic file replacement.
-"""
+# Finalized DPS encounter history storage.
+#
+# This module intentionally stays off the parser/DPS hot path: callers feed it
+# already-finalized encounter reports, and it writes a compact rolling history
+# with atomic file replacement.
 
 import copy
 import csv
@@ -394,7 +393,7 @@ def load_exported_report_file(path: str) -> Dict[str, Any]:
 
 
 class DpsHistoryStore:
-    """Thread-safe rolling store for finalized DPS encounter summaries."""
+    # Thread-safe rolling store for finalized DPS encounter summaries.
 
     def __init__(self, path: str = DPS_HISTORY_PATH, limit: int = DEFAULT_HISTORY_LIMIT,
                  archive_path: Optional[str] = None,

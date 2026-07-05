@@ -1,31 +1,30 @@
 # -*- coding: utf-8 -*-
-"""Best-effort GDI object TYPE breakdown for a target process.
-
-GetGuiResources(GR_GDIOBJECTS) (used by handle_count_monitor.py) only
-gives a TOTAL GDI object count — no way to tell whether it's bitmaps,
-device contexts, regions, brushes, pens, or fonts that are climbing.
-There is no documented public API for a type breakdown; tools like
-Process Explorer / GDIView get it by walking the session-wide
-"GDI shared handle table", a structure whose layout is NOT part of the
-public Windows SDK — it's been reverse-engineered and published by the
-tool-author community and has stayed stable across Windows 7 through
-11 (64-bit), but is NOT guaranteed by Microsoft to stay that way.
-
-Because this is unofficial, this script cross-checks its own total
-count against the OFFICIAL GetGuiResources() number for the same PID
-before showing anything — if they don't roughly match, the layout
-assumption is wrong on this machine and the type breakdown below it is
-not trustworthy (this script says so explicitly rather than guessing).
-
-Usage:
-    python tools/gdi_type_breakdown.py --pid 12345
-    python tools/gdi_type_breakdown.py            # auto-detect by title "SAO"
-
-Read-only: only calls ReadProcessMemory, never WriteProcessMemory —
-cannot corrupt or destabilize the target process even if the layout
-assumptions below are wrong for this Windows build (a wrong read just
-returns garbage bytes we then sanity-check, not a crash).
-"""
+# Best-effort GDI object TYPE breakdown for a target process.
+#
+# GetGuiResources(GR_GDIOBJECTS) (used by handle_count_monitor.py) only
+# gives a TOTAL GDI object count — no way to tell whether it's bitmaps,
+# device contexts, regions, brushes, pens, or fonts that are climbing.
+# There is no documented public API for a type breakdown; tools like
+# Process Explorer / GDIView get it by walking the session-wide
+# "GDI shared handle table", a structure whose layout is NOT part of the
+# public Windows SDK — it's been reverse-engineered and published by the
+# tool-author community and has stayed stable across Windows 7 through
+# 11 (64-bit), but is NOT guaranteed by Microsoft to stay that way.
+#
+# Because this is unofficial, this script cross-checks its own total
+# count against the OFFICIAL GetGuiResources() number for the same PID
+# before showing anything — if they don't roughly match, the layout
+# assumption is wrong on this machine and the type breakdown below it is
+# not trustworthy (this script says so explicitly rather than guessing).
+#
+# Usage:
+# python tools/gdi_type_breakdown.py --pid 12345
+# python tools/gdi_type_breakdown.py            # auto-detect by title "SAO"
+#
+# Read-only: only calls ReadProcessMemory, never WriteProcessMemory —
+# cannot corrupt or destabilize the target process even if the layout
+# assumptions below are wrong for this Windows build (a wrong read just
+# returns garbage bytes we then sanity-check, not a crash).
 import argparse
 import ctypes
 import sys

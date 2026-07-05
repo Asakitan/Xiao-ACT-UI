@@ -1,14 +1,13 @@
-"""End-to-end rebuild: dump metadata, run Il2CppDumper, build bundle.
-
-Steps:
-  1. Resolve current Star.exe PID + GameAssembly.dll path/sha
-  2. Dump decrypted global-metadata.dat from the running process
-  3. Copy GameAssembly.dll into the dumper out dir
-  4. Run Il2CppDumper.exe (net6 self-contained) -> script.json + dump.cs
-  5. Run mem_probe.il2cpp.bundle_build to produce a new bundle.json under
-     mem_probe/il2cpp/out/<game_key8>/bundle.json
-  6. Register the bundle in the store
-"""
+# End-to-end rebuild: dump metadata, run Il2CppDumper, build bundle.
+#
+# Steps:
+# 1. Resolve current Star.exe PID + GameAssembly.dll path/sha
+# 2. Dump decrypted global-metadata.dat from the running process
+# 3. Copy GameAssembly.dll into the dumper out dir
+# 4. Run Il2CppDumper.exe (net6 self-contained) -> script.json + dump.cs
+# 5. Run mem_probe.il2cpp.bundle_build to produce a new bundle.json under
+# mem_probe/il2cpp/out/<game_key8>/bundle.json
+# 6. Register the bundle in the store
 from __future__ import annotations
 
 import json

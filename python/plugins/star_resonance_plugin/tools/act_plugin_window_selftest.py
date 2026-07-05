@@ -1,11 +1,10 @@
 # -*- coding: utf-8 -*-
-"""Regression coverage for plugin panel windows: declared size + open_window.
-
-A plugin declares per-panel window size on ``register_ui_panel`` (width/height/
-min_*), and asks the host to pop a panel into its own window via
-``ctx.open_window(panel_id)`` (emits ``plugin_open_window``). Host renderers use
-the declared size and fall back to a default when absent.
-"""
+# Regression coverage for plugin panel windows: declared size + open_window.
+#
+# A plugin declares per-panel window size on ``register_ui_panel`` (width/height/
+# min_*), and asks the host to pop a panel into its own window via
+# ``ctx.open_window(panel_id)`` (emits ``plugin_open_window``). Host renderers use
+# the declared size and fall back to a default when absent.
 
 from __future__ import annotations
 

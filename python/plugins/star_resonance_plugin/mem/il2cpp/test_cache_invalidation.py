@@ -1,7 +1,6 @@
-"""tests for instance_cache - 验证失效逻辑 (无 200s 扫描).
-
-只测 validate_cache_entry 的鉴别能力, 不触发全堆扫.
-"""
+# tests for instance_cache - 验证失效逻辑 (无 200s 扫描).
+#
+# 只测 validate_cache_entry 的鉴别能力, 不触发全堆扫.
 from __future__ import annotations
 
 import os
@@ -24,7 +23,7 @@ KEY = _key(CLS, SENT_FIELD)
 
 
 def test_with_cache_mod(name: str, mutator) -> bool:
-    """临时改 cache, 校验, 恢复. 返回 True = 校验拒绝(预期)."""
+    # 临时改 cache, 校验, 恢复. 返回 True = 校验拒绝(预期).
     cache = _load(_DEFAULT_CACHE)
     if KEY not in cache:
         print(f"  [SKIP {name}] cache 没有 baseline entry")

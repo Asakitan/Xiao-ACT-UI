@@ -1,15 +1,14 @@
-"""Shared ACT capability parity contract for WebView and Entity UIs.
-
-This module is intentionally UI-framework neutral.  It defines the canonical
-capability matrix once, then lets WebView and Entity adapters declare how they
-expose the same capabilities, actions, and payload fields.
-
-Run from ``sao_auto`` with::
-
-    python -m tools.act_ui_parity
-
-The command exits non-zero if the default WebView/Entity contracts drift.
-"""
+# Shared ACT capability parity contract for WebView and Entity UIs.
+#
+# This module is intentionally UI-framework neutral.  It defines the canonical
+# capability matrix once, then lets WebView and Entity adapters declare how they
+# expose the same capabilities, actions, and payload fields.
+#
+# Run from ``sao_auto`` with::
+#
+# python -m tools.act_ui_parity
+#
+# The command exits non-zero if the default WebView/Entity contracts drift.
 
 from __future__ import annotations
 
@@ -28,7 +27,7 @@ ENTITY_UI: UiKind = "entity"
 
 @dataclass(frozen=True)
 class CapabilitySpec:
-    """Canonical ACT capability shared by every UI surface."""
+    # Canonical ACT capability shared by every UI surface.
 
     capability_id: str
     title: str
@@ -40,7 +39,7 @@ class CapabilitySpec:
 
 @dataclass(frozen=True)
 class CapabilityBinding:
-    """One UI adapter's exposure of a canonical ACT capability."""
+    # One UI adapter's exposure of a canonical ACT capability.
 
     capability_id: str
     actions: tuple[str, ...]
@@ -52,7 +51,7 @@ class CapabilityBinding:
 
 @dataclass(frozen=True)
 class UiAdapterContract:
-    """Declared capability surface for one UI adapter."""
+    # Declared capability surface for one UI adapter.
 
     ui_kind: UiKind
     bindings: Mapping[str, CapabilityBinding]
@@ -60,7 +59,7 @@ class UiAdapterContract:
 
 @dataclass(frozen=True)
 class ParityIssue:
-    """A validation problem that must block ACT UI delivery."""
+    # A validation problem that must block ACT UI delivery.
 
     code: str
     message: str
@@ -77,12 +76,11 @@ class ParityIssue:
 
 
 def build_capability_registry() -> dict[str, CapabilitySpec]:
-    """Return the canonical ACT capability matrix.
-
-    The registry is the source of truth.  A feature is not accepted as done
-    unless both WebView and Entity expose every capability ID here with the same
-    required actions and shared payload fields.
-    """
+    # Return the canonical ACT capability matrix.
+    #
+    # The registry is the source of truth.  A feature is not accepted as done
+    # unless both WebView and Entity expose every capability ID here with the same
+    # required actions and shared payload fields.
 
     specs = (
         CapabilitySpec(
@@ -306,7 +304,7 @@ def build_default_adapter_contract(
     ui_kind: UiKind,
     registry: Mapping[str, CapabilitySpec] | None = None,
 ) -> UiAdapterContract:
-    """Build the current expected contract for a first-party UI adapter."""
+    # Build the current expected contract for a first-party UI adapter.
 
     if ui_kind not in {WEBVIEW_UI, ENTITY_UI}:
         raise ValueError(f"unsupported ACT UI kind: {ui_kind!r}")
@@ -333,7 +331,7 @@ def build_default_adapter_contract(
 
 
 def build_default_contracts() -> tuple[UiAdapterContract, UiAdapterContract]:
-    """Return the baseline WebView and Entity adapter contracts."""
+    # Return the baseline WebView and Entity adapter contracts.
 
     registry = build_capability_registry()
     return (
@@ -346,7 +344,7 @@ def validate_adapter_contract(
     adapter: UiAdapterContract,
     registry: Mapping[str, CapabilitySpec] | None = None,
 ) -> list[ParityIssue]:
-    """Validate one UI adapter against the canonical registry."""
+    # Validate one UI adapter against the canonical registry.
 
     registry = registry or build_capability_registry()
     issues: list[ParityIssue] = []
@@ -439,7 +437,7 @@ def validate_ui_parity(
     entity: UiAdapterContract,
     registry: Mapping[str, CapabilitySpec] | None = None,
 ) -> list[ParityIssue]:
-    """Validate that WebView and Entity expose an equivalent ACT surface."""
+    # Validate that WebView and Entity expose an equivalent ACT surface.
 
     registry = registry or build_capability_registry()
     issues = [
@@ -496,7 +494,7 @@ def validate_ui_parity(
 
 
 def contract_to_dict(adapter: UiAdapterContract) -> dict[str, Any]:
-    """Serialize an adapter contract for selftest/report output."""
+    # Serialize an adapter contract for selftest/report output.
 
     return {
         "ui_kind": adapter.ui_kind,
@@ -515,7 +513,7 @@ def contract_to_dict(adapter: UiAdapterContract) -> dict[str, Any]:
 
 
 def registry_to_dict(registry: Mapping[str, CapabilitySpec]) -> dict[str, Any]:
-    """Serialize the canonical registry for diagnostics."""
+    # Serialize the canonical registry for diagnostics.
 
     return {
         capability_id: {
@@ -530,7 +528,7 @@ def registry_to_dict(registry: Mapping[str, CapabilitySpec]) -> dict[str, Any]:
 
 
 def run_selftest() -> dict[str, Any]:
-    """Run the baseline ACT WebView/Entity parity selftest."""
+    # Run the baseline ACT WebView/Entity parity selftest.
 
     registry = build_capability_registry()
     webview, entity = build_default_contracts()
@@ -557,7 +555,7 @@ def assert_ui_parity(
     entity: UiAdapterContract,
     registry: Mapping[str, CapabilitySpec] | None = None,
 ) -> None:
-    """Raise ``AssertionError`` if the two UI adapters are not 1:1."""
+    # Raise ``AssertionError`` if the two UI adapters are not 1:1.
 
     issues = validate_ui_parity(webview, entity, registry)
     if issues:
@@ -566,7 +564,7 @@ def assert_ui_parity(
 
 
 def main(argv: Sequence[str] | None = None) -> int:
-    """CLI entry point used by smoke tests and future ``act_replay.selftest``."""
+    # CLI entry point used by smoke tests and future ``act_replay.selftest``.
 
     _ = argv
     report = run_selftest()

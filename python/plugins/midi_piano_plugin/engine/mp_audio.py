@@ -1,15 +1,14 @@
 # -*- coding: utf-8 -*-
-"""mp_audio — MIDI 试听（在本机扬声器播放，听演奏效果，不驱动游戏）。
-
-MIDI 试听后端链 FluidSynth → WinMCI → pygame 中，FluidSynth 需额外 DLL + 30MB
-SoundFont，这里**只取无需额外资源的两条后端**：
-
-  1. WinMCI —— 调用 Windows 自带 MIDI 合成器（winmm.mciSendStringW），零依赖、零音色库；
-  2. pygame —— SAO-UI 已自带的依赖，作为 WinMCI 不可用时的后备。
-
-试听播放的是**原始 MIDI 文件**（曲子本来的样子）。一切操作都防御性包裹，绝不让试听
-异常波及插件主流程。
-"""
+# mp_audio — MIDI 试听（在本机扬声器播放，听演奏效果，不驱动游戏）。
+#
+# MIDI 试听后端链 FluidSynth → WinMCI → pygame 中，FluidSynth 需额外 DLL + 30MB
+# SoundFont，这里**只取无需额外资源的两条后端**：
+#
+# 1. WinMCI —— 调用 Windows 自带 MIDI 合成器（winmm.mciSendStringW），零依赖、零音色库；
+# 2. pygame —— SAO-UI 已自带的依赖，作为 WinMCI 不可用时的后备。
+#
+# 试听播放的是**原始 MIDI 文件**（曲子本来的样子）。一切操作都防御性包裹，绝不让试听
+# 异常波及插件主流程。
 
 from __future__ import annotations
 

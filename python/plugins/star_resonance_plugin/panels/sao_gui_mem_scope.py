@@ -1,10 +1,9 @@
 # -*- coding: utf-8 -*-
-"""Star Resonance Entity-mode memory-scan explorer (Mem Scope) panel.
-
-This is a game/plugin-owned surface. It consumes the common runtime JSON
-contract (``act_mem_scope_status`` + ``act_mem_search*``) but is registered and
-opened by the Star Resonance plugin, not by the platform menu shell.
-"""
+# Star Resonance Entity-mode memory-scan explorer (Mem Scope) panel.
+#
+# This is a game/plugin-owned surface. It consumes the common runtime JSON
+# contract (``act_mem_scope_status`` + ``act_mem_search*``) but is registered and
+# opened by the Star Resonance plugin, not by the platform menu shell.
 
 from __future__ import annotations
 
@@ -77,7 +76,7 @@ def _finite_int(value: Any, default: int = 0, *, lo: Optional[int] = None,
 
 
 class MemScopePanel:
-    """内存浏览器（CE-lite，全只读）：暴露 mem_scan 全部可读资源 + 手动按值搜索。"""
+    # 内存浏览器（CE-lite，全只读）：暴露 mem_scan 全部可读资源 + 手动按值搜索。
 
     def __init__(self, root: tk.Misc, owner: Any):
         self.root = root

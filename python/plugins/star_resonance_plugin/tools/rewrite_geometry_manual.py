@@ -1,17 +1,16 @@
 # -*- coding: utf-8 -*-
-"""手动根据机制语义重写所有raid示例的geometry和dodge参数。
-
-基于:
-  1. 技能名语义(横扫=半场扇形, 分摊=聚集圈, 吐息=锥形等)
-  2. AI范围数据(optMax作为有效半径)
-  3. BulletShape几何(扇形角度/线形宽度)
-  4. MMO通用机制尺寸常识
-
-规则:
-  - 已有source != "" 的几何不覆盖(认为是手动验证过的)
-  - 不改notes/alert/detect(保留现有的手写内容)
-  - 只改 geometry + 部分dodge方向
-"""
+# 手动根据机制语义重写所有raid示例的geometry和dodge参数。
+#
+# 基于:
+# 1. 技能名语义(横扫=半场扇形, 分摊=聚集圈, 吐息=锥形等)
+# 2. AI范围数据(optMax作为有效半径)
+# 3. BulletShape几何(扇形角度/线形宽度)
+# 4. MMO通用机制尺寸常识
+#
+# 规则:
+# - 已有source != "" 的几何不覆盖(认为是手动验证过的)
+# - 不改notes/alert/detect(保留现有的手写内容)
+# - 只改 geometry + 部分dodge方向
 from __future__ import annotations
 
 import json
@@ -28,8 +27,8 @@ _EXP = os.path.join(_ROOT, "exports", "boss_raids")
 # ── 按技能名/机制类型的标准几何 ─────────────────────────────────────────────
 
 def _infer_geometry(mech: dict, ai: List[float] = None) -> Tuple[dict, str]:
-    """根据机制名/kind/技能名推断正确的geometry和dodge direction。
-    返回 (geometry_dict, dodge_direction)。"""
+    # 根据机制名/kind/技能名推断正确的geometry和dodge direction。
+    # 返回 (geometry_dict, dodge_direction)。
     name = mech.get("name", "")
     kind = mech.get("kind", "")
     det = mech.get("detect", {})

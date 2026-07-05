@@ -1,18 +1,17 @@
 # -*- coding: utf-8 -*-
-"""mem_camera_reader - 读 gameplay 相机朝向 (read-only, auto-offset).
-
-WASD 是相机相对的: 按 W 角色朝"相机前向投影到地面"移动。要把"往世界某方向撤"
-翻成按键, 必须知道相机前向/右向的世界 XZ 向量。
-
-链路 (活体实证 game 2022.3.59f1):
-  CameraManager(堆扫, brain_字段→CinemachineBrain 校验)
-    brain_ → CinemachineBrain
-      <CurrentCameraState>k__BackingField (活字段表偏移, 内联 Cinemachine CameraState 结构)
-        → 结构内扫单位四元数 RawOrientation (自识别: |q|≈1 + 真实俯角 + 非轴对齐)
-
-相机前向 = q·(0,0,1), 右向 = q·(1,0,0), 各自投影到 XZ 平面归一化。
-结构内字段偏移随版本漂移, 故用"自识别四元数扫描"而非写死偏移 → 补丁自愈。
-"""
+# mem_camera_reader - 读 gameplay 相机朝向 (read-only, auto-offset).
+#
+# WASD 是相机相对的: 按 W 角色朝"相机前向投影到地面"移动。要把"往世界某方向撤"
+# 翻成按键, 必须知道相机前向/右向的世界 XZ 向量。
+#
+# 链路 (活体实证 game 2022.3.59f1):
+# CameraManager(堆扫, brain_字段→CinemachineBrain 校验)
+# brain_ → CinemachineBrain
+# <CurrentCameraState>k__BackingField (活字段表偏移, 内联 Cinemachine CameraState 结构)
+# → 结构内扫单位四元数 RawOrientation (自识别: |q|≈1 + 真实俯角 + 非轴对齐)
+#
+# 相机前向 = q·(0,0,1), 右向 = q·(1,0,0), 各自投影到 XZ 平面归一化。
+# 结构内字段偏移随版本漂移, 故用"自识别四元数扫描"而非写死偏移 → 补丁自愈。
 from __future__ import annotations
 
 import math
@@ -37,7 +36,7 @@ Vec2 = Tuple[float, float]
 
 
 def _quat_forward_xz(q) -> Optional[Vec2]:
-    """相机前向 q·(0,0,1) 投影到 XZ 平面归一化 (x, z)。"""
+    # 相机前向 q·(0,0,1) 投影到 XZ 平面归一化 (x, z)。
     qx, qy, qz, qw = q
     fx = 2.0 * (qx * qz + qw * qy)
     fz = 1.0 - 2.0 * (qx * qx + qy * qy)
@@ -48,7 +47,7 @@ def _quat_forward_xz(q) -> Optional[Vec2]:
 
 
 def _quat_right_xz(q) -> Optional[Vec2]:
-    """相机右向 q·(1,0,0) 投影到 XZ 平面归一化 (x, z)。"""
+    # 相机右向 q·(1,0,0) 投影到 XZ 平面归一化 (x, z)。
     qx, qy, qz, qw = q
     rx = 1.0 - 2.0 * (qy * qy + qz * qz)
     rz = 2.0 * (qx * qz - qw * qy)
@@ -64,7 +63,7 @@ def _quat_pitch_deg(q) -> float:
 
 
 class CameraReader:
-    """相机前向/右向世界 XZ 基向量读取 (auto-offset + 自识别四元数扫描)。"""
+    # 相机前向/右向世界 XZ 基向量读取 (auto-offset + 自识别四元数扫描)。
 
     def __init__(self, dps_source):
         self._src = dps_source
@@ -109,8 +108,8 @@ class CameraReader:
         self._off_camstate = int(oc) if oc else BRAIN_CAMSTATE_OFF
 
     def _scan_region_for_cammgr(self, r, kp: int, _cy) -> bool:
-        """Cython klass-sentinel scan of one private region (zero-copy scratch).
-        Validates each hit's brain_ -> CinemachineBrain; sets self._cammgr/_brain."""
+        # Cython klass-sentinel scan of one private region (zero-copy scratch).
+        # Validates each hit's brain_ -> CinemachineBrain; sets self._cammgr/_brain.
         pm = self._pm
         read_into = getattr(pm, "read_bytes_into", None)
         chunk = 16 * 1024 * 1024
@@ -155,7 +154,7 @@ class CameraReader:
         return False
 
     def _locate(self) -> bool:
-        """定位 CameraManager 实例并取 brain_ (校验 brain_ 指向 CinemachineBrain)。"""
+        # 定位 CameraManager 实例并取 brain_ (校验 brain_ 指向 CinemachineBrain)。
         # 缓存有效性: cammgr 仍是 CameraManager 且 brain_ 仍是 CinemachineBrain
         if self._brain and self._obj_kname(self._brain) == BRAIN_CLASS:
             return True
@@ -197,10 +196,10 @@ class CameraReader:
 
     def _find_orientation_quat(self, player_pos=None
                                ) -> Optional[Tuple[float, float, float, float]]:
-        """定位 RawOrientation 四元数。靠四元数分量做启发式不稳(随相机角度剧变,
-        yaw≈0 时只 2 个分量非零)。改用 **RawPosition 锚定**: 相机世界坐标必在玩家
-        附近, 找到它→紧随其后(0x10~0x30 内)的单位四元数就是 RawOrientation。
-        偏移找到后缓存, 之后直读 + 单位校验, 失效再重找 (auto-offset 补丁自愈)。"""
+        # 定位 RawOrientation 四元数。靠四元数分量做启发式不稳(随相机角度剧变,
+        # yaw≈0 时只 2 个分量非零)。改用 **RawPosition 锚定**: 相机世界坐标必在玩家
+        # 附近, 找到它→紧随其后(0x10~0x30 内)的单位四元数就是 RawOrientation。
+        # 偏移找到后缓存, 之后直读 + 单位校验, 失效再重找 (auto-offset 补丁自愈)。
         base = self._brain + self._off_camstate
         buf = self._pm.read_bytes(base, CAMSTATE_SCAN_LEN)
         if not buf or len(buf) < 16:
@@ -254,8 +253,8 @@ class CameraReader:
         return None
 
     def read_basis(self, player_pos=None) -> Optional[dict]:
-        """返回 {forward:(x,z), right:(x,z), yaw_deg} 世界 XZ 基, 或 None。
-        传 player_pos 可用位置锚定稳健定位相机朝向四元数 (强烈建议传)。"""
+        # 返回 {forward:(x,z), right:(x,z), yaw_deg} 世界 XZ 基, 或 None。
+        # 传 player_pos 可用位置锚定稳健定位相机朝向四元数 (强烈建议传)。
         try:
             if not self._locate():
                 return None

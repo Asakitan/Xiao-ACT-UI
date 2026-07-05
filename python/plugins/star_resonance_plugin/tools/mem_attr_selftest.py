@@ -1,15 +1,14 @@
 # -*- coding: utf-8 -*-
-"""Offline selftest for F-B ZAttrReader (no live game required).
-
-Synthesises a ZAttrCollection -> mixItemDict_ (Dictionary<uint, IMixAttr>) ->
-IMixAttr objects whose Value sits at a klass-specific offset, then verifies:
-  - read_attr_ptrs walks the dict
-  - calibrate() discovers the per-klass Value offset from TCP-known anchors
-  - read_attrs() returns the correct values for HP / MAX_HP / breaking_stage / overdrive
-  - ga_base change invalidates the calibration
-
-Run:  python tools/mem_attr_selftest.py
-"""
+# Offline selftest for F-B ZAttrReader (no live game required).
+#
+# Synthesises a ZAttrCollection -> mixItemDict_ (Dictionary<uint, IMixAttr>) ->
+# IMixAttr objects whose Value sits at a klass-specific offset, then verifies:
+# - read_attr_ptrs walks the dict
+# - calibrate() discovers the per-klass Value offset from TCP-known anchors
+# - read_attrs() returns the correct values for HP / MAX_HP / breaking_stage / overdrive
+# - ga_base change invalidates the calibration
+#
+# Run:  python tools/mem_attr_selftest.py
 from __future__ import annotations
 
 import os
@@ -39,7 +38,7 @@ INT_VALUE_OFF = 0x18
 
 
 class FakeMem:
-    """Flat byte-addressable memory with a bump allocator + StarProcess reads."""
+    # Flat byte-addressable memory with a bump allocator + StarProcess reads.
 
     def __init__(self, base=0x0000_0002_0000_0000, size=0x20000):
         self.base = base
@@ -101,7 +100,7 @@ def _mk_imixattr(mem, klass, value, value_off, width):
 
 
 def _mk_dict(mem, pairs):
-    """pairs = [(attr_id, imixattr_ptr)]. Returns the Dictionary object addr."""
+    # pairs = [(attr_id, imixattr_ptr)]. Returns the Dictionary object addr.
     n = len(pairs)
     entries = mem.alloc(ARRAY_ELEMS_OFF + (n + 2) * ENTRY_SIZE)
     mem.wu32(entries + 0x18, n + 2)           # array length (slots)
@@ -136,7 +135,7 @@ def check(name, cond):
 
 
 def test_entity_integration():
-    """F-C: synth ZEntity -> attrs_ -> calibrated ZAttrReader -> numeric fields."""
+    # F-C: synth ZEntity -> attrs_ -> calibrated ZAttrReader -> numeric fields.
     print("test_entity_integration (F-C)")
     try:
         from plugins.star_resonance_plugin.mem.il2cpp.mem_entity_mgr import EntityMgrReader, EntitySnap

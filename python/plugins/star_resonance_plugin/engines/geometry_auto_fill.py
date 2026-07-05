@@ -1,14 +1,13 @@
 # -*- coding: utf-8 -*-
-"""geometry_auto_fill - 自动把读到的几何智能填进机制壳子 (fill_geometry 的智能调度).
-
-两种填法:
-  1. **按 skill_id 精确填** (运行时时间关联, 最准): boss 放招 X 的瞬间场上新出现的几何实体
-     = 招 X 的几何 → 直接填进 detect.skill_ids 含 X 的机制。fill_by_skill_id()。
-  2. **按名字相似度填** (FieldTable 领域几何, best-effort): field 名 vs 机制名的中文 2-gram
-     重叠打分, 高分(且 boss 标识一致)才填, 避免错填。auto_fill_from_fields()。
-
-纯逻辑可测 (匹配/填入不碰内存); 内存读由 FieldGeometryReader / 运行时采集器提供。
-"""
+# geometry_auto_fill - 自动把读到的几何智能填进机制壳子 (fill_geometry 的智能调度).
+#
+# 两种填法:
+# 1. **按 skill_id 精确填** (运行时时间关联, 最准): boss 放招 X 的瞬间场上新出现的几何实体
+# = 招 X 的几何 → 直接填进 detect.skill_ids 含 X 的机制。fill_by_skill_id()。
+# 2. **按名字相似度填** (FieldTable 领域几何, best-effort): field 名 vs 机制名的中文 2-gram
+# 重叠打分, 高分(且 boss 标识一致)才填, 避免错填。auto_fill_from_fields()。
+#
+# 纯逻辑可测 (匹配/填入不碰内存); 内存读由 FieldGeometryReader / 运行时采集器提供。
 from __future__ import annotations
 
 from typing import Dict, List, Optional
@@ -20,7 +19,7 @@ def _bigrams(s: str) -> set:
 
 
 def name_similarity(a: str, b: str) -> float:
-    """中文 2-gram 重叠相似度 0~1 (Dice 系数)。"""
+    # 中文 2-gram 重叠相似度 0~1 (Dice 系数)。
     ga, gb = _bigrams(a), _bigrams(b)
     if not ga or not gb:
         return 0.0
@@ -42,8 +41,8 @@ def _set_geometry(mech: dict, shape: str, radius: float, inner: float = 0.0,
 def fill_by_skill_id(profile: dict, skill_id: int, *, shape: str, radius: float,
                      inner: float = 0.0, angle: float = 0.0, width: float = 0.0,
                      center: str = "boss", source: str = "runtime") -> int:
-    """运行时时间关联结果: 把几何精确填进 detect.skill_ids 含 skill_id 的机制。返回填的条数。
-    不覆盖用户手填(source=='manual') — 显式手填优先于自动测量。"""
+    # 运行时时间关联结果: 把几何精确填进 detect.skill_ids 含 skill_id 的机制。返回填的条数。
+    # 不覆盖用户手填(source=='manual') — 显式手填优先于自动测量。
     n = 0
     for m in (profile or {}).get("mechanics", []) or []:
         ids = ((m.get("detect") or {}).get("skill_ids")) or []
@@ -59,8 +58,8 @@ def fill_by_skill_id(profile: dict, skill_id: int, *, shape: str, radius: float,
 
 def auto_fill_from_fields(profile: dict, field_geoms: List[Dict],
                           min_score: float = 0.5) -> List[Dict]:
-    """FieldTable 领域几何 → 名字相似度匹配机制, 高分才填。返回填入记录 [{mech, field, score}]。
-    只填 source 未填(占位)的机制, 不覆盖已有(运行时/手填优先)。"""
+    # FieldTable 领域几何 → 名字相似度匹配机制, 高分才填。返回填入记录 [{mech, field, score}]。
+    # 只填 source 未填(占位)的机制, 不覆盖已有(运行时/手填优先)。
     filled = []
     boss_pat = (profile or {}).get("target_name_pattern", "")
     for m in (profile or {}).get("mechanics", []) or []:

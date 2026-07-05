@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""Selftest for live name cross-reference runtime evidence handling."""
+# Selftest for live name cross-reference runtime evidence handling.
 from __future__ import annotations
 
 import _bootstrap  # noqa: F401

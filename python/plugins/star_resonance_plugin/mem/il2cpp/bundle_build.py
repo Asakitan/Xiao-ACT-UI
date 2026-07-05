@@ -1,30 +1,29 @@
-"""bundle_build - 把 script.json + dump_cs_index 子集 + GA 校验和打包.
-
-dump_cs_index.json (15.5MB) 和 script.json (248MB) 太大, 不适合分发.
-本工具按"需要的类列表"抽取最小子集, 输出单一 JSON bundle.
-
-bundle 结构:
-  {
-    "meta": {
-        "dump_id": "ef9ef95a",
-        "ga_module": "GameAssembly.dll",
-        "ga_size": <int>,
-        "ga_sha256_first_1mb": "<hex>",   // 用于运行时校验 dump 是否还匹配
-        "built_at": <unix>,
-        "il2cpp_version": "31",
-    },
-    "klass_rva": { "Zproto.CharSerialize": <rva>, ... },
-    "type_rva":  { "Zproto.UserFightAttr": <rva>, ... },     // typeof 桥
-    "classes": {
-        "Zproto.CharSerialize": {
-            "namespace": "Zproto",
-            "type_def_index": 10518,
-            "fields": [{name, type, offset, is_static}, ...]
-        },
-        ...
-    }
-  }
-"""
+# bundle_build - 把 script.json + dump_cs_index 子集 + GA 校验和打包.
+#
+# dump_cs_index.json (15.5MB) 和 script.json (248MB) 太大, 不适合分发.
+# 本工具按"需要的类列表"抽取最小子集, 输出单一 JSON bundle.
+#
+# bundle 结构:
+# {
+# "meta": {
+# "dump_id": "ef9ef95a",
+# "ga_module": "GameAssembly.dll",
+# "ga_size": <int>,
+# "ga_sha256_first_1mb": "<hex>",   // 用于运行时校验 dump 是否还匹配
+# "built_at": <unix>,
+# "il2cpp_version": "31",
+# },
+# "klass_rva": { "Zproto.CharSerialize": <rva>, ... },
+# "type_rva":  { "Zproto.UserFightAttr": <rva>, ... },     // typeof 桥
+# "classes": {
+# "Zproto.CharSerialize": {
+# "namespace": "Zproto",
+# "type_def_index": 10518,
+# "fields": [{name, type, offset, is_static}, ...]
+# },
+# ...
+# }
+# }
 from __future__ import annotations
 
 import argparse
@@ -116,14 +115,13 @@ _GENERIC_REF_RE = __import__('re').compile(r'<\s*([A-Za-z_][\w`]*)(?:\s*,\s*([A-
 
 
 def _extract_generic_refs(type_str: str) -> List[str]:
-    """Pull all reference type names out of generic signatures.
-
-    Examples:
-        RepeatedField<SkillCDInfo>          -> ['SkillCDInfo']
-        MapField<uint, EnergyInfo>          -> ['EnergyInfo']
-        List<RepeatedField<Zproto.SkillCD>> -> ['Zproto.SkillCD']
-        EnergyItem                            -> ['EnergyItem']
-    """
+    # Pull all reference type names out of generic signatures.
+    #
+    # Examples:
+    # RepeatedField<SkillCDInfo>          -> ['SkillCDInfo']
+    # MapField<uint, EnergyInfo>          -> ['EnergyInfo']
+    # List<RepeatedField<Zproto.SkillCD>> -> ['Zproto.SkillCD']
+    # EnergyItem                            -> ['EnergyItem']
     if not type_str:
         return []
     base = type_str.split("<", 1)[0].strip("[] ")
@@ -137,7 +135,7 @@ def _extract_generic_refs(type_str: str) -> List[str]:
 
 def expand_referenced_classes(dci: DumpCsIndex, seeds: Iterable[str],
                               max_depth: int = 1) -> Set[str]:
-    """从种子类的字段类型递归展开 (引用类型才进 dci) - 一阶即可."""
+    # 从种子类的字段类型递归展开 (引用类型才进 dci) - 一阶即可.
     result: Set[str] = set()
     queue = list(seeds)
     depth = {s: 0 for s in seeds}

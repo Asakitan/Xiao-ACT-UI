@@ -1,15 +1,14 @@
-"""Export the live StringPoolManager localization string table.
-
-Read-only IL2CPP probe.  It resolves the reproducible runtime chain:
-
-    ZUtil.ZSingleton<StringPoolManager>.static_fields
-      -> instance_
-      -> Panda.Module.StringPoolManager.impl_
-      -> Panda.Module.StringPoolRuntimeImpl.allLocalizationString_
-
-The full array export is still runtime evidence, but the owner chain gives a
-stable class/static anchor for the current build instead of a naked heap table.
-"""
+# Export the live StringPoolManager localization string table.
+#
+# Read-only IL2CPP probe.  It resolves the reproducible runtime chain:
+#
+# ZUtil.ZSingleton<StringPoolManager>.static_fields
+# -> instance_
+# -> Panda.Module.StringPoolManager.impl_
+# -> Panda.Module.StringPoolRuntimeImpl.allLocalizationString_
+#
+# The full array export is still runtime evidence, but the owner chain gives a
+# stable class/static anchor for the current build instead of a naked heap table.
 
 from __future__ import annotations
 

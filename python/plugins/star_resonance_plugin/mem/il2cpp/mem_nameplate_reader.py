@@ -1,28 +1,27 @@
 # -*- coding: utf-8 -*-
-"""mem_nameplate_reader - read the game's *rendered* entity name from the
-world-space nameplate widgets (read-only).
-
-The authoritative display name an entity shows over its head is NOT stored on the
-ZEntity, its combat table row, or the localization pool in a template-keyed way --
-it lives in the nameplate UI widget. Each rendered nameplate widget has a fixed
-field layout:
-
-    widget + 0x10 : long  Uuid          (== ZEntity.Uuid, the live anchor)
-    widget + 0x60 : Il2CppString  Text   ('NN 级 <name>' for mobs, bare for NPCs)
-
-We string-anchor on the live entity uuids (already enumerated by the entity
-provider) instead of a version-fragile widget klass: scan the heap for any u64
-equal to a live uuid (Cython find_aligned_u64_in_set), and where the slot 0x50
-ahead decodes to a CJK/printable Il2CppString, that's the entity's nameplate.
-Strip the 'NN 级 ' level prefix to get the bare name.
-
-This makes the read auto-offset (the uuid is the anchor, the two field offsets are
-structural il2cpp offsets, stable across ASLR) and needs no disassembly. The heavy
-heap sweep is the Cython multi-needle scan; the per-hit work is a couple of reads.
-
-Verified live (2026-06-08, training hall): baseid 114->敌方木桩, 115->精英敌方木桩,
-121->友方木桩, 122->精英守护木桩 (corrects the offline JSON's generic '木桩').
-"""
+# mem_nameplate_reader - read the game's *rendered* entity name from the
+# world-space nameplate widgets (read-only).
+#
+# The authoritative display name an entity shows over its head is NOT stored on the
+# ZEntity, its combat table row, or the localization pool in a template-keyed way --
+# it lives in the nameplate UI widget. Each rendered nameplate widget has a fixed
+# field layout:
+#
+# widget + 0x10 : long  Uuid          (== ZEntity.Uuid, the live anchor)
+# widget + 0x60 : Il2CppString  Text   ('NN 级 <name>' for mobs, bare for NPCs)
+#
+# We string-anchor on the live entity uuids (already enumerated by the entity
+# provider) instead of a version-fragile widget klass: scan the heap for any u64
+# equal to a live uuid (Cython find_aligned_u64_in_set), and where the slot 0x50
+# ahead decodes to a CJK/printable Il2CppString, that's the entity's nameplate.
+# Strip the 'NN 级 ' level prefix to get the bare name.
+#
+# This makes the read auto-offset (the uuid is the anchor, the two field offsets are
+# structural il2cpp offsets, stable across ASLR) and needs no disassembly. The heavy
+# heap sweep is the Cython multi-needle scan; the per-hit work is a couple of reads.
+#
+# Verified live (2026-06-08, training hall): baseid 114->敌方木桩, 115->精英敌方木桩,
+# 121->友方木桩, 122->精英守护木桩 (corrects the offline JSON's generic '木桩').
 from __future__ import annotations
 
 import re
@@ -56,7 +55,7 @@ def _plaus(p: Optional[int]) -> bool:
 
 
 class NameplateReader:
-    """Harvest {uuid -> rendered name strings} from nameplate widgets (read-only)."""
+    # Harvest {uuid -> rendered name strings} from nameplate widgets (read-only).
 
     def __init__(self, pm):
         self.pm = pm
@@ -86,7 +85,7 @@ class NameplateReader:
 
     @staticmethod
     def strip_level(text: str) -> Tuple[str, bool]:
-        """Return (bare_name, had_level_prefix). 'NN 级 敌方木桩' -> ('敌方木桩', True)."""
+        # Return (bare_name, had_level_prefix). 'NN 级 敌方木桩' -> ('敌方木桩', True).
         m = _LEVEL_RE.match(text or "")
         if m:
             return text[m.end():].strip(), True
@@ -97,14 +96,13 @@ class NameplateReader:
 
     def _scan_region(self, r, want, by_uuid: Dict[int, List[Tuple[int, str]]],
                      scratch=None) -> bool:
-        """Scan one region for uuid slots and decode the plate (type@+0x40, name@+0x50
-        ahead of the uuid). Appends (plate_type, name) into ``by_uuid``. Returns True
-        if this region held a confirmed nameplate (so it's remembered as a hint).
-
-        ``scratch`` is an optional reusable bytearray (allocated once per harvest by
-        _collect): the chunk is RPM'd straight into it and scanned in place, so the
-        sweep does zero per-chunk allocations/copies.
-        """
+        # Scan one region for uuid slots and decode the plate (type@+0x40, name@+0x50
+        # ahead of the uuid). Appends (plate_type, name) into ``by_uuid``. Returns True
+        # if this region held a confirmed nameplate (so it's remembered as a hint).
+        #
+        # ``scratch`` is an optional reusable bytearray (allocated once per harvest by
+        # _collect): the chunk is RPM'd straight into it and scanned in place, so the
+        # sweep does zero per-chunk allocations/copies.
         had = False
         off = 0
         read_into = getattr(self.pm, "read_bytes_into", None)
@@ -141,12 +139,11 @@ class NameplateReader:
         return had
 
     def _collect(self, uuids) -> Dict[int, List[Tuple[int, str]]]:
-        """Return {uuid -> [(plate_type, nameplate string), ...]}.
-
-        Warm path: scan only the remembered hint region(s) (the nameplate region is
-        stable within a session). Cold/stale path: full private-heap sweep, which
-        rebuilds the hint. Keeps the heavy scan in Cython and warm reads cheap.
-        """
+        # Return {uuid -> [(plate_type, nameplate string), ...]}.
+        #
+        # Warm path: scan only the remembered hint region(s) (the nameplate region is
+        # stable within a session). Cold/stale path: full private-heap sweep, which
+        # rebuilds the hint. Keeps the heavy scan in Cython and warm reads cheap.
         want = {int(u) & 0xFFFFFFFFFFFFFFFF for u in uuids if int(u) > 0}
         by_uuid: Dict[int, List[Tuple[int, str]]] = {}
         if not want:
@@ -174,16 +171,15 @@ class NameplateReader:
         return by_uuid
 
     def harvest(self, uuid_to_base: Dict[int, int]) -> Dict[str, object]:
-        """Scan nameplates for the given live entities.
-
-        ``uuid_to_base`` maps live ZEntity.Uuid -> base_id (template id). Returns:
-          {
-            'names':     {base_id: bare_name},   # confident (level-prefixed mob, or
-                                                  #  a uuid with a single bare string)
-            'ambiguous': {base_id: [candidates]}, # uuid with >1 bare string (NPC name+title)
-            'by_uuid':   {uuid: [raw strings]},
-          }
-        """
+        # Scan nameplates for the given live entities.
+        #
+        # ``uuid_to_base`` maps live ZEntity.Uuid -> base_id (template id). Returns:
+        # {
+        # 'names':     {base_id: bare_name},   # confident (level-prefixed mob, or
+        # #  a uuid with a single bare string)
+        # 'ambiguous': {base_id: [candidates]}, # uuid with >1 bare string (NPC name+title)
+        # 'by_uuid':   {uuid: [raw strings]},
+        # }
         uuid_to_base = {int(u): int(b) for u, b in (uuid_to_base or {}).items() if int(u) > 0}
         by_uuid = self._collect(uuid_to_base.keys())
         self.last_raw = {u: [s for _, s in plates] for u, plates in by_uuid.items()}

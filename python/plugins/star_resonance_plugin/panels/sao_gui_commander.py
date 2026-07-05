@@ -36,7 +36,7 @@ _ELLIPSIS_FONT_CACHE: Dict[Any, Any] = {}
 
 
 def _tk_ellipsize(text: str, font_spec: Any, max_px: int) -> str:
-    """按像素预算给 Tk Label 文本加省略号 (Tk 无原生 ellipsis)。"""
+    # 按像素预算给 Tk Label 文本加省略号 (Tk 无原生 ellipsis)。
     if max_px <= 0 or not text:
         return text
     try:

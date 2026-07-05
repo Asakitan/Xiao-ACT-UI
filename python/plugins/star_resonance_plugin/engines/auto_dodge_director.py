@@ -1,19 +1,18 @@
 # -*- coding: utf-8 -*-
-"""auto_dodge_director - 定向自动躲避: 把"往某方向撤"翻成相机相对的 WASD 按住。
-
-设计原则 (与活体逆向结论对齐):
-- **本地玩家坐标 + 相机前向/右向基** 已活体实证可读 (mem_player_position_reader /
-  mem_camera_reader), 是 100% 可靠的躲避基础。
-- **相机相对方向** (向后/左/右/斜向) 是最稳的躲避: 打 boss 时面朝它, "向后撤"=脱离
-  boss, 直接映射到 W/A/S/D, 连相机都不必读 → 永远正确。
-- **世界方向 / 撤向世界坐标点** 需要相机基把世界向量投影到 WASD: dot(d,前向)→W/S,
-  dot(d,右向)→D/A。相机基已可读。
-- **远程实体(boss)坐标** 远程同步不写本地 lastPosition_, 字段需进本确认 → "远离boss"
-  模式留接口但默认降级到相机相对方向 (honest: 不在本里不假装能读 boss 位)。
-
-WASD 同时按住 move_ms 才会真正位移; 可叠加 Shift 连冲 (boss_autokey_linkage 的 dash)。
-所有按键经宿主提供的 send_key (与现有引擎同 SendInput), 前台门 + F12 急停由 linkage 兜。
-"""
+# auto_dodge_director - 定向自动躲避: 把"往某方向撤"翻成相机相对的 WASD 按住。
+#
+# 设计原则 (与活体逆向结论对齐):
+# - **本地玩家坐标 + 相机前向/右向基** 已活体实证可读 (mem_player_position_reader /
+# mem_camera_reader), 是 100% 可靠的躲避基础。
+# - **相机相对方向** (向后/左/右/斜向) 是最稳的躲避: 打 boss 时面朝它, "向后撤"=脱离
+# boss, 直接映射到 W/A/S/D, 连相机都不必读 → 永远正确。
+# - **世界方向 / 撤向世界坐标点** 需要相机基把世界向量投影到 WASD: dot(d,前向)→W/S,
+# dot(d,右向)→D/A。相机基已可读。
+# - **远程实体(boss)坐标** 远程同步不写本地 lastPosition_, 字段需进本确认 → "远离boss"
+# 模式留接口但默认降级到相机相对方向 (honest: 不在本里不假装能读 boss 位)。
+#
+# WASD 同时按住 move_ms 才会真正位移; 可叠加 Shift 连冲 (boss_autokey_linkage 的 dash)。
+# 所有按键经宿主提供的 send_key (与现有引擎同 SendInput), 前台门 + F12 急停由 linkage 兜。
 from __future__ import annotations
 
 import math
@@ -63,7 +62,7 @@ def _axis_keys(fwd: int, right: int) -> List[str]:
 def world_vec_to_keys(world_dx: float, world_dz: float,
                       cam_forward: Vec2, cam_right: Vec2,
                       thresh: float = 0.35) -> List[str]:
-    """把世界 XZ 方向向量投影到相机基, 给出要按住的 WASD 键集。"""
+    # 把世界 XZ 方向向量投影到相机基, 给出要按住的 WASD 键集。
     m = math.hypot(world_dx, world_dz)
     if m < 1e-5:
         return []
@@ -79,15 +78,14 @@ def resolve_dodge_keys(spec: Dict, *,
                        player_pos: Optional[Tuple[float, float, float]] = None,
                        danger_pos: Optional[Tuple[float, float, float]] = None
                        ) -> Tuple[List[str], str]:
-    """根据 dodge spec 解出要按住的 WASD 键集 + 人类可读说明。
-
-    spec.direction:
-      ''                 不定向 (只走原有 key/sequence)
-      camera 相对         forward/back/left/right/forward_left/.../back_right
-      world:<dx>,<dz>     固定世界方向 (需 cam_basis)
-      away_point:<x>,<z>  远离某世界坐标点 (需 cam_basis + player_pos)
-      away_boss           远离危险源 (需 cam_basis + player_pos + danger_pos; 缺则降级)
-    """
+    # 根据 dodge spec 解出要按住的 WASD 键集 + 人类可读说明。
+    #
+    # spec.direction:
+    # ''                 不定向 (只走原有 key/sequence)
+    # camera 相对         forward/back/left/right/forward_left/.../back_right
+    # world:<dx>,<dz>     固定世界方向 (需 cam_basis)
+    # away_point:<x>,<z>  远离某世界坐标点 (需 cam_basis + player_pos)
+    # away_boss           远离危险源 (需 cam_basis + player_pos + danger_pos; 缺则降级)
     direction = str(spec.get("direction") or "").strip()
     if not direction:
         return [], ""
@@ -131,14 +129,13 @@ def resolve_dodge_keys(spec: Dict, *,
 
 
 class AutoDodgeDirector:
-    """把定向躲避 spec 落成实际按键 (按住 WASD move_ms + 可选 Shift 连冲)。
-
-    宿主注入:
-      key_event(key, down)                   # 低层按下(down=True)/松开(down=False)
-      get_cam_basis() -> dict|None           # 相机前向/右向 (世界 XZ)
-      get_player_pos() -> (x,y,z)|None
-      gate() -> bool                         # 前台门 (False=不发); 派发中复查可急停
-    """
+    # 把定向躲避 spec 落成实际按键 (按住 WASD move_ms + 可选 Shift 连冲)。
+    #
+    # 宿主注入:
+    # key_event(key, down)                   # 低层按下(down=True)/松开(down=False)
+    # get_cam_basis() -> dict|None           # 相机前向/右向 (世界 XZ)
+    # get_player_pos() -> (x,y,z)|None
+    # gate() -> bool                         # 前台门 (False=不发); 派发中复查可急停
 
     def __init__(self, key_event: Callable, *,
                  get_cam_basis: Optional[Callable] = None,
@@ -155,8 +152,8 @@ class AutoDodgeDirector:
         self._epoch = 0          # 单飞: 每次新 dodge +1, 旧循环检测到不等即退出
 
     def is_active(self) -> bool:
-        """当前是否正按住移动键 (有进行中的定向躲避)。linkage 据此避免发 WASD
-        穿插破坏: 定向躲避按住 W+A 时, 一条偏移连招若也含 WASD 会松错键。"""
+        # 当前是否正按住移动键 (有进行中的定向躲避)。linkage 据此避免发 WASD
+        # 穿插破坏: 定向躲避按住 W+A 时, 一条偏移连招若也含 WASD 会松错键。
         return bool(self._held)
 
     def _blocked(self) -> bool:
@@ -181,12 +178,12 @@ class AutoDodgeDirector:
 
     def dodge(self, spec: Dict, *, danger_pos=None, get_danger_pos=None,
              is_clear=None) -> Dict:
-        """执行一次定向躲避。返回 {keys, label, fired}。非定向 spec 直接 no-op。
-
-        get_danger_pos (可选): 危险源世界坐标的 O(1) 读回调 (宿主已锁定 obj)。提供且方向
-        为 away_* 时走**闭环精准出圈**——持续读玩家/危险位重算 WASD。
-        is_clear (可选): 零误差出圈判据回调——游戏自己的区域成员判定(玩家离开 AOE 圈即
-        True), 优先于 exit_margin 距离; 提供时距离仅作兜底。"""
+        # 执行一次定向躲避。返回 {keys, label, fired}。非定向 spec 直接 no-op。
+        #
+        # get_danger_pos (可选): 危险源世界坐标的 O(1) 读回调 (宿主已锁定 obj)。提供且方向
+        # 为 away_* 时走**闭环精准出圈**——持续读玩家/危险位重算 WASD。
+        # is_clear (可选): 零误差出圈判据回调——游戏自己的区域成员判定(玩家离开 AOE 圈即
+        # True), 优先于 exit_margin 距离; 提供时距离仅作兜底。
         cam = self._cam_safe()
         pos = self._pos_safe()
         keys, label = resolve_dodge_keys(spec, cam_basis=cam, player_pos=pos,
@@ -214,14 +211,14 @@ class AutoDodgeDirector:
                 max_ms: int = 8000, is_arrived: Optional[Callable] = None,
                 extra_gate: Optional[Callable] = None,
                 label: str = "自动走位") -> Dict:
-        """闭环走向一个世界坐标点 (与 dodge 的"远离"相反): 每 tick 读玩家位+目标位+相机
-        基 → 朝目标的 WASD, 水平距 ≤ arrive_m 或 is_arrived() 即停。
-
-        extra_gate (可选): 每 tick 额外复查的门 (如 auto_walk_enabled), 返回 False 即停
-        (审查 #8: 走位中关掉总开关能即时停, 不必等超时)。
-
-        ★安全: 走位读不到位置/相机/目标时**直接停, 绝不盲按键**(盲走可能走进危险);
-        这是与躲避(可降级纯按键后撤)的关键区别。get_target_pos 返回 None → 该 tick 停。"""
+        # 闭环走向一个世界坐标点 (与 dodge 的"远离"相反): 每 tick 读玩家位+目标位+相机
+        # 基 → 朝目标的 WASD, 水平距 ≤ arrive_m 或 is_arrived() 即停。
+        #
+        # extra_gate (可选): 每 tick 额外复查的门 (如 auto_walk_enabled), 返回 False 即停
+        # (审查 #8: 走位中关掉总开关能即时停, 不必等超时)。
+        #
+        # ★安全: 走位读不到位置/相机/目标时**直接停, 绝不盲按键**(盲走可能走进危险);
+        # 这是与躲避(可降级纯按键后撤)的关键区别。get_target_pos 返回 None → 该 tick 停。
         epoch = self._next_epoch()
         max_ms = max(200, min(15000, int(max_ms)))
         arrive_m = max(0.5, float(arrive_m))
@@ -287,9 +284,9 @@ class AutoDodgeDirector:
             return None
 
     def _apply_keys(self, target: List[str], epoch: int = 0) -> None:
-        """把 _held 调整到 target 键集 (只对变化的键 press/release, 不抖)。
-        用 _io_lock(独立于 epoch 锁): 按键 I/O 不阻塞 _next_epoch (审查 #2);
-        记 _held_epoch 标记按键归属 (审查 #10)。"""
+        # 把 _held 调整到 target 键集 (只对变化的键 press/release, 不抖)。
+        # 用 _io_lock(独立于 epoch 锁): 按键 I/O 不阻塞 _next_epoch (审查 #2);
+        # 记 _held_epoch 标记按键归属 (审查 #10)。
         with self._io_lock:
             cur = set(self._held)
             want = set(target)
@@ -319,13 +316,13 @@ class AutoDodgeDirector:
     def _run_until_clear(self, epoch: int, spec: Dict, get_danger_pos: Callable,
                          safe_dist: float, max_ms: int, fallback_keys: List[str],
                          is_clear: Optional[Callable] = None) -> None:
-        """闭环: 持续把人物往远离危险源方向挪, 危险过去即停。
-        停止判据 (主人: **不要距离兜底, 锥/线/扇形到圆心距离无意义肯定错**):
-          (1) is_clear() —— 区域成员判定(玩家离开 ZoneEnt 圈, 零误差) 或 招式生命周期
-              (boss 这一招结束, 圈是 ECS 也对); 二者由宿主组合注入。
-          (2) max_ms 时长上限 —— 即用户每机制配的躲避时长(匹配预警/读条), 形状无关安全兜底。
-        热路径 O(1): 每 tick 只读玩家位+危险位+相机基(缓存); 任一读不到→降级到相机相对
-        fallback 纯按键(不再读内存)。"""
+        # 闭环: 持续把人物往远离危险源方向挪, 危险过去即停。
+        # 停止判据 (主人: **不要距离兜底, 锥/线/扇形到圆心距离无意义肯定错**):
+        # (1) is_clear() —— 区域成员判定(玩家离开 ZoneEnt 圈, 零误差) 或 招式生命周期
+        # (boss 这一招结束, 圈是 ECS 也对); 二者由宿主组合注入。
+        # (2) max_ms 时长上限 —— 即用户每机制配的躲避时长(匹配预警/读条), 形状无关安全兜底。
+        # 热路径 O(1): 每 tick 只读玩家位+危险位+相机基(缓存); 任一读不到→降级到相机相对
+        # fallback 纯按键(不再读内存)。
         tick = 0.07
         t0 = time.time()
         try:
@@ -367,7 +364,7 @@ class AutoDodgeDirector:
             self._held = []
 
     def release_all(self) -> None:
-        """急停: 松开所有按住的移动键并作废在途循环 (F12 / panic 调用)。"""
+        # 急停: 松开所有按住的移动键并作废在途循环 (F12 / panic 调用)。
         with self._lock:
             self._epoch += 1      # 作废所有在飞循环 (epoch 锁轻, 不含 I/O)
         with self._io_lock:

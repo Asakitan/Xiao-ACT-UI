@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""Regression tests for shared ACT graph/timeseries helpers."""
+# Regression tests for shared ACT graph/timeseries helpers.
 
 from __future__ import annotations
 

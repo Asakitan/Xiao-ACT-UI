@@ -1,12 +1,11 @@
 # -*- coding: utf-8 -*-
-"""build_break_time_cache — dump ALL MonsterTable BreakingContinueTime to cache.
-
-Requires game process attached. Reads every row from MonsterTable and saves
-template_id → BreakingContinueTime (seconds) to assets/break_time_cache.json.
-
-Usage:
-  python -m tools.build_break_time_cache
-"""
+# build_break_time_cache — dump ALL MonsterTable BreakingContinueTime to cache.
+#
+# Requires game process attached. Reads every row from MonsterTable and saves
+# template_id → BreakingContinueTime (seconds) to assets/break_time_cache.json.
+#
+# Usage:
+# python -m tools.build_break_time_cache
 import os
 import sys
 

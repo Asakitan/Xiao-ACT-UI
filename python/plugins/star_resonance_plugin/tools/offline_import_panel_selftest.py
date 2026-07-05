@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""Regression tests for Entity offline-import panel render signatures."""
+# Regression tests for Entity offline-import panel render signatures.
 
 from __future__ import annotations
 

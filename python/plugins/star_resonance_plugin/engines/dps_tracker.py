@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""DPS / HPS tracker — accumulates damage events, computes per-entity and per-skill stats."""
+# DPS / HPS tracker — accumulates damage events, computes per-entity and per-skill stats.
 
 import json
 import os
@@ -44,7 +44,7 @@ _SKILL_LEVEL_TO_EFFECT: Optional[Dict[int, int]] = None
 # ═══════════════════════════════════════════════
 
 def _format_big_number(value: int) -> str:
-    """Pretty-print large numbers with M/K suffixes."""
+    # Pretty-print large numbers with M/K suffixes.
     if value >= 1_000_000:
         return f"{value / 1_000_000:.1f}M"
     if value >= 1_000:
@@ -148,7 +148,7 @@ _KNOWN_SKILL_IDS_CACHE: tuple[tuple[int, ...], frozenset] | None = None
 
 
 def _known_skill_ids() -> frozenset:
-    """四张名字表的 id 并集; 按底表对象身份缓存, 底表 cache_clear 重载后自动重建."""
+    # 四张名字表的 id 并集; 按底表对象身份缓存, 底表 cache_clear 重载后自动重建.
     global _KNOWN_SKILL_IDS_CACHE
     from tools.tablekit.name_table_classifier import aoyi_skill_names, damage_attr_names, skill_fallback_names, skill_table
     tables = (skill_table(), skill_fallback_names(), aoyi_skill_names(), damage_attr_names())
@@ -242,7 +242,7 @@ EntityStats = _CY_COMBAT.CyEntityStats
 # ═══════════════════════════════════════════════
 
 class DpsTracker:
-    """Thread-safe DPS/HPS tracker for all combat entities."""
+    # Thread-safe DPS/HPS tracker for all combat entities.
 
     # Upstream counters do not reset encounters on short idle gaps. Keep the
     # UI fade/report behavior, but let explicit scene/deferred resets own data
@@ -302,12 +302,11 @@ class DpsTracker:
             self._self_uid = uid
 
     def set_mem_damage(self, uid_to_total: Optional[Dict[int, int]]) -> None:
-        """Store MEM-sourced per-uid damage totals (the game's own DamageDataMgr table).
-
-        Keyed by uid = playerUuid >> 16 (verified == CharSerialize.CharId). Attached to
-        each entity in get_snapshot as 'mem_damage_total' for the cross-check badge /
-        memory mode. TCP stays authoritative; this never feeds on_damage_event.
-        """
+        # Store MEM-sourced per-uid damage totals (the game's own DamageDataMgr table).
+        #
+        # Keyed by uid = playerUuid >> 16 (verified == CharSerialize.CharId). Attached to
+        # each entity in get_snapshot as 'mem_damage_total' for the cross-check badge /
+        # memory mode. TCP stays authoritative; this never feeds on_damage_event.
         with self._lock:
             new = {int(k): int(v) for k, v in (uid_to_total or {}).items() if v}
             # No-op guard: the mem bridge re-pushes the full table on every poll
@@ -334,10 +333,10 @@ class DpsTracker:
             self._snapshot_cache = None
 
     def set_mem_primary(self, value: bool) -> None:
-        """When True (memory mode), the snapshot shows the game's own DamageDataMgr totals
-        as the primary value: per-entity damage_total/dps/pct are re-derived from MEM (the
-        original TCP value is kept as tcp_damage_total), entities re-sorted, totals adjusted.
-        DPS uses the TCP encounter window (MEM has no timestamps)."""
+        # When True (memory mode), the snapshot shows the game's own DamageDataMgr totals
+        # as the primary value: per-entity damage_total/dps/pct are re-derived from MEM (the
+        # original TCP value is kept as tcp_damage_total), entities re-sorted, totals adjusted.
+        # DPS uses the TCP encounter window (MEM has no timestamps).
         with self._lock:
             if bool(value) == self._mem_primary:
                 return   # unchanged -> keep the cache (set on every mem poll)
@@ -345,9 +344,9 @@ class DpsTracker:
             self._snapshot_cache = None
 
     def set_mem_skill_damage(self, uid_to_skills: Optional[Dict[int, Dict[int, int]]]) -> None:
-        """Store per-player per-skill MEM damage ({uid: {skillId: damage}}) for the detail
-        view's skill breakdown (memory mode / hybrid cross-check). Skill names resolve via
-        the same path as TCP skills; crit/hit columns degrade (MEM has totals only)."""
+        # Store per-player per-skill MEM damage ({uid: {skillId: damage}}) for the detail
+        # view's skill breakdown (memory mode / hybrid cross-check). Skill names resolve via
+        # the same path as TCP skills; crit/hit columns degrade (MEM has totals only).
         with self._lock:
             new = {
                 int(u): {int(s): int(v) for s, v in (sk or {}).items() if v}
@@ -359,7 +358,7 @@ class DpsTracker:
             self._snapshot_cache = None
 
     def _mem_skill_rows_locked(self, uid: int, entity_total: int) -> List[Dict[str, Any]]:
-        """Build skill rows from the MEM per-skill table (name-resolved, total desc)."""
+        # Build skill rows from the MEM per-skill table (name-resolved, total desc).
         sk = self._mem_skill_damage.get(int(uid)) or {}
         tot = max(int(entity_total or 0), 1)
         rows = []
@@ -378,18 +377,17 @@ class DpsTracker:
         return rows
 
     def set_boss_uuid(self, uuid: int):
-        """Set the current boss monster UUID for boss-only damage filtering."""
+        # Set the current boss monster UUID for boss-only damage filtering.
         with self._lock:
             self._boss_uuid = int(uuid or 0)
 
     def update_monster_info(self, uuid: int, name: str = '') -> None:
-        """Register a target uuid -> CN name for the ACT per-target cross-tab.
-
-        Fed from the monster-update path of both UI front-ends (mirrors how
-        update_player_info is called). Stored in a small side map so the
-        per-target drill-down can show real monster names without polluting
-        the DPS entity list. Bounded to avoid unbounded growth.
-        """
+        # Register a target uuid -> CN name for the ACT per-target cross-tab.
+        #
+        # Fed from the monster-update path of both UI front-ends (mirrors how
+        # update_player_info is called). Stored in a small side map so the
+        # per-target drill-down can show real monster names without polluting
+        # the DPS entity list. Bounded to avoid unbounded growth.
         u = int(uuid or 0)
         nm = str(name or '').strip()
         if u <= 0 or not nm:
@@ -402,26 +400,25 @@ class DpsTracker:
             self._target_names[u] = nm
 
     def get_target_name(self, uuid: int) -> str:
-        """Return the registered CN name for a target uuid (or '')."""
+        # Return the registered CN name for a target uuid (or '').
         return self._target_names.get(int(uuid or 0), '')
 
     def update_self_buffs(self, buffs: Optional[List[Dict[str, Any]]],
                           now_ms: Optional[float] = None) -> None:
-        """Feed a self_buffs snapshot into the buff-uptime accumulator.
-
-        Lock-free w.r.t. the tracker lock (BuffUptimeTracker has its own lock);
-        called from the same place that pushes self_buffs to the buff overlay.
-        """
+        # Feed a self_buffs snapshot into the buff-uptime accumulator.
+        #
+        # Lock-free w.r.t. the tracker lock (BuffUptimeTracker has its own lock);
+        # called from the same place that pushes self_buffs to the buff overlay.
         self._buff_uptime.update(buffs, now_ms)
 
     def get_buff_uptime(self) -> Dict[str, Any]:
-        """Return the self buff/debuff uptime snapshot for the ACT panel."""
+        # Return the self buff/debuff uptime snapshot for the ACT panel.
         return self._buff_uptime.snapshot()
 
     # ── Player info cache (persistence) ──
 
     def _load_player_cache(self):
-        """Load cached player info from disk (called once at init, no lock needed)."""
+        # Load cached player info from disk (called once at init, no lock needed).
         try:
             if os.path.isfile(_PLAYER_CACHE_PATH):
                 with open(_PLAYER_CACHE_PATH, 'r', encoding='utf-8') as f:
@@ -432,7 +429,7 @@ class DpsTracker:
             self._player_cache = {}
 
     def _save_player_cache_if_dirty(self):
-        """Flush cache to disk if changed (throttled: max once per 3 s)."""
+        # Flush cache to disk if changed (throttled: max once per 3 s).
         if not self._player_cache_dirty:
             return
         now = time.time()
@@ -449,7 +446,7 @@ class DpsTracker:
             pass
 
     def save_player_cache(self):
-        """Public flush — call on shutdown or map change."""
+        # Public flush — call on shutdown or map change.
         with self._lock:
             if self._player_cache_dirty:
                 self._player_cache_last_save = 0
@@ -458,7 +455,7 @@ class DpsTracker:
     def _update_player_cache_locked(self, uid: int, name: str = '',
                                      profession: str = '', fight_point: int = 0,
                                      level: int = 0):
-        """Merge new info into the persistent player cache (caller holds _lock)."""
+        # Merge new info into the persistent player cache (caller holds _lock).
         key = str(uid)
         entry = self._player_cache.get(key, {})
         changed = False
@@ -482,7 +479,7 @@ class DpsTracker:
             self._save_player_cache_if_dirty()
 
     def _apply_cache_to_entity(self, entity: 'EntityStats'):
-        """Fill entity fields from cache if missing (caller holds _lock)."""
+        # Fill entity fields from cache if missing (caller holds _lock).
         cached = self._player_cache.get(str(entity.uid))
         if not cached:
             return
@@ -495,7 +492,7 @@ class DpsTracker:
 
     @property
     def idle_seconds(self) -> float:
-        """Seconds since last damage/heal event (0 if no events yet)."""
+        # Seconds since last damage/heal event (0 if no events yet).
         with self._lock:
             if not self._last_event_time:
                 return 0.0
@@ -534,11 +531,10 @@ class DpsTracker:
         return str(skill_id or skill_key)
 
     def register_finalized_hook(self, callback: Callable[[Dict[str, Any]], None]) -> None:
-        """Register a callback for finalized encounter reports.
-
-        Hooks are invoked outside the DPS lock so history/export work cannot
-        stall packet parsing or the overlay polling path.
-        """
+        # Register a callback for finalized encounter reports.
+        #
+        # Hooks are invoked outside the DPS lock so history/export work cannot
+        # stall packet parsing or the overlay polling path.
         if not callable(callback):
             return
         with self._lock:
@@ -570,7 +566,7 @@ class DpsTracker:
 
     @_probe.decorate('dps.on_damage_event')
     def on_damage_event(self, event: Dict[str, Any]):
-        """Called for each damage/heal event from packet_parser."""
+        # Called for each damage/heal event from packet_parser.
         if not event:
             return
         with self._lock:
@@ -683,11 +679,10 @@ class DpsTracker:
     def update_player_info(self, uid: int, name: str = '',
                            profession: str = '', fight_point: int = 0,
                            level: int = 0):
-        """Update display name/profession/fight_point/level for an entity.
-        
-        If no entity exists yet but we have a valid name, pre-create the entity
-        so that when damage events arrive later, the name is already set.
-        """
+        # Update display name/profession/fight_point/level for an entity.
+        #
+        # If no entity exists yet but we have a valid name, pre-create the entity
+        # so that when damage events arrive later, the name is already set.
         with self._lock:
             entity = self._entities.get(uid)
             if not entity and name and uid:
@@ -711,11 +706,10 @@ class DpsTracker:
                 self._update_player_cache_locked(uid, name, profession, fight_point, level)
 
     def update_player_info_batch(self, players: List[Tuple[int, str, str, int, int]]) -> None:
-        """Batch update display info for multiple players with a single lock acquisition.
-        
-        v2.3.15: eliminates N lock acquisitions when updating the whole party.
-        Each element of `players` is (uid, name, profession, fight_point, level).
-        """
+        # Batch update display info for multiple players with a single lock acquisition.
+        #
+        # v2.3.15: eliminates N lock acquisitions when updating the whole party.
+        # Each element of `players` is (uid, name, profession, fight_point, level).
         if not players:
             return
         with self._lock:
@@ -742,15 +736,14 @@ class DpsTracker:
                     self._update_player_cache_locked(uid, name, profession, fight_point, level)
 
     def try_lock(self) -> bool:
-        """Attempt to acquire the lock without blocking.
-        
-        v2.3.15: allows the main thread to skip DPS updates when the lock
-        is held by the packet thread, avoiding blocking the UI.
-        """
+        # Attempt to acquire the lock without blocking.
+        #
+        # v2.3.15: allows the main thread to skip DPS updates when the lock
+        # is held by the packet thread, avoiding blocking the UI.
         return self._lock.acquire(blocking=False)
 
     def unlock(self) -> None:
-        """Release the lock acquired via try_lock()."""
+        # Release the lock acquired via try_lock().
         self._lock.release()
 
     def reset(self):
@@ -964,17 +957,16 @@ class DpsTracker:
 
     @_probe.decorate('dps.get_snapshot')
     def get_snapshot(self, include_skills: bool = False) -> Dict[str, Any]:
-        """Return a snapshot of the current encounter for UI rendering."""
+        # Return a snapshot of the current encounter for UI rendering.
         with self._lock:
             return self._build_snapshot_locked(include_skills=include_skills)
 
     def get_snapshot_fast(self, max_age_ms: float = 150.0) -> Dict[str, Any]:
-        """Fast snapshot retrieval with short-lived cache.
-        
-        v2.3.15: avoids full deepcopy on every call. Returns a cached
-        snapshot if less than max_age_ms has elapsed since the last
-        build. The cache is invalidated on any data mutation (dirty flag).
-        """
+        # Fast snapshot retrieval with short-lived cache.
+        #
+        # v2.3.15: avoids full deepcopy on every call. Returns a cached
+        # snapshot if less than max_age_ms has elapsed since the last
+        # build. The cache is invalidated on any data mutation (dirty flag).
         now = time.time()
         _cached = self._snapshot_cache
         if _cached is not None and (now - self._snapshot_cache_ts) * 1000 < max_age_ms:
@@ -986,11 +978,11 @@ class DpsTracker:
             return snap
 
     def invalidate_snapshot_cache(self) -> None:
-        """Force the next get_snapshot_fast to rebuild."""
+        # Force the next get_snapshot_fast to rebuild.
         self._snapshot_cache = None
 
     def get_entity_detail(self, uid: int) -> Optional[Dict[str, Any]]:
-        """Return detailed stats for a single entity (with skill breakdown)."""
+        # Return detailed stats for a single entity (with skill breakdown).
         with self._lock:
             entity = self._entities.get(uid)
             if not entity:
@@ -1071,15 +1063,14 @@ class DpsTracker:
     def poll_overlay_state(self, max_age_ms: float = 150.0,
                            idle_timeout_s: float = 15.0,
                            detail_uid: int = 0) -> Dict[str, Any]:
-        """Single-lock acquisition for all data the DPS overlay needs.
-
-        Combines: finalize_if_idle + is_dirty + get_snapshot_fast +
-                  has_recent_damage + has_last_report + get_entity_detail.
-
-        Returns dict with keys:
-            snapshot, has_live, has_report, detail, dirty,
-            should_fade_out, should_show
-        """
+        # Single-lock acquisition for all data the DPS overlay needs.
+        #
+        # Combines: finalize_if_idle + is_dirty + get_snapshot_fast +
+        # has_recent_damage + has_last_report + get_entity_detail.
+        #
+        # Returns dict with keys:
+        # snapshot, has_live, has_report, detail, dirty,
+        # should_fade_out, should_show
         now = time.time()
         result: Dict[str, Any] = {
             'snapshot': None,

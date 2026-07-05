@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""Regression coverage for first-party ACT parser adapters."""
+# Regression coverage for first-party ACT parser adapters.
 
 from __future__ import annotations
 

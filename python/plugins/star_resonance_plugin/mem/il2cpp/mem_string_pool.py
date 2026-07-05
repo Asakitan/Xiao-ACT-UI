@@ -1,18 +1,17 @@
 # -*- coding: utf-8 -*-
-"""mem_string_pool - reusable mlid -> localized string bridge (read-only).
-
-Config-table row blobs store localized text as an MLString id (mlid), not a
-string pointer. The client's own localization pool resolves them:
-
-  Panda.Module.StringPoolRuntimeImpl
-    allLocalizationString_ : string[]               (slot -> Il2CppString)
-    indexes_               : NativeArray<KV<int,int>>  (mlid -> slot)
-
-Every IL2CPP class + field offset is resolved BY NAME (live field table walk
-with tiny literal fallbacks); only the runtime-defined string/array/NativeArray
-layouts are constants. One heavy heap scan on ``build()``, then O(1) lookups.
-Never raises; returns "" on any failure.
-"""
+# mem_string_pool - reusable mlid -> localized string bridge (read-only).
+#
+# Config-table row blobs store localized text as an MLString id (mlid), not a
+# string pointer. The client's own localization pool resolves them:
+#
+# Panda.Module.StringPoolRuntimeImpl
+# allLocalizationString_ : string[]               (slot -> Il2CppString)
+# indexes_               : NativeArray<KV<int,int>>  (mlid -> slot)
+#
+# Every IL2CPP class + field offset is resolved BY NAME (live field table walk
+# with tiny literal fallbacks); only the runtime-defined string/array/NativeArray
+# layouts are constants. One heavy heap scan on ``build()``, then O(1) lookups.
+# Never raises; returns "" on any failure.
 from __future__ import annotations
 
 import struct
@@ -48,7 +47,7 @@ def _is_cjk(s: str) -> bool:
 
 
 class StringPoolBridge:
-    """mlid -> localized CN string. ``build()`` once (heap scan), then O(1)."""
+    # mlid -> localized CN string. ``build()`` once (heap scan), then O(1).
 
     def __init__(self, dps_source):
         self._src = dps_source
@@ -123,7 +122,7 @@ class StringPoolBridge:
 
     # ── pool build (one heap scan) ─────────────────────────────────────────────
     def build(self) -> bool:
-        """Locate the live StringPoolRuntimeImpl and index mlid -> slot."""
+        # Locate the live StringPoolRuntimeImpl and index mlid -> slot.
         if self._pool_kv:
             return True
         try:
@@ -174,7 +173,7 @@ class StringPoolBridge:
         return bool(self._pool_kv)
 
     def resolve(self, mlid: Optional[int]) -> str:
-        """mlid -> localized string ("" when unknown / pool not built)."""
+        # mlid -> localized string ("" when unknown / pool not built).
         if not mlid:
             return ""
         v = self._pool_kv.get(int(mlid))

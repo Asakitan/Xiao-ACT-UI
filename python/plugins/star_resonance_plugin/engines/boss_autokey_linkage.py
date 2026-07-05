@@ -1,9 +1,8 @@
 # -*- coding: utf-8 -*-
-"""Boss Raid → Auto Key linkage controller.
-
-Listens to boss raid phase/timeline events and triggers mapped auto-key actions.
-Supports cooldown, dedup, execution lock, and debug logging.
-"""
+# Boss Raid → Auto Key linkage controller.
+#
+# Listens to boss raid phase/timeline events and triggers mapped auto-key actions.
+# Supports cooldown, dedup, execution lock, and debug logging.
 
 import copy
 import json
@@ -171,7 +170,7 @@ def normalize_linkage_config(raw: Any) -> Dict[str, Any]:
 
 
 def set_dodge_enabled(settings, enabled: bool) -> Dict[str, Any]:
-    """Flip the master auto-dodge switch and persist (panic hotkey + editor)."""
+    # Flip the master auto-dodge switch and persist (panic hotkey + editor).
     cfg = load_linkage_config(settings)
     cfg["dodge_enabled"] = bool(enabled)
     return save_linkage_config(settings, cfg)
@@ -204,11 +203,10 @@ def build_linkage_state(config: Dict[str, Any],
 # ════════════════════════════════════════
 
 class BossAutoKeyLinkage:
-    """Bridges boss raid events to auto-key actions.
-
-    Wraps the on_alert callback of the boss raid engine to intercept
-    phase/timeline events and fire mapped keystrokes.
-    """
+    # Bridges boss raid events to auto-key actions.
+    #
+    # Wraps the on_alert callback of the boss raid engine to intercept
+    # phase/timeline events and fire mapped keystrokes.
 
     # 定向躲避按住的移动键 — 偏移连招命中这些键会松错 director 的按住态, 故躲避中跳过
     _MOVE_KEYS = frozenset({"W", "A", "S", "D"})
@@ -218,17 +216,15 @@ class BossAutoKeyLinkage:
                  on_log: Optional[Callable[[str], None]] = None,
                  foreground_gate: Optional[Callable[[], bool]] = None,
                  dodge_active_gate: Optional[Callable[[], bool]] = None):
-        """
-        Args:
-            settings: SettingsManager instance
-            send_key: callable(key, press_mode, hold_ms, press_count) → fires a keystroke
-            on_log: callable(message) → debug log output
-            foreground_gate: callable() → False blocks key emission (game not
-                foreground); re-checked right before sending so delayed dodges
-                die when the game loses focus mid-wait
-            dodge_active_gate: callable() → True 表示定向躲避正按住 WASD; 此时
-                跳过连招里的移动键(W/A/S/D), 防穿插松错 director 的按住态
-        """
+        # Args:
+        # settings: SettingsManager instance
+        # send_key: callable(key, press_mode, hold_ms, press_count) → fires a keystroke
+        # on_log: callable(message) → debug log output
+        # foreground_gate: callable() → False blocks key emission (game not
+        # foreground); re-checked right before sending so delayed dodges
+        # die when the game loses focus mid-wait
+        # dodge_active_gate: callable() → True 表示定向躲避正按住 WASD; 此时
+        # 跳过连招里的移动键(W/A/S/D), 防穿插松错 director 的按住态
         self._settings = settings
         self._send_key = send_key
         self._on_log = on_log
@@ -242,16 +238,15 @@ class BossAutoKeyLinkage:
         self._panic_epoch: int = 0   # 每次 panic_stop +1, 在飞的发键线程据此自杀
 
     def panic_stop(self) -> None:
-        """急停: 作废所有在途(等待中/序列进行中)的发键线程。F12 与 AutoDodgeDirector
-        .release_all() 同步调用 — 否则 hold 型连招会无视急停继续发, 破坏 panic。"""
+        # 急停: 作废所有在途(等待中/序列进行中)的发键线程。F12 与 AutoDodgeDirector
+        # .release_all() 同步调用 — 否则 hold 型连招会无视急停继续发, 破坏 panic。
         with self._lock:
             self._panic_epoch += 1
 
     def on_boss_raid_alert(self, title: str, message: str):
-        """Called when boss raid engine fires an alert (phase change, timeline, enrage, etc.).
-
-        Determines if the alert matches any configured mapping and fires the action.
-        """
+        # Called when boss raid engine fires an alert (phase change, timeline, enrage, etc.).
+        #
+        # Determines if the alert matches any configured mapping and fires the action.
         config = load_linkage_config(self._settings)
         if not _bool(config.get("enabled"), False):
             return
@@ -307,18 +302,18 @@ class BossAutoKeyLinkage:
                 break  # Only fire first matching mapping per alert
 
     def on_boss_action(self, action: Dict[str, Any]):
-        """Mem-feed driven, skill_id-accurate boss reaction. Parallel to
-        on_boss_raid_alert; reuses the same cooldown/dedup/global-cooldown machinery.
-
-        Fires `boss_cast` on a cast-start edge (matched by skill_id, scoped by
-        boss_base_id) and the offensive windows `boss_breaking`/`boss_overdrive`/
-        `boss_stun` only on the rising edge (the engine sets *_edge flags).
-
-        Mechanic events (the engine resolved a raid-profile mechanic) carry
-        `mechanic_id` (+ optional inline `mechanic_dodge` dict and a
-        `dodge_wait_s` countdown alignment). The inline dodge is gated by the
-        independent `dodge_enabled` master switch; user-defined `mechanic`
-        trigger mappings go through the regular `enabled` path."""
+        # Mem-feed driven, skill_id-accurate boss reaction. Parallel to
+        # on_boss_raid_alert; reuses the same cooldown/dedup/global-cooldown machinery.
+        #
+        # Fires `boss_cast` on a cast-start edge (matched by skill_id, scoped by
+        # boss_base_id) and the offensive windows `boss_breaking`/`boss_overdrive`/
+        # `boss_stun` only on the rising edge (the engine sets *_edge flags).
+        #
+        # Mechanic events (the engine resolved a raid-profile mechanic) carry
+        # `mechanic_id` (+ optional inline `mechanic_dodge` dict and a
+        # `dodge_wait_s` countdown alignment). The inline dodge is gated by the
+        # independent `dodge_enabled` master switch; user-defined `mechanic`
+        # trigger mappings go through the regular `enabled` path.
         config = load_linkage_config(self._settings)
         if not isinstance(action, dict):
             return
@@ -419,7 +414,7 @@ class BossAutoKeyLinkage:
                     return   # one fire per action
 
     def _dodge_still_enabled(self) -> bool:
-        """Live re-read of the master dodge switch (panic kills in-flight waits)."""
+        # Live re-read of the master dodge switch (panic kills in-flight waits).
         try:
             cfg = load_linkage_config(self._settings)
             return _bool(cfg.get("dodge_enabled"), False)
@@ -428,8 +423,8 @@ class BossAutoKeyLinkage:
 
     def _refund_fire(self, mid: str, stamped: float, prev: float,
                      prev_global: Optional[float] = None) -> None:
-        """被门拦下的发键退还冷却 — 拦截不应烧掉下一次真触发的冷却窗口。
-        只在时间戳仍是本次盖的章时回退(期间有新触发则不动)。"""
+        # 被门拦下的发键退还冷却 — 拦截不应烧掉下一次真触发的冷却窗口。
+        # 只在时间戳仍是本次盖的章时回退(期间有新触发则不动)。
         with self._lock:
             if self._last_fire.get(mid) == stamped:
                 if prev > 0:
@@ -444,11 +439,11 @@ class BossAutoKeyLinkage:
                           gate: Optional[Callable[[], bool]] = None,
                           skip_foreground: bool = False,
                           on_blocked: Optional[Callable[[], None]] = None):
-        """Spawn the key send on a thread, honoring delay_ms / lead_ms / sequence.
-        `wait_override_s` replaces the delay/lead computation (countdown-aligned
-        mechanic dodges). `gate` is re-checked after the wait; the foreground
-        gate is re-checked too unless `skip_foreground` (editor dry-run).
-        `on_blocked` runs if the pre-send gate blocks (cooldown refund)."""
+        # Spawn the key send on a thread, honoring delay_ms / lead_ms / sequence.
+        # `wait_override_s` replaces the delay/lead computation (countdown-aligned
+        # mechanic dodges). `gate` is re-checked after the wait; the foreground
+        # gate is re-checked too unless `skip_foreground` (editor dry-run).
+        # `on_blocked` runs if the pre-send gate blocks (cooldown refund).
         delay_ms = _int(mapping.get("delay_ms"), 0)
         lead_ms = _int(mapping.get("lead_ms"), 0)
         wait_s = max(0.0, delay_ms / 1000.0)
@@ -528,9 +523,9 @@ class BossAutoKeyLinkage:
         threading.Thread(target=_run, daemon=True).start()
 
     def fire_mapping_test(self, mapping: Any) -> bool:
-        """Editor dry-run: fire a mapping/dodge dict immediately, skipping
-        enable flags, cooldowns and the foreground gate (keys land in whatever
-        window is focused — callers must warn the user)."""
+        # Editor dry-run: fire a mapping/dodge dict immediately, skipping
+        # enable flags, cooldowns and the foreground gate (keys land in whatever
+        # window is focused — callers must warn the user).
         if not isinstance(mapping, dict) or not self._send_key:
             return False
         if not (_s(mapping.get("action_key")) or mapping.get("sequence")):
@@ -540,7 +535,7 @@ class BossAutoKeyLinkage:
         return True
 
     def _classify_alert(self, title: str, message: str):
-        """Determine trigger_type and label from an alert."""
+        # Determine trigger_type and label from an alert.
         msg = _s(message)
         if not msg:
             return None, ""
@@ -635,9 +630,9 @@ def _resolve_scene_name(nm, scene_id: int, dungeon_id: int) -> str:
 
 
 def _build_boss_detail(sel_boss: int, boss_name: str, obs: list) -> Dict[str, Any]:
-    """Group one boss's observations into the aggregation views the editor renders:
-    casts (the buffs it applies), mechanics/states, and a time-ordered timeline.
-    Plus a per-boss-unit summary."""
+    # Group one boss's observations into the aggregation views the editor renders:
+    # casts (the buffs it applies), mechanics/states, and a time-ordered timeline.
+    # Plus a per-boss-unit summary.
     skills = [o for o in obs if o.get("kind") == "skill"]
     mechanics = [o for o in obs if o.get("kind") in ("mechanic", "state")]
     timeline = []
@@ -675,19 +670,19 @@ def _build_boss_detail(sel_boss: int, boss_name: str, obs: list) -> Dict[str, An
 def build_boss_reactions_state(settings, engine, state_mgr,
                                scene_key: Any = None,
                                boss_base_id: Any = None) -> Dict[str, Any]:
-    """Single data contract for the dual-UI Boss Reactions editor.
-
-    Assembles the linkage mappings + the engine's live cast state + the persisted
-    per-scene/per-boss observed skills & mechanics (tagged, name-resolved) grouped
-    into casts/mechanics/timeline aggregation views, so the Tk panel and the
-    WebView raid editor render identically. `scene_key` selects which map/scene to
-    browse (None = live); `boss_base_id` selects which boss (None = first/live).
-
-    Names (scene / boss / skill) are resolved at read time from the authoritative
-    name cache, so historical observations recorded before a name was known still
-    display correctly. Observations are scoped to the SELECTED boss only (not every
-    boss in the scene) — combined with the entity-free status read, this is what
-    keeps opening the editor cheap in crowded raids."""
+    # Single data contract for the dual-UI Boss Reactions editor.
+    #
+    # Assembles the linkage mappings + the engine's live cast state + the persisted
+    # per-scene/per-boss observed skills & mechanics (tagged, name-resolved) grouped
+    # into casts/mechanics/timeline aggregation views, so the Tk panel and the
+    # WebView raid editor render identically. `scene_key` selects which map/scene to
+    # browse (None = live); `boss_base_id` selects which boss (None = first/live).
+    #
+    # Names (scene / boss / skill) are resolved at read time from the authoritative
+    # name cache, so historical observations recorded before a name was known still
+    # display correctly. Observations are scoped to the SELECTED boss only (not every
+    # boss in the scene) — combined with the entity-free status read, this is what
+    # keeps opening the editor cheap in crowded raids.
     cfg = load_linkage_config(settings)
     nm = _name_resolver()
     gs = getattr(state_mgr, "state", None) if state_mgr else None
@@ -828,7 +823,7 @@ def build_boss_reactions_state(settings, engine, state_mgr,
 
 
 def upsert_mapping(settings, mapping: Any) -> Dict[str, Any]:
-    """Insert or replace one linkage mapping (by id) and persist. Returns config."""
+    # Insert or replace one linkage mapping (by id) and persist. Returns config.
     cfg = load_linkage_config(settings)
     m = normalize_mapping(mapping)
     mappings = cfg.get("mappings", [])

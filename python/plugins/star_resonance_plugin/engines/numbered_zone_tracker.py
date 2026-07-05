@@ -1,18 +1,17 @@
 # -*- coding: utf-8 -*-
-"""numbered_zone_tracker - 编号圈(1/2/3 按顺序出的 AOE 圈)顺序判定 + 命中归属。
-
-纯逻辑(不碰内存, 可单测): 喂入 ZoneReader.snapshot() 的时序快照, 按**出现顺序**给圈编号
-(同 group_id 的圈算一批, 组内 1/2/3), 并用圈自带的成员列表(entitiesIdInZone_=服务端真实
-命中判定)做"哪个编号圈命中了谁"的精确归属——不靠 DamagePos 最近邻猜。战斗中若有伤害事件
-(skill_id + 命中世界坐标 DamagePos)再补充技能名/坐标。
-
-用法:
-    t = NumberedZoneTracker()
-    t.observe(zone_snapshot_list, now=ts)       # 每次区域快照(节流调用)
-    t.observe_damage(skill_id, target_uuid, pos, now=ts)  # 可选: TCP 伤害事件
-    seq = t.active_sequence()    # 当前存活编号圈按序 → UI/"下一个该去的圈"
-    stats = t.summary()          # 每个编号圈: 序号/组/命中名单/伤害/存活时长
-"""
+# numbered_zone_tracker - 编号圈(1/2/3 按顺序出的 AOE 圈)顺序判定 + 命中归属。
+#
+# 纯逻辑(不碰内存, 可单测): 喂入 ZoneReader.snapshot() 的时序快照, 按**出现顺序**给圈编号
+# (同 group_id 的圈算一批, 组内 1/2/3), 并用圈自带的成员列表(entitiesIdInZone_=服务端真实
+# 命中判定)做"哪个编号圈命中了谁"的精确归属——不靠 DamagePos 最近邻猜。战斗中若有伤害事件
+# (skill_id + 命中世界坐标 DamagePos)再补充技能名/坐标。
+#
+# 用法:
+# t = NumberedZoneTracker()
+# t.observe(zone_snapshot_list, now=ts)       # 每次区域快照(节流调用)
+# t.observe_damage(skill_id, target_uuid, pos, now=ts)  # 可选: TCP 伤害事件
+# seq = t.active_sequence()    # 当前存活编号圈按序 → UI/"下一个该去的圈"
+# stats = t.summary()          # 每个编号圈: 序号/组/命中名单/伤害/存活时长
 from __future__ import annotations
 
 import threading
@@ -62,7 +61,7 @@ class NumberedZoneTracker:
         return True
 
     def observe(self, snapshot: List[Dict], now: float) -> List[TrackedZone]:
-        """吃一帧区域快照。返回本帧**新出现**的编号圈(已分配序号)。"""
+        # 吃一帧区域快照。返回本帧**新出现**的编号圈(已分配序号)。
         live_uuids = set()
         new_zones: List[TrackedZone] = []
         with self._lock:
@@ -98,7 +97,7 @@ class NumberedZoneTracker:
 
     def observe_damage(self, skill_id: int, target_uuid: int,
                        pos: Optional[Vec3], now: float) -> Optional[TrackedZone]:
-        """把一次伤害归到目标当前所在的存活编号圈(成员判定优先, 退而求其次按 pos)。"""
+        # 把一次伤害归到目标当前所在的存活编号圈(成员判定优先, 退而求其次按 pos)。
         with self._lock:
             best: Optional[TrackedZone] = None
             for tz in self._zones.values():
@@ -125,7 +124,7 @@ class NumberedZoneTracker:
         return best
 
     def active_sequence(self) -> List[TrackedZone]:
-        """当前存活编号圈按出现顺序 → "1/2/3" 该走/该躲的顺序。"""
+        # 当前存活编号圈按出现顺序 → "1/2/3" 该走/该躲的顺序。
         with self._lock:
             return sorted((z for z in self._zones.values() if z.alive),
                           key=lambda z: z.seq)
@@ -139,7 +138,7 @@ class NumberedZoneTracker:
         return groups
 
     def summary(self) -> List[Dict]:
-        """每个追踪过的编号圈一条统计(含已消失的), 按出现序。"""
+        # 每个追踪过的编号圈一条统计(含已消失的), 按出现序。
         out = []
         with self._lock:
             for z in sorted(self._zones.values(), key=lambda z: z.seq):
@@ -160,7 +159,7 @@ class NumberedZoneTracker:
             self._group_counter.clear()
 
     def prune(self, now: float, keep_s: float = 30.0) -> None:
-        """清掉消失超过 keep_s 的圈, 防内存涨。战斗中低频调用。"""
+        # 清掉消失超过 keep_s 的圈, 防内存涨。战斗中低频调用。
         with self._lock:
             dead = [u for u, z in self._zones.items()
                     if not z.alive and (now - z.last_seen) > keep_s]

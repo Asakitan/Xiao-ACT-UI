@@ -1,17 +1,16 @@
 # -*- coding: utf-8 -*-
-"""offline_raid_dump - 纯离线: 从已有name_table + raid示例交叉分析全部bossraid机制。
-
-不需要游戏运行。数据源:
-  assets/name_tables/boss_mechanic_skill.json  (452个机制技能)
-  assets/name_tables/boss_skill.json           (355个boss技能)
-  assets/name_tables/buff.json                 (9533个buff含raid范围)
-  assets/name_tables/monster.json              (1038个怪物)
-  assets/boss_raids/*机制示例.json              (9个raid示例)
-  assets/boss_raids/raid_scene_names.json      (raid元数据)
-
-Usage:
-  python -m tools.offline_raid_dump
-"""
+# offline_raid_dump - 纯离线: 从已有name_table + raid示例交叉分析全部bossraid机制。
+#
+# 不需要游戏运行。数据源:
+# assets/name_tables/boss_mechanic_skill.json  (452个机制技能)
+# assets/name_tables/boss_skill.json           (355个boss技能)
+# assets/name_tables/buff.json                 (9533个buff含raid范围)
+# assets/name_tables/monster.json              (1038个怪物)
+# assets/boss_raids/*机制示例.json              (9个raid示例)
+# assets/boss_raids/raid_scene_names.json      (raid元数据)
+#
+# Usage:
+# python -m tools.offline_raid_dump
 from __future__ import annotations
 
 import json

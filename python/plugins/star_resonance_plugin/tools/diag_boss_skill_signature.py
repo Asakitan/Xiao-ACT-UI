@@ -1,12 +1,11 @@
 # -*- coding: utf-8 -*-
-"""Find the per-skill discriminator: capture the boss's full attr_map + buffs at
-each attack start and report which attr ids / buffs DIFFER between attacks (so we
-can tell a 吼 from a 护盾 from a 普攻).
-
-Tell me roughly which skill each attack was (order) and I can map the signature.
-
-    python tools/diag_boss_skill_signature.py [seconds] [name_substr]
-"""
+# Find the per-skill discriminator: capture the boss's full attr_map + buffs at
+# each attack start and report which attr ids / buffs DIFFER between attacks (so we
+# can tell a 吼 from a 护盾 from a 普攻).
+#
+# Tell me roughly which skill each attack was (order) and I can map the signature.
+#
+# python tools/diag_boss_skill_signature.py [seconds] [name_substr]
 from __future__ import annotations
 
 import os

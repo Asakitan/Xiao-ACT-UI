@@ -1,15 +1,14 @@
-"""verify_klass — 用 script.json 的 *_TypeInfo RVA 取出 klass_ptr,
-并在已知 HP 候选周围扫描这个 klass_ptr, 看对象首字节假设是否成立.
-
-用法:
-    python -m tools.mem_probe.il2cpp.verify_klass
-
-读取:
-    sao_auto/tools/mem_probe/il2cpp/out/<dump_id>/dumper_out/script.json
-    (硬编码 dump_id = ef9ef95a, 也可改 --dump-id)
-    GameAssembly.dll @ Star.exe
-    Phase 0.1 找到的 4 个 HP 候选地址
-"""
+# verify_klass — 用 script.json 的 *_TypeInfo RVA 取出 klass_ptr,
+# 并在已知 HP 候选周围扫描这个 klass_ptr, 看对象首字节假设是否成立.
+#
+# 用法:
+# python -m tools.mem_probe.il2cpp.verify_klass
+#
+# 读取:
+# sao_auto/tools/mem_probe/il2cpp/out/<dump_id>/dumper_out/script.json
+# (硬编码 dump_id = ef9ef95a, 也可改 --dump-id)
+# GameAssembly.dll @ Star.exe
+# Phase 0.1 找到的 4 个 HP 候选地址
 from __future__ import annotations
 
 import argparse

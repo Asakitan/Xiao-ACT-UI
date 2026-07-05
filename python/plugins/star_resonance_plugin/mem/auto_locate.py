@@ -1,21 +1,20 @@
-"""TCP-驱动的全自动锚点定位.
-
-不需要手动输入数值: 后台启动 PacketBridge 抓包, 读取 GameStateManager
-和 parser._current_uid 作为 ground truth, 自动驱动 scanner 收敛。
-
-用法 (管理员 PowerShell):
-    cd e:\\VC\\SAO-UI\\sao_auto
-    e:\\Py\\python.exe -m tools.mem_probe.auto_locate
-
-需求:
-    - 已安装 Npcap (主程序若能正常抓包就 OK)
-    - Star.exe 在线且已登录到主城/任意场景 (HP > 0)
-    - 整个过程让游戏内 HP 自然变化几次 (走两步、挨一下、吃个药都行),
-      30~60 秒应该能收敛 self UID + HP + MaxHP 三个锚点
-
-输出:
-    tools/mem_probe/anchors.json  (基于游戏当前 PID 写入, 不跨重启复用)
-"""
+# TCP-驱动的全自动锚点定位.
+#
+# 不需要手动输入数值: 后台启动 PacketBridge 抓包, 读取 GameStateManager
+# 和 parser._current_uid 作为 ground truth, 自动驱动 scanner 收敛。
+#
+# 用法 (管理员 PowerShell):
+# cd e:\VC\SAO-UI\sao_auto
+# e:\Py\python.exe -m tools.mem_probe.auto_locate
+#
+# 需求:
+# - 已安装 Npcap (主程序若能正常抓包就 OK)
+# - Star.exe 在线且已登录到主城/任意场景 (HP > 0)
+# - 整个过程让游戏内 HP 自然变化几次 (走两步、挨一下、吃个药都行),
+# 30~60 秒应该能收敛 self UID + HP + MaxHP 三个锚点
+#
+# 输出:
+# tools/mem_probe/anchors.json  (基于游戏当前 PID 写入, 不跨重启复用)
 
 from __future__ import annotations
 
@@ -38,7 +37,7 @@ from .scanner import narrow, scan
 
 # ───────────────────────── TCP 数据源 ─────────────────────────
 class _TcpSource:
-    """轻量包装: 启动 PacketBridge, 暴露 self UID / HP / MaxHP / Name."""
+    # 轻量包装: 启动 PacketBridge, 暴露 self UID / HP / MaxHP / Name.
 
     def __init__(self) -> None:
         from game_state import GameStateManager
@@ -74,7 +73,7 @@ class _TcpSource:
         }
 
     def wait_ready(self, *, timeout: float = 60.0, interval: float = 0.5) -> Dict[str, Any]:
-        """阻塞等待 self UID + HP > 0; 超时抛 RuntimeError."""
+        # 阻塞等待 self UID + HP > 0; 超时抛 RuntimeError.
         deadline = time.time() + timeout
         last_print = 0.0
         while time.time() < deadline:
@@ -126,7 +125,7 @@ def _hex_context(pm: StarProcess, addr: int, before: int = 16, after: int = 48) 
 
 # ───────────────────────── 阶段实现 ─────────────────────────
 def locate_uid(pm: StarProcess, uid: int) -> List[int]:
-    """UID 通常全局唯一, 一次扫描即可定位."""
+    # UID 通常全局唯一, 一次扫描即可定位.
     print(f"[uid] scanning i64 = 0x{uid & 0xFFFFFFFFFFFFFFFF:016X} ({uid})...")
     t0 = time.time()
     hits = scan(pm, uid, "i64")
@@ -142,10 +141,9 @@ def locate_hp(
     poll: float = 0.2,
     target_count: int = 3,
 ) -> List[int]:
-    """轮询 TCP HP, 当数值变化时自动 narrow.
-
-    target_count: 收敛到 <= 此数即停止 (默认 3, 对 PoC 已足够)
-    """
+    # 轮询 TCP HP, 当数值变化时自动 narrow.
+    #
+    # target_count: 收敛到 <= 此数即停止 (默认 3, 对 PoC 已足够)
     snap = src.snapshot()
     cur = snap["hp"]
     print(f"[hp] initial scan i32 = {cur} (max={snap['max_hp']})")
@@ -190,7 +188,7 @@ def locate_max_hp(
     near_hits: Optional[List[int]] = None,
     near_radius: int = 0x100,
 ) -> List[int]:
-    """MaxHP 一般不变; 单帧扫描后, 如果给了 hp 候选, 就用'相邻性'过滤."""
+    # MaxHP 一般不变; 单帧扫描后, 如果给了 hp 候选, 就用'相邻性'过滤.
     print(f"[maxhp] scanning i32 = {max_hp}")
     t0 = time.time()
     cands = scan(pm, max_hp, "i32", max_hits=300_000)

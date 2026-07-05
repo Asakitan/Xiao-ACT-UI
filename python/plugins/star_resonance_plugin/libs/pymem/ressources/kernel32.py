@@ -107,58 +107,6 @@ VirtualAllocEx.argtypes = (
 VirtualProtectEx = dll.VirtualProtectEx
 VirtualProtectEx.restype = ctypes.c_long
 
-#: Takes a snapshot of the specified processes, as well as the heaps, modules, and threads used by these processes.
-#:
-#: https://msdn.microsoft.com/en-us/library/windows/desktop/ms682489%28v=vs.85%29.aspx
-CreateToolhelp32Snapshot = dll.CreateToolhelp32Snapshot
-CreateToolhelp32Snapshot.restype = ctypes.c_void_p
-CreateToolhelp32Snapshot.argtypes = (ctypes.c_ulong, ctypes.c_ulong)
-
-#: Retrieves information about the first module associated with a process.
-#:
-#: https://msdn.microsoft.com/en-us/library/windows/desktop/ms684218%28v=vs.85%29.aspx
-Module32First = dll.Module32First
-Module32First.restype = ctypes.c_ulonglong
-Module32First.argtypes = (ctypes.c_void_p, pymem.ressources.structure.LPMODULEENTRY32)
-
-#: Retrieves information about the next module associated with a process or thread.
-#:
-#: https://msdn.microsoft.com/en-us/library/windows/desktop/ms684221%28v=vs.85%29.aspx
-Module32Next = dll.Module32Next
-Module32Next.restype = ctypes.c_ulonglong
-Module32Next.argtypes = (ctypes.c_void_p, pymem.ressources.structure.LPMODULEENTRY32)
-
-#: Retrieves information about the first process encountered in a system snapshot.
-#:
-#: https://msdn.microsoft.com/en-us/library/windows/desktop/ms684834%28v=vs.85%29.aspx
-Process32First = dll.Process32First
-Process32First.restype = ctypes.c_long
-
-#: Retrieves information about the next process recorded in a system snapshot.
-#:
-#: https://msdn.microsoft.com/en-us/library/windows/desktop/ms684836%28v=vs.85%29.aspx
-Process32Next = dll.Process32Next
-Process32Next.restype = ctypes.c_long
-
-#: Retrieves information about the first thread of any process encountered in a system snapshot.
-#:
-#: https://msdn.microsoft.com/en-us/library/windows/desktop/ms686728%28v=vs.85%29.aspx
-Thread32First = dll.Thread32First
-Thread32First.restype = ctypes.c_long
-Thread32First.argtypes = [
-    ctypes.c_void_p,
-    ctypes.POINTER(pymem.ressources.structure.ThreadEntry32)
-]
-
-#: Retrieves information about the next thread of any process encountered in the system memory snapshot.
-#:
-#: https://msdn.microsoft.com/en-us/library/windows/desktop/ms686731%28v=vs.85%29.aspx
-Thread32Next = dll.Thread32Next
-Thread32Next.restype = ctypes.c_long
-Thread32Next.argtypes = [
-    ctypes.c_void_p,
-    ctypes.POINTER(pymem.ressources.structure.ThreadEntry32)
-]
 
 #: Opens an existing thread object.
 #:

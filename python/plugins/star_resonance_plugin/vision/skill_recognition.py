@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""Fixed-ROI visual skill recognition for 16:9 game client windows."""
+# Fixed-ROI visual skill recognition for 16:9 game client windows.
 
 from __future__ import annotations
 
@@ -265,7 +265,7 @@ def _classify_state(
 
 
 class SkillVisualTracker:
-    """Track fixed visual skill slots using client-rect anchored ROIs."""
+    # Track fixed visual skill slots using client-rect anchored ROIs.
 
     def __init__(self, confirm_frames: int = 2):
         self._confirm_frames = max(1, int(confirm_frames))
@@ -293,9 +293,9 @@ class SkillVisualTracker:
 
     @staticmethod
     def _baseline_hsv(state_store: Dict[str, Any], cur_shape) -> Optional[np.ndarray]:
-        """基线 HSV 缓存 — 基线 BGR 在一个会话内恒定, 每帧重转纯属浪费。
-        按当前帧 (h, w) 缓存; 尺寸变化才重算 (与旧实现的逐帧 resize+convert 等价);
-        reset() 清空 _slot_cache 时随之失效。"""
+        # 基线 HSV 缓存 — 基线 BGR 在一个会话内恒定, 每帧重转纯属浪费。
+        # 按当前帧 (h, w) 缓存; 尺寸变化才重算 (与旧实现的逐帧 resize+convert 等价);
+        # reset() 清空 _slot_cache 时随之失效。
         base_bgr = state_store.get("baseline_img")
         if base_bgr is None or getattr(base_bgr, "size", 0) == 0:
             return None

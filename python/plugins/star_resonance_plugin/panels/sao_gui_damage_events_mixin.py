@@ -1,47 +1,45 @@
 # -*- coding: utf-8 -*-
-"""
-SAOPlayerGUIDamageEventsMixin — eighteenth mixin extracted from
-SAOPlayerGUI (round 67 of the sao_gui split refactor). 5 methods,
-~287 lines.
-
-The damage-event normalization + pending-combat-reset cluster.
-These methods are called from the packet damage callback path
-(see PacketCallbacks mixin) to:
-  1. defer DPS encounter resets until the next real player-vs-
-     monster hit (so a scene change doesn't blank the bar mid-fight),
-  2. normalize incoming damage events so SELF / friendly / enemy
-     attribution is consistent regardless of which packet variant
-     the bridge emitted.
-
-Methods (in source order):
-  * _maybe_apply_pending_combat_reset(event, is_self_combat_target)
-    (88) — if a pending reset window is open and the new hit is a
-    real self-combat damage event, apply the reset. Otherwise let
-    it expire silently. Avoids resetting on heal-only / immune-
-    only packets.
-  * _current_player_uid_int (16) — best-effort fetch of the
-    SELF UID as int (used by the normalizers below).
-  * _is_known_friendly_uid (42) — predicate: is this UID one of
-    the in-session player roster (so a packet hitting it isn't an
-    enemy attack on us).
-  * _normalize_damage_event_for_self (47) — patches event['attacker_is_self']
-    / target attribution + cleans up the SELF UID when the bridge
-    used a stale uid.
-  * _normalize_damage_event_target_for_entity (94) — heavier
-    variant: rewrites target attribution so the entity HUD sees
-    the right "target" for Boss-HP lock, even when the bridge
-    emitted a friendly-side-effect packet.
-
-Required SAOPlayerGUI attrs:
-  * self._pending_combat_reset_after, self._pending_combat_reset_reason
-  * self._dps_tracker, self._game_state, self._session_players,
-    self._session_players_self_uid
-  * self._packet_engine
-
-Required SAOPlayerGUI methods (via MRO):
-  * _session_int (Session mixin, staticmethod)
-  * _session_self_uid (Session mixin)
-"""
+# SAOPlayerGUIDamageEventsMixin — eighteenth mixin extracted from
+# SAOPlayerGUI (round 67 of the sao_gui split refactor). 5 methods,
+# ~287 lines.
+#
+# The damage-event normalization + pending-combat-reset cluster.
+# These methods are called from the packet damage callback path
+# (see PacketCallbacks mixin) to:
+# 1. defer DPS encounter resets until the next real player-vs-
+# monster hit (so a scene change doesn't blank the bar mid-fight),
+# 2. normalize incoming damage events so SELF / friendly / enemy
+# attribution is consistent regardless of which packet variant
+# the bridge emitted.
+#
+# Methods (in source order):
+# * _maybe_apply_pending_combat_reset(event, is_self_combat_target)
+# (88) — if a pending reset window is open and the new hit is a
+# real self-combat damage event, apply the reset. Otherwise let
+# it expire silently. Avoids resetting on heal-only / immune-
+# only packets.
+# * _current_player_uid_int (16) — best-effort fetch of the
+# SELF UID as int (used by the normalizers below).
+# * _is_known_friendly_uid (42) — predicate: is this UID one of
+# the in-session player roster (so a packet hitting it isn't an
+# enemy attack on us).
+# * _normalize_damage_event_for_self (47) — patches event['attacker_is_self']
+# / target attribution + cleans up the SELF UID when the bridge
+# used a stale uid.
+# * _normalize_damage_event_target_for_entity (94) — heavier
+# variant: rewrites target attribution so the entity HUD sees
+# the right "target" for Boss-HP lock, even when the bridge
+# emitted a friendly-side-effect packet.
+#
+# Required SAOPlayerGUI attrs:
+# * self._pending_combat_reset_after, self._pending_combat_reset_reason
+# * self._dps_tracker, self._game_state, self._session_players,
+# self._session_players_self_uid
+# * self._packet_engine
+#
+# Required SAOPlayerGUI methods (via MRO):
+# * _session_int (Session mixin, staticmethod)
+# * _session_self_uid (Session mixin)
 
 from __future__ import annotations
 
@@ -51,7 +49,7 @@ from typing import Any, Dict, Optional
 
 
 class SAOPlayerGUIDamageEventsMixin:
-    """Mixin bundling damage-event normalization + pending combat reset."""
+    # Mixin bundling damage-event normalization + pending combat reset.
 
     @staticmethod
     def _finite_combat_float(value: Any, default: float = 0.0, *, lo: Optional[float] = None) -> float:
@@ -66,7 +64,7 @@ class SAOPlayerGUIDamageEventsMixin:
         return num
 
     def _arm_pending_combat_reset(self, scene_event=None):
-        """Defer same-instance encounter reset until the next real damage."""
+        # Defer same-instance encounter reset until the next real damage.
         reason = 'restart'
         delay_s = 3.0
         if isinstance(scene_event, dict):
@@ -97,7 +95,7 @@ class SAOPlayerGUIDamageEventsMixin:
         )
 
     def _maybe_apply_pending_combat_reset(self, event, is_self_combat_target: bool) -> bool:
-        """Apply deferred encounter reset immediately before the first new hit."""
+        # Apply deferred encounter reset immediately before the first new hit.
         try:
             reset_after = float(getattr(self, '_pending_combat_reset_after', 0.0) or 0.0)
         except Exception:
@@ -290,21 +288,20 @@ class SAOPlayerGUIDamageEventsMixin:
         return fixed
 
     def _normalize_damage_event_target_for_entity(self, event):
-        """Recover combat-target classification after scene/dungeon switches.
-
-        Some instance transitions clear the monster cache before the first
-        damage packet of the next dungeon arrives. If that target UUID has a
-        player-looking suffix, the parser can conservatively mark it as a
-        player until SyncNearEntities catches up, which suppresses both DPS
-        and BossHP. For self-outgoing damage to a target that is not present
-        in the known player table, treat it as a combat target.
-
-        v2.5.4: also force combat_target on by UUID encoding alone for any
-        non-player-suffix target (StarResonanceDps / resonance-logs-cn parity).
-        Stale `_players` entries preserved across scene resets used to make the
-        `known_player` early return swallow the very first hit on a new boss
-        whose encoded uid happened to collide with an old teammate's uid.
-        """
+        # Recover combat-target classification after scene/dungeon switches.
+        #
+        # Some instance transitions clear the monster cache before the first
+        # damage packet of the next dungeon arrives. If that target UUID has a
+        # player-looking suffix, the parser can conservatively mark it as a
+        # player until SyncNearEntities catches up, which suppresses both DPS
+        # and BossHP. For self-outgoing damage to a target that is not present
+        # in the known player table, treat it as a combat target.
+        #
+        # v2.5.4: also force combat_target on by UUID encoding alone for any
+        # non-player-suffix target (StarResonanceDps / resonance-logs-cn parity).
+        # Stale `_players` entries preserved across scene resets used to make the
+        # `known_player` early return swallow the very first hit on a new boss
+        # whose encoded uid happened to collide with an old teammate's uid.
         if not isinstance(event, dict):
             return event
         try:

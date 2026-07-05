@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""Regression tests for the Entity session players panel update signature."""
+# Regression tests for the Entity session players panel update signature.
 
 from __future__ import annotations
 

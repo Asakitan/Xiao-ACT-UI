@@ -1,22 +1,21 @@
 # -*- coding: utf-8 -*-
-"""mem_boss_action_reader - memory-driven boss action/skill feed (read-only).
-
-Turns the per-tick combat attrs (already decoded by EntityCombatReader) into a
-structured "boss action" stream: which skill an entity is CASTING (edge-detected
-from attr 100 / A_SKILL_ID flipping 0 -> positive), its breaking/overdrive/stun/
-hp state, and a best-effort cast DURATION so a downstream auto-dodge can be timed.
-
-Cast duration is genuinely hard (no per-entity float in the dump; ZActionAnimInfo
-.GetTotalTime is a method over Unity clips). Two layered sources, both honest:
-  - learned: measure observed cast length (wall clock between the start/end edges)
-    and EMA it per skill_id; available from the 2nd cast of a skill. The floor.
-  - buff:    read BuffComp -> BuffItem.Duration (a real ms field, offsets verified
-    vs dump fdc7111b) for a buff that appears at cast-start; the precise upgrade.
-
-Read-only. Never blocks the hot loop (the buff probe runs on the 1Hz path only,
-is bounded, and degrades to None). All offsets are IL2CPP field offsets (stable
-across base/ASLR).
-"""
+# mem_boss_action_reader - memory-driven boss action/skill feed (read-only).
+#
+# Turns the per-tick combat attrs (already decoded by EntityCombatReader) into a
+# structured "boss action" stream: which skill an entity is CASTING (edge-detected
+# from attr 100 / A_SKILL_ID flipping 0 -> positive), its breaking/overdrive/stun/
+# hp state, and a best-effort cast DURATION so a downstream auto-dodge can be timed.
+#
+# Cast duration is genuinely hard (no per-entity float in the dump; ZActionAnimInfo
+# .GetTotalTime is a method over Unity clips). Two layered sources, both honest:
+# - learned: measure observed cast length (wall clock between the start/end edges)
+# and EMA it per skill_id; available from the 2nd cast of a skill. The floor.
+# - buff:    read BuffComp -> BuffItem.Duration (a real ms field, offsets verified
+# vs dump fdc7111b) for a buff that appears at cast-start; the precise upgrade.
+#
+# Read-only. Never blocks the hot loop (the buff probe runs on the 1Hz path only,
+# is bounded, and degrades to None). All offsets are IL2CPP field offsets (stable
+# across base/ASLR).
 from __future__ import annotations
 
 import threading
@@ -62,8 +61,8 @@ def _plaus(p: Any) -> bool:
 
 
 class BossDurationProbe:
-    """Best-effort cast-duration decoder. Isolated so a bad read never breaks the
-    reliable edge feed. Reads are bounded; failure returns None/empty."""
+    # Best-effort cast-duration decoder. Isolated so a bad read never breaks the
+    # reliable edge feed. Reads are bounded; failure returns None/empty.
 
     def __init__(self, pm: Any, *, resolver=None):
         self.pm = pm
@@ -91,7 +90,7 @@ class BossDurationProbe:
             setattr(self, _k, _v)
 
     def read_actor_state(self, ent_addr: int) -> Optional[int]:
-        """ZEntity.stateMachine_.currentState_ (EActorState). None on bad read."""
+        # ZEntity.stateMachine_.currentState_ (EActorState). None on bad read.
         if not _plaus(ent_addr):
             return None
         sm = self.pm.read_u64(ent_addr + self.off_statemachine)
@@ -100,7 +99,7 @@ class BossDurationProbe:
         return self.pm.read_i32(sm + self.off_sm_curstate)
 
     def read_buffs(self, ent_addr: int) -> List[dict]:
-        """Read BuffComp -> [{uuid, base_id, create_ms, duration_ms}, ...]. Bounded."""
+        # Read BuffComp -> [{uuid, base_id, create_ms, duration_ms}, ...]. Bounded.
         import struct as _st
         if not _plaus(ent_addr):
             return []
@@ -145,8 +144,8 @@ class BossDurationProbe:
         return out
 
     def pick_cast_buff(self, buffs: List[dict], baseline_uuids: set) -> Optional[int]:
-        """Choose the cast-channel buff: one that appeared since `baseline_uuids`
-        with a plausible duration. Returns its duration_ms or None."""
+        # Choose the cast-channel buff: one that appeared since `baseline_uuids`
+        # with a plausible duration. Returns its duration_ms or None.
         cands = [b for b in buffs
                  if b["uuid"] not in baseline_uuids
                  and _DUR_MIN_MS <= b["duration_ms"] <= _DUR_MAX_MS]
@@ -158,12 +157,12 @@ class BossDurationProbe:
 
 
 class BossActionTracker:
-    """Edge-detects boss/monster casts and assembles JSON-safe action records.
-
-    Fed by the mem entity loop: ``update(snap, boss)`` per ~1Hz rich tick, and
-    ``update_fast(uuid, skill_id, actor_state, ...)`` per ~10Hz boss-only tick for
-    low-latency cast-start detection. Both share the per-uuid prev state under a
-    lock so whichever sees the edge first wins; the other is a no-op edge."""
+    # Edge-detects boss/monster casts and assembles JSON-safe action records.
+    #
+    # Fed by the mem entity loop: ``update(snap, boss)`` per ~1Hz rich tick, and
+    # ``update_fast(uuid, skill_id, actor_state, ...)`` per ~10Hz boss-only tick for
+    # low-latency cast-start detection. Both share the per-uuid prev state under a
+    # lock so whichever sees the edge first wins; the other is a no-op edge.
 
     def __init__(self, ecr: Any, *, pm: Any = None, name_resolver: Any = None,
                  duration_probe: Optional[BossDurationProbe] = None,
@@ -180,7 +179,7 @@ class BossActionTracker:
 
     # ── public ────────────────────────────────────────────────────────────────
     def update(self, snap: List[dict], boss: Optional[dict]) -> List[dict]:
-        """Rich per-tick update over the full entity snapshot. Never raises."""
+        # Rich per-tick update over the full entity snapshot. Never raises.
         # Read the boss's actor_state once so its instant skills (which don't set
         # cast_skill_id) are still detected on the rich path; non-boss entities use
         # the cheaper skill-id-only path.
@@ -232,8 +231,8 @@ class BossActionTracker:
 
     def update_fast(self, uuid: int, skill_id: int, actor_state: Optional[int] = None,
                     *, obj: int = 0) -> Optional[dict]:
-        """Low-latency boss-only update: edge-detect from skill_id alone, reusing
-        the base_id/name cached by the rich path. Returns the record on an edge."""
+        # Low-latency boss-only update: edge-detect from skill_id alone, reusing
+        # the base_id/name cached by the rich path. Returns the record on an edge.
         uuid = int(uuid or 0)
         if not uuid:
             return None
@@ -302,10 +301,10 @@ class BossActionTracker:
     # ── edge detection (call under lock) ──────────────────────────────────────
     def _apply_action_locked(self, st: dict, skill: int, actor_state: Optional[int],
                              is_boss: bool = True) -> str:
-        """Detect a skill-action start/end. An action is 'active' when the entity is
-        casting a skill (cast_skill_id>0) OR its actor_state is an active skill state
-        (Singing/Skill) — the latter catches instant skills (e.g. a counterattack)
-        that never populate cast_skill_id."""
+        # Detect a skill-action start/end. An action is 'active' when the entity is
+        # casting a skill (cast_skill_id>0) OR its actor_state is an active skill state
+        # (Singing/Skill) — the latter catches instant skills (e.g. a counterattack)
+        # that never populate cast_skill_id.
         skill = int(skill or 0)
         if actor_state is not None:
             st["actor_state"] = int(actor_state)
@@ -385,9 +384,9 @@ class BossActionTracker:
     _SKILL_PRIO = {"boss_mechanic_skill": 3, "boss_mechanic": 2, "boss_skill": 1}
 
     def _skill_name_hint(self, base_id: int):
-        """Best-effort, NON-authoritative display name for a buff base_id. The id
-        itself (read from memory) is the authority; this offline-table lookup may be
-        version-offset, so it is only a UI hint and never used for matching/filtering."""
+        # Best-effort, NON-authoritative display name for a buff base_id. The id
+        # itself (read from memory) is the authority; this offline-table lookup may be
+        # version-offset, so it is only a UI hint and never used for matching/filtering.
         nr = self._names
         if nr is None or base_id <= 0:
             return "", ""
@@ -403,12 +402,12 @@ class BossActionTracker:
         return "", ""
 
     def detect_buff_skill(self, uuid: int, obj: int):
-        """Return (base_id, name_hint, duration_ms, kind) for a NEW buff that appeared
-        on this entity since last call, else None. The boss's skills/mechanics surface
-        as transient buffs in BuffComp; the base_id + duration are read from memory
-        (authoritative). Persistent buffs (present from the baseline) never re-fire, so
-        only real skill casts emit. Name is a best-effort hint only -- the player maps
-        reactions by the memory base_id, so an offset name table can't break matching."""
+        # Return (base_id, name_hint, duration_ms, kind) for a NEW buff that appeared
+        # on this entity since last call, else None. The boss's skills/mechanics surface
+        # as transient buffs in BuffComp; the base_id + duration are read from memory
+        # (authoritative). Persistent buffs (present from the baseline) never re-fire, so
+        # only real skill casts emit. Name is a best-effort hint only -- the player maps
+        # reactions by the memory base_id, so an offset name table can't break matching.
         if not (self._probe and obj):
             return None
         with self._lock:

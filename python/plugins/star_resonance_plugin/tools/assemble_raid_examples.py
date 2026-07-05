@@ -1,11 +1,10 @@
 # -*- coding: utf-8 -*-
-"""assemble_raid_examples - 把 per-boss 机制分析(workflow 输出) 组装成示例机制 JSON。
-
-输入: raid-mechanics-per-boss-analysis workflow 的输出 (9 boss, 每 boss mechanics[])。
-输出: 每个 boss 一个 assets/boss_raids/<dungeon>_<boss名>_机制示例.json。
-机制 detect 绑真实 skill_id (boss_base_id=0 跨难度通用); 需范围的留 geometry 占位(壳子);
-躲避方向/TTS/notes 用分析结果。normalize_profile 保证格式。
-"""
+# assemble_raid_examples - 把 per-boss 机制分析(workflow 输出) 组装成示例机制 JSON。
+#
+# 输入: raid-mechanics-per-boss-analysis workflow 的输出 (9 boss, 每 boss mechanics[])。
+# 输出: 每个 boss 一个 assets/boss_raids/<dungeon>_<boss名>_机制示例.json。
+# 机制 detect 绑真实 skill_id (boss_base_id=0 跨难度通用); 需范围的留 geometry 占位(壳子);
+# 躲避方向/TTS/notes 用分析结果。normalize_profile 保证格式。
 from __future__ import annotations
 
 import json
@@ -53,7 +52,7 @@ def _mech_entry(m: dict, boss_id: int) -> dict:
 
 
 def cat_key(cat: str) -> str:
-    """中文 category → _MECH_COLOR 的英文 key (模糊映射)。"""
+    # 中文 category → _MECH_COLOR 的英文 key (模糊映射)。
     m = {"分摊": "stack", "全场": "raidwide", "环形": "ring", "冲锋": "charge",
          "吐息": "breath", "横扫": "sweep", "砸地": "slam", "十字": "cross",
          "点名": "marker", "落点": "fall", "召唤": "summon", "连线": "link",

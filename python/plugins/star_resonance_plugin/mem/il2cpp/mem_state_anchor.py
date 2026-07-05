@@ -1,41 +1,40 @@
-"""mem_state_anchor — TCP-anchored memory reader for self state.
-
-Static-RVA + `_find_self` only works when the live GameAssembly matches the
-checked-in bundle byte-for-byte.  In production the game patches small fields
-(blob sizes, alignment padding) and the old static-resolver path goes stale.
-The fix is to stop trusting RVA and use **TCP-stable semantic IDs** as
-anchors instead — every read is constrained by multiple independent fields,
-so the false-positive rate is negligible.
-
-Pipeline:
-
-  1. Build an anchor pack from the TCP parser state:
-       - self_uid (CharId)
-       - self_profession_id
-       - self_level
-       - self_skill_level_ids (set of SkillLevelId values)
-       - self_dungeon_id
-       - self_scene_id
-       - monster_template_ids + max_hp (set of (template_id, max_hp) pairs)
-  2. The anchor pack is small (~tens of bytes) but uniquely identifies the
-     live player instance in a 6 GB private heap.
-  3. ``find_self_via_anchors(anchor)``:
-       a. Scan all private readable regions.
-       b. For each 4-byte aligned offset, look at a sliding window of the
-          anchor fields (level, profession, dungeon, scene) and demand
-          ALL of them to match simultaneously.
-       c. When a candidate region has every anchor field aligned correctly,
-          verify via the SkillCD array: read the nearest RepeatedField
-          array, decode SkillCDInfo entries, and demand that ≥80% of the
-          anchor's known skill ids appear.
-       d. The single matching instance is the live player; its
-          ``CharSerialize`` object base address falls out for free.
-  4. With the validated base, walk the proto layout to read HP / Attr /
-     Level / EnergyItem / etc — using the BUNDLE FOR SHAPE ONLY
-     (no klass_ptr validation; we just need field offsets, not klass).
-
-The whole thing is read-only.  No hook, no injection, no written memory.
-"""
+# mem_state_anchor — TCP-anchored memory reader for self state.
+#
+# Static-RVA + `_find_self` only works when the live GameAssembly matches the
+# checked-in bundle byte-for-byte.  In production the game patches small fields
+# (blob sizes, alignment padding) and the old static-resolver path goes stale.
+# The fix is to stop trusting RVA and use **TCP-stable semantic IDs** as
+# anchors instead — every read is constrained by multiple independent fields,
+# so the false-positive rate is negligible.
+#
+# Pipeline:
+#
+# 1. Build an anchor pack from the TCP parser state:
+# - self_uid (CharId)
+# - self_profession_id
+# - self_level
+# - self_skill_level_ids (set of SkillLevelId values)
+# - self_dungeon_id
+# - self_scene_id
+# - monster_template_ids + max_hp (set of (template_id, max_hp) pairs)
+# 2. The anchor pack is small (~tens of bytes) but uniquely identifies the
+# live player instance in a 6 GB private heap.
+# 3. ``find_self_via_anchors(anchor)``:
+# a. Scan all private readable regions.
+# b. For each 4-byte aligned offset, look at a sliding window of the
+# anchor fields (level, profession, dungeon, scene) and demand
+# ALL of them to match simultaneously.
+# c. When a candidate region has every anchor field aligned correctly,
+# verify via the SkillCD array: read the nearest RepeatedField
+# array, decode SkillCDInfo entries, and demand that ≥80% of the
+# anchor's known skill ids appear.
+# d. The single matching instance is the live player; its
+# ``CharSerialize`` object base address falls out for free.
+# 4. With the validated base, walk the proto layout to read HP / Attr /
+# Level / EnergyItem / etc — using the BUNDLE FOR SHAPE ONLY
+# (no klass_ptr validation; we just need field offsets, not klass).
+#
+# The whole thing is read-only.  No hook, no injection, no written memory.
 from __future__ import annotations
 
 import os
@@ -133,7 +132,7 @@ SKILL_CD_INFO = {
 
 @dataclass
 class AnchorPack:
-    """The TCP-side semantic identifiers we will use to disambiguate memory."""
+    # The TCP-side semantic identifiers we will use to disambiguate memory.
     uid: int = 0
     profession_id: int = 0
     level: int = 0
@@ -144,18 +143,18 @@ class AnchorPack:
     seen_at: float = 0.0
 
     def is_strong(self) -> bool:
-        """A weak anchor pack can't pin down the live player; refuse to scan."""
+        # A weak anchor pack can't pin down the live player; refuse to scan.
         return self.uid > 0 and (self.level > 0 or self.profession_id > 0
                                  or len(self.skill_level_ids) >= 3)
 
     def has_semantic_detail(self) -> bool:
-        """Return True when TCP has more than just the uid."""
+        # Return True when TCP has more than just the uid.
         return self.level > 0 or self.profession_id > 0 or bool(self.skill_level_ids)
 
 
 @dataclass
 class ResolvedSelf:
-    """Result of anchor-driven self lookup."""
+    # Result of anchor-driven self lookup.
     char_serialize_obj: int
     user_fight_attr_obj: int
     char_base_obj: int
@@ -183,11 +182,10 @@ class ResolvedSelf:
 
 
 class AnchorMemoryReader:
-    """Pure anchor-driven memory reader.
-
-    No static RVA / klass-ptr validation.  All disambiguation is done with
-    TCP-derived semantic IDs.
-    """
+    # Pure anchor-driven memory reader.
+    #
+    # No static RVA / klass-ptr validation.  All disambiguation is done with
+    # TCP-derived semantic IDs.
 
     # Each candidate is a (region_base, region_size) tuple already filtered
     # to private+readable.
@@ -232,7 +230,7 @@ class AnchorMemoryReader:
         self.last_confidence: float = 0.0
 
     def _init_layout(self, resolver) -> None:
-        """Resolve the proto field layouts by name (live memory -> dump -> literal)."""
+        # Resolve the proto field layouts by name (live memory -> dump -> literal).
         from plugins.star_resonance_plugin.mem.il2cpp import auto_offsets as _ao
 
         def _R(literal_map, class_name):
@@ -259,11 +257,10 @@ class AnchorMemoryReader:
             pass
 
     def _ga_base(self) -> int:
-        """GameAssembly/main-module base for the current process (0 on failure).
-
-        Part of the session-cache invalidation set: a base change means the game
-        relaunched (ASLR), so any cached object address is stale.
-        """
+        # GameAssembly/main-module base for the current process (0 on failure).
+        #
+        # Part of the session-cache invalidation set: a base change means the game
+        # relaunched (ASLR), so any cached object address is stale.
         try:
             mod = self.pm.main_module()
             return int(getattr(mod, "base", 0) or 0)
@@ -293,12 +290,11 @@ class AnchorMemoryReader:
 
     @staticmethod
     def _score_region(region) -> float:
-        """Heuristic score: 'most-likely IL2CPP GC heap' first.
-
-        bdwgc super-blocks are large, committed, private, read-write regions.
-        Pure arithmetic on already-enumerated fields — no extra RPC. Higher =
-        scanned earlier; full-heap coverage is preserved (ranking only reorders).
-        """
+        # Heuristic score: 'most-likely IL2CPP GC heap' first.
+        #
+        # bdwgc super-blocks are large, committed, private, read-write regions.
+        # Pure arithmetic on already-enumerated fields — no extra RPC. Higher =
+        # scanned earlier; full-heap coverage is preserved (ranking only reorders).
         size = max(0, int(getattr(region, "size", 0) or 0))
         if bool(getattr(region, "is_image", False)):
             return 0.0
@@ -323,12 +319,11 @@ class AnchorMemoryReader:
         return score
 
     def _ranked_regions(self):
-        """`_regions()` ordered GC-heap-first; cached under the same TTL gate.
-
-        Stable sort → tie-break stays address order. The owning-region search
-        and full-heap fallback both still visit every region; this only changes
-        the order so a strong-anchor caller validates-and-stops sooner.
-        """
+        # `_regions()` ordered GC-heap-first; cached under the same TTL gate.
+        #
+        # Stable sort → tie-break stays address order. The owning-region search
+        # and full-heap fallback both still visit every region; this only changes
+        # the order so a strong-anchor caller validates-and-stops sooner.
         if self._cached_ranked is None:
             self._cached_ranked = sorted(
                 list(self._regions()), key=self._score_region, reverse=True
@@ -336,7 +331,7 @@ class AnchorMemoryReader:
         return self._cached_ranked
 
     def _owning_region(self, addr: int):
-        """Return the cached region containing ``addr`` (or None)."""
+        # Return the cached region containing ``addr`` (or None).
         if not addr:
             return None
         for region in self._regions():
@@ -408,11 +403,10 @@ class AnchorMemoryReader:
 
     @staticmethod
     def build_anchor_from_parser(parser) -> AnchorPack:
-        """Pull a fresh anchor pack from the live TCP parser state.
-
-        Safe even when the parser is mid-stream: we copy the uid/level/profession
-        fields by value, then iterate skill_cd_map for skill_level_ids.
-        """
+        # Pull a fresh anchor pack from the live TCP parser state.
+        #
+        # Safe even when the parser is mid-stream: we copy the uid/level/profession
+        # fields by value, then iterate skill_cd_map for skill_level_ids.
         if parser is None:
             return AnchorPack()
         ap = AnchorPack()
@@ -459,14 +453,13 @@ class AnchorMemoryReader:
     # ---------- skill-cd driven self discovery ----------
 
     def _iter_uid_candidates(self, anchor: AnchorPack, max_hits: int = 4096) -> Iterator[int]:
-        """Yield candidate ``CharSerialize`` bases by TCP-confirmed uid, lazily.
-
-        ``CharSerialize.CharId`` is at ``+0x10``.  We scan readable private
-        regions with the Cython u64 scanner, then subtract that field offset.
-        Yielding region-by-region lets a strong-anchor caller validate-and-stop
-        the moment self is found, instead of always sweeping the whole heap to
-        collect every uid collision first.
-        """
+        # Yield candidate ``CharSerialize`` bases by TCP-confirmed uid, lazily.
+        #
+        # ``CharSerialize.CharId`` is at ``+0x10``.  We scan readable private
+        # regions with the Cython u64 scanner, then subtract that field offset.
+        # Yielding region-by-region lets a strong-anchor caller validate-and-stop
+        # the moment self is found, instead of always sweeping the whole heap to
+        # collect every uid collision first.
         if anchor.uid <= 0:
             return
         emitted = 0
@@ -508,18 +501,17 @@ class AnchorMemoryReader:
                 off += n
 
     def _scan_for_uid_candidates(self, anchor: AnchorPack, max_hits: int = 4096) -> List[int]:
-        """Eagerly collect all uid candidates (used by the weak-anchor path)."""
+        # Eagerly collect all uid candidates (used by the weak-anchor path).
         return list(self._iter_uid_candidates(anchor, max_hits))
 
     def _read_skill_matches_from_attr(self, attr: int, anchor_skills: Set[int],
                                       max_items: int = 512) -> Set[int]:
-        """Read ``UserFightAttr.CdInfo`` and return skill ids found in anchors.
-
-        RepeatedField<T> is a heap object pointer stored at ``attr+0x50``:
-        ``+0x10`` array pointer, ``+0x18`` count, IL2CPP array elements at
-        ``array+0x20``.  The pointer array itself is read in one batch; only
-        the candidate SkillCDInfo objects are then sampled one by one.
-        """
+        # Read ``UserFightAttr.CdInfo`` and return skill ids found in anchors.
+        #
+        # RepeatedField<T> is a heap object pointer stored at ``attr+0x50``:
+        # ``+0x10`` array pointer, ``+0x18`` count, IL2CPP array elements at
+        # ``array+0x20``.  The pointer array itself is read in one batch; only
+        # the candidate SkillCDInfo objects are then sampled one by one.
         if not anchor_skills or not self._plausible_ptr(attr):
             return set()
         rf = self._read_u64(attr + self.USER_FIGHT_ATTR['CdInfo'][0])
@@ -587,15 +579,14 @@ class AnchorMemoryReader:
         return matched
 
     def _scan_for_skill_cd_arrays(self, anchor: AnchorPack) -> List[Tuple[int, Set[int]]]:
-        """Find every RepeatedField<SkillCDInfo> array in private heap.
-
-        Strategy: chunk-scan private regions with the Cython-decorated
-        ``find_skill_cd_arrays_in_blob`` which finds every 4-byte aligned
-        int32 in [50, 1024] (a plausible array count) and validates the
-        neighboring array header + first element pointer *all inside the
-        same blob*, so no per-candidate RPC is needed.  Elements that
-        live in another region are filtered via a quick ``in_blob`` flag.
-        """
+        # Find every RepeatedField<SkillCDInfo> array in private heap.
+        #
+        # Strategy: chunk-scan private regions with the Cython-decorated
+        # ``find_skill_cd_arrays_in_blob`` which finds every 4-byte aligned
+        # int32 in [50, 1024] (a plausible array count) and validates the
+        # neighboring array header + first element pointer *all inside the
+        # same blob*, so no per-candidate RPC is needed.  Elements that
+        # live in another region are filtered via a quick ``in_blob`` flag.
         if not anchor.skill_level_ids:
             return []
         anchor_skill_set = set(int(s) for s in anchor.skill_level_ids)
@@ -675,7 +666,7 @@ class AnchorMemoryReader:
     def _validate_candidate(self, cs_base: int, anchor: AnchorPack,
                             anchor_skills: Set[int], min_skill_matches: int,
                             t0: float) -> Optional[ResolvedSelf]:
-        """Validate one CharSerialize candidate; shared by full + window scans."""
+        # Validate one CharSerialize candidate; shared by full + window scans.
         ok, info = self._validate_self(cs_base, anchor)
         if not ok:
             return None
@@ -693,12 +684,11 @@ class AnchorMemoryReader:
         # NOTE: keep _last_known_base/_last_known_uid as a window-scan hint.
 
     def _remember(self, anchor: AnchorPack, resolved: ResolvedSelf) -> None:
-        """Store the resolved self into the session cache + klass sentinel.
-
-        Honors the "no klass → no anchor" rule: if obj+0 is not a plausible heap
-        pointer we keep only the window hint and refuse to cache a base we cannot
-        validate. Never persisted to disk — the base is session-volatile (ASLR).
-        """
+        # Store the resolved self into the session cache + klass sentinel.
+        #
+        # Honors the "no klass → no anchor" rule: if obj+0 is not a plausible heap
+        # pointer we keep only the window hint and refuse to cache a base we cannot
+        # validate. Never persisted to disk — the base is session-volatile (ASLR).
         cs = int(resolved.char_serialize_obj or 0)
         self._last_known_base = cs
         self._last_known_uid = int(anchor.uid or 0)
@@ -761,13 +751,12 @@ class AnchorMemoryReader:
 
     def reacquire_self(self, anchor: AnchorPack, hint_addr: int, *,
                        window_bytes: Optional[int] = None) -> Optional[ResolvedSelf]:
-        """Bounded re-acquisition: scan a window around ``hint_addr``.
-
-        Used when the session cache is dropped (object moved within the heap) so
-        self is re-found cheaply near its previous neighbourhood before paying a
-        full ranked scan. Read-only; returns the first validated candidate, else
-        None (caller escalates to the ranked full scan).
-        """
+        # Bounded re-acquisition: scan a window around ``hint_addr``.
+        #
+        # Used when the session cache is dropped (object moved within the heap) so
+        # self is re-found cheaply near its previous neighbourhood before paying a
+        # full ranked scan. Read-only; returns the first validated candidate, else
+        # None (caller escalates to the ranked full scan).
         if anchor.uid <= 0 or not self._plausible_ptr(hint_addr):
             return None
         region = self._owning_region(hint_addr)
@@ -809,14 +798,13 @@ class AnchorMemoryReader:
         return resolved
 
     def find_self(self, anchor: AnchorPack) -> Optional[ResolvedSelf]:
-        """Find the live player via anchor-driven scanning.
-
-        Order: (1) klass-sentinel session cache, (2) bounded window re-scan
-        around the last-known base, (3) GC-heap-first ranked full scan. The uid
-        (``CharSerialize.CharId`` at +0x10) is the first hard anchor; each
-        candidate is validated through object pointers and ``CdInfo`` skill ids.
-        No static RVA/klass trust; no persisted base (session-volatile, ASLR).
-        """
+        # Find the live player via anchor-driven scanning.
+        #
+        # Order: (1) klass-sentinel session cache, (2) bounded window re-scan
+        # around the last-known base, (3) GC-heap-first ranked full scan. The uid
+        # (``CharSerialize.CharId`` at +0x10) is the first hard anchor; each
+        # candidate is validated through object pointers and ``CdInfo`` skill ids.
+        # No static RVA/klass trust; no persisted base (session-volatile, ASLR).
         if anchor.uid <= 0:
             self.last_scan_mode = "miss"
             return None
@@ -871,7 +859,7 @@ class AnchorMemoryReader:
         return None
 
     def _validate_self(self, cs_base: int, anchor: AnchorPack) -> Tuple[bool, dict]:
-        """Cross-validate candidate CharSerialize base via field readback."""
+        # Cross-validate candidate CharSerialize base via field readback.
         info = {'ufa': 0, 'cb': 0, 'ei': 0, 'rl': 0, 'pl': 0, 'used': '', 'confidence': 0.0}
         checks = 0
         passed = 0
@@ -1034,7 +1022,7 @@ class AnchorMemoryReader:
         return out
 
     def _read_il2cpp_string(self, str_field_addr: int) -> Optional[str]:
-        """Read a `string` field (a heap ptr to Il2CppString)."""
+        # Read a `string` field (a heap ptr to Il2CppString).
         ptr = self._read_u64(str_field_addr)
         if not ptr:
             return None

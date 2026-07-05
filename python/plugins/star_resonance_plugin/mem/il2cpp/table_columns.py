@@ -1,33 +1,32 @@
 # -*- coding: utf-8 -*-
-"""table_columns - extract config-table row blob column offsets from getter thunks.
-
-A table row's serialized blob columns are NOT IL2CPP class fields, so the
-auto_offsets (live field table / dump bundle) path cannot resolve them. The
-authoritative source is the compiled property getter itself: every row getter
-is a tiny thunk
-
-    call <get_proxy helper>
-    xor  r8d, r8d
-    mov  edx, <COLUMN>        ; or xor edx,edx for column 0
-    mov  rcx, rax
-    ...epilogue...
-    jmp  <ReadProxy.ReadXxx>  ; reader picks the column TYPE
-
-so the column offset is the ``edx`` immediate and the column type follows from
-which ``ReadProxy.Read*`` the thunk tail-jumps to. ``dump.cs`` provides each
-getter's file Offset + RVA and the ReadProxy reader RVAs, so the whole
-extraction works offline on ``out/<dump_id>/`` artifacts.
-
-Resolution order used by callers:
-  1. versioned cache ``_cache/table_columns_<dump_id>.json``
-  2. fresh extraction from dump.cs + GameAssembly.dll (then cached)
-  3. ``FALLBACK`` curated literals
-plus a live ``self_check`` gate: when the extracted columns fail live
-plausibility the caller downgrades to the literals (with a log line).
-
-Offline CLI:
-    python -m mem_probe.il2cpp.table_columns Bokura.RaidDungeonTableBase [more...]
-"""
+# table_columns - extract config-table row blob column offsets from getter thunks.
+#
+# A table row's serialized blob columns are NOT IL2CPP class fields, so the
+# auto_offsets (live field table / dump bundle) path cannot resolve them. The
+# authoritative source is the compiled property getter itself: every row getter
+# is a tiny thunk
+#
+# call <get_proxy helper>
+# xor  r8d, r8d
+# mov  edx, <COLUMN>        ; or xor edx,edx for column 0
+# mov  rcx, rax
+# ...epilogue...
+# jmp  <ReadProxy.ReadXxx>  ; reader picks the column TYPE
+#
+# so the column offset is the ``edx`` immediate and the column type follows from
+# which ``ReadProxy.Read*`` the thunk tail-jumps to. ``dump.cs`` provides each
+# getter's file Offset + RVA and the ReadProxy reader RVAs, so the whole
+# extraction works offline on ``out/<dump_id>/`` artifacts.
+#
+# Resolution order used by callers:
+# 1. versioned cache ``_cache/table_columns_<dump_id>.json``
+# 2. fresh extraction from dump.cs + GameAssembly.dll (then cached)
+# 3. ``FALLBACK`` curated literals
+# plus a live ``self_check`` gate: when the extracted columns fail live
+# plausibility the caller downgrades to the literals (with a log line).
+#
+# Offline CLI:
+# python -m mem_probe.il2cpp.table_columns Bokura.RaidDungeonTableBase [more...]
 from __future__ import annotations
 
 import json
@@ -140,11 +139,11 @@ def _find_ga(d: str) -> str:
 
 
 def select_dump_dir(out_root: str = _OUT_ROOT) -> Optional[Tuple[str, str]]:
-    """Pick the dump dir to extract from. Returns (dir, dump_id) or None.
-
-    Preference: the version matching the RUNNING game (via bundle_store), when
-    its out/<dump_id>/ dir holds both dump.cs and GameAssembly.dll; otherwise
-    the newest out/ dir that has both artifacts."""
+    # Pick the dump dir to extract from. Returns (dir, dump_id) or None.
+    #
+    # Preference: the version matching the RUNNING game (via bundle_store), when
+    # its out/<dump_id>/ dir holds both dump.cs and GameAssembly.dll; otherwise
+    # the newest out/ dir that has both artifacts.
     try:
         from plugins.star_resonance_plugin.mem.il2cpp.bundle_store import find_bundle_for_running_game
         hit = find_bundle_for_running_game()
@@ -179,12 +178,12 @@ def select_dump_dir(out_root: str = _OUT_ROOT) -> Optional[Tuple[str, str]]:
 
 def parse_classes_getters(dump_cs_path: str, class_full_names: Iterable[str],
                           ) -> Tuple[Dict[str, Dict[str, Tuple[int, int]]], Dict[int, str]]:
-    """One streaming pass over dump.cs.
-
-    Returns ({class_full_name: {prop: (rva, file_offset)}},
-             {reader_rva: reader_method_name}) — the latter from the
-    ``Bokura.Table.ReadProxy`` struct block. Early-exits once every wanted
-    class block and the ReadProxy block have been consumed."""
+    # One streaming pass over dump.cs.
+    #
+    # Returns ({class_full_name: {prop: (rva, file_offset)}},
+    # {reader_rva: reader_method_name}) — the latter from the
+    # ``Bokura.Table.ReadProxy`` struct block. Early-exits once every wanted
+    # class block and the ReadProxy block have been consumed.
     want = {str(c) for c in class_full_names}
     by_short: Dict[str, str] = {}
     for full in want | {READPROXY_CLS}:
@@ -257,7 +256,7 @@ def parse_classes_getters(dump_cs_path: str, class_full_names: Iterable[str],
 
 def parse_class_getters(dump_cs_path: str, class_full_name: str,
                         ) -> Tuple[Dict[str, Tuple[int, int]], Dict[int, str]]:
-    """Single-class convenience wrapper: ({prop: (rva, file_offset)}, reader_map)."""
+    # Single-class convenience wrapper: ({prop: (rva, file_offset)}, reader_map).
     getters, reader_map = parse_classes_getters(dump_cs_path, [class_full_name])
     return getters.get(class_full_name, {}), reader_map
 
@@ -266,12 +265,12 @@ def parse_class_getters(dump_cs_path: str, class_full_name: str,
 
 def extract_columns(ga_path: str, getters: Dict[str, Tuple[int, int]],
                     reader_map: Dict[int, str]) -> Dict[str, Tuple[int, str]]:
-    """{prop: (rva, file_off)} -> {prop: (column_offset, type_tag)}.
-
-    Reads <=0x100 bytes per getter at its file offset, matches the thunk byte
-    pattern, converts the tail-jmp rel32 to an RVA and requires it to land on a
-    known ReadProxy reader. Getters whose body does not match (non-thunk
-    getters, cached MLString wrappers, ...) are dropped."""
+    # {prop: (rva, file_off)} -> {prop: (column_offset, type_tag)}.
+    #
+    # Reads <=0x100 bytes per getter at its file offset, matches the thunk byte
+    # pattern, converts the tail-jmp rel32 to an RVA and requires it to land on a
+    # known ReadProxy reader. Getters whose body does not match (non-thunk
+    # getters, cached MLString wrappers, ...) are dropped.
     out: Dict[str, Tuple[int, str]] = {}
     with open(ga_path, "rb") as f:
         for prop, (rva, off) in getters.items():
@@ -331,10 +330,10 @@ def _save_cache(dump_id: str, classes: Dict[str, Dict[str, Tuple[int, str]]]) ->
 def load_columns(class_full_names: Iterable[str], *, dump_dir: Optional[str] = None,
                  dump_id: Optional[str] = None, use_cache: bool = True,
                  log=print) -> Dict[str, Dict[str, Tuple[int, str]]]:
-    """Columns for several classes: cache -> extraction -> FALLBACK (per class).
-
-    Always returns an entry for every requested class (possibly the literal
-    fallback, possibly {}); the per-class source is logged."""
+    # Columns for several classes: cache -> extraction -> FALLBACK (per class).
+    #
+    # Always returns an entry for every requested class (possibly the literal
+    # fallback, possibly {}); the per-class source is logged.
     want = [str(c) for c in class_full_names]
     if dump_dir is None:
         sel = select_dump_dir()
@@ -376,17 +375,17 @@ def self_check(reader, class_full_name: str, columns: Dict[str, Tuple[int, str]]
                pool=None, sample: int = 12, min_ratio: float = 0.5,
                expect: Optional[Dict[str, Tuple[int, int]]] = None,
                log=print) -> bool:
-    """Validate extracted columns against live rows. ``reader`` is a
-    MemConfigTableReader; ``pool`` an optional StringPoolBridge for mlstring
-    probes. Per-row gates:
-      - column-0 i32 (the row id) > 0
-      - every ``expect`` prop value lies within its (lo, hi) range
-      - i32array columns decode with 0 <= count <= 512
-    Stale heap objects with recycled ReadProxy ids decode a FOREIGN table's
-    blob, so single bad rows are expected noise: the check passes when at least
-    ``min_ratio`` of sampled rows pass all gates AND at least one passing row
-    resolves an mlstring column to a CJK string (when ``pool`` is ready).
-    Returns False (caller downgrades to literals) on failure."""
+    # Validate extracted columns against live rows. ``reader`` is a
+    # MemConfigTableReader; ``pool`` an optional StringPoolBridge for mlstring
+    # probes. Per-row gates:
+    # - column-0 i32 (the row id) > 0
+    # - every ``expect`` prop value lies within its (lo, hi) range
+    # - i32array columns decode with 0 <= count <= 512
+    # Stale heap objects with recycled ReadProxy ids decode a FOREIGN table's
+    # blob, so single bad rows are expected noise: the check passes when at least
+    # ``min_ratio`` of sampled rows pass all gates AND at least one passing row
+    # resolves an mlstring column to a CJK string (when ``pool`` is ready).
+    # Returns False (caller downgrades to literals) on failure.
     rows = []
     try:
         # the validated loader walk yields clean serialized rows; the heap scan

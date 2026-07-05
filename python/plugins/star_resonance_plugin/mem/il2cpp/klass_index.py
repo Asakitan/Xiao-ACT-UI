@@ -1,33 +1,32 @@
 # -*- coding: utf-8 -*-
-"""klass_index - process-wide, version-keyed shared klass-by-name resolver.
-
-Every reader (entity mgr, damage mgr, string pool, scene table, camera, field
-resolver) needs to turn a class name into the live ``Il2CppClass*`` for the
-running game. Before this module, each one called
-``auto_registration_locator.build_live_class_index`` independently — so a single
-session scanned the GameAssembly image 5+ times (once per reader, each for a
-single class name), and every game launch paid the full multi-hundred-MB scan
-again from scratch.
-
-This collapses all of that into:
-
-  1. **One process-level index** keyed by ``(pid, ga_base)``. The union of every
-     reader's wanted class names is scanned in a SINGLE pass; later lookups are
-     dict hits. A name found once is never re-scanned in the session.
-
-  2. **Persistent RVA cache** keyed by ``game_key`` (sha256 of the GA image's
-     first 1 MB — the same version fingerprint ``bundle_store`` uses). On the
-     next launch, each class resolves with ONE ``read_u64(ga + rva)`` + a live
-     name check instead of a fresh image scan. A wrong RVA (game patched) simply
-     fails the name check and falls through to a re-scan, then re-persists — it
-     self-heals exactly like the offset bundle.
-
-  3. **Negative cache** so a class the game genuinely doesn't expose is scanned
-     for at most once per session, not on every reader's first lookup.
-
-Read-only. The index holds live addresses (never persisted — only RVAs are), so
-a relaunch (new ``ga_base``/pid) naturally builds a fresh instance.
-"""
+# klass_index - process-wide, version-keyed shared klass-by-name resolver.
+#
+# Every reader (entity mgr, damage mgr, string pool, scene table, camera, field
+# resolver) needs to turn a class name into the live ``Il2CppClass*`` for the
+# running game. Before this module, each one called
+# ``auto_registration_locator.build_live_class_index`` independently — so a single
+# session scanned the GameAssembly image 5+ times (once per reader, each for a
+# single class name), and every game launch paid the full multi-hundred-MB scan
+# again from scratch.
+#
+# This collapses all of that into:
+#
+# 1. **One process-level index** keyed by ``(pid, ga_base)``. The union of every
+# reader's wanted class names is scanned in a SINGLE pass; later lookups are
+# dict hits. A name found once is never re-scanned in the session.
+#
+# 2. **Persistent RVA cache** keyed by ``game_key`` (sha256 of the GA image's
+# first 1 MB — the same version fingerprint ``bundle_store`` uses). On the
+# next launch, each class resolves with ONE ``read_u64(ga + rva)`` + a live
+# name check instead of a fresh image scan. A wrong RVA (game patched) simply
+# fails the name check and falls through to a re-scan, then re-persists — it
+# self-heals exactly like the offset bundle.
+#
+# 3. **Negative cache** so a class the game genuinely doesn't expose is scanned
+# for at most once per session, not on every reader's first lookup.
+#
+# Read-only. The index holds live addresses (never persisted — only RVAs are), so
+# a relaunch (new ``ga_base``/pid) naturally builds a fresh instance.
 from __future__ import annotations
 
 import hashlib
@@ -70,7 +69,7 @@ def _save_rva_store(store: Dict[str, Dict[str, int]]) -> None:
 
 
 class SharedKlassIndex:
-    """One name->klass_ptr index per (pid, ga_base), with persistent RVAs."""
+    # One name->klass_ptr index per (pid, ga_base), with persistent RVAs.
 
     def __init__(self, pm, ga_module=None):
         self.pm = pm
@@ -136,12 +135,11 @@ class SharedKlassIndex:
 
     # ---- public ----
     def resolve_many(self, names: Iterable[str], *, time_budget_s: float = 40.0) -> Dict[str, int]:
-        """Resolve ``names`` -> ``{name: kp}`` (only the found ones).
-
-        Order per name: session cache -> persisted RVA (validate by name) ->
-        single GA scan of all still-missing names. Newly discovered RVAs are
-        persisted so the next launch skips the scan.
-        """
+        # Resolve ``names`` -> ``{name: kp}`` (only the found ones).
+        #
+        # Order per name: session cache -> persisted RVA (validate by name) ->
+        # single GA scan of all still-missing names. Newly discovered RVAs are
+        # persisted so the next launch skips the scan.
         want = {str(n) for n in names if n}
         out: Dict[str, int] = {}
         with self._lock:
@@ -194,18 +192,18 @@ class SharedKlassIndex:
         return out
 
     def resolve(self, name: str, *, time_budget_s: float = 40.0) -> int:
-        """Resolve a single class name -> kp (0 if not found)."""
+        # Resolve a single class name -> kp (0 if not found).
         return int(self.resolve_many({name}, time_budget_s=time_budget_s).get(name, 0) or 0)
 
     def invalidate(self) -> None:
-        """Drop the session cache (keep persisted RVAs). Called on server change."""
+        # Drop the session cache (keep persisted RVAs). Called on server change.
         with self._lock:
             self._resolved.clear()
             self._negative.clear()
 
 
 def get_shared_index(pm) -> Optional[SharedKlassIndex]:
-    """Return the process-wide klass index for ``pm`` (one per pid+ga_base)."""
+    # Return the process-wide klass index for ``pm`` (one per pid+ga_base).
     if pm is None:
         return None
     try:
@@ -231,7 +229,7 @@ def get_shared_index(pm) -> Optional[SharedKlassIndex]:
 
 
 def resolve_klasses(pm, names: Iterable[str], *, time_budget_s: float = 40.0) -> Dict[str, int]:
-    """Convenience: resolve ``names`` via the shared process index."""
+    # Convenience: resolve ``names`` via the shared process index.
     idx = get_shared_index(pm)
     if idx is None:
         return {}

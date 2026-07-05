@@ -1,10 +1,9 @@
 # -*- coding: utf-8 -*-
-"""mem_field_geometry_reader - 读 FieldTable 的领域机制几何 (Size=半径米, 游戏开时可读).
-
-实测: FieldTable.Size(i32array) 就是半径(米): 虚蚀龙-X盾领域=[3], 毒圈=[8], 缩圈=[19]。
-游戏开着房间里就能读(领域 field 常驻/当前场景加载)。SkillId 多为 0(静态链路断), 按 Name
-含 boss 标识匹配机制。这是"游戏开就能拿的部分几何源", 配合运行时时间关联补全瞬时招几何。
-"""
+# mem_field_geometry_reader - 读 FieldTable 的领域机制几何 (Size=半径米, 游戏开时可读).
+#
+# 实测: FieldTable.Size(i32array) 就是半径(米): 虚蚀龙-X盾领域=[3], 毒圈=[8], 缩圈=[19]。
+# 游戏开着房间里就能读(领域 field 常驻/当前场景加载)。SkillId 多为 0(静态链路断), 按 Name
+# 含 boss 标识匹配机制。这是"游戏开就能拿的部分几何源", 配合运行时时间关联补全瞬时招几何。
 from __future__ import annotations
 
 from typing import Dict, List
@@ -19,7 +18,7 @@ class FieldGeometryReader:
         self._src = dps_source
 
     def read_all(self) -> List[Dict]:
-        """返回 [{name, shape, radius, inner}] —— FieldTable 全部带 Size 的领域几何。"""
+        # 返回 [{name, shape, radius, inner}] —— FieldTable 全部带 Size 的领域几何。
         out = []
         try:
             from plugins.star_resonance_plugin.mem.il2cpp import table_columns

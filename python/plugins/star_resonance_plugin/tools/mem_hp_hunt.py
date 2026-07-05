@@ -1,14 +1,13 @@
 # -*- coding: utf-8 -*-
-"""Live HP hunt — find a known boss/dummy HP value inside ZAttrCacheSlim._values.
-
-ZAttrCollection (attrs):
-  +0x18  ZAttrCacheSlim _indexPart (IntPtr)
-  +0x20  ValueTuple<uint, object[]>[] _values   (array: len@+0x18, elems@+0x20)
-Each _values element (16B): Item1 uint @+0, Item2 object[] @+8.
-Each object[] element is an attr value object; we scan it for the target HP.
-
-Usage: python tools/mem_hp_hunt.py --lo 16000000 --hi 19500000
-"""
+# Live HP hunt — find a known boss/dummy HP value inside ZAttrCacheSlim._values.
+#
+# ZAttrCollection (attrs):
+# +0x18  ZAttrCacheSlim _indexPart (IntPtr)
+# +0x20  ValueTuple<uint, object[]>[] _values   (array: len@+0x18, elems@+0x20)
+# Each _values element (16B): Item1 uint @+0, Item2 object[] @+8.
+# Each object[] element is an attr value object; we scan it for the target HP.
+#
+# Usage: python tools/mem_hp_hunt.py --lo 16000000 --hi 19500000
 from __future__ import annotations
 import argparse, struct, sys, os
 _HERE=os.path.dirname(os.path.abspath(__file__)); _ROOT=os.path.dirname(_HERE)

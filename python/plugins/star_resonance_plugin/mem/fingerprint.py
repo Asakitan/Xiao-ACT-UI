@@ -1,21 +1,20 @@
-"""指纹定位 — 替代指针链的 Plan B 方案.
-
-思路:
-    1. refine 完成时, 读 self_hp_addr 周围 128 字节作为"指纹" (typical: klass ptr +
-       Mono header + 邻接字段值)。同时记录 hp 字段在指纹中的偏移。
-    2. 指纹中 HP/MaxHP 字段的位置用 0xCC 屏蔽 (它们会变), 其它字节相对稳定。
-    3. 下次启动时, 用 pymem.pattern.pattern_scan_module 风格的全堆掩码扫描, 找到
-       唯一匹配的 128 字节区, 加上偏移就是新的 self_hp 地址。
-
-这比指针链对 IL2CPP / 高度托管的游戏更鲁棒, 因为:
-    - 不依赖游戏代码静态指针
-    - GC 移动对象时整个 fingerprint 跟着搬, 模式不变
-    - 误匹配率低 (128 字节里有 klass ptr + 字段标记 + 浮点常量等, 非常独特)
-
-CLI:
-    python -m tools.mem_probe.fingerprint capture
-    python -m tools.mem_probe.fingerprint locate    # 当前进程实测
-"""
+# 指纹定位 — 替代指针链的 Plan B 方案.
+#
+# 思路:
+# 1. refine 完成时, 读 self_hp_addr 周围 128 字节作为"指纹" (typical: klass ptr +
+# Mono header + 邻接字段值)。同时记录 hp 字段在指纹中的偏移。
+# 2. 指纹中 HP/MaxHP 字段的位置用 0xCC 屏蔽 (它们会变), 其它字节相对稳定。
+# 3. 下次启动时, 用 pymem.pattern.pattern_scan_module 风格的全堆掩码扫描, 找到
+# 唯一匹配的 128 字节区, 加上偏移就是新的 self_hp 地址。
+#
+# 这比指针链对 IL2CPP / 高度托管的游戏更鲁棒, 因为:
+# - 不依赖游戏代码静态指针
+# - GC 移动对象时整个 fingerprint 跟着搬, 模式不变
+# - 误匹配率低 (128 字节里有 klass ptr + 字段标记 + 浮点常量等, 非常独特)
+#
+# CLI:
+# python -m tools.mem_probe.fingerprint capture
+# python -m tools.mem_probe.fingerprint locate    # 当前进程实测
 
 from __future__ import annotations
 
@@ -51,7 +50,7 @@ def _save_anchors(path: str, data: dict) -> None:
 
 
 def capture(pm: StarProcess, anchors: dict) -> Optional[dict]:
-    """从当前 anchors 抓取指纹, 返回 dict (调用方负责写回)."""
+    # 从当前 anchors 抓取指纹, 返回 dict (调用方负责写回).
     hp_addr = int(anchors["self_hp_addr"], 16)
     max_hp_addr = int(anchors["self_max_hp_addr"], 16)
     delta_max = max_hp_addr - hp_addr  # 例如 -0x20
@@ -97,15 +96,14 @@ def capture(pm: StarProcess, anchors: dict) -> Optional[dict]:
 
 
 def _masked_search(blob: bytes, pattern: bytes, mask: bytes) -> List[int]:
-    """在 blob 中找所有 pattern (按 mask 比对) 的偏移.
-
-    内层走 cy_memscan.find_pattern_masked (memchr 锚字节 + 掩码逐字节验证).
-    """
+    # 在 blob 中找所有 pattern (按 mask 比对) 的偏移.
+    #
+    # 内层走 cy_memscan.find_pattern_masked (memchr 锚字节 + 掩码逐字节验证).
     return _cy.find_pattern_masked(blob, pattern, mask)
 
 
 def locate(pm: StarProcess, fp: dict) -> List[int]:
-    """全堆扫指纹, 返回所有匹配的 HP 地址."""
+    # 全堆扫指纹, 返回所有匹配的 HP 地址.
     pattern = bytes.fromhex(fp["pattern_hex"])
     mask = bytes.fromhex(fp["mask_hex"])
     fp_base_off = fp["fp_base_offset"]
@@ -215,8 +213,8 @@ def cmd_locate(args) -> int:
 
 
 def cmd_recapture(args) -> int:
-    """diff 加固: 读 anchors.self_hp_addr 周围 128 字节, 与旧指纹 pattern diff,
-    把不一致的字节 mask 掉, 得到跨进程稳定的指纹。"""
+    # diff 加固: 读 anchors.self_hp_addr 周围 128 字节, 与旧指纹 pattern diff,
+    # 把不一致的字节 mask 掉, 得到跨进程稳定的指纹。
     anchors = _load_anchors(args.anchors)
     old_fp = anchors.get("fingerprint")
     if not old_fp:

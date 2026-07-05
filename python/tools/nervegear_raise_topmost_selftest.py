@@ -1,25 +1,24 @@
 # -*- coding: utf-8 -*-
-"""Selftest: GpuNerveGearButton.raise_topmost() must not break its own
-click routing in unified compositor mode.
-
-Reproduces the user's report: "the button stopped being clickable [and
-window clipping was gone too]" a few seconds after opening it. Root
-cause: raise_topmost() operated on self._win._hwnd, which in unified
-mode is uo.hwnd — the ONE shared host window every layer draws into,
-not a window owned by this button. Pushing that SHARED host to real
-WS_EX_TOPMOST via SetWindowPos placed it ABOVE the button's own Tk
-input proxy (a separate, different-thread window) — a real click then
-landed on the (transparent, but now literally on top) host instead of
-handing off to the proxy underneath, the same same-thread-only
-limitation documented for HTTRANSPARENT/WS_EX_TRANSPARENT elsewhere in
-this codebase. _start_topmost_loop calls this every 2 seconds in the
-real app, so the break happened within seconds of the button
-appearing — matching the user's report closely.
-
-Asserts: WindowFromPoint at the ball's center keeps reporting the
-button's OWN proxy (not the host) and a real synthesized click keeps
-registering, across several raise_topmost() calls.
-"""
+# Selftest: GpuNerveGearButton.raise_topmost() must not break its own
+# click routing in unified compositor mode.
+#
+# Reproduces the user's report: "the button stopped being clickable [and
+# window clipping was gone too]" a few seconds after opening it. Root
+# cause: raise_topmost() operated on self._win._hwnd, which in unified
+# mode is uo.hwnd — the ONE shared host window every layer draws into,
+# not a window owned by this button. Pushing that SHARED host to real
+# WS_EX_TOPMOST via SetWindowPos placed it ABOVE the button's own Tk
+# input proxy (a separate, different-thread window) — a real click then
+# landed on the (transparent, but now literally on top) host instead of
+# handing off to the proxy underneath, the same same-thread-only
+# limitation documented for HTTRANSPARENT/WS_EX_TRANSPARENT elsewhere in
+# this codebase. _start_topmost_loop calls this every 2 seconds in the
+# real app, so the break happened within seconds of the button
+# appearing — matching the user's report closely.
+#
+# Asserts: WindowFromPoint at the ball's center keeps reporting the
+# button's OWN proxy (not the host) and a real synthesized click keeps
+# registering, across several raise_topmost() calls.
 import os
 import sys
 import time

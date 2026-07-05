@@ -1,31 +1,30 @@
 # -*- coding: utf-8 -*-
-"""mem_attr_reader — decode ZAttrCollection into ``attr_id -> value`` (read-only).
-
-This is the F-B "master unlock": once an entity's attribute values can be read,
-boss HP / breaking_stage / extinction / stun / overdrive / shield / hated_char /
-self combat stats all become readable, because the in-memory attr ids are the
-SAME ``packet_parser.enums.AttrType`` ids the TCP parser already uses.
-
-Layout (Zproto.ZAttrCollection, verified against dump fdc7111b):
-
-    ZAttrCollection
-      +0x18  ZAttrCacheSlim              cacheSlim_     (Burst/SIMD cache — NOT decoded)
-      +0x28  Dictionary<uint, IMixAttr>  mixItemDict_   <- decoded here
-
-Each value is an ``IMixAttr`` == ``ZMixAttr<T>`` (a class) whose current value
-lives in an INLINE ``ZMixItem<T>`` struct (``<Value>k__BackingField``).
-IL2CPPDumper reports that struct's field offsets as 0x0 for the open generic, so
-the concrete ``Value`` offset is **not** statically knowable. It depends on T
-(int vs long vs float), and the dict is heterogeneous, so we discover the offset
-at runtime PER KLASS by calibrating against TCP-known ``(attr_id, value)`` pairs
-(e.g. a monster's MAX_HP that TCP already decoded). Objects of the same concrete
-``ZMixAttr<T>`` share a klass pointer (obj+0), so one calibrated offset serves
-every attribute of that type.
-
-Read-only. No persistence: calibration is tied to the GameAssembly base and is
-discarded when the base changes (relaunch / ASLR), matching the hybrid
-base-discovery posture (no blindly-trusted cross-session offsets).
-"""
+# mem_attr_reader — decode ZAttrCollection into ``attr_id -> value`` (read-only).
+#
+# This is the F-B "master unlock": once an entity's attribute values can be read,
+# boss HP / breaking_stage / extinction / stun / overdrive / shield / hated_char /
+# self combat stats all become readable, because the in-memory attr ids are the
+# SAME ``packet_parser.enums.AttrType`` ids the TCP parser already uses.
+#
+# Layout (Zproto.ZAttrCollection, verified against dump fdc7111b):
+#
+# ZAttrCollection
+# +0x18  ZAttrCacheSlim              cacheSlim_     (Burst/SIMD cache — NOT decoded)
+# +0x28  Dictionary<uint, IMixAttr>  mixItemDict_   <- decoded here
+#
+# Each value is an ``IMixAttr`` == ``ZMixAttr<T>`` (a class) whose current value
+# lives in an INLINE ``ZMixItem<T>`` struct (``<Value>k__BackingField``).
+# IL2CPPDumper reports that struct's field offsets as 0x0 for the open generic, so
+# the concrete ``Value`` offset is **not** statically knowable. It depends on T
+# (int vs long vs float), and the dict is heterogeneous, so we discover the offset
+# at runtime PER KLASS by calibrating against TCP-known ``(attr_id, value)`` pairs
+# (e.g. a monster's MAX_HP that TCP already decoded). Objects of the same concrete
+# ``ZMixAttr<T>`` share a klass pointer (obj+0), so one calibrated offset serves
+# every attribute of that type.
+#
+# Read-only. No persistence: calibration is tied to the GameAssembly base and is
+# discarded when the base changes (relaunch / ASLR), matching the hybrid
+# base-discovery posture (no blindly-trusted cross-session offsets).
 from __future__ import annotations
 
 from typing import Dict, List, Optional, Tuple
@@ -60,11 +59,10 @@ def _plausible_ptr(p: Optional[int]) -> bool:
 
 
 class ZAttrReader:
-    """Decode an entity/self ``ZAttrCollection`` via its ``mixItemDict_``.
-
-    ``pm`` only needs the StarProcess read primitives:
-    ``read_bytes / read_u32 / read_u64 / read_i64 / read_i32``.
-    """
+    # Decode an entity/self ``ZAttrCollection`` via its ``mixItemDict_``.
+    #
+    # ``pm`` only needs the StarProcess read primitives:
+    # ``read_bytes / read_u32 / read_u64 / read_i64 / read_i32``.
 
     def __init__(self, pm, *, ga_base: int = 0, resolver=None):
         self.pm = pm
@@ -80,7 +78,7 @@ class ZAttrReader:
     # ---------- dict walk ----------
 
     def _read_dict_entries(self, dict_addr: int, max_entries: int = 512) -> List[Tuple[int, int]]:
-        """Return ``[(attr_id_uint, imixattr_ptr), ...]`` from a Dictionary<uint, ref>."""
+        # Return ``[(attr_id_uint, imixattr_ptr), ...]`` from a Dictionary<uint, ref>.
         pm = self.pm
         if not _plausible_ptr(dict_addr):
             return []
@@ -122,7 +120,7 @@ class ZAttrReader:
         return out
 
     def read_attr_ptrs(self, attrs_obj: int) -> Dict[int, int]:
-        """``attrs_obj`` (ZAttrCollection) -> ``{attr_id: imixattr_ptr}``."""
+        # ``attrs_obj`` (ZAttrCollection) -> ``{attr_id: imixattr_ptr}``.
         if not _plausible_ptr(attrs_obj):
             return {}
         mixdict = self.pm.read_u64(attrs_obj + self.off_mixdict)
@@ -139,12 +137,11 @@ class ZAttrReader:
         return bool(self._klass_value_off)
 
     def calibrate(self, attrs_obj: int, known: Dict[int, int], *, ga_base: int = 0) -> int:
-        """Discover the per-klass Value offset from TCP-known ``{attr_id: value}``.
-
-        Objects of the same ``ZMixAttr<T>`` share a klass (obj+0); the consistent
-        offset across multiple same-klass anchors is the ``<Value>`` field. Returns
-        the number of distinct klasses calibrated.
-        """
+        # Discover the per-klass Value offset from TCP-known ``{attr_id: value}``.
+        #
+        # Objects of the same ``ZMixAttr<T>`` share a klass (obj+0); the consistent
+        # offset across multiple same-klass anchors is the ``<Value>`` field. Returns
+        # the number of distinct klasses calibrated.
         ga = int(ga_base or self._req_ga or 0)
         if ga and self._calibrated_ga and ga != self._calibrated_ga:
             self._klass_value_off = {}      # base changed → discard stale offsets
@@ -190,7 +187,7 @@ class ZAttrReader:
     # ---------- value read ----------
 
     def read_value(self, imixattr_ptr: int) -> Optional[int]:
-        """Read the calibrated ``Value`` of one IMixAttr (None if uncalibrated)."""
+        # Read the calibrated ``Value`` of one IMixAttr (None if uncalibrated).
         if not _plausible_ptr(imixattr_ptr) or not self._klass_value_off:
             return None
         try:
@@ -208,11 +205,10 @@ class ZAttrReader:
             return None
 
     def read_attrs(self, attrs_obj: int, attr_ids) -> Dict[int, int]:
-        """Read a set of ``attr_id`` values from a ZAttrCollection.
-
-        Returns only the ids present in the dict AND readable with a calibrated
-        offset. Safe to call before calibration (returns ``{}``).
-        """
+        # Read a set of ``attr_id`` values from a ZAttrCollection.
+        #
+        # Returns only the ids present in the dict AND readable with a calibrated
+        # offset. Safe to call before calibration (returns ``{}``).
         want = {int(a) for a in attr_ids}
         ptrs = self.read_attr_ptrs(attrs_obj)
         out: Dict[int, int] = {}

@@ -1,11 +1,10 @@
 # -*- coding: utf-8 -*-
-"""Selective parsing policy helpers for ACT-style combat capture.
-
-The default policy records every combat event the parser sees.  This module is
-kept deliberately small and side-effect free so WebView, Entity/Tk, replay, and
-plugins can share the same filtering contract without touching the DPS hot path
-unless the user explicitly enables selective parsing.
-"""
+# Selective parsing policy helpers for ACT-style combat capture.
+#
+# The default policy records every combat event the parser sees.  This module is
+# kept deliberately small and side-effect free so WebView, Entity/Tk, replay, and
+# plugins can share the same filtering contract without touching the DPS hot path
+# unless the user explicitly enables selective parsing.
 
 from __future__ import annotations
 
@@ -95,7 +94,7 @@ def _id_values(payload: Mapping[str, Any]) -> set[int]:
 
 
 def normalize_policy(value: Any = None) -> dict[str, Any]:
-    """Return a stable policy dictionary with safe defaults."""
+    # Return a stable policy dictionary with safe defaults.
 
     src = dict(value or {}) if isinstance(value, Mapping) else {}
     mode = _safe_str(src.get("mode") or ("selective" if src.get("enabled") else "all")).lower()
@@ -134,7 +133,7 @@ def should_record_event(
     self_uid: int = 0,
     party_ids: set[int] | None = None,
 ) -> SelectiveParseDecision:
-    """Decide whether a canonical combat event should be recorded."""
+    # Decide whether a canonical combat event should be recorded.
 
     normalized = normalize_policy(policy)
     if not normalized.get("enabled"):

@@ -1,20 +1,18 @@
 # -*- coding: utf-8 -*-
-"""
-SAO Auto — 主程序入口
-
-UI 模式:
-  webview — SAO WebView UI (pywebview, 唯一模式)
-
-额外模式:
-  --test      单次截图测试识别
-  --headless  无 HUD，仅终端输出
-
-架构:
-  sao_webview.py  — WebView 透明 HUD (pywebview + EdgeChromium)
-    config.py       — 平台配置
-    act_platform/   — 插件 SDK、运行时分发、渲染钩子
-    plugins/        — 游戏适配器动态注入游戏逻辑
-"""
+# SAO Auto — 主程序入口
+#
+# UI 模式:
+# webview — SAO WebView UI (pywebview, 唯一模式)
+#
+# 额外模式:
+# --test      单次截图测试识别
+# --headless  无 HUD，仅终端输出
+#
+# 架构:
+# sao_webview.py  — WebView 透明 HUD (pywebview + EdgeChromium)
+# config.py       — 平台配置
+# act_platform/   — 插件 SDK、运行时分发、渲染钩子
+# plugins/        — 游戏适配器动态注入游戏逻辑
 
 import os
 import sys
@@ -77,19 +75,18 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 
 def _bootstrap_runtime_overrides():
-    """模块化 onedir 布局适配 + update.exe 提升 (bootstrap).
-
-    在 PyInstaller onedir + noarchive=True + contents_directory='runtime' 下,
-    sys.path 只包含 runtime/。但 build_release.bat 会把 proto/ assets/ web/
-    icon.ico 提升到 EXE 顶层 (便于增量更新), 导致:
-    - 插件运行时的协议/资源目录不在 sys.path → 插件导入失败
-      - 开发时 sys.path 包含项目根, onefile 时 _MEIPASS 包含 proto/, 都正常
-      - **只有 onedir 打包后会 ImportError**
-    解决: 把 EXE 所在目录 (frozen) / 当前文件目录 (dev) 加入 sys.path 头部。
-
-    同时:在最早时机调用 sao_updater.promote_runtime_update_exe(), 把
-    runtime/update.exe 提升到顶层 (旧 update.exe 通过嵌套路径绕过 _collect_entries)。
-    """
+    # 模块化 onedir 布局适配 + update.exe 提升 (bootstrap).
+    #
+    # 在 PyInstaller onedir + noarchive=True + contents_directory='runtime' 下,
+    # sys.path 只包含 runtime/。但 build_release.bat 会把 proto/ assets/ web/
+    # icon.ico 提升到 EXE 顶层 (便于增量更新), 导致:
+    # - 插件运行时的协议/资源目录不在 sys.path → 插件导入失败
+    # - 开发时 sys.path 包含项目根, onefile 时 _MEIPASS 包含 proto/, 都正常
+    # - **只有 onedir 打包后会 ImportError**
+    # 解决: 把 EXE 所在目录 (frozen) / 当前文件目录 (dev) 加入 sys.path 头部。
+    #
+    # 同时:在最早时机调用 sao_updater.promote_runtime_update_exe(), 把
+    # runtime/update.exe 提升到顶层 (旧 update.exe 通过嵌套路径绕过 _collect_entries)。
     try:
         _frozen = getattr(sys, 'frozen', False)
         if not _frozen:
@@ -128,12 +125,11 @@ def _set_dpi_aware():
 
 
 def _dispatch_cli_runtime(action: str, missing_msg: str) -> None:
-    """Dispatch a ``--test`` / ``--headless`` CLI action through the plugin runtime.
-
-    The platform bootstraps the plugin manager (which triggers each plugin's
-    ``on_load`` and therefore ``register_extension_runtime``) and then looks up
-    the requested handler. The platform code never imports plugin modules.
-    """
+    # Dispatch a ``--test`` / ``--headless`` CLI action through the plugin runtime.
+    #
+    # The platform bootstraps the plugin manager (which triggers each plugin's
+    # ``on_load`` and therefore ``register_extension_runtime``) and then looks up
+    # the requested handler. The platform code never imports plugin modules.
     try:
         from act_platform.runtime import (
             ensure_act_plugin_manager,
@@ -155,13 +151,12 @@ def _dispatch_cli_runtime(action: str, missing_msg: str) -> None:
 
 
 class _CliRuntimeOwner:
-    """Minimal owner for plugin-manager-driven CLI dispatch.
-
-    ``main.py --test`` / ``--headless`` run before the full UI is online. We
-    bootstrap only the pieces the plugin manager needs (settings + an attrs
-    sink); the plugin's ``on_load`` then registers its runtime handlers via
-    ``register_extension_runtime``.
-    """
+    # Minimal owner for plugin-manager-driven CLI dispatch.
+    #
+    # ``main.py --test`` / ``--headless`` run before the full UI is online. We
+    # bootstrap only the pieces the plugin manager needs (settings + an attrs
+    # sink); the plugin's ``on_load`` then registers its runtime handlers via
+    # ``register_extension_runtime``.
 
     def __init__(self) -> None:
         try:
@@ -172,7 +167,7 @@ class _CliRuntimeOwner:
 
 
 def run_test():
-    """Run the active plugin's one-shot CLI test handler."""
+    # Run the active plugin's one-shot CLI test handler.
     _dispatch_cli_runtime(
         "cli_test",
         "[SAO Auto] --test requires an active plugin runtime handler.",
@@ -180,7 +175,7 @@ def run_test():
 
 
 def run_headless():
-    """Run the active plugin's headless CLI handler."""
+    # Run the active plugin's headless CLI handler.
     _dispatch_cli_runtime(
         "cli_headless",
         "[SAO Auto] --headless requires an active plugin runtime handler.",
@@ -188,7 +183,7 @@ def run_headless():
 
 
 def _start_update_check():
-    """在 UI 启动后后台检查一次更新；状态由 sao_updater 管理器维护，UI 会自行监听。"""
+    # 在 UI 启动后后台检查一次更新；状态由 sao_updater 管理器维护，UI 会自行监听。
     try:
         from config import SettingsManager
         s = SettingsManager()
@@ -204,7 +199,7 @@ def _start_update_check():
 
 
 def _register_apply_on_exit():
-    """注册 atexit hook：如果退出时有 staging 待应用包，就启动外部 helper 应用它。"""
+    # 注册 atexit hook：如果退出时有 staging 待应用包，就启动外部 helper 应用它。
     import atexit
     def _hook():
         try:
@@ -217,7 +212,7 @@ def _register_apply_on_exit():
 
 
 def _show_tk_license_gate():
-    """启动前显示 Tk 授权验证弹窗 (阻塞到用户关闭)"""
+    # 启动前显示 Tk 授权验证弹窗 (阻塞到用户关闭)
     try:
         from license import get_license_manager
         mgr = get_license_manager()
@@ -244,7 +239,7 @@ def _show_tk_license_gate():
 
 
 def run_ui():
-    """根据 settings.json 中的 ui_mode 启动对应 UI."""
+    # 根据 settings.json 中的 ui_mode 启动对应 UI.
     # ── Phase 0: 授权验证 (阻塞, 在 LinkStart / 引擎加载之前) ──
     _show_tk_license_gate()
 
@@ -298,12 +293,11 @@ def run_ui():
 
 
 def _elevate_process_priority():
-    """v2.1.16: nudge process to ABOVE_NORMAL on Windows.
-
-    Helps the Tk main loop + render lanes keep timeslices when many panels
-    are active and recognition/packet threads compete for CPU. ABOVE_NORMAL
-    is conservative — it doesn't starve background apps the way HIGH would.
-    """
+    # v2.1.16: nudge process to ABOVE_NORMAL on Windows.
+    #
+    # Helps the Tk main loop + render lanes keep timeslices when many panels
+    # are active and recognition/packet threads compete for CPU. ABOVE_NORMAL
+    # is conservative — it doesn't starve background apps the way HIGH would.
     try:
         import ctypes
         ABOVE_NORMAL_PRIORITY_CLASS = 0x00008000

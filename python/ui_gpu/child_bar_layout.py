@@ -1,9 +1,8 @@
-"""Child bar layout: rows + connecting line + arrow indicator.
-
-Reuses the existing PIL composer ``_compose_child_bar`` from
-``sao_child_bar_gpu`` so we don't duplicate ~200 LOC of font fallback +
-row composition.
-"""
+# Child bar layout: rows + connecting line + arrow indicator.
+#
+# Reuses the existing PIL composer ``_compose_child_bar`` from
+# ``sao_child_bar_gpu`` so we don't duplicate ~200 LOC of font fallback +
+# row composition.
 
 from __future__ import annotations
 
@@ -49,8 +48,8 @@ def height_for(state) -> int:
 
 
 def advance_animation(state, now: float) -> bool:
-    """Tick row hover lerp + slide-in width. Returns True if still
-    animating."""
+    # Tick row hover lerp + slide-in width. Returns True if still
+    # animating.
     return bool(_CY_UI.popup_advance_child_animation(
         state.row_hover_t, state.row_anim_w, state.hover_row_idx,
         len(state.child_rows), now, state.row_anim_t0,

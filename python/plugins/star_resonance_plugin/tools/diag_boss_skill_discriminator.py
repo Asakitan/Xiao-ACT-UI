@@ -1,12 +1,11 @@
 # -*- coding: utf-8 -*-
-"""Wider net: poll the boss's full attr_map continuously and find any attr that
-cycles through a SMALL REPEATING set of values (a skill-id / skill-type
-signature) -- as opposed to HP / monotonic timers. Also dumps both buff lists.
-
-Use the boss's different skills (吼/护盾/普攻) while this runs.
-
-    python tools/diag_boss_skill_discriminator.py [seconds] [name_substr]
-"""
+# Wider net: poll the boss's full attr_map continuously and find any attr that
+# cycles through a SMALL REPEATING set of values (a skill-id / skill-type
+# signature) -- as opposed to HP / monotonic timers. Also dumps both buff lists.
+#
+# Use the boss's different skills (吼/护盾/普攻) while this runs.
+#
+# python tools/diag_boss_skill_discriminator.py [seconds] [name_substr]
 from __future__ import annotations
 
 import os

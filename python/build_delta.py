@@ -1,21 +1,20 @@
 # -*- coding: utf-8 -*-
-"""构建 runtime-delta zip 包（模块化顶层布局）。
-
-发布后客户端目录:
-  XiaoACTUI/
-    XiaoACTUI.exe
-    update.exe
-    web/   assets/   proto/   runtime/   ...
-
-delta zip 内路径与客户端目录一致（以 BASE_DIR 为根）:
-  runtime/sao_gui.py
-  web/menu.html
-  assets/sounds/x.wav
-
-用法:
-  python build_delta.py --version 2.1.0 --files runtime/sao_gui.py web/menu.html
-  python build_delta.py --version 2.1.0 --from-list changes.txt
-"""
+# 构建 runtime-delta zip 包（模块化顶层布局）。
+#
+# 发布后客户端目录:
+# XiaoACTUI/
+# XiaoACTUI.exe
+# update.exe
+# web/   assets/   proto/   runtime/   ...
+#
+# delta zip 内路径与客户端目录一致（以 BASE_DIR 为根）:
+# runtime/sao_gui.py
+# web/menu.html
+# assets/sounds/x.wav
+#
+# 用法:
+# python build_delta.py --version 2.1.0 --files runtime/sao_gui.py web/menu.html
+# python build_delta.py --version 2.1.0 --from-list changes.txt
 
 from __future__ import annotations
 
@@ -28,13 +27,12 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 
 
 def _resolve_source(rel: str) -> str:
-    """将 zip 内相对路径映射到源码中的实际路径。
-
-    优先顺序:
-        1) dist/XiaoACTUI/<path>             (如果已构建 onedir 产物)
-        2) HERE/<path>                       (源码 .py / web / assets ...)
-        3) HERE/<path 去掉 runtime/ 前缀>    (runtime/sao_gui.py -> sao_gui.py)
-    """
+    # 将 zip 内相对路径映射到源码中的实际路径。
+    #
+    # 优先顺序:
+    # 1) dist/XiaoACTUI/<path>             (如果已构建 onedir 产物)
+    # 2) HERE/<path>                       (源码 .py / web / assets ...)
+    # 3) HERE/<path 去掉 runtime/ 前缀>    (runtime/sao_gui.py -> sao_gui.py)
     rel_norm = rel.replace("\\", "/").lstrip("/")
     candidates = [
         os.path.join(HERE, "dist", "XiaoACTUI", rel_norm),

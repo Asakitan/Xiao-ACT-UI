@@ -1,12 +1,11 @@
 # -*- coding: utf-8 -*-
-"""Selftest for mem_boss_action_reader.BossActionTracker / BossDurationProbe.
-
-Validates cast edge detection, chained casts, the learned-duration EMA, the
-BuffComp duration upgrade, fast-path low-latency edges, pruning, and JSON safety.
-No game / process needed (stubs).
-
-    python tools/boss_action_tracker_selftest.py
-"""
+# Selftest for mem_boss_action_reader.BossActionTracker / BossDurationProbe.
+#
+# Validates cast edge detection, chained casts, the learned-duration EMA, the
+# BuffComp duration upgrade, fast-path low-latency edges, pruning, and JSON safety.
+# No game / process needed (stubs).
+#
+# python tools/boss_action_tracker_selftest.py
 from __future__ import annotations
 
 import os
@@ -161,9 +160,9 @@ def test_prune_and_json():
 
 
 def test_boss_only_buff_reads():
-    """Perf guard: reading buffs (RPM loop) for EVERY casting entity in a crowd was
-    the per-tick O(N) GIL-holding hot path that made hybrid laggy with many players.
-    Only the boss may read buffs; non-boss casters use the cheap snapshot path."""
+    # Perf guard: reading buffs (RPM loop) for EVERY casting entity in a crowd was
+    # the per-tick O(N) GIL-holding hot path that made hybrid laggy with many players.
+    # Only the boss may read buffs; non-boss casters use the cheap snapshot path.
     print("[boss-only buff reads]")
 
     class _CountProbe(BossDurationProbe):

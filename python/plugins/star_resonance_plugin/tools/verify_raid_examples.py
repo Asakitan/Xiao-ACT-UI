@@ -1,14 +1,13 @@
 # -*- coding: utf-8 -*-
-"""verify_raid_examples - 机制示例全量校验 (离线, 静态缓存为权威)。
-
-逐文件检查:
-  1. 文件名 = {dungeon_id}_{图名}_机制示例.json 且图名在 raid_scene_names.json 中;
-  2. profile.dungeon_id / target_name_pattern 与 raid_scene_names.json 的场次一致;
-  3. 每条机制 detect.skill_ids ⊆ 该场全部 boss(全难度并集) 的实测技能集(boss_skills);
-  4. 每条机制 detect.buff_ids ⊆ 该场 buff 段(buff_marker_fill.BOSS_BUFF_SEGMENTS);
-  5. skill/buff id 在名字缓存里有名(检测得到的都是真 id)。
-退出码非 0 = 有违规。
-"""
+# verify_raid_examples - 机制示例全量校验 (离线, 静态缓存为权威)。
+#
+# 逐文件检查:
+# 1. 文件名 = {dungeon_id}_{图名}_机制示例.json 且图名在 raid_scene_names.json 中;
+# 2. profile.dungeon_id / target_name_pattern 与 raid_scene_names.json 的场次一致;
+# 3. 每条机制 detect.skill_ids ⊆ 该场全部 boss(全难度并集) 的实测技能集(boss_skills);
+# 4. 每条机制 detect.buff_ids ⊆ 该场 buff 段(buff_marker_fill.BOSS_BUFF_SEGMENTS);
+# 5. skill/buff id 在名字缓存里有名(检测得到的都是真 id)。
+# 退出码非 0 = 有违规。
 from __future__ import annotations
 
 import glob

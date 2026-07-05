@@ -1,10 +1,9 @@
 # -*- coding: utf-8 -*-
-"""Regression coverage for the plugin render engine.
-
-Covers the declarative UI spec, the render-hook + overlay registry, the
-``ui_panels`` extension (render + action), plugin-unload cleanup, and the
-bundled example plugins that exercise the new surface.
-"""
+# Regression coverage for the plugin render engine.
+#
+# Covers the declarative UI spec, the render-hook + overlay registry, the
+# ``ui_panels`` extension (render + action), plugin-unload cleanup, and the
+# bundled example plugins that exercise the new surface.
 
 from __future__ import annotations
 

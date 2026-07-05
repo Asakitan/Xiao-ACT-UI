@@ -1,11 +1,10 @@
 # -*- coding: utf-8 -*-
-"""native_dialog — 原生「打开文件」对话框（Windows comdlg32），跨 UI 模式可用。
-
-平台插件管理面板在 WebView 模式下没有 Tk root，``tkinter.filedialog`` 不可用；
-这里直接调 ``comdlg32.GetOpenFileNameW``，Entity / WebView 两种模式都能弹出资源
-管理器。可在后台线程调用（对话框自带模态消息循环）。从 midi_piano 的 mp_dialog
-上提为平台通用能力。
-"""
+# native_dialog — 原生「打开文件」对话框（Windows comdlg32），跨 UI 模式可用。
+#
+# 平台插件管理面板在 WebView 模式下没有 Tk root，``tkinter.filedialog`` 不可用；
+# 这里直接调 ``comdlg32.GetOpenFileNameW``，Entity / WebView 两种模式都能弹出资源
+# 管理器。可在后台线程调用（对话框自带模态消息循环）。从 midi_piano 的 mp_dialog
+# 上提为平台通用能力。
 
 from __future__ import annotations
 
@@ -21,7 +20,7 @@ OFN_HIDEREADONLY = 0x00000004
 
 
 def _build_filter(filters: Sequence[tuple[str, str]]) -> str:
-    """[(label, pattern), ...] → comdlg32 以 \\0 分隔、\\0\\0 结尾的过滤器串。"""
+    # [(label, pattern), ...] → comdlg32 以 \0 分隔、\0\0 结尾的过滤器串。
     parts: list[str] = []
     for label, pattern in filters:
         parts.append(str(label))
@@ -33,7 +32,7 @@ def open_file(filters: Optional[Sequence[tuple[str, str]]] = None,
               title: str = "选择文件",
               initial_dir: str = "",
               hwnd_owner: int = 0) -> Optional[str]:
-    """弹出资源管理器选单个文件，返回绝对路径或 None（取消 / 失败 / 非 Windows）。"""
+    # 弹出资源管理器选单个文件，返回绝对路径或 None（取消 / 失败 / 非 Windows）。
     try:
         import ctypes
         from ctypes import wintypes
@@ -106,7 +105,7 @@ def foreground_hwnd() -> int:
 
 
 def open_plugin_archive(initial_dir: str = "", hwnd_owner: int = 0) -> Optional[str]:
-    """选一个插件包(.zip / .saoplugin)，返回绝对路径或 None。"""
+    # 选一个插件包(.zip / .saoplugin)，返回绝对路径或 None。
     return open_file(
         filters=[
             ("SAO 插件包 (*.zip;*.saoplugin)", "*.zip;*.saoplugin"),

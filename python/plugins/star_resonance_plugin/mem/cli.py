@@ -1,15 +1,14 @@
-"""mem_probe 命令行入口.
-
-用法 (在 sao_auto/ 目录, 管理员 PowerShell):
-    python -m tools.mem_probe.cli attach
-    python -m tools.mem_probe.cli regions [--limit N]
-    python -m tools.mem_probe.cli dump <addr_hex> <length>
-
-阶段 1 验证目标:
-    1. attach 子命令能在游戏运行时输出 Star.exe 基址, 无 access denied;
-    2. 游戏未运行时友好报错;
-    3. 游戏开了反作弊 → attach 失败时打印明确提示, 用户据此中止整个方案。
-"""
+# mem_probe 命令行入口.
+#
+# 用法 (在 sao_auto/ 目录, 管理员 PowerShell):
+# python -m tools.mem_probe.cli attach
+# python -m tools.mem_probe.cli regions [--limit N]
+# python -m tools.mem_probe.cli dump <addr_hex> <length>
+#
+# 阶段 1 验证目标:
+# 1. attach 子命令能在游戏运行时输出 Star.exe 基址, 无 access denied;
+# 2. 游戏未运行时友好报错;
+# 3. 游戏开了反作弊 → attach 失败时打印明确提示, 用户据此中止整个方案。
 
 from __future__ import annotations
 

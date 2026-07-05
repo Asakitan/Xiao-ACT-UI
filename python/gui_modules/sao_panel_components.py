@@ -1,10 +1,9 @@
 # -*- coding: utf-8 -*-
-"""Reusable SAO-style Tk components for Entity panels.
-
-Centralized so every floating panel shares one visual language. All colors
-come from the live ``sao_panel_ui`` palette (light/dark) via ``_pc`` so a theme
-swap repaints every panel consistently — never hardcode hex here.
-"""
+# Reusable SAO-style Tk components for Entity panels.
+#
+# Centralized so every floating panel shares one visual language. All colors
+# come from the live ``sao_panel_ui`` palette (light/dark) via ``_pc`` so a theme
+# swap repaints every panel consistently — never hardcode hex here.
 
 from __future__ import annotations
 
@@ -35,7 +34,7 @@ FONT_CARET = get_sao_font(9)
 
 
 def _pc(key: str, fallback: str = '') -> str:
-    """Read a token from the active SAO palette with a safe fallback."""
+    # Read a token from the active SAO palette with a safe fallback.
     try:
         return ui._theme_color(key, fallback) or fallback
     except Exception:
@@ -61,7 +60,7 @@ def _finite_int(value: Any, default: int = 0, *, lo: Optional[int] = None,
 # 三类时间分开处理：绝对 epoch 毫秒→墙钟 HH:MM:SS；带符号偏移→+2.6s；纯时长→2.6s/M:SS。
 # JS 侧的等价实现见 web/panel utilities（window.PanelTime），两边输出必须逐字一致。
 def fmt_clock(time_ms: Any, *, with_seconds: bool = True) -> str:
-    """ABSOLUTE epoch-ms → local wall clock 'HH:MM:SS'. '--' when <=0/None."""
+    # ABSOLUTE epoch-ms → local wall clock 'HH:MM:SS'. '--' when <=0/None.
     try:
         ms = int(time_ms or 0)
     except Exception:
@@ -72,7 +71,7 @@ def fmt_clock(time_ms: Any, *, with_seconds: bool = True) -> str:
 
 
 def fmt_dur(ms: Any) -> str:
-    """Non-negative DURATION → '2.6s' (<60s) / 'M:SS' (<1h) / 'H:MM:SS'."""
+    # Non-negative DURATION → '2.6s' (<60s) / 'M:SS' (<1h) / 'H:MM:SS'.
     try:
         total = max(0.0, float(ms or 0)) / 1000.0
     except Exception:
@@ -85,11 +84,10 @@ def fmt_dur(ms: Any) -> str:
 
 
 def fmt_rel(time_ms: Any, base_ms: Any) -> str:
-    """SIGNED offset of absolute time_ms from base_ms → '+2.6s' / '-1:23'.
-
-    Falls back to fmt_clock when base is missing (so a lone absolute time still
-    reads as a clock, never as raw ms).
-    """
+    # SIGNED offset of absolute time_ms from base_ms → '+2.6s' / '-1:23'.
+    #
+    # Falls back to fmt_clock when base is missing (so a lone absolute time still
+    # reads as a clock, never as raw ms).
     try:
         base = int(base_ms or 0)
     except Exception:
@@ -104,7 +102,7 @@ def fmt_rel(time_ms: Any, base_ms: Any) -> str:
 
 
 def fmt_signed(delta_ms: Any) -> str:
-    """Already-computed delta (relative_ms / cursor) → 'T0' at zero, else '+2.6s'/'-1:23'."""
+    # Already-computed delta (relative_ms / cursor) → 'T0' at zero, else '+2.6s'/'-1:23'.
     try:
         d = int(delta_ms or 0)
     except Exception:
@@ -115,7 +113,7 @@ def fmt_signed(delta_ms: Any) -> str:
 
 
 def topic_cn(value: Any, *, default: str = "事件") -> str:
-    """Return a display label for a generic topic/kind field."""
+    # Return a display label for a generic topic/kind field.
     text = str(value or "").strip()
     if not text:
         return default
@@ -123,7 +121,7 @@ def topic_cn(value: Any, *, default: str = "事件") -> str:
 
 
 def source_cn(value: Any, *, default: str = "未知") -> str:
-    """Return a display label for a generic source field."""
+    # Return a display label for a generic source field.
     text = str(value or "").strip()
     if not text:
         return default
@@ -131,11 +129,10 @@ def source_cn(value: Any, *, default: str = "未知") -> str:
 
 
 def readable_event_line(row: Mapping[str, Any], *, value_fmt: Optional[Callable[[Any], Any]] = None) -> str:
-    """一条代表事件 → 人话行：时钟 · 类型 · 来源→目标 · 标签 · 值。
-
-    topic 译成中文；把当 actor 用的来源标识(tcp/entity)译成中文；丢掉无意义的
-    0 值和与类型重复的标签。所有面板共用，避免各自拼一套黑话。
-    """
+    # 一条代表事件 → 人话行：时钟 · 类型 · 来源→目标 · 标签 · 值。
+    #
+    # topic 译成中文；把当 actor 用的来源标识(tcp/entity)译成中文；丢掉无意义的
+    # 0 值和与类型重复的标签。所有面板共用，避免各自拼一套黑话。
     if not isinstance(row, Mapping):
         return ""
     fmt_value = value_fmt or (lambda v: "" if v in (None, "") else str(v))
@@ -171,7 +168,7 @@ def _accent(kind: str = "gold") -> str:
 
 
 def _accent_text(kind: str = "gold") -> str:
-    """Accent color tuned for legible TEXT (cyan needs a darker shade on tints)."""
+    # Accent color tuned for legible TEXT (cyan needs a darker shade on tints).
     kind = str(kind or "gold").lower()
     if kind in {"cyan", "accent", "info"}:
         return _pc('accent_strong', _accent('cyan'))
@@ -206,7 +203,7 @@ def _bind_click(widget: tk.Misc, command: Callable[[], Any]) -> None:
 
 
 def _bind_hover(row: tk.Misc, base_bg: str, hover_bg: str) -> None:
-    """Lighten the row (and same-bg children) on mouse-over for live feedback."""
+    # Lighten the row (and same-bg children) on mouse-over for live feedback.
     if not hover_bg or hover_bg == base_bg:
         return
     targets: list[tk.Misc] = []
@@ -247,13 +244,12 @@ def _bind_hover(row: tk.Misc, base_bg: str, hover_bg: str) -> None:
 def status_badge(parent: tk.Misc, text: str, *, kind: str = "gold",
                  bg: Optional[str] = None, fill: Optional[str] = None,
                  border: Optional[str] = None, fg: Optional[str] = None) -> tk.Canvas:
-    """Rounded pill badge (canvas) — matches the web panel badge style.
-
-    ``bg``/``fill``/``border``/``fg`` let a caller with its own brand palette
-    (e.g. Workshop's gold/ivory skin) skin the badge directly instead of
-    going through the global light/dark token lookup — omit them and the
-    badge behaves exactly as before.
-    """
+    # Rounded pill badge (canvas) — matches the web panel badge style.
+    #
+    # ``bg``/``fill``/``border``/``fg`` let a caller with its own brand palette
+    # (e.g. Workshop's gold/ivory skin) skin the badge directly instead of
+    # going through the global light/dark token lookup — omit them and the
+    # badge behaves exactly as before.
     fontspec = get_cjk_font(8)
     f = tkfont.Font(font=fontspec)
     txt = str(text or "-")
@@ -271,16 +267,15 @@ def status_badge(parent: tk.Misc, text: str, *, kind: str = "gold",
 
 
 class _RoundedButton(tk.Canvas):
-    """Rounded flat button (canvas) — Tk has no rounded Button. Matches web panel buttons.
-
-    Supports ``configure(command=…)`` / ``configure(text=…)`` so existing callers
-    (e.g. dropdown_button) keep working. ``fill``/``fill_hover``/``border``/``fg``/
-    ``canvas_bg`` let a caller skin the button with an explicit brand palette
-    instead of the global theme tokens (all default to the prior token-driven
-    look when omitted). ``active``/``active_fill``/``active_fg``/``active_border``
-    add an optional toggled-on appearance (tab bars, segmented mode pickers)
-    driven by ``set_active()`` instead of hand-rolled bg/fg swapping per caller.
-    """
+    # Rounded flat button (canvas) — Tk has no rounded Button. Matches web panel buttons.
+    #
+    # Supports ``configure(command=…)`` / ``configure(text=…)`` so existing callers
+    # (e.g. dropdown_button) keep working. ``fill``/``fill_hover``/``border``/``fg``/
+    # ``canvas_bg`` let a caller skin the button with an explicit brand palette
+    # instead of the global theme tokens (all default to the prior token-driven
+    # look when omitted). ``active``/``active_fill``/``active_fg``/``active_border``
+    # add an optional toggled-on appearance (tab bars, segmented mode pickers)
+    # driven by ``set_active()`` instead of hand-rolled bg/fg swapping per caller.
 
     def __init__(self, parent, text='', command=None, *, kind='normal', radius=7, padx=12, pady=5,
                  fill=None, fill_hover=None, border=None, fg=None, canvas_bg=None,
@@ -327,7 +322,7 @@ class _RoundedButton(tk.Canvas):
             self._command()
 
     def set_active(self, active: bool) -> None:
-        """Toggle the pre-styled 'selected' look (tab bars, segmented pickers)."""
+        # Toggle the pre-styled 'selected' look (tab bars, segmented pickers).
         self._active = bool(active)
         self._draw()
 
@@ -353,16 +348,15 @@ def dropdown_button(parent: tk.Misc, text: str, items: Iterable[Any], *, kind: s
                     menu_bg: Optional[str] = None, menu_fg: Optional[str] = None,
                     menu_active_bg: Optional[str] = None, menu_active_fg: Optional[str] = None,
                     **button_kwargs) -> tk.Button:
-    """聚合按钮：点击弹出条目菜单，把同排过密的相似动作收进一个父按钮。
-
-    ``items`` 为 ``(label, command)`` 序列；条目为 ``'-'``（或 label 为 '-'）时
-    插入分隔线。默认菜单配色走面板调色板，主题切换无需重建；``menu_*`` 参数可
-    显式覆盖(供带自有品牌配色的面板使用，如 Workshop 的白金皮肤)。其余
-    ``button_kwargs``(fill/fill_hover/border/fg/canvas_bg/active...) 原样透传给
-    ``action_button``。返回的按钮挂了 ``_sao_dropdown_menu`` 活引用，调用方可以
-    在数据变化时直接 ``btn._sao_dropdown_menu.delete(0, 'end')`` 重建条目，不需要
-    整个按钮重建。
-    """
+    # 聚合按钮：点击弹出条目菜单，把同排过密的相似动作收进一个父按钮。
+    #
+    # ``items`` 为 ``(label, command)`` 序列；条目为 ``'-'``（或 label 为 '-'）时
+    # 插入分隔线。默认菜单配色走面板调色板，主题切换无需重建；``menu_*`` 参数可
+    # 显式覆盖(供带自有品牌配色的面板使用，如 Workshop 的白金皮肤)。其余
+    # ``button_kwargs``(fill/fill_hover/border/fg/canvas_bg/active...) 原样透传给
+    # ``action_button``。返回的按钮挂了 ``_sao_dropdown_menu`` 活引用，调用方可以
+    # 在数据变化时直接 ``btn._sao_dropdown_menu.delete(0, 'end')`` 重建条目，不需要
+    # 整个按钮重建。
     btn = action_button(parent, f'{text} ▾', None, kind=kind, **button_kwargs)
     menu = tk.Menu(
         btn, tearoff=0,
@@ -393,10 +387,9 @@ def dropdown_button(parent: tk.Misc, text: str, items: Iterable[Any], *, kind: s
 
 
 def attach_tooltip(widget: tk.Misc, text: str, *, delay_ms: int = 450) -> None:
-    """悬停延迟弹出的轻量提示气泡——解释 Cursor ms / Window s 这类不直观字段。
-
-    Web 端等价做法是控件上的 ``title`` 属性，文案保持两边一致。
-    """
+    # 悬停延迟弹出的轻量提示气泡——解释 Cursor ms / Window s 这类不直观字段。
+    #
+    # Web 端等价做法是控件上的 ``title`` 属性，文案保持两边一致。
     tip_text = str(text or '').strip()
     if not tip_text:
         return
@@ -453,7 +446,7 @@ def attach_tooltip(widget: tk.Misc, text: str, *, delay_ms: int = 450) -> None:
 
 
 def more_indicator(parent: tk.Misc, hidden_count: int, *, noun: str = "条") -> tk.Label:
-    """列表截断提示：'… 还有 N 条'。让用户知道没看到的不是全部。"""
+    # 列表截断提示：'… 还有 N 条'。让用户知道没看到的不是全部。
     count = _finite_int(hidden_count, 0, lo=0)
     return tk.Label(
         parent, text=f'… 还有 {count} {noun}',
@@ -463,7 +456,7 @@ def more_indicator(parent: tk.Misc, hidden_count: int, *, noun: str = "条") -> 
 
 
 def _round_pts(x1, y1, x2, y2, r):
-    """Point list for a smooth (bezier) rounded rectangle on a tk.Canvas."""
+    # Point list for a smooth (bezier) rounded rectangle on a tk.Canvas.
     return [
         x1 + r, y1, x2 - r, y1, x2, y1, x2, y1 + r,
         x2, y2 - r, x2, y2, x2 - r, y2, x1 + r, y2,
@@ -472,17 +465,16 @@ def _round_pts(x1, y1, x2, y2, r):
 
 
 def rounded_panel(parent, *, bg, border, radius=8, rail=None, rail_w=3, pad=10, height=None, canvas_bg=None):
-    """Canvas-backed rounded card (Tk has no rounded Frame). Returns (canvas, inner).
-
-    Draws a smooth rounded rect (fill ``bg``, 1px ``border``) and, when ``rail``
-    is set, a flat colored left rail (rounded to follow the corner) like the web
-    ``border-left`` accent. Content goes in the returned ``inner`` frame, inset by
-    ``pad`` so the rounded edge stays visible.
-
-    ``canvas_bg`` overrides the backing canvas fill (visible at the rounded
-    corners) — pass it when ``bg``/``border`` are an explicit brand palette
-    that doesn't match the current global theme's body background.
-    """
+    # Canvas-backed rounded card (Tk has no rounded Frame). Returns (canvas, inner).
+    #
+    # Draws a smooth rounded rect (fill ``bg``, 1px ``border``) and, when ``rail``
+    # is set, a flat colored left rail (rounded to follow the corner) like the web
+    # ``border-left`` accent. Content goes in the returned ``inner`` frame, inset by
+    # ``pad`` so the rounded edge stays visible.
+    #
+    # ``canvas_bg`` overrides the backing canvas fill (visible at the rounded
+    # corners) — pass it when ``bg``/``border`` are an explicit brand palette
+    # that doesn't match the current global theme's body background.
     body_bg = canvas_bg if canvas_bg is not None else _pc('body_bg', ui._SAO_PANEL_BODY_BG)
     canvas = tk.Canvas(parent, bg=body_bg, highlightthickness=0, bd=0)
     if height:
@@ -527,9 +519,9 @@ def rounded_panel(parent, *, bg, border, radius=8, rail=None, rail_w=3, pad=10, 
 
 
 class _SaoScroll(tk.Canvas):
-    """Custom slim, dark, rounded scrollbar (native tk.Scrollbar ignores colors on
-    Windows — it stays white/split). Drop-in: pass as ``yscrollcommand=sb.set`` and
-    ``command=canvas.yview``. Thumb auto-hides when everything fits."""
+    # Custom slim, dark, rounded scrollbar (native tk.Scrollbar ignores colors on
+    # Windows — it stays white/split). Drop-in: pass as ``yscrollcommand=sb.set`` and
+    # ``command=canvas.yview``. Thumb auto-hides when everything fits.
 
     def __init__(self, parent, command, *, width=9, track_bg=None, thumb=None):
         bg = track_bg if track_bg is not None else _pc('body_bg', ui._SAO_PANEL_BODY_BG)
@@ -578,7 +570,7 @@ def sao_scrollbar(parent, command, *, width=9, track_bg=None, thumb=None):
 
 
 def bind_canvas_mousewheel(canvas: Optional[tk.Canvas], *widgets: Optional[tk.Misc]) -> None:
-    """Route mouse-wheel events from a scroll canvas and its children to yview."""
+    # Route mouse-wheel events from a scroll canvas and its children to yview.
     if canvas is None:
         return
 
@@ -631,7 +623,7 @@ def bind_canvas_mousewheel(canvas: Optional[tk.Canvas], *widgets: Optional[tk.Mi
 
 
 def sao_entry(parent, textvariable=None, *, width=14):
-    """Flat dark text input (cyan focus border), matching the web panel input."""
+    # Flat dark text input (cyan focus border), matching the web panel input.
     card_bg = _pc('card_bg', ui._SAO_PANEL_BODY_BG)
     e = tk.Entry(
         parent, textvariable=textvariable, width=width,
@@ -645,7 +637,7 @@ def sao_entry(parent, textvariable=None, *, width=14):
 
 
 def sao_option_menu(parent, var, *values, command=None):
-    """Flat dark dropdown (replaces the cramped/raised native tk.OptionMenu)."""
+    # Flat dark dropdown (replaces the cramped/raised native tk.OptionMenu).
     card_bg = _pc('card_bg', ui._SAO_PANEL_BODY_BG)
     text = _pc('value_fg', ui._SAO_PANEL_VALUE_FG)
     accent = _accent('cyan')
@@ -742,11 +734,10 @@ def aggregate_row(parent: tk.Misc, *, title: str, meta: str = "", value: str = "
 
 def detail_row(parent: tk.Misc, text: str, *, accent: str = "cyan", zebra: bool = False, strong: bool = False,
                command: Optional[Callable[[], Any]] = None, expanded: Optional[bool] = None) -> tk.Frame:
-    """One drilldown line: thin accent rule + monospace-ish aligned text, zebra striped.
-
-    When `command` is set the line is clickable (e.g. expand the raw payload), with
-    an optional caret showing expand state.
-    """
+    # One drilldown line: thin accent rule + monospace-ish aligned text, zebra striped.
+    #
+    # When `command` is set the line is clickable (e.g. expand the raw payload), with
+    # an optional caret showing expand state.
     base_bg = _pc('card_bg_alt', ui._SAO_PANEL_HEADER_BG) if zebra else _pc('card_bg', ui._SAO_PANEL_BODY_BG)
     fg = _pc('value_fg', ui._SAO_PANEL_VALUE_FG) if strong else _pc('label_fg', ui._SAO_PANEL_LABEL_FG)
     row = tk.Frame(parent, bg=base_bg, cursor='hand2' if callable(command) else '')
@@ -762,10 +753,10 @@ def detail_row(parent: tk.Misc, text: str, *, accent: str = "cyan", zebra: bool 
 
 
 def keep_canvas_scroll(canvas: Optional[tk.Canvas], inner: Optional[tk.Misc]) -> None:
-    """全量重建前调用: 记录滚动分数, 本轮事件处理结束后还原。
-    web setContentHtml(preserveScroll) 的 Tk 对偶 — 不调用的面板
-    每次签名刷新滚动都会跳回顶部。after_idle 在重建完成后触发,
-    单插入点覆盖渲染函数的全部 return 路径。"""
+    # 全量重建前调用: 记录滚动分数, 本轮事件处理结束后还原。
+    # web setContentHtml(preserveScroll) 的 Tk 对偶 — 不调用的面板
+    # 每次签名刷新滚动都会跳回顶部。after_idle 在重建完成后触发,
+    # 单插入点覆盖渲染函数的全部 return 路径。
     if canvas is None or inner is None:
         return
     try:

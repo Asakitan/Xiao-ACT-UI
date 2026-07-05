@@ -1,34 +1,33 @@
 # -*- coding: utf-8 -*-
-"""SAO Auto - 远程更新客户端
-
-功能:
-- 拉取远程 manifest (HTTPS/HTTP, JSON)
-- 比较版本号决定是否需要更新, 是否强制更新
-- 下载 zip 包到 staging 目录, SHA256 校验
-- 写入 update_state.json, 由外部 update_apply.py 在主进程退出后应用
-
-manifest schema (JSON):
-{
-  "version": "2.1.0",
-  "minimum_version": "2.0.1",   # 客户端 < 该版本时强制升级
-  "force_update": false,
-  "package_type": "runtime-delta" | "full-package",
-  "target": "windows-x64",
-  "channel": "stable",
-  "download_url": "https://.../release.zip",
-  "sha256": "<hex>",
-  "size": 12345,
-  "notes": "...",
-  "published_at": "2026-04-19T12:00:00Z"
-}
-
-runtime-delta zip 内容: 按 runtime/ 下的相对路径布局, 例如
-  runtime/sao_gui.py
-  web/menu.html
-  assets/sounds/ding.wav
-
-full-package zip 内容: 顶层包含 XiaoACTUI.exe 等完整客户端文件.
-"""
+# SAO Auto - 远程更新客户端
+#
+# 功能:
+# - 拉取远程 manifest (HTTPS/HTTP, JSON)
+# - 比较版本号决定是否需要更新, 是否强制更新
+# - 下载 zip 包到 staging 目录, SHA256 校验
+# - 写入 update_state.json, 由外部 update_apply.py 在主进程退出后应用
+#
+# manifest schema (JSON):
+# {
+# "version": "2.1.0",
+# "minimum_version": "2.0.1",   # 客户端 < 该版本时强制升级
+# "force_update": false,
+# "package_type": "runtime-delta" | "full-package",
+# "target": "windows-x64",
+# "channel": "stable",
+# "download_url": "https://.../release.zip",
+# "sha256": "<hex>",
+# "size": 12345,
+# "notes": "...",
+# "published_at": "2026-04-19T12:00:00Z"
+# }
+#
+# runtime-delta zip 内容: 按 runtime/ 下的相对路径布局, 例如
+# runtime/sao_gui.py
+# web/menu.html
+# assets/sounds/ding.wav
+#
+# full-package zip 内容: 顶层包含 XiaoACTUI.exe 等完整客户端文件.
 
 from __future__ import annotations
 
@@ -210,20 +209,19 @@ def _ensure_dirs():
 
 
 def promote_runtime_update_exe() -> bool:
-    """把 runtime/update.exe 提升到 BASE_DIR/update.exe (bootstrap 用).
-
-    旧版 update.exe (<=2.1.2-f) 不允许 runtime-delta 顶层带 update.exe,
-    所以新 update.exe 通过嵌套路径 runtime/update.exe 投递。
-    主程序启动时调用本函数完成一次性提升:
-      - 若 runtime/update.exe 不存在: no-op
-      - 若 BASE_DIR/update.exe 不存在: 直接 move
-      - 否则: 先把旧文件改名为 update.exe.old, 再 move 新文件
-    所有失败均静默返回 False, 不影响主程序启动。
-
-    v2.1.2-k: 仅在主程序 (XiaoACTUI) 进程里运行 — update.exe 自己 import
-    sao_updater 时不能 promote 自己, 否则正在运行的 update.exe 会被
-    rename 到 .old, 用户看到 update.exe 启动后消失。
-    """
+    # 把 runtime/update.exe 提升到 BASE_DIR/update.exe (bootstrap 用).
+    #
+    # 旧版 update.exe (<=2.1.2-f) 不允许 runtime-delta 顶层带 update.exe,
+    # 所以新 update.exe 通过嵌套路径 runtime/update.exe 投递。
+    # 主程序启动时调用本函数完成一次性提升:
+    # - 若 runtime/update.exe 不存在: no-op
+    # - 若 BASE_DIR/update.exe 不存在: 直接 move
+    # - 否则: 先把旧文件改名为 update.exe.old, 再 move 新文件
+    # 所有失败均静默返回 False, 不影响主程序启动。
+    #
+    # v2.1.2-k: 仅在主程序 (XiaoACTUI) 进程里运行 — update.exe 自己 import
+    # sao_updater 时不能 promote 自己, 否则正在运行的 update.exe 会被
+    # rename 到 .old, 用户看到 update.exe 启动后消失。
     try:
         if getattr(sys, "frozen", False):
             try:
@@ -311,7 +309,7 @@ def _http_download(
     progress_cb: Optional[Callable[[float], None]] = None,
     expected_size: int = 0,
 ) -> Optional[str]:
-    """下载到 dst_path. 返回错误字符串, None 表示成功."""
+    # 下载到 dst_path. 返回错误字符串, None 表示成功.
     req = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
     sha = hashlib.sha256()
     tmp_path = dst_path + ".part"
@@ -410,7 +408,7 @@ def skip_version(version: str):
 
 
 class UpdateManager:
-    """线程安全的更新管理器, 由 entity / webview 共用."""
+    # 线程安全的更新管理器, 由 entity / webview 共用.
 
     def __init__(self, host: Optional[str] = None, channel: str = UPDATE_CHANNEL):
         self.host = (host or DEFAULT_UPDATE_HOST or "").rstrip("/")
@@ -657,12 +655,11 @@ def get_manager() -> UpdateManager:
 
 
 def has_pending_update() -> bool:
-    """检查 staging 中是否存在待应用的更新包.
-
-    pending.json 在包下载+SHA 校验成功后才写, 但包文件可能事后被磁盘清理/
-    杀软删除或截断 — 那种残局不能再报「更新就绪」, 否则退出时 update.exe
-    解包报错。这里只读校验, 不动残留文件。
-    """
+    # 检查 staging 中是否存在待应用的更新包.
+    #
+    # pending.json 在包下载+SHA 校验成功后才写, 但包文件可能事后被磁盘清理/
+    # 杀软删除或截断 — 那种残局不能再报「更新就绪」, 否则退出时 update.exe
+    # 解包报错。这里只读校验, 不动残留文件。
     try:
         meta_path = os.path.join(RUNTIME_STAGING_DIR, "pending.json")
         if not os.path.exists(meta_path):
@@ -685,23 +682,23 @@ def has_pending_update() -> bool:
 
 
 def _prestage_locked_targets_for_old_helper() -> int:
-    """v2.1.2-n: 在主进程退出前, 主程序自己把 staging zip 里 TTF/OTF/TTC/DLL
-    路径上对应的现有文件 rename 到 ``<name>.old-<ts>``。
-
-    背景: 老 update.exe (<2.1.2-j) 没有 skip-on-lock, 遇到字体被
-    Windows 字体缓存/SAO 主题持锁时 ``os.replace`` 直接 raise →
-    用户看到 "更新失败 [WinError 5] SAOUI.ttf.tmp-update -> SAOUI.ttf"。
-
-    用户的 update.exe 有可能停在 -j 之前的版本 (因为 -k/-l/-m 没动
-    update_apply.py, 只有 --rebuild 才会强制重打 update.exe), 没法假设
-    它会自带 skip 逻辑。主程序自己持有最新 update_apply 代码, 在退出前:
-      1. 打开 staging zip
-      2. 列出所有 .ttf / .otf / .ttc / .dll 条目
-      3. 对应已存在文件 rename 到 ``<name>.old-<ts>``
-        (Windows 即使有 GDI font handle 也允许 rename, 仅不允许覆盖)
-    rename 成功后, 老 update.exe 看到目标不存在, 直接写新文件, 不会再 raise。
-    本进程持有的 font/dll handle 在主进程 sys.exit() 后释放,
-    老 .old- 文件由 _promote_pending_replacements 下次启动顺手清理。"""
+    # v2.1.2-n: 在主进程退出前, 主程序自己把 staging zip 里 TTF/OTF/TTC/DLL
+    # 路径上对应的现有文件 rename 到 ``<name>.old-<ts>``。
+    #
+    # 背景: 老 update.exe (<2.1.2-j) 没有 skip-on-lock, 遇到字体被
+    # Windows 字体缓存/SAO 主题持锁时 ``os.replace`` 直接 raise →
+    # 用户看到 "更新失败 [WinError 5] SAOUI.ttf.tmp-update -> SAOUI.ttf"。
+    #
+    # 用户的 update.exe 有可能停在 -j 之前的版本 (因为 -k/-l/-m 没动
+    # update_apply.py, 只有 --rebuild 才会强制重打 update.exe), 没法假设
+    # 它会自带 skip 逻辑。主程序自己持有最新 update_apply 代码, 在退出前:
+    # 1. 打开 staging zip
+    # 2. 列出所有 .ttf / .otf / .ttc / .dll 条目
+    # 3. 对应已存在文件 rename 到 ``<name>.old-<ts>``
+    # (Windows 即使有 GDI font handle 也允许 rename, 仅不允许覆盖)
+    # rename 成功后, 老 update.exe 看到目标不存在, 直接写新文件, 不会再 raise。
+    # 本进程持有的 font/dll handle 在主进程 sys.exit() 后释放,
+    # 老 .old- 文件由 _promote_pending_replacements 下次启动顺手清理。
     try:
         meta_path = os.path.join(RUNTIME_STAGING_DIR, "pending.json")
         if not os.path.isfile(meta_path):
@@ -756,11 +753,10 @@ def _prestage_locked_targets_for_old_helper() -> int:
 
 
 def schedule_apply_on_exit() -> bool:
-    """在主进程退出前调用. 启动外部 helper 来应用 staging 中的更新.
-
-    helper 需要等待主进程退出, 所以这里 spawn 一个 detached 子进程.
-    返回 True 表示已经成功调度.
-    """
+    # 在主进程退出前调用. 启动外部 helper 来应用 staging 中的更新.
+    #
+    # helper 需要等待主进程退出, 所以这里 spawn 一个 detached 子进程.
+    # 返回 True 表示已经成功调度.
     global _APPLY_SCHEDULED
     if not has_pending_update():
         return False
@@ -806,7 +802,7 @@ def schedule_apply_on_exit() -> bool:
 
 
 def _resolve_apply_helper() -> str:
-    """定位 update.exe（优先）或 update_apply.py 脚本。"""
+    # 定位 update.exe（优先）或 update_apply.py 脚本。
     candidates = []
     try:
         if getattr(sys, "frozen", False):

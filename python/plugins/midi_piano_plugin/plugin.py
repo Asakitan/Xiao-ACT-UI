@@ -1,14 +1,13 @@
 # -*- coding: utf-8 -*-
-"""MIDI 钢琴演奏家
-
-职责：引导外置依赖(mido) → 装配引擎(mp_player/mp_api) → 注册主面板 + 多个子面板
-(钢琴键盘/音符卷帘/MIDI分析/设置) + 可改键热键 → 把按钮动作翻译成引擎调用
-→ 原生资源管理器选曲 + 前台门控 + 配置持久化。
-
-真正的弹琴逻辑全在 engine/mp_*.py。本文件不含演奏算法，
-只做编排与展示。子面板既注册为平台独立面板（在“插件面板”里可单独唤出），
-主面板顶部也带「视图切换」按钮可就地唤出。
-"""
+# MIDI 钢琴演奏家
+#
+# 职责：引导外置依赖(mido) → 装配引擎(mp_player/mp_api) → 注册主面板 + 多个子面板
+# (钢琴键盘/音符卷帘/MIDI分析/设置) + 可改键热键 → 把按钮动作翻译成引擎调用
+# → 原生资源管理器选曲 + 前台门控 + 配置持久化。
+#
+# 真正的弹琴逻辑全在 engine/mp_*.py。本文件不含演奏算法，
+# 只做编排与展示。子面板既注册为平台独立面板（在“插件面板”里可单独唤出），
+# 主面板顶部也带「视图切换」按钮可就地唤出。
 
 from __future__ import annotations
 
@@ -339,7 +338,7 @@ def _is_white(m):
 
 
 def _heat(shade, dark=False):
-    """使用频次热力色：白键 浅灰→金；黑键 深灰→金。"""
+    # 使用频次热力色：白键 浅灰→金；黑键 深灰→金。
     a = (27, 31, 36) if dark else (243, 245, 247)
     b = (222, 166, 32)
     s = max(0.0, min(1.0, float(shade)))
@@ -357,7 +356,7 @@ def _playing_notes(events, ct):
 
 
 def _kbd_canvas(target_w=810, h=150):
-    """画一架钢琴：白/黑键，按使用频次着色，正在演奏的键高亮。"""
+    # 画一架钢琴：白/黑键，按使用频次着色，正在演奏的键高亮。
     ui = _ctx.ui
     p = _player.parser
     pitches = [n.note for n in (p.notes or [])]
@@ -399,7 +398,7 @@ def _kbd_canvas(target_w=810, h=150):
 
 
 def _roll_canvas(target_w=700, h=430):
-    """音符卷帘：横=时间(随播放滚动)，纵=音高，红线=播放头。"""
+    # 音符卷帘：横=时间(随播放滚动)，纵=音高，红线=播放头。
     ui = _ctx.ui
     p = _player.parser
     events = p.get_play_events() or []
@@ -602,7 +601,7 @@ _VIEW_BODY = {
 
 
 def _render(_payload=None):
-    """主面板：顶部视图切换 + 当前视图 body。"""
+    # 主面板：顶部视图切换 + 当前视图 body。
     ui = _ctx.ui
     view = _S.get("view", "main")
     children = [_switcher(view)]
@@ -619,7 +618,7 @@ def _render(_payload=None):
 
 
 def _make_subpanel_render(view):
-    """子面板独立注册时的渲染（只画该子面板 body，不含切换器）。"""
+    # 子面板独立注册时的渲染（只画该子面板 body，不含切换器）。
     def _r(_payload=None):
         ui = _ctx.ui
         title = next((t for (_pid, t, v) in SUBPANELS if v == view), "MIDI")

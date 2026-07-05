@@ -1,44 +1,43 @@
-"""gpu_compositor.py — GPU layer compositor for overlay panels (v2.2.11).
-
-Phase 1 of the overlay GPU acceleration plan. Provides a per-panel,
-per-thread `LayerCompositor` that owns persistent FBO textures plus a
-small registry of fragment shaders used by plugin-rendered effects and
-the platform menu reveal animation.
-
-Design notes
-------------
-- One `LayerCompositor` instance per overlay panel. Lives on the panel's
-  render-lane thread; reuses the per-thread WGL context that
-  `gpu_renderer._tls.ctx` already manages.
-- Texture pool is keyed by ``(tag, w, h)`` with a 16-entry LRU cap, so
-  transient size changes (e.g. menu reveal animation) do not leak.
-- Shader programs are lazy-compiled per-thread on first use and shared
-  via the same `_tls` storage as `gpu_renderer.py`.
-- Public API (all calls must be made from the owning render-lane thread):
-    cmp = LayerCompositor(name="plugin_effect")
-    if cmp.available:
-        tex = cmp.tex('main', w, h, clear=True)
-        cmp.render('halo_field', tex, uniforms={...})
-        cmp.render('over', tex, uniforms={...}, inputs={'u_top': other_tex})
-        bgra = cmp.read_bgra_premultiplied(tex)   # ready for ULW
-        # or fallback when partial migration:
-        pil = cmp.to_pil(tex)
-
-Shaders provided
-----------------
-- ``over``           — straight-alpha "src over dst" composite of two textures.
-- ``gradient_bar``   — 2/3-stop horizontal gradient + vertical shading.
-- ``halo_field``     — exponential ring halo + core fill.
-- ``sweep_arc``      — radial sweep band.
-- ``light_sweep``    — angled highlight band.
-- ``shimmer_scan``   — moving brightness band.
-- ``inset_shadow``   — invert + blur + clip to alpha.
-- ``beam``           — procedural beam sprite with rotation.
-
-When `gpu_available()` is False the constructor returns an instance with
-``.available == False`` and all render calls become no-ops; callers are
-expected to fall back to their existing PIL/numpy paths.
-"""
+# gpu_compositor.py — GPU layer compositor for overlay panels (v2.2.11).
+#
+# Phase 1 of the overlay GPU acceleration plan. Provides a per-panel,
+# per-thread `LayerCompositor` that owns persistent FBO textures plus a
+# small registry of fragment shaders used by plugin-rendered effects and
+# the platform menu reveal animation.
+#
+# Design notes
+# ------------
+# - One `LayerCompositor` instance per overlay panel. Lives on the panel's
+# render-lane thread; reuses the per-thread WGL context that
+# `gpu_renderer._tls.ctx` already manages.
+# - Texture pool is keyed by ``(tag, w, h)`` with a 16-entry LRU cap, so
+# transient size changes (e.g. menu reveal animation) do not leak.
+# - Shader programs are lazy-compiled per-thread on first use and shared
+# via the same `_tls` storage as `gpu_renderer.py`.
+# - Public API (all calls must be made from the owning render-lane thread):
+# cmp = LayerCompositor(name="plugin_effect")
+# if cmp.available:
+# tex = cmp.tex('main', w, h, clear=True)
+# cmp.render('halo_field', tex, uniforms={...})
+# cmp.render('over', tex, uniforms={...}, inputs={'u_top': other_tex})
+# bgra = cmp.read_bgra_premultiplied(tex)   # ready for ULW
+# # or fallback when partial migration:
+# pil = cmp.to_pil(tex)
+#
+# Shaders provided
+# ----------------
+# - ``over``           — straight-alpha "src over dst" composite of two textures.
+# - ``gradient_bar``   — 2/3-stop horizontal gradient + vertical shading.
+# - ``halo_field``     — exponential ring halo + core fill.
+# - ``sweep_arc``      — radial sweep band.
+# - ``light_sweep``    — angled highlight band.
+# - ``shimmer_scan``   — moving brightness band.
+# - ``inset_shadow``   — invert + blur + clip to alpha.
+# - ``beam``           — procedural beam sprite with rotation.
+#
+# When `gpu_available()` is False the constructor returns an instance with
+# ``.available == False`` and all render calls become no-ops; callers are
+# expected to fall back to their existing PIL/numpy paths.
 
 from __future__ import annotations
 
@@ -302,7 +301,7 @@ _SHADER_SRC: Dict[str, str] = {
 # ─────────────────────────────────────────────────────────────────────
 
 def _ensure_program(name: str):
-    """Lazy-compile a shader program in the current thread's GL context."""
+    # Lazy-compile a shader program in the current thread's GL context.
     cache = getattr(_tls, 'compositor_progs', None)
     if cache is None:
         cache = {}
@@ -330,12 +329,11 @@ def _ensure_program(name: str):
 # ─────────────────────────────────────────────────────────────────────
 
 class LayerCompositor:
-    """Per-panel GPU compositor.
-
-    Lives on the panel's render-lane thread. All `tex`/`render`/`read_*`
-    calls must originate from that thread (the WGL context is thread-
-    affine).
-    """
+    # Per-panel GPU compositor.
+    #
+    # Lives on the panel's render-lane thread. All `tex`/`render`/`read_*`
+    # calls must originate from that thread (the WGL context is thread-
+    # affine).
 
     _LRU_CAP = 16
 
@@ -354,7 +352,7 @@ class LayerCompositor:
         return self._available
 
     def release(self) -> None:
-        """Release all owned textures + framebuffers."""
+        # Release all owned textures + framebuffers.
         if not self._available:
             return
         ctx = _tls.ctx
@@ -374,11 +372,10 @@ class LayerCompositor:
 
     # ─── texture pool ───────────────────────────────────────────
     def tex(self, tag: str, w: int, h: int, *, clear: bool = True):
-        """Get-or-allocate an RGBA8 texture+FBO bound to ``tag``.
-
-        When ``clear`` is True (default) the returned framebuffer has been
-        cleared to transparent; the caller can immediately render into it.
-        """
+        # Get-or-allocate an RGBA8 texture+FBO bound to ``tag``.
+        #
+        # When ``clear`` is True (default) the returned framebuffer has been
+        # cleared to transparent; the caller can immediately render into it.
         if not self._available:
             return None
         if w <= 0 or h <= 0:
@@ -419,11 +416,10 @@ class LayerCompositor:
 
     # ─── upload ─────────────────────────────────────────────────
     def upload(self, tag: str, image) -> Optional[Tuple[Any, Any]]:
-        """Upload a PIL/ndarray RGBA into the named texture (replacing it).
-
-        Use sparingly — the whole point of the compositor is to keep
-        intermediates on the GPU.
-        """
+        # Upload a PIL/ndarray RGBA into the named texture (replacing it).
+        #
+        # Use sparingly — the whole point of the compositor is to keep
+        # intermediates on the GPU.
         if not self._available:
             return None
         if isinstance(image, np.ndarray):
@@ -459,15 +455,14 @@ class LayerCompositor:
                uniforms: Optional[Mapping[str, Any]] = None,
                inputs: Optional[Mapping[str, Any]] = None,
                *, blend: bool = False) -> None:
-        """Run ``shader`` over the whole framebuffer of ``target``.
-
-        ``target`` is the (texture, fbo) tuple returned by `tex()`.
-        ``uniforms`` are scalar/vector uniforms; ``inputs`` is a
-        ``{uniform_name: (texture, fbo) or texture}`` map of sampler
-        bindings (textures bound to consecutive units starting at 0).
-        ``blend=True`` enables straight-alpha source-over blending so
-        subsequent draws can composite onto an existing target.
-        """
+        # Run ``shader`` over the whole framebuffer of ``target``.
+        #
+        # ``target`` is the (texture, fbo) tuple returned by `tex()`.
+        # ``uniforms`` are scalar/vector uniforms; ``inputs`` is a
+        # ``{uniform_name: (texture, fbo) or texture}`` map of sampler
+        # bindings (textures bound to consecutive units starting at 0).
+        # ``blend=True`` enables straight-alpha source-over blending so
+        # subsequent draws can composite onto an existing target.
         if not self._available or target is None:
             return
         prog, vao = _ensure_program(shader)
@@ -509,11 +504,10 @@ class LayerCompositor:
 
     # ─── readback ───────────────────────────────────────────────
     def read_bgra_premultiplied(self, target) -> Optional[bytes]:
-        """Download ``target`` as premultiplied BGRA bytes (top-down).
-
-        Result is suitable as ``FrameBuffer.bgra_bytes`` for
-        UpdateLayeredWindow without any further CPU work.
-        """
+        # Download ``target`` as premultiplied BGRA bytes (top-down).
+        #
+        # Result is suitable as ``FrameBuffer.bgra_bytes`` for
+        # UpdateLayeredWindow without any further CPU work.
         if not self._available or target is None:
             return None
         tex_src, _fbo_src = target
@@ -532,7 +526,7 @@ class LayerCompositor:
         return bytes(data)
 
     def read_rgba(self, target) -> Optional[np.ndarray]:
-        """Download ``target`` as a top-down RGBA ndarray (h, w, 4)."""
+        # Download ``target`` as a top-down RGBA ndarray (h, w, 4).
         if not self._available or target is None:
             return None
         tex_src, fbo_src = target
@@ -545,7 +539,7 @@ class LayerCompositor:
         return np.flipud(arr).copy()
 
     def to_pil(self, target) -> Optional[Image.Image]:
-        """Escape hatch: download ``target`` as a PIL RGBA image."""
+        # Escape hatch: download ``target`` as a PIL RGBA image.
         arr = self.read_rgba(target)
         if arr is None:
             return None
@@ -554,14 +548,13 @@ class LayerCompositor:
     # ─── GPU-resident gaussian blur ─────────────────────────────
     def blur_tex(self, source, sigma: float, *,
                  out_tag: str = '__blur_out') -> Optional[Tuple[Any, Any]]:
-        """Two-pass separable blur of an existing compositor texture.
-
-        Reuses ``gpu_renderer``'s blur shader (no PIL roundtrip).
-        Returns the (texture, fbo) for the blurred result, or None on
-        failure.  ``source`` must be a (texture, fbo) tuple from this
-        compositor.  Output and a temporary horizontal pass are
-        allocated via the compositor's texture pool.
-        """
+        # Two-pass separable blur of an existing compositor texture.
+        #
+        # Reuses ``gpu_renderer``'s blur shader (no PIL roundtrip).
+        # Returns the (texture, fbo) for the blurred result, or None on
+        # failure.  ``source`` must be a (texture, fbo) tuple from this
+        # compositor.  Output and a temporary horizontal pass are
+        # allocated via the compositor's texture pool.
         if not self._available or source is None or sigma <= 0.05:
             return source
         try:
@@ -600,5 +593,5 @@ class LayerCompositor:
 
 
 def gpu_compositor_available() -> bool:
-    """True when the current thread has a working GL context."""
+    # True when the current thread has a working GL context.
     return gpu_renderer.gpu_available()

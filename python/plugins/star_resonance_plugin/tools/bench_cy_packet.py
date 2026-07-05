@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""Bench and parity-check mandatory Cython packet helpers."""
+# Bench and parity-check mandatory Cython packet helpers.
 from __future__ import annotations
 
 import argparse

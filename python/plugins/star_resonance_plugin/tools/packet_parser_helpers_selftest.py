@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""Focused regression tests for packet_parser.helpers."""
+# Focused regression tests for packet_parser.helpers.
 
 from __future__ import annotations
 

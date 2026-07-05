@@ -1,4 +1,4 @@
-"""Diagnose where SkillFX shader pipeline time goes: shader vs readback."""
+# Diagnose where SkillFX shader pipeline time goes: shader vs readback.
 from __future__ import annotations
 import os, sys, time
 HERE = os.path.dirname(os.path.abspath(__file__))

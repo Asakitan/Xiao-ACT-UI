@@ -1,36 +1,34 @@
 # -*- coding: utf-8 -*-
-"""
-SAOPlayerGUIDialogsMixin — eleventh mixin extracted from
-SAOPlayerGUI (round 52 of the sao_gui split refactor). 7 methods,
-~197 lines.
-
-A small grab-bag mixin for SAOPlayerGUI helpers that build modal dialogs.
-Game-specific left widgets, profile editors, and overlay context menus are
-installed by plugins.
-
-Methods:
-  * _show_welcome_then_menu — first-launch flow: profile dialog
-    first, SAO menu second.
-  * _show_entity_alert(title, message='', display_time=5.0) —
-    convenience around self._alert_overlay.show_alert with a
-    print() fallback.
-  * _switch_to_webview_ui — confirm dialog + exit-animation + fresh
-    process restart into WebView UI.
-  * _show_about — SAO 'about' info dialog with updater state hint.
-
-Required SAOPlayerGUI attrs:
-  * self._sao_menu
-    * self._alert_overlay, self._recognition_active
-  * self._float, self.root, self.settings, self._cfg_settings_ref
-  * self._profile_dialog_ref, self._profile_dialog_pending
-
-Required SAOPlayerGUI methods (via MRO):
-  * _get_setting, _set_setting (SAOPlayerGUI)
-  * _toggle_sao_menu (Menu mixin)
-  * _toggle_recognition_menu (Panels mixin)
-    * _update_float_title, _refresh_float_layered (SAOPlayerGUI)
-  * _run_exit_animation (SAOPlayerGUI)
-"""
+# SAOPlayerGUIDialogsMixin — eleventh mixin extracted from
+# SAOPlayerGUI (round 52 of the sao_gui split refactor). 7 methods,
+# ~197 lines.
+#
+# A small grab-bag mixin for SAOPlayerGUI helpers that build modal dialogs.
+# Game-specific left widgets, profile editors, and overlay context menus are
+# installed by plugins.
+#
+# Methods:
+# * _show_welcome_then_menu — first-launch flow: profile dialog
+# first, SAO menu second.
+# * _show_entity_alert(title, message='', display_time=5.0) —
+# convenience around self._alert_overlay.show_alert with a
+# print() fallback.
+# * _switch_to_webview_ui — confirm dialog + exit-animation + fresh
+# process restart into WebView UI.
+# * _show_about — SAO 'about' info dialog with updater state hint.
+#
+# Required SAOPlayerGUI attrs:
+# * self._sao_menu
+# * self._alert_overlay, self._recognition_active
+# * self._float, self.root, self.settings, self._cfg_settings_ref
+# * self._profile_dialog_ref, self._profile_dialog_pending
+#
+# Required SAOPlayerGUI methods (via MRO):
+# * _get_setting, _set_setting (SAOPlayerGUI)
+# * _toggle_sao_menu (Menu mixin)
+# * _toggle_recognition_menu (Panels mixin)
+# * _update_float_title, _refresh_float_layered (SAOPlayerGUI)
+# * _run_exit_animation (SAOPlayerGUI)
 
 from __future__ import annotations
 
@@ -45,7 +43,7 @@ from sao_theme import SAODialog
 
 
 class SAOPlayerGUIDialogsMixin:
-    """Mixin bundling player-panel factory + dialogs + small UI helpers."""
+    # Mixin bundling player-panel factory + dialogs + small UI helpers.
 
     def _dismiss_menu_before_window(self):
         dismiss = getattr(self, '_dismiss_sao_menu_for_panel', None)
@@ -60,7 +58,7 @@ class SAOPlayerGUIDialogsMixin:
             pass
 
     def _show_welcome_then_menu(self):
-        """首次启动: 平台只打开菜单；游戏资料由插件注入。"""
+        # 首次启动: 平台只打开菜单；游戏资料由插件注入。
         self.root.after(300, self._toggle_sao_menu)
 
     def _show_entity_alert(self, title: str, message: str = '', display_time: float = 5.0):
@@ -77,7 +75,7 @@ class SAOPlayerGUIDialogsMixin:
             print(f'[SAO Entity] {title}')
 
     def _spawn_webview_process(self) -> None:
-        """Persist WebView mode, then launch a fresh main.py process."""
+        # Persist WebView mode, then launch a fresh main.py process.
         try:
             settings_ref = getattr(self, '_cfg_settings_ref', None)
             if settings_ref is not None:
@@ -124,7 +122,7 @@ class SAOPlayerGUIDialogsMixin:
             import traceback; traceback.print_exc()
 
     def _switch_to_webview_ui(self):
-        """切换到 WebView UI — fresh process restart."""
+        # 切换到 WebView UI — fresh process restart.
         self._dismiss_menu_before_window()
 
         def _do_switch():

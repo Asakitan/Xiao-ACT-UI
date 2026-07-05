@@ -1,13 +1,12 @@
 # -*- coding: utf-8 -*-
-"""Static guards for Tk profile editor export/import failure feedback.
-
-The AutoKey and BossRaid profile editors must not silently swallow export
-failures: a failing `export_profile_to_default_path` call has to surface as
-an `Export failed: ...` status instead of leaving the previous status text
-on screen.
-
-    python tools/profile_editor_export_selftest.py
-"""
+# Static guards for Tk profile editor export/import failure feedback.
+#
+# The AutoKey and BossRaid profile editors must not silently swallow export
+# failures: a failing `export_profile_to_default_path` call has to surface as
+# an `Export failed: ...` status instead of leaving the previous status text
+# on screen.
+#
+# python tools/profile_editor_export_selftest.py
 from __future__ import annotations
 
 import sys

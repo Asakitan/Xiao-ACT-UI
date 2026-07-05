@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
-"""Read the compositor host window's actual SetWindowRgn box from
-outside the process. Usage: host_rgn_probe.py <hwnd-hex>"""
+# Read the compositor host window's actual SetWindowRgn box from
+# outside the process. Usage: host_rgn_probe.py <hwnd-hex>
 import sys
 import ctypes
 from ctypes import wintypes

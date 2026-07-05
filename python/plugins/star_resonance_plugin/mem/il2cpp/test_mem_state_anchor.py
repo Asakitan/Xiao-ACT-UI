@@ -1,4 +1,4 @@
-"""Deterministic tests for mem_state_anchor candidate validation."""
+# Deterministic tests for mem_state_anchor candidate validation.
 from __future__ import annotations
 
 import os

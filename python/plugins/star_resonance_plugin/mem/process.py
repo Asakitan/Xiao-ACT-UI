@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""Star Resonance process wrapper."""
+# Star Resonance process wrapper.
 
 from __future__ import annotations
 
@@ -17,7 +17,7 @@ from plugins.star_resonance_plugin.sr_config import GAME_PROCESS_NAMES
 
 
 class StarProcess(GameProcess):
-    """Game-named wrapper owned by the Star Resonance plugin."""
+    # Game-named wrapper owned by the Star Resonance plugin.
 
     def __init__(self, process_name: Optional[str] = None) -> None:
         super().__init__(

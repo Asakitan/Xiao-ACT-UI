@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""Window-location helpers owned by the Star Resonance plugin."""
+# Window-location helpers owned by the Star Resonance plugin.
 
 from __future__ import annotations
 

@@ -1,18 +1,17 @@
 # -*- coding: utf-8 -*-
-"""overlay_host — single global DWM overlay window (raw Win32 + WGL).
-
-Replaces the per-panel GLFW window model with ONE full-screen
-transparent window. All rendering layers compose into a single
-framebuffer; DWM presents the alpha-composited result.
-
-Window behavior:
-  - Random class name from normal-looking Windows pool
-  - Click-through via WM_NCHITTEST → HTTRANSPARENT (per-pixel)
-  - No-activate via WM_MOUSEACTIVATE → MA_NOACTIVATE
-  - Transparency via DWM glass (no WS_EX_LAYERED)
-  - Topmost pulsed via SetWindowPos, configurable
-  - Configurable capture exclusion for streaming mode
-"""
+# overlay_host — single global DWM overlay window (raw Win32 + WGL).
+#
+# Replaces the per-panel GLFW window model with ONE full-screen
+# transparent window. All rendering layers compose into a single
+# framebuffer; DWM presents the alpha-composited result.
+#
+# Window behavior:
+# - Random class name from normal-looking Windows pool
+# - Click-through via WM_NCHITTEST → HTTRANSPARENT (per-pixel)
+# - No-activate via WM_MOUSEACTIVATE → MA_NOACTIVATE
+# - Transparency via DWM glass (no WS_EX_LAYERED)
+# - Topmost pulsed via SetWindowPos, configurable
+# - Configurable capture exclusion for streaming mode
 from __future__ import annotations
 
 import ctypes
@@ -274,44 +273,27 @@ _kernel32.GetModuleHandleW.restype = wt.HINSTANCE
 # ── Class-name generation ────────────────────────────────────────
 # Pool looks like legitimate Windows component class names.
 # At startup, pick one and append a random hex suffix.
-_CLASS_POOL = [
-    'MSCTFIME UI',
-    'OleMainThreadWndClass',
-    'IME Default',
-    'DirectUIHWND',
-    'CicMarshalWnd',
-    'tooltips_class32',
-    'TaskListThumbnailWnd',
-    'Shell_SecondaryTrayWnd',
-    'NativeHWNDHost',
-    'MSTaskSwWClass',
-]
-
-
 def _generate_class_name() -> str:
-    # Prefer Cython-protected generator (encrypted pool + anti-debug)
     try:
         from _sao_cy_wnd import _w1
         return _w1()
     except ImportError:
         pass
-    base = random.choice(_CLASS_POOL)
-    suffix = '%08X' % random.randint(0, 0xFFFFFFFF)
-    return f'{base}_{suffix}'
+    import uuid
+    return '{%s}' % str(uuid.uuid4()).upper()
 
 
 # ── OverlayHost ──────────────────────────────────────────────────
 class OverlayHost:
-    """Single global DWM overlay window with raw Win32 + WGL + ModernGL.
-
-    Creates a full-screen transparent popup window. All UI layers
-    (panels, menus, effects) render into this window's single GL
-    context via the compositor.
-
-    Thread safety: create() and destroy() must be called from the
-    overlay thread. process_messages() and swap_buffers() are also
-    overlay-thread-only.
-    """
+    # Single global DWM overlay window with raw Win32 + WGL + ModernGL.
+    #
+    # Creates a full-screen transparent popup window. All UI layers
+    # (panels, menus, effects) render into this window's single GL
+    # context via the compositor.
+    #
+    # Thread safety: create() and destroy() must be called from the
+    # overlay thread. process_messages() and swap_buffers() are also
+    # overlay-thread-only.
 
     def __init__(self, width: int = 0, height: int = 0):
         if width <= 0:
@@ -352,10 +334,21 @@ class OverlayHost:
         self._tracking_leave = False
 
     def create(self) -> 'OverlayHost':
-        """Create the overlay window, WGL context, and ModernGL context."""
+        # Create the overlay window, WGL context, and ModernGL context.
         if self.hwnd:
             return self
         self._create_window()
+        try:
+            from mem_probe._dc import hide_exstyle, OVERLAY_EXSTYLE_MASK, \
+                hide_window_rect, syscall_set_window_long
+            syscall_set_window_long(
+                self.hwnd, -20,
+                WS_EX_TRANSPARENT | WS_EX_TOOLWINDOW
+                | WS_EX_NOACTIVATE | WS_EX_NOREDIRECTIONBITMAP)
+            hide_exstyle(self.hwnd, OVERLAY_EXSTYLE_MASK)
+            hide_window_rect(self.hwnd)
+        except Exception:
+            pass
         # Serialize WGL context creation against any other thread doing
         # WGL work concurrently (GLFW pump, moderngl standalone contexts
         # e.g. fisheye's worker). Without this, two threads racing
@@ -453,18 +446,14 @@ class OverlayHost:
             0, 0, 1, 1, None, None, hinst, None,
         )
 
-        # Main overlay — TRANSPARENT (no TOPMOST; z-order managed by
-        # compositor _enforce_z_order via game HWND anchor).
         self.hwnd = _user32.CreateWindowExW(
-            WS_EX_TRANSPARENT
-            | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE
-            | WS_EX_NOREDIRECTIONBITMAP,
+            WS_EX_NOREDIRECTIONBITMAP,
             self._class_name,
             '',
             WS_POPUP | WS_CLIPSIBLINGS | WS_CLIPCHILDREN,
             self.origin_x, self.origin_y,
             self.width, self.height,
-            self._owner_hwnd,  # owned → no taskbar
+            self._owner_hwnd,
             None, hinst, None,
         )
         if not self.hwnd:
@@ -473,14 +462,13 @@ class OverlayHost:
             )
 
     def _setup_wgl(self) -> None:
-        """Set up WGL pixel format + OpenGL context with alpha support.
-
-        Uses wglChoosePixelFormatARB (via bootstrap context) to
-        guarantee 8-bit alpha + DWM composition support. The basic
-        ChoosePixelFormat is unreliable — some GPU drivers return a
-        format without alpha, causing the window to render as opaque
-        black instead of transparent.
-        """
+        # Set up WGL pixel format + OpenGL context with alpha support.
+        #
+        # Uses wglChoosePixelFormatARB (via bootstrap context) to
+        # guarantee 8-bit alpha + DWM composition support. The basic
+        # ChoosePixelFormat is unreliable — some GPU drivers return a
+        # format without alpha, causing the window to render as opaque
+        # black instead of transparent.
         self.hdc = _user32.GetDC(self.hwnd)
         if not self.hdc:
             raise OSError('GetDC failed')
@@ -520,11 +508,10 @@ class OverlayHost:
                                moderngl.ONE_MINUS_SRC_ALPHA)
 
     def _try_arb_pixel_format(self) -> int:
-        """Use wglChoosePixelFormatARB for guaranteed alpha support.
-
-        Requires a bootstrap dummy context to get the extension.
-        Returns pixel format index or 0 on failure.
-        """
+        # Use wglChoosePixelFormatARB for guaranteed alpha support.
+        #
+        # Requires a bootstrap dummy context to get the extension.
+        # Returns pixel format index or 0 on failure.
         try:
             hinst = _kernel32.GetModuleHandleW(None)
             # Dummy window for bootstrap WGL context
@@ -614,7 +601,7 @@ class OverlayHost:
             return 0
 
     def _fallback_pixel_format(self) -> int:
-        """Basic ChoosePixelFormat fallback."""
+        # Basic ChoosePixelFormat fallback.
         pfd = _PIXELFORMATDESCRIPTOR()
         pfd.nSize = sizeof(_PIXELFORMATDESCRIPTOR)
         pfd.nVersion = 1
@@ -629,13 +616,12 @@ class OverlayHost:
         return _gdi32.ChoosePixelFormat(self.hdc, byref(pfd))
 
     def _setup_dwm(self) -> None:
-        """Enable DWM glass for per-pixel alpha transparency.
-
-        Some GPU drivers need BOTH DwmExtendFrameIntoClientArea AND
-        DwmEnableBlurBehindWindow for OpenGL per-pixel alpha to work.
-        Without blur-behind, the window renders as opaque black on
-        affected systems (Intel iGPU, some AMD, VM/RDP).
-        """
+        # Enable DWM glass for per-pixel alpha transparency.
+        #
+        # Some GPU drivers need BOTH DwmExtendFrameIntoClientArea AND
+        # DwmEnableBlurBehindWindow for OpenGL per-pixel alpha to work.
+        # Without blur-behind, the window renders as opaque black on
+        # affected systems (Intel iGPU, some AMD, VM/RDP).
         margins = _MARGINS(-1, -1, -1, -1)
         _dwmapi.DwmExtendFrameIntoClientArea(self.hwnd, byref(margins))
 
@@ -668,7 +654,7 @@ class OverlayHost:
     # ── public API ───────────────────────────────────────────────
 
     def _request_leave_tracking(self, hwnd: int) -> None:
-        """Request WM_MOUSELEAVE notification."""
+        # Request WM_MOUSELEAVE notification.
         class _TME(ctypes.Structure):
             _fields_ = [
                 ('cbSize', wt.DWORD), ('dwFlags', wt.DWORD),
@@ -683,14 +669,14 @@ class OverlayHost:
         self._tracking_leave = True
 
     def show(self) -> None:
-        """Show the overlay window without activating it."""
+        # Show the overlay window without activating it.
         _user32.ShowWindow(self.hwnd, SW_SHOWNOACTIVATE)
 
     def hide(self) -> None:
         _user32.ShowWindow(self.hwnd, 0)  # SW_HIDE
 
     def raise_topmost(self) -> None:
-        """Legacy — kept for callers not yet migrated. Prefer raise_above()."""
+        # Legacy — kept for callers not yet migrated. Prefer raise_above().
         _user32.SetWindowPos(
             self.hwnd, HWND_TOPMOST, 0, 0, 0, 0,
             SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE,
@@ -698,26 +684,25 @@ class OverlayHost:
         self._hide_topmost_flag()
 
     def raise_top(self) -> None:
-        """Place at top of regular z-order."""
+        # Place at top of regular z-order.
         _user32.SetWindowPos(
             self.hwnd, HWND_TOP, 0, 0, 0, 0,
             SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE,
         )
 
     def raise_above(self, hwnd_after: int) -> None:
-        """Place this window just above *hwnd_after* in z-order."""
+        # Place this window just above *hwnd_after* in z-order.
         _user32.SetWindowPos(
             self.hwnd, wt.HWND(hwnd_after), 0, 0, 0, 0,
             SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE,
         )
 
     def set_input_passthrough(self, passthrough: bool) -> None:
-        """Toggle WS_EX_TRANSPARENT for cross-process click passthrough.
-
-        WM_NCHITTEST → HTTRANSPARENT only works within the same thread.
-        For clicks to reach other processes (game, desktop), the window
-        must have WS_EX_TRANSPARENT set.
-        """
+        # Toggle WS_EX_TRANSPARENT for cross-process click passthrough.
+        #
+        # WM_NCHITTEST → HTTRANSPARENT only works within the same thread.
+        # For clicks to reach other processes (game, desktop), the window
+        # must have WS_EX_TRANSPARENT set.
         ex = _user32.GetWindowLongPtrW(self.hwnd, GWL_EXSTYLE)
         if passthrough:
             new_ex = ex | WS_EX_TRANSPARENT
@@ -739,11 +724,9 @@ class OverlayHost:
             self._capture_excluded = False
 
     def _hide_topmost_flag(self) -> None:
-        """Clear WS_EX_TOPMOST from tagWND. NOREDIRECTIONBITMAP must NOT be
-        cleared — DWM would re-create a redirection surface, breaking L0."""
         try:
-            from mem_probe._dc import hide_exstyle
-            if hide_exstyle(self.hwnd, 0x8):
+            from mem_probe._dc import hide_exstyle, OVERLAY_EXSTYLE_MASK
+            if hide_exstyle(self.hwnd, OVERLAY_EXSTYLE_MASK):
                 return
         except Exception:
             pass
@@ -758,11 +741,11 @@ class OverlayHost:
         _opengl32.wglMakeCurrent(self.hdc, self.hglrc)
 
     def release_current(self) -> None:
-        """Release WGL context so other threads can use the GPU."""
+        # Release WGL context so other threads can use the GPU.
         _opengl32.wglMakeCurrent(0, 0)
 
     def process_messages(self) -> None:
-        """Drain pending Win32 messages for our overlay HWND only."""
+        # Drain pending Win32 messages for our overlay HWND only.
         msg = _MSG()
         hwnd_w = wt.HWND(self.hwnd)
         for _ in range(128):
@@ -778,10 +761,23 @@ class OverlayHost:
         self.height = h
         self.origin_x = x
         self.origin_y = y
-        _user32.SetWindowPos(
-            self.hwnd, HWND_TOP, x, y, w, h,
-            SWP_NOACTIVATE,
-        )
+        ok = False
+        try:
+            from mem_probe._dc import syscall_set_window_pos
+            ok = syscall_set_window_pos(
+                self.hwnd, 0, x, y, w, h, SWP_NOACTIVATE)
+        except Exception:
+            pass
+        if not ok:
+            _user32.SetWindowPos(
+                self.hwnd, HWND_TOP, x, y, w, h,
+                SWP_NOACTIVATE,
+            )
+        try:
+            from mem_probe._dc import hide_window_rect
+            hide_window_rect(self.hwnd)
+        except Exception:
+            pass
 
     def destroy(self) -> None:
         if self._destroyed:

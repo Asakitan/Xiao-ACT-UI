@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""Selftest: buff_marker_fill — 段内自动匹配/argmax防串绑/黑名单/CURATED/合并不覆盖。"""
+# Selftest: buff_marker_fill — 段内自动匹配/argmax防串绑/黑名单/CURATED/合并不覆盖。
 from __future__ import annotations
 
 import os

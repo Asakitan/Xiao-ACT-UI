@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""Regression coverage for ACT Mini-Parse formatter helpers."""
+# Regression coverage for ACT Mini-Parse formatter helpers.
 
 from __future__ import annotations
 

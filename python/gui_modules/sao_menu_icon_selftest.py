@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""Pixel-level smoke tests for procedural SAO menu plugin icons."""
+# Pixel-level smoke tests for procedural SAO menu plugin icons.
 from __future__ import annotations
 
 import sys

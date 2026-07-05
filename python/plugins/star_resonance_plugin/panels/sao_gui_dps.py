@@ -1,24 +1,22 @@
 # -*- coding: utf-8 -*-
-"""
-sao_gui_dps.py — Animated SAO DPS overlay (tkinter edition)
-
-This is a full port of the webview DPS panel (`web/dps.html`) into tkinter.
-Rendering is done via PIL onto a WS_EX_LAYERED window and committed with
-UpdateLayeredWindow for per-pixel alpha. A 60 FPS animation loop tweens:
-
-  - Entity bar widths (ease-out)
-  - Entity damage / DPS numbers (roll-up)
-  - Row Y positions on reorder
-  - Panel hit-flash tint (impact / mega / starburst)
-  - Shell fade-in / fade-out
-
-Public API (kept backward-compatible):
-    DpsOverlay(root, settings=None)
-    .show() / .hide()
-    .update(snapshot)
-    .set_self_uid(uid)
-    .fade_in() / .fade_out()
-"""
+# sao_gui_dps.py — Animated SAO DPS overlay (tkinter edition)
+#
+# This is a full port of the webview DPS panel (`web/dps.html`) into tkinter.
+# Rendering is done via PIL onto a WS_EX_LAYERED window and committed with
+# UpdateLayeredWindow for per-pixel alpha. A 60 FPS animation loop tweens:
+#
+# - Entity bar widths (ease-out)
+# - Entity damage / DPS numbers (roll-up)
+# - Row Y positions on reorder
+# - Panel hit-flash tint (impact / mega / starburst)
+# - Shell fade-in / fade-out
+#
+# Public API (kept backward-compatible):
+# DpsOverlay(root, settings=None)
+# .show() / .hide()
+# .update(snapshot)
+# .set_self_uid(uid)
+# .fade_in() / .fade_out()
 
 from __future__ import annotations
 
@@ -117,12 +115,11 @@ class _BITMAPINFOHEADER(ctypes.Structure):
 
 def _ulw_update(hwnd: int, img: Image.Image, x: int, y: int,
                 alpha: int = 255) -> None:
-    """Commit a PIL RGBA image to a layered window with per-pixel alpha.
-
-    RGB channels are premultiplied by the alpha channel via numpy for speed.
-    The previous implementation used a Python per-pixel loop (~4 FPS for a
-    260×220 panel) — the vectorised version is >100× faster.
-    """
+    # Commit a PIL RGBA image to a layered window with per-pixel alpha.
+    #
+    # RGB channels are premultiplied by the alpha channel via numpy for speed.
+    # The previous implementation used a Python per-pixel loop (~4 FPS for a
+    # 260×220 panel) — the vectorised version is >100× faster.
     if not wait_until_capture_idle(0.010):
         return
     w, h = img.size
@@ -181,7 +178,7 @@ _FONT_CACHE: Dict[tuple, Any] = {}
 
 
 def _load_font(kind: str, size: int):
-    """Load a PIL font (SAOUI for ASCII, ZhuZiAYuanJWD for CJK fallback)."""
+    # Load a PIL font (SAOUI for ASCII, ZhuZiAYuanJWD for CJK fallback).
     key = (kind, size)
     cached = _FONT_CACHE.get(key)
     if cached is not None:
@@ -445,18 +442,17 @@ def _empty_snapshot() -> dict:
 # ═══════════════════════════════════════════════
 
 class DpsOverlay:
-    """Animated SAO-styled DPS overlay (ULW + PIL).
-
-    Pixel-for-pixel port of `web/dps.html`. The outer window is WIDTH×HEIGHT
-    and contains a 10px body padding (equivalent to CSS `body{padding:10}`)
-    around the `.dps-shell`. Inside the shell:
-
-        ┌─ shell (cream gradient, gold/cyan corners, inner highlight border)
-        │   ├─ dps-header   (eyebrow · title+badge · summary · ACT buttons)
-        │   ├─ dps-tabs     (Damage | Healing)
-        │   ├─ list-frame   (entity rows)
-        │   └─ dps-footer   (ELAPSED … | TOTAL …)
-    """
+    # Animated SAO-styled DPS overlay (ULW + PIL).
+    #
+    # Pixel-for-pixel port of `web/dps.html`. The outer window is WIDTH×HEIGHT
+    # and contains a 10px body padding (equivalent to CSS `body{padding:10}`)
+    # around the `.dps-shell`. Inside the shell:
+    #
+    # ┌─ shell (cream gradient, gold/cyan corners, inner highlight border)
+    # │   ├─ dps-header   (eyebrow · title+badge · summary · ACT buttons)
+    # │   ├─ dps-tabs     (Damage | Healing)
+    # │   ├─ list-frame   (entity rows)
+    # │   └─ dps-footer   (ELAPSED … | TOTAL …)
 
     # Outer panel (ULW window) size
     WIDTH = 380
@@ -864,17 +860,16 @@ class DpsOverlay:
     FADE_IDLE_ALPHA = 0.0
 
     def _set_passthrough(self, passthrough: bool) -> None:
-        """Toggle WS_EX_TRANSPARENT so a faded-out idle panel stops
-        swallowing clicks meant for the game window. Re-enabled
-        (interactive) on fade_in().
-
-        v3.0.2: always re-assert the Win32 / GLFW state instead of
-        early-returning on a cached ``_is_passthrough`` match. The
-        cached flag could drift out of sync with the actual window
-        ex-style if GLFW reset it on focus/activation, leaving the
-        idle DPS panel quietly intercepting clicks even though we
-        believed it was already pass-through.
-        """
+        # Toggle WS_EX_TRANSPARENT so a faded-out idle panel stops
+        # swallowing clicks meant for the game window. Re-enabled
+        # (interactive) on fade_in().
+        #
+        # v3.0.2: always re-assert the Win32 / GLFW state instead of
+        # early-returning on a cached ``_is_passthrough`` match. The
+        # cached flag could drift out of sync with the actual window
+        # ex-style if GLFW reset it on focus/activation, leaving the
+        # idle DPS panel quietly intercepting clicks even though we
+        # believed it was already pass-through.
         passthrough = bool(passthrough)
         if self._gpu_managed and self._gpu_window is not None:
             # v3.0.4: set_click_through used to live on the wrong class
@@ -1023,7 +1018,7 @@ class DpsOverlay:
         self._schedule_tick(immediate=True)
 
     def _pick_detail_uid(self) -> int:
-        """Pick the most useful entity for the panel-wide detail mode."""
+        # Pick the most useful entity for the panel-wide detail mode.
         detail_uid = _safe_int(self._detail_uid)
         if detail_uid > 0:
             return detail_uid
@@ -1089,7 +1084,7 @@ class DpsOverlay:
 
     @_probe.decorate('ui.dps.update_detail')
     def update_detail(self, data: Optional[dict]) -> None:
-        """Push fresh per-entity skill breakdown (called by controller)."""
+        # Push fresh per-entity skill breakdown (called by controller).
         if not isinstance(data, dict):
             return
         uid = _safe_int(data.get('uid'))
@@ -1206,11 +1201,10 @@ class DpsOverlay:
     # ── Theme ──
 
     def _apply_theme(self, theme_name: str) -> None:
-        """切换 DPS 面板主题并清除所有渲染缓存。
-
-        Args:
-            theme_name: 'light' 或 'dark'
-        """
+        # 切换 DPS 面板主题并清除所有渲染缓存。
+        #
+        # Args:
+        # theme_name: 'light' 或 'dark'
         from sao_theme import get_panel_theme
         theme = get_panel_theme('dps', theme_name)
         if not theme:
@@ -1242,12 +1236,11 @@ class DpsOverlay:
     # ──────────────────────────────────────────
 
     def _schedule_tick(self, immediate: bool = False) -> None:
-        """Register with the shared 60 Hz scheduler (idempotent).
-
-        `immediate=True` used to force an out-of-band early tick; with the
-        shared scheduler we just make sure we're subscribed — the next tick
-        will happen on the global 60 Hz deadline anyway.
-        """
+        # Register with the shared 60 Hz scheduler (idempotent).
+        #
+        # `immediate=True` used to force an out-of-band early tick; with the
+        # shared scheduler we just make sure we're subscribed — the next tick
+        # will happen on the global 60 Hz deadline anyway.
         if not self._visible or self._win is None:
             return
         if not self._registered:
@@ -1285,11 +1278,11 @@ class DpsOverlay:
         ))
 
     def _compose_signature(self, now: float) -> Optional[tuple]:
-        """v2.3.x: coarse fingerprint of frame inputs. Returns None
-        when an animation is in flight (forces every-tick submit so
-        tweens look smooth). Otherwise returns a tuple covering all
-        observable state — if it equals the previous signature, the
-        compose+ULW pass can be skipped entirely."""
+        # v2.3.x: coarse fingerprint of frame inputs. Returns None
+        # when an animation is in flight (forces every-tick submit so
+        # tweens look smooth). Otherwise returns a tuple covering all
+        # observable state — if it equals the previous signature, the
+        # compose+ULW pass can be skipped entirely.
         if self._is_animating():
             return None
         try:
@@ -1445,8 +1438,8 @@ class DpsOverlay:
     # ──────────────────────────────────────────
 
     def _header_height(self) -> int:
-        """Total .dps-header height = pad-top + eyebrow + 4 + title + 6 +
-        summary + pad-bot + button row (below title cluster, wrapped)."""
+        # Total .dps-header height = pad-top + eyebrow + 4 + title + 6 +
+        # summary + pad-bot + button row (below title cluster, wrapped).
         # Top cluster (eyebrow/title/summary) + button row + gap between
         button_rows = self._button_row_count()
         return (self.HEADER_PAD_TOP
@@ -1473,7 +1466,7 @@ class DpsOverlay:
         return min(self._view_row_total(), self.MAX_ROWS)
 
     def _clamped_scroll(self) -> int:
-        """Return the scroll offset clamped to current data bounds."""
+        # Return the scroll offset clamped to current data bounds.
         if self._view_mode == 'report':
             total = len(self._report_entities())
             return max(0, min(_safe_int(self._scroll_offset_report), max(0, total - self.MAX_ROWS)))
@@ -1654,11 +1647,10 @@ class DpsOverlay:
         raise RuntimeError('DpsOverlay legacy ULW render path is disabled; GPU presentation is required')
 
     def _build_shell_layer(self, w: int, h: int) -> Image.Image:
-        """Compose the static shell (shadow + body + corners) once per size.
-
-        阴影 polygon 沿用 shell 切角形状; 偏移 + blur 后会从切角区域漏出来,
-        所以最后用切角三角形 mask 把那两块抠掉, 让 cut 区透明 (只露背景)。
-        """
+        # Compose the static shell (shadow + body + corners) once per size.
+        #
+        # 阴影 polygon 沿用 shell 切角形状; 偏移 + blur 后会从切角区域漏出来,
+        # 所以最后用切角三角形 mask 把那两块抠掉, 让 cut 区透明 (只露背景)。
         layer = Image.new('RGBA', (w, h), (0, 0, 0, 0))
         sx, sy = self.BODY_PAD, self.BODY_PAD
         sw, sh = w - 2 * self.BODY_PAD, h - 2 * self.BODY_PAD
@@ -1712,11 +1704,10 @@ class DpsOverlay:
         return layer
 
     def compose_frame(self, now: Optional[float] = None) -> Image.Image:
-        """Compose the current overlay frame to a PIL RGBA image.
-
-        Used by the ULW renderer and by test harnesses. Does not touch
-        any Win32 resources.
-        """
+        # Compose the current overlay frame to a PIL RGBA image.
+        #
+        # Used by the ULW renderer and by test harnesses. Does not touch
+        # any Win32 resources.
         if now is None:
             now = time.time()
         w, h = self._compute_size()
@@ -1777,7 +1768,7 @@ class DpsOverlay:
 
     def _shell_polygon(self, sx: int, sy: int, sw: int, sh: int,
                         inset: int = 0):
-        """web/dps.html clip-path:polygon 几何 — 右上角 + 左下角各切 22px 对角。"""
+        # web/dps.html clip-path:polygon 几何 — 右上角 + 左下角各切 22px 对角。
         c = max(2, self.SHELL_CUT - inset)
         x0, y0 = sx + inset, sy + inset
         x1, y1 = sx + sw - 1 - inset, sy + sh - 1 - inset
@@ -1878,7 +1869,7 @@ class DpsOverlay:
 
     def _draw_corners(self, draw: ImageDraw.ImageDraw,
                       sx: int, sy: int, sw: int, sh: int) -> None:
-        """高亮 cut-corner 转折点 — 强化 SAO 切角观感。"""
+        # 高亮 cut-corner 转折点 — 强化 SAO 切角观感。
         c = self.SHELL_CUT
         # Top-left full corner — bright cyan accent
         cyan = self.CYAN
@@ -2800,8 +2791,8 @@ class DpsOverlay:
         )
 
     def _heat_color(self, ratio: float):
-        """Heat gradient by relative output: low → cold blue, mid → gold,
-        high → hot red. Byte-for-byte mirror of web/dps.html _heatColor."""
+        # Heat gradient by relative output: low → cold blue, mid → gold,
+        # high → hot red. Byte-for-byte mirror of web/dps.html _heatColor.
         r = max(0.0, min(1.0, float(ratio or 0.0)))
         if r < 0.5:
             return self._lerp_rgb(self.HEAT_COLD, self.HEAT_MID, r / 0.5)
@@ -2810,8 +2801,8 @@ class DpsOverlay:
     def _draw_clip_rect(self, draw: ImageDraw.ImageDraw,
                         x: int, y: int, w: int, h: int,
                         fill=None, outline=None, bevel: int = 8) -> None:
-        """Render a CSS clip-path:polygon(Npx 0,100% 0,100% 100%,0 100%,0 Npx)
-        shape — a rectangle with a bevelled top-left corner."""
+        # Render a CSS clip-path:polygon(Npx 0,100% 0,100% 100%,0 100%,0 Npx)
+        # shape — a rectangle with a bevelled top-left corner.
         b = max(2, min(bevel, min(w, h) // 2))
         poly = [
             (x + b, y),
@@ -2882,8 +2873,8 @@ class DpsOverlay:
     def _draw_tracked(self, draw: ImageDraw.ImageDraw, xy, text: str,
                       font, fill, spacing: float = 1,
                       shadow_color=None, shadow_blur: int = 0) -> None:
-        """Approximate CSS letter-spacing by drawing glyphs one-by-one.
-        Optional text-shadow via *shadow_color* + *shadow_blur*."""
+        # Approximate CSS letter-spacing by drawing glyphs one-by-one.
+        # Optional text-shadow via *shadow_color* + *shadow_blur*.
         x, y = xy
         if shadow_color and shadow_blur > 0:
             self._draw_text_shadow(draw, text, font, shadow_color,
@@ -2939,7 +2930,7 @@ class DpsOverlay:
 
     def _tracked_text_width(self, draw, text: str, font,
                             spacing: float = 1) -> int:
-        """Return the total pixel width of tracked text."""
+        # Return the total pixel width of tracked text.
         if not text:
             return 0
         total = 0.0
@@ -3578,12 +3569,11 @@ class DpsOverlay:
     # ──────────────────────────────────────────
 
     def _on_mouse_wheel(self, ev) -> None:
-        """Handle mouse wheel.
-
-        In detail view the wheel scrolls the skill list (parity with
-        web/dps.html .skill-frame overflow:auto); otherwise it scrolls the
-        entity list. ev.delta > 0 = scroll up, < 0 = scroll down on Windows.
-        """
+        # Handle mouse wheel.
+        #
+        # In detail view the wheel scrolls the skill list (parity with
+        # web/dps.html .skill-frame overflow:auto); otherwise it scrolls the
+        # entity list. ev.delta > 0 = scroll up, < 0 = scroll down on Windows.
         delta = _safe_float(getattr(ev, 'delta', 0))
         if abs(delta) <= 1e-9:
             return
@@ -3594,7 +3584,7 @@ class DpsOverlay:
             self._scroll(direction)
 
     def _scroll(self, direction: int) -> None:
-        """Scroll the entity list by one row in the given direction (+1 down, -1 up)."""
+        # Scroll the entity list by one row in the given direction (+1 down, -1 up).
         max_offset = self._max_scroll_offset()
         old = self._current_scroll_offset()
         new = max(0, min(max_offset, old + direction))
@@ -3602,12 +3592,11 @@ class DpsOverlay:
             self._set_scroll_offset(new)
 
     def _scroll_skills(self, direction: int) -> None:
-        """Nudge the detail-view skill-scroll target by one wheel notch
-        (+1 down, -1 up). The displayed offset eases toward this target in
-        _advance_animations, so it glides instead of snapping. Bounds come
-        from the last _draw_detail_view pass (_skill_max_scroll), and the
-        draw pass re-clamps in case the geometry changed since.
-        """
+        # Nudge the detail-view skill-scroll target by one wheel notch
+        # (+1 down, -1 up). The displayed offset eases toward this target in
+        # _advance_animations, so it glides instead of snapping. Bounds come
+        # from the last _draw_detail_view pass (_skill_max_scroll), and the
+        # draw pass re-clamps in case the geometry changed since.
         max_scroll = _safe_float(getattr(self, '_skill_max_scroll', 0.0), min_value=0.0)
         old_raw = getattr(self, '_skill_scroll_target', 0.0)
         old = _safe_float(old_raw, min_value=0.0, max_value=max_scroll)

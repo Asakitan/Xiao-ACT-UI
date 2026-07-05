@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""Regression tests for direct-GPU Entity entry/exit transition routing."""
+# Regression tests for direct-GPU Entity entry/exit transition routing.
 
 from __future__ import annotations
 

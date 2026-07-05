@@ -1,34 +1,33 @@
 # -*- coding: utf-8 -*-
-"""field_authority - per-component source-of-truth model for the smart hybrid.
-
-Until Phase 5, PacketBridge read a single boolean ``mem_authoritative`` set by
-MemStateBridge: when True the *entire* self-state (hp, level, skills, identity)
-came from memory; when False TCP owned all of it. That single bit is the source
-of the "one field bad → whole subsystem flips to TCP" failure mode Phase 5 fixes.
-
-This module defines:
-
-  - ``Source``: enum {tcp, memory, either}. Per-component source-of-truth.
-  - ``ProbeReason``: enum classifying WHY a mem probe failed (anchor_invalid /
-    process_missing / scan_in_progress / snapshot_none / layout_drift). Each
-    reason maps to a different backoff policy so failure handling is precise
-    instead of "decrement count, flip at 10".
-  - ``FieldAuthority``: the live ``{component: (source, confidence, reason,
-    last_updated_tick)}`` map. Components extend the existing DATA_SOURCE_COMPONENTS
-    set (hp/level/stamina/skills/identity) with the things memory can also own
-    (boss/scene/entity/name/profession).
-  - ``BackoffPolicy``: per-reason backoff + re-probe cadence. Decoupled from
-    MemSelfStateProvider so the same policy can be reused by all readers.
-
-Back-compat shim: ``FieldAuthority.as_authoritative_bool()`` collapses back to the
-single-bool signal so the change is non-breaking — flipping
-``mem_per_field_authority = False`` in config restores today's behavior exactly.
-
-Authoritative sources are independent of why the last probe failed: a field can
-be ``Source.memory`` (it IS what the reader produces) while a *different* field
-is in ``Source.tcp`` (its reader is in backoff). On failure we degrade ONE field
-to tcp and schedule a re-probe; we do NOT flip the whole subsystem.
-"""
+# field_authority - per-component source-of-truth model for the smart hybrid.
+#
+# Until Phase 5, PacketBridge read a single boolean ``mem_authoritative`` set by
+# MemStateBridge: when True the *entire* self-state (hp, level, skills, identity)
+# came from memory; when False TCP owned all of it. That single bit is the source
+# of the "one field bad → whole subsystem flips to TCP" failure mode Phase 5 fixes.
+#
+# This module defines:
+#
+# - ``Source``: enum {tcp, memory, either}. Per-component source-of-truth.
+# - ``ProbeReason``: enum classifying WHY a mem probe failed (anchor_invalid /
+# process_missing / scan_in_progress / snapshot_none / layout_drift). Each
+# reason maps to a different backoff policy so failure handling is precise
+# instead of "decrement count, flip at 10".
+# - ``FieldAuthority``: the live ``{component: (source, confidence, reason,
+# last_updated_tick)}`` map. Components extend the existing DATA_SOURCE_COMPONENTS
+# set (hp/level/stamina/skills/identity) with the things memory can also own
+# (boss/scene/entity/name/profession).
+# - ``BackoffPolicy``: per-reason backoff + re-probe cadence. Decoupled from
+# MemSelfStateProvider so the same policy can be reused by all readers.
+#
+# Back-compat shim: ``FieldAuthority.as_authoritative_bool()`` collapses back to the
+# single-bool signal so the change is non-breaking — flipping
+# ``mem_per_field_authority = False`` in config restores today's behavior exactly.
+#
+# Authoritative sources are independent of why the last probe failed: a field can
+# be ``Source.memory`` (it IS what the reader produces) while a *different* field
+# is in ``Source.tcp`` (its reader is in backoff). On failure we degrade ONE field
+# to tcp and schedule a re-probe; we do NOT flip the whole subsystem.
 from __future__ import annotations
 
 import enum
@@ -45,7 +44,7 @@ class Source(str, enum.Enum):
 
 
 class ProbeReason(str, enum.Enum):
-    """Classifies why a memory probe failed. Drives backoff policy."""
+    # Classifies why a memory probe failed. Drives backoff policy.
     OK = "ok"                              # success / not failed
     ANCHOR_INVALID = "anchor_invalid"      # cached singleton pointer went stale
     PROCESS_MISSING = "process_missing"    # Star.exe not running
@@ -76,12 +75,12 @@ class BackoffState:
     last_reason: ProbeReason = ProbeReason.OK
 
     def schedule(self, *, now: float) -> float:
-        """Compute this round's backoff delay and stamp ``next_probe_at``.
-
-        Exponential schedule: initial_s, 2×, 4×, ..., capped at ``cap_s``. Returns
-        the delay in seconds (also stored as next_probe_at for ``should_retry``).
-        When ``initial_s == 0`` (process_missing / scan_in_progress reasons) the
-        delay is zero so the field can re-probe on the next tick."""
+        # Compute this round's backoff delay and stamp ``next_probe_at``.
+        #
+        # Exponential schedule: initial_s, 2×, 4×, ..., capped at ``cap_s``. Returns
+        # the delay in seconds (also stored as next_probe_at for ``should_retry``).
+        # When ``initial_s == 0`` (process_missing / scan_in_progress reasons) the
+        # delay is zero so the field can re-probe on the next tick.
         if self.initial_s <= 0:
             delay = 0.0
         else:
@@ -115,7 +114,7 @@ _POLICY_DEFAULTS: Dict[ProbeReason, Dict[str, float]] = {
 
 def make_policy(reason: ProbeReason, *,
                 cap_override: Optional[float] = None) -> BackoffState:
-    """Construct a BackoffState for a specific reason using the policy table."""
+    # Construct a BackoffState for a specific reason using the policy table.
     cfg = _POLICY_DEFAULTS.get(reason, _POLICY_DEFAULTS[ProbeReason.SNAPSHOT_NONE])
     cap = cap_override if cap_override is not None else cfg["cap_s"]
     return BackoffState(initial_s=cfg["initial_s"], cap_s=cap,
@@ -123,9 +122,9 @@ def make_policy(reason: ProbeReason, *,
 
 
 def counts_as_failure(reason: ProbeReason) -> bool:
-    """``True`` iff this reason should increment a per-field consecutive-fail
-    counter. SCAN_IN_PROGRESS and PROCESS_MISSING do NOT (the former is mid-scan,
-    the latter is the game gone — neither implies the reader is broken)."""
+    # ``True`` iff this reason should increment a per-field consecutive-fail
+    # counter. SCAN_IN_PROGRESS and PROCESS_MISSING do NOT (the former is mid-scan,
+    # the latter is the game gone — neither implies the reader is broken).
     return reason in (ProbeReason.ANCHOR_INVALID, ProbeReason.SNAPSHOT_NONE,
                       ProbeReason.LAYOUT_DRIFT)
 
@@ -145,20 +144,19 @@ class _FieldState:
 
 
 class FieldAuthority:
-    """Thread-safe per-component source-of-truth + per-reason backoff.
-
-    Lifecycle:
-      - Reader succeeds → ``record_success(component, source=memory, confidence)``,
-        which clears backoff, sets source to memory, last_updated = now.
-      - Reader fails   → ``record_failure(component, reason)``, which:
-          - if reason counts → increments consecutive_fails, schedules next retry;
-          - if reason doesn't count (scan_in_progress / process_missing) leaves
-            the source untouched (memory reader hasn't been proven broken);
-          - the *field* degrades to Source.TCP only when consecutive_fails passes
-            a threshold (default 3 counted failures, NOT 10 as the old constant).
-      - Degraded field with Source.TCP → ``try_resync(component)`` may flip it
-        back to memory on the next reader success.
-    """
+    # Thread-safe per-component source-of-truth + per-reason backoff.
+    #
+    # Lifecycle:
+    # - Reader succeeds → ``record_success(component, source=memory, confidence)``,
+    # which clears backoff, sets source to memory, last_updated = now.
+    # - Reader fails   → ``record_failure(component, reason)``, which:
+    # - if reason counts → increments consecutive_fails, schedules next retry;
+    # - if reason doesn't count (scan_in_progress / process_missing) leaves
+    # the source untouched (memory reader hasn't been proven broken);
+    # - the *field* degrades to Source.TCP only when consecutive_fails passes
+    # a threshold (default 3 counted failures, NOT 10 as the old constant).
+    # - Degraded field with Source.TCP → ``try_resync(component)`` may flip it
+    # back to memory on the next reader success.
 
     DEFAULT_THRESHOLD = 3          # counted fails before degrade (was 10)
 
@@ -182,7 +180,7 @@ class FieldAuthority:
             return st.confidence if st else 0.0
 
     def report(self) -> Dict[str, Dict[str, object]]:
-        """Snapshot for health(): per-component {source, confidence, reason, ago_s}."""
+        # Snapshot for health(): per-component {source, confidence, reason, ago_s}.
         now = time.monotonic()
         with self._lock:
             out: Dict[str, Dict[str, object]] = {}
@@ -209,12 +207,11 @@ class FieldAuthority:
             st.backoff.reset()
 
     def record_failure(self, component: str, reason: ProbeReason) -> bool:
-        """Record a probe failure for one component.
-
-        Returns ``True`` iff this failure SHOULD DEGRADE the field to TCP (i.e.
-        we've crossed the threshold). The caller is then expected to flip the
-        publish-side source for that field; nothing here touches publishers.
-        """
+        # Record a probe failure for one component.
+        #
+        # Returns ``True`` iff this failure SHOULD DEGRADE the field to TCP (i.e.
+        # we've crossed the threshold). The caller is then expected to flip the
+        # publish-side source for that field; nothing here touches publishers.
         with self._lock:
             st = self._state.setdefault(component, _FieldState())
             st.last_reason = reason
@@ -242,7 +239,7 @@ class FieldAuthority:
             return False
 
     def should_retry(self, component: str, *, now: Optional[float] = None) -> bool:
-        """Has the per-component backoff elapsed for a degraded field?"""
+        # Has the per-component backoff elapsed for a degraded field?
         t = float(now if now is not None else time.monotonic())
         with self._lock:
             st = self._state.get(component)
@@ -253,10 +250,10 @@ class FieldAuthority:
     # ── back-compat ─────────────────────────────────────────────────────────
     def as_authoritative_bool(self, components=("hp", "level", "stamina", "skills",
                                                 "identity")) -> bool:
-        """Collapse to the legacy single-bool signal. ``True`` iff ALL the
-        self-state components are currently Source.MEMORY. This lets existing
-        callers (PacketBridge.set_mem_authoritative) keep working unchanged when
-        ``mem_per_field_authority = False``."""
+        # Collapse to the legacy single-bool signal. ``True`` iff ALL the
+        # self-state components are currently Source.MEMORY. This lets existing
+        # callers (PacketBridge.set_mem_authoritative) keep working unchanged when
+        # ``mem_per_field_authority = False``.
 
         with self._lock:
             return all(

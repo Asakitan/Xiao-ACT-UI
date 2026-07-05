@@ -1,23 +1,22 @@
 # -*- coding: utf-8 -*-
-"""Creative Workshop — SAO menu sidebar category + floating panel.
-
-Two widgets:
-  * ``WorkshopChildPreview``: compact preview inside the SAO menu childbar area
-    (search + featured list + "open full panel" button).
-  * ``WorkshopPanel``: full-featured floating Tk Toplevel with tabs:
-    - 在线商店 (online catalog, install from workshop)
-    - 我的插件 (local user plugins, delete/publish/open in AI editor)
-    - 上传 (publish a local plugin to workshop)
-
-Both use ``workshop.client.WorkshopClient`` for catalog data (HTTP, threaded).
-
-Visual language: an independent white + gold brand skin (this panel reads as
-a "shop", not a system panel), built from the same rounded-card/button/
-scrollbar primitives every other floating panel uses (``sao_panel_components``)
-so it doesn't feel hand-rolled — just skinned differently. Colors are passed
-explicitly to those primitives instead of the global light/dark tokens, so
-Workshop keeps its brand identity across theme switches.
-"""
+# Creative Workshop — SAO menu sidebar category + floating panel.
+#
+# Two widgets:
+# * ``WorkshopChildPreview``: compact preview inside the SAO menu childbar area
+# (search + featured list + "open full panel" button).
+# * ``WorkshopPanel``: full-featured floating Tk Toplevel with tabs:
+# - 在线商店 (online catalog, install from workshop)
+# - 我的插件 (local user plugins, delete/publish/open in AI editor)
+# - 上传 (publish a local plugin to workshop)
+#
+# Both use ``workshop.client.WorkshopClient`` for catalog data (HTTP, threaded).
+#
+# Visual language: an independent white + gold brand skin (this panel reads as
+# a "shop", not a system panel), built from the same rounded-card/button/
+# scrollbar primitives every other floating panel uses (``sao_panel_components``)
+# so it doesn't feel hand-rolled — just skinned differently. Colors are passed
+# explicitly to those primitives instead of the global light/dark tokens, so
+# Workshop keeps its brand identity across theme switches.
 
 from __future__ import annotations
 
@@ -105,7 +104,7 @@ def _get_workshop_client():
 
 
 def _open_ai_editor_via_owner(owner: Any, *, status_var: Any = None) -> None:
-    """Open AI Editor through the owner path that releases menu/fisheye input first."""
+    # Open AI Editor through the owner path that releases menu/fisheye input first.
     try:
         safe_toggle = getattr(owner, "_toggle_ai_editor_panel", None)
         if callable(safe_toggle):
@@ -149,7 +148,7 @@ def _get_installed_ids(owner: Any) -> list[str]:
 
 
 def _get_local_user_plugins() -> list[dict]:
-    """List plugins from user_plugins/ (non-builtin, user-installed)."""
+    # List plugins from user_plugins/ (non-builtin, user-installed).
     results = []
     try:
         from config import BASE_DIR
@@ -183,8 +182,8 @@ def _get_local_user_plugins() -> list[dict]:
 
 def _wg_button(parent, text, command=None, *, kind: str = 'ghost', small: bool = False,
                active: bool = False):
-    """Rounded gold-skinned button. kind: 'solid' (filled gold CTA), 'ghost'
-    (outline, default), 'danger' (red outline, e.g. delete)."""
+    # Rounded gold-skinned button. kind: 'solid' (filled gold CTA), 'ghost'
+    # (outline, default), 'danger' (red outline, e.g. delete).
     if kind == 'solid':
         fill, fill_hover, border, fg = _WG_GOLD, _WG_GOLD_DARK, _WG_GOLD, '#FFFFFF'
     elif kind == 'danger':
@@ -200,7 +199,7 @@ def _wg_button(parent, text, command=None, *, kind: str = 'ghost', small: bool =
 
 
 def _wg_tab_button(parent, text, command):
-    """Toggleable pill tab (call ``.set_active(bool)`` to switch selection)."""
+    # Toggleable pill tab (call ``.set_active(bool)`` to switch selection).
     return _sao_action_button(
         parent, text, command, fill=_WG_CARD_BG, fill_hover=_WG_GOLD_SOFT,
         border=_WG_BORDER, fg=_WG_TEXT, canvas_bg=_WG_BODY_BG, radius=7, padx=14, pady=6,
@@ -209,7 +208,7 @@ def _wg_tab_button(parent, text, command):
 
 
 def _wg_card(parent, *, rail=None, pad=10):
-    """Rounded ivory card. Returns (canvas, inner) — pack/grid the canvas."""
+    # Rounded ivory card. Returns (canvas, inner) — pack/grid the canvas.
     return _sao_rounded_panel(parent, bg=_WG_CARD_BG, border=_WG_BORDER, radius=8,
                               rail=rail, rail_w=3, pad=pad, canvas_bg=_WG_BODY_BG)
 
@@ -223,7 +222,7 @@ def _wg_scrollbar(parent, command):
 
 
 def _wg_dropdown(parent, text, items, *, active: bool = False):
-    """Gold-skinned aggregate dropdown (按游戏/按标签 filters use this)."""
+    # Gold-skinned aggregate dropdown (按游戏/按标签 filters use this).
     fill, fill_hover, border, fg = _WG_CARD_BG, _WG_GOLD_SOFT, _WG_BORDER, _WG_TEXT
     return _sao_dropdown_button(
         parent, text, items, fill=fill, fill_hover=fill_hover, border=border, fg=fg,
@@ -234,11 +233,10 @@ def _wg_dropdown(parent, text, items, *, active: bool = False):
 
 
 def _bind_mousewheel_recursive(widget, canvas):
-    """Bind ``<MouseWheel>`` on ``widget`` and every descendant so scrolling
-    works no matter which child (card, label, badge...) is under the cursor —
-    Tk only delivers the wheel event to the exact widget the pointer is over,
-    it doesn't bubble up to the scrollable canvas by itself.
-    """
+    # Bind ``<MouseWheel>`` on ``widget`` and every descendant so scrolling
+    # works no matter which child (card, label, badge...) is under the cursor —
+    # Tk only delivers the wheel event to the exact widget the pointer is over,
+    # it doesn't bubble up to the scrollable canvas by itself.
     def _on_wheel(e):
         canvas.yview_scroll(int(-1 * (e.delta / 120)), 'units')
     try:
@@ -250,7 +248,7 @@ def _bind_mousewheel_recursive(widget, canvas):
 
 
 def _wg_search_bar(parent, var):
-    """Rounded search field with a magnifier icon. Returns (card, entry)."""
+    # Rounded search field with a magnifier icon. Returns (card, entry).
     card, inner = _sao_rounded_panel(parent, bg=_WG_CARD_BG, border=_WG_BORDER, radius=8,
                                      pad=6, canvas_bg=_WG_BODY_BG, height=32)
     row = tk.Frame(inner, bg=_WG_CARD_BG)
@@ -274,7 +272,7 @@ def _set_tab_active(btns: dict, active_key: str):
 # ═══════════════════════════════════════════════════════════════════
 
 class WorkshopChildPreview(tk.Frame):
-    """Compact workshop preview embedded in the SAO menu childbar area."""
+    # Compact workshop preview embedded in the SAO menu childbar area.
 
     _PREVIEW_W = 320
     _MAX_ROWS = 6
@@ -491,7 +489,7 @@ class WorkshopChildPreview(tk.Frame):
 # ═══════════════════════════════════════════════════════════════════
 
 class WorkshopPanel:
-    """Full-featured workshop floating panel with tabs."""
+    # Full-featured workshop floating panel with tabs.
 
     def __init__(self, root: tk.Misc, owner: Any):
         self.root = root
@@ -718,9 +716,8 @@ class WorkshopPanel:
         self._canvas = canvas
 
     def _render_filters(self):
-        """按游戏/按标签筛选下拉，条目和计数来自最近一次 catalog() 响应里的
-        game_ids/tags 聚合(见 _on_loaded)。首次(数据还没到)只有"全部"一项。
-        """
+        # 按游戏/按标签筛选下拉，条目和计数来自最近一次 catalog() 响应里的
+        # game_ids/tags 聚合(见 _on_loaded)。首次(数据还没到)只有"全部"一项。
         parent = getattr(self, '_filter_frame', None)
         if parent is None:
             return
@@ -1191,9 +1188,8 @@ class WorkshopPanel:
         threading.Thread(target=_do, daemon=True).start()
 
     def _delete_my_upload(self, plugin_id: str):
-        """删除自己发布在 workshop 上的插件(服务端按 uploader_token 校验所有权，
-        只能删自己的——这里不重复弹二次确认，跟本地「我的插件」删除同一套交互)。
-        """
+        # 删除自己发布在 workshop 上的插件(服务端按 uploader_token 校验所有权，
+        # 只能删自己的——这里不重复弹二次确认，跟本地「我的插件」删除同一套交互)。
         self._status_var.set(f'正在删除 {plugin_id} ...')
 
         def _do():

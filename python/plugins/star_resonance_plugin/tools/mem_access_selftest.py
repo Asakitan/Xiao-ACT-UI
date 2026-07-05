@@ -1,10 +1,9 @@
 # -*- coding: utf-8 -*-
-"""Selftest for mem_probe.mem_access — gating, JSON-safety, async search lifecycle.
-
-Runs entirely against stub owners / a synthetic StarProcess; no game required.
-
-    python tools/mem_access_selftest.py
-"""
+# Selftest for mem_probe.mem_access — gating, JSON-safety, async search lifecycle.
+#
+# Runs entirely against stub owners / a synthetic StarProcess; no game required.
+#
+# python tools/mem_access_selftest.py
 from __future__ import annotations
 
 import os
@@ -41,7 +40,7 @@ class _Region:
 
 
 class _FakePm:
-    """Minimal StarProcess stand-in over one in-memory buffer."""
+    # Minimal StarProcess stand-in over one in-memory buffer.
 
     def __init__(self, base=0x100000, buf=b""):
         self._base = base

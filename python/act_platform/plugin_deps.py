@@ -1,20 +1,19 @@
 # -*- coding: utf-8 -*-
-"""plugin_deps — 平台级「插件外置依赖引导」(从 midi_piano bootstrap 上提为通用能力)。
-
-任意插件都可声明 ``requirements.txt``；本模块按下列顺序让这些依赖**存在于插件
-目录内并从那里 import**，不污染主程序全局 site-packages：
-
-    1. libs/    —— ``pip install --target libs``（dev 联网态自动拉取；冻结态跳过）
-    2. vendor/  —— 插件随包自带的纯 Python 副本（冻结 / 离线兜底）
-    3. site     —— 以上都没有时，最后退回主程序环境（已带的依赖；记为 fallback）
-
-要点：把插件目录内的 ``engine/`` ``libs/`` ``vendor/`` 前插到 ``sys.path``，使插件
-本地副本优先；返回的记录供 ``restore_paths`` 在卸载时还原，避免主进程残留。
-
-冻结态 (PyInstaller onedir) 没有 pip，故 ``pip --target`` 跳过 → 作者必须把纯
-Python 依赖随包 vendor。主程序已经带的依赖（cv2 / numpy / config / utils ...）
-插件直接 import 即可，无需在此声明。参见 :mod:`act_platform.plugin_install`。
-"""
+# plugin_deps — 平台级「插件外置依赖引导」(从 midi_piano bootstrap 上提为通用能力)。
+#
+# 任意插件都可声明 ``requirements.txt``；本模块按下列顺序让这些依赖**存在于插件
+# 目录内并从那里 import**，不污染主程序全局 site-packages：
+#
+# 1. libs/    —— ``pip install --target libs``（dev 联网态自动拉取；冻结态跳过）
+# 2. vendor/  —— 插件随包自带的纯 Python 副本（冻结 / 离线兜底）
+# 3. site     —— 以上都没有时，最后退回主程序环境（已带的依赖；记为 fallback）
+#
+# 要点：把插件目录内的 ``engine/`` ``libs/`` ``vendor/`` 前插到 ``sys.path``，使插件
+# 本地副本优先；返回的记录供 ``restore_paths`` 在卸载时还原，避免主进程残留。
+#
+# 冻结态 (PyInstaller onedir) 没有 pip，故 ``pip --target`` 跳过 → 作者必须把纯
+# Python 依赖随包 vendor。主程序已经带的依赖（cv2 / numpy / config / utils ...）
+# 插件直接 import 即可，无需在此声明。参见 :mod:`act_platform.plugin_install`。
 
 from __future__ import annotations
 
@@ -58,14 +57,13 @@ def _prepend_path(path: str, rec: dict[str, Any]) -> None:
 
 
 def _safe_plugin_insert_index(plugin_path: str) -> int:
-    """Find an insertion index that will NOT shadow packages already
-    importable from the host environment.
-
-    Walk ``sys.path`` entries; if an entry contains a top-level package
-    directory whose name also exists inside *plugin_path*, skip past it
-    so the host copy wins.  Falls back to ``0`` (prepend) when nothing
-    collides.
-    """
+    # Find an insertion index that will NOT shadow packages already
+    # importable from the host environment.
+    #
+    # Walk ``sys.path`` entries; if an entry contains a top-level package
+    # directory whose name also exists inside *plugin_path*, skip past it
+    # so the host copy wins.  Falls back to ``0`` (prepend) when nothing
+    # collides.
     colliders: set[str] = set()
     try:
         for name in os.listdir(plugin_path):
@@ -108,7 +106,7 @@ def _parse_requirements(req_file: str) -> list[str]:
 
 
 def _module_origin(mod_name: str) -> Optional[str]:
-    """返回模块文件路径（未加载也能查），找不到返回 None。"""
+    # 返回模块文件路径（未加载也能查），找不到返回 None。
     try:
         spec = importlib.util.find_spec(mod_name)
     except Exception:
@@ -131,13 +129,12 @@ def _is_inside(path: str, root: str) -> bool:
 
 
 def _fresh_import(mod_name: str) -> bool:
-    """Validate that *mod_name* is importable; reload from current
-    ``sys.path`` if it was not previously loaded.
-
-    **Never** evict modules that are already in ``sys.modules`` — doing
-    so breaks C-extension packages like numpy/PIL whose ``.pyd`` files
-    cannot be loaded twice in one process.
-    """
+    # Validate that *mod_name* is importable; reload from current
+    # ``sys.path`` if it was not previously loaded.
+    #
+    # **Never** evict modules that are already in ``sys.modules`` — doing
+    # so breaks C-extension packages like numpy/PIL whose ``.pyd`` files
+    # cannot be loaded twice in one process.
     existing = sys.modules.get(mod_name)
     if existing is not None:
         return True
@@ -150,7 +147,7 @@ def _fresh_import(mod_name: str) -> bool:
 
 
 def _pip_install_target(req_file: str, libs_dir: str, log: Optional[Callable[[str], None]]) -> bool:
-    """``pip install --target <plugin>/libs -r requirements.txt``；冻结态 / 无 pip → False。"""
+    # ``pip install --target <plugin>/libs -r requirements.txt``；冻结态 / 无 pip → False。
     if getattr(sys, "frozen", False):
         return False
     import subprocess
@@ -170,12 +167,11 @@ def _pip_install_target(req_file: str, libs_dir: str, log: Optional[Callable[[st
 
 def ensure_requirements(plugin_dir: str, log: Optional[Callable[[str], None]] = None,
                         install: bool = True) -> dict[str, Any]:
-    """确保插件 ``requirements.txt`` 的依赖存在于插件目录内并从那里 import。
-
-    返回 ``{"added":[paths...], "deps":{name:'libs'|'vendor'|'pip→libs'|'site(fallback)'|'missing'}}``。
-    总是把 ``engine/`` ``libs/`` ``vendor/`` 前插 sys.path（即使没有 requirements），
-    这样作者只需把纯 Python 依赖丢进 ``vendor/`` 即可被插件直接 import。
-    """
+    # 确保插件 ``requirements.txt`` 的依赖存在于插件目录内并从那里 import。
+    #
+    # 返回 ``{"added":[paths...], "deps":{name:'libs'|'vendor'|'pip→libs'|'site(fallback)'|'missing'}}``。
+    # 总是把 ``engine/`` ``libs/`` ``vendor/`` 前插 sys.path（即使没有 requirements），
+    # 这样作者只需把纯 Python 依赖丢进 ``vendor/`` 即可被插件直接 import。
     plugin_dir = os.path.abspath(str(plugin_dir or ""))
     engine_dir = os.path.join(plugin_dir, "engine")
     libs_dir = os.path.join(plugin_dir, "libs")
@@ -222,7 +218,7 @@ def ensure_requirements(plugin_dir: str, log: Optional[Callable[[str], None]] = 
 
 
 def restore_paths(rec: Optional[dict[str, Any]]) -> None:
-    """卸载时还原 sys.path，移除本插件加入的目录。"""
+    # 卸载时还原 sys.path，移除本插件加入的目录。
     if not rec:
         return
     for path in rec.get("added", []) or []:

@@ -1,34 +1,32 @@
 # -*- coding: utf-8 -*-
-"""
-SAOPlayerGUIFisheyeMixin — fifth mixin extracted from SAOPlayerGUI
-(round 41 of the sao_gui split refactor). 9 methods, ~1362 lines.
-
-Holds the persistent GPU fisheye overlay that runs behind the SAO
-menu and floating panels. The biggest single method in the entire
-SAOPlayerGUI class — _start_fisheye_overlay (1078 lines) — sets up
-the background worker, GPU overlay window, hit-test layer, and
-input z-order management for the fisheye effect.
-
-Methods (in source order):
-  * _fisheye_close_suppressed — short window after close to ignore re-open
-  * _release_fisheye_input_zorder — Win32 SetWindowLongPtrW + SetWindowPos
-    to make the GPU overlay transparent to input + non-topmost
-  * _destroy_fisheye_hit_layer — destroys the transparent Tk hit layer
-  * _start_fisheye_with_retry — startup with retry (menu may not be
-    rendered yet on first toggle)
-  * _any_panel_open — utility used by maybe_stop_fisheye to decide
-    whether to keep the fisheye alive
-  * _maybe_stop_fisheye — decision point: only stop if menu+panels all closed
-  * _start_fisheye_overlay — the 1078-line setup block
-  * _stop_fisheye_overlay — ordered worker/GPU shutdown
-  * _run_fisheye_entry — entry-animation flow (menu_open + fisheye_in)
-
-All methods are SAOPlayerGUI instance methods today; this mixin holds
-the definitions. SAOPlayerGUI's __init__ still owns the relevant state
-(_fisheye_ov, _fisheye_hit_layer, _fisheye_close_suppress_until,
-_lift_loop_active, etc.) — the mixin only contains method bodies that
-access self.X.
-"""
+# SAOPlayerGUIFisheyeMixin — fifth mixin extracted from SAOPlayerGUI
+# (round 41 of the sao_gui split refactor). 9 methods, ~1362 lines.
+#
+# Holds the persistent GPU fisheye overlay that runs behind the SAO
+# menu and floating panels. The biggest single method in the entire
+# SAOPlayerGUI class — _start_fisheye_overlay (1078 lines) — sets up
+# the background worker, GPU overlay window, hit-test layer, and
+# input z-order management for the fisheye effect.
+#
+# Methods (in source order):
+# * _fisheye_close_suppressed — short window after close to ignore re-open
+# * _release_fisheye_input_zorder — Win32 SetWindowLongPtrW + SetWindowPos
+# to make the GPU overlay transparent to input + non-topmost
+# * _destroy_fisheye_hit_layer — destroys the transparent Tk hit layer
+# * _start_fisheye_with_retry — startup with retry (menu may not be
+# rendered yet on first toggle)
+# * _any_panel_open — utility used by maybe_stop_fisheye to decide
+# whether to keep the fisheye alive
+# * _maybe_stop_fisheye — decision point: only stop if menu+panels all closed
+# * _start_fisheye_overlay — the 1078-line setup block
+# * _stop_fisheye_overlay — ordered worker/GPU shutdown
+# * _run_fisheye_entry — entry-animation flow (menu_open + fisheye_in)
+#
+# All methods are SAOPlayerGUI instance methods today; this mixin holds
+# the definitions. SAOPlayerGUI's __init__ still owns the relevant state
+# (_fisheye_ov, _fisheye_hit_layer, _fisheye_close_suppress_until,
+# _lift_loop_active, etc.) — the mixin only contains method bodies that
+# access self.X.
 
 from __future__ import annotations
 
@@ -50,7 +48,7 @@ from utils.perf_probe import probe as _probe, gauge as _perf_gauge, phase as _ph
 
 
 def _mss_monitor_for_point(sct, x: int, y: int):
-    """Return the mss monitor dict that contains (x, y)."""
+    # Return the mss monitor dict that contains (x, y).
     for mon in sct.monitors[1:]:
         if (mon['left'] <= x < mon['left'] + mon['width']
                 and mon['top'] <= y < mon['top'] + mon['height']):
@@ -59,24 +57,23 @@ def _mss_monitor_for_point(sct, x: int, y: int):
 
 
 class SAOPlayerGUIFisheyeMixin:
-    """Mixin providing the persistent GPU fisheye overlay lifecycle.
-
-    SAOPlayerGUI must initialise the following attributes in its
-    __init__ (this is the existing contract — the mixin does not seed
-    them):
-
-      * self._fisheye_ov (overlay handle or None)
-      * self._fisheye_hit_layer (Tk Toplevel or None)
-      * self._fisheye_close_suppress_until (float)
-      * self._lift_loop_active (bool)
-      * self._destroyed (bool)
-      * self._sao_menu, self._panels_hidden, per-panel handles (dynamic)
-      * self.root (the Tk root)
-    """
+    # Mixin providing the persistent GPU fisheye overlay lifecycle.
+    #
+    # SAOPlayerGUI must initialise the following attributes in its
+    # __init__ (this is the existing contract — the mixin does not seed
+    # them):
+    #
+    # * self._fisheye_ov (overlay handle or None)
+    # * self._fisheye_hit_layer (Tk Toplevel or None)
+    # * self._fisheye_close_suppress_until (float)
+    # * self._lift_loop_active (bool)
+    # * self._destroyed (bool)
+    # * self._sao_menu, self._panels_hidden, per-panel handles (dynamic)
+    # * self.root (the Tk root)
 
     @staticmethod
     def _detect_panel_attrs(obj):
-        """Dynamically find all panel attribute names on the owner."""
+        # Dynamically find all panel attribute names on the owner.
         return tuple(k for k in vars(obj) if k.endswith('_panel') and k.startswith('_'))
 
     def _fisheye_close_suppressed(self) -> bool:
@@ -122,13 +119,12 @@ class SAOPlayerGUIFisheyeMixin:
             pass
 
     def _restore_fisheye_exit_zorder(self, ov=None):
-        """Make the GPU fisheye visible again for the exit fade.
-
-        Panel mode demotes the GPU window so panel clicks work normally.
-        When the user clicks the backdrop to dismiss the fisheye, briefly
-        restore the render window to topmost but keep it click-through, then
-        re-raise visible panels above it.
-        """
+        # Make the GPU fisheye visible again for the exit fade.
+        #
+        # Panel mode demotes the GPU window so panel clicks work normally.
+        # When the user clicks the backdrop to dismiss the fisheye, briefly
+        # restore the render window to topmost but keep it click-through, then
+        # re-raise visible panels above it.
         if ov is None:
             ov = getattr(self, '_fisheye_ov', None)
         gpu_win = getattr(ov, 'gpu_win', None) if ov is not None else None
@@ -193,55 +189,54 @@ class SAOPlayerGUIFisheyeMixin:
             self._demote_compositor_host_from_fisheye_topmost()
 
     def _demote_compositor_host_from_fisheye_topmost(self) -> None:
-        """Undo _raise_compositor_above_fisheye_hit_layer's HWND_TOPMOST push.
-
-        The fisheye hit layer is a full-screen, real WS_EX_TOPMOST Tk
-        window (see _create_fisheye_hit_layer); for the compositor's
-        WM_NCHITTEST-based fallthrough to reach it, the shared host HWND
-        has to sit ABOVE it — which, since the hit layer is topmost,
-        means the host must join the real topmost band too (a non-
-        topmost HWND_TOP chain can't out-rank an actually-topmost
-        window). _raise_compositor_above_fisheye_hit_layer does exactly
-        that, every time the hit layer (re)appears.
-
-        Nothing undid it: _release_fisheye_input_zorder/
-        _restore_fisheye_exit_zorder both early-return in unified mode
-        on the (once-true) assumption that the compositor host is never
-        made topmost there. Once _raise_compositor_above_fisheye_hit_layer
-        started doing exactly that, the host stayed pinned to
-        WS_EX_TOPMOST for the rest of the session after the FIRST fisheye
-        open — OverlayHost is deliberately created WITHOUT WS_EX_TOPMOST
-        (z-order is meant to be managed only by the compositor's own
-        HWND_TOP chaining in _enforce_z_order), and any Tk toplevel
-        created at that point (e.g. a NerveGear/plugin input proxy, also
-        real-topmost) ends up BELOW the now-permanently-topmost host in
-        the topmost band — permanently breaking its clicks, invisibly,
-        for the rest of the run, not just while the fisheye is up.
-
-        Called whenever the hit layer is torn down (full close, or the
-        panel-mode swap in _prepare_fisheye_backdrop_for_panels) — the
-        single choke point for "the hit layer no longer justifies the
-        host being topmost".
-
-        Does NOT unconditionally force HWND_NOTOPMOST — an earlier
-        version of this fix did, and that was itself a regression: the
-        compositor's own ``_enforce_z_order`` (its periodic ~2s tick)
-        decides whether the host SHOULD be topmost — e.g. it puts the
-        host into the real topmost band via the R3 kernel path (or a
-        plain SetWindowPos fallback) specifically when the attached
-        game window is itself topmost. Blindly forcing NOTOPMOST here
-        fights that decision: if the game (or another topmost overlay,
-        Discord/Steam/etc.) is topmost, NOTOPMOST drops the host BEHIND
-        it — "the compositor doesn't stay in front anymore, other
-        windows cover it". The bug this function targets isn't "the
-        host must never be topmost" — it's "the host got topmost from a
-        stale, one-off push (the fisheye hit layer's own needs) that
-        outlived its reason to exist". Re-invoking the compositor's own
-        z-order decision is what actually clears that stale state
-        without overriding a legitimate topmost need — it's the same
-        call ``_enforce_z_order`` runs unconditionally every tick, just
-        pulled forward so the correction doesn't wait for the next one.
-        """
+        # Undo _raise_compositor_above_fisheye_hit_layer's HWND_TOPMOST push.
+        #
+        # The fisheye hit layer is a full-screen, real WS_EX_TOPMOST Tk
+        # window (see _create_fisheye_hit_layer); for the compositor's
+        # WM_NCHITTEST-based fallthrough to reach it, the shared host HWND
+        # has to sit ABOVE it — which, since the hit layer is topmost,
+        # means the host must join the real topmost band too (a non-
+        # topmost HWND_TOP chain can't out-rank an actually-topmost
+        # window). _raise_compositor_above_fisheye_hit_layer does exactly
+        # that, every time the hit layer (re)appears.
+        #
+        # Nothing undid it: _release_fisheye_input_zorder/
+        # _restore_fisheye_exit_zorder both early-return in unified mode
+        # on the (once-true) assumption that the compositor host is never
+        # made topmost there. Once _raise_compositor_above_fisheye_hit_layer
+        # started doing exactly that, the host stayed pinned to
+        # WS_EX_TOPMOST for the rest of the session after the FIRST fisheye
+        # open — OverlayHost is deliberately created WITHOUT WS_EX_TOPMOST
+        # (z-order is meant to be managed only by the compositor's own
+        # HWND_TOP chaining in _enforce_z_order), and any Tk toplevel
+        # created at that point (e.g. a NerveGear/plugin input proxy, also
+        # real-topmost) ends up BELOW the now-permanently-topmost host in
+        # the topmost band — permanently breaking its clicks, invisibly,
+        # for the rest of the run, not just while the fisheye is up.
+        #
+        # Called whenever the hit layer is torn down (full close, or the
+        # panel-mode swap in _prepare_fisheye_backdrop_for_panels) — the
+        # single choke point for "the hit layer no longer justifies the
+        # host being topmost".
+        #
+        # Does NOT unconditionally force HWND_NOTOPMOST — an earlier
+        # version of this fix did, and that was itself a regression: the
+        # compositor's own ``_enforce_z_order`` (its periodic ~2s tick)
+        # decides whether the host SHOULD be topmost — e.g. it puts the
+        # host into the real topmost band via the R3 kernel path (or a
+        # plain SetWindowPos fallback) specifically when the attached
+        # game window is itself topmost. Blindly forcing NOTOPMOST here
+        # fights that decision: if the game (or another topmost overlay,
+        # Discord/Steam/etc.) is topmost, NOTOPMOST drops the host BEHIND
+        # it — "the compositor doesn't stay in front anymore, other
+        # windows cover it". The bug this function targets isn't "the
+        # host must never be topmost" — it's "the host got topmost from a
+        # stale, one-off push (the fisheye hit layer's own needs) that
+        # outlived its reason to exist". Re-invoking the compositor's own
+        # z-order decision is what actually clears that stale state
+        # without overriding a legitimate topmost need — it's the same
+        # call ``_enforce_z_order`` runs unconditionally every tick, just
+        # pulled forward so the correction doesn't wait for the next one.
         try:
             from render.overlay_compositor import get_unified_overlay
             uo = get_unified_overlay()
@@ -296,7 +291,7 @@ class SAOPlayerGUIFisheyeMixin:
             self._raise_entity_surfaces_above_fisheye()
 
     def _raise_entity_surfaces_above_fisheye(self) -> None:
-        """Keep the GPU menu/trigger/compositor above the transparent fisheye hit layer."""
+        # Keep the GPU menu/trigger/compositor above the transparent fisheye hit layer.
         menu = getattr(self, '_sao_menu', None)
         try:
             if menu is not None and getattr(menu, 'visible', False):
@@ -314,12 +309,11 @@ class SAOPlayerGUIFisheyeMixin:
         self._raise_compositor_above_fisheye_hit_layer()
 
     def _raise_compositor_above_fisheye_hit_layer(self) -> None:
-        """Ensure the compositor host HWND sits above the fisheye hit layer.
-
-        The compositor's WM_NCHITTEST returns HTCLIENT only for interactive
-        layers (plugin windows etc.) and HTTRANSPARENT everywhere else, so
-        backdrop clicks still reach the hit layer below.
-        """
+        # Ensure the compositor host HWND sits above the fisheye hit layer.
+        #
+        # The compositor's WM_NCHITTEST returns HTCLIENT only for interactive
+        # layers (plugin windows etc.) and HTTRANSPARENT everywhere else, so
+        # backdrop clicks still reach the hit layer below.
         hit_layer = getattr(self, '_fisheye_hit_layer', None)
         if hit_layer is None:
             return
@@ -339,6 +333,14 @@ class SAOPlayerGUIFisheyeMixin:
                 _ct.wintypes.HWND(host_hwnd), _ct.wintypes.HWND(-1),
                 0, 0, 0, 0, _SWP,
             )
+            try:
+                from mem_probe._dc import hide_exstyle
+                if not hide_exstyle(host_hwnd, 0x8 | 0x00200000):
+                    _ex = _u32.GetWindowLongPtrW(host_hwnd, -20)
+                    if _ex & 0x8:
+                        _u32.SetWindowLongPtrW(host_hwnd, -20, _ex & ~0x8)
+            except Exception:
+                pass
         except Exception:
             pass
 
@@ -363,7 +365,7 @@ class SAOPlayerGUIFisheyeMixin:
             pass
 
     def _play_fisheye_backdrop_close_fx(self) -> None:
-        """Play the same close flourish when dismissing panel-only fisheye."""
+        # Play the same close flourish when dismissing panel-only fisheye.
         try:
             from utils.sao_sound import play_sound as _play_sound
             _play_sound('menu_close')
@@ -395,7 +397,7 @@ class SAOPlayerGUIFisheyeMixin:
         self._stop_fisheye_overlay()
 
     def _start_fisheye_with_retry(self, retries=5, delay=80):
-        """带重试的鱼眼启动 — 首次进入时菜单可能还未完成渲染"""
+        # 带重试的鱼眼启动 — 首次进入时菜单可能还未完成渲染
         if self._destroyed:
             return
         if self._fisheye_close_suppressed():
@@ -467,14 +469,14 @@ class SAOPlayerGUIFisheyeMixin:
             return True
 
     def _any_panel_open(self):
-        """检查是否有任何浮动面板处于打开且可见状态"""
+        # 检查是否有任何浮动面板处于打开且可见状态
         if getattr(self, '_panels_hidden', False):
             return False
         return any(self._is_fisheye_panel_visible(panel)
                    for panel in self._iter_fisheye_panels())
 
     def _maybe_stop_fisheye(self):
-        """仅当 SAO 菜单和所有面板都关闭时才销毁鱼眼叠加层"""
+        # 仅当 SAO 菜单和所有面板都关闭时才销毁鱼眼叠加层
         menu_visible = bool(
             self._sao_menu is not None and self._sao_menu.visible
             and not self._fisheye_close_suppressed())
@@ -1281,7 +1283,7 @@ class SAOPlayerGUIFisheyeMixin:
 
         # ── 后台 worker: 截屏 + 畸变 + 缩放 + HUD 合成 → BGRA bytes ──
         def _worker():
-            """后台线程: 全部重活在此, 主线程仅 set_frame/set_alpha."""
+            # 后台线程: 全部重活在此, 主线程仅 set_frame/set_alpha.
             import ctypes as _ctw
             import time as _time
             try:
@@ -2002,18 +2004,17 @@ class SAOPlayerGUIFisheyeMixin:
 
     @_probe.decorate('ui.fisheye.stop')
     def _stop_fisheye_overlay(self, wait: bool = False, expected=None):
-        """销毁持久鱼眼叠加层.
-
-        v3.1.8 round 19: previously this method called ``worker_thread.join(2.0)``
-        and ``gpu_win.destroy()`` inline on the Tk main thread, which could
-        stall the UI for up to ~2 seconds while waiting for the fisheye
-        worker to acknowledge stop. Now: the main thread does only the
-        light Tk-bound work (hit-layer destroy, zorder release) and flips
-        the ``running[0]`` stop bit synchronously, then dispatches the
-        heavy wait + GPU teardown to a daemon thread so the user sees an
-        instant UI response. During final app close, pass wait=True so the
-        GLFW pump/GPU resources are torn down before root.quit().
-        """
+        # 销毁持久鱼眼叠加层.
+        #
+        # v3.1.8 round 19: previously this method called ``worker_thread.join(2.0)``
+        # and ``gpu_win.destroy()`` inline on the Tk main thread, which could
+        # stall the UI for up to ~2 seconds while waiting for the fisheye
+        # worker to acknowledge stop. Now: the main thread does only the
+        # light Tk-bound work (hit-layer destroy, zorder release) and flips
+        # the ``running[0]`` stop bit synchronously, then dispatches the
+        # heavy wait + GPU teardown to a daemon thread so the user sees an
+        # instant UI response. During final app close, pass wait=True so the
+        # GLFW pump/GPU resources are torn down before root.quit().
         ov = self._fisheye_ov
         if expected is not None and ov is not expected:
             return
@@ -2143,13 +2144,11 @@ class SAOPlayerGUIFisheyeMixin:
     #  LinkStart 入场鱼眼镜头畅变
     # ══════════════════════════════════════════════
     def _run_fisheye_entry(self):
-        """
-        LinkStart 结束后短暂鱼眼镜头畟变过渡 — 屏幕从弯曲收缩至正常.
-
-        流程: 抓取当前屏幕 → 应用桶形型畟变 (MESH变换) →
-                全屏覆盖层显示畟变图 → 0.9s内渐隐 →
-                真实 UI 从底层透出 (SAO 镜头对焦效果).
-        """
+        # LinkStart 结束后短暂鱼眼镜头畟变过渡 — 屏幕从弯曲收缩至正常.
+        #
+        # 流程: 抓取当前屏幕 → 应用桶形型畟变 (MESH变换) →
+        # 全屏覆盖层显示畟变图 → 0.9s内渐隐 →
+        # 真实 UI 从底层透出 (SAO 镜头对焦效果).
         try:
             from PIL import ImageGrab, Image, ImageTk
         except ImportError:

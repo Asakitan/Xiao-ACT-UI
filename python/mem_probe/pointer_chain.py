@@ -1,33 +1,32 @@
-"""指针链回溯 — 让 self_hp 地址跨进程持久.
-
-输入:
-    anchors.json 里的 self_hp_addr (堆地址, 跨进程必失效)
-输出:
-    anchors.json 新增字段 pointer_chain:
-        {
-            "module": "<main_module>",
-            "module_base_when_found": "0x7ff6...",
-            "static_offset": "0x...",   # 静态段内的偏移
-            "deref_offsets": ["0x10", "0x40", "0x20"],
-            "final_offset": "0x20",     # struct 内 hp 字段偏移
-            "max_depth": 3
-        }
-
-回溯算法 (BFS, 限深):
-    L0: anchor_set = {self_hp_addr - δ for δ in [0, 8, 16, ...]}  (目标对象起点附近)
-    L1: 全堆扫所有 i64 == anchor_set, 得到 ptr_set
-        - 命中模块静态段 → 链路成立, 终止
-    L2: 全堆扫 ptr_set, 得到 ptr2_set, 同上
-    L3: 同上 (默认止步 3)
-
-resolve_chain():
-    给定 chain, 用当前模块基址走一遍, 还原 final_addr; 与 reader 对接。
-
-CLI:
-    python -m tools.mem_probe.pointer_chain backtrace [--depth 3]
-    python -m tools.mem_probe.pointer_chain resolve
-    python -m tools.mem_probe.pointer_chain verify    # 跑完跟 anchor 对一遍
-"""
+# 指针链回溯 — 让 self_hp 地址跨进程持久.
+#
+# 输入:
+# anchors.json 里的 self_hp_addr (堆地址, 跨进程必失效)
+# 输出:
+# anchors.json 新增字段 pointer_chain:
+# {
+# "module": "<main_module>",
+# "module_base_when_found": "0x7ff6...",
+# "static_offset": "0x...",   # 静态段内的偏移
+# "deref_offsets": ["0x10", "0x40", "0x20"],
+# "final_offset": "0x20",     # struct 内 hp 字段偏移
+# "max_depth": 3
+# }
+#
+# 回溯算法 (BFS, 限深):
+# L0: anchor_set = {self_hp_addr - δ for δ in [0, 8, 16, ...]}  (目标对象起点附近)
+# L1: 全堆扫所有 i64 == anchor_set, 得到 ptr_set
+# - 命中模块静态段 → 链路成立, 终止
+# L2: 全堆扫 ptr_set, 得到 ptr2_set, 同上
+# L3: 同上 (默认止步 3)
+#
+# resolve_chain():
+# 给定 chain, 用当前模块基址走一遍, 还原 final_addr; 与 reader 对接。
+#
+# CLI:
+# python -m tools.mem_probe.pointer_chain backtrace [--depth 3]
+# python -m tools.mem_probe.pointer_chain resolve
+# python -m tools.mem_probe.pointer_chain verify    # 跑完跟 anchor 对一遍
 
 from __future__ import annotations
 
@@ -83,13 +82,13 @@ def _save_anchors(path: str, data: dict) -> None:
 
 
 def _module_index(mods: List[ModuleInfo]) -> List[Tuple[int, int, str]]:
-    """(base, base+size, name) 升序, 用于二分判定地址在哪个模块."""
+    # (base, base+size, name) 升序, 用于二分判定地址在哪个模块.
     out = sorted(((m.base, m.base + m.size, m.name) for m in mods), key=lambda x: x[0])
     return out
 
 
 def _addr_in_module(addr: int, idx: List[Tuple[int, int, str]]) -> Optional[Tuple[str, int]]:
-    """返回 (module_name, offset_in_module) 或 None."""
+    # 返回 (module_name, offset_in_module) 或 None.
     import bisect
     bases = [b for b, _, _ in idx]
     i = bisect.bisect_right(bases, addr) - 1
@@ -105,13 +104,12 @@ def _scan_pointers_to(
     pm: GameProcess, targets: Set[int], *, max_hits_per_level: int = _MAX_PTR_PER_LEVEL,
     include_image: bool = True,
 ) -> Dict[int, int]:
-    """全堆 + 模块静态段扫: 8 字节对齐 i64, 值落在 targets 中则记录.
-
-    include_image=True 是关键 — 模块 .data/.bss 在 MEM_IMAGE 段, 排除掉就找不到静态指针。
-    返回 dict: pointer_address -> pointed_to_address
-
-    内层走 cy_memscan.find_aligned_u64_in_set (AVX2 hash-set scan).
-    """
+    # 全堆 + 模块静态段扫: 8 字节对齐 i64, 值落在 targets 中则记录.
+    #
+    # include_image=True 是关键 — 模块 .data/.bss 在 MEM_IMAGE 段, 排除掉就找不到静态指针。
+    # 返回 dict: pointer_address -> pointed_to_address
+    #
+    # 内层走 cy_memscan.find_aligned_u64_in_set (AVX2 hash-set scan).
     if not targets:
         return {}
     targets_list = [int(t) & 0xFFFFFFFFFFFFFFFF for t in targets]
@@ -184,7 +182,7 @@ def backtrace(
     *,
     max_depth: int = 3,
 ) -> Optional[Dict]:
-    """从 anchor_addr 回溯, 返回找到的最短链 (深度优先打分: 浅 > 深)."""
+    # 从 anchor_addr 回溯, 返回找到的最短链 (深度优先打分: 浅 > 深).
     mods = pm.list_modules()
     mod_idx = _module_index(mods)
     print(f"[backtrace] modules={len(mods)}, anchor=0x{anchor_addr:X}")
@@ -254,7 +252,7 @@ def _build_chain(
     levels: List[PointerLevel],
     static_hit: Tuple[int, str, int, int],
 ) -> Dict:
-    """从静态命中向前 (向 anchor 方向) 反推 deref 偏移序列."""
+    # 从静态命中向前 (向 anchor 方向) 反推 deref 偏移序列.
     static_ptr_addr, mod_name, mod_offset, _ = static_hit
     # 从 levels[-1].static_hits 选中 static_ptr_addr 这个起点; 它指向 levels[-1].pointers[static_ptr_addr]
     chain_addrs: List[int] = []  # [ptr1_addr, ptr2_addr, ..., obj_addr, final_anchor]
@@ -300,7 +298,7 @@ def _build_chain(
 
 # ───────────────────────── 解析 / 验证 ─────────────────────────
 def resolve_chain(pm: GameProcess, chain: Dict) -> Optional[int]:
-    """用当前进程的模块基址走一遍 chain, 返回最终地址 (即 self_hp 的当前地址)."""
+    # 用当前进程的模块基址走一遍 chain, 返回最终地址 (即 self_hp 的当前地址).
     mod_name = chain["module"]
     mods = pm.list_modules()
     mod = next((m for m in mods if m.name.lower() == mod_name.lower()), None)
@@ -391,7 +389,7 @@ def cmd_resolve(args) -> int:
 
 
 def cmd_verify(args) -> int:
-    """对比静态链解析的地址 与 当前 anchors.self_hp_addr 是否一致."""
+    # 对比静态链解析的地址 与 当前 anchors.self_hp_addr 是否一致.
     anchors = _load_anchors(args.anchors)
     chain = anchors.get("pointer_chain")
     cur_anchor_s = anchors.get("self_hp_addr")

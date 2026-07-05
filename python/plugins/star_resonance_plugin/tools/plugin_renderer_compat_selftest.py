@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""Regression tests for Entity plugin renderer compatibility paths."""
+# Regression tests for Entity plugin renderer compatibility paths.
 
 from __future__ import annotations
 

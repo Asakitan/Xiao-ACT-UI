@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""Focused selftest for settings persistence safety."""
+# Focused selftest for settings persistence safety.
 
 from __future__ import annotations
 

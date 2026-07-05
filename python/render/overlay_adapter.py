@@ -1,22 +1,21 @@
 # -*- coding: utf-8 -*-
-"""overlay_adapter — drop-in GpuOverlayWindow replacement backed by
-the unified compositor.
-
-CompositorOverlayWindow has the same public API as GpuOverlayWindow
-so existing code can switch with minimal changes:
-
-    # OLD:
-    pump = get_glfw_pump(root)
-    win = GpuOverlayWindow(pump, w=300, h=400, ...)
-
-    # NEW:
-    overlay = get_unified_overlay(root)
-    win = CompositorOverlayWindow(overlay, w=300, h=400, ...)
-
-Both expose: show(), hide(), destroy(), set_geometry(),
-set_render_fn(), request_redraw(), set_click_through(),
-set_input_callbacks(), hwnd, ctx.
-"""
+# overlay_adapter — drop-in GpuOverlayWindow replacement backed by
+# the unified compositor.
+#
+# CompositorOverlayWindow has the same public API as GpuOverlayWindow
+# so existing code can switch with minimal changes:
+#
+# # OLD:
+# pump = get_glfw_pump(root)
+# win = GpuOverlayWindow(pump, w=300, h=400, ...)
+#
+# # NEW:
+# overlay = get_unified_overlay(root)
+# win = CompositorOverlayWindow(overlay, w=300, h=400, ...)
+#
+# Both expose: show(), hide(), destroy(), set_geometry(),
+# set_render_fn(), request_redraw(), set_click_through(),
+# set_input_callbacks(), hwnd, ctx.
 from __future__ import annotations
 
 import threading
@@ -43,12 +42,11 @@ def _gen_layer_name(title: str) -> str:
 
 
 class CompositorOverlayWindow:
-    """GpuOverlayWindow-compatible wrapper around a CompositorLayer.
-
-    Adapts the GpuOverlayWindow API surface so callers (popup menu,
-    fisheye, panels, etc.) can switch to the unified overlay with
-    minimal code changes.
-    """
+    # GpuOverlayWindow-compatible wrapper around a CompositorLayer.
+    #
+    # Adapts the GpuOverlayWindow API surface so callers (popup menu,
+    # fisheye, panels, etc.) can switch to the unified overlay with
+    # minimal code changes.
 
     def __init__(self, compositor: UnifiedOverlay,
                  w: int = 100, h: int = 100,
@@ -78,6 +76,12 @@ class CompositorOverlayWindow:
 
         if render_fn is not None:
             self._layer.set_render_fn(render_fn)
+        if vsync:
+            try:
+                from render.overlay_compositor import _detect_refresh_hz
+                self._layer.target_fps = _detect_refresh_hz()
+            except Exception:
+                self._layer.target_fps = 60
 
     # ── Properties matching GpuOverlayWindow ─────────────────
 
@@ -200,17 +204,17 @@ class CompositorOverlayWindow:
             pass
 
     def enable_input_proxy(self) -> bool:
-        """Route this (non-click-through) layer's input through a pinned
-        Tk proxy so the host stays click-through everywhere.
-
-        For a persistent interactive layer such as the NerveGear trigger
-        button: without this it forces the whole host out of
-        WS_EX_TRANSPARENT, and every other layer's SetWindowRgn spans
-        start gating input — a click_through desktop pet then grows a
-        flickering click/cursor dead-zone halo (its anti-tear pad) and
-        cross-process clicks over it die. See
-        UnifiedOverlay.attach_layer_input_proxy. Returns False if there's
-        no Tk root (legacy host-HWND routing kept)."""
+        # Route this (non-click-through) layer's input through a pinned
+        # Tk proxy so the host stays click-through everywhere.
+        #
+        # For a persistent interactive layer such as the NerveGear trigger
+        # button: without this it forces the whole host out of
+        # WS_EX_TRANSPARENT, and every other layer's SetWindowRgn spans
+        # start gating input — a click_through desktop pet then grows a
+        # flickering click/cursor dead-zone halo (its anti-tear pad) and
+        # cross-process clicks over it die. See
+        # UnifiedOverlay.attach_layer_input_proxy. Returns False if there's
+        # no Tk root (legacy host-HWND routing kept).
         try:
             return self._compositor.attach_layer_input_proxy(self._name)
         except Exception:
@@ -236,12 +240,11 @@ class CompositorOverlayWindow:
 
 
 class CompositorBgraPresenter:
-    """BgraPresenter-compatible wrapper that feeds a CompositorLayer.
-
-    Drop-in replacement for the existing BgraPresenter. Instead of
-    owning a GL texture and shader program, this simply forwards
-    BGRA bytes to the underlying layer.
-    """
+    # BgraPresenter-compatible wrapper that feeds a CompositorLayer.
+    #
+    # Drop-in replacement for the existing BgraPresenter. Instead of
+    # owning a GL texture and shader program, this simply forwards
+    # BGRA bytes to the underlying layer.
 
     def __init__(self, layer: CompositorLayer):
         self._layer = layer
@@ -251,7 +254,7 @@ class CompositorBgraPresenter:
 
     def set_frame(self, bgra: bytes, w: int, h: int,
                   x: int = 0, y: int = 0) -> None:
-        """Stage a new frame (same API as BgraPresenter)."""
+        # Stage a new frame (same API as BgraPresenter).
         self._frame_bytes = bgra
         self._frame_w = w
         self._frame_h = h
@@ -264,7 +267,7 @@ class CompositorBgraPresenter:
         self._layer.start_fade(target, duration, done_fn)
 
     def render(self, ctx: Any, t: float) -> None:
-        """No-op. In unified overlay, master compositor handles drawing."""
+        # No-op. In unified overlay, master compositor handles drawing.
         pass
 
     @property
@@ -291,11 +294,10 @@ def create_overlay_window(
     vsync: bool = False,
     z: int = 100,
 ) -> Any:
-    """Create an overlay window — unified compositor or legacy GLFW.
-
-    Returns CompositorOverlayWindow (unified) or GpuOverlayWindow
-    (legacy) depending on _USE_UNIFIED toggle.
-    """
+    # Create an overlay window — unified compositor or legacy GLFW.
+    #
+    # Returns CompositorOverlayWindow (unified) or GpuOverlayWindow
+    # (legacy) depending on _USE_UNIFIED toggle.
     if _USE_UNIFIED:
         overlay = get_unified_overlay(root)
         if not overlay._running:

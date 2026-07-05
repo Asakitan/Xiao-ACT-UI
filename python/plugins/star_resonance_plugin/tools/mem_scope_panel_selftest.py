@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""Regression tests for Entity Mem Scope render signatures."""
+# Regression tests for Entity Mem Scope render signatures.
 
 from __future__ import annotations
 

@@ -1,36 +1,35 @@
-"""gpu_capture.py — Asynchronous Windows.Graphics.Capture-backed HWND grabber.
-
-The original recognition path uses ``PrintWindow`` which synchronously asks the
-target window's WndProc to render to a DC.  For our game window that costs
-30–100 ms per call and **blocks the calling thread** the whole time.  Worse,
-``recognition.py`` wraps it in ``capture_section()`` so all overlay ULW commits
-also have to wait for the capture lock — which is exactly why overlay panels
-can feel "1–2 FPS" under load even though their tick loops keep firing at 30 Hz.
-
-Switching to Windows.Graphics.Capture (WGC, available since Windows 10 1903)
-fixes both problems at once:
-
-* WGC runs on its own DirectX-backed worker thread.  Frames arrive via a
-  callback; the recognition tick simply reads the latest snapshot — never
-  blocks for capture.
-* It captures the game window's swap-chain directly, so we get a real GPU
-  blit, not a synchronous WndProc round-trip.
-* The window doesn't need to be in the foreground or fully visible.
-
-If WGC fails to initialise for any reason (Windows < 1903, GPU driver issue,
-target HWND not capturable yet, ``SAO_GPU_CAPTURE=0``), this module silently
-returns ``None`` and the caller falls back to the legacy PrintWindow path.
-
-Public API
-----------
-    ensure_session(hwnd)        → bool   (True if GPU capture is providing
-                                          frames for this HWND right now)
-    get_latest_bgr(hwnd, max_age_s=0.25)
-                                → Optional[np.ndarray]   shape (H, W, 3),
-                                          BGR uint8, top-down
-    stop()                      → tear down current session (e.g. window
-                                          changed)
-"""
+# gpu_capture.py — Asynchronous Windows.Graphics.Capture-backed HWND grabber.
+#
+# The original recognition path uses ``PrintWindow`` which synchronously asks the
+# target window's WndProc to render to a DC.  For our game window that costs
+# 30–100 ms per call and **blocks the calling thread** the whole time.  Worse,
+# ``recognition.py`` wraps it in ``capture_section()`` so all overlay ULW commits
+# also have to wait for the capture lock — which is exactly why overlay panels
+# can feel "1–2 FPS" under load even though their tick loops keep firing at 30 Hz.
+#
+# Switching to Windows.Graphics.Capture (WGC, available since Windows 10 1903)
+# fixes both problems at once:
+#
+# * WGC runs on its own DirectX-backed worker thread.  Frames arrive via a
+# callback; the recognition tick simply reads the latest snapshot — never
+# blocks for capture.
+# * It captures the game window's swap-chain directly, so we get a real GPU
+# blit, not a synchronous WndProc round-trip.
+# * The window doesn't need to be in the foreground or fully visible.
+#
+# If WGC fails to initialise for any reason (Windows < 1903, GPU driver issue,
+# target HWND not capturable yet, ``SAO_GPU_CAPTURE=0``), this module silently
+# returns ``None`` and the caller falls back to the legacy PrintWindow path.
+#
+# Public API
+# ----------
+# ensure_session(hwnd)        → bool   (True if GPU capture is providing
+# frames for this HWND right now)
+# get_latest_bgr(hwnd, max_age_s=0.25)
+# → Optional[np.ndarray]   shape (H, W, 3),
+# BGR uint8, top-down
+# stop()                      → tear down current session (e.g. window
+# changed)
 
 from __future__ import annotations
 
@@ -65,9 +64,8 @@ _MONITORENUMPROC = ctypes.WINFUNCTYPE(
 
 
 def _client_inset(hwnd: int) -> Optional[Tuple[int, int, int, int]]:
-    """Return ``(off_x, off_y, client_w, client_h)`` mapping the client area
-    onto the full window swap-chain that WGC hands us. ``None`` on failure.
-    """
+    # Return ``(off_x, off_y, client_w, client_h)`` mapping the client area
+    # onto the full window swap-chain that WGC hands us. ``None`` on failure.
     try:
         win = _RECT()
         cli = _RECT()
@@ -137,7 +135,7 @@ def _get_dxgi_state() -> Tuple[Dict[int, object], Dict[int, Tuple[float, np.ndar
 
 
 def list_monitors() -> List[Dict[str, int]]:
-    """Return monitors in EnumDisplayMonitors order."""
+    # Return monitors in EnumDisplayMonitors order.
     monitors: List[Dict[str, int]] = []
 
     @_MONITORENUMPROC
@@ -209,7 +207,7 @@ def capture_monitor_bgr(
     timeout_ms: int = 16,
     max_age_s: float = 0.25,
 ) -> Optional[np.ndarray]:
-    """Return the latest DXGI BGR frame for a monitor, if available."""
+    # Return the latest DXGI BGR frame for a monitor, if available.
     if _DISABLED:
         return None
     idx = int(monitor_index or 0)
@@ -325,7 +323,7 @@ def _start_locked(hwnd: int) -> bool:
     _now = time.time
 
     class _SafeWindowsCapture(wgc.WindowsCapture):  # type: ignore[misc]
-        """Override the library wrapper to bypass numpy on the pyo3 thread."""
+        # Override the library wrapper to bypass numpy on the pyo3 thread.
 
         def __init__(self, **kwargs):  # type: ignore[override]
             super().__init__(**kwargs)
@@ -429,12 +427,11 @@ def _stop_locked() -> None:
 
 
 def ensure_session(hwnd: int) -> bool:
-    """Make sure a WGC session is running for ``hwnd``.
-
-    Returns True if frames are (or are about to be) flowing.  Returns False
-    when WGC is unavailable on this machine — the caller should fall back to
-    PrintWindow.  Cheap to call every recognition tick.
-    """
+    # Make sure a WGC session is running for ``hwnd``.
+    #
+    # Returns True if frames are (or are about to be) flowing.  Returns False
+    # when WGC is unavailable on this machine — the caller should fall back to
+    # PrintWindow.  Cheap to call every recognition tick.
     global _resume_hwnd
     if _DISABLED or _session_failed or hwnd <= 0:
         return False
@@ -458,13 +455,12 @@ def ensure_session(hwnd: int) -> bool:
 
 def get_latest_bgr(hwnd: int,
                    max_age_s: float = 0.25) -> Optional[np.ndarray]:
-    """Return the most recent BGR frame for ``hwnd`` cropped to its client
-    area, if it's fresh enough.
-
-    The returned array is owned by us (we deep-copy out of the slot so the
-    bytes object can be replaced by the next callback safely); callers may
-    slice / .copy() it freely.
-    """
+    # Return the most recent BGR frame for ``hwnd`` cropped to its client
+    # area, if it's fresh enough.
+    #
+    # The returned array is owned by us (we deep-copy out of the slot so the
+    # bytes object can be replaced by the next callback safely); callers may
+    # slice / .copy() it freely.
     if _DISABLED or _session_failed:
         return None
     if hwnd <= 0:
@@ -527,13 +523,12 @@ def stop() -> None:
 
 
 def pause_capture() -> None:
-    """Suspend the WGC session before a long GIL-releasing ctypes call
-    (``glfw.create_window``, ``moderngl.create_context``) on the main
-    thread.  This eliminates the race window for the
-    "PyEval_RestoreThread: NULL tstate" pyo3 crash.  Pair with
-    :func:`resume_capture`.  Idempotent and fast when no session is
-    running.
-    """
+    # Suspend the WGC session before a long GIL-releasing ctypes call
+    # (``glfw.create_window``, ``moderngl.create_context``) on the main
+    # thread.  This eliminates the race window for the
+    # "PyEval_RestoreThread: NULL tstate" pyo3 crash.  Pair with
+    # :func:`resume_capture`.  Idempotent and fast when no session is
+    # running.
     global _session_paused, _resume_hwnd
     with _session_lock:
         if _session_paused:
@@ -546,9 +541,8 @@ def pause_capture() -> None:
 
 
 def resume_capture() -> None:
-    """Restart the WGC session after the long ctypes call completes.
-    Pairs with :func:`pause_capture`.
-    """
+    # Restart the WGC session after the long ctypes call completes.
+    # Pairs with :func:`pause_capture`.
     global _session_paused, _resume_hwnd
     with _session_lock:
         if not _session_paused:

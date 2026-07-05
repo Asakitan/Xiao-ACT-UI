@@ -1,16 +1,15 @@
 # -*- coding: utf-8 -*-
-"""Synthetic-memory test for MemConfigTableReader column decode.
-
-Builds a fake ZLoader (IntArrayPool + Memory + _offsets dictionary) and row
-blobs in a flat dict-backed 'process memory', then asserts:
-  - col_i32_array decodes a pooled Int32Array column (i16 count + count*4 bytes)
-  - the Pool length bit31 flag is masked before bound checks
-  - empty arrays decode to []
-  - out-of-range pool offsets / counts return [] instead of garbage
-  - iter_rows_via_loader walks Dictionary<long,int> into (key, zloader, blob)
-
-No game required.  Run: python -m mem_probe.il2cpp.test_table_array_decode
-"""
+# Synthetic-memory test for MemConfigTableReader column decode.
+#
+# Builds a fake ZLoader (IntArrayPool + Memory + _offsets dictionary) and row
+# blobs in a flat dict-backed 'process memory', then asserts:
+# - col_i32_array decodes a pooled Int32Array column (i16 count + count*4 bytes)
+# - the Pool length bit31 flag is masked before bound checks
+# - empty arrays decode to []
+# - out-of-range pool offsets / counts return [] instead of garbage
+# - iter_rows_via_loader walks Dictionary<long,int> into (key, zloader, blob)
+#
+# No game required.  Run: python -m mem_probe.il2cpp.test_table_array_decode
 from plugins.star_resonance_plugin.mem.il2cpp.mem_config_table_reader import (
     MemConfigTableReader,
     ZLOADER_INTARRAYPOOL_OFF, ZLOADER_MEM_OBJ_OFF, ZLOADER_OFFSETS_OFF,
@@ -103,8 +102,8 @@ def _build(*, len_flag_bit31=True):
 
 
 def _build_loader_walk(pm):
-    """_offsets Dictionary<long,int> {9001: 1, 9002: 2} of RECORD indices.
-    GetRowData semantics: blob = Memory + _bufferRange.offset + idx*DataSize."""
+    # _offsets Dictionary<long,int> {9001: 1, 9002: 2} of RECORD indices.
+    # GetRowData semantics: blob = Memory + _bufferRange.offset + idx*DataSize.
     pm.wu64(ZL + ZLOADER_MEM_OBJ_OFF, MEM)      # Memory._object
     pm.wu32(ZL + ZLOADER_MEM_OBJ_OFF + 8, 0)    # Memory._index
     pm.wu32(ZL + ZLOADER_DATASIZE_OFF, 0x40)    # 0x40-byte row records

@@ -1,27 +1,26 @@
 # -*- coding: utf-8 -*-
-"""Selftest: with NO interactive layer open (host.input_passthrough is
-True, WS_EX_TRANSPARENT set), a click over EMPTY overlay space must
-still reach a window in a TRULY SEPARATE OS PROCESS underneath it.
-
-This is the exact scenario the earlier "Stage C1" regression broke:
-whenever host.input_passthrough was True, _sync_host_rgn cleared the
-SetWindowRgn clip region to NULL (the host's shape reverts to the full,
-unclipped screen rect) and skipped the alpha scan entirely, reasoning
-that WS_EX_TRANSPARENT alone would let clicks fall through everywhere.
-That reasoning is contradicted by this module's OWN docstring:
-SetWindowRgn's exclusion — not the ex-style — is what reliably lets a
-click reach the GAME PROCESS; WS_EX_TRANSPARENT does not work cross-
-process/cross-thread by itself. A NULL region means the host's shape
-covers the entire screen with nothing excluded, so the OS still
-considers the host to be sitting over every pixel regardless of the
-ex-style — clicks meant for the game/desktop landed on the host and
-died there.
-
-Every earlier selftest in this investigation used SAME-PROCESS Tk
-windows to stand in for "the game", which cannot catch a cross-process-
-specific delivery failure. This test spawns a genuinely separate OS
-process (tools/_cross_process_target.py) as the click target.
-"""
+# Selftest: with NO interactive layer open (host.input_passthrough is
+# True, WS_EX_TRANSPARENT set), a click over EMPTY overlay space must
+# still reach a window in a TRULY SEPARATE OS PROCESS underneath it.
+#
+# This is the exact scenario the earlier "Stage C1" regression broke:
+# whenever host.input_passthrough was True, _sync_host_rgn cleared the
+# SetWindowRgn clip region to NULL (the host's shape reverts to the full,
+# unclipped screen rect) and skipped the alpha scan entirely, reasoning
+# that WS_EX_TRANSPARENT alone would let clicks fall through everywhere.
+# That reasoning is contradicted by this module's OWN docstring:
+# SetWindowRgn's exclusion — not the ex-style — is what reliably lets a
+# click reach the GAME PROCESS; WS_EX_TRANSPARENT does not work cross-
+# process/cross-thread by itself. A NULL region means the host's shape
+# covers the entire screen with nothing excluded, so the OS still
+# considers the host to be sitting over every pixel regardless of the
+# ex-style — clicks meant for the game/desktop landed on the host and
+# died there.
+#
+# Every earlier selftest in this investigation used SAME-PROCESS Tk
+# windows to stand in for "the game", which cannot catch a cross-process-
+# specific delivery failure. This test spawns a genuinely separate OS
+# process (tools/_cross_process_target.py) as the click target.
 import os
 import sys
 import time

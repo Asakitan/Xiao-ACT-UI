@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""Selftest: mechanic_intelligence — 招名分类 + 机制壳子 + 范围填入 + 几何出圈判定。"""
+# Selftest: mechanic_intelligence — 招名分类 + 机制壳子 + 范围填入 + 几何出圈判定。
 from __future__ import annotations
 
 import os

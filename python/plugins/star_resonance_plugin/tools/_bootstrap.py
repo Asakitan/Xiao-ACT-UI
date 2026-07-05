@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""Selftest bootstrap for direct `python tools/<script>.py` runs."""
+# Selftest bootstrap for direct `python tools/<script>.py` runs.
 
 from __future__ import annotations
 

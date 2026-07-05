@@ -1,27 +1,26 @@
 # -*- coding: utf-8 -*-
-"""Declarative ACT plugin UI spec.
-
-A *render spec* is plain JSON-safe data describing a small UI tree.  Both the
-Entity (Tk) renderer in ``gui_modules.sao_plugin_ui_render`` and the WebView
-renderer in ``web/plugin_layer.js`` consume the **same** normalized spec so a
-plugin draws identically on both surfaces.
-
-Plugins build specs with the :class:`UI` helper (exposed as ``ctx.ui``)::
-
-    return ctx.ui.panel("Live Metrics", [
-        ctx.ui.bar("Primary Meter", pct=0.62, color="bad", caption="3.1 / 5.0"),
-        ctx.ui.table(
-            columns=[{"key": "name", "title": "Name"}, {"key": "value", "title": "Value", "align": "right"}],
-            rows=[{"name": "Sample", "value": "1.2M"}],
-            highlight_key="is_self",
-        ),
-        ctx.ui.button("Reset", action="reset", style="danger"),
-    ])
-
-The host never trusts plugin output blindly: :func:`normalize_ui_spec` clamps
-sizes, drops unknown node types, escapes/limits text and bounds recursion so a
-misbehaving plugin cannot bloat or crash the UI thread.
-"""
+# Declarative ACT plugin UI spec.
+#
+# A *render spec* is plain JSON-safe data describing a small UI tree.  Both the
+# Entity (Tk) renderer in ``gui_modules.sao_plugin_ui_render`` and the WebView
+# renderer in ``web/plugin_layer.js`` consume the **same** normalized spec so a
+# plugin draws identically on both surfaces.
+#
+# Plugins build specs with the :class:`UI` helper (exposed as ``ctx.ui``)::
+#
+# return ctx.ui.panel("Live Metrics", [
+# ctx.ui.bar("Primary Meter", pct=0.62, color="bad", caption="3.1 / 5.0"),
+# ctx.ui.table(
+# columns=[{"key": "name", "title": "Name"}, {"key": "value", "title": "Value", "align": "right"}],
+# rows=[{"name": "Sample", "value": "1.2M"}],
+# highlight_key="is_self",
+# ),
+# ctx.ui.button("Reset", action="reset", style="danger"),
+# ])
+#
+# The host never trusts plugin output blindly: :func:`normalize_ui_spec` clamps
+# sizes, drops unknown node types, escapes/limits text and bounds recursion so a
+# misbehaving plugin cannot bloat or crash the UI thread.
 
 from __future__ import annotations
 
@@ -119,7 +118,7 @@ def _cz(value: Any, default: int = 0) -> int:
 
 
 def _canvas_color(value: Any, default: str = "") -> str:
-    """A canvas color: ``#rgb``/``#rrggbb`` passes through; else a theme token."""
+    # A canvas color: ``#rgb``/``#rrggbb`` passes through; else a theme token.
     text = str(value or "").strip()
     if not text:
         return default
@@ -372,11 +371,10 @@ def _normalize_node(node: Any, depth: int, budget: list[int]) -> Optional[dict]:
 
 
 def normalize_ui_spec(spec: Any, *, title: str = "") -> dict:
-    """Return a canonical, bounded, JSON-safe render spec.
-
-    Accepts a full ``{"nodes": [...]}`` mapping, a single node mapping, or a
-    bare list of nodes.  Always returns ``{"version", "title", "nodes"}``.
-    """
+    # Return a canonical, bounded, JSON-safe render spec.
+    #
+    # Accepts a full ``{"nodes": [...]}`` mapping, a single node mapping, or a
+    # bare list of nodes.  Always returns ``{"version", "title", "nodes"}``.
     budget = [MAX_NODES]
     nodes: List[dict] = []
     spec_title = title
@@ -418,7 +416,7 @@ def is_ui_spec(value: Any) -> bool:
 # ── Builder DSL (exposed to plugins as ``ctx.ui``) ───────────────────────────
 
 class UI:
-    """Tiny builder returning plain spec dicts.  All methods are static."""
+    # Tiny builder returning plain spec dicts.  All methods are static.
 
     @staticmethod
     def panel(title: Any = "", children: Optional[Iterable[Any]] = None) -> dict:
@@ -492,9 +490,9 @@ class UI:
     @staticmethod
     def input(id: Any, value: Any = "", placeholder: Any = "",
               input_type: str = "text", width: int = 0) -> dict:
-        """A text field. ``id`` keys the value into ``payload["inputs"]`` when a
-        sibling button fires. ``input_type``: text/number/password. ``width`` px
-        (0 = flex). Rendered identically on Tk and WebView."""
+        # A text field. ``id`` keys the value into ``payload["inputs"]`` when a
+        # sibling button fires. ``input_type``: text/number/password. ``width`` px
+        # (0 = flex). Rendered identically on Tk and WebView.
         return {"type": "input", "id": _s(id, 80), "value": _s(value, MAX_INPUT_VAL),
                 "placeholder": _s(placeholder, 200), "input_type": input_type,
                 "width": max(0, min(2000, _ci(width, 0)))}
@@ -510,9 +508,9 @@ class UI:
     def canvas(width: int, height: int, ops: Optional[Iterable[Any]] = None,
                bg: str = "body", x: int = 0, y: int = 0, z: int = 0,
                id: Any = "", draggable: bool = False) -> dict:
-        """A drawing surface. ``ops`` are op dicts (see :meth:`rect`/:meth:`line`/
-        :meth:`ctext`); colors are theme tokens (accent/gold/ok/white/black/…) or
-        ``#hex``. Rendered identically on Tk and WebView."""
+        # A drawing surface. ``ops`` are op dicts (see :meth:`rect`/:meth:`line`/
+        # :meth:`ctext`); colors are theme tokens (accent/gold/ok/white/black/…) or
+        # ``#hex``. Rendered identically on Tk and WebView.
         return {"type": "canvas",
                 "id": _s(id, 120),
                 "x": _cpos(x, 0), "y": _cpos(y, 0), "z": _cz(z, 0),
@@ -526,11 +524,10 @@ class UI:
                    x: int = 0, y: int = 0, z: int = 0,
                    frame_key: Any = "", draggable: bool = True,
                    hit_test: str = "alpha", premultiplied: bool = False) -> dict:
-        """A pre-rendered RGBA8888 overlay frame supplied by a plugin.
-
-        The platform only decodes and composites these pixels; it does not
-        inspect model, mesh, or animation data.
-        """
+        # A pre-rendered RGBA8888 overlay frame supplied by a plugin.
+        #
+        # The platform only decodes and composites these pixels; it does not
+        # inspect model, mesh, or animation data.
         return {
             "type": "rgba_frame",
             "id": _s(id, 120),
