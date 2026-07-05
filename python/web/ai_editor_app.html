@@ -5520,8 +5520,10 @@ pre.code-block { overflow:visible; }
           <input id="s-cm-name" placeholder="model-name" style="flex:2;font-size:11px;min-width:120px">
           <input id="s-cm-input" placeholder="maxInput" type="number" style="flex:1;font-size:11px;min-width:70px" value="128000">
           <input id="s-cm-output" placeholder="maxOutput" type="number" style="flex:1;font-size:11px;min-width:70px" value="4096">
-          <button class="send-btn" style="font-size:10px;padding:2px 8px" onclick="addCustomModel()">Add</button>
+          <button type="button" style="font-size:10px;padding:2px 8px" onclick="fetchCustomModelContext()" data-i18n="s_cm_fetch_api" title="Look up this model's context window from the provider's official /models endpoint">Fetch from API</button>
+          <button class="send-btn" style="font-size:10px;padding:2px 8px" onclick="addCustomModel()" data-i18n="s_cm_save">Add</button>
         </div>
+        <div id="s-cm-status" style="font-size:11px;color:var(--fg-dim);min-height:14px;margin-top:2px"></div>
         <div style="display:flex;gap:8px;margin-top:4px;font-size:11px;color:var(--fg-dim)">
           <label><input type="checkbox" id="s-cm-tools" checked> Tools</label>
           <label><input type="checkbox" id="s-cm-vision"> Vision</label>
@@ -8307,6 +8309,13 @@ en:{
   s_wf_locations:'Workflow Locations',s_skill_locations:'Skill Locations',
   s_advanced:'Advanced Sampling & Connection',s_custom_models:'Custom Models',
   s_test:'Test',s_save:'Save',
+  s_cm_fetch_api:'Fetch from API',s_cm_save:'Save',
+  s_cm_empty:'No models defined. Add models below to configure context window and capabilities.',
+  s_cm_edit_hint:'Click to edit this model',
+  s_cm_need_name:'Enter a model name first',s_cm_fetching:'Fetching…',
+  s_cm_fetch_ok:'Context window: $1K',s_cm_fetch_failed:'Could not fetch — please fill in manually',
+  s_cm_saved:'Saved',
+  s_ctx_window_label:'Context window: $1',s_ctx_window_label_unknown:'Context window',s_ctx_window_edit:'Edit…',
   s_section_assistant:'AI / Endpoint',s_section_appearance:'Appearance',s_section_editor:'Editor / Files',
   s_section_claude:'Claude Code',s_section_codex:'Codex',s_section_mcp:'MCP Policy',
   s_section_terminal:'Terminal',s_section_workspace:'Workspace',s_section_extensions:'Extensions',
@@ -8508,6 +8517,13 @@ zh:{
   s_wf_locations:'工作流位置',s_skill_locations:'技能位置',
   s_advanced:'高级采样 & 连接',s_custom_models:'自定义模型',
   s_test:'测试',s_save:'保存',
+  s_cm_fetch_api:'从 API 获取',s_cm_save:'保存',
+  s_cm_empty:'尚未定义模型。在下方添加模型以配置上下文窗口与能力。',
+  s_cm_edit_hint:'点击编辑此模型',
+  s_cm_need_name:'请先填写模型名称',s_cm_fetching:'获取中…',
+  s_cm_fetch_ok:'上下文窗口: $1K',s_cm_fetch_failed:'获取失败 — 请手动填写',
+  s_cm_saved:'已保存',
+  s_ctx_window_label:'上下文窗口: $1',s_ctx_window_label_unknown:'上下文窗口',s_ctx_window_edit:'编辑…',
   s_section_assistant:'AI / 端点',s_section_appearance:'外观',s_section_editor:'编辑器 / 文件',
   s_section_claude:'Claude Code',s_section_codex:'Codex',s_section_mcp:'MCP 策略',
   s_section_terminal:'终端',s_section_workspace:'工作区',s_section_extensions:'扩展',
@@ -38120,6 +38136,19 @@ function renderChatControlPopups(){
       empty.textContent=modelFetchPending(config.provider)?'Loading Custom Endpoint models...':'No models configured for this provider';
       modelPopup.appendChild(empty);
     }
+    const activeModelForCtx=ensureToolbarModelSelection({persist:false});
+    if(activeModelForCtx){
+      const activeRow=rows.find(item=>controlItemId(item)===activeModelForCtx);
+      const ctxK=activeRow&&activeRow.max_input?Math.round(Number(activeRow.max_input)/1000)+'K':'';
+      const ctxSep=document.createElement('div');ctxSep.className='mode-popup-sep';modelPopup.appendChild(ctxSep);
+      const ctxRow=document.createElement('div');
+      ctxRow.className='mode-popup-item model-context-row';
+      ctxRow.setAttribute('role','option');ctxRow.tabIndex=-1;
+      ctxRow.textContent=(ctxK?tf('s_ctx_window_label',ctxK):t('s_ctx_window_label_unknown'))+' · '+t('s_ctx_window_edit');
+      ctxRow.onclick=ev=>{ev.stopPropagation();closeChatControlPopups();openModelContextEditor(activeModelForCtx)};
+      ctxRow.onkeydown=ev=>{if(ev.key==='Enter'||ev.key===' '){ev.preventDefault();ctxRow.click()}};
+      modelPopup.appendChild(ctxRow);
+    }
     modelPopup.onkeydown=e=>handleChatControlPopupKeydown(e,'model');
   }
   const wfSel=$('chat-workflow-sel'),workflowTrigger=$('chat-workflow-trigger'),workflowLabelEl=$('chat-workflow-trigger-label'),workflowPopup=$('chat-workflow-popup');
@@ -38836,18 +38865,73 @@ async function renderCustomModels(){
   const el=$('s-custom-models-list');if(!el)return;
   const models=r.models;const keys=Object.keys(models).sort();
   el.innerHTML='';
-  if(!keys.length){el.innerHTML='<div style="color:var(--fg-dim);font-size:11px;padding:2px 0">No models defined. Add models below to configure context window and capabilities.</div>';return}
+  if(!keys.length){el.innerHTML='<div style="color:var(--fg-dim);font-size:11px;padding:2px 0" data-i18n="s_cm_empty">No models defined. Add models below to configure context window and capabilities.</div>';return}
   keys.forEach(m=>{const c=models[m];
     const caps=[];if(c.tools)caps.push('T');if(c.vision)caps.push('V');if(c.thinking)caps.push('R');if(c.streaming)caps.push('S');
     const row=document.createElement('div');
-    row.style.cssText='display:flex;align-items:center;gap:4px;padding:2px 0;font-size:11px';
+    row.style.cssText='display:flex;align-items:center;gap:4px;padding:2px 0;font-size:11px;cursor:pointer';
+    row.title=t('s_cm_edit_hint');
     row.innerHTML='<span style="flex:2;font-family:var(--mono);overflow:hidden;text-overflow:ellipsis" title="'+esc(m)+'">'+esc(m)+'</span>'
       +'<span style="flex:1;color:var(--fg-dim)">'+Math.round(c.max_input/1000)+'K/'+Math.round(c.max_output/1000)+'K</span>'
       +'<span style="color:var(--fg-dim)">'+caps.join('')+'</span>'
-      +'<span style="cursor:pointer;opacity:0.5;color:var(--fg-error)" onclick="delModel(\''+esc(m)+'\')">✕</span>';
+      +'<span class="s-cm-del" style="cursor:pointer;opacity:0.5;color:var(--fg-error)">✕</span>';
+    row.querySelector('.s-cm-del').onclick=ev=>{ev.stopPropagation();delModel(m)};
+    row.onclick=()=>fillCustomModelForm(m,c);
     el.appendChild(row);
   });
 }
+function fillCustomModelForm(name,c){
+  c=c||{};
+  if($('s-cm-name'))$('s-cm-name').value=name;
+  if($('s-cm-input'))$('s-cm-input').value=c.max_input||128000;
+  if($('s-cm-output'))$('s-cm-output').value=c.max_output||4096;
+  if($('s-cm-tools'))$('s-cm-tools').checked=c.tools!==false;
+  if($('s-cm-vision'))$('s-cm-vision').checked=!!c.vision;
+  if($('s-cm-thinking'))$('s-cm-thinking').checked=!!c.thinking;
+  if($('s-cm-streaming'))$('s-cm-streaming').checked=c.streaming!==false;
+  const status=$('s-cm-status');if(status)status.textContent='';
+  try{$('s-cm-input').focus({preventScroll:true})}catch(e){}
+}
+window.fillCustomModelForm=fillCustomModelForm;
+async function refreshActiveModelContextWindowIfMatches(model){
+  if(!model||model!==(config.model||''))return;
+  const info=await call('get_model_info',model);
+  if(info&&info.max_input){
+    config.context_window={max_input:info.max_input,max_output:info.max_output||4096};
+    updateContextUsage(totalTokens);
+  }
+}
+async function fetchCustomModelContext(){
+  const name=$('s-cm-name').value.trim();
+  const status=$('s-cm-status');
+  if(!name){if(status)status.textContent=t('s_cm_need_name');return}
+  if(status){status.textContent=t('s_cm_fetching');status.style.color='var(--fg-dim)'}
+  const r=await call('fetch_model_context',name,readInputValue('s-provider'),readInputValue('s-baseurl'));
+  if(r&&r.max_input){
+    $('s-cm-input').value=r.max_input;
+    if(status){status.textContent=tf('s_cm_fetch_ok',Math.round(r.max_input/1000));status.style.color='var(--fg-success)'}
+  }else{
+    if(status){status.textContent=(r&&r.error)||t('s_cm_fetch_failed');status.style.color='var(--fg-error)'}
+  }
+}
+window.fetchCustomModelContext=fetchCustomModelContext;
+function openModelContextEditor(model){
+  openSettings();
+  if(settingsCurrentMode()==='simple')settingsSetMode('complex');
+  setTimeout(()=>{
+    scrollToSettingsSection('models');
+    const section=document.querySelector('.settings-section[data-settings-id="models"]');
+    if(section&&section.tagName==='DETAILS')section.open=true;
+    call('get_model_info',model||'').then(info=>{
+      fillCustomModelForm(model||'',{
+        max_input:(info&&info.max_input)||128000,
+        max_output:(info&&info.max_output)||4096,
+        tools:true,streaming:true,
+      });
+    });
+  },90);
+}
+window.openModelContextEditor=openModelContextEditor;
 async function addCustomModel(){
   const name=$('s-cm-name').value.trim();if(!name)return;
   const inp=parseInt($('s-cm-input').value)||128000;
@@ -38856,10 +38940,14 @@ async function addCustomModel(){
   const vision=$('s-cm-vision')&&$('s-cm-vision').checked;
   const thinking=$('s-cm-thinking')&&$('s-cm-thinking').checked;
   const streaming=$('s-cm-streaming')?$('s-cm-streaming').checked:true;
-  await call('save_custom_model',name,inp,out,tools,vision,thinking,streaming,readInputValue('s-provider'),readInputValue('s-baseurl'));
+  const r=await call('save_custom_model',name,inp,out,tools,vision,thinking,streaming,readInputValue('s-provider'),readInputValue('s-baseurl'));
+  const status=$('s-cm-status');
+  if(r&&r.ok){if(status){status.textContent=t('s_cm_saved');status.style.color='var(--fg-success)'}}
+  else if(status){status.textContent=(r&&r.error)||t('s_save_failed');status.style.color='var(--fg-error)'}
   $('s-cm-name').value='';renderCustomModels();showModelInfo();
+  await refreshActiveModelContextWindowIfMatches(name);
 }
-async function delModel(name){await call('delete_custom_model',name);renderCustomModels();showModelInfo()}
+async function delModel(name){await call('delete_custom_model',name);renderCustomModels();showModelInfo();await refreshActiveModelContextWindowIfMatches(name)}
 window.delModel=delModel;
 window.addCustomModel=addCustomModel;
 
