@@ -79,7 +79,13 @@ if t.TYPE_CHECKING:
 
 try:
     from ctypes import pythonapi
-except ImportError:
+
+    # Frozen builds (e.g. Nuitka standalone) link CPython statically and the
+    # host EXE exports no Python C-API symbols, so these attribute lookups
+    # raise AttributeError at import time. Treat that like the PyPy case.
+    PyObject_GetBuffer = pythonapi.PyObject_GetBuffer
+    PyBuffer_Release = pythonapi.PyBuffer_Release
+except (ImportError, AttributeError):
     # On PyPy we cannot get buffers so our ability to operate here is
     # severely limited.
     get_buffer = None
@@ -99,9 +105,6 @@ else:
             ("suboffsets", c_ssize_p),
             ("internal", c_void_p),
         ]
-
-    PyObject_GetBuffer = pythonapi.PyObject_GetBuffer
-    PyBuffer_Release = pythonapi.PyBuffer_Release
 
     def get_buffer(obj: Buffer, writable: bool = False) -> Array[c_char]:
         buf = Py_buffer()

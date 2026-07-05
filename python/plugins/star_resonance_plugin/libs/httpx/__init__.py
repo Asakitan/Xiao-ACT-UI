@@ -13,7 +13,11 @@ from ._urls import *
 
 try:
     from ._main import main
-except ImportError:  # pragma: no cover
+except Exception:  # pragma: no cover
+    # The CLI is optional: its dependencies (click/rich) can fail at import
+    # time in frozen builds with errors other than ImportError (for example
+    # AttributeError from ctypes.pythonapi lookups). Never let the optional
+    # CLI break `import httpx` itself.
 
     def main() -> None:  # type: ignore
         import sys
