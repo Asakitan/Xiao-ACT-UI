@@ -56,6 +56,9 @@ _PROVIDER_DEFAULTS: Dict[str, Dict[str, str]] = {
 # Model registry — fully user-driven. No hardcoded models.
 # Users add models via Settings → Custom Models or settings.json ai_editor.custom_models.
 # Default context for unknown models: 128K input, 4K output, all capabilities enabled.
+# Context window precedence: LLMConfig.max_input_tokens (global override)
+# > user-registered entry (source="user", persisted) > provider-reported
+# entry (source="api", in-memory only, never overrides user data) > default.
 
 _DEFAULT_CONTEXT: Dict[str, int] = {"max_input": 128000, "max_output": 4096}
 _DEFAULT_CAPS: Dict[str, bool] = {"tools": True, "vision": False, "thinking": False, "streaming": True}
@@ -68,18 +71,36 @@ _model_registry: Dict[str, Dict[str, Any]] = {}
 def register_model(name: str, max_input: int = 0, max_output: int = 0,
                     tools: bool = True, vision: bool = False,
                     thinking: bool = False, streaming: bool = True,
-                    provider: str = "", base_url: str = "") -> None:
+                    provider: str = "", base_url: str = "",
+                    source: str = "user") -> None:
     """Register or update a model's context window and capabilities."""
     _model_registry[name] = {
         "max_input": max_input or _DEFAULT_CONTEXT["max_input"],
         "max_output": max_output or _DEFAULT_CONTEXT["max_output"],
         "tools": tools, "vision": vision,
         "thinking": thinking, "streaming": streaming,
+        "source": str(source or "user"),
     }
     if provider:
         _model_registry[name]["provider"] = str(provider)
     if base_url:
         _model_registry[name]["base_url"] = str(base_url)
+
+
+def register_api_context(name: str, max_input: int, max_output: int = 0) -> bool:
+    """Record a provider-reported context window for a model.
+
+    API-sourced values only fill models the user has not configured
+    themselves; a user-registered entry always wins. Returns True when the
+    registry was updated."""
+    if not name or not max_input:
+        return False
+    existing = _model_registry.get(name)
+    if existing and existing.get("source", "user") != "api":
+        return False
+    register_model(name, max_input=int(max_input), max_output=int(max_output or 0),
+                   source="api")
+    return True
 
 
 def unregister_model(name: str) -> None:
@@ -101,6 +122,7 @@ def set_custom_models(models: Dict[str, Any]) -> None:
                 streaming=cfg.get("streaming", True),
                 provider=str(cfg.get("provider", "") or cfg.get("provider_id", "") or ""),
                 base_url=str(cfg.get("base_url", "") or cfg.get("endpoint", "") or ""),
+                source=str(cfg.get("source", "user") or "user"),
             )
 
 
@@ -222,6 +244,23 @@ class ProviderConfig:
         return ctx
 
 
+def _friendly_llm_error(exc: Exception) -> str:
+    """Turn a raw request exception into a short, user-facing Chinese message."""
+    status = getattr(getattr(exc, "response", None), "status_code", None)
+    if status in (401, 403):
+        return "API Key 无效或无权限，请到设置中检查"
+    if status == 404:
+        return "接口地址不存在，请检查 Base URL"
+    if status == 429:
+        return "请求过于频繁（触发限流），请稍后重试"
+    if isinstance(status, int) and status >= 500:
+        return f"服务端错误 (HTTP {status})，请稍后重试"
+    name = type(exc).__name__
+    if "Connect" in name or "Timeout" in name:
+        return f"无法连接服务商，请检查网络或 Base URL（{name}）"
+    return f"{name}: {exc}"
+
+
 # ---------------------------------------------------------------------------
 # Engine
 # ---------------------------------------------------------------------------
@@ -291,7 +330,7 @@ class LLMEngine:
                 return self._parse_responses_response(data, cfg)
             return self._parse_response(data, cfg)
         except Exception as exc:
-            return LLMResponse(error=str(exc))
+            return LLMResponse(error=_friendly_llm_error(exc))
 
     # -- Streaming call --
 
@@ -405,11 +444,11 @@ class LLMEngine:
                 status = getattr(getattr(exc, 'response', None), 'status_code', None)
                 if status in self._RETRYABLE_STATUS and _attempt < self._MAX_RETRIES:
                     continue
-                accumulated.error = str(exc)
+                accumulated.error = _friendly_llm_error(exc)
                 break
 
         if last_exc and not accumulated.error:
-            accumulated.error = str(last_exc)
+            accumulated.error = _friendly_llm_error(last_exc)
 
         for _idx in sorted(tool_call_buffers):
             buf = tool_call_buffers[_idx]
@@ -588,11 +627,11 @@ class LLMEngine:
                 status = getattr(getattr(exc, 'response', None), 'status_code', None)
                 if status in self._RETRYABLE_STATUS and _attempt < self._MAX_RETRIES:
                     continue
-                accumulated.error = str(exc)
+                accumulated.error = _friendly_llm_error(exc)
                 break
 
         if last_exc and not accumulated.error:
-            accumulated.error = str(last_exc)
+            accumulated.error = _friendly_llm_error(last_exc)
 
         if completed:
             if not accumulated.content:
@@ -748,11 +787,11 @@ class LLMEngine:
                 status = getattr(getattr(exc, 'response', None), 'status_code', None)
                 if status in self._RETRYABLE_STATUS and _attempt < self._MAX_RETRIES:
                     continue
-                accumulated.error = str(exc)
+                accumulated.error = _friendly_llm_error(exc)
                 break
 
         if last_exc and not accumulated.error:
-            accumulated.error = str(last_exc)
+            accumulated.error = _friendly_llm_error(last_exc)
 
         for _idx in sorted(tool_blocks):
             tb = tool_blocks[_idx]

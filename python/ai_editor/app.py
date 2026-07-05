@@ -21782,7 +21782,14 @@ class AIEditorAPI:
             base_url = defaults.get("base_url", self._engine.config.effective_base_url)
         if not api_key:
             api_key = self._resolve_provider_key(provider) or self._engine.config.api_key
-        return self._fetch_provider_models(provider, base_url, api_key)
+        result = self._fetch_provider_models(provider, base_url, api_key)
+        if not result.get("error"):
+            from ai_editor.llm_engine import register_api_context
+            for m in result.get("models", []):
+                ctx_len = m.get("context_length")
+                if isinstance(ctx_len, int) and ctx_len > 0:
+                    register_api_context(str(m.get("id") or ""), ctx_len)
+        return result
 
     def _official_default_model_for_provider(self, provider: str, base_url: str,
                                              api_key: str) -> str:
@@ -21822,11 +21829,26 @@ class AIEditorAPI:
                     mid = str(m.get("id") or m.get("name") or "").strip()
                     if not mid:
                         continue
-                    models.append({
+                    entry = {
                         "id": mid,
                         "name": m.get("display_name") or m.get("name") or mid,
                         "created": m.get("created", m.get("created_at", 0)),
-                    })
+                    }
+                    ctx_len = 0
+                    for key in ("context_length", "context_window", "max_context_length", "input_token_limit"):
+                        v = m.get(key)
+                        if isinstance(v, (int, float)) and v > 0:
+                            ctx_len = int(v)
+                            break
+                    if not ctx_len:
+                        top_provider = m.get("top_provider")
+                        if isinstance(top_provider, dict):
+                            v = top_provider.get("context_length")
+                            if isinstance(v, (int, float)) and v > 0:
+                                ctx_len = int(v)
+                    if ctx_len:
+                        entry["context_length"] = ctx_len
+                    models.append(entry)
                 elif isinstance(m, str):
                     models.append({"id": m, "name": m})
             default_model = models[0]["id"] if models else ""
@@ -21857,6 +21879,50 @@ class AIEditorAPI:
             }
         return {"ok": True, "model": model_name}
 
+    def set_model_context(self, model: str, max_input: int, max_output: int = 0) -> Dict:
+        """User-set context window for a model. Always persisted as source="user",
+        which takes precedence over any provider-reported value for this model."""
+        if not model or not max_input:
+            return {"error": "Model name and a positive max_input are required"}
+        from ai_editor.llm_engine import register_model, get_model_capabilities, _model_registry
+        existing = _model_registry.get(model, {})
+        caps = get_model_capabilities(model)
+        register_model(
+            model,
+            max_input=int(max_input),
+            max_output=int(max_output) or int(existing.get("max_output") or 0) or 4096,
+            tools=caps.get("tools", True),
+            vision=caps.get("vision", False),
+            thinking=caps.get("thinking", False),
+            streaming=caps.get("streaming", True),
+            provider=str(existing.get("provider", "")),
+            base_url=str(existing.get("base_url", "")),
+        )
+        persist_error = self._save_models_to_settings()
+        result: Dict[str, Any] = {"ok": not persist_error, "model": model,
+                                   "context_window": self._current_context_window()}
+        if persist_error:
+            result["error"] = f"Model saved only for the current runtime: {persist_error}"
+            result["applied"] = True
+        return result
+
+    def fetch_model_context(self, model: str, provider: str = "", base_url: str = "",
+                            api_key: str = "") -> Dict:
+        """Look up a model's context window from the provider's official /models
+        endpoint. Returns an error (not an exception) when the provider doesn't
+        report a context length, so the caller can fall back to manual entry."""
+        if not model:
+            return {"error": "Model name is required", "max_input": 0}
+        result = self.list_provider_models(provider, base_url, api_key)
+        if not result.get("error"):
+            for m in result.get("models", []):
+                if str(m.get("id") or "") == model:
+                    ctx_len = m.get("context_length")
+                    if isinstance(ctx_len, int) and ctx_len > 0:
+                        return {"model": model, "max_input": ctx_len, "source": "api"}
+                    break
+        return {"error": "该服务商未提供此模型的上下文长度，请手动填写", "max_input": 0}
+
     def delete_custom_model(self, model_name: str) -> Dict:
         from ai_editor.llm_engine import unregister_model
         unregister_model(model_name)
@@ -21877,7 +21943,12 @@ class AIEditorAPI:
         ai = settings.get("ai_editor", {}) or {}
         if not isinstance(ai, dict):
             ai = {}
-        ai["custom_models"] = dict(_model_registry)
+        # Provider-reported entries (source="api") are runtime-only lookup
+        # hints, not user configuration - never let them bloat settings.json.
+        ai["custom_models"] = {
+            name: cfg for name, cfg in _model_registry.items()
+            if not isinstance(cfg, dict) or cfg.get("source", "user") != "api"
+        }
         settings.set("ai_editor", ai)
         try:
             settings.save()
