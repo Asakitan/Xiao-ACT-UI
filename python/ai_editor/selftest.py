@@ -12265,7 +12265,6 @@ console.log("frontend word separator behavior ok");
             and ".settings-current-detail .detail-value-row" in html
             and "Copy Value','Copy the current setting value" in html
             and "Copy JSON','Copy this setting and current value as JSON" in html
-            and "Save Setting','Save Settings with this row selected" in html
             and "Revert Setting','Revert this row to the persisted value for the active target" in html
             and "Use Default','Apply the default value to this setting" in html
             and "Use Inherited','Apply the inherited value for the active target" in html
@@ -12809,7 +12808,6 @@ console.log("frontend word separator behavior ok");
             and "window.settingsClearReviewFilters()" in settings_smoke_source
             and "window.settingsSearchModifiedLanguageOverride(" in settings_smoke_source
             and "\"Copy Value\"" in settings_smoke_source
-            and "\"Save Setting\"" in settings_smoke_source
             and "\"Revert Setting\"" in settings_smoke_source
             and "\"Use Inherited\"" in settings_smoke_source
            and "settings.png" in settings_smoke_source

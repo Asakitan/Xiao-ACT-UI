@@ -250,7 +250,7 @@ async function main() {
   await page.screenshot({ path: shotPath, fullPage: false });
   await browser.close();
 
-  const requiredActions = ["Prev", "Next", "Section", "Filter", "Copy ID", "Copy Link", "Copy Value", "Copy JSON", "Save Setting", "Revert Setting", "Use Default", "Use Inherited", "Clear Override", "JSON"];
+  const requiredActions = ["Prev", "Next", "Section", "Filter", "Copy ID", "Copy Link", "Copy Value", "Copy JSON", "Revert Setting", "Use Default", "Use Inherited", "Clear Override", "JSON"];
   const missingDetail = requiredActions.filter(action => !result.detailActions.includes(action));
   const requiredReview = ["Show Modified", "Show Overrides", "Show Errors", "Clear Review"];
   const missingReview = requiredReview.filter(action => !result.reviewActions.includes(action));

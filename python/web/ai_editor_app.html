@@ -6240,6 +6240,7 @@ function settingsApplyRowValue(row,mode){
   setSettingsInputValue(info.input,info.meta,value);
   markSettingsModified();
   scheduleFilterSettings(0);
+  scheduleSettingsAutoSave();
   settingsShowRowDetails(row);
   showToast((mode==='default'?'Default':'Inherited')+' applied: '+(info.meta.key||info.inputId),'info',1400);
   return true;
@@ -6254,6 +6255,7 @@ function settingsRevertRowValue(row){
   setTimeout(()=>row.classList.remove('highlight'),720);
   markSettingsModified();
   scheduleFilterSettings(0);
+  scheduleSettingsAutoSave();
   settingsShowRowDetails(row);
   showToast('Reverted '+(info.meta.key||info.inputId)+' to persisted '+settingsTargetDisplayName(currentSettingsTarget)+' value','info',1700);
   return true;
@@ -6651,7 +6653,6 @@ function settingsShowRowDetails(row){
   addAction('Copy Link','Copy a direct setting link',()=>settingsCopyRowUrl(row));
   addAction('Copy Value','Copy the current setting value',()=>settingsCopyRowValue(row));
   addAction('Copy JSON','Copy this setting and current value as JSON',()=>settingsCopyRowJson(row));
-  addAction('Save Setting','Save Settings with this row selected',()=>settingsSaveFocusedRow(row),!(info&&info.input&&info.meta));
   addAction('Revert Setting','Revert this row to the persisted value for the active target',()=>settingsRevertRowValue(row),!(info&&info.input&&info.meta));
   addAction('Use Default','Apply the default value to this setting',()=>settingsApplyRowValue(row,'default'),!(info&&info.input&&info.meta));
   addAction('Use Inherited','Apply the inherited value for the active target',()=>settingsApplyRowValue(row,'inherited'),!(info&&info.input&&info.meta));
@@ -6721,8 +6722,7 @@ function settingsAddRowActions(row,opts){
     addMenuItem('Reveal Section','Reveal this setting category in the left navigation',()=>settingsFocusActiveSection());
   }
   if(opts.key&&opts.searchable)addButton('⌕','Filter to this setting',()=>settingsSearchForKey(opts.key,opts.target||currentSettingsTarget));
-  if(opts.meta&&opts.inputId)addMenuItem('Use Default','Apply default value',()=>{const el=$(opts.inputId);if(el){setSettingsInputValue(el,opts.meta,settingDefaultValue(opts.meta));markSettingsModified();scheduleFilterSettings(0);showToast('Default applied: '+(opts.meta.key||opts.inputId),'info',1400)}});
-  if(opts.meta&&opts.inputId)addMenuItem('Save Setting','Save Settings with this row selected',()=>settingsSaveFocusedRow(row));
+  if(opts.meta&&opts.inputId)addMenuItem('Use Default','Apply default value',()=>{const el=$(opts.inputId);if(el){setSettingsInputValue(el,opts.meta,settingDefaultValue(opts.meta));markSettingsModified();scheduleFilterSettings(0);scheduleSettingsAutoSave();showToast('Default applied: '+(opts.meta.key||opts.inputId),'info',1400)}});
   if(opts.meta&&opts.inputId)addMenuItem('Revert Setting','Revert this row to the persisted value for the active target',()=>settingsRevertRowValue(row));
   if(opts.meta&&opts.inputId)addMenuItem('Copy JSON','Copy JSON setting entry',()=>{
     const el=$(opts.inputId);
@@ -6796,6 +6796,7 @@ function settingsClearRowTargetOverride(row,meta,inputId){
   setTimeout(()=>row.classList.remove('highlight'),720);
   markSettingsModified();
   scheduleFilterSettings(0);
+  scheduleSettingsAutoSave();
   settingsShowRowDetails(row);
   showToast('Cleared '+(meta.key||inputId)+' for '+settingsBackendTargetName(currentSettingsTarget),'info',1600);
 }
@@ -7085,7 +7086,7 @@ function wrapSettingsField(inputId){
   }
   if(!wrap.querySelector('.s-reset')){
     const rst=document.createElement('span');rst.className='s-reset';rst.textContent='↻';rst.title='Reset to inherited/default value';
-    rst.onclick=()=>{setSettingsInputValue(el,meta,settingInheritedValueForTarget(meta,currentSettingsTarget));markSettingsModified();scheduleFilterSettings(0);showToast('Reset '+(meta.key||inputId),'info',1400)};
+    rst.onclick=()=>{setSettingsInputValue(el,meta,settingInheritedValueForTarget(meta,currentSettingsTarget));markSettingsModified();scheduleFilterSettings(0);scheduleSettingsAutoSave();showToast('Reset '+(meta.key||inputId),'info',1400)};
     wrap.appendChild(rst);
   }
   settingsAddRowActions(wrap,{key:meta.key||meta.path||inputId,searchable:false,meta,inputId,clearTarget:()=>settingHasTargetValue(meta,currentSettingsTarget)});
@@ -7127,10 +7128,13 @@ function markSettingsModified(){
     settingsUpdateControlFrame(wrap,meta,cur);
     settingsRenderRowImpact(wrap);
     const modified=settingIsTargetModified(meta,cur,currentSettingsTarget);
+    const valueState=settingValueState(meta,cur,currentSettingsTarget);
     wrap.classList.toggle('modified',modified);
     wrap.dataset.settingModified=modified?'1':'0';
     wrap.dataset.settingTargetOverride=settingHasTargetValue(meta,currentSettingsTarget)?'1':'0';
-    if(modified)modifiedCount++;
+    wrap.dataset.settingEdited=valueState.state==='edited'?'1':'0';
+    // Count only true unsaved edits: persisted overrides are not "dirty".
+    if(valueState.state==='edited')modifiedCount++;
     if(wrap.classList.contains('invalid')||el.getAttribute('aria-invalid')==='true')errorCount++;
     const currentChip=wrap.querySelector('[data-setting-current-value="1"]');
     if(currentChip){
@@ -7160,7 +7164,7 @@ function markSettingsModified(){
     const valueStateChip=wrap.querySelector('[data-setting-value-state="1"]');
     const headState=wrap.querySelector('[data-setting-head-state="1"]');
     if(valueStateChip){
-      const state=settingValueState(meta,cur,currentSettingsTarget);
+      const state=valueState;
       valueStateChip.textContent=state.label;
       valueStateChip.title='Value source: '+state.label;
       ['edited','default','override','inherited'].forEach(cls=>valueStateChip.classList.toggle(cls,state.state===cls));
@@ -7180,7 +7184,7 @@ function markSettingsModified(){
     if(footTarget)footTarget.textContent='Target: '+settingsTargetDisplayName(currentSettingsTarget);
   });
   const root=settingsMainElement()||document;
-  Array.from(root.querySelectorAll('.ext-setting-row.modified')).forEach(()=>modifiedCount++);
+  // Extension rows save on change, so they never count as pending edits.
   Array.from(root.querySelectorAll('.ext-setting-row.invalid,[aria-invalid="true"]')).forEach(row=>{
     if(row.classList&&row.classList.contains('ext-setting-row'))errorCount++;
   });
@@ -7195,8 +7199,8 @@ function refreshSettingsDirtySummary(modifiedCount,errorCount){
   const pill=$('settings-dirty-summary');
   modifiedCount=Number(modifiedCount)||0;
   errorCount=Number(errorCount)||0;
-  const label=errorCount?errorCount+' error'+(errorCount===1?'':'s')
-    : modifiedCount?modifiedCount+' modified':'Clean';
+  const label=errorCount?tf('s_pill_errors',errorCount)
+    : modifiedCount?tf('s_pill_pending',modifiedCount):t('s_pill_clean');
   if(pill){
     pill.classList.toggle('modified',modifiedCount>0&&errorCount===0);
     pill.classList.toggle('error',errorCount>0);
@@ -7206,27 +7210,23 @@ function refreshSettingsDirtySummary(modifiedCount,errorCount){
     pill.textContent=label;
   }
   const footer=$('settings-footer-summary');
-  if(footer){
+  if(footer&&footer.dataset.savedHint!=='1'){
     footer.classList.toggle('modified',modifiedCount>0&&errorCount===0);
     footer.classList.toggle('error',errorCount>0);
     footer.textContent=errorCount
-      ? label+' · fix errors before saving'
+      ? tf('s_autosave_error',errorCount)
       : modifiedCount
-        ? label+' · Ctrl+S saves to '+settingsTargetDisplayName(currentSettingsTarget)
-        : 'Clean · '+settingsTargetDisplayName(currentSettingsTarget)+' settings';
+        ? tf('s_autosave_pending',modifiedCount)
+        : t('s_autosave_hint')+' · '+settingsTargetDisplayName(currentSettingsTarget);
     footer.title=footer.textContent;
   }
   const save=document.querySelector('.settings-save-button');
   if(save){
     save.dataset.modifiedCount=String(modifiedCount);
     save.dataset.settingsSaveState=errorCount?'blocked':(modifiedCount?'ready':'clean');
-    save.disabled=errorCount>0||modifiedCount===0;
-    save.textContent=errorCount?'Fix Errors':(modifiedCount?'Save '+String(modifiedCount):'Save');
-    save.title=errorCount
-      ? 'Fix validation errors before saving'
-      : modifiedCount
-        ? 'Save '+String(modifiedCount)+' modified setting'+(modifiedCount===1?'':'s')+' to '+settingsTargetDisplayName(currentSettingsTarget)
-        : 'No Settings changes to save';
+    save.disabled=errorCount>0;
+    save.textContent=errorCount?t('s_fix_errors'):t('s_save_now');
+    save.title=errorCount?t('s_fix_errors_title'):t('s_save_now_title');
   }
   const frame=document.querySelector('.modal.settings-modal');
   if(frame){
@@ -7242,19 +7242,17 @@ function settingsUpdateCloseButton(modifiedCount,errorCount){
   const modal=$('settings-modal');
   modifiedCount=Number(modifiedCount)||0;
   errorCount=Number(errorCount)||0;
-  if(modal&&!(modifiedCount||errorCount))delete modal.dataset.settingsDiscardArmed;
+  if(modal&&!errorCount)delete modal.dataset.settingsDiscardArmed;
   const armed=!!(modal&&modal.dataset.settingsDiscardArmed==='1');
   const title=armed
-    ? 'Discard unsaved Settings changes and close'
-    : (modifiedCount||errorCount
-      ? 'Review unsaved Settings changes before closing'
-      : 'Close Settings');
+    ? t('s_close_discard_title')
+    : (errorCount?t('s_close_errors_title'):t('s_close_title'));
   buttons.forEach(btn=>{
     const isIcon=btn.id==='settings-title-close-button'||btn.id==='settings-floating-close-button';
     btn.dataset.discardArmed=armed?'1':'0';
     btn.title=title;
-    btn.setAttribute('aria-label',armed?'Discard and close Settings':title);
-    btn.textContent=isIcon?'×':(armed?'Discard':(modifiedCount||errorCount?'Close...':'Close'));
+    btn.setAttribute('aria-label',title);
+    btn.textContent=isIcon?'×':(armed?t('s_discard'):t('s_close'));
   });
 }
 
@@ -8279,6 +8277,17 @@ en:{
   no_mcp_servers:'No MCP servers configured.',mcp_id_cmd_required:'Server ID and command/URL required',
   mcp_added:'MCP server added',mcp_add_failed:'Failed to add server',mcp_status_prefix:'MCP status not loaded.',
   // settings
+  s_saved:'Saved',s_autosaved:'Saved automatically',s_settings_saved:'Settings saved',
+  s_save_failed:'Save failed',s_save_partial:'Current session updated, but settings were not persisted',
+  s_autosave_hint:'Changes are saved automatically',s_autosave_pending:'$1 change(s) saving shortly…',
+  s_autosave_error:'$1 invalid value(s) · fix them to save',
+  s_pill_errors:'$1 error(s)',s_pill_pending:'$1 pending',s_pill_clean:'Saved',
+  s_save_now:'Save now',s_save_now_title:'Changes save automatically; click to save immediately',
+  s_fix_errors:'Fix errors',s_fix_errors_title:'Invalid values are not saved until fixed',
+  s_close:'Close',s_discard:'Discard',s_close_title:'Close Settings',
+  s_close_errors_title:'Some values are invalid and will not be saved',
+  s_close_discard_title:'Discard invalid changes and close',
+  s_close_error_guard:'$1 invalid value(s) will not be saved. Fix them, or click Discard to close.',
   s_settings:'Settings',s_endpoint:'Endpoint',s_provider:'Provider',s_api_key:'API Key (active provider)',
   s_base_url:'Base URL (empty = default)',s_provider_keys:'Provider Keys',s_model:'Model',
   s_model_name:'Model Name',s_temperature:'Temperature',s_max_tokens:'Max Output Tokens',
@@ -8425,6 +8434,17 @@ zh:{
   uninstall_confirm:'卸载此扩展？',install_blocked:'安装被阻止',trust_allowed:'受信任发布者',trust_restricted:'发布者受限',trust_blocked:'发布者已阻止',trust_unknown:'未知发布者',
   no_mcp_servers:'未配置 MCP 服务器。',mcp_id_cmd_required:'服务器 ID 和命令/URL 必填',
   mcp_added:'MCP 服务器已添加',mcp_add_failed:'添加服务器失败',mcp_status_prefix:'MCP 状态未加载。',
+  s_saved:'已保存',s_autosaved:'已自动保存',s_settings_saved:'设置已保存',
+  s_save_failed:'保存失败',s_save_partial:'本次会话已生效，但未能写入磁盘',
+  s_autosave_hint:'更改会自动保存',s_autosave_pending:'$1 项更改即将自动保存…',
+  s_autosave_error:'$1 项填写有误 · 修正后才会保存',
+  s_pill_errors:'$1 项错误',s_pill_pending:'$1 项待保存',s_pill_clean:'已保存',
+  s_save_now:'立即保存',s_save_now_title:'更改会自动保存；点击立即保存',
+  s_fix_errors:'修正错误',s_fix_errors_title:'填写有误的值在修正前不会被保存',
+  s_close:'关闭',s_discard:'丢弃',s_close_title:'关闭设置',
+  s_close_errors_title:'部分值填写有误，不会被保存',
+  s_close_discard_title:'丢弃有误的更改并关闭',
+  s_close_error_guard:'$1 项填写有误不会被保存。请修正，或点「丢弃」直接关闭。',
   s_settings:'设置',s_endpoint:'端点',s_provider:'提供商',s_api_key:'API Key (当前提供商)',
   s_base_url:'Base URL (留空 = 默认)',s_provider_keys:'提供商密钥',s_model:'模型',
   s_model_name:'模型名称',s_temperature:'温度',s_max_tokens:'最大输出 Token',
@@ -33451,11 +33471,11 @@ function openSettings(){
   // SETTINGS-03: wrap inputs with reset buttons and mark modified
   Object.keys(SETTING_INPUT_MAP).forEach(id=>wrapSettingsField(id));markSettingsModified();
   // Add change listeners for live modified-state updates
-  Object.keys(SETTING_INPUT_MAP).forEach(id=>{const el=$(id);if(el&&!el.dataset.resetWired){el.dataset.resetWired='1';const update=()=>{markSettingsModified();scheduleFilterSettings()};el.addEventListener('input',update);el.addEventListener('change',update)}});
+  Object.keys(SETTING_INPUT_MAP).forEach(id=>{const el=$(id);if(el&&!el.dataset.resetWired){el.dataset.resetWired='1';const update=()=>{markSettingsModified();scheduleFilterSettings();scheduleSettingsAutoSave()};el.addEventListener('input',update);el.addEventListener('change',update)}});
   restoreSettingsViewState();
   applySettingsMode();
   SETTINGS_VALIDATION_INPUTS.forEach(id=>{const el=$(id);if(el&&!el.dataset.validationWired){el.dataset.validationWired='1';el.addEventListener('input',scheduleSettingsValidation);el.addEventListener('change',scheduleSettingsValidation)}});
-  ['s-editor-lang-override-enabled','s-files-lang-override-enabled','s-editor-lang-default-formatter','s-editor-lang-tab-size','s-editor-lang-format-on-save','s-editor-lang-code-actions-on-save-json','s-files-lang-trim-trailing-whitespace','s-files-lang-insert-final-newline','s-files-lang-trim-final-newlines'].forEach(id=>{const el=$(id);if(el&&!el.dataset.languageOverrideWired){el.dataset.languageOverrideWired='1';const update=()=>{renderSettingsLanguageOverridePanel();markSettingsModified();scheduleFilterSettings()};el.addEventListener('input',update);el.addEventListener('change',update)}});
+  ['s-editor-lang-override-enabled','s-files-lang-override-enabled','s-editor-lang-default-formatter','s-editor-lang-tab-size','s-editor-lang-format-on-save','s-editor-lang-code-actions-on-save-json','s-files-lang-trim-trailing-whitespace','s-files-lang-insert-final-newline','s-files-lang-trim-final-newlines'].forEach(id=>{const el=$(id);if(el&&!el.dataset.languageOverrideWired){el.dataset.languageOverrideWired='1';const update=()=>{renderSettingsLanguageOverridePanel();markSettingsModified();scheduleFilterSettings();scheduleSettingsAutoSave()};el.addEventListener('input',update);el.addEventListener('change',update)}});
   ['s-ext-confirm','s-ext-allow','s-ext-block'].forEach(id=>{const el=$(id);if(el&&!el.dataset.trustSummaryWired){el.dataset.trustSummaryWired='1';const update=()=>renderExtensionTrustSummary({confirm_install:readCheckedValue('s-ext-confirm'),allowed_publishers:readListValue('s-ext-allow',true),blocked_publishers:readListValue('s-ext-block',true)});el.addEventListener('input',update);el.addEventListener('change',update)}});
   applySettingsValidation(collectSettingsValidationErrors(),{});
   installSettingsKeyboardHandlers();
@@ -33513,18 +33533,20 @@ function settingsHasPendingCloseWork(){
 function settingsArmDiscardClose(reason){
   const modal=$('settings-modal');
   const state=settingsPendingCloseState();
-  if(!(state.modifiedCount||state.errorCount))return true;
+  // Pending edits are flushed by auto-save on close; only invalid values
+  // (which auto-save refuses to persist) need an explicit guard.
+  if(!state.errorCount)return true;
   if(modal)modal.dataset.settingsDiscardArmed='1';
   const reviewState=settingsComputeReviewState({visible:settingsVisibleRows().length});
   renderSettingsReviewBar({visible:settingsVisibleRows().length,modified:state.modifiedCount,errors:state.errorCount,overrides:settingsReviewRows('override').length});
   renderSettingsSavePreview(reviewState,true);
   refreshSettingsDirtySummary(state.modifiedCount,state.errorCount);
-  settingsApplyReviewFilter(state.errorCount?'error':'modified');
+  settingsApplyReviewFilter('error');
   setTimeout(()=>{
-    const first=state.errorCount?settingsFocusFirstReviewRow('error'):settingsFocusFirstReviewRow('modified');
+    const first=settingsFocusFirstReviewRow('error');
     if(!first)focusSettingsSearch();
   },0);
-  showToast((state.errorCount?'Fix errors or ':'')+'Save or click Discard to close Settings.','warning',2600);
+  showToast(tf('s_close_error_guard',state.errorCount),'warning',2600);
   return false;
 }
 function settingsResetCloseGuard(){
@@ -33536,6 +33558,9 @@ function settingsResetCloseGuard(){
 function closeSettings(options){
   const opts=options||{};
   if(!opts.force&&!settingsArmDiscardClose('close'))return false;
+  // Flush any pending debounced auto-save; inputs stay in the DOM after the
+  // modal hides, so the async save still reads the final values.
+  try{flushSettingsAutoSave()}catch(e){}
   const modal=$('settings-modal');
   if(modal){
     modal.classList.remove('open');
@@ -37127,8 +37152,53 @@ async function testConn(){
 }
 window.testConn=testConn;
 
-async function saveSettings(){
-  const validationErrors=validateSettingsBeforeSave({focusFirst:true});
+// Built-in settings auto-save: debounce edits, then run the same full
+// saveSettings() pipeline silently. Extension rows already save on change;
+// this unifies both halves of the panel behind one mental model.
+let _settingsAutoSaveTimer=null;
+let _settingsAutoSaveBusy=false;
+let _settingsAutoSaveQueued=false;
+let _settingsSavedHintTimer=null;
+function scheduleSettingsAutoSave(){
+  const modal=$('settings-modal');
+  if(!modal||!modal.classList.contains('open'))return;
+  if(_settingsAutoSaveTimer)clearTimeout(_settingsAutoSaveTimer);
+  _settingsAutoSaveTimer=setTimeout(()=>{_settingsAutoSaveTimer=null;runSettingsAutoSave()},800);
+}
+async function runSettingsAutoSave(){
+  if(_settingsAutoSaveBusy){_settingsAutoSaveQueued=true;return}
+  _settingsAutoSaveBusy=true;
+  try{
+    do{
+      _settingsAutoSaveQueued=false;
+      await saveSettings({auto:true});
+    }while(_settingsAutoSaveQueued);
+  }finally{_settingsAutoSaveBusy=false}
+}
+async function flushSettingsAutoSave(){
+  if(_settingsAutoSaveTimer){clearTimeout(_settingsAutoSaveTimer);_settingsAutoSaveTimer=null;await runSettingsAutoSave();return}
+  while(_settingsAutoSaveBusy)await new Promise(r=>setTimeout(r,40));
+}
+function settingsShowAutoSavedHint(){
+  const footer=$('settings-footer-summary');
+  if(!footer)return;
+  footer.dataset.savedHint='1';
+  footer.classList.remove('error');
+  footer.textContent='✓ '+t('s_autosaved');
+  footer.title=footer.textContent;
+  if(_settingsSavedHintTimer)clearTimeout(_settingsSavedHintTimer);
+  _settingsSavedHintTimer=setTimeout(()=>{
+    delete footer.dataset.savedHint;
+    markSettingsModified();
+  },1800);
+}
+window.scheduleSettingsAutoSave=scheduleSettingsAutoSave;
+window.flushSettingsAutoSave=flushSettingsAutoSave;
+
+async function saveSettings(options){
+  const opts=options||{};
+  const auto=!!opts.auto;
+  const validationErrors=validateSettingsBeforeSave({focusFirst:!auto});
   if(validationErrors.length)return;
   Object.assign(config,withSettingsDefaults(config));
   config.provider=$('s-provider').value;config.api_key=$('s-apikey').value;
@@ -37231,21 +37301,24 @@ async function saveSettings(){
   if(!(saveResult&&saveResult.ok)){
     delete config._settings_target;
     delete config._configuration_target_updates;
-    showToast('Save failed: '+callFailedMessage(saveResult,'backend unavailable'),'error',3200);
-    if(saveResult&&saveResult.applied)showToast('Current session updated, but settings were not persisted','warning',3600);
+    showToast(t('s_save_failed')+': '+callFailedMessage(saveResult,'backend unavailable'),'error',3200);
+    if(saveResult&&saveResult.applied)showToast(t('s_save_partial'),'warning',3600);
     return;
   }
   const status=$('s-status');
-  if(status){status.textContent='Saved';status.style.color='var(--fg-success)';}
+  if(status){status.textContent=auto?t('s_autosaved'):t('s_saved');status.style.color='var(--fg-success)';}
   settingsApplyTargetUpdateResults(targetUpdates);
   delete config._settings_target;
   delete config._configuration_target_updates;
-  showToast('Settings saved','success',1500);
-  settingsVisibleRows().forEach(row=>{
-    row.classList.remove('saved-flash');
-    void row.offsetWidth;
-    row.classList.add('saved-flash');
-  });
+  settingsShowAutoSavedHint();
+  if(!auto){
+    showToast(t('s_settings_saved'),'success',1500);
+    settingsVisibleRows().forEach(row=>{
+      row.classList.remove('saved-flash');
+      void row.offsetWidth;
+      row.classList.add('saved-flash');
+    });
+  }
   markSettingsModified();
   scheduleFilterSettings(0);
   const diagApply=await call('set_extension_host_diagnostics',config.extensions.diagnostics_enabled);
