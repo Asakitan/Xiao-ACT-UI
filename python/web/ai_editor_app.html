@@ -2890,7 +2890,7 @@ button.extension-webview-resource-pill:hover,button.extension-webview-resource-p
 
 /* ── Code block action toolbar (VSCode: copy/insert/run) ── */
 pre.code-block { position:relative; }
-.cb-toolbar { position:absolute; top:-13px; right:8px; display:flex; gap:2px; opacity:0;
+.cb-toolbar { position:absolute; top:4px; right:6px; display:flex; gap:2px; opacity:0;
   transition:opacity var(--motion-base); background:var(--bg2); border:1px solid var(--border); border-radius:4px;
   padding:1px; z-index:10; }
 pre.code-block:hover .cb-toolbar { opacity:1; }
@@ -2901,7 +2901,7 @@ pre.code-block { overflow:visible; }
 .cb-btn:disabled { opacity:.4; cursor:default; background:var(--bg2); color:var(--fg-dim); }
 
 /* ── Message footer (rate/retry/copy) ── */
-.msg-footer { display:flex; align-items:center; gap:4px; margin-top:4px; opacity:0; transition:opacity var(--motion-base); }
+.msg-footer { display:flex; align-items:center; gap:4px; margin-top:4px; opacity:.45; transition:opacity var(--motion-base); }
 .msg:hover .msg-footer,.msg:focus-within .msg-footer,.msg.chat-message-focused .msg-footer { opacity:1; }
 .interactive-request .msg-footer { justify-content:flex-end; margin-left:auto; }
 .msg-footer .mf-btn { padding:2px 4px; border-radius:3px; font-size:14px; cursor:pointer;
@@ -4773,8 +4773,6 @@ pre.code-block { overflow:visible; }
                   <button type="button" class="chat-prompt-shortcut" data-chat-prompt-action="fix" onclick="applyAssistantPromptShortcut('fix')" title="Draft a fix request" data-i18n="ps_fix">Fix</button>
                   <button type="button" class="chat-prompt-shortcut" data-chat-prompt-action="tests" onclick="applyAssistantPromptShortcut('tests')" title="Draft a test request" data-i18n="ps_tests">Tests</button>
                   <button type="button" class="chat-prompt-shortcut" data-chat-prompt-action="review" onclick="applyAssistantPromptShortcut('review')" title="Draft a review request" data-i18n="ps_review">Review</button>
-                  <button type="button" class="chat-prompt-shortcut utility" data-chat-prompt-action="copy-context" onclick="copyAssistantComposerContext()" title="Copy current composer context">Copy Context</button>
-                  <button type="button" class="chat-prompt-shortcut utility" data-chat-prompt-action="clear-draft" onclick="clearAssistantDraft()" title="Clear the current draft">Clear</button>
                 </div>
                 <div class="chat-input-row">
                   <textarea class="chat-input" id="chat-input" rows="3" data-i18n="ask_placeholder" placeholder="Ask anything... (/ commands, @ context, # tools)" aria-label="Ask Agent" aria-describedby="chat-input-status chat-input-help" aria-autocomplete="list" aria-haspopup="listbox" aria-expanded="false"></textarea>
@@ -8361,6 +8359,9 @@ en:{
   cm_run:'Run in Terminal',cm_delete:'Delete Message',
   // feedback
   helpful:'Helpful',not_helpful:'Not helpful',copy_response:'Copy response',retry:'Retry',
+  more_actions:'More actions',
+  cm_focus_references:'Focus References',cm_focus_changes:'Focus Changes',cm_focus_trees:'Focus File Tree',
+  cm_focus_followups:'Focus Follow-ups',cm_focus_actions:'Focus Actions',
   feedback_saved:'Feedback saved',
   // misc
   implementing:'Implementing...',exported:'Exported to clipboard',
@@ -8555,6 +8556,9 @@ zh:{
   cm_retry:'重试请求',cm_edit:'编辑请求',
   cm_run:'在终端运行',cm_delete:'删除消息',
   helpful:'有帮助',not_helpful:'没帮助',copy_response:'复制回复',retry:'重试',
+  more_actions:'更多操作',
+  cm_focus_references:'聚焦引用',cm_focus_changes:'聚焦更改',cm_focus_trees:'聚焦文件树',
+  cm_focus_followups:'聚焦跟进建议',cm_focus_actions:'聚焦操作',
   feedback_saved:'反馈已保存',
   implementing:'执行中...',exported:'已导出到剪贴板',
   about_text:'SAO AI Editor — 多模型 LLM IDE',
@@ -11514,8 +11518,10 @@ function normalizeChatResponseMetadata(payload,content,refs,fileTrees,changes){
     if(!value)return;
     chips.push({kind,value,title:title||kind+': '+value});
   };
+  // Keep the chip row to the three facts users actually read: model,
+  // token usage and response time. provider/finish/parts/chars only echoed
+  // internals and crowded every response.
   add('model',chatPayloadFirstValue(payload,['model','modelId','model_id'])||meta.model||meta.modelId);
-  add('provider',chatPayloadFirstValue(payload,['provider','providerId','provider_id'])||meta.provider);
   const total=normalizeChatUsageValue(usage,'total');
   const input=normalizeChatUsageValue(usage,'input');
   const output=normalizeChatUsageValue(usage,'output');
@@ -11523,10 +11529,6 @@ function normalizeChatResponseMetadata(payload,content,refs,fileTrees,changes){
   else if(input||output)add('tokens',[input?input+' in':'',output?output+' out':''].filter(Boolean).join(' · '),'Token usage');
   const latency=chatPayloadFirstValue(payload,['latencyMs','elapsedMs','durationMs','latency_ms','elapsed_ms'])||meta.latencyMs||meta.elapsedMs||meta.durationMs;
   if(latency!==''&&Number.isFinite(Number(latency)))add('time',Math.round(Number(latency))+'ms','Response time');
-  add('finish',chatPayloadFirstValue(payload,['finishReason','finish_reason','stopReason','stop_reason'])||meta.finishReason||meta.stopReason);
-  const refsCount=(refs||[]).length,treeCount=(fileTrees||[]).length,changeCount=(changes||[]).length;
-  if(refsCount||treeCount||changeCount)add('parts',[refsCount?refsCount+' refs':'',treeCount?treeCount+' trees':'',changeCount?changeCount+' changes':''].filter(Boolean).join(' · '),'Response parts');
-  if(!chips.length&&content)add('chars',String(String(content||'').length),'Response length');
   return chips;
 }
 function renderChatResponseMetadata(wrap,metadata){
@@ -13621,11 +13623,14 @@ function assistantMessageTargetFooterSmokeSnapshot(){
   addMessageFooter(msg,'assistant');
   updateMessageFooterState(msg);
   const footer=msg.querySelector('.msg-footer');
-  const focusButtons=footer?Array.from(footer.querySelectorAll('.mf-btn[data-focus-target]')):[];
+  const footerButtons=footer?Array.from(footer.querySelectorAll('.mf-btn')):[];
+  const moreButton=footerButtons.find(btn=>btn.dataset.action==='more')||null;
+  // Focus actions live in the message overflow menu now; exercise them there.
+  const menuFocusItems=assistantMessageContextActions(msg).filter(item=>item&&!item.sep&&String(item.action||'').startsWith('focus-'));
   const clickResults={};
-  focusButtons.forEach(btn=>{
-    const target=btn.dataset.focusTarget;
-    btn.click();
+  menuFocusItems.forEach(item=>{
+    const target=String(item.action).slice('focus-'.length);
+    if(typeof item.fn==='function')item.fn();
     clickResults[target]=msg.dataset.lastFocusedTarget===target;
   });
   const snapshot={
@@ -13633,11 +13638,12 @@ function assistantMessageTargetFooterSmokeSnapshot(){
     footerExists:!!footer,
     toolbarRole:footer?footer.getAttribute('role'):'',
     toolbarLabel:footer?footer.getAttribute('aria-label'):'',
-    focusButtonCount:focusButtons.length,
-    focusActions:focusButtons.map(btn=>btn.dataset.action),
-    targetCounts:focusButtons.reduce((acc,btn)=>{acc[btn.dataset.focusTarget]=Number(btn.dataset.targetCount||0);return acc},{}),
-    disabledFocusButtons:focusButtons.filter(btn=>btn.disabled).length,
-    targetReadyCount:focusButtons.filter(btn=>btn.dataset.targetReady==='true').length,
+    footerButtonCount:footerButtons.length,
+    footerButtonActions:footerButtons.map(btn=>btn.dataset.action),
+    moreButtonReady:!!moreButton&&!moreButton.disabled,
+    menuFocusCount:menuFocusItems.length,
+    menuFocusActions:menuFocusItems.map(item=>item.action),
+    targetCounts:assistantMessageTargetCounts(msg),
     clickedTargets:Object.keys(clickResults).filter(key=>clickResults[key]),
     lastFocusedTarget:msg.dataset.lastFocusedTarget||'',
     footerReferences:footer?footer.dataset.referencesCount:'',
@@ -13737,7 +13743,7 @@ async function runAssistantUiSelfCheck(opts){
   assistantUiSelfCheckRecord(checks,'restored-history-banner-keyboard-aria-ready',restoredHistoryBanner.toolbarRole==='toolbar'&&restoredHistoryBanner.toolbarLabel==='Restored history actions'&&restoredHistoryBanner.keyboardItems>=8&&restoredHistoryBanner.keyboardMoved&&restoredHistoryBanner.keyboardFocusedAction,JSON.stringify(restoredHistoryBanner));
   assistantUiSelfCheckRecord(checks,'native-response-card-navigation-ready',nativeCardKeyboard.cardCount>=8&&nativeCardKeyboard.bodyCount===nativeCardKeyboard.cardCount&&nativeCardKeyboard.refs>=1&&nativeCardKeyboard.edits>=1&&nativeCardKeyboard.trees>=1&&nativeCardKeyboard.actions>=2&&nativeCardKeyboard.kinds.includes('reference')&&nativeCardKeyboard.kinds.includes('edit')&&nativeCardKeyboard.kinds.includes('tree')&&nativeCardKeyboard.kinds.includes('action'),JSON.stringify(nativeCardKeyboard));
   assistantUiSelfCheckRecord(checks,'native-response-card-keyboard-ready',nativeCardKeyboard.moved&&nativeCardKeyboard.endMoved&&nativeCardKeyboard.rovingZero===1&&nativeCardKeyboard.panelFocusedKind&&nativeCardKeyboard.labels.every(label=>label.includes('Assistant ')),JSON.stringify(nativeCardKeyboard));
-  assistantUiSelfCheckRecord(checks,'message-footer-target-actions-ready',messageTargetFooter.footerExists&&messageTargetFooter.toolbarRole==='toolbar'&&messageTargetFooter.toolbarLabel==='Assistant message actions'&&messageTargetFooter.focusButtonCount===5&&messageTargetFooter.focusActions.includes('focus-references')&&messageTargetFooter.focusActions.includes('focus-changes')&&messageTargetFooter.focusActions.includes('focus-file-tree')&&messageTargetFooter.focusActions.includes('focus-followups')&&messageTargetFooter.focusActions.includes('focus-actions')&&messageTargetFooter.disabledFocusButtons===0&&messageTargetFooter.targetReadyCount===5,JSON.stringify(messageTargetFooter));
+  assistantUiSelfCheckRecord(checks,'message-footer-target-actions-ready',messageTargetFooter.footerExists&&messageTargetFooter.toolbarRole==='toolbar'&&messageTargetFooter.toolbarLabel==='Assistant message actions'&&messageTargetFooter.footerButtonCount===5&&messageTargetFooter.moreButtonReady&&messageTargetFooter.menuFocusCount===5&&messageTargetFooter.menuFocusActions.includes('focus-references')&&messageTargetFooter.menuFocusActions.includes('focus-changes')&&messageTargetFooter.menuFocusActions.includes('focus-trees')&&messageTargetFooter.menuFocusActions.includes('focus-followups')&&messageTargetFooter.menuFocusActions.includes('focus-actions'),JSON.stringify(messageTargetFooter));
   assistantUiSelfCheckRecord(checks,'message-footer-target-focus-ready',messageTargetFooter.clickedTargets.length===5&&messageTargetFooter.clickedTargets.includes('references')&&messageTargetFooter.clickedTargets.includes('changes')&&messageTargetFooter.clickedTargets.includes('trees')&&messageTargetFooter.clickedTargets.includes('followups')&&messageTargetFooter.clickedTargets.includes('actions')&&messageTargetFooter.lastFocusedTarget==='actions'&&messageTargetFooter.highlighted,JSON.stringify(messageTargetFooter));
   assistantUiSelfCheckRecord(checks,'fork-lineage-history-visible',forkLineage.itemExists&&forkLineage.parentResource==='sao-ai-chat://local/parent-lineage-selfcheck'&&forkLineage.parentTitle==='Parent Assistant Session'&&forkLineage.parentId==='parent-lineage-selfcheck'&&forkLineage.branchChildren===1&&forkLineage.labelTitle.includes('Forked from: Parent Assistant Session')&&forkLineage.labelTitle.includes('Branches: 1')&&forkLineage.chipLabels.includes('fork: Parent Assistant Session')&&forkLineage.chipLabels.includes('1 branch')&&forkLineage.chipKinds.some(kind=>kind.includes('lineage'))&&forkLineage.actionLabels.includes('parent')&&forkLineage.actionLabels.includes('branches')&&forkLineage.actionLabels.includes('fork')&&forkLineage.actionKinds.includes('parent-session')&&forkLineage.actionKinds.includes('branch-sessions')&&forkLineage.parentButtonEnabled&&forkLineage.branchesButtonEnabled&&forkLineage.disabledActions.length===0&&forkLineage.searchMatches,JSON.stringify(forkLineage));
   assistantUiSelfCheckRecord(checks,'fork-lineage-chip-visible',forkLineage.chipLabels.includes('fork: Parent Assistant Session')&&forkLineage.chipLabels.includes('1 branch')&&forkLineage.chipKinds.some(kind=>kind.includes('lineage'))&&forkLineage.labelTitle.includes('Forked from: Parent Assistant Session')&&forkLineage.labelTitle.includes('Branches: 1'),JSON.stringify(forkLineage));
@@ -51525,6 +51531,12 @@ function updateMessageFooterState(msgEl){
   const hasCode=!!codeBlocks.length;
   const hasMultipleCode=codeBlocks.length>1;
   const targetCounts=assistantMessageTargetCounts(msgEl);
+  // Skip DOM writes entirely when nothing relevant changed - streaming
+  // re-runs this for every message on each composer refresh, and the
+  // resulting disabled/title churn made buttons visibly flicker.
+  const stateSig=[streaming?1:0,hasText?1:0,codeBlocks.length,JSON.stringify(targetCounts)].join('|');
+  if(footer.dataset.stateSig===stateSig)return;
+  footer.dataset.stateSig=stateSig;
   footer.querySelectorAll('.mf-btn').forEach(btn=>{
     const requires=String(btn.dataset.requires||'').split(/\s+/).filter(Boolean);
     let disabled=false;
@@ -51643,18 +51655,13 @@ function addMessageFooter(msgEl,role){
     {icon:'👎',title:t('not_helpful'),cls:'rate-down',feedback:'down',action:'feedback-down',requires:'text',disableWhileStreaming:true,fn:function(){setMessageFeedback(msgEl,msgId,this.classList.contains('active')?'none':'down')}},
     {separator:true},
     {icon:'📋',title:t('copy_response'),action:'copy',requires:'text',fn:function(){const text=chatMessageActionText(msgEl,false);if(text){navigator.clipboard.writeText(text);announceAssistantAction('Response copied');setMessageFooterStatus(msgEl,t('copied'))}showToast(t('copied'),'success',1500)}},
-    {icon:'M↓',title:t('copy_markdown'),action:'copy-markdown',requires:'text',fn:function(){const text=chatMessageActionText(msgEl,true);if(text){navigator.clipboard.writeText(text);announceAssistantAction('Markdown copied');setMessageFooterStatus(msgEl,t('copied'))}showToast(t('copied'),'success',1500)}},
-    {icon:'{}',title:t('copy_all_code'),action:'copy-all-code',requires:'code',fn:function(){const text=chatAllMessageCodeBlocksText(msgEl);if(text){navigator.clipboard.writeText(text);announceAssistantAction(t('all_code_copied'));setMessageFooterStatus(msgEl,t('all_code_copied'))}showToast(t('copied'),'success',1500)}},
-    {icon:'↧',title:t('insert_response'),action:'insert-response',requires:'text',disableWhileStreaming:true,fn:function(){const text=chatMessageActionText(msgEl,true);if(text){openInEditor(text,'markdown');announceAssistantAction(t('response_inserted'));setMessageFooterStatus(msgEl,t('response_inserted'))}}},
-    {icon:'⚒',title:t('apply_first_code'),action:'apply-code',requires:'code',disableWhileStreaming:true,disabledTitle:'No code block in response',fn:function(){applyFirstMessageCodeBlock(msgEl)}},
-    {separator:true},
-    {icon:'@',title:'Focus references',action:'focus-references',focusTarget:'references',disabledTitle:'No references in this response',fn:function(){focusAssistantMessageTarget(msgEl,'references')}},
-    {icon:'±',title:'Focus changes',action:'focus-changes',focusTarget:'changes',disabledTitle:'No changes in this response',fn:function(){focusAssistantMessageTarget(msgEl,'changes')}},
-    {icon:'▤',title:'Focus file tree',action:'focus-file-tree',focusTarget:'trees',disabledTitle:'No file tree in this response',fn:function(){focusAssistantMessageTarget(msgEl,'trees')}},
-    {icon:'↪',title:'Focus follow-ups',action:'focus-followups',focusTarget:'followups',disabledTitle:'No follow-ups in this response',fn:function(){focusAssistantMessageTarget(msgEl,'followups')}},
-    {icon:'◇',title:'Focus actions',action:'focus-actions',focusTarget:'actions',disabledTitle:'No pending actions in this response',fn:function(){focusAssistantMessageTarget(msgEl,'actions')}},
     {separator:true},
     {icon:'🔄',title:t('retry'),action:'regenerate',disableWhileStreaming:true,disabledTitle:t('response_in_progress'),fn:function(){retryAssistantMessage(msgEl)}},
+    {icon:'⋯',title:t('more_actions'),action:'more',fn:function(){
+      const r=this.getBoundingClientRect();
+      showAssistantMessageContextMenu({clientX:Math.round(r.left),clientY:Math.round(r.bottom+4)},msgEl);
+      return true;
+    }},
   ];
   actions.forEach(a=>createMessageFooterButton(msgEl,footer,a));
   const status=document.createElement('span');status.className='mf-status sr-only';status.setAttribute('aria-live','polite');footer.appendChild(status);
@@ -51860,7 +51867,9 @@ const _origCreateMsg=createMsg;
 createMsg=function(role,model){
   const body=_origCreateMsg(role,model);
   const msgEl=body.parentElement;
-  if(role==='assistant'||role==='user')setTimeout(()=>addMessageFooter(msgEl,role),100);
+  // Attach the footer synchronously so the message height never shifts
+  // 100ms after it first renders.
+  if(role==='assistant'||role==='user')addMessageFooter(msgEl,role);
   return body;
 };
 
@@ -51893,6 +51902,14 @@ function assistantMessageContextActions(msgEl){
     {sep:true},
     {label:t('cm_retry'),action:'retry',disabled:role!=='assistant'||streaming,fn:()=>retryAssistantMessage(msgEl)},
     {label:t('cm_edit'),action:'edit-request',disabled:role!=='user'||streaming,fn:()=>startAssistantUserMessageEdit(msgEl)},
+    ...(function(){
+      if(role!=='assistant')return [];
+      const counts=assistantMessageTargetCounts(msgEl);
+      const focus=[['references',t('cm_focus_references')],['changes',t('cm_focus_changes')],['trees',t('cm_focus_trees')],['followups',t('cm_focus_followups')],['actions',t('cm_focus_actions')]]
+        .filter(([key])=>counts[key]>0)
+        .map(([key,label])=>({label,action:'focus-'+key,disabled:false,fn:()=>focusAssistantMessageTarget(msgEl,key)}));
+      return focus.length?[{sep:true},...focus]:[];
+    })(),
     {sep:true},
     {label:t('cm_delete'),action:'delete-message',disabled:false,fn:()=>deleteChatMessage(msgEl)},
   ];
