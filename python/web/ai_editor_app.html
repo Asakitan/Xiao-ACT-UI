@@ -5462,22 +5462,22 @@ pre.code-block { overflow:visible; }
     </div>
 
     <div class="settings-section" data-settings-id="accounts" data-settings-title="Accounts">
-      <div class="sb-group" style="padding:0;margin-top:0">Authentication Sessions</div>
+      <div class="sb-group" style="padding:0;margin-top:0" data-i18n="s_auth_sessions">Authentication Sessions</div>
       <div class="settings-help">Sessions backing <code>vscode.authentication.getSession()</code> for installed extensions. Extensions normally create a session themselves the first time one is needed (<code>createIfNone</code>); use Remove to sign an account out, or add a manual session below for providers that accept a pasted token.</div>
       <div class="settings-inline-row">
-        <input id="s-auth-provider-id" placeholder="Provider ID (e.g. github, anthropic)" autocomplete="off">
-        <button type="button" onclick="trackAuthProvider()">Show Sessions</button>
+        <input id="s-auth-provider-id" placeholder="Provider ID (e.g. github, anthropic)" data-i18n="s_auth_provider_id" autocomplete="off">
+        <button type="button" onclick="trackAuthProvider()" data-i18n="s_auth_show_sessions">Show Sessions</button>
       </div>
       <div id="auth-sessions-list" style="margin-top:8px" aria-live="polite"></div>
-      <div class="sb-group" style="padding:0;margin-top:12px">Add Manual Session</div>
-      <div class="settings-help">Creates a session from a pasted token for the Provider ID above.</div>
+      <div class="sb-group" style="padding:0;margin-top:12px" data-i18n="s_auth_add_manual">Add Manual Session</div>
+      <div class="settings-help" data-i18n="s_auth_add_manual_help">Creates a session from a pasted token for the Provider ID above.</div>
       <div class="settings-grid">
-        <div><label>Token</label><input id="s-auth-token" type="password" placeholder="Access token / API key" autocomplete="off"></div>
-        <div><label>Label</label><input id="s-auth-label" placeholder="Account label (optional)" autocomplete="off"></div>
+        <div><label data-i18n="s_auth_token">Token</label><input id="s-auth-token" type="password" placeholder="Access token / API key" data-i18n="s_auth_token_placeholder" autocomplete="off"></div>
+        <div><label data-i18n="s_auth_label">Label</label><input id="s-auth-label" placeholder="Account label (optional)" data-i18n="s_auth_label_placeholder" autocomplete="off"></div>
       </div>
       <div class="settings-inline-row" style="margin-top:4px">
-        <button type="button" class="primary" onclick="addAuthSession()">Add Session</button>
-        <button type="button" onclick="renderAuthSessions()">Refresh</button>
+        <button type="button" class="primary" onclick="addAuthSession()" data-i18n="s_auth_add_session">Add Session</button>
+        <button type="button" onclick="renderAuthSessions()" data-i18n="s_refresh">Refresh</button>
       </div>
     </div>
 
@@ -5520,15 +5520,15 @@ pre.code-block { overflow:visible; }
           <input id="s-cm-name" placeholder="model-name" style="flex:2;font-size:11px;min-width:120px">
           <input id="s-cm-input" placeholder="maxInput" type="number" style="flex:1;font-size:11px;min-width:70px" value="128000">
           <input id="s-cm-output" placeholder="maxOutput" type="number" style="flex:1;font-size:11px;min-width:70px" value="4096">
-          <button type="button" style="font-size:10px;padding:2px 8px" onclick="fetchCustomModelContext()" data-i18n="s_cm_fetch_api" title="Look up this model's context window from the provider's official /models endpoint">Fetch from API</button>
-          <button class="send-btn" style="font-size:10px;padding:2px 8px" onclick="addCustomModel()" data-i18n="s_cm_save">Add</button>
+          <button type="button" onclick="fetchCustomModelContext()" data-i18n="s_cm_fetch_api" title="Look up this model's context window from the provider's official /models endpoint">Fetch from API</button>
+          <button type="button" onclick="addCustomModel()" data-i18n="s_cm_save">Add</button>
         </div>
         <div id="s-cm-status" style="font-size:11px;color:var(--fg-dim);min-height:14px;margin-top:2px"></div>
         <div style="display:flex;gap:8px;margin-top:4px;font-size:11px;color:var(--fg-dim)">
-          <label><input type="checkbox" id="s-cm-tools" checked> Tools</label>
-          <label><input type="checkbox" id="s-cm-vision"> Vision</label>
-          <label><input type="checkbox" id="s-cm-thinking"> Thinking</label>
-          <label><input type="checkbox" id="s-cm-streaming" checked> Streaming</label>
+          <label><input type="checkbox" id="s-cm-tools" checked> <span data-i18n="s_cm_tools">Tools</span></label>
+          <label><input type="checkbox" id="s-cm-vision"> <span data-i18n="s_cm_vision">Vision</span></label>
+          <label><input type="checkbox" id="s-cm-thinking"> <span data-i18n="s_cm_thinking">Thinking</span></label>
+          <label><input type="checkbox" id="s-cm-streaming" checked> <span data-i18n="s_cm_streaming">Streaming</span></label>
         </div>
       </div>
     </details>
@@ -5974,7 +5974,7 @@ async function renderAuthSessions(){
   if(!groups.length){
     const empty=document.createElement('div');
     empty.style.cssText='color:var(--fg-dim);font-size:11px;padding:4px 0';
-    empty.textContent='No authentication sessions. Extensions create one automatically via vscode.authentication.getSession, or add a manual session below.';
+    empty.textContent=t('s_auth_empty');
     el.appendChild(empty);
     return;
   }
@@ -6023,19 +6023,19 @@ async function renderAuthSessions(){
 }
 async function trackAuthProvider(){
   const input=$('s-auth-provider-id');const pid=input?input.value.trim():'';
-  if(!pid){showToast('Enter a provider ID first','info',1600);return}
+  if(!pid){showToast(t('s_auth_need_provider'),'info',1600);return}
   authRememberProvider(pid);
   await renderAuthSessions();
-  showToast('Tracking provider: '+pid,'success',1400);
+  showToast(tf('s_auth_tracking',pid),'success',1400);
 }
 async function addAuthSession(){
   const pidInput=$('s-auth-provider-id');const tokenInput=$('s-auth-token');const labelInput=$('s-auth-label');
   const pid=pidInput?pidInput.value.trim():'';
   const token=tokenInput?tokenInput.value.trim():'';
   const label=labelInput?labelInput.value.trim():'';
-  if(!pid||!token){showToast('Provider ID and token are required','warning',1800);return}
+  if(!pid||!token){showToast(t('s_auth_need_token'),'warning',1800);return}
   const r=await call('create_auth_session',pid,token,label);
-  if(!r||r.error){showToast('Add session failed: '+((r&&r.error)||'unknown error'),'error',2200);return}
+  if(!r||r.error){showToast(t('s_auth_add_failed')+': '+((r&&r.error)||'unknown error'),'error',2200);return}
   authRememberProvider(pid);
   if(tokenInput)tokenInput.value='';
   if(labelInput)labelInput.value='';
@@ -8315,7 +8315,17 @@ en:{
   s_cm_need_name:'Enter a model name first',s_cm_fetching:'Fetching…',
   s_cm_fetch_ok:'Context window: $1K',s_cm_fetch_failed:'Could not fetch — please fill in manually',
   s_cm_saved:'Saved',
+  s_cm_tools:'Tools',s_cm_vision:'Vision',s_cm_thinking:'Thinking',s_cm_streaming:'Streaming',
   s_ctx_window_label:'Context window: $1',s_ctx_window_label_unknown:'Context window',s_ctx_window_edit:'Edit…',
+  s_auth_sessions:'Authentication Sessions',s_auth_provider_id:'Provider ID (e.g. github, anthropic)',
+  s_auth_show_sessions:'Show Sessions',s_auth_add_manual:'Add Manual Session',
+  s_auth_add_manual_help:'Creates a session from a pasted token for the Provider ID above.',
+  s_auth_token:'Token',s_auth_token_placeholder:'Access token / API key',
+  s_auth_label:'Label',s_auth_label_placeholder:'Account label (optional)',
+  s_auth_add_session:'Add Session',s_refresh:'Refresh',
+  s_auth_empty:'No authentication sessions. Extensions create one automatically via vscode.authentication.getSession, or add a manual session below.',
+  s_auth_need_provider:'Enter a provider ID first',s_auth_tracking:'Tracking provider: $1',
+  s_auth_need_token:'Provider ID and token are required',s_auth_add_failed:'Add session failed',
   s_section_assistant:'AI / Endpoint',s_section_appearance:'Appearance',s_section_editor:'Editor / Files',
   s_section_claude:'Claude Code',s_section_codex:'Codex',s_section_mcp:'MCP Policy',
   s_section_terminal:'Terminal',s_section_workspace:'Workspace',s_section_extensions:'Extensions',
@@ -8333,6 +8343,8 @@ en:{
   s_secdesc_extension_settings:'Settings dynamically contributed by installed VS Code extensions.',
   s_secdesc_accounts:'Authentication sessions used by vscode.authentication and manual token sign-in.',
   s_secdesc_customization:'Workspace instructions, agents, workflows, and skill discovery paths.',
+  s_secdesc_advanced:'Advanced sampling, timeout, headers, and request body overrides.',
+  s_secdesc_models:'Custom endpoint models available to provider and assistant controls.',
   s_appearance:'Appearance',s_color_theme:'Color Theme',s_icon_theme:'File Icon Theme',
   s_default_formatter:'Default Formatter',s_tab_size:'Tab Size',s_insert_spaces:'Insert spaces',
   s_format_on_save:'Format on save',s_quick_suggestions_delay:'Quick Suggestions Delay',
@@ -8523,7 +8535,17 @@ zh:{
   s_cm_need_name:'请先填写模型名称',s_cm_fetching:'获取中…',
   s_cm_fetch_ok:'上下文窗口: $1K',s_cm_fetch_failed:'获取失败 — 请手动填写',
   s_cm_saved:'已保存',
+  s_cm_tools:'工具',s_cm_vision:'视觉',s_cm_thinking:'思考',s_cm_streaming:'流式输出',
   s_ctx_window_label:'上下文窗口: $1',s_ctx_window_label_unknown:'上下文窗口',s_ctx_window_edit:'编辑…',
+  s_auth_sessions:'认证会话',s_auth_provider_id:'提供商 ID（例如 github、anthropic）',
+  s_auth_show_sessions:'显示会话',s_auth_add_manual:'添加手动会话',
+  s_auth_add_manual_help:'使用上方提供商 ID 与粘贴的令牌创建一个会话。',
+  s_auth_token:'令牌',s_auth_token_placeholder:'访问令牌 / API Key',
+  s_auth_label:'标签',s_auth_label_placeholder:'账户标签（可选）',
+  s_auth_add_session:'添加会话',s_refresh:'刷新',
+  s_auth_empty:'暂无认证会话。扩展会在需要时通过 vscode.authentication.getSession 自动创建，或在下方手动添加。',
+  s_auth_need_provider:'请先填写提供商 ID',s_auth_tracking:'正在追踪提供商: $1',
+  s_auth_need_token:'需要填写提供商 ID 与令牌',s_auth_add_failed:'添加会话失败',
   s_section_assistant:'AI / 端点',s_section_appearance:'外观',s_section_editor:'编辑器 / 文件',
   s_section_claude:'Claude Code',s_section_codex:'Codex',s_section_mcp:'MCP 策略',
   s_section_terminal:'终端',s_section_workspace:'工作区',s_section_extensions:'扩展',
@@ -8541,6 +8563,8 @@ zh:{
   s_secdesc_extension_settings:'由已安装 VS Code 扩展动态提供的设置。',
   s_secdesc_accounts:'vscode.authentication 与手动令牌登录使用的认证会话。',
   s_secdesc_customization:'工作区指令、Agent、工作流与技能的发现路径。',
+  s_secdesc_advanced:'高级采样、超时、请求头与请求体覆盖项。',
+  s_secdesc_models:'可供服务商与助手控件使用的自定义端点模型。',
   s_appearance:'外观',s_color_theme:'颜色主题',s_icon_theme:'文件图标主题',
   s_default_formatter:'默认格式化器',s_tab_size:'Tab 宽度',s_insert_spaces:'用空格代替 Tab',
   s_format_on_save:'保存时格式化',s_quick_suggestions_delay:'快速建议延迟',
