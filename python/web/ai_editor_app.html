@@ -7057,6 +7057,7 @@ function settingsUpdateControlFrame(wrap,meta,value){
     const kindLabel=kind==='secret'?'Secret':kind==='json'?'JSON':kind==='select'?'Choice':kind==='checkbox'?'Toggle':kind==='number'?'Number':kind==='textarea'?'Text':'Value';
     status.textContent=invalid?'Invalid':kindLabel+' · '+state.label+' · '+targetLabel;
     status.title=(meta.key||meta.path||'Setting')+' - '+status.textContent;
+    status.classList.toggle('invalid',!!invalid);
   }
 }
 function wrapSettingsField(inputId){
@@ -33621,11 +33622,11 @@ const SETTINGS_MODE_DESCRIPTIONS={
   advanced:'All settings, including per-language overrides and raw config.'
 };
 const SETTINGS_SIMPLE_CATEGORY_IDS=new Set(['assistant','appearance','editor','extensions','terminal','workspace']);
-const SETTINGS_COMPLEX_HIDDEN_CATEGORY_IDS=new Set(['advanced','models']);
+const SETTINGS_COMPLEX_HIDDEN_CATEGORY_IDS=new Set(['advanced']);
 let _settingsSimpleAllowedInputIdsCache=null;
 function settingsCurrentMode(){
   const v=settingsViewState().mode;
-  return SETTINGS_MODE_ORDER.includes(v)?v:'advanced';
+  return SETTINGS_MODE_ORDER.includes(v)?v:'simple';
 }
 function settingsCategoryAllowedInMode(id,mode){
   mode=mode||settingsCurrentMode();
@@ -35417,7 +35418,7 @@ function renderSettingsRowMatchSummaries(parsed){
   const active=parsed&&parsed.active;
   const rows=Array.from((settingsMainElement()||document).querySelectorAll('.settings-field.builtin-setting,.ext-setting-row'));
   rows.forEach(row=>{
-    const reasons=active&&row.style.display!=='none'&&!row.classList.contains('settings-target-hidden')&&!row.classList.contains('settings-query-hidden')&&!row.classList.contains('settings-mode-hidden')
+    const reasons=active&&settingsCurrentMode()==='advanced'&&row.style.display!=='none'&&!row.classList.contains('settings-target-hidden')&&!row.classList.contains('settings-query-hidden')&&!row.classList.contains('settings-mode-hidden')
       ? settingsRowMatchReasons(row,parsed)
       : [];
     row.classList.toggle('settings-search-hit',reasons.length>0);
@@ -41681,7 +41682,11 @@ function renderExtensionLanguageDefaults(languageDefaults,container,categorySele
       }
       row.appendChild(targetControl);
       const keyLabel=document.createElement('div');keyLabel.className='ext-setting-key';
-      keyLabel.textContent=override+' · '+key+(scopeName!=='window'?' · '+scopeName:'')+' · '+type+' · '+extensionSettingTargetLabel(targetName);
+      keyLabel.textContent=override+' · '+key;
+      const keyTech=document.createElement('span');
+      keyTech.dataset.settingsTier='advanced-only';
+      keyTech.textContent=(scopeName!=='window'?' · '+scopeName:'')+' · '+type+' · '+extensionSettingTargetLabel(targetName);
+      keyLabel.appendChild(keyTech);
       row.appendChild(keyLabel);
       decorateExtensionSettingRowChrome(row,{key,target:targetName,extensionId:extId,language:item.language});
       const targetOverrideNote=document.createElement('div');targetOverrideNote.className='ext-setting-note';
@@ -42163,7 +42168,11 @@ async function renderExtensionSettings(){
       row.appendChild(targetControl);
       const keyLabel=document.createElement('div');
       keyLabel.className='ext-setting-key';
-      keyLabel.textContent=key+(scopeName!=='window'?' · '+scopeName:'')+' · '+type+' · '+extensionSettingTargetLabel(targetName);
+      keyLabel.textContent=key;
+      const keyTech=document.createElement('span');
+      keyTech.dataset.settingsTier='advanced-only';
+      keyTech.textContent=(scopeName!=='window'?' · '+scopeName:'')+' · '+type+' · '+extensionSettingTargetLabel(targetName);
+      keyLabel.appendChild(keyTech);
       row.appendChild(keyLabel);
       decorateExtensionSettingRowChrome(row,{key,target:targetName,extensionId:extId});
       const targetOverrideNote=document.createElement('div');targetOverrideNote.className='ext-setting-note';
@@ -56936,6 +56945,68 @@ if(window.pywebview){
     #settings-modal.open .settings-vscode-calm .settings-nav {
       display: none !important;
     }
+  }
+
+  /* ---- Simple/Complex views: hide internal-state chrome. The Advanced
+     view keeps every badge, chip and inspector control visible. ---- */
+  #settings-modal.open:not([data-settings-mode="advanced"]) .settings-field.builtin-setting > .settings-built-meta,
+  #settings-modal.open:not([data-settings-mode="advanced"]) .settings-field.builtin-setting > .settings-built-foot,
+  #settings-modal.open:not([data-settings-mode="advanced"]) .settings-field.builtin-setting > .settings-value-summary,
+  #settings-modal.open:not([data-settings-mode="advanced"]) .settings-field.builtin-setting > .settings-row-impact,
+  #settings-modal.open:not([data-settings-mode="advanced"]) .settings-built-head code,
+  #settings-modal.open:not([data-settings-mode="advanced"]) [data-setting-control-status="1"]:not(.invalid),
+  #settings-modal.open:not([data-settings-mode="advanced"]) .settings-match-summary,
+  #settings-modal.open:not([data-settings-mode="advanced"]) [data-settings-tier="advanced-only"] {
+    display: none !important;
+  }
+
+  /* Detail inspector: keep the CURRENT value row; other sources are
+     advanced-view material. */
+  #settings-modal.open:not([data-settings-mode="advanced"]) .detail-matrix .detail-value-row:not([data-settings-detail-value-row="current"]) {
+    display: none !important;
+  }
+
+  /* Detail toolbar: whitelist the actions a non-expert actually needs. */
+  #settings-modal.open:not([data-settings-mode="advanced"]) .detail-actions button:not([data-settings-detail-action="revert-setting"]):not([data-settings-detail-action="use-default"]):not([data-settings-detail-action="json"]) {
+    display: none !important;
+  }
+
+  /* Per-row overflow menu: same whitelist idea. */
+  #settings-modal.open:not([data-settings-mode="advanced"]) .settings-row-action-menu button:not([data-settings-menu-item="use-default"]):not([data-settings-menu-item="revert-setting"]):not([data-settings-menu-item="open-json"]) {
+    display: none !important;
+  }
+
+  /* Extension rows: hide schema/type breadcrumbs, per-row target selects
+     and enum quick-action buttons outside the Advanced view. */
+  #settings-modal.open:not([data-settings-mode="advanced"]) .ext-setting-schema,
+  #settings-modal.open:not([data-settings-mode="advanced"]) .ext-setting-target-select,
+  #settings-modal.open:not([data-settings-mode="advanced"]) .ext-setting-enum-choice-actions {
+    display: none !important;
+  }
+
+  /* Left navigation: Simple keeps search, View/Scope tabs and the category
+     list; Complex additionally keeps the counters block. */
+  #settings-modal.open[data-settings-mode="simple"] .settings-nav-workbench,
+  #settings-modal.open[data-settings-mode="simple"] .settings-nav-runtime-context,
+  #settings-modal.open[data-settings-mode="simple"] .settings-nav-result-groups,
+  #settings-modal.open[data-settings-mode="simple"] .settings-nav-commandbar,
+  #settings-modal.open[data-settings-mode="simple"] .settings-nav-summary,
+  #settings-modal.open[data-settings-mode="simple"] .settings-nav-tools,
+  #settings-modal.open[data-settings-mode="simple"] .settings-nav-quick,
+  #settings-modal.open[data-settings-mode="simple"] .settings-nav-status,
+  #settings-modal.open[data-settings-mode="simple"] .settings-nav-active-filters,
+  #settings-modal.open[data-settings-mode="simple"] .settings-nav-memory,
+  #settings-modal.open[data-settings-mode="complex"] .settings-nav-runtime-context,
+  #settings-modal.open[data-settings-mode="complex"] .settings-nav-commandbar,
+  #settings-modal.open[data-settings-mode="complex"] .settings-nav-quick,
+  #settings-modal.open[data-settings-mode="complex"] .settings-nav-memory {
+    display: none !important;
+  }
+
+  /* Search suggestion popup only offers @token query syntax - not Simple
+     view material. Plain typing still live-filters the list. */
+  #settings-modal.open[data-settings-mode="simple"] .settings-search-suggest {
+    display: none !important;
   }
 </style>
 <script id="ai-editor-settings-health">
