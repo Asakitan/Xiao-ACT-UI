@@ -4952,9 +4952,9 @@ pre.code-block { overflow:visible; }
     <button type="button" class="settings-top-action settings-close-action settings-floating-close" id="settings-floating-close-button" data-settings-icon-action="1" data-command="close-settings" title="Close Settings" aria-label="Close Settings" onclick="settingsCancelOrClose()">×</button>
     <div class="settings-titlebar">
       <div>
-        <h2 id="settings-title">Settings</h2>
+        <h2 id="settings-title" data-i18n="s_settings">Settings</h2>
         <div class="settings-title-sub" id="settings-title-sub">User · Workspace · Extensions</div>
-        <div class="settings-title-route" id="settings-title-route">Search, edit, review, then save settings.</div>
+        <div class="settings-title-route" id="settings-title-route" data-i18n="s_title_route">Search, edit, review, then save settings.</div>
       </div>
       <div class="settings-title-actions">
         <span id="settings-dirty-summary" class="settings-status-pill" role="status" aria-live="polite">Clean</span>
@@ -4976,7 +4976,7 @@ pre.code-block { overflow:visible; }
       <div class="settings-search-row">
         <div class="settings-search-primary">
           <div class="settings-query-box">
-            <input id="settings-search" list="settings-filter-suggestions" placeholder="Search settings..." oninput="scheduleFilterSettings()" aria-label="Search settings">
+            <input id="settings-search" list="settings-filter-suggestions" placeholder="Search settings..." data-i18n="s_search_placeholder" oninput="scheduleFilterSettings()" aria-label="Search settings">
             <datalist id="settings-filter-suggestions"></datalist>
             <button type="button" id="settings-clear-search" class="settings-query-clear" title="Clear settings search" aria-label="Clear settings search" onclick="settingsClearSearch()">×</button>
             <div class="settings-result-nav" aria-label="Settings results navigation">
@@ -4988,12 +4988,12 @@ pre.code-block { overflow:visible; }
           </div>
           <div id="settings-search-suggest" class="settings-search-suggest" role="listbox" aria-label="Settings search suggestions"></div>
           <div class="settings-search-caption">
-            <strong>Search Settings</strong>
-            <span id="settings-search-caption-text">Use @modified, @workspace, @ext:, @lang:, or setting IDs.</span>
+            <strong data-i18n="s_search_caption_title">Search Settings</strong>
+            <span id="settings-search-caption-text" data-i18n="s_search_caption">Use @modified, @workspace, @ext:, @lang:, or setting IDs.</span>
           </div>
         </div>
         <div class="settings-scope-control">
-          <span class="settings-scope-label">Scope</span>
+          <span class="settings-scope-label" data-i18n="s_scope">Scope</span>
           <div class="settings-target-tabs" role="tablist" aria-label="Settings target" onkeydown="settingsHandleTargetTabKeydown(event)">
             <button type="button" class="active" data-settings-target="user" aria-controls="settings-main" onclick="selectSettingsTarget('user')">User</button>
             <button type="button" data-settings-target="workspace" aria-controls="settings-main" onclick="selectSettingsTarget('workspace')">Workspace</button>
@@ -5085,14 +5085,14 @@ pre.code-block { overflow:visible; }
         </div>
 
     <div class="settings-section" data-settings-id="assistant" data-settings-title="AI / Endpoint">
-    <div class="sb-group" style="padding:0;margin-top:8px">Endpoint</div>
-    <label>Provider</label>
+    <div class="sb-group" style="padding:0;margin-top:8px" data-i18n="s_endpoint">Endpoint</div>
+    <label data-i18n="s_provider">Provider</label>
     <select id="s-provider"><option value="openai">OpenAI</option><option value="anthropic">Anthropic</option>
     <option value="deepseek">DeepSeek</option><option value="ollama">Ollama</option><option value="custom">Custom</option></select>
-    <label>API Key (active provider)</label>
+    <label data-i18n="s_api_key">API Key (active provider)</label>
     <div style="display:flex;gap:6px"><input id="s-apikey" type="password" style="flex:1">
     <span class="toolbar-btn" onclick="document.getElementById('s-apikey').type=document.getElementById('s-apikey').type==='password'?'text':'password'" style="padding:7px 10px;border:1px solid var(--border);border-radius:var(--radius)">👁</span></div>
-    <label>Base URL (empty = default)</label><input id="s-baseurl" placeholder="https://api.openai.com/v1">
+    <label data-i18n="s_base_url">Base URL (empty = default)</label><input id="s-baseurl" placeholder="https://api.openai.com/v1">
 
     <div class="sb-group" style="padding:0;margin-top:12px">Provider Keys <span style="font-weight:normal;font-size:10px;color:var(--fg-dim)">(for Claude Code / Codex tabs)</span></div>
     <div style="display:grid;grid-template-columns:80px 1fr;gap:4px 8px;font-size:12px;padding:4px 0">
@@ -5101,34 +5101,34 @@ pre.code-block { overflow:visible; }
       <span style="color:var(--fg-dim)">DeepSeek</span><input id="sk-deepseek" type="password" placeholder="sk-..." style="font-size:11px">
     </div>
 
-    <div class="sb-group" style="padding:0;margin-top:12px">Model</div>
+    <div class="sb-group" style="padding:0;margin-top:12px" data-i18n="s_model">Model</div>
     <label>Model Name <span style="font-weight:400;color:var(--fg-dim)">(type or select)</span></label>
     <input id="s-model" list="s-model-list" placeholder="gpt-4o / select Anthropic model from API / deepseek-chat" autocomplete="off">
     <datalist id="s-model-list"></datalist>
     <div id="s-model-info" style="font-size:11px;color:var(--fg-dim);padding:2px 0"></div>
-    <label>Temperature</label><input id="s-temp" type="number" step="0.1" min="0" max="2" value="0.7">
-    <label>Max Output Tokens</label><input id="s-maxtok" type="number" value="4096">
+    <label data-i18n="s_temperature">Temperature</label><input id="s-temp" type="number" step="0.1" min="0" max="2" value="0.7">
+    <label data-i18n="s_max_tokens">Max Output Tokens</label><input id="s-maxtok" type="number" value="4096">
 
-    <div class="sb-group" style="padding:0;margin-top:12px">Assistant</div>
-    <label>System Prompt</label><textarea id="s-sysprompt" rows="3"></textarea>
-    <label>Mode</label>
-    <select id="s-mode" style="width:100%"><option value="ask">Ask (no tools)</option><option value="plan">Plan (confirm writes)</option><option value="agent" selected>Agent (autonomous)</option></select>
+    <div class="sb-group" style="padding:0;margin-top:12px" data-i18n="s_chat">Assistant</div>
+    <label data-i18n="s_system_prompt">System Prompt</label><textarea id="s-sysprompt" rows="3"></textarea>
+    <label data-i18n="s_mode">Mode</label>
+    <select id="s-mode" style="width:100%"><option value="ask" data-i18n="s_ask_mode">Ask (no tools)</option><option value="plan" data-i18n="s_plan_mode">Plan (confirm writes)</option><option value="agent" selected data-i18n="s_agent_mode">Agent (autonomous)</option></select>
     <div id="s-perms" style="margin-top:6px;font-size:11px"></div>
     </div>
 
     <div class="settings-section" data-settings-id="appearance" data-settings-title="Appearance">
-      <div class="sb-group" style="padding:0;margin-top:0">Appearance</div>
-      <label>Color Theme</label>
+      <div class="sb-group" style="padding:0;margin-top:0" data-i18n="s_appearance">Appearance</div>
+      <label data-i18n="s_color_theme">Color Theme</label>
       <select id="s-color-theme" style="width:100%"></select>
       <div class="settings-help" id="s-color-theme-info">Extension color themes are loaded from contributed theme JSON files.</div>
-      <label>File Icon Theme</label>
+      <label data-i18n="s_icon_theme">File Icon Theme</label>
       <select id="s-file-icon-theme" style="width:100%"></select>
       <div class="settings-help" id="s-file-icon-theme-info">Extension file icon themes are applied to Explorer and extension TreeViews.</div>
     </div>
 
     <div class="settings-section" data-settings-id="editor" data-settings-title="Editor / Files">
-      <div class="sb-group" style="padding:0;margin-top:0">Editor</div>
-      <label>Default Formatter</label>
+      <div class="sb-group" style="padding:0;margin-top:0" data-i18n="s_editor">Editor</div>
+      <label data-i18n="s_default_formatter">Default Formatter</label>
       <div class="settings-inline-row">
         <input id="s-editor-default-formatter" placeholder="publisher.extension-id" style="width:100%">
         <button type="button" onclick="pickSettingsDefaultFormatter('s-editor-default-formatter')">Pick</button>
@@ -5136,8 +5136,8 @@ pre.code-block { overflow:visible; }
       <div class="settings-help">Matches VS Code's editor.defaultFormatter and is used by Format Document, Format Selection, and format on save.</div>
       <div id="s-editor-formatter-detected" class="settings-language-chips"></div>
       <div class="settings-grid">
-        <div><label>Tab Size</label><input id="s-editor-tab-size" type="number" min="1" max="16" step="1" style="width:100%"></div>
-        <label class="settings-check"><input id="s-editor-insert-spaces" type="checkbox"><span><b>Insert spaces</b><small>Use spaces instead of tab characters when formatting.</small></span></label>
+        <div><label data-i18n="s_tab_size">Tab Size</label><input id="s-editor-tab-size" type="number" min="1" max="16" step="1" style="width:100%"></div>
+        <label class="settings-check"><input id="s-editor-insert-spaces" type="checkbox"><span><b data-i18n="s_insert_spaces">Insert spaces</b><small>Use spaces instead of tab characters when formatting.</small></span></label>
       </div>
       <label>Word Separators</label>
       <input id="s-editor-word-separators" spellcheck="false" style="width:100%">
@@ -5146,7 +5146,7 @@ pre.code-block { overflow:visible; }
         <div><label>Quick Suggestions: Code</label><select id="s-editor-quick-suggestions-other" style="width:100%"><option value="on">on</option><option value="inline">inline</option><option value="off">off</option><option value="offWhenInlineCompletions">offWhenInlineCompletions</option></select></div>
         <div><label>Quick Suggestions: Comments</label><select id="s-editor-quick-suggestions-comments" style="width:100%"><option value="off">off</option><option value="on">on</option><option value="inline">inline</option><option value="offWhenInlineCompletions">offWhenInlineCompletions</option></select></div>
         <div><label>Quick Suggestions: Strings</label><select id="s-editor-quick-suggestions-strings" style="width:100%"><option value="off">off</option><option value="on">on</option><option value="inline">inline</option><option value="offWhenInlineCompletions">offWhenInlineCompletions</option></select></div>
-        <div><label>Quick Suggestions Delay</label><input id="s-editor-quick-suggestions-delay" type="number" min="0" step="1" style="width:100%"></div>
+        <div><label data-i18n="s_quick_suggestions_delay">Quick Suggestions Delay</label><input id="s-editor-quick-suggestions-delay" type="number" min="0" step="1" style="width:100%"></div>
       </div>
       <div class="settings-grid">
         <div><label>Accept Suggestion On Enter</label><select id="s-editor-accept-suggestion-on-enter" style="width:100%"><option value="on">on</option><option value="smart">smart</option><option value="off">off</option></select></div>
@@ -5205,7 +5205,7 @@ pre.code-block { overflow:visible; }
         <div><label>Sticky Model</label><select id="s-editor-sticky-scroll-default-model" style="width:100%"><option value="outlineModel">outlineModel</option><option value="foldingProviderModel">foldingProviderModel</option><option value="indentationModel">indentationModel</option></select></div>
         <label class="settings-check"><input id="s-editor-sticky-scroll-scroll-with-editor" type="checkbox"><span><b>Scroll with editor</b><small>Move sticky lines with horizontal editor scroll.</small></span></label>
       </div>
-      <label class="settings-check"><input id="s-editor-format-on-save" type="checkbox"><span><b>Format on save</b><small>Runs the active formatter before explicit saves.</small></span></label>
+      <label class="settings-check"><input id="s-editor-format-on-save" type="checkbox"><span><b data-i18n="s_format_on_save">Format on save</b><small>Runs the active formatter before explicit saves.</small></span></label>
       <label class="settings-check"><input id="s-editor-format-on-paste" type="checkbox"><span><b>Format on paste</b><small>Runs range formatting after paste/drop edits when a range formatter is available.</small></span></label>
       <label class="settings-check"><input id="s-editor-format-on-type" type="checkbox"><span><b>Format on type</b><small>Runs extension on-type formatting providers for typed trigger characters.</small></span></label>
       <label class="settings-check"><input id="s-editor-linked-editing" type="checkbox"><span><b>Linked editing</b><small>Mirrors edits across extension-provided linked ranges, such as paired HTML tags.</small></span></label>
@@ -5218,10 +5218,10 @@ pre.code-block { overflow:visible; }
       <div class="settings-help">JSON object for extension-specific code action kinds. Values: explicit, always, never, true, false.</div>
       <div class="settings-help" id="s-editor-code-actions-detected"></div>
       <label class="settings-check"><input id="s-editor-code-actions-trigger-focus" type="checkbox"><span><b>Trigger code actions on focus change</b><small>Runs <code>always</code> source actions when Auto Save is <code>afterDelay</code>.</small></span></label>
-      <div class="sb-group" style="padding:0;margin-top:12px">Files</div>
+      <div class="sb-group" style="padding:0;margin-top:12px" data-i18n="s_files">Files</div>
       <div class="settings-grid">
-        <div><label>Auto Save</label><select id="s-files-auto-save" style="width:100%"><option value="off">off</option><option value="afterDelay">afterDelay</option><option value="onFocusChange">onFocusChange</option><option value="onWindowChange">onWindowChange</option></select></div>
-        <div><label>Auto Save Delay</label><input id="s-files-auto-save-delay" type="number" min="0" step="100" style="width:100%"></div>
+        <div><label data-i18n="s_auto_save">Auto Save</label><select id="s-files-auto-save" style="width:100%"><option value="off">off</option><option value="afterDelay">afterDelay</option><option value="onFocusChange">onFocusChange</option><option value="onWindowChange">onWindowChange</option></select></div>
+        <div><label data-i18n="s_auto_save_delay">Auto Save Delay</label><input id="s-files-auto-save-delay" type="number" min="0" step="100" style="width:100%"></div>
       </div>
       <label class="settings-check"><input id="s-files-trim-trailing-whitespace" type="checkbox"><span><b>Trim trailing whitespace</b><small>Matches files.trimTrailingWhitespace during explicit saves.</small></span></label>
       <label class="settings-check"><input id="s-files-insert-final-newline" type="checkbox"><span><b>Insert final newline</b><small>Matches files.insertFinalNewline during explicit saves.</small></span></label>
@@ -5304,13 +5304,13 @@ pre.code-block { overflow:visible; }
     <div class="settings-section" data-settings-id="claude" data-settings-title="Claude Code">
       <div class="sb-group" style="padding:0;margin-top:0">Claude Code</div>
       <div class="settings-grid">
-        <div><label>CLI Command</label><input id="s-cc-cli" placeholder="Leave empty for auto-discovery"></div>
-        <div><label>Model</label><input id="s-cc-model" placeholder="Auto from Anthropic /v1/models when empty"></div>
-        <div class="full"><label>CLI Args (one per line)</label><textarea id="s-cc-args" rows="2" placeholder="Optional non-secret flags only"></textarea></div>
+        <div><label data-i18n="s_cli_cmd">CLI Command</label><input id="s-cc-cli" placeholder="Leave empty for auto-discovery"></div>
+        <div><label data-i18n="s_model">Model</label><input id="s-cc-model" placeholder="Auto from Anthropic /v1/models when empty"></div>
+        <div class="full"><label data-i18n="s_cli_args">CLI Args (one per line)</label><textarea id="s-cc-args" rows="2" placeholder="Optional non-secret flags only"></textarea></div>
       </div>
-      <label class="settings-check"><input id="s-cc-prefer-cli" type="checkbox"><span><b>Prefer Claude Code CLI</b><small>Keep the local CLI path ready for external launches; the embedded Claude Code tab continues to use the Anthropic/API path inside the editor.</small></span></label>
+      <label class="settings-check"><input id="s-cc-prefer-cli" type="checkbox"><span><b data-i18n="s_prefer_cli">Prefer Claude Code CLI</b><small>Keep the local CLI path ready for external launches; the embedded Claude Code tab continues to use the Anthropic/API path inside the editor.</small></span></label>
       <label class="settings-check settings-danger"><input id="s-cc-skip-permissions" type="checkbox"><span><b>Allow Claude skip permissions flag</b><small>Off by default. Enable only if you want external Claude CLI launches from this workspace to include the skip-permissions flag.</small></span></label>
-      <div class="sb-group" style="padding:0;margin-top:12px">External CLI</div>
+      <div class="sb-group" style="padding:0;margin-top:12px" data-i18n="s_external_cli">External CLI</div>
       <div class="settings-help">Launch the Claude Code CLI in its own terminal window using the CLI command and args configured above.</div>
       <div id="cc-cli-panel" class="settings-language-panel" aria-live="polite">
         <div class="settings-language-head">
@@ -5319,12 +5319,12 @@ pre.code-block { overflow:visible; }
           <span id="cc-cli-pid-chip" class="lang-chip" style="display:none">PID: -</span>
         </div>
         <div class="settings-language-actions">
-          <button type="button" class="primary" id="cc-cli-launch-btn" onclick="launchProviderCli('claude-code')">Launch CLI</button>
-          <button type="button" id="cc-cli-stop-btn" onclick="stopProviderCli('claude-code')" disabled>Stop CLI</button>
+          <button type="button" class="primary" id="cc-cli-launch-btn" onclick="launchProviderCli('claude-code')" data-i18n="s_launch_cli">Launch CLI</button>
+          <button type="button" id="cc-cli-stop-btn" onclick="stopProviderCli('claude-code')" disabled data-i18n="s_stop_cli">Stop CLI</button>
         </div>
         <div class="settings-help" id="cc-cli-detail"></div>
       </div>
-      <div class="sb-group" style="padding:0;margin-top:12px">Local Proxy</div>
+      <div class="sb-group" style="padding:0;margin-top:12px" data-i18n="s_local_proxy">Local Proxy</div>
       <div class="settings-help">Runs a local Anthropic-compatible proxy so external Claude Code CLI/SDK launches use this editor's configured provider and API key instead of a direct Anthropic key.</div>
       <div id="cc-proxy-panel" class="settings-language-panel" aria-live="polite">
         <div class="settings-language-head">
@@ -5334,9 +5334,9 @@ pre.code-block { overflow:visible; }
           <span id="cc-proxy-model-chip" class="lang-chip" style="display:none">Model: -</span>
         </div>
         <div class="settings-language-actions">
-          <button type="button" class="primary" id="cc-proxy-start-btn" onclick="startClaudeProxy()">Start Proxy</button>
-          <button type="button" id="cc-proxy-stop-btn" onclick="stopClaudeProxy()" disabled>Stop Proxy</button>
-          <button type="button" id="cc-proxy-copy-env-btn" onclick="copyClaudeProxyEnv()" disabled>Copy Env Vars</button>
+          <button type="button" class="primary" id="cc-proxy-start-btn" onclick="startClaudeProxy()" data-i18n="s_start_proxy">Start Proxy</button>
+          <button type="button" id="cc-proxy-stop-btn" onclick="stopClaudeProxy()" disabled data-i18n="s_stop_proxy">Stop Proxy</button>
+          <button type="button" id="cc-proxy-copy-env-btn" onclick="copyClaudeProxyEnv()" disabled data-i18n="s_copy_env">Copy Env Vars</button>
         </div>
         <div class="settings-help" id="cc-proxy-detail"></div>
       </div>
@@ -5345,14 +5345,14 @@ pre.code-block { overflow:visible; }
     <div class="settings-section" data-settings-id="codex" data-settings-title="Codex">
       <div class="sb-group" style="padding:0;margin-top:0">Codex</div>
       <div class="settings-grid">
-        <div><label>CLI Command</label><input id="s-codex-cli" placeholder="Leave empty for auto-discovery"></div>
-        <div><label>Model</label><input id="s-codex-model" list="s-codex-model-list" placeholder="codex-mini-latest / select OpenAI model from API"></div>
-        <div><label>Transport</label><select id="s-codex-transport"><option value="chat_completions">Chat Completions</option><option value="responses">Responses</option><option value="cli">CLI preference (editor uses Responses)</option></select></div>
-        <div class="full"><label>CLI Args (one per line)</label><textarea id="s-codex-args" rows="2" placeholder="Optional non-secret flags only"></textarea></div>
+        <div><label data-i18n="s_cli_cmd">CLI Command</label><input id="s-codex-cli" placeholder="Leave empty for auto-discovery"></div>
+        <div><label data-i18n="s_model">Model</label><input id="s-codex-model" list="s-codex-model-list" placeholder="codex-mini-latest / select OpenAI model from API"></div>
+        <div><label data-i18n="s_transport">Transport</label><select id="s-codex-transport"><option value="chat_completions">Chat Completions</option><option value="responses">Responses</option><option value="cli">CLI preference (editor uses Responses)</option></select></div>
+        <div class="full"><label data-i18n="s_cli_args">CLI Args (one per line)</label><textarea id="s-codex-args" rows="2" placeholder="Optional non-secret flags only"></textarea></div>
       </div>
       <datalist id="s-codex-model-list"></datalist>
       <div id="s-codex-model-info" style="font-size:11px;color:var(--fg-dim);padding:2px 0"></div>
-      <div class="sb-group" style="padding:0;margin-top:12px">External CLI</div>
+      <div class="sb-group" style="padding:0;margin-top:12px" data-i18n="s_external_cli">External CLI</div>
       <div class="settings-help">Launch the Codex CLI in its own terminal window using the CLI command and args configured above.</div>
       <div id="codex-cli-panel" class="settings-language-panel" aria-live="polite">
         <div class="settings-language-head">
@@ -5361,24 +5361,24 @@ pre.code-block { overflow:visible; }
           <span id="codex-cli-pid-chip" class="lang-chip" style="display:none">PID: -</span>
         </div>
         <div class="settings-language-actions">
-          <button type="button" class="primary" id="codex-cli-launch-btn" onclick="launchProviderCli('codex')">Launch CLI</button>
-          <button type="button" id="codex-cli-stop-btn" onclick="stopProviderCli('codex')" disabled>Stop CLI</button>
+          <button type="button" class="primary" id="codex-cli-launch-btn" onclick="launchProviderCli('codex')" data-i18n="s_launch_cli">Launch CLI</button>
+          <button type="button" id="codex-cli-stop-btn" onclick="stopProviderCli('codex')" disabled data-i18n="s_stop_cli">Stop CLI</button>
         </div>
         <div class="settings-help" id="codex-cli-detail"></div>
       </div>
     </div>
 
     <div class="settings-section" data-settings-id="mcp" data-settings-title="MCP Policy">
-      <div class="sb-group" style="padding:0;margin-top:0">MCP Policy</div>
+      <div class="sb-group" style="padding:0;margin-top:0" data-i18n="s_mcp_policy">MCP Policy</div>
       <div class="settings-grid">
-        <div><label>Tool Access</label><select id="s-mcp-access"><option value="prompt">Prompt before use</option><option value="read_only">Read-only allowed</option><option value="allow">Allow configured tools</option><option value="disabled">Disabled</option></select></div>
-        <div><label>Name Collisions</label><select id="s-mcp-collision"><option value="first">Use first registered</option><option value="last">Use latest registered</option><option value="error">Treat as error</option></select></div>
+        <div><label data-i18n="s_tool_access">Tool Access</label><select id="s-mcp-access"><option value="prompt">Prompt before use</option><option value="read_only">Read-only allowed</option><option value="allow">Allow configured tools</option><option value="disabled">Disabled</option></select></div>
+        <div><label data-i18n="s_name_collisions">Name Collisions</label><select id="s-mcp-collision"><option value="first">Use first registered</option><option value="last">Use latest registered</option><option value="error">Treat as error</option></select></div>
       </div>
-      <label class="settings-check"><input id="s-mcp-discovery" type="checkbox"><span><b>Discover configured MCP servers</b><small>Reads configured server entries only; missing backend APIs are not called from this modal.</small></span></label>
-      <label class="settings-check"><input id="s-mcp-autostart" type="checkbox"><span><b>Autostart MCP servers</b><small>Off by default to avoid launching local commands unexpectedly.</small></span></label>
-      <label class="settings-check"><input id="s-mcp-sampling" type="checkbox"><span><b>Allow MCP server sampling</b><small>Keep off unless trusted MCP servers are allowed to request model sampling.</small></span></label>
+      <label class="settings-check"><input id="s-mcp-discovery" type="checkbox"><span><b data-i18n="s_discover_mcp">Discover configured MCP servers</b><small>Reads configured server entries only; missing backend APIs are not called from this modal.</small></span></label>
+      <label class="settings-check"><input id="s-mcp-autostart" type="checkbox"><span><b data-i18n="s_autostart_mcp">Autostart MCP servers</b><small>Off by default to avoid launching local commands unexpectedly.</small></span></label>
+      <label class="settings-check"><input id="s-mcp-sampling" type="checkbox"><span><b data-i18n="s_mcp_sampling">Allow MCP server sampling</b><small>Keep off unless trusted MCP servers are allowed to request model sampling.</small></span></label>
       <div class="settings-help" id="mcp-runtime-status">MCP status not loaded.</div>
-      <div class="sb-group" style="padding:0;margin-top:10px">MCP Servers</div>
+      <div class="sb-group" style="padding:0;margin-top:10px" data-i18n="s_mcp_servers">MCP Servers</div>
       <div id="mcp-server-list" style="font-size:12px;margin-bottom:6px"></div>
       <div style="display:flex;gap:4px;flex-wrap:wrap">
         <input id="s-mcp-new-id" placeholder="Server ID" style="flex:1;min-width:80px;font-size:12px;padding:3px 6px;background:var(--bg3);color:var(--fg);border:1px solid var(--border);border-radius:3px">
@@ -5391,37 +5391,37 @@ pre.code-block { overflow:visible; }
     </div>
 
     <div class="settings-section" data-settings-id="terminal" data-settings-title="Terminal">
-      <div class="sb-group" style="padding:0;margin-top:0">Terminal Profile</div>
+      <div class="sb-group" style="padding:0;margin-top:0" data-i18n="s_terminal">Terminal Profile</div>
       <div class="settings-grid">
-        <div><label>Profile Name</label><input id="s-term-profile" placeholder="PowerShell"></div>
-        <div><label>Shell Command</label><input id="s-term-shell" placeholder="Leave empty for platform default"></div>
-        <div><label>Timeout (sec)</label><input id="s-term-timeout" type="number" min="1" value="30"></div>
-        <div><label>Output Limit</label><input id="s-term-output" type="number" min="1000" value="8000"></div>
-        <div class="full"><label>Shell Args (one per line)</label><textarea id="s-term-args" rows="2" placeholder="Optional non-secret args only"></textarea></div>
+        <div><label data-i18n="s_profile_name">Profile Name</label><input id="s-term-profile" placeholder="PowerShell"></div>
+        <div><label data-i18n="s_shell_cmd">Shell Command</label><input id="s-term-shell" placeholder="Leave empty for platform default"></div>
+        <div><label data-i18n="s_timeout">Timeout (sec)</label><input id="s-term-timeout" type="number" min="1" value="30"></div>
+        <div><label data-i18n="s_output_limit">Output Limit</label><input id="s-term-output" type="number" min="1000" value="8000"></div>
+        <div class="full"><label data-i18n="s_shell_args">Shell Args (one per line)</label><textarea id="s-term-args" rows="2" placeholder="Optional non-secret args only"></textarea></div>
       </div>
-      <label class="settings-check"><input id="s-term-use-pty" type="checkbox"><span><b>Use real pseudo-terminal (ConPTY)</b><small>Needed for raw-mode/full-screen programs to see a real terminal size and isatty(). Requires the optional pywinpty dependency; falls back silently to the normal pipe if it isn't installed. May show extra redraw escape sequences for programs that repaint the whole screen.</small></span></label>
+      <label class="settings-check"><input id="s-term-use-pty" type="checkbox"><span><b data-i18n="s_use_pty">Use real pseudo-terminal (ConPTY)</b><small>Needed for raw-mode/full-screen programs to see a real terminal size and isatty(). Requires the optional pywinpty dependency; falls back silently to the normal pipe if it isn't installed. May show extra redraw escape sequences for programs that repaint the whole screen.</small></span></label>
     </div>
 
     <div class="settings-section" data-settings-id="workspace" data-settings-title="Workspace">
-      <div class="sb-group" style="padding:0;margin-top:0">Workspace</div>
+      <div class="sb-group" style="padding:0;margin-top:0" data-i18n="s_workspace">Workspace</div>
       <div class="settings-grid">
-        <div class="full"><label>Workspace Root</label><input id="s-workspace-root" placeholder="Auto-detect when empty"></div>
-        <div class="full"><label>Additional Roots (one per line)</label><textarea id="s-workspace-roots" rows="2" placeholder="Optional fallback workspace roots"></textarea></div>
+        <div class="full"><label data-i18n="s_workspace_root">Workspace Root</label><input id="s-workspace-root" placeholder="Auto-detect when empty"></div>
+        <div class="full"><label data-i18n="s_addl_roots">Additional Roots (one per line)</label><textarea id="s-workspace-roots" rows="2" placeholder="Optional fallback workspace roots"></textarea></div>
       </div>
-      <label class="settings-check"><input id="s-workspace-auto" type="checkbox"><span><b>Auto-detect workspace</b><small>Use configured root first, then active file, process directory, and repository root.</small></span></label>
-      <label class="settings-check"><input id="s-workspace-remember" type="checkbox"><span><b>Remember last workspace</b><small>Keep the last resolved root available for Explorer and Terminal cwd.</small></span></label>
+      <label class="settings-check"><input id="s-workspace-auto" type="checkbox"><span><b data-i18n="s_auto_detect_ws">Auto-detect workspace</b><small>Use configured root first, then active file, process directory, and repository root.</small></span></label>
+      <label class="settings-check"><input id="s-workspace-remember" type="checkbox"><span><b data-i18n="s_remember_ws">Remember last workspace</b><small>Keep the last resolved root available for Explorer and Terminal cwd.</small></span></label>
       <div class="settings-help" id="s-workspace-current">Workspace not loaded.</div>
     </div>
 
     <div class="settings-section" data-settings-id="extensions" data-settings-title="Extensions">
-      <div class="sb-group" style="padding:0;margin-top:0">Extension Trust</div>
-      <label class="settings-check"><input id="s-ext-confirm" type="checkbox"><span><b>Confirm extension installs</b><small>Recommended. Keep install/uninstall actions user-confirmed.</small></span></label>
-      <label class="settings-check"><input id="s-ext-diagnostics" type="checkbox"><span><b>Extension host diagnostics</b><small>Off by default. Enable only while tracing Node-backed extension activation, webviews, or custom editors.</small></span></label>
+      <div class="sb-group" style="padding:0;margin-top:0" data-i18n="s_ext_trust">Extension Trust</div>
+      <label class="settings-check"><input id="s-ext-confirm" type="checkbox"><span><b data-i18n="s_confirm_install">Confirm extension installs</b><small>Recommended. Keep install/uninstall actions user-confirmed.</small></span></label>
+      <label class="settings-check"><input id="s-ext-diagnostics" type="checkbox"><span><b data-i18n="s_ext_diagnostics">Extension host diagnostics</b><small>Off by default. Enable only while tracing Node-backed extension activation, webviews, or custom editors.</small></span></label>
       <div class="settings-grid">
-        <div><label>Allowed Publishers</label><textarea id="s-ext-allow" rows="2" placeholder="One publisher per line"></textarea></div>
-        <div><label>Blocked Publishers</label><textarea id="s-ext-block" rows="2" placeholder="One publisher per line"></textarea></div>
+        <div><label data-i18n="s_allowed_pubs">Allowed Publishers</label><textarea id="s-ext-allow" rows="2" placeholder="One publisher per line"></textarea></div>
+        <div><label data-i18n="s_blocked_pubs">Blocked Publishers</label><textarea id="s-ext-block" rows="2" placeholder="One publisher per line"></textarea></div>
         <div class="full">
-          <label>Enabled Contributions</label>
+          <label data-i18n="s_enabled_contribs">Enabled Contributions</label>
           <div class="settings-option-grid" id="s-ext-contribs-list"></div>
           <textarea id="s-ext-contribs" rows="2" hidden></textarea>
         </div>
@@ -5487,20 +5487,20 @@ pre.code-block { overflow:visible; }
     <div id="ext-settings-container" data-settings-id="extension-settings" data-settings-title="Extension Settings"></div>
 
     <div class="settings-section" data-settings-id="customization" data-settings-title="Customization">
-      <div class="sb-group" style="padding:0;margin-top:0">Customization Discovery</div>
-      <label class="settings-check"><input id="s-cust-agent-md" type="checkbox"><span><b>Read AGENTS.md</b><small>Include workspace instruction files when available.</small></span></label>
-      <label class="settings-check"><input id="s-cust-claude-md" type="checkbox"><span><b>Read CLAUDE.md</b><small>Disabled by default unless this workspace intentionally uses Claude-style project memory.</small></span></label>
+      <div class="sb-group" style="padding:0;margin-top:0" data-i18n="s_customization">Customization Discovery</div>
+      <label class="settings-check"><input id="s-cust-agent-md" type="checkbox"><span><b data-i18n="s_read_agents">Read AGENTS.md</b><small>Include workspace instruction files when available.</small></span></label>
+      <label class="settings-check"><input id="s-cust-claude-md" type="checkbox"><span><b data-i18n="s_read_claude">Read CLAUDE.md</b><small>Disabled by default unless this workspace intentionally uses Claude-style project memory.</small></span></label>
       <div class="settings-grid">
-        <div><label>Instructions Locations</label><textarea id="s-cust-instructions" rows="2" placeholder=".sao/instructions.md"></textarea></div>
-        <div><label>Agent Locations</label><textarea id="s-cust-agents" rows="2" placeholder=".sao/agents"></textarea></div>
-        <div><label>Workflow Locations</label><textarea id="s-cust-workflows" rows="2" placeholder=".sao/workflows"></textarea></div>
-        <div><label>Skill Locations</label><textarea id="s-cust-skills" rows="2" placeholder=".agents/skills/.local"></textarea></div>
+        <div><label data-i18n="s_inst_locations">Instructions Locations</label><textarea id="s-cust-instructions" rows="2" placeholder=".sao/instructions.md"></textarea></div>
+        <div><label data-i18n="s_agent_locations">Agent Locations</label><textarea id="s-cust-agents" rows="2" placeholder=".sao/agents"></textarea></div>
+        <div><label data-i18n="s_wf_locations">Workflow Locations</label><textarea id="s-cust-workflows" rows="2" placeholder=".sao/workflows"></textarea></div>
+        <div><label data-i18n="s_skill_locations">Skill Locations</label><textarea id="s-cust-skills" rows="2" placeholder=".agents/skills/.local"></textarea></div>
       </div>
       <div class="settings-help">Defaults are relative discovery paths only; no secrets or local absolute paths are prefilled.</div>
     </div>
 
     <details class="settings-section" data-settings-id="advanced" data-settings-title="Advanced" style="margin-top:12px">
-      <summary style="cursor:pointer;font-size:12px;font-weight:600;color:var(--fg-dim);user-select:none">▸ Advanced Sampling & Connection</summary>
+      <summary style="cursor:pointer;font-size:12px;font-weight:600;color:var(--fg-dim);user-select:none" data-i18n="s_advanced">▸ Advanced Sampling & Connection</summary>
       <div style="padding:8px 0;display:grid;grid-template-columns:1fr 1fr;gap:6px 12px;font-size:12px">
         <div><label>Top P</label><input id="s-topp" type="number" step="0.05" min="0" max="1" value="1.0"></div>
         <div><label>Freq Penalty</label><input id="s-freqp" type="number" step="0.1" min="-2" max="2" value="0"></div>
@@ -5515,7 +5515,7 @@ pre.code-block { overflow:visible; }
     </details>
 
     <details class="settings-section" data-settings-id="models" data-settings-title="Custom Models" style="margin-top:8px">
-      <summary style="cursor:pointer;font-size:12px;font-weight:600;color:var(--fg-dim);user-select:none">▸ Custom Models</summary>
+      <summary style="cursor:pointer;font-size:12px;font-weight:600;color:var(--fg-dim);user-select:none" data-i18n="s_custom_models">▸ Custom Models</summary>
       <div style="padding:8px 0;font-size:12px">
         <div id="s-custom-models-list"></div>
         <div style="display:flex;gap:4px;margin-top:6px;flex-wrap:wrap">
@@ -5543,9 +5543,9 @@ pre.code-block { overflow:visible; }
     <div class="modal-status" id="s-status"></div>
     <div class="modal-btns">
       <span id="settings-footer-summary" class="settings-footer-summary" role="status" aria-live="polite">Clean</span>
-      <button type="button" class="settings-bottom-action" onclick="settingsCloseThen(openKeybindings)">Keyboard Shortcuts</button>
-      <button type="button" class="settings-top-action settings-reset-visible" onclick="resetVisibleModifiedSettings()">Reset Visible</button>
-      <button type="button" class="settings-bottom-action" onclick="testConn()">Test</button>
+      <button type="button" class="settings-bottom-action" onclick="settingsCloseThen(openKeybindings)" data-i18n="s_kbd_shortcuts">Keyboard Shortcuts</button>
+      <button type="button" class="settings-top-action settings-reset-visible" onclick="resetVisibleModifiedSettings()" data-i18n="s_reset_visible">Reset Visible</button>
+      <button type="button" class="settings-bottom-action" onclick="testConn()" data-i18n="s_test">Test</button>
       <button type="button" class="settings-bottom-action settings-cancel-button" id="settings-cancel-button" onclick="settingsCancelOrClose()">Close</button>
       <button type="button" class="settings-bottom-action primary settings-save-button" onclick="saveSettings()">Save</button>
     </div>
@@ -5638,7 +5638,7 @@ const EXTENSION_CONTRIBUTION_OPTIONS=[
 const SETTINGS_DEFAULTS={
   provider:'openai',api_key:'',base_url:'',model:'',temperature:0.7,max_tokens:4096,system_prompt:'',
   top_p:1.0,frequency_penalty:0,presence_penalty:0,stop:[],max_input_tokens:0,max_output_tokens:0,timeout:180,
-  extra_headers:{},extra_body:{},_provider_keys:{},provider_keys:{},custom_models:{},permissions:{},configuration_targets:{},mode:'agent',language:'en',approval:'default',active_chat_provider:'chat',theme:'dark',color_theme:'',file_icon_theme:'',
+  extra_headers:{},extra_body:{},_provider_keys:{},provider_keys:{},custom_models:{},permissions:{},configuration_targets:{},mode:'agent',language:'zh',approval:'default',active_chat_provider:'chat',theme:'dark',color_theme:'',file_icon_theme:'',
   ...SETTINGS_SECTION_DEFAULTS
 };
 function clonePlain(value){return JSON.parse(JSON.stringify(value))}
@@ -8309,6 +8309,38 @@ en:{
   s_wf_locations:'Workflow Locations',s_skill_locations:'Skill Locations',
   s_advanced:'Advanced Sampling & Connection',s_custom_models:'Custom Models',
   s_test:'Test',s_save:'Save',
+  s_section_assistant:'AI / Endpoint',s_section_appearance:'Appearance',s_section_editor:'Editor / Files',
+  s_section_claude:'Claude Code',s_section_codex:'Codex',s_section_mcp:'MCP Policy',
+  s_section_terminal:'Terminal',s_section_workspace:'Workspace',s_section_extensions:'Extensions',
+  s_section_accounts:'Accounts',s_section_extension_settings:'Extension Settings',
+  s_section_customization:'Customization',s_section_advanced:'Advanced',s_section_models:'Custom Models',
+  s_secdesc_assistant:'Provider, model, prompt, mode, and tool permission defaults.',
+  s_secdesc_appearance:'Theme and icon settings contributed by the core app and installed extensions.',
+  s_secdesc_editor:'Editor behavior, formatting, suggestions, hover, folding, diff, and language overrides.',
+  s_secdesc_claude:'Claude Code command, model, and launch preference settings.',
+  s_secdesc_codex:'Codex command, model, and transport settings.',
+  s_secdesc_mcp:'MCP discovery, startup, sampling, and server connection policy.',
+  s_secdesc_terminal:'Integrated terminal profile, shell, output, and timeout behavior.',
+  s_secdesc_workspace:'Workspace roots, auto-detection, and remembered workspace behavior.',
+  s_secdesc_extensions:'Extension install trust, contribution loading, diagnostics, and runtime surfaces.',
+  s_secdesc_extension_settings:'Settings dynamically contributed by installed VS Code extensions.',
+  s_secdesc_accounts:'Authentication sessions used by vscode.authentication and manual token sign-in.',
+  s_secdesc_customization:'Workspace instructions, agents, workflows, and skill discovery paths.',
+  s_appearance:'Appearance',s_color_theme:'Color Theme',s_icon_theme:'File Icon Theme',
+  s_default_formatter:'Default Formatter',s_tab_size:'Tab Size',s_insert_spaces:'Insert spaces',
+  s_format_on_save:'Format on save',s_quick_suggestions_delay:'Quick Suggestions Delay',
+  s_files:'Files',s_editor:'Editor',s_auto_save:'Auto Save',s_auto_save_delay:'Auto Save Delay',
+  s_workspace:'Workspace',s_workspace_root:'Workspace Root',s_addl_roots:'Additional Roots (one per line)',
+  s_auto_detect_ws:'Auto-detect workspace',s_remember_ws:'Remember last workspace',
+  s_external_cli:'External CLI',s_local_proxy:'Local Proxy',
+  s_launch_cli:'Launch CLI',s_stop_cli:'Stop CLI',s_start_proxy:'Start Proxy',s_stop_proxy:'Stop Proxy',s_copy_env:'Copy Env Vars',
+  s_use_pty:'Use real pseudo-terminal (ConPTY)',s_ext_diagnostics:'Extension host diagnostics',
+  s_title_route:'Search and edit settings; changes save automatically.',
+  s_search_placeholder:'Search settings...',s_search_caption_title:'Search Settings',
+  s_search_caption:'Use @modified, @workspace, @ext:, @lang:, or setting IDs.',
+  s_scope:'Scope',s_reset_visible:'Reset Visible',s_kbd_shortcuts:'Keyboard Shortcuts',
+  s_search_user:'Search user settings...',s_search_ws:'Search workspace settings...',
+  s_search_ext:'Search extension settings...',s_search_matches:'$1 matches',
   // provider
   provider_unavailable:'Provider is unavailable.',
   // follow-ups
@@ -8466,6 +8498,38 @@ zh:{
   s_wf_locations:'工作流位置',s_skill_locations:'技能位置',
   s_advanced:'高级采样 & 连接',s_custom_models:'自定义模型',
   s_test:'测试',s_save:'保存',
+  s_section_assistant:'AI / 端点',s_section_appearance:'外观',s_section_editor:'编辑器 / 文件',
+  s_section_claude:'Claude Code',s_section_codex:'Codex',s_section_mcp:'MCP 策略',
+  s_section_terminal:'终端',s_section_workspace:'工作区',s_section_extensions:'扩展',
+  s_section_accounts:'账户',s_section_extension_settings:'扩展设置',
+  s_section_customization:'自定义',s_section_advanced:'高级',s_section_models:'自定义模型',
+  s_secdesc_assistant:'服务商、模型、提示词、模式与工具权限默认值。',
+  s_secdesc_appearance:'核心应用与已装扩展提供的主题与图标设置。',
+  s_secdesc_editor:'编辑器行为、格式化、建议、悬停、折叠、对比与语言覆盖。',
+  s_secdesc_claude:'Claude Code 命令、模型与启动偏好。',
+  s_secdesc_codex:'Codex 命令、模型与传输方式。',
+  s_secdesc_mcp:'MCP 发现、启动、采样与服务器连接策略。',
+  s_secdesc_terminal:'集成终端配置、Shell、输出与超时行为。',
+  s_secdesc_workspace:'工作区根目录、自动检测与记忆行为。',
+  s_secdesc_extensions:'扩展安装信任、贡献加载、诊断与运行时界面。',
+  s_secdesc_extension_settings:'由已安装 VS Code 扩展动态提供的设置。',
+  s_secdesc_accounts:'vscode.authentication 与手动令牌登录使用的认证会话。',
+  s_secdesc_customization:'工作区指令、Agent、工作流与技能的发现路径。',
+  s_appearance:'外观',s_color_theme:'颜色主题',s_icon_theme:'文件图标主题',
+  s_default_formatter:'默认格式化器',s_tab_size:'Tab 宽度',s_insert_spaces:'用空格代替 Tab',
+  s_format_on_save:'保存时格式化',s_quick_suggestions_delay:'快速建议延迟',
+  s_files:'文件',s_editor:'编辑器',s_auto_save:'自动保存',s_auto_save_delay:'自动保存延迟 (毫秒)',
+  s_workspace:'工作区',s_workspace_root:'工作区根目录',s_addl_roots:'附加根目录（每行一个）',
+  s_auto_detect_ws:'自动检测工作区',s_remember_ws:'记住上次工作区',
+  s_external_cli:'外部 CLI',s_local_proxy:'本地代理',
+  s_launch_cli:'启动 CLI',s_stop_cli:'停止 CLI',s_start_proxy:'启动代理',s_stop_proxy:'停止代理',s_copy_env:'复制环境变量',
+  s_use_pty:'使用真实伪终端 (ConPTY)',s_ext_diagnostics:'扩展宿主诊断',
+  s_title_route:'搜索并编辑设置，更改会自动保存。',
+  s_search_placeholder:'搜索设置…',s_search_caption_title:'搜索设置',
+  s_search_caption:'支持 @modified、@workspace、@ext:、@lang: 或设置 ID。',
+  s_scope:'范围',s_reset_visible:'重置可见项',s_kbd_shortcuts:'键盘快捷键',
+  s_search_user:'搜索用户设置…',s_search_ws:'搜索工作区设置…',
+  s_search_ext:'搜索扩展设置…',s_search_matches:'$1 个匹配',
   provider_unavailable:'提供商不可用。',
   fu_explain:'解释这段代码',fu_fix:'如何修复这个问题？',fu_full:'显示完整文件',fu_continue:'继续',
   cm_copy:'复制消息',cm_markdown:'复制为 Markdown',cm_insert:'插入到编辑器',
@@ -8512,7 +8576,7 @@ zh:{
   install_confirm:'安装此扩展？',update_confirm:'更新此扩展？',uninstalled_prefix:'已卸载: ',installed_prefix:'已安装: ',updated_prefix:'已更新: ',save_failed_prefix:'保存失败: ',
   install_from_folder:'从文件夹安装...',
 }};
-let _curLang='en';
+let _curLang='zh';
 function normalizeUiLanguage(lang){return lang==='zh'||lang==='en'?lang:''}
 function t(key){return (_LANG[_curLang]||_LANG.en)[key]||(_LANG.en[key]||key)}
 function tf(key,...args){return String(t(key)).replace(/\$(\d+)/g,(_,n)=>String(args[Number(n)-1]??''))}
@@ -8530,7 +8594,7 @@ function localizeDynamicUi(){
 }
 function setLang(lang,options){
   const opts=isPlainObject(options)?options:{};
-  const next=normalizeUiLanguage(lang)||'en';
+  const next=normalizeUiLanguage(lang)||'zh';
   _curLang=next;
   config.language=next;
   document.querySelectorAll('[data-i18n]').forEach(el=>{
@@ -33737,10 +33801,16 @@ function settingsCategorySections(){
     .filter(section=>section.dataset&&section.dataset.settingsId);
 }
 function settingsSectionTitle(section){
-  return String((section&&section.dataset&&section.dataset.settingsTitle)||'Settings');
+  const raw=String((section&&section.dataset&&section.dataset.settingsTitle)||'Settings');
+  const id=String((section&&section.dataset&&section.dataset.settingsId)||'').replace(/-/g,'_');
+  if(id){const k='s_section_'+id;const v=t(k);if(v!==k)return v}
+  return raw;
 }
 function settingsSectionDescription(section){
   const id=String((section&&section.dataset&&section.dataset.settingsId)||'');
+  const k='s_secdesc_'+id.replace(/-/g,'_');
+  const v=t(k);
+  if(v!==k)return v;
   return SETTINGS_SECTION_DESCRIPTIONS[id]||'Settings in this section.';
 }
 function settingsSectionVisibleCount(section){
@@ -34692,7 +34762,7 @@ function selectSettingsTarget(target,options){
   });
   const input=$('settings-search');
   if(input){
-    input.placeholder=currentSettingsTarget==='extensions'?'Search extension settings...':currentSettingsTarget==='workspace'?'Search workspace settings...':'Search user settings...';
+    input.placeholder=currentSettingsTarget==='extensions'?t('s_search_ext'):currentSettingsTarget==='workspace'?t('s_search_ws'):t('s_search_user');
     if(!opts.preserveSearch){
       input.value=String(input.value||'')
         .replace(/(^|\s)@extensions(?=\s|$)/ig,' ')
@@ -36963,7 +37033,7 @@ function filterSettings(){
   renderSettingsRowMatchSummaries(parsed);
   renderSettingsRowImpactSummaries();
   renderSettingsSectionOverviews();
-  const inp=$('settings-search');if(inp)inp.placeholder=parsed.active?visible+' matches':currentSettingsTarget==='extensions'?'Search extension settings...':currentSettingsTarget==='workspace'?'Search workspace settings...':'Search user settings...';
+  const inp=$('settings-search');if(inp)inp.placeholder=parsed.active?tf('s_search_matches',visible):currentSettingsTarget==='extensions'?t('s_search_ext'):currentSettingsTarget==='workspace'?t('s_search_ws'):t('s_search_user');
   settingsRecordSearch(q,parsed);
   renderSettingsActiveFilters(parsed,visible,total);
   renderSettingsSearchInspector(parsed,visible,total,{...targetStats,queryMatched:queryStats.matched,queryHidden:queryStats.hidden,queryTotal:queryStats.total});
