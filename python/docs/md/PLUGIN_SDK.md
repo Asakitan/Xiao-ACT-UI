@@ -99,7 +99,7 @@ my_plugin/
   "entry": "plugin.py",
   "description": "插件功能简述",
   "enabled": true,
-  "game_ids": ["star_resonance"],
+  "game_ids": ["my_game"],
   "requires": ["other_plugin"],
   "permissions": ["engine_access", "input_control"],
   "capabilities": [
@@ -184,7 +184,7 @@ my_plugin/
 | `entry` | 否 | `"plugin.py"` | 入口文件，必须在插件目录内 |
 | `description` | 否 | — | 在插件管理界面显示的说明文字 |
 | `enabled` | 否 | `true` | 程序启动时是否自动加载。用户可在管理界面切换 |
-| `game_ids` | 否 | — | 适配的游戏 ID 列表（如 `["star_resonance"]`） |
+| `game_ids` | 否 | — | 适配的游戏 ID 列表（如 `["my_game"]`） |
 | `requires` | 否 | — | 依赖的其他插件 ID，平台会先加载依赖项 |
 | `permissions` | 否 | — | 声明需要的权限标记 |
 | `capabilities` | 否 | — | 声明插件提供的能力（面板、自动化等） |
@@ -355,7 +355,7 @@ ctx.unsubscribe(token)
     "source": {
         "name": "解析器名",
         "kind": "parser",                # parser / plugin / trigger
-        "game_id": "star_resonance",
+        "game_id": "my_game",
         "confidence": 0.95               # 0.0 - 1.0
     },
     "payload": { ... }                   # 事件数据（按主题不同）
@@ -589,27 +589,27 @@ ctx.destroy_compositor_layer("pet_preview")
 
 ### 引擎访问 (ctx.engine)
 
-通过 `ctx.engine` 访问平台和其他插件注册的引擎实例。
+`ctx.engine` 是一个跨插件共享的命名引擎注册表。平台核心只提供 `owner`、`event_bus`、`plugin_manager`、`settings`、`memory_bridge` 这几个固定别名；其余名字完全由插件自己注册和消费，平台不做任何预设。
 
 ```python
+# 注册自己的引擎，供其他插件使用（ctx 和 ctx.engine 上都有这个方法，等价）
+ctx.register_engine("my_custom_engine", my_engine_instance)
+ctx.engine.register("my_custom_engine", my_engine_instance)
+
 # 获取引擎（不存在返回 None）
-tracker = ctx.engine.get("dps_tracker")
-bridge = ctx.engine.get("packet_bridge")
+tracker = ctx.engine.get("my_custom_engine")
 
 # 获取引擎（不存在抛 RuntimeError）
-state = ctx.engine.require("game_state")
+tracker = ctx.engine.require("my_custom_engine")
 
-# 列出可用引擎
+# 列出当前可用引擎
 names = ctx.engine.available()
 
 # 调用引擎方法
-ctx.engine.call("dps_tracker", "reset")
-
-# 注册自己的引擎供其他插件使用
-ctx.register_engine("my_custom_engine", my_engine_instance)
+ctx.engine.call("my_custom_engine", "reset")
 ```
 
-**常见引擎名**：
+**平台固定别名**：
 
 | 名称 | 说明 |
 |------|------|
@@ -617,17 +617,9 @@ ctx.register_engine("my_custom_engine", my_engine_instance)
 | `event_bus` | 事件总线 |
 | `plugin_manager` | 插件管理器 |
 | `settings` | 全局设置 |
-| `game_state` | 游戏状态 |
-| `state_manager` | 状态管理器 |
-| `dps_tracker` | DPS 追踪器 |
-| `history_store` | 历史记录 |
-| `encounter_manager` | 战斗管理器 |
-| `trigger_engine` | 触发器引擎 |
-| `packet_bridge` | 数据包桥接 |
-| `memory_bridge` | 内存桥接 |
-| `auto_key_engine` | 自动按键引擎 |
-| `boss_raid_engine` | Boss 机制引擎 |
-| `window_locator` | 窗口定位器 |
+| `memory_bridge` | 内存桥接门面（`mem_probe.mem_access.resolve_bridge`，需要有插件提供实现） |
+
+**内置 star_resonance_plugin 注册的引擎名**（仅在该插件加载后可用，供参考）：`game_state`、`dps_tracker`、`encounter_manager`、`trigger_engine`、`packet_bridge`、`auto_key_engine`、`boss_raid_engine`、`history_store`。详见 `GAME_STATE_API.md`。
 
 ### 设置读写
 
@@ -891,8 +883,8 @@ def _on_action(action_id, payload=None):
   "name": "Boss 助手",
   "entry": "plugin.py",
   "enabled": true,
-  "game_ids": ["star_resonance"],
-  "requires": ["star_resonance"],
+  "game_ids": ["my_game"],
+  "requires": ["my_game_plugin"],
   "capabilities": [
     {
       "id": "ui_panels",

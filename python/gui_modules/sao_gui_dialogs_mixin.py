@@ -15,7 +15,8 @@
 # print() fallback.
 # * _switch_to_webview_ui — confirm dialog + exit-animation + fresh
 # process restart into WebView UI.
-# * _show_about — SAO 'about' info dialog with updater state hint.
+# * _show_about — opens docs/html/index.html, then shows the 'about'
+# info dialog with updater state hint.
 #
 # Required SAOPlayerGUI attrs:
 # * self._sao_menu
@@ -139,6 +140,15 @@ class SAOPlayerGUIDialogsMixin:
 
     def _show_about(self):
         self._dismiss_menu_before_window()
+        try:
+            import webbrowser
+            from pathlib import Path
+            from config import BASE_DIR
+            docs_index = Path(BASE_DIR) / 'docs' / 'html' / 'index.html'
+            if docs_index.is_file():
+                webbrowser.open(docs_index.resolve().as_uri())
+        except Exception:
+            pass
         try:
             from updater.sao_updater import get_manager, STATE_AVAILABLE, STATE_READY
             st = get_manager().snapshot()

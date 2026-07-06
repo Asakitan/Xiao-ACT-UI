@@ -717,7 +717,7 @@ cdef inline double _row_subpixel_crossing(const double[::1] score,
     return <double>(last_filled_idx + 1)
 
 
-cdef void _quickselect_median(double[::1] arr, Py_ssize_t count, double *out) nogil:
+cdef void _quickselect_median(double[::1] arr, Py_ssize_t count, double *out) noexcept nogil:
     """Median of arr[:count] via standard quickselect (partial sort).
 
     Sorts in place. ``out`` receives the median. Caller must ensure count > 0.
@@ -1314,7 +1314,7 @@ cpdef object compute_bar_col_score_f32(object mean_hue,
 # same linear interpolation numpy uses by default.
 
 
-cdef void _insertion_sort_double(double[::1] arr, Py_ssize_t n) nogil:
+cdef void _insertion_sort_double(double[::1] arr, Py_ssize_t n) noexcept nogil:
     """Plain in-place ascending insertion sort. Fast for the small (~50
     element) slices `_detect_bar_pct` feeds us; ~2.5k ops worst case."""
     cdef Py_ssize_t i, j

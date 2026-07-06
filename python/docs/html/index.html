@@ -1,0 +1,32 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SAO ACT UI 文档</title>
+<link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+<header class="site-header">
+  <a class="brand" href="index.html"><span class="brand-mark">SAO</span> ACT UI 文档</a>
+</header>
+<div class="layout layout-index">
+  <main class="content content-index">
+    <h1>SAO ACT UI 开发者文档</h1>
+    <p class="lede">游戏无关的战斗分析平台。平台核心负责事件分发、声明式 UI 渲染、插件生命周期与触发器执行；
+       所有游戏特定逻辑由插件提供，内置的 <code>star_resonance_plugin</code>（星痕共鸣）是完整的参考实现。</p>
+    <div class="card-grid">
+      <a class="doc-card" href="ACT_PLATFORM.html"><div class="doc-title">平台总览</div><div class="doc-desc">架构、事件总线、数据模式、触发器、插件生命周期</div></a>
+      <a class="doc-card" href="PLUGIN_SDK.html"><div class="doc-title">插件开发指南</div><div class="doc-desc">PluginContext 完整 API、生命周期、打包分发</div></a>
+      <a class="doc-card" href="ACT_UI_PARITY_SDK.html"><div class="doc-title">声明式 UI 面板</div><div class="doc-desc">ctx.ui 构建器、节点类型、主题适配</div></a>
+      <a class="doc-card" href="MULTI_LANGUAGE_SCRIPTING.html"><div class="doc-title">多语言脚本运行时</div><div class="doc-desc">Lua / C# / AngelScript / Emma 插件写法</div></a>
+      <a class="doc-card" href="GAME_STATE_API.html"><div class="doc-title">游戏状态 API 参考</div><div class="doc-desc">star_resonance_plugin 参考实现：GameStateManager、ctx.mem</div></a>
+      <a class="doc-card" href="HYBRID_MEMORY_TCP.html"><div class="doc-title">游戏数据源</div><div class="doc-desc">TCP / 内存 / 混合三种数据获取模式</div></a>
+      <a class="doc-card" href="AI_EDITOR.html"><div class="doc-title">AI Editor 使用指南</div><div class="doc-desc">内置 AI 编辑器功能说明</div></a>
+      <a class="doc-card" href="AI_EDITOR_MCP.html"><div class="doc-title">AI Editor MCP Server</div><div class="doc-desc">MCP 工具集成与外部 IDE 接入</div></a>
+    </div>
+  </main>
+</div>
+<footer class="site-footer">SAO ACT UI &middot; 平台与插件开发者文档</footer>
+</body>
+</html>

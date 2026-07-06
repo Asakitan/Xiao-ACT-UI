@@ -1,8 +1,10 @@
 # SAO ACT 平台
 
-SAO ACT UI 是一个游戏无关的战斗分析平台。所有游戏特定逻辑由插件提供，平台本身只负责事件分发、UI 渲染、数据存储和触发器执行。
+SAO ACT UI 是一个游戏无关的战斗分析平台。平台核心（`act_platform/`）只负责事件总线、声明式 UI 渲染、插件生命周期和触发器执行框架，不包含任何游戏特定字段或逻辑。所有游戏特定逻辑——职业/技能/副本/Boss 机制、内存字段布局——都由插件提供。
 
-配套文档：`PLUGIN_SDK.md`、`HYBRID_MEMORY_TCP.md`、`AI_EDITOR.md`。
+仓库内置了一个完整的参考插件 `plugins/star_resonance_plugin`（星痕共鸣），实现了本文和配套文档里出现的大部分具体引擎（`dps_tracker`、`game_state`、`boss_raid_engine` 等）与内存字段。它是**如何为一个游戏接入平台**的范例，不是平台本身的固定契约——为新游戏写插件时，可以参考它的结构，但引擎名、事件字段完全由你自己的插件决定。
+
+配套文档：`PLUGIN_SDK.md`、`HYBRID_MEMORY_TCP.md`、`GAME_STATE_API.md`（star_resonance_plugin 参考实现细节）、`AI_EDITOR.md`。
 
 ---
 
@@ -39,7 +41,7 @@ SAO ACT UI 是一个游戏无关的战斗分析平台。所有游戏特定逻辑
 {
     "topic": "damage",
     "observed_at": 1718000000.0,
-    "source": {"name": "tcp_parser", "kind": "packet", "game_id": "star_resonance"},
+    "source": {"name": "tcp_parser", "kind": "packet", "game_id": "my_game"},
     "payload": {
         "attacker_id": 12345,
         "target_id": 67890,
@@ -313,21 +315,17 @@ ctx.set_overlay('dps_overlay', overlay_data)
 
 #### 引擎句柄
 
-受信任的插件可以通过 `ctx.engine` 访问平台内部组件：
+`ctx.engine` 是一个跨插件的命名引擎注册表，由平台维护但内容完全由插件填充——平台核心不会预置任何名字。任意插件可以在 `on_load` 中调用 `ctx.engine.register('my_engine', instance)` 注册一个引擎实例，之后所有插件都能通过 `ctx.engine.get('my_engine')` 取到同一个对象：
 
 ```python
-# 获取 DPS 追踪器
-tracker = ctx.engine.get('dps_tracker')
+# 注册（通常在 on_load 中）
+ctx.engine.register('my_engine', MyEngineImpl())
 
-# 获取游戏状态管理器
-state = ctx.engine.get('game_state')
-snapshot = state.snapshot()
-
-# 获取触发器引擎
-triggers = ctx.engine.get('trigger_engine')
+# 其他插件获取
+tracker = ctx.engine.get('my_engine')
 ```
 
-常用句柄：`game_state`、`dps_tracker`、`encounter_manager`、`trigger_engine`、`packet_bridge`、`memory_bridge`、`auto_key_engine`、`boss_raid_engine`、`settings`、`history_store`。
+`owner`、`event_bus`、`plugin_manager`、`settings`、`memory_bridge` 这几个名字是平台内置的固定别名，任何插件都能取到。除此之外的引擎名（`game_state`、`dps_tracker`、`encounter_manager`、`trigger_engine`、`packet_bridge`、`auto_key_engine`、`boss_raid_engine`、`history_store` 等）**不是平台契约**，而是内置的 `star_resonance_plugin` 按自己的需要注册的——它们只在该插件加载后才存在。详见 `GAME_STATE_API.md`。
 
 #### 设置
 

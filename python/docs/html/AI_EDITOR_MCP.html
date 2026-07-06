@@ -1,0 +1,597 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>AI Editor MCP Server · SAO ACT UI 文档</title>
+<link rel="stylesheet" href="assets/style.css">
+<link rel="stylesheet" href="assets/pygments.css">
+</head>
+<body>
+<header class="site-header">
+  <a class="brand" href="index.html"><span class="brand-mark">SAO</span> ACT UI 文档</a>
+  <nav class="top-nav">
+    <a href="index.html">全部文档</a>
+  </nav>
+</header>
+<div class="layout">
+  <aside class="sidebar">
+    <div class="sidebar-title">开发者文档</div>
+    <ul class="sidebar-nav">
+      <li><a href="ACT_PLATFORM.html">平台总览</a></li>
+      <li><a href="PLUGIN_SDK.html">插件开发指南</a></li>
+      <li><a href="ACT_UI_PARITY_SDK.html">声明式 UI 面板</a></li>
+      <li><a href="MULTI_LANGUAGE_SCRIPTING.html">多语言脚本运行时</a></li>
+      <li><a href="GAME_STATE_API.html">游戏状态 API 参考</a></li>
+      <li><a href="HYBRID_MEMORY_TCP.html">游戏数据源</a></li>
+      <li><a href="AI_EDITOR.html">AI Editor 使用指南</a></li>
+      <li><a href="AI_EDITOR_MCP.html" class="active">AI Editor MCP Server</a></li>
+    </ul>
+  </aside>
+  <main class="content">
+    <article class="markdown-body">
+      <h1 id="ai-editor-mcp-server">AI Editor MCP Server</h1>
+<p>SAO AI Editor 内置 MCP (Model Context Protocol) 服务器，允许外部 IDE 的 AI 助手（Claude Code、GitHub Copilot、Cursor、Windsurf 等）直接接入并使用 AI Editor 的全部能力。</p>
+<p><strong>两种运行模式，选一种：</strong></p>
+<table>
+<thead>
+<tr>
+<th>模式</th>
+<th>是什么</th>
+<th>什么时候用</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Live（推荐）</strong></td>
+<td>你正在用的、已经打开的那个编辑器窗口本身，额外监听一个 HTTP 端口</td>
+<td>你想让外部 AI 操作<strong>你当前实际打开的项目</strong>——真实工作区、真实已配置的 provider/agent/workflow</td>
+</tr>
+<tr>
+<td><strong>Standalone headless</strong></td>
+<td><code>--mcp-server</code> 命令行参数启动的独立进程，不带界面，自己重新建一套全新的引擎/工具注册表</td>
+<td>CI/自动化脚本，没有也不需要一个真正打开的编辑器窗口</td>
+</tr>
+</tbody>
+</table>
+<p>两者共享同一套 18 个工具定义，区别只在于工具执行时"背后是谁"。</p>
+<hr />
+<h2 id="live">快速开始 — Live 模式（在已打开的编辑器里开启）</h2>
+<ol>
+<li>打开命令面板（<code>Ctrl+Shift+P</code>）</li>
+<li>运行 <strong>"MCP: Expose This Editor as an MCP Server"</strong></li>
+<li>右下角会弹出实际监听的端口，例如 <code>http://127.0.0.1:53210</code></li>
+<li>把这个端口填进外部 AI 工具的 MCP 配置（见下方"IDE 接入配置"，把 <code>command</code>/<code>args</code> 换成 HTTP 连接方式，或直接用支持 <code>url</code> 字段的 MCP 客户端指向这个地址）</li>
+<li>再次运行同一个命令即可停止</li>
+</ol>
+<p>Live 模式下，<code>read_file</code>/<code>list_files</code>/<code>search_files</code>/<code>edit_file</code> 的相对路径按<strong>这个编辑器窗口实际打开的工作区</strong>解析，<code>chat_with_agent</code>/<code>run_workflow</code> 用的是<strong>这个窗口里实际配置好的</strong> provider/agent/workflow——不是另起一套。</p>
+<blockquote>
+<p>目前只有命令面板入口，还没有设置面板里的开关/自动启动选项。</p>
+</blockquote>
+<hr />
+<h2 id="standalone-headless">快速开始 — Standalone headless 模式</h2>
+<h3 id="1">1. 确定启动命令</h3>
+<p>MCP 服务器是主程序的一个运行模式，通过命令行参数启动：</p>
+<table>
+<thead>
+<tr>
+<th>部署方式</th>
+<th>启动命令</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>打包发布</td>
+<td><code>XiaoACTUI.exe --mcp-server</code></td>
+</tr>
+<tr>
+<td>源码开发</td>
+<td><code>python main.py --mcp-server</code></td>
+</tr>
+</tbody>
+</table>
+<p>验证：</p>
+<div class="highlight"><pre><span></span><code>XiaoACTUI.exe<span class="w"> </span>--mcp-server<span class="w"> </span>--help
+</code></pre></div>
+
+<p>这个模式下工具在一个全新的、无界面的进程里运行，<code>read_file</code> 这类相对路径按<strong>进程的当前工作目录</strong>解析（用 <code>cwd</code> 参数或绝对路径更可靠），LLM 相关工具从 <code>settings.json</code> 读取配置，跟"当前有没有编辑器窗口打开"完全无关。</p>
+<h3 id="2-ide">2. 在 IDE 中配置接入</h3>
+<p>见下方各 IDE 的配置示例（stdio 方式，两种模式通用；Live 模式额外支持 HTTP）。</p>
+<hr />
+<h2 id="ide">IDE 接入配置</h2>
+<h3 id="claude-code">Claude Code</h3>
+<p>在项目根目录创建 <code>mcp.json</code>，或添加到全局 <code>~/.claude.json</code>：</p>
+<div class="highlight"><pre><span></span><code><span class="p">{</span>
+<span class="w">  </span><span class="nt">&quot;mcpServers&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="nt">&quot;sao-ai-editor&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+<span class="w">      </span><span class="nt">&quot;command&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;XiaoACTUI.exe&quot;</span><span class="p">,</span>
+<span class="w">      </span><span class="nt">&quot;args&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">[</span><span class="s2">&quot;--mcp-server&quot;</span><span class="p">]</span>
+<span class="w">    </span><span class="p">}</span>
+<span class="w">  </span><span class="p">}</span>
+<span class="p">}</span>
+</code></pre></div>
+
+<p>源码开发时：</p>
+<div class="highlight"><pre><span></span><code><span class="p">{</span>
+<span class="w">  </span><span class="nt">&quot;mcpServers&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="nt">&quot;sao-ai-editor&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+<span class="w">      </span><span class="nt">&quot;command&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;python&quot;</span><span class="p">,</span>
+<span class="w">      </span><span class="nt">&quot;args&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">[</span><span class="s2">&quot;main.py&quot;</span><span class="p">,</span><span class="w"> </span><span class="s2">&quot;--mcp-server&quot;</span><span class="p">],</span>
+<span class="w">      </span><span class="nt">&quot;cwd&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;&lt;sao_auto/python 目录&gt;&quot;</span>
+<span class="w">    </span><span class="p">}</span>
+<span class="w">  </span><span class="p">}</span>
+<span class="p">}</span>
+</code></pre></div>
+
+<p>也可以用 CLI 直接添加：</p>
+<div class="highlight"><pre><span></span><code>claude<span class="w"> </span>mcp<span class="w"> </span>add<span class="w"> </span>sao-ai-editor<span class="w"> </span>--<span class="w"> </span>XiaoACTUI.exe<span class="w"> </span>--mcp-server
+</code></pre></div>
+
+<h3 id="vs-code-copilot-continue-cline">VS Code (Copilot / Continue / Cline)</h3>
+<p>在项目中创建 <code>.vscode/mcp.json</code>：</p>
+<div class="highlight"><pre><span></span><code><span class="p">{</span>
+<span class="w">  </span><span class="nt">&quot;servers&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="nt">&quot;sao-ai-editor&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+<span class="w">      </span><span class="nt">&quot;type&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;stdio&quot;</span><span class="p">,</span>
+<span class="w">      </span><span class="nt">&quot;command&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;XiaoACTUI.exe&quot;</span><span class="p">,</span>
+<span class="w">      </span><span class="nt">&quot;args&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">[</span><span class="s2">&quot;--mcp-server&quot;</span><span class="p">]</span>
+<span class="w">    </span><span class="p">}</span>
+<span class="w">  </span><span class="p">}</span>
+<span class="p">}</span>
+</code></pre></div>
+
+<h3 id="cursor">Cursor</h3>
+<p>在 Cursor Settings → MCP 中添加：</p>
+<div class="highlight"><pre><span></span><code><span class="p">{</span>
+<span class="w">  </span><span class="nt">&quot;mcpServers&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="nt">&quot;sao-ai-editor&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+<span class="w">      </span><span class="nt">&quot;command&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;XiaoACTUI.exe&quot;</span><span class="p">,</span>
+<span class="w">      </span><span class="nt">&quot;args&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">[</span><span class="s2">&quot;--mcp-server&quot;</span><span class="p">]</span>
+<span class="w">    </span><span class="p">}</span>
+<span class="w">  </span><span class="p">}</span>
+<span class="p">}</span>
+</code></pre></div>
+
+<h3 id="windsurf-mcp">Windsurf / 其他支持 MCP 的工具</h3>
+<p>同上格式，在工具各自的 MCP 配置位置添加即可。</p>
+<h3 id="http">HTTP 模式（远程/共享）</h3>
+<p>如果需要多个 IDE 同时连接同一个服务器实例：</p>
+<div class="highlight"><pre><span></span><code>XiaoACTUI.exe<span class="w"> </span>--mcp-server<span class="w"> </span>--mcp-port<span class="w"> </span><span class="m">9820</span>
+</code></pre></div>
+
+<p>客户端用 HTTP POST 连接 <code>http://127.0.0.1:9820</code>。</p>
+<hr />
+<h2 id="tools">暴露的工具 (Tools)</h2>
+<p>MCP 服务器暴露以下 18 个工具，覆盖 AI Editor 的全部核心能力：</p>
+<h3 id="_1">文件操作</h3>
+<table>
+<thead>
+<tr>
+<th>工具</th>
+<th>说明</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>read_file</code></td>
+<td>读取文件内容，支持行范围 <code>start_line</code>/<code>end_line</code></td>
+</tr>
+<tr>
+<td><code>edit_file</code></td>
+<td>创建/编辑文件，支持全量写入或行范围替换</td>
+</tr>
+<tr>
+<td><code>list_files</code></td>
+<td>列出目录内容，支持 glob 过滤和递归</td>
+</tr>
+<tr>
+<td><code>search_files</code></td>
+<td>全文搜索/正则搜索，返回匹配行</td>
+</tr>
+</tbody>
+</table>
+<h3 id="_2">终端</h3>
+<table>
+<thead>
+<tr>
+<th>工具</th>
+<th>说明</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>run_terminal</code></td>
+<td>执行 shell 命令，返回 stdout/stderr</td>
+</tr>
+</tbody>
+</table>
+<h3 id="llm">LLM 对话</h3>
+<table>
+<thead>
+<tr>
+<th>工具</th>
+<th>说明</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>chat</code></td>
+<td>发送消息到 AI Editor 配置的 LLM，获取回复。支持覆盖 model/temperature/max_tokens/system_prompt</td>
+</tr>
+<tr>
+<td><code>chat_with_agent</code></td>
+<td>使用指定 Agent 身份发送消息（如 code-reviewer、debugger 等）</td>
+</tr>
+<tr>
+<td><code>run_workflow</code></td>
+<td>执行多步骤 AI 工作流（如 review-and-fix、debug-trace 等）</td>
+</tr>
+</tbody>
+</table>
+<h3 id="_3">注册表查询</h3>
+<table>
+<thead>
+<tr>
+<th>工具</th>
+<th>说明</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>list_agents</code></td>
+<td>列出所有可用 Agent（内置 + 自定义）</td>
+</tr>
+<tr>
+<td><code>list_workflows</code></td>
+<td>列出所有可用工作流</td>
+</tr>
+</tbody>
+</table>
+<h3 id="_4">平台引擎</h3>
+<table>
+<thead>
+<tr>
+<th>工具</th>
+<th>说明</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>engine</code></td>
+<td>ACT 平台引擎操作：system_info, plugins, settings_get/set, memory_status, list_processes, select_process, eval, exec</td>
+</tr>
+<tr>
+<td><code>sdk_dumper</code></td>
+<td>游戏引擎 SDK 导出：从运行进程内存中提取 IL2CPP/Mono/Unreal/Source 的类/字段/方法</td>
+</tr>
+</tbody>
+</table>
+<h3 id="_5">网络</h3>
+<table>
+<thead>
+<tr>
+<th>工具</th>
+<th>说明</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>web_fetch</code></td>
+<td>HTTP 请求，支持 GET/POST + 自定义 headers</td>
+</tr>
+</tbody>
+</table>
+<h3 id="_6">配置</h3>
+<table>
+<thead>
+<tr>
+<th>工具</th>
+<th>说明</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>get_config</code></td>
+<td>读取 AI Editor 配置（provider/mcp/terminal/agents/workflows）</td>
+</tr>
+<tr>
+<td><code>set_config</code></td>
+<td>修改 AI Editor 配置项</td>
+</tr>
+</tbody>
+</table>
+<h3 id="_7">指令系统</h3>
+<table>
+<thead>
+<tr>
+<th>工具</th>
+<th>说明</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>get_instructions</code></td>
+<td>获取自定义指令（system + workspace + plugin 三级）</td>
+</tr>
+<tr>
+<td><code>save_instructions</code></td>
+<td>保存自定义指令文件</td>
+</tr>
+</tbody>
+</table>
+<h3 id="mcp">MCP 元数据</h3>
+<table>
+<thead>
+<tr>
+<th>工具</th>
+<th>说明</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>list_mcp_servers</code></td>
+<td>列出 AI Editor 自身连接的 MCP 子服务器</td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h2 id="prompts-ai">Prompts — 教 AI 怎么用这些工具</h2>
+<p>除了工具列表，服务器还通过 MCP 协议本身暴露了一个 prompt（<code>prompts/list</code> + <code>prompts/get</code>），支持的客户端会自动发现：</p>
+<table>
+<thead>
+<tr>
+<th>Prompt</th>
+<th>内容</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>how_to_use_sao_ai_editor</code></td>
+<td>每组工具该在什么场景下用——文件类工具默认优先；<code>chat_with_agent</code>/<code>run_workflow</code> 只在用户明确要"用编辑器自己配置的 agent/workflow"时才调用（而不是自己读完文件直接分析）；<code>engine</code>/<code>sdk_dumper</code> 是 SAO ACT 平台专用（进程内存/游戏引擎逆向），不是通用工具；改配置前先确认用户真的要求了</td>
+</tr>
+</tbody>
+</table>
+<p>支持 <code>prompts/get</code> 的客户端（比如 Claude Code）连接后会自动看到这个 prompt；不支持的客户端可以手动发 <code>prompts/get {"name": "how_to_use_sao_ai_editor"}</code> 拿到完整文本。</p>
+<hr />
+<h2 id="_8">使用示例</h2>
+<h3 id="claude-code_1">在 Claude Code 中使用</h3>
+<p>配置完成后，Claude Code 会自动发现 MCP 工具。你可以直接在对话中使用：</p>
+<div class="highlight"><pre><span></span><code>&gt; 用 code-reviewer agent 审查 ai_editor/mcp_server.py
+
+Claude 会自动调用 chat_with_agent 工具：
+  agent_id: &quot;code-reviewer&quot;
+  message: &quot;审查以下代码... [文件内容]&quot;
+</code></pre></div>
+
+<div class="highlight"><pre><span></span><code>&gt; 查看 AI Editor 当前配置的 LLM 提供商
+
+Claude 会调用 get_config 工具：
+  section: &quot;provider&quot;
+</code></pre></div>
+
+<div class="highlight"><pre><span></span><code>&gt; 列出所有可用的 AI 工作流
+
+Claude 会调用 list_workflows 工具
+</code></pre></div>
+
+<div class="highlight"><pre><span></span><code>&gt; 用 debug-trace 工作流分析这个错误
+[粘贴错误信息]
+
+Claude 会调用 run_workflow 工具：
+  workflow_id: &quot;debug-trace&quot;
+  input: &quot;[错误信息]&quot;
+</code></pre></div>
+
+<h3 id="_9">平台引擎操作</h3>
+<div class="highlight"><pre><span></span><code>&gt; 查看 SAO ACT 的系统状态
+
+engine：action=&quot;system_info&quot;
+→ 返回版本、运行时间、数据源模式
+</code></pre></div>
+
+<div class="highlight"><pre><span></span><code>&gt; 列出当前运行的游戏进程
+
+engine：action=&quot;list_processes&quot;
+</code></pre></div>
+
+<div class="highlight"><pre><span></span><code>&gt; 从 PID 12345 导出 IL2CPP SDK
+
+sdk_dumper：action=&quot;dump&quot;, pid=12345
+</code></pre></div>
+
+<hr />
+<h2 id="_10">架构</h2>
+<div class="highlight"><pre><span></span><code>┌─────────────────────────────────────────────┐
+│              IDE (Claude Code)              │
+│                                             │
+│  AI 发现 MCP 工具 → 按需调用               │
+└────────────────┬────────────────────────────┘
+                 │ stdio (JSON-RPC 2.0)
+                 │ 或 HTTP (--mcp-port)
+┌────────────────▼────────────────────────────┐
+│    XiaoACTUI.exe --mcp-server               │
+│                                             │
+│  McpServer (stdio)  或  McpHttpServer (HTTP)│
+│         │                                   │
+│         ▼                                   │
+│  McpRuntime (headless)                      │
+│  ├── LLMEngine (多 provider 支持)           │
+│  ├── ToolRegistry (文件/终端/引擎工具)      │
+│  ├── AgentRegistry (5 内置 + 自定义)        │
+│  ├── WorkflowRegistry (3 内置 + 自定义)     │
+│  ├── McpManager (子 MCP 服务器)             │
+│  └── Settings (配置读写)                    │
+└─────────────────────────────────────────────┘
+</code></pre></div>
+
+<h3 id="_11">两种运行模式</h3>
+<p><strong>Stdio 模式</strong>（默认）：IDE 启动 MCP 服务器作为子进程，通过 stdin/stdout 通信。每个 IDE 连接一个独立实例。</p>
+<div class="highlight"><pre><span></span><code>XiaoACTUI.exe<span class="w"> </span>--mcp-server
+</code></pre></div>
+
+<p><strong>HTTP 模式</strong>：作为长驻 HTTP 服务器运行，多个客户端可以同时连接。</p>
+<div class="highlight"><pre><span></span><code>XiaoACTUI.exe<span class="w"> </span>--mcp-server<span class="w"> </span>--mcp-port<span class="w"> </span><span class="m">9820</span>
+</code></pre></div>
+
+<h3 id="gui">无 GUI 依赖</h3>
+<p>MCP 服务器以 headless 模式运行，不启动主界面。它直接初始化：
+- LLM 引擎（从 settings.json 读取 provider/api_key/model 配置）
+- 工具注册表
+- Agent 和 Workflow 注册表
+- MCP 客户端管理器（如果配置了子 MCP 服务器）</p>
+<hr />
+<h2 id="_12">配置前置条件</h2>
+<h3 id="llm_1">LLM 功能</h3>
+<p>要使用 <code>chat</code>、<code>chat_with_agent</code>、<code>run_workflow</code> 等 LLM 相关工具，需要在 AI Editor 设置中配置好 LLM 提供商：</p>
+<ol>
+<li>打开 SAO ACT 主界面 → 工具 → AI Editor</li>
+<li>点击 ⚙ 设置 → 配置 provider / api_key / model</li>
+<li>保存后 MCP 服务器会自动读取这些配置</li>
+</ol>
+<p>或者直接编辑 <code>settings.json</code>：</p>
+<div class="highlight"><pre><span></span><code><span class="p">{</span>
+<span class="w">  </span><span class="nt">&quot;ai_editor&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="nt">&quot;provider&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;openai&quot;</span><span class="p">,</span>
+<span class="w">    </span><span class="nt">&quot;api_key&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;sk-...&quot;</span><span class="p">,</span>
+<span class="w">    </span><span class="nt">&quot;model&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;gpt-4o&quot;</span><span class="p">,</span>
+<span class="w">    </span><span class="nt">&quot;temperature&quot;</span><span class="p">:</span><span class="w"> </span><span class="mf">0.7</span><span class="p">,</span>
+<span class="w">    </span><span class="nt">&quot;max_tokens&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">4096</span>
+<span class="w">  </span><span class="p">}</span>
+<span class="p">}</span>
+</code></pre></div>
+
+<h3 id="_13">文件/终端功能</h3>
+<p>这些工具开箱即用，不需要额外配置。</p>
+<h3 id="sdk-dumper">SDK Dumper</h3>
+<p>需要 <code>ai_editor.sdk_dumper</code> 模块可用（随 SAO ACT 分发）。目标游戏进程必须正在运行。</p>
+<hr />
+<h2 id="_14">协议细节</h2>
+<ul>
+<li>协议版本：<code>2024-11-05</code></li>
+<li>传输：stdio (JSON-RPC 2.0 + Content-Length 头) 或 HTTP POST</li>
+<li>服务器名：<code>sao-ai-editor</code></li>
+<li>支持的 MCP 方法：</li>
+<li><code>initialize</code> / <code>notifications/initialized</code></li>
+<li><code>tools/list</code> / <code>tools/call</code></li>
+<li><code>resources/list</code>（返回空）</li>
+<li><code>prompts/list</code> / <code>prompts/get</code>（见上方"Prompts"一节）</li>
+<li><code>ping</code></li>
+</ul>
+<hr />
+<h2 id="_15">故障排查</h2>
+<h3 id="mcp_1">MCP 服务器无法启动</h3>
+<div class="highlight"><pre><span></span><code><span class="c1"># 打包版</span>
+XiaoACTUI.exe<span class="w"> </span>--mcp-server
+
+<span class="c1"># 源码版</span>
+python<span class="w"> </span>main.py<span class="w"> </span>--mcp-server
+</code></pre></div>
+
+<p>如果报 import 错误，确认运行目录包含 <code>ai_editor/</code> 包。</p>
+<h3 id="llm-not-configured">LLM 工具返回 "not configured"</h3>
+<p>确保 <code>settings.json</code> 中有有效的 <code>ai_editor.provider</code> 和 <code>ai_editor.api_key</code>。</p>
+<h3 id="_16">日志查看</h3>
+<p>MCP 服务器的日志输出到 stderr。在 Claude Code 中可以通过 <code>claude mcp logs sao-ai-editor</code> 查看。</p>
+<h3 id="nuitka">Nuitka 打包注意</h3>
+<p>打包后主程序会将 stdout/stderr 重定向到 <code>_nuitka.log</code>。MCP stdio 模式依赖 stdout 通信，需要确保 <code>--mcp-server</code> 模式跳过日志重定向（见下方说明）。</p>
+<hr />
+<h2 id="_17">自定义扩展</h2>
+<h3 id="agent">添加自定义 Agent</h3>
+<p>在 <code>.sao/agents/</code> 目录下创建 JSON 文件：</p>
+<div class="highlight"><pre><span></span><code><span class="p">{</span>
+<span class="w">  </span><span class="nt">&quot;id&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;my-analyst&quot;</span><span class="p">,</span>
+<span class="w">  </span><span class="nt">&quot;name&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;My Analyst&quot;</span><span class="p">,</span>
+<span class="w">  </span><span class="nt">&quot;description&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;Analyzes game data patterns&quot;</span><span class="p">,</span>
+<span class="w">  </span><span class="nt">&quot;system_prompt&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;You are a game data analyst...&quot;</span><span class="p">,</span>
+<span class="w">  </span><span class="nt">&quot;icon&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;📊&quot;</span><span class="p">,</span>
+<span class="w">  </span><span class="nt">&quot;when_to_use&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;When analyzing game mechanics or data patterns&quot;</span>
+<span class="p">}</span>
+</code></pre></div>
+
+<p>MCP 工具 <code>list_agents</code> 会自动发现，<code>chat_with_agent</code> 可以直接使用。</p>
+<h3 id="workflow">添加自定义 Workflow</h3>
+<p>在 <code>.sao/workflows/</code> 目录下创建 JSON 文件：</p>
+<div class="highlight"><pre><span></span><code><span class="p">{</span>
+<span class="w">  </span><span class="nt">&quot;id&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;full-review&quot;</span><span class="p">,</span>
+<span class="w">  </span><span class="nt">&quot;name&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;Full Code Review&quot;</span><span class="p">,</span>
+<span class="w">  </span><span class="nt">&quot;description&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;Review + Security Audit + Performance Check&quot;</span><span class="p">,</span>
+<span class="w">  </span><span class="nt">&quot;steps&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">[</span>
+<span class="w">    </span><span class="p">{</span><span class="nt">&quot;agent&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;code-reviewer&quot;</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;prompt&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;Review:\n\n{{input}}&quot;</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;output_var&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;review&quot;</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;label&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;Code Review&quot;</span><span class="p">},</span>
+<span class="w">    </span><span class="p">{</span><span class="nt">&quot;agent&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;optimizer&quot;</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;prompt&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;Based on review:\n{{review}}\nCheck performance.&quot;</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;output_var&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;perf&quot;</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;label&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;Perf Check&quot;</span><span class="p">}</span>
+<span class="w">  </span><span class="p">]</span>
+<span class="p">}</span>
+</code></pre></div>
+
+<h3 id="mcp_2">嵌套 MCP</h3>
+<p>AI Editor 自身也是 MCP 客户端。配置子 MCP 服务器后，<code>list_mcp_servers</code> 工具会显示连接的服务器，IDE AI 可以通过 AI Editor 的 LLM 间接使用这些子工具。</p>
+    </article>
+  </main>
+  <aside class="toc-rail">
+    <div class="toc-title">本页目录</div>
+    <div class="toc">
+<ul>
+<li><a href="#live">快速开始 — Live 模式（在已打开的编辑器里开启）</a></li>
+<li><a href="#standalone-headless">快速开始 — Standalone headless 模式</a><ul>
+<li><a href="#1">1. 确定启动命令</a></li>
+<li><a href="#2-ide">2. 在 IDE 中配置接入</a></li>
+</ul>
+</li>
+<li><a href="#ide">IDE 接入配置</a><ul>
+<li><a href="#claude-code">Claude Code</a></li>
+<li><a href="#vs-code-copilot-continue-cline">VS Code (Copilot / Continue / Cline)</a></li>
+<li><a href="#cursor">Cursor</a></li>
+<li><a href="#windsurf-mcp">Windsurf / 其他支持 MCP 的工具</a></li>
+<li><a href="#http">HTTP 模式（远程/共享）</a></li>
+</ul>
+</li>
+<li><a href="#tools">暴露的工具 (Tools)</a><ul>
+<li><a href="#_1">文件操作</a></li>
+<li><a href="#_2">终端</a></li>
+<li><a href="#llm">LLM 对话</a></li>
+<li><a href="#_3">注册表查询</a></li>
+<li><a href="#_4">平台引擎</a></li>
+<li><a href="#_5">网络</a></li>
+<li><a href="#_6">配置</a></li>
+<li><a href="#_7">指令系统</a></li>
+<li><a href="#mcp">MCP 元数据</a></li>
+</ul>
+</li>
+<li><a href="#prompts-ai">Prompts — 教 AI 怎么用这些工具</a></li>
+<li><a href="#_8">使用示例</a><ul>
+<li><a href="#claude-code_1">在 Claude Code 中使用</a></li>
+<li><a href="#_9">平台引擎操作</a></li>
+</ul>
+</li>
+<li><a href="#_10">架构</a><ul>
+<li><a href="#_11">两种运行模式</a></li>
+<li><a href="#gui">无 GUI 依赖</a></li>
+</ul>
+</li>
+<li><a href="#_12">配置前置条件</a><ul>
+<li><a href="#llm_1">LLM 功能</a></li>
+<li><a href="#_13">文件/终端功能</a></li>
+<li><a href="#sdk-dumper">SDK Dumper</a></li>
+</ul>
+</li>
+<li><a href="#_14">协议细节</a></li>
+<li><a href="#_15">故障排查</a><ul>
+<li><a href="#mcp_1">MCP 服务器无法启动</a></li>
+<li><a href="#llm-not-configured">LLM 工具返回 "not configured"</a></li>
+<li><a href="#_16">日志查看</a></li>
+<li><a href="#nuitka">Nuitka 打包注意</a></li>
+</ul>
+</li>
+<li><a href="#_17">自定义扩展</a><ul>
+<li><a href="#agent">添加自定义 Agent</a></li>
+<li><a href="#workflow">添加自定义 Workflow</a></li>
+<li><a href="#mcp_2">嵌套 MCP</a></li>
+</ul>
+</li>
+</ul>
+</div>
+
+  </aside>
+</div>
+<footer class="site-footer">SAO ACT UI &middot; 平台与插件开发者文档</footer>
+</body>
+</html>

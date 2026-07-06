@@ -1,0 +1,794 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>AI Editor 使用指南 · SAO ACT UI 文档</title>
+<link rel="stylesheet" href="assets/style.css">
+<link rel="stylesheet" href="assets/pygments.css">
+</head>
+<body>
+<header class="site-header">
+  <a class="brand" href="index.html"><span class="brand-mark">SAO</span> ACT UI 文档</a>
+  <nav class="top-nav">
+    <a href="index.html">全部文档</a>
+  </nav>
+</header>
+<div class="layout">
+  <aside class="sidebar">
+    <div class="sidebar-title">开发者文档</div>
+    <ul class="sidebar-nav">
+      <li><a href="ACT_PLATFORM.html">平台总览</a></li>
+      <li><a href="PLUGIN_SDK.html">插件开发指南</a></li>
+      <li><a href="ACT_UI_PARITY_SDK.html">声明式 UI 面板</a></li>
+      <li><a href="MULTI_LANGUAGE_SCRIPTING.html">多语言脚本运行时</a></li>
+      <li><a href="GAME_STATE_API.html">游戏状态 API 参考</a></li>
+      <li><a href="HYBRID_MEMORY_TCP.html">游戏数据源</a></li>
+      <li><a href="AI_EDITOR.html" class="active">AI Editor 使用指南</a></li>
+      <li><a href="AI_EDITOR_MCP.html">AI Editor MCP Server</a></li>
+    </ul>
+  </aside>
+  <main class="content">
+    <article class="markdown-body">
+      <h1 id="ai-editor">AI Editor 使用指南</h1>
+<p>SAO ACT UI 内置的 AI 编辑器是一个独立窗口，提供多模型 LLM 对话、代码编辑、自定义 Agent 与 Workflow、插件扩展，以及 dark/light 双主题。</p>
+<hr />
+<h2 id="_1">打开方式</h2>
+<ul>
+<li><strong>菜单</strong>：工具 → AI Editor (LLM)</li>
+<li><strong>命令行</strong>：<code>python -m ai_editor.app</code>（独立启动，不需要主界面运行）</li>
+</ul>
+<h2 id="_2">窗口布局</h2>
+<div class="highlight"><pre><span></span><code>┌─────────┬──────────┬─────────────────┬──┬──────────────────┐
+│ 活动栏  │ 左侧边栏 │ 编辑器区域      │⟷│ 右侧边栏         │
+│         │          │ 标签页栏        │  │ ASST│CC│CODEX│.. │
+│ 助手    │ 模型选择 │ 代码编辑器      │  │ ┌──────────────┐ │
+│ 工具    │ 操作列表 │                 │  │ │ 对话消息     │ │
+│ 插件    │ Agent 列 │ ─────────       │  │ │              │ │
+│ 历史    │          │ 终端 / 输出     │  │ ├──────────────┤ │
+│         │          │                 │  │ │ 输入框+工具  │ │
+│ 主题 ⚙ │          │                 │  │ └──────────────┘ │
+├─────────┴──────────┴─────────────────┴──┴──────────────────┤
+│ 状态: Ready │ Ln 1 │ UTF-8 │ 编辑模式 │ gpt-4o │ 0 tokens │
+└────────────────────────────────────────────────────────────┘
+</code></pre></div>
+
+<p><strong>关键区域说明：</strong></p>
+<ul>
+<li><strong>左侧活动栏</strong>：图标按钮，切换左侧边栏的面板（聊天、工具、插件、历史），底部是主题切换和设置入口。</li>
+<li><strong>左侧边栏</strong>：显示当前模型选择、可用操作、Agent 列表。</li>
+<li><strong>编辑器</strong>：中央大区域，上方标签页栏，下方可折叠终端/输出面板。</li>
+<li><strong>右侧边栏</strong>：对话面板。顶部是 Provider 标签页（Assistant、Claude Code、Codex 等），按已配置的 API Key 动态出现。宽度可拖拽（260-600px）。</li>
+<li><strong>状态栏</strong>：底部一行，显示当前模式、模型、token 用量。点击模式区域可循环切换。</li>
+</ul>
+<hr />
+<h2 id="_3">编辑器核心功能</h2>
+<h3 id="_4">资源管理器</h3>
+<p>左侧边栏的文件树。右键菜单支持新建文件/新建文件夹/重命名/删除（真实文件系统操作，删除需二次确认，不进回收站）。文件被重命名/删除时，已打开的标签页会同步更新路径或标记为未保存。</p>
+<h3 id="_5">全文搜索</h3>
+<p><code>Ctrl+Shift+F</code> 或命令面板 "Search: Find in Files"。按文件分组显示匹配结果，支持正则/大小写/全字匹配，点击结果精确跳到匹配位置。</p>
+<h3 id="_6">快速打开文件</h3>
+<p><code>Ctrl+P</code>，模糊匹配工作区内文件名，回车打开。</p>
+<h3 id="scm">源代码管理（SCM）</h3>
+<p>改动条（gutter 上的颜色条）对比的是真实 git HEAD，保存文件后改动条会重新计算，不会因为保存就清零。</p>
+<h3 id="_7">终端</h3>
+<p>集成终端是真实 PTY（Windows 下走 ConPTY），支持交互式程序（如 <code>python</code>/<code>node</code> REPL、<code>vim</code> 等），不只是单次命令执行。</p>
+<h3 id="_8">调试</h3>
+<p>Run and Debug 侧边栏 + 真实调试控制台。在编辑器 gutter 点击可设置断点。调试配置来自 <code>launch.json</code> 风格的配置或已安装扩展贡献的 debugger。</p>
+<h3 id="task-runner">任务运行器（Task Runner）</h3>
+<p>命令面板 "Tasks: Run Task..."，运行已安装扩展贡献的 task（<code>contributes.tasks</code>），有独立面板展示运行状态和输出。</p>
+<h3 id="_9">通知中心</h3>
+<p>状态栏铃铛图标，点击查看历史通知（error/warning/info 分色），显示未读数量角标。</p>
+<h3 id="_10">终端/输出面板超链接</h3>
+<p>终端和输出面板里的 URL 和"文件路径:行号"格式文本会自动变成可点击链接——URL 用系统浏览器打开，文件路径在编辑器里打开并跳到对应行。</p>
+<h3 id="extensions">扩展 (Extensions)</h3>
+<p>左侧边栏"插件"面板，兼容真实 VS Code Marketplace 扩展格式（<code>package.json</code> + <code>contributes</code>）：</p>
+<ul>
+<li><strong>安装来源</strong>：Marketplace 搜索安装、或"Install from Folder..."（📁 图标）从本地文件夹安装——两种方式都会把扩展<strong>持久化拷贝</strong>进这个平台自己的扩展目录，重启编辑器后扩展仍然在，不需要重新安装。</li>
+<li><strong>JS/TypeScript 扩展真激活</strong>：带 <code>main</code> 字段的扩展会在真实 Node.js 子进程里运行，真调用 <code>activate()</code>，注册的命令/菜单/侧边栏图标/Webview 面板都是真实可用的，不是清单展示。命令面板 "Extensions: Verify Installed Extension Activation" 可以对已安装的扩展跑一次真激活检查，逐个报告成功/失败；对"需要真实 Microsoft Visual Studio Code 环境"这类无法绕过的许可证限制（如 C# Dev Kit），会显示诚实的"需要该环境"提示而不是原始报错堆栈。</li>
+<li><strong>需要 Node.js</strong>：如果安装的扩展需要 Node.js 但本机没装，会弹窗询问是否下载内置运行时（约 70MB），确认后才下载，不会静默进行。</li>
+<li><strong>侧边栏 Webview 面板</strong>：扩展贡献的 Webview 类型侧边栏视图，点击图标时会真实请求扩展渲染内容并显示。</li>
+</ul>
+<hr />
+<h2 id="_11">设置配置</h2>
+<p>点击活动栏底部的 ⚙ 齿轮图标打开设置面板。</p>
+<h3 id="endpoint">Endpoint（端点配置）</h3>
+<table>
+<thead>
+<tr>
+<th>设置项</th>
+<th>说明</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>provider</code></td>
+<td>提供商：openai / anthropic / deepseek / ollama / custom</td>
+</tr>
+<tr>
+<td><code>api_key</code></td>
+<td>当前提供商的 API Key</td>
+</tr>
+<tr>
+<td><code>base_url</code></td>
+<td>自定义端点地址（留空使用官方默认地址）</td>
+</tr>
+<tr>
+<td><code>model</code></td>
+<td>模型名称</td>
+</tr>
+</tbody>
+</table>
+<h3 id="provider-keys">Provider Keys（多提供商密钥）</h3>
+<p>分别填入 OpenAI、Anthropic、DeepSeek 的 API Key。右侧边栏的 Claude Code 和 Codex 标签页根据对应 Key 是否已配置自动出现或隐藏。</p>
+<h3 id="advanced-sampling-connection">Advanced Sampling &amp; Connection（高级参数，折叠区）</h3>
+<table>
+<thead>
+<tr>
+<th>设置项</th>
+<th>类型</th>
+<th>默认</th>
+<th>说明</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>temperature</code></td>
+<td>float</td>
+<td>0.7</td>
+<td>采样温度，越高越随机</td>
+</tr>
+<tr>
+<td><code>top_p</code></td>
+<td>float</td>
+<td>1.0</td>
+<td>核采样</td>
+</tr>
+<tr>
+<td><code>frequency_penalty</code></td>
+<td>float</td>
+<td>0.0</td>
+<td>频率惩罚</td>
+</tr>
+<tr>
+<td><code>presence_penalty</code></td>
+<td>float</td>
+<td>0.0</td>
+<td>存在惩罚</td>
+</tr>
+<tr>
+<td><code>max_tokens</code></td>
+<td>int</td>
+<td>4096</td>
+<td>单次回复最大输出 token</td>
+</tr>
+<tr>
+<td><code>stop</code></td>
+<td>list</td>
+<td>[]</td>
+<td>停止序列</td>
+</tr>
+<tr>
+<td><code>max_input_tokens</code></td>
+<td>int</td>
+<td>0</td>
+<td>覆盖模型默认输入窗口（0 = 使用内置表）</td>
+</tr>
+<tr>
+<td><code>max_output_tokens</code></td>
+<td>int</td>
+<td>0</td>
+<td>覆盖模型默认输出窗口</td>
+</tr>
+<tr>
+<td><code>timeout</code></td>
+<td>int</td>
+<td>180</td>
+<td>HTTP 超时（秒）</td>
+</tr>
+<tr>
+<td><code>extra_headers</code></td>
+<td>dict</td>
+<td>{}</td>
+<td>自定义 HTTP 请求头</td>
+</tr>
+<tr>
+<td><code>extra_body</code></td>
+<td>dict</td>
+<td>{}</td>
+<td>额外请求体参数</td>
+</tr>
+</tbody>
+</table>
+<h3 id="custom-models">Custom Models（自定义模型）</h3>
+<p>在 Settings → Custom Models 区域可以添加或覆盖任何模型的 context window 大小。编辑器内置了常见模型的窗口大小表，但如果你使用私有部署或新模型，可以在此手动设定。自定义模型保存在 <code>settings.json → ai_editor.custom_models</code>。</p>
+<hr />
+<h2 id="_12">三种工作模式</h2>
+<p>状态栏显示当前模式，点击聊天输入框左侧的模式按钮可选择：</p>
+<table>
+<thead>
+<tr>
+<th>模式</th>
+<th>说明</th>
+<th>LLM 可用工具范围</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Agent</strong></td>
+<td>全自主</td>
+<td>所有工具自动可用，无需确认</td>
+</tr>
+<tr>
+<td><strong>Ask</strong></td>
+<td>只读问答</td>
+<td>可以读文件和查询，不能写文件或执行命令</td>
+</tr>
+<tr>
+<td><strong>Plan</strong></td>
+<td>规划模式</td>
+<td>可以读文件，写文件和终端操作需要确认。LLM 输出实现方案而非直接执行，底部出现「Implement」按钮，点击自动切换到 Agent 模式执行方案</td>
+</tr>
+</tbody>
+</table>
+<p>每个工具还可以单独设置权限覆盖（allowed / confirm / disabled）。</p>
+<h3 id="_13">审批级别</h3>
+<p>在模式选择弹出菜单中，还可以设置审批级别：</p>
+<table>
+<thead>
+<tr>
+<th>级别</th>
+<th>图标</th>
+<th>说明</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Default Approvals</strong></td>
+<td>◎</td>
+<td>按模式的默认权限表执行，写操作需要逐一确认</td>
+</tr>
+<tr>
+<td><strong>Bypass Approvals</strong></td>
+<td>⚡</td>
+<td>自动批准所有工具调用，跳过确认弹窗</td>
+</tr>
+<tr>
+<td><strong>Autopilot</strong></td>
+<td>✦</td>
+<td>完全自主循环，自动批准且不等待用户交互</td>
+</tr>
+</tbody>
+</table>
+<p>审批级别与模式独立——例如在 Plan 模式 + Bypass 级别下，写操作的确认会被自动跳过。</p>
+<hr />
+<h2 id="scope">三层 Scope 体系</h2>
+<p>配置、Agent、Workflow、指令文件分三层存放，后者按 ID 覆盖前者：</p>
+<table>
+<thead>
+<tr>
+<th>Scope</th>
+<th>路径</th>
+<th>作用范围</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>System</strong></td>
+<td><code>~/.sao/</code></td>
+<td>全局，跨所有项目生效</td>
+</tr>
+<tr>
+<td><strong>Workspace</strong></td>
+<td><code>&lt;项目根&gt;/.sao/</code></td>
+<td>当前项目</td>
+</tr>
+<tr>
+<td><strong>Plugin</strong></td>
+<td><code>plugins/&lt;插件ID&gt;/.sao/</code></td>
+<td>单个插件的独立工作区</td>
+</tr>
+</tbody>
+</table>
+<p>每个 scope 目录下可以放：</p>
+<div class="highlight"><pre><span></span><code>.sao/
+├── instructions.md           # 自定义指令（追加到 system prompt）
+├── instructions/             # 多文件指令（按文件名排序合并）
+│   ├── 01-style.md
+│   └── 02-rules.md
+├── agents/                   # 自定义 Agent 定义
+│   └── my-agent.json
+├── workflows/                # 自定义 Workflow 定义
+│   └── my-pipeline.json
+└── chat_history/             # 对话历史（自动管理）
+</code></pre></div>
+
+<hr />
+<h2 id="_14">自定义指令</h2>
+<p>自定义指令会追加到每次 LLM 调用的 system prompt 中。三种来源：</p>
+<ol>
+<li><strong>Settings UI</strong> — 在设置面板的 System Prompt 文本框中填写，全局持久保存。</li>
+<li><strong>项目级</strong> — 在 <code>.sao/instructions.md</code> 中编写。</li>
+<li><strong>多文件</strong> — 在 <code>.sao/instructions/</code> 目录下放多个 <code>.md</code> 文件，按文件名排序合并。</li>
+</ol>
+<p>三层 scope 的指令全部收集叠加。</p>
+<hr />
+<h2 id="agent">自定义 Agent</h2>
+<p>AI Editor 内置了 5 个常用 Agent：</p>
+<table>
+<thead>
+<tr>
+<th>Agent</th>
+<th>用途</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>code-reviewer</td>
+<td>审查代码（bug、安全、性能、风格）</td>
+</tr>
+<tr>
+<td>explainer</td>
+<td>解释代码逻辑和设计模式</td>
+</tr>
+<tr>
+<td>debugger</td>
+<td>系统化诊断和修复问题</td>
+</tr>
+<tr>
+<td>optimizer</td>
+<td>分析性能瓶颈并给出优化建议</td>
+</tr>
+<tr>
+<td>documenter</td>
+<td>生成 API 文档、注释、指南</td>
+</tr>
+</tbody>
+</table>
+<h3 id="_15">使用方式</h3>
+<ul>
+<li><strong>侧边栏</strong>：在左侧边栏的 Agent 列表中点击激活</li>
+<li><strong>@提及</strong>：在聊天输入框中输入 <code>@agent-id 你的问题</code>，例如 <code>@code-reviewer 检查这个函数</code></li>
+<li><strong>LLM 工具调用</strong>：<code>engine(action="invoke_agent", agent_id="code-reviewer", message="...")</code></li>
+</ul>
+<h3 id="agent_1">创建自定义 Agent</h3>
+<p>在任意 scope 的 <code>.sao/agents/</code> 目录下新建 JSON 文件，例如 <code>.sao/agents/my-agent.json</code>：</p>
+<div class="highlight"><pre><span></span><code><span class="p">{</span>
+<span class="w">  </span><span class="nt">&quot;id&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;game-analyst&quot;</span><span class="p">,</span>
+<span class="w">  </span><span class="nt">&quot;name&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;Game Analyst&quot;</span><span class="p">,</span>
+<span class="w">  </span><span class="nt">&quot;description&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;分析游戏数据和战斗日志&quot;</span><span class="p">,</span>
+<span class="w">  </span><span class="nt">&quot;system_prompt&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;你是一个游戏数据分析专家。擅长解读战斗日志、DPS统计、装备属性，给出优化建议。&quot;</span><span class="p">,</span>
+<span class="w">  </span><span class="nt">&quot;icon&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;🎮&quot;</span><span class="p">,</span>
+<span class="w">  </span><span class="nt">&quot;tools&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">[</span><span class="s2">&quot;readFile&quot;</span><span class="p">,</span><span class="w"> </span><span class="s2">&quot;engine&quot;</span><span class="p">],</span>
+<span class="w">  </span><span class="nt">&quot;model&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;gpt-4o&quot;</span><span class="p">,</span>
+<span class="w">  </span><span class="nt">&quot;when_to_use&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;分析游戏数据、战斗日志、装备搭配&quot;</span>
+<span class="p">}</span>
+</code></pre></div>
+
+<p><strong>字段说明：</strong></p>
+<table>
+<thead>
+<tr>
+<th>字段</th>
+<th>必填</th>
+<th>说明</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>id</code></td>
+<td>是</td>
+<td>唯一标识，用于 @提及和 API 调用</td>
+</tr>
+<tr>
+<td><code>name</code></td>
+<td>是</td>
+<td>显示名称</td>
+</tr>
+<tr>
+<td><code>description</code></td>
+<td>否</td>
+<td>简短描述，显示在侧边栏</td>
+</tr>
+<tr>
+<td><code>system_prompt</code></td>
+<td>是</td>
+<td>Agent 的系统提示词</td>
+</tr>
+<tr>
+<td><code>icon</code></td>
+<td>否</td>
+<td>Emoji 图标，默认为通用图标</td>
+</tr>
+<tr>
+<td><code>tools</code></td>
+<td>否</td>
+<td>允许使用的工具列表（空 = 全部）</td>
+</tr>
+<tr>
+<td><code>model</code></td>
+<td>否</td>
+<td>指定模型（空 = 使用当前选择的模型）</td>
+</tr>
+<tr>
+<td><code>when_to_use</code></td>
+<td>否</td>
+<td>描述适用场景，帮助 LLM 自动选择</td>
+</tr>
+</tbody>
+</table>
+<p>Agent 保存到不同 scope 的效果：
+- <code>~/.sao/agents/</code> — 所有项目都能用
+- <code>&lt;项目根&gt;/.sao/agents/</code> — 只在当前项目可用
+- <code>plugins/&lt;id&gt;/.sao/agents/</code> — 只在该插件的工作区可用</p>
+<p>同 ID 的 Agent，Workspace 覆盖 System，Plugin 覆盖 Workspace。</p>
+<hr />
+<h2 id="workflow">自定义 Workflow</h2>
+<p>Workflow 是多步骤的链式 LLM 调用，每一步可以使用不同的 Agent，上一步的输出可以通过变量传递给下一步。</p>
+<p>内置了 3 个 Workflow：</p>
+<table>
+<thead>
+<tr>
+<th>Workflow</th>
+<th>步骤</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>review-and-fix</td>
+<td>Code Reviewer 审查 → 生成修复代码</td>
+</tr>
+<tr>
+<td>explain-and-improve</td>
+<td>Explainer 分析 → Optimizer 改进</td>
+</tr>
+<tr>
+<td>debug-trace</td>
+<td>Debugger 诊断 → 生成修复方案</td>
+</tr>
+</tbody>
+</table>
+<h3 id="_16">使用方式</h3>
+<ul>
+<li><strong>侧边栏</strong>：在 Workflow 列表中点击运行</li>
+<li><strong>LLM 工具调用</strong>：<code>engine(action="run_workflow", workflow_id="review-and-fix", input="...")</code></li>
+</ul>
+<h3 id="workflow_1">创建自定义 Workflow</h3>
+<p>在 <code>.sao/workflows/</code> 目录下新建 JSON 文件，例如 <code>.sao/workflows/my-pipeline.json</code>：</p>
+<div class="highlight"><pre><span></span><code><span class="p">{</span>
+<span class="w">  </span><span class="nt">&quot;id&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;analyze-and-report&quot;</span><span class="p">,</span>
+<span class="w">  </span><span class="nt">&quot;name&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;分析并生成报告&quot;</span><span class="p">,</span>
+<span class="w">  </span><span class="nt">&quot;description&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;先用分析 Agent 审查代码，再汇总成格式化报告&quot;</span><span class="p">,</span>
+<span class="w">  </span><span class="nt">&quot;icon&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;📊&quot;</span><span class="p">,</span>
+<span class="w">  </span><span class="nt">&quot;steps&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">[</span>
+<span class="w">    </span><span class="p">{</span>
+<span class="w">      </span><span class="nt">&quot;agent&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;code-reviewer&quot;</span><span class="p">,</span>
+<span class="w">      </span><span class="nt">&quot;prompt&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;审查以下代码，列出所有问题：\n\n{{input}}&quot;</span><span class="p">,</span>
+<span class="w">      </span><span class="nt">&quot;output_var&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;review_result&quot;</span><span class="p">,</span>
+<span class="w">      </span><span class="nt">&quot;label&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;审查中...&quot;</span>
+<span class="w">    </span><span class="p">},</span>
+<span class="w">    </span><span class="p">{</span>
+<span class="w">      </span><span class="nt">&quot;agent&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;documenter&quot;</span><span class="p">,</span>
+<span class="w">      </span><span class="nt">&quot;prompt&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;根据以下审查结果生成一份格式化报告，包含问题分类和优先级：\n\n{{review_result}}&quot;</span><span class="p">,</span>
+<span class="w">      </span><span class="nt">&quot;output_var&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;report&quot;</span><span class="p">,</span>
+<span class="w">      </span><span class="nt">&quot;label&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;生成报告...&quot;</span>
+<span class="w">    </span><span class="p">}</span>
+<span class="w">  </span><span class="p">]</span>
+<span class="p">}</span>
+</code></pre></div>
+
+<p><strong>步骤字段说明：</strong></p>
+<table>
+<thead>
+<tr>
+<th>字段</th>
+<th>说明</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>agent</code></td>
+<td>使用哪个 Agent 执行这一步（<code>"default"</code> = 不指定 Agent）</td>
+</tr>
+<tr>
+<td><code>prompt</code></td>
+<td>发给 LLM 的提示词，支持 <code>{{变量名}}</code> 插值</td>
+</tr>
+<tr>
+<td><code>output_var</code></td>
+<td>把这一步的输出存到这个变量名，后续步骤可以用 <code>{{变量名}}</code> 引用</td>
+</tr>
+<tr>
+<td><code>label</code></td>
+<td>执行时显示的进度文字</td>
+</tr>
+</tbody>
+</table>
+<p>初始输入通过 <code>{{input}}</code> 变量获取。</p>
+<hr />
+<h2 id="chat-provider">Chat Provider（对话提供商）</h2>
+<p>右侧边栏的标签页由 Provider 驱动：</p>
+<table>
+<thead>
+<tr>
+<th>标签页</th>
+<th>出现条件</th>
+<th>说明</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>ASSISTANT</strong></td>
+<td>始终存在</td>
+<td>通用对话，使用你在 Settings 中配置的模型</td>
+</tr>
+<tr>
+<td><strong>Claude Code</strong></td>
+<td>已配置 Anthropic API Key 或本机有 <code>claude</code> CLI</td>
+<td>自动进入 Agent 模式</td>
+</tr>
+<tr>
+<td><strong>Codex</strong></td>
+<td>已配置 OpenAI API Key</td>
+<td>自动进入 Agent 模式</td>
+</tr>
+<tr>
+<td><strong>插件自定义</strong></td>
+<td>插件 <code>plugin.json</code> 里声明 <code>chatProviders</code>（见下方"插件开发者指南"）</td>
+<td>按插件配置运行</td>
+</tr>
+</tbody>
+</table>
+<p>每个 Provider 标签页有独立的对话会话和 LLM 引擎实例，互不干扰。</p>
+<hr />
+<h2 id="_17">对话历史</h2>
+<p>对话自动保存，分 scope 存放：
+- <strong>Workspace 历史</strong>：<code>&lt;项目根&gt;/.sao/chat_history/</code>
+- <strong>System 历史</strong>：<code>~/.sao/chat_history/</code></p>
+<p>可以在左侧边栏的历史面板中浏览和恢复之前的对话。</p>
+<hr />
+<h2 id="mcp">MCP 集成</h2>
+<p>AI Editor 支持连接 MCP 服务器，扩展 LLM 可用的工具。配置来源按优先级：</p>
+<ol>
+<li>Settings UI 中的 MCP 配置</li>
+<li>项目根目录 <code>mcp.json</code></li>
+<li><code>~/.sao/mcp.json</code></li>
+<li>插件 manifest 中声明的 MCP 服务器</li>
+</ol>
+<p>支持 stdio、HTTP+SSE、内部 Python 三种传输方式。</p>
+<h3 id="ai-editor-mcp">把 AI Editor 自己暴露成 MCP 服务器</h3>
+<p>反过来，也可以让外部 CLI AI（Claude Code、Codex CLI 等）连进这个正在运行的编辑器，使用它的文件/终端/chat/agent/workflow 等全部能力。命令面板运行 "MCP: Expose This Editor as an MCP Server" 即可开启（再运行一次关闭），会提示实际监听的端口。工具调用作用于<strong>这个编辑器窗口真实打开的工作区</strong>，不是另起一个空环境。</p>
+<p>还有一个独立的、无界面的 <code>--mcp-server</code> 命令行模式，适合 CI/自动化场景。两种模式的区别、完整工具列表、各 IDE 接入配置，见 <a href="AI_EDITOR_MCP.html">AI_EDITOR_MCP.md</a>。</p>
+<hr />
+<h1 id="_18">插件开发者指南</h1>
+<p>以下内容面向想在 AI Editor 中添加自定义对话标签页或扩展功能的插件开发者。</p>
+<h2 id="chat-provider_1">注册 Chat Provider</h2>
+<p>AI Editor 正常情况下运行在与主 SAO 进程<strong>不同的操作系统进程</strong>里（<code>ai_editor.app.launch()</code> 用 <code>subprocess.Popen</code> 拉起一个独立子进程/独立 exe），SAO root 插件（<code>plugins/&lt;id&gt;/plugin.py</code>）跑在主进程里——两边不共享 Python 内存，插件没有一个能直接调用的“live”对象。所以注册方式是<strong>声明式 manifest</strong>，不是在 <code>plugin.py</code> 里调用某个 <code>ctx</code> 方法：在插件的 <code>plugin.json</code> 里加一个 <code>chatProviders</code> 数组，AI Editor 启动时会扫描所有 <code>plugins/*/plugin.json</code> 并自动注册（和已有的 <code>mcpServers</code> manifest 扫描是同一套约定，同一个文件，同一种发现时机）：</p>
+<div class="highlight"><pre><span></span><code><span class="p">{</span>
+<span class="w">  </span><span class="nt">&quot;id&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;acme-bot&quot;</span><span class="p">,</span>
+<span class="w">  </span><span class="nt">&quot;name&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;Acme Bot Plugin&quot;</span><span class="p">,</span>
+<span class="w">  </span><span class="nt">&quot;chatProviders&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">[</span>
+<span class="w">    </span><span class="p">{</span>
+<span class="w">      </span><span class="nt">&quot;id&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;my-bot&quot;</span><span class="p">,</span>
+<span class="w">      </span><span class="nt">&quot;name&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;My Bot&quot;</span><span class="p">,</span>
+<span class="w">      </span><span class="nt">&quot;icon&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;🤖&quot;</span><span class="p">,</span>
+<span class="w">      </span><span class="nt">&quot;provider_type&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;openai&quot;</span><span class="p">,</span>
+<span class="w">      </span><span class="nt">&quot;model&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;gpt-4o-mini&quot;</span><span class="p">,</span>
+<span class="w">      </span><span class="nt">&quot;base_url&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;&quot;</span><span class="p">,</span>
+<span class="w">      </span><span class="nt">&quot;system_prompt&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;你是一个游戏辅助助手，专注于回答战斗相关问题。&quot;</span><span class="p">,</span>
+<span class="w">      </span><span class="nt">&quot;auto_agent&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">false</span>
+<span class="w">    </span><span class="p">}</span>
+<span class="w">  </span><span class="p">]</span>
+<span class="p">}</span>
+</code></pre></div>
+
+<p>注册后的标签页 id 会自动加上插件 id 前缀（如 <code>acme-bot.my-bot</code>），避免不同插件之间撞名，也保证永远不会覆盖内置的 <code>chat</code> 标签页。</p>
+<p><strong>ChatProviderDef 全部字段：</strong></p>
+<table>
+<thead>
+<tr>
+<th>字段</th>
+<th>类型</th>
+<th>默认</th>
+<th>说明</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>id</code></td>
+<td>str</td>
+<td>(必填)</td>
+<td>唯一标识（会被加上插件 id 前缀）</td>
+</tr>
+<tr>
+<td><code>name</code></td>
+<td>str</td>
+<td>(必填)</td>
+<td>标签页显示名称</td>
+</tr>
+<tr>
+<td><code>icon</code></td>
+<td>str</td>
+<td>💬</td>
+<td>Emoji 图标</td>
+</tr>
+<tr>
+<td><code>provider_type</code></td>
+<td>str</td>
+<td>openai</td>
+<td>LLM 提供商</td>
+</tr>
+<tr>
+<td><code>api_key</code></td>
+<td>str</td>
+<td>""</td>
+<td>API Key（不填则使用用户在 Settings 中配置的 Key）</td>
+</tr>
+<tr>
+<td><code>base_url</code></td>
+<td>str</td>
+<td>""</td>
+<td>自定义端点</td>
+</tr>
+<tr>
+<td><code>model</code></td>
+<td>str</td>
+<td>""</td>
+<td>模型名</td>
+</tr>
+<tr>
+<td><code>system_prompt</code></td>
+<td>str</td>
+<td>""</td>
+<td>系统提示词</td>
+</tr>
+<tr>
+<td><code>auto_agent</code></td>
+<td>bool</td>
+<td>False</td>
+<td>打开时是否自动切到 Agent 模式</td>
+</tr>
+</tbody>
+</table>
+<p>注册后，标签页在下次 AI Editor 启动时出现在右侧边栏中（manifest 是启动时一次性扫描，不是热重载）。</p>
+<p><strong>如果需要真正的自定义工具执行</strong>（不只是一个对话标签页，而是要跑插件自己的代码），declarative JSON 表达不了一个活的 Python 函数——用同一个 <code>plugin.json</code> 里已有的 <code>mcpServers</code> 字段声明一个真正的 MCP server（stdio 或 HTTP），AI Editor 会像连接任何其他 MCP server 一样连接它。这正是 MCP 协议本来要解决的"跨进程调用活代码"问题，不需要再造一个新机制。</p>
+<p><code>AIEditorAPI.register_chat_provider()</code>/<code>register_mcp_tools()</code>（<code>window.pywebview.api.xxx</code>）仍然是真实、可调用的方法，但它们是给<strong>同进程内</strong>的调用方用的（比如未来的 JS/Node extension host），SAO root 插件因为跨进程边界，走的是上面这条 manifest 路径。</p>
+<h2 id="scope-agent-workflow">通过 Scope 分发 Agent 和 Workflow</h2>
+<p>插件可以在自己的 <code>.sao/</code> 目录下放置 Agent 和 Workflow 定义文件，它们会自动被加载：</p>
+<div class="highlight"><pre><span></span><code>plugins/my-plugin/
+├── plugin.py
+└── .sao/
+    ├── agents/
+    │   └── my-plugin-agent.json
+    ├── workflows/
+    │   └── my-plugin-workflow.json
+    └── instructions.md           # 插件级自定义指令
+</code></pre></div>
+
+<p>这些定义只在该插件的工作区生效，不会影响其他插件或全局配置。</p>
+<h2 id="engine">engine 工具扩展</h2>
+<p>插件可以通过 engine 聚合入口注册自定义 action，扩展 LLM 在对话中可调用的能力。engine 已有的 action 包括：</p>
+<ul>
+<li><strong>平台相关</strong>：<code>system_info</code>、<code>plugins</code>、<code>settings_get</code>、<code>settings_set</code>、<code>memory_status</code>、<code>eval</code>、<code>exec</code></li>
+<li><strong>Agent 相关</strong>：<code>list_agents</code>、<code>invoke_agent</code></li>
+<li><strong>Workflow 相关</strong>：<code>list_workflows</code>、<code>run_workflow</code></li>
+<li><strong>插件动态注册的 action</strong></li>
+</ul>
+<h2 id="_19">扩展运行时诊断</h2>
+<p>AI Editor 内部有一套扩展运行时 surface 诊断接口，用于对齐 VSCode 扩展能力和排查前端/Node host 状态。当前除了 tree views、webview views、custom editors、notebooks 等 surface 之外，也会追踪扩展通过 <code>vscode.window.createWebviewPanel(...)</code> 动态创建的独立 panel。</p>
+<p>这类记录会进入 <code>list_extension_runtime_surfaces()</code> 的 <code>webviewPanels</code> 桶，包含以下典型字段：</p>
+<table>
+<thead>
+<tr>
+<th>字段</th>
+<th>说明</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>view_id</code> / <code>viewType</code></td>
+<td>panel 的逻辑 ID 与 VSCode <code>viewType</code></td>
+</tr>
+<tr>
+<td><code>title</code></td>
+<td>当前标题</td>
+</tr>
+<tr>
+<td><code>renderCount</code></td>
+<td>已推送到前端的 HTML 渲染次数</td>
+</tr>
+<tr>
+<td><code>messageCount</code> / <code>lastMessage</code></td>
+<td>扩展发往该 panel 的消息次数与最后一条消息</td>
+</tr>
+<tr>
+<td><code>htmlAvailable</code> / <code>htmlLength</code> / <code>rawHtmlLength</code></td>
+<td>当前是否已有 HTML，以及预处理前后的长度</td>
+</tr>
+<tr>
+<td><code>localResourceRootCount</code></td>
+<td>注册的本地资源根数量</td>
+</tr>
+<tr>
+<td><code>visible</code> / <code>active</code> / <code>disposed</code></td>
+<td>当前显示、激活、释放状态</td>
+</tr>
+<tr>
+<td><code>readiness</code></td>
+<td><code>pending</code> / <code>ready</code> / <code>disposed</code></td>
+</tr>
+<tr>
+<td><code>providerBacked</code></td>
+<td>当前是否已经拿到可渲染 HTML</td>
+</tr>
+</tbody>
+</table>
+<p>这套记录由 Python 侧 <code>_AIEditorUIBridge.render_webview_panel()</code> 和 Node host 的 <code>webview_html</code> 消息桥接共同维护，主要用途是：</p>
+<ol>
+<li>排查扩展 panel 是否真的被创建、渲染、销毁。</li>
+<li>对比 <code>WebviewView</code> 和 <code>WebviewPanel</code> 两类 surface 的运行时状态。</li>
+<li>在 command palette / 运行时支持面板 / probe 脚本里做 smoke diagnostics。</li>
+</ol>
+<p>如果你在扩展里创建动态 panel，建议保持稳定的 <code>viewId</code> / <code>viewType</code>，并在 panel 标题、资源根、消息桥接发生变化时观察这组 surface 记录，确认 AI Editor 的扩展宿主和前端 iframe 状态一致。</p>
+    </article>
+  </main>
+  <aside class="toc-rail">
+    <div class="toc-title">本页目录</div>
+    <div class="toc">
+<ul>
+<li><a href="#_1">打开方式</a></li>
+<li><a href="#_2">窗口布局</a></li>
+<li><a href="#_3">编辑器核心功能</a><ul>
+<li><a href="#_4">资源管理器</a></li>
+<li><a href="#_5">全文搜索</a></li>
+<li><a href="#_6">快速打开文件</a></li>
+<li><a href="#scm">源代码管理（SCM）</a></li>
+<li><a href="#_7">终端</a></li>
+<li><a href="#_8">调试</a></li>
+<li><a href="#task-runner">任务运行器（Task Runner）</a></li>
+<li><a href="#_9">通知中心</a></li>
+<li><a href="#_10">终端/输出面板超链接</a></li>
+<li><a href="#extensions">扩展 (Extensions)</a></li>
+</ul>
+</li>
+<li><a href="#_11">设置配置</a><ul>
+<li><a href="#endpoint">Endpoint（端点配置）</a></li>
+<li><a href="#provider-keys">Provider Keys（多提供商密钥）</a></li>
+<li><a href="#advanced-sampling-connection">Advanced Sampling &amp; Connection（高级参数，折叠区）</a></li>
+<li><a href="#custom-models">Custom Models（自定义模型）</a></li>
+</ul>
+</li>
+<li><a href="#_12">三种工作模式</a><ul>
+<li><a href="#_13">审批级别</a></li>
+</ul>
+</li>
+<li><a href="#scope">三层 Scope 体系</a></li>
+<li><a href="#_14">自定义指令</a></li>
+<li><a href="#agent">自定义 Agent</a><ul>
+<li><a href="#_15">使用方式</a></li>
+<li><a href="#agent_1">创建自定义 Agent</a></li>
+</ul>
+</li>
+<li><a href="#workflow">自定义 Workflow</a><ul>
+<li><a href="#_16">使用方式</a></li>
+<li><a href="#workflow_1">创建自定义 Workflow</a></li>
+</ul>
+</li>
+<li><a href="#chat-provider">Chat Provider（对话提供商）</a></li>
+<li><a href="#_17">对话历史</a></li>
+<li><a href="#mcp">MCP 集成</a><ul>
+<li><a href="#ai-editor-mcp">把 AI Editor 自己暴露成 MCP 服务器</a></li>
+</ul>
+</li>
+<li><a href="#chat-provider_1">注册 Chat Provider</a></li>
+<li><a href="#scope-agent-workflow">通过 Scope 分发 Agent 和 Workflow</a></li>
+<li><a href="#engine">engine 工具扩展</a></li>
+<li><a href="#_19">扩展运行时诊断</a></li>
+</ul>
+</div>
+
+  </aside>
+</div>
+<footer class="site-footer">SAO ACT UI &middot; 平台与插件开发者文档</footer>
+</body>
+</html>

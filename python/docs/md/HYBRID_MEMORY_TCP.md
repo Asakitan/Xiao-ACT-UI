@@ -1,8 +1,10 @@
 # 游戏数据源 — 插件开发者指南
 
-> 配套文档：`PLUGIN_SDK.md`、`ACT_PLATFORM.md`。
+> 配套文档：`PLUGIN_SDK.md`、`ACT_PLATFORM.md`、`GAME_STATE_API.md`。
 
 本文面向**插件开发者**，介绍如何从插件中读取游戏实时数据。
+
+**范围说明**：TCP / 内存 / 混合三种数据模式的架构思路是平台通用的——任何游戏插件都可以照这个模式实现自己的 `PacketBridge` 风格数据源。但本文中 `ctx.mem` 的具体方法和返回字段（`self_state()`、`boss()`、`entities()` 等）是内置 `star_resonance_plugin` 的实现（`plugins/star_resonance_plugin/mem/mem_access.py`），仅在该插件加载时可用。要为新游戏接入内存数据源，需要实现自己的桥接类并通过 `mem_probe.unified_source.set_bridge_classes()` 注入——细节见文末[注入自定义桥接](#注入自定义桥接高级)一节。
 
 ---
 

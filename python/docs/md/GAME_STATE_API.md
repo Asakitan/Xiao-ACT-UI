@@ -1,6 +1,10 @@
-# 游戏状态 API 参考
+# 游戏状态 API 参考 — star_resonance_plugin 实现细节
 
 > 面向插件开发者与高级用户。所有接口均为只读。
+
+**范围说明**：本文档描述的 `game_state` 引擎（`GameStateManager`）、`ctx.mem`（`MemAccess`）facade，以及下面列出的全部字段名（`profession_id`、`dungeon_id`、`boss_breaking_stage` 等）都是内置的 `plugins/star_resonance_plugin` 插件为「星痕共鸣」这个游戏实现的具体内容，**不是 SAO ACT 平台核心的固定契约**。平台核心（`act_platform/`）本身不知道职业、副本、Boss 破防这些概念。
+
+`ctx.mem` 之所以在其他插件里也能用，是因为 star_resonance_plugin 加载时会把自己的 `MemAccess`/`UnifiedDataSource` 实现注册进 `mem_probe.mem_access` / `mem_probe.unified_source`（见 `plugins/star_resonance_plugin/plugin.py` 的 `set_bridge_classes()` 调用）。如果这个插件没有加载，`ctx.mem` 返回 `None`。第五节 `mem_probe.scanner` / `mem_probe.process` 之下的原始内存扫描能力（`scan`/`narrow`/`GameProcess`）是平台级通用工具，与具体游戏无关，为新游戏写插件时可以直接复用；`ctx.mem` 之上的高层字段结构则需要参考本篇，自己实现一套等价的 facade 并通过 `ctx.register_engine()` 注册。
 
 ---
 

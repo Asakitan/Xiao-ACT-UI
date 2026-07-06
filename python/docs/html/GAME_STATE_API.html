@@ -1,0 +1,1253 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>游戏状态 API 参考 — star_resonance_plugin 实现细节 · SAO ACT UI 文档</title>
+<link rel="stylesheet" href="assets/style.css">
+<link rel="stylesheet" href="assets/pygments.css">
+</head>
+<body>
+<header class="site-header">
+  <a class="brand" href="index.html"><span class="brand-mark">SAO</span> ACT UI 文档</a>
+  <nav class="top-nav">
+    <a href="index.html">全部文档</a>
+  </nav>
+</header>
+<div class="layout">
+  <aside class="sidebar">
+    <div class="sidebar-title">开发者文档</div>
+    <ul class="sidebar-nav">
+      <li><a href="ACT_PLATFORM.html">平台总览</a></li>
+      <li><a href="PLUGIN_SDK.html">插件开发指南</a></li>
+      <li><a href="ACT_UI_PARITY_SDK.html">声明式 UI 面板</a></li>
+      <li><a href="MULTI_LANGUAGE_SCRIPTING.html">多语言脚本运行时</a></li>
+      <li><a href="GAME_STATE_API.html" class="active">游戏状态 API 参考</a></li>
+      <li><a href="HYBRID_MEMORY_TCP.html">游戏数据源</a></li>
+      <li><a href="AI_EDITOR.html">AI Editor 使用指南</a></li>
+      <li><a href="AI_EDITOR_MCP.html">AI Editor MCP Server</a></li>
+    </ul>
+  </aside>
+  <main class="content">
+    <article class="markdown-body">
+      <h1 id="api-star_resonance_plugin">游戏状态 API 参考 — star_resonance_plugin 实现细节</h1>
+<blockquote>
+<p>面向插件开发者与高级用户。所有接口均为只读。</p>
+</blockquote>
+<p><strong>范围说明</strong>：本文档描述的 <code>game_state</code> 引擎（<code>GameStateManager</code>）、<code>ctx.mem</code>（<code>MemAccess</code>）facade，以及下面列出的全部字段名（<code>profession_id</code>、<code>dungeon_id</code>、<code>boss_breaking_stage</code> 等）都是内置的 <code>plugins/star_resonance_plugin</code> 插件为「星痕共鸣」这个游戏实现的具体内容，<strong>不是 SAO ACT 平台核心的固定契约</strong>。平台核心（<code>act_platform/</code>）本身不知道职业、副本、Boss 破防这些概念。</p>
+<p><code>ctx.mem</code> 之所以在其他插件里也能用，是因为 star_resonance_plugin 加载时会把自己的 <code>MemAccess</code>/<code>UnifiedDataSource</code> 实现注册进 <code>mem_probe.mem_access</code> / <code>mem_probe.unified_source</code>（见 <code>plugins/star_resonance_plugin/plugin.py</code> 的 <code>set_bridge_classes()</code> 调用）。如果这个插件没有加载，<code>ctx.mem</code> 返回 <code>None</code>。第五节 <code>mem_probe.scanner</code> / <code>mem_probe.process</code> 之下的原始内存扫描能力（<code>scan</code>/<code>narrow</code>/<code>GameProcess</code>）是平台级通用工具，与具体游戏无关，为新游戏写插件时可以直接复用；<code>ctx.mem</code> 之上的高层字段结构则需要参考本篇，自己实现一套等价的 facade 并通过 <code>ctx.register_engine()</code> 注册。</p>
+<hr />
+<h2 id="_1">快速上手</h2>
+<div class="highlight"><pre><span></span><code><span class="k">def</span><span class="w"> </span><span class="nf">on_load</span><span class="p">(</span><span class="n">ctx</span><span class="p">):</span>
+    <span class="c1"># 订阅状态快照（每次状态变化时触发）</span>
+    <span class="n">ctx</span><span class="o">.</span><span class="n">on_snapshot</span><span class="p">(</span><span class="k">lambda</span> <span class="n">snap</span><span class="p">:</span> <span class="nb">print</span><span class="p">(</span><span class="n">snap</span><span class="p">[</span><span class="s2">&quot;context&quot;</span><span class="p">]))</span>
+
+    <span class="c1"># 主动拉取当前快照</span>
+    <span class="n">snap</span> <span class="o">=</span> <span class="n">ctx</span><span class="o">.</span><span class="n">get_snapshot</span><span class="p">()</span>
+
+    <span class="c1"># 获取 GameStateManager 引擎</span>
+    <span class="n">gsm</span> <span class="o">=</span> <span class="n">ctx</span><span class="o">.</span><span class="n">engine</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;game_state&quot;</span><span class="p">)</span>
+    <span class="n">state</span> <span class="o">=</span> <span class="n">gsm</span><span class="o">.</span><span class="n">snapshot</span><span class="p">()</span>
+
+    <span class="c1"># 读内存（hybrid/memory 模式下可用）</span>
+    <span class="n">self_info</span> <span class="o">=</span> <span class="n">ctx</span><span class="o">.</span><span class="n">mem</span><span class="o">.</span><span class="n">self_state</span><span class="p">()</span>
+    <span class="k">if</span> <span class="n">self_info</span><span class="p">[</span><span class="s2">&quot;ok&quot;</span><span class="p">]:</span>
+        <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s1">&#39;HP: </span><span class="si">{</span><span class="n">self_info</span><span class="p">[</span><span class="s2">&quot;hp&quot;</span><span class="p">]</span><span class="si">}</span><span class="s1">/</span><span class="si">{</span><span class="n">self_info</span><span class="p">[</span><span class="s2">&quot;max_hp&quot;</span><span class="p">]</span><span class="si">}</span><span class="s1">&#39;</span><span class="p">)</span>
+</code></pre></div>
+
+<hr />
+<h2 id="ctx">一、插件上下文 <code>ctx</code></h2>
+<p><code>on_load(ctx)</code> 的 <code>ctx</code> 是 <code>PluginContext</code>，提供以下能力：</p>
+<h3 id="_2">事件订阅</h3>
+<table>
+<thead>
+<tr>
+<th>方法</th>
+<th>说明</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>ctx.on_snapshot(cb)</code></td>
+<td>状态快照变化</td>
+</tr>
+<tr>
+<td><code>ctx.on_damage(cb)</code></td>
+<td>伤害/治疗事件</td>
+</tr>
+<tr>
+<td><code>ctx.on_heal(cb)</code></td>
+<td>治疗事件</td>
+</tr>
+<tr>
+<td><code>ctx.on_skill(cb)</code></td>
+<td>技能事件</td>
+</tr>
+<tr>
+<td><code>ctx.on_boss(cb)</code></td>
+<td>Boss 机制事件</td>
+</tr>
+<tr>
+<td><code>ctx.on_encounter_finalized(cb)</code></td>
+<td>战斗结束事件</td>
+</tr>
+<tr>
+<td><code>ctx.subscribe(topic, cb)</code></td>
+<td>订阅任意 topic</td>
+</tr>
+<tr>
+<td><code>ctx.unsubscribe(token)</code></td>
+<td>取消订阅（传入订阅返回的 token）</td>
+</tr>
+</tbody>
+</table>
+<p>所有 <code>on_*</code> 方法返回 <code>str</code> token，用于取消订阅。回调参数是 <code>dict</code>。</p>
+<h3 id="_3">主动查询</h3>
+<table>
+<thead>
+<tr>
+<th>方法</th>
+<th>说明</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>ctx.get_snapshot()</code></td>
+<td>拉取最新 ACT 快照</td>
+</tr>
+<tr>
+<td><code>ctx.recent_events(limit=20, topic="")</code></td>
+<td>最近事件列表</td>
+</tr>
+<tr>
+<td><code>ctx.emit(topic, payload)</code></td>
+<td>发布自定义事件</td>
+</tr>
+</tbody>
+</table>
+<h3 id="_4">引擎访问</h3>
+<table>
+<thead>
+<tr>
+<th>方法</th>
+<th>说明</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>ctx.engine.get(name)</code></td>
+<td>获取命名引擎（返回 <code>None</code> 若不存在）</td>
+</tr>
+<tr>
+<td><code>ctx.require_engine(name)</code></td>
+<td>获取引擎（不存在则抛异常）</td>
+</tr>
+<tr>
+<td><code>ctx.call_engine(name, method, *args)</code></td>
+<td>调用引擎方法</td>
+</tr>
+<tr>
+<td><code>ctx.register_engine(name, engine)</code></td>
+<td>注册自定义引擎</td>
+</tr>
+</tbody>
+</table>
+<p>常用引擎名：<code>"game_state"</code>、<code>"dps_tracker"</code>、<code>"encounter_manager"</code>、<code>"trigger_engine"</code>、<code>"packet_bridge"</code>、<code>"history_store"</code>、<code>"auto_key_engine"</code>、<code>"boss_raid_engine"</code></p>
+<h3 id="_5">设置</h3>
+<div class="highlight"><pre><span></span><code><span class="n">ctx</span><span class="o">.</span><span class="n">set_defaults</span><span class="p">({</span><span class="s2">&quot;my_threshold&quot;</span><span class="p">:</span> <span class="mi">50</span><span class="p">,</span> <span class="s2">&quot;show_overlay&quot;</span><span class="p">:</span> <span class="kc">True</span><span class="p">})</span>
+<span class="n">val</span> <span class="o">=</span> <span class="n">ctx</span><span class="o">.</span><span class="n">get_setting</span><span class="p">(</span><span class="s2">&quot;my_threshold&quot;</span><span class="p">)</span>   <span class="c1"># 50</span>
+<span class="n">ctx</span><span class="o">.</span><span class="n">set_setting</span><span class="p">(</span><span class="s2">&quot;show_overlay&quot;</span><span class="p">,</span> <span class="kc">False</span><span class="p">)</span>
+</code></pre></div>
+
+<h3 id="ui">UI 注册</h3>
+<table>
+<thead>
+<tr>
+<th>方法</th>
+<th>说明</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>ctx.register_ui_panel(panel_id, metadata, render, on_action)</code></td>
+<td>注册 UI 面板</td>
+</tr>
+<tr>
+<td><code>ctx.register_render_hook(surface, cb, priority=0.0)</code></td>
+<td>注册渲染钩子</td>
+</tr>
+<tr>
+<td><code>ctx.register_menu_category(name, icon, builder, priority=0.0)</code></td>
+<td>注册菜单分类</td>
+</tr>
+<tr>
+<td><code>ctx.open_window(panel_id, width, height)</code></td>
+<td>打开面板窗口</td>
+</tr>
+<tr>
+<td><code>ctx.set_overlay(surface, spec)</code></td>
+<td>设置覆盖层</td>
+</tr>
+<tr>
+<td><code>ctx.clear_overlay(surface)</code></td>
+<td>清除覆盖层</td>
+</tr>
+<tr>
+<td><code>ctx.request_redraw(surface, reason)</code></td>
+<td>请求重绘</td>
+</tr>
+<tr>
+<td><code>ctx.notify(title, message, duration_s=60, kind="plugin")</code></td>
+<td>弹通知</td>
+</tr>
+<tr>
+<td><code>ctx.toast(message)</code></td>
+<td>短暂提示</td>
+</tr>
+</tbody>
+</table>
+<h3 id="_6">快捷键 / 定时器</h3>
+<div class="highlight"><pre><span></span><code><span class="n">ctx</span><span class="o">.</span><span class="n">register_hotkey</span><span class="p">(</span><span class="s2">&quot;my_toggle&quot;</span><span class="p">,</span> <span class="n">my_callback</span><span class="p">,</span> <span class="n">default_key</span><span class="o">=</span><span class="s2">&quot;CTRL+F9&quot;</span><span class="p">,</span> <span class="n">label</span><span class="o">=</span><span class="s2">&quot;切换覆盖层&quot;</span><span class="p">)</span>
+<span class="n">timer_id</span> <span class="o">=</span> <span class="n">ctx</span><span class="o">.</span><span class="n">set_interval</span><span class="p">(</span><span class="n">poll_func</span><span class="p">,</span> <span class="n">seconds</span><span class="o">=</span><span class="mf">1.0</span><span class="p">)</span>   <span class="c1"># 循环</span>
+<span class="n">timeout_id</span> <span class="o">=</span> <span class="n">ctx</span><span class="o">.</span><span class="n">set_timeout</span><span class="p">(</span><span class="n">once_func</span><span class="p">,</span> <span class="n">seconds</span><span class="o">=</span><span class="mf">5.0</span><span class="p">)</span>   <span class="c1"># 一次性</span>
+<span class="n">ctx</span><span class="o">.</span><span class="n">clear_timer</span><span class="p">(</span><span class="n">timer_id</span><span class="p">)</span>
+</code></pre></div>
+
+<h3 id="_7">其他</h3>
+<table>
+<thead>
+<tr>
+<th>属性/方法</th>
+<th>说明</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>ctx.plugin_id</code></td>
+<td>插件 ID</td>
+</tr>
+<tr>
+<td><code>ctx.path</code></td>
+<td>插件目录绝对路径</td>
+</tr>
+<tr>
+<td><code>ctx.web_path</code></td>
+<td>插件 <code>web/</code> 目录路径</td>
+</tr>
+<tr>
+<td><code>ctx.assets_path</code></td>
+<td>插件 <code>assets/</code> 目录路径</td>
+</tr>
+<tr>
+<td><code>ctx.mem</code></td>
+<td>内存访问门面 <code>MemAccess</code></td>
+</tr>
+<tr>
+<td><code>ctx.ui</code></td>
+<td>声明式 UI 构建器</td>
+</tr>
+<tr>
+<td><code>ctx.log(message)</code></td>
+<td>写插件日志</td>
+</tr>
+<tr>
+<td><code>ctx.load_local(relative_path)</code></td>
+<td>加载插件目录下的 <code>.py</code> 模块（返回 <code>ModuleType</code>）</td>
+</tr>
+<tr>
+<td><code>ctx.load_script(relative_path)</code></td>
+<td>脚本插件加载同语言子文件（<code>.lua</code>/<code>.as</code>/<code>.emma</code>），合并到同一作用域；Lua 也可用 <code>dofile</code></td>
+</tr>
+<tr>
+<td><code>ctx.run_on_ui(callback)</code></td>
+<td>在 UI 线程执行</td>
+</tr>
+<tr>
+<td><code>ctx.ensure_requirements(install=True)</code></td>
+<td>安装插件依赖</td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h2 id="_8">二、事件载荷格式</h2>
+<h3 id="on_damage">伤害事件 (<code>on_damage</code>)</h3>
+<div class="highlight"><pre><span></span><code><span class="p">{</span>
+    <span class="s2">&quot;timestamp&quot;</span><span class="p">:</span> <span class="nb">float</span><span class="p">,</span>
+    <span class="s2">&quot;attacker_uid&quot;</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span>
+    <span class="s2">&quot;target_uuid&quot;</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span>
+    <span class="s2">&quot;skill_id&quot;</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span>              <span class="c1"># 基础技能 ID</span>
+    <span class="s2">&quot;skill_name&quot;</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span>
+    <span class="s2">&quot;damage&quot;</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span>
+    <span class="s2">&quot;is_crit&quot;</span><span class="p">:</span> <span class="nb">bool</span><span class="p">,</span>
+    <span class="s2">&quot;is_heal&quot;</span><span class="p">:</span> <span class="nb">bool</span><span class="p">,</span>
+    <span class="s2">&quot;is_immune&quot;</span><span class="p">:</span> <span class="nb">bool</span><span class="p">,</span>
+    <span class="s2">&quot;is_absorbed&quot;</span><span class="p">:</span> <span class="nb">bool</span><span class="p">,</span>
+    <span class="s2">&quot;element&quot;</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span>               <span class="c1"># 元素 ID（0=无）</span>
+    <span class="s2">&quot;attacker_is_self&quot;</span><span class="p">:</span> <span class="nb">bool</span><span class="p">,</span>
+    <span class="s2">&quot;target_is_player&quot;</span><span class="p">:</span> <span class="nb">bool</span><span class="p">,</span>
+    <span class="s2">&quot;target_is_monster&quot;</span><span class="p">:</span> <span class="nb">bool</span><span class="p">,</span>
+<span class="p">}</span>
+</code></pre></div>
+
+<h3 id="on_skill">技能事件 (<code>on_skill</code>)</h3>
+<div class="highlight"><pre><span></span><code><span class="p">{</span>
+    <span class="s2">&quot;timestamp&quot;</span><span class="p">:</span> <span class="nb">float</span><span class="p">,</span>
+    <span class="s2">&quot;kind&quot;</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span>                  <span class="c1"># &quot;client_use&quot;, &quot;server_stage_end&quot; 等</span>
+    <span class="s2">&quot;skill_id&quot;</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span>
+    <span class="s2">&quot;skill_level_id&quot;</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span>
+    <span class="s2">&quot;skill_name&quot;</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span>
+    <span class="s2">&quot;skill_role&quot;</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span>
+    <span class="s2">&quot;skill_category&quot;</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span>        <span class="c1"># &quot;player_skill&quot;, &quot;boss_skill&quot;</span>
+    <span class="s2">&quot;is_ultimate&quot;</span><span class="p">:</span> <span class="nb">bool</span><span class="p">,</span>
+    <span class="s2">&quot;is_player_skill&quot;</span><span class="p">:</span> <span class="nb">bool</span><span class="p">,</span>
+    <span class="s2">&quot;is_boss_skill&quot;</span><span class="p">:</span> <span class="nb">bool</span><span class="p">,</span>
+<span class="p">}</span>
+</code></pre></div>
+
+<h3 id="boss-on_boss">Boss 事件 (<code>on_boss</code>)</h3>
+<div class="highlight"><pre><span></span><code><span class="p">{</span>
+    <span class="s2">&quot;timestamp&quot;</span><span class="p">:</span> <span class="nb">float</span><span class="p">,</span>
+    <span class="s2">&quot;event_type&quot;</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span>
+    <span class="s2">&quot;host_uuid&quot;</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span>             <span class="c1"># Boss UUID</span>
+    <span class="s2">&quot;buff_category&quot;</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span>
+    <span class="s2">&quot;boss_mechanic_key&quot;</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span>
+    <span class="s2">&quot;boss_mechanic_label&quot;</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span>
+    <span class="s2">&quot;trigger_family&quot;</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span>
+<span class="p">}</span>
+</code></pre></div>
+
+<h3 id="act-on_snapshot-get_snapshot">ACT 快照 (<code>on_snapshot</code> / <code>get_snapshot()</code>)</h3>
+<div class="highlight"><pre><span></span><code><span class="p">{</span>
+    <span class="s2">&quot;live&quot;</span><span class="p">:</span> <span class="p">{</span><span class="o">...</span><span class="p">},</span>                <span class="c1"># 当前战斗 DPS 实时数据（无战斗时为 null）</span>
+    <span class="s2">&quot;last_report&quot;</span><span class="p">:</span> <span class="p">{</span><span class="o">...</span><span class="p">},</span>         <span class="c1"># 最近一次已结算的战斗报告</span>
+    <span class="s2">&quot;history&quot;</span><span class="p">:</span> <span class="p">[</span><span class="o">...</span><span class="p">],</span>             <span class="c1"># 历史报告列表</span>
+    <span class="s2">&quot;context&quot;</span><span class="p">:</span> <span class="p">{</span><span class="o">...</span><span class="p">},</span>             <span class="c1"># GameState 派生上下文</span>
+    <span class="s2">&quot;encounter&quot;</span><span class="p">:</span> <span class="p">{</span><span class="o">...</span><span class="p">},</span>           <span class="c1"># 当前/历史战斗元数据</span>
+    <span class="s2">&quot;sources&quot;</span><span class="p">:</span> <span class="p">{</span><span class="o">...</span><span class="p">},</span>             <span class="c1"># 数据源健康状态</span>
+    <span class="s2">&quot;render_spec&quot;</span><span class="p">:</span> <span class="p">{</span><span class="o">...</span><span class="p">},</span>         <span class="c1"># UI 渲染契约</span>
+    <span class="s2">&quot;triggers&quot;</span><span class="p">:</span> <span class="p">{</span><span class="o">...</span><span class="p">},</span>            <span class="c1"># 触发器引擎快照</span>
+<span class="p">}</span>
+</code></pre></div>
+
+<hr />
+<h2 id="gamestatemanager">三、GameStateManager</h2>
+<p>通过 <code>ctx.engine.get("game_state")</code> 获取。</p>
+<h3 id="_9">方法</h3>
+<table>
+<thead>
+<tr>
+<th>方法</th>
+<th>说明</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>.snapshot()</code></td>
+<td>返回当前状态的浅拷贝（线程安全）</td>
+</tr>
+<tr>
+<td><code>.update(**kwargs)</code></td>
+<td>部分更新 + 通知订阅者</td>
+</tr>
+<tr>
+<td><code>.subscribe(callback)</code></td>
+<td>注册变化监听</td>
+</tr>
+<tr>
+<td><code>.unsubscribe(callback)</code></td>
+<td>移除监听</td>
+</tr>
+</tbody>
+</table>
+<h3 id="_10">状态字段</h3>
+<p><strong>身份</strong></p>
+<table>
+<thead>
+<tr>
+<th>字段</th>
+<th>类型</th>
+<th>说明</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>player_name</code></td>
+<td>str</td>
+<td>角色名</td>
+</tr>
+<tr>
+<td><code>player_id</code></td>
+<td>int</td>
+<td>玩家 ID</td>
+</tr>
+<tr>
+<td><code>level_base</code></td>
+<td>int</td>
+<td>基础等级（上限 60）</td>
+</tr>
+<tr>
+<td><code>level_extra</code></td>
+<td>int</td>
+<td>赛季加算等级</td>
+</tr>
+<tr>
+<td><code>season_exp</code></td>
+<td>int</td>
+<td>赛季经验</td>
+</tr>
+<tr>
+<td><code>profession_id</code></td>
+<td>int</td>
+<td>职业 ID</td>
+</tr>
+<tr>
+<td><code>profession_name</code></td>
+<td>str</td>
+<td>职业名</td>
+</tr>
+<tr>
+<td><code>fight_point</code></td>
+<td>int</td>
+<td>战力</td>
+</tr>
+</tbody>
+</table>
+<p><strong>生命 / 体力</strong></p>
+<table>
+<thead>
+<tr>
+<th>字段</th>
+<th>类型</th>
+<th>说明</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>hp_current</code></td>
+<td>int</td>
+<td>当前 HP</td>
+</tr>
+<tr>
+<td><code>hp_max</code></td>
+<td>int</td>
+<td>最大 HP</td>
+</tr>
+<tr>
+<td><code>hp_pct</code></td>
+<td>float</td>
+<td>HP 百分比</td>
+</tr>
+<tr>
+<td><code>stamina_current</code></td>
+<td>int</td>
+<td>当前体力</td>
+</tr>
+<tr>
+<td><code>stamina_max</code></td>
+<td>int</td>
+<td>最大体力</td>
+</tr>
+<tr>
+<td><code>stamina_pct</code></td>
+<td>float</td>
+<td>体力百分比</td>
+</tr>
+</tbody>
+</table>
+<p><strong>技能</strong></p>
+<table>
+<thead>
+<tr>
+<th>字段</th>
+<th>类型</th>
+<th>说明</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>skill_slots</code></td>
+<td>list[dict]</td>
+<td>技能槽列表（见下方结构）</td>
+</tr>
+<tr>
+<td><code>custom_skill_slots</code></td>
+<td>list[dict]</td>
+<td>自定义技能槽</td>
+</tr>
+<tr>
+<td><code>burst_ready</code></td>
+<td>bool</td>
+<td>大招是否就绪</td>
+</tr>
+</tbody>
+</table>
+<p>技能槽结构：</p>
+<div class="highlight"><pre><span></span><code><span class="p">{</span>
+    <span class="s2">&quot;index&quot;</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span>             <span class="c1"># 槽位（0-9 主技能，10-14 自定义）</span>
+    <span class="s2">&quot;state&quot;</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span>             <span class="c1"># &quot;ready&quot; | &quot;cooldown&quot; | &quot;insufficient_energy&quot; | &quot;unknown&quot;</span>
+    <span class="s2">&quot;cooldown_pct&quot;</span><span class="p">:</span> <span class="nb">float</span><span class="p">,</span>    <span class="c1"># 0.0=就绪 ~ 1.0=满 CD</span>
+    <span class="s2">&quot;remaining_ms&quot;</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span>      <span class="c1"># 剩余冷却毫秒</span>
+    <span class="s2">&quot;charge_count&quot;</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span>      <span class="c1"># 充能层数</span>
+    <span class="s2">&quot;active&quot;</span><span class="p">:</span> <span class="nb">bool</span><span class="p">,</span>           <span class="c1"># 当前是否激活中</span>
+    <span class="s2">&quot;ready_edge&quot;</span><span class="p">:</span> <span class="nb">bool</span><span class="p">,</span>       <span class="c1"># 是否刚从 CD 变为就绪</span>
+    <span class="s2">&quot;insufficient_energy&quot;</span><span class="p">:</span> <span class="nb">bool</span><span class="p">,</span>
+<span class="p">}</span>
+</code></pre></div>
+
+<p><strong>Buff</strong></p>
+<table>
+<thead>
+<tr>
+<th>字段</th>
+<th>类型</th>
+<th>说明</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>self_buffs</code></td>
+<td>list[dict]</td>
+<td>自身 Buff 列表</td>
+</tr>
+<tr>
+<td><code>server_time_offset_ms</code></td>
+<td>int</td>
+<td>服务器时间偏移</td>
+</tr>
+</tbody>
+</table>
+<p>Buff 结构：</p>
+<div class="highlight"><pre><span></span><code><span class="p">{</span>
+    <span class="s2">&quot;id&quot;</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span>                <span class="c1"># Buff ID</span>
+    <span class="s2">&quot;uuid&quot;</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span>              <span class="c1"># Buff UUID</span>
+    <span class="s2">&quot;begin_ms&quot;</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span>          <span class="c1"># 服务器时钟起始</span>
+    <span class="s2">&quot;duration_ms&quot;</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span>       <span class="c1"># 总持续时间</span>
+    <span class="s2">&quot;layer&quot;</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span>             <span class="c1"># 层数</span>
+    <span class="s2">&quot;count&quot;</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span>             <span class="c1"># 叠加数</span>
+    <span class="s2">&quot;name&quot;</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span>              <span class="c1"># 名称</span>
+<span class="p">}</span>
+</code></pre></div>
+
+<p><strong>战斗</strong></p>
+<table>
+<thead>
+<tr>
+<th>字段</th>
+<th>类型</th>
+<th>说明</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>in_combat</code></td>
+<td>bool</td>
+<td>是否处于战斗状态</td>
+</tr>
+</tbody>
+</table>
+<p><strong>Boss</strong></p>
+<table>
+<thead>
+<tr>
+<th>字段</th>
+<th>类型</th>
+<th>说明</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>boss_current_hp</code></td>
+<td>int</td>
+<td>Boss 当前 HP</td>
+</tr>
+<tr>
+<td><code>boss_total_hp</code></td>
+<td>int</td>
+<td>Boss 最大 HP</td>
+</tr>
+<tr>
+<td><code>boss_hp_source</code></td>
+<td>str</td>
+<td>HP 数据来源</td>
+</tr>
+<tr>
+<td><code>boss_hp_est_pct</code></td>
+<td>float</td>
+<td>估算 HP 百分比</td>
+</tr>
+<tr>
+<td><code>boss_shield_active</code></td>
+<td>bool</td>
+<td>是否有护盾</td>
+</tr>
+<tr>
+<td><code>boss_shield_pct</code></td>
+<td>float</td>
+<td>护盾百分比</td>
+</tr>
+<tr>
+<td><code>boss_breaking_stage</code></td>
+<td>int</td>
+<td>破防阶段</td>
+</tr>
+<tr>
+<td><code>boss_extinction_pct</code></td>
+<td>float</td>
+<td>削韧百分比</td>
+</tr>
+<tr>
+<td><code>boss_cast_skill_id</code></td>
+<td>int</td>
+<td>当前施法技能 ID</td>
+</tr>
+<tr>
+<td><code>boss_cast_skill_name</code></td>
+<td>str</td>
+<td>当前施法技能名</td>
+</tr>
+<tr>
+<td><code>boss_cast_active</code></td>
+<td>bool</td>
+<td>是否正在施法</td>
+</tr>
+<tr>
+<td><code>boss_cast_duration_ms</code></td>
+<td>int</td>
+<td>施法持续时间</td>
+</tr>
+<tr>
+<td><code>boss_stun</code></td>
+<td>bool</td>
+<td>是否眩晕</td>
+</tr>
+<tr>
+<td><code>boss_invincible</code></td>
+<td>bool</td>
+<td>是否无敌</td>
+</tr>
+<tr>
+<td><code>boss_in_overdrive</code></td>
+<td>bool</td>
+<td>是否狂暴</td>
+</tr>
+<tr>
+<td><code>boss_raid_active</code></td>
+<td>bool</td>
+<td>团本机制是否激活</td>
+</tr>
+<tr>
+<td><code>boss_raid_phase</code></td>
+<td>int</td>
+<td>团本阶段</td>
+</tr>
+<tr>
+<td><code>boss_raid_phase_name</code></td>
+<td>str</td>
+<td>团本阶段名</td>
+</tr>
+<tr>
+<td><code>boss_enrage_remaining</code></td>
+<td>float</td>
+<td>狂暴剩余时间</td>
+</tr>
+<tr>
+<td><code>boss_enrage_urgency</code></td>
+<td>str</td>
+<td>狂暴紧迫度</td>
+</tr>
+<tr>
+<td><code>boss_timer_text</code></td>
+<td>str</td>
+<td>Boss 计时器文本</td>
+</tr>
+<tr>
+<td><code>boss_mechanic_event</code></td>
+<td>dict</td>
+<td>当前机制事件</td>
+</tr>
+<tr>
+<td><code>boss_mechanic_countdowns</code></td>
+<td>list</td>
+<td>机制倒计时列表</td>
+</tr>
+<tr>
+<td><code>boss_total_damage</code></td>
+<td>int</td>
+<td>累计总伤害</td>
+</tr>
+<tr>
+<td><code>boss_dps</code></td>
+<td>float</td>
+<td>当前 DPS</td>
+</tr>
+</tbody>
+</table>
+<p><strong>副本</strong></p>
+<table>
+<thead>
+<tr>
+<th>字段</th>
+<th>类型</th>
+<th>说明</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>dungeon_id</code></td>
+<td>int</td>
+<td>副本 ID</td>
+</tr>
+<tr>
+<td><code>dungeon_scene_id</code></td>
+<td>int</td>
+<td>场景 ID</td>
+</tr>
+<tr>
+<td><code>dungeon_difficulty</code></td>
+<td>int</td>
+<td>难度</td>
+</tr>
+<tr>
+<td><code>dungeon_name</code></td>
+<td>str</td>
+<td>副本名</td>
+</tr>
+</tbody>
+</table>
+<p><strong>事件</strong></p>
+<table>
+<thead>
+<tr>
+<th>字段</th>
+<th>类型</th>
+<th>说明</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>last_dungeon_event</code></td>
+<td>dict</td>
+<td>最近副本事件</td>
+</tr>
+<tr>
+<td><code>last_skill_event</code></td>
+<td>dict</td>
+<td>最近技能事件</td>
+</tr>
+<tr>
+<td><code>last_boss_event</code></td>
+<td>dict</td>
+<td>最近 Boss 事件</td>
+</tr>
+</tbody>
+</table>
+<p><strong>窗口</strong></p>
+<table>
+<thead>
+<tr>
+<th>字段</th>
+<th>类型</th>
+<th>说明</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>window_rect</code></td>
+<td>tuple</td>
+<td>窗口矩形</td>
+</tr>
+<tr>
+<td><code>window_width</code></td>
+<td>int</td>
+<td>窗口宽度</td>
+</tr>
+<tr>
+<td><code>window_height</code></td>
+<td>int</td>
+<td>窗口高度</td>
+</tr>
+</tbody>
+</table>
+<p><strong>元数据</strong></p>
+<table>
+<thead>
+<tr>
+<th>字段</th>
+<th>类型</th>
+<th>说明</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>capture_timestamp</code></td>
+<td>float</td>
+<td>采集时间戳</td>
+</tr>
+<tr>
+<td><code>recognition_ok</code></td>
+<td>bool</td>
+<td>识别是否正常</td>
+</tr>
+<tr>
+<td><code>packet_active</code></td>
+<td>bool</td>
+<td>抓包是否活跃</td>
+</tr>
+<tr>
+<td><code>error_msg</code></td>
+<td>str</td>
+<td>错误信息</td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h2 id="ctxmem">四、内存访问 <code>ctx.mem</code></h2>
+<p><code>ctx.mem</code> 是 <code>MemAccess</code> 实例。在 <strong>hybrid</strong> 或 <strong>memory</strong> 模式下可用，TCP-only 模式下所有读取方法返回 <code>{"ok": False, "reason": "...", "hint": "..."}</code>。</p>
+<p>所有返回值是 JSON 安全的 dict（地址为十六进制字符串，大整数为字符串）。方法不会抛异常。</p>
+<h3 id="_11">状态检查</h3>
+<div class="highlight"><pre><span></span><code><span class="n">status</span> <span class="o">=</span> <span class="n">ctx</span><span class="o">.</span><span class="n">mem</span><span class="o">.</span><span class="n">status</span><span class="p">()</span>
+<span class="c1"># {</span>
+<span class="c1">#     &quot;ok&quot;: bool,        是否可用</span>
+<span class="c1">#     &quot;mode&quot;: str,       当前模式</span>
+<span class="c1">#     &quot;active&quot;: bool,    内存桥是否激活</span>
+<span class="c1">#     &quot;process&quot;: str,    进程名</span>
+<span class="c1">#     &quot;module_base&quot;: str, 主模块基址（hex）</span>
+<span class="c1">#     &quot;last_error&quot;: str,</span>
+<span class="c1"># }</span>
+
+<span class="n">catalog</span> <span class="o">=</span> <span class="n">ctx</span><span class="o">.</span><span class="n">mem</span><span class="o">.</span><span class="n">catalog</span><span class="p">()</span>  <span class="c1"># 列出所有可用读取操作及示例</span>
+</code></pre></div>
+
+<h3 id="_12">自身状态</h3>
+<div class="highlight"><pre><span></span><code><span class="n">me</span> <span class="o">=</span> <span class="n">ctx</span><span class="o">.</span><span class="n">mem</span><span class="o">.</span><span class="n">self_state</span><span class="p">()</span>
+<span class="c1"># {</span>
+<span class="c1">#     &quot;ok&quot;: True,</span>
+<span class="c1">#     &quot;uid&quot;: str,            # 自身 UID</span>
+<span class="c1">#     &quot;hp&quot;: int,</span>
+<span class="c1">#     &quot;max_hp&quot;: int,</span>
+<span class="c1">#     &quot;hp_pct&quot;: float,</span>
+<span class="c1">#     &quot;level&quot;: int,</span>
+<span class="c1">#     &quot;profession_id&quot;: int,</span>
+<span class="c1">#     &quot;char_name&quot;: str,</span>
+<span class="c1">#     &quot;stamina&quot;: int,</span>
+<span class="c1">#     &quot;origin_energy&quot;: int,</span>
+<span class="c1">#     &quot;is_dead&quot;: bool,</span>
+<span class="c1">#     &quot;skill_cd_count&quot;: int,</span>
+<span class="c1">#     &quot;resources&quot;: dict,</span>
+<span class="c1"># }</span>
+</code></pre></div>
+
+<h3 id="_13">实体列表</h3>
+<div class="highlight"><pre><span></span><code><span class="n">result</span> <span class="o">=</span> <span class="n">ctx</span><span class="o">.</span><span class="n">mem</span><span class="o">.</span><span class="n">entities</span><span class="p">(</span><span class="n">include_monsters</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span> <span class="n">include_npcs</span><span class="o">=</span><span class="kc">False</span><span class="p">)</span>
+<span class="c1"># {</span>
+<span class="c1">#     &quot;ok&quot;: True,</span>
+<span class="c1">#     &quot;count&quot;: int,</span>
+<span class="c1">#     &quot;entities&quot;: [</span>
+<span class="c1">#         {</span>
+<span class="c1">#             &quot;uuid&quot;: int,</span>
+<span class="c1">#             &quot;config_uuid&quot;: int,</span>
+<span class="c1">#             &quot;base_id&quot;: int,</span>
+<span class="c1">#             &quot;kind&quot;: str,           # &quot;player&quot;, &quot;monster&quot;, &quot;npc&quot;</span>
+<span class="c1">#             &quot;name&quot;: str,</span>
+<span class="c1">#             &quot;cur_hp&quot;: int,</span>
+<span class="c1">#             &quot;max_hp&quot;: int,</span>
+<span class="c1">#             &quot;hp_pct&quot;: float,</span>
+<span class="c1">#             &quot;breaking_stage&quot;: int,</span>
+<span class="c1">#             &quot;overdrive&quot;: bool,</span>
+<span class="c1">#             &quot;stun&quot;: bool,</span>
+<span class="c1">#             &quot;cast_skill_id&quot;: int,</span>
+<span class="c1">#         },</span>
+<span class="c1">#         ...</span>
+<span class="c1">#     ]</span>
+<span class="c1"># }</span>
+</code></pre></div>
+
+<h3 id="boss">Boss 状态</h3>
+<div class="highlight"><pre><span></span><code><span class="n">boss</span> <span class="o">=</span> <span class="n">ctx</span><span class="o">.</span><span class="n">mem</span><span class="o">.</span><span class="n">boss</span><span class="p">()</span>
+<span class="c1"># {&quot;ok&quot;: True, &quot;boss&quot;: {...}}  或  {&quot;ok&quot;: True, &quot;boss&quot;: None}</span>
+
+<span class="n">actions</span> <span class="o">=</span> <span class="n">ctx</span><span class="o">.</span><span class="n">mem</span><span class="o">.</span><span class="n">boss_actions</span><span class="p">()</span>
+<span class="c1"># {</span>
+<span class="c1">#     &quot;ok&quot;: True,</span>
+<span class="c1">#     &quot;count&quot;: int,</span>
+<span class="c1">#     &quot;actions&quot;: [</span>
+<span class="c1">#         {</span>
+<span class="c1">#             &quot;boss_uuid&quot;: int,</span>
+<span class="c1">#             &quot;boss_base_id&quot;: int,</span>
+<span class="c1">#             &quot;boss_name&quot;: str,</span>
+<span class="c1">#             &quot;skill_id&quot;: int,</span>
+<span class="c1">#             &quot;skill_name&quot;: str,</span>
+<span class="c1">#             &quot;cast_active&quot;: bool,</span>
+<span class="c1">#             &quot;cast_elapsed_ms&quot;: int,</span>
+<span class="c1">#             &quot;cast_duration_ms&quot;: int,</span>
+<span class="c1">#             &quot;breaking_stage&quot;: int,</span>
+<span class="c1">#             &quot;overdrive&quot;: bool,</span>
+<span class="c1">#             &quot;stun&quot;: bool,</span>
+<span class="c1">#             &quot;extinction&quot;: float,</span>
+<span class="c1">#             &quot;hp&quot;: int,</span>
+<span class="c1">#             &quot;max_hp&quot;: int,</span>
+<span class="c1">#             &quot;hp_pct&quot;: float,</span>
+<span class="c1">#         },</span>
+<span class="c1">#     ]</span>
+<span class="c1"># }</span>
+
+<span class="c1"># 查询指定 Boss</span>
+<span class="n">single</span> <span class="o">=</span> <span class="n">ctx</span><span class="o">.</span><span class="n">mem</span><span class="o">.</span><span class="n">boss_action</span><span class="p">(</span><span class="n">uuid</span><span class="o">=</span><span class="mi">12345</span><span class="p">)</span>
+</code></pre></div>
+
+<h3 id="_14">伤害数据</h3>
+<div class="highlight"><pre><span></span><code><span class="n">totals</span> <span class="o">=</span> <span class="n">ctx</span><span class="o">.</span><span class="n">mem</span><span class="o">.</span><span class="n">damage_totals</span><span class="p">(</span><span class="n">total_type</span><span class="o">=</span><span class="mi">1</span><span class="p">)</span>
+<span class="c1"># {&quot;ok&quot;: True, &quot;total_type&quot;: 1, &quot;totals&quot;: {uuid: damage_value, ...}, &quot;source&quot;: str}</span>
+
+<span class="n">skills</span> <span class="o">=</span> <span class="n">ctx</span><span class="o">.</span><span class="n">mem</span><span class="o">.</span><span class="n">skill_damage</span><span class="p">(</span><span class="n">uuid</span><span class="o">=</span><span class="mi">12345</span><span class="p">)</span>
+<span class="c1"># {&quot;ok&quot;: True, &quot;uuid&quot;: str, &quot;skills&quot;: {skill_id: damage_value, ...}}</span>
+</code></pre></div>
+
+<h3 id="_15">属性读取</h3>
+<div class="highlight"><pre><span></span><code><span class="n">attrs</span> <span class="o">=</span> <span class="n">ctx</span><span class="o">.</span><span class="n">mem</span><span class="o">.</span><span class="n">attr_map</span><span class="p">(</span><span class="n">ent_addr</span><span class="o">=</span><span class="mh">0x1A2B3C4D</span><span class="p">)</span>
+<span class="c1"># {&quot;ok&quot;: True, &quot;ent_addr&quot;: &quot;0x1A2B3C4D&quot;, &quot;attrs&quot;: {attr_id: value, ...}}</span>
+</code></pre></div>
+
+<h3 id="_16">名称查询</h3>
+<div class="highlight"><pre><span></span><code><span class="n">name</span> <span class="o">=</span> <span class="n">ctx</span><span class="o">.</span><span class="n">mem</span><span class="o">.</span><span class="n">resolve_name</span><span class="p">(</span><span class="n">kind</span><span class="o">=</span><span class="s2">&quot;monster&quot;</span><span class="p">,</span> <span class="nb">id</span><span class="o">=</span><span class="mi">114</span><span class="p">)</span>
+<span class="c1"># {&quot;ok&quot;: True, &quot;kind&quot;: &quot;monster&quot;, &quot;id&quot;: 114, &quot;name&quot;: &quot;敌方木桩&quot;}</span>
+
+<span class="c1"># kind 可选: &quot;monster&quot;, &quot;dungeon&quot;, &quot;skill&quot;, &quot;monster_skill&quot;</span>
+</code></pre></div>
+
+<h3 id="_17">底层地址读取</h3>
+<div class="highlight"><pre><span></span><code><span class="n">result</span> <span class="o">=</span> <span class="n">ctx</span><span class="o">.</span><span class="n">mem</span><span class="o">.</span><span class="n">read_at</span><span class="p">(</span><span class="n">addr</span><span class="o">=</span><span class="s2">&quot;0x1A2B3C4D&quot;</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="s2">&quot;u64&quot;</span><span class="p">)</span>
+<span class="c1"># {&quot;ok&quot;: True, &quot;hint&quot;: {...}}</span>
+
+<span class="n">batch</span> <span class="o">=</span> <span class="n">ctx</span><span class="o">.</span><span class="n">mem</span><span class="o">.</span><span class="n">read_many</span><span class="p">(</span><span class="n">addrs</span><span class="o">=</span><span class="p">[</span><span class="mh">0x100</span><span class="p">,</span> <span class="mh">0x200</span><span class="p">],</span> <span class="n">dtype</span><span class="o">=</span><span class="s2">&quot;i32&quot;</span><span class="p">)</span>
+</code></pre></div>
+
+<hr />
+<h2 id="_18">五、内存搜索</h2>
+<h3 id="ctxmem-job">通过 <code>ctx.mem</code>（异步 Job）</h3>
+<p>适合在插件中做自定义值搜索。后台线程运行，不阻塞 UI。</p>
+<div class="highlight"><pre><span></span><code><span class="c1"># 1. 开始搜索</span>
+<span class="n">job</span> <span class="o">=</span> <span class="n">ctx</span><span class="o">.</span><span class="n">mem</span><span class="o">.</span><span class="n">search</span><span class="p">(</span><span class="n">value</span><span class="o">=</span><span class="mi">50000</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="s2">&quot;i32&quot;</span><span class="p">)</span>
+<span class="n">job_id</span> <span class="o">=</span> <span class="n">job</span><span class="p">[</span><span class="s2">&quot;job_id&quot;</span><span class="p">]</span>
+
+<span class="c1"># 2. 查看进度</span>
+<span class="n">status</span> <span class="o">=</span> <span class="n">ctx</span><span class="o">.</span><span class="n">mem</span><span class="o">.</span><span class="n">search_status</span><span class="p">(</span><span class="n">job_id</span><span class="p">)</span>
+<span class="c1"># {&quot;ok&quot;: True, &quot;state&quot;: &quot;done&quot;, &quot;count&quot;: 42, &quot;results&quot;: [...]}</span>
+
+<span class="c1"># 3. 游戏内改变数值后，缩小范围</span>
+<span class="n">ctx</span><span class="o">.</span><span class="n">mem</span><span class="o">.</span><span class="n">narrow</span><span class="p">(</span><span class="n">job_id</span><span class="p">,</span> <span class="n">value</span><span class="o">=</span><span class="mi">49500</span><span class="p">)</span>
+
+<span class="c1"># 4. 再次查看</span>
+<span class="n">status</span> <span class="o">=</span> <span class="n">ctx</span><span class="o">.</span><span class="n">mem</span><span class="o">.</span><span class="n">search_status</span><span class="p">(</span><span class="n">job_id</span><span class="p">)</span>
+
+<span class="c1"># 管理</span>
+<span class="n">ctx</span><span class="o">.</span><span class="n">mem</span><span class="o">.</span><span class="n">search_cancel</span><span class="p">(</span><span class="n">job_id</span><span class="p">)</span>
+<span class="n">ctx</span><span class="o">.</span><span class="n">mem</span><span class="o">.</span><span class="n">search_list</span><span class="p">()</span>  <span class="c1"># 查看所有 Job</span>
+</code></pre></div>
+
+<p>支持的 dtype：<code>"i32"</code>, <code>"u32"</code>, <code>"i64"</code>, <code>"u64"</code>, <code>"f32"</code>, <code>"f64"</code>, <code>"utf16"</code></p>
+<h3 id="mem_probescanner">通过 <code>mem_probe.scanner</code>（同步）</h3>
+<p>适合脚本和 AI Editor 中使用。</p>
+<div class="highlight"><pre><span></span><code><span class="kn">from</span><span class="w"> </span><span class="nn">mem_probe.scanner</span><span class="w"> </span><span class="kn">import</span> <span class="n">scan</span><span class="p">,</span> <span class="n">narrow</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">mem_probe.process</span><span class="w"> </span><span class="kn">import</span> <span class="n">GameProcess</span>
+
+<span class="k">with</span> <span class="n">GameProcess</span><span class="p">()</span> <span class="k">as</span> <span class="n">proc</span><span class="p">:</span>
+    <span class="c1"># 第一帧：扫描所有匹配值</span>
+    <span class="n">candidates</span> <span class="o">=</span> <span class="n">scan</span><span class="p">(</span><span class="n">proc</span><span class="p">,</span> <span class="n">value</span><span class="o">=</span><span class="mi">50000</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="s2">&quot;i32&quot;</span><span class="p">)</span>
+    <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;找到 </span><span class="si">{</span><span class="nb">len</span><span class="p">(</span><span class="n">candidates</span><span class="p">)</span><span class="si">}</span><span class="s2"> 个候选地址&quot;</span><span class="p">)</span>
+
+    <span class="c1"># 游戏内改变数值后，第二帧缩小范围</span>
+    <span class="n">refined</span> <span class="o">=</span> <span class="n">narrow</span><span class="p">(</span><span class="n">proc</span><span class="p">,</span> <span class="n">candidates</span><span class="p">,</span> <span class="n">value</span><span class="o">=</span><span class="mi">49500</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="s2">&quot;i32&quot;</span><span class="p">)</span>
+    <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;缩小到 </span><span class="si">{</span><span class="nb">len</span><span class="p">(</span><span class="n">refined</span><span class="p">)</span><span class="si">}</span><span class="s2"> 个地址&quot;</span><span class="p">)</span>
+</code></pre></div>
+
+<p><code>scan()</code> 参数：</p>
+<table>
+<thead>
+<tr>
+<th>参数</th>
+<th>说明</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>pm</code></td>
+<td><code>GameProcess</code> 实例</td>
+</tr>
+<tr>
+<td><code>value</code></td>
+<td>要搜索的值</td>
+</tr>
+<tr>
+<td><code>dtype</code></td>
+<td>数据类型</td>
+</tr>
+<tr>
+<td><code>align</code></td>
+<td>对齐字节数（0=自动）</td>
+</tr>
+<tr>
+<td><code>max_hits</code></td>
+<td>最大命中数（默认 200000）</td>
+</tr>
+<tr>
+<td><code>max_region_size</code></td>
+<td>最大区域大小（默认 256MB）</td>
+</tr>
+</tbody>
+</table>
+<h3 id="cython-mem_probecy_memscan">Cython 加速扫描 <code>mem_probe.cy_memscan</code></h3>
+<p>Cython 编译的扫描内核，有纯 Python 回退。插件中一般不直接调用——<code>ctx.mem.search()</code> 已在内部使用。</p>
+<div class="highlight"><pre><span></span><code><span class="kn">from</span><span class="w"> </span><span class="nn">mem_probe</span><span class="w"> </span><span class="kn">import</span> <span class="n">cy_memscan</span>
+
+<span class="c1"># 在 buffer 中搜索对齐的 u64 值</span>
+<span class="n">result</span> <span class="o">=</span> <span class="n">cy_memscan</span><span class="o">.</span><span class="n">find_aligned_u64_in_range</span><span class="p">(</span><span class="n">buffer</span><span class="p">,</span> <span class="n">target</span><span class="p">,</span> <span class="n">offset</span><span class="p">,</span> <span class="n">size</span><span class="p">)</span>
+</code></pre></div>
+
+<hr />
+<h2 id="mem_probeprocess">六、进程操作 <code>mem_probe.process</code></h2>
+<p>需要管理员权限。进程名由调用方显式传入。</p>
+<div class="highlight"><pre><span></span><code><span class="kn">from</span><span class="w"> </span><span class="nn">mem_probe.process</span><span class="w"> </span><span class="kn">import</span> <span class="n">GameProcess</span>
+
+<span class="k">with</span> <span class="n">GameProcess</span><span class="p">()</span> <span class="k">as</span> <span class="n">proc</span><span class="p">:</span>
+    <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;PID: </span><span class="si">{</span><span class="n">proc</span><span class="o">.</span><span class="n">pid</span><span class="si">}</span><span class="s2">, 进程: </span><span class="si">{</span><span class="n">proc</span><span class="o">.</span><span class="n">name</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
+
+    <span class="c1"># 主模块</span>
+    <span class="n">mod</span> <span class="o">=</span> <span class="n">proc</span><span class="o">.</span><span class="n">main_module</span><span class="p">()</span>  <span class="c1"># ModuleInfo(name, base, size)</span>
+    <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;基址: 0x</span><span class="si">{</span><span class="n">mod</span><span class="o">.</span><span class="n">base</span><span class="si">:</span><span class="s2">X</span><span class="si">}</span><span class="s2">, 大小: </span><span class="si">{</span><span class="n">mod</span><span class="o">.</span><span class="n">size</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
+
+    <span class="c1"># 模块列表</span>
+    <span class="k">for</span> <span class="n">m</span> <span class="ow">in</span> <span class="n">proc</span><span class="o">.</span><span class="n">list_modules</span><span class="p">():</span>
+        <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="n">m</span><span class="o">.</span><span class="n">name</span><span class="si">}</span><span class="s2"> @ 0x</span><span class="si">{</span><span class="n">m</span><span class="o">.</span><span class="n">base</span><span class="si">:</span><span class="s2">X</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
+
+    <span class="c1"># 内存区域</span>
+    <span class="k">for</span> <span class="n">region</span> <span class="ow">in</span> <span class="n">proc</span><span class="o">.</span><span class="n">iter_regions</span><span class="p">():</span>
+        <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;0x</span><span class="si">{</span><span class="n">region</span><span class="o">.</span><span class="n">base</span><span class="si">:</span><span class="s2">X</span><span class="si">}</span><span class="s2"> size=</span><span class="si">{</span><span class="n">region</span><span class="o">.</span><span class="n">size</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
+
+    <span class="c1"># 读取</span>
+    <span class="n">data</span> <span class="o">=</span> <span class="n">proc</span><span class="o">.</span><span class="n">read_bytes</span><span class="p">(</span><span class="n">mod</span><span class="o">.</span><span class="n">base</span><span class="p">,</span> <span class="mi">16</span><span class="p">)</span>
+    <span class="n">val</span> <span class="o">=</span> <span class="n">proc</span><span class="o">.</span><span class="n">read_u64</span><span class="p">(</span><span class="n">mod</span><span class="o">.</span><span class="n">base</span><span class="p">)</span>
+    <span class="n">name</span> <span class="o">=</span> <span class="n">proc</span><span class="o">.</span><span class="n">read_utf16</span><span class="p">(</span><span class="n">addr</span><span class="p">,</span> <span class="n">max_len</span><span class="o">=</span><span class="mi">64</span><span class="p">)</span>
+</code></pre></div>
+
+<p>读取方法一览：</p>
+<table>
+<thead>
+<tr>
+<th>方法</th>
+<th>返回类型</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>read_bytes(addr, size)</code></td>
+<td><code>Optional[bytes]</code></td>
+</tr>
+<tr>
+<td><code>read_bytes_into(addr, buf, size)</code></td>
+<td><code>int</code>（读入字节数，零拷贝）</td>
+</tr>
+<tr>
+<td><code>read_u32(addr)</code></td>
+<td><code>Optional[int]</code></td>
+</tr>
+<tr>
+<td><code>read_u64(addr)</code></td>
+<td><code>Optional[int]</code></td>
+</tr>
+<tr>
+<td><code>read_i32(addr)</code></td>
+<td><code>Optional[int]</code></td>
+</tr>
+<tr>
+<td><code>read_i64(addr)</code></td>
+<td><code>Optional[int]</code></td>
+</tr>
+<tr>
+<td><code>read_f32(addr)</code></td>
+<td><code>Optional[float]</code></td>
+</tr>
+<tr>
+<td><code>read_f64(addr)</code></td>
+<td><code>Optional[float]</code></td>
+</tr>
+<tr>
+<td><code>read_cstr(addr, max_len)</code></td>
+<td><code>Optional[str]</code>（ASCII）</td>
+</tr>
+<tr>
+<td><code>read_utf16(addr, max_len)</code></td>
+<td><code>Optional[str]</code>（UTF-16）</td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h2 id="ai-editor">七、AI Editor 引擎调用</h2>
+<p>通过 AI Editor 的 <code>engine()</code> 工具可调用：</p>
+<div class="highlight"><pre><span></span><code>engine(action=&quot;game_state&quot;)       # 当前游戏状态
+engine(action=&quot;entity_list&quot;)      # 实体列表
+engine(action=&quot;dps_summary&quot;)      # DPS 汇总
+engine(action=&quot;system_info&quot;)      # 系统信息
+engine(action=&quot;plugins&quot;)          # 插件列表
+engine(action=&quot;memory_status&quot;)    # 内存源健康状态
+engine(action=&quot;settings_get&quot;, key=&quot;some_key&quot;)
+engine(action=&quot;settings_set&quot;, key=&quot;some_key&quot;, value=&quot;val&quot;)
+</code></pre></div>
+
+<p>执行任意代码：</p>
+<div class="highlight"><pre><span></span><code>engine(action=&quot;exec&quot;, code=&quot;&quot;&quot;
+from mem_probe.process import GameProcess
+with GameProcess() as proc:
+    base = proc.main_module().base
+    data = proc.read_bytes(base, 16)
+    _output.append(f&#39;Base: 0x{base:X}, Header: {data.hex()}&#39;)
+&quot;&quot;&quot;)
+</code></pre></div>
+
+<hr />
+<h2 id="_19">八、常用示例</h2>
+<h3 id="hp">监控自身 HP 并报警</h3>
+<div class="highlight"><pre><span></span><code><span class="k">def</span><span class="w"> </span><span class="nf">on_load</span><span class="p">(</span><span class="n">ctx</span><span class="p">):</span>
+    <span class="k">def</span><span class="w"> </span><span class="nf">check_hp</span><span class="p">(</span><span class="n">snap</span><span class="p">):</span>
+        <span class="n">gs</span> <span class="o">=</span> <span class="n">snap</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;context&quot;</span><span class="p">,</span> <span class="p">{})</span>
+        <span class="n">pct</span> <span class="o">=</span> <span class="n">gs</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;hp_pct&quot;</span><span class="p">,</span> <span class="mf">1.0</span><span class="p">)</span>
+        <span class="k">if</span> <span class="n">pct</span> <span class="o">&lt;</span> <span class="mf">0.3</span><span class="p">:</span>
+            <span class="n">ctx</span><span class="o">.</span><span class="n">toast</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;⚠ HP 过低: </span><span class="si">{</span><span class="n">pct</span><span class="si">:</span><span class="s2">.0%</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
+    <span class="n">ctx</span><span class="o">.</span><span class="n">on_snapshot</span><span class="p">(</span><span class="n">check_hp</span><span class="p">)</span>
+</code></pre></div>
+
+<h3 id="_20">记录每次受到的伤害</h3>
+<div class="highlight"><pre><span></span><code><span class="k">def</span><span class="w"> </span><span class="nf">on_load</span><span class="p">(</span><span class="n">ctx</span><span class="p">):</span>
+    <span class="k">def</span><span class="w"> </span><span class="nf">on_hit</span><span class="p">(</span><span class="n">event</span><span class="p">):</span>
+        <span class="n">p</span> <span class="o">=</span> <span class="n">event</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;payload&quot;</span><span class="p">,</span> <span class="n">event</span><span class="p">)</span>
+        <span class="k">if</span> <span class="ow">not</span> <span class="n">p</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;attacker_is_self&quot;</span><span class="p">)</span> <span class="ow">and</span> <span class="n">p</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;target_is_player&quot;</span><span class="p">):</span>
+            <span class="n">ctx</span><span class="o">.</span><span class="n">log</span><span class="p">(</span><span class="sa">f</span><span class="s1">&#39;受击: </span><span class="si">{</span><span class="n">p</span><span class="p">[</span><span class="s2">&quot;skill_name&quot;</span><span class="p">]</span><span class="si">}</span><span class="s1"> → </span><span class="si">{</span><span class="n">p</span><span class="p">[</span><span class="s2">&quot;damage&quot;</span><span class="p">]</span><span class="si">}</span><span class="s1">&#39;</span><span class="p">)</span>
+    <span class="n">ctx</span><span class="o">.</span><span class="n">on_damage</span><span class="p">(</span><span class="n">on_hit</span><span class="p">)</span>
+</code></pre></div>
+
+<h3 id="boss_1">Boss 施法提醒</h3>
+<div class="highlight"><pre><span></span><code><span class="k">def</span><span class="w"> </span><span class="nf">on_load</span><span class="p">(</span><span class="n">ctx</span><span class="p">):</span>
+    <span class="n">gsm</span> <span class="o">=</span> <span class="n">ctx</span><span class="o">.</span><span class="n">engine</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;game_state&quot;</span><span class="p">)</span>
+
+    <span class="k">def</span><span class="w"> </span><span class="nf">poll</span><span class="p">():</span>
+        <span class="n">s</span> <span class="o">=</span> <span class="n">gsm</span><span class="o">.</span><span class="n">snapshot</span><span class="p">()</span>
+        <span class="k">if</span> <span class="n">s</span><span class="o">.</span><span class="n">boss_cast_active</span><span class="p">:</span>
+            <span class="n">ctx</span><span class="o">.</span><span class="n">notify</span><span class="p">(</span><span class="s2">&quot;Boss 施法&quot;</span><span class="p">,</span> <span class="n">s</span><span class="o">.</span><span class="n">boss_cast_skill_name</span><span class="p">,</span> <span class="n">duration_s</span><span class="o">=</span><span class="mi">3</span><span class="p">)</span>
+
+    <span class="n">ctx</span><span class="o">.</span><span class="n">set_interval</span><span class="p">(</span><span class="n">poll</span><span class="p">,</span> <span class="n">seconds</span><span class="o">=</span><span class="mf">0.5</span><span class="p">)</span>
+</code></pre></div>
+
+<h3 id="boss_2">内存读取 Boss 实时状态</h3>
+<div class="highlight"><pre><span></span><code><span class="k">def</span><span class="w"> </span><span class="nf">on_load</span><span class="p">(</span><span class="n">ctx</span><span class="p">):</span>
+    <span class="k">def</span><span class="w"> </span><span class="nf">show_boss</span><span class="p">():</span>
+        <span class="n">boss</span> <span class="o">=</span> <span class="n">ctx</span><span class="o">.</span><span class="n">mem</span><span class="o">.</span><span class="n">boss</span><span class="p">()</span>
+        <span class="k">if</span> <span class="n">boss</span><span class="p">[</span><span class="s2">&quot;ok&quot;</span><span class="p">]</span> <span class="ow">and</span> <span class="n">boss</span><span class="p">[</span><span class="s2">&quot;boss&quot;</span><span class="p">]:</span>
+            <span class="n">b</span> <span class="o">=</span> <span class="n">boss</span><span class="p">[</span><span class="s2">&quot;boss&quot;</span><span class="p">]</span>
+            <span class="n">ctx</span><span class="o">.</span><span class="n">log</span><span class="p">(</span><span class="sa">f</span><span class="s1">&#39;Boss HP: </span><span class="si">{</span><span class="n">b</span><span class="p">[</span><span class="s2">&quot;hp&quot;</span><span class="p">]</span><span class="si">}</span><span class="s1">/</span><span class="si">{</span><span class="n">b</span><span class="p">[</span><span class="s2">&quot;max_hp&quot;</span><span class="p">]</span><span class="si">}</span><span class="s1"> 破防:</span><span class="si">{</span><span class="n">b</span><span class="p">[</span><span class="s2">&quot;breaking_stage&quot;</span><span class="p">]</span><span class="si">}</span><span class="s1">&#39;</span><span class="p">)</span>
+    <span class="n">ctx</span><span class="o">.</span><span class="n">set_interval</span><span class="p">(</span><span class="n">show_boss</span><span class="p">,</span> <span class="n">seconds</span><span class="o">=</span><span class="mf">1.0</span><span class="p">)</span>
+</code></pre></div>
+
+<h3 id="_21">搜索内存中的自定义数值</h3>
+<div class="highlight"><pre><span></span><code><span class="k">def</span><span class="w"> </span><span class="nf">on_load</span><span class="p">(</span><span class="n">ctx</span><span class="p">):</span>
+    <span class="k">def</span><span class="w"> </span><span class="nf">start_search</span><span class="p">():</span>
+        <span class="n">job</span> <span class="o">=</span> <span class="n">ctx</span><span class="o">.</span><span class="n">mem</span><span class="o">.</span><span class="n">search</span><span class="p">(</span><span class="n">value</span><span class="o">=</span><span class="mi">999</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="s2">&quot;i32&quot;</span><span class="p">)</span>
+        <span class="k">if</span> <span class="n">job</span><span class="p">[</span><span class="s2">&quot;ok&quot;</span><span class="p">]:</span>
+            <span class="n">ctx</span><span class="o">.</span><span class="n">log</span><span class="p">(</span><span class="sa">f</span><span class="s1">&#39;搜索已启动: </span><span class="si">{</span><span class="n">job</span><span class="p">[</span><span class="s2">&quot;job_id&quot;</span><span class="p">]</span><span class="si">}</span><span class="s1">&#39;</span><span class="p">)</span>
+
+            <span class="k">def</span><span class="w"> </span><span class="nf">check</span><span class="p">():</span>
+                <span class="n">s</span> <span class="o">=</span> <span class="n">ctx</span><span class="o">.</span><span class="n">mem</span><span class="o">.</span><span class="n">search_status</span><span class="p">(</span><span class="n">job</span><span class="p">[</span><span class="s2">&quot;job_id&quot;</span><span class="p">])</span>
+                <span class="k">if</span> <span class="n">s</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;done&quot;</span><span class="p">):</span>
+                    <span class="n">ctx</span><span class="o">.</span><span class="n">log</span><span class="p">(</span><span class="sa">f</span><span class="s1">&#39;找到 </span><span class="si">{</span><span class="n">s</span><span class="p">[</span><span class="s2">&quot;count&quot;</span><span class="p">]</span><span class="si">}</span><span class="s1"> 个地址&#39;</span><span class="p">)</span>
+                    <span class="n">ctx</span><span class="o">.</span><span class="n">clear_timer</span><span class="p">(</span><span class="n">t</span><span class="p">)</span>
+
+            <span class="n">t</span> <span class="o">=</span> <span class="n">ctx</span><span class="o">.</span><span class="n">set_interval</span><span class="p">(</span><span class="n">check</span><span class="p">,</span> <span class="n">seconds</span><span class="o">=</span><span class="mf">0.5</span><span class="p">)</span>
+    <span class="n">start_search</span><span class="p">()</span>
+</code></pre></div>
+
+<h3 id="_22">列出附近所有怪物</h3>
+<div class="highlight"><pre><span></span><code><span class="k">def</span><span class="w"> </span><span class="nf">on_load</span><span class="p">(</span><span class="n">ctx</span><span class="p">):</span>
+    <span class="k">def</span><span class="w"> </span><span class="nf">list_monsters</span><span class="p">():</span>
+        <span class="n">r</span> <span class="o">=</span> <span class="n">ctx</span><span class="o">.</span><span class="n">mem</span><span class="o">.</span><span class="n">entities</span><span class="p">(</span><span class="n">include_monsters</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+        <span class="k">if</span> <span class="n">r</span><span class="p">[</span><span class="s2">&quot;ok&quot;</span><span class="p">]:</span>
+            <span class="k">for</span> <span class="n">e</span> <span class="ow">in</span> <span class="n">r</span><span class="p">[</span><span class="s2">&quot;entities&quot;</span><span class="p">]:</span>
+                <span class="k">if</span> <span class="n">e</span><span class="p">[</span><span class="s2">&quot;kind&quot;</span><span class="p">]</span> <span class="o">==</span> <span class="s2">&quot;monster&quot;</span><span class="p">:</span>
+                    <span class="n">ctx</span><span class="o">.</span><span class="n">log</span><span class="p">(</span><span class="sa">f</span><span class="s1">&#39;</span><span class="si">{</span><span class="n">e</span><span class="p">[</span><span class="s2">&quot;name&quot;</span><span class="p">]</span><span class="si">}</span><span class="s1"> HP:</span><span class="si">{</span><span class="n">e</span><span class="p">[</span><span class="s2">&quot;cur_hp&quot;</span><span class="p">]</span><span class="si">}</span><span class="s1">/</span><span class="si">{</span><span class="n">e</span><span class="p">[</span><span class="s2">&quot;max_hp&quot;</span><span class="p">]</span><span class="si">}</span><span class="s1">&#39;</span><span class="p">)</span>
+    <span class="n">ctx</span><span class="o">.</span><span class="n">set_interval</span><span class="p">(</span><span class="n">list_monsters</span><span class="p">,</span> <span class="n">seconds</span><span class="o">=</span><span class="mf">2.0</span><span class="p">)</span>
+</code></pre></div>
+
+<hr />
+<h2 id="_23">九、设计约定</h2>
+<ul>
+<li><strong>只读</strong>：所有接口均为只读。不提供写入游戏内存的方法。</li>
+<li><strong>线程安全</strong>：<code>GameStateManager</code> 内部有锁；<code>MemAccess</code> 方法设计为并发安全。搜索 Job 在后台守护线程运行。</li>
+<li><strong>不抛异常</strong>：<code>MemAccess</code> 方法不会 raise——不可用时返回 <code>{"ok": False, "reason": "...", "hint": "..."}</code>。</li>
+<li><strong>JSON 安全</strong>：所有 <code>MemAccess</code> 返回值可直接 <code>json.dumps()</code>。64 位地址为 hex 字符串，超大整数为字符串（避免 JS <code>Number</code> 精度丢失）。</li>
+<li><strong>模式门控</strong>：<code>ctx.mem</code> 在 TCP-only 模式下返回错误 dict。hybrid/memory 模式下完整可用。</li>
+<li><strong>管理员权限</strong>：内存扫描需要以管理员身份运行。</li>
+</ul>
+    </article>
+  </main>
+  <aside class="toc-rail">
+    <div class="toc-title">本页目录</div>
+    <div class="toc">
+<ul>
+<li><a href="#_1">快速上手</a></li>
+<li><a href="#ctx">一、插件上下文 ctx</a><ul>
+<li><a href="#_2">事件订阅</a></li>
+<li><a href="#_3">主动查询</a></li>
+<li><a href="#_4">引擎访问</a></li>
+<li><a href="#_5">设置</a></li>
+<li><a href="#ui">UI 注册</a></li>
+<li><a href="#_6">快捷键 / 定时器</a></li>
+<li><a href="#_7">其他</a></li>
+</ul>
+</li>
+<li><a href="#_8">二、事件载荷格式</a><ul>
+<li><a href="#on_damage">伤害事件 (on_damage)</a></li>
+<li><a href="#on_skill">技能事件 (on_skill)</a></li>
+<li><a href="#boss-on_boss">Boss 事件 (on_boss)</a></li>
+<li><a href="#act-on_snapshot-get_snapshot">ACT 快照 (on_snapshot / get_snapshot())</a></li>
+</ul>
+</li>
+<li><a href="#gamestatemanager">三、GameStateManager</a><ul>
+<li><a href="#_9">方法</a></li>
+<li><a href="#_10">状态字段</a></li>
+</ul>
+</li>
+<li><a href="#ctxmem">四、内存访问 ctx.mem</a><ul>
+<li><a href="#_11">状态检查</a></li>
+<li><a href="#_12">自身状态</a></li>
+<li><a href="#_13">实体列表</a></li>
+<li><a href="#boss">Boss 状态</a></li>
+<li><a href="#_14">伤害数据</a></li>
+<li><a href="#_15">属性读取</a></li>
+<li><a href="#_16">名称查询</a></li>
+<li><a href="#_17">底层地址读取</a></li>
+</ul>
+</li>
+<li><a href="#_18">五、内存搜索</a><ul>
+<li><a href="#ctxmem-job">通过 ctx.mem（异步 Job）</a></li>
+<li><a href="#mem_probescanner">通过 mem_probe.scanner（同步）</a></li>
+<li><a href="#cython-mem_probecy_memscan">Cython 加速扫描 mem_probe.cy_memscan</a></li>
+</ul>
+</li>
+<li><a href="#mem_probeprocess">六、进程操作 mem_probe.process</a></li>
+<li><a href="#ai-editor">七、AI Editor 引擎调用</a></li>
+<li><a href="#_19">八、常用示例</a><ul>
+<li><a href="#hp">监控自身 HP 并报警</a></li>
+<li><a href="#_20">记录每次受到的伤害</a></li>
+<li><a href="#boss_1">Boss 施法提醒</a></li>
+<li><a href="#boss_2">内存读取 Boss 实时状态</a></li>
+<li><a href="#_21">搜索内存中的自定义数值</a></li>
+<li><a href="#_22">列出附近所有怪物</a></li>
+</ul>
+</li>
+<li><a href="#_23">九、设计约定</a></li>
+</ul>
+</div>
+
+  </aside>
+</div>
+<footer class="site-footer">SAO ACT UI &middot; 平台与插件开发者文档</footer>
+</body>
+</html>

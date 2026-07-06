@@ -912,6 +912,15 @@ class EngineAccess:
             raise RuntimeError(f"engine handle is unavailable: {name}")
         return value
 
+    def register(self, name: str, engine: Any) -> None:
+        # Alias for PluginContext.register_engine, callable as ctx.engine.register(...).
+        key = _normalize_engine_name(name)
+        if not key:
+            raise ValueError(f"invalid engine name: {name!r}")
+        self._manager._plugin_engines[key] = engine
+        if self._record is not None:
+            self._manager._plugin_engine_owners[key] = self._record.plugin_id
+
     def owner_attr(self, name: str, default: Any = None) -> Any:
         owner = self.owner
         if owner is None:
