@@ -102,6 +102,11 @@ python/update_host/native_crypto.py
 *.pyd.sao
 *.native_cache/
 
+# —— Platform source vault (仓库静态加密保护，见 pyx_vault.py) ──────────────
+# 明文源码只留本地磁盘，进 git 的是同目录下的 *.vault 加密件；密钥不进仓库。
+python/.vault/
+python/mem_probe/_sao_cy_memscan.pyx
+
 # ── AI Editor (user conversation history, local only) ──
 python/ai_editor_history/
 python/.sao/chat_history/

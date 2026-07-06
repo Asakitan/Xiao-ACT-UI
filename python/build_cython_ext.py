@@ -24,6 +24,9 @@ from setuptools import Extension, setup
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 
+import pyx_vault
+pyx_vault.sync()
+
 
 def _selected_extension_names() -> set[str]:
     raw = os.environ.get('SAO_CY_ONLY', '').strip()
