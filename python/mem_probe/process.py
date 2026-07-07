@@ -111,29 +111,45 @@ class _UNICODE_STRING(ctypes.Structure):
     ]
 
 
-def _iter_process_entries_wide() -> Iterator[tuple[str, int]]:
-    # Enumerate processes via NtQuerySystemInformation(SystemProcessInformation).
-    #
-    # Avoids CreateToolhelp32Snapshot which is commonly monitored by anti-cheat.
+@dataclass
+class ProcessEntry:
+    name: str
+    pid: int
+    ppid: int = 0
+    thread_count: int = 0
+    working_set: int = 0
+    kernel_time: int = 0
+    user_time: int = 0
+
+
+def _query_system_process_info() -> Optional[tuple]:
     _ntdll = ctypes.windll.ntdll
-    _SPI = 5  # SystemProcessInformation
-    buf_size = 0x100000  # 1 MB initial
+    _SPI = 5
+    buf_size = 0x100000
     for _ in range(3):
         buf = ctypes.create_string_buffer(buf_size)
         ret_len = ctypes.c_ulong(0)
         status = _ntdll.NtQuerySystemInformation(
             _SPI, buf, buf_size, ctypes.byref(ret_len))
         if status == 0:
-            break
-        if status == 0xC0000004:  # STATUS_INFO_LENGTH_MISMATCH
+            return buf, buf.raw, int(ret_len.value)
+        if status == 0xC0000004:
             buf_size = int(ret_len.value) + 0x10000
             continue
+        return None
+    return None
+
+
+def _iter_process_entries_wide() -> Iterator[tuple[str, int]]:
+    # Enumerate processes via NtQuerySystemInformation(SystemProcessInformation).
+    #
+    # Avoids CreateToolhelp32Snapshot which is commonly monitored by anti-cheat.
+    result = _query_system_process_info()
+    if result is None:
         return
-    else:
-        return
+    buf, raw, total = result
+    buf_addr = ctypes.addressof(buf)
     offset = 0
-    raw = buf.raw
-    total = int(ret_len.value)
     while offset < total:
         next_entry = int.from_bytes(raw[offset:offset + 4], "little")
         pid = int.from_bytes(raw[offset + 0x50:offset + 0x58], "little")
@@ -141,7 +157,7 @@ def _iter_process_entries_wide() -> Iterator[tuple[str, int]]:
         name_us_buf = int.from_bytes(raw[offset + 0x40:offset + 0x48], "little")
         name = ""
         if name_us_len > 0 and name_us_buf:
-            buf_offset = name_us_buf - ctypes.addressof(buf)
+            buf_offset = name_us_buf - buf_addr
             if 0 <= buf_offset <= total - name_us_len:
                 try:
                     name = raw[buf_offset:buf_offset + name_us_len].decode("utf-16-le")
@@ -149,6 +165,98 @@ def _iter_process_entries_wide() -> Iterator[tuple[str, int]]:
                     pass
         if pid > 0:
             yield name, pid
+        if next_entry == 0:
+            break
+        offset += next_entry
+
+
+def _iter_process_entries_ext() -> Iterator[ProcessEntry]:
+    """Extended process enumeration — yields ProcessEntry with ppid, threads, memory, CPU times.
+
+    SYSTEM_PROCESS_INFORMATION x64 offsets:
+      +0x00 NextEntryOffset (4)    +0x04 NumberOfThreads (4)
+      +0x18 KernelTime (8)         +0x20 UserTime (8)
+      +0x38 ImageName.Length (2)    +0x40 ImageName.Buffer (8)
+      +0x50 UniqueProcessId (8)    +0x58 InheritedFromUniqueProcessId (8)
+      VM_COUNTERS_EX2 starts ~+0x70; WorkingSetSize at +0x98 (8)
+    """
+    result = _query_system_process_info()
+    if result is None:
+        return
+    buf, raw, total = result
+    buf_addr = ctypes.addressof(buf)
+    _i4 = lambda o: int.from_bytes(raw[o:o + 4], "little")
+    _i8 = lambda o: int.from_bytes(raw[o:o + 8], "little")
+    offset = 0
+    while offset < total:
+        next_entry = _i4(offset)
+        pid = _i8(offset + 0x50)
+        if pid > 0:
+            name_us_len = int.from_bytes(raw[offset + 0x38:offset + 0x3A], "little")
+            name_us_buf = _i8(offset + 0x40)
+            name = ""
+            if name_us_len > 0 and name_us_buf:
+                buf_off = name_us_buf - buf_addr
+                if 0 <= buf_off <= total - name_us_len:
+                    try:
+                        name = raw[buf_off:buf_off + name_us_len].decode("utf-16-le")
+                    except Exception:
+                        pass
+            ppid = _i8(offset + 0x58)
+            thread_count = _i4(offset + 0x04)
+            kernel_time = _i8(offset + 0x18)
+            user_time = _i8(offset + 0x20)
+            working_set = 0
+            if offset + 0xA0 <= total:
+                working_set = _i8(offset + 0x98)
+            yield ProcessEntry(
+                name=name, pid=pid, ppid=ppid,
+                thread_count=thread_count,
+                working_set=working_set,
+                kernel_time=kernel_time,
+                user_time=user_time,
+            )
+        if next_entry == 0:
+            break
+        offset += next_entry
+
+
+def _iter_thread_entries_for_pid(target_pid: int) -> Iterator[dict]:
+    """Parse SYSTEM_THREAD_INFORMATION entries for a specific PID from SystemProcessInformation.
+
+    Each thread entry (56 bytes on x64) follows its parent SYSTEM_PROCESS_INFORMATION.
+    """
+    result = _query_system_process_info()
+    if result is None:
+        return
+    _, raw, total = result
+    _i4 = lambda o: int.from_bytes(raw[o:o + 4], "little")
+    _i8 = lambda o: int.from_bytes(raw[o:o + 8], "little")
+    offset = 0
+    _THREAD_SIZE = 56
+    _PROC_HEADER_SIZE = 0x100
+    while offset < total:
+        next_entry = _i4(offset)
+        pid = _i8(offset + 0x50)
+        n_threads = _i4(offset + 0x04)
+        if pid == target_pid and n_threads > 0:
+            thread_base = offset + _PROC_HEADER_SIZE
+            for i in range(n_threads):
+                t_off = thread_base + i * _THREAD_SIZE
+                if t_off + _THREAD_SIZE > total:
+                    break
+                tid = _i8(t_off + 0x28)
+                start_addr = _i8(t_off + 0x10)
+                base_prio = _i4(t_off + 0x30)
+                prio = _i4(t_off + 0x34)
+                state = _i4(t_off + 0x04)
+                wait_reason = _i4(t_off + 0x38)
+                yield {
+                    "tid": tid, "start_address": start_addr,
+                    "base_priority": base_prio, "priority": prio,
+                    "state": state, "wait_reason": wait_reason,
+                }
+            return
         if next_entry == 0:
             break
         offset += next_entry

@@ -136,6 +136,7 @@ class SAOPlayerGUI(SAOPlayerGUIMenuMixin, SAOPlayerGUIFisheyeMixin, SAOPlayerGUI
         _set_process_app_id('sao.auto.platform.ui')
         self.root = tk.Tk()
         self.root.withdraw()  # root 永远隐藏, 只作为 Tk 事件循环
+        self.root.update_idletasks()
         self.root.title("SAO Auto — Platform UI")
 
         # Unified overlay: single DWM window for all GPU panels.
