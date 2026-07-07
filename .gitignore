@@ -5,6 +5,13 @@ __pycache__/
 *.pyo
 plan_*
 
+# ── Cython source (only .pyd binaries shipped) ───
+python/_sao_cy_*.pyx
+python/mem_probe/_sao_cy_*.pyx
+python/mem_probe/rt_io.py
+python/mem_probe/rt_io_proxy.py
+python/plugins/star_resonance_plugin/cython/_sao_cy_*.pyx
+
 # ── User data (excluded from repo) ────────────────
 player_profile.json
 player_cache.json

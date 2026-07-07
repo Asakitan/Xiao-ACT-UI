@@ -37,7 +37,9 @@ from gui_modules.sao_panel_ui import (
 )
 from gui_modules.sao_panel_components import (
     action_button as _sao_action_button,
+    attach_tooltip as _sao_attach_tooltip,
     dropdown_button as _sao_dropdown_button,
+    plugin_avatar as _sao_plugin_avatar,
     rounded_panel as _sao_rounded_panel,
     sao_scrollbar as _sao_scrollbar,
     status_badge as _sao_status_badge,
@@ -207,10 +209,10 @@ def _wg_tab_button(parent, text, command):
     )
 
 
-def _wg_card(parent, *, rail=None, pad=10):
+def _wg_card(parent, *, rail=None, pad=10, shadow=True):
     # Rounded ivory card. Returns (canvas, inner) — pack/grid the canvas.
     return _sao_rounded_panel(parent, bg=_WG_CARD_BG, border=_WG_BORDER, radius=8,
-                              rail=rail, rail_w=3, pad=pad, canvas_bg=_WG_BODY_BG)
+                              rail=rail, rail_w=3, pad=pad, canvas_bg=_WG_BODY_BG, shadow=shadow)
 
 
 def _wg_badge(parent, text, *, fill, border, fg):
@@ -265,6 +267,70 @@ def _wg_search_bar(parent, var):
 def _set_tab_active(btns: dict, active_key: str):
     for key, btn in btns.items():
         btn.set_active(key == active_key)
+
+
+# ── Publish-tab form primitives (grouped cards instead of a flat label:field list) ──
+
+def _wg_section(parent, title: str):
+    # Rounded card with a small gold eyebrow header. Packs itself; returns the
+    # inner content frame the caller fills in.
+    card, inner = _wg_card(parent, pad=14)
+    card.pack(fill='x', pady=(0, 12))
+    tk.Label(inner, text=title, bg=_WG_CARD_BG, fg=_WG_GOLD_DARK,
+             font=get_cjk_font(10, True), anchor='w').pack(fill='x', pady=(0, 10))
+    return inner
+
+
+def _wg_field(parent, label_text: str, var, *, height: int = 1, hint: str = ''):
+    # Label ABOVE field (not beside it) — avoids the right-aligned-label river
+    # that made the old form read as a raw data-entry sheet. The field itself
+    # sits on _WG_BODY_BG (a shade off the card) so it reads as an inset well.
+    row = tk.Frame(parent, bg=_WG_CARD_BG)
+    row.pack(fill='x', pady=(0, 10))
+    tk.Label(row, text=label_text, bg=_WG_CARD_BG, fg=_WG_MUTED,
+             font=get_cjk_font(9), anchor='w').pack(fill='x', pady=(0, 3))
+    if height > 1:
+        widget = tk.Text(row, bg=_WG_BODY_BG, fg=_WG_TEXT, font=get_cjk_font(10),
+                         relief='flat', height=height, highlightthickness=1,
+                         highlightbackground=_WG_BORDER, highlightcolor=_WG_GOLD,
+                         insertbackground=_WG_TEXT, wrap='word', padx=8, pady=6)
+        widget.pack(fill='x')
+    else:
+        widget = tk.Entry(row, textvariable=var, bg=_WG_BODY_BG, fg=_WG_TEXT,
+                          font=get_cjk_font(10), relief='flat', highlightthickness=1,
+                          highlightbackground=_WG_BORDER, highlightcolor=_WG_GOLD,
+                          insertbackground=_WG_TEXT)
+        widget.pack(fill='x', ipady=5)
+    if hint:
+        tk.Label(row, text=hint, bg=_WG_CARD_BG, fg=_WG_MUTED,
+                 font=get_cjk_font(8), anchor='w', wraplength=560,
+                 justify='left').pack(fill='x', pady=(3, 0))
+    return widget
+
+
+def _wg_choice_group(parent, var, options, *, on_change=None):
+    # Segmented pill chips replacing native tk.Radiobutton (which looks like a
+    # completely different, unstyled app next to the rest of this canvas-drawn
+    # form). ``options`` is ``(value, label)`` pairs; clicking sets ``var`` and
+    # restyles all chips via the same active-state mechanism the store/manage
+    # tabs already use for their tab bars.
+    row = tk.Frame(parent, bg=_WG_CARD_BG)
+    row.pack(fill='x')
+    buttons: dict[str, Any] = {}
+
+    def _select(value: str):
+        var.set(value)
+        for v, btn in buttons.items():
+            btn.set_active(v == value)
+        if callable(on_change):
+            on_change(value)
+
+    for value, label in options:
+        btn = _wg_button(row, label, lambda v=value: _select(v), kind='ghost')
+        btn.pack(side='left', padx=(0, 8))
+        btn.set_active(var.get() == value)
+        buttons[value] = btn
+    return buttons
 
 
 # ═══════════════════════════════════════════════════════════════════
@@ -359,9 +425,11 @@ class WorkshopChildPreview(tk.Frame):
         pid = str(plugin.get('id') or '')
         name = str(plugin.get('name') or pid)
 
-        card, inner = _wg_card(self._local_frame, rail=_WG_GREEN, pad=6)
+        card, inner = _wg_card(self._local_frame, rail=_WG_GREEN, pad=6, shadow=False)
         card.pack(fill='x', pady=2)
 
+        _sao_plugin_avatar(inner, pid, name, size=18, radius=5,
+                          canvas_bg=_WG_CARD_BG).pack(side='left', padx=(0, 6))
         tk.Label(inner, text=name, bg=_WG_CARD_BG, fg=_WG_TEXT,
                  font=get_cjk_font(9, True), anchor='w').pack(side='left', fill='x', expand=True)
         _wg_button(inner, '✦', lambda p=pid: self._open_in_editor(p),
@@ -446,9 +514,11 @@ class WorkshopChildPreview(tk.Frame):
         name = str(plugin.get('name') or pid)
         installed = pid in self._installed
 
-        card, inner = _wg_card(self._list_frame, rail=_WG_GOLD if installed else _WG_SEP, pad=6)
+        card, inner = _wg_card(self._list_frame, rail=_WG_GOLD if installed else _WG_SEP, pad=6, shadow=False)
         card.pack(fill='x', pady=2)
 
+        _sao_plugin_avatar(inner, pid, name, size=18, radius=5,
+                          canvas_bg=_WG_CARD_BG).pack(side='left', padx=(0, 6))
         tk.Label(inner, text=name, bg=_WG_CARD_BG, fg=_WG_TEXT,
                  font=get_cjk_font(9, True), anchor='w').pack(side='left', fill='x', expand=True)
 
@@ -692,8 +762,9 @@ class WorkshopPanel:
 
         zoom_frame = tk.Frame(toolbar, bg=_WG_BODY_BG)
         zoom_frame.pack(side='right', padx=(8, 0))
-        _wg_button(zoom_frame, '−', self._zoom_out, kind='ghost', small=True).pack(side='left', padx=2)
-        _wg_button(zoom_frame, '+', self._zoom_in, kind='ghost', small=True).pack(side='left', padx=2)
+        _wg_button(zoom_frame, '−', self._zoom_out, kind='ghost', small=True).pack(side='left', padx=(0, 1))
+        _wg_button(zoom_frame, '+', self._zoom_in, kind='ghost', small=True).pack(side='left')
+        _sao_attach_tooltip(zoom_frame, '卡片大小 Card size')
 
         self._filter_frame = tk.Frame(parent, bg=_WG_BODY_BG)
         self._filter_frame.pack(fill='x', padx=14, pady=(0, 4))
@@ -806,43 +877,19 @@ class WorkshopPanel:
         scrollbar.pack(side='right', fill='y', padx=(0, 4), pady=10)
         canvas.bind('<MouseWheel>', lambda e: canvas.yview_scroll(int(-1 * (e.delta / 120)), 'units'))
 
-        lbl_font = get_cjk_font(9)
-        entry_font = get_cjk_font(10)
+        max_w = 640
 
-        tk.Label(body, text='上传插件到创意工坊', bg=_WG_BODY_BG, fg=_WG_TEXT,
-                 font=get_cjk_font(12, True), anchor='w').pack(fill='x', pady=(0, 4))
-        tk.Label(body, text='填写插件信息并选择 .zip 包上传，其他用户即可浏览和下载。',
-                 bg=_WG_BODY_BG, fg=_WG_MUTED, font=lbl_font,
-                 anchor='w', wraplength=600).pack(fill='x', pady=(0, 12))
+        header_wrap = tk.Frame(body, bg=_WG_BODY_BG)
+        header_wrap.pack(fill='x')
+        tk.Label(header_wrap, text='上传插件到创意工坊', bg=_WG_BODY_BG, fg=_WG_TEXT,
+                 font=get_cjk_font(13, True), anchor='w').pack(fill='x', pady=(0, 4))
+        tk.Label(header_wrap, text='填写插件信息并选择 .zip 包上传，其他用户即可浏览和下载。',
+                 bg=_WG_BODY_BG, fg=_WG_MUTED, font=get_cjk_font(9),
+                 anchor='w', wraplength=max_w).pack(fill='x', pady=(0, 14))
 
-        tk.Frame(body, bg=_WG_SEP, height=1).pack(fill='x', pady=(0, 10))
-
-        def _field(parent, label_text, var, width=50):
-            row = tk.Frame(parent, bg=_WG_BODY_BG)
-            row.pack(fill='x', pady=(0, 6))
-            tk.Label(row, text=label_text, bg=_WG_BODY_BG, fg=_WG_MUTED,
-                     font=lbl_font, width=12, anchor='e').pack(side='left', padx=(0, 6))
-            e = tk.Entry(row, textvariable=var, bg=_WG_CARD_BG, fg=_WG_TEXT,
-                         font=entry_font, relief='flat', highlightthickness=1,
-                         highlightbackground=_WG_BORDER, insertbackground=_WG_TEXT,
-                         width=width)
-            e.pack(side='left', fill='x', expand=True)
-            return e
-
-        # Select from local plugins
-        sel_frame = tk.Frame(body, bg=_WG_BODY_BG)
-        sel_frame.pack(fill='x', pady=(0, 8))
-        tk.Label(sel_frame, text='选择插件:', bg=_WG_BODY_BG, fg=_WG_TEXT,
-                 font=get_cjk_font(10), anchor='w').pack(side='left')
+        # Metadata StringVars — names kept exactly as before, _collect_publish_meta()
+        # and friends read these directly and are otherwise untouched.
         self._publish_var = tk.StringVar()
-        self._publish_menu_frame = tk.Frame(sel_frame, bg=_WG_BODY_BG)
-        self._publish_menu_frame.pack(side='left', padx=(8, 0))
-        _wg_button(sel_frame, '填入', self._fill_from_selected,
-                  kind='ghost', small=True).pack(side='left', padx=(8, 0))
-
-        tk.Frame(body, bg=_WG_SEP, height=1).pack(fill='x', pady=(4, 8))
-
-        # Metadata fields
         self._pub_id_var = tk.StringVar()
         self._pub_name_var = tk.StringVar()
         self._pub_version_var = tk.StringVar(value='1.0.0')
@@ -851,93 +898,103 @@ class WorkshopPanel:
         self._pub_games_var = tk.StringVar()
         self._pub_tags_var = tk.StringVar()
 
-        _field(body, '显示名称', self._pub_name_var)
+        # ── Section: source (pick a local plugin — auto-fills below — or browse a .zip) ──
+        src = _wg_section(body, '① 选择来源 SOURCE')
+        row = tk.Frame(src, bg=_WG_CARD_BG)
+        row.pack(fill='x')
+        tk.Label(row, text='本地插件', bg=_WG_CARD_BG, fg=_WG_TEXT,
+                 font=get_cjk_font(9), anchor='w').pack(side='left')
+        self._publish_menu_frame = tk.Frame(row, bg=_WG_CARD_BG)
+        self._publish_menu_frame.pack(side='left', padx=(8, 0), fill='x', expand=True)
+        _wg_button(row, '↺ 重新填入', self._fill_from_selected,
+                  kind='ghost', small=True).pack(side='right')
+        tk.Label(src, text='选中插件即自动填入下方信息；如手动改过想恢复原值再点"重新填入"。',
+                 bg=_WG_CARD_BG, fg=_WG_MUTED, font=get_cjk_font(8),
+                 anchor='w').pack(fill='x', pady=(4, 10))
 
-        row2 = tk.Frame(body, bg=_WG_BODY_BG)
-        row2.pack(fill='x', pady=(0, 6))
-        tk.Label(row2, text='版本', bg=_WG_BODY_BG, fg=_WG_MUTED,
-                 font=lbl_font, width=12, anchor='e').pack(side='left', padx=(0, 6))
-        tk.Entry(row2, textvariable=self._pub_version_var, bg=_WG_CARD_BG, fg=_WG_TEXT,
-                 font=entry_font, relief='flat', highlightthickness=1,
+        divider = tk.Frame(src, bg=_WG_CARD_BG)
+        divider.pack(fill='x', pady=(0, 10))
+        tk.Frame(divider, bg=_WG_SEP, height=1).pack(side='left', fill='x', expand=True, pady=(0,))
+        tk.Label(divider, text='  或直接上传 .zip  ', bg=_WG_CARD_BG, fg=_WG_MUTED,
+                 font=get_cjk_font(8)).pack(side='left')
+        tk.Frame(divider, bg=_WG_SEP, height=1).pack(side='left', fill='x', expand=True)
+
+        zip_row = tk.Frame(src, bg=_WG_CARD_BG)
+        zip_row.pack(fill='x')
+        self._zip_path_var = tk.StringVar()
+        tk.Entry(zip_row, textvariable=self._zip_path_var, bg=_WG_BODY_BG, fg=_WG_TEXT,
+                 font=get_cjk_font(9), relief='flat', highlightthickness=1,
                  highlightbackground=_WG_BORDER, insertbackground=_WG_TEXT,
-                 width=15).pack(side='left')
-        tk.Label(row2, text='作者', bg=_WG_BODY_BG, fg=_WG_MUTED,
-                 font=lbl_font, anchor='e').pack(side='left', padx=(16, 6))
-        tk.Entry(row2, textvariable=self._pub_author_var, bg=_WG_CARD_BG, fg=_WG_TEXT,
-                 font=entry_font, relief='flat', highlightthickness=1,
-                 highlightbackground=_WG_BORDER, insertbackground=_WG_TEXT,
-                 width=20).pack(side='left', fill='x', expand=True)
+                 state='readonly').pack(side='left', fill='x', expand=True, ipady=4, padx=(0, 6))
+        _wg_button(zip_row, '浏览', self._browse_zip, kind='ghost', small=True).pack(side='left')
 
-        _field(body, '简介', self._pub_desc_var)
+        # ── Section: basic info ──
+        info = _wg_section(body, '② 基本信息 DETAILS')
+        _wg_field(info, '显示名称', self._pub_name_var)
+        row2 = tk.Frame(info, bg=_WG_CARD_BG)
+        row2.pack(fill='x', pady=(0, 10))
+        col_a = tk.Frame(row2, bg=_WG_CARD_BG)
+        col_a.pack(side='left', fill='x', expand=True, padx=(0, 8))
+        tk.Label(col_a, text='版本', bg=_WG_CARD_BG, fg=_WG_MUTED,
+                 font=get_cjk_font(9), anchor='w').pack(fill='x', pady=(0, 3))
+        tk.Entry(col_a, textvariable=self._pub_version_var, bg=_WG_BODY_BG, fg=_WG_TEXT,
+                 font=get_cjk_font(10), relief='flat', highlightthickness=1,
+                 highlightbackground=_WG_BORDER, highlightcolor=_WG_GOLD,
+                 insertbackground=_WG_TEXT).pack(fill='x', ipady=5)
+        col_b = tk.Frame(row2, bg=_WG_CARD_BG)
+        col_b.pack(side='left', fill='x', expand=True)
+        tk.Label(col_b, text='作者', bg=_WG_CARD_BG, fg=_WG_MUTED,
+                 font=get_cjk_font(9), anchor='w').pack(fill='x', pady=(0, 3))
+        tk.Entry(col_b, textvariable=self._pub_author_var, bg=_WG_BODY_BG, fg=_WG_TEXT,
+                 font=get_cjk_font(10), relief='flat', highlightthickness=1,
+                 highlightbackground=_WG_BORDER, highlightcolor=_WG_GOLD,
+                 insertbackground=_WG_TEXT).pack(fill='x', ipady=5)
+        _wg_field(info, '简介', self._pub_desc_var)
+        self._pub_long_desc = _wg_field(info, '详细介绍 (可选)', None, height=4)
 
-        # Long description
-        tk.Label(body, text='详细介绍 (可选)', bg=_WG_BODY_BG, fg=_WG_MUTED,
-                 font=lbl_font, anchor='w').pack(fill='x', padx=(0, 0), pady=(0, 2))
-        self._pub_long_desc = tk.Text(body, bg=_WG_CARD_BG, fg=_WG_TEXT,
-                                       font=entry_font, relief='flat', height=4,
-                                       highlightthickness=1, highlightbackground=_WG_BORDER,
-                                       insertbackground=_WG_TEXT, wrap='word')
-        self._pub_long_desc.pack(fill='x', pady=(0, 6))
+        # ── Section: classification ──
+        cls = _wg_section(body, '③ 分类 CLASSIFICATION')
+        _wg_field(cls, '游戏 (逗号隔开)', self._pub_games_var)
+        _wg_field(cls, '标签 (逗号隔开)', self._pub_tags_var)
 
-        _field(body, '游戏 (逗号隔)', self._pub_games_var)
-        _field(body, '标签 (逗号隔)', self._pub_tags_var)
-
-        # Access level
-        acc_frame = tk.Frame(body, bg=_WG_BODY_BG)
-        acc_frame.pack(fill='x', pady=(0, 6))
-        tk.Label(acc_frame, text='访问权限', bg=_WG_BODY_BG, fg=_WG_MUTED,
-                 font=lbl_font, width=12, anchor='e').pack(side='left', padx=(0, 6))
+        # ── Section: publish settings ──
+        pub = _wg_section(body, '④ 发布设置 PUBLISH SETTINGS')
+        tk.Label(pub, text='访问权限', bg=_WG_CARD_BG, fg=_WG_MUTED,
+                 font=get_cjk_font(9), anchor='w').pack(fill='x', pady=(0, 4))
         self._pub_access_var = tk.StringVar(value='free')
-        tk.Radiobutton(acc_frame, text='免费 (所有用户)', variable=self._pub_access_var,
-                       value='free', bg=_WG_BODY_BG, fg=_WG_TEXT, selectcolor=_WG_CARD_BG,
-                       font=lbl_font, activebackground=_WG_BODY_BG,
-                       activeforeground=_WG_TEXT).pack(side='left', padx=(0, 12))
-        tk.Radiobutton(acc_frame, text='★ 高级版专属 (付费用户)', variable=self._pub_access_var,
-                       value='paid', bg=_WG_BODY_BG, fg='#ffc040', selectcolor=_WG_CARD_BG,
-                       font=lbl_font, activebackground=_WG_BODY_BG,
-                       activeforeground='#ffc040').pack(side='left')
+        _wg_choice_group(pub, self._pub_access_var,
+                        [('free', '免费 (所有用户)'), ('paid', '★ 高级版专属 (付费用户)')])
+
+        tk.Frame(pub, bg=_WG_SEP, height=1).pack(fill='x', pady=(12, 12))
 
         # Source protection: open-source (downloadable .py) vs closed-source
         # (server compiles to native + AES-encrypts; source not downloadable).
         # Sent as the `open_source` publish attribute the client/server
         # already accept.
-        prot_frame = tk.Frame(body, bg=_WG_BODY_BG)
-        prot_frame.pack(fill='x', pady=(0, 2))
-        tk.Label(prot_frame, text='源码保护', bg=_WG_BODY_BG, fg=_WG_MUTED,
-                 font=lbl_font, width=12, anchor='e').pack(side='left', padx=(0, 6))
+        tk.Label(pub, text='源码保护', bg=_WG_CARD_BG, fg=_WG_MUTED,
+                 font=get_cjk_font(9), anchor='w').pack(fill='x', pady=(0, 4))
         self._pub_open_source_var = tk.StringVar(value='open')
-        tk.Radiobutton(prot_frame, text='开源 (可下载源码)', variable=self._pub_open_source_var,
-                       value='open', bg=_WG_BODY_BG, fg=_WG_TEXT, selectcolor=_WG_CARD_BG,
-                       font=lbl_font, activebackground=_WG_BODY_BG,
-                       activeforeground=_WG_TEXT).pack(side='left', padx=(0, 12))
-        tk.Radiobutton(prot_frame, text='🔒 闭源加密 (编译保护)', variable=self._pub_open_source_var,
-                       value='protected', bg=_WG_BODY_BG, fg='#5ec8d8', selectcolor=_WG_CARD_BG,
-                       font=lbl_font, activebackground=_WG_BODY_BG,
-                       activeforeground='#5ec8d8').pack(side='left')
-        tk.Label(body, text='闭源加密: 上传后由服务器编译为原生模块并加密，其他用户可安装运行但无法查看或下载源码。',
-                 bg=_WG_BODY_BG, fg=_WG_MUTED, font=get_cjk_font(8),
-                 anchor='w', wraplength=600, justify='left').pack(fill='x', padx=(96, 0), pady=(0, 6))
+        prot_hint = tk.Label(pub, text='', bg=_WG_CARD_BG, fg=_WG_MUTED, font=get_cjk_font(8),
+                             anchor='w', wraplength=max_w, justify='left')
 
-        tk.Frame(body, bg=_WG_SEP, height=1).pack(fill='x', pady=(4, 8))
+        def _on_protection_change(value: str):
+            prot_hint.configure(
+                text='闭源加密: 上传后由服务器编译为原生模块并加密，其他用户可安装运行但无法查看或下载源码。'
+                if value == 'protected' else '开源: 其他用户可以查看和下载这个插件的源代码。')
 
-        # Zip file selector
-        or_frame = tk.Frame(body, bg=_WG_BODY_BG)
-        or_frame.pack(fill='x', pady=(0, 8))
-        tk.Label(or_frame, text='.zip 文件', bg=_WG_BODY_BG, fg=_WG_MUTED,
-                 font=lbl_font, width=12, anchor='e').pack(side='left', padx=(0, 6))
-        self._zip_path_var = tk.StringVar()
-        tk.Entry(or_frame, textvariable=self._zip_path_var, bg=_WG_CARD_BG, fg=_WG_TEXT,
-                 font=entry_font, relief='flat', highlightthickness=1,
-                 highlightbackground=_WG_BORDER, insertbackground=_WG_TEXT,
-                 state='readonly', width=40).pack(side='left', fill='x', expand=True, padx=(0, 4))
-        _wg_button(or_frame, '浏览', self._browse_zip, kind='ghost', small=True).pack(side='left')
+        _wg_choice_group(pub, self._pub_open_source_var,
+                        [('open', '开源 (可下载源码)'), ('protected', '🔒 闭源加密 (编译保护)')],
+                        on_change=_on_protection_change)
+        _on_protection_change(self._pub_open_source_var.get())
+        prot_hint.pack(fill='x', pady=(8, 0))
 
-        tk.Frame(body, bg=_WG_SEP, height=1).pack(fill='x', pady=(4, 10))
-
-        _wg_button(body, '  上传到创意工坊  ', self._do_publish, kind='solid').pack(anchor='w')
+        # ── CTA ──
+        cta_row = tk.Frame(body, bg=_WG_BODY_BG)
+        cta_row.pack(fill='x', pady=(4, 0))
+        _wg_button(cta_row, '  上传到创意工坊  ', self._do_publish, kind='solid').pack(side='left')
 
         self._publish_status = tk.Label(body, text='', bg=_WG_BODY_BG, fg=_WG_MUTED,
-                                        font=get_cjk_font(9), anchor='w', wraplength=500)
+                                        font=get_cjk_font(9), anchor='w', wraplength=max_w)
         self._publish_status.pack(fill='x', pady=(8, 0))
 
     # ── Tab switching ─────────────────────────────────────────────
@@ -1086,8 +1143,8 @@ class WorkshopPanel:
 
         top = tk.Frame(inner, bg=_WG_CARD_BG)
         top.pack(fill='x', pady=(0, 4))
-        tk.Label(top, text='◇', bg=_WG_BADGE_BG, fg=_WG_GOLD,
-                 font=get_sao_font(int(14 * z)), width=2, relief='flat').pack(side='left', padx=(0, 8))
+        _sao_plugin_avatar(top, pid, name, size=max(26, int(32 * z)),
+                          canvas_bg=_WG_CARD_BG).pack(side='left', padx=(0, 8))
         title_area = tk.Frame(top, bg=_WG_CARD_BG)
         title_area.pack(side='left', fill='x', expand=True)
         tk.Label(title_area, text=name, bg=_WG_CARD_BG, fg=_WG_TEXT,
@@ -1246,21 +1303,27 @@ class WorkshopPanel:
         card, inner = _wg_card(parent, rail=_WG_GREEN, pad=12)
         card.pack(fill='x', padx=14, pady=4)
 
-        # Top row: name + version
+        # Top row: avatar + name/version + author
         top = tk.Frame(inner, bg=_WG_CARD_BG)
         top.pack(fill='x')
-        tk.Label(top, text=name, bg=_WG_CARD_BG, fg=_WG_TEXT,
+        _sao_plugin_avatar(top, pid, name, size=30,
+                          canvas_bg=_WG_CARD_BG).pack(side='left', padx=(0, 8))
+        title_area = tk.Frame(top, bg=_WG_CARD_BG)
+        title_area.pack(side='left', fill='x', expand=True)
+        name_row = tk.Frame(title_area, bg=_WG_CARD_BG)
+        name_row.pack(fill='x')
+        tk.Label(name_row, text=name, bg=_WG_CARD_BG, fg=_WG_TEXT,
                  font=get_cjk_font(11, True), anchor='w').pack(side='left')
         if version:
-            tk.Label(top, text=f'v{version}', bg=_WG_CARD_BG, fg=_WG_MUTED,
+            tk.Label(name_row, text=f'v{version}', bg=_WG_CARD_BG, fg=_WG_MUTED,
                      font=get_cjk_font(8), anchor='e').pack(side='right')
-
         if author:
-            tk.Label(inner, text=f'by {author}', bg=_WG_CARD_BG, fg=_WG_MUTED,
+            tk.Label(title_area, text=f'by {author}', bg=_WG_CARD_BG, fg=_WG_MUTED,
                      font=get_cjk_font(9), anchor='w').pack(fill='x')
+
         if desc:
             tk.Label(inner, text=desc, bg=_WG_CARD_BG, fg=_WG_MUTED,
-                     font=get_cjk_font(9), anchor='w', wraplength=600).pack(fill='x', pady=(2, 0))
+                     font=get_cjk_font(9), anchor='w', wraplength=600).pack(fill='x', pady=(6, 0))
 
         tk.Frame(inner, bg=_WG_SEP, height=1).pack(fill='x', pady=(6, 4))
 
@@ -1355,6 +1418,9 @@ class WorkshopPanel:
     # ── Publish tab ───────────────────────────────────────────────
 
     def _refresh_publish_menu(self):
+        # Gold-skinned dropdown (matches every other picker in this panel)
+        # instead of a native tk.OptionMenu, which looked like a different,
+        # unstyled app dropped into the middle of this form.
         self._local_plugins = _get_local_user_plugins()
         parent = self._publish_menu_frame
         if parent is None:
@@ -1362,22 +1428,20 @@ class WorkshopPanel:
         for w in parent.winfo_children():
             w.destroy()
         if not self._local_plugins:
-            tk.Label(parent, text='(无用户插件)', bg=_WG_BODY_BG, fg=_WG_MUTED,
-                     font=get_cjk_font(9)).pack(side='left')
+            tk.Label(parent, text='(无本地插件 · 可在下方直接浏览 .zip)', bg=_WG_CARD_BG,
+                     fg=_WG_MUTED, font=get_cjk_font(9), anchor='w').pack(side='left', fill='x')
             return
         names = [f'{p["name"]} ({p["id"]})' for p in self._local_plugins]
-        self._publish_var.set(names[0] if names else '')
-        try:
-            om = tk.OptionMenu(parent, self._publish_var, *names)
-            om.configure(bg=_WG_CARD_BG, fg=_WG_TEXT, font=get_cjk_font(9),
-                         highlightthickness=1, highlightbackground=_WG_BORDER,
-                         relief='flat')
-            om['menu'].configure(bg=_WG_CARD_BG, fg=_WG_TEXT,
-                                 activebackground=_WG_GOLD, activeforeground='#FFFFFF',
-                                 relief='flat', bd=0, font=get_cjk_font(9))
-            om.pack(side='left')
-        except Exception:
-            pass
+        if self._publish_var.get().strip() not in names:
+            self._publish_var.set(names[0])
+
+        def _pick(plugin: dict):
+            self._publish_var.set(f'{plugin["name"]} ({plugin["id"]})')
+            self._fill_from_selected()
+            self._refresh_publish_menu()
+
+        items = [(label, lambda p=p: _pick(p)) for label, p in zip(names, self._local_plugins)]
+        _wg_dropdown(parent, self._publish_var.get(), items).pack(side='left', fill='x')
 
     def _fill_from_selected(self):
         selected = self._publish_var.get().strip()

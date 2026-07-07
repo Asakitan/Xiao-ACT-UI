@@ -455,6 +455,21 @@ def more_indicator(parent: tk.Misc, hidden_count: int, *, noun: str = "条") -> 
     )
 
 
+def _blend_hex(c1: str, c2: str, t: float) -> str:
+    # Linear-blend two '#rrggbb' colors by t in [0, 1] (0 = c1, 1 = c2).
+    try:
+        a, b = c1.lstrip('#'), c2.lstrip('#')
+        r1, g1, b1 = int(a[0:2], 16), int(a[2:4], 16), int(a[4:6], 16)
+        r2, g2, b2 = int(b[0:2], 16), int(b[2:4], 16), int(b[4:6], 16)
+        t = max(0.0, min(1.0, t))
+        r = int(r1 + (r2 - r1) * t)
+        g = int(g1 + (g2 - g1) * t)
+        b = int(b1 + (b2 - b1) * t)
+        return f'#{r:02x}{g:02x}{b:02x}'
+    except Exception:
+        return c1 if str(c1).startswith('#') else f'#{c1}'
+
+
 def _round_pts(x1, y1, x2, y2, r):
     # Point list for a smooth (bezier) rounded rectangle on a tk.Canvas.
     return [
@@ -464,7 +479,8 @@ def _round_pts(x1, y1, x2, y2, r):
     ]
 
 
-def rounded_panel(parent, *, bg, border, radius=8, rail=None, rail_w=3, pad=10, height=None, canvas_bg=None):
+def rounded_panel(parent, *, bg, border, radius=8, rail=None, rail_w=3, pad=10, height=None,
+                  canvas_bg=None, shadow=False):
     # Canvas-backed rounded card (Tk has no rounded Frame). Returns (canvas, inner).
     #
     # Draws a smooth rounded rect (fill ``bg``, 1px ``border``) and, when ``rail``
@@ -475,10 +491,21 @@ def rounded_panel(parent, *, bg, border, radius=8, rail=None, rail_w=3, pad=10, 
     # ``canvas_bg`` overrides the backing canvas fill (visible at the rounded
     # corners) — pass it when ``bg``/``border`` are an explicit brand palette
     # that doesn't match the current global theme's body background.
+    #
+    # ``shadow`` adds a cheap flat drop-shadow (two offset solid polygons blended
+    # toward black, no PIL/blur) so the card reads as raised off the sheet instead
+    # of flat-printed on it. Defaults off — existing callers are pixel-identical.
+    #
+    # A Tk canvas clips drawing to its own width/height — a shadow can't be
+    # painted "outside" the widget. So when enabled, the fill/rail rect is
+    # inset by ``_SHADOW_MARGIN`` px on the bottom-right and the shadow layers
+    # are drawn in that reserved strip, staying inside the canvas's own bounds.
+    _SHADOW_MARGIN = 5
+    margin = _SHADOW_MARGIN if shadow else 0
     body_bg = canvas_bg if canvas_bg is not None else _pc('body_bg', ui._SAO_PANEL_BODY_BG)
     canvas = tk.Canvas(parent, bg=body_bg, highlightthickness=0, bd=0)
     if height:
-        canvas.configure(height=height)
+        canvas.configure(height=height + margin)
     inner = tk.Frame(canvas, bg=bg)
     canvas.create_window(pad + (rail_w if rail else 0), pad, window=inner, anchor='nw', tags='inner')
 
@@ -487,28 +514,41 @@ def rounded_panel(parent, *, bg, border, radius=8, rail=None, rail_w=3, pad=10, 
         h = canvas.winfo_height()
         if w <= 2 or h <= 2:
             return
+        fw, fh = w - margin, h - margin
         canvas.delete('bg')
+        canvas.delete('shadow')
+        if shadow:
+            sh_far = _blend_hex(body_bg, '#000000', 0.16)
+            sh_near = _blend_hex(body_bg, '#000000', 0.08)
+            canvas.create_polygon(_round_pts(1 + 3, 1 + 4, fw + 3, fh + 4, radius), smooth=True, splinesteps=20,
+                                  fill=sh_far, outline='', tags='shadow')
+            canvas.create_polygon(_round_pts(1 + 2, 1 + 2, fw + 2, fh + 2, radius), smooth=True, splinesteps=20,
+                                  fill=sh_near, outline='', tags='shadow')
         if rail:
-            canvas.create_polygon(_round_pts(1, 1, w - 1, h - 1, radius), smooth=True, splinesteps=20,
+            canvas.create_polygon(_round_pts(1, 1, fw - 1, fh - 1, radius), smooth=True, splinesteps=20,
                                   fill=rail, outline=rail, tags='bg')
-            canvas.create_polygon(_round_pts(1 + rail_w, 1, w - 1, h - 1, radius), smooth=True, splinesteps=20,
+            canvas.create_polygon(_round_pts(1 + rail_w, 1, fw - 1, fh - 1, radius), smooth=True, splinesteps=20,
                                   fill=bg, outline=border, width=1, tags='bg')
         else:
-            canvas.create_polygon(_round_pts(1, 1, w - 1, h - 1, radius), smooth=True, splinesteps=20,
+            canvas.create_polygon(_round_pts(1, 1, fw - 1, fh - 1, radius), smooth=True, splinesteps=20,
                                   fill=bg, outline=border, width=1, tags='bg')
-        canvas.tag_lower('bg')
+        if shadow:
+            canvas.tag_lower('shadow')
+            canvas.tag_raise('bg', 'shadow')
+        else:
+            canvas.tag_lower('bg')
         canvas.coords('inner', pad + (rail_w if rail else 0), pad)
         if height is not None:
-            canvas.itemconfigure('inner', width=w - 2 * pad - (rail_w if rail else 0), height=h - 2 * pad)
+            canvas.itemconfigure('inner', width=fw - 2 * pad - (rail_w if rail else 0), height=fh - 2 * pad)
         else:
-            canvas.itemconfigure('inner', width=w - 2 * pad - (rail_w if rail else 0))
+            canvas.itemconfigure('inner', width=fw - 2 * pad - (rail_w if rail else 0))
 
     canvas.bind('<Configure>', _redraw)
     if height is None:
         # auto-grow the canvas to the inner content height (variable-height cards/sections)
         def _fit(_e=None):
             try:
-                req = inner.winfo_reqheight() + 2 * pad
+                req = inner.winfo_reqheight() + 2 * pad + margin
                 if abs((canvas.winfo_height() or 0) - req) > 1:
                     canvas.configure(height=req)
                 _redraw()
@@ -516,6 +556,52 @@ def rounded_panel(parent, *, bg, border, radius=8, rail=None, rail_w=3, pad=10, 
                 pass
         inner.bind('<Configure>', _fit)
     return canvas, inner
+
+
+# ── Deterministic per-item "identicon" avatar (plugin/store cards) ──
+# Every card drawing the same generic glyph reads as "placeholder, not real
+# software" (VS Code/GitHub/Steam Workshop all give each item a distinct
+# thumbnail). Without real icons, a stable hash → color + initial glyph at
+# least makes cards individually recognizable at a glance, and it's a pure
+# function of the item's own id/name so it never flickers between refreshes.
+_AVATAR_PALETTE = (
+    '#5B8DEF', '#22A699', '#E0895C', '#8E6FCE',
+    '#D65C7A', '#4FA65B', '#4C6B8A', '#C2574B',
+)
+
+
+def _avatar_glyph(label: str) -> str:
+    text = str(label or '').strip()
+    if not text:
+        return '?'
+    first = text[0]
+    if ord(first) > 0x2E80:  # CJK/kana/hangul block and above → one glyph reads fine
+        return first
+    letters = ''.join(ch for ch in text if ch.isalnum())
+    return (letters[:2] or first).upper()
+
+
+def plugin_avatar(parent: tk.Misc, key: str, label: str, *, size: int = 34,
+                  radius: int = 8, canvas_bg: Optional[str] = None,
+                  fg: str = '#ffffff') -> tk.Canvas:
+    # Rounded colored square with a 1-2 char glyph, color hashed from ``key``
+    # (stable across restarts — same plugin always gets the same color).
+    #
+    # Plugin ids are short and share structure (most end in "_plugin"/"_log"),
+    # and crc32 mod-8 only looks at the low 3 bits — on this corpus that put
+    # half the ids in one bucket. XOR-folding the high bits in first mixes
+    # enough of the digest to spread a small id set across the palette.
+    import zlib
+    digest = zlib.crc32(str(key or label or '').encode('utf-8', 'ignore')) & 0xFFFFFFFF
+    mixed = (digest ^ (digest >> 15) ^ (digest >> 24)) & 0xFFFFFFFF
+    color = _AVATAR_PALETTE[mixed % len(_AVATAR_PALETTE)]
+    bg = canvas_bg if canvas_bg is not None else _pc('card_bg', ui._SAO_PANEL_BODY_BG)
+    c = tk.Canvas(parent, width=size, height=size, bg=bg, highlightthickness=0, bd=0)
+    c.create_polygon(_round_pts(1, 1, size - 1, size - 1, radius), smooth=True, splinesteps=16,
+                     fill=color, outline='')
+    c.create_text(size // 2, size // 2 + 1, text=_avatar_glyph(label), fill=fg,
+                  font=get_cjk_font(max(9, int(size * 0.34)), True))
+    return c
 
 
 class _SaoScroll(tk.Canvas):

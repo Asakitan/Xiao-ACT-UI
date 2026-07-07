@@ -34,7 +34,7 @@ from gui_modules.sao_panel_components import (
     SP_SM, SP_MD, SP_XS,
     _pc,
     action_button, bind_canvas_mousewheel, dropdown_button, keep_canvas_scroll,
-    rounded_panel, sao_entry, sao_option_menu, sao_scrollbar,
+    plugin_avatar, rounded_panel, sao_entry, sao_option_menu, sao_scrollbar,
     status_badge,
 )
 from utils.sao_sound import get_sao_font, get_cjk_font
@@ -101,7 +101,6 @@ class PluginManagerPanel:
         self.owner = owner
         self._win: Optional[tk.Toplevel] = None
         self._list: Optional[tk.Frame] = None
-        self._summary_var = tk.StringVar(value="0 / 0 ACTIVE")
         self._status_var = tk.StringVar(value="Ready")
         self._last_status: Dict[str, Any] = {}
         self._active_tab = "manage"
@@ -110,6 +109,9 @@ class PluginManagerPanel:
         self._panel_list: Optional[PluginPanelList] = None
         self._tab_buttons: Dict[str, tk.Button] = {}
         self._refresh_busy = False
+        #: quick status filter driving the pill row — 'all' | 'enabled' | 'disabled'
+        self._status_filter = 'all'
+        self._filter_buttons: Dict[str, Any] = {}
 
     def show(self) -> None:
         if self._win is None or not self._exists():
@@ -298,12 +300,15 @@ class PluginManagerPanel:
         status_badge(badge_frame, '0/0', kind='gold').pack()
         self._count_badge_parent = badge_frame
 
+        # Row2: a plain context subtitle, not a second "PLUGIN MANAGER" —
+        # the header bar already names the panel; repeating the brand title
+        # here was pure duplication. The enabled/disabled count now lives
+        # only in the badge above and the filter chips below (self._summary_var
+        # is kept for the status line but no longer double-printed here).
         title2_row = tk.Frame(body, bg=body_bg)
         title2_row.pack(fill='x', padx=16, pady=(1, 4))
-        tk.Label(title2_row, text='PLUGIN MANAGER', bg=body_bg,
+        tk.Label(title2_row, text='已安装插件 Installed Plugins', bg=body_bg,
                  fg=value_fg, font=get_sao_font(13, True), anchor='w').pack(side='left')
-        tk.Label(title2_row, textvariable=self._summary_var, bg=body_bg,
-                 fg=label_fg, font=get_cjk_font(9)).pack(side='right')
 
         # ── Accent line ──
         tk.Frame(body, bg=gold, height=1).pack(fill='x', padx=16, pady=(0, 0))
@@ -320,7 +325,7 @@ class PluginManagerPanel:
         action_button(toolbar, '导入', self._import_plugin, kind='normal').pack(side='left', padx=(0, SP_XS))
         action_button(toolbar, '重载全部', self._reload_all, kind='cyan').pack(side='left', padx=(0, SP_XS))
 
-        # ── Tag pills ──
+        # ── Status filter chips (全部/已启用/已停用) — populated in _render_status ──
         self._pills_row = tk.Frame(body, bg=body_bg)
         self._pills_row.pack(fill='x', padx=16, pady=(0, 3))
 
@@ -431,32 +436,44 @@ class PluginManagerPanel:
         active = _finite_int(status.get('active_count'), 0, lo=0)
         enabled_count = sum(1 for p in plugins if p.get('enabled'))
         disabled_count = total - enabled_count
-        # Webref shows the count only in the badge pill — no separate text label
-        self._summary_var.set(f'{enabled_count} 已启用 · {disabled_count} 已停用')
         message = status.get('message') or ('OK' if status.get('ok', True) else 'Plugin manager unavailable')
         self._status_var.set(str(message))
 
-        # ── Update count badge in its dedicated frame ──
+        # ── Update count badge in its dedicated frame (the one place the
+        # enabled/total count is spelled out as text — the filter chips below
+        # carry their own counts but exist primarily to filter, not to repeat
+        # this number a third time) ──
         badge_parent = getattr(self, '_count_badge_parent', None)
         if badge_parent is not None:
             for child in list(badge_parent.winfo_children()):
                 child.destroy()
             status_badge(badge_parent, f'{enabled_count}/{total}', kind='gold').pack()
 
-        # ── Update tag pills row ──
+        # ── Status filter chips: 全部/已启用/已停用, click narrows the grid ──
         pills_row = getattr(self, '_pills_row', None)
         if pills_row is not None:
             for child in list(pills_row.winfo_children()):
                 child.destroy()
-            status_badge(pills_row, f'{enabled_count}已启用', kind='gold').pack(side='left', padx=(0, SP_SM))
-            if disabled_count > 0:
-                status_badge(pills_row, f'{disabled_count}已停用', kind='danger').pack(side='left', padx=(0, SP_SM))
-            status_badge(pills_row, 'API v1', kind='cyan').pack(side='left', padx=(0, SP_SM))
+            self._filter_buttons = {}
+            for key, label_text, count, kind in (
+                ('all', '全部', total, 'normal'),
+                ('enabled', '已启用', enabled_count, 'gold'),
+                ('disabled', '已停用', disabled_count, 'danger'),
+            ):
+                btn = action_button(pills_row, f'{label_text} {count}',
+                                    lambda k=key: self._set_status_filter(k), kind=kind)
+                btn.pack(side='left', padx=(0, SP_XS))
+                btn.set_active(self._status_filter == key)
+                self._filter_buttons[key] = btn
 
         if self._list is None:
             return
 
-        # ── Filter by search term ──
+        # ── Filter by status chip, then by search term ──
+        if self._status_filter == 'enabled':
+            plugins = [p for p in plugins if p.get('enabled')]
+        elif self._status_filter == 'disabled':
+            plugins = [p for p in plugins if not p.get('enabled')]
         query = getattr(self, '_search_var', tk.StringVar()).get().strip().lower()
         if query:
             plugins = [p for p in plugins if query in str(p.get('name') or '').lower()
@@ -471,6 +488,10 @@ class PluginManagerPanel:
             return
         self._render_grid(plugins)
         bind_canvas_mousewheel(getattr(self, '_canvas', None), self._list)
+
+    def _set_status_filter(self, key: str) -> None:
+        self._status_filter = key if key in ('all', 'enabled', 'disabled') else 'all'
+        self._render_status(self._last_status)
 
     def _render_empty(self) -> None:
         if self._list is None:
@@ -525,12 +546,14 @@ class PluginManagerPanel:
         card_border = gold if enabled else _pc('sep', '#d8d0c0')
 
         card, inner = rounded_panel(parent, bg=card_bg, border=card_border, radius=8,
-                                    rail=rail, rail_w=3, pad=SP_MD)
+                                    rail=rail, rail_w=3, pad=SP_MD, shadow=True)
         card.grid(row=row_idx, column=col_idx, padx=5, pady=5, sticky='nsew')
 
-        # ── Name + pin star + version ──
+        # ── Avatar + pin star + name + version ──
         top = tk.Frame(inner, bg=card_bg)
         top.pack(fill='x', pady=(0, 1))
+        plugin_avatar(top, plugin_id, name, size=26, radius=6,
+                     canvas_bg=card_bg).pack(side='left', padx=(0, 6))
         if pinned:
             tk.Label(top, text='★', bg=card_bg, fg=gold,
                      font=get_cjk_font(10)).pack(side='left', padx=(0, 3))
@@ -560,12 +583,11 @@ class PluginManagerPanel:
         bottom = tk.Frame(inner, bg=card_bg)
         bottom.pack(fill='x')
 
+        # Enabled/disabled state is already unambiguous from the rail color
+        # plus the 启用/禁用 button below — a separate ON/OFF badge here was
+        # a third repetition of the same one bit of information.
         category, cat_kind = _plugin_category(plugin_id, plugin)
         status_badge(bottom, category, kind=cat_kind).pack(side='left', padx=(0, SP_XS))
-
-        state_text = 'ON' if enabled else 'OFF'
-        state_kind = 'cyan' if enabled else 'gold'
-        status_badge(bottom, state_text, kind=state_kind).pack(side='left', padx=(0, SP_XS))
 
         failures = _finite_int(plugin.get('failures'), 0, lo=0)
         event_failures = _finite_int(plugin.get('event_failures'), 0, lo=0)

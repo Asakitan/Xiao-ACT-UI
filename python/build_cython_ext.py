@@ -125,6 +125,13 @@ if os.path.isfile(_drv_src):
         sources=[_drv_src],
     ))
 
+_drv_proxy_src = os.path.join(HERE, 'mem_probe', 'rt_io_proxy.py')
+if os.path.isfile(_drv_proxy_src):
+    extensions.append(Extension(
+        name='mem_probe.rt_io_proxy',
+        sources=[_drv_proxy_src],
+    ))
+
 extensions = _filter_extensions(_selected_extension_names(), extensions)
 
 

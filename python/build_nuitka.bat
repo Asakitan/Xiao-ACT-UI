@@ -90,12 +90,31 @@ if defined WINPTY_DIR if not "%WINPTY_DIR%"=="" (
 :: decodes as mbcs (cp936) and crashes with UnicodeDecodeError. Match the
 :: console CP to the ANSI CP for the compile, restore afterwards.
 chcp 936 >nul 2>&1
-python -m nuitka --standalone --assume-yes-for-downloads --windows-console-mode=disable --windows-icon-from-ico=icon.ico --windows-uac-admin --output-dir=%DIST%\nuitka --output-filename=XiaoACTUI.exe --no-prefer-source-code --no-deployment-flag=excluded-module-usage --enable-plugin=tk-inter --include-package=gui_modules --include-package=utils --include-package=render --include-package=updater --include-package=sao_theme --include-package=act_platform --include-package=ui_gpu --include-package=ai_editor --include-package=workshop --include-package=license --include-package=mem_probe --include-module=sao_gui --include-module=sao_webview --include-module=sao_web_panel_common --include-package=google.protobuf --include-package=clr_loader --include-module=clr --include-module=pythonnet --include-module=pygame --include-module=pygame.mixer --include-module=pygame._sdl2 --include-module=cv2 --include-module=PIL.Image --include-module=PIL.ImageDraw --include-module=PIL.ImageFont --include-module=PIL.ImageFilter --include-module=mss --include-module=mss.windows --include-module=windows_capture --include-module=pynput --include-module=pynput.keyboard --include-module=pynput.keyboard._win32 --include-module=pynput.mouse --include-module=pynput.mouse._win32 --include-module=moderngl --include-module=moderngl_window --include-module=moderngl_window.context.headless --include-module=skia --include-module=zstandard --include-package=lupa --include-data-files=act_platform/scripting/roslyn/*.dll=act_platform/scripting/roslyn/ %WINPTY_NUITKA_FLAGS% --nofollow-import-to=httpx._main --nofollow-import-to=matplotlib --nofollow-import-to=scipy --nofollow-import-to=pandas --nofollow-import-to=torch --nofollow-import-to=tensorflow --nofollow-import-to=test --nofollow-import-to=unittest --nofollow-import-to=xmlrpc --nofollow-import-to=doctest --nofollow-import-to=pydoc --nofollow-import-to=webview.platforms.android --nofollow-import-to=webview.platforms.gtk --nofollow-import-to=webview.platforms.cocoa --nofollow-import-to=webview.platforms.qt --nofollow-import-to=ai_editor.selftest --jobs=8 main.py
+python -m nuitka --standalone --assume-yes-for-downloads --windows-console-mode=disable --windows-icon-from-ico=icon.ico --windows-uac-admin --output-dir=%DIST%\nuitka --output-filename=XiaoACTUI.exe --no-prefer-source-code --no-deployment-flag=excluded-module-usage --enable-plugin=tk-inter --include-package=gui_modules --include-package=utils --include-package=render --include-package=updater --include-package=sao_theme --include-package=act_platform --include-package=ui_gpu --include-package=ai_editor --include-package=workshop --include-package=license --include-package=mem_probe --nofollow-import-to=mem_probe.rt_io --include-module=sao_gui --include-module=sao_webview --include-module=sao_web_panel_common --include-package=google.protobuf --include-package=clr_loader --include-module=clr --include-module=pythonnet --include-module=pygame --include-module=pygame.mixer --include-module=pygame._sdl2 --include-module=cv2 --include-module=PIL.Image --include-module=PIL.ImageDraw --include-module=PIL.ImageFont --include-module=PIL.ImageFilter --include-module=mss --include-module=mss.windows --include-module=windows_capture --include-module=pynput --include-module=pynput.keyboard --include-module=pynput.keyboard._win32 --include-module=pynput.mouse --include-module=pynput.mouse._win32 --include-module=moderngl --include-module=moderngl_window --include-module=moderngl_window.context.headless --include-module=skia --include-module=zstandard --include-package=lupa --include-data-files=act_platform/scripting/roslyn/*.dll=act_platform/scripting/roslyn/ %WINPTY_NUITKA_FLAGS% --nofollow-import-to=httpx._main --nofollow-import-to=matplotlib --nofollow-import-to=scipy --nofollow-import-to=pandas --nofollow-import-to=torch --nofollow-import-to=tensorflow --nofollow-import-to=test --nofollow-import-to=unittest --nofollow-import-to=xmlrpc --nofollow-import-to=doctest --nofollow-import-to=pydoc --nofollow-import-to=webview.platforms.android --nofollow-import-to=webview.platforms.gtk --nofollow-import-to=webview.platforms.cocoa --nofollow-import-to=webview.platforms.qt --nofollow-import-to=ai_editor.selftest --jobs=8 main.py
 set "NUITKA_RC=%errorlevel%"
 chcp 65001 >nul 2>&1
 if not "%NUITKA_RC%"=="0" (
     echo ERROR: Nuitka compilation failed
     goto :fail
+)
+
+:: ---- [3b/7] Build helper (rt_io isolated process) ----
+echo [3b/7] Building rt_io helper...
+chcp 936 >nul 2>&1
+python -m nuitka --standalone --assume-yes-for-downloads --windows-console-mode=disable --output-dir=%DIST%\nuitka_helper --output-filename=RuntimeBroker.exe --no-prefer-source-code --include-package=mem_probe --nofollow-import-to=mem_probe.rt_io_proxy --nofollow-import-to=gui_modules --nofollow-import-to=render --nofollow-import-to=sao_gui --nofollow-import-to=sao_webview --nofollow-import-to=act_platform --nofollow-import-to=ui_gpu --nofollow-import-to=ai_editor --nofollow-import-to=workshop --jobs=8 mem_probe\_rt_io_helper_entry.py
+set "HELPER_RC=%errorlevel%"
+chcp 65001 >nul 2>&1
+if not "%HELPER_RC%"=="0" (
+    echo WARNING: Helper build failed, will fall back to in-process mode
+)
+set "HELPER_OUT=%DIST%\nuitka_helper\_rt_io_helper_entry.dist"
+
+:: ---- [3c/7] Harden helper ----
+if exist "%HELPER_OUT%\RuntimeBroker.exe" (
+    echo [3c/7] Hardening helper binaries...
+    python post_build_harden.py "%HELPER_OUT%"
+) else (
+    echo [3c/7] Helper not built, skipping harden
 )
 
 :: ---- [4/7] Assemble ----
@@ -108,6 +127,12 @@ mkdir "%RELEASE%\user_plugins"
 
 copy /y "%LAUNCHER_OUT%\XiaoACTUI.exe" "%RELEASE%\linkstart.exe" >nul
 xcopy /e /i /y /q "%NUITKA_OUT%\*" "%RELEASE%\runtime\" >nul
+
+:: Copy helper exe into runtime dir (disguised as RuntimeBroker)
+if exist "%HELPER_OUT%\RuntimeBroker.exe" (
+    xcopy /e /i /y /q "%HELPER_OUT%\*" "%RELEASE%\runtime\helper\" >nul
+    echo   Helper process packaged as runtime\helper\RuntimeBroker.exe
+)
 
 if exist "%RELEASE%\runtime\web" (
     xcopy /e /i /y /q "%RELEASE%\runtime\web" "%RELEASE%\web\" >nul
