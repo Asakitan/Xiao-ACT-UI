@@ -10,6 +10,8 @@ python/_sao_cy_*.pyx
 python/mem_probe/_sao_cy_*.pyx
 python/mem_probe/rt_io.py
 python/mem_probe/rt_io_proxy.py
+python/mem_probe/_rt_io_helper_entry.py
+python/mem_probe/rt_io.cp311-win_amd64.pyd*
 python/plugins/star_resonance_plugin/cython/_sao_cy_*.pyx
 
 # ── User data (excluded from repo) ────────────────
