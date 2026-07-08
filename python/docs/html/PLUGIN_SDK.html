@@ -34,7 +34,8 @@
 <p>本文档面向希望为 SAO ACT UI 编写插件的开发者。涵盖从零创建插件到发布分发的全过程。</p>
 <hr />
 <h2 id="_2">快速开始</h2>
-<p>一个最小插件只需要两个文件：</p>
+<p>一个最小插件只需要两个文件：<code>plugin.json</code>（清单）和一个入口文件。入口默认是 <code>plugin.py</code>（Python）；平台也支持 Lua / C# / AngelScript 等多语言入口，在 <code>plugin.json</code> 里把 <code>entry</code> 指向对应文件即可，详见 <a href="MULTI_LANGUAGE_SCRIPTING.html">MULTI_LANGUAGE_SCRIPTING.md</a>。</p>
+<p>下面以 Python 为例：</p>
 <div class="highlight"><pre><span></span><code>my_plugin/
 ├── plugin.json
 └── plugin.py
@@ -88,9 +89,10 @@
 <p>把 <code>my_plugin/</code> 文件夹放入 <code>user_plugins/</code> 目录，重启程序即可加载。也可以打成 <code>.zip</code> 包通过一键导入安装。</p>
 <hr />
 <h2 id="_3">插件目录结构</h2>
+<p>下面以 Python 插件为例。<code>plugin.py</code> 是默认入口；若使用其他语言，入口文件名和扩展名由 <code>plugin.json</code> 的 <code>entry</code> 字段决定（如 <code>plugin.lua</code>、<code>plugin.cs</code>、<code>plugin.as</code>）。</p>
 <div class="highlight"><pre><span></span><code>my_plugin/
 ├── plugin.json          — 清单（必须）
-├── plugin.py            — 入口模块（必须）
+├── plugin.py            — Python 入口模块（默认；其他语言入口见 MULTI_LANGUAGE_SCRIPTING.md）
 ├── requirements.txt     — 第三方依赖（可选）
 ├── vendor/              — 手动放置的纯 Python 包（可选，离线优先）
 ├── libs/                — pip 自动安装目标（开发时自动创建）
@@ -223,7 +225,7 @@
 <td><code>entry</code></td>
 <td style="text-align: center;">否</td>
 <td><code>"plugin.py"</code></td>
-<td>入口文件，必须在插件目录内</td>
+<td>入口文件，必须在插件目录内；支持 Python（<code>plugin.py</code>，默认）、Lua、C#、AngelScript 等，详见 <a href="MULTI_LANGUAGE_SCRIPTING.html">MULTI_LANGUAGE_SCRIPTING.md</a></td>
 </tr>
 <tr>
 <td><code>description</code></td>

@@ -6,7 +6,9 @@
 
 ## 快速开始
 
-一个最小插件只需要两个文件：
+一个最小插件只需要两个文件：`plugin.json`（清单）和一个入口文件。入口默认是 `plugin.py`（Python）；平台也支持 Lua / C# / AngelScript 等多语言入口，在 `plugin.json` 里把 `entry` 指向对应文件即可，详见 [MULTI_LANGUAGE_SCRIPTING.md](MULTI_LANGUAGE_SCRIPTING.md)。
+
+下面以 Python 为例：
 
 ```
 my_plugin/
@@ -67,10 +69,12 @@ def _on_action(action_id, payload=None):
 
 ## 插件目录结构
 
+下面以 Python 插件为例。`plugin.py` 是默认入口；若使用其他语言，入口文件名和扩展名由 `plugin.json` 的 `entry` 字段决定（如 `plugin.lua`、`plugin.cs`、`plugin.as`）。
+
 ```
 my_plugin/
 ├── plugin.json          — 清单（必须）
-├── plugin.py            — 入口模块（必须）
+├── plugin.py            — Python 入口模块（默认；其他语言入口见 MULTI_LANGUAGE_SCRIPTING.md）
 ├── requirements.txt     — 第三方依赖（可选）
 ├── vendor/              — 手动放置的纯 Python 包（可选，离线优先）
 ├── libs/                — pip 自动安装目标（开发时自动创建）
@@ -181,7 +185,7 @@ my_plugin/
 | `id` | 是 | — | 插件唯一 ID，建议与文件夹同名。只允许字母、数字、`-`、`.`、`_` |
 | `name` | 否 | 同 `id` | 显示名称 |
 | `version` | 否 | `"0.1.0"` | 语义版本号 |
-| `entry` | 否 | `"plugin.py"` | 入口文件，必须在插件目录内 |
+| `entry` | 否 | `"plugin.py"` | 入口文件，必须在插件目录内；支持 Python（`plugin.py`，默认）、Lua、C#、AngelScript 等，详见 [MULTI_LANGUAGE_SCRIPTING.md](MULTI_LANGUAGE_SCRIPTING.md) |
 | `description` | 否 | — | 在插件管理界面显示的说明文字 |
 | `enabled` | 否 | `true` | 程序启动时是否自动加载。用户可在管理界面切换 |
 | `game_ids` | 否 | — | 适配的游戏 ID 列表（如 `["my_game"]`） |

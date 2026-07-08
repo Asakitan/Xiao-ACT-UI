@@ -10,8 +10,8 @@ from pathlib import Path
 import markdown
 from pygments.formatters import HtmlFormatter
 
-DOCS_DIR = Path(__file__).resolve().parent
-OUT_DIR = DOCS_DIR / "html"
+DOCS_DIR = Path(__file__).resolve().parent          # python/docs/md/
+OUT_DIR = DOCS_DIR.parent / "html"                    # python/docs/html/ (仓库正式输出目录)
 ASSETS_DIR = OUT_DIR / "assets"
 
 # (filename, nav label, short description shown on the index page)
@@ -456,7 +456,7 @@ def main() -> None:
         )
         out_path = OUT_DIR / (slugify(fname) + ".html")
         out_path.write_text(page_html, encoding="utf-8")
-        print(f"wrote {out_path.relative_to(DOCS_DIR)}")
+        print(f"wrote {out_path.relative_to(OUT_DIR.parent)}")
 
         cards.append(
             f'<a class="doc-card" href="{slugify(fname)}.html">'
@@ -467,7 +467,7 @@ def main() -> None:
 
     index_html = INDEX_TEMPLATE.format(cards="\n      ".join(cards))
     (OUT_DIR / "index.html").write_text(index_html, encoding="utf-8")
-    print(f"wrote {(OUT_DIR / 'index.html').relative_to(DOCS_DIR)}")
+    print(f"wrote {(OUT_DIR / 'index.html').relative_to(OUT_DIR.parent)}")
 
 
 if __name__ == "__main__":

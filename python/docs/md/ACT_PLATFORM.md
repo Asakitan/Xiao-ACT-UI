@@ -2,9 +2,9 @@
 
 SAO ACT UI 是一个游戏无关的战斗分析平台。平台核心（`act_platform/`）只负责事件总线、声明式 UI 渲染、插件生命周期和触发器执行框架，不包含任何游戏特定字段或逻辑。所有游戏特定逻辑——职业/技能/副本/Boss 机制、内存字段布局——都由插件提供。
 
-仓库内置了一个完整的参考插件 `plugins/star_resonance_plugin`（星痕共鸣），实现了本文和配套文档里出现的大部分具体引擎（`dps_tracker`、`game_state`、`boss_raid_engine` 等）与内存字段。它是**如何为一个游戏接入平台**的范例，不是平台本身的固定契约——为新游戏写插件时，可以参考它的结构，但引擎名、事件字段完全由你自己的插件决定。
+仓库内置了一个完整的参考插件 `plugins/star_resonance_plugin`（星痕共鸣），实现了本文和配套文档里出现的大部分具体引擎（`dps_tracker`、`game_state`、`boss_raid_engine` 等）与内存字段。它是**如何为一个游戏接入平台**的范例，不是平台本身的固定契约——为新游戏写插件时，可以参考它的结构，但引擎名、事件字段完全由你自己的插件决定。它和其他插件一样通过 `plugin.json` 清单被动态发现和加载，不与 `act_platform/` 编译或耦合在一起。
 
-配套文档：`PLUGIN_SDK.md`、`HYBRID_MEMORY_TCP.md`、`GAME_STATE_API.md`（star_resonance_plugin 参考实现细节）、`AI_EDITOR.md`。
+配套文档：`PLUGIN_SDK.md`、`MULTI_LANGUAGE_SCRIPTING.md`（Lua/C#/AngelScript 等非 Python 入口）、`HYBRID_MEMORY_TCP.md`、`GAME_STATE_API.md`（star_resonance_plugin 参考实现细节）、`AI_EDITOR.md`。
 
 ---
 
@@ -143,12 +143,14 @@ SAO ACT UI 是一个游戏无关的战斗分析平台。平台核心（`act_plat
 ```
 my_plugin/
 ├── plugin.json        — 插件清单
-├── plugin.py          — 入口文件
+├── plugin.py          — 入口文件（Python，默认）
 ├── requirements.txt   — 第三方依赖（可选）
 ├── vendor/            — 手动放置的纯 Python 包（可选）
 ├── assets/            — 数据文件
 └── web/               — HTML 面板
 ```
+
+`entry` 字段不限于 `plugin.py`。平台支持多语言入口（Lua / C# / AngelScript 等），在 `plugin.json` 里把 `entry` 指向对应入口即可，详见 [MULTI_LANGUAGE_SCRIPTING.md](MULTI_LANGUAGE_SCRIPTING.md)。
 
 用户安装的插件放在 `user_plugins/` 目录，软件更新时不会被覆盖。
 
@@ -183,7 +185,7 @@ my_plugin/
 | `id` | 是 | 唯一标识符，建议与文件夹同名 |
 | `name` | 否 | 显示名称 |
 | `version` | 否 | 版本号 |
-| `entry` | 否 | 入口文件，默认 `plugin.py` |
+| `entry` | 否 | 入口文件，默认 `plugin.py`；也支持 `plugin.lua`/`plugin.cs`/`plugin.as` 等多语言入口（详见 [MULTI_LANGUAGE_SCRIPTING.md](MULTI_LANGUAGE_SCRIPTING.md)） |
 | `enabled` | 否 | 是否默认启用 |
 | `game_ids` | 否 | 适配的游戏 ID |
 | `requires` | 否 | 依赖的其他插件 ID |

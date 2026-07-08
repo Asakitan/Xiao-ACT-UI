@@ -32,8 +32,8 @@
     <article class="markdown-body">
       <h1 id="sao-act">SAO ACT 平台</h1>
 <p>SAO ACT UI 是一个游戏无关的战斗分析平台。平台核心（<code>act_platform/</code>）只负责事件总线、声明式 UI 渲染、插件生命周期和触发器执行框架，不包含任何游戏特定字段或逻辑。所有游戏特定逻辑——职业/技能/副本/Boss 机制、内存字段布局——都由插件提供。</p>
-<p>仓库内置了一个完整的参考插件 <code>plugins/star_resonance_plugin</code>（星痕共鸣），实现了本文和配套文档里出现的大部分具体引擎（<code>dps_tracker</code>、<code>game_state</code>、<code>boss_raid_engine</code> 等）与内存字段。它是<strong>如何为一个游戏接入平台</strong>的范例，不是平台本身的固定契约——为新游戏写插件时，可以参考它的结构，但引擎名、事件字段完全由你自己的插件决定。</p>
-<p>配套文档：<code>PLUGIN_SDK.md</code>、<code>HYBRID_MEMORY_TCP.md</code>、<code>GAME_STATE_API.md</code>（star_resonance_plugin 参考实现细节）、<code>AI_EDITOR.md</code>。</p>
+<p>仓库内置了一个完整的参考插件 <code>plugins/star_resonance_plugin</code>（星痕共鸣），实现了本文和配套文档里出现的大部分具体引擎（<code>dps_tracker</code>、<code>game_state</code>、<code>boss_raid_engine</code> 等）与内存字段。它是<strong>如何为一个游戏接入平台</strong>的范例，不是平台本身的固定契约——为新游戏写插件时，可以参考它的结构，但引擎名、事件字段完全由你自己的插件决定。它和其他插件一样通过 <code>plugin.json</code> 清单被动态发现和加载，不与 <code>act_platform/</code> 编译或耦合在一起。</p>
+<p>配套文档：<code>PLUGIN_SDK.md</code>、<code>MULTI_LANGUAGE_SCRIPTING.md</code>（Lua/C#/AngelScript 等非 Python 入口）、<code>HYBRID_MEMORY_TCP.md</code>、<code>GAME_STATE_API.md</code>（star_resonance_plugin 参考实现细节）、<code>AI_EDITOR.md</code>。</p>
 <hr />
 <h2 id="_1">平台能做什么</h2>
 <ul>
@@ -219,13 +219,14 @@
 <h3 id="_12">插件结构</h3>
 <div class="highlight"><pre><span></span><code>my_plugin/
 ├── plugin.json        — 插件清单
-├── plugin.py          — 入口文件
+├── plugin.py          — 入口文件（Python，默认）
 ├── requirements.txt   — 第三方依赖（可选）
 ├── vendor/            — 手动放置的纯 Python 包（可选）
 ├── assets/            — 数据文件
 └── web/               — HTML 面板
 </code></pre></div>
 
+<p><code>entry</code> 字段不限于 <code>plugin.py</code>。平台支持多语言入口（Lua / C# / AngelScript 等），在 <code>plugin.json</code> 里把 <code>entry</code> 指向对应入口即可，详见 <a href="MULTI_LANGUAGE_SCRIPTING.html">MULTI_LANGUAGE_SCRIPTING.md</a>。</p>
 <p>用户安装的插件放在 <code>user_plugins/</code> 目录，软件更新时不会被覆盖。</p>
 <h3 id="pluginjson">plugin.json 清单</h3>
 <div class="highlight"><pre><span></span><code><span class="p">{</span>
@@ -278,7 +279,7 @@
 <tr>
 <td><code>entry</code></td>
 <td>否</td>
-<td>入口文件，默认 <code>plugin.py</code></td>
+<td>入口文件，默认 <code>plugin.py</code>；也支持 <code>plugin.lua</code>/<code>plugin.cs</code>/<code>plugin.as</code> 等多语言入口（详见 <a href="MULTI_LANGUAGE_SCRIPTING.html">MULTI_LANGUAGE_SCRIPTING.md</a>）</td>
 </tr>
 <tr>
 <td><code>enabled</code></td>

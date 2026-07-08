@@ -424,8 +424,8 @@ button,input,select,.action-btn{clip-path:none!important;}
             </div>
             <div class="side-title">SDK QUICK START</div>
             <div class="help">
-                <strong>一键导入</strong>：点上方「导入 Import」选一个 <strong>.zip</strong> 插件包(内含 plugin.json + plugin.py)，自动装进 <strong>user_plugins/</strong> 并启用即用，无需编译。<br/><br/>
-                或手动放入 <strong>plugins/&lt;plugin_id&gt;/plugin.json</strong> 与 <strong>plugin.py</strong>。<br/><br/>
+                <strong>一键导入</strong>：点上方「导入 Import」选一个 <strong>.zip</strong> 插件包(内含 plugin.json + 入口文件，如 plugin.py / plugin.lua / plugin.cs)，自动装进 <strong>user_plugins/</strong> 并启用即用，无需编译。<br/><br/>
+                或手动放入 <strong>plugins/&lt;plugin_id&gt;/plugin.json</strong> 与入口文件。入口由清单 <strong>entry</strong> 字段决定，默认 <strong>plugin.py</strong>；平台也支持 Lua / C# / AngelScript 等多语言入口（见 MULTI_LANGUAGE_SCRIPTING 文档）。<br/><br/>
                 插件可实现 <strong>on_load(ctx)</strong>、<strong>on_enable()</strong>、<strong>on_disable()</strong>、<strong>on_unload()</strong>。第三方依赖写进 <strong>requirements.txt</strong> 并 vendor 进 <strong>vendor/</strong>，用 <strong>ctx.ensure_requirements()</strong> 加载。<br/><br/>
                 推荐用 <strong>@ctx.on("damage")</strong>、<strong>ctx.on_snapshot(cb)</strong>、<strong>ctx.subscribe_once(topic, cb)</strong> 监听事件；用 <strong>ctx.set_defaults({...})</strong> 与 <strong>ctx.setting(key)</strong> 管理插件设置。
             </div>

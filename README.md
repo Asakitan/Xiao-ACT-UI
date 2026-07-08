@@ -65,11 +65,11 @@
 - MCP 服务器集成，VSCode Marketplace 扩展浏览
 - 自定义指令、三层 scope（系统/项目/插件）
 
-详见 [AI 编辑器文档](python/docs/AI_EDITOR.md)。
+详见 [AI 编辑器文档](python/docs/md/AI_EDITOR.md)。
 
 ## 插件开发
 
-插件是独立目录，包含清单文件和入口脚本。通过 SDK 注册数据源、面板、菜单和引擎扩展。
+插件是独立目录，包含清单文件（`plugin.json`）和入口脚本（`entry`，默认 `plugin.py`）。入口可以是 Python、Lua、C#、AngelScript 等多语言，详见[多语言脚本运行时](python/docs/md/MULTI_LANGUAGE_SCRIPTING.md)。通过 SDK 注册数据源、面板、菜单和引擎扩展。
 
 ```python
 # plugins/my_game/plugin.py
@@ -84,22 +84,27 @@ def on_load(ctx):
 
 ## 已有插件
 
+仓库内置的插件都在 `python/plugins/`，作为平台能力的示例：
+
 | 插件 | 说明 |
 |------|------|
-| 星痕共鸣 | TCP + 内存双数据源，DPS/Boss/HP/Buff 面板，自动按键，Boss 机制提醒 |
+| 星痕共鸣 | TCP + 内存双数据源，DPS/Boss/HP/Buff 面板，自动按键，Boss 机制提醒（平台参考实现） |
 | 躲猫猫 | 躲猫猫游戏自动化 |
 | MIDI 钢琴 | 游戏内 MIDI 钢琴演奏 |
+
+这些插件与平台解耦，通过 `plugin.json` 清单被动态发现和加载，不与平台核心（`act_platform/`）编译或耦合在一起。
 
 ## 文档
 
 | 文档 | 内容 |
 |------|------|
-| [平台概览](python/docs/ACT_PLATFORM.md) | 平台功能和配置 |
-| [插件 SDK](python/docs/PLUGIN_SDK.md) | 插件开发完整指南 |
-| [数据源](python/docs/HYBRID_MEMORY_TCP.md) | TCP/内存混合数据源使用 |
-| [游戏状态 API](python/docs/GAME_STATE_API.md) | 游戏数据访问接口 |
-| [AI 编辑器](python/docs/AI_EDITOR.md) | AI 编辑器功能和配置 |
-| [面板开发](python/docs/ACT_UI_PARITY_SDK.md) | 插件 UI 面板开发 |
+| [平台概览](python/docs/md/ACT_PLATFORM.md) | 平台功能和配置 |
+| [插件 SDK](python/docs/md/PLUGIN_SDK.md) | 插件开发完整指南 |
+| [多语言脚本运行时](python/docs/md/MULTI_LANGUAGE_SCRIPTING.md) | Lua / C# / AngelScript 插件写法 |
+| [数据源](python/docs/md/HYBRID_MEMORY_TCP.md) | TCP/内存混合数据源使用 |
+| [游戏状态 API](python/docs/md/GAME_STATE_API.md) | 游戏数据访问接口 |
+| [AI 编辑器](python/docs/md/AI_EDITOR.md) | AI 编辑器功能和配置 |
+| [面板开发](python/docs/md/ACT_UI_PARITY_SDK.md) | 插件 UI 面板开发 |
 | [更新记录](CHANGELOG.md) | 逐版本变更日志 |
 
 ## 许可
