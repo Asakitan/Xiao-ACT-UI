@@ -2,6 +2,15 @@
 
 逐版本变更记录, 最新在前。本文件由 config.py 内联的历史注释迁出。
 
+## v5.2.15: star_resonance 插件 Cython 产物同步刷新.
+
+  - **Cython binaries**:
+    - `_sao_cy_combat` / `_sao_cy_packet` / `_sao_cy_skillfx` / `_sao_cy_sr_uihelpers`
+      四个插件级 `.pyd` 对齐 v5.2.14 `pyx_vault` 源码仓级静态加密落地后的重新编译
+      产物, 字节数不变(仅 MSVC/Cython 非确定性构建差异), 无源码与功能变化。
+    - 这些 `.pyx` 明文已在 v5.2.13 移出仓库, 重建依赖 `.vault/key.bin` (本地持有,
+      不进库); 无 key 的普通贡献者直接使用已提交的 `.pyd` 即可。
+
 ## v5.2.13: 平台/插件契约梳理、ACT/内存/TCP 读路径整理与旧辅助文件清理.
 
   - **platform / plugin foundation**:
