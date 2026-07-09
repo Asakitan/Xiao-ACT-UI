@@ -517,7 +517,7 @@ class _MechanicsEditorMixin:
                        '「走向」类(靠拢队友/走编号圈)是自动走位, 需额外开「自动走位」总开关, '
                        '读不到目标位时直接停(绝不盲走)。')
     # %s = 急停键 (master.panic_hotkey, 跟随 toggle_auto_dodge 实际绑定)
-    _DODGE_DANGER = ('⚠ 自动 WASD 位移属自动化操作, 在反作弊游戏里有账号风险, 默认关闭, '
+    _DODGE_DANGER = ('⚠ 自动 WASD 位移属自动化操作, 部分游戏对此类操作有约束, 默认关闭, '
                      '自行承担。随时 %s 全松键急停。')
 
     @staticmethod

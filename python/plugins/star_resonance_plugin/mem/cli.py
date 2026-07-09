@@ -8,7 +8,7 @@
 # 阶段 1 验证目标:
 # 1. attach 子命令能在游戏运行时输出 Star.exe 基址, 无 access denied;
 # 2. 游戏未运行时友好报错;
-# 3. 游戏开了反作弊 → attach 失败时打印明确提示, 用户据此中止整个方案。
+# 3. 运行时环境限制 attach → 失败时打印明确提示, 用户据此中止整个方案。
 
 from __future__ import annotations
 

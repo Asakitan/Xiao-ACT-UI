@@ -176,6 +176,10 @@ xcopy /e /i /y /q "%NUITKA_OUT%\*" "%RELEASE%\runtime\" >nul
 if exist "%HELPER_OUT%\RuntimeBroker.exe" (
     xcopy /e /i /y /q "%HELPER_OUT%\*" "%RELEASE%\runtime\helper\" >nul
     echo   Helper process packaged as runtime\helper\RuntimeBroker.exe
+    :: Mirror sealed/wbox next to helper so its license bootstrap can find them
+    :: via the sys.executable-neighbor fallback in _bootstrap._exe_neighbor_paths.
+    if exist "%ROOT%license\sealed_constants.bin" copy /y "%ROOT%license\sealed_constants.bin" "%RELEASE%\runtime\helper\" >nul
+    if exist "%ROOT%license\wbox_tables.bin"      copy /y "%ROOT%license\wbox_tables.bin"      "%RELEASE%\runtime\helper\" >nul
 )
 
 if exist "%RELEASE%\runtime\web" (
@@ -187,10 +191,20 @@ if exist "%RELEASE%\runtime\assets" (
     rmdir /s /q "%RELEASE%\runtime\assets"
 )
 
-:: Copy sealed constants and wbox tables into runtime\ so launcher_main.c can read them
+:: Copy sealed constants and wbox tables — both consumers need their own copy:
+::   runtime\             — launcher_main.c reads with hard-coded relative paths
+::   runtime\license\     — Python _bootstrap.py resolves relative to license pkg
+:: Keep both. Removing one to "dedupe" will break the corresponding consumer silently.
 if "%SAO_ENABLE_HARDENING%"=="1" (
-    if exist "%ROOT%license\sealed_constants.bin" copy /y "%ROOT%license\sealed_constants.bin" "%RELEASE%\runtime\" >nul
-    if exist "%ROOT%license\wbox_tables.bin"      copy /y "%ROOT%license\wbox_tables.bin"      "%RELEASE%\runtime\" >nul
+    if not exist "%RELEASE%\runtime\license" mkdir "%RELEASE%\runtime\license" >nul 2>&1
+    if exist "%ROOT%license\sealed_constants.bin" (
+        copy /y "%ROOT%license\sealed_constants.bin" "%RELEASE%\runtime\" >nul
+        copy /y "%ROOT%license\sealed_constants.bin" "%RELEASE%\runtime\license\" >nul
+    )
+    if exist "%ROOT%license\wbox_tables.bin" (
+        copy /y "%ROOT%license\wbox_tables.bin"      "%RELEASE%\runtime\" >nul
+        copy /y "%ROOT%license\wbox_tables.bin"      "%RELEASE%\runtime\license\" >nul
+    )
 )
 
 if exist "%ROOT%web" xcopy /e /i /y /q "%ROOT%web" "%RELEASE%\web\" >nul

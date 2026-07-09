@@ -56,6 +56,93 @@ def _early_dpi_aware():
 
 _early_dpi_aware()
 
+
+# ── Windows MessageBox 兜底 excepthook ─────────────────────────────
+# Nuitka --windows-console-mode=disable 下 sys.stderr 无处输出。任何主线程
+# unhandled exception 会被 default excepthook 打到 stderr → 用户看到"点了没反应"。
+# 装一个兜底 hook，把 traceback 用 MessageBoxW 弹出来。
+# - 用 ctypes 直连 user32，避免依赖 tkinter/pywebview 才能报错的鸡生蛋
+# - 只处理 Exception 子类（SystemExit / KeyboardInterrupt 保持默认行为）
+# - traceback 截到 3800 chars 内避免 MessageBox 尺寸溢出
+# - MB_ICONERROR + MB_OK + MB_SETFOREGROUND 保证前台弹出
+# - 装完 sys.excepthook + threading.excepthook 都覆盖（后者 Python 3.8+）
+# - --mcp-server 模式跳过（走 stdio JSON-RPC 需要 stderr 干净）
+def _install_msgbox_excepthook():
+    if '--mcp-server' in sys.argv:
+        return
+    try:
+        import ctypes
+        _u32 = ctypes.windll.user32
+        _MB_OK = 0x00000000
+        _MB_ICONERROR = 0x00000010
+        _MB_SETFOREGROUND = 0x00010000
+        _MB_TOPMOST = 0x00040000
+        _FLAGS = _MB_OK | _MB_ICONERROR | _MB_SETFOREGROUND | _MB_TOPMOST
+        _TITLE = "SAO Auto — 崩溃"
+
+        def _fmt(exc_type, exc_value, exc_tb) -> str:
+            import traceback as _tb
+            try:
+                lines = _tb.format_exception(exc_type, exc_value, exc_tb)
+                body = "".join(lines)
+            except Exception:
+                body = f"{exc_type.__name__}: {exc_value}"
+            head = (
+                f"进程发生未捕获异常。\n"
+                f"发生位置：{getattr(exc_value, 'args', ('',))}\n\n"
+            )
+            # MessageBox 硬上限约 32K，我们保守截到 3800 字符
+            total = head + body
+            if len(total) > 3800:
+                total = total[:1900] + "\n\n[...traceback 截断...]\n\n" + total[-1800:]
+            return total
+
+        def _sys_hook(exc_type, exc_value, exc_tb):
+            # SystemExit / KeyboardInterrupt / GeneratorExit 走默认，不弹
+            if exc_type is not None and issubclass(exc_type, (SystemExit, KeyboardInterrupt, GeneratorExit)):
+                sys.__excepthook__(exc_type, exc_value, exc_tb)
+                return
+            try:
+                _u32.MessageBoxW(0, _fmt(exc_type, exc_value, exc_tb), _TITLE, _FLAGS)
+            except Exception:
+                pass
+            # 让 default hook 也跑一遍（写 stderr —— 如果有 XIAOACT_DEBUG_LOG=1 会入日志文件）
+            try:
+                sys.__excepthook__(exc_type, exc_value, exc_tb)
+            except Exception:
+                pass
+
+        sys.excepthook = _sys_hook
+
+        # threading.Thread target 里 unhandled exception 走 threading.excepthook
+        # (Python 3.8+)；补一份以覆盖 daemon 线程/helper spawn 线程等
+        try:
+            import threading as _th
+
+            def _thread_hook(args):
+                # args: threading.ExceptHookArgs(exc_type, exc_value, exc_traceback, thread)
+                if args.exc_type is not None and issubclass(
+                    args.exc_type, (SystemExit, KeyboardInterrupt, GeneratorExit)
+                ):
+                    return
+                try:
+                    thread_label = f"[线程 {args.thread.name}] "
+                    msg = thread_label + _fmt(args.exc_type, args.exc_value, args.exc_traceback)
+                    _u32.MessageBoxW(0, msg, _TITLE, _FLAGS)
+                except Exception:
+                    pass
+
+            _th.excepthook = _thread_hook
+        except Exception:
+            pass
+    except Exception:
+        # user32 加载失败 (非 Windows) → 保持默认 excepthook, 不影响任何行为
+        pass
+
+
+_install_msgbox_excepthook()
+
+
 # Nuitka: optionally redirect all output to a log file (no console window).
 # Off by default; set XIAOACT_DEBUG_LOG=1 before launch to enable.
 # --mcp-server 模式依赖 stdout 做 JSON-RPC 通信，必须跳过重定向
@@ -307,7 +394,77 @@ def _elevate_process_priority():
         pass
 
 
+def _early_hardening_bootstrap() -> None:
+    # 每一步独立 try，任何失败都不阻塞主程后续启动
+    # helper 只在 paid tier 启动；free tier 不预启动 helper
+    try:
+        try:
+            from license._bootstrap import receive_session_key
+            receive_session_key(strict=False)
+        except Exception:
+            pass
+
+        _is_paid = False
+        try:
+            from license import get_license_manager
+            _lm = get_license_manager()
+            _is_paid = bool(getattr(_lm, 'is_paid', False))
+        except Exception:
+            _is_paid = False
+
+        try:
+            from license._integrity_ext import verify_key_dlls
+            verify_key_dlls(hard_fail=False)
+        except Exception:
+            pass
+        try:
+            from license.anti_hook import full_anti_hook_check
+            full_anti_hook_check()
+        except Exception:
+            pass
+
+        if _is_paid:
+            def _spawn_helper():
+                try:
+                    from mem_probe import rt_io_proxy
+                    rt_io_proxy.ensure_loaded()
+                except Exception:
+                    pass
+
+            import threading
+            threading.Thread(target=_spawn_helper, daemon=True, name='helper-early-spawn').start()
+    except Exception:
+        pass
+
+
 def main():
+    # ！打包版静默失败根因防御 (双层)！
+    # launcher (linkstart.exe) 通过 --sao-ipc-mapping <name> <total> <wo> <wl>
+    # <so> <sl> <mko> <mkl> [pubkey_hex] 派发 IPC。argparse.parse_args() 遇到
+    # 未知参数会立即 exit(2)，打包版 --windows-console-mode=disable → stderr
+    # 无处输出 → 主程静默退出，UI 一次都不出现。
+    #
+    # 首选: strip_ipc_marker_early() 完整 parse + 缓存供 receive_session_key 复用。
+    # 兜底: 若 license 子系统 import 失败（比如 cryptography 未打包），仍要保证
+    #      argparse 干净，走 inline strip 不依赖任何三方模块。这一层是"UI 起得来"
+    #      的绝对底线，宁可丢 marker info 走文件回退也不能让主程 exit。
+    try:
+        from license._bootstrap import strip_ipc_marker_early
+        strip_ipc_marker_early()
+    except Exception:
+        try:
+            for _i, _tok in enumerate(sys.argv):
+                if _tok == "--sao-ipc-mapping":
+                    # marker 后跟随的 tokens 都不以 '--' 开头（都是 name/数字/hex），
+                    # 一直吃到下一个 '--' 参数或 argv 末尾
+                    _j = _i + 1
+                    while _j < len(sys.argv) and not sys.argv[_j].startswith("--"):
+                        _j += 1
+                    sys.argv = sys.argv[:_i] + sys.argv[_j:]
+                    break
+        except Exception:
+            pass
+
     parser = argparse.ArgumentParser(description='SAO Auto — 游戏 HUD 与自动化')
     parser.add_argument('--test', action='store_true', help='单次识别测试')
     parser.add_argument('--headless', action='store_true', help='无 HUD 终端模式')
@@ -322,12 +479,16 @@ def main():
     args = parser.parse_args()
 
     if args.mcp_server:
+        # MCP server 是本机 stdio 开发通道，跳过 hardening bootstrap
         from ai_editor.mcp_server import McpServer, McpHttpServer
         if args.mcp_port:
             McpHttpServer(port=args.mcp_port).run()
         else:
             McpServer().run()
         return
+
+    # 所有模式 (test/headless/ai-editor/workshop/run_ui) 统一先跑 hardening bootstrap
+    _early_hardening_bootstrap()
 
     _set_dpi_aware()
     _elevate_process_priority()

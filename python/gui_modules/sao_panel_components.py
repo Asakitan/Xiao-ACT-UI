@@ -297,10 +297,10 @@ class _RoundedButton(tk.Canvas):
         canvas_bg_c = canvas_bg if canvas_bg is not None else _pc('body_bg', ui._SAO_PANEL_BODY_BG)
         super().__init__(parent, width=w, height=h, bg=canvas_bg_c,
                          highlightthickness=0, bd=0, cursor='hand2' if command else '')
-        self.bind('<Configure>', lambda _e: self._draw())
+        self.bind('<Configure>', lambda _e=None: self._draw())
         self.bind('<Button-1>', self._on_click)
-        self.bind('<Enter>', lambda _e: self._draw(hover=True))
-        self.bind('<Leave>', lambda _e: self._draw(hover=False))
+        self.bind('<Enter>', lambda _e=None: self._draw(hover=True))
+        self.bind('<Leave>', lambda _e=None: self._draw(hover=False))
         self._draw()
 
     def _draw(self, hover=False):
@@ -317,7 +317,7 @@ class _RoundedButton(tk.Canvas):
                             fill=fill, outline=border, width=1)
         self.create_text(w // 2, h // 2, text=self._text, fill=fg, font=self._font)
 
-    def _on_click(self, _e):
+    def _on_click(self, _e=None):
         if callable(self._command):
             self._command()
 
