@@ -1362,6 +1362,7 @@ class SAOPlayerGUIFisheyeMixin:
 
             _cap_fn = None
             _cap_source = ''
+            _dda = None  # DXGIDuplicator instance, released at worker exit
 
             if _procedural:
                 # GL procedural 背景: 在下面 moderngl init 里设置
@@ -1373,18 +1374,46 @@ class SAOPlayerGUIFisheyeMixin:
                 _cap_fn = _cap_static
                 _cap_source = 'static'
             elif _fisheye_src == 'live':
-                # live 模式: mss 截屏 (streaming_mode 下 compositor 不可截)
+                # live 模式采样端优先级 (2026-07-10):
+                #   1) DXGI Desktop Duplication — 走 DWM 合成路径, 遵循
+                #      WDA_EXCLUDEFROMCAPTURE 的透明穿透语义, 是本 SAO
+                #      overlay host (全屏 WDA 排除窗口) 场景下唯一能真正
+                #      拿到底下桌面/游戏画面的 API。
+                #   2) mss — GDI BitBlt 回退, 对 WDA 排除的窗口位置会拿黑,
+                #      但 DDA 不可用时 (Win7/无 D3D11/首次 duplicate 冲突)
+                #      比 ImageGrab 快得多。
+                #   3) ImageGrab — 最终兜底 (下面 `if _cap_fn is None` 段)。
                 try:
-                    import mss as _mss_mod
-                    _sct = _mss_mod.mss()
-                    _primary = _mss_monitor_for_point(_sct, _mon_cx, _mon_cy)
-                    def _cap_mss():
-                        s = _sct.grab(_primary)
-                        return Image.frombytes('RGB', s.size, s.rgb)
-                    _cap_fn = _cap_mss
-                    _cap_source = 'mss'
-                except Exception:
-                    pass
+                    from render.dxgi_duplication import DXGIDuplicator
+                    _dda = DXGIDuplicator(output_index=0)
+                    if _dda.alive:
+                        def _cap_dda():
+                            return _dda.try_acquire_rgb(timeout_ms=8)
+                        _cap_fn = _cap_dda
+                        _cap_source = 'dda'
+                    else:
+                        try:
+                            _dda.destroy()
+                        except Exception:
+                            pass
+                        _dda = None
+                except Exception as _exc_dda:
+                    print(f'[SAO-UI] fisheye DDA init failed, falling back '
+                          f'to mss/ImageGrab: {_exc_dda}', flush=True)
+                    _dda = None
+
+                if _cap_fn is None:
+                    try:
+                        import mss as _mss_mod
+                        _sct = _mss_mod.mss()
+                        _primary = _mss_monitor_for_point(_sct, _mon_cx, _mon_cy)
+                        def _cap_mss():
+                            s = _sct.grab(_primary)
+                            return Image.frombytes('RGB', s.size, s.rgb)
+                        _cap_fn = _cap_mss
+                        _cap_source = 'mss'
+                    except Exception:
+                        pass
             if _cap_fn is None and not _procedural:
                 def _cap_ig():
                     for _g in (
@@ -1995,6 +2024,9 @@ class SAOPlayerGUIFisheyeMixin:
                 except Exception: pass
             if _timer_res:
                 try: _timer_res.release()
+                except Exception: pass
+            if _dda is not None:
+                try: _dda.destroy()
                 except Exception: pass
 
         import threading as _th
