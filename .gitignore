@@ -43,6 +43,7 @@ python/assets/name_tables/boss_skill_observations.local.json
 dist/
 build/
 *.exe
+tools/
 
 # ── Roslyn C# compiler (downloaded, rebuilt by fetch_roslyn) ──
 python/act_platform/scripting/roslyn/
