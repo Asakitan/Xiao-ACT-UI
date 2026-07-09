@@ -44,25 +44,52 @@ python build_cython_ext.py build_ext --inplace
 if errorlevel 1 goto :fail
 
 :: ---- [2/7] C launcher ----
-echo [2/7] Compiling C launcher (no CRT, KERNEL32 only)...
-set "VSWHERE=%ProgramFiles(x86)%\Microsoft Visual Studio\Installer\vswhere.exe"
-if not exist "%VSWHERE%" (
-    echo ERROR: vswhere.exe not found
-    goto :fail
+if "%SAO_ENABLE_HARDENING%"=="1" (
+    echo [2/7] Compiling multi-module native launcher ^(hardening enabled^)...
+    call build_launcher.bat
+    if errorlevel 1 goto :fail
+    if exist "%LAUNCHER_OUT%\linkstart.exe" (
+        copy /y "%LAUNCHER_OUT%\linkstart.exe" "%LAUNCHER_OUT%\XiaoACTUI.exe" >nul
+    ) else (
+        copy /y "%LAUNCHER_OUT%\linkstart_raw.exe" "%LAUNCHER_OUT%\XiaoACTUI.exe" >nul
+    )
+    echo   OK: hardened launcher assembled
+) else (
+    echo [2/7] Compiling C launcher ^(legacy single-file mode^)...
+    set "VSWHERE=%ProgramFiles(x86)%\Microsoft Visual Studio\Installer\vswhere.exe"
+    if not exist "%VSWHERE%" (
+        echo ERROR: vswhere.exe not found
+        goto :fail
+    )
+    for /f "usebackq tokens=*" %%i in (`"%VSWHERE%" -latest -products * -property installationPath`) do set "VSDIR=%%i"
+    if not defined VSDIR (
+        echo ERROR: Visual Studio not found
+        goto :fail
+    )
+    call "%VSDIR%\VC\Auxiliary\Build\vcvarsall.bat" x64 >nul 2>&1
+    if not exist "%LAUNCHER_OUT%" mkdir "%LAUNCHER_OUT%"
+    rc /nologo launcher.rc
+    if errorlevel 1 goto :fail
+    cl /nologo /O2 /GS- launcher.c launcher.res /Fe:"%LAUNCHER_OUT%\XiaoACTUI.exe" /link kernel32.lib
+    if errorlevel 1 goto :fail
+    del /q launcher.res launcher.obj >nul 2>&1
+    echo   OK: %LAUNCHER_OUT%\XiaoACTUI.exe
 )
-for /f "usebackq tokens=*" %%i in (`"%VSWHERE%" -latest -products * -property installationPath`) do set "VSDIR=%%i"
-if not defined VSDIR (
-    echo ERROR: Visual Studio not found
-    goto :fail
+
+:: ---- [2b/7] Seal constants (hardening only) ----
+if "%SAO_ENABLE_HARDENING%"=="1" (
+    echo [2b/7] Sealing constants into wbox_tables.bin / sealed_constants.bin...
+    python license\tests\seal_constants.py ^
+        --server-url "%SAO_SERVER_URL%" ^
+        --update-host "%SAO_UPDATE_HOST%" ^
+        --server-pubkey "%SAO_SERVER_ED25519_PUBKEY%" ^
+        --cert-pin-primary "%SAO_CERT_PIN_PRIMARY%" ^
+        --cert-pin-backup "%SAO_CERT_PIN_BACKUP%"
+    if errorlevel 1 (
+        echo WARNING: seal_constants failed; hardening disabled for this build
+        set "SAO_ENABLE_HARDENING="
+    )
 )
-call "%VSDIR%\VC\Auxiliary\Build\vcvarsall.bat" x64 >nul 2>&1
-if not exist "%LAUNCHER_OUT%" mkdir "%LAUNCHER_OUT%"
-rc /nologo launcher.rc
-if errorlevel 1 goto :fail
-cl /nologo /O2 /GS- launcher.c launcher.res /Fe:"%LAUNCHER_OUT%\XiaoACTUI.exe" /link kernel32.lib
-if errorlevel 1 goto :fail
-del /q launcher.res launcher.obj >nul 2>&1
-echo   OK: %LAUNCHER_OUT%\XiaoACTUI.exe
 
 :: ---- [3/7] Nuitka ----
 echo [3/7] Nuitka compilation...
@@ -143,6 +170,12 @@ if exist "%RELEASE%\runtime\assets" (
     rmdir /s /q "%RELEASE%\runtime\assets"
 )
 
+:: Copy sealed constants and wbox tables into runtime\ so launcher_main.c can read them
+if "%SAO_ENABLE_HARDENING%"=="1" (
+    if exist "%ROOT%license\sealed_constants.bin" copy /y "%ROOT%license\sealed_constants.bin" "%RELEASE%\runtime\" >nul
+    if exist "%ROOT%license\wbox_tables.bin"      copy /y "%ROOT%license\wbox_tables.bin"      "%RELEASE%\runtime\" >nul
+)
+
 if exist "%ROOT%web" xcopy /e /i /y /q "%ROOT%web" "%RELEASE%\web\" >nul
 if exist "%ROOT%assets" xcopy /e /i /y /q "%ROOT%assets" "%RELEASE%\assets\" >nul
 if exist "%ROOT%plugins" xcopy /e /i /y /q "%ROOT%plugins" "%RELEASE%\plugins\" >nul
@@ -153,6 +186,21 @@ if exist "%ROOT%icon.ico" copy /y "%ROOT%icon.ico" "%RELEASE%\" >nul
 :: ---- [5/7] Harden ----
 echo [5/7] Post-build hardening (runtime/)...
 python post_build_harden.py "%RELEASE%\runtime"
+
+:: ---- [5b/7] Runtime DLL SHA-256 manifest (hardening only) ----
+if "%SAO_ENABLE_HARDENING%"=="1" (
+    echo [5b/7] Hashing runtime DLLs into manifest...
+    if not exist "%ROOT%build" mkdir "%ROOT%build"
+    python license\tests\hash_runtime_dlls.py "%RELEASE%\runtime" --out "%ROOT%build\runtime_manifest.json"
+    if errorlevel 1 echo WARNING: hash_runtime_dlls failed
+)
+
+:: ---- [5c/7] Hook baseline (hardening only) ----
+if "%SAO_ENABLE_HARDENING%"=="1" (
+    echo [5c/7] Capturing hook baseline...
+    python license\tests\gen_hook_baseline.py --out "%ROOT%build\hook_baseline.json"
+    if errorlevel 1 echo WARNING: gen_hook_baseline failed
+)
 
 :: ---- [6/7] Verify ----
 echo [6/7] Roslyn in distribution check...
