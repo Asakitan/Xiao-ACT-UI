@@ -190,14 +190,16 @@ class ReadContractTests(unittest.TestCase):
         self.assertEqual(returned.value, 77)
         self.assertTrue(boundary.closed)
 
-    def test_pending_wait_failure_is_not_reported_as_success(self):
+    def test_pending_wait_failure_keeps_event_owned_until_completion_or_cancel(self):
         boundary = _FakeNtBoundary(self.rt._STATUS_PENDING, 0, 99, wait_result=258)
         returned = wt.DWORD(77)
         self.assertFalse(
             self.rt._io_d0_nt(boundary, 1, 2, None, 0, None, 10, returned)
         )
         self.assertEqual(returned.value, 77)
-        self.assertTrue(boundary.closed)
+        # A failed wait is not proof that the IRP stopped using its IOSB/event.
+        # Keep the native ownership alive until completion or confirmed cancel.
+        self.assertFalse(boundary.closed)
 
 
 class OwnedCleanupTests(unittest.TestCase):
@@ -407,6 +409,23 @@ class WriterReadinessTests(unittest.TestCase):
             self.assertFalse(self.rt._r5_setup())
             self.assertFalse(self.rt._r5_ready)
         cleanup.assert_not_called()
+
+    def test_r5p_fallback_requires_a_confirmed_writer_health_probe(self):
+        health_probe = mock.Mock(return_value=False)
+        with (
+            mock.patch.object(self.rt, "_g0", return_value=True),
+            mock.patch.object(self.rt, "_r1_l", return_value=True),
+            mock.patch.object(self.rt, "_r3_l", return_value=False),
+            mock.patch.object(self.rt, "_r5p_load", return_value=True),
+            mock.patch.object(
+                self.rt, "_r5p_health_probe", health_probe, create=True),
+            mock.patch.object(self.rt, "_post_load_cleanup", return_value=True),
+            mock.patch.object(self.rt.time, "sleep", return_value=None),
+            mock.patch.object(self.rt, "_r5_ready", False),
+        ):
+            self.assertFalse(self.rt._r5_setup())
+            self.assertFalse(self.rt._r5_ready)
+        health_probe.assert_called_once_with()
 
     def test_r5p_fallback_preserves_non_r3_post_load_cleanup(self):
         cleanup = mock.Mock(return_value=True)
@@ -650,6 +669,26 @@ class CleanupReportTests(unittest.TestCase):
         ):
             self.assertEqual(self.rt._drv_unload("ExactService"), 0)
         register.assert_called_once_with("ExactService", r"C:\owned\ExactService.sys")
+
+    def test_drv_unload_refuses_owned_path_when_recorded_hash_no_longer_matches(self):
+        register = mock.Mock()
+        unload = mock.Mock(return_value=0)
+        with (
+            mock.patch.object(self.rt, "_NtULD", unload),
+            mock.patch.object(self.rt, "_service_registry_absent", return_value=True),
+            mock.patch.object(self.rt, "_owned_service_files", {
+                "ExactService": {
+                    "path": r"C:\owned\ExactService.sys",
+                    "sha256": "0" * 64,
+                }
+            }),
+            mock.patch.object(self.rt, "_owned_path_allowed", return_value=True),
+            mock.patch.object(self.rt, "_file_sha256", return_value="f" * 64),
+            mock.patch.object(self.rt, "_drv_reg", register),
+        ):
+            self.assertIsNone(self.rt._drv_unload("ExactService"))
+        register.assert_not_called()
+        unload.assert_not_called()
 
     def test_close_failure_is_reported_and_prevents_unload_or_state_clear(self):
         common = self._common_patches()
@@ -1043,6 +1082,67 @@ class MapLifecycleTests(unittest.TestCase):
         ):
             self.assertFalse(self.rt._r5_write(123, 0x4004, b"data"))
 
+    def test_mapped_write_requires_readback_before_unmap_confirmation(self):
+        backing = ctypes.create_string_buffer(0x1000)
+        unmap = mock.Mock(return_value=True)
+        with (
+            mock.patch.object(self.rt, "_r1_fp", return_value=0x1000),
+            mock.patch.object(self.rt, "_r1_pv8", side_effect=[0x2000, 0x3000]),
+            mock.patch.object(self.rt, "_r1_w", return_value=0x5008),
+            mock.patch.object(
+                self.rt, "_r3_m", return_value=ctypes.addressof(backing)),
+            mock.patch.object(self.rt, "_r3_um", unmap),
+            # Model a native copy that returns normally but did not make the
+            # requested bytes observable in the mapped page.
+            mock.patch.object(self.rt.ctypes, "memmove", return_value=None),
+            mock.patch.object(self.rt, "_OFF_DTB", 0),
+        ):
+            self.assertFalse(self.rt._kw(0xFFFF0000, b"ABCD"))
+        unmap.assert_called_once()
+
+    def test_r3_loader_unmaps_when_restore_path_itself_raises(self):
+        mapped = ctypes.c_uint32(7)
+        unmap = mock.Mock(return_value=True)
+        patches = (
+            mock.patch.object(self.rt, "_g0", return_value=True),
+            mock.patch.object(self.rt, "_r3_hvci", return_value=False),
+            mock.patch.object(self.rt, "_r1_l", return_value=True),
+            mock.patch.object(self.rt.time, "sleep", return_value=None),
+            mock.patch.object(self.rt, "_r3_l", return_value=True),
+            mock.patch.object(self.rt, "_r3_uc_to_cached_patch", return_value=True),
+            mock.patch.object(self.rt, "_r3_fc", return_value=(1, 0x1000, 7)),
+            mock.patch.object(
+                self.rt, "_r3_m", return_value=ctypes.addressof(mapped)),
+            mock.patch.object(self.rt, "_r3_um", unmap),
+            mock.patch.object(self.rt, "_fres", return_value="source.sys"),
+            mock.patch.object(self.rt, "_drv_tmp", return_value="stage.sys"),
+            mock.patch.object(self.rt, "_safe_remove", return_value=True),
+            mock.patch("shutil.copy2", return_value=None),
+            mock.patch.object(self.rt, "_mutate_hash", return_value=None),
+            mock.patch.object(self.rt, "_record_owned_file_hash", return_value=None),
+            mock.patch.object(self.rt, "_wdfilter_suppress", return_value=None),
+            mock.patch.object(self.rt, "_suppress_image_callbacks", return_value=None),
+            mock.patch.object(self.rt, "_suppress_registry_callbacks", return_value=None),
+            mock.patch.object(self.rt, "_suppress_etw_write", return_value=None),
+            mock.patch.object(self.rt, "_drv_reg", return_value=None),
+            mock.patch.object(
+                self.rt, "_drv_load", side_effect=RuntimeError("load failed")),
+            mock.patch.object(
+                self.rt, "_wdfilter_restore",
+                side_effect=RuntimeError("restore failed")),
+            mock.patch.object(self.rt, "_restore_image_callbacks", return_value=None),
+            mock.patch.object(self.rt, "_restore_registry_callbacks", return_value=None),
+            mock.patch.object(self.rt, "_restore_etw_write", return_value=None),
+            mock.patch.object(self.rt, "_r3_u", return_value=True),
+            mock.patch.object(self.rt, "_r5sn", None),
+            mock.patch.object(self.rt, "_tmp_files", []),
+        )
+        with contextlib.ExitStack() as stack:
+            for patcher in patches:
+                stack.enter_context(patcher)
+            self.assertFalse(self.rt._r3_c())
+        unmap.assert_called_once()
+
     def test_r3_failure_close_preserves_handle_and_service_owner(self):
         remove_service = mock.Mock()
         with (
@@ -1161,6 +1261,40 @@ class TeardownGuardTests(unittest.TestCase):
             if data and (set(data) == {0xCC} or set(data) == {0})
         }
         self.assertTrue({0x6000, 0x3000, 0x4000, 0x5000} <= wiped_addresses)
+
+    def test_dpc_flush_availability_is_not_rundown_confirmation(self):
+        writes = []
+
+        def write(addr, data):
+            writes.append((addr, bytes(data)))
+            return True
+
+        context = self._dpc_context(True)
+        context["dpc_cancel_confirmed"] = False
+        context["dpc_rundown_confirmed"] = False
+        with (
+            mock.patch.object(self.rt, "_find_exec_cave", return_value=0x6000),
+            mock.patch.object(self.rt, "_kw", side_effect=write),
+            mock.patch.object(self.rt, "_kr8", return_value=context["oh"]),
+            mock.patch.object(self.rt, "_teardown_recovery", []),
+        ):
+            self.assertFalse(self.rt._e_cleanup_dpc(context))
+
+        wiped_addresses = {
+            addr for addr, data in writes
+            if data and (set(data) == {0xCC} or set(data) == {0})
+        }
+        self.assertFalse({0x6000, 0x3000, 0x4000, 0x5000} & wiped_addresses)
+
+    def test_input_cleanup_retains_context_when_trigger_handle_close_fails(self):
+        context = self._dpc_context(True)
+        with (
+            mock.patch.object(self.rt, "_e_ctx", context),
+            mock.patch.object(self.rt, "_e_cleanup_dpc", return_value=True),
+            mock.patch.object(self.rt.kernel32, "CloseHandle", return_value=False),
+        ):
+            self.assertFalse(self.rt._e_cleanup())
+            self.assertIs(self.rt._e_ctx, context)
 
     def test_failed_cleanup_keeps_context_and_trigger_handle_for_retry(self):
         context = self._dpc_context(False)

@@ -34,8 +34,12 @@ Other plugins (`hide_seek_plugin/`, `midi_piano_plugin/`) follow the same SDK pa
 - Check `/memories/repo/` for task-specific notes.
 - Confirm the target surface before editing UI:
   - Entity UI: `sao_gui.py`, `gui_modules/`, `sao_theme/`, Tk/GPU modules
-  - WebView UI: `sao_webview.py`, `web/*.html`
   - AI Editor: `ai_editor/`, `web/ai_editor_app.html`
+  - **WebView UI: paused — do not maintain.** `sao_webview.py` + `web/menu.html` / `web/act_aggregate.html` / other legacy `web/*.html` (excluding AI Editor) are frozen. Do NOT invest effort in:
+    - New features / panels / fields (overrides the historical "double-UI parity" rule — Entity-only for new work)
+    - Cleaning up historical coupling leaks inside `sao_webview.py` (hardcoded plugin attributes: `_recognition_engines`, `_packet_engine`, `_vision_engine`, `_recognition_active`, `_vision_paused_for_death`, etc. — leave them as-is, do NOT extract or refactor)
+    - Adding new tests / selftests targeting `sao_webview.py`
+    - Existing production paths through `sao_webview.py` are untouched; only maintenance work on it is off-limits unless a blocking runtime bug forces it.
 - Default to UTF-8 for all reads/writes.
 
 ## Branch And Build

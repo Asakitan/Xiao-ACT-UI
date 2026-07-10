@@ -512,6 +512,29 @@ class SelectorAndViewerTests(unittest.TestCase):
 
 
 class PluginReaderRundownTests(unittest.TestCase):
+    def test_unified_source_propagates_unconfirmed_bridge_rundown(self):
+        from plugins.star_resonance_plugin.mem.unified_source import (
+            UnifiedDataSource,
+        )
+
+        class _LiveBridge:
+            stop_calls = 0
+
+            def stop(self):
+                self.stop_calls += 1
+                return False
+
+        source = UnifiedDataSource.__new__(UnifiedDataSource)
+        source._bridge = _LiveBridge()
+        source._started = True
+        source._deferred = False
+        source._last_error = ""
+        source._notify_status = lambda *_args: None
+
+        self.assertIs(source.stop(), False)
+        self.assertTrue(source._started)
+        self.assertEqual(source._bridge.stop_calls, 1)
+
     def test_poll_reader_does_not_close_process_until_worker_exits(self):
         from plugins.star_resonance_plugin.mem.reader import MemoryReader
 

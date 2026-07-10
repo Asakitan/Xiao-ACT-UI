@@ -89,7 +89,12 @@ class OverlayInputLifecycleTests(unittest.TestCase):
             [item[2] for item in mutations],
             ['hide_window_rect', 'hide_exstyle', 'hide_z_order'])
 
-    def test_capture_affinity_is_applied_and_verified_on_both_hwnds(self):
+    def test_capture_affinity_is_applied_and_verified_only_on_hrender(self):
+        # hControl 是 1x1 decoy (无 GL/DComp/WM_PAINT/hbrBackground=NULL),
+        # 客户区永远没像素可截; 给它上 WDA 反而把 SetWindowDisplayAffinity=
+        # 0x11 (反作弊高优先级指纹) 焊到"唯一暴露在 EnumWindows 里的窗口"
+        # 上, 抹掉 hRender hide_z_order unlink 换来的隐蔽性. set_capture_mode
+        # 必须只碰 self.hwnd (hRender), 完全不 touch control_hwnd.
         calls = []
         fake_dc = types.ModuleType('mem_probe._dc')
         fake_dc.apply = lambda hwnd: calls.append(('apply', hwnd)) or True
@@ -105,8 +110,14 @@ class OverlayInputLifecycleTests(unittest.TestCase):
             host.set_capture_mode(True)
             self.assertTrue(host._capture_excluded)
             self.assertEqual(calls, [
-                ('apply', 10), ('apply', 20),
-                ('verify', 10), ('verify', 20)])
+                ('apply', 10), ('verify', 10)])
+            self.assertNotIn(('apply', 20), calls)
+            self.assertNotIn(('verify', 20), calls)
+            calls.clear()
+            host.set_capture_mode(False)
+            self.assertFalse(host._capture_excluded)
+            self.assertEqual(calls, [('remove', 10)])
+            self.assertNotIn(('remove', 20), calls)
         finally:
             if old_dc is None:
                 sys.modules.pop('mem_probe._dc', None)

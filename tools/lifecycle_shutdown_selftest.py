@@ -16,6 +16,12 @@ if PYTHON not in sys.path:
 from gui_modules.sao_gui_lifecycle_mixin import SAOPlayerGUILifecycleMixin
 from act_platform.plugins import PluginContext
 
+# 平台 selftest 禁止 import 插件 (feedback_platform_no_plugin_dependency).
+# 插件耦合的引擎 lifecycle 测试挪到:
+#   python/plugins/star_resonance_plugin/tools/engine_lifecycle_selftest.py
+# 这里只保留 duck-typing 探针契约测试 (通过 mock _stop_recognition_engines
+# 覆盖平台侧的返回值传播行为, 无需 import 任何插件类).
+
 
 class _ExitIntercept(BaseException):
     pass
@@ -197,6 +203,63 @@ class LifecycleShutdownTests(unittest.TestCase):
                 sys.modules['act_platform.runtime'] = old_runtime
         self.assertEqual(events, [('panel', 1), ('panel', 2), 'compositor'])
         self.assertTrue(subject._close_finalized)
+
+    # test_memory_bridge_rundown_failure_keeps_owner_for_retry 挪到
+    # python/plugins/star_resonance_plugin/tools/engine_lifecycle_selftest.py
+    # (它耦合 SAOPlayerGUIEngineLifecycleMixin, 平台不该 import 插件).
+
+    def test_live_internal_memory_producer_blocks_compositor_teardown(self):
+        events = []
+
+        class Root:
+            @staticmethod
+            def after_cancel(_token):
+                return None
+
+            @staticmethod
+            def quit():
+                events.append('quit')
+
+        class Subject(SAOPlayerGUILifecycleMixin):
+            def _stop_fisheye_overlay(self, **_kwargs):
+                return None
+
+            def _stop_recognition_engines(self):
+                events.append('memory-producer')
+                return False
+
+            def _stop_overlay_runtime(self):
+                events.append('compositor')
+                return True
+
+        subject = Subject()
+        subject.root = Root()
+        subject._close_finalized = False
+        subject._destroyed = False
+        subject._breath_active = True
+        subject._lift_loop_active = True
+        subject._cache_loop_stop = threading.Event()
+        subject._entry_overlay = None
+        subject._exit_overlay = None
+        subject._hotkey_mgr = None
+        subject._state_mgr = None
+        subject._cfg_settings_ref = None
+        subject._sao_menu = None
+        subject._float = None
+        runtime = types.ModuleType('act_platform.runtime')
+        runtime.shutdown_act_plugin_manager = lambda _owner: True
+        old_runtime = sys.modules.get('act_platform.runtime')
+        sys.modules['act_platform.runtime'] = runtime
+        try:
+            self.assertFalse(subject._finalize_close(quit_root=False))
+        finally:
+            if old_runtime is None:
+                sys.modules.pop('act_platform.runtime', None)
+            else:
+                sys.modules['act_platform.runtime'] = old_runtime
+
+        self.assertEqual(events, ['memory-producer'])
+        self.assertFalse(subject._close_finalized)
 
 
 if __name__ == '__main__':

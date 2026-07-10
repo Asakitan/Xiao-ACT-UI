@@ -121,6 +121,46 @@ class DcMutationCoordinatorTests(unittest.TestCase):
         self.assertTrue(barrier.confirmed)
         self.assertTrue(coordinator.stop(timeout=2))
 
+    def test_begin_invalidate_cannot_be_bypassed_by_late_registration(self) -> None:
+        """A teardown barrier must close the first-register race for its HWND."""
+        register_started = threading.Event()
+        allow_register = threading.Event()
+        calls = []
+
+        class BlockingRegisterDc(FakeDc):
+            def register_window(self, hwnd):
+                register_started.set()
+                allow_register.wait(2)
+                return super().register_window(hwnd)
+
+        dc = BlockingRegisterDc()
+        coordinator = DcMutationCoordinator(dc_module=dc)
+        result = []
+
+        def submit_late() -> None:
+            result.append(coordinator.submit(
+                27, "rect", lambda: calls.append("mutated") or True))
+
+        submitter = threading.Thread(target=submit_late)
+        submitter.start()
+        try:
+            self.assertTrue(register_started.wait(1))
+            barrier = coordinator.begin_invalidate(27, timeout=1)
+            self.assertTrue(barrier.wait(1))
+            allow_register.set()
+            submitter.join(timeout=1)
+
+            self.assertFalse(submitter.is_alive())
+            self.assertEqual(result, [False])
+            self.assertTrue(coordinator.drain(27, timeout=1))
+            self.assertEqual(calls, [])
+            self.assertNotIn(27, dc.tokens)
+        finally:
+            allow_register.set()
+            submitter.join(timeout=1)
+            coordinator.quiesce()
+            coordinator.stop(timeout=2)
+
     def test_quiesce_rejects_new_work_and_stop_is_proven(self) -> None:
         dc = FakeDc()
         coordinator = DcMutationCoordinator(dc_module=dc)

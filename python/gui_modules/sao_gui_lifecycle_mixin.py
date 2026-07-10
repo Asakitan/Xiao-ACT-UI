@@ -392,11 +392,19 @@ class SAOPlayerGUILifecycleMixin:
         except Exception:
             pass
         # 停止识别引擎
+        # 插件 (star_resonance_plugin.SAOPlayerGUIEngineLifecycleMixin) 通过
+        # duck typing 提供 _stop_recognition_engines. 契约: 返回 False 明确
+        # 表示 "live producer 还没停完 (e.g. mem_bridge.stop() 拒绝 rundown,
+        # 或 kernel-side 物理内存写还在飞)", 平台必须暂停后续 shutdown 让
+        # 调用者 retry — 否则继续走 _stop_overlay_runtime + 缓存保存可能撞上
+        # 未 drain 的 mutation 写坏物理内存. 返回 None/True/其他都视为放行
+        # (兼容旧插件不返回值的语义).
         self._recognition_active = False
         self._cache_loop_stop.set()
         stop_recognition = getattr(self, '_stop_recognition_engines', None)
         if callable(stop_recognition):
-            stop_recognition()
+            if stop_recognition() is False:
+                return False
         # 保存缓存
         state_mgr = getattr(self, '_state_mgr', None)
         cfg_ref = getattr(self, '_cfg_settings_ref', None)

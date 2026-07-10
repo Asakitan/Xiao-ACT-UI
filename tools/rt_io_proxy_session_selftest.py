@@ -1193,6 +1193,56 @@ class TransportBoundaryTests(unittest.TestCase):
         finally:
             rt._helper_bcrypt, rt._helper_key_bound = old
 
+    def test_cng_rotation_refuses_to_replace_an_unclean_old_key(self) -> None:
+        class FailedOldKeyCleanup:
+            def __init__(self):
+                self.open_calls = 0
+
+            def BCryptDestroyKey(self, *args):
+                return 0xC0000001
+
+            def BCryptCloseAlgorithmProvider(self, *args):
+                return 0
+
+            def BCryptOpenAlgorithmProvider(self, *args):
+                self.open_calls += 1
+                return 0
+
+            def BCryptSetProperty(self, *args):
+                return 0
+
+            def BCryptGenerateSymmetricKey(self, *args):
+                return 0
+
+        rt = _backend()
+        cases = (
+            (
+                "proxy",
+                self.proxy,
+                "_bcrypt",
+                "_key_bound",
+                self.proxy._ensure_bcrypt,
+            ),
+            (
+                "helper",
+                rt,
+                "_helper_bcrypt",
+                "_helper_key_bound",
+                rt._ensure_helper_bcrypt,
+            ),
+        )
+        for label, module, bcrypt_name, bound_name, ensure in cases:
+            with self.subTest(side=label):
+                fake = FailedOldKeyCleanup()
+                with (
+                    mock.patch.object(module, bcrypt_name, fake),
+                    mock.patch.object(module, bound_name, b"o" * 32),
+                ):
+                    with self.assertRaises(RuntimeError):
+                        ensure(b"n" * 32)
+                    self.assertEqual(getattr(module, bound_name), b"o" * 32)
+                    self.assertEqual(fake.open_calls, 0)
+
     def test_decrypt_rejects_native_short_plaintext_count(self) -> None:
         p = self.proxy
 
@@ -1498,6 +1548,34 @@ class HelperExecutorTests(unittest.TestCase):
         self.assertTrue(keep_running)
         self.assertEqual(sent, [(1, 1, b"")])
         self.assertFalse(event.is_set())
+
+    def test_init_failure_is_not_overridden_by_residual_handles(self) -> None:
+        sent = []
+        rt = self.rt
+        with (
+            mock.patch.object(rt, "ensure_loaded", return_value=False),
+            mock.patch.object(rt, "_engine", None),
+            mock.patch.object(rt, "_backend", 0),
+            mock.patch.object(rt, "_r1h", 123),
+            mock.patch.object(rt, "_r3h", None),
+            mock.patch.object(rt, "_r5ph", None),
+            mock.patch.object(rt, "_r5_ready", False),
+            mock.patch.object(rt, "_OFF_PID", 1),
+            mock.patch.object(rt, "_resolve_ep_offsets", return_value=False),
+        ):
+            keep_running = rt._helper_dispatch(
+                rt._HELPER_CMD_INIT,
+                17,
+                struct.pack("<H", 0),
+                lambda status, seq, payload=b"": sent.append(
+                    (status, seq, payload)
+                ),
+                threading.Event(),
+            )
+        self.assertTrue(keep_running)
+        self.assertEqual(len(sent), 1)
+        self.assertEqual(sent[0][:2], (0, 17))
+        self.assertEqual(sent[0][2][:1], b"\x00")
 
 
 class PhysicalBatchTransactionTests(unittest.TestCase):
@@ -1873,6 +1951,58 @@ class HelperServerContractTests(unittest.TestCase):
             thread.join(2.0)
         self.assertFalse(thread.is_alive())
         self.assertEqual(cleanup, ["cleanup", "cleanup", "cleanup"])
+
+    def test_parent_death_does_not_wait_forever_for_stuck_cleanup(self) -> None:
+        rt = self.rt
+        cleanup_entered = threading.Event()
+        release_cleanup = threading.Event()
+
+        class DeadParentWithoutClients:
+            def __init__(self, parent_pid):
+                self.parent_pid = parent_pid
+
+            def create_pipe(self, pipe_name):
+                return None
+
+            def cancel(self, handle):
+                return None
+
+            def parent_alive(self):
+                return False
+
+            def close_security(self):
+                return None
+
+        def cleanup():
+            cleanup_entered.set()
+            release_cleanup.wait(2.0)
+            return True
+
+        boundary = DeadParentWithoutClients(502)
+        with mock.patch.object(rt, "_HELPER_PIPE_INSTANCES", 1):
+            thread = threading.Thread(target=lambda: rt._helper_main(
+                "test-pipe",
+                (b"h" * 32).hex(),
+                parent_pid=502,
+                boundary_factory=lambda _pid: boundary,
+                executor_factory=lambda: rt._HelperRequestExecutor(
+                    cleanup=cleanup
+                ),
+                monitor_interval=0.01,
+                orphan_cleanup_attempts=1,
+                orphan_cleanup_backoff=0.001,
+            ))
+            thread.start()
+            try:
+                self.assertTrue(cleanup_entered.wait(1.0))
+                thread.join(0.25)
+                self.assertFalse(
+                    thread.is_alive(),
+                    "parent-death teardown must bound a stuck executor cleanup",
+                )
+            finally:
+                release_cleanup.set()
+                thread.join(2.0)
 
     def test_executor_fatal_error_runs_emergency_cleanup_and_exits(self) -> None:
         rt = self.rt

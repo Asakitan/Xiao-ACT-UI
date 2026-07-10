@@ -319,6 +319,31 @@ class DisplayContextNoDriverTests(unittest.TestCase):
         self.assertFalse(dc.hide_exstyle(0x44, 0x8))
         self.assertEqual(commits, [])
 
+    def test_revoked_generation_after_translation_never_submits_transaction(self):
+        dc = load_dc()
+        dc._ensure_cal = lambda: True
+        dc._exs_off = 0x18
+        token = types.SimpleNamespace(generation=7)
+        valid = [True]
+        dc._capture_window_token = lambda _hwnd: token
+        dc._validate_window_token = lambda _token: valid[0]
+        dc._get_tw = lambda _hwnd: 0x1000
+        dc._read_tw_bytes = lambda *_args: (0x28).to_bytes(4, "little")
+        dc._our_cr3 = lambda: 0x3000
+        dc._rt_session_epoch = lambda: 7
+
+        def translate(*_args, **_kwargs):
+            valid[0] = False
+            return 0x5000
+
+        dc._va_to_pa = translate
+        commits = []
+        dc._pw_batch_or_fallback = (
+            lambda pairs, **kwargs: commits.append((pairs, kwargs)) or True)
+
+        self.assertFalse(dc.hide_exstyle(0x44, 0x8))
+        self.assertEqual(commits, [])
+
     def test_hide_z_order_rejects_broken_neighbor_backlink(self) -> None:
         dc = load_dc()
         dc._ensure_cal = lambda: True

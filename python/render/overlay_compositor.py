@@ -493,8 +493,6 @@ class CompositorLayer:
         # _apply_proxy_region): last applied span hash + frame seq.
         self._proxy_rgn_key: Any = None
         self._proxy_rgn_seq: int = -1
-        # _shape_tick 里 hide_exstyle 走 IPC, 用 pending flag 防堆积.
-        self._exs_scrub_pending = False
 
         # Mouse event callbacks
         self._on_cursor_pos: Optional[
@@ -749,21 +747,16 @@ class CompositorLayer:
                 pass
             # Tk may re-assert -topmost internally on map/focus events.
             # Check if 0x8 reappeared and scrub it.
-            # 异步 scrub: hide_exstyle 走 rt_io_proxy → IPC → helper 阻塞式
-            # pipe read; helper 慢时会把 Tk 主线程卡死 (2026-07-10 主人实测
-            # 主菜单卡死栈: _shape_tick → hide_exstyle → _our_cr3 → _r1_fe).
-            # 推到 daemon 线程做, 用 pending flag 抑制堆积.
+            # _submit_dc 走 mutation coordinator: 非阻塞入队 + key 级 dedup,
+            # 200ms tick 重复入队同一个 (hwnd, gen, 'proxy-exstyle') 会被
+            # coordinator 侧 _queued set 天然吞掉 — 不需要额外 pending flag.
             try:
                 _ph = _ct.windll.user32.GetAncestor(proxy.winfo_id(), 2)
                 if _ph:
                     _ex = _ct.windll.user32.GetWindowLongPtrW(_ph, -20)
-                    if _ex & 0x8 and not self._exs_scrub_pending:
-                        self._exs_scrub_pending = True
+                    if _ex & 0x8:
                         self._submit_dc(
                             _ph, 'proxy-exstyle', 'hide_exstyle', 0x8)
-                        # Submission itself is non-blocking and coalesced; the
-                        # next 200 ms shape tick may enqueue a fresh check.
-                        self._exs_scrub_pending = False
             except Exception:
                 pass
             try:

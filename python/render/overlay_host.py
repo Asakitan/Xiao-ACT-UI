@@ -493,12 +493,20 @@ class OverlayHost:
         hinst = _kernel32.GetModuleHandleW(None)
         self._class_name = _generate_class_name()
 
-        # WndProc — handle hit-testing, activation, and mouse events
-        # hControl (1x1 decoy) 走 DefWindowProc; 只有 hRender (self.hwnd)
-        # 才跑真正的 hit test / mouse event 逻辑. 用 "self.hwnd 已赋值且
-        # hwnd 不等于它" 判断 → WM_CREATE 阶段 self.hwnd=0 时不误拦.
+        # WndProc — handle hit-testing, activation, and mouse events.
+        # 三窗口共享同一 wndproc: hRender (self.hwnd, 真交互), hControl
+        # (self.control_hwnd, 1x1 decoy), _owner_hwnd (invisible owner).
+        # 只有 hRender 应该跑 hit_test/mouse_fn 逻辑, 其他两个必须走
+        # DefWindowProc.
+        #
+        # 陷阱: hControl/owner 都建在 hRender 之前, 期间 self.hwnd=0,
+        # "if self.hwnd and hwnd != self.hwnd" 会假成短路 → hControl/owner
+        # 的早期消息 (WM_NCCREATE/WM_NCCALCSIZE/WM_CREATE/WM_MOUSEACTIVATE)
+        # 全落到 hRender 的交互分支. 今天 hit_test_fn=None + mouse_fn=None
+        # 撞不上, 明天加一行日志就炸. 显式检查: 只有 hwnd == self.hwnd
+        # (已建成的 hRender) 才走交互分支.
         def _wndproc(hwnd: int, msg: int, wp: int, lp: int) -> int:
-            if self.hwnd and hwnd != self.hwnd:
+            if not self.hwnd or hwnd != self.hwnd:
                 return _user32.DefWindowProcW(hwnd, msg, wp, lp)
             if msg == WM_NCHITTEST:
                 x = lp & 0xFFFF
@@ -873,36 +881,33 @@ class OverlayHost:
         self.input_passthrough = bool(passthrough)
 
     def set_capture_mode(self, exclude: bool) -> None:
-        # 双 hwnd 都必须 apply — 否则反作弊 BitBlt/PrintWindow 到 hControl
-        # 能截到内容 (即使 1x1 也是内容), 立即察觉"decoy 没上 WDA"→ 怀疑.
-        # 一致的 defense-in-depth: hRender + hControl 都 WDA_EXCLUDEFROMCAPTURE.
+        # 只对 hRender apply/verify WDA_EXCLUDEFROMCAPTURE.
         #
-        # apply 后调 verify() 校验 DWM 端 WDA state 真被设成 0x11 = WDA_V.
-        # 校验失败时打日志, 反作弊/直播软件 hooks 掉 SetWindowDisplayAffinity
-        # 时能被此暴露.
+        # hControl 是 1x1 decoy — 无 GL context, 无 DComp target, 无 WM_PAINT,
+        # hbrBackground=NULL, WM_ERASEBKGND 假装 erase → 客户区永远没像素可截.
+        # 给它上 WDA 反而把 SetWindowDisplayAffinity=0x11 这个反作弊高优先级
+        # 指纹焊到"唯一暴露在 EnumWindows 里的窗口"上, 直接抹掉 hRender
+        # 走 hide_z_order unlink 换来的隐蔽性.
+        #
+        # apply 后调 verify() 校验 DWM 端 GetWindowDisplayAffinity 真回读 0x11.
+        # 校验失败打日志暴露"反作弊/直播软件 hook 掉 SetWindowDisplayAffinity".
         try:
             from mem_probe._dc import (apply as _ac_apply,
                                        remove as _ac_remove,
                                        verify as _ac_verify)
             if exclude:
-                ok_r = _ac_apply(self.hwnd)
-                ok_c = _ac_apply(self.control_hwnd) if self.control_hwnd else True
-                # verify: DWM 侧回读 GetWindowDisplayAffinity == 0x11
-                v_r = _ac_verify(self.hwnd)
-                v_c = _ac_verify(self.control_hwnd) if self.control_hwnd else True
-                self._capture_excluded = ok_r and ok_c and v_r and v_c
+                ok = _ac_apply(self.hwnd)
+                v = _ac_verify(self.hwnd)
+                self._capture_excluded = ok and v
                 if not self._capture_excluded:
                     try:
-                        print(f'[Overlay] WDA_EXCLUDEFROMCAPTURE partial: '
-                              f'hRender apply={ok_r} verify={v_r}, '
-                              f'hControl apply={ok_c} verify={v_c}',
+                        print(f'[Overlay] WDA_EXCLUDEFROMCAPTURE failed on '
+                              f'hRender: apply={ok} verify={v}',
                               flush=True)
                     except Exception:
                         pass
             else:
                 _ac_remove(self.hwnd)
-                if self.control_hwnd:
-                    _ac_remove(self.control_hwnd)
                 self._capture_excluded = False
         except Exception:
             self._capture_excluded = False
@@ -966,6 +971,20 @@ class OverlayHost:
         self._submit_dc('host-rect', 'hide_window_rect')
 
     def destroy(self) -> bool:
+        # 两阶段设计:
+        #
+        # 【阶段 1: mutation drain】invalidate 失败必须**保留 handle** + 立即
+        # return False, 让调用者 retry. 原因: mutation coordinator worker
+        # 可能还在飞, worker 拿着 stale hwnd 去物理内存写会撞死别人的地址
+        # (kernel-side unsafe). 死循环风险由调用者 (compositor
+        # _teardown_render_thread_once) 侧的 retry 上限约束, 不能靠这里
+        # "强行清零" 逃避.
+        #
+        # 【阶段 2: 本地 API】wgl/ReleaseDC/DestroyWindow 失败**幂等清零**.
+        # 这些跟 mutation 无关, 死 handle 二次调用可能撞穿其他窗口/驱动崩,
+        # 一次尝试后就永久放弃这个 handle. 返回值反映是否全绿.
+        #
+        # self._destroyed=True 保证第二次进来直接 True return.
         if self._destroyed:
             return True
         coordinator = self._dc_mutations
@@ -977,6 +996,7 @@ class OverlayHost:
                             return False
                     except Exception:
                         return False
+        any_failed = False
         if self.hglrc:
             try:
                 from render.gpu_overlay_window import get_wgl_serialize_lock
@@ -984,35 +1004,38 @@ class OverlayHost:
             except Exception:
                 import contextlib
                 lock = contextlib.nullcontext()
+            deleted = False
             try:
                 with lock:
                     _opengl32.wglMakeCurrent(0, 0)
                     deleted = bool(_opengl32.wglDeleteContext(self.hglrc))
             except Exception:
                 deleted = False
-            if not deleted:
-                return False
             self.hglrc = 0
+            if not deleted:
+                any_failed = True
         if self.hdc and self.hwnd:
+            released = False
             try:
                 released = bool(_user32.ReleaseDC(self.hwnd, self.hdc))
             except Exception:
                 released = False
-            if not released:
-                return False
             self.hdc = 0
+            if not released:
+                any_failed = True
         for attr in ('hwnd', 'control_hwnd', '_owner_hwnd'):
             hwnd = int(getattr(self, attr, 0) or 0)
             if not hwnd:
                 continue
+            destroyed = False
             try:
                 _user32.DestroyWindow(hwnd)
                 destroyed = not bool(_user32.IsWindow(hwnd))
             except Exception:
                 destroyed = False
-            if not destroyed:
-                return False
             setattr(self, attr, 0)
+            if not destroyed:
+                any_failed = True
         self.ctx = None
         self._destroyed = True
-        return True
+        return not any_failed

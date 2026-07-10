@@ -74,9 +74,22 @@ class SAOPlayerGUIEngineLifecycleMixin:
 
     def _stop_recognition_engines(self):
         # 停止所有识别/数据引擎.
+        #
+        # 契约: 返回 False 明确告知平台 "live producer 拒绝 rundown", 平台
+        # _finalize_close 收到 False 会暂停后续 shutdown 让调用者 retry.
+        # mem_bridge 是重点 — 它管着 kernel-side 物理内存写的 mutation
+        # coordinator, 强行 destroy 会撞穿别人的 pa. mem_bridge.stop() 返回
+        # False → 保留 _mem_bridge 引用 + 立即返 False 阻塞 shutdown.
+        # 其他 engine (auto_key/boss_raid/vision/packet) 都是 user-mode
+        # 生命周期, stop 失败不阻塞.
         if getattr(self, '_mem_bridge', None):
-            try: self._mem_bridge.stop()
-            except Exception: pass
+            stopped = False
+            try:
+                stopped = self._mem_bridge.stop() is not False
+            except Exception:
+                stopped = False
+            if not stopped:
+                return False
             self._mem_bridge = None
         if getattr(self, '_auto_key_engine', None):
             try: self._auto_key_engine.stop()
@@ -100,6 +113,7 @@ class SAOPlayerGUIEngineLifecycleMixin:
         self._packet_engine = None
         self._vision_engine = None
         self._reset_sta_offline_state()
+        return True
 
     def _reconfigure_data_engines(self):
         # 重启引擎。所有引擎/数据源/overlay 由插件 on_load 创建。

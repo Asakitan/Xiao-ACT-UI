@@ -459,6 +459,22 @@ class ProxyContractTests(unittest.TestCase):
             self.assertTrue(p.request_capability(p.CAP_INPUT))
         load.assert_called_once_with(p.ENGINE_PHYSRW)
 
+    def test_request_capability_rejects_readonly_fallback_success(self) -> None:
+        p = self.proxy
+
+        def readonly_fallback(_requested_engine):
+            p._engine = p.ENGINE_READONLY
+            return True
+
+        for capability in (p.CAP_WRITE, p.CAP_INPUT):
+            with self.subTest(capability=capability):
+                p._engine = None
+                with mock.patch.object(
+                    p, "ensure_loaded", side_effect=readonly_fallback
+                ):
+                    self.assertFalse(p.request_capability(capability))
+                self.assertEqual(p._engine, p.ENGINE_READONLY)
+
     def test_available_engines_has_real_backend_record_shape(self) -> None:
         p = self.proxy
         with mock.patch.object(p, "_lic_check", return_value=True):
@@ -476,6 +492,27 @@ class ProxyContractTests(unittest.TestCase):
         self.assertTrue(all(set(item) == {
             "id", "name", "caps", "available", "licensed"
         } for item in records))
+
+    def test_available_engines_preserves_helper_per_engine_inventory(self) -> None:
+        p = self.proxy
+        # Helper inventory is one byte per ENGINE_DISPLAY entry.  A proxy that
+        # merely checks whether RuntimeBroker exists collapses these distinct
+        # backend-resource states and is not API-compatible with rt_io.
+        inventory = bytes((1, 0, 1, 0, 0))
+        with (
+            mock.patch.object(p, "_call", return_value=inventory),
+            mock.patch.object(
+                p,
+                "_find_helper_exe",
+                return_value=str(MEM_PROBE / "rt_io_proxy.py"),
+            ),
+            mock.patch.object(p, "_lic_check", return_value=True),
+        ):
+            records = p.available_engines()
+        self.assertEqual(
+            [item["available"] for item in records],
+            [True, False, True, False, False],
+        )
 
     def test_read_into_and_rpm_report_actual_short_read_length(self) -> None:
         p = self.proxy
