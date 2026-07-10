@@ -11,7 +11,7 @@ from collections import deque
 from dataclasses import dataclass
 import threading
 import time
-from typing import Any, Callable, Optional
+from typing import Any, Callable, Optional, Tuple
 
 
 @dataclass(frozen=True)
@@ -64,7 +64,13 @@ class DcMutationCoordinator:
         self._invalidating: set[int] = set()
         self._invalidations = 0
         self._invalidation_failed = False
-        self._failed_invalidations: set[int] = set()
+        # 从 set[int] 改成 dict[int, Optional[(pid, tid)]] — 值是"失败当时的
+        # window identity". Windows kernel 会把 destroy 后的 HWND 数值重分给
+        # 新窗口 (罕见但真实存在). 老逻辑仅按 HWND 数值 block → 一次失败
+        # 永久禁用该 hwnd, 新窗口撞上同数值就永远 register 不上. 现在保存
+        # identity: register 头部拿当前 identity 对比, 变了 → 是新窗口,
+        # 清 stale block 继续 register.
+        self._failed_invalidations: dict[int, Optional[Tuple[int, int]]] = {}
         self._accepting = True
         self._stop_requested = False
         self._thread = threading.Thread(
@@ -77,20 +83,74 @@ class DcMutationCoordinator:
             self._dc_module = _dc
         return self._dc_module
 
+    def _capture_identity_locked(
+            self, hwnd: int) -> Optional[Tuple[int, int]]:
+        # 只在 self._condition 锁内被调用. _window_identity 走 user32
+        # (IsWindow + GetWindowThreadProcessId), 不跨 helper 边界, 常规 <1ms.
+        try:
+            ident = getattr(self._dc(), '_window_identity', None)
+            if callable(ident):
+                return ident(hwnd)
+        except Exception:
+            pass
+        return None
+
+    def _record_failed_locked(self, hwnd: int) -> None:
+        self._failed_invalidations[hwnd] = self._capture_identity_locked(hwnd)
+        self._invalidation_failed = True
+
+    def _is_blocked_by_stale_failure_locked(self, hwnd: int) -> bool:
+        # 判断 hwnd 是否仍被"上次 invalidation 失败"block.
+        # 返回 True → 保留 block; 返回 False → 已 clear, 可以 register.
+        if hwnd not in self._failed_invalidations:
+            return False
+        prev = self._failed_invalidations[hwnd]
+        if prev is None:
+            # 曾经拿不到 identity 就 fail 了 (可能 HWND 已死) — 保守 block
+            return True
+        curr = self._capture_identity_locked(hwnd)
+        if curr is None:
+            # 现在也拿不到 identity → HWND 无效或 anti-cheat hook, 沿用 block
+            return True
+        if curr == prev:
+            return True
+        # HWND 数值被新窗口重用 → 清 stale block + 重置 epoch, 让新窗口
+        # 从 epoch 0 开始一个干净的 register lifecycle.
+        self._failed_invalidations.pop(hwnd, None)
+        self._registration_epochs.pop(hwnd, None)
+        self._invalidation_failed = bool(self._failed_invalidations)
+        return False
+
+    def clear_failed_invalidation(self, hwnd: int) -> bool:
+        # 显式 API: caller 明知这个 hwnd 已被替换成新窗口, 直接清 block +
+        # epoch. 返回值指示是否真清了什么.
+        hwnd = int(hwnd or 0)
+        if not hwnd:
+            return False
+        with self._condition:
+            removed = self._failed_invalidations.pop(hwnd, None) is not None
+            if removed:
+                self._registration_epochs.pop(hwnd, None)
+                self._invalidation_failed = bool(self._failed_invalidations)
+                self._condition.notify_all()
+            return removed
+
     def register(self, hwnd: int):
         hwnd = int(hwnd or 0)
         if not hwnd:
             return None
         with self._condition:
-            if (not self._accepting or hwnd in self._invalidating
-                    or hwnd in self._failed_invalidations):
+            if not self._accepting or hwnd in self._invalidating:
+                return None
+            if self._is_blocked_by_stale_failure_locked(hwnd):
                 return None
             registration_lock = self._registration_locks.setdefault(
                 hwnd, threading.Lock())
         with registration_lock:
             with self._condition:
-                if (not self._accepting or hwnd in self._invalidating
-                        or hwnd in self._failed_invalidations):
+                if not self._accepting or hwnd in self._invalidating:
+                    return None
+                if self._is_blocked_by_stale_failure_locked(hwnd):
                     return None
                 epoch = self._registration_epochs.get(hwnd, 0)
             token = self._dc().register_window(hwnd)
@@ -119,8 +179,7 @@ class DcMutationCoordinator:
                 pass
             if not revoked:
                 with self._condition:
-                    self._failed_invalidations.add(hwnd)
-                    self._invalidation_failed = True
+                    self._record_failed_locked(hwnd)
                     self._condition.notify_all()
             return None
 
@@ -221,8 +280,7 @@ class DcMutationCoordinator:
             with self._condition:
                 self._invalidations = max(0, self._invalidations - 1)
                 self._invalidating.discard(hwnd)
-                self._failed_invalidations.add(hwnd)
-                self._invalidation_failed = True
+                self._record_failed_locked(hwnd)
                 self._condition.notify_all()
             barrier._finish(False)
             return barrier
@@ -259,10 +317,11 @@ class DcMutationCoordinator:
                     self._invalidations = max(0, self._invalidations - 1)
                     self._invalidating.discard(hwnd)
                     if confirmed:
-                        self._failed_invalidations.discard(hwnd)
+                        self._failed_invalidations.pop(hwnd, None)
+                        self._invalidation_failed = bool(
+                            self._failed_invalidations)
                     else:
-                        self._failed_invalidations.add(hwnd)
-                    self._invalidation_failed = bool(self._failed_invalidations)
+                        self._record_failed_locked(hwnd)
                     self._condition.notify_all()
                 barrier._finish(confirmed)
 
@@ -274,8 +333,7 @@ class DcMutationCoordinator:
             with self._condition:
                 self._invalidations = max(0, self._invalidations - 1)
                 self._invalidating.discard(hwnd)
-                self._failed_invalidations.add(hwnd)
-                self._invalidation_failed = True
+                self._record_failed_locked(hwnd)
                 self._condition.notify_all()
             barrier._finish(False)
         return barrier

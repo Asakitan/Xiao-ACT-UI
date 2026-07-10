@@ -886,20 +886,46 @@ class OverlayHost:
                 _user32.GetWindowLongPtrW(self.hwnd, GWL_EXSTYLE)
                 & WS_EX_TRANSPARENT)
         except Exception:
+            # 完全 Win32 失败 — anti-cheat/DWM hook 掉了 GetWindowLongPtr.
+            # 保留 input_passthrough 上次的值 (调用者视为 no-op).
+            if os.environ.get('SAO_OVERLAY_DIAGNOSTICS') == '1':
+                import traceback
+                traceback.print_exc()
             return
         if confirmed == requested:
             self.input_passthrough = requested
+            return
+        # SetWindowLongPtr 完成但 verify 显示 bit 没变 — 常见原因:
+        # 1) SetWindowLongPtr 被 anti-cheat/DWM hook 掉静默返 0
+        # 2) 权限不足 (host 属于其他 desktop/session)
+        # 3) hwnd 已 destroyed 但 GetLast 没检
+        # 无告警 → 调用者 sync_host_input_mode 以为切成功了继续错; 打 gated
+        # 一行 stderr 让排障时看得见.
+        if os.environ.get('SAO_OVERLAY_DIAGNOSTICS') == '1':
+            print(f'[Overlay] set_input_passthrough({requested}) '
+                  f'not confirmed (confirmed={confirmed}); '
+                  f'input_passthrough stays {self.input_passthrough}',
+                  flush=True)
 
     def set_capture_mode(self, exclude: bool) -> None:
         # hRender and hControl form one public overlay surface.  Keep capture
         # affinity symmetric so a topology change cannot expose the control
         # side while the render side remains excluded.
+        #
+        # Partial-success rollback: if any hwnd fails apply/verify (or its
+        # counterpart already succeeded), reverse the successful ones so that
+        # (a) internal _capture_excluded matches the real DWM state, and
+        # (b) never leave one side WDA_V while the other is WDA_0 — that
+        # inconsistency is exactly the "topology exposure" this symmetric
+        # policy exists to prevent.
         try:
             from mem_probe._dc import (apply as _ac_apply,
                                        remove as _ac_remove,
                                        verify as _ac_verify)
             hwnds = tuple(hwnd for hwnd in (self.hwnd, self.control_hwnd)
                           if int(hwnd or 0))
+            if not hwnds:
+                return
 
             def _call(fn, hwnd):
                 try:
@@ -907,31 +933,69 @@ class OverlayHost:
                 except Exception:
                     return False
 
+            diag = os.environ.get('SAO_OVERLAY_DIAGNOSTICS') == '1'
+            # 无 early-break: 每个 hwnd 都必须尝试, 尽力清干净. break-early
+            # 会漏做后面 hwnd 的清理动作 (即使前面失败, 后面还是要试, 因为
+            # 后面 hwnd 之前也可能有 stale state 需要 remove).
             if exclude:
+                applied: list = []
                 confirmed = True
                 for hwnd in hwnds:
                     ok = _call(_ac_apply, hwnd)
                     verified = _call(_ac_verify, hwnd) if ok else False
-                    confirmed = confirmed and ok and verified
-                if hwnds and confirmed:
+                    if ok and verified:
+                        applied.append(hwnd)
+                    else:
+                        confirmed = False
+                if confirmed:
                     self._capture_excluded = True
-                if (not (hwnds and confirmed)
-                        and os.environ.get('SAO_OVERLAY_DIAGNOSTICS') == '1'):
-                    print('[Overlay] WDA apply/verify not confirmed', flush=True)
+                    return
+                # 回滚已 apply 的 hwnd, 保证左右对称: 要么都 excluded, 要么都不.
+                rollback_ok = True
+                for hwnd in applied:
+                    ok = _call(_ac_remove, hwnd)
+                    still = _call(_ac_verify, hwnd)
+                    if not ok or still:
+                        rollback_ok = False
+                if rollback_ok:
+                    self._capture_excluded = False
+                if diag:
+                    print(f'[Overlay] set_capture_mode(True) partial: '
+                          f'confirmed={confirmed} '
+                          f'rolled_back={len(applied)} rollback_ok={rollback_ok}',
+                          flush=True)
             else:
-                removed = True
+                removed_hwnds: list = []
+                confirmed = True
                 for hwnd in hwnds:
                     ok = _call(_ac_remove, hwnd)
-                    try:
-                        still_excluded = bool(_ac_verify(hwnd)) if ok else True
-                    except Exception:
-                        still_excluded = True
-                    removed = removed and ok and not still_excluded
-                if hwnds and removed:
+                    still = _call(_ac_verify, hwnd) if ok else True
+                    if ok and not still:
+                        removed_hwnds.append(hwnd)
+                    else:
+                        confirmed = False
+                if confirmed:
                     self._capture_excluded = False
+                    return
+                # 回滚已 remove 的 hwnd (再 apply 回去), 保证对称.
+                rollback_ok = True
+                for hwnd in removed_hwnds:
+                    ok = _call(_ac_apply, hwnd)
+                    verified = _call(_ac_verify, hwnd) if ok else False
+                    if not ok or not verified:
+                        rollback_ok = False
+                if rollback_ok:
+                    self._capture_excluded = True
+                if diag:
+                    print(f'[Overlay] set_capture_mode(False) partial: '
+                          f'confirmed={confirmed} '
+                          f'rolled_back={len(removed_hwnds)} '
+                          f'rollback_ok={rollback_ok}', flush=True)
         except Exception:
-            # Preserve the last confirmed state.  A failed remove must not be
-            # published as success, and a failed apply is not proof of removal.
+            # 顶层异常无法判断 state, 保守: 不动 _capture_excluded, 上层重试.
+            if os.environ.get('SAO_OVERLAY_DIAGNOSTICS') == '1':
+                import traceback
+                traceback.print_exc()
             return
 
     def _hide_topmost_flag(self) -> None:

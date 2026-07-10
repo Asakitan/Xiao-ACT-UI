@@ -1466,6 +1466,7 @@ class UnifiedOverlay:
         self._streaming_accepting = True
         self._streaming_generation = 0
         self._teardown_confirmed = False
+        self._last_teardown_stage = ''
         self._retired = False
         self._timer_period_active = False
 
@@ -1540,8 +1541,6 @@ class UnifiedOverlay:
         # form a deterministic swap chain; otherwise the late first caller
         # can overwrite the newer layer without retiring its resources.
         with self._lock:
-            if not hasattr(self, '_layer_epochs'):
-                self._layer_epochs = {}
             epoch = int(self._layer_epochs.get(name, 0)) + 1
             layer = CompositorLayer(
                 name, width, height, x, y, z, click_through, bgra_swizzle,
@@ -1559,13 +1558,18 @@ class UnifiedOverlay:
         if not click_through:
             # Keep all interactive input on a local proxy; the fullscreen
             # compositor HWND itself remains passthrough at all times.
-            self.attach_layer_input_proxy(name)
+            # attach 失败 → 该 layer 的点击会穿透到游戏, 用户面前"按钮点不动"
+            # 却没日志. gated 一行 stderr 让排障有痕迹; layer 仍返回,
+            # 后续 sync_host_input_mode / 下一轮 UI tick 可能自愈.
+            if not self.attach_layer_input_proxy(name):
+                if os.environ.get('SAO_OVERLAY_DIAGNOSTICS') == '1':
+                    print(f'[Compositor] attach_layer_input_proxy({name!r}) '
+                          f'failed at create_layer; interactive layer will '
+                          f'have no click target until re-attach', flush=True)
         return layer
 
     def destroy_layer(self, name: str) -> None:
         with self._lock:
-            if not hasattr(self, '_layer_epochs'):
-                self._layer_epochs = {}
             layer = self._layers.pop(name, None)
             self._layer_epochs[name] = int(
                 self._layer_epochs.get(name, 0)) + 1
@@ -1936,8 +1940,7 @@ class UnifiedOverlay:
         with self._streaming_threads_lock:
             if not self._streaming_accepting:
                 return
-            self._streaming_generation = int(
-                getattr(self, '_streaming_generation', 0)) + 1
+            self._streaming_generation += 1
             generation = self._streaming_generation
 
         def _bg():
@@ -1986,8 +1989,7 @@ class UnifiedOverlay:
         deadline = time.monotonic() + max(0.0, float(timeout))
         with self._streaming_threads_lock:
             self._streaming_accepting = False
-            self._streaming_generation = int(
-                getattr(self, '_streaming_generation', 0)) + 1
+            self._streaming_generation += 1
             threads = list(self._streaming_threads)
         current = threading.current_thread()
         for thread in threads:
@@ -2083,8 +2085,6 @@ class UnifiedOverlay:
         if root is None:
             return False
         with self._lock:
-            if not hasattr(self, '_layer_epochs'):
-                self._layer_epochs = {}
             layer = self._layers.get(name)
             epoch = int(self._layer_epochs.get(name, 0))
             if layer is None or layer.click_through:
@@ -2623,44 +2623,85 @@ class UnifiedOverlay:
             # HWND destruction is thread-affine.  If a producer or _dc
             # mutation has not drained yet, remain alive on this owner thread
             # and let stop() report the timeout instead of abandoning HWNDs.
-            while not self._teardown_render_thread_once():
+            #
+            # 上限约束: 20s (400 iter x 50ms) 后放弃 + hard-log 卡在哪一步.
+            # 主人的 fail-preserve 策略 (destroy 失败保留 handle 给 caller retry)
+            # 依赖 caller 有 retry 上限, 否则 wglDeleteContext 一次死就静默
+            # 无限循环 → 用户端"退出卡死"看不到诊断. 每 40 iter (~2s) 打一
+            # 行 stderr 进度 (无条件, shutdown 期间稀有事件不算噪音).
+            _TEARDOWN_MAX_ITERS = 400
+            _TEARDOWN_LOG_EVERY = 40
+            self._last_teardown_stage = ''
+            for _it in range(_TEARDOWN_MAX_ITERS):
+                if self._teardown_render_thread_once():
+                    break
+                if _it and _it % _TEARDOWN_LOG_EVERY == 0:
+                    try:
+                        import sys as _sys
+                        _sys.stderr.write(
+                            f'[Compositor] teardown stalled at '
+                            f'stage={self._last_teardown_stage!r} '
+                            f'retry={_it}/{_TEARDOWN_MAX_ITERS}\n')
+                        _sys.stderr.flush()
+                    except Exception:
+                        pass
                 time.sleep(0.05)
+            else:
+                # 循环完自然退出 (未 break) = 到达上限. 放弃 + hard-log.
+                try:
+                    import sys as _sys
+                    _sys.stderr.write(
+                        f'[Compositor] teardown giving up after '
+                        f'{_TEARDOWN_MAX_ITERS} retries, stuck at '
+                        f'stage={self._last_teardown_stage!r}. Handles '
+                        f'may leak; hard-exit path will proceed.\n')
+                    _sys.stderr.flush()
+                except Exception:
+                    pass
             self._teardown_confirmed = True
 
     def _teardown_render_thread_once(self) -> bool:
+        self._last_teardown_stage = 'streaming_workers'
         if not self._stop_streaming_workers(timeout=0.25):
             return False
+        self._last_teardown_stage = 'streaming_lock'
         if not self._streaming_lock.acquire(timeout=0.25):
             return False
         try:
+            self._last_teardown_stage = 'vfence'
             if not self._stop_vf(timeout=0.25):
                 return False
         finally:
             self._streaming_lock.release()
         if self._timer_period_active:
+            self._last_teardown_stage = 'timer_period'
             try:
                 _ct.windll.winmm.timeEndPeriod(1)
                 self._timer_period_active = False
             except Exception:
                 return False
         if self._dcomp:
+            self._last_teardown_stage = 'dcomp'
             try:
                 self._dcomp.destroy()
                 self._dcomp = None
             except Exception:
                 return False
+        self._last_teardown_stage = 'cleanup_gl'
         try:
             self._cleanup_gl()
         except Exception:
             return False
         host = self._host
         if host is not None:
+            self._last_teardown_stage = 'host_destroy'
             try:
                 if not host.destroy():
                     return False
             except Exception:
                 return False
             self._host = None
+        self._last_teardown_stage = 'done'
         return True
 
     def _run_body(self) -> None:
