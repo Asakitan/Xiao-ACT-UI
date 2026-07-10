@@ -2687,6 +2687,9 @@ def test_app_settings_parity() -> None:
         "lastControlNoopCommand": "open-settings",
         "lastUiActionErrorLabel": "Settings",
         "lastUiActionErrorMessage": "inspector is not defined",
+        "inlineHandlerCount": 137,
+        "inlineHandlerMissingCount": 0,
+        "inlineHandlerMissing": "",
         "criticalActionMissingCount": 0,
         "criticalActionNoHandlerCount": 0,
         "criticalActionNonFocusableCount": 0,
@@ -2742,6 +2745,9 @@ def test_app_settings_parity() -> None:
            and health_summary.get("lastControlNoopCommand") == "open-settings"
            and health_summary.get("lastUiActionErrorLabel") == "Settings"
            and health_summary.get("lastUiActionErrorMessage") == "inspector is not defined"
+           and health_summary.get("inlineHandlerCount") == 137
+           and health_summary.get("inlineHandlerMissingCount") == 0
+           and health_summary.get("inlineHandlerMissing") == ""
            and health_summary.get("criticalActionMissingCount") == 0
            and health_summary.get("criticalActionNoHandlerCount") == 0
            and health_summary.get("criticalActionNonFocusableCount") == 0
@@ -2926,6 +2932,7 @@ def test_app_settings_parity() -> None:
             and "\"lastControlNoopAt\"" in app_src
             and "\"lastControlNoopCommand\"" in app_src
             and "\"lastUiActionErrorLabel\"" in app_src
+            and "\"inlineHandlerMissingCount\"" in app_src
             and "\"criticalActionMissingCount\"" in app_src
             and "\"editorLongActionState\"" in app_src
             and "\"launcher_pid\"" in app_src
@@ -7755,6 +7762,7 @@ def test_phase1_ai_editor_regressions() -> None:
     _check("frontend Assistant browser smoke script exists",
            bool(smoke_source)
            and "window.runAssistantUiSelfCheck({ cleanup: true })" in smoke_source
+           and "inline-handler-contract-ready" in smoke_source
            and "custom-endpoint-model" in smoke_source
            and "composer-input-history-ready" in smoke_source
            and "composer-edit-target-highlight-ready" in smoke_source

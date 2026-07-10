@@ -6,6 +6,7 @@ conversations with streaming.  Thread-safe for the Tk after-based UI loop.
 
 from __future__ import annotations
 
+import copy
 import json
 import re
 import threading
@@ -84,6 +85,7 @@ class _RunContext:
     run_id: str
     conversation: "Conversation"
     cancel_event: threading.Event
+    engine: Any
     agent_mode: bool = False
     multimodal_content: Optional[Any] = None
     thread: Optional[threading.Thread] = None
@@ -248,6 +250,16 @@ class ChatController:
                 self.on_message_added(message)
             return True
 
+    def _fork_engine_for_run(self) -> Any:
+        """Snapshot mutable provider settings and isolate request cancel state."""
+        config = copy.deepcopy(self.engine.config)
+        fork = getattr(self.engine, "fork_for_run", None)
+        request_engine = fork(config) if callable(fork) else self.engine
+        reset = getattr(request_engine, "reset_cancel", None)
+        if callable(reset):
+            reset()
+        return request_engine
+
     def _start_run(self, user_msg: ChatMessage, *, agent_mode: bool,
                    multimodal_content: Optional[Any] = None) -> Dict[str, Any]:
         """Atomically reserve the controller and start one worker."""
@@ -266,6 +278,7 @@ class ChatController:
                     run_id=uuid.uuid4().hex[:12],
                     conversation=self.conversation,
                     cancel_event=threading.Event(),
+                    engine=self._fork_engine_for_run(),
                     agent_mode=bool(agent_mode),
                     multimodal_content=multimodal_content,
                 )
@@ -358,6 +371,7 @@ class ChatController:
             with self._state_lock:
                 run = self._active_run
                 thread = run.thread if run is not None else None
+                request_engine = run.engine if run is not None else self.engine
                 if run is not None:
                     self._close_cancelled_run_locked(run)
                     run.cancel_event.set()
@@ -367,7 +381,7 @@ class ChatController:
                     self._thread = None
                 self._multimodal_override = None
 
-            self.engine.cancel()
+            request_engine.cancel()
             with self._confirm_lock:
                 evt = self._confirm_event
                 if evt is not None:
@@ -480,7 +494,8 @@ class ChatController:
         target_conversation = conversation or self.conversation
         if run is not None and not self._is_active_run(run):
             return
-        model = self.engine.config.effective_model
+        engine = run.engine if run is not None else self.engine
+        model = engine.config.effective_model
         threshold = compaction_threshold(model)
         if threshold <= 0:
             return
@@ -633,6 +648,7 @@ class ChatController:
                 run_id=uuid.uuid4().hex[:12],
                 conversation=self.conversation,
                 cancel_event=threading.Event(),
+                engine=self._fork_engine_for_run(),
                 agent_mode=bool(self._agent_mode),
                 multimodal_content=self._multimodal_override,
                 thread=threading.current_thread(),
@@ -667,7 +683,7 @@ class ChatController:
                 assistant_msg = ChatMessage(
                     role="assistant",
                     is_streaming=True,
-                    model=self.engine.config.effective_model,
+                    model=run.engine.config.effective_model,
                 )
                 if not self._add_message_for_run(
                         run, assistant_msg, current_assistant=True):
@@ -686,7 +702,7 @@ class ChatController:
 
                 first_token_time: List[Optional[float]] = [None]
                 request_start = time.monotonic()
-                request_tokens = self.engine.count_message_tokens(messages)
+                request_tokens = run.engine.count_message_tokens(messages)
 
                 def _on_delta(delta: StreamDelta, _msg=assistant_msg) -> None:
                     with self._state_lock:
@@ -703,9 +719,9 @@ class ChatController:
                 with self._state_lock:
                     if not self._is_active_run_locked(run):
                         break
-                    self.engine.reset_cancel()
+                    run.engine.reset_cancel()
                 try:
-                    resp = self.engine.chat_completion_stream(
+                    resp = run.engine.chat_completion_stream(
                         messages=messages,
                         tools=tools,
                         on_delta=_on_delta,
@@ -725,7 +741,7 @@ class ChatController:
                     if request_tokens and "context_tokens" not in assistant_msg.usage:
                         assistant_msg.usage["context_tokens"] = request_tokens
                     if not assistant_msg.usage.get("total_tokens"):
-                        output_tokens = self.engine.estimate_tokens(
+                        output_tokens = run.engine.estimate_tokens(
                             (resp.content or "") + (resp.thinking or ""))
                         if output_tokens or request_tokens:
                             assistant_msg.usage.setdefault("input_tokens", request_tokens)
@@ -906,6 +922,13 @@ class ChatController:
                         if self._thread is run.thread:
                             self._thread = None
                 run.finished_event.set()
+                if run.engine is not self.engine:
+                    close = getattr(run.engine, "close", None)
+                    if callable(close):
+                        try:
+                            close()
+                        except Exception:
+                            pass
 
     _last_save_key: Optional[tuple[str, int]] = None
 
@@ -922,6 +945,7 @@ class ChatController:
             from ai_editor.history import save_conversation
             # Build messages list directly instead of serialize+deserialize
             # round-trip through export_messages()/json.loads().
+            saved_model = self.engine.config.effective_model
             with target_conversation._lock:
                 msgs = []
                 for m in target_conversation.messages:
@@ -940,12 +964,14 @@ class ChatController:
                         d["tool_call_id"] = m.tool_call_id
                         d["tool_name"] = m.tool_name
                     msgs.append(d)
+                    if m.role == "assistant" and m.model:
+                        saved_model = m.model
             save_conversation(
                 conv_id=target_conversation.id,
                 title=target_conversation.title,
                 messages=msgs,
                 system_prompt=target_conversation.system_prompt,
-                model=self.engine.config.effective_model,
+                model=saved_model,
             )
             self._last_save_key = save_key
             self._last_save_error = ""

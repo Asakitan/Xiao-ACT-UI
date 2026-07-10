@@ -208,6 +208,14 @@ def run_frontend_health_selftest() -> list[str]:
     _require(failures, "api health exposes required method gaps", "missingMethods" in html and "requiredApiMethods" in html)
     _require(failures, "aggregate diagnostics exists", "aiEditorHealthAggregateSnapshot" in html and "aiEditorDiagnostics" in html)
     _require(failures, "frontend health payload exported for smoke checks", "window.aiEditorFrontendHealthPayload=aiEditorFrontendHealthPayload;" in html)
+    _require(
+        failures,
+        "inline HTML handlers are covered by a browser-visible contract",
+        "function aiEditorInlineHandlerContractSnapshot()" in html
+        and "window.aiEditorInlineHandlerContractSnapshot=aiEditorInlineHandlerContractSnapshot;" in html
+        and "inlineHandlerMissingCount:inlineHandlerContract.missingCount" in html
+        and "'inline-handler-contract-ready'" in html,
+    )
     _require(failures, "frontend heartbeat sends aggregate health payload", "aiEditorFrontendHealthPayload" in html and "update_frontend_health(String(phase||'heartbeat'),aiEditorFrontendHealthPayload())" in html)
     _require(failures, "frontend ready sends aggregate health payload", "mark_frontend_ready(String(phase||'ready'),aiEditorFrontendHealthPayload())" in html)
     _require(failures, "failure classifier exists", "ai-editor-failure-classifier" in html)

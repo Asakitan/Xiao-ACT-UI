@@ -73,6 +73,232 @@ function screenshotPath(root) {
   return path.join(outDir, "settings.png");
 }
 
+async function installSettingsAccessibilityFixture(page) {
+  await page.addInitScript(() => {
+    const ok = value => Promise.resolve(value);
+    const config = {
+      provider: "openai",
+      model: "gpt-4o-mini",
+      base_url: "https://api.openai.com/v1",
+      api_key: "",
+      mode: "agent",
+      editor: { tabSize: 4, insertSpaces: true, formatOnSave: true },
+      files: { autoSave: "off", autoSaveDelay: 1000, insertFinalNewline: true },
+      workspace: { auto_detect: true, remember_last: true, root: "E:/VC/SAO-UI/sao_auto" },
+      extensions: { confirm_install: true, enabled_contributions: ["commands", "views", "webviews"] }
+    };
+    const apiTarget = {
+      load_config: () => ok(config),
+      list_tools: () => ok({ tools: [] }),
+      get_mode: () => ok({ mode: "agent", permissions: {} }),
+      get_chat_controls: () => ok({ ok: true, provider: "openai", model: "gpt-4o-mini", agents: [], workflows: [], providers: [] }),
+      list_provider_models: () => ok({ models: [{ id: "gpt-4o-mini", name: "gpt-4o-mini" }], default_model: "gpt-4o-mini" }),
+      list_editor_languages: () => ok({ languages: [{ id: "python", name: "Python" }] }),
+      list_editor_themes: () => ok({ themes: [] }),
+      list_extension_settings: () => ok({ configurations: [], languageDefaults: [] }),
+      list_extension_runtime_surfaces: () => ok({ surfaces: [] }),
+      list_mcp_servers: () => ok({ servers: [] }),
+      get_runtime_support_summary: () => ok({ ok: true, diagnostics: [] }),
+      get_model_info: () => ok({ max_input: 128000, max_output: 4096, compact_at: 115200 }),
+      editor_language_provider: payload => ok(
+        String(payload?.kind || "") === "formattingProviders"
+          ? {
+              ok: true,
+              providers: [
+                { providerId: "formatter.alpha", displayName: "Formatter Alpha", capabilities: ["document"] },
+                { providerId: "formatter.beta", displayName: "Formatter Beta", capabilities: ["document"] }
+              ]
+            }
+          : { ok: true, items: [], providers: [] }
+      )
+    };
+    window.pywebview = {
+      api: new Proxy(apiTarget, {
+        get(target, prop) {
+          if (prop in target) return target[prop];
+          return () => ok({ ok: true });
+        }
+      })
+    };
+  });
+}
+
+async function runSettingsAccessibilityViewportCheck(browser, htmlUrl, viewport) {
+  const page = await browser.newPage({ viewport });
+  page.on("pageerror", error => { throw error; });
+  await installSettingsAccessibilityFixture(page);
+  await page.goto(htmlUrl, { waitUntil: "domcontentloaded" });
+  await page.waitForFunction(
+    () => typeof window.openSettings === "function",
+    null,
+    { timeout: 15000 }
+  );
+  await page.evaluate(() => {
+    try {
+      localStorage.setItem("sao.aiEditor.settings.details.v1", "closed");
+      localStorage.setItem("sao.aiEditor.settings.density.v1", "comfortable");
+      localStorage.setItem("sao.aiEditor.settings.view.v1", JSON.stringify({ mode: "simple" }));
+    } catch (_error) {}
+    const opener = document.createElement("button");
+    opener.id = "settings-a11y-opener";
+    opener.type = "button";
+    opener.textContent = "Open settings accessibility probe";
+    opener.onclick = () => window.openSettings();
+    document.body.appendChild(opener);
+    opener.focus();
+    opener.click();
+  });
+  await page.waitForFunction(
+    () => document.querySelector("#settings-modal")?.dataset.settingsHydration === "hydrated",
+    null,
+    { timeout: 15000 }
+  );
+  await page.waitForTimeout(120);
+  const openState = await page.evaluate(() => {
+    const modal = document.querySelector("#settings-modal");
+    const compact = matchMedia("(max-width: 900px)").matches;
+    const initialFocus = document.activeElement;
+    const focusables = Array.from(modal.querySelectorAll(
+      'a[href],button,input,select,textarea,summary,[contenteditable="true"],[tabindex]:not([tabindex="-1"])'
+    )).filter(element => {
+      if (element.disabled || element.getAttribute("aria-disabled") === "true") return false;
+      if (element.closest('[inert],[aria-hidden="true"]')) return false;
+      const style = getComputedStyle(element);
+      const rect = element.getBoundingClientRect();
+      return style.display !== "none" && style.visibility !== "hidden" && rect.width > 0 && rect.height > 0 && element.tabIndex >= 0;
+    });
+    const first = focusables[0] || null;
+    const last = focusables[focusables.length - 1] || null;
+    const dispatchTab = (target, shiftKey) => {
+      if (!target) return false;
+      target.focus({ preventScroll: true });
+      target.dispatchEvent(new KeyboardEvent("keydown", {
+        key: "Tab", shiftKey: !!shiftKey, bubbles: true, cancelable: true, composed: true
+      }));
+      return true;
+    };
+    dispatchTab(last, false);
+    const forwardWrapped = !!first && document.activeElement === first;
+    dispatchTab(first, true);
+    const reverseWrapped = !!last && document.activeElement === last;
+    const controlName = id => {
+      const control = document.getElementById(id);
+      if (!control) return { id, present: false, name: "", labelledby: "", describedby: "" };
+      const labelledby = String(control.getAttribute("aria-labelledby") || "").trim();
+      const referenced = labelledby.split(/\s+/).filter(Boolean)
+        .map(ref => document.getElementById(ref)?.textContent?.trim() || "").filter(Boolean).join(" ");
+      const labels = control.labels ? Array.from(control.labels).map(label => label.textContent.trim()).filter(Boolean).join(" ") : "";
+      return {
+        id,
+        present: true,
+        name: String(control.getAttribute("aria-label") || referenced || labels || "").trim(),
+        labelCount: control.labels ? control.labels.length : 0,
+        labelledby,
+        describedby: String(control.getAttribute("aria-describedby") || "").trim()
+      };
+    };
+    const backgroundRoots = Array.from(document.body.children)
+      .filter(node => node !== modal && !["SCRIPT", "STYLE", "LINK"].includes(node.tagName));
+    const tabbableSelector = 'a[href],button,input,select,textarea,summary,[contenteditable="true"],[tabindex]:not([tabindex="-1"])';
+    const uninertBackgroundRoots = backgroundRoots.filter(node => {
+      if (node.hasAttribute("inert")) return false;
+      const candidates = [
+        ...(node.matches?.(tabbableSelector) ? [node] : []),
+        ...Array.from(node.querySelectorAll?.(tabbableSelector) || [])
+      ];
+      return candidates.some(element => !element.disabled && element.tabIndex >= 0);
+    });
+    const controls = ["s-provider", "s-apikey", "s-baseurl", "sk-openai", "sk-anthropic", "sk-deepseek", "s-model"].map(controlName);
+    return {
+      viewport: { width: innerWidth, height: innerHeight },
+      compact,
+      initialFocusId: initialFocus?.id || "",
+      initialFocusInside: !!initialFocus?.closest?.("#settings-modal"),
+      expectedInitialFocusId: compact ? "settings-mobile-nav-toggle" : "settings-search",
+      focusableCount: focusables.length,
+      firstFocusId: first?.id || "",
+      lastFocusText: String(last?.getAttribute?.("aria-label") || last?.textContent || "").trim(),
+      forwardWrapped,
+      reverseWrapped,
+      backgroundRootCount: backgroundRoots.length,
+      uninertBackgroundRootCount: uninertBackgroundRoots.length,
+      uninertBackgroundRoots: uninertBackgroundRoots.map(node => ({
+        tag: node.tagName,
+        id: node.id || "",
+        className: String(node.className || "").slice(0, 80)
+      })),
+      controls,
+      nativeLabelsPreferred: ["s-provider", "s-baseurl"].every(id => {
+        const control = controls.find(item => item.id === id);
+        return !!control && control.labelCount > 0 && !control.labelledby;
+      }),
+      dynamicDescriptionsReady: ["s-provider", "s-baseurl", "s-model"].every(id => !!document.getElementById(id)?.getAttribute("aria-describedby"))
+    };
+  });
+  const formatterPortalState = await page.evaluate(async () => {
+    const opener = document.querySelector('[onclick*="pickSettingsDefaultFormatter"]');
+    const palette = document.querySelector("#cmd-palette");
+    if (!opener || !palette) return { available: false };
+    opener.focus({ preventScroll: true });
+    const pending = window.pickSettingsDefaultFormatter("s-editor-default-formatter");
+    await new Promise(resolve => setTimeout(resolve, 0));
+    const item = palette.querySelector(".cmd-item");
+    const during = {
+      open: palette.classList.contains("open"),
+      inert: palette.hasAttribute("inert"),
+      focusInside: palette.contains(document.activeElement),
+      itemCount: palette.querySelectorAll(".cmd-item").length
+    };
+    item?.click();
+    const selected = await pending;
+    await new Promise(resolve => setTimeout(resolve, 0));
+    return {
+      available: true,
+      during,
+      selected,
+      selectedValue: document.querySelector("#s-editor-default-formatter")?.value || "",
+      focusRestored: document.activeElement === opener,
+      inertRestored: palette.hasAttribute("inert"),
+      portalMarkerCleared: !palette.dataset.settingsModalPortalActive
+    };
+  });
+  await page.evaluate(() => {
+    const modal = document.querySelector("#settings-modal");
+    const target = document.activeElement?.closest?.("#settings-modal") ? document.activeElement : modal;
+    target?.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true, composed: true }));
+  });
+  await page.waitForTimeout(80);
+  let closedState = await page.evaluate(() => ({
+    modalOpen: document.querySelector("#settings-modal")?.classList.contains("open") || false,
+    focusId: document.activeElement?.id || "",
+    backgroundMarkers: document.querySelectorAll("[data-settings-background-inert='1']").length
+  }));
+  if (closedState.modalOpen) {
+    await page.evaluate(() => {
+      document.activeElement?.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true, composed: true }));
+    });
+    await page.waitForTimeout(80);
+    closedState = await page.evaluate(() => ({
+      modalOpen: document.querySelector("#settings-modal")?.classList.contains("open") || false,
+      focusId: document.activeElement?.id || "",
+      backgroundMarkers: document.querySelectorAll("[data-settings-background-inert='1']").length
+    }));
+  }
+  return { ...openState, formatterPortalState, closedState };
+}
+
+async function runSettingsAccessibilityViewportMatrix(browser, htmlUrl) {
+  const results = [];
+  for (const viewport of [
+    { width: 1440, height: 920 },
+    { width: 800, height: 600 },
+    { width: 600, height: 400 }
+  ]) {
+    results.push(await runSettingsAccessibilityViewportCheck(browser, htmlUrl, viewport));
+  }
+  return results;
+}
+
 async function main() {
   const root = repoRoot();
   const htmlPath = path.join(root, "python", "web", "ai_editor_app.html");
@@ -345,6 +571,10 @@ async function main() {
   });
   const shotPath = screenshotPath(root);
   await page.screenshot({ path: shotPath, fullPage: false });
+  result.accessibilityMatrix = await runSettingsAccessibilityViewportMatrix(
+    browser,
+    pathToFileURL(htmlPath).href
+  );
   await browser.close();
 
   const requiredActions = ["Prev", "Next", "Section", "Filter", "Copy ID", "Copy Link", "Copy Value", "Copy JSON", "Revert Setting", "Use Default", "Use Inherited", "Clear Override", "JSON"];
@@ -452,7 +682,40 @@ async function main() {
   if (!result.resultCountText || missingDetail.length || missingSection.length || !result.visibleRows) {
     throw new Error("Settings smoke missing navigation feedback: " + JSON.stringify({ result, missingDetail, missingSection }));
   }
-  console.log("PASS settings-ui-browser-smoke rows=" + result.visibleRows + " screenshot=" + shotPath);
+  const invalidAccessibilityViewports = (result.accessibilityMatrix || []).filter(item =>
+    !item.initialFocusInside ||
+    item.initialFocusId !== item.expectedInitialFocusId ||
+    !item.forwardWrapped ||
+    !item.reverseWrapped ||
+    item.focusableCount < 2 ||
+    item.backgroundRootCount < 1 ||
+    item.uninertBackgroundRootCount !== 0 ||
+    !item.nativeLabelsPreferred ||
+    !item.dynamicDescriptionsReady ||
+    item.controls.some(control => !control.present || !control.name) ||
+    !item.formatterPortalState?.available ||
+    !item.formatterPortalState.during?.open ||
+    item.formatterPortalState.during?.inert ||
+    !item.formatterPortalState.during?.focusInside ||
+    item.formatterPortalState.during?.itemCount < 2 ||
+    item.formatterPortalState.selected !== true ||
+    item.formatterPortalState.selectedValue !== "formatter.alpha" ||
+    !item.formatterPortalState.focusRestored ||
+    !item.formatterPortalState.inertRestored ||
+    !item.formatterPortalState.portalMarkerCleared ||
+    !item.closedState ||
+    item.closedState.modalOpen ||
+    item.closedState.focusId !== "settings-a11y-opener" ||
+    item.closedState.backgroundMarkers !== 0
+  );
+  if (invalidAccessibilityViewports.length) {
+    throw new Error("Settings modal accessibility viewport regression: " + JSON.stringify(invalidAccessibilityViewports));
+  }
+  console.log(
+    "PASS settings-ui-browser-smoke rows=" + result.visibleRows +
+    " a11y-viewports=" + result.accessibilityMatrix.length +
+    " screenshot=" + shotPath
+  );
 }
 
 main().catch(error => {

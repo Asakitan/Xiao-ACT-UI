@@ -20,6 +20,11 @@ from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, List, Optional
 
 from ai_editor.extension_host import EventEmitter, Disposable
+from ai_editor.secret_store import (
+    block_legacy_migration,
+    get_with_legacy_migration,
+    secret_ref_part,
+)
 
 
 logger = logging.getLogger(__name__)
@@ -126,7 +131,19 @@ class AuthService:
         return session
 
     def remove_session(self, provider_id: str, session_id: str) -> bool:
+        provider_key = str(provider_id or "")
+        session_key = str(session_id or "")
         with self._lock:
+            legacy_ref = self._legacy_session_secret_ref(
+                provider_key, session_key)
+            legacy_owners = {
+                (str(pid), str(session.id or ""))
+                for pid, provider_sessions in self._sessions.items()
+                for session in provider_sessions
+                if self._legacy_session_secret_ref(
+                    str(pid), str(session.id or "")) == legacy_ref
+            }
+            legacy_is_unique = legacy_owners == {(provider_key, session_key)}
             sessions = self._sessions.get(provider_id, [])
             before = len(sessions)
             self._sessions[provider_id] = [
@@ -138,6 +155,14 @@ class AuthService:
                     self._session_secret_ref(provider_id, session_id))
             except Exception as exc:
                 logger.warning("Failed to remove protected auth token: %s", exc)
+            try:
+                if legacy_is_unique:
+                    self._secret_store.delete(legacy_ref)
+                else:
+                    block_legacy_migration(self._secret_store, legacy_ref)
+            except Exception as exc:
+                logger.warning(
+                    "Failed to retire legacy protected auth token: %s", exc)
             self._save()
             self._change_emitter.fire({"provider": provider_id,
                                         "removed": [session_id]})
@@ -164,6 +189,14 @@ class AuthService:
 
     @staticmethod
     def _session_secret_ref(provider_id: str, session_id: str) -> str:
+        return (
+            f"auth-session/{secret_ref_part(provider_id)}"
+            f"/{secret_ref_part(session_id)}"
+        )
+
+    @staticmethod
+    def _legacy_session_secret_ref(provider_id: str, session_id: str) -> str:
+        """Reproduce the pre-v2 lossy auth-session vault reference."""
         safe_provider = str(provider_id or "unknown").replace("/", "_")
         safe_session = str(session_id or "unknown").replace("/", "_")
         return f"auth-session/{safe_provider}/{safe_session}"
@@ -207,10 +240,39 @@ class AuthService:
         try:
             with open(path, "r", encoding="utf-8") as f:
                 data = json.load(f)
-            for pid, sessions_raw in data.items():
+            if not isinstance(data, dict):
+                raise ValueError("Auth session metadata root must be an object")
+
+            # Decide legacy ownership before reading any token.  The old
+            # slash-to-underscore reference was lossy, so a colliding legacy
+            # entry must never be assigned to either candidate session.
+            legacy_owners: Dict[str, set[tuple[str, str]]] = {}
+            for raw_pid, sessions_raw in data.items():
+                if not isinstance(sessions_raw, list):
+                    continue
+                pid = str(raw_pid)
                 for sr in sessions_raw:
-                    secret_ref = str(sr.get("secretRef") or
-                                     self._session_secret_ref(pid, sr.get("id", "")))
+                    if not isinstance(sr, dict):
+                        continue
+                    session_id = str(sr.get("id") or "")
+                    legacy_ref = self._legacy_session_secret_ref(pid, session_id)
+                    legacy_owners.setdefault(legacy_ref, set()).add(
+                        (pid, session_id))
+
+            for pid, sessions_raw in data.items():
+                if not isinstance(sessions_raw, list):
+                    continue
+                pid = str(pid)
+                for sr in sessions_raw:
+                    if not isinstance(sr, dict):
+                        continue
+                    session_id = str(sr.get("id") or "")
+                    secret_ref = self._session_secret_ref(pid, session_id)
+                    legacy_ref = self._legacy_session_secret_ref(pid, session_id)
+                    stored_ref = str(sr.get("secretRef") or legacy_ref)
+                    legacy_is_unique = legacy_owners.get(legacy_ref, set()) == {
+                        (pid, session_id)
+                    }
                     access_token = ""
                     if sr.get("accessToken"):
                         # One-time migration: only remove plaintext after the
@@ -218,10 +280,24 @@ class AuthService:
                         access_token = str(sr.get("accessToken") or "")
                         self._secret_store.set(secret_ref, access_token)
                         migrated = True
+                    elif stored_ref == secret_ref:
+                        access_token = self._secret_store.get(secret_ref, "")
+                    elif stored_ref == legacy_ref:
+                        access_token = get_with_legacy_migration(
+                            self._secret_store,
+                            secret_ref,
+                            legacy_ref,
+                            allow_legacy=legacy_is_unique,
+                        )
+                        if self._secret_store.has(secret_ref):
+                            migrated = True
                     else:
+                        logger.warning(
+                            "Ignoring unexpected auth token reference for %s/%s",
+                            pid, session_id)
                         access_token = self._secret_store.get(secret_ref, "")
                     s = AuthSession(
-                        id=sr.get("id", ""),
+                        id=session_id,
                         access_token=access_token,
                         account_id=sr.get("account", {}).get("id", ""),
                         account_label=sr.get("account", {}).get("label", ""),

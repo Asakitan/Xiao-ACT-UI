@@ -68,6 +68,19 @@ change can be reverted without undoing unrelated fixes.
 - The complete AI Editor self-test passes twice consecutively, frontend health is
   green, and both browser smoke suites explicitly report `PASS`.
 
+Run the canonical gate from `python/` with one command:
+
+```powershell
+python -m ai_editor.selftest_runner
+```
+
+The runner executes the legacy parity suite, discovers every independent
+`ai_editor/test_*.py` unittest, runs the frontend-health check, and then runs the
+Assistant and Settings browser smokes through Node Playwright or the real Python
+Playwright fallback. It exits successfully only when every layer passes and both
+browser processes print their explicit `PASS` markers; an explicitly requested
+local `SKIP` therefore does not satisfy this release gate.
+
 ## Rollback and compatibility
 
 Public JS method names and persisted non-secret settings remain compatible.

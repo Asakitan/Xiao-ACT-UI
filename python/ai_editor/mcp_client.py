@@ -41,6 +41,10 @@ _MCP_SUPPORTED_PROTOCOL_VERSIONS = {
 }
 _MCP_STREAMABLE_ACCEPT = "application/json, text/event-stream"
 _MCP_MAX_LIST_PAGES = 100
+_MCP_MAX_MESSAGE_BYTES = 4 * 1024 * 1024
+_MCP_MAX_HEADER_LINE_BYTES = 8 * 1024
+_MCP_MAX_HEADER_BYTES = 64 * 1024
+_MCP_MAX_HEADER_COUNT = 100
 
 
 class _McpHttpStatusError(RuntimeError):
@@ -49,6 +53,10 @@ class _McpHttpStatusError(RuntimeError):
     def __init__(self, status_code: int, message: str) -> None:
         super().__init__(message)
         self.status_code = int(status_code)
+
+
+class _McpProtocolError(RuntimeError):
+    """Malformed or oversized MCP transport frame."""
 
 
 @dataclass
@@ -190,24 +198,71 @@ def _extract_resource_read_result(result: Any, uri: str = "") -> Dict[str, Any]:
     }
 
 
+def _line_payload_size(raw_line: bytes) -> int:
+    if raw_line.endswith(b"\r\n"):
+        return len(raw_line) - 2
+    if raw_line.endswith(b"\n"):
+        return len(raw_line) - 1
+    return len(raw_line)
+
+
+def _read_bounded_line(stream: Any, max_bytes: int, label: str) -> bytes:
+    # Two bytes cover CRLF; one extra byte makes an oversized line observable
+    # without allowing ``readline`` to buffer an unbounded child-process line.
+    raw_line = stream.readline(max_bytes + 3)
+    payload_size = _line_payload_size(raw_line)
+    if payload_size > max_bytes:
+        raise _McpProtocolError(
+            f"{label} length {payload_size} exceeds {max_bytes} bytes"
+        )
+    return raw_line
+
+
 def _read_rpc_message_from_stream(stream: Any) -> Optional[bytes]:
-    first_line = stream.readline()
+    first_line = _read_bounded_line(
+        stream, _MCP_MAX_MESSAGE_BYTES, "MCP message line")
     if not first_line:
         return None
     stripped = first_line.strip()
     if not stripped:
         return b""
     if stripped.lower().startswith(b"content-length:"):
+        if _line_payload_size(first_line) > _MCP_MAX_HEADER_LINE_BYTES:
+            raise _McpProtocolError(
+                "MCP header line length "
+                f"{_line_payload_size(first_line)} exceeds "
+                f"{_MCP_MAX_HEADER_LINE_BYTES} bytes"
+            )
         try:
             length = int(stripped.split(b":", 1)[1].strip())
         except (IndexError, ValueError):
             return b""
+        if length > _MCP_MAX_MESSAGE_BYTES:
+            raise _McpProtocolError(
+                "MCP message Content-Length "
+                f"{length} exceeds {_MCP_MAX_MESSAGE_BYTES} bytes"
+            )
+        header_bytes = len(first_line)
+        header_count = 1
         while True:
-            header_line = stream.readline()
+            header_line = _read_bounded_line(
+                stream, _MCP_MAX_HEADER_LINE_BYTES, "MCP header line")
             if not header_line:
                 return None
+            header_bytes += len(header_line)
+            if header_bytes > _MCP_MAX_HEADER_BYTES:
+                raise _McpProtocolError(
+                    "MCP headers length "
+                    f"{header_bytes} exceeds {_MCP_MAX_HEADER_BYTES} bytes"
+                )
             if header_line in {b"\r\n", b"\n", b""}:
                 break
+            header_count += 1
+            if header_count > _MCP_MAX_HEADER_COUNT:
+                raise _McpProtocolError(
+                    "MCP header count "
+                    f"{header_count} exceeds {_MCP_MAX_HEADER_COUNT}"
+                )
         if length <= 0:
             return b""
         payload = stream.read(length)
@@ -215,6 +270,139 @@ def _read_rpc_message_from_stream(stream: Any) -> Optional[bytes]:
             return None
         return payload
     return first_line
+
+
+def _http_response_header(response: Any, name: str) -> str:
+    headers = getattr(response, "headers", {}) or {}
+    getter = getattr(headers, "get", None)
+    if not callable(getter):
+        return ""
+    return str(getter(name, "") or getter(name.title(), "") or "").strip()
+
+
+def _read_bounded_http_body(
+    response: Any,
+    max_bytes: int = _MCP_MAX_MESSAGE_BYTES,
+) -> bytes:
+    """Read one HTTP response body without buffering beyond ``max_bytes``."""
+    declared = _http_response_header(response, "content-length")
+    if declared:
+        try:
+            declared_bytes = int(declared)
+        except ValueError as exc:
+            raise _McpProtocolError(
+                f"Invalid MCP HTTP Content-Length: {declared!r}"
+            ) from exc
+        if declared_bytes < 0:
+            raise _McpProtocolError(
+                f"Invalid MCP HTTP Content-Length: {declared_bytes}"
+            )
+        if declared_bytes > max_bytes:
+            raise _McpProtocolError(
+                "MCP HTTP response Content-Length "
+                f"{declared_bytes} exceeds {max_bytes} bytes"
+            )
+
+    chunks = getattr(response, "iter_bytes", None)
+    if callable(chunks):
+        body = bytearray()
+        for chunk in chunks():
+            if not chunk:
+                continue
+            raw = chunk if isinstance(chunk, bytes) else bytes(chunk)
+            next_size = len(body) + len(raw)
+            if next_size > max_bytes:
+                raise _McpProtocolError(
+                    "MCP HTTP response body length "
+                    f"{next_size} exceeds {max_bytes} bytes"
+                )
+            body.extend(raw)
+        return bytes(body)
+
+    # Compatibility path for the small response doubles used by integrations.
+    # Real httpx traffic enters through ``Client.stream`` and ``iter_bytes``.
+    content = getattr(response, "content", None)
+    if isinstance(content, bytes):
+        raw_body = content
+    elif isinstance(content, str):
+        raw_body = content.encode("utf-8")
+    elif content is not None:
+        raw_body = bytes(content)
+    else:
+        raw_body = str(getattr(response, "text", "") or "").encode("utf-8")
+    if len(raw_body) > max_bytes:
+        raise _McpProtocolError(
+            "MCP HTTP response body length "
+            f"{len(raw_body)} exceeds {max_bytes} bytes"
+        )
+    return raw_body
+
+
+def _bounded_http_request(
+    client: Any,
+    method: str,
+    url: str,
+    **kwargs: Any,
+) -> Tuple[Any, bytes]:
+    """Issue an HTTP request and bound the decoded body before buffering it."""
+    normalized_method = str(method or "GET").upper()
+    stream = getattr(client, "stream", None)
+    if callable(stream):
+        with stream(normalized_method, url, **kwargs) as response:
+            return response, _read_bounded_http_body(response)
+
+    # Preserve compatibility with existing lightweight clients that expose
+    # only ``post``/``delete``.  Production httpx clients always use the
+    # streaming branch above.
+    request = getattr(client, normalized_method.lower(), None)
+    if not callable(request):
+        raise RuntimeError(
+            f"MCP HTTP client does not support {normalized_method} requests"
+        )
+    response = request(url, **kwargs)
+    return response, _read_bounded_http_body(response)
+
+
+def _iter_bounded_sse_lines(
+    response: Any,
+    max_line_bytes: int = _MCP_MAX_MESSAGE_BYTES,
+) -> Iterable[Tuple[bytes, int]]:
+    """Yield UTF-8 SSE lines while bounding the pending raw line buffer."""
+    chunks = getattr(response, "iter_bytes", None)
+    if not callable(chunks):
+        raise _McpProtocolError(
+            "MCP SSE response does not support bounded byte streaming"
+        )
+
+    pending = bytearray()
+    for chunk in chunks():
+        if not chunk:
+            continue
+        raw_chunk = chunk if isinstance(chunk, bytes) else bytes(chunk)
+        start = 0
+        while start < len(raw_chunk):
+            newline = raw_chunk.find(b"\n", start)
+            end = len(raw_chunk) if newline < 0 else newline
+            segment = raw_chunk[start:end]
+            next_size = len(pending) + len(segment)
+            if next_size > max_line_bytes:
+                raise _McpProtocolError(
+                    "MCP SSE line length "
+                    f"{next_size} exceeds {max_line_bytes} bytes"
+                )
+            pending.extend(segment)
+            if newline < 0:
+                break
+            wire_size = len(pending) + 1
+            line = bytes(pending[:-1] if pending.endswith(b"\r") else pending)
+            pending.clear()
+            yield line, wire_size
+            start = newline + 1
+
+    if pending:
+        wire_size = len(pending)
+        line = bytes(pending[:-1] if pending.endswith(b"\r") else pending)
+        yield line, wire_size
 
 
 def _parse_sse_event_payloads(raw_text: str) -> List[str]:
@@ -603,15 +791,22 @@ class McpStreamableHttpClient:
         return headers
 
     @staticmethod
-    def _response_messages(response: Any) -> List[Dict[str, Any]]:
-        text = str(getattr(response, "text", "") or "")
+    def _response_messages(
+        response: Any,
+        raw_body: Optional[bytes] = None,
+    ) -> List[Dict[str, Any]]:
+        body = (
+            _read_bounded_http_body(response)
+            if raw_body is None else raw_body
+        )
+        text = body.decode("utf-8", errors="replace")
         if not text.strip():
             return []
-        content_type = str(response.headers.get("content-type", "")).lower()
+        content_type = _http_response_header(response, "content-type").lower()
         if "text/event-stream" in content_type or text.lstrip().startswith(("data:", "event:")):
             return _parse_sse_json_messages(text)
         try:
-            decoded = response.json()
+            decoded = json.loads(text)
         except Exception as exc:
             raise RuntimeError(f"MCP HTTP response was not valid JSON or SSE: {exc}") from exc
         candidates = decoded if isinstance(decoded, list) else [decoded]
@@ -623,14 +818,16 @@ class McpStreamableHttpClient:
             self._tools_dirty = True
 
     def _send_message(self, message: Dict[str, Any], *, initializing: bool = False) -> Any:
-        response = self._client().post(
+        response, raw_body = _bounded_http_request(
+            self._client(),
+            "POST",
             self.config.url,
             json=message,
             headers=self._headers(initializing=initializing),
         )
         status_code = int(getattr(response, "status_code", 0) or 0)
         if status_code >= 400:
-            detail = str(getattr(response, "text", "") or "").strip()[:300]
+            detail = raw_body.decode("utf-8", errors="replace").strip()[:300]
             suffix = f": {detail}" if detail else ""
             raise _McpHttpStatusError(
                 status_code,
@@ -648,13 +845,13 @@ class McpStreamableHttpClient:
         if request_id is None:
             # Notifications are acknowledged with 202 and no body.  Be liberal
             # enough to process a body if a server supplies one.
-            for item in self._response_messages(response):
+            for item in self._response_messages(response, raw_body):
                 self._observe_message(item)
             return None
 
         matched = False
         matched_result: Any = None
-        for item in self._response_messages(response):
+        for item in self._response_messages(response, raw_body):
             self._observe_message(item)
             if item.get("id") != request_id:
                 continue
@@ -743,7 +940,8 @@ class McpStreamableHttpClient:
         client = self._http
         if send_delete and client is not None and session_id:
             try:
-                response = client.delete(self.config.url, headers=self._headers())
+                response, _raw_body = _bounded_http_request(
+                    client, "DELETE", self.config.url, headers=self._headers())
                 if int(getattr(response, "status_code", 0) or 0) not in {
                     200, 202, 204, 404, 405,
                 }:
@@ -1024,8 +1222,23 @@ class McpSseClient:
                 self._handle_message(item)
 
     def _read_sse_loop(self) -> None:
-        event_name = "message"
-        data_lines: List[str] = []
+        event_name = b"message"
+        event_bytes = 0
+        data_payload = bytearray()
+        data_line_count = 0
+
+        def _dispatch_event() -> None:
+            nonlocal event_name, event_bytes, data_line_count
+            if data_line_count:
+                self._handle_sse_event(
+                    event_name.decode("utf-8", errors="replace"),
+                    bytes(data_payload).decode("utf-8", errors="replace"),
+                )
+            event_name = b"message"
+            event_bytes = 0
+            data_payload.clear()
+            data_line_count = 0
+
         try:
             import httpx
             headers = {str(key): str(value) for key, value in self.config.headers.items()}
@@ -1039,23 +1252,42 @@ class McpSseClient:
                 content_type = str(response.headers.get("content-type", "")).lower()
                 if "text/event-stream" not in content_type:
                     raise RuntimeError("MCP legacy SSE endpoint did not return text/event-stream")
-                for line in response.iter_lines():
+                for line, wire_size in _iter_bounded_sse_lines(response):
                     if self._stop_event.is_set():
                         break
-                    if line == "":
-                        if data_lines:
-                            self._handle_sse_event(event_name, "\n".join(data_lines))
-                        event_name = "message"
-                        data_lines = []
+                    if line == b"":
+                        _dispatch_event()
                         continue
-                    if line.startswith(":"):
+                    next_event_bytes = event_bytes + wire_size
+                    if next_event_bytes > _MCP_MAX_MESSAGE_BYTES:
+                        raise _McpProtocolError(
+                            "MCP SSE event length "
+                            f"{next_event_bytes} exceeds "
+                            f"{_MCP_MAX_MESSAGE_BYTES} bytes"
+                        )
+                    event_bytes = next_event_bytes
+                    if line.startswith(b":"):
                         continue
-                    if line.startswith("event:"):
-                        event_name = line[6:].strip() or "message"
-                    elif line.startswith("data:"):
-                        data_lines.append(line[5:].lstrip())
-                if data_lines:
-                    self._handle_sse_event(event_name, "\n".join(data_lines))
+                    if line.startswith(b"event:"):
+                        event_name = line[6:].strip() or b"message"
+                    elif line.startswith(b"data:"):
+                        payload = line[5:].lstrip()
+                        separator_bytes = 1 if data_line_count else 0
+                        next_payload_bytes = (
+                            len(data_payload) + separator_bytes + len(payload)
+                        )
+                        if next_payload_bytes > _MCP_MAX_MESSAGE_BYTES:
+                            raise _McpProtocolError(
+                                "MCP SSE event data length "
+                                f"{next_payload_bytes} exceeds "
+                                f"{_MCP_MAX_MESSAGE_BYTES} bytes"
+                            )
+                        if separator_bytes:
+                            data_payload.extend(b"\n")
+                        data_payload.extend(payload)
+                        data_line_count += 1
+                if data_line_count:
+                    _dispatch_event()
         except Exception as exc:
             if not self._stop_event.is_set():
                 self._last_error = f"MCP SSE reader failed: {exc}"
@@ -1067,16 +1299,24 @@ class McpSseClient:
                 self._fail_pending(
                     self._last_error or f"MCP SSE server '{self.config.id}' disconnected")
 
-    def _consume_post_response(self, response: Any) -> None:
-        text = str(getattr(response, "text", "") or "")
+    def _consume_post_response(
+        self,
+        response: Any,
+        raw_body: Optional[bytes] = None,
+    ) -> None:
+        body = (
+            _read_bounded_http_body(response)
+            if raw_body is None else raw_body
+        )
+        text = body.decode("utf-8", errors="replace")
         if not text.strip():
             return
-        content_type = str(response.headers.get("content-type", "")).lower()
+        content_type = _http_response_header(response, "content-type").lower()
         if "text/event-stream" in content_type or text.lstrip().startswith(("event:", "data:")):
             messages = _parse_sse_json_messages(text)
         else:
             try:
-                decoded = response.json()
+                decoded = json.loads(text)
             except Exception:
                 return
             candidates = decoded if isinstance(decoded, list) else [decoded]
@@ -1089,13 +1329,15 @@ class McpSseClient:
         if params is not None:
             message["params"] = params
         try:
-            response = self._client().post(
+            response, raw_body = _bounded_http_request(
+                self._client(),
+                "POST",
                 self._session_url or self.config.url,
                 json=message,
                 headers=self.config.headers,
             )
             response.raise_for_status()
-            self._consume_post_response(response)
+            self._consume_post_response(response, raw_body)
             return True
         except Exception as exc:
             self._last_error = f"MCP SSE notification failed: {exc}"
@@ -1112,13 +1354,15 @@ class McpSseClient:
         if params is not None:
             body["params"] = params
         try:
-            response = self._client().post(
+            response, raw_body = _bounded_http_request(
+                self._client(),
+                "POST",
                 self._session_url or self.config.url,
                 json=body,
                 headers=self.config.headers,
             )
             response.raise_for_status()
-            self._consume_post_response(response)
+            self._consume_post_response(response, raw_body)
         except Exception as exc:
             with self._lock:
                 self._pending.pop(request_id, None)

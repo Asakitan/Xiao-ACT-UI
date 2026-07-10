@@ -6,6 +6,7 @@ Anthropic (via proxy), DeepSeek, Ollama, vLLM, and any compatible endpoint.
 
 from __future__ import annotations
 
+import copy
 import json
 import random
 import threading
@@ -289,6 +290,27 @@ class LLMEngine:
         self._cancel = threading.Event()
         self._http: Any = None
         self._http_timeout: Optional[float] = None
+
+    def fork_for_run(
+        self, config_override: Optional[ProviderConfig] = None,
+    ) -> "LLMEngine":
+        """Create an isolated request engine for one chat run.
+
+        A chat can span several model requests while tools execute between
+        them.  The provider configuration and cancellation event therefore
+        belong to the run, not to the mutable settings-facing engine object.
+        """
+        # A shallow object clone preserves subclass transport/instrumentation
+        # hooks without re-running an unknown subclass constructor.  Mutable
+        # request state is then replaced so no HTTP client or cancel flag can
+        # leak between runs.  Subclasses with additional request-local state
+        # can override this hook and extend the reset.
+        fork = copy.copy(self)
+        fork.config = copy.deepcopy(config_override or self.config)
+        fork._cancel = threading.Event()
+        fork._http = None
+        fork._http_timeout = None
+        return fork
 
     @property
     def _client(self):

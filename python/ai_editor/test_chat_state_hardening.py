@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import copy
 import json
 import threading
 import time
@@ -80,6 +81,74 @@ class _ScriptedEngine(_BaseEngine):
         return self.responses.pop(0)
 
 
+class _RunScopedScriptEngine(_ScriptedEngine):
+    """Production-shaped engine whose forks share only scripted test state."""
+
+    def __init__(self, responses, owner=None) -> None:
+        super().__init__(responses if owner is None else [])
+        self.owner = owner or self
+        self.cancel_event = threading.Event()
+        if owner is None:
+            self.request_configs = []
+            self.forks = []
+
+    def fork_for_run(self, config):
+        fork = _RunScopedScriptEngine([], owner=self.owner)
+        fork.config = copy.deepcopy(config)
+        self.owner.forks.append(fork)
+        return fork
+
+    def reset_cancel(self) -> None:
+        self.cancel_event.clear()
+
+    def cancel(self) -> None:
+        self.cancel_event.set()
+
+    def close(self) -> None:
+        return None
+
+    def chat_completion_stream(self, messages, tools=None, on_delta=None):
+        self.owner.request_configs.append(
+            (self.config.provider, self.config.model))
+        return self.owner.responses.pop(0)
+
+
+class _RunScopedBlockingEngine(_BaseEngine):
+    def __init__(self, owner=None) -> None:
+        super().__init__()
+        self.owner = owner or self
+        self.cancel_event = threading.Event()
+        if owner is None:
+            self.forks = []
+            self.calls = 0
+            self.first_started = threading.Event()
+            self.first_release = threading.Event()
+
+    def fork_for_run(self, config):
+        fork = _RunScopedBlockingEngine(owner=self.owner)
+        fork.config = copy.deepcopy(config)
+        self.owner.forks.append(fork)
+        return fork
+
+    def reset_cancel(self) -> None:
+        self.cancel_event.clear()
+
+    def cancel(self) -> None:
+        self.cancel_event.set()
+
+    def close(self) -> None:
+        return None
+
+    def chat_completion_stream(self, messages, tools=None, on_delta=None):
+        call_index = self.owner.calls
+        self.owner.calls += 1
+        if call_index == 0:
+            self.owner.first_started.set()
+            if not self.owner.first_release.wait(2.0):
+                raise TimeoutError("first request engine was not released")
+        return LLMResponse(content=f"response-{call_index}")
+
+
 def _wait_until(predicate, timeout: float = 2.0) -> bool:
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
@@ -90,6 +159,80 @@ def _wait_until(predicate, timeout: float = 2.0) -> bool:
 
 
 class ChatControllerHardeningTests(unittest.TestCase):
+    def test_auto_save_uses_last_assistant_run_model(self) -> None:
+        engine = _ScriptedEngine([])
+        engine.config.model = "mutable-model-b"
+        conversation = Conversation()
+        conversation.add_message(ChatMessage(role="user", content="inspect"))
+        conversation.add_message(ChatMessage(
+            role="assistant", content="done", model="frozen-model-a"))
+        controller = ChatController(engine, ToolRegistry(), conversation)
+
+        with patch("ai_editor.history.save_conversation") as save:
+            self.assertTrue(controller._auto_save(conversation))
+
+        self.assertEqual(
+            "frozen-model-a", save.call_args.kwargs.get("model"))
+
+    def test_provider_config_is_frozen_across_tool_rounds(self) -> None:
+        engine = _RunScopedScriptEngine([
+            LLMResponse(tool_calls=[ToolCall(
+                id="read_1", name="readFile", arguments='{"path":"a"}',
+            )]),
+            LLMResponse(content="done"),
+        ])
+        engine.config.provider = "openai"
+        engine.config.model = "model-a"
+        registry = ToolRegistry()
+
+        def _read_file(**_kwargs):
+            engine.config.provider = "anthropic"
+            engine.config.model = "model-b"
+            return {"ok": True}
+
+        registry.register(
+            "readFile", "read", {"type": "object"}, _read_file)
+        controller = ChatController(engine, registry)
+        controller._auto_save = lambda conversation=None: None
+
+        result = controller.send("inspect")
+        self.assertTrue(result["accepted"])
+        self.assertTrue(_wait_until(lambda: not controller.is_running))
+        self.assertEqual(
+            [("openai", "model-a"), ("openai", "model-a")],
+            engine.request_configs,
+        )
+        self.assertEqual("anthropic", engine.config.provider)
+        self.assertEqual("model-b", engine.config.model)
+
+    def test_new_run_cannot_clear_retired_run_cancel_scope(self) -> None:
+        engine = _RunScopedBlockingEngine()
+        controller = ChatController(engine, ToolRegistry())
+        controller.CANCEL_JOIN_TIMEOUT = 0.01
+        controller._auto_save = lambda conversation=None: None
+
+        first = controller.send("first")
+        self.assertTrue(first["accepted"])
+        self.assertTrue(engine.first_started.wait(1.0))
+        first_worker = controller._thread
+        controller.cancel()
+        self.assertEqual(1, len(engine.forks))
+        first_scope = engine.forks[0]
+        self.assertTrue(first_scope.cancel_event.is_set())
+
+        controller.new_conversation("fresh")
+        second = controller.send("second")
+        self.assertTrue(second["accepted"])
+        self.assertTrue(_wait_until(lambda: not controller.is_running))
+        self.assertEqual(2, len(engine.forks))
+        self.assertTrue(first_scope.cancel_event.is_set())
+        self.assertFalse(engine.forks[1].cancel_event.is_set())
+
+        engine.first_release.set()
+        self.assertIsNotNone(first_worker)
+        first_worker.join(1.0)
+        self.assertFalse(first_worker.is_alive())
+
     def test_concurrent_send_has_one_atomic_winner(self) -> None:
         engine = _SingleBlockingEngine()
         controller = ChatController(engine, ToolRegistry())

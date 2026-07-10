@@ -5032,7 +5032,7 @@ pre.code-block { overflow:visible; }
 
 <!-- Settings modal -->
 <div class="modal-bg" id="settings-modal">
-  <div class="modal settings-modal preferences-workbench settings-vscode-calm" role="dialog" aria-modal="true" aria-labelledby="settings-title">
+  <div class="modal settings-modal preferences-workbench settings-vscode-calm" role="dialog" aria-modal="true" aria-labelledby="settings-title" tabindex="-1">
     <span class="sr-only" id="settings-hydration-status" role="status" aria-live="polite"></span>
     <button type="button" class="settings-top-action settings-mobile-nav-toggle" id="settings-mobile-nav-toggle" data-settings-icon-action="1" data-i18n-title="settings_categories" title="Settings categories" aria-label="Settings categories" aria-controls="settings-nav" aria-expanded="false" onclick="toggleSettingsMobileNav()">☰</button>
     <button type="button" class="settings-mobile-nav-backdrop" id="settings-mobile-nav-backdrop" tabindex="-1" aria-hidden="true" onclick="setSettingsMobileNav(false)"></button>
@@ -5173,20 +5173,20 @@ pre.code-block { overflow:visible; }
 
     <div class="settings-section" data-settings-id="assistant" data-settings-title="AI / Endpoint">
     <div class="sb-group" style="padding:0;margin-top:8px" data-i18n="s_endpoint">Endpoint</div>
-    <label data-i18n="s_provider">Provider</label>
+    <label for="s-provider" data-i18n="s_provider">Provider</label>
     <select id="s-provider"><option value="openai">OpenAI</option><option value="anthropic">Anthropic</option>
     <option value="deepseek">DeepSeek</option><option value="ollama">Ollama</option><option value="custom">Custom</option></select>
-    <label data-i18n="s_api_key">API Key (active provider)</label>
-    <div style="display:flex;gap:6px"><input id="s-apikey" type="password" style="flex:1">
+    <label id="settings-secret-label-active-provider" for="s-apikey" data-i18n="s_api_key">API Key (active provider)</label>
+    <div style="display:flex;gap:6px"><input id="s-apikey" type="password" aria-labelledby="settings-secret-label-active-provider" style="flex:1">
     <button type="button" class="toolbar-btn" aria-label="Show or hide API key" onclick="document.getElementById('s-apikey').type=document.getElementById('s-apikey').type==='password'?'text':'password'" style="padding:7px 10px;border:1px solid var(--border);border-radius:var(--radius)">👁</button>
     <button type="button" class="settings-secret-clear" data-i18n="s_clear_secret" onclick="clearProtectedSecretInput('s-apikey')">Clear</button></div>
-    <label data-i18n="s_base_url">Base URL (empty = default)</label><input id="s-baseurl" placeholder="https://api.openai.com/v1">
+    <label for="s-baseurl" data-i18n="s_base_url">Base URL (empty = default)</label><input id="s-baseurl" placeholder="https://api.openai.com/v1">
 
     <div class="sb-group" style="padding:0;margin-top:12px">Provider Keys <span style="font-weight:normal;font-size:10px;color:var(--fg-dim)">(for Claude Code / Codex tabs)</span></div>
     <div style="display:grid;grid-template-columns:80px minmax(0,1fr) auto;gap:4px 8px;font-size:12px;padding:4px 0">
-      <span style="color:var(--fg-dim)">OpenAI</span><input id="sk-openai" type="password" placeholder="sk-..." style="font-size:11px"><button type="button" class="settings-secret-clear" data-i18n="s_clear_secret" onclick="clearProtectedSecretInput('sk-openai')">Clear</button>
-      <span style="color:var(--fg-dim)">Anthropic</span><input id="sk-anthropic" type="password" placeholder="sk-ant-..." style="font-size:11px"><button type="button" class="settings-secret-clear" data-i18n="s_clear_secret" onclick="clearProtectedSecretInput('sk-anthropic')">Clear</button>
-      <span style="color:var(--fg-dim)">DeepSeek</span><input id="sk-deepseek" type="password" placeholder="sk-..." style="font-size:11px"><button type="button" class="settings-secret-clear" data-i18n="s_clear_secret" onclick="clearProtectedSecretInput('sk-deepseek')">Clear</button>
+      <label id="settings-secret-label-openai" for="sk-openai" style="color:var(--fg-dim)">OpenAI</label><input id="sk-openai" type="password" aria-labelledby="settings-secret-label-openai" placeholder="sk-..." style="font-size:11px"><button type="button" class="settings-secret-clear" data-i18n="s_clear_secret" onclick="clearProtectedSecretInput('sk-openai')">Clear</button>
+      <label id="settings-secret-label-anthropic" for="sk-anthropic" style="color:var(--fg-dim)">Anthropic</label><input id="sk-anthropic" type="password" aria-labelledby="settings-secret-label-anthropic" placeholder="sk-ant-..." style="font-size:11px"><button type="button" class="settings-secret-clear" data-i18n="s_clear_secret" onclick="clearProtectedSecretInput('sk-anthropic')">Clear</button>
+      <label id="settings-secret-label-deepseek" for="sk-deepseek" style="color:var(--fg-dim)">DeepSeek</label><input id="sk-deepseek" type="password" aria-labelledby="settings-secret-label-deepseek" placeholder="sk-..." style="font-size:11px"><button type="button" class="settings-secret-clear" data-i18n="s_clear_secret" onclick="clearProtectedSecretInput('sk-deepseek')">Clear</button>
     </div>
 
     <div class="sb-group" style="padding:0;margin-top:12px" data-i18n="s_model">Model</div>
@@ -7212,6 +7212,31 @@ function settingsUpdateControlFrame(wrap,meta,value){
     status.classList.toggle('invalid',!!invalid);
   }
 }
+function settingsControlAccessibilityId(prefix,inputId){
+  return prefix+'-'+String(inputId||'setting').replace(/[^A-Za-z0-9_-]+/g,'-');
+}
+function settingsAppendIdReference(el,attribute,id){
+  if(!el||!id)return;
+  const refs=String(el.getAttribute(attribute)||'').split(/\s+/).filter(Boolean);
+  if(!refs.includes(id))refs.push(id);
+  el.setAttribute(attribute,refs.join(' '));
+}
+function settingsBindControlAccessibility(wrap,el,inputId){
+  if(!wrap||!el)return;
+  const title=wrap.querySelector('.settings-built-head-title');
+  if(title){
+    if(!title.id)title.id=settingsControlAccessibilityId('settings-control-label',inputId);
+    const nativeLabels=el.labels?Array.from(el.labels).filter(label=>String(label.textContent||'').trim()):[];
+    if(!el.hasAttribute('aria-label')&&!el.hasAttribute('aria-labelledby')&&!nativeLabels.length){
+      settingsAppendIdReference(el,'aria-labelledby',title.id);
+    }
+  }
+  const desc=wrap.querySelector('.settings-built-desc');
+  if(desc){
+    if(!desc.id)desc.id=settingsControlAccessibilityId('settings-control-description',inputId);
+    settingsAppendIdReference(el,'aria-describedby',desc.id);
+  }
+}
 function wrapSettingsField(inputId){
   const el=$(inputId),meta=SETTING_INPUT_META[inputId];if(!el||!meta)return;
   if(el.hidden||el.type==='hidden'||el.style.display==='none')return;
@@ -7265,6 +7290,7 @@ function wrapSettingsField(inputId){
     wrap.appendChild(foot);
   }
   settingsEnsureControlFrame(wrap,el,meta,inputId);
+  settingsBindControlAccessibility(wrap,el,inputId);
   settingsUpdateBuiltInValueSummary(wrap,meta,settingsInputValue(el,meta));
   settingsUpdateControlFrame(wrap,meta,settingsInputValue(el,meta));
   settingsRenderRowImpact(wrap);
@@ -13954,6 +13980,13 @@ function assistantMessageTargetFooterSmokeSnapshot(){
 async function runAssistantUiSelfCheck(opts){
   opts=opts||{};
   const checks=[];
+  const inlineHandlerContract=aiEditorInlineHandlerContractSnapshot();
+  assistantUiSelfCheckRecord(
+    checks,
+    'inline-handler-contract-ready',
+    inlineHandlerContract.ok,
+    inlineHandlerContract.missing.join(',')
+  );
   const layout=assistantComposerLayoutSnapshot();
   const composerInteractions=assistantComposerInteractionSnapshot();
   assistantUiSelfCheckRecord(checks,'composer-layout-present',layout.ok,layout.display);
@@ -17043,6 +17076,7 @@ let _editorDocumentColors=[],_editorDocumentColorRequest=0,_editorDocumentColorT
 let _editorColorPresentationMenu=null;
 let _editorFormatOnTypeRequest=0,_editorFormatOnTypeTriggers=null,_editorFormatOnTypeTriggerLang='',_editorFormatOnTypeTriggerRequest=0;
 let _editorFormatterPickSession=null;
+let _commandPaletteSettingsReturnFocus=null;
 let _editorLinkedEditingRanges=[],_editorLinkedEditingRequest=0,_editorLinkedEditingTimer=null,_editorLinkedEditingContentLength=-1,_editorLinkedEditingBefore=null,_editorLinkedEditingApplying=false;
 let _editorSelectionRanges=[],_editorSelectionRangeIndex=-1,_editorSelectionRangeKey='';
 let _editorPasteDropRequest=0,_editorDropPasteOptions=[],_editorDropPasteOptionIndex=0,_editorDropPasteSession=null;
@@ -23486,6 +23520,21 @@ function finishEditorFormatterPicker(provider){
   closeCommandPalette();
   if(session)session.resolve(provider||null);
 }
+function activateCommandPaletteSettingsPortal(palette){
+  const settingsModal=$('settings-modal');
+  if(!palette||!settingsModal||!settingsModal.classList.contains('open')||!settingsModal.contains(document.activeElement))return false;
+  _commandPaletteSettingsReturnFocus=document.activeElement;
+  return settingsSetModalPortalActive(palette,true);
+}
+function restoreCommandPaletteSettingsPortal(palette){
+  const returnFocus=_commandPaletteSettingsReturnFocus;
+  _commandPaletteSettingsReturnFocus=null;
+  settingsSetModalPortalActive(palette,false);
+  const settingsModal=$('settings-modal');
+  if(returnFocus&&returnFocus.isConnected&&settingsModal&&settingsModal.classList.contains('open')){
+    settingsFocusElement(returnFocus);
+  }
+}
 function filterEditorFormatterPicker(){
   const session=_editorFormatterPickSession,list=$('cmd-list'),input=$('cmd-input');
   if(!session||!list||!input)return;
@@ -23520,6 +23569,7 @@ function showEditorFormatterPicker(providers){
     _editorFormatterPickSession={providers,resolve};
     const palette=$('cmd-palette'),input=$('cmd-input');
     if(!palette||!input){_editorFormatterPickSession=null;resolve(null);return}
+    activateCommandPaletteSettingsPortal(palette);
     palette.dataset.mode='formatter';
     palette.dataset.formatterCount=String(providers.length);
     palette.dataset.defaultFormatter=editorDefaultFormatter();
@@ -33831,6 +33881,72 @@ async function showModelInfo(){
   else{el.textContent='Custom model — default 128K context. Add via Custom Models below.'}
 }
 let _settingsOpenHydrationEpoch=0;
+let _settingsReturnFocusTarget=null;
+function settingsUsesCompactNavigation(){
+  return !!(window.matchMedia&&window.matchMedia('(max-width: 900px)').matches);
+}
+function settingsFocusElement(el){
+  if(!el||typeof el.focus!=='function')return false;
+  try{el.focus({preventScroll:true})}catch(_error){try{el.focus()}catch(_ignored){return false}}
+  return document.activeElement===el;
+}
+function settingsElementCanReceiveFocus(el){
+  if(!el||!el.isConnected||el.disabled||el.getAttribute('aria-disabled')==='true')return false;
+  if(el.closest('[inert],[aria-hidden="true"]'))return false;
+  const style=getComputedStyle(el),rect=el.getBoundingClientRect();
+  return style.display!=='none'&&style.visibility!=='hidden'&&rect.width>0&&rect.height>0&&el.tabIndex>=0;
+}
+function settingsModalFocusableElements(){
+  const modal=$('settings-modal');if(!modal||!modal.classList.contains('open'))return [];
+  const selector='a[href],button,input,select,textarea,summary,[contenteditable="true"],[tabindex]:not([tabindex="-1"])';
+  return Array.from(modal.querySelectorAll(selector)).filter(settingsElementCanReceiveFocus);
+}
+function settingsSetBackgroundInert(enabled){
+  const modal=$('settings-modal');if(!document.body||!modal)return;
+  Array.from(document.body.children).forEach(el=>{
+    if(el===modal||['SCRIPT','STYLE','LINK'].includes(el.tagName))return;
+    if(enabled){
+      if(!el.hasAttribute('inert')){
+        el.setAttribute('inert','');
+        el.dataset.settingsBackgroundInert='1';
+      }
+    }else if(el.dataset.settingsBackgroundInert==='1'){
+      el.removeAttribute('inert');
+      delete el.dataset.settingsBackgroundInert;
+    }
+  });
+}
+function settingsSetModalPortalActive(el,active){
+  if(!el)return false;
+  const modal=$('settings-modal');
+  const modalOpen=!!(modal&&modal.classList.contains('open'));
+  if(active){
+    if(!modalOpen||el.dataset.settingsBackgroundInert!=='1')return false;
+    el.removeAttribute('inert');
+    el.dataset.settingsModalPortalActive='1';
+    return true;
+  }
+  const wasActive=el.dataset.settingsModalPortalActive==='1';
+  delete el.dataset.settingsModalPortalActive;
+  if(wasActive&&modalOpen&&el.dataset.settingsBackgroundInert==='1')el.setAttribute('inert','');
+  return wasActive;
+}
+function settingsFocusInitialTarget(){
+  const modal=$('settings-modal');if(!modal||!modal.classList.contains('open'))return false;
+  const frame=modal.querySelector('.modal.settings-modal');
+  const preferred=settingsUsesCompactNavigation()
+    ?$('settings-mobile-nav-toggle')
+    :$('settings-search');
+  if(settingsElementCanReceiveFocus(preferred)&&settingsFocusElement(preferred))return true;
+  return settingsFocusElement(frame);
+}
+function settingsRestoreReturnFocus(){
+  const preferred=_settingsReturnFocusTarget;
+  _settingsReturnFocusTarget=null;
+  const fallback=document.querySelector('.activity-manage,[data-command="open-settings"]');
+  const target=preferred&&preferred.isConnected?preferred:fallback;
+  if(target)setTimeout(()=>settingsFocusElement(target),0);
+}
 function settingsHydrationState(state,message){
   const modal=$('settings-modal'),status=$('settings-hydration-status');
   if(!modal)return;
@@ -33861,15 +33977,20 @@ function openSettings(){
   if(typeof setSettingsMobileNav==='function')setSettingsMobileNav(false,{restoreFocus:false});
   if(modal.classList.contains('open')){
     if(modal.dataset.settingsHydration==='shell')return true;
-    const search=$('settings-search');if(search){try{search.focus({preventScroll:true})}catch(_e){search.focus()}}
+    settingsFocusInitialTarget();
     return true;
   }
+  const active=document.activeElement;
+  _settingsReturnFocusTarget=active&&active!==document.body&&!modal.contains(active)?active:null;
   const epoch=++_settingsOpenHydrationEpoch;
   settingsHydrationState('shell','Loading settings…');
   modal.dataset.settingsShellVisibleAt=String(Date.now());
   modal.classList.add('open');
+  settingsSetBackgroundInert(true);
+  installSettingsKeyboardHandlers();
   recordAiEditorPerfSample('settingsOpenVisible',performance.now()-_settingsOpenT0);
   syncSettingsViewportFit('open-shell');
+  settingsFocusInitialTarget();
   scheduleSettingsOpenHydration(epoch);
   return true;
 }
@@ -34039,8 +34160,10 @@ function hydrateSettingsAfterOpen(_settingsHydrationEpochValue){
     const target=saved&&settingsCategorySections().find(section=>section.dataset.settingsId===saved&&section.style.display!=='none');
     if(target)scrollToSettingsSection(saved);
     const search=$('settings-search');
-    if(search&&!String(search.value||'').trim()){
+    if(!settingsUsesCompactNavigation()&&search&&!String(search.value||'').trim()){
       try{search.focus({preventScroll:true})}catch(e){try{search.focus()}catch(_e){}}
+    }else if(settingsUsesCompactNavigation()&&!_settingsModal.contains(document.activeElement)){
+      settingsFocusInitialTarget();
     }
   },0);
   return true;
@@ -34119,7 +34242,9 @@ function closeSettings(options){
     delete modal.dataset.settingsDiscardArmed;
     settingsHydrationState('closed','');
   }
+  settingsSetBackgroundInert(false);
   settingsShowRowDetails(null);
+  settingsRestoreReturnFocus();
   return true;
 }
 function settingsCancelOrClose(){
@@ -35286,6 +35411,21 @@ function installSettingsKeyboardHandlers(){
     if(!(ev.target&&ev.target.closest&&ev.target.closest('.settings-row-actions')))closeSettingsRowActionMenus();
   });
   modal.addEventListener('keydown',ev=>{
+    if(ev.key==='Tab'){
+      const focusable=settingsModalFocusableElements();
+      if(!focusable.length){
+        ev.preventDefault();
+        settingsFocusElement(modal.querySelector('.modal.settings-modal'));
+        return;
+      }
+      const active=document.activeElement,index=focusable.indexOf(active);
+      if(ev.shiftKey&&(index<=0)){
+        ev.preventDefault();settingsFocusElement(focusable[focusable.length-1]);return;
+      }
+      if(!ev.shiftKey&&(index<0||index===focusable.length-1)){
+        ev.preventDefault();settingsFocusElement(focusable[0]);return;
+      }
+    }
     if(ev.key==='Escape'){
       if(modal.querySelector('.settings-row-action-menu.open')){
         ev.preventDefault();
@@ -51150,7 +51290,8 @@ function openCommandPalette(initialValue){
   openCommandPaletteWithValue(initialValue==null?'>':initialValue);
 }
 function openCommandPaletteWithValue(value){
-  _editorFormatterPickSession=null;
+  if(_editorFormatterPickSession)finishEditorFormatterPicker(null);
+  activateCommandPaletteSettingsPortal($('cmd-palette'));
   delete $('cmd-palette').dataset.mode;
   $('cmd-input').placeholder=t('type_command');
   $('cmd-palette').classList.add('open');
@@ -51174,6 +51315,7 @@ function closeCommandPalette(){
   $('cmd-input').setAttribute('aria-expanded','false');
   $('cmd-input').removeAttribute('aria-activedescendant');
   $('cmd-palette').classList.remove('open');
+  restoreCommandPaletteSettingsPortal($('cmd-palette'));
 }
 const _CMD_HISTORY_KEY='sao-command-palette-history';
 let _cmdPaletteSelected=0;
@@ -52500,11 +52642,31 @@ function forceInteractiveUi(reason){
   try{document.documentElement.dataset.aiEditorInteractive='1'}catch(_e){}
   try{document.body.dataset.aiEditorInteractive='1'}catch(_e){}
 }
+function aiEditorInlineHandlerContractSnapshot(){
+  const handlerNames=new Set();
+  const ignored=new Set(['if','for','while','switch','catch','function','return']);
+  const callPattern=/(^|[^.\w$])([A-Za-z_$][\w$]*)\s*\(/g;
+  document.querySelectorAll('*').forEach(el=>{
+    Array.from(el.attributes||[]).forEach(attr=>{
+      if(!/^on[a-z]+$/i.test(String(attr.name||'')))return;
+      callPattern.lastIndex=0;
+      let match;
+      while((match=callPattern.exec(String(attr.value||'')))){
+        const name=match[2];
+        if(!ignored.has(name))handlerNames.add(name);
+      }
+    });
+  });
+  const names=Array.from(handlerNames).sort();
+  const missing=names.filter(name=>typeof window[name]!=='function');
+  return {ok:missing.length===0,handlerCount:names.length,missingCount:missing.length,missing};
+}
 function aiEditorInteractionHealthSnapshot(){
   const overlay=$('drag-overlay');
   const bodyStyle=getComputedStyle(document.body);
   const overlayStyle=overlay?getComputedStyle(overlay):null;
   const frames=Array.from(document.querySelectorAll('iframe.provider-webview-frame,.extension-webview-view-host iframe'));
+  const inlineHandlerContract=aiEditorInlineHandlerContractSnapshot();
   const centerX=Math.max(0,Math.floor((window.innerWidth||0)/2));
   const centerY=Math.max(0,Math.floor((window.innerHeight||0)/2));
   const topEl=document.elementFromPoint?document.elementFromPoint(centerX,centerY):null;
@@ -52532,6 +52694,9 @@ function aiEditorInteractionHealthSnapshot(){
     lastInteractiveAt:Number(document.body.dataset.aiEditorLastInteractiveAt||0),
     interactionClearCount:Number(document.body.dataset.interactionClearCount||0),
     watchdogStamp:String(document.body.dataset.interactionBlockerWatchdog||''),
+    inlineHandlerCount:inlineHandlerContract.handlerCount,
+    inlineHandlerMissingCount:inlineHandlerContract.missingCount,
+    inlineHandlerMissing:inlineHandlerContract.missing.slice(0,12).join(','),
     viewportWidth:Number(window.innerWidth||0),
     viewportHeight:Number(window.innerHeight||0),
   };
@@ -56066,6 +56231,20 @@ window.toggleMinimap=toggleMinimap;
 window.refreshExplorer=refreshExplorer;window.refreshPremiumGuide=refreshPremiumGuide;
 window.closeFindBar=closeFindBar;window.doReplace=doReplace;window.doReplaceAll=doReplaceAll;
 window.toggleExtInstall=toggleExtInstall;
+window.saveFileAs=saveFileAs;window.revertFile=revertFile;window.editorSelectWordAtCursor=editorSelectWordAtCursor;
+window.refreshScmSidebar=refreshScmSidebar;window.refreshMemViewer=refreshMemViewer;
+window.memViewerRead=memViewerRead;window.memViewerReadValue=memViewerReadValue;
+window.renderExtensionRuntimeDebugConsole=renderExtensionRuntimeDebugConsole;
+window.handleDebugConsoleInputKeydown=handleDebugConsoleInputKeydown;
+window.submitExtensionRuntimeDebugConsoleInput=submitExtensionRuntimeDebugConsoleInput;
+window.copyExtensionRuntimeDebugConsole=copyExtensionRuntimeDebugConsole;
+window.clearExtensionDebugConsole=clearExtensionDebugConsole;
+window.evaluateExtensionDebugConsoleExpression=evaluateExtensionDebugConsoleExpression;
+window.applyAssistantPromptShortcut=applyAssistantPromptShortcut;
+window.toggleEditorLanguageStatusPanel=toggleEditorLanguageStatusPanel;
+window.handleEditorLanguageStatusKey=handleEditorLanguageStatusKey;
+window.pickSettingsDefaultFormatter=pickSettingsDefaultFormatter;
+window.aiEditorInlineHandlerContractSnapshot=aiEditorInlineHandlerContractSnapshot;
 window.aiEditorInteractionHealthSnapshot=aiEditorInteractionHealthSnapshot;
 
 let _aiEditorBootStarted=false;

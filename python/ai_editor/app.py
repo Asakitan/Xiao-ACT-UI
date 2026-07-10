@@ -4599,9 +4599,19 @@ class AIEditorAPI:
     def _apply_config_to_engine(self, config: Dict[str, Any]) -> None:
         if not self._engine:
             return
-        for k, v in config.items():
-            if k in _PROVIDER_CONFIG_KEYS and hasattr(self._engine.config, k):
-                setattr(self._engine.config, k, v)
+        def _apply() -> None:
+            for k, v in config.items():
+                if (k in _PROVIDER_CONFIG_KEYS
+                        and hasattr(self._engine.config, k)):
+                    setattr(self._engine.config, k, v)
+
+        lifecycle_lock = getattr(
+            getattr(self, "_controller", None), "_lifecycle_lock", None)
+        if lifecycle_lock is None:
+            _apply()
+            return
+        with lifecycle_lock:
+            _apply()
 
     def _persist_ai_editor_config(self, merged: Dict[str, Any]) -> Optional[str]:
         settings = _resolve_settings(self._gui_ref)
@@ -23022,6 +23032,8 @@ def _frontend_health_summary(health: Any) -> Dict[str, Any]:
         "pywebviewReady", "bootMode", "visibilityState", "documentReadyState",
         "topElement", "activeElement", "lastClearedReason",
         "lastInteractiveReason", "interactionClearCount",
+        "inlineHandlerCount", "inlineHandlerMissingCount",
+        "inlineHandlerMissing",
         "lastApiFailureMethod", "lastApiFailureReason", "lastApiFailureAt",
         "healthAggregate", "healthAggregateError", "apiMissingMethods",
         "terminalApiReady", "terminalCanExecuteTool", "terminalPendingCwd",

@@ -8,7 +8,181 @@ from pathlib import Path
 from unittest import mock
 
 from ai_editor.auth import AuthService
-from ai_editor.secret_store import ProtectedSecretStore, SecretStoreError
+from ai_editor.secret_store import (
+    InMemorySecretStore,
+    ProtectedSecretStore,
+    SecretStoreError,
+)
+
+
+class AuthServiceSecretReferenceTests(unittest.TestCase):
+    def test_colliding_provider_ids_keep_distinct_session_tokens(self) -> None:
+        class _Provider:
+            def __init__(self, token: str) -> None:
+                self.token = token
+
+            def create_session(self, scopes, options):
+                return {
+                    "id": "shared-session",
+                    "accessToken": self.token,
+                    "account": {"id": "account", "label": "Account"},
+                    "scopes": list(scopes),
+                }
+
+        with tempfile.TemporaryDirectory(prefix="sao_auth_ref_collision_") as root:
+            store = InMemorySecretStore()
+            service = AuthService(storage_dir=root, secret_store=store)
+            service.register_provider("a/b", "Slash", _Provider("slash-token"))
+            service.register_provider("a_b", "Underscore", _Provider("underscore-token"))
+
+            self.assertIsNotNone(service.create_session("a/b", ["repo"]))
+            self.assertIsNotNone(service.create_session("a_b", ["repo"]))
+
+            reloaded = AuthService(storage_dir=root, secret_store=store)
+            self.assertEqual(
+                reloaded.get_session("a/b").access_token,
+                "slash-token",
+            )
+            self.assertEqual(
+                reloaded.get_session("a_b").access_token,
+                "underscore-token",
+            )
+
+            with open(os.path.join(root, "sessions.json"), "r", encoding="utf-8") as handle:
+                metadata = json.load(handle)
+            slash_ref = metadata["a/b"][0]["secretRef"]
+            underscore_ref = metadata["a_b"][0]["secretRef"]
+            self.assertNotEqual(slash_ref, underscore_ref)
+            self.assertTrue(slash_ref.startswith("auth-session/v2-"))
+            self.assertTrue(underscore_ref.startswith("auth-session/v2-"))
+
+    def test_unique_legacy_session_secret_is_migrated_to_v2(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="sao_auth_ref_migration_") as root:
+            metadata_path = os.path.join(root, "sessions.json")
+            legacy_ref = "auth-session/legacy/session-one"
+            with open(metadata_path, "w", encoding="utf-8") as handle:
+                json.dump({
+                    "legacy": [{
+                        "id": "session-one",
+                        "secretRef": legacy_ref,
+                        "account": {"id": "one", "label": "One"},
+                        "scopes": ["repo"],
+                    }],
+                }, handle)
+
+            store = InMemorySecretStore()
+            store.set(legacy_ref, "legacy-token")
+            service = AuthService(storage_dir=root, secret_store=store)
+
+            self.assertEqual(
+                service.get_session("legacy").access_token,
+                "legacy-token",
+            )
+            with open(metadata_path, "r", encoding="utf-8") as handle:
+                migrated = json.load(handle)
+            v2_ref = migrated["legacy"][0]["secretRef"]
+            self.assertTrue(v2_ref.startswith("auth-session/v2-"))
+            self.assertNotEqual(v2_ref, legacy_ref)
+            self.assertTrue(store.has(v2_ref))
+            self.assertFalse(store.has(legacy_ref))
+
+    def test_ambiguous_legacy_session_secret_is_quarantined(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="sao_auth_ref_ambiguous_") as root:
+            metadata_path = os.path.join(root, "sessions.json")
+            legacy_ref = "auth-session/a_b/shared-session"
+            with open(metadata_path, "w", encoding="utf-8") as handle:
+                json.dump({
+                    "a/b": [{
+                        "id": "shared-session",
+                        "secretRef": legacy_ref,
+                        "account": {"id": "slash", "label": "Slash"},
+                        "scopes": [],
+                    }],
+                    "a_b": [{
+                        "id": "shared-session",
+                        "secretRef": legacy_ref,
+                        "account": {"id": "underscore", "label": "Underscore"},
+                        "scopes": [],
+                    }],
+                }, handle)
+
+            store = InMemorySecretStore()
+            store.set(legacy_ref, "ambiguous-token")
+            service = AuthService(storage_dir=root, secret_store=store)
+
+            self.assertEqual(service.get_session("a/b").access_token, "")
+            self.assertEqual(service.get_session("a_b").access_token, "")
+            self.assertTrue(store.has(legacy_ref))
+
+            reloaded = AuthService(storage_dir=root, secret_store=store)
+            self.assertEqual(reloaded.get_session("a/b").access_token, "")
+            self.assertEqual(reloaded.get_session("a_b").access_token, "")
+
+    def test_remove_session_cleans_unique_v2_and_legacy_secrets(self) -> None:
+        class _Provider:
+            @staticmethod
+            def create_session(scopes, options):
+                return {
+                    "id": "delete-session",
+                    "accessToken": "delete-token",
+                    "account": {"id": "delete", "label": "Delete"},
+                    "scopes": list(scopes),
+                }
+
+        with tempfile.TemporaryDirectory(prefix="sao_auth_ref_delete_") as root:
+            store = InMemorySecretStore()
+            service = AuthService(storage_dir=root, secret_store=store)
+            service.register_provider("legacy/delete", "Legacy", _Provider())
+            session = service.create_session("legacy/delete", [])
+            self.assertIsNotNone(session)
+
+            with open(os.path.join(root, "sessions.json"), "r", encoding="utf-8") as handle:
+                metadata = json.load(handle)
+            v2_ref = metadata["legacy/delete"][0]["secretRef"]
+            legacy_ref = "auth-session/legacy_delete/delete-session"
+            store.set(legacy_ref, "stale-legacy-token")
+            self.assertTrue(store.has(v2_ref))
+            self.assertTrue(store.has(legacy_ref))
+
+            self.assertTrue(service.remove_session(
+                "legacy/delete", "delete-session"))
+            self.assertFalse(store.has(v2_ref))
+            self.assertFalse(store.has(legacy_ref))
+
+    def test_remove_session_does_not_claim_ambiguous_legacy_secret(self) -> None:
+        class _Provider:
+            def __init__(self, token: str) -> None:
+                self.token = token
+
+            def create_session(self, scopes, options):
+                return {
+                    "id": "shared-session",
+                    "accessToken": self.token,
+                    "account": {"id": "account", "label": "Account"},
+                    "scopes": list(scopes),
+                }
+
+        with tempfile.TemporaryDirectory(prefix="sao_auth_ref_delete_ambiguous_") as root:
+            store = InMemorySecretStore()
+            service = AuthService(storage_dir=root, secret_store=store)
+            service.register_provider("a/b", "Slash", _Provider("slash-token"))
+            service.register_provider("a_b", "Underscore", _Provider("underscore-token"))
+            service.create_session("a/b", [])
+            service.create_session("a_b", [])
+
+            legacy_ref = "auth-session/a_b/shared-session"
+            store.set(legacy_ref, "ambiguous-token")
+            self.assertTrue(service.remove_session("a/b", "shared-session"))
+            self.assertTrue(store.has(legacy_ref))
+
+            with open(os.path.join(root, "sessions.json"), "r", encoding="utf-8") as handle:
+                metadata = json.load(handle)
+            remaining_ref = metadata["a_b"][0]["secretRef"]
+            store.delete(remaining_ref)
+
+            reloaded = AuthService(storage_dir=root, secret_store=store)
+            self.assertEqual(reloaded.get_session("a_b").access_token, "")
+            self.assertTrue(store.has(legacy_ref))
 
 
 @unittest.skipUnless(os.name == "nt", "AI Editor protected persistence uses Windows DPAPI")

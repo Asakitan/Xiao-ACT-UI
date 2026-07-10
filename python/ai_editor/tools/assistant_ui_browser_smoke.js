@@ -143,6 +143,7 @@ async function main() {
     throw new Error("Assistant UI selfcheck failed: " + JSON.stringify(result));
   }
   const required = [
+    "inline-handler-contract-ready",
     "composer-layout-present",
     "composer-input-history-ready",
     "composer-edit-target-highlight-ready",

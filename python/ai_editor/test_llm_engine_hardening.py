@@ -34,6 +34,29 @@ class ModelFamilyMatchingTests(unittest.TestCase):
 
 
 class HttpClientConfigurationTests(unittest.TestCase):
+    def test_run_fork_has_independent_config_and_cancel_state(self) -> None:
+        class _InstrumentedEngine(LLMEngine):
+            def transport_marker(self) -> str:
+                return "custom-transport"
+
+        engine = _InstrumentedEngine(ProviderConfig(
+            provider="openai",
+            model="model-a",
+            extra_headers={"X-Run": "one"},
+        ))
+        fork = engine.fork_for_run()
+
+        engine.config.model = "model-b"
+        engine.config.extra_headers["X-Run"] = "two"
+        fork.cancel()
+
+        self.assertEqual("model-a", fork.config.model)
+        self.assertEqual({"X-Run": "one"}, fork.config.extra_headers)
+        self.assertIsInstance(fork, _InstrumentedEngine)
+        self.assertEqual("custom-transport", fork.transport_marker())
+        self.assertTrue(fork._cancel.is_set())
+        self.assertFalse(engine._cancel.is_set())
+
     def test_config_override_timeout_rebuilds_client(self) -> None:
         engine = LLMEngine(ProviderConfig(timeout=180))
         clients = [mock.Mock(), mock.Mock()]
