@@ -45,6 +45,10 @@ build/
 *.exe
 tools/
 
+# No-driver rt_io/overlay regression harnesses are source deliverables.
+!/tools/
+!/tools/*.py
+
 # ── Roslyn C# compiler (downloaded, rebuilt by fetch_roslyn) ──
 python/act_platform/scripting/roslyn/
 

@@ -1323,6 +1323,14 @@ class SAOPopUpMenu:
         hwnd = int(getattr(self._gpu_win, '_hwnd', 0) or 0)
         if not hwnd:
             return
+        if getattr(self._gpu_win, '_unified', False):
+            try:
+                from render.overlay_compositor import get_unified_overlay
+                get_unified_overlay().enforce_z_order_now(
+                    force_topmost=True)
+            except Exception:
+                pass
+            return
         try:
             import ctypes
             from ctypes import wintypes
@@ -1335,11 +1343,10 @@ class SAOPopUpMenu:
                 wintypes.HWND(hwnd), wintypes.HWND(HWND_TOPMOST),
                 0, 0, 0, 0,
                 SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE)
-            try:
-                from mem_probe._dc import hide_exstyle
-                hide_exstyle(hwnd, 0x8 | 0x00200000)
-            except Exception:
-                pass
+            from render.overlay_compositor import submit_dc_mutation
+            submit_dc_mutation(
+                hwnd, 'popup-exstyle', 'hide_exstyle',
+                0x8 | 0x00200000)
             for tk_shell in (getattr(self, '_shell', None),
                             getattr(self, '_custom_child_shell', None)):
                 if tk_shell is not None:
@@ -1351,11 +1358,9 @@ class SAOPopUpMenu:
                                 wintypes.HWND(sh), wintypes.HWND(HWND_TOPMOST),
                                 0, 0, 0, 0,
                                 SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE)
-                            try:
-                                from mem_probe._dc import hide_exstyle as _he
-                                _he(sh, 0x8)
-                            except Exception:
-                                pass
+                            submit_dc_mutation(
+                                sh, 'popup-shell-exstyle',
+                                'hide_exstyle', 0x8)
                     except Exception:
                         pass
         except Exception:

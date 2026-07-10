@@ -85,6 +85,8 @@ class MemSelfStateProvider:
         self._thread: Optional[threading.Thread] = None
         self._stop_evt = threading.Event()
         self._lock = threading.Lock()
+        self._cleanup_lock = threading.Lock()
+        self._cleanup_thread: Optional[threading.Thread] = None
 
         # 状态
         self.mode: str = "init"   # init | memory | tcp | error
@@ -110,22 +112,50 @@ class MemSelfStateProvider:
     # ───────── public ─────────
 
     def start(self):
+        with self._cleanup_lock:
+            if self._cleanup_thread is not None:
+                return
         if self._thread and self._thread.is_alive():
             return
+        if self._thread is not None:
+            self._finish_stop(self._thread)
         self._stop_evt.clear()
         self._thread = threading.Thread(
             target=self._loop, name="mem-self-state", daemon=True
         )
         self._thread.start()
 
-    def stop(self, join_timeout: float = 2.0):
+    def _finish_stop(self, worker: Optional[threading.Thread]) -> None:
+        if worker is not None and worker is not threading.current_thread():
+            worker.join()
+        with self._cleanup_lock:
+            if worker is not None and self._thread is worker:
+                self._thread = None
+            src, self._src = self._src, None
+            self._anchor_reader = None
+            self._cleanup_thread = None
+        if src is not None:
+            src.close()
+
+    def stop(self, join_timeout: float = 2.0) -> bool:
         self._stop_evt.set()
-        if self._thread:
-            self._thread.join(timeout=join_timeout)
-        if self._src:
-            self._src.close()
-            self._src = None
-        self._anchor_reader = None
+        worker = self._thread
+        if worker is not None and worker is not threading.current_thread():
+            worker.join(timeout=max(0.0, float(join_timeout)))
+        if worker is not None and worker.is_alive():
+            with self._cleanup_lock:
+                if self._cleanup_thread is None:
+                    finalizer = threading.Thread(
+                        target=self._finish_stop,
+                        args=(worker,),
+                        name="mem-state-rundown",
+                        daemon=True,
+                    )
+                    self._cleanup_thread = finalizer
+                    finalizer.start()
+            return False
+        self._finish_stop(worker)
+        return True
 
     def force_mode(self, mode: str):
         # 主程序可调来强制切到 'tcp' 或 'memory'.
@@ -417,4 +447,3 @@ def _selftest():
 
 if __name__ == "__main__":
     _selftest()
-

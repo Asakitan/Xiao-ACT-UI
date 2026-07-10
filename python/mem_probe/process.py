@@ -12,9 +12,11 @@ import ctypes
 import ctypes.wintypes as wintypes
 import os
 import sys
+import threading
 import time
+from contextlib import contextmanager
 from dataclasses import dataclass
-from typing import Iterator, List, Optional
+from typing import Dict, Iterator, List, Optional
 
 
 # ───────────────────────── Win32 常量 / 结构体 ─────────────────────────
@@ -52,6 +54,285 @@ except Exception:
     _drv = None
 _DRIVER_OK = False
 _DRIVER_TRIED = False
+_DRIVER_EPOCH = None
+_DRIVER_ACTIVE_PID = 0
+_DRIVER_RETRY_AT = 0.0
+_DRIVER_FAILURES = 0
+_DRIVER_PID_REFS: Dict[int, int] = {}
+_DRIVER_LOCK = threading.RLock()
+_DRIVER_CONDITION = threading.Condition(_DRIVER_LOCK)
+
+
+class TargetLeaseError(RuntimeError):
+    """The process-global driver target could not be activated safely."""
+
+
+def _driver_session_epoch(*, allow_status: bool = False):
+    """Return a cheap identity for the current proxy/helper session.
+
+    New proxy builds expose ``session_epoch()``.  The fallbacks keep source
+    compatibility with older PYDs without making a STATUS IPC on every read.
+    STATUS is only consulted on lifecycle/ensure paths.
+    """
+    drv = _drv
+    if drv is None:
+        return ("none",)
+    try:
+        getter = getattr(drv, "session_epoch", None)
+        if callable(getter):
+            return (
+                "epoch", int(getter()),
+                bool(getattr(drv, "_connected", True)),
+            )
+    except Exception:
+        pass
+    try:
+        value = getattr(drv, "_session_epoch", None)
+        if value is not None:
+            return (
+                "epoch", int(value),
+                bool(getattr(drv, "_connected", True)),
+            )
+    except Exception:
+        pass
+    session = getattr(drv, "_session", None)
+    if session is not None:
+        try:
+            value = getattr(session, "epoch", None)
+            if value is not None:
+                state = str(getattr(session, "state", "") or "")
+                return ("epoch", int(value), state)
+        except Exception:
+            pass
+    if allow_status:
+        try:
+            status = drv.status()
+            if isinstance(status, dict) and status.get("session_epoch") is not None:
+                return (
+                    "epoch", int(status["session_epoch"]),
+                    bool(status.get("connected", status.get("backend_ready", False))),
+                )
+        except Exception:
+            pass
+    proc = getattr(drv, "_helper_proc", None)
+    try:
+        proc_pid = int(getattr(proc, "pid", 0) or 0)
+    except Exception:
+        proc_pid = 0
+    return (
+        "legacy",
+        id(drv),
+        bool(getattr(drv, "_connected", False)),
+        id(proc) if proc is not None else 0,
+        proc_pid,
+    )
+
+
+def _refresh_driver_epoch_locked(*, allow_status: bool = False) -> None:
+    global _DRIVER_EPOCH, _DRIVER_OK, _DRIVER_TRIED
+    global _DRIVER_ACTIVE_PID, _DRIVER_RETRY_AT, _DRIVER_FAILURES
+    epoch = _driver_session_epoch(allow_status=allow_status)
+    if epoch == _DRIVER_EPOCH:
+        return
+    _DRIVER_EPOCH = epoch
+    _DRIVER_OK = False
+    _DRIVER_TRIED = False
+    _DRIVER_ACTIVE_PID = 0
+    _DRIVER_RETRY_AT = 0.0
+    _DRIVER_FAILURES = 0
+
+
+def _ensure_driver_locked() -> bool:
+    """Ensure the driver with epoch-scoped exponential retry backoff."""
+    global _DRIVER_OK, _DRIVER_TRIED, _DRIVER_EPOCH
+    global _DRIVER_ACTIVE_PID, _DRIVER_RETRY_AT, _DRIVER_FAILURES
+    if _drv is None:
+        return False
+    _refresh_driver_epoch_locked()
+    if _DRIVER_OK:
+        return True
+    now = time.monotonic()
+    if now < _DRIVER_RETRY_AT:
+        return False
+    _DRIVER_TRIED = True
+    try:
+        ok = bool(_drv.ensure_loaded())
+    except Exception:
+        ok = False
+    # ensure_loaded may create a new helper, so capture its final epoch before
+    # publishing success.  Do not let the epoch refresh erase this result.
+    final_epoch = _driver_session_epoch(allow_status=ok)
+    if final_epoch != _DRIVER_EPOCH:
+        _DRIVER_EPOCH = final_epoch
+        _DRIVER_ACTIVE_PID = 0
+    _DRIVER_OK = ok
+    if ok:
+        _DRIVER_FAILURES = 0
+        _DRIVER_RETRY_AT = 0.0
+        return True
+    _DRIVER_FAILURES += 1
+    _DRIVER_RETRY_AT = now + min(30.0, 2.0 * (2 ** min(_DRIVER_FAILURES - 1, 4)))
+    return False
+
+
+def _cy_driver_attach_locked(pid: int) -> bool:
+    try:
+        from mem_probe import cy_memscan as _cy
+        ok = bool(_cy.driver_attach(int(pid)))
+        if not ok:
+            _cy.driver_detach()
+        return ok
+    except Exception:
+        try:
+            from mem_probe import cy_memscan as _cy
+            _cy.driver_detach()
+        except Exception:
+            pass
+        return False
+
+
+def _cy_driver_detach_locked() -> None:
+    try:
+        from mem_probe import cy_memscan as _cy
+        _cy.driver_detach()
+    except Exception:
+        pass
+
+
+def _activate_target_locked(pid: int) -> bool:
+    global _DRIVER_ACTIVE_PID
+    _refresh_driver_epoch_locked()
+    if not _ensure_driver_locked():
+        return False
+    target = int(pid)
+    if target <= 0:
+        return False
+    if _DRIVER_ACTIVE_PID == target:
+        return True
+    try:
+        ensure_target = getattr(_drv, "_ensure_target", None)
+        if callable(ensure_target):
+            attached = bool(ensure_target(target))
+        else:
+            attached = bool(_drv.attach(target))
+        if not attached:
+            return False
+    except Exception:
+        return False
+    _cy_driver_attach_locked(target)
+    _DRIVER_ACTIVE_PID = target
+    return True
+
+
+class TargetLease:
+    """Reference-counted ownership of the process-global rt_io target.
+
+    rt_io and the Cython fast path both keep one attached PID per process.
+    Every operation therefore holds the same re-entrant lock while activating
+    its PID and performing the read/write.  Multiple same-PID consumers share
+    a reference; different-PID consumers are explicitly switched, never read
+    through whichever consumer happened to attach last.
+    """
+
+    def __init__(self, pid: int) -> None:
+        self.pid = int(pid)
+        if self.pid <= 0:
+            raise ValueError("pid must be positive")
+        self._closed = False
+        with _DRIVER_CONDITION:
+            _DRIVER_PID_REFS[self.pid] = _DRIVER_PID_REFS.get(self.pid, 0) + 1
+            _DRIVER_CONDITION.notify_all()
+
+    def ensure_active(self) -> bool:
+        with _DRIVER_LOCK:
+            if self._closed:
+                return False
+            return _activate_target_locked(self.pid)
+
+    @contextmanager
+    def operation(self):
+        with _DRIVER_LOCK:
+            if self._closed:
+                raise TargetLeaseError(f"target lease for pid {self.pid} is closed")
+            if not _activate_target_locked(self.pid):
+                raise TargetLeaseError(f"failed to activate driver target pid {self.pid}")
+            target_operation = getattr(_drv, "target_operation", None)
+            if callable(target_operation):
+                with target_operation(self.pid):
+                    yield _drv
+            else:
+                yield _drv
+
+    def close(self) -> None:
+        global _DRIVER_ACTIVE_PID
+        with _DRIVER_CONDITION:
+            if self._closed:
+                return
+            self._closed = True
+            remaining = _DRIVER_PID_REFS.get(self.pid, 0) - 1
+            if remaining > 0:
+                _DRIVER_PID_REFS[self.pid] = remaining
+                _DRIVER_CONDITION.notify_all()
+                return
+            _DRIVER_PID_REFS.pop(self.pid, None)
+            if _DRIVER_ACTIVE_PID != self.pid and _DRIVER_PID_REFS:
+                _DRIVER_CONDITION.notify_all()
+                return
+            # Never leave the Cython PID pointing at a lease that no longer
+            # exists.  Surviving different-PID leases reactivate lazily.
+            _cy_driver_detach_locked()
+            try:
+                if _drv is not None and _DRIVER_OK:
+                    release_target = getattr(_drv, "_release_target", None)
+                    if callable(release_target):
+                        release_target(self.pid)
+                    else:
+                        _drv.detach()
+            except Exception:
+                pass
+            _DRIVER_ACTIVE_PID = 0
+            _DRIVER_CONDITION.notify_all()
+
+    def __enter__(self) -> "TargetLease":
+        if not self.ensure_active():
+            self.close()
+            raise TargetLeaseError(f"failed to activate driver target pid {self.pid}")
+        return self
+
+    def __exit__(self, *_exc) -> None:
+        self.close()
+
+
+def _reset_target_leases_for_test() -> None:
+    """Reset only Python ownership state; never touches a live backend."""
+    global _DRIVER_OK, _DRIVER_TRIED, _DRIVER_EPOCH, _DRIVER_ACTIVE_PID
+    global _DRIVER_RETRY_AT, _DRIVER_FAILURES
+    with _DRIVER_CONDITION:
+        _DRIVER_PID_REFS.clear()
+        _DRIVER_OK = False
+        _DRIVER_TRIED = False
+        _DRIVER_EPOCH = None
+        _DRIVER_ACTIVE_PID = 0
+        _DRIVER_RETRY_AT = 0.0
+        _DRIVER_FAILURES = 0
+        _DRIVER_CONDITION.notify_all()
+
+
+def _wait_for_target_leases_closed(timeout: float = 10.0) -> bool:
+    """Wait until every memory consumer has released its target lease.
+
+    This is an internal shutdown barrier.  A plugin that timed out while
+    joining its scan thread keeps its lease alive, so helper teardown cannot
+    race that thread's next read or detach.
+    """
+    deadline = time.monotonic() + max(0.0, float(timeout))
+    with _DRIVER_CONDITION:
+        while _DRIVER_PID_REFS:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                return False
+            _DRIVER_CONDITION.wait(remaining)
+        return True
 
 
 class _MEMORY_RANGE_ENTRY(ctypes.Structure):
@@ -71,22 +352,20 @@ try:
 except Exception:
     _PrefetchVM = None
 
+try:
+    _GetExitCodeProcess = ctypes.windll.kernel32.GetExitCodeProcess
+    _GetExitCodeProcess.argtypes = [wintypes.HANDLE, ctypes.POINTER(wintypes.DWORD)]
+    _GetExitCodeProcess.restype = wintypes.BOOL
+except Exception:
+    _GetExitCodeProcess = None
+
 
 def _mem_read(handle, addr, buf, size, p_got):
     # Read via driver backend only. No user-mode API fallback.
-    global _DRIVER_OK, _DRIVER_TRIED
-    if _drv is not None:
-        if _DRIVER_OK:
-            return _drv._rpm(handle, addr, buf, size, p_got)
-        if not _DRIVER_TRIED:
-            _DRIVER_TRIED = True
-            try:
-                _DRIVER_OK = _drv.ensure_loaded()
-            except Exception:
-                _DRIVER_OK = False
-            if _DRIVER_OK:
-                return _drv._rpm(handle, addr, buf, size, p_got)
-    return False
+    with _DRIVER_LOCK:
+        if _drv is None or not _ensure_driver_locked():
+            return False
+        return _drv._rpm(handle, addr, buf, size, p_got)
 
 
 class _MEMORY_BASIC_INFORMATION64(ctypes.Structure):
@@ -275,6 +554,39 @@ def _find_pid_by_name_wide(process_name: str) -> Optional[int]:
     return None
 
 
+def query_process_identity(pid: int) -> Optional[tuple[int, str, int]]:
+    """Return ``(pid, image_name, create_time)`` without opening a handle."""
+    target_pid = int(pid)
+    if target_pid <= 0:
+        return None
+    result = _query_system_process_info()
+    if result is None:
+        return None
+    buf, raw, total = result
+    buf_addr = ctypes.addressof(buf)
+    offset = 0
+    while offset < total:
+        next_entry = int.from_bytes(raw[offset:offset + 4], "little")
+        current_pid = int.from_bytes(raw[offset + 0x50:offset + 0x58], "little")
+        if current_pid == target_pid:
+            name_len = int.from_bytes(raw[offset + 0x38:offset + 0x3A], "little")
+            name_buf = int.from_bytes(raw[offset + 0x40:offset + 0x48], "little")
+            name = ""
+            if name_len > 0 and name_buf:
+                buf_offset = name_buf - buf_addr
+                if 0 <= buf_offset <= total - name_len:
+                    try:
+                        name = raw[buf_offset:buf_offset + name_len].decode("utf-16-le")
+                    except Exception:
+                        name = ""
+            create_time = int.from_bytes(raw[offset + 0x20:offset + 0x28], "little")
+            return current_pid, os.path.basename(name).casefold(), create_time
+        if next_entry == 0:
+            break
+        offset += next_entry
+    return None
+
+
 # ───────────────────────── 数据类 ─────────────────────────
 @dataclass(frozen=True)
 class ModuleInfo:
@@ -312,6 +624,8 @@ class GameProcess:
 
     def __init__(self, process_name: Optional[str] = None,
                  process_names: Optional[List[str]] = None) -> None:
+        self._closed = False
+        self._target_lease: Optional[TargetLease] = None
         try:
             import pymem  # noqa: F401  延迟 import, 主程序不强依赖
         except ImportError as e:
@@ -349,23 +663,11 @@ class GameProcess:
             )
 
         # ── Step 2: 驱动优先 (在 OpenProcess 之前, 不产生游戏进程句柄) ──
-        global _DRIVER_OK, _DRIVER_TRIED
         drv_attached = False
+        target_lease: Optional[TargetLease] = None
         if _drv is not None:
-            if not _DRIVER_TRIED:
-                try:
-                    _DRIVER_OK = _drv.ensure_loaded()
-                except Exception:
-                    _DRIVER_OK = False
-                _DRIVER_TRIED = True
-            if _DRIVER_OK:
-                if _drv.attach(found_pid):
-                    drv_attached = True
-                    try:
-                        from mem_probe import cy_memscan as _cy
-                        _cy.driver_attach(found_pid)
-                    except Exception:
-                        pass
+            target_lease = TargetLease(found_pid)
+            drv_attached = target_lease.ensure_active()
 
         # ── Step 3: OpenProcess — 只要 QUERY (不含 VM_READ, 不触发降权) ──
         access = PROCESS_QUERY_INFORMATION | PROCESS_QUERY_LIMITED_INFORMATION
@@ -383,12 +685,29 @@ class GameProcess:
                 self._pm.process_id = found_pid
                 self._pm.process_handle = 0
             else:
+                if target_lease is not None:
+                    target_lease.close()
                 raise GameProcessError(f"E_ACCESS ({e})") from e
+        except Exception:
+            if target_lease is not None:
+                target_lease.close()
+            raise
         self._attached_name = attached_name
         self._pid = int(found_pid)
         self._handle = int(self._pm.process_handle)
+        self._target_lease = target_lease
         self._region_cache: Optional[List[MemoryRegion]] = None
         self._region_cache_time: float = 0.0
+
+    @contextmanager
+    def _driver_operation(self):
+        if self._closed:
+            raise TargetLeaseError(f"process reader for pid {self._pid} is closed")
+        lease = self._target_lease
+        if lease is None:
+            raise TargetLeaseError("driver backend is unavailable")
+        with lease.operation() as drv:
+            yield drv
 
     # ───── 基本属性 ─────
     @property
@@ -402,6 +721,23 @@ class GameProcess:
     @property
     def name(self) -> str:
         return self._attached_name or ""
+
+    def is_alive(self) -> bool:
+        if self._closed:
+            return False
+        if self._handle and _GetExitCodeProcess is not None:
+            try:
+                exit_code = wintypes.DWORD(0)
+                ok = _GetExitCodeProcess(
+                    wintypes.HANDLE(self._handle), ctypes.byref(exit_code)
+                )
+                return bool(ok) and int(exit_code.value) == 259
+            except Exception:
+                return False
+        try:
+            return any(int(pid) == self._pid for _name, pid in _iter_process_entries_wide())
+        except Exception:
+            return False
 
     @property
     def memory_tier(self) -> str:
@@ -417,7 +753,7 @@ class GameProcess:
 
     # ───── 模块 ─────
     def list_modules(self) -> List[ModuleInfo]:
-        if _drv is not None and _DRIVER_OK:
+        if _drv is not None:
             mods = self._list_modules_via_driver()
             if mods is not None:
                 return mods
@@ -441,55 +777,56 @@ class GameProcess:
 
     def _list_modules_via_driver(self) -> Optional[List[ModuleInfo]]:
         try:
-            pbi = (ctypes.c_byte * 48)()
-            ret_len = ctypes.c_ulong(0)
-            _ntqip = ctypes.windll.ntdll.NtQueryInformationProcess
-            st = _ntqip(ctypes.c_void_p(self._handle), 0, pbi, 48, ctypes.byref(ret_len))
-            if st < 0:
-                return None
-            peb_addr = int.from_bytes(bytes(pbi[8:16]), "little")
-            if not peb_addr:
-                return None
+            with self._driver_operation() as drv:
+                pbi = (ctypes.c_byte * 48)()
+                ret_len = ctypes.c_ulong(0)
+                _ntqip = ctypes.windll.ntdll.NtQueryInformationProcess
+                st = _ntqip(ctypes.c_void_p(self._handle), 0, pbi, 48, ctypes.byref(ret_len))
+                if st < 0:
+                    return None
+                peb_addr = int.from_bytes(bytes(pbi[8:16]), "little")
+                if not peb_addr:
+                    return None
 
-            peb_data = _drv.read(peb_addr, 0x20)
-            if not peb_data or len(peb_data) < 0x20:
-                return None
-            ldr_addr = int.from_bytes(peb_data[0x18:0x20], "little")
-            if not ldr_addr:
-                return None
+                peb_data = drv.read(peb_addr, 0x20)
+                if not peb_data or len(peb_data) < 0x20:
+                    return None
+                ldr_addr = int.from_bytes(peb_data[0x18:0x20], "little")
+                if not ldr_addr:
+                    return None
 
-            ldr_data = _drv.read(ldr_addr, 0x30)
-            if not ldr_data or len(ldr_data) < 0x20:
-                return None
-            head = ldr_addr + 0x10
-            flink = int.from_bytes(ldr_data[0x10:0x18], "little")
+                ldr_data = drv.read(ldr_addr, 0x30)
+                if not ldr_data or len(ldr_data) < 0x20:
+                    return None
+                head = ldr_addr + 0x10
+                flink = int.from_bytes(ldr_data[0x10:0x18], "little")
 
-            out: List[ModuleInfo] = []
-            visited = set()
-            while flink and flink != head and flink not in visited:
-                visited.add(flink)
-                if len(visited) > 1024:
-                    break
-                entry = _drv.read(flink, 0x78)
-                if not entry or len(entry) < 0x78:
-                    break
-                dll_base = int.from_bytes(entry[0x20:0x28], "little")
-                size_of_image = int.from_bytes(entry[0x40:0x44], "little")
-                name_len = int.from_bytes(entry[0x58:0x5A], "little")
-                name_buf = int.from_bytes(entry[0x60:0x68], "little")
-                name = ""
-                if name_buf and name_len:
-                    raw = _drv.read(name_buf, min(name_len, 520))
-                    if raw:
-                        try:
-                            name = raw.decode("utf-16-le").rstrip("\x00")
-                            name = os.path.basename(name)
-                        except Exception:
-                            name = ""
-                if dll_base and name:
-                    out.append(ModuleInfo(name=name, base=dll_base, size=size_of_image))
-                flink = int.from_bytes(entry[0x00:0x08], "little")
-            return out if out else None
+                out: List[ModuleInfo] = []
+                visited = set()
+                while flink and flink != head and flink not in visited:
+                    visited.add(flink)
+                    if len(visited) > 1024:
+                        break
+                    entry = drv.read(flink, 0x78)
+                    if not entry or len(entry) < 0x78:
+                        break
+                    dll_base = int.from_bytes(entry[0x20:0x28], "little")
+                    size_of_image = int.from_bytes(entry[0x40:0x44], "little")
+                    name_len = int.from_bytes(entry[0x58:0x5A], "little")
+                    name_buf = int.from_bytes(entry[0x60:0x68], "little")
+                    name = ""
+                    if name_buf and name_len:
+                        raw = drv.read(name_buf, min(name_len, 520))
+                        if raw:
+                            try:
+                                name = raw.decode("utf-16-le").rstrip("\x00")
+                                name = os.path.basename(name)
+                            except Exception:
+                                name = ""
+                    if dll_base and name:
+                        out.append(ModuleInfo(name=name, base=dll_base, size=size_of_image))
+                    flink = int.from_bytes(entry[0x00:0x08], "little")
+                return out if out else None
         except Exception:
             return None
 
@@ -558,12 +895,13 @@ class GameProcess:
         if n <= 0:
             return b""
         try:
-            buf = ctypes.create_string_buffer(n)
-            got = ctypes.c_size_t(0)
-            ok = _mem_read(self._handle, int(addr), buf, n, ctypes.byref(got))
-            if ok and got.value > 0:
-                return buf.raw[: int(got.value)]
-            return None
+            with self._driver_operation():
+                buf = ctypes.create_string_buffer(n)
+                got = ctypes.c_size_t(0)
+                ok = _mem_read(self._handle, int(addr), buf, n, ctypes.byref(got))
+                if ok and got.value > 0:
+                    return buf.raw[: int(got.value)]
+                return None
         except Exception:
             return None
 
@@ -582,7 +920,8 @@ class GameProcess:
             return 0
         got = ctypes.c_size_t(0)
         try:
-            ok = _mem_read(self._handle, int(addr), c_buf, want, ctypes.byref(got))
+            with self._driver_operation():
+                ok = _mem_read(self._handle, int(addr), c_buf, want, ctypes.byref(got))
         except Exception:
             return 0
         return int(got.value) if ok else 0
@@ -614,9 +953,10 @@ class GameProcess:
     def read_batch(self, requests) -> list:
         if not requests:
             return []
-        if _drv is not None and _DRIVER_OK and hasattr(_drv, 'read_batch'):
+        if _drv is not None and hasattr(_drv, 'read_batch'):
             try:
-                return _drv.read_batch([(int(a), int(s)) for a, s in requests])
+                with self._driver_operation() as drv:
+                    return drv.read_batch([(int(a), int(s)) for a, s in requests])
             except Exception:
                 pass
         return [self.read_bytes(a, s) for a, s in requests]
@@ -637,10 +977,11 @@ class GameProcess:
         if not addrs:
             return []
         try:
-            from mem_probe import cy_memscan as _cy
-            res = _cy.read_words_many(self._handle, addrs, word_size)
-            if res is not None:
-                return res
+            with self._driver_operation():
+                from mem_probe import cy_memscan as _cy
+                res = _cy.read_words_many(self._handle, addrs, word_size)
+                if res is not None:
+                    return res
         except Exception:
             pass
         # direct-ctypes fallback
@@ -650,14 +991,20 @@ class GameProcess:
         pbuf = ctypes.byref(buf)
         pgot = ctypes.byref(got)
         out: list = []
-        for a in addrs:
-            try:
-                ok = _mem_read(h, int(a), pbuf, word_size, pgot)
-                if ok and got.value == word_size:
-                    out.append(int(buf.value))
-                else:
-                    out.append(None)
-            except Exception:
+        try:
+            with self._driver_operation():
+                for a in addrs:
+                    try:
+                        got.value = 0
+                        ok = _mem_read(h, int(a), pbuf, word_size, pgot)
+                        if ok and got.value == word_size:
+                            out.append(int(buf.value))
+                        else:
+                            out.append(None)
+                    except Exception:
+                        out.append(None)
+        except Exception:
+            while len(out) < len(addrs):
                 out.append(None)
         return out
 
@@ -705,15 +1052,23 @@ class GameProcess:
 
     # ───── 写入 (仅驱动后端, Tier B+ 时可用) ─────
     def write_bytes(self, addr: int, data: bytes) -> bool:
-        if not data or _drv is None or not _DRIVER_OK:
+        if not data or _drv is None:
             return False
-        return _drv.write(int(addr), data)
+        try:
+            with self._driver_operation() as drv:
+                return bool(drv.write(int(addr), data))
+        except Exception:
+            return False
 
     def can_write(self) -> bool:
-        if _drv is None or not _DRIVER_OK:
+        if _drv is None:
             return False
-        caps = _drv.ENGINE_CAPS.get(_drv._engine, 0)
-        return bool(caps & _drv.CAP_WRITE)
+        try:
+            with self._driver_operation() as drv:
+                caps = drv.ENGINE_CAPS.get(drv._engine, 0)
+                return bool(caps & drv.CAP_WRITE)
+        except Exception:
+            return False
 
     # ───── 区域缓存 / 预取 / 批量 slab ─────
     def cached_regions(
@@ -753,27 +1108,32 @@ class GameProcess:
         #
         # Returns flat list of ``len(base_addrs) * len(offsets)`` values (None on fail).
         # Cython-accelerated when available; fallback to individual reads.
+        bases = list(base_addrs)
+        field_offsets = list(offsets)
         try:
-            from mem_probe import cy_memscan as _cy
-            res = _cy.read_slab_many(self._handle, list(base_addrs), list(offsets), word_size)
-            if res is not None:
-                return res
+            with self._driver_operation():
+                from mem_probe import cy_memscan as _cy
+                res = _cy.read_slab_many(self._handle, bases, field_offsets, word_size)
+                if res is not None:
+                    return res
         except Exception:
             pass
         out: list = []
         read_fn = self.read_u64 if word_size == 8 else self.read_u32
-        for base in base_addrs:
-            for off in offsets:
+        for base in bases:
+            for off in field_offsets:
                 out.append(read_fn(int(base) + int(off)))
         return out
 
     # ───── 关闭 ─────
     def close(self) -> None:
-        try:
-            if _drv is not None and _DRIVER_OK:
-                _drv.detach()
-        except Exception:
-            pass
+        if self._closed:
+            return
+        self._closed = True
+        lease = self._target_lease
+        self._target_lease = None
+        if lease is not None:
+            lease.close()
         try:
             self._pm.close_process()
         except Exception:

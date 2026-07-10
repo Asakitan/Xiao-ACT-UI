@@ -251,19 +251,24 @@ class WebViewProxy:
         )
         self._thread.start()
 
-    def stop(self) -> None:
+    def stop(self) -> bool:
         self._running = False
         self._stop_evt.set()
-        if self._thread and self._thread.is_alive():
-            self._thread.join(timeout=3.0)
+        thread = self._thread
+        if thread and thread.is_alive():
+            thread.join(timeout=3.0)
+        if thread and thread.is_alive():
+            # Preserve both producer and layer ownership for a later retry.
+            return False
         self._thread = None
         if self._layer is not None:
             try:
                 from render.gpu_overlay_window import _get_unified_overlay
                 _get_unified_overlay().destroy_layer(f'wv_{self._name}')
             except Exception:
-                pass
+                return False
             self._layer = None
+        return True
 
     def show(self) -> None:
         self._visible = True
@@ -359,7 +364,8 @@ def register_webview_proxy(
     # Register a pywebview window for compositor proxying.
     with _proxy_lock:
         if name in _proxies:
-            _proxies[name].stop()
+            if not _proxies[name].stop():
+                return _proxies[name]
         proxy = WebViewProxy(
             hwnd, name, width, height, screen_x, screen_y,
             z, click_through, capture_fps,
@@ -368,19 +374,27 @@ def register_webview_proxy(
     return proxy
 
 
-def unregister_webview_proxy(name: str) -> None:
+def unregister_webview_proxy(name: str) -> bool:
     with _proxy_lock:
-        proxy = _proxies.pop(name, None)
-    if proxy:
-        proxy.stop()
+        proxy = _proxies.get(name)
+    if proxy is None:
+        return True
+    if not proxy.stop():
+        return False
+    with _proxy_lock:
+        if _proxies.get(name) is proxy:
+            _proxies.pop(name, None)
+    return True
 
 
 def get_webview_proxy(name: str) -> Optional[WebViewProxy]:
     return _proxies.get(name)
 
 
-def stop_all_proxies() -> None:
+def stop_all_proxies() -> bool:
     with _proxy_lock:
         names = list(_proxies.keys())
+    confirmed = True
     for name in names:
-        unregister_webview_proxy(name)
+        confirmed = unregister_webview_proxy(name) and confirmed
+    return confirmed

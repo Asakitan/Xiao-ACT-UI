@@ -386,15 +386,18 @@ def _sync_plugin_discovery(manager: PluginManager) -> None:
         sync()
 
 
-def shutdown_act_plugin_manager(owner: Any) -> None:
+def shutdown_act_plugin_manager(owner: Any) -> bool:
     manager = getattr(owner, "_act_plugin_manager", None)
     if not isinstance(manager, PluginManager):
-        return
+        return True
+    confirmed = True
     for plugin in list(manager.list_plugins()):
         try:
-            manager.unload_plugin(plugin.get("id"))
+            confirmed = bool(
+                manager.unload_plugin(plugin.get("id"))) and confirmed
         except Exception:
-            pass
+            confirmed = False
+    return confirmed
 
 
 def publish_owner_event(owner: Any, topic: str, payload: Optional[Mapping[str, Any]] = None,

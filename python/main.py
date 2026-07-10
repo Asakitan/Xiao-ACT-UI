@@ -143,6 +143,75 @@ def _install_msgbox_excepthook():
 _install_msgbox_excepthook()
 
 
+# ── 全进程 hang detector (SAO_HANG_DETECTOR=1 默认开启) ─────────────
+# 主人反馈: 主菜单跑着跑着卡死, 但 compositor watchdog 无报警. 说明卡的
+# 是 Tk 主线程, compositor 内的 phase watchdog 抓不到. 装一个 faulthandler
+# 定时器: 主线程每次机会打个心跳时间戳 (Tk after / compositor tick), 后
+# 台 daemon 线程每 500ms 比对, 超过 SAO_HANG_THRESHOLD_MS (默认 2000ms)
+# 无更新就 dump 所有线程栈到 stderr. 只 dump 一次直到心跳恢复.
+def _install_hang_detector() -> None:
+    if os.environ.get('SAO_HANG_DETECTOR', '1') != '1':
+        return
+    if '--mcp-server' in sys.argv:
+        return
+    try:
+        threshold_ms = float(os.environ.get('SAO_HANG_THRESHOLD_MS', '2000'))
+    except ValueError:
+        threshold_ms = 2000.0
+    try:
+        import threading
+        import time as _t
+        import faulthandler as _fh
+
+        _hb = [_t.perf_counter()]
+        _dumped = [False]
+        _paused = [False]
+
+        def _heartbeat() -> None:
+            _hb[0] = _t.perf_counter()
+            _dumped[0] = False
+
+        def _pause(paused: bool = True) -> None:
+            # 主线程即将做一段合法的长阻塞 (比如 helper driver load 15-30s),
+            # 期间 heartbeat 停 → watchdog 会疯狂 dump. pause 期间跳过检查.
+            _paused[0] = paused
+            if not paused:
+                _hb[0] = _t.perf_counter()  # resume 时重置心跳
+
+        # 暴露到 __main__, sao_gui 的 Tk after 循环可以调
+        sys.modules['__main__']._sao_hang_heartbeat = _heartbeat
+        sys.modules['__main__']._sao_hang_pause = _pause
+
+        def _watchdog() -> None:
+            while True:
+                _t.sleep(0.5)
+                if _paused[0]:
+                    continue
+                elapsed_ms = (_t.perf_counter() - _hb[0]) * 1000.0
+                if elapsed_ms > threshold_ms and not _dumped[0]:
+                    sys.stderr.write(
+                        f'\n[HangDetector] 主线程 {elapsed_ms:.0f}ms 无心跳 '
+                        f'(阈值 {threshold_ms:.0f}ms), dump 所有线程栈:\n')
+                    sys.stderr.flush()
+                    try:
+                        _fh.dump_traceback(file=sys.stderr, all_threads=True)
+                    except Exception:
+                        pass
+                    sys.stderr.write('\n')
+                    sys.stderr.flush()
+                    _dumped[0] = True
+                elif elapsed_ms < threshold_ms:
+                    _dumped[0] = False
+
+        threading.Thread(target=_watchdog, name='HangDetector',
+                         daemon=True).start()
+    except Exception:
+        pass
+
+
+_install_hang_detector()
+
+
 # Nuitka: optionally redirect all output to a log file (no console window).
 # Off by default; set XIAOACT_DEBUG_LOG=1 before launch to enable.
 # --mcp-server 模式依赖 stdout 做 JSON-RPC 通信，必须跳过重定向
@@ -424,15 +493,46 @@ def _early_hardening_bootstrap() -> None:
             pass
 
         if _is_paid:
-            def _spawn_helper():
+            # 2026-07-10: 主人反馈 UI 起来后 Tk 主线程 hide_exstyle → _our_cr3
+            # → _r1_fe IPC 卡等 helper driver load (10-30s), UI 冻死. 主人诉求:
+            # 干脆启动阶段同步等 helper 完全 loaded 再起 UI. 副作用: 启动屏
+            # 幕停几十秒, 但之后 IPC 都秒返回, UI 稳定. 比后台 spawn + Tk 冻
+            # 结体验好.
+            #
+            # SAO_HELPER_ASYNC=1 可回到老的后台 spawn 行为 (仅调试用).
+            _helper_async = os.environ.get('SAO_HELPER_ASYNC') == '1'
+            if _helper_async:
+                def _spawn_helper():
+                    try:
+                        from mem_probe import rt_io_proxy
+                        rt_io_proxy.ensure_loaded()
+                    except Exception:
+                        pass
+                import threading
+                threading.Thread(target=_spawn_helper, daemon=True,
+                                 name='helper-early-spawn').start()
+            else:
+                import time as _t
+                # 暂停 hang detector — helper driver load 15-30s 主线程合法
+                # 长阻塞, 别让 watchdog 疯狂 dump 栈刷屏.
+                _pause_fn = getattr(sys.modules.get('__main__'),
+                                    '_sao_hang_pause', None)
+                if callable(_pause_fn):
+                    _pause_fn(True)
                 try:
                     from mem_probe import rt_io_proxy
-                    rt_io_proxy.ensure_loaded()
-                except Exception:
-                    pass
-
-            import threading
-            threading.Thread(target=_spawn_helper, daemon=True, name='helper-early-spawn').start()
+                    print("[main] loading helper (driver init, "
+                          "expected 5-30s)...", flush=True)
+                    _t0 = _t.time()
+                    _ok = rt_io_proxy.ensure_loaded()
+                    print(f"[main] helper ready ok={_ok} in "
+                          f"{_t.time()-_t0:.1f}s", flush=True)
+                except Exception as _e:
+                    print(f"[main] helper load failed: "
+                          f"{type(_e).__name__}: {_e}", flush=True)
+                finally:
+                    if callable(_pause_fn):
+                        _pause_fn(False)
     except Exception:
         pass
 

@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-# Selftest for mem_probe.mem_access — gating, JSON-safety, async search lifecycle.
+# Selftest for plugin-owned mem_access — gating, JSON-safety, async search lifecycle.
 #
 # Runs entirely against stub owners / a synthetic StarProcess; no game required.
 #
@@ -15,7 +15,7 @@ _ROOT = os.path.dirname(_HERE)
 if _ROOT not in sys.path:
     sys.path.insert(0, _ROOT)
 
-from mem_probe.mem_access import MemAccess  # noqa: E402
+from plugins.star_resonance_plugin.mem.mem_access import MemAccess  # noqa: E402
 
 _passed = 0
 _failed = 0
