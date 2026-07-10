@@ -1,7 +1,7 @@
-"""Render docs/*.md into a themed static HTML site under docs/html/.
-
-Usage: python build_html_docs.py
-"""
+# Render docs/*.md into a themed static HTML site under docs/html/.
+#
+# Usage: python build_html_docs.py
+#
 from __future__ import annotations
 
 import re

@@ -1,24 +1,24 @@
-﻿# -*- coding: utf-8 -*-
-"""SAO Utils 风格 UI 组件 (package).
-
-在 tkinter 中重现 SAO 风格的:
-  - PopUpMenu (全屏弹出菜单 + 半透明遮罩)
-  - MenuBar (圆形图标按钮条, 下落动画, 滚轮切换)
-  - LeftInfo (左侧用户信息面板, 展开动画)
-  - ChildBar (右侧子菜单, 下拉动画)
-    - Generic Alert (对话框, 宽度展开动画, 文字渐现)
-  - HP Bar (血条进度条, 绿/黄/红渐变)
-  - LinkStart (LINK START 粒子入场动画)
-
-This is a pure physical split of the former monolithic ``sao_theme.py``
-into sibling submodules. Re-exports below preserve 100% backward
-compatibility: ``from sao_theme import SAOColors, SAOPopUpMenu, ...`` and
-``import sao_theme; sao_theme.SAOColors`` keep working unchanged.
-
-Submodules are imported in topological order (low-level first) so that
-sibling absolute imports (``from sao_theme.colors import SAOColors`` etc.)
-never hit a half-initialized package.
-"""
+# -*- coding: utf-8 -*-
+# SAO Utils 风格 UI 组件 (package).
+#
+# 在 tkinter 中重现 SAO 风格的:
+#   - PopUpMenu (全屏弹出菜单 + 半透明遮罩)
+#   - MenuBar (圆形图标按钮条, 下落动画, 滚轮切换)
+#   - LeftInfo (左侧用户信息面板, 展开动画)
+#   - ChildBar (右侧子菜单, 下拉动画)
+#     - Generic Alert (对话框, 宽度展开动画, 文字渐现)
+#   - HP Bar (血条进度条, 绿/黄/红渐变)
+#   - LinkStart (LINK START 粒子入场动画)
+#
+# This is a pure physical split of the former monolithic ``sao_theme.py``
+# into sibling submodules. Re-exports below preserve 100% backward
+# compatibility: ``from sao_theme import SAOColors, SAOPopUpMenu, ...`` and
+# ``import sao_theme; sao_theme.SAOColors`` keep working unchanged.
+#
+# Submodules are imported in topological order (low-level first) so that
+# sibling absolute imports (``from sao_theme.colors import SAOColors`` etc.)
+# never hit a half-initialized package.
+#
 
 # ── 底层: 配色 / 工具 / theme registry / 动画引擎 ──
 from sao_theme.colors import SAOColors

@@ -7,11 +7,11 @@ from typing import Dict, Optional
 
 
 class CpuTracker:
-    """Track per-process CPU% via NtQuerySystemInformation time deltas.
-
-    Call ``update(entries)`` with a list of ProcessEntry objects from
-    ``_iter_process_entries_ext()``.  Returns a dict mapping pid → cpu%.
-    """
+    # Track per-process CPU% via NtQuerySystemInformation time deltas.
+    #
+    #     Call ``update(entries)`` with a list of ProcessEntry objects from
+    #     ``_iter_process_entries_ext()``.  Returns a dict mapping pid → cpu%.
+    #
 
     def __init__(self) -> None:
         self._prev: Dict[int, int] = {}

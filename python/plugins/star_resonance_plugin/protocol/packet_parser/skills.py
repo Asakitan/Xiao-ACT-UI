@@ -1,8 +1,8 @@
-﻿# -*- coding: utf-8 -*-
-"""Profession / skill mapping tables extracted from packet_parser (physical split).
-
-Self-contained: depends on no other packet_parser submodule.
-"""
+# -*- coding: utf-8 -*-
+# Profession / skill mapping tables extracted from packet_parser (physical split).
+#
+# Self-contained: depends on no other packet_parser submodule.
+#
 
 from typing import Dict
 
@@ -118,11 +118,11 @@ SUB_PROFESSION_NAMES: Dict[int, str] = {
 
 
 def _compose_skill_level_id(skill_id: int, level: int = 0) -> int:
-    """Compose a skill_level_id from a base skill_id and skill level.
-
-    Convention: skill_level_id = skill_id * 100 + level.
-    Returns skill_id as-is if level is 0 or negative.
-    """
+    # Compose a skill_level_id from a base skill_id and skill level.
+    #
+    #     Convention: skill_level_id = skill_id * 100 + level.
+    #     Returns skill_id as-is if level is 0 or negative.
+    #
     skill_id = int(skill_id or 0)
     level = int(level or 0)
     if skill_id <= 0:

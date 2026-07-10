@@ -549,7 +549,7 @@ class MemSearchManager:
 
 
 def cancel_search_jobs_for_bridge(bridge: Any) -> tuple[threading.Thread, ...]:
-    """Cancel and return all live manual-search workers borrowing ``bridge``."""
+    # Cancel and return all live manual-search workers borrowing ``bridge``.
     if bridge is None:
         return ()
     with _SEARCH_MANAGERS_LOCK:

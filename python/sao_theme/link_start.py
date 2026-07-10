@@ -1,5 +1,5 @@
-﻿# -*- coding: utf-8 -*-
-"""SAOLinkStart (split from sao_theme.py — verbatim)."""
+# -*- coding: utf-8 -*-
+# SAOLinkStart (split from sao_theme.py — verbatim).
 import tkinter as tk
 import math
 import time
@@ -29,20 +29,20 @@ from sao_theme.utils import ease_out, ease_in, ease_in_out, lerp, lerp_color, he
 
 # ──────────────────── LINK START 动画 ────────────────────
 class SAOLinkStart:
-    """
-    LINK START 入场动画 — 忠实还原 SAO-UI 粒子隧道飞行效果
-
-    核心原理 (参考 Cad-noob/SAO-UI):
-      ~250 个细长条粒子 (3px × 300px) 静止排列在圆柱隧道中,
-      摄像机以 cubic-bezier(0.8, 0.1, 0.9, 0.8) 加速飞过隧道,
-      透视投影使粒子从中心向四周急速飞散, 产生超时空隧道飞行感.
-
-    完整动画序列 (总计~9.0s):
-      Phase 1 (0.0~3.5s)  白闪→彩色隧道 — 摄像机飞过 250 根彩色粒子
-      Phase 2 (3.5~5.5s)  灰底文字 — "Welcome to / 咲 ACT UI!" 飞入飞出
-      Phase 3 (5.5~7.5s)  蓝色隧道 — 250 根蓝色粒子, 渐亮
-      Phase 4 (7.5~9.0s)  全屏蓝白闪光 → 渐隐透出
-    """
+    #
+    #     LINK START 入场动画 — 忠实还原 SAO-UI 粒子隧道飞行效果
+    #
+    #     核心原理 (参考 Cad-noob/SAO-UI):
+    #       ~250 个细长条粒子 (3px × 300px) 静止排列在圆柱隧道中,
+    #       摄像机以 cubic-bezier(0.8, 0.1, 0.9, 0.8) 加速飞过隧道,
+    #       透视投影使粒子从中心向四周急速飞散, 产生超时空隧道飞行感.
+    #
+    #     完整动画序列 (总计~9.0s):
+    #       Phase 1 (0.0~3.5s)  白闪→彩色隧道 — 摄像机飞过 250 根彩色粒子
+    #       Phase 2 (3.5~5.5s)  灰底文字 — "Welcome to / 咲 ACT UI!" 飞入飞出
+    #       Phase 3 (5.5~7.5s)  蓝色隧道 — 250 根蓝色粒子, 渐亮
+    #       Phase 4 (7.5~9.0s)  全屏蓝白闪光 → 渐隐透出
+    #
 
     # ──── SAO-UI 8色循环 (与原版一致) ────
     _COLORS_8 = [
@@ -420,13 +420,13 @@ void main() {
     #  Link Start 音效播放 (3阶段)
     # ════════════════════════════════════════════════════════
     def _play_sound(self):
-        """3阶段音效: LinkStart → Startup → Welcome
-
-        对应动画时间线:
-          Phase 1 (t=0.0s):  启动提示音 — 彩色隧道开始
-          Phase 1 (t=1.5s):  启动推进音 — 隧道飞向中, 持续到 P2 结束
-          Phase 3 (t=5.2s):  欢迎音 — 蓝色隧道开始, 持续到 P4 结束
-        """
+        # 3阶段音效: LinkStart → Startup → Welcome
+        #
+        #         对应动画时间线:
+        #           Phase 1 (t=0.0s):  启动提示音 — 彩色隧道开始
+        #           Phase 1 (t=1.5s):  启动推进音 — 隧道飞向中, 持续到 P2 结束
+        #           Phase 3 (t=5.2s):  欢迎音 — 蓝色隧道开始, 持续到 P4 结束
+        #
         import threading
 
         def _do_play(name):
@@ -454,7 +454,7 @@ void main() {
         threading.Timer(5.2, lambda: _do_play('alo_welcome')).start()
 
     def _detect_refresh_hz(self) -> float:
-        """Detect display refresh rate for non-vsync fallback scheduling."""
+        # Detect display refresh rate for non-vsync fallback scheduling.
         try:
             from render import gpu_overlay_window as _gow
             pump = _gow.get_glfw_pump(self.root)
@@ -578,11 +578,11 @@ void main() {
     #  隧道粒子生成 (SAO-UI 模型: 静态圆柱排列)
     # ════════════════════════════════════════════════════════
     def _gen_tunnel(self, colors: list, num_particles: int = None) -> list:
-        """
-        生成 ~300 根静态隧道粒子.
-        粒子分布在较深的范围, 摄像机从后方飞向前方,
-        视觉上粒子会从中心小点逐渐变大并飞过摄像机.
-        """
+        #
+        #         生成 ~300 根静态隧道粒子.
+        #         粒子分布在较深的范围, 摄像机从后方飞向前方,
+        #         视觉上粒子会从中心小点逐渐变大并飞过摄像机.
+        #
         particles = []
         n = num_particles if num_particles is not None else self._NUM_PARTICLES
         for i in range(n):
@@ -606,7 +606,7 @@ void main() {
         return particles
 
     def _try_start_gpu_present_window(self, sw: int, sh: int) -> bool:
-        """优先使用 GLFW/ModernGL 直出窗口，避免每帧 FBO.read → Tk 贴图。"""
+        # 优先使用 GLFW/ModernGL 直出窗口，避免每帧 FBO.read → Tk 贴图。
         if not _HAS_MODERNGL:
             print('[LinkStart] GPU present unavailable: moderngl import failed')
             return False
@@ -648,7 +648,7 @@ void main() {
             return False
 
     def _try_start_gpu_present_window_strict(self, sw: int, sh: int) -> bool:
-        """Start direct GPU presentation; recover once if old startup code suspended creation."""
+        # Start direct GPU presentation; recover once if old startup code suspended creation.
         if self._try_start_gpu_present_window(sw, sh):
             return True
         try:
@@ -707,7 +707,7 @@ void main() {
             self._post_gpu_present_finish()
 
     def _post_gpu_present_finish(self) -> None:
-        """GPU 直出结束后只投递一次 Tk 收尾；不使用 Tk 帧循环驱动动画。"""
+        # GPU 直出结束后只投递一次 Tk 收尾；不使用 Tk 帧循环驱动动画。
         if getattr(self, '_gpu_present_finish_posted', False):
             return
         self._gpu_present_finish_posted = True
@@ -742,10 +742,10 @@ void main() {
     @staticmethod
     def _cubic_bezier_y(t_x: float, p1x: float, p1y: float,
                         p2x: float, p2y: float) -> float:
-        """
-        给定时间比例 t_x ∈ [0,1], 用二分法求 cubic-bezier 的输出 y.
-        cubic-bezier(0.8, 0.1, 0.9, 0.8) → 前期极慢, 后期急加速.
-        """
+        #
+        #         给定时间比例 t_x ∈ [0,1], 用二分法求 cubic-bezier 的输出 y.
+        #         cubic-bezier(0.8, 0.1, 0.9, 0.8) → 前期极慢, 后期急加速.
+        #
         lo, hi = 0.0, 1.0
         for _ in range(25):
             mid = (lo + hi) * 0.5
@@ -760,20 +760,20 @@ void main() {
         return 3 * inv * inv * s * p1y + 3 * inv * s * s * p2y + s ** 3
 
     def _cam_z(self, phase_elapsed: float, duration: float) -> float:
-        """摄像机 Z 坐标: cubic-bezier 从 _CAM_Z_START 到 _CAM_Z_END"""
+        # 摄像机 Z 坐标: cubic-bezier 从 _CAM_Z_START 到 _CAM_Z_END
         t = max(0.0, min(1.0, phase_elapsed / duration))
         eased = self._cubic_bezier_y(t, 0.8, 0.1, 0.9, 0.8)
         return self._CAM_Z_START + (self._CAM_Z_END - self._CAM_Z_START) * eased
 
     def _cam_z_end_velocity(self, duration: float) -> float:
-        """_cam_z 在结束点的速度，用于飞出段无停顿续接。"""
+        # _cam_z 在结束点的速度，用于飞出段无停顿续接。
         # cubic-bezier(0.8, 0.1, 0.9, 0.8) 在终点的 dy/dx。
         end_slope = (1.0 - 0.8) / max(1.0e-6, 1.0 - 0.9)
         return (self._CAM_Z_END - self._CAM_Z_START) * end_slope / max(0.01, duration)
 
     def _cam_z_with_exit(self, phase_elapsed: float, duration: float,
                          exit_start: float, exit_duration: float) -> float:
-        """相机结束段继续 overshoot，确保圆柱体尾巴整体飞出屏幕。"""
+        # 相机结束段继续 overshoot，确保圆柱体尾巴整体飞出屏幕。
         cam_z = self._cam_z(phase_elapsed, duration)
         if phase_elapsed <= exit_start or exit_duration <= 0.0:
             return cam_z
@@ -792,7 +792,7 @@ void main() {
     _GL_TUBE_RADIUS = 1.8     # 管子视觉半径(世界单位)
 
     def _init_gl(self, ctx=None):
-        """创建/绑定 ModernGL context, 着色器, 几何体, FBO."""
+        # 创建/绑定 ModernGL context, 着色器, 几何体, FBO.
         if ctx is None:
             ctx = moderngl.create_standalone_context()
         self._gl_ctx = ctx
@@ -1016,7 +1016,7 @@ void main() {
         self._ensure_gl_static_text_textures()
 
     def _destroy_gl(self):
-        """释放 OpenGL 资源."""
+        # 释放 OpenGL 资源.
         if self._gl_ctx and not getattr(self, '_gpu_present_enabled', False):
             try:
                 self._gl_ctx.release()
@@ -1040,19 +1040,19 @@ void main() {
     #  构建 View-Projection 矩阵
     # ════════════════════════════════════════════════════════
     def _build_vp_matrix(self, cam_z: float) -> np.ndarray:
-        """
-        构建 view-projection 矩阵, 转置后传给 GLSL.
-
-        坐标系约定:
-          - 世界空间 Z = 隧道前方 (+Z 为前)
-          - 摄像机在 (0,0,cam_z), 朝 +Z 看
-          - 眼空间 Z = -(world_z - cam_z)  → 标准 OpenGL (-Z 为前)
-          - 近平面/远平面: near=1, far=10000
-
-        Python 中用行主序写矩阵, 做 proj @ view, 再 .T 传 GLSL.
-        GLSL 收到后: gl_Position = u_vp * vec4(pos, 1.0)
-        等价于 math: vp_python @ pos  (正确)
-        """
+        #
+        #         构建 view-projection 矩阵, 转置后传给 GLSL.
+        #
+        #         坐标系约定:
+        #           - 世界空间 Z = 隧道前方 (+Z 为前)
+        #           - 摄像机在 (0,0,cam_z), 朝 +Z 看
+        #           - 眼空间 Z = -(world_z - cam_z)  → 标准 OpenGL (-Z 为前)
+        #           - 近平面/远平面: near=1, far=10000
+        #
+        #         Python 中用行主序写矩阵, 做 proj @ view, 再 .T 传 GLSL.
+        #         GLSL 收到后: gl_Position = u_vp * vec4(pos, 1.0)
+        #         等价于 math: vp_python @ pos  (正确)
+        #
         sw, sh = self._sw, self._sh
         focal = self._FOCAL
 
@@ -1104,10 +1104,10 @@ void main() {
                      t: float = 0.0,
                      motion_blur: float = 0.0,
                      cam_velocity: float = 0.0):
-        """
-        3D 隧道渲染. 如果 OpenGL 可用, 使用真 3D 圆柱体 + Blinn-Phong;
-        否则回退到 Canvas 2D.
-        """
+        #
+        #         3D 隧道渲染. 如果 OpenGL 可用, 使用真 3D 圆柱体 + Blinn-Phong;
+        #         否则回退到 Canvas 2D.
+        #
         if self._gl_ctx:
             try:
                 self._draw_tunnel_gl(cv, particles, cam_z, bg, fade, t,
@@ -1123,7 +1123,7 @@ void main() {
 
     @staticmethod
     def _with_alpha(img: Image.Image, opacity: float) -> Image.Image:
-        """返回 alpha 乘过 opacity 的 RGBA 图，用于 GL UI 纹理合成。"""
+        # 返回 alpha 乘过 opacity 的 RGBA 图，用于 GL UI 纹理合成。
         opacity = max(0.0, min(1.0, float(opacity)))
         if opacity >= 0.999:
             return img
@@ -1135,7 +1135,7 @@ void main() {
 
     def _paste_gl_ui(self, base: Image.Image, img: Image.Image, x: int, y: int,
                      anchor: str = 'center', opacity: float = 1.0):
-        """把透明 UI 子图贴到 GL UI 纹理上，坐标语义接近 Tk anchor。"""
+        # 把透明 UI 子图贴到 GL UI 纹理上，坐标语义接近 Tk anchor。
         if img is None or opacity <= 0.01:
             return
         w, h = img.size
@@ -1168,7 +1168,7 @@ void main() {
                                stroke_rgba=(0, 0, 0, 0), glow_rgba=(0, 0, 0, 0),
                                stroke_width: int = 0, blur_radius: float = 0.0,
                                tracking: int = 0) -> Image.Image:
-        """渲染带字距和辉光的文字贴图，供 OpenGL UI 层采样。"""
+        # 渲染带字距和辉光的文字贴图，供 OpenGL UI 层采样。
         qsize = max(6, int(round(size)))
         qstroke = max(0, int(round(stroke_width)))
         tracking = int(round(tracking))
@@ -1227,7 +1227,7 @@ void main() {
         return img
 
     def _calc_boot_panel_state(self, t: float):
-        """计算 Web 同款启动框时序和屏幕矩形，供 GPU shader 使用。"""
+        # 计算 Web 同款启动框时序和屏幕矩形，供 GPU shader 使用。
         if t < 0.0 or t >= 1.58:
             return None
         if t < 0.16:
@@ -1266,11 +1266,11 @@ void main() {
         }
 
     def _ensure_gl_boot_text_texture(self, state):
-        """Boot text is pre-baked once; shader maps it into animated panel rect."""
+        # Boot text is pre-baked once; shader maps it into animated panel rect.
         return
 
     def _ensure_gl_static_text_textures(self):
-        """Pre-bake all GL text atlases once; animation frames only update uniforms."""
+        # Pre-bake all GL text atlases once; animation frames only update uniforms.
         if not self._gl_ctx or self._gl_ui_tex is None or self._gl_boot_text_tex is None:
             return
         sig = (self._sw, self._sh)
@@ -1349,11 +1349,11 @@ void main() {
         self._gl_static_text_sig = sig
 
     def _draw_gl_boot_panel_ui(self, img: Image.Image, t: float):
-        """启动框 GL 模式由 shader 绘制；这里保留空实现供旧调用兼容。"""
+        # 启动框 GL 模式由 shader 绘制；这里保留空实现供旧调用兼容。
         return
 
     def _draw_gl_text_layer_ui(self, img: Image.Image, scene_t: float):
-        """Web text-layer 的 OpenGL UI 纹理版本：只保留文字，不再画 P2 外框。"""
+        # Web text-layer 的 OpenGL UI 纹理版本：只保留文字，不再画 P2 外框。
         op = 0.0
         scale = 0.2
         if self._P2_START - 0.2 <= scene_t < self._P2_END + 0.3:
@@ -1393,7 +1393,7 @@ void main() {
         self._paste_gl_ui(img, text2, cx, top + text1.height + gap, anchor='n')
 
     def _draw_gl_connected_layer_ui(self, img: Image.Image, scene_t: float):
-        """Web connected-layer 的 OpenGL UI 纹理版本。"""
+        # Web connected-layer 的 OpenGL UI 纹理版本。
         op = 0.0
         if scene_t >= self._P4_START:
             if scene_t < 7.7:
@@ -1419,7 +1419,7 @@ void main() {
         self._paste_gl_ui(img, sub, cx, top + main.height + 14, anchor='n')
 
     def _calc_gl_p2_text_state(self, scene_t: float):
-        """P2 text state for shader-only animation; no PIL/Tk work per frame."""
+        # P2 text state for shader-only animation; no PIL/Tk work per frame.
         op = 0.0
         scale = 1.0
         if self._P2_START - 0.2 <= scene_t < self._P2_END + 0.3:
@@ -1441,7 +1441,7 @@ void main() {
         return max(0.0, min(1.0, op)), max(0.001, float(scale))
 
     def _calc_gl_connected_opacity(self, scene_t: float) -> float:
-        """P4 connected text opacity for shader-only animation."""
+        # P4 connected text opacity for shader-only animation.
         if scene_t < self._P4_START:
             return 0.0
         if scene_t < 7.7:
@@ -1451,7 +1451,7 @@ void main() {
         return max(0.0, 1.0 - (scene_t - self._P4_HOLD_END) / max(0.01, self._P4_FADE_END - self._P4_HOLD_END))
 
     def _calc_p3_p4_fx_state(self, scene_t: float, p3_fade: float = 1.0):
-        """Continuous cool-blue background FX through the P3→P4 handoff."""
+        # Continuous cool-blue background FX through the P3→P4 handoff.
         p3_dur = self._P3_END - self._P3_START
         p3_t = scene_t - self._P3_START
         exit_elapsed = max(0.0, scene_t - self._P3_END)
@@ -1473,13 +1473,13 @@ void main() {
         return energy, in_flash + exit_flash, (0.45, 0.80, 1.00), motion_mix
 
     def _render_gl_ui_layer(self, elapsed: float, scene_t: float):
-        """Ensure static GL text atlases exist; per-frame text animation is shader-only."""
+        # Ensure static GL text atlases exist; per-frame text animation is shader-only.
         if not self._gl_ctx or self._gl_ui_tex is None:
             return
         self._ensure_gl_static_text_textures()
 
     def _postprocess_gl_scene(self, elapsed: float = 0.0):
-        """把 scene FBO + history + UI texture 做最终后处理，结果留在 ping-pong 纹理。"""
+        # 把 scene FBO + history + UI texture 做最终后处理，结果留在 ping-pong 纹理。
         ctx = self._gl_ctx
         sw, sh = self._sw, self._sh
         scene_t = elapsed - self._STARTUP_PRELUDE
@@ -1538,7 +1538,7 @@ void main() {
         return write_fbo
 
     def _present_gl_scene(self, cv: tk.Canvas, elapsed: float = 0.0):
-        """把 scene FBO + history + UI texture 做最终后处理并读回给 Tk 仅展示。"""
+        # 把 scene FBO + history + UI texture 做最终后处理并读回给 Tk 仅展示。
         write_fbo = self._postprocess_gl_scene(elapsed)
         if write_fbo is None:
             return
@@ -1562,7 +1562,7 @@ void main() {
                 self._gl_canvas_item = cv.create_image(0, 0, image=self._gl_photo, anchor='nw')
 
     def _draw_startup_gl(self, cv: tk.Canvas, bg: str, t: float = 0.0):
-        """启动扫描前奏专用 GPU 渲染：只跑背景 shader，避免几何与后处理拖慢 FPS。"""
+        # 启动扫描前奏专用 GPU 渲染：只跑背景 shader，避免几何与后处理拖慢 FPS。
         if not self._gl_ctx:
             return
         ctx = self._gl_ctx
@@ -1591,14 +1591,14 @@ void main() {
                         t: float = 0.0,
                         motion_blur: float = 0.0,
                         cam_velocity: float = 0.0):
-        """
-        使用 ModernGL 渲染真 3D 圆柱体隧道.
-
-        每根粒子 = 一根小圆柱管, 分布在大圆柱隧道表面.
-        光源在隧道中轴 = 所有管子内侧受光, 外侧暗.
-        Blinn-Phong + Fresnel rim = 逼真 3D 质感.
-        深度缓冲自动处理 Z 排序, 粒子自然飞出屏幕.
-        """
+        #
+        #         使用 ModernGL 渲染真 3D 圆柱体隧道.
+        #
+        #         每根粒子 = 一根小圆柱管, 分布在大圆柱隧道表面.
+        #         光源在隧道中轴 = 所有管子内侧受光, 外侧暗.
+        #         Blinn-Phong + Fresnel rim = 逼真 3D 质感.
+        #         深度缓冲自动处理 Z 排序, 粒子自然飞出屏幕.
+        #
         ctx = self._gl_ctx
         sw, sh = self._sw, self._sh
         bgr, bgg, bgb = hex_to_rgb(bg)
@@ -1722,7 +1722,7 @@ void main() {
         self._present_gl_scene(cv, elapsed=getattr(self, '_gl_elapsed', t))
 
     def _render_linkstart_gl_frame(self, elapsed: float, target_fbo=None, readback_canvas=None) -> bool:
-        """按当前时间线渲染一帧 GL LinkStart；target_fbo 保留给直出路径。"""
+        # 按当前时间线渲染一帧 GL LinkStart；target_fbo 保留给直出路径。
         if not self._gl_ctx:
             return False
         scene_t = elapsed - self._STARTUP_PRELUDE
@@ -1815,7 +1815,7 @@ void main() {
     def _draw_tunnel_canvas(self, cv: tk.Canvas, particles: list,
                             cam_z: float, bg: str, fade: float = 1.0,
                             t: float = 0.0):
-        """Canvas 回退: 锥形多边形 + 屏幕空间高光."""
+        # Canvas 回退: 锥形多边形 + 屏幕空间高光.
         cx, cy = self._cx, self._cy
         focal = self._FOCAL
         sw, sh = self._sw, self._sh
@@ -1948,7 +1948,7 @@ void main() {
         self._animate_canvas_frame(elapsed, scene_t)
 
     def _animate_canvas_frame(self, elapsed: float, scene_t: float):
-        """Tk/Canvas 或非直出 GL 的单帧渲染；直出 GPU 不走这里。"""
+        # Tk/Canvas 或非直出 GL 的单帧渲染；直出 GPU 不走这里。
         cv = self._canvas
         sw, sh = self._sw, self._sh
         use_gl = self._gl_ctx is not None
@@ -2096,7 +2096,7 @@ void main() {
         self._schedule_next_frame()
 
     def _schedule_next_frame(self):
-        """用绝对 deadline 调度下一帧，避免 Tk after 累计漂移。"""
+        # 用绝对 deadline 调度下一帧，避免 Tk after 累计漂移。
         if getattr(self, '_gpu_present_enabled', False):
             if not self._gpu_present_window:
                 return
@@ -2117,7 +2117,7 @@ void main() {
     #  背景颜色
     # ════════════════════════════════════════════════════════
     def _calc_bg(self, t: float) -> str:
-        """背景: 深色开始, 微微变亮, 给粒子对比度"""
+        # 背景: 深色开始, 微微变亮, 给粒子对比度
         if t < 0.12:
             return '#02040a'
         elif t < 0.72:
@@ -2140,7 +2140,7 @@ void main() {
             return '#1a2a4a'
 
     def _blend_over_bg(self, bg_hex: str, fg_rgb: tuple, alpha: float) -> str:
-        """将目标颜色按 alpha 混到当前背景上, 避免 Canvas 特效显得生硬."""
+        # 将目标颜色按 alpha 混到当前背景上, 避免 Canvas 特效显得生硬.
         alpha = max(0.0, min(1.0, alpha))
         br, bg, bb = hex_to_rgb(bg_hex)
         fr, fg, fb = fg_rgb
@@ -2151,7 +2151,7 @@ void main() {
         )
 
     def _draw_start_aperture_cv(self, cv: tk.Canvas, t: float, bg: str):
-        """Canvas 回退的中心光阀: 从一条水平狭缝快速扩张成椭圆视域."""
+        # Canvas 回退的中心光阀: 从一条水平狭缝快速扩张成椭圆视域.
         if t < 0.0 or t > 0.72:
             return
 
@@ -2199,7 +2199,7 @@ void main() {
             cv.create_line(0, cy + slit_h, sw, cy + slit_h, fill=feather, width=1)
 
     def _draw_entry_burst_cv(self, cv: tk.Canvas, t: float, bg: str):
-        """开场聚焦: 更克制的中心 bloom + 横向镜头 flare."""
+        # 开场聚焦: 更克制的中心 bloom + 横向镜头 flare.
         if t <= 0.0 or t > 1.2:
             return
 
@@ -2257,7 +2257,7 @@ void main() {
                            width=1 if off else 2)
 
     def _draw_start_connect_cv(self, cv: tk.Canvas, t: float, bg: str):
-        """LinkStart 最开头的 SAO 连接启动爆散: 中心白核 + 冲击环 + 水平闪光."""
+        # LinkStart 最开头的 SAO 连接启动爆散: 中心白核 + 冲击环 + 水平闪光.
         if t < 0.0 or t > 0.72:
             return
 
@@ -2307,7 +2307,7 @@ void main() {
                            fill=col, width=1 if off else 2)
 
     def _draw_start_nervegear_panel_cv(self, cv: tk.Canvas, t: float, bg: str):
-        """LinkStart 开头的 NErVGEAR 中央启动框，移植 C# splash 的方框感。"""
+        # LinkStart 开头的 NErVGEAR 中央启动框，移植 C# splash 的方框感。
         if t < 0.0 or t > 1.58:
             return
 
@@ -2416,7 +2416,7 @@ void main() {
             stroke_width=1, blur_radius=1.0, anchor='s')
 
     def _draw_global_bloom_cv(self, cv: tk.Canvas, t: float, bg: str):
-        """整段 LinkStart 的轻量辉光罩，让 Canvas 回退也有发光感。"""
+        # 整段 LinkStart 的轻量辉光罩，让 Canvas 回退也有发光感。
         cx, cy = self._cx, self._cy
         sw, sh = self._sw, self._sh
         pulse = 0.5 + 0.5 * math.sin(t * 1.65)
@@ -2431,7 +2431,7 @@ void main() {
 
     def _draw_focus_flow_cv(self, cv: tk.Canvas, phase_t: float, phase_dur: float,
                             fade: float, bg: str, warm: bool = True):
-        """隧道聚焦层: 细长 flare、双层焦环、轻微扫光, 避免杂乱射线感."""
+        # 隧道聚焦层: 细长 flare、双层焦环、轻微扫光, 避免杂乱射线感.
         if fade <= 0.03 or phase_dur <= 0:
             return
 
@@ -2513,11 +2513,11 @@ void main() {
     #  P1 结束圆形扫场
     # ════════════════════════════════════════════════════════
     def _draw_p1_circle_wipe(self, cv: tk.Canvas, t: float):
-        """
-        P1 结束时从中心向外扩张的暗色圆形, 把残留圆柱体盖住.
-        动画: 0.45s 内从半径 0 扩张到覆盖全屏.
-        边缘带一圈青蓝色光晕, 呼应 SAO 风格.
-        """
+        #
+        #         P1 结束时从中心向外扩张的暗色圆形, 把残留圆柱体盖住.
+        #         动画: 0.45s 内从半径 0 扩张到覆盖全屏.
+        #         边缘带一圈青蓝色光晕, 呼应 SAO 风格.
+        #
         sw, sh = self._sw, self._sh
         cx, cy = self._cx, self._cy
         diag = self._diag
@@ -2562,7 +2562,7 @@ void main() {
                                     stroke_width: int = 1,
                                     blur_radius: float = 1.0,
                                     anchor: str = 'center'):
-        """使用 LinkStart 的 SAOUI sprite 管线在 Canvas 上绘制英文文本."""
+        # 使用 LinkStart 的 SAOUI sprite 管线在 Canvas 上绘制英文文本.
         sprite = self._get_linkstart_text_sprite(
             text, 'sao', size,
             fill_rgba, stroke_rgba, glow_rgba,
@@ -2599,7 +2599,7 @@ void main() {
     # ════════════════════════════════════════════════════════
     def _draw_tunnel_hud_overlay(self, cv: tk.Canvas, t: float, fade: float,
                                   warm: bool = True):
-        """在隧道飞行阶段叠加 SAO 风格 HUD 角标和数据标签."""
+        # 在隧道飞行阶段叠加 SAO 风格 HUD 角标和数据标签.
         if fade < 0.08:
             return
         sw, sh = self._sw, self._sh
@@ -2674,7 +2674,7 @@ void main() {
     #  P4 "CONNECTED" 叠加文字
     # ════════════════════════════════════════════════════════
     def _draw_connected_overlay(self, cv: tk.Canvas, t: float):
-        """在 P4 早期闪现 'SYSTEM >> CONNECTED' 确认文字."""
+        # 在 P4 早期闪现 'SYSTEM >> CONNECTED' 确认文字.
         wt = t - self._P4_START
         fade_start = self._P4_HOLD_END - self._P4_START
         fade_end = self._P4_FADE_END - self._P4_START
@@ -2708,10 +2708,10 @@ void main() {
     #  白闪 + 渐隐
     # ════════════════════════════════════════════════════════
     def _draw_whiteout_cv(self, cv, t):
-        """
-        Phase 4: 从隧道中心向外扩散的光 → 整体渐亮 → 窗口淡出.
-        不是廉价的矩形填充, 而是从中心径向扩散.
-        """
+        #
+        #         Phase 4: 从隧道中心向外扩散的光 → 整体渐亮 → 窗口淡出.
+        #         不是廉价的矩形填充, 而是从中心径向扩散.
+        #
         sw, sh = self._sw, self._sh
         cx, cy = self._cx, self._cy
         diag = self._diag
@@ -2777,7 +2777,7 @@ void main() {
                 pass
 
     def _get_linkstart_pil_font(self, size: int, family: str = 'sao'):
-        """LinkStart 专用 PIL 字体加载: SAOUI / ZhuZiAYuanJWD."""
+        # LinkStart 专用 PIL 字体加载: SAOUI / ZhuZiAYuanJWD.
         size = max(6, int(size))
         key = (family, size)
         if key in self._ls_font_cache:
@@ -2811,7 +2811,7 @@ void main() {
         return font
 
     def _prewarm_linkstart_p2_sprites(self):
-        """预热 P2 文字 / HUD 所需 sprite，尽量把 PIL 开销前移到 P1。"""
+        # 预热 P2 文字 / HUD 所需 sprite，尽量把 PIL 开销前移到 P1。
         if self._ls_p2_prewarmed:
             return
 
@@ -2883,7 +2883,7 @@ void main() {
     def _get_linkstart_text_sprite(self, text: str, family: str, size: int,
                                    fill_rgba, stroke_rgba, glow_rgba,
                                    stroke_width: int, blur_radius: float = 3.0):
-        """缓存化文字 sprite，避免文字阶段每帧整屏 PIL 合成。"""
+        # 缓存化文字 sprite，避免文字阶段每帧整屏 PIL 合成。
         qsize = max(6, int(round(size / 4.0) * 4))
         qstroke = max(0, int(round(stroke_width)))
         qblur = round(float(blur_radius) * 2.0) / 2.0
@@ -2932,7 +2932,7 @@ void main() {
     def _get_linkstart_mixed_text_sprite(self, segments, size: int,
                                          fill_rgba, stroke_rgba, glow_rgba,
                                          stroke_width: int, blur_radius: float = 3.0):
-        """按片段混合 SAOUI / CJK 字体，保证英文数字走 SAOUI。"""
+        # 按片段混合 SAOUI / CJK 字体，保证英文数字走 SAOUI。
         qsize = max(6, int(round(size / 4.0) * 4))
         qstroke = max(0, int(round(stroke_width)))
         qblur = round(float(blur_radius) * 2.0) / 2.0
@@ -2995,7 +2995,7 @@ void main() {
         return payload
 
     def _draw_linkstart_hud(self, cv: tk.Canvas, t: float, vis: float):
-        """文字阶段 HUD: 左右两侧使用远近两层漂移, 保持非对称飞掠感."""
+        # 文字阶段 HUD: 左右两侧使用远近两层漂移, 保持非对称飞掠感.
         cx, cy = self._cx, self._cy
         sw = self._sw
         phase = (t - self._P2_START) / max(0.01, (self._P2_END - self._P2_START))
@@ -3128,7 +3128,7 @@ void main() {
                 accent_up=layer['accent_up'])
 
     def _get_text_phase_state(self, t: float):
-        """计算 P2 文字段落的共享状态, 供 underlay / overlay 复用."""
+        # 计算 P2 文字段落的共享状态, 供 underlay / overlay 复用.
         if t < self._P2_START or t > self._P2_END:
             return None
 
@@ -3236,7 +3236,7 @@ void main() {
         }
 
     def _draw_text_phase_underlay(self, cv: tk.Canvas, t: float, state=None):
-        """P2 文本背景层: 只负责底层 flare / 框角, 以便与圆柱体层分离."""
+        # P2 文本背景层: 只负责底层 flare / 框角, 以便与圆柱体层分离.
         state = state or self._get_text_phase_state(t)
         if not state:
             return
@@ -3278,7 +3278,7 @@ void main() {
                            frame_right - inset, frame_bottom - 24 - inset, fill=line, width=2)
 
     def _draw_segmented_reveal_mask(self, cv: tk.Canvas, state):
-        """P2 文字 reveal: 分段栅格扫描, 避免整块单向擦除."""
+        # P2 文字 reveal: 分段栅格扫描, 避免整块单向擦除.
         reveal_t = state['reveal_t']
         vis = state['vis']
         if reveal_t >= 1.0 and vis >= 0.999:
@@ -3333,7 +3333,7 @@ void main() {
                            fill=self._blend_over_bg(bg_fill, (108, 230, 255), 0.16 * vis), width=1)
 
     def _render_text_phase(self, cv: tk.Canvas, t: float, state=None):
-        """用 SAOUI / ZhuZiAYuanJWD 渲染更炫酷的 LinkStart 文字段落."""
+        # 用 SAOUI / ZhuZiAYuanJWD 渲染更炫酷的 LinkStart 文字段落.
         state = state or self._get_text_phase_state(t)
         if not state:
             return

@@ -1,6 +1,6 @@
-﻿# -*- coding: utf-8 -*-
-"""MonsterData / PlayerData state dataclasses extracted from plugins.star_resonance_plugin.protocol.packet_parser.
-"""
+# -*- coding: utf-8 -*-
+# MonsterData / PlayerData state dataclasses extracted from plugins.star_resonance_plugin.protocol.packet_parser.
+#
 
 from typing import Optional, Dict, Any
 
@@ -8,7 +8,7 @@ from plugins.star_resonance_plugin.protocol.packet_parser.helpers import _uuid_t
 
 
 class MonsterData:
-    """Tracks one monster entity's parsed state."""
+    # Tracks one monster entity's parsed state.
     __slots__ = ('uuid', 'uid', 'name', 'template_id',
                  'hp', 'max_hp', 'season_level',
                  'breaking_stage', 'extinction', 'max_extinction',
@@ -93,7 +93,7 @@ class MonsterData:
 
 
 class PlayerData:
-    """Tracks one player's parsed data."""
+    # Tracks one player's parsed data.
     __slots__ = ('uid', 'name', 'level', 'rank_level', 'season_level',
                  'level_extra', 'level_extra_source',
                  'level_extra_pending_source', 'level_extra_pending_value',

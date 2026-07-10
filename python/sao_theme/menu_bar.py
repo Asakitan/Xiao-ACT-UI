@@ -1,5 +1,5 @@
-﻿# -*- coding: utf-8 -*-
-"""SAOMenuBar (split from sao_theme.py — verbatim)."""
+# -*- coding: utf-8 -*-
+# SAOMenuBar (split from sao_theme.py — verbatim).
 import tkinter as tk
 import time
 from typing import Any, Optional, List, Dict, Tuple
@@ -31,13 +31,13 @@ from sao_theme.circle_button import SAOCircleButton
 
 # ──────────────────── 菜单栏 (MenuBar) ────────────────────
 class SAOMenuBar(tk.Frame):
-    """
-    SAO 风格垂直菜单栏
-    - 最多显示 9 个圆形按钮 (v3: +插件分类)
-    - 下落动画 (from top:-500 to top:0)
-    - 滚轮滚动
-    - 点击激活 → 触发 LeftInfo + ChildBar
-    """
+    #
+    #     SAO 风格垂直菜单栏
+    #     - 最多显示 9 个圆形按钮 (v3: +插件分类)
+    #     - 下落动画 (from top:-500 to top:0)
+    #     - 滚轮滚动
+    #     - 点击激活 → 触发 LeftInfo + ChildBar
+    #
 
     _MAX_VISIBLE = 9
 
@@ -123,7 +123,7 @@ class SAOMenuBar(tk.Frame):
 
     def refresh_icons(self, icon_arr: List[Dict], active_name: Optional[str] = None,
                       force: bool = False) -> bool:
-        """Replace top-level menu buttons without recreating the popup."""
+        # Replace top-level menu buttons without recreating the popup.
         new_icons = list(icon_arr or [])
         if not force and self._icon_sig(new_icons) == self._icon_sig(self.icon_arr):
             return False
@@ -246,13 +246,13 @@ class SAOMenuBar(tk.Frame):
             self.on_activate(item)
 
     def _root_hit_test_item(self, x_root: int, y_root: int):
-        """Return the visible menu item under a root-level click.
-
-        In GPU mode the button canvases are intentionally visually empty
-        under a transparent-color popup, so Windows can deliver the click
-        straight to the root window instead of the Tk canvas. Hit-testing
-        the fixed 70x70 slot rect restores the original interaction model.
-        """
+        # Return the visible menu item under a root-level click.
+        #
+        #         In GPU mode the button canvases are intentionally visually empty
+        #         under a transparent-color popup, so Windows can deliver the click
+        #         straight to the root window instead of the Tk canvas. Hit-testing
+        #         the fixed 70x70 slot rect restores the original interaction model.
+        #
         if not self._buttons or not self.winfo_exists() or not self.winfo_ismapped():
             return None
         visible_items = self.icon_arr[:len(self._buttons)]
@@ -316,7 +316,7 @@ class SAOMenuBar(tk.Frame):
         self._scroll_by_delta(getattr(e, 'delta', 0))
 
     def play_enter_animation(self):
-        """下落入场: 单时间轴动画，避免 5 路 after 同时抢帧。"""
+        # 下落入场: 单时间轴动画，避免 5 路 after 同时抢帧。
         self._stop_float()
         self._enter_active = True
         self._enter_t0 = time.time()
@@ -357,8 +357,8 @@ class SAOMenuBar(tk.Frame):
         # must persist across rest ↔ hover transitions.
 
     def _on_destroy(self) -> None:
-        """Bound to <Destroy>; releases the float scheduler AND any
-        long-lived resources (the GPU painter)."""
+        # Bound to <Destroy>; releases the float scheduler AND any
+        #         long-lived resources (the GPU painter).
         self._stop_float()
         if self._gpu_painter is not None:
             try:
@@ -418,9 +418,9 @@ class SAOMenuBar(tk.Frame):
             self._stop_float()
 
     def _dispatch_gpu_paint(self) -> None:
-        """Snapshot all button visual states and feed them to the GPU
-        painter. Runs on the Tk main thread; reads winfo for screen
-        position. The painter's worker does the PIL composite."""
+        # Snapshot all button visual states and feed them to the GPU
+        #         painter. Runs on the Tk main thread; reads winfo for screen
+        #         position. The painter's worker does the PIL composite.
         if not self._buttons or _ButtonSnapshot is None:
             return
         if not self.winfo_exists() or not self.winfo_ismapped():

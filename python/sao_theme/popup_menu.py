@@ -1,5 +1,5 @@
-﻿# -*- coding: utf-8 -*-
-"""SAOPopUpMenu (legacy; split from sao_theme.py — verbatim)."""
+# -*- coding: utf-8 -*-
+# SAOPopUpMenu (legacy; split from sao_theme.py — verbatim).
 import tkinter as tk
 import time
 from typing import Optional, Callable, List, Dict, Tuple
@@ -23,15 +23,15 @@ from sao_theme.child_bar import SAOChildBar
 
 # ──────────────────── 弹出菜单容器 (PopUpMenu) ────────────────────
 class SAOPopUpMenu:
-    """
-    SAO 风格全屏弹出菜单
-    - Alt+A 或滑动下拉呼出
-    - 半透明深色遮罩 (70% 黑)
-    - 居中: MenuBar + LeftInfo + ChildBar
-    - 呼吸浮动动画 (8px偏移, 8s周期)
-    - fadeIn/fadeOut 过渡
-    - 点击空白关闭
-    """
+    #
+    #     SAO 风格全屏弹出菜单
+    #     - Alt+A 或滑动下拉呼出
+    #     - 半透明深色遮罩 (70% 黑)
+    #     - 居中: MenuBar + LeftInfo + ChildBar
+    #     - 呼吸浮动动画 (8px偏移, 8s周期)
+    #     - fadeIn/fadeOut 过渡
+    #     - 点击空白关闭
+    #
 
     def __init__(self, root: tk.Tk, icon_arr: List[Dict],
                  child_menus: Dict[str, List[Dict]],
@@ -362,7 +362,7 @@ class SAOPopUpMenu:
         spring_offset = 28  # 入场起始偏移量(px)
 
         def _spring_ease(t: float) -> float:
-            """spring: overshoot 则小弹超, 平滑落地"""
+            # spring: overshoot 则小弹超, 平滑落地
             # 使用近似弹簧曲线: ease-out 加轻微反射
             if t < 0.7:
                 return ease_out(t / 0.7) * 1.06
@@ -422,7 +422,7 @@ class SAOPopUpMenu:
             pass
 
     def _get_visual_bounds(self):
-        """返回当前实际可见菜单区域边界，忽略透明占位区域."""
+        # 返回当前实际可见菜单区域边界，忽略透明占位区域.
         if not self._content or not self._content.winfo_exists():
             return None
         try:
@@ -702,7 +702,7 @@ class SAOPopUpMenu:
             self._menu_anim_registered = False
 
     def _on_root_click_outside(self, e):
-        """root 层点击处理: 透明区域的点击穿透到 root, 判断是否在内容区外."""
+        # root 层点击处理: 透明区域的点击穿透到 root, 判断是否在内容区外.
         if not self._visible or not self._content:
             return
         try:
@@ -878,7 +878,7 @@ class SAOPopUpMenu:
             self._schedule_menu_layout_refresh()
 
     def refresh_child_menus(self, menus: Dict[str, List[Dict]], force: bool = False):
-        """Batch-refresh child menus and redraw HUD only if the visible menu changed."""
+        # Batch-refresh child menus and redraw HUD only if the visible menu changed.
         menus = dict(menus or {})
         self.child_menus = menus
         if not self._child_bar:
@@ -907,7 +907,7 @@ class SAOPopUpMenu:
         return True
 
     def refresh_icons(self, icons: List[Dict], force: bool = False):
-        """Refresh top-level fish-eye buttons while the popup is open."""
+        # Refresh top-level fish-eye buttons while the popup is open.
         icons = list(icons or [])
         old_sig = tuple(
             (str(item.get('name') or ''), str(item.get('icon') or ''),
@@ -945,15 +945,15 @@ class SAOPopUpMenu:
         return bool(changed)
 
     def refresh_child_menu(self, name: str, items: List[Dict]):
-        """动态更新某个子菜单的内容"""
+        # 动态更新某个子菜单的内容
         menus = dict(self.child_menus or {})
         menus[name] = items
         return self.refresh_child_menus(menus)
 
     def _clear_menu_hud_items(self) -> None:
-        """Drop all canvas-native HUD items so the next frame re-creates
-        them at the new positions/photos. Cheaper than re-positioning
-        everything when the content size changes."""
+        # Drop all canvas-native HUD items so the next frame re-creates
+        #         them at the new positions/photos. Cheaper than re-positioning
+        #         everything when the content size changes.
         if self._menu_hud_cv is not None:
             try:
                 self._menu_hud_cv.delete('all')

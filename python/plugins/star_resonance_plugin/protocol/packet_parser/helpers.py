@@ -1,11 +1,11 @@
-﻿# -*- coding: utf-8 -*-
-"""Lazy loaders, Cython bindings and low-level decode/level helpers
-extracted from packet_parser (physical split).
-
-`from __future__ import annotations` keeps the ``player: PlayerData`` type
-hints as strings so this module needs no runtime import of data.py, which
-would otherwise form an import cycle (data.py -> helpers._uuid_to_uid).
-"""
+# -*- coding: utf-8 -*-
+# Lazy loaders, Cython bindings and low-level decode/level helpers
+# extracted from packet_parser (physical split).
+#
+# `from __future__ import annotations` keeps the ``player: PlayerData`` type
+# hints as strings so this module needs no runtime import of data.py, which
+# would otherwise form an import cycle (data.py -> helpers._uuid_to_uid).
+#
 
 from __future__ import annotations
 
@@ -55,7 +55,7 @@ def _ensure_zstd():
 
 
 def _ensure_pb():
-    """Load compiled protobuf module if available."""
+    # Load compiled protobuf module if available.
     global _pb, _pb_loaded, _MessageToDict
     if _pb_loaded:
         return _pb
@@ -161,11 +161,11 @@ _tcp_dump_printed = False
 
 
 def _dump_tcp(kind: str, **fields):
-    """Append one raw TCP frame record to sao_auto/tcp_dump.jsonl (offline analysis).
-
-    kind='notify'        — 解压后的游戏 notify: mid(method_id)/name/zstd/n(len)/hex
-    kind='unknown_msgtype' — 顶层消息类型既非 NOTIFY 也非 FRAME_DOWN 的原始帧
-    """
+    # Append one raw TCP frame record to sao_auto/tcp_dump.jsonl (offline analysis).
+    #
+    #     kind='notify'        — 解压后的游戏 notify: mid(method_id)/name/zstd/n(len)/hex
+    #     kind='unknown_msgtype' — 顶层消息类型既非 NOTIFY 也非 FRAME_DOWN 的原始帧
+    #
     global _tcp_dump_bytes, _tcp_dump_printed
     if not _TCP_DUMP_ENABLED:
         return
@@ -189,7 +189,7 @@ def _dump_tcp(kind: str, **fields):
 
 
 def _append_packet_debug(tag: str, payload: Dict[str, Any]):
-    """Append a small packet debug snapshot for later field confirmation."""
+    # Append a small packet debug snapshot for later field confirmation.
     if not _PACKET_DEBUG_ENABLED:
         return
     try:
@@ -241,11 +241,11 @@ _MONSTER_HINT_ATTR_IDS = (
 
 
 def _attrs_look_monster_like(ac) -> bool:
-    """Return True for non-player entities carrying monster/combat HP attrs.
-
-    v2.4.33: pb2 decoding stays in Python (the AttrCollection wrapper is a
-    Python-only proto object), but the membership test is in cython now.
-    """
+    # Return True for non-player entities carrying monster/combat HP attrs.
+    #
+    #     v2.4.33: pb2 decoding stays in Python (the AttrCollection wrapper is a
+    #     Python-only proto object), but the membership test is in cython now.
+    #
     if not ac or not getattr(ac, 'Attrs', None):
         return False
     attr_ids: list = []
@@ -258,7 +258,7 @@ def _attrs_look_monster_like(ac) -> bool:
 
 
 def _combat_damage_amount(value, lucky_value, actual_value, hp_lessen, shield_lessen) -> int:
-    """Resolve display/stat damage using the same broad fallbacks as upstream counters."""
+    # Resolve display/stat damage using the same broad fallbacks as upstream counters.
     return int(_CY_COMBAT.combat_damage_amount(
         value, lucky_value, actual_value, hp_lessen, shield_lessen))
 
@@ -274,11 +274,11 @@ def _uuid_to_uid(uuid: int) -> int:
 
 
 def _fields_to_debug_dict(fields: dict, max_depth: int = 3) -> dict:
-    """Convert protobuf decoded fields dict to JSON-serializable debug dict.
-
-    Recursively decodes nested protobuf bytes up to max_depth.
-    Used for generic CharSerialize / Entity field logging.
-    """
+    # Convert protobuf decoded fields dict to JSON-serializable debug dict.
+    #
+    #     Recursively decodes nested protobuf bytes up to max_depth.
+    #     Used for generic CharSerialize / Entity field logging.
+    #
     if max_depth <= 0:
         return {'_truncated': True}
     result = {}
@@ -305,13 +305,13 @@ def _fields_to_debug_dict(fields: dict, max_depth: int = 3) -> dict:
 
 
 def _decode_buff_info_sync_pb(bfs) -> list:
-    """Decode BuffInfoSync pb2 object → list of buff dicts.
-
-    BuffInfoSync { int64 Uuid = 1; repeated BuffInfo BuffInfos = 2; }
-    BuffInfo { BuffUuid(1), BaseId(2), Level(3), HostUuid(4), TableUuid(5),
-               CreateTime(6), FireUuid(7), Layer(8), PartId(9), Count(10),
-               Duration(11), FightSourceInfo(12), LogicEffect(13) }
-    """
+    # Decode BuffInfoSync pb2 object → list of buff dicts.
+    #
+    #     BuffInfoSync { int64 Uuid = 1; repeated BuffInfo BuffInfos = 2; }
+    #     BuffInfo { BuffUuid(1), BaseId(2), Level(3), HostUuid(4), TableUuid(5),
+    #                CreateTime(6), FireUuid(7), Layer(8), PartId(9), Count(10),
+    #                Duration(11), FightSourceInfo(12), LogicEffect(13) }
+    #
     buffs = []
     try:
         for bi in bfs.BuffInfos:
@@ -337,10 +337,10 @@ def _decode_buff_info_sync_pb(bfs) -> list:
 
 
 def _decode_dirty_energy_value(raw_u32: int, raw_f32: float, stamina_max: int = 0) -> Optional[float]:
-    """Pick the sane representation from dirty-stream energy payload.
-
-    v2.4.33: cython.
-    """
+    # Pick the sane representation from dirty-stream energy payload.
+    #
+    #     v2.4.33: cython.
+    #
     return _CY_PACKET.decode_dirty_energy_value(raw_u32, raw_f32, stamina_max)
 
 
@@ -367,7 +367,7 @@ _TRUSTED_LEVEL_SOURCES = frozenset({'deep_sleep', 'season_attr', 'season_attr_lv
 
 
 def _source_priority(source: str) -> int:
-    """v2.4.33: cython."""
+    # v2.4.33: cython.
     return int(_CY_PACKET.level_extra_source_priority(source))
 
 
@@ -387,13 +387,13 @@ def _commit_level_extra(player: PlayerData, source: str, value: int) -> bool:
 
 
 def _normalize_season_medal_level(raw_level: int) -> int:
-    """Normalize season medal level from raw server value.
-
-    The server may send various representations of the medal level.
-    This function converts to a canonical form.
-
-    v2.4.33: cython.
-    """
+    # Normalize season medal level from raw server value.
+    #
+    #     The server may send various representations of the medal level.
+    #     This function converts to a canonical form.
+    #
+    #     v2.4.33: cython.
+    #
     return int(_CY_PACKET.normalize_season_medal_level(raw_level))
 
 

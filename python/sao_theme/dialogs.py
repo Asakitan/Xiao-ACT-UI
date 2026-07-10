@@ -1,6 +1,6 @@
-﻿# -*- coding: utf-8 -*-
-"""SAODialog / SAOLeaderboardDialog / _clip_reveal / _close_alert
-(split from sao_theme.py — verbatim)."""
+# -*- coding: utf-8 -*-
+# SAODialog / SAOLeaderboardDialog / _clip_reveal / _close_alert
+# (split from sao_theme.py — verbatim).
 import tkinter as tk
 import time
 import math
@@ -21,14 +21,14 @@ _sao_dialog_counter = 0
 
 # ──────────────────── SAO 对话框 (Alert) ────────────────────
 class SAODialog:
-    """
-    SAO Utils 风格对话框
-    - 三段式: 标题区(68px) + 内容区 + 按钮区(83px)
-    - 宽度展开动画 (135px → 375px, 0.5s)
-    - 文字 clip 渐现
-    - Close: 红圆 rgb(209,61,79)
-    - OK: 蓝圆 rgb(66,140,230)
-    """
+    #
+    #     SAO Utils 风格对话框
+    #     - 三段式: 标题区(68px) + 内容区 + 按钮区(83px)
+    #     - 宽度展开动画 (135px → 375px, 0.5s)
+    #     - 文字 clip 渐现
+    #     - Close: 红圆 rgb(209,61,79)
+    #     - OK: 蓝圆 rgb(66,140,230)
+    #
 
     @staticmethod
     def showinfo(parent, title, message, on_ok=None):
@@ -205,7 +205,7 @@ class SAODialog:
 
 def _clip_reveal(label: tk.Label, full_text: str, dlg: tk.Toplevel,
                  duration_ms: int, delay: int = 0):
-    """模拟 CSS clip-path inset 渐现: 从中间向两边展开"""
+    # 模拟 CSS clip-path inset 渐现: 从中间向两边展开
     if not full_text:
         label.configure(text='')
         return
@@ -241,7 +241,7 @@ def _clip_reveal(label: tk.Label, full_text: str, dlg: tk.Toplevel,
 
 
 def _close_alert(dlg: tk.Toplevel):
-    """关闭对话框: 宽度收缩 → 消失"""
+    # 关闭对话框: 宽度收缩 → 消失
     if not dlg.winfo_exists():
         return
 
@@ -285,7 +285,7 @@ def _close_alert(dlg: tk.Toplevel):
 
 
 class SAOLeaderboardDialog:
-    """SAO 风格排行榜对话框：分页、搜索、自适应高度、显示自身设备名与排名。"""
+    # SAO 风格排行榜对话框：分页、搜索、自适应高度、显示自身设备名与排名。
 
     def __init__(self, parent, title='排行榜', sort_by='xp'):
         self._parent = parent

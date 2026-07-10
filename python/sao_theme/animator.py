@@ -1,5 +1,5 @@
-﻿# -*- coding: utf-8 -*-
-"""通用动画引擎 Animator (split from sao_theme.py — verbatim)."""
+# -*- coding: utf-8 -*-
+# 通用动画引擎 Animator (split from sao_theme.py — verbatim).
 import tkinter as tk
 import time
 from typing import Optional, Callable, Dict
@@ -7,7 +7,7 @@ from sao_theme.utils import ease_out
 
 # ──────────────────── 通用动画引擎 ────────────────────
 class Animator:
-    """用 after() 驱动的属性动画引擎"""
+    # 用 after() 驱动的属性动画引擎
 
     def __init__(self, widget: tk.Widget):
         self.widget = widget

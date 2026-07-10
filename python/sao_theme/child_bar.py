@@ -1,5 +1,5 @@
-﻿# -*- coding: utf-8 -*-
-"""SAOChildBar (split from sao_theme.py — verbatim)."""
+# -*- coding: utf-8 -*-
+# SAOChildBar (split from sao_theme.py — verbatim).
 import tkinter as tk
 import time
 from typing import Any, Optional, Callable, List, Dict, Tuple
@@ -30,13 +30,13 @@ from sao_theme.utils import ease_in_out, lerp, lerp_color
 
 # ──────────────────── 子菜单 (ChildBar) ────────────────────
 class SAOChildBar(tk.Frame):
-    """
-    SAO 风格子菜单
-    - 列表项: 160px宽, 40px高, 白色半透明
-    - 悬停: 金色背景
-    - 左侧连接线
-    - 下拉动画
-    """
+    #
+    #     SAO 风格子菜单
+    #     - 列表项: 160px宽, 40px高, 白色半透明
+    #     - 悬停: 金色背景
+    #     - 左侧连接线
+    #     - 下拉动画
+    #
 
     def __init__(self, parent, **kw):
         super().__init__(parent, bg='', highlightthickness=0, **kw)
@@ -721,8 +721,8 @@ class SAOChildBar(tk.Frame):
         self._gpu_managed = False
 
     def _gpu_force_chroma(self):
-        """Repaint every Tk widget in the bar with chroma-key bg/fg so
-        Tk renders nothing visible. Painter draws on top."""
+        # Repaint every Tk widget in the bar with chroma-key bg/fg so
+        #         Tk renders nothing visible. Painter draws on top.
         if not self._gpu_managed:
             return
         chroma = self._gpu_chroma_bg

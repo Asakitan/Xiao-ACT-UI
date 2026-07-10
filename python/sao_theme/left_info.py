@@ -1,5 +1,5 @@
-﻿# -*- coding: utf-8 -*-
-"""SAOLeftInfo (split from sao_theme.py — verbatim)."""
+# -*- coding: utf-8 -*-
+# SAOLeftInfo (split from sao_theme.py — verbatim).
 import tkinter as tk
 import math
 from typing import Any, Optional, Tuple
@@ -26,13 +26,13 @@ from sao_theme.utils import ease_in_out
 
 # ──────────────────── 左侧信息面板 (LeftInfo) ────────────────────
 class SAOLeftInfo(tk.Frame):
-    """
-    SAO 风格左侧用户信息面板
-    - 顶部: 白色背景, 用户名 + 插槽内容
-    - 底部: 灰色背景, 描述文字
-    - 右三角箭头指示器
-    - 展开/关闭动画
-    """
+    #
+    #     SAO 风格左侧用户信息面板
+    #     - 顶部: 白色背景, 用户名 + 插槽内容
+    #     - 底部: 灰色背景, 描述文字
+    #     - 右三角箭头指示器
+    #     - 展开/关闭动画
+    #
 
     def __init__(self, parent, username: str = 'Player',
                  description: str = 'Welcome to SAO world', **kw):

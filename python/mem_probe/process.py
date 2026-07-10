@@ -64,16 +64,17 @@ _DRIVER_CONDITION = threading.Condition(_DRIVER_LOCK)
 
 
 class TargetLeaseError(RuntimeError):
-    """The process-global driver target could not be activated safely."""
+    # The process-global driver target could not be activated safely.
+    pass
 
 
 def _driver_session_epoch(*, allow_status: bool = False):
-    """Return a cheap identity for the current proxy/helper session.
-
-    New proxy builds expose ``session_epoch()``.  The fallbacks keep source
-    compatibility with older PYDs without making a STATUS IPC on every read.
-    STATUS is only consulted on lifecycle/ensure paths.
-    """
+    # Return a cheap identity for the current proxy/helper session.
+    #
+    #     New proxy builds expose ``session_epoch()``.  The fallbacks keep source
+    #     compatibility with older PYDs without making a STATUS IPC on every read.
+    #     STATUS is only consulted on lifecycle/ensure paths.
+    #
     drv = _drv
     if drv is None:
         return ("none",)
@@ -143,7 +144,7 @@ def _refresh_driver_epoch_locked(*, allow_status: bool = False) -> None:
 
 
 def _ensure_driver_locked() -> bool:
-    """Ensure the driver with epoch-scoped exponential retry backoff."""
+    # Ensure the driver with epoch-scoped exponential retry backoff.
     global _DRIVER_OK, _DRIVER_TRIED, _DRIVER_EPOCH
     global _DRIVER_ACTIVE_PID, _DRIVER_RETRY_AT, _DRIVER_FAILURES
     if _drv is None:
@@ -225,14 +226,14 @@ def _activate_target_locked(pid: int) -> bool:
 
 
 class TargetLease:
-    """Reference-counted ownership of the process-global rt_io target.
-
-    rt_io and the Cython fast path both keep one attached PID per process.
-    Every operation therefore holds the same re-entrant lock while activating
-    its PID and performing the read/write.  Multiple same-PID consumers share
-    a reference; different-PID consumers are explicitly switched, never read
-    through whichever consumer happened to attach last.
-    """
+    # Reference-counted ownership of the process-global rt_io target.
+    #
+    #     rt_io and the Cython fast path both keep one attached PID per process.
+    #     Every operation therefore holds the same re-entrant lock while activating
+    #     its PID and performing the read/write.  Multiple same-PID consumers share
+    #     a reference; different-PID consumers are explicitly switched, never read
+    #     through whichever consumer happened to attach last.
+    #
 
     def __init__(self, pid: int) -> None:
         self.pid = int(pid)
@@ -304,7 +305,7 @@ class TargetLease:
 
 
 def _reset_target_leases_for_test() -> None:
-    """Reset only Python ownership state; never touches a live backend."""
+    # Reset only Python ownership state; never touches a live backend.
     global _DRIVER_OK, _DRIVER_TRIED, _DRIVER_EPOCH, _DRIVER_ACTIVE_PID
     global _DRIVER_RETRY_AT, _DRIVER_FAILURES
     with _DRIVER_CONDITION:
@@ -319,12 +320,12 @@ def _reset_target_leases_for_test() -> None:
 
 
 def _wait_for_target_leases_closed(timeout: float = 10.0) -> bool:
-    """Wait until every memory consumer has released its target lease.
-
-    This is an internal shutdown barrier.  A plugin that timed out while
-    joining its scan thread keeps its lease alive, so helper teardown cannot
-    race that thread's next read or detach.
-    """
+    # Wait until every memory consumer has released its target lease.
+    #
+    #     This is an internal shutdown barrier.  A plugin that timed out while
+    #     joining its scan thread keeps its lease alive, so helper teardown cannot
+    #     race that thread's next read or detach.
+    #
     deadline = time.monotonic() + max(0.0, float(timeout))
     with _DRIVER_CONDITION:
         while _DRIVER_PID_REFS:
@@ -401,8 +402,9 @@ class ProcessEntry:
     user_time: int = 0
 
 
-def _query_system_process_info() -> Optional[tuple]:
-    _ntdll = ctypes.windll.ntdll
+def _query_system_process_info(_ntdll=None) -> Optional[tuple]:
+    if _ntdll is None:
+        _ntdll = ctypes.windll.ntdll
     _SPI = 5
     buf_size = 0x100000
     for _ in range(3):
@@ -410,9 +412,12 @@ def _query_system_process_info() -> Optional[tuple]:
         ret_len = ctypes.c_ulong(0)
         status = _ntdll.NtQuerySystemInformation(
             _SPI, buf, buf_size, ctypes.byref(ret_len))
-        if status == 0:
+        # NTSTATUS is a signed LONG at the native boundary, while constants
+        # are conventionally written as unsigned hexadecimal values.
+        status_u32 = int(status) & 0xFFFFFFFF
+        if status_u32 == 0:
             return buf, buf.raw, int(ret_len.value)
-        if status == 0xC0000004:
+        if status_u32 == 0xC0000004:
             buf_size = int(ret_len.value) + 0x10000
             continue
         return None
@@ -450,15 +455,15 @@ def _iter_process_entries_wide() -> Iterator[tuple[str, int]]:
 
 
 def _iter_process_entries_ext() -> Iterator[ProcessEntry]:
-    """Extended process enumeration — yields ProcessEntry with ppid, threads, memory, CPU times.
-
-    SYSTEM_PROCESS_INFORMATION x64 offsets:
-      +0x00 NextEntryOffset (4)    +0x04 NumberOfThreads (4)
-      +0x18 KernelTime (8)         +0x20 UserTime (8)
-      +0x38 ImageName.Length (2)    +0x40 ImageName.Buffer (8)
-      +0x50 UniqueProcessId (8)    +0x58 InheritedFromUniqueProcessId (8)
-      VM_COUNTERS_EX2 starts ~+0x70; WorkingSetSize at +0x98 (8)
-    """
+    # Extended process enumeration — yields ProcessEntry with ppid, threads, memory, CPU times.
+    #
+    #     SYSTEM_PROCESS_INFORMATION x64 offsets:
+    #       +0x00 NextEntryOffset (4)    +0x04 NumberOfThreads (4)
+    #       +0x18 KernelTime (8)         +0x20 UserTime (8)
+    #       +0x38 ImageName.Length (2)    +0x40 ImageName.Buffer (8)
+    #       +0x50 UniqueProcessId (8)    +0x58 InheritedFromUniqueProcessId (8)
+    #       VM_COUNTERS_EX2 starts ~+0x70; WorkingSetSize at +0x98 (8)
+    #
     result = _query_system_process_info()
     if result is None:
         return
@@ -501,10 +506,10 @@ def _iter_process_entries_ext() -> Iterator[ProcessEntry]:
 
 
 def _iter_thread_entries_for_pid(target_pid: int) -> Iterator[dict]:
-    """Parse SYSTEM_THREAD_INFORMATION entries for a specific PID from SystemProcessInformation.
-
-    Each thread entry (56 bytes on x64) follows its parent SYSTEM_PROCESS_INFORMATION.
-    """
+    # Parse SYSTEM_THREAD_INFORMATION entries for a specific PID from SystemProcessInformation.
+    #
+    #     Each thread entry (56 bytes on x64) follows its parent SYSTEM_PROCESS_INFORMATION.
+    #
     result = _query_system_process_info()
     if result is None:
         return
@@ -555,7 +560,7 @@ def _find_pid_by_name_wide(process_name: str) -> Optional[int]:
 
 
 def query_process_identity(pid: int) -> Optional[tuple[int, str, int]]:
-    """Return ``(pid, image_name, create_time)`` without opening a handle."""
+    # Return ``(pid, image_name, create_time)`` without opening a handle.
     target_pid = int(pid)
     if target_pid <= 0:
         return None

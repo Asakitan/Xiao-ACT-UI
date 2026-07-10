@@ -1,5 +1,5 @@
-﻿# -*- coding: utf-8 -*-
-"""SAOFilePicker (split from sao_theme.py — verbatim)."""
+# -*- coding: utf-8 -*-
+# SAOFilePicker (split from sao_theme.py — verbatim).
 import tkinter as tk
 import os
 import time
@@ -11,7 +11,7 @@ from sao_theme.dialogs import _clip_reveal
 
 # ──────────────────── SAO 文件选择器 ────────────────────
 class SAOFilePicker(tk.Toplevel):
-    """SAO 风格文件浏览器 — 白色主题"""
+    # SAO 风格文件浏览器 — 白色主题
 
     _BG       = '#ffffff'
     _BG2      = '#f5f5f7'
@@ -73,7 +73,7 @@ class SAOFilePicker(tk.Toplevel):
         self.after(50, self._animate_expand)
 
     def _delayed_grab(self):
-        """窗口完全映射后才 grab_set, 防止 grab 冲突导致窗口闪退"""
+        # 窗口完全映射后才 grab_set, 防止 grab 冲突导致窗口闪退
         try:
             if self.winfo_exists():
                 self.lift()
@@ -83,7 +83,7 @@ class SAOFilePicker(tk.Toplevel):
             pass
 
     def _animate_expand(self):
-        """SAO 风格宽度展开动画 (135px → 520px, 500ms ease-out cubic)."""
+        # SAO 风格宽度展开动画 (135px → 520px, 500ms ease-out cubic).
         import time as _time
         t0 = _time.time()
         dur = 0.5
@@ -338,7 +338,7 @@ class SAOFilePicker(tk.Toplevel):
                 self._finish()
 
     def _confirm_dir(self):
-        """目录模式: 选择当前浏览的文件夹"""
+        # 目录模式: 选择当前浏览的文件夹
         self.result = self._current_dir
         self._finish()
 
@@ -358,7 +358,7 @@ class SAOFilePicker(tk.Toplevel):
         self._animate_collapse(result, callback, parent)
 
     def _animate_collapse(self, result, callback, parent):
-        """SAO 风格收起动画 (宽度 → 135px, 300ms ease-in)."""
+        # SAO 风格收起动画 (宽度 → 135px, 300ms ease-in).
         import time as _time
         t0 = _time.time()
         dur = 0.3

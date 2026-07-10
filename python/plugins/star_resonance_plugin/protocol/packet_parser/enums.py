@@ -1,8 +1,8 @@
-﻿# -*- coding: utf-8 -*-
-"""Enum / constant definitions extracted from packet_parser (physical split).
-
-Self-contained: depends on no other packet_parser submodule.
-"""
+# -*- coding: utf-8 -*-
+# Enum / constant definitions extracted from packet_parser (physical split).
+#
+# Self-contained: depends on no other packet_parser submodule.
+#
 
 from typing import Dict
 

@@ -1,13 +1,13 @@
-﻿# -*- coding: utf-8 -*-
-"""
-角色识别与配置模块
-基于 StarResonanceDamageCounter 项目的人物职业数据
-
-功能:
-  - 尝试从星痕共鸣游戏获取当前人物名称和职业 (需要本地服务运行)
-  - 无法识别时提供用户手动输入界面
-  - 保存/加载用户配置
-"""
+# -*- coding: utf-8 -*-
+#
+# 角色识别与配置模块
+# 基于 StarResonanceDamageCounter 项目的人物职业数据
+#
+# 功能:
+#   - 尝试从星痕共鸣游戏获取当前人物名称和职业 (需要本地服务运行)
+#   - 无法识别时提供用户手动输入界面
+#   - 保存/加载用户配置
+#
 
 import os
 import sys
@@ -90,7 +90,7 @@ _migration_done = False
 
 
 def _default_profile() -> dict:
-    """Return a fresh, empty profile dict with stable keys."""
+    # Return a fresh, empty profile dict with stable keys.
     return {
         'username': '',
         'profession': '',
@@ -103,17 +103,17 @@ def _default_profile() -> dict:
 
 
 def _read_settings() -> dict:
-    """Read the full settings.json blob; returns {} on any failure."""
+    # Read the full settings.json blob; returns {} on any failure.
     return settings_crypto.read_settings_file(_SETTINGS_FILE, migrate=True)
 
 
 def _write_settings(data: dict) -> bool:
-    """Atomically write settings.json. Returns True on success."""
+    # Atomically write settings.json. Returns True on success.
     return settings_crypto.write_settings_file(_SETTINGS_FILE, data)
 
 
 def _load_profile_stats(settings: dict) -> tuple[dict, bool]:
-    """Load stats from the canonical key and prune legacy MIDI-era aliases."""
+    # Load stats from the canonical key and prune legacy MIDI-era aliases.
     dirty = False
     stats = settings.get(_PROFILE_STATS_KEY)
     if isinstance(stats, dict):
@@ -145,12 +145,12 @@ def _store_profile_stats(settings: dict, stats: dict):
 
 
 def _migrate_legacy_profile_once():
-    """One-shot migration: copy fields from legacy player_profile.json into
-    settings.json (game_cache + player_stats), then delete the legacy file.
-
-    Safe to call repeatedly: the module-level flag short-circuits subsequent
-    calls, and the legacy file is removed after a successful merge.
-    """
+    # One-shot migration: copy fields from legacy player_profile.json into
+    #     settings.json (game_cache + player_stats), then delete the legacy file.
+    #
+    #     Safe to call repeatedly: the module-level flag short-circuits subsequent
+    #     calls, and the legacy file is removed after a successful merge.
+    #
     global _migration_done
     if _migration_done:
         return
@@ -209,12 +209,12 @@ def _migrate_legacy_profile_once():
 # ═══════════════════════════════════════════════
 
 def load_profile() -> dict:
-    """加载玩家配置 (名称 + 职业 + 等级 + UID + 历史统计).
-
-    数据来源: settings.json 的 "game_cache" 字段 (由抓包线程实时更新);
-    统计字段从 "player_stats" 读取，旧的 "midiplayer_stats" 会自动迁移。
-    首次调用时会自动把 player_profile.json 的残留数据迁移进来.
-    """
+    # 加载玩家配置 (名称 + 职业 + 等级 + UID + 历史统计).
+    #
+    #     数据来源: settings.json 的 "game_cache" 字段 (由抓包线程实时更新);
+    #     统计字段从 "player_stats" 读取，旧的 "midiplayer_stats" 会自动迁移。
+    #     首次调用时会自动把 player_profile.json 的残留数据迁移进来.
+    #
     _migrate_legacy_profile_once()
     profile = _default_profile()
 
@@ -256,12 +256,12 @@ def load_profile() -> dict:
 def save_profile(username: str, profession: str, level: int = 1,
                  xp: int = 0, songs_played: int = 0, play_time: float = 0,
                  uid: str = ''):
-    """保存玩家配置到 settings.json.
-
-    角色字段 → game_cache (与抓包线程共享), 可选统计字段 → player_stats.
-    只在调用方显式提供的字段被写入 — 避免用默认值 (level=1, xp=0) 覆盖
-    抓包线程已经写好的真实值.
-    """
+    # 保存玩家配置到 settings.json.
+    #
+    #     角色字段 → game_cache (与抓包线程共享), 可选统计字段 → player_stats.
+    #     只在调用方显式提供的字段被写入 — 避免用默认值 (level=1, xp=0) 覆盖
+    #     抓包线程已经写好的真实值.
+    #
     _migrate_legacy_profile_once()
     settings = _read_settings()
 
@@ -311,7 +311,7 @@ def save_profile(username: str, profession: str, level: int = 1,
 # 升级经验表 (level → 需要的累计 XP)
 # 前10级较快升级, 后面逐渐变慢
 def xp_for_level(level: int) -> int:
-    """计算达到某等级需要的累计 XP"""
+    # 计算达到某等级需要的累计 XP
     if level <= 1:
         return 0
     # 每级需要: base * level^1.5
@@ -323,9 +323,9 @@ def xp_for_level(level: int) -> int:
 
 
 def calc_level(xp: int) -> tuple:
-    """根据 XP 计算等级和进度
-    Returns: (level, current_xp_in_level, xp_needed_for_next)
-    """
+    # 根据 XP 计算等级和进度
+    #     Returns: (level, current_xp_in_level, xp_needed_for_next)
+    #
     level = 1
     while True:
         next_xp = xp_for_level(level + 1)
@@ -338,16 +338,16 @@ def calc_level(xp: int) -> tuple:
 
 
 def add_song_xp(profile: dict, song_duration: float = 0) -> tuple:
-    """
-    完成一首歌后增加经验
-    
-    Args:
-        profile: 当前配置 dict
-        song_duration: 歌曲时长(秒)
-    
-    Returns:
-        (new_profile, leveled_up: bool, old_level, new_level)
-    """
+    #
+    #     完成一首歌后增加经验
+    #
+    #     Args:
+    #         profile: 当前配置 dict
+    #         song_duration: 歌曲时长(秒)
+    #
+    #     Returns:
+    #         (new_profile, leveled_up: bool, old_level, new_level)
+    #
     xp_gain = 30  # 基础完成奖励
     # 根据歌曲时长加成
     if song_duration > 30:
@@ -385,14 +385,14 @@ def add_song_xp(profile: dict, song_duration: float = 0) -> tuple:
 # ═══════════════════════════════════════════════
 
 def try_detect_character() -> Optional[Tuple[str, str]]:
-    """
-    尝试从 StarResonanceDamageCounter 本地服务获取角色信息。
-    
-    服务地址: http://localhost:8989/api/uid-mappings
-    
-    Returns:
-        (username, profession) 或 None
-    """
+    #
+    #     尝试从 StarResonanceDamageCounter 本地服务获取角色信息。
+    #
+    #     服务地址: http://localhost:8989/api/uid-mappings
+    #
+    #     Returns:
+    #         (username, profession) 或 None
+    #
     try:
         import requests
         # 尝试从本地服务获取数据
@@ -437,15 +437,15 @@ def try_detect_character() -> Optional[Tuple[str, str]]:
 
 
 def get_or_ask_profile(parent_widget=None, settings=None) -> Tuple[str, str]:
-    """
-    获取玩家配置。优先级:
-    1. 已保存的配置
-    2. 游戏服务自动检测
-    3. 弹出输入对话框
-    
-    Returns:
-        (username, profession)
-    """
+    #
+    #     获取玩家配置。优先级:
+    #     1. 已保存的配置
+    #     2. 游戏服务自动检测
+    #     3. 弹出输入对话框
+    #
+    #     Returns:
+    #         (username, profession)
+    #
     # 1. 检查已保存的配置
     profile = load_profile()
     if profile['username']:
@@ -467,22 +467,22 @@ def get_or_ask_profile(parent_widget=None, settings=None) -> Tuple[str, str]:
 # ═══════════════════════════════════════════════
 
 class SAOWelcomeDialog:
-    """
-    SAO 风格角色注册对话框
-    '欢迎来到艾恩格朗特！请输入你的昵称，选择你的职业'
-    
-    设计对标 SAO-UI 白色对话框风格:
-    - 白色底 + 金色装饰
-    - 标题区 + 内容区 + 按钮区三段式
-    - 展开动画
-    - 尺寸: 520x520 确保所有内容放得下
-    """
+    #
+    #     SAO 风格角色注册对话框
+    #     '欢迎来到艾恩格朗特！请输入你的昵称，选择你的职业'
+    #
+    #     设计对标 SAO-UI 白色对话框风格:
+    #     - 白色底 + 金色装饰
+    #     - 标题区 + 内容区 + 按钮区三段式
+    #     - 展开动画
+    #     - 尺寸: 520x520 确保所有内容放得下
+    #
 
     def __init__(self, parent, on_done=None):
-        """
-        parent: 父窗口 (Toplevel 或 Tk)
-        on_done: 回调 callback(username, profession) — 用户确认后调用
-        """
+        #
+        #         parent: 父窗口 (Toplevel 或 Tk)
+        #         on_done: 回调 callback(username, profession) — 用户确认后调用
+        #
         self._parent = parent
         self._on_done = on_done
         self._result = None
@@ -648,11 +648,11 @@ class SAOWelcomeDialog:
         self._name_entry.bind('<Return>', lambda e: self._confirm())
 
     def _on_prof_select(self):
-        """职业选中时的视觉反馈"""
+        # 职业选中时的视觉反馈
         pass  # RadioButton 已自动处理
 
     def _draw_sep(self, canvas, w):
-        """绘制 SAO 风格分隔线 (灰线 + 金色高光渐淡)"""
+        # 绘制 SAO 风格分隔线 (灰线 + 金色高光渐淡)
         canvas.delete('all')
         canvas.create_line(0, 1, w, 1, fill='#aaaaaa', width=1)
         # 金色渐淡 (从左到中间)
@@ -667,7 +667,7 @@ class SAOWelcomeDialog:
             canvas.create_line(xp, 0, xp + int(w * 0.025), 0, fill=gc, width=1)
 
     def _animate_expand(self):
-        """宽度展开动画 (135px → final_w, 500ms)"""
+        # 宽度展开动画 (135px → final_w, 500ms)
         t0 = time.time()
         dur = 0.5
         initial_w = 135
@@ -693,7 +693,7 @@ class SAOWelcomeDialog:
         _step()
 
     def _reveal_text(self):
-        """渐显标题文字"""
+        # 渐显标题文字
         self._title_lbl.configure(text='◇  WELCOME  ◇')
         self._subtitle_lbl.configure(text='欢迎来到 艾恩格朗特')
         self._name_entry.focus_force()
@@ -713,7 +713,7 @@ class SAOWelcomeDialog:
             self._on_done(name, prof)
 
     def _skip(self):
-        """跳过 — 使用默认名称"""
+        # 跳过 — 使用默认名称
         default_name = 'Player'
         default_prof = PROFESSION_LIST[0]
         save_profile(default_name, default_prof)
@@ -743,14 +743,14 @@ class SAOWelcomeDialog:
 
 
 def show_welcome_dialog(parent, on_done=None):
-    """
-    显示 SAO 风格欢迎/角色注册对话框。
-    
-    Args:
-        parent: 父窗口
-        on_done: callback(username, profession) 用户确认后调用
-    
-    Returns:
-        SAOWelcomeDialog 实例
-    """
+    #
+    #     显示 SAO 风格欢迎/角色注册对话框。
+    #
+    #     Args:
+    #         parent: 父窗口
+    #         on_done: callback(username, profession) 用户确认后调用
+    #
+    #     Returns:
+    #         SAOWelcomeDialog 实例
+    #
     return SAOWelcomeDialog(parent, on_done=on_done)

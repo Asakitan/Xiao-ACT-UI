@@ -1,13 +1,13 @@
-﻿# -*- coding: utf-8 -*-
-"""SAOButton / SAOProgressBar / SAOStatusPill / SAOResizeGrip /
-SAOSeparator / SAOTitleBar (split from sao_theme.py — verbatim)."""
+# -*- coding: utf-8 -*-
+# SAOButton / SAOProgressBar / SAOStatusPill / SAOResizeGrip /
+# SAOSeparator / SAOTitleBar (split from sao_theme.py — verbatim).
 import tkinter as tk
 from config import APP_VERSION_LABEL
 from sao_theme.colors import SAOColors
 
 # ──────────────────── SAO 通用按钮 ────────────────────
 class SAOButton(tk.Canvas):
-    """SAO 风格按钮 (矩形白底, 金色悬停)"""
+    # SAO 风格按钮 (矩形白底, 金色悬停)
 
     def __init__(self, parent, text='', command=None,
                  width=120, height=36, **kw):
@@ -63,7 +63,7 @@ class SAOButton(tk.Canvas):
 
 # ──────────────────── SAO 进度条 / 状态 ────────────────────
 class SAOProgressBar(tk.Canvas):
-    """SAO 风格进度条 (HP 条简化版，嵌入式)"""
+    # SAO 风格进度条 (HP 条简化版，嵌入式)
 
     def __init__(self, parent, width=300, height=20, **kw):
         parent_bg = '#0a0e14'
@@ -100,7 +100,7 @@ class SAOProgressBar(tk.Canvas):
 
 
 class SAOStatusPill(tk.Canvas):
-    """SAO 风格状态指示器"""
+    # SAO 风格状态指示器
 
     def __init__(self, parent, text='Ready', color='#4caf50',
                  width=100, height=24, **kw):
@@ -133,7 +133,7 @@ class SAOStatusPill(tk.Canvas):
 
 
 class SAOResizeGrip(tk.Canvas):
-    """SAO 风格调整大小手柄"""
+    # SAO 风格调整大小手柄
 
     def __init__(self, parent, root, size=16, **kw):
         super().__init__(parent, width=size, height=size,
@@ -168,7 +168,7 @@ class SAOResizeGrip(tk.Canvas):
 
 
 class SAOSeparator(tk.Canvas):
-    """SAO 风格分隔线"""
+    # SAO 风格分隔线
 
     def __init__(self, parent, width=200, **kw):
         super().__init__(parent, width=width, height=2,
@@ -179,7 +179,7 @@ class SAOSeparator(tk.Canvas):
 
 # ──────────────────── SAO 标题栏 ────────────────────
 class SAOTitleBar(tk.Frame):
-    """SAO 风格标题栏"""
+    # SAO 风格标题栏
 
     def __init__(self, parent, root, title="咲 ACT UI",
                  version=APP_VERSION_LABEL, on_close=None, **kw):

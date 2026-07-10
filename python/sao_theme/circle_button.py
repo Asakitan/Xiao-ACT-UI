@@ -1,5 +1,5 @@
-﻿# -*- coding: utf-8 -*-
-"""SAOCircleButton (split from sao_theme.py — verbatim)."""
+# -*- coding: utf-8 -*-
+# SAOCircleButton (split from sao_theme.py — verbatim).
 import tkinter as tk
 from typing import Optional, Callable
 from PIL import Image, ImageTk
@@ -12,13 +12,13 @@ from sao_theme.utils import lerp, ease_out_back_lite
 
 # ──────────────────── 圆形图标按钮 ────────────────────
 class SAOCircleButton(tk.Canvas):
-    """
-    SAO 风格圆形图标按钮 (54px)
-    - 边框 2px solid rgba(201,198,198,0.6)
-    - 内圆白底 + 图标
-    - 激活: 金色边框 + 金色填充
-    - 悬停: 金色高亮
-    """
+    #
+    #     SAO 风格圆形图标按钮 (54px)
+    #     - 边框 2px solid rgba(201,198,198,0.6)
+    #     - 内圆白底 + 图标
+    #     - 激活: 金色边框 + 金色填充
+    #     - 悬停: 金色高亮
+    #
     RADIUS = 27
     SIZE = 54
     # Canvas stays at this fixed size through the whole entry + fisheye

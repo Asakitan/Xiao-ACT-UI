@@ -1,9 +1,9 @@
-﻿# -*- coding: utf-8 -*-
-"""SAO 配色常量 (split from sao_theme.py — verbatim)."""
+# -*- coding: utf-8 -*-
+# SAO 配色常量 (split from sao_theme.py — verbatim).
 
 # ──────────────────────── 配色 ────────────────────────
 class SAOColors:
-    """SAO Utils 原版配色 (来自 Vue 组件 CSS)"""
+    # SAO Utils 原版配色 (来自 Vue 组件 CSS)
     # 遮罩 / 背景
     OVERLAY_BG = '#000000'
     OVERLAY_ALPHA = 0.70

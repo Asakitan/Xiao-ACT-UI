@@ -51,7 +51,7 @@ def _list_processes_fallback() -> List[dict]:
 
 
 def _list_processes_ext() -> List[dict]:
-    """Extended enumeration with ppid, threads, memory, CPU times."""
+    # Extended enumeration with ppid, threads, memory, CPU times.
     try:
         from mem_probe.process import _iter_process_entries_ext
         seen: dict[int, dict] = {}
@@ -174,7 +174,7 @@ def _cache_result(sp, gp, name: str = "", pid: int = 0, *, _guard=None):
 
 
 def get_cached_gp_snapshot():
-    """Return ``(reader, generation, pid)`` for race-aware consumers."""
+    # Return ``(reader, generation, pid)`` for race-aware consumers.
     with _cache_lock:
         gp = _gp_ref
         generation = int(_cache_generation)

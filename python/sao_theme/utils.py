@@ -1,12 +1,12 @@
-﻿# -*- coding: utf-8 -*-
-"""缓动 / 数学 / 图像工具函数 (split from sao_theme.py — verbatim)."""
+# -*- coding: utf-8 -*-
+# 缓动 / 数学 / 图像工具函数 (split from sao_theme.py — verbatim).
 import tkinter as tk
 from typing import Tuple
 from PIL import Image, ImageDraw, ImageTk
 import _sao_cy_uihelpers as _CY_UI  # type: ignore[import-not-found]
 
 def _aa_circle_icon(kind: str, outer: str, inner: str, size: int = 40, scale: int = 4) -> ImageTk.PhotoImage:
-    """Render an anti-aliased circular SAO action icon as a PhotoImage."""
+    # Render an anti-aliased circular SAO action icon as a PhotoImage.
     sw = size * scale
     img = Image.new('RGBA', (sw, sw), (0, 0, 0, 0))
     draw = ImageDraw.Draw(img)
@@ -28,7 +28,7 @@ def _aa_circle_icon(kind: str, outer: str, inner: str, size: int = 40, scale: in
 
 
 def _make_aa_icon_button(parent, kind: str, command, outer: str, inner: str, bg: str = '#ffffff'):
-    """Create a reusable anti-aliased popup icon button."""
+    # Create a reusable anti-aliased popup icon button.
     lbl = tk.Label(parent, bg=bg, cursor='hand2', bd=0, highlightthickness=0)
     normal = _aa_circle_icon(kind, outer, inner)
     hover_inner = '#ffffff' if kind == 'ok' else '#ff6b7b'
@@ -61,17 +61,17 @@ def ease_in_out(t: float) -> float:
     return 3 * t ** 2 - 2 * t ** 3
 
 def ease_out_back_lite(t: float) -> float:
-    """Snappier ease-out with a springy feel — but clamped to never exceed
-    1.0, unlike a true "back" ease. Safe to feed into color-lerp paths that
-    hard-clamp their input to [0,1] (this project's Cython
-    ``lerp_hex_color`` does), where a real overshoot curve would just get
-    flattened and produce no visible bounce at all.
-
-    Uses the standard easeOutBack cubic (which normally overshoots past 1.0
-    around t≈0.7-0.8 before settling back to 1.0 at t=1) and clips the
-    overshoot to a flat plateau at 1.0 instead — reads as a quick snap-in
-    followed by a brief settle, rather than a linear/cubic glide.
-    """
+    # Snappier ease-out with a springy feel — but clamped to never exceed
+    #     1.0, unlike a true "back" ease. Safe to feed into color-lerp paths that
+    #     hard-clamp their input to [0,1] (this project's Cython
+    #     ``lerp_hex_color`` does), where a real overshoot curve would just get
+    #     flattened and produce no visible bounce at all.
+    #
+    #     Uses the standard easeOutBack cubic (which normally overshoots past 1.0
+    #     around t≈0.7-0.8 before settling back to 1.0 at t=1) and clips the
+    #     overshoot to a flat plateau at 1.0 instead — reads as a quick snap-in
+    #     followed by a brief settle, rather than a linear/cubic glide.
+    #
     t = max(0.0, min(1.0, t))
     c1 = 1.70158
     c3 = c1 + 1.0
@@ -91,11 +91,11 @@ def rgb_to_hex(r: int, g: int, b: int) -> str:
     return f'#{r:02x}{g:02x}{b:02x}'
 
 def _strip_alpha(c: str) -> str:
-    """Strip 8-digit RGBA hex to 6-digit RGB (tkinter doesn't support alpha).
-
-    Retained for backward compatibility with any external callers; new hot
-    paths should call lerp_color directly (the cython kernel normalizes).
-    """
+    # Strip 8-digit RGBA hex to 6-digit RGB (tkinter doesn't support alpha).
+    #
+    #     Retained for backward compatibility with any external callers; new hot
+    #     paths should call lerp_color directly (the cython kernel normalizes).
+    #
     c = c.strip()
     if c.startswith('#') and len(c) == 9:
         return c[:7]

@@ -1,10 +1,10 @@
-﻿# -*- coding: utf-8 -*-
-"""PacketParser main class extracted from packet_parser (physical split).
-
-All cross-module references use absolute sibling imports
-(``from plugins.star_resonance_plugin.protocol.packet_parser.<sub> import ...``) to avoid the half-initialised
-``packet_parser/__init__`` import cycle.
-"""
+# -*- coding: utf-8 -*-
+# PacketParser main class extracted from packet_parser (physical split).
+#
+# All cross-module references use absolute sibling imports
+# (``from plugins.star_resonance_plugin.protocol.packet_parser.<sub> import ...``) to avoid the half-initialised
+# ``packet_parser/__init__`` import cycle.
+#
 
 import math
 import os
@@ -45,7 +45,7 @@ from plugins.star_resonance_plugin.protocol.packet_parser.helpers import (
 
 
 class PacketParser:
-    """Parse game packets and notify the callback when self data changes."""
+    # Parse game packets and notify the callback when self data changes.
 
     def __init__(self, on_self_update: Callable[[PlayerData], None],
                  on_damage: Optional[Callable[[dict], None]] = None,
@@ -130,7 +130,7 @@ class PacketParser:
         return self._players[uid]
 
     def _confirm_self_uid(self, uid: int, source: str, uuid: int = 0) -> bool:
-        """Mark current UID as server-confirmed, not just cache-guessed."""
+        # Mark current UID as server-confirmed, not just cache-guessed.
         uid = int(uid or 0)
         if uid <= 0:
             return False
@@ -197,13 +197,13 @@ class PacketParser:
         )
 
     def _player_entry_has_identity(self, uid: int) -> bool:
-        """Return True only for player rows backed by real player data.
-
-        Refreshing overworld monsters can use UUID layouts that look like
-        player entities. If an early delta creates an empty PlayerData row for
-        such a UUID, treating that row as a confirmed player suppresses DPS and
-        BossHP for everyone attacking it.
-        """
+        # Return True only for player rows backed by real player data.
+        #
+        #         Refreshing overworld monsters can use UUID layouts that look like
+        #         player entities. If an early delta creates an empty PlayerData row for
+        #         such a UUID, treating that row as a confirmed player suppresses DPS and
+        #         BossHP for everyone attacking it.
+        #
         try:
             player = self._players.get(int(uid or 0))
         except Exception:
@@ -220,13 +220,13 @@ class PacketParser:
         )
 
     def _is_known_player_uuid(self, uuid: int) -> bool:
-        """Return True for UUIDs that should block combat-target DPS.
-
-        A raw player-looking suffix is not enough in overworld refresh maps:
-        monsters can be seen first via damage before their attrs/entity type
-        arrive. Confirm players through self identity, team cache, or actual
-        parsed player data.
-        """
+        # Return True for UUIDs that should block combat-target DPS.
+        #
+        #         A raw player-looking suffix is not enough in overworld refresh maps:
+        #         monsters can be seen first via damage before their attrs/entity type
+        #         arrive. Confirm players through self identity, team cache, or actual
+        #         parsed player data.
+        #
         if not uuid or not _is_player(uuid):
             return False
         if uuid in self._monsters:
@@ -250,13 +250,13 @@ class PacketParser:
         return self._monsters[uuid]
 
     def _classify_entity_uuid(self, uuid: int) -> tuple[bool, bool]:
-        """Return (is_player, is_monster), preferring observed entity state.
-
-        Some overworld/repeated-instance combat targets reuse UUID layouts that
-        look player-like by suffix. Once SyncNearEntities has registered such a
-        UUID as a monster, keep treating later deltas/damage as monster traffic
-        so DPS/BossHP are not filtered out.
-        """
+        # Return (is_player, is_monster), preferring observed entity state.
+        #
+        #         Some overworld/repeated-instance combat targets reuse UUID layouts that
+        #         look player-like by suffix. Once SyncNearEntities has registered such a
+        #         UUID as a monster, keep treating later deltas/damage as monster traffic
+        #         so DPS/BossHP are not filtered out.
+        #
         if not uuid:
             return False, False
         if uuid in self._monsters:
@@ -264,26 +264,26 @@ class PacketParser:
         return bool(self._is_known_player_uuid(uuid)), bool(_is_monster(uuid))
 
     def reset_scene(self):
-        """场景服务器切换时重置场景数据。
-
-        清除:
-        - 怪物缓存 (旧场景的怪物不会出现在新场景)
-        - 服务器时间偏移 (新服务器有独立时间)
-        - 副本 ID 追踪 (防止后续 SyncDungeonData 二次重置)
-        - 同步计数器 (新服务器需要重新接收首个 full sync)
-        - 场景 ID (新服务器/地图的场景 ID 需要重新识别)
-
-        保留:
-        - 玩家数据 (player identity/profession 跨场景不变)
-        - 玩家 UID (CharId, 跨场景不变)
-        - 职业技能缓存 (profession_skill_cache 跨场景不变)
-
-        v2.1.18: 必须清空 _current_uuid (entity UUID), 因为它是 scene-server-scoped:
-        新场景里玩家的 entity UUID 会变, 旧 UUID 与新 SCDeltaInfo 中的 attacker_uuid
-        永远对不上, 导致 attacker_is_self=False → DPS tracker 永远不会把自己的伤害
-        累计 → 整个 DPS / boss 血条都失效. 清零后 _decode_sync_damage_info 会走
-        UID-based fallback, 直到下一个 SyncToMeDeltaInfo 重新确认 _current_uuid.
-        """
+        # 场景服务器切换时重置场景数据。
+        #
+        #         清除:
+        #         - 怪物缓存 (旧场景的怪物不会出现在新场景)
+        #         - 服务器时间偏移 (新服务器有独立时间)
+        #         - 副本 ID 追踪 (防止后续 SyncDungeonData 二次重置)
+        #         - 同步计数器 (新服务器需要重新接收首个 full sync)
+        #         - 场景 ID (新服务器/地图的场景 ID 需要重新识别)
+        #
+        #         保留:
+        #         - 玩家数据 (player identity/profession 跨场景不变)
+        #         - 玩家 UID (CharId, 跨场景不变)
+        #         - 职业技能缓存 (profession_skill_cache 跨场景不变)
+        #
+        #         v2.1.18: 必须清空 _current_uuid (entity UUID), 因为它是 scene-server-scoped:
+        #         新场景里玩家的 entity UUID 会变, 旧 UUID 与新 SCDeltaInfo 中的 attacker_uuid
+        #         永远对不上, 导致 attacker_is_self=False → DPS tracker 永远不会把自己的伤害
+        #         累计 → 整个 DPS / boss 血条都失效. 清零后 _decode_sync_damage_info 会走
+        #         UID-based fallback, 直到下一个 SyncToMeDeltaInfo 重新确认 _current_uuid.
+        #
         old_count = len(self._monsters)
         # Save template_id → max_hp to cache before clearing
         for m in self._monsters.values():
@@ -332,7 +332,7 @@ class PacketParser:
 
     def _emit_scene_change(self, kind: str, reason: str = '',
                            preserve_combat: bool = False, **extra):
-        """Notify UI layers about scene transitions with backward compatibility."""
+        # Notify UI layers about scene transitions with backward compatibility.
         if not self._on_scene_change:
             return
         event = {
@@ -354,7 +354,7 @@ class PacketParser:
             logger.error(f'[Parser] on_scene_change callback error: {e}')
 
     def _emit_skill_event(self, kind: str, **payload):
-        """Emit normalized skill lifecycle events for ACT/triggers."""
+        # Emit normalized skill lifecycle events for ACT/triggers.
         if not self._on_skill_event:
             return
         event = {
@@ -369,7 +369,7 @@ class PacketParser:
             logger.debug(f'[Parser] on_skill_event callback error: {e}')
 
     def _emit_dungeon_event(self, kind: str, **payload):
-        """Emit normalized dungeon/scene context events for ACT/triggers."""
+        # Emit normalized dungeon/scene context events for ACT/triggers.
         if not self._on_dungeon_event:
             return
         event = {
@@ -384,12 +384,12 @@ class PacketParser:
             logger.debug(f'[Parser] on_dungeon_event callback error: {e}')
 
     def _notify_soft_scene_restart(self, reason: str):
-        """Notify UI layers about a likely new encounter without clearing monsters.
-
-        Upstream counters defer same-instance encounter resets until the next
-        damage packet. Doing the same here avoids wiping DPS/BossHP when a
-        dungeon emits restart-like packets during map/layer mechanics.
-        """
+        # Notify UI layers about a likely new encounter without clearing monsters.
+        #
+        #         Upstream counters defer same-instance encounter resets until the next
+        #         damage packet. Doing the same here avoids wiping DPS/BossHP when a
+        #         dungeon emits restart-like packets during map/layer mechanics.
+        #
         now = time.time()
         if now - self._last_soft_scene_restart_ts < 1.5:
             logger.info(f'[Parser] Soft scene restart suppressed: {reason}')
@@ -419,7 +419,7 @@ class PacketParser:
         )
 
     def _apply_dungeon_target_reset_rules(self, targets, source: str) -> bool:
-        """Mirror upstream objective checks without hard-clearing scene entities."""
+        # Mirror upstream objective checks without hard-clearing scene entities.
         matched = False
         for target_data in targets or []:
             try:
@@ -459,7 +459,7 @@ class PacketParser:
 
     def _notify_soft_scene_transition(self, reason: str, old_scene_key=None,
                                       new_scene_key=None):
-        """Handle same-instance map/layer changes without wiping live combat."""
+        # Handle same-instance map/layer changes without wiping live combat.
         now = time.time()
         if now - self._last_soft_scene_transition_ts < 1.0:
             logger.info(f'[Parser] Soft scene transition suppressed: {reason}')
@@ -489,12 +489,12 @@ class PacketParser:
         )
 
     def _purge_stale_monsters_locked(self, ttl_s: float) -> int:
-        """Drop monsters that have not been updated for at least `ttl_s` seconds.
-
-        Returns the number of evicted entries. Saves each evicted monster's
-        template_id → max_hp into `_monster_hp_cache` first so an Appear
-        packet for the same template can rehydrate max_hp.
-        """
+        # Drop monsters that have not been updated for at least `ttl_s` seconds.
+        #
+        #         Returns the number of evicted entries. Saves each evicted monster's
+        #         template_id → max_hp into `_monster_hp_cache` first so an Appear
+        #         packet for the same template can rehydrate max_hp.
+        #
         if not self._monsters:
             return 0
         now = time.time()
@@ -519,20 +519,20 @@ class PacketParser:
         return len(stale_uuids)
 
     def get_monsters(self) -> Dict[int, MonsterData]:
-        """Return the current monster tracking dict (uuid → MonsterData)."""
+        # Return the current monster tracking dict (uuid → MonsterData).
         return self._monsters
 
     def get_players(self) -> Dict[int, 'PlayerData']:
-        """Return all tracked players (uid → PlayerData) for info sync."""
+        # Return all tracked players (uid → PlayerData) for info sync.
         return self._players
 
     def get_alive_monsters(self) -> list:
-        """Return list of alive monster dicts (for UI consumption)."""
+        # Return list of alive monster dicts (for UI consumption).
         return [m.to_dict() for m in self._monsters.values()
                 if not m.is_dead and m.max_hp > 0]
 
     def _notify_monster(self, monster: MonsterData):
-        """Fire on_monster_update callback if registered."""
+        # Fire on_monster_update callback if registered.
         if self._on_monster_update:
             self.stats['monster_updates'] += 1
             try:
@@ -542,7 +542,7 @@ class PacketParser:
 
     def _notify_boss_event(self, event_type: int, host_uuid: int,
                            buff_uuid: int = 0, extra: Optional[dict] = None):
-        """Fire on_boss_event callback for boss-relevant buff events."""
+        # Fire on_boss_event callback for boss-relevant buff events.
         if self._on_boss_event:
             self.stats['boss_events'] += 1
             event = {
@@ -589,30 +589,30 @@ class PacketParser:
         return matched
 
     def set_subscribed_messages(self, names: Optional[set]) -> None:
-        """Phase 9: restrict which TCP messages trigger upstream callbacks.
-
-        Pass `None` to subscribe to everything (default). Pass a set of
-        message names like {'SyncContainerData'} to dispatch only those.
-        Other messages are still parsed (for internal state coherence)
-        but their on_* callbacks are skipped, saving CPU on the consumer
-        side (DpsTracker, BossRaidEngine, etc.).
-
-        Used by mem_probe.tcp_source.TcpSnapshotSource(mode='anchor_only')
-        to keep the TCP path cheap once mem_probe owns the data flow.
-        """
+        # Phase 9: restrict which TCP messages trigger upstream callbacks.
+        #
+        #         Pass `None` to subscribe to everything (default). Pass a set of
+        #         message names like {'SyncContainerData'} to dispatch only those.
+        #         Other messages are still parsed (for internal state coherence)
+        #         but their on_* callbacks are skipped, saving CPU on the consumer
+        #         side (DpsTracker, BossRaidEngine, etc.).
+        #
+        #         Used by mem_probe.tcp_source.TcpSnapshotSource(mode='anchor_only')
+        #         to keep the TCP path cheap once mem_probe owns the data flow.
+        #
         if names is None:
             self._subscribed_messages = None
         else:
             self._subscribed_messages = {str(n) for n in names}
 
     def _is_subscribed(self, name: str) -> bool:
-        """Returns True if message `name` should fire upstream callbacks."""
+        # Returns True if message `name` should fire upstream callbacks.
         if self._subscribed_messages is None:
             return True
         return name in self._subscribed_messages
 
     def _notify_self(self):
-        """Notify callback for current player if available."""
+        # Notify callback for current player if available.
         if self._current_uid and self._current_uid in self._players:
             p = self._players[self._current_uid]
             p.self_uid_confirmed = bool(self._current_uid_confirmed)
@@ -630,7 +630,7 @@ class PacketParser:
                 logger.error(f'[Parser] callback error: {e}')
 
     def _apply_cached_profession_slots(self, player: PlayerData) -> bool:
-        """Reuse the last known slot map for a profession when only profession id is available."""
+        # Reuse the last known slot map for a profession when only profession id is available.
         profession_id = int(getattr(player, 'profession_id', 0) or 0)
         if profession_id <= 0:
             return False
@@ -640,7 +640,7 @@ class PacketParser:
         return self._set_authoritative_skill_slots(player, cached_slot_map)
 
     def _set_authoritative_skill_slots(self, player: PlayerData, slot_skill_map: Dict[int, int]) -> bool:
-        """Apply ProfessionList-derived slots and clear any inference marker."""
+        # Apply ProfessionList-derived slots and clear any inference marker.
         next_map = dict(slot_skill_map or {})
         changed = next_map != player.skill_slot_map
         if changed:
@@ -651,13 +651,13 @@ class PacketParser:
         return changed
 
     def _try_detect_profession(self, player: PlayerData, skill_level_id: int) -> bool:
-        """Auto-detect profession from observed skill IDs when SyncContainerData was missed.
-
-        Uses reverse lookup from PROFESSION_NORMAL_ATTACK / PROFESSION_SKILL /
-        PROFESSION_ULTIMATE / PROFESSION_SKILL_VARIANTS tables to identify
-        the player's current profession from any matching skill_level_id.
-        Also detects sub-profession branch from SUB_PROFESSION_NAMES.
-        """
+        # Auto-detect profession from observed skill IDs when SyncContainerData was missed.
+        #
+        #         Uses reverse lookup from PROFESSION_NORMAL_ATTACK / PROFESSION_SKILL /
+        #         PROFESSION_ULTIMATE / PROFESSION_SKILL_VARIANTS tables to identify
+        #         the player's current profession from any matching skill_level_id.
+        #         Also detects sub-profession branch from SUB_PROFESSION_NAMES.
+        #
         base = skill_level_id // 100 if skill_level_id >= 100 else skill_level_id
 
         # Try to detect sub-profession branch even if profession is already known
@@ -685,7 +685,7 @@ class PacketParser:
         return False
 
     def _remember_seen_skill(self, player: PlayerData, skill_level_id: int) -> bool:
-        """Cache every observed skill id, including zero-duration attack pings."""
+        # Cache every observed skill id, including zero-duration attack pings.
         skill_level_id = int(skill_level_id or 0)
         if skill_level_id <= 0:
             return False
@@ -699,7 +699,7 @@ class PacketParser:
         return True
 
     def _replace_skill_cds(self, player: PlayerData, skill_cds) -> bool:
-        """Replace the full self cooldown snapshot from UserFightAttr.CdInfo."""
+        # Replace the full self cooldown snapshot from UserFightAttr.CdInfo.
         normalized: Dict[int, Dict[str, Any]] = {}
         observed_at_ms = int(time.time() * 1000)
         previous = player.skill_cd_map
@@ -751,7 +751,7 @@ class PacketParser:
         return True
 
     def _update_skill_cd(self, player: PlayerData, skill_cd: Dict[str, Any]) -> bool:
-        """Merge one cooldown delta from AoiSyncToMeDelta.SyncSkillCDs."""
+        # Merge one cooldown delta from AoiSyncToMeDelta.SyncSkillCDs.
         skill_level_id = int(skill_cd.get('skill_level_id') or 0)
         if skill_level_id <= 0:
             return False
@@ -886,7 +886,7 @@ class PacketParser:
 
     @_probe.decorate('parser.process_packet')
     def process_packet(self, frame: bytes):
-        """Process one framed packet: `[4B size][2B type][payload]`."""
+        # Process one framed packet: `[4B size][2B type][payload]`.
         if len(frame) < 6:
             return
         self.stats['raw_frames'] += 1
@@ -1022,7 +1022,7 @@ class PacketParser:
 
 
     def _on_sync_server_time(self, data: bytes):
-        """Track server/client time delta for packet-only cooldown progress."""
+        # Track server/client time delta for packet-only cooldown progress.
         pb = _ensure_pb()
         if not pb:
             return
@@ -1054,13 +1054,13 @@ class PacketParser:
 
 
     def _on_notify_buff_change(self, data: bytes):
-        """Handle NotifyBuffChange (0x3003 / 12291) — buff replacement notification.
-
-        NotifyBuffChange proto:
-            int32 OldBuffId = 1;   // 被替换的buff
-            int32 NewBuffId = 2;   // 新buff
-        Note: Full buff state is tracked from AoiSyncDelta.BuffInfos and Entity.BuffInfos.
-        """
+        # Handle NotifyBuffChange (0x3003 / 12291) — buff replacement notification.
+        #
+        #         NotifyBuffChange proto:
+        #             int32 OldBuffId = 1;   // 被替换的buff
+        #             int32 NewBuffId = 2;   // 新buff
+        #         Note: Full buff state is tracked from AoiSyncDelta.BuffInfos and Entity.BuffInfos.
+        #
         pb = _ensure_pb()
         if not pb:
             return
@@ -1076,13 +1076,13 @@ class PacketParser:
             logger.debug(f'[Parser] NotifyBuffChange decode error: {e}')
 
     def _on_sync_client_use_skill(self, data: bytes):
-        """Handle SyncClientUseSkill (0x3002 / 12290) — skill use confirmation.
-
-        SyncClientUseSkill proto:
-            int64 SkillTargetUuid = 1;   // 技能目标
-            int32 SkillLevelId = 2;      // 技能等级ID
-        Note: caster is implied to be the local player ("Client" use skill).
-        """
+        # Handle SyncClientUseSkill (0x3002 / 12290) — skill use confirmation.
+        #
+        #         SyncClientUseSkill proto:
+        #             int64 SkillTargetUuid = 1;   // 技能目标
+        #             int32 SkillLevelId = 2;      // 技能等级ID
+        #         Note: caster is implied to be the local player ("Client" use skill).
+        #
         pb = _ensure_pb()
         if not pb:
             return
@@ -1119,11 +1119,11 @@ class PacketParser:
             logger.debug(f'[Parser] SyncClientUseSkill decode error: {e}')
 
     def _on_sync_server_skill_end(self, data: bytes):
-        """Handle SyncServerSkillEnd (0x3005 / 12293) — skill cast completed.
-
-        SyncServerSkillEnd proto:
-            int32 SkillUuid = 1;    // 技能会话ID
-        """
+        # Handle SyncServerSkillEnd (0x3005 / 12293) — skill cast completed.
+        #
+        #         SyncServerSkillEnd proto:
+        #             int32 SkillUuid = 1;    // 技能会话ID
+        #
         pb = _ensure_pb()
         if not pb:
             return
@@ -1141,16 +1141,16 @@ class PacketParser:
             logger.debug(f'[Parser] SyncServerSkillEnd decode error: {e}')
 
     def _on_sync_server_skill_stage_end(self, data: bytes):
-        """Handle SyncServerSkillStageEnd (0x3004 / 12292).
-
-        SyncServerSkillStageEnd proto:
-            ServerSkillStageEnd SkillStageEndInfo = 1;
-        ServerSkillStageEnd proto:
-            int32 SkillUuid = 1;
-            uint32 StageId = 2;
-            uint32 NewStageId = 3;
-            uint32 ConditionId = 4;
-        """
+        # Handle SyncServerSkillStageEnd (0x3004 / 12292).
+        #
+        #         SyncServerSkillStageEnd proto:
+        #             ServerSkillStageEnd SkillStageEndInfo = 1;
+        #         ServerSkillStageEnd proto:
+        #             int32 SkillUuid = 1;
+        #             uint32 StageId = 2;
+        #             uint32 NewStageId = 3;
+        #             uint32 ConditionId = 4;
+        #
         pb = _ensure_pb()
         if not pb:
             return
@@ -1180,9 +1180,9 @@ class PacketParser:
             logger.debug(f'[Parser] SyncServerSkillStageEnd decode error: {e}')
 
     def _on_qte_begin(self, data: bytes):
-        """Handle QteBegin (0x3001 / 12289) — QTE event start.
-        Note: QteBegin not in compiled proto — uses _decode_fields.
-        """
+        # Handle QteBegin (0x3001 / 12289) — QTE event start.
+        #         Note: QteBegin not in compiled proto — uses _decode_fields.
+        #
         try:
             outer = _decode_fields(data)
             qte_id = outer.get(1, [0])[0]
@@ -1199,7 +1199,7 @@ class PacketParser:
 
 
     def _on_enter_scene(self, data: bytes):
-        """Handle EnterScene (0x03) — authoritative scene attribute sync."""
+        # Handle EnterScene (0x03) — authoritative scene attribute sync.
         pb = _ensure_pb()
         if not pb:
             return
@@ -1270,17 +1270,17 @@ class PacketParser:
 
 
     def _on_sync_dungeon_data(self, data: bytes):
-        """Handle SyncDungeonData (0x17) — dungeon context sync.
-
-        SyncDungeonData proto:
-            DungeonSyncData VData = 1;
-        DungeonSyncData proto:
-            int64 SceneUuid = 1;
-            DungeonFlowInfo FlowInfo = 2;
-            DungeonSettlement Settlement = 7;
-            DungeonSceneInfo DungeonSceneInfo = 21;
-            ...
-        """
+        # Handle SyncDungeonData (0x17) — dungeon context sync.
+        #
+        #         SyncDungeonData proto:
+        #             DungeonSyncData VData = 1;
+        #         DungeonSyncData proto:
+        #             int64 SceneUuid = 1;
+        #             DungeonFlowInfo FlowInfo = 2;
+        #             DungeonSettlement Settlement = 7;
+        #             DungeonSceneInfo DungeonSceneInfo = 21;
+        #             ...
+        #
         pb = _ensure_pb()
         if not pb:
             return
@@ -1349,7 +1349,7 @@ class PacketParser:
             logger.debug(f'[Parser] SyncDungeonData decode error: {e}')
 
     def _on_sync_dungeon_dirty_data(self, data: bytes):
-        """Handle SyncDungeonDirtyData (0x18) target progress updates."""
+        # Handle SyncDungeonDirtyData (0x18) target progress updates.
         pb = _ensure_pb()
         if not pb:
             return
@@ -1394,11 +1394,11 @@ class PacketParser:
             self._apply_dungeon_target_reset_rules(targets, 'sync_dungeon_dirty_data')
 
     def _on_notify_start_playing_dungeon(self, data: bytes):
-        """Handle NotifyStartPlayingDungeon (0x37) — dungeon play started.
-
-        NotifyStartPlayingDungeon proto:
-            int32 DungeonId = 1;
-        """
+        # Handle NotifyStartPlayingDungeon (0x37) — dungeon play started.
+        #
+        #         NotifyStartPlayingDungeon proto:
+        #             int32 DungeonId = 1;
+        #
         try:
             outer = _decode_fields(data)
             dungeon_id = outer.get(1, [0])[0]
@@ -1457,12 +1457,12 @@ class PacketParser:
 
 
     def _on_enter_game(self, data: bytes):
-        """Handle EnterGame (0x14) — login notification.
-
-        EnterGame proto:
-            int64 Uid = 1;
-            string ServerName = 2;
-        """
+        # Handle EnterGame (0x14) — login notification.
+        #
+        #         EnterGame proto:
+        #             int64 Uid = 1;
+        #             string ServerName = 2;
+        #
         try:
             outer = _decode_fields(data)
             uid_raw = outer.get(1, [0])[0]
@@ -1488,11 +1488,11 @@ class PacketParser:
             logger.debug(f'[Parser] EnterGame decode error: {e}')
 
     def _on_notify_revive_user(self, data: bytes):
-        """Handle NotifyReviveUser (0x27) — player revived.
-
-        NotifyReviveUser proto:
-            int64 VActorUuid = 1;
-        """
+        # Handle NotifyReviveUser (0x27) — player revived.
+        #
+        #         NotifyReviveUser proto:
+        #             int64 VActorUuid = 1;
+        #
         pb = _ensure_pb()
         if not pb:
             return
@@ -1514,11 +1514,11 @@ class PacketParser:
             logger.debug(f'[Parser] NotifyReviveUser decode error: {e}')
 
     def _on_notify_team_generic(self, notify_name: str, data: bytes):
-        """Handle team-related notify packets (AllMemberReady, CaptainReady, MatchResult).
-
-        These packets may carry team roster data. We log the raw payload and
-        attempt to decode it as CharTeam or other team-related messages.
-        """
+        # Handle team-related notify packets (AllMemberReady, CaptainReady, MatchResult).
+        #
+        #         These packets may carry team roster data. We log the raw payload and
+        #         attempt to decode it as CharTeam or other team-related messages.
+        #
         print(
             f'[Parser] 收到队伍通知: {notify_name} (len={len(data)})',
             flush=True,
@@ -1554,7 +1554,7 @@ class PacketParser:
             logger.info(f'[Parser] {notify_name}: not decodable as CharTeam, raw logged')
 
     def _on_sync_container_data(self, data: bytes):
-        """SyncContainerData { CharSerialize VData = 1 } — 纯 pb2 解析."""
+        # SyncContainerData { CharSerialize VData = 1 } — 纯 pb2 解析.
         pb = _ensure_pb()
         if not pb:
             logger.error('[Parser] SyncContainerData: pb2 模块未加载，跳过')
@@ -2182,7 +2182,7 @@ class PacketParser:
 
 
     def _on_sync_container_dirty(self, data: bytes):
-        """Handle the custom dirty-data stream wrapper."""
+        # Handle the custom dirty-data stream wrapper.
         if not self._current_uid_confirmed:
             self._queue_pending_self_dirty_packet(data)
             return
@@ -2200,7 +2200,7 @@ class PacketParser:
 
     @_probe.decorate('parser._parse_dirty_stream')
     def _parse_dirty_stream(self, data: bytes):
-        """Parse the custom dirty-data binary stream used by V3.3.6."""
+        # Parse the custom dirty-data binary stream used by V3.3.6.
         pos = 0
         uid = self._current_uid
         player = self._get_player(uid)
@@ -2850,7 +2850,7 @@ class PacketParser:
 
     @_probe.decorate('parser._process_aoi_sync_delta')
     def _process_aoi_sync_delta(self, delta):
-        """Process an AoiSyncDelta pb2 object."""
+        # Process an AoiSyncDelta pb2 object.
         uuid = delta.Uuid
         if uuid == 0:
             return
@@ -2923,9 +2923,9 @@ class PacketParser:
     def _process_skill_effect(self, target_uuid: int, target_is_player: bool,
                               target_is_monster: bool,
                               target_is_combat_target: bool, se):
-        """Decode SkillEffect (AoiSyncDelta field 7) and emit damage events.
-        se is a pb2 SkillEffect object.
-        """
+        # Decode SkillEffect (AoiSyncDelta field 7) and emit damage events.
+        #         se is a pb2 SkillEffect object.
+        #
         for dmg in se.Damages:
             try:
                 self._decode_sync_damage_info(target_uuid, target_is_player,
@@ -2937,7 +2937,7 @@ class PacketParser:
     def _decode_sync_damage_info(self, target_uuid: int, target_is_player: bool,
                                  target_is_monster: bool,
                                  target_is_combat_target: bool, dmg):
-        """Decode a single SyncDamageInfo pb2 object and fire on_damage callback."""
+        # Decode a single SyncDamageInfo pb2 object and fire on_damage callback.
         damage_type = int(dmg.Type)
         if damage_type in (DamageType.MISS, DamageType.FALL):
             return
@@ -3135,7 +3135,7 @@ class PacketParser:
 
     @_probe.decorate('parser._process_monster_attr_collection')
     def _process_monster_attr_collection(self, uuid: int, ac):
-        """Decode AttrCollection pb2 object from a monster delta and update MonsterData."""
+        # Decode AttrCollection pb2 object from a monster delta and update MonsterData.
         if not ac.Attrs:
             return
 
@@ -3367,18 +3367,18 @@ class PacketParser:
     # ── CharTeam parsing — party / team members ──
 
     def _process_char_team(self, self_uid: int, team_info):
-        """Parse CharTeam pb2 message and populate _players + _team_members.
-
-        CharTeam fields:
-          TeamId(1), LeaderId(2), TeamTargetId(3), TeamNum(4),
-          CharIds(5, repeated int64), IsMatching(6), CharTeamVersion(7),
-          TeamMemberData(8, map<int64, TeamMemData>)
-
-        TeamMemData → SocialData(9, TeamMemberSocialData) →
-          BasicData(1) → Name(3), Level(6)
-          ProfessionData(4) → ProfessionId(1)
-          UserAttrData(8) → FightPoint(2)
-        """
+        # Parse CharTeam pb2 message and populate _players + _team_members.
+        #
+        #         CharTeam fields:
+        #           TeamId(1), LeaderId(2), TeamTargetId(3), TeamNum(4),
+        #           CharIds(5, repeated int64), IsMatching(6), CharTeamVersion(7),
+        #           TeamMemberData(8, map<int64, TeamMemData>)
+        #
+        #         TeamMemData → SocialData(9, TeamMemberSocialData) →
+        #           BasicData(1) → Name(3), Level(6)
+        #           ProfessionData(4) → ProfessionId(1)
+        #           UserAttrData(8) → FightPoint(2)
+        #
         team_id = team_info.TeamId
         leader_id = team_info.LeaderId
         char_ids = list(team_info.CharIds)
@@ -3617,7 +3617,7 @@ class PacketParser:
         })
 
     def _decode_shield_list(self, monster: MonsterData, raw_data: bytes):
-        """Decode AttrShieldList (60050) — repeated ShieldInfo messages."""
+        # Decode AttrShieldList (60050) — repeated ShieldInfo messages.
         # The raw_data for AttrShieldList is a protobuf with repeated ShieldInfo
         # ShieldInfo: uuid=1(int32), shield_type=2(int32), value=3(int64),
         #             initial_value=4(int64), max_value=5(int64)
@@ -3664,7 +3664,7 @@ class PacketParser:
 
 
     def _process_buff_effect_sync(self, host_uuid: int, sync):
-        """Decode BuffEffectSync pb2 object (AoiSyncDelta field 11) for boss events."""
+        # Decode BuffEffectSync pb2 object (AoiSyncDelta field 11) for boss events.
         try:
             for be in sync.BuffEffects:
                 event_type = int(be.Type)
@@ -3706,13 +3706,13 @@ class PacketParser:
 
 
     def _process_temp_attr_collection(self, uid: int, tac):
-        """Process TempAttrCollection pb2 object for CD-related buff modifiers.
-
-        Relevant TempAttr types (from resonance-logs-cn skill_cd_monitor.rs):
-          100 = percent CD reduction (万分比, /10000) — cumulative across buffs
-          101 = flat CD reduction (ms) — cumulative
-          103 = CD acceleration (万分比, /10000) — cumulative
-        """
+        # Process TempAttrCollection pb2 object for CD-related buff modifiers.
+        #
+        #         Relevant TempAttr types (from resonance-logs-cn skill_cd_monitor.rs):
+        #           100 = percent CD reduction (万分比, /10000) — cumulative across buffs
+        #           101 = flat CD reduction (ms) — cumulative
+        #           103 = CD acceleration (万分比, /10000) — cumulative
+        #
         try:
             if not tac.Attrs:
                 return
@@ -3770,7 +3770,7 @@ class PacketParser:
 
     @_probe.decorate('parser._process_attr_collection')
     def _process_attr_collection(self, uid: int, ac):
-        """Process AttrCollection pb2 object for player attrs."""
+        # Process AttrCollection pb2 object for player attrs.
         if not ac.Attrs:
             return
 
@@ -4045,7 +4045,7 @@ class PacketParser:
 
 
     def _decompress(self, data: bytes) -> Optional[bytes]:
-        """Zstd decompression helper matching the Node.js reference behavior."""
+        # Zstd decompression helper matching the Node.js reference behavior.
         try:
             if self._zstd is None:
                 self._zstd = _ensure_zstd()

@@ -1,5 +1,5 @@
-﻿# -*- coding: utf-8 -*-
-"""SAOHPBar (split from sao_theme.py — verbatim)."""
+# -*- coding: utf-8 -*-
+# SAOHPBar (split from sao_theme.py — verbatim).
 import tkinter as tk
 from utils.sao_sound import get_sao_font as _sao_font
 from sao_theme.animator import Animator
@@ -7,14 +7,14 @@ from sao_theme.utils import lerp
 
 # ──────────────────── HP 血条 ────────────────────
 class SAOHPBar(tk.Canvas):
-    """
-    SAO Utils 风格 HP 条
-    - 左侧缺口方块
-    - 用户名标签
-    - HP 数值 + Lv 等级
-    - 绿/黄/红 渐变条
-    - SVG polygon 风格边框
-    """
+    #
+    #     SAO Utils 风格 HP 条
+    #     - 左侧缺口方块
+    #     - 用户名标签
+    #     - HP 数值 + Lv 等级
+    #     - 绿/黄/红 渐变条
+    #     - SVG polygon 风格边框
+    #
 
     def __init__(self, parent, username='Player', current=100, total=100,
                  level=1, width=400, height=40, **kw):
