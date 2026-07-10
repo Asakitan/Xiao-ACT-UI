@@ -2142,10 +2142,18 @@ class PluginManager:
             if changed:
                 changed_ids.add(pid)
             if changed and bool(old_record.loaded or old_record.active or old_record.module is not None):
+                unloaded = False
                 try:
-                    self.unload_plugin(pid)
+                    unloaded = bool(self.unload_plugin(pid))
                 except Exception:
-                    pass
+                    unloaded = False
+                if not unloaded:
+                    # Discovery must not replace or forget a record which
+                    # still owns live plugin resources.  Keep it retryable;
+                    # the new manifest will be reconsidered on the next scan.
+                    records[pid] = old_record
+                    changed_ids.discard(pid)
+                    continue
             elif not changed and bool(old_record.loaded or old_record.active or old_record.module is not None):
                 old_record.enabled = bool(getattr(new_record, "enabled", old_record.enabled))
                 records[pid] = old_record
@@ -2185,8 +2193,13 @@ class PluginManager:
         if record.plugin_id in persisted and not record.last_error:
             record.enabled = bool(persisted[record.plugin_id])
         existing = self._records.get(record.plugin_id)
-        if existing is not None and existing.loaded:
-            self.unload_plugin(record.plugin_id)
+        if existing is not None and bool(
+                existing.loaded or existing.active
+                or existing.module is not None):
+            if not self.unload_plugin(record.plugin_id):
+                raise RuntimeError(
+                    f"plugin rundown unconfirmed: {record.plugin_id}"
+                )
         self._records[record.plugin_id] = record
         self._publish_plugin_lifecycle(record, "discovered")
         try:
@@ -2273,7 +2286,11 @@ class PluginManager:
         record = self._records.get(str(plugin_id or ""))
         if record is None:
             return False
-        self.unload_plugin(record.plugin_id)
+        # A live module/context is still the owner until its unload hook and
+        # registered workers both confirm rundown.  Never overwrite it with a
+        # replacement module after an unconfirmed stop.
+        if not self.unload_plugin(record.plugin_id):
+            return False
         if not record.enabled:
             return False
         try:
@@ -2323,6 +2340,7 @@ class PluginManager:
             except Exception:
                 pass
         context = record.context
+        hook_confirmed = True
         if record.module is not None and not bool(
                 context is not None and context._unload_hooks_called):
             try:
@@ -2330,10 +2348,11 @@ class PluginManager:
             except Exception:
                 pass
             try:
-                self._call_hook(record, "on_unload")
+                hook_result = self._call_hook(record, "on_unload")
+                hook_confirmed = hook_result is not False
             except Exception:
-                pass
-            if context is not None:
+                hook_confirmed = False
+            if context is not None and hook_confirmed:
                 context._unload_hooks_called = True
         if context is not None:
             try:
@@ -2343,6 +2362,10 @@ class PluginManager:
             if not threads_stopped:
                 record.last_error = "plugin worker rundown timed out"
                 return False
+        if not hook_confirmed:
+            if not record.last_error:
+                record.last_error = "plugin on_unload did not confirm rundown"
+            return False
         self._unload_script_runtime(record)
         for token in list(record.subscriptions):
             self.event_bus.unsubscribe(token)
@@ -2406,8 +2429,14 @@ class PluginManager:
         return self.load_plugin(record.plugin_id) if record.enabled else False
 
     def reload_all(self) -> dict[str, Any]:
+        blocked = []
         for plugin_id in list(self._records):
-            self.unload_plugin(plugin_id)
+            if not self.unload_plugin(plugin_id):
+                blocked.append(plugin_id)
+        if blocked:
+            status = self.status()
+            status["reload_blocked"] = blocked
+            return status
         self.discover()
         return self.load_all()
 

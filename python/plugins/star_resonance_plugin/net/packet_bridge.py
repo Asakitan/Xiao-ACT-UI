@@ -650,27 +650,45 @@ class PacketBridge:
             pass
 
     def stop(self):
-        # 停止抓包
+        # Stop every producer and retain ownership of anything whose rundown
+        # cannot be confirmed.  Callers use False to block later helper/
+        # compositor teardown and retry this same instance.
         self._running = False
+        confirmed = True
         if self._mem_source is not None:
+            mem_stopped = False
             try:
-                self._mem_source.stop()
+                mem_stopped = self._mem_source.stop() is not False
             except Exception:
-                pass
-            self._mem_source = None
+                mem_stopped = False
+            if mem_stopped:
+                self._mem_source = None
+            else:
+                confirmed = False
         if self._capture:
             try:
-                self._capture.stop()
+                if self._capture.stop() is False:
+                    confirmed = False
             except Exception:
-                pass
+                confirmed = False
         if self._parser_adapter is not None:
             try:
-                self._parser_adapter.stop()
+                if self._parser_adapter.stop() is False:
+                    confirmed = False
             except Exception:
-                pass
+                confirmed = False
         if self._thread:
-            self._thread.join(timeout=3)
-            self._thread = None
+            thread = self._thread
+            try:
+                thread.join(timeout=3)
+                alive = bool(thread.is_alive())
+            except Exception:
+                alive = True
+            if alive:
+                confirmed = False
+            else:
+                self._thread = None
+        return confirmed
 
     def single_capture(self):
         # 返回当前快照 (兼容 RecognitionEngine 接口)

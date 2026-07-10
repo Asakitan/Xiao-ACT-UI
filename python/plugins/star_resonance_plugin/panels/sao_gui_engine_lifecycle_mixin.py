@@ -80,38 +80,54 @@ class SAOPlayerGUIEngineLifecycleMixin:
         # mem_bridge 是重点 — 它管着 kernel-side 物理内存写的 mutation
         # coordinator, 强行 destroy 会撞穿别人的 pa. mem_bridge.stop() 返回
         # False → 保留 _mem_bridge 引用 + 立即返 False 阻塞 shutdown.
-        # 其他 engine (auto_key/boss_raid/vision/packet) 都是 user-mode
-        # 生命周期, stop 失败不阻塞.
-        if getattr(self, '_mem_bridge', None):
-            stopped = False
+        # Every producer participates in the same fail-closed contract.  An
+        # owner reference is cleared only after stop() confirms it is no
+        # longer live; otherwise the next close attempt must be able to retry.
+        stopped_ids = set()
+
+        def _stop_owner(attr_name):
+            engine = getattr(self, attr_name, None)
+            if engine is None:
+                return True
             try:
-                stopped = self._mem_bridge.stop() is not False
+                stopped = engine.stop() is not False
             except Exception:
                 stopped = False
             if not stopped:
                 return False
-            self._mem_bridge = None
-        if getattr(self, '_auto_key_engine', None):
-            try: self._auto_key_engine.stop()
-            except Exception: pass
-            self._auto_key_engine = None
-        if getattr(self, '_boss_raid_engine', None):
-            try: self._boss_raid_engine.stop()
-            except Exception: pass
-            self._boss_raid_engine = None
+            stopped_ids.add(id(engine))
+            setattr(self, attr_name, None)
+            return True
+
+        for attr_name in (
+                '_mem_bridge', '_auto_key_engine', '_boss_raid_engine',
+                '_packet_engine', '_vision_engine'):
+            if not _stop_owner(attr_name):
+                return False
+
+        engines = list(getattr(self, '_recognition_engines', []) or [])
+        primary = getattr(self, '_recognition_engine', None)
+        if primary is not None and all(primary is not item for item in engines):
+            engines.append(primary)
+        for index, engine in enumerate(engines):
+            if engine is None or id(engine) in stopped_ids:
+                continue
+            try:
+                stopped = engine.stop() is not False
+            except Exception:
+                stopped = False
+            if not stopped:
+                self._recognition_engines = engines[index:]
+                self._recognition_engine = engine
+                return False
+            stopped_ids.add(id(engine))
+
         # Plugins (incl. the hide_seek_plugin that now owns the hide-and-seek
         # engine) are unloaded here; their on_unload stops any owned engines.
-        shutdown_act_plugin_manager(self)
-        engines = list(getattr(self, '_recognition_engines', []) or [])
-        if not engines and self._recognition_engine:
-            engines = [self._recognition_engine]
-        for engine in engines:
-            try: engine.stop()
-            except Exception: pass
+        if not shutdown_act_plugin_manager(self):
+            return False
         self._recognition_engines = []
         self._recognition_engine = None
-        self._packet_engine = None
-        self._vision_engine = None
         self._reset_sta_offline_state()
         return True
 
@@ -463,4 +479,3 @@ class SAOPlayerGUIEngineLifecycleMixin:
                 settings.save()
             except Exception:
                 pass
-

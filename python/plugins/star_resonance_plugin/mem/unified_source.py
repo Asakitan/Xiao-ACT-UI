@@ -199,15 +199,24 @@ class UnifiedDataSource:
             self._emit_self_update_if_changed()
             return True
 
-    def stop(self) -> None:
-        # Stop the underlying bridge. Never raises.
-        try:
-            self._bridge.stop()
-        except Exception as exc:
-            self._last_error = str(exc)
-        self._started = False
-        self._deferred = False
-        self._notify_status("stopped", self._last_error)
+    def stop(self) -> bool:
+        # Serialize against a deferred/start_bridge transition and publish
+        # "stopped" only after the underlying producer confirms rundown.
+        with self._start_lock:
+            try:
+                stopped = self._bridge.stop() is not False
+            except Exception as exc:
+                self._last_error = str(exc)
+                stopped = False
+            if not stopped:
+                if not self._last_error:
+                    self._last_error = "MemStateBridge refused rundown"
+                self._notify_status("error", self._last_error)
+                return False
+            self._started = False
+            self._deferred = False
+            self._notify_status("stopped", self._last_error)
+            return True
 
     def health(self) -> dict:
         # Return a JSON-serializable health snapshot.

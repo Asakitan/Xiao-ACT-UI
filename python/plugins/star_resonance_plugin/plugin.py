@@ -624,12 +624,43 @@ def on_disable():
 
 def on_unload():
     global _ctx, _engines_started
-    if _ctx is not None:
-        _ctx.log('[SR] Star Resonance plugin unloading')
+    ctx = _ctx
+    if ctx is not None:
+        ctx.log('[SR] Star Resonance plugin unloading')
+        owner = getattr(getattr(ctx, 'engine', None), 'owner', None)
+        stopped_ids = set()
+        for attr_name in (
+                '_packet_engine', '_vision_engine', '_auto_key_engine',
+                '_boss_raid_engine', '_boss_autokey_linkage'):
+            engine = getattr(owner, attr_name, None) if owner is not None else None
+            if engine is None or id(engine) in stopped_ids:
+                continue
+            stop_fn = getattr(engine, 'stop', None)
+            if not callable(stop_fn):
+                stop_fn = getattr(engine, 'panic_stop', None)
+            try:
+                stopped = not callable(stop_fn) or stop_fn() is not False
+            except Exception:
+                stopped = False
+            if not stopped:
+                ctx.log(f'[SR] producer rundown refused: {attr_name}')
+                return False
+            stopped_ids.add(id(engine))
+            setattr(owner, attr_name, None)
+        if owner is not None:
+            engines = list(getattr(owner, '_recognition_engines', []) or [])
+            owner._recognition_engines = [
+                engine for engine in engines if id(engine) not in stopped_ids]
+            if id(getattr(owner, '_recognition_engine', None)) in stopped_ids:
+                owner._recognition_engine = None
+            owner._recognition_active = bool(
+                getattr(owner, '_packet_engine', None)
+                or getattr(owner, '_vision_engine', None))
         try:
             from plugins.star_resonance_plugin.ai_actions import uninstall_ai_engine_actions
-            uninstall_ai_engine_actions(_ctx.engine.owner)
+            uninstall_ai_engine_actions(ctx.engine.owner)
         except Exception:
             pass
     _ctx = None
     _engines_started = False
+    return True
