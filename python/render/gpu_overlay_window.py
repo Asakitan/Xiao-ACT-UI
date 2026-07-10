@@ -376,20 +376,18 @@ def prestart_unified_overlay(root: Any = None) -> None:
             if attempt < max_attempts:
                 import time as _t
                 _t.sleep(2.0)
-    # All attempts exhausted — clean up state and fail fatally.
-    try:
-        uo = _unified_overlay_instance
-        if uo is not None:
-            uo.stop()
-    except Exception:
-        pass
+    # All attempts exhausted — drop the singleton only if teardown is proven.
+    # A live host reference is more important than making a later retry look
+    # clean: clearing it here could let a second compositor start.
+    cleanup_confirmed = False
     try:
         from render import overlay_compositor as _oc
-        _oc.reset_unified_overlay()
+        cleanup_confirmed = bool(_oc.reset_unified_overlay())
     except Exception:
-        pass
-    _unified_overlay_instance = None
-    _UNIFIED_OVERLAY_MODE = False
+        cleanup_confirmed = False
+    if cleanup_confirmed:
+        _unified_overlay_instance = None
+        _UNIFIED_OVERLAY_MODE = False
     raise RuntimeError(
         f'compositor failed after {max_attempts} attempts: {last_exc}')
 

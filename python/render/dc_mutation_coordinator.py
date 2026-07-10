@@ -1,10 +1,10 @@
-"""Serialized, generation-aware display-context mutations for overlay HWNDs.
-
-The compositor and Tk threads submit work here instead of blocking on the
-rt_io pipe.  Calls with the same ``(hwnd, generation, operation)`` key are
-coalesced while an earlier call is in flight.  No helper/backend import occurs
-until work is actually submitted.
-"""
+# Serialized, generation-aware display-context mutations for overlay HWNDs.
+#
+# The compositor and Tk threads submit work here instead of blocking on the
+# rt_io pipe.  Calls with the same ``(hwnd, generation, operation)`` key are
+# coalesced while an earlier call is in flight.  No helper/backend import occurs
+# until work is actually submitted.
+#
 from __future__ import annotations
 
 from collections import deque
@@ -24,7 +24,7 @@ class _Mutation:
 
 
 class InvalidationBarrier:
-    """Completion token for a revoked HWND generation."""
+    # Completion token for a revoked HWND generation.
 
     def __init__(self) -> None:
         self._event = threading.Event()
@@ -43,7 +43,7 @@ class InvalidationBarrier:
 
 
 class DcMutationCoordinator:
-    """Own one mutation worker and make HWND teardown an explicit barrier."""
+    # Own one mutation worker and make HWND teardown an explicit barrier.
 
     def __init__(self, dc_module=None) -> None:
         self._dc_module = dc_module
@@ -53,6 +53,15 @@ class DcMutationCoordinator:
         self._queued: set[tuple[int, int, str]] = set()
         self._inflight: dict[int, int] = {}
         self._tokens: dict[int, Any] = {}
+        # Registration calls intentionally happen outside ``_condition``
+        # because the underlying _dc path may cross the helper boundary.
+        # Pair every call with an epoch so begin_invalidate() can revoke a
+        # registration which started before the teardown barrier but returns
+        # after it.  The per-HWND lock prevents a replacement registration
+        # from racing the stale token's cleanup.
+        self._registration_epochs: dict[int, int] = {}
+        self._registration_locks: dict[int, threading.Lock] = {}
+        self._invalidating: set[int] = set()
         self._invalidations = 0
         self._invalidation_failed = False
         self._failed_invalidations: set[int] = set()
@@ -72,11 +81,48 @@ class DcMutationCoordinator:
         hwnd = int(hwnd or 0)
         if not hwnd:
             return None
-        token = self._dc().register_window(hwnd)
-        if token is not None:
+        with self._condition:
+            if (not self._accepting or hwnd in self._invalidating
+                    or hwnd in self._failed_invalidations):
+                return None
+            registration_lock = self._registration_locks.setdefault(
+                hwnd, threading.Lock())
+        with registration_lock:
             with self._condition:
-                self._tokens[hwnd] = token
-        return token
+                if (not self._accepting or hwnd in self._invalidating
+                        or hwnd in self._failed_invalidations):
+                    return None
+                epoch = self._registration_epochs.get(hwnd, 0)
+            token = self._dc().register_window(hwnd)
+            if token is None:
+                return None
+            with self._condition:
+                publish = bool(
+                    self._accepting
+                    and hwnd not in self._invalidating
+                    and self._registration_epochs.get(hwnd, 0) == epoch)
+                if publish:
+                    self._tokens[hwnd] = token
+            if publish:
+                return token
+
+            # A teardown barrier advanced the epoch while register_window()
+            # was running.  Do not leak the late generation into _dc's own
+            # registry: revoke it before another registration can acquire the
+            # per-HWND lock.
+            revoked = False
+            try:
+                revoke = getattr(self._dc(), 'revoke_window', None)
+                if callable(revoke):
+                    revoked = bool(revoke(token))
+            except Exception:
+                pass
+            if not revoked:
+                with self._condition:
+                    self._failed_invalidations.add(hwnd)
+                    self._invalidation_failed = True
+                    self._condition.notify_all()
+            return None
 
     def submit(self, hwnd: int, operation: str,
                fn: Callable[..., Any], *args, **kwargs) -> bool:
@@ -95,7 +141,9 @@ class DcMutationCoordinator:
         key = (hwnd, generation, str(operation))
         task = _Mutation(token, key, fn, tuple(args), dict(kwargs))
         with self._condition:
-            if not self._accepting:
+            if (not self._accepting or hwnd in self._invalidating
+                    or hwnd in self._failed_invalidations
+                    or self._tokens.get(hwnd) != token):
                 return False
             self._pending[key] = task
             if key not in self._queued:
@@ -147,17 +195,20 @@ class DcMutationCoordinator:
     def begin_invalidate(self, hwnd: int,
                          timeout: Optional[float] = None
                          ) -> InvalidationBarrier:
-        """Revoke now and drain on a helper thread.
-
-        The caller can withdraw an input proxy immediately and poll the
-        returned barrier from Tk without ever waiting on a helper pipe.
-        """
+        # Revoke now and drain on a helper thread.
+        #
+        #         The caller can withdraw an input proxy immediately and poll the
+        #         returned barrier from Tk without ever waiting on a helper pipe.
+        #
         hwnd = int(hwnd or 0)
         barrier = InvalidationBarrier()
         if not hwnd:
             barrier._finish(True)
             return barrier
         with self._condition:
+            self._registration_epochs[hwnd] = (
+                self._registration_epochs.get(hwnd, 0) + 1)
+            self._invalidating.add(hwnd)
             token = self._tokens.pop(hwnd, None)
             for key in [key for key in self._pending if key[0] == hwnd]:
                 self._pending.pop(key, None)
@@ -169,6 +220,7 @@ class DcMutationCoordinator:
         except Exception:
             with self._condition:
                 self._invalidations = max(0, self._invalidations - 1)
+                self._invalidating.discard(hwnd)
                 self._failed_invalidations.add(hwnd)
                 self._invalidation_failed = True
                 self._condition.notify_all()
@@ -205,6 +257,7 @@ class DcMutationCoordinator:
             finally:
                 with self._condition:
                     self._invalidations = max(0, self._invalidations - 1)
+                    self._invalidating.discard(hwnd)
                     if confirmed:
                         self._failed_invalidations.discard(hwnd)
                     else:
@@ -220,6 +273,7 @@ class DcMutationCoordinator:
         except Exception:
             with self._condition:
                 self._invalidations = max(0, self._invalidations - 1)
+                self._invalidating.discard(hwnd)
                 self._failed_invalidations.add(hwnd)
                 self._invalidation_failed = True
                 self._condition.notify_all()

@@ -1130,10 +1130,11 @@ class CompositorLayer:
         self.width = w
         self.height = h
         self._dirty = True
-        print(f'[Compositor] layer {self.name!r}: GPU shared texture '
-              f'0x{handle:X} registered ({w}x{h}, '
-              f'{"keyed-mutex" if self._shared_keyed_mutex else "unsynced"})',
-              flush=True)
+        if os.environ.get('SAO_OVERLAY_DIAGNOSTICS') == '1':
+            print(f'[Compositor] layer {self.name!r}: GPU shared texture '
+                  f'0x****{(handle & 0xFFFF):04X} registered ({w}x{h}, '
+                  f'{"keyed-mutex" if self._shared_keyed_mutex else "unsynced"})',
+                  flush=True)
         return True
 
     def _log_shared_fail(self, handle: int, why: str) -> None:
@@ -1142,9 +1143,10 @@ class CompositorLayer:
         if getattr(self, '_shared_fail_logged', None) == handle:
             return
         self._shared_fail_logged = handle
-        print(f'[Compositor] layer {self.name!r}: shared texture '
-              f'0x{handle:X} unusable ({why}) — MMF color path stays',
-              flush=True)
+        if os.environ.get('SAO_OVERLAY_DIAGNOSTICS') == '1':
+            print(f'[Compositor] layer {self.name!r}: shared texture '
+                  f'0x****{(handle & 0xFFFF):04X} unusable ({why}) — '
+                  'MMF color path stays', flush=True)
 
     @property
     def shared_texture_active(self) -> bool:
@@ -1415,8 +1417,13 @@ class UnifiedOverlay:
 
     def __init__(self, root: Any = None):
         self._root = root
+        # UnifiedOverlay is constructed from the Tk owner thread.  Keep the
+        # identity so one-shot UI transitions can avoid an 8ms proxy-relift
+        # gap without ever guessing that an arbitrary non-render thread is Tk.
+        self._tk_thread_id = threading.get_ident()
         self._host: Optional[OverlayHost] = None
         self._layers: Dict[str, CompositorLayer] = {}
+        self._layer_epochs: Dict[str, int] = {}
         self._z_sorted: List[CompositorLayer] = []
         self._lock = threading.RLock()
         self._lifecycle_lock = threading.RLock()
@@ -1441,6 +1448,7 @@ class UnifiedOverlay:
 
         # Periodic z-order pulse interval
         self._topmost_interval = 2.0  # seconds
+        self._topmost_interval_idle = 0.25  # no-game weak z-order pulse
         self._last_topmost = 0.0
 
         # Game window HWND — set by process selector on attach.
@@ -1456,7 +1464,9 @@ class UnifiedOverlay:
         self._streaming_threads_lock = threading.RLock()
         self._streaming_threads: set[threading.Thread] = set()
         self._streaming_accepting = True
+        self._streaming_generation = 0
         self._teardown_confirmed = False
+        self._retired = False
         self._timer_period_active = False
 
         # Tk callback queue (overlay thread → Tk main thread)
@@ -1526,17 +1536,25 @@ class UnifiedOverlay:
         # the OLD CompositorLayer's GL FBO/texture and any live Tk input
         # proxy without ever releasing them — destroy_layer is the only
         # path that queues _release_gl on the correct thread/context.
-        # Safe to call unconditionally: a no-op if nothing is registered
-        # under this name yet.
-        self.destroy_layer(name)
-        layer = CompositorLayer(
-            name, width, height, x, y, z, click_through, bgra_swizzle,
-            high_fps=high_fps, target_fps=target_fps,
-            dc_mutations=self._dc_mutations,
-        )
+        # Construct and publish under one lock.  Two concurrent callers must
+        # form a deterministic swap chain; otherwise the late first caller
+        # can overwrite the newer layer without retiring its resources.
         with self._lock:
+            if not hasattr(self, '_layer_epochs'):
+                self._layer_epochs = {}
+            epoch = int(self._layer_epochs.get(name, 0)) + 1
+            layer = CompositorLayer(
+                name, width, height, x, y, z, click_through, bgra_swizzle,
+                high_fps=high_fps, target_fps=target_fps,
+                dc_mutations=self._dc_mutations,
+            )
+            old_layer = self._layers.get(name)
+            self._layer_epochs[name] = epoch
+            layer._overlay_epoch = epoch
             self._layers[name] = layer
             self._rebuild_z_order()
+        if old_layer is not None:
+            self._retire_layer(old_layer)
         self._recalc_fps()
         if not click_through:
             # Keep all interactive input on a local proxy; the fullscreen
@@ -1546,25 +1564,43 @@ class UnifiedOverlay:
 
     def destroy_layer(self, name: str) -> None:
         with self._lock:
+            if not hasattr(self, '_layer_epochs'):
+                self._layer_epochs = {}
             layer = self._layers.pop(name, None)
+            self._layer_epochs[name] = int(
+                self._layer_epochs.get(name, 0)) + 1
             if layer:
                 self._rebuild_z_order()
         self._recalc_fps()
-        if layer is not None and layer.visible:
+        if layer is not None:
+            self._retire_layer(layer)
+
+    def _retire_layer(self, layer: CompositorLayer) -> None:
+        if layer.visible:
             # The removed layer no longer participates in the dirty
             # scan, so nothing else would trigger the render+present
             # that repaints its vacated screen area — force one frame.
             self._layers_changed = True
 
-        if layer:
+        def _destroy_proxy():
             try:
                 layer.destroy_input_proxy()
             except Exception:
                 pass
 
+        root = getattr(self, '_root', None)
+        if getattr(layer, '_input_proxy', None) is not None and root:
+            try:
+                root.after(0, _destroy_proxy)
+            except Exception:
+                # Keep the closure owned by the Tk bridge instead of falling
+                # back to unsafe direct Tk calls on this caller's thread.
+                self.post_to_tk(_destroy_proxy)
+        else:
+            _destroy_proxy()
+
         def _release():
-            if layer:
-                layer._release_gl(self._dcomp)
+            layer._release_gl(self._dcomp)
         self._cmd_q.put(_release)
 
     def get_layer(self, name: str) -> Optional[CompositorLayer]:
@@ -1651,43 +1687,11 @@ class UnifiedOverlay:
     def _enforce_z_order(self, force_topmost: bool = False) -> None:
         # Position the compositor host just above the game window.
         #
-        # Priority order:
-        # 1. Kernel path (Engine A R3): set TOPMOST bit via physical
-        # memory — invisible to user-mode API hooks.
-        # 2. User-mode fallback: SetWindowPos(HWND_TOPMOST) if R3
-        # is unavailable (no driver loaded / calibration failed).
-        # 3. Real HWND_TOPMOST if no game HWND is set.
-        #
-        # Case 3 uses REAL WS_EX_TOPMOST, not the weaker HWND_TOP ("top
-        # of the current z-order, reasserted every tick") this branch
-        # used before. The whole reason this class avoids real TOPMOST
-        # elsewhere is anti-cheat evasion — a game's anti-cheat scanning
-        # for suspicious always-on-top overlay windows — but that risk
-        # only exists while a game IS actually attached; this branch by
-        # definition only runs when it isn't (desktop-pet-only usage,
-        # the common case with no game running at all). HWND_TOP has no
-        # such detection risk to justify its weakness: it only wins the
-        # z-order race AT THE MOMENT of the call, and ANY other app
-        # activating a window (a perfectly normal desktop interaction,
-        # e.g. clicking through the pet's own click_through pixels to
-        # whatever sits behind it) climbs back above it until the next
-        # tick — measured live as "click the desktop pet a few times and
-        # the compositor vanishes behind other apps, only popping back
-        # in front when the fisheye menu opens" (fisheye briefly forces
-        # real TOPMOST for its own hit-layer's sake — see
-        # SAOPlayerGUIFisheyeMixin._raise_compositor_above_fisheye_hit_layer
-        # — which is what was masking this the whole time).
-        #
-        # Real TOPMOST here reintroduces the proxy-burial risk this
-        # session's other fixes were about (a Tk input proxy is ALSO
-        # real-topmost; whichever of the two most recently joined the
-        # topmost band sits above the other) — so every call also
-        # schedules ``lift_all_input_proxies`` on the Tk thread
-        # immediately after, keeping active proxies re-asserted above
-        # the host every time its own topmost status gets refreshed.
-        # ``lift_all_input_proxies`` touches Tk widgets and must not run
-        # on this (the compositor render) thread — ``post_to_tk`` marshals
-        # it to the Tk main loop.
+        # Explicit force_topmost is a one-shot fish-eye/popup transition and
+        # relifts proxies once through Tk.  Normal game mode keeps relative
+        # placement.  Normal no-game pulses clear a stale TOPMOST bit and then
+        # issue HWND_TOP without proxy relifts; a permanent TOPMOST host plus
+        # periodic compensating relifts created a cross-thread z-order storm.
         host = self._host
         if host is None:
             return
@@ -1707,7 +1711,7 @@ class UnifiedOverlay:
             except Exception:
                 pass
 
-            def _swp(h, after, x, y, cx, cy, f):
+            def _swp(h, after, x, y, cx, cy, f, scrub_rect=True):
                 ok = False
                 if _sc_swp is not None:
                     try:
@@ -1718,10 +1722,28 @@ class UnifiedOverlay:
                     u32.SetWindowPos(
                         _ct.c_void_p(h), _ct.c_void_p(after),
                         x, y, cx, cy, f)
-                self._dc_mutations.submit_dc(
-                    h, 'host-rect', 'hide_window_rect')
+                if scrub_rect:
+                    self._dc_mutations.submit_dc(
+                        h, 'host-rect', 'hide_window_rect')
 
-            if not force_topmost and game and u32.IsWindow(game):
+            if force_topmost:
+                # Explicit transient request used by the fish-eye / popup hit
+                # layer.  It must cross the Tk TOPMOST band, then relift local
+                # proxies exactly once through the Tk bridge.
+                _swp(comp_hwnd, -1, 0, 0, 0, 0, _SWP)
+                self._dc_mutations.submit_dc(
+                    comp_hwnd, 'host-exstyle', 'hide_exstyle',
+                    0x00000008 | 0x00000020 | 0x00000080
+                    | 0x00200000 | 0x08000000)
+                try:
+                    if (threading.get_ident()
+                            == getattr(self, '_tk_thread_id', None)):
+                        self.lift_all_input_proxies()
+                    else:
+                        self.post_to_tk(self.lift_all_input_proxies)
+                except Exception:
+                    pass
+            elif game and u32.IsWindow(game):
                 # The visible z-order decision must stay synchronous, but
                 # physical-memory scrubs are coalesced by the single mutation
                 # worker.  USER32 is sufficient to classify the game's
@@ -1737,44 +1759,23 @@ class UnifiedOverlay:
                     0x00000008 | 0x00000020 | 0x00000080
                     | 0x00200000 | 0x08000000)
             else:
-                _swp(comp_hwnd, -1, 0, 0, 0, 0, _SWP)
+                # Clear any stale TOPMOST bit first, then make one weak
+                # foreground request.  A real TOPMOST host plus proxy relift
+                # previously produced a cross-thread z-order storm.
+                _swp(comp_hwnd, -2, 0, 0, 0, 0, _SWP,
+                     scrub_rect=False)                    # HWND_NOTOPMOST
+                _swp(comp_hwnd, 0, 0, 0, 0, 0, _SWP)   # HWND_TOP
                 self._dc_mutations.submit_dc(
                     comp_hwnd, 'host-exstyle', 'hide_exstyle',
                     0x00000008 | 0x00000020 | 0x00000080
                     | 0x00200000 | 0x08000000)
-                # Re-lift proxies to counter this call re-inserting the
-                # host at the FRONT of the topmost band, possibly above
-                # a proxy last lifted before this tick. lift_all_input_
-                # proxies touches Tk widgets — safe to call directly
-                # only when already on the Tk thread (the normal case
-                # when this method is invoked from a UI event handler,
-                # e.g. the fisheye/popup close-time demote calls, where
-                # queuing via post_to_tk would leave a real gap: the
-                # SetWindowPos above already landed, so a click arriving
-                # before the queued lift drains (up to 8ms later, one
-                # Tk poller tick) could land on the host instead of the
-                # proxy — measured live as an intermittent "first close
-                # after the fisheye/popup misses the click, the next one
-                # doesn't" flake). When called from the compositor's own
-                # render thread (its periodic tick), we're NOT on the Tk
-                # thread and must marshal via post_to_tk instead.
-                if threading.current_thread() is not self._thread:
-                    try:
-                        self.lift_all_input_proxies()
-                    except Exception:
-                        pass
-                else:
-                    try:
-                        self.post_to_tk(self.lift_all_input_proxies)
-                    except Exception:
-                        pass
             self._dc_mutations.submit_dc(
                 comp_hwnd, 'host-z-order', 'hide_z_order')
         except Exception:
             pass
 
     def enforce_z_order_now(self, force_topmost: bool = False) -> None:
-        """Synchronously apply the one canonical USER32 z-order decision."""
+        # Synchronously apply the one canonical USER32 z-order decision.
         self._enforce_z_order(force_topmost=bool(force_topmost))
 
     def _rebuild_z_order(self) -> None:
@@ -1797,7 +1798,7 @@ class UnifiedOverlay:
         # Re-lift all input proxies in z-order so higher-z layers
         # receive clicks above lower-z layers (e.g., popup above fisheye),
         # and so a proxy stays above the host after the host (re-)joins
-        # the real topmost band (see _enforce_z_order's no-game branch).
+        # the real topmost band (see _enforce_z_order's explicit-force branch).
         #
         # Tk's own ``.lift()`` is NOT enough for that last case: measured
         # live, it did not reliably out-rank a host that had JUST been
@@ -1835,6 +1836,8 @@ class UnifiedOverlay:
             self._start_locked()
 
     def _start_locked(self) -> None:
+        if getattr(self, '_retired', False):
+            raise RuntimeError('retired UnifiedOverlay cannot be restarted')
         if self._running or (self._thread is not None
                              and self._thread.is_alive()):
             return
@@ -1861,6 +1864,16 @@ class UnifiedOverlay:
         with self._lifecycle_lock:
             return self._stop_locked()
 
+    def retire(self) -> bool:
+        # Permanently stop this singleton generation before replacement.
+        with self._lifecycle_lock:
+            if getattr(self, '_retired', False):
+                return True
+            if not self._stop_locked():
+                return False
+            self._retired = True
+            return True
+
     def _stop_locked(self) -> bool:
         self._running = False
         self._stop_evt.set()
@@ -1879,6 +1892,10 @@ class UnifiedOverlay:
             # Keep the live thread reference: restart must not create a second
             # host while the previous compositor still owns its HWND/GL state.
             return False
+        # A never-started instance has no render-thread teardown to confirm,
+        # but it still owns a live mutation coordinator that must be stopped.
+        if thread is None and self._host is None:
+            self._teardown_confirmed = True
         # The render-thread finally block may have completed producer rundown
         # after the caller-side attempt timed out; re-sample confirmed state.
         streaming_stopped = self._stop_streaming_workers(timeout=0.0)
@@ -1915,18 +1932,33 @@ class UnifiedOverlay:
     # ── Streaming mode ───────────────────────────────────────
 
     def set_streaming_mode(self, exclude: bool) -> None:
+        requested = bool(exclude)
+        with self._streaming_threads_lock:
+            if not self._streaming_accepting:
+                return
+            self._streaming_generation = int(
+                getattr(self, '_streaming_generation', 0)) + 1
+            generation = self._streaming_generation
+
         def _bg():
             try:
                 with self._streaming_lock:
                     if self._stop_evt.is_set():
                         return
+                    with self._streaming_threads_lock:
+                        if generation != self._streaming_generation:
+                            return
                     try:
                         if self._host:
-                            self._host.set_capture_mode(exclude)
+                            self._host.set_capture_mode(requested)
+                            if bool(getattr(
+                                    self._host, '_capture_excluded',
+                                    requested)) != requested:
+                                return
                     except Exception:
-                        pass
+                        return
                     try:
-                        if exclude:
+                        if requested:
                             self._start_vf()
                         else:
                             self._stop_vf()
@@ -1939,7 +1971,8 @@ class UnifiedOverlay:
         thread = threading.Thread(
             target=_bg, name='OverlayStreamingMode', daemon=True)
         with self._streaming_threads_lock:
-            if not self._streaming_accepting:
+            if (not self._streaming_accepting
+                    or generation != self._streaming_generation):
                 return
             self._streaming_threads.add(thread)
             try:
@@ -1953,6 +1986,8 @@ class UnifiedOverlay:
         deadline = time.monotonic() + max(0.0, float(timeout))
         with self._streaming_threads_lock:
             self._streaming_accepting = False
+            self._streaming_generation = int(
+                getattr(self, '_streaming_generation', 0)) + 1
             threads = list(self._streaming_threads)
         current = threading.current_thread()
         for thread in threads:
@@ -2047,21 +2082,29 @@ class UnifiedOverlay:
         root = self._root
         if root is None:
             return False
-        layer = self._layers.get(name)
-        if layer is None or layer.click_through:
-            return False
+        with self._lock:
+            if not hasattr(self, '_layer_epochs'):
+                self._layer_epochs = {}
+            layer = self._layers.get(name)
+            epoch = int(self._layer_epochs.get(name, 0))
+            if layer is None or layer.click_through:
+                return False
 
         def _apply():
             try:
-                layer.create_input_proxy(root)
-                layer.sync_input_proxy()
+                with self._lock:
+                    if (self._layers.get(name) is not layer
+                            or int(self._layer_epochs.get(name, 0)) != epoch):
+                        return
+                    layer.create_input_proxy(root)
+                    layer.sync_input_proxy()
                 self.sync_host_input_mode()
             except Exception:
                 pass
         try:
             root.after(0, _apply)
         except Exception:
-            _apply()
+            return False
         return True
 
     def force_host_hidden(self, hidden: bool) -> None:
@@ -2625,8 +2668,10 @@ class UnifiedOverlay:
             print('[Compositor] creating host window...', flush=True)
             self._host = OverlayHost(dc_mutations=self._dc_mutations)
             self._host.create()
-            print(f'[Compositor] host HWND=0x{self._host.hwnd:08X} '
-                  f'{self._host.width}x{self._host.height}', flush=True)
+            if os.environ.get('SAO_OVERLAY_DIAGNOSTICS') == '1':
+                print(f'[Compositor] host HWND=0x****'
+                      f'{(self._host.hwnd & 0xFFFF):04X} '
+                      f'{self._host.width}x{self._host.height}', flush=True)
             self._host.hit_test_fn = self._hit_test
             try:
                 _gdi = _ct.windll.gdi32
@@ -2710,11 +2755,16 @@ class UnifiedOverlay:
         # stderr. 阈值可用 SAO_TRACE_COMPOSITOR_MS 覆盖.
         import os as _os
         _trace_enabled = _os.environ.get('SAO_TRACE_COMPOSITOR') == '1'
-        try:
-            _trace_thresh_ms = float(
-                _os.environ.get('SAO_TRACE_COMPOSITOR_MS', '500'))
-        except ValueError:
-            _trace_thresh_ms = 500.0
+        if _trace_enabled:
+            try:
+                _trace_thresh_ms = float(
+                    _os.environ.get('SAO_TRACE_COMPOSITOR_MS', '500'))
+            except ValueError:
+                _trace_thresh_ms = 500.0
+        else:
+            # Full-thread tracebacks can expose unrelated process state.  Do
+            # not run this diagnostic watchdog unless explicitly requested.
+            _trace_thresh_ms = 0.0
         _current_phase = ['idle']
         _phase_started = [0.0]
         _hang_dumped = [False]
@@ -2775,7 +2825,7 @@ class UnifiedOverlay:
                     _sys.stderr.flush()
                 _phase_started[0] = 0.0
 
-        if _trace_enabled or _trace_thresh_ms > 0:
+        if _trace_enabled and _trace_thresh_ms > 0:
             threading.Thread(target=_watchdog, name='CompositorWatchdog',
                              daemon=True).start()
 
@@ -2800,7 +2850,10 @@ class UnifiedOverlay:
 
             # Z-order check: only re-assert when actually bumped down.
             now = time.perf_counter()
-            if now - self._last_topmost >= self._topmost_interval:
+            z_interval = (self._topmost_interval
+                          if self._game_hwnd
+                          else self._topmost_interval_idle)
+            if now - self._last_topmost >= z_interval:
                 self._last_topmost = now
                 with _phase('z_order_stale_check'):
                     _stale = self._z_order_stale()
@@ -3330,12 +3383,13 @@ def get_unified_overlay(root: Any = None) -> UnifiedOverlay:
             _overlay = UnifiedOverlay(root)
         elif root is not None and _overlay._root is None:
             _overlay._root = root
+            _overlay._tk_thread_id = threading.get_ident()
         return _overlay
 
 
 def submit_dc_mutation(hwnd: int, operation: str,
                        method_name: str, *args, **kwargs) -> bool:
-    """Route an external overlay HWND through the single mutation worker."""
+    # Route an external overlay HWND through the single mutation worker.
     try:
         overlay = get_unified_overlay()
         return overlay._dc_mutations.submit_dc(
@@ -3344,14 +3398,22 @@ def submit_dc_mutation(hwnd: int, operation: str,
         return False
 
 
-def reset_unified_overlay() -> None:
-    # Drop a failed singleton UnifiedOverlay after stopping it.
+def reset_unified_overlay() -> bool:
+    # Drop the singleton only after its owner confirms teardown.
     global _overlay
     with _overlay_lock:
         old = _overlay
-        _overlay = None
-    if old is not None:
-        try:
-            old.stop()
-        except Exception:
-            pass
+    if old is None:
+        return True
+    try:
+        retire = getattr(old, 'retire', None)
+        stopped = bool(retire() if callable(retire) else old.stop())
+    except Exception:
+        stopped = False
+    if not stopped:
+        return False
+    with _overlay_lock:
+        if _overlay is old:
+            _overlay = None
+            return True
+        return _overlay is None

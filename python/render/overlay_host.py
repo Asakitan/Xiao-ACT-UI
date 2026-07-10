@@ -618,10 +618,12 @@ class OverlayHost:
             raise OSError(
                 f'CreateWindowExW failed: {ctypes.GetLastError()}'
             )
-        print(f'[OverlayHost] hRender=0x{self.hwnd:08X} '
-              f'hControl=0x{(self.control_hwnd or 0):08X} '
-              f'owner=0x{(self._owner_hwnd or 0):08X} pid={os.getpid()}',
-              flush=True)
+        if os.environ.get('SAO_OVERLAY_DIAGNOSTICS') == '1':
+            def _masked(value: int) -> str:
+                return f'0x****{(int(value or 0) & 0xFFFF):04X}'
+            print(f'[OverlayHost] hRender={_masked(self.hwnd)} '
+                  f'hControl={_masked(self.control_hwnd)} '
+                  f'owner={_masked(self._owner_hwnd)}', flush=True)
 
     def _setup_wgl(self) -> None:
         # Set up WGL pixel format + OpenGL context with alpha support.
@@ -871,46 +873,66 @@ class OverlayHost:
         # WM_NCHITTEST → HTTRANSPARENT only works within the same thread.
         # For clicks to reach other processes (game, desktop), the window
         # must have WS_EX_TRANSPARENT set.
-        ex = _user32.GetWindowLongPtrW(self.hwnd, GWL_EXSTYLE)
-        if passthrough:
-            new_ex = ex | WS_EX_TRANSPARENT
-        else:
-            new_ex = ex & ~WS_EX_TRANSPARENT
-        if new_ex != ex:
-            _user32.SetWindowLongPtrW(self.hwnd, GWL_EXSTYLE, new_ex)
-        self.input_passthrough = bool(passthrough)
+        requested = bool(passthrough)
+        try:
+            ex = _user32.GetWindowLongPtrW(self.hwnd, GWL_EXSTYLE)
+            if requested:
+                new_ex = ex | WS_EX_TRANSPARENT
+            else:
+                new_ex = ex & ~WS_EX_TRANSPARENT
+            if new_ex != ex:
+                _user32.SetWindowLongPtrW(self.hwnd, GWL_EXSTYLE, new_ex)
+            confirmed = bool(
+                _user32.GetWindowLongPtrW(self.hwnd, GWL_EXSTYLE)
+                & WS_EX_TRANSPARENT)
+        except Exception:
+            return
+        if confirmed == requested:
+            self.input_passthrough = requested
 
     def set_capture_mode(self, exclude: bool) -> None:
-        # 只对 hRender apply/verify WDA_EXCLUDEFROMCAPTURE.
-        #
-        # hControl 是 1x1 decoy — 无 GL context, 无 DComp target, 无 WM_PAINT,
-        # hbrBackground=NULL, WM_ERASEBKGND 假装 erase → 客户区永远没像素可截.
-        # 给它上 WDA 反而把 SetWindowDisplayAffinity=0x11 这个反作弊高优先级
-        # 指纹焊到"唯一暴露在 EnumWindows 里的窗口"上, 直接抹掉 hRender
-        # 走 hide_z_order unlink 换来的隐蔽性.
-        #
-        # apply 后调 verify() 校验 DWM 端 GetWindowDisplayAffinity 真回读 0x11.
-        # 校验失败打日志暴露"反作弊/直播软件 hook 掉 SetWindowDisplayAffinity".
+        # hRender and hControl form one public overlay surface.  Keep capture
+        # affinity symmetric so a topology change cannot expose the control
+        # side while the render side remains excluded.
         try:
             from mem_probe._dc import (apply as _ac_apply,
                                        remove as _ac_remove,
                                        verify as _ac_verify)
+            hwnds = tuple(hwnd for hwnd in (self.hwnd, self.control_hwnd)
+                          if int(hwnd or 0))
+
+            def _call(fn, hwnd):
+                try:
+                    return bool(fn(hwnd))
+                except Exception:
+                    return False
+
             if exclude:
-                ok = _ac_apply(self.hwnd)
-                v = _ac_verify(self.hwnd)
-                self._capture_excluded = ok and v
-                if not self._capture_excluded:
-                    try:
-                        print(f'[Overlay] WDA_EXCLUDEFROMCAPTURE failed on '
-                              f'hRender: apply={ok} verify={v}',
-                              flush=True)
-                    except Exception:
-                        pass
+                confirmed = True
+                for hwnd in hwnds:
+                    ok = _call(_ac_apply, hwnd)
+                    verified = _call(_ac_verify, hwnd) if ok else False
+                    confirmed = confirmed and ok and verified
+                if hwnds and confirmed:
+                    self._capture_excluded = True
+                if (not (hwnds and confirmed)
+                        and os.environ.get('SAO_OVERLAY_DIAGNOSTICS') == '1'):
+                    print('[Overlay] WDA apply/verify not confirmed', flush=True)
             else:
-                _ac_remove(self.hwnd)
-                self._capture_excluded = False
+                removed = True
+                for hwnd in hwnds:
+                    ok = _call(_ac_remove, hwnd)
+                    try:
+                        still_excluded = bool(_ac_verify(hwnd)) if ok else True
+                    except Exception:
+                        still_excluded = True
+                    removed = removed and ok and not still_excluded
+                if hwnds and removed:
+                    self._capture_excluded = False
         except Exception:
-            self._capture_excluded = False
+            # Preserve the last confirmed state.  A failed remove must not be
+            # published as success, and a failed apply is not proof of removal.
+            return
 
     def _hide_topmost_flag(self) -> None:
         if self._dc_mutations is not None:
@@ -980,11 +1002,9 @@ class OverlayHost:
         # _teardown_render_thread_once) 侧的 retry 上限约束, 不能靠这里
         # "强行清零" 逃避.
         #
-        # 【阶段 2: 本地 API】wgl/ReleaseDC/DestroyWindow 失败**幂等清零**.
-        # 这些跟 mutation 无关, 死 handle 二次调用可能撞穿其他窗口/驱动崩,
-        # 一次尝试后就永久放弃这个 handle. 返回值反映是否全绿.
-        #
-        # self._destroyed=True 保证第二次进来直接 True return.
+        # 【阶段 2: 本地 API】每个 owner 只在 native postcondition 确认后
+        # 清零。失败时保留 handle 给调用者 retry；否则第二次调用会把泄漏
+        # 误报成已完成 teardown。
         if self._destroyed:
             return True
         coordinator = self._dc_mutations
@@ -996,7 +1016,6 @@ class OverlayHost:
                             return False
                     except Exception:
                         return False
-        any_failed = False
         if self.hglrc:
             try:
                 from render.gpu_overlay_window import get_wgl_serialize_lock
@@ -1011,18 +1030,18 @@ class OverlayHost:
                     deleted = bool(_opengl32.wglDeleteContext(self.hglrc))
             except Exception:
                 deleted = False
-            self.hglrc = 0
             if not deleted:
-                any_failed = True
+                return False
+            self.hglrc = 0
         if self.hdc and self.hwnd:
             released = False
             try:
                 released = bool(_user32.ReleaseDC(self.hwnd, self.hdc))
             except Exception:
                 released = False
-            self.hdc = 0
             if not released:
-                any_failed = True
+                return False
+            self.hdc = 0
         for attr in ('hwnd', 'control_hwnd', '_owner_hwnd'):
             hwnd = int(getattr(self, attr, 0) or 0)
             if not hwnd:
@@ -1033,9 +1052,9 @@ class OverlayHost:
                 destroyed = not bool(_user32.IsWindow(hwnd))
             except Exception:
                 destroyed = False
-            setattr(self, attr, 0)
             if not destroyed:
-                any_failed = True
+                return False
+            setattr(self, attr, 0)
         self.ctx = None
         self._destroyed = True
-        return not any_failed
+        return True
