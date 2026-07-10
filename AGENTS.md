@@ -77,6 +77,18 @@ Other plugins (`hide_seek_plugin/`, `midi_piano_plugin/`) follow the same SDK pa
 - `git diff --check -- <changed files>` for whitespace.
 - For UI/performance: code checks verify correctness, not behavior. Note when live validation is needed.
 
+## Git — test files never committed
+
+- **Test files MUST NOT be added to git.** This includes all `*selftest*.py`, `*_test*.py`, `test_*.py`, conftest.py, and any file under `tools/` that is a selftest/test harness.
+- Do not `git add` any test file. Do not commit test files alongside feature/fix changes.
+- If a test file is untracked, leave it untracked. If a test file is already tracked, do not stage further changes to it.
+- Rationale: test files are local-only development artifacts; they must not ship to the repository or downstream consumers.
+- When committing a batch, explicitly exclude test files:
+  ```
+  git add <non-test files only>
+  # never: git add -A  (would include test files)
+  ```
+
 ## UI And Performance
 
 - Preserve SAO visual style, 60 FPS target.
@@ -147,6 +159,14 @@ Standalone pywebview IDE with VSCode layout, multi-provider LLM chat, dynamic Ch
 | `extensions.py` | VSCode Marketplace API client |
 | `history.py` | Scope-aware conversation persistence |
 | `selftest.py` | 304-item self-test suite |
+
+## Comment Style — hard rule (docstrings banned outside AI Editor)
+
+- **All comments MUST use `#` line comments.** Docstrings (`"""..."""` or `'''..."""`) as comments/docs are **banned** everywhere in this repo EXCEPT the three AI Editor packages: `python/ai_editor/`, `python/ai_editor_extensions/`, `python/ai_editor_history/`.
+- Applies to modules, classes, functions, and inline blocks. No exceptions for "brief one-liners".
+- Multi-line strings used as actual string literals (assigned, passed as args, returned) are fine — they are not docstrings.
+- If you encounter a docstring outside AI Editor, convert it to `#` comments in the same change. Do NOT reintroduce one.
+- Rationale: uniform comment style + explicit user policy. `__doc__` inflation and mixed comment/reflection semantics were the recurring complaints.
 
 ## Documentation Hygiene
 

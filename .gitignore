@@ -43,11 +43,15 @@ python/assets/name_tables/boss_skill_observations.local.json
 dist/
 build/
 *.exe
-tools/
 
-# No-driver rt_io/overlay regression harnesses are source deliverables.
-!/tools/
-!/tools/*.py
+# ── Test files: never committed, local only ──────
+# All selftest/test harnesses are local-only dev artifacts.
+tools/
+*/*_selftest*.py
+*/*_selftest*.js
+*/selftest*.py
+*/test_*.py
+*/smoke_test_*.py
 
 # ── Roslyn C# compiler (downloaded, rebuilt by fetch_roslyn) ──
 python/act_platform/scripting/roslyn/
