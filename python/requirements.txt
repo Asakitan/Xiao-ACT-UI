@@ -8,6 +8,7 @@ Pillow>=9.0                     # 截图回退 (PIL.ImageGrab)
 mss>=9.0                        # 高性能截图 (优先)
 windows-capture>=1.4.3          # Windows.Graphics.Capture (DXGI / GPU) — 异步免阻塞窗口捕获，规避 PrintWindow 卡顿
 pythonnet>=3.0                  # .NET WinForms 透明 (clr, System.Drawing)
+pywin32; sys_platform == "win32"  # AI Editor DPAPI secret vault (win32crypt/pywintypes)
 
 # ═══ 特效 / GPU 渲染 (v2.3.0 GUI 渲染链路重置) ═══
 moderngl>=5.12                  # LinkStart 3D 粒子隧道 + 插件渲染 shader (OpenGL)

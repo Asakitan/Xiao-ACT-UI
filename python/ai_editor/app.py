@@ -76,6 +76,7 @@ _AI_EDITOR_MIN_SIZE = (600, 400)
 _AI_EDITOR_WINDOW_TITLE = "SAO AI Editor"
 _AI_EDITOR_FORCE_NEW_ENV = "SAO_AI_EDITOR_FORCE_NEW"
 _AI_EDITOR_WORKSPACE_ROOT_ENV = "SAO_AI_EDITOR_WORKSPACE_ROOT"
+_SECRET_STATE_KEY = "_secret_state"
 
 _MODE_VALUES = {"agent", "ask", "plan", "chat", "edit"}
 _APPROVAL_VALUES = {"default", "bypass", "autopilot"}
@@ -896,6 +897,392 @@ def _resolve_settings(gui_ref: Any = None):
     return None if _STANDALONE_SETTINGS is False else _STANDALONE_SETTINGS
 
 
+def _secret_store_for_settings(settings: Any = None) -> Any:
+    """Use an ephemeral vault when the settings adapter itself is ephemeral."""
+    from ai_editor.secret_store import InMemorySecretStore, get_secret_store
+
+    if settings is None:
+        return get_secret_store()
+    existing = getattr(settings, "_ai_editor_secret_store", None)
+    if existing is not None:
+        return existing
+    settings_path = str(getattr(settings, "_path", "") or "").strip()
+    if not settings_path:
+        module = sys.modules.get(type(settings).__module__)
+        settings_path = str(getattr(module, "CONFIG_FILE", "") or "").strip()
+    store = get_secret_store() if settings_path else InMemorySecretStore()
+    try:
+        setattr(settings, "_ai_editor_secret_store", store)
+    except Exception:
+        pass
+    return store
+
+
+def _secret_ref_part(value: Any) -> str:
+    from ai_editor.secret_store import secret_ref_part
+    return secret_ref_part(value)
+
+
+def _legacy_secret_ref_part(value: Any) -> str:
+    from ai_editor.secret_store import legacy_secret_ref_part
+    return legacy_secret_ref_part(value)
+
+
+def _provider_secret_ref(provider: Any, kind: str = "api-key") -> str:
+    return f"provider/{_secret_ref_part(provider)}/{_secret_ref_part(kind)}"
+
+
+def _legacy_provider_secret_ref(provider: Any, kind: str = "api-key") -> str:
+    return (
+        f"provider/{_legacy_secret_ref_part(provider)}/"
+        f"{_legacy_secret_ref_part(kind)}"
+    )
+
+
+def _mcp_secret_ref(server_id: Any, kind: str) -> str:
+    return f"mcp/{_secret_ref_part(server_id)}/{_secret_ref_part(kind)}"
+
+
+def _legacy_mcp_secret_ref(server_id: Any, kind: str) -> str:
+    return (
+        f"mcp/{_legacy_secret_ref_part(server_id)}/"
+        f"{_legacy_secret_ref_part(kind)}"
+    )
+
+
+def _protect_mcp_server_secrets(mcp: Dict[str, Any], store: Any,
+                                secret_present: str) -> Dict[str, Any]:
+    from ai_editor.secret_store import (
+        get_json_with_legacy_migration,
+        legacy_ref_is_unambiguous,
+        block_legacy_migration,
+    )
+
+    result = dict(mcp)
+    server_ids = set()
+    raw_servers = result.get("servers")
+    if isinstance(raw_servers, list):
+        server_ids.update(
+            str(item.get("id") or "server")
+            for item in raw_servers if isinstance(item, dict))
+    elif isinstance(raw_servers, dict):
+        server_ids.update(str(server_id) for server_id in raw_servers)
+    raw_named_servers = result.get("mcpServers")
+    if isinstance(raw_named_servers, dict):
+        server_ids.update(str(server_id) for server_id in raw_named_servers)
+
+    def protect_server(server_id: str, raw_server: Dict[str, Any]) -> Dict[str, Any]:
+        server = dict(raw_server)
+        secret_fields = {
+            str(item) for item in server.get("_secret_fields", [])
+            if str(item) in {"env", "headers"}
+        }
+        for field_name in ("env", "headers"):
+            new_ref = _mcp_secret_ref(server_id, field_name)
+            legacy_ref = _legacy_mcp_secret_ref(server_id, field_name)
+            legacy_safe = legacy_ref_is_unambiguous(server_id, server_ids)
+            if not legacy_safe:
+                block_legacy_migration(store, legacy_ref)
+            raw_mapping = server.get(field_name)
+            if isinstance(raw_mapping, dict) and raw_mapping:
+                existing = get_json_with_legacy_migration(
+                    store,
+                    new_ref,
+                    legacy_ref,
+                    allow_legacy=legacy_safe,
+                    default={},
+                ) or {}
+                merged = dict(existing) if isinstance(existing, dict) else {}
+                has_real_value = False
+                for key, value in raw_mapping.items():
+                    if value == secret_present:
+                        continue
+                    merged[str(key)] = str(value)
+                    has_real_value = True
+                if merged or store.has(new_ref) or has_real_value:
+                    store.set_json(new_ref, merged)
+                    if legacy_safe:
+                        store.delete(legacy_ref)
+                secret_fields.add(field_name)
+                server[field_name] = {
+                    str(key): secret_present for key in merged}
+            if server.pop(f"_clear_{field_name}", False):
+                store.delete(new_ref)
+                if legacy_safe:
+                    store.delete(legacy_ref)
+                secret_fields.discard(field_name)
+                server[field_name] = {}
+        server["_secret_fields"] = sorted(secret_fields)
+        return server
+
+    servers = result.get("servers")
+    if isinstance(servers, list):
+        result["servers"] = [
+            protect_server(str(item.get("id") or "server"), item)
+            if isinstance(item, dict) else item
+            for item in servers
+        ]
+    elif isinstance(servers, dict):
+        result["servers"] = {
+            str(server_id): protect_server(str(server_id), server)
+            if isinstance(server, dict) else server
+            for server_id, server in servers.items()
+        }
+    named_servers = result.get("mcpServers")
+    if isinstance(named_servers, dict):
+        result["mcpServers"] = {
+            str(server_id): protect_server(str(server_id), server)
+            if isinstance(server, dict) else server
+            for server_id, server in named_servers.items()
+        }
+    return result
+
+
+def _is_real_secret_value(value: Any) -> bool:
+    from ai_editor.secret_store import SECRET_PRESENT
+    return isinstance(value, str) and bool(value) and value != SECRET_PRESENT
+
+
+def _protect_ai_editor_config_secrets(raw: Any, store: Any = None) -> Dict[str, Any]:
+    """Persist secret fields to DPAPI and return a plaintext-free config.
+
+    Empty or redacted values preserve an existing protected value.  Deletion is
+    explicit through ``_clear_*`` flags so Settings auto-save cannot erase a key
+    merely because the frontend was intentionally not given the secret.
+    """
+    from ai_editor.secret_store import (
+        SECRET_PRESENT,
+        block_legacy_migration,
+        get_json_with_legacy_migration,
+        get_secret_store,
+        legacy_ref_is_unambiguous,
+    )
+
+    cfg = dict(raw) if isinstance(raw, dict) else {}
+    state = _as_dict(cfg.get(_SECRET_STATE_KEY))
+    provider_ids = {
+        str(item) for item in state.get("provider_keys", [])
+        if str(item).strip()
+    }
+    headers_providers = {
+        str(item) for item in state.get("extra_headers", [])
+        if str(item).strip()
+    }
+    body_providers = {
+        str(item) for item in state.get("extra_body", [])
+        if str(item).strip()
+    }
+    provider = str(cfg.get("provider") or "openai").strip() or "openai"
+    store = store or get_secret_store()
+
+    raw_provider_keys = cfg.get("provider_keys")
+    if not isinstance(raw_provider_keys, dict):
+        raw_provider_keys = cfg.get("_provider_keys")
+    raw_provider_keys = (
+        raw_provider_keys if isinstance(raw_provider_keys, dict) else {})
+    cleared_provider_ids = [
+        str(item or "").strip()
+        for item in (cfg.pop("_clear_provider_keys", []) or [])
+        if str(item or "").strip()
+    ]
+    provider_candidates = set(provider_ids)
+    provider_candidates.add(provider)
+    provider_candidates.update(
+        str(item or "").strip() for item in raw_provider_keys
+        if str(item or "").strip())
+    provider_candidates.update(cleared_provider_ids)
+    for provider_candidate in provider_candidates:
+        if not legacy_ref_is_unambiguous(
+                provider_candidate, provider_candidates):
+            block_legacy_migration(
+                store, _legacy_provider_secret_ref(provider_candidate))
+
+    api_key = cfg.get("api_key")
+    active_legacy_safe = legacy_ref_is_unambiguous(
+        provider, provider_candidates)
+    if _is_real_secret_value(api_key):
+        store.set(_provider_secret_ref(provider), str(api_key))
+        if active_legacy_safe:
+            store.delete(_legacy_provider_secret_ref(provider))
+        provider_ids.add(provider)
+    if cfg.pop("_clear_api_key", False):
+        store.delete(_provider_secret_ref(provider))
+        if active_legacy_safe:
+            store.delete(_legacy_provider_secret_ref(provider))
+        provider_ids.discard(provider)
+
+    for provider_id, value in raw_provider_keys.items():
+        provider_name = str(provider_id or "").strip()
+        if not provider_name:
+            continue
+        if _is_real_secret_value(value):
+            store.set(_provider_secret_ref(provider_name), str(value))
+            if legacy_ref_is_unambiguous(
+                    provider_name, provider_candidates):
+                store.delete(_legacy_provider_secret_ref(provider_name))
+            provider_ids.add(provider_name)
+    for provider_name in cleared_provider_ids:
+        store.delete(_provider_secret_ref(provider_name))
+        if legacy_ref_is_unambiguous(provider_name, provider_candidates):
+            store.delete(_legacy_provider_secret_ref(provider_name))
+        provider_ids.discard(provider_name)
+
+    for field_name, configured in (
+        ("extra_headers", headers_providers),
+        ("extra_body", body_providers),
+    ):
+        field_candidates = set(configured)
+        field_candidates.add(provider)
+        legacy_safe = legacy_ref_is_unambiguous(provider, field_candidates)
+        new_ref = _provider_secret_ref(provider, field_name)
+        legacy_ref = _legacy_provider_secret_ref(provider, field_name)
+        if not legacy_safe:
+            block_legacy_migration(store, legacy_ref)
+        raw_value = cfg.get(field_name)
+        if isinstance(raw_value, dict) and raw_value:
+            existing = get_json_with_legacy_migration(
+                store,
+                new_ref,
+                legacy_ref,
+                allow_legacy=legacy_safe,
+                default={},
+            ) or {}
+            merged_value = dict(existing) if isinstance(existing, dict) else {}
+            has_real_value = False
+            for key, value in raw_value.items():
+                if value == SECRET_PRESENT:
+                    continue
+                merged_value[str(key)] = value
+                has_real_value = True
+            if merged_value or store.has(new_ref) or has_real_value:
+                store.set_json(new_ref, merged_value)
+                if legacy_safe:
+                    store.delete(legacy_ref)
+            configured.add(provider)
+        if cfg.pop(f"_clear_{field_name}", False):
+            store.delete(new_ref)
+            if legacy_safe:
+                store.delete(legacy_ref)
+            configured.discard(provider)
+
+    cfg["api_key"] = ""
+    cfg["provider_keys"] = {}
+    cfg.pop("_provider_keys", None)
+    cfg["extra_headers"] = {}
+    cfg["extra_body"] = {}
+    if isinstance(cfg.get("mcp"), dict):
+        cfg["mcp"] = _protect_mcp_server_secrets(
+            cfg["mcp"], store, SECRET_PRESENT)
+    cfg[_SECRET_STATE_KEY] = {
+        "provider_keys": sorted(provider_ids),
+        "extra_headers": sorted(headers_providers),
+        "extra_body": sorted(body_providers),
+    }
+    return cfg
+
+
+def _hydrate_ai_editor_config_secrets(raw: Any, store: Any = None) -> Dict[str, Any]:
+    """Return a runtime config with protected provider values restored."""
+    from ai_editor.secret_store import (
+        get_json_with_legacy_migration,
+        get_secret_store,
+        get_with_legacy_migration,
+        legacy_ref_is_unambiguous,
+    )
+
+    cfg = _normalize_ai_editor_config(raw)
+    state = _as_dict(cfg.get(_SECRET_STATE_KEY))
+    store = store or get_secret_store()
+    provider_ids = [
+        str(item) for item in state.get("provider_keys", [])
+        if str(item).strip()
+    ]
+    provider = str(cfg.get("provider") or "openai")
+    provider_candidates = set(provider_ids)
+    provider_candidates.add(provider)
+    provider_keys: Dict[str, str] = {}
+    for provider_id in provider_ids:
+        value = get_with_legacy_migration(
+            store,
+            _provider_secret_ref(provider_id),
+            _legacy_provider_secret_ref(provider_id),
+            allow_legacy=legacy_ref_is_unambiguous(
+                provider_id, provider_candidates),
+        )
+        if value:
+            provider_keys[provider_id] = value
+    # Legacy plaintext remains usable until migration succeeds.
+    for provider_id, value in _as_dict(cfg.get("provider_keys")).items():
+        if value:
+            provider_keys[str(provider_id)] = str(value)
+    cfg["provider_keys"] = provider_keys
+    active_secret = get_with_legacy_migration(
+        store,
+        _provider_secret_ref(provider),
+        _legacy_provider_secret_ref(provider),
+        allow_legacy=legacy_ref_is_unambiguous(
+            provider, provider_candidates),
+    )
+    cfg["api_key"] = (
+        str(cfg.get("api_key") or "")
+        or provider_keys.get(provider, "")
+        or active_secret
+    )
+    header_candidates = {
+        str(item) for item in state.get("extra_headers", []) if str(item).strip()
+    }
+    if provider in header_candidates:
+        value = get_json_with_legacy_migration(
+            store,
+            _provider_secret_ref(provider, "extra_headers"),
+            _legacy_provider_secret_ref(provider, "extra_headers"),
+            allow_legacy=legacy_ref_is_unambiguous(
+                provider, header_candidates),
+            default={},
+        )
+        if isinstance(value, dict):
+            cfg["extra_headers"] = value
+    body_candidates = {
+        str(item) for item in state.get("extra_body", []) if str(item).strip()
+    }
+    if provider in body_candidates:
+        value = get_json_with_legacy_migration(
+            store,
+            _provider_secret_ref(provider, "extra_body"),
+            _legacy_provider_secret_ref(provider, "extra_body"),
+            allow_legacy=legacy_ref_is_unambiguous(
+                provider, body_candidates),
+            default={},
+        )
+        if isinstance(value, dict):
+            cfg["extra_body"] = value
+    return cfg
+
+
+def _load_ai_editor_config(settings: Any) -> Dict[str, Any]:
+    raw = settings.get("ai_editor", {}) if settings else {}
+    if not isinstance(raw, dict):
+        raw = {}
+    store = _secret_store_for_settings(settings)
+    has_plaintext = (
+        _is_real_secret_value(raw.get("api_key"))
+        or any(_is_real_secret_value(value)
+               for value in _as_dict(raw.get("provider_keys") or
+                                      raw.get("_provider_keys")).values())
+        or bool(_as_dict(raw.get("extra_headers")))
+        or bool(_as_dict(raw.get("extra_body")))
+    )
+    if has_plaintext and settings:
+        protected = _protect_ai_editor_config_secrets(raw, store)
+        settings.set("ai_editor", protected)
+        try:
+            settings.save()
+        except Exception:
+            pass
+        raw = protected
+    return _hydrate_ai_editor_config_secrets(raw, store)
+
+
 def load_provider_config(gui_ref: Any = None) -> ProviderConfig:
     """Shared helper: build a ProviderConfig from settings.
 
@@ -905,7 +1292,7 @@ def load_provider_config(gui_ref: Any = None) -> ProviderConfig:
     settings = _resolve_settings(gui_ref)
     if not settings:
         return ProviderConfig()
-    raw = _normalize_ai_editor_config(settings.get("ai_editor", {}) or {})
+    raw = _load_ai_editor_config(settings)
     custom_models = raw.get("custom_models", {})
     if custom_models:
         from ai_editor.llm_engine import set_custom_models
@@ -1854,6 +2241,7 @@ class _AIEditorUIBridge:
         prepared, resource_evidence = (
             self._api._prepare_extension_webview_html_with_evidence(
                 html, local_resource_roots, view_id=view_id))
+        webview_token = self._api._ensure_webview_token(view_id)
         record = self._webview_panel_record(view_id)
         if record is not None:
             record.update({
@@ -1918,6 +2306,7 @@ class _AIEditorUIBridge:
                         "retainContextWhenHidden", False))),
             "webviewEvidence": _json_safe(resource_evidence),
             "resourceEvidence": _json_safe(resource_evidence),
+            "token": webview_token,
         })
 
     def get_webview_state(self, view_id: str) -> Any:
@@ -2100,9 +2489,10 @@ class _AIEditorUIBridge:
             "change": dict(change or {}),
         })
 
-    def receive_webview_message(self, view_id: str, message: Any) -> None:
-        """Relay a message from the webview back to the extension."""
-        self._api.webview_post_message(view_id, message)
+    def receive_webview_message(self, view_id: str, message: Any,
+                                token: str = "") -> Dict[str, Any]:
+        """Relay a nonce-authenticated webview message to the extension."""
+        return self._api.webview_post_message(view_id, message, token)
 
     # -- Pickers / dialogs --
     def show_quick_pick(self, items: List[Any],
@@ -2452,6 +2842,7 @@ class AIEditorAPI:
         self._assistant_response_part_actions: List[Dict[str, Any]] = []
         self._pending_confirm: Dict[str, threading.Event] = {}
         self._confirm_results: Dict[str, bool] = {}
+        self._pending_confirm_lock = threading.Lock()
         self._confirmation_timeout = 30.0
         self._workflow_cancel_lock = threading.Lock()
         self._workflow_cancel_events: Dict[str, threading.Event] = {}
@@ -2707,10 +3098,58 @@ class AIEditorAPI:
                 roots.append(path)
         return roots
 
+    def _default_webview_resource_roots(self, view_id: str) -> List[str]:
+        """Return least-privilege roots for Webviews that omit the option."""
+        roots: List[str] = []
+        vscode_ns = getattr(self, "_vscode_ns", None)
+        entry = {}
+        if vscode_ns is not None:
+            entry = _as_dict(getattr(
+                vscode_ns, "_webview_view_providers", {}).get(view_id))
+        extension_id = str(entry.get("_extensionId") or "").strip()
+        if extension_id:
+            try:
+                descriptor = self._ext_host.registry.get(extension_id)
+                extension_path = str(
+                    getattr(descriptor, "extension_path", "") or "")
+                if extension_path:
+                    roots.append(os.path.realpath(os.path.abspath(extension_path)))
+            except Exception:
+                pass
+        if not roots:
+            try:
+                workspace_root = self._workspace_root()
+                if workspace_root:
+                    roots.append(os.path.realpath(os.path.abspath(workspace_root)))
+            except Exception:
+                pass
+        return list(dict.fromkeys(roots))
+
+    def _effective_webview_resource_roots(
+            self, value: Any, view_id: str = "") -> List[str]:
+        explicit = self._webview_resource_roots(value)
+        if explicit is not None:
+            return explicit
+        return self._default_webview_resource_roots(str(view_id or ""))
+
+    def _ensure_webview_token(self, view_id: str) -> str:
+        normalized = str(view_id or "").strip()
+        vscode_ns = getattr(self, "_vscode_ns", None)
+        if not normalized or vscode_ns is None:
+            return ""
+        tokens = getattr(vscode_ns, "_webview_tokens", {})
+        token = str(tokens.get(normalized) or "")
+        if token:
+            return token
+        generator = getattr(vscode_ns, "_generate_view_token", None)
+        if callable(generator):
+            return str(generator(normalized) or "")
+        return ""
+
     @staticmethod
     def _webview_path_allowed(path: str, roots: Optional[List[str]]) -> bool:
         if roots is None:
-            return True
+            return False
         if not roots:
             return False
         try:
@@ -2729,7 +3168,8 @@ class AIEditorAPI:
         key = str(view_id or "").strip()
         if not key:
             return "", ""
-        roots = self._webview_resource_roots(local_resource_roots)
+        roots = self._effective_webview_resource_roots(
+            local_resource_roots, key)
         server = self._ensure_webview_resource_server()
         return server.register_view(key, roots), server.origin
 
@@ -2761,14 +3201,15 @@ class AIEditorAPI:
         """
         text = str(html or "")
         budget = {"bytes": 0}
-        allowed_roots = self._webview_resource_roots(local_resource_roots)
+        allowed_roots = self._effective_webview_resource_roots(
+            local_resource_roots, view_id)
         root_count = len(allowed_roots or [])
         endpoint_base = ""
         endpoint_origin = ""
         view_key = str(view_id or "").strip()
         if view_key:
             endpoint_base, endpoint_origin = self._register_webview_resource_view(
-                view_key, local_resource_roots)
+                view_key, allowed_roots)
         evidence: Dict[str, Any] = {
             "resourceRewriteCount": 0,
             "resourceMapHitCount": 0,
@@ -3200,6 +3641,8 @@ class AIEditorAPI:
         self._controller.on_tool_progress = self._on_tool_progress
         self._controller.on_token_warning = self._on_token_warning
         self._controller.on_error = self._on_error
+        self._controller.on_save_error = lambda error: self._emit(
+            "history_save_error", {"error": error})
         self._controller.on_idle = self._on_idle
 
         self._configure_controller_tooling(self._controller)
@@ -3306,13 +3749,14 @@ class AIEditorAPI:
     # ── JS-callable methods (window.pywebview.api.*) ──
 
     def load_config(self) -> Dict:
+        from ai_editor.secret_store import SECRET_PRESENT
         cfg = self._load_config_obj()
         # Load theme from ACT panel_themes or ai_editor config
         theme = "dark"
         settings = _resolve_settings(self._gui_ref)
         ai_cfg = {}
         if settings:
-            ai_cfg = _normalize_ai_editor_config(settings.get("ai_editor", {}) or {})
+            ai_cfg = _load_ai_editor_config(settings)
             theme = ai_cfg.get("theme", "")
             if not theme:
                 themes = settings.get("panel_themes", {}) or {}
@@ -3322,7 +3766,9 @@ class AIEditorAPI:
         ctx = cfg.effective_context
         language = ai_cfg.get("language", "") if isinstance(ai_cfg, dict) else ""
         result = {
-            "provider": cfg.provider, "api_key": cfg.api_key,
+            "provider": cfg.provider,
+            "api_key": SECRET_PRESENT if cfg.api_key else "",
+            "api_key_configured": bool(cfg.api_key),
             "base_url": cfg.base_url, "model": model_name,
             "temperature": cfg.temperature, "max_tokens": cfg.max_tokens,
             "transport": cfg.transport,
@@ -3333,15 +3779,21 @@ class AIEditorAPI:
             "max_input_tokens": cfg.max_input_tokens,
             "max_output_tokens": cfg.max_output_tokens,
             "timeout": cfg.timeout,
-            "extra_headers": cfg.extra_headers,
-            "extra_body": cfg.extra_body,
+            "extra_headers": {
+                str(key): SECRET_PRESENT for key in cfg.extra_headers},
+            "extra_body": {
+                str(key): SECRET_PRESENT for key in cfg.extra_body},
             "system_prompt": cfg.system_prompt,
             "theme": theme,
             "color_theme": ai_cfg.get("color_theme", ""),
             "file_icon_theme": ai_cfg.get("file_icon_theme", ""),
             "language": language,
-            "_provider_keys": pkeys,
-            "provider_keys": pkeys,
+            "_provider_keys": {
+                str(key): SECRET_PRESENT for key, value in pkeys.items() if value},
+            "provider_keys": {
+                str(key): SECRET_PRESENT for key, value in pkeys.items() if value},
+            "provider_key_status": {
+                str(key): bool(value) for key, value in pkeys.items()},
             "custom_models": ai_cfg.get("custom_models", {}),
             "workspace": self._workspace_info(),
             "mode": ai_cfg.get("mode", self._mode),
@@ -4037,7 +4489,8 @@ class AIEditorAPI:
         persist_error = self._persist_ai_editor_config(merged)
         if self._engine:
             effective = self._config_with_target_overrides(
-                merged, target_name)
+                _hydrate_ai_editor_config_secrets(
+                    merged, _secret_store_for_settings(settings)), target_name)
             self._apply_config_to_engine(effective)
         self._invalidate_provider_controllers(data)
         if isinstance(merged.get("mode"), str):
@@ -4154,8 +4607,10 @@ class AIEditorAPI:
         settings = _resolve_settings(self._gui_ref)
         if not settings:
             return "Settings not available"
-        settings.set("ai_editor", merged)
         try:
+            persisted = _protect_ai_editor_config_secrets(
+                merged, _secret_store_for_settings(settings))
+            settings.set("ai_editor", persisted)
             settings.save()
         except Exception as exc:
             return str(exc)
@@ -4216,7 +4671,9 @@ class AIEditorAPI:
         current = settings.get("ai_editor", {}) if settings else self.load_config()
         merged = _merge_ai_editor_config(current or {}, data)
         persist_error = self._persist_ai_editor_config(merged)
-        self._apply_config_to_engine(merged)
+        runtime_merged = _hydrate_ai_editor_config_secrets(
+            merged, _secret_store_for_settings(settings))
+        self._apply_config_to_engine(runtime_merged)
         self._invalidate_provider_controllers(data)
         if isinstance(merged.get("mode"), str):
             from ai_editor.scopes import normalize_mode
@@ -4226,7 +4683,7 @@ class AIEditorAPI:
         self._apply_mode_permissions()
         if persist_error:
             raise RuntimeError(persist_error)
-        return merged
+        return runtime_merged
 
     @staticmethod
     def _default_model_for_provider(provider: str) -> str:
@@ -4234,6 +4691,9 @@ class AIEditorAPI:
 
     def _provider_options(self, ai_cfg: Dict[str, Any]) -> List[Dict[str, Any]]:
         from ai_editor.llm_engine import Provider
+        settings = _resolve_settings(self._gui_ref)
+        ai_cfg = _hydrate_ai_editor_config_secrets(
+            ai_cfg, _secret_store_for_settings(settings))
         current_provider = self._engine.config.provider if self._engine else ai_cfg.get("provider", "openai")
         configured_provider = ai_cfg.get("provider", "")
         active_key_present = bool(ai_cfg.get("api_key"))
@@ -4410,15 +4870,15 @@ class AIEditorAPI:
             result["controls"] = self.get_chat_controls()
         return result
 
-    def webview_post_message(self, view_id: str, message: Any) -> Dict:
+    def webview_post_message(self, view_id: str, message: Any,
+                             token: str = "") -> Dict:
         """Relay a message FROM the webview HTML TO the extension.
 
         Routes through the VS Code namespace bridge so runtime webview views and
         panels receive the same onDidReceiveMessage event shape.
-        Token validation: if the message carries a ``_token`` field, it must
-        match the nonce stored in ``_vscode_ns._webview_tokens`` for the
-        given *view_id*.  Messages without a ``_token`` are allowed through
-        (backward compat), but an incorrect token is rejected.
+        The iframe nonce must match the value registered for *view_id*.
+        Tokenless messages are rejected because the broad pywebview bridge is
+        callable by any script running in the main document.
         """
         def _record_panel_inbound_message() -> None:
             panels = getattr(self, "_extension_webview_panels", None)
@@ -4435,13 +4895,15 @@ class AIEditorAPI:
         vscode_ns = getattr(self, "_vscode_ns", None)
         if not vscode_ns:
             return {"error": "vscode namespace not initialized"}
-        # Validate webview token when present
-        if isinstance(message, dict):
-            token = message.get("_token")
-            if token is not None:
-                expected = vscode_ns._webview_tokens.get(view_id)
-                if expected is None or not vscode_ns.verify_webview_token(view_id, str(token)):
-                    return {"error": "Invalid webview token", "view_id": view_id}
+        message_token = str(token or "")
+        if not message_token and isinstance(message, dict):
+            message_token = str(message.get("_token") or "")
+            if "_token" in message and "payload" in message:
+                message = message.get("payload")
+        expected = vscode_ns._webview_tokens.get(view_id)
+        if (not expected or not message_token
+                or not vscode_ns.verify_webview_token(view_id, message_token)):
+            return {"error": "Invalid or missing webview token", "view_id": view_id}
         delivered = vscode_ns.deliver_webview_message(view_id, message)
         if delivered:
             _record_panel_inbound_message()
@@ -4530,6 +4992,7 @@ class AIEditorAPI:
             if runtime_html:
                 return {"html": runtime_html, "view_id": runtime_view_id,
                         "available": True, "source": "runtime",
+                        "token": self._ensure_webview_token(runtime_view_id),
                         "state": self._provider_webview_state(runtime_view_id, fallback_id)}
 
         manifest_view = runtime_info.get("manifest_view") or {}
@@ -4665,36 +5128,51 @@ class AIEditorAPI:
         if not text or not text.strip():
             return {"error": "Empty message"}
         self._ensure_engine()
-        if config:
-            if config.get("provider"):
-                self._engine.config.provider = config["provider"]
-            if config.get("model"):
-                self._engine.config.model = config["model"]
-        # @agent-id prefix → activate agent for this message
-        stripped = text.strip()
-        if stripped.startswith("@") and " " in stripped:
-            mention, rest = stripped.split(" ", 1)
-            agent_id = mention[1:]
-            if self._agent_registry and self._agent_registry.get(agent_id):
-                self._set_active_agent(agent_id)
-                stripped = rest.strip()
-        self._sync_extension_tools()
-        effective_agent = agent_mode or self._mode == "agent"
-        is_plan = self._mode == "plan" and not effective_agent
-        if effective_agent and self._controller.conversation:
-            self._controller.conversation.system_prompt = self._default_system_prompt(agent_mode=True)
-        elif is_plan and self._controller.conversation:
-            self._controller.conversation.system_prompt = self._default_system_prompt(plan_mode=True)
-        self._apply_mode_permissions()
-        if self._mode == "agent":
-            for t in self._registry.list_tools():
-                self._controller._session_auto_approve[t.name] = True
-        self._controller.send(stripped, agent_mode=effective_agent)
-        return {"ok": True}
+        # The lifecycle lock keeps provider/model changes and run reservation in
+        # one atomic operation so a rejected second send cannot mutate the
+        # request already in flight.
+        with self._controller._lifecycle_lock:
+            if self._controller.is_running:
+                return {
+                    "error": "Already running",
+                    "accepted": False,
+                    "busy": True,
+                    "run_id": self._controller.active_run_id,
+                }
+            if config:
+                if config.get("provider"):
+                    self._engine.config.provider = config["provider"]
+                if config.get("model"):
+                    self._engine.config.model = config["model"]
+            # @agent-id prefix → activate agent for this message
+            stripped = text.strip()
+            if stripped.startswith("@") and " " in stripped:
+                mention, rest = stripped.split(" ", 1)
+                agent_id = mention[1:]
+                if self._agent_registry and self._agent_registry.get(agent_id):
+                    self._set_active_agent(agent_id)
+                    stripped = rest.strip()
+            self._sync_extension_tools()
+            effective_agent = agent_mode or self._mode == "agent"
+            is_plan = self._mode == "plan" and not effective_agent
+            if effective_agent and self._controller.conversation:
+                self._controller.conversation.system_prompt = self._default_system_prompt(agent_mode=True)
+            elif is_plan and self._controller.conversation:
+                self._controller.conversation.system_prompt = self._default_system_prompt(plan_mode=True)
+            self._apply_mode_permissions()
+            if self._mode == "agent":
+                for t in self._registry.list_tools():
+                    self._controller._session_auto_approve[t.name] = True
+            return self._controller.send(stripped, agent_mode=effective_agent)
 
     def implement_plan(self) -> Dict:
         """Switch from Plan to Agent mode and execute the last plan."""
         self._ensure_engine()
+        if self._controller.is_running:
+            return {
+                "error": "Already running", "accepted": False, "busy": True,
+                "run_id": self._controller.active_run_id,
+            }
         old_mode = self._mode
         self._mode = "agent"
         self._save_mode_to_settings()
@@ -4703,13 +5181,14 @@ class AIEditorAPI:
             self._controller._session_auto_approve[t.name] = True
         if self._controller.conversation:
             self._controller.conversation.system_prompt = self._default_system_prompt(agent_mode=True)
-        self._controller.send(
+        result = self._controller.send(
             "Implement the plan above. Execute each step. "
             "Read files before editing. Run tests after changes. "
             "Use taskComplete when done.",
             agent_mode=True,
         )
-        return {"ok": True, "mode": "agent", "previous_mode": old_mode}
+        result.update({"mode": "agent", "previous_mode": old_mode})
+        return result
 
     def _resolve_variable(self, name: str) -> str:
         """Resolve @-mention variables by reading editor state."""
@@ -8999,7 +9478,8 @@ class AIEditorAPI:
         base_cfg = self._engine.config if self._engine else None
         for prov in self._provider_registry.list_all():
             item = prov.to_dict()
-            item.update(describe_provider_status(prov, self._settings_getter, base_cfg))
+            item.update(describe_provider_status(
+                prov, self._runtime_settings_getter, base_cfg))
             item["builtin"] = prov.builtin
             providers.append(item)
         return {"providers": providers}
@@ -9070,11 +9550,14 @@ class AIEditorAPI:
         if not ctrl:
             ctrl = self._create_provider_controller(prov)
             self._provider_controllers[provider_id] = ctrl
-        if ctrl.is_running:
-            return {"error": "Already running"}
         self._sync_extension_tools()
-        ctrl.send(message, agent_mode=prov.auto_agent)
-        return {"ok": True}
+        result = ctrl.send(message, agent_mode=prov.auto_agent) or {
+            "ok": True, "accepted": True, "busy": False,
+        }
+        if result.get("busy"):
+            result.setdefault("error", "Already running")
+        result["provider"] = provider_id
+        return result
 
     def assistant_native_response_fixture(self, name: str = "") -> Dict:
         """Return a replayable Assistant native response payload fixture."""
@@ -9733,13 +10216,16 @@ class AIEditorAPI:
             "provider_tool_start", {"provider": pid, "id": cid, "name": n, "arguments": a, "state": state})
         ctrl.on_tool_end = lambda cid, n, r, state="": self._emit(
             "provider_tool_end", {"provider": pid, "id": cid, "name": n, "result": r, "state": state})
-        ctrl.on_tool_confirm = lambda cid, n, a, _pid=pid: self._on_provider_tool_confirm(_pid, cid, n, a)
+        ctrl.on_tool_confirm = lambda cid, n, a, _pid=pid, _ctrl=ctrl: self._on_provider_tool_confirm(
+            _pid, cid, n, a, _ctrl)
         ctrl.on_tool_progress = lambda cid, n, p: self._emit(
             "provider_tool_progress", {"provider": pid, "id": cid, "name": n, "progress": p})
         ctrl.on_token_warning = lambda u, l, r: self._emit(
             "provider_token_warning", {"provider": pid, "used": u, "limit": l, "percent": int(r * 100)})
         ctrl.on_error = lambda e: self._emit(
             "provider_error", {"provider": pid, "error": e})
+        ctrl.on_save_error = lambda e: self._emit(
+            "provider_history_save_error", {"provider": pid, "error": e})
         ctrl.on_idle = lambda: self._emit(
             "provider_idle", {"provider": pid})
 
@@ -9806,7 +10292,8 @@ class AIEditorAPI:
     def _provider_config_for(self, prov) -> ProviderConfig:
         """Build the exact runtime config for a right-sidebar provider tab."""
         base_cfg = self._engine.config if self._engine else ProviderConfig()
-        runtime_cfg = build_provider_runtime_config(prov, self._settings_getter, base_cfg)
+        runtime_cfg = build_provider_runtime_config(
+            prov, self._runtime_settings_getter, base_cfg)
         if runtime_cfg and runtime_cfg.provider == "anthropic" and runtime_cfg.api_key and (
                 not runtime_cfg.model or runtime_cfg.model in _STALE_ANTHROPIC_DEFAULT_MODELS):
             official_model = self._official_default_model_for_provider(
@@ -9825,13 +10312,29 @@ class AIEditorAPI:
     def _provider_unavailable_reason(self, prov) -> str:
         status = describe_provider_status(
             prov,
-            self._settings_getter,
+            self._runtime_settings_getter,
             self._engine.config if self._engine else None,
         )
         return str(status.get("unavailable_reason") or "")
 
+    def _runtime_settings_getter(self, key: str, default: Any = None) -> Any:
+        """Return settings suitable for trusted in-process provider runtimes.
+
+        Persisted AI Editor settings intentionally contain only redacted
+        placeholders.  Provider construction and availability checks still
+        need the protected values, so hydrate only the ``ai_editor`` section
+        at this narrow runtime boundary.  Other settings retain the normal
+        getter semantics.
+        """
+        value = self._settings_getter(key, default)
+        if key != "ai_editor" or not isinstance(value, dict):
+            return value
+        settings = _resolve_settings(self._gui_ref)
+        return _hydrate_ai_editor_config_secrets(
+            value, _secret_store_for_settings(settings))
+
     def _resolve_provider_key(self, provider_type: str) -> str:
-        ai = _normalize_ai_editor_config(self._settings_getter("ai_editor", {}) or {})
+        ai = self._runtime_settings_getter("ai_editor", {}) or {}
         if not isinstance(ai, dict):
             return ""
         if ai.get("provider") == provider_type and ai.get("api_key"):
@@ -16922,9 +17425,16 @@ class AIEditorAPI:
         self._mcp_http_server = server
         self._mcp_http_thread = thread
         thread.start()
-        deadline = time.monotonic() + 3.0
-        while server.port == 0 and time.monotonic() < deadline:
-            time.sleep(0.02)
+        if not server.wait_until_ready(3.0):
+            error = server.startup_error or "MCP server did not become ready"
+            self._mcp_http_server = None
+            self._mcp_http_thread = None
+            return {"ok": False, "error": error, "port": 0}
+        if not thread.is_alive():
+            error = server.startup_error or "MCP server stopped during startup"
+            self._mcp_http_server = None
+            self._mcp_http_thread = None
+            return {"ok": False, "error": error, "port": 0}
         return {"ok": True, "port": server.port}
 
     def stop_mcp_server(self) -> Dict:
@@ -20139,14 +20649,14 @@ class AIEditorAPI:
     def list_auth_sessions(self, provider_id: str = "") -> Dict:
         from ai_editor.auth import get_auth_service
         sessions = get_auth_service().list_sessions(provider_id)
-        return {"sessions": [s.to_dict() for s in sessions]}
+        return {"sessions": [s.to_public_dict() for s in sessions]}
 
     def create_auth_session(self, provider_id: str, token: str,
                              label: str = "") -> Dict:
         from ai_editor.auth import get_auth_service
         session = get_auth_service().create_session_from_token(
             provider_id, token, label)
-        return {"ok": True, "session": session.to_dict()}
+        return {"ok": True, "session": session.to_public_dict()}
 
     def remove_auth_session(self, provider_id: str,
                              session_id: str) -> Dict:
@@ -20343,13 +20853,40 @@ class AIEditorAPI:
                     return str(tool.name)
         return name[4:] if name.startswith("mcp_") else name
 
-    @staticmethod
-    def _is_probably_read_only_mcp_tool(name: str) -> bool:
-        lowered = str(name or "").lower()
-        parts = [part for part in re.split(r"[_\-.:]+", lowered) if part]
-        return any(part.startswith((
-            "read", "list", "get", "search", "show", "fetch", "query", "find"
-        )) for part in parts)
+    def _mcp_tool_definition(self, name: str) -> Any:
+        if not self._mcp:
+            return None
+        for tool in self._mcp.all_tools():
+            if self._mcp_tool_name(tool) == name:
+                return tool
+        return None
+
+    def _mcp_tool_policy(self, name: str) -> str:
+        """Return disabled/read_only/confirm/allow for one MCP tool.
+
+        Tool annotations are security hints, not authority.  They can classify a
+        tool as read-only only when its server was explicitly marked trusted.
+        Unknown and untrusted tools always default to confirmation.
+        """
+        settings = self._mcp_settings()
+        policies = _as_dict(settings.get("tool_policies"))
+        tool = self._mcp_tool_definition(name)
+        candidates = [name]
+        if tool is not None:
+            candidates.extend([
+                f"{tool.server_id}.{tool.name}",
+                f"{tool.server_id}:{tool.name}",
+                str(tool.name),
+            ])
+        for candidate in candidates:
+            policy = str(policies.get(candidate, "")).strip().lower()
+            if policy in {"disabled", "read_only", "confirm", "allow"}:
+                return policy
+        if tool is not None and bool(getattr(tool, "trusted_server", False)):
+            annotations = _as_dict(getattr(tool, "annotations", {}))
+            if annotations.get("readOnlyHint") is True:
+                return "read_only"
+        return "confirm"
 
     def _mcp_tool_allowed(self, name: str) -> bool:
         if self._mode == "ask":
@@ -20362,10 +20899,7 @@ class AIEditorAPI:
         access = self._mcp_access()
         if access == "disabled":
             return False
-        if access == "read_only":
-            return self._is_probably_read_only_mcp_tool(
-                self._mcp_tool_source_name(name))
-        return True
+        return self._mcp_tool_policy(name) != "disabled"
 
     def _mcp_tool_requires_confirm(self, name: str) -> bool:
         if not self._mcp_tool_allowed(name):
@@ -20375,11 +20909,12 @@ class AIEditorAPI:
             return False
         if override == "confirm":
             return True
-        access = self._mcp_access()
-        if access == "prompt":
-            return True
-        if access == "read_only":
+        policy = self._mcp_tool_policy(name)
+        if policy in {"disabled", "read_only", "allow"}:
             return False
+        access = self._mcp_access()
+        if access in {"prompt", "read_only"}:
+            return True
         return self._mode == "agent" and access != "allow"
 
     def _refresh_mcp_tools(self) -> None:
@@ -20424,14 +20959,17 @@ class AIEditorAPI:
             "url": str(config.get("url", "")),
             "headers": dict(config.get("headers", {})) if isinstance(config.get("headers", {}), dict) else {},
             "enabled": bool(config.get("enabled", True)),
+            "trusted": bool(config.get("trusted", False)),
+            "inherit_env": list(config.get("inherit_env", []))
+            if isinstance(config.get("inherit_env", []), list) else [],
         }
         if not server["id"]:
             return {"error": "MCP server id is required"}
-        if server["transport"] not in {"stdio", "sse"}:
+        if server["transport"] not in {"stdio", "sse", "streamable_http", "http"}:
             return {
                 "error": (
                     f"Unsupported MCP transport: {server['transport']}. "
-                    "This build supports stdio and SSE; streamable HTTP is not wired yet."
+                    "This build supports stdio, Streamable HTTP, and legacy SSE."
                 )
             }
         try:
@@ -20451,6 +20989,8 @@ class AIEditorAPI:
             url=server["url"],
             headers=server["headers"],
             enabled=server["enabled"],
+            trusted=server["trusted"],
+            inherit_env=server["inherit_env"],
         )
         ok = self._mcp.add_server(cfg) if server["enabled"] and self._mcp_settings().get("autostart") else True
         tool_count = 0
@@ -20512,12 +21052,7 @@ class AIEditorAPI:
         mcp = _as_dict(ai.get("mcp"))
         mcp["servers"] = servers
         ai["mcp"] = mcp
-        settings.set("ai_editor", ai)
-        try:
-            settings.save()
-        except Exception as exc:
-            return str(exc)
-        return None
+        return self._persist_ai_editor_config(ai)
 
     def _upsert_saved_mcp_server(self, server: Dict[str, Any]) -> None:
         servers = [s for s in self._saved_mcp_servers() if s.get("id") != server.get("id")]
@@ -20549,9 +21084,36 @@ class AIEditorAPI:
 
     def test_connection(self, cfg: Dict) -> Dict:
         self._ensure_engine()
+        from ai_editor.secret_store import SECRET_PRESENT
+        provider = str(cfg.get("provider", "openai") or "openai")
+        supplied_key = str(cfg.get("api_key", "") or "")
+        api_key = (
+            self._resolve_provider_key(provider)
+            if supplied_key in {"", SECRET_PRESENT}
+            else supplied_key
+        )
+        settings = _resolve_settings(self._gui_ref)
+        runtime_cfg = _hydrate_ai_editor_config_secrets({
+            **_as_dict(self._settings_getter("ai_editor", {}) or {}),
+            "provider": provider,
+        }, _secret_store_for_settings(settings))
+        supplied_headers = _as_dict(cfg.get("extra_headers"))
+        supplied_body = _as_dict(cfg.get("extra_body"))
+        def merge_redacted(runtime_value: Any,
+                           supplied_value: Dict[str, Any]) -> Dict[str, Any]:
+            merged_value = _as_dict(runtime_value)
+            for key, value in supplied_value.items():
+                if value != SECRET_PRESENT:
+                    merged_value[str(key)] = value
+            return merged_value
+
+        extra_headers = merge_redacted(
+            runtime_cfg.get("extra_headers", {}), supplied_headers)
+        extra_body = merge_redacted(
+            runtime_cfg.get("extra_body", {}), supplied_body)
         test_cfg = ProviderConfig(
-            provider=cfg.get("provider", "openai"),
-            api_key=cfg.get("api_key", ""),
+            provider=provider,
+            api_key=api_key,
             base_url=cfg.get("base_url", ""),
             model=cfg.get("model", ""),
             transport=_normalize_transport(cfg.get("transport")),
@@ -20565,8 +21127,8 @@ class AIEditorAPI:
             max_output_tokens=_as_int(cfg.get("max_output_tokens"), 0),
             timeout=_as_int(cfg.get("timeout"), 180),
             extra_headers={str(k): str(v) for k, v in _as_dict(
-                cfg.get("extra_headers")).items()},
-            extra_body=_as_dict(cfg.get("extra_body")),
+                extra_headers).items()},
+            extra_body=_as_dict(extra_body),
         )
         ok, msg = self._engine.test_connection(test_cfg)
         return {"ok": ok, "message": msg}
@@ -21780,7 +22342,8 @@ class AIEditorAPI:
         if not base_url:
             defaults = _PROVIDER_DEFAULTS.get(provider, {})
             base_url = defaults.get("base_url", self._engine.config.effective_base_url)
-        if not api_key:
+        from ai_editor.secret_store import SECRET_PRESENT
+        if not api_key or api_key == SECRET_PRESENT:
             api_key = self._resolve_provider_key(provider) or self._engine.config.api_key
         result = self._fetch_provider_models(provider, base_url, api_key)
         if not result.get("error"):
@@ -21968,7 +22531,7 @@ class AIEditorAPI:
         """Send a message with an attached image (vision)."""
         if not image_base64:
             return {"error": "No image data"}
-        if self._controller and self._controller._running:
+        if self._controller and self._controller.is_running:
             return {"error": "Already running"}
         try:
             self._ensure_engine()
@@ -21977,8 +22540,11 @@ class AIEditorAPI:
                 content = self._engine.make_image_content_anthropic(display, image_base64, mime)
             else:
                 content = self._engine.make_image_content(display, image_base64, mime)
-            self._controller.send_multimodal(display, content, agent_mode=(self._mode == "agent"))
-            return {"ok": True}
+            result = self._controller.send_multimodal(
+                display, content, agent_mode=(self._mode == "agent"))
+            if result.get("busy"):
+                result.setdefault("error", "Already running")
+            return result
         except Exception as exc:
             self._emit("error", {"error": str(exc)})
             return {"error": str(exc)}
@@ -21988,10 +22554,11 @@ class AIEditorAPI:
 
     def confirm_tool(self, call_id: str, allowed: bool) -> Dict:
         """UI calls this to allow/deny a pending tool confirmation."""
-        evt = self._pending_confirm.pop(call_id, None)
-        if not evt and call_id not in self._confirm_results:
-            return {"error": "No pending confirmation"}
-        self._confirm_results[call_id] = allowed
+        with self._pending_confirm_lock:
+            evt = self._pending_confirm.pop(call_id, None)
+            if not evt and call_id not in self._confirm_results:
+                return {"error": "No pending confirmation"}
+            self._confirm_results[call_id] = allowed
         if evt:
             evt.set()
         return {"ok": True}
@@ -22139,41 +22706,60 @@ class AIEditorAPI:
         """Called from background thread. Pushes confirm request to JS, blocks until response."""
         return self._wait_for_tool_confirmation("tool_confirm", {
             "id": call_id, "name": name, "arguments": args,
-        }, call_id, name, args)
+        }, call_id, name, args, self._controller)
 
-    def _on_provider_tool_confirm(self, provider_id: str, call_id: str, name: str, args: str) -> bool:
+    def _on_provider_tool_confirm(self, provider_id: str, call_id: str,
+                                  name: str, args: str,
+                                  controller: Any = None) -> bool:
+        confirmation_id = f"provider:{provider_id}:{call_id}"
         return self._wait_for_tool_confirmation("provider_tool_confirm", {
-            "provider": provider_id, "id": call_id, "name": name, "arguments": args,
-        }, call_id, name, args)
+            "provider": provider_id,
+            "id": confirmation_id,
+            "callId": call_id,
+            "name": name,
+            "arguments": args,
+        }, confirmation_id, name, args, controller,
+            provider_id=provider_id, raw_call_id=call_id)
 
     def _wait_for_tool_confirmation(self, event: str, payload: Dict[str, Any],
-                                    call_id: str, name: str, args: str) -> bool:
+                                    call_id: str, name: str, args: str,
+                                    controller: Any = None,
+                                    provider_id: str = "",
+                                    raw_call_id: str = "") -> bool:
         engine_action = self._engine_action_from_arguments(args) if name == "engine" else ""
         if name == "engine" and engine_action not in _DANGEROUS_ENGINE_ACTIONS:
             return True
         if self._mode == "agent":
             return True
         evt = threading.Event()
-        self._pending_confirm[call_id] = evt
-        self._confirm_results[call_id] = False
+        with self._pending_confirm_lock:
+            self._pending_confirm[call_id] = evt
+            self._confirm_results[call_id] = False
         self._emit(event, payload)
         timeout = float(getattr(self, "_confirmation_timeout", 30.0))
         deadline = time.monotonic() + timeout
         while not evt.is_set():
-            ctrl = self._controller
-            if ctrl is not None and not ctrl._running:
+            ctrl = controller
+            if ctrl is not None and not ctrl.is_running:
                 break
             remaining = deadline - time.monotonic()
             if remaining <= 0:
                 break
             evt.wait(timeout=min(0.5, remaining))
-        self._pending_confirm.pop(call_id, None)
-        result = self._confirm_results.pop(call_id, False)
+        with self._pending_confirm_lock:
+            self._pending_confirm.pop(call_id, None)
+            result = self._confirm_results.pop(call_id, False)
         if not result and not evt.is_set():
-            self._emit("tool_end", {"id": call_id,
-                                     "name": name,
-                                     "result": '{"error":"confirmation timeout"}',
-                                     "state": "cancelled"})
+            end_event = "provider_tool_end" if provider_id else "tool_end"
+            end_payload = {
+                "id": raw_call_id or call_id,
+                "name": name,
+                "result": '{"error":"confirmation timeout"}',
+                "state": "cancelled",
+            }
+            if provider_id:
+                end_payload["provider"] = provider_id
+            self._emit(end_event, end_payload)
         return result
 
     def _on_tool_end(self, call_id: str, name: str, result: str, state: str = "") -> None:

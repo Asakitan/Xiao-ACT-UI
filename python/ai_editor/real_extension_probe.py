@@ -938,13 +938,15 @@ def run_probe(extension_dir: str, keep_copy: bool = False) -> Dict[str, Any]:
                 }
 
             view_id = str(success.get("view_id", ""))
+            view_token = api._ensure_webview_token(view_id)
             render_payload = _wait_for_render(rendered, view_id)
             html = ""
             if isinstance(render_payload, dict):
                 html = str(render_payload.get("html", ""))
 
             state = api.custom_editor_state(view_id=view_id)
-            ready_result = api.webview_post_message(view_id, {"type": "ready"})
+            ready_result = api.webview_post_message(
+                view_id, {"type": "ready"}, view_token)
             init_message = _wait_for_webview_message(events, view_id, "init")
             init_body = (
                 init_message.get("message", {}).get("body", {})
@@ -971,7 +973,8 @@ def run_probe(extension_dir: str, keep_copy: bool = False) -> Dict[str, Any]:
                     "new": {"type": 10, "value": first_root},
                 },
             }
-            edit_result = api.webview_post_message(view_id, edit_payload)
+            edit_result = api.webview_post_message(
+                view_id, edit_payload, view_token)
             dirty_state = _wait_for_custom_editor_state(
                 api,
                 view_id,
@@ -1012,7 +1015,7 @@ def run_probe(extension_dir: str, keep_copy: bool = False) -> Dict[str, Any]:
                     "old": {"type": 10, "value": first_root},
                     "new": {"type": 10, "value": second_root},
                 },
-            })
+            }, view_token)
             dirty_state_after_second_edit = _wait_for_custom_editor_state(
                 api,
                 view_id,
@@ -1170,7 +1173,7 @@ def run_builtin_smoke_probe(
                 api.webview_post_message(webview_view_id, {
                     "type": "ping",
                     "target": "webview-view",
-                })
+                }, api._ensure_webview_token(webview_view_id))
                 if webview_view_id else {"ok": False})
 
             panel_render = _wait_for_render_matching(
@@ -1186,7 +1189,7 @@ def run_builtin_smoke_probe(
                 api.webview_post_message(panel_view_id, {
                     "type": "ping",
                     "target": "webview-panel",
-                })
+                }, api._ensure_webview_token(panel_view_id))
                 if panel_view_id else {"ok": False})
 
             custom_result = api.resolve_extension_custom_editor(
@@ -1199,7 +1202,7 @@ def run_builtin_smoke_probe(
                 api.webview_post_message(custom_view_id, {
                     "type": "ping",
                     "target": "custom-editor",
-                })
+                }, api._ensure_webview_token(custom_view_id))
                 if custom_view_id else {"ok": False})
 
             state_deadline = time.time() + 5.0
@@ -1226,7 +1229,7 @@ def run_builtin_smoke_probe(
                         candidate_id, {
                             "type": "ping",
                             "target": "webview-view",
-                        })
+                        }, api._ensure_webview_token(candidate_id))
                     raw_state = api.execute_command("saoProbe.state")
                     command_state = (
                         raw_state.get("result", raw_state)
@@ -1245,7 +1248,7 @@ def run_builtin_smoke_probe(
                         candidate_id, {
                             "type": "ping",
                             "target": "webview-panel",
-                        })
+                        }, api._ensure_webview_token(candidate_id))
                     raw_state = api.execute_command("saoProbe.state")
                     command_state = (
                         raw_state.get("result", raw_state)

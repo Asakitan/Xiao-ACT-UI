@@ -723,6 +723,15 @@ class _FakeVscodeNamespace:
     def __init__(self, html_by_id=None):
         self.html_by_id = dict(html_by_id or {})
         self.delivered = []
+        self._webview_tokens = {}
+
+    def _generate_view_token(self, view_id):
+        token = f"selftest-webview-token:{view_id}"
+        self._webview_tokens[view_id] = token
+        return token
+
+    def verify_webview_token(self, view_id, token):
+        return bool(token) and self._webview_tokens.get(view_id) == token
 
     def get_webview_html(self, view_id):
         return self.html_by_id.get(view_id, "")
@@ -3085,10 +3094,14 @@ def test_app_settings_parity() -> None:
            and loaded.get("max_input_tokens") == 64000
            and loaded.get("max_output_tokens") == 2048
            and loaded.get("timeout") == 45
-           and loaded.get("extra_headers") == {"X-Test": "1"}
-           and loaded.get("extra_body") == {"stream_options": {"include_usage": True}})
-    _check("provider keys and unknown keys preserved",
-           loaded.get("_provider_keys", {}).get("deepseek") == "new-deepseek"
+           and loaded.get("extra_headers") == {"X-Test": "__SAO_SECRET_PRESENT__"}
+           and loaded.get("extra_body") == {"stream_options": "__SAO_SECRET_PRESENT__"}
+           and stored.get("extra_headers") == {}
+           and stored.get("extra_body") == {})
+    _check("provider keys are protected and unknown keys preserved",
+           loaded.get("_provider_keys", {}).get("deepseek") == "__SAO_SECRET_PRESENT__"
+           and stored.get("provider_keys") == {}
+           and "deepseek" in stored.get("_secret_state", {}).get("provider_keys", [])
            and stored.get("unknown_payload") == {"preserve": True})
     _check("approval active provider and layout round-trip",
            loaded.get("approval") == "autopilot"
@@ -3250,7 +3263,7 @@ def test_app_settings_parity() -> None:
     })
     loaded_bad = AIEditorAPI(malformed).load_config()
     _check("malformed settings normalized safely",
-           loaded_bad.get("provider_keys") == {"anthropic": "legacy-key"}
+           loaded_bad.get("provider_keys") == {"anthropic": "__SAO_SECRET_PRESENT__"}
            and loaded_bad.get("top_p") == 1.0
            and loaded_bad.get("timeout") == 180
            and loaded_bad.get("stop") == ["A", "B"]
@@ -3379,12 +3392,12 @@ def test_app_settings_parity() -> None:
            and mode.get("overrides", {}).get("readFile") == "allowed")
 
     mcp_api = AIEditorAPI(_SettingsGui({"ai_editor": {}}))
-    _check("unsupported MCP transport rejected explicitly",
-           "Unsupported MCP transport" in mcp_api.add_mcp_server({
+    _check("Streamable HTTP MCP transport is accepted explicitly",
+           mcp_api.add_mcp_server({
                "id": "http-test",
                "transport": "streamable_http",
                "url": "http://localhost:3000/mcp",
-           }).get("error", ""))
+           }).get("ok") is True)
 
     no_window_editor = AIEditorAPI(_SettingsGui({"ai_editor": {}}))
     _check("editor mutating API does not fake success without window",
@@ -3861,7 +3874,10 @@ def test_app_settings_parity() -> None:
 
     mcp_policy_api = AIEditorAPI(_SettingsGui({"ai_editor": {
         "mode": "agent",
-        "mcp": {"access": "read_only"},
+        "mcp": {"access": "read_only", "tool_policies": {
+            "selftest_tools.read_info": "read_only",
+            "selftest_tools.write_info": "disabled",
+        }},
     }}))
     mcp_policy_api._ensure_engine()
     mcp_policy_api.register_mcp_tools(
@@ -3880,7 +3896,7 @@ def test_app_settings_parity() -> None:
         for item in (mcp_policy_api._controller.extra_tools or [])
     ]
     mcp_list_items = {t.get("name"): t for t in mcp_policy_api.list_tools().get("tools", [])}
-    _check("MCP read_only exposes only read-like controller tools",
+    _check("MCP read_only exposes only explicitly classified controller tools",
            "mcp_selftest_tools_read_info" in mcp_tool_names
            and "mcp_selftest_tools_write_info" not in mcp_tool_names)
     _check("MCP tool list includes UI metadata and normalized schema",
@@ -4462,13 +4478,15 @@ def test_app_settings_parity() -> None:
 
     provider_result = controls_api.set_active_provider("anthropic")
     stored_controls = controls_gui.settings.data["ai_editor"]
+    loaded_controls = controls_api.load_config()
     _check("set_active_provider updates engine and preserves settings",
            provider_result.get("ok") is True
            and controls_api._engine.config.provider == "anthropic"
            and controls_api._engine.config.model == ""
            and stored_controls.get("provider") == "anthropic"
            and stored_controls.get("model") == ""
-           and stored_controls.get("provider_keys", {}).get("anthropic") == "old-claude"
+           and stored_controls.get("provider_keys") == {}
+           and loaded_controls.get("provider_keys", {}).get("anthropic") == "__SAO_SECRET_PRESENT__"
            and stored_controls.get("future_section") == {"enabled": True})
 
     endpoint_result = controls_api.set_chat_controls({
@@ -6142,8 +6160,8 @@ def test_phase1_ai_editor_regressions() -> None:
            and "function settingsModelListRows(provider)" in html
            and "function customEndpointSettingModelRows(provider)" in html
            and "function customEndpointConfiguredModelRows(provider)" in html
-           and "const quickModel=$('model-inp');" in html
-           and "const model=String((modelInput&&modelInput.value)||(quickModel&&quickModel.value)||activeModelValue()||'').trim();" in html
+           and "const model=String((modelInput&&modelInput.value)||activeModelValue()||'').trim();" in html
+           and "const quickModel=$('model-inp');" not in html
            and "return modelIdListFromText(model)" in html
            and "const firstModel=modelIdListFromText(model)[0]||'';" in html
            and "function modelOptionRows()" in html
@@ -6269,7 +6287,11 @@ def test_phase1_ai_editor_regressions() -> None:
            and "function assistantCompactNumber(value)" in html
            and "return assistantCompactNumber(value)+' tok';" in html
            and "statusCtx.style.setProperty('--ctx-percent',pct+'%');" in html
-           and "statusContextReady:!!(statusCtx&&statusCtxStyle" in html
+           and ".statusbar > #status-language-service," in html
+           and ".statusbar > #status-context-usage," in html
+           and ".statusbar > #status-tokens { display:none; }" in html
+           and "statusHealth&&statusHealthStyle&&statusHealthStyle.display!=='none'" in html
+           and "contextWindow.healthContext===contextWindow.statusLabel.replace(/^CW\\s*/i,'')" in html
            and "border:1px solid var(--border); border-radius:999px; font-size:11px; color:var(--fg-dim);" in html
            and ".workflow-popup-action { width:20px; height:20px; border:1px solid transparent; border-radius:999px;" in html
            and ".chat-control-popup.show { display:block; }" in html
@@ -6303,9 +6325,9 @@ def test_phase1_ai_editor_regressions() -> None:
            and "Edit Custom" in html
            and "function workflowSlug(value)" in html
            and "async function saveCustomWorkflowDefinition(options)" in html
-           and "modeStrip.appendChild(workflowModePopupItem('off','Off'" in html
-           and "modeStrip.appendChild(workflowModePopupItem('on','On'" in html
-           and "modeStrip.appendChild(workflowModePopupItem('custom','Custom'" in html
+           and "modeStrip.appendChild(workflowModePopupItem('off',t('workflow_off')" in html
+           and "modeStrip.appendChild(workflowModePopupItem('on',t('workflow_on')" in html
+           and "modeStrip.appendChild(workflowModePopupItem('custom',t('workflow_custom')" in html
            and "workflowPopup.appendChild(workflowModeToolbar(workflowMode));" in html
            and "function workflowCustomPromptModal(seed,options)" in html
            and "Save as workflow" in html
@@ -6395,7 +6417,7 @@ def test_phase1_ai_editor_regressions() -> None:
            and "collectWorkflowStepEditor(stepEditor)" in html
            and "$('wf-id').readOnly=true;" in html
            and "edit.onclick=e=>{e.stopPropagation();createWorkflow(w)};" in html
-           and "Plain chat" in html)
+           and "No preset workflow" in html)
     _check("frontend workflow step editor authors group (parallel) and requires_confirmation",
            "data-step-field=\"group\"" in html
            and "data-step-field=\"requires_confirmation\"" in html
@@ -6449,7 +6471,7 @@ def test_phase1_ai_editor_regressions() -> None:
             and "messages.dataset.chatMessageCount=String(count);" in html
             and ".chat-messages.empty .chat-messages-inner { justify-content:center; }" in html
             and "updateAssistantSurfaceState();\n  updateMessageFootersState();\n  renderChatComposerHeader();\n  renderAssistantComposerSummary();" in html)
-    _check("frontend Assistant composer summary and shortcuts mirror Copilot Chat input affordances",
+    _check("frontend Assistant composer summary exposes five focused prompt shortcuts",
            'id="chat-composer-summary"' in html
            and 'id="chat-prompt-shortcuts"' in html
            and 'data-chat-prompt-action="explain"' in html
@@ -6457,8 +6479,8 @@ def test_phase1_ai_editor_regressions() -> None:
            and 'data-chat-prompt-action="fix"' in html
            and 'data-chat-prompt-action="tests"' in html
            and 'data-chat-prompt-action="review"' in html
-           and 'data-chat-prompt-action="copy-context"' in html
-           and 'data-chat-prompt-action="clear-draft"' in html
+           and 'data-chat-prompt-action="copy-context"' not in html
+           and 'data-chat-prompt-action="clear-draft"' not in html
            and ".chat-toolbar-head.has-state { display:none!important; }" in html
            and ".chat-composer-summary.has-state { display:none!important; }" in html
            and ".chat-toolbar-head,.chat-composer-summary { min-height:0!important; padding:0!important; }" in html
@@ -6856,7 +6878,7 @@ def test_phase1_ai_editor_regressions() -> None:
            and '<span class="chat-composer-meta" id="chat-input-status" role="status" aria-live="polite">' in html
            and "ask_placeholder:'Ask anything... (/ commands, @ context, # tools)'" in html
            and "ask_placeholder:'输入问题... (/ 命令, @ 上下文, # 工具)'" in html
-           and "note.textContent='Enter to send, Shift+Enter for newline, / commands, @ context, # tools.'" in html
+           and "note.textContent=t('composer_hint');" in html
            and ".chat-input-container.completion-open" in html
            and "@keyframes composerPopupIn" in html
            and "function setChatCompletionState(kind,open,controlsId)" in html
@@ -7143,20 +7165,18 @@ def test_phase1_ai_editor_regressions() -> None:
            and "announceAssistantAction(next==='none'?'Feedback cleared':'Feedback saved: '+next);" in html
            and "announceAssistantAction('Response copied')" in html
            and "announceAssistantAction('Markdown copied')" in html
-           and "t('copy_all_code')" in html
-           and "t('insert_response')" in html
-           and "t('apply_first_code')" in html
+           and "t('cm_copy_all_code')" in html
+           and "t('cm_insert')" in html
+           and "t('cm_apply_code')" in html
            and "action:'copy-markdown'" in html
            and "action:'copy-all-code'" in html
-           and "action:'insert-response'" in html
-           and "action:'apply-code'" in html
-           and "action:'focus-references'" in html
-           and "action:'focus-changes'" in html
-           and "action:'focus-file-tree'" in html
-           and "action:'focus-followups'" in html
-           and "action:'focus-actions'" in html
-           and "requires:'code'" in html
-           and "openInEditor(text,'markdown')" in html
+           and "action:'insert-message'" in html
+           and "action:'apply-first-code'" in html
+           and "action:'more'" in html
+           and "const focus=[['references',t('cm_focus_references')],['changes',t('cm_focus_changes')],['trees',t('cm_focus_trees')],['followups',t('cm_focus_followups')],['actions',t('cm_focus_actions')]]" in html
+           and ".map(([key,label])=>({label,action:'focus-'+key,disabled:false,fn:()=>focusAssistantMessageTarget(msgEl,key)}));" in html
+           and "disabled:!hasCode||streaming" in html
+           and "openInEditor(raw,'markdown')" in html
            and "assistantInsertCodeIntoEditor(block.code,{lang:block.lang,replaceSelection:true})" in html
            and "editorInsertPlainTextAtRange(text,editorRangePayloadFromOffsets(value,start,end))" in html
            and "const message=replace?t('code_applied'):t('code_inserted');" in html
@@ -7189,7 +7209,7 @@ def test_phase1_ai_editor_regressions() -> None:
            and "sendAssistantTextRequest(req.text,{refs:req.refs,toolHint:req.toolHint,appendUser:false,clearInput:false});" in html
            and "if(opts.appendUser!==false){" in html
            and "action:'regenerate'" in html
-           and "if(role==='assistant'||role==='user')setTimeout(()=>addMessageFooter(msgEl,role),100);" in html
+           and "if(role==='assistant'||role==='user')addMessageFooter(msgEl,role);" in html
            and "announceAssistantAction('Retrying previous request')" in html
            and "chatMessageActionText(msgEl,true)" in html
            and "chatFirstMessageCodeBlock(msgEl)" in html
@@ -7217,11 +7237,18 @@ def test_phase1_ai_editor_regressions() -> None:
            and "addMessageFooter(body.closest('.msg'),'assistant');" in html
            and "function deleteChatMessage(msgEl)" in html
            and "e.key==='Enter'&&(e.ctrlKey||e.metaKey)" in html)
-    _check("frontend Assistant message footer can focus response target cards",
+    _check("frontend Assistant message overflow can focus response target cards",
            "function assistantMessageTargetFooterSmokeSnapshot()" in html
            and "assistantUiSelfCheckRecord(checks,'message-footer-target-actions-ready'" in html
            and "assistantUiSelfCheckRecord(checks,'message-footer-target-focus-ready'" in html
-           and "messageTargetFooter.focusButtonCount===5" in html
+           and "messageTargetFooter.footerButtonCount===5" in html
+           and "messageTargetFooter.moreButtonReady" in html
+           and "messageTargetFooter.menuFocusCount===5" in html
+           and "messageTargetFooter.menuFocusActions.includes('focus-references')" in html
+           and "messageTargetFooter.menuFocusActions.includes('focus-changes')" in html
+           and "messageTargetFooter.menuFocusActions.includes('focus-trees')" in html
+           and "messageTargetFooter.menuFocusActions.includes('focus-followups')" in html
+           and "messageTargetFooter.menuFocusActions.includes('focus-actions')" in html
            and "messageTargetFooter.clickedTargets.length===5" in html
            and "messageTargetFooter.lastFocusedTarget==='actions'" in html
            and "messageTargetFooter.highlighted" in html
@@ -7259,7 +7286,6 @@ def test_phase1_ai_editor_regressions() -> None:
            and "chatPayloadFirstValue(payload,['model','modelId','model_id'])" in html
            and "normalizeChatUsageValue(usage,'total')" in html
            and "latencyMs','elapsedMs','durationMs'" in html
-           and "finishReason','finish_reason','stopReason'" in html
            and "renderChatResponseMetadata(wrap,metadata);" in html
            and "usedRefs.length?usedRefs.length+' used'" in html
            and "chat-used-context-list" in html
@@ -7782,7 +7808,10 @@ def test_phase1_ai_editor_regressions() -> None:
             and "workflow-backend-duration-payload-ready" in smoke_source
             and "channel: \"msedge\"" in smoke_source
            and "PASS assistant-ui-browser-smoke" in smoke_source
-           and "SKIP assistant-ui-browser-smoke playwright unavailable" in smoke_source)
+           and "SKIP assistant-ui-browser-smoke playwright unavailable" in smoke_source
+           and "process.env.SAO_ALLOW_BROWSER_SMOKE_SKIP" in smoke_source
+           and "Playwright is required for assistant-ui-browser-smoke release validation." in smoke_source
+           and "only for an explicit local-development skip." in smoke_source)
     _check("backend workflow exposes run cancellation",
            "def cancel_workflow(self, run_id: str = \"\") -> Dict:" in app_source
            and "self._workflow_cancel_events" in app_source
@@ -8004,7 +8033,9 @@ def test_phase1_ai_editor_regressions() -> None:
     _check("frontend Assistant exposes dynamic context picker",
            'class="chat-context-picker" id="chat-context-picker" role="dialog" aria-label="Attach context"' in html
            and 'id="chat-context-picker-input" aria-label="Search context"' in html
-           and 'onclick="openChatContextPicker()" title="Attach context" aria-label="Attach context"' in html
+           and 'onclick="openChatContextPicker()"' in html
+           and 'data-i18n-title="attach_context"' in html
+           and 'aria-label="Attach context"' in html
            and "id=\"chat-context-option-'+i+'\"" in html
            and "input.setAttribute('aria-activedescendant',active.id);" in html
            and "input.removeAttribute('aria-activedescendant');" in html
@@ -11910,7 +11941,7 @@ console.log("frontend word separator behavior ok");
            and "window.settingsValidationErrorGroups=settingsValidationErrorGroups;" in html
            and "window.settingsFocusValidationError=settingsFocusValidationError;" in html
            and "window.settingsFilterValidationErrors=settingsFilterValidationErrors;" in html
-           and "const validationErrors=validateSettingsBeforeSave({focusFirst:true});" in html
+           and "const validationErrors=validateSettingsBeforeSave({focusFirst:!auto});" in html
            and "if(validationErrors.length)return;" in html
            and "setAttribute('aria-invalid','true')" in html
            and "settings-input-invalid" in html
@@ -12129,14 +12160,16 @@ console.log("frontend word separator behavior ok");
            and "payload.settingsReadableColumns=settings.readableColumns===true;" in html
            and "payload.settingsNavUsable=settings.navUsable===true;" in html
            and "payload.settingsMainUsable=settings.mainUsable===true;" in html)
-    _check("frontend settings target tabs filter by scope without mutating search",
+    _check("frontend settings target tabs filter by scope with localized controls",
            "input.value=(input.value+' @workspace').trim();" not in html
            and "input.value=(input.value+' @extensions').trim();" not in html
            and "row.classList.toggle('settings-target-hidden',!show);" in html
-           and "currentSettingsTarget==='workspace'?'Search workspace settings...'" in html
+           and "input.placeholder=currentSettingsTarget==='extensions'?t('s_search_ext'):currentSettingsTarget==='workspace'?t('s_search_ws'):t('s_search_user');" in html
            and "persistSettingsViewState({target:currentSettingsTarget,search:q});" in html
            and "restoreSettingsViewState();" in html
-           and "Reset Visible" in html
+           and 'data-i18n="s_reset_visible"' in html
+           and "s_reset_visible:'Reset Visible'" in html
+           and "s_reset_visible:'重置可见项'" in html
            and "settingsSectionModifiedCount(section)" in html)
     _check("frontend settings has humane VS Code style interaction polish",
            "id=\"settings-dirty-summary\"" in html
@@ -12154,13 +12187,15 @@ console.log("frontend word separator behavior ok");
            and "settings-save-button" in html
            and "id=\"settings-footer-summary\"" in html
            and "save.dataset.settingsSaveState=errorCount?'blocked':(modifiedCount?'ready':'clean');" in html
-           and "save.disabled=errorCount>0||modifiedCount===0;" in html
-           and "No Settings changes to save" in html
+           and "save.disabled=errorCount>0;" in html
+           and "save.textContent=errorCount?t('s_fix_errors'):t('s_save_now');" in html
            and "frame.classList.toggle('settings-has-modified',modifiedCount>0&&errorCount===0);" in html
            and "frame.dataset.settingsDirtyState=errorCount?'error':(modifiedCount?'modified':'clean');" in html
-           and "fix errors before saving" in html
+           and "function scheduleSettingsAutoSave()" in html
+           and "await saveSettings({auto:true});" in html
+           and "const validationErrors=validateSettingsBeforeSave({focusFirst:!auto});" in html
+           and "if(validationErrors.length)return;" in html
             and "Settings saved" in html
-            and "closeSettings();" not in html[html.index("async function saveSettings()"):html.index("window.saveSettings=saveSettings;")]
             and "const first=settingsVisibleRows().find(Boolean);" in html
             and "updateSettingsResultNav(visibleRowCount);" in html
             and "settingsFocusFirstReviewRow('modified')" in html
@@ -12708,7 +12743,7 @@ console.log("frontend word separator behavior ok");
            and "function applySettingsMode(){" in html
            and "function settingsSetMode(mode){" in html
            and "const SETTINGS_SIMPLE_CATEGORY_IDS=new Set(['assistant','appearance','editor','extensions','terminal','workspace']);" in html
-           and "const SETTINGS_COMPLEX_HIDDEN_CATEGORY_IDS=new Set(['advanced','models']);" in html
+           and "const SETTINGS_COMPLEX_HIDDEN_CATEGORY_IDS=new Set(['advanced']);" in html
            and "settings-nav-mode-tabs" in html
            and "'[data-settings-tier=\"advanced-only\"]'" in html
            and "modeAllowed=settingsCategoryAllowedInMode(g.dataset&&g.dataset.settingsId);" in html
@@ -12813,7 +12848,10 @@ console.log("frontend word separator behavior ok");
            and "settings.png" in settings_smoke_source
            and "channel: \"msedge\"" in settings_smoke_source
            and "PASS settings-ui-browser-smoke" in settings_smoke_source
-           and "SKIP settings-ui-browser-smoke playwright unavailable" in settings_smoke_source)
+           and "SKIP settings-ui-browser-smoke playwright unavailable" in settings_smoke_source
+           and "process.env.SAO_ALLOW_BROWSER_SMOKE_SKIP" in settings_smoke_source
+           and "Playwright is required for settings-ui-browser-smoke release validation." in settings_smoke_source
+           and "only for an explicit local-development skip." in settings_smoke_source)
     _check("frontend settings browser exposes VS Code style interaction state",
            "settings-query-box::before" in html
            and "function updateSettingsTargetTabCounts(stats)" in html
@@ -19388,7 +19426,9 @@ console.log("frontend built-in language fallback behavior ok");
     runtime_ns = _FakeVscodeNamespace({"chatgpt.sidebarView": "<html>runtime codex</html>"})
     runtime_api._vscode_ns = runtime_ns
     runtime_result = runtime_api.get_provider_webview("codex")
-    post_result = runtime_api.webview_post_message("chatgpt.sidebarView", {"type": "send", "text": "hi"})
+    runtime_token = runtime_api._ensure_webview_token("chatgpt.sidebarView")
+    post_result = runtime_api.webview_post_message(
+        "chatgpt.sidebarView", {"type": "send", "text": "hi"}, runtime_token)
     _check("provider runtime webview HTML wins for Codex",
             runtime_result.get("source") == "runtime"
             and runtime_result.get("view_id") == "chatgpt.sidebarView"
@@ -19399,8 +19439,9 @@ console.log("frontend built-in language fallback behavior ok");
     fallback_api = AIEditorAPI(_SettingsGui({"ai_editor": {}}))
     fallback_api._vscode_ns = _FakeVscodeNamespace({})
     fallback_api._node_ext_host = _FakeNodeCustomEditorHost()
+    fallback_token = fallback_api._ensure_webview_token("custom-selftest-1")
     fallback_post = fallback_api.webview_post_message(
-        "custom-selftest-1", {"type": "ready"})
+        "custom-selftest-1", {"type": "ready"}, fallback_token)
     _check("webview postMessage falls back to node custom editor bridge",
            fallback_post.get("ok") is True
            and fallback_post.get("transport") == "node_ext_host"

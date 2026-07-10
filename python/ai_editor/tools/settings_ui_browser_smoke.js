@@ -9,16 +9,59 @@ function repoRoot() {
   return path.resolve(__dirname, "..", "..", "..");
 }
 
+function loadPythonPlaywrightFallback(nativeError) {
+  try {
+    return require("../browser_smoke_python_bridge");
+  } catch (fallbackError) {
+    if (String(process.env.SAO_ALLOW_BROWSER_SMOKE_SKIP || "").trim() === "1") {
+      console.warn("SKIP settings-ui-browser-smoke playwright unavailable; explicitly allowed by SAO_ALLOW_BROWSER_SMOKE_SKIP=1: " + fallbackError.message);
+      process.exit(0);
+    }
+    throw new Error(
+      "Playwright is required for settings-ui-browser-smoke release validation. " +
+      "Install playwright/playwright-core or Python Playwright with a runnable Chromium/Edge, " +
+      "or set SAO_ALLOW_BROWSER_SMOKE_SKIP=1 only for an explicit local-development skip. " +
+      "Node runtime error: " + nativeError.message + ". Python fallback error: " + fallbackError.message
+    );
+  }
+}
+
 function loadPlaywright() {
+  if (String(process.env.SAO_BROWSER_SMOKE_FORCE_PYTHON || "").trim() === "1") {
+    return loadPythonPlaywrightFallback(new Error("native Node Playwright bypassed by SAO_BROWSER_SMOKE_FORCE_PYTHON=1"));
+  }
   try {
     return require("playwright");
   } catch (firstError) {
     try {
       return require("playwright-core");
     } catch (_secondError) {
-      console.log("SKIP settings-ui-browser-smoke playwright unavailable: " + firstError.message);
-      process.exit(0);
+      return loadPythonPlaywrightFallback(firstError);
     }
+  }
+}
+
+async function launchBrowser(playwright, allowPythonFallback = true) {
+  let chromiumError;
+  try {
+    return await playwright.chromium.launch({ headless: true });
+  } catch (error) {
+    chromiumError = error;
+  }
+  try {
+    return await playwright.chromium.launch({ headless: true, channel: "msedge" });
+  } catch (edgeError) {
+    if (allowPythonFallback && (!playwright._runtime || playwright._runtime.kind !== "python-playwright")) {
+      const nativeError = new Error(
+        "Node Playwright loaded but Chromium and Edge could not launch: " +
+        chromiumError.message + " | " + edgeError.message
+      );
+      return launchBrowser(loadPythonPlaywrightFallback(nativeError), false);
+    }
+    throw new Error(
+      "Playwright could not launch Chromium or Edge: " +
+      chromiumError.message + " | " + edgeError.message
+    );
   }
 }
 
@@ -38,16 +81,7 @@ async function main() {
   }
 
   const playwright = loadPlaywright();
-  let browser;
-  try {
-    browser = await playwright.chromium.launch({ headless: true });
-  } catch (firstLaunchError) {
-    try {
-      browser = await playwright.chromium.launch({ headless: true, channel: "msedge" });
-    } catch (_edgeLaunchError) {
-      throw firstLaunchError;
-    }
-  }
+  const browser = await launchBrowser(playwright);
 
   const page = await browser.newPage({ viewport: { width: 1440, height: 920 } });
   page.on("pageerror", error => {
@@ -181,6 +215,7 @@ async function main() {
     try {
       localStorage.setItem("sao.aiEditor.settings.details.v1", "closed");
       localStorage.setItem("sao.aiEditor.settings.density.v1", "comfortable");
+      localStorage.setItem("sao.aiEditor.settings.view.v1", JSON.stringify({ mode: "simple" }));
     } catch (_error) {}
     window.config = Object.assign(window.config || {}, {
       provider: "openai",
@@ -195,6 +230,14 @@ async function main() {
   await page.waitForFunction(() => document.querySelector("#settings-modal.open #settings-nav-filter"), null, { timeout: 15000 });
   await page.waitForTimeout(350);
   const result = await page.evaluate(() => {
+    const modal = document.querySelector("#settings-modal .settings-modal");
+    const personalNav = document.querySelector("[data-settings-personal-nav='1']");
+    const simpleSnapshot = window.settingsUiSelfCheckSnapshot();
+    const simpleState = {
+      mode: String((document.querySelector("#settings-modal") || {}).dataset?.settingsMode || ""),
+      detailsOpen: !!(modal && modal.classList.contains("settings-details-open")),
+      personalNavVisible: !!(personalNav && getComputedStyle(personalNav).display !== "none")
+    };
     const firstRow = window.settingsVisibleRows && window.settingsVisibleRows()[0];
     if (firstRow) window.settingsHighlightRow(firstRow);
     const navFiltered = window.settingsFilterNavCategories ? window.settingsFilterNavCategories("editor") : null;
@@ -218,11 +261,52 @@ async function main() {
     if (enumFilterButton) enumFilterButton.click();
     if (enumUseButton) enumUseButton.click();
     if (schemaDetails) schemaDetails.click();
-    const snapshot = window.settingsUiSelfCheckSnapshot();
-    const modal = document.querySelector("#settings-modal .settings-modal");
+    const extensionSearchValue = (document.querySelector("#settings-search") || {}).value || "";
+    if (window.settingsClearFilters) window.settingsClearFilters();
+    const advancedModeButton = document.querySelector('[data-settings-mode="advanced"]');
+    if (advancedModeButton) advancedModeButton.click();
+    const detailsToggle = document.querySelector("#settings-details-toggle");
+    if (detailsToggle && !(modal && modal.classList.contains("settings-details-open"))) detailsToggle.click();
+    const detailedRows = Array.from(document.querySelectorAll(".settings-field.builtin-setting")).filter(row => {
+      const style = getComputedStyle(row);
+      return style.display !== "none" && !row.classList.contains("settings-mode-hidden") && !!row.querySelector("input,select,textarea");
+    });
+    const detailedRow = detailedRows.find(row => row.classList.contains("modified")) || detailedRows[0];
+    if (detailedRow && window.settingsHighlightRow) window.settingsHighlightRow(detailedRow);
+    const detailedSnapshot = window.settingsUiSelfCheckSnapshot();
+    const detailedState = {
+      mode: String((document.querySelector("#settings-modal") || {}).dataset?.settingsMode || ""),
+      detailsOpen: !!(modal && modal.classList.contains("settings-details-open")),
+      personalNavVisible: (() => {
+        const currentPersonalNav = document.querySelector("[data-settings-personal-nav='1']");
+        return !!(currentPersonalNav && getComputedStyle(currentPersonalNav).display !== "none");
+      })()
+    };
+    const snapshot = { ...simpleSnapshot };
+    [
+      "hasDetailValueActions",
+      "hasDetailSaveRevertActions",
+      "hasDetailTargetNote",
+      "hasDetailValueMatrix",
+      "hasDetailValueMatrixRows",
+      "hasDetailValueMatrixActions",
+      "hasDetailCopyLinkAction",
+      "hasDetailBreadcrumb",
+      "hasDefaultVisiblePersonalNav"
+    ].forEach(key => { snapshot[key] = detailedSnapshot[key]; });
+    snapshot.pass = simpleSnapshot.pass === true && detailedSnapshot.pass === true;
     const rect = modal ? modal.getBoundingClientRect() : null;
     return {
       snapshot,
+      simpleSnapshot,
+      detailedSnapshot,
+      simpleState,
+      detailedState,
+      detailedRow: detailedRow ? {
+        key: detailedRow.dataset.settingKey || detailedRow.dataset.extSettingKey || "",
+        className: detailedRow.className,
+        inputId: (detailedRow.querySelector("input,select,textarea") || {}).id || ""
+      } : null,
       navFiltered,
       navCleared,
       sectionMoved,
@@ -237,7 +321,7 @@ async function main() {
       hasStructuredHints: !!structuredHint,
       hasSchemaDetails: !!schemaDetails,
       performanceStatus: (document.querySelector("#ext-settings-perf") || {}).textContent || "",
-      extensionSearchValue: (document.querySelector("#settings-search") || {}).value || "",
+      extensionSearchValue,
       sectionActions: Array.from(document.querySelectorAll("#settings-section-context .section-actions button")).map(btn => btn.textContent),
       reviewApplied,
       reviewCleared,
@@ -246,6 +330,19 @@ async function main() {
     };
   });
 
+  result.restoredState = await page.evaluate(() => {
+    const modal = document.querySelector("#settings-modal .settings-modal");
+    const detailsToggle = document.querySelector("#settings-details-toggle");
+    if (detailsToggle && modal && modal.classList.contains("settings-details-open")) detailsToggle.click();
+    const simpleModeButton = document.querySelector('[data-settings-mode="simple"]');
+    if (simpleModeButton) simpleModeButton.click();
+    const currentPersonalNav = document.querySelector("[data-settings-personal-nav='1']");
+    return {
+      mode: String((document.querySelector("#settings-modal") || {}).dataset?.settingsMode || ""),
+      detailsOpen: !!(modal && modal.classList.contains("settings-details-open")),
+      personalNavVisible: !!(currentPersonalNav && getComputedStyle(currentPersonalNav).display !== "none")
+    };
+  });
   const shotPath = screenshotPath(root);
   await page.screenshot({ path: shotPath, fullPage: false });
   await browser.close();
@@ -256,6 +353,18 @@ async function main() {
   const missingReview = requiredReview.filter(action => !result.reviewActions.includes(action));
   const requiredSection = ["Prev Section", "Next Section", "Search"];
   const missingSection = requiredSection.filter(action => !result.sectionActions.includes(action));
+  if (!result.simpleSnapshot || result.simpleSnapshot.pass !== true || result.simpleState.mode !== "simple" || result.simpleState.detailsOpen || result.simpleState.personalNavVisible) {
+    throw new Error("Settings Simple mode is not calm by default: " + JSON.stringify({ snapshot: result.simpleSnapshot, state: result.simpleState }));
+  }
+  if (!result.simpleSnapshot.hasDefaultHiddenInlineDetailsToggle || !result.simpleSnapshot.hasCalmDefaultSettingsMode || result.simpleSnapshot.hasDefaultVisiblePersonalNav) {
+    throw new Error("Settings Simple mode did not hide advanced disclosure surfaces: " + JSON.stringify(result.simpleSnapshot));
+  }
+  if (!result.detailedSnapshot || result.detailedSnapshot.pass !== true || result.detailedState.mode !== "advanced" || !result.detailedState.detailsOpen || !result.detailedState.personalNavVisible) {
+    throw new Error("Settings Advanced details mode is not reachable: " + JSON.stringify({ snapshot: result.detailedSnapshot, state: result.detailedState }));
+  }
+  if (!result.restoredState || result.restoredState.mode !== "simple" || result.restoredState.detailsOpen || result.restoredState.personalNavVisible) {
+    throw new Error("Settings did not restore the calm Simple mode after detailed validation: " + JSON.stringify(result.restoredState));
+  }
   if (!result.snapshot || result.snapshot.pass !== true) {
     throw new Error("Settings selfcheck failed: " + JSON.stringify(result));
   }
@@ -311,7 +420,7 @@ async function main() {
     throw new Error("Settings selfcheck missing extension interaction controls: " + JSON.stringify(result.snapshot));
   }
   if (!result.snapshot.hasDetailValueActions || !result.snapshot.hasDetailSaveRevertActions || !result.snapshot.hasDetailTargetNote || !result.snapshot.hasDetailValueMatrix || !result.snapshot.hasDetailValueMatrixRows || !result.snapshot.hasDetailValueMatrixActions) {
-    throw new Error("Settings selfcheck missing row value actions: " + JSON.stringify(result.snapshot));
+    throw new Error("Settings selfcheck missing row value actions: " + JSON.stringify({ snapshot: result.snapshot, detailedRow: result.detailedRow, detailActions: result.detailActions }));
   }
   if (!result.snapshot.hasDetailCopyLinkAction || !result.snapshot.hasExperienceBar || !result.snapshot.hasExperienceScopeChip || !result.snapshot.hasRowImpactSummary || !result.snapshot.hasSuggestedMatchesHost) {
     throw new Error("Settings selfcheck missing humanized context affordances: " + JSON.stringify(result.snapshot));

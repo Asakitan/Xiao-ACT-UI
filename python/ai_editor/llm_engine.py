@@ -7,6 +7,7 @@ Anthropic (via proxy), DeepSeek, Ollama, vLLM, and any compatible endpoint.
 from __future__ import annotations
 
 import json
+import random
 import threading
 import time
 import uuid
@@ -126,26 +127,41 @@ def set_custom_models(models: Dict[str, Any]) -> None:
             )
 
 
+def _matching_model_entry(model: str) -> Optional[Dict[str, Any]]:
+    normalized = str(model or "").strip().lower()
+    if not normalized:
+        return None
+    exact = _model_registry.get(model)
+    if exact:
+        return exact
+    candidates = []
+    for registered_name, entry in _model_registry.items():
+        prefix = str(registered_name or "").strip().lower()
+        if not prefix or not normalized.startswith(prefix):
+            continue
+        suffix = normalized[len(prefix):]
+        if suffix and suffix[0] not in {"-", ".", ":", "/", "_"}:
+            continue
+        candidates.append((len(prefix), entry))
+    if not candidates:
+        return None
+    return max(candidates, key=lambda item: item[0])[1]
+
+
 def get_model_context(model: str) -> Dict[str, int]:
     """Return {max_input, max_output} for a model.
     Checks registry first, then prefix match, then default 128K."""
-    entry = _model_registry.get(model)
+    entry = _matching_model_entry(model)
     if entry:
         return {"max_input": entry["max_input"], "max_output": entry["max_output"]}
-    for prefix, e in _model_registry.items():
-        if model.startswith(prefix.rsplit("-", 1)[0]):
-            return {"max_input": e["max_input"], "max_output": e["max_output"]}
     return dict(_DEFAULT_CONTEXT)
 
 
 def get_model_capabilities(model: str) -> Dict[str, bool]:
     """Return per-model feature flags. Unknown models get all-enabled defaults."""
-    entry = _model_registry.get(model)
+    entry = _matching_model_entry(model)
     if entry:
         return {k: entry.get(k, v) for k, v in _DEFAULT_CAPS.items()}
-    for prefix, e in _model_registry.items():
-        if model.startswith(prefix.rsplit("-", 1)[0]):
-            return {k: e.get(k, v) for k, v in _DEFAULT_CAPS.items()}
     return dict(_DEFAULT_CAPS)
 
 
@@ -272,13 +288,20 @@ class LLMEngine:
         self.config = config or ProviderConfig()
         self._cancel = threading.Event()
         self._http: Any = None
+        self._http_timeout: Optional[float] = None
 
     @property
     def _client(self):
-        if self._http is None:
+        return self._client_for(self.config)
+
+    def _client_for(self, config: ProviderConfig):
+        timeout = float(config.timeout if config else 180)
+        if self._http is None or self._http_timeout != timeout:
+            self.close()
             import httpx
-            t = self.config.timeout if self.config else 180
-            self._http = httpx.Client(timeout=float(t), http2=False, follow_redirects=True)
+            self._http = httpx.Client(
+                timeout=timeout, http2=False, follow_redirects=True)
+            self._http_timeout = timeout
         return self._http
 
     def close(self) -> None:
@@ -288,6 +311,7 @@ class LLMEngine:
             except Exception:
                 pass
             self._http = None
+            self._http_timeout = None
 
     def cancel(self) -> None:
         self._cancel.set()
@@ -321,7 +345,7 @@ class LLMEngine:
             else:
                 body = self._build_body(cfg, messages, tools, stream=False)
                 url = self._resolve_request_url(cfg, "/chat/completions")
-            resp = self._client.post(url, json=body, headers=headers)
+            resp = self._client_for(cfg).post(url, json=body, headers=headers)
             resp.raise_for_status()
             data = resp.json()
             if self._is_anthropic_native(cfg):
@@ -361,6 +385,25 @@ class LLMEngine:
     _MAX_RETRIES = 2
     _RETRY_BACKOFFS = (1.0, 2.0)
 
+    def _retry_delay(self, response: Any, attempt: int) -> float:
+        retry_after = ""
+        try:
+            retry_after = str(response.headers.get("Retry-After") or "").strip()
+        except Exception:
+            retry_after = ""
+        if retry_after:
+            try:
+                return max(0.0, min(float(retry_after), 60.0))
+            except (TypeError, ValueError):
+                pass
+        base = self._RETRY_BACKOFFS[
+            min(attempt, len(self._RETRY_BACKOFFS) - 1)]
+        return base + random.uniform(0.0, base * 0.25)
+
+    def _wait_for_retry(self, delay: float) -> bool:
+        """Wait for a retry; return False when cancellation interrupts it."""
+        return not self._cancel.wait(max(0.0, float(delay)))
+
     def _stream_openai(
         self,
         cfg: ProviderConfig,
@@ -376,19 +419,28 @@ class LLMEngine:
         headers = self._build_headers(cfg)
         url = self._resolve_request_url(cfg, "/chat/completions")
         last_exc: Optional[Exception] = None
+        pending_retry_delay: Optional[float] = None
 
         for _attempt in range(1 + self._MAX_RETRIES):
             if _attempt > 0:
-                time.sleep(self._RETRY_BACKOFFS[min(_attempt - 1, len(self._RETRY_BACKOFFS) - 1)])
+                delay = pending_retry_delay
+                if delay is None:
+                    delay = self._retry_delay(None, _attempt - 1)
+                if not self._wait_for_retry(delay):
+                    accumulated.finish_reason = "cancelled"
+                    break
                 accumulated = LLMResponse(model=cfg.effective_model)
                 tool_call_buffers.clear()
                 _json_buffer.clear()
+            pending_retry_delay = None
+            emitted_any = False
             last_exc = None
             try:
                 import httpx as _httpx
-                with self._client.stream("POST", url, json=body, headers=headers) as resp:
+                with self._client_for(cfg).stream("POST", url, json=body, headers=headers) as resp:
                     if resp.status_code in self._RETRYABLE_STATUS and _attempt < self._MAX_RETRIES:
                         last_exc = Exception(f"HTTP {resp.status_code}")
+                        pending_retry_delay = self._retry_delay(resp, _attempt)
                         continue
                     resp.raise_for_status()
                     for line in resp.iter_lines():
@@ -406,6 +458,9 @@ class LLMEngine:
                             continue
 
                         delta = self._parse_stream_chunk(chunk)
+                        emitted_any = emitted_any or bool(
+                            delta.content or delta.thinking or delta.tool_calls
+                            or delta.data_parts or delta.refusal)
                         if delta.content:
                             accumulated.content += delta.content
                         if delta.thinking:
@@ -442,7 +497,10 @@ class LLMEngine:
             except Exception as exc:
                 last_exc = exc
                 status = getattr(getattr(exc, 'response', None), 'status_code', None)
-                if status in self._RETRYABLE_STATUS and _attempt < self._MAX_RETRIES:
+                if (not emitted_any and status in self._RETRYABLE_STATUS
+                        and _attempt < self._MAX_RETRIES):
+                    pending_retry_delay = self._retry_delay(
+                        getattr(exc, "response", None), _attempt)
                     continue
                 accumulated.error = _friendly_llm_error(exc)
                 break
@@ -476,19 +534,27 @@ class LLMEngine:
         headers = self._build_headers(cfg)
         url = self._resolve_request_url(cfg, "/responses")
         last_exc: Optional[Exception] = None
+        pending_retry_delay: Optional[float] = None
 
         for _attempt in range(1 + self._MAX_RETRIES):
             if _attempt > 0:
-                time.sleep(self._RETRY_BACKOFFS[min(_attempt - 1, len(self._RETRY_BACKOFFS) - 1)])
+                delay = pending_retry_delay
+                if delay is None:
+                    delay = self._retry_delay(None, _attempt - 1)
+                if not self._wait_for_retry(delay):
+                    accumulated.finish_reason = "cancelled"
+                    break
                 accumulated = LLMResponse(model=cfg.effective_model)
                 tool_call_buffers.clear()
                 tool_item_keys.clear()
                 completed = None
+            pending_retry_delay = None
             last_exc = None
             try:
-                with self._client.stream("POST", url, json=body, headers=headers) as resp:
+                with self._client_for(cfg).stream("POST", url, json=body, headers=headers) as resp:
                     if resp.status_code in self._RETRYABLE_STATUS and _attempt < self._MAX_RETRIES:
                         last_exc = Exception(f"HTTP {resp.status_code}")
+                        pending_retry_delay = self._retry_delay(resp, _attempt)
                         continue
                     resp.raise_for_status()
                     event_type = ""
@@ -625,7 +691,13 @@ class LLMEngine:
             except Exception as exc:
                 last_exc = exc
                 status = getattr(getattr(exc, 'response', None), 'status_code', None)
-                if status in self._RETRYABLE_STATUS and _attempt < self._MAX_RETRIES:
+                emitted_any = bool(
+                    accumulated.content or accumulated.thinking
+                    or tool_call_buffers or completed)
+                if (not emitted_any and status in self._RETRYABLE_STATUS
+                        and _attempt < self._MAX_RETRIES):
+                    pending_retry_delay = self._retry_delay(
+                        getattr(exc, "response", None), _attempt)
                     continue
                 accumulated.error = _friendly_llm_error(exc)
                 break
@@ -684,17 +756,25 @@ class LLMEngine:
 
         headers = self._build_headers(cfg)
         url = self._resolve_request_url(cfg, "/messages")
+        pending_retry_delay: Optional[float] = None
 
         for _attempt in range(1 + self._MAX_RETRIES):
             if _attempt > 0:
-                time.sleep(self._RETRY_BACKOFFS[min(_attempt - 1, len(self._RETRY_BACKOFFS) - 1)])
+                delay = pending_retry_delay
+                if delay is None:
+                    delay = self._retry_delay(None, _attempt - 1)
+                if not self._wait_for_retry(delay):
+                    accumulated.finish_reason = "cancelled"
+                    break
                 accumulated = LLMResponse(model=cfg.effective_model)
                 tool_blocks.clear()
+            pending_retry_delay = None
             last_exc = None
             try:
-                with self._client.stream("POST", url, json=body, headers=headers) as resp:
+                with self._client_for(cfg).stream("POST", url, json=body, headers=headers) as resp:
                     if resp.status_code in self._RETRYABLE_STATUS and _attempt < self._MAX_RETRIES:
                         last_exc = Exception(f"HTTP {resp.status_code}")
+                        pending_retry_delay = self._retry_delay(resp, _attempt)
                         continue
                     resp.raise_for_status()
                     event_type = ""
@@ -785,7 +865,12 @@ class LLMEngine:
             except Exception as exc:
                 last_exc = exc
                 status = getattr(getattr(exc, 'response', None), 'status_code', None)
-                if status in self._RETRYABLE_STATUS and _attempt < self._MAX_RETRIES:
+                emitted_any = bool(
+                    accumulated.content or accumulated.thinking or tool_blocks)
+                if (not emitted_any and status in self._RETRYABLE_STATUS
+                        and _attempt < self._MAX_RETRIES):
+                    pending_retry_delay = self._retry_delay(
+                        getattr(exc, "response", None), _attempt)
                     continue
                 accumulated.error = _friendly_llm_error(exc)
                 break

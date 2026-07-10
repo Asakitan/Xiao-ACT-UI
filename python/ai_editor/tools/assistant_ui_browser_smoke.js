@@ -9,16 +9,59 @@ function repoRoot() {
   return path.resolve(__dirname, "..", "..", "..");
 }
 
+function loadPythonPlaywrightFallback(nativeError) {
+  try {
+    return require("../browser_smoke_python_bridge");
+  } catch (fallbackError) {
+    if (String(process.env.SAO_ALLOW_BROWSER_SMOKE_SKIP || "").trim() === "1") {
+      console.warn("SKIP assistant-ui-browser-smoke playwright unavailable; explicitly allowed by SAO_ALLOW_BROWSER_SMOKE_SKIP=1: " + fallbackError.message);
+      process.exit(0);
+    }
+    throw new Error(
+      "Playwright is required for assistant-ui-browser-smoke release validation. " +
+      "Install playwright/playwright-core or Python Playwright with a runnable Chromium/Edge, " +
+      "or set SAO_ALLOW_BROWSER_SMOKE_SKIP=1 only for an explicit local-development skip. " +
+      "Node runtime error: " + nativeError.message + ". Python fallback error: " + fallbackError.message
+    );
+  }
+}
+
 function loadPlaywright() {
+  if (String(process.env.SAO_BROWSER_SMOKE_FORCE_PYTHON || "").trim() === "1") {
+    return loadPythonPlaywrightFallback(new Error("native Node Playwright bypassed by SAO_BROWSER_SMOKE_FORCE_PYTHON=1"));
+  }
   try {
     return require("playwright");
   } catch (firstError) {
     try {
       return require("playwright-core");
     } catch (_secondError) {
-      console.log("SKIP assistant-ui-browser-smoke playwright unavailable: " + firstError.message);
-      process.exit(0);
+      return loadPythonPlaywrightFallback(firstError);
     }
+  }
+}
+
+async function launchBrowser(playwright, allowPythonFallback = true) {
+  let chromiumError;
+  try {
+    return await playwright.chromium.launch({ headless: true });
+  } catch (error) {
+    chromiumError = error;
+  }
+  try {
+    return await playwright.chromium.launch({ headless: true, channel: "msedge" });
+  } catch (edgeError) {
+    if (allowPythonFallback && (!playwright._runtime || playwright._runtime.kind !== "python-playwright")) {
+      const nativeError = new Error(
+        "Node Playwright loaded but Chromium and Edge could not launch: " +
+        chromiumError.message + " | " + edgeError.message
+      );
+      return launchBrowser(loadPythonPlaywrightFallback(nativeError), false);
+    }
+    throw new Error(
+      "Playwright could not launch Chromium or Edge: " +
+      chromiumError.message + " | " + edgeError.message
+    );
   }
 }
 
@@ -30,16 +73,7 @@ async function main() {
   }
 
   const playwright = loadPlaywright();
-  let browser;
-  try {
-    browser = await playwright.chromium.launch({ headless: true });
-  } catch (firstLaunchError) {
-    try {
-      browser = await playwright.chromium.launch({ headless: true, channel: "msedge" });
-    } catch (_edgeLaunchError) {
-      throw firstLaunchError;
-    }
-  }
+  const browser = await launchBrowser(playwright);
   const page = await browser.newPage({ viewport: { width: 1440, height: 920 } });
   page.on("pageerror", error => {
     throw error;

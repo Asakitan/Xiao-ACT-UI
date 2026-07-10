@@ -14,6 +14,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import tempfile
 import threading
 from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, List, Optional
@@ -33,20 +34,34 @@ class AuthSession:
     scopes: List[str] = field(default_factory=list)
     provider_id: str = ""
 
-    def to_dict(self) -> Dict[str, Any]:
-        return {
-            "id": self.id, "accessToken": self.access_token,
+    def to_dict(self, include_token: bool = True) -> Dict[str, Any]:
+        result = {
+            "id": self.id,
             "account": {"id": self.account_id, "label": self.account_label},
             "scopes": self.scopes,
         }
+        if include_token:
+            result["accessToken"] = self.access_token
+        return result
+
+    def to_public_dict(self) -> Dict[str, Any]:
+        """Return metadata safe for the broad pywebview settings bridge."""
+        result = self.to_dict(include_token=False)
+        result["hasToken"] = bool(self.access_token)
+        return result
 
 
 class AuthService:
     """Central authentication manager."""
 
-    def __init__(self, storage_dir: str = "") -> None:
+    def __init__(self, storage_dir: str = "", secret_store: Any = None) -> None:
         self._storage = storage_dir or os.path.join(
             os.path.expanduser("~"), ".sao", "auth")
+        if secret_store is None:
+            from ai_editor.secret_store import ProtectedSecretStore
+            secret_store = ProtectedSecretStore(
+                os.path.join(self._storage, "sessions.vault.json"))
+        self._secret_store = secret_store
         self._providers: Dict[str, Any] = {}
         self._sessions: Dict[str, List[AuthSession]] = {}
         self._change_emitter = EventEmitter()
@@ -118,6 +133,11 @@ class AuthService:
                 s for s in sessions if s.id != session_id]
             removed = len(self._sessions[provider_id]) < before
         if removed:
+            try:
+                self._secret_store.delete(
+                    self._session_secret_ref(provider_id, session_id))
+            except Exception as exc:
+                logger.warning("Failed to remove protected auth token: %s", exc)
             self._save()
             self._change_emitter.fire({"provider": provider_id,
                                         "removed": [session_id]})
@@ -141,6 +161,12 @@ class AuthService:
     def _storage_file(self) -> str:
         os.makedirs(self._storage, exist_ok=True)
         return os.path.join(self._storage, "sessions.json")
+
+    @staticmethod
+    def _session_secret_ref(provider_id: str, session_id: str) -> str:
+        safe_provider = str(provider_id or "unknown").replace("/", "_")
+        safe_session = str(session_id or "unknown").replace("/", "_")
+        return f"auth-session/{safe_provider}/{safe_session}"
 
     @staticmethod
     def _normalize_session(provider_id: str, raw: Any,
@@ -177,37 +203,73 @@ class AuthService:
 
     def _load(self) -> None:
         path = self._storage_file()
+        migrated = False
         try:
             with open(path, "r", encoding="utf-8") as f:
                 data = json.load(f)
             for pid, sessions_raw in data.items():
                 for sr in sessions_raw:
+                    secret_ref = str(sr.get("secretRef") or
+                                     self._session_secret_ref(pid, sr.get("id", "")))
+                    access_token = ""
+                    if sr.get("accessToken"):
+                        # One-time migration: only remove plaintext after the
+                        # protected write succeeds.
+                        access_token = str(sr.get("accessToken") or "")
+                        self._secret_store.set(secret_ref, access_token)
+                        migrated = True
+                    else:
+                        access_token = self._secret_store.get(secret_ref, "")
                     s = AuthSession(
                         id=sr.get("id", ""),
-                        access_token=sr.get("accessToken", ""),
+                        access_token=access_token,
                         account_id=sr.get("account", {}).get("id", ""),
                         account_label=sr.get("account", {}).get("label", ""),
                         scopes=sr.get("scopes", []),
                         provider_id=pid,
                     )
                     self._sessions.setdefault(pid, []).append(s)
+            if migrated:
+                self._save()
         except FileNotFoundError:
             return
         except Exception as exc:
             logger.warning("Failed to load auth sessions from %s: %s",
                            path, exc)
 
-    def _save(self) -> None:
+    def _save(self) -> bool:
         path = self._storage_file()
         try:
             data = {}
             for pid, sessions in self._sessions.items():
-                data[pid] = [s.to_dict() for s in sessions]
-            with open(path, "w", encoding="utf-8") as f:
-                json.dump(data, f, ensure_ascii=False, indent=1)
+                entries = []
+                for session in sessions:
+                    secret_ref = self._session_secret_ref(pid, session.id)
+                    self._secret_store.set(secret_ref, session.access_token)
+                    metadata = session.to_dict(include_token=False)
+                    metadata["secretRef"] = secret_ref
+                    entries.append(metadata)
+                data[pid] = entries
+            os.makedirs(os.path.dirname(path), exist_ok=True)
+            fd, tmp_path = tempfile.mkstemp(
+                prefix=".sessions.", suffix=".tmp", dir=os.path.dirname(path))
+            try:
+                with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as f:
+                    json.dump(data, f, ensure_ascii=False, indent=1)
+                    f.flush()
+                    os.fsync(f.fileno())
+                os.replace(tmp_path, path)
+            except Exception:
+                try:
+                    os.unlink(tmp_path)
+                except OSError:
+                    pass
+                raise
+            return True
         except Exception as exc:
             logger.warning("Failed to save auth sessions to %s: %s",
                            path, exc)
+            return False
 
 
 _singleton: Optional[AuthService] = None

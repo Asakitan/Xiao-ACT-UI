@@ -7,7 +7,7 @@ as a tool server.
 
 Usage:
     python -m ai_editor.mcp_server              # stdio server (default)
-    python -m ai_editor.mcp_server --port 9820   # SSE/HTTP server
+    python -m ai_editor.mcp_server --port 9820   # Streamable HTTP server
 
 IDE configuration examples:
 
@@ -35,13 +35,22 @@ import threading
 import time
 import traceback
 from typing import Any, Callable, Dict, List, Optional
+from urllib.parse import urlsplit
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
 _PKG_ROOT = os.path.dirname(_HERE)
 if _PKG_ROOT not in sys.path:
     sys.path.insert(0, _PKG_ROOT)
 
-_PROTOCOL_VERSION = "2024-11-05"
+_PROTOCOL_VERSION = "2025-06-18"
+_SUPPORTED_PROTOCOL_VERSIONS = frozenset({
+    _PROTOCOL_VERSION,
+    "2025-03-26",
+})
+_HTTP_DEFAULT_PROTOCOL_VERSION = "2025-03-26"
+_HTTP_MAX_REQUEST_BYTES = 4 * 1024 * 1024
+_HTTP_REJECTION_DRAIN_BYTES = 64 * 1024
+_HTTP_SHUTDOWN_GRACE_SECONDS = 3.0
 _SERVER_NAME = "sao-ai-editor"
 _SERVER_VERSION = "1.0.0"
 
@@ -976,6 +985,35 @@ def _make_error(req_id: Any, code: int, message: str,
     return {"jsonrpc": "2.0", "id": req_id, "error": error}
 
 
+def _negotiate_protocol_version(params: Any) -> str:
+    """Choose the newest mutually understood protocol version.
+
+    MCP clients request a single preferred version.  When it is supported the
+    server must echo it; otherwise the server advertises its own latest version
+    and lets the client decide whether it can continue.
+    """
+    if isinstance(params, dict):
+        requested = str(params.get("protocolVersion") or "").strip()
+        if requested in _SUPPORTED_PROTOCOL_VERSIONS:
+            return requested
+    return _PROTOCOL_VERSION
+
+
+def _initialize_result(params: Any) -> Dict[str, Any]:
+    return {
+        "protocolVersion": _negotiate_protocol_version(params),
+        "capabilities": {
+            "tools": {"listChanged": False},
+            "resources": {},
+            "prompts": {"listChanged": False},
+        },
+        "serverInfo": {
+            "name": _SERVER_NAME,
+            "version": _SERVER_VERSION,
+        },
+    }
+
+
 def _tool_result_content(result: Any) -> Dict[str, Any]:
     if isinstance(result, str):
         text = result
@@ -1036,18 +1074,7 @@ class McpServer:
     def _handle_initialize(self, req_id: Any, params: Dict[str, Any]) -> None:
         client_info = params.get("clientInfo", {})
         _log(f"Initialize from {client_info.get('name', '?')} v{client_info.get('version', '?')}")
-        _write_response(_make_response(req_id, {
-            "protocolVersion": _PROTOCOL_VERSION,
-            "capabilities": {
-                "tools": {"listChanged": False},
-                "resources": {},
-                "prompts": {},
-            },
-            "serverInfo": {
-                "name": _SERVER_NAME,
-                "version": _SERVER_VERSION,
-            },
-        }))
+        _write_response(_make_response(req_id, _initialize_result(params)))
 
     def _handle_tools_list(self, req_id: Any, params: Dict[str, Any]) -> None:
         _write_response(_make_response(req_id, {"tools": _TOOLS}))
@@ -1074,93 +1101,464 @@ class McpServer:
 
 
 # =========================================================================
-# Optional SSE/HTTP server mode
+# Optional Streamable HTTP server mode
 # =========================================================================
 
-class McpHttpServer:
-    """Minimal HTTP server for SSE transport mode."""
+def _http_origin_allowed(origin: str) -> bool:
+    """Allow non-browser clients and loopback browser origins only.
 
-    def __init__(self, port: int = 9820, runtime: Optional[Any] = None) -> None:
-        self._port = port
+    Validating an explicitly supplied Origin is required for local Streamable
+    HTTP servers because otherwise a hostile website can use DNS rebinding to
+    reach the editor's privileged tools.
+    """
+    value = str(origin or "").strip()
+    if not value:
+        return True
+    try:
+        parsed = urlsplit(value)
+        hostname = str(parsed.hostname or "").lower()
+    except (TypeError, ValueError):
+        return False
+    return (
+        parsed.scheme.lower() in {"http", "https"}
+        and hostname in {"127.0.0.1", "localhost", "::1"}
+        and not parsed.username
+        and not parsed.password
+    )
+
+
+def _http_accepts_json(accept: str) -> bool:
+    """Return whether an Accept header permits a JSON response.
+
+    Missing Accept remains supported for the editor's pre-Streamable-HTTP
+    urllib integration.  Explicitly SSE-only callers receive 406 because this
+    deliberately small server does not implement optional SSE streams.
+    """
+    value = str(accept or "").strip()
+    if not value:
+        return True
+    for raw_item in value.split(","):
+        parts = [part.strip() for part in raw_item.split(";")]
+        media_type = parts[0].lower()
+        quality = 1.0
+        for parameter in parts[1:]:
+            key, separator, raw_value = parameter.partition("=")
+            if separator and key.strip().lower() == "q":
+                try:
+                    quality = float(raw_value.strip())
+                except ValueError:
+                    quality = 0.0
+        if quality > 0 and media_type in {
+                "application/json", "application/*", "*/*"}:
+            return True
+    return False
+
+
+class McpHttpServer:
+    """JSON-only subset of MCP 2025-06-18 Streamable HTTP.
+
+    The endpoint is intentionally stateless: it does not issue session IDs or
+    provide optional GET/SSE streams.  Every JSON-RPC request is answered with
+    one JSON object, while notifications and client responses are acknowledged
+    with HTTP 202 and an empty body.
+    """
+
+    def __init__(self, port: int = 9820, runtime: Optional[Any] = None,
+                 max_request_bytes: int = _HTTP_MAX_REQUEST_BYTES) -> None:
+        request_limit = int(max_request_bytes)
+        if request_limit <= 0:
+            raise ValueError("max_request_bytes must be positive")
+        self._port = int(port)
         self._runtime = runtime if runtime is not None else McpRuntime()
+        self._max_request_bytes = request_limit
         self._server = None
+        self._state_lock = threading.Lock()
+        self._tool_call_lock = threading.RLock()
+        self._closing = threading.Event()
+        self._ready = threading.Event()
+        self._stopped = threading.Event()
+        self._initialize_seen = threading.Event()
+        self._initialized = threading.Event()
+        self._startup_error = ""
 
     def run(self) -> None:
-        from http.server import HTTPServer, BaseHTTPRequestHandler
+        from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
+        owner = self
         runtime = self._runtime
         port = self._port
 
+        class ReadyThreadingHTTPServer(ThreadingHTTPServer):
+            # HTTPServer enables SO_REUSEADDR by default.  On Windows that can
+            # let a second process bind the same local MCP port, so retain the
+            # safer exclusive default there while keeping Unix restartability.
+            allow_reuse_address = os.name != "nt"
+
+            def service_actions(self) -> None:
+                # service_actions runs from inside serve_forever's loop, so
+                # readiness means shutdown() is now safe to call.
+                owner._ready.set()
+                super().service_actions()
+
         class Handler(BaseHTTPRequestHandler):
-            def do_POST(self):
-                length = int(self.headers.get("Content-Length", 0))
-                body = self.rfile.read(length) if length > 0 else b""
+            protocol_version = "HTTP/1.1"
+
+            def do_POST(self) -> None:
+                origin_allowed = _http_origin_allowed(
+                    self.headers.get("Origin", ""))
+                endpoint_exists = urlsplit(self.path).path == "/"
+                if self.headers.get("Transfer-Encoding"):
+                    self.close_connection = True
+                    self._send_rpc_error(
+                        400 if origin_allowed else 403, None, -32600,
+                        ("Transfer-Encoding is not supported; use Content-Length"
+                         if origin_allowed else "Origin is not allowed"))
+                    return
+                raw_length = str(self.headers.get("Content-Length") or "").strip()
                 try:
-                    msg = json.loads(body.decode("utf-8"))
-                except json.JSONDecodeError:
-                    self._send_json(400, {"error": "Invalid JSON"})
+                    length = int(raw_length)
+                except ValueError:
+                    self.close_connection = True
+                    self._send_rpc_error(
+                        411 if origin_allowed else 403, None, -32600,
+                        ("A valid Content-Length is required"
+                         if origin_allowed else "Origin is not allowed"))
+                    return
+                if length <= 0:
+                    self.close_connection = True
+                    self._send_rpc_error(
+                        400, None, -32700, "Request body must not be empty")
+                    return
+                if length > owner._max_request_bytes:
+                    self.close_connection = True
+                    self._send_rpc_error(
+                        413 if origin_allowed else 403, None, -32600,
+                        ("Request body exceeds the configured limit"
+                         if origin_allowed else "Origin is not allowed"))
+                    self._drain_rejected_body(length)
                     return
 
-                method = msg.get("method", "")
-                req_id = msg.get("id")
-                params = msg.get("params") or {}
+                body = self.rfile.read(length)
+                if len(body) != length:
+                    self.close_connection = True
+                    self._send_rpc_error(
+                        400, None, -32700, "Incomplete request body")
+                    return
+                if not origin_allowed:
+                    self._send_rpc_error(
+                        403, None, -32600, "Origin is not allowed")
+                    return
+                if not endpoint_exists:
+                    self._send_rpc_error(
+                        404, None, -32600, "MCP endpoint not found")
+                    return
+                content_type = str(
+                    self.headers.get("Content-Type") or "").split(";", 1)[0]
+                if content_type.strip().lower() != "application/json":
+                    self._send_rpc_error(
+                        415, None, -32600,
+                        "Content-Type must be application/json")
+                    return
+                if not _http_accepts_json(self.headers.get("Accept", "")):
+                    self._send_rpc_error(
+                        406, None, -32600,
+                        "This endpoint returns application/json; SSE is not supported")
+                    return
+                try:
+                    msg = json.loads(body.decode("utf-8"))
+                except (UnicodeDecodeError, json.JSONDecodeError):
+                    self._send_rpc_error(400, None, -32700, "Invalid JSON")
+                    return
+                if not isinstance(msg, dict) or msg.get("jsonrpc") != "2.0":
+                    request_id = msg.get("id") if isinstance(msg, dict) else None
+                    self._send_rpc_error(
+                        400, request_id, -32600, "Invalid JSON-RPC request")
+                    return
 
+                header_version = str(
+                    self.headers.get("MCP-Protocol-Version") or
+                    _HTTP_DEFAULT_PROTOCOL_VERSION).strip()
+                if header_version not in _SUPPORTED_PROTOCOL_VERSIONS:
+                    self._send_rpc_error(
+                        400, msg.get("id"), -32602,
+                        "Unsupported MCP-Protocol-Version",
+                        {"supported": sorted(_SUPPORTED_PROTOCOL_VERSIONS)})
+                    return
+
+                method = msg.get("method")
+                if method is None:
+                    if "id" in msg and ("result" in msg or "error" in msg):
+                        self._send_empty(202)
+                    else:
+                        self._send_rpc_error(
+                            400, msg.get("id"), -32600,
+                            "Invalid JSON-RPC message")
+                    return
+                if not isinstance(method, str) or not method:
+                    self._send_rpc_error(
+                        400, msg.get("id"), -32600,
+                        "JSON-RPC method must be a non-empty string")
+                    return
+                raw_params = msg.get("params", {})
+                params = {} if raw_params is None else raw_params
+                if not isinstance(params, dict):
+                    if "id" not in msg:
+                        self._send_empty(202)
+                    else:
+                        self._send_json(
+                            200, _make_error(
+                                msg.get("id"), -32602,
+                                "JSON-RPC params must be an object"))
+                    return
+
+                if "id" not in msg:
+                    if method == "initialize":
+                        self._send_rpc_error(
+                            400, None, -32600,
+                            "initialize must be a JSON-RPC request")
+                        return
+                    if method == "notifications/initialized":
+                        if not owner._initialize_seen.is_set():
+                            self._send_rpc_error(
+                                400, None, -32600,
+                                "initialize must complete before initialized")
+                            return
+                        owner._initialized.set()
+                        _log("HTTP MCP client initialized")
+                    self._send_empty(202)
+                    return
+
+                req_id = msg.get("id")
                 if method == "initialize":
-                    self._send_json(200, _make_response(req_id, {
-                        "protocolVersion": _PROTOCOL_VERSION,
-                        "capabilities": {"tools": {"listChanged": False}, "prompts": {}},
-                        "serverInfo": {"name": _SERVER_NAME, "version": _SERVER_VERSION},
-                    }))
+                    owner._initialize_seen.set()
+                    client_info = params.get("clientInfo")
+                    if isinstance(client_info, dict):
+                        _log(
+                            "HTTP initialize from "
+                            f"{client_info.get('name', '?')} "
+                            f"v{client_info.get('version', '?')}")
+                    self._send_json(
+                        200, _make_response(req_id, _initialize_result(params)))
                 elif method == "tools/list":
-                    self._send_json(200, _make_response(req_id, {"tools": _TOOLS}))
+                    self._send_json(
+                        200, _make_response(req_id, {"tools": _TOOLS}))
                 elif method == "tools/call":
-                    name = params.get("name", "")
-                    arguments = params.get("arguments") or {}
-                    result = runtime.handle_tool(name, arguments)
-                    self._send_json(200, _make_response(req_id, _tool_result_content(result)))
+                    self._handle_tool_call(req_id, params)
+                elif method == "resources/list":
+                    self._send_json(
+                        200, _make_response(req_id, {"resources": []}))
+                elif method == "resources/read":
+                    self._send_json(
+                        200, _make_error(
+                            req_id, -32601, "No resources available"))
                 elif method == "prompts/list":
-                    self._send_json(200, _make_response(req_id, {"prompts": _PROMPTS}))
+                    self._send_json(
+                        200, _make_response(req_id, {"prompts": _PROMPTS}))
                 elif method == "prompts/get":
                     prompt_name = str(params.get("name", ""))
                     messages = _prompt_messages(prompt_name)
                     if messages is None:
-                        self._send_json(200, _make_error(req_id, -32602, f"Unknown prompt: {prompt_name}"))
+                        self._send_json(
+                            200, _make_error(
+                                req_id, -32602,
+                                f"Unknown prompt: {prompt_name}"))
                     else:
-                        self._send_json(200, _make_response(req_id, {"messages": messages}))
+                        self._send_json(
+                            200, _make_response(
+                                req_id, {"messages": messages}))
                 elif method == "ping":
                     self._send_json(200, _make_response(req_id, {}))
                 else:
-                    self._send_json(200, _make_error(req_id, -32601, f"Method not found: {method}"))
+                    self._send_json(
+                        200, _make_error(
+                            req_id, -32601,
+                            f"Method not found: {method}"))
 
-            def _send_json(self, status, data):
-                raw = json.dumps(data, ensure_ascii=False).encode("utf-8")
+            def do_GET(self) -> None:
+                if self._validate_endpoint_and_origin():
+                    self._send_empty(405, {"Allow": "POST"})
+
+            def do_DELETE(self) -> None:
+                if self._validate_endpoint_and_origin():
+                    self._send_empty(405, {"Allow": "POST"})
+
+            def do_OPTIONS(self) -> None:
+                if self._validate_endpoint_and_origin():
+                    self._send_empty(405, {"Allow": "POST"})
+
+            def _handle_tool_call(
+                    self, req_id: Any, params: Dict[str, Any]) -> None:
+                name = str(params.get("name") or "")
+                arguments = params.get("arguments") or {}
+                if not name or name not in _TOOL_HANDLERS:
+                    self._send_json(
+                        200, _make_error(
+                            req_id, -32602, f"Unknown tool: {name}",
+                            {"available": sorted(_TOOL_HANDLERS.keys())}))
+                    return
+                if not isinstance(arguments, dict):
+                    self._send_json(
+                        200, _make_error(
+                            req_id, -32602,
+                            "Tool arguments must be an object"))
+                    return
+                _log(f"HTTP calling tool: {name}")
+                try:
+                    # The live runtime mutates editor/workspace state and is not
+                    # safe to enter concurrently from ThreadingHTTPServer workers.
+                    with owner._tool_call_lock:
+                        if owner._closing.is_set():
+                            self._send_json(
+                                503, _make_error(
+                                    req_id, -32000,
+                                    "MCP server is shutting down"))
+                            return
+                        result = runtime.handle_tool(name, arguments)
+                    self._send_json(
+                        200, _make_response(
+                            req_id, _tool_result_content(result)))
+                except Exception as exc:
+                    error_result = _tool_result_content({"error": str(exc)})
+                    error_result["isError"] = True
+                    self._send_json(
+                        200, _make_response(req_id, error_result))
+
+            def _validate_endpoint_and_origin(self) -> bool:
+                if not _http_origin_allowed(self.headers.get("Origin", "")):
+                    self._send_rpc_error(
+                        403, None, -32600, "Origin is not allowed")
+                    return False
+                if urlsplit(self.path).path != "/":
+                    self._send_rpc_error(
+                        404, None, -32600, "MCP endpoint not found")
+                    return False
+                return True
+
+            def _drain_rejected_body(self, declared_length: int) -> None:
+                """Best-effort small drain so clients receive 413 before close.
+
+                The cap avoids turning rejection into an unbounded slow-read;
+                larger or stalled uploads are simply disconnected.
+                """
+                remaining = min(
+                    max(0, int(declared_length)),
+                    _HTTP_REJECTION_DRAIN_BYTES)
+                if not remaining:
+                    return
+                previous_timeout = self.connection.gettimeout()
+                try:
+                    self.connection.settimeout(0.1)
+                    while remaining:
+                        chunk = self.rfile.read(min(remaining, 8192))
+                        if not chunk:
+                            break
+                        remaining -= len(chunk)
+                except OSError:
+                    pass
+                finally:
+                    try:
+                        self.connection.settimeout(previous_timeout)
+                    except OSError:
+                        pass
+
+            def _send_rpc_error(
+                    self, status: int, req_id: Any, code: int,
+                    message: str, data: Any = None) -> None:
+                self._send_json(
+                    status, _make_error(req_id, code, message, data))
+
+            def _send_json(self, status: int, data: Any) -> None:
+                raw = json.dumps(
+                    data, ensure_ascii=False, separators=(",", ":"),
+                    default=str).encode("utf-8")
                 self.send_response(status)
-                self.send_header("Content-Type", "application/json")
+                self._send_common_headers()
+                self.send_header("Content-Type", "application/json; charset=utf-8")
                 self.send_header("Content-Length", str(len(raw)))
                 self.end_headers()
-                self.wfile.write(raw)
+                try:
+                    self.wfile.write(raw)
+                except (BrokenPipeError, ConnectionResetError):
+                    pass
 
-            def log_message(self, fmt, *a):
-                _log(fmt % a)
+            def _send_empty(
+                    self, status: int,
+                    headers: Optional[Dict[str, str]] = None) -> None:
+                self.send_response(status)
+                self._send_common_headers()
+                for key, value in (headers or {}).items():
+                    self.send_header(str(key), str(value))
+                self.send_header("Content-Length", "0")
+                self.end_headers()
 
-        server = HTTPServer(("127.0.0.1", port), Handler)
-        self._server = server
-        self._port = server.server_address[1]
-        _log(f"HTTP MCP server listening on http://127.0.0.1:{self._port}")
+            def _send_common_headers(self) -> None:
+                self.send_header("Cache-Control", "no-store")
+                self.send_header("X-Content-Type-Options", "nosniff")
+
+            def log_message(self, fmt: str, *args: Any) -> None:
+                _log(fmt % args)
+
+        server = None
+        self._ready.clear()
+        self._stopped.clear()
+        self._closing.clear()
+        self._startup_error = ""
         try:
-            server.serve_forever()
+            server = ReadyThreadingHTTPServer(("127.0.0.1", port), Handler)
+            server.daemon_threads = True
+            with self._state_lock:
+                self._server = server
+                self._port = int(server.server_address[1])
+            _log(
+                "Streamable HTTP MCP server listening on "
+                f"http://127.0.0.1:{self._port}")
+            server.serve_forever(poll_interval=0.05)
         except KeyboardInterrupt:
             _log("HTTP server stopped")
+        except OSError as exc:
+            self._startup_error = str(exc)
+            _log(f"HTTP server failed to start: {exc}")
         finally:
-            server.server_close()
+            self._ready.set()
+            if server is not None:
+                server.server_close()
+            with self._state_lock:
+                if self._server is server:
+                    self._server = None
+            self._stopped.set()
 
     @property
     def port(self) -> int:
         return self._port
 
+    @property
+    def startup_error(self) -> str:
+        return self._startup_error
+
+    @property
+    def initialized(self) -> bool:
+        return self._initialized.is_set()
+
+    def wait_until_ready(self, timeout: float = 3.0) -> bool:
+        """Wait until bind succeeds or the server reports a startup error."""
+        return self._ready.wait(max(0.0, float(timeout))) and not self._startup_error
+
     def stop(self) -> None:
-        if self._server is not None:
-            self._server.shutdown()
+        with self._state_lock:
+            server = self._server
+        if server is None:
+            return
+        self._closing.set()
+        server.shutdown()
+        # Wait for the one permitted runtime mutation to finish.  Workers that
+        # were queued on the serialization lock observe _closing and abort.
+        acquired = self._tool_call_lock.acquire(
+            timeout=_HTTP_SHUTDOWN_GRACE_SECONDS)
+        if acquired:
+            self._tool_call_lock.release()
+        else:
+            _log("Timed out waiting for an in-flight MCP tool during shutdown")
+        self._stopped.wait(_HTTP_SHUTDOWN_GRACE_SECONDS)
 
 
 # =========================================================================

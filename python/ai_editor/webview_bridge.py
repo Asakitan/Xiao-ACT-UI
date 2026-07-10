@@ -62,6 +62,7 @@ class AIEditorBridge:
         self._controller.on_tool_confirm = self._on_tool_confirm
         self._controller.on_tool_progress = self._on_tool_progress
         self._controller.on_error = self._on_error
+        self._controller.on_save_error = self._on_error
         self._controller.on_idle = self._on_idle
 
     def _settings_getter(self, key: str, default=None):
@@ -210,8 +211,13 @@ class AIEditorBridge:
                 self._engine.config.system_prompt = config_override["system_prompt"]
 
         self._refresh_system_prompt(mode)
-        self._controller.send(text, agent_mode=mode == "agent")
-        return {"ok": True, "mode": mode}
+        result = self._controller.send(text, agent_mode=mode == "agent") or {
+            "ok": True, "accepted": True, "busy": False,
+        }
+        if result.get("busy"):
+            result.setdefault("error", "Already running")
+        result["mode"] = mode
+        return result
 
     def _cmd_cancel(self, payload: Dict) -> Dict:
         if self._controller:

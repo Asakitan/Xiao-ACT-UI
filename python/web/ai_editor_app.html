@@ -11,7 +11,7 @@
   --bg-code: #0d1117; --bg-tool: #1a2a1a; --bg-tool-result: #0d1a0d;
   --bg-hover: #2a2d2e; --bg-active: #37373d; --bg-tab-active: #1e1e1e;
   --bg-tab: #2d2d2d; --bg-badge: #007acc;
-  --fg: #cccccc; --fg-dim: #808080; --fg-bright: #e0e0e0;
+  --fg: #cccccc; --fg-dim: #9b9b9b; --fg-bright: #e0e0e0;
   --fg-accent: #68e4ff; --fg-success: #4ec9b0; --fg-error: #f14c4c;
   --fg-warning: #cca700; --fg-tool: #dcdcaa; --fg-code: #d4d4d4;
   --fg-kw: #569cd6; --fg-str: #ce9178; --fg-num: #b5cea8; --fg-cmt: #6a9955;
@@ -38,7 +38,7 @@
   --bg-code: #f6f8fa; --bg-tool: #e8f5e9; --bg-tool-result: #e0f2e0;
   --bg-hover: #e0e0e0; --bg-active: #d0d0d0; --bg-tab-active: #ffffff;
   --bg-tab: #ececec; --bg-badge: #007acc;
-  --fg: #3b3a3c; --fg-dim: #8c878a; --fg-bright: #1e1e1e;
+  --fg: #3b3a3c; --fg-dim: #666166; --fg-bright: #1e1e1e;
   --fg-accent: #16a9d6; --fg-success: #3fae5a; --fg-error: #ef684e;
   --fg-warning: #bf8803; --fg-tool: #795e26; --fg-code: #24292e;
   --fg-kw: #0000ff; --fg-str: #a31515; --fg-num: #098658; --fg-cmt: #008000;
@@ -132,6 +132,26 @@ body.window-resizing * { cursor:inherit !important; }
 .ab-icon .badge { position:absolute; top:6px; right:6px; background:var(--bg-badge);
   color:#fff; font-size:9px; min-width:16px; height:16px; border-radius:8px;
   display:flex; align-items:center; justify-content:center; }
+.activity-overflow { width:48px; height:48px; flex:0 0 48px; }
+.activity-more-toggle { border:0; padding:0; background:transparent; font:inherit; }
+.activity-more-toggle[aria-expanded="true"] { opacity:1; color:var(--fg); background:var(--bg-hover); }
+.activity-overflow-menu { display:none; position:fixed; z-index:560; width:218px; max-height:min(420px,calc(100dvh - 16px));
+  overflow:auto; padding:6px; border:1px solid var(--border); border-radius:6px; background:var(--bg2);
+  box-shadow:0 8px 28px #00000055; }
+.activity-overflow-menu.open { display:block; }
+.activity-overflow-heading { padding:4px 8px 7px; color:var(--fg-dim); font-size:10px; font-weight:600;
+  letter-spacing:.04em; text-transform:uppercase; }
+.activity-overflow-menu .ab-icon,
+.activity-overflow-menu #ext-actbar-items .ab-icon { width:100%; height:34px; min-height:34px; justify-content:flex-start;
+  gap:10px; padding:0 9px; border:0; border-radius:4px; box-sizing:border-box; opacity:.78; }
+.activity-overflow-menu .ab-icon:hover,
+.activity-overflow-menu .ab-icon:focus { opacity:1; background:var(--bg-hover); outline:1px solid transparent; }
+.activity-overflow-menu .ab-icon.active { opacity:1; color:var(--fg); background:var(--bg-active); border-left:0; }
+.activity-overflow-menu .ab-icon svg,
+.activity-overflow-menu .ab-icon .extension-container-icon { width:18px; height:18px; flex:0 0 18px; background-size:18px 18px; }
+.activity-overflow-label { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;
+  color:inherit; font:12px var(--sans); }
+.activity-overflow-menu #ext-actbar-items:empty { display:none; }
 .ab-spacer { flex:1; }
 
 /* ── Sidebar ── */
@@ -1863,6 +1883,38 @@ pre.code-block code .type { color:var(--fg-type); }
 .editor-action-cancel.visible { display:inline-flex; }
 .editor-action-cancel:hover,.editor-action-cancel:focus { color:var(--fg); border-color:var(--border-focus); background:var(--bg-hover); outline:none; }
 #status-model { display:none!important; }
+.statusbar > #status-language-service,
+.statusbar > #status-editor-action,
+.statusbar > #status-editor-surface,
+.statusbar > #status-approval,
+.statusbar > #status-context-usage,
+.statusbar > #status-tokens { display:none; }
+.status-ai-health-toggle { appearance:none; border:0; border-radius:3px; background:transparent; color:var(--statusbar-fg);
+  font:11px var(--sans); cursor:pointer; white-space:nowrap; }
+.status-ai-health-toggle:hover,.status-ai-health-toggle:focus-visible,.status-ai-health-toggle[aria-expanded="true"] {
+  background:var(--bg-hover); outline:none; }
+.status-ai-health-dot { width:7px; height:7px; border-radius:50%; background:var(--fg-success); box-shadow:0 0 0 1px #00000024; }
+.status-ai-health-toggle[data-health="busy"] .status-ai-health-dot { background:var(--fg-accent); animation:languageStatusPulse 1.1s ease-in-out infinite; }
+.status-ai-health-toggle[data-health="warn"] .status-ai-health-dot { background:var(--fg-warning); }
+.status-ai-health-toggle[data-health="error"] .status-ai-health-dot { background:var(--fg-error); }
+.status-ai-health-panel { display:none; position:fixed; right:8px; bottom:28px; z-index:430; width:min(330px,calc(100vw - 16px));
+  padding:0; border:1px solid var(--border); border-radius:6px; background:var(--bg2); color:var(--fg);
+  box-shadow:0 8px 28px #00000066; font:12px var(--sans); }
+.status-ai-health-panel.open { display:block; }
+.status-ai-health-head { display:flex; align-items:center; min-height:36px; padding:0 8px 0 12px; border-bottom:1px solid var(--border); }
+.status-ai-health-head strong { flex:1; font-size:12px; font-weight:600; }
+.status-ai-health-close { width:28px; height:28px; border:0; border-radius:4px; background:transparent; color:var(--fg-dim); cursor:pointer; }
+.status-ai-health-close:hover,.status-ai-health-close:focus-visible { color:var(--fg); background:var(--bg-hover); outline:none; }
+.status-ai-health-list { margin:0; padding:6px 12px 8px; }
+.status-ai-health-row { display:grid; grid-template-columns:minmax(96px,.8fr) minmax(0,1.2fr); gap:10px;
+  min-height:27px; align-items:center; border-bottom:1px solid color-mix(in srgb,var(--border) 58%,transparent); }
+.status-ai-health-row:last-child { border-bottom:0; }
+.status-ai-health-row dt { color:var(--fg-dim); }
+.status-ai-health-row dd { margin:0; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; text-align:right; }
+.status-ai-health-actions { display:none; justify-content:flex-end; padding:0 12px 10px; }
+.status-ai-health-actions.visible { display:flex; }
+.status-ai-health-actions button { min-height:28px; padding:3px 10px; border:1px solid var(--border); border-radius:4px;
+  background:var(--bg3); color:var(--fg); cursor:pointer; }
 .editor-language-status { max-width:190px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; color:var(--fg-dim); }
 .editor-language-status[role="button"] { cursor:pointer; }
 .editor-language-status.running { color:var(--fg-accent); }
@@ -1944,6 +1996,17 @@ button.editor-language-capability:hover,button.editor-language-capability:focus 
 #settings-modal.open { --settings-viewport-gap:12px; --settings-available-height:calc(100dvh - 24px);
   align-items:stretch; justify-content:center; padding:12px 22px; box-sizing:border-box;
   background:color-mix(in srgb,#000 42%,transparent); }
+#settings-modal[data-settings-hydration="shell"] .settings-shell { position:relative; }
+#settings-modal[data-settings-hydration="shell"] .settings-nav,
+#settings-modal[data-settings-hydration="shell"] .settings-main,
+#settings-modal[data-settings-hydration="shell"] .settings-inspector { opacity:.18; pointer-events:none; }
+#settings-modal[data-settings-hydration="shell"] .settings-shell::after { content:'Loading settings…'; position:absolute;
+  left:50%; top:42%; z-index:18; transform:translate(-50%,-50%); min-width:170px; padding:11px 14px;
+  border:1px solid var(--border); border-radius:5px; background:color-mix(in srgb,var(--bg2) 96%,transparent);
+  color:var(--fg-dim); box-shadow:0 5px 18px #00000028; text-align:center; font:12px var(--sans); }
+#settings-modal[data-settings-hydration="hydrated"] .settings-nav,
+#settings-modal[data-settings-hydration="hydrated"] .settings-main,
+#settings-modal[data-settings-hydration="hydrated"] .settings-inspector { transition:opacity var(--motion-fast) ease; }
 #settings-modal.open:has(.settings-vscode-calm) { --settings-viewport-gap:48px; --settings-available-height:min(660px, calc(100svh - 48px), calc(100dvh - 48px));
   align-items:center; justify-content:center; padding:18px 24px; background:color-mix(in srgb,#000 34%,transparent); }
 .modal { background:var(--bg2); border:1px solid var(--border); border-radius:6px;
@@ -3246,7 +3309,8 @@ pre.code-block { overflow:visible; }
 .settings-vscode-calm .settings-titlebar h2::before { display:none; }
 .settings-vscode-calm .settings-title-sub { display:none; }
 .settings-vscode-calm .settings-title-route { display:none; }
-.settings-vscode-calm #settings-dirty-summary[data-settings-state="clean"] { display:none; }
+.settings-vscode-calm #settings-dirty-summary[data-settings-state="clean"],
+.settings-vscode-calm #settings-nav-dirty-summary[data-settings-state="clean"] { display:none; }
 .settings-vscode-calm .settings-searchbar { position:relative; padding:5px 24px 0; gap:0; border-bottom:0; background:var(--bg); }
 .settings-vscode-calm .settings-search-row { grid-template-columns:minmax(600px,1fr) minmax(260px,auto); align-items:end; padding-bottom:8px; border-bottom:1px solid var(--border); }
 .settings-vscode-calm .settings-jumpbar { padding:6px 0 5px; border-bottom:1px solid color-mix(in srgb,var(--border) 56%,transparent); }
@@ -4342,13 +4406,19 @@ pre.code-block { overflow:visible; }
     <div class="ab-icon" data-panel="scm" title="Source Control" data-i18n-title="scm_title"><svg width="20" height="20" viewBox="0 0 20 20" fill="none"><circle cx="6" cy="5" r="2" stroke="currentColor" stroke-width="1.5"/><circle cx="14" cy="15" r="2" stroke="currentColor" stroke-width="1.5"/><circle cx="6" cy="15" r="2" stroke="currentColor" stroke-width="1.5"/><path d="M6 7v6M8 5h2.5A3.5 3.5 0 0114 8.5V13" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg></div>
     <div class="ab-icon" data-panel="debug-runner" title="Run and Debug" data-i18n-title="ab_debug"><svg width="20" height="20" viewBox="0 0 20 20" fill="none"><path d="M6 4l9 6-9 6V4z" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/></svg></div>
     <div class="ab-icon active" data-panel="chat" data-i18n-title="chat" title="Assistant"><svg width="20" height="20" viewBox="0 0 20 20" fill="none"><path d="M4 4h12a2 2 0 012 2v7a2 2 0 01-2 2H8l-4 3v-3a2 2 0 01-2-2V6a2 2 0 012-2z" stroke="currentColor" stroke-width="1.5"/></svg></div>
-    <div class="ab-icon" data-panel="tools" data-i18n-title="tools" title="Tools"><svg width="20" height="20" viewBox="0 0 20 20" fill="none"><path d="M11.5 2.5l2.5 2.5-7 7-3.5.5.5-3.5 7-7z" stroke="currentColor" stroke-width="1.5"/><path d="M14 8l3-3" stroke="currentColor" stroke-width="1.5"/></svg></div>
-    <div class="ab-icon" data-panel="memviewer" title="Mem Viewer" data-i18n-title="ab_memviewer"><svg width="20" height="20" viewBox="0 0 20 20" fill="none"><rect x="4" y="4" width="12" height="12" rx="1.2" stroke="currentColor" stroke-width="1.5"/><path d="M7 4V2M10 4V2M13 4V2M7 18v-2M10 18v-2M13 18v-2M4 7H2M4 10H2M4 13H2M18 7h-2M18 10h-2M18 13h-2" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/></svg></div>
     <div class="ab-icon" data-panel="extensions" data-i18n-title="extensions" title="Extensions"><svg width="20" height="20" viewBox="0 0 20 20" fill="none"><rect x="3" y="8" width="5" height="5" rx="1" stroke="currentColor" stroke-width="1.5"/><rect x="8" y="3" width="5" height="5" rx="1" stroke="currentColor" stroke-width="1.5"/><rect x="8" y="12" width="5" height="5" rx="1" stroke="currentColor" stroke-width="1.5"/><rect x="13" y="8" width="5" height="5" rx="1" stroke="currentColor" stroke-width="1.5"/></svg></div>
-    <div class="ab-icon" data-panel="instructions" data-i18n-title="instructions" title="Custom Instructions"><svg width="20" height="20" viewBox="0 0 20 20" fill="none"><path d="M5 3h10a1 1 0 011 1v12a1 1 0 01-1 1H5a1 1 0 01-1-1V4a1 1 0 011-1z" stroke="currentColor" stroke-width="1.5"/><path d="M7 7h6M7 10h6M7 13h4" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/></svg></div>
-    <div class="ab-icon" data-panel="agents" data-i18n-title="agents_wf" title="Agents & Workflows"><svg width="20" height="20" viewBox="0 0 20 20" fill="none"><circle cx="10" cy="7" r="3" stroke="currentColor" stroke-width="1.5"/><path d="M4 17c0-3.3 2.7-6 6-6s6 2.7 6 6" stroke="currentColor" stroke-width="1.5"/></svg></div>
-    <div class="ab-icon" data-panel="premium" data-i18n-title="premium" title="Premium"><svg width="20" height="20" viewBox="0 0 20 20" fill="none"><rect x="4" y="8" width="12" height="9" rx="1.5" stroke="currentColor" stroke-width="1.5"/><path d="M7 8V5.5a3 3 0 016 0V8" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/><circle cx="10" cy="13" r="1.2" fill="currentColor"/></svg></div>
-    <div id="ext-actbar-items"></div>
+    <div class="activity-overflow">
+      <button type="button" class="ab-icon activity-more-toggle" id="activity-more-toggle" title="More views" aria-label="More views" data-i18n-title="more_views" aria-haspopup="true" aria-expanded="false" aria-controls="activity-overflow-menu" onclick="toggleActivityOverflow(event)"><svg width="20" height="20" viewBox="0 0 20 20" fill="none" aria-hidden="true"><circle cx="5" cy="10" r="1.25" fill="currentColor"/><circle cx="10" cy="10" r="1.25" fill="currentColor"/><circle cx="15" cy="10" r="1.25" fill="currentColor"/></svg></button>
+      <div class="activity-overflow-menu" id="activity-overflow-menu" role="group" aria-label="More views">
+        <div class="activity-overflow-heading" data-i18n="more_views">More views</div>
+        <div class="ab-icon" data-panel="tools" data-i18n-title="tools" title="Tools"><svg width="20" height="20" viewBox="0 0 20 20" fill="none"><path d="M11.5 2.5l2.5 2.5-7 7-3.5.5.5-3.5 7-7z" stroke="currentColor" stroke-width="1.5"/><path d="M14 8l3-3" stroke="currentColor" stroke-width="1.5"/></svg><span class="activity-overflow-label" data-i18n="tools">Tools</span></div>
+        <div class="ab-icon" data-panel="memviewer" title="Mem Viewer" data-i18n-title="ab_memviewer"><svg width="20" height="20" viewBox="0 0 20 20" fill="none"><rect x="4" y="4" width="12" height="12" rx="1.2" stroke="currentColor" stroke-width="1.5"/><path d="M7 4V2M10 4V2M13 4V2M7 18v-2M10 18v-2M13 18v-2M4 7H2M4 10H2M4 13H2M18 7h-2M18 10h-2M18 13h-2" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/></svg><span class="activity-overflow-label" data-i18n="ab_memviewer">Memory</span></div>
+        <div class="ab-icon" data-panel="instructions" data-i18n-title="instructions" title="Custom Instructions"><svg width="20" height="20" viewBox="0 0 20 20" fill="none"><path d="M5 3h10a1 1 0 011 1v12a1 1 0 01-1 1H5a1 1 0 01-1-1V4a1 1 0 011-1z" stroke="currentColor" stroke-width="1.5"/><path d="M7 7h6M7 10h6M7 13h4" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/></svg><span class="activity-overflow-label" data-i18n="instructions">Instructions</span></div>
+        <div class="ab-icon" data-panel="agents" data-i18n-title="agents_wf" title="Agents & Workflows"><svg width="20" height="20" viewBox="0 0 20 20" fill="none"><circle cx="10" cy="7" r="3" stroke="currentColor" stroke-width="1.5"/><path d="M4 17c0-3.3 2.7-6 6-6s6 2.7 6 6" stroke="currentColor" stroke-width="1.5"/></svg><span class="activity-overflow-label" data-i18n="agents_wf">Agents &amp; Workflows</span></div>
+        <div class="ab-icon" data-panel="premium" data-i18n-title="premium" title="Premium"><svg width="20" height="20" viewBox="0 0 20 20" fill="none"><rect x="4" y="8" width="12" height="9" rx="1.5" stroke="currentColor" stroke-width="1.5"/><path d="M7 8V5.5a3 3 0 016 0V8" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/><circle cx="10" cy="13" r="1.2" fill="currentColor"/></svg><span class="activity-overflow-label" data-i18n="premium">Premium</span></div>
+        <div id="ext-actbar-items"></div>
+      </div>
+    </div>
     <div class="ab-spacer"></div>
     <div class="ab-icon activity-theme" data-command="toggle-theme" data-theme-button="1" role="button" tabindex="0" aria-label="Toggle Theme" data-i18n-title="toggle_theme" title="Toggle Theme" onclick="event.stopImmediatePropagation();toggleTheme();return false"><svg class="theme-toggle-icon" width="20" height="20" viewBox="0 0 20 20" fill="none" data-theme-toggle-icon="day-night" aria-hidden="true"><path d="M10 2.75a7.25 7.25 0 107.25 7.25c0-.42-.04-.83-.11-1.23A5.25 5.25 0 0111.23 2.86 7.4 7.4 0 0010 2.75z" stroke="currentColor" stroke-width="1.45" stroke-linejoin="round"/><path d="M4.9 15.1L15.1 4.9" stroke="currentColor" stroke-width="1.35" stroke-linecap="round"/></svg></div>
     <div class="ab-icon activity-manage" data-panel="settings" data-command="open-settings" data-settings-button="1" role="button" tabindex="0" aria-label="Settings" data-i18n-title="settings" title="Settings" onclick="event.stopImmediatePropagation();openSettings();return false"><svg class="settings-gear-icon" width="20" height="20" viewBox="0 0 16 16" fill="currentColor" data-settings-manage-icon="gear" data-settings-manage-style="codicon-gear" data-settings-manage-shape="codicon-settings-gear" data-settings-manage-visual="solid-vscode-gear" aria-hidden="true"><path data-settings-manage-gear-teeth="codicon-settings-gear" fill-rule="evenodd" clip-rule="evenodd" d="M9.18 1.5H6.82l-.42 2.06c-.34.12-.67.25-.98.41L3.66 2.8 2.08 4.38l1.16 1.74c-.17.32-.31.66-.42 1.01L.75 7.54v2.24l2.07.41c.11.35.25.69.42 1.01l-1.16 1.74 1.58 1.58 1.76-1.17c.31.16.64.29.98.41l.42 2.06h2.36l.42-2.06c.34-.12.67-.25.98-.41l1.76 1.17 1.58-1.58-1.16-1.74c.17-.32.31-.66.42-1.01l2.07-.41V7.54l-2.07-.41a5.63 5.63 0 0 0-.42-1.01l1.16-1.74-1.58-1.58-1.76 1.17c-.31-.16-.64-.29-.98-.41L9.18 1.5zM8 10.75A2.75 2.75 0 1 0 8 5.25a2.75 2.75 0 0 0 0 5.5z"/><circle data-settings-manage-gear-center="codicon-settings-gear" cx="8" cy="8" r="1.55" fill="var(--activitybar-bg,#181818)"/></svg></div>
@@ -4400,17 +4470,19 @@ pre.code-block { overflow:visible; }
         <span class="sb-action" onclick="newChat()" data-i18n-title="new_chat_action" title="New Chat">✚</span>
       </div>
       <div class="sb-section">
-        <div class="sb-group" data-i18n="model">Model</div>
-        <div style="padding:4px 16px">
-          <select id="provider-sel" style="width:100%;background:var(--bg3);color:var(--fg);border:1px solid var(--border);border-radius:3px;padding:3px 6px;font-size:12px">
-            <option value="openai">OpenAI</option><option value="anthropic">Anthropic</option>
-            <option value="deepseek">DeepSeek</option><option value="ollama">Ollama</option>
-            <option value="custom">Custom</option>
-          </select>
-          <input id="model-inp" placeholder="Model name" style="width:11%;min-width:36px;max-width:44px;margin-top:4px;background:var(--bg3);color:var(--fg);border:1px solid var(--border);border-radius:3px;padding:3px 6px;font:12px var(--mono)">
+        <div class="assistant-legacy-model-controls" aria-hidden="true" inert>
+          <div class="sb-group" data-i18n="model">Model</div>
+          <div style="padding:4px 16px">
+            <select id="provider-sel" style="width:100%;background:var(--bg3);color:var(--fg);border:1px solid var(--border);border-radius:3px;padding:3px 6px;font-size:12px">
+              <option value="openai">OpenAI</option><option value="anthropic">Anthropic</option>
+              <option value="deepseek">DeepSeek</option><option value="ollama">Ollama</option>
+              <option value="custom">Custom</option>
+            </select>
+            <input id="model-inp" placeholder="Model name" style="width:11%;min-width:36px;max-width:44px;margin-top:4px;background:var(--bg3);color:var(--fg);border:1px solid var(--border);border-radius:3px;padding:3px 6px;font:12px var(--mono)">
+          </div>
         </div>
         <div class="sb-group" style="margin-top:8px" data-i18n="quick_actions">Quick Actions</div>
-        <div class="sb-item" onclick="execSlash('/system')">ℹ System Info</div>
+        <div class="sb-item" onclick="execSlash('/system')">ℹ <span data-i18n="system_info">System Info</span></div>
       </div>
     </div>
     <!-- Tools sidebar -->
@@ -4831,8 +4903,8 @@ pre.code-block { overflow:visible; }
                     <button class="chat-composer-action" id="stop-btn" style="display:none;color:var(--fg-error)" onclick="doStop()" title="Stop" aria-label="Stop" aria-hidden="true">■</button>
                     <button class="chat-composer-action" onclick="newChat()" data-i18n-title="new_chat_title" title="New chat" aria-label="New chat">＋</button>
                     <button class="chat-composer-action" onclick="openChatHistory()" data-i18n-title="history" title="History" aria-label="History">◷</button>
-                    <button class="chat-composer-action" onclick="openChatContextPicker()" title="Attach context" aria-label="Attach context">@</button>
-                    <button class="chat-composer-action" onclick="uploadImage()" title="Attach image" aria-label="Attach image">📎</button>
+                    <button class="chat-composer-action" onclick="openChatContextPicker()" data-i18n-title="attach_context" title="Attach context" aria-label="Attach context">@</button>
+                    <button class="chat-composer-action" onclick="uploadImage()" data-i18n-title="attach_image" title="Attach image" aria-label="Attach image">📎</button>
                     <span class="chat-composer-meta" id="chat-input-status" role="status" aria-live="polite">
                       <span class="chat-session-chip" id="chat-session-chip" title="Chat session">Local - 0 req</span>
                       <span class="ctx-usage" id="ctx-usage" title="Context window usage">
@@ -4884,8 +4956,22 @@ pre.code-block { overflow:visible; }
   <span class="sb-item" id="status-model">-</span>
   <span class="sb-item" id="status-tokens">0 tok</span>
   <span class="sb-ext-right" id="sb-ext-right"></span>
+  <button type="button" class="sb-item status-ai-health-toggle" id="status-ai-health" data-health="ok" title="AI health details" aria-label="AI health details" data-i18n-title="ai_health" aria-haspopup="dialog" aria-expanded="false" aria-controls="status-ai-health-panel" onclick="toggleAiStatusHealth(event)"><span class="status-ai-health-dot" aria-hidden="true"></span><span id="status-ai-health-label" data-i18n="ai_ready">AI Ready</span></button>
   <span class="sb-item" id="status-notifications" data-i18n-title="notifications" title="Notifications" style="cursor:pointer;position:relative" onclick="toggleNotificationCenter()">🔔<span id="status-notifications-badge" style="display:none;position:absolute;top:-2px;right:-6px;background:var(--fg-error,#f44);color:#fff;border-radius:8px;font-size:9px;line-height:1;padding:2px 4px;min-width:8px;text-align:center"></span></span>
 </div>
+
+<section class="status-ai-health-panel" id="status-ai-health-panel" role="dialog" aria-label="AI health details" aria-modal="false" aria-hidden="true">
+  <div class="status-ai-health-head"><strong data-i18n="ai_health">AI health</strong><button type="button" class="status-ai-health-close" aria-label="Close AI health details" onclick="closeAiStatusHealth(true)">×</button></div>
+  <dl class="status-ai-health-list">
+    <div class="status-ai-health-row"><dt data-i18n="language_services">Language services</dt><dd id="status-ai-health-language">Ready</dd></div>
+    <div class="status-ai-health-row"><dt data-i18n="editor_action">Editor action</dt><dd id="status-ai-health-action">Ready</dd></div>
+    <div class="status-ai-health-row"><dt data-i18n="editor_surfaces">Editor surfaces</dt><dd id="status-ai-health-surface">Ready</dd></div>
+    <div class="status-ai-health-row"><dt data-i18n="approval_label">Approval</dt><dd id="status-ai-health-approval">Default</dd></div>
+    <div class="status-ai-health-row"><dt data-i18n="context_window">Context window</dt><dd id="status-ai-health-context">0 / 128K</dd></div>
+    <div class="status-ai-health-row"><dt data-i18n="usage_label">Usage</dt><dd id="status-ai-health-tokens">0 tok</dd></div>
+  </dl>
+  <div class="status-ai-health-actions" id="status-ai-health-actions"><button type="button" data-i18n="cancel_editor_action" onclick="cancelEditorLongAction('health-panel')">Cancel editor action</button></div>
+</section>
 
 <!-- Notification center popover -->
 <div id="notification-center" style="display:none;position:fixed;right:8px;bottom:30px;width:340px;max-height:60vh;background:var(--bg2);border:1px solid var(--border);border-radius:6px;box-shadow:0 6px 24px rgba(0,0,0,.4);z-index:400;flex-direction:column">
@@ -4947,6 +5033,9 @@ pre.code-block { overflow:visible; }
 <!-- Settings modal -->
 <div class="modal-bg" id="settings-modal">
   <div class="modal settings-modal preferences-workbench settings-vscode-calm" role="dialog" aria-modal="true" aria-labelledby="settings-title">
+    <span class="sr-only" id="settings-hydration-status" role="status" aria-live="polite"></span>
+    <button type="button" class="settings-top-action settings-mobile-nav-toggle" id="settings-mobile-nav-toggle" data-settings-icon-action="1" data-i18n-title="settings_categories" title="Settings categories" aria-label="Settings categories" aria-controls="settings-nav" aria-expanded="false" onclick="toggleSettingsMobileNav()">☰</button>
+    <button type="button" class="settings-mobile-nav-backdrop" id="settings-mobile-nav-backdrop" tabindex="-1" aria-hidden="true" onclick="setSettingsMobileNav(false)"></button>
     <button type="button" class="settings-top-action settings-close-action settings-floating-close" id="settings-floating-close-button" data-settings-icon-action="1" data-command="close-settings" title="Close Settings" aria-label="Close Settings" onclick="settingsCancelOrClose()">×</button>
     <div class="settings-titlebar">
       <div>
@@ -5089,14 +5178,15 @@ pre.code-block { overflow:visible; }
     <option value="deepseek">DeepSeek</option><option value="ollama">Ollama</option><option value="custom">Custom</option></select>
     <label data-i18n="s_api_key">API Key (active provider)</label>
     <div style="display:flex;gap:6px"><input id="s-apikey" type="password" style="flex:1">
-    <span class="toolbar-btn" onclick="document.getElementById('s-apikey').type=document.getElementById('s-apikey').type==='password'?'text':'password'" style="padding:7px 10px;border:1px solid var(--border);border-radius:var(--radius)">👁</span></div>
+    <button type="button" class="toolbar-btn" aria-label="Show or hide API key" onclick="document.getElementById('s-apikey').type=document.getElementById('s-apikey').type==='password'?'text':'password'" style="padding:7px 10px;border:1px solid var(--border);border-radius:var(--radius)">👁</button>
+    <button type="button" class="settings-secret-clear" data-i18n="s_clear_secret" onclick="clearProtectedSecretInput('s-apikey')">Clear</button></div>
     <label data-i18n="s_base_url">Base URL (empty = default)</label><input id="s-baseurl" placeholder="https://api.openai.com/v1">
 
     <div class="sb-group" style="padding:0;margin-top:12px">Provider Keys <span style="font-weight:normal;font-size:10px;color:var(--fg-dim)">(for Claude Code / Codex tabs)</span></div>
-    <div style="display:grid;grid-template-columns:80px 1fr;gap:4px 8px;font-size:12px;padding:4px 0">
-      <span style="color:var(--fg-dim)">OpenAI</span><input id="sk-openai" type="password" placeholder="sk-..." style="font-size:11px">
-      <span style="color:var(--fg-dim)">Anthropic</span><input id="sk-anthropic" type="password" placeholder="sk-ant-..." style="font-size:11px">
-      <span style="color:var(--fg-dim)">DeepSeek</span><input id="sk-deepseek" type="password" placeholder="sk-..." style="font-size:11px">
+    <div style="display:grid;grid-template-columns:80px minmax(0,1fr) auto;gap:4px 8px;font-size:12px;padding:4px 0">
+      <span style="color:var(--fg-dim)">OpenAI</span><input id="sk-openai" type="password" placeholder="sk-..." style="font-size:11px"><button type="button" class="settings-secret-clear" data-i18n="s_clear_secret" onclick="clearProtectedSecretInput('sk-openai')">Clear</button>
+      <span style="color:var(--fg-dim)">Anthropic</span><input id="sk-anthropic" type="password" placeholder="sk-ant-..." style="font-size:11px"><button type="button" class="settings-secret-clear" data-i18n="s_clear_secret" onclick="clearProtectedSecretInput('sk-anthropic')">Clear</button>
+      <span style="color:var(--fg-dim)">DeepSeek</span><input id="sk-deepseek" type="password" placeholder="sk-..." style="font-size:11px"><button type="button" class="settings-secret-clear" data-i18n="s_clear_secret" onclick="clearProtectedSecretInput('sk-deepseek')">Clear</button>
     </div>
 
     <div class="sb-group" style="padding:0;margin-top:12px" data-i18n="s_model">Model</div>
@@ -5373,6 +5463,7 @@ pre.code-block { overflow:visible; }
         <div><label data-i18n="s_name_collisions">Name Collisions</label><select id="s-mcp-collision"><option value="first">Use first registered</option><option value="last">Use latest registered</option><option value="error">Treat as error</option></select></div>
       </div>
       <label class="settings-check"><input id="s-mcp-discovery" type="checkbox"><span><b data-i18n="s_discover_mcp">Discover configured MCP servers</b><small>Reads configured server entries only; missing backend APIs are not called from this modal.</small></span></label>
+      <label class="settings-check"><input id="s-mcp-workspace-trusted" type="checkbox"><span><b data-i18n="s_trust_workspace_mcp">Trust workspace MCP configuration</b><small data-i18n="s_trust_workspace_mcp_help">Allows this workspace and plugin manifests to launch configured MCP commands.</small></span></label>
       <label class="settings-check"><input id="s-mcp-autostart" type="checkbox"><span><b data-i18n="s_autostart_mcp">Autostart MCP servers</b><small>Off by default to avoid launching local commands unexpectedly.</small></span></label>
       <label class="settings-check"><input id="s-mcp-sampling" type="checkbox"><span><b data-i18n="s_mcp_sampling">Allow MCP server sampling</b><small>Keep off unless trusted MCP servers are allowed to request model sampling.</small></span></label>
       <div class="settings-help" id="mcp-runtime-status">MCP status not loaded.</div>
@@ -5610,7 +5701,7 @@ pre.code-block { overflow:visible; }
 const SETTINGS_SECTION_DEFAULTS={
   claude_code:{cli_path:'',cli_args:[],prefer_cli:false,allow_dangerously_skip_permissions:false,model:''},
   codex:{cli_path:'',cli_args:[],transport:'chat_completions',model:'codex-mini-latest'},
-  mcp:{access:'prompt',autostart:false,discovery_enabled:true,collision_behavior:'first',server_sampling:false},
+  mcp:{access:'prompt',autostart:false,discovery_enabled:true,workspace_trusted:false,collision_behavior:'first',server_sampling:false},
   terminal:{profile:'PowerShell 7 (No Profile)',shell_path:'',shell_args:[],timeout:30,output_limit:8000,auto_approve:{}},
   workspace:{root:'',roots:[],recent_roots:[],auto_detect:true,remember_last:true,last_root:''},
   extensions:{confirm_install:true,allowed_publishers:[],blocked_publishers:[],enabled_contributions:['chatParticipants','languageModelTools','commands','views','customEditors','notebooks','terminal','statusBarItems'],enabled_contributions_explicit:false,diagnostics_enabled:false},
@@ -5666,7 +5757,65 @@ function withSettingsDefaults(raw){
   merged.stop=toList(src.stop);
   return merged;
 }
+const SECRET_PRESENT='__SAO_SECRET_PRESENT__';
+const PROTECTED_SECRET_INPUT_IDS=['s-apikey','sk-openai','sk-anthropic','sk-deepseek'];
 let config=withSettingsDefaults({});
+function prepareProtectedSecretInput(id,value){
+  const input=$(id);if(!input)return;
+  if(!input.dataset.originalPlaceholder)input.dataset.originalPlaceholder=input.getAttribute('placeholder')||'';
+  const configured=value===SECRET_PRESENT||!!value;
+  input.value=value===SECRET_PRESENT?'':(value||'');
+  input.dataset.secretConfigured=configured?'1':'0';
+  input.dataset.secretDirty='0';
+  input.dataset.secretClear='0';
+  input.placeholder=configured?t('s_secret_saved'):input.dataset.originalPlaceholder;
+}
+function protectedSecretValue(id){
+  const input=$(id);if(!input)return '';
+  if(input.dataset.secretClear==='1')return '';
+  if(input.dataset.secretDirty!=='1'&&input.dataset.secretConfigured==='1')return SECRET_PRESENT;
+  return input.value||'';
+}
+function clearProtectedSecretInput(id){
+  const input=$(id);if(!input)return;
+  input.value='';input.dataset.secretDirty='1';input.dataset.secretClear='1';
+  input.dataset.secretConfigured='0';input.placeholder=input.dataset.originalPlaceholder||'';
+  input.focus();
+  if(typeof scheduleSettingsAutoSave==='function')scheduleSettingsAutoSave();
+}
+function finalizeProtectedSecretSave(){
+  const configuredAfterSave=id=>{
+    const input=$(id);if(!input||input.dataset.secretClear==='1')return false;
+    return input.dataset.secretDirty==='1'?!!input.value:input.dataset.secretConfigured==='1';
+  };
+  config.api_key=configuredAfterSave('s-apikey')?SECRET_PRESENT:'';
+  const providerInputs={openai:'sk-openai',anthropic:'sk-anthropic',deepseek:'sk-deepseek'};
+  config.provider_keys={};
+  Object.entries(providerInputs).forEach(([provider,id])=>{
+    if(configuredAfterSave(id))config.provider_keys[provider]=SECRET_PRESENT;
+  });
+  config._provider_keys={...config.provider_keys};
+  prepareProtectedSecretInput('s-apikey',config.api_key);
+  Object.entries(providerInputs).forEach(([provider,id])=>
+    prepareProtectedSecretInput(id,config.provider_keys[provider]||''));
+  delete config._clear_api_key;
+  delete config._clear_provider_keys;
+  ['extra_headers','extra_body'].forEach(field=>{
+    if(isPlainObject(config[field])){
+      config[field]=Object.fromEntries(Object.keys(config[field]).map(key=>[key,SECRET_PRESENT]));
+    }
+  });
+  if($('s-xheaders'))$('s-xheaders').value=stringifyJsonValue(config.extra_headers);
+  if($('s-xbody'))$('s-xbody').value=stringifyJsonValue(config.extra_body);
+}
+PROTECTED_SECRET_INPUT_IDS.forEach(id=>{
+  const input=document.getElementById(id);if(!input)return;
+  input.addEventListener('input',()=>{
+    input.dataset.secretDirty='1';
+    input.dataset.secretClear=input.value?'0':(input.dataset.secretConfigured==='1'?'1':'0');
+  });
+});
+window.clearProtectedSecretInput=clearProtectedSecretInput;
 function currentWorkspaceRoot(){
   const ws=isPlainObject(config.workspace)?config.workspace:{};
   return normalizeWorkspaceRootPath(ws.resolved_root||ws.root||ws.last_root||(typeof explorerRoot!=='undefined'?explorerRoot:'')||'');
@@ -5741,6 +5890,7 @@ const SETTING_INPUT_META={
   's-codex-transport':{key:'aiEditor.codex.transport',path:'codex.transport',scope:'User'},
   's-mcp-access':{key:'aiEditor.mcp.access',path:'mcp.access',scope:'User'},
   's-mcp-discovery':{key:'aiEditor.mcp.discoveryEnabled',path:'mcp.discovery_enabled',scope:'User'},
+  's-mcp-workspace-trusted':{key:'aiEditor.mcp.workspaceTrusted',path:'mcp.workspace_trusted',scope:'Workspace'},
   's-mcp-autostart':{key:'aiEditor.mcp.autostart',path:'mcp.autostart',scope:'User'},
   's-term-profile':{key:'terminal.integrated.defaultProfile.windows',path:'terminal.profile',scope:'User'},
   's-term-shell':{key:'terminal.integrated.shell.windows',path:'terminal.shell_path',scope:'User'},
@@ -6443,6 +6593,8 @@ function settingsAppendTargetNote(host,row,info,valueState){
   const note=document.createElement('div');
   note.className='detail-target-note'+(desc.cls?' '+desc.cls:'');
   note.dataset.settingsDetailTargetNote='1';
+  note.dataset.settingsDetailTarget=String(currentSettingsTarget||'user');
+  note.dataset.settingsDetailKind=row&&row.classList&&row.classList.contains('ext-setting-row')?'extension':(info&&info.meta?'builtin':'local');
   const title=document.createElement('strong');
   title.textContent=desc.title;
   const body=document.createElement('span');
@@ -7197,19 +7349,19 @@ function markSettingsModified(){
   renderSettingsFocusDeck(settingsQueryFilters((($('settings-search')||{}).value)||''),0,0,{visible:settingsVisibleRows().length,modified:modifiedCount,errors:errorCount,overrides:settingsReviewRows('override').length});
 }
 function refreshSettingsDirtySummary(modifiedCount,errorCount){
-  const pill=$('settings-dirty-summary');
+  const pills=[$('settings-dirty-summary'),$('settings-nav-dirty-summary')].filter(Boolean);
   modifiedCount=Number(modifiedCount)||0;
   errorCount=Number(errorCount)||0;
   const label=errorCount?tf('s_pill_errors',errorCount)
     : modifiedCount?tf('s_pill_pending',modifiedCount):t('s_pill_clean');
-  if(pill){
+  pills.forEach(pill=>{
     pill.classList.toggle('modified',modifiedCount>0&&errorCount===0);
     pill.classList.toggle('error',errorCount>0);
     pill.dataset.settingsState=errorCount?'error':(modifiedCount?'modified':'clean');
     pill.dataset.settingsModifiedCount=String(modifiedCount);
     pill.dataset.settingsErrorCount=String(errorCount);
     pill.textContent=label;
-  }
+  });
   const footer=$('settings-footer-summary');
   if(footer&&footer.dataset.savedHint!=='1'){
     footer.classList.toggle('modified',modifiedCount>0&&errorCount===0);
@@ -7664,6 +7816,88 @@ async function init(){
 // ── Render ──
 const $=id=>document.getElementById(id);
 const esc=s=>{const d=document.createElement('div');d.textContent=s;return d.innerHTML};
+
+let _aiStatusHealthFrame=0;
+function aiStatusHealthText(id,fallback){
+  const node=$(id),text=String(node&&node.textContent||'').replace(/\s+/g,' ').trim();
+  return text||String(fallback||'');
+}
+function aiStatusHealthState(){
+  const language=$('status-language-service'),action=$('status-editor-action'),surface=$('status-editor-surface');
+  const nodes=[language,action,surface].filter(Boolean);
+  const text=nodes.map(node=>String(node.textContent||'')).join(' ').toLowerCase();
+  const classText=nodes.map(node=>String(node.className||'')).join(' ').toLowerCase();
+  if(/\berror\b|\bfailed\b|unavailable/.test(text+' '+classText))return'error';
+  if(/\bwarning\b|\bcancelled\b|\btimeout\b/.test(text+' '+classText))return'warn';
+  if((action&&action.classList.contains('running'))||(language&&language.classList.contains('running')))return'busy';
+  return'ok';
+}
+function updateAiStatusHealth(){
+  _aiStatusHealthFrame=0;
+  const state=aiStatusHealthState(),toggle=$('status-ai-health'),label=$('status-ai-health-label');
+  const values={
+    language:aiStatusHealthText('status-language-service','Lang: Ready').replace(/^Lang:\s*/i,''),
+    action:aiStatusHealthText('status-editor-action','Action: Ready').replace(/^Action:\s*/i,''),
+    surface:aiStatusHealthText('status-editor-surface','Editor: Ready').replace(/^Editor:\s*/i,''),
+    approval:aiStatusHealthText('status-approval','Default').replace(/^[^A-Za-z\u4e00-\u9fff]+/,''),
+    context:aiStatusHealthText('status-context-text','CW 0 / 128K').replace(/^CW\s*/i,''),
+    tokens:aiStatusHealthText('status-tokens','0 tok')
+  };
+  Object.keys(values).forEach(key=>{const node=$('status-ai-health-'+key);if(node)node.textContent=values[key]});
+  if(toggle){
+    toggle.dataset.health=state;
+    toggle.title='AI health details · '+(state==='busy'?'busy':state==='ok'?'ready':state==='warn'?'needs attention':'error');
+  }
+  if(label)label.textContent=state==='busy'?t('ai_busy'):state==='ok'?t('ai_ready'):state==='warn'?t('ai_attention'):t('ai_error');
+  const actions=$('status-ai-health-actions'),running=!!($('status-editor-action')&&$('status-editor-action').classList.contains('running'));
+  if(actions)actions.classList.toggle('visible',running);
+  if(document.body){document.body.dataset.aiStatusHealth=state;document.body.dataset.aiStatusHealthUpdated=String(Date.now())}
+  return{state,...values,running};
+}
+function scheduleAiStatusHealthUpdate(){
+  if(_aiStatusHealthFrame)return;
+  _aiStatusHealthFrame=requestAnimationFrame(updateAiStatusHealth);
+}
+function closeAiStatusHealth(restoreFocus){
+  const panel=$('status-ai-health-panel'),toggle=$('status-ai-health');
+  if(panel){panel.classList.remove('open');panel.setAttribute('aria-hidden','true')}
+  if(toggle)toggle.setAttribute('aria-expanded','false');
+  if(restoreFocus&&toggle){try{toggle.focus({preventScroll:true})}catch(_e){toggle.focus()}}
+}
+function toggleAiStatusHealth(event){
+  if(event){event.preventDefault();event.stopPropagation()}
+  const panel=$('status-ai-health-panel'),toggle=$('status-ai-health');if(!panel||!toggle)return false;
+  const open=!panel.classList.contains('open');closeAiStatusHealth(false);
+  if(!open)return false;
+  const notifications=$('notification-center');if(notifications)notifications.style.display='none';
+  updateAiStatusHealth();panel.classList.add('open');panel.setAttribute('aria-hidden','false');toggle.setAttribute('aria-expanded','true');
+  return true;
+}
+{
+  const sources=['status-language-service','status-editor-action','status-editor-surface','status-approval','status-context-text','status-tokens']
+    .map(id=>$(id)).filter(Boolean);
+  if(typeof MutationObserver==='function'){
+    const observer=new MutationObserver(scheduleAiStatusHealthUpdate);
+    sources.forEach(node=>observer.observe(node,{attributes:true,childList:true,subtree:true,characterData:true}));
+  }
+  document.addEventListener('pointerdown',event=>{
+    const panel=$('status-ai-health-panel');if(!panel||!panel.classList.contains('open'))return;
+    if(event.target&&event.target.closest&&event.target.closest('#status-ai-health-panel,#status-ai-health'))return;
+    closeAiStatusHealth(false);
+  },true);
+  document.addEventListener('keydown',event=>{
+    const panel=$('status-ai-health-panel');
+    if(event.key==='Escape'&&panel&&panel.classList.contains('open')){
+      event.preventDefault();event.stopPropagation();closeAiStatusHealth(true);
+    }
+  },true);
+  // Language tables are declared later in this bundle. Defer the first
+  // localized snapshot until the current script has finished initializing.
+  setTimeout(updateAiStatusHealth,0);
+}
+window.aiStatusHealthSnapshot=updateAiStatusHealth;
+window.toggleAiStatusHealth=toggleAiStatusHealth;
+window.closeAiStatusHealth=closeAiStatusHealth;
 
 function quickInputPayloadState(data){
   const base=isPlainObject(data&&data.state)?data.state:{};
@@ -8206,13 +8440,19 @@ en:{
   confirm_delete_entry:'Delete permanently? This cannot be undone.',deleted_entry:'Deleted',
   go_to_line:'Go to Line...',run_selection:'Run Selection',new_terminal:'New Terminal',system_info:'System Info',about:'About',
   chat:'Assistant',explorer:'Explorer',tools:'Engine Tools',extensions:'Extensions',history:'History',instructions:'Instructions',agents_wf:'Agents & Workflows',settings:'Settings',
+  more_views:'More views',ai_health:'AI health',ai_ready:'AI Ready',ai_busy:'AI Busy',ai_attention:'AI Attention',ai_error:'AI Error',language_services:'Language services',editor_action:'Editor action',editor_surfaces:'Editor surfaces',approval_label:'Approval',context_window:'Context window',usage_label:'Usage',cancel_editor_action:'Cancel editor action',
   send:'Send',stop:'Stop',ask_placeholder:'Ask anything... (/ commands, @ context, # tools)',
   agents:'Agents',workflows:'Workflows',new_agent:'New Agent',new_wf:'New Workflow',
   model:'Model',quick_actions:'Quick Actions',
   welcome_title:'SAO AI Editor',welcome_desc:'Multi-model LLM · Tool Calling · Streaming',
   welcome_settings:'Configure your API key in',welcome_settings_link:'⚙ Settings',
   prompt_explain:'Explain this codebase',prompt_write:'Write a Python script',prompt_debug:'Help me debug an error',prompt_summarize:'Summarize the current file',
-  no_api_key:'No API key configured.',open_settings:'Open Settings',
+  no_api_key:'No API key configured.',open_settings:'Open Settings',configure_provider:'Configure Provider',s_secret_saved:'Saved securely — enter a new value to replace it',s_clear_secret:'Clear',
+  attach_context:'Attach Context',attach_image:'Attach Image',composer_hint:'Enter to send, Shift+Enter for newline, / commands, @ context, # tools.',
+  agent_default:'Agent: Default',agent_named:'Agent: $1',agent_default_desc:'Use the default assistant behavior',
+  workflow_off:'Workflow: Off',workflow_on:'Workflow: On',workflow_custom:'Workflow: Custom',workflow_named:'Workflow: $1',
+  session_local:'Local',session_request:'$1 req',session_requests:'$1 reqs',session_running:'running',session_draft:'draft',session_context:'context',
+  settings_categories:'Settings categories',
   ready:'Ready',thinking:'Thinking...',agent_mode:'Agent',
   installed:'INSTALLED',marketplace:'MARKETPLACE',search_ext:'Search Extensions in Marketplace',
   user_instructions:'User Instructions',inst_placeholder:'Add custom instructions that apply to every conversation...',
@@ -8298,7 +8538,7 @@ en:{
   s_prefer_cli:'Prefer Claude Code CLI',s_skip_perms:'Skip permissions',
   s_codex:'Codex',s_transport:'Transport',
   s_mcp_policy:'MCP Policy',s_tool_access:'Tool Access',s_name_collisions:'Name Collisions',
-  s_discover_mcp:'Discover configured MCP servers',s_autostart_mcp:'Autostart MCP servers',
+  s_discover_mcp:'Discover configured MCP servers',s_trust_workspace_mcp:'Trust workspace MCP configuration',s_trust_workspace_mcp_help:'Allows this workspace and plugin manifests to launch configured MCP commands.',s_autostart_mcp:'Autostart MCP servers',
   s_mcp_sampling:'Allow MCP server sampling',s_mcp_servers:'MCP Servers',s_add:'+ Add',
   s_terminal:'Terminal Profile',s_profile_name:'Profile Name',s_shell_cmd:'Shell Command',
   s_timeout:'Timeout (sec)',s_output_limit:'Output Limit',s_shell_args:'Shell Args (one per line)',
@@ -8441,13 +8681,19 @@ zh:{
   confirm_delete_entry:'确定永久删除？此操作无法撤销。',deleted_entry:'已删除',
   go_to_line:'转到行...',run_selection:'运行选中代码',new_terminal:'新建终端',system_info:'系统信息',about:'关于',
   chat:'助手',explorer:'资源管理器',tools:'引擎工具',extensions:'扩展',history:'历史记录',instructions:'自定义指令',agents_wf:'代理 & 工作流',settings:'设置',
+  more_views:'更多视图',ai_health:'AI 健康详情',ai_ready:'AI 就绪',ai_busy:'AI 忙碌',ai_attention:'AI 需要注意',ai_error:'AI 错误',language_services:'语言服务',editor_action:'编辑器操作',editor_surfaces:'编辑器界面',approval_label:'审批',context_window:'上下文窗口',usage_label:'用量',cancel_editor_action:'取消编辑器操作',
   send:'发送',stop:'停止',ask_placeholder:'输入问题... (/ 命令, @ 上下文, # 工具)',
   agents:'代理',workflows:'工作流',new_agent:'新建代理',new_wf:'新建工作流',
   model:'模型',quick_actions:'快捷操作',
   welcome_title:'SAO AI Editor',welcome_desc:'多模型 LLM · 工具调用 · 流式输出',
   welcome_settings:'在',welcome_settings_link:'⚙ 设置',
   prompt_explain:'解释这个代码库',prompt_write:'写一个 Python 脚本',prompt_debug:'帮我调试一个错误',prompt_summarize:'总结当前文件',
-  no_api_key:'未配置 API Key。',open_settings:'打开设置',
+  no_api_key:'未配置 API Key。',open_settings:'打开设置',configure_provider:'配置模型服务',s_secret_saved:'已安全保存；输入新值可替换',s_clear_secret:'清除',
+  attach_context:'添加上下文',attach_image:'添加图片',composer_hint:'Enter 发送，Shift+Enter 换行；支持 / 命令、@ 上下文和 # 工具。',
+  agent_default:'代理：默认',agent_named:'代理：$1',agent_default_desc:'使用默认助手行为',
+  workflow_off:'工作流：关闭',workflow_on:'工作流：开启',workflow_custom:'工作流：自定义',workflow_named:'工作流：$1',
+  session_local:'本地',session_request:'$1 次请求',session_requests:'$1 次请求',session_running:'运行中',session_draft:'草稿',session_context:'上下文',
+  settings_categories:'设置分类',
   ready:'就绪',thinking:'思考中...',agent_mode:'代理',
   installed:'已安装',marketplace:'应用市场',search_ext:'在应用市场搜索扩展',
   user_instructions:'用户指令',inst_placeholder:'添加适用于所有对话的自定义指令...',
@@ -8518,7 +8764,7 @@ zh:{
   s_prefer_cli:'优先使用 Claude Code CLI',s_skip_perms:'跳过权限',
   s_codex:'Codex',s_transport:'传输方式',
   s_mcp_policy:'MCP 策略',s_tool_access:'工具访问',s_name_collisions:'名称冲突',
-  s_discover_mcp:'发现已配置的 MCP 服务器',s_autostart_mcp:'自动启动 MCP 服务器',
+  s_discover_mcp:'发现已配置的 MCP 服务器',s_trust_workspace_mcp:'信任工作区 MCP 配置',s_trust_workspace_mcp_help:'允许当前工作区和插件清单启动所配置的 MCP 命令。',s_autostart_mcp:'自动启动 MCP 服务器',
   s_mcp_sampling:'允许 MCP 服务器采样',s_mcp_servers:'MCP 服务器',s_add:'+ 添加',
   s_terminal:'终端配置',s_profile_name:'配置名',s_shell_cmd:'Shell 命令',
   s_timeout:'超时 (秒)',s_output_limit:'输出限制',s_shell_args:'Shell 参数 (每行一个)',
@@ -8706,7 +8952,10 @@ function setLang(lang,options){
     if(el.tagName==='INPUT'||el.tagName==='TEXTAREA'){el.placeholder=t(k)}
     else{el.textContent=t(k)}
   });
-  document.querySelectorAll('[data-i18n-title]').forEach(el=>{el.title=t(el.dataset.i18nTitle)});
+  document.querySelectorAll('[data-i18n-title]').forEach(el=>{
+    const label=t(el.dataset.i18nTitle);el.title=label;
+    if(el.hasAttribute('aria-label'))el.setAttribute('aria-label',label);
+  });
   // Refresh welcome if visible
   const wm=$('chat-welcome-msg');if(wm){wm.remove();renderWelcome()}
   // Persist
@@ -8717,6 +8966,7 @@ function setLang(lang,options){
   document.title=t('welcome_title');
   if(typeof updateModeUI==='function')updateModeUI();
   if(typeof renderChatControlOptions==='function')renderChatControlOptions();
+  if(typeof updateAiStatusHealth==='function')updateAiStatusHealth();
   localizeDynamicUi();
   // Only re-fetch agents/workflows on a real user-initiated language switch
   // (opts.persist!==false, e.g. toggleLang()). The two silent boot-time
@@ -9995,9 +10245,11 @@ function renderAssistantSessionState(){
   const panel=$('chat-panel');
   const req=assistantSessionState.requestCount;
   const ctx=(assistantSessionState.context||[]).length;
-  const suffix=assistantSessionState.requestInProgress?' running':assistantSessionState.inputHasText?' draft':ctx?' ctx':'';
+  const suffix=assistantSessionState.requestInProgress?t('session_running'):assistantSessionState.inputHasText?t('session_draft'):ctx?t('session_context'):'';
   if(chip){
-    chip.textContent=(assistantSessionState.type==='local'?'Local':assistantSessionState.type)+' - '+req+' req'+(req===1?'':'s')+suffix;
+    const typeLabel=assistantSessionState.type==='local'?t('session_local'):assistantSessionState.type;
+    const requestLabel=tf(req===1?'session_request':'session_requests',req);
+    chip.textContent=typeLabel+' · '+requestLabel+(suffix?' · '+suffix:'');
     chip.title='Session: '+assistantSessionResource()
       +'\nProvider: '+(assistantSessionState.provider||'-')
       +'\nModel: '+(assistantSessionState.model||'-')
@@ -13220,6 +13472,8 @@ function assistantControlPopupSnapshot(kind){
     customModelCount:kind==='model'?options.filter(option=>String(option.textContent||'').toLowerCase().includes('custom endpoint')).length:0,
     oldModePopupPresent:kind==='mode'&&!!$('mode-popup'),
     modeActionCount:kind==='mode'?options.filter(option=>option.dataset.mode||option.dataset.approval).length:0,
+    modeValues:kind==='mode'?options.map(option=>String(option.dataset.mode||'')).filter(Boolean):[],
+    approvalValues:kind==='mode'?options.map(option=>String(option.dataset.approval||'')).filter(Boolean):[],
     workflowModeCount:kind==='workflow'?options.filter(option=>option.dataset.workflowMode).length:0,
     workflowModeStrip:kind==='workflow'&&!!(popup&&popup.querySelector('.workflow-mode-strip')),
     workflowModeToolbar:kind==='workflow'&&!!(popup&&popup.querySelector('.workflow-mode-toolbar')),
@@ -13710,7 +13964,7 @@ async function runAssistantUiSelfCheck(opts){
   assistantUiSelfCheckRecord(checks,'composer-edit-target-highlight-ready',composerInteractions.editHighlighted&&composerInteractions.editCleared&&composerInteractions.editInput==='edit selfcheck request',JSON.stringify(composerInteractions));
   assistantUiSelfCheckRecord(checks,'composer-attachment-summary-ready',composerInteractions.attachHeader&&composerInteractions.attachCounts.total===2&&composerInteractions.attachCounts.images===1&&composerInteractions.attachCounts.files===1,JSON.stringify(composerInteractions));
   assistantUiSelfCheckRecord(checks,'composer-queue-state-ready',composerInteractions.queueClass&&composerInteractions.queueCount===1&&composerInteractions.queuedMessage,JSON.stringify(composerInteractions));
-  assistantUiSelfCheckRecord(checks,'composer-summary-shortcuts-ready',composerInteractions.shortcutButtonCount>=6&&composerInteractions.shortcutText.includes('minimal fix')&&composerInteractions.summaryChipCount>=7&&composerInteractions.summaryDatasetReady&&composerInteractions.copyContextReady&&composerInteractions.clearDraftReady,JSON.stringify(composerInteractions));
+  assistantUiSelfCheckRecord(checks,'composer-summary-shortcuts-ready',composerInteractions.shortcutButtonCount===5&&composerInteractions.shortcutText.includes('minimal fix')&&composerInteractions.summaryChipCount>=7&&composerInteractions.summaryDatasetReady,JSON.stringify(composerInteractions));
   assistantUiSelfCheckRecord(checks,'composer-anchor-context-ready',composerInteractions.anchorButtonReady&&composerInteractions.atAnchorReady&&composerInteractions.anchorAttached&&composerInteractions.anchorPillReady&&composerInteractions.anchorSummaryReady&&composerInteractions.anchorNativeReady&&composerInteractions.anchorQueuedReady,JSON.stringify(composerInteractions));
   const previousCustomModels=config.custom_models;
   config.custom_models={...(config.custom_models||{}),'custom-endpoint-model':{max_input:64000,max_output:4096,provider:config.provider||'openai'}};
@@ -13754,7 +14008,7 @@ async function runAssistantUiSelfCheck(opts){
   assistantUiSelfCheckRecord(checks,'model-popup-custom-endpoint-models-ready',modelPopup.shown&&modelPopup.customModelCount>=1&&modelPopup.visibleText.includes('custom-endpoint-model')&&modelPopup.visibleText.toLowerCase().includes('custom endpoint'),JSON.stringify(modelPopup));
   assistantUiSelfCheckRecord(checks,'model-popup-custom-endpoint-selection-ready',customEndpointModelPicker.provider==='openai'&&customEndpointModelPicker.rowIds.includes('custom-endpoint-setting-model')&&customEndpointModelPicker.rowIds.includes('custom-endpoint-setting-alt')&&customEndpointModelPicker.rowIds.includes('custom-endpoint-configured-model')&&customEndpointModelPicker.rowIds.includes('custom-endpoint-fetched-model')&&customEndpointModelPicker.firstRow==='custom-endpoint-setting-model'&&customEndpointModelPicker.endpointBeforeFetched&&customEndpointModelPicker.configuredBeforeFetched&&customEndpointModelPicker.preferred==='custom-endpoint-setting-model'&&customEndpointModelPicker.firstRowWithoutSetting==='custom-endpoint-configured-model'&&customEndpointModelPicker.preferredWithoutSetting==='custom-endpoint-configured-model'&&customEndpointModelPicker.optionCount>=4&&customEndpointModelPicker.customModelCount>=4&&customEndpointModelPicker.keyboardReady,JSON.stringify(customEndpointModelPicker));
   assistantUiSelfCheckRecord(checks,'composer-native-selects-hidden',layout.nativeHidden===true,JSON.stringify(layout.nativeControls));
-  assistantUiSelfCheckRecord(checks,'mode-popup-custom-control-ready',modePopup.shown&&modePopup.optionCount>=6&&modePopup.modeActionCount>=6&&modePopup.keyboardReady&&!modePopup.oldModePopupPresent&&modePopup.visibleText.includes('Agent')&&modePopup.visibleText.includes('Default Approvals'),JSON.stringify(modePopup));
+  assistantUiSelfCheckRecord(checks,'mode-popup-custom-control-ready',modePopup.shown&&modePopup.optionCount>=6&&modePopup.modeActionCount>=6&&modePopup.keyboardReady&&!modePopup.oldModePopupPresent&&modePopup.modeValues.includes('agent')&&modePopup.approvalValues.includes('default'),JSON.stringify(modePopup));
   assistantUiSelfCheckRecord(checks,'control-popup-rects-unclipped',[providerPopup,modelPopup,agentPopup,modePopup,workflowPopup].every(s=>s.shown&&s.display==='block'&&s.rectReady&&s.opensAboveTrigger&&s.notToolbarClipped&&!s.className.includes('mode-popup')),JSON.stringify({providerPopup,modelPopup,agentPopup,modePopup,workflowPopup}));
   assistantUiSelfCheckRecord(checks,'agent-popup-configured-agents-ready',agentPopup.shown&&agentPopup.optionCount>=6&&agentPopup.focusableCount===agentPopup.optionCount&&agentPopup.keyboardReady&&agentPopup.agentAnchorCount>=5&&agentPopup.agentBuiltinFallbackCount>=5&&agentPopup.agentDefaultSelectableCount===0&&agentPopup.visibleText.includes('Code Reviewer')&&agentPopup.visibleText.includes('Debugger'),JSON.stringify(agentPopup));
   assistantUiSelfCheckRecord(checks,'visual-composer-centered-three-line-ready',visualLayout.ok&&visualLayout.composerCentered&&visualLayout.composerTwoThirdsWide&&visualLayout.composerThreeLineHeight&&visualLayout.inputThreeLineHeight&&visualLayout.composerBottomFilled,JSON.stringify(visualLayout));
@@ -13896,6 +14150,7 @@ function assistantComposerLayoutSnapshot(){
 function assistantVisualLayoutSnapshot(){
   renderChatControlPopups();
   if(typeof updateContextUsage==='function')updateContextUsage(totalTokens||0);
+  if(typeof updateAiStatusHealth==='function')updateAiStatusHealth();
   const panel=$('chat-panel');
   const area=document.querySelector('.chat-input-area');
   const container=$('chat-input-container');
@@ -13915,9 +14170,11 @@ function assistantVisualLayoutSnapshot(){
   const statusCtxText=$('status-context-text');
   const statusTokens=$('status-tokens');
   const statusModel=$('status-model');
+  const statusHealth=$('status-ai-health');
+  const statusHealthContext=$('status-ai-health-context');
   const rect=el=>{if(!el)return null;const r=el.getBoundingClientRect();return {top:Math.round(r.top),left:Math.round(r.left),right:Math.round(r.right),bottom:Math.round(r.bottom),width:Math.round(r.width),height:Math.round(r.height)}};
   const cssPx=value=>{const n=parseFloat(String(value||'0'));return Number.isFinite(n)?n:0};
-  const panelRect=rect(panel),areaRect=rect(area),containerRect=rect(container),toolbarRect=rect(toolbar),controlsRect=rect(controls),trailingRect=rect(trailing),metaRect=rect(meta),headRect=rect(head),summaryRect=rect(summary),shortcutsRect=rect(shortcuts),modelChipRect=rect(modelChip),ctxRingRect=rect(ctxRing),statusCtxRect=rect(statusCtx);
+  const panelRect=rect(panel),areaRect=rect(area),containerRect=rect(container),toolbarRect=rect(toolbar),controlsRect=rect(controls),trailingRect=rect(trailing),metaRect=rect(meta),headRect=rect(head),summaryRect=rect(summary),shortcutsRect=rect(shortcuts),modelChipRect=rect(modelChip),ctxRingRect=rect(ctxRing),statusCtxRect=rect(statusCtx),statusHealthRect=rect(statusHealth);
   const areaStyle=area?getComputedStyle(area):null;
   const contentLeft=areaRect?areaRect.left+cssPx(areaStyle&&areaStyle.paddingLeft):0;
   const contentRight=areaRect?areaRect.right-cssPx(areaStyle&&areaStyle.paddingRight):0;
@@ -13954,6 +14211,7 @@ function assistantVisualLayoutSnapshot(){
   const summaryStyle=summary?getComputedStyle(summary):null;
   const modelChipStyle=modelChip?getComputedStyle(modelChip):null;
   const statusCtxStyle=statusCtx?getComputedStyle(statusCtx):null;
+  const statusHealthStyle=statusHealth?getComputedStyle(statusHealth):null;
   const statusModelStyle=statusModel?getComputedStyle(statusModel):null;
   const compactSamples=typeof assistantCompactNumber==='function'
     ? [assistantCompactNumber(999),assistantCompactNumber(1200),assistantCompactNumber(2500000),assistantCompactNumber(4300000000)]
@@ -13966,6 +14224,8 @@ function assistantVisualLayoutSnapshot(){
     estimate:String(ctxEstimate&&ctxEstimate.textContent||''),
     statusLabel:String(statusCtxText&&statusCtxText.textContent||''),
     statusEstimate:String(statusTokens&&statusTokens.textContent||''),
+    healthLabel:String(statusHealth&&statusHealth.textContent||'').replace(/\s+/g,' ').trim(),
+    healthContext:String(statusHealthContext&&statusHealthContext.textContent||'').trim(),
     cssPercent:String(ctxUsage&&ctxUsage.style&&ctxUsage.style.getPropertyValue('--ctx-percent')||''),
     statusCssPercent:String(statusCtx&&statusCtx.style&&statusCtx.style.getPropertyValue('--ctx-percent')||''),
     compactSamples
@@ -14003,7 +14263,10 @@ function assistantVisualLayoutSnapshot(){
     contextWindow,
     contextRingReady:!!(ctxUsage&&ctxRing&&ctxRingRect&&ctxRingRect.width>=14&&contextWindow.cssPercent&&String(ctxRing.getAttribute('aria-hidden')||'')==='true'),
     contextTokenCompactReady:contextWindow.label.includes('CW ')&&contextWindow.estimate.endsWith('tok')&&compactSamples.join(',')==='999,1.2K,2.5M,4.3B',
-    statusContextReady:!!(statusCtx&&statusCtxStyle&&['flex','inline-flex'].includes(statusCtxStyle.display)&&statusCtxRect&&statusCtxRect.width>0&&contextWindow.statusLabel.includes('CW ')&&contextWindow.statusEstimate.endsWith('tok')&&contextWindow.statusCssPercent),
+    statusContextReady:!!(
+      (statusCtx&&statusCtxStyle&&['flex','inline-flex'].includes(statusCtxStyle.display)&&statusCtxRect&&statusCtxRect.width>0&&contextWindow.statusLabel.includes('CW ')&&contextWindow.statusEstimate.endsWith('tok')&&contextWindow.statusCssPercent)
+      ||(statusHealth&&statusHealthStyle&&statusHealthStyle.display!=='none'&&statusHealthRect&&statusHealthRect.width>0&&contextWindow.healthLabel.includes('AI')&&contextWindow.healthContext===contextWindow.statusLabel.replace(/^CW\s*/i,''))
+    ),
     triggers,
     buttonSurfaceReady:triggers.every(item=>item.exists&&item.tag==='button'&&item.radius>=10&&item.width>18&&item.height>=20),
     triggerMotionReady:triggers.every(item=>item.transition.includes('border-color')&&item.transition.includes('background')),
@@ -14085,7 +14348,7 @@ function assistantComposerInteractionSnapshot(){
     shortcutText=applyAssistantPromptShortcut('fix');
     renderAssistantComposerSummary();
     summaryChipCount=summary?summary.querySelectorAll('.chat-composer-summary-chip').length:0;
-    summaryDatasetReady=!!(panel&&panel.dataset.chatComposerStatus==='draft'&&Number(panel.dataset.chatComposerDraftLength||0)>0&&panel.dataset.chatComposerShortcut==='fix');
+    summaryDatasetReady=!!(panel&&['draft','queued'].includes(panel.dataset.chatComposerStatus)&&Number(panel.dataset.chatComposerDraftLength||0)>0&&panel.dataset.chatComposerShortcut==='fix');
     copyContextReady=typeof copyAssistantComposerContext==='function'&&assistantComposerContextText().includes('Provider:')&&assistantComposerContextText().includes('Draft chars:');
     clearDraftReady=clearAssistantDraft()&&!!(input&&input.value==='');
   }finally{
@@ -25688,9 +25951,43 @@ async function refreshScmSidebar(force){
   scmStableProviders(providers).forEach(provider=>renderScmProvider(list,provider));
   _scmLoaded=true;
 }
+function positionActivityOverflow(){
+  const toggle=$('activity-more-toggle'),menu=$('activity-overflow-menu');
+  if(!toggle||!menu||!menu.classList.contains('open'))return;
+  const rect=toggle.getBoundingClientRect();
+  const width=Math.max(200,menu.offsetWidth||218),height=Math.max(80,menu.offsetHeight||260);
+  const left=Math.min(Math.max(6,rect.right+5),Math.max(6,window.innerWidth-width-8));
+  const top=Math.min(Math.max(8,rect.top),Math.max(8,window.innerHeight-height-8));
+  menu.style.left=Math.round(left)+'px';menu.style.top=Math.round(top)+'px';
+}
+function closeActivityOverflow(restoreFocus){
+  const toggle=$('activity-more-toggle'),menu=$('activity-overflow-menu');
+  if(menu)menu.classList.remove('open');
+  if(toggle)toggle.setAttribute('aria-expanded','false');
+  if(restoreFocus&&toggle){try{toggle.focus({preventScroll:true})}catch(_e){toggle.focus()}}
+}
+function toggleActivityOverflow(event){
+  if(event){event.preventDefault();event.stopPropagation()}
+  const toggle=$('activity-more-toggle'),menu=$('activity-overflow-menu');
+  if(!toggle||!menu)return false;
+  const opening=!menu.classList.contains('open');
+  closeActivityOverflow(false);
+  if(!opening)return false;
+  menu.classList.add('open');toggle.setAttribute('aria-expanded','true');
+  positionActivityOverflow();
+  return true;
+}
+function syncActivityOverflowSelection(panel){
+  const toggle=$('activity-more-toggle'),menu=$('activity-overflow-menu');
+  if(!toggle||!menu)return;
+  const selected=Array.from(menu.querySelectorAll('.ab-icon[data-panel]')).some(item=>item.dataset.panel===panel);
+  toggle.classList.toggle('active',selected);
+}
 function switchSidebar(panel){
   if(typeof _activeSidebarPanel!=='undefined')_activeSidebarPanel=panel;
   document.querySelectorAll('.ab-icon').forEach(i=>{i.classList.toggle('active',i.dataset.panel===panel)});
+  syncActivityOverflowSelection(panel);
+  closeActivityOverflow(false);
   document.querySelectorAll('.sb-view').forEach(v=>v.style.display='none');
   const view=$('sb-'+panel);if(view)view.style.display='flex';
   if(panel==='settings'){openSettings();return}
@@ -25755,6 +26052,29 @@ document.querySelectorAll('.ab-icon[data-panel],.ab-icon[data-command]').forEach
     _activeSidebarPanel=panel;switchSidebar(panel);_saveLayoutImmediate();
   });
 });
+{
+  const toggle=$('activity-more-toggle'),menu=$('activity-overflow-menu');
+  if(toggle)toggle.addEventListener('keydown',event=>{
+    if(event.key==='ArrowDown'){
+      event.preventDefault();toggleActivityOverflow(event);
+      const first=menu&&menu.querySelector('.ab-icon[data-panel]');if(first)first.focus();
+    }
+  });
+  if(menu)menu.addEventListener('click',event=>{
+    if(event.target&&event.target.closest&&event.target.closest('.ab-icon[data-panel]'))setTimeout(()=>closeActivityOverflow(false),0);
+  });
+  document.addEventListener('pointerdown',event=>{
+    if(menu&&menu.classList.contains('open')&&!(event.target&&event.target.closest&&event.target.closest('.activity-overflow')))closeActivityOverflow(false);
+  },true);
+  document.addEventListener('keydown',event=>{
+    if(event.key==='Escape'&&menu&&menu.classList.contains('open')){
+      event.preventDefault();event.stopPropagation();closeActivityOverflow(true);
+    }
+  },true);
+  window.addEventListener('resize',positionActivityOverflow);
+}
+window.toggleActivityOverflow=toggleActivityOverflow;
+window.closeActivityOverflow=closeActivityOverflow;
 
 let _premiumLoaded=false;
 async function loadPremiumGuide(force){
@@ -28650,9 +28970,14 @@ function renderWorkflowResultSummary(body,result,launch){
   addResultAction('Copy summary',()=>workflowResultCopySummary(card),false);
   addResultAction('Collapse',button=>workflowResultToggleCard(card,button),false).setAttribute('aria-expanded','true');
   card.appendChild(actions);
-  if(result&&(result.error||result.cancelled)){
+  const resultMessage=result&&(
+    result.error
+    ||(status==='error'&&steps.find(step=>step&&step.error)&&steps.find(step=>step&&step.error).error)
+    ||(result.cancelled&&(result.message||'Workflow cancelled'))
+  );
+  if(resultMessage){
     const msg=document.createElement('div');msg.className='workflow-result-message';
-    msg.textContent=String(result.error||result.message||'Workflow cancelled');
+    msg.textContent=String(resultMessage);
     card.appendChild(msg);
   }
   steps.forEach((step,index)=>{
@@ -30676,6 +31001,7 @@ function rememberWebviewRuntime(viewId,data){
     webviewEvidence:{...(existing.webviewEvidence||{}),...incomingEvidence},
     html:data.html!==undefined?data.html:existing.html,
     state:data.state!==undefined?data.state:existing.state,
+    token:data.token||data.webviewToken||existing.token||existing.webviewToken||'',
     source:data.source||existing.source||'event',
     viewType:data.view_type||data.viewType||existing.viewType||existing.view_type||'',
     title:data.title||data.name||existing.title||existing.name||'',
@@ -31923,10 +32249,11 @@ function _injectWebviewHtml(container,viewId,html,initialState){
   const runtimeOptions=webviewRuntimeOptions(runtime);
   // Clear existing content
   container.innerHTML='';
-  // Generate a unique token for this webview iframe
-  var token=(typeof crypto!=='undefined'&&crypto.getRandomValues)?
+  // Use the backend-registered nonce. The random fallback keeps isolated DOM
+  // self-checks functional but cannot pass the Python trust boundary.
+  var token=String(previousRuntime.token||previousRuntime.webviewToken||'')||((typeof crypto!=='undefined'&&crypto.getRandomValues)?
     Array.from(crypto.getRandomValues(new Uint8Array(16)),b=>b.toString(16).padStart(2,'0')).join(''):
-    Math.random().toString(36).slice(2)+Date.now().toString(36);
+    Math.random().toString(36).slice(2)+Date.now().toString(36));
   _webviewTokens[viewId]=token;
   delete container.dataset.webviewFallback;
   container.classList.add('provider-webview-host');
@@ -32090,7 +32417,7 @@ window.addEventListener('message',function(e){
       lastMessageSeq:inboundSeq
     });
     if(window.pywebview&&window.pywebview.api&&window.pywebview.api.webview_post_message){
-      window.pywebview.api.webview_post_message(viewId,msg);
+      window.pywebview.api.webview_post_message(viewId,msg,tok);
     }
     return;
   }
@@ -33503,10 +33830,54 @@ async function showModelInfo(){
   if(r&&r.max_input){el.innerHTML='Context: <b>'+Math.round(r.max_input/1000)+'K</b> input · <b>'+Math.round(r.max_output/1000)+'K</b> output · Compress at <b>'+Math.round(r.compact_at/1000)+'K</b>'}
   else{el.textContent='Custom model — default 128K context. Add via Custom Models below.'}
 }
+let _settingsOpenHydrationEpoch=0;
+function settingsHydrationState(state,message){
+  const modal=$('settings-modal'),status=$('settings-hydration-status');
+  if(!modal)return;
+  modal.dataset.settingsHydration=String(state||'');
+  if(state==='shell')modal.setAttribute('aria-busy','true');
+  else modal.removeAttribute('aria-busy');
+  if(status)status.textContent=String(message||'');
+}
+function scheduleSettingsOpenHydration(epoch){
+  let completed=false,fallbackTimer=0;
+  const run=()=>{
+    if(completed)return;completed=true;if(fallbackTimer)clearTimeout(fallbackTimer);
+    const modal=$('settings-modal');
+    if(!modal||!modal.classList.contains('open')||epoch!==_settingsOpenHydrationEpoch)return;
+    try{hydrateSettingsAfterOpen(epoch)}catch(error){
+      settingsHydrationState('error','Settings could not be loaded.');
+      console.error('[settings hydrate]',error);
+      showToast('Settings could not be loaded: '+String(error&&error.message||error),'error',4200);
+    }
+  };
+  fallbackTimer=setTimeout(run,120);
+  if(typeof requestAnimationFrame==='function')requestAnimationFrame(()=>requestAnimationFrame(()=>setTimeout(run,0)));
+  else setTimeout(run,24);
+}
 function openSettings(){
   const _settingsOpenT0=performance.now();
+  const modal=$('settings-modal');if(!modal)return false;
+  if(typeof setSettingsMobileNav==='function')setSettingsMobileNav(false,{restoreFocus:false});
+  if(modal.classList.contains('open')){
+    if(modal.dataset.settingsHydration==='shell')return true;
+    const search=$('settings-search');if(search){try{search.focus({preventScroll:true})}catch(_e){search.focus()}}
+    return true;
+  }
+  const epoch=++_settingsOpenHydrationEpoch;
+  settingsHydrationState('shell','Loading settings…');
+  modal.dataset.settingsShellVisibleAt=String(Date.now());
+  modal.classList.add('open');
+  recordAiEditorPerfSample('settingsOpenVisible',performance.now()-_settingsOpenT0);
+  syncSettingsViewportFit('open-shell');
+  scheduleSettingsOpenHydration(epoch);
+  return true;
+}
+function hydrateSettingsAfterOpen(_settingsHydrationEpochValue){
+  const _settingsHydrateT0=performance.now(),_settingsModal=$('settings-modal');
+  if(!_settingsModal||!_settingsModal.classList.contains('open')||_settingsHydrationEpochValue!==_settingsOpenHydrationEpoch)return false;
   Object.assign(config,withSettingsDefaults(config));
-  $('s-provider').value=config.provider;$('s-apikey').value=config.api_key;
+  $('s-provider').value=config.provider;prepareProtectedSecretInput('s-apikey',config.api_key);
   $('s-baseurl').value=config.base_url;$('s-model').value=config.model;
   $('s-temp').value=config.temperature;$('s-maxtok').value=config.max_tokens;
   $('s-sysprompt').value=config.system_prompt;$('s-status').textContent='';
@@ -33581,9 +33952,9 @@ function openSettings(){
   renderSettingsLanguageOverridePanel();
   // Provider keys
   const keys=config._provider_keys||config.provider_keys||{};
-  if($('sk-openai'))$('sk-openai').value=keys.openai||'';
-  if($('sk-anthropic'))$('sk-anthropic').value=keys.anthropic||'';
-  if($('sk-deepseek'))$('sk-deepseek').value=keys.deepseek||'';
+  prepareProtectedSecretInput('sk-openai',keys.openai||'');
+  prepareProtectedSecretInput('sk-anthropic',keys.anthropic||'');
+  prepareProtectedSecretInput('sk-deepseek',keys.deepseek||'');
   // Advanced params
   if($('s-topp'))$('s-topp').value=config.top_p??1.0;
   if($('s-freqp'))$('s-freqp').value=config.frequency_penalty??0;
@@ -33605,7 +33976,7 @@ function openSettings(){
   refreshProviderCliStatus('codex');
   const mcp=settingSection('mcp');
   setSelectValue('s-mcp-access',mcp.access,'prompt');setSelectValue('s-mcp-collision',mcp.collision_behavior,'first');
-  setCheckedValue('s-mcp-discovery',mcp.discovery_enabled!==false);setCheckedValue('s-mcp-autostart',mcp.autostart===true);setCheckedValue('s-mcp-sampling',mcp.server_sampling===true);
+  setCheckedValue('s-mcp-discovery',mcp.discovery_enabled!==false);setCheckedValue('s-mcp-workspace-trusted',mcp.workspace_trusted===true);setCheckedValue('s-mcp-autostart',mcp.autostart===true);setCheckedValue('s-mcp-sampling',mcp.server_sampling===true);
   const term=settingSection('terminal');
   setInputValue('s-term-profile',term.profile);setInputValue('s-term-shell',term.shell_path);setInputValue('s-term-args',listToText(term.shell_args));
   setInputValue('s-term-timeout',term.timeout??30);setInputValue('s-term-output',term.output_limit??8000);
@@ -33653,10 +34024,14 @@ function openSettings(){
   installSettingsScrollSync();
   settingsApplyDensity(settingsReadDensity());
   settingsApplyDetails(settingsReadDetails());
-  $('settings-modal').classList.add('open');
-  recordAiEditorPerfSample('settingsOpenVisible',performance.now()-_settingsOpenT0);
-  syncSettingsViewportFit('open');
+  if(_settingsHydrationEpochValue!==_settingsOpenHydrationEpoch||!_settingsModal.classList.contains('open'))return false;
+  _settingsModal.dataset.settingsHydratedAt=String(Date.now());
+  settingsHydrationState('hydrated','Settings loaded.');
+  recordAiEditorPerfSample('settingsOpenHydrated',performance.now()-_settingsHydrateT0);
+  syncSettingsViewportFit('open-hydrated');
+  _settingsModal.dispatchEvent(new CustomEvent('settingshydrated',{detail:{epoch:_settingsHydrationEpochValue}}));
   setTimeout(()=>{
+    if(_settingsHydrationEpochValue!==_settingsOpenHydrationEpoch||!_settingsModal.classList.contains('open'))return;
     syncSettingsViewportFit('open-settle');
     renderSettingsSectionOverviews();
     filterSettings();renderSettingsNav();
@@ -33668,12 +34043,16 @@ function openSettings(){
       try{search.focus({preventScroll:true})}catch(e){try{search.focus()}catch(_e){}}
     }
   },0);
+  return true;
 }
 function openSettingsTarget(target,search){
   openSettings();
+  const expectedEpoch=_settingsOpenHydrationEpoch;
   const wanted=String(target||'user').toLowerCase();
   const safeTarget=['user','workspace','extensions'].includes(wanted)?wanted:'user';
   const apply=()=>{
+    const liveModal=$('settings-modal');
+    if(!liveModal||!liveModal.classList.contains('open')||expectedEpoch!==_settingsOpenHydrationEpoch)return;
     selectSettingsTarget(safeTarget,{preserveSearch:true,focusSearch:true,persist:true});
     if(search!==undefined&&search!==null){
       const input=$('settings-search');
@@ -33681,8 +34060,9 @@ function openSettingsTarget(target,search){
     }
     focusSettingsSearch();
   };
-  apply();
-  setTimeout(apply,0);
+  const modal=$('settings-modal');
+  if(modal&&modal.dataset.settingsHydration==='hydrated')apply();
+  else if(modal)modal.addEventListener('settingshydrated',apply,{once:true});
   return safeTarget;
 }
 function settingsAllRows(){
@@ -33728,14 +34108,16 @@ function settingsResetCloseGuard(){
 }
 function closeSettings(options){
   const opts=options||{};
-  if(!opts.force&&!settingsArmDiscardClose('close'))return false;
+  const modal=$('settings-modal'),hydrating=!!(modal&&modal.dataset.settingsHydration==='shell');
+  if(!opts.force&&!hydrating&&!settingsArmDiscardClose('close'))return false;
   // Flush any pending debounced auto-save; inputs stay in the DOM after the
   // modal hides, so the async save still reads the final values.
   try{flushSettingsAutoSave()}catch(e){}
-  const modal=$('settings-modal');
+  _settingsOpenHydrationEpoch++;
   if(modal){
     modal.classList.remove('open');
     delete modal.dataset.settingsDiscardArmed;
+    settingsHydrationState('closed','');
   }
   settingsShowRowDetails(null);
   return true;
@@ -34414,8 +34796,14 @@ function renderSettingsNav(){
   commandbar.className='settings-nav-commandbar';
   commandbar.id='settings-nav-commandbar';
   commandbar.dataset.settingsCommandSurface='sidebar';
-  const dirty=$('settings-dirty-summary');
-  if(dirty)commandbar.appendChild(dirty);
+  const dirtySource=$('settings-dirty-summary');
+  if(dirtySource){
+    const dirty=dirtySource.cloneNode(true);
+    dirty.id='settings-nav-dirty-summary';
+    dirty.removeAttribute('aria-live');
+    dirty.setAttribute('aria-hidden','true');
+    commandbar.appendChild(dirty);
+  }
   const addCommand=(label,icon,title,handler,primary)=>{
     const btn=document.createElement('button');
     btn.type='button';
@@ -35085,7 +35473,7 @@ function settingsUiSelfCheckSnapshot(){
     hasWorkbenchHeaderContext:!!(route&&route.textContent&&typeof renderSettingsWorkbenchHeader==='function'&&typeof settingsWorkbenchContextLabel==='function'),
     hasSettingsToolbarStrip:!!document.querySelector('.settings-toolbar-strip .settings-top-action.primary'),
     hasIconOnlySettingsToolbar:iconActions.length>=3&&iconActions.every(btn=>btn.getAttribute('aria-label')&&btn.title&&String(btn.textContent||'').trim().length<=2),
-    hasInlineDetailsToggle:!!(inlineDetailsToggle&&inlineDetailsToggle.getAttribute('aria-label')==='Toggle settings details'),
+    hasInlineDetailsToggle:!!(inlineDetailsToggle&&String(inlineDetailsToggle.getAttribute('aria-label')||'').trim()&&String(inlineDetailsToggle.getAttribute('onclick')||'').includes('settingsToggleDetails')),
     hasDefaultHiddenInlineDetailsToggle:!!(settingsFrame&&settingsFrame.classList.contains('settings-vscode-calm')&&!settingsFrame.classList.contains('settings-details-open')&&inlineDetailsToggle&&String(getComputedStyle(inlineDetailsToggle).display)==='none'),
     hasHiddenDefaultTitlebar:!!(settingsTitlebar&&settingsFrame&&settingsFrame.classList.contains('settings-vscode-calm')&&!settingsFrame.classList.contains('settings-details-open')&&String(getComputedStyle(settingsTitlebar).display)==='none'),
     hasSettingsJumpbar:!!(jumpbar&&jumpbar.getAttribute('role')==='toolbar'&&jumpButtons.length>=7),
@@ -35286,9 +35674,9 @@ function settingsUiSelfCheckSnapshot(){
     hasDetailValueMatrix:!!(detailMatrix&&detailMatrix.querySelector('[data-settings-detail-value-row="current"]')),
     hasDetailValueMatrixRows:!!(detailMatrix&&detailMatrix.querySelector('[data-settings-detail-value-row="inherited"]')&&detailMatrix.querySelector('[data-settings-detail-value-row="default"]')&&detailMatrix.querySelector('[data-settings-detail-value-row="json"]')),
     hasDetailValueMatrixActions:!!(detailMatrix&&Array.from(detailMatrix.querySelectorAll('button')).some(btn=>String(btn.textContent||'')==='Use')&&Array.from(detailMatrix.querySelectorAll('button')).some(btn=>String(btn.textContent||'')==='Copy')),
-    hasDetailTargetNote:!!(detailTargetNote&&/Editing|Extension|Local|Viewing/.test(detailTargetNote.textContent||'')),
+    hasDetailTargetNote:!!(detailTargetNote&&detailTargetNote.dataset.settingsDetailTarget&&['extension','builtin','local'].includes(detailTargetNote.dataset.settingsDetailKind||'')),
     hasDetailValueActions:['Copy Value','Copy JSON','Use Default','Use Inherited','Clear Override'].every(label=>detailActionLabels.includes(label)),
-    hasDetailSaveRevertActions:['Save Setting','Revert Setting'].every(label=>detailActionLabels.includes(label)),
+    hasDetailSaveRevertActions:detailActionLabels.includes('Revert Setting')&&!!(footerSave&&String(footerSave.getAttribute('onclick')||'').includes('saveSettings')),
     hasDetailCopyLinkAction:detailActionLabels.includes('Copy Link'),
     hasExperienceBar:!!(experienceBar&&experienceBar.querySelector('.experience-chip')&&experienceBar.querySelector('.experience-actions button')),
     hasExperienceScopeChip:!!(experienceBar&&/User|Workspace|Extensions/.test(experienceBar.textContent||'')),
@@ -35410,6 +35798,7 @@ window.settingsMoveNavFocus=settingsMoveNavFocus;
 window.settingsFocusNavBoundary=settingsFocusNavBoundary;
 window.settingsRefreshRowsAccessibility=settingsRefreshRowsAccessibility;
 window.settingsUiSelfCheckSnapshot=settingsUiSelfCheckSnapshot;
+window.settingsToggleDetails=settingsToggleDetails;
 window.settingsToggleDensity=settingsToggleDensity;
 window.settingsToggleQueryHelp=settingsToggleQueryHelp;
 window.renderSettingsRowMatchSummaries=renderSettingsRowMatchSummaries;
@@ -37308,7 +37697,7 @@ async function testConn(){
   const s=$('s-status');s.textContent='Testing...';s.style.color='var(--fg-dim)';
   const payload={
     provider:$('s-provider').value,
-    api_key:$('s-apikey').value,
+    api_key:protectedSecretValue('s-apikey'),
     base_url:$('s-baseurl').value,
     model:$('s-model').value,
     transport:config.transport||'chat_completions',
@@ -37378,7 +37767,8 @@ async function saveSettings(options){
   const validationErrors=validateSettingsBeforeSave({focusFirst:!auto});
   if(validationErrors.length)return;
   Object.assign(config,withSettingsDefaults(config));
-  config.provider=$('s-provider').value;config.api_key=$('s-apikey').value;
+  config.provider=$('s-provider').value;config.api_key=protectedSecretValue('s-apikey');
+  config._clear_api_key=$('s-apikey').dataset.secretClear==='1';
   config.base_url=$('s-baseurl').value;config.model=$('s-model').value;
   config.temperature=readNumberValue('s-temp',0.7,false);config.max_tokens=readNumberValue('s-maxtok',4096,true);
   config.system_prompt=$('s-sysprompt').value;
@@ -37394,14 +37784,17 @@ async function saveSettings(options){
   config.extra_body=readJsonObjectValue('s-xbody',{});
   // Collect provider keys
   config._provider_keys={
-    openai:($('sk-openai')?$('sk-openai').value:''),
-    anthropic:($('sk-anthropic')?$('sk-anthropic').value:''),
-    deepseek:($('sk-deepseek')?$('sk-deepseek').value:''),
+    openai:protectedSecretValue('sk-openai'),
+    anthropic:protectedSecretValue('sk-anthropic'),
+    deepseek:protectedSecretValue('sk-deepseek'),
   };
+  config._clear_provider_keys=[
+    ['openai','sk-openai'],['anthropic','sk-anthropic'],['deepseek','sk-deepseek']
+  ].filter(([,id])=>$(id)&&$(id).dataset.secretClear==='1').map(([provider])=>provider);
   config.provider_keys=config._provider_keys;
   config.claude_code={...settingSection('claude_code'),cli_path:readInputValue('s-cc-cli'),model:readInputValue('s-cc-model'),cli_args:readListValue('s-cc-args',false),prefer_cli:readCheckedValue('s-cc-prefer-cli'),allow_dangerously_skip_permissions:readCheckedValue('s-cc-skip-permissions')};
   config.codex={...settingSection('codex'),cli_path:readInputValue('s-codex-cli'),model:readInputValue('s-codex-model'),transport:readInputValue('s-codex-transport')||'chat_completions',cli_args:readListValue('s-codex-args',false)};
-  config.mcp={...settingSection('mcp'),access:readInputValue('s-mcp-access')||'prompt',collision_behavior:readInputValue('s-mcp-collision')||'first',discovery_enabled:readCheckedValue('s-mcp-discovery'),autostart:readCheckedValue('s-mcp-autostart'),server_sampling:readCheckedValue('s-mcp-sampling')};
+  config.mcp={...settingSection('mcp'),access:readInputValue('s-mcp-access')||'prompt',collision_behavior:readInputValue('s-mcp-collision')||'first',discovery_enabled:readCheckedValue('s-mcp-discovery'),workspace_trusted:readCheckedValue('s-mcp-workspace-trusted'),autostart:readCheckedValue('s-mcp-autostart'),server_sampling:readCheckedValue('s-mcp-sampling')};
   config.terminal={...settingSection('terminal'),profile:readInputValue('s-term-profile')||'PowerShell 7 (No Profile)',shell_path:readInputValue('s-term-shell'),shell_args:readListValue('s-term-args',false),timeout:readNumberValue('s-term-timeout',30,true),output_limit:readNumberValue('s-term-output',8000,true),use_pty:readCheckedValue('s-term-use-pty')};
   const workspaceRootInput=readInputValue('s-workspace-root');
   config.workspace={...settingSection('workspace'),root:workspaceRootInput,configured_root:workspaceRootInput,resolved_root:currentWorkspaceRoot(),roots:readListValue('s-workspace-roots',false),recent_roots:workspaceRecentRoots(),auto_detect:readCheckedValue('s-workspace-auto'),remember_last:readCheckedValue('s-workspace-remember'),last_root:currentWorkspaceRoot()};
@@ -37482,6 +37875,7 @@ async function saveSettings(options){
     if(saveResult&&saveResult.applied)showToast(t('s_save_partial'),'warning',3600);
     return;
   }
+  finalizeProtectedSecretSave();
   const status=$('s-status');
   if(status){status.textContent=auto?t('s_autosaved'):t('s_saved');status.style.color='var(--fg-success)';}
   settingsApplyTargetUpdateResults(targetUpdates);
@@ -37789,8 +38183,9 @@ function customEndpointSettingModelRows(provider){
   const pid=String(provider||config.provider||'').trim();
   const modelInput=$('s-model');
   const baseInput=$('s-baseurl');
-  const quickModel=$('model-inp');
-  const model=String((modelInput&&modelInput.value)||(quickModel&&quickModel.value)||activeModelValue()||'').trim();
+  // The sidebar's legacy model input is inert and hidden. Letting its stale
+  // value win here made a cleared Settings model reappear in the picker.
+  const model=String((modelInput&&modelInput.value)||activeModelValue()||'').trim();
   const base=String((baseInput&&baseInput.value)||config.base_url||'').trim();
   if(!isCustomEndpointConfigured(pid,base))return [];
   if(isPlaceholderModelValue(model))return [];
@@ -38098,15 +38493,16 @@ function renderChatControlPopups(){
   if(agentTrigger&&agentLabelEl){
     const agentRows=agentOptionRows();
     const active=activeAgentId?agentRows.find(a=>controlItemId(a)===activeAgentId):null;
-    agentLabelEl.textContent=activeAgentId?'Agent: '+(controlItemName(active)||activeAgentId):'Agent: Default';
-    agentTrigger.title=activeAgentId?'Active agent: '+(controlItemName(active)||activeAgentId):'Active agent: Default';
+    const activeAgentName=controlItemName(active)||activeAgentId;
+    agentLabelEl.textContent=activeAgentId?tf('agent_named',activeAgentName):t('agent_default');
+    agentTrigger.title=agentLabelEl.textContent;
     agentTrigger.classList.toggle('active',!!activeAgentId);
     agentTrigger.classList.toggle('muted',!activeAgentId);
     agentTrigger.onkeydown=e=>handleChatControlPopupKeydown(e,'agent');
   }
   if(agentPopup){
     agentPopup.innerHTML='';
-    agentPopup.appendChild(chatControlPopupItem('agent',{id:'',name:'Agent: Default',description:'Use the default assistant behavior',icon:'○'},!activeAgentId));
+    agentPopup.appendChild(chatControlPopupItem('agent',{id:'',name:t('agent_default'),description:t('agent_default_desc'),icon:'○'},!activeAgentId));
     const agentRows=agentOptionRows();
     if(agentRows.length){
       const sep=document.createElement('div');sep.className='mode-popup-sep';agentPopup.appendChild(sep);
@@ -38179,9 +38575,10 @@ function renderChatControlPopups(){
   const workflowId=wfSel?String(wfSel.value||''):'';
   const workflowMode=normalizeWorkflowMode(assistantWorkflowMode);
   if(workflowTrigger&&workflowLabelEl){
-    const label=workflowMode==='off'?'Workflow: Off':workflowMode==='custom'?'Workflow: Custom':(workflowId?assistantSelectedWorkflowLabel():'Workflow: On');
-    workflowLabelEl.textContent=label||'Workflow';
-    workflowTrigger.title=workflowMode==='custom'?'Workflow: Custom':workflowMode==='off'?'Workflow: Off':(workflowId?'Workflow: '+label:'Workflow: On');
+    const selectedWorkflow=assistantSelectedWorkflowLabel();
+    const label=workflowMode==='off'?t('workflow_off'):workflowMode==='custom'?t('workflow_custom'):(workflowId?tf('workflow_named',selectedWorkflow):t('workflow_on'));
+    workflowLabelEl.textContent=label||t('workflows');
+    workflowTrigger.title=label||t('workflows');
     workflowTrigger.classList.toggle('muted',workflowMode==='off');
     workflowTrigger.onkeydown=e=>handleChatControlPopupKeydown(e,'workflow');
   }
@@ -38189,9 +38586,9 @@ function renderChatControlPopups(){
     workflowPopup.innerHTML='';
     const modeStrip=document.createElement('div');
     modeStrip.className='workflow-mode-strip';
-    modeStrip.appendChild(workflowModePopupItem('off','Off','Plain chat',workflowMode==='off'));
-    modeStrip.appendChild(workflowModePopupItem('on','On','Use preset',workflowMode==='on'));
-    modeStrip.appendChild(workflowModePopupItem('custom','Custom','Use prompt',workflowMode==='custom'));
+    modeStrip.appendChild(workflowModePopupItem('off',t('workflow_off'),'',workflowMode==='off'));
+    modeStrip.appendChild(workflowModePopupItem('on',t('workflow_on'),'',workflowMode==='on'));
+    modeStrip.appendChild(workflowModePopupItem('custom',t('workflow_custom'),'',workflowMode==='custom'));
     workflowPopup.appendChild(modeStrip);
     workflowPopup.appendChild(workflowModeToolbar(workflowMode));
     workflowPopup.appendChild(chatControlPopupItem('workflow',{id:'',name:'No preset workflow',description:'Keep workflow mode but clear the preset selection',icon:'○',steps:[]},!workflowId));
@@ -41885,11 +42282,6 @@ function renderExtensionLanguageDefaults(languageDefaults,container,categorySele
       appendExtensionSettingExperimentBadge(head,experimentMeta);
       appendExtensionSettingAgentsWindowBadge(head,agentsMeta);
       appendExtensionSettingTagBadges(head,schema);
-      if(isHiddenSetting){
-        const hiddenEl=document.createElement('span');hiddenEl.className='ext-setting-hidden-badge';hiddenEl.textContent='Hidden';
-        hiddenEl.title='Excluded from the VS Code configuration registry';
-        head.appendChild(hiddenEl);
-      }
       if(schema.restricted===true){
         const restrictedEl=document.createElement('span');restrictedEl.className='ext-setting-scope-badge';restrictedEl.textContent='Restricted';
         head.appendChild(restrictedEl);
@@ -47878,6 +48270,8 @@ function activateExtensionActivityItem(item){
   _activeSidebarPanel=panel;
   reportExtensionActivityVisibilityForPanel(panel,true);
   document.querySelectorAll('.ab-icon').forEach(i=>{i.classList.toggle('active',i.dataset.panel===panel)});
+  syncActivityOverflowSelection(panel);
+  closeActivityOverflow(false);
   document.querySelectorAll('.sb-view').forEach(v=>v.style.display='none');
   const view=$('sb-ext-viewcontainer');
   if(view){
@@ -52456,6 +52850,17 @@ window.submitAssistantQuestionCarousel=()=>assistantSubmitCurrentQuestionCarouse
 window.clearAssistantPendingActionTray=(kind)=>{assistantClearPendingActionTray(kind?{kind:String(kind)}:{});return true;};
 
 // ── Welcome screen with suggested prompts ──
+function openProviderSettingsFromWelcome(){
+  openSettings();
+  requestAnimationFrame(()=>{
+    if(typeof selectSettingsTarget==='function')selectSettingsTarget('user',{preserveSearch:true});
+    requestAnimationFrame(()=>{
+      if(typeof scrollToSettingsSection==='function')scrollToSettingsSection('assistant');
+      const keyInput=$('s-apikey');
+      if(keyInput){keyInput.scrollIntoView({block:'center'});keyInput.focus({preventScroll:true})}
+    });
+  });
+}
 function renderWelcome(){
   const existing=$('chat-welcome-msg');if(existing)return existing;
   const container=ensureChatMessagesInner();if(!container)return null;
@@ -52482,17 +52887,25 @@ function renderWelcome(){
     prompts.appendChild(btn);
   });
   const actions=w.querySelector('.chat-welcome-actions');
-  [
-    {label:t('new_chat_action'),cls:'primary',fn:()=>newChat()},
-    {label:'Attach Context',fn:()=>openChatContextPicker()},
-    {label:t('settings'),fn:()=>openSettings()},
-  ].forEach(item=>{
+  const missingProviderKey=!config.api_key&&config.provider!=='ollama';
+  const welcomeActions=missingProviderKey
+    ?[
+      {label:t('configure_provider'),cls:'primary',fn:()=>openProviderSettingsFromWelcome()},
+      {label:t('new_chat_action'),fn:()=>newChat()},
+      {label:t('attach_context'),fn:()=>openChatContextPicker()},
+    ]
+    :[
+      {label:t('new_chat_action'),cls:'primary',fn:()=>newChat()},
+      {label:t('attach_context'),fn:()=>openChatContextPicker()},
+      {label:t('settings'),fn:()=>openSettings()},
+    ];
+  welcomeActions.forEach(item=>{
     const btn=document.createElement('button');btn.type='button';btn.className='chat-welcome-action'+(item.cls?' '+item.cls:'');
     btn.textContent=item.label;btn.onclick=item.fn;actions.appendChild(btn);
   });
   const note=document.createElement('div');
   note.className='chat-empty-note';
-  note.textContent='Enter to send, Shift+Enter for newline, / commands, @ context, # tools.';
+  note.textContent=t('composer_hint');
   w.appendChild(note);
   container.appendChild(w);
   return w;
@@ -57150,7 +57563,7 @@ if(window.pywebview){
 
   #settings-modal.open .settings-vscode-calm .settings-control-frame {
     width: 100% !important;
-    max-width: min(760px, 100%) !important;
+    max-width: 760px !important;
     box-sizing: border-box;
   }
 
@@ -57269,6 +57682,270 @@ if(window.pywebview){
     display: none !important;
   }
 </style>
+<style id="ai-editor-responsive-ux-css">
+  .assistant-legacy-model-controls { display:none !important; }
+  .titlebar .title { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .main,.content,.right-sidebar,#right-panels,.right-panel,.chat-panel { min-width:0; }
+  .activity-bar { overflow-x:hidden; overflow-y:auto; scrollbar-width:none; }
+  .activity-bar::-webkit-scrollbar { width:0; height:0; }
+
+  /* Frequent controls remain compact, but no longer require pixel-perfect pointing. */
+  .chat-composer-action { width:28px; height:28px; }
+  .send-btn { width:30px; height:30px; }
+  .chat-chip,.chat-select-chip,.chat-model-inline,.chat-run-chip { height:28px; line-height:26px; }
+  .chat-control-trigger { min-height:28px; }
+  .chat-prompt-shortcut { min-height:28px; }
+  .settings-row-action,.settings-query-clear { min-width:28px; width:28px; height:28px; }
+  .settings-secret-clear {
+    min-width:44px;
+    min-height:28px;
+    padding:3px 8px;
+    border:1px solid var(--border);
+    border-radius:var(--radius);
+    background:var(--bg3);
+    color:var(--fg-muted-text,var(--fg));
+    cursor:pointer;
+  }
+  .settings-vscode-calm .settings-top-action[data-settings-icon-action="1"],
+  .settings-vscode-calm .settings-result-nav button { min-width:28px; width:28px; height:28px; }
+
+  .statusbar { min-width:0; overflow:hidden; }
+  .statusbar > .sb-item { flex:0 0 auto; white-space:nowrap; }
+  .statusbar #status-text { min-width:0; max-width:260px; flex:0 1 auto; overflow:hidden; text-overflow:ellipsis; }
+  .statusbar .sb-ext-left,.statusbar .sb-ext-right { min-width:0; overflow:hidden; flex:0 1 auto; }
+  .settings-mobile-nav-toggle,.settings-mobile-nav-backdrop { display:none; }
+
+  @media (max-width:1100px) {
+    .chat-toolbar { grid-template-columns:minmax(0,1fr); align-items:stretch; row-gap:6px; white-space:normal; }
+    .chat-control-strip { width:100%; max-width:100%; min-width:0; flex-wrap:wrap; }
+    .chat-composer-trailing { width:100%; margin-left:0; justify-content:flex-start; flex-wrap:wrap; white-space:normal; }
+    .chat-composer-meta { min-width:0; max-width:100%; margin-left:auto; flex:1 1 210px; }
+    #status-indent,#status-encoding,#status-eol,
+    #status-language-service,#status-editor-surface.ready,#status-editor-action.idle { display:none !important; }
+  }
+
+  @media (max-width:900px) {
+    .lsplitter { display:none !important; }
+    .right-sidebar { min-width:0; }
+    .right-sidebar.has-editor { width:45%; min-width:0; max-width:55%; }
+    #status-approval,#status-model,#status-tokens,#status-context-usage { display:none !important; }
+
+    #settings-modal.open:has(.settings-vscode-calm) {
+      --settings-viewport-gap:16px;
+      --settings-available-height:calc(100dvh - 16px);
+      padding:8px !important;
+    }
+    #settings-modal.open .modal.settings-modal.settings-vscode-calm {
+      width:calc(100vw - 16px) !important;
+      max-width:calc(100vw - 16px) !important;
+      height:calc(100dvh - 16px) !important;
+      max-height:calc(100dvh - 16px) !important;
+    }
+    #settings-modal.open .settings-vscode-calm .settings-shell,
+    #settings-modal.open .settings-vscode-calm .settings-shell.inspecting {
+      position:relative !important;
+      grid-template-columns:minmax(0,1fr) !important;
+      background:var(--bg) !important;
+    }
+    #settings-modal.open .settings-vscode-calm .settings-main {
+      grid-column:1 !important;
+      min-width:0 !important;
+      width:100% !important;
+      padding:44px 18px 20px !important;
+      overflow-x:hidden !important;
+    }
+    #settings-modal.open .settings-vscode-calm .settings-nav {
+      display:block !important;
+      position:absolute !important;
+      inset:0 auto 0 0 !important;
+      z-index:14 !important;
+      width:min(320px, calc(100% - 48px)) !important;
+      min-width:0 !important;
+      max-width:320px !important;
+      height:100% !important;
+      padding:44px 12px 14px 18px !important;
+      border-right:1px solid var(--border) !important;
+      background:var(--bg) !important;
+      box-shadow:12px 0 30px #00000055 !important;
+      transform:translateX(-105%);
+      visibility:hidden;
+      pointer-events:none;
+      transition:transform var(--motion-base) var(--ease-emphasized),visibility 0s linear var(--motion-base);
+    }
+    #settings-modal.settings-mobile-nav-open .settings-vscode-calm .settings-nav {
+      transform:translateX(0);
+      visibility:visible;
+      pointer-events:auto;
+      transition-delay:0s;
+    }
+    #settings-modal.open .settings-mobile-nav-toggle {
+      position:absolute;
+      top:8px;
+      left:8px;
+      z-index:16;
+      display:inline-flex !important;
+      align-items:center;
+      justify-content:center;
+      width:30px !important;
+      min-width:30px !important;
+      height:30px !important;
+      padding:0 !important;
+      border-color:color-mix(in srgb,var(--border) 78%,transparent);
+      background:color-mix(in srgb,var(--bg3) 94%,transparent);
+      box-shadow:0 2px 10px #00000024;
+    }
+    #settings-modal.open .settings-floating-close { top:8px; right:8px; z-index:16; height:30px; }
+    #settings-modal.settings-mobile-nav-open .settings-mobile-nav-backdrop {
+      position:absolute;
+      inset:0;
+      z-index:13;
+      display:block;
+      width:100%;
+      height:100%;
+      padding:0;
+      border:0;
+      background:#00000052;
+      cursor:default;
+    }
+    #settings-modal.open .settings-vscode-calm .settings-inspector {
+      position:absolute;
+      inset:40px 0 0 auto;
+      z-index:12;
+      width:min(360px,100%);
+      min-width:0;
+      box-shadow:-12px 0 30px #00000055;
+    }
+    #settings-modal.open .modal-btns { flex-wrap:wrap; gap:5px; padding:7px 10px; }
+    #settings-modal.open .settings-footer-summary { order:-1; flex:1 1 100%; min-width:0; max-width:none; height:18px; }
+    #settings-modal.open .settings-vscode-calm .settings-control-frame,
+    #settings-modal.open .settings-vscode-calm .settings-section,
+    #settings-modal.open .settings-vscode-calm .ext-setting-row { min-width:0 !important; max-width:100% !important; }
+  }
+
+  @media (max-width:720px) {
+    .tb-menu-item:not(.app-icon):not(:nth-child(2)):not(:nth-child(5)) { display:none; }
+    .titlebar .title { max-width:110px; }
+    .tb-btn { width:38px; }
+    .chat-input-area { padding:6px 6px 8px; width:100%; max-width:100%; }
+    .chat-input-area > div { width:100%; max-width:100%; }
+    .chat-input-container { min-height:0; }
+    .chat-toolbar { padding:0 7px 7px; }
+    .chat-control-strip {
+      display:grid !important;
+      grid-template-columns:repeat(3,minmax(0,1fr));
+      gap:5px;
+      width:100% !important;
+      min-width:0 !important;
+      max-width:100% !important;
+    }
+    .chat-control-menu,#chat-provider-menu,#chat-model-menu,#chat-agent-menu,#chat-workflow-menu {
+      width:auto !important;
+      min-width:0 !important;
+      max-width:none !important;
+      flex-basis:auto !important;
+    }
+    .chat-control-trigger,
+    .chat-control-trigger.provider,.chat-control-trigger.model,.chat-control-trigger.agent,
+    .chat-control-trigger.mode,.chat-control-trigger.workflow,.chat-model-inline {
+      width:100% !important;
+      min-width:0 !important;
+      max-width:100% !important;
+      inline-size:auto !important;
+      min-inline-size:0 !important;
+      max-inline-size:100% !important;
+      flex-basis:auto !important;
+    }
+    .chat-run-chip { width:100%; min-width:0; }
+    .chat-control-popup { min-width:min(260px, calc(100vw - 24px)); max-width:calc(100vw - 24px); }
+    .chat-composer-meta { justify-content:flex-start; }
+    .ctx-usage { min-width:96px; }
+    .ctx-token-estimate { display:none; }
+    #status-cursor,#status-language,#status-mode,.statusbar .sb-ext-right { display:none !important; }
+    .statusbar { padding:0 4px; }
+    .statusbar #status-text { max-width:none; }
+
+    #settings-modal.open .settings-vscode-calm .settings-main { padding:44px 10px 16px !important; }
+    #settings-modal.open .settings-vscode-calm .settings-field.builtin-setting { padding:10px 34px 11px 8px !important; }
+    #settings-modal.open .settings-vscode-calm .settings-built-head {
+      grid-template-columns:minmax(0,1fr) !important;
+      grid-template-areas:"title" "category" "key" "state" !important;
+      gap:3px !important;
+    }
+    #settings-modal.open .settings-vscode-calm .settings-built-head-category { max-width:100% !important; }
+    #settings-modal.open .settings-vscode-calm .settings-built-head-state { margin-left:0 !important; max-width:100% !important; }
+    #settings-modal.open .settings-grid,#settings-modal.open .settings-option-grid { grid-template-columns:minmax(0,1fr) !important; }
+    #settings-modal.open .settings-target-tabs { flex-wrap:wrap; }
+    #settings-modal.open .modal-btns button[data-i18n="s_kbd_shortcuts"],
+    #settings-modal.open .modal-btns button[data-i18n="s_test"] { display:none !important; }
+  }
+
+  @media (max-height:500px) {
+    .chat-prompt-shortcuts,.chat-empty-note,.welcome-prompts,
+    .chat-welcome-mark,.chat-welcome-title,.chat-welcome-meta,.chat-welcome-desc { display:none !important; }
+    .chat-welcome { min-height:0; justify-content:flex-start; padding:6px 10px; }
+    .chat-welcome-warning { margin:0 0 4px; }
+    .chat-welcome-actions { margin-top:2px; }
+    .chat-input-area { padding-top:4px; padding-bottom:5px; }
+    .chat-input-row { min-height:44px; }
+    .chat-input { min-height:44px; max-height:72px; padding-top:8px; padding-bottom:7px; }
+  }
+</style>
+<script id="ai-editor-responsive-ux-runtime">
+(function(){
+  "use strict";
+  function compactSettings(){ return !!(window.matchMedia&&window.matchMedia('(max-width: 900px)').matches); }
+  function setSettingsMobileNav(open,options){
+    var opts=options&&typeof options==='object'?options:{};
+    var modal=document.getElementById('settings-modal');
+    var nav=document.getElementById('settings-nav');
+    var toggle=document.getElementById('settings-mobile-nav-toggle');
+    var backdrop=document.getElementById('settings-mobile-nav-backdrop');
+    if(!modal||!nav||!toggle)return false;
+    var next=!!open&&compactSettings()&&modal.classList.contains('open');
+    modal.classList.toggle('settings-mobile-nav-open',next);
+    toggle.setAttribute('aria-expanded',next?'true':'false');
+    if(backdrop)backdrop.setAttribute('aria-hidden',next?'false':'true');
+    if(compactSettings()&&!next)nav.setAttribute('inert','');
+    else nav.removeAttribute('inert');
+    if(next&&opts.focus!==false){
+      setTimeout(function(){
+        var focusTarget=nav.querySelector('#settings-search, .settings-nav-item.active, .settings-nav-item, button');
+        if(focusTarget)focusTarget.focus({preventScroll:true});
+      },0);
+    }else if(!next&&opts.restoreFocus!==false&&compactSettings()){
+      toggle.focus({preventScroll:true});
+    }
+    return next;
+  }
+  function toggleSettingsMobileNav(){
+    var modal=document.getElementById('settings-modal');
+    return setSettingsMobileNav(!(modal&&modal.classList.contains('settings-mobile-nav-open')));
+  }
+  window.setSettingsMobileNav=setSettingsMobileNav;
+  window.toggleSettingsMobileNav=toggleSettingsMobileNav;
+  document.addEventListener('click',function(event){
+    var modal=document.getElementById('settings-modal');
+    if(!modal||!modal.classList.contains('settings-mobile-nav-open'))return;
+    if(event.target&&event.target.closest&&event.target.closest('#settings-nav .settings-nav-item')){
+      setTimeout(function(){setSettingsMobileNav(false,{restoreFocus:false});},0);
+    }
+  },true);
+  document.addEventListener('keydown',function(event){
+    var modal=document.getElementById('settings-modal');
+    if(event.key==='Escape'&&modal&&modal.classList.contains('settings-mobile-nav-open')){
+      event.preventDefault();event.stopImmediatePropagation();setSettingsMobileNav(false);
+    }
+  },true);
+  window.addEventListener('resize',function(){
+    var modal=document.getElementById('settings-modal');
+    if(!modal)return;
+    if(!compactSettings())setSettingsMobileNav(false,{restoreFocus:false});
+    else if(modal.classList.contains('open')&&!modal.classList.contains('settings-mobile-nav-open')){
+      var nav=document.getElementById('settings-nav');if(nav)nav.setAttribute('inert','');
+    }
+  });
+})();
+</script>
 <script id="ai-editor-settings-health">
 (function(){
   "use strict";
@@ -57299,6 +57976,12 @@ if(window.pywebview){
     var nav = document.getElementById("settings-nav");
     var main = document.getElementById("settings-main");
     var shell = document.querySelector("#settings-modal.open .settings-shell");
+    var modal = document.getElementById("settings-modal");
+    var mobileToggle = document.getElementById("settings-mobile-nav-toggle");
+    var compactViewport = !!(window.matchMedia && window.matchMedia("(max-width: 900px)").matches);
+    var mobileToggleRect = mobileToggle ? mobileToggle.getBoundingClientRect() : null;
+    var mobileToggleVisible = !!(mobileToggleRect && mobileToggleRect.width > 1 && mobileToggleRect.height > 1);
+    var mobileDrawerOpen = !!(modal && modal.classList.contains("settings-mobile-nav-open"));
     var navItems = nav ? Array.prototype.slice.call(nav.querySelectorAll(".settings-nav-item")) : [];
     var visibleNavItems = navItems.filter(function(item){
       try{
@@ -57311,13 +57994,16 @@ if(window.pywebview){
     });
     var navRect = nav ? nav.getBoundingClientRect() : null;
     var mainRect = main ? main.getBoundingClientRect() : null;
-    var columnsOverlap = !!(navRect && mainRect && navRect.right > mainRect.left + 2);
+    var rawColumnsOverlap = !!(navRect && mainRect && navRect.right > mainRect.left + 2);
+    var columnsOverlap = rawColumnsOverlap && !(compactViewport && mobileDrawerOpen);
     var navSearchbar = nav ? nav.querySelector(":scope > #settings-searchbar") : null;
     var navSearchbarRect = navSearchbar ? navSearchbar.getBoundingClientRect() : null;
     var navSearchbarVisible = !!(navSearchbarRect && navSearchbarRect.width > 1 && navSearchbarRect.height > 1);
-    var readableColumns = !!(navRect && mainRect && navRect.width >= 260 && mainRect.width >= 520 && !columnsOverlap);
-    var navUsable = !!(navRect && navRect.width >= 280 && visibleNavItems.length > 0);
-    var mainUsable = !!(mainRect && mainRect.width >= 620);
+    var mobileNavAvailable = compactViewport && mobileToggleVisible && navItems.length > 0;
+    var readableColumns = !!(navRect && mainRect && navRect.width >= 260 && mainRect.width >= 520 && !columnsOverlap)
+      || !!(compactViewport && mainRect && mainRect.width >= 280 && mobileNavAvailable);
+    var navUsable = !!(navRect && navRect.width >= 280 && visibleNavItems.length > 0) || mobileNavAvailable;
+    var mainUsable = !!(mainRect && mainRect.width >= (compactViewport ? 280 : 620));
     var shellColumns = shell ? String(getComputedStyle(shell).gridTemplateColumns || "").split(" ").filter(Boolean) : [];
     try{ search = typeof settingsSearchDomSnapshot === "function" ? settingsSearchDomSnapshot() : null; }catch(_err){}
     try{ review = typeof settingsComputeReviewState === "function" ? settingsComputeReviewState() : null; }catch(_err){}
@@ -57353,6 +58039,10 @@ if(window.pywebview){
       columnsOverlap: columnsOverlap,
       navHasSearchbar: !!navSearchbar,
       navSearchbarVisible: navSearchbarVisible,
+      compactViewport: compactViewport,
+      mobileNavAvailable: mobileNavAvailable,
+      mobileDrawerOpen: mobileDrawerOpen,
+      mobileToggleVisible: mobileToggleVisible,
       readableColumns: readableColumns,
       navUsable: navUsable,
       mainUsable: mainUsable,
@@ -57385,6 +58075,8 @@ if(window.pywebview){
       document.body.dataset.settingsHealthColumnsOverlap = String(snap.columnsOverlap);
       document.body.dataset.settingsHealthNavHasSearchbar = String(snap.navHasSearchbar);
       document.body.dataset.settingsHealthNavSearchbarVisible = String(snap.navSearchbarVisible);
+      document.body.dataset.settingsHealthMobileNavAvailable = String(snap.mobileNavAvailable);
+      document.body.dataset.settingsHealthMobileDrawerOpen = String(snap.mobileDrawerOpen);
       document.body.dataset.settingsHealthReadableColumns = String(snap.readableColumns);
       document.body.dataset.settingsHealthNavUsable = String(snap.navUsable);
       document.body.dataset.settingsHealthMainUsable = String(snap.mainUsable);
@@ -57445,7 +58137,6 @@ if(window.pywebview){
   }
 
   .assistant-toolbar,
-  .chat-toolbar,
   [data-assistant-toolbar] {
     display: flex;
     align-items: center;
@@ -57455,7 +58146,6 @@ if(window.pywebview){
   }
 
   .assistant-toolbar select,
-  .chat-toolbar select,
   [data-assistant-toolbar] select {
     min-width: 64px;
     max-width: 180px;

@@ -72,6 +72,25 @@ class ChatMessage:
         return d
 
 
+@dataclass
+class _RunContext:
+    """Immutable run identity plus per-run cancellation and input state.
+
+    The controller deliberately keeps this private: callers receive ``run_id``
+    from :meth:`ChatController.send`, while the worker uses object identity to
+    reject callbacks and side effects from a retired thread.
+    """
+
+    run_id: str
+    conversation: "Conversation"
+    cancel_event: threading.Event
+    agent_mode: bool = False
+    multimodal_content: Optional[Any] = None
+    thread: Optional[threading.Thread] = None
+    current_assistant: Optional[ChatMessage] = None
+    finished_event: threading.Event = field(default_factory=threading.Event)
+
+
 # ---------------------------------------------------------------------------
 # Conversation
 # ---------------------------------------------------------------------------
@@ -104,7 +123,7 @@ class Conversation:
     def to_api_messages(self) -> List[Dict[str, Any]]:
         with self._lock:
             if self._api_cache is not None and self._api_cache_ver == self._msg_version:
-                return self._api_cache
+                return [dict(message) for message in self._api_cache]
             msgs: List[Dict[str, Any]] = []
             if self.system_prompt:
                 msgs.append({"role": "system", "content": self.system_prompt})
@@ -112,7 +131,7 @@ class Conversation:
                 msgs.append(m.to_api_dict())
             self._api_cache = msgs
             self._api_cache_ver = self._msg_version
-            return list(msgs)
+            return [dict(message) for message in msgs]
 
     def clear(self) -> None:
         with self._lock:
@@ -138,6 +157,7 @@ class ChatController:
     """Drives the send → stream → tool-call → resume loop."""
 
     MAX_TOOL_ROUNDS = 10
+    CANCEL_JOIN_TIMEOUT = 5.0
 
     def __init__(
         self,
@@ -151,6 +171,9 @@ class ChatController:
         # Auto-compress runs at the start of each _run_loop based on token count
         self._running = False
         self._thread: Optional[threading.Thread] = None
+        self._active_run: Optional[_RunContext] = None
+        self._state_lock = threading.RLock()
+        self._lifecycle_lock = threading.RLock()
         self.extra_tools: Optional[List[Dict[str, Any]]] = None  # MCP tools injected by app
         self.mcp_dispatch: Optional[Callable[[str, str], str]] = None  # MCP tool call dispatcher
         self.mcp_tool_requires_confirm: Optional[Callable[[str], bool]] = None
@@ -159,7 +182,10 @@ class ChatController:
         self._disabled_tools: set = set()
         self._tool_result_cache: Dict[str, str] = {}
         self._tool_result_cache_keys: List[str] = []
+        self._tool_result_cache_lock = threading.Lock()
         self._multimodal_override: Optional[Any] = None
+        self._last_save_key: Optional[tuple[str, int]] = None
+        self._last_save_error = ""
 
         # Session-level auto-approve (tool name → always allow for this session)
         self._session_auto_approve: Dict[str, bool] = {}
@@ -179,6 +205,7 @@ class ChatController:
         self.on_tool_confirm: Optional[Callable[[str, str, str], Any]] = None  # call_id, name, args → bool|"always_approve"
         self.on_tool_progress: Optional[Callable[[str, str, float], None]] = None  # call_id, name, progress 0-1
         self.on_error: Optional[Callable[[str], None]] = None
+        self.on_save_error: Optional[Callable[[str], None]] = None
         self.on_idle: Optional[Callable[[], None]] = None
         self.resolve_variable: Optional[Callable[[str], str]] = None  # @mention resolver
 
@@ -189,7 +216,83 @@ class ChatController:
 
     @property
     def is_running(self) -> bool:
-        return self._running
+        with self._state_lock:
+            return self._running
+
+    @property
+    def active_run_id(self) -> Optional[str]:
+        """Return the current public run identifier, if a run is active."""
+        with self._state_lock:
+            run = self._active_run
+            if run is not None and not run.cancel_event.is_set():
+                return run.run_id
+            return None
+
+    def _is_active_run_locked(self, run: _RunContext) -> bool:
+        return self._active_run is run and not run.cancel_event.is_set()
+
+    def _is_active_run(self, run: _RunContext) -> bool:
+        with self._state_lock:
+            return self._is_active_run_locked(run)
+
+    def _add_message_for_run(self, run: _RunContext, message: ChatMessage,
+                             *, current_assistant: bool = False) -> bool:
+        """Append and notify as one cancellation-linearized operation."""
+        with self._state_lock:
+            if not self._is_active_run_locked(run):
+                return False
+            run.conversation.add_message(message)
+            if current_assistant:
+                run.current_assistant = message
+            if self.on_message_added:
+                self.on_message_added(message)
+            return True
+
+    def _start_run(self, user_msg: ChatMessage, *, agent_mode: bool,
+                   multimodal_content: Optional[Any] = None) -> Dict[str, Any]:
+        """Atomically reserve the controller and start one worker."""
+        with self._lifecycle_lock:
+            with self._state_lock:
+                active = self._active_run
+                if active is not None and not active.cancel_event.is_set():
+                    return {
+                        "ok": False,
+                        "accepted": False,
+                        "busy": True,
+                        "run_id": active.run_id,
+                    }
+
+                run = _RunContext(
+                    run_id=uuid.uuid4().hex[:12],
+                    conversation=self.conversation,
+                    cancel_event=threading.Event(),
+                    agent_mode=bool(agent_mode),
+                    multimodal_content=multimodal_content,
+                )
+                thread = threading.Thread(
+                    target=self._run_loop,
+                    args=(run,),
+                    name=f"ai-chat-{run.run_id}",
+                    daemon=True,
+                )
+                run.thread = thread
+                self._active_run = run
+                self._running = True
+                self._thread = thread
+                # Compatibility mirrors for code that still inspects these
+                # private fields.  The worker never relies on them.
+                self._agent_mode = run.agent_mode
+                self._multimodal_override = multimodal_content
+                run.conversation.add_message(user_msg)
+                if self.on_message_added:
+                    self.on_message_added(user_msg)
+                thread.start()
+                return {
+                    "ok": True,
+                    "accepted": True,
+                    "busy": False,
+                    "run_id": run.run_id,
+                }
 
     def _set_tool_state(self, call_id: str, state: ToolInvocationState) -> None:
         """Update the state machine for a tool invocation."""
@@ -211,32 +314,19 @@ class ChatController:
         except TypeError:
             self.on_tool_end(call_id, result, state_value)  # type: ignore[misc]
 
-    def send(self, text: str, agent_mode: bool = False) -> None:
-        if self._running:
-            return
+    def send(self, text: str, agent_mode: bool = False) -> Dict[str, Any]:
         resolved = self._resolve_at_mentions(text)
         user_msg = ChatMessage(role="user", content=resolved)
-        self.conversation.add_message(user_msg)
-        if self.on_message_added:
-            self.on_message_added(user_msg)
-        self._running = True
-        self._agent_mode = agent_mode
-        self._thread = threading.Thread(target=self._run_loop, daemon=True)
-        self._thread.start()
+        return self._start_run(user_msg, agent_mode=agent_mode)
 
     def send_multimodal(self, display_text: str, multimodal_content: Any,
-                        agent_mode: bool = False) -> None:
-        if self._running:
-            return
+                        agent_mode: bool = False) -> Dict[str, Any]:
         user_msg = ChatMessage(role="user", content=display_text)
-        self.conversation.add_message(user_msg)
-        if self.on_message_added:
-            self.on_message_added(user_msg)
-        self._multimodal_override = multimodal_content
-        self._running = True
-        self._agent_mode = agent_mode
-        self._thread = threading.Thread(target=self._run_loop, daemon=True)
-        self._thread.start()
+        return self._start_run(
+            user_msg,
+            agent_mode=agent_mode,
+            multimodal_content=multimodal_content,
+        )
 
     # @-mention variable resolution
     _AT_RE = re.compile(r'@(\w+)')
@@ -264,79 +354,188 @@ class ChatController:
         return self._AT_RE.sub(_replace, text)
 
     def cancel(self) -> None:
-        self._running = False
-        self.engine.cancel()
-        with self._confirm_lock:
-            evt = self._confirm_event
-            if evt is not None:
-                evt.set()
-        if self._thread and self._thread.is_alive():
-            self._thread.join(timeout=5.0)
-            if self._thread.is_alive():
-                self._thread = None
+        with self._lifecycle_lock:
+            with self._state_lock:
+                run = self._active_run
+                thread = run.thread if run is not None else None
+                if run is not None:
+                    self._close_cancelled_run_locked(run)
+                    run.cancel_event.set()
+                    self._active_run = None
+                self._running = False
+                if self._thread is thread:
+                    self._thread = None
+                self._multimodal_override = None
+
+            self.engine.cancel()
+            with self._confirm_lock:
+                evt = self._confirm_event
+                if evt is not None:
+                    evt.set()
+            if (thread is not None and thread.is_alive()
+                    and thread is not threading.current_thread()):
+                thread.join(timeout=self.CANCEL_JOIN_TIMEOUT)
+
+    def _close_cancelled_run_locked(self, run: _RunContext) -> None:
+        """Leave a cancelled conversation in a valid, non-streaming state.
+
+        This method runs synchronously as part of ``cancel`` while the run is
+        still active.  The retired worker is not allowed to perform this
+        cleanup later because a new conversation may already exist by then.
+        """
+        assistant = run.current_assistant
+        if assistant is None:
+            return
+        assistant.is_streaming = False
+        if not assistant.content and not assistant.thinking and not assistant.tool_calls:
+            with run.conversation._lock:
+                try:
+                    run.conversation.messages.remove(assistant)
+                except ValueError:
+                    pass
+                else:
+                    run.conversation._msg_version += 1
+                    run.conversation._api_cache = None
+            return
+
+        with run.conversation._lock:
+            completed_ids = {
+                message.tool_call_id
+                for message in run.conversation.messages
+                if message.role == "tool" and message.tool_call_id
+            }
+        for tool_call in assistant.tool_calls:
+            if tool_call.id in completed_ids:
+                continue
+            result = json.dumps({"error": "Tool execution cancelled"})
+            tool_call.result = result
+            self._set_tool_state(tool_call.id, ToolInvocationState.CANCELLED)
+            tool_msg = ChatMessage(
+                role="tool",
+                content=result,
+                tool_call_id=tool_call.id,
+                tool_name=tool_call.name,
+            )
+            run.conversation.add_message(tool_msg)
+            try:
+                if self.on_message_added:
+                    self.on_message_added(tool_msg)
+                if self.on_tool_end:
+                    self._notify_tool_end(
+                        tool_call.id, tool_call.name, result,
+                        ToolInvocationState.CANCELLED,
+                    )
+            except Exception:
+                pass
 
     MAX_AGENT_ROUNDS = 25
     KEEP_RECENT_MIN = 6
 
-    # Role weights for compaction priority (higher = more important to keep)
-    _COMPACTION_WEIGHTS: Dict[str, int] = {
-        "system": 10, "user": 3, "assistant": 5, "tool": 1,
-    }
+    @staticmethod
+    def _tool_sequence_is_valid(messages: List[ChatMessage]) -> bool:
+        """Return whether tool calls and results form complete API sequences."""
+        pending: Optional[set[str]] = None
+        for message in messages:
+            if pending is not None:
+                if (message.role != "tool" or not message.tool_call_id
+                        or message.tool_call_id not in pending):
+                    return False
+                pending.remove(message.tool_call_id)
+                if not pending:
+                    pending = None
+                continue
+            if message.role == "tool":
+                return False
+            if message.role == "assistant" and message.tool_calls:
+                call_ids = [call.id for call in message.tool_calls if call.id]
+                if (len(call_ids) != len(message.tool_calls)
+                        or len(set(call_ids)) != len(call_ids)):
+                    return False
+                pending = set(call_ids)
+        return pending is None
 
-    def _auto_compress(self) -> None:
+    @staticmethod
+    def _compaction_groups(messages: List[ChatMessage]) -> List[List[ChatMessage]]:
+        """Group complete user turns without splitting tool-call/result clusters."""
+        groups: List[List[ChatMessage]] = []
+        current: List[ChatMessage] = []
+        for message in messages:
+            if message.role == "user" and current:
+                groups.append(current)
+                current = []
+            current.append(message)
+        if current:
+            groups.append(current)
+        return groups
+
+    def _auto_compress(self, conversation: Optional[Conversation] = None,
+                       run: Optional[_RunContext] = None) -> None:
         """Compact conversation when token usage exceeds 90% of model context window.
 
-        Uses weighted compaction: messages with lower role-based weights are
-        trimmed first, keeping high-weight messages (system, assistant) longer.
-        Threshold is purely token-driven — no message count limit.
+        Compaction removes only complete, oldest user turns.  An assistant
+        ``tool_calls`` message and every matching ``tool`` result therefore
+        remain adjacent and are either retained or summarized together.
         """
         from ai_editor.llm_engine import compaction_threshold
+        target_conversation = conversation or self.conversation
+        if run is not None and not self._is_active_run(run):
+            return
         model = self.engine.config.effective_model
         threshold = compaction_threshold(model)
         if threshold <= 0:
             return
 
-        api_msgs = self.conversation.to_api_messages()
+        api_msgs = target_conversation.to_api_messages()
         total_tokens = self.engine.count_message_tokens(api_msgs)
         # Emit token usage warnings at 50/75/90/95% thresholds
         if self.on_token_warning and threshold > 0:
             ratio = total_tokens / threshold
             for pct in (0.50, 0.75, 0.90, 0.95):
                 if ratio >= pct:
-                    self.on_token_warning(total_tokens, threshold, ratio)
+                    if run is None:
+                        self.on_token_warning(total_tokens, threshold, ratio)
+                    else:
+                        with self._state_lock:
+                            if self._is_active_run_locked(run):
+                                self.on_token_warning(total_tokens, threshold, ratio)
                     break
         if total_tokens < threshold:
             return
 
-        with self.conversation._lock:
-            msgs = list(self.conversation.messages)
-        if len(msgs) <= self.KEEP_RECENT_MIN * 2:
+        with target_conversation._lock:
+            msgs = list(target_conversation.messages)
+        if (len(msgs) <= self.KEEP_RECENT_MIN
+                or not self._tool_sequence_is_valid(msgs)):
             return
 
-        keep = self.KEEP_RECENT_MIN
-        while keep < len(msgs) - 2:
-            test_msgs = [{"role": "system", "content": self.conversation.system_prompt or ""}]
-            test_msgs.extend(m.to_api_dict() for m in msgs[-keep:])
-            if self.engine.count_message_tokens(test_msgs) < threshold * 0.7:
-                keep += 2
-            else:
+        groups = self._compaction_groups(msgs)
+        if len(groups) <= 1:
+            return
+
+        remaining = list(groups)
+        removed: List[List[ChatMessage]] = []
+        target_tokens = threshold * 0.7
+        while len(remaining) > 1:
+            flat_remaining = [message for group in remaining for message in group]
+            test_msgs = [{
+                "role": "system",
+                "content": target_conversation.system_prompt or "",
+            }]
+            test_msgs.extend(message.to_api_dict() for message in flat_remaining)
+            if removed and self.engine.count_message_tokens(test_msgs) < target_tokens:
                 break
+            candidate = remaining[1:]
+            if sum(len(group) for group in candidate) < self.KEEP_RECENT_MIN:
+                break
+            removed.append(remaining.pop(0))
 
-        cut = len(msgs) - keep
-        if cut <= 0:
+        if not removed:
             return
 
-        # Sort candidates by weight (ascending) so lowest-weight messages are
-        # trimmed first while higher-weight messages survive compaction.
-        candidates = list(enumerate(msgs[:cut]))
-        candidates.sort(key=lambda pair: self._COMPACTION_WEIGHTS.get(pair[1].role, 1))
-
-        # Build the trimmed set: drop lowest-weight messages first
-        trim_count = max(1, cut // 2)
-        trim_indices = {idx for idx, _m in candidates[:trim_count]}
-
-        old = [m for i, m in enumerate(msgs[:cut]) if i in trim_indices]
-        kept_from_old = [m for i, m in enumerate(msgs[:cut]) if i not in trim_indices]
+        old = [message for group in removed for message in group]
+        recent = [message for group in remaining for message in group]
+        if not self._tool_sequence_is_valid(recent):
+            return
 
         roles: dict = {}
         for m in old:
@@ -350,111 +549,213 @@ class ChatController:
                 f"Topics: {'; '.join(topics)}]"
             ),
         )
-        recent = msgs[cut:]
-        with self.conversation._lock:
-            self.conversation.messages.clear()
-            self.conversation.messages.append(summary)
-            self.conversation.messages.extend(kept_from_old)
-            self.conversation.messages.extend(recent)
-            self.conversation._msg_version += 1
-            self.conversation._api_cache = None
+        if run is None:
+            with target_conversation._lock:
+                target_conversation.messages[:] = [summary, *recent]
+                target_conversation._msg_version += 1
+                target_conversation._api_cache = None
+        else:
+            with self._state_lock:
+                if not self._is_active_run_locked(run):
+                    return
+                with target_conversation._lock:
+                    target_conversation.messages[:] = [summary, *recent]
+                    target_conversation._msg_version += 1
+                    target_conversation._api_cache = None
 
-    def _run_loop(self) -> None:
-        max_rounds = self.MAX_AGENT_ROUNDS if self._agent_mode else self.MAX_TOOL_ROUNDS
+    @staticmethod
+    def _tool_cache_key(name: str, arguments: str) -> str:
         try:
-            self._auto_compress()
+            normalized = json.dumps(
+                json.loads(arguments), ensure_ascii=False,
+                sort_keys=True, separators=(",", ":"),
+            )
+        except (TypeError, ValueError, json.JSONDecodeError):
+            normalized = str(arguments)
+        return f"{name}:{normalized}"
+
+    def _tool_cache_get(self, key: str) -> Optional[str]:
+        with self._tool_result_cache_lock:
+            if key not in self._tool_result_cache:
+                return None
+            value = self._tool_result_cache[key]
+            self._tool_result_cache_keys[:] = [
+                existing for existing in self._tool_result_cache_keys
+                if existing != key
+            ]
+            self._tool_result_cache_keys.append(key)
+            return value
+
+    def _tool_cache_put(self, key: str, value: str) -> None:
+        with self._tool_result_cache_lock:
+            self._tool_result_cache[key] = value
+            self._tool_result_cache_keys[:] = [
+                existing for existing in self._tool_result_cache_keys
+                if existing != key
+            ]
+            self._tool_result_cache_keys.append(key)
+            while len(self._tool_result_cache_keys) > 50:
+                old_key = self._tool_result_cache_keys.pop(0)
+                self._tool_result_cache.pop(old_key, None)
+
+    def _invalidate_tool_cache(self) -> None:
+        with self._tool_result_cache_lock:
+            self._tool_result_cache.clear()
+            self._tool_result_cache_keys.clear()
+
+    def _record_tool_result(self, run: _RunContext, tool_call: ToolCall,
+                            result: str, state: ToolInvocationState) -> bool:
+        with self._state_lock:
+            if not self._is_active_run_locked(run):
+                return False
+            tool_call.result = result
+            self._set_tool_state(tool_call.id, state)
+            tool_msg = ChatMessage(
+                role="tool",
+                content=result,
+                tool_call_id=tool_call.id,
+                tool_name=tool_call.name,
+            )
+            run.conversation.add_message(tool_msg)
+            if self.on_message_added:
+                self.on_message_added(tool_msg)
+            if self.on_tool_end:
+                self._notify_tool_end(
+                    tool_call.id, tool_call.name, result, state)
+            return True
+
+    def _legacy_run_context(self) -> _RunContext:
+        """Support older direct ``_run_loop()`` tests and integrations."""
+        with self._state_lock:
+            if self._active_run is not None:
+                return self._active_run
+            run = _RunContext(
+                run_id=uuid.uuid4().hex[:12],
+                conversation=self.conversation,
+                cancel_event=threading.Event(),
+                agent_mode=bool(self._agent_mode),
+                multimodal_content=self._multimodal_override,
+                thread=threading.current_thread(),
+            )
+            self._active_run = run
+            self._running = True
+            return run
+
+    def _run_loop(self, run: Optional[_RunContext] = None) -> None:
+        run = run or self._legacy_run_context()
+        max_rounds = self.MAX_AGENT_ROUNDS if run.agent_mode else self.MAX_TOOL_ROUNDS
+        try:
+            self._auto_compress(run.conversation, run)
             for _round in range(max_rounds):
-                if not self._running:
+                if not self._is_active_run(run):
                     break
+
+                # Build the request before adding the streaming placeholder;
+                # the placeholder is UI state and must never be sent upstream.
+                messages = run.conversation.to_api_messages()
+                multimodal_content = run.multimodal_content
+                if multimodal_content is not None:
+                    for i in range(len(messages) - 1, -1, -1):
+                        if messages[i].get("role") == "user":
+                            messages[i]["content"] = multimodal_content
+                            break
+                    run.multimodal_content = None
+                    with self._state_lock:
+                        if self._is_active_run_locked(run):
+                            self._multimodal_override = None
 
                 assistant_msg = ChatMessage(
                     role="assistant",
                     is_streaming=True,
                     model=self.engine.config.effective_model,
                 )
-                self.conversation.add_message(assistant_msg)
-                if self.on_message_added:
-                    self.on_message_added(assistant_msg)
+                if not self._add_message_for_run(
+                        run, assistant_msg, current_assistant=True):
+                    break
 
-                messages = self.conversation.to_api_messages()
-                if self._multimodal_override is not None:
-                    for i in range(len(messages) - 1, -1, -1):
-                        if messages[i].get("role") == "user":
-                            messages[i]["content"] = self._multimodal_override
-                            break
-                    self._multimodal_override = None
                 tools = self.registry.to_openai_tools()
                 if self.extra_tools:
                     tools = (tools or []) + self.extra_tools
                 if tools and self._disabled_tools:
-                    tools = [t for t in tools
-                             if t.get("function", {}).get("name")
-                             not in self._disabled_tools]
+                    tools = [
+                        tool for tool in tools
+                        if tool.get("function", {}).get("name")
+                        not in self._disabled_tools
+                    ]
                 tools = tools or None
 
-                _first_token_time = [None]
-                _request_start = time.monotonic()
-                _request_tokens = self.engine.count_message_tokens(messages)
+                first_token_time: List[Optional[float]] = [None]
+                request_start = time.monotonic()
+                request_tokens = self.engine.count_message_tokens(messages)
 
                 def _on_delta(delta: StreamDelta, _msg=assistant_msg) -> None:
-                    if (delta.content or delta.thinking) and _first_token_time[0] is None:
-                        _first_token_time[0] = time.monotonic()
-                    if delta.content and self.on_stream_delta:
-                        self.on_stream_delta(_msg, delta.content)
-                    if delta.thinking and self.on_thinking_delta:
-                        self.on_thinking_delta(_msg, delta.thinking)
+                    with self._state_lock:
+                        if not self._is_active_run_locked(run):
+                            return
+                        if ((delta.content or delta.thinking)
+                                and first_token_time[0] is None):
+                            first_token_time[0] = time.monotonic()
+                        if delta.content and self.on_stream_delta:
+                            self.on_stream_delta(_msg, delta.content)
+                        if delta.thinking and self.on_thinking_delta:
+                            self.on_thinking_delta(_msg, delta.thinking)
 
-                self.engine.reset_cancel()
-                if not self._running:
-                    break
+                with self._state_lock:
+                    if not self._is_active_run_locked(run):
+                        break
+                    self.engine.reset_cancel()
                 try:
                     resp = self.engine.chat_completion_stream(
                         messages=messages,
                         tools=tools,
                         on_delta=_on_delta,
                     )
-                except Exception as exc:
-                    if not self._running:
+                except Exception:
+                    if not self._is_active_run(run):
                         break
                     raise
 
-                assistant_msg.content = resp.content
-                assistant_msg.thinking = resp.thinking
-                assistant_msg.tool_calls = resp.tool_calls
-                assistant_msg.usage = dict(resp.usage or {})
-                if _request_tokens and "context_tokens" not in assistant_msg.usage:
-                    assistant_msg.usage["context_tokens"] = _request_tokens
-                if not assistant_msg.usage.get("total_tokens"):
-                    output_tokens = self.engine.estimate_tokens(
-                        (resp.content or "") + (resp.thinking or ""))
-                    if output_tokens or _request_tokens:
-                        assistant_msg.usage.setdefault("input_tokens", _request_tokens)
-                        assistant_msg.usage.setdefault("output_tokens", output_tokens)
-                        assistant_msg.usage["total_tokens"] = (
-                            int(assistant_msg.usage.get("input_tokens") or 0)
-                            + int(assistant_msg.usage.get("output_tokens") or 0)
-                        )
-                        assistant_msg.usage.setdefault("estimated", True)
-                if _first_token_time[0] is not None:
-                    assistant_msg.usage["ttft_ms"] = round(
-                        (_first_token_time[0] - _request_start) * 1000, 1)
-                    assistant_msg.usage["total_ms"] = round(
-                        (time.monotonic() - _request_start) * 1000, 1)
-                assistant_msg.model = resp.model
-                assistant_msg.is_streaming = False
-
-                if resp.error:
-                    assistant_msg.is_error = True
-                    assistant_msg.content = resp.error
+                with self._state_lock:
+                    if not self._is_active_run_locked(run):
+                        break
+                    assistant_msg.content = resp.content
+                    assistant_msg.thinking = resp.thinking
+                    assistant_msg.tool_calls = resp.tool_calls
+                    assistant_msg.usage = dict(resp.usage or {})
+                    if request_tokens and "context_tokens" not in assistant_msg.usage:
+                        assistant_msg.usage["context_tokens"] = request_tokens
+                    if not assistant_msg.usage.get("total_tokens"):
+                        output_tokens = self.engine.estimate_tokens(
+                            (resp.content or "") + (resp.thinking or ""))
+                        if output_tokens or request_tokens:
+                            assistant_msg.usage.setdefault("input_tokens", request_tokens)
+                            assistant_msg.usage.setdefault("output_tokens", output_tokens)
+                            assistant_msg.usage["total_tokens"] = (
+                                int(assistant_msg.usage.get("input_tokens") or 0)
+                                + int(assistant_msg.usage.get("output_tokens") or 0)
+                            )
+                            assistant_msg.usage.setdefault("estimated", True)
+                    if first_token_time[0] is not None:
+                        assistant_msg.usage["ttft_ms"] = round(
+                            (first_token_time[0] - request_start) * 1000, 1)
+                        assistant_msg.usage["total_ms"] = round(
+                            (time.monotonic() - request_start) * 1000, 1)
+                    assistant_msg.model = resp.model
+                    assistant_msg.is_streaming = False
+                    if resp.error:
+                        assistant_msg.is_error = True
+                        assistant_msg.content = resp.error
+                    with run.conversation._lock:
+                        run.conversation._msg_version += 1
+                        run.conversation._api_cache = None
                     if self.on_stream_end:
                         self.on_stream_end(assistant_msg)
+
+                if resp.error:
                     break
 
-                if self.on_stream_end:
-                    self.on_stream_end(assistant_msg)
-
                 if not resp.tool_calls:
-                    if not self._agent_mode:
+                    if not run.agent_mode:
                         break
                     content_lower = (resp.content or "").strip().lower()
                     continues = resp.finish_reason in {"length", "max_tokens"}
@@ -478,131 +779,152 @@ class ChatController:
                             "Use tools again if they are still needed."
                         ),
                     )
-                    self.conversation.add_message(cont_msg)
-                    if self.on_message_added:
-                        self.on_message_added(cont_msg)
-
-                for tc in resp.tool_calls:
-                    if not self._running:
+                    if not self._add_message_for_run(run, cont_msg):
                         break
 
-                    # Track tool invocation state
-                    self._set_tool_state(tc.id, ToolInvocationState.PENDING)
+                for tool_call in resp.tool_calls:
+                    with self._state_lock:
+                        if not self._is_active_run_locked(run):
+                            break
+                        self._set_tool_state(tool_call.id, ToolInvocationState.PENDING)
+                        if self.on_tool_start:
+                            self.on_tool_start(
+                                tool_call.id, tool_call.name, tool_call.arguments,
+                                ToolInvocationState.PENDING.value,
+                            )
 
-                    if self.on_tool_start:
-                        self.on_tool_start(tc.id, tc.name, tc.arguments,
-                                           ToolInvocationState.PENDING.value)
-
-                    # Confirmation gate for dangerous tools
-                    desc = self.registry.get(tc.name)
+                    desc = self.registry.get(tool_call.name)
                     mcp_allowed = True
-                    if tc.name.startswith("mcp_") and self.mcp_tool_allowed:
-                        mcp_allowed = self.mcp_tool_allowed(tc.name)
+                    if tool_call.name.startswith("mcp_") and self.mcp_tool_allowed:
+                        mcp_allowed = self.mcp_tool_allowed(tool_call.name)
                     if not mcp_allowed:
-                        self._set_tool_state(tc.id, ToolInvocationState.CANCELLED)
-                        result = json.dumps({"error": f"MCP tool disabled by policy: {tc.name}"})
-                        tc.result = result
-                        tool_msg = ChatMessage(role="tool", content=result,
-                                               tool_call_id=tc.id, tool_name=tc.name)
-                        self.conversation.add_message(tool_msg)
-                        if self.on_tool_end:
-                            self._notify_tool_end(
-                                tc.id, tc.name, result, ToolInvocationState.CANCELLED)
+                        result = json.dumps({
+                            "error": f"MCP tool disabled by policy: {tool_call.name}",
+                        })
+                        if not self._record_tool_result(
+                                run, tool_call, result,
+                                ToolInvocationState.CANCELLED):
+                            break
                         continue
+
                     needs_confirm = bool(desc and desc.requires_confirm)
-                    if tc.name.startswith("mcp_") and self.mcp_tool_requires_confirm:
-                        needs_confirm = self.mcp_tool_requires_confirm(tc.name)
+                    if (tool_call.name.startswith("mcp_")
+                            and self.mcp_tool_requires_confirm):
+                        needs_confirm = self.mcp_tool_requires_confirm(tool_call.name)
                     if (needs_confirm and self.on_tool_confirm
-                            and not self._session_auto_approve.get(tc.name, False)):
+                            and not self._session_auto_approve.get(
+                                tool_call.name, False)):
                         with self._confirm_lock:
-                            self._confirm_event = threading.Event()
+                            confirm_event = threading.Event()
+                            self._confirm_event = confirm_event
                             self._confirm_result = True
-                        allowed = self.on_tool_confirm(tc.id, tc.name, tc.arguments)
-                        if allowed == "always_approve":
-                            self._session_auto_approve[tc.name] = True
-                        elif isinstance(allowed, bool) and not allowed:
-                            self._set_tool_state(tc.id, ToolInvocationState.CANCELLED)
-                            result = json.dumps({"error": "User denied tool execution"})
-                            tc.result = result
-                            tool_msg = ChatMessage(role="tool", content=result,
-                                                   tool_call_id=tc.id, tool_name=tc.name)
-                            self.conversation.add_message(tool_msg)
-                            if self.on_tool_end:
-                                self._notify_tool_end(
-                                    tc.id, tc.name, result, ToolInvocationState.CANCELLED)
+                        try:
+                            allowed = self.on_tool_confirm(
+                                tool_call.id, tool_call.name, tool_call.arguments)
+                        finally:
+                            with self._confirm_lock:
+                                if self._confirm_event is confirm_event:
+                                    self._confirm_event = None
+                        with self._state_lock:
+                            if not self._is_active_run_locked(run):
+                                break
+                            if allowed == "always_approve":
+                                self._session_auto_approve[tool_call.name] = True
+                        if isinstance(allowed, bool) and not allowed:
+                            result = json.dumps({
+                                "error": "User denied tool execution",
+                            })
+                            if not self._record_tool_result(
+                                    run, tool_call, result,
+                                    ToolInvocationState.CANCELLED):
+                                break
                             continue
 
-                    self._set_tool_state(tc.id, ToolInvocationState.CONFIRMED)
+                    with self._state_lock:
+                        if not self._is_active_run_locked(run):
+                            break
+                        self._set_tool_state(
+                            tool_call.id, ToolInvocationState.CONFIRMED)
+                        # This lock-protected transition is the linearization
+                        # point for tool start.  Cancellation after it may not
+                        # undo an already-running synchronous tool, but a
+                        # retired worker can never initiate another one.
+                        self._set_tool_state(
+                            tool_call.id, ToolInvocationState.EXECUTING)
 
-                    # Build progress callback for this tool call
-                    def _make_progress_cb(call_id: str, name: str):
-                        def _progress(fraction: float) -> None:
-                            if self.on_tool_progress:
-                                self.on_tool_progress(call_id, name, fraction)
-                        return _progress
-                    _progress_cb = _make_progress_cb(tc.id, tc.name)
-
-                    self._set_tool_state(tc.id, ToolInvocationState.EXECUTING)
-
-                    cache_key = f"{tc.name}:{tc.arguments}"
-                    cached = self._tool_result_cache.get(cache_key)
-                    if cached is not None and tc.name in _READ_ONLY_TOOLS:
+                    is_read_only = tool_call.name in _READ_ONLY_TOOLS
+                    cache_key = self._tool_cache_key(
+                        tool_call.name, tool_call.arguments)
+                    cached = self._tool_cache_get(cache_key) if is_read_only else None
+                    if cached is not None:
                         result = cached
-                    elif tc.name.startswith("mcp_") and self.mcp_dispatch:
-                        result = self.mcp_dispatch(tc.name, tc.arguments)
                     else:
-                        result = self.registry.execute(tc.name, tc.arguments)
+                        try:
+                            if (tool_call.name.startswith("mcp_")
+                                    and self.mcp_dispatch):
+                                result = self.mcp_dispatch(
+                                    tool_call.name, tool_call.arguments)
+                            else:
+                                result = self.registry.execute(
+                                    tool_call.name, tool_call.arguments)
+                        finally:
+                            if not is_read_only:
+                                # Also invalidate when an old synchronous write
+                                # finishes after cancellation; a new run must
+                                # not retain reads made while that write ran.
+                                self._invalidate_tool_cache()
 
-                    result = _compress_tool_result(result, tc.name)
-
-                    if tc.name in _READ_ONLY_TOOLS:
-                        self._tool_result_cache[cache_key] = result
-                        self._tool_result_cache_keys.append(cache_key)
-                        if len(self._tool_result_cache_keys) > 50:
-                            old_key = self._tool_result_cache_keys.pop(0)
-                            self._tool_result_cache.pop(old_key, None)
-
-                    tc.result = result
-                    self._set_tool_state(tc.id, ToolInvocationState.COMPLETED)
-
-                    tool_msg = ChatMessage(
-                        role="tool",
-                        content=result,
-                        tool_call_id=tc.id,
-                        tool_name=tc.name,
-                    )
-                    self.conversation.add_message(tool_msg)
-                    if self.on_message_added:
-                        self.on_message_added(tool_msg)
-                    if self.on_tool_end:
-                        self._notify_tool_end(
-                            tc.id, tc.name, result, ToolInvocationState.COMPLETED)
+                    result = _compress_tool_result(result, tool_call.name)
+                    if is_read_only:
+                        with self._state_lock:
+                            if self._is_active_run_locked(run):
+                                self._tool_cache_put(cache_key, result)
+                    if not self._record_tool_result(
+                            run, tool_call, result,
+                            ToolInvocationState.COMPLETED):
+                        break
 
         except Exception as exc:
-            if self.on_error:
-                self.on_error(str(exc))
+            with self._state_lock:
+                if self._is_active_run_locked(run) and self.on_error:
+                    self.on_error(str(exc))
         finally:
-            self._running = False
-            self._auto_save()
-            if self.on_idle:
-                self.on_idle()
+            idle_callback: Optional[Callable[[], None]] = None
+            with self._state_lock:
+                if self._is_active_run_locked(run):
+                    self._auto_save(run.conversation)
+                    self._running = False
+                    self._multimodal_override = None
+                    idle_callback = self.on_idle
+            try:
+                if idle_callback:
+                    idle_callback()
+            finally:
+                with self._state_lock:
+                    if self._active_run is run:
+                        self._active_run = None
+                        if self._thread is run.thread:
+                            self._thread = None
+                run.finished_event.set()
 
-    _last_save_ver: int = -1
+    _last_save_key: Optional[tuple[str, int]] = None
 
-    def _auto_save(self) -> None:
+    def _auto_save(self, conversation: Optional[Conversation] = None) -> bool:
         """Persist conversation — skip if nothing changed since last save."""
         try:
-            if not self.conversation.messages:
-                return
-            ver = self.conversation._msg_version
-            if ver == self._last_save_ver:
-                return
+            target_conversation = conversation or self.conversation
+            if not target_conversation.messages:
+                return True
+            ver = target_conversation._msg_version
+            save_key = (target_conversation.id, ver)
+            if save_key == self._last_save_key:
+                return True
             from ai_editor.history import save_conversation
             # Build messages list directly instead of serialize+deserialize
             # round-trip through export_messages()/json.loads().
-            with self.conversation._lock:
+            with target_conversation._lock:
                 msgs = []
-                for m in self.conversation.messages:
+                for m in target_conversation.messages:
                     d = {
                         "role": m.role,
                         "content": m.content,
@@ -619,24 +941,34 @@ class ChatController:
                         d["tool_name"] = m.tool_name
                     msgs.append(d)
             save_conversation(
-                conv_id=self.conversation.id,
-                title=self.conversation.title,
+                conv_id=target_conversation.id,
+                title=target_conversation.title,
                 messages=msgs,
-                system_prompt=self.conversation.system_prompt,
+                system_prompt=target_conversation.system_prompt,
                 model=self.engine.config.effective_model,
             )
-            self._last_save_ver = ver
-        except Exception:
-            pass
+            self._last_save_key = save_key
+            self._last_save_error = ""
+            return True
+        except Exception as exc:
+            self._last_save_error = str(exc)
+            if self.on_save_error:
+                self.on_save_error(self._last_save_error)
+            return False
 
     def new_conversation(self, system_prompt: str = "") -> Conversation:
-        self._auto_save()
-        self.cancel()
-        sp = system_prompt or self.engine.config.system_prompt
-        self.conversation = Conversation(system_prompt=sp)
-        # Auto-compress runs at the start of each _run_loop based on token count
-        self._session_auto_approve.clear()
-        return self.conversation
+        with self._lifecycle_lock:
+            old_conversation = self.conversation
+            self.cancel()
+            self._auto_save(old_conversation)
+            sp = system_prompt or self.engine.config.system_prompt
+            with self._state_lock:
+                self.conversation = Conversation(system_prompt=sp)
+                # Auto-compress runs at the start of each _run_loop based on token count
+                self._session_auto_approve.clear()
+                self._tool_states.clear()
+                self._invalidate_tool_cache()
+                return self.conversation
 
     def export_messages(self) -> str:
         with self.conversation._lock:

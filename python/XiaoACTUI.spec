@@ -55,6 +55,10 @@ LOCAL_HIDDENIMPORTS = [
     'sao_gui',
     'sao_webview',
     'sao_web_panel_common',
+    # AI Editor secret_store imports DPAPI lazily so frozen-build analysis
+    # cannot discover these pywin32 modules on its own.
+    'win32crypt',
+    'pywintypes',
     '_sao_cy_memscan',
     '_sao_cy_pixels',
     '_sao_cy_packet',

@@ -1,7 +1,8 @@
 """MCP (Model Context Protocol) client for the AI Editor.
 
-Supports three transport modes:
+Supports four transport modes:
   - **stdio** — spawn subprocess, JSON-RPC over stdin/stdout
+  - **streamable_http** / **http** — MCP 2025-06-18 Streamable HTTP
   - **sse** — HTTP+SSE to remote endpoint
   - **internal** — Python-native tools registered directly by plugins
 
@@ -27,10 +28,27 @@ import sys
 import threading
 import time
 from dataclasses import dataclass, field
-from typing import Any, Callable, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, Iterable, List, Optional, Tuple
 from urllib.parse import urljoin
 
 from ai_editor.tool_registry import normalize_tool_parameters
+
+
+_MCP_PROTOCOL_VERSION = "2025-06-18"
+_MCP_SUPPORTED_PROTOCOL_VERSIONS = {
+    "2025-06-18",
+    "2025-03-26",
+}
+_MCP_STREAMABLE_ACCEPT = "application/json, text/event-stream"
+_MCP_MAX_LIST_PAGES = 100
+
+
+class _McpHttpStatusError(RuntimeError):
+    """HTTP status failure with enough detail for session recovery/fallback."""
+
+    def __init__(self, status_code: int, message: str) -> None:
+        super().__init__(message)
+        self.status_code = int(status_code)
 
 
 @dataclass
@@ -39,19 +57,48 @@ class McpToolDef:
     description: str
     input_schema: Dict[str, Any]
     server_id: str
+    annotations: Dict[str, Any] = field(default_factory=dict)
+    trusted_server: bool = False
 
 
 @dataclass
 class McpServerConfig:
     id: str
     name: str
-    transport: str = "stdio"  # "stdio" | "sse"
+    transport: str = "stdio"  # "stdio" | "streamable_http" | "sse"
     command: str = ""          # for stdio
     args: List[str] = field(default_factory=list)
     env: Dict[str, str] = field(default_factory=dict)
-    url: str = ""              # for sse
+    url: str = ""              # for streamable_http/http/sse
     headers: Dict[str, str] = field(default_factory=dict)
     enabled: bool = True
+    trusted: bool = False
+    inherit_env: List[str] = field(default_factory=list)
+
+
+_SAFE_INHERITED_ENV = {
+    "PATH", "PATHEXT", "SYSTEMROOT", "WINDIR", "COMSPEC",
+    "TEMP", "TMP", "TMPDIR", "HOME", "USERPROFILE", "HOMEDRIVE",
+    "HOMEPATH", "APPDATA", "LOCALAPPDATA", "PROGRAMDATA",
+    "LANG", "LC_ALL", "PYTHONIOENCODING", "PYTHONUTF8",
+    "PROCESSOR_ARCHITECTURE", "NUMBER_OF_PROCESSORS",
+}
+
+
+def _stdio_environment(config: McpServerConfig) -> Dict[str, str]:
+    """Build a minimal child environment without leaking host credentials."""
+    requested = {
+        str(name).strip() for name in (config.inherit_env or [])
+        if str(name).strip()
+    }
+    allowed = _SAFE_INHERITED_ENV | requested
+    result = {
+        key: str(value) for key, value in os.environ.items()
+        if key.upper() in {name.upper() for name in allowed}
+    }
+    result.update({str(key): str(value) for key, value in config.env.items()})
+    result.setdefault("PYTHONIOENCODING", "utf-8")
+    return result
 
 
 def _rpc_error_result(message: str, code: int = -32000,
@@ -188,12 +235,29 @@ def _parse_sse_event_payloads(raw_text: str) -> List[str]:
     return [payload for payload in payloads if payload]
 
 
+def _parse_sse_json_messages(raw_text: str) -> List[Dict[str, Any]]:
+    """Decode finite SSE response bodies into JSON-RPC messages."""
+    messages: List[Dict[str, Any]] = []
+    for payload in _parse_sse_event_payloads(raw_text):
+        try:
+            decoded = json.loads(payload)
+        except json.JSONDecodeError:
+            continue
+        candidates = decoded if isinstance(decoded, list) else [decoded]
+        messages.extend(item for item in candidates if isinstance(item, dict))
+    return messages
+
+
 def _resolve_sse_session_url(base_url: str, raw_text: str) -> str:
     raw_text = str(raw_text or "").strip()
     if not raw_text:
         return ""
     candidates = _parse_sse_event_payloads(raw_text) or [raw_text]
     for payload in candidates:
+        # Legacy MCP endpoint events normally carry a URI directly rather than
+        # wrapping it in JSON.  Accept both shapes for compatibility.
+        if payload.startswith(("/", "http://", "https://")):
+            return urljoin(base_url, payload)
         try:
             decoded = json.loads(payload)
         except json.JSONDecodeError:
@@ -262,7 +326,7 @@ class McpStdioClient:
             if not self.config.command:
                 print(f"[MCP] Missing stdio command for {self.config.id}")
                 return False
-            env = {**os.environ, **self.config.env}
+            env = _stdio_environment(self.config)
             self._proc = subprocess.Popen(
                 [self.config.command, *self.config.args],
                 stdin=subprocess.PIPE,
@@ -462,6 +526,8 @@ class McpStdioClient:
                     t.get("inputSchema", {"type": "object", "properties": {}})
                 ),
                 server_id=self.config.id,
+                annotations=dict(t.get("annotations") or {}),
+                trusted_server=bool(self.config.trusted),
             ))
 
     def call_tool(self, name: str, arguments: Dict[str, Any]) -> str:
@@ -482,15 +548,30 @@ class McpStdioClient:
         return self._alive and self._proc is not None and self._proc.poll() is None
 
 
-class McpSseClient:
-    """HTTP+SSE transport for MCP servers."""
+class McpStreamableHttpClient:
+    """Synchronous MCP 2025-06-18 Streamable HTTP client.
+
+    Each JSON-RPC message uses its own POST.  POST responses may be a JSON
+    object or a finite SSE stream containing notifications followed by the
+    matching response.  Stateful servers are supported through
+    ``Mcp-Session-Id`` and are re-initialized once after a session-expiry 404.
+    """
 
     def __init__(self, config: McpServerConfig) -> None:
         self.config = config
         self.tools: List[McpToolDef] = []
-        self._session_url: str = ""
         self._http: Any = None
         self._alive = False
+        self._req_id = 0
+        self._id_lock = threading.Lock()
+        self._request_lock = threading.RLock()
+        self._session_id = ""
+        self._protocol_version = _MCP_PROTOCOL_VERSION
+        self._server_capabilities: Dict[str, Any] = {}
+        self._tools_dirty = False
+        self._discovering_tools = False
+        self._last_error = ""
+        self._legacy_fallback_recommended = False
 
     def _client(self):
         if self._http is None:
@@ -498,77 +579,297 @@ class McpSseClient:
             self._http = httpx.Client(timeout=30.0)
         return self._http
 
-    def start(self) -> bool:
+    def _next_request_id(self) -> int:
+        with self._id_lock:
+            self._req_id += 1
+            return self._req_id
+
+    def _headers(self, *, initializing: bool = False) -> Dict[str, str]:
+        reserved = {
+            "accept", "content-type", "mcp-session-id", "mcp-protocol-version",
+        }
+        headers = {
+            str(key): str(value) for key, value in self.config.headers.items()
+            if str(key).lower() not in reserved
+        }
+        headers["Accept"] = _MCP_STREAMABLE_ACCEPT
+        headers["Content-Type"] = "application/json"
+        if not initializing:
+            headers["MCP-Protocol-Version"] = self._protocol_version
+            if self._session_id:
+                headers["Mcp-Session-Id"] = self._session_id
+        # Initializing starts a new logical session, so reserved headers from
+        # configuration are deliberately excluded above.
+        return headers
+
+    @staticmethod
+    def _response_messages(response: Any) -> List[Dict[str, Any]]:
+        text = str(getattr(response, "text", "") or "")
+        if not text.strip():
+            return []
+        content_type = str(response.headers.get("content-type", "")).lower()
+        if "text/event-stream" in content_type or text.lstrip().startswith(("data:", "event:")):
+            return _parse_sse_json_messages(text)
         try:
-            resp = self._client().get(self.config.url, headers=self.config.headers)
-            resp.raise_for_status()
-            self._session_url = _resolve_sse_session_url(self.config.url, resp.text)
-            if not self._session_url:
-                self._session_url = self.config.url
-            self._alive = True
-            self._discover_tools()
+            decoded = response.json()
+        except Exception as exc:
+            raise RuntimeError(f"MCP HTTP response was not valid JSON or SSE: {exc}") from exc
+        candidates = decoded if isinstance(decoded, list) else [decoded]
+        return [item for item in candidates if isinstance(item, dict)]
+
+    def _observe_message(self, message: Dict[str, Any]) -> None:
+        method = str(message.get("method") or "")
+        if method == "notifications/tools/list_changed":
+            self._tools_dirty = True
+
+    def _send_message(self, message: Dict[str, Any], *, initializing: bool = False) -> Any:
+        response = self._client().post(
+            self.config.url,
+            json=message,
+            headers=self._headers(initializing=initializing),
+        )
+        status_code = int(getattr(response, "status_code", 0) or 0)
+        if status_code >= 400:
+            detail = str(getattr(response, "text", "") or "").strip()[:300]
+            suffix = f": {detail}" if detail else ""
+            raise _McpHttpStatusError(
+                status_code,
+                f"MCP HTTP request failed with status {status_code}{suffix}",
+            )
+
+        if initializing:
+            session_id = str(response.headers.get("Mcp-Session-Id", "") or "")
+            if session_id:
+                if not all(0x21 <= ord(ch) <= 0x7E for ch in session_id):
+                    raise RuntimeError("MCP server returned an invalid session identifier")
+                self._session_id = session_id
+
+        request_id = message.get("id")
+        if request_id is None:
+            # Notifications are acknowledged with 202 and no body.  Be liberal
+            # enough to process a body if a server supplies one.
+            for item in self._response_messages(response):
+                self._observe_message(item)
+            return None
+
+        matched = False
+        matched_result: Any = None
+        for item in self._response_messages(response):
+            self._observe_message(item)
+            if item.get("id") != request_id:
+                continue
+            matched = True
+            if "error" in item:
+                matched_result = {"_rpc_error": item.get("error")}
+            else:
+                matched_result = item.get("result")
+        if matched:
+            return matched_result
+        return _rpc_error_result(
+            "MCP HTTP response did not contain the matching JSON-RPC response",
+            data={"requestId": request_id, "serverId": self.config.id},
+        )
+
+    def _notify(self, method: str, params: Any = None) -> bool:
+        message: Dict[str, Any] = {"jsonrpc": "2.0", "method": method}
+        if params is not None:
+            message["params"] = params
+        try:
+            self._send_message(message)
             return True
         except Exception as exc:
-            print(f"[MCP/SSE] Failed to connect {self.config.id}: {exc}")
-            self.stop()
+            self._last_error = f"Failed to send MCP notification '{method}': {exc}"
             return False
 
-    def stop(self) -> None:
-        self._alive = False
-        if self._http:
+    def _initialize_session(self) -> bool:
+        self._session_id = ""
+        self._protocol_version = _MCP_PROTOCOL_VERSION
+        request = {
+            "jsonrpc": "2.0",
+            "id": self._next_request_id(),
+            "method": "initialize",
+            "params": {
+                "protocolVersion": _MCP_PROTOCOL_VERSION,
+                "capabilities": {},
+                "clientInfo": {"name": "sao-ai-editor", "version": "1.0.0"},
+            },
+        }
+        result = self._send_message(request, initializing=True)
+        if not isinstance(result, dict) or _is_rpc_error(result):
+            self._last_error = (
+                f"MCP initialize failed: {_rpc_error_message(result)}"
+                if _is_rpc_error(result) else "MCP initialize returned no result"
+            )
+            return False
+        negotiated = str(result.get("protocolVersion") or "").strip()
+        if negotiated not in _MCP_SUPPORTED_PROTOCOL_VERSIONS:
+            self._last_error = f"Unsupported MCP protocol version: {negotiated or '<missing>'}"
+            return False
+        self._protocol_version = negotiated
+        self._server_capabilities = dict(result.get("capabilities") or {})
+        if not self._notify("notifications/initialized"):
+            return False
+        return True
+
+    def start(self) -> bool:
+        if not self.config.url:
+            self._last_error = f"Missing Streamable HTTP URL for {self.config.id}"
+            return False
+        self._alive = True
+        self._legacy_fallback_recommended = False
+        try:
+            if not self._initialize_session():
+                raise RuntimeError(self._last_error or "MCP initialization failed")
+            self._discover_tools()
+            return True
+        except _McpHttpStatusError as exc:
+            self._legacy_fallback_recommended = exc.status_code in {404, 405}
+            self._last_error = str(exc)
+            if self._legacy_fallback_recommended:
+                print(
+                    f"[MCP/HTTP] Streamable HTTP unavailable for {self.config.id}; "
+                    "trying legacy SSE"
+                )
+            else:
+                print(f"[MCP/HTTP] Failed to connect {self.config.id}: {exc}")
+        except Exception as exc:
+            self._last_error = str(exc)
+            print(f"[MCP/HTTP] Failed to connect {self.config.id}: {exc}")
+        self.stop(send_delete=False)
+        return False
+
+    def stop(self, *, send_delete: bool = True) -> None:
+        session_id = self._session_id
+        client = self._http
+        if send_delete and client is not None and session_id:
             try:
-                self._http.close()
-            except Exception:
-                self.tools = []
-            self._http = None
-        self._session_url = ""
+                response = client.delete(self.config.url, headers=self._headers())
+                if int(getattr(response, "status_code", 0) or 0) not in {
+                    200, 202, 204, 404, 405,
+                }:
+                    self._last_error = (
+                        f"MCP session DELETE returned HTTP {response.status_code}"
+                    )
+            except Exception as exc:
+                self._last_error = f"Failed to terminate MCP HTTP session: {exc}"
+        self._alive = False
+        self._session_id = ""
+        self._server_capabilities = {}
+        self._tools_dirty = False
         self.tools = []
+        if client is not None:
+            try:
+                client.close()
+            except Exception:
+                pass
+        self._http = None
 
     def _rpc(self, method: str, params: Any = None) -> Any:
         if not self._alive:
-            return _rpc_error_result(f"MCP SSE server '{self.config.id}' is not connected")
-        body = {"jsonrpc": "2.0", "id": 1, "method": method}
-        if params:
-            body["params"] = params
-        try:
-            resp = self._client().post(
-                self._session_url or self.config.url,
-                json=body,
-                headers=self.config.headers,
-            )
-            resp.raise_for_status()
-            data = resp.json()
-        except Exception as exc:
             return _rpc_error_result(
-                f"MCP SSE request failed: {exc}",
-                data={"method": method, "serverId": self.config.id},
-            )
-        if not isinstance(data, dict):
-            return _rpc_error_result(
-                "MCP SSE response was not a JSON object",
-                data={"method": method, "serverId": self.config.id},
-            )
-        if "error" in data:
-            return {"_rpc_error": data.get("error")}
-        return data.get("result")
+                f"MCP HTTP server '{self.config.id}' is not connected")
+        with self._request_lock:
+            for attempt in range(2):
+                message: Dict[str, Any] = {
+                    "jsonrpc": "2.0",
+                    "id": self._next_request_id(),
+                    "method": method,
+                }
+                if params is not None:
+                    message["params"] = params
+                try:
+                    return self._send_message(message)
+                except _McpHttpStatusError as exc:
+                    if exc.status_code == 404 and self._session_id and attempt == 0:
+                        try:
+                            if self._initialize_session():
+                                self._tools_dirty = True
+                                continue
+                            return _rpc_error_result(
+                                self._last_error or "MCP session reinitialization failed",
+                                data={"method": method, "serverId": self.config.id},
+                            )
+                        except Exception as init_exc:
+                            self._last_error = f"MCP session reinitialization failed: {init_exc}"
+                            return _rpc_error_result(
+                                self._last_error,
+                                data={"method": method, "serverId": self.config.id},
+                            )
+                    self._last_error = str(exc)
+                    return _rpc_error_result(
+                        f"MCP HTTP request failed: {exc}",
+                        code=exc.status_code,
+                        data={"method": method, "serverId": self.config.id},
+                    )
+                except Exception as exc:
+                    self._last_error = str(exc)
+                    return _rpc_error_result(
+                        f"MCP HTTP request failed: {exc}",
+                        data={"method": method, "serverId": self.config.id},
+                    )
+        return _rpc_error_result(
+            "MCP HTTP request failed after session recovery",
+            data={"method": method, "serverId": self.config.id},
+        )
 
-    def _discover_tools(self) -> None:
-        result = self._rpc("tools/list", {})
-        if not result:
-            return
-        self.tools = []
-        for t in result.get("tools", []):
-            self.tools.append(McpToolDef(
-                name=t.get("name", ""),
-                description=t.get("description", ""),
-                input_schema=normalize_tool_parameters(
-                    t.get("inputSchema", {"type": "object", "properties": {}})
-                ),
-                server_id=self.config.id,
-            ))
+    def _discover_tools(self) -> bool:
+        if self._discovering_tools:
+            return False
+        self._discovering_tools = True
+        discovered: List[McpToolDef] = []
+        cursor = ""
+        seen_cursors = set()
+        try:
+            for _page in range(_MCP_MAX_LIST_PAGES):
+                params = {"cursor": cursor} if cursor else {}
+                result = self._rpc("tools/list", params)
+                if not isinstance(result, dict) or _is_rpc_error(result):
+                    self._last_error = (
+                        f"MCP tools/list failed: {_rpc_error_message(result)}"
+                        if _is_rpc_error(result) else "MCP tools/list returned no result"
+                    )
+                    return False
+                raw_tools = result.get("tools", [])
+                if isinstance(raw_tools, list):
+                    for item in raw_tools:
+                        if not isinstance(item, dict):
+                            continue
+                        discovered.append(McpToolDef(
+                            name=str(item.get("name") or ""),
+                            description=str(item.get("description") or ""),
+                            input_schema=normalize_tool_parameters(
+                                item.get("inputSchema", {
+                                    "type": "object", "properties": {},
+                                })
+                            ),
+                            server_id=self.config.id,
+                            annotations=dict(item.get("annotations") or {}),
+                            trusted_server=bool(self.config.trusted),
+                        ))
+                next_cursor = str(result.get("nextCursor") or "").strip()
+                if not next_cursor:
+                    self.tools = discovered
+                    self._tools_dirty = False
+                    return True
+                if next_cursor in seen_cursors:
+                    self._last_error = "MCP tools/list repeated a pagination cursor"
+                    return False
+                seen_cursors.add(next_cursor)
+                cursor = next_cursor
+            self._last_error = (
+                f"MCP tools/list exceeded {_MCP_MAX_LIST_PAGES} pages")
+            return False
+        finally:
+            self._discovering_tools = False
+
+    def refresh_tools_if_needed(self) -> None:
+        if self._alive and self._tools_dirty and not self._discovering_tools:
+            self._discover_tools()
 
     def call_tool(self, name: str, arguments: Dict[str, Any]) -> str:
         result = self._rpc("tools/call", {"name": name, "arguments": arguments})
+        if self._tools_dirty:
+            self._discover_tools()
         if _is_rpc_error(result):
             return json.dumps({
                 "error": f"MCP call failed: {_rpc_error_message(result)}",
@@ -578,6 +879,327 @@ class McpSseClient:
 
     def read_resource(self, uri: str) -> Dict[str, Any]:
         result = self._rpc("resources/read", {"uri": uri})
+        if self._tools_dirty:
+            self._discover_tools()
+        return _extract_resource_read_result(result, uri)
+
+    @property
+    def legacy_fallback_recommended(self) -> bool:
+        return self._legacy_fallback_recommended
+
+    @property
+    def is_alive(self) -> bool:
+        return self._alive
+
+
+class McpSseClient:
+    """Legacy MCP 2024-11-05 HTTP+SSE transport.
+
+    The GET stream stays open on a reader thread.  Requests are POSTed to the
+    endpoint announced by the initial ``endpoint`` event and their responses
+    are resolved from later ``message`` events.  Finite JSON/SSE POST responses
+    remain supported for older hybrid servers.
+    """
+
+    def __init__(self, config: McpServerConfig) -> None:
+        self.config = config
+        self.tools: List[McpToolDef] = []
+        self._session_url: str = ""
+        self._http: Any = None
+        self._alive = False
+        self._req_id = 0
+        self._lock = threading.Lock()
+        self._pending: Dict[int, threading.Event] = {}
+        self._results: Dict[int, Any] = {}
+        self._ready = threading.Event()
+        self._stop_event = threading.Event()
+        self._reader_thread: Optional[threading.Thread] = None
+        self._stream_response: Any = None
+        self._last_error = ""
+        self._tools_dirty = False
+        self._discovering_tools = False
+
+    def _client(self):
+        if self._http is None:
+            import httpx
+            self._http = httpx.Client(timeout=30.0)
+        return self._http
+
+    def start(self) -> bool:
+        if not self.config.url:
+            return False
+        self._alive = True
+        self._ready.clear()
+        self._stop_event.clear()
+        self._reader_thread = threading.Thread(target=self._read_sse_loop, daemon=True)
+        self._reader_thread.start()
+        try:
+            if not self._ready.wait(timeout=10.0) or not self._session_url:
+                raise RuntimeError(self._last_error or "Timed out waiting for MCP SSE endpoint")
+            result = self._rpc("initialize", {
+                "protocolVersion": "2024-11-05",
+                "capabilities": {},
+                "clientInfo": {"name": "sao-ai-editor", "version": "1.0.0"},
+            })
+            if result is None or _is_rpc_error(result):
+                raise RuntimeError(
+                    f"MCP SSE initialize failed: {_rpc_error_message(result)}")
+            if not self._notify("notifications/initialized"):
+                raise RuntimeError(self._last_error or "MCP SSE initialized notification failed")
+            self._discover_tools()
+            return True
+        except Exception as exc:
+            print(f"[MCP/SSE] Failed to connect {self.config.id}: {exc}")
+            self.stop()
+            return False
+
+    def stop(self) -> None:
+        self._alive = False
+        self._stop_event.set()
+        stream_response = self._stream_response
+        self._stream_response = None
+        if stream_response is not None:
+            try:
+                stream_response.close()
+            except Exception:
+                pass
+        self._fail_pending(self._last_error or f"MCP SSE server '{self.config.id}' stopped")
+        reader = self._reader_thread
+        if reader and reader.is_alive() and reader is not threading.current_thread():
+            reader.join(timeout=1.0)
+        self._reader_thread = None
+        if self._http:
+            try:
+                self._http.close()
+            except Exception:
+                pass
+            self._http = None
+        self._session_url = ""
+        self.tools = []
+        self._tools_dirty = False
+
+    def _next_request_id(self) -> int:
+        with self._lock:
+            self._req_id += 1
+            return self._req_id
+
+    def _fail_pending(self, message: str) -> None:
+        with self._lock:
+            for request_id, event in list(self._pending.items()):
+                self._results[request_id] = _rpc_error_result(message)
+                event.set()
+
+    def _handle_message(self, message: Dict[str, Any]) -> None:
+        if str(message.get("method") or "") == "notifications/tools/list_changed":
+            self._tools_dirty = True
+            return
+        request_id = message.get("id")
+        if request_id is None:
+            return
+        with self._lock:
+            event = self._pending.get(request_id)
+            if event is None:
+                return
+            self._results[request_id] = (
+                {"_rpc_error": message.get("error")}
+                if "error" in message else message.get("result")
+            )
+            event.set()
+
+    def _handle_sse_event(self, event_name: str, payload: str) -> None:
+        if event_name == "endpoint":
+            session_url = _resolve_sse_session_url(
+                self.config.url, f"data: {payload}\n\n")
+            if session_url:
+                self._session_url = session_url
+                self._ready.set()
+            return
+        try:
+            decoded = json.loads(payload)
+        except json.JSONDecodeError:
+            return
+        candidates = decoded if isinstance(decoded, list) else [decoded]
+        for item in candidates:
+            if isinstance(item, dict):
+                self._handle_message(item)
+
+    def _read_sse_loop(self) -> None:
+        event_name = "message"
+        data_lines: List[str] = []
+        try:
+            import httpx
+            headers = {str(key): str(value) for key, value in self.config.headers.items()}
+            headers["Accept"] = "text/event-stream"
+            timeout = httpx.Timeout(connect=10.0, read=None, write=30.0, pool=10.0)
+            with self._client().stream(
+                "GET", self.config.url, headers=headers, timeout=timeout,
+            ) as response:
+                self._stream_response = response
+                response.raise_for_status()
+                content_type = str(response.headers.get("content-type", "")).lower()
+                if "text/event-stream" not in content_type:
+                    raise RuntimeError("MCP legacy SSE endpoint did not return text/event-stream")
+                for line in response.iter_lines():
+                    if self._stop_event.is_set():
+                        break
+                    if line == "":
+                        if data_lines:
+                            self._handle_sse_event(event_name, "\n".join(data_lines))
+                        event_name = "message"
+                        data_lines = []
+                        continue
+                    if line.startswith(":"):
+                        continue
+                    if line.startswith("event:"):
+                        event_name = line[6:].strip() or "message"
+                    elif line.startswith("data:"):
+                        data_lines.append(line[5:].lstrip())
+                if data_lines:
+                    self._handle_sse_event(event_name, "\n".join(data_lines))
+        except Exception as exc:
+            if not self._stop_event.is_set():
+                self._last_error = f"MCP SSE reader failed: {exc}"
+        finally:
+            self._stream_response = None
+            self._ready.set()
+            if not self._stop_event.is_set():
+                self._alive = False
+                self._fail_pending(
+                    self._last_error or f"MCP SSE server '{self.config.id}' disconnected")
+
+    def _consume_post_response(self, response: Any) -> None:
+        text = str(getattr(response, "text", "") or "")
+        if not text.strip():
+            return
+        content_type = str(response.headers.get("content-type", "")).lower()
+        if "text/event-stream" in content_type or text.lstrip().startswith(("event:", "data:")):
+            messages = _parse_sse_json_messages(text)
+        else:
+            try:
+                decoded = response.json()
+            except Exception:
+                return
+            candidates = decoded if isinstance(decoded, list) else [decoded]
+            messages = [item for item in candidates if isinstance(item, dict)]
+        for item in messages:
+            self._handle_message(item)
+
+    def _notify(self, method: str, params: Any = None) -> bool:
+        message: Dict[str, Any] = {"jsonrpc": "2.0", "method": method}
+        if params is not None:
+            message["params"] = params
+        try:
+            response = self._client().post(
+                self._session_url or self.config.url,
+                json=message,
+                headers=self.config.headers,
+            )
+            response.raise_for_status()
+            self._consume_post_response(response)
+            return True
+        except Exception as exc:
+            self._last_error = f"MCP SSE notification failed: {exc}"
+            return False
+
+    def _rpc(self, method: str, params: Any = None) -> Any:
+        if not self._alive:
+            return _rpc_error_result(f"MCP SSE server '{self.config.id}' is not connected")
+        request_id = self._next_request_id()
+        event = threading.Event()
+        with self._lock:
+            self._pending[request_id] = event
+        body = {"jsonrpc": "2.0", "id": request_id, "method": method}
+        if params is not None:
+            body["params"] = params
+        try:
+            response = self._client().post(
+                self._session_url or self.config.url,
+                json=body,
+                headers=self.config.headers,
+            )
+            response.raise_for_status()
+            self._consume_post_response(response)
+        except Exception as exc:
+            with self._lock:
+                self._pending.pop(request_id, None)
+            return _rpc_error_result(
+                f"MCP SSE request failed: {exc}",
+                data={"method": method, "serverId": self.config.id},
+            )
+        completed = event.wait(timeout=30.0)
+        with self._lock:
+            self._pending.pop(request_id, None)
+            result = self._results.pop(request_id, None)
+        if not completed:
+            return _rpc_error_result(
+                "MCP SSE call timeout after 30.0s",
+                data={"method": method, "serverId": self.config.id},
+            )
+        if result is None:
+            return _rpc_error_result(
+                "MCP SSE server disconnected before replying",
+                data={"method": method, "serverId": self.config.id},
+            )
+        return result
+
+    def _discover_tools(self) -> None:
+        if self._discovering_tools:
+            return
+        self._discovering_tools = True
+        discovered: List[McpToolDef] = []
+        cursor = ""
+        seen_cursors = set()
+        try:
+            for _page in range(_MCP_MAX_LIST_PAGES):
+                result = self._rpc("tools/list", {"cursor": cursor} if cursor else {})
+                if not isinstance(result, dict) or _is_rpc_error(result):
+                    return
+                for item in result.get("tools", []):
+                    if not isinstance(item, dict):
+                        continue
+                    discovered.append(McpToolDef(
+                        name=str(item.get("name") or ""),
+                        description=str(item.get("description") or ""),
+                        input_schema=normalize_tool_parameters(
+                            item.get("inputSchema", {
+                                "type": "object", "properties": {},
+                            })
+                        ),
+                        server_id=self.config.id,
+                        annotations=dict(item.get("annotations") or {}),
+                        trusted_server=bool(self.config.trusted),
+                    ))
+                next_cursor = str(result.get("nextCursor") or "").strip()
+                if not next_cursor:
+                    self.tools = discovered
+                    self._tools_dirty = False
+                    return
+                if next_cursor in seen_cursors:
+                    return
+                seen_cursors.add(next_cursor)
+                cursor = next_cursor
+        finally:
+            self._discovering_tools = False
+
+    def refresh_tools_if_needed(self) -> None:
+        if self._alive and self._tools_dirty and not self._discovering_tools:
+            self._discover_tools()
+
+    def call_tool(self, name: str, arguments: Dict[str, Any]) -> str:
+        result = self._rpc("tools/call", {"name": name, "arguments": arguments})
+        if self._tools_dirty:
+            self._discover_tools()
+        if _is_rpc_error(result):
+            return json.dumps({
+                "error": f"MCP call failed: {_rpc_error_message(result)}",
+                "rpc_error": result.get("_rpc_error"),
+            }, ensure_ascii=False)
+        return _extract_tool_call_result(result)
+
+    def read_resource(self, uri: str) -> Dict[str, Any]:
+        result = self._rpc("resources/read", {"uri": uri})
+        if self._tools_dirty:
+            self._discover_tools()
         return _extract_resource_read_result(result, uri)
 
     @property
@@ -680,7 +1302,7 @@ class McpManager:
     """Manages multiple MCP server connections and unified tool dispatch."""
 
     def __init__(self) -> None:
-        self._clients: Dict[str, Any] = {}  # McpStdioClient | McpSseClient | InternalMcpProvider
+        self._clients: Dict[str, Any] = {}  # stdio | Streamable HTTP | SSE | internal
 
     def add_server(self, config: McpServerConfig) -> bool:
         if not config.enabled:
@@ -691,7 +1313,12 @@ class McpManager:
         config.transport = transport
         if transport == "internal":
             return False  # use register_provider() for internal
-        if transport == "sse":
+        if transport in {"streamable_http", "http"}:
+            if not config.url:
+                print(f"[MCP] Missing Streamable HTTP URL for {config.id}")
+                return False
+            client = McpStreamableHttpClient(config)
+        elif transport == "sse":
             if not config.url:
                 print(f"[MCP] Missing SSE URL for {config.id}")
                 return False
@@ -705,6 +1332,12 @@ class McpManager:
             print(f"[MCP] Unsupported transport for {config.id}: {transport}")
             return False
         ok = client.start()
+        if (not ok and isinstance(client, McpStreamableHttpClient)
+                and client.legacy_fallback_recommended):
+            # Official backwards compatibility: only probe legacy HTTP+SSE
+            # after the Streamable HTTP initialize POST is rejected by 404/405.
+            client = McpSseClient(config)
+            ok = client.start()
         if ok:
             self._clients[config.id] = client
         return ok
@@ -763,11 +1396,17 @@ class McpManager:
         transport = str(config.transport or "stdio").strip().lower()
         if transport == "internal":
             return False
-        if transport == "sse":
+        if transport in {"streamable_http", "http"}:
+            new_client = McpStreamableHttpClient(config)
+        elif transport == "sse":
             new_client = McpSseClient(config)
         else:
             new_client = McpStdioClient(config)
         ok = new_client.start()
+        if (not ok and isinstance(new_client, McpStreamableHttpClient)
+                and new_client.legacy_fallback_recommended):
+            new_client = McpSseClient(config)
+            ok = new_client.start()
         if ok:
             self._clients[server_id] = new_client
         return ok
@@ -794,6 +1433,9 @@ class McpManager:
         tools = []
         for c in self._clients.values():
             if c.is_alive:
+                refresh = getattr(c, "refresh_tools_if_needed", None)
+                if callable(refresh):
+                    refresh()
                 tools.extend(c.tools)
         return tools
 
@@ -964,11 +1606,11 @@ def load_mcp_configs(settings_get: Callable = None) -> List[McpServerConfig]:
     normalized_autostart = False
     has_mcp_settings = False
     collision_behavior = "first"
+    workspace_trusted = False
 
     # From settings
     if settings_get:
-        raw = settings_get("ai_editor_mcp_servers", [])
-        _append_server_configs(configs, seen_ids, raw)
+        raw_settings_servers = settings_get("ai_editor_mcp_servers", [])
 
         ai_editor = settings_get("ai_editor", {})
         has_mcp_settings = isinstance(ai_editor, dict) and isinstance(ai_editor.get("mcp"), dict)
@@ -980,12 +1622,44 @@ def load_mcp_configs(settings_get: Callable = None) -> List[McpServerConfig]:
                 return []
             discovery_enabled = _as_bool(mcp_settings.get("discovery_enabled"), True)
             normalized_autostart = _as_bool(mcp_settings.get("autostart"), False)
+            workspace_trusted = _as_bool(
+                mcp_settings.get("workspace_trusted"), False)
             raw_collision = str(mcp_settings.get("collision_behavior", "first")).strip().lower()
             if raw_collision in {"first", "last", "error"}:
                 collision_behavior = raw_collision
-            if normalized_autostart:
-                _append_server_configs(configs, seen_ids, mcp_settings.get("servers", []), collision_behavior)
-                _append_server_configs(configs, seen_ids, mcp_settings.get("mcpServers", {}), collision_behavior)
+
+        settings_raw_groups = [raw_settings_servers]
+        if has_mcp_settings and normalized_autostart:
+            settings_raw_groups.extend([
+                mcp_settings.get("servers", []),
+                mcp_settings.get("mcpServers", {}),
+            ])
+        settings_secret_ids = [
+            sid
+            for raw_group in settings_raw_groups
+            for sid, _sconf in _iter_server_configs(raw_group)
+        ]
+        _append_server_configs(
+            configs,
+            seen_ids,
+            raw_settings_servers,
+            legacy_id_candidates=settings_secret_ids,
+        )
+        if has_mcp_settings and normalized_autostart:
+            _append_server_configs(
+                configs,
+                seen_ids,
+                mcp_settings.get("servers", []),
+                collision_behavior,
+                settings_secret_ids,
+            )
+            _append_server_configs(
+                configs,
+                seen_ids,
+                mcp_settings.get("mcpServers", {}),
+                collision_behavior,
+                settings_secret_ids,
+            )
 
     if settings_get and has_mcp_settings and (not discovery_enabled or not normalized_autostart):
         return []
@@ -993,8 +1667,10 @@ def load_mcp_configs(settings_get: Callable = None) -> List[McpServerConfig]:
     if not discovery_enabled or not normalized_autostart:
         return configs
 
-    # From mcp.json in workspace
-    for candidate in ["mcp.json", ".mcp/mcp.json", ".vscode/mcp.json"]:
+    # Workspace and plugin manifests are executable configuration.  They remain
+    # inert until the workspace itself has been explicitly trusted.
+    for candidate in (["mcp.json", ".mcp/mcp.json", ".vscode/mcp.json"]
+                      if workspace_trusted else []):
         try:
             from config import BASE_DIR
             path = os.path.join(BASE_DIR, candidate)
@@ -1026,7 +1702,7 @@ def load_mcp_configs(settings_get: Callable = None) -> List[McpServerConfig]:
         plugins_dir = os.path.join(BASE_DIR, "plugins")
     except ImportError:
         plugins_dir = os.path.join(os.path.dirname(__file__), "..", "plugins")
-    if os.path.isdir(plugins_dir):
+    if workspace_trusted and os.path.isdir(plugins_dir):
         for pname in os.listdir(plugins_dir):
             manifest = os.path.join(plugins_dir, pname, "plugin.json")
             if not os.path.isfile(manifest):
@@ -1048,6 +1724,7 @@ def _append_server_configs(
     seen_ids: set[str],
     raw: Any,
     collision_behavior: str = "first",
+    legacy_id_candidates: Optional[Iterable[str]] = (),
 ) -> None:
     for sid, sconf in _iter_server_configs(raw):
         if not sid:
@@ -1060,7 +1737,7 @@ def _append_server_configs(
                 raise ValueError(f"Duplicate MCP server id: {sid}")
             else:
                 continue
-        config = _parse_server_config(sid, sconf)
+        config = _parse_server_config(sid, sconf, legacy_id_candidates)
         seen_ids.add(sid)
         if config.enabled:
             configs.append(config)
@@ -1113,17 +1790,85 @@ def _as_string_dict(value: Any) -> Dict[str, str]:
     return {str(k): str(v) for k, v in value.items()}
 
 
-def _parse_server_config(sid: str, sconf: Dict[str, Any]) -> McpServerConfig:
+def _protected_server_mapping(
+    sid: str,
+    sconf: Dict[str, Any],
+    field_name: str,
+    legacy_id_candidates: Optional[Iterable[str]] = None,
+) -> Dict[str, str]:
+    raw = _as_string_dict(sconf.get(field_name, {}))
+    secret_fields = {
+        str(item) for item in _as_string_list(sconf.get("_secret_fields", []))}
+    if field_name not in secret_fields:
+        return raw
+    try:
+        from ai_editor.secret_store import (
+            SECRET_PRESENT,
+            get_json_with_legacy_migration,
+            get_secret_store,
+            legacy_ref_is_unambiguous,
+        )
+        store = get_secret_store()
+        new_ref = f"mcp/{_secret_ref_part(sid)}/{_secret_ref_part(field_name)}"
+        candidates = (
+            [sid] if legacy_id_candidates is None
+            else list(legacy_id_candidates)
+        )
+        if candidates:
+            protected = get_json_with_legacy_migration(
+                store,
+                new_ref,
+                (
+                    f"mcp/{_legacy_secret_ref_part(sid)}/"
+                    f"{_legacy_secret_ref_part(field_name)}"
+                ),
+                allow_legacy=legacy_ref_is_unambiguous(sid, candidates),
+                default={},
+            )
+        else:
+            protected = store.get_json(new_ref, {})
+    except Exception as exc:
+        print(f"[MCP] Failed to load protected {field_name} for {sid}: {exc}")
+        return {
+            key: value for key, value in raw.items()
+            if value != "__SAO_SECRET_PRESENT__"
+        }
+    result = _as_string_dict(protected)
+    for key, value in raw.items():
+        if value != SECRET_PRESENT:
+            result[key] = value
+    return result
+
+
+def _secret_ref_part(value: Any) -> str:
+    from ai_editor.secret_store import secret_ref_part
+    return secret_ref_part(value)
+
+
+def _legacy_secret_ref_part(value: Any) -> str:
+    from ai_editor.secret_store import legacy_secret_ref_part
+    return legacy_secret_ref_part(value)
+
+
+def _parse_server_config(
+    sid: str,
+    sconf: Dict[str, Any],
+    legacy_id_candidates: Optional[Iterable[str]] = None,
+) -> McpServerConfig:
     return McpServerConfig(
         id=sid,
         name=sconf.get("name", sid),
         transport=str(sconf.get("transport", "stdio")),
         command=sconf.get("command", ""),
         args=_as_string_list(sconf.get("args", [])),
-        env=_as_string_dict(sconf.get("env", {})),
+        env=_protected_server_mapping(
+            sid, sconf, "env", legacy_id_candidates),
         url=sconf.get("url", ""),
-        headers=_as_string_dict(sconf.get("headers", {})),
+        headers=_protected_server_mapping(
+            sid, sconf, "headers", legacy_id_candidates),
         enabled=_as_bool(sconf.get("enabled"), True),
+        trusted=_as_bool(sconf.get("trusted"), False),
+        inherit_env=_as_string_list(sconf.get("inherit_env", [])),
     )
 
 
