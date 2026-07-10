@@ -82,18 +82,22 @@ def test_prestart_failure_disables_unified_mode() -> None:
         oc.reset_unified_overlay = fake_reset
         time.sleep = lambda _seconds: None
         gow.set_unified_overlay_mode(True)
-        gow.prestart_unified_overlay(None)
 
-        deadline = time.monotonic() + 2.0
-        while gow.get_unified_overlay_mode():
-            if time.monotonic() > deadline:
-                raise AssertionError("unified overlay mode did not fall back")
-            old_sleep(0.01)
+        # 新契约: prestart 同步阻塞 + 3 次失败后 raise RuntimeError.
+        # (旧契约: 后台 daemon 线程静默降级, mode 变 False 但不 raise.)
+        raised = False
+        try:
+            gow.prestart_unified_overlay(None)
+        except RuntimeError:
+            raised = True
+        assert raised, "prestart_unified_overlay should have raised RuntimeError"
 
         assert calls["get"] == 3, calls
         assert calls["reset"] == 1, calls
         assert fake.stop_count >= 1
         assert gow._unified_overlay_instance is None
+        assert not gow.get_unified_overlay_mode(), (
+            "compositor 失败后 unified overlay mode 必须回落到 False")
     finally:
         gow._get_unified_overlay = old_get
         if old_reset is not None:

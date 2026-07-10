@@ -243,7 +243,11 @@ class ReadEntityCombatManyTests(unittest.TestCase):
         })
         rows = fast.read_entity_combat_many(
             self.handle, [ent], self.OFF_ATTRS, self.OFF_INDEXPART, self.OFF_VALUES)
-        self.assertEqual(rows, [123456, 654321, 2, 7, 1, 33, 9901, 100])
+        # Current stable ABI is 9 values/entity; max_stun is the ninth field.
+        self.assertEqual(
+            rows,
+            [123456, 654321, 2, 7, 1, 33, 9901, 100, -1],
+        )
 
     def test_noncombat_and_partial(self) -> None:
         # entity with no readable attrs ptr -> all -1
@@ -254,9 +258,9 @@ class ReadEntityCombatManyTests(unittest.TestCase):
         rows = fast.read_entity_combat_many(
             self.handle, [bad_ent, state_ent],
             self.OFF_ATTRS, self.OFF_INDEXPART, self.OFF_VALUES)
-        self.assertEqual(rows[:8], [-1] * 8)
-        self.assertEqual(rows[8:10], [-1, -1])
-        self.assertEqual(rows[10], 3)
+        self.assertEqual(rows[:9], [-1] * 9)
+        self.assertEqual(rows[9:11], [-1, -1])
+        self.assertEqual(rows[11], 3)
 
 
 if __name__ == "__main__":

@@ -270,6 +270,80 @@ _kernel32.GetModuleHandleW.argtypes = [wt.LPCWSTR]
 _kernel32.GetModuleHandleW.restype = wt.HINSTANCE
 
 
+# ── tagWND diagnostic dump (SAO_DUMP_TW=1) ──────────────────────
+# 环境变量守护的自诊: 读回 tagWND 里的 rcWindow / ExStyle, 与
+# GetWindowRect / GetWindowLong 的用户可见值对比, 追加到 dump 文件.
+# 用来验证 hide_window_rect / hide_exstyle 有没有真正把物理内存写下去.
+
+_TW_DUMP_PATH = os.path.join(
+    os.environ.get('TEMP', os.path.expanduser('~')), 'sao_tw_dump.jsonl')
+
+
+def _tw_dump_snapshot(hwnd: int, phase: str, **extra) -> None:
+    import json
+    import time as _t
+    record = {'phase': phase, 'hwnd': int(hwnd), 'ts': _t.time()}
+    record.update(extra)
+
+    try:
+        from mem_probe import _dc
+        record['exs_off'] = _dc._exs_off
+        record['rect_off'] = _dc._rect_off
+        record['cal_done'] = _dc._cal_done
+    except Exception as e:
+        record['dc_probe_err'] = repr(e)
+
+    try:
+        from mem_probe import rt_io as _rt_io_mod
+        record['rt_io_module'] = getattr(_rt_io_mod, '__name__', '?')
+        record['rt_io_file'] = getattr(_rt_io_mod, '__file__', '?')
+        record['has_pw'] = callable(getattr(_rt_io_mod, '_pw', None))
+        record['has_tw'] = callable(getattr(_rt_io_mod, '_tw', None))
+        record['has_hmv_addr'] = callable(getattr(_rt_io_mod, '_hmv_addr', None))
+        record['rt_io_connected'] = getattr(_rt_io_mod, '_connected', None)
+    except Exception as e:
+        record['rt_io_probe_err'] = repr(e)
+
+    try:
+        rect = wt.RECT()
+        _user32.GetWindowRect(hwnd, byref(rect))
+        record['user_rect'] = [rect.left, rect.top, rect.right, rect.bottom]
+    except Exception as e:
+        record['user_rect_err'] = repr(e)
+
+    try:
+        exs = _user32.GetWindowLongPtrW(hwnd, GWL_EXSTYLE)
+        record['user_exstyle'] = int(exs) & 0xFFFFFFFF
+    except Exception as e:
+        record['user_exstyle_err'] = repr(e)
+
+    try:
+        from mem_probe import _dc
+        tw = _dc._get_tw(hwnd)
+        record['tagwnd_addr'] = tw
+        if tw and _dc._rect_off >= 0:
+            rc = _dc._read_tw_bytes(tw, _dc._rect_off, 16)
+            if rc and len(rc) == 16:
+                l, t, r, b = struct.unpack('<iiii', rc)
+                record['tagwnd_rect'] = [l, t, r, b]
+            else:
+                record['tagwnd_rect_read_fail'] = True
+        if tw and _dc._exs_off >= 0:
+            es = _dc._read_tw_bytes(tw, _dc._exs_off, 4)
+            if es and len(es) == 4:
+                record['tagwnd_exstyle'] = struct.unpack('<I', es)[0]
+            else:
+                record['tagwnd_exstyle_read_fail'] = True
+    except Exception as e:
+        record['tagwnd_probe_err'] = repr(e)
+
+    try:
+        with open(_TW_DUMP_PATH, 'a', encoding='utf-8') as f:
+            f.write(json.dumps(record, ensure_ascii=False) + '\n')
+    except Exception:
+        pass
+
+
 # ── Class-name generation ────────────────────────────────────────
 # Pool looks like legitimate Windows component class names.
 # At startup, pick one and append a random hex suffix.
@@ -295,7 +369,8 @@ class OverlayHost:
     # overlay thread. process_messages() and swap_buffers() are also
     # overlay-thread-only.
 
-    def __init__(self, width: int = 0, height: int = 0):
+    def __init__(self, width: int = 0, height: int = 0,
+                 dc_mutations=None):
         if width <= 0:
             width = _user32.GetSystemMetrics(SM_CXSCREEN)
         if height <= 0:
@@ -317,11 +392,18 @@ class OverlayHost:
         self.input_passthrough: bool = True
         self.ctx: Any = None  # moderngl.Context
         self._owner_hwnd: int = 0
+        # 2026-07-10 双 hwnd (方案 B, α 语义): self.hwnd 保持指向 hRender
+        # (全屏, DComp target), 所有现有消费者行为不变. control_hwnd 是
+        # 1x1 诱饵 — 保留在 z-order chain 里让 EnumWindows 扫到, 反作弊
+        # 看到"进程有个 1x1 无害窗口" 假象. hRender 走 hide_z_order 从
+        # chain unlink, 反作弊扫不到.
+        self.control_hwnd: int = 0
         self._class_name: str = ''
         self._class_atom: int = 0
         self._wndproc_ref: Any = None  # prevent GC of ctypes callback
         self._destroyed = False
         self._capture_excluded = False
+        self._dc_mutations = dc_mutations
 
         # Hit-test callback: (screen_x, screen_y) -> bool (True=interactive)
         self.hit_test_fn: Optional[Callable[[int, int], bool]] = None
@@ -333,20 +415,60 @@ class OverlayHost:
         ] = None
         self._tracking_leave = False
 
+    def _submit_dc(self, operation: str, method_name: str,
+                   *args, **kwargs) -> bool:
+        coordinator = self._dc_mutations
+        if coordinator is not None:
+            try:
+                return coordinator.submit_dc(
+                    self.hwnd, operation, method_name, *args, **kwargs)
+            except Exception:
+                return False
+        try:
+            from mem_probe import _dc
+            fn = getattr(_dc, method_name, None)
+            return bool(callable(fn) and fn(self.hwnd, *args, **kwargs))
+        except Exception:
+            return False
+
     def create(self) -> 'OverlayHost':
         # Create the overlay window, WGL context, and ModernGL context.
         if self.hwnd:
             return self
         self._create_window()
+        desired_exstyle = (
+            WS_EX_TRANSPARENT | WS_EX_TOOLWINDOW
+            | WS_EX_NOACTIVATE | WS_EX_NOREDIRECTIONBITMAP)
+        style_ok = False
         try:
-            from mem_probe._dc import hide_exstyle, OVERLAY_EXSTYLE_MASK, \
-                hide_window_rect, syscall_set_window_long
-            syscall_set_window_long(
-                self.hwnd, -20,
-                WS_EX_TRANSPARENT | WS_EX_TOOLWINDOW
-                | WS_EX_NOACTIVATE | WS_EX_NOREDIRECTIONBITMAP)
-            hide_exstyle(self.hwnd, OVERLAY_EXSTYLE_MASK)
-            hide_window_rect(self.hwnd)
+            from mem_probe._dc import OVERLAY_EXSTYLE_MASK, \
+                syscall_set_window_long
+            style_ok = syscall_set_window_long(
+                self.hwnd, -20, desired_exstyle)
+        except Exception:
+            OVERLAY_EXSTYLE_MASK = desired_exstyle
+        if not style_ok:
+            try:
+                _user32.SetWindowLongPtrW(
+                    self.hwnd, -20, desired_exstyle)
+                style_ok = int(_user32.GetWindowLongPtrW(
+                    self.hwnd, -20)) == int(desired_exstyle)
+            except Exception:
+                style_ok = False
+        if not style_ok:
+            raise OSError('failed to establish host passthrough exstyle')
+        try:
+            _dump_tw = os.environ.get('SAO_DUMP_TW') == '1'
+            if _dump_tw:
+                _tw_dump_snapshot(self.hwnd, phase='before_hide')
+            _hs_ok = self._submit_dc(
+                'host-exstyle', 'hide_exstyle', OVERLAY_EXSTYLE_MASK)
+            _hr_ok = self._submit_dc(
+                'host-rect', 'hide_window_rect')
+            if _dump_tw:
+                _tw_dump_snapshot(self.hwnd, phase='after_hide',
+                                  hide_exstyle_ret=_hs_ok,
+                                  hide_window_rect_ret=_hr_ok)
         except Exception:
             pass
         # Serialize WGL context creation against any other thread doing
@@ -372,7 +494,12 @@ class OverlayHost:
         self._class_name = _generate_class_name()
 
         # WndProc — handle hit-testing, activation, and mouse events
+        # hControl (1x1 decoy) 走 DefWindowProc; 只有 hRender (self.hwnd)
+        # 才跑真正的 hit test / mouse event 逻辑. 用 "self.hwnd 已赋值且
+        # hwnd 不等于它" 判断 → WM_CREATE 阶段 self.hwnd=0 时不误拦.
         def _wndproc(hwnd: int, msg: int, wp: int, lp: int) -> int:
+            if self.hwnd and hwnd != self.hwnd:
+                return _user32.DefWindowProcW(hwnd, msg, wp, lp)
             if msg == WM_NCHITTEST:
                 x = lp & 0xFFFF
                 if x > 0x7FFF:
@@ -445,9 +572,32 @@ class OverlayHost:
             0, self._class_name, '', WS_POPUP,
             0, 0, 1, 1, None, None, hinst, None,
         )
+        if not self._owner_hwnd:
+            raise OSError(
+                f'owner CreateWindowExW failed: {ctypes.GetLastError()}'
+            )
 
+        # hControl (1x1 decoy) — 反作弊 EnumWindows 会扫到, 拿到 GetWindowRect
+        # 是 1x1, 表现为"无害小窗". 不做 DComp 绑定 / 不做实际渲染 / 不
+        # unlink z-order. TOOLWINDOW + NOACTIVATE 让它不进 Alt+Tab, 不抢焦点.
+        self.control_hwnd = _user32.CreateWindowExW(
+            WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE,
+            self._class_name, '',
+            WS_POPUP,
+            0, 0, 1, 1,   # 真实 1x1 rcWindow, 不用擦 tagWND
+            self._owner_hwnd,
+            None, hinst, None,
+        )
+        if not self.control_hwnd:
+            raise OSError(
+                f'hControl CreateWindowExW failed: {ctypes.GetLastError()}'
+            )
+
+        # hRender (self.hwnd, α 语义) — 全屏, DComp target 挂这里, rcWindow
+        # 保持真实全屏, DWM 合成不受影响. 用 hide_z_order 从 chain unlink
+        # 让 EnumWindows 扫不到 (existing tick 逻辑仍然对 self.hwnd 生效).
         self.hwnd = _user32.CreateWindowExW(
-            WS_EX_NOREDIRECTIONBITMAP,
+            WS_EX_NOREDIRECTIONBITMAP | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE,
             self._class_name,
             '',
             WS_POPUP | WS_CLIPSIBLINGS | WS_CLIPCHILDREN,
@@ -460,6 +610,10 @@ class OverlayHost:
             raise OSError(
                 f'CreateWindowExW failed: {ctypes.GetLastError()}'
             )
+        print(f'[OverlayHost] hRender=0x{self.hwnd:08X} '
+              f'hControl=0x{(self.control_hwnd or 0):08X} '
+              f'owner=0x{(self._owner_hwnd or 0):08X} pid={os.getpid()}',
+              flush=True)
 
     def _setup_wgl(self) -> None:
         # Set up WGL pixel format + OpenGL context with alpha support.
@@ -671,9 +825,15 @@ class OverlayHost:
     def show(self) -> None:
         # Show the overlay window without activating it.
         _user32.ShowWindow(self.hwnd, SW_SHOWNOACTIVATE)
+        # 1x1 诱饵也 show, 才会 visible + 出现在 EnumWindows 结果里被反作弊
+        # 扫到. WS_EX_NOACTIVATE + WS_EX_TOOLWINDOW 保证不抢焦点不进 Alt+Tab.
+        if self.control_hwnd:
+            _user32.ShowWindow(self.control_hwnd, SW_SHOWNOACTIVATE)
 
     def hide(self) -> None:
         _user32.ShowWindow(self.hwnd, 0)  # SW_HIDE
+        if self.control_hwnd:
+            _user32.ShowWindow(self.control_hwnd, 0)
 
     def raise_topmost(self) -> None:
         # Legacy — kept for callers not yet migrated. Prefer raise_above().
@@ -713,17 +873,47 @@ class OverlayHost:
         self.input_passthrough = bool(passthrough)
 
     def set_capture_mode(self, exclude: bool) -> None:
+        # 双 hwnd 都必须 apply — 否则反作弊 BitBlt/PrintWindow 到 hControl
+        # 能截到内容 (即使 1x1 也是内容), 立即察觉"decoy 没上 WDA"→ 怀疑.
+        # 一致的 defense-in-depth: hRender + hControl 都 WDA_EXCLUDEFROMCAPTURE.
+        #
+        # apply 后调 verify() 校验 DWM 端 WDA state 真被设成 0x11 = WDA_V.
+        # 校验失败时打日志, 反作弊/直播软件 hooks 掉 SetWindowDisplayAffinity
+        # 时能被此暴露.
         try:
-            from mem_probe._dc import apply as _ac_apply, remove as _ac_remove
+            from mem_probe._dc import (apply as _ac_apply,
+                                       remove as _ac_remove,
+                                       verify as _ac_verify)
             if exclude:
-                self._capture_excluded = _ac_apply(self.hwnd)
+                ok_r = _ac_apply(self.hwnd)
+                ok_c = _ac_apply(self.control_hwnd) if self.control_hwnd else True
+                # verify: DWM 侧回读 GetWindowDisplayAffinity == 0x11
+                v_r = _ac_verify(self.hwnd)
+                v_c = _ac_verify(self.control_hwnd) if self.control_hwnd else True
+                self._capture_excluded = ok_r and ok_c and v_r and v_c
+                if not self._capture_excluded:
+                    try:
+                        print(f'[Overlay] WDA_EXCLUDEFROMCAPTURE partial: '
+                              f'hRender apply={ok_r} verify={v_r}, '
+                              f'hControl apply={ok_c} verify={v_c}',
+                              flush=True)
+                    except Exception:
+                        pass
             else:
                 _ac_remove(self.hwnd)
+                if self.control_hwnd:
+                    _ac_remove(self.control_hwnd)
                 self._capture_excluded = False
         except Exception:
             self._capture_excluded = False
 
     def _hide_topmost_flag(self) -> None:
+        if self._dc_mutations is not None:
+            self._submit_dc(
+                'host-exstyle', 'hide_exstyle',
+                0x00000008 | 0x00000020 | 0x00000080
+                | 0x00200000 | 0x08000000)
+            return
         try:
             from mem_probe._dc import hide_exstyle, OVERLAY_EXSTYLE_MASK
             if hide_exstyle(self.hwnd, OVERLAY_EXSTYLE_MASK):
@@ -773,16 +963,20 @@ class OverlayHost:
                 self.hwnd, HWND_TOP, x, y, w, h,
                 SWP_NOACTIVATE,
             )
-        try:
-            from mem_probe._dc import hide_window_rect
-            hide_window_rect(self.hwnd)
-        except Exception:
-            pass
+        self._submit_dc('host-rect', 'hide_window_rect')
 
-    def destroy(self) -> None:
+    def destroy(self) -> bool:
         if self._destroyed:
-            return
-        self._destroyed = True
+            return True
+        coordinator = self._dc_mutations
+        if coordinator is not None:
+            for hwnd in (self.hwnd, self.control_hwnd):
+                if hwnd:
+                    try:
+                        if not coordinator.invalidate(hwnd, timeout=2.0):
+                            return False
+                    except Exception:
+                        return False
         if self.hglrc:
             try:
                 from render.gpu_overlay_window import get_wgl_serialize_lock
@@ -790,17 +984,35 @@ class OverlayHost:
             except Exception:
                 import contextlib
                 lock = contextlib.nullcontext()
-            with lock:
-                _opengl32.wglMakeCurrent(0, 0)
-                _opengl32.wglDeleteContext(self.hglrc)
+            try:
+                with lock:
+                    _opengl32.wglMakeCurrent(0, 0)
+                    deleted = bool(_opengl32.wglDeleteContext(self.hglrc))
+            except Exception:
+                deleted = False
+            if not deleted:
+                return False
             self.hglrc = 0
         if self.hdc and self.hwnd:
-            _user32.ReleaseDC(self.hwnd, self.hdc)
+            try:
+                released = bool(_user32.ReleaseDC(self.hwnd, self.hdc))
+            except Exception:
+                released = False
+            if not released:
+                return False
             self.hdc = 0
-        if self.hwnd:
-            _user32.DestroyWindow(self.hwnd)
-            self.hwnd = 0
-        if self._owner_hwnd:
-            _user32.DestroyWindow(self._owner_hwnd)
-            self._owner_hwnd = 0
+        for attr in ('hwnd', 'control_hwnd', '_owner_hwnd'):
+            hwnd = int(getattr(self, attr, 0) or 0)
+            if not hwnd:
+                continue
+            try:
+                _user32.DestroyWindow(hwnd)
+                destroyed = not bool(_user32.IsWindow(hwnd))
+            except Exception:
+                destroyed = False
+            if not destroyed:
+                return False
+            setattr(self, attr, 0)
         self.ctx = None
+        self._destroyed = True
+        return True

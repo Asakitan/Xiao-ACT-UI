@@ -26,6 +26,7 @@ from __future__ import annotations
 import math
 import threading
 import time
+import weakref
 from typing import Any, Optional, Sequence
 
 # Heap pointer plausibility (matches the readers / cy_memscan bounds).
@@ -276,7 +277,8 @@ def decode_hint(pm: Any, addr: int, modules=None, *, ga: tuple = (0, 0)) -> dict
 
 class _SearchJob:
     __slots__ = ("job_id", "dtype", "align", "state", "progress", "hits", "count",
-                 "error", "created_at", "updated_at", "last_value", "_stop", "_thread")
+                 "error", "created_at", "updated_at", "last_value", "_stop", "_thread",
+                 "_bridge")
 
     def __init__(self, job_id: str, dtype: str, align: int, now: float):
         self.job_id = job_id
@@ -292,6 +294,11 @@ class _SearchJob:
         self.last_value: Any = None
         self._stop = threading.Event()
         self._thread: Optional[threading.Thread] = None
+        self._bridge = None
+
+
+_SEARCH_MANAGERS = weakref.WeakSet()
+_SEARCH_MANAGERS_LOCK = threading.Lock()
 
 
 class MemSearchManager:
@@ -314,6 +321,8 @@ class MemSearchManager:
         self._jobs: dict[str, _SearchJob] = {}
         self._lock = threading.Lock()
         self._seq = 0
+        with _SEARCH_MANAGERS_LOCK:
+            _SEARCH_MANAGERS.add(self)
 
     # ---- public ----
     def search(self, value, dtype: str, *, align: int = 0) -> dict:
@@ -335,6 +344,7 @@ class MemSearchManager:
             job_id = f"s{self._seq}"
             job = _SearchJob(job_id, dtype, int(align or 0), time.time())
             job.last_value = coerced
+            job._bridge = bridge
             self._jobs[job_id] = job
         t = threading.Thread(target=self._run_search, args=(job, bridge, coerced),
                              name=f"mem-search-{job_id}", daemon=True)
@@ -358,6 +368,7 @@ class MemSearchManager:
         job.state = "running"
         job.error = ""
         job.last_value = coerced
+        job._bridge = bridge
         job._stop.clear()
         t = threading.Thread(target=self._run_narrow, args=(job, bridge, coerced),
                              name=f"mem-narrow-{job_id}", daemon=True)
@@ -435,7 +446,13 @@ class MemSearchManager:
             return None
 
     def _run_search(self, job: _SearchJob, bridge: Any, value) -> None:
+        if job._stop.is_set():
+            job.state = "cancelled"
+            return
         pm = resolve_pm_blocking(bridge)
+        if job._stop.is_set():
+            job.state = "cancelled"
+            return
         if pm is None:
             job.state = "error"
             job.error = "not_armed"
@@ -454,14 +471,26 @@ class MemSearchManager:
             job.error = f"process_gone: {exc}"
 
     def _run_narrow(self, job: _SearchJob, bridge: Any, value) -> None:
+        if job._stop.is_set():
+            job.state = "cancelled"
+            return
         pm = resolve_pm_blocking(bridge)
+        if job._stop.is_set():
+            job.state = "cancelled"
+            return
         if pm is None:
             job.state = "error"
             job.error = "not_armed"
             return
         try:
             from mem_probe import scanner
+            if job._stop.is_set():
+                job.state = "cancelled"
+                return
             hits = scanner.narrow(pm, job.hits, value, job.dtype)
+            if job._stop.is_set():
+                job.state = "cancelled"
+                return
             job.hits = hits
             job.count = len(hits)
             job.progress = 1.0
@@ -517,6 +546,30 @@ class MemSearchManager:
                     if j.state != "running" and (now - j.updated_at) > self.JOB_TTL_S]
             for jid in dead:
                 self._jobs.pop(jid, None)
+
+
+def cancel_search_jobs_for_bridge(bridge: Any) -> tuple[threading.Thread, ...]:
+    """Cancel and return all live manual-search workers borrowing ``bridge``."""
+    if bridge is None:
+        return ()
+    with _SEARCH_MANAGERS_LOCK:
+        managers = tuple(_SEARCH_MANAGERS)
+    workers = []
+    seen = set()
+    for manager in managers:
+        with manager._lock:
+            jobs = tuple(manager._jobs.values())
+        for job in jobs:
+            worker = job._thread
+            if job._bridge is not bridge or worker is None or not worker.is_alive():
+                continue
+            job._stop.set()
+            if job.state == "running":
+                job.state = "cancelled"
+            if id(worker) not in seen:
+                seen.add(id(worker))
+                workers.append(worker)
+    return tuple(workers)
 
 
 def get_search_manager(owner: Any) -> MemSearchManager:

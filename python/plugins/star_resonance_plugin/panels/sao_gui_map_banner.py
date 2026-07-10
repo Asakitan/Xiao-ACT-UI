@@ -127,8 +127,9 @@ class MapBannerOverlay:
                                ex | WS_EX_LAYERED | WS_EX_TOOLWINDOW
                                | WS_EX_TOPMOST | WS_EX_TRANSPARENT)
         try:
-            from mem_probe._dc import hide_exstyle
-            if not hide_exstyle(hwnd, 0x8):
+            from render.overlay_compositor import submit_dc_mutation
+            if not submit_dc_mutation(
+                    hwnd, 'map-banner-exstyle', 'hide_exstyle', 0x8):
                 _user32.SetWindowLongW(
                     ctypes.c_void_p(hwnd), GWL_EXSTYLE,
                     (ex | WS_EX_LAYERED | WS_EX_TOOLWINDOW

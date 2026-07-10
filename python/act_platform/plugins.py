@@ -824,6 +824,13 @@ class PluginRecord:
 class EngineAccess:
     # Trusted in-process plugin bridge to SAO Auto owner/runtime engines.
 
+    _OWNER_ENGINE_ALIASES = {
+        "dps_tracker": ("_dps_tracker",),
+        "history_store": ("_dps_history_store",),
+        "trigger_engine": ("_act_trigger_engine",),
+        "packet_bridge": ("_packet_engine", "_packet_bridge"),
+    }
+
     def __init__(self, manager: "PluginManager", record: Optional[PluginRecord] = None) -> None:
         self._manager = manager
         self._record = record
@@ -866,6 +873,15 @@ class EngineAccess:
                     "type": _type_name(engine),
                     "source": "plugin",
                 }
+        for name in self._OWNER_ENGINE_ALIASES:
+            if name in out:
+                continue
+            engine = self.get(name)
+            out[name] = {
+                "available": engine is not None,
+                "type": _type_name(engine),
+                "source": "owner",
+            }
         return out
 
     def available(self) -> list[str]:
@@ -900,6 +916,13 @@ class EngineAccess:
             if bridge is not None:
                 return bridge
             # else fall through to the flat alias lookup (covers memory-only adapters)
+        for attr_name in self._OWNER_ENGINE_ALIASES.get(key, ()):
+            try:
+                value = getattr(owner, attr_name)
+            except Exception:
+                continue
+            if value is not None:
+                return value
         try:
             value = getattr(owner, str(name))
         except Exception:
@@ -925,7 +948,10 @@ class EngineAccess:
         owner = self.owner
         if owner is None:
             return default
-        return default
+        try:
+            return getattr(owner, str(name), default)
+        except Exception:
+            return default
 
     def set_owner_attr(self, name: str, value: Any) -> None:
         owner = self.require("owner")
@@ -984,6 +1010,8 @@ class PluginContext:
         self._mem_access: Any = None
         self._stop_event = threading.Event()
         self._registered_threads: list[threading.Thread] = []
+        self._registered_threads_lock = threading.RLock()
+        self._unload_hooks_called = False
 
     @property
     def plugin_id(self) -> str:
@@ -996,17 +1024,24 @@ class PluginContext:
     def register_thread(self, thread: threading.Thread) -> None:
         # Register a worker thread so it gets joined on plugin unload.
         if isinstance(thread, threading.Thread):
-            self._registered_threads.append(thread)
+            with self._registered_threads_lock:
+                self._registered_threads.append(thread)
 
-    def _signal_stop_and_join(self, timeout: float = 2.0) -> None:
+    def _signal_stop_and_join(self, timeout: float = 2.0) -> bool:
         self._stop_event.set()
-        for t in self._registered_threads:
+        deadline = time.monotonic() + max(0.0, float(timeout))
+        with self._registered_threads_lock:
+            threads = list(self._registered_threads)
+        for t in threads:
             try:
-                if t.is_alive():
-                    t.join(timeout=timeout)
+                if t is not threading.current_thread() and t.is_alive():
+                    t.join(timeout=max(0.0, deadline - time.monotonic()))
             except Exception:
                 pass
-        self._registered_threads.clear()
+        with self._registered_threads_lock:
+            alive = [t for t in self._registered_threads if t.is_alive()]
+            self._registered_threads[:] = alive
+        return not alive
 
     @property
     def mem(self) -> Any:
@@ -2287,7 +2322,9 @@ class PluginManager:
                 record.context._stop_event.set()
             except Exception:
                 pass
-        if record.module is not None:
+        context = record.context
+        if record.module is not None and not bool(
+                context is not None and context._unload_hooks_called):
             try:
                 self._call_hook(record, "on_disable")
             except Exception:
@@ -2296,11 +2333,16 @@ class PluginManager:
                 self._call_hook(record, "on_unload")
             except Exception:
                 pass
-        if record.context is not None:
+            if context is not None:
+                context._unload_hooks_called = True
+        if context is not None:
             try:
-                record.context._signal_stop_and_join(timeout=2.0)
+                threads_stopped = context._signal_stop_and_join(timeout=2.0)
             except Exception:
-                pass
+                threads_stopped = False
+            if not threads_stopped:
+                record.last_error = "plugin worker rundown timed out"
+                return False
         self._unload_script_runtime(record)
         for token in list(record.subscriptions):
             self.event_bus.unsubscribe(token)
@@ -2325,7 +2367,8 @@ class PluginManager:
         record = self._records.get(plugin_id)
         if record is None:
             return False
-        self.unload_plugin(plugin_id)
+        if not self.unload_plugin(plugin_id):
+            return False
         self._records.pop(plugin_id, None)
         self._settings_cache.pop(plugin_id, None)
         self._publish_plugin_lifecycle(record, "forgotten")
@@ -2350,7 +2393,8 @@ class PluginManager:
         record.enabled = False
         self._set_persisted_enabled(record.plugin_id, False)
         was_loaded = bool(record.loaded or record.active or record.module is not None)
-        self.unload_plugin(record.plugin_id)
+        if not self.unload_plugin(record.plugin_id):
+            return False
         if not was_loaded:
             self._publish_plugin_lifecycle(record, "disabled")
         return True

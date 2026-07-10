@@ -226,6 +226,15 @@ class TkMirrorLayer:
         self._compositor = uo
 
         try:
+            # Establish the local Tk input endpoint before hiding the source
+            # window.  Otherwise the host remains the only possible receiver
+            # for a short window and the first cross-process click can be
+            # swallowed while the proxy is still queued on ``root.after``.
+            layer.create_input_proxy(root)
+            layer.sync_input_proxy()
+            if layer._input_proxy is None:
+                raise RuntimeError('Tk mirror input proxy is not ready')
+
             self._orig_exstyle = _user32.GetWindowLongPtrW(
                 self._hwnd, GWL_EXSTYLE)
             try:
@@ -260,13 +269,19 @@ class TkMirrorLayer:
         self._thread.start()
         self._sync_host_input()
 
-    def detach(self) -> None:
+    def detach(self) -> bool:
         if not self._attached:
-            return
+            return True
         self._running = False
         self._stop_evt.set()
-        if self._thread and self._thread.is_alive():
-            self._thread.join(timeout=3.0)
+        thread = self._thread
+        if thread and thread.is_alive():
+            thread.join(timeout=3.0)
+        if thread and thread.is_alive():
+            # Preserve every owner reference.  Destroying the layer/window
+            # while capture is still executing would race PrintWindow and
+            # allow a producer to outlive compositor teardown.
+            return False
         self._thread = None
 
         self._uninstall_geometry_hook()
@@ -291,6 +306,7 @@ class TkMirrorLayer:
         except Exception:
             pass
         self._attached = False
+        return True
 
     def _sync_host_input(self) -> None:
         try:
@@ -314,12 +330,14 @@ class TkMirrorLayer:
                 pass
         if self._layer:
             self._layer.show()
+            self._layer.sync_input_proxy()
         self._sync_host_input()
 
     def hide(self) -> None:
         self._visible = False
         if self._layer:
             self._layer.hide()
+            self._layer.sync_input_proxy()
         if self._hwnd:
             # The real backing Tk window has to stay MAPPED (not
             # iconic/withdrawn) for PrintWindow to keep capturing
@@ -366,6 +384,7 @@ class TkMirrorLayer:
         self._hit_rect_cache = None
         if self._layer:
             self._layer.set_position(x, y)
+            self._layer.sync_input_proxy()
         if self._hwnd:
             _user32.MoveWindow(
                 self._hwnd, x, y,
@@ -379,6 +398,7 @@ class TkMirrorLayer:
         self._hit_rect_cache = None
         if self._layer:
             self._layer.set_geometry(x, y, w, h)
+            self._layer.sync_input_proxy()
         if self._hwnd:
             _user32.MoveWindow(self._hwnd, x, y, w, h, True)
 
@@ -488,7 +508,7 @@ class TkMirrorLayer:
     # card list refreshing) can't leave the cache stale indefinitely.
     _HIT_CACHE_MAX_AGE = 0.3
 
-    def _widget_at(self, sx: int, sy: int):
+    def _widget_at(self, win, sx: int, sy: int):
         # Only a *leaf* widget's rect is safe to trust via plain containment:
         # a container's bounding rect can have children positioned inside
         # it, and a point inside the container's rect but over one of those
@@ -511,7 +531,6 @@ class TkMirrorLayer:
                     pass
             self._hit_rect_cache = None
 
-        win = self._tk_win
         try:
             wx0, wy0 = win.winfo_rootx(), win.winfo_rooty()
             wx1, wy1 = wx0 + win.winfo_width(), wy0 + win.winfo_height()
@@ -559,15 +578,31 @@ class TkMirrorLayer:
     _STATE_BUTTON3 = 0x400
 
     def _generate(self, widget, sequence: str, sx: int, sy: int,
-                  state: int = 0, **extra) -> None:
+                  state: int = 0, **extra) -> bool:
         try:
             lx = sx - widget.winfo_rootx()
             ly = sy - widget.winfo_rooty()
             widget.event_generate(
                 sequence, x=lx, y=ly, rootx=sx, rooty=sy, state=state,
                 **extra)
+            return True
         except Exception:
-            pass
+            return False
+
+    def _forward_tk_mouse_event(self, target, button: int, action: int,
+                                sx: int, sy: int) -> bool:
+        if target is None:
+            return False
+        if action == 1:
+            sequence = '<ButtonPress-1>' if button == 0 \
+                else '<ButtonPress-3>'
+            state = 0
+        else:
+            sequence = '<ButtonRelease-1>' if button == 0 \
+                else '<ButtonRelease-3>'
+            state = self._STATE_BUTTON1 if button == 0 \
+                else self._STATE_BUTTON3
+        return self._generate(target, sequence, sx, sy, state=state)
 
     def _on_cursor_pos(self, _lx: float, _ly: float) -> None:
         sx, sy = self._cursor_screen_pos()
@@ -581,7 +616,7 @@ class TkMirrorLayer:
                 self._generate(target, '<B3-Motion>', sx, sy, state=self._STATE_BUTTON3)
             return
 
-        target = self._widget_at(sx, sy)
+        target = self._widget_at(self._tk_win, sx, sy)
         if target is not self._hover_widget:
             prev = self._hover_widget
             self._hover_widget = target
@@ -603,32 +638,46 @@ class TkMirrorLayer:
                          mods: int, _lx: float, _ly: float) -> None:
         if button not in (0, 1):
             return
-        sx, sy = self._cursor_screen_pos()
+        x, y = self._cursor_screen_pos()
         if action == 1:
-            target = self._widget_at(sx, sy)
-            if target is None:
-                return
+            target = self._widget_at(self._tk_win, x, y)
             self._pressed_widget = target
             self._held_button = button
-            try:
-                target.focus_set()
-            except Exception:
-                pass
-            seq = '<ButtonPress-1>' if button == 0 else '<ButtonPress-3>'
-            self._generate(target, seq, sx, sy)
+            if target is not None:
+                try:
+                    target.focus_set()
+                except Exception:
+                    pass
         else:
             target = self._pressed_widget
             self._pressed_widget = None
             self._held_button = -1
-            if target is None:
-                return
-            seq = '<ButtonRelease-1>' if button == 0 else '<ButtonRelease-3>'
-            state = self._STATE_BUTTON1 if button == 0 else self._STATE_BUTTON3
-            self._generate(target, seq, sx, sy, state=state)
+        forwarded = self._forward_tk_mouse_event(
+            target, button, action, x, y)
+        if forwarded:
+            return
+
+        # Native-message fallback is only used when Tk event generation
+        # could not resolve or dispatch to a widget.  Keep it after the
+        # in-process path so successful proxy clicks are never duplicated.
+        pt = wt.POINT(x, y)
+        try:
+            _user32.ScreenToClient(self._hwnd, ctypes.byref(pt))
+            if button == 0:
+                msg = 0x0201 if action == 1 else 0x0202
+                wp = 0x0001 if action == 1 else 0
+            else:
+                msg = 0x0204 if action == 1 else 0x0205
+                wp = 0x0002 if action == 1 else 0
+            lp = (pt.x & 0xFFFF) | ((pt.y & 0xFFFF) << 16)
+            _user32.PostMessageW(self._hwnd, msg, wp, lp)
+        except Exception:
+            pass
 
     def _on_scroll(self, _dx: float, dy: float) -> None:
         sx, sy = self._cursor_screen_pos()
-        target = self._pressed_widget or self._widget_at(sx, sy)
+        target = self._pressed_widget or self._widget_at(
+            self._tk_win, sx, sy)
         if target is None:
             return
         self._generate(target, '<MouseWheel>', sx, sy, delta=int(dy * 120))
@@ -686,28 +735,38 @@ def mirror_tk_panel(tk_win, name: str, z: int = 500,
     with _mirror_lock:
         old = _mirrors.get(name)
         if old is not None:
-            old.detach()
+            if not old.detach():
+                raise RuntimeError(
+                    f'tk mirror {name!r} capture thread did not stop')
         m = TkMirrorLayer(tk_win, name, z, capture_fps)
         _mirrors[name] = m
     return m
 
 
-def unmirror_tk_panel(name: str) -> None:
+def unmirror_tk_panel(name: str) -> bool:
     with _mirror_lock:
-        m = _mirrors.pop(name, None)
-    if m is not None:
-        m.detach()
+        m = _mirrors.get(name)
+    if m is None:
+        return True
+    if not m.detach():
+        return False
+    with _mirror_lock:
+        if _mirrors.get(name) is m:
+            _mirrors.pop(name, None)
+    return True
 
 
 def get_tk_mirror(name: str) -> Optional[TkMirrorLayer]:
     return _mirrors.get(name)
 
 
-def stop_all_mirrors() -> None:
+def stop_all_mirrors() -> bool:
     with _mirror_lock:
         names = list(_mirrors.keys())
+    confirmed = True
     for name in names:
-        unmirror_tk_panel(name)
+        confirmed = unmirror_tk_panel(name) and confirmed
+    return confirmed
 
 
 # ── SaoToplevel: drop-in replacement for tk.Toplevel ─────────────
@@ -836,8 +895,9 @@ class SaoToplevel(tk.Toplevel):
     def destroy(self) -> None:
         if self._mirror is not None:
             try:
-                self._mirror.detach()
+                if not self._mirror.detach():
+                    return
             except Exception:
-                pass
+                return
             self._mirror = None
         super().destroy()

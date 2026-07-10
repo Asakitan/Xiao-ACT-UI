@@ -60,27 +60,59 @@ class MemoryReader:
         self._stop = threading.Event()
         self._latest: Dict[str, Any] = {}
         self._lock = threading.Lock()
+        self._cleanup_lock = threading.Lock()
+        self._cleanup_thread: Optional[threading.Thread] = None
         self._read_fail_count = 0
 
     def start(self) -> None:
-        if self._thr is not None:
+        with self._cleanup_lock:
+            if self._cleanup_thread is not None:
+                return
+        if self._thr is not None and self._thr.is_alive():
             return
+        if self._thr is not None:
+            self._close_process_after(self._thr)
         self._pm = StarProcess()
         self._stop.clear()
         self._thr = threading.Thread(target=self._loop, name="mem_reader", daemon=True)
         self._thr.start()
 
-    def stop(self) -> None:
-        self._stop.set()
-        if self._thr:
-            self._thr.join(timeout=1.0)
-            self._thr = None
-        if self._pm:
+    def _close_process_after(self, worker: Optional[threading.Thread]) -> None:
+        if worker is not None and worker is not threading.current_thread():
+            worker.join()
+        with self._cleanup_lock:
+            if worker is not None and self._thr is worker:
+                self._thr = None
+            pm, self._pm = self._pm, None
+            self._cleanup_thread = None
+        if pm is not None:
             try:
-                self._pm.close()
+                pm.close()
             except Exception:
                 pass
-            self._pm = None
+
+    def stop(self, join_timeout: float = 1.0) -> bool:
+        self._stop.set()
+        worker = self._thr
+        if worker is not None and worker is not threading.current_thread():
+            worker.join(timeout=max(0.0, float(join_timeout)))
+        if worker is not None and worker.is_alive():
+            # A heap read can outlive the UI shutdown timeout.  Closing its
+            # GameProcess here would detach the process while the worker still
+            # owns it.  Defer final cleanup until rundown is proven complete.
+            with self._cleanup_lock:
+                if self._cleanup_thread is None:
+                    finalizer = threading.Thread(
+                        target=self._close_process_after,
+                        args=(worker,),
+                        name="mem-reader-rundown",
+                        daemon=True,
+                    )
+                    self._cleanup_thread = finalizer
+                    finalizer.start()
+            return False
+        self._close_process_after(worker)
+        return True
 
     def latest(self) -> Dict[str, Any]:
         with self._lock:

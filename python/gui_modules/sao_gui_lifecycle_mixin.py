@@ -132,22 +132,210 @@ class SAOPlayerGUILifecycleMixin:
         self._entry_overlay = None
 
     def _hard_exit_process(self) -> None:
+        # Stop producers and fully tear down every HWND/compositor owner
+        # before asking the helper to clean kernel state.  A helper teardown
+        # while overlay/_dc work is still being produced can otherwise race
+        # a late mutation against unload.
+        plugins_stopped = False
         try:
             from act_platform.runtime import shutdown_act_plugin_manager
-            shutdown_act_plugin_manager(self)
+            plugins_stopped = bool(shutdown_act_plugin_manager(self))
         except Exception:
-            pass
+            plugins_stopped = False
+        if not plugins_stopped:
+            try:
+                print('[SAO] hard exit blocked: plugin workers still active',
+                      flush=True)
+            except Exception:
+                pass
+            return
         try:
             from utils.sao_sound import unload_sao_fonts
             unload_sao_fonts()
         except Exception:
             pass
+        if not self._finalize_close(quit_root=False):
+            # ``UnifiedOverlay.stop`` preserves a live thread on timeout.
+            # Do not pretend shutdown succeeded and do not pull the helper
+            # out from underneath that still-live owner.
+            try:
+                print('[SAO] hard exit blocked: compositor did not stop',
+                      flush=True)
+            except Exception:
+                pass
+            return
+        try:
+            from mem_probe.process import _wait_for_target_leases_closed
+            producers_stopped = _wait_for_target_leases_closed(timeout=20.0)
+        except Exception:
+            producers_stopped = False
+        if not producers_stopped:
+            try:
+                print('[SAO] hard exit blocked: memory consumers still active',
+                      flush=True)
+            except Exception:
+                pass
+            return
+        # Wait for the rt_io helper subprocess to finish its kernel-side
+        # teardown before we let os._exit(0) yank the interpreter. The old
+        # path bypassed atexit → helper got killed 2 s later mid-teardown →
+        # kernel state (Ob callback pool, DPC timer, UC-tainted PFNs) left
+        # partially set up → next launch bugchecks 0x1A_2101 in
+        # MiProcessLoaderEntry when MI validates the newly-loaded driver
+        # image against the leftover PFN cache-attribute state.
+        #
+        # We show a small modal so the user knows the ~200 ms — 15 s wait
+        # is intentional, then explicitly call _stop_helper on a worker
+        # thread and pump Tk events while it drains.
+        if not self._await_helper_shutdown_ui():
+            try:
+                print('[SAO] hard exit blocked: helper cleanup unconfirmed',
+                      flush=True)
+            except Exception:
+                pass
+            return
         os._exit(0)
 
-    def _finalize_close(self):
+    def _await_helper_shutdown_ui(self) -> bool:
+        # Blocking wait with visible progress. Never raises.
+        try:
+            from mem_probe import rt_io_proxy
+        except Exception:
+            return False
+        # A dead child is not proof that backend cleanup committed: it may have
+        # crashed in FAILED state before sending CleanupReport/ACK.  Always ask
+        # the session owner for its confirmed stop result, including STOPPED.
+        # Modal Tk toplevel with a simple status label. Uses grab_set so
+        # the user can't restart the app mid-teardown.
+        try:
+            import tkinter as tk
+            top = tk.Toplevel(self.root)
+            top.title('退出中')
+            top.transient(self.root)
+            top.resizable(False, False)
+            try:
+                top.attributes('-topmost', True)
+            except Exception:
+                pass
+            frm = tk.Frame(top, padx=24, pady=18)
+            frm.pack()
+            tk.Label(frm, text='正在清理驱动状态，请稍候…',
+                     font=('Microsoft YaHei UI', 11)).pack(pady=(0, 6))
+            status = tk.Label(frm, text='等待 helper 退出',
+                              font=('Microsoft YaHei UI', 9), fg='#666')
+            status.pack()
+            # Center over the main window if possible.
+            try:
+                self.root.update_idletasks()
+                rx, ry = self.root.winfo_rootx(), self.root.winfo_rooty()
+                rw, rh = self.root.winfo_width(), self.root.winfo_height()
+                top.update_idletasks()
+                tw, th = top.winfo_width(), top.winfo_height()
+                top.geometry(f'+{rx + (rw - tw) // 2}+{ry + (rh - th) // 2}')
+            except Exception:
+                pass
+            try:
+                top.grab_set()
+            except Exception:
+                pass
+        except Exception:
+            top = None
+            status = None
+        # Run the actual stop in a background thread so we can pump Tk.
+        import threading, time
+        done = threading.Event()
+        confirmed = [False]
+
+        def _worker():
+            try:
+                result = rt_io_proxy._stop_helper(wait_seconds=15.0)
+                if isinstance(result, bool):
+                    confirmed[0] = result
+                elif isinstance(result, dict):
+                    confirmed[0] = bool(result.get('confirmed', False))
+                else:
+                    confirmed[0] = bool(
+                        getattr(result, 'confirmed', False))
+            except Exception:
+                confirmed[0] = False
+            done.set()
+
+        threading.Thread(target=_worker, daemon=True,
+                         name='helper-graceful-stop').start()
+        t0 = time.time()
+        while not done.is_set():
+            elapsed = time.time() - t0
+            if elapsed > 20.0:  # hard ceiling above _stop_helper's own 15s
+                break
+            if status is not None:
+                try:
+                    status.configure(text=f'等待 helper 退出（{elapsed:.1f}s）')
+                except Exception:
+                    pass
+            if top is not None:
+                try:
+                    self.root.update()
+                except Exception:
+                    pass
+            time.sleep(0.05)
+        if top is not None:
+            try:
+                top.grab_release()
+            except Exception:
+                pass
+            try:
+                top.destroy()
+            except Exception:
+                pass
+        return bool(done.is_set() and confirmed[0]
+                    and not getattr(
+                        rt_io_proxy, 'helper_alive', lambda: True)())
+
+    def _stop_overlay_runtime(self) -> bool:
+        webviews_stopped = False
+        try:
+            from render.webview_proxy import stop_all_proxies
+            webviews_stopped = bool(stop_all_proxies())
+        except Exception:
+            webviews_stopped = False
+        if not webviews_stopped:
+            self._compositor_stop_confirmed = False
+            return False
+        mirrors_stopped = False
+        try:
+            from render.tk_mirror import stop_all_mirrors
+            mirrors_stopped = bool(stop_all_mirrors())
+        except Exception:
+            mirrors_stopped = False
+        if not mirrors_stopped:
+            self._compositor_stop_confirmed = False
+            return False
+        compositor_stopped = True
+        try:
+            from render import gpu_overlay_window as _gow
+            instance = getattr(_gow, '_unified_overlay_instance', None)
+            if instance is not None:
+                compositor_stopped = bool(instance.stop())
+        except Exception:
+            compositor_stopped = False
+        self._compositor_stop_confirmed = compositor_stopped
+        return compositor_stopped
+
+    def _finalize_close(self, *, quit_root: bool = True):
         if self._close_finalized:
-            return
-        self._close_finalized = True
+            stopped = self._stop_overlay_runtime()
+            if stopped and quit_root:
+                try:
+                    self.root.quit()
+                except Exception:
+                    pass
+            return stopped
+        try:
+            from act_platform.runtime import shutdown_act_plugin_manager
+            if not shutdown_act_plugin_manager(self):
+                return False
+        except Exception:
+            return False
         self._destroyed = True
         self._breath_active = False
         self._lift_loop_active = False
@@ -233,20 +421,27 @@ class SAOPlayerGUILifecycleMixin:
             except Exception:
                 pass
         # 销毁所有注册的覆盖层 + 面板 (动态遍历, 不硬编码名称)
+        panels_stopped = True
         for attr_name in list(vars(self)):
             if attr_name.endswith('_overlay') or attr_name.endswith('_panel'):
                 obj = getattr(self, attr_name, None)
                 if obj is not None:
+                    destroyed = True
                     try:
                         destroy = getattr(obj, 'destroy', None)
                         if callable(destroy):
-                            destroy()
+                            destroyed = destroy() is not False
                     except Exception:
-                        pass
-                    try:
-                        setattr(self, attr_name, None)
-                    except Exception:
-                        pass
+                        destroyed = False
+                    if destroyed:
+                        try:
+                            setattr(self, attr_name, None)
+                        except Exception:
+                            pass
+                    else:
+                        panels_stopped = False
+        if not panels_stopped:
+            return False
         if getattr(self, '_ai_editor_panel', None):
             try:
                 self._ai_editor_panel.destroy()
@@ -266,18 +461,18 @@ class SAOPlayerGUILifecycleMixin:
         except Exception:
             pass
         self._cleanup_exit_overlay()
-        # Stop unified overlay compositor
-        try:
-            from render.gpu_overlay_window import (
-                get_unified_overlay_mode, _unified_overlay_instance)
-            if get_unified_overlay_mode() and _unified_overlay_instance:
-                _unified_overlay_instance.stop()
-        except Exception:
-            pass
-        try:
-            self.root.quit()  # 退出 mainloop，由 run() 负责 destroy
-        except Exception:
-            pass
+        # Stop unified overlay compositor.  The instance is authoritative;
+        # mode can already be false during a failed/prestart transition.
+        compositor_stopped = self._stop_overlay_runtime()
+        if not compositor_stopped:
+            return False
+        self._close_finalized = True
+        if quit_root:
+            try:
+                self.root.quit()  # 退出 mainloop，由 run() 负责 destroy
+            except Exception:
+                pass
+        return True
 
     def _run_exit_animation(
             self, after_shutdown=None, mode='exit', target_label=None,

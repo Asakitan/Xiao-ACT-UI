@@ -348,45 +348,50 @@ def _get_unified_overlay(root: Any = None):
 
 
 def prestart_unified_overlay(root: Any = None) -> None:
-    # Pre-initialize the compositor on a background thread.
+    # Synchronously initialize the compositor. Blocks until it is fully ready.
+    # 契约: 起不来直接 raise; 不再降级到 Tk/Canvas. 主人要求"没 compositor
+    # 直接退出", 由 sao_gui 顶层 catch → sys.exit.
     #
-    # Called early in app startup (before LinkStart) so the compositor
-    # is ready by the time the first overlay window is created.
+    # 旧版把 _init 扔到后台 daemon thread 立刻返回, 主线程继续走 __init__,
+    # 结果后续消费者 (LinkStart/NerveGear) 建 GpuOverlayWindow 时 compositor
+    # 还没 ready → 各自 wait_ready(8s) 超时 → 走 Tk/Canvas 降级. 上一轮实测
+    # HWND=0x000409C2 那次日志里两条 "compositor not ready after 8s" 就是这
+    # 个症状 (rt_io driver load 拉长了 compositor init 首轮).
+    global _UNIFIED_OVERLAY_MODE, _unified_overlay_instance
     if not _UNIFIED_OVERLAY_MODE:
         return
-    import threading
-    def _init():
-        global _UNIFIED_OVERLAY_MODE, _unified_overlay_instance
-        max_attempts = 3
-        for attempt in range(1, max_attempts + 1):
-            try:
-                uo = _get_unified_overlay(root)
-                if not uo.wait_ready(timeout=10.0):
-                    raise RuntimeError('compositor did not become ready in 10s')
-                print('[Overlay] compositor ready', flush=True)
-                return
-            except Exception as exc:
-                print(f'[Overlay] compositor init attempt {attempt}/{max_attempts} '
-                      f'failed: {exc}', flush=True)
-                if attempt < max_attempts:
-                    import time
-                    time.sleep(2.0)
+    max_attempts = 3
+    last_exc: Optional[Exception] = None
+    for attempt in range(1, max_attempts + 1):
         try:
-            uo = _unified_overlay_instance
-            if uo is not None:
-                uo.stop()
-        except Exception:
-            pass
-        try:
-            from render import overlay_compositor as _oc
-            _oc.reset_unified_overlay()
-        except Exception:
-            pass
-        _unified_overlay_instance = None
-        _UNIFIED_OVERLAY_MODE = False
-        print('[Overlay] compositor failed after retries — overlays '
-              'will be unavailable', flush=True)
-    threading.Thread(target=_init, daemon=True).start()
+            uo = _get_unified_overlay(root)
+            if not uo.wait_ready(timeout=10.0):
+                raise RuntimeError('compositor did not become ready in 10s')
+            print('[Overlay] compositor ready', flush=True)
+            return
+        except Exception as exc:
+            last_exc = exc
+            print(f'[Overlay] compositor init attempt {attempt}/{max_attempts} '
+                  f'failed: {exc}', flush=True)
+            if attempt < max_attempts:
+                import time as _t
+                _t.sleep(2.0)
+    # All attempts exhausted — clean up state and fail fatally.
+    try:
+        uo = _unified_overlay_instance
+        if uo is not None:
+            uo.stop()
+    except Exception:
+        pass
+    try:
+        from render import overlay_compositor as _oc
+        _oc.reset_unified_overlay()
+    except Exception:
+        pass
+    _unified_overlay_instance = None
+    _UNIFIED_OVERLAY_MODE = False
+    raise RuntimeError(
+        f'compositor failed after {max_attempts} attempts: {last_exc}')
 
 
 # ── GpuOverlayWindow ────────────────────────────────────────────────────────

@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-# Small contract tests for mem_probe.unified_source.UnifiedDataSource.
+# Small contract tests for the plugin-owned UnifiedDataSource.
 
 from __future__ import annotations
 
@@ -13,7 +13,7 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if ROOT not in sys.path:
     sys.path.insert(0, ROOT)
 
-from mem_probe import unified_source
+from plugins.star_resonance_plugin.mem import unified_source
 from plugins.star_resonance_plugin.mem.il2cpp.mem_self_state_provider import MemSelfStateProvider
 from plugins.star_resonance_plugin.mem.il2cpp.mem_state_anchor import AnchorMemoryReader, AnchorPack
 from mem_probe.process import MemoryRegion
@@ -75,7 +75,7 @@ class UnifiedSourceContractTests(unittest.TestCase):
         statuses = []
         self_updates = []
         packet_bridge = object()
-        with mock.patch.object(unified_source, "MemStateBridge", FakeMemStateBridge):
+        with mock.patch.object(unified_source, "_MemStateBridge", FakeMemStateBridge):
             source = unified_source.UnifiedDataSource(
                 state_mgr=object(),
                 mode="hybrid",
@@ -116,7 +116,7 @@ class UnifiedSourceContractTests(unittest.TestCase):
 
     def test_start_can_defer_until_tcp_trigger(self) -> None:
         statuses = []
-        with mock.patch.object(unified_source, "MemStateBridge", FakeMemStateBridge):
+        with mock.patch.object(unified_source, "_MemStateBridge", FakeMemStateBridge):
             source = unified_source.UnifiedDataSource(
                 state_mgr=object(),
                 mode="hybrid",
@@ -147,7 +147,7 @@ class UnifiedSourceContractTests(unittest.TestCase):
                 return False
 
         statuses = []
-        with mock.patch.object(unified_source, "MemStateBridge", FailingBridge):
+        with mock.patch.object(unified_source, "_MemStateBridge", FailingBridge):
             source = unified_source.UnifiedDataSource(
                 state_mgr=object(),
                 mode="memory",
@@ -162,7 +162,7 @@ class UnifiedSourceContractTests(unittest.TestCase):
 
     def test_policy_can_disable_memory_start(self) -> None:
         statuses = []
-        with mock.patch.object(unified_source, "MemStateBridge", FakeMemStateBridge):
+        with mock.patch.object(unified_source, "_MemStateBridge", FakeMemStateBridge):
             source = unified_source.UnifiedDataSource(
                 state_mgr=object(),
                 mode="hybrid",
@@ -229,7 +229,7 @@ class UnifiedSourceContractTests(unittest.TestCase):
         self.assertFalse(policy["provider_scan_in_progress"])
 
     def test_auto_hybrid_policy_defaults_are_scan_safe(self) -> None:
-        with mock.patch.object(unified_source, "MemStateBridge", FakeMemStateBridge):
+        with mock.patch.object(unified_source, "_MemStateBridge", FakeMemStateBridge):
             source = unified_source.UnifiedDataSource(
                 state_mgr=object(),
                 mode="hybrid",
@@ -244,7 +244,7 @@ class UnifiedSourceContractTests(unittest.TestCase):
         self.assertIn("cy_memscan", health["policy"])
 
     def test_auto_hybrid_zero_scan_cap_is_clamped_unless_explicitly_allowed(self) -> None:
-        with mock.patch.object(unified_source, "MemStateBridge", FakeMemStateBridge):
+        with mock.patch.object(unified_source, "_MemStateBridge", FakeMemStateBridge):
             safe = unified_source.UnifiedDataSource(
                 state_mgr=object(),
                 mode="hybrid",

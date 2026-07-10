@@ -146,16 +146,27 @@ class PageResolver:
         return modules
 
     def as_game_process(self, pid: int):
-        ep, cr3 = rt_io._r1_fe(pid)
-        if not ep or not cr3:
-            raise RuntimeError(f"pid {pid}")
-        return _MP(pid, cr3, self)
+        from mem_probe.process import TargetLease
+        lease = TargetLease(int(pid))
+        try:
+            if not lease.ensure_active():
+                raise RuntimeError(f"pid {pid}")
+            with lease.operation() as drv:
+                ep, cr3 = drv._r1_fe(int(pid))
+            if not ep or not cr3:
+                raise RuntimeError(f"pid {pid}")
+            return _MP(pid, cr3, self, lease)
+        except Exception:
+            lease.close()
+            raise
 
 
 class _MP:
 
-    def __init__(self, pid: int, cr3: int, sp) -> None:
+    def __init__(self, pid: int, cr3: int, sp, lease) -> None:
         self._pid, self._cr3, self._sp = pid, cr3, sp
+        self._lease = lease
+        self._closed = False
 
     @property
     def pid(self) -> int:
@@ -171,10 +182,39 @@ class _MP:
 
     @property
     def memory_tier(self) -> str:
-        return rt_io.memory_tier()
+        if self._closed:
+            return "S"
+        try:
+            with self._lease.operation() as drv:
+                return drv.memory_tier()
+        except Exception:
+            return "S"
 
     def read_bytes(self, addr: int, n: int) -> Optional[bytes]:
-        return b"" if n <= 0 else self._sp.read_memory(self._cr3, addr, n)
+        if n <= 0:
+            return b""
+        if self._closed:
+            return None
+        try:
+            with self._lease.operation():
+                return self._sp.read_memory(self._cr3, addr, n)
+        except Exception:
+            return None
+
+    def close(self) -> None:
+        if self._closed:
+            return
+        self._closed = True
+        lease = self._lease
+        self._lease = None
+        if lease is not None:
+            lease.close()
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *_exc) -> None:
+        self.close()
 
     def read_bytes_into(self, addr: int, buf, n: Optional[int] = None) -> int:
         want = len(buf) if n is None else int(n)

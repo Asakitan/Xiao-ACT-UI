@@ -85,31 +85,163 @@ _sp_ref = None
 _gp_ref = None
 _name_ref = ""
 _pid_ref = 0
+_cache_generation = 0
+_cache_lock = threading.RLock()
+_identity_token_ref = None
+_identity_name_ref = ""
+
+def _query_identity(pid: int):
+    try:
+        from mem_probe.process import query_process_identity
+        return query_process_identity(int(pid))
+    except Exception:
+        return None
 
 
-def _cache_result(sp, gp, name: str = "", pid: int = 0):
-    global _sp_ref, _gp_ref, _name_ref, _pid_ref
-    _sp_ref, _gp_ref = sp, gp
-    _name_ref, _pid_ref = str(name or ""), int(pid or 0)
+def _cached_identity_alive(gp, pid: int, token, name: str) -> bool:
+    if gp is None or int(pid or 0) <= 0 or bool(getattr(gp, "_closed", False)):
+        return False
+    is_alive = getattr(gp, "is_alive", None)
+    if callable(is_alive):
+        try:
+            return bool(is_alive())
+        except Exception:
+            return False
+    current = _query_identity(pid)
+    if current is None:
+        return False
+    expected_name = os.path.basename(str(name or "")).casefold()
+    if int(current[0]) != int(pid) or str(current[1]) != expected_name:
+        return False
+    # CreateTime makes PID reuse distinguishable without introducing the
+    # process handle that the primary resolver intentionally avoids.
+    return token is None or tuple(current) == tuple(token)
+
+
+def _close_cached_reader(sp, gp) -> None:
+    seen = set()
+    for obj in (gp, sp):
+        if obj is None or id(obj) in seen:
+            continue
+        seen.add(id(obj))
+        close = getattr(obj, "close", None)
+        if callable(close):
+            try:
+                close()
+            except Exception:
+                pass
+
+
+def _cache_result(sp, gp, name: str = "", pid: int = 0, *, _guard=None):
+    global _sp_ref, _gp_ref, _name_ref, _pid_ref, _cache_generation
+    global _identity_token_ref, _identity_name_ref
+    requested_pid = int(pid or 0)
+    if gp is not None:
+        try:
+            actual_pid = int(getattr(gp, "pid", 0) or 0)
+        except Exception:
+            actual_pid = 0
+        if requested_pid <= 0 or actual_pid != requested_pid:
+            _close_cached_reader(sp, gp)
+            return False
+    identity_token = _query_identity(requested_pid) if gp is not None else None
+    guard_lock = guard_check = None
+    if _guard is not None:
+        guard_lock, guard_check = _guard
+        guard_lock.acquire()
+    allowed = True
+    try:
+        if guard_check is not None and not bool(guard_check()):
+            allowed = False
+        else:
+            with _cache_lock:
+                old_sp, old_gp = _sp_ref, _gp_ref
+                _sp_ref, _gp_ref = sp, gp
+                _name_ref = str(name or "") if gp is not None else ""
+                _pid_ref = requested_pid if gp is not None else 0
+                _identity_token_ref = identity_token
+                _identity_name_ref = _name_ref
+                _cache_generation += 1
+    finally:
+        if guard_lock is not None:
+            guard_lock.release()
+    if not allowed:
+        _close_cached_reader(sp, gp)
+        return False
+    if old_gp is not gp or old_sp is not sp:
+        _close_cached_reader(old_sp, old_gp)
+    return gp is not None
+
+
+def get_cached_gp_snapshot():
+    """Return ``(reader, generation, pid)`` for race-aware consumers."""
+    with _cache_lock:
+        gp = _gp_ref
+        generation = int(_cache_generation)
+        pid = int(_pid_ref if gp is not None else 0)
+        identity_token = _identity_token_ref
+        identity_name = str(_identity_name_ref)
+    if gp is not None and not _cached_identity_alive(
+            gp, pid, identity_token, identity_name):
+        _invalidate_cache_if_current(gp, generation)
+        with _cache_lock:
+            return None, int(_cache_generation), 0
+    return gp, generation, pid
+
+
+def _invalidate_cache_if_current(gp, generation: int) -> bool:
+    global _sp_ref, _gp_ref, _name_ref, _pid_ref, _cache_generation
+    global _identity_token_ref, _identity_name_ref
+    with _cache_lock:
+        if gp is not _gp_ref or int(generation) != _cache_generation:
+            return False
+        old_sp, old_gp = _sp_ref, _gp_ref
+        _sp_ref = _gp_ref = None
+        _name_ref = _identity_name_ref = ""
+        _pid_ref = 0
+        _identity_token_ref = None
+        _cache_generation += 1
+    _close_cached_reader(old_sp, old_gp)
+    return True
+
+
+def is_cached_gp_current(gp, generation: int, pid: int = 0) -> bool:
+    with _cache_lock:
+        if gp is None or gp is not _gp_ref or int(generation) != _cache_generation:
+            return False
+        if bool(getattr(gp, "_closed", False)):
+            return False
+        current_pid = int(_pid_ref)
+        identity_token = _identity_token_ref
+        identity_name = str(_identity_name_ref)
+    if pid and int(pid) != current_pid:
+        return False
+    return _cached_identity_alive(
+        gp, current_pid, identity_token, identity_name
+    )
 
 
 def get_cached_gp():
-    return _gp_ref
+    return get_cached_gp_snapshot()[0]
 
 
 def get_cached_process_info() -> dict:
-    gp = _gp_ref
+    gp, generation, pid = get_cached_gp_snapshot()
     tier = ""
     if gp is not None:
         try:
             tier = gp.memory_tier
         except Exception:
             tier = ""
+        if not is_cached_gp_current(gp, generation, pid):
+            gp, pid, tier = None, 0, ""
+    with _cache_lock:
+        name = _name_ref if gp is _gp_ref and generation == _cache_generation else ""
     return {
         "attached": gp is not None,
         "engine": "A" if gp is not None else "",
-        "name": _name_ref,
-        "pid": _pid_ref,
+        "name": name,
+        "pid": pid,
         "tier": tier,
     }
 
@@ -260,6 +392,10 @@ class ProcessManagerPanel:
         self._count_label: Optional[tk.Label] = None
         self._stats_labels: Dict[str, tk.Label] = {}
         self._attach_mode: str = ""
+        self._attach_request_id: int = 0
+        self._attach_lock = threading.Lock()
+        self._attach_threads: Set[threading.Thread] = set()
+        self._destroying = False
         self._enum_source: str = ""
         self._resize_state: dict = {}
         self._tree_mode: bool = False
@@ -1126,11 +1262,16 @@ class ProcessManagerPanel:
         if not proc:
             return
         name, pid = proc["name"], proc["pid"]
+        with self._attach_lock:
+            if self._destroying:
+                return
+            self._attach_request_id += 1
+            request_id = self._attach_request_id
         if self._attached_label:
             self._attached_label.configure(text=f"Attaching {name}…",
                                            fg=_tc('gold', '#dea620'))
 
-        def _bg_attach():
+        def _bg_attach_body():
             try:
                 import config
                 config.GAME_PROCESS_NAMES = [name]
@@ -1138,36 +1279,96 @@ class ProcessManagerPanel:
                 pass
             primary_ok = False
             found_pid = pid
+            attach_error = "driver process resolver did not return a usable reader"
             try:
                 from mem_probe._pm._core import PageResolver
                 sp = PageResolver()
                 result = sp.find_process_by_name(name)
                 if result:
-                    found_pid, cr3 = result
-                    gp = sp.as_game_process(found_pid)
-                    _cache_result(sp, gp, name=name, pid=found_pid)
-                    primary_ok = True
-            except Exception:
-                pass
+                    resolved_pid, cr3 = result
+                    if int(resolved_pid) != int(pid):
+                        attach_error = (
+                            f"resolver returned pid {resolved_pid}, selected pid is {pid}"
+                        )
+                    else:
+                        found_pid = int(resolved_pid)
+                        gp = sp.as_game_process(found_pid)
+                        primary_ok = _cache_result(
+                            sp, gp, name=name, pid=found_pid,
+                            _guard=(
+                                self._attach_lock,
+                                lambda: request_id == self._attach_request_id,
+                            ),
+                        )
+                        if request_id != self._attach_request_id:
+                            return
+                        if not primary_ok:
+                            attach_error = "resolved reader PID did not match the selected process"
+            except Exception as exc:
+                attach_error = str(exc) or exc.__class__.__name__
             if not primary_ok:
+                if not _cache_result(
+                    None, None,
+                    _guard=(
+                        self._attach_lock,
+                        lambda: request_id == self._attach_request_id,
+                    ),
+                ) and request_id != self._attach_request_id:
+                    return
                 try:
                     from mem_probe.process import set_game_process_names
                     set_game_process_names([name])
                 except Exception:
                     pass
+            with self._attach_lock:
+                if request_id != self._attach_request_id:
+                    return
             try:
                 self.owner.settings.set("process_module_mode", self._module_mode)
                 self.owner.settings.save()
             except Exception:
                 pass
             if self._exists():
-                self.root.after(0, lambda: self._on_attach_done(name, found_pid, primary_ok))
+                self.root.after(
+                    0,
+                    lambda: self._on_attach_done(
+                        name, found_pid, primary_ok, request_id, attach_error
+                    ),
+                )
 
-        threading.Thread(target=_bg_attach, daemon=True).start()
+        def _bg_attach():
+            try:
+                _bg_attach_body()
+            finally:
+                with self._attach_lock:
+                    self._attach_threads.discard(threading.current_thread())
 
-    def _on_attach_done(self, name: str, pid: int, primary: bool):
-        self._attach_mode = "A" if primary else "S"
-        mode = "A" if primary else "S"
+        thread = threading.Thread(
+            target=_bg_attach, name=f'ProcessAttach-{pid}', daemon=True)
+        with self._attach_lock:
+            if self._destroying:
+                return
+            self._attach_threads.add(thread)
+            try:
+                thread.start()
+            except Exception:
+                self._attach_threads.discard(thread)
+
+    def _on_attach_done(self, name: str, pid: int, primary: bool,
+                        request_id: int, error: str = ""):
+        if request_id != self._attach_request_id:
+            return
+        if not primary:
+            self._attach_mode = ""
+            if self._attached_label:
+                detail = f" · {error[:80]}" if error else ""
+                self._attached_label.configure(
+                    text=f"✗ Attach failed: {name} ({pid}){detail}",
+                    fg=_tc('danger', '#d95f5f'))
+            self._update_mode_display()
+            return
+        self._attach_mode = "A"
+        mode = "A"
         if self._attached_label:
             self._attached_label.configure(
                 text=f"✓ {mode}: {name} ({pid})",
@@ -1241,7 +1442,26 @@ class ProcessManagerPanel:
         except Exception:
             return False
 
-    def destroy(self):
+    def destroy(self) -> bool:
+        with self._attach_lock:
+            self._destroying = True
+            self._attach_request_id += 1
+            threads = list(self._attach_threads)
+        # Invalidate the global cache before waiting.  A late worker is guarded
+        # by the incremented request id and closes its local reader on reject.
+        _cache_result(None, None)
+        deadline = _time.monotonic() + 5.0
+        current = threading.current_thread()
+        for thread in threads:
+            if thread is current:
+                continue
+            thread.join(timeout=max(0.0, deadline - _time.monotonic()))
+        with self._attach_lock:
+            alive = {thread for thread in self._attach_threads
+                     if thread.is_alive()}
+            self._attach_threads.intersection_update(alive)
+        if alive:
+            return False
         if self._auto_refresh_id is not None:
             try:
                 self.root.after_cancel(self._auto_refresh_id)
@@ -1254,6 +1474,7 @@ class ProcessManagerPanel:
             except Exception:
                 pass
             self._win = None
+        return True
 
 
 # Backward compatibility

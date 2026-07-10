@@ -1153,12 +1153,13 @@ class SAOWebViewGUI:
         except Exception:
             pass
 
-    def _destroy_plugin_surfaces(self):
+    def _destroy_plugin_surfaces(self) -> bool:
         try:
             from render.webview_proxy import stop_all_proxies
-            stop_all_proxies()
+            if not stop_all_proxies():
+                return False
         except Exception:
-            pass
+            return False
         surfaces = getattr(self, '_plugin_surfaces', None)
         meta = getattr(self, '_plugin_surface_meta', None)
         order = getattr(self, '_plugin_surface_order', None)
@@ -1181,6 +1182,7 @@ class SAOWebViewGUI:
         surfaces.clear()
         meta.clear()
         order.clear()
+        return True
 
     def _destroy_plugin_surfaces_for_plugin(self, plugin_id: str):
         pid = str(plugin_id or '').strip()
@@ -1198,9 +1200,10 @@ class SAOWebViewGUI:
         for surface in stale:
             try:
                 from render.webview_proxy import unregister_webview_proxy
-                unregister_webview_proxy(surface)
+                if not unregister_webview_proxy(surface):
+                    continue
             except Exception:
-                pass
+                continue
             try:
                 win = surfaces.get(surface)
                 if win:
@@ -3285,6 +3288,12 @@ class SAOWebViewGUI:
 
         time.sleep(0.46 if self._menu_visible else 0.28)
 
+        # Capture producers must be proven stopped before their source HWNDs
+        # or compositor layers are destroyed.
+        if not self._destroy_plugin_surfaces():
+            self._exit_animating = False
+            return
+
         try:
             self.hp_win.destroy()
         except Exception:
@@ -3304,7 +3313,6 @@ class SAOWebViewGUI:
         except Exception:
             pass
         self._release_plugin_lifecycle_subscription()
-        self._destroy_plugin_surfaces()
 
         # 强制退出进程 — webview/.NET 内部线程无法自行终止
         # UI 切换也走新进程: 动画结束后立即拉起 Entity, 不再等待 webview.start() 返回.
@@ -3875,6 +3883,8 @@ class SAOWebViewGUI:
         except Exception:
             pass
         self._dispatch_webview_extension('_save_game_cache', quiet=False)
+        if not self._destroy_plugin_surfaces():
+            return
         self._destroy_all_panels()
         try:
             self.hp_win.destroy()
@@ -3890,4 +3900,3 @@ class SAOWebViewGUI:
         except Exception:
             pass
         self._release_plugin_lifecycle_subscription()
-        self._destroy_plugin_surfaces()

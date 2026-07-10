@@ -159,13 +159,23 @@ class MemStateBridge:
         self._np_last_harvest: float = 0.0
         self._np_harvest_interval: float = 8.0    # min gap between sweeps
         self._np_periodic_interval: float = 60.0  # idle re-sweep (warm ~0.1s) for new mobs/npcs
+        self._map_reader_thread: Optional[threading.Thread] = None
+        self._np_harvest_thread: Optional[threading.Thread] = None
+        self._break_cache_thread: Optional[threading.Thread] = None
+        self._stopping = threading.Event()
+        self._rundown_lock = threading.Lock()
+        self._rundown_thread: Optional[threading.Thread] = None
 
     # ───────── public ─────────
 
     def start(self) -> bool:
         # 启动后台线程. 失败返回 False (不抛). 成功返回 True.
+        with self._rundown_lock:
+            if self._rundown_thread is not None:
+                return False
         if self._provider is not None:
             return True
+        self._stopping.clear()
         try:
             self._provider = MemSelfStateProvider(
                 on_uid_change=self._on_uid,
@@ -333,10 +343,11 @@ class MemStateBridge:
                                 duration_probe=BossDurationProbe(
                                     prov._pm,
                                     resolver=(_prov_src.sr if _prov_src is not None else None)))
-                            self._boss_cast_stop.clear()
-                            self._boss_cast_thread = threading.Thread(
-                                target=self._boss_cast_loop, name="mem-boss-cast", daemon=True)
-                            self._boss_cast_thread.start()
+                            if not self._stopping.is_set():
+                                self._boss_cast_stop.clear()
+                                self._boss_cast_thread = threading.Thread(
+                                    target=self._boss_cast_loop, name="mem-boss-cast", daemon=True)
+                                self._boss_cast_thread.start()
                         except Exception as _ba_exc:
                             self._boss_action_tracker = None
                             print(f"[MemBridge.entity] BossActionTracker init failed: {_ba_exc}")
@@ -642,29 +653,74 @@ class MemStateBridge:
         if rec is not None:
             self._on_boss_action_event(rec)
 
-    def stop(self):
+    def _finish_rundown(self, threads, provider) -> None:
+        for worker in threads:
+            if worker is not None and worker is not threading.current_thread():
+                try:
+                    worker.join()
+                except Exception:
+                    pass
+        if provider is not None:
+            try:
+                provider.stop()
+            except Exception:
+                pass
+        with self._rundown_lock:
+            if self._provider is provider:
+                self._provider = None
+            self._entity_thread = None
+            self._boss_cast_thread = None
+            self._map_reader_thread = None
+            self._np_harvest_thread = None
+            self._break_cache_thread = None
+            self._entity_provider = None
+            self._boss_action_tracker = None
+            self._rundown_thread = None
+
+    def stop(self, join_timeout: float = 2.0) -> bool:
+        self._stopping.set()
         self._entity_stop.set()
         self._boss_cast_stop.set()
-        if self._boss_cast_thread:
+        search_threads = ()
+        try:
+            from plugins.star_resonance_plugin.mem.mem_access import cancel_search_jobs_for_bridge
+            search_threads = cancel_search_jobs_for_bridge(self)
+        except Exception:
+            pass
+        threads = tuple(dict.fromkeys(
+            worker for worker in (
+                self._boss_cast_thread,
+                self._entity_thread,
+                self._map_reader_thread,
+                self._np_harvest_thread,
+                self._break_cache_thread,
+                *search_threads,
+            ) if worker is not None
+        ))
+        deadline = time.monotonic() + max(0.0, float(join_timeout))
+        for worker in threads:
+            if worker is threading.current_thread():
+                continue
             try:
-                self._boss_cast_thread.join(timeout=2.0)
+                worker.join(timeout=max(0.0, deadline - time.monotonic()))
             except Exception:
                 pass
-            self._boss_cast_thread = None
-        self._boss_action_tracker = None
-        if self._entity_thread:
-            try:
-                self._entity_thread.join(timeout=2.0)
-            except Exception:
-                pass
-            self._entity_thread = None
-        self._entity_provider = None
-        if self._provider:
-            try:
-                self._provider.stop()
-            except Exception:
-                pass
-            self._provider = None
+        alive = tuple(worker for worker in threads if worker.is_alive())
+        provider = self._provider
+        if alive:
+            with self._rundown_lock:
+                if self._rundown_thread is None:
+                    finalizer = threading.Thread(
+                        target=self._finish_rundown,
+                        args=(threads, provider),
+                        name="mem-bridge-rundown",
+                        daemon=True,
+                    )
+                    self._rundown_thread = finalizer
+                    finalizer.start()
+            return False
+        self._finish_rundown(threads, provider)
+        return True
 
     def force_mode(self, mode: str):
         # 'tcp' 或 'memory' — 主程序可强制切换.
@@ -699,9 +755,13 @@ class MemStateBridge:
             if sid:
                 return sid, r.name_for_scene(sid)
         if not self._map_reader_built and not self._map_reader_busy:
+            if self._stopping.is_set():
+                return smid, ""
             self._map_reader_busy = True
-            threading.Thread(target=self._build_map_reader, name="mem-mapname",
-                             daemon=True).start()
+            worker = threading.Thread(target=self._build_map_reader, name="mem-mapname",
+                                      daemon=True)
+            self._map_reader_thread = worker
+            worker.start()
         nr = self._name_resolver()
         nm = (nr.dungeon(smid, default="") if (nr and smid) else "")
         return smid, nm
@@ -742,6 +802,8 @@ class MemStateBridge:
         finally:
             self._map_reader_built = True
             self._map_reader_busy = False
+            if self._map_reader_thread is threading.current_thread():
+                self._map_reader_thread = None
 
     def _harvest_pm(self):
         # The shared StarProcess handle for the nameplate sweep (or None).
@@ -759,7 +821,21 @@ class MemStateBridge:
             from plugins.star_resonance_plugin.engines.break_time_lookup import build_full_cache, _cache
             if len(_cache) > 50:
                 return
-            threading.Thread(target=build_full_cache, name="break-cache-build", daemon=True).start()
+            if self._stopping.is_set() or self._break_cache_thread is not None:
+                return
+
+            def _worker():
+                try:
+                    build_full_cache()
+                finally:
+                    if self._break_cache_thread is threading.current_thread():
+                        self._break_cache_thread = None
+
+            worker = threading.Thread(
+                target=_worker, name="break-cache-build", daemon=True
+            )
+            self._break_cache_thread = worker
+            worker.start()
         except Exception:
             pass
 
@@ -781,13 +857,19 @@ class MemStateBridge:
             if (not unresolved or self._np_harvest_busy
                     or (now - self._np_last_harvest) < self._np_harvest_interval):
                 return
+            if self._stopping.is_set():
+                return
             pm = self._harvest_pm()
             if pm is None:
                 return
             self._np_harvest_busy = True
             self._np_last_harvest = now
-            threading.Thread(target=self._run_nameplate_harvest, args=(pm,),
-                             name="mem-nameplate", daemon=True).start()
+            worker = threading.Thread(
+                target=self._run_nameplate_harvest,
+                args=(pm,), name="mem-nameplate", daemon=True
+            )
+            self._np_harvest_thread = worker
+            worker.start()
         except Exception:
             traceback.print_exc()
 
@@ -867,6 +949,8 @@ class MemStateBridge:
             traceback.print_exc()
         finally:
             self._np_harvest_busy = False
+            if self._np_harvest_thread is threading.current_thread():
+                self._np_harvest_thread = None
 
     def _build_anchor_pack(self) -> AnchorPack:
         # Build a semantic anchor pack from the live PacketBridge parser.
@@ -1253,4 +1337,3 @@ def _selftest():
 
 if __name__ == "__main__":
     _selftest()
-

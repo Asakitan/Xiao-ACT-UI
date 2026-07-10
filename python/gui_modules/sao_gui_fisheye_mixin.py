@@ -326,21 +326,9 @@ class SAOPlayerGUIFisheyeMixin:
         except Exception:
             return
         try:
-            import ctypes as _ct
-            _u32 = _ct.windll.user32
-            _SWP = 0x0002 | 0x0001 | 0x0010  # NOMOVE | NOSIZE | NOACTIVATE
-            _u32.SetWindowPos(
-                _ct.wintypes.HWND(host_hwnd), _ct.wintypes.HWND(-1),
-                0, 0, 0, 0, _SWP,
-            )
-            try:
-                from mem_probe._dc import hide_exstyle
-                if not hide_exstyle(host_hwnd, 0x8 | 0x00200000):
-                    _ex = _u32.GetWindowLongPtrW(host_hwnd, -20)
-                    if _ex & 0x8:
-                        _u32.SetWindowLongPtrW(host_hwnd, -20, _ex & ~0x8)
-            except Exception:
-                pass
+            # `_enforce_z_order` owns the visible USER32 decision; its kernel
+            # scrub is queued through the shared mutation coordinator.
+            uo.enforce_z_order_now(force_topmost=True)
         except Exception:
             pass
 

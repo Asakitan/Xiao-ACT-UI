@@ -28,6 +28,16 @@ def _get_gp():
     return get_cached_gp()
 
 
+def _get_gp_snapshot():
+    from gui_modules.sao_gui_process_selector import get_cached_gp_snapshot
+    return get_cached_gp_snapshot()
+
+
+def _snapshot_is_current(gp, generation: int, pid: int) -> bool:
+    from gui_modules.sao_gui_process_selector import is_cached_gp_current
+    return is_cached_gp_current(gp, generation, pid)
+
+
 def status() -> Dict[str, Any]:
     # Attach status for the cached engine-A process handle.
     from gui_modules.sao_gui_process_selector import get_cached_process_info
@@ -45,7 +55,7 @@ def _parse_address(address: Any) -> int:
 
 def read_bytes(address: Any, length: int) -> Dict[str, Any]:
     # Read raw bytes at `address`, returned as hex + printable-ASCII dump.
-    gp = _get_gp()
+    gp, generation, pid = _get_gp_snapshot()
     if gp is None:
         return {"ok": False, "error": "no process attached (use Process Selector)"}
     try:
@@ -57,6 +67,8 @@ def read_bytes(address: Any, length: int) -> Dict[str, Any]:
         data = gp.read_bytes(addr, n)
     except Exception as exc:
         return {"ok": False, "error": str(exc)}
+    if not _snapshot_is_current(gp, generation, pid):
+        return {"ok": False, "error": "attached process changed during read"}
     if data is None:
         return {"ok": False, "error": "read failed (unmapped or inaccessible address)"}
     ascii_repr = "".join(chr(b) if 32 <= b < 127 else "." for b in data)
@@ -71,7 +83,7 @@ def read_bytes(address: Any, length: int) -> Dict[str, Any]:
 
 def read_value(address: Any, dtype: str = "u32") -> Dict[str, Any]:
     # Read one typed scalar (u8/i8/u16/i16/u32/i32/u64/i64/f32/f64) at `address`.
-    gp = _get_gp()
+    gp, generation, pid = _get_gp_snapshot()
     if gp is None:
         return {"ok": False, "error": "no process attached (use Process Selector)"}
     dtype = str(dtype or "u32").strip().lower()
@@ -88,6 +100,8 @@ def read_value(address: Any, dtype: str = "u32") -> Dict[str, Any]:
         data = gp.read_bytes(addr, size)
     except Exception as exc:
         return {"ok": False, "error": str(exc)}
+    if not _snapshot_is_current(gp, generation, pid):
+        return {"ok": False, "error": "attached process changed during read"}
     if not data or len(data) != size:
         return {"ok": False, "error": "read failed (unmapped or inaccessible address)"}
     value = struct.unpack(pack_fmt, data)[0]

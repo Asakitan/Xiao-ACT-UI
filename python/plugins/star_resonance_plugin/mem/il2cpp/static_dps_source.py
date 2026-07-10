@@ -98,27 +98,37 @@ class StaticDpsSource:
         self._last_snapshot: Optional[SelfSnapshot] = None
         self._scan_in_progress: bool = False
         self._scan_failed_at: float = 0.0
-        self._sr_lock = threading.Lock()  # StarProcess 不是线程安全的
+        self._sr_lock = threading.RLock()  # StarProcess 不是线程安全的
+        self._close_requested = threading.Event()
+        self._close_lock = threading.Lock()
+        self._close_thread: Optional[threading.Thread] = None
 
     @property
     def sr(self) -> StaticResolver:
-        if self._sr is None:
-            # 1. 优先从 bundle_store 按 game_key 自动找
-            store_hit = find_bundle_for_running_game()
-            if store_hit:
-                bundle_path, key, _ga_path = store_hit
-                print(f"[dps-source] using bundle from store: {os.path.basename(bundle_path)} "
-                      f"(game_key={key[:16]}...)", file=sys.stderr)
-                self._sr = open_resolver_from_bundle(bundle_path)
-            elif os.path.isfile(self.bundle_path):
-                self._sr = open_resolver_from_bundle(self.bundle_path)
-            else:
-                self._sr = open_resolver(self.dump_id)
-        return self._sr
+        with self._sr_lock:
+            if self._close_requested.is_set():
+                raise RuntimeError("StaticDpsSource is closing")
+            if self._sr is None:
+                # 1. 优先从 bundle_store 按 game_key 自动找
+                store_hit = find_bundle_for_running_game()
+                if store_hit:
+                    bundle_path, key, _ga_path = store_hit
+                    print(f"[dps-source] using bundle from store: {os.path.basename(bundle_path)} "
+                          f"(game_key={key[:16]}...)", file=sys.stderr)
+                    self._sr = open_resolver_from_bundle(bundle_path)
+                elif os.path.isfile(self.bundle_path):
+                    self._sr = open_resolver_from_bundle(self.bundle_path)
+                else:
+                    self._sr = open_resolver(self.dump_id)
+            return self._sr
 
     def get_self_snapshot(self, force_rescan: bool = False) -> Optional[SelfSnapshot]:
-        sr = self.sr
+        if self._close_requested.is_set():
+            return None
         with self._sr_lock:
+            if self._close_requested.is_set():
+                return None
+            sr = self.sr
             hit = get_or_find_self(sr, self.SELF_CLASS,
                                    self.SELF_SENTINEL_FIELD,
                                    self.SELF_SENTINEL_CLASS,
@@ -150,9 +160,13 @@ class StaticDpsSource:
         # ...显示 "正在扫描..."
         # else:
         # ...用 snap 数据
-        sr = self.sr
+        if self._close_requested.is_set():
+            return None
         # 先尝试用现有缓存命中 (不触发扫描)
         with self._sr_lock:
+            if self._close_requested.is_set():
+                return None
+            sr = self.sr
             try:
                 # 复用 get_or_find_self 的校验逻辑: 强制不扫,直接读 cache
                 from plugins.star_resonance_plugin.mem.il2cpp.instance_cache import _load, _key, _DEFAULT_CACHE
@@ -191,7 +205,7 @@ class StaticDpsSource:
 
     def _kick_background_scan(self) -> None:
         with self._scan_lock:
-            if self._scan_in_progress:
+            if self._close_requested.is_set() or self._scan_in_progress:
                 return
             # 失败后 30s 才允许下次重试
             if self._scan_failed_at and time.time() - self._scan_failed_at < 30:
@@ -211,6 +225,8 @@ class StaticDpsSource:
                 with self._scan_lock:
                     self._scan_in_progress = False
                     self._scan_thread = None
+                if self._close_requested.is_set():
+                    self._finish_close(None)
 
         t = threading.Thread(target=_worker, name="static-dps-scan", daemon=True)
         self._scan_thread = t
@@ -229,12 +245,14 @@ class StaticDpsSource:
 
     def fill_extended(self, snap: SelfSnapshot) -> SelfSnapshot:
         # 在现有 snap 上补充 SkillCD/Resources/Profession/Name 等扩展信息.
-        if snap is None:
+        if snap is None or self._close_requested.is_set():
             return snap
-        sr = self.sr
         attr = snap.user_fight_attr_obj
         char = snap.char_serialize_obj
         with self._sr_lock:
+            if self._close_requested.is_set():
+                return snap
+            sr = self.sr
             try:
                 snap.is_dead = sr.read_field(attr, self.SELF_SENTINEL_CLASS, "IsDead") or 0
                 snap.origin_energy = sr.read_field(attr, self.SELF_SENTINEL_CLASS, "OriginEnergy") or 0.0
@@ -312,13 +330,39 @@ class StaticDpsSource:
             self.fill_extended(snap)
         return snap
 
-    def close(self):
-        if self._sr is not None:
+    def _finish_close(self, worker: Optional[threading.Thread]) -> None:
+        if worker is not None and worker is not threading.current_thread():
+            worker.join()
+        with self._close_lock:
+            with self._sr_lock:
+                sr, self._sr = self._sr, None
+            self._close_thread = None
+        if sr is not None:
             try:
-                self._sr.pm.close()
+                sr.pm.close()
             except Exception:
                 pass
-            self._sr = None
+
+    def close(self, wait_timeout: float = 2.0) -> bool:
+        self._close_requested.set()
+        with self._scan_lock:
+            worker = self._scan_thread
+        if worker is not None and worker is not threading.current_thread():
+            worker.join(timeout=max(0.0, float(wait_timeout)))
+        if worker is not None and worker.is_alive():
+            with self._close_lock:
+                if self._close_thread is None:
+                    finalizer = threading.Thread(
+                        target=self._finish_close,
+                        args=(worker,),
+                        name="static-dps-rundown",
+                        daemon=True,
+                    )
+                    self._close_thread = finalizer
+                    finalizer.start()
+            return False
+        self._finish_close(worker)
+        return True
 
 
 def _selftest():
@@ -367,4 +411,3 @@ def _selftest():
 
 if __name__ == "__main__":
     _selftest()
-

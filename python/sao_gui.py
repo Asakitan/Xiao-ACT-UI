@@ -140,15 +140,28 @@ class SAOPlayerGUI(SAOPlayerGUIMenuMixin, SAOPlayerGUIFisheyeMixin, SAOPlayerGUI
         self.root.title("SAO Auto — Platform UI")
 
         # Unified overlay: single DWM window for all GPU panels.
+        # 契约: compositor 是硬依赖. prestart 现在同步阻塞, 起不来直接退出主
+        # 程序; 不再降级到 Tk/Canvas. (config 导入失败或 USE_UNIFIED_OVERLAY
+        # 为 False 时按旧行为跳过, 相当于用户显式关闭 unified overlay.)
         try:
             from config import USE_UNIFIED_OVERLAY
-            if USE_UNIFIED_OVERLAY:
-                from render.gpu_overlay_window import (
-                    set_unified_overlay_mode, prestart_unified_overlay)
-                set_unified_overlay_mode(True)
-                prestart_unified_overlay(self.root)
         except Exception:
-            pass
+            USE_UNIFIED_OVERLAY = False
+        if USE_UNIFIED_OVERLAY:
+            from render.gpu_overlay_window import (
+                set_unified_overlay_mode, prestart_unified_overlay)
+            set_unified_overlay_mode(True)
+            try:
+                prestart_unified_overlay(self.root)
+            except Exception as _co_exc:
+                print(f'[SAO] compositor unavailable, aborting startup: '
+                      f'{type(_co_exc).__name__}: {_co_exc}', flush=True)
+                try:
+                    self.root.destroy()
+                except Exception:
+                    pass
+                import sys as _sys
+                _sys.exit(1)
 
         self.settings = SettingsManager()
         # 记录当前 UI 模式 — 下次启动时使用
@@ -277,6 +290,29 @@ class SAOPlayerGUI(SAOPlayerGUIMenuMixin, SAOPlayerGUIFisheyeMixin, SAOPlayerGUI
             self.root.after(100, _ensure_compositor_poller)
         except Exception:
             pass
+
+        # 主线程心跳 — 每 200ms 打一次时间戳给 main.py 里的 HangDetector 后
+        # 台线程比对. 阈值默认 2s (SAO_HANG_THRESHOLD_MS), 超过就 dump 所有
+        # 线程栈到 stderr. 主人反馈"主菜单跑着跑着卡死无报错" 就是靠这条
+        # 抓到卡的位置.
+        try:
+            import sys as _sys
+            _hb_fn = getattr(_sys.modules.get('__main__'),
+                             '_sao_hang_heartbeat', None)
+            if callable(_hb_fn):
+                def _tick_heartbeat():
+                    try:
+                        _hb_fn()
+                    except Exception:
+                        pass
+                    try:
+                        self.root.after(200, _tick_heartbeat)
+                    except Exception:
+                        pass
+                self.root.after(0, _tick_heartbeat)
+        except Exception:
+            pass
+
         self.root.mainloop()
         # mainloop 已退出 — 先停 GLFW pump 线程（v2.3.14 解耦后 pump 在独立线程
         # 上跑 GL；必须在 root.destroy() 之前 join，否则 daemon 线程会被强杀，

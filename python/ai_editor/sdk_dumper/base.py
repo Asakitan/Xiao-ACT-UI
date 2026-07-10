@@ -105,19 +105,26 @@ class ProcessReader(MemoryReader):
     def __init__(self, pid: int) -> None:
         self.pid = pid
         self._drv = None
+        self._lease = None
         self._attached = False
         self._module_cache: Dict[str, Tuple[int, int]] = {}
 
     def _ensure_attached(self) -> None:
         if self._attached:
             return
+        lease = None
         try:
             from mem_probe import rt_io as drv
-            drv.ensure_loaded()
-            drv.attach(self.pid)
+            from mem_probe.process import TargetLease
+            lease = TargetLease(self.pid)
+            if not lease.ensure_active():
+                raise RuntimeError("driver ensure/attach returned false")
             self._drv = drv
+            self._lease = lease
             self._attached = True
         except Exception as exc:
+            if lease is not None:
+                lease.close()
             raise RuntimeError(f"Failed to attach to pid {self.pid}: {exc}") from exc
 
     def read(self, addr: int, size: int) -> bytes:
@@ -125,7 +132,9 @@ class ProcessReader(MemoryReader):
             return b""
         self._ensure_attached()
         try:
-            return self._drv.read(addr, size)
+            with self._lease.operation() as drv:
+                data = drv.read(addr, size)
+            return data if data is not None else b""
         except Exception as exc:
             logger.debug("ProcessReader.read failed at %s size=%s: %s",
                          hex(addr), size, exc)
@@ -137,10 +146,13 @@ class ProcessReader(MemoryReader):
             return self._module_cache[name_lower]
         self._ensure_attached()
         try:
-            from mem_probe.process import enum_modules
-            for mod in enum_modules(self.pid):
-                mod_name = mod.get("name", "").lower()
-                self._module_cache[mod_name] = (mod["base"], mod["size"])
+            with self._lease.operation():
+                from mem_probe._pm._core import PageResolver
+                modules = PageResolver().enumerate_modules(self.pid)
+            for mod_name, base, size in modules:
+                self._module_cache[str(mod_name or "").lower()] = (
+                    int(base), int(size)
+                )
             return self._module_cache.get(name_lower, (0, 0))
         except Exception as exc:
             logger.debug("ProcessReader.get_module_base failed for %s: %s",
@@ -148,13 +160,12 @@ class ProcessReader(MemoryReader):
             return (0, 0)
 
     def close(self):
-        if self._attached and self._drv:
-            try:
-                self._drv.detach()
-            except Exception as exc:
-                logger.debug("ProcessReader.detach failed for pid %s: %s",
-                             self.pid, exc)
+        lease = self._lease
+        self._lease = None
+        if lease is not None:
+            lease.close()
         self._attached = False
+        self._drv = None
 
 
 # ---------------------------------------------------------------------------

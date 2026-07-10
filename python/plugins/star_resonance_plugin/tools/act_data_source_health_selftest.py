@@ -49,9 +49,9 @@ class FakePacketEngine:
 
 class FakeOwner:
     def __init__(self):
-        self._packet_engine = FakePacketEngine()
+        self.packet_engine = FakePacketEngine()
         self._recognition_active = True
-        self._cfg_settings_ref = {"mem_data_source": "hybrid"}
+        self._cfg_settings_ref = {"data_source": "hybrid"}
 
 
 class FakeStringVar:
@@ -64,7 +64,17 @@ class FakeStringVar:
 
 class ActDataSourceHealthTests(unittest.TestCase):
     def test_health_payload_contains_parity_fields(self) -> None:
-        payload = runtime.act_data_source_health(FakeOwner(), now=1002.0)
+        owner = FakeOwner()
+
+        def provider(name):
+            if name == "owner_packet_bridge":
+                return lambda current_owner: current_owner.packet_engine
+            return None
+
+        with mock.patch.object(
+            runtime, "_EXTENSION_RUNTIME_PROVIDER", provider
+        ):
+            payload = runtime.act_data_source_health(owner, now=1002.0)
 
         self.assertTrue(payload["ok"])
         self.assertEqual(payload["status"], "running")
