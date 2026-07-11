@@ -2,15 +2,9 @@
 # SAOPlayerGUIActionsMixin — sixth mixin extracted from SAOPlayerGUI
 # (round 43 of the sao_gui split refactor). 17 methods, ~152 lines.
 #
-# Bundles the AutoKey + BossRaid "action" toggles + their config
-# loaders + their panel-toggle handlers. Both clusters share the same
-# shape (toggle_panel + toggle_detail_panel + toggle_engine +
-# config-loader + config-saver + author-snapshot), so they ride
-# together as a single mixin.
+# Bundles the AutoKey + BossRaid action toggles and their config loaders.
 #
 # AutoKey cluster:
-# * _toggle_autokey_panel, _toggle_autokey_detail_panel — open/close
-# the floating panels (quick + detail editor)
 # * _toggle_auto_script — toggle the AutoKey engine on/off
 # * _auto_key_settings_ref, _auto_key_author_snapshot — settings
 # + author-info shims
@@ -19,7 +13,6 @@
 # action list IO
 #
 # BossRaid cluster:
-# * _toggle_bossraid_panel, _toggle_bossraid_detail_panel — same shape
 # * _toggle_boss_raid — toggle the BossRaid engine
 # * _boss_raid_next_phase — advance the raid phase
 # * _boss_raid_settings_ref, _boss_raid_author_snapshot
@@ -29,8 +22,6 @@
 # * self.root, self.settings, self._cfg_settings_ref
 # * self._username, self._profession, self._game_state
 # * self._auto_key_engine, self._boss_raid_engine
-# * self._autokey_panel, self._autokey_detail_panel,
-# self._bossraid_panel, self._bossraid_detail_panel
 #
 # Required SAOPlayerGUI methods (resolved via MRO):
 # * _dismiss_sao_menu_for_panel, _refresh_menu_if_open  (Menu mixin)
@@ -45,14 +36,6 @@ from typing import Any, Dict, List, Optional
 
 class SAOPlayerGUIActionsMixin:
     # Mixin bundling the AutoKey + BossRaid action toggles + config IO.
-
-    def _toggle_autokey_panel(self):
-        # 打开/关闭 AutoKey 配置面板 — 游戏插件覆盖此方法。
-        pass
-
-    def _toggle_bossraid_panel(self):
-        # 打开/关闭 BossRaid 配置面板 — 游戏插件覆盖此方法。
-        pass
 
     def _mechanics_editor_api(self) -> Dict[str, Any]:
         # 机制编辑器回调集 — 游戏插件覆盖此方法。
@@ -73,14 +56,6 @@ class SAOPlayerGUIActionsMixin:
     def _set_linkage_field(self, field: str, value: Any) -> Any:
         # 设置联动字段 — 游戏插件覆盖此方法。
         return None
-
-    def _toggle_autokey_detail_panel(self):
-        # AutoKey 详细编辑器 — 游戏插件覆盖此方法。
-        pass
-
-    def _toggle_bossraid_detail_panel(self):
-        # BossRaid 详细编辑器 — 游戏插件覆盖此方法。
-        pass
 
     def _toggle_auto_script(self, force_enabled=None):
         # 切换 AutoKey 脚本开关.

@@ -23,27 +23,38 @@ from gui_modules.sao_panel_components import (
     attach_tooltip,
     empty_state,
     fmt_dur,
+    fmt_signed,
     keep_canvas_scroll,
     sao_entry,
     sao_option_menu,
     sao_scrollbar,
     status_badge,
+    _pc,
 )
 from utils.sao_sound import get_sao_font, get_cjk_font
+from gui_modules import sao_panel_ui as ui
 from gui_modules.sao_panel_ui import (
-    _SAO_PANEL_ACCENT,
-    _SAO_PANEL_BG,
-    _SAO_PANEL_BODY_BG,
-    _SAO_PANEL_BORDER,
-    _SAO_PANEL_GOLD,
-    _SAO_PANEL_LABEL_FG,
-    _SAO_PANEL_VALUE_FG,
     _apply_window_icon,
     _bind_panel_drag,
     _make_panel_close_button,
     _sao_panel_body,
     _sao_panel_header,
 )
+
+
+def _refresh_panel_palette() -> None:
+    global _SAO_PANEL_ACCENT, _SAO_PANEL_BG, _SAO_PANEL_BODY_BG, _SAO_PANEL_BORDER
+    global _SAO_PANEL_GOLD, _SAO_PANEL_LABEL_FG, _SAO_PANEL_VALUE_FG
+    _SAO_PANEL_ACCENT = _pc('accent', ui._SAO_PANEL_ACCENT)
+    _SAO_PANEL_BG = _pc('bg', ui._SAO_PANEL_BG)
+    _SAO_PANEL_BODY_BG = _pc('body_bg', ui._SAO_PANEL_BODY_BG)
+    _SAO_PANEL_BORDER = _pc('border', ui._SAO_PANEL_BORDER)
+    _SAO_PANEL_GOLD = _pc('gold', ui._SAO_PANEL_GOLD)
+    _SAO_PANEL_LABEL_FG = _pc('label_fg', ui._SAO_PANEL_LABEL_FG)
+    _SAO_PANEL_VALUE_FG = _pc('value_fg', ui._SAO_PANEL_VALUE_FG)
+
+
+_refresh_panel_palette()
 
 
 def _finite_float(value: Any, default: float = 0.0, *, lo: float | None = None, hi: float | None = None) -> float:
@@ -196,6 +207,7 @@ class TimelineVcrPanel:
             return False
 
     def _build(self) -> None:
+        _refresh_panel_palette()
         win = tk.Toplevel(self.root)
         self._win = win
         win.title('SAO ACT Timeline VCR')
@@ -280,6 +292,7 @@ class TimelineVcrPanel:
         self._reset_render_cache()
 
     def _render_status(self, status: Mapping[str, Any]) -> None:
+        _refresh_panel_palette()
         if hasattr(self, '_badge_frame_vcr'):
             for child in list(self._badge_frame_vcr.winfo_children()):
                 child.destroy()
@@ -359,11 +372,12 @@ class TimelineVcrPanel:
         track_frame.pack(side='left', fill='x', expand=True, padx=(4, 4))
         ratio = (cursor_ms / total_ms) if total_ms > 0 else 0.0
         ratio = max(0.0, min(1.0, ratio))
-        track = tk.Canvas(track_frame, bg=_SAO_PANEL_BODY_BG, height=14,
+        track = tk.Canvas(track_frame, bg=_pc('body_bg', ui._SAO_PANEL_BODY_BG), height=14,
                           highlightthickness=0, bd=0)
         track.pack(fill='x')
 
         def _draw_track(_e=None):
+            track.configure(bg=_pc('body_bg', ui._SAO_PANEL_BODY_BG))
             w = track.winfo_width()
             if w < 10:
                 return
@@ -372,16 +386,17 @@ class TimelineVcrPanel:
             # Filled portion (accent/gold)
             fill_w = max(0, int(w * ratio))
             if fill_w > 0:
-                track.create_line(0, y, fill_w, y, fill=_SAO_PANEL_GOLD, width=4)
+                track.create_line(0, y, fill_w, y, fill=_pc('gold', ui._SAO_PANEL_GOLD), width=4)
             # Remaining portion (border/dim)
             if fill_w < w:
-                track.create_line(fill_w, y, w, y, fill=_SAO_PANEL_BORDER, width=4)
+                track.create_line(fill_w, y, w, y, fill=_pc('border', ui._SAO_PANEL_BORDER), width=4)
             # Thumb circle
             cx = max(6, min(w - 6, fill_w))
             track.create_oval(cx - 6, y - 6, cx + 6, y + 6,
-                              fill=_SAO_PANEL_ACCENT, outline='')
+                              fill=_pc('accent', ui._SAO_PANEL_ACCENT), outline='')
 
         track.bind('<Configure>', _draw_track)
+        track._sao_theme_repaint = _draw_track
         track.after(10, _draw_track)
 
     def _render_summary_pills(self, status: Mapping[str, Any], events: list[Any]) -> None:
@@ -478,9 +493,14 @@ class TimelineVcrPanel:
         inner.pack(fill='x', padx=8, pady=7)
 
         # Colored dot (canvas circle)
-        dot = tk.Canvas(inner, width=10, height=10, bg=_SAO_PANEL_BODY_BG,
+        dot = tk.Canvas(inner, width=10, height=10, bg=_pc('body_bg', ui._SAO_PANEL_BODY_BG),
                         highlightthickness=0, bd=0)
-        dot.create_oval(1, 1, 9, 9, fill=dot_color, outline='')
+        def _draw_dot(_event: Any = None) -> None:
+            dot.configure(bg=_pc('body_bg', ui._SAO_PANEL_BODY_BG))
+            dot.delete('all')
+            dot.create_oval(1, 1, 9, 9, fill=dot_color, outline='')
+        dot._sao_theme_repaint = _draw_dot
+        _draw_dot()
         dot.pack(side='left', padx=(0, 8), pady=2)
 
         # Timestamp in gold (MM:SS.d relative format)
@@ -508,11 +528,8 @@ class TimelineVcrPanel:
 
     @staticmethod
     def _fmt_kf_time(ms: int) -> str:
-        # Format milliseconds as MM:SS.d (e.g. 01:10.4) for keyframe timestamps.
-        total_s = max(0.0, ms / 1000.0)
-        minutes = int(total_s // 60)
-        seconds = total_s - minutes * 60
-        return f"{minutes:02d}:{seconds:04.1f}"
+        # Relative offsets are already deltas, matching the shared formatter API.
+        return fmt_signed(ms)
 
     @staticmethod
     def _events_base_ms(events: list[Any]) -> int:

@@ -175,8 +175,3 @@ class SAOPlayerGUIEngineTogglesMixin:
         prev = getattr(gs, 'custom_skill_slots', []) if gs else []
         return compute_custom_skill_slots(
             monitors, cd_map, server_offset, player_attrs, prev)
-
-    def _open_skill_picker(self):
-        # 技能选择器 — 游戏插件覆盖此方法。
-        pass
-

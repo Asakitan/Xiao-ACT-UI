@@ -26,14 +26,8 @@ from gui_modules.sao_panel_components import (
     status_badge,
 )
 from utils.sao_sound import get_sao_font, get_cjk_font
+from gui_modules import sao_panel_ui as ui
 from gui_modules.sao_panel_ui import (
-    _SAO_PANEL_BG,
-    _SAO_PANEL_BODY_BG,
-    _SAO_PANEL_BORDER,
-    _SAO_PANEL_GOLD,
-    _SAO_PANEL_HEADER_BG,
-    _SAO_PANEL_LABEL_FG,
-    _SAO_PANEL_VALUE_FG,
     _apply_window_icon,
     _bind_panel_drag,
     _make_panel_close_button,
@@ -41,6 +35,21 @@ from gui_modules.sao_panel_ui import (
     _sao_panel_header,
     run_native_dialog,
 )
+
+
+def _refresh_panel_palette() -> None:
+    global _SAO_PANEL_BG, _SAO_PANEL_BODY_BG, _SAO_PANEL_BORDER
+    global _SAO_PANEL_GOLD, _SAO_PANEL_HEADER_BG, _SAO_PANEL_LABEL_FG, _SAO_PANEL_VALUE_FG
+    _SAO_PANEL_BG = _pc('bg', ui._SAO_PANEL_BG)
+    _SAO_PANEL_BODY_BG = _pc('body_bg', ui._SAO_PANEL_BODY_BG)
+    _SAO_PANEL_BORDER = _pc('border', ui._SAO_PANEL_BORDER)
+    _SAO_PANEL_GOLD = _pc('gold', ui._SAO_PANEL_GOLD)
+    _SAO_PANEL_HEADER_BG = _pc('header_bg', ui._SAO_PANEL_HEADER_BG)
+    _SAO_PANEL_LABEL_FG = _pc('label_fg', ui._SAO_PANEL_LABEL_FG)
+    _SAO_PANEL_VALUE_FG = _pc('value_fg', ui._SAO_PANEL_VALUE_FG)
+
+
+_refresh_panel_palette()
 
 
 def _finite_int(value: Any, default: int = 0, *, lo: int | None = None, hi: int | None = None) -> int:
@@ -178,6 +187,7 @@ class OfflineImportPanel:
             return False
 
     def _build(self) -> None:
+        _refresh_panel_palette()
         win = tk.Toplevel(self.root)
         self._win = win
         win.title('SAO ACT Offline Import')
@@ -322,6 +332,7 @@ class OfflineImportPanel:
         self._last_rows_sig = ""
 
     def _render_status(self, status: Mapping[str, Any]) -> None:
+        _refresh_panel_palette()
         last = status.get('last_result') if isinstance(status.get('last_result'), Mapping) else {}
         history = status.get('history') if isinstance(status.get('history'), Mapping) else {}
         encounters = list(history.get('encounters') or [])

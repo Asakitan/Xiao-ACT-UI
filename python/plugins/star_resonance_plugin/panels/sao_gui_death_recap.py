@@ -23,19 +23,12 @@ from gui_modules.sao_panel_components import (
     sao_scrollbar,
     section_card,
     status_badge,
+    _pc,
 )
 from plugins.star_resonance_plugin.panels.panel_text import topic_cn
 from utils.sao_sound import get_sao_font, get_cjk_font
+from gui_modules import sao_panel_ui as ui
 from gui_modules.sao_panel_ui import (
-    _SAO_PANEL_ACCENT,
-    _SAO_PANEL_BG,
-    _SAO_PANEL_BODY_BG,
-    _SAO_PANEL_BORDER,
-    _SAO_PANEL_GOLD,
-    _SAO_PANEL_HEADER_BG,
-    _SAO_PANEL_HEADER_FG,
-    _SAO_PANEL_LABEL_FG,
-    _SAO_PANEL_VALUE_FG,
     _apply_window_icon,
     _bind_panel_drag,
     _make_panel_close_button,
@@ -43,6 +36,20 @@ from gui_modules.sao_panel_ui import (
     _sao_panel_header,
     _sao_pill,
 )
+
+
+def _refresh_panel_palette() -> None:
+    global _SAO_PANEL_BG, _SAO_PANEL_BODY_BG, _SAO_PANEL_BORDER
+    global _SAO_PANEL_GOLD, _SAO_PANEL_LABEL_FG, _SAO_PANEL_VALUE_FG
+    _SAO_PANEL_BG = _pc('bg', ui._SAO_PANEL_BG)
+    _SAO_PANEL_BODY_BG = _pc('body_bg', ui._SAO_PANEL_BODY_BG)
+    _SAO_PANEL_BORDER = _pc('border', ui._SAO_PANEL_BORDER)
+    _SAO_PANEL_GOLD = _pc('gold', ui._SAO_PANEL_GOLD)
+    _SAO_PANEL_LABEL_FG = _pc('label_fg', ui._SAO_PANEL_LABEL_FG)
+    _SAO_PANEL_VALUE_FG = _pc('value_fg', ui._SAO_PANEL_VALUE_FG)
+
+
+_refresh_panel_palette()
 
 
 def _finite_float(value: Any, default: float = 0.0, *, lo: float | None = None, hi: float | None = None) -> float:
@@ -174,6 +181,7 @@ class DeathRecapPanel:
             return False
 
     def _build(self) -> None:
+        _refresh_panel_palette()
         win = tk.Toplevel(self.root)
         self._win = win
         win.title('SAO ACT Death Recap')
@@ -235,6 +243,7 @@ class DeathRecapPanel:
         win.protocol('WM_DELETE_WINDOW', self.hide)
 
     def _render_status(self, status: Mapping[str, Any]) -> None:
+        _refresh_panel_palette()
         rows = _mapping_rows(status.get('rows'))
         summary = status.get('summary') if isinstance(status.get('summary'), Mapping) else {}
         death = status.get('death') if isinstance(status.get('death'), Mapping) else {}

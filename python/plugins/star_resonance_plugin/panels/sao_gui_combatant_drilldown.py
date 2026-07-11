@@ -29,23 +29,33 @@ from gui_modules.sao_panel_components import (
     sao_scrollbar,
     section_card,
     status_badge,
+    _pc,
 )
 from plugins.star_resonance_plugin.panels.panel_text import topic_cn
 from utils.sao_sound import get_sao_font, get_cjk_font
+from gui_modules import sao_panel_ui as ui
 from gui_modules.sao_panel_ui import (
-    _SAO_PANEL_BG,
-    _SAO_PANEL_BODY_BG,
-    _SAO_PANEL_BORDER,
-    _SAO_PANEL_GOLD,
-    _SAO_PANEL_HEADER_BG,
-    _SAO_PANEL_LABEL_FG,
-    _SAO_PANEL_VALUE_FG,
     _apply_window_icon,
     _bind_panel_drag,
     _make_panel_close_button,
     _sao_panel_body,
     _sao_panel_header,
 )
+
+
+def _refresh_panel_palette() -> None:
+    global _SAO_PANEL_BG, _SAO_PANEL_BODY_BG, _SAO_PANEL_BORDER
+    global _SAO_PANEL_GOLD, _SAO_PANEL_HEADER_BG, _SAO_PANEL_LABEL_FG, _SAO_PANEL_VALUE_FG
+    _SAO_PANEL_BG = _pc('bg', ui._SAO_PANEL_BG)
+    _SAO_PANEL_BODY_BG = _pc('body_bg', ui._SAO_PANEL_BODY_BG)
+    _SAO_PANEL_BORDER = _pc('border', ui._SAO_PANEL_BORDER)
+    _SAO_PANEL_GOLD = _pc('gold', ui._SAO_PANEL_GOLD)
+    _SAO_PANEL_HEADER_BG = _pc('header_bg', ui._SAO_PANEL_HEADER_BG)
+    _SAO_PANEL_LABEL_FG = _pc('label_fg', ui._SAO_PANEL_LABEL_FG)
+    _SAO_PANEL_VALUE_FG = _pc('value_fg', ui._SAO_PANEL_VALUE_FG)
+
+
+_refresh_panel_palette()
 
 
 def _finite_float(value: Any, default: float = 0.0, *, lo: float | None = None, hi: float | None = None) -> float:
@@ -146,6 +156,7 @@ class CombatantDrilldownPanel:
         return bool(self._win is not None and self._exists() and self._win.state() != 'withdrawn')
 
     def refresh(self) -> Dict[str, Any]:
+        self._action_status = ''
         now = time.time()
         combatant_id = self._combatant_var.get()
         query = self._query_var.get()
@@ -183,7 +194,7 @@ class CombatantDrilldownPanel:
         self._last_status = dict(result or {})
         self._last_refresh_at = time.time()
         self._last_request_key = ()
-        self._status_var.set(message)
+        self._action_status = message
         self._render_status(self._last_status)
         return self._last_status
 
@@ -194,6 +205,7 @@ class CombatantDrilldownPanel:
             return False
 
     def _build(self) -> None:
+        _refresh_panel_palette()
         win = tk.Toplevel(self.root)
         self._win = win
         win.title('SAO ACT Combatant Drilldown')
@@ -254,6 +266,10 @@ class CombatantDrilldownPanel:
                                         bg=_SAO_PANEL_BODY_BG, fg=_SAO_PANEL_GOLD,
                                         font=get_cjk_font(10, True))
         self._identity_label.pack(fill='x', padx=14, pady=(0, 6))
+        self._feedback_label = tk.Label(body, textvariable=self._status_var, anchor='w',
+                        bg=_SAO_PANEL_BODY_BG, fg=_SAO_PANEL_LABEL_FG,
+                        font=get_cjk_font(9))
+        self._feedback_label.pack(fill='x', padx=14, pady=(0, 6))
 
         # ── two-column layout: left main + right sidebar 280px ──
         outer = tk.Frame(body, bg=_SAO_PANEL_BODY_BG)
@@ -282,6 +298,7 @@ class CombatantDrilldownPanel:
         win.protocol('WM_DELETE_WINDOW', self.hide)
 
     def _render_status(self, status: Mapping[str, Any]) -> None:
+        _refresh_panel_palette()
         if hasattr(self, '_badge_frame_cd'):
             for child in list(self._badge_frame_cd.winfo_children()):
                 child.destroy()
@@ -302,7 +319,9 @@ class CombatantDrilldownPanel:
             identity_parts.append(profession)
         identity_parts.append(f"UID {uid_display}")
         self._summary_var.set(" · ".join(identity_parts))
-        self._status_var.set(f"encounter={status.get('encounter_id') or 'live'} · query={filters.get('query') or '-'} · focus={filters.get('focus_target') or '-'} · errors={_list_count(status.get('errors'))}")
+        detail = f"encounter={status.get('encounter_id') or 'live'} · query={filters.get('query') or '-'} · focus={filters.get('focus_target') or '-'} · errors={_list_count(status.get('errors'))}"
+        action_status = getattr(self, '_action_status', '')
+        self._status_var.set(f"{action_status} · {detail}" if action_status else detail)
         if self._rows is None:
             return
         sig = self._signature(status)

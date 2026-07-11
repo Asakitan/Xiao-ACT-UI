@@ -21,18 +21,10 @@ from act_platform.runtime import (
     act_selective_parsing_status,
 )
 from gui_modules import sao_panel_components as components
+from gui_modules.sao_panel_components import _pc
 from utils.sao_sound import get_sao_font, get_cjk_font
+from gui_modules import sao_panel_ui as ui
 from gui_modules.sao_panel_ui import (
-    _SAO_PANEL_ACCENT,
-    _SAO_PANEL_BG,
-    _SAO_PANEL_BODY_BG,
-    _SAO_PANEL_BORDER,
-    _SAO_PANEL_GOLD,
-    _SAO_PANEL_HEADER_BG,
-    _SAO_PANEL_HEADER_FG,
-    _SAO_PANEL_LABEL_FG,
-    _SAO_PANEL_SEP,
-    _SAO_PANEL_VALUE_FG,
     _apply_window_icon,
     _bind_panel_drag,
     _make_panel_close_button,
@@ -41,6 +33,21 @@ from gui_modules.sao_panel_ui import (
     _sao_pill,
     run_native_dialog,
 )
+
+
+def _refresh_panel_palette() -> None:
+    global _SAO_PANEL_BG, _SAO_PANEL_BODY_BG, _SAO_PANEL_BORDER
+    global _SAO_PANEL_GOLD, _SAO_PANEL_HEADER_BG, _SAO_PANEL_LABEL_FG, _SAO_PANEL_VALUE_FG
+    _SAO_PANEL_BG = _pc('bg', ui._SAO_PANEL_BG)
+    _SAO_PANEL_BODY_BG = _pc('body_bg', ui._SAO_PANEL_BODY_BG)
+    _SAO_PANEL_BORDER = _pc('border', ui._SAO_PANEL_BORDER)
+    _SAO_PANEL_GOLD = _pc('gold', ui._SAO_PANEL_GOLD)
+    _SAO_PANEL_HEADER_BG = _pc('header_bg', ui._SAO_PANEL_HEADER_BG)
+    _SAO_PANEL_LABEL_FG = _pc('label_fg', ui._SAO_PANEL_LABEL_FG)
+    _SAO_PANEL_VALUE_FG = _pc('value_fg', ui._SAO_PANEL_VALUE_FG)
+
+
+_refresh_panel_palette()
 
 
 def _finite_int(value: Any, default: int = 0, *, lo: int | None = None, hi: int | None = None) -> int:
@@ -140,6 +147,35 @@ class ReportExportPanel:
     def export_html(self) -> Dict[str, Any]:
         self._format_var.set('html')
         return self._export('html')
+
+    def copy_markdown(self) -> Dict[str, Any]:
+        status = self._last_status or self.refresh()
+        preview = status.get('preview') if isinstance(status.get('preview'), Mapping) else {}
+        title = str(preview.get('title') or 'Last Encounter')
+        duration_s = _finite_int(preview.get('elapsed_s'), 0, lo=0)
+        lines = [
+            f'# {title}',
+            '',
+            f'- Duration: {duration_s}s',
+            f'- Damage: {_finite_int(preview.get("total_damage"), 0):,}',
+            f'- DPS: {_finite_int(preview.get("total_dps"), 0):,}',
+        ]
+        rows = [row for row in list(preview.get('top_rows') or []) if isinstance(row, Mapping)]
+        if rows:
+            lines.extend(['', '| Combatant | Damage | DPS |', '| --- | ---: | ---: |'])
+            lines.extend(
+                f"| {str(row.get('name') or row.get('uid') or '-')} | {_finite_int(row.get('damage'), 0):,} | {_finite_int(row.get('dps'), 0):,} |"
+                for row in rows
+            )
+        text = '\n'.join(lines)
+        try:
+            self.root.clipboard_clear()
+            self.root.clipboard_append(text)
+            self._status_var.set('Markdown summary copied to clipboard')
+            return {'ok': True, 'text': text}
+        except Exception as exc:
+            self._status_var.set(str(exc))
+            return {'ok': False, 'message': str(exc), 'text': text}
 
     def export_xml(self) -> Dict[str, Any]:
         self._format_var.set('xml')
@@ -282,6 +318,7 @@ class ReportExportPanel:
             return False
 
     def _build(self) -> None:
+        _refresh_panel_palette()
         win = tk.Toplevel(self.root)
         self._win = win
         win.title('SAO ACT Report Export')
@@ -327,12 +364,15 @@ class ReportExportPanel:
             ('markdown', 'Markdown', '战斗简报'),
             ('html', 'HTML', '可分享报告'),
         ):
-            cmd = {'json': self.export_json, 'csv': self.export_csv, 'html': self.export_html}.get(fmt_id)
+            cmd = {'json': self.export_json, 'csv': self.export_csv, 'markdown': self.copy_markdown, 'html': self.export_html}.get(fmt_id)
             tile = components.metric_tile(fmt_row, fmt_label, fmt_sub, accent='gold' if fmt_id == 'json' else 'cyan')
             tile.pack(side='left', fill='x', expand=True, padx=(0, 6))
             if cmd:
                 tile.bind('<Button-1>', lambda _e, c=cmd: c(), add='+')
                 tile.configure(cursor='hand2')
+
+        tk.Label(body, textvariable=self._status_var, anchor='w', bg=_SAO_PANEL_BODY_BG,
+                 fg=_SAO_PANEL_LABEL_FG, font=get_cjk_font(9)).pack(fill='x', padx=12, pady=(0, 6))
 
         outer = tk.Frame(body, bg=_SAO_PANEL_BODY_BG)
         outer.pack(fill='both', expand=True, padx=12, pady=(0, 12))
@@ -381,12 +421,15 @@ class ReportExportPanel:
                  fg=_SAO_PANEL_GOLD, font=get_cjk_font(10, True)).pack(fill='x', pady=(0, 8))
         components.action_button(right, '导出文件', self.export_json, kind='gold').pack(fill='x', pady=(0, 4))
         components.action_button(right, '复制到剪贴板', self.copy_snapshot).pack(fill='x', pady=(0, 12))
+        clear_btn = components.action_button(right, '清空历史 Clear All', kind='danger')
+        clear_btn.pack(fill='x', pady=(0, 12))
+        self._wire_clear_confirm(clear_btn)
         self._history = tk.Frame(right, bg=_SAO_PANEL_BODY_BG)
         self._history.pack(fill='both', expand=True)
         win.protocol('WM_DELETE_WINDOW', self.hide)
         self._reset_render_cache()
 
-    def _wire_clear_confirm(self, btn: tk.Button) -> None:
+    def _wire_clear_confirm(self, btn: tk.Misc) -> None:
         # 两段式确认：第一次点击进入「确认清空?」态，3 秒内再点才真正清空。
         state = {'armed': False, 'after': None}
 
@@ -422,14 +465,18 @@ class ReportExportPanel:
         self._last_history_sig = ""
 
     def _render_status(self, status: Mapping[str, Any]) -> None:
+        _refresh_panel_palette()
         preview = status.get('preview') or {}
         history = status.get('history') or []
         errors = status.get('errors') or []
         fmt = str(status.get('selected_format') or self._format_var.get() or 'json').upper()
-        for child in list(self._badge_frame.winfo_children()):
-            child.destroy()
-        components.status_badge(self._badge_frame, 'READY' if status.get('ok', True) else 'ERROR',
-                                kind='ok' if status.get('ok', True) else 'danger').pack(side='left')
+        self._summary_var.set(f"{fmt} · {_finite_int(preview.get('total_damage'), 0):,} DMG")
+        badge_frame = getattr(self, '_badge_frame', None)
+        if badge_frame is not None:
+            for child in list(badge_frame.winfo_children()):
+                child.destroy()
+            components.status_badge(badge_frame, 'READY' if status.get('ok', True) else 'ERROR',
+                                    kind='ok' if status.get('ok', True) else 'danger').pack(side='left')
         try:
             selective = act_selective_parsing_status(self.owner)
         except Exception:

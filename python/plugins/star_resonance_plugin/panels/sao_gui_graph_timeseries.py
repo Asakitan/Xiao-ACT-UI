@@ -23,17 +23,11 @@ from gui_modules.sao_panel_components import (
     sao_option_menu,
     section_card,
     status_badge,
+    _pc,
 )
 from utils.sao_sound import get_sao_font, get_cjk_font
+from gui_modules import sao_panel_ui as ui
 from gui_modules.sao_panel_ui import (
-    _SAO_PANEL_ACCENT,
-    _SAO_PANEL_BG,
-    _SAO_PANEL_BODY_BG,
-    _SAO_PANEL_BORDER,
-    _SAO_PANEL_GOLD,
-    _SAO_PANEL_HEADER_BG,
-    _SAO_PANEL_LABEL_FG,
-    _SAO_PANEL_VALUE_FG,
     _apply_window_icon,
     _bind_panel_drag,
     _make_panel_close_button,
@@ -41,6 +35,22 @@ from gui_modules.sao_panel_ui import (
     _sao_panel_header,
     _sao_pill,
 )
+
+
+def _refresh_panel_palette() -> None:
+    global _SAO_PANEL_ACCENT, _SAO_PANEL_BG, _SAO_PANEL_BODY_BG, _SAO_PANEL_BORDER
+    global _SAO_PANEL_GOLD, _SAO_PANEL_HEADER_BG, _SAO_PANEL_LABEL_FG, _SAO_PANEL_VALUE_FG
+    _SAO_PANEL_ACCENT = _pc('accent', ui._SAO_PANEL_ACCENT)
+    _SAO_PANEL_BG = _pc('bg', ui._SAO_PANEL_BG)
+    _SAO_PANEL_BODY_BG = _pc('body_bg', ui._SAO_PANEL_BODY_BG)
+    _SAO_PANEL_BORDER = _pc('border', ui._SAO_PANEL_BORDER)
+    _SAO_PANEL_GOLD = _pc('gold', ui._SAO_PANEL_GOLD)
+    _SAO_PANEL_HEADER_BG = _pc('header_bg', ui._SAO_PANEL_HEADER_BG)
+    _SAO_PANEL_LABEL_FG = _pc('label_fg', ui._SAO_PANEL_LABEL_FG)
+    _SAO_PANEL_VALUE_FG = _pc('value_fg', ui._SAO_PANEL_VALUE_FG)
+
+
+_refresh_panel_palette()
 
 
 _BAR_COLORS = {
@@ -221,6 +231,7 @@ class GraphTimeseriesPanel:
             return False
 
     def _build(self) -> None:
+        _refresh_panel_palette()
         win = tk.Toplevel(self.root)
         self._win = win
         win.title('SAO ACT Graph Timeseries')
@@ -283,6 +294,7 @@ class GraphTimeseriesPanel:
         win.protocol('WM_DELETE_WINDOW', self.hide)
 
     def _render_status(self, status: Mapping[str, Any]) -> None:
+        _refresh_panel_palette()
         metric = str(status.get('selected_metric') or self._metric_var.get() or 'damage')
         series = status.get('series') if isinstance(status.get('series'), Mapping) else {}
         selected = series.get(metric) if isinstance(series.get(metric), Mapping) else {}
@@ -378,16 +390,17 @@ class GraphTimeseriesPanel:
 
     def _render_lane_canvas(self, parent: tk.Misc, metric_id: str, lane_points: list[Mapping[str, Any]], color: str) -> None:
         # Draw a single bar-chart lane inside its section_card.
-        canvas = tk.Canvas(parent, height=140, bg=_SAO_PANEL_BODY_BG, bd=0, highlightthickness=0)
+        canvas = tk.Canvas(parent, height=140, bg=_pc('body_bg', ui._SAO_PANEL_BODY_BG), bd=0, highlightthickness=0)
         canvas.pack(fill='x', expand=False, padx=4, pady=4)
 
         def _draw(_event: Any = None) -> None:
+            canvas.configure(bg=_pc('body_bg', ui._SAO_PANEL_BODY_BG))
             w = max(1, canvas.winfo_width())
             h = max(1, canvas.winfo_height())
             canvas.delete('all')
             top = 12
             base = max(top + 20, h - 16)
-            canvas.create_line(24, base, w - 16, base, fill='#274555', width=1)
+            canvas.create_line(24, base, w - 16, base, fill=_pc('track_bg', ui._SAO_PANEL_BORDER), width=1)
             max_v = max(1.0, *[_finite_float(p.get('value'), 0.0, lo=0.0) for p in lane_points])
             max_bar_height = max(4, base - (top + 8))
             plot_l, plot_r = 24, max(40, w - 16)
@@ -398,10 +411,11 @@ class GraphTimeseriesPanel:
                 height = max(4, int(max_bar_height * value / max_v))
                 x = plot_l + idx * slot + max(0, (slot - bar_w) / 2)
                 canvas.create_rectangle(x, base - height, x + bar_w, base, fill=color, outline=color)
-            canvas.create_text(w - 18, top, text=self._fmt(max_v), fill=_SAO_PANEL_LABEL_FG,
+            canvas.create_text(w - 18, top, text=self._fmt(max_v), fill=_pc('label_fg', ui._SAO_PANEL_LABEL_FG),
                                font=get_cjk_font(8), anchor='ne')
 
         canvas.bind('<Configure>', _draw)
+        canvas._sao_theme_repaint = _draw
         canvas.after_idle(_draw)
 
     def _open_action_log_at(self, time_ms: int, topic: str) -> None:

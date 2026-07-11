@@ -34,18 +34,11 @@ from gui_modules.sao_panel_components import (
     sao_scrollbar,
     section_card,
     status_badge,
+    _pc,
 )
 from plugins.star_resonance_plugin.panels.panel_text import source_badges, source_cn, topic_cn
+from gui_modules import sao_panel_ui as ui
 from gui_modules.sao_panel_ui import (
-    _SAO_PANEL_ACCENT,
-    _SAO_PANEL_BG,
-    _SAO_PANEL_BODY_BG,
-    _SAO_PANEL_BORDER,
-    _SAO_PANEL_GOLD,
-    _SAO_PANEL_HEADER_BG,
-    _SAO_PANEL_HEADER_FG,
-    _SAO_PANEL_LABEL_FG,
-    _SAO_PANEL_VALUE_FG,
     _apply_window_icon,
     _bind_panel_drag,
     _make_panel_close_button,
@@ -53,6 +46,21 @@ from gui_modules.sao_panel_ui import (
     _sao_panel_header,
     _sao_pill,
 )
+
+
+def _refresh_panel_palette() -> None:
+    global _SAO_PANEL_BG, _SAO_PANEL_BODY_BG, _SAO_PANEL_BORDER
+    global _SAO_PANEL_GOLD, _SAO_PANEL_HEADER_BG, _SAO_PANEL_LABEL_FG, _SAO_PANEL_VALUE_FG
+    _SAO_PANEL_BG = _pc('bg', ui._SAO_PANEL_BG)
+    _SAO_PANEL_BODY_BG = _pc('body_bg', ui._SAO_PANEL_BODY_BG)
+    _SAO_PANEL_BORDER = _pc('border', ui._SAO_PANEL_BORDER)
+    _SAO_PANEL_GOLD = _pc('gold', ui._SAO_PANEL_GOLD)
+    _SAO_PANEL_HEADER_BG = _pc('header_bg', ui._SAO_PANEL_HEADER_BG)
+    _SAO_PANEL_LABEL_FG = _pc('label_fg', ui._SAO_PANEL_LABEL_FG)
+    _SAO_PANEL_VALUE_FG = _pc('value_fg', ui._SAO_PANEL_VALUE_FG)
+
+
+_refresh_panel_palette()
 
 
 def _finite_float(value: Any, default: float = 0.0, *, lo: float | None = None, hi: float | None = None) -> float:
@@ -218,6 +226,7 @@ class ActAggregatePanel:
             return False
 
     def _build(self) -> None:
+        _refresh_panel_palette()
         win = tk.Toplevel(self.root)
         self._win = win
         win.title('SAO ACT Cockpit')
@@ -268,6 +277,9 @@ class ActAggregatePanel:
         sao_option_menu(control, self._source_var, 'live', 'history', command=lambda _v: self.filter()).pack(side='left', padx=(0, 8))
         action_button(control, '刷新', self.refresh, kind='gold').pack(side='left', padx=(0, 6))
         _make_panel_close_button(control, self.hide, bg=_SAO_PANEL_BODY_BG, flat=True).pack(side='left', padx=(6, 0))
+
+        tk.Label(body, textvariable=self._status_var, anchor='w', bg=_SAO_PANEL_BODY_BG,
+             fg=_SAO_PANEL_LABEL_FG, font=get_cjk_font(9)).pack(fill='x', padx=14, pady=(0, 6))
 
         outer = tk.Frame(body, bg=_SAO_PANEL_BODY_BG)
         outer.pack(fill='both', expand=True, padx=14, pady=(0, 14))
@@ -321,7 +333,7 @@ class ActAggregatePanel:
         overview = status.get('overview') if isinstance(status.get('overview'), Mapping) else {}
         counts = status.get('raw_counts') if isinstance(status.get('raw_counts'), Mapping) else {}
         errors = list(status.get('errors') or [])
-        span_s = round(_finite_float(overview.get('span_ms'), 0.0, lo=0.0) / 1000.0, 1)
+        span_s = self._combat_duration_s(overview)
         mix = list(status.get('source_mix') or [])
         event_count = _finite_int(counts.get('rows'), 0, lo=0)
         pad = tk.Frame(side, bg=_SAO_PANEL_BODY_BG)
@@ -369,6 +381,7 @@ class ActAggregatePanel:
                      font=get_cjk_font(9), anchor='w').pack(fill='x')
 
     def _render_status(self, status: Mapping[str, Any]) -> None:
+        _refresh_panel_palette()
         overview = status.get('overview') if isinstance(status.get('overview'), Mapping) else {}
         counts = status.get('raw_counts') if isinstance(status.get('raw_counts'), Mapping) else {}
         errors = list(status.get('errors') or [])
@@ -447,7 +460,7 @@ class ActAggregatePanel:
         badges = tk.Frame(self._rows, bg=_SAO_PANEL_BODY_BG)
         badges.pack(fill='x', padx=4, pady=(0, 8))
         status_badge(badges, f"模式 {overview.get('mode') or 'live'}", kind='cyan').pack(side='left', padx=(0, SP_SM))
-        span_s = round(_finite_float(overview.get('span_ms'), 0.0, lo=0.0) / 1000.0, 1)
+        span_s = self._combat_duration_s(overview)
         status_badge(badges, f"战斗时长 {self._fmt(span_s)} 秒", kind='gold').pack(side='left', padx=(0, SP_SM))
         source_badges(badges, status.get('source_mix') or []).pack(side='left')
 
@@ -612,6 +625,11 @@ class ActAggregatePanel:
         if abs(number) >= 1_000:
             return f"{number / 1_000:.1f}k"
         return str(int(number)) if number == int(number) else f"{number:.2f}"
+
+    @staticmethod
+    def _combat_duration_s(overview: Mapping[str, Any]) -> float:
+        span_s = _finite_float(overview.get('span_ms'), 0.0, lo=0.0) / 1000.0
+        return round(span_s if span_s > 0 else _finite_float(overview.get('elapsed_s'), 0.0, lo=0.0), 1)
 
     def _signature(self, status: Mapping[str, Any]) -> str:
         counts = status.get('raw_counts') if isinstance(status.get('raw_counts'), Mapping) else {}

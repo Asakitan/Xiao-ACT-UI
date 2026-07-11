@@ -379,10 +379,6 @@ def _build_auto_items():
          'command': getattr(owner, '_toggle_recognition_menu', lambda: None)},
         {'icon': '⚡', 'label': f'AutoKey: {"ON" if ak_on else "OFF"}',
          'command': getattr(owner, '_toggle_auto_script', lambda: None)},
-        {'icon': '◆', 'label': 'AutoKey Quick Panel',
-         'command': getattr(owner, '_toggle_autokey_panel', lambda: None)},
-        {'icon': '◇', 'label': 'AutoKey Detail Editor',
-         'command': getattr(owner, '_toggle_autokey_detail_panel', lambda: None)},
     ]
 
 
@@ -397,10 +393,6 @@ def _build_boss_items():
          'command': getattr(owner, '_toggle_boss_raid', lambda: None)},
         {'icon': '▸', 'label': '下一阶段',
          'command': getattr(owner, '_boss_raid_next_phase', lambda: None)},
-        {'icon': '◆', 'label': 'BossRaid Quick Panel',
-         'command': getattr(owner, '_toggle_bossraid_panel', lambda: None)},
-        {'icon': '◇', 'label': 'BossRaid Detail Editor',
-         'command': getattr(owner, '_toggle_bossraid_detail_panel', lambda: None)},
     ]
 
 

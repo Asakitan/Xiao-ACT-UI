@@ -22,17 +22,8 @@ from gui_modules.sao_panel_components import (
     sao_entry, sao_scrollbar, section_card, status_badge,
 )
 from utils.sao_sound import get_sao_font, get_cjk_font
+from gui_modules import sao_panel_ui as ui
 from gui_modules.sao_panel_ui import (
-    _SAO_PANEL_ACCENT,
-    _SAO_PANEL_BG,
-    _SAO_PANEL_BODY_BG,
-    _SAO_PANEL_BORDER,
-    _SAO_PANEL_GOLD,
-    _SAO_PANEL_HEADER_BG,
-    _SAO_PANEL_HEADER_FG,
-    _SAO_PANEL_LABEL_FG,
-    _SAO_PANEL_SEP,
-    _SAO_PANEL_VALUE_FG,
     _apply_window_icon,
     _bind_panel_drag,
     _make_panel_close_button,
@@ -40,6 +31,25 @@ from gui_modules.sao_panel_ui import (
     _sao_panel_header,
     _sao_pill,
 )
+
+
+def _refresh_panel_palette() -> None:
+    global _SAO_PANEL_ACCENT, _SAO_PANEL_BG, _SAO_PANEL_BODY_BG, _SAO_PANEL_BORDER
+    global _SAO_PANEL_GOLD, _SAO_PANEL_HEADER_BG, _SAO_PANEL_HEADER_FG
+    global _SAO_PANEL_LABEL_FG, _SAO_PANEL_SEP, _SAO_PANEL_VALUE_FG
+    _SAO_PANEL_ACCENT = _pc('accent', ui._SAO_PANEL_ACCENT)
+    _SAO_PANEL_BG = _pc('bg', ui._SAO_PANEL_BG)
+    _SAO_PANEL_BODY_BG = _pc('body_bg', ui._SAO_PANEL_BODY_BG)
+    _SAO_PANEL_BORDER = _pc('border', ui._SAO_PANEL_BORDER)
+    _SAO_PANEL_GOLD = _pc('gold', ui._SAO_PANEL_GOLD)
+    _SAO_PANEL_HEADER_BG = _pc('header_bg', ui._SAO_PANEL_HEADER_BG)
+    _SAO_PANEL_HEADER_FG = _pc('header_fg', ui._SAO_PANEL_HEADER_FG)
+    _SAO_PANEL_LABEL_FG = _pc('label_fg', ui._SAO_PANEL_LABEL_FG)
+    _SAO_PANEL_SEP = _pc('sep', ui._SAO_PANEL_SEP)
+    _SAO_PANEL_VALUE_FG = _pc('value_fg', ui._SAO_PANEL_VALUE_FG)
+
+
+_refresh_panel_palette()
 
 
 def _finite_float(value: Any, default: float = 0.0, *, lo: float | None = None, hi: float | None = None) -> float:
@@ -129,6 +139,7 @@ class TriggerTimerManagerPanel:
             return False
 
     def _build(self) -> None:
+        _refresh_panel_palette()
         win = tk.Toplevel(self.root)
         self._win = win
         win.title('SAO ACT Trigger Timer Manager')
@@ -157,9 +168,9 @@ class TriggerTimerManagerPanel:
         title_box = tk.Frame(toolbar, bg=bg)
         title_box.pack(side='left', anchor='n')
         tk.Label(title_box, text='ACT TRIGGERS', bg=bg,
-                 fg=_SAO_PANEL_GOLD, font=get_sao_font(8, True), anchor='w').pack(fill='x')
+                 fg=_pc('gold', ui._SAO_PANEL_GOLD), font=get_sao_font(8, True), anchor='w').pack(fill='x')
         tk.Label(title_box, text='TRIGGER / TIMER 触发计时', bg=bg,
-                 fg=_SAO_PANEL_VALUE_FG, font=get_sao_font(15, True), anchor='w').pack(fill='x', pady=(1, 0))
+                 fg=_pc('value_fg', ui._SAO_PANEL_VALUE_FG), font=get_sao_font(15, True), anchor='w').pack(fill='x', pady=(1, 0))
         controls = tk.Frame(toolbar, bg=bg)
         controls.pack(side='right', anchor='center')
         self._badge_frame = tk.Frame(controls, bg=bg)
@@ -190,6 +201,7 @@ class TriggerTimerManagerPanel:
         self._last_render_sig = ""
 
     def _render_status(self, status: Mapping[str, Any]) -> None:
+        _refresh_panel_palette()
         rules = self._display_rules(status)
         active_count = sum(1 for r in rules if r.get('enabled'))
         for child in list(self._badge_frame.winfo_children()):
@@ -263,7 +275,7 @@ class TriggerTimerManagerPanel:
             tk.Label(card, text=f'动作 : {message}', bg=bg,
                      fg=_pc('value_fg', _SAO_PANEL_VALUE_FG), font=get_cjk_font(8), anchor='w').pack(fill='x', padx=SP_MD, pady=(0, SP_SM))
 
-    _TIMER_COLORS = ['#ef684e', '#3bb4e5', '#5cc46a', '#e5b43b']
+    _TIMER_COLOR_TOKENS = ('danger', 'accent', 'ok', 'gold')
 
     @staticmethod
     def _timer_countdown(item: Mapping[str, Any]) -> str:
@@ -305,7 +317,8 @@ class TriggerTimerManagerPanel:
         for i, item in enumerate(items[:4]):
             label = str(item.get('label') or item.get('rule_id') or item.get('id') or '').strip()
             countdown = self._timer_countdown(item)
-            color = self._TIMER_COLORS[i % len(self._TIMER_COLORS)]
+            color_token = self._TIMER_COLOR_TOKENS[i % len(self._TIMER_COLOR_TOKENS)]
+            color = _pc(color_token, ui._SAO_PANEL_ACCENT)
             bar_frame = tk.Frame(self._right, bg=bg)
             bar_frame.pack(fill='x', pady=SP_SM)
             top = tk.Frame(bar_frame, bg=bg)
@@ -316,11 +329,17 @@ class TriggerTimerManagerPanel:
             bar = tk.Canvas(bar_frame, bg=bg, height=6, highlightthickness=0, bd=0)
             bar.pack(fill='x', pady=(2, 0))
             ratio = self._timer_ratio(item)
-            bar.bind('<Configure>', lambda e, c=bar, r=ratio, col=color: (
-                c.delete('all'),
-                c.create_rectangle(0, 0, max(1, int(e.width * r)), 6, fill=col, outline=''),
-                c.create_rectangle(max(1, int(e.width * r)), 0, e.width, 6, fill=_pc('border', _SAO_PANEL_BORDER), outline=''),
-            ))
+            def _draw_timer(e: Any = None, *, c=bar, r=ratio, token=color_token) -> None:
+                width = max(1, int(c.winfo_width() if e is None else e.width))
+                c.configure(bg=_pc('body_bg', ui._SAO_PANEL_BODY_BG))
+                c.delete('all')
+                c.create_rectangle(0, 0, max(1, int(width * r)), 6,
+                                   fill=_pc(token, ui._SAO_PANEL_ACCENT), outline='')
+                c.create_rectangle(max(1, int(width * r)), 0, width, 6,
+                                   fill=_pc('border', ui._SAO_PANEL_BORDER), outline='')
+            bar.bind('<Configure>', _draw_timer)
+            bar._sao_theme_repaint = _draw_timer
+            bar.after_idle(_draw_timer)
 
     def _render_controls(self) -> None:
         bg = _pc('body_bg', _SAO_PANEL_BODY_BG)

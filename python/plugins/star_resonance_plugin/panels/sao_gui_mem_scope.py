@@ -33,22 +33,31 @@ from gui_modules.sao_panel_components import (
     empty_state,
     section_card,
     status_badge,
+    _pc,
 )
 from utils.sao_sound import get_sao_font, get_cjk_font
+from gui_modules import sao_panel_ui as ui
 from gui_modules.sao_panel_ui import (
-    _SAO_PANEL_BG,
-    _SAO_PANEL_BODY_BG,
-    _SAO_PANEL_GOLD,
-    _SAO_PANEL_LABEL_FG,
-    _SAO_PANEL_VALUE_FG,
     _apply_window_icon,
     _bind_panel_drag,
     _make_panel_close_button,
     _sao_panel_body,
     _sao_panel_header,
     _sao_pill,
-    _theme_color,
 )
+
+
+def _refresh_panel_palette() -> None:
+    global _SAO_PANEL_BG, _SAO_PANEL_BODY_BG, _SAO_PANEL_GOLD
+    global _SAO_PANEL_LABEL_FG, _SAO_PANEL_VALUE_FG
+    _SAO_PANEL_BG = _pc('bg', ui._SAO_PANEL_BG)
+    _SAO_PANEL_BODY_BG = _pc('body_bg', ui._SAO_PANEL_BODY_BG)
+    _SAO_PANEL_GOLD = _pc('gold', ui._SAO_PANEL_GOLD)
+    _SAO_PANEL_LABEL_FG = _pc('label_fg', ui._SAO_PANEL_LABEL_FG)
+    _SAO_PANEL_VALUE_FG = _pc('value_fg', ui._SAO_PANEL_VALUE_FG)
+
+
+_refresh_panel_palette()
 
 _DTYPES = ("i32", "u32", "i64", "u64", "f32", "utf16")
 _POLL_MS = 500
@@ -225,6 +234,7 @@ class MemScopePanel:
             self._poll_after = self.root.after(_POLL_MS, self._poll)
 
     def _build(self) -> None:
+        _refresh_panel_palette()
         win = tk.Toplevel(self.root)
         self._win = win
         win.title('SAO Mem Scope')
@@ -298,6 +308,7 @@ class MemScopePanel:
         self._last_sig = ""
 
     def _render_status(self, status: Mapping[str, Any]) -> None:
+        _refresh_panel_palette()
         st = status.get('status') if isinstance(status.get('status'), Mapping) else {}
         active = bool(st.get('active'))
         self._summary_var.set(
@@ -451,7 +462,7 @@ class MemScopePanel:
             return
         state = str(search.get('state') or '')
         if search.get('error'):
-            tk.Label(inner, text=f"错误: {search.get('error')}", bg=_SAO_PANEL_BODY_BG, fg=_theme_color('danger', '#ff6b82'),
+            tk.Label(inner, text=f"错误: {search.get('error')}", bg=_SAO_PANEL_BODY_BG, fg=_pc('danger', '#ff6b82'),
                      font=get_cjk_font(9), anchor='w').pack(fill='x')
             return
         if state == 'running':

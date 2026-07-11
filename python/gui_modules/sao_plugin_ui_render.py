@@ -25,12 +25,10 @@ import tkinter as tk
 from typing import Any, Callable, Mapping, Optional
 
 import gui_modules.sao_panel_ui as _theme
+from gui_modules.sao_panel_components import _pc, action_button, rounded_panel, status_badge
+from utils.sao_sound import get_cjk_font
 
-# Status colors are theme-independent enough to read on both light and dark.
-_OK = "#2bb673"
-_WARN = "#d79b06"
 _BAD = "#e0455a"
-_MONO = ("Consolas", 9)
 
 _ANCHOR = {"left": "w", "center": "center", "right": "e"}
 _JUSTIFY = {"left": "left", "center": "center", "right": "right"}
@@ -85,52 +83,56 @@ def _input_pack_kw(width: Any) -> dict:
 
 def _pal() -> dict:
     # Resolve the live SAO panel palette (respects runtime theme switches).
-    g = lambda name, fallback: getattr(_theme, name, fallback)
     return {
-        "body": g("_SAO_PANEL_BODY_BG", "#f6f7f7"),
-        "border": g("_SAO_PANEL_BORDER", "#babec4"),
-        "sep": g("_SAO_PANEL_SEP", "#d8dde2"),
-        "label": g("_SAO_PANEL_LABEL_FG", "#8c878a"),
-        "value": g("_SAO_PANEL_VALUE_FG", "#646364"),
-        "gold": g("_SAO_PANEL_GOLD", "#dea620"),
-        "accent": g("_SAO_PANEL_ACCENT", "#68e4ff"),
-        "header_bg": g("_SAO_PANEL_HEADER_BG", "#fcfcfc"),
-        "header_fg": g("_SAO_PANEL_HEADER_FG", "#646364"),
+        "body": _pc("body_bg", _theme._SAO_PANEL_BODY_BG),
+        "card": _pc("card_bg", _theme._SAO_PANEL_BODY_BG),
+        "card_alt": _pc("card_bg_alt", _theme._SAO_PANEL_HEADER_BG),
+        "control": _pc("control_bg", _theme._SAO_PANEL_HEADER_BG),
+        "border": _pc("border", _theme._SAO_PANEL_BORDER),
+        "sep": _pc("sep", _theme._SAO_PANEL_SEP),
+        "label": _pc("label_fg", _theme._SAO_PANEL_LABEL_FG),
+        "value": _pc("value_fg", _theme._SAO_PANEL_VALUE_FG),
+        "gold": _pc("gold", _theme._SAO_PANEL_GOLD),
+        "accent": _pc("accent", _theme._SAO_PANEL_ACCENT),
+        "header_bg": _pc("header_bg", _theme._SAO_PANEL_HEADER_BG),
+        "header_fg": _pc("header_fg", _theme._SAO_PANEL_HEADER_FG),
+        "ok": _pc("ok", "#2bb673"),
+        "danger": _pc("danger", _BAD),
     }
 
 
 def _text_color(style: str, pal: dict) -> str:
     return {
         "title": pal["gold"], "subtitle": pal["accent"], "value": pal["value"],
-        "label": pal["label"], "muted": pal["label"], "ok": _OK, "warn": _WARN,
-        "bad": _BAD, "gold": pal["gold"], "accent": pal["accent"], "mono": pal["value"],
+        "label": pal["label"], "muted": pal["label"], "ok": pal["ok"], "warn": pal["gold"],
+        "bad": pal["danger"], "gold": pal["gold"], "accent": pal["accent"], "mono": pal["value"],
     }.get(style, pal["value"])
 
 
 def _bar_color(color: str, pal: dict) -> str:
     return {
         "cyan": pal["accent"], "accent": pal["accent"], "gold": pal["gold"],
-        "ok": _OK, "heal": _OK, "warn": _WARN, "bad": _BAD,
+        "ok": pal["ok"], "heal": pal["ok"], "warn": pal["gold"], "bad": pal["danger"],
     }.get(color, pal["accent"])
 
 
 def _text_font(style: str):
     if style == "title":
-        return ("Segoe UI", 12, "bold")
+        return get_cjk_font(12, True)
     if style == "subtitle":
-        return ("Segoe UI", 10, "bold")
+        return get_cjk_font(10, True)
     if style == "mono":
-        return _MONO
-    return ("Segoe UI", 10)
+        return get_cjk_font(9)
+    return get_cjk_font(10)
 
 
 def _badge_fg(style: str, pal: dict) -> str:
-    return {"ok": _OK, "warn": _WARN, "bad": _BAD, "gold": pal["gold"],
+    return {"ok": pal["ok"], "warn": pal["gold"], "bad": pal["danger"], "gold": pal["gold"],
             "accent": pal["accent"]}.get(style, pal["label"])
 
 
 def _btn_fg(style: str, pal: dict) -> str:
-    return {"primary": pal["gold"], "danger": _BAD, "ghost": pal["label"]}.get(
+    return {"primary": pal["gold"], "danger": pal["danger"], "ghost": pal["label"]}.get(
         style, pal["header_fg"])
 
 
@@ -147,8 +149,8 @@ def _canvas_fill(value: Any, pal: dict, default: str = "") -> str:
         "header": pal["header_bg"], "transparent": "",
         "title": pal["gold"], "subtitle": pal["accent"], "value": pal["value"],
         "label": pal["label"], "muted": pal["label"], "gold": pal["gold"],
-        "accent": pal["accent"], "cyan": pal["accent"], "heal": _OK,
-        "ok": _OK, "warn": _WARN, "bad": _BAD, "mono": pal["value"],
+        "accent": pal["accent"], "cyan": pal["accent"], "heal": pal["ok"],
+        "ok": pal["ok"], "warn": pal["gold"], "bad": pal["danger"], "mono": pal["value"],
     }.get(text.lower(), default)
 
 
@@ -176,8 +178,7 @@ def _draw_canvas_ops(cv: tk.Canvas, node: Mapping[str, Any], pal: dict) -> None:
                            fill=_canvas_fill(op.get("fill"), pal, pal["value"]) or pal["value"],
                            width=_finite_int(op.get("width"), 1, lo=1))
         elif kind == "text":
-            font = ("Segoe UI", _finite_int(op.get("size"), 10, lo=1),
-                    "bold" if op.get("bold") else "normal")
+            font = get_cjk_font(_finite_int(op.get("size"), 10, lo=1), bool(op.get("bold")))
             cv.create_text(_finite_int(op.get("x"), 0), _finite_int(op.get("y"), 0),
                            text=str(op.get("text") or ""),
                            fill=_canvas_fill(op.get("fill"), pal, pal["value"]) or pal["value"],
@@ -238,7 +239,7 @@ class SpecRenderer:
         if title:
             if self._title is None or not self._title.winfo_exists():
                 self._title = tk.Label(self.mount, text=title, bg=self.mount["bg"],
-                                       fg=pal["gold"], anchor="w", font=("Segoe UI", 12, "bold"))
+                                       fg=pal["gold"], anchor="w", font=get_cjk_font(12, True))
                 self._title.pack(fill="x", pady=(0, 4))
             else:
                 self._title.config(text=title, fg=pal["gold"])
@@ -377,11 +378,11 @@ class SpecRenderer:
     def _build_kv(self, parent, ns, pal) -> _RNode:
         w = tk.Frame(parent, bg=parent["bg"])
         k = tk.Label(w, text=str(ns.get("label") or ""), bg=parent["bg"], fg=pal["label"],
-                     anchor="w", font=("Segoe UI", 9))
+                     anchor="w", font=get_cjk_font(9))
         k.pack(side="left")
         v = tk.Label(w, text=str(ns.get("value") or ""), bg=parent["bg"],
                      fg=_text_color(str(ns.get("style") or "value"), pal),
-                     anchor="e", font=("Segoe UI", 9, "bold"))
+                     anchor="e", font=get_cjk_font(9, True))
         v.pack(side="right")
         return _RNode("kv", w, parts={"k": k, "v": v}, spec=ns, pack_kw={"fill": "x", "pady": 1})
 
@@ -398,10 +399,10 @@ class SpecRenderer:
         top = tk.Frame(w, bg=parent["bg"])
         top.pack(fill="x", pady=(3, 1))
         lbl = tk.Label(top, text=str(ns.get("label") or ""), bg=parent["bg"], fg=pal["label"],
-                       anchor="w", font=("Segoe UI", 9))
+                       anchor="w", font=get_cjk_font(9))
         lbl.pack(side="left")
         cap = tk.Label(top, text=str(ns.get("caption") or ""), bg=parent["bg"], fg=pal["value"],
-                       anchor="e", font=("Segoe UI", 9))
+                       anchor="e", font=get_cjk_font(9))
         cap.pack(side="right")
         bar_h = 16 if interactive else 8
         track = tk.Frame(w, bg=pal["sep"], height=bar_h,
@@ -462,12 +463,12 @@ class SpecRenderer:
 
         w = tk.Frame(parent, bg=bg)
         lbl = tk.Label(w, text=str(ns.get("label") or ""), bg=bg,
-                       fg=pal["label"], anchor="w", font=("Segoe UI", 9))
+                       fg=pal["label"], anchor="w", font=get_cjk_font(9))
         lbl.pack(side="left", padx=(0, 6))
 
         val_lbl = tk.Label(w, text=self._fmt_slider_val(val, lo, hi),
                            bg=bg, fg=pal["value"], anchor="e",
-                           font=("Segoe UI", 9, "bold"), width=7)
+                           font=get_cjk_font(9, True), width=7)
         val_lbl.pack(side="right", padx=(4, 0))
 
         resolution = step if step > 0 else (hi - lo) / 200
@@ -515,14 +516,33 @@ class SpecRenderer:
         return f"{int(v)}"
 
     def _build_badge(self, parent, ns, pal) -> _RNode:
-        fg = _badge_fg(str(ns.get("style") or "muted"), pal)
-        w = tk.Label(parent, text=" " + str(ns.get("text") or "") + " ", bg=parent["bg"],
-                     fg=fg, highlightthickness=1, highlightbackground=fg, font=("Segoe UI", 8, "bold"))
-        return _RNode("badge", w, spec=ns, pack_kw={"side": "left", "padx": (0, 4), "pady": 2})
+        style = str(ns.get("style") or "muted")
+        kind = {"ok": "ok", "warn": "gold", "bad": "danger", "accent": "cyan"}.get(style, "gold")
+        w = status_badge(parent, str(ns.get("text") or ""), kind=kind,
+                         bg=lambda: parent.cget("bg"),
+                         fg=lambda: _badge_fg(style, _pal()))
+        return _RNode(
+            "badge", w,
+            parts={"text": str(ns.get("text") or ""), "style": style},
+            spec=ns, pack_kw={"side": "left", "padx": (0, 4), "pady": 2},
+        )
 
     def _update_badge(self, rn, ns, pal) -> None:
-        fg = _badge_fg(str(ns.get("style") or "muted"), pal)
-        rn.widget.config(text=" " + str(ns.get("text") or "") + " ", fg=fg, highlightbackground=fg)
+        text = str(ns.get("text") or "")
+        style = str(ns.get("style") or "muted")
+        if text == rn.parts.get("text") and style == rn.parts.get("style"):
+            repaint = getattr(rn.widget, "_sao_theme_repaint", None)
+            if callable(repaint):
+                repaint()
+            return
+        # Canvas-backed status badges need a shape rebuild when their text or
+        # semantic style changes; unchanged badges remain persistent nodes.
+        parent = rn.widget.master
+        rn.widget.destroy()
+        replacement = self._build_badge(parent, ns, pal)
+        rn.widget = replacement.widget
+        rn.parts = replacement.parts
+        self._place(rn, False)
 
     def _build_divider(self, parent, ns, pal) -> _RNode:
         return _RNode("divider", tk.Frame(parent, bg=pal["sep"], height=1),
@@ -535,23 +555,25 @@ class SpecRenderer:
     def _build_button(self, parent, ns, pal) -> _RNode:
         rn = _RNode("button", None, spec=ns, pack_kw={"side": "left", "padx": (0, 6), "pady": 4})
         rn.parts = {"action": str(ns.get("action") or ""), "payload": dict(ns.get("payload") or {}),
-                    "disabled": bool(ns.get("disabled"))}
-        fg = _btn_fg(str(ns.get("style") or "default"), pal)
-        rn.widget = tk.Button(parent, text=str(ns.get("label") or ns.get("action") or ""),
-                              command=lambda r=rn: self._fire(r),
-                              state=("disabled" if rn.parts["disabled"] else "normal"),
-                              bg=pal["header_bg"], fg=fg, activebackground=pal["accent"],
-                              activeforeground="white", relief="flat", bd=0, padx=10, pady=3,
-                              font=("Segoe UI", 9, "bold"))
+                    "disabled": bool(ns.get("disabled")), "style": str(ns.get("style") or "default")}
+        kind = {"primary": "gold", "danger": "danger"}.get(rn.parts["style"], "normal")
+        rn.widget = action_button(
+            parent, str(ns.get("label") or ns.get("action") or ""),
+            command=(None if rn.parts["disabled"] else lambda r=rn: self._fire(r)),
+            kind=kind, padx=10, pady=3,
+            canvas_bg=lambda: parent.cget("bg"), disabled=rn.parts["disabled"],
+        )
         return rn
 
     def _update_button(self, rn, ns, pal) -> None:
         rn.parts["action"] = str(ns.get("action") or "")
         rn.parts["payload"] = dict(ns.get("payload") or {})
         rn.parts["disabled"] = bool(ns.get("disabled"))
+        rn.parts["style"] = str(ns.get("style") or "default")
+        kind = {"primary": "gold", "danger": "danger"}.get(rn.parts["style"], "normal")
         rn.widget.config(text=str(ns.get("label") or ns.get("action") or ""),
-                         fg=_btn_fg(str(ns.get("style") or "default"), pal),
-                         state=("disabled" if rn.parts["disabled"] else "normal"))
+                         kind=kind, disabled=rn.parts["disabled"],
+                         command=(None if rn.parts["disabled"] else lambda r=rn: self._fire(r)))
 
     # ── text input (round-trips into payload["inputs"] on a button fire) ───────
     def _build_input(self, parent, ns, pal) -> _RNode:
@@ -563,7 +585,7 @@ class SpecRenderer:
         w = tk.Entry(parent, textvariable=var, bg=pal["header_bg"], fg=pal["value"],
                      insertbackground=pal["value"], relief="flat", highlightthickness=1,
                      highlightbackground=pal["border"], highlightcolor=pal["accent"],
-                     font=("Segoe UI", 10))
+                     font=get_cjk_font(10))
         width = _input_width_px(ns.get("width"))
         pack_kw = _input_pack_kw(width)
         if width > 0:
@@ -689,7 +711,7 @@ class SpecRenderer:
         title = str(ns.get("title") or "")
         if title:
             tl = tk.Label(w, text=title, bg=parent["bg"], fg=pal["label"], anchor="w",
-                          font=("Segoe UI", 9, "bold"))
+                          font=get_cjk_font(9, True))
             tl.pack(fill="x", pady=(4, 2))
             parts["title"] = tl
         grid = tk.Frame(w, bg=parent["bg"])
@@ -704,7 +726,7 @@ class SpecRenderer:
             grid.grid_columnconfigure(ci, weight=(1 if ci == 0 else 0))
             tk.Label(grid, text=str(col.get("title") or col.get("key") or ""), bg=parent["bg"],
                      fg=pal["label"], anchor=_TALIGN.get(col.get("align"), "w"),
-                     font=("Segoe UI", 8, "bold")).grid(row=0, column=ci, sticky="ew", padx=4, pady=(0, 2))
+                     font=get_cjk_font(8, True)).grid(row=0, column=ci, sticky="ew", padx=4, pady=(0, 2))
         hk = str(ns.get("highlight_key") or "")
         for ri, row in enumerate(rows, start=1):
             hi = bool(hk and row.get(hk))
@@ -714,7 +736,7 @@ class SpecRenderer:
                 c = tk.Label(grid, text="" if val is None else str(val), bg=parent["bg"],
                              fg=(pal["gold"] if hi else pal["value"]),
                              anchor=_TALIGN.get(col.get("align"), "w"),
-                             font=("Segoe UI", 9, "bold" if hi else "normal"))
+                             font=get_cjk_font(9, hi))
                 c.grid(row=ri, column=ci, sticky="ew", padx=4, pady=1)
                 cellrow.append(c)
             parts["cells"].append(cellrow)
@@ -735,7 +757,7 @@ class SpecRenderer:
                 val = row.get(col.get("key"))
                 cells[ri][ci].config(text="" if val is None else str(val),
                                      fg=(pal["gold"] if hi else pal["value"]),
-                                     font=("Segoe UI", 9, "bold" if hi else "normal"))
+                                     font=get_cjk_font(9, hi))
         if "title" in rn.parts:
             rn.parts["title"].config(text=str(ns.get("title") or ""))
 
@@ -760,27 +782,24 @@ class SpecRenderer:
         t = str(ns.get("type") or "")
         framed = t in ("section", "card")
         accent = _bar_color(str(ns.get("accent") or "cyan"), pal)
-        box = tk.Frame(parent, bg=pal["body"], highlightthickness=(1 if framed else 0),
-                       highlightbackground=pal["border"])
         parts: dict = {}
         if framed:
-            shell = tk.Frame(box, bg=pal["body"])
-            shell.pack(fill="x")
-            stripe = tk.Frame(shell, bg=accent, width=3)
-            stripe.pack(side="left", fill="y")
-            content = tk.Frame(shell, bg=pal["body"])
-            content.pack(side="left", fill="x", expand=True, padx=(7, 8), pady=(2, 6))
-            parts["accent"] = stripe
+            box, content = rounded_panel(
+                parent, bg=lambda: _pal()["card"], border=lambda: _pal()["border"], radius=9,
+                rail=lambda: _bar_color(str(ns.get("accent") or "cyan"), _pal()),
+                rail_w=3, pad=8, canvas_bg=lambda: parent.cget("bg"), shadow=True,
+            )
         else:
+            box = tk.Frame(parent, bg=pal["body"])
             content = box
         title = str(ns.get("title") or "")
         if title:
-            head = tk.Frame(content, bg=pal["body"])
+            head = tk.Frame(content, bg=content["bg"])
             head.pack(fill="x", pady=(3, 2))
             hstripe = tk.Frame(head, bg=accent, width=3, height=14)
             hstripe.pack(side="left", padx=(0, 6))
-            tlbl = tk.Label(head, text=title, bg=pal["body"], fg=pal["gold"], anchor="w",
-                            font=("Segoe UI", 10, "bold"))
+            tlbl = tk.Label(head, text=title, bg=content["bg"], fg=pal["gold"], anchor="w",
+                            font=get_cjk_font(10, True))
             tlbl.pack(side="left")
             parts["title"] = tlbl
             parts["title_stripe"] = hstripe
@@ -800,6 +819,9 @@ class SpecRenderer:
 
     def _update_container(self, rn, ns, pal) -> None:
         accent = _bar_color(str(ns.get("accent") or "cyan"), pal)
+        repaint = getattr(rn.widget, "_sao_theme_repaint", None)
+        if callable(repaint):
+            repaint()
         if "accent" in rn.parts:
             try:
                 rn.parts["accent"].config(bg=accent)
@@ -836,7 +858,8 @@ def render_spec_into(parent: tk.Misc, spec: Any,
     try:
         SpecRenderer(parent, on_action).render(spec or {})
     except Exception:
-        tk.Label(parent, text="[render error]", bg=parent["bg"], fg=_BAD, font=_MONO).pack(anchor="w")
+        tk.Label(parent, text="[render error]", bg=parent["bg"], fg=_BAD,
+                 font=get_cjk_font(9)).pack(anchor="w")
 
 
 # ── auto-redrawing panel list (manager "Panels" tab) ─────────────────────────
@@ -960,7 +983,7 @@ class PluginPanelList:
                 self._empty_lbl = tk.Label(
                     self._frame, text="无插件 UI 面板\n启用注册了 register_ui_panel 的插件后显示在这里。",
                     bg=self._frame["bg"], fg=pal["label"], justify="center",
-                    font=("Segoe UI", 10), pady=24)
+                    font=get_cjk_font(10), pady=24)
                 self._empty_lbl.pack(fill="x")
             return
         if self._empty_lbl is not None:

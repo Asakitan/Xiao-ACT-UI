@@ -125,6 +125,7 @@ class AlertOverlay:
         sh = _user32.GetSystemMetrics(1)
         self._center_x = (sw - self.WIDTH) // 2
         self._center_y = (sh - self.HEIGHT) // 2
+        self._screen_h = sh
 
         # Theme: load saved preference
         self._theme_name: str = 'dark'
@@ -163,6 +164,7 @@ class AlertOverlay:
 
         # Pre-render the static frame at full opacity
         base_img = self._render_frame(title, message)
+        self._center_y = (self._screen_h - self._frame_height) // 2
 
         win = tk.Toplevel(self.root)
         try:
@@ -242,7 +244,13 @@ class AlertOverlay:
         self._theme_name = theme_name
 
     def _render_frame(self, title: str, message: str):
-        W, H = self.WIDTH, self.HEIGHT
+        W = self.WIDTH
+        font_body = _load_font('cjk', 14)
+        body_lines = self._wrap_body_lines(message, font_body, W - 48) if message else []
+        line_h = 14 * 1.7
+        body_h = max(self.BODY_H, int(len(body_lines) * line_h + 24))
+        H = self.TITLE_H + body_h + self.FOOTER_H
+        self._frame_height = H
         # Render at 2x for shadow room, then crop
         PAD = 40  # shadow padding
         cw, ch = W + PAD * 2, H + PAD * 2
@@ -281,19 +289,19 @@ class AlertOverlay:
 
         # Body section
         draw.rectangle(
-            [(ox, oy + self.TITLE_H), (ox + W - 1, oy + self.TITLE_H + self.BODY_H - 1)],
+            [(ox, oy + self.TITLE_H), (ox + W - 1, oy + self.TITLE_H + body_h - 1)],
             fill=self.BODY_BG
         )
 
         # Footer section
         draw.rectangle(
-            [(ox, oy + self.TITLE_H + self.BODY_H),
+            [(ox, oy + self.TITLE_H + body_h),
              (ox + W - 1, oy + H - 1)],
             fill=self.FOOTER_BG
         )
 
         # Footer gradient line at y=9 from footer top
-        fy = oy + self.TITLE_H + self.BODY_H + 9
+        fy = oy + self.TITLE_H + body_h + 9
         line_left = ox + 18
         line_right = ox + W - 18
         line_w = line_right - line_left
@@ -321,7 +329,7 @@ class AlertOverlay:
         # Footer top shadow: rgba(0,0,0,.07) 0 -10px 12px 0
         footer_shadow = Image.new('RGBA', (cw, ch), (0, 0, 0, 0))
         fsd = ImageDraw.Draw(footer_shadow)
-        fsy = oy + self.TITLE_H + self.BODY_H
+        fsy = oy + self.TITLE_H + body_h
         fsd.rectangle(
             [(ox, fsy - 10), (ox + W, fsy)],
             fill=(0, 0, 0, 18)
@@ -343,15 +351,10 @@ class AlertOverlay:
             _draw_tracked(draw, (tx, ty0 + i * title_line_h), line, fill=self.TITLE_COLOR, font=font_title, spacing=1.0)
 
         # Body text: 14px, centered, pre-line
-        font_body = _load_font('cjk', 14)
-        if message:
-            lines = message.split('\n')
-            line_h = 14 * 1.7  # line-height: 1.7
-            total_h = len(lines) * line_h
-            by_start = oy + self.TITLE_H + (self.BODY_H - total_h) / 2
-            for i, line in enumerate(lines):
-                if len(line) > 45:
-                    line = line[:44] + '…'
+        if body_lines:
+            total_h = len(body_lines) * line_h
+            by_start = oy + self.TITLE_H + (body_h - total_h) / 2
+            for i, line in enumerate(body_lines):
                 lw = _tracked_text_width(line, font_body, 0.0)
                 lx = ox + (W - lw) / 2
                 ly = by_start + i * line_h
@@ -359,6 +362,20 @@ class AlertOverlay:
 
         # Crop to final size with shadow padding preserved
         return img
+
+    @staticmethod
+    def _wrap_body_lines(text, font, max_w):
+        lines = []
+        for source_line in str(text or '').splitlines() or ['']:
+            current = ''
+            for ch in source_line:
+                if current and _tracked_text_width(current + ch, font) > max_w:
+                    lines.append(current)
+                    current = ch
+                else:
+                    current += ch
+            lines.append(current)
+        return lines
 
     @staticmethod
     def _wrap_title_lines(text, font, max_w, max_lines=2):

@@ -34,27 +34,35 @@ from gui_modules.sao_panel_components import (
     sao_scrollbar,
     section_card,
     status_badge,
+    _pc,
 )
 from plugins.star_resonance_plugin.panels.panel_text import readable_event_line, source_cn, topic_cn
 from utils.sao_sound import get_sao_font, get_cjk_font
+from gui_modules import sao_panel_ui as ui
 from gui_modules.sao_panel_ui import (
-    _SAO_PANEL_ACCENT,
-    _SAO_PANEL_BG,
-    _SAO_PANEL_BODY_BG,
-    _SAO_PANEL_BORDER,
-    _SAO_PANEL_GOLD,
-    _SAO_PANEL_HEADER_BG,
-    _SAO_PANEL_HEADER_FG,
-    _SAO_PANEL_LABEL_FG,
-    _SAO_PANEL_VALUE_FG,
     _apply_window_icon,
     _bind_panel_drag,
     _make_panel_close_button,
     _sao_panel_body,
     _sao_panel_header,
     _sao_pill,
-    _theme_color,
 )
+
+
+def _refresh_panel_palette() -> None:
+    global _SAO_PANEL_ACCENT, _SAO_PANEL_BG, _SAO_PANEL_BODY_BG, _SAO_PANEL_BORDER
+    global _SAO_PANEL_GOLD, _SAO_PANEL_HEADER_BG, _SAO_PANEL_LABEL_FG, _SAO_PANEL_VALUE_FG
+    _SAO_PANEL_ACCENT = _pc('accent', ui._SAO_PANEL_ACCENT)
+    _SAO_PANEL_BG = _pc('bg', ui._SAO_PANEL_BG)
+    _SAO_PANEL_BODY_BG = _pc('body_bg', ui._SAO_PANEL_BODY_BG)
+    _SAO_PANEL_BORDER = _pc('border', ui._SAO_PANEL_BORDER)
+    _SAO_PANEL_GOLD = _pc('gold', ui._SAO_PANEL_GOLD)
+    _SAO_PANEL_HEADER_BG = _pc('header_bg', ui._SAO_PANEL_HEADER_BG)
+    _SAO_PANEL_LABEL_FG = _pc('label_fg', ui._SAO_PANEL_LABEL_FG)
+    _SAO_PANEL_VALUE_FG = _pc('value_fg', ui._SAO_PANEL_VALUE_FG)
+
+
+_refresh_panel_palette()
 
 
 # ── Source dropdown display labels (internal value → UI label) ──
@@ -345,6 +353,7 @@ class ActionLogPanel:
             return False
 
     def _build(self) -> None:
+        _refresh_panel_palette()
         win = tk.Toplevel(self.root)
         self._win = win
         win.title('SAO ACT Action Log')
@@ -499,6 +508,7 @@ class ActionLogPanel:
                      font=get_cjk_font(9, True), anchor='e').pack(side='right')
 
     def _render_status(self, status: Mapping[str, Any]) -> None:
+        _refresh_panel_palette()
         if hasattr(self, '_badge_frame_al'):
             for child in list(self._badge_frame_al.winfo_children()):
                 child.destroy()
@@ -785,9 +795,9 @@ class ActionLogPanel:
         is_boss = raw_topic in {'boss', 'boss_state', 'boss_mechanic'}
         # 游标行用主题 warn_soft 淡金底（旧 '#2b2a1a' 深橄榄色在浅色主题下是黑块）
         if row.get('is_cursor'):
-            bg = _theme_color('warn_soft', '#fff8e5')
+            bg = _pc('warn_soft', ui._theme_color('warn_soft', '#fff8e5'))
         elif is_boss:
-            bg = _theme_color('warn_soft', '#fff8e5')
+            bg = _pc('warn_soft', ui._theme_color('warn_soft', '#fff8e5'))
         else:
             bg = _SAO_PANEL_BODY_BG
         card = tk.Frame(parent, bg=bg, highlightthickness=0 if compact else 1, highlightbackground=_SAO_PANEL_BORDER)
