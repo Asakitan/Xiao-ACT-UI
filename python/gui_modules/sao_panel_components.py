@@ -186,6 +186,16 @@ def _accent_soft(kind: str = "gold") -> str:
     return _pc('gold_soft', _pc('header_bg', ui._SAO_PANEL_HEADER_BG))
 
 
+def _resolve_color(value: Any, fallback: str) -> str:
+    # Callable colors opt into live palette resolution; literal colors stay explicit.
+    if callable(value):
+        try:
+            value = value()
+        except Exception:
+            value = None
+    return str(value) if value not in (None, '') else fallback
+
+
 def _bind_click(widget: tk.Misc, command: Callable[[], Any]) -> None:
     def walk(w: tk.Misc) -> None:
         try:
@@ -255,14 +265,21 @@ def status_badge(parent: tk.Misc, text: str, *, kind: str = "gold",
     txt = str(text or "-")
     w = f.measure(txt) + 2 * 9
     h = f.metrics('linespace') + 2 * 3
-    canvas_bg = bg if bg is not None else _pc('body_bg', ui._SAO_PANEL_BODY_BG)
-    fill_c = fill if fill is not None else _accent_soft(kind)
-    border_c = border if border is not None else _accent(kind)
-    fg_c = fg if fg is not None else _accent_text(kind)
-    c = tk.Canvas(parent, width=w, height=h, bg=canvas_bg, highlightthickness=0, bd=0)
-    c.create_polygon(_round_pts(1, 1, w - 1, h - 1, min(9, h / 2)), smooth=True, splinesteps=16,
-                     fill=fill_c, outline=border_c, width=1)
-    c.create_text(w // 2, h // 2 + 1, text=txt, fill=fg_c, font=fontspec)
+    c = tk.Canvas(parent, width=w, height=h, highlightthickness=0, bd=0)
+
+    def _redraw(_e=None) -> None:
+        canvas_bg = _resolve_color(bg, _pc('body_bg', ui._SAO_PANEL_BODY_BG))
+        fill_c = _resolve_color(fill, _accent_soft(kind))
+        border_c = _resolve_color(border, _accent(kind))
+        fg_c = _resolve_color(fg, _accent_text(kind))
+        c.configure(bg=canvas_bg)
+        c.delete('all')
+        c.create_polygon(_round_pts(1, 1, w - 1, h - 1, min(9, h / 2)), smooth=True, splinesteps=16,
+                         fill=fill_c, outline=border_c, width=1)
+        c.create_text(w // 2, h // 2 + 1, text=txt, fill=fg_c, font=fontspec)
+
+    c._sao_theme_repaint = _redraw
+    _redraw()
     return c
 
 
@@ -279,46 +296,94 @@ class _RoundedButton(tk.Canvas):
 
     def __init__(self, parent, text='', command=None, *, kind='normal', radius=7, padx=12, pady=5,
                  fill=None, fill_hover=None, border=None, fg=None, canvas_bg=None,
-                 active=False, active_fill=None, active_fg=None, active_border=None):
+                 active=False, active_fill=None, active_fg=None, active_border=None,
+                 disabled=False, disabled_fill=None, disabled_fg=None, disabled_border=None):
         self._radius = radius
         self._text = str(text)
         self._command = command
         self._font = tkfont.Font(font=get_cjk_font(9, True))
-        self._fill = fill if fill is not None else _pc('control_bg', _pc('card_bg', ui._SAO_PANEL_BODY_BG))
-        self._fill_hover = fill_hover if fill_hover is not None else _pc('card_bg_alt', _pc('header_bg', ui._SAO_PANEL_HEADER_BG))
-        self._border = border if border is not None else (_pc('border', ui._SAO_PANEL_BORDER) if kind == 'normal' else _accent(kind))
-        self._fg = fg if fg is not None else (_pc('value_fg', ui._SAO_PANEL_VALUE_FG) if kind == 'normal' else _accent_text(kind))
+        self._kind = str(kind or 'normal')
+        self._fill = fill
+        self._fill_hover = fill_hover
+        self._border = border
+        self._fg = fg
+        self._canvas_bg = canvas_bg
         self._active = bool(active)
-        self._active_fill = active_fill if active_fill is not None else self._border
-        self._active_fg = active_fg if active_fg is not None else '#ffffff'
-        self._active_border = active_border if active_border is not None else self._active_fill
+        self._active_fill = active_fill
+        self._active_fg = active_fg
+        self._active_border = active_border
+        self._disabled = bool(disabled)
+        self._disabled_fill = disabled_fill
+        self._disabled_fg = disabled_fg
+        self._disabled_border = disabled_border
+        self._hover = False
         w = self._font.measure(self._text) + 2 * padx
         h = self._font.metrics('linespace') + 2 * pady
-        canvas_bg_c = canvas_bg if canvas_bg is not None else _pc('body_bg', ui._SAO_PANEL_BODY_BG)
-        super().__init__(parent, width=w, height=h, bg=canvas_bg_c,
-                         highlightthickness=0, bd=0, cursor='hand2' if command else '')
+        super().__init__(parent, width=w, height=h,
+                         bg=_resolve_color(canvas_bg, _pc('body_bg', ui._SAO_PANEL_BODY_BG)),
+                         highlightthickness=0, bd=0)
         self.bind('<Configure>', lambda _e=None: self._draw())
         self.bind('<Button-1>', self._on_click)
-        self.bind('<Enter>', lambda _e=None: self._draw(hover=True))
-        self.bind('<Leave>', lambda _e=None: self._draw(hover=False))
+        self.bind('<Enter>', self._on_enter)
+        self.bind('<Leave>', self._on_leave)
+        self._sao_theme_repaint = self._draw
         self._draw()
 
-    def _draw(self, hover=False):
+    def _palette(self) -> tuple[str, str, str, str, str, str, str, str, str, str]:
+        normal_fill = _resolve_color(self._fill, _pc('control_bg', _pc('card_bg', ui._SAO_PANEL_BODY_BG)))
+        hover_fill = _resolve_color(self._fill_hover, _pc('card_bg_alt', _pc('header_bg', ui._SAO_PANEL_HEADER_BG)))
+        normal_border = _resolve_color(
+            self._border,
+            _pc('border', ui._SAO_PANEL_BORDER) if self._kind == 'normal' else _accent(self._kind),
+        )
+        normal_fg = _resolve_color(
+            self._fg,
+            _pc('value_fg', ui._SAO_PANEL_VALUE_FG) if self._kind == 'normal' else _accent_text(self._kind),
+        )
+        active_fill = _resolve_color(self._active_fill, normal_border)
+        active_fg = _resolve_color(self._active_fg, _pc('active_fg', '#ffffff'))
+        active_border = _resolve_color(self._active_border, active_fill)
+        disabled_fill = _resolve_color(self._disabled_fill, _pc('card_bg_alt', ui._SAO_PANEL_HEADER_BG))
+        disabled_fg = _resolve_color(self._disabled_fg, _pc('label_fg', ui._SAO_PANEL_LABEL_FG))
+        disabled_border = _resolve_color(self._disabled_border, _pc('border', ui._SAO_PANEL_BORDER))
+        return (normal_fill, hover_fill, normal_border, normal_fg, active_fill, active_fg,
+                active_border, disabled_fill, disabled_fg, disabled_border)
+
+    def _draw(self, _e=None):
         self.delete('all')
         w = self.winfo_width() or int(self['width'])
         h = self.winfo_height() or int(self['height'])
-        if self._active:
-            fill, border, fg = self._active_fill, self._active_border, self._active_fg
+        (normal_fill, hover_fill, normal_border, normal_fg, active_fill, active_fg,
+         active_border, disabled_fill, disabled_fg, disabled_border) = self._palette()
+        tk.Canvas.configure(
+            self,
+            bg=_resolve_color(self._canvas_bg, _pc('body_bg', ui._SAO_PANEL_BODY_BG)),
+            cursor='' if self._disabled or not self._command else 'hand2',
+        )
+        if self._disabled:
+            fill, border, fg = disabled_fill, disabled_border, disabled_fg
+        elif self._active:
+            fill, border, fg = active_fill, active_border, active_fg
         else:
-            fill = self._fill_hover if hover else self._fill
-            border = _accent('cyan') if hover else self._border
-            fg = self._fg
+            fill = hover_fill if self._hover else normal_fill
+            border = _accent('cyan') if self._hover else normal_border
+            fg = normal_fg
         self.create_polygon(_round_pts(1, 1, w - 1, h - 1, self._radius), smooth=True, splinesteps=16,
                             fill=fill, outline=border, width=1)
         self.create_text(w // 2, h // 2, text=self._text, fill=fg, font=self._font)
 
+    def _on_enter(self, _e=None) -> None:
+        if not self._disabled:
+            self._hover = True
+            self._draw()
+
+    def _on_leave(self, _e=None) -> None:
+        if self._hover:
+            self._hover = False
+            self._draw()
+
     def _on_click(self, _e=None):
-        if callable(self._command):
+        if not self._disabled and callable(self._command):
             self._command()
 
     def set_active(self, active: bool) -> None:
@@ -326,10 +391,26 @@ class _RoundedButton(tk.Canvas):
         self._active = bool(active)
         self._draw()
 
+    def set_disabled(self, disabled: bool) -> None:
+        self._disabled = bool(disabled)
+        self._hover = False
+        self.configure(cursor='' if self._disabled or not self._command else 'hand2')
+        self._draw()
+
+    def set_kind(self, kind: str) -> None:
+        self._kind = str(kind or 'normal')
+        self._draw()
+
     def configure(self, cnf=None, **kw):
+        if 'state' in kw:
+            self.set_disabled(str(kw.pop('state')).lower() == 'disabled')
+        if 'disabled' in kw:
+            self.set_disabled(bool(kw.pop('disabled')))
+        if 'kind' in kw:
+            self.set_kind(kw.pop('kind'))
         if 'command' in kw:
             self._command = kw.pop('command')
-            tk.Canvas.configure(self, cursor='hand2' if self._command else '')
+            tk.Canvas.configure(self, cursor='' if self._disabled or not self._command else 'hand2')
         if 'text' in kw:
             self._text = str(kw.pop('text'))
             self._draw()
@@ -337,6 +418,11 @@ class _RoundedButton(tk.Canvas):
             return tk.Canvas.configure(self, cnf, **kw)
 
     config = configure
+
+    def cget(self, key):
+        if key == 'state':
+            return 'disabled' if self._disabled else 'normal'
+        return tk.Canvas.cget(self, key)
 
 
 def action_button(parent: tk.Misc, text: str, command: Optional[Callable[[], Any]] = None, *,
@@ -479,7 +565,7 @@ def _round_pts(x1, y1, x2, y2, r):
     ]
 
 
-def rounded_panel(parent, *, bg, border, radius=8, rail=None, rail_w=3, pad=10, height=None,
+def rounded_panel(parent, *, bg=None, border=None, radius=8, rail=None, rail_w=3, pad=10, height=None,
                   canvas_bg=None, shadow=False):
     # Canvas-backed rounded card (Tk has no rounded Frame). Returns (canvas, inner).
     #
@@ -502,11 +588,11 @@ def rounded_panel(parent, *, bg, border, radius=8, rail=None, rail_w=3, pad=10, 
     # are drawn in that reserved strip, staying inside the canvas's own bounds.
     _SHADOW_MARGIN = 5
     margin = _SHADOW_MARGIN if shadow else 0
-    body_bg = canvas_bg if canvas_bg is not None else _pc('body_bg', ui._SAO_PANEL_BODY_BG)
+    body_bg = _resolve_color(canvas_bg, _pc('body_bg', ui._SAO_PANEL_BODY_BG))
     canvas = tk.Canvas(parent, bg=body_bg, highlightthickness=0, bd=0)
     if height:
         canvas.configure(height=height + margin)
-    inner = tk.Frame(canvas, bg=bg)
+    inner = tk.Frame(canvas, bg=_resolve_color(bg, _pc('card_bg', ui._SAO_PANEL_BODY_BG)))
     canvas.create_window(pad + (rail_w if rail else 0), pad, window=inner, anchor='nw', tags='inner')
 
     def _redraw(_e=None):
@@ -514,36 +600,43 @@ def rounded_panel(parent, *, bg, border, radius=8, rail=None, rail_w=3, pad=10, 
         h = canvas.winfo_height()
         if w <= 2 or h <= 2:
             return
+        draw_body_bg = _resolve_color(canvas_bg, _pc('body_bg', ui._SAO_PANEL_BODY_BG))
+        draw_bg = _resolve_color(bg, _pc('card_bg', ui._SAO_PANEL_BODY_BG))
+        draw_border = _resolve_color(border, _pc('border', ui._SAO_PANEL_BORDER))
+        draw_rail = _resolve_color(rail, '')
+        canvas.configure(bg=draw_body_bg)
+        inner.configure(bg=draw_bg)
         fw, fh = w - margin, h - margin
         canvas.delete('bg')
         canvas.delete('shadow')
         if shadow:
-            sh_far = _blend_hex(body_bg, '#000000', 0.16)
-            sh_near = _blend_hex(body_bg, '#000000', 0.08)
+            sh_far = _blend_hex(draw_body_bg, '#000000', 0.16)
+            sh_near = _blend_hex(draw_body_bg, '#000000', 0.08)
             canvas.create_polygon(_round_pts(1 + 3, 1 + 4, fw + 3, fh + 4, radius), smooth=True, splinesteps=20,
                                   fill=sh_far, outline='', tags='shadow')
             canvas.create_polygon(_round_pts(1 + 2, 1 + 2, fw + 2, fh + 2, radius), smooth=True, splinesteps=20,
                                   fill=sh_near, outline='', tags='shadow')
-        if rail:
+        if draw_rail:
             canvas.create_polygon(_round_pts(1, 1, fw - 1, fh - 1, radius), smooth=True, splinesteps=20,
-                                  fill=rail, outline=rail, tags='bg')
+                                  fill=draw_rail, outline=draw_rail, tags='bg')
             canvas.create_polygon(_round_pts(1 + rail_w, 1, fw - 1, fh - 1, radius), smooth=True, splinesteps=20,
-                                  fill=bg, outline=border, width=1, tags='bg')
+                                  fill=draw_bg, outline=draw_border, width=1, tags='bg')
         else:
             canvas.create_polygon(_round_pts(1, 1, fw - 1, fh - 1, radius), smooth=True, splinesteps=20,
-                                  fill=bg, outline=border, width=1, tags='bg')
+                                  fill=draw_bg, outline=draw_border, width=1, tags='bg')
         if shadow:
             canvas.tag_lower('shadow')
             canvas.tag_raise('bg', 'shadow')
         else:
             canvas.tag_lower('bg')
-        canvas.coords('inner', pad + (rail_w if rail else 0), pad)
+        canvas.coords('inner', pad + (rail_w if draw_rail else 0), pad)
         if height is not None:
-            canvas.itemconfigure('inner', width=fw - 2 * pad - (rail_w if rail else 0), height=fh - 2 * pad)
+            canvas.itemconfigure('inner', width=fw - 2 * pad - (rail_w if draw_rail else 0), height=fh - 2 * pad)
         else:
-            canvas.itemconfigure('inner', width=fw - 2 * pad - (rail_w if rail else 0))
+            canvas.itemconfigure('inner', width=fw - 2 * pad - (rail_w if draw_rail else 0))
 
     canvas.bind('<Configure>', _redraw)
+    canvas._sao_theme_repaint = _redraw
     if height is None:
         # auto-grow the canvas to the inner content height (variable-height cards/sections)
         def _fit(_e=None):

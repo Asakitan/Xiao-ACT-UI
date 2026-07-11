@@ -15,6 +15,7 @@ from utils.sao_sound import get_sao_font as _sao_font, get_cjk_font as _cjk_font
 from sao_theme.colors import SAOColors
 from sao_theme.animator import Animator
 from sao_theme.utils import ease_out, lerp, _make_aa_icon_button
+from gui_modules.sao_panel_ui import _remember_sao_panel_root, _theme_color
 
 # ── 尺寸 ──
 _FINAL_W = 460
@@ -55,11 +56,23 @@ def show_license_dialog(parent: Optional[tk.Tk] = None,
 
     from license import get_license_manager, TIER_FREE, TIER_PAID
     mgr = get_license_manager()
+    outer_bg = _theme_color('bg', _BG_OUTER)
+    surface_bg = _theme_color('card_bg', _BG_WHITE)
+    content_bg = _theme_color('body_bg', _BG_CONTENT)
+    title_fg = _theme_color('value_fg', _FG_TITLE)
+    label_fg = _theme_color('label_fg', _FG_LABEL)
+    value_fg = _theme_color('value_fg', _FG_VALUE)
+    input_border = _theme_color('border', _INPUT_BORDER)
+    input_cursor = _theme_color('gold', _INPUT_CURSOR)
+    accent_gold = _theme_color('gold', _ACCENT_GOLD)
+    accent_cyan = _theme_color('accent', _ACCENT_CYAN)
+    separator = _theme_color('sep', '#d8dde2')
 
     dlg = tk.Toplevel(parent)
+    _remember_sao_panel_root(dlg)
     dlg.overrideredirect(True)
     dlg.attributes('-topmost', True)
-    dlg.configure(bg=_BG_OUTER)
+    dlg.configure(bg=outer_bg)
 
     # DWM 圆角
     try:
@@ -76,96 +89,96 @@ def show_license_dialog(parent: Optional[tk.Tk] = None,
     dlg.geometry(f'{_INITIAL_W}x{_FINAL_H}+{px + (_FINAL_W - _INITIAL_W) // 2}+{py}')
 
     # ── 主容器 ──
-    main = tk.Frame(dlg, bg=_BG_WHITE)
+    main = tk.Frame(dlg, bg=surface_bg)
     main.pack(fill=tk.BOTH, expand=True)
     main.pack_forget()
 
     # ── 标题栏 ──
-    header = tk.Frame(main, bg=_BG_WHITE, height=_HEADER_H)
+    header = tk.Frame(main, bg=surface_bg, height=_HEADER_H)
     header.pack(fill=tk.X)
     header.pack_propagate(False)
 
     # 左侧 cyan 装饰条
-    tk.Frame(header, bg=_ACCENT_CYAN, width=3, height=20).pack(
+    tk.Frame(header, bg=accent_cyan, width=3, height=20).pack(
         side=tk.LEFT, padx=(14, 0), pady=(_HEADER_H // 2 - 10, 0))
-    title_lbl = tk.Label(header, text='', bg=_BG_WHITE,
-                         fg=_FG_TITLE, font=_sao_font(13, True))
+    title_lbl = tk.Label(header, text='', bg=surface_bg,
+                         fg=title_fg, font=_sao_font(13, True))
     title_lbl.pack(side=tk.LEFT, padx=(8, 0), expand=False)
 
     # 右侧 gold 装饰
-    tk.Frame(header, bg=_ACCENT_GOLD, width=18, height=2).pack(
+    tk.Frame(header, bg=accent_gold, width=18, height=2).pack(
         side=tk.RIGHT, padx=(0, 14), pady=(_HEADER_H // 2, 0))
 
-    tk.Frame(main, bg=_BG_OUTER, height=1).pack(fill=tk.X)
+    tk.Frame(main, bg=separator, height=1).pack(fill=tk.X)
 
     # ── 内容区 ──
-    content = tk.Frame(main, bg=_BG_CONTENT)
+    content = tk.Frame(main, bg=content_bg)
     content.pack(fill=tk.BOTH, expand=True, padx=0, pady=0)
 
-    inner = tk.Frame(content, bg=_BG_CONTENT)
+    inner = tk.Frame(content, bg=content_bg)
     inner.pack(fill=tk.BOTH, expand=True, padx=24, pady=16)
 
     # 状态信息行
-    status_frame = tk.Frame(inner, bg=_BG_CONTENT)
+    status_frame = tk.Frame(inner, bg=content_bg)
     status_frame.pack(fill=tk.X, pady=(0, 12))
 
     # 授权等级
-    tier_row = tk.Frame(status_frame, bg=_BG_CONTENT)
+    tier_row = tk.Frame(status_frame, bg=content_bg)
     tier_row.pack(fill=tk.X, pady=2)
-    tk.Label(tier_row, text='授权等级', bg=_BG_CONTENT,
-             fg=_FG_LABEL, font=_cjk_font(9), anchor='w').pack(side=tk.LEFT)
-    tier_val = tk.Label(tier_row, text='', bg=_BG_CONTENT,
-                        fg=_FG_VALUE, font=_sao_font(11, True), anchor='e')
+    tk.Label(tier_row, text='授权等级', bg=content_bg,
+             fg=label_fg, font=_cjk_font(9), anchor='w').pack(side=tk.LEFT)
+    tier_val = tk.Label(tier_row, text='', bg=content_bg,
+                        fg=value_fg, font=_sao_font(11, True), anchor='e')
     tier_val.pack(side=tk.RIGHT)
 
     # 引擎权限
-    engine_row = tk.Frame(status_frame, bg=_BG_CONTENT)
+    engine_row = tk.Frame(status_frame, bg=content_bg)
     engine_row.pack(fill=tk.X, pady=2)
-    tk.Label(engine_row, text='可用引擎', bg=_BG_CONTENT,
-             fg=_FG_LABEL, font=_cjk_font(9), anchor='w').pack(side=tk.LEFT)
-    engine_val = tk.Label(engine_row, text='', bg=_BG_CONTENT,
-                          fg=_FG_VALUE, font=_sao_font(10, True), anchor='e')
+    tk.Label(engine_row, text='可用引擎', bg=content_bg,
+             fg=label_fg, font=_cjk_font(9), anchor='w').pack(side=tk.LEFT)
+    engine_val = tk.Label(engine_row, text='', bg=content_bg,
+                          fg=value_fg, font=_sao_font(10, True), anchor='e')
     engine_val.pack(side=tk.RIGHT)
 
     # HWID
-    hwid_row = tk.Frame(status_frame, bg=_BG_CONTENT)
+    hwid_row = tk.Frame(status_frame, bg=content_bg)
     hwid_row.pack(fill=tk.X, pady=2)
-    tk.Label(hwid_row, text='设备指纹', bg=_BG_CONTENT,
-             fg=_FG_LABEL, font=_cjk_font(9), anchor='w').pack(side=tk.LEFT)
-    hwid_val = tk.Label(hwid_row, text='', bg=_BG_CONTENT,
-                        fg=_FG_LABEL, font=_cjk_font(8), anchor='e')
+    tk.Label(hwid_row, text='设备指纹', bg=content_bg,
+             fg=label_fg, font=_cjk_font(9), anchor='w').pack(side=tk.LEFT)
+    hwid_val = tk.Label(hwid_row, text='', bg=content_bg,
+                        fg=label_fg, font=_sao_font(8), anchor='e')
     hwid_val.pack(side=tk.RIGHT)
 
     # 分割线
-    tk.Frame(inner, bg='#d8dde2', height=1).pack(fill=tk.X, pady=(4, 10))
+    tk.Frame(inner, bg=separator, height=1).pack(fill=tk.X, pady=(4, 10))
 
     # 激活码输入
-    input_label = tk.Label(inner, text='输入激活码', bg=_BG_CONTENT,
-                           fg=_FG_LABEL, font=_cjk_font(9), anchor='w')
+    input_label = tk.Label(inner, text='输入激活码', bg=content_bg,
+                           fg=label_fg, font=_cjk_font(9), anchor='w')
     input_label.pack(fill=tk.X)
 
-    entry_border = tk.Frame(inner, bg=_INPUT_BORDER, bd=0)
+    entry_border = tk.Frame(inner, bg=input_border, bd=0)
     entry_border.pack(fill=tk.X, ipady=1, pady=(4, 0))
     key_entry = tk.Entry(entry_border, font=('Segoe UI', 12),
-                         bg=_BG_WHITE, fg='#333333',
+                         bg=surface_bg, fg=value_fg,
                          relief='flat', bd=0,
-                         insertbackground=_INPUT_CURSOR)
+                         insertbackground=input_cursor)
     key_entry.pack(fill=tk.X, padx=2, pady=2, ipady=6)
 
     # 消息提示
-    msg_lbl = tk.Label(inner, text='', bg=_BG_CONTENT,
+    msg_lbl = tk.Label(inner, text='', bg=content_bg,
                        fg=_FG_DANGER, font=_cjk_font(8),
                        anchor='w', wraplength=_FINAL_W - 72)
     msg_lbl.pack(fill=tk.X, pady=(6, 0))
 
-    tk.Frame(main, bg=_BG_OUTER, height=1).pack(fill=tk.X)
+    tk.Frame(main, bg=separator, height=1).pack(fill=tk.X)
 
     # ── 底部按钮区 ──
-    footer = tk.Frame(main, bg=_BG_WHITE, height=_FOOTER_H)
+    footer = tk.Frame(main, bg=surface_bg, height=_FOOTER_H)
     footer.pack(fill=tk.X)
     footer.pack_propagate(False)
 
-    btn_box = tk.Frame(footer, bg=_BG_WHITE)
+    btn_box = tk.Frame(footer, bg=surface_bg)
     btn_box.place(relx=0.5, rely=0.5, anchor='center')
 
     _result = {'closed': False}
@@ -210,7 +223,7 @@ def show_license_dialog(parent: Optional[tk.Tk] = None,
         else:
             msg_lbl.configure(text=result.get('error', '激活失败'), fg=_FG_DANGER)
             entry_border.configure(bg=_FG_DANGER)
-            dlg.after(1200, lambda: entry_border.configure(bg=_INPUT_BORDER))
+            dlg.after(1200, lambda: entry_border.configure(bg=input_border))
 
     def _skip():
         _dismiss_license_dialog()
@@ -220,13 +233,13 @@ def show_license_dialog(parent: Optional[tk.Tk] = None,
     # 激活按钮 (蓝)
     ok_btn = _make_aa_icon_button(btn_box, 'ok', _do_activate,
                                   SAOColors.OK_BLUE, SAOColors.OK_BLUE,
-                                  bg=_BG_WHITE)
+                                     bg=surface_bg)
     ok_btn.pack(side=tk.LEFT, padx=16)
 
     # 跳过按钮 (红)
     skip_btn = _make_aa_icon_button(btn_box, 'close', _skip,
                                     SAOColors.CLOSE_RED, SAOColors.CLOSE_RED,
-                                    bg=_BG_WHITE)
+                                       bg=surface_bg)
     skip_btn.pack(side=tk.LEFT, padx=16)
 
     # Enter 激活

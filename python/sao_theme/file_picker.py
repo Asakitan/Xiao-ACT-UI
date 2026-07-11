@@ -8,6 +8,7 @@ from utils.sao_sound import get_sao_font as _sao_font, get_cjk_font as _cjk_font
 from sao_theme.colors import SAOColors
 from sao_theme.utils import _make_aa_icon_button
 from sao_theme.dialogs import _clip_reveal
+from gui_modules.sao_panel_ui import _remember_sao_panel_root, _theme_color
 
 # ──────────────────── SAO 文件选择器 ────────────────────
 class SAOFilePicker(tk.Toplevel):
@@ -35,12 +36,24 @@ class SAOFilePicker(tk.Toplevel):
         self._filetypes = filetypes or [('All Files', '*.*')]
         self._entries = []
         self._mode = mode  # 'file' or 'dir'
+        self._BG = _theme_color('card_bg', self._BG)
+        self._BG2 = _theme_color('body_bg', self._BG2)
+        self._BORDER = _theme_color('border', self._BORDER)
+        self._ACCENT = _theme_color('gold', self._ACCENT)
+        self._ACCENT2 = _theme_color('accent_strong', self._ACCENT2)
+        self._TEXT = _theme_color('value_fg', self._TEXT)
+        self._TEXT_DIM = _theme_color('label_fg', self._TEXT_DIM)
+        self._SEL_BG = _theme_color('accent_soft', self._SEL_BG)
+        self._SEL_FG = _theme_color('value_fg', self._SEL_FG)
+        self._DIR_FG = _theme_color('gold', self._DIR_FG)
+        self._FILE_FG = _theme_color('value_fg', self._FILE_FG)
 
         self.withdraw()
+        _remember_sao_panel_root(self)
         self.overrideredirect(True)
         self.attributes('-topmost', True)
         self.attributes('-alpha', 0.0)
-        self.configure(bg='#e0e0e0')
+        self.configure(bg=_theme_color('bg', '#e0e0e0'))
 
         self._final_w, self._final_h = 520, 480
         self._initial_w = 135
@@ -124,36 +137,36 @@ class SAOFilePicker(tk.Toplevel):
 
     def _build_ui(self, w, h, title):
         # ── SAODialog 式三段壳 ──
-        main_box = tk.Frame(self, bg='#ffffff')
+        main_box = tk.Frame(self, bg=self._BG)
         main_box.pack(fill=tk.BOTH, expand=True)
         self._main_box = main_box
 
         # 标题区 (68px)
-        header = tk.Frame(main_box, bg='#ffffff', height=68)
+        header = tk.Frame(main_box, bg=self._BG, height=68)
         header.pack(fill=tk.X)
         header.pack_propagate(False)
 
         # 菱形图标
         hcv = tk.Canvas(header, width=24, height=24,
-                        bg='#ffffff', highlightthickness=0)
+                        bg=self._BG, highlightthickness=0)
         hcv.pack(side=tk.LEFT, padx=(16, 0), pady=22)
         hcv.create_polygon(12, 2, 22, 12, 12, 22, 2, 12,
                            fill=self._ACCENT, outline='')
 
-        self._title_lbl = tk.Label(header, text='', bg='#ffffff',
-                                   fg=SAOColors.ALERT_TITLE_FG,
+        self._title_lbl = tk.Label(header, text='', bg=self._BG,
+                       fg=_theme_color('value_fg', SAOColors.ALERT_TITLE_FG),
                                    font=_sao_font(13, True))
         self._title_lbl.place(relx=0.5, rely=0.5, anchor='center')
 
         # 关闭 ×
         close_btn = _make_aa_icon_button(header, 'close', self._cancel,
-                         SAOColors.CLOSE_RED, SAOColors.CLOSE_RED, bg='#ffffff')
+                         SAOColors.CLOSE_RED, SAOColors.CLOSE_RED, bg=self._BG)
         close_btn.pack(side=tk.RIGHT, padx=16, pady=14)
 
-        tk.Frame(main_box, bg='#e0e0e0', height=1).pack(fill=tk.X)
+        tk.Frame(main_box, bg=self._BORDER, height=1).pack(fill=tk.X)
 
         # 内容区 (浅灰)
-        content = tk.Frame(main_box, bg='#eae9e9')
+        content = tk.Frame(main_box, bg=self._BG2)
         content.pack(fill=tk.BOTH, expand=True)
 
         for w_item in [header, self._title_lbl]:
@@ -161,16 +174,16 @@ class SAOFilePicker(tk.Toplevel):
             w_item.bind('<B1-Motion>', self._do_drag)
 
         # ── 路径行 ──
-        path_row = tk.Frame(content, bg='#eae9e9', height=30)
+        path_row = tk.Frame(content, bg=self._BG2, height=30)
         path_row.pack(fill=tk.X, padx=10, pady=(10, 0))
         path_row.pack_propagate(False)
 
-        tk.Label(path_row, text='▸', bg='#eae9e9', fg=self._ACCENT2,
+        tk.Label(path_row, text='▸', bg=self._BG2, fg=self._ACCENT2,
                  font=_sao_font(8)).pack(side=tk.LEFT, padx=(6, 4), pady=6)
         self._path_lbl = tk.Label(path_row, text='', bg=self._BG,
                                   fg=self._TEXT_DIM,
                                   font=_sao_font(8), anchor='w')
-        self._path_lbl.configure(bg='#eae9e9')
+        self._path_lbl.configure(bg=self._BG2)
         self._path_lbl.pack(side=tk.LEFT, fill=tk.X, expand=True, pady=6)
 
         # ── 列表区 ──
@@ -209,44 +222,44 @@ class SAOFilePicker(tk.Toplevel):
         tk.Frame(content, bg=self._BORDER, height=1).pack(fill=tk.X, padx=14)
 
         # ── 文件名预览行 ──
-        fname_row = tk.Frame(content, bg='#eae9e9', height=30)
+        fname_row = tk.Frame(content, bg=self._BG2, height=30)
         fname_row.pack(fill=tk.X, padx=14, pady=(4, 10))
         fname_row.pack_propagate(False)
-        self._fname_lbl = tk.Label(fname_row, text='未选择文件', bg='#eae9e9',
+        self._fname_lbl = tk.Label(fname_row, text='未选择文件', bg=self._BG2,
                                    fg=self._ACCENT, font=_cjk_font(9),
                                    anchor='w')
         self._fname_lbl.pack(fill=tk.X, padx=4, pady=4)
         self._listbox.bind('<<ListboxSelect>>', self._on_select)
 
         # 按钮区 (83px)
-        tk.Frame(main_box, bg='#e0e0e0', height=1).pack(fill=tk.X)
-        footer = tk.Frame(main_box, bg='#ffffff', height=83)
+        tk.Frame(main_box, bg=self._BORDER, height=1).pack(fill=tk.X)
+        footer = tk.Frame(main_box, bg=self._BG, height=83)
         footer.pack(fill=tk.X)
         footer.pack_propagate(False)
 
-        btn_frame = tk.Frame(footer, bg='#ffffff')
+        btn_frame = tk.Frame(footer, bg=self._BG)
         btn_frame.place(relx=0.5, rely=0.5, anchor='center')
 
         # 目录模式: 添加 "选择此文件夹" 按钮
         if self._mode == 'dir':
             sel_dir_btn = _make_aa_icon_button(btn_frame, 'ok', self._confirm_dir,
-                                               '#4caf50', '#4caf50', bg='#ffffff')
+                                               _theme_color('ok', '#4caf50'), _theme_color('ok', '#4caf50'), bg=self._BG)
             sel_dir_btn.pack(side=tk.LEFT, padx=(0, 10))
-            tk.Label(btn_frame, text='选择此文件夹', bg='#ffffff', fg='#999999',
+            tk.Label(btn_frame, text='选择此文件夹', bg=self._BG, fg=self._TEXT_DIM,
                      font=_sao_font(8)).pack(side=tk.LEFT, padx=(0, 18))
 
         ok_btn = _make_aa_icon_button(btn_frame, 'ok', self._confirm,
-                                      SAOColors.OK_BLUE, SAOColors.OK_BLUE, bg='#ffffff')
+                                      SAOColors.OK_BLUE, SAOColors.OK_BLUE, bg=self._BG)
         ok_btn.pack(side=tk.LEFT, padx=20)
 
-        tk.Label(btn_frame, text='确认', bg='#ffffff', fg='#999999',
+        tk.Label(btn_frame, text='确认', bg=self._BG, fg=self._TEXT_DIM,
                  font=_sao_font(8)).pack(side=tk.LEFT, padx=(0, 20))
 
         cancel_btn = _make_aa_icon_button(btn_frame, 'close', self._cancel,
-                          SAOColors.CLOSE_RED, SAOColors.CLOSE_RED, bg='#ffffff')
+                          SAOColors.CLOSE_RED, SAOColors.CLOSE_RED, bg=self._BG)
         cancel_btn.pack(side=tk.LEFT, padx=(0, 4))
 
-        tk.Label(btn_frame, text='取消', bg='#ffffff', fg='#999999',
+        tk.Label(btn_frame, text='取消', bg=self._BG, fg=self._TEXT_DIM,
                  font=_sao_font(8)).pack(side=tk.LEFT)
 
     def _start_drag(self, e):

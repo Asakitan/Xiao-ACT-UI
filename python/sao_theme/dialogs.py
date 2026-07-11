@@ -10,6 +10,7 @@ from utils.sao_sound import get_sao_font as _sao_font, get_cjk_font as _cjk_font
 from sao_theme.colors import SAOColors
 from sao_theme.animator import Animator
 from sao_theme.utils import ease_out, lerp, _make_aa_icon_button
+from gui_modules.sao_panel_ui import _remember_sao_panel_root, _theme_color
 
 # Mirror z for dialogs registered on the unified overlay compositor — must
 # sit above the default panel z (500, see render/tk_mirror.py's
@@ -70,6 +71,7 @@ class SAODialog:
             dlg = None
         if dlg is None:
             dlg = tk.Toplevel(parent)
+        _remember_sao_panel_root(dlg)
         dlg.overrideredirect(True)
         try:
             dlg.attributes('-topmost', True)
@@ -93,45 +95,50 @@ class SAODialog:
 
         dlg.geometry(f'{initial_w}x{final_h}+{px + (final_w - initial_w) // 2}+{py}')
 
-        # ── 白色 SAO 对话框配色 (与截图匹配) ──
-        dlg.configure(bg='#e0e0e0')
+        outer_bg = _theme_color('bg', '#e0e0e0')
+        surface_bg = _theme_color('card_bg', '#ffffff')
+        content_bg = _theme_color('body_bg', '#eae9e9')
+        border = _theme_color('sep', '#e0e0e0')
+        title_fg = _theme_color('value_fg', SAOColors.ALERT_TITLE_FG)
+        content_fg = _theme_color('label_fg', '#888888')
+        dlg.configure(bg=outer_bg)
 
-        main_box = tk.Frame(dlg, bg='#ffffff')
+        main_box = tk.Frame(dlg, bg=surface_bg)
         main_box.pack(fill=tk.BOTH, expand=True)
         main_box.pack_forget()
 
         # 标题区 (68px)
-        header = tk.Frame(main_box, bg='#ffffff', height=68)
+        header = tk.Frame(main_box, bg=surface_bg, height=68)
         header.pack(fill=tk.X)
         header.pack_propagate(False)
 
-        title_lbl = tk.Label(header, text='', bg='#ffffff',
-                             fg=SAOColors.ALERT_TITLE_FG,
+        title_lbl = tk.Label(header, text='', bg=surface_bg,
+                     fg=title_fg,
                              font=_sao_font(13, True))
         title_lbl.pack(expand=True)
 
-        tk.Frame(main_box, bg='#e0e0e0', height=1).pack(fill=tk.X)
+        tk.Frame(main_box, bg=border, height=1).pack(fill=tk.X)
 
         # 内容区 (浅灰)
         content_h = final_h - 68 - 83 - 2
-        content = tk.Frame(main_box, bg='#eae9e9', height=max(25, content_h))
+        content = tk.Frame(main_box, bg=content_bg, height=max(25, content_h))
         content.pack(fill=tk.X)
         content.pack_propagate(False)
 
-        content_lbl = tk.Label(content, text='', bg='#eae9e9',
-                               fg='#888888',
+        content_lbl = tk.Label(content, text='', bg=content_bg,
+                       fg=content_fg,
                                font=_cjk_font(10),
                                wraplength=final_w - 48, justify='center')
         content_lbl.pack(expand=True)
 
-        tk.Frame(main_box, bg='#e0e0e0', height=1).pack(fill=tk.X)
+        tk.Frame(main_box, bg=border, height=1).pack(fill=tk.X)
 
         # 按钮区 (83px)
-        footer = tk.Frame(main_box, bg='#ffffff', height=83)
+        footer = tk.Frame(main_box, bg=surface_bg, height=83)
         footer.pack(fill=tk.X)
         footer.pack_propagate(False)
 
-        btn_container = tk.Frame(footer, bg='#ffffff')
+        btn_container = tk.Frame(footer, bg=surface_bg)
         btn_container.place(relx=0.5, rely=0.5, anchor='center')
 
         def do_close():
@@ -146,11 +153,11 @@ class SAODialog:
 
         if show_icon:
             ok_btn = _make_aa_icon_button(btn_container, 'ok', do_ok,
-                                          SAOColors.OK_BLUE, SAOColors.OK_BLUE, bg='#ffffff')
+                                          SAOColors.OK_BLUE, SAOColors.OK_BLUE, bg=surface_bg)
             ok_btn.pack(side=tk.LEFT, padx=20)
 
             close_btn = _make_aa_icon_button(btn_container, 'close', do_close,
-                                             SAOColors.CLOSE_RED, SAOColors.CLOSE_RED, bg='#ffffff')
+                                             SAOColors.CLOSE_RED, SAOColors.CLOSE_RED, bg=surface_bg)
             close_btn.pack(side=tk.LEFT, padx=20)
         else:
             dlg.bind('<Button-1>', lambda e: do_close())
@@ -311,12 +318,24 @@ class SAOLeaderboardDialog:
         except Exception:
             dlg = None
         self._dlg = dlg if dlg is not None else tk.Toplevel(parent)
+        _remember_sao_panel_root(self._dlg)
         self._dlg.overrideredirect(True)
         try:
             self._dlg.attributes('-topmost', True)
         except Exception:
             pass
-        self._dlg.configure(bg='#d9dde3')
+        outer_bg = _theme_color('bg', '#d9dde3')
+        surface_bg = _theme_color('card_bg', '#ffffff')
+        toolbar_bg = _theme_color('card_bg_alt', '#f4f5f7')
+        body_bg = _theme_color('body_bg', '#ececec')
+        border = _theme_color('border', '#d1d7df')
+        sep = _theme_color('sep', '#dde3ea')
+        label_fg = _theme_color('label_fg', '#6b7888')
+        value_fg = _theme_color('value_fg', '#333333')
+        accent = _theme_color('gold', '#f3af12')
+        accent_text = _theme_color('accent_strong', '#428ce6')
+        control_bg = _theme_color('control_bg', '#ffffff')
+        self._dlg.configure(bg=outer_bg)
 
         try:
             self._dlg.update_idletasks()
@@ -335,72 +354,72 @@ class SAOLeaderboardDialog:
         self._py = (self._dlg.winfo_screenheight() - self._current_h) // 2
         self._dlg.geometry(f'{self._initial_w}x{self._current_h}+{self._px + (self._final_w - self._initial_w)//2}+{self._py}')
 
-        main = tk.Frame(self._dlg, bg='#ffffff')
+        main = tk.Frame(self._dlg, bg=surface_bg)
         main.pack(fill=tk.BOTH, expand=True)
 
-        header = tk.Frame(main, bg='#ffffff', height=58)
+        header = tk.Frame(main, bg=surface_bg, height=58)
         header.pack(fill=tk.X)
         header.pack_propagate(False)
-        tk.Frame(header, bg='#f3af12', height=3).pack(fill=tk.X)
-        self._title_lbl = tk.Label(header, text=title, bg='#ffffff', fg='#646364', font=_sao_font(13, True))
+        tk.Frame(header, bg=accent, height=3).pack(fill=tk.X)
+        self._title_lbl = tk.Label(header, text=title, bg=surface_bg, fg=value_fg, font=_sao_font(13, True))
         self._title_lbl.pack(expand=True)
 
-        toolbar = tk.Frame(main, bg='#f4f5f7', height=54)
+        toolbar = tk.Frame(main, bg=toolbar_bg, height=54)
         toolbar.pack(fill=tk.X)
         toolbar.pack_propagate(False)
-        search_wrap = tk.Frame(toolbar, bg='#d1d7df')
+        search_wrap = tk.Frame(toolbar, bg=border)
         search_wrap.pack(side=tk.LEFT, padx=(14, 8), pady=10, fill=tk.X, expand=True)
         self._search_var = tk.StringVar()
         self._search_entry = tk.Entry(search_wrap, textvariable=self._search_var,
-                                      relief='flat', bd=0, bg='#ffffff', fg='#333333',
-                                      font=_cjk_font(9), insertbackground='#f3af12')
+                                      relief='flat', bd=0, bg=control_bg, fg=value_fg,
+                                      font=_cjk_font(9), insertbackground=accent)
         self._search_entry.pack(fill=tk.X, padx=2, pady=2, ipady=5)
         self._search_entry.bind('<Return>', lambda e: self._apply_search())
-        search_btn = tk.Label(toolbar, text='搜索', bg='#1a2030', fg='#e8f4f8', font=_cjk_font(8, True),
+        search_btn = tk.Label(toolbar, text='搜索', bg=_theme_color('header_bg', '#1a2030'), fg=_theme_color('header_fg', '#e8f4f8'), font=_cjk_font(8, True),
                               padx=10, pady=5, cursor='hand2')
         search_btn.pack(side=tk.LEFT, padx=(0, 14), pady=10)
         search_btn.bind('<Button-1>', lambda e: self._apply_search())
-        self._mine_btn = tk.Label(toolbar, text='我的排名', bg='#273244', fg='#f5f8fb', font=_cjk_font(8, True),
+        self._mine_btn = tk.Label(toolbar, text='我的排名', bg=_theme_color('header_bg', '#273244'), fg=_theme_color('header_fg', '#f5f8fb'), font=_cjk_font(8, True),
                       padx=10, pady=5, cursor='hand2')
         self._mine_btn.pack(side=tk.LEFT, padx=(0, 14), pady=10)
         self._mine_btn.bind('<Button-1>', lambda e: self._jump_to_self())
 
-        self._info_bar = tk.Frame(main, bg='#eef1f5', height=34)
+        self._info_bar = tk.Frame(main, bg=toolbar_bg, height=34)
         self._info_bar.pack(fill=tk.X)
         self._info_bar.pack_propagate(False)
-        self._self_lbl = tk.Label(self._info_bar, text='PLAYER ID: --', bg='#eef1f5', fg='#5b6978', font=_sao_font(8))
+        self._self_lbl = tk.Label(self._info_bar, text='PLAYER ID: --', bg=toolbar_bg, fg=label_fg, font=_sao_font(8))
         self._self_lbl.pack(side=tk.LEFT, padx=14)
-        self._rank_lbl = tk.Label(self._info_bar, text='SELF RANK: --', bg='#eef1f5', fg='#f3af12', font=_sao_font(8, True))
+        self._rank_lbl = tk.Label(self._info_bar, text='SELF RANK: --', bg=toolbar_bg, fg=accent, font=_sao_font(8, True))
         self._rank_lbl.pack(side=tk.RIGHT, padx=14)
 
-        list_host = tk.Frame(main, bg='#ececec')
+        list_host = tk.Frame(main, bg=body_bg)
         list_host.pack(fill=tk.BOTH, expand=True)
-        self._list_wrap = tk.Frame(list_host, bg='#ececec')
+        self._list_wrap = tk.Frame(list_host, bg=body_bg)
         self._list_wrap.pack(fill=tk.BOTH, expand=True, padx=12, pady=10)
 
-        head = tk.Frame(self._list_wrap, bg='#dde3ea', height=28)
+        head = tk.Frame(self._list_wrap, bg=sep, height=28)
         head.pack(fill=tk.X)
         head.pack_propagate(False)
         for text, width, anchor in [('RANK', 8, 'w'), ('NAME', 22, 'w'), ('LV', 7, 'center'), ('STAT', 12, 'e')]:
-            tk.Label(head, text=text, bg='#dde3ea', fg='#6b7888', font=_sao_font(8), width=width, anchor=anchor).pack(side=tk.LEFT, padx=(6, 0))
+            tk.Label(head, text=text, bg=sep, fg=label_fg, font=_sao_font(8), width=width, anchor=anchor).pack(side=tk.LEFT, padx=(6, 0))
 
-        self._rows_host = tk.Frame(self._list_wrap, bg='#ececec')
+        self._rows_host = tk.Frame(self._list_wrap, bg=body_bg)
         self._rows_host.pack(fill=tk.BOTH, expand=True)
 
-        footer = tk.Frame(main, bg='#ffffff', height=68)
+        footer = tk.Frame(main, bg=surface_bg, height=68)
         footer.pack(fill=tk.X)
         footer.pack_propagate(False)
-        pager = tk.Frame(footer, bg='#ffffff')
+        pager = tk.Frame(footer, bg=surface_bg)
         pager.place(relx=0.5, rely=0.5, anchor='center')
-        self._prev_btn = tk.Label(pager, text='PREV', bg='#1a2030', fg='#e8f4f8', font=_sao_font(8), padx=10, pady=5, cursor='hand2')
+        self._prev_btn = tk.Label(pager, text='PREV', bg=_theme_color('header_bg', '#1a2030'), fg=_theme_color('header_fg', '#e8f4f8'), font=_sao_font(8), padx=10, pady=5, cursor='hand2')
         self._prev_btn.pack(side=tk.LEFT, padx=8)
         self._prev_btn.bind('<Button-1>', lambda e: self._change_page(-1))
-        self._page_lbl = tk.Label(pager, text='1 / 1', bg='#ffffff', fg='#646364', font=_sao_font(9, True), width=10)
+        self._page_lbl = tk.Label(pager, text='1 / 1', bg=surface_bg, fg=value_fg, font=_sao_font(9, True), width=10)
         self._page_lbl.pack(side=tk.LEFT, padx=8)
-        self._next_btn = tk.Label(pager, text='NEXT', bg='#1a2030', fg='#e8f4f8', font=_sao_font(8), padx=10, pady=5, cursor='hand2')
+        self._next_btn = tk.Label(pager, text='NEXT', bg=_theme_color('header_bg', '#1a2030'), fg=_theme_color('header_fg', '#e8f4f8'), font=_sao_font(8), padx=10, pady=5, cursor='hand2')
         self._next_btn.pack(side=tk.LEFT, padx=8)
         self._next_btn.bind('<Button-1>', lambda e: self._change_page(1))
-        close_btn = tk.Label(footer, text='CLOSE', bg='#d13d4f', fg='#ffffff', font=_sao_font(8, True), padx=10, pady=5, cursor='hand2')
+        close_btn = tk.Label(footer, text='CLOSE', bg=_theme_color('danger', '#d13d4f'), fg=_theme_color('active_fg', '#ffffff'), font=_sao_font(8, True), padx=10, pady=5, cursor='hand2')
         close_btn.place(relx=0.94, rely=0.5, anchor='center')
         close_btn.bind('<Button-1>', lambda e: self.close())
 
@@ -549,8 +568,10 @@ class SAOLeaderboardDialog:
         start = self._page * self._per_page
         page_rows = self._filtered[start:start + self._per_page]
         self._page_lbl.configure(text=f'{self._page + 1} / {pages}')
-        self._prev_btn.configure(bg='#1a2030' if self._page > 0 else '#9aa4b3')
-        self._next_btn.configure(bg='#1a2030' if self._page < pages - 1 else '#9aa4b3')
+        control_bg = _theme_color('header_bg', '#1a2030')
+        disabled_bg = _theme_color('border', '#9aa4b3')
+        self._prev_btn.configure(bg=control_bg if self._page > 0 else disabled_bg)
+        self._next_btn.configure(bg=control_bg if self._page < pages - 1 else disabled_bg)
         self._render_rows(rows=page_rows)
 
     def _render_rows(self, rows: Optional[List[Dict]] = None, message: str = '', empty: bool = False):
@@ -559,23 +580,28 @@ class SAOLeaderboardDialog:
 
         visible_rows = 1
         if empty:
-            tk.Label(self._rows_host, text=message, bg='#ececec', fg='#8892a0', font=_cjk_font(10), pady=28).pack(fill=tk.BOTH, expand=True)
+            tk.Label(self._rows_host, text=message,
+                     bg=_theme_color('body_bg', '#ececec'),
+                     fg=_theme_color('label_fg', '#8892a0'),
+                     font=_cjk_font(10), pady=28).pack(fill=tk.BOTH, expand=True)
         else:
             rows = rows or []
             visible_rows = max(1, min(self._per_page, len(rows)))
             for idx, row in enumerate(rows):
-                bg = '#f7f9fb' if idx % 2 == 0 else '#eef2f6'
+                bg = (_theme_color('card_bg', '#f7f9fb') if idx % 2 == 0
+                      else _theme_color('card_bg_alt', '#eef2f6'))
                 if row.get('device_id', '') == self._self_device:
-                    bg = '#e7f1fb'
+                    bg = _theme_color('accent_soft', '#e7f1fb')
                 if self._focus_rank and int(row.get('rank', -1)) == int(self._focus_rank):
-                    bg = '#fff1d8'
+                    bg = _theme_color('gold_soft', '#fff1d8')
                 line = tk.Frame(self._rows_host, bg=bg, height=34)
                 line.pack(fill=tk.X, pady=1)
                 line.pack_propagate(False)
                 rank_text = f"#{row.get('rank', idx + 1)}"
                 if row.get('rank', 99) <= 3:
                     rank_text = ['TOP1', 'TOP2', 'TOP3'][row.get('rank', 1) - 1]
-                tk.Label(line, text=rank_text, bg=bg, fg='#f3af12' if row.get('rank', 9) <= 3 else '#7a8796',
+                tk.Label(line, text=rank_text, bg=bg,
+                         fg=(_theme_color('gold', '#f3af12') if row.get('rank', 9) <= 3 else _theme_color('label_fg', '#7a8796')),
                          font=_sao_font(8, True), width=8, anchor='w').pack(side=tk.LEFT, padx=(8, 0))
                 primary = str(row.get('player_id', '') or row.get('username', '???'))[:18]
                 alt = str(row.get('username', '') or '').strip()
@@ -585,11 +611,11 @@ class SAOLeaderboardDialog:
                     pieces.append(f'@{alt[:10]}')
                 if prof:
                     pieces.append(f'[{prof}]')
-                tk.Label(line, text='  '.join(pieces), bg=bg, fg='#333333',
+                tk.Label(line, text='  '.join(pieces), bg=bg, fg=_theme_color('value_fg', '#333333'),
                          font=_cjk_font(9), anchor='w').pack(side=tk.LEFT, fill=tk.X, expand=True)
-                tk.Label(line, text=f"Lv.{row.get('level', 1)}", bg=bg, fg='#428ce6',
+                tk.Label(line, text=f"Lv.{row.get('level', 1)}", bg=bg, fg=_theme_color('accent_strong', '#428ce6'),
                          font=_sao_font(8), width=7, anchor='center').pack(side=tk.LEFT)
-                tk.Label(line, text=self._stat_text(row), bg=bg, fg='#666666',
+                tk.Label(line, text=self._stat_text(row), bg=bg, fg=_theme_color('label_fg', '#666666'),
                          font=_sao_font(8), width=12, anchor='e').pack(side=tk.RIGHT, padx=(0, 8))
 
         target_h = 58 + 54 + 34 + 10 + 28 + visible_rows * 36 + 68

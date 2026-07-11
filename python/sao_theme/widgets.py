@@ -4,6 +4,7 @@
 import tkinter as tk
 from config import APP_VERSION_LABEL
 from sao_theme.colors import SAOColors
+from gui_modules.sao_panel_ui import _theme_color
 
 # ──────────────────── SAO 通用按钮 ────────────────────
 class SAOButton(tk.Canvas):
@@ -30,17 +31,20 @@ class SAOButton(tk.Canvas):
         self.bind('<Enter>', self._on_enter)
         self.bind('<Leave>', self._on_leave)
         self.bind('<Button-1>', self._on_click)
+        self._sao_theme_repaint = self._draw
 
     def _draw(self):
         self.delete('all')
+        self.configure(bg=_theme_color('body_bg', self.cget('bg')))
         if self._hovering:
-            fill = SAOColors.CHILD_HOVER
-            fg = '#ffffff'
+            fill = _theme_color('card_bg_alt', SAOColors.CHILD_HOVER)
+            fg = _theme_color('value_fg', '#ffffff')
         else:
-            fill = '#ffffff'
-            fg = '#333333'
+            fill = _theme_color('control_bg', '#ffffff')
+            fg = _theme_color('value_fg', '#333333')
 
-        self.create_rectangle(0, 0, self._btn_w, self._btn_h, fill=fill, outline='#c9c6c6')
+        self.create_rectangle(0, 0, self._btn_w, self._btn_h, fill=fill,
+                              outline=_theme_color('border', '#c9c6c6'))
         self.create_text(self._btn_w // 2, self._btn_h // 2, text=self.text,
                          fill=fg, font=('Microsoft YaHei UI', 10))
 
@@ -63,7 +67,7 @@ class SAOButton(tk.Canvas):
 
 # ──────────────────── SAO 进度条 / 状态 ────────────────────
 class SAOProgressBar(tk.Canvas):
-    # SAO 风格进度条 (HP 条简化版，嵌入式)
+    # SAO 风格通用进度条（嵌入式）
 
     def __init__(self, parent, width=300, height=20, **kw):
         parent_bg = '#0a0e14'
@@ -77,6 +81,7 @@ class SAOProgressBar(tk.Canvas):
         self._bar_h = height
         self._value = 0.0
         self._draw()
+        self._sao_theme_repaint = self._draw
 
     def set_value(self, v: float):
         self._value = max(0.0, min(1.0, v))
@@ -84,25 +89,23 @@ class SAOProgressBar(tk.Canvas):
 
     def _draw(self):
         self.delete('all')
+        self.configure(bg=_theme_color('body_bg', self.cget('bg')))
         w, h = self._bar_w, self._bar_h
-        self.create_rectangle(0, 0, w, h, fill='#1a2535', outline='#2a4a5e')
+        self.create_rectangle(0, 0, w, h,
+                              fill=_theme_color('track_bg', '#1a2535'),
+                              outline=_theme_color('border', '#2a4a5e'))
         fw = int(w * self._value)
         if fw > 0:
-            if self._value > 0.5:
-                c = '#9ad334'
-            elif self._value > 0.25:
-                c = '#f4fa49'
-            else:
-                c = '#ef684e'
-            self.create_rectangle(1, 1, fw, h - 1, fill=c, outline='')
+            self.create_rectangle(1, 1, fw, h - 1,
+                                  fill=_theme_color('accent', '#68e4ff'), outline='')
         self.create_text(w // 2, h // 2, text=f'{int(self._value * 100)}%',
-                         fill='#e8f4f8', font=('Segoe UI', 8))
+                         fill=_theme_color('value_fg', '#e8f4f8'), font=('Segoe UI', 8))
 
 
 class SAOStatusPill(tk.Canvas):
     # SAO 风格状态指示器
 
-    def __init__(self, parent, text='Ready', color='#4caf50',
+    def __init__(self, parent, text='Ready', color=None,
                  width=100, height=24, **kw):
         parent_bg = '#0a0e14'
         try:
@@ -116,20 +119,25 @@ class SAOStatusPill(tk.Canvas):
         self._pill_w = width
         self._pill_h = height
         self._draw()
+        self._sao_theme_repaint = self._draw
 
     def set_status(self, text: str, color: str = None):
         self._text = text
-        if color:
+        if color is not None:
             self._color = color
         self._draw()
 
     def _draw(self):
         self.delete('all')
+        self.configure(bg=_theme_color('body_bg', self.cget('bg')))
         w, h = self._pill_w, self._pill_h
-        self.create_rectangle(0, 0, w, h, fill='#111820', outline='#2a4a5e')
-        self.create_rectangle(2, 2, 8, h - 2, fill=self._color, outline='')
+        self.create_rectangle(0, 0, w, h,
+                      fill=_theme_color('card_bg', '#111820'),
+                      outline=_theme_color('border', '#2a4a5e'))
+        self.create_rectangle(2, 2, 8, h - 2,
+                      fill=self._color or _theme_color('ok', '#4caf50'), outline='')
         self.create_text(w // 2 + 3, h // 2, text=self._text,
-                         fill='#e8f4f8', font=('Segoe UI', 8))
+                 fill=_theme_color('value_fg', '#e8f4f8'), font=('Segoe UI', 8))
 
 
 class SAOResizeGrip(tk.Canvas):

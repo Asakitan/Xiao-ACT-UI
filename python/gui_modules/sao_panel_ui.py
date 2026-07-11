@@ -141,9 +141,8 @@ def _apply_panel_style(panel):
 
 
 # ── SAO HUD 面板样式常量 ──
-# Keep this palette aligned with ``sao_web_panel_common.py`` and the WebView
-# editor panels: light translucent shell, muted graphite text, cyan/gold
-# accents.  Floating panels use these helpers as their shared chrome.
+# Floating panels share this light translucent shell with muted graphite text
+# and cyan/gold accents.
 _SAO_PANEL_BG = '#e8ebee'          # 面板外壳/透明边缘
 _SAO_PANEL_HEADER_BG = '#fcfcfc'   # 浅色标题栏
 _SAO_PANEL_HEADER_FG = '#646364'   # 标题文字
@@ -351,12 +350,22 @@ def _apply_sao_theme_to_widget(widget) -> None:
                     widget.configure(highlightcolor=_theme_color(hc_key))
             except Exception:
                 pass
-        elif cls == 'Label':
+        elif cls in {'Label', 'Listbox'}:
             updates = {}
             if bg_key:
                 updates['bg'] = _theme_color(bg_key)
             if fg_key:
                 updates['fg'] = _theme_color(fg_key)
+            if cls == 'Listbox':
+                try:
+                    select_bg_key = _semantic_color_key(widget.cget('selectbackground'))
+                    select_fg_key = _semantic_color_key(widget.cget('selectforeground'))
+                    if select_bg_key:
+                        updates['selectbackground'] = _theme_color(select_bg_key)
+                    if select_fg_key:
+                        updates['selectforeground'] = _theme_color(select_fg_key)
+                except Exception:
+                    pass
             if updates:
                 widget.configure(**updates)
             try:
@@ -831,7 +840,11 @@ def _style_panel_descendants(root):
                     highlightthickness=0,
                 )
             elif cls == 'Canvas':
-                child.configure(bg=_SAO_PANEL_BODY_BG, highlightthickness=0, bd=0)
+                repaint = getattr(child, '_sao_theme_repaint', None)
+                if callable(repaint):
+                    repaint()
+                else:
+                    child.configure(bg=_SAO_PANEL_BODY_BG, highlightthickness=0, bd=0)
             elif cls in {'Checkbutton', 'Radiobutton'}:
                 child.configure(
                     bg=_SAO_PANEL_BODY_BG,
