@@ -4,35 +4,74 @@ import math
 import tkinter as tk
 from typing import Any, Dict, List, Optional, Tuple
 
-from sao_web_panel_common import (
-    PANEL_BG,
-    PANEL_BG_ALT,
-    PANEL_CARD,
-    PANEL_CARD_ALT,
-    PANEL_EDGE,
-    PANEL_HEADER_ALT,
-    TEXT_DIM,
-    TEXT_MAIN,
-    TEXT_MUTED,
-    GOLD,
-    GOLD_STRONG,
-    CYAN,
-    READY,
-    apply_surface_chrome,
-    attach_tab_underline,
-    bind_drag,
-    calc_panel_geometry,
-    clear_frame,
-    create_scrollable_area,
-    make_section_title,
-    make_tab_label,
-    panel_font,
-    place_corner_accents,
-    set_tab_active,
+from gui_modules import sao_panel_ui as ui
+from gui_modules.sao_panel_components import (
+    _pc,
+    action_button,
+    bind_canvas_mousewheel,
+    rounded_panel,
+    sao_scrollbar,
+    section_card,
+    status_badge,
 )
+from gui_modules.sao_panel_ui import _bind_panel_drag, _sao_panel_body, _sao_panel_header
+from utils.sao_sound import get_cjk_font
 
 
 _ELLIPSIS_FONT_CACHE: Dict[Any, Any] = {}
+
+
+def _panel_tokens() -> Dict[str, str]:
+    return {
+        'bg': _pc('bg', ui._SAO_PANEL_BG),
+        'body': _pc('body_bg', ui._SAO_PANEL_BODY_BG),
+        'card': _pc('card_bg', ui._SAO_PANEL_BODY_BG),
+        'card_alt': _pc('card_bg_alt', ui._SAO_PANEL_HEADER_BG),
+        'header': _pc('header_bg', ui._SAO_PANEL_HEADER_BG),
+        'border': _pc('border', ui._SAO_PANEL_BORDER),
+        'accent': _pc('accent', ui._SAO_PANEL_ACCENT),
+        'gold': _pc('gold', ui._SAO_PANEL_GOLD),
+        'label': _pc('label_fg', ui._SAO_PANEL_LABEL_FG),
+        'value': _pc('value_fg', ui._SAO_PANEL_VALUE_FG),
+        'ok': _pc('ok', '#3fae5a'),
+        'danger': _pc('danger', '#ef684e'),
+        'gold_soft': _pc('gold_soft', '#fbf2d8'),
+    }
+
+
+def _panel_geometry(master: tk.Misc) -> Tuple[int, int, int, int]:
+    try:
+        screen_w = int(master.winfo_screenwidth())
+        screen_h = int(master.winfo_screenheight())
+    except Exception:
+        screen_w, screen_h = 1920, 1080
+    return (
+        max(300, int(min(screen_w, 1920) * 0.18)),
+        max(380, int(min(screen_h, 1080) * 0.42)),
+        max(16, int(screen_w * 0.25)),
+        max(0, int(screen_h * 0.15)),
+    )
+
+
+def clear_frame(frame: tk.Widget) -> None:
+    for child in frame.winfo_children():
+        child.destroy()
+
+
+def _scrollable_area(parent: tk.Widget, bg: str) -> Tuple[tk.Canvas, tk.Frame]:
+    wrap = tk.Frame(parent, bg=bg)
+    wrap.pack(fill=tk.BOTH, expand=True)
+    canvas = tk.Canvas(wrap, bg=bg, highlightthickness=0, bd=0)
+    scrollbar = sao_scrollbar(wrap, canvas.yview)
+    body = tk.Frame(canvas, bg=bg)
+    window_id = canvas.create_window((0, 0), window=body, anchor='nw')
+    body.bind('<Configure>', lambda _event: canvas.configure(scrollregion=canvas.bbox('all')))
+    canvas.bind('<Configure>', lambda event: canvas.itemconfigure(window_id, width=event.width))
+    canvas.configure(yscrollcommand=scrollbar.set)
+    canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+    scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+    bind_canvas_mousewheel(canvas, body)
+    return canvas, body
 
 
 def _tk_ellipsize(text: str, font_spec: Any, max_px: int) -> str:
@@ -173,11 +212,12 @@ def _fmt_fp(value: Any) -> str:
 
 
 def _hp_color(pct: float) -> str:
+    tokens = _panel_tokens()
     if pct > 0.5:
-        return READY
+        return tokens['ok']
     if pct > 0.2:
         return '#f4fa49'
-    return '#ef684e'
+    return tokens['danger']
 
 
 class CommanderPanel:
@@ -191,7 +231,7 @@ class CommanderPanel:
         self._drag_oy = 0
         self._body: Optional[tk.Frame] = None
         self._canvas: Optional[tk.Canvas] = None
-        self._tab_labels: Dict[str, tk.Label] = {}
+        self._tab_labels: Dict[str, Any] = {}
         self._last_signature: Optional[Tuple[Any, ...]] = None
 
     def is_visible(self) -> bool:
@@ -233,18 +273,11 @@ class CommanderPanel:
             self._render_if_needed(force=False)
 
     def _build(self) -> None:
-        width, height, pos_x, pos_y = calc_panel_geometry(
-            self.root,
-            min_w=300,
-            min_h=380,
-            width_ratio=0.18,
-            height_ratio=0.42,
-            x_ratio=0.25,
-            y_ratio=0.15,
-        )
+        width, height, pos_x, pos_y = _panel_geometry(self.root)
+        tokens = _panel_tokens()
         win = tk.Toplevel(self.root)
         win.overrideredirect(True)
-        win.configure(bg=PANEL_EDGE)
+        win.configure(bg=tokens['bg'])
         win.geometry(f'{width}x{height}+{pos_x}+{pos_y}')
         try:
             win.attributes('-topmost', True)
@@ -253,59 +286,34 @@ class CommanderPanel:
         win.bind('<Escape>', lambda _event: self.hide())
         self._win = win
 
-        shell = tk.Frame(win, bg=PANEL_BG, highlightthickness=1, highlightbackground=PANEL_EDGE)
-        shell.pack(fill=tk.BOTH, expand=True)
-        apply_surface_chrome(shell, accent=CYAN, accent_side='top')
-        place_corner_accents(shell, size=42)
+        header, close_label = _sao_panel_header(win, '◇', 'COMMANDER', self.hide)
+        _bind_panel_drag(header, close_label, self._on_drag_start, self._on_drag_move)
+        body = _sao_panel_body(win)
 
-        tk.Frame(shell, bg=CYAN, height=1).place(x=0, y=0, relwidth=1.0)
-        tk.Frame(shell, bg=GOLD_STRONG, height=1).place(relx=0.0, rely=1.0, y=-1, relwidth=1.0)
-        tk.Frame(shell, bg=CYAN, width=1).place(x=0, y=0, relheight=1.0)
-        tk.Frame(shell, bg=GOLD_STRONG, width=1).place(relx=1.0, x=-1, y=0, relheight=1.0)
-
-        header = tk.Frame(shell, bg=PANEL_HEADER_ALT, height=30)
-        header.pack(fill=tk.X)
-        header.pack_propagate(False)
-        apply_surface_chrome(header)
-        tk.Label(header, text='◇', bg=PANEL_HEADER_ALT, fg=CYAN, font=panel_font(8, bold=True)).pack(side=tk.LEFT, padx=(12, 6))
-        tk.Label(header, text='COMMANDER', bg=PANEL_HEADER_ALT, fg=TEXT_MAIN, font=panel_font(11, bold=True)).pack(side=tk.LEFT)
-        accent = tk.Canvas(header, bg=PANEL_HEADER_ALT, highlightthickness=0, bd=0, height=2)
-        accent.pack(side=tk.BOTTOM, fill=tk.X)
-        accent.bind('<Configure>', lambda event: self._draw_header_accent(accent, event.width))
-        bind_drag(header, self._on_drag_start, self._on_drag_move)
-
-        tabs = tk.Frame(shell, bg=PANEL_HEADER_ALT, height=26)
+        tabs = tk.Frame(body, bg=tokens['body'], height=34)
         tabs.pack(fill=tk.X)
         tabs.pack_propagate(False)
         for key, label in (('team', 'TEAM'), ('boss', 'BOSS RAID')):
-            slot = tk.Frame(tabs, bg=PANEL_HEADER_ALT)
+            slot = tk.Frame(tabs, bg=tokens['body'])
             slot.pack(side=tk.LEFT, expand=True, fill=tk.BOTH)
-            tab = make_tab_label(slot, label, command=lambda target=key: self._switch_tab(target))
-            tab.configure(bg=PANEL_HEADER_ALT)
-            tab.pack(fill=tk.X, expand=True)
-            attach_tab_underline(tab, slot)
+            tab = action_button(
+                slot, label, lambda target=key: self._switch_tab(target), kind='cyan',
+                active=key == self._active_tab, canvas_bg=tokens['body'], padx=8, pady=3,
+            )
+            tab.pack(fill=tk.X, expand=True, padx=3, pady=3)
             self._tab_labels[key] = tab
         self._refresh_tabs()
 
-        body_wrap = tk.Frame(shell, bg=PANEL_BG, padx=10, pady=8)
+        body_wrap = tk.Frame(body, bg=tokens['body'], padx=10, pady=8)
         body_wrap.pack(fill=tk.BOTH, expand=True)
-        _, canvas, body = create_scrollable_area(body_wrap, PANEL_BG)
+        canvas, scroll_body = _scrollable_area(body_wrap, tokens['body'])
         self._canvas = canvas
-        self._body = body
+        self._body = scroll_body
 
-        footer = tk.Frame(shell, bg=PANEL_HEADER_ALT, height=20)
+        footer = tk.Frame(body, bg=tokens['body'], height=28)
         footer.pack(fill=tk.X)
         footer.pack_propagate(False)
-        apply_surface_chrome(footer, accent=GOLD_STRONG, accent_side='bottom')
-        tk.Label(footer, text='COMMANDER PANEL — LIVE', bg=PANEL_HEADER_ALT, fg=TEXT_DIM, font=panel_font(7, bold=True)).pack(expand=True)
-
-    def _draw_header_accent(self, canvas: tk.Canvas, width: int) -> None:
-        canvas.delete('all')
-        if width <= 2:
-            return
-        half = width // 2
-        canvas.create_line(0, 1, half, 1, fill=CYAN, width=2)
-        canvas.create_line(half, 1, width, 1, fill=GOLD_STRONG, width=2)
+        status_badge(footer, 'COMMANDER PANEL — LIVE', kind='ok', bg=tokens['body']).pack(expand=True, pady=3)
 
     def _switch_tab(self, tab: str) -> None:
         if tab == self._active_tab:
@@ -316,7 +324,7 @@ class CommanderPanel:
 
     def _refresh_tabs(self) -> None:
         for key, label in self._tab_labels.items():
-            set_tab_active(label, key == self._active_tab)
+            label.set_active(key == self._active_tab)
 
     def _render_if_needed(self, force: bool = False) -> None:
         if self._body is None:
@@ -337,49 +345,59 @@ class CommanderPanel:
 
     def _render_team_tab(self) -> None:
         members = list(self._data.get('members') or [])
-        make_section_title(self._body, 'PARTY')
+        section = section_card(self._body, 'PARTY', accent='cyan')
+        section.pack(fill=tk.X, pady=(0, 6))
         if not members:
             if str(self._data.get('status') or '') == 'backend_not_ready':
-                self._render_empty('⌛', '数据源未就绪 — 启动识别后显示队伍\nData source starting — team appears once capture is running')
+                self._render_empty(section, '⌛', '数据源未就绪 — 启动识别后显示队伍\nData source starting — team appears once capture is running')
             else:
-                self._render_empty('⚔', '暂无队伍信息\nNo team data — join a party to see members')
+                self._render_empty(section, '⚔', '暂无队伍信息\nNo team data — join a party to see members')
             return
         for member in members:
-            self._member_card(member, compact=False)
+            self._member_card(section, member, compact=False)
 
     def _render_boss_tab(self) -> None:
-        make_section_title(self._body, 'BOSS RAID')
+        tokens = _panel_tokens()
+        section = section_card(self._body, 'BOSS RAID', accent='gold')
+        section.pack(fill=tk.X, pady=(0, 6))
         dungeon_id = _finite_int(self._data.get('dungeon_id'), 0, lo=0)
         if not dungeon_id:
-            self._render_empty('⚑', '未进入副本\nNot in a dungeon instance')
+            self._render_empty(section, '⚑', '未进入副本\nNot in a dungeon instance')
         else:
-            card = tk.Frame(self._body, bg=PANEL_CARD, highlightbackground=PANEL_EDGE, highlightthickness=1, padx=10, pady=8)
+            card, inner = rounded_panel(
+                section, bg=tokens['card'], border=tokens['border'], radius=8, rail=tokens['gold'],
+                canvas_bg=tokens['card'], pad=10,
+            )
             card.pack(fill=tk.X, pady=(0, 6))
-            apply_surface_chrome(card, accent=GOLD_STRONG)
-            tk.Label(card, text=f'副本 Dungeon ID: {dungeon_id}', bg=PANEL_CARD, fg=TEXT_MAIN, font=panel_font(10, bold=True)).pack(anchor='w')
-            tk.Label(card, text='ACTIVE', bg=PANEL_CARD, fg=GOLD_STRONG, font=panel_font(8, bold=True)).pack(anchor='w', pady=(2, 0))
+            tk.Label(inner, text=f'副本 Dungeon ID: {dungeon_id}', bg=tokens['card'], fg=tokens['value'], font=get_cjk_font(10, True)).pack(anchor='w')
+            status_badge(inner, 'ACTIVE', kind='gold', bg=tokens['card']).pack(anchor='w', pady=(4, 0))
 
         members = list(self._data.get('members') or [])
         if members:
-            make_section_title(self._body, 'TEAM OVERVIEW')
+            overview = section_card(self._body, 'TEAM OVERVIEW', accent='cyan')
+            overview.pack(fill=tk.X, pady=(0, 6))
             for member in members:
-                self._member_card(member, compact=True)
+                self._member_card(overview, member, compact=True)
 
-    def _render_empty(self, icon: str, text: str) -> None:
-        wrap = tk.Frame(self._body, bg=PANEL_BG)
+    def _render_empty(self, parent: tk.Misc, icon: str, text: str) -> None:
+        tokens = _panel_tokens()
+        wrap = tk.Frame(parent, bg=tokens['card'])
         wrap.pack(fill=tk.X, pady=28)
-        tk.Label(wrap, text=icon, bg=PANEL_BG, fg=TEXT_DIM, font=panel_font(22, bold=True)).pack()
-        tk.Label(wrap, text=text, bg=PANEL_BG, fg=TEXT_MUTED, font=panel_font(9), justify='center').pack(pady=(6, 0))
+        tk.Label(wrap, text=icon, bg=tokens['card'], fg=tokens['label'], font=get_cjk_font(22, True)).pack()
+        tk.Label(wrap, text=text, bg=tokens['card'], fg=tokens['label'], font=get_cjk_font(9), justify='center').pack(pady=(6, 0))
 
-    def _member_card(self, member: Dict[str, Any], compact: bool) -> None:
+    def _member_card(self, parent: tk.Misc, member: Dict[str, Any], compact: bool) -> None:
+        tokens = _panel_tokens()
         is_self = bool(member.get('is_self'))
         is_leader = bool(member.get('is_leader'))
-        border = CYAN if is_self else PANEL_EDGE
-        card = tk.Frame(self._body, bg=PANEL_CARD, highlightbackground=border, highlightthickness=2 if is_self else 1, padx=8, pady=6)
+        rail = tokens['accent'] if is_self else tokens['gold'] if is_leader else None
+        card, inner = rounded_panel(
+            parent, bg=tokens['card'], border=tokens['accent'] if is_self else tokens['border'],
+            radius=8, rail=rail, canvas_bg=tokens['card'], pad=8,
+        )
         card.pack(fill=tk.X, pady=(0, 5))
-        apply_surface_chrome(card, accent=CYAN if is_self else GOLD_STRONG if is_leader else PANEL_BG_ALT)
 
-        top = tk.Frame(card, bg=PANEL_CARD)
+        top = tk.Frame(inner, bg=tokens['card'])
         top.pack(fill=tk.X)
         name = str(member.get('name') or f'UID:{member.get("uid") or 0}')
         # 徽章先 pack(RIGHT) — pack 后包者只分剩余空间, 否则长名把
@@ -387,69 +405,90 @@ class CommanderPanel:
         # (web 端 .member-name 同款 ellipsis, batch 241)
         profession = str(member.get('profession') or '')
         if profession:
-            tk.Label(top, text=profession, bg=PANEL_HEADER_ALT, fg=TEXT_MAIN, font=panel_font(8), padx=5, pady=1).pack(side=tk.RIGHT)
+            status_badge(top, profession, kind='cyan', bg=tokens['card']).pack(side=tk.RIGHT)
         if is_leader:
-            tk.Label(top, text='★', bg=PANEL_CARD, fg=GOLD_STRONG, font=panel_font(9, bold=True)).pack(side=tk.RIGHT, padx=(0, 4))
-        name_font = panel_font(10 if compact else 11, bold=True)
+            status_badge(top, 'LEADER', kind='gold', bg=tokens['card']).pack(side=tk.RIGHT, padx=(0, 4))
+        name_font = get_cjk_font(10 if compact else 11, True)
         try:
             body_w = int(self._body.winfo_width() or 0)
         except Exception:
             body_w = 0
         name = _tk_ellipsize(name, name_font, max(90, (body_w or 300) - 130))
-        tk.Label(top, text=name, bg=PANEL_CARD, fg=TEXT_MAIN, font=name_font).pack(side=tk.LEFT, fill=tk.X, expand=True)
+        tk.Label(top, text=name, bg=tokens['card'], fg=tokens['value'], font=name_font).pack(side=tk.LEFT, fill=tk.X, expand=True)
 
         if not compact:
-            meta = tk.Frame(card, bg=PANEL_CARD)
+            meta = tk.Frame(inner, bg=tokens['card'])
             meta.pack(fill=tk.X, pady=(2, 0))
-            tk.Label(meta, text=f'Lv.{_fmt_level(member.get("level"))}', bg=PANEL_CARD, fg=TEXT_MUTED, font=panel_font(8)).pack(side=tk.LEFT)
-            tk.Label(meta, text=f'CP {_fmt_fp(member.get("fight_point"))}', bg=PANEL_CARD, fg=TEXT_MUTED, font=panel_font(8)).pack(side=tk.LEFT, padx=(10, 0))
+            tk.Label(meta, text=f'Lv.{_fmt_level(member.get("level"))}', bg=tokens['card'], fg=tokens['label'], font=get_cjk_font(8)).pack(side=tk.LEFT)
+            tk.Label(meta, text=f'CP {_fmt_fp(member.get("fight_point"))}', bg=tokens['card'], fg=tokens['label'], font=get_cjk_font(8)).pack(side=tk.LEFT, padx=(10, 0))
             if is_self:
-                tk.Label(meta, text='SELF', bg=PANEL_CARD, fg=CYAN, font=panel_font(8, bold=True)).pack(side=tk.LEFT, padx=(8, 0))
+                status_badge(meta, 'SELF', kind='cyan', bg=tokens['card']).pack(side=tk.LEFT, padx=(8, 0))
 
             hp = _finite_float(member.get('hp'), 0.0, lo=0.0)
             hp_max = _finite_float(member.get('max_hp'), 0.0, lo=0.0)
             if hp_max > 0:
-                self._hp_mini_bar(card, _unit_pct(hp / hp_max))
+                self._hp_mini_bar(inner, _unit_pct(hp / hp_max))
 
         if is_self:
             slots = list(member.get('skill_slots') or [])
             if slots:
-                self._cd_grid(card, slots)
+                self._cd_grid(inner, slots)
 
     def _hp_mini_bar(self, parent: tk.Frame, pct: float) -> None:
+        tokens = _panel_tokens()
         pct = _unit_pct(pct)
-        row = tk.Frame(parent, bg=PANEL_CARD)
+        row = tk.Frame(parent, bg=tokens['card'])
         row.pack(fill=tk.X, pady=(4, 0))
-        canvas = tk.Canvas(row, height=6, bg=PANEL_CARD_ALT, highlightthickness=0, bd=0)
+        canvas = tk.Canvas(row, height=6, bg=tokens['card_alt'], highlightthickness=0, bd=0)
         canvas.pack(side=tk.LEFT, fill=tk.X, expand=True)
-        canvas.update_idletasks()
-        width = max(120, int(canvas.winfo_reqwidth() or 240))
-        canvas.create_rectangle(0, 0, width, 6, fill=PANEL_CARD_ALT, outline='')
-        canvas.create_rectangle(0, 0, int(width * pct), 6, fill=_hp_color(pct), outline='')
-        tk.Label(row, text=f'{int(round(pct * 100))}%', bg=PANEL_CARD, fg=TEXT_MUTED, font=panel_font(8, bold=True)).pack(side=tk.RIGHT, padx=(6, 0))
+
+        def _draw_bar(_event=None) -> None:
+            current = _panel_tokens()
+            width = max(120, int(canvas.winfo_width() or canvas.winfo_reqwidth() or 240))
+            canvas.configure(bg=current['card_alt'])
+            canvas.delete('all')
+            canvas.create_rectangle(0, 0, width, 6, fill=current['card_alt'], outline='')
+            canvas.create_rectangle(0, 0, int(width * pct), 6, fill=_hp_color(pct), outline='')
+
+        canvas.bind('<Configure>', _draw_bar)
+        canvas._sao_theme_repaint = _draw_bar
+        _draw_bar()
+        tk.Label(row, text=f'{int(round(pct * 100))}%', bg=tokens['card'], fg=tokens['label'], font=get_cjk_font(8, True)).pack(side=tk.RIGHT, padx=(6, 0))
 
     def _cd_grid(self, parent: tk.Frame, slots: List[Dict[str, Any]]) -> None:
-        grid = tk.Frame(parent, bg=PANEL_CARD)
+        tokens = _panel_tokens()
+        grid = tk.Frame(parent, bg=tokens['card'])
         grid.pack(fill=tk.X, pady=(5, 0))
         for idx, slot in enumerate(slots):
             state = str(slot.get('state') or 'ready').lower()
-            border = PANEL_EDGE
+            border = tokens['border']
             if state == 'ready':
-                border = READY
+                border = tokens['ok']
             elif state == 'active':
-                border = GOLD_STRONG
-            cell = tk.Frame(grid, bg=PANEL_CARD_ALT, highlightbackground=border, highlightthickness=1, width=32, height=32)
+                border = tokens['gold']
+            cell = tk.Frame(grid, bg=tokens['card_alt'], highlightbackground=border, highlightthickness=1, width=32, height=32)
             cell.grid(row=0, column=idx, padx=2)
             cell.grid_propagate(False)
-            canvas = tk.Canvas(cell, width=30, height=30, bg=PANEL_CARD_ALT, highlightthickness=0, bd=0)
+            canvas = tk.Canvas(cell, width=30, height=30, bg=tokens['card_alt'], highlightthickness=0, bd=0)
             canvas.place(x=1, y=1)
-            if state == 'cooldown':
-                fill_height = int(30 * _unit_pct(slot.get('cooldown_pct')))
-                canvas.create_rectangle(0, 30 - fill_height, 30, 30, fill='#f3af1222', outline='')
             slot_index = _finite_int(slot.get('index'), idx + 1, lo=0) or (idx + 1)
-            canvas.create_text(15, 9, text=str(slot_index), fill=TEXT_DIM, font=panel_font(6, bold=True))
             time_text = _fmt_time(slot.get('remaining_ms') or 0) if state == 'cooldown' else '✓'
-            canvas.create_text(15, 21, text=time_text, fill=READY if state == 'ready' else TEXT_MAIN, font=panel_font(6, bold=True))
+
+            def _draw_cell(_event=None, *, canvas=canvas, state=state, slot=slot,
+                           slot_index=slot_index, time_text=time_text) -> None:
+                current = _panel_tokens()
+                canvas.configure(bg=current['card_alt'])
+                canvas.delete('all')
+                if state == 'cooldown':
+                    fill_height = int(30 * _unit_pct(slot.get('cooldown_pct')))
+                    canvas.create_rectangle(0, 30 - fill_height, 30, 30, fill=current['gold_soft'], outline='')
+                canvas.create_text(15, 9, text=str(slot_index), fill=current['label'], font=get_cjk_font(6, True))
+                canvas.create_text(15, 21, text=time_text,
+                                   fill=current['ok'] if state == 'ready' else current['value'],
+                                   font=get_cjk_font(6, True))
+
+            canvas._sao_theme_repaint = _draw_cell
+            _draw_cell()
 
     def _on_drag_start(self, event) -> None:
         if self._win is None:
