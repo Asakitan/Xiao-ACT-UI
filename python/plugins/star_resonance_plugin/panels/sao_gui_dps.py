@@ -2956,15 +2956,9 @@ class DpsOverlay:
         else:
             ca, cb = self.BAR_OTHER_A, self.BAR_OTHER_B
 
-        # Horizontal gradient (vectorised) — matches CSS linear-gradient.
-        xs = np.linspace(0, 1, bw)[None, :]
-        ys = np.linspace(0, 1, bh)[:, None]
-        rr = (ca[0] + (cb[0] - ca[0]) * xs) * (1.0 - 0.12 * ys)
-        gg = (ca[1] + (cb[1] - ca[1]) * xs) * (1.0 - 0.12 * ys)
-        bb = (ca[2] + (cb[2] - ca[2]) * xs) * (1.0 - 0.12 * ys)
-        aa = (ca[3] + (cb[3] - ca[3]) * xs) * np.ones_like(ys)
-        arr = np.stack([rr, gg, bb, aa], axis=-1).clip(0, 255).astype(np.uint8)
-        bar = Image.fromarray(arr, 'RGBA')
+        # Flat single-layer fills keep the rank proportion readable without
+        # the former vertical glass shading, top sheen, or leading highlight.
+        bar = Image.new('RGBA', (bw, bh), ca)
 
         mask = Image.new('L', (bw, bh), 0)
         ImageDraw.Draw(mask).rounded_rectangle(
@@ -2973,29 +2967,6 @@ class DpsOverlay:
         )
         out = Image.new('RGBA', (bw, bh), (0, 0, 0, 0))
         out.paste(bar, (0, 0), mask)
-
-        highlight = Image.new('RGBA', (bw, bh), (0, 0, 0, 0))
-        hd = ImageDraw.Draw(highlight, 'RGBA')
-        hd.rounded_rectangle(
-            (0, 0, bw - 1, max(2, bh // 3)),
-            radius=min(3, max(1, bh // 2)),
-            fill=(80, 140, 180, 16 if is_self else 10),
-        )
-        hd.line(
-            (1, max(1, bh - 2), max(1, bw - 2), max(1, bh - 2)),
-            fill=(28, 24, 16, 20 if is_self else 14), width=1,
-        )
-        highlight = _gpu_blur(highlight, 1.1)
-        out.alpha_composite(highlight)
-
-        leading = Image.new('RGBA', (bw, bh), (0, 0, 0, 0))
-        ld = ImageDraw.Draw(leading, 'RGBA')
-        ld.rounded_rectangle(
-            (0, 0, min(bw - 1, 4), bh - 1),
-            radius=min(3, max(1, bh // 2)),
-            fill=(255, 240, 200, 26 if is_self else 14),
-        )
-        out.alpha_composite(leading)
         cache[key] = out
         self._bar_cache = cache
         return out

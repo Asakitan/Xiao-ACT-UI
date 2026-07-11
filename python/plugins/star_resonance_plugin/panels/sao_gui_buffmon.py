@@ -757,18 +757,26 @@ class _BuffPanelBase:
             fill=self.ROW_TOP_SHEEN, width=1,
         )
 
-        # 名字 (左) — ×层数 · 触发次数
+        # 名字 (左) + 独立层数列，避免长 buff 名称吞掉层数。
         applies = _finite_int(row.get('apply_count'), 0, lo=0)
-        if layer > 1:
-            name = f'{name} ×{layer}'
-        elif count > 1:
-            name = f'{name} ×{count}'
+        stack_parts = []
+        if layer > 0:
+            stack_parts.append(f'层{layer}')
+        if count > 1:
+            stack_parts.append(f'×{count}')
         if applies > 1:
-            name = f'{name}·{applies}'
+            stack_parts.append(f'·{applies}')
+        stack_text = ' '.join(stack_parts)
 
+        font_secs = _load_font('sao', 13)
+        secs = self._fmt_seconds(rem_s)
+        secs_w = _text_width(draw, secs, font_secs)
+        font_stack = _pick_font(stack_text, 10)
+        stack_w = _text_width(draw, stack_text, font_stack) if stack_text else 0
+        secs_x = rx1 - 8 - secs_w
+        stack_x = secs_x - 8 - stack_w
         font_name = _pick_font(name, 12)
-        # 给秒数 60 px
-        max_name_w = (rx1 - rx0) - 16 - 56
+        max_name_w = stack_x - (rx0 + 8) - 8
         while name and _text_width(draw, name, font_name) > max_name_w:
             name = name[:-1]
             if len(name) <= 2:
@@ -780,13 +788,13 @@ class _BuffPanelBase:
         ty = ry + (self.ROW_H - 14) // 2
         draw.text((tx, ty), name, fill=text_color, font=font_name)
 
+        if stack_text:
+            draw.text((stack_x, ry + (self.ROW_H - 11) // 2), stack_text,
+                      fill=self.TEXT_MUTED, font=font_stack)
+
         # 秒数 (右)
-        secs = self._fmt_seconds(rem_s)
-        font_secs = _load_font('sao', 13)
-        sw_text = _text_width(draw, secs, font_secs)
-        sx_text = rx1 - 8 - sw_text
         sy_text = ry + (self.ROW_H - 15) // 2
-        draw.text((sx_text, sy_text), secs, fill=secs_color, font=font_secs)
+        draw.text((secs_x, sy_text), secs, fill=secs_color, font=font_secs)
         # 's' 后缀 — 只有有限秒数才有
         if rem_s >= 0:
             font_unit = _load_font('sao', 9)

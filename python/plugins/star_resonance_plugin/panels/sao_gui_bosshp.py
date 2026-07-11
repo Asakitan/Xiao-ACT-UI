@@ -412,9 +412,9 @@ class BossHpOverlay:
     BOX_H = 45
 
     NUMBER_X = BOX_X + int(round(BOX_W * 0.58))
-    NUMBER_Y = BOX_Y + int(round(BOX_H * 0.82))
+    NUMBER_Y = BOX_Y + BOX_H - 20
     NUMBER_W = 210
-    NUMBER_H = 19
+    NUMBER_H = 24
 
     # HP bar geometry (relative to panel origin, matches CSS
     # xt_border left:108, top:9 inside boss-box which is at 16,12).
@@ -2035,20 +2035,9 @@ class BossHpOverlay:
             return
         sw_f = self._pct_width_px_f(pct)
         sw = max(1, int(math.ceil(sw_f)))
-        shield = _make_gradient_bar(
-            sw, self.BAR_H, self.SHIELD_A, self.SHIELD_B, cc=self.SHIELD_C)
-        edge = _make_skew_cap(self.BAR_H, self.SHIELD_B, self.SHIELD_C,
+        shield = _make_gradient_bar(sw, self.BAR_H, self.SHIELD_A, self.SHIELD_B)
+        edge = _make_skew_cap(self.BAR_H, self.SHIELD_B, self.SHIELD_B,
                               skew_px=7)
-
-        phase = self._shield_light_phase
-        sweep = _make_light_sweep(sw, self.BAR_H, phase)
-        shield.alpha_composite(sweep)
-
-        scan = Image.new('RGBA', (sw, self.BAR_H), (0, 0, 0, 0))
-        sd = ImageDraw.Draw(scan, 'RGBA')
-        for yy in range(2, self.BAR_H, 5):
-            sd.line((0, yy, sw - 1, yy), fill=(212, 248, 255, 20), width=1)
-        shield.alpha_composite(scan)
         # v2.1.17: fade trailing column for subpixel-smooth shield growth.
         shield = subpixel_bar_width(shield, sw_f) or shield
 
@@ -2161,9 +2150,9 @@ class BossHpOverlay:
             text = f'{_fmt_hp(self._current_hp)}/{_fmt_hp(self._total_hp)}'
         else:
             text = f'{int(round(self._disp_hp_pct * 100))}%'
-        font = _load_font('sao', 12)
+        font = _load_font('sao', 20)
         tx = self.NUMBER_X + self.NUMBER_W - 5
-        ty = self.NUMBER_Y + 2 + y_off
+        ty = self.NUMBER_Y + y_off
         tw = _text_width(draw, text, font)
         col = ((130, 130, 130, 255) if self._invincible
                else self.TEXT_MAIN)
@@ -2889,31 +2878,24 @@ def _make_gradient_bar(w: int, h: int,
     # Horizontal 2- or 3-stop linear gradient.
     if w <= 0 or h <= 0:
         return Image.new('RGBA', (1, 1), (0, 0, 0, 0))
-    xs = np.linspace(0, 1, w)[None, :]
     if cc is None:
-        ts = xs
-        rr = ca[0] + (cb[0] - ca[0]) * ts
-        gg = ca[1] + (cb[1] - ca[1]) * ts
-        bb = ca[2] + (cb[2] - ca[2]) * ts
-        aa = ca[3] + (cb[3] - ca[3]) * ts
-    else:
-        rr = np.where(xs < 0.54,
-                      ca[0] + (cb[0] - ca[0]) * (xs / 0.54),
-                      cb[0] + (cc[0] - cb[0]) * ((xs - 0.54) / 0.46))
-        gg = np.where(xs < 0.54,
-                      ca[1] + (cb[1] - ca[1]) * (xs / 0.54),
-                      cb[1] + (cc[1] - cb[1]) * ((xs - 0.54) / 0.46))
-        bb = np.where(xs < 0.54,
-                      ca[2] + (cb[2] - ca[2]) * (xs / 0.54),
-                      cb[2] + (cc[2] - cb[2]) * ((xs - 0.54) / 0.46))
-        aa = np.where(xs < 0.54,
-                      ca[3] + (cb[3] - ca[3]) * (xs / 0.54),
-                      cb[3] + (cc[3] - cb[3]) * ((xs - 0.54) / 0.46))
+        raw = _CY_PIXELS.hgrad_bar_flat_rgba_bytes(w, h, ca, cb)
+        return Image.frombytes('RGBA', (w, h), raw)
+    xs = np.linspace(0, 1, w)[None, :]
+    rr = np.where(xs < 0.54,
+                  ca[0] + (cb[0] - ca[0]) * (xs / 0.54),
+                  cb[0] + (cc[0] - cb[0]) * ((xs - 0.54) / 0.46))
+    gg = np.where(xs < 0.54,
+                  ca[1] + (cb[1] - ca[1]) * (xs / 0.54),
+                  cb[1] + (cc[1] - cb[1]) * ((xs - 0.54) / 0.46))
+    bb = np.where(xs < 0.54,
+                  ca[2] + (cb[2] - ca[2]) * (xs / 0.54),
+                  cb[2] + (cc[2] - cb[2]) * ((xs - 0.54) / 0.46))
+    aa = np.where(xs < 0.54,
+                  ca[3] + (cb[3] - ca[3]) * (xs / 0.54),
+                  cb[3] + (cc[3] - cb[3]) * ((xs - 0.54) / 0.46))
     arr = np.broadcast_to(
         np.stack([rr, gg, bb, aa], axis=-1), (h, w, 4)).copy()
-    # Vertical shading (top brighter).
-    ys = np.linspace(1.0, 0.82, h)[:, None, None]
-    arr[:, :, :3] = np.clip(arr[:, :, :3] * ys, 0, 255)
     return Image.fromarray(arr.astype(np.uint8), 'RGBA')
 
 

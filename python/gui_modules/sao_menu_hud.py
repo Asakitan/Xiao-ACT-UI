@@ -757,10 +757,6 @@ class MenuHudSpriteRenderer:
                             screen_w: int, screen_h: int) -> None:
         font = self._font('sao', 10)
         draw.text((cx1 + 4, cy1 - 12), 'SYS:MENU', font=font, fill=self._DIM_CYAN)
-        res_text = f'RES:{screen_w}x{screen_h}'
-        bbox = self._text_bbox(draw, res_text, font)
-        draw.text((cx2 - 4 - (bbox[2] - bbox[0]), cy1 - 12),
-                  res_text, font=font, fill=self._DIM_GOLD)
         draw.text((cx1 + 4, cy2 + 2), 'ACTIVE', font=font, fill=self._DIM_CYAN)
 
     def _alpha_dot(self, frame: Image.Image, cx: int, cy: int,

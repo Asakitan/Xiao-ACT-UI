@@ -11,7 +11,7 @@
 # * GPU glow layer behind the callout, matching the webview's `#gl-fx`
 # beam / anchor / panel energy pass when ModernGL is available.
 # * Caption panel (angular clipped hexagon) with "SYSTEM CALL" tag, big
-# "BRUST MODE READY" headline, sub-line, 3 progress bars and the small
+# "BURST MODE READY" headline, sub-line, 3 progress bars and the small
 # accent circle on the top-right.
 #
 # 60 FPS tick with static-layer caching: the caption geometry is baked once
@@ -1437,7 +1437,7 @@ void main() {
             fill=TEXT_SUB,
         )
 
-        title_text = 'BRUST MODE READY'
+        title_text = 'BURST MODE READY'
         tx = 30
         ty = 36
         draw_title.text((tx, ty), title_text, font=f_main, fill=TEXT_MAIN)

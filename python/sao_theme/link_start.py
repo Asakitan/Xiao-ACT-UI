@@ -1332,7 +1332,7 @@ void main() {
             (255, 196, 82, 120), 1, 2.0, 3),
             bx1 - 20, by0 + 17, anchor='ne')
         self._paste_gl_ui(boot_img, self._make_gl_tracking_text(
-            [('NErVGEAR', 'sao')], title_size,
+            [('NerveGear', 'sao')], title_size,
             (242, 251, 255, 255), (10, 26, 42, 232),
             (110, 232, 255, 210), 2, 6.0,
             int(max(7, min(14, sw * 0.0092)))),
@@ -2307,7 +2307,7 @@ void main() {
                            fill=col, width=1 if off else 2)
 
     def _draw_start_nervegear_panel_cv(self, cv: tk.Canvas, t: float, bg: str):
-        # LinkStart 开头的 NErVGEAR 中央启动框，移植 C# splash 的方框感。
+        # LinkStart 开头的 NerveGear 中央启动框，移植 C# splash 的方框感。
         if t < 0.0 or t > 1.58:
             return
 
@@ -2401,7 +2401,7 @@ void main() {
         title_size = max(26, min(48, int(panel_w / 12)))
         title_alpha = int(255 * opacity * (0.82 + 0.18 * math.sin(t * 16.0) ** 2))
         self._draw_linkstart_canvas_text(
-            cv, cx, y0 + int(panel_h * 0.54), 'NErVGEAR', title_size,
+            cv, cx, y0 + int(panel_h * 0.54), 'NerveGear', title_size,
             (242, 251, 255, title_alpha),
             (10, 26, 42, int(title_alpha * 0.92)),
             (110, 232, 255, int(title_alpha * 0.32)),
@@ -2846,7 +2846,7 @@ void main() {
                (160, 238, 255, 192), (10, 24, 40, 164), (110, 232, 255, 44), 1, 1.0),
               ('[ LINK STANDBY ]', 'sao', 11,
                (255, 218, 116, 192), (34, 28, 14, 164), (255, 196, 82, 44), 1, 1.0),
-              ('NErVGEAR', 'sao', 40,
+              ('NerveGear', 'sao', 40,
                (242, 251, 255, 240), (10, 26, 42, 224), (110, 232, 255, 72), 2, 2.5),
               ('FULLDIVE AUTHENTICATION', 'sao', 12,
                (255, 218, 132, 192), (34, 28, 14, 164), (255, 196, 82, 44), 1, 1.0),

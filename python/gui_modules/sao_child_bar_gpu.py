@@ -150,6 +150,8 @@ ROW_X_INDICATOR_W = 2
 ROW_X_PAD_L = 8
 ROW_X_ICON_GAP = 5
 ROW_X_PAD_R = 8
+ROW_X_CARET_W = 12
+ROW_X_CARET_GAP = 3
 LINE_COL_W = 10
 LINE_COL_PAD_R = 3
 ARROW_COL_W = 12
@@ -331,6 +333,60 @@ def _draw_text_with_fallback(draw: ImageDraw.ImageDraw, xy, text: str,
     return x - x0
 
 
+def _text_width_with_fallback(draw: ImageDraw.ImageDraw, text: str,
+                              chain: list) -> int:
+    if not text or not chain:
+        return 0
+    primary = chain[0]
+    width = 0
+    for ch in text:
+        chosen = primary
+        if ch != ' ' and not _glyph_supported(primary, ch):
+            for fallback in chain[1:]:
+                if _glyph_supported(fallback, ch):
+                    chosen = fallback
+                    break
+        try:
+            width += int(draw.textlength(ch, font=chosen))
+        except Exception:
+            width += chosen.size if hasattr(chosen, 'size') else 8
+    return width
+
+
+def _ellipsize_text(draw: ImageDraw.ImageDraw, text: str, chain: list,
+                    max_width: int) -> str:
+    # Reserve the hover caret's slot even while it is hidden so a long label
+    # never grows underneath it during the hover transition.
+    if not text or max_width <= 0:
+        return ''
+    if _text_width_with_fallback(draw, text, chain) <= max_width:
+        return text
+    ellipsis = '…'
+    ellipsis_width = _text_width_with_fallback(draw, ellipsis, chain)
+    if ellipsis_width > max_width:
+        return ''
+    out = []
+    used = 0
+    for ch in text:
+        char_width = _text_width_with_fallback(draw, ch, chain)
+        if used + char_width + ellipsis_width > max_width:
+            break
+        out.append(ch)
+        used += char_width
+    return ''.join(out) + ellipsis
+
+
+def _rgba(hex_color: str, alpha: int) -> Tuple[int, int, int, int]:
+    raw = str(hex_color or '').lstrip('#')
+    try:
+        if len(raw) == 3:
+            raw = ''.join(ch * 2 for ch in raw)
+        return (int(raw[0:2], 16), int(raw[2:4], 16), int(raw[4:6], 16),
+                max(0, min(255, int(alpha))))
+    except Exception:
+        return (255, 255, 255, max(0, min(255, int(alpha))))
+
+
 # ═══════════════════════════════════════════════
 #  Compose helper (worker-safe)
 # ═══════════════════════════════════════════════
@@ -353,9 +409,10 @@ def _compose_child_bar(snap: _ChildBarSnapshot, total_w: int, total_h: int) -> I
         line_h = snap.line_h
         line_w = max(1, snap.line_w)
         if line_w > 1 and line_h > 5:
-            glow_color = colors.lerp('#d4d0d0', bg, fade_t)
-            main_color = colors.lerp('#9c9999', bg, fade_t)
-            dot_color = colors.lerp('#b0b0b0', bg, fade_t)
+            line_alpha = int(210 * (1.0 - fade_t))
+            glow_color = _rgba('#d4d0d0', line_alpha)
+            main_color = _rgba('#9c9999', line_alpha)
+            dot_color = _rgba('#b0b0b0', line_alpha)
             cx = LINE_COL_W // 2
             ly = LINE_TOP_PAD
             draw.line((cx, ly + 5, cx, ly + line_h - 5), fill=glow_color, width=4)
@@ -378,12 +435,12 @@ def _compose_child_bar(snap: _ChildBarSnapshot, total_w: int, total_h: int) -> I
                     int(ga * 2.2) & 0xFF,
                     int(ga * 0.3) & 0xFF,
                 )
-                faded = colors.lerp(base_hex, bg, fade_t)
+                faded = _rgba(base_hex, int(150 * (1.0 - fade_t)))
                 draw.ellipse((arrow_x + cx - gr, cy - gr,
                               arrow_x + cx + gr, cy + gr),
                              fill=faded)
-            core_fill = colors.lerp('#c9b896', bg, fade_t)
-            core_outline = colors.lerp('#d4c8a8', bg, fade_t)
+            core_fill = _rgba('#c9b896', int(220 * (1.0 - fade_t)))
+            core_outline = _rgba('#d4c8a8', int(220 * (1.0 - fade_t)))
             draw.ellipse((arrow_x + 4, cy - 2, arrow_x + 9, cy + 3),
                          fill=core_fill, outline=core_outline)
 
@@ -401,15 +458,20 @@ def _compose_child_bar(snap: _ChildBarSnapshot, total_w: int, total_h: int) -> I
             fg_now = colors.lerp(colors.child_text, colors.child_hover_fg, ht)
             icon_now = colors.lerp(colors.child_icon, colors.child_hover_fg, ht)
             ind_now = colors.lerp(colors.child_bg, colors.active_border, ht)
-            bg_blend = colors.lerp(bg_now, bg, fade_t)
-            fg_blend = colors.lerp(fg_now, bg, fade_t)
-            icon_blend = colors.lerp(icon_now, bg, fade_t)
-            ind_blend = colors.lerp(ind_now, bg, fade_t)
+            row_alpha = int((218 + 18 * ht) * (1.0 - fade_t))
+            bg_blend = _rgba(bg_now, row_alpha)
+            fg_blend = _rgba(fg_now, int(255 * (1.0 - fade_t)))
+            icon_blend = _rgba(icon_now, int(245 * (1.0 - fade_t)))
+            ind_blend = _rgba(ind_now, int(235 * (1.0 - fade_t)))
 
-            draw.rectangle((LIST_X, row_y, LIST_X + rw, row_y + ROW_H),
-                           fill=bg_blend)
-            draw.rectangle((LIST_X, row_y, LIST_X + ROW_X_INDICATOR_W, row_y + ROW_H),
-                           fill=ind_blend)
+            row_box = (LIST_X, row_y, LIST_X + rw, row_y + ROW_H)
+            row_radius = min(8, max(2, ROW_H // 4), max(2, rw // 2))
+            draw.rounded_rectangle(row_box, radius=row_radius, fill=bg_blend,
+                                   outline=_rgba(colors.active_border, int(72 * ht * (1.0 - fade_t)),), width=1)
+            draw.rounded_rectangle(
+                (LIST_X, row_y, LIST_X + ROW_X_INDICATOR_W + 1, row_y + ROW_H),
+                radius=min(2, row_radius), fill=ind_blend,
+            )
 
             ic_x = LIST_X + ROW_X_INDICATOR_W + ROW_X_PAD_L
             ic_y = row_y + (ROW_H - ICON_FONT_SIZE) // 2 - 2
@@ -422,16 +484,19 @@ def _compose_child_bar(snap: _ChildBarSnapshot, total_w: int, total_h: int) -> I
                 ic_w = ICON_FONT_SIZE
             lbl_x = ic_x + ic_w + ROW_X_ICON_GAP
             lbl_y = row_y + (ROW_H - LABEL_FONT_SIZE) // 2 - 2
-            max_lbl_w = max(0, LIST_X + rw - lbl_x - ROW_X_PAD_R - 6)
+            caret_x = LIST_X + rw - ROW_X_PAD_R - 6
+            max_lbl_w = max(0, caret_x - ROW_X_CARET_W - ROW_X_CARET_GAP - lbl_x)
             if row.label and max_lbl_w > 4:
                 _draw_text_with_fallback(
-                    draw, (lbl_x, lbl_y), row.label, label_chain, fg_blend,
+                    draw, (lbl_x, lbl_y),
+                    _ellipsize_text(draw, row.label, label_chain, max_lbl_w),
+                    label_chain, fg_blend,
                 )
             if ht > 0.05:
-                arr_x = LIST_X + rw - ROW_X_PAD_R - 6
+                arr_x = caret_x
                 arr_y = row_y + (ROW_H - 14) // 2 - 1
                 arr_color = colors.lerp(colors.child_bg, colors.child_hover_fg, ht)
-                arr_blend = colors.lerp(arr_color, bg, fade_t)
+                arr_blend = _rgba(arr_color, int(255 * (1.0 - fade_t)))
                 _draw_text_with_fallback(
                     draw, (arr_x, arr_y), '\u203a', label_chain, arr_blend,
                 )

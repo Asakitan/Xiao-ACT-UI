@@ -190,11 +190,13 @@ COVER_BORDER_DEEP = (160, 165, 171, 255)
 # The result depends only on (w, h) + the COVER_* constants, all module
 # invariants — so once built for a given size the same RGBA Image can be
 # reused forever. Both _draw_id_plate_bg and _draw_hp_cover_bg share this.
-_COVER_GRADIENT_CACHE: Dict[Tuple[int, int], Image.Image] = {}
+_COVER_GRADIENT_CACHE: Dict[Tuple[int, int, Tuple[int, int, int, int],
+                                Tuple[int, int, int, int],
+                                Tuple[int, int, int, int]], Image.Image] = {}
 
 
 def _cover_gradient_image(w: int, h: int) -> Image.Image:
-    key = (int(w), int(h))
+    key = (int(w), int(h), COVER_A, COVER_MID, COVER_B)
     cached = _COVER_GRADIENT_CACHE.get(key)
     if cached is not None:
         return cached
@@ -471,7 +473,7 @@ def _make_hgrad_bar(w: int, h: int,
                     cb: Tuple[int, int, int, int]) -> Image.Image:
     if w <= 0 or h <= 0:
         return Image.new('RGBA', (1, 1), (0, 0, 0, 0))
-    raw = _CY_PIXELS.hgrad_bar_rgba_bytes(w, h, ca, cb)
+    raw = _CY_PIXELS.hgrad_bar_flat_rgba_bytes(w, h, ca, cb)
     return Image.frombytes('RGBA', (w, h), raw)
 
 
@@ -735,12 +737,12 @@ class HpOverlay:
         theme = get_panel_theme('hp', theme_name)
         if not theme:
             return
-        # HP 用模块级常量，直接 setattr 本模块
-        from gui_modules import sao_gui_hp as _mod
+        # HP uses module-level palette constants in this plugin module.
         for key, value in theme.items():
-            setattr(_mod, key, value)
+            globals()[key] = value
         self._theme_name = theme_name
         # 清除所有缓存
+        _COVER_GRADIENT_CACHE.clear()
         self._panels_cache = None; self._panels_sig = ()
         self._shell_cache = None; self._shell_sig = ()
         self._shadow_cache = None; self._shadow_sig = ()
@@ -3144,21 +3146,11 @@ class HpOverlay:
         if asset is None:
             bar = _make_hgrad_bar(max(1, fw_int - 2), 4, STA_A, STA_B)
             bar = subpixel_bar_width(bar, max(0.0, fw - 2.0)) or bar
-            highlight = Image.new('RGBA', (max(1, fw_int - 2), 1), (255, 242, 202, 72))
-            glow = Image.new('RGBA', (fw_int + 12, 14), (0, 0, 0, 0))
-            ImageDraw.Draw(glow).rectangle(
-                (6, 4, fw_int + 6, 10), fill=(243, 175, 18, 60),
-            )
-            glow = _gpu_blur(glow, 3)
-            layer_w = max(bar.size[0], glow.size[0])
-            layer_h = max(5, glow.size[1])
-            asset = Image.new('RGBA', (layer_w, layer_h), (0, 0, 0, 0))
-            asset.alpha_composite(glow, (0, 0))
-            asset.alpha_composite(bar, (6 if glow.size[0] >= bar.size[0] + 12 else 0, 5))
-            asset.alpha_composite(highlight, (6 if glow.size[0] >= highlight.size[0] + 12 else 0, 5))
+            asset = Image.new('RGBA', bar.size, (0, 0, 0, 0))
+            asset.alpha_composite(bar)
             cache[fill_q] = asset
             self._sta_fill_cache = cache
-        img.alpha_composite(asset, (tx0 - 6, ty0 - 4))
+        img.alpha_composite(asset, (tx0, ty0 + 1))
 
     def _draw_sta_text(self, img: Image.Image, y_off: int) -> None:
         draw = ImageDraw.Draw(img, 'RGBA')
