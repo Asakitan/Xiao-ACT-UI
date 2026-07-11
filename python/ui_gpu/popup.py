@@ -90,6 +90,7 @@ class SAOPopUpMenu:
 
         self._gpu_win: Optional[_gow.GpuOverlayWindow] = None
         self._gpu_pos: Tuple[int, int] = (0, 0)
+        self._resize_anchor_y: Optional[int] = None
         self._presenter: Optional[_gow.BgraPresenter] = None
         self._render_worker = AsyncFrameWorker(prefer_isolation=True)
         self._last_presented_size: Tuple[int, int] = (0, 0)
@@ -329,27 +330,11 @@ class SAOPopUpMenu:
             name = self._state.menu_items[idx].get('name', '')
             self._state.child_rows = list(self.child_menus.get(name, []))
             self._reset_row_anim()
+            self._resize_for_child_rows(len(self._state.child_rows))
         elif force:
             self._state.child_rows = []
             self._reset_row_anim()
-        # Resize GPU window if new rows exceed reserved size
-        new_max = _CY_UI.popup_max_child_rows(self.child_menus)
-        if new_max > getattr(self, '_reserved_rows', 0) and self._gpu_win is not None:
-            old_reserved = self._reserved_rows
-            self._reserved_rows = new_max
-            from ui_gpu import composer
-            _old_w, old_h = composer.window_size_reserved(self._state, old_reserved)
-            win_w, win_h = composer.window_size_reserved(self._state, new_max)
-            win_w = max(win_w, 200)
-            win_h = max(win_h, 200)
-            try:
-                gx, gy = getattr(self, '_gpu_pos', (0, 0))
-                delta_h = win_h - max(200, old_h)
-                new_gy = gy - delta_h // 2
-                self._gpu_win.set_geometry(gx, max(0, new_gy), win_w, win_h)
-                self._gpu_pos = (gx, max(0, new_gy))
-            except Exception:
-                pass
+            self._resize_for_child_rows(0)
         if self._gpu_win is not None:
             self._gpu_win.request_redraw()
 
@@ -412,6 +397,7 @@ class SAOPopUpMenu:
             self._state.hover_row_idx = None
             self._state.child_fade_t = 1.0
             self._state.child_phase = 'idle'
+        self._resize_for_child_rows(len(self._state.child_rows))
         if self._gpu_win is not None:
             self._gpu_win.request_redraw()
         return True
@@ -423,6 +409,7 @@ class SAOPopUpMenu:
                 and self._state.menu_items[idx].get('name') == name):
             self._state.child_rows = list(items)
             self._reset_row_anim()
+            self._resize_for_child_rows(len(self._state.child_rows))
             if self._gpu_win is not None:
                 self._gpu_win.request_redraw()
 
@@ -484,12 +471,8 @@ class SAOPopUpMenu:
         # else center on screen.
         sw = self.root.winfo_screenwidth()
         sh = self.root.winfo_screenheight()
-        # Reserve GPU window size for the WORST-CASE child menu so that
-        # switching between menus never clips rows or forces a resize
-        # (resizes are jarring and visually break the compose layout).
-        max_rows = _CY_UI.popup_max_child_rows(self.child_menus)
-        self._reserved_rows = max_rows
-        win_w, win_h = composer.window_size_reserved(self._state, max_rows)
+        self._reserved_rows = len(self._state.child_rows)
+        win_w, win_h = composer.window_size_reserved(self._state, self._reserved_rows)
         win_w = max(win_w, 200)
         win_h = max(win_h, 200)
 
@@ -551,6 +534,15 @@ class SAOPopUpMenu:
             gpu_x = base_x + left_w + gap_left_to_gpu
             gpu_y = base_y + (total_h - win_h) // 2
             self._gpu_pos = (gpu_x, gpu_y)
+
+        # Dynamic child-row resizes are centered on this fixed anchor rather
+        # than the last resized y coordinate. That makes 0→N→M→0 transitions
+        # return to precisely the opening geometry. Cascade mode animates from
+        # a separate start position, so anchor its settled target instead.
+        if self.cascade_mode:
+            self._resize_anchor_y = self._cascade_target_y + win_h // 2
+        else:
+            self._resize_anchor_y = self._gpu_pos[1] + win_h // 2
 
         # Create the GPU window once, then hide/reuse it across normal
         # menu closes. Recreating GLFW/moderngl while WGC is active can
@@ -1060,6 +1052,7 @@ class SAOPopUpMenu:
         self._state.child_phase = 'idle'
         self._state.row_anim_w = []
         self._state.row_hover_t = []
+        self._resize_for_child_rows(0)
 
     def _activate_menu(self, idx: int) -> None:
         _phase_trace('popup.act.enter', f'idx={idx}')
@@ -1140,6 +1133,7 @@ class SAOPopUpMenu:
             if completed:
                 self._state.child_rows = list(self._state.pending_child_rows)
                 self._state.pending_child_rows = []
+                self._resize_for_child_rows(len(self._state.child_rows))
                 if self._state.child_rows:
                     self._reset_row_anim()
                     self._state.child_fade_t = 1.0
@@ -1158,6 +1152,7 @@ class SAOPopUpMenu:
             return
         self._state.child_rows = next_rows
         self._state.pending_child_rows = []
+        self._resize_for_child_rows(len(next_rows))
         if next_rows:
             self._reset_row_anim()
             self._state.child_fade_t = 1.0
@@ -1253,6 +1248,43 @@ class SAOPopUpMenu:
         self._state.row_hover_t = [0.0] * n
         self._state.hover_row_idx = None
         self._state.row_anim_t0 = time.monotonic()
+
+    def _resize_for_child_rows(self, row_count: int) -> None:
+        # Keep the production popup snug for short submenus. The compositor and
+        # hit tester consume the same reserved-row value, so geometry changes
+        # only after the visible row set changes. Size both sides from explicit
+        # row counts: state.child_rows already contains the new count here.
+        reserved_rows = max(0, int(row_count))
+        if reserved_rows == getattr(self, '_reserved_rows', 0):
+            return
+        old_reserved = int(getattr(self, '_reserved_rows', 0) or 0)
+        self._reserved_rows = reserved_rows
+        if self._gpu_win is None:
+            return
+        _old_w, old_h = composer.window_size_for_child_rows(
+            self._state, old_reserved)
+        win_w, win_h = composer.window_size_for_child_rows(
+            self._state, reserved_rows)
+        old_h = max(old_h, 200)
+        win_w = max(win_w, 200)
+        win_h = max(win_h, 200)
+        try:
+            gx, gy = self._gpu_pos
+            anchor_y = self._resize_anchor_y
+            if anchor_y is None:
+                anchor_y = gy + old_h // 2
+                self._resize_anchor_y = anchor_y
+            new_gy = max(0, int(anchor_y) - win_h // 2)
+            if self.cascade_mode:
+                self._cascade_target_y = new_gy
+                self._cascade_start_y = new_gy - int(win_h * 0.55)
+                self._cascade_gpu_x = gx
+                self._cascade_win_w = win_w
+                self._cascade_win_h = win_h
+            self._gpu_win.set_geometry(gx, new_gy, win_w, win_h)
+            self._gpu_pos = (gx, new_gy)
+        except Exception:
+            pass
 
     # ── alt+a + slide gestures + outside click ────────────────────
 

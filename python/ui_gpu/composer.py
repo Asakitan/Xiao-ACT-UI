@@ -70,24 +70,36 @@ def window_size(state) -> tuple:
 
 
 def window_size_reserved(state, reserved_rows: int) -> tuple:
-    # Like ``window_size`` but sized for at least ``reserved_rows``
-    # child rows. Used at open() time to bake in a fixed window size
-    # big enough for the worst-case menu, so switching menus never
-    # requires a GPU window resize.
-    return _CY_UI.popup_window_size(
-        len(state.menu_items), len(state.child_rows), reserved_rows,
+    # Compatibility name for callers that already provide the exact space
+    # reservation. Do not combine that reservation with state.child_rows:
+    # callers changing rows need deterministic old/new geometry.
+    return window_size_for_child_rows(state, reserved_rows)
+
+
+def window_size_for_child_rows(state, row_count: int) -> tuple:
+    # Size a popup for one explicit child-row count. Unlike
+    # ``window_size_reserved``, this intentionally does not inspect the
+    # current state.child_rows, which lets resize callers compare old and new
+    # geometry after state has already changed.
+    row_count = max(0, int(row_count))
+    win_w, win_h = _CY_UI.popup_window_size(
+        len(state.menu_items), row_count, row_count,
         menu_bar_layout.MAX_VISIBLE, menu_bar_layout.SLOT,
         child_bar_layout.ROW_STRIDE, menu_bar_layout.WIDTH,
         GAP_MENU_CHILD, child_bar_layout.WIDTH, HUD_PAD)
+    return max(int(win_w), 200), max(int(win_h), 200)
 
 
 def compose_rgba(state, hud_phase: float, screen_w: int, screen_h: int,
                  reserved_rows: int = 0) -> Image.Image:
-    iw, ih = content_size(state)
-    if reserved_rows > 0:
-        _win_w, win_h = window_size_reserved(state, reserved_rows)
-        ih = max(1, win_h - HUD_PAD * 2)
-    win_w, win_h = iw + HUD_PAD * 2, ih + HUD_PAD * 2
+    # The popup supplies its active reservation every frame. Preserve the
+    # legacy default for direct callers by deriving it from visible rows only
+    # when no reservation is provided.
+    render_rows = (len(state.child_rows) if reserved_rows <= 0
+                   else int(reserved_rows))
+    win_w, win_h = window_size_for_child_rows(state, render_rows)
+    iw = max(1, win_w - HUD_PAD * 2)
+    ih = max(1, win_h - HUD_PAD * 2)
     frame = Image.new('RGBA', (win_w, win_h), (0, 0, 0, 0))
     dx, dy = content_shift(state)
 

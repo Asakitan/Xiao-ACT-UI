@@ -323,7 +323,7 @@ class PluginManagerPanel:
         sao_entry(toolbar, textvariable=self._search_var, width=18).pack(side='left', padx=(0, SP_SM))
 
         action_button(toolbar, '导入', self._import_plugin, kind='normal').pack(side='left', padx=(0, SP_XS))
-        action_button(toolbar, '重载全部', self._reload_all, kind='cyan').pack(side='left', padx=(0, SP_XS))
+        action_button(toolbar, '重载全部', self._reload_all, kind='normal').pack(side='left', padx=(0, SP_XS))
 
         # ── Status filter chips (全部/已启用/已停用) — populated in _render_status ──
         self._pills_row = tk.Frame(body, bg=body_bg)
@@ -618,7 +618,7 @@ class PluginManagerPanel:
             error = '已停用'
         if error:
             is_real_error = error != '已停用'
-            err_bg = _pc('card_bg_2', '#1a283b') if is_real_error else _pc('card_bg', '#162233')
+            err_bg = _pc('card_bg_alt', '#1a283b') if is_real_error else _pc('card_bg', '#162233')
             err_fg = _pc('danger', '#ff707a') if is_real_error else label_fg
             tk.Label(inner, text=self._truncate(error, 80),
                      bg=err_bg, fg=err_fg,
