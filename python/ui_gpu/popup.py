@@ -1250,29 +1250,28 @@ class SAOPopUpMenu:
         self._state.row_anim_t0 = time.monotonic()
 
     def _resize_for_child_rows(self, row_count: int) -> None:
-        # Keep the production popup snug for short submenus. The compositor and
-        # hit tester consume the same reserved-row value, so geometry changes
-        # only after the visible row set changes. Size both sides from explicit
-        # row counts: state.child_rows already contains the new count here.
+        # Reconcile the complete popup geometry after an icon or child-row
+        # refresh. The compositor delegate propagates set_geometry() to its
+        # layer and Tk input proxy, while the local hit tester uses this same
+        # reservation immediately. Do not return merely because the child-row
+        # count is unchanged: the menu button count also changes frame height.
         reserved_rows = max(0, int(row_count))
-        if reserved_rows == getattr(self, '_reserved_rows', 0):
-            return
         old_reserved = int(getattr(self, '_reserved_rows', 0) or 0)
         self._reserved_rows = reserved_rows
-        if self._gpu_win is None:
-            return
-        _old_w, old_h = composer.window_size_for_child_rows(
-            self._state, old_reserved)
         win_w, win_h = composer.window_size_for_child_rows(
             self._state, reserved_rows)
-        old_h = max(old_h, 200)
         win_w = max(win_w, 200)
         win_h = max(win_h, 200)
+        self._hit.update(self._state, reserved_rows)
+        if self._gpu_win is None:
+            return
         try:
             gx, gy = self._gpu_pos
             anchor_y = self._resize_anchor_y
             if anchor_y is None:
-                anchor_y = gy + old_h // 2
+                _old_w, old_h = composer.window_size_for_child_rows(
+                    self._state, old_reserved)
+                anchor_y = gy + max(old_h, 200) // 2
                 self._resize_anchor_y = anchor_y
             new_gy = max(0, int(anchor_y) - win_h // 2)
             if self.cascade_mode:
