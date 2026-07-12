@@ -463,9 +463,27 @@ def _elevate_process_priority():
         pass
 
 
-def _early_hardening_bootstrap() -> None:
-    # 每一步独立 try，任何失败都不阻塞主程后续启动
-    # helper 只在 paid tier 启动；free tier 不预启动 helper
+def _show_helper_bootstrap_failure(message: str) -> None:
+    try:
+        import ctypes
+        ctypes.windll.user32.MessageBoxW(
+            0,
+            message,
+            "SAO Auto — Helper 启动失败",
+            0x00000010 | 0x00010000 | 0x00040000,
+        )
+        return
+    except Exception:
+        pass
+    try:
+        print(message, file=sys.stderr, flush=True)
+    except Exception:
+        pass
+
+
+def _early_hardening_bootstrap() -> bool:
+    # All application modes synchronously establish authenticated helper IPC
+    # before any UI or feature entry. Only paid mode proceeds to CMD_INIT.
     try:
         try:
             from license._bootstrap import receive_session_key
@@ -492,49 +510,39 @@ def _early_hardening_bootstrap() -> None:
         except Exception:
             pass
 
-        if _is_paid:
-            # 2026-07-10: 主人反馈 UI 起来后 Tk 主线程 hide_exstyle → _our_cr3
-            # → _r1_fe IPC 卡等 helper driver load (10-30s), UI 冻死. 主人诉求:
-            # 干脆启动阶段同步等 helper 完全 loaded 再起 UI. 副作用: 启动屏
-            # 幕停几十秒, 但之后 IPC 都秒返回, UI 稳定. 比后台 spawn + Tk 冻
-            # 结体验好.
-            #
-            # SAO_HELPER_ASYNC=1 可回到老的后台 spawn 行为 (仅调试用).
-            _helper_async = os.environ.get('SAO_HELPER_ASYNC') == '1'
-            if _helper_async:
-                def _spawn_helper():
-                    try:
-                        from mem_probe import rt_io_proxy
-                        rt_io_proxy.ensure_loaded()
-                    except Exception:
-                        pass
-                import threading
-                threading.Thread(target=_spawn_helper, daemon=True,
-                                 name='helper-early-spawn').start()
-            else:
-                import time as _t
-                # 暂停 hang detector — helper driver load 15-30s 主线程合法
-                # 长阻塞, 别让 watchdog 疯狂 dump 栈刷屏.
-                _pause_fn = getattr(sys.modules.get('__main__'),
-                                    '_sao_hang_pause', None)
-                if callable(_pause_fn):
-                    _pause_fn(True)
-                try:
-                    from mem_probe import rt_io_proxy
-                    print("[main] loading helper (driver init, "
-                          "expected 5-30s)...", flush=True)
-                    _t0 = _t.time()
-                    _ok = rt_io_proxy.ensure_loaded()
-                    print(f"[main] helper ready ok={_ok} in "
-                          f"{_t.time()-_t0:.1f}s", flush=True)
-                except Exception as _e:
-                    print(f"[main] helper load failed: "
-                          f"{type(_e).__name__}: {_e}", flush=True)
-                finally:
-                    if callable(_pause_fn):
-                        _pause_fn(False)
-    except Exception:
-        pass
+        import time as _t
+        _pause_fn = getattr(sys.modules.get('__main__'),
+                            '_sao_hang_pause', None)
+        if callable(_pause_fn):
+            _pause_fn(True)
+        try:
+            from mem_probe import rt_io_proxy
+            _t0 = _t.time()
+            if not rt_io_proxy.ensure_helper_ready(timeout=30.0):
+                _show_helper_bootstrap_failure(
+                    "SAO Auto helper 未能完成认证连接，程序将退出。"
+                )
+                return False
+            print(f"[main] helper IPC ready in {_t.time()-_t0:.1f}s", flush=True)
+            if _is_paid and not rt_io_proxy.ensure_loaded():
+                _show_helper_bootstrap_failure(
+                    "SAO Auto helper 驱动初始化失败，程序将退出。"
+                )
+                return False
+            return True
+        except Exception as exc:
+            _show_helper_bootstrap_failure(
+                f"SAO Auto helper 启动失败: {type(exc).__name__}: {exc}"
+            )
+            return False
+        finally:
+            if callable(_pause_fn):
+                _pause_fn(False)
+    except Exception as exc:
+        _show_helper_bootstrap_failure(
+            f"SAO Auto 启动预检失败: {type(exc).__name__}: {exc}"
+        )
+        return False
 
 
 def main():
@@ -588,7 +596,8 @@ def main():
         return
 
     # 所有模式 (test/headless/ai-editor/workshop/run_ui) 统一先跑 hardening bootstrap
-    _early_hardening_bootstrap()
+    if not _early_hardening_bootstrap():
+        return
 
     _set_dpi_aware()
     _elevate_process_priority()

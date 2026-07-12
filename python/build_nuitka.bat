@@ -144,17 +144,29 @@ if not "%NUITKA_RC%"=="0" (
 
 :: ---- [3b/7] Build helper (rt_io isolated process) ----
 echo [3b/7] Building rt_io helper...
+:: Nuitka's Windows version fields require exactly four numeric components.
+:: APP_VERSION remains the product-facing version; normalize it for this helper.
+chcp 65001 >nul 2>&1
+set "HELPER_FILE_VERSION=1.0.0.0"
+for /f "usebackq delims=" %%V in (`python -c "from config import APP_VERSION; parts=str(APP_VERSION).strip().split('.'); valid=1 ^<= len(parts) ^<= 4 and all(part.isdigit() and int(part) ^<= 65535 for part in parts); print('.'.join((parts + ['0'] * 4)[:4]) if valid else 1/0)" 2^>nul`) do set "HELPER_FILE_VERSION=%%V"
+echo   Helper file version: !HELPER_FILE_VERSION!
 chcp 936 >nul 2>&1
-python -m nuitka --standalone --assume-yes-for-downloads --windows-console-mode=disable --output-dir=%DIST%\nuitka_helper --output-filename=RuntimeBroker.exe --no-prefer-source-code --include-package=mem_probe --nofollow-import-to=mem_probe.rt_io_proxy --nofollow-import-to=gui_modules --nofollow-import-to=render --nofollow-import-to=sao_gui --nofollow-import-to=sao_webview --nofollow-import-to=act_platform --nofollow-import-to=ui_gpu --nofollow-import-to=ai_editor --nofollow-import-to=workshop --jobs=8 mem_probe\_rt_io_helper_entry.py
+python -m nuitka --standalone --assume-yes-for-downloads --windows-console-mode=disable --windows-icon-from-ico=icon.ico --windows-company-name="SAO Auto" --windows-product-name="SAO Auto" --windows-file-description="SAO Auto helper subprocess" --windows-file-version=!HELPER_FILE_VERSION! --windows-product-version=!HELPER_FILE_VERSION! --output-dir=%DIST%\nuitka_helper --output-filename=SaoUiHelper.exe --no-prefer-source-code --include-package=mem_probe --nofollow-import-to=mem_probe.rt_io_proxy --nofollow-import-to=gui_modules --nofollow-import-to=render --nofollow-import-to=sao_gui --nofollow-import-to=sao_webview --nofollow-import-to=act_platform --nofollow-import-to=ui_gpu --nofollow-import-to=ai_editor --nofollow-import-to=workshop --jobs=8 mem_probe\_rt_io_helper_entry.py
 set "HELPER_RC=%errorlevel%"
 chcp 65001 >nul 2>&1
 if not "%HELPER_RC%"=="0" (
-    echo WARNING: Helper build failed, will fall back to in-process mode
+    echo ERROR: Helper build failed
+    goto :fail
 )
 set "HELPER_OUT=%DIST%\nuitka_helper\_rt_io_helper_entry.dist"
 
+if not exist "%HELPER_OUT%\SaoUiHelper.exe" (
+    echo ERROR: Helper executable was not produced
+    goto :fail
+)
+
 :: ---- [3c/7] Harden helper ----
-if exist "%HELPER_OUT%\RuntimeBroker.exe" (
+if exist "%HELPER_OUT%\SaoUiHelper.exe" (
     echo [3c/7] Hardening helper binaries...
     python post_build_harden.py "%HELPER_OUT%"
 ) else (
@@ -172,14 +184,19 @@ mkdir "%RELEASE%\user_plugins"
 copy /y "%LAUNCHER_OUT%\XiaoACTUI.exe" "%RELEASE%\linkstart.exe" >nul
 xcopy /e /i /y /q "%NUITKA_OUT%\*" "%RELEASE%\runtime\" >nul
 
-:: Copy helper exe into runtime dir (disguised as RuntimeBroker)
-if exist "%HELPER_OUT%\RuntimeBroker.exe" (
+:: Copy the helper subprocess executable into the runtime directory.
+if exist "%HELPER_OUT%\SaoUiHelper.exe" (
     xcopy /e /i /y /q "%HELPER_OUT%\*" "%RELEASE%\runtime\helper\" >nul
-    echo   Helper process packaged as runtime\helper\RuntimeBroker.exe
+    echo   Helper subprocess packaged as runtime\helper\SaoUiHelper.exe
     :: Mirror sealed/wbox next to helper so its license bootstrap can find them
     :: via the sys.executable-neighbor fallback in _bootstrap._exe_neighbor_paths.
     if exist "%ROOT%license\sealed_constants.bin" copy /y "%ROOT%license\sealed_constants.bin" "%RELEASE%\runtime\helper\" >nul
     if exist "%ROOT%license\wbox_tables.bin"      copy /y "%ROOT%license\wbox_tables.bin"      "%RELEASE%\runtime\helper\" >nul
+)
+
+if not exist "%RELEASE%\runtime\helper\SaoUiHelper.exe" (
+    echo ERROR: Helper executable was not assembled into the runtime layout
+    goto :fail
 )
 
 if exist "%RELEASE%\runtime\web" (

@@ -1,5 +1,10 @@
 # SAO Auto Agent Instructions
 
+## Python Environment
+- Use `E:\Py\python.exe` for all Python scripts, tools, checks, and tests in this repository.
+- Install Python packages with `E:\Py\python.exe -m pip ...` so they are installed for the correct interpreter.
+- Do not substitute another Python installation unless the user explicitly requests it.
+
 ## Scope
 
 - This file applies to `sao_auto` only.

@@ -4,6 +4,9 @@ from __future__ import annotations
 import os as _os
 import sys as _sys
 import types as _types
+import importlib.abc as _importlib_abc
+import importlib.machinery as _importlib_machinery
+import importlib.util as _importlib_util
 
 # ── rt_io / rt_io_proxy 分流 ──────────────────────────────────
 # 契约:
@@ -23,6 +26,69 @@ _IS_HELPER = _os.environ.get("SAO_RT_IO_HELPER") == "1"
 _IS_HELPER_BOOTSTRAP = (
     _IS_HELPER and _os.environ.get("SAO_RT_IO_BOOTSTRAP") == "1"
 )
+_IS_FROZEN = bool(
+    getattr(_sys, "frozen", False)
+    or _os.environ.get("SAO_RT_IO_FROZEN") == "1"
+)
+
+
+def _load_source_submodule(module_basename: str):
+    # Development binaries can leave a stale adjacent .pyd behind. Load the
+    # source proxy explicitly so the main process always follows this tree.
+    module_name = __name__ + "." + module_basename
+    source_path = _os.path.join(
+        _os.path.dirname(_os.path.abspath(__file__)), module_basename + ".py"
+    )
+    spec = _importlib_util.spec_from_file_location(module_name, source_path)
+    if spec is None or spec.loader is None:
+        raise ImportError(f"cannot load source module {module_name}")
+    package = _sys.modules[__name__]
+    stale = _sys.modules.pop(module_name, None)
+    if stale is not None and getattr(package, module_basename, None) is stale:
+        delattr(package, module_basename)
+    module = _importlib_util.module_from_spec(spec)
+    _sys.modules[module_name] = module
+    setattr(package, module_basename, module)
+    try:
+        spec.loader.exec_module(module)
+    except Exception:
+        _sys.modules.pop(module_name, None)
+        if getattr(package, module_basename, None) is module:
+            delattr(package, module_basename)
+        raise
+    return module
+
+
+class _DevHelperRtIoSourceFinder(_importlib_abc.MetaPathFinder):
+    # After authenticated bootstrap, source helpers must not resolve rt_io.pyd.
+    def find_spec(self, fullname, path=None, target=None):
+        if (
+            fullname != __name__ + ".rt_io"
+            or _IS_FROZEN
+            or not _IS_HELPER
+            or _os.environ.get("SAO_RT_IO_BOOTSTRAP") == "1"
+        ):
+            return None
+        try:
+            from . import _rt_atomic_globals as _rag
+            version = int(_os.environ.get("SAO_RT_IO_PROTOCOL_VERSION", "0"))
+            if not _rag.bootstrap_ready(version):
+                raise RuntimeError(
+                    "refuse rt_io source import before helper authentication"
+                )
+        except ValueError as exc:
+            raise RuntimeError("invalid helper protocol version") from exc
+        source_path = _os.path.join(
+            _os.path.dirname(_os.path.abspath(__file__)), "rt_io.py"
+        )
+        loader = _importlib_machinery.SourceFileLoader(fullname, source_path)
+        return _importlib_util.spec_from_file_location(
+            fullname, source_path, loader=loader
+        )
+
+
+if _IS_HELPER and not _IS_FROZEN:
+    _sys.meta_path.insert(0, _DevHelperRtIoSourceFinder())
 
 if _IS_HELPER_BOOTSTRAP:
     class _BootstrapBlockedRtIo(_types.ModuleType):
@@ -52,7 +118,10 @@ else:
             )
         from . import rt_io as _rt  # noqa: F401
     else:
-        from . import rt_io_proxy as _rt  # noqa: F401
+        if _IS_FROZEN:
+            from . import rt_io_proxy as _rt  # noqa: F401
+        else:
+            _rt = _load_source_submodule("rt_io_proxy")
         _sys.modules[__name__ + ".rt_io"] = _rt
 
     # Re-export the Cython facade so ``from mem_probe import cy_memscan`` works
