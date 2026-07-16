@@ -1,11 +1,11 @@
-# ── Python cache ──────────────────────────────────
+# 鈹€鈹€ Python cache 鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€
 __pycache__/
 *.py[cod]
 *.pyd
 *.pyo
 plan_*
 
-# ── Cython source (only .pyd binaries shipped) ───
+# 鈹€鈹€ Cython source (only .pyd binaries shipped) 鈹€鈹€鈹€
 python/_sao_cy_*.pyx
 python/mem_probe/_sao_cy_*.pyx
 python/mem_probe/rt_io.py
@@ -14,19 +14,19 @@ python/mem_probe/_rt_io_helper_entry.py
 python/mem_probe/rt_io.cp311-win_amd64.pyd*
 python/plugins/star_resonance_plugin/cython/_sao_cy_*.pyx
 
-# ── User data (excluded from repo) ────────────────
+# 鈹€鈹€ User data (excluded from repo) 鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€
 player_profile.json
 player_cache.json
 settings.json
 settings.json.corrupt*
 
-# ── Debug / log files ─────────────────────────────
+# 鈹€鈹€ Debug / log files 鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€
 packet_debug.jsonl
 *.log
 *.jsonl
 exports/
 
-# ── Local live name-table diagnostics (regenerated on demand) ───────
+# 鈹€鈹€ Local live name-table diagnostics (regenerated on demand) 鈹€鈹€鈹€鈹€鈹€鈹€鈹€
 python/assets/name_tables/live_*.json
 python/assets/name_tables/live_name_table_scan_report_*.md
 python/assets/name_tables/_backup_live_scan_*/
@@ -39,12 +39,12 @@ python/assets/name_tables/boss_skill_observations.local.json
 !python/assets/name_tables/boss_mechanic.json
 !python/assets/name_tables/buff.json
 
-# ── Build / dist ──────────────────────────────────
+# 鈹€鈹€ Build / dist 鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€
 dist/
 build/
 *.exe
 
-# ── Test files: never committed, local only ──────
+# 鈹€鈹€ Test files: never committed, local only 鈹€鈹€鈹€鈹€鈹€鈹€
 # All selftest/test harnesses are local-only dev artifacts.
 tools/
 */*_selftest*.py
@@ -53,18 +53,18 @@ tools/
 */test_*.py
 */smoke_test_*.py
 
-# ── Roslyn C# compiler (downloaded, rebuilt by fetch_roslyn) ──
+# 鈹€鈹€ Roslyn C# compiler (downloaded, rebuilt by fetch_roslyn) 鈹€鈹€
 python/act_platform/scripting/roslyn/
 
-# ── .NET build artifacts ──────────────────────────
+# 鈹€鈹€ .NET build artifacts 鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€
 **/bin/
 **/obj/
 
-# ── Packaging specs (tracked) ─────────────────────
+# 鈹€鈹€ Packaging specs (tracked) 鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€
 # XiaoACTUI.spec and server/AutoKeyServer.spec are tracked
 # build.ps1 is tracked
 
-# ── IDE / OS ──────────────────────────────────────
+# 鈹€鈹€ IDE / OS 鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€
 .vscode/handoff/
 .vscode/
 .idea/
@@ -74,24 +74,24 @@ python/server/data/
 python/server/*.db
 temp/
 
-# ── Dev publish tool (local only, contains API key) ───
+# 鈹€鈹€ Dev publish tool (local only, contains API key) 鈹€鈹€鈹€
 dev_publish.py
 dev_publish.bat
 dev_publish_gui.py
 dev_publish_config.json
 python/update_host/update_host_config.json
 
-# ── Updater runtime artifacts ─────────────────────
+# 鈹€鈹€ Updater runtime artifacts 鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€
 update_state.json
 staging/
 backup/
 update_apply.log
 python/update_host/releases/
 
-# ── mem_probe production: keep code, exclude per-user anchor data ───
+# 鈹€鈹€ mem_probe production: keep code, exclude per-user anchor data 鈹€鈹€鈹€
 python/mem_probe/anchors.json
 
-# —— Local only, not part of the repo ─────────────────────────────────
+# 鈥斺€?Local only, not part of the repo 鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€
 drivers/
 locale/
 driver_*.py
@@ -104,7 +104,7 @@ _encrypt_drivers.py
 _build_driver.py
 _convert_docstrings.py
 
-# —— License system (local only, never commit) ────────────────────────
+# 鈥斺€?License system (local only, never commit) 鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€
 python/license/
 python/license_server/
 license_tool.py
@@ -112,7 +112,7 @@ license_tool.py
 *.license
 license.db
 
-# —— Plugin native protection (encryption/anti-tamper, local only, never commit) ──
+# 鈥斺€?Plugin native protection (encryption/anti-tamper, local only, never commit) 鈹€鈹€
 python/act_platform/protect/
 python/update_host/build_service.py
 python/update_host/toolchain_bootstrap.py
@@ -120,27 +120,54 @@ python/update_host/native_crypto.py
 *.pyd.sao
 *.native_cache/
 
-# —— Platform source vault (仓库静态加密保护，见 pyx_vault.py) ──────────────
-# 明文源码只留本地磁盘，进 git 的是同目录下的 *.vault 加密件；密钥不进仓库。
-python/.vault/
-python/mem_probe/_sao_cy_memscan.pyx
+# 鈥斺€?Platform source vault (浠撳簱闈欐€佸姞瀵嗕繚鎶わ紝瑙?pyx_vault.py) 鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€
+# 鏄庢枃婧愮爜鍙暀鏈湴纾佺洏锛岃繘 git 鐨勬槸鍚岀洰褰曚笅鐨?*.vault 鍔犲瘑浠讹紱瀵嗛挜涓嶈繘浠撳簱銆?python/.vault/
+# ────────────────────────────────────────────────────────────────
+# ── SENSITIVE: protection / anti-cheat / hardening source ──────
+# ── Local only, NEVER commit. Mirrors C/ internal-only boundary.─
+# ────────────────────────────────────────────────────────────────
 
-# ── AI Editor (user conversation history, local only) ──
+# ── Native launcher: VMP/TPM/anti-debug/HWID/crypto/wbox (保护核心) ──
+python/launcher/
+python/build_launcher.bat
+python/build_vmp.py
+python/launcher/linkstart.vmp
+
+# ── mem_probe protection/anti-cheat layer ──
+python/mem_probe/_rt_atomic_globals.py
+python/mem_probe/_sao_cy_memscan.pyx.vault
+python/mem_probe/anti_capture.py
+python/mem_probe/stealth/
+# Engine SDK dumper adapters (IL2CPP/Mono/UE/Native) — reverse-engineering core
+python/mem_probe/engine/
+
+# ── Source vault / sealed constants / signing tools ──
+python/pyx_vault.py
+python/updater/update_manifest.py
+python/tools/seal_constants.py
+python/tools/test_license_server_protocol_v2.py
+python/tools/test_sealed_pipeline.py
+
+# ── rt-io testkit (physical-memory / GDI / transport primitives) ──
+tools/rt_io_testkit.py
+tools/rt_io_testkit_selftest.pypython/mem_probe/_sao_cy_memscan.pyx
+
+# 鈹€鈹€ AI Editor (user conversation history, local only) 鈹€鈹€
 python/ai_editor_history/
 python/.sao/chat_history/
 .vscode/handoff/
 
-# ── AI Editor installed extensions (machine-specific, can be 100s of MB) ──
+# 鈹€鈹€ AI Editor installed extensions (machine-specific, can be 100s of MB) 鈹€鈹€
 python/ai_editor_extensions/
 
-# ── AI Editor real-VSIX smoke test output (machine-specific, regenerated) ──
+# 鈹€鈹€ AI Editor real-VSIX smoke test output (machine-specific, regenerated) 鈹€鈹€
 python/ai_editor/real_extension_smoke_results.json
 
 
-# ── Embedded Node.js runtime (downloaded binary, ~70 MB) ──
+# 鈹€鈹€ Embedded Node.js runtime (downloaded binary, ~70 MB) 鈹€鈹€
 python/runtime/node/node.exe
 
-# ── Misc ───────────────────────────────────────────
+# 鈹€鈹€ Misc 鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€
 .github/
 out/
 _cache/
