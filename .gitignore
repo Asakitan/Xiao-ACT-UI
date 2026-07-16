@@ -47,11 +47,13 @@ build/
 # 鈹€鈹€ Test files: never committed, local only 鈹€鈹€鈹€鈹€鈹€鈹€
 # All selftest/test harnesses are local-only dev artifacts.
 tools/
-*/*_selftest*.py
-*/*_selftest*.js
-*/selftest*.py
-*/test_*.py
-*/smoke_test_*.py
+**/*_selftest*.py
+**/*_selftest*.js
+**/selftest*.py
+**/test_*.py
+**/smoke_test_*.py
+# 例外：游戏数据表里的 test_skill.json 是真实技能数据，不是测试代码
+!python/plugins/star_resonance_plugin/assets/name_tables/test_skill.json
 
 # 鈹€鈹€ Roslyn C# compiler (downloaded, rebuilt by fetch_roslyn) 鈹€鈹€
 python/act_platform/scripting/roslyn/
