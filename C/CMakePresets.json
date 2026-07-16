@@ -1,0 +1,123 @@
+{
+  "version": 6,
+  "cmakeMinimumRequired": { "major": 3, "minor": 28, "patch": 0 },
+  "configurePresets": [
+    {
+      "name": "windows-base",
+      "hidden": true,
+      "generator": "Visual Studio 17 2022",
+      "architecture": { "value": "x64", "strategy": "set" },
+      "binaryDir": "${sourceDir}/build/${presetName}",
+      "environment": {
+        "SAO_BUILD_ROOT": "${sourceDir}"
+      }
+    },
+    {
+      "name": "windows-debug",
+      "displayName": "Windows x64 Debug",
+      "description": "Full-symbol debug build with every baseline subsystem and CTest suite enabled.",
+      "inherits": "windows-base",
+      "cacheVariables": {
+        "SAO_HARDENED_BUILD": "OFF",
+        "SAO_BUILD_TESTS": "ON",
+        "BUILD_TESTING": "ON"
+      }
+    },
+    {
+      "name": "windows-release",
+      "displayName": "Windows x64 Release",
+      "description": "Release build (RelWithDebInfo) with optimizations enabled.",
+      "inherits": "windows-base",
+      "cacheVariables": {
+        "SAO_HARDENED_BUILD": "OFF"
+      }
+    },
+    {
+      "name": "windows-hardened",
+      "displayName": "Windows x64 Hardened Release",
+      "description": "Ship-ready hardened build: LTO, CFG/CET when supported, reproducible linking, high-entropy ASLR, and DEP.",
+      "inherits": "windows-base",
+      "cacheVariables": {
+        "SAO_HARDENED_BUILD": "ON"
+      }
+    },
+    {
+      "name": "windows-tests",
+      "displayName": "Windows x64 Tests",
+      "description": "Isolated Debug test build with CTest and SAO subsystem tests enabled.",
+      "inherits": "windows-base",
+      "cacheVariables": {
+        "SAO_HARDENED_BUILD": "OFF",
+        "SAO_BUILD_TESTS": "ON",
+        "BUILD_TESTING": "ON"
+      }
+    },
+    {
+      "name": "windows-ninja-debug",
+      "displayName": "Windows x64 Debug (Ninja)",
+      "description": "Ninja-based iterative debug loop.  Requires the VS2022 x64 dev command prompt.",
+      "inherits": "windows-base",
+      "generator": "Ninja",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug",
+        "SAO_HARDENED_BUILD": "OFF"
+      }
+    }
+  ],
+  "buildPresets": [
+    {
+      "name": "windows-debug",
+      "configurePreset": "windows-debug",
+      "configuration": "Debug"
+    },
+    {
+      "name": "windows-release",
+      "configurePreset": "windows-release",
+      "configuration": "RelWithDebInfo"
+    },
+    {
+      "name": "windows-hardened",
+      "configurePreset": "windows-hardened",
+      "configuration": "Release"
+    },
+    {
+      "name": "windows-tests",
+      "configurePreset": "windows-tests",
+      "configuration": "Debug"
+    },
+    {
+      "name": "windows-ninja-debug",
+      "configurePreset": "windows-ninja-debug"
+    }
+  ],
+  "testPresets": [
+    {
+      "name": "windows-debug",
+      "displayName": "Windows x64 Debug Tests",
+      "description": "Runs tests built by the tests-on windows-debug configure and build presets.",
+      "configurePreset": "windows-debug",
+      "configuration": "Debug",
+      "output": { "outputOnFailure": true },
+      "execution": { "stopOnFailure": false }
+    },
+    {
+      "name": "windows-release",
+      "configurePreset": "windows-release",
+      "configuration": "RelWithDebInfo",
+      "output": { "outputOnFailure": true }
+    },
+    {
+      "name": "windows-hardened",
+      "configurePreset": "windows-hardened",
+      "configuration": "Release",
+      "output": { "outputOnFailure": true }
+    },
+    {
+      "name": "windows-tests",
+      "configurePreset": "windows-tests",
+      "configuration": "Debug",
+      "output": { "outputOnFailure": true },
+      "execution": { "stopOnFailure": false }
+    }
+  ]
+}

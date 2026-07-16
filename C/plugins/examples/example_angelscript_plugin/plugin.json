@@ -1,0 +1,27 @@
+{
+  "id": "example_angelscript",
+  "name": "AngelScript Plugin Example",
+  "version": "1.0.0",
+  "entry": "plugin.as",
+  "language": "angelscript",
+  "description": "AngelScript 插件示例。C 风格语法, 真 asIScriptEngine 嵌入。",
+  "enabled": false,
+  "capabilities": [
+    "plugin_manager",
+    {"id": "ui_panels", "title": "AS Demo", "actions": ["greet", "count"]}
+  ],
+  "permissions": [],
+  "settings_schema": {
+    "greeting": {"type": "string", "default": "你好", "description": "问候语"}
+  },
+  "sao_menu": {
+    "category": "示例",
+    "icon": "🅰",
+    "action_id": "script.overlay.set_enabled",
+    "default_enabled": false
+  },
+  "locales": {
+    "zh-CN": {"name": "AngelScript 示例插件"},
+    "en-US": {"name": "AngelScript Example Plugin"}
+  }
+}

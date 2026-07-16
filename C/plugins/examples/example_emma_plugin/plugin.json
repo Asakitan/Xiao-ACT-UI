@@ -1,0 +1,28 @@
+{
+  "id": "example_emma",
+  "name": "Emma Plugin Example",
+  "version": "1.0.0",
+  "entry": "plugin.emma",
+  "language": "emma",
+  "description": "Emma 插件示例。零依赖内置脚本语言, 语法类 Python, 可调用全部平台 API。",
+  "enabled": false,
+  "capabilities": [
+    "plugin_manager",
+    {"id": "ui_panels", "title": "Emma Demo", "actions": ["greet", "count", "timer_toggle"]}
+  ],
+  "permissions": [],
+  "settings_schema": {
+    "greeting": {"type": "string", "default": "你好", "description": "问候语"},
+    "auto_count": {"type": "boolean", "default": false, "description": "自动计数"}
+  },
+  "sao_menu": {
+    "category": "示例",
+    "icon": "💠",
+    "action_id": "script.overlay.set_enabled",
+    "default_enabled": false
+  },
+  "locales": {
+    "zh-CN": {"name": "Emma 示例插件"},
+    "en-US": {"name": "Emma Example Plugin"}
+  }
+}

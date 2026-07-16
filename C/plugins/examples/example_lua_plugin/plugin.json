@@ -1,0 +1,27 @@
+{
+  "id": "example_lua",
+  "name": "Lua Plugin Example",
+  "version": "1.0.0",
+  "entry": "plugin.lua",
+  "language": "lua",
+  "description": "Lua 插件示例。真 Lua 5.4 C API 嵌入, 免 lupa 双跳。",
+  "enabled": false,
+  "capabilities": [
+    "plugin_manager",
+    {"id": "ui_panels", "title": "Lua Demo", "actions": ["greet", "count"]}
+  ],
+  "permissions": [],
+  "settings_schema": {
+    "greeting": {"type": "string", "default": "你好", "description": "问候语"}
+  },
+  "sao_menu": {
+    "category": "示例",
+    "icon": "🌙",
+    "action_id": "script.overlay.set_enabled",
+    "default_enabled": false
+  },
+  "locales": {
+    "zh-CN": {"name": "Lua 示例插件"},
+    "en-US": {"name": "Lua Example Plugin"}
+  }
+}

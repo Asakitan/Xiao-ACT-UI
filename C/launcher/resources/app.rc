@@ -1,0 +1,48 @@
+// SAO Auto — launcher/resources/app.rc
+//
+// Version info block + application manifest + icon.  RC compiler picks
+// this up automatically when the file is listed in CMakeLists.txt sources.
+
+#include <winres.h>
+#include "version.h"
+
+// ---- Icon ---------------------------------------------------------------
+// CMake supplies SAO_LAUNCHER_ICON_PATH only when the real project icon is
+// present; a skeleton checkout then builds without fabricating a binary.
+#ifdef SAO_LAUNCHER_ICON_PATH
+1 ICON SAO_LAUNCHER_ICON_PATH
+#endif
+
+// ---- Application manifest ----------------------------------------------
+// RT_MANIFEST id 1 == CREATEPROCESS_MANIFEST_RESOURCE_ID.
+1 24 "..\\manifest.xml"
+
+// ---- VERSIONINFO -------------------------------------------------------
+VS_VERSION_INFO VERSIONINFO
+    FILEVERSION    SAO_VER_FILE
+    PRODUCTVERSION SAO_VER_PRODUCT
+    FILEFLAGSMASK  0x3FL
+    FILEFLAGS      0x0L
+    FILEOS         VOS_NT_WINDOWS32
+    FILETYPE       VFT_APP
+    FILESUBTYPE    0x0L
+BEGIN
+    BLOCK "StringFileInfo"
+    BEGIN
+        BLOCK "040904E4"        // en-US, Windows Multilingual
+        BEGIN
+            VALUE "CompanyName",      SAO_VER_COMPANY      "\0"
+            VALUE "FileDescription",  SAO_VER_DESC         "\0"
+            VALUE "FileVersion",      SAO_VER_STRING       "\0"
+            VALUE "InternalName",     SAO_VER_INTERNAL     "\0"
+            VALUE "LegalCopyright",   SAO_VER_COPYRIGHT    "\0"
+            VALUE "OriginalFilename", SAO_VER_ORIGINAL     "\0"
+            VALUE "ProductName",      SAO_VER_PRODUCT_NM   "\0"
+            VALUE "ProductVersion",   SAO_VER_STRING       "\0"
+        END
+    END
+    BLOCK "VarFileInfo"
+    BEGIN
+        VALUE "Translation", 0x0409, 0x04E4
+    END
+END

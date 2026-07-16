@@ -1,0 +1,27 @@
+{
+  "id": "example_csharp",
+  "name": "C# Plugin Example",
+  "version": "1.0.0",
+  "entry": "plugin.cs",
+  "language": "csharp",
+  "description": "C# 插件示例。hostfxr 嵌入 .NET 8 runtime, Roslyn 编译 .cs 到 dll。免用户装 SDK。",
+  "enabled": false,
+  "capabilities": [
+    "plugin_manager",
+    {"id": "ui_panels", "title": "C# Demo", "actions": ["greet", "count"]}
+  ],
+  "permissions": [],
+  "settings_schema": {
+    "greeting": {"type": "string", "default": "你好", "description": "问候语"}
+  },
+  "sao_menu": {
+    "category": "示例",
+    "icon": "🔷",
+    "action_id": "script.overlay.set_enabled",
+    "default_enabled": false
+  },
+  "locales": {
+    "zh-CN": {"name": "C# 示例插件"},
+    "en-US": {"name": "C# Example Plugin"}
+  }
+}

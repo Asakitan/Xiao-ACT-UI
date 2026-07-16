@@ -1,0 +1,5 @@
+add_executable(test_plugins_sdk_binding test_binding.cpp)
+target_link_libraries(test_plugins_sdk_binding PRIVATE sao_plugins_sdk_binding)
+target_compile_features(test_plugins_sdk_binding PRIVATE cxx_std_17)
+target_compile_definitions(test_plugins_sdk_binding PRIVATE SAO_PLUGINS_BUILDING_DLL)
+add_test(NAME plugins_sdk_binding_smoke COMMAND test_plugins_sdk_binding)

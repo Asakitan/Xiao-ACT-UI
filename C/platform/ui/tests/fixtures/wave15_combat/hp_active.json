@@ -1,0 +1,53 @@
+{
+  "alpha_bbox": [
+    0,
+    6,
+    1117,
+    115
+  ],
+  "bytes": 536160,
+  "format_strings": {
+    "hp": "123,456/200,000",
+    "sta": "85%"
+  },
+  "frame": "hp_active",
+  "height": 120,
+  "layer_signature": "7294ceda82d6279a1c01d90888ff07d16a88204b9d4ef9985e4a7c22848674a4",
+  "layers": [
+    {
+      "height": 120,
+      "id": "star-resonance-hp-active",
+      "source": "hp.compose_frame",
+      "visible": true,
+      "width": 1117,
+      "x": 5,
+      "y": 17,
+      "z_order": 60
+    }
+  ],
+  "number_format_boundaries": [
+    {
+      "id": "hp_three_digits",
+      "input": 999,
+      "output": "999"
+    },
+    {
+      "id": "hp_four_digits",
+      "input": 1000,
+      "output": "1,000"
+    },
+    {
+      "id": "hp_millions",
+      "input": 1234567,
+      "output": "1,234,567"
+    }
+  ],
+  "panel": "hp",
+  "pixel_format": "premultiplied-bgra",
+  "render_path": "PIL.compose_frame",
+  "schema": "sao.ui.python-authority.wave15.combat.v1",
+  "sha256": "01c62b7f2a0ecc5bae105e17fc1849c803c430c5d03ed9e629388303cf96aef5",
+  "state": "active",
+  "stride": 4468,
+  "width": 1117
+}

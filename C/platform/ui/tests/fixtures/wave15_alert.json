@@ -1,0 +1,47 @@
+{
+  "alpha_bbox": {
+    "height": 274,
+    "width": 472,
+    "x": 0,
+    "y": 0
+  },
+  "authority": "python-alert-overlay",
+  "bytes": 517312,
+  "event_order": [
+    {
+      "event": "alert.render_frame",
+      "title": "MECHANIC ALERT"
+    },
+    {
+      "event": "compositor.create_layer",
+      "layer": "alert",
+      "z_order": 20
+    },
+    {
+      "event": "compositor.update_bgra",
+      "layer": "alert"
+    }
+  ],
+  "format": "premultiplied-bgra",
+  "geometry": {
+    "canvas_height": 274,
+    "canvas_width": 472,
+    "content_height": 194,
+    "content_width": 392,
+    "shadow_padding": 40
+  },
+  "height": 274,
+  "layers": [
+    {
+      "alpha": 1.0,
+      "name": "alert",
+      "x": 8,
+      "y": 6,
+      "z_order": 20
+    }
+  ],
+  "sha256": "04d42bf1187ab13637e366b4918bd017e7d48218aac725742915aab994164f34",
+  "source": "plugins.star_resonance_plugin.panels.sao_gui_alert.AlertOverlay._render_frame",
+  "stride": 1888,
+  "width": 472
+}

@@ -1,0 +1,55 @@
+{
+  "alpha_bbox": {
+    "height": 130,
+    "width": 461,
+    "x": 42,
+    "y": 34
+  },
+  "authority": "python-skillfx-caption-raster",
+  "bytes": 1440000,
+  "event_order": [
+    {
+      "event": "skillfx.draw_caption",
+      "fixed_now": 1001.0
+    },
+    {
+      "event": "compositor.create_layer",
+      "layer": "skillfx_caption",
+      "z_order": 30
+    },
+    {
+      "event": "compositor.update_bgra",
+      "layer": "skillfx_caption"
+    }
+  ],
+  "format": "premultiplied-bgra",
+  "geometry": {
+    "anchor": {
+      "x": 612.0,
+      "y": 326.0
+    },
+    "callout": {
+      "h": 128,
+      "w": 460,
+      "x": 42,
+      "y": 34
+    },
+    "fixed_now": 1001.0,
+    "viewport_height": 450,
+    "viewport_width": 800
+  },
+  "height": 450,
+  "layers": [
+    {
+      "alpha": 1.0,
+      "name": "skillfx_caption",
+      "x": 0,
+      "y": 0,
+      "z_order": 30
+    }
+  ],
+  "sha256": "a043ffeef469c8d5e9a8ea238842541b520d64266e3c638fbea8c7f762fe5224",
+  "source": "plugins.star_resonance_plugin.panels.sao_gui_skillfx.BurstReadyOverlay._draw_caption",
+  "stride": 3200,
+  "width": 800
+}

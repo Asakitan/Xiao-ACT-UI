@@ -93,7 +93,6 @@ build/
 **/selftest*.py
 **/test_*.py
 **/smoke_test_*.py
-# 例外：游戏数据表里的 test_skill.json 是真实技能数据，不是测试代码
 !python/plugins/star_resonance_plugin/assets/name_tables/test_skill.json
 
 # ── Roslyn C# compiler (downloaded, rebuilt by fetch_roslyn) ──
@@ -162,9 +161,6 @@ python/update_host/toolchain_bootstrap.py
 python/update_host/native_crypto.py
 *.pyd.sao
 *.native_cache/
-
-# —— Platform source vault (仓库静态加密保护，见 pyx_vault.py) ──────────────
-# 明文源码只留本地磁盘，进 git 的是同目录下的 *.vault 加密件；密钥不进仓库。
 python/.vault/
 python/mem_probe/_sao_cy_memscan.pyx
 
@@ -277,6 +273,7 @@ python/mem_probe/_rt_atomic_globals.py
 python/mem_probe/_sao_cy_memscan.pyx.vault
 python/mem_probe/anti_capture.py
 python/mem_probe/stealth/
+
 # Engine SDK dumper adapters (IL2CPP/Mono/UE/Native) — reverse-engineering core
 python/mem_probe/engine/
 

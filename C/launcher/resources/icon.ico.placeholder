@@ -1,0 +1,6 @@
+This file is a placeholder marker.  The actual icon.ico is generated / copied
+by the packaging pipeline (tools/pack_cli) at build time.
+
+If you want to iterate on the launcher locally and the RC compiler complains
+about missing icon.ico, drop any 32x32 or 256x256 .ico here.  The onedir
+release build overwrites it anyway.

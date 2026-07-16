@@ -1,0 +1,48 @@
+{
+  "alpha_bbox": {
+    "height": 108,
+    "width": 236,
+    "x": 0,
+    "y": 0
+  },
+  "authority": "python-buffmon-base-compose",
+  "bytes": 101952,
+  "event_order": [
+    {
+      "event": "buffmon.render_base",
+      "row_count": 2
+    },
+    {
+      "event": "compositor.create_layer",
+      "layer": "buffmon",
+      "z_order": 10
+    },
+    {
+      "event": "compositor.update_bgra",
+      "layer": "buffmon"
+    }
+  ],
+  "format": "premultiplied-bgra",
+  "geometry": {
+    "panel_height": 92,
+    "panel_width": 220,
+    "row_count": 2,
+    "row_gap": 4,
+    "row_height": 24,
+    "shadow_padding": 8
+  },
+  "height": 108,
+  "layers": [
+    {
+      "alpha": 1.0,
+      "name": "buffmon",
+      "x": 3,
+      "y": 14,
+      "z_order": 10
+    }
+  ],
+  "sha256": "643f646d1ddf274cd3b212ed36ae64a926c67260fbee439ff9ab2b46cf0f47ef",
+  "source": "plugins.star_resonance_plugin.panels.sao_gui_buffmon._BuffPanelBase._render_base",
+  "stride": 944,
+  "width": 236
+}

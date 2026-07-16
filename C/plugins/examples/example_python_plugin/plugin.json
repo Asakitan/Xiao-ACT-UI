@@ -1,0 +1,27 @@
+{
+  "id": "example_python",
+  "name": "Python Plugin Example",
+  "version": "1.0.0",
+  "entry": "plugin.py",
+  "language": "python",
+  "description": "Python 插件示例。CPython 3.11 嵌入宿主, 手写 PyModuleDef SDK, 老 Python 平台插件无缝迁移。",
+  "enabled": false,
+  "capabilities": [
+    "plugin_manager",
+    {"id": "ui_panels", "title": "Python Demo", "actions": ["greet", "count"]}
+  ],
+  "permissions": [],
+  "settings_schema": {
+    "greeting": {"type": "string", "default": "你好", "description": "问候语"}
+  },
+  "sao_menu": {
+    "category": "示例",
+    "icon": "🐍",
+    "action_id": "script.overlay.set_enabled",
+    "default_enabled": false
+  },
+  "locales": {
+    "zh-CN": {"name": "Python 示例插件"},
+    "en-US": {"name": "Python Example Plugin"}
+  }
+}

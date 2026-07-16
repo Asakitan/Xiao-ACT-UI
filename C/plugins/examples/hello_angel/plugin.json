@@ -1,0 +1,13 @@
+{
+  "id": "hello_angel",
+  "name": "Hello AngelScript",
+  "version": "1.0.0",
+  "entry": "main.as",
+  "language": "angelscript",
+  "description": "Wave 8 AngelScript host smoke plugin — 调 log_info / register_ui_panel / register_hotkey 三条 SDK API, 且实装 on_load / on_tick / on_unload 完整生命周期.",
+  "enabled": false,
+  "capabilities": [
+    {"id": "ui_panels", "title": "AS Hello", "actions": ["greet"]}
+  ],
+  "permissions": []
+}

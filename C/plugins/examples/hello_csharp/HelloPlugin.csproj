@@ -1,0 +1,20 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <AssemblyName>HelloPlugin</AssemblyName>
+    <RootNamespace>SaoAuto.Plugins.HelloCsharp</RootNamespace>
+    <ImplicitUsings>disable</ImplicitUsings>
+    <Nullable>disable</Nullable>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <!-- Wave 8 first slice: unmanaged callers only, no runtime IL emission -->
+    <PublishAot>false</PublishAot>
+    <!-- 输出到 prebuilt/, 让 plugin.json entry 指到 prebuilt/HelloPlugin.dll -->
+    <OutputPath>prebuilt\</OutputPath>
+    <AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>
+    <AppendRuntimeIdentifierToOutputPath>false</AppendRuntimeIdentifierToOutputPath>
+    <GenerateAssemblyInfo>false</GenerateAssemblyInfo>
+    <GenerateTargetFrameworkAttribute>false</GenerateTargetFrameworkAttribute>
+    <!-- runtimeconfig 用 csproj 自动生成, 我们同时 checkin 手写副本兜底 -->
+    <GenerateRuntimeConfigurationFiles>true</GenerateRuntimeConfigurationFiles>
+  </PropertyGroup>
+</Project>

@@ -1,0 +1,182 @@
+# ── Build outputs ────────────────────────────────────
+build/
+out/
+bin/
+lib/
+/Testing/
+
+# ── Internal-only boundary (second-layer, directory-anchored) ──
+# Public client/SDK sources remain visible under /platform/{ui,core,engine,
+# net,sdk}/, /launcher/ and /plugins/.
+/security/
+/shell/
+/license/
+/server/
+/platform/rt_io/
+/tools/
+/tests/
+/PLAN.md
+/STATUS.md
+/README.md
+/AGENTS.md
+/docs/
+
+# ── Visual Studio / CMake tooling ────────────────────
+.vs/
+CMakeUserPresets.json
+CMakeCache.txt
+CMakeFiles/
+*.dir/
+
+# ── vcpkg (installed packages; manifest itself IS tracked) ──
+vcpkg_installed/
+
+# ── Compiler / linker artifacts ──────────────────────
+*.obj
+*.pdb
+*.ilk
+*.exp
+*.dll
+*.lib
+*.exe
+*.pyd
+
+# ── Transient editor / patch artifacts ──────────────
+*.tmp
+*.temp
+*.bak
+*.orig
+*.rej
+
+# ── Crash dumps / diagnostic traces ─────────────────
+*.dmp
+*.mdmp
+*.minidump
+*.etl
+*.wer
+*.crash
+
+# ── Coverage / profiling outputs ────────────────────
+/coverage/
+/htmlcov/
+*.gcda
+*.gcno
+*.gcov
+*.profraw
+*.profdata
+*.coverage
+*.coveragexml
+*.lcov
+lcov.info
+coverage.xml
+gmon.out
+*.vsp
+*.vspx
+*.diagsession
+
+# ── Editor ───────────────────────────────────────────
+*.user
+.idea/
+
+# ── Legacy / archived skeleton (do not use, do not commit) ──
+_legacy_pybridge/
+_legacy_*/
+
+# ── SENSITIVE: license client + server (local only, never commit) ──
+license/client/private/
+license/server/
+license/**/keys/
+license/**/*.pem
+license/**/*.key
+license/**/*.crt
+license/**/*.p12
+license/**/*.pfx
+
+# ── SENSITIVE: dynamic crypter / shell (local only, never commit) ──
+shell/crypter/private/
+shell/protocol/private/
+shell/packer/private/
+shell/**/keys/
+shell/**/*.bin.enc
+shell/**/*.dat.enc
+
+# ── SENSITIVE: shellcode + anti-cheat bypass payloads (local only, never commit) ──
+security/shellcode/payloads/
+security/shellcode/private/
+security/shellcode/**/*.bin
+security/shellcode/**/*.raw
+security/anti_cheat/private/
+security/anti_cheat/**/*.sig
+security/anti_cheat/**/*.dump
+security/anti_debug/private/
+security/anti_dump/private/
+security/obfuscation/private/
+security/crypto/private/
+security/crypto/**/*.key
+security/loader/private/
+
+# ── SENSITIVE: cloud server private code (freetier is committed, private is not) ──
+server/private/
+server/**/private/
+server/**/keys/
+server/**/*.pem
+server/**/*.env
+server/**/db/
+server/**/*.db
+
+# ── Driver load / kernel path artifacts ──────────────
+security/driver_loader/signed/
+security/driver_loader/**/*.sys
+security/driver_loader/**/*.cat
+
+# ── Generated shellcode blobs / obfuscated intermediates ──
+*.shellcode.h
+*.obf.cpp
+*.obf.hpp
+
+# ── Session-local memory anchor / process-sensitive dumps ──
+*.anchor.json
+*.session.json
+platform/core/live_addrs.json
+
+# ── Runtime state (device fingerprints, tokens) ──────
+runtime_state/
+platform/core/machine_id.dat
+launcher/token.dat
+
+# ── Local environment / credential material ─────────
+.env
+.env.*
+!.env.example
+!.env.sample
+.credentials
+.credentials.local
+.credentials.local.*
+.secrets
+.secrets.local
+.secrets.local.*
+.token
+.token.local
+.token.local.*
+credentials.local
+credentials.local.*
+secrets.local
+secrets.local.*
+token.local
+token.local.*
+*.credentials.local
+*.credentials.local.*
+*.secrets.local
+*.secrets.local.*
+*.token.local
+*.token.local.*
+
+# ── Plugin author private examples ───────────────────
+plugins/private/
+plugins/user_plugins/
+
+# ── Test / selftest artifacts (per repo AGENTS.md rule) ──
+tests/**/artifacts/
+tools/**/artifacts/
+*_selftest.cpp
+*_selftest.py
