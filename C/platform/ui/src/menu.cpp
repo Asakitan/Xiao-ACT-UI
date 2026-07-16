@@ -20,6 +20,8 @@
 //     file — they are ABI-exported so the test binary can see them,
 //     but they are not part of menu.h and therefore not part of the
 //     public plugin ABI yet.
+//   * Dynamic root items keyed by stable name plus retained child-menu
+//     registries, child-row geometry, hit testing, and activation.
 //
 // State machine (mirrors SAOPopUpMenu.play_enter_animation / close):
 //
@@ -81,6 +83,13 @@ constexpr int32_t kDefaultButtonMaxSize = 70;
 constexpr int32_t kDefaultSlotSize = 70;
 constexpr int32_t kDefaultMaxVisible = 9;
 
+// Active Python GPU child-bar authority.
+constexpr int32_t kChildColumnGap = 25;
+constexpr int32_t kChildListX = 27;
+constexpr int32_t kChildRowHeight = 44;
+constexpr int32_t kChildRowStride = 47;
+constexpr int32_t kChildTargetRowWidth = 240;
+
 // Ring defaults: outer_radius large enough that a 70-px button doesn't
 // clip the NerveGear centre (which owns a 36-px inner disc).
 constexpr int32_t kDefaultInnerRadius = 60;
@@ -121,6 +130,7 @@ struct MenuItem {
 struct ChildMenu {
     std::string parent_name;
     std::vector<MenuItem> items;
+    std::vector<int32_t> visible_widths;
 };
 
 } // namespace
@@ -358,6 +368,82 @@ int32_t cascade_hit_test(const SaoUiMenuLayout& layout, int32_t button_count, in
     return -1;
 }
 
+ChildMenu* find_child_menu_locked(sao_ui_menu_s* menu, const std::string& parent_name) {
+    const auto found = std::find_if(menu->children.begin(), menu->children.end(),
+                                    [&parent_name](const ChildMenu& child_menu) {
+                                        return child_menu.parent_name == parent_name;
+                                    });
+    return found == menu->children.end() ? nullptr : &*found;
+}
+
+const ChildMenu* find_child_menu_locked(const sao_ui_menu_s* menu, const std::string& parent_name) {
+    const auto found = std::find_if(menu->children.begin(), menu->children.end(),
+                                    [&parent_name](const ChildMenu& child_menu) {
+                                        return child_menu.parent_name == parent_name;
+                                    });
+    return found == menu->children.end() ? nullptr : &*found;
+}
+
+bool has_root_name(const std::vector<MenuItem>& items, const std::string& name) {
+    return std::any_of(items.begin(), items.end(),
+                       [&name](const MenuItem& item) { return item.name == name; });
+}
+
+int32_t find_activatable_root(const std::vector<MenuItem>& items, const std::string& name) {
+    const auto found = std::find_if(items.begin(), items.end(), [&name](const MenuItem& item) {
+        return item.name == name && item.can_activate;
+    });
+    return found == items.end() ? -1 : static_cast<int32_t>(found - items.begin());
+}
+
+int32_t find_root(const std::vector<MenuItem>& items, const std::string& name) {
+    const auto found = std::find_if(items.begin(), items.end(),
+                                    [&name](const MenuItem& item) { return item.name == name; });
+    return found == items.end() ? -1 : static_cast<int32_t>(found - items.begin());
+}
+
+bool is_child_phase(SaoUiMenuPhase phase) {
+    return phase == SAO_UI_MENU_PHASE_CHILD_OPENING || phase == SAO_UI_MENU_PHASE_CHILD_OPEN ||
+           phase == SAO_UI_MENU_PHASE_CHILD_CLOSING;
+}
+
+void close_child_phase_locked(sao_ui_menu_s* menu) {
+    if (is_child_phase(menu->phase)) {
+        menu->phase = SAO_UI_MENU_PHASE_OPEN;
+        menu->phase_elapsed_ms = 0;
+    }
+}
+
+SaoUiMenuButtonRect compute_child_rect(const SaoUiMenuLayout& layout, const ChildMenu& child_menu,
+                                       int32_t child_idx) {
+    const int32_t slot = layout.slot_size > 0 ? layout.slot_size : kDefaultSlotSize;
+    const int32_t root_left = layout.center_x - slot / 2;
+    const int32_t stored_width = child_menu.visible_widths[child_idx];
+    const int32_t visible_width = std::max(1, stored_width);
+    return {root_left + slot + kChildColumnGap + kChildListX,
+            layout.center_y + child_idx * kChildRowStride, visible_width, kChildRowHeight};
+}
+
+int32_t child_hit_test_locked(const sao_ui_menu_s* menu, int32_t px, int32_t py,
+                              int32_t* out_parent_idx) {
+    if (menu->active_idx < 0 || menu->active_idx >= static_cast<int32_t>(menu->items.size()) ||
+        !is_child_phase(menu->phase)) {
+        return -1;
+    }
+    const auto* child_menu = find_child_menu_locked(menu, menu->items[menu->active_idx].name);
+    if (child_menu == nullptr) {
+        return -1;
+    }
+    for (int32_t i = 0; i < static_cast<int32_t>(child_menu->items.size()); ++i) {
+        const auto rect = compute_child_rect(menu->layout, *child_menu, i);
+        if (px >= rect.x && px < rect.x + rect.w && py >= rect.y && py < rect.y + rect.h) {
+            *out_parent_idx = menu->active_idx;
+            return i;
+        }
+    }
+    return -1;
+}
+
 } // namespace
 
 // ---------------------------------------------------------------------------
@@ -396,22 +482,51 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_menu_set_items(sao_ui_menu_handle_t h
         return SAO_STATUS_ERR_HANDLE_INVALID;
     if (items == nullptr && item_count > 0)
         return SAO_STATUS_ERR_INVALID_ARGUMENT;
-    std::lock_guard<std::mutex> lock(handle->mtx);
-    handle->items.clear();
-    handle->children.clear();
-    handle->hover_idx = -1;
-    handle->active_idx = -1;
-    handle->items.reserve(item_count);
-    for (size_t i = 0; i < item_count; ++i) {
-        MenuItem it{};
-        it.name = items[i].name_utf8 ? items[i].name_utf8 : "";
-        it.icon = items[i].icon_utf8 ? items[i].icon_utf8 : "";
-        it.action_id = items[i].action_id;
-        it.can_activate = items[i].can_activate;
-        it.state = SAO_UI_MENU_BTN_IDLE;
-        handle->items.push_back(std::move(it));
+    try {
+        std::vector<MenuItem> replacement;
+        replacement.reserve(item_count);
+        for (size_t i = 0; i < item_count; ++i) {
+            MenuItem item{};
+            item.name = items[i].name_utf8 ? items[i].name_utf8 : "";
+            item.icon = items[i].icon_utf8 ? items[i].icon_utf8 : "";
+            item.action_id = items[i].action_id;
+            item.can_activate = items[i].can_activate;
+            replacement.push_back(std::move(item));
+        }
+
+        std::lock_guard<std::mutex> lock(handle->mtx);
+        int32_t next_active_idx = -1;
+        if (handle->active_idx >= 0 &&
+            handle->active_idx < static_cast<int32_t>(handle->items.size())) {
+            next_active_idx =
+                find_activatable_root(replacement, handle->items[handle->active_idx].name);
+        }
+        handle->children.erase(std::remove_if(handle->children.begin(), handle->children.end(),
+                                              [&replacement](const ChildMenu& child_menu) {
+                                                  return !has_root_name(replacement,
+                                                                        child_menu.parent_name);
+                                              }),
+                               handle->children.end());
+        handle->items = std::move(replacement);
+        handle->active_idx = next_active_idx;
+        handle->hover_idx = -1;
+        if (next_active_idx >= 0) {
+            handle->items[next_active_idx].state = SAO_UI_MENU_BTN_ACTIVE;
+            auto* child_menu = find_child_menu_locked(handle, handle->items[next_active_idx].name);
+            if (child_menu == nullptr || child_menu->items.empty()) {
+                close_child_phase_locked(handle);
+            } else {
+                std::fill(child_menu->visible_widths.begin(), child_menu->visible_widths.end(), 0);
+                handle->phase = SAO_UI_MENU_PHASE_CHILD_OPENING;
+                handle->phase_elapsed_ms = 0;
+            }
+        } else {
+            close_child_phase_locked(handle);
+        }
+        return SAO_STATUS_OK;
+    } catch (...) {
+        return SAO_STATUS_ERR_UNKNOWN;
     }
-    return SAO_STATUS_OK;
 }
 
 extern "C" sao_status_t SAO_UI_CALL sao_ui_menu_set_children(sao_ui_menu_handle_t handle,
@@ -424,41 +539,44 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_menu_set_children(sao_ui_menu_handle_
         return SAO_STATUS_ERR_INVALID_ARGUMENT;
     if (items == nullptr && item_count > 0)
         return SAO_STATUS_ERR_INVALID_ARGUMENT;
-    std::lock_guard<std::mutex> lock(handle->mtx);
-    // Reject if parent not registered.
-    bool found_parent = false;
-    for (const auto& it : handle->items) {
-        if (it.name == parent_name_utf8) {
-            found_parent = true;
-            break;
+    try {
+        ChildMenu replacement{};
+        replacement.parent_name = parent_name_utf8;
+        replacement.items.reserve(item_count);
+        replacement.visible_widths.assign(item_count, 0);
+        for (size_t i = 0; i < item_count; ++i) {
+            MenuItem item{};
+            item.name = items[i].name_utf8 ? items[i].name_utf8 : "";
+            item.icon = items[i].icon_utf8 ? items[i].icon_utf8 : "";
+            item.action_id = items[i].action_id;
+            item.can_activate = items[i].can_activate;
+            replacement.items.push_back(std::move(item));
         }
-    }
-    if (!found_parent)
-        return SAO_STATUS_ERR_NOT_FOUND;
-    // Replace-or-insert.
-    ChildMenu* target = nullptr;
-    for (auto& cm : handle->children) {
-        if (cm.parent_name == parent_name_utf8) {
-            target = &cm;
-            break;
+
+        std::lock_guard<std::mutex> lock(handle->mtx);
+        const int32_t parent_idx = find_root(handle->items, parent_name_utf8);
+        if (parent_idx < 0) {
+            return SAO_STATUS_ERR_NOT_FOUND;
         }
+        auto* target = find_child_menu_locked(handle, replacement.parent_name);
+        if (target == nullptr) {
+            handle->children.push_back(std::move(replacement));
+            target = &handle->children.back();
+        } else {
+            *target = std::move(replacement);
+        }
+        if (handle->active_idx == parent_idx) {
+            if (target->items.empty()) {
+                close_child_phase_locked(handle);
+            } else {
+                handle->phase = SAO_UI_MENU_PHASE_CHILD_OPENING;
+                handle->phase_elapsed_ms = 0;
+            }
+        }
+        return SAO_STATUS_OK;
+    } catch (...) {
+        return SAO_STATUS_ERR_UNKNOWN;
     }
-    if (target == nullptr) {
-        handle->children.push_back(ChildMenu{});
-        target = &handle->children.back();
-        target->parent_name = parent_name_utf8;
-    }
-    target->items.clear();
-    target->items.reserve(item_count);
-    for (size_t i = 0; i < item_count; ++i) {
-        MenuItem it{};
-        it.name = items[i].name_utf8 ? items[i].name_utf8 : "";
-        it.icon = items[i].icon_utf8 ? items[i].icon_utf8 : "";
-        it.action_id = items[i].action_id;
-        it.can_activate = items[i].can_activate;
-        target->items.push_back(std::move(it));
-    }
-    return SAO_STATUS_OK;
 }
 
 extern "C" sao_status_t SAO_UI_CALL sao_ui_menu_set_layout(sao_ui_menu_handle_t handle,
@@ -552,6 +670,15 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_menu_hit_test(sao_ui_menu_handle_t ha
     *out_menu_idx = -1;
     if (out_child_idx)
         *out_child_idx = -1;
+    int32_t child_parent_idx = -1;
+    const int32_t child_idx = child_hit_test_locked(handle, x, y, &child_parent_idx);
+    if (child_idx >= 0) {
+        *out_menu_idx = child_parent_idx;
+        if (out_child_idx != nullptr) {
+            *out_child_idx = child_idx;
+        }
+        return SAO_STATUS_OK;
+    }
     const int32_t n = static_cast<int32_t>(handle->items.size());
     if (n == 0)
         return SAO_STATUS_OK;
@@ -617,13 +744,117 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_menu_activate(sao_ui_menu_handle_t ha
         auto& it = handle->items[menu_idx];
         if (!it.can_activate)
             return SAO_STATUS_OK;
+        if (handle->active_idx >= 0 && handle->active_idx < n && handle->active_idx != menu_idx) {
+            auto& previous = handle->items[handle->active_idx];
+            if (previous.state == SAO_UI_MENU_BTN_ACTIVE) {
+                previous.state = SAO_UI_MENU_BTN_IDLE;
+            }
+        }
         handle->active_idx = menu_idx;
         it.state = SAO_UI_MENU_BTN_ACTIVE;
+        auto* child_menu = find_child_menu_locked(handle, it.name);
+        if (child_menu != nullptr && !child_menu->items.empty()) {
+            std::fill(child_menu->visible_widths.begin(), child_menu->visible_widths.end(), 0);
+            handle->phase = SAO_UI_MENU_PHASE_CHILD_OPENING;
+            handle->phase_elapsed_ms = 0;
+        } else {
+            close_child_phase_locked(handle);
+        }
         pending =
             capture_event_locked(handle, SAO_UI_MENU_EV_ITEM_ACTIVATED, menu_idx, -1, it.action_id);
     }
     dispatch_event_noexcept(pending);
     return SAO_STATUS_OK;
+}
+
+extern "C" sao_status_t SAO_UI_CALL
+sao_ui_menu_set_child_row_visible_width(sao_ui_menu_handle_t handle, int32_t parent_menu_idx,
+                                        int32_t child_idx, int32_t visible_width_px) {
+    if (handle == nullptr)
+        return SAO_STATUS_ERR_HANDLE_INVALID;
+    if (visible_width_px < 0 || visible_width_px > kChildTargetRowWidth)
+        return SAO_STATUS_ERR_INVALID_ARGUMENT;
+    try {
+        std::lock_guard<std::mutex> lock(handle->mtx);
+        if (parent_menu_idx < 0 || parent_menu_idx >= static_cast<int32_t>(handle->items.size())) {
+            return SAO_STATUS_ERR_INVALID_ARGUMENT;
+        }
+        auto* child_menu = find_child_menu_locked(handle, handle->items[parent_menu_idx].name);
+        if (child_menu == nullptr)
+            return SAO_STATUS_ERR_NOT_FOUND;
+        if (child_idx < 0 || child_idx >= static_cast<int32_t>(child_menu->items.size())) {
+            return SAO_STATUS_ERR_INVALID_ARGUMENT;
+        }
+        child_menu->visible_widths[child_idx] = visible_width_px;
+        return SAO_STATUS_OK;
+    } catch (...) {
+        return SAO_STATUS_ERR_UNKNOWN;
+    }
+}
+
+extern "C" sao_status_t SAO_UI_CALL sao_ui_menu_compute_child_layout(
+    sao_ui_menu_handle_t handle, int32_t parent_menu_idx, int32_t child_idx, int32_t* out_x,
+    int32_t* out_y, int32_t* out_w, int32_t* out_h) {
+    if (handle == nullptr)
+        return SAO_STATUS_ERR_HANDLE_INVALID;
+    if (out_x == nullptr || out_y == nullptr || out_w == nullptr || out_h == nullptr) {
+        return SAO_STATUS_ERR_INVALID_ARGUMENT;
+    }
+    try {
+        std::lock_guard<std::mutex> lock(handle->mtx);
+        if (parent_menu_idx < 0 || parent_menu_idx >= static_cast<int32_t>(handle->items.size())) {
+            return SAO_STATUS_ERR_INVALID_ARGUMENT;
+        }
+        const auto* child_menu =
+            find_child_menu_locked(handle, handle->items[parent_menu_idx].name);
+        if (child_menu == nullptr)
+            return SAO_STATUS_ERR_NOT_FOUND;
+        if (child_idx < 0 || child_idx >= static_cast<int32_t>(child_menu->items.size())) {
+            return SAO_STATUS_ERR_INVALID_ARGUMENT;
+        }
+        const auto rect = compute_child_rect(handle->layout, *child_menu, child_idx);
+        *out_x = rect.x;
+        *out_y = rect.y;
+        *out_w = rect.w;
+        *out_h = rect.h;
+        return SAO_STATUS_OK;
+    } catch (...) {
+        return SAO_STATUS_ERR_UNKNOWN;
+    }
+}
+
+extern "C" sao_status_t SAO_UI_CALL sao_ui_menu_activate_child(sao_ui_menu_handle_t handle,
+                                                               int32_t parent_menu_idx,
+                                                               int32_t child_idx) {
+    if (handle == nullptr)
+        return SAO_STATUS_ERR_HANDLE_INVALID;
+    PendingMenuEvent pending{};
+    try {
+        {
+            std::lock_guard<std::mutex> lock(handle->mtx);
+            if (parent_menu_idx < 0 ||
+                parent_menu_idx >= static_cast<int32_t>(handle->items.size()) ||
+                parent_menu_idx != handle->active_idx || !is_child_phase(handle->phase)) {
+                return SAO_STATUS_ERR_INVALID_ARGUMENT;
+            }
+            const auto* child_menu =
+                find_child_menu_locked(handle, handle->items[parent_menu_idx].name);
+            if (child_menu == nullptr)
+                return SAO_STATUS_ERR_NOT_FOUND;
+            if (child_idx < 0 || child_idx >= static_cast<int32_t>(child_menu->items.size())) {
+                return SAO_STATUS_ERR_INVALID_ARGUMENT;
+            }
+            const auto& child = child_menu->items[child_idx];
+            if (!child.can_activate)
+                return SAO_STATUS_OK;
+            pending = capture_event_locked(handle, SAO_UI_MENU_EV_CHILD_SELECTED, child_idx,
+                                           parent_menu_idx, child.action_id);
+        }
+        dispatch_event_noexcept(pending);
+        return SAO_STATUS_OK;
+    } catch (...) {
+        return SAO_STATUS_ERR_UNKNOWN;
+    }
 }
 
 extern "C" sao_status_t SAO_UI_CALL sao_ui_menu_query_hud_bounds(sao_ui_menu_handle_t handle,
