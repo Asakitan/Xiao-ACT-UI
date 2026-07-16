@@ -11,10 +11,10 @@
 #include <vector>
 
 #if defined(_WIN32)
-#  ifndef WIN32_LEAN_AND_MEAN
-#    define WIN32_LEAN_AND_MEAN
-#  endif
-#  include <windows.h>
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#include <windows.h>
 #endif
 
 namespace {
@@ -22,6 +22,9 @@ namespace {
 constexpr uint32_t kMouseMove = 0x0200;
 constexpr uint32_t kLeftButtonDown = 0x0201;
 constexpr uint32_t kLeftButtonUp = 0x0202;
+constexpr int32_t kMenuPad = 40;
+constexpr int32_t kMenuSlot = 70;
+constexpr int32_t kMenuSlotCenter = kMenuPad + kMenuSlot / 2;
 
 struct ActionLog {
     uint32_t calls = 0;
@@ -34,19 +37,18 @@ struct ActionLog {
     uint64_t frame_count_when_called = 0;
 };
 
-sao_status_t SAO_UI_CALL record_action(SaoUiEntityAction action,
-                                       void* user_data) {
+sao_status_t SAO_UI_CALL record_action(SaoUiEntityAction action, void* user_data) {
     auto* log = static_cast<ActionLog*>(user_data);
     ++log->calls;
     log->last = action;
     if (log->shell != nullptr) {
         SaoUiEntityShellSnapshot snapshot{};
-        log->snapshot_status =
-            sao_ui_entity_shell_get_snapshot(log->shell, &snapshot);
+        log->snapshot_status = sao_ui_entity_shell_get_snapshot(log->shell, &snapshot);
         log->menu_visible_when_called = snapshot.menu_visible;
         log->frame_count_when_called = snapshot.frame_count;
     }
-    if (log->throw_exception) throw std::runtime_error("action callback");
+    if (log->throw_exception)
+        throw std::runtime_error("action callback");
     return log->return_status;
 }
 
@@ -67,66 +69,52 @@ std::vector<uint8_t> snapshot_pixels(sao_ui_entity_shell_handle_t shell,
     uint32_t width = 0;
     uint32_t height = 0;
     size_t bytes = 0;
-    REQUIRE(sao_ui_entity_shell_snapshot_bgra(
-                shell, nullptr, 0, &width, &height, &bytes) ==
+    REQUIRE(sao_ui_entity_shell_snapshot_bgra(shell, nullptr, 0, &width, &height, &bytes) ==
             SAO_STATUS_ERR_BUFFER_TOO_SMALL);
     std::vector<uint8_t> pixels(bytes);
-    REQUIRE(sao_ui_entity_shell_snapshot_bgra(
-                shell, pixels.data(), pixels.size(), &width, &height,
-                &bytes) == SAO_STATUS_OK);
-    if (width_out != nullptr) *width_out = width;
-    if (height_out != nullptr) *height_out = height;
+    REQUIRE(sao_ui_entity_shell_snapshot_bgra(shell, pixels.data(), pixels.size(), &width, &height,
+                                              &bytes) == SAO_STATUS_OK);
+    if (width_out != nullptr)
+        *width_out = width;
+    if (height_out != nullptr)
+        *height_out = height;
     return pixels;
 }
 
-sao_status_t send_left_click_status(sao_ui_entity_shell_handle_t shell,
-                                    int32_t screen_x,
+sao_status_t send_left_click_status(sao_ui_entity_shell_handle_t shell, int32_t screen_x,
                                     int32_t screen_y) {
-    REQUIRE(sao_ui_entity_shell_handle_mouse(
-                shell, kMouseMove, screen_x, screen_y, -1, 0) ==
+    REQUIRE(sao_ui_entity_shell_handle_mouse(shell, kMouseMove, screen_x, screen_y, -1, 0) ==
             SAO_STATUS_OK);
-    REQUIRE(sao_ui_entity_shell_handle_mouse(
-                shell, kLeftButtonDown, screen_x, screen_y, 0, 0) ==
+    REQUIRE(sao_ui_entity_shell_handle_mouse(shell, kLeftButtonDown, screen_x, screen_y, 0, 0) ==
             SAO_STATUS_OK);
-    return sao_ui_entity_shell_handle_mouse(
-        shell, kLeftButtonUp, screen_x, screen_y, 0, 0);
+    return sao_ui_entity_shell_handle_mouse(shell, kLeftButtonUp, screen_x, screen_y, 0, 0);
 }
 
-void send_left_click(sao_ui_entity_shell_handle_t shell,
-                     int32_t screen_x,
-                     int32_t screen_y) {
-    REQUIRE(send_left_click_status(shell, screen_x, screen_y) ==
-            SAO_STATUS_OK);
+void send_left_click(sao_ui_entity_shell_handle_t shell, int32_t screen_x, int32_t screen_y) {
+    REQUIRE(send_left_click_status(shell, screen_x, screen_y) == SAO_STATUS_OK);
 }
 
 bool SAO_UI_CALL shell_hit_test(int32_t x, int32_t y, void* user_data) {
     bool hit = false;
-    return sao_ui_entity_shell_hit_test(
-               static_cast<sao_ui_entity_shell_handle_t>(user_data), x, y,
-               &hit) == SAO_STATUS_OK &&
+    return sao_ui_entity_shell_hit_test(static_cast<sao_ui_entity_shell_handle_t>(user_data), x, y,
+                                        &hit) == SAO_STATUS_OK &&
            hit;
 }
 
-void SAO_UI_CALL shell_mouse(uint32_t message,
-                             int32_t x,
-                             int32_t y,
-                             int32_t button,
-                             int32_t wheel_delta,
-                             void* user_data) {
-    (void)sao_ui_entity_shell_handle_mouse(
-        static_cast<sao_ui_entity_shell_handle_t>(user_data), message, x, y,
-        button, wheel_delta);
+void SAO_UI_CALL shell_mouse(uint32_t message, int32_t x, int32_t y, int32_t button,
+                             int32_t wheel_delta, void* user_data) {
+    (void)sao_ui_entity_shell_handle_mouse(static_cast<sao_ui_entity_shell_handle_t>(user_data),
+                                           message, x, y, button, wheel_delta);
 }
 
-}  // namespace
+} // namespace
 
 TEST_CASE("Entity shell renders real BGRA and changes NerveGear state pixels",
           "[ui][entity_shell][raster]") {
     ActionLog actions;
     const auto config = headless_config(&actions);
     sao_ui_entity_shell_handle_t shell = nullptr;
-    REQUIRE(sao_ui_entity_shell_create(nullptr, &config, &shell) ==
-            SAO_STATUS_OK);
+    REQUIRE(sao_ui_entity_shell_create(nullptr, &config, &shell) == SAO_STATUS_OK);
     REQUIRE(sao_ui_entity_shell_bring_online(shell) == SAO_STATUS_OK);
 
     SaoUiEntityShellSnapshot state{};
@@ -138,22 +126,15 @@ TEST_CASE("Entity shell renders real BGRA and changes NerveGear state pixels",
     uint32_t width = 0;
     uint32_t height = 0;
     const auto idle = snapshot_pixels(shell, &width, &height);
-    REQUIRE(std::any_of(idle.begin() + 3, idle.end(),
-                        [](uint8_t value) { return value != 0; }));
+    REQUIRE(std::any_of(idle.begin() + 3, idle.end(), [](uint8_t value) { return value != 0; }));
     const size_t corner_alpha =
-        (static_cast<size_t>(state.nervegear_y) * width +
-         state.nervegear_x) *
-            4U +
-        3U;
+        (static_cast<size_t>(state.nervegear_y) * width + state.nervegear_x) * 4U + 3U;
     REQUIRE(corner_alpha < idle.size());
     CHECK(idle[corner_alpha] == 0);
 
-    const int32_t center_x =
-        state.origin_x + state.nervegear_x + SAO_UI_NERVEGEAR_SIZE / 2;
-    const int32_t center_y =
-        state.origin_y + state.nervegear_y + SAO_UI_NERVEGEAR_SIZE / 2;
-    REQUIRE(sao_ui_entity_shell_handle_mouse(
-                shell, kMouseMove, center_x, center_y, -1, 0) ==
+    const int32_t center_x = state.origin_x + state.nervegear_x + SAO_UI_NERVEGEAR_SIZE / 2;
+    const int32_t center_y = state.origin_y + state.nervegear_y + SAO_UI_NERVEGEAR_SIZE / 2;
+    REQUIRE(sao_ui_entity_shell_handle_mouse(shell, kMouseMove, center_x, center_y, -1, 0) ==
             SAO_STATUS_OK);
     const auto hover = snapshot_pixels(shell);
     CHECK(hover != idle);
@@ -161,8 +142,7 @@ TEST_CASE("Entity shell renders real BGRA and changes NerveGear state pixels",
     CHECK(state.nervegear_state == SAO_UI_NG_STATE_HOVER);
     CHECK(state.frame_count > 1);
 
-    REQUIRE(sao_ui_entity_shell_handle_mouse(
-                shell, kLeftButtonDown, center_x, center_y, 0, 0) ==
+    REQUIRE(sao_ui_entity_shell_handle_mouse(shell, kLeftButtonDown, center_x, center_y, 0, 0) ==
             SAO_STATUS_OK);
     const auto pressed = snapshot_pixels(shell);
     CHECK(pressed != hover);
@@ -179,22 +159,21 @@ TEST_CASE("Entity shell click opens menu and About dismisses before action",
     ActionLog actions;
     const auto config = headless_config(&actions);
     sao_ui_entity_shell_handle_t shell = nullptr;
-    REQUIRE(sao_ui_entity_shell_create(nullptr, &config, &shell) ==
-            SAO_STATUS_OK);
+    REQUIRE(sao_ui_entity_shell_create(nullptr, &config, &shell) == SAO_STATUS_OK);
     actions.shell = shell;
     REQUIRE(sao_ui_entity_shell_bring_online(shell) == SAO_STATUS_OK);
 
     SaoUiEntityShellSnapshot state{};
     REQUIRE(sao_ui_entity_shell_get_snapshot(shell, &state) == SAO_STATUS_OK);
-    send_left_click(shell,
-                    state.origin_x + state.nervegear_x + 36,
+    send_left_click(shell, state.origin_x + state.nervegear_x + 36,
                     state.origin_y + state.nervegear_y + 36);
     REQUIRE(sao_ui_entity_shell_get_snapshot(shell, &state) == SAO_STATUS_OK);
     REQUIRE(state.menu_visible);
     const auto open_menu = snapshot_pixels(shell);
 
-    const int32_t about_x = state.origin_x + state.menu_x + 35;
-    const int32_t about_y = state.origin_y + state.menu_y + 8 + 4 * 70 + 27;
+    const int32_t about_x = state.origin_x + state.menu_x + kMenuSlotCenter;
+    const int32_t about_y =
+        state.origin_y + state.menu_y + kMenuPad + 4 * kMenuSlot + kMenuSlot / 2;
     send_left_click(shell, about_x, about_y);
     REQUIRE(sao_ui_entity_shell_get_snapshot(shell, &state) == SAO_STATUS_OK);
     CHECK_FALSE(state.menu_visible);
@@ -218,17 +197,15 @@ TEST_CASE("Entity shell click opens menu and About dismisses before action",
     uint32_t hidden_width = 1;
     uint32_t hidden_height = 1;
     size_t hidden_bytes = 1;
-    REQUIRE(sao_ui_entity_shell_snapshot_bgra(
-                shell, nullptr, 0, &hidden_width, &hidden_height,
-                &hidden_bytes) == SAO_STATUS_OK);
+    REQUIRE(sao_ui_entity_shell_snapshot_bgra(shell, nullptr, 0, &hidden_width, &hidden_height,
+                                              &hidden_bytes) == SAO_STATUS_OK);
     CHECK(hidden_width == 0);
     CHECK(hidden_height == 0);
     CHECK(hidden_bytes == 0);
     bool hit = true;
-    REQUIRE(sao_ui_entity_shell_hit_test(
-                shell, state.origin_x + state.nervegear_x + 36,
-                state.origin_y + state.nervegear_y + 36, &hit) ==
-            SAO_STATUS_OK);
+    REQUIRE(sao_ui_entity_shell_hit_test(shell, state.origin_x + state.nervegear_x + 36,
+                                         state.origin_y + state.nervegear_y + 36,
+                                         &hit) == SAO_STATUS_OK);
     CHECK_FALSE(hit);
     REQUIRE(sao_ui_entity_shell_insert(shell) == SAO_STATUS_OK);
     REQUIRE(sao_ui_entity_shell_get_snapshot(shell, &state) == SAO_STATUS_OK);
@@ -244,37 +221,32 @@ TEST_CASE("Entity shell records About callback failure in last_status",
     actions.return_status = SAO_STATUS_ERR_OS_CALL_FAILED;
     const auto config = headless_config(&actions);
     sao_ui_entity_shell_handle_t shell = nullptr;
-    REQUIRE(sao_ui_entity_shell_create(nullptr, &config, &shell) ==
-            SAO_STATUS_OK);
+    REQUIRE(sao_ui_entity_shell_create(nullptr, &config, &shell) == SAO_STATUS_OK);
     actions.shell = shell;
     REQUIRE(sao_ui_entity_shell_bring_online(shell) == SAO_STATUS_OK);
 
     SaoUiEntityShellSnapshot state{};
     REQUIRE(sao_ui_entity_shell_get_snapshot(shell, &state) == SAO_STATUS_OK);
-    send_left_click(shell,
-                    state.origin_x + state.nervegear_x + 36,
+    send_left_click(shell, state.origin_x + state.nervegear_x + 36,
                     state.origin_y + state.nervegear_y + 36);
     REQUIRE(sao_ui_entity_shell_get_snapshot(shell, &state) == SAO_STATUS_OK);
     REQUIRE(state.menu_visible);
 
-    const int32_t about_x = state.origin_x + state.menu_x + 35;
+    const int32_t about_x = state.origin_x + state.menu_x + kMenuSlotCenter;
     const int32_t about_y =
-        state.origin_y + state.menu_y + 8 + 4 * 70 + 27;
-    REQUIRE(send_left_click_status(shell, about_x, about_y) ==
-            actions.return_status);
+        state.origin_y + state.menu_y + kMenuPad + 4 * kMenuSlot + kMenuSlot / 2;
+    REQUIRE(send_left_click_status(shell, about_x, about_y) == actions.return_status);
     REQUIRE(sao_ui_entity_shell_get_snapshot(shell, &state) == SAO_STATUS_OK);
     CHECK_FALSE(state.menu_visible);
     CHECK(state.last_status == actions.return_status);
     CHECK(actions.calls == 1);
 
     actions.throw_exception = true;
-    send_left_click(shell,
-                    state.origin_x + state.nervegear_x + 36,
+    send_left_click(shell, state.origin_x + state.nervegear_x + 36,
                     state.origin_y + state.nervegear_y + 36);
     REQUIRE(sao_ui_entity_shell_get_snapshot(shell, &state) == SAO_STATUS_OK);
     REQUIRE(state.menu_visible);
-    REQUIRE(send_left_click_status(shell, about_x, about_y) ==
-            SAO_STATUS_ERR_UNKNOWN);
+    REQUIRE(send_left_click_status(shell, about_x, about_y) == SAO_STATUS_ERR_UNKNOWN);
     REQUIRE(sao_ui_entity_shell_get_snapshot(shell, &state) == SAO_STATUS_OK);
     CHECK_FALSE(state.menu_visible);
     CHECK(state.last_status == SAO_STATUS_ERR_UNKNOWN);
@@ -289,8 +261,7 @@ TEST_CASE("Entity shell non-owner destroy detaches without releasing",
     ActionLog actions;
     const auto config = headless_config(&actions);
     sao_ui_entity_shell_handle_t shell = nullptr;
-    REQUIRE(sao_ui_entity_shell_create(nullptr, &config, &shell) ==
-            SAO_STATUS_OK);
+    REQUIRE(sao_ui_entity_shell_create(nullptr, &config, &shell) == SAO_STATUS_OK);
     REQUIRE(sao_ui_entity_shell_bring_online(shell) == SAO_STATUS_OK);
 
     std::thread non_owner([shell] { sao_ui_entity_shell_destroy(shell); });
@@ -316,16 +287,13 @@ TEST_CASE("compositor alpha-zero input layer leaves host click-through",
     }
 
     sao_status_t cross_thread_status = SAO_STATUS_OK;
-    std::thread cross_thread([&] {
-        cross_thread_status =
-            sao_ui_overlay_host_set_input_passthrough(host, false);
-    });
+    std::thread cross_thread(
+        [&] { cross_thread_status = sao_ui_overlay_host_set_input_passthrough(host, false); });
     cross_thread.join();
     CHECK(cross_thread_status == SAO_STATUS_ERR_ACCESS_DENIED);
 
     sao_ui_compositor_handle_t compositor = nullptr;
-    const sao_status_t compositor_status =
-        sao_ui_compositor_create(host, nullptr, &compositor);
+    const sao_status_t compositor_status = sao_ui_compositor_create(host, nullptr, &compositor);
     if (compositor_status != SAO_STATUS_OK) {
         REQUIRE(sao_ui_overlay_host_destroy(host));
         SKIP("D3D11/DirectComposition unavailable in this environment");
@@ -340,35 +308,26 @@ TEST_CASE("compositor alpha-zero input layer leaves host click-through",
     config.click_through = false;
     config.rect_hit = true;
     sao_ui_layer_handle_t layer = nullptr;
-    REQUIRE(sao_ui_layer_create(compositor, &config, &layer) ==
-            SAO_STATUS_OK);
+    REQUIRE(sao_ui_layer_create(compositor, &config, &layer) == SAO_STATUS_OK);
     const std::array<uint8_t, 4> pixel{};
-    CHECK(sao_ui_layer_update_bgra(
-              layer, pixel.data(), 0x40000000U, 1U, 0U) ==
+    CHECK(sao_ui_layer_update_bgra(layer, pixel.data(), 0x40000000U, 1U, 0U) ==
           SAO_STATUS_ERR_INVALID_ARGUMENT);
 
-    CHECK(sao_ui_layer_set_geometry(
-              layer, INT32_MAX - 5, 9, 20, 18) ==
+    CHECK(sao_ui_layer_set_geometry(layer, INT32_MAX - 5, 9, 20, 18) ==
           SAO_STATUS_ERR_INVALID_ARGUMENT);
     const SaoUiLayerInputRect local_rect{0, 0, 20, 18};
-    REQUIRE(sao_ui_layer_set_input_rects(layer, &local_rect, 1) ==
-            SAO_STATUS_OK);
-    CHECK(sao_ui_layer_set_geometry(layer, 7, 9, 10, 10) ==
-          SAO_STATUS_ERR_INVALID_ARGUMENT);
-    REQUIRE(sao_ui_layer_set_input_rects(layer, nullptr, 0) ==
-            SAO_STATUS_OK);
+    REQUIRE(sao_ui_layer_set_input_rects(layer, &local_rect, 1) == SAO_STATUS_OK);
+    CHECK(sao_ui_layer_set_geometry(layer, 7, 9, 10, 10) == SAO_STATUS_ERR_INVALID_ARGUMENT);
+    REQUIRE(sao_ui_layer_set_input_rects(layer, nullptr, 0) == SAO_STATUS_OK);
 
     REQUIRE(sao_ui_layer_set_alpha(layer, 0.0F) == SAO_STATUS_OK);
     REQUIRE(sao_ui_compositor_sync_host_rgn(compositor) == SAO_STATUS_OK);
-    REQUIRE(sao_ui_compositor_sync_host_input_mode(compositor) ==
-            SAO_STATUS_OK);
+    REQUIRE(sao_ui_compositor_sync_host_input_mode(compositor) == SAO_STATUS_OK);
     CHECK(sao_ui_overlay_host_input_passthrough(host));
 
     HRGN region = CreateRectRgn(0, 0, 0, 0);
     REQUIRE(region != nullptr);
-    REQUIRE(GetWindowRgn(
-                static_cast<HWND>(sao_ui_overlay_host_hwnd(host)), region) !=
-            ERROR);
+    REQUIRE(GetWindowRgn(static_cast<HWND>(sao_ui_overlay_host_hwnd(host)), region) != ERROR);
     CHECK_FALSE(PtInRegion(region, 10, 12));
     DeleteObject(region);
 
@@ -386,8 +345,7 @@ TEST_CASE("real overlay HWND routes mouse callback into Entity menu",
     host_config.origin_y = 80;
     host_config.title_utf16 = L"SAO Entity production-chain test";
     sao_ui_overlay_host_handle_t host = nullptr;
-    const sao_status_t host_status =
-        sao_ui_overlay_host_create(&host_config, &host);
+    const sao_status_t host_status = sao_ui_overlay_host_create(&host_config, &host);
     if (host_status != SAO_STATUS_OK) {
         SKIP("overlay host unavailable in this desktop session");
     }
@@ -397,24 +355,20 @@ TEST_CASE("real overlay HWND routes mouse callback into Entity menu",
     shell_config.action_fn = &record_action;
     shell_config.action_user_data = &actions;
     sao_ui_entity_shell_handle_t shell = nullptr;
-    const sao_status_t create_status =
-        sao_ui_entity_shell_create(host, &shell_config, &shell);
+    const sao_status_t create_status = sao_ui_entity_shell_create(host, &shell_config, &shell);
     if (create_status != SAO_STATUS_OK) {
         REQUIRE(sao_ui_overlay_host_destroy(host));
         SKIP("D3D11/DirectComposition unavailable in this environment");
     }
 
-    REQUIRE(sao_ui_overlay_host_set_hit_test(
-                host, &shell_hit_test, shell) == SAO_STATUS_OK);
-    REQUIRE(sao_ui_overlay_host_set_mouse(host, &shell_mouse, shell) ==
-            SAO_STATUS_OK);
+    REQUIRE(sao_ui_overlay_host_set_hit_test(host, &shell_hit_test, shell) == SAO_STATUS_OK);
+    REQUIRE(sao_ui_overlay_host_set_mouse(host, &shell_mouse, shell) == SAO_STATUS_OK);
     REQUIRE(sao_ui_entity_shell_bring_online(shell) == SAO_STATUS_OK);
 
     SaoUiEntityShellSnapshot state{};
     REQUIRE(sao_ui_entity_shell_get_snapshot(shell, &state) == SAO_STATUS_OK);
     HWND hwnd = static_cast<HWND>(sao_ui_overlay_host_hwnd(host));
-    const LPARAM point = MAKELPARAM(state.nervegear_x + 36,
-                                    state.nervegear_y + 36);
+    const LPARAM point = MAKELPARAM(state.nervegear_x + 36, state.nervegear_y + 36);
     SendMessageW(hwnd, WM_MOUSEMOVE, 0, point);
     SendMessageW(hwnd, WM_LBUTTONDOWN, MK_LBUTTON, point);
     SendMessageW(hwnd, WM_LBUTTONUP, 0, point);
@@ -424,8 +378,8 @@ TEST_CASE("real overlay HWND routes mouse callback into Entity menu",
     HRGN region = CreateRectRgn(0, 0, 0, 0);
     REQUIRE(region != nullptr);
     REQUIRE(GetWindowRgn(hwnd, region) != ERROR);
-    CHECK(PtInRegion(region, state.menu_x + 35, state.menu_y + 35));
-    CHECK_FALSE(PtInRegion(region, state.menu_x + 120, state.menu_y + 35));
+    CHECK(PtInRegion(region, state.menu_x + kMenuSlotCenter, state.menu_y + kMenuSlotCenter));
+    CHECK_FALSE(PtInRegion(region, state.menu_x + 120, state.menu_y + kMenuSlotCenter));
     DeleteObject(region);
 
     REQUIRE(sao_ui_entity_shell_home(shell) == SAO_STATUS_OK);
@@ -435,15 +389,13 @@ TEST_CASE("real overlay HWND routes mouse callback into Entity menu",
     region = CreateRectRgn(0, 0, 0, 0);
     REQUIRE(region != nullptr);
     REQUIRE(GetWindowRgn(hwnd, region) != ERROR);
-    CHECK_FALSE(PtInRegion(region, state.menu_x + 35, state.menu_y + 35));
-    CHECK(PtInRegion(region, state.nervegear_x + 36,
-                     state.nervegear_y + 36));
+    CHECK_FALSE(PtInRegion(region, state.menu_x + kMenuSlotCenter, state.menu_y + kMenuSlotCenter));
+    CHECK(PtInRegion(region, state.nervegear_x + 36, state.nervegear_y + 36));
     DeleteObject(region);
 
     const int32_t old_menu_x = state.menu_x;
     const int32_t old_menu_y = state.menu_y;
-    REQUIRE(SetWindowPos(hwnd, nullptr, 180, 120, 800, 600,
-                         SWP_NOACTIVATE | SWP_NOZORDER));
+    REQUIRE(SetWindowPos(hwnd, nullptr, 180, 120, 800, 600, SWP_NOACTIVATE | SWP_NOZORDER));
     REQUIRE(sao_ui_entity_shell_tick(shell, 16) == SAO_STATUS_OK);
     REQUIRE(sao_ui_entity_shell_get_snapshot(shell, &state) == SAO_STATUS_OK);
     CHECK(state.origin_x == 180);
@@ -459,14 +411,12 @@ TEST_CASE("real overlay HWND routes mouse callback into Entity menu",
     region = CreateRectRgn(0, 0, 0, 0);
     REQUIRE(region != nullptr);
     REQUIRE(GetWindowRgn(hwnd, region) != ERROR);
-    CHECK(PtInRegion(region, state.menu_x + 35, state.menu_y + 35));
-    CHECK_FALSE(PtInRegion(region, old_menu_x + 35, old_menu_y + 35));
+    CHECK(PtInRegion(region, state.menu_x + kMenuSlotCenter, state.menu_y + kMenuSlotCenter));
+    CHECK_FALSE(PtInRegion(region, old_menu_x + kMenuSlotCenter, old_menu_y + kMenuSlotCenter));
     DeleteObject(region);
 
-    REQUIRE(sao_ui_overlay_host_set_mouse(host, nullptr, nullptr) ==
-            SAO_STATUS_OK);
-    REQUIRE(sao_ui_overlay_host_set_hit_test(host, nullptr, nullptr) ==
-            SAO_STATUS_OK);
+    REQUIRE(sao_ui_overlay_host_set_mouse(host, nullptr, nullptr) == SAO_STATUS_OK);
+    REQUIRE(sao_ui_overlay_host_set_hit_test(host, nullptr, nullptr) == SAO_STATUS_OK);
     REQUIRE(sao_ui_entity_shell_take_offline(shell) == SAO_STATUS_OK);
     sao_ui_entity_shell_destroy(shell);
     REQUIRE(sao_ui_overlay_host_destroy(host));

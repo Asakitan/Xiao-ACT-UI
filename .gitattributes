@@ -1,3 +1,6 @@
 # *.vault 是 AES-256-GCM 密文(见 pyx_vault.py)，绝不能被 core.autocrlf 之类的
 # 文本归一化触碰，否则密文会被换行符转换破坏导致永久解不开。
 *.vault binary
+
+# 冻结的 premultiplied-BGRA 权威帧按原始字节校验，禁止文本归一化。
+*.bgra binary

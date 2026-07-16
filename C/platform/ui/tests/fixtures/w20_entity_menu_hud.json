@@ -1,0 +1,455 @@
+{
+  "dimensions": {
+    "bytes": 760240,
+    "height": 430,
+    "stride": 1768,
+    "width": 442
+  },
+  "format": "premultiplied-bgra",
+  "frames": [
+    {
+      "asset": "assets/entity/w20_entity_menu_hud_idle.bgra",
+      "bytes": 760240,
+      "file": "w20_entity_menu_hud_idle.bgra",
+      "height": 430,
+      "name": "idle",
+      "sha256": "811f3cd774047146829c5a515d33a4ecf35d14a88fd2947948824a5daf4d55a9",
+      "state": {
+        "active": null,
+        "btn_hover_t": [
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "btn_size": [
+          54.0,
+          54.0,
+          54.0,
+          54.0,
+          54.0
+        ],
+        "child_rows": [],
+        "hover": null,
+        "menu_items": [
+          {
+            "can_active": false,
+            "icon": "C",
+            "name": "Control"
+          },
+          {
+            "can_active": false,
+            "icon": "T",
+            "name": "Tools"
+          },
+          {
+            "can_active": false,
+            "icon": "P",
+            "name": "Plugins"
+          },
+          {
+            "can_active": false,
+            "icon": "S",
+            "name": "Skins"
+          },
+          {
+            "can_active": true,
+            "icon": "?",
+            "name": "About"
+          }
+        ]
+      },
+      "stride": 1768,
+      "width": 442
+    },
+    {
+      "asset": "assets/entity/w20_entity_menu_hud_hover_0.bgra",
+      "bytes": 760240,
+      "file": "w20_entity_menu_hud_hover_0.bgra",
+      "height": 430,
+      "name": "hover_0",
+      "sha256": "827a88cff8cc7bc52b826632ed47361002e0d673b8fe9028f8a2986cf788428b",
+      "state": {
+        "active": null,
+        "btn_hover_t": [
+          1.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "btn_size": [
+          70.0,
+          54.0,
+          54.0,
+          54.0,
+          54.0
+        ],
+        "child_rows": [],
+        "hover": 0,
+        "menu_items": [
+          {
+            "can_active": false,
+            "icon": "C",
+            "name": "Control"
+          },
+          {
+            "can_active": false,
+            "icon": "T",
+            "name": "Tools"
+          },
+          {
+            "can_active": false,
+            "icon": "P",
+            "name": "Plugins"
+          },
+          {
+            "can_active": false,
+            "icon": "S",
+            "name": "Skins"
+          },
+          {
+            "can_active": true,
+            "icon": "?",
+            "name": "About"
+          }
+        ]
+      },
+      "stride": 1768,
+      "width": 442
+    },
+    {
+      "asset": "assets/entity/w20_entity_menu_hud_hover_1.bgra",
+      "bytes": 760240,
+      "file": "w20_entity_menu_hud_hover_1.bgra",
+      "height": 430,
+      "name": "hover_1",
+      "sha256": "984d7b79bb5050db67c3c9b7d079428f5afa29ff5b1477d779c441d7b8bd599a",
+      "state": {
+        "active": null,
+        "btn_hover_t": [
+          0.0,
+          1.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "btn_size": [
+          54.0,
+          70.0,
+          54.0,
+          54.0,
+          54.0
+        ],
+        "child_rows": [],
+        "hover": 1,
+        "menu_items": [
+          {
+            "can_active": false,
+            "icon": "C",
+            "name": "Control"
+          },
+          {
+            "can_active": false,
+            "icon": "T",
+            "name": "Tools"
+          },
+          {
+            "can_active": false,
+            "icon": "P",
+            "name": "Plugins"
+          },
+          {
+            "can_active": false,
+            "icon": "S",
+            "name": "Skins"
+          },
+          {
+            "can_active": true,
+            "icon": "?",
+            "name": "About"
+          }
+        ]
+      },
+      "stride": 1768,
+      "width": 442
+    },
+    {
+      "asset": "assets/entity/w20_entity_menu_hud_hover_2.bgra",
+      "bytes": 760240,
+      "file": "w20_entity_menu_hud_hover_2.bgra",
+      "height": 430,
+      "name": "hover_2",
+      "sha256": "67fbca2e96bef818bec66a84a67df547ed5f7355e5b3f2bdcd3301a0df898aaa",
+      "state": {
+        "active": null,
+        "btn_hover_t": [
+          0.0,
+          0.0,
+          1.0,
+          0.0,
+          0.0
+        ],
+        "btn_size": [
+          54.0,
+          54.0,
+          70.0,
+          54.0,
+          54.0
+        ],
+        "child_rows": [],
+        "hover": 2,
+        "menu_items": [
+          {
+            "can_active": false,
+            "icon": "C",
+            "name": "Control"
+          },
+          {
+            "can_active": false,
+            "icon": "T",
+            "name": "Tools"
+          },
+          {
+            "can_active": false,
+            "icon": "P",
+            "name": "Plugins"
+          },
+          {
+            "can_active": false,
+            "icon": "S",
+            "name": "Skins"
+          },
+          {
+            "can_active": true,
+            "icon": "?",
+            "name": "About"
+          }
+        ]
+      },
+      "stride": 1768,
+      "width": 442
+    },
+    {
+      "asset": "assets/entity/w20_entity_menu_hud_hover_3.bgra",
+      "bytes": 760240,
+      "file": "w20_entity_menu_hud_hover_3.bgra",
+      "height": 430,
+      "name": "hover_3",
+      "sha256": "d8e292ca3fac401b277b925b83f1a72ffe6e6ddf51c0e7a749c43c28e545861a",
+      "state": {
+        "active": null,
+        "btn_hover_t": [
+          0.0,
+          0.0,
+          0.0,
+          1.0,
+          0.0
+        ],
+        "btn_size": [
+          54.0,
+          54.0,
+          54.0,
+          70.0,
+          54.0
+        ],
+        "child_rows": [],
+        "hover": 3,
+        "menu_items": [
+          {
+            "can_active": false,
+            "icon": "C",
+            "name": "Control"
+          },
+          {
+            "can_active": false,
+            "icon": "T",
+            "name": "Tools"
+          },
+          {
+            "can_active": false,
+            "icon": "P",
+            "name": "Plugins"
+          },
+          {
+            "can_active": false,
+            "icon": "S",
+            "name": "Skins"
+          },
+          {
+            "can_active": true,
+            "icon": "?",
+            "name": "About"
+          }
+        ]
+      },
+      "stride": 1768,
+      "width": 442
+    },
+    {
+      "asset": "assets/entity/w20_entity_menu_hud_hover_4.bgra",
+      "bytes": 760240,
+      "file": "w20_entity_menu_hud_hover_4.bgra",
+      "height": 430,
+      "name": "hover_4",
+      "sha256": "a7bc237743862b3b7ac5aaa78a70ba0908097e5285cb178c10181ddfe78fd6ca",
+      "state": {
+        "active": null,
+        "btn_hover_t": [
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          1.0
+        ],
+        "btn_size": [
+          54.0,
+          54.0,
+          54.0,
+          54.0,
+          70.0
+        ],
+        "child_rows": [],
+        "hover": 4,
+        "menu_items": [
+          {
+            "can_active": false,
+            "icon": "C",
+            "name": "Control"
+          },
+          {
+            "can_active": false,
+            "icon": "T",
+            "name": "Tools"
+          },
+          {
+            "can_active": false,
+            "icon": "P",
+            "name": "Plugins"
+          },
+          {
+            "can_active": false,
+            "icon": "S",
+            "name": "Skins"
+          },
+          {
+            "can_active": true,
+            "icon": "?",
+            "name": "About"
+          }
+        ]
+      },
+      "stride": 1768,
+      "width": 442
+    }
+  ],
+  "frozen_environment": {
+    "datetime": "2026-07-14T12:34:56",
+    "fade_alpha": 1.0,
+    "fonts": [
+      "python/assets/fonts/SAOUI.ttf",
+      "python/assets/fonts/ZhuZiAYuanJWD.ttf"
+    ],
+    "hud_phase": 0.375,
+    "screen": [
+      1920,
+      1080
+    ]
+  },
+  "menu": {
+    "child_rows": [],
+    "geometry": {
+      "base_size": 54,
+      "column_origin": [
+        40,
+        40
+      ],
+      "hit_rects": [
+        {
+          "index": 0,
+          "rect": [
+            40,
+            40,
+            110,
+            110
+          ]
+        },
+        {
+          "index": 1,
+          "rect": [
+            40,
+            110,
+            110,
+            180
+          ]
+        },
+        {
+          "index": 2,
+          "rect": [
+            40,
+            180,
+            110,
+            250
+          ]
+        },
+        {
+          "index": 3,
+          "rect": [
+            40,
+            250,
+            110,
+            320
+          ]
+        },
+        {
+          "index": 4,
+          "rect": [
+            40,
+            320,
+            110,
+            390
+          ]
+        }
+      ],
+      "hover_size": 70,
+      "hud_pad": 40,
+      "slot": 70
+    },
+    "item_count": 5,
+    "items": [
+      {
+        "can_active": false,
+        "icon": "C",
+        "name": "Control"
+      },
+      {
+        "can_active": false,
+        "icon": "T",
+        "name": "Tools"
+      },
+      {
+        "can_active": false,
+        "icon": "P",
+        "name": "Plugins"
+      },
+      {
+        "can_active": false,
+        "icon": "S",
+        "name": "Skins"
+      },
+      {
+        "can_active": true,
+        "icon": "?",
+        "name": "About"
+      }
+    ],
+    "max_slots": 9
+  },
+  "schema": "sao.ui.python-authority.w20.entity-menu-hud.v1",
+  "source": {
+    "composition": "ui_gpu.composer.compose_rgba",
+    "state": "ui_gpu.state.PopupState",
+    "transport": "ui_gpu.composer.to_premultiplied_bgra"
+  }
+}

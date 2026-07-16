@@ -362,6 +362,29 @@ if (WIN32)
         TEST_PREFIX "ui.w19.entity."
         PROPERTIES LABELS "ui;w19;entity;parity"
     )
+
+    add_executable(sao_platform_ui_entity_menu_hud_w20_tests
+        test_entity_menu_hud_w20.cpp
+    )
+
+    target_link_libraries(sao_platform_ui_entity_menu_hud_w20_tests PRIVATE
+        sao::ui
+        nlohmann_json::nlohmann_json
+        Catch2::Catch2WithMain
+        bcrypt
+    )
+
+    target_compile_definitions(sao_platform_ui_entity_menu_hud_w20_tests PRIVATE
+        SAO_UI_USING_DLL
+        SAO_UI_TEST_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures"
+        SAO_UI_TEST_ASSET_DIR="${CMAKE_CURRENT_SOURCE_DIR}/../assets/entity"
+    )
+    target_compile_features(sao_platform_ui_entity_menu_hud_w20_tests PRIVATE cxx_std_20)
+
+    catch_discover_tests(sao_platform_ui_entity_menu_hud_w20_tests
+        TEST_PREFIX "ui.w20.entity_menu_hud."
+        PROPERTIES LABELS "ui;w20;entity;resource_integrity;production_composition"
+    )
 endif()
 
 # Overlay-region transaction tests compile the host directly so failure
