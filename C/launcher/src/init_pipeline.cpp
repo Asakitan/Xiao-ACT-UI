@@ -642,8 +642,26 @@ void SAO_UI_CALL entity_mouse(uint32_t message, int32_t x, int32_t y,
 
 sao_status_t SAO_UI_CALL entity_action(SaoUiEntityAction action,
                                        void* user_data) {
-    if (action != SAO_UI_ENTITY_ACTION_OPEN_ABOUT) {
-    return SAO_STATUS_ERR_INVALID_ARGUMENT;
+    switch (action) {
+    case SAO_UI_ENTITY_ACTION_OPEN_ABOUT:
+        break;
+    case SAO_UI_ENTITY_ACTION_TOGGLE_TOPMOST:
+    case SAO_UI_ENTITY_ACTION_TOGGLE_NERVGEAR:
+    case SAO_UI_ENTITY_ACTION_TOGGLE_STREAMING_MODE:
+    case SAO_UI_ENTITY_ACTION_SAVE_SETTINGS:
+    case SAO_UI_ENTITY_ACTION_SET_FISHEYE_PROCEDURAL:
+    case SAO_UI_ENTITY_ACTION_SET_FISHEYE_LIVE:
+    case SAO_UI_ENTITY_ACTION_OPEN_AI_EDITOR:
+    case SAO_UI_ENTITY_ACTION_OPEN_WORKSHOP:
+    case SAO_UI_ENTITY_ACTION_OPEN_PROCESS_SELECTOR:
+    case SAO_UI_ENTITY_ACTION_OPEN_PLUGIN_MANAGER:
+    case SAO_UI_ENTITY_ACTION_RELOAD_PLUGINS:
+    case SAO_UI_ENTITY_ACTION_PLUGIN_STATUS:
+    case SAO_UI_ENTITY_ACTION_SET_ALL_LIGHT:
+    case SAO_UI_ENTITY_ACTION_SET_ALL_DARK:
+        return SAO_STATUS_ERR_NOT_IMPLEMENTED;
+    default:
+        return SAO_STATUS_ERR_INVALID_ARGUMENT;
     }
     auto* ctx = static_cast<sao_platform_ctx*>(user_data);
     HWND owner = ctx == nullptr || ctx->overlay_host == nullptr
