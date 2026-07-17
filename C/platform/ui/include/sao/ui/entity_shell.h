@@ -87,6 +87,10 @@ SAO_UI_API sao_status_t SAO_UI_CALL sao_ui_entity_shell_bring_online(
 SAO_UI_API sao_status_t SAO_UI_CALL sao_ui_entity_shell_take_offline(
     sao_ui_entity_shell_handle_t handle);
 
+SAO_UI_API sao_status_t SAO_UI_CALL sao_ui_entity_shell_set_nervgear_mode(
+    sao_ui_entity_shell_handle_t handle,
+    bool enabled);
+
 SAO_UI_API sao_status_t SAO_UI_CALL sao_ui_entity_shell_tick(
     sao_ui_entity_shell_handle_t handle,
     uint32_t elapsed_ms);

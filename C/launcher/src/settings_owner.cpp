@@ -695,14 +695,43 @@ sao_status_t SettingsOwner::get_value(std::string_view top_level_key, Json& out)
     }
 }
 
-sao_status_t SettingsOwner::set_value(std::string_view top_level_key, Json value) noexcept {
+sao_status_t SettingsOwner::get_truthy(std::string_view top_level_key, bool default_value,
+                                       bool& out) const noexcept {
     const auto key_status = validate_key(top_level_key);
     if (key_status != SAO_STATUS_OK) {
         return key_status;
     }
     try {
-        std::string key(top_level_key);
         std::lock_guard lock(mutex_);
+        const auto value = document_.find(std::string(top_level_key));
+        bool result = default_value;
+        if (value != document_.end()) {
+            if (value->is_null()) {
+                result = false;
+            } else if (value->is_boolean()) {
+                result = value->get<bool>();
+            } else if (value->is_number_integer()) {
+                result = value->get<std::int64_t>() != 0;
+            } else if (value->is_number_unsigned()) {
+                result = value->get<std::uint64_t>() != 0;
+            } else if (value->is_number_float()) {
+                result = value->get<double>() != 0.0;
+            } else if (value->is_string()) {
+                result = !value->get_ref<const Json::string_t&>().empty();
+            } else {
+                result = !value->empty();
+            }
+        }
+        out = result;
+        return SAO_STATUS_OK;
+    } catch (...) {
+        return SAO_STATUS_ERR_UNKNOWN;
+    }
+}
+
+sao_status_t SettingsOwner::set_value_locked(std::string_view top_level_key, Json value) noexcept {
+    try {
+        std::string key(top_level_key);
         Json updated = document_;
         updated[std::move(key)] = std::move(value);
         std::string serialized;
@@ -721,6 +750,43 @@ sao_status_t SettingsOwner::set_value(std::string_view top_level_key, Json value
         return SAO_STATUS_ERR_UNKNOWN;
     } catch (const nlohmann::json::exception&) {
         return SAO_STATUS_ERR_INVALID_ARGUMENT;
+    } catch (...) {
+        return SAO_STATUS_ERR_UNKNOWN;
+    }
+}
+
+sao_status_t SettingsOwner::set_value(std::string_view top_level_key, Json value) noexcept {
+    const auto key_status = validate_key(top_level_key);
+    if (key_status != SAO_STATUS_OK) {
+        return key_status;
+    }
+    try {
+        std::lock_guard lock(mutex_);
+        return set_value_locked(top_level_key, std::move(value));
+    } catch (...) {
+        return SAO_STATUS_ERR_UNKNOWN;
+    }
+}
+
+sao_status_t SettingsOwner::set_value_and_save(std::string_view top_level_key,
+                                               Json value) noexcept {
+    const auto key_status = validate_key(top_level_key);
+    if (key_status != SAO_STATUS_OK) {
+        return key_status;
+    }
+    try {
+        std::lock_guard lock(mutex_);
+        Json previous_document = document_;
+        const bool previous_dirty = dirty_;
+        sao_status_t status = set_value_locked(top_level_key, std::move(value));
+        if (status == SAO_STATUS_OK) {
+            status = save_locked();
+        }
+        if (status != SAO_STATUS_OK) {
+            document_.swap(previous_document);
+            dirty_ = previous_dirty;
+        }
+        return status;
     } catch (...) {
         return SAO_STATUS_ERR_UNKNOWN;
     }

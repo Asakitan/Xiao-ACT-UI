@@ -41,11 +41,15 @@ class SettingsOwner final {
     sao_status_t save() noexcept;
     sao_status_t snapshot(Json& out) const noexcept;
     sao_status_t get_value(std::string_view top_level_key, Json& out) const noexcept;
+    sao_status_t get_truthy(std::string_view top_level_key, bool default_value,
+                bool& out) const noexcept;
     sao_status_t set_value(std::string_view top_level_key, Json value) noexcept;
+    sao_status_t set_value_and_save(std::string_view top_level_key, Json value) noexcept;
     bool dirty() const noexcept;
     sao_status_t path(std::wstring& out) const noexcept;
 
   private:
+    sao_status_t set_value_locked(std::string_view top_level_key, Json value) noexcept;
     sao_status_t save_locked() noexcept;
 
     mutable std::mutex mutex_;

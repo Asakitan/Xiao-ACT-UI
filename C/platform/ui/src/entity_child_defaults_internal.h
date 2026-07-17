@@ -7,6 +7,24 @@
 
 namespace sao::ui::entity_child_defaults {
 
+inline sao_status_t apply_control(sao_ui_menu_handle_t menu, bool nervgear_mode) noexcept {
+    const std::array<SaoUiMenuItem, 8> control{{
+        {"置顶: OFF", "⬆", SAO_UI_ENTITY_ACTION_TOGGLE_TOPMOST, true, {false, false, false}},
+        {nervgear_mode ? "NervGear: ON" : "NervGear: OFF", "◈",
+         SAO_UI_ENTITY_ACTION_TOGGLE_NERVGEAR, true, {false, false, false}},
+        {"──────────", "─", -1, false, {false, false, false}},
+        {"Streaming Mode: OFF", "◈", SAO_UI_ENTITY_ACTION_TOGGLE_STREAMING_MODE, true,
+         {false, false, false}},
+        {"鱼眼背景: 程序生成", "◆", SAO_UI_ENTITY_ACTION_SET_FISHEYE_PROCEDURAL, true,
+         {false, false, false}},
+        {"鱼眼背景: 实时截屏", "◇", SAO_UI_ENTITY_ACTION_SET_FISHEYE_LIVE, true,
+         {false, false, false}},
+        {"──────────", "─", -1, false, {false, false, false}},
+        {"保存设置", "✓", SAO_UI_ENTITY_ACTION_SAVE_SETTINGS, true, {false, false, false}},
+    }};
+    return sao_ui_menu_set_children(menu, "Control", control.data(), control.size());
+}
+
 inline sao_status_t apply(sao_ui_menu_handle_t menu) noexcept {
     const std::array<SaoUiMenuItem, 5> roots{{
         {"Control", "C", 10, true, {false, false, false}},
@@ -19,20 +37,7 @@ inline sao_status_t apply(sao_ui_menu_handle_t menu) noexcept {
     if (status != SAO_STATUS_OK)
         return status;
 
-    const std::array<SaoUiMenuItem, 8> control{{
-        {"置顶: OFF", "⬆", SAO_UI_ENTITY_ACTION_TOGGLE_TOPMOST, true, {false, false, false}},
-        {"NervGear: ON", "◈", SAO_UI_ENTITY_ACTION_TOGGLE_NERVGEAR, true, {false, false, false}},
-        {"──────────", "─", -1, false, {false, false, false}},
-        {"Streaming Mode: OFF", "◈", SAO_UI_ENTITY_ACTION_TOGGLE_STREAMING_MODE, true,
-         {false, false, false}},
-        {"鱼眼背景: 程序生成", "◆", SAO_UI_ENTITY_ACTION_SET_FISHEYE_PROCEDURAL, true,
-         {false, false, false}},
-        {"鱼眼背景: 实时截屏", "◇", SAO_UI_ENTITY_ACTION_SET_FISHEYE_LIVE, true,
-         {false, false, false}},
-        {"──────────", "─", -1, false, {false, false, false}},
-        {"保存设置", "✓", SAO_UI_ENTITY_ACTION_SAVE_SETTINGS, true, {false, false, false}},
-    }};
-    status = sao_ui_menu_set_children(menu, "Control", control.data(), control.size());
+    status = apply_control(menu, true);
     if (status != SAO_STATUS_OK)
         return status;
 

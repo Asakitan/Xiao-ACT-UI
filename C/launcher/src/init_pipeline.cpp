@@ -635,6 +635,7 @@ struct sao_platform_ctx {
     SaoUiThemeId previous_theme = SAO_UI_THEME_DARK;
     bool restore_theme_on_rollback = false;
     bool settings_save_enabled = false;
+    bool nervgear_mode{true};
     std::unique_ptr<sao::launcher::settings_owner::SettingsOwner> settings_owner;
     std::unique_ptr<sao::launcher::tool_launch::AiEditorProcessOwner> ai_editor;
 };
@@ -715,7 +716,6 @@ sao_status_t SAO_UI_CALL entity_action(SaoUiEntityAction action,
     case SAO_UI_ENTITY_ACTION_OPEN_ABOUT:
         break;
     case SAO_UI_ENTITY_ACTION_TOGGLE_TOPMOST:
-    case SAO_UI_ENTITY_ACTION_TOGGLE_NERVGEAR:
     case SAO_UI_ENTITY_ACTION_TOGGLE_STREAMING_MODE:
     case SAO_UI_ENTITY_ACTION_SET_FISHEYE_PROCEDURAL:
     case SAO_UI_ENTITY_ACTION_SET_FISHEYE_LIVE:
@@ -725,6 +725,26 @@ sao_status_t SAO_UI_CALL entity_action(SaoUiEntityAction action,
     case SAO_UI_ENTITY_ACTION_RELOAD_PLUGINS:
     case SAO_UI_ENTITY_ACTION_PLUGIN_STATUS:
         return SAO_STATUS_ERR_NOT_IMPLEMENTED;
+    case SAO_UI_ENTITY_ACTION_TOGGLE_NERVGEAR: {
+        auto* ctx = static_cast<sao_platform_ctx*>(user_data);
+        if (ctx == nullptr || ctx->entity_shell == nullptr || !ctx->settings_owner) {
+            return SAO_STATUS_ERR_NOT_INITIALIZED;
+        }
+        const bool target = !ctx->nervgear_mode;
+        sao_status_t status =
+            sao_ui_entity_shell_set_nervgear_mode(ctx->entity_shell, target);
+        if (status != SAO_STATUS_OK) {
+            return status;
+        }
+        status = ctx->settings_owner->set_value_and_save("nervgear_mode", target);
+        if (status != SAO_STATUS_OK) {
+            (void)sao_ui_entity_shell_set_nervgear_mode(
+                ctx->entity_shell, ctx->nervgear_mode);
+            return status;
+        }
+        ctx->nervgear_mode = target;
+        return SAO_STATUS_OK;
+    }
     case SAO_UI_ENTITY_ACTION_OPEN_AI_EDITOR: {
         auto* ctx = static_cast<sao_platform_ctx*>(user_data);
         if (ctx == nullptr || !ctx->ai_editor) {
@@ -798,6 +818,12 @@ sao_status_t sao_platform_bringup(const sao_platform_config* cfg,
         delete ctx;
         return status;
     }
+    status = ctx->settings_owner->get_truthy(
+        "nervgear_mode", true, ctx->nervgear_mode);
+    if (status != SAO_STATUS_OK) {
+        delete ctx;
+        return status;
+    }
     sao::launcher::settings_theme::PanelTheme restored_theme{};
     status = sao::launcher::settings_theme::read_process_theme(
         *ctx->settings_owner, restored_theme);
@@ -833,6 +859,11 @@ sao_status_t sao_platform_bringup(const sao_platform_config* cfg,
     entity_cfg.action_user_data = ctx;
     status = sao_ui_entity_shell_create(
         ctx->overlay_host, &entity_cfg, &ctx->entity_shell);
+    if (status != SAO_STATUS_OK) {
+        return rollback_platform_bringup(ctx, ctx_out, status);
+    }
+    status = sao_ui_entity_shell_set_nervgear_mode(
+        ctx->entity_shell, ctx->nervgear_mode);
     if (status != SAO_STATUS_OK) {
         return rollback_platform_bringup(ctx, ctx_out, status);
     }

@@ -717,6 +717,7 @@ struct sao_ui_entity_shell_s {
     bool online{};
     bool overlay_visible{};
     bool menu_visible{};
+    bool nervgear_mode{true};
     bool visual_dirty{true};
     bool input_region_settle_pending{};
     bool destroy_pending{};
@@ -827,13 +828,14 @@ sao_status_t refresh_host_geometry_locked(sao_ui_entity_shell_s* shell) {
 }
 
 sao_status_t apply_layer_state_locked(sao_ui_entity_shell_s* shell) {
-    const bool nervegear_active = shell->online && shell->overlay_visible;
+    const bool overlay_active = shell->online && shell->overlay_visible;
+    const bool nervegear_active = overlay_active && shell->nervgear_mode;
     SaoUiMenuPhase menu_phase = SAO_UI_MENU_PHASE_CLOSED;
     float menu_progress = 0.0F;
     sao_status_t status = sao_ui_menu_get_phase(shell->menu, &menu_phase);
     status =
         first_failure(status, sao_ui_menu_get_transition_progress(shell->menu, &menu_progress));
-    const bool menu_active = nervegear_active && menu_phase != SAO_UI_MENU_PHASE_CLOSED;
+    const bool menu_active = overlay_active && menu_phase != SAO_UI_MENU_PHASE_CLOSED;
     const float menu_layer_alpha = shell->menu_visible && menu_phase == SAO_UI_MENU_PHASE_OPENING
                                        ? std::max(menu_progress, 1.0F / 255.0F)
                                        : menu_progress;
@@ -1009,6 +1011,8 @@ sao_status_t sync_frame_locked(sao_ui_entity_shell_s* shell, uint32_t elapsed_ms
 }
 
 bool local_nervegear_hit_locked(sao_ui_entity_shell_s* shell, int32_t screen_x, int32_t screen_y) {
+    if (!shell->nervgear_mode)
+        return false;
     bool hit = false;
     return sao_ui_nervegear_hit_test(shell->nervegear, screen_x, screen_y, &hit) == SAO_STATUS_OK &&
            hit;
@@ -1255,6 +1259,40 @@ sao_ui_entity_shell_take_offline(sao_ui_entity_shell_handle_t handle) {
     }
     handle->last_status = status;
     return status;
+}
+
+extern "C" sao_status_t SAO_UI_CALL
+sao_ui_entity_shell_set_nervgear_mode(sao_ui_entity_shell_handle_t handle, bool enabled) {
+    if (handle == nullptr)
+        return SAO_STATUS_ERR_HANDLE_INVALID;
+    if (std::this_thread::get_id() != handle->owner_thread) {
+        return SAO_STATUS_ERR_ACCESS_DENIED;
+    }
+    std::lock_guard<std::mutex> lock(handle->mutex);
+    if (handle->nervgear_mode == enabled) {
+        handle->last_status = SAO_STATUS_OK;
+        return SAO_STATUS_OK;
+    }
+
+    const bool previous_mode = handle->nervgear_mode;
+    handle->nervgear_mode = enabled;
+    sao_status_t status = sao::ui::entity_child_defaults::apply_control(handle->menu, enabled);
+    if (status == SAO_STATUS_OK) {
+        handle->visual_dirty = true;
+        status = commit_visual_state_locked(handle);
+    }
+    if (status == SAO_STATUS_OK) {
+        handle->last_status = SAO_STATUS_OK;
+        return SAO_STATUS_OK;
+    }
+
+    const sao_status_t failure_status = status;
+    handle->nervgear_mode = previous_mode;
+    (void)sao::ui::entity_child_defaults::apply_control(handle->menu, previous_mode);
+    handle->visual_dirty = true;
+    (void)commit_visual_state_locked(handle);
+    handle->last_status = failure_status;
+    return failure_status;
 }
 
 extern "C" sao_status_t SAO_UI_CALL sao_ui_entity_shell_tick(sao_ui_entity_shell_handle_t handle,
