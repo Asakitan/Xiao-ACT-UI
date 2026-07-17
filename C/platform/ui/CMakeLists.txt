@@ -96,6 +96,7 @@ target_link_libraries(sao_platform_ui
 if (WIN32)
     target_sources(sao_platform_ui PRIVATE
         src/entity_authority_frames.rc
+        src/entity_text_renderer_win.cpp
     )
 
     target_link_libraries(sao_platform_ui
@@ -105,6 +106,8 @@ if (WIN32)
             dcomp
             d2d1
             dwrite
+            windowscodecs
+            ole32
             user32
             gdi32
             dwmapi

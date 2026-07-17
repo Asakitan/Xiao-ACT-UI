@@ -4,10 +4,12 @@
 #include "sao/ui/menu.h"
 #include "sao/ui/theme.h"
 
+#include "entity_child_defaults_internal.h"
 #include "menu_visual_internal.h"
 
 #if defined(_WIN32)
 #include "entity_authority_frames.h"
+#include "entity_text_renderer_win.h"
 #ifndef WIN32_LEAN_AND_MEAN
 #define WIN32_LEAN_AND_MEAN
 #endif
@@ -18,6 +20,7 @@
 #include <array>
 #include <cmath>
 #include <cstring>
+#include <limits>
 #include <memory>
 #include <mutex>
 #include <new>
@@ -63,6 +66,13 @@ constexpr int32_t kChildRowHeight = 44;
 constexpr int32_t kChildRowStride = 47;
 constexpr int32_t kChildTargetWidth = 240;
 constexpr int32_t kChildMaxRows = 8;
+constexpr int32_t kChildIconFontSize = 12;
+constexpr int32_t kChildLabelFontSize = 10;
+constexpr int32_t kChildFallbackIconWidth = 12;
+constexpr int32_t kChildIconGap = 5;
+constexpr int32_t kChildRowPadRight = 8;
+constexpr int32_t kChildCaretWidth = 12;
+constexpr int32_t kChildCaretGap = 3;
 constexpr uint32_t kMouseMove = 0x0200;
 constexpr uint32_t kLeftButtonDown = 0x0201;
 constexpr uint32_t kLeftButtonUp = 0x0202;
@@ -265,6 +275,7 @@ constexpr std::array<Glyph, 26> kUppercaseGlyphs{{
 }};
 
 constexpr Glyph kQuestionGlyph{0x0E, 0x11, 0x01, 0x02, 0x04, 0x00, 0x04};
+constexpr Glyph kDotGlyph{0x00, 0x00, 0x00, 0x00, 0x00, 0x06, 0x06};
 constexpr Glyph kBlankGlyph{};
 
 const Glyph& glyph_for(unsigned char character) {
@@ -273,11 +284,75 @@ const Glyph& glyph_for(unsigned char character) {
     if (character >= 'A' && character <= 'Z') {
         return kUppercaseGlyphs[character - 'A'];
     }
-    return character == '?' ? kQuestionGlyph : kBlankGlyph;
+    if (character == '?')
+        return kQuestionGlyph;
+    return character == '.' ? kDotGlyph : kBlankGlyph;
+}
+
+bool next_utf8_code_point(std::string_view text, size_t* offset, uint32_t* code_point) {
+    if (offset == nullptr || code_point == nullptr || *offset >= text.size())
+        return false;
+    const auto first = static_cast<uint8_t>(text[*offset]);
+    if (first < 0x80U) {
+        *code_point = first;
+        ++*offset;
+        return true;
+    }
+
+    size_t length = 0;
+    uint32_t value = 0;
+    uint32_t minimum = 0;
+    if (first >= 0xC2U && first <= 0xDFU) {
+        length = 2;
+        value = first & 0x1FU;
+        minimum = 0x80U;
+    } else if (first >= 0xE0U && first <= 0xEFU) {
+        length = 3;
+        value = first & 0x0FU;
+        minimum = 0x800U;
+    } else if (first >= 0xF0U && first <= 0xF4U) {
+        length = 4;
+        value = first & 0x07U;
+        minimum = 0x10000U;
+    } else {
+        *code_point = '?';
+        do {
+            ++*offset;
+        } while (*offset < text.size() && (static_cast<uint8_t>(text[*offset]) & 0xC0U) == 0x80U);
+        return true;
+    }
+    if (length > text.size() - *offset) {
+        *code_point = '?';
+        do {
+            ++*offset;
+        } while (*offset < text.size() && (static_cast<uint8_t>(text[*offset]) & 0xC0U) == 0x80U);
+        return true;
+    }
+    for (size_t index = 1; index < length; ++index) {
+        const auto continuation = static_cast<uint8_t>(text[*offset + index]);
+        if ((continuation & 0xC0U) != 0x80U) {
+            *code_point = '?';
+            *offset += index;
+            return true;
+        }
+        value = (value << 6U) | (continuation & 0x3FU);
+    }
+    if (value < minimum || value > 0x10FFFFU || (value >= 0xD800U && value <= 0xDFFFU)) {
+        *code_point = '?';
+        *offset += length;
+        return true;
+    }
+    *code_point = value;
+    *offset += length;
+    return true;
 }
 
 void draw_text(Raster& raster, int32_t x, int32_t y, std::string_view text, int32_t scale,
                Color color, BlendRounding rounding = BlendRounding::Nearest);
+
+void draw_text_clipped(Raster& raster, int32_t x, int32_t y, int32_t max_width,
+                       std::string_view text, int32_t scale, Color color,
+                       BlendRounding rounding = BlendRounding::Nearest, bool ellipsis = false);
 
 Color lerp_rgb(Color from, Color to, float amount, uint8_t alpha) {
     const double t = std::clamp(static_cast<double>(amount), 0.0, 1.0);
@@ -309,9 +384,15 @@ void draw_child_overlay(Raster& raster, const sao::ui::menu_visual::Snapshot& sn
                       kChildBlendRounding);
     }
 
-    const int32_t row_count = std::min(static_cast<int32_t>(snapshot.rows.size()), kChildMaxRows);
+    const size_t visible_row_count =
+        std::min(snapshot.rows.size(), static_cast<size_t>(kChildMaxRows));
+    const int32_t row_count = static_cast<int32_t>(visible_row_count);
     if (row_count <= 0)
         return;
+#if defined(_WIN32)
+    std::vector<sao::ui::entity_text::TextCommand> text_commands;
+    text_commands.reserve(static_cast<size_t>(row_count) * 2U);
+#endif
     const double opacity = 1.0 - std::clamp(static_cast<double>(snapshot.fade_t), 0.0, 1.0);
     const int32_t line_height = row_count * kChildRowStride - 3;
     const int32_t line_top = kChildOriginY + 5;
@@ -370,19 +451,48 @@ void draw_child_overlay(Raster& raster, const sao::ui::menu_visual::Snapshot& sn
                           kChildBlendRounding);
 
         const int32_t icon_x = kChildRowX + 2 + 8;
-        const int32_t text_y = row_y + 15;
+        const int32_t icon_y = row_y + (kChildRowHeight - kChildIconFontSize) / 2 - 2;
+        const int32_t label_x = icon_x + kChildFallbackIconWidth + kChildIconGap;
+        const int32_t label_y = row_y + (kChildRowHeight - kChildLabelFontSize) / 2 - 2;
+        const int32_t caret_x = kChildRowX + row_width - kChildRowPadRight - 6;
+        const int32_t label_max_width =
+            std::max(0, caret_x - kChildCaretWidth - kChildCaretGap - label_x);
         const std::string_view icon_text(row.icon_utf8.data());
-        if (!icon_text.empty())
-            draw_text(raster, icon_x, text_y, icon_text.substr(0, 1), 1, icon,
-                      kChildBlendRounding);
-        const int32_t label_x = icon_x + 11;
-        const int32_t caret_x = kChildRowX + row_width - 14;
-        if (caret_x - label_x > 5) {
-            const size_t max_characters = static_cast<size_t>((caret_x - label_x) / 6);
-            draw_text(raster, label_x, text_y, std::string_view(row.name_utf8.data()).substr(
-                                                     0, max_characters),
-                      1, foreground, kChildBlendRounding);
+#if defined(_WIN32)
+        if (!icon_text.empty()) {
+            text_commands.push_back({icon_x,
+                                     icon_y,
+                                     kChildFallbackIconWidth,
+                                     kChildRowHeight,
+                                     std::string(icon_text),
+                                     sao::ui::entity_text::FontRole::Icon,
+                                     static_cast<float>(kChildIconFontSize),
+                                     {icon.r, icon.g, icon.b, icon.a},
+                                     false});
         }
+        const std::string_view label_text(row.name_utf8.data());
+        if (!label_text.empty() && label_max_width > 4) {
+            text_commands.push_back({label_x,
+                                     label_y,
+                                     label_max_width,
+                                     kChildRowHeight,
+                                     std::string(label_text),
+                                     sao::ui::entity_text::FontRole::Label,
+                                     static_cast<float>(kChildLabelFontSize),
+                                     {foreground.r, foreground.g, foreground.b, foreground.a},
+                                     true});
+        }
+#else
+        if (!icon_text.empty()) {
+            draw_text_clipped(raster, icon_x, icon_y, kChildFallbackIconWidth, icon_text, 1, icon,
+                              kChildBlendRounding);
+        }
+        if (label_max_width > 4) {
+            draw_text_clipped(raster, label_x, label_y, label_max_width,
+                              std::string_view(row.name_utf8.data()), 1, foreground,
+                              kChildBlendRounding, true);
+        }
+#endif
         if (hover > 0.05F && row_width >= 18) {
             const Color caret = lerp_rgb(kChildBackground, kChildHoverText, hover,
                                          scaled_alpha(255.0, opacity));
@@ -393,23 +503,66 @@ void draw_child_overlay(Raster& raster, const sao::ui::menu_visual::Snapshot& sn
                       kChildBlendRounding);
         }
     }
+#if defined(_WIN32)
+    const sao::ui::entity_text::BgraSurface surface{
+        reinterpret_cast<uint8_t*>(raster.pixels.data()), raster.width, raster.height,
+        raster.width * sizeof(Pixel)};
+    if (!sao::ui::entity_text::render_text(surface, text_commands)) {
+        for (const auto& command : text_commands) {
+            draw_text_clipped(raster, command.x, command.y, command.max_width, command.utf8, 1,
+                              {command.color.r, command.color.g, command.color.b, command.color.a},
+                              kChildBlendRounding, command.ellipsis);
+        }
+    }
+#endif
 }
 
 void draw_text(Raster& raster, int32_t x, int32_t y, std::string_view text, int32_t scale,
                Color color, BlendRounding rounding) {
+    draw_text_clipped(raster, x, y, std::numeric_limits<int32_t>::max(), text, scale, color,
+                      rounding);
+}
+
+void draw_text_clipped(Raster& raster, int32_t x, int32_t y, int32_t max_width,
+                       std::string_view text, int32_t scale, Color color, BlendRounding rounding,
+                       bool ellipsis) {
+    if (scale <= 0 || max_width <= 0)
+        return;
+    const int64_t glyph_width = static_cast<int64_t>(scale) * 5;
+    const int64_t advance = static_cast<int64_t>(scale) * 6;
+    if (glyph_width > max_width)
+        return;
+    const size_t capacity = static_cast<size_t>(
+        1 + (static_cast<int64_t>(max_width) - glyph_width) / advance);
+    std::vector<uint32_t> code_points;
+    code_points.reserve(text.size());
+    size_t offset = 0;
+    uint32_t code_point = 0;
+    while (next_utf8_code_point(text, &offset, &code_point))
+        code_points.push_back(code_point);
+
+    const bool clipped = code_points.size() > capacity;
+    const size_t dot_count = ellipsis && clipped ? std::min<size_t>(3U, capacity) : 0U;
+    const size_t text_count = clipped ? capacity - dot_count : code_points.size();
     int32_t cursor = x;
-    for (const unsigned char character : text) {
+    const auto draw_code_point = [&](uint32_t value) {
+        const unsigned char character =
+            value <= 0x7FU ? static_cast<unsigned char>(value) : '?';
         const Glyph& glyph = glyph_for(character);
         for (int32_t row = 0; row < static_cast<int32_t>(glyph.size()); ++row) {
             for (int32_t column = 0; column < 5; ++column) {
                 if ((glyph[row] & (1U << (4 - column))) != 0U) {
-                    fill_rect(raster, cursor + column * scale, y + row * scale, scale, scale,
-                              color, rounding);
+                    fill_rect(raster, cursor + column * scale, y + row * scale, scale, scale, color,
+                              rounding);
                 }
             }
         }
         cursor += scale * 6;
-    }
+    };
+    for (size_t index = 0; index < text_count; ++index)
+        draw_code_point(code_points[index]);
+    for (size_t index = 0; index < dot_count; ++index)
+        draw_code_point('.');
 }
 
 Raster make_raster(uint32_t width, uint32_t height) {
@@ -708,8 +861,9 @@ sao_status_t build_menu_input_rects_locked(
         next_rects.push_back(
             {kMenuPad, kMenuPad + index * kMenuSlot, kMenuSlot, kMenuSlot});
     }
-    const int32_t child_count =
-        std::min(static_cast<int32_t>(snapshot.rows.size()), kChildMaxRows);
+    const size_t visible_child_count =
+        std::min(snapshot.rows.size(), static_cast<size_t>(kChildMaxRows));
+    const int32_t child_count = static_cast<int32_t>(visible_child_count);
     for (int32_t index = 0; index < child_count; ++index) {
         int32_t x = 0;
         int32_t y = 0;
@@ -928,49 +1082,7 @@ sao_ui_entity_shell_create(sao_ui_overlay_host_handle_t host, const SaoUiEntityS
                                     SAO_UI_MENU_MODE_VERTICAL_STRIP, &shell->menu);
     }
     if (status == SAO_STATUS_OK) {
-        const std::array<SaoUiMenuItem, 5> items{{
-            {"Control", "C", 10, true, {false, false, false}},
-            {"Tools", "T", 11, true, {false, false, false}},
-            {"Plugins", "P", 12, true, {false, false, false}},
-            {"Skins", "S", 13, true, {false, false, false}},
-            {"About", "?", SAO_UI_ENTITY_ACTION_OPEN_ABOUT, true, {false, false, false}},
-        }};
-        status = sao_ui_menu_set_items(shell->menu, items.data(), items.size());
-    }
-    if (status == SAO_STATUS_OK) {
-        const std::array<SaoUiMenuItem, 4> children{{
-            {"TOPMOST: OFF", "T", 100, true, {false, false, false}},
-            {"NERVGEAR: ON", "N", 101, true, {false, false, false}},
-            {"STREAMING MODE: OFF", "S", 102, true, {false, false, false}},
-            {"SAVE SETTINGS", "S", 103, true, {false, false, false}},
-        }};
-        status = sao_ui_menu_set_children(shell->menu, "Control", children.data(),
-                                          children.size());
-    }
-    if (status == SAO_STATUS_OK) {
-        const std::array<SaoUiMenuItem, 3> children{{
-            {"AI EDITOR (LLM)", "A", 110, true, {false, false, false}},
-            {"WORKSHOP", "W", 111, true, {false, false, false}},
-            {"PROCESS SELECTOR", "P", 112, true, {false, false, false}},
-        }};
-        status =
-            sao_ui_menu_set_children(shell->menu, "Tools", children.data(), children.size());
-    }
-    if (status == SAO_STATUS_OK) {
-        const std::array<SaoUiMenuItem, 2> children{{
-            {"PLUGIN MANAGER", "P", 120, true, {false, false, false}},
-            {"RELOAD PLUGINS", "R", 121, true, {false, false, false}},
-        }};
-        status = sao_ui_menu_set_children(shell->menu, "Plugins", children.data(),
-                                          children.size());
-    }
-    if (status == SAO_STATUS_OK) {
-        const std::array<SaoUiMenuItem, 2> children{{
-            {"ALL LIGHT", "L", 130, true, {false, false, false}},
-            {"ALL DARK", "D", 131, true, {false, false, false}},
-        }};
-        status =
-            sao_ui_menu_set_children(shell->menu, "Skins", children.data(), children.size());
+        status = sao::ui::entity_child_defaults::apply(shell->menu);
     }
     if (status == SAO_STATUS_OK) {
         SaoUiMenuLayout layout{};
