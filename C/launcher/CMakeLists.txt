@@ -20,6 +20,7 @@ set(SAO_LAUNCHER_HEADERS
     src/settings_codec_internal.h
     src/settings_json_internal.h
     src/settings_owner_internal.h
+    src/settings_theme_internal.h
     include/sao/launcher/app.h
     include/sao/launcher/args.h
     include/sao/launcher/crash_handler.h
@@ -38,6 +39,7 @@ set(SAO_LAUNCHER_SOURCES
     src/settings_codec.cpp
     src/settings_json_internal.cpp
     src/settings_owner.cpp
+    src/settings_theme_internal.cpp
     src/main.cpp
     src/app.cpp
     src/args.cpp

@@ -22,9 +22,17 @@
 
 #include "launcher_lifecycle.h"
 
+#ifdef SAO_STATUS_OK
+#undef SAO_STATUS_OK
+#endif
+#include "settings_owner_internal.h"
+#include "settings_theme_internal.h"
+
 #include <windows.h>
 #include <cstring>
 #include <cwchar>
+#include <filesystem>
+#include <memory>
 #include <new>
 
 #if defined(SAO_LAUNCHER_CORE_LOG_PROVIDER)
@@ -623,7 +631,51 @@ struct sao_platform_ctx {
     sao_ui_entity_shell_handle_t entity_shell;
     bool home_hotkey_registered;
     bool insert_hotkey_registered;
+    SaoUiThemeId previous_theme = SAO_UI_THEME_DARK;
+    bool restore_theme_on_rollback = false;
+    bool settings_save_enabled = false;
+    std::unique_ptr<sao::launcher::settings_owner::SettingsOwner> settings_owner;
 };
+
+sao_status_t create_settings_owner(
+    const wchar_t* base_dir,
+    std::unique_ptr<sao::launcher::settings_owner::SettingsOwner>& out) noexcept {
+    try {
+        const auto settings_path =
+            std::filesystem::path(base_dir) / L"settings.json";
+        return sao::launcher::settings_owner::SettingsOwner::create(
+            settings_path.wstring(), out);
+    } catch (const std::bad_alloc&) {
+        return SAO_STATUS_ERR_UNKNOWN;
+    } catch (...) {
+        return SAO_STATUS_ERR_OS_CALL_FAILED;
+    }
+}
+
+SaoUiThemeId runtime_theme_id(
+    sao::launcher::settings_theme::PanelTheme theme) noexcept {
+    return theme == sao::launcher::settings_theme::PanelTheme::light
+        ? SAO_UI_THEME_LIGHT
+        : SAO_UI_THEME_DARK;
+}
+
+sao_status_t teardown_platform_context(sao_platform_ctx* ctx,
+                                       bool save_settings) noexcept;
+
+sao_status_t rollback_platform_bringup(sao_platform_ctx* ctx,
+                                        sao_platform_ctx** ctx_out,
+                                        sao_status_t failure_status) noexcept {
+    const SaoUiThemeId previous_theme = ctx->previous_theme;
+    const bool restore_theme = ctx->restore_theme_on_rollback;
+    const sao_status_t teardown_status = teardown_platform_context(ctx, false);
+    if (teardown_status != SAO_STATUS_OK) {
+        *ctx_out = ctx;
+    }
+    if (restore_theme) {
+        (void)sao_ui_theme_set_active_id(previous_theme);
+    }
+    return failure_status;
+}
 
 bool SAO_UI_CALL entity_hit_test(int32_t x, int32_t y, void* user_data) {
     bool hit = false;
@@ -649,7 +701,6 @@ sao_status_t SAO_UI_CALL entity_action(SaoUiEntityAction action,
     case SAO_UI_ENTITY_ACTION_TOGGLE_TOPMOST:
     case SAO_UI_ENTITY_ACTION_TOGGLE_NERVGEAR:
     case SAO_UI_ENTITY_ACTION_TOGGLE_STREAMING_MODE:
-    case SAO_UI_ENTITY_ACTION_SAVE_SETTINGS:
     case SAO_UI_ENTITY_ACTION_SET_FISHEYE_PROCEDURAL:
     case SAO_UI_ENTITY_ACTION_SET_FISHEYE_LIVE:
     case SAO_UI_ENTITY_ACTION_OPEN_AI_EDITOR:
@@ -659,10 +710,30 @@ sao_status_t SAO_UI_CALL entity_action(SaoUiEntityAction action,
     case SAO_UI_ENTITY_ACTION_RELOAD_PLUGINS:
     case SAO_UI_ENTITY_ACTION_PLUGIN_STATUS:
         return SAO_STATUS_ERR_NOT_IMPLEMENTED;
+    case SAO_UI_ENTITY_ACTION_SAVE_SETTINGS: {
+        auto* ctx = static_cast<sao_platform_ctx*>(user_data);
+        if (ctx == nullptr || !ctx->settings_owner) {
+            return SAO_STATUS_ERR_NOT_INITIALIZED;
+        }
+        return ctx->settings_owner->save();
+    }
     case SAO_UI_ENTITY_ACTION_SET_ALL_LIGHT:
-        return sao_ui_theme_set_active_id(SAO_UI_THEME_LIGHT);
-    case SAO_UI_ENTITY_ACTION_SET_ALL_DARK:
-        return sao_ui_theme_set_active_id(SAO_UI_THEME_DARK);
+    case SAO_UI_ENTITY_ACTION_SET_ALL_DARK: {
+        auto* ctx = static_cast<sao_platform_ctx*>(user_data);
+        if (ctx == nullptr || !ctx->settings_owner) {
+            return SAO_STATUS_ERR_NOT_INITIALIZED;
+        }
+        const auto theme = action == SAO_UI_ENTITY_ACTION_SET_ALL_LIGHT
+            ? sao::launcher::settings_theme::PanelTheme::light
+            : sao::launcher::settings_theme::PanelTheme::dark;
+        const sao_status_t status =
+            sao::launcher::settings_theme::replace_all_panel_themes(
+                *ctx->settings_owner, theme);
+        if (status != SAO_STATUS_OK) {
+            return status;
+        }
+        return sao_ui_theme_set_active_id(runtime_theme_id(theme));
+    }
     default:
         return SAO_STATUS_ERR_INVALID_ARGUMENT;
     }
@@ -687,23 +758,45 @@ sao_status_t sao_platform_bringup(const sao_platform_config* cfg,
     auto* ctx = new (std::nothrow) sao_platform_ctx{};
     if (!ctx) return SAO_STATUS_INTERNAL;
 
-    SaoRtIoProxyConfig rt_io_cfg{};
-    rt_io_cfg.session_name_utf8 = "launcher";
-    rt_io_cfg.strict_bootstrap = 1;
-    sao_status_t status = sao_rt_io_proxy_open(&rt_io_cfg, &ctx->rt_io_proxy);
+    sao_status_t status = create_settings_owner(cfg->base_dir, ctx->settings_owner);
     if (status != SAO_STATUS_OK) {
         delete ctx;
         return status;
+    }
+    sao::launcher::settings_owner::LoadInfo load_info{};
+    status = ctx->settings_owner->load(load_info);
+    if (status != SAO_STATUS_OK) {
+        delete ctx;
+        return status;
+    }
+    sao::launcher::settings_theme::PanelTheme restored_theme{};
+    status = sao::launcher::settings_theme::read_process_theme(
+        *ctx->settings_owner, restored_theme);
+    if (status != SAO_STATUS_OK) {
+        return rollback_platform_bringup(ctx, ctx_out, status);
+    }
+    status = sao_ui_theme_get_active_id(&ctx->previous_theme);
+    if (status != SAO_STATUS_OK) {
+        return rollback_platform_bringup(ctx, ctx_out, status);
+    }
+    ctx->restore_theme_on_rollback = true;
+    status = sao_ui_theme_set_active_id(runtime_theme_id(restored_theme));
+    if (status != SAO_STATUS_OK) {
+        return rollback_platform_bringup(ctx, ctx_out, status);
+    }
+
+    SaoRtIoProxyConfig rt_io_cfg{};
+    rt_io_cfg.session_name_utf8 = "launcher";
+    rt_io_cfg.strict_bootstrap = 1;
+    status = sao_rt_io_proxy_open(&rt_io_cfg, &ctx->rt_io_proxy);
+    if (status != SAO_STATUS_OK) {
+        return rollback_platform_bringup(ctx, ctx_out, status);
     }
 
     SaoOverlayHostConfig overlay_cfg{};
     status = sao_ui_overlay_host_create(&overlay_cfg, &ctx->overlay_host);
     if (status != SAO_STATUS_OK) {
-        const sao_status_t teardown_status = sao_platform_teardown(ctx);
-        if (teardown_status != SAO_STATUS_OK) {
-            *ctx_out = ctx;
-        }
-        return status;
+        return rollback_platform_bringup(ctx, ctx_out, status);
     }
 
     SaoUiEntityShellConfig entity_cfg{};
@@ -712,9 +805,7 @@ sao_status_t sao_platform_bringup(const sao_platform_config* cfg,
     status = sao_ui_entity_shell_create(
         ctx->overlay_host, &entity_cfg, &ctx->entity_shell);
     if (status != SAO_STATUS_OK) {
-        const sao_status_t teardown_status = sao_platform_teardown(ctx);
-        if (teardown_status != SAO_STATUS_OK) *ctx_out = ctx;
-        return status;
+        return rollback_platform_bringup(ctx, ctx_out, status);
     }
     status = sao_ui_overlay_host_set_hit_test(
         ctx->overlay_host, &entity_hit_test, ctx->entity_shell);
@@ -723,16 +814,17 @@ sao_status_t sao_platform_bringup(const sao_platform_config* cfg,
             ctx->overlay_host, &entity_mouse, ctx->entity_shell);
     }
     if (status != SAO_STATUS_OK) {
-        const sao_status_t teardown_status = sao_platform_teardown(ctx);
-        if (teardown_status != SAO_STATUS_OK) *ctx_out = ctx;
-        return status;
+        return rollback_platform_bringup(ctx, ctx_out, status);
     }
 
+    ctx->restore_theme_on_rollback = false;
+    ctx->settings_save_enabled = true;
     *ctx_out = ctx;
     return SAO_STATUS_OK;
 }
 
-sao_status_t sao_platform_teardown(sao_platform_ctx* ctx) {
+sao_status_t teardown_platform_context(sao_platform_ctx* ctx,
+                                       bool save_settings) noexcept {
     if (!ctx) return SAO_STATUS_INVALID_ARGUMENT;
     if (ctx->insert_hotkey_registered) {
         (void)UnregisterHotKey(nullptr, kInsertHotkeyId);
@@ -759,8 +851,22 @@ sao_status_t sao_platform_teardown(sao_platform_ctx* ctx) {
         }
         ctx->rt_io_proxy = nullptr;
     }
+    if (save_settings) {
+        if (!ctx->settings_owner) {
+            return SAO_STATUS_ERR_NOT_INITIALIZED;
+        }
+        const sao_status_t settings_status = ctx->settings_owner->save();
+        if (settings_status != SAO_STATUS_OK) {
+            return settings_status;
+        }
+    }
     delete ctx;
     return SAO_STATUS_OK;
+}
+
+sao_status_t sao_platform_teardown(sao_platform_ctx* ctx) {
+    if (!ctx) return SAO_STATUS_INVALID_ARGUMENT;
+    return teardown_platform_context(ctx, ctx->settings_save_enabled);
 }
 
 sao_status_t sao_ui_bring_online(sao_platform_ctx* ctx) {
