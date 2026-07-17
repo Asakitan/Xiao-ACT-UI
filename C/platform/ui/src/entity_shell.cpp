@@ -27,9 +27,6 @@
 #include <vector>
 
 extern "C" {
-SAO_UI_API sao_status_t SAO_UI_CALL
-sao_ui_menu_compute_button_layout(sao_ui_menu_handle_t handle, int32_t button_index, int32_t* out_x,
-                                  int32_t* out_y, int32_t* out_w, int32_t* out_h);
 SAO_UI_API sao_status_t SAO_UI_CALL sao_ui_menu_tick(sao_ui_menu_handle_t handle, int32_t dt_ms);
 SAO_UI_API sao_status_t SAO_UI_CALL sao_ui_menu_get_transition_progress(sao_ui_menu_handle_t handle,
                                                                         float* out_progress);
@@ -56,7 +53,16 @@ constexpr int32_t kMenuHeight = 430;
 constexpr int32_t kMenuSlot = 70;
 constexpr int32_t kMenuPad = 40;
 constexpr int32_t kMenuColumnCenter = kMenuPad + kMenuSlot / 2;
+constexpr int32_t kRootItemCount = 5;
 constexpr int32_t kAboutIndex = 4;
+constexpr int32_t kChildOriginX = 135;
+constexpr int32_t kChildOriginY = 40;
+constexpr int32_t kChildLineCenterX = 140;
+constexpr int32_t kChildRowX = 162;
+constexpr int32_t kChildRowHeight = 44;
+constexpr int32_t kChildRowStride = 47;
+constexpr int32_t kChildTargetWidth = 240;
+constexpr int32_t kChildMaxRows = 8;
 constexpr uint32_t kMouseMove = 0x0200;
 constexpr uint32_t kLeftButtonDown = 0x0201;
 constexpr uint32_t kLeftButtonUp = 0x0202;
@@ -84,58 +90,131 @@ struct Raster {
     std::vector<Pixel> pixels;
 };
 
-Pixel premultiply(Color color) {
+enum class BlendRounding {
+    Nearest,
+    Floor,
+};
+
+constexpr BlendRounding kChildBlendRounding = BlendRounding::Floor;
+
+Pixel premultiply(Color color, BlendRounding rounding = BlendRounding::Nearest) {
+    const uint32_t bias = rounding == BlendRounding::Nearest ? 127U : 0U;
     return {
-        static_cast<uint8_t>((static_cast<uint32_t>(color.b) * color.a + 127U) / 255U),
-        static_cast<uint8_t>((static_cast<uint32_t>(color.g) * color.a + 127U) / 255U),
-        static_cast<uint8_t>((static_cast<uint32_t>(color.r) * color.a + 127U) / 255U),
+        static_cast<uint8_t>((static_cast<uint32_t>(color.b) * color.a + bias) / 255U),
+        static_cast<uint8_t>((static_cast<uint32_t>(color.g) * color.a + bias) / 255U),
+        static_cast<uint8_t>((static_cast<uint32_t>(color.r) * color.a + bias) / 255U),
         color.a,
     };
 }
 
-void blend(Raster& raster, int32_t x, int32_t y, Color color) {
+void blend(Raster& raster, int32_t x, int32_t y, Color color,
+           BlendRounding rounding = BlendRounding::Nearest) {
     if (x < 0 || y < 0 || x >= static_cast<int32_t>(raster.width) ||
         y >= static_cast<int32_t>(raster.height)) {
         return;
     }
-    const Pixel source = premultiply(color);
+    const Pixel source = premultiply(color, rounding);
     Pixel& destination = raster.pixels[static_cast<size_t>(y) * raster.width + x];
     const uint32_t inverse = 255U - source.a;
+    const uint32_t bias = rounding == BlendRounding::Nearest ? 127U : 0U;
     destination.b = static_cast<uint8_t>(
-        source.b + (static_cast<uint32_t>(destination.b) * inverse + 127U) / 255U);
+        source.b + (static_cast<uint32_t>(destination.b) * inverse + bias) / 255U);
     destination.g = static_cast<uint8_t>(
-        source.g + (static_cast<uint32_t>(destination.g) * inverse + 127U) / 255U);
+        source.g + (static_cast<uint32_t>(destination.g) * inverse + bias) / 255U);
     destination.r = static_cast<uint8_t>(
-        source.r + (static_cast<uint32_t>(destination.r) * inverse + 127U) / 255U);
+        source.r + (static_cast<uint32_t>(destination.r) * inverse + bias) / 255U);
     destination.a = static_cast<uint8_t>(
-        source.a + (static_cast<uint32_t>(destination.a) * inverse + 127U) / 255U);
+        source.a + (static_cast<uint32_t>(destination.a) * inverse + bias) / 255U);
 }
 
-void fill_rect(Raster& raster, int32_t x, int32_t y, int32_t width, int32_t height, Color color) {
+void fill_rect(Raster& raster, int32_t x, int32_t y, int32_t width, int32_t height, Color color,
+               BlendRounding rounding = BlendRounding::Nearest) {
     const int32_t left = std::max(0, x);
     const int32_t top = std::max(0, y);
     const int32_t right = std::min(static_cast<int32_t>(raster.width), x + width);
     const int32_t bottom = std::min(static_cast<int32_t>(raster.height), y + height);
     for (int32_t py = top; py < bottom; ++py) {
         for (int32_t px = left; px < right; ++px)
-            blend(raster, px, py, color);
+            blend(raster, px, py, color, rounding);
     }
 }
 
-void fill_circle(Raster& raster, int32_t center_x, int32_t center_y, int32_t radius, Color color) {
+bool rounded_rect_contains(int32_t px, int32_t py, int32_t x, int32_t y, int32_t width,
+                           int32_t height, int32_t radius) {
+    if (px < x || py < y || px >= x + width || py >= y + height)
+        return false;
+    const int32_t clamped_radius = std::clamp(radius, 0, std::min(width, height) / 2);
+    if (clamped_radius == 0 ||
+        (px >= x + clamped_radius && px < x + width - clamped_radius) ||
+        (py >= y + clamped_radius && py < y + height - clamped_radius)) {
+        return true;
+    }
+    const int32_t center_x = px < x + clamped_radius ? x + clamped_radius - 1
+                                                     : x + width - clamped_radius;
+    const int32_t center_y = py < y + clamped_radius ? y + clamped_radius - 1
+                                                     : y + height - clamped_radius;
+    const int32_t dx = px - center_x;
+    const int32_t dy = py - center_y;
+    return dx * dx + dy * dy <= clamped_radius * clamped_radius;
+}
+
+void fill_rounded_rect(Raster& raster, int32_t x, int32_t y, int32_t width, int32_t height,
+                       int32_t radius, Color color,
+                       BlendRounding rounding = BlendRounding::Nearest) {
+    for (int32_t py = std::max(0, y); py < std::min(static_cast<int32_t>(raster.height), y + height);
+         ++py) {
+        for (int32_t px = std::max(0, x);
+             px < std::min(static_cast<int32_t>(raster.width), x + width); ++px) {
+            if (rounded_rect_contains(px, py, x, y, width, height, radius))
+                blend(raster, px, py, color, rounding);
+        }
+    }
+}
+
+void stroke_rounded_rect(Raster& raster, int32_t x, int32_t y, int32_t width, int32_t height,
+                         int32_t radius, int32_t thickness, Color color,
+                         BlendRounding rounding = BlendRounding::Nearest) {
+    for (int32_t inset = 0; inset < thickness; ++inset) {
+        const int32_t inner_x = x + inset;
+        const int32_t inner_y = y + inset;
+        const int32_t inner_width = width - inset * 2;
+        const int32_t inner_height = height - inset * 2;
+        if (inner_width <= 0 || inner_height <= 0)
+            break;
+        for (int32_t py = std::max(0, inner_y);
+             py < std::min(static_cast<int32_t>(raster.height), inner_y + inner_height); ++py) {
+            for (int32_t px = std::max(0, inner_x);
+                 px < std::min(static_cast<int32_t>(raster.width), inner_x + inner_width); ++px) {
+                if (!rounded_rect_contains(px, py, inner_x, inner_y, inner_width, inner_height,
+                                           std::max(0, radius - inset))) {
+                    continue;
+                }
+                if (rounded_rect_contains(px, py, inner_x + 1, inner_y + 1, inner_width - 2,
+                                          inner_height - 2, std::max(0, radius - inset - 1))) {
+                    continue;
+                }
+                blend(raster, px, py, color, rounding);
+            }
+        }
+    }
+}
+
+void fill_circle(Raster& raster, int32_t center_x, int32_t center_y, int32_t radius, Color color,
+                 BlendRounding rounding = BlendRounding::Nearest) {
     const int32_t radius_squared = radius * radius;
     for (int32_t y = center_y - radius; y <= center_y + radius; ++y) {
         for (int32_t x = center_x - radius; x <= center_x + radius; ++x) {
             const int32_t dx = x - center_x;
             const int32_t dy = y - center_y;
             if (dx * dx + dy * dy <= radius_squared)
-                blend(raster, x, y, color);
+                blend(raster, x, y, color, rounding);
         }
     }
 }
 
 void stroke_circle(Raster& raster, int32_t center_x, int32_t center_y, int32_t radius,
-                   int32_t thickness, Color color) {
+                   int32_t thickness, Color color,
+                   BlendRounding rounding = BlendRounding::Nearest) {
     const int32_t outer = radius * radius;
     const int32_t inner_radius = std::max(0, radius - thickness);
     const int32_t inner = inner_radius * inner_radius;
@@ -145,16 +224,16 @@ void stroke_circle(Raster& raster, int32_t center_x, int32_t center_y, int32_t r
             const int32_t dy = y - center_y;
             const int32_t distance = dx * dx + dy * dy;
             if (distance <= outer && distance >= inner)
-                blend(raster, x, y, color);
+                blend(raster, x, y, color, rounding);
         }
     }
 }
 
 void draw_line(Raster& raster, int32_t x0, int32_t y0, int32_t x1, int32_t y1, int32_t thickness,
-               Color color) {
+               Color color, BlendRounding rounding = BlendRounding::Nearest) {
     const int32_t steps = std::max(std::abs(x1 - x0), std::abs(y1 - y0));
     if (steps == 0) {
-        fill_circle(raster, x0, y0, std::max(1, thickness / 2), color);
+        fill_circle(raster, x0, y0, std::max(1, thickness / 2), color, rounding);
         return;
     }
     for (int32_t step = 0; step <= steps; ++step) {
@@ -163,7 +242,7 @@ void draw_line(Raster& raster, int32_t x0, int32_t y0, int32_t x1, int32_t y1, i
             static_cast<int32_t>(std::lround(x0 + static_cast<float>(x1 - x0) * ratio));
         const int32_t y =
             static_cast<int32_t>(std::lround(y0 + static_cast<float>(y1 - y0) * ratio));
-        fill_circle(raster, x, y, std::max(1, thickness / 2), color);
+        fill_circle(raster, x, y, std::max(1, thickness / 2), color, rounding);
     }
 }
 
@@ -189,6 +268,8 @@ constexpr Glyph kQuestionGlyph{0x0E, 0x11, 0x01, 0x02, 0x04, 0x00, 0x04};
 constexpr Glyph kBlankGlyph{};
 
 const Glyph& glyph_for(unsigned char character) {
+    if (character >= 'a' && character <= 'z')
+        character = static_cast<unsigned char>(character - 'a' + 'A');
     if (character >= 'A' && character <= 'Z') {
         return kUppercaseGlyphs[character - 'A'];
     }
@@ -196,7 +277,126 @@ const Glyph& glyph_for(unsigned char character) {
 }
 
 void draw_text(Raster& raster, int32_t x, int32_t y, std::string_view text, int32_t scale,
-               Color color) {
+               Color color, BlendRounding rounding = BlendRounding::Nearest);
+
+Color lerp_rgb(Color from, Color to, float amount, uint8_t alpha) {
+    const double t = std::clamp(static_cast<double>(amount), 0.0, 1.0);
+    const auto channel = [t](uint8_t start, uint8_t end) {
+        return static_cast<uint8_t>(static_cast<int32_t>(
+            static_cast<double>(start) +
+            (static_cast<double>(end) - static_cast<double>(start)) * t));
+    };
+    return {channel(from.r, to.r), channel(from.g, to.g), channel(from.b, to.b), alpha};
+}
+
+uint8_t scaled_alpha(double base, double opacity) {
+    return static_cast<uint8_t>(
+        std::clamp(static_cast<int32_t>(base * opacity), 0, 255));
+}
+
+void draw_child_overlay(Raster& raster, const sao::ui::menu_visual::Snapshot& snapshot) {
+    constexpr Color kChildBackground{248, 248, 248, 255};
+    constexpr Color kChildHover{244, 238, 225, 255};
+    constexpr Color kChildText{100, 99, 100, 255};
+    constexpr Color kChildHoverText{98, 88, 70, 255};
+    constexpr Color kChildIcon{143, 149, 155, 255};
+    constexpr Color kActiveBorder{243, 175, 18, 255};
+
+    if (snapshot.active_root_idx >= 0 && snapshot.active_root_idx < kRootItemCount) {
+        const int32_t center_y = kMenuPad + snapshot.active_root_idx * kMenuSlot + kMenuSlot / 2;
+        stroke_circle(raster, kMenuColumnCenter, center_y, 31, 2,
+                      Color{kActiveBorder.r, kActiveBorder.g, kActiveBorder.b, 235},
+                      kChildBlendRounding);
+    }
+
+    const int32_t row_count = std::min(static_cast<int32_t>(snapshot.rows.size()), kChildMaxRows);
+    if (row_count <= 0)
+        return;
+    const double opacity = 1.0 - std::clamp(static_cast<double>(snapshot.fade_t), 0.0, 1.0);
+    const int32_t line_height = row_count * kChildRowStride - 3;
+    const int32_t line_top = kChildOriginY + 5;
+    const uint8_t line_alpha = scaled_alpha(210.0, opacity);
+    draw_line(raster, kChildLineCenterX, line_top + 5, kChildLineCenterX,
+              line_top + line_height - 5, 4, Color{212, 208, 208, line_alpha},
+              kChildBlendRounding);
+    draw_line(raster, kChildLineCenterX, line_top + 5, kChildLineCenterX,
+              line_top + line_height - 5, 2, Color{156, 153, 153, line_alpha},
+              kChildBlendRounding);
+    fill_circle(raster, kChildLineCenterX, line_top + 5, 2,
+                Color{176, 176, 176, line_alpha}, kChildBlendRounding);
+    fill_circle(raster, kChildLineCenterX, line_top + line_height - 5, 2,
+                Color{176, 176, 176, line_alpha}, kChildBlendRounding);
+
+    constexpr int32_t kArrowCenterX = kChildOriginX + 10 + 3 + 6;
+    const int32_t arrow_center_y = kChildOriginY + 5 + line_height / 2;
+    for (int32_t glow_radius = 6; glow_radius > 0; glow_radius -= 2) {
+        const int32_t glow_amount = static_cast<int32_t>(15.0 * (1.0 - glow_radius / 6.0));
+        fill_circle(raster, kArrowCenterX, arrow_center_y, glow_radius,
+                    Color{static_cast<uint8_t>(static_cast<int32_t>(glow_amount * 3.5) & 0xFF),
+                          static_cast<uint8_t>(static_cast<int32_t>(glow_amount * 2.2) & 0xFF),
+                          static_cast<uint8_t>(static_cast<int32_t>(glow_amount * 0.3) & 0xFF),
+                          scaled_alpha(150.0, opacity)},
+                    kChildBlendRounding);
+    }
+    fill_circle(raster, kArrowCenterX, arrow_center_y, 3,
+                Color{201, 184, 150, scaled_alpha(220.0, opacity)}, kChildBlendRounding);
+    stroke_circle(raster, kArrowCenterX, arrow_center_y, 3, 1,
+                  Color{212, 200, 168, scaled_alpha(220.0, opacity)}, kChildBlendRounding);
+
+    for (int32_t index = 0; index < row_count; ++index) {
+        const auto& row = snapshot.rows[static_cast<size_t>(index)];
+        const int32_t row_width = std::clamp(row.visible_width_px, 0, kChildTargetWidth);
+        if (row_width <= 1)
+            continue;
+        const float hover = std::clamp(row.hover_t, 0.0F, 1.0F);
+        const int32_t row_y = kChildOriginY + index * kChildRowStride;
+        const int32_t radius = std::min({8, std::max(2, kChildRowHeight / 4),
+                                         std::max(2, row_width / 2)});
+        Color background = lerp_rgb(kChildBackground, kChildHover, hover,
+                                    scaled_alpha(218.0 + 18.0 * hover, opacity));
+        Color foreground = lerp_rgb(kChildText, kChildHoverText, hover,
+                                    scaled_alpha(255.0, opacity));
+        Color icon = lerp_rgb(kChildIcon, kChildHoverText, hover,
+                              scaled_alpha(245.0, opacity));
+        Color indicator = lerp_rgb(kChildBackground, kActiveBorder, hover,
+                                   scaled_alpha(235.0, opacity));
+        fill_rounded_rect(raster, kChildRowX, row_y, row_width, kChildRowHeight, radius,
+                          background, kChildBlendRounding);
+        stroke_rounded_rect(raster, kChildRowX, row_y, row_width, kChildRowHeight, radius, 1,
+                            Color{kActiveBorder.r, kActiveBorder.g, kActiveBorder.b,
+                                  scaled_alpha(72.0 * hover, opacity)},
+                            kChildBlendRounding);
+        fill_rounded_rect(raster, kChildRowX, row_y, 2, kChildRowHeight, 2, indicator,
+                          kChildBlendRounding);
+
+        const int32_t icon_x = kChildRowX + 2 + 8;
+        const int32_t text_y = row_y + 15;
+        const std::string_view icon_text(row.icon_utf8.data());
+        if (!icon_text.empty())
+            draw_text(raster, icon_x, text_y, icon_text.substr(0, 1), 1, icon,
+                      kChildBlendRounding);
+        const int32_t label_x = icon_x + 11;
+        const int32_t caret_x = kChildRowX + row_width - 14;
+        if (caret_x - label_x > 5) {
+            const size_t max_characters = static_cast<size_t>((caret_x - label_x) / 6);
+            draw_text(raster, label_x, text_y, std::string_view(row.name_utf8.data()).substr(
+                                                     0, max_characters),
+                      1, foreground, kChildBlendRounding);
+        }
+        if (hover > 0.05F && row_width >= 18) {
+            const Color caret = lerp_rgb(kChildBackground, kChildHoverText, hover,
+                                         scaled_alpha(255.0, opacity));
+            const int32_t caret_y = row_y + 15;
+            draw_line(raster, caret_x, caret_y, caret_x + 3, caret_y + 3, 1, caret,
+                      kChildBlendRounding);
+            draw_line(raster, caret_x + 3, caret_y + 3, caret_x, caret_y + 6, 1, caret,
+                      kChildBlendRounding);
+        }
+    }
+}
+
+void draw_text(Raster& raster, int32_t x, int32_t y, std::string_view text, int32_t scale,
+               Color color, BlendRounding rounding) {
     int32_t cursor = x;
     for (const unsigned char character : text) {
         const Glyph& glyph = glyph_for(character);
@@ -204,7 +404,7 @@ void draw_text(Raster& raster, int32_t x, int32_t y, std::string_view text, int3
             for (int32_t column = 0; column < 5; ++column) {
                 if ((glyph[row] & (1U << (4 - column))) != 0U) {
                     fill_rect(raster, cursor + column * scale, y + row * scale, scale, scale,
-                              color);
+                              color, rounding);
                 }
             }
         }
@@ -277,7 +477,8 @@ Raster rasterize_nervegear(SaoUiNerveGearState state) {
 #endif
 }
 
-Raster rasterize_menu(int32_t hover_index, int32_t pressed_index) {
+Raster rasterize_menu(int32_t hover_index, int32_t pressed_index,
+                      const sao::ui::menu_visual::Snapshot& snapshot) {
 #if defined(_WIN32)
     const int32_t selected_index = pressed_index >= 0 ? pressed_index : hover_index;
     constexpr std::array<int32_t, 5> kHoverResources{
@@ -289,7 +490,7 @@ Raster rasterize_menu(int32_t hover_index, int32_t pressed_index) {
         selected_index >= 0 && selected_index < static_cast<int32_t>(kHoverResources.size())
             ? kHoverResources[static_cast<size_t>(selected_index)]
             : SAO_UI_ENTITY_AUTHORITY_MENU_IDLE;
-    return load_authority_frame(resource_id, kMenuWidth, kMenuHeight);
+    Raster raster = load_authority_frame(resource_id, kMenuWidth, kMenuHeight);
 #else
     Raster raster = make_raster(kMenuWidth, kMenuHeight);
     fill_rect(raster, 15, 15, kMenuWidth - 30, kMenuHeight - 30, Color{248, 248, 248, 205});
@@ -323,8 +524,9 @@ Raster rasterize_menu(int32_t hover_index, int32_t pressed_index) {
         draw_line(raster, 113, center_y + 15, kMenuWidth - 19, center_y + 15, 1,
                   Color{188, 196, 202, 145});
     }
-    return raster;
 #endif
+    draw_child_overlay(raster, snapshot);
+    return raster;
 }
 
 sao_status_t first_failure(sao_status_t current, sao_status_t candidate) {
@@ -344,6 +546,7 @@ struct sao_ui_entity_shell_s {
     SaoUiEntityShellConfig config{};
     Raster nervegear_raster;
     Raster menu_raster;
+    std::vector<SaoUiLayerInputRect> menu_input_rects;
     int32_t origin_x{};
     int32_t origin_y{};
     int32_t width{};
@@ -389,7 +592,7 @@ void destroy_members(sao_ui_entity_shell_s* shell) {
 
 sao_status_t set_menu_visibility_locked(sao_ui_entity_shell_s* shell, bool visible) {
     const bool changed = shell->menu_visible != visible;
-    const sao_status_t status =
+    sao_status_t status =
         visible ? sao_ui_menu_show(shell->menu, shell->menu_x + kMenuColumnCenter,
                                    shell->menu_y + kMenuPad)
                 : sao_ui_menu_hide(shell->menu);
@@ -404,10 +607,11 @@ sao_status_t set_menu_visibility_locked(sao_ui_entity_shell_s* shell, bool visib
         shell->menu_hover_child_index = -1;
         shell->menu_pressed_child_parent = -1;
         shell->menu_pressed_child_index = -1;
-        (void)sao_ui_menu_set_hover(shell->menu, -1);
-        (void)sao::ui::menu_visual::set_child_hover(shell->menu, -1, -1);
+        status = first_failure(status, sao_ui_menu_set_hover(shell->menu, -1));
+        status = first_failure(
+            status, sao::ui::menu_visual::set_child_hover(shell->menu, -1, -1));
     }
-    return SAO_STATUS_OK;
+    return status;
 }
 
 sao_status_t refresh_host_geometry_locked(sao_ui_entity_shell_s* shell) {
@@ -483,28 +687,90 @@ sao_status_t apply_layer_state_locked(sao_ui_entity_shell_s* shell) {
     return status;
 }
 
+bool input_rects_equal(const std::vector<SaoUiLayerInputRect>& left,
+                       const std::vector<SaoUiLayerInputRect>& right) {
+    return left.size() == right.size() &&
+           std::equal(left.begin(), left.end(), right.begin(),
+                      [](const SaoUiLayerInputRect& a, const SaoUiLayerInputRect& b) {
+                          return a.x == b.x && a.y == b.y && a.width == b.width &&
+                                 a.height == b.height;
+                      });
+}
+
+sao_status_t build_menu_input_rects_locked(
+    sao_ui_entity_shell_s* shell, const sao::ui::menu_visual::Snapshot& snapshot,
+    std::vector<SaoUiLayerInputRect>* out_rects) {
+    if (out_rects == nullptr)
+        return SAO_STATUS_ERR_INVALID_ARGUMENT;
+    std::vector<SaoUiLayerInputRect> next_rects;
+    next_rects.reserve(kRootItemCount + kChildMaxRows);
+    for (int32_t index = 0; index < kRootItemCount; ++index) {
+        next_rects.push_back(
+            {kMenuPad, kMenuPad + index * kMenuSlot, kMenuSlot, kMenuSlot});
+    }
+    const int32_t child_count =
+        std::min(static_cast<int32_t>(snapshot.rows.size()), kChildMaxRows);
+    for (int32_t index = 0; index < child_count; ++index) {
+        int32_t x = 0;
+        int32_t y = 0;
+        int32_t width = 0;
+        int32_t height = 0;
+        const sao_status_t status = sao_ui_menu_compute_child_layout(
+            shell->menu, snapshot.displayed_parent_idx, index, &x, &y, &width, &height);
+        if (status != SAO_STATUS_OK)
+            return status;
+        next_rects.push_back(
+            {x - shell->menu_x, y - shell->menu_y, std::max(1, width), height});
+    }
+    *out_rects = std::move(next_rects);
+    return SAO_STATUS_OK;
+}
+
 sao_status_t raster_and_upload_locked(sao_ui_entity_shell_s* shell) {
-    SaoUiNerveGearState state = SAO_UI_NG_STATE_IDLE;
-    sao_status_t status = sao_ui_nervegear_get_state(shell->nervegear, &state);
+    sao::ui::menu_visual::Snapshot menu_snapshot{};
+    sao_status_t status = sao::ui::menu_visual::get_snapshot(shell->menu, &menu_snapshot);
     if (status != SAO_STATUS_OK)
         return status;
+    SaoUiNerveGearState state = SAO_UI_NG_STATE_IDLE;
+    status = sao_ui_nervegear_get_state(shell->nervegear, &state);
+    if (status != SAO_STATUS_OK)
+        return status;
+    Raster next_nervegear_raster;
+    Raster next_menu_raster;
+    std::vector<SaoUiLayerInputRect> next_menu_input_rects;
     try {
-        shell->nervegear_raster = rasterize_nervegear(state);
-        shell->menu_raster = rasterize_menu(shell->menu_hover_index, shell->menu_pressed_index);
+        next_nervegear_raster = rasterize_nervegear(state);
+        next_menu_raster =
+            rasterize_menu(shell->menu_hover_index, shell->menu_pressed_index, menu_snapshot);
+        status = build_menu_input_rects_locked(shell, menu_snapshot, &next_menu_input_rects);
     } catch (...) {
         return SAO_STATUS_ERR_UNKNOWN;
     }
-    status = sao_ui_layer_update_bgra(
-        shell->nervegear_layer,
-        reinterpret_cast<const uint8_t*>(shell->nervegear_raster.pixels.data()),
-        shell->nervegear_raster.width, shell->nervegear_raster.height,
-        shell->nervegear_raster.width * sizeof(Pixel));
     if (status != SAO_STATUS_OK)
         return status;
-    return sao_ui_layer_update_bgra(
-        shell->menu_layer, reinterpret_cast<const uint8_t*>(shell->menu_raster.pixels.data()),
-        shell->menu_raster.width, shell->menu_raster.height,
-        shell->menu_raster.width * sizeof(Pixel));
+    status = sao_ui_layer_update_bgra(
+        shell->nervegear_layer,
+        reinterpret_cast<const uint8_t*>(next_nervegear_raster.pixels.data()),
+        next_nervegear_raster.width, next_nervegear_raster.height,
+        next_nervegear_raster.width * sizeof(Pixel));
+    if (status != SAO_STATUS_OK)
+        return status;
+    status = sao_ui_layer_update_bgra(
+        shell->menu_layer, reinterpret_cast<const uint8_t*>(next_menu_raster.pixels.data()),
+        next_menu_raster.width, next_menu_raster.height,
+        next_menu_raster.width * sizeof(Pixel));
+    if (status != SAO_STATUS_OK)
+        return status;
+    if (!input_rects_equal(shell->menu_input_rects, next_menu_input_rects)) {
+        status = sao_ui_layer_set_input_rects(shell->menu_layer, next_menu_input_rects.data(),
+                                              next_menu_input_rects.size());
+        if (status != SAO_STATUS_OK)
+            return status;
+        shell->menu_input_rects = std::move(next_menu_input_rects);
+    }
+    shell->nervegear_raster = std::move(next_nervegear_raster);
+    shell->menu_raster = std::move(next_menu_raster);
+    return SAO_STATUS_OK;
 }
 
 sao_status_t commit_visual_state_locked(sao_ui_entity_shell_s* shell) {
@@ -520,7 +786,15 @@ sao_status_t commit_visual_state_locked(sao_ui_entity_shell_s* shell) {
         return settle_status;
     }
     sao_status_t status = apply_layer_state_locked(shell);
-    status = first_failure(status, raster_and_upload_locked(shell));
+    if (status != SAO_STATUS_OK) {
+        shell->last_status = status;
+        return status;
+    }
+    status = raster_and_upload_locked(shell);
+    if (status != SAO_STATUS_OK) {
+        shell->last_status = status;
+        return status;
+    }
     if (shell->host != nullptr) {
         status = first_failure(status, sao_ui_compositor_present(shell->compositor));
         const sao_status_t region_status = sao_ui_compositor_sync_host_rgn(shell->compositor);
@@ -585,9 +859,16 @@ struct MenuHit {
 
 MenuHit menu_hit_locked(sao_ui_entity_shell_s* shell, int32_t screen_x, int32_t screen_y) {
     MenuHit hit{};
-    if (!shell->menu_visible ||
-        sao_ui_menu_hit_test(shell->menu, screen_x - shell->origin_x, screen_y - shell->origin_y,
-                             &hit.parent, &hit.child) != SAO_STATUS_OK) {
+    if (!shell->menu_visible)
+        return {};
+    const int32_t host_x = screen_x - shell->origin_x;
+    const int32_t host_y = screen_y - shell->origin_y;
+    const int32_t local_x = host_x - shell->menu_x;
+    const int32_t local_y = host_y - shell->menu_y;
+    if (local_x < 0 || local_y < 0 || local_x >= kMenuWidth || local_y >= kMenuHeight ||
+        sao_ui_menu_hit_test(shell->menu, host_x, host_y, &hit.parent, &hit.child) !=
+            SAO_STATUS_OK ||
+        hit.child >= kChildMaxRows) {
         return {};
     }
     return hit;
@@ -648,13 +929,48 @@ sao_ui_entity_shell_create(sao_ui_overlay_host_handle_t host, const SaoUiEntityS
     }
     if (status == SAO_STATUS_OK) {
         const std::array<SaoUiMenuItem, 5> items{{
-            {"Control", "C", 10, false, {false, false, false}},
-            {"Tools", "T", 11, false, {false, false, false}},
-            {"Plugins", "P", 12, false, {false, false, false}},
-            {"Skins", "S", 13, false, {false, false, false}},
+            {"Control", "C", 10, true, {false, false, false}},
+            {"Tools", "T", 11, true, {false, false, false}},
+            {"Plugins", "P", 12, true, {false, false, false}},
+            {"Skins", "S", 13, true, {false, false, false}},
             {"About", "?", SAO_UI_ENTITY_ACTION_OPEN_ABOUT, true, {false, false, false}},
         }};
         status = sao_ui_menu_set_items(shell->menu, items.data(), items.size());
+    }
+    if (status == SAO_STATUS_OK) {
+        const std::array<SaoUiMenuItem, 4> children{{
+            {"TOPMOST: OFF", "T", 100, true, {false, false, false}},
+            {"NERVGEAR: ON", "N", 101, true, {false, false, false}},
+            {"STREAMING MODE: OFF", "S", 102, true, {false, false, false}},
+            {"SAVE SETTINGS", "S", 103, true, {false, false, false}},
+        }};
+        status = sao_ui_menu_set_children(shell->menu, "Control", children.data(),
+                                          children.size());
+    }
+    if (status == SAO_STATUS_OK) {
+        const std::array<SaoUiMenuItem, 3> children{{
+            {"AI EDITOR (LLM)", "A", 110, true, {false, false, false}},
+            {"WORKSHOP", "W", 111, true, {false, false, false}},
+            {"PROCESS SELECTOR", "P", 112, true, {false, false, false}},
+        }};
+        status =
+            sao_ui_menu_set_children(shell->menu, "Tools", children.data(), children.size());
+    }
+    if (status == SAO_STATUS_OK) {
+        const std::array<SaoUiMenuItem, 2> children{{
+            {"PLUGIN MANAGER", "P", 120, true, {false, false, false}},
+            {"RELOAD PLUGINS", "R", 121, true, {false, false, false}},
+        }};
+        status = sao_ui_menu_set_children(shell->menu, "Plugins", children.data(),
+                                          children.size());
+    }
+    if (status == SAO_STATUS_OK) {
+        const std::array<SaoUiMenuItem, 2> children{{
+            {"ALL LIGHT", "L", 130, true, {false, false, false}},
+            {"ALL DARK", "D", 131, true, {false, false, false}},
+        }};
+        status =
+            sao_ui_menu_set_children(shell->menu, "Skins", children.data(), children.size());
     }
     if (status == SAO_STATUS_OK) {
         SaoUiMenuLayout layout{};
@@ -706,24 +1022,6 @@ sao_ui_entity_shell_create(sao_ui_overlay_host_handle_t host, const SaoUiEntityS
     }
     if (status == SAO_STATUS_OK) {
         status = sao_ui_layer_set_visible(shell->menu_layer, false);
-    }
-    if (status == SAO_STATUS_OK) {
-        std::array<SaoUiLayerInputRect, 5> input_rects{};
-        for (int32_t index = 0; index < static_cast<int32_t>(input_rects.size()); ++index) {
-            int32_t x = 0;
-            int32_t y = 0;
-            int32_t width = 0;
-            int32_t height = 0;
-            status = sao_ui_menu_compute_button_layout(shell->menu, index, &x, &y, &width, &height);
-            if (status != SAO_STATUS_OK)
-                break;
-            input_rects[static_cast<size_t>(index)] = {x - shell->menu_x, y - shell->menu_y, width,
-                                                       height};
-        }
-        if (status == SAO_STATUS_OK) {
-            status = sao_ui_layer_set_input_rects(shell->menu_layer, input_rects.data(),
-                                                  input_rects.size());
-        }
     }
     if (status == SAO_STATUS_OK) {
         status = sao_ui_layer_set_input_enabled(shell->menu_layer, false);
