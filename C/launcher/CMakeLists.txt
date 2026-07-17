@@ -17,6 +17,8 @@
 # EXEs in the tree are CLI tools or plugin hosts.
 
 set(SAO_LAUNCHER_HEADERS
+    src/settings_codec_internal.h
+    src/settings_json_internal.h
     include/sao/launcher/app.h
     include/sao/launcher/args.h
     include/sao/launcher/crash_handler.h
@@ -32,6 +34,8 @@ set(SAO_LAUNCHER_HEADERS
 )
 
 set(SAO_LAUNCHER_SOURCES
+    src/settings_codec.cpp
+    src/settings_json_internal.cpp
     src/main.cpp
     src/app.cpp
     src/args.cpp
@@ -186,6 +190,7 @@ target_link_libraries(SaoAuto PRIVATE
     version
     shlwapi
     bcrypt         # HMAC-SHA-256 for rollout bucketing (Wave 10 Phase 12)
+    crypt32        # current-user DPAPI for secure settings envelopes
 )
 
 # Wave 10 / Agent a — rollout_manager depends on freetier telemetry_client
