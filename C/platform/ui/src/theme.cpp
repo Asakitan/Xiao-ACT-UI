@@ -235,7 +235,10 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_theme_set_active_id(
     }
     for (const auto& slot : snapshot) {
         if (slot.callback != nullptr) {
-            slot.callback(theme_id, slot.user_data);
+            try {
+                slot.callback(theme_id, slot.user_data);
+            } catch (...) {
+            }
         }
     }
     return SAO_STATUS_OK;

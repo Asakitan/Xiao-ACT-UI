@@ -38,6 +38,7 @@
 #include "sao/rt_io/proxy.h"
 #include "sao/ui/overlay_host.h"
 #include "sao/ui/entity_shell.h"
+#include "sao/ui/theme.h"
 #endif
 
 #if defined(SAO_LAUNCHER_SECURITY_COMPOSITION_PROVIDER) && \
@@ -657,9 +658,11 @@ sao_status_t SAO_UI_CALL entity_action(SaoUiEntityAction action,
     case SAO_UI_ENTITY_ACTION_OPEN_PLUGIN_MANAGER:
     case SAO_UI_ENTITY_ACTION_RELOAD_PLUGINS:
     case SAO_UI_ENTITY_ACTION_PLUGIN_STATUS:
-    case SAO_UI_ENTITY_ACTION_SET_ALL_LIGHT:
-    case SAO_UI_ENTITY_ACTION_SET_ALL_DARK:
         return SAO_STATUS_ERR_NOT_IMPLEMENTED;
+    case SAO_UI_ENTITY_ACTION_SET_ALL_LIGHT:
+        return sao_ui_theme_set_active_id(SAO_UI_THEME_LIGHT);
+    case SAO_UI_ENTITY_ACTION_SET_ALL_DARK:
+        return sao_ui_theme_set_active_id(SAO_UI_THEME_DARK);
     default:
         return SAO_STATUS_ERR_INVALID_ARGUMENT;
     }
