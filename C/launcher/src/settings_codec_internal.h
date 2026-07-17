@@ -4,12 +4,16 @@
 
 #include <nlohmann/json.hpp>
 
+#include <cstddef>
 #include <string>
 #include <string_view>
 
 namespace sao::launcher::settings_codec {
 
 using Json = nlohmann::ordered_json;
+
+inline constexpr std::size_t kMaxPlaintextBytes = 16U * 1024U * 1024U;
+inline constexpr std::size_t kMaxEnvelopeBytes = 32U * 1024U * 1024U;
 
 struct DecodeResult {
     Json document;

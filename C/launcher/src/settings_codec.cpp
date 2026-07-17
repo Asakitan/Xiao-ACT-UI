@@ -22,8 +22,6 @@ namespace {
 constexpr std::size_t kAesKeyBytes = 32;
 constexpr std::size_t kNonceBytes = 12;
 constexpr std::size_t kTagBytes = 16;
-constexpr std::size_t kMaxPlaintextBytes = 16U * 1024U * 1024U;
-constexpr std::size_t kMaxEnvelopeBytes = 32U * 1024U * 1024U;
 constexpr std::size_t kMaxProtectedKeyBytes = 4U * 1024U;
 constexpr std::size_t kMaxCipherBlobBytes = kMaxPlaintextBytes + kNonceBytes + kTagBytes;
 constexpr char kEntropy[] = "SAO-Auto-settings-v1";
