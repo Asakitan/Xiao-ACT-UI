@@ -15,7 +15,24 @@ extern "C" {
 typedef struct sao_ui_entity_shell_s* sao_ui_entity_shell_handle_t;
 
 enum SaoUiEntityAction : int32_t {
+    // Built-in token groups are 1 (About), 100-105 (Control), 110-112 (Tools),
+    // 120-122 (Plugins), and 130-131 (Skins). Assigned tokens are never reused;
+    // unlisted values do not establish a public provider range.
     SAO_UI_ENTITY_ACTION_OPEN_ABOUT = 1,
+    SAO_UI_ENTITY_ACTION_TOGGLE_TOPMOST = 100,
+    SAO_UI_ENTITY_ACTION_TOGGLE_NERVGEAR = 101,
+    SAO_UI_ENTITY_ACTION_TOGGLE_STREAMING_MODE = 102,
+    SAO_UI_ENTITY_ACTION_SAVE_SETTINGS = 103,
+    SAO_UI_ENTITY_ACTION_SET_FISHEYE_PROCEDURAL = 104,
+    SAO_UI_ENTITY_ACTION_SET_FISHEYE_LIVE = 105,
+    SAO_UI_ENTITY_ACTION_OPEN_AI_EDITOR = 110,
+    SAO_UI_ENTITY_ACTION_OPEN_WORKSHOP = 111,
+    SAO_UI_ENTITY_ACTION_OPEN_PROCESS_SELECTOR = 112,
+    SAO_UI_ENTITY_ACTION_OPEN_PLUGIN_MANAGER = 120,
+    SAO_UI_ENTITY_ACTION_RELOAD_PLUGINS = 121,
+    SAO_UI_ENTITY_ACTION_PLUGIN_STATUS = 122,
+    SAO_UI_ENTITY_ACTION_SET_ALL_LIGHT = 130,
+    SAO_UI_ENTITY_ACTION_SET_ALL_DARK = 131,
 };
 
 typedef sao_status_t(SAO_UI_CALL* sao_ui_entity_action_fn_t)(

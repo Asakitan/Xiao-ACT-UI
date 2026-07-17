@@ -46,12 +46,12 @@ typedef struct sao_ui_menu_s* sao_ui_menu_handle_t;
 // ── Menu item POD ─────────────────────────────────────────────────
 // Icon glyph is a UTF-8 string (Python uses '●', '⚔', '♪' etc.).
 // The compose path renders it through the font atlas — no image slot.
-// action_id is what OnActivate returns; -1 means "cannot activate".
+// action_id is what OnActivate returns; -1 means there is no action token.
 struct SaoUiMenuItem {
     const char* name_utf8; // display + child-menu registry key
     const char* icon_utf8; // glyph (1-2 chars typical)
     int32_t action_id;
-    bool can_activate; // if false, click is a no-op
+    bool can_activate; // false means the row is disabled and click is a no-op
     bool _pad[3];
 };
 
@@ -140,7 +140,7 @@ SAO_UI_API sao_status_t SAO_UI_CALL sao_ui_menu_set_items(sao_ui_menu_handle_t h
 
 // Register a child menu for one parent item.  parent_name_utf8 must
 // match a previously-registered SaoUiMenuItem.name_utf8.  Child items
-// use the same POD as top-level items but can_activate must be true.
+// use the same POD as top-level items and may include disabled rows.
 SAO_UI_API sao_status_t SAO_UI_CALL sao_ui_menu_set_children(sao_ui_menu_handle_t handle,
                                                              const char* parent_name_utf8,
                                                              const SaoUiMenuItem* items,

@@ -38,4 +38,7 @@ SAO_UI_API sao_status_t SAO_UI_CALL set_child_hover(sao_ui_menu_handle_t handle,
 SAO_UI_API sao_status_t SAO_UI_CALL get_snapshot(sao_ui_menu_handle_t handle,
                                                   Snapshot* out_snapshot);
 
+sao_status_t activate_child(sao_ui_menu_handle_t handle, int32_t parent_menu_idx,
+                            int32_t child_idx, bool* out_activated, int32_t* out_action_id);
+
 } // namespace sao::ui::menu_visual

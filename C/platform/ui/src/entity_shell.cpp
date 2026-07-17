@@ -719,6 +719,8 @@ struct sao_ui_entity_shell_s {
     bool menu_visible{};
     bool visual_dirty{true};
     bool input_region_settle_pending{};
+    bool destroy_pending{};
+    uint32_t callback_depth{};
     uint64_t frame_count{};
     uint64_t action_count{};
     sao_status_t last_status{SAO_STATUS_OK};
@@ -741,6 +743,12 @@ void destroy_members(sao_ui_entity_shell_s* shell) {
     shell->theme = nullptr;
     sao_ui_compositor_destroy(shell->compositor);
     shell->compositor = nullptr;
+}
+
+void destroy_now(sao_ui_entity_shell_s* shell) {
+    (void)sao_ui_entity_shell_take_offline(shell);
+    destroy_members(shell);
+    delete shell;
 }
 
 sao_status_t set_menu_visibility_locked(sao_ui_entity_shell_s* shell, bool visible) {
@@ -1011,6 +1019,33 @@ struct MenuHit {
     int32_t child{-1};
 };
 
+struct PendingEntityAction {
+    sao_ui_entity_action_fn_t callback{};
+    void* user_data{};
+    SaoUiEntityAction action{SAO_UI_ENTITY_ACTION_OPEN_ABOUT};
+};
+
+sao_status_t dispatch_entity_action(sao_ui_entity_shell_s* shell,
+                                    const PendingEntityAction& pending) {
+    sao_status_t action_status = SAO_STATUS_ERR_UNKNOWN;
+    try {
+        action_status = pending.callback(pending.action, pending.user_data);
+    } catch (...) {
+        action_status = SAO_STATUS_ERR_UNKNOWN;
+    }
+    bool should_destroy = false;
+    {
+        std::lock_guard<std::mutex> lock(shell->mutex);
+        shell->last_status = action_status;
+        if (shell->callback_depth > 0)
+            --shell->callback_depth;
+        should_destroy = shell->destroy_pending && shell->callback_depth == 0;
+    }
+    if (should_destroy)
+        destroy_now(shell);
+    return action_status;
+}
+
 MenuHit menu_hit_locked(sao_ui_entity_shell_s* shell, int32_t screen_x, int32_t screen_y) {
     MenuHit hit{};
     if (!shell->menu_visible)
@@ -1157,9 +1192,14 @@ extern "C" void SAO_UI_CALL sao_ui_entity_shell_destroy(sao_ui_entity_shell_hand
     }
     if (std::this_thread::get_id() != handle->owner_thread)
         return;
-    (void)sao_ui_entity_shell_take_offline(handle);
-    destroy_members(handle);
-    delete handle;
+    {
+        std::lock_guard<std::mutex> lock(handle->mutex);
+        if (handle->callback_depth > 0) {
+            handle->destroy_pending = true;
+            return;
+        }
+    }
+    destroy_now(handle);
 }
 
 extern "C" sao_status_t SAO_UI_CALL
@@ -1241,8 +1281,7 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_entity_shell_handle_mouse(
     if (std::this_thread::get_id() != handle->owner_thread) {
         return SAO_STATUS_ERR_ACCESS_DENIED;
     }
-    sao_ui_entity_action_fn_t action_fn = nullptr;
-    void* action_user_data = nullptr;
+    PendingEntityAction pending_action{};
     sao_status_t status = SAO_STATUS_OK;
     {
         std::lock_guard<std::mutex> lock(handle->mutex);
@@ -1306,15 +1345,24 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_entity_shell_handle_mouse(
             } else if (menu_hit.child >= 0 &&
                        menu_hit.parent == handle->menu_pressed_child_parent &&
                        menu_hit.child == handle->menu_pressed_child_index) {
-                status = sao_ui_menu_activate_child(handle->menu, menu_hit.parent, menu_hit.child);
+                bool activated = false;
+                int32_t action_id = -1;
+                status = sao::ui::menu_visual::activate_child(
+                    handle->menu, menu_hit.parent, menu_hit.child, &activated, &action_id);
+                if (status == SAO_STATUS_OK && activated && action_id >= 0 &&
+                    handle->config.action_fn != nullptr) {
+                    pending_action.callback = handle->config.action_fn;
+                    pending_action.user_data = handle->config.action_user_data;
+                    pending_action.action = static_cast<SaoUiEntityAction>(action_id);
+                }
             } else if (menu_index >= 0 && menu_index == handle->menu_pressed_index) {
                 status = sao_ui_menu_activate(handle->menu, menu_index);
                 if (status == SAO_STATUS_OK && menu_index == kAboutIndex) {
                     status = set_menu_visibility_locked(handle, false);
                     if (status == SAO_STATUS_OK && handle->config.action_fn != nullptr) {
-                        ++handle->action_count;
-                        action_fn = handle->config.action_fn;
-                        action_user_data = handle->config.action_user_data;
+                        pending_action.callback = handle->config.action_fn;
+                        pending_action.user_data = handle->config.action_user_data;
+                        pending_action.action = SAO_UI_ENTITY_ACTION_OPEN_ABOUT;
                     }
                 }
             }
@@ -1332,18 +1380,14 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_entity_shell_handle_mouse(
                                previous_child_pressed != handle->menu_pressed_child_index ||
                                previous_menu_visible != handle->menu_visible;
         status = first_failure(status, commit_visual_state_locked(handle));
+        if (status == SAO_STATUS_OK && pending_action.callback != nullptr) {
+            ++handle->action_count;
+            ++handle->callback_depth;
+        }
         handle->last_status = status;
     }
-    if (status == SAO_STATUS_OK && action_fn != nullptr) {
-        sao_status_t action_status = SAO_STATUS_ERR_UNKNOWN;
-        try {
-            action_status = action_fn(SAO_UI_ENTITY_ACTION_OPEN_ABOUT, action_user_data);
-        } catch (...) {
-            action_status = SAO_STATUS_ERR_UNKNOWN;
-        }
-        std::lock_guard<std::mutex> lock(handle->mutex);
-        handle->last_status = action_status;
-        return action_status;
+    if (status == SAO_STATUS_OK && pending_action.callback != nullptr) {
+        return dispatch_entity_action(handle, pending_action);
     }
     return status;
 }

@@ -971,6 +971,19 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_menu_compute_child_layout(
 extern "C" sao_status_t SAO_UI_CALL sao_ui_menu_activate_child(sao_ui_menu_handle_t handle,
                                                                int32_t parent_menu_idx,
                                                                int32_t child_idx) {
+    bool activated = false;
+    int32_t action_id = -1;
+    return sao::ui::menu_visual::activate_child(handle, parent_menu_idx, child_idx, &activated,
+                                                 &action_id);
+}
+
+sao_status_t sao::ui::menu_visual::activate_child(sao_ui_menu_handle_t handle,
+                                                   int32_t parent_menu_idx, int32_t child_idx,
+                                                   bool* out_activated, int32_t* out_action_id) {
+    if (out_activated == nullptr || out_action_id == nullptr)
+        return SAO_STATUS_ERR_INVALID_ARGUMENT;
+    *out_activated = false;
+    *out_action_id = -1;
     if (handle == nullptr)
         return SAO_STATUS_ERR_HANDLE_INVALID;
     PendingMenuEvent pending{};
@@ -993,12 +1006,16 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_menu_activate_child(sao_ui_menu_handl
             const auto& child = child_menu->items[child_idx];
             if (!child.can_activate)
                 return SAO_STATUS_OK;
+            *out_activated = true;
+            *out_action_id = child.action_id;
             pending = capture_event_locked(handle, SAO_UI_MENU_EV_CHILD_SELECTED, child_idx,
                                            parent_menu_idx, child.action_id);
         }
         dispatch_event_noexcept(pending);
         return SAO_STATUS_OK;
     } catch (...) {
+        *out_activated = false;
+        *out_action_id = -1;
         return SAO_STATUS_ERR_UNKNOWN;
     }
 }
