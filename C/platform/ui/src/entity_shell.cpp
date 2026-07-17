@@ -4,6 +4,8 @@
 #include "sao/ui/menu.h"
 #include "sao/ui/theme.h"
 
+#include "menu_visual_internal.h"
+
 #if defined(_WIN32)
 #include "entity_authority_frames.h"
 #ifndef WIN32_LEAN_AND_MEAN
@@ -352,6 +354,10 @@ struct sao_ui_entity_shell_s {
     int32_t menu_y{};
     int32_t menu_hover_index{-1};
     int32_t menu_pressed_index{-1};
+    int32_t menu_hover_child_parent{-1};
+    int32_t menu_hover_child_index{-1};
+    int32_t menu_pressed_child_parent{-1};
+    int32_t menu_pressed_child_index{-1};
     bool online{};
     bool overlay_visible{};
     bool menu_visible{};
@@ -394,7 +400,12 @@ sao_status_t set_menu_visibility_locked(sao_ui_entity_shell_s* shell, bool visib
     if (!visible) {
         shell->menu_hover_index = -1;
         shell->menu_pressed_index = -1;
+        shell->menu_hover_child_parent = -1;
+        shell->menu_hover_child_index = -1;
+        shell->menu_pressed_child_parent = -1;
+        shell->menu_pressed_child_index = -1;
         (void)sao_ui_menu_set_hover(shell->menu, -1);
+        (void)sao::ui::menu_visual::set_child_hover(shell->menu, -1, -1);
     }
     return SAO_STATUS_OK;
 }
@@ -531,24 +542,31 @@ sao_status_t sync_frame_locked(sao_ui_entity_shell_s* shell, uint32_t elapsed_ms
     SaoUiNerveGearState previous_state = SAO_UI_NG_STATE_IDLE;
     SaoUiMenuPhase previous_menu_phase = SAO_UI_MENU_PHASE_CLOSED;
     float previous_menu_progress = 0.0F;
+    sao::ui::menu_visual::Snapshot previous_menu_visual{};
     sao_status_t status = refresh_host_geometry_locked(shell);
     status = first_failure(status, sao_ui_nervegear_get_state(shell->nervegear, &previous_state));
     status = first_failure(status, sao_ui_menu_get_phase(shell->menu, &previous_menu_phase));
     status = first_failure(
         status, sao_ui_menu_get_transition_progress(shell->menu, &previous_menu_progress));
     status = first_failure(
+        status, sao::ui::menu_visual::get_snapshot(shell->menu, &previous_menu_visual));
+    status = first_failure(
         status, sao_ui_nervegear_tick(shell->nervegear, static_cast<int32_t>(elapsed_ms)));
     status = first_failure(status, sao_ui_menu_tick(shell->menu, static_cast<int32_t>(elapsed_ms)));
     SaoUiNerveGearState current_state = previous_state;
     SaoUiMenuPhase current_menu_phase = previous_menu_phase;
     float current_menu_progress = previous_menu_progress;
+    sao::ui::menu_visual::Snapshot current_menu_visual{};
     status = first_failure(status, sao_ui_nervegear_get_state(shell->nervegear, &current_state));
     status = first_failure(status, sao_ui_menu_get_phase(shell->menu, &current_menu_phase));
     status = first_failure(
         status, sao_ui_menu_get_transition_progress(shell->menu, &current_menu_progress));
+    status = first_failure(
+        status, sao::ui::menu_visual::get_snapshot(shell->menu, &current_menu_visual));
     shell->visual_dirty = shell->visual_dirty || previous_state != current_state ||
                           previous_menu_phase != current_menu_phase ||
-                          previous_menu_progress != current_menu_progress;
+                          previous_menu_progress != current_menu_progress ||
+                          previous_menu_visual.revision != current_menu_visual.revision;
     status = first_failure(status, commit_visual_state_locked(shell));
     shell->last_status = status;
     return status;
@@ -560,15 +578,19 @@ bool local_nervegear_hit_locked(sao_ui_entity_shell_s* shell, int32_t screen_x, 
            hit;
 }
 
-int32_t menu_hit_locked(sao_ui_entity_shell_s* shell, int32_t screen_x, int32_t screen_y) {
-    int32_t index = -1;
-    int32_t child = -1;
+struct MenuHit {
+    int32_t parent{-1};
+    int32_t child{-1};
+};
+
+MenuHit menu_hit_locked(sao_ui_entity_shell_s* shell, int32_t screen_x, int32_t screen_y) {
+    MenuHit hit{};
     if (!shell->menu_visible ||
         sao_ui_menu_hit_test(shell->menu, screen_x - shell->origin_x, screen_y - shell->origin_y,
-                             &index, &child) != SAO_STATUS_OK) {
-        return -1;
+                             &hit.parent, &hit.child) != SAO_STATUS_OK) {
+        return {};
     }
-    return index;
+    return hit;
 }
 
 } // namespace
@@ -819,11 +841,14 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_entity_shell_handle_mouse(
         }
 
         const bool nervegear_hit = local_nervegear_hit_locked(handle, screen_x, screen_y);
-        const int32_t menu_index = menu_hit_locked(handle, screen_x, screen_y);
+        const MenuHit menu_hit = menu_hit_locked(handle, screen_x, screen_y);
+        const int32_t menu_index = menu_hit.child >= 0 ? -1 : menu_hit.parent;
         SaoUiNerveGearState previous_state = SAO_UI_NG_STATE_IDLE;
         status = sao_ui_nervegear_get_state(handle->nervegear, &previous_state);
         const int32_t previous_hover = handle->menu_hover_index;
         const int32_t previous_pressed = handle->menu_pressed_index;
+        const int32_t previous_child_hover = handle->menu_hover_child_index;
+        const int32_t previous_child_pressed = handle->menu_pressed_child_index;
         const bool previous_menu_visible = handle->menu_visible;
         if (message == kMouseMove) {
             status = nervegear_hit ? sao_ui_nervegear_on_mouse_enter(handle->nervegear)
@@ -832,16 +857,33 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_entity_shell_handle_mouse(
                 handle->menu_hover_index = menu_index;
                 status = first_failure(status, sao_ui_menu_set_hover(handle->menu, menu_index));
             }
+            const int32_t child_parent = menu_hit.child >= 0 ? menu_hit.parent : -1;
+            if (handle->menu_hover_child_parent != child_parent ||
+                handle->menu_hover_child_index != menu_hit.child) {
+                handle->menu_hover_child_parent = child_parent;
+                handle->menu_hover_child_index = menu_hit.child;
+                status = first_failure(
+                    status, sao::ui::menu_visual::set_child_hover(
+                                handle->menu, handle->menu_hover_child_parent,
+                                handle->menu_hover_child_index));
+            }
         } else if (message == kMouseLeave) {
             status = sao_ui_nervegear_on_mouse_leave(handle->nervegear);
             handle->menu_hover_index = -1;
+            handle->menu_hover_child_parent = -1;
+            handle->menu_hover_child_index = -1;
             status = first_failure(status, sao_ui_menu_set_hover(handle->menu, -1));
+            status = first_failure(
+                status, sao::ui::menu_visual::set_child_hover(handle->menu, -1, -1));
         } else if (message == kLeftButtonDown && button == 0) {
             if (nervegear_hit) {
                 status = sao_ui_nervegear_on_mouse_enter(handle->nervegear);
                 status = first_failure(status, sao_ui_nervegear_on_mouse_down(handle->nervegear));
             }
             handle->menu_pressed_index = menu_index;
+            handle->menu_pressed_child_parent =
+                menu_hit.child >= 0 ? menu_hit.parent : -1;
+            handle->menu_pressed_child_index = menu_hit.child;
         } else if (message == kLeftButtonUp && button == 0) {
             if (nervegear_hit) {
                 status = sao_ui_nervegear_on_mouse_up(handle->nervegear);
@@ -851,6 +893,10 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_entity_shell_handle_mouse(
                 status = first_failure(
                     status, sao_ui_nervegear_transition(handle->nervegear, SAO_UI_NG_STATE_IDLE));
                 status = first_failure(status, sao_ui_nervegear_on_mouse_enter(handle->nervegear));
+            } else if (menu_hit.child >= 0 &&
+                       menu_hit.parent == handle->menu_pressed_child_parent &&
+                       menu_hit.child == handle->menu_pressed_child_index) {
+                status = sao_ui_menu_activate_child(handle->menu, menu_hit.parent, menu_hit.child);
             } else if (menu_index >= 0 && menu_index == handle->menu_pressed_index) {
                 status = sao_ui_menu_activate(handle->menu, menu_index);
                 if (status == SAO_STATUS_OK && menu_index == kAboutIndex) {
@@ -863,6 +909,8 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_entity_shell_handle_mouse(
                 }
             }
             handle->menu_pressed_index = -1;
+            handle->menu_pressed_child_parent = -1;
+            handle->menu_pressed_child_index = -1;
         }
         SaoUiNerveGearState current_state = previous_state;
         status =
@@ -870,6 +918,8 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_entity_shell_handle_mouse(
         handle->visual_dirty = handle->visual_dirty || previous_state != current_state ||
                                previous_hover != handle->menu_hover_index ||
                                previous_pressed != handle->menu_pressed_index ||
+                               previous_child_hover != handle->menu_hover_child_index ||
+                               previous_child_pressed != handle->menu_pressed_child_index ||
                                previous_menu_visible != handle->menu_visible;
         status = first_failure(status, commit_visual_state_locked(handle));
         handle->last_status = status;
@@ -902,7 +952,7 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_entity_shell_hit_test(
         *out_hit = true;
         return SAO_STATUS_OK;
     }
-    *out_hit = menu_hit_locked(handle, screen_x, screen_y) >= 0;
+    *out_hit = menu_hit_locked(handle, screen_x, screen_y).parent >= 0;
     return SAO_STATUS_OK;
 }
 

@@ -1,9 +1,8 @@
-// SAO Auto — SAO main menu implementation (Wave 3, G3.2 first slice).
+// SAO Auto — SAO main menu implementation.
 //
-// This slice owns the *state machine* + *ring geometry* half of the menu.
-// It does NOT touch the D2D compose path, the frosted-glass shader, or
-// the child-menu row list — those land in later Wave 3 slices.  What
-// this file gives us today:
+// Owns root/child state machines, geometry, hit testing, interaction,
+// and renderer-facing visual snapshots. The D2D compose path and
+// frosted-glass shader remain separate concerns. This file provides:
 //
 //   * Header-declared entry points (create / destroy / show / hide /
 //     get_phase / hit_test / set_hover / activate / set_items / …)
@@ -14,7 +13,7 @@
 //     matches the Python SAOMenuBar default pack layout).
 //   * Cascade geometry math for CASCADE mode (horizontal strip anchored
 //     near screen top).
-//   * A wave3-only helper family, exported for tests + future compose
+//   * An internal helper family, exported for tests + compose
 //     path (compute_button_layout / tick / set_button_state /
 //     dispatch_event).  Their prototypes live at the bottom of this
 //     file — they are ABI-exported so the test binary can see them,
@@ -27,17 +26,18 @@
 //
 //   CLOSED  --show-->  OPENING  --tick 450ms-->  OPEN
 //   OPEN    --hide-->  CLOSING  --tick 300ms-->  CLOSED
-//   OPEN    --child open  -->  CHILD_OPENING --200ms--> CHILD_OPEN
-//   CHILD_OPEN --child close--> CHILD_CLOSING --200ms--> OPEN
+//   OPEN    --child open  -->  CHILD_OPENING --220ms--> CHILD_OPEN
+//   CHILD_OPEN --child close--> CHILD_CLOSING --160ms--> OPEN
 //
 // The top-level 450 ms open / 300 ms close durations come from the
-// production popup fade authority. Child timings remain on the generic
-// row-transition track until the child renderer consumes the asymmetric
-// 160 ms fadeout / 220 ms fadein contract.
+// production popup fade authority. Child fade, staggered slide, and
+// hover timings mirror the active Python GPU popup authority.
 //
 // UTF-8 no BOM.
 
 #include "sao/ui/menu.h"
+
+#include "menu_visual_internal.h"
 
 #include <algorithm>
 #include <cmath>
@@ -70,8 +70,12 @@ namespace {
 
 constexpr int32_t kMenuOpenMs = 450;
 constexpr int32_t kMenuCloseMs = 300;
-constexpr int32_t kChildOpenMs = 200;
-constexpr int32_t kChildCloseMs = 200;
+constexpr int32_t kChildFadeInMs = 220;
+constexpr int32_t kChildFadeOutMs = 160;
+constexpr int32_t kChildSlideMs = 320;
+constexpr int32_t kChildSlideStaggerMs = 50;
+constexpr float kChildHoverLerp = 0.25F;
+constexpr float kChildHoverSnap = 0.01F;
 
 // Default metrics — from menu.h banner + theme.h metrics table:
 //   button_size     = 54  (SAOCircleButton.SIZE)
@@ -131,6 +135,7 @@ struct ChildMenu {
     std::string parent_name;
     std::vector<MenuItem> items;
     std::vector<int32_t> visible_widths;
+    std::vector<float> hover_values;
 };
 
 } // namespace
@@ -154,6 +159,15 @@ struct sao_ui_menu_s {
     // Hover / active idx.
     int32_t hover_idx{-1};
     int32_t active_idx{-1};
+
+    // Child visual state is keyed by stable parent name so root reorder
+    // never leaves renderer-facing rows attached to a stale index.
+    std::string displayed_parent_name;
+    std::string pending_parent_name;
+    int32_t child_hover_idx{-1};
+    int32_t child_slide_elapsed_ms{0};
+    float child_fade_t{1.0F};
+    uint64_t visual_revision{1};
 
     // Callback.
     sao_ui_menu_event_callback_t callback{nullptr};
@@ -407,11 +421,132 @@ bool is_child_phase(SaoUiMenuPhase phase) {
            phase == SAO_UI_MENU_PHASE_CHILD_CLOSING;
 }
 
+template <size_t Capacity>
+void copy_fixed_utf8(std::array<char, Capacity>* destination, const std::string& source) {
+    static_assert(Capacity > 0);
+    destination->fill('\0');
+    size_t byte_count = std::min(source.size(), Capacity - 1);
+    if (byte_count < source.size()) {
+        while (byte_count > 0 &&
+               (static_cast<unsigned char>(source[byte_count]) & 0xC0U) == 0x80U) {
+            --byte_count;
+        }
+    }
+    std::memcpy(destination->data(), source.data(), byte_count);
+}
+
+void mark_visual_changed_locked(sao_ui_menu_s* menu) {
+    ++menu->visual_revision;
+}
+
+void clear_child_visual_locked(sao_ui_menu_s* menu) {
+    menu->displayed_parent_name.clear();
+    menu->pending_parent_name.clear();
+    menu->child_hover_idx = -1;
+    menu->child_slide_elapsed_ms = 0;
+    menu->child_fade_t = 1.0F;
+}
+
+void reset_child_rows_locked(ChildMenu* child_menu) {
+    if (child_menu == nullptr)
+        return;
+    child_menu->visible_widths.assign(child_menu->items.size(), 0);
+    child_menu->hover_values.assign(child_menu->items.size(), 0.0F);
+}
+
+void begin_child_fadein_locked(sao_ui_menu_s* menu, const std::string& parent_name) {
+    auto* child_menu = find_child_menu_locked(menu, parent_name);
+    if (child_menu == nullptr || child_menu->items.empty()) {
+        clear_child_visual_locked(menu);
+        menu->phase = SAO_UI_MENU_PHASE_OPEN;
+        menu->phase_elapsed_ms = 0;
+        mark_visual_changed_locked(menu);
+        return;
+    }
+    reset_child_rows_locked(child_menu);
+    menu->displayed_parent_name = parent_name;
+    menu->pending_parent_name.clear();
+    menu->child_hover_idx = -1;
+    menu->child_slide_elapsed_ms = 0;
+    menu->child_fade_t = 1.0F;
+    menu->phase = SAO_UI_MENU_PHASE_CHILD_OPENING;
+    menu->phase_elapsed_ms = 0;
+    mark_visual_changed_locked(menu);
+}
+
+void close_child_phase_locked(sao_ui_menu_s* menu);
+
+void begin_child_transition_locked(sao_ui_menu_s* menu, const std::string& next_parent_name) {
+    if (!menu->displayed_parent_name.empty()) {
+        menu->pending_parent_name = next_parent_name;
+        menu->child_hover_idx = -1;
+        menu->phase = SAO_UI_MENU_PHASE_CHILD_CLOSING;
+        menu->phase_elapsed_ms = 0;
+        mark_visual_changed_locked(menu);
+        return;
+    }
+    if (next_parent_name.empty()) {
+        close_child_phase_locked(menu);
+        return;
+    }
+    begin_child_fadein_locked(menu, next_parent_name);
+}
+
 void close_child_phase_locked(sao_ui_menu_s* menu) {
+    clear_child_visual_locked(menu);
     if (is_child_phase(menu->phase)) {
         menu->phase = SAO_UI_MENU_PHASE_OPEN;
         menu->phase_elapsed_ms = 0;
     }
+    mark_visual_changed_locked(menu);
+}
+
+int32_t child_slide_width(int32_t elapsed_ms, int32_t child_idx) {
+    const int32_t local_elapsed = elapsed_ms - child_idx * kChildSlideStaggerMs;
+    const double progress = std::clamp(static_cast<double>(local_elapsed) /
+                                           static_cast<double>(kChildSlideMs),
+                                       0.0, 1.0);
+    const double inverse = 1.0 - progress;
+    const double eased = 1.0 - inverse * inverse * inverse;
+    return static_cast<int32_t>(
+        std::lround(static_cast<double>(kChildTargetRowWidth) * eased));
+}
+
+void advance_child_rows_locked(sao_ui_menu_s* menu, int32_t dt_ms) {
+    if (menu->displayed_parent_name.empty())
+        return;
+    auto* child_menu = find_child_menu_locked(menu, menu->displayed_parent_name);
+    if (child_menu == nullptr)
+        return;
+    const int32_t previous_elapsed = menu->child_slide_elapsed_ms;
+    const int32_t last_row = std::max(0, static_cast<int32_t>(child_menu->items.size()) - 1);
+    const int32_t slide_end = kChildSlideMs + last_row * kChildSlideStaggerMs;
+    if (dt_ms > 0) {
+        const int64_t next_elapsed =
+            static_cast<int64_t>(menu->child_slide_elapsed_ms) + static_cast<int64_t>(dt_ms);
+        menu->child_slide_elapsed_ms =
+            static_cast<int32_t>(std::min<int64_t>(next_elapsed, slide_end));
+    }
+    bool changed = previous_elapsed != menu->child_slide_elapsed_ms;
+    for (int32_t i = 0; i < static_cast<int32_t>(child_menu->items.size()); ++i) {
+        const int32_t width = child_slide_width(menu->child_slide_elapsed_ms, i);
+        if (child_menu->visible_widths[static_cast<size_t>(i)] != width) {
+            child_menu->visible_widths[static_cast<size_t>(i)] = width;
+            changed = true;
+        }
+        const float target = menu->child_hover_idx == i ? 1.0F : 0.0F;
+        float& current = child_menu->hover_values[static_cast<size_t>(i)];
+        const float delta = target - current;
+        const float next = std::abs(delta) <= kChildHoverSnap
+                               ? target
+                               : current + delta * kChildHoverLerp;
+        if (next != current) {
+            current = next;
+            changed = true;
+        }
+    }
+    if (changed)
+        mark_visual_changed_locked(menu);
 }
 
 SaoUiMenuButtonRect compute_child_rect(const SaoUiMenuLayout& layout, const ChildMenu& child_menu,
@@ -426,18 +561,20 @@ SaoUiMenuButtonRect compute_child_rect(const SaoUiMenuLayout& layout, const Chil
 
 int32_t child_hit_test_locked(const sao_ui_menu_s* menu, int32_t px, int32_t py,
                               int32_t* out_parent_idx) {
-    if (menu->active_idx < 0 || menu->active_idx >= static_cast<int32_t>(menu->items.size()) ||
-        !is_child_phase(menu->phase)) {
+    if (menu->displayed_parent_name.empty() || !is_child_phase(menu->phase)) {
         return -1;
     }
-    const auto* child_menu = find_child_menu_locked(menu, menu->items[menu->active_idx].name);
+    const int32_t displayed_parent_idx = find_root(menu->items, menu->displayed_parent_name);
+    if (displayed_parent_idx < 0)
+        return -1;
+    const auto* child_menu = find_child_menu_locked(menu, menu->displayed_parent_name);
     if (child_menu == nullptr) {
         return -1;
     }
     for (int32_t i = 0; i < static_cast<int32_t>(child_menu->items.size()); ++i) {
         const auto rect = compute_child_rect(menu->layout, *child_menu, i);
         if (px >= rect.x && px < rect.x + rect.w && py >= rect.y && py < rect.y + rect.h) {
-            *out_parent_idx = menu->active_idx;
+            *out_parent_idx = displayed_parent_idx;
             return i;
         }
     }
@@ -516,9 +653,7 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_menu_set_items(sao_ui_menu_handle_t h
             if (child_menu == nullptr || child_menu->items.empty()) {
                 close_child_phase_locked(handle);
             } else {
-                std::fill(child_menu->visible_widths.begin(), child_menu->visible_widths.end(), 0);
-                handle->phase = SAO_UI_MENU_PHASE_CHILD_OPENING;
-                handle->phase_elapsed_ms = 0;
+                begin_child_fadein_locked(handle, handle->items[next_active_idx].name);
             }
         } else {
             close_child_phase_locked(handle);
@@ -544,6 +679,7 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_menu_set_children(sao_ui_menu_handle_
         replacement.parent_name = parent_name_utf8;
         replacement.items.reserve(item_count);
         replacement.visible_widths.assign(item_count, 0);
+        replacement.hover_values.assign(item_count, 0.0F);
         for (size_t i = 0; i < item_count; ++i) {
             MenuItem item{};
             item.name = items[i].name_utf8 ? items[i].name_utf8 : "";
@@ -569,9 +705,10 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_menu_set_children(sao_ui_menu_handle_
             if (target->items.empty()) {
                 close_child_phase_locked(handle);
             } else {
-                handle->phase = SAO_UI_MENU_PHASE_CHILD_OPENING;
-                handle->phase_elapsed_ms = 0;
+                begin_child_fadein_locked(handle, target->parent_name);
             }
+        } else {
+            mark_visual_changed_locked(handle);
         }
         return SAO_STATUS_OK;
     } catch (...) {
@@ -744,21 +881,26 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_menu_activate(sao_ui_menu_handle_t ha
         auto& it = handle->items[menu_idx];
         if (!it.can_activate)
             return SAO_STATUS_OK;
-        if (handle->active_idx >= 0 && handle->active_idx < n && handle->active_idx != menu_idx) {
-            auto& previous = handle->items[handle->active_idx];
-            if (previous.state == SAO_UI_MENU_BTN_ACTIVE) {
-                previous.state = SAO_UI_MENU_BTN_IDLE;
-            }
-        }
-        handle->active_idx = menu_idx;
-        it.state = SAO_UI_MENU_BTN_ACTIVE;
-        auto* child_menu = find_child_menu_locked(handle, it.name);
-        if (child_menu != nullptr && !child_menu->items.empty()) {
-            std::fill(child_menu->visible_widths.begin(), child_menu->visible_widths.end(), 0);
-            handle->phase = SAO_UI_MENU_PHASE_CHILD_OPENING;
-            handle->phase_elapsed_ms = 0;
+        const bool toggle_off = handle->active_idx == menu_idx;
+        if (toggle_off) {
+            it.state = handle->hover_idx == menu_idx ? SAO_UI_MENU_BTN_HOVER
+                                                     : SAO_UI_MENU_BTN_IDLE;
+            handle->active_idx = -1;
+            begin_child_transition_locked(handle, "");
         } else {
-            close_child_phase_locked(handle);
+            if (handle->active_idx >= 0 && handle->active_idx < n) {
+                auto& previous = handle->items[handle->active_idx];
+                if (previous.state == SAO_UI_MENU_BTN_ACTIVE) {
+                    previous.state = handle->hover_idx == handle->active_idx
+                                         ? SAO_UI_MENU_BTN_HOVER
+                                         : SAO_UI_MENU_BTN_IDLE;
+                }
+            }
+            handle->active_idx = menu_idx;
+            it.state = SAO_UI_MENU_BTN_ACTIVE;
+            const auto* child_menu = find_child_menu_locked(handle, it.name);
+            begin_child_transition_locked(
+                handle, child_menu != nullptr && !child_menu->items.empty() ? it.name : "");
         }
         pending =
             capture_event_locked(handle, SAO_UI_MENU_EV_ITEM_ACTIVATED, menu_idx, -1, it.action_id);
@@ -785,7 +927,10 @@ sao_ui_menu_set_child_row_visible_width(sao_ui_menu_handle_t handle, int32_t par
         if (child_idx < 0 || child_idx >= static_cast<int32_t>(child_menu->items.size())) {
             return SAO_STATUS_ERR_INVALID_ARGUMENT;
         }
-        child_menu->visible_widths[child_idx] = visible_width_px;
+        if (child_menu->visible_widths[child_idx] != visible_width_px) {
+            child_menu->visible_widths[child_idx] = visible_width_px;
+            mark_visual_changed_locked(handle);
+        }
         return SAO_STATUS_OK;
     } catch (...) {
         return SAO_STATUS_ERR_UNKNOWN;
@@ -834,7 +979,8 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_menu_activate_child(sao_ui_menu_handl
             std::lock_guard<std::mutex> lock(handle->mtx);
             if (parent_menu_idx < 0 ||
                 parent_menu_idx >= static_cast<int32_t>(handle->items.size()) ||
-                parent_menu_idx != handle->active_idx || !is_child_phase(handle->phase)) {
+                parent_menu_idx != handle->active_idx || !is_child_phase(handle->phase) ||
+                handle->displayed_parent_name != handle->items[parent_menu_idx].name) {
                 return SAO_STATUS_ERR_INVALID_ARGUMENT;
             }
             const auto* child_menu =
@@ -876,6 +1022,81 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_menu_set_event_callback(
     handle->callback = callback;
     handle->callback_user_data = user_data;
     return SAO_STATUS_OK;
+}
+
+SAO_UI_API sao_status_t SAO_UI_CALL
+sao::ui::menu_visual::set_child_hover(sao_ui_menu_handle_t handle, int32_t parent_menu_idx,
+                                      int32_t child_idx) {
+    if (handle == nullptr)
+        return SAO_STATUS_ERR_HANDLE_INVALID;
+    std::lock_guard<std::mutex> lock(handle->mtx);
+    if (child_idx == -1) {
+        if (handle->child_hover_idx != -1) {
+            handle->child_hover_idx = -1;
+            mark_visual_changed_locked(handle);
+        }
+        return SAO_STATUS_OK;
+    }
+    if (parent_menu_idx < 0 || parent_menu_idx >= static_cast<int32_t>(handle->items.size()) ||
+        handle->displayed_parent_name != handle->items[parent_menu_idx].name) {
+        return SAO_STATUS_ERR_INVALID_ARGUMENT;
+    }
+    const auto* child_menu = find_child_menu_locked(handle, handle->displayed_parent_name);
+    if (child_menu == nullptr)
+        return SAO_STATUS_ERR_NOT_FOUND;
+    if (child_idx < 0 || child_idx >= static_cast<int32_t>(child_menu->items.size())) {
+        return SAO_STATUS_ERR_INVALID_ARGUMENT;
+    }
+    if (handle->child_hover_idx != child_idx) {
+        handle->child_hover_idx = child_idx;
+        mark_visual_changed_locked(handle);
+    }
+    return SAO_STATUS_OK;
+}
+
+SAO_UI_API sao_status_t SAO_UI_CALL
+sao::ui::menu_visual::get_snapshot(sao_ui_menu_handle_t handle, Snapshot* out_snapshot) {
+    if (handle == nullptr)
+        return SAO_STATUS_ERR_HANDLE_INVALID;
+    if (out_snapshot == nullptr)
+        return SAO_STATUS_ERR_INVALID_ARGUMENT;
+    try {
+        Snapshot snapshot{};
+        {
+            std::lock_guard<std::mutex> lock(handle->mtx);
+            snapshot.active_root_idx = handle->active_idx;
+            if (handle->active_idx >= 0 &&
+                handle->active_idx < static_cast<int32_t>(handle->items.size())) {
+                copy_fixed_utf8(&snapshot.active_root_name_utf8,
+                                handle->items[handle->active_idx].name);
+            }
+            snapshot.displayed_parent_idx =
+                find_root(handle->items, handle->displayed_parent_name);
+            copy_fixed_utf8(&snapshot.displayed_parent_name_utf8,
+                            handle->displayed_parent_name);
+            snapshot.child_hover_idx = handle->child_hover_idx;
+            snapshot.phase = handle->phase;
+            snapshot.fade_t = handle->child_fade_t;
+            snapshot.revision = handle->visual_revision;
+            const auto* child_menu =
+                find_child_menu_locked(handle, handle->displayed_parent_name);
+            if (child_menu != nullptr) {
+                snapshot.rows.reserve(child_menu->items.size());
+                for (size_t i = 0; i < child_menu->items.size(); ++i) {
+                    ChildRowSnapshot row{};
+                    copy_fixed_utf8(&row.name_utf8, child_menu->items[i].name);
+                    copy_fixed_utf8(&row.icon_utf8, child_menu->items[i].icon);
+                    row.visible_width_px = child_menu->visible_widths[i];
+                    row.hover_t = child_menu->hover_values[i];
+                    snapshot.rows.push_back(row);
+                }
+            }
+        }
+        *out_snapshot = std::move(snapshot);
+        return SAO_STATUS_OK;
+    } catch (...) {
+        return SAO_STATUS_ERR_UNKNOWN;
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -923,9 +1144,7 @@ sao_ui_menu_compute_button_layout(sao_ui_menu_handle_t handle, int32_t button_in
     return SAO_STATUS_OK;
 }
 
-// Advance the state machine by dt_ms.  Handles the four transitions
-// documented at the top of this file: OPENING→OPEN, CLOSING→CLOSED,
-// CHILD_OPENING→CHILD_OPEN, CHILD_CLOSING→OPEN.
+// Advance root and child temporal state by dt_ms.
 extern "C" SAO_UI_API sao_status_t SAO_UI_CALL sao_ui_menu_tick(sao_ui_menu_handle_t handle,
                                                                 int32_t dt_ms) {
     if (handle == nullptr)
@@ -935,7 +1154,10 @@ extern "C" SAO_UI_API sao_status_t SAO_UI_CALL sao_ui_menu_tick(sao_ui_menu_hand
     PendingMenuEvent pending{};
     {
         std::lock_guard<std::mutex> lock(handle->mtx);
-        handle->phase_elapsed_ms += dt_ms;
+        const int64_t next_elapsed =
+            static_cast<int64_t>(handle->phase_elapsed_ms) + static_cast<int64_t>(dt_ms);
+        handle->phase_elapsed_ms = static_cast<int32_t>(
+            std::min<int64_t>(next_elapsed, static_cast<int64_t>(INT32_MAX)));
         switch (handle->phase) {
         case SAO_UI_MENU_PHASE_OPENING:
             if (handle->phase_elapsed_ms >= kMenuOpenMs) {
@@ -948,19 +1170,64 @@ extern "C" SAO_UI_API sao_status_t SAO_UI_CALL sao_ui_menu_tick(sao_ui_menu_hand
             if (handle->phase_elapsed_ms >= kMenuCloseMs) {
                 handle->phase = SAO_UI_MENU_PHASE_CLOSED;
                 handle->phase_elapsed_ms = 0;
+                clear_child_visual_locked(handle);
+                for (auto& item : handle->items) {
+                    if (item.state == SAO_UI_MENU_BTN_ACTIVE ||
+                        item.state == SAO_UI_MENU_BTN_HOVER) {
+                        item.state = SAO_UI_MENU_BTN_IDLE;
+                    }
+                }
+                handle->active_idx = -1;
+                handle->hover_idx = -1;
+                mark_visual_changed_locked(handle);
                 pending = capture_event_locked(handle, SAO_UI_MENU_EV_CLOSED, -1, -1, 0);
             }
             break;
         case SAO_UI_MENU_PHASE_CHILD_OPENING:
-            if (handle->phase_elapsed_ms >= kChildOpenMs) {
+            advance_child_rows_locked(handle, dt_ms);
+            {
+                const float next_fade = std::clamp(
+                    handle->child_fade_t -
+                        static_cast<float>(dt_ms) / static_cast<float>(kChildFadeInMs),
+                    0.0F, 1.0F);
+                if (next_fade != handle->child_fade_t) {
+                    handle->child_fade_t = next_fade;
+                    mark_visual_changed_locked(handle);
+                }
+            }
+            if (handle->child_fade_t <= 0.001F) {
                 handle->phase = SAO_UI_MENU_PHASE_CHILD_OPEN;
                 handle->phase_elapsed_ms = 0;
+                handle->child_fade_t = 0.0F;
+                mark_visual_changed_locked(handle);
             }
             break;
+        case SAO_UI_MENU_PHASE_CHILD_OPEN:
+            advance_child_rows_locked(handle, dt_ms);
+            handle->phase_elapsed_ms = 0;
+            break;
         case SAO_UI_MENU_PHASE_CHILD_CLOSING:
-            if (handle->phase_elapsed_ms >= kChildCloseMs) {
-                handle->phase = SAO_UI_MENU_PHASE_OPEN;
-                handle->phase_elapsed_ms = 0;
+            advance_child_rows_locked(handle, dt_ms);
+            {
+                const float next_fade = std::clamp(
+                    handle->child_fade_t +
+                        static_cast<float>(dt_ms) / static_cast<float>(kChildFadeOutMs),
+                    0.0F, 1.0F);
+                if (next_fade != handle->child_fade_t) {
+                    handle->child_fade_t = next_fade;
+                    mark_visual_changed_locked(handle);
+                }
+            }
+            if (handle->child_fade_t >= 0.999F) {
+                const std::string next_parent = handle->pending_parent_name;
+                if (next_parent.empty()) {
+                    clear_child_visual_locked(handle);
+                    handle->phase = SAO_UI_MENU_PHASE_OPEN;
+                    handle->phase_elapsed_ms = 0;
+                    mark_visual_changed_locked(handle);
+                } else {
+                    begin_child_fadein_locked(handle, next_parent);
+                }
             }
             break;
         default:
@@ -993,15 +1260,7 @@ sao_ui_menu_get_transition_progress(sao_ui_menu_handle_t handle, float* out_prog
                                           0.0F, 1.0F);
         break;
     case SAO_UI_MENU_PHASE_CHILD_OPENING:
-        *out_progress = std::clamp(static_cast<float>(handle->phase_elapsed_ms) /
-                                       static_cast<float>(kChildOpenMs),
-                                   0.0F, 1.0F);
-        break;
     case SAO_UI_MENU_PHASE_CHILD_CLOSING:
-        *out_progress = 1.0F - std::clamp(static_cast<float>(handle->phase_elapsed_ms) /
-                                              static_cast<float>(kChildCloseMs),
-                                          0.0F, 1.0F);
-        break;
     case SAO_UI_MENU_PHASE_OPEN:
     case SAO_UI_MENU_PHASE_CHILD_OPEN:
         *out_progress = 1.0F;
