@@ -21,6 +21,8 @@ set(SAO_LAUNCHER_HEADERS
     src/settings_json_internal.h
     src/settings_owner_internal.h
     src/settings_theme_internal.h
+    src/tool_launch_internal.h
+    src/tool_launch_package_internal.h
     include/sao/launcher/app.h
     include/sao/launcher/args.h
     include/sao/launcher/crash_handler.h
@@ -40,6 +42,8 @@ set(SAO_LAUNCHER_SOURCES
     src/settings_json_internal.cpp
     src/settings_owner.cpp
     src/settings_theme_internal.cpp
+    src/tool_launch_internal.cpp
+    src/tool_launch_package_internal.cpp
     src/main.cpp
     src/app.cpp
     src/args.cpp
@@ -108,8 +112,9 @@ set_target_properties(SaoAuto PROPERTIES
 target_include_directories(SaoAuto
     PRIVATE
         ${CMAKE_CURRENT_SOURCE_DIR}/include
+    ${CMAKE_SOURCE_DIR}/platform/core/include
 )
-target_link_libraries(SaoAuto PRIVATE nlohmann_json::nlohmann_json)
+target_link_libraries(SaoAuto PRIVATE nlohmann_json::nlohmann_json dwmapi)
 if (TARGET sao::core)
     target_link_libraries(SaoAuto PRIVATE sao::core)
     target_compile_definitions(SaoAuto PRIVATE

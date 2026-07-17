@@ -27,6 +27,7 @@
 #endif
 #include "settings_owner_internal.h"
 #include "settings_theme_internal.h"
+#include "tool_launch_internal.h"
 
 #include <windows.h>
 #include <cstring>
@@ -635,7 +636,22 @@ struct sao_platform_ctx {
     bool restore_theme_on_rollback = false;
     bool settings_save_enabled = false;
     std::unique_ptr<sao::launcher::settings_owner::SettingsOwner> settings_owner;
+    std::unique_ptr<sao::launcher::tool_launch::AiEditorProcessOwner> ai_editor;
 };
+
+sao_status_t create_ai_editor_owner(
+    const wchar_t* base_dir,
+    std::unique_ptr<sao::launcher::tool_launch::AiEditorProcessOwner>& out) noexcept {
+    try {
+        out = std::make_unique<sao::launcher::tool_launch::AiEditorProcessOwner>(
+            base_dir);
+        return SAO_STATUS_OK;
+    } catch (const std::bad_alloc&) {
+        return SAO_STATUS_ERR_UNKNOWN;
+    } catch (...) {
+        return SAO_STATUS_ERR_OS_CALL_FAILED;
+    }
+}
 
 sao_status_t create_settings_owner(
     const wchar_t* base_dir,
@@ -703,13 +719,21 @@ sao_status_t SAO_UI_CALL entity_action(SaoUiEntityAction action,
     case SAO_UI_ENTITY_ACTION_TOGGLE_STREAMING_MODE:
     case SAO_UI_ENTITY_ACTION_SET_FISHEYE_PROCEDURAL:
     case SAO_UI_ENTITY_ACTION_SET_FISHEYE_LIVE:
-    case SAO_UI_ENTITY_ACTION_OPEN_AI_EDITOR:
     case SAO_UI_ENTITY_ACTION_OPEN_WORKSHOP:
     case SAO_UI_ENTITY_ACTION_OPEN_PROCESS_SELECTOR:
     case SAO_UI_ENTITY_ACTION_OPEN_PLUGIN_MANAGER:
     case SAO_UI_ENTITY_ACTION_RELOAD_PLUGINS:
     case SAO_UI_ENTITY_ACTION_PLUGIN_STATUS:
         return SAO_STATUS_ERR_NOT_IMPLEMENTED;
+    case SAO_UI_ENTITY_ACTION_OPEN_AI_EDITOR: {
+        auto* ctx = static_cast<sao_platform_ctx*>(user_data);
+        if (ctx == nullptr || !ctx->ai_editor) {
+            return SAO_STATUS_ERR_NOT_INITIALIZED;
+        }
+        // The callback reports request acceptance. The detached owner records
+        // completion state and emits asynchronous failures through core logs.
+        return sao::launcher::tool_launch::open_ai_editor(ctx->ai_editor.get());
+    }
     case SAO_UI_ENTITY_ACTION_SAVE_SETTINGS: {
         auto* ctx = static_cast<sao_platform_ctx*>(user_data);
         if (ctx == nullptr || !ctx->settings_owner) {
@@ -758,7 +782,12 @@ sao_status_t sao_platform_bringup(const sao_platform_config* cfg,
     auto* ctx = new (std::nothrow) sao_platform_ctx{};
     if (!ctx) return SAO_STATUS_INTERNAL;
 
-    sao_status_t status = create_settings_owner(cfg->base_dir, ctx->settings_owner);
+    sao_status_t status = create_ai_editor_owner(cfg->base_dir, ctx->ai_editor);
+    if (status != SAO_STATUS_OK) {
+        delete ctx;
+        return status;
+    }
+    status = create_settings_owner(cfg->base_dir, ctx->settings_owner);
     if (status != SAO_STATUS_OK) {
         delete ctx;
         return status;

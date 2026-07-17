@@ -1351,9 +1351,15 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_entity_shell_handle_mouse(
                     handle->menu, menu_hit.parent, menu_hit.child, &activated, &action_id);
                 if (status == SAO_STATUS_OK && activated && action_id >= 0 &&
                     handle->config.action_fn != nullptr) {
-                    pending_action.callback = handle->config.action_fn;
-                    pending_action.user_data = handle->config.action_user_data;
-                    pending_action.action = static_cast<SaoUiEntityAction>(action_id);
+                    const auto action = static_cast<SaoUiEntityAction>(action_id);
+                    if (action == SAO_UI_ENTITY_ACTION_OPEN_AI_EDITOR) {
+                        status = set_menu_visibility_locked(handle, false);
+                    }
+                    if (status == SAO_STATUS_OK) {
+                        pending_action.callback = handle->config.action_fn;
+                        pending_action.user_data = handle->config.action_user_data;
+                        pending_action.action = action;
+                    }
                 }
             } else if (menu_index >= 0 && menu_index == handle->menu_pressed_index) {
                 status = sao_ui_menu_activate(handle->menu, menu_index);
