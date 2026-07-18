@@ -15,6 +15,9 @@ extern "C" {
 
 typedef struct sao_ui_entity_shell_s* sao_ui_entity_shell_handle_t;
 
+#define SAO_UI_ENTITY_ROOT_MAX_COUNT 64u
+#define SAO_UI_ENTITY_ROOT_ID_CAPACITY 128u
+
 enum SaoUiEntityAction : int32_t {
     // Built-in token groups are 1 (About), 100-105 (Control), 110-112 (Tools),
     // 120-122 (Plugins), and 130-131 (Skins). Assigned tokens are never reused;
@@ -71,6 +74,26 @@ struct SaoUiEntityShellSnapshot {
     sao_status_t last_status;
 };
 
+struct SaoUiEntityRootItem {
+    size_t struct_size;
+    const char* root_id_utf8;
+    const char* name_utf8;
+    const char* icon_utf8;
+    int32_t action_id;
+    bool can_activate;
+    uint8_t _pad[3];
+    const SaoUiMenuItem* children;
+    size_t child_count;
+};
+
+struct SaoUiEntityRootSnapshot {
+    size_t root_count;
+    size_t first_visible_root_index;
+    size_t visible_root_count;
+    uint64_t root_tree_revision;
+    char active_root_id_utf8[SAO_UI_ENTITY_ROOT_ID_CAPACITY];
+};
+
 SAO_UI_API sao_status_t SAO_UI_CALL sao_ui_entity_shell_create(
     sao_ui_overlay_host_handle_t host,
     const SaoUiEntityShellConfig* config,
@@ -97,6 +120,13 @@ SAO_UI_API sao_status_t SAO_UI_CALL sao_ui_entity_shell_set_children(
     const char* parent_name_utf8,
     const SaoUiMenuItem* items,
     size_t item_count);
+
+// Replaces the complete root/child tree. Every descriptor's struct_size must
+// equal sizeof(SaoUiEntityRootItem), because this array ABI has no element
+// stride field. All descriptor pointers are borrowed only for this synchronous
+// call; the shell retains a deep copy.
+SAO_UI_API sao_status_t SAO_UI_CALL sao_ui_entity_shell_set_roots(
+    sao_ui_entity_shell_handle_t handle, const SaoUiEntityRootItem* roots, size_t root_count);
 
 SAO_UI_API sao_status_t SAO_UI_CALL sao_ui_entity_shell_tick(
     sao_ui_entity_shell_handle_t handle,
@@ -125,6 +155,9 @@ SAO_UI_API sao_status_t SAO_UI_CALL sao_ui_entity_shell_insert(
 SAO_UI_API sao_status_t SAO_UI_CALL sao_ui_entity_shell_get_snapshot(
     sao_ui_entity_shell_handle_t handle,
     SaoUiEntityShellSnapshot* out_snapshot);
+
+SAO_UI_API sao_status_t SAO_UI_CALL sao_ui_entity_shell_get_root_snapshot(
+    sao_ui_entity_shell_handle_t handle, SaoUiEntityRootSnapshot* out_snapshot);
 
 SAO_UI_API sao_status_t SAO_UI_CALL sao_ui_entity_shell_snapshot_bgra(
     sao_ui_entity_shell_handle_t handle,
