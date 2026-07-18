@@ -3,7 +3,7 @@
 // **升级说明**: Python 侧走 pythonnet (Python 加载 CLR), C++ 侧直接走
 // hostfxr —— .NET 8 的官方原生嵌入 API。免 pythonnet 双跳, 免 Python 依赖。
 //
-// 对齐 Python 源: csharp_runtime.py (fetch_roslyn / assembly 加载语义参考)。
+// Generic component loading uses hostfxr's runtimeconfig path and precompiled DLLs.
 #pragma once
 
 #include <cstddef>
@@ -15,7 +15,12 @@
 namespace sao::plugins::csharp_host {
 
 typedef struct cs_host_s* cs_host_handle_t;
-typedef struct cs_domain_s* cs_domain_handle_t;    // 每插件独立 AssemblyLoadContext
+typedef struct cs_domain_s* cs_domain_handle_t;
+
+enum class cs_assembly_unload_mode : uint32_t {
+    process_resident = 0,
+    collectible = 1,
+};
 
 struct cs_host_config {
     // hostfxr.dll 的路径 (随包 vendor 或 .NET runtime 目录)
@@ -34,16 +39,15 @@ sao_plugins_cshost_init(const cs_host_config* cfg, cs_host_handle_t* out_host);
 extern "C" SAO_PLUGINS_API int32_t SAO_PLUGINS_CALL
 sao_plugins_cshost_shutdown(cs_host_handle_t host);
 
-// 每插件独立 AssemblyLoadContext (隔离)。
-extern "C" SAO_PLUGINS_API int32_t SAO_PLUGINS_CALL
-sao_plugins_cshost_create_domain(cs_host_handle_t host,
-                                 const char* domain_name_utf8,
-                                 cs_domain_handle_t* out_domain);
+// Collectible AssemblyLoadContext bootstrap is not available in this host yet.
+// Domain creation therefore fails instead of claiming isolation.
+extern "C" SAO_PLUGINS_API int32_t SAO_PLUGINS_CALL sao_plugins_cshost_create_domain(
+    cs_host_handle_t host, const char* domain_name_utf8, cs_domain_handle_t* out_domain);
 
 extern "C" SAO_PLUGINS_API int32_t SAO_PLUGINS_CALL
 sao_plugins_cshost_destroy_domain(cs_domain_handle_t domain);
 
-// .NET runtime 版本 (X.Y.Z)。
+// Compatibility snapshot backed by thread-local storage. Prefer the buffer API.
 extern "C" SAO_PLUGINS_API const char* SAO_PLUGINS_CALL
 sao_plugins_cshost_runtime_version(cs_host_handle_t host);
 
@@ -55,8 +59,17 @@ sao_plugins_cshost_is_available(bool* out_available);
 
 // 获取 runtime 版本到调用方 buffer。
 extern "C" SAO_PLUGINS_API int32_t SAO_PLUGINS_CALL
-sao_plugins_cshost_get_runtime_version(cs_host_handle_t host,
-                                       char* buf,
-                                       size_t buf_size);
+sao_plugins_cshost_get_runtime_version(cs_host_handle_t host, char* buf, size_t buf_size);
+
+// Reports whether managed assemblies can be physically unloaded. The current
+// default-ALC implementation returns process_resident; logical plugin unload
+// does not unload assembly code and the same assembly path cannot be reloaded.
+extern "C" SAO_PLUGINS_API int32_t SAO_PLUGINS_CALL sao_plugins_cshost_get_assembly_unload_mode(
+    cs_host_handle_t host, cs_assembly_unload_mode* out_mode);
+
+// Copies the last host/runtime cleanup diagnostic and leaves the host valid so
+// a failed shutdown or component close can be retried.
+extern "C" SAO_PLUGINS_API int32_t SAO_PLUGINS_CALL
+sao_plugins_cshost_get_last_error(cs_host_handle_t host, char* buf, size_t buf_size);
 
 } // namespace sao::plugins::csharp_host

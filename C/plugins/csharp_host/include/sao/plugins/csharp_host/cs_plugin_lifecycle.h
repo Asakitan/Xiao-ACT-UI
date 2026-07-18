@@ -1,16 +1,5 @@
-// cs_plugin_lifecycle.h — Wave 8 / Agent d Phase 8
-//
-// 用 hostfxr load_assembly_and_get_function_pointer 加载 hello_csharp.dll:
-//   1. hostfxr_initialize_for_runtime_config(HelloPlugin.runtimeconfig.json)
-//   2. hostfxr_get_runtime_delegate(hdt_load_assembly_and_get_function_pointer)
-//   3. load_assembly_and_get_function_pointer:
-//        - "SaoAuto.Plugins.HelloCsharp.HelloPlugin::InitSdkPointers"
-//        - "SaoAuto.Plugins.HelloCsharp.HelloPlugin::OnLoad"
-//        - "SaoAuto.Plugins.HelloCsharp.HelloPlugin::OnTick"
-//        - "SaoAuto.Plugins.HelloCsharp.HelloPlugin::OnUnload"
-//   4. 调 InitSdkPointers(bridge, sizeof(bridge)) 注入 SDK 3 条 C 函数
-//   5. 调 OnLoad() / OnTick() / OnUnload()
-//   6. SDK 记账通过 static state, 供 test 观察
+// Direct precompiled-DLL compatibility API. Production loader integration is
+// exposed by cs_loader_adapter.h and uses manifest managed_type/runtimeconfig.
 
 #pragma once
 
@@ -20,17 +9,37 @@
 #include "sao_plugins/abi.h"
 #include "sao_plugins/sao_status.h"
 
+#include "sao/plugins/csharp_host/cs_error.h"
 #include "sao/plugins/csharp_host/cs_host.h"
 
 namespace sao::plugins::csharp_host {
 
 typedef struct cs_plugin_s* cs_plugin_handle_t;
 
-// 与 hello_csharp/HelloPlugin.cs 里的 SdkBridge 结构体字节对齐 (顺序也要一致).
+inline constexpr uint32_t SAO_CSHOST_MANAGED_ABI_VERSION = 1;
+
+// The first three fields preserve the legacy fixture layout. New managed
+// components must validate struct_size and abi_version before reading appended
+// fields. sdk_context is a SaoSdkContext pointer; loader_context is a distinct
+// opaque loader plugin_context_t pointer and must never be cast to SaoSdkContext.
 struct cs_sdk_bridge {
-    void (*log_info)(const char* utf8);
-    void (*register_ui_panel)(const char* utf8);
-    void (*register_hotkey)(const char* id_utf8, const char* key_utf8);
+    void(SAO_PLUGINS_CALL* log_info)(const char* utf8);
+    void(SAO_PLUGINS_CALL* register_ui_panel)(const char* utf8);
+    void(SAO_PLUGINS_CALL* register_hotkey)(const char* id_utf8, const char* key_utf8);
+    uint32_t struct_size;
+    uint32_t abi_version;
+    void* sdk_context;
+    void* loader_context;
+};
+
+// OnLoad receives a borrowed pointer to this descriptor and exactly
+// sizeof(cs_managed_plugin_context) as argumentSize. Both pointers remain valid
+// until logical unload completes. Other lifecycle hooks receive null/zero.
+struct cs_managed_plugin_context {
+    uint32_t struct_size;
+    uint32_t abi_version;
+    void* sdk_context;
+    void* loader_context;
 };
 
 // SDK 记账 (供 test 校验插件真的调了 SDK)
@@ -44,36 +53,32 @@ struct cs_sdk_counters {
     char last_hotkey_key_utf8[64];
 };
 
-// 加载 plugin.json 指定的插件 (读 entry .dll → hostfxr load →
-// InitSdkPointers → OnLoad).
+// 加载 plugin.json 指定的预编译 DLL 并调用 OnLoad。
 //
 // plugin_json_path_utf8: 插件目录里的 plugin.json 绝对路径.
-// entry (从 JSON 里读) 相对 plugin.json 目录, e.g. "prebuilt/HelloPlugin.dll";
-// 同目录必须有 <AssemblyName>.runtimeconfig.json.
+// entry 必须是相对 plugin.json 目录的 .dll；runtimeconfig 可显式声明，
+// 否则使用 <AssemblyName>.runtimeconfig.json。
 extern "C" SAO_PLUGINS_API int32_t SAO_PLUGINS_CALL
-sao_plugins_cshost_load_plugin(cs_host_handle_t host,
-                               const char* plugin_json_path_utf8,
-                               cs_plugin_handle_t* out_plugin,
-                               char** out_error_utf8);
+sao_plugins_cshost_load_plugin(cs_host_handle_t host, const char* plugin_json_path_utf8,
+                               cs_plugin_handle_t* out_plugin, char** out_error_utf8);
 
 // 调 OnTick() 一次.
 extern "C" SAO_PLUGINS_API int32_t SAO_PLUGINS_CALL
-sao_plugins_cshost_tick_plugin(cs_plugin_handle_t plugin,
-                               char** out_error_utf8);
+sao_plugins_cshost_tick_plugin(cs_plugin_handle_t plugin, char** out_error_utf8);
 
-// 调 OnUnload() 并释放插件资源.
+// Calls optional OnUnload and logically deactivates the plugin. The assembly is
+// process-resident until process exit; loading the same assembly path again is
+// rejected while collectible ALC bootstrap is unavailable. Close failures are
+// returned and the handle remains valid for a retry.
 extern "C" SAO_PLUGINS_API int32_t SAO_PLUGINS_CALL
-sao_plugins_cshost_unload_plugin(cs_plugin_handle_t plugin,
-                                 char** out_error_utf8);
+sao_plugins_cshost_unload_plugin(cs_plugin_handle_t plugin, char** out_error_utf8);
 
 // 读 SDK 计数器 (供 test 校验).
 extern "C" SAO_PLUGINS_API int32_t SAO_PLUGINS_CALL
-sao_plugins_cshost_get_sdk_counters(cs_plugin_handle_t plugin,
-                                    cs_sdk_counters* out_counters);
+sao_plugins_cshost_get_sdk_counters(cs_plugin_handle_t plugin, cs_sdk_counters* out_counters);
 
 // 调 GetTickCount() 拿托管侧的 s_tickCount 全局.
 extern "C" SAO_PLUGINS_API int32_t SAO_PLUGINS_CALL
-sao_plugins_cshost_read_tick_count(cs_plugin_handle_t plugin,
-                                   int32_t* out_value);
+sao_plugins_cshost_read_tick_count(cs_plugin_handle_t plugin, int32_t* out_value);
 
 } // namespace sao::plugins::csharp_host

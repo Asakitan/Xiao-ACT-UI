@@ -201,6 +201,10 @@ std::shared_ptr<callable> interpreter::get_function(const std::string& name) {
     return nullptr;
 }
 
+emma_value interpreter::get_global(const std::string& name) const {
+    return pimpl_->global->get(name);
+}
+
 const ast_pool* interpreter::pool() const { return pimpl_->pool; }
 void interpreter::set_pool(const ast_pool* pool) { pimpl_->pool = pool; }
 

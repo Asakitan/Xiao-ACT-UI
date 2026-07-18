@@ -10,7 +10,8 @@ struct lua_State;
 
 namespace sao::plugins::lua_host {
 
-// 从栈顶取错误字符串, 转 SAO_STATUS。带 traceback (debug.traceback)。
+// 从栈顶弹出错误并复制 UTF-8 文本。成功输出统一由
+// sao_plugins_luahost_free_string 释放。
 extern "C" SAO_PLUGINS_API int32_t SAO_PLUGINS_CALL
 sao_plugins_luahost_take_error(lua_State* L, char** out_utf8);
 

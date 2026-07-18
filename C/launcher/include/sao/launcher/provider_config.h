@@ -28,6 +28,7 @@ struct PluginsProviderConfiguration {
     std::vector<std::wstring> roots;
     std::vector<std::wstring> user_roots;
     std::vector<std::wstring> manifests;
+    std::wstring python_home;
     bool workspace_walkup = false;
     uint32_t max_depth = 1;
 };

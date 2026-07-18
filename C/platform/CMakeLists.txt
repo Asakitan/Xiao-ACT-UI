@@ -43,6 +43,7 @@ add_subdirectory(rt_io)
 add_subdirectory(ui)
 add_subdirectory(sdk)
 add_subdirectory(scripting)
+add_subdirectory(gpu_hunt)
 
 # Convenience meta-target: link this to pull the whole platform in.
 add_library(sao_platform INTERFACE)
@@ -54,5 +55,6 @@ target_link_libraries(sao_platform INTERFACE
     sao::rt_io
     sao::ui
     sao::sdk
-    sao::scripting)
+    sao::scripting
+    sao::gpu_hunt)
 target_compile_features(sao_platform INTERFACE cxx_std_20)

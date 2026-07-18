@@ -1,5 +1,7 @@
 #include "tool_launch_package_internal.h"
 
+#include <windows.h>
+
 #include <algorithm>
 #include <array>
 #include <cwchar>
@@ -26,9 +28,7 @@ struct PackageLease::Impl {
 
 namespace {
 
-constexpr wchar_t kRuntimeExecutable[] = L"XiaoACTUI.exe";
-constexpr wchar_t kAiEditorDocument[] = L"ai_editor_app.html";
-constexpr wchar_t kAiEditorArgument[] = L"--ai-editor";
+constexpr wchar_t kRuntimeExecutable[] = L"SaoAiEditor.exe";
 
 sao_status_t map_os_error(DWORD error) noexcept {
     switch (error) {
@@ -80,32 +80,6 @@ public:
 private:
     HANDLE handle_{};
 };
-
-void append_quoted_argument(std::wstring& command_line,
-                            const std::wstring& argument) {
-    if (!command_line.empty()) {
-        command_line.push_back(L' ');
-    }
-    command_line.push_back(L'\"');
-    std::size_t slash_count = 0;
-    for (const wchar_t value : argument) {
-        if (value == L'\\') {
-            ++slash_count;
-            continue;
-        }
-        if (value == L'\"') {
-            command_line.append(slash_count * 2 + 1, L'\\');
-            command_line.push_back(L'\"');
-            slash_count = 0;
-            continue;
-        }
-        command_line.append(slash_count, L'\\');
-        slash_count = 0;
-        command_line.push_back(value);
-    }
-    command_line.append(slash_count * 2, L'\\');
-    command_line.push_back(L'\"');
-}
 
 sao_status_t reject_reparse_components(
     const std::filesystem::path& path) noexcept {
@@ -215,11 +189,8 @@ sao_status_t lock_verified_path(const std::filesystem::path& path,
 sao_status_t acquire_package_lease_impl(const std::filesystem::path& base,
                                         const PackagePaths& package,
                                         PackageLease::Impl& lease) noexcept {
-    const std::array<std::pair<std::filesystem::path, bool>, 5> paths{
+    const std::array<std::pair<std::filesystem::path, bool>, 2> paths{
         std::pair{base, true},
-        std::pair{base / L"web", true},
-        std::pair{base / L"web" / kAiEditorDocument, false},
-        std::pair{package.working_directory, true},
         std::pair{package.executable, false},
     };
     for (const auto& [path, directory] : paths) {
@@ -229,85 +200,6 @@ sao_status_t acquire_package_lease_impl(const std::filesystem::path& base,
         }
     }
     return SAO_STATUS_OK;
-}
-
-bool environment_has(const std::vector<std::wstring>& entries,
-                     const wchar_t* name) noexcept {
-    const std::size_t name_length = std::wcslen(name);
-    return std::any_of(entries.begin(), entries.end(), [&](const auto& entry) {
-        return entry.size() > name_length && entry[name_length] == L'=' &&
-               _wcsnicmp(entry.c_str(), name, name_length) == 0;
-    });
-}
-
-void environment_set_default(std::vector<std::wstring>& entries,
-                             const wchar_t* name,
-                             const std::wstring& value) {
-    if (!environment_has(entries, name)) {
-        entries.emplace_back(std::wstring(name) + L"=" + value);
-    }
-}
-
-void environment_set(std::vector<std::wstring>& entries, const wchar_t* name,
-                     const wchar_t* value) {
-    const std::size_t name_length = std::wcslen(name);
-    const auto found = std::find_if(entries.begin(), entries.end(),
-                                    [&](const auto& entry) {
-        return entry.size() > name_length && entry[name_length] == L'=' &&
-               _wcsnicmp(entry.c_str(), name, name_length) == 0;
-    });
-    const std::wstring setting = std::wstring(name) + L"=" + value;
-    if (found == entries.end()) {
-        entries.emplace_back(setting);
-    } else {
-        *found = setting;
-    }
-}
-
-std::vector<wchar_t> build_child_environment(
-    const std::filesystem::path& python_root) {
-    struct EnvironmentStrings final {
-        LPWCH value{};
-        ~EnvironmentStrings() {
-            if (value != nullptr) {
-                FreeEnvironmentStringsW(value);
-            }
-        }
-    } source{GetEnvironmentStringsW()};
-    if (source.value == nullptr) {
-        throw std::runtime_error("GetEnvironmentStringsW failed");
-    }
-    std::vector<std::wstring> entries;
-    for (const wchar_t* cursor = source.value; *cursor != L'\0';) {
-        entries.emplace_back(cursor);
-        cursor += entries.back().size() + 1;
-    }
-
-    environment_set_default(entries, L"PYTHONPATH", python_root.wstring());
-    environment_set_default(entries, L"PYTHONUNBUFFERED", L"1");
-    const DWORD cwd_length = GetCurrentDirectoryW(0, nullptr);
-    if (cwd_length > 1) {
-        std::wstring cwd(cwd_length, L'\0');
-        const DWORD copied = GetCurrentDirectoryW(cwd_length, cwd.data());
-        if (copied > 0 && copied < cwd_length) {
-            cwd.resize(copied);
-            environment_set_default(entries, L"SAO_AI_EDITOR_WORKSPACE_ROOT",
-                                    cwd);
-        }
-    }
-    environment_set(entries, L"PYWEBVIEW_GUI", L"edgechromium");
-    std::sort(entries.begin(), entries.end(), [](const auto& left,
-                                                 const auto& right) {
-        return _wcsicmp(left.c_str(), right.c_str()) < 0;
-    });
-
-    std::vector<wchar_t> block;
-    for (const auto& entry : entries) {
-        block.insert(block.end(), entry.begin(), entry.end());
-        block.push_back(L'\0');
-    }
-    block.push_back(L'\0');
-    return block;
 }
 
 } // namespace
@@ -344,23 +236,13 @@ sao_status_t resolve_package(const std::filesystem::path& base,
         if (status != SAO_STATUS_OK) {
             return status;
         }
-        const auto web_dir = base / L"web";
-        status = validate_path(web_dir, true);
-        if (status != SAO_STATUS_OK) {
-            return status;
-        }
-        status = validate_path(web_dir / kAiEditorDocument, false);
-        if (status != SAO_STATUS_OK) {
-            return status;
-        }
-
         const auto runtime_dir = base / L"runtime";
         const sao_status_t runtime_status = validate_path(runtime_dir, true);
         if (runtime_status == SAO_STATUS_OK) {
             const auto runtime_executable = runtime_dir / kRuntimeExecutable;
             status = validate_path(runtime_executable, false);
             if (status == SAO_STATUS_OK) {
-                out = {runtime_executable, runtime_dir};
+                out = {runtime_executable, base};
                 return SAO_STATUS_OK;
             }
             if (status != SAO_STATUS_ERR_NOT_FOUND) {
@@ -376,52 +258,6 @@ sao_status_t resolve_package(const std::filesystem::path& base,
             return status;
         }
         out = {root_executable, base};
-        return SAO_STATUS_OK;
-    } catch (const std::bad_alloc&) {
-        return SAO_STATUS_ERR_UNKNOWN;
-    } catch (...) {
-        return SAO_STATUS_ERR_OS_CALL_FAILED;
-    }
-}
-
-sao_status_t create_ai_editor_process(const std::filesystem::path& base,
-                                      PROCESS_INFORMATION& out_process,
-                                      PackagePaths& out_package,
-                                      PackageLease& out_lease) noexcept {
-    out_process = {};
-    try {
-        PackagePaths package;
-        sao_status_t status = resolve_package(base, package);
-        if (status != SAO_STATUS_OK) {
-            return status;
-        }
-        PackageLease lease;
-        status = acquire_package_lease(base, package, lease);
-        if (status != SAO_STATUS_OK) {
-            return status;
-        }
-
-        std::wstring command_line;
-        append_quoted_argument(command_line, package.executable.wstring());
-        append_quoted_argument(command_line, kAiEditorArgument);
-        std::vector<wchar_t> mutable_command(command_line.begin(),
-                                             command_line.end());
-        mutable_command.push_back(L'\0');
-        auto environment = build_child_environment(package.working_directory);
-        out_package = package;
-
-        STARTUPINFOW startup{};
-        startup.cb = sizeof(startup);
-        constexpr DWORD kFlags = CREATE_NEW_PROCESS_GROUP |
-                                 CREATE_UNICODE_ENVIRONMENT |
-                                 BELOW_NORMAL_PRIORITY_CLASS;
-        if (!CreateProcessW(
-                package.executable.c_str(), mutable_command.data(), nullptr,
-                nullptr, FALSE, kFlags, environment.data(),
-                package.working_directory.c_str(), &startup, &out_process)) {
-            return map_os_error(GetLastError());
-        }
-        out_lease = std::move(lease);
         return SAO_STATUS_OK;
     } catch (const std::bad_alloc&) {
         return SAO_STATUS_ERR_UNKNOWN;

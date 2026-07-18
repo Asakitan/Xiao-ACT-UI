@@ -266,14 +266,15 @@ void populate_context(ContextState* state, SaoSdkContext* out_ctx,
     out_ctx->ctx_impl            = state;
     out_ctx->plugin_id_utf8      = state->plugin_id.c_str();
     out_ctx->plugin_version_utf8 = state->plugin_version.c_str();
-    out_ctx->ui     = make_ui_table();
-    out_ctx->event  = make_event_table();
-    out_ctx->mem    = make_mem_table_fail_closed();
-    out_ctx->net    = make_net_table_fail_closed();
-    out_ctx->config = make_config_table();
-    out_ctx->hotkey = make_hotkey_table();
-    out_ctx->tts    = make_tts_table();
-    out_ctx->banner = make_banner_table();
+    out_ctx->ui       = make_ui_table();
+    out_ctx->event    = make_event_table();
+    out_ctx->mem      = make_mem_table_fail_closed();
+    out_ctx->net      = make_net_table_fail_closed();
+    out_ctx->config   = make_config_table();
+    out_ctx->hotkey   = make_hotkey_table();
+    out_ctx->tts      = make_tts_table();
+    out_ctx->banner   = make_banner_table();
+    out_ctx->gpu_hunt = make_gpu_hunt_table();
 }
 
 }  // namespace sao_sdk_internal
@@ -316,6 +317,7 @@ extern "C" SAO_SDK_API void SAO_SDK_CALL sao_sdk_context_destroy(
     // Provider-owned registrations are swept in exact reverse registration
     // order before local event/panel state is released.
     sao_sdk_internal::provider_cleanup(state);
+    sao_sdk_internal::sdk_gpu_hunt_sweep_owner(state);
 
     auto& rt = sao_sdk_internal::SharedRuntime::instance();
     {

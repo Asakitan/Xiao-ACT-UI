@@ -23,6 +23,8 @@ namespace {
 struct adapter_record {
     host_adapter_vtable value{};
     bool present = false;
+    bool retiring = false;
+    size_t active_calls = 0;
 };
 
 struct subscriber_record {
@@ -62,12 +64,65 @@ std::string dependency_id(std::string requirement) {
     return requirement;
 }
 
-bool adapter_for(engine_kind language, host_adapter_vtable& output) {
-    const auto index = language_index(language);
-    std::lock_guard lock(g_lifecycle_mutex);
-    if (index >= g_adapters.size() || !g_adapters[index].present) return false;
-    output = g_adapters[index].value;
-    return true;
+class adapter_lease {
+public:
+    adapter_lease() = default;
+    ~adapter_lease() { release(); }
+
+    adapter_lease(const adapter_lease&) = delete;
+    adapter_lease& operator=(const adapter_lease&) = delete;
+
+    bool acquire(engine_kind language) noexcept {
+        try {
+            const auto index = language_index(language);
+            std::lock_guard lock(g_lifecycle_mutex);
+            if (index >= g_adapters.size() || !g_adapters[index].present ||
+                g_adapters[index].retiring) {
+                return false;
+            }
+            index_ = index;
+            value_ = g_adapters[index].value;
+            ++g_adapters[index].active_calls;
+            return true;
+        } catch (...) {
+            return false;
+        }
+    }
+
+    const host_adapter_vtable& value() const noexcept { return value_; }
+
+private:
+    void release() noexcept {
+        if (index_ >= g_adapters.size()) return;
+        try {
+            std::lock_guard lock(g_lifecycle_mutex);
+            auto& record = g_adapters[index_];
+            if (record.active_calls > 0) --record.active_calls;
+        } catch (...) {
+        }
+        index_ = g_adapters.size();
+    }
+
+    size_t index_ = g_adapters.size();
+    host_adapter_vtable value_{};
+};
+
+bool language_has_owned_context(engine_kind language) noexcept {
+    try {
+        auto& registry = registry_storage();
+        std::shared_lock registry_lock(registry.mutex);
+        for (const auto& [_, plugin] : registry.plugins) {
+            std::lock_guard plugin_lock(plugin->mutex);
+            if (plugin->manifest.language == language &&
+                plugin->native_module == nullptr && plugin->context != nullptr &&
+                !plugin->host_adapter_unloaded) {
+                return true;
+            }
+        }
+        return false;
+    } catch (...) {
+        return true;
+    }
 }
 
 uint32_t expected_native_abi(const plugin_manifest& manifest) {
@@ -210,23 +265,36 @@ int32_t call_native_simple(native_simple_fn callback) noexcept {
 #endif
 }
 
-int32_t clear_native(plugin_handle_t plugin) noexcept {
-    if (plugin->context != nullptr) {
-        const int32_t status = plugin_context_destroy(plugin->context);
-        if (status != SAO_OK) return status;
-        plugin->context = nullptr;
-    }
-    if (plugin->native_module != nullptr &&
-        FreeLibrary(plugin->native_module) == FALSE) {
+int32_t clear_owned_runtime(plugin_handle_t plugin) noexcept {
+    try {
+        plugin_context_t* context = nullptr;
+        HMODULE module = nullptr;
+        {
+            std::lock_guard lock(plugin->mutex);
+            context = plugin->context;
+            module = plugin->native_module;
+        }
+        if (context != nullptr) {
+            const int32_t status = plugin_context_destroy(context);
+            if (status != SAO_OK) return status;
+        }
+        if (module != nullptr && FreeLibrary(module) == FALSE) {
+            return SAO_ERR_OS_CALL_FAILED;
+        }
+        {
+            std::lock_guard lock(plugin->mutex);
+            plugin->native_module = nullptr;
+            plugin->native_on_load = nullptr;
+            plugin->native_on_enable = nullptr;
+            plugin->native_on_disable = nullptr;
+            plugin->native_on_unload = nullptr;
+            plugin->unload_hook_completed = false;
+            plugin->host_adapter_unloaded = false;
+        }
+        return SAO_OK;
+    } catch (...) {
         return SAO_ERR_OS_CALL_FAILED;
     }
-    plugin->native_module = nullptr;
-    plugin->native_on_load = nullptr;
-    plugin->native_on_enable = nullptr;
-    plugin->native_on_disable = nullptr;
-    plugin->native_on_unload = nullptr;
-    plugin->native_cleanup_pending = false;
-    return SAO_OK;
 }
 
 int32_t load_native(plugin_handle_t plugin, const plugin_manifest& manifest) {
@@ -280,7 +348,8 @@ int32_t load_native(plugin_handle_t plugin, const plugin_manifest& manifest) {
         plugin->native_on_disable = on_disable;
         plugin->native_on_unload = on_unload;
         plugin->context = context;
-        plugin->native_cleanup_pending = false;
+        plugin->unload_hook_completed = false;
+        plugin->host_adapter_unloaded = false;
     }
     const bool has_entity_providers =
         descriptor.struct_size >= sizeof(native_plugin_descriptor);
@@ -303,11 +372,16 @@ int32_t load_native(plugin_handle_t plugin, const plugin_manifest& manifest) {
         int32_t rollback_status = SAO_OK;
         if (on_load_entered) {
             rollback_status = call_native_simple(on_unload);
+            if (rollback_status == SAO_OK) {
+                std::lock_guard lock(plugin->mutex);
+                plugin->unload_hook_completed = true;
+            }
         }
         if (rollback_status != SAO_OK) return rollback_status;
-        plugin->native_cleanup_pending = on_load_entered;
-        const int32_t cleanup_status = clear_native(plugin);
-        return cleanup_status == SAO_OK ? status : cleanup_status;
+        const int32_t cleanup_status = plugin_context_release_resources(context);
+        if (cleanup_status != SAO_OK) return cleanup_status;
+        const int32_t clear_status = clear_owned_runtime(plugin);
+        return clear_status == SAO_OK ? status : clear_status;
     }
     return SAO_OK;
 }
@@ -384,27 +458,38 @@ int32_t load_single(plugin_handle_t plugin, std::unordered_set<plugin_handle_t>&
         plugin->stop_requested.store(false);
     }
     publish(plugin, lifecycle_event::load_started, "load started");
-    host_adapter_vtable adapter{};
+    adapter_lease adapter;
     bool adapter_loaded = false;
+    bool adapter_on_load_entered = false;
+    bool rollback_adapter_unloaded = false;
     if (!manifest.native_entry.empty()) {
         status = load_native(plugin, manifest);
     } else {
-        if (!adapter_for(manifest.language, adapter) || adapter.load_plugin == nullptr ||
-            adapter.call_on_load == nullptr || adapter.unload_plugin == nullptr) {
-            status = SAO_PLUGINS_ERR_UNSUPPORTED;
+        auto* context = sao_plugins_ctx_create(plugin);
+        if (context == nullptr) {
+            status = SAO_ERR_OS_CALL_FAILED;
         } else {
+            std::lock_guard lock(plugin->mutex);
+            plugin->context = context;
+            plugin->unload_hook_completed = false;
+            plugin->host_adapter_unloaded = false;
+        }
+        if (status == SAO_OK &&
+            (!adapter.acquire(manifest.language) ||
+             adapter.value().load_plugin == nullptr ||
+             adapter.value().call_on_load == nullptr ||
+             adapter.value().unload_plugin == nullptr)) {
+            status = SAO_PLUGINS_ERR_UNSUPPORTED;
+        } else if (status == SAO_OK) {
             try {
-                status = adapter.load_plugin(plugin, &manifest, adapter.host_user_data);
+                status = adapter.value().load_plugin(
+                    plugin, &manifest, adapter.value().host_user_data);
                 adapter_loaded = status == SAO_OK;
                 if (status == SAO_OK) {
-                    auto* context = sao_plugins_ctx_create(plugin);
-                    if (context == nullptr) status = SAO_ERR_OS_CALL_FAILED;
-                    else {
-                        std::lock_guard lock(plugin->mutex);
-                        plugin->context = context;
-                    }
+                    adapter_on_load_entered = true;
+                    status = adapter.value().call_on_load(
+                        plugin, adapter.value().host_user_data);
                 }
-                if (status == SAO_OK) status = adapter.call_on_load(plugin, adapter.host_user_data);
             } catch (...) {
                 status = SAO_ERR_OS_CALL_FAILED;
             }
@@ -413,16 +498,62 @@ int32_t load_single(plugin_handle_t plugin, std::unordered_set<plugin_handle_t>&
     visiting.erase(plugin);
     if (status != SAO_OK) {
         if (manifest.native_entry.empty()) {
-            const int32_t cleanup_status = clear_native(plugin);
-            if (cleanup_status != SAO_OK) status = cleanup_status;
-        }
-        if (adapter_loaded) {
-            try {
-                if (adapter.unload_plugin(plugin, adapter.host_user_data) != SAO_OK) {
-                    sao_plugins_isolation_record_failure(plugin, "host rollback unload failed");
+            plugin_context_t* context = nullptr;
+            {
+                std::lock_guard lock(plugin->mutex);
+                context = plugin->context;
+            }
+            int32_t rollback_status = SAO_OK;
+            bool allow_unload = true;
+            if (adapter_loaded && adapter_on_load_entered &&
+                adapter.value().call_on_unload != nullptr) {
+                try {
+                    rollback_status = adapter.value().call_on_unload(
+                        plugin, &allow_unload,
+                        adapter.value().host_user_data);
+                } catch (...) {
+                    rollback_status = SAO_ERR_OS_CALL_FAILED;
                 }
-            } catch (...) {
-                sao_plugins_isolation_record_failure(plugin, "host rollback unload crossed exception boundary");
+            }
+            if (rollback_status == SAO_OK && allow_unload) {
+                {
+                    std::lock_guard lock(plugin->mutex);
+                    plugin->unload_hook_completed = true;
+                }
+                const int32_t resource_status =
+                    plugin_context_release_resources(context);
+                if (resource_status != SAO_OK) {
+                    status = resource_status;
+                } else if (adapter_loaded) {
+                    try {
+                        const int32_t unload_status =
+                            adapter.value().unload_plugin(
+                                plugin, adapter.value().host_user_data);
+                        if (unload_status == SAO_OK) {
+                            std::lock_guard lock(plugin->mutex);
+                            plugin->host_adapter_unloaded = true;
+                            rollback_adapter_unloaded = true;
+                        } else {
+                            status = unload_status;
+                            sao_plugins_isolation_record_failure(
+                                plugin, "host rollback unload failed");
+                        }
+                    } catch (...) {
+                        status = SAO_ERR_OS_CALL_FAILED;
+                        sao_plugins_isolation_record_failure(
+                            plugin,
+                            "host rollback unload crossed exception boundary");
+                    }
+                }
+            } else {
+                status = rollback_status == SAO_OK
+                             ? SAO_PLUGINS_ERR_BUSY
+                             : rollback_status;
+            }
+            if (rollback_status == SAO_OK && allow_unload &&
+                (!adapter_loaded || rollback_adapter_unloaded)) {
+                const int32_t cleanup_status = clear_owned_runtime(plugin);
+                if (cleanup_status != SAO_OK) status = cleanup_status;
             }
         }
         {
@@ -451,9 +582,81 @@ sao_plugins_lifecycle_register_host_adapter(engine_kind language,
     if (vtable == nullptr || index == 0 || index >= g_adapters.size() ||
         vtable->load_plugin == nullptr || vtable->call_on_load == nullptr ||
         vtable->unload_plugin == nullptr) return SAO_ERR_INVALID_ARGUMENT;
-    std::lock_guard lock(g_lifecycle_mutex);
-    g_adapters[index] = {*vtable, true};
-    return SAO_OK;
+    try {
+        std::lock_guard lock(g_lifecycle_mutex);
+        auto& record = g_adapters[index];
+        if (record.present) return SAO_PLUGINS_ERR_ALREADY_EXISTS;
+        if (record.retiring || record.active_calls != 0) {
+            return SAO_PLUGINS_ERR_BUSY;
+        }
+        record.value = *vtable;
+        record.present = true;
+        return SAO_OK;
+    } catch (...) {
+        return SAO_ERR_OS_CALL_FAILED;
+    }
+}
+
+extern "C" SAO_PLUGINS_API int32_t SAO_PLUGINS_CALL
+sao_plugins_lifecycle_unregister_host_adapter(engine_kind language) {
+    const auto index = language_index(language);
+    if (index == 0 || index >= g_adapters.size()) {
+        return SAO_ERR_INVALID_ARGUMENT;
+    }
+    try {
+        {
+            std::lock_guard lock(g_lifecycle_mutex);
+            auto& record = g_adapters[index];
+            if (!record.present) return SAO_ERR_HANDLE_INVALID;
+            if (record.retiring || record.active_calls != 0) {
+                return SAO_PLUGINS_ERR_BUSY;
+            }
+            record.present = false;
+            record.retiring = true;
+        }
+        if (language_has_owned_context(language)) {
+            std::lock_guard lock(g_lifecycle_mutex);
+            auto& record = g_adapters[index];
+            record.present = true;
+            record.retiring = false;
+            return SAO_PLUGINS_ERR_BUSY;
+        }
+        {
+            std::lock_guard lock(g_lifecycle_mutex);
+            auto& record = g_adapters[index];
+            record.value = {};
+            record.retiring = false;
+        }
+        return SAO_OK;
+    } catch (...) {
+        try {
+            std::lock_guard lock(g_lifecycle_mutex);
+            auto& record = g_adapters[index];
+            if (record.retiring) {
+                record.present = true;
+                record.retiring = false;
+            }
+        } catch (...) {
+        }
+        return SAO_ERR_OS_CALL_FAILED;
+    }
+}
+
+extern "C" SAO_PLUGINS_API int32_t SAO_PLUGINS_CALL
+sao_plugins_lifecycle_get_context(plugin_handle_t plugin,
+                                  plugin_context_t** out_context) {
+    if (out_context == nullptr) return SAO_ERR_INVALID_ARGUMENT;
+    *out_context = nullptr;
+    try {
+        const auto retained = retain_plugin(plugin);
+        if (retained == nullptr) return SAO_ERR_HANDLE_INVALID;
+        std::lock_guard lock(retained->mutex);
+        if (retained->context == nullptr) return SAO_ERR_NOT_INITIALIZED;
+        *out_context = retained->context;
+        return SAO_OK;
+    } catch (...) {
+        return SAO_ERR_OS_CALL_FAILED;
+    }
 }
 
 extern "C" SAO_PLUGINS_API int32_t SAO_PLUGINS_CALL
@@ -468,40 +671,165 @@ sao_plugins_lifecycle_load(plugin_handle_t plugin) {
 
 extern "C" SAO_PLUGINS_API int32_t SAO_PLUGINS_CALL
 sao_plugins_lifecycle_unload(plugin_handle_t plugin) {
-    const auto retained = retain_plugin(plugin);
-    if (retained == nullptr) return SAO_ERR_HANDLE_INVALID;
-    (void)retained;
-    const auto manifest = manifest_snapshot(plugin);
-    lifecycle_state previous_state = lifecycle_state::unknown;
-    plugin_context_t* context = nullptr;
-    bool cleanup_only = false;
-    {
-        std::lock_guard lock(plugin->mutex);
-        if (plugin->state == lifecycle_state::discovered || plugin->state == lifecycle_state::unloaded) return SAO_OK;
-        const bool resident_failed =
-            plugin->state == lifecycle_state::failed &&
-            (plugin->native_module != nullptr || plugin->context != nullptr);
-        if (plugin->state != lifecycle_state::loaded_active &&
-            plugin->state != lifecycle_state::loaded_disabled &&
-            !resident_failed) {
+    try {
+        const auto retained = retain_plugin(plugin);
+        if (retained == nullptr) return SAO_ERR_HANDLE_INVALID;
+        (void)retained;
+        const auto manifest = manifest_snapshot(plugin);
+        lifecycle_state previous_state = lifecycle_state::unknown;
+        plugin_context_t* context = nullptr;
+        HMODULE native_module = nullptr;
+        native_simple_fn native_on_disable = nullptr;
+        native_simple_fn native_on_unload = nullptr;
+        bool unload_hook_completed = false;
+        bool host_adapter_unloaded = false;
+        {
+            std::lock_guard lock(plugin->mutex);
+            if (plugin->state == lifecycle_state::discovered ||
+                plugin->state == lifecycle_state::unloaded) {
+                return SAO_OK;
+            }
+            const bool resident_failed =
+                plugin->state == lifecycle_state::failed &&
+                (plugin->native_module != nullptr || plugin->context != nullptr);
+            if (plugin->state != lifecycle_state::loaded_active &&
+                plugin->state != lifecycle_state::loaded_disabled &&
+                !resident_failed) {
+                return SAO_PLUGINS_ERR_BUSY;
+            }
+            context = plugin->context;
+            native_module = plugin->native_module;
+            native_on_disable = plugin->native_on_disable;
+            native_on_unload = plugin->native_on_unload;
+            unload_hook_completed = plugin->unload_hook_completed;
+            host_adapter_unloaded = plugin->host_adapter_unloaded;
+            previous_state = plugin->state;
+            plugin->state = lifecycle_state::unloading;
+        }
+        if (plugin_context_entity_provider_is_current_thread(context)) {
+            std::lock_guard lock(plugin->mutex);
+            plugin->state = previous_state;
             return SAO_PLUGINS_ERR_BUSY;
         }
-        context = plugin->context;
-        previous_state = plugin->state;
-        cleanup_only = resident_failed && plugin->native_cleanup_pending;
-        plugin->state = lifecycle_state::unloading;
-    }
-    if (cleanup_only) {
-        publish(plugin, lifecycle_event::unload_started,
-                "resident cleanup started");
-        const int32_t cleanup_status = clear_native(plugin);
-        if (cleanup_status != SAO_OK) {
-            std::lock_guard lock(plugin->mutex);
-            plugin->state = lifecycle_state::failed;
-            plugin->last_error = "native cleanup failed";
-            return cleanup_status;
+        plugin->stop_requested.store(true);
+        plugin_context_request_stop(context);
+        publish(plugin, lifecycle_event::unload_started, "unload started");
+        const int32_t platform_quiesce_status =
+            plugin_context_quiesce_platform(context);
+        if (platform_quiesce_status != SAO_OK) {
+            {
+                std::lock_guard lock(plugin->mutex);
+                plugin->state = lifecycle_state::failed;
+                plugin->last_error = "platform capability rundown failed";
+            }
+            publish(plugin, lifecycle_event::unload_failed,
+                    "platform capability rundown failed");
+            return platform_quiesce_status;
         }
-        plugin_remove_extensions(plugin);
+        const int32_t quiesce_status =
+            plugin_context_quiesce_entity_providers(context);
+        if (quiesce_status != SAO_OK) {
+            {
+                std::lock_guard lock(plugin->mutex);
+                plugin->state = lifecycle_state::failed;
+                plugin->last_error = "entity provider rundown failed";
+            }
+            publish(plugin, lifecycle_event::unload_failed,
+                    "entity provider rundown failed");
+            return quiesce_status;
+        }
+
+        int32_t status = SAO_OK;
+        bool allow_unload = true;
+        bool disable_completed = false;
+        adapter_lease adapter;
+        try {
+            if (native_module != nullptr) {
+                if (previous_state == lifecycle_state::loaded_active &&
+                    native_on_disable != nullptr) {
+                    status = call_native_simple(native_on_disable);
+                    disable_completed = status == SAO_OK;
+                }
+                if (status == SAO_OK && !unload_hook_completed &&
+                    native_on_unload != nullptr) {
+                    status = call_native_simple(native_on_unload);
+                    unload_hook_completed = status == SAO_OK;
+                }
+            } else if (!host_adapter_unloaded) {
+                if (!adapter.acquire(manifest.language)) {
+                    status = SAO_PLUGINS_ERR_UNSUPPORTED;
+                } else {
+                    const auto& value = adapter.value();
+                    if (previous_state == lifecycle_state::loaded_active &&
+                        value.call_on_disable != nullptr) {
+                        status = value.call_on_disable(
+                            plugin, value.host_user_data);
+                        disable_completed = status == SAO_OK;
+                    }
+                    if (status == SAO_OK && !unload_hook_completed &&
+                        value.call_on_unload != nullptr) {
+                        status = value.call_on_unload(
+                            plugin, &allow_unload, value.host_user_data);
+                        unload_hook_completed = status == SAO_OK && allow_unload;
+                    } else if (status == SAO_OK && !unload_hook_completed) {
+                        unload_hook_completed = true;
+                    }
+                }
+            }
+        } catch (...) {
+            status = SAO_ERR_OS_CALL_FAILED;
+        }
+        if (unload_hook_completed) {
+            std::lock_guard lock(plugin->mutex);
+            plugin->unload_hook_completed = true;
+        }
+        if (status != SAO_OK || !allow_unload) {
+            const bool blocked = status == SAO_OK && !allow_unload;
+            if (blocked) {
+                plugin->stop_requested.store(false);
+                plugin_context_clear_stop(context);
+            }
+            {
+                std::lock_guard lock(plugin->mutex);
+                plugin->state =
+                    blocked && previous_state != lifecycle_state::failed
+                        ? lifecycle_state::loaded_disabled
+                        : lifecycle_state::failed;
+                if (disable_completed) plugin->manifest.enabled = false;
+                plugin->last_error = blocked ? "unload blocked"
+                                             : "unload failed";
+            }
+            publish(plugin, blocked ? lifecycle_event::unload_blocked
+                                    : lifecycle_event::unload_failed,
+                    blocked ? "unload blocked" : "unload failed");
+            return blocked ? SAO_PLUGINS_ERR_BUSY : status;
+        }
+
+        status = plugin_context_release_resources(context);
+        if (status == SAO_OK && native_module == nullptr &&
+            !host_adapter_unloaded) {
+            try {
+                status = adapter.value().unload_plugin(
+                    plugin, adapter.value().host_user_data);
+            } catch (...) {
+                status = SAO_ERR_OS_CALL_FAILED;
+            }
+            if (status == SAO_OK) {
+                std::lock_guard lock(plugin->mutex);
+                plugin->host_adapter_unloaded = true;
+            }
+        }
+        if (status == SAO_OK) status = clear_owned_runtime(plugin);
+        if (status != SAO_OK) {
+            {
+                std::lock_guard lock(plugin->mutex);
+                plugin->state = lifecycle_state::failed;
+                plugin->last_error = "runtime cleanup failed";
+            }
+            publish(plugin, lifecycle_event::unload_failed,
+                    "runtime cleanup failed");
+            return status;
+        }
         {
             std::lock_guard lock(plugin->mutex);
             plugin->state = lifecycle_state::unloaded;
@@ -509,99 +837,20 @@ sao_plugins_lifecycle_unload(plugin_handle_t plugin) {
         }
         publish(plugin, lifecycle_event::unloaded, "unloaded");
         return SAO_OK;
-    }
-    if (plugin_context_entity_provider_is_current_thread(context)) {
-        std::lock_guard lock(plugin->mutex);
-        plugin->state = previous_state;
-        return SAO_PLUGINS_ERR_BUSY;
-    }
-    plugin->stop_requested.store(true);
-    if (context != nullptr) plugin_context_request_stop(context);
-    publish(plugin, lifecycle_event::unload_started, "unload started");
-    const int32_t quiesce_status =
-        plugin_context_quiesce_entity_providers(context);
-    if (quiesce_status != SAO_OK) {
-        {
-            std::lock_guard lock(plugin->mutex);
-            plugin->state = lifecycle_state::failed;
-            plugin->last_error = "entity provider rundown failed";
-        }
-        publish(plugin, lifecycle_event::unload_failed,
-                "entity provider rundown failed");
-        return quiesce_status;
-    }
-    int32_t status = SAO_OK;
-    bool allow_unload = true;
-    bool disable_completed = false;
-    try {
-        if (plugin->native_module != nullptr) {
-            if (previous_state == lifecycle_state::loaded_active &&
-                plugin->native_on_disable != nullptr) {
-                status = call_native_simple(plugin->native_on_disable);
-                disable_completed = status == SAO_OK;
-            }
-            if (status == SAO_OK && plugin->native_on_unload != nullptr) {
-                status = call_native_simple(plugin->native_on_unload);
-            }
-        } else {
-            host_adapter_vtable adapter{};
-            if (!adapter_for(manifest.language, adapter)) status = SAO_PLUGINS_ERR_UNSUPPORTED;
-            else {
-                if (previous_state == lifecycle_state::loaded_active &&
-                    adapter.call_on_disable != nullptr) {
-                    status = adapter.call_on_disable(plugin, adapter.host_user_data);
-                    disable_completed = status == SAO_OK;
-                }
-                if (status == SAO_OK && adapter.call_on_unload != nullptr) {
-                    status = adapter.call_on_unload(plugin, &allow_unload, adapter.host_user_data);
-                }
-                if (status == SAO_OK && allow_unload) status = adapter.unload_plugin(plugin, adapter.host_user_data);
-            }
-        }
     } catch (...) {
-        status = SAO_ERR_OS_CALL_FAILED;
-    }
-    if (status != SAO_OK || !allow_unload) {
-        const bool blocked = !allow_unload && status == SAO_OK &&
-                             (disable_completed ||
-                              previous_state ==
-                                  lifecycle_state::loaded_disabled);
-        if (blocked) {
-            plugin->stop_requested.store(false);
-            plugin_context_clear_stop(context);
+        try {
+            const auto retained = retain_plugin(plugin);
+            if (retained != nullptr) {
+                std::lock_guard lock(retained->mutex);
+                if (retained->state == lifecycle_state::unloading) {
+                    retained->state = lifecycle_state::failed;
+                    retained->last_error = "unload failed";
+                }
+            }
+        } catch (...) {
         }
-        {
-            std::lock_guard lock(plugin->mutex);
-            plugin->state = blocked ? lifecycle_state::loaded_disabled
-                                    : lifecycle_state::failed;
-            if (disable_completed) plugin->manifest.enabled = false;
-            plugin->last_error = blocked ? "unload blocked"
-                                         : "unload failed";
-        }
-        publish(plugin, blocked ? lifecycle_event::unload_blocked
-                                : lifecycle_event::unload_failed,
-                blocked ? "unload blocked" : "unload failed");
-        return blocked ? SAO_PLUGINS_ERR_BUSY : status;
+        return SAO_ERR_OS_CALL_FAILED;
     }
-    plugin->native_cleanup_pending = true;
-    const int32_t cleanup_status = clear_native(plugin);
-    if (cleanup_status != SAO_OK) {
-        {
-            std::lock_guard lock(plugin->mutex);
-            plugin->state = lifecycle_state::failed;
-            plugin->last_error = "native cleanup failed";
-        }
-        publish(plugin, lifecycle_event::unload_failed,
-                "native cleanup failed");
-        return cleanup_status;
-    }
-    plugin_remove_extensions(plugin);
-    {
-        std::lock_guard lock(plugin->mutex);
-        plugin->state = lifecycle_state::unloaded;
-    }
-    publish(plugin, lifecycle_event::unloaded, "unloaded");
-    return SAO_OK;
 }
 
 extern "C" SAO_PLUGINS_API int32_t SAO_PLUGINS_CALL
@@ -630,6 +879,7 @@ sao_plugins_lifecycle_enable(plugin_handle_t plugin) {
     const auto manifest = manifest_snapshot(plugin);
     int32_t status = SAO_OK;
     bool enable_entered = false;
+    adapter_lease adapter;
     try {
         if (plugin->native_module != nullptr) {
             if (plugin->native_on_enable != nullptr) {
@@ -639,12 +889,11 @@ sao_plugins_lifecycle_enable(plugin_handle_t plugin) {
                 status = SAO_PLUGINS_ERR_UNSUPPORTED;
             }
         } else {
-            host_adapter_vtable adapter{};
-            if (adapter_for(manifest.language, adapter) &&
-                adapter.call_on_enable != nullptr) {
+            if (adapter.acquire(manifest.language) &&
+                adapter.value().call_on_enable != nullptr) {
                 enable_entered = true;
-                status = adapter.call_on_enable(plugin,
-                                                adapter.host_user_data);
+                status = adapter.value().call_on_enable(
+                    plugin, adapter.value().host_user_data);
             } else {
                 status = SAO_PLUGINS_ERR_UNSUPPORTED;
             }
@@ -664,12 +913,10 @@ sao_plugins_lifecycle_enable(plugin_handle_t plugin) {
                             ? call_native_simple(plugin->native_on_disable)
                             : SAO_PLUGINS_ERR_UNSUPPORTED;
                 } else {
-                    host_adapter_vtable adapter{};
                     rollback_status =
-                        adapter_for(manifest.language, adapter) &&
-                                adapter.call_on_disable != nullptr
-                            ? adapter.call_on_disable(plugin,
-                                                      adapter.host_user_data)
+                        adapter.value().call_on_disable != nullptr
+                            ? adapter.value().call_on_disable(
+                                  plugin, adapter.value().host_user_data)
                             : SAO_PLUGINS_ERR_UNSUPPORTED;
                 }
             } catch (...) {
@@ -702,12 +949,10 @@ sao_plugins_lifecycle_enable(plugin_handle_t plugin) {
                             ? call_native_simple(plugin->native_on_disable)
                             : SAO_PLUGINS_ERR_UNSUPPORTED;
                 } else {
-                    host_adapter_vtable adapter{};
                     rollback_status =
-                        adapter_for(manifest.language, adapter) &&
-                                adapter.call_on_disable != nullptr
-                            ? adapter.call_on_disable(plugin,
-                                                      adapter.host_user_data)
+                        adapter.value().call_on_disable != nullptr
+                            ? adapter.value().call_on_disable(
+                                  plugin, adapter.value().host_user_data)
                             : SAO_PLUGINS_ERR_UNSUPPORTED;
                 }
             } catch (...) {
@@ -760,17 +1005,17 @@ sao_plugins_lifecycle_disable(plugin_handle_t plugin) {
         return quiesce_status;
     }
     int32_t status = SAO_OK;
+    adapter_lease adapter;
     try {
         if (plugin->native_module != nullptr) {
             status = plugin->native_on_disable != nullptr
                          ? call_native_simple(plugin->native_on_disable)
                          : SAO_PLUGINS_ERR_UNSUPPORTED;
         } else {
-            host_adapter_vtable adapter{};
-            status = adapter_for(manifest.language, adapter) &&
-                             adapter.call_on_disable != nullptr
-                         ? adapter.call_on_disable(plugin,
-                                                   adapter.host_user_data)
+            status = adapter.acquire(manifest.language) &&
+                             adapter.value().call_on_disable != nullptr
+                         ? adapter.value().call_on_disable(
+                               plugin, adapter.value().host_user_data)
                          : SAO_PLUGINS_ERR_UNSUPPORTED;
         }
     } catch (...) {

@@ -23,9 +23,8 @@ struct AiEditorLaunchSnapshot {
     bool has_exit_code{};
 };
 
-// Python-compatible detached opener for XiaoACTUI.exe --ai-editor. This is
-// intentionally separate from the Phase 10 named-pipe child protocol, which
-// the current Python AI Editor process does not implement.
+// Asynchronous owner for the native SaoAiEditor subprocess. The dedicated
+// launcher ABI handshake is the readiness authority; a window is optional.
 class AiEditorProcessOwner final {
 public:
     struct State;

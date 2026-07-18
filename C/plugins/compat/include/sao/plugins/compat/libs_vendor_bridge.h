@@ -21,13 +21,14 @@
 //   4. platform site-packages   — 主程序环境 fallback (最低)
 #pragma once
 
+#include <cstddef>
 #include <cstdint>
-#include <vector>
 #include <string>
+#include <vector>
 
+#include "sao/plugins/loader/plugin_manifest.h"
 #include "sao_plugins/abi.h"
 #include "sao_plugins/sao_status.h"
-#include "sao/plugins/loader/plugin_manifest.h"
 
 namespace sao::plugins::compat {
 
@@ -43,8 +44,7 @@ struct discovered_deps_dirs {
 // 发现某插件目录下的老 libs/vendor 结构。
 // 内部实测目录存在性 (std::filesystem::is_directory), 不存在的路径不加入。
 extern "C" SAO_PLUGINS_API int32_t SAO_PLUGINS_CALL
-sao_plugins_compat_discover_deps_dirs(const wchar_t* plugin_dir,
-                                      discovered_deps_dirs* out_dirs);
+sao_plugins_compat_discover_deps_dirs(const wchar_t* plugin_dir, discovered_deps_dirs* out_dirs);
 
 // 释放 out_dirs 里可能分配的 wchar 存储 (不透明容器)。
 extern "C" SAO_PLUGINS_API void SAO_PLUGINS_CALL
@@ -56,16 +56,15 @@ sao_plugins_compat_free_deps_dirs(discovered_deps_dirs* dirs);
 //   - AS: 只返回目录列表, AS 的 IIncludeCallback 用
 //   - C#: 目录列表, LoadContext.Resolving 用
 //   - Emma: 目录列表, 内置 load_script 用
-// out_paths 归属调用方 free (以 wchar_t** 数组返回)。
-extern "C" SAO_PLUGINS_API int32_t SAO_PLUGINS_CALL
-sao_plugins_compat_format_paths_for_language(
-    const discovered_deps_dirs* dirs,
-    sao::plugins::loader::engine_kind language,
-    wchar_t*** out_paths,
-    size_t* out_count);
+// out_paths 归属调用方，必须且只能传给 sao_plugins_compat_free_paths。
+// Python/AS/C#/Emma 每个目录返回一项；Lua 每目录返回 ?.lua 与 ?/init.lua
+// 两项。输出按 engine → libs → vendor 去重且稳定。
+extern "C" SAO_PLUGINS_API int32_t SAO_PLUGINS_CALL sao_plugins_compat_format_paths_for_language(
+    const discovered_deps_dirs* dirs, sao::plugins::loader::engine_kind language,
+    wchar_t*** out_paths, size_t* out_count);
 
-extern "C" SAO_PLUGINS_API void SAO_PLUGINS_CALL
-sao_plugins_compat_free_paths(wchar_t** paths, size_t count);
+extern "C" SAO_PLUGINS_API void SAO_PLUGINS_CALL sao_plugins_compat_free_paths(wchar_t** paths,
+                                                                               size_t count);
 
 // 判断插件是否 requires 声明了外置 requirements.txt (影响 install 触发)。
 extern "C" SAO_PLUGINS_API bool SAO_PLUGINS_CALL
@@ -76,21 +75,16 @@ sao_plugins_compat_has_requirements_txt(const wchar_t* plugin_dir);
 // 扫 plugin_dir/libs/ + plugin_dir/vendor/, 返回目录字符串列表。
 // out_dirs 归属调用方 free。
 extern "C" SAO_PLUGINS_API int32_t SAO_PLUGINS_CALL
-sao_plugins_compat_libs_vendor_probe(const wchar_t* plugin_dir,
-                                     discovered_deps_dirs* out_dirs);
+sao_plugins_compat_libs_vendor_probe(const wchar_t* plugin_dir, discovered_deps_dirs* out_dirs);
 
 // 把发现的 dirs 拼成 os.pathsep (Win=';', POSIX=':') 分隔的 Python sys.path
 // 字符串, 写到 out_buf。out_size 为 buf 长度 (含终止符)。
-extern "C" SAO_PLUGINS_API int32_t SAO_PLUGINS_CALL
-sao_plugins_compat_format_python_sys_path(const discovered_deps_dirs* dirs,
-                                          wchar_t* out_buf,
-                                          size_t out_size);
+extern "C" SAO_PLUGINS_API int32_t SAO_PLUGINS_CALL sao_plugins_compat_format_python_sys_path(
+    const discovered_deps_dirs* dirs, wchar_t* out_buf, size_t out_size);
 
 // 把发现的 dirs 拼成 Lua package.path pattern (';' 分隔, 每目录展开为
 // "<dir>/?.lua;<dir>/?/init.lua")。
-extern "C" SAO_PLUGINS_API int32_t SAO_PLUGINS_CALL
-sao_plugins_compat_format_lua_package_path(const discovered_deps_dirs* dirs,
-                                           wchar_t* out_buf,
-                                           size_t out_size);
+extern "C" SAO_PLUGINS_API int32_t SAO_PLUGINS_CALL sao_plugins_compat_format_lua_package_path(
+    const discovered_deps_dirs* dirs, wchar_t* out_buf, size_t out_size);
 
 } // namespace sao::plugins::compat

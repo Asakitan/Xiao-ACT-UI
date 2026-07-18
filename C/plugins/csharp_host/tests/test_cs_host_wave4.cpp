@@ -61,6 +61,9 @@ void case_cshost_get_runtime_version_nonempty() {
                     "(no hostfxr in env)\n");
         return;
     }
+    cs_assembly_unload_mode unload_mode = cs_assembly_unload_mode::collectible;
+    assert(sao_plugins_cshost_get_assembly_unload_mode(g_host, &unload_mode) == SAO_OK);
+    assert(unload_mode == cs_assembly_unload_mode::process_resident);
     char buf[64] = {};
     int32_t rc = sao_plugins_cshost_get_runtime_version(g_host, buf, sizeof(buf));
     assert(rc == SAO_OK);

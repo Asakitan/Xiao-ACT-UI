@@ -37,6 +37,61 @@ if (Catch2_FOUND OR TARGET Catch2::Catch2WithMain)
     add_test(NAME plugins_angel_host_wave8 COMMAND test_plugins_angel_host_wave8)
     set_tests_properties(plugins_angel_host_wave8
         PROPERTIES LABELS "plugins;angel;wave8")
+
+    # Phase 4: gpu_hunt SDK binding on AngelScript engine.
+    add_executable(test_plugins_angel_host_gpu_hunt_bind test_gpu_hunt_bind.cpp)
+    target_link_libraries(test_plugins_angel_host_gpu_hunt_bind PRIVATE
+        sao_plugins_angel_host
+        Catch2::Catch2WithMain
+    )
+    target_compile_features(test_plugins_angel_host_gpu_hunt_bind PRIVATE cxx_std_17)
+    target_compile_definitions(test_plugins_angel_host_gpu_hunt_bind PRIVATE
+        SAO_PLUGINS_BUILDING_DLL)
+    if (MSVC)
+        target_compile_options(test_plugins_angel_host_gpu_hunt_bind PRIVATE /GR)
+    endif()
+    add_test(NAME plugins_angel_host_gpu_hunt_bind
+             COMMAND test_plugins_angel_host_gpu_hunt_bind)
+    set_tests_properties(plugins_angel_host_gpu_hunt_bind
+        PROPERTIES LABELS "plugins;angel;gpu_hunt")
+
+    add_executable(test_plugins_angel_host_loader_adapter
+        test_as_loader_adapter.cpp)
+    target_link_libraries(test_plugins_angel_host_loader_adapter PRIVATE
+        sao_plugins_angel_host
+        sao::sdk
+        Catch2::Catch2WithMain
+    )
+    target_compile_features(test_plugins_angel_host_loader_adapter PRIVATE
+        cxx_std_20)
+    target_compile_definitions(test_plugins_angel_host_loader_adapter PRIVATE
+        SAO_PLUGINS_BUILDING_DLL)
+    if (MSVC)
+        target_compile_options(test_plugins_angel_host_loader_adapter PRIVATE /GR)
+    endif()
+    add_test(NAME plugins_angel_host_loader_adapter
+             COMMAND test_plugins_angel_host_loader_adapter)
+    set_tests_properties(plugins_angel_host_loader_adapter
+        PROPERTIES LABELS "plugins;angel;loader_adapter")
+
+    # ── Wave 18 / Agent b — AngelScript sandbox 8 case ──────────────
+    add_executable(test_plugins_angel_host_sandbox_wave18b
+        test_as_sandbox_wave18b.cpp)
+    target_link_libraries(test_plugins_angel_host_sandbox_wave18b PRIVATE
+        sao_plugins_angel_host
+        sao_script_sandbox_common_lib
+        Catch2::Catch2WithMain
+    )
+    target_compile_features(test_plugins_angel_host_sandbox_wave18b PRIVATE cxx_std_20)
+    target_compile_definitions(test_plugins_angel_host_sandbox_wave18b PRIVATE
+        SAO_PLUGINS_BUILDING_DLL)
+    if (MSVC)
+        target_compile_options(test_plugins_angel_host_sandbox_wave18b PRIVATE /GR)
+    endif()
+    add_test(NAME plugins_angel_host_sandbox_wave18b
+             COMMAND test_plugins_angel_host_sandbox_wave18b)
+    set_tests_properties(plugins_angel_host_sandbox_wave18b
+        PROPERTIES LABELS "plugins;angel;wave18b;sandbox")
 else()
-    message(STATUS "plugins/angel_host: Catch2 未找到, 跳过 wave3/wave8 单测")
+    message(STATUS "plugins/angel_host: Catch2 未找到, 跳过 wave3/wave8/wave18b 单测")
 endif()

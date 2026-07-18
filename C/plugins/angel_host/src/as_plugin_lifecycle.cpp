@@ -5,6 +5,8 @@
 
 #include "sao/plugins/angel_host/as_plugin_lifecycle.h"
 
+#include "as_plugin_internal.h"
+
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -71,17 +73,6 @@ std::string read_file(const std::string& p) {
 }
 } // namespace
 
-struct as_plugin_s {
-    as_host_handle_t host = nullptr;
-    asIScriptModule* module = nullptr;
-    asIScriptContext* ctx = nullptr;
-    std::string plugin_id;
-    std::string entry_path;
-    as_sdk_counters counters;
-    bool sdk_registered = false;
-    bool loaded_ok = false;
-};
-
 // ── SDK 3 条 C 函数 (asCALL_CDECL, 全局命名空间) ─────────────
 //
 // 用 asGetActiveContext()->GetUserData() 拿到当前跑 script 的 as_plugin_s*
@@ -136,9 +127,7 @@ static void as_sdk_register_hotkey(const std::string& hotkey_id,
 // asCALL_CDECL 等 native call 不可用, 所有绑定用 asCALL_GENERIC.
 // 每条 SDK / string method 都用一个 void(*)(asIScriptGeneric*) wrapper.
 namespace {
-struct as_str {
-    std::string data;
-};
+using as_str = as_string_value;
 
 static void gen_str_construct(asIScriptGeneric* gen) {
     new (gen->GetObject()) as_str();
@@ -328,38 +317,37 @@ sao_plugins_ashost_load_plugin(as_host_handle_t host,
     }
 
     auto* plugin = new as_plugin_s();
-    plugin->host = host;
+    plugin->engine = engine;
     plugin->module = mod;
     plugin->plugin_id = std::move(plugin_id);
-    plugin->entry_path = entry_path;
+    plugin->module_name = module_name;
 
     // 分配 ctx (每 plugin 一个 context, 复用调 on_load/on_tick/on_unload)
-    plugin->ctx = engine->CreateContext();
-    if (plugin->ctx == nullptr) {
+    plugin->context = engine->CreateContext();
+    if (plugin->context == nullptr) {
         delete plugin;
         return SAO_ERR_OS_CALL_FAILED;
     }
-    plugin->ctx->SetUserData(plugin, 0x5A05DB01);
+    plugin->context->SetUserData(plugin, 0x5A05DB01);
 
     // 调 on_load()
     asIScriptFunction* on_load = mod->GetFunctionByName("on_load");
     if (on_load) {
-        plugin->ctx->Prepare(on_load);
-        int rc = plugin->ctx->Execute();
+        plugin->context->Prepare(on_load);
+        int rc = plugin->context->Execute();
         if (rc != asEXECUTION_FINISHED) {
             std::string m = "on_load did not finish (rc=" + std::to_string(rc) + ")";
             if (rc == asEXECUTION_EXCEPTION) {
-                const char* ex = plugin->ctx->GetExceptionString();
+                const char* ex = plugin->context->GetExceptionString();
                 if (ex) { m += ": "; m += ex; }
             }
             if (out_error_utf8) { *out_error_utf8 = static_cast<char*>(std::malloc(m.size()+1)); if (*out_error_utf8) { std::memcpy(*out_error_utf8, m.data(), m.size()); (*out_error_utf8)[m.size()] = '\0'; } }
-            plugin->ctx->Release();
+            plugin->context->Release();
             delete plugin;
             return SAO_ERR_OS_CALL_FAILED;
         }
     }
 
-    plugin->loaded_ok = true;
     *out_plugin = plugin;
     return SAO_OK;
 #else
@@ -374,11 +362,11 @@ sao_plugins_ashost_tick_plugin(as_plugin_handle_t plugin,
     if (out_error_utf8) *out_error_utf8 = nullptr;
     if (plugin == nullptr) return SAO_ERR_INVALID_ARGUMENT;
 #if defined(SAO_HAS_ANGELSCRIPT)
-    if (plugin->module == nullptr || plugin->ctx == nullptr) return SAO_ERR_HANDLE_INVALID;
+    if (plugin->module == nullptr || plugin->context == nullptr) return SAO_ERR_HANDLE_INVALID;
     asIScriptFunction* on_tick = plugin->module->GetFunctionByName("on_tick");
     if (on_tick == nullptr) return SAO_ERR_HANDLE_INVALID;
-    plugin->ctx->Prepare(on_tick);
-    int rc = plugin->ctx->Execute();
+    plugin->context->Prepare(on_tick);
+    int rc = plugin->context->Execute();
     if (rc != asEXECUTION_FINISHED) {
         if (out_error_utf8) {
             const char* m = "on_tick did not finish";
@@ -399,14 +387,14 @@ sao_plugins_ashost_unload_plugin(as_plugin_handle_t plugin,
     if (out_error_utf8) *out_error_utf8 = nullptr;
     if (plugin == nullptr) return SAO_ERR_INVALID_ARGUMENT;
 #if defined(SAO_HAS_ANGELSCRIPT)
-    if (plugin->module && plugin->ctx) {
+    if (plugin->module && plugin->context) {
         asIScriptFunction* on_unload = plugin->module->GetFunctionByName("on_unload");
         if (on_unload) {
-            plugin->ctx->Prepare(on_unload);
-            plugin->ctx->Execute();
+            plugin->context->Prepare(on_unload);
+            plugin->context->Execute();
         }
     }
-    if (plugin->ctx) { plugin->ctx->Release(); plugin->ctx = nullptr; }
+    if (plugin->context) { plugin->context->Release(); plugin->context = nullptr; }
     if (plugin->module) {
         asIScriptEngine* engine = plugin->module->GetEngine();
         if (engine) engine->DiscardModule(plugin->module->GetName());

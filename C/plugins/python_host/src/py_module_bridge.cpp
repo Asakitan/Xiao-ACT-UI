@@ -28,6 +28,7 @@
 // AttributeError, 由插件自己 try/except 兜底 (老 hide_seek 就这么写的)。
 
 #include "sao/plugins/python_host/py_module_bridge.h"
+#include "sao/plugins/python_host/py_host.h"
 #include "sao/sdk/sao_sdk.h"
 
 #if defined(SAO_HAS_PYTHON_EMBED)
@@ -900,13 +901,15 @@ PyObject* PluginContext_load_local(PluginContextObject* self, PyObject* args) {
     // 简化实装: 拼路径 → 用 importlib.util.spec_from_file_location 装载。
     const char* rel = nullptr;
     if (!PyArg_ParseTuple(args, "s", &rel)) return nullptr;
-    if (self->controlled_test_shim && std::strcmp(rel, "bootstrap.py") == 0) {
+    if (std::strcmp(rel, "bootstrap.py") == 0) {
         PyObject* shim = PyModule_New("sao_controlled_bootstrap");
         if (shim == nullptr) return nullptr;
         PyObject* globals = PyModule_GetDict(shim);
         const char* code =
-            "def ensure_requirements(*args, **kwargs):\n"
-            "    return {'added': [], 'deps': {'controlled': 'shim'}}\n"
+            "def ensure_requirements(plugin_dir, ctx=None, install=False):\n"
+            "    if ctx is not None:\n"
+            "        return ctx.ensure_requirements(install=False)\n"
+            "    return {'added': [], 'deps': {}}\n"
             "def restore_paths(*args, **kwargs):\n"
             "    return None\n";
         PyObject* result = PyRun_String(code, Py_file_input, globals, globals);
@@ -1030,8 +1033,47 @@ PyObject* PluginContext_unsubscribe(PluginContextObject* /*self*/, PyObject* /*a
 PyObject* PluginContext_toast(PluginContextObject* /*self*/, PyObject* /*args*/) {
     Py_RETURN_NONE;
 }
-PyObject* PluginContext_ensure_requirements(PluginContextObject* /*self*/, PyObject* /*args*/, PyObject* /*kwds*/) {
-    Py_RETURN_NONE;
+PyObject* PluginContext_ensure_requirements(PluginContextObject* self,
+                                             PyObject* args,
+                                             PyObject* kwds) {
+    static const char* kwlist[] = {"install", nullptr};
+    int ignored_install = 0;
+    if (!PyArg_ParseTupleAndKeywords(args, kwds, "|p",
+                                     const_cast<char**>(kwlist),
+                                     &ignored_install)) {
+        return nullptr;
+    }
+    (void)ignored_install;
+    if (self == nullptr || self->base_dir == nullptr) {
+        PyErr_SetString(PyExc_RuntimeError, "plugin base directory is unavailable");
+        return nullptr;
+    }
+    Py_ssize_t length = 0;
+    const wchar_t* plugin_dir = PyUnicode_AsWideCharString(self->base_dir,
+                                                           &length);
+    if (plugin_dir == nullptr) return nullptr;
+    char* report_json = nullptr;
+    const int32_t status = sao_plugins_pyhost_report_requirements(
+        plugin_dir, &report_json);
+    PyMem_Free(const_cast<wchar_t*>(plugin_dir));
+    if (status != SAO_OK || report_json == nullptr) {
+        sao_plugins_pyhost_free_string(report_json);
+        PyErr_Format(PyExc_RuntimeError,
+                     "requirements report failed: %d", status);
+        return nullptr;
+    }
+    PyObject* json_module = PyImport_ImportModule("json");
+    PyObject* result = nullptr;
+    if (json_module != nullptr) {
+        PyObject* loads = PyObject_GetAttrString(json_module, "loads");
+        Py_DECREF(json_module);
+        if (loads != nullptr) {
+            result = PyObject_CallFunction(loads, "s", report_json);
+            Py_DECREF(loads);
+        }
+    }
+    sao_plugins_pyhost_free_string(report_json);
+    return result;
 }
 
 // ── PyMethodDef 表 ──────────────────────────────────────────

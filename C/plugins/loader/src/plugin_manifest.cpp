@@ -156,14 +156,25 @@ int32_t populate_manifest(const json& root, plugin_manifest& output) {
     output.version = string_value(root, "version");
     output.description = string_value(root, "description");
     output.entry = string_value(root, "entry");
+    output.managed_type = string_value(root, "managed_type");
+    output.runtimeconfig = string_value(root, "runtimeconfig");
     output.enabled = root.value("enabled", false);
+    output.native_entry = string_value(root, "native_entry");
+    output.native_abi = string_value(root, "native_abi");
+    output.abi_version = root.value("abi_version", 0U);
+
+    const bool native_only = output.entry.empty() && !output.native_entry.empty();
+    if (native_only) output.entry = output.native_entry;
 
     auto language = string_value(root, "language");
     if (language.empty()) language = string_value(root, "engine");
     if (language.empty()) language = string_value(root, "runtime");
     output.language = parse_engine_kind(language);
     if (output.language == engine_kind::unknown) output.language = infer_language_from_entry(output.entry);
-    if (output.language == engine_kind::unknown && output.entry.empty()) output.language = engine_kind::python;
+    if (output.language == engine_kind::unknown && output.entry.empty() &&
+        output.native_entry.empty()) {
+        output.language = engine_kind::python;
+    }
     if (output.entry.empty()) output.entry = guess_default_entry_for(output.language);
     if (output.name.empty()) output.name = output.plugin_id;
     if (output.version.empty()) output.version = "0.1.0";
@@ -195,9 +206,6 @@ int32_t populate_manifest(const json& root, plugin_manifest& output) {
     if (const auto iterator = root.find("mcpServers"); iterator != root.end()) output.mcp_servers_json = iterator->dump();
     if (const auto iterator = root.find("chatProviders"); iterator != root.end()) output.chat_providers_json = iterator->dump();
     output.protected_plugin = root.value("protected", false);
-    output.native_entry = string_value(root, "native_entry");
-    output.native_abi = string_value(root, "native_abi");
-    output.abi_version = root.value("abi_version", 0U);
     return SAO_OK;
 }
 
@@ -250,11 +258,17 @@ sao_plugins_manifest_load_from_file(const wchar_t* manifest_path,
 int32_t validate_manifest(const plugin_manifest& manifest) {
     if (!manifest.parse_error.empty() || !valid_plugin_id(manifest.plugin_id) ||
         manifest.name.empty() || manifest.version.empty() ||
-        manifest.language == engine_kind::unknown || !valid_relative_entry(manifest.entry)) {
+        (manifest.language == engine_kind::unknown && manifest.native_entry.empty()) ||
+        !valid_relative_entry(manifest.entry)) {
         return SAO_ERR_INVALID_ARGUMENT;
     }
     if (manifest.abi_version > static_cast<uint32_t>(SAO_PLUGINS_ABI_VERSION)) return SAO_ERR_INVALID_ARGUMENT;
     if (manifest.protected_plugin && manifest.native_entry.empty()) {
+        return SAO_ERR_INVALID_ARGUMENT;
+    }
+    if (manifest.managed_type.size() > 1024 ||
+        (!manifest.runtimeconfig.empty() &&
+         !valid_relative_entry(manifest.runtimeconfig))) {
         return SAO_ERR_INVALID_ARGUMENT;
     }
     if (!manifest.native_entry.empty()) {

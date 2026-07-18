@@ -397,7 +397,7 @@ TEST_CASE("launcher_init_pipeline_teardown_reverse_order",
     REQUIRE(mutex_idx < crash_idx);
 }
 
-TEST_CASE("launcher_init_pipeline_no_config_keeps_optional_providers_disabled",
+TEST_CASE("launcher_init_pipeline_no_config_enables_stable_plugin_roots",
       "[launcher][init_pipeline][providers]") {
     DualRunChildGuard dual_run_child;
     CompositionRecorder composition;
@@ -416,10 +416,12 @@ TEST_CASE("launcher_init_pipeline_no_config_keeps_optional_providers_disabled",
     REQUIRE(exit_code == SAO_EXIT_OK);
     REQUIRE(findStep(composition.steps, "license_verify") == -1);
     REQUIRE(findStep(composition.steps, "shell_verify") == -1);
-    REQUIRE(findStep(composition.steps, "plugins_discover") == -1);
+    REQUIRE(findStep(composition.steps, "plugins_discover") >= 0);
+    REQUIRE(findStep(composition.steps, "plugins_activate") >= 0);
+    REQUIRE(findStep(composition.steps, "plugins_shutdown") >= 0);
     REQUIRE(findStep(rec.steps, "license") == -1);
     REQUIRE(findStep(rec.steps, "shell") == -1);
-    REQUIRE(findStep(rec.steps, "plugins") == -1);
+    REQUIRE(findStep(rec.steps, "plugins") >= 0);
 }
 
 TEST_CASE("launcher raw license transport rejects prevalidated responses",

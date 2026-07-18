@@ -37,6 +37,100 @@ using compositor_mouse_button_fn = void (*)(uint32_t button, bool pressed, void*
 using compositor_cursor_leave_fn = void (*)(void* user_data);
 using compositor_scroll_fn = void (*)(float dx, float dy, void* user_data);
 
+// Loader-neutral platform capability bridge.  The loader copies the
+// provider vtable and never includes or links the platform SDK.  A provider
+// owns one isolated session per canonical plugin_context_t.
+#define SAO_PLUGIN_CONTEXT_PLATFORM_PROVIDER_ABI_VERSION_MAJOR 1u
+#define SAO_PLUGIN_CONTEXT_PLATFORM_PROVIDER_ABI_VERSION_MINOR 0u
+#define SAO_PLUGIN_CONTEXT_PLATFORM_PROVIDER_ABI_VERSION \
+    ((SAO_PLUGIN_CONTEXT_PLATFORM_PROVIDER_ABI_VERSION_MAJOR << 16u) | \
+     SAO_PLUGIN_CONTEXT_PLATFORM_PROVIDER_ABI_VERSION_MINOR)
+
+using plugin_context_platform_token_t = uint64_t;
+using plugin_context_platform_session_t = void*;
+
+struct plugin_context_platform_session_spec {
+    uint32_t struct_size;
+    const char* plugin_id_utf8;
+    const char* plugin_path_utf8;
+    const char* plugin_version_utf8;
+};
+
+struct plugin_context_platform_provider {
+    uint32_t abi_version;
+    uint32_t struct_size;
+    void* user_data;
+
+    void (SAO_PLUGINS_CALL* retain)(void* user_data);
+    void (SAO_PLUGINS_CALL* release)(void* user_data);
+
+    int32_t (SAO_PLUGINS_CALL* create_session)(
+        void* user_data,
+        const plugin_context_platform_session_spec* spec,
+        plugin_context_platform_session_t* out_session);
+    int32_t (SAO_PLUGINS_CALL* quiesce_session)(
+        void* user_data, plugin_context_platform_session_t session);
+    int32_t (SAO_PLUGINS_CALL* destroy_session)(
+        void* user_data, plugin_context_platform_session_t session);
+
+    int32_t (SAO_PLUGINS_CALL* register_hotkey)(
+        void* user_data, plugin_context_platform_session_t session,
+        const char* hotkey_id_utf8, const char* default_key_utf8,
+        const char* label_utf8, hotkey_callback_fn callback,
+        void* callback_user_data,
+        plugin_context_platform_token_t* out_provider_token);
+    int32_t (SAO_PLUGINS_CALL* unregister_hotkey)(
+        void* user_data, plugin_context_platform_session_t session,
+        plugin_context_platform_token_t provider_token);
+
+    int32_t (SAO_PLUGINS_CALL* register_timer)(
+        void* user_data, plugin_context_platform_session_t session,
+        double seconds, bool one_shot, timer_callback_fn callback,
+        void* callback_user_data,
+        plugin_context_platform_token_t* out_provider_token);
+    int32_t (SAO_PLUGINS_CALL* unregister_timer)(
+        void* user_data, plugin_context_platform_session_t session,
+        plugin_context_platform_token_t provider_token);
+
+    int32_t (SAO_PLUGINS_CALL* show_notify)(
+        void* user_data, plugin_context_platform_session_t session,
+        const char* title_utf8, const char* message_utf8, double duration_s,
+        const char* kind_utf8,
+        plugin_context_platform_token_t* out_provider_token);
+    int32_t (SAO_PLUGINS_CALL* dismiss_notify)(
+        void* user_data, plugin_context_platform_session_t session,
+        plugin_context_platform_token_t provider_token);
+
+    int32_t (SAO_PLUGINS_CALL* register_render_hook)(
+        void* user_data, plugin_context_platform_session_t session,
+        const char* surface_utf8, float priority, render_hook_fn callback,
+        void* callback_user_data,
+        plugin_context_platform_token_t* out_provider_token);
+    int32_t (SAO_PLUGINS_CALL* unregister_render_hook)(
+        void* user_data, plugin_context_platform_session_t session,
+        plugin_context_platform_token_t provider_token);
+
+    int32_t (SAO_PLUGINS_CALL* set_overlay)(
+        void* user_data, plugin_context_platform_session_t session,
+        const char* surface_utf8, const char* spec_json_utf8,
+        plugin_context_platform_token_t* out_provider_token);
+    int32_t (SAO_PLUGINS_CALL* clear_overlay)(
+        void* user_data, plugin_context_platform_session_t session,
+        plugin_context_platform_token_t provider_token);
+
+    int32_t (SAO_PLUGINS_CALL* request_redraw)(
+        void* user_data, plugin_context_platform_session_t session,
+        const char* surface_utf8, const char* reason_utf8);
+};
+
+// Exactly one process-wide provider may be registered.  Unregistering while
+// any canonical context owns a provider session returns BUSY.
+extern "C" SAO_PLUGINS_API int32_t SAO_PLUGINS_CALL
+sao_plugins_ctx_register_platform_provider(
+    const plugin_context_platform_provider* provider);
+extern "C" SAO_PLUGINS_API int32_t SAO_PLUGINS_CALL
+sao_plugins_ctx_unregister_platform_provider();
+
 // ── 生命周期 ──
 extern "C" SAO_PLUGINS_API plugin_context_t* SAO_PLUGINS_CALL
 sao_plugins_ctx_create(plugin_handle_t plugin);

@@ -10,7 +10,7 @@ extern "C" {
 #endif
 
 #define SAO_SDK_PROVIDER_ABI_VERSION_MAJOR 1u
-#define SAO_SDK_PROVIDER_ABI_VERSION_MINOR 1u
+#define SAO_SDK_PROVIDER_ABI_VERSION_MINOR 2u
 #define SAO_SDK_PROVIDER_ABI_VERSION \
     ((SAO_SDK_PROVIDER_ABI_VERSION_MAJOR << 16) | \
      SAO_SDK_PROVIDER_ABI_VERSION_MINOR)
@@ -70,6 +70,13 @@ struct SaoSdkOverlaySpec {
     const char* surface_id_utf8;
     const uint8_t* spec_json_utf8;
     size_t spec_len;
+};
+
+struct SaoSdkGpuHuntRegion {
+    uint64_t base;
+    uint64_t size;
+    uint32_t protect;
+    uint32_t region_type;
 };
 
 // Host-owned capability provider. The SDK copies only `struct_size` bytes,
@@ -154,6 +161,35 @@ struct SaoSdkProviderVTable {
         uint64_t* out_provider_token);
     sao_sdk_status_t (SAO_SDK_CALL* request_redraw)(
         void* user_data, const char* surface_id_utf8);
+
+    // GPU hunt I/O is session-scoped: every tracker opens an independent
+    // provider session and holds an extra retain/release lease until the
+    // tracker is destroyed.  A host backed by a process-global rt_io proxy
+    // may reject a second session explicitly instead of sharing mutable
+    // attach state between trackers.
+    sao_sdk_status_t (SAO_SDK_CALL* gpu_hunt_open_session)(
+        void* user_data,
+        const char* plugin_id_utf8,
+        void** out_session);
+    sao_sdk_status_t (SAO_SDK_CALL* gpu_hunt_close_session)(
+        void* user_data, void* session);
+    sao_sdk_status_t (SAO_SDK_CALL* gpu_hunt_attach)(
+        void* user_data, void* session, uint32_t pid);
+    sao_sdk_status_t (SAO_SDK_CALL* gpu_hunt_detach)(
+        void* user_data, void* session);
+    sao_sdk_status_t (SAO_SDK_CALL* gpu_hunt_enum_regions)(
+        void* user_data,
+        void* session,
+        struct SaoSdkGpuHuntRegion* out_regions,
+        size_t capacity,
+        size_t* out_count);
+    sao_sdk_status_t (SAO_SDK_CALL* gpu_hunt_read)(
+        void* user_data,
+        void* session,
+        uint64_t address,
+        uint8_t* out_buffer,
+        size_t buffer_size,
+        size_t* out_bytes_read);
 };
 
 enum sao_sdk_render_dispatch_flag_e : uint32_t {

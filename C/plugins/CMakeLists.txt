@@ -18,10 +18,10 @@ set(SAO_PLUGINS_VERSION 2)
 add_compile_definitions(SAO_PLUGINS_ABI_VERSION=${SAO_PLUGINS_VERSION})
 
 # ── 单模块开关 (可覆盖) ────────────────────────────────────────────────
-option(SAO_PLUGINS_ENABLE_PYTHON  "构建 Python 插件宿主 (需要 vcpkg python3)" OFF)
+option(SAO_PLUGINS_ENABLE_PYTHON  "构建 Python 插件宿主 (需要 vcpkg python3)" ON)
 option(SAO_PLUGINS_ENABLE_LUA     "构建 Lua 插件宿主 (vcpkg lua)"             OFF)
 option(SAO_PLUGINS_ENABLE_ANGEL   "构建 AngelScript 插件宿主 (vcpkg unofficial-angelscript)" OFF)
-option(SAO_PLUGINS_ENABLE_EMMA    "构建 Emma 插件宿主 (零依赖)"                OFF)
+option(SAO_PLUGINS_ENABLE_EMMA    "构建 Emma 插件宿主 (零依赖)"                ON)
 option(SAO_PLUGINS_ENABLE_CSHARP  "构建 C# 插件宿主 (需要 .NET 8+ runtime)"    OFF)
 
 # ── v2 分层模块 ────────────────────────────────────────────────────────
@@ -128,6 +128,13 @@ endif()
 add_library(sao_plugins_runtime INTERFACE)
 add_library(sao::plugins ALIAS sao_plugins_runtime)
 target_link_libraries(sao_plugins_runtime INTERFACE ${SAO_PLUGINS_COMPONENT_TARGETS})
+
+# ── 脚本沙箱共享 STATIC lib ─────────────────────────────────────────
+# 独立 STATIC lib sao_script_sandbox_common_lib, 为 Lua / AS sandbox test
+# 提供共享 utility.  只在 SAO_BUILD_TESTS 时构建 — 无 test 时 lib 不参与出货.
+if (SAO_BUILD_TESTS)
+    add_subdirectory(script_sandbox_common)
+endif()
 
 if (SAO_BUILD_TESTS)
     add_subdirectory(tests)

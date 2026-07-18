@@ -32,7 +32,8 @@ struct plugin_handle_s {
     native_simple_fn native_on_disable = nullptr;
     native_simple_fn native_on_unload = nullptr;
     plugin_context_s* context = nullptr;
-    bool native_cleanup_pending = false;
+    bool unload_hook_completed = false;
+    bool host_adapter_unloaded = false;
     uint32_t failure_count = 0;
     std::string last_error;
 };
@@ -57,7 +58,9 @@ int32_t plugin_context_register_entity_providers(
 bool plugin_context_entity_provider_is_current_thread(
     plugin_context_t* ctx) noexcept;
 int32_t plugin_context_quiesce_entity_providers(plugin_context_t* ctx) noexcept;
+int32_t plugin_context_quiesce_platform(plugin_context_t* ctx) noexcept;
 int32_t plugin_context_resume_entity_providers(plugin_context_t* ctx) noexcept;
+int32_t plugin_context_release_resources(plugin_context_t* ctx) noexcept;
 int32_t plugin_context_destroy(plugin_context_t* ctx) noexcept;
 
 } // namespace sao::plugins::loader

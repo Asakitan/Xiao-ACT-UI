@@ -13,28 +13,6 @@
 
 using namespace sao::plugins::lua_host;
 
-// 前向声明扩展 API (定义在 lua_host.cpp 的 wave3 段)
-extern "C" {
-    SAO_PLUGINS_API int32_t SAO_PLUGINS_CALL
-    sao_plugins_luahost_execute(lua_host_handle_t host,
-                                const char* source_utf8,
-                                size_t source_len,
-                                char** out_result_utf8,
-                                char** out_error_utf8);
-
-    SAO_PLUGINS_API int32_t SAO_PLUGINS_CALL
-    sao_plugins_luahost_call_function(lua_host_handle_t host,
-                                       const char* fn_name,
-                                       char** out_result_utf8,
-                                       char** out_error_utf8);
-
-    SAO_PLUGINS_API void SAO_PLUGINS_CALL
-    sao_plugins_luahost_free_string(char* s);
-
-    SAO_PLUGINS_API bool SAO_PLUGINS_CALL
-    sao_plugins_luahost_is_available(void);
-}
-
 namespace {
 
 struct auto_free {

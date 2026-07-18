@@ -51,3 +51,20 @@ add_test(NAME plugins_compat_manifest_fixture_parity_wave8
          COMMAND test_manifest_fixture_parity_wave8)
 set_tests_properties(plugins_compat_manifest_fixture_parity_wave8
     PROPERTIES LABELS "plugins;manifest;fixture_parity;wave8")
+
+find_package(Catch2 3 CONFIG REQUIRED)
+add_executable(test_plugins_compat_shims_focused
+    test_compat_shims_focused.cpp)
+target_link_libraries(test_plugins_compat_shims_focused PRIVATE
+    sao_plugins_compat
+    Catch2::Catch2WithMain)
+target_compile_features(test_plugins_compat_shims_focused PRIVATE cxx_std_20)
+target_compile_definitions(test_plugins_compat_shims_focused PRIVATE
+    SAO_PLUGINS_BUILDING_DLL)
+if (MSVC)
+    target_compile_options(test_plugins_compat_shims_focused PRIVATE /GR)
+endif()
+include(Catch)
+catch_discover_tests(test_plugins_compat_shims_focused
+    TEST_PREFIX "plugins_compat_shims."
+    PROPERTIES LABELS "plugins;compat;focused")

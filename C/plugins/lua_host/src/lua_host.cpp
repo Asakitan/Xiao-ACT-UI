@@ -3,10 +3,18 @@
 // 通过 CMake gate: SAO_HAS_LUA (find_package(Lua) 成功时定义)。
 // 未 gated 时全部 API 返回 SAO_ERR_NOT_IMPLEMENTED (等同 SAO_ERR_NOT_AVAILABLE 语义)。
 
+#if 0
 #include "sao/plugins/lua_host/lua_host.h"
+
+#include "sao/plugins/lua_host/lua_sandbox.h"
+
+#if defined(SAO_HAS_LUA)
+#include "lua_bridge_internal.h"
+#endif
 
 #include <cstdlib>
 #include <cstring>
+#include <new>
 #include <string>
 
 #if defined(SAO_HAS_LUA)
@@ -29,24 +37,29 @@ struct lua_host_s {
 
 // 自定义 print, 走 message_callback (若装了)
 static int lua_print_hook(lua_State* L) {
-    auto* host_ptr = static_cast<lua_host_s**>(lua_touserdata(L, lua_upvalueindex(1)));
-    lua_host_s* host = host_ptr ? *host_ptr : nullptr;
-    int n = lua_gettop(L);
-    std::string acc;
-    for (int i = 1; i <= n; ++i) {
-        if (i > 1) acc.push_back('\t');
-        size_t len = 0;
-        const char* s = luaL_tolstring(L, i, &len);
-        if (s) acc.append(s, len);
-        lua_pop(L, 1);
+    try {
+        auto* host_ptr = static_cast<lua_host_s**>(
+            lua_touserdata(L, lua_upvalueindex(1)));
+        lua_host_s* host = host_ptr ? *host_ptr : nullptr;
+        int n = lua_gettop(L);
+        std::string acc;
+        for (int i = 1; i <= n; ++i) {
+            if (i > 1) acc.push_back('\t');
+            size_t len = 0;
+            const char* s = luaL_tolstring(L, i, &len);
+            if (s) acc.append(s, len);
+            lua_pop(L, 1);
+        }
+        if (host && host->message_callback) {
+            host->message_callback(acc.c_str(), 0, host->callback_user_data);
+        } else {
+            std::fwrite(acc.c_str(), 1, acc.size(), stdout);
+            std::fputc('\n', stdout);
+        }
+        return 0;
+    } catch (...) {
+        return luaL_error(L, "Lua print callback failed");
     }
-    if (host && host->message_callback) {
-        host->message_callback(acc.c_str(), 0, host->callback_user_data);
-    } else {
-        std::fwrite(acc.c_str(), 1, acc.size(), stdout);
-        std::fputc('\n', stdout);
-    }
-    return 0;
 }
 
 #endif // SAO_HAS_LUA
@@ -61,7 +74,11 @@ sao_plugins_luahost_create(const lua_host_config* cfg, lua_host_handle_t* out_ho
     if (cfg && cfg->install_stdlib) {
         luaL_openlibs(L);
     }
-    auto* host = new lua_host_s();
+    auto* host = new (std::nothrow) lua_host_s();
+    if (host == nullptr) {
+        lua_close(L);
+        return SAO_ERR_OS_CALL_FAILED;
+    }
     host->L = L;
     if (cfg) {
         host->message_callback = cfg->message_callback;
@@ -77,16 +94,22 @@ sao_plugins_luahost_create(const lua_host_config* cfg, lua_host_handle_t* out_ho
     *out_host = host;
     return SAO_OK;
 #else
-    (void)cfg;
+        lua_State* state = nullptr;
     return SAO_ERR_NOT_IMPLEMENTED;
 #endif
 }
 
 extern "C" SAO_PLUGINS_API int32_t SAO_PLUGINS_CALL
-sao_plugins_luahost_destroy(lua_host_handle_t host) {
+    int print_hook_body(lua_State* state) {
     if (host == nullptr) return SAO_ERR_HANDLE_INVALID;
 #if defined(SAO_HAS_LUA)
-    if (host->L) lua_close(host->L);
+    if (host->L) {
+            lua_host_s* host = host_ptr ? *host_ptr : nullptr;
+        if (sao_plugins_luahost_sandbox_is_armed(host->L)) {
+            (void)sao_plugins_luahost_sandbox_disarm(host->L);
+        }
+        lua_close(host->L);
+    }
     delete host;
     return SAO_OK;
 #else
@@ -237,3 +260,4 @@ sao_plugins_luahost_is_available(void) {
 }
 
 } // namespace sao::plugins::lua_host
+#endif

@@ -38,6 +38,9 @@
 #ifndef SAO_TEST_PLUGIN_STAR_RESONANCE
 #  define SAO_TEST_PLUGIN_STAR_RESONANCE ""
 #endif
+#ifndef SAO_TEST_PYTHON_HOME
+#  define SAO_TEST_PYTHON_HOME L""
+#endif
 #ifndef SAO_TEST_PLUGIN_HIDE_SEEK
 #  define SAO_TEST_PLUGIN_HIDE_SEEK ""
 #endif
@@ -74,6 +77,7 @@ bool g_host_ready = false;
 py_host_handle_t ensure_host() {
     if (g_host != nullptr && g_host_ready) return g_host;
     py_host_config cfg{};
+    cfg.python_home = SAO_TEST_PYTHON_HOME;
     cfg.register_sao_sdk = true;
     cfg.controlled_test_shim = true;
     int32_t rc = sao_plugins_pyhost_init(&cfg, &g_host);
@@ -478,7 +482,18 @@ void require_full_lifecycle(const char* directory, const char* plugin_id,
     REQUIRE(plugin != nullptr);
     REQUIRE(outcome_of(plugin) == LoadOutcome::OK);
     REQUIRE(sao_plugins_pyhost_has_hook(plugin, "on_load"));
-    REQUIRE(sao_plugins_pyhost_call_on_load(plugin) == SAO_OK);
+    const int32_t load_status = sao_plugins_pyhost_call_on_load(plugin);
+    std::string load_error;
+    if (load_status != SAO_OK) {
+        char* error = nullptr;
+        if (sao_plugins_pyhost_get_last_error(plugin, &error) == SAO_OK &&
+            error != nullptr) {
+            load_error = error;
+            std::free(error);
+        }
+    }
+    INFO("plugin=" << plugin_id << " on_load traceback=" << load_error);
+    REQUIRE(load_status == SAO_OK);
 
     void* ctx = sao_plugins_pyhost_get_ctx_pyobject(plugin);
     REQUIRE(ctx != nullptr);

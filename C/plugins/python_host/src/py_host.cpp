@@ -30,14 +30,21 @@
 #include "sao/plugins/python_host/py_module_bridge.h"
 #include "sao/plugins/compat/py_v1_manifest.h"
 #include "sao/plugins/compat/libs_vendor_bridge.h"
+#include "sao/plugins/loader/loader_status.h"
 #include "sao/sdk/sao_sdk.h"
 
+#include <windows.h>
+
 #include <atomic>
+#include <algorithm>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <cwctype>
+#include <filesystem>
 #include <mutex>
 #include <string>
+#include <unordered_set>
 #include <vector>
 
 namespace sao::plugins::python_host {
@@ -53,6 +60,7 @@ struct py_host_state {
     std::wstring python_home;
     std::wstring platform_site_dir;
     bool controlled_test_shim = false;
+    size_t active_plugins = 0;
 };
 
 std::mutex g_singleton_mu;
@@ -63,11 +71,13 @@ std::atomic<int32_t> g_ref_count{0};
 
 // 每插件持:
 struct py_plugin_state {
+    py_host_state* host = nullptr;
     std::string plugin_id;
     std::wstring plugin_dir_w;
     std::string entry_relative;
     // 加载时前插的 sys.path 条目 (unload 恢复用)
     std::vector<std::wstring> inserted_sys_paths;
+    std::unordered_set<std::string> preexisting_modules;
     // PyObject 引用 (强引用, 需 DECREF)
     PyObject* module = nullptr;
     PyObject* ctx = nullptr;
@@ -79,8 +89,16 @@ struct py_plugin_state {
     std::string last_error;
     // manifest 副本 (compat 层解析出来的)
     sao::plugins::loader::plugin_manifest manifest;
-    SaoSdkContext sdk_context{};
-    bool sdk_context_bound = false;
+    SaoSdkContext owned_sdk_context{};
+    SaoSdkContext* sdk_context = nullptr;
+    bool owns_sdk_context = false;
+};
+
+namespace fs = std::filesystem;
+
+struct python_layout {
+    std::wstring home;
+    std::vector<std::wstring> module_search_paths;
 };
 
 // wchar_t → utf-8 (小工具, 复用).
@@ -280,6 +298,81 @@ void clear_module_context_refs(PyObject* module, PyObject* context) {
     }
 }
 
+std::wstring normalized_path(std::wstring value) {
+    std::replace(value.begin(), value.end(), L'/', L'\\');
+    while (!value.empty() && value.back() == L'\\') value.pop_back();
+    std::transform(value.begin(), value.end(), value.begin(),
+                   [](wchar_t ch) { return std::towlower(ch); });
+    return value;
+}
+
+bool path_is_inside(const std::wstring& path, const std::wstring& root) {
+    const std::wstring normalized_file = normalized_path(path);
+    const std::wstring normalized_root = normalized_path(root);
+    return !normalized_root.empty() && normalized_file.size() > normalized_root.size() &&
+           normalized_file.compare(0, normalized_root.size(), normalized_root) == 0 &&
+           normalized_file[normalized_root.size()] == L'\\';
+}
+
+void snapshot_module_names(std::unordered_set<std::string>& output) {
+    output.clear();
+    PyObject* modules = PyImport_GetModuleDict();
+    if (modules == nullptr) return;
+    PyObject* key = nullptr;
+    PyObject* value = nullptr;
+    Py_ssize_t position = 0;
+    while (PyDict_Next(modules, &position, &key, &value)) {
+        if (!PyUnicode_Check(key)) continue;
+        const char* name = PyUnicode_AsUTF8(key);
+        if (name != nullptr) output.emplace(name);
+        else PyErr_Clear();
+    }
+}
+
+void remove_plugin_modules(py_plugin_state* plugin) {
+    if (plugin == nullptr) return;
+    PyObject* modules = PyImport_GetModuleDict();
+    if (modules == nullptr) return;
+    std::vector<std::string> remove_names;
+    PyObject* key = nullptr;
+    PyObject* value = nullptr;
+    Py_ssize_t position = 0;
+    const std::string main_module = "act_plugin_" + plugin->plugin_id;
+    const std::string local_prefix = "sao_local_" + plugin->plugin_id + "_";
+    while (PyDict_Next(modules, &position, &key, &value)) {
+        if (!PyUnicode_Check(key)) continue;
+        const char* name_utf8 = PyUnicode_AsUTF8(key);
+        if (name_utf8 == nullptr) {
+            PyErr_Clear();
+            continue;
+        }
+        const std::string name(name_utf8);
+        bool remove = name == main_module || name.rfind(local_prefix, 0) == 0;
+        if (!remove && !plugin->preexisting_modules.contains(name) && value != nullptr) {
+            PyObject* file = PyObject_GetAttrString(value, "__file__");
+            if (file != nullptr && PyUnicode_Check(file)) {
+                Py_ssize_t size = 0;
+                const wchar_t* path = PyUnicode_AsWideCharString(file, &size);
+                if (path != nullptr) {
+                    remove = path_is_inside(std::wstring(path, static_cast<size_t>(size)),
+                                            plugin->plugin_dir_w);
+                    PyMem_Free(const_cast<wchar_t*>(path));
+                } else {
+                    PyErr_Clear();
+                }
+            } else {
+                PyErr_Clear();
+            }
+            Py_XDECREF(file);
+        }
+        if (remove) remove_names.push_back(name);
+    }
+    for (const auto& name : remove_names) {
+        if (PyDict_DelItemString(modules, name.c_str()) != 0) PyErr_Clear();
+    }
+    plugin->preexisting_modules.clear();
+}
+
 bool py_status_ok(PyStatus status) {
     return !PyStatus_Exception(status);
 }
@@ -290,7 +383,90 @@ bool append_module_search_path(PyConfig* config, const std::wstring& path) {
                                                 path.c_str()));
 }
 
+bool is_python_zip_name(const fs::path& path) {
+    std::wstring name = path.filename().wstring();
+    std::transform(name.begin(), name.end(), name.begin(),
+                   [](wchar_t ch) { return std::towlower(ch); });
+    if (name.size() < 12 || name.rfind(L"python3", 0) != 0 ||
+        path.extension() != L".zip") {
+        return false;
+    }
+    return std::all_of(name.begin() + 7, name.end() - 4,
+                       [](wchar_t ch) { return std::iswdigit(ch) != 0; });
+}
+
+bool discover_python_layout(const wchar_t* python_home,
+                            python_layout& layout) {
+    layout = {};
+    if (python_home == nullptr || python_home[0] == L'\0') return false;
+    try {
+        std::error_code error;
+        fs::path home = fs::weakly_canonical(fs::path(python_home), error);
+        if (error || !fs::is_directory(home, error)) return false;
+
+        const std::wstring runtime_stem =
+            L"python" + std::to_wstring(PY_MAJOR_VERSION) +
+            std::to_wstring(PY_MINOR_VERSION);
+        if (!fs::is_regular_file(home / (runtime_stem + L".dll"), error)) {
+            return false;
+        }
+
+        std::vector<fs::path> zip_candidates;
+        for (fs::directory_iterator it(home, error), end; !error && it != end;
+             it.increment(error)) {
+            if (it->is_regular_file(error) && is_python_zip_name(it->path())) {
+                zip_candidates.push_back(it->path());
+            }
+        }
+        error.clear();
+        std::sort(zip_candidates.begin(), zip_candidates.end());
+        const auto preferred = std::find_if(
+            zip_candidates.begin(), zip_candidates.end(),
+            [&runtime_stem](const fs::path& path) {
+                std::wstring name = path.filename().wstring();
+                std::transform(name.begin(), name.end(), name.begin(),
+                               [](wchar_t ch) { return std::towlower(ch); });
+                return name == runtime_stem + L".zip";
+            });
+        if (preferred != zip_candidates.end() && preferred != zip_candidates.begin()) {
+            std::rotate(zip_candidates.begin(), preferred, preferred + 1);
+        }
+
+        const fs::path lib = home / L"Lib";
+        const bool has_lib = fs::is_directory(lib / L"encodings", error);
+        error.clear();
+        if (zip_candidates.empty() && !has_lib) return false;
+
+        layout.home = home.native();
+        for (const auto& zip : zip_candidates) {
+            layout.module_search_paths.push_back(zip.native());
+        }
+        layout.module_search_paths.push_back(layout.home);
+        if (has_lib) layout.module_search_paths.push_back(lib.native());
+        const fs::path dlls = home / L"DLLs";
+        if (fs::is_directory(dlls, error)) {
+            layout.module_search_paths.push_back(dlls.native());
+        }
+        error.clear();
+        const fs::path site_packages = lib / L"site-packages";
+        if (fs::is_directory(site_packages, error)) {
+            layout.module_search_paths.push_back(site_packages.native());
+        }
+        return true;
+    } catch (...) {
+        layout = {};
+        return false;
+    }
+}
+
 bool initialize_isolated_python(const py_host_config* cfg) {
+    if (cfg == nullptr || !cfg->isolated || !cfg->no_site ||
+        !cfg->ignore_pypath_env) {
+        return false;
+    }
+    python_layout layout;
+    if (!discover_python_layout(cfg->python_home, layout)) return false;
+
     PyConfig config;
     PyConfig_InitIsolatedConfig(&config);
     config.isolated = 1;
@@ -299,25 +475,14 @@ bool initialize_isolated_python(const py_host_config* cfg) {
     config.user_site_directory = 0;
     config.parse_argv = 0;
     config.install_signal_handlers = 0;
+    config.write_bytecode = 0;
+    config.pathconfig_warnings = 0;
 
-    bool configured = true;
-    if (cfg != nullptr && cfg->python_home != nullptr && cfg->python_home[0] != L'\0') {
-        configured = py_status_ok(PyConfig_SetString(&config, &config.home,
-                                                     cfg->python_home));
-        if (configured) {
-            const std::wstring home(cfg->python_home);
-            config.module_search_paths_set = 1;
-            configured = append_module_search_path(&config, home) &&
-                         append_module_search_path(&config, home + L"\\python311.zip") &&
-                         append_module_search_path(&config, home + L"\\DLLs") &&
-                         append_module_search_path(&config, home + L"\\Lib") &&
-                         append_module_search_path(&config, home + L"\\Lib\\site-packages");
-            if (configured && cfg->platform_site_dir != nullptr &&
-                cfg->platform_site_dir[0] != L'\0') {
-                configured = append_module_search_path(&config,
-                                                       cfg->platform_site_dir);
-            }
-        }
+    bool configured = py_status_ok(
+        PyConfig_SetString(&config, &config.home, layout.home.c_str()));
+    config.module_search_paths_set = 1;
+    for (const auto& path : layout.module_search_paths) {
+        if (configured) configured = append_module_search_path(&config, path);
     }
 
     const PyStatus init_status = configured
@@ -342,9 +507,20 @@ sao_plugins_pyhost_init(const py_host_config* cfg, py_host_handle_t* out_host) {
     (void)cfg;
     return SAO_ERR_NOT_IMPLEMENTED;
 #else
+    if (cfg == nullptr || cfg->python_home == nullptr ||
+        cfg->python_home[0] == L'\0' || !cfg->isolated || !cfg->no_site ||
+        !cfg->ignore_pypath_env) {
+        return SAO_ERR_INVALID_ARGUMENT;
+    }
     std::lock_guard<std::mutex> lock(g_singleton_mu);
 
     if (g_singleton != nullptr && g_singleton->initialized) {
+        python_layout requested;
+        if (!discover_python_layout(cfg->python_home, requested) ||
+            normalized_path(requested.home) !=
+                normalized_path(g_singleton->python_home)) {
+            return SAO_ERR_INVALID_ARGUMENT;
+        }
         *out_host = reinterpret_cast<py_host_handle_t>(g_singleton);
         g_ref_count.fetch_add(1);
         return SAO_OK;
@@ -415,6 +591,9 @@ sao_plugins_pyhost_shutdown(py_host_handle_t host) {
     py_host_state* s = reinterpret_cast<py_host_state*>(host);
     if (s != g_singleton) return SAO_ERR_HANDLE_INVALID;
     if (!s->initialized) return SAO_ERR_NOT_INITIALIZED;
+    if (s->active_plugins != 0) {
+        return sao::plugins::loader::SAO_PLUGINS_ERR_BUSY;
+    }
 
     int32_t remaining = g_ref_count.fetch_sub(1) - 1;
     if (remaining > 0) {
@@ -451,8 +630,8 @@ sao_plugins_pyhost_available(const wchar_t* python_home) {
     (void)python_home;
     return false;
 #else
-    (void)python_home;
-    return true;
+    python_layout layout;
+    return discover_python_layout(python_home, layout);
 #endif
 }
 
@@ -475,9 +654,11 @@ sao_plugins_pyhost_load_plugin(py_host_handle_t host,
 #else
     if (host == nullptr || plugin_dir == nullptr) return SAO_ERR_INVALID_ARGUMENT;
     py_host_state* s = reinterpret_cast<py_host_state*>(host);
-    if (!s->initialized) return SAO_ERR_NOT_INITIALIZED;
+    if (s != g_singleton || !s->initialized) return SAO_ERR_NOT_INITIALIZED;
 
     auto* pl = new py_plugin_state();
+    pl->host = s;
+    ++s->active_plugins;
     pl->plugin_dir_w = plugin_dir;
 
     // 1. 读 manifest (compat W1c).
@@ -522,18 +703,40 @@ sao_plugins_pyhost_load_plugin(py_host_handle_t host,
     }
     if (pl->entry_relative.empty()) pl->entry_relative = "plugin.py";
 
-    // The Python host owns a native SDK context for the exact plugin
-    // lifetime.  `ctx_ptr` was a Wave-7 record-only placeholder and is
-    // deliberately ignored: Python plugins now receive this bound context.
-    (void)ctx_ptr;
-    rc = sao_sdk_bind_context(pl->plugin_id.c_str(), pl->manifest.version.c_str(),
-                              &pl->sdk_context);
-    if (rc != SAO_SDK_OK) {
-        pl->last_error = "sao_sdk_bind_context failed";
-        *out_plugin = reinterpret_cast<py_plugin_handle_t>(pl);
-        return rc;
+    // ctx_ptr 可传入已绑定的 SaoSdkContext。有效上下文只借用，由调用方持有；
+    // 其他值保持兼容并回退为本 plugin 唯一的 host-owned SaoSdkContext。
+    if (ctx_ptr != nullptr) {
+        MEMORY_BASIC_INFORMATION memory{};
+        if (VirtualQuery(ctx_ptr, &memory, sizeof(memory)) == sizeof(memory) &&
+            memory.State == MEM_COMMIT &&
+            (memory.Protect & (PAGE_GUARD | PAGE_NOACCESS)) == 0 &&
+            reinterpret_cast<uintptr_t>(ctx_ptr) + sizeof(SaoSdkContext) <=
+                reinterpret_cast<uintptr_t>(memory.BaseAddress) + memory.RegionSize) {
+            auto* supplied = static_cast<SaoSdkContext*>(ctx_ptr);
+            if (supplied->abi_version == SAO_SDK_ABI_VERSION &&
+                supplied->ctx_impl != nullptr) {
+                pl->sdk_context = supplied;
+            }
+        }
     }
-    pl->sdk_context_bound = true;
+    if (pl->sdk_context == nullptr) {
+        rc = sao_sdk_bind_context(pl->plugin_id.c_str(),
+                                  pl->manifest.version.c_str(),
+                                  &pl->owned_sdk_context);
+        if (rc != SAO_SDK_OK) {
+            pl->last_error = "sao_sdk_bind_context failed";
+            *out_plugin = reinterpret_cast<py_plugin_handle_t>(pl);
+            return rc;
+        }
+        pl->sdk_context = &pl->owned_sdk_context;
+        pl->owns_sdk_context = true;
+        rc = sao_sdk_context_bind_platform_services(pl->sdk_context);
+        if (rc != SAO_SDK_OK) {
+            pl->last_error = "sao_sdk_context_bind_platform_services failed";
+            *out_plugin = reinterpret_cast<py_plugin_handle_t>(pl);
+            return rc;
+        }
+    }
 
     // 3. 前插 sys.path: plugin_dir + libs/ + vendor/ + engine/ (W4b probe).
     prepend_sys_path(pl->plugin_dir_w, pl->inserted_sys_paths);
@@ -565,7 +768,7 @@ sao_plugins_pyhost_load_plugin(py_host_handle_t host,
         }
         std::string dir_utf8 = wchar_to_utf8(pl->plugin_dir_w.c_str());
         Py_ssize_t hnd = static_cast<Py_ssize_t>(
-            reinterpret_cast<intptr_t>(&pl->sdk_context));
+            reinterpret_cast<intptr_t>(pl->sdk_context));
         PyObject* args = Py_BuildValue("(ssni)", pl->plugin_id.c_str(),
                         dir_utf8.c_str(), hnd,
                         s->controlled_test_shim ? 1 : 0);
@@ -588,6 +791,7 @@ sao_plugins_pyhost_load_plugin(py_host_handle_t host,
 
     // 5. spec_from_file_location(f"act_plugin_{id}", <plugin_dir>/<entry>).
     std::string module_name = "act_plugin_" + pl->plugin_id;
+    snapshot_module_names(pl->preexisting_modules);
     // 老代码可能自己 import (相对), 我们用完整绝对路径避免混淆.
     std::wstring entry_path = pl->plugin_dir_w;
     if (!entry_path.empty() &&
@@ -774,19 +978,16 @@ sao_plugins_pyhost_unload_plugin(py_plugin_handle_t plugin) {
     // Py 可能已被 finalize (host_shutdown 之后二次 unload). 只有 initialized
     // 时才走 Py 侧清理.
     if (Py_IsInitialized() != 0) {
-        if (pl->sdk_context_bound) {
-            sao_sdk_context_destroy(&pl->sdk_context);
-            pl->sdk_context_bound = false;
-        }
         sao_plugins_pyhost_ctx_teardown_native(pl->ctx);
 
-        // 从 sys.modules 撕 (让 GC 释放).
-        PyObject* sys_modules = PyImport_GetModuleDict();
-        if (sys_modules != nullptr) {
-            std::string module_name = "act_plugin_" + pl->plugin_id;
-            (void)PyDict_DelItemString(sys_modules, module_name.c_str());
-            if (PyErr_Occurred()) PyErr_Clear();
+        if (pl->owns_sdk_context && pl->sdk_context != nullptr) {
+            sao_sdk_context_destroy(pl->sdk_context);
         }
+        pl->sdk_context = nullptr;
+        pl->owns_sdk_context = false;
+
+        // 从 sys.modules 撕主模块以及本次加载新增且位于插件目录内的模块。
+        remove_plugin_modules(pl);
         // DECREF hook + module + ctx.
         Py_CLEAR(pl->hook_on_load);
         Py_CLEAR(pl->hook_on_enable);
@@ -805,10 +1006,15 @@ sao_plugins_pyhost_unload_plugin(py_plugin_handle_t plugin) {
         pl->module = nullptr;
         pl->ctx = nullptr;
         pl->inserted_sys_paths.clear();
+        pl->preexisting_modules.clear();
     }
-    if (pl->sdk_context_bound) {
-        sao_sdk_context_destroy(&pl->sdk_context);
-        pl->sdk_context_bound = false;
+    if (pl->owns_sdk_context && pl->sdk_context != nullptr) {
+        sao_sdk_context_destroy(pl->sdk_context);
+    }
+    pl->sdk_context = nullptr;
+    pl->owns_sdk_context = false;
+    if (pl->host != nullptr && pl->host->active_plugins > 0) {
+        --pl->host->active_plugins;
     }
     delete pl;
     return SAO_OK;
@@ -1002,7 +1208,7 @@ sao_plugins_pyhost_get_sdk_context(py_plugin_handle_t plugin) {
 #else
     if (plugin == nullptr) return nullptr;
     auto* pl = reinterpret_cast<py_plugin_state*>(plugin);
-    return pl->sdk_context_bound ? &pl->sdk_context : nullptr;
+    return pl->sdk_context;
 #endif
 }
 

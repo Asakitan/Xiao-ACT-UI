@@ -12,27 +12,93 @@ extern "C" {
 #include <lauxlib.h>
 #include <lualib.h>
 }
+
+#include "lua_sandbox_internal.h"
+#include "lua_state_internal.h"
 #endif
 
 namespace sao::plugins::lua_host {
 
-extern "C" SAO_PLUGINS_API int32_t SAO_PLUGINS_CALL
-sao_plugins_luahost_install_stdlib(lua_State* L, const lua_stdlib_config* cfg) {
-    if (L == nullptr || cfg == nullptr) return SAO_ERR_INVALID_ARGUMENT;
 #if defined(SAO_HAS_LUA)
-    if (cfg->base)      { luaL_requiref(L, LUA_GNAME,        luaopen_base,       1); lua_pop(L, 1); }
-    if (cfg->coroutine) { luaL_requiref(L, LUA_COLIBNAME,    luaopen_coroutine,  1); lua_pop(L, 1); }
-    if (cfg->string_)   { luaL_requiref(L, LUA_STRLIBNAME,   luaopen_string,     1); lua_pop(L, 1); }
-    if (cfg->table_)    { luaL_requiref(L, LUA_TABLIBNAME,   luaopen_table,      1); lua_pop(L, 1); }
-    if (cfg->math)      { luaL_requiref(L, LUA_MATHLIBNAME,  luaopen_math,       1); lua_pop(L, 1); }
-    if (cfg->utf8)      { luaL_requiref(L, LUA_UTF8LIBNAME,  luaopen_utf8,       1); lua_pop(L, 1); }
-    if (cfg->io)        { luaL_requiref(L, LUA_IOLIBNAME,    luaopen_io,         1); lua_pop(L, 1); }
-    if (cfg->os)        { luaL_requiref(L, LUA_OSLIBNAME,    luaopen_os,         1); lua_pop(L, 1); }
-    if (cfg->package_)  { luaL_requiref(L, LUA_LOADLIBNAME,  luaopen_package,    1); lua_pop(L, 1); }
-    if (cfg->debug_)    { luaL_requiref(L, LUA_DBLIBNAME,    luaopen_debug,      1); lua_pop(L, 1); }
-    return SAO_OK;
+namespace {
+
+int install_stdlib_body(lua_State* state) {
+    const auto* config = static_cast<const lua_stdlib_config*>(
+        lua_touserdata(state, 1));
+    if (config->base) {
+        luaL_requiref(state, LUA_GNAME, luaopen_base, 1);
+        lua_pop(state, 1);
+    }
+    if (config->coroutine) {
+        luaL_requiref(state, LUA_COLIBNAME, luaopen_coroutine, 1);
+        lua_pop(state, 1);
+    }
+    if (config->string_) {
+        luaL_requiref(state, LUA_STRLIBNAME, luaopen_string, 1);
+        lua_pop(state, 1);
+    }
+    if (config->table_) {
+        luaL_requiref(state, LUA_TABLIBNAME, luaopen_table, 1);
+        lua_pop(state, 1);
+    }
+    if (config->math) {
+        luaL_requiref(state, LUA_MATHLIBNAME, luaopen_math, 1);
+        lua_pop(state, 1);
+    }
+    if (config->utf8) {
+        luaL_requiref(state, LUA_UTF8LIBNAME, luaopen_utf8, 1);
+        lua_pop(state, 1);
+    }
+    if (config->io) {
+        luaL_requiref(state, LUA_IOLIBNAME, luaopen_io, 1);
+        lua_pop(state, 1);
+    }
+    if (config->os) {
+        luaL_requiref(state, LUA_OSLIBNAME, luaopen_os, 1);
+        lua_pop(state, 1);
+    }
+    if (config->package_) {
+        luaL_requiref(state, LUA_LOADLIBNAME, luaopen_package, 1);
+        lua_pop(state, 1);
+    }
+    if (config->debug_) {
+        luaL_requiref(state, LUA_DBLIBNAME, luaopen_debug, 1);
+        lua_pop(state, 1);
+    }
+    return 0;
+}
+
+} // namespace
+#endif
+
+extern "C" SAO_PLUGINS_API int32_t SAO_PLUGINS_CALL
+sao_plugins_luahost_install_stdlib(lua_State* state,
+                                   const lua_stdlib_config* config) {
+    if (state == nullptr || config == nullptr) return SAO_ERR_INVALID_ARGUMENT;
+#if defined(SAO_HAS_LUA)
+    try {
+        detail::state_operation operation;
+        int32_t status =
+            detail::acquire_state_operation(state, operation);
+        if (status != SAO_OK) return status;
+        if (!detail::sandbox_stdlib_allowed_locked(state)) {
+            return SAO_ERR_INVALID_ARGUMENT;
+        }
+        const int base = lua_gettop(state);
+        if (detail::protected_trampoline(
+                state, install_stdlib_body,
+                const_cast<lua_stdlib_config*>(config), 0) != LUA_OK) {
+            detail::capture_state_error_locked(state, -1);
+            lua_settop(state, base);
+            return SAO_ERR_OS_CALL_FAILED;
+        }
+        lua_settop(state, base);
+        return SAO_OK;
+    } catch (...) {
+        return SAO_ERR_OS_CALL_FAILED;
+    }
 #else
-    (void)cfg;
+    (void)config;
     return SAO_ERR_NOT_IMPLEMENTED;
 #endif
 }

@@ -84,7 +84,7 @@ TEST_CASE("csharp_host wave8 :: load_hello_csharp_dll_success",
     INFO("load rc=" << rc << " err=" << (err ? err : "(null)"));
     REQUIRE(rc == SAO_OK);
     REQUIRE(g_plugin != nullptr);
-    if (err) std::free(err);
+    sao_plugins_cshost_free_string(err);
 }
 
 TEST_CASE("csharp_host wave8 :: hello_csharp_on_load_ticks",
@@ -112,7 +112,7 @@ TEST_CASE("csharp_host wave8 :: hello_csharp_on_load_ticks",
         rc = sao_plugins_cshost_tick_plugin(g_plugin, &err);
         INFO("tick " << i << " rc=" << rc);
         REQUIRE(rc == SAO_OK);
-        if (err) std::free(err);
+        sao_plugins_cshost_free_string(err);
     }
     int32_t tc = 0;
     rc = sao_plugins_cshost_read_tick_count(g_plugin, &tc);
@@ -133,7 +133,7 @@ TEST_CASE("csharp_host wave8 :: hello_csharp_unload_clean",
     int32_t rc = sao_plugins_cshost_unload_plugin(g_plugin, &err);
     INFO("unload rc=" << rc << " err=" << (err ? err : "(null)"));
     REQUIRE(rc == SAO_OK);
-    if (err) std::free(err);
+    sao_plugins_cshost_free_string(err);
     g_plugin = nullptr;
     // OnUnload 应打了一条最新 log
     // 但 unload_plugin 释放了 g_counters 之外的资源, 计数器仍保留.

@@ -100,6 +100,9 @@ public:
     // 按名字取一个已定义函数, 用于宿主查 on_load / on_enable / on_unload。
     std::shared_ptr<callable> get_function(const std::string& name);
 
+    // 读取已注入的全局值。不存在时返回 nil。
+    emma_value get_global(const std::string& name) const;
+
     // 由 host 侧调 Emma 函数 (Emma 的 on_load(ctx) 等)。
     emma_value call_function(const std::shared_ptr<callable>& fn,
                              std::vector<emma_value> args,

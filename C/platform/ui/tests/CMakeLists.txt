@@ -339,6 +339,27 @@ catch_discover_tests(sao_platform_ui_entity_shell_tests
     PROPERTIES LABELS "ui;entity_shell;production_slice"
 )
 
+add_executable(sao_platform_ui_entity_roots_focused_tests
+    test_entity_roots_focused.cpp
+)
+
+target_link_libraries(sao_platform_ui_entity_roots_focused_tests PRIVATE
+    sao::ui
+    Catch2::Catch2WithMain
+)
+
+if (WIN32)
+    target_link_libraries(sao_platform_ui_entity_roots_focused_tests PRIVATE user32 gdi32)
+endif()
+
+target_compile_definitions(sao_platform_ui_entity_roots_focused_tests PRIVATE SAO_UI_USING_DLL)
+target_compile_features(sao_platform_ui_entity_roots_focused_tests PRIVATE cxx_std_20)
+
+catch_discover_tests(sao_platform_ui_entity_roots_focused_tests
+    TEST_PREFIX "ui.entity_roots.focused."
+    PROPERTIES LABELS "ui;entity_shell;entity_roots;w21"
+)
+
 if (WIN32)
     add_executable(sao_platform_ui_parity_entity_w19_tests
         test_ui_parity_entity_w19.cpp

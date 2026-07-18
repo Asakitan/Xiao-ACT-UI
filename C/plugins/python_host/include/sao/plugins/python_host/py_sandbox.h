@@ -82,4 +82,19 @@ sao_plugins_pyhost_default_import_whitelist(size_t* out_count);
 extern "C" SAO_PLUGINS_API const char* const* SAO_PLUGINS_CALL
 sao_plugins_pyhost_default_import_blacklist(size_t* out_count);
 
+// ── Wave 18 / Agent a 内省 API ─────────────────────────────
+// 在指定 plugin 的沙箱子解释器里跑一段合成源码 (仅测试用).
+// 无 raise → out_raised=false; 有 raise → out_raised=true 且写入
+// exception type 名字到 err_type_buf.
+extern "C" SAO_PLUGINS_API int32_t SAO_PLUGINS_CALL
+sao_plugins_pyhost_sandbox_exec_test(const char* plugin_id_utf8,
+                                     const char* source_utf8,
+                                     bool* out_raised,
+                                     char* err_type_buf,
+                                     size_t err_type_buf_size);
+
+// 当前活着的 sandbox slot 数.
+extern "C" SAO_PLUGINS_API size_t SAO_PLUGINS_CALL
+sao_plugins_pyhost_sandbox_active_count(void);
+
 } // namespace sao::plugins::python_host

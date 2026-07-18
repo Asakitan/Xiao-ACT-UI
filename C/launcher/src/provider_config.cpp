@@ -44,6 +44,54 @@ fs::path resolvePath(const fs::path& base, const std::string& value) {
     return path.lexically_normal();
 }
 
+bool isDirectory(const fs::path& path) {
+    std::error_code error;
+    return fs::is_directory(path, error) && !error;
+}
+
+bool isSourceRoot(const fs::path& path) {
+    std::error_code error;
+    return isDirectory(path / L"python" / L"plugins") &&
+        (fs::is_directory(path / L".git", error) ||
+         fs::is_regular_file(path / L"C" / L"CMakeLists.txt", error));
+}
+
+void appendExistingRoot(const fs::path& candidate,
+                        std::vector<std::wstring>& roots) {
+    if (!isDirectory(candidate)) return;
+    std::error_code error;
+    const auto normalized = fs::weakly_canonical(candidate, error);
+    const auto value = (error ? candidate.lexically_normal() : normalized).wstring();
+    if (std::find(roots.begin(), roots.end(), value) == roots.end()) {
+        roots.push_back(value);
+    }
+}
+
+PluginsProviderConfiguration defaultPluginsConfiguration(
+    const fs::path& launcher_base) {
+    PluginsProviderConfiguration output;
+    if (launcher_base.empty() || launcher_base.is_relative()) return output;
+
+    fs::path source_root;
+    for (auto current = launcher_base.lexically_normal(); !current.empty();) {
+        if (isSourceRoot(current)) {
+            source_root = current;
+            break;
+        }
+        const auto parent = current.parent_path();
+        if (parent == current) break;
+        current = parent;
+    }
+    if (!source_root.empty()) {
+        appendExistingRoot(source_root.parent_path() / L"plugins", output.roots);
+        appendExistingRoot(source_root / L"python" / L"plugins", output.roots);
+    }
+    appendExistingRoot(launcher_base / L"plugins", output.roots);
+    appendExistingRoot(launcher_base / L"python" / L"plugins", output.roots);
+    output.enabled = !output.roots.empty();
+    return output;
+}
+
 bool parsePathArray(const json& section, const char* name,
                     const fs::path& base, std::vector<std::wstring>& output) {
     const auto values = section.find(name);
@@ -111,6 +159,15 @@ bool parsePlugins(const json& root, const fs::path& base,
         !parsePathArray(*section, "manifests", base, output.manifests)) {
         return false;
     }
+    const auto python_home = section->find("python_home");
+    if (python_home != section->end()) {
+        if (!python_home->is_string() ||
+            python_home->get_ref<const std::string&>().empty()) {
+            return false;
+        }
+        output.python_home =
+            resolvePath(base, python_home->get<std::string>()).wstring();
+    }
     return !output.roots.empty() || !output.user_roots.empty() ||
         !output.manifests.empty();
 }
@@ -122,17 +179,28 @@ sao_status_t loadLauncherProviderConfiguration(
     const wchar_t* config_path) noexcept {
     LauncherProviderConfiguration next;
     if (config_path == nullptr || config_path[0] == L'\0') {
-        std::lock_guard lock(g_configuration_mutex);
-        g_configuration = std::move(next);
-        return SAO_STATUS_OK;
+        try {
+            if (base_dir != nullptr && base_dir[0] != L'\0') {
+                next.plugins = defaultPluginsConfiguration(fs::path(base_dir));
+            }
+            std::lock_guard lock(g_configuration_mutex);
+            g_configuration = std::move(next);
+            return SAO_STATUS_OK;
+        } catch (...) {
+            return SAO_STATUS_INVALID_ARGUMENT;
+        }
     }
     try {
+        const fs::path launcher_base =
+            base_dir == nullptr || base_dir[0] == L'\0'
+                ? fs::path{}
+                : fs::path(base_dir).lexically_normal();
         fs::path path(config_path);
         if (path.is_relative()) {
-            if (base_dir == nullptr || base_dir[0] == L'\0') {
+            if (launcher_base.empty()) {
                 return SAO_STATUS_INVALID_ARGUMENT;
             }
-            path = fs::path(base_dir) / path;
+            path = launcher_base / path;
         }
         path = path.lexically_normal();
         std::ifstream input(path, std::ios::binary);

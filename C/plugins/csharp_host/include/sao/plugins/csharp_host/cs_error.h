@@ -9,11 +9,13 @@
 namespace sao::plugins::csharp_host {
 
 // 从最近一次 CLR 异常拿 (Type, Message, StackTrace) → SAO_STATUS + utf-8。
-extern "C" SAO_PLUGINS_API int32_t SAO_PLUGINS_CALL
-sao_plugins_cshost_take_error(char** out_utf8);
+extern "C" SAO_PLUGINS_API int32_t SAO_PLUGINS_CALL sao_plugins_cshost_take_error(char** out_utf8);
 
 // 编译时错误 (Roslyn diagnostics) → SAO_STATUS + 详细列表 json。
 extern "C" SAO_PLUGINS_API int32_t SAO_PLUGINS_CALL
 sao_plugins_cshost_take_compile_errors(char** out_json_utf8);
+
+// Releases every string returned by the direct and generic C# host APIs.
+extern "C" SAO_PLUGINS_API void SAO_PLUGINS_CALL sao_plugins_cshost_free_string(char* value);
 
 } // namespace sao::plugins::csharp_host

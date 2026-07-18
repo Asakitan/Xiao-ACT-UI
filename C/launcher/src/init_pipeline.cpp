@@ -322,11 +322,11 @@ int runPipeline(const sao_launcher_init_hooks_t* hooks,
         sao_plugins_registry* reg = nullptr;
         sao_status_t s = sao_plugins_discover(
             static_cast<sao_platform_ctx*>(state.platform_ctx), &reg);
+        state.plugins_registry = reg;
+        plugins_discovered = reg != nullptr;
         if (s != SAO_STATUS_OK || reg == nullptr) {
             return SAO_EXIT_PLUGIN_LOAD_FAIL;
         } else {
-            state.plugins_registry = reg;
-            plugins_discovered = true;
             if (sao_plugins_activate_autostart(reg) != SAO_STATUS_OK) {
                 return SAO_EXIT_PLUGIN_LOAD_FAIL;
             }
@@ -423,8 +423,11 @@ void teardown(const sao_launcher_init_hooks_t* hooks,
         notifyStep(hooks, "ui");
     }
     if (plugins_discovered) {
-        (void)sao_plugins_shutdown(static_cast<sao_plugins_registry*>(state.plugins_registry));
-        state.plugins_registry = nullptr;
+        if (sao_plugins_shutdown(
+                static_cast<sao_plugins_registry*>(state.plugins_registry)) ==
+            SAO_STATUS_OK) {
+            state.plugins_registry = nullptr;
+        }
         notifyStep(hooks, "plugins");
     }
     if (platform_up) {

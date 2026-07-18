@@ -15,6 +15,10 @@
 
 using namespace sao::plugins::python_host;
 
+#ifndef SAO_TEST_PYTHON_HOME
+#  define SAO_TEST_PYTHON_HOME L""
+#endif
+
 #if defined(SAO_HAS_PYTHON_EMBED)
 
 namespace {
@@ -27,8 +31,7 @@ py_host_handle_t g_test_host = nullptr;
 // ── CASE 1: init + refcount 复用 + shutdown 全流程 ──
 void case_py_host_init_and_shutdown_roundtrip() {
     py_host_config cfg{};
-    // 最小配置: 不指定 python_home (让 Py 自动定位).
-    cfg.python_home = nullptr;
+    cfg.python_home = SAO_TEST_PYTHON_HOME;
     cfg.platform_site_dir = nullptr;
     cfg.stdout_callback = nullptr;
     cfg.stderr_callback = nullptr;
@@ -76,7 +79,7 @@ void case_py_host_reports_correct_version() {
     assert(ok);
 
     // available() 探测应真.
-    bool avail = sao_plugins_pyhost_available(nullptr);
+    bool avail = sao_plugins_pyhost_available(SAO_TEST_PYTHON_HOME);
     assert(avail);
 
     // 最终 shutdown, 真 Py_FinalizeEx.

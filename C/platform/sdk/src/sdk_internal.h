@@ -184,6 +184,8 @@ const SaoSdkNetTable*    make_net_table_fail_closed();
 const SaoSdkConfigTable* make_config_table();
 const SaoSdkTtsTable*    make_tts_table();
 const SaoSdkBannerTable* make_banner_table();
+const SaoSdkGpuHuntTable* make_gpu_hunt_table();
+void sdk_gpu_hunt_sweep_owner(ContextState* owner);
 
 void destroy_hotkey_bridge(void* bridge);
 void destroy_widget_for_kind(int32_t kind, sao_ui_widget_handle_t widget);

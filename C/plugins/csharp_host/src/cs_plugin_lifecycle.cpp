@@ -222,7 +222,7 @@ sao_plugins_cshost_load_plugin(cs_host_handle_t host,
         return SAO_ERR_HANDLE_INVALID;
     }
     std::string entry = extract_json_string_field(manifest_body, "entry");
-    if (entry.empty()) entry = "prebuilt/HelloPlugin.dll";
+    if (entry.empty()) return SAO_ERR_INVALID_ARGUMENT;
     std::string plugin_id = extract_json_string_field(manifest_body, "id");
 
     std::string dir = parent_dir(plugin_json_path_utf8);
@@ -279,7 +279,13 @@ sao_plugins_cshost_load_plugin(cs_host_handle_t host,
     std::wstring dll_w = utf8_to_wide(dll_path);
     // 用 forward slash 是 OK 的但改成 backslash 更兼容
     for (auto& c : dll_w) if (c == L'/') c = L'\\';
-    const wchar_t* type_name = L"SaoAuto.Plugins.HelloCsharp.HelloPlugin, HelloPlugin";
+    std::string managed_type = extract_json_string_field(manifest_body, "managed_type");
+    if (managed_type.empty()) {
+        close_fn(ctx);
+        return SAO_ERR_INVALID_ARGUMENT;
+    }
+    std::wstring managed_type_w = utf8_to_wide(managed_type);
+    const wchar_t* type_name = managed_type_w.c_str();
 
     auto load_one = [&](const wchar_t* method, void** out) -> int32_t {
         return load_fn(dll_w.c_str(), type_name, method, /*delegate_type*/ nullptr,

@@ -22,6 +22,7 @@ TEST_CASE("sdk_bind_context creates the unified owned context", "[sdk][bind]") {
     REQUIRE(ctx.hotkey != nullptr);
     REQUIRE(ctx.tts != nullptr);
     REQUIRE(ctx.banner != nullptr);
+    REQUIRE(ctx.gpu_hunt != nullptr);
 
     bool enabled = false;
     REQUIRE(sao_sdk_config_set_bool(&ctx, "enabled", true) == SAO_SDK_OK);
@@ -32,6 +33,10 @@ TEST_CASE("sdk_bind_context creates the unified owned context", "[sdk][bind]") {
     REQUIRE(sao_sdk_mem_read_u32(&ctx, 0, &value) == SAO_SDK_ERR_NOT_INITIALIZED);
     REQUIRE(sao_sdk_net_set_frame_callback(&ctx, nullptr, nullptr) ==
             SAO_SDK_ERR_NOT_INITIALIZED);
+    sao_sdk_gpu_tracker_t tracker = 0;
+    REQUIRE(ctx.gpu_hunt->create_tracker(ctx.ctx_impl, &tracker) ==
+            SAO_SDK_ERR_UNSUPPORTED);
+    REQUIRE(tracker == 0);
 
     sao_sdk_context_destroy(&ctx);
     REQUIRE(ctx.ctx_impl == nullptr);
@@ -47,6 +52,10 @@ TEST_CASE("legacy JSON UI path is context-owned", "[sdk][legacy_ui]") {
     SaoSdkContext ctx{};
     REQUIRE(sao_sdk_bind_context("legacy.test", "1.0.0", &ctx) == SAO_SDK_OK);
     REQUIRE(sao_sdk_context_bind_platform_services(&ctx) == SAO_SDK_OK);
+    sao_sdk_gpu_tracker_t tracker = 0;
+    REQUIRE(ctx.gpu_hunt->create_tracker(ctx.ctx_impl, &tracker) ==
+            SAO_SDK_ERR_UNSUPPORTED);
+    REQUIRE(tracker == 0);
 
     constexpr char kSpec[] = R"({"kind":"panel","children":[{"kind":"canvas"}]})";
     sao_sdk_ui_panel_t panel = nullptr;

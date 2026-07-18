@@ -92,6 +92,36 @@ if (TARGET sao::plugins::loader)
         ${CMAKE_CURRENT_SOURCE_DIR}/include)
     target_link_libraries(sao_launcher_plugins_provider PRIVATE
         sao::plugins::loader)
+    if (TARGET sao::plugins::python_host)
+        target_link_libraries(sao_launcher_plugins_provider PRIVATE
+            sao::plugins::python_host)
+        target_compile_definitions(sao_launcher_plugins_provider PRIVATE
+            SAO_LAUNCHER_PROVIDER_HAS_PYTHON=1)
+    endif()
+    if (TARGET sao::plugins::emma_host)
+        target_link_libraries(sao_launcher_plugins_provider PRIVATE
+            sao::plugins::emma_host)
+        target_compile_definitions(sao_launcher_plugins_provider PRIVATE
+            SAO_LAUNCHER_PROVIDER_HAS_EMMA=1)
+    endif()
+    if (TARGET sao::plugins::angel_host)
+        target_link_libraries(sao_launcher_plugins_provider PRIVATE
+            sao::plugins::angel_host)
+        target_compile_definitions(sao_launcher_plugins_provider PRIVATE
+            SAO_LAUNCHER_PROVIDER_HAS_ANGEL=1)
+    endif()
+    if (TARGET sao::plugins::lua_host)
+        target_link_libraries(sao_launcher_plugins_provider PRIVATE
+            sao::plugins::lua_host)
+        target_compile_definitions(sao_launcher_plugins_provider PRIVATE
+            SAO_LAUNCHER_PROVIDER_HAS_LUA=1)
+    endif()
+    if (TARGET sao::plugins::csharp_host)
+        target_link_libraries(sao_launcher_plugins_provider PRIVATE
+            sao::plugins::csharp_host)
+        target_compile_definitions(sao_launcher_plugins_provider PRIVATE
+            SAO_LAUNCHER_PROVIDER_HAS_CSHARP=1)
+    endif()
     target_compile_definitions(sao_launcher_plugins_provider PRIVATE
         SAO_PLUGINS_BUILDING_DLL)
 endif()

@@ -5,10 +5,10 @@
 // 派发, 所以本 host 的职责是:
 //   1. Py_Initialize + PyConfig 配置 (isolated=1, no_site=1, PYTHONHOME 指向
 //      随包 embedded 分发)
-//   2. 每插件独占 PyThreadState (avoid GIL contention across plugins)
+//   2. 所有插件共用 CPython 主解释器；调用由主解释器 GIL 串行化
 //   3. 用 sdk_binding/binding_python 注册 sao_sdk 内置模块
 //   4. spec_from_file_location 加载 plugin.py, 提取 on_load/on_enable 等 hook
-//   5. Py_Finalize on unload (last plugin only)
+//   5. 最后一个 host handle shutdown 时按所有权决定是否 Py_Finalize
 //
 // **能直接加载旧 Python 插件**: 老 plugin.py 的 ``on_load(ctx)`` 拿到的 ctx
 // 是本 host 用 sao_sdk.wrap_ctx(handle) 构造的 PyObject, 方法名/签名/返回值
@@ -27,6 +27,7 @@
 // 一小组 C ABI 方法)。
 #pragma once
 
+#include <cstddef>
 #include <cstdint>
 
 #include "sao_plugins/abi.h"
@@ -36,6 +37,7 @@ namespace sao::plugins::python_host {
 
 typedef struct py_host_s* py_host_handle_t;
 typedef struct py_plugin_s* py_plugin_handle_t;
+typedef struct py_loader_adapter_owner_s* py_loader_adapter_owner_t;
 
 // Python 宿主全局配置。
 struct py_host_config {
@@ -77,19 +79,24 @@ sao_plugins_pyhost_available(const wchar_t* python_home);
 
 // ── 加载 / 卸载单个插件 (被 lifecycle.load 派发进来) ──
 
+// 直接调用本节 API 时，调用方必须持有 CPython 主解释器 GIL；这些函数
+// 不在内部 acquire/release GIL。production loader adapter 负责为每次
+// load/hook/unload 调用获取 GIL，并允许从原生 worker thread 进入。
+
 // 载入未修改的 plugin.py。
 // 内部:
-//   1. AcquireGIL
-//   2. sys.path 前插 <plugin>/vendor / libs / engine
-//   3. importlib.util.spec_from_file_location(f"act_plugin_{id}", <entry>)
-//   4. spec.loader.exec_module(module)
-//   5. 抽 on_load / on_enable / on_disable / on_unload 存到 py_plugin_handle_t
+//   1. sys.path 前插 <plugin>/vendor / libs / engine
+//   2. importlib.util.spec_from_file_location(f"act_plugin_{id}", <entry>)
+//   3. spec.loader.exec_module(module)
+//   4. 抽 on_load / on_enable / on_disable / on_unload 存到 py_plugin_handle_t
+// ctx_ptr 若非 nullptr，必须指向仍由调用方持有的有效 SaoSdkContext；传入
+// 其他 ABI 的 opaque context 不会被复用，host 将创建自己的 SaoSdkContext。
 extern "C" SAO_PLUGINS_API int32_t SAO_PLUGINS_CALL
 sao_plugins_pyhost_load_plugin(py_host_handle_t host,
                                const wchar_t* plugin_dir,
                                const char* entry_relative,
                                const char* plugin_id_utf8,
-                               void* ctx_ptr,       // plugin_context_t*
+                               void* ctx_ptr,
                                py_plugin_handle_t* out_plugin);
 
 // 调 on_load(ctx) 传入本插件的 ctx PyObject (来自 wrap_ctx)。
@@ -144,5 +151,42 @@ sao_plugins_pyhost_get_sdk_context(py_plugin_handle_t plugin);
 extern "C" SAO_PLUGINS_API int32_t SAO_PLUGINS_CALL
 sao_plugins_pyhost_get_last_error(py_plugin_handle_t plugin,
                                   char** out_utf8);
+
+// 注册 loader::engine_kind::python 的 production adapter。cfg 必须提供
+// 显式 bundled python_home；owner 注销前必须先通过 loader 卸载全部插件。
+extern "C" SAO_PLUGINS_API int32_t SAO_PLUGINS_CALL
+sao_plugins_pyhost_register_loader_adapter(
+    const py_host_config* cfg,
+    py_loader_adapter_owner_t* out_owner);
+
+extern "C" SAO_PLUGINS_API int32_t SAO_PLUGINS_CALL
+sao_plugins_pyhost_unregister_loader_adapter(
+    py_loader_adapter_owner_t owner);
+
+// adapter 内部 loader plugin_handle_t → py_plugin_handle_t 映射内省。
+extern "C" SAO_PLUGINS_API size_t SAO_PLUGINS_CALL
+sao_plugins_pyhost_loader_adapter_plugin_count(
+    py_loader_adapter_owner_t owner);
+
+extern "C" SAO_PLUGINS_API int32_t SAO_PLUGINS_CALL
+sao_plugins_pyhost_loader_adapter_get_last_error(
+    py_loader_adapter_owner_t owner,
+    void* loader_plugin_handle,
+    char** out_utf8);
+
+extern "C" SAO_PLUGINS_API int32_t SAO_PLUGINS_CALL
+sao_plugins_pyhost_loader_adapter_get_requirements_report(
+    py_loader_adapter_owner_t owner,
+    void* loader_plugin_handle,
+    char** out_json_utf8);
+
+// requirements.txt 只做静态报告，不安装、不启动外部进程。返回路径优先级为
+// engine、libs、vendor，与 Python oracle 的最终 sys.path 顺序一致。
+extern "C" SAO_PLUGINS_API int32_t SAO_PLUGINS_CALL
+sao_plugins_pyhost_report_requirements(const wchar_t* plugin_dir,
+                                       char** out_json_utf8);
+
+extern "C" SAO_PLUGINS_API void SAO_PLUGINS_CALL
+sao_plugins_pyhost_free_string(char* value);
 
 } // namespace sao::plugins::python_host

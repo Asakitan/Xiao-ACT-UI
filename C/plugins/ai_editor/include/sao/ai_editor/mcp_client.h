@@ -92,6 +92,26 @@ sao_ai_editor_mcp_client_list_prompts(sao_ai_editor_mcp_client_t handle,
                                       uint32_t json_cap,
                                       uint32_t* out_len);
 
+// Render one MCP prompt (server-side prompts/get).
+//
+// request_json fields:
+//   server      (string, required)  — server name registered above
+//   name        (string, required)  — prompt identifier
+//   arguments   (object)            — MCP prompt arguments (optional)
+//   timeoutMs   (integer)           — request budget, default 30000
+//
+// On success the response echoes the MCP prompts/get result verbatim —
+// typically {"description": <string>, "messages": [...]} — with the source
+// "server" field mixed in so callers can trace which registry entry produced
+// the reply.
+SAO_AI_EDITOR_API int32_t SAO_AI_EDITOR_CALL
+sao_ai_editor_mcp_client_get_prompt(sao_ai_editor_mcp_client_t handle,
+                                    const char* request_json,
+                                    uint32_t request_len,
+                                    char* response_out,
+                                    uint32_t response_cap,
+                                    uint32_t* out_len);
+
 // Aggregated resources/list across servers.
 SAO_AI_EDITOR_API int32_t SAO_AI_EDITOR_CALL
 sao_ai_editor_mcp_client_list_resources(sao_ai_editor_mcp_client_t handle,

@@ -324,10 +324,12 @@ int App::bringUpPlatform() {
 
 int App::discoverPlugins() {
     sao_plugins_registry* reg = nullptr;
-    if (sao_plugins_discover(static_cast<sao_platform_ctx*>(state_.platform_ctx), &reg) != SAO_STATUS_OK) {
+    const sao_status_t status = sao_plugins_discover(
+        static_cast<sao_platform_ctx*>(state_.platform_ctx), &reg);
+    state_.plugins_registry = reg;
+    if (status != SAO_STATUS_OK || reg == nullptr) {
         return SAO_EXIT_PLUGIN_LOAD_FAIL;
     }
-    state_.plugins_registry = reg;
 
     if (sao_plugins_activate_autostart(reg) != SAO_STATUS_OK) {
         return SAO_EXIT_PLUGIN_LOAD_FAIL;

@@ -138,6 +138,16 @@ extern "C" SAO_PLUGINS_API int32_t SAO_PLUGINS_CALL
 sao_plugins_lifecycle_register_host_adapter(engine_kind language,
                                             const host_adapter_vtable* vtable);
 
+// 注销一个宿主适配器。仍有该 language 的插件 context 或活动调用时返回 BUSY。
+extern "C" SAO_PLUGINS_API int32_t SAO_PLUGINS_CALL
+sao_plugins_lifecycle_unregister_host_adapter(engine_kind language);
+
+// 查询 loader 为插件生命周期持有的 canonical context。
+// 返回的指针是借用引用，仅在下一次 lifecycle 转换前有效；adapter 回调期间稳定。
+extern "C" SAO_PLUGINS_API int32_t SAO_PLUGINS_CALL
+sao_plugins_lifecycle_get_context(plugin_handle_t plugin,
+                                  plugin_context_t** out_context);
+
 // 载入一个插件 (查 language 派发给对应宿主的 vtable.load_plugin)。
 extern "C" SAO_PLUGINS_API int32_t SAO_PLUGINS_CALL
 sao_plugins_lifecycle_load(plugin_handle_t plugin);

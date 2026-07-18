@@ -9,6 +9,7 @@
 // C++ 版本主动加固为一个诊断维度。
 #pragma once
 
+#include <cstddef>
 #include <cstdint>
 
 #include "sao_plugins/abi.h"
@@ -29,9 +30,12 @@ struct deprecated_entry {
 extern "C" SAO_PLUGINS_API const deprecated_entry* SAO_PLUGINS_CALL
 sao_plugins_compat_deprecated_entries(size_t* out_count);
 
-// 扫描某插件的 manifest + 已加载 ctx, 报告用到了哪些弃用条目。
+// 扫描某插件的 manifest + 入口源码，报告可静态确认的弃用条目。
+// plugin_id_utf8 接受 UTF-8 插件目录、plugin.json 路径，或当前 plugins/
+// 下的插件 id。源码扫描遍历插件自有 .py/.lua/.as/.cs/.emma 文件并执行
+// canonical containment 校验，不扫描 libs/vendor/构建缓存。
+// out_report_json_utf8 归属调用方，使用 sao_plugins_compat_free_string 释放。
 extern "C" SAO_PLUGINS_API int32_t SAO_PLUGINS_CALL
-sao_plugins_compat_scan_deprecated(const char* plugin_id_utf8,
-                                   char** out_report_json_utf8);
+sao_plugins_compat_scan_deprecated(const char* plugin_id_utf8, char** out_report_json_utf8);
 
 } // namespace sao::plugins::compat

@@ -8,11 +8,6 @@
 #include <cstdio>
 #include <cstring>
 
-// wave3 便利函数 (在 lua_host.cpp)
-extern "C" {
-    SAO_PLUGINS_API bool SAO_PLUGINS_CALL sao_plugins_luahost_is_available(void);
-}
-
 int main() {
     using namespace sao::plugins::lua_host;
 

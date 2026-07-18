@@ -10,10 +10,15 @@
 #include <cstdio>
 #include <cstring>
 
+#ifndef SAO_TEST_PYTHON_HOME
+#  define SAO_TEST_PYTHON_HOME L""
+#endif
+
 int main() {
     using namespace sao::plugins::python_host;
 
     py_host_config cfg{};
+    cfg.python_home = SAO_TEST_PYTHON_HOME;
     py_host_handle_t h = nullptr;
     int32_t rc = sao_plugins_pyhost_init(&cfg, &h);
 #if defined(SAO_HAS_PYTHON_EMBED)

@@ -5,6 +5,7 @@ endif()
 
 add_library(sao_plugins_python_host STATIC
     src/py_host.cpp
+    src/py_loader_adapter.cpp
     src/py_module_bridge.cpp
     src/py_call.cpp
     src/py_sandbox.cpp

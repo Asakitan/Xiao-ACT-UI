@@ -1,6 +1,7 @@
 #include <catch2/catch_test_macros.hpp>
 
 #include "sao/plugins/loader/plugin_context.h"
+#include "sao/plugins/loader/entity_provider.h"
 #include "sao/plugins/loader/plugin_deps.h"
 #include "sao/plugins/loader/plugin_install.h"
 #include "sao/plugins/loader/plugin_isolation.h"
@@ -11,6 +12,7 @@
 
 #include <windows.h>
 
+#include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <cstring>
@@ -27,6 +29,181 @@ namespace fs = std::filesystem;
 #endif
 
 namespace {
+
+struct entity_provider_row_snapshot {
+    std::string category_id;
+    std::string category_label;
+    std::string category_icon;
+    double category_priority = 0.0;
+    std::string row_label;
+    std::string row_icon;
+    std::string action_id;
+    std::string payload_json;
+    bool can_activate = true;
+    bool keep_menu_open = false;
+    bool close_menu_before = false;
+};
+
+struct entity_provider_snapshot_record {
+    std::string provider_id;
+    std::string owner_plugin_id;
+    uint64_t generation = 0;
+    uint64_t revision = 0;
+    std::vector<entity_provider_row_snapshot> rows;
+};
+
+struct entity_provider_catalog_snapshot {
+    uint64_t revision = 0;
+    std::vector<entity_provider_snapshot_record> providers;
+};
+
+struct adapter_probe {
+    plugin_context_t* load_context = nullptr;
+    plugin_context_t* unload_context = nullptr;
+    int load_calls = 0;
+    int on_load_calls = 0;
+    int on_unload_calls = 0;
+    int unload_calls = 0;
+    int32_t on_load_status = SAO_OK;
+    int32_t on_unload_status = SAO_OK;
+    bool allow_unload = true;
+    bool context_visible_during_load = false;
+    bool extension_visible_during_on_unload = false;
+    bool extension_removed_before_adapter_unload = false;
+};
+
+int32_t SAO_PLUGINS_CALL copy_entity_provider_catalog(
+    const entity_provider_catalog_view* catalog, void* user_data) {
+    if (catalog == nullptr || user_data == nullptr ||
+        catalog->struct_size < sizeof(entity_provider_catalog_view)) {
+        return SAO_ERR_INVALID_ARGUMENT;
+    }
+    auto& out = *static_cast<entity_provider_catalog_snapshot*>(user_data);
+    entity_provider_catalog_snapshot candidate;
+    candidate.revision = catalog->revision;
+    candidate.providers.reserve(catalog->provider_count);
+    for (uint32_t provider_index = 0;
+         provider_index < catalog->provider_count; ++provider_index) {
+        const auto& provider = catalog->providers[provider_index];
+        entity_provider_snapshot_record copied;
+        copied.provider_id = provider.provider_id_utf8;
+        copied.owner_plugin_id = provider.owner_plugin_id_utf8;
+        copied.generation = provider.generation;
+        copied.revision = provider.revision;
+        copied.rows.reserve(provider.row_count);
+        for (uint32_t row_index = 0; row_index < provider.row_count;
+             ++row_index) {
+            const auto& row = provider.rows[row_index];
+            copied.rows.push_back({
+                row.category_id_utf8,
+                row.category_label_utf8,
+                row.category_icon_utf8,
+                row.category_priority,
+                row.row_label_utf8,
+                row.row_icon_utf8,
+                row.action_id_utf8,
+                row.payload_json_utf8,
+                row.can_activate != 0,
+                row.keep_menu_open != 0,
+                row.close_menu_before != 0,
+            });
+        }
+        candidate.providers.push_back(std::move(copied));
+    }
+    out = std::move(candidate);
+    return SAO_OK;
+}
+
+int32_t snapshot_entity_providers(entity_provider_catalog_snapshot& out) {
+    return sao_plugins_entity_provider_snapshot(copy_entity_provider_catalog,
+                                                &out);
+}
+
+int32_t SAO_PLUGINS_CALL probe_adapter_load(
+    plugin_handle_t plugin, const plugin_manifest*, void* user_data) {
+    auto& probe = *static_cast<adapter_probe*>(user_data);
+    ++probe.load_calls;
+    plugin_context_t* context = nullptr;
+    probe.context_visible_during_load =
+        sao_plugins_lifecycle_get_context(plugin, &context) == SAO_OK &&
+        context != nullptr;
+    probe.load_context = context;
+    return context == nullptr
+               ? SAO_ERR_NOT_INITIALIZED
+               : sao_plugins_ctx_register_ui_panel(
+                     context, "rollback_panel", R"({"title":"Rollback"})",
+                     nullptr, nullptr, nullptr);
+}
+
+int32_t SAO_PLUGINS_CALL probe_adapter_on_load(plugin_handle_t plugin,
+                                               void* user_data) {
+    auto& probe = *static_cast<adapter_probe*>(user_data);
+    ++probe.on_load_calls;
+    plugin_context_t* context = nullptr;
+    if (sao_plugins_lifecycle_get_context(plugin, &context) != SAO_OK ||
+        context != probe.load_context) {
+        return SAO_ERR_NOT_INITIALIZED;
+    }
+    return probe.on_load_status;
+}
+
+int32_t SAO_PLUGINS_CALL probe_adapter_enable(plugin_handle_t, void*) {
+    return SAO_OK;
+}
+
+int32_t SAO_PLUGINS_CALL probe_adapter_disable(plugin_handle_t, void*) {
+    return SAO_OK;
+}
+
+int32_t SAO_PLUGINS_CALL probe_adapter_on_unload(plugin_handle_t plugin,
+                                                 bool* allow,
+                                                 void* user_data) {
+    auto& probe = *static_cast<adapter_probe*>(user_data);
+    ++probe.on_unload_calls;
+    plugin_context_t* context = nullptr;
+    const auto extensions = snapshot_extensions(
+        sao_plugins_registry_instance(), extension_kind::ui_panel);
+    probe.extension_visible_during_on_unload =
+        std::any_of(extensions.begin(), extensions.end(), [](const auto& item) {
+            return item.id == "rollback_panel";
+        });
+    if (sao_plugins_lifecycle_get_context(plugin, &context) != SAO_OK ||
+        context != probe.load_context) {
+        return SAO_ERR_NOT_INITIALIZED;
+    }
+    probe.unload_context = context;
+    *allow = probe.allow_unload;
+    return probe.on_unload_status;
+}
+
+int32_t SAO_PLUGINS_CALL probe_adapter_unload(plugin_handle_t plugin,
+                                              void* user_data) {
+    auto& probe = *static_cast<adapter_probe*>(user_data);
+    ++probe.unload_calls;
+    plugin_context_t* context = nullptr;
+    const auto extensions = snapshot_extensions(
+        sao_plugins_registry_instance(), extension_kind::ui_panel);
+    probe.extension_removed_before_adapter_unload =
+        std::none_of(extensions.begin(), extensions.end(), [](const auto& item) {
+            return item.id == "rollback_panel";
+        });
+    return sao_plugins_lifecycle_get_context(plugin, &context) == SAO_OK &&
+                   context == probe.load_context
+               ? SAO_OK
+               : SAO_ERR_NOT_INITIALIZED;
+}
+
+host_adapter_vtable probe_adapter_vtable(adapter_probe* probe) {
+    host_adapter_vtable adapter{};
+    adapter.load_plugin = probe_adapter_load;
+    adapter.call_on_load = probe_adapter_on_load;
+    adapter.call_on_enable = probe_adapter_enable;
+    adapter.call_on_disable = probe_adapter_disable;
+    adapter.call_on_unload = probe_adapter_on_unload;
+    adapter.unload_plugin = probe_adapter_unload;
+    adapter.host_user_data = probe;
+    return adapter;
+}
 
 struct TempDirectory {
     fs::path path;
@@ -203,6 +380,29 @@ TEST_CASE("manifest parses and validates normalized fields", "[plugins][loader][
     REQUIRE(validate_manifest(manifest) == SAO_ERR_INVALID_ARGUMENT);
 }
 
+TEST_CASE("native-only manifest uses its native entry without a script entry",
+          "[plugins][loader][manifest][native]") {
+    const std::string text = R"({
+        "id":"native_only_manifest","enabled":true,
+        "native_entry":"native_fixture.dll","native_abi":"sao_plugin_v2",
+        "abi_version":2
+    })";
+    plugin_manifest manifest;
+    REQUIRE(sao_plugins_manifest_parse(text.data(), text.size(), &manifest) == SAO_OK);
+    REQUIRE(validate_manifest(manifest) == SAO_OK);
+    REQUIRE(manifest.entry == "native_fixture.dll");
+    REQUIRE(manifest.native_entry == "native_fixture.dll");
+    REQUIRE(manifest.language == engine_kind::csharp);
+
+    TempDirectory temp(L"native_only_manifest");
+    write_text(temp.path / L"plugin.json", text);
+    write_text(temp.path / L"native_fixture.dll", "fixture");
+    scanned_plugin scanned;
+    REQUIRE(sao_plugins_scanner_refresh_one(temp.path.c_str(), &scanned) == SAO_OK);
+    REQUIRE(scanned.manifest.entry == "native_fixture.dll");
+    REQUIRE(scanned.manifest.native_entry == "native_fixture.dll");
+}
+
 TEST_CASE("scanner discovers valid directories and computes a changing signature", "[plugins][loader][scanner]") {
     TempDirectory temp(L"scanner");
     const auto plugin_dir = temp.path / L"plugins" / L"one";
@@ -330,6 +530,197 @@ TEST_CASE("host adapter lifecycle executes symmetric transitions", "[plugins][lo
     g_adapter_fail_on_load = false;
 }
 
+TEST_CASE("script adapter sees canonical context during load and unregisters cleanly",
+          "[plugins][loader][lifecycle][context]") {
+    TempDirectory temp(L"adapter_context");
+    write_text(temp.path / L"plugin.lua", "entry");
+    auto manifest = make_manifest("adapter_context_case", temp.path);
+    manifest.entry = "plugin.lua";
+    manifest.language = engine_kind::lua;
+    auto handle = add_plugin(manifest);
+
+    plugin_context_t* context = reinterpret_cast<plugin_context_t*>(1);
+    REQUIRE(sao_plugins_lifecycle_get_context(handle, &context) ==
+            SAO_ERR_NOT_INITIALIZED);
+    REQUIRE(context == nullptr);
+
+    adapter_probe probe;
+    const auto adapter = probe_adapter_vtable(&probe);
+    REQUIRE(sao_plugins_lifecycle_register_host_adapter(
+            engine_kind::lua, &adapter) == SAO_OK);
+    REQUIRE(sao_plugins_lifecycle_load(handle) == SAO_OK);
+    REQUIRE(probe.context_visible_during_load);
+    REQUIRE(sao_plugins_lifecycle_get_context(handle, &context) == SAO_OK);
+    REQUIRE(context == probe.load_context);
+    REQUIRE(sao_plugins_lifecycle_unregister_host_adapter(engine_kind::lua) ==
+            SAO_PLUGINS_ERR_BUSY);
+
+    REQUIRE(sao_plugins_lifecycle_unload(handle) == SAO_OK);
+    REQUIRE(probe.unload_context == probe.load_context);
+    REQUIRE(probe.extension_visible_during_on_unload);
+    REQUIRE(probe.extension_removed_before_adapter_unload);
+    REQUIRE(sao_plugins_lifecycle_get_context(handle, &context) ==
+            SAO_ERR_NOT_INITIALIZED);
+    REQUIRE(context == nullptr);
+    REQUIRE(sao_plugins_lifecycle_unregister_host_adapter(engine_kind::lua) ==
+            SAO_OK);
+    remove_plugin(handle);
+}
+
+TEST_CASE("script load failure rolls back hooks resources and context in order",
+          "[plugins][loader][lifecycle][rollback]") {
+    TempDirectory temp(L"adapter_rollback");
+    write_text(temp.path / L"plugin.as", "entry");
+    auto manifest = make_manifest("adapter_rollback_focused", temp.path);
+    manifest.entry = "plugin.as";
+    manifest.language = engine_kind::angelscript;
+    auto handle = add_plugin(manifest);
+
+    adapter_probe probe;
+    probe.on_load_status = SAO_ERR_OS_CALL_FAILED;
+    const auto adapter = probe_adapter_vtable(&probe);
+    REQUIRE(sao_plugins_lifecycle_register_host_adapter(
+            engine_kind::angelscript, &adapter) == SAO_OK);
+    REQUIRE(sao_plugins_lifecycle_load(handle) == SAO_ERR_OS_CALL_FAILED);
+    REQUIRE(sao_plugins_lifecycle_state(handle) == lifecycle_state::failed);
+    REQUIRE(probe.load_calls == 1);
+    REQUIRE(probe.on_load_calls == 1);
+    REQUIRE(probe.on_unload_calls == 1);
+    REQUIRE(probe.unload_calls == 1);
+    REQUIRE(probe.load_context == probe.unload_context);
+    REQUIRE(probe.extension_visible_during_on_unload);
+    REQUIRE(probe.extension_removed_before_adapter_unload);
+
+    plugin_context_t* context = reinterpret_cast<plugin_context_t*>(1);
+    REQUIRE(sao_plugins_lifecycle_get_context(handle, &context) ==
+            SAO_ERR_NOT_INITIALIZED);
+    REQUIRE(context == nullptr);
+    REQUIRE(snapshot_extensions(sao_plugins_registry_instance(),
+                                extension_kind::ui_panel)
+                .empty());
+    REQUIRE(sao_plugins_lifecycle_unregister_host_adapter(
+            engine_kind::angelscript) == SAO_OK);
+    remove_plugin(handle);
+}
+
+    TEST_CASE("script load rollback veto remains resident until unload retry",
+          "[plugins][loader][lifecycle][rollback][resident-failed]") {
+        TempDirectory temp(L"adapter_rollback_veto");
+        write_text(temp.path / L"plugin.lua", "entry");
+        auto manifest = make_manifest("adapter_rollback_veto", temp.path);
+        manifest.entry = "plugin.lua";
+        manifest.language = engine_kind::lua;
+        auto handle = add_plugin(manifest);
+
+        adapter_probe probe;
+        probe.on_load_status = SAO_ERR_OS_CALL_FAILED;
+        probe.allow_unload = false;
+        const auto adapter = probe_adapter_vtable(&probe);
+        REQUIRE(sao_plugins_lifecycle_register_host_adapter(
+            engine_kind::lua, &adapter) == SAO_OK);
+
+        REQUIRE(sao_plugins_lifecycle_load(handle) == SAO_PLUGINS_ERR_BUSY);
+        REQUIRE(sao_plugins_lifecycle_state(handle) == lifecycle_state::failed);
+        REQUIRE(probe.on_unload_calls == 1);
+        REQUIRE(probe.unload_calls == 0);
+
+        plugin_context_t* context = nullptr;
+        REQUIRE(sao_plugins_lifecycle_get_context(handle, &context) == SAO_OK);
+        REQUIRE(context == probe.load_context);
+        REQUIRE(sao_plugins_registry_remove(sao_plugins_registry_instance(),
+                        handle) == SAO_PLUGINS_ERR_BUSY);
+        REQUIRE(sao_plugins_registry_find(sao_plugins_registry_instance(),
+                          manifest.plugin_id.c_str()) == handle);
+        REQUIRE(sao_plugins_lifecycle_unregister_host_adapter(
+            engine_kind::lua) == SAO_PLUGINS_ERR_BUSY);
+
+        probe.allow_unload = true;
+        REQUIRE(sao_plugins_lifecycle_unload(handle) == SAO_OK);
+        REQUIRE(sao_plugins_lifecycle_state(handle) == lifecycle_state::unloaded);
+        REQUIRE(probe.on_unload_calls == 2);
+        REQUIRE(probe.unload_calls == 1);
+        REQUIRE(probe.extension_visible_during_on_unload);
+        REQUIRE(probe.extension_removed_before_adapter_unload);
+        REQUIRE(sao_plugins_lifecycle_get_context(handle, &context) ==
+            SAO_ERR_NOT_INITIALIZED);
+        REQUIRE(context == nullptr);
+        REQUIRE(sao_plugins_lifecycle_unregister_host_adapter(
+            engine_kind::lua) == SAO_OK);
+        remove_plugin(handle);
+    }
+
+    TEST_CASE("native load rollback error remains resident until unload retry",
+          "[plugins][loader][lifecycle][rollback][resident-failed][native]") {
+        TempDirectory temp(L"native_rollback_error");
+        const fs::path fixture = SAO_TEST_NATIVE_PLUGIN_PATH;
+        REQUIRE(fs::is_regular_file(fixture));
+        const auto copied = temp.path / L"native_fixture.dll";
+        REQUIRE(CopyFileW(fixture.c_str(), copied.c_str(), FALSE) == TRUE);
+        write_text(temp.path / L"plugin.emma", "entry");
+
+        const auto control_module = LoadLibraryExW(
+        copied.c_str(), nullptr,
+        LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR | LOAD_LIBRARY_SEARCH_DEFAULT_DIRS);
+        REQUIRE(control_module != nullptr);
+        using set_lifecycle_statuses_fn = int32_t(SAO_PLUGINS_CALL*)(int32_t,
+                                     int32_t);
+        const auto set_lifecycle_statuses =
+        reinterpret_cast<set_lifecycle_statuses_fn>(GetProcAddress(
+            control_module, "sao_test_plugin_set_lifecycle_statuses"));
+        REQUIRE(set_lifecycle_statuses != nullptr);
+        REQUIRE(set_lifecycle_statuses(SAO_ERR_OS_CALL_FAILED,
+                       SAO_ERR_OS_CALL_FAILED) == SAO_OK);
+
+        auto manifest = make_manifest("native_rollback_error", temp.path);
+        manifest.native_entry = "native_fixture.dll";
+        manifest.native_abi = "sao_plugin_v2";
+        manifest.capabilities.push_back({"native_test"});
+        auto handle = add_plugin(manifest);
+
+        REQUIRE(sao_plugins_lifecycle_load(handle) == SAO_ERR_OS_CALL_FAILED);
+        REQUIRE(sao_plugins_lifecycle_state(handle) == lifecycle_state::failed);
+        plugin_context_t* context = nullptr;
+        REQUIRE(sao_plugins_lifecycle_get_context(handle, &context) == SAO_OK);
+        REQUIRE(context != nullptr);
+        REQUIRE(GetModuleHandleW(copied.c_str()) != nullptr);
+        REQUIRE(sao_plugins_registry_remove(sao_plugins_registry_instance(),
+                        handle) == SAO_PLUGINS_ERR_BUSY);
+        REQUIRE(sao_plugins_registry_find(sao_plugins_registry_instance(),
+                          manifest.plugin_id.c_str()) == handle);
+
+        REQUIRE(set_lifecycle_statuses(SAO_ERR_OS_CALL_FAILED, SAO_OK) == SAO_OK);
+        REQUIRE(FreeLibrary(control_module) == TRUE);
+        REQUIRE(sao_plugins_lifecycle_unload(handle) == SAO_OK);
+        REQUIRE(sao_plugins_lifecycle_state(handle) == lifecycle_state::unloaded);
+        REQUIRE(GetModuleHandleW(copied.c_str()) == nullptr);
+        REQUIRE(sao_plugins_lifecycle_get_context(handle, &context) ==
+            SAO_ERR_NOT_INITIALIZED);
+        REQUIRE(context == nullptr);
+        remove_plugin(handle);
+    }
+
+TEST_CASE("host adapter register and unregister reject duplicate operations",
+          "[plugins][loader][lifecycle][adapter-registry]") {
+    adapter_probe first_probe;
+    adapter_probe second_probe;
+    const auto first = probe_adapter_vtable(&first_probe);
+    const auto second = probe_adapter_vtable(&second_probe);
+
+    REQUIRE(sao_plugins_lifecycle_register_host_adapter(
+            engine_kind::csharp, &first) == SAO_OK);
+    REQUIRE(sao_plugins_lifecycle_register_host_adapter(
+            engine_kind::csharp, &second) ==
+            SAO_PLUGINS_ERR_ALREADY_EXISTS);
+    REQUIRE(sao_plugins_lifecycle_unregister_host_adapter(
+            engine_kind::csharp) == SAO_OK);
+    REQUIRE(sao_plugins_lifecycle_unregister_host_adapter(
+            engine_kind::csharp) == SAO_ERR_HANDLE_INVALID);
+    REQUIRE(sao_plugins_lifecycle_register_host_adapter(
+            engine_kind::csharp, &second) == SAO_OK);
+    REQUIRE(sao_plugins_lifecycle_unregister_host_adapter(
+            engine_kind::csharp) == SAO_OK);
+}
+
 TEST_CASE("native DLL lifecycle validates ABI and capabilities then frees the module", "[plugins][loader][native]") {
     TempDirectory temp(L"native");
     const fs::path fixture = SAO_TEST_NATIVE_PLUGIN_PATH;
@@ -347,8 +738,58 @@ TEST_CASE("native DLL lifecycle validates ABI and capabilities then frees the mo
     REQUIRE(sao_plugins_lifecycle_load(handle) == SAO_OK);
     REQUIRE(sao_plugins_lifecycle_state(handle) == lifecycle_state::loaded_active);
     REQUIRE(GetModuleHandleW(copied.c_str()) != nullptr);
+
+    entity_provider_catalog_snapshot providers;
+    REQUIRE(snapshot_entity_providers(providers) == SAO_OK);
+    const auto provider = std::find_if(
+        providers.providers.begin(), providers.providers.end(),
+        [](const auto& item) {
+            return item.provider_id == "native_case/fixture";
+        });
+    REQUIRE(provider != providers.providers.end());
+    REQUIRE(provider->generation > 0);
+    const uint64_t provider_generation = provider->generation;
+    REQUIRE(provider->revision == 7);
+    REQUIRE(provider->rows.size() == 1);
+    CHECK(provider->rows[0].category_id == "fixture-category");
+    CHECK(provider->rows[0].action_id == "fixture.action");
+    CHECK(provider->rows[0].payload_json == R"({"source":"fixture"})");
+    REQUIRE(sao_plugins_entity_provider_invoke(
+                "native_case/fixture", provider_generation,
+                "fixture.action", R"({"source":"fixture"})") == SAO_OK);
+
+    REQUIRE(sao_plugins_lifecycle_disable(handle) == SAO_OK);
+    providers = {};
+    REQUIRE(snapshot_entity_providers(providers) == SAO_OK);
+    CHECK(std::none_of(providers.providers.begin(), providers.providers.end(),
+                       [](const auto& item) {
+                           return item.provider_id == "native_case/fixture";
+                       }));
+    CHECK(sao_plugins_entity_provider_invoke(
+              "native_case/fixture", provider_generation,
+              "fixture.action", "{}") == SAO_PLUGINS_ERR_BUSY);
+    REQUIRE(sao_plugins_lifecycle_enable(handle) == SAO_OK);
+    providers = {};
+    REQUIRE(snapshot_entity_providers(providers) == SAO_OK);
+    const auto reenabled = std::find_if(
+        providers.providers.begin(), providers.providers.end(),
+        [](const auto& item) {
+            return item.provider_id == "native_case/fixture";
+        });
+    REQUIRE(reenabled != providers.providers.end());
+    CHECK(reenabled->generation == provider_generation);
+
     REQUIRE(sao_plugins_lifecycle_unload(handle) == SAO_OK);
     REQUIRE(GetModuleHandleW(copied.c_str()) == nullptr);
+    CHECK(sao_plugins_entity_provider_invoke(
+              "native_case/fixture", provider_generation,
+              "fixture.action", "{}") == SAO_ERR_HANDLE_INVALID);
+    providers = {};
+    REQUIRE(snapshot_entity_providers(providers) == SAO_OK);
+    CHECK(std::none_of(providers.providers.begin(), providers.providers.end(),
+                       [](const auto& item) {
+                           return item.provider_id == "native_case/fixture";
+                       }));
     remove_plugin(handle);
 
     manifest.plugin_id = "native_version_bad";

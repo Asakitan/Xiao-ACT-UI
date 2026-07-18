@@ -19,6 +19,7 @@
 #include "sao/sdk/sao_sdk_context.h"
 #include "sao/sdk/sao_sdk_ui.h"
 #include "sao/sdk/sao_sdk_event.h"
+#include "sao/sdk/sao_sdk_gpu_hunt.h"
 #include "sao/sdk/sao_sdk_mem.h"
 #include "sao/sdk/sao_sdk_net.h"
 #include "sao/sdk/sao_sdk_config.h"

@@ -18,6 +18,9 @@ set(_sao_launcher_test_sources
     test_single_instance.cpp
     test_working_dir.cpp
     test_init_pipeline_wave5.cpp
+    test_entity_action_routes_focused.cpp
+    test_settings_owner_focused.cpp
+    test_tool_launch_focused.cpp
 )
 # Wave 10 / Agent a — Phase 12 rollout tests join the same discovery scheme
 # so an operator building a slim launcher can drop them without CMake edits.
@@ -32,8 +35,18 @@ foreach (_maybe
 endforeach()
 add_executable(sao_launcher_tests ${_sao_launcher_test_sources})
 
+add_executable(sao_tool_launch_child_fixture
+    tool_launch_child_fixture.cpp)
+target_compile_features(sao_tool_launch_child_fixture PRIVATE cxx_std_20)
+target_link_libraries(sao_tool_launch_child_fixture PRIVATE user32)
+
 target_include_directories(sao_launcher_tests PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/../include
+    ${CMAKE_CURRENT_SOURCE_DIR}/../src
+    ${CMAKE_SOURCE_DIR}/platform/core/include
+    ${CMAKE_SOURCE_DIR}/platform/ui/include
+    ${CMAKE_SOURCE_DIR}/plugins/include
+    ${CMAKE_SOURCE_DIR}/plugins/loader/include
 )
 
 # We link the launcher's source files directly rather than the SaoAuto exe
@@ -56,6 +69,12 @@ target_sources(sao_launcher_tests PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/../src/provider_config.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/../src/launcher_lifecycle.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/../src/user_menu.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/../src/settings_codec.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/../src/settings_json_internal.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/../src/settings_owner.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/../src/tool_launch_internal.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/../src/tool_launch_package_internal.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/../src/entity_provider_publication_internal.cpp
 )
 
 target_compile_definitions(sao_launcher_tests PRIVATE
@@ -69,7 +88,14 @@ target_compile_definitions(sao_launcher_tests
     PRIVATE
         SAO_PYTHON_ROOT_HINT="${CMAKE_CURRENT_SOURCE_DIR}/../../../python"
         SAO_CPP_ROOT_HINT="${CMAKE_CURRENT_SOURCE_DIR}/../.."
+        SAO_TOOL_LAUNCH_CHILD_FIXTURE="$<TARGET_FILE:sao_tool_launch_child_fixture>"
 )
+add_dependencies(sao_launcher_tests sao_tool_launch_child_fixture)
+if (TARGET sao::plugin_ai_editor)
+    target_link_libraries(sao_launcher_tests PRIVATE sao::plugin_ai_editor)
+    target_compile_definitions(sao_launcher_tests PRIVATE
+        SAO_LAUNCHER_HAS_AI_EDITOR_ABI=1)
+endif()
 if (TARGET cutover_diff)
     target_compile_definitions(sao_launcher_tests
         PRIVATE
@@ -115,12 +141,14 @@ target_link_libraries(sao_launcher_tests
     PRIVATE
         Catch2::Catch2WithMain
         user32
+        dwmapi
         shell32
         advapi32
         shlwapi
         dbghelp
         version
         bcrypt          # HMAC-SHA-256 for rollout bucketing (Wave 10)
+        crypt32         # current-user DPAPI for secure settings envelopes
         nlohmann_json::nlohmann_json
 )
 if (TARGET sao::core)
@@ -143,5 +171,55 @@ endif()
 include(Catch)
 catch_discover_tests(sao_launcher_tests
     TEST_PREFIX "launcher."
-    PROPERTIES LABELS "launcher"
+    PROPERTIES
+        LABELS "launcher"
+        RESOURCE_LOCK "sao_launcher_process_resources"
 )
+
+if (TARGET sao_launcher_plugins_provider)
+    add_executable(sao_launcher_provider_tests
+        test_provider_config_focused.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/provider_config.cpp)
+    target_include_directories(sao_launcher_provider_tests PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/../include)
+    target_compile_features(sao_launcher_provider_tests PRIVATE cxx_std_20)
+    target_compile_definitions(sao_launcher_provider_tests PRIVATE
+        SAO_PLUGINS_BUILDING_DLL)
+    target_link_libraries(sao_launcher_provider_tests PRIVATE
+        Catch2::Catch2WithMain
+        nlohmann_json::nlohmann_json
+        sao_launcher_plugins_provider)
+    if (TARGET sao::plugins::python_host)
+        target_link_libraries(sao_launcher_provider_tests PRIVATE
+            sao::plugins::python_host)
+        target_compile_definitions(sao_launcher_provider_tests PRIVATE
+            SAO_LAUNCHER_PROVIDER_HAS_PYTHON=1)
+    endif()
+    if (TARGET sao::plugins::emma_host)
+        target_link_libraries(sao_launcher_provider_tests PRIVATE
+            sao::plugins::emma_host)
+        target_compile_definitions(sao_launcher_provider_tests PRIVATE
+            SAO_LAUNCHER_PROVIDER_HAS_EMMA=1)
+    endif()
+    if (TARGET sao::plugins::angel_host)
+        target_link_libraries(sao_launcher_provider_tests PRIVATE
+            sao::plugins::angel_host)
+        target_compile_definitions(sao_launcher_provider_tests PRIVATE
+            SAO_LAUNCHER_PROVIDER_HAS_ANGEL=1)
+    endif()
+    if (TARGET sao::plugins::lua_host)
+        target_link_libraries(sao_launcher_provider_tests PRIVATE
+            sao::plugins::lua_host)
+        target_compile_definitions(sao_launcher_provider_tests PRIVATE
+            SAO_LAUNCHER_PROVIDER_HAS_LUA=1)
+    endif()
+    if (TARGET sao::plugins::csharp_host)
+        target_link_libraries(sao_launcher_provider_tests PRIVATE
+            sao::plugins::csharp_host)
+        target_compile_definitions(sao_launcher_provider_tests PRIVATE
+            SAO_LAUNCHER_PROVIDER_HAS_CSHARP=1)
+    endif()
+    catch_discover_tests(sao_launcher_provider_tests
+        TEST_PREFIX "launcher.provider."
+        PROPERTIES LABELS "launcher;plugins;focused")
+endif()

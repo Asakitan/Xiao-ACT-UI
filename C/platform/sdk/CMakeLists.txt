@@ -11,11 +11,12 @@ add_library(sao_platform_sdk SHARED
     # wrappers in ``sao_sdk.h``) into the corresponding platform
     # module.  Nothing here imports plugins — plugins only see the SDK
     # umbrella header.
-    src/sdk_context.cpp     # sao_sdk_context_create/destroy + accessors
-    src/sdk_ui_wire.cpp     # panel register + widget CRUD + render hook + redraw
-    src/sdk_event_wire.cpp  # event bus subscribe/unsubscribe/publish (wave5)
-    src/sdk_hotkey_wire.cpp # input_router_deep hotkey register/unregister
-    src/sdk_provider.cpp    # provider implementation
+    src/sdk_context.cpp       # sao_sdk_context_create/destroy + accessors
+    src/sdk_ui_wire.cpp       # panel register + widget CRUD + render hook + redraw
+    src/sdk_event_wire.cpp    # event bus subscribe/unsubscribe/publish (wave5)
+    src/sdk_hotkey_wire.cpp   # input_router_deep hotkey register/unregister
+    src/sdk_gpu_hunt_wire.cpp # DX12 upload-heap tracker (view/proj + bones + W2S)
+    src/sdk_provider.cpp      # provider implementation
 )
 add_library(sao::sdk ALIAS sao_platform_sdk)
 
@@ -33,7 +34,7 @@ target_compile_features(sao_platform_sdk PUBLIC cxx_std_20)
 # The SDK dispatch DLL forwards into engine/core/ui but does NOT expose
 # their headers to plugins — plugins only see the SDK's public include.
 target_link_libraries(sao_platform_sdk
-    PRIVATE sao::core sao::engine sao::ui sao::net
+    PRIVATE sao::core sao::engine sao::ui sao::net sao::gpu_hunt
 )
 
 if (SAO_BUILD_TESTS)

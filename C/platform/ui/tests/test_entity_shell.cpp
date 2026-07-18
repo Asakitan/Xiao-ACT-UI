@@ -6,7 +6,9 @@
 #include <algorithm>
 #include <array>
 #include <cstdint>
+#include <limits>
 #include <stdexcept>
+#include <string>
 #include <thread>
 #include <vector>
 
@@ -22,9 +24,17 @@ namespace {
 constexpr uint32_t kMouseMove = 0x0200;
 constexpr uint32_t kLeftButtonDown = 0x0201;
 constexpr uint32_t kLeftButtonUp = 0x0202;
+constexpr uint32_t kMouseWheel = 0x020A;
 constexpr int32_t kMenuPad = 40;
 constexpr int32_t kMenuSlot = 70;
 constexpr int32_t kMenuSlotCenter = kMenuPad + kMenuSlot / 2;
+constexpr int32_t kChildRowX = 162;
+constexpr int32_t kChildRowY = 40;
+constexpr int32_t kChildRowHeight = 44;
+constexpr int32_t kChildRowStride = 47;
+constexpr int32_t kChildRowWidth = 240;
+constexpr int32_t kChildPhysicalCapacity = 8;
+constexpr int32_t kChildActionBase = 1000;
 
 struct ActionLog {
     uint32_t calls = 0;
@@ -36,6 +46,32 @@ struct ActionLog {
     bool throw_exception = false;
     uint64_t frame_count_when_called = 0;
 };
+
+struct ChildItemStorage {
+    std::vector<std::string> names;
+    std::vector<SaoUiMenuItem> items;
+};
+
+ChildItemStorage make_child_items(size_t count, int32_t action_base = kChildActionBase,
+                                  int32_t disabled_index = -1) {
+    ChildItemStorage storage;
+    storage.names.reserve(count);
+    storage.items.reserve(count);
+    for (size_t index = 0; index < count; ++index) {
+        const char marker = static_cast<char>('A' + index % 26U);
+        storage.names.push_back(std::string(1, marker) + " viewport row " +
+                                std::to_string(index));
+    }
+    for (size_t index = 0; index < count; ++index) {
+        SaoUiMenuItem item{};
+        item.name_utf8 = storage.names[index].c_str();
+        item.icon_utf8 = ">";
+        item.action_id = action_base + static_cast<int32_t>(index);
+        item.can_activate = static_cast<int32_t>(index) != disabled_index;
+        storage.items.push_back(item);
+    }
+    return storage;
+}
 
 sao_status_t SAO_UI_CALL record_action(SaoUiEntityAction action, void* user_data) {
     auto* log = static_cast<ActionLog*>(user_data);
@@ -92,6 +128,40 @@ sao_status_t send_left_click_status(sao_ui_entity_shell_handle_t shell, int32_t 
 
 void send_left_click(sao_ui_entity_shell_handle_t shell, int32_t screen_x, int32_t screen_y) {
     REQUIRE(send_left_click_status(shell, screen_x, screen_y) == SAO_STATUS_OK);
+}
+
+void set_entity_children(sao_ui_entity_shell_handle_t shell, const char* parent_name,
+                         const ChildItemStorage& storage) {
+    const SaoUiMenuItem* items = storage.items.empty() ? nullptr : storage.items.data();
+    REQUIRE(sao_ui_entity_shell_set_children(shell, parent_name, items, storage.items.size()) ==
+            SAO_STATUS_OK);
+}
+
+void select_root(sao_ui_entity_shell_handle_t shell, int32_t root_index) {
+    SaoUiEntityShellSnapshot state{};
+    REQUIRE(sao_ui_entity_shell_get_snapshot(shell, &state) == SAO_STATUS_OK);
+    if (!state.menu_visible)
+        REQUIRE(sao_ui_entity_shell_home(shell) == SAO_STATUS_OK);
+    const int32_t root_x = state.origin_x + state.menu_x + kMenuSlotCenter;
+    const int32_t root_y =
+        state.origin_y + state.menu_y + kMenuPad + root_index * kMenuSlot + kMenuSlot / 2;
+    send_left_click(shell, root_x, root_y);
+    REQUIRE(sao_ui_entity_shell_tick(shell, 1000) == SAO_STATUS_OK);
+    REQUIRE(sao_ui_entity_shell_tick(shell, 200) == SAO_STATUS_OK);
+}
+
+std::array<int32_t, 2> child_point(const SaoUiEntityShellSnapshot& state, int32_t slot,
+                                   int32_t local_x = kChildRowX + 18,
+                                   int32_t row_offset_y = kChildRowHeight / 2) {
+    return {state.origin_x + state.menu_x + local_x,
+            state.origin_y + state.menu_y + kChildRowY + slot * kChildRowStride +
+                row_offset_y};
+}
+
+void send_wheel(sao_ui_entity_shell_handle_t shell, const std::array<int32_t, 2>& point,
+                int32_t delta) {
+    REQUIRE(sao_ui_entity_shell_handle_mouse(shell, kMouseWheel, point[0], point[1], -1, delta) ==
+            SAO_STATUS_OK);
 }
 
 bool SAO_UI_CALL shell_hit_test(int32_t x, int32_t y, void* user_data) {
@@ -255,6 +325,343 @@ TEST_CASE("Entity shell records About callback failure in last_status",
     REQUIRE(sao_ui_entity_shell_take_offline(shell) == SAO_STATUS_OK);
     sao_ui_entity_shell_destroy(shell);
 }
+
+TEST_CASE("Entity shell dismisses menu before AI Editor action",
+          "[ui][entity_shell][input]") {
+    ActionLog actions;
+    const auto config = headless_config(&actions);
+    sao_ui_entity_shell_handle_t shell = nullptr;
+    REQUIRE(sao_ui_entity_shell_create(nullptr, &config, &shell) == SAO_STATUS_OK);
+    actions.shell = shell;
+    REQUIRE(sao_ui_entity_shell_bring_online(shell) == SAO_STATUS_OK);
+
+    SaoUiEntityShellSnapshot state{};
+    REQUIRE(sao_ui_entity_shell_get_snapshot(shell, &state) == SAO_STATUS_OK);
+    send_left_click(shell, state.origin_x + state.nervegear_x + 36,
+                    state.origin_y + state.nervegear_y + 36);
+    REQUIRE(sao_ui_entity_shell_get_snapshot(shell, &state) == SAO_STATUS_OK);
+    REQUIRE(state.menu_visible);
+
+    const int32_t tools_x = state.origin_x + state.menu_x + kMenuSlotCenter;
+    const int32_t tools_y = state.origin_y + state.menu_y + kMenuPad +
+                            kMenuSlot + kMenuSlot / 2;
+    send_left_click(shell, tools_x, tools_y);
+    REQUIRE(sao_ui_entity_shell_tick(shell, 600) == SAO_STATUS_OK);
+
+    const int32_t ai_editor_x = state.origin_x + state.menu_x + 180;
+    const int32_t ai_editor_y = state.origin_y + state.menu_y + kMenuPad + 22;
+    send_left_click(shell, ai_editor_x, ai_editor_y);
+    REQUIRE(sao_ui_entity_shell_get_snapshot(shell, &state) == SAO_STATUS_OK);
+    CHECK_FALSE(state.menu_visible);
+    CHECK(actions.calls == 1);
+    CHECK(actions.last == SAO_UI_ENTITY_ACTION_OPEN_AI_EDITOR);
+    CHECK(actions.snapshot_status == SAO_STATUS_OK);
+    CHECK_FALSE(actions.menu_visible_when_called);
+
+    REQUIRE(sao_ui_entity_shell_take_offline(shell) == SAO_STATUS_OK);
+    sao_ui_entity_shell_destroy(shell);
+}
+
+TEST_CASE("Entity child viewport derives eight physical rows from fixed geometry",
+          "[ui][entity_shell][viewport][geometry]") {
+    for (const size_t row_count : {0U, 8U, 9U, 16U}) {
+        DYNAMIC_SECTION(row_count << " logical rows") {
+            ActionLog actions;
+            const auto config = headless_config(&actions);
+            sao_ui_entity_shell_handle_t shell = nullptr;
+            REQUIRE(sao_ui_entity_shell_create(nullptr, &config, &shell) == SAO_STATUS_OK);
+            REQUIRE(sao_ui_entity_shell_bring_online(shell) == SAO_STATUS_OK);
+            const auto children = make_child_items(row_count);
+            set_entity_children(shell, "Control", children);
+            select_root(shell, 0);
+
+            SaoUiEntityShellSnapshot state{};
+            REQUIRE(sao_ui_entity_shell_get_snapshot(shell, &state) == SAO_STATUS_OK);
+            bool hit = false;
+            const auto slot0 = child_point(state, 0, kChildRowX, 0);
+            REQUIRE(sao_ui_entity_shell_hit_test(shell, slot0[0], slot0[1], &hit) == SAO_STATUS_OK);
+            CHECK(hit == (row_count > 0));
+
+            const auto right_edge = child_point(state, 0, kChildRowX + kChildRowWidth, 10);
+            REQUIRE(sao_ui_entity_shell_hit_test(shell, right_edge[0], right_edge[1], &hit) ==
+                    SAO_STATUS_OK);
+            CHECK_FALSE(hit);
+            const auto row_bottom = child_point(state, 0, kChildRowX + 10, kChildRowHeight);
+            REQUIRE(sao_ui_entity_shell_hit_test(shell, row_bottom[0], row_bottom[1], &hit) ==
+                    SAO_STATUS_OK);
+            CHECK_FALSE(hit);
+            const auto next_row = child_point(state, 1, kChildRowX + 10, 0);
+            REQUIRE(sao_ui_entity_shell_hit_test(shell, next_row[0], next_row[1], &hit) ==
+                    SAO_STATUS_OK);
+            CHECK(hit == (row_count > 1));
+
+            const auto physical_slot8 =
+                child_point(state, kChildPhysicalCapacity, kChildRowX + 10, 0);
+            REQUIRE(sao_ui_entity_shell_hit_test(shell, physical_slot8[0], physical_slot8[1],
+                                                 &hit) == SAO_STATUS_OK);
+            CHECK_FALSE(hit);
+            REQUIRE(sao_ui_entity_shell_hit_test(
+                        shell, std::numeric_limits<int32_t>::min(),
+                        std::numeric_limits<int32_t>::max(), &hit) == SAO_STATUS_OK);
+            CHECK_FALSE(hit);
+
+            REQUIRE(sao_ui_entity_shell_take_offline(shell) == SAO_STATUS_OK);
+            sao_ui_entity_shell_destroy(shell);
+        }
+    }
+}
+
+TEST_CASE("Entity child viewport wheel projects physical slots to logical rows",
+          "[ui][entity_shell][viewport][wheel][activation]") {
+    ActionLog actions;
+    const auto config = headless_config(&actions);
+    sao_ui_entity_shell_handle_t shell = nullptr;
+    REQUIRE(sao_ui_entity_shell_create(nullptr, &config, &shell) == SAO_STATUS_OK);
+    actions.shell = shell;
+    REQUIRE(sao_ui_entity_shell_bring_online(shell) == SAO_STATUS_OK);
+    const auto children = make_child_items(16);
+    set_entity_children(shell, "Control", children);
+    select_root(shell, 0);
+
+    SaoUiEntityShellSnapshot state{};
+    REQUIRE(sao_ui_entity_shell_get_snapshot(shell, &state) == SAO_STATUS_OK);
+    const auto slot0 = child_point(state, 0);
+    const auto slot7 = child_point(state, 7);
+    const auto top_pixels = snapshot_pixels(shell);
+    const uint64_t top_frame = state.frame_count;
+
+    send_wheel(shell, slot0, 120);
+    send_wheel(shell, slot0, 240);
+    send_wheel(shell, slot0, 0);
+    send_wheel(shell, slot0, 60);
+    const auto outside = child_point(state, 0, kChildRowX - 32);
+    send_wheel(shell, outside, -120);
+    REQUIRE(sao_ui_entity_shell_get_snapshot(shell, &state) == SAO_STATUS_OK);
+    CHECK(state.frame_count == top_frame);
+    CHECK(snapshot_pixels(shell) == top_pixels);
+
+    send_wheel(shell, slot0, -120);
+    REQUIRE(sao_ui_entity_shell_get_snapshot(shell, &state) == SAO_STATUS_OK);
+    CHECK(state.frame_count > top_frame);
+    CHECK(snapshot_pixels(shell) != top_pixels);
+    send_left_click(shell, slot0[0], slot0[1]);
+    CHECK(actions.calls == 1);
+    CHECK(static_cast<int32_t>(actions.last) == kChildActionBase + 1);
+
+    send_wheel(shell, slot0, -120 * 20);
+    send_left_click(shell, slot7[0], slot7[1]);
+    CHECK(actions.calls == 2);
+    CHECK(static_cast<int32_t>(actions.last) == kChildActionBase + 15);
+    REQUIRE(sao_ui_entity_shell_get_snapshot(shell, &state) == SAO_STATUS_OK);
+    const uint64_t bottom_frame = state.frame_count;
+    send_wheel(shell, slot0, -120);
+    REQUIRE(sao_ui_entity_shell_get_snapshot(shell, &state) == SAO_STATUS_OK);
+    CHECK(state.frame_count == bottom_frame);
+
+    send_wheel(shell, slot0, 120 * 20);
+    send_left_click(shell, slot0[0], slot0[1]);
+    CHECK(actions.calls == 3);
+    CHECK(static_cast<int32_t>(actions.last) == kChildActionBase);
+
+    REQUIRE(sao_ui_entity_shell_take_offline(shell) == SAO_STATUS_OK);
+    sao_ui_entity_shell_destroy(shell);
+}
+
+TEST_CASE("Entity child viewport ignores short menus and cancels stale pressed rows",
+          "[ui][entity_shell][viewport][wheel][pressed][disabled]") {
+    ActionLog actions;
+    const auto config = headless_config(&actions);
+    sao_ui_entity_shell_handle_t shell = nullptr;
+    REQUIRE(sao_ui_entity_shell_create(nullptr, &config, &shell) == SAO_STATUS_OK);
+    REQUIRE(sao_ui_entity_shell_bring_online(shell) == SAO_STATUS_OK);
+
+    const auto short_children = make_child_items(8);
+    set_entity_children(shell, "Control", short_children);
+    select_root(shell, 0);
+    SaoUiEntityShellSnapshot state{};
+    REQUIRE(sao_ui_entity_shell_get_snapshot(shell, &state) == SAO_STATUS_OK);
+    const auto slot0 = child_point(state, 0);
+    const uint64_t short_frame = state.frame_count;
+    send_wheel(shell, slot0, -120);
+    REQUIRE(sao_ui_entity_shell_get_snapshot(shell, &state) == SAO_STATUS_OK);
+    CHECK(state.frame_count == short_frame);
+
+    const auto long_children = make_child_items(16, kChildActionBase, 1);
+    set_entity_children(shell, "Control", long_children);
+    REQUIRE(sao_ui_entity_shell_tick(shell, 1000) == SAO_STATUS_OK);
+    REQUIRE(sao_ui_entity_shell_tick(shell, 200) == SAO_STATUS_OK);
+    REQUIRE(sao_ui_entity_shell_handle_mouse(shell, kMouseMove, slot0[0], slot0[1], -1, 0) ==
+            SAO_STATUS_OK);
+    REQUIRE(sao_ui_entity_shell_handle_mouse(shell, kLeftButtonDown, slot0[0], slot0[1], 0, 0) ==
+            SAO_STATUS_OK);
+    send_wheel(shell, slot0, -120);
+    REQUIRE(sao_ui_entity_shell_handle_mouse(shell, kLeftButtonUp, slot0[0], slot0[1], 0, 0) ==
+            SAO_STATUS_OK);
+    CHECK(actions.calls == 0);
+
+        send_wheel(shell, slot0, 120);
+    const auto about = std::array<int32_t, 2>{
+        state.origin_x + state.menu_x + kMenuSlotCenter,
+        state.origin_y + state.menu_y + kMenuPad + 4 * kMenuSlot + kMenuSlot / 2};
+    REQUIRE(sao_ui_entity_shell_handle_mouse(shell, kLeftButtonDown, about[0], about[1], 0, 0) ==
+            SAO_STATUS_OK);
+    send_wheel(shell, slot0, 120);
+    REQUIRE(sao_ui_entity_shell_handle_mouse(shell, kLeftButtonUp, about[0], about[1], 0, 0) ==
+            SAO_STATUS_OK);
+    CHECK(actions.calls == 0);
+    REQUIRE(sao_ui_entity_shell_get_snapshot(shell, &state) == SAO_STATUS_OK);
+    CHECK(state.menu_visible);
+
+    send_wheel(shell, slot0, -120);
+    send_left_click(shell, slot0[0], slot0[1]);
+    CHECK(actions.calls == 0);
+    const auto slot1 = child_point(state, 1);
+    send_left_click(shell, slot1[0], slot1[1]);
+    CHECK(actions.calls == 1);
+    CHECK(static_cast<int32_t>(actions.last) == kChildActionBase + 2);
+
+    REQUIRE(sao_ui_entity_shell_take_offline(shell) == SAO_STATUS_OK);
+    sao_ui_entity_shell_destroy(shell);
+}
+
+TEST_CASE("Entity child setter is owner-thread atomic and clamps refreshed viewport",
+          "[ui][entity_shell][viewport][setter]") {
+    CHECK(sao_ui_entity_shell_set_children(nullptr, "Control", nullptr, 0) ==
+          SAO_STATUS_ERR_HANDLE_INVALID);
+
+    ActionLog actions;
+    const auto config = headless_config(&actions);
+    sao_ui_entity_shell_handle_t shell = nullptr;
+    REQUIRE(sao_ui_entity_shell_create(nullptr, &config, &shell) == SAO_STATUS_OK);
+    REQUIRE(sao_ui_entity_shell_bring_online(shell) == SAO_STATUS_OK);
+    const auto original = make_child_items(16);
+    set_entity_children(shell, "Control", original);
+    select_root(shell, 0);
+
+    SaoUiEntityShellSnapshot state{};
+    REQUIRE(sao_ui_entity_shell_get_snapshot(shell, &state) == SAO_STATUS_OK);
+    const auto slot0 = child_point(state, 0);
+    const auto slot7 = child_point(state, 7);
+    send_wheel(shell, slot0, -120);
+    REQUIRE(sao_ui_entity_shell_set_children(shell, nullptr, original.items.data(),
+                                             original.items.size()) ==
+            SAO_STATUS_ERR_INVALID_ARGUMENT);
+    REQUIRE(sao_ui_entity_shell_set_children(shell, "Control", nullptr, 1) ==
+            SAO_STATUS_ERR_INVALID_ARGUMENT);
+    REQUIRE(sao_ui_entity_shell_set_children(shell, "Missing", original.items.data(),
+                                             original.items.size()) == SAO_STATUS_ERR_NOT_FOUND);
+
+    sao_status_t non_owner_status = SAO_STATUS_OK;
+    const auto* original_items = original.items.data();
+    const size_t original_item_count = original.items.size();
+    std::thread non_owner([&] {
+        non_owner_status =
+            sao_ui_entity_shell_set_children(shell, "Control", original_items, original_item_count);
+    });
+    non_owner.join();
+    CHECK(non_owner_status == SAO_STATUS_ERR_ACCESS_DENIED);
+    send_left_click(shell, slot0[0], slot0[1]);
+    CHECK(actions.calls == 1);
+    CHECK(static_cast<int32_t>(actions.last) == kChildActionBase + 1);
+
+    REQUIRE(sao_ui_entity_shell_get_snapshot(shell, &state) == SAO_STATUS_OK);
+    const uint64_t unchanged_frame = state.frame_count;
+    const auto unchanged_pixels = snapshot_pixels(shell);
+    set_entity_children(shell, "Control", original);
+    REQUIRE(sao_ui_entity_shell_get_snapshot(shell, &state) == SAO_STATUS_OK);
+    CHECK(state.frame_count == unchanged_frame);
+    CHECK(snapshot_pixels(shell) == unchanged_pixels);
+
+    send_wheel(shell, slot0, -120 * 20);
+    const int32_t replacement_base = 2000;
+    const auto replacement = make_child_items(9, replacement_base);
+    set_entity_children(shell, "Control", replacement);
+    REQUIRE(sao_ui_entity_shell_tick(shell, 1000) == SAO_STATUS_OK);
+    send_left_click(shell, slot0[0], slot0[1]);
+    CHECK(actions.calls == 2);
+    CHECK(static_cast<int32_t>(actions.last) == replacement_base + 1);
+    send_left_click(shell, slot7[0], slot7[1]);
+    CHECK(actions.calls == 3);
+    CHECK(static_cast<int32_t>(actions.last) == replacement_base + 8);
+
+    const auto tools = make_child_items(16, 3000);
+    set_entity_children(shell, "Tools", tools);
+    select_root(shell, 1);
+    send_left_click(shell, slot0[0], slot0[1]);
+    CHECK(actions.calls == 4);
+    CHECK(static_cast<int32_t>(actions.last) == 3000);
+
+    REQUIRE(sao_ui_entity_shell_take_offline(shell) == SAO_STATUS_OK);
+    sao_ui_entity_shell_destroy(shell);
+}
+
+    TEST_CASE("Entity shell NerveGear mode hides only the trigger",
+          "[ui][entity_shell][nervgear_mode]") {
+        CHECK(sao_ui_entity_shell_set_nervgear_mode(nullptr, false) ==
+          SAO_STATUS_ERR_HANDLE_INVALID);
+
+        ActionLog actions;
+        const auto config = headless_config(&actions);
+        sao_ui_entity_shell_handle_t shell = nullptr;
+        REQUIRE(sao_ui_entity_shell_create(nullptr, &config, &shell) == SAO_STATUS_OK);
+        REQUIRE(sao_ui_entity_shell_bring_online(shell) == SAO_STATUS_OK);
+
+        SaoUiEntityShellSnapshot state{};
+        REQUIRE(sao_ui_entity_shell_get_snapshot(shell, &state) == SAO_STATUS_OK);
+        const int32_t trigger_x = state.origin_x + state.nervegear_x + 36;
+        const int32_t trigger_y = state.origin_y + state.nervegear_y + 36;
+        bool hit = false;
+        REQUIRE(sao_ui_entity_shell_hit_test(shell, trigger_x, trigger_y, &hit) ==
+            SAO_STATUS_OK);
+        REQUIRE(hit);
+
+        REQUIRE(sao_ui_entity_shell_set_nervgear_mode(shell, false) == SAO_STATUS_OK);
+        REQUIRE(sao_ui_entity_shell_hit_test(shell, trigger_x, trigger_y, &hit) ==
+            SAO_STATUS_OK);
+        CHECK_FALSE(hit);
+        REQUIRE(sao_ui_entity_shell_get_snapshot(shell, &state) == SAO_STATUS_OK);
+        CHECK(state.online);
+        CHECK(state.overlay_visible);
+        CHECK_FALSE(state.menu_visible);
+
+        REQUIRE(sao_ui_entity_shell_home(shell) == SAO_STATUS_OK);
+        REQUIRE(sao_ui_entity_shell_get_snapshot(shell, &state) == SAO_STATUS_OK);
+        CHECK(state.menu_visible);
+
+        const int32_t control_x = state.origin_x + state.menu_x + kMenuSlotCenter;
+        const int32_t control_y = state.origin_y + state.menu_y + kMenuSlotCenter;
+        send_left_click(shell, control_x, control_y);
+        REQUIRE(sao_ui_entity_shell_tick(shell, 600) == SAO_STATUS_OK);
+        const auto control_off = snapshot_pixels(shell);
+
+        REQUIRE(sao_ui_entity_shell_set_nervgear_mode(shell, true) == SAO_STATUS_OK);
+        REQUIRE(sao_ui_entity_shell_tick(shell, 600) == SAO_STATUS_OK);
+        const auto control_on = snapshot_pixels(shell);
+        CHECK(control_on != control_off);
+        REQUIRE(sao_ui_entity_shell_get_snapshot(shell, &state) == SAO_STATUS_OK);
+        CHECK(state.menu_visible);
+        REQUIRE(sao_ui_entity_shell_hit_test(shell, trigger_x, trigger_y, &hit) ==
+            SAO_STATUS_OK);
+        CHECK(hit);
+
+        REQUIRE(sao_ui_entity_shell_set_nervgear_mode(shell, false) == SAO_STATUS_OK);
+        REQUIRE(sao_ui_entity_shell_get_snapshot(shell, &state) == SAO_STATUS_OK);
+        const uint64_t settled_frame_count = state.frame_count;
+        REQUIRE(sao_ui_entity_shell_set_nervgear_mode(shell, false) == SAO_STATUS_OK);
+        REQUIRE(sao_ui_entity_shell_get_snapshot(shell, &state) == SAO_STATUS_OK);
+        CHECK(state.frame_count == settled_frame_count);
+        CHECK(state.menu_visible);
+
+        sao_status_t non_owner_status = SAO_STATUS_OK;
+        std::thread non_owner([&] {
+        non_owner_status = sao_ui_entity_shell_set_nervgear_mode(shell, true);
+        });
+        non_owner.join();
+        CHECK(non_owner_status == SAO_STATUS_ERR_ACCESS_DENIED);
+
+        REQUIRE(sao_ui_entity_shell_take_offline(shell) == SAO_STATUS_OK);
+        sao_ui_entity_shell_destroy(shell);
+    }
 
 TEST_CASE("Entity shell non-owner destroy detaches without releasing",
           "[ui][entity_shell][lifecycle]") {

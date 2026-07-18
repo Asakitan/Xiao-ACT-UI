@@ -113,9 +113,15 @@ sao_plugins_registry_remove(registry_handle_t reg, plugin_handle_t handle) {
         const auto retained = iterator->second;
         {
             std::lock_guard plugin_lock(retained->mutex);
+            const bool failed_without_runtime =
+                retained->state == lifecycle_state::failed &&
+                retained->context == nullptr &&
+                retained->native_module == nullptr;
             if (retained->state != lifecycle_state::discovered &&
                 retained->state != lifecycle_state::unloaded &&
-                retained->state != lifecycle_state::failed) return SAO_PLUGINS_ERR_BUSY;
+                !failed_without_runtime) {
+                return SAO_PLUGINS_ERR_BUSY;
+            }
         }
         const auto plugin_id = iterator->first;
         reg->extensions.erase(

@@ -19,6 +19,7 @@
 //        - host_impl 调 sao_plugins_ctx_log(ctx_ptr, "hi")
 #pragma once
 
+#include <cstddef>
 #include <cstdint>
 
 #include "sao_plugins/abi.h"
@@ -29,6 +30,8 @@ namespace sao::plugins::emma_host {
 class interpreter;
 
 typedef struct emma_plugin_s* emma_plugin_handle_t;
+using emma_interpreter_callback_t =
+    int32_t(SAO_PLUGINS_CALL*)(interpreter* interp, void* user_data);
 
 // 加载 .emma 脚本 (lex + parse + execute 顶层, 拿到 on_* 定义)。
 // 内部:
@@ -61,7 +64,7 @@ extern "C" SAO_PLUGINS_API int32_t SAO_PLUGINS_CALL
 sao_plugins_emma_call_on_unload(emma_plugin_handle_t plugin,
                                 bool* out_allow_unload);
 
-// 通用 hook: args_json 是 hook 参数的 json 数组; 对 on_load 就是 [ctx_wrapper_id]。
+// 通用 hook: args_json 是 hook 参数的 JSON 数组，结果是 malloc 分配的 JSON。
 extern "C" SAO_PLUGINS_API int32_t SAO_PLUGINS_CALL
 sao_plugins_emma_call_hook(emma_plugin_handle_t plugin,
                            const char* hook_name,
@@ -72,12 +75,18 @@ sao_plugins_emma_call_hook(emma_plugin_handle_t plugin,
 extern "C" SAO_PLUGINS_API bool SAO_PLUGINS_CALL
 sao_plugins_emma_has_hook(emma_plugin_handle_t plugin, const char* hook_name);
 
-// 拿底层 interpreter (给 sdk_binding 用)。
-extern "C" SAO_PLUGINS_API interpreter* SAO_PLUGINS_CALL
-sao_plugins_emma_get_interpreter(emma_plugin_handle_t plugin);
+// 在 direct operation lease 与调用锁内同步访问底层 interpreter。
+// interp 只在 callback 返回前有效；callback 不得保留指针或重入同一 plugin。
+extern "C" SAO_PLUGINS_API int32_t SAO_PLUGINS_CALL
+sao_plugins_emma_with_interpreter(emma_plugin_handle_t plugin,
+                                  emma_interpreter_callback_t callback,
+                                  void* user_data);
 
-// 卸载 (interpreter 析构, 释放 AST 池)。
+// 进入 closing 并阻止新调用；有活动 operation 时返回 BUSY，重试完成销毁。
 extern "C" SAO_PLUGINS_API int32_t SAO_PLUGINS_CALL
 sao_plugins_emma_unload_script(emma_plugin_handle_t plugin);
+
+extern "C" SAO_PLUGINS_API void SAO_PLUGINS_CALL
+sao_plugins_emma_free_string(char* value);
 
 } // namespace sao::plugins::emma_host

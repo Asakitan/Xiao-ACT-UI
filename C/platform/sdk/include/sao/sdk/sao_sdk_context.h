@@ -27,6 +27,11 @@ typedef struct sao_sdk_ui_overlay_s*  sao_sdk_ui_overlay_t;
 typedef struct sao_sdk_ui_widget_s*   sao_sdk_ui_widget_t;
 typedef struct sao_sdk_config_scope_s* sao_sdk_config_scope_t;
 
+// GPU tracker handle — opaque 64-bit token issued by the SDK's per-context
+// registry.  Never a raw pointer, so a plugin holding a stale handle after
+// destroy_tracker gets SAO_SDK_ERR_INVALID_ARGUMENT rather than a UAF.
+typedef uint64_t sao_sdk_gpu_tracker_t;
+
 typedef int32_t sao_sdk_status_t;
 
 typedef uint64_t sao_sdk_subscription_t;
@@ -362,6 +367,75 @@ struct SaoSdkBannerTable {
         uint32_t argb_color);
 };
 
+// GPU hunt capability — DX12 upload-heap view/projection matrix and
+// skeleton bone locator.  Plugins never speak rt_io directly; the
+// tracker owns a provider session obtained from the context's retained
+// SaoSdkProviderVTable.  Until the host supplies every GPU I/O slot,
+// `create_tracker` fails closed with SAO_SDK_ERR_UNSUPPORTED.
+//
+// Vec3 / Mat4 are exposed as flat arrays through the SDK ABI so plugins
+// in any language just deal with float[3] / float[16].  Mat4 is column-
+// major (matches HLSL default; gpu_hunt uses the same convention).
+struct SaoSdkGpuHuntTable {
+    // Create a detached tracker.  Returns 0 handle on failure.  Call
+    // attach_tracker before tick; tick on a detached tracker returns
+    // SAO_SDK_ERR_NOT_INITIALIZED rather than reporting false progress.
+    sao_sdk_status_t (SAO_SDK_CALL* create_tracker)(
+        void* ctx_impl, sao_sdk_gpu_tracker_t* out_tracker);
+
+    sao_sdk_status_t (SAO_SDK_CALL* destroy_tracker)(
+        void* ctx_impl, sao_sdk_gpu_tracker_t tracker);
+
+    // Drive one iteration.  Non-blocking.  Steady-state cost after
+    // lock is a single 64-byte read via rt_io.
+    sao_sdk_status_t (SAO_SDK_CALL* tick)(
+        void* ctx_impl, sao_sdk_gpu_tracker_t tracker);
+
+    // Fetch the locked view*projection matrix (16 floats, column-major).
+    // `*out_locked` is set to 1 if the tracker has a lock, 0 otherwise;
+    // if locked=0 the matrix contents are undefined.
+    sao_sdk_status_t (SAO_SDK_CALL* get_view_proj)(
+        void* ctx_impl, sao_sdk_gpu_tracker_t tracker,
+        float out_matrix[16], uint8_t* out_locked);
+
+    // Fetch the approximate camera world position (3 floats).  Only
+    // meaningful when the tracker has a matrix lock.
+    sao_sdk_status_t (SAO_SDK_CALL* get_camera_pos)(
+        void* ctx_impl, sao_sdk_gpu_tracker_t tracker,
+        float out_pos[3]);
+
+    // Copy up to `max_bones` bone positions (xyz triplets) into
+    // `out_positions_xyz`.  `*out_bone_count` reports how many were
+    // written.  If `out_positions_xyz` is NULL, only the count is set.
+    sao_sdk_status_t (SAO_SDK_CALL* get_skeleton_positions)(
+        void* ctx_impl, sao_sdk_gpu_tracker_t tracker,
+        float* out_positions_xyz, size_t max_bones,
+        size_t* out_bone_count);
+
+    // Project a single world position to screen using the tracker's
+    // locked matrix.  `*out_visible = 1` if the point is on-screen,
+    // 0 otherwise (behind camera or outside frustum with 5% margin).
+    sao_sdk_status_t (SAO_SDK_CALL* world_to_screen)(
+        void* ctx_impl, sao_sdk_gpu_tracker_t tracker,
+        const float world_pos[3],
+        int32_t viewport_w, int32_t viewport_h,
+        float* out_screen_x, float* out_screen_y,
+        uint8_t* out_visible);
+
+    // Explicit invalidation — call when the plugin knows the target
+    // switched maps or restarted.  Safe to call at any time.
+    sao_sdk_status_t (SAO_SDK_CALL* invalidate)(
+        void* ctx_impl, sao_sdk_gpu_tracker_t tracker);
+
+    // Append-only ABI 1.4 extension.  The host provider performs the
+    // process attach inside the retained per-tracker I/O session.
+    sao_sdk_status_t (SAO_SDK_CALL* attach_tracker)(
+        void* ctx_impl, sao_sdk_gpu_tracker_t tracker, uint32_t pid);
+
+    sao_sdk_status_t (SAO_SDK_CALL* detach_tracker)(
+        void* ctx_impl, sao_sdk_gpu_tracker_t tracker);
+};
+
 // The main context struct.  ctx_impl is an opaque pointer to the
 // platform's per-plugin state; every function pointer takes it as
 // the first argument.
@@ -381,6 +455,7 @@ struct SaoSdkContext {
     const struct SaoSdkHotkeyTable*  hotkey;
     const struct SaoSdkTtsTable*     tts;
     const struct SaoSdkBannerTable*  banner;
+    const struct SaoSdkGpuHuntTable* gpu_hunt;
     // TODO(phase-6): scripting table for plugins that host scripts of
     // their own (e.g. the workshop plugin's LuaJit sandbox).
 };

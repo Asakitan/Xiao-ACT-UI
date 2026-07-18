@@ -81,6 +81,8 @@ struct plugin_manifest {
     std::string version;     // 语义化版本
     std::string description; // 简介
     std::string entry;       // 入口文件相对路径 (plugin.py / plugin.lua / ...)
+    std::string managed_type; // C# component type: Namespace.Type, Assembly
+    std::string runtimeconfig; // 可选 .runtimeconfig.json 相对路径
     engine_kind language = engine_kind::unknown;
     bool enabled = false;    // manifest 默认启用状态
 
