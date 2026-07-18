@@ -14,6 +14,7 @@
 #include "native_tool_registry.h"
 #include "sao/ai_editor/mcp_client.h"
 #include "winhttp_chat.h"
+#include "workflow_engine.h"
 
 namespace sao::ai_editor::native {
 
@@ -26,8 +27,11 @@ struct RuntimeOptions final {
     uint32_t maximum_search_results = kDefaultSearchResults;
 };
 
+class WorkflowExecution;
+
 class NativeRuntime final {
 public:
+    friend class WorkflowExecution;
     explicit NativeRuntime(RuntimeOptions options);
     ~NativeRuntime();
 
@@ -58,6 +62,11 @@ private:
     int32_t dispatch_mcp(std::string_view method,
                          const Json& params,
                          Json& result);
+    int32_t dispatch_workflow(std::string_view method,
+                              const Json& params,
+                              Json& result);
+    int32_t run_chat_sync(const Json& params, uint32_t timeout_ms,
+                          std::string& out_content);
     void execute_chat(const std::shared_ptr<RunState>& run,
                       HttpChatRequest request,
                       std::string conversation_id);
@@ -84,6 +93,10 @@ private:
     NativeToolRegistry tools_;
     std::unique_ptr<SecretStore> secrets_;
     std::unique_ptr<SaoAiEditorMcpClient, McpClientDeleter> mcp_client_;
+    WorkflowRegistry workflow_registry_;
+    mutable std::mutex workflow_mutex_;
+    std::unordered_map<std::string, std::shared_ptr<WorkflowExecution>>
+        workflow_executions_;
     uint32_t maximum_event_queue_;
 
     mutable std::mutex store_mutex_;

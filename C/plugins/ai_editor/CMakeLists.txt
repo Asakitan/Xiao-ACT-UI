@@ -23,6 +23,7 @@ add_library(sao_plugin_ai_editor SHARED
     src/openai_codec.cpp
     src/scope_store.cpp
     src/winhttp_chat.cpp
+    src/workflow_engine.cpp
 )
 add_library(sao::plugin_ai_editor ALIAS sao_plugin_ai_editor)
 

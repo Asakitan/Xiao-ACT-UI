@@ -807,6 +807,132 @@ TEST_CASE("AI Editor MCP client spawns SaoAiEditor as MCP server, "
     sao_ai_editor_mcp_client_destroy(client);
 }
 
+TEST_CASE("AI Editor workflows.list_defs surfaces built-in workflows",
+          "[plugins][ai_editor][native][workflows]") {
+    RuntimeFixture fixture;
+    const Json defs = dispatch(fixture.get(), "workflows.list_defs");
+    REQUIRE(defs.contains("result"));
+    REQUIRE(defs["result"]["total"] >= 3);
+    std::vector<std::string> ids;
+    for (const auto& item : defs["result"]["items"]) {
+        ids.push_back(item.value("id", ""));
+    }
+    REQUIRE(std::find(ids.begin(), ids.end(), "review-and-fix") != ids.end());
+    REQUIRE(std::find(ids.begin(), ids.end(), "explain-and-improve") !=
+            ids.end());
+    REQUIRE(std::find(ids.begin(), ids.end(), "debug-trace") != ids.end());
+}
+
+TEST_CASE("AI Editor workflows.run walks steps sequentially and captures "
+          "output variables",
+          "[plugins][ai_editor][native][workflows][integration]") {
+    const std::string body =
+        R"({"choices":[{"message":{"role":"assistant","content":"review-content"}}]})";
+    LocalHttpServer server(
+        "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n"
+        "Content-Length: " +
+        std::to_string(body.size()) +
+        "\r\nConnection: close\r\n\r\n" + body);
+    RuntimeFixture fixture;
+    const Json run = dispatch(
+        fixture.get(), "workflows.run",
+        {{"id", "review-and-fix"},
+         {"provider", {{"id", "workflow-fixture"},
+                       {"endpoint", server.endpoint()}}},
+         {"model", "fixture-model"},
+         {"input", "some code"},
+         {"timeoutMs", 5000}});
+    INFO("workflows.run response: " << run.dump());
+    REQUIRE(run.contains("result"));
+    const std::string execution_id = run["result"]["executionId"];
+
+    Json status;
+    const ULONGLONG started = GetTickCount64();
+    do {
+        status = dispatch(fixture.get(), "workflows.status",
+                          {{"executionId", execution_id}})["result"];
+        if (status["status"] != "running" &&
+            status["status"] != "pending") {
+            break;
+        }
+        Sleep(20);
+    } while (GetTickCount64() - started < 15'000);
+    REQUIRE(status["status"] == "completed");
+    REQUIRE(status["variables"]["input"] == "some code");
+    REQUIRE(status["variables"]["review"] == "review-content");
+    REQUIRE(status["variables"]["fix"] == "review-content");
+    REQUIRE(status["stepResults"].size() == 2);
+}
+
+TEST_CASE("AI Editor workflows.cancel terminates in-flight run",
+          "[plugins][ai_editor][native][workflows][integration]") {
+    LocalHttpServer server;  // never responds; workflow blocks in HTTP
+    RuntimeFixture fixture;
+    const Json run = dispatch(
+        fixture.get(), "workflows.run",
+        {{"id", "debug-trace"},
+         {"provider", {{"id", "cancel-fixture"},
+                       {"endpoint", server.endpoint()}}},
+         {"model", "fixture-model"},
+         {"input", "bug"},
+         {"timeoutMs", 2000}});
+    REQUIRE(run.contains("result"));
+    const std::string execution_id = run["result"]["executionId"];
+    REQUIRE(server.wait_for_connections(1, 2'000));
+    REQUIRE(dispatch(fixture.get(), "workflows.cancel",
+                     {{"executionId", execution_id}})
+                .contains("result"));
+
+    Json status;
+    const ULONGLONG started = GetTickCount64();
+    do {
+        status = dispatch(fixture.get(), "workflows.status",
+                          {{"executionId", execution_id}})["result"];
+        if (status["status"] != "running" && status["status"] != "pending") {
+            break;
+        }
+        Sleep(20);
+    } while (GetTickCount64() - started < 5'000);
+    // Cancelled during network wait -> chat times out -> failed OR cancelled
+    // depending on when the cancel arrived.
+    const std::string terminal = status["status"];
+    REQUIRE((terminal == "cancelled" || terminal == "failed"));
+}
+
+TEST_CASE("AI Editor workflows.save_def / delete_def round-trips a "
+          "user-defined workflow",
+          "[plugins][ai_editor][native][workflows]") {
+    RuntimeFixture fixture;
+    const Json workflow_json{
+        {"id", "custom-review"},
+        {"name", "Custom Review"},
+        {"description", "Test workflow"},
+        {"steps",
+         Json::array({Json{{"agent", "default"},
+                             {"prompt", "Review {{input}}"},
+                             {"output_var", "verdict"}}})}};
+    REQUIRE(dispatch(fixture.get(), "workflows.save_def",
+                     {{"scope", "workspace"},
+                      {"workflow", workflow_json}})
+                .contains("result"));
+    const Json listed = dispatch(fixture.get(), "workflows.list_defs")
+                            ["result"];
+    bool found = false;
+    for (const auto& item : listed["items"]) {
+        if (item.value("id", "") == "custom-review") {
+            found = true;
+            REQUIRE(item["builtin"] == false);
+        }
+    }
+    REQUIRE(found);
+    REQUIRE(dispatch(fixture.get(), "workflows.delete_def",
+                     {{"id", "custom-review"}})
+                .contains("result"));
+    REQUIRE(dispatch(fixture.get(), "workflows.delete_def",
+                     {{"id", "review-and-fix"}})["error"]["data"]["status"]
+                        == SAO_AI_EDITOR_ERR_PERMISSION_DENIED);
+}
+
 TEST_CASE("AI Editor mcp.* JSON-RPC surface aggregates and forwards", "[plugins]"
           "[ai_editor][native][mcp][dispatch][integration]") {
     RuntimeFixture fixture;

@@ -489,6 +489,275 @@ int32_t NativeRuntime::invoke(std::string_view method,
     if (method.starts_with("mcp.")) {
         return dispatch_mcp(method, params, result);
     }
+    if (method.starts_with("workflows.")) {
+        return dispatch_workflow(method, params, result);
+    }
+    return SAO_AI_EDITOR_ERR_NOT_FOUND;
+}
+
+int32_t NativeRuntime::run_chat_sync(const Json& params, uint32_t timeout_ms,
+                                     std::string& out_content) {
+    Json provider;
+    std::string api_key;
+    int32_t status = resolve_provider(params, provider, api_key);
+    if (status != SAO_AI_EDITOR_OK) {
+        return status;
+    }
+    const std::string endpoint = provider.value("endpoint", std::string{});
+    const std::string model =
+        params.value("model", provider.value("model", std::string{}));
+    if (endpoint.empty() || model.empty()) {
+        return SAO_AI_EDITOR_ERR_INVALID_ARGUMENT;
+    }
+    Json messages = params.value("messages", Json::array());
+    if (!messages.is_array() || messages.empty()) {
+        return SAO_AI_EDITOR_ERR_INVALID_ARGUMENT;
+    }
+    const bool stream = params.value("stream", false);
+    Json body{{"model", model},
+              {"messages", std::move(messages)},
+              {"stream", stream}};
+    for (const std::string_view field : {"temperature", "max_tokens", "tools",
+                                          "tool_choice", "response_format"}) {
+        if (params.contains(field)) {
+            body[std::string(field)] = params[field];
+        }
+    }
+    HttpChatRequest request{endpoint, api_key, body.dump(), timeout_ms, stream};
+    ChatCancellation cancellation;
+    std::string streamed;
+    Json transport_result;
+    const int32_t chat_status = perform_openai_chat(
+        request, cancellation,
+        [&](const Json& event) {
+            if (event.value("type", "") == "delta" &&
+                event.contains("content") && event["content"].is_string()) {
+                streamed += event["content"].get<std::string>();
+            }
+        },
+        transport_result);
+    if (chat_status != SAO_AI_EDITOR_OK) {
+        return chat_status;
+    }
+    out_content = streamed.empty()
+        ? transport_result.value("content", std::string{})
+        : std::move(streamed);
+    return SAO_AI_EDITOR_OK;
+}
+
+int32_t NativeRuntime::dispatch_workflow(std::string_view method,
+                                          const Json& params, Json& result) {
+    if (method == "workflows.reload") {
+        std::lock_guard<std::mutex> guard(store_mutex_);
+        workflow_registry_.reload(scopes_);
+        result = Json{{"ok", true}};
+        return SAO_AI_EDITOR_OK;
+    }
+    if (method == "workflows.list_defs") {
+        {
+            std::lock_guard<std::mutex> guard(store_mutex_);
+            workflow_registry_.reload(scopes_);
+        }
+        Json items = Json::array();
+        for (const auto& definition : workflow_registry_.list()) {
+            items.push_back(definition.to_json());
+        }
+        result = Json{{"items", std::move(items)}};
+        result["total"] = result["items"].size();
+        return SAO_AI_EDITOR_OK;
+    }
+    if (method == "workflows.get_def") {
+        if (!params.contains("id") || !params["id"].is_string()) {
+            return SAO_AI_EDITOR_ERR_INVALID_ARGUMENT;
+        }
+        {
+            std::lock_guard<std::mutex> guard(store_mutex_);
+            workflow_registry_.reload(scopes_);
+        }
+        WorkflowDefinition definition;
+        if (!workflow_registry_.get(params["id"].get<std::string>(),
+                                    definition)) {
+            return SAO_AI_EDITOR_ERR_NOT_FOUND;
+        }
+        result = definition.to_json();
+        return SAO_AI_EDITOR_OK;
+    }
+    if (method == "workflows.save_def") {
+        if (!params.contains("workflow") || !params["workflow"].is_object() ||
+            !params.contains("scope") || !params["scope"].is_string()) {
+            return SAO_AI_EDITOR_ERR_INVALID_ARGUMENT;
+        }
+        WorkflowDefinition definition =
+            WorkflowDefinition::from_json(params["workflow"]);
+        const std::string scope_key = params["scope"].get<std::string>();
+        std::string scope;
+        std::string plugin_id;
+        if (scope_key == "system" || scope_key == "workspace") {
+            scope = scope_key;
+        } else if (scope_key.rfind("plugin:", 0) == 0) {
+            scope = "plugin";
+            plugin_id = scope_key.substr(7);
+            if (!valid_simple_id(plugin_id)) {
+                return SAO_AI_EDITOR_ERR_INVALID_ARGUMENT;
+            }
+        } else {
+            return SAO_AI_EDITOR_ERR_INVALID_ARGUMENT;
+        }
+        std::lock_guard<std::mutex> guard(store_mutex_);
+        const int32_t status = workflow_registry_.save(definition, scopes_,
+                                                        scope, plugin_id);
+        if (status != SAO_AI_EDITOR_OK) {
+            return status;
+        }
+        result = definition.to_json();
+        result["scope"] = scope_key;
+        return SAO_AI_EDITOR_OK;
+    }
+    if (method == "workflows.delete_def") {
+        if (!params.contains("id") || !params["id"].is_string()) {
+            return SAO_AI_EDITOR_ERR_INVALID_ARGUMENT;
+        }
+        std::lock_guard<std::mutex> guard(store_mutex_);
+        const int32_t status = workflow_registry_.remove(
+            params["id"].get<std::string>(), scopes_,
+            params.value("scope", "workspace"), std::string{});
+        if (status != SAO_AI_EDITOR_OK) {
+            return status;
+        }
+        result = Json{{"ok", true}, {"id", params["id"]}};
+        return SAO_AI_EDITOR_OK;
+    }
+    if (method == "workflows.run") {
+        if (!params.contains("id") || !params["id"].is_string()) {
+            return SAO_AI_EDITOR_ERR_INVALID_ARGUMENT;
+        }
+        {
+            std::lock_guard<std::mutex> guard(store_mutex_);
+            workflow_registry_.reload(scopes_);
+        }
+        WorkflowDefinition definition;
+        if (!workflow_registry_.get(params["id"].get<std::string>(),
+                                    definition)) {
+            return SAO_AI_EDITOR_ERR_NOT_FOUND;
+        }
+        Json provider;
+        std::string api_key;
+        int32_t status = resolve_provider(params, provider, api_key);
+        if (status != SAO_AI_EDITOR_OK) {
+            return status;
+        }
+        if (!api_key.empty()) {
+            provider["apiKey"] = api_key;
+        }
+        const std::string model =
+            params.value("model", provider.value("model", std::string{}));
+        if (model.empty() || provider.value("endpoint", "").empty()) {
+            return SAO_AI_EDITOR_ERR_INVALID_ARGUMENT;
+        }
+        const uint32_t chat_timeout = params.value("timeoutMs", 60'000U);
+        Json input = params.contains("input") ? params["input"]
+                                              : params.value("inputs",
+                                                              Json::object());
+        static std::atomic<uint64_t> execution_counter{0};
+        auto execution = std::make_shared<WorkflowExecution>(
+            "wf-" + std::to_string(GetTickCount64()) + "-" +
+                std::to_string(execution_counter.fetch_add(
+                    1, std::memory_order_relaxed)),
+            std::move(definition), std::move(input));
+        {
+            std::lock_guard<std::mutex> guard(workflow_mutex_);
+            workflow_executions_[execution->id()] = execution;
+        }
+        execution->start(*this, std::move(provider), model, chat_timeout);
+        result = Json{{"executionId", execution->id()},
+                      {"status", "running"}};
+        return SAO_AI_EDITOR_OK;
+    }
+    if (method == "workflows.status") {
+        if (!params.contains("executionId") ||
+            !params["executionId"].is_string()) {
+            return SAO_AI_EDITOR_ERR_INVALID_ARGUMENT;
+        }
+        std::shared_ptr<WorkflowExecution> execution;
+        {
+            std::lock_guard<std::mutex> guard(workflow_mutex_);
+            const auto found = workflow_executions_.find(
+                params["executionId"].get<std::string>());
+            if (found != workflow_executions_.end()) {
+                execution = found->second;
+            }
+        }
+        if (!execution) {
+            return SAO_AI_EDITOR_ERR_NOT_FOUND;
+        }
+        result = execution->snapshot();
+        return SAO_AI_EDITOR_OK;
+    }
+    if (method == "workflows.pause" || method == "workflows.resume" ||
+        method == "workflows.cancel" || method == "workflows.confirm") {
+        if (!params.contains("executionId") ||
+            !params["executionId"].is_string()) {
+            return SAO_AI_EDITOR_ERR_INVALID_ARGUMENT;
+        }
+        std::shared_ptr<WorkflowExecution> execution;
+        {
+            std::lock_guard<std::mutex> guard(workflow_mutex_);
+            const auto found = workflow_executions_.find(
+                params["executionId"].get<std::string>());
+            if (found != workflow_executions_.end()) {
+                execution = found->second;
+            }
+        }
+        if (!execution) {
+            return SAO_AI_EDITOR_ERR_NOT_FOUND;
+        }
+        if (method == "workflows.pause") {
+            execution->request_pause();
+            result = Json{{"ok", true}};
+            return SAO_AI_EDITOR_OK;
+        }
+        if (method == "workflows.resume") {
+            execution->request_resume(
+                params.value("humanInput", std::string{}));
+            result = Json{{"ok", true}};
+            return SAO_AI_EDITOR_OK;
+        }
+        if (method == "workflows.cancel") {
+            execution->request_cancel();
+            result = Json{{"ok", true}};
+            return SAO_AI_EDITOR_OK;
+        }
+        // confirm
+        const int32_t confirm_status = execution->confirm(
+            params.value("stepId", std::string{}),
+            params.value("approved", false),
+            params.value("note", std::string{}));
+        if (confirm_status != SAO_AI_EDITOR_OK) {
+            return confirm_status;
+        }
+        result = Json{{"ok", true}};
+        return SAO_AI_EDITOR_OK;
+    }
+    if (method == "workflows.gc") {
+        // Reap completed executions to bound memory.
+        std::lock_guard<std::mutex> guard(workflow_mutex_);
+        Json removed = Json::array();
+        for (auto iterator = workflow_executions_.begin();
+             iterator != workflow_executions_.end();) {
+            const Json snapshot = iterator->second->snapshot();
+            const std::string status = snapshot.value("status", "");
+            if (status == "completed" || status == "cancelled" ||
+                status == "failed") {
+                iterator->second->join();
+                removed.push_back(iterator->first);
+                iterator = workflow_executions_.erase(iterator);
+            } else {
+                ++iterator;
+            }
+        }
+        result = Json{{"removed", std::move(removed)}};
+        return SAO_AI_EDITOR_OK;
+    }
     return SAO_AI_EDITOR_ERR_NOT_FOUND;
 }
 
