@@ -62,6 +62,14 @@ set(SAO_LAUNCHER_SOURCES
     src/user_menu.cpp
 )
 
+if (TARGET sao::plugins::loader AND TARGET sao::rt_io AND TARGET sao::ui)
+    list(APPEND SAO_LAUNCHER_HEADERS
+        src/entity_provider_catalog_internal.h
+        src/entity_provider_publication_internal.h)
+    list(APPEND SAO_LAUNCHER_SOURCES
+        src/entity_provider_publication_internal.cpp)
+endif()
+
 if (TARGET sao::shell::stub)
     add_library(sao_launcher_shell_provider STATIC src/shell_provider.cpp)
     target_include_directories(sao_launcher_shell_provider PRIVATE
@@ -122,6 +130,20 @@ if (TARGET sao::core)
         SAO_LAUNCHER_CORE_LOG_PROVIDER=1)
 endif()
 
+if (TARGET sao::plugin_ai_editor)
+    target_link_libraries(SaoAuto PRIVATE sao::plugin_ai_editor)
+    target_compile_definitions(SaoAuto PRIVATE
+        SAO_LAUNCHER_HAS_AI_EDITOR_ABI=1)
+    if (TARGET sao_ai_editor)
+        add_dependencies(SaoAuto sao_ai_editor)
+    endif()
+    message(STATUS
+        "launcher: native AI Editor uses dedicated sao::plugin_ai_editor ABI")
+else()
+    message(STATUS
+        "launcher: ai_editor ABI unavailable; OPEN_AI_EDITOR remains fail-closed")
+endif()
+
 set(SAO_LAUNCHER_ICON "${CMAKE_CURRENT_SOURCE_DIR}/../../python/icon.ico")
 if (EXISTS "${SAO_LAUNCHER_ICON}")
     file(TO_CMAKE_PATH "${SAO_LAUNCHER_ICON}" SAO_LAUNCHER_ICON_RC_PATH)
@@ -174,6 +196,18 @@ if (TARGET sao::rt_io AND TARGET sao::ui)
 else()
     message(STATUS
         "launcher: rt_io and/or ui target unavailable; retaining fail-closed platform composition")
+endif()
+
+if (TARGET sao::plugins::loader AND
+    TARGET sao_launcher_plugins_provider AND
+    TARGET sao::rt_io AND TARGET sao::ui)
+    target_link_libraries(SaoAuto PRIVATE sao::plugins::loader)
+    target_compile_definitions(SaoAuto PRIVATE
+        SAO_LAUNCHER_ENTITY_PROVIDER_COMPOSITION=1
+        SAO_PLUGINS_BUILDING_DLL)
+else()
+    message(STATUS
+        "launcher: native Entity provider publication unavailable; retaining fail-closed dynamic actions")
 endif()
 
 # There is no aggregate security lifecycle ABI.  Use the concrete, stable

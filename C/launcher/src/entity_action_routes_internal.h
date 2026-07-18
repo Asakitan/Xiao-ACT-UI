@@ -3,6 +3,7 @@
 #include "sao/core/status.h"
 
 #include <atomic>
+#include <cmath>
 #include <cstddef>
 #include <cstdint>
 #include <functional>
@@ -22,6 +23,7 @@ inline constexpr std::int32_t kFirstDynamicToken = 0x40000000;
 inline constexpr std::int32_t kLastDynamicToken = 0x7ffffffe;
 inline constexpr std::size_t kMaximumRows = 4096;
 inline constexpr std::size_t kMaximumStringBytes = 1024;
+inline constexpr std::size_t kMaximumPayloadBytes = 16 * 1024;
 inline constexpr std::size_t kMaximumSnapshotStringBytes = 4 * 1024 * 1024;
 
 inline constexpr bool is_dynamic_token(std::int32_t token) noexcept {
@@ -30,12 +32,15 @@ inline constexpr bool is_dynamic_token(std::int32_t token) noexcept {
 
 struct EntityActionRouteSpec {
     std::string provider_id;
+    std::uint64_t provider_generation = 0;
     std::string category_id;
     std::string category_label;
     std::string category_icon;
+    double category_priority = 0.0;
     std::string row_label;
     std::string row_icon;
     std::string action_id;
+    std::string payload_json;
     bool can_activate = true;
     bool keep_menu_open = false;
     bool close_menu_before = false;
@@ -46,12 +51,15 @@ struct EntityActionRouteSpec {
 struct EntityActionRoute {
     std::int32_t token = 0;
     std::string provider_id;
+    std::uint64_t provider_generation = 0;
     std::string category_id;
     std::string category_label;
     std::string category_icon;
+    double category_priority = 0.0;
     std::string row_label;
     std::string row_icon;
     std::string action_id;
+    std::string payload_json;
     bool can_activate = true;
     bool keep_menu_open = false;
     bool close_menu_before = false;
@@ -455,7 +463,8 @@ class EntityActionRouteStore final {
                 row.category_icon,  row.row_label,   row.row_icon,
                 row.action_id,
             };
-            if (row.provider_id.empty() || row.action_id.empty()) {
+            if (row.provider_id.empty() || row.action_id.empty() ||
+                !std::isfinite(row.category_priority)) {
                 return SAO_STATUS_ERR_INVALID_ARGUMENT;
             }
             for (const auto value : strings) {
@@ -466,6 +475,14 @@ class EntityActionRouteStore final {
                 }
                 total_string_bytes += value.size();
             }
+            if (row.payload_json.size() > kMaximumPayloadBytes ||
+                row.payload_json.find('\0') != std::string::npos ||
+                !valid_utf8(row.payload_json) ||
+                row.payload_json.size() >
+                    kMaximumSnapshotStringBytes - total_string_bytes) {
+                return SAO_STATUS_ERR_INVALID_ARGUMENT;
+            }
+            total_string_bytes += row.payload_json.size();
             if (!identities.emplace(identity_of(row)).second) {
                 return SAO_STATUS_ERR_INVALID_ARGUMENT;
             }
@@ -500,11 +517,14 @@ class EntityActionRouteStore final {
             const auto& route = current->snapshot.routes[index];
             const auto& row = rows[index];
             if (!same_identity(route, row) ||
+                route.provider_generation != row.provider_generation ||
                 route.category_id != row.category_id ||
                 route.category_label != row.category_label ||
                 route.category_icon != row.category_icon ||
+                route.category_priority != row.category_priority ||
                 route.row_label != row.row_label ||
                 route.row_icon != row.row_icon ||
+                route.payload_json != row.payload_json ||
                 route.can_activate != row.can_activate ||
                 route.keep_menu_open != row.keep_menu_open ||
                 route.close_menu_before != row.close_menu_before) {
@@ -516,19 +536,22 @@ class EntityActionRouteStore final {
 
     static EntityActionRoute make_route(const EntityActionRouteSpec& row,
                                         std::int32_t token) {
-        return {
-            token,
-            row.provider_id,
-            row.category_id,
-            row.category_label,
-            row.category_icon,
-            row.row_label,
-            row.row_icon,
-            row.action_id,
-            row.can_activate,
-            row.keep_menu_open,
-            row.close_menu_before,
-        };
+        EntityActionRoute route;
+        route.token = token;
+        route.provider_id = row.provider_id;
+        route.provider_generation = row.provider_generation;
+        route.category_id = row.category_id;
+        route.category_label = row.category_label;
+        route.category_icon = row.category_icon;
+        route.category_priority = row.category_priority;
+        route.row_label = row.row_label;
+        route.row_icon = row.row_icon;
+        route.action_id = row.action_id;
+        route.payload_json = row.payload_json;
+        route.can_activate = row.can_activate;
+        route.keep_menu_open = row.keep_menu_open;
+        route.close_menu_before = row.close_menu_before;
+        return route;
     }
 
     std::shared_ptr<StoreState> state_;

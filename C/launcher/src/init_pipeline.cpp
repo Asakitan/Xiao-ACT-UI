@@ -30,6 +30,12 @@
 #include "tool_launch_internal.h"
 #include "entity_action_routes_internal.h"
 
+#if defined(SAO_LAUNCHER_ENTITY_PROVIDER_COMPOSITION) && \
+    !defined(SAO_LAUNCHER_COMPOSITION_TEST_PROVIDER)
+#include "entity_provider_publication_internal.h"
+#include "sao/plugins/loader/entity_provider.h"
+#endif
+
 #include <windows.h>
 #include <cstring>
 #include <cwchar>
@@ -638,6 +644,10 @@ struct sao_platform_ctx {
     bool settings_save_enabled = false;
     bool nervgear_mode{true};
     sao::launcher::entity_action_routes::EntityActionRouteStore entity_action_routes;
+#if defined(SAO_LAUNCHER_ENTITY_PROVIDER_COMPOSITION)
+    sao::launcher::entity_provider_publication::EntityProviderPublicationState
+        entity_provider_publication;
+#endif
     std::unique_ptr<sao::launcher::settings_owner::SettingsOwner> settings_owner;
     std::unique_ptr<sao::launcher::tool_launch::AiEditorProcessOwner> ai_editor;
 };
@@ -724,7 +734,15 @@ sao_status_t SAO_UI_CALL entity_action(SaoUiEntityAction action,
         const sao_status_t route_status =
             ctx->entity_action_routes.resolve(action_token, route);
         if (route_status == SAO_STATUS_OK) {
+#if defined(SAO_LAUNCHER_ENTITY_PROVIDER_COMPOSITION)
+            return sao::launcher::entity_provider_publication::invoke(
+                route, ctx->entity_shell,
+                &sao::plugins::loader::sao_plugins_entity_provider_invoke,
+                &sao_ui_entity_shell_get_snapshot,
+                &sao_ui_entity_shell_home);
+#else
             return SAO_STATUS_ERR_NOT_IMPLEMENTED;
+#endif
         }
         return route_status == SAO_STATUS_ERR_NOT_FOUND
                    ? SAO_STATUS_ERR_INVALID_ARGUMENT
@@ -913,6 +931,12 @@ sao_status_t teardown_platform_context(sao_platform_ctx* ctx,
         ctx->home_hotkey_registered = false;
     }
     if (ctx->entity_shell) {
+#if defined(SAO_LAUNCHER_ENTITY_PROVIDER_COMPOSITION)
+        (void)sao::launcher::entity_provider_publication::clear(
+            ctx->entity_shell, ctx->entity_action_routes,
+            ctx->entity_provider_publication,
+            &sao_ui_entity_shell_set_children);
+#endif
         sao_ui_entity_shell_destroy(ctx->entity_shell);
         ctx->entity_shell = nullptr;
     }
@@ -953,7 +977,28 @@ sao_status_t sao_ui_bring_online(sao_platform_ctx* ctx) {
     }
     sao_status_t status = sao_ui_entity_shell_bring_online(ctx->entity_shell);
     if (status != SAO_STATUS_OK) return status;
+#if defined(SAO_LAUNCHER_ENTITY_PROVIDER_COMPOSITION)
+    status = sao::launcher::entity_provider_publication::refresh(
+        ctx->entity_shell, ctx->entity_action_routes,
+        ctx->entity_provider_publication,
+        &sao::plugins::loader::sao_plugins_entity_provider_snapshot,
+        &sao_ui_entity_shell_set_children);
+    if (status != SAO_STATUS_OK) {
+#if defined(SAO_LAUNCHER_CORE_LOG_PROVIDER)
+        (void)sao_core_logf(SAO_LOG_WARN, "launcher.entity_provider",
+                            "initial catalog publication deferred: status=%d",
+                            status);
+#endif
+        status = SAO_STATUS_OK;
+    }
+#endif
     if (!RegisterHotKey(nullptr, kHomeHotkeyId, MOD_NOREPEAT, VK_HOME)) {
+#if defined(SAO_LAUNCHER_ENTITY_PROVIDER_COMPOSITION)
+        (void)sao::launcher::entity_provider_publication::clear(
+            ctx->entity_shell, ctx->entity_action_routes,
+            ctx->entity_provider_publication,
+            &sao_ui_entity_shell_set_children);
+#endif
         (void)sao_ui_entity_shell_take_offline(ctx->entity_shell);
         return SAO_STATUS_INTERNAL;
     }
@@ -961,6 +1006,12 @@ sao_status_t sao_ui_bring_online(sao_platform_ctx* ctx) {
     if (!RegisterHotKey(nullptr, kInsertHotkeyId, MOD_NOREPEAT, VK_INSERT)) {
         UnregisterHotKey(nullptr, kHomeHotkeyId);
         ctx->home_hotkey_registered = false;
+#if defined(SAO_LAUNCHER_ENTITY_PROVIDER_COMPOSITION)
+        (void)sao::launcher::entity_provider_publication::clear(
+            ctx->entity_shell, ctx->entity_action_routes,
+            ctx->entity_provider_publication,
+            &sao_ui_entity_shell_set_children);
+#endif
         (void)sao_ui_entity_shell_take_offline(ctx->entity_shell);
         return SAO_STATUS_INTERNAL;
     }
@@ -973,16 +1024,22 @@ sao_status_t sao_ui_take_offline(sao_platform_ctx* ctx) {
         return SAO_STATUS_INVALID_ARGUMENT;
     }
     sao_status_t status = SAO_STATUS_OK;
+#if defined(SAO_LAUNCHER_ENTITY_PROVIDER_COMPOSITION)
+    status = sao::launcher::entity_provider_publication::clear(
+        ctx->entity_shell, ctx->entity_action_routes,
+        ctx->entity_provider_publication,
+        &sao_ui_entity_shell_set_children);
+#endif
     if (ctx->insert_hotkey_registered) {
         if (!UnregisterHotKey(nullptr, kInsertHotkeyId)) {
-            status = SAO_STATUS_INTERNAL;
+            if (status == SAO_STATUS_OK) status = SAO_STATUS_INTERNAL;
         } else {
             ctx->insert_hotkey_registered = false;
         }
     }
     if (ctx->home_hotkey_registered) {
         if (!UnregisterHotKey(nullptr, kHomeHotkeyId)) {
-            status = SAO_STATUS_INTERNAL;
+            if (status == SAO_STATUS_OK) status = SAO_STATUS_INTERNAL;
         } else {
             ctx->home_hotkey_registered = false;
         }
@@ -994,7 +1051,27 @@ sao_status_t sao_ui_take_offline(sao_platform_ctx* ctx) {
 
 sao_status_t sao_ui_tick(sao_platform_ctx* ctx, uint32_t elapsed_ms) {
     if (!ctx || !ctx->entity_shell) return SAO_STATUS_INVALID_ARGUMENT;
-    return sao_ui_entity_shell_tick(ctx->entity_shell, elapsed_ms);
+    const sao_status_t tick_status =
+        sao_ui_entity_shell_tick(ctx->entity_shell, elapsed_ms);
+    if (tick_status != SAO_STATUS_OK) return tick_status;
+#if defined(SAO_LAUNCHER_ENTITY_PROVIDER_COMPOSITION)
+    const sao_status_t provider_status =
+        sao::launcher::entity_provider_publication::poll(
+        ctx->entity_shell, ctx->entity_action_routes,
+        ctx->entity_provider_publication, elapsed_ms,
+        &sao::plugins::loader::sao_plugins_entity_provider_snapshot,
+        &sao_ui_entity_shell_set_children);
+#if defined(SAO_LAUNCHER_CORE_LOG_PROVIDER)
+    if (provider_status != SAO_STATUS_OK) {
+        (void)sao_core_logf(SAO_LOG_WARN, "launcher.entity_provider",
+                            "catalog refresh deferred: status=%d",
+                            provider_status);
+    }
+#endif
+    return SAO_STATUS_OK;
+#else
+    return SAO_STATUS_OK;
+#endif
 }
 
 sao_status_t sao_ui_handle_message(sao_platform_ctx* ctx, uint32_t message,
