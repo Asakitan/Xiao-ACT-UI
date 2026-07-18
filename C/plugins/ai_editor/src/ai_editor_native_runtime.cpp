@@ -158,7 +158,18 @@ NativeRuntime::NativeRuntime(RuntimeOptions options)
             conversations_(scopes_),
       tools_(scopes_, options.maximum_file_bytes,
              options.maximum_search_results),
-      maximum_event_queue_(std::clamp(options.maximum_event_queue, 8U, 4096U)) {}
+      maximum_event_queue_(std::clamp(options.maximum_event_queue, 8U, 4096U)) {
+    // Register the three built-in tool-result compressors + hand the registry
+    // pointer to the tool registry.  Filters are shared_ptrs so the registry
+    // can snapshot the vector without holding its mutex on every dispatch;
+    // set_filter_registry takes a raw pointer because the tool registry lives
+    // strictly within this runtime and never outlives it.  Order matters only
+    // for the fired-id list — the LLM sees them in the order they compressed.
+    filter_registry_.register_filter(make_list_files_folder_filter());
+    filter_registry_.register_filter(make_search_files_collapse_filter());
+    filter_registry_.register_filter(make_read_file_truncate_filter());
+    tools_.set_filter_registry(&filter_registry_);
+}
 
 NativeRuntime::~NativeRuntime() {
     std::vector<std::shared_ptr<RunState>> runs;
@@ -1730,6 +1741,48 @@ int32_t NativeRuntime::invoke(std::string_view method,
             emit(hook.emit_event, payload);
         }
         const auto call_start = std::chrono::steady_clock::now();
+        // Session-memory dedup: mutation-aware invalidation runs first, then
+        // read-only calls try the cache and short-circuit on hit.  observe()
+        // is a no-op for read-only tools; lookup() returns nullopt for
+        // uncached tools (mutations, custom).  See tool_result_cache.h.
+        tool_cache_.observe(resolved_name, arguments);
+        if (auto hit = tool_cache_.lookup(resolved_name, arguments)) {
+            result = hit->result;
+            const int64_t now_ms =
+                std::chrono::duration_cast<std::chrono::milliseconds>(
+                    std::chrono::steady_clock::now().time_since_epoch())
+                    .count();
+            const int64_t age_ms = now_ms - hit->timestamp_ms;
+            if (result.is_object()) {
+                result["cacheHit"] = true;
+                result["cacheAgeMs"] = age_ms;
+            }
+            Json hit_payload{{"tool", resolved_name},
+                             {"arguments", arguments},
+                             {"cacheAgeMs", age_ms}};
+            if (resolved_name != requested_name) {
+                hit_payload["requestedTool"] = requested_name;
+            }
+            emit("tools.cache.hit", hit_payload);
+            // Cache hits still fire the after-phase hook so audit sinks see a
+            // canonical (before, after) pair even for served-from-memory calls.
+            const auto after_hooks =
+                tools_.snapshot_hooks("after", resolved_name);
+            for (const auto& hook : after_hooks) {
+                Json payload{{"hookId", hook.id},
+                             {"phase", "after"},
+                             {"tool", resolved_name},
+                             {"arguments", arguments},
+                             {"result", result},
+                             {"durationMs", 0},
+                             {"cacheHit", true}};
+                if (resolved_name != requested_name) {
+                    payload["requestedTool"] = requested_name;
+                }
+                emit(hook.emit_event, payload);
+            }
+            return SAO_AI_EDITOR_OK;
+        }
         int32_t status;
         {
             std::lock_guard<std::mutex> lock(store_mutex_);
@@ -1740,6 +1793,13 @@ int32_t NativeRuntime::invoke(std::string_view method,
             std::chrono::duration_cast<std::chrono::milliseconds>(
                 call_end - call_start)
                 .count();
+        // Record successful executions into the session-memory cache.  We
+        // deliberately skip failed calls (permission denied, boundary
+        // violation, schema failure) so retries do not return the error
+        // payload as if it were the ground truth.
+        if (status == SAO_AI_EDITOR_OK) {
+            tool_cache_.record(resolved_name, arguments, result);
+        }
         // After / error hooks reflect the outcome.  We treat every non-OK
         // status as an error phase so validation failures + permission
         // denials also surface — audits typically care about *any* non-happy
@@ -1892,6 +1952,19 @@ int32_t NativeRuntime::invoke(std::string_view method,
             result = Json{{"ok", true}, {"id", id}};
         }
         return status;
+    }
+    if (method == "tools.cache_stats") {
+        // Session-memory cache introspection — used by the debug console
+        // + tests to confirm hit/miss/invalidation accounting.
+        result = tool_cache_.stats();
+        return SAO_AI_EDITOR_OK;
+    }
+    if (method == "tools.cache_clear") {
+        // Wipe every cached entry + zero the counters.  No parameters — the
+        // cache is per-runtime so scoping is implicit.
+        tool_cache_.clear();
+        result = Json{{"ok", true}};
+        return SAO_AI_EDITOR_OK;
     }
     if (method == "chat.run") {
         // Render an optional `promptId` + `promptArguments` into the
@@ -4353,6 +4426,16 @@ int32_t NativeRuntime::cost_stats(const Json& params, Json& result) {
     int64_t total_completion = 0;
     double total_cost = 0.0;
     Json by_model = Json::object();
+    // Roll up per-provider aggregates from the same rows so callers can
+    // slice by vendor without walking `byModel`.  Kept parallel to
+    // byModel/CostStatsRow so both views stay lookup-compatible.
+    struct ProviderAgg {
+        uint64_t requests = 0;
+        int64_t prompt_tokens = 0;
+        int64_t completion_tokens = 0;
+        double cost_usd = 0.0;
+    };
+    std::unordered_map<std::string, ProviderAgg> provider_totals;
     {
         std::lock_guard<std::mutex> lock(cost_stats_mutex_);
         for (const auto& [key, row] : cost_stats_) {
@@ -4371,7 +4454,21 @@ int32_t NativeRuntime::cost_stats(const Json& params, Json& result) {
                 {"costUsd", row.cost_usd},
             };
             by_model[row.model] = std::move(entry);
+            auto& agg = provider_totals[row.provider];
+            agg.requests += row.requests;
+            agg.prompt_tokens += row.prompt_tokens;
+            agg.completion_tokens += row.completion_tokens;
+            agg.cost_usd += row.cost_usd;
         }
+    }
+    Json by_provider = Json::object();
+    for (const auto& [provider, agg] : provider_totals) {
+        by_provider[provider] = Json{
+            {"requests", agg.requests},
+            {"promptTokens", agg.prompt_tokens},
+            {"completionTokens", agg.completion_tokens},
+            {"costUsd", agg.cost_usd},
+        };
     }
     Json average = Json::object();
     if (total_requests > 0) {
@@ -4395,6 +4492,7 @@ int32_t NativeRuntime::cost_stats(const Json& params, Json& result) {
         {"totalCompletionTokens", total_completion},
         {"totalCostUsd", total_cost},
         {"byModel", std::move(by_model)},
+        {"byProvider", std::move(by_provider)},
         {"averagePerRequest", std::move(average)},
     };
     return SAO_AI_EDITOR_OK;

@@ -1,6 +1,8 @@
 #include "sao/ai_editor/ai_editor_native.h"
 
 #include "mcp_server.h"
+#include "gpu_hunt_panel.h"
+#include "gpu_hunt_tool.h"
 #if SAO_AI_EDITOR_HAS_WEBVIEW
 #include "webview_bridge.h"
 #endif
@@ -39,6 +41,7 @@ constexpr int kOutputEditId = 1001;
 constexpr int kRequestEditId = 1002;
 constexpr int kSendButtonId = 1003;
 constexpr int kClearButtonId = 1004;
+constexpr int kGpuHuntButtonId = 1005;
 constexpr wchar_t kWindowClassName[] = L"SaoAiEditorNativeWindow";
 constexpr wchar_t kWindowTitle[] = L"SAO AI Editor";
 constexpr std::string_view kHandshakeRequest = "SAO_AI_EDITOR_HELLO 1";
@@ -724,6 +727,7 @@ struct UiState final {
     HWND request_edit = nullptr;
     HWND send_button = nullptr;
     HWND clear_button = nullptr;
+    HWND gpu_hunt_button = nullptr;
     HWND status_bar = nullptr;
     DWORD auto_exit_ms = 0;
     int exit_code = 0;
@@ -821,6 +825,11 @@ void layout_controls(HWND window, UiState& state) {
                button_height, TRUE);
     MoveWindow(state.clear_button, margin + button_width + gap, button_top,
                button_width, button_height, TRUE);
+    // GPU Hunt button lives to the right of the primary buttons so it does
+    // not shift the muscle memory for Send / Clear.
+    MoveWindow(state.gpu_hunt_button,
+               margin + (button_width + gap) * 2, button_top,
+               button_width + 24, button_height, TRUE);
 }
 
 bool create_controls(HWND window, UiState& state) {
@@ -850,11 +859,17 @@ bool create_controls(HWND window, UiState& state) {
         0, 0, window,
         reinterpret_cast<HMENU>(static_cast<INT_PTR>(kClearButtonId)),
         instance, nullptr);
+    state.gpu_hunt_button = CreateWindowExW(
+        0, L"BUTTON", L"GPU Hunt",
+        WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON, 0, 0, 0, 0, window,
+        reinterpret_cast<HMENU>(static_cast<INT_PTR>(kGpuHuntButtonId)),
+        instance, nullptr);
     state.status_bar = CreateWindowExW(
         0, STATUSCLASSNAMEW, L"Ready", WS_CHILD | WS_VISIBLE | SBARS_SIZEGRIP,
         0, 0, 0, 0, window, nullptr, instance, nullptr);
     if (state.output_edit == nullptr || state.request_edit == nullptr ||
         state.send_button == nullptr || state.clear_button == nullptr ||
+        state.gpu_hunt_button == nullptr ||
         state.status_bar == nullptr) {
         return false;
     }
@@ -862,7 +877,7 @@ bool create_controls(HWND window, UiState& state) {
     const HFONT font = static_cast<HFONT>(GetStockObject(DEFAULT_GUI_FONT));
     for (HWND control : {state.output_edit, state.request_edit,
                          state.send_button, state.clear_button,
-                         state.status_bar}) {
+                         state.gpu_hunt_button, state.status_bar}) {
         SendMessageW(control, WM_SETFONT, reinterpret_cast<WPARAM>(font), TRUE);
     }
     append_output(state, L"SAO AI Editor native runtime ready.\r\n");
@@ -907,6 +922,16 @@ LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wparam,
             LOWORD(wparam) == kClearButtonId) {
             SetWindowTextW(state->output_edit, L"");
             set_status(*state, L"Output cleared");
+            return 0;
+        }
+        if (HIWORD(wparam) == BN_CLICKED &&
+            LOWORD(wparam) == kGpuHuntButtonId) {
+            HINSTANCE inst = reinterpret_cast<HINSTANCE>(
+                GetWindowLongPtrW(window, GWLP_HINSTANCE));
+            HWND panel = sao::ai_editor::gpu_hunt_panel_show(inst);
+            set_status(*state,
+                panel != nullptr ? L"GPU Hunt panel opened"
+                                 : L"GPU Hunt panel failed to open");
             return 0;
         }
         break;

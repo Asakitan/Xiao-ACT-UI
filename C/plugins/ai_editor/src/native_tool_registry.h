@@ -11,6 +11,8 @@
 
 namespace sao::ai_editor::native {
 
+class ToolResultFilterRegistry;
+
 // Best-effort JSON Schema draft-07 subset validator.  Supports type / properties
 // / required / items / enum and skips fields it does not recognise (pattern,
 // format, oneOf/anyOf/allOf/not, $ref, additionalProperties, …) so early
@@ -28,6 +30,12 @@ public:
     NativeToolRegistry(const ScopeStore& scopes,
                        uint32_t maximum_file_bytes,
                        uint32_t maximum_search_results) noexcept;
+
+    // Wire in a filter registry so tools.call output runs through the
+    // compression chain before it hits the JSON-RPC wire.  Passed by
+    // pointer (may be null) so tests + non-runtime consumers can skip the
+    // filter path entirely.  Ownership stays with the caller (the runtime).
+    void set_filter_registry(const ToolResultFilterRegistry* registry) noexcept;
 
     Json describe(std::string_view mode) const;
     int32_t execute(std::string_view mode,
@@ -133,6 +141,10 @@ private:
     std::unordered_map<std::string, CustomTool> custom_tools_;
     std::unordered_map<std::string, AliasEntry> aliases_;
     std::unordered_map<std::string, Hook> hooks_;
+    // Non-owning — the NativeRuntime keeps the concrete registry alive for the
+    // lifetime of the tool registry.  Guarded by `custom_mutex_` so a runtime
+    // that mutates it (currently only at construction) never races execute().
+    const ToolResultFilterRegistry* filter_registry_ = nullptr;
 };
 
 }  // namespace sao::ai_editor::native

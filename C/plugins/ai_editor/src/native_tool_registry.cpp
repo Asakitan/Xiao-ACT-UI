@@ -1,5 +1,7 @@
 #include "native_tool_registry.h"
 
+#include "gpu_hunt_bridge.h"
+
 #include <algorithm>
 #include <cwctype>
 #include <filesystem>
@@ -7,6 +9,8 @@
 #include <sstream>
 #include <string>
 #include <vector>
+
+#include "tool_result_filter.h"
 
 namespace sao::ai_editor::native {
 namespace {
@@ -320,6 +324,11 @@ Json NativeToolRegistry::describe(std::string_view mode) const {
              {"confirmed", {{"type", "boolean"}}}},
             {"path", "content"}),
     });
+    // gpuHunt.* tools are wired in through a dedicated bridge so this
+    // registry file does not need to include gpu_hunt / rt_io headers.
+    // They live in the same descriptor list, so the LLM and describe()
+    // consumers see them alongside the file tools.
+    append_gpu_hunt_tool_descriptors(tools);
     // Append caller-registered tools + aliases.  Snapshot under lock so a
     // concurrent register / unregister cannot mutate the maps while we build
     // descriptors, then release the lock before finalising `permission`
@@ -404,8 +413,13 @@ int32_t NativeToolRegistry::execute(std::string_view mode,
     bool is_custom = false;
     bool custom_read_only = true;
     bool found_tool = false;
+    bool is_gpu_hunt = false;
     if (is_builtin_name(resolved_name)) {
         schema = builtin_schema_for(resolved_name);
+        found_tool = true;
+    } else if (is_gpu_hunt_tool_name(resolved_name)) {
+        schema = gpu_hunt_tool_schema(resolved_name);
+        is_gpu_hunt = true;
         found_tool = true;
     } else {
         std::lock_guard<std::mutex> lock(custom_mutex_);
@@ -449,16 +463,19 @@ int32_t NativeToolRegistry::execute(std::string_view mode,
             return validation_status;
         }
     }
+    // Dispatch to the concrete handler.  Captured into a status variable so
+    // we can run the filter chain over `result` on the OK path before
+    // returning to the caller (JSON-RPC error paths bypass compression by
+    // design — a validation-error payload is already tiny and the LLM needs
+    // to see the raw structure to correct its next call).
+    int32_t dispatch_status = SAO_AI_EDITOR_ERR_NOT_FOUND;
     if (name == "readFile") {
-        return read_file(arguments, result);
-    }
-    if (name == "listFiles") {
-        return list_files(arguments, result);
-    }
-    if (name == "searchFiles") {
-        return search_files(arguments, result);
-    }
-    if (name == "editFile") {
+        dispatch_status = read_file(arguments, result);
+    } else if (name == "listFiles") {
+        dispatch_status = list_files(arguments, result);
+    } else if (name == "searchFiles") {
+        dispatch_status = search_files(arguments, result);
+    } else if (name == "editFile") {
         if (mode == "ask") {
             return SAO_AI_EDITOR_ERR_PERMISSION_DENIED;
         }
@@ -467,13 +484,19 @@ int32_t NativeToolRegistry::execute(std::string_view mode,
                           {"tool", "editFile"}};
             return SAO_AI_EDITOR_ERR_CONFIRMATION_REQUIRED;
         }
-        return edit_file(arguments, result);
-    }
-    // Custom tools: sync passthrough — the runtime hands the arguments back to
-    // the caller so an external handler can carry out the real work.  The
-    // ask/plan gating mirrors the built-in mutating-tool behaviour so a
-    // user-defined "writeSomething" tool cannot slip past permission mode.
-    if (is_custom) {
+        dispatch_status = edit_file(arguments, result);
+    } else if (is_gpu_hunt) {
+        // gpu_hunt tools observe / drive a live tracker; they never touch
+        // the workspace or spawn processes, so ask/plan gating does not
+        // apply.  Errors on missing state (not locked, no attach) are
+        // surfaced as `ok:false` responses rather than JSON-RPC errors.
+        dispatch_status = dispatch_gpu_hunt_tool(name, arguments, result);
+    } else if (is_custom) {
+        // Custom tools: sync passthrough — the runtime hands the arguments
+        // back to the caller so an external handler can carry out the real
+        // work.  The ask/plan gating mirrors the built-in mutating-tool
+        // behaviour so a user-defined "writeSomething" tool cannot slip past
+        // permission mode.
         if (!custom_read_only && mode == "ask") {
             return SAO_AI_EDITOR_ERR_PERMISSION_DENIED;
         }
@@ -487,9 +510,63 @@ int32_t NativeToolRegistry::execute(std::string_view mode,
         result = Json{{"custom", true},
                       {"name", std::string(name)},
                       {"arguments", arguments}};
-        return SAO_AI_EDITOR_OK;
+        dispatch_status = SAO_AI_EDITOR_OK;
+    } else {
+        return SAO_AI_EDITOR_ERR_NOT_FOUND;
     }
-    return SAO_AI_EDITOR_ERR_NOT_FOUND;
+    // Filter chain: apply on OK results only.  A filter that fires records
+    // its id into compressionInfo so downstream telemetry can attribute
+    // savings + the LLM can opt-out via arguments in a follow-up call.
+    // The filter registry is a non-owning pointer (see set_filter_registry);
+    // a null registry is the "no compression" happy path used by unit tests
+    // that instantiate NativeToolRegistry directly.
+    if (dispatch_status == SAO_AI_EDITOR_OK && filter_registry_ != nullptr) {
+        std::vector<std::string> fired;
+        const bool any_fired = filter_registry_->apply_filters(
+            std::string(name), arguments, result, fired);
+        if (any_fired && result.is_object()) {
+            // Filters that touch a single field (e.g. ReadFileTruncate) already
+            // populate compressionInfo themselves; only wrap the top-level
+            // "which filters ran" metadata when the field is not already set,
+            // so multi-filter runs still report the full chain.
+            if (!result.contains("compressionInfo") ||
+                !result["compressionInfo"].is_object()) {
+                result["compressionInfo"] = Json{{"filterIds", fired}};
+            } else {
+                // Merge fired ids into existing compressionInfo.filterIds so
+                // the final list is a union of what every filter reported.
+                Json& info = result["compressionInfo"];
+                Json existing = info.value("filterIds", Json::array());
+                if (!existing.is_array()) {
+                    existing = Json::array();
+                }
+                for (const auto& fid : fired) {
+                    bool present = false;
+                    for (const auto& entry : existing) {
+                        if (entry.is_string() && entry.get<std::string>() == fid) {
+                            present = true;
+                            break;
+                        }
+                    }
+                    if (!present) {
+                        existing.push_back(fid);
+                    }
+                }
+                info["filterIds"] = std::move(existing);
+            }
+        }
+    }
+    return dispatch_status;
+}
+
+void NativeToolRegistry::set_filter_registry(
+    const ToolResultFilterRegistry* registry) noexcept {
+    // The registry is read on every execute() call.  We do not take the
+    // custom_mutex_ here because the runtime installs the pointer exactly
+    // once during construction (before any dispatch thread touches the
+    // registry); using memory_order semantics via a plain assignment matches
+    // that lifecycle and keeps execute() lock-free.
+    filter_registry_ = registry;
 }
 
 bool NativeToolRegistry::is_builtin_name(std::string_view name) noexcept {
@@ -507,7 +584,7 @@ int32_t NativeToolRegistry::register_custom(std::string_view name,
     // Shadowing a built-in would produce two entries in describe() and confuse
     // execute() dispatch (built-ins always win).  Reject early so callers get
     // an actionable error rather than a silently-hidden custom tool.
-    if (is_builtin_name(name)) {
+    if (is_builtin_name(name) || is_gpu_hunt_tool_name(name)) {
         return SAO_AI_EDITOR_ERR_INVALID_ARGUMENT;
     }
     // `parameters` is optional — default to an empty object schema so
@@ -563,8 +640,10 @@ int32_t NativeToolRegistry::register_alias(std::string_view alias,
         return SAO_AI_EDITOR_ERR_INVALID_ARGUMENT;
     }
     std::lock_guard<std::mutex> lock(custom_mutex_);
-    // Collision: alias name must not shadow a built-in / custom / other alias.
+    // Collision: alias name must not shadow a built-in / gpu_hunt tool /
+    // custom / other alias.
     if (is_builtin_name(alias) ||
+        is_gpu_hunt_tool_name(alias) ||
         custom_tools_.find(std::string(alias)) != custom_tools_.end() ||
         aliases_.find(std::string(alias)) != aliases_.end()) {
         return SAO_AI_EDITOR_ERR_INVALID_ARGUMENT;
@@ -574,6 +653,7 @@ int32_t NativeToolRegistry::register_alias(std::string_view alias,
     // resolution + describe() would need cycle detection.
     const bool target_ok =
         is_builtin_name(target) ||
+        is_gpu_hunt_tool_name(target) ||
         custom_tools_.find(std::string(target)) != custom_tools_.end();
     if (!target_ok) {
         return SAO_AI_EDITOR_ERR_NOT_FOUND;

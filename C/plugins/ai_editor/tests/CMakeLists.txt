@@ -20,6 +20,12 @@ add_executable(sao_plugin_ai_editor_wave7_tests
     ai_editor_process_test.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/../src/chat_provider_router.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/../src/native_utils.cpp
+    # tool_result_filter is compiled straight into the test target so the
+    # built-in filter factories + is_protected_from_compression helper are
+    # visible to the compression-filter test cases.  The plugin DLL also
+    # owns a copy for its own dispatch pipeline; the two live in separate
+    # translation units and never clash at link time.
+    ${CMAKE_CURRENT_SOURCE_DIR}/../src/tool_result_filter.cpp
 )
 
 target_link_libraries(sao_plugin_ai_editor_wave7_tests PRIVATE

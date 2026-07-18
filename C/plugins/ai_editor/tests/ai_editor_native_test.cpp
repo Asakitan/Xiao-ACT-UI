@@ -32,6 +32,7 @@
 #include "sao/ai_editor/openai_codec.h"
 
 #include "../src/chat_provider_router.h"
+#include "../src/tool_result_filter.h"
 #if defined(SAO_AI_EDITOR_HAS_WEBVIEW) && SAO_AI_EDITOR_HAS_WEBVIEW
 #include "../src/webview_bridge.h"
 #endif
@@ -7515,10 +7516,14 @@ TEST_CASE("tools.register surfaces custom tools in tools.list and tools.call "
     auto runtime = fixture.get();
     REQUIRE(dispatch(runtime, "runtime.initialize").contains("result"));
 
-    // Baseline: four built-in tools before any custom registration.
+    // Baseline: whatever built-in count is registered before any custom tool
+    // is added.  The exact number varies with feature flags (e.g. gpu_hunt);
+    // we anchor on the delta so `+ 1` after tools.register still means "one
+    // more entry than the baseline".
     const Json baseline = dispatch(runtime, "tools.list")["result"];
     REQUIRE(baseline["tools"].is_array());
-    REQUIRE(baseline["tools"].size() == 4);
+    const auto baseline_tool_count = baseline["tools"].size();
+    REQUIRE(baseline_tool_count >= 4);
 
     // Register a read-only custom tool with a real parameters schema.
     const Json register_result = dispatch(
@@ -7535,10 +7540,10 @@ TEST_CASE("tools.register surfaces custom tools in tools.list and tools.call "
     REQUIRE(register_result["result"]["ok"] == true);
     REQUIRE(register_result["result"]["name"] == "translate");
 
-    // tools.list now surfaces five tools; the custom one carries custom:true
-    // and the readOnly + parameters schema we registered.
+    // tools.list now surfaces one more tool than the baseline; the custom one
+    // carries custom:true and the readOnly + parameters schema we registered.
     const Json after_register = dispatch(runtime, "tools.list")["result"];
-    REQUIRE(after_register["tools"].size() == 5);
+    REQUIRE(after_register["tools"].size() == baseline_tool_count + 1);
     bool found = false;
     for (const auto& tool : after_register["tools"]) {
         if (tool["name"] == "translate") {
@@ -7645,13 +7650,16 @@ TEST_CASE("tools.unregister removes the custom tool and is idempotent-safe",
     auto runtime = fixture.get();
     REQUIRE(dispatch(runtime, "runtime.initialize").contains("result"));
 
+    const Json pre_register = dispatch(runtime, "tools.list")["result"];
+    const auto baseline_tool_count = pre_register["tools"].size();
+
     REQUIRE(dispatch(runtime, "tools.register",
                      {{"name", "ephemeral"},
                       {"description", "temp"}})
                 .contains("result"));
 
     const Json listed = dispatch(runtime, "tools.list")["result"];
-    REQUIRE(listed["tools"].size() == 5);
+    REQUIRE(listed["tools"].size() == baseline_tool_count + 1);
 
     const Json removed = dispatch(runtime, "tools.unregister",
                                    {{"name", "ephemeral"}})["result"];
@@ -7659,7 +7667,7 @@ TEST_CASE("tools.unregister removes the custom tool and is idempotent-safe",
     REQUIRE(removed["name"] == "ephemeral");
 
     const Json after_remove = dispatch(runtime, "tools.list")["result"];
-    REQUIRE(after_remove["tools"].size() == 4);
+    REQUIRE(after_remove["tools"].size() == baseline_tool_count);
     for (const auto& tool : after_remove["tools"]) {
         REQUIRE(tool["name"] != "ephemeral");
     }
@@ -8304,6 +8312,11 @@ TEST_CASE("tools.register_alias routes tools.call to the target and surfaces "
         seed << "aliased-content\n";
     }
 
+    // Snapshot the pre-alias tool count so we can prove the alias added exactly
+    // one entry regardless of how many built-ins the runtime ships with.
+    const Json pre_alias_list = dispatch(runtime, "tools.list")["result"];
+    const auto pre_alias_count = pre_alias_list["tools"].size();
+
     // Register the alias.  Both alias + target are echoed back in the result
     // so callers can verify the binding without a follow-up tools.list.
     const Json register_result = dispatch(
@@ -8314,9 +8327,9 @@ TEST_CASE("tools.register_alias routes tools.call to the target and surfaces "
     REQUIRE(register_result["result"]["target"] == "readFile");
 
     // tools.list now includes an aliasOf-tagged entry that mirrors readFile's
-    // readOnly + parameters schema.  We keep the built-in count (4) plus one.
+    // readOnly + parameters schema — exactly one more entry than the baseline.
     const Json listed = dispatch(runtime, "tools.list")["result"];
-    REQUIRE(listed["tools"].size() == 5);
+    REQUIRE(listed["tools"].size() == pre_alias_count + 1);
     bool saw_alias = false;
     for (const auto& tool : listed["tools"]) {
         if (tool.value("name", std::string{}) == "read_file") {
@@ -8891,4 +8904,882 @@ TEST_CASE("AI Editor prompt.pin floats a user prompt above builtins and unpin "
                                    {{"id", "does-not-exist"}});
     REQUIRE(missing["error"]["data"]["status"] ==
             SAO_AI_EDITOR_ERR_NOT_FOUND);
+}
+
+// -------------------------------------------------------------------------
+// Session-memory tool-result cache (src/tool_result_cache.{h,cpp}) — read-only
+// dedup keyed on canonical JSON of `(tool, arguments)`, mutation-aware
+// invalidation on editFile.  Modelled on VSCode terminalOutputCache.
+// -------------------------------------------------------------------------
+
+TEST_CASE("tool cache: readFile returns cached result on second call",
+          "[plugins][ai_editor][native][tools][cache]") {
+    RuntimeFixture fixture;
+    auto runtime = fixture.get();
+
+    // Seed a file that readFile can serve.
+    REQUIRE(dispatch(runtime, "tools.call",
+                     {{"mode", "agent"},
+                      {"name", "editFile"},
+                      {"arguments", {{"path", "cache_hit.txt"},
+                                     {"content", "hello-cache\n"}}}})
+                .contains("result"));
+
+    const Json request = {{"mode", "agent"},
+                          {"name", "readFile"},
+                          {"arguments", {{"path", "cache_hit.txt"}}}};
+    const Json first = dispatch(runtime, "tools.call", request);
+    REQUIRE(first.contains("result"));
+    REQUIRE(first["result"]["content"] == "hello-cache\n");
+    // First call has no cacheHit annotation — it went through execute().
+    REQUIRE_FALSE(first["result"].contains("cacheHit"));
+
+    const Json second = dispatch(runtime, "tools.call", request);
+    REQUIRE(second.contains("result"));
+    REQUIRE(second["result"]["cacheHit"] == true);
+    REQUIRE(second["result"].contains("cacheAgeMs"));
+    REQUIRE(second["result"]["cacheAgeMs"].is_number_integer());
+    REQUIRE(second["result"]["cacheAgeMs"].get<int64_t>() >= 0);
+    // Content still round-trips even when served from cache.
+    REQUIRE(second["result"]["content"] == "hello-cache\n");
+
+    const Json stats = dispatch(runtime, "tools.cache_stats")["result"];
+    REQUIRE(stats["hitCount"].get<int64_t>() >= 1);
+    REQUIRE(stats["totalEntries"].get<int64_t>() >= 1);
+    // The one Fast-class entry (readFile) shows up under byClass.Fast.
+    REQUIRE(stats["byClass"]["Fast"].get<int64_t>() >= 1);
+}
+
+TEST_CASE("tool cache: editFile invalidates matching readFile path only",
+          "[plugins][ai_editor][native][tools][cache]") {
+    RuntimeFixture fixture;
+    auto runtime = fixture.get();
+
+    // Seed two files so we can prove path-scoped invalidation.
+    REQUIRE(dispatch(runtime, "tools.call",
+                     {{"mode", "agent"},
+                      {"name", "editFile"},
+                      {"arguments", {{"path", "a.txt"},
+                                     {"content", "AAA\n"}}}})
+                .contains("result"));
+    REQUIRE(dispatch(runtime, "tools.call",
+                     {{"mode", "agent"},
+                      {"name", "editFile"},
+                      {"arguments", {{"path", "b.txt"},
+                                     {"content", "BBB\n"}}}})
+                .contains("result"));
+
+    // Warm the cache for both.
+    const Json read_a = {{"mode", "agent"},
+                         {"name", "readFile"},
+                         {"arguments", {{"path", "a.txt"}}}};
+    const Json read_b = {{"mode", "agent"},
+                         {"name", "readFile"},
+                         {"arguments", {{"path", "b.txt"}}}};
+    REQUIRE(dispatch(runtime, "tools.call", read_a)["result"]["content"] ==
+            "AAA\n");
+    REQUIRE(dispatch(runtime, "tools.call", read_b)["result"]["content"] ==
+            "BBB\n");
+
+    // Second reads are cache hits.
+    REQUIRE(dispatch(runtime, "tools.call",
+                     read_a)["result"]["cacheHit"] == true);
+    REQUIRE(dispatch(runtime, "tools.call",
+                     read_b)["result"]["cacheHit"] == true);
+
+    // Mutate a.txt only.  Cache for a.txt evicted; b.txt survives.
+    REQUIRE(dispatch(runtime, "tools.call",
+                     {{"mode", "agent"},
+                      {"name", "editFile"},
+                      {"arguments", {{"path", "a.txt"},
+                                     {"content", "AAA-v2\n"}}}})
+                .contains("result"));
+
+    const Json after_a = dispatch(runtime, "tools.call", read_a);
+    REQUIRE(after_a["result"]["content"] == "AAA-v2\n");
+    // a.txt was invalidated — first read after the edit is a miss (no
+    // cacheHit annotation) and returns fresh content.
+    REQUIRE_FALSE(after_a["result"].contains("cacheHit"));
+
+    const Json after_b = dispatch(runtime, "tools.call", read_b);
+    REQUIRE(after_b["result"]["cacheHit"] == true);
+    REQUIRE(after_b["result"]["content"] == "BBB\n");
+}
+
+TEST_CASE("tool cache: listFiles recursive gets Slow class, "
+          "non-recursive gets Fast",
+          "[plugins][ai_editor][native][tools][cache]") {
+    RuntimeFixture fixture;
+    auto runtime = fixture.get();
+
+    // Seed a subdirectory with content so listFiles has real output.
+    REQUIRE(dispatch(runtime, "tools.call",
+                     {{"mode", "agent"},
+                      {"name", "editFile"},
+                      {"arguments", {{"path", "sub/nested.txt"},
+                                     {"content", "n\n"}}}})
+                .contains("result"));
+
+    // Reset counters + entries so we can inspect this test's contribution.
+    dispatch(runtime, "tools.cache_clear");
+
+    // Non-recursive → Fast bucket.
+    const Json ls_flat = {{"mode", "agent"},
+                          {"name", "listFiles"},
+                          {"arguments", {{"path", "."}}}};
+    REQUIRE(dispatch(runtime, "tools.call", ls_flat).contains("result"));
+    REQUIRE(dispatch(runtime, "tools.call",
+                     ls_flat)["result"]["cacheHit"] == true);
+
+    // Recursive → Slow bucket.
+    const Json ls_deep = {{"mode", "agent"},
+                          {"name", "listFiles"},
+                          {"arguments", {{"path", "."},
+                                         {"recursive", true}}}};
+    REQUIRE(dispatch(runtime, "tools.call", ls_deep).contains("result"));
+    REQUIRE(dispatch(runtime, "tools.call",
+                     ls_deep)["result"]["cacheHit"] == true);
+
+    const Json stats = dispatch(runtime, "tools.cache_stats")["result"];
+    REQUIRE(stats["byClass"]["Fast"].get<int64_t>() == 1);
+    REQUIRE(stats["byClass"]["Slow"].get<int64_t>() == 1);
+    // Two hits (one for each variant), two misses (the initial recording
+    // calls).
+    REQUIRE(stats["hitCount"].get<int64_t>() == 2);
+    REQUIRE(stats["missCount"].get<int64_t>() == 2);
+}
+
+TEST_CASE("tool cache: searchFiles Medium bucket + cache_stats + cache_clear",
+          "[plugins][ai_editor][native][tools][cache]") {
+    RuntimeFixture fixture;
+    auto runtime = fixture.get();
+
+    REQUIRE(dispatch(runtime, "tools.call",
+                     {{"mode", "agent"},
+                      {"name", "editFile"},
+                      {"arguments", {{"path", "hits.txt"},
+                                     {"content", "needle in haystack\n"}}}})
+                .contains("result"));
+
+    dispatch(runtime, "tools.cache_clear");
+
+    const Json search = {{"mode", "agent"},
+                         {"name", "searchFiles"},
+                         {"arguments", {{"path", "."},
+                                        {"query", "needle"},
+                                        {"pattern", "*.txt"}}}};
+    REQUIRE(dispatch(runtime, "tools.call", search)["result"]["total"] == 1);
+    // Second call reuses the cache.
+    const Json cached = dispatch(runtime, "tools.call", search);
+    REQUIRE(cached["result"]["cacheHit"] == true);
+    REQUIRE(cached["result"]["total"] == 1);
+
+    // searchFiles lives in Medium.
+    Json stats = dispatch(runtime, "tools.cache_stats")["result"];
+    REQUIRE(stats["byClass"]["Medium"].get<int64_t>() == 1);
+    REQUIRE(stats["hitCount"].get<int64_t>() == 1);
+    REQUIRE(stats["missCount"].get<int64_t>() == 1);
+
+    // Any editFile triggers full flush of searchFiles entries (invalidates
+    // wholesale, not path-scoped — a doc under a different path could still
+    // match the query).
+    REQUIRE(dispatch(runtime, "tools.call",
+                     {{"mode", "agent"},
+                      {"name", "editFile"},
+                      {"arguments", {{"path", "other.txt"},
+                                     {"content", "x\n"}}}})
+                .contains("result"));
+    // The second read of the same query is now a miss again.
+    const Json fresh = dispatch(runtime, "tools.call", search);
+    REQUIRE_FALSE(fresh["result"].contains("cacheHit"));
+
+    // Manual clear zeroes the counters and empties byClass buckets.
+    const Json cleared = dispatch(runtime, "tools.cache_clear")["result"];
+    REQUIRE(cleared["ok"] == true);
+    stats = dispatch(runtime, "tools.cache_stats")["result"];
+    REQUIRE(stats["totalEntries"] == 0);
+    REQUIRE(stats["hitCount"] == 0);
+    REQUIRE(stats["missCount"] == 0);
+    REQUIRE(stats["invalidationCount"] == 0);
+    REQUIRE(stats["byClass"]["Fast"] == 0);
+    REQUIRE(stats["byClass"]["Medium"] == 0);
+    REQUIRE(stats["byClass"]["Slow"] == 0);
+}
+
+TEST_CASE("tool cache: JSON key ordering does not fragment the cache",
+          "[plugins][ai_editor][native][tools][cache]") {
+    // Sanity check the canonical-JSON key generation: two argument objects
+    // that carry the same fields in different insertion order must land on
+    // the same cache slot.
+    RuntimeFixture fixture;
+    auto runtime = fixture.get();
+    REQUIRE(dispatch(runtime, "tools.call",
+                     {{"mode", "agent"},
+                      {"name", "editFile"},
+                      {"arguments", {{"path", "canon.txt"},
+                                     {"content", "K\n"}}}})
+                .contains("result"));
+    dispatch(runtime, "tools.cache_clear");
+
+    // Use searchFiles because it accepts multiple string params; the exact
+    // JSON insertion order is what we're stressing.
+    Json args_a = Json::object();
+    args_a["path"] = ".";
+    args_a["query"] = "K";
+    args_a["pattern"] = "*.txt";
+    Json args_b = Json::object();
+    args_b["pattern"] = "*.txt";
+    args_b["query"] = "K";
+    args_b["path"] = ".";
+
+    REQUIRE(dispatch(runtime, "tools.call",
+                     {{"mode", "agent"},
+                      {"name", "searchFiles"},
+                      {"arguments", args_a}}).contains("result"));
+    const Json hit = dispatch(runtime, "tools.call",
+                              {{"mode", "agent"},
+                               {"name", "searchFiles"},
+                               {"arguments", args_b}});
+    REQUIRE(hit["result"]["cacheHit"] == true);
+    const Json stats = dispatch(runtime, "tools.cache_stats")["result"];
+    REQUIRE(stats["totalEntries"].get<int64_t>() == 1);
+}
+
+// -----------------------------------------------------------------------------
+// chat.set_pricing / chat.get_pricing / chat.list_pricing / chat.cost_stats
+//
+// R15 wave: LLM token pricing rules + per-model cost aggregation.  Storage is
+// in-process (map<"provider|model", rule>) so the round-trip test asserts
+// both the write shape (returned rule mirrors what the caller sent, missing
+// fields dropped) and the read-back shape (found:true carries the same rule
+// verbatim).  Cost math itself lives inside perform_openai_chat and is
+// exercised via chat.run: the "with rule" path asserts costUsd is derived
+// from the rule + reported usage, the "without rule" path asserts we still
+// surface prompt/completion token counts but leave costUsd at zero and set
+// pricingApplied:false so downstream consumers can distinguish the two.
+// -----------------------------------------------------------------------------
+
+TEST_CASE("AI Editor chat.set_pricing + chat.get_pricing round-trip a rule",
+          "[plugins][ai_editor][native][pricing]") {
+    RuntimeFixture fixture;
+    auto runtime = fixture.get();
+
+    // Unknown (provider, model) reports found:false with no rule payload so
+    // callers can distinguish "no rule registered" from "rule with zeros".
+    const Json missing =
+        dispatch(runtime, "chat.get_pricing",
+                 {{"provider", "openai"}, {"model", "gpt-4o"}});
+    REQUIRE(missing.contains("result"));
+    REQUIRE(missing["result"]["found"].get<bool>() == false);
+    REQUIRE(!missing["result"].contains("rule"));
+
+    // Register a canonical rule.
+    const Json set = dispatch(runtime, "chat.set_pricing",
+                              {{"provider", "openai"},
+                               {"model", "gpt-4o"},
+                               {"promptPer1K", 0.005},
+                               {"completionPer1K", 0.015}});
+    REQUIRE(set.contains("result"));
+    REQUIRE(set["result"]["ok"].get<bool>() == true);
+    REQUIRE(set["result"]["provider"] == "openai");
+    REQUIRE(set["result"]["model"] == "gpt-4o");
+    REQUIRE(set["result"]["rule"]["promptPer1K"].get<double>() == 0.005);
+    REQUIRE(set["result"]["rule"]["completionPer1K"].get<double>() == 0.015);
+
+    // Read it back.
+    const Json got = dispatch(runtime, "chat.get_pricing",
+                              {{"provider", "openai"}, {"model", "gpt-4o"}});
+    REQUIRE(got["result"]["found"].get<bool>() == true);
+    REQUIRE(got["result"]["rule"]["promptPer1K"].get<double>() == 0.005);
+    REQUIRE(got["result"]["rule"]["completionPer1K"].get<double>() == 0.015);
+
+    // Register a second rule under a different (provider, model) pair.
+    dispatch(runtime, "chat.set_pricing",
+             {{"provider", "anthropic"},
+              {"model", "claude-3-sonnet"},
+              {"promptPer1K", 0.003},
+              {"completionPer1K", 0.015}});
+
+    // list_pricing returns both entries.  Order is unspecified (unordered_map)
+    // so the assertions walk the array and match by (provider, model).
+    const Json listed = dispatch(runtime, "chat.list_pricing");
+    REQUIRE(listed["result"]["items"].is_array());
+    REQUIRE(listed["result"]["items"].size() == 2);
+    bool saw_openai = false;
+    bool saw_anthropic = false;
+    for (const auto& entry : listed["result"]["items"]) {
+        if (entry["provider"] == "openai" && entry["model"] == "gpt-4o") {
+            saw_openai = true;
+            REQUIRE(entry["rule"]["promptPer1K"].get<double>() == 0.005);
+        } else if (entry["provider"] == "anthropic" &&
+                   entry["model"] == "claude-3-sonnet") {
+            saw_anthropic = true;
+            REQUIRE(entry["rule"]["completionPer1K"].get<double>() == 0.015);
+        }
+    }
+    REQUIRE(saw_openai);
+    REQUIRE(saw_anthropic);
+
+    // Overwrite the openai rule.  set_pricing is upsert-shaped: sending only
+    // completionPer1K drops promptPer1K rather than merging with the old
+    // value, so the read-back only carries what the last call supplied.
+    dispatch(runtime, "chat.set_pricing",
+             {{"provider", "openai"},
+              {"model", "gpt-4o"},
+              {"completionPer1K", 0.020}});
+    const Json overwritten =
+        dispatch(runtime, "chat.get_pricing",
+                 {{"provider", "openai"}, {"model", "gpt-4o"}});
+    REQUIRE(overwritten["result"]["rule"]["completionPer1K"].get<double>() ==
+            0.020);
+    REQUIRE(!overwritten["result"]["rule"].contains("promptPer1K"));
+
+    // Rejects an empty rule (neither field numeric) so we never register a
+    // silent no-op entry.
+    const Json rejected = dispatch(runtime, "chat.set_pricing",
+                                    {{"provider", "openai"},
+                                     {"model", "no-pricing"}});
+    REQUIRE(rejected.contains("error"));
+    REQUIRE(rejected["error"]["data"]["status"] ==
+            SAO_AI_EDITOR_ERR_INVALID_ARGUMENT);
+
+    // Missing provider / model → INVALID_ARGUMENT (rule cannot be keyed).
+    const Json bad_key = dispatch(runtime, "chat.set_pricing",
+                                   {{"provider", "openai"},
+                                    {"promptPer1K", 0.001}});
+    REQUIRE(bad_key["error"]["data"]["status"] ==
+            SAO_AI_EDITOR_ERR_INVALID_ARGUMENT);
+}
+
+TEST_CASE("AI Editor chat.run with a pricing rule computes costUsd on metrics",
+          "[plugins][ai_editor][native][pricing][runs]") {
+    // Provider replies with a usage block containing both prompt_tokens and
+    // completion_tokens so we can assert the derived costUsd lands on the run
+    // result once resolve_pricing_rule injects the caller's rule.
+    const std::string body =
+        R"({"id":"chat-cost-1","model":"gpt-4o",)"
+        R"("choices":[{"message":{"role":"assistant",)"
+        R"("content":"priced"},"finish_reason":"stop"}],)"
+        R"("usage":{"prompt_tokens":1000,"completion_tokens":500,)"
+        R"("total_tokens":1500}})";
+    LocalHttpServer server(
+        "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n"
+        "Content-Length: " +
+        std::to_string(body.size()) +
+        "\r\nConnection: close\r\n\r\n" + body);
+    RuntimeFixture fixture;
+    auto runtime = fixture.get();
+
+    // Register a $0.005 / $0.015 rule.  For 1000 prompt + 500 completion
+    // tokens the derived cost is 1.0 * 0.005 + 0.5 * 0.015 = 0.0125 USD.
+    dispatch(runtime, "chat.set_pricing",
+             {{"provider", "openai"},
+              {"model", "gpt-4o"},
+              {"promptPer1K", 0.005},
+              {"completionPer1K", 0.015}});
+
+    const Json params{{"provider", {{"id", "fixture-cost"},
+                                     {"endpoint", server.endpoint()}}},
+                      {"model", "gpt-4o"},
+                      {"messages", Json::array(
+                           {{{"role", "user"}, {"content", "hi"}}})},
+                      {"stream", false},
+                      {"timeoutMs", 5'000}};
+    const Json started = dispatch(runtime, "chat.run", params);
+    const std::string run_id = started["result"]["runId"];
+    REQUIRE(server.wait_for_connections(1, 2'000));
+
+    Json status;
+    const ULONGLONG wait_started = GetTickCount64();
+    do {
+        status = dispatch(runtime, "run.status", {{"runId", run_id}})["result"];
+        if (status["status"] != "running") {
+            break;
+        }
+        Sleep(10);
+    } while (GetTickCount64() - wait_started < 5'000);
+    REQUIRE(status["status"] == "completed");
+
+    REQUIRE(status["result"].contains("metrics"));
+    const Json metrics = status["result"]["metrics"];
+    REQUIRE(metrics["promptTokens"].get<int64_t>() == 1000);
+    REQUIRE(metrics["completionTokens"].get<int64_t>() == 500);
+    REQUIRE(metrics["pricingApplied"].get<bool>() == true);
+    REQUIRE(metrics.contains("costUsd"));
+    // Floating-point math: allow tiny epsilon for the 0.0125 result.
+    const double cost = metrics["costUsd"].get<double>();
+    REQUIRE(cost > 0.01249);
+    REQUIRE(cost < 0.01251);
+
+    // Cost also propagates through the runtime's per-model accumulator.  The
+    // (provider, model) row must credit the same numbers we just observed on
+    // metrics so the dashboard slice stays consistent with per-run data.
+    const Json stats = dispatch(runtime, "chat.cost_stats")["result"];
+    REQUIRE(stats["totalRequestsSampled"].get<uint64_t>() == 1);
+    REQUIRE(stats["totalPromptTokens"].get<int64_t>() == 1000);
+    REQUIRE(stats["totalCompletionTokens"].get<int64_t>() == 500);
+    const double stats_total = stats["totalCostUsd"].get<double>();
+    REQUIRE(stats_total > 0.01249);
+    REQUIRE(stats_total < 0.01251);
+    REQUIRE(stats["byModel"].contains("gpt-4o"));
+    REQUIRE(stats["byModel"]["gpt-4o"]["provider"] == "openai");
+    REQUIRE(stats["byModel"]["gpt-4o"]["requests"].get<uint64_t>() == 1);
+    REQUIRE(stats["byProvider"].contains("openai"));
+    REQUIRE(stats["byProvider"]["openai"]["requests"].get<uint64_t>() == 1);
+}
+
+TEST_CASE("AI Editor chat.run without a pricing rule zeroes costUsd but keeps "
+          "prompt / completion token counts",
+          "[plugins][ai_editor][native][pricing][runs]") {
+    const std::string body =
+        R"({"id":"chat-cost-2","model":"unpriced-model",)"
+        R"("choices":[{"message":{"role":"assistant",)"
+        R"("content":"ok"},"finish_reason":"stop"}],)"
+        R"("usage":{"prompt_tokens":250,"completion_tokens":42,)"
+        R"("total_tokens":292}})";
+    LocalHttpServer server(
+        "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n"
+        "Content-Length: " +
+        std::to_string(body.size()) +
+        "\r\nConnection: close\r\n\r\n" + body);
+    RuntimeFixture fixture;
+    auto runtime = fixture.get();
+
+    // Intentionally do NOT register a pricing rule for unpriced-model.  The
+    // resolve_pricing_rule lookup should miss, leaving pricing_rule empty
+    // and cost math skipped.
+    const Json params{{"provider", {{"id", "fixture-nopricing"},
+                                     {"endpoint", server.endpoint()}}},
+                      {"model", "unpriced-model"},
+                      {"messages", Json::array(
+                           {{{"role", "user"}, {"content", "hi"}}})},
+                      {"stream", false},
+                      {"timeoutMs", 5'000}};
+    const Json started = dispatch(runtime, "chat.run", params);
+    const std::string run_id = started["result"]["runId"];
+    REQUIRE(server.wait_for_connections(1, 2'000));
+
+    Json status;
+    const ULONGLONG wait_started = GetTickCount64();
+    do {
+        status = dispatch(runtime, "run.status", {{"runId", run_id}})["result"];
+        if (status["status"] != "running") {
+            break;
+        }
+        Sleep(10);
+    } while (GetTickCount64() - wait_started < 5'000);
+    REQUIRE(status["status"] == "completed");
+
+    const Json metrics = status["result"]["metrics"];
+    REQUIRE(metrics["promptTokens"].get<int64_t>() == 250);
+    REQUIRE(metrics["completionTokens"].get<int64_t>() == 42);
+    REQUIRE(metrics["pricingApplied"].get<bool>() == false);
+    // costUsd is present but zero — the wire shape stays stable so consumers
+    // can index into metrics.costUsd without branching on pricingApplied.
+    REQUIRE(metrics["costUsd"].get<double>() == 0.0);
+
+    // cost_stats still records the run so per-model token counts stay useful
+    // even in the no-pricing case.  costUsd contribution is 0.
+    const Json stats = dispatch(runtime, "chat.cost_stats")["result"];
+    REQUIRE(stats["totalRequestsSampled"].get<uint64_t>() == 1);
+    REQUIRE(stats["totalPromptTokens"].get<int64_t>() == 250);
+    REQUIRE(stats["totalCompletionTokens"].get<int64_t>() == 42);
+    REQUIRE(stats["totalCostUsd"].get<double>() == 0.0);
+    REQUIRE(stats["byModel"]["unpriced-model"]["provider"] == "openai");
+}
+
+TEST_CASE("AI Editor chat.cost_stats aggregates across multiple runs by model "
+          "and provider",
+          "[plugins][ai_editor][native][pricing][runs]") {
+    // We send the same fixture-model twice and a different model once so the
+    // aggregation rolls up requests/prompt/completion/cost correctly per
+    // (provider, model) row *and* per provider-only slice.  Each response
+    // returns a distinct usage block so a bug that stops accumulating after
+    // the first run would fail the deep totals check.
+    const std::string body_a =
+        R"({"id":"agg-a","model":"gpt-4o",)"
+        R"("choices":[{"message":{"role":"assistant","content":"a"},)"
+        R"("finish_reason":"stop"}],)"
+        R"("usage":{"prompt_tokens":100,"completion_tokens":50,)"
+        R"("total_tokens":150}})";
+    const std::string body_b =
+        R"({"id":"agg-b","model":"gpt-4o",)"
+        R"("choices":[{"message":{"role":"assistant","content":"b"},)"
+        R"("finish_reason":"stop"}],)"
+        R"("usage":{"prompt_tokens":200,"completion_tokens":80,)"
+        R"("total_tokens":280}})";
+    const std::string body_c =
+        R"({"id":"agg-c","model":"gpt-4o-mini",)"
+        R"("choices":[{"message":{"role":"assistant","content":"c"},)"
+        R"("finish_reason":"stop"}],)"
+        R"("usage":{"prompt_tokens":40,"completion_tokens":10,)"
+        R"("total_tokens":50}})";
+    auto build_http_response = [](const std::string& body) {
+        return std::string(
+                   "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n"
+                   "Content-Length: ") +
+               std::to_string(body.size()) + "\r\nConnection: close\r\n\r\n" +
+               body;
+    };
+    LocalHttpServer server(std::vector<std::string>{
+        build_http_response(body_a), build_http_response(body_b),
+        build_http_response(body_c)});
+
+    RuntimeFixture fixture;
+    auto runtime = fixture.get();
+
+    // $0.005/$0.015 for gpt-4o so cost=100/1000*0.005 + 50/1000*0.015=0.00125
+    // per body_a and 0.0022 per body_b (total 0.00345).
+    dispatch(runtime, "chat.set_pricing",
+             {{"provider", "openai"},
+              {"model", "gpt-4o"},
+              {"promptPer1K", 0.005},
+              {"completionPer1K", 0.015}});
+    // gpt-4o-mini priced at 0.00015 / 0.0006 → 40/1000*0.00015 + 10/1000*0.0006
+    // = 6e-6 + 6e-6 = 1.2e-5.
+    dispatch(runtime, "chat.set_pricing",
+             {{"provider", "openai"},
+              {"model", "gpt-4o-mini"},
+              {"promptPer1K", 0.00015},
+              {"completionPer1K", 0.0006}});
+
+    auto submit = [&](const std::string& model) {
+        const Json params{{"provider", {{"id", "fixture-agg"},
+                                          {"endpoint", server.endpoint()}}},
+                          {"model", model},
+                          {"messages", Json::array(
+                               {{{"role", "user"}, {"content", "x"}}})},
+                          {"stream", false},
+                          {"timeoutMs", 5'000}};
+        const Json started = dispatch(runtime, "chat.run", params);
+        const std::string run_id = started["result"]["runId"];
+        Json status;
+        const ULONGLONG wait_started = GetTickCount64();
+        do {
+            status = dispatch(runtime, "run.status", {{"runId", run_id}})
+                         ["result"];
+            if (status["status"] != "running") {
+                break;
+            }
+            Sleep(10);
+        } while (GetTickCount64() - wait_started < 5'000);
+        REQUIRE(status["status"] == "completed");
+    };
+    submit("gpt-4o");
+    submit("gpt-4o");
+    submit("gpt-4o-mini");
+    REQUIRE(server.wait_for_connections(3, 5'000));
+
+    const Json stats = dispatch(runtime, "chat.cost_stats",
+                                {{"days", 7}})["result"];
+
+    // Top-level totals: 3 runs, 340 prompt tokens, 140 completion tokens.
+    REQUIRE(stats["days"].get<int64_t>() == 7);
+    REQUIRE(stats["totalRequestsSampled"].get<uint64_t>() == 3);
+    REQUIRE(stats["totalPromptTokens"].get<int64_t>() == 340);
+    REQUIRE(stats["totalCompletionTokens"].get<int64_t>() == 140);
+    const double total_cost = stats["totalCostUsd"].get<double>();
+    // 0.00125 (a) + 0.0022 (b) + 0.000012 (c) = 0.003462.
+    REQUIRE(total_cost > 0.003461);
+    REQUIRE(total_cost < 0.003463);
+
+    // Per-model slice: gpt-4o row aggregates both runs.
+    REQUIRE(stats["byModel"]["gpt-4o"]["requests"].get<uint64_t>() == 2);
+    REQUIRE(stats["byModel"]["gpt-4o"]["promptTokens"].get<int64_t>() == 300);
+    REQUIRE(stats["byModel"]["gpt-4o"]["completionTokens"].get<int64_t>() ==
+            130);
+    // 0.00125 + 0.0022 = 0.00345 for gpt-4o.
+    const double gpt4o_cost =
+        stats["byModel"]["gpt-4o"]["costUsd"].get<double>();
+    REQUIRE(gpt4o_cost > 0.00344);
+    REQUIRE(gpt4o_cost < 0.00346);
+    REQUIRE(stats["byModel"]["gpt-4o-mini"]["requests"].get<uint64_t>() == 1);
+
+    // Provider-only slice: openai row rolls up all 3 runs since both models
+    // share the same provider_type.
+    REQUIRE(stats["byProvider"].contains("openai"));
+    REQUIRE(stats["byProvider"]["openai"]["requests"].get<uint64_t>() == 3);
+    REQUIRE(stats["byProvider"]["openai"]["promptTokens"].get<int64_t>() ==
+            340);
+    REQUIRE(stats["byProvider"]["openai"]["completionTokens"].get<int64_t>() ==
+            140);
+
+    // Average per request: 340/3 = 113 prompt tokens (int div), 140/3 = 46
+    // completion tokens.
+    REQUIRE(stats["averagePerRequest"]["promptTokens"].get<int64_t>() == 113);
+    REQUIRE(stats["averagePerRequest"]["completionTokens"].get<int64_t>() ==
+            46);
+    const double avg_cost =
+        stats["averagePerRequest"]["costUsd"].get<double>();
+    REQUIRE(avg_cost > total_cost / 3.0 - 1e-9);
+    REQUIRE(avg_cost < total_cost / 3.0 + 1e-9);
+}
+
+// -------------------------------------------------------------------------
+// Tool-result compression filter chain (src/tool_result_filter.{h,cpp}).
+// Filters are exercised directly (via the factory functions) rather than
+// through the runtime because the fixture caps listFiles/searchFiles at 50
+// results — smaller than the collapse thresholds we need to validate.
+// -------------------------------------------------------------------------
+
+TEST_CASE("tool result filter: listFiles collapses large recursive listings "
+          "into top-level directory stubs",
+          "[plugins][ai_editor][native][tools][filter][listFiles]") {
+    using namespace sao::ai_editor::native;
+    auto filter = make_list_files_folder_filter();
+    REQUIRE(filter);
+    REQUIRE(filter->id() == "ListFilesFolder");
+    REQUIRE(filter->matches("listFiles", Json::object()));
+    REQUIRE_FALSE(filter->matches("readFile", Json::object()));
+
+    // Build a listing shaped like a real recursive dump: 240 nested entries
+    // under node_modules + 10 leaf files at the workspace root.  Total is
+    // well above the 200-entry threshold so the filter should collapse
+    // node_modules into a single stub and leave the leaf files alone.
+    Json entries = Json::array();
+    for (int index = 0; index < 240; ++index) {
+        entries.push_back({{"name",
+                            std::string("node_modules/dep-") +
+                                std::to_string(index) + "/index.js"},
+                           {"type", "file"},
+                           {"size", 100}});
+    }
+    for (int index = 0; index < 10; ++index) {
+        entries.push_back({{"name", std::string("root-") +
+                                        std::to_string(index) + ".txt"},
+                           {"type", "file"},
+                           {"size", 200}});
+    }
+    Json result{{"path", "."},
+                {"entries", std::move(entries)},
+                {"total", 250}};
+    const Json input{{"path", "."}, {"recursive", true}};
+    ToolResultFilterOutput out = filter->apply(result, input);
+    REQUIRE(out.compressed);
+    REQUIRE(out.filter_id == "ListFilesFolder");
+    REQUIRE(result["originalTotal"] == 250);
+    // node_modules folded into 1 stub + 10 leaf files = 11 entries.
+    REQUIRE(result["entries"].size() == 11);
+    // The first entry should be the collapsed node_modules stub with its
+    // itemsInside counter set to the 240 nested entries.
+    bool found_collapsed = false;
+    for (const auto& entry : result["entries"]) {
+        if (entry.value("name", "") == "node_modules") {
+            found_collapsed = true;
+            REQUIRE(entry["type"] == "directory");
+            REQUIRE(entry.value("collapsed", false) == true);
+            REQUIRE(entry["itemsInside"].get<int>() == 240);
+        }
+    }
+    REQUIRE(found_collapsed);
+
+    // Small listings (<= 200) must be a no-op — filter returns compressed:false
+    // and leaves entries unchanged.
+    Json small_result{{"path", "."},
+                     {"entries", Json::array()},
+                     {"total", 5}};
+    for (int index = 0; index < 5; ++index) {
+        small_result["entries"].push_back({{"name", std::to_string(index)},
+                                            {"type", "file"},
+                                            {"size", 0}});
+    }
+    const Json small_input{{"path", "."}};
+    ToolResultFilterOutput small_out = filter->apply(small_result, small_input);
+    REQUIRE_FALSE(small_out.compressed);
+    REQUIRE(small_result["entries"].size() == 5);
+    REQUIRE_FALSE(small_result.contains("originalTotal"));
+}
+
+TEST_CASE("tool result filter: searchFiles folds dense per-file hits into "
+          "3 samples plus a matches count",
+          "[plugins][ai_editor][native][tools][filter][searchFiles]") {
+    using namespace sao::ai_editor::native;
+    auto filter = make_search_files_collapse_filter();
+    REQUIRE(filter);
+    REQUIRE(filter->id() == "SearchFilesCollapse");
+    REQUIRE(filter->matches("searchFiles", Json::object()));
+    REQUIRE_FALSE(filter->matches("listFiles", Json::object()));
+
+    // 15 hits in path.ts + 2 hits in other.ts.  The dense file gets folded;
+    // the sparse file's hits pass through unchanged so the LLM still sees
+    // full-line context for the low-noise matches.
+    Json results = Json::array();
+    for (int index = 0; index < 15; ++index) {
+        results.push_back({{"file", "path.ts"},
+                           {"line", index + 1},
+                           {"text", std::string("hit-") +
+                                        std::to_string(index)}});
+    }
+    for (int index = 0; index < 2; ++index) {
+        results.push_back({{"file", "other.ts"},
+                           {"line", index + 10},
+                           {"text", "sparse"}});
+    }
+    Json result{{"query", "hit"},
+                {"results", std::move(results)},
+                {"total", 17}};
+    const Json input{{"query", "hit"}};
+    ToolResultFilterOutput out = filter->apply(result, input);
+    REQUIRE(out.compressed);
+    REQUIRE(out.filter_id == "SearchFilesCollapse");
+    REQUIRE(result["originalTotal"] == 17);
+    // path.ts collapsed into 1 entry + 2 sparse other.ts entries = 3 results.
+    REQUIRE(result["results"].size() == 3);
+    bool found_collapsed = false;
+    int sparse_count = 0;
+    for (const auto& entry : result["results"]) {
+        if (entry["file"] == "path.ts") {
+            found_collapsed = true;
+            REQUIRE(entry["matches"].get<int>() == 15);
+            REQUIRE(entry["samples"].is_array());
+            REQUIRE(entry["samples"].size() == 3);
+            // The 3 samples should be the first 3 hits (line 1, 2, 3).
+            REQUIRE(entry["samples"][0]["line"].get<int>() == 1);
+            REQUIRE(entry["samples"][2]["line"].get<int>() == 3);
+        }
+        if (entry.value("file", "") == "other.ts") {
+            ++sparse_count;
+            // Sparse hits keep their line + text fields untouched.
+            REQUIRE(entry.contains("line"));
+            REQUIRE(entry.contains("text"));
+        }
+    }
+    REQUIRE(found_collapsed);
+    REQUIRE(sparse_count == 2);
+
+    // All-sparse (< 4 hits per file) — no collapse; filter is a no-op.
+    Json sparse_result{{"query", "hit"},
+                       {"results", Json::array()},
+                       {"total", 6}};
+    for (int index = 0; index < 3; ++index) {
+        sparse_result["results"].push_back({{"file", "a.ts"},
+                                             {"line", index},
+                                             {"text", "hit"}});
+    }
+    for (int index = 0; index < 3; ++index) {
+        sparse_result["results"].push_back({{"file", "b.ts"},
+                                             {"line", index},
+                                             {"text", "hit"}});
+    }
+    ToolResultFilterOutput sparse_out =
+        filter->apply(sparse_result, Json{{"query", "hit"}});
+    REQUIRE_FALSE(sparse_out.compressed);
+    REQUIRE(sparse_result["results"].size() == 6);
+}
+
+TEST_CASE("tool result filter: readFile head-truncates >32 KB content and "
+          "adds a compression banner",
+          "[plugins][ai_editor][native][tools][filter][readFile]") {
+    using namespace sao::ai_editor::native;
+    auto filter = make_read_file_truncate_filter();
+    REQUIRE(filter);
+    REQUIRE(filter->id() == "ReadFileTruncate");
+    // Matching is arguments-aware: an explicit line window opts out because
+    // the caller wanted exactly those lines.
+    REQUIRE(filter->matches("readFile", Json::object()));
+    REQUIRE_FALSE(filter->matches("readFile",
+                                   Json{{"startLine", 10}, {"endLine", 20}}));
+    REQUIRE_FALSE(filter->matches("editFile", Json::object()));
+
+    // Build a >32 KB payload of ~800 lines, each 50 bytes.  Total ~40 KB
+    // covers the truncate threshold with room for the banner tail.
+    std::string content;
+    content.reserve(50 * 800);
+    for (int index = 0; index < 800; ++index) {
+        content.append("line-");
+        content.append(std::to_string(index));
+        // Pad to 50 bytes so the read fits the shape the truncator expects.
+        while (content.size() % 50 != 49) {
+            content.push_back('x');
+        }
+        content.push_back('\n');
+    }
+    REQUIRE(content.size() > 32u * 1024u);
+    const size_t original_bytes = content.size();
+    Json result{{"path", "big.txt"},
+                {"content", content},
+                {"startLine", 0},
+                {"endLine", 0}};
+    const Json input{{"path", "big.txt"}};
+    ToolResultFilterOutput out = filter->apply(result, input);
+    REQUIRE(out.compressed);
+    REQUIRE(out.filter_id == "ReadFileTruncate");
+    const std::string truncated =
+        result["content"].get<std::string>();
+    // The truncated payload keeps the head + banner tail; overall must be
+    // materially smaller than the input.
+    REQUIRE(truncated.size() < original_bytes);
+    REQUIRE(truncated.find("[SAO output compressed by ReadFileTruncate") !=
+            std::string::npos);
+    REQUIRE(truncated.find("more lines truncated") != std::string::npos);
+    // First line of the file must still be present so the model sees the
+    // shape of the truncated content, not just the banner.
+    REQUIRE(truncated.find("line-0") != std::string::npos);
+    // compressionInfo carries the filter id + before/after byte counts.
+    REQUIRE(result["compressionInfo"]["filterIds"][0] == "ReadFileTruncate");
+    REQUIRE(result["compressionInfo"]["originalBytes"].get<size_t>() ==
+            original_bytes);
+    REQUIRE(result["compressionInfo"]["compressedBytes"].get<size_t>() ==
+            truncated.size());
+
+    // Sub-threshold content is a no-op.
+    Json small_result{{"path", "small.txt"},
+                     {"content", std::string(1024, 'a')},
+                     {"startLine", 0},
+                     {"endLine", 0}};
+    ToolResultFilterOutput small_out = filter->apply(small_result, input);
+    REQUIRE_FALSE(small_out.compressed);
+    REQUIRE(small_result["content"].get<std::string>().size() == 1024);
+}
+
+TEST_CASE("tool result filter: is_protected_from_compression refuses to "
+          "touch JSON / YAML / TOML documents",
+          "[plugins][ai_editor][native][tools][filter][protected]") {
+    using namespace sao::ai_editor::native;
+    // Valid top-level JSON object + array must be refused.
+    REQUIRE(is_protected_from_compression(R"({"a":1,"b":[1,2,3]})"));
+    REQUIRE(is_protected_from_compression("[1, 2, 3, 4]"));
+    // Leading whitespace is stripped before the check.
+    REQUIRE(is_protected_from_compression("   \n\t {\"x\":true}\n"));
+    // YAML document opener.
+    REQUIRE(is_protected_from_compression("---\nfoo: bar\n"));
+    // TOML section header on its own line.
+    REQUIRE(is_protected_from_compression("[server]\nport = 80\n"));
+
+    // Ordinary text — not protected.
+    REQUIRE_FALSE(is_protected_from_compression("hello world"));
+    REQUIRE_FALSE(is_protected_from_compression(""));
+    REQUIRE_FALSE(is_protected_from_compression("   \n  \t"));
+    // Broken JSON (unbalanced braces) is not protected.
+    REQUIRE_FALSE(is_protected_from_compression("{oops"));
+    REQUIRE_FALSE(is_protected_from_compression("{\"unterminated\": "));
+    // A line that starts with `[` but is not a real TOML header — no closing
+    // bracket on the same line, or garbage after — must not fool the check.
+    REQUIRE_FALSE(is_protected_from_compression("[not a header\nfoo=1\n"));
+
+    // End-to-end guard: the ReadFileTruncate filter refuses to compress a
+    // huge JSON payload because is_protected_from_compression() returns true.
+    auto filter = make_read_file_truncate_filter();
+    std::string huge_json = "{\"data\":[";
+    for (int index = 0; index < 8000; ++index) {
+        if (index != 0) huge_json.push_back(',');
+        // Pad each item so the total document comfortably exceeds 32 KB
+        // and forces the truncate filter's size check to fire.
+        huge_json.append("\"item-");
+        huge_json.append(std::to_string(index));
+        huge_json.append("\"");
+    }
+    huge_json.append("]}");
+    REQUIRE(huge_json.size() > 32u * 1024u);
+    Json protected_result{{"path", "big.json"},
+                         {"content", huge_json},
+                         {"startLine", 0},
+                         {"endLine", 0}};
+    ToolResultFilterOutput protected_out =
+        filter->apply(protected_result, Json{{"path", "big.json"}});
+    REQUIRE_FALSE(protected_out.compressed);
+    // Content must be byte-for-byte identical — the filter has to leave
+    // structured payloads unchanged even when they are huge.
+    REQUIRE(protected_result["content"].get<std::string>() == huge_json);
+    REQUIRE_FALSE(protected_result.contains("compressionInfo"));
 }

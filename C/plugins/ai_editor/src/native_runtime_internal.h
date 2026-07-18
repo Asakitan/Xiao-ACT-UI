@@ -17,6 +17,8 @@
 #include "native_secret_store.h"
 #include "native_tool_registry.h"
 #include "prompt_registry.h"
+#include "tool_result_cache.h"
+#include "tool_result_filter.h"
 #include "sao/ai_editor/mcp_client.h"
 #include "winhttp_chat.h"
 #include "workflow_engine.h"
@@ -196,6 +198,17 @@ private:
     RuntimeOptions options_;
     ConversationStore conversations_;
     NativeToolRegistry tools_;
+    // Session-memory dedup cache for read-only tool calls.  Owns its own
+    // mutex; safe to call from the dispatch thread without holding
+    // store_mutex_.  See tool_result_cache.h for TTL / classification rules.
+    ToolResultCache tool_cache_;
+    // Compression chain applied to tools.execute() output before it hits the
+    // JSON-RPC wire.  Populated with the 3 built-in filters
+    // (ListFilesFolder / SearchFilesCollapse / ReadFileTruncate) in the
+    // NativeRuntime constructor; wired into tools_ via set_filter_registry
+    // so the registry can run the chain from inside execute() without the
+    // dispatch layer having to remember to invoke it.
+    ToolResultFilterRegistry filter_registry_;
     std::unique_ptr<SecretStore> secrets_;
     std::unique_ptr<SaoAiEditorMcpClient, McpClientDeleter> mcp_client_;
     WorkflowRegistry workflow_registry_;
