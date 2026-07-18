@@ -255,6 +255,7 @@ extern "C" SAO_AI_EDITOR_API int32_t SAO_AI_EDITOR_CALL sao_ai_editor_ipc_create
     SaoAiEditorIpcTransport transport,
     const char* pipe_name_utf8,
     sao_ai_editor_ipc_t* out_handle) {
+    try {
     if (out_handle == nullptr) {
         return SAO_AI_EDITOR_ERR_INVALID_ARGUMENT;
     }
@@ -285,12 +286,16 @@ extern "C" SAO_AI_EDITOR_API int32_t SAO_AI_EDITOR_CALL sao_ai_editor_ipc_create
 
     *out_handle = implementation.release();
     return SAO_AI_EDITOR_OK;
+    } catch (...) {
+        return SAO_AI_EDITOR_ERR_OS_CALL_FAILED;
+    }
 }
 
 extern "C" SAO_AI_EDITOR_API int32_t SAO_AI_EDITOR_CALL
 sao_ai_editor_ipc_get_pipe_name(sao_ai_editor_ipc_t handle,
                                 char* name_out,
                                 size_t name_cap) {
+    try {
     if (handle == nullptr) {
         return SAO_AI_EDITOR_ERR_HANDLE_INVALID;
     }
@@ -301,6 +306,9 @@ sao_ai_editor_ipc_get_pipe_name(sao_ai_editor_ipc_t handle,
     return copy_string(name_out, name_cap, handle->pipe_name)
         ? SAO_AI_EDITOR_OK
         : SAO_AI_EDITOR_ERR_BUFFER_TOO_SMALL;
+    } catch (...) {
+        return SAO_AI_EDITOR_ERR_OS_CALL_FAILED;
+    }
 }
 
 int32_t sao::ai_editor::detail::ipc_accept_with_process(
@@ -343,13 +351,18 @@ int32_t sao::ai_editor::detail::ipc_accept_with_process(
 
 extern "C" SAO_AI_EDITOR_API int32_t SAO_AI_EDITOR_CALL sao_ai_editor_ipc_accept(
     sao_ai_editor_ipc_t handle, uint32_t timeout_ms) {
-    return sao::ai_editor::detail::ipc_accept_with_process(
-        handle, timeout_ms, nullptr);
+    try {
+        return sao::ai_editor::detail::ipc_accept_with_process(
+            handle, timeout_ms, nullptr);
+    } catch (...) {
+        return SAO_AI_EDITOR_ERR_OS_CALL_FAILED;
+    }
 }
 
 extern "C" SAO_AI_EDITOR_API int32_t SAO_AI_EDITOR_CALL
 sao_ai_editor_ipc_is_connected(sao_ai_editor_ipc_t handle,
                                bool* out_connected) {
+    try {
     if (handle == nullptr) {
         return SAO_AI_EDITOR_ERR_HANDLE_INVALID;
     }
@@ -359,10 +372,14 @@ sao_ai_editor_ipc_is_connected(sao_ai_editor_ipc_t handle,
     std::lock_guard<std::mutex> lock(handle->mutex);
     *out_connected = handle->connected;
     return SAO_AI_EDITOR_OK;
+    } catch (...) {
+        return SAO_AI_EDITOR_ERR_OS_CALL_FAILED;
+    }
 }
 
 extern "C" SAO_AI_EDITOR_API int32_t SAO_AI_EDITOR_CALL sao_ai_editor_ipc_send(
     sao_ai_editor_ipc_t handle, const void* payload, uint32_t payload_len) {
+    try {
     if (handle == nullptr) {
         return SAO_AI_EDITOR_ERR_HANDLE_INVALID;
     }
@@ -383,6 +400,9 @@ extern "C" SAO_AI_EDITOR_API int32_t SAO_AI_EDITOR_CALL sao_ai_editor_ipc_send(
         handle->connected = false;
     }
     return status;
+    } catch (...) {
+        return SAO_AI_EDITOR_ERR_OS_CALL_FAILED;
+    }
 }
 
 int32_t sao::ai_editor::detail::ipc_recv_with_process(
@@ -417,6 +437,7 @@ extern "C" SAO_AI_EDITOR_API int32_t SAO_AI_EDITOR_CALL sao_ai_editor_ipc_recv(
     void* buffer,
     uint32_t buffer_cap,
     uint32_t* out_len) {
+    try {
     if (handle == nullptr) {
         return SAO_AI_EDITOR_ERR_HANDLE_INVALID;
     }
@@ -455,10 +476,14 @@ extern "C" SAO_AI_EDITOR_API int32_t SAO_AI_EDITOR_CALL sao_ai_editor_ipc_recv(
         }
     }
     return copy_pending_locked(*handle, buffer, buffer_cap, out_len);
+    } catch (...) {
+        return SAO_AI_EDITOR_ERR_OS_CALL_FAILED;
+    }
 }
 
 extern "C" SAO_AI_EDITOR_API void SAO_AI_EDITOR_CALL sao_ai_editor_ipc_destroy(
     sao_ai_editor_ipc_t handle) {
+    try {
     if (handle == nullptr) {
         return;
     }
@@ -477,11 +502,17 @@ extern "C" SAO_AI_EDITOR_API void SAO_AI_EDITOR_CALL sao_ai_editor_ipc_destroy(
         handle->pending_message.clear();
     }
     delete handle;
+    } catch (...) {
+    }
 }
 
 extern "C" SAO_AI_EDITOR_API int32_t SAO_AI_EDITOR_CALL
 sao_ai_editor_ipc_test_connect_mock(sao_ai_editor_ipc_t handle) {
-    return handle == nullptr
-        ? SAO_AI_EDITOR_ERR_HANDLE_INVALID
-        : SAO_AI_EDITOR_ERR_NOT_IMPLEMENTED;
+    try {
+        return handle == nullptr
+            ? SAO_AI_EDITOR_ERR_HANDLE_INVALID
+            : SAO_AI_EDITOR_ERR_NOT_IMPLEMENTED;
+    } catch (...) {
+        return SAO_AI_EDITOR_ERR_OS_CALL_FAILED;
+    }
 }

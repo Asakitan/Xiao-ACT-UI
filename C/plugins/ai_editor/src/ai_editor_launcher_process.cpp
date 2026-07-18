@@ -1,10 +1,10 @@
 #include "sao/ai_editor/ai_editor_launcher.h"
 
-#include "sao/ai_editor/ai_editor_ipc.h"
 #include "ai_editor_ipc_internal.h"
+#include "sao/ai_editor/ai_editor_ipc.h"
 
-#include <windows.h>
 #include <shellapi.h>
+#include <windows.h>
 
 #include <array>
 #include <cstring>
@@ -37,21 +37,17 @@ bool utf8_to_wide(const std::string& input, std::wstring& output) {
     if (input.empty()) {
         return false;
     }
-    const int length = MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS,
-                                            input.data(),
-                                            static_cast<int>(input.size()),
-                                            nullptr, 0);
+    const int length = MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, input.data(),
+                                           static_cast<int>(input.size()), nullptr, 0);
     if (length <= 0) {
         return false;
     }
     output.assign(static_cast<size_t>(length), L'\0');
-    return MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS,
-                               input.data(), static_cast<int>(input.size()),
-                               output.data(), length) == length;
+    return MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, input.data(),
+                               static_cast<int>(input.size()), output.data(), length) == length;
 }
 
-void append_quoted_argument(std::wstring& command_line,
-                            const std::wstring& argument) {
+void append_quoted_argument(std::wstring& command_line, const std::wstring& argument) {
     if (!command_line.empty()) {
         command_line.push_back(L' ');
     }
@@ -76,8 +72,7 @@ void append_quoted_argument(std::wstring& command_line,
     command_line.push_back(L'"');
 }
 
-bool append_extra_arguments(const std::string& extra_args,
-                            std::wstring& command_line) {
+bool append_extra_arguments(const std::string& extra_args, std::wstring& command_line) {
     if (extra_args.empty()) {
         return true;
     }
@@ -99,17 +94,15 @@ bool append_extra_arguments(const std::string& extra_args,
 
 bool is_existing_file(const std::wstring& path) {
     const DWORD attributes = GetFileAttributesW(path.c_str());
-    return attributes != INVALID_FILE_ATTRIBUTES &&
-           (attributes & FILE_ATTRIBUTE_DIRECTORY) == 0;
+    return attributes != INVALID_FILE_ATTRIBUTES && (attributes & FILE_ATTRIBUTE_DIRECTORY) == 0;
 }
 
 bool is_existing_directory(const std::wstring& path) {
     const DWORD attributes = GetFileAttributesW(path.c_str());
-    return attributes != INVALID_FILE_ATTRIBUTES &&
-           (attributes & FILE_ATTRIBUTE_DIRECTORY) != 0;
+    return attributes != INVALID_FILE_ATTRIBUTES && (attributes & FILE_ATTRIBUTE_DIRECTORY) != 0;
 }
 
-}  // namespace
+} // namespace
 
 struct SaoAiEditorLauncher {
     ~SaoAiEditorLauncher() {
@@ -155,45 +148,68 @@ void close_process_handles(SaoAiEditorLauncher& launcher) {
     }
 }
 
-void observe_process_exit(SaoAiEditorLauncher& launcher) {
-    if (launcher.process == nullptr || launcher.exited) {
-        return;
-    }
-    DWORD exit_code = STILL_ACTIVE;
-    if (GetExitCodeProcess(launcher.process, &exit_code) && exit_code != STILL_ACTIVE) {
-        launcher.exited = true;
-        launcher.recorded_exit = static_cast<int32_t>(exit_code);
-    }
-}
-
 int32_t recreate_ipc(SaoAiEditorLauncher& launcher) {
     if (launcher.ipc != nullptr) {
         sao_ai_editor_ipc_destroy(launcher.ipc);
         launcher.ipc = nullptr;
     }
-    return sao_ai_editor_ipc_create(SAO_AI_EDITOR_IPC_NAMED_PIPE,
-                                    launcher.ipc_pipe_name.c_str(),
+    return sao_ai_editor_ipc_create(SAO_AI_EDITOR_IPC_NAMED_PIPE, launcher.ipc_pipe_name.c_str(),
                                     &launcher.ipc);
+}
+
+void finish_process_exit(SaoAiEditorLauncher& launcher, DWORD exit_code) {
+    launcher.recorded_exit = static_cast<int32_t>(exit_code);
+    launcher.exited = true;
+    launcher.launched = false;
+    launcher.response_pending = false;
+    close_process_handles(launcher);
+    (void)recreate_ipc(launcher);
+}
+
+void observe_process_exit(SaoAiEditorLauncher& launcher) {
+    if (launcher.process == nullptr) {
+        return;
+    }
+    DWORD exit_code = STILL_ACTIVE;
+    if (GetExitCodeProcess(launcher.process, &exit_code) && exit_code != STILL_ACTIVE) {
+        finish_process_exit(launcher, exit_code);
+    }
+}
+
+int32_t ensure_ipc(SaoAiEditorLauncher& launcher) {
+    return launcher.ipc != nullptr ? SAO_AI_EDITOR_OK : recreate_ipc(launcher);
+}
+
+void discard_pending_response(SaoAiEditorLauncher& launcher) {
+    if (!launcher.response_pending || launcher.ipc == nullptr) {
+        return;
+    }
+    uint32_t required = 0;
+    const int32_t size_status = sao_ai_editor_ipc_recv(launcher.ipc, nullptr, 0, &required);
+    if (size_status == SAO_AI_EDITOR_ERR_BUFFER_TOO_SMALL) {
+        std::vector<uint8_t> discarded(required);
+        (void)sao_ai_editor_ipc_recv(launcher.ipc, discarded.data(), required, &required);
+    }
+    launcher.response_pending = false;
 }
 
 void fail_launch(SaoAiEditorLauncher& launcher, int32_t* out_exit_code) {
     if (launcher.process != nullptr) {
         DWORD exit_code = STILL_ACTIVE;
-        if (GetExitCodeProcess(launcher.process, &exit_code) &&
-            exit_code == STILL_ACTIVE) {
+        if (GetExitCodeProcess(launcher.process, &exit_code) && exit_code == STILL_ACTIVE) {
             (void)TerminateProcess(launcher.process, 1);
             (void)WaitForSingleObject(launcher.process, 5000);
             (void)GetExitCodeProcess(launcher.process, &exit_code);
         }
-        launcher.recorded_exit = static_cast<int32_t>(exit_code);
-        launcher.exited = true;
+        finish_process_exit(launcher, exit_code);
         if (out_exit_code != nullptr) {
             *out_exit_code = launcher.recorded_exit;
         }
+        return;
     }
     close_process_handles(launcher);
     launcher.launched = false;
-    (void)recreate_ipc(launcher);
+    launcher.response_pending = false;
 }
 
 int32_t create_job(SaoAiEditorLauncher& launcher) {
@@ -202,11 +218,8 @@ int32_t create_job(SaoAiEditorLauncher& launcher) {
         return SAO_AI_EDITOR_ERR_OS_CALL_FAILED;
     }
     JOBOBJECT_EXTENDED_LIMIT_INFORMATION information{};
-    information.BasicLimitInformation.LimitFlags =
-        JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
-    if (!SetInformationJobObject(launcher.job,
-                                 JobObjectExtendedLimitInformation,
-                                 &information,
+    information.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+    if (!SetInformationJobObject(launcher.job, JobObjectExtendedLimitInformation, &information,
                                  sizeof(information))) {
         return SAO_AI_EDITOR_ERR_OS_CALL_FAILED;
     }
@@ -219,17 +232,16 @@ int32_t perform_handshake(SaoAiEditorLauncher& launcher) {
     if (status != SAO_AI_EDITOR_OK) {
         return status;
     }
-    status = sao_ai_editor_ipc_send(
-        launcher.ipc, kHandshakeRequest,
-        static_cast<uint32_t>(std::strlen(kHandshakeRequest)));
+    status = sao_ai_editor_ipc_send(launcher.ipc, kHandshakeRequest,
+                                    static_cast<uint32_t>(std::strlen(kHandshakeRequest)));
     if (status != SAO_AI_EDITOR_OK) {
         return status;
     }
     std::array<char, 128> response{};
     uint32_t response_length = 0;
     status = sao::ai_editor::detail::ipc_recv_with_process(
-        launcher.ipc, response.data(), static_cast<uint32_t>(response.size()),
-        &response_length, launcher.handshake_timeout_ms, launcher.process);
+        launcher.ipc, response.data(), static_cast<uint32_t>(response.size()), &response_length,
+        launcher.handshake_timeout_ms, launcher.process);
     if (status != SAO_AI_EDITOR_OK) {
         return status;
     }
@@ -240,19 +252,26 @@ int32_t perform_handshake(SaoAiEditorLauncher& launcher) {
     return SAO_AI_EDITOR_OK;
 }
 
-}  // namespace
+} // namespace
 
 extern "C" SAO_AI_EDITOR_API uint32_t SAO_AI_EDITOR_CALL sao_ai_editor_abi_version(void) {
-    return SAO_AI_EDITOR_ABI_VERSION;
+    try {
+        return SAO_AI_EDITOR_ABI_VERSION;
+    } catch (...) {
+        return 0;
+    }
 }
 
 extern "C" SAO_AI_EDITOR_API bool SAO_AI_EDITOR_CALL sao_ai_editor_launcher_available(void) {
-    return true;
+    try {
+        return true;
+    } catch (...) {
+        return false;
+    }
 }
 
-extern "C" SAO_AI_EDITOR_API int32_t SAO_AI_EDITOR_CALL sao_ai_editor_create(
-    const SaoAiEditorLaunchConfig* config,
-    sao_ai_editor_launcher_t* out_handle) {
+extern "C" SAO_AI_EDITOR_API int32_t SAO_AI_EDITOR_CALL
+sao_ai_editor_create(const SaoAiEditorLaunchConfig* config, sao_ai_editor_launcher_t* out_handle) {
     if (out_handle == nullptr) {
         return SAO_AI_EDITOR_ERR_INVALID_ARGUMENT;
     }
@@ -264,28 +283,24 @@ extern "C" SAO_AI_EDITOR_API int32_t SAO_AI_EDITOR_CALL sao_ai_editor_create(
     }
 
     try {
-        auto implementation = std::unique_ptr<SaoAiEditorLauncher>(
-            new (std::nothrow) SaoAiEditorLauncher());
+        auto implementation =
+            std::unique_ptr<SaoAiEditorLauncher>(new (std::nothrow) SaoAiEditorLauncher());
         if (!implementation) {
             return SAO_AI_EDITOR_ERR_OS_CALL_FAILED;
         }
         implementation->executable = config->executable_utf8;
         implementation->base_dir = config->base_dir_utf8;
-        implementation->extra_args = config->extra_args_utf8 != nullptr
-            ? config->extra_args_utf8
-            : "";
+        implementation->extra_args =
+            config->extra_args_utf8 != nullptr ? config->extra_args_utf8 : "";
         implementation->inherit_stdio = config->inherit_stdio;
         implementation->handshake_timeout_ms = config->handshake_timeout_ms != 0
-            ? config->handshake_timeout_ms
-            : kDefaultHandshakeTimeoutMs;
-        implementation->request_timeout_ms = config->request_timeout_ms != 0
-            ? config->request_timeout_ms
-            : kDefaultRequestTimeoutMs;
+                                                   ? config->handshake_timeout_ms
+                                                   : kDefaultHandshakeTimeoutMs;
+        implementation->request_timeout_ms =
+            config->request_timeout_ms != 0 ? config->request_timeout_ms : kDefaultRequestTimeoutMs;
 
-        if (!utf8_to_wide(implementation->executable,
-                          implementation->executable_wide) ||
-            !utf8_to_wide(implementation->base_dir,
-                          implementation->base_dir_wide) ||
+        if (!utf8_to_wide(implementation->executable, implementation->executable_wide) ||
+            !utf8_to_wide(implementation->base_dir, implementation->base_dir_wide) ||
             !std::filesystem::path(implementation->executable_wide).is_absolute() ||
             !std::filesystem::path(implementation->base_dir_wide).is_absolute() ||
             !is_existing_file(implementation->executable_wide) ||
@@ -293,16 +308,14 @@ extern "C" SAO_AI_EDITOR_API int32_t SAO_AI_EDITOR_CALL sao_ai_editor_create(
             return SAO_AI_EDITOR_ERR_CONFIG_MISSING;
         }
 
-        int32_t status = sao_ai_editor_ipc_create(
-            SAO_AI_EDITOR_IPC_NAMED_PIPE,
-            config->ipc_pipe_name_utf8,
-            &implementation->ipc);
+        int32_t status = sao_ai_editor_ipc_create(SAO_AI_EDITOR_IPC_NAMED_PIPE,
+                                                  config->ipc_pipe_name_utf8, &implementation->ipc);
         if (status != SAO_AI_EDITOR_OK) {
             return status;
         }
         std::array<char, 512> pipe_name{};
-        status = sao_ai_editor_ipc_get_pipe_name(
-            implementation->ipc, pipe_name.data(), pipe_name.size());
+        status = sao_ai_editor_ipc_get_pipe_name(implementation->ipc, pipe_name.data(),
+                                                 pipe_name.size());
         if (status != SAO_AI_EDITOR_OK) {
             return status;
         }
@@ -315,22 +328,26 @@ extern "C" SAO_AI_EDITOR_API int32_t SAO_AI_EDITOR_CALL sao_ai_editor_create(
     }
 }
 
-extern "C" SAO_AI_EDITOR_API int32_t SAO_AI_EDITOR_CALL sao_ai_editor_launch(
-    sao_ai_editor_launcher_t handle,
-    int32_t* out_exit_code) {
-    if (handle == nullptr) {
-        return SAO_AI_EDITOR_ERR_HANDLE_INVALID;
-    }
-    std::lock_guard<std::mutex> lock(handle->mutex);
-    if (handle->launched) {
-        return SAO_AI_EDITOR_ERR_ALREADY_RUNNING;
-    }
-    if (!is_existing_file(handle->executable_wide) ||
-        !is_existing_directory(handle->base_dir_wide) || handle->ipc == nullptr) {
-        return SAO_AI_EDITOR_ERR_CONFIG_MISSING;
-    }
-
+extern "C" SAO_AI_EDITOR_API int32_t SAO_AI_EDITOR_CALL
+sao_ai_editor_launch(sao_ai_editor_launcher_t handle, int32_t* out_exit_code) {
     try {
+        if (handle == nullptr) {
+            return SAO_AI_EDITOR_ERR_HANDLE_INVALID;
+        }
+        std::lock_guard<std::mutex> lock(handle->mutex);
+        observe_process_exit(*handle);
+        if (handle->launched) {
+            return SAO_AI_EDITOR_ERR_ALREADY_RUNNING;
+        }
+        if (!is_existing_file(handle->executable_wide) ||
+            !is_existing_directory(handle->base_dir_wide)) {
+            return SAO_AI_EDITOR_ERR_CONFIG_MISSING;
+        }
+        int32_t status = ensure_ipc(*handle);
+        if (status != SAO_AI_EDITOR_OK) {
+            return status;
+        }
+
         std::wstring command_line;
         append_quoted_argument(command_line, handle->executable_wide);
         if (!append_extra_arguments(handle->extra_args, command_line)) {
@@ -345,7 +362,7 @@ extern "C" SAO_AI_EDITOR_API int32_t SAO_AI_EDITOR_CALL sao_ai_editor_launch(
         std::vector<wchar_t> mutable_command(command_line.begin(), command_line.end());
         mutable_command.push_back(L'\0');
 
-        int32_t status = create_job(*handle);
+        status = create_job(*handle);
         if (status != SAO_AI_EDITOR_OK) {
             close_process_handles(*handle);
             return status;
@@ -364,10 +381,9 @@ extern "C" SAO_AI_EDITOR_API int32_t SAO_AI_EDITOR_CALL sao_ai_editor_launch(
         if (!handle->inherit_stdio) {
             flags |= CREATE_NO_WINDOW;
         }
-        const BOOL created = CreateProcessW(
-            handle->executable_wide.c_str(), mutable_command.data(),
-            nullptr, nullptr, FALSE, flags, nullptr,
-            handle->base_dir_wide.c_str(), &startup, &process);
+        const BOOL created = CreateProcessW(handle->executable_wide.c_str(), mutable_command.data(),
+                                            nullptr, nullptr, FALSE, flags, nullptr,
+                                            handle->base_dir_wide.c_str(), &startup, &process);
         if (!created) {
             close_process_handles(*handle);
             return SAO_AI_EDITOR_ERR_LAUNCH_FAILED;
@@ -375,6 +391,7 @@ extern "C" SAO_AI_EDITOR_API int32_t SAO_AI_EDITOR_CALL sao_ai_editor_launch(
         handle->process = process.hProcess;
         handle->thread = process.hThread;
         handle->exited = false;
+        handle->response_pending = false;
         handle->recorded_exit = 0;
 
         if (!AssignProcessToJobObject(handle->job, handle->process) ||
@@ -397,149 +414,155 @@ extern "C" SAO_AI_EDITOR_API int32_t SAO_AI_EDITOR_CALL sao_ai_editor_launch(
 }
 
 extern "C" SAO_AI_EDITOR_API int32_t SAO_AI_EDITOR_CALL sao_ai_editor_status(
-    sao_ai_editor_launcher_t handle,
-    bool* out_is_running,
-    int32_t* out_exit_code) {
-    if (handle == nullptr) {
-        return SAO_AI_EDITOR_ERR_HANDLE_INVALID;
+    sao_ai_editor_launcher_t handle, bool* out_is_running, int32_t* out_exit_code) {
+    try {
+        if (handle == nullptr) {
+            return SAO_AI_EDITOR_ERR_HANDLE_INVALID;
+        }
+        if (out_is_running == nullptr) {
+            return SAO_AI_EDITOR_ERR_INVALID_ARGUMENT;
+        }
+        std::lock_guard<std::mutex> lock(handle->mutex);
+        observe_process_exit(*handle);
+        *out_is_running = handle->launched && !handle->exited;
+        if (handle->exited && out_exit_code != nullptr) {
+            *out_exit_code = handle->recorded_exit;
+        }
+        return SAO_AI_EDITOR_OK;
+    } catch (...) {
+        return SAO_AI_EDITOR_ERR_OS_CALL_FAILED;
     }
-    if (out_is_running == nullptr) {
-        return SAO_AI_EDITOR_ERR_INVALID_ARGUMENT;
-    }
-    std::lock_guard<std::mutex> lock(handle->mutex);
-    observe_process_exit(*handle);
-    *out_is_running = handle->launched && !handle->exited;
-    if (handle->exited && out_exit_code != nullptr) {
-        *out_exit_code = handle->recorded_exit;
-    }
-    return SAO_AI_EDITOR_OK;
 }
 
 extern "C" SAO_AI_EDITOR_API int32_t SAO_AI_EDITOR_CALL sao_ai_editor_request(
-    sao_ai_editor_launcher_t handle,
-    const void* request,
-    uint32_t request_len,
-    void* response,
-    uint32_t response_cap,
-    uint32_t* out_len,
-    uint32_t timeout_ms) {
-    if (handle == nullptr) {
-        return SAO_AI_EDITOR_ERR_HANDLE_INVALID;
-    }
-    if (out_len == nullptr || (request == nullptr && request_len != 0) ||
-        request_len > kMaximumPayload) {
-        return SAO_AI_EDITOR_ERR_INVALID_ARGUMENT;
-    }
-    std::lock_guard<std::mutex> lock(handle->mutex);
-    *out_len = 0;
-    observe_process_exit(*handle);
-    if (!handle->launched || handle->exited) {
-        return SAO_AI_EDITOR_ERR_NOT_RUNNING;
-    }
-    int32_t status = SAO_AI_EDITOR_OK;
-    if (!handle->response_pending) {
-        status = sao_ai_editor_ipc_send(handle->ipc, request, request_len);
-        if (status != SAO_AI_EDITOR_OK) {
-            observe_process_exit(*handle);
-            return status;
+    sao_ai_editor_launcher_t handle, const void* request, uint32_t request_len, void* response,
+    uint32_t response_cap, uint32_t* out_len, uint32_t timeout_ms) {
+    try {
+        if (handle == nullptr) {
+            return SAO_AI_EDITOR_ERR_HANDLE_INVALID;
         }
+        if (out_len == nullptr || (request == nullptr && request_len != 0) ||
+            request_len > kMaximumPayload) {
+            return SAO_AI_EDITOR_ERR_INVALID_ARGUMENT;
+        }
+        std::lock_guard<std::mutex> lock(handle->mutex);
+        *out_len = 0;
+        observe_process_exit(*handle);
+        if (!handle->launched || handle->exited) {
+            return SAO_AI_EDITOR_ERR_NOT_RUNNING;
+        }
+        int32_t status = SAO_AI_EDITOR_OK;
+        if (!handle->response_pending) {
+            status = sao_ai_editor_ipc_send(handle->ipc, request, request_len);
+            if (status != SAO_AI_EDITOR_OK) {
+                observe_process_exit(*handle);
+                return status;
+            }
+        }
+        const uint32_t effective_timeout =
+            timeout_ms != 0 ? timeout_ms : handle->request_timeout_ms;
+        status = sao::ai_editor::detail::ipc_recv_with_process(
+            handle->ipc, response, response_cap, out_len, effective_timeout, handle->process);
+        handle->response_pending = status == SAO_AI_EDITOR_ERR_BUFFER_TOO_SMALL;
+        if (status == SAO_AI_EDITOR_ERR_IPC_CLOSED && handle->process != nullptr) {
+            (void)WaitForSingleObject(handle->process, effective_timeout);
+        }
+        observe_process_exit(*handle);
+        return status;
+    } catch (...) {
+        return SAO_AI_EDITOR_ERR_OS_CALL_FAILED;
     }
-    const uint32_t effective_timeout = timeout_ms != 0
-        ? timeout_ms
-        : handle->request_timeout_ms;
-    status = sao::ai_editor::detail::ipc_recv_with_process(
-        handle->ipc, response, response_cap, out_len,
-        effective_timeout, handle->process);
-    handle->response_pending =
-        status == SAO_AI_EDITOR_ERR_BUFFER_TOO_SMALL;
-    if (status == SAO_AI_EDITOR_ERR_IPC_CLOSED && handle->process != nullptr) {
-        (void)WaitForSingleObject(handle->process, effective_timeout);
-    }
-    observe_process_exit(*handle);
-    return status;
 }
 
 extern "C" SAO_AI_EDITOR_API int32_t SAO_AI_EDITOR_CALL sao_ai_editor_shutdown(
-    sao_ai_editor_launcher_t handle,
-    uint32_t timeout_ms,
-    int32_t* out_exit_code) {
-    if (handle == nullptr) {
-        return SAO_AI_EDITOR_ERR_HANDLE_INVALID;
-    }
-    std::lock_guard<std::mutex> lock(handle->mutex);
-    observe_process_exit(*handle);
-    if (!handle->launched) {
-        return SAO_AI_EDITOR_ERR_NOT_RUNNING;
-    }
-    if (!handle->exited) {
-        (void)sao_ai_editor_ipc_send(
-            handle->ipc, kShutdownRequest,
-            static_cast<uint32_t>(std::strlen(kShutdownRequest)));
-        std::array<char, 64> acknowledgement{};
-        uint32_t acknowledgement_length = 0;
-        (void)sao::ai_editor::detail::ipc_recv_with_process(
-            handle->ipc, acknowledgement.data(),
-            static_cast<uint32_t>(acknowledgement.size()),
-            &acknowledgement_length, timeout_ms, handle->process);
-        const DWORD wait_result = WaitForSingleObject(handle->process, timeout_ms);
-        if (wait_result == WAIT_TIMEOUT) {
-            (void)TerminateProcess(handle->process, 1);
-            (void)WaitForSingleObject(handle->process, 5000);
-        } else if (wait_result == WAIT_FAILED) {
-            return SAO_AI_EDITOR_ERR_OS_CALL_FAILED;
+    sao_ai_editor_launcher_t handle, uint32_t timeout_ms, int32_t* out_exit_code) {
+    try {
+        if (handle == nullptr) {
+            return SAO_AI_EDITOR_ERR_HANDLE_INVALID;
         }
-        observe_process_exit(*handle);
-    }
-    if (out_exit_code != nullptr) {
-        *out_exit_code = handle->recorded_exit;
-    }
-    return SAO_AI_EDITOR_OK;
-}
-
-extern "C" SAO_AI_EDITOR_API void SAO_AI_EDITOR_CALL sao_ai_editor_destroy(
-    sao_ai_editor_launcher_t handle) {
-    if (handle == nullptr) {
-        return;
-    }
-    {
         std::lock_guard<std::mutex> lock(handle->mutex);
         observe_process_exit(*handle);
-        if (handle->process != nullptr && !handle->exited) {
-            (void)TerminateProcess(handle->process, 1);
-            (void)WaitForSingleObject(handle->process, 5000);
+        if (!handle->launched) {
+            if (!handle->exited) {
+                return SAO_AI_EDITOR_ERR_NOT_RUNNING;
+            }
+            if (out_exit_code != nullptr) {
+                *out_exit_code = handle->recorded_exit;
+            }
+            return SAO_AI_EDITOR_OK;
         }
-        close_process_handles(*handle);
-        if (handle->ipc != nullptr) {
-            sao_ai_editor_ipc_destroy(handle->ipc);
-            handle->ipc = nullptr;
+        if (!handle->exited) {
+            discard_pending_response(*handle);
+            (void)sao_ai_editor_ipc_send(handle->ipc, kShutdownRequest,
+                                         static_cast<uint32_t>(std::strlen(kShutdownRequest)));
+            std::array<char, 64> acknowledgement{};
+            uint32_t acknowledgement_length = 0;
+            (void)sao::ai_editor::detail::ipc_recv_with_process(
+                handle->ipc, acknowledgement.data(), static_cast<uint32_t>(acknowledgement.size()),
+                &acknowledgement_length, timeout_ms, handle->process);
+            const DWORD wait_result = WaitForSingleObject(handle->process, timeout_ms);
+            if (wait_result == WAIT_TIMEOUT) {
+                (void)TerminateProcess(handle->process, 1);
+                (void)WaitForSingleObject(handle->process, 5000);
+            } else if (wait_result == WAIT_FAILED) {
+                return SAO_AI_EDITOR_ERR_OS_CALL_FAILED;
+            }
+            observe_process_exit(*handle);
         }
+        if (out_exit_code != nullptr) {
+            *out_exit_code = handle->recorded_exit;
+        }
+        return SAO_AI_EDITOR_OK;
+    } catch (...) {
+        return SAO_AI_EDITOR_ERR_OS_CALL_FAILED;
     }
-    delete handle;
+}
+
+extern "C" SAO_AI_EDITOR_API void SAO_AI_EDITOR_CALL
+sao_ai_editor_destroy(sao_ai_editor_launcher_t handle) {
+    try {
+        if (handle == nullptr) {
+            return;
+        }
+        {
+            std::lock_guard<std::mutex> lock(handle->mutex);
+            observe_process_exit(*handle);
+            if (handle->process != nullptr && !handle->exited) {
+                (void)TerminateProcess(handle->process, 1);
+                (void)WaitForSingleObject(handle->process, 5000);
+            }
+            close_process_handles(*handle);
+            if (handle->ipc != nullptr) {
+                sao_ai_editor_ipc_destroy(handle->ipc);
+                handle->ipc = nullptr;
+            }
+        }
+        delete handle;
+    } catch (...) {
+    }
 }
 
 extern "C" SAO_AI_EDITOR_API int32_t SAO_AI_EDITOR_CALL sao_ai_editor_get_config(
-    sao_ai_editor_launcher_t handle,
-    char* executable_out,
-    size_t executable_cap,
-    char* base_dir_out,
-    size_t base_dir_cap,
-    char* ipc_pipe_name_out,
-    size_t ipc_pipe_cap) {
-    if (handle == nullptr) {
-        return SAO_AI_EDITOR_ERR_HANDLE_INVALID;
+    sao_ai_editor_launcher_t handle, char* executable_out, size_t executable_cap,
+    char* base_dir_out, size_t base_dir_cap, char* ipc_pipe_name_out, size_t ipc_pipe_cap) {
+    try {
+        if (handle == nullptr) {
+            return SAO_AI_EDITOR_ERR_HANDLE_INVALID;
+        }
+        std::lock_guard<std::mutex> lock(handle->mutex);
+        if (executable_out != nullptr &&
+            !copy_string(executable_out, executable_cap, handle->executable)) {
+            return SAO_AI_EDITOR_ERR_BUFFER_TOO_SMALL;
+        }
+        if (base_dir_out != nullptr && !copy_string(base_dir_out, base_dir_cap, handle->base_dir)) {
+            return SAO_AI_EDITOR_ERR_BUFFER_TOO_SMALL;
+        }
+        if (ipc_pipe_name_out != nullptr &&
+            !copy_string(ipc_pipe_name_out, ipc_pipe_cap, handle->ipc_pipe_name)) {
+            return SAO_AI_EDITOR_ERR_BUFFER_TOO_SMALL;
+        }
+        return SAO_AI_EDITOR_OK;
+    } catch (...) {
+        return SAO_AI_EDITOR_ERR_OS_CALL_FAILED;
     }
-    std::lock_guard<std::mutex> lock(handle->mutex);
-    if (executable_out != nullptr &&
-        !copy_string(executable_out, executable_cap, handle->executable)) {
-        return SAO_AI_EDITOR_ERR_BUFFER_TOO_SMALL;
-    }
-    if (base_dir_out != nullptr &&
-        !copy_string(base_dir_out, base_dir_cap, handle->base_dir)) {
-        return SAO_AI_EDITOR_ERR_BUFFER_TOO_SMALL;
-    }
-    if (ipc_pipe_name_out != nullptr &&
-        !copy_string(ipc_pipe_name_out, ipc_pipe_cap, handle->ipc_pipe_name)) {
-        return SAO_AI_EDITOR_ERR_BUFFER_TOO_SMALL;
-    }
-    return SAO_AI_EDITOR_OK;
 }

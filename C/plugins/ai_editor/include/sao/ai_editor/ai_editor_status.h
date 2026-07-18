@@ -44,6 +44,16 @@ enum SaoAiEditorStatus : int32_t {
     SAO_AI_EDITOR_ERR_IPC_TIMEOUT       = -111,
     SAO_AI_EDITOR_ERR_IPC_CLOSED        = -112,
     SAO_AI_EDITOR_ERR_CONFIG_MISSING    = -120,
+    // Native backend errors. Existing launcher/IPC values remain unchanged.
+    SAO_AI_EDITOR_ERR_TIMEOUT               = -200,
+    SAO_AI_EDITOR_ERR_NOT_FOUND             = -201,
+    SAO_AI_EDITOR_ERR_PERMISSION_DENIED     = -202,
+    SAO_AI_EDITOR_ERR_CONFIRMATION_REQUIRED = -203,
+    SAO_AI_EDITOR_ERR_BOUNDARY_VIOLATION    = -204,
+    SAO_AI_EDITOR_ERR_CANCELLED             = -205,
+    SAO_AI_EDITOR_ERR_HTTP                  = -206,
+    SAO_AI_EDITOR_ERR_PROTOCOL              = -207,
+    SAO_AI_EDITOR_ERR_BUSY                  = -208,
 };
 
 // ABI version. Bump minor when adding new entrypoints; bump major
