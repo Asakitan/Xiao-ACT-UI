@@ -1,0 +1,459 @@
+#include "webview_bridge.h"
+
+#include <windows.h>
+#include <objbase.h>
+#include <combaseapi.h>
+
+#include <atomic>
+#include <memory>
+#include <mutex>
+#include <string>
+#include <vector>
+
+#include <nlohmann/json.hpp>
+
+#include <WebView2.h>
+
+#include "native_runtime_internal.h"
+#include "native_utils.h"
+
+// The opaque runtime type must match the definition inside
+// ai_editor_native_runtime.cpp so we can recover the concrete
+// NativeRuntime instance from the C ABI handle.
+struct SaoAiEditorRuntime {
+    std::unique_ptr<sao::ai_editor::native::NativeRuntime> implementation;
+    std::mutex dispatch_mutex;
+    std::mutex event_mutex;
+    std::string pending_dispatch;
+    std::string pending_event;
+};
+
+// Dynamic loader signature for CreateCoreWebView2EnvironmentWithOptions.
+using PFN_CreateEnvironment =
+    HRESULT (STDMETHODCALLTYPE*)(PCWSTR, PCWSTR,
+                                 ICoreWebView2EnvironmentOptions*,
+                                 ICoreWebView2CreateCoreWebView2EnvironmentCompletedHandler*);
+
+namespace sao::ai_editor::native {
+namespace {
+
+constexpr wchar_t kWindowClassName[] = L"SaoAiEditorWebViewHost";
+
+class ScopedCoInitialize final {
+public:
+    ScopedCoInitialize() {
+        hr_ = CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
+    }
+    ~ScopedCoInitialize() {
+        if (SUCCEEDED(hr_) || hr_ == RPC_E_CHANGED_MODE) {
+            CoUninitialize();
+        }
+    }
+    bool valid() const noexcept {
+        return SUCCEEDED(hr_) || hr_ == S_FALSE ||
+               hr_ == RPC_E_CHANGED_MODE;
+    }
+    HRESULT status() const noexcept { return hr_; }
+
+    ScopedCoInitialize(const ScopedCoInitialize&) = delete;
+    ScopedCoInitialize& operator=(const ScopedCoInitialize&) = delete;
+
+private:
+    HRESULT hr_ = S_OK;
+};
+
+class ScopedCoTaskString final {
+public:
+    ScopedCoTaskString() = default;
+    ~ScopedCoTaskString() {
+        if (value_ != nullptr) {
+            CoTaskMemFree(value_);
+        }
+    }
+    LPWSTR* addressof() noexcept { return &value_; }
+    LPWSTR get() const noexcept { return value_; }
+    ScopedCoTaskString(const ScopedCoTaskString&) = delete;
+    ScopedCoTaskString& operator=(const ScopedCoTaskString&) = delete;
+
+private:
+    LPWSTR value_ = nullptr;
+};
+
+struct WebViewSession {
+    HWND window = nullptr;
+    NativeRuntime* runtime = nullptr;
+    sao_ai_editor_runtime_t runtime_handle = nullptr;
+    ICoreWebView2Environment* environment = nullptr;
+    ICoreWebView2Controller* controller = nullptr;
+    ICoreWebView2* view = nullptr;
+    EventRegistrationToken web_message_token{};
+    std::wstring navigate_url;
+    bool bridge_enabled = true;
+    std::atomic<int> exit_code{0};
+    std::atomic<bool> teardown_requested{false};
+};
+
+class EnvironmentReadyHandler
+    : public ICoreWebView2CreateCoreWebView2EnvironmentCompletedHandler {
+public:
+    explicit EnvironmentReadyHandler(WebViewSession* session)
+        : session_(session) {}
+
+    HRESULT STDMETHODCALLTYPE QueryInterface(REFIID iid, void** out) override {
+        if (iid == IID_IUnknown ||
+            iid == __uuidof(
+                ICoreWebView2CreateCoreWebView2EnvironmentCompletedHandler)) {
+            *out = this;
+            AddRef();
+            return S_OK;
+        }
+        *out = nullptr;
+        return E_NOINTERFACE;
+    }
+    ULONG STDMETHODCALLTYPE AddRef() override {
+        return ref_.fetch_add(1) + 1;
+    }
+    ULONG STDMETHODCALLTYPE Release() override {
+        const ULONG remaining = ref_.fetch_sub(1) - 1;
+        if (remaining == 0) {
+            delete this;
+        }
+        return remaining;
+    }
+
+    HRESULT STDMETHODCALLTYPE Invoke(HRESULT hr,
+                                     ICoreWebView2Environment* environment) override;
+
+private:
+    std::atomic<ULONG> ref_{1};
+    WebViewSession* session_;
+};
+
+class ControllerReadyHandler
+    : public ICoreWebView2CreateCoreWebView2ControllerCompletedHandler {
+public:
+    explicit ControllerReadyHandler(WebViewSession* session)
+        : session_(session) {}
+
+    HRESULT STDMETHODCALLTYPE QueryInterface(REFIID iid, void** out) override {
+        if (iid == IID_IUnknown ||
+            iid == __uuidof(
+                ICoreWebView2CreateCoreWebView2ControllerCompletedHandler)) {
+            *out = this;
+            AddRef();
+            return S_OK;
+        }
+        *out = nullptr;
+        return E_NOINTERFACE;
+    }
+    ULONG STDMETHODCALLTYPE AddRef() override {
+        return ref_.fetch_add(1) + 1;
+    }
+    ULONG STDMETHODCALLTYPE Release() override {
+        const ULONG remaining = ref_.fetch_sub(1) - 1;
+        if (remaining == 0) {
+            delete this;
+        }
+        return remaining;
+    }
+
+    HRESULT STDMETHODCALLTYPE Invoke(HRESULT hr,
+                                     ICoreWebView2Controller* controller) override;
+
+private:
+    std::atomic<ULONG> ref_{1};
+    WebViewSession* session_;
+};
+
+class WebMessageReceivedHandler
+    : public ICoreWebView2WebMessageReceivedEventHandler {
+public:
+    explicit WebMessageReceivedHandler(WebViewSession* session)
+        : session_(session) {}
+
+    HRESULT STDMETHODCALLTYPE QueryInterface(REFIID iid, void** out) override {
+        if (iid == IID_IUnknown ||
+            iid == __uuidof(
+                ICoreWebView2WebMessageReceivedEventHandler)) {
+            *out = this;
+            AddRef();
+            return S_OK;
+        }
+        *out = nullptr;
+        return E_NOINTERFACE;
+    }
+    ULONG STDMETHODCALLTYPE AddRef() override {
+        return ref_.fetch_add(1) + 1;
+    }
+    ULONG STDMETHODCALLTYPE Release() override {
+        const ULONG remaining = ref_.fetch_sub(1) - 1;
+        if (remaining == 0) {
+            delete this;
+        }
+        return remaining;
+    }
+
+    HRESULT STDMETHODCALLTYPE Invoke(
+        ICoreWebView2* sender,
+        ICoreWebView2WebMessageReceivedEventArgs* args) override;
+
+private:
+    std::atomic<ULONG> ref_{1};
+    WebViewSession* session_;
+};
+
+HRESULT EnvironmentReadyHandler::Invoke(HRESULT hr,
+                                        ICoreWebView2Environment* environment) {
+    if (FAILED(hr) || environment == nullptr) {
+        PostMessageW(session_->window, WM_CLOSE, 0, 0);
+        return hr;
+    }
+    environment->AddRef();
+    session_->environment = environment;
+    auto* controller_ready = new ControllerReadyHandler(session_);
+    HRESULT create_hr = environment->CreateCoreWebView2Controller(
+        session_->window, controller_ready);
+    controller_ready->Release();
+    if (FAILED(create_hr)) {
+        PostMessageW(session_->window, WM_CLOSE, 0, 0);
+    }
+    return S_OK;
+}
+
+HRESULT ControllerReadyHandler::Invoke(
+    HRESULT hr, ICoreWebView2Controller* controller) {
+    if (FAILED(hr) || controller == nullptr) {
+        PostMessageW(session_->window, WM_CLOSE, 0, 0);
+        return hr;
+    }
+    controller->AddRef();
+    session_->controller = controller;
+    controller->put_IsVisible(TRUE);
+    RECT rect{};
+    GetClientRect(session_->window, &rect);
+    controller->put_Bounds(rect);
+    ICoreWebView2* view = nullptr;
+    controller->get_CoreWebView2(&view);
+    if (view == nullptr) {
+        PostMessageW(session_->window, WM_CLOSE, 0, 0);
+        return E_FAIL;
+    }
+    session_->view = view;
+    if (session_->bridge_enabled) {
+        auto* handler = new WebMessageReceivedHandler(session_);
+        view->add_WebMessageReceived(handler,
+                                     &session_->web_message_token);
+        handler->Release();
+    }
+    if (!session_->navigate_url.empty()) {
+        view->Navigate(session_->navigate_url.c_str());
+    } else {
+        view->NavigateToString(L"<html><body><h1>SAO AI Editor</h1></body></html>");
+    }
+    return S_OK;
+}
+
+HRESULT WebMessageReceivedHandler::Invoke(
+    ICoreWebView2* sender,
+    ICoreWebView2WebMessageReceivedEventArgs* args) {
+    if (args == nullptr || session_->runtime == nullptr) {
+        return S_OK;
+    }
+    ScopedCoTaskString payload;
+    if (FAILED(args->TryGetWebMessageAsString(payload.addressof())) ||
+        payload.get() == nullptr) {
+        return S_OK;
+    }
+    const std::string utf8 = wide_to_utf8(payload.get());
+    if (utf8.empty()) {
+        return S_OK;
+    }
+    try {
+        auto message = nlohmann::json::parse(utf8, nullptr, false);
+        if (!message.is_object()) {
+            return S_OK;
+        }
+        const std::string method =
+            message.value("method", std::string{});
+        nlohmann::json params =
+            message.value("params", nlohmann::json::object());
+        nlohmann::json result;
+        const int32_t status = session_->runtime->dispatch_extension_call(
+            method, params, result);
+        nlohmann::json reply{{"id", message.value("id", nlohmann::json())},
+                              {"status", status}};
+        if (status == SAO_AI_EDITOR_OK) {
+            reply["result"] = std::move(result);
+        } else {
+            reply["error"] = std::move(result);
+        }
+        const std::wstring wide_reply =
+            utf8_to_wide(reply.dump());
+        if (sender != nullptr && !wide_reply.empty()) {
+            sender->PostWebMessageAsJson(wide_reply.c_str());
+        }
+    } catch (...) {
+    }
+    return S_OK;
+}
+
+LRESULT CALLBACK webview_wnd_proc(HWND window, UINT message, WPARAM wparam,
+                                  LPARAM lparam) {
+    auto* session = reinterpret_cast<WebViewSession*>(
+        GetWindowLongPtrW(window, GWLP_USERDATA));
+    if (message == WM_NCCREATE) {
+        auto* create = reinterpret_cast<CREATESTRUCTW*>(lparam);
+        SetWindowLongPtrW(window, GWLP_USERDATA,
+                          reinterpret_cast<LONG_PTR>(create->lpCreateParams));
+        return DefWindowProcW(window, message, wparam, lparam);
+    }
+    if (session == nullptr) {
+        return DefWindowProcW(window, message, wparam, lparam);
+    }
+    switch (message) {
+    case WM_SIZE:
+        if (session->controller != nullptr) {
+            RECT rect{};
+            GetClientRect(window, &rect);
+            session->controller->put_Bounds(rect);
+        }
+        return 0;
+    case WM_CLOSE:
+        DestroyWindow(window);
+        return 0;
+    case WM_DESTROY:
+        if (!session->teardown_requested.exchange(true)) {
+            if (session->view != nullptr &&
+                session->web_message_token.value != 0) {
+                session->view->remove_WebMessageReceived(
+                    session->web_message_token);
+                session->web_message_token = {};
+            }
+            if (session->controller != nullptr) {
+                session->controller->Close();
+                session->controller->Release();
+                session->controller = nullptr;
+            }
+            if (session->view != nullptr) {
+                session->view->Release();
+                session->view = nullptr;
+            }
+            if (session->environment != nullptr) {
+                session->environment->Release();
+                session->environment = nullptr;
+            }
+        }
+        PostQuitMessage(session->exit_code.load());
+        return 0;
+    default:
+        break;
+    }
+    return DefWindowProcW(window, message, wparam, lparam);
+}
+
+}  // namespace
+
+bool webview_runtime_available() {
+    HMODULE module = LoadLibraryW(L"WebView2Loader.dll");
+    if (module == nullptr) {
+        return false;
+    }
+    const bool available =
+        GetProcAddress(module,
+                       "CreateCoreWebView2EnvironmentWithOptions") != nullptr;
+    FreeLibrary(module);
+    return available;
+}
+
+int32_t run_webview_bridge(const WebViewConfig& config) {
+    if (config.user_data_folder.empty() ||
+        !valid_utf8(config.user_data_folder)) {
+        return SAO_AI_EDITOR_ERR_INVALID_ARGUMENT;
+    }
+    if (config.bridge_native_runtime &&
+        config.runtime_handle == nullptr) {
+        return SAO_AI_EDITOR_ERR_INVALID_ARGUMENT;
+    }
+    NativeRuntime* runtime = nullptr;
+    if (config.runtime_handle != nullptr) {
+        runtime = config.runtime_handle->implementation.get();
+        if (config.bridge_native_runtime && runtime == nullptr) {
+            return SAO_AI_EDITOR_ERR_INVALID_ARGUMENT;
+        }
+    }
+    ScopedCoInitialize apartment;
+    if (!apartment.valid()) {
+        return SAO_AI_EDITOR_ERR_OS_CALL_FAILED;
+    }
+    HMODULE loader = LoadLibraryW(L"WebView2Loader.dll");
+    if (loader == nullptr) {
+        return SAO_AI_EDITOR_ERR_NOT_FOUND;
+    }
+    auto create_environment =
+        reinterpret_cast<PFN_CreateEnvironment>(
+            GetProcAddress(loader,
+                           "CreateCoreWebView2EnvironmentWithOptions"));
+    if (create_environment == nullptr) {
+        FreeLibrary(loader);
+        return SAO_AI_EDITOR_ERR_NOT_FOUND;
+    }
+
+    WNDCLASSEXW window_class{};
+    window_class.cbSize = sizeof(window_class);
+    window_class.style = CS_HREDRAW | CS_VREDRAW;
+    window_class.lpfnWndProc = webview_wnd_proc;
+    window_class.hInstance = GetModuleHandleW(nullptr);
+    window_class.hCursor = LoadCursorW(nullptr, IDC_ARROW);
+    window_class.hbrBackground =
+        reinterpret_cast<HBRUSH>(COLOR_WINDOW + 1);
+    window_class.lpszClassName = kWindowClassName;
+    if (RegisterClassExW(&window_class) == 0 &&
+        GetLastError() != ERROR_CLASS_ALREADY_EXISTS) {
+        FreeLibrary(loader);
+        return SAO_AI_EDITOR_ERR_OS_CALL_FAILED;
+    }
+
+    WebViewSession session;
+    session.runtime = runtime;
+    session.runtime_handle = config.runtime_handle;
+    session.bridge_enabled = config.bridge_native_runtime;
+    session.navigate_url = utf8_to_wide(config.url);
+
+    const std::wstring title = config.window_title.empty()
+        ? std::wstring(L"SAO AI Editor WebView")
+        : utf8_to_wide(config.window_title);
+    HWND window = CreateWindowExW(
+        0, kWindowClassName, title.c_str(), WS_OVERLAPPEDWINDOW,
+        CW_USEDEFAULT, CW_USEDEFAULT, std::max(320, config.width),
+        std::max(240, config.height), nullptr, nullptr,
+        window_class.hInstance, &session);
+    if (window == nullptr) {
+        FreeLibrary(loader);
+        return SAO_AI_EDITOR_ERR_OS_CALL_FAILED;
+    }
+    session.window = window;
+    ShowWindow(window, SW_SHOW);
+    UpdateWindow(window);
+
+    const std::wstring user_data =
+        utf8_to_wide(config.user_data_folder);
+    auto* environment_handler = new EnvironmentReadyHandler(&session);
+    HRESULT hr = create_environment(nullptr, user_data.c_str(), nullptr,
+                                     environment_handler);
+    environment_handler->Release();
+    if (FAILED(hr)) {
+        DestroyWindow(window);
+        FreeLibrary(loader);
+        return SAO_AI_EDITOR_ERR_OS_CALL_FAILED;
+    }
+
+    MSG message{};
+    while (GetMessageW(&message, nullptr, 0, 0) > 0) {
+        TranslateMessage(&message);
+        DispatchMessageW(&message);
+    }
+    FreeLibrary(loader);
+    return SAO_AI_EDITOR_OK;
+}
+
+}  // namespace sao::ai_editor::native

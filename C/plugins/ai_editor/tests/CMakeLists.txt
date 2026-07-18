@@ -23,6 +23,10 @@ target_link_libraries(sao_plugin_ai_editor_wave7_tests PRIVATE
 target_include_directories(sao_plugin_ai_editor_wave7_tests PRIVATE
     ${CMAKE_SOURCE_DIR}/plugins/ai_editor/src
 )
+if (SAO_BUILD_WEBVIEW_BRIDGE)
+    target_compile_definitions(sao_plugin_ai_editor_wave7_tests PRIVATE
+        SAO_AI_EDITOR_HAS_WEBVIEW=1)
+endif()
 
 target_compile_features(sao_plugin_ai_editor_wave7_tests PRIVATE cxx_std_20)
 target_compile_definitions(sao_plugin_ai_editor_wave7_tests PRIVATE

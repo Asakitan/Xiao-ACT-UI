@@ -1,6 +1,9 @@
 #include "sao/ai_editor/ai_editor_native.h"
 
 #include "mcp_server.h"
+#if SAO_AI_EDITOR_HAS_WEBVIEW
+#include "webview_bridge.h"
+#endif
 
 #include <windows.h>
 #include <commctrl.h>
@@ -92,12 +95,14 @@ using RuntimeHandle = std::unique_ptr<SaoAiEditorRuntime, RuntimeDeleter>;
 
 struct Arguments final {
     std::wstring pipe_name;
+    std::wstring webview_url;
     std::optional<std::filesystem::path> workspace;
     DWORD auto_exit_ms = 0;
     bool headless = false;
     bool hidden_window = false;
     bool ui_smoke_test = false;
     bool mcp_server = false;
+    bool webview_mode = false;
     bool show_help = false;
 };
 
@@ -168,8 +173,16 @@ bool parse_arguments(int argc, wchar_t** argv, Arguments& result) {
             result.mcp_server = true;
             continue;
         }
+        if (argument == L"--webview") {
+            if (result.webview_mode) {
+                return false;
+            }
+            result.webview_mode = true;
+            continue;
+        }
         if (argument != L"--sao-ai-editor-pipe" &&
-            argument != L"--workspace" && argument != L"--auto-exit-ms") {
+            argument != L"--workspace" && argument != L"--auto-exit-ms" &&
+            argument != L"--webview-url") {
             return false;
         }
         if (++index >= argc || argv[index][0] == L'\0') {
@@ -185,6 +198,11 @@ bool parse_arguments(int argc, wchar_t** argv, Arguments& result) {
                 return false;
             }
             result.workspace = std::filesystem::path(argv[index]);
+        } else if (argument == L"--webview-url") {
+            if (!result.webview_url.empty()) {
+                return false;
+            }
+            result.webview_url = argv[index];
         } else if (result.auto_exit_ms != 0 ||
                    !parse_milliseconds(argv[index], result.auto_exit_ms)) {
             return false;
@@ -197,6 +215,10 @@ bool parse_arguments(int argc, wchar_t** argv, Arguments& result) {
         return result.pipe_name.empty() && !result.ui_smoke_test &&
                !result.headless && !result.hidden_window &&
                result.auto_exit_ms == 0;
+    }
+    if (result.webview_mode) {
+        return result.pipe_name.empty() && !result.ui_smoke_test &&
+               !result.headless && !result.mcp_server;
     }
     if (result.ui_smoke_test) {
         return result.pipe_name.empty() && !result.headless;
@@ -1067,6 +1089,43 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int show_command) {
             }
             return sao::ai_editor::native::run_mcp_server_stdio(*workspace);
         }
+#if SAO_AI_EDITOR_HAS_WEBVIEW
+        if (arguments.webview_mode) {
+            const auto workspace = resolve_workspace(arguments.workspace);
+            if (!workspace.has_value()) {
+                return 4;
+            }
+            const auto workspace_utf8 =
+                wide_to_utf8(workspace->native());
+            if (!workspace_utf8.has_value()) {
+                return 4;
+            }
+            SaoAiEditorRuntimeConfig runtime_config{};
+            runtime_config.struct_size = sizeof(runtime_config);
+            runtime_config.workspace_root_utf8 = workspace_utf8->c_str();
+            sao_ai_editor_runtime_t runtime = nullptr;
+            const int32_t create_status =
+                sao_ai_editor_runtime_create(&runtime_config, &runtime);
+            if (create_status != SAO_AI_EDITOR_OK || runtime == nullptr) {
+                return 7;
+            }
+            const auto url_utf8 = wide_to_utf8(arguments.webview_url);
+            sao::ai_editor::native::WebViewConfig config;
+            config.url = url_utf8.value_or(std::string{});
+            config.user_data_folder =
+                wide_to_utf8((*workspace / L".sao" /
+                              L"webview").native()).value_or(std::string{});
+            config.window_title = "SAO AI Editor";
+            config.width = 1280;
+            config.height = 800;
+            config.bridge_native_runtime = true;
+            config.runtime_handle = runtime;
+            const int32_t status =
+                sao::ai_editor::native::run_webview_bridge(config);
+            sao_ai_editor_runtime_destroy(runtime);
+            return status == SAO_AI_EDITOR_OK ? 0 : 12;
+        }
+#endif
         if (arguments.ui_smoke_test) {
             return run_ui_smoke(instance, show_command, arguments);
         }

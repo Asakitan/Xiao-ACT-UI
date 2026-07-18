@@ -4,9 +4,49 @@
 # Win32 child; the shared library owns the launcher, IPC, and runtime ABI.
 #
 option(SAO_BUILD_AI_EDITOR "Build the AI Editor subprocess launcher/IPC plugin" ON)
+option(SAO_BUILD_WEBVIEW_BRIDGE "Build the WebView2 window bridge" ON)
 
 if (NOT SAO_BUILD_AI_EDITOR)
     return()
+endif()
+
+# Discover the Microsoft WebView2 SDK layout dropped by NuGet
+# (Microsoft.Web.WebView2.<version>/build/native/{include,x64}).  Falls back
+# to environment vars if the NuGet cache is not present.
+set(_SAO_WEBVIEW2_CANDIDATE_DIRS
+    "$ENV{USERPROFILE}/.nuget/packages/microsoft.web.webview2"
+    "$ENV{ProgramFiles}/Microsoft.Web.WebView2"
+    "${CMAKE_CURRENT_SOURCE_DIR}/../../vendor/webview2"
+)
+set(_SAO_WEBVIEW2_ROOT "")
+foreach (_candidate IN LISTS _SAO_WEBVIEW2_CANDIDATE_DIRS)
+    if (EXISTS "${_candidate}")
+        file(GLOB _versioned_children LIST_DIRECTORIES true "${_candidate}/*")
+        list(SORT _versioned_children ORDER DESCENDING)
+        foreach (_child IN LISTS _versioned_children)
+            if (EXISTS "${_child}/build/native/include/WebView2.h")
+                set(_SAO_WEBVIEW2_ROOT "${_child}/build/native")
+                break()
+            endif()
+        endforeach()
+    endif()
+    if (_SAO_WEBVIEW2_ROOT)
+        break()
+    endif()
+endforeach()
+if (NOT _SAO_WEBVIEW2_ROOT AND SAO_BUILD_WEBVIEW_BRIDGE)
+    message(STATUS "sao_ai_editor: WebView2 SDK not located; webview bridge disabled")
+    set(SAO_BUILD_WEBVIEW_BRIDGE OFF CACHE BOOL "" FORCE)
+endif()
+if (SAO_BUILD_WEBVIEW_BRIDGE)
+    message(STATUS "sao_ai_editor: WebView2 SDK at ${_SAO_WEBVIEW2_ROOT}")
+    set(_SAO_WEBVIEW2_INCLUDE "${_SAO_WEBVIEW2_ROOT}/include")
+    set(_SAO_WEBVIEW2_LIB    "${_SAO_WEBVIEW2_ROOT}/x64/WebView2LoaderStatic.lib")
+    set(_SAO_WEBVIEW2_DLL    "${_SAO_WEBVIEW2_ROOT}/x64/WebView2Loader.dll")
+    if (NOT EXISTS "${_SAO_WEBVIEW2_LIB}")
+        message(STATUS "sao_ai_editor: WebView2LoaderStatic.lib missing at ${_SAO_WEBVIEW2_LIB}, disabling webview bridge")
+        set(SAO_BUILD_WEBVIEW_BRIDGE OFF CACHE BOOL "" FORCE)
+    endif()
 endif()
 
 add_library(sao_plugin_ai_editor SHARED
@@ -29,6 +69,15 @@ add_library(sao_plugin_ai_editor SHARED
     src/winhttp_chat.cpp
     src/workflow_engine.cpp
 )
+if (SAO_BUILD_WEBVIEW_BRIDGE)
+    target_sources(sao_plugin_ai_editor PRIVATE src/webview_bridge.cpp)
+    target_include_directories(sao_plugin_ai_editor PRIVATE
+        "${_SAO_WEBVIEW2_INCLUDE}")
+    target_link_libraries(sao_plugin_ai_editor PRIVATE
+        "${_SAO_WEBVIEW2_LIB}" ole32 oleaut32 advapi32 version)
+    target_compile_definitions(sao_plugin_ai_editor PRIVATE
+        SAO_AI_EDITOR_HAS_WEBVIEW=1)
+endif()
 add_library(sao::plugin_ai_editor ALIAS sao_plugin_ai_editor)
 
 target_include_directories(sao_plugin_ai_editor PUBLIC

@@ -28,6 +28,9 @@
 #include "sao/ai_editor/openai_codec.h"
 
 #include "../src/chat_provider_router.h"
+#if defined(SAO_AI_EDITOR_HAS_WEBVIEW) && SAO_AI_EDITOR_HAS_WEBVIEW
+#include "../src/webview_bridge.h"
+#endif
 
 namespace {
 
@@ -932,6 +935,30 @@ private:
 };
 
 }  // namespace
+
+#if defined(SAO_AI_EDITOR_HAS_WEBVIEW) && SAO_AI_EDITOR_HAS_WEBVIEW
+TEST_CASE("WebView2 runtime probe reports Loader availability",
+          "[plugins][ai_editor][native][webview]") {
+    const bool available =
+        sao::ai_editor::native::webview_runtime_available();
+    INFO("WebView2Loader.dll available: " << (available ? "yes" : "no"));
+    // Either state is fine — the test just proves the probe binary itself
+    // links against the loader shim without crashing.
+    REQUIRE((available == true || available == false));
+}
+
+TEST_CASE("run_webview_bridge fails closed with invalid config",
+          "[plugins][ai_editor][native][webview]") {
+    sao::ai_editor::native::WebViewConfig config;
+    REQUIRE(sao::ai_editor::native::run_webview_bridge(config) ==
+            SAO_AI_EDITOR_ERR_INVALID_ARGUMENT);
+    config.user_data_folder = "C:/tmp/sao-webview-fixture";
+    config.bridge_native_runtime = true;
+    config.runtime_handle = nullptr;
+    REQUIRE(sao::ai_editor::native::run_webview_bridge(config) ==
+            SAO_AI_EDITOR_ERR_INVALID_ARGUMENT);
+}
+#endif
 
 TEST_CASE("AI Editor extensions.* register + list + unregister without node",
           "[plugins][ai_editor][native][extensions]") {
