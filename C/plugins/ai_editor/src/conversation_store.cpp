@@ -431,6 +431,68 @@ int32_t ConversationStore::import_conversation(const Json& conversation,
     return status;
 }
 
+int32_t ConversationStore::branch(std::string_view source_id,
+                                  int64_t message_index,
+                                  std::string_view title,
+                                  std::string_view scope,
+                                  Json& result) const {
+    if (scope != "workspace" && scope != "system") {
+        return SAO_AI_EDITOR_ERR_INVALID_ARGUMENT;
+    }
+    if (message_index < 0) {
+        return SAO_AI_EDITOR_ERR_INVALID_ARGUMENT;
+    }
+    Json source;
+    const int32_t get_status = get(source_id, source);
+    if (get_status != SAO_AI_EDITOR_OK) {
+        return get_status;
+    }
+    if (!source.contains("messages") || !source["messages"].is_array()) {
+        return SAO_AI_EDITOR_ERR_INVALID_ARGUMENT;
+    }
+    const Json& messages = source["messages"];
+    const int64_t total = static_cast<int64_t>(messages.size());
+    // `messageIndex` is the index of the last message we want to include,
+    // so it must be strictly less than the message count; otherwise there's
+    // nothing at that slot.
+    if (message_index >= total) {
+        return SAO_AI_EDITOR_ERR_INVALID_ARGUMENT;
+    }
+    const size_t branch_count = static_cast<size_t>(message_index) + 1;
+    Json branched_messages = Json::array();
+    for (size_t index = 0; index < branch_count; ++index) {
+        branched_messages.push_back(messages[index]);
+    }
+    const std::string new_id = next_id();
+    std::string branch_title(title);
+    if (branch_title.empty()) {
+        branch_title = source.value("title", std::string{"Untitled"}) +
+                       " (branch)";
+    }
+    const int64_t now = unix_milliseconds();
+    Json document{{"id", new_id},
+                  {"title", branch_title},
+                  {"systemPrompt",
+                   source.value("systemPrompt", std::string{})},
+                  {"model", source.value("model", std::string{})},
+                  {"scope", std::string(scope)},
+                  {"savedAt", now},
+                  {"messageCount", branched_messages.size()},
+                  {"messages", branched_messages}};
+    const auto path = scopes_.history_root(scope) /
+                      (utf8_to_wide(new_id) + L".json");
+    const int32_t status = save(path, document);
+    if (status != SAO_AI_EDITOR_OK) {
+        return status;
+    }
+    result = Json{{"id", new_id},
+                  {"title", branch_title},
+                  {"messageCount", branched_messages.size()},
+                  {"sourceId", std::string(source_id)},
+                  {"branchedAt", now}};
+    return SAO_AI_EDITOR_OK;
+}
+
 int32_t ConversationStore::remove(std::string_view conversation_id,
                                   Json& result) const {
     std::filesystem::path path;

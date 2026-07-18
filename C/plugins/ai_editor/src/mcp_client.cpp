@@ -491,6 +491,18 @@ public:
         return call("prompts/list", Json::object(), 15000U, result);
     }
 
+    int32_t get_prompt(const std::string& prompt_name,
+                       const Json& arguments,
+                       uint32_t timeout_ms,
+                       Json& result) {
+        Json params = Json{{"name", prompt_name}};
+        // MCP prompts/get takes an "arguments" object of string->string; when
+        // the caller omits it we still emit an empty object so servers that
+        // strictly validate the request shape do not reject the payload.
+        params["arguments"] = arguments.is_null() ? Json::object() : arguments;
+        return call("prompts/get", params, timeout_ms, result);
+    }
+
     int32_t list_resources(Json& result) {
         return call("resources/list", Json::object(), 15000U, result);
     }
@@ -1292,6 +1304,65 @@ sao_ai_editor_mcp_client_read_resource(sao_ai_editor_mcp_client_t handle,
         }
         sao::ai_editor::native::Json result;
         const int32_t status = server->read_resource(uri, timeout_ms, result);
+        if (status != SAO_AI_EDITOR_OK) {
+            return status;
+        }
+        result["server"] = server_name;
+        return emit_json(*handle, result, response_out, response_cap, out_len);
+    } catch (...) {
+        return SAO_AI_EDITOR_ERR_PROTOCOL;
+    }
+}
+
+extern "C" SAO_AI_EDITOR_API int32_t SAO_AI_EDITOR_CALL
+sao_ai_editor_mcp_client_get_prompt(sao_ai_editor_mcp_client_t handle,
+                                    const char* request_json,
+                                    uint32_t request_len,
+                                    char* response_out,
+                                    uint32_t response_cap,
+                                    uint32_t* out_len) {
+    try {
+        if (handle == nullptr) {
+            return SAO_AI_EDITOR_ERR_HANDLE_INVALID;
+        }
+        if (out_len == nullptr) {
+            return SAO_AI_EDITOR_ERR_INVALID_ARGUMENT;
+        }
+        int32_t drain_status = SAO_AI_EDITOR_OK;
+        if (try_drain_pending(*handle, response_out, response_cap, out_len,
+                              &drain_status)) {
+            return drain_status;
+        }
+        if (request_json == nullptr || request_len == 0) {
+            return SAO_AI_EDITOR_ERR_INVALID_ARGUMENT;
+        }
+        const std::string_view input(request_json, request_len);
+        if (!sao::ai_editor::native::valid_utf8(input)) {
+            return SAO_AI_EDITOR_ERR_INVALID_ARGUMENT;
+        }
+        sao::ai_editor::native::Json parsed =
+            sao::ai_editor::native::Json::parse(input, nullptr, false);
+        if (!parsed.is_object() || !parsed.contains("server") ||
+            !parsed["server"].is_string() || !parsed.contains("name") ||
+            !parsed["name"].is_string()) {
+            return SAO_AI_EDITOR_ERR_INVALID_ARGUMENT;
+        }
+        const std::string server_name = parsed["server"].get<std::string>();
+        const std::string prompt_name = parsed["name"].get<std::string>();
+        const sao::ai_editor::native::Json arguments =
+            parsed.value("arguments", sao::ai_editor::native::Json::object());
+        const uint32_t timeout_ms = parsed.value("timeoutMs", 0U);
+        std::shared_ptr<sao::ai_editor::native::McpServer> server;
+        {
+            std::lock_guard<std::mutex> guard(handle->mutex);
+            server = handle->find_locked(server_name);
+        }
+        if (!server) {
+            return SAO_AI_EDITOR_ERR_NOT_FOUND;
+        }
+        sao::ai_editor::native::Json result;
+        const int32_t status =
+            server->get_prompt(prompt_name, arguments, timeout_ms, result);
         if (status != SAO_AI_EDITOR_OK) {
             return status;
         }

@@ -1,0 +1,21 @@
+{
+    "id": "test-first-refactor",
+    "name": "Test-First Refactor",
+    "description": "Write missing tests, then propose a safe refactor guided by the new coverage",
+    "icon": "🔧",
+    "when_to_use": "When the user wants to refactor code but the target lacks the tests needed to prove behavior is preserved",
+    "steps": [
+        {
+            "agent": "test-writer",
+            "prompt": "Write focused unit tests that pin down the observable behavior of the following code. Cover happy path, boundary, and error cases. Do not rely on network, clock, or filesystem:\n\n{{input}}",
+            "output_var": "tests",
+            "label": "Writing pinning tests"
+        },
+        {
+            "agent": "refactor-mentor",
+            "prompt": "Given the code:\n\n{{input}}\n\nAnd these pinning tests:\n\n{{tests}}\n\nPropose the smallest catalog refactor that removes the code smell without changing behavior. Sequence it as micro-steps and show what to run after each step to prove the tests still pass.",
+            "output_var": "refactor_plan",
+            "label": "Planning refactor"
+        }
+    ]
+}

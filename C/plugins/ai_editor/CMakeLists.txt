@@ -117,6 +117,20 @@ install(FILES
     COMPONENT ship
 )
 
+# Market presets: bundled agent/workflow definitions surfaced by
+# AgentRegistry / WorkflowRegistry as scope="market" (builtin=false so
+# users can override or delete them via the normal save/delete flow).
+install(DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/assets/ai_editor/agents/"
+    DESTINATION "assets/ai_editor/agents"
+    COMPONENT ship
+    FILES_MATCHING PATTERN "*.json"
+)
+install(DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/assets/ai_editor/workflows/"
+    DESTINATION "assets/ai_editor/workflows"
+    COMPONENT ship
+    FILES_MATCHING PATTERN "*.json"
+)
+
 if (SAO_BUILD_TESTS)
     add_subdirectory(tests)
 endif()

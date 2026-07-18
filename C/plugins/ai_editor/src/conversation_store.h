@@ -34,6 +34,19 @@ public:
                                 bool overwrite,
                                 std::string& out_id) const;
 
+    // Fork a new conversation whose messages are the first
+    // `message_index + 1` entries of the source (i.e. up to and including
+    // the entry at `message_index`).  The new conversation inherits the
+    // source's model + systemPrompt, gets a fresh id, savedAt = now, and
+    // title defaults to source.title + " (branch)".  Emits the same shape
+    // dispatch relays to callers (id / title / messageCount / sourceId /
+    // branchedAt).
+    int32_t branch(std::string_view source_id,
+                   int64_t message_index,
+                   std::string_view title,
+                   std::string_view scope,
+                   Json& result) const;
+
 private:
     int32_t locate(std::string_view conversation_id,
                    std::filesystem::path& path) const;

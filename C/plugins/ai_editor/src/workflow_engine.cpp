@@ -5,13 +5,112 @@
 #include <algorithm>
 #include <chrono>
 #include <cstdio>
+#include <filesystem>
+#include <string>
+#include <system_error>
 #include <utility>
+#include <vector>
 
 #include "native_runtime_internal.h"
 #include "scope_store.h"
 
 namespace sao::ai_editor::native {
 namespace {
+
+std::filesystem::path workflow_market_module_directory() {
+    HMODULE module_handle = nullptr;
+    if (!GetModuleHandleExW(
+            GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS |
+                GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+            reinterpret_cast<LPCWSTR>(&workflow_market_module_directory),
+            &module_handle) ||
+        module_handle == nullptr) {
+        return {};
+    }
+    std::vector<wchar_t> buffer(MAX_PATH);
+    for (;;) {
+        const DWORD written = GetModuleFileNameW(
+            module_handle, buffer.data(),
+            static_cast<DWORD>(buffer.size()));
+        if (written == 0) {
+            return {};
+        }
+        if (written < buffer.size()) {
+            std::filesystem::path path(buffer.data());
+            return path.parent_path();
+        }
+        buffer.resize(buffer.size() * 2);
+        if (buffer.size() > 32768) {
+            return {};
+        }
+    }
+}
+
+// Mirror of agent_registry.cpp::resolve_market_assets_dir — same anchor
+// strategy, distinct symbol so translation units stay independent.
+std::filesystem::path resolve_workflow_market_dir(std::wstring_view subdir) {
+    const std::filesystem::path anchor = workflow_market_module_directory();
+    if (anchor.empty()) {
+        return {};
+    }
+    const std::wstring rel_install =
+        std::wstring(L"assets/ai_editor/") + std::wstring(subdir);
+    const std::wstring candidates[] = {
+        rel_install,
+        std::wstring(L"../") + rel_install,
+        std::wstring(L"../../") + rel_install,
+        std::wstring(L"../plugins/ai_editor/") + rel_install,
+        std::wstring(L"../../plugins/ai_editor/") + rel_install,
+        std::wstring(L"../../../plugins/ai_editor/") + rel_install,
+        std::wstring(L"../../../../plugins/ai_editor/") + rel_install,
+    };
+    for (const auto& rel : candidates) {
+        std::filesystem::path candidate = anchor / rel;
+        std::error_code error;
+        candidate = std::filesystem::weakly_canonical(candidate, error);
+        if (error) {
+            continue;
+        }
+        if (std::filesystem::is_directory(candidate, error) && !error) {
+            return candidate;
+        }
+    }
+    return {};
+}
+
+template <typename Sink>
+void enumerate_workflow_market_json(const std::filesystem::path& dir,
+                                    Sink&& sink) {
+    if (dir.empty()) {
+        return;
+    }
+    std::error_code error;
+    std::filesystem::directory_iterator iterator(dir, error);
+    if (error) {
+        return;
+    }
+    for (const auto& entry : iterator) {
+        std::error_code file_error;
+        if (!entry.is_regular_file(file_error) || file_error) {
+            continue;
+        }
+        const auto& path = entry.path();
+        if (path.extension() != L".json") {
+            continue;
+        }
+        std::string text;
+        if (read_text_file(path, kMaximumJsonBytes, text) !=
+                SAO_AI_EDITOR_OK ||
+            text.empty()) {
+            continue;
+        }
+        Json parsed = Json::parse(text, nullptr, false);
+        if (parsed.is_discarded() || !parsed.is_object()) {
+            continue;
+        }
+        sink(parsed);
+    }
+}
 
 int64_t unix_milliseconds() {
     return std::chrono::duration_cast<std::chrono::milliseconds>(
@@ -187,6 +286,27 @@ void WorkflowRegistry::reload(const ScopeStore& scopes) {
     for (const auto& workflow : builtin_workflows()) {
         workflows_.emplace(workflow.id, workflow);
     }
+    // Market presets: install-time bundled workflow definitions.  Loaded
+    // after built-ins so built-in ids win, and before user scopes so user
+    // edits with the same id override the market copy.  Marked
+    // builtin=false / scope="market" so users can override or delete them.
+    enumerate_workflow_market_json(
+        resolve_workflow_market_dir(L"workflows"), [this](const Json& item) {
+            if (!item.contains("id") || !item["id"].is_string()) {
+                return;
+            }
+            WorkflowDefinition workflow = WorkflowDefinition::from_json(item);
+            if (workflow.id.empty()) {
+                return;
+            }
+            const auto existing = workflows_.find(workflow.id);
+            if (existing != workflows_.end() && existing->second.builtin) {
+                return;  // built-in wins over market
+            }
+            workflow.builtin = false;
+            workflow.scope = "market";
+            workflows_[workflow.id] = std::move(workflow);
+        });
     Json registry;
     if (scopes.load_registry("workflows", Json::array(), registry) !=
             SAO_AI_EDITOR_OK ||
@@ -263,6 +383,89 @@ int32_t WorkflowRegistry::save(const WorkflowDefinition& definition,
                    (plugin_id.empty() ? std::string{}
                                       : ":" + std::string(plugin_id));
     workflows_[definition.id] = std::move(stored);
+    return SAO_AI_EDITOR_OK;
+}
+
+bool WorkflowRegistry::is_builtin(std::string_view id) const {
+    std::lock_guard<std::mutex> guard(mutex_);
+    const auto found = workflows_.find(std::string(id));
+    return found != workflows_.end() && found->second.builtin;
+}
+
+int32_t WorkflowRegistry::export_all(std::string_view scope,
+                                     Json& result) const {
+    if (scope != "workspace" && scope != "system" && scope != "all" &&
+        scope != "builtin") {
+        return SAO_AI_EDITOR_ERR_INVALID_ARGUMENT;
+    }
+    Json workflows = Json::array();
+    {
+        std::lock_guard<std::mutex> guard(mutex_);
+        for (const auto& [id, definition] : workflows_) {
+            (void)id;
+            if (scope == "builtin") {
+                if (!definition.builtin) {
+                    continue;
+                }
+            } else if (scope == "workspace" || scope == "system") {
+                if (definition.builtin) {
+                    continue;
+                }
+                // Match the raw scope key stored on the definition; for
+                // plugin-scoped items this is "plugin:<id>" so a plain
+                // "workspace"/"system" export skips them, which mirrors
+                // conversation.export scope semantics.
+                if (definition.scope != scope) {
+                    continue;
+                }
+            }
+            // scope == "all" → include everything (builtin + user + plugin:*).
+            workflows.push_back(definition.to_json());
+        }
+    }
+    const size_t count = workflows.size();
+    result = Json{{"format", "sao-workflows/1"},
+                  {"workflows", std::move(workflows)},
+                  {"count", count},
+                  {"exportedAt", unix_milliseconds()}};
+    return SAO_AI_EDITOR_OK;
+}
+
+int32_t WorkflowRegistry::import_workflow(const Json& workflow,
+                                          std::string_view scope,
+                                          std::string_view plugin_id,
+                                          bool overwrite,
+                                          const ScopeStore& scopes,
+                                          std::string& out_id) {
+    if (!workflow.is_object()) {
+        return SAO_AI_EDITOR_ERR_INVALID_ARGUMENT;
+    }
+    WorkflowDefinition definition = WorkflowDefinition::from_json(workflow);
+    if (!valid_simple_id(definition.id) || definition.name.empty()) {
+        return SAO_AI_EDITOR_ERR_INVALID_ARGUMENT;
+    }
+    // Built-in ids are reserved — importing over them would either replace
+    // the compile-time definition on next reload or silently promote a user
+    // copy to look like a built-in.  Refuse both cases regardless of
+    // `overwrite`.
+    {
+        std::lock_guard<std::mutex> guard(mutex_);
+        const auto existing = workflows_.find(definition.id);
+        if (existing != workflows_.end() && existing->second.builtin) {
+            return SAO_AI_EDITOR_ERR_PERMISSION_DENIED;
+        }
+        if (existing != workflows_.end() && !overwrite) {
+            return SAO_AI_EDITOR_ERR_INVALID_ARGUMENT;
+        }
+    }
+    // Drop transient flags so the on-disk payload matches what
+    // WorkflowRegistry::save produces.
+    definition.builtin = false;
+    const int32_t status = save(definition, scopes, scope, plugin_id);
+    if (status != SAO_AI_EDITOR_OK) {
+        return status;
+    }
+    out_id = definition.id;
     return SAO_AI_EDITOR_OK;
 }
 

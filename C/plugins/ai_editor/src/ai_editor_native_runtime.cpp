@@ -378,6 +378,22 @@ int32_t NativeRuntime::invoke(std::string_view method,
         std::lock_guard<std::mutex> lock(store_mutex_);
         return conversations_.remove(params["id"].get<std::string>(), result);
     }
+    if (method == "conversation.branch") {
+        if (!params.contains("sourceId") ||
+            !params["sourceId"].is_string() ||
+            !params.contains("messageIndex") ||
+            !params["messageIndex"].is_number_integer()) {
+            return SAO_AI_EDITOR_ERR_INVALID_ARGUMENT;
+        }
+        const std::string source_id = params["sourceId"].get<std::string>();
+        const int64_t message_index = params["messageIndex"].get<int64_t>();
+        const std::string title = params.value("title", std::string{});
+        const std::string scope = params.value("scope",
+                                                std::string{"workspace"});
+        std::lock_guard<std::mutex> lock(store_mutex_);
+        return conversations_.branch(source_id, message_index, title, scope,
+                                      result);
+    }
     if (method == "conversation.export") {
         const bool has_id = params.contains("id");
         const bool has_scope = params.contains("scope");
@@ -484,6 +500,136 @@ int32_t NativeRuntime::invoke(std::string_view method,
             std::string assigned_id;
             const int32_t import_status = conversations_.import_conversation(
                 conversation, target_scope, overwrite, assigned_id);
+            if (import_status != SAO_AI_EDITOR_OK) {
+                result = Json{{"imported", imported},
+                              {"conflicts", std::move(conflicts)},
+                              {"assignedIds", std::move(assigned_ids)}};
+                return import_status;
+            }
+            assigned_ids.push_back(assigned_id);
+            ++imported;
+        }
+        result = Json{{"imported", imported},
+                      {"conflicts", std::move(conflicts)},
+                      {"assignedIds", std::move(assigned_ids)}};
+        return SAO_AI_EDITOR_OK;
+    }
+    if (method == "workflow.export") {
+        const bool has_id = params.contains("id");
+        const bool has_scope = params.contains("scope");
+        if (has_id == has_scope) {
+            return SAO_AI_EDITOR_ERR_INVALID_ARGUMENT;
+        }
+        {
+            std::lock_guard<std::mutex> guard(store_mutex_);
+            workflow_registry_.reload(scopes_);
+        }
+        if (has_id) {
+            if (!params["id"].is_string()) {
+                return SAO_AI_EDITOR_ERR_INVALID_ARGUMENT;
+            }
+            WorkflowDefinition definition;
+            if (!workflow_registry_.get(params["id"].get<std::string>(),
+                                        definition)) {
+                return SAO_AI_EDITOR_ERR_NOT_FOUND;
+            }
+            const int64_t now = std::chrono::duration_cast<
+                                    std::chrono::milliseconds>(
+                                    std::chrono::system_clock::now()
+                                        .time_since_epoch())
+                                    .count();
+            result = Json{{"format", "sao-workflow/1"},
+                          {"workflow", definition.to_json()},
+                          {"exportedAt", now}};
+            return SAO_AI_EDITOR_OK;
+        }
+        if (!params["scope"].is_string()) {
+            return SAO_AI_EDITOR_ERR_INVALID_ARGUMENT;
+        }
+        return workflow_registry_.export_all(
+            params["scope"].get<std::string>(), result);
+    }
+    if (method == "workflow.import") {
+        if (!params.contains("payload") || !params["payload"].is_object()) {
+            return SAO_AI_EDITOR_ERR_INVALID_ARGUMENT;
+        }
+        const std::string scope_key =
+            params.value("scope", std::string{"workspace"});
+        std::string scope;
+        std::string plugin_id;
+        if (!parse_scope_key(scope_key, scope, plugin_id)) {
+            return SAO_AI_EDITOR_ERR_INVALID_ARGUMENT;
+        }
+        const bool overwrite = params.value("overwrite", false);
+        const Json& payload = params["payload"];
+        const std::string format = payload.value("format", std::string{});
+        std::vector<Json> incoming;
+        if (format == "sao-workflow/1") {
+            if (!payload.contains("workflow") ||
+                !payload["workflow"].is_object()) {
+                return SAO_AI_EDITOR_ERR_INVALID_ARGUMENT;
+            }
+            incoming.push_back(payload["workflow"]);
+        } else if (format == "sao-workflows/1") {
+            if (!payload.contains("workflows") ||
+                !payload["workflows"].is_array()) {
+                return SAO_AI_EDITOR_ERR_INVALID_ARGUMENT;
+            }
+            for (const auto& item : payload["workflows"]) {
+                if (!item.is_object()) {
+                    return SAO_AI_EDITOR_ERR_INVALID_ARGUMENT;
+                }
+                incoming.push_back(item);
+            }
+        } else {
+            result = Json{{"message", "unknown export format"},
+                          {"format", format}};
+            return SAO_AI_EDITOR_ERR_INVALID_ARGUMENT;
+        }
+        if (incoming.empty()) {
+            return SAO_AI_EDITOR_ERR_INVALID_ARGUMENT;
+        }
+        std::lock_guard<std::mutex> lock(store_mutex_);
+        workflow_registry_.reload(scopes_);
+        // Two-pass conflict detection so overwrite=false rejects atomically
+        // instead of half-importing a batch.  Built-ins are always fatal —
+        // even with overwrite=true — because letting a user replace a
+        // built-in id would either shadow it after reload or masquerade a
+        // user workflow as compile-time.
+        Json conflicts = Json::array();
+        for (const auto& workflow : incoming) {
+            const std::string candidate_id =
+                workflow.value("id", std::string{});
+            if (candidate_id.empty() || !valid_simple_id(candidate_id)) {
+                result = Json{{"message", "invalid workflow id"},
+                              {"id", candidate_id}};
+                return SAO_AI_EDITOR_ERR_INVALID_ARGUMENT;
+            }
+            if (workflow_registry_.is_builtin(candidate_id)) {
+                result = Json{{"imported", 0},
+                              {"conflicts", Json::array({candidate_id})},
+                              {"assignedIds", Json::array()},
+                              {"message", "cannot overwrite builtin"}};
+                return SAO_AI_EDITOR_ERR_PERMISSION_DENIED;
+            }
+            WorkflowDefinition existing;
+            if (workflow_registry_.get(candidate_id, existing) &&
+                !existing.builtin) {
+                conflicts.push_back(candidate_id);
+            }
+        }
+        if (!conflicts.empty() && !overwrite) {
+            result = Json{{"imported", 0},
+                          {"conflicts", std::move(conflicts)},
+                          {"assignedIds", Json::array()}};
+            return SAO_AI_EDITOR_ERR_INVALID_ARGUMENT;
+        }
+        Json assigned_ids = Json::array();
+        size_t imported = 0;
+        for (const auto& workflow : incoming) {
+            std::string assigned_id;
+            const int32_t import_status = workflow_registry_.import_workflow(
+                workflow, scope, plugin_id, overwrite, scopes_, assigned_id);
             if (import_status != SAO_AI_EDITOR_OK) {
                 result = Json{{"imported", imported},
                               {"conflicts", std::move(conflicts)},
@@ -1807,11 +1953,14 @@ int32_t NativeRuntime::dispatch_mcp(std::string_view method, const Json& params,
         result["total"] = result["items"].size();
         return SAO_AI_EDITOR_OK;
     }
-    if (method == "mcp.call_tool" || method == "mcp.read_resource") {
+    if (method == "mcp.call_tool" || method == "mcp.read_resource" ||
+        method == "mcp.get_prompt") {
         const std::string request = dump_json(params);
         auto invoker = method == "mcp.call_tool"
             ? &sao_ai_editor_mcp_client_call_tool
-            : &sao_ai_editor_mcp_client_read_resource;
+            : (method == "mcp.read_resource"
+                   ? &sao_ai_editor_mcp_client_read_resource
+                   : &sao_ai_editor_mcp_client_get_prompt);
         uint32_t required = 0;
         int32_t query =
             invoker(raw, request.data(),
@@ -1919,6 +2068,146 @@ int32_t NativeRuntime::collect_mcp_openai_tools(const Json& mcp_server_filter,
     return SAO_AI_EDITOR_OK;
 }
 
+int32_t NativeRuntime::apply_system_prompt_source(Json& params) {
+    if (!params.is_object() || !params.contains("systemPromptSource")) {
+        return SAO_AI_EDITOR_OK;
+    }
+    const Json source = params["systemPromptSource"];
+    // Absent / null / empty-object systemPromptSource is a no-op — callers may
+    // send the field unconditionally.  The runtime still strips it from the
+    // forwarded params in the caller.
+    if (!source.is_object() || source.empty()) {
+        return SAO_AI_EDITOR_OK;
+    }
+    if (!source.contains("server") || !source["server"].is_string() ||
+        !source.contains("name") || !source["name"].is_string()) {
+        return SAO_AI_EDITOR_ERR_INVALID_ARGUMENT;
+    }
+    if (mcp_client_ == nullptr) {
+        return SAO_AI_EDITOR_ERR_NOT_INITIALIZED;
+    }
+    Json request{{"server", source["server"]}, {"name", source["name"]}};
+    if (source.contains("arguments") && source["arguments"].is_object()) {
+        request["arguments"] = source["arguments"];
+    } else {
+        request["arguments"] = Json::object();
+    }
+    if (source.contains("timeoutMs") &&
+        source["timeoutMs"].is_number_integer()) {
+        request["timeoutMs"] = source["timeoutMs"];
+    }
+    const std::string request_json = dump_json(request);
+    auto* raw = mcp_client_.get();
+    uint32_t required = 0;
+    int32_t query = sao_ai_editor_mcp_client_get_prompt(
+        raw, request_json.data(),
+        static_cast<uint32_t>(request_json.size()), nullptr, 0, &required);
+    Json prompt_result;
+    if (query == SAO_AI_EDITOR_OK && required == 0) {
+        prompt_result = Json::object();
+    } else if (query != SAO_AI_EDITOR_ERR_BUFFER_TOO_SMALL) {
+        return query;
+    } else {
+        std::string buffer(static_cast<size_t>(required) + 1U, '\0');
+        uint32_t written = 0;
+        const int32_t drain_status = sao_ai_editor_mcp_client_get_prompt(
+            raw, nullptr, 0, buffer.data(),
+            static_cast<uint32_t>(buffer.size()), &written);
+        if (drain_status != SAO_AI_EDITOR_OK) {
+            return drain_status;
+        }
+        prompt_result = Json::parse(buffer.data(), buffer.data() + written,
+                                    nullptr, false);
+        if (prompt_result.is_discarded() || !prompt_result.is_object()) {
+            return SAO_AI_EDITOR_ERR_PROTOCOL;
+        }
+    }
+    // Normalize the MCP prompts/get shape into OpenAI-flavour chat messages.
+    // MCP content is either a plain string, a single {type:"text",text:...}
+    // object, or an array of such objects; downstream chat.run expects
+    // {"role","content"} with content as a string.
+    Json prepended = Json::array();
+    bool prompt_has_system = false;
+    if (prompt_result.contains("messages") &&
+        prompt_result["messages"].is_array()) {
+        for (const auto& message : prompt_result["messages"]) {
+            if (message.is_object() &&
+                message.value("role", std::string{}) == "system") {
+                prompt_has_system = true;
+                break;
+            }
+        }
+    }
+    const bool caller_has_system =
+        params.contains("messages") && params["messages"].is_array() &&
+        !params["messages"].empty() &&
+        params["messages"][0].is_object() &&
+        params["messages"][0].value("role", "") == "system";
+    // Only surface the prompt description as a system header when neither
+    // the prompt messages nor the caller already provide one — otherwise
+    // it duplicates the intent of the existing system message.
+    if (!caller_has_system && !prompt_has_system &&
+        prompt_result.contains("description") &&
+        prompt_result["description"].is_string()) {
+        const std::string description =
+            prompt_result["description"].get<std::string>();
+        if (!description.empty()) {
+            prepended.push_back(Json{{"role", "system"},
+                                     {"content", description}});
+        }
+    }
+    if (prompt_result.contains("messages") &&
+        prompt_result["messages"].is_array()) {
+        for (const auto& message : prompt_result["messages"]) {
+            if (!message.is_object()) {
+                continue;
+            }
+            const std::string role = message.value("role", std::string{});
+            if (role.empty()) {
+                continue;
+            }
+            std::string text;
+            const auto& content = message.contains("content")
+                                      ? message["content"]
+                                      : Json{};
+            if (content.is_string()) {
+                text = content.get<std::string>();
+            } else if (content.is_object() &&
+                       content.value("type", "") == "text" &&
+                       content.contains("text") &&
+                       content["text"].is_string()) {
+                text = content["text"].get<std::string>();
+            } else if (content.is_array()) {
+                for (const auto& part : content) {
+                    if (part.is_object() &&
+                        part.value("type", "") == "text" &&
+                        part.contains("text") && part["text"].is_string()) {
+                        if (!text.empty()) {
+                            text.push_back('\n');
+                        }
+                        text.append(part["text"].get<std::string>());
+                    }
+                }
+            }
+            if (text.empty()) {
+                continue;
+            }
+            prepended.push_back(Json{{"role", role}, {"content", text}});
+        }
+    }
+    if (!prepended.empty()) {
+        Json existing = params.value("messages", Json::array());
+        if (!existing.is_array()) {
+            existing = Json::array();
+        }
+        for (const auto& message : existing) {
+            prepended.push_back(message);
+        }
+        params["messages"] = std::move(prepended);
+    }
+    return SAO_AI_EDITOR_OK;
+}
+
 int32_t NativeRuntime::start_chat_with_mcp(const Json& params, Json& result) {
     if (!params.is_object()) {
         return SAO_AI_EDITOR_ERR_INVALID_ARGUMENT;
@@ -1939,11 +2228,15 @@ int32_t NativeRuntime::start_chat_with_mcp(const Json& params, Json& result) {
         }
     }
     Json forwarded = params;
+    // Render systemPromptSource (MCP prompts/get) into forwarded.messages
+    // before stripping the source field.  On error we surface the failure
+    // instead of silently dropping the source.
+    const int32_t prompt_status = apply_system_prompt_source(forwarded);
+    if (prompt_status != SAO_AI_EDITOR_OK) {
+        return prompt_status;
+    }
     forwarded.erase("mcpServers");
     forwarded.erase("extraTools");
-    // systemPromptSource is reserved for a future revision that lands
-    // mcp.prompts.get plumbing; drop it silently for now so callers can send
-    // the field without triggering INVALID_ARGUMENT.
     forwarded.erase("systemPromptSource");
     if (!combined_tools.empty()) {
         forwarded["tools"] = std::move(combined_tools);
@@ -1968,6 +2261,10 @@ int32_t NativeRuntime::agent_invoke_with_mcp(const Json& params, Json& result) {
         }
     }
     Json forwarded = params;
+    const int32_t prompt_status = apply_system_prompt_source(forwarded);
+    if (prompt_status != SAO_AI_EDITOR_OK) {
+        return prompt_status;
+    }
     forwarded.erase("mcpServers");
     forwarded.erase("extraTools");
     forwarded.erase("systemPromptSource");

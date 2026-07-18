@@ -1,0 +1,21 @@
+{
+    "id": "sql-schema-fix",
+    "name": "SQL Schema Fix",
+    "description": "Analyze a SQL schema or query, then propose the minimal correcting DDL/DML",
+    "icon": "🗄️",
+    "when_to_use": "When the user has a SQL schema, query, or migration that needs review and a concrete fix",
+    "steps": [
+        {
+            "agent": "sql-expert",
+            "prompt": "Analyze this SQL for correctness, performance, and portability issues. List every finding with the exact table/column and the risk it poses:\n\n{{input}}",
+            "output_var": "analysis",
+            "label": "Analyzing SQL"
+        },
+        {
+            "agent": "default",
+            "prompt": "Given this analysis:\n\n{{analysis}}\n\nProduce the minimal patch (DDL, DML, or query rewrite) that resolves every Critical and High finding. Show the before -> after for each change. Do not touch findings marked Low.",
+            "output_var": "patch",
+            "label": "Generating SQL patch"
+        }
+    ]
+}

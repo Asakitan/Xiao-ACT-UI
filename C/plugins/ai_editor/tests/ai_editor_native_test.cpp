@@ -17,6 +17,7 @@
 #include <string>
 #include <string_view>
 #include <thread>
+#include <unordered_map>
 #include <utility>
 #include <vector>
 
@@ -1075,6 +1076,41 @@ TEST_CASE("AI Editor agents.list_defs surfaces 5 built-in agents",
     for (const auto* required :
          {"code-reviewer", "explainer", "debugger", "optimizer", "documenter"}) {
         REQUIRE(std::find(ids.begin(), ids.end(), required) != ids.end());
+    }
+}
+
+TEST_CASE("AI Editor agents.list_defs surfaces market presets when the "
+          "assets/ai_editor/agents dir is reachable",
+          "[plugins][ai_editor][native][agents][market]") {
+    RuntimeFixture fixture;
+    const Json defs = dispatch(fixture.get(), "agents.list_defs");
+    REQUIRE(defs.contains("result"));
+    const auto& items = defs["result"]["items"];
+    std::unordered_map<std::string, Json> by_id;
+    for (const auto& item : items) {
+        by_id.emplace(item.value("id", std::string{}), item);
+    }
+    const std::vector<std::string> market_ids{
+        "sql-expert", "test-writer", "security-auditor", "refactor-mentor"};
+    size_t market_hits = 0;
+    for (const auto& id : market_ids) {
+        const auto found = by_id.find(id);
+        if (found == by_id.end()) {
+            continue;
+        }
+        ++market_hits;
+        REQUIRE(found->second.value("scope", std::string{}) == "market");
+        REQUIRE(found->second.value("builtin", true) == false);
+        REQUIRE_FALSE(found->second.value("name", std::string{}).empty());
+    }
+    if (market_hits == 0) {
+        INFO("Market agent assets/ai_editor/agents not deployed near the "
+             "test binary; skipping the presence assertions. This is "
+             "expected when assets have not been installed.");
+    } else {
+        // Any preset we actually found must be the full set — partial
+        // deployment would indicate a packaging bug worth surfacing.
+        REQUIRE(market_hits == market_ids.size());
     }
 }
 
@@ -2441,6 +2477,41 @@ TEST_CASE("AI Editor workflows.list_defs surfaces built-in workflows",
     REQUIRE(std::find(ids.begin(), ids.end(), "debug-trace") != ids.end());
 }
 
+TEST_CASE("AI Editor workflows.list_defs surfaces market presets when the "
+          "assets/ai_editor/workflows dir is reachable",
+          "[plugins][ai_editor][native][workflows][market]") {
+    RuntimeFixture fixture;
+    const Json defs = dispatch(fixture.get(), "workflows.list_defs");
+    REQUIRE(defs.contains("result"));
+    const auto& items = defs["result"]["items"];
+    std::unordered_map<std::string, Json> by_id;
+    for (const auto& item : items) {
+        by_id.emplace(item.value("id", std::string{}), item);
+    }
+    const std::vector<std::string> market_ids{
+        "sql-schema-fix", "security-audit-and-fix", "test-first-refactor"};
+    size_t market_hits = 0;
+    for (const auto& id : market_ids) {
+        const auto found = by_id.find(id);
+        if (found == by_id.end()) {
+            continue;
+        }
+        ++market_hits;
+        REQUIRE(found->second.value("scope", std::string{}) == "market");
+        REQUIRE(found->second.value("builtin", true) == false);
+        REQUIRE(found->second.contains("steps"));
+        REQUIRE(found->second["steps"].is_array());
+        REQUIRE(found->second["steps"].size() >= 2);
+    }
+    if (market_hits == 0) {
+        INFO("Market workflow assets/ai_editor/workflows not deployed near "
+             "the test binary; skipping the presence assertions. This is "
+             "expected when assets have not been installed.");
+    } else {
+        REQUIRE(market_hits == market_ids.size());
+    }
+}
+
 TEST_CASE("AI Editor workflows.run walks steps sequentially and captures "
           "output variables",
           "[plugins][ai_editor][native][workflows][integration]") {
@@ -2551,6 +2622,321 @@ TEST_CASE("AI Editor workflows.save_def / delete_def round-trips a "
                         == SAO_AI_EDITOR_ERR_PERMISSION_DENIED);
 }
 
+TEST_CASE("AI Editor workflow.export packages a single workflow with "
+          "sao-workflow/1 envelope",
+          "[plugins][ai_editor][native][workflows][export]") {
+    RuntimeFixture fixture;
+    auto runtime = fixture.get();
+
+    const Json workflow_json{
+        {"id", "custom-export-a"},
+        {"name", "Custom Export A"},
+        {"description", "Test export workflow"},
+        {"steps",
+         Json::array({Json{{"agent", "default"},
+                             {"prompt", "Summarize {{input}}"},
+                             {"output_var", "summary"},
+                             {"label", "Summarizing"}},
+                       Json{{"agent", "code-reviewer"},
+                             {"prompt", "Critique {{summary}}"},
+                             {"output_var", "critique"}}})}};
+    REQUIRE(dispatch(runtime, "workflows.save_def",
+                     {{"scope", "workspace"},
+                      {"workflow", workflow_json}})
+                .contains("result"));
+
+    // Missing both id and scope → invalid.
+    const Json missing =
+        dispatch(runtime, "workflow.export", Json::object());
+    REQUIRE(missing["error"]["data"]["status"] ==
+            SAO_AI_EDITOR_ERR_INVALID_ARGUMENT);
+
+    // Providing both id and scope → invalid (mutually exclusive).
+    const Json both = dispatch(runtime, "workflow.export",
+                                {{"id", "custom-export-a"},
+                                 {"scope", "workspace"}});
+    REQUIRE(both["error"]["data"]["status"] ==
+            SAO_AI_EDITOR_ERR_INVALID_ARGUMENT);
+
+    const Json exported = dispatch(runtime, "workflow.export",
+                                    {{"id", "custom-export-a"}});
+    REQUIRE(exported.contains("result"));
+    REQUIRE(exported["result"]["format"] == "sao-workflow/1");
+    REQUIRE(exported["result"]["exportedAt"].is_number());
+    REQUIRE(exported["result"]["workflow"]["id"] == "custom-export-a");
+    REQUIRE(exported["result"]["workflow"]["name"] == "Custom Export A");
+    REQUIRE(exported["result"]["workflow"]["steps"].size() == 2);
+    REQUIRE(exported["result"]["workflow"]["steps"][0]["prompt"] ==
+            "Summarize {{input}}");
+    REQUIRE(exported["result"]["workflow"]["steps"][0]["output_var"] ==
+            "summary");
+    REQUIRE(exported["result"]["workflow"]["steps"][1]["agent"] ==
+            "code-reviewer");
+
+    // Batch export scope=workspace surfaces the sao-workflows/1 envelope.
+    const Json ws = dispatch(runtime, "workflow.export",
+                              {{"scope", "workspace"}});
+    REQUIRE(ws["result"]["format"] == "sao-workflows/1");
+    REQUIRE(ws["result"]["count"] == 1);
+    REQUIRE(ws["result"]["workflows"][0]["id"] == "custom-export-a");
+
+    // scope=builtin surfaces the compile-time built-ins.
+    const Json builtin_export =
+        dispatch(runtime, "workflow.export", {{"scope", "builtin"}});
+    REQUIRE(builtin_export["result"]["format"] == "sao-workflows/1");
+    REQUIRE(builtin_export["result"]["count"].get<int>() >= 1);
+    bool saw_review_and_fix = false;
+    for (const auto& item : builtin_export["result"]["workflows"]) {
+        if (item.value("id", "") == "review-and-fix") {
+            saw_review_and_fix = true;
+            REQUIRE(item["builtin"] == true);
+        }
+    }
+    REQUIRE(saw_review_and_fix);
+
+    // Unknown id → NOT_FOUND propagated as protocol error.
+    const Json unknown = dispatch(runtime, "workflow.export",
+                                   {{"id", "wf-nope-nope"}});
+    REQUIRE(unknown.contains("error"));
+}
+
+TEST_CASE("AI Editor workflow.import round-trips with overwrite semantics",
+          "[plugins][ai_editor][native][workflows][import]") {
+    RuntimeFixture fixture;
+    auto runtime = fixture.get();
+
+    const Json workflow_json{
+        {"id", "custom-import-a"},
+        {"name", "Custom Import A"},
+        {"description", "Seed"},
+        {"steps",
+         Json::array({Json{{"agent", "default"},
+                             {"prompt", "Do {{input}}"},
+                             {"output_var", "output"}}})}};
+    REQUIRE(dispatch(runtime, "workflows.save_def",
+                     {{"scope", "workspace"},
+                      {"workflow", workflow_json}})
+                .contains("result"));
+
+    const Json exported = dispatch(runtime, "workflow.export",
+                                    {{"id", "custom-import-a"}})["result"];
+    REQUIRE(exported["format"] == "sao-workflow/1");
+
+    // Unknown format → invalid.
+    const Json bogus = dispatch(runtime, "workflow.import",
+                                 {{"payload", {{"format", "not-real/1"}}}});
+    REQUIRE(bogus["error"]["data"]["status"] ==
+            SAO_AI_EDITOR_ERR_INVALID_ARGUMENT);
+
+    // Conflict with overwrite=false → rejected atomically, imported=0.
+    const Json conflict =
+        dispatch(runtime, "workflow.import",
+                 {{"payload", exported},
+                  {"scope", "workspace"},
+                  {"overwrite", false}});
+    REQUIRE(conflict.contains("error"));
+    REQUIRE(conflict["error"]["data"]["status"] ==
+            SAO_AI_EDITOR_ERR_INVALID_ARGUMENT);
+    REQUIRE(conflict["error"]["data"]["details"]["imported"] == 0);
+    REQUIRE(conflict["error"]["data"]["details"]["conflicts"].size() == 1);
+    REQUIRE(conflict["error"]["data"]["details"]["conflicts"][0] ==
+            "custom-import-a");
+
+    // Overwrite=true replaces the definition; new description wins.
+    Json rewritten = exported;
+    rewritten["workflow"]["description"] = "Rewritten!";
+    rewritten["workflow"]["steps"] = Json::array(
+        {Json{{"agent", "reviewer"},
+              {"prompt", "New prompt {{input}}"},
+              {"output_var", "verdict"}}});
+    const Json overwrote = dispatch(runtime, "workflow.import",
+                                     {{"payload", rewritten},
+                                      {"scope", "workspace"},
+                                      {"overwrite", true}});
+    REQUIRE(overwrote.contains("result"));
+    REQUIRE(overwrote["result"]["imported"] == 1);
+    REQUIRE(overwrote["result"]["assignedIds"][0] == "custom-import-a");
+
+    const Json fetched = dispatch(runtime, "workflows.get_def",
+                                   {{"id", "custom-import-a"}});
+    REQUIRE(fetched["result"]["description"] == "Rewritten!");
+    REQUIRE(fetched["result"]["steps"].size() == 1);
+    REQUIRE(fetched["result"]["steps"][0]["agent"] == "reviewer");
+    REQUIRE(fetched["result"]["steps"][0]["prompt"] ==
+            "New prompt {{input}}");
+
+    // Fresh id not present in store → imported without conflict.
+    Json fresh = exported;
+    fresh["workflow"]["id"] = "custom-import-fresh";
+    fresh["workflow"]["name"] = "Fresh Workflow";
+    const Json fresh_result =
+        dispatch(runtime, "workflow.import",
+                 {{"payload", fresh}, {"scope", "workspace"}});
+    REQUIRE(fresh_result.contains("result"));
+    REQUIRE(fresh_result["result"]["imported"] == 1);
+    REQUIRE(fresh_result["result"]["conflicts"].empty());
+    REQUIRE(fresh_result["result"]["assignedIds"][0] ==
+            "custom-import-fresh");
+}
+
+TEST_CASE("AI Editor workflow.import refuses to overwrite built-in workflows",
+          "[plugins][ai_editor][native][workflows][import]") {
+    RuntimeFixture fixture;
+    auto runtime = fixture.get();
+
+    // review-and-fix is a compile-time built-in; even overwrite=true must
+    // not shadow it via the on-disk registry.
+    Json envelope{
+        {"format", "sao-workflow/1"},
+        {"workflow", Json{{"id", "review-and-fix"},
+                            {"name", "Hijacked"},
+                            {"description", "Attacker payload"},
+                            {"steps",
+                             Json::array({Json{
+                                 {"agent", "attacker"},
+                                 {"prompt", "pwn {{input}}"},
+                                 {"output_var", "pwned"}}})}}}};
+
+    const Json overwrite_false =
+        dispatch(runtime, "workflow.import",
+                 {{"payload", envelope},
+                  {"scope", "workspace"},
+                  {"overwrite", false}});
+    REQUIRE(overwrite_false.contains("error"));
+    REQUIRE(overwrite_false["error"]["data"]["status"] ==
+            SAO_AI_EDITOR_ERR_PERMISSION_DENIED);
+    REQUIRE(overwrite_false["error"]["data"]["details"]["imported"] == 0);
+    REQUIRE(overwrite_false["error"]["data"]["details"]["conflicts"][0] ==
+            "review-and-fix");
+
+    const Json overwrite_true =
+        dispatch(runtime, "workflow.import",
+                 {{"payload", envelope},
+                  {"scope", "workspace"},
+                  {"overwrite", true}});
+    REQUIRE(overwrite_true.contains("error"));
+    REQUIRE(overwrite_true["error"]["data"]["status"] ==
+            SAO_AI_EDITOR_ERR_PERMISSION_DENIED);
+
+    // The compile-time definition must survive both attempts unchanged.
+    const Json fetched = dispatch(runtime, "workflows.get_def",
+                                   {{"id", "review-and-fix"}})["result"];
+    REQUIRE(fetched["builtin"] == true);
+    REQUIRE(fetched["name"] == "Review & Fix");
+}
+
+TEST_CASE("AI Editor conversation.branch forks a new conversation from "
+          "messageIndex",
+          "[plugins][ai_editor][native][storage][branch]") {
+    RuntimeFixture fixture;
+    auto runtime = fixture.get();
+    REQUIRE(dispatch(runtime, "runtime.initialize").contains("result"));
+
+    const Json created = dispatch(runtime, "conversation.create",
+                                  {{"title", "Original Thread"},
+                                   {"model", "gpt-branch"},
+                                   {"scope", "workspace"}});
+    const std::string source_id = created["result"]["id"];
+    REQUIRE(dispatch(runtime, "conversation.append",
+                     {{"id", source_id},
+                      {"message", {{"role", "system"},
+                                    {"content", "you are a helpful bot"}}}})
+                .contains("result"));
+    REQUIRE(dispatch(runtime, "conversation.append",
+                     {{"id", source_id},
+                      {"message", {{"role", "user"},
+                                    {"content", "hello"}}}})
+                .contains("result"));
+    REQUIRE(dispatch(runtime, "conversation.append",
+                     {{"id", source_id},
+                      {"message", {{"role", "assistant"},
+                                    {"content", "hi there"}}}})
+                .contains("result"));
+
+    // Sleep 2ms so branchedAt is guaranteed > source savedAt.
+    Sleep(5);
+
+    const Json source_get =
+        dispatch(runtime, "conversation.get", {{"id", source_id}})["result"];
+    const int64_t source_saved_at =
+        source_get["savedAt"].get<int64_t>();
+
+    // Bad scope → invalid.
+    const Json bad_scope = dispatch(runtime, "conversation.branch",
+                                     {{"sourceId", source_id},
+                                      {"messageIndex", 1},
+                                      {"scope", "elsewhere"}});
+    REQUIRE(bad_scope["error"]["data"]["status"] ==
+            SAO_AI_EDITOR_ERR_INVALID_ARGUMENT);
+
+    // Negative messageIndex → invalid.
+    const Json negative = dispatch(runtime, "conversation.branch",
+                                    {{"sourceId", source_id},
+                                     {"messageIndex", -1}});
+    REQUIRE(negative["error"]["data"]["status"] ==
+            SAO_AI_EDITOR_ERR_INVALID_ARGUMENT);
+
+    // messageIndex >= source.messages.size() → invalid.
+    const Json past_end = dispatch(runtime, "conversation.branch",
+                                    {{"sourceId", source_id},
+                                     {"messageIndex", 3}});
+    REQUIRE(past_end["error"]["data"]["status"] ==
+            SAO_AI_EDITOR_ERR_INVALID_ARGUMENT);
+
+    // Unknown source → NOT_FOUND (propagated as error).
+    const Json missing = dispatch(runtime, "conversation.branch",
+                                   {{"sourceId", "conv-does-not-exist"},
+                                    {"messageIndex", 0}});
+    REQUIRE(missing.contains("error"));
+
+    // Fork from messageIndex=1 → new conversation carries the first two
+    // messages (system + user); sourceId + branchedAt round-trip.
+    const Json branched = dispatch(runtime, "conversation.branch",
+                                    {{"sourceId", source_id},
+                                     {"messageIndex", 1}});
+    REQUIRE(branched.contains("result"));
+    const std::string new_id = branched["result"]["id"];
+    REQUIRE(!new_id.empty());
+    REQUIRE(new_id != source_id);
+    REQUIRE(branched["result"]["title"] == "Original Thread (branch)");
+    REQUIRE(branched["result"]["messageCount"] == 2);
+    REQUIRE(branched["result"]["sourceId"] == source_id);
+    REQUIRE(branched["result"]["branchedAt"].is_number());
+    REQUIRE(branched["result"]["branchedAt"].get<int64_t>() >=
+            source_saved_at);
+
+    const Json new_conv = dispatch(runtime, "conversation.get",
+                                    {{"id", new_id}})["result"];
+    REQUIRE(new_conv["messages"].size() == 2);
+    REQUIRE(new_conv["messages"][0]["role"] == "system");
+    REQUIRE(new_conv["messages"][0]["content"] ==
+            "you are a helpful bot");
+    REQUIRE(new_conv["messages"][1]["role"] == "user");
+    REQUIRE(new_conv["messages"][1]["content"] == "hello");
+    REQUIRE(new_conv["model"] == "gpt-branch");
+    REQUIRE(new_conv["scope"] == "workspace");
+    REQUIRE(new_conv["messageCount"] == 2);
+
+    // Original conversation is untouched.
+    const Json orig_after = dispatch(runtime, "conversation.get",
+                                      {{"id", source_id}})["result"];
+    REQUIRE(orig_after["messages"].size() == 3);
+
+    // Custom title override + messageIndex=0 → only the first message.
+    const Json single = dispatch(runtime, "conversation.branch",
+                                  {{"sourceId", source_id},
+                                   {"messageIndex", 0},
+                                   {"title", "Just System"}});
+    REQUIRE(single.contains("result"));
+    REQUIRE(single["result"]["title"] == "Just System");
+    REQUIRE(single["result"]["messageCount"] == 1);
+    const std::string single_id = single["result"]["id"];
+    const Json single_conv = dispatch(runtime, "conversation.get",
+                                       {{"id", single_id}})["result"];
+    REQUIRE(single_conv["messages"].size() == 1);
+    REQUIRE(single_conv["messages"][0]["role"] == "system");
+}
+
 TEST_CASE("AI Editor mcp.* JSON-RPC surface aggregates and forwards", "[plugins]"
           "[ai_editor][native][mcp][dispatch][integration]") {
     RuntimeFixture fixture;
@@ -2586,6 +2972,157 @@ TEST_CASE("AI Editor mcp.* JSON-RPC surface aggregates and forwards", "[plugins]
     REQUIRE(dispatch(runtime, "mcp.close_server", {{"name", "dispatch-mcp"}})
                 .contains("result"));
     REQUIRE(dispatch(runtime, "mcp.list_servers")["result"]["total"] == 0);
+}
+
+TEST_CASE("AI Editor mcp.get_prompt returns prompt messages from HTTP server",
+          "[plugins][ai_editor][native][mcp][dispatch][prompts][integration]") {
+    ScriptedHttpServer server;
+    // initialize handshake
+    server.enqueue(
+        R"({"jsonrpc":"2.0","id":1,"result":{"protocolVersion":"2024-11-05",)"
+        R"("serverInfo":{"name":"prompts-mock","version":"0.1"},)"
+        R"("capabilities":{"prompts":{"listChanged":false}}}})");
+    // notifications/initialized fire-and-forget
+    server.enqueue(R"({"jsonrpc":"2.0"})");
+    // prompts/get response — messages carry {role, content:{type:"text",text}}
+    // shape per MCP spec so the runtime can normalize into OpenAI messages.
+    server.enqueue(
+        R"({"jsonrpc":"2.0","id":2,"result":{"description":"Codebase intro",)"
+        R"("messages":[)"
+        R"({"role":"system","content":{"type":"text",)"
+        R"("text":"You review SAO plugins."}},)"
+        R"({"role":"user","content":{"type":"text",)"
+        R"("text":"Summarize plugins/ai_editor."}})"
+        R"(]}})");
+
+    RuntimeFixture fixture;
+    auto runtime = fixture.get();
+    const Json register_result = dispatch(
+        runtime, "mcp.register_server",
+        {{"name", "prompts-http"},
+         {"transport", "http"},
+         {"url", server.base_url() + "/mcp"},
+         {"startupMs", 5000}});
+    REQUIRE(register_result.contains("result"));
+
+    const Json prompt = dispatch(
+        runtime, "mcp.get_prompt",
+        {{"server", "prompts-http"},
+         {"name", "codebase-intro"},
+         {"arguments", {{"scope", "plugins/ai_editor"}}}});
+    REQUIRE(prompt.contains("result"));
+    REQUIRE(prompt["result"]["description"] == "Codebase intro");
+    REQUIRE(prompt["result"]["server"] == "prompts-http");
+    REQUIRE(prompt["result"]["messages"].is_array());
+    REQUIRE(prompt["result"]["messages"].size() == 2);
+    REQUIRE(prompt["result"]["messages"][0]["role"] == "system");
+    REQUIRE(prompt["result"]["messages"][0]["content"]["text"] ==
+            "You review SAO plugins.");
+    REQUIRE(prompt["result"]["messages"][1]["role"] == "user");
+    REQUIRE(prompt["result"]["messages"][1]["content"]["text"] ==
+            "Summarize plugins/ai_editor.");
+
+    // Verify the outgoing prompts/get body carried the correct name +
+    // arguments the caller passed through.  The first request is the
+    // initialize handshake, the second is notifications/initialized, the
+    // third is the prompts/get itself.
+    (void)server.take_request();  // initialize
+    (void)server.take_request();  // notifications/initialized
+    const std::string prompt_request = server.take_request();
+    REQUIRE(prompt_request.find("\"method\":\"prompts/get\"") !=
+            std::string::npos);
+    REQUIRE(prompt_request.find("\"name\":\"codebase-intro\"") !=
+            std::string::npos);
+    REQUIRE(prompt_request.find("\"scope\":\"plugins/ai_editor\"") !=
+            std::string::npos);
+
+    REQUIRE(dispatch(runtime, "mcp.close_server",
+                     {{"name", "prompts-http"}})
+                .contains("result"));
+}
+
+TEST_CASE("AI Editor chat.run_with_mcp renders systemPromptSource into "
+          "OpenAI messages",
+          "[plugins][ai_editor][native][runs][mcp][prompts][integration]") {
+    ScriptedHttpServer mcp_server;
+    // initialize handshake
+    mcp_server.enqueue(
+        R"({"jsonrpc":"2.0","id":1,"result":{"protocolVersion":"2024-11-05",)"
+        R"("serverInfo":{"name":"prompts-mock","version":"0.1"},)"
+        R"("capabilities":{"prompts":{}}}})");
+    mcp_server.enqueue(R"({"jsonrpc":"2.0"})");
+    // chat.run_with_mcp aggregates tools/list across every registered server
+    // before it renders the systemPromptSource, so serve an empty tool list
+    // to keep the OpenAI body free of MCP-injected function tools.
+    mcp_server.enqueue(
+        R"({"jsonrpc":"2.0","id":2,"result":{"tools":[]}})");
+    // prompts/get renders a system + user message.
+    mcp_server.enqueue(
+        R"({"jsonrpc":"2.0","id":3,"result":{"description":"Boot header",)"
+        R"("messages":[)"
+        R"({"role":"system","content":{"type":"text",)"
+        R"("text":"You are the SAO reviewer."}},)"
+        R"({"role":"user","content":{"type":"text",)"
+        R"("text":"Prime the review."}})"
+        R"(]}})");
+
+    const std::string chat_body =
+        R"({"choices":[{"message":{"role":"assistant","content":"ok"}}]})";
+    LocalHttpServer chat_server(
+        "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n"
+        "Content-Length: " + std::to_string(chat_body.size()) +
+        "\r\nConnection: close\r\n\r\n" + chat_body);
+
+    RuntimeFixture fixture;
+    auto runtime = fixture.get();
+    // Register the HTTP MCP server so mcp.get_prompt can resolve the source.
+    const Json register_result = dispatch(
+        runtime, "mcp.register_server",
+        {{"name", "prompts-http"},
+         {"transport", "http"},
+         {"url", mcp_server.base_url() + "/mcp"},
+         {"startupMs", 5000}});
+    REQUIRE(register_result.contains("result"));
+
+    // No mcpServers -> keep the tools list empty so the request body is a
+    // vanilla chat.run shape; we only care about the messages array here.
+    const Json params{
+        {"provider", {{"id", "fixture"},
+                       {"endpoint", chat_server.endpoint()}}},
+        {"model", "fixture-model"},
+        {"messages", Json::array(
+             {{{"role", "user"}, {"content", "actual user turn"}}})},
+        {"stream", false},
+        {"timeoutMs", 5'000},
+        {"systemPromptSource",
+         {{"server", "prompts-http"}, {"name", "codebase-intro"}}}};
+    const Json started = dispatch(runtime, "chat.run_with_mcp", params);
+    REQUIRE(started.contains("result"));
+    REQUIRE(started["result"]["accepted"] == true);
+    REQUIRE(chat_server.wait_for_connections(1, 5'000));
+
+    const auto bodies = chat_server.captured_bodies();
+    REQUIRE(bodies.size() == 1);
+    const Json body_json = Json::parse(bodies.front());
+    REQUIRE(body_json.contains("messages"));
+    REQUIRE(body_json["messages"].is_array());
+    // Expected: system prompt from MCP first (description is skipped
+    // because prompt already produced a system message), then user turn
+    // from MCP, then the caller's actual user turn.
+    REQUIRE(body_json["messages"].size() == 3);
+    REQUIRE(body_json["messages"][0]["role"] == "system");
+    REQUIRE(body_json["messages"][0]["content"] ==
+            "You are the SAO reviewer.");
+    REQUIRE(body_json["messages"][1]["role"] == "user");
+    REQUIRE(body_json["messages"][1]["content"] == "Prime the review.");
+    REQUIRE(body_json["messages"][2]["role"] == "user");
+    REQUIRE(body_json["messages"][2]["content"] == "actual user turn");
+    // systemPromptSource must not leak into the OpenAI request body.
+    REQUIRE_FALSE(body_json.contains("systemPromptSource"));
+
+    REQUIRE(dispatch(runtime, "mcp.close_server",
+                     {{"name", "prompts-http"}})
+                .contains("result"));
 }
 
 TEST_CASE("SaoAiEditor.exe --extension-host serves NativeRuntime JSON-RPC "

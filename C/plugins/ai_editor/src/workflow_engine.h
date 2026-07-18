@@ -61,6 +61,34 @@ public:
                    std::string_view scope,
                    std::string_view plugin_id);
 
+    // Snapshot workflow definitions for export.
+    // scope options:
+    //   "workspace" — user workflows currently attached to the workspace scope
+    //   "system"    — user workflows currently attached to the system scope
+    //   "builtin"   — the compiled-in built-in workflows
+    //   "all"       — everything the registry knows about (workspace + system +
+    //                 plugin:* + builtin).  Only user workflows keep their
+    //                 storage scope; built-ins are tagged scope="builtin".
+    // Populates `result` with a sao-workflows/1 envelope.
+    int32_t export_all(std::string_view scope, Json& result) const;
+
+    // Import a single workflow definition into the target scope.  Mirrors
+    // ConversationStore::import_conversation: honours `overwrite` on
+    // conflict, blocks any attempt to shadow a built-in, and yields the id
+    // that was actually written.  Callers stage two passes for atomicity
+    // (see dispatch_workflow) so the store either fully accepts or fully
+    // rejects a batch.
+    int32_t import_workflow(const Json& workflow,
+                            std::string_view scope,
+                            std::string_view plugin_id,
+                            bool overwrite,
+                            const ScopeStore& scopes,
+                            std::string& out_id);
+
+    // Look up whether an id is currently owned by a built-in; used by the
+    // dispatch layer to fail atomically before any import writes happen.
+    bool is_builtin(std::string_view id) const;
+
 private:
     mutable std::mutex mutex_;
     std::unordered_map<std::string, WorkflowDefinition> workflows_;

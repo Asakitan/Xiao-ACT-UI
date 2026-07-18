@@ -1,11 +1,119 @@
 #include "agent_registry.h"
 
+#include <windows.h>
+
 #include <algorithm>
+#include <filesystem>
+#include <string>
+#include <system_error>
+#include <vector>
 
 #include "scope_store.h"
 
 namespace sao::ai_editor::native {
 namespace {
+
+std::filesystem::path market_module_directory() {
+    HMODULE module_handle = nullptr;
+    if (!GetModuleHandleExW(
+            GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS |
+                GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+            reinterpret_cast<LPCWSTR>(&market_module_directory),
+            &module_handle) ||
+        module_handle == nullptr) {
+        return {};
+    }
+    std::vector<wchar_t> buffer(MAX_PATH);
+    for (;;) {
+        const DWORD written = GetModuleFileNameW(
+            module_handle, buffer.data(),
+            static_cast<DWORD>(buffer.size()));
+        if (written == 0) {
+            return {};
+        }
+        if (written < buffer.size()) {
+            std::filesystem::path path(buffer.data());
+            return path.parent_path();
+        }
+        buffer.resize(buffer.size() * 2);
+        if (buffer.size() > 32768) {
+            return {};
+        }
+    }
+}
+
+// Locate a market-preset subdirectory of the installed/deployed ai_editor
+// assets tree.  Mirrors default_shim_path_utf8() in extension_host.cpp:
+// anchor at the DLL directory and try both install-tree and source-tree
+// relative candidates.  Returns an empty path when nothing is found so
+// callers treat market presets as optional.
+std::filesystem::path resolve_market_assets_dir(std::wstring_view subdir) {
+    const std::filesystem::path anchor = market_module_directory();
+    if (anchor.empty()) {
+        return {};
+    }
+    const std::wstring rel_install =
+        std::wstring(L"assets/ai_editor/") + std::wstring(subdir);
+    // Candidates ordered from most specific (install layout) to source
+    // layout used during dev-tree tests.
+    const std::wstring candidates[] = {
+        rel_install,
+        std::wstring(L"../") + rel_install,
+        std::wstring(L"../../") + rel_install,
+        std::wstring(L"../plugins/ai_editor/") + rel_install,
+        std::wstring(L"../../plugins/ai_editor/") + rel_install,
+        std::wstring(L"../../../plugins/ai_editor/") + rel_install,
+        std::wstring(L"../../../../plugins/ai_editor/") + rel_install,
+    };
+    for (const auto& rel : candidates) {
+        std::filesystem::path candidate = anchor / rel;
+        std::error_code error;
+        candidate = std::filesystem::weakly_canonical(candidate, error);
+        if (error) {
+            continue;
+        }
+        if (std::filesystem::is_directory(candidate, error) && !error) {
+            return candidate;
+        }
+    }
+    return {};
+}
+
+// Read every *.json file in `dir` and hand it to `sink`. Malformed files
+// are skipped silently — market presets are optional and must never break
+// registry reload.
+template <typename Sink>
+void enumerate_market_json(const std::filesystem::path& dir, Sink&& sink) {
+    if (dir.empty()) {
+        return;
+    }
+    std::error_code error;
+    std::filesystem::directory_iterator iterator(dir, error);
+    if (error) {
+        return;
+    }
+    for (const auto& entry : iterator) {
+        std::error_code file_error;
+        if (!entry.is_regular_file(file_error) || file_error) {
+            continue;
+        }
+        const auto& path = entry.path();
+        if (path.extension() != L".json") {
+            continue;
+        }
+        std::string text;
+        if (read_text_file(path, kMaximumJsonBytes, text) !=
+                SAO_AI_EDITOR_OK ||
+            text.empty()) {
+            continue;
+        }
+        Json parsed = Json::parse(text, nullptr, false);
+        if (parsed.is_discarded() || !parsed.is_object()) {
+            continue;
+        }
+        sink(parsed);
+    }
+}
 
 const std::vector<AgentDefinition>& builtin_agents() {
     static const std::vector<AgentDefinition> agents = [] {
@@ -168,6 +276,27 @@ void AgentRegistry::reload(const ScopeStore& scopes) {
     for (const auto& agent : builtin_agents()) {
         agents_.emplace(agent.id, agent);
     }
+    // Market presets: install-time bundled agent definitions.  Loaded
+    // after built-ins so built-in ids win, and before user scopes so user
+    // edits with the same id override the market copy.  Marked
+    // builtin=false / scope="market" so users can override or delete them.
+    enumerate_market_json(
+        resolve_market_assets_dir(L"agents"), [this](const Json& item) {
+            if (!item.contains("id") || !item["id"].is_string()) {
+                return;
+            }
+            AgentDefinition agent = AgentDefinition::from_json(item);
+            if (agent.id.empty()) {
+                return;
+            }
+            const auto existing = agents_.find(agent.id);
+            if (existing != agents_.end() && existing->second.builtin) {
+                return;  // built-in wins over market
+            }
+            agent.builtin = false;
+            agent.scope = "market";
+            agents_[agent.id] = std::move(agent);
+        });
     Json registry;
     if (scopes.load_registry("agents", Json::array(), registry) !=
             SAO_AI_EDITOR_OK ||

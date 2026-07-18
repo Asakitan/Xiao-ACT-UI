@@ -77,6 +77,13 @@ private:
     // dispatch_agent("agents.invoke").
     int32_t start_chat_with_mcp(const Json& params, Json& result);
     int32_t agent_invoke_with_mcp(const Json& params, Json& result);
+    // Resolve `systemPromptSource:{server,name,arguments?}` by calling the
+    // registered MCP server's prompts/get and prepending the returned
+    // messages (and optional description as a system header) to
+    // `params.messages`.  Returns SAO_AI_EDITOR_OK when the source field is
+    // absent, empty, or successfully rendered; propagates the get_prompt
+    // failure otherwise (never silently swallowed).
+    int32_t apply_system_prompt_source(Json& params);
     int32_t dispatch_workflow(std::string_view method,
                               const Json& params,
                               Json& result);

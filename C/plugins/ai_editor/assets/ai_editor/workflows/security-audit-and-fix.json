@@ -1,0 +1,29 @@
+{
+    "id": "security-audit-and-fix",
+    "name": "Security Audit & Fix",
+    "description": "Audit code for vulnerabilities, then draft input-sanitization and hardening fixes in parallel",
+    "icon": "🛡️",
+    "when_to_use": "For security-sensitive code changes where an audit + concrete fixes are both needed",
+    "steps": [
+        {
+            "agent": "security-auditor",
+            "prompt": "Audit the following code and list every finding with CWE id, severity, exact location, and a short exploit sketch:\n\n{{input}}",
+            "output_var": "audit",
+            "label": "Auditing"
+        },
+        {
+            "agent": "default",
+            "prompt": "Given this security audit:\n\n{{audit}}\n\nDraft input-validation and boundary-check fixes for every Critical and High finding. Show the minimal patch for each and reference the CWE id.",
+            "output_var": "input_fixes",
+            "label": "Drafting input-validation fixes",
+            "group": "fixes"
+        },
+        {
+            "agent": "default",
+            "prompt": "Given this security audit:\n\n{{audit}}\n\nDraft hardening fixes (least privilege, secret handling, TLS, logging redaction) for every Critical and High finding. Show the minimal patch for each and reference the CWE id.",
+            "output_var": "hardening_fixes",
+            "label": "Drafting hardening fixes",
+            "group": "fixes"
+        }
+    ]
+}
