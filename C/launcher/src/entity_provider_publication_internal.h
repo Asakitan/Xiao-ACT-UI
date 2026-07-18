@@ -7,6 +7,9 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <mutex>
+#include <string>
+#include <vector>
 
 namespace sao::launcher::entity_provider_publication {
 
@@ -24,11 +27,45 @@ using HomeFn = sao_status_t(SAO_UI_CALL*)(sao_ui_entity_shell_handle_t handle);
 
 inline constexpr std::uint32_t kRefreshIntervalMs = 250;
 
+struct EntityRootContributionActionRef {
+    std::string provider_id;
+    std::string action_id;
+
+    bool operator==(const EntityRootContributionActionRef&) const = default;
+};
+
+struct EntityRootContributionSpec {
+    std::string owner_id;
+    std::string contribution_id;
+    std::string root_id;
+    std::string name;
+    std::string icon;
+    double priority = 0.0;
+    std::vector<EntityRootContributionActionRef> actions;
+
+    bool operator==(const EntityRootContributionSpec&) const = default;
+};
+
 struct EntityProviderPublicationState {
     std::uint64_t catalog_revision = 0;
     std::uint32_t refresh_elapsed_ms = 0;
     bool has_catalog_revision = false;
+    std::uint64_t root_contribution_revision = 0;
+    std::uint64_t published_root_contribution_revision = 0;
+    std::vector<EntityRootContributionSpec> root_contributions;
+    mutable std::mutex root_contribution_mutex;
 };
+
+sao_status_t
+replace_root_contributions(EntityProviderPublicationState& state,
+                           const std::vector<EntityRootContributionSpec>& contributions) noexcept;
+
+sao_status_t replace_root_contributions_for_owner(
+    EntityProviderPublicationState& state, const std::string& owner_id,
+    const std::vector<EntityRootContributionSpec>& contributions) noexcept;
+
+sao_status_t clear_root_contributions_for_owner(EntityProviderPublicationState& state,
+                                                const std::string& owner_id) noexcept;
 
 sao_status_t refresh(sao_ui_entity_shell_handle_t shell,
                      entity_action_routes::EntityActionRouteStore& routes,
