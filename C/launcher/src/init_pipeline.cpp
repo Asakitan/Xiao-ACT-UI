@@ -28,6 +28,7 @@
 #include "settings_owner_internal.h"
 #include "settings_theme_internal.h"
 #include "tool_launch_internal.h"
+#include "entity_action_routes_internal.h"
 
 #include <windows.h>
 #include <cstring>
@@ -636,6 +637,7 @@ struct sao_platform_ctx {
     bool restore_theme_on_rollback = false;
     bool settings_save_enabled = false;
     bool nervgear_mode{true};
+    sao::launcher::entity_action_routes::EntityActionRouteStore entity_action_routes;
     std::unique_ptr<sao::launcher::settings_owner::SettingsOwner> settings_owner;
     std::unique_ptr<sao::launcher::tool_launch::AiEditorProcessOwner> ai_editor;
 };
@@ -712,6 +714,22 @@ void SAO_UI_CALL entity_mouse(uint32_t message, int32_t x, int32_t y,
 
 sao_status_t SAO_UI_CALL entity_action(SaoUiEntityAction action,
                                        void* user_data) {
+    const auto action_token = static_cast<std::int32_t>(action);
+    if (sao::launcher::entity_action_routes::is_dynamic_token(action_token)) {
+        auto* ctx = static_cast<sao_platform_ctx*>(user_data);
+        if (ctx == nullptr) {
+            return SAO_STATUS_ERR_INVALID_ARGUMENT;
+        }
+        sao::launcher::entity_action_routes::EntityActionRoute route;
+        const sao_status_t route_status =
+            ctx->entity_action_routes.resolve(action_token, route);
+        if (route_status == SAO_STATUS_OK) {
+            return SAO_STATUS_ERR_NOT_IMPLEMENTED;
+        }
+        return route_status == SAO_STATUS_ERR_NOT_FOUND
+                   ? SAO_STATUS_ERR_INVALID_ARGUMENT
+                   : route_status;
+    }
     switch (action) {
     case SAO_UI_ENTITY_ACTION_OPEN_ABOUT:
         break;

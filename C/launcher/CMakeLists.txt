@@ -17,6 +17,7 @@
 # EXEs in the tree are CLI tools or plugin hosts.
 
 set(SAO_LAUNCHER_HEADERS
+    src/entity_action_routes_internal.h
     src/settings_codec_internal.h
     src/settings_json_internal.h
     src/settings_owner_internal.h
