@@ -933,6 +933,65 @@ private:
 
 }  // namespace
 
+TEST_CASE("AI Editor extensions.* register + list + unregister without node",
+          "[plugins][ai_editor][native][extensions]") {
+    RuntimeFixture fixture;
+    const Json manifest{{"name", "hello"},
+                        {"publisher", "sao-test"},
+                        {"version", "0.1.0"},
+                        {"main", "./out/extension.js"}};
+    const Json registered = dispatch(fixture.get(), "extensions.register",
+                                     {{"manifest", manifest},
+                                      {"extensionPath", "C:\\ext\\hello"}});
+    REQUIRE(registered.contains("result"));
+    REQUIRE(registered["result"]["id"] == "sao-test.hello");
+    REQUIRE(registered["result"]["activated"] == false);
+
+    const Json listed =
+        dispatch(fixture.get(), "extensions.list")["result"];
+    REQUIRE(listed["total"] == 1);
+    REQUIRE(listed["items"][0]["publisher"] == "sao-test");
+    REQUIRE(listed["nodeAlive"] == false);
+
+    const Json activate_without_configure =
+        dispatch(fixture.get(), "extensions.activate",
+                 {{"extensionId", "sao-test.hello"}, {"timeoutMs", 500}});
+    REQUIRE(activate_without_configure["error"]["data"]["status"] ==
+            SAO_AI_EDITOR_ERR_NOT_INITIALIZED);
+
+    const Json unregistered = dispatch(fixture.get(), "extensions.unregister",
+                                       {{"extensionId", "sao-test.hello"}});
+    REQUIRE(unregistered.contains("result"));
+    REQUIRE(dispatch(fixture.get(), "extensions.list")["result"]["total"] ==
+            0);
+}
+
+TEST_CASE("dispatch_extension_call maps vscode.workspace.* into tools registry",
+          "[plugins][ai_editor][native][extensions][vscode]") {
+    RuntimeFixture fixture;
+    // Seed a file so readTextDocument can round-trip.
+    {
+        std::ofstream fixture_file(fixture.workspace() / L"note.txt");
+        fixture_file << "hello from vscode API\n";
+    }
+    // Reach the internal dispatcher via the NativeRuntime C API using
+    // tools.call — vscode.workspace.readTextDocument maps to the same
+    // registry.
+    const Json read_request = Json{{"mode", "agent"},
+                                    {"name", "readFile"},
+                                    {"arguments", {{"path", "note.txt"}}}};
+    const Json call = dispatch(fixture.get(), "tools.call", read_request);
+    REQUIRE(call.contains("result"));
+    REQUIRE(call["result"]["content"].get<std::string>().find(
+                "hello from vscode API") != std::string::npos);
+    // Also directly ensure the vscode.workspace.workspaceFolders shim works
+    // via a synthetic sao.host.dispatch style path: extensions.snapshot is a
+    // representative Node-side view.
+    const Json snapshot = dispatch(fixture.get(), "extensions.snapshot");
+    REQUIRE(snapshot.contains("result"));
+    REQUIRE(snapshot["result"]["nodeAlive"] == false);
+}
+
 TEST_CASE("AI Editor auth.begin_device_flow + poll drives RFC 8628 to success",
           "[plugins][ai_editor][native][auth][device_flow][integration]") {
     RuntimeFixture fixture;

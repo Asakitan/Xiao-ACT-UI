@@ -16,12 +16,14 @@ add_library(sao_plugin_ai_editor SHARED
     src/auth_device_flow.cpp
     src/chat_provider_router.cpp
     src/conversation_store.cpp
+    src/extension_host.cpp
     src/mcp_client.cpp
     src/mcp_codec.cpp
     src/mcp_server.cpp
     src/native_secret_store.cpp
     src/native_tool_registry.cpp
     src/native_utils.cpp
+    src/node_runtime.cpp
     src/openai_codec.cpp
     src/scope_store.cpp
     src/winhttp_chat.cpp

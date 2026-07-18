@@ -11,6 +11,7 @@
 
 #include "auth_device_flow.h"
 #include "conversation_store.h"
+#include "extension_host.h"
 #include "native_secret_store.h"
 #include "native_tool_registry.h"
 #include "sao/ai_editor/mcp_client.h"
@@ -69,6 +70,9 @@ private:
     int32_t dispatch_auth(std::string_view method,
                           const Json& params,
                           Json& result);
+    int32_t dispatch_extension(std::string_view method,
+                               const Json& params,
+                               Json& result);
     int32_t run_chat_sync(const Json& params, uint32_t timeout_ms,
                           std::string& out_content);
     void execute_chat(const std::shared_ptr<RunState>& run,
@@ -102,7 +106,15 @@ private:
     std::unordered_map<std::string, std::shared_ptr<WorkflowExecution>>
         workflow_executions_;
     std::unique_ptr<AuthDeviceFlow> auth_flow_;
+    std::unique_ptr<ExtensionHost> extension_host_;
     uint32_t maximum_event_queue_;
+
+public:
+    // Node-side vscode.* / sao.host.* callbacks; the extension shim invokes
+    // these when extensions call vscode API surface.
+    int32_t dispatch_extension_call(std::string_view method,
+                                    const Json& params,
+                                    Json& result);
 
     mutable std::mutex store_mutex_;
     mutable std::mutex state_mutex_;

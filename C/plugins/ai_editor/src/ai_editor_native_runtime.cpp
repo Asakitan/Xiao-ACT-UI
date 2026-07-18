@@ -178,6 +178,7 @@ int32_t NativeRuntime::initialize() {
     }
     mcp_client_.reset(mcp_raw);
     auth_flow_ = std::make_unique<AuthDeviceFlow>(secrets_.get());
+    extension_host_ = std::make_unique<ExtensionHost>(*this);
     return SAO_AI_EDITOR_OK;
 }
 
@@ -497,6 +498,219 @@ int32_t NativeRuntime::invoke(std::string_view method,
     if (method.starts_with("auth.")) {
         return dispatch_auth(method, params, result);
     }
+    if (method.starts_with("extensions.")) {
+        return dispatch_extension(method, params, result);
+    }
+    return SAO_AI_EDITOR_ERR_NOT_FOUND;
+}
+
+int32_t NativeRuntime::dispatch_extension(std::string_view method,
+                                          const Json& params, Json& result) {
+    if (extension_host_ == nullptr) {
+        return SAO_AI_EDITOR_ERR_NOT_INITIALIZED;
+    }
+    if (method == "extensions.configure_host") {
+        return extension_host_->configure(params);
+    }
+    if (method == "extensions.list") {
+        return extension_host_->list_extensions(result);
+    }
+    if (method == "extensions.register") {
+        return extension_host_->register_extension(params, result);
+    }
+    if (method == "extensions.unregister") {
+        if (!params.contains("extensionId") ||
+            !params["extensionId"].is_string()) {
+            return SAO_AI_EDITOR_ERR_INVALID_ARGUMENT;
+        }
+        return extension_host_->unregister_extension(
+            params["extensionId"].get<std::string>(), result);
+    }
+    if (method == "extensions.activate") {
+        if (!params.contains("extensionId") ||
+            !params["extensionId"].is_string()) {
+            return SAO_AI_EDITOR_ERR_INVALID_ARGUMENT;
+        }
+        return extension_host_->activate(
+            params["extensionId"].get<std::string>(),
+            params.value("timeoutMs", 15000U), result);
+    }
+    if (method == "extensions.deactivate") {
+        if (!params.contains("extensionId") ||
+            !params["extensionId"].is_string()) {
+            return SAO_AI_EDITOR_ERR_INVALID_ARGUMENT;
+        }
+        return extension_host_->deactivate(
+            params["extensionId"].get<std::string>(), result);
+    }
+    if (method == "extensions.execute_command") {
+        if (!params.contains("command") || !params["command"].is_string()) {
+            return SAO_AI_EDITOR_ERR_INVALID_ARGUMENT;
+        }
+        return extension_host_->execute_command(
+            params["command"].get<std::string>(),
+            params.value("arguments", Json::array()),
+            params.value("timeoutMs", 15000U), result);
+    }
+    if (method == "extensions.snapshot") {
+        result = extension_host_->snapshot();
+        return SAO_AI_EDITOR_OK;
+    }
+    return SAO_AI_EDITOR_ERR_NOT_FOUND;
+}
+
+int32_t NativeRuntime::dispatch_extension_call(std::string_view method,
+                                               const Json& params,
+                                               Json& result) {
+    // vscode.workspace.* — file surface goes through the built-in tools
+    // registry so writes still respect the workspace boundary + permission
+    // model.
+    if (method == "vscode.workspace.readTextDocument") {
+        const Json arguments{{"path", params.value("path", std::string{})},
+                              {"startLine", params.value("startLine", 0)},
+                              {"endLine", params.value("endLine", 0)}};
+        return tools_.execute("agent", "readFile", arguments, result);
+    }
+    if (method == "vscode.workspace.writeTextDocument") {
+        Json arguments = params;
+        arguments["confirmed"] = true;
+        return tools_.execute("agent", "editFile", arguments, result);
+    }
+    if (method == "vscode.workspace.findFiles") {
+        const Json arguments{
+            {"path", params.value("path", std::string{"."})},
+            {"pattern", params.value("pattern", std::string{"*"})},
+            {"recursive", params.value("recursive", true)},
+            {"limit", params.value("limit", 200)}};
+        return tools_.execute("agent", "listFiles", arguments, result);
+    }
+    if (method == "vscode.workspace.textSearch") {
+        const Json arguments{
+            {"query", params.value("query", std::string{})},
+            {"path", params.value("path", std::string{"."})},
+            {"pattern", params.value("pattern", std::string{"*"})},
+            {"regex", params.value("regex", false)},
+            {"caseSensitive", params.value("caseSensitive", false)},
+            {"limit", params.value("limit", 200)}};
+        return tools_.execute("agent", "searchFiles", arguments, result);
+    }
+    if (method == "vscode.workspace.workspaceFolders") {
+        result = Json::array({Json{{"index", 0},
+                                    {"name", "workspace"},
+                                    {"uri", "file:///" +
+                                             wide_to_utf8(
+                                                 scopes_.workspace_root().native())}}});
+        return SAO_AI_EDITOR_OK;
+    }
+    if (method == "vscode.workspace.getConfiguration") {
+        Json merged;
+        {
+            std::lock_guard<std::mutex> lock(store_mutex_);
+            const int32_t status = scopes_.load_merged_config(merged);
+            if (status != SAO_AI_EDITOR_OK) {
+                return status;
+            }
+        }
+        const std::string section = params.value("section", std::string{});
+        if (section.empty()) {
+            result = std::move(merged);
+        } else {
+            const auto found = merged.find(section);
+            result = found == merged.end() ? Json::object() : *found;
+        }
+        return SAO_AI_EDITOR_OK;
+    }
+    if (method == "vscode.workspace.updateConfiguration") {
+        if (!params.contains("section") || !params["section"].is_string() ||
+            !params.contains("value")) {
+            return SAO_AI_EDITOR_ERR_INVALID_ARGUMENT;
+        }
+        std::lock_guard<std::mutex> lock(store_mutex_);
+        Json existing;
+        (void)scopes_.load_scope_config("workspace", "", existing);
+        existing[params["section"].get<std::string>()] = params["value"];
+        return scopes_.save_scope_config("workspace", "", existing);
+    }
+    // vscode.window.* — surface messages/inputs as native events so the
+    // host UI can render them.
+    if (method == "vscode.window.showInformationMessage" ||
+        method == "vscode.window.showWarningMessage" ||
+        method == "vscode.window.showErrorMessage") {
+        const std::string_view kind = method.substr(
+            std::string_view("vscode.window.show").size());
+        emit(std::string("vscode.window.") + std::string(kind),
+             Json{{"message", params.value("message", std::string{})},
+                  {"actions", params.value("actions", Json::array())}});
+        result = Json(nullptr);
+        return SAO_AI_EDITOR_OK;
+    }
+    if (method == "vscode.window.showQuickPick" ||
+        method == "vscode.window.showInputBox") {
+        emit(std::string("vscode.window.") + std::string(method.substr(
+                 std::string_view("vscode.window.").size())),
+             params);
+        // No UI attached — fail closed with null.
+        result = Json(nullptr);
+        return SAO_AI_EDITOR_OK;
+    }
+    if (method == "vscode.window.createOutputChannel") {
+        result = Json{{"channelId",
+                       params.value("name", std::string{"default"})}};
+        return SAO_AI_EDITOR_OK;
+    }
+    if (method == "vscode.window.appendOutput") {
+        emit("vscode.window.output",
+             Json{{"channelId", params.value("channelId", std::string{})},
+                  {"text", params.value("text", std::string{})}});
+        result = Json(nullptr);
+        return SAO_AI_EDITOR_OK;
+    }
+    // vscode.commands.executeCommand loops back through the extension host
+    // if a Node-side command was registered.
+    if (method == "vscode.commands.executeCommand") {
+        if (extension_host_ == nullptr) {
+            return SAO_AI_EDITOR_ERR_NOT_INITIALIZED;
+        }
+        return extension_host_->execute_command(
+            params.value("command", std::string{}),
+            params.value("arguments", Json::array()),
+            params.value("timeoutMs", 15000U), result);
+    }
+    // vscode.languages.* — static shim identifying registered languages.
+    if (method == "vscode.languages.getLanguages") {
+        result = Json::array({"plaintext", "json", "javascript", "typescript",
+                              "python", "cpp", "csharp", "go", "rust",
+                              "markdown", "html", "css"});
+        return SAO_AI_EDITOR_OK;
+    }
+    // sao.host.* — direct pass-through to native runtime methods so the
+    // extension shim can lean on SAO's own JSON-RPC surface without going
+    // through the parent process.
+    if (method == "sao.host.dispatch") {
+        Json request{{"jsonrpc", "2.0"},
+                     {"id", 1},
+                     {"method",
+                      params.value("method", std::string{})},
+                     {"params", params.value("params", Json::object())}};
+        Json response;
+        const int32_t status = dispatch(request, response);
+        if (status != SAO_AI_EDITOR_OK) {
+            result = Json{{"message", "dispatch failed"}};
+            return status;
+        }
+        if (response.contains("error")) {
+            result = response["error"];
+            return SAO_AI_EDITOR_ERR_PROTOCOL;
+        }
+        result = response.value("result", Json::object());
+        return SAO_AI_EDITOR_OK;
+    }
+    if (method == "sao.host.log") {
+        emit("host.log", params);
+        result = Json(nullptr);
+        return SAO_AI_EDITOR_OK;
+    }
+    result = Json{{"message", "unsupported extension method"}};
     return SAO_AI_EDITOR_ERR_NOT_FOUND;
 }
 
