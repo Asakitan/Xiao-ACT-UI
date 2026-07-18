@@ -107,6 +107,20 @@ public:
     const std::string& id() const noexcept { return id_; }
     const WorkflowDefinition& definition() const noexcept { return definition_; }
 
+    // Retry support: seed the execution so run_loop begins at
+    // `step_index` instead of 0.  Optional `preserved_variables` overrides
+    // the variable map set up by the constructor — used by
+    // workflow.retry when keepVariables=true to carry successful step
+    // outputs from a previous run.  `retry_of` records the original
+    // execution id so it flows into snapshot()/history_record() and
+    // becomes discoverable from the persisted record.  Must be called
+    // before start(); once the worker thread is spawned these knobs are
+    // read-only.
+    void seed_retry_state(size_t step_index,
+                          std::unordered_map<std::string, std::string>
+                              preserved_variables,
+                          std::string retry_of);
+
     void start(NativeRuntime& runtime, Json provider, std::string model,
                uint32_t chat_timeout_ms);
     // Overload that also takes a directory to persist a full history record
@@ -215,6 +229,11 @@ private:
     // wires up disk history; run_loop() writes to this directory once the
     // execution reaches a terminal state.
     std::filesystem::path history_persist_root_;
+    // Retry knobs.  Both default to the "fresh run" values so unchanged
+    // callers observe original semantics; workflow.retry populates them
+    // before start() to graft onto a prior failed execution.
+    size_t start_at_step_index_ = 0;
+    std::string retry_of_;
 };
 
 }  // namespace sao::ai_editor::native

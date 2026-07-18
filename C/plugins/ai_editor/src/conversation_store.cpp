@@ -522,6 +522,245 @@ int32_t ConversationStore::branch(std::string_view source_id,
     return SAO_AI_EDITOR_OK;
 }
 
+int32_t ConversationStore::merge(const std::vector<std::string>& source_ids,
+                                  std::string_view title,
+                                  std::string_view scope,
+                                  const Json& separator,
+                                  bool order_by_saved_at,
+                                  Json& result) const {
+    if (scope != "workspace" && scope != "system") {
+        return SAO_AI_EDITOR_ERR_INVALID_ARGUMENT;
+    }
+    if (source_ids.empty()) {
+        return SAO_AI_EDITOR_ERR_INVALID_ARGUMENT;
+    }
+    // Fetch every source up front so a missing id fails cleanly before we
+    // start writing anything.  Any NOT_FOUND propagates so callers see the
+    // same error surface as get() does for individual lookups.
+    std::vector<Json> sources;
+    sources.reserve(source_ids.size());
+    for (const auto& id : source_ids) {
+        Json document;
+        const int32_t status = get(id, document);
+        if (status != SAO_AI_EDITOR_OK) {
+            return status;
+        }
+        sources.push_back(std::move(document));
+    }
+    // Optional separator must be a valid message-shaped object (role +
+    // content).  We normalise an explicit null / missing key to "no
+    // separator" instead of surfacing an error — callers that omit the
+    // param probably do not want a divider.
+    const bool has_separator = separator.is_object() &&
+                                separator.contains("role") &&
+                                separator["role"].is_string() &&
+                                separator.contains("content");
+    if (order_by_saved_at) {
+        // Preserve caller order as a stable tie-breaker if two conversations
+        // share the same savedAt (which happens in unit tests that mint
+        // records quickly).  std::stable_sort keeps the pre-sort ordering
+        // for equal keys.
+        std::stable_sort(sources.begin(), sources.end(),
+                         [](const Json& left, const Json& right) {
+                             return left.value("savedAt", int64_t{0}) <
+                                    right.value("savedAt", int64_t{0});
+                         });
+    }
+    Json merged_messages = Json::array();
+    Json sourced_from = Json::array();
+    for (size_t index = 0; index < sources.size(); ++index) {
+        if (index > 0 && has_separator) {
+            merged_messages.push_back(separator);
+        }
+        const auto& source = sources[index];
+        sourced_from.push_back(source.value("id", std::string{}));
+        if (!source.contains("messages") || !source["messages"].is_array()) {
+            continue;
+        }
+        for (const auto& message : source["messages"]) {
+            merged_messages.push_back(message);
+        }
+    }
+    const std::string& first_title = sources.front().value(
+        "title", std::string{"Untitled"});
+    const std::string merged_title = title.empty()
+                                          ? (first_title + " (merged)")
+                                          : std::string(title);
+    const std::string new_id = next_id();
+    const int64_t now = unix_milliseconds();
+    Json document{{"id", new_id},
+                  {"title", merged_title},
+                  {"systemPrompt",
+                   sources.front().value("systemPrompt", std::string{})},
+                  {"model",
+                   sources.front().value("model", std::string{})},
+                  {"scope", std::string(scope)},
+                  {"savedAt", now},
+                  {"messageCount", merged_messages.size()},
+                  {"pinned", false},
+                  {"messages", merged_messages}};
+    const auto path = scopes_.history_root(scope) /
+                      (utf8_to_wide(new_id) + L".json");
+    const int32_t status = save(path, document);
+    if (status != SAO_AI_EDITOR_OK) {
+        return status;
+    }
+    result = Json{{"id", new_id},
+                  {"title", merged_title},
+                  {"messageCount", merged_messages.size()},
+                  {"sourcedFrom", std::move(sourced_from)},
+                  {"mergedAt", now}};
+    return SAO_AI_EDITOR_OK;
+}
+
+int32_t ConversationStore::split(std::string_view source_id,
+                                  size_t message_index,
+                                  std::string_view title_before,
+                                  std::string_view title_after,
+                                  std::string_view scope,
+                                  bool keep_original,
+                                  Json& result) const {
+    if (scope != "workspace" && scope != "system") {
+        return SAO_AI_EDITOR_ERR_INVALID_ARGUMENT;
+    }
+    std::filesystem::path source_path;
+    int32_t status = locate(source_id, source_path);
+    if (status != SAO_AI_EDITOR_OK) {
+        return status;
+    }
+    Json source;
+    status = get(source_id, source);
+    if (status != SAO_AI_EDITOR_OK) {
+        return status;
+    }
+    if (!source.contains("messages") || !source["messages"].is_array()) {
+        return SAO_AI_EDITOR_ERR_INVALID_ARGUMENT;
+    }
+    const Json& messages = source["messages"];
+    const size_t total = messages.size();
+    // The split slot must sit strictly inside the range so both halves have
+    // at least one message.  message_index == total - 1 would leave the
+    // "after" half empty; message_index >= total is off-the-end.
+    if (total < 2 || message_index >= total - 1) {
+        return SAO_AI_EDITOR_ERR_INVALID_ARGUMENT;
+    }
+    const size_t before_count = message_index + 1;
+    Json before_messages = Json::array();
+    for (size_t index = 0; index < before_count; ++index) {
+        before_messages.push_back(messages[index]);
+    }
+    Json after_messages = Json::array();
+    for (size_t index = before_count; index < total; ++index) {
+        after_messages.push_back(messages[index]);
+    }
+    const int64_t now = unix_milliseconds();
+    const std::string original_title = source.value(
+        "title", std::string{"Untitled"});
+    const std::string resolved_title_before = title_before.empty()
+        ? original_title
+        : std::string(title_before);
+    const std::string resolved_title_after = title_after.empty()
+        ? (original_title + " (after)")
+        : std::string(title_after);
+
+    // "After" half is always a fresh conversation regardless of the mode,
+    // inheriting model / systemPrompt from the source so downstream chat
+    // continues to work.  We build it first so a save failure short-
+    // circuits before we touch the source file.
+    const std::string after_id = next_id();
+    Json after_document{{"id", after_id},
+                        {"title", resolved_title_after},
+                        {"systemPrompt",
+                         source.value("systemPrompt", std::string{})},
+                        {"model", source.value("model", std::string{})},
+                        {"scope", std::string(scope)},
+                        {"savedAt", now},
+                        {"messageCount", after_messages.size()},
+                        {"pinned", false},
+                        {"messages", after_messages}};
+    const auto after_path = scopes_.history_root(scope) /
+                             (utf8_to_wide(after_id) + L".json");
+    status = save(after_path, after_document);
+    if (status != SAO_AI_EDITOR_OK) {
+        return status;
+    }
+
+    std::string original_id_out;
+    size_t original_message_count = 0;
+    if (keep_original) {
+        // Both halves become new conversations; the source keeps its
+        // messages / id intact.  `title_before` still names the new
+        // "before" copy so callers can label the fork.
+        const std::string before_id = next_id();
+        Json before_document{{"id", before_id},
+                             {"title", resolved_title_before},
+                             {"systemPrompt",
+                              source.value("systemPrompt", std::string{})},
+                             {"model",
+                              source.value("model", std::string{})},
+                             {"scope", std::string(scope)},
+                             {"savedAt", now},
+                             {"messageCount", before_messages.size()},
+                             {"pinned", false},
+                             {"messages", before_messages}};
+        const auto before_path = scopes_.history_root(scope) /
+                                  (utf8_to_wide(before_id) + L".json");
+        status = save(before_path, before_document);
+        if (status != SAO_AI_EDITOR_OK) {
+            // Rollback the "after" half so a half-written split does not
+            // leave dangling files behind.
+            std::error_code cleanup_error;
+            std::filesystem::remove(after_path, cleanup_error);
+            return status;
+        }
+        original_id_out = before_id;
+        original_message_count = before_messages.size();
+    } else {
+        // Default path: source is rewritten in place with the "before"
+        // messages so existing references to the source id keep working.
+        // savedAt is bumped because the document content changed.
+        Json rewritten = source;
+        rewritten["messages"] = before_messages;
+        rewritten["messageCount"] = before_messages.size();
+        rewritten["savedAt"] = now;
+        if (!title_before.empty()) {
+            rewritten["title"] = std::string(title_before);
+        }
+        // Honour a scope change even for the in-place half: if the caller
+        // asked for "system" but the source lives under "workspace" (or
+        // vice versa), move the file across before we overwrite it.
+        const std::string original_scope = rewritten.value(
+            "scope", std::string{"workspace"});
+        rewritten["scope"] = std::string(scope);
+        std::filesystem::path target_source_path = source_path;
+        if (original_scope != scope) {
+            target_source_path = scopes_.history_root(scope) /
+                                  (utf8_to_wide(std::string(source_id)) +
+                                   L".json");
+            std::error_code remove_error;
+            std::filesystem::remove(source_path, remove_error);
+        }
+        status = save(target_source_path, rewritten);
+        if (status != SAO_AI_EDITOR_OK) {
+            std::error_code cleanup_error;
+            std::filesystem::remove(after_path, cleanup_error);
+            return status;
+        }
+        original_id_out = std::string(source_id);
+        original_message_count = before_messages.size();
+    }
+
+    result = Json{{"original",
+                   Json{{"id", original_id_out},
+                        {"messageCount", original_message_count}}},
+                  {"latter",
+                   Json{{"id", after_id},
+                        {"title", resolved_title_after},
+                        {"messageCount", after_messages.size()}}},
+                  {"splitAt", now}};
+    return SAO_AI_EDITOR_OK;
+}
+
 int32_t ConversationStore::remove(std::string_view conversation_id,
                                   Json& result) const {
     std::filesystem::path path;

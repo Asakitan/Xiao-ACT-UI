@@ -109,6 +109,64 @@ int32_t decode_openai_response_text(std::string_view input, Json& result) {
     return SAO_AI_EDITOR_OK;
 }
 
+void OpenAiSseCodec::accumulate_tool_calls(const Json& delta_tool_calls,
+                                           Json& events) {
+    if (!delta_tool_calls.is_array()) {
+        return;
+    }
+    for (const auto& piece : delta_tool_calls) {
+        if (!piece.is_object() || !piece.contains("index") ||
+            !piece["index"].is_number_integer()) {
+            continue;
+        }
+        const int64_t signed_index = piece["index"].get<int64_t>();
+        if (signed_index < 0) {
+            continue;
+        }
+        const size_t index = static_cast<size_t>(signed_index);
+        while (tool_calls_accumulator_.size() <= index) {
+            const size_t slot_index = tool_calls_accumulator_.size();
+            tool_calls_accumulator_.push_back(
+                Json{{"index", slot_index},
+                     {"id", ""},
+                     {"type", "function"},
+                     {"function",
+                      Json{{"name", ""}, {"arguments", ""}}}});
+        }
+        Json& slot = tool_calls_accumulator_[index];
+        if (piece.contains("id") && piece["id"].is_string()) {
+            slot["id"] = piece["id"];
+        }
+        if (piece.contains("type") && piece["type"].is_string()) {
+            slot["type"] = piece["type"];
+        }
+        if (piece.contains("function") && piece["function"].is_object()) {
+            const Json& fn_delta = piece["function"];
+            if (!slot["function"].is_object()) {
+                slot["function"] =
+                    Json{{"name", ""}, {"arguments", ""}};
+            }
+            Json& fn = slot["function"];
+            if (fn_delta.contains("name") && fn_delta["name"].is_string()) {
+                fn["name"] = fn_delta["name"];
+            }
+            if (fn_delta.contains("arguments") &&
+                fn_delta["arguments"].is_string()) {
+                const std::string existing = fn.value("arguments", "");
+                const std::string appended =
+                    fn_delta["arguments"].get<std::string>();
+                fn["arguments"] = existing + appended;
+            }
+        }
+        events.push_back(Json{{"type", "tool_delta"},
+                              {"index", index},
+                              {"name", slot["function"].value("name", "")},
+                              {"arguments",
+                               slot["function"].value("arguments", "")},
+                              {"partial", slot}});
+    }
+}
+
 int32_t OpenAiSseCodec::dispatch_event(Json& events) {
     if (event_data_.empty()) {
         return SAO_AI_EDITOR_OK;
@@ -117,6 +175,10 @@ int32_t OpenAiSseCodec::dispatch_event(Json& events) {
     event_data_.clear();
     if (payload == "[DONE]") {
         done_ = true;
+        if (!tool_calls_accumulator_.empty()) {
+            events.push_back(Json{{"type", "tool_calls_final"},
+                                  {"tool_calls", tool_calls_accumulator_}});
+        }
         events.push_back({{"type", "done"}});
         return SAO_AI_EDITOR_OK;
     }
@@ -126,9 +188,18 @@ int32_t OpenAiSseCodec::dispatch_event(Json& events) {
     }
     if (chunk.contains("error")) {
         events.push_back({{"type", "error"}, {"error", chunk["error"]}});
-    } else {
-        events.push_back(normalize_chunk(chunk));
+        return SAO_AI_EDITOR_OK;
     }
+    // Accumulate tool_calls before normalizing so `tool_delta` events show up
+    // in-order with the normalized delta event that carries text content.
+    const Json choices = chunk.value("choices", Json::array());
+    if (choices.is_array() && !choices.empty() && choices[0].is_object()) {
+        const Json& delta = choices[0].value("delta", Json::object());
+        if (delta.is_object() && delta.contains("tool_calls")) {
+            accumulate_tool_calls(delta["tool_calls"], events);
+        }
+    }
+    events.push_back(normalize_chunk(chunk));
     return SAO_AI_EDITOR_OK;
 }
 

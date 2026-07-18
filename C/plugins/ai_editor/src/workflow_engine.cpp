@@ -518,6 +518,34 @@ WorkflowExecution::~WorkflowExecution() {
     join();
 }
 
+void WorkflowExecution::seed_retry_state(
+    size_t step_index,
+    std::unordered_map<std::string, std::string> preserved_variables,
+    std::string retry_of) {
+    // Called from the dispatch thread before the worker is started, so no
+    // race with run_loop.  Still take the mutex to keep memory ordering
+    // clean and to match the discipline every other mutator observes.
+    std::lock_guard<std::mutex> guard(mutex_);
+    start_at_step_index_ = step_index;
+    retry_of_ = std::move(retry_of);
+    if (!preserved_variables.empty()) {
+        // Keep the input value the ctor established (falling back to the
+        // preserved copy if the caller supplied one).  This matches the
+        // R9 semantics documented on the ctor: "input" always ends up
+        // populated, even if the payload was empty.
+        auto found_input = variables_.find("input");
+        std::string input_copy;
+        if (found_input != variables_.end()) {
+            input_copy = found_input->second;
+        }
+        variables_ = std::move(preserved_variables);
+        if (variables_.find("input") == variables_.end()) {
+            variables_["input"] = std::move(input_copy);
+        }
+    }
+    current_step_index_ = start_at_step_index_;
+}
+
 void WorkflowExecution::request_pause() noexcept {
     pause_requested_.store(true, std::memory_order_release);
     std::lock_guard<std::mutex> guard(mutex_);
@@ -576,7 +604,7 @@ Json WorkflowExecution::snapshot() const {
     for (const auto& item : step_results_) {
         step_results.push_back(item);
     }
-    return Json{{"id", id_},
+    Json record{{"id", id_},
                 {"workflowId", definition_.id},
                 {"status", status_},
                 {"currentStep", current_step_index_},
@@ -589,6 +617,16 @@ Json WorkflowExecution::snapshot() const {
                 {"error", error_message_},
                 {"startedAt", started_at_ms_},
                 {"completedAt", completed_at_ms_}};
+    // Only include retry lineage when this execution was actually seeded
+    // from a prior run — otherwise consumers see a stable "no retry"
+    // snapshot without a nulled-out field.
+    if (!retry_of_.empty()) {
+        record["retryOf"] = retry_of_;
+    }
+    if (start_at_step_index_ != 0) {
+        record["startAtStep"] = static_cast<int64_t>(start_at_step_index_);
+    }
+    return record;
 }
 
 Json WorkflowExecution::history_record() const {
@@ -932,7 +970,14 @@ void WorkflowExecution::run_loop(NativeRuntime* runtime, Json provider,
             }
         }
     };
-    size_t index = 0;
+    // Retry runs skip previously-successful steps by starting the loop
+    // partway through.  Bounds are enforced by the dispatch layer before
+    // this thread is spawned, but clamp defensively so an out-of-range
+    // seed still terminates cleanly rather than reading past `steps`.
+    size_t index = start_at_step_index_;
+    if (index > steps.size()) {
+        index = steps.size();
+    }
     while (index < steps.size()) {
         if (cancel_requested_.load(std::memory_order_acquire)) {
             {

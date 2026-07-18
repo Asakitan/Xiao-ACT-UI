@@ -474,6 +474,80 @@ int32_t NativeRuntime::invoke(std::string_view method,
         return conversations_.branch(source_id, message_index, title, scope,
                                       result);
     }
+    if (method == "conversation.merge") {
+        if (!params.contains("sourceIds") ||
+            !params["sourceIds"].is_array()) {
+            return SAO_AI_EDITOR_ERR_INVALID_ARGUMENT;
+        }
+        std::vector<std::string> source_ids;
+        source_ids.reserve(params["sourceIds"].size());
+        for (const auto& item : params["sourceIds"]) {
+            if (!item.is_string()) {
+                return SAO_AI_EDITOR_ERR_INVALID_ARGUMENT;
+            }
+            source_ids.push_back(item.get<std::string>());
+        }
+        const std::string title = params.value("title", std::string{});
+        const std::string scope = params.value("scope",
+                                                std::string{"workspace"});
+        // "explicit" (default) preserves the caller's sourceIds order;
+        // "savedAt" sorts by each source's savedAt ascending before concat.
+        const std::string order_by = params.value("orderBy",
+                                                    std::string{"explicit"});
+        if (order_by != "explicit" && order_by != "savedAt") {
+            return SAO_AI_EDITOR_ERR_INVALID_ARGUMENT;
+        }
+        const Json separator = params.contains("separator")
+                                    ? params["separator"]
+                                    : Json(nullptr);
+        std::lock_guard<std::mutex> lock(store_mutex_);
+        return conversations_.merge(source_ids, title, scope, separator,
+                                     order_by == "savedAt", result);
+    }
+    if (method == "conversation.split") {
+        if (!params.contains("sourceId") ||
+            !params["sourceId"].is_string() ||
+            !params.contains("messageIndex") ||
+            !params["messageIndex"].is_number_integer()) {
+            return SAO_AI_EDITOR_ERR_INVALID_ARGUMENT;
+        }
+        const int64_t message_index_signed =
+            params["messageIndex"].get<int64_t>();
+        if (message_index_signed < 0) {
+            return SAO_AI_EDITOR_ERR_INVALID_ARGUMENT;
+        }
+        const std::string source_id = params["sourceId"].get<std::string>();
+        const std::string scope = params.value("scope",
+                                                std::string{"workspace"});
+        const bool keep_original = params.value("keepOriginal", false);
+        // titles is optional; when present it must be a 2-element string
+        // array [before, after].  Missing / partial entries fall back to
+        // the store's default naming.
+        std::string title_before;
+        std::string title_after;
+        if (params.contains("titles")) {
+            if (!params["titles"].is_array() ||
+                params["titles"].size() > 2) {
+                return SAO_AI_EDITOR_ERR_INVALID_ARGUMENT;
+            }
+            const auto& titles = params["titles"];
+            if (titles.size() >= 1 && titles[0].is_string()) {
+                title_before = titles[0].get<std::string>();
+            } else if (titles.size() >= 1 && !titles[0].is_null()) {
+                return SAO_AI_EDITOR_ERR_INVALID_ARGUMENT;
+            }
+            if (titles.size() >= 2 && titles[1].is_string()) {
+                title_after = titles[1].get<std::string>();
+            } else if (titles.size() >= 2 && !titles[1].is_null()) {
+                return SAO_AI_EDITOR_ERR_INVALID_ARGUMENT;
+            }
+        }
+        std::lock_guard<std::mutex> lock(store_mutex_);
+        return conversations_.split(source_id,
+                                     static_cast<size_t>(message_index_signed),
+                                     title_before, title_after, scope,
+                                     keep_original, result);
+    }
     if (method == "conversation.export") {
         const bool has_id = params.contains("id");
         const bool has_scope = params.contains("scope");
@@ -854,6 +928,184 @@ int32_t NativeRuntime::invoke(std::string_view method,
             return SAO_AI_EDITOR_ERR_NOT_FOUND;
         }
         result = Json{{"ok", true}, {"id", execution_id}};
+        return SAO_AI_EDITOR_OK;
+    }
+    if (method == "workflow.retry") {
+        // Resume a previously-failed execution starting at the failed
+        // step (or an explicit `fromStep` override).  Original variables
+        // from the persisted record are preserved by default so downstream
+        // steps see the successful outputs of earlier ones.
+        if (!params.contains("id") || !params["id"].is_string()) {
+            return SAO_AI_EDITOR_ERR_INVALID_ARGUMENT;
+        }
+        const std::string original_id = params["id"].get<std::string>();
+        if (original_id.empty()) {
+            return SAO_AI_EDITOR_ERR_INVALID_ARGUMENT;
+        }
+        const std::string scope_key =
+            params.value("scope", std::string{"all"});
+        if (scope_key != "all" && scope_key != "workspace" &&
+            scope_key != "system") {
+            return SAO_AI_EDITOR_ERR_INVALID_ARGUMENT;
+        }
+        // Locate the persisted record.  Mirror the workspace-first scan
+        // pattern that workflow.get_execution uses so the two APIs stay
+        // consistent for callers who don't pin a scope.
+        std::vector<std::filesystem::path> candidates;
+        if (scope_key == "workspace" || scope_key == "all") {
+            candidates.push_back(workflow_history_root(scopes_, "workspace"));
+        }
+        if (scope_key == "system" || scope_key == "all") {
+            candidates.push_back(workflow_history_root(scopes_, "system"));
+        }
+        Json record;
+        bool found_record = false;
+        for (const auto& root : candidates) {
+            const int32_t load_status = WorkflowExecution::load_history_record(
+                root, original_id, record);
+            if (load_status == SAO_AI_EDITOR_OK) {
+                found_record = true;
+                break;
+            }
+            if (load_status != SAO_AI_EDITOR_ERR_NOT_FOUND) {
+                return load_status;
+            }
+        }
+        if (!found_record) {
+            return SAO_AI_EDITOR_ERR_NOT_FOUND;
+        }
+        // Only failed executions are eligible — completed runs have no
+        // work left, cancelled runs are intentionally aborted, and
+        // running/pending records would race with an already-live worker.
+        if (record.value("status", std::string{}) != "failed") {
+            return SAO_AI_EDITOR_ERR_INVALID_ARGUMENT;
+        }
+        const std::string workflow_id =
+            record.value("workflowId", std::string{});
+        if (workflow_id.empty()) {
+            return SAO_AI_EDITOR_ERR_INVALID_ARGUMENT;
+        }
+        // Refresh the registry snapshot the same way workflows.run does so
+        // an out-of-band edit to the definition takes effect on retry.
+        {
+            std::lock_guard<std::mutex> guard(store_mutex_);
+            workflow_registry_.reload(scopes_);
+        }
+        WorkflowDefinition definition;
+        if (!workflow_registry_.get(workflow_id, definition)) {
+            return SAO_AI_EDITOR_ERR_NOT_FOUND;
+        }
+        if (definition.steps.empty()) {
+            return SAO_AI_EDITOR_ERR_INVALID_ARGUMENT;
+        }
+        // Determine the target step index.  Callers may override with
+        // `fromStep`; otherwise scan stepResults for the first
+        // status=="failed" entry, falling back to record.currentStep when
+        // the persisted stepResults array is missing (older schemas).
+        size_t from_step = definition.steps.size();
+        if (params.contains("fromStep") && !params["fromStep"].is_null()) {
+            if (!params["fromStep"].is_number_integer() &&
+                !params["fromStep"].is_number_unsigned()) {
+                return SAO_AI_EDITOR_ERR_INVALID_ARGUMENT;
+            }
+            const int64_t requested = params["fromStep"].get<int64_t>();
+            if (requested < 0) {
+                return SAO_AI_EDITOR_ERR_INVALID_ARGUMENT;
+            }
+            from_step = static_cast<size_t>(requested);
+        } else {
+            bool found_failed = false;
+            if (record.contains("stepResults") &&
+                record["stepResults"].is_array()) {
+                for (const auto& step_result : record["stepResults"]) {
+                    if (!step_result.is_object()) {
+                        continue;
+                    }
+                    if (step_result.value("status", std::string{}) ==
+                            "failed" &&
+                        step_result.contains("stepIndex")) {
+                        const int64_t idx =
+                            step_result["stepIndex"].get<int64_t>();
+                        if (idx < 0) {
+                            continue;
+                        }
+                        from_step = static_cast<size_t>(idx);
+                        found_failed = true;
+                        break;
+                    }
+                }
+            }
+            if (!found_failed) {
+                const int64_t current = record.value("currentStep",
+                                                      int64_t{0});
+                from_step = current < 0 ? 0 : static_cast<size_t>(current);
+            }
+        }
+        if (from_step >= definition.steps.size()) {
+            return SAO_AI_EDITOR_ERR_INVALID_ARGUMENT;
+        }
+        // Resolve the (possibly-new) provider before we build the
+        // execution so an invalid provider payload doesn't leak a
+        // half-registered execution into workflow_executions_.
+        Json provider;
+        std::string api_key;
+        const int32_t provider_status =
+            resolve_provider(params, provider, api_key);
+        if (provider_status != SAO_AI_EDITOR_OK) {
+            return provider_status;
+        }
+        if (!api_key.empty()) {
+            provider["apiKey"] = api_key;
+        }
+        const std::string model =
+            params.value("model", provider.value("model", std::string{}));
+        if (model.empty() || provider.value("endpoint", "").empty()) {
+            return SAO_AI_EDITOR_ERR_INVALID_ARGUMENT;
+        }
+        const uint32_t chat_timeout = params.value("timeoutMs", 60'000U);
+        const bool keep_variables = params.value("keepVariables", true);
+        // Seed the initial input from the persisted record so
+        // interpolations like {{input}} still resolve when
+        // keepVariables=false.  The ctor then re-derives variables_
+        // from this payload; keepVariables=true overrides variables_
+        // wholesale after construction via seed_retry_state.
+        Json initial_input = Json::object();
+        if (record.contains("variables") && record["variables"].is_object() &&
+            record["variables"].contains("input")) {
+            initial_input["input"] = record["variables"]["input"];
+        }
+        std::unordered_map<std::string, std::string> preserved;
+        if (keep_variables && record.contains("variables") &&
+            record["variables"].is_object()) {
+            for (const auto& [key, value] : record["variables"].items()) {
+                if (value.is_string()) {
+                    preserved[key] = value.get<std::string>();
+                } else {
+                    preserved[key] = value.dump();
+                }
+            }
+        }
+        static std::atomic<uint64_t> retry_execution_counter{0};
+        const std::string new_id =
+            "wf-" + std::to_string(GetTickCount64()) + "-retry-" +
+            std::to_string(retry_execution_counter.fetch_add(
+                1, std::memory_order_relaxed));
+        auto execution = std::make_shared<WorkflowExecution>(
+            new_id, std::move(definition), std::move(initial_input));
+        execution->seed_retry_state(from_step, std::move(preserved),
+                                     original_id);
+        {
+            std::lock_guard<std::mutex> guard(workflow_mutex_);
+            workflow_executions_[execution->id()] = execution;
+        }
+        const std::filesystem::path history_dir =
+            workflow_history_root(scopes_, "workspace");
+        execution->start(*this, std::move(provider), model, chat_timeout,
+                          history_dir);
+        result = Json{{"executionId", execution->id()},
+                      {"retryOf", original_id},
+                      {"fromStep", static_cast<int64_t>(from_step)},
+                      {"status", "running"}};
         return SAO_AI_EDITOR_OK;
     }
     if (method == "agents.list" || method == "workflows.list" ||

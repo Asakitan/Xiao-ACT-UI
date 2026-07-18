@@ -2,6 +2,7 @@
 
 #include <string>
 #include <string_view>
+#include <vector>
 
 #include "scope_store.h"
 
@@ -62,6 +63,41 @@ public:
                    std::string_view title,
                    std::string_view scope,
                    Json& result) const;
+
+    // Concatenate N source conversations into a single new conversation.
+    // Source conversations are preserved on disk; a new id + savedAt = now
+    // are assigned to the merged copy.  systemPrompt / model inherit from
+    // the first source after ordering.  If `separator` is a valid message
+    // object (role + content) it is inserted between adjacent source
+    // message blocks (never before the first, never after the last).
+    // `order_by_saved_at` = true sorts source ids by their savedAt (asc)
+    // before concat; false honours the caller-supplied order.  Emits
+    // {id, title, messageCount, sourcedFrom, mergedAt}.
+    int32_t merge(const std::vector<std::string>& source_ids,
+                  std::string_view title,
+                  std::string_view scope,
+                  const Json& separator,
+                  bool order_by_saved_at,
+                  Json& result) const;
+
+    // Cleave a single conversation into two halves at `message_index`.
+    // Messages [0..message_index] (inclusive) form the "before" half;
+    // [message_index + 1..end] form the "after" half.  Both halves need
+    // at least one message, so message_index must sit strictly inside
+    // (0..size - 1).  When `keep_original` is false (default) the source
+    // is rewritten in-place with the "before" messages (id preserved so
+    // existing references stay live) and a fresh conversation is created
+    // for the "after" half.  When `keep_original` is true the source is
+    // left untouched and both halves are created as new conversations.
+    // Emits {original: {id, messageCount}, latter: {id, title,
+    // messageCount}, splitAt}.
+    int32_t split(std::string_view source_id,
+                  size_t message_index,
+                  std::string_view title_before,
+                  std::string_view title_after,
+                  std::string_view scope,
+                  bool keep_original,
+                  Json& result) const;
 
 private:
     int32_t locate(std::string_view conversation_id,

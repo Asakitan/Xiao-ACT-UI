@@ -401,6 +401,144 @@ TEST_CASE("AI Editor OpenAI codecs normalize responses and split SSE chunks",
     sao_ai_editor_openai_sse_decoder_destroy(decoder);
 }
 
+TEST_CASE(
+    "OpenAiSseCodec accumulates tool_calls arguments across chunks",
+    "[plugins][ai_editor][native][openai][sse][tool_calls]") {
+    sao_ai_editor_openai_sse_decoder_t decoder = nullptr;
+    REQUIRE(sao_ai_editor_openai_sse_decoder_create(&decoder) ==
+            SAO_AI_EDITOR_OK);
+
+    // Chunk 1: opening tool_call w/ id + name + empty arguments.
+    const Json chunk1 = Json::parse(feed_sse(
+        decoder,
+        "data: {\"id\":\"chat-t1\",\"choices\":[{\"delta\":{\"tool_calls\":"
+        "[{\"index\":0,\"id\":\"call_abc\",\"type\":\"function\","
+        "\"function\":{\"name\":\"readFile\",\"arguments\":\"\"}}]},"
+        "\"finish_reason\":null}]}\n\n"));
+    REQUIRE(chunk1.size() == 2);
+    REQUIRE(chunk1[0]["type"] == "tool_delta");
+    REQUIRE(chunk1[0]["index"] == 0);
+    REQUIRE(chunk1[0]["name"] == "readFile");
+    REQUIRE(chunk1[0]["arguments"] == "");
+    REQUIRE(chunk1[0]["partial"]["id"] == "call_abc");
+    REQUIRE(chunk1[1]["type"] == "delta");
+
+    // Chunk 2: mid-argument fragment.
+    const Json chunk2 = Json::parse(feed_sse(
+        decoder,
+        "data: {\"id\":\"chat-t1\",\"choices\":[{\"delta\":{\"tool_calls\":"
+        "[{\"index\":0,\"function\":{\"arguments\":\"{\\\"path\\\":\\\"\"}}]},"
+        "\"finish_reason\":null}]}\n\n"));
+    REQUIRE(chunk2.size() == 2);
+    REQUIRE(chunk2[0]["type"] == "tool_delta");
+    REQUIRE(chunk2[0]["arguments"] == "{\"path\":\"");
+    REQUIRE(chunk2[0]["name"] == "readFile");
+
+    // Chunk 3: closing argument fragment + finish_reason=tool_calls.
+    const Json chunk3 = Json::parse(feed_sse(
+        decoder,
+        "data: {\"id\":\"chat-t1\",\"choices\":[{\"delta\":{\"tool_calls\":"
+        "[{\"index\":0,\"function\":{\"arguments\":\"README.md\\\"}\"}}]},"
+        "\"finish_reason\":\"tool_calls\"}]}\n\n"));
+    REQUIRE(chunk3.size() == 2);
+    REQUIRE(chunk3[0]["type"] == "tool_delta");
+    REQUIRE(chunk3[0]["arguments"] == "{\"path\":\"README.md\"}");
+
+    // Terminate with [DONE]: expect tool_calls_final then done.
+    const Json final = Json::parse(feed_sse(decoder, "data: [DONE]\n\n"));
+    REQUIRE(final.size() == 2);
+    REQUIRE(final[0]["type"] == "tool_calls_final");
+    REQUIRE(final[0]["tool_calls"].is_array());
+    REQUIRE(final[0]["tool_calls"].size() == 1);
+    REQUIRE(final[0]["tool_calls"][0]["id"] == "call_abc");
+    REQUIRE(final[0]["tool_calls"][0]["type"] == "function");
+    REQUIRE(final[0]["tool_calls"][0]["function"]["name"] == "readFile");
+    REQUIRE(final[0]["tool_calls"][0]["function"]["arguments"] ==
+            "{\"path\":\"README.md\"}");
+    REQUIRE(final[1]["type"] == "done");
+
+    sao_ai_editor_openai_sse_decoder_destroy(decoder);
+}
+
+TEST_CASE("OpenAiSseCodec omits tool_calls_final when no tool_calls seen",
+          "[plugins][ai_editor][native][openai][sse][tool_calls]") {
+    sao_ai_editor_openai_sse_decoder_t decoder = nullptr;
+    REQUIRE(sao_ai_editor_openai_sse_decoder_create(&decoder) ==
+            SAO_AI_EDITOR_OK);
+    const Json events = Json::parse(feed_sse(
+        decoder,
+        "data: {\"id\":\"chat-plain\",\"choices\":[{\"delta\":"
+        "{\"content\":\"hi\"},\"finish_reason\":null}]}\n\n"
+        "data: [DONE]\n\n"));
+    REQUIRE(events.size() == 2);
+    REQUIRE(events[0]["type"] == "delta");
+    REQUIRE(events[0]["content"] == "hi");
+    REQUIRE(events[1]["type"] == "done");
+    // No tool_calls_final should be present.
+    for (const auto& event : events) {
+        REQUIRE(event.value("type", "") != "tool_calls_final");
+    }
+    sao_ai_editor_openai_sse_decoder_destroy(decoder);
+}
+
+TEST_CASE("OpenAiSseCodec accumulates multiple tool_calls by index",
+          "[plugins][ai_editor][native][openai][sse][tool_calls]") {
+    sao_ai_editor_openai_sse_decoder_t decoder = nullptr;
+    REQUIRE(sao_ai_editor_openai_sse_decoder_create(&decoder) ==
+            SAO_AI_EDITOR_OK);
+
+    // Two tool_calls opened in one chunk.
+    const Json start = Json::parse(feed_sse(
+        decoder,
+        "data: {\"choices\":[{\"delta\":{\"tool_calls\":["
+        "{\"index\":0,\"id\":\"c1\",\"type\":\"function\","
+        "\"function\":{\"name\":\"readFile\",\"arguments\":\"\"}},"
+        "{\"index\":1,\"id\":\"c2\",\"type\":\"function\","
+        "\"function\":{\"name\":\"writeFile\",\"arguments\":\"\"}}"
+        "]},\"finish_reason\":null}]}\n\n"));
+    // Two tool_delta events + one normalized delta event.
+    REQUIRE(start.size() == 3);
+    REQUIRE(start[0]["type"] == "tool_delta");
+    REQUIRE(start[0]["index"] == 0);
+    REQUIRE(start[0]["name"] == "readFile");
+    REQUIRE(start[1]["type"] == "tool_delta");
+    REQUIRE(start[1]["index"] == 1);
+    REQUIRE(start[1]["name"] == "writeFile");
+
+    // Argument fragments for index 1 (out-of-order OK).
+    const Json mid = Json::parse(feed_sse(
+        decoder,
+        "data: {\"choices\":[{\"delta\":{\"tool_calls\":["
+        "{\"index\":1,\"function\":{\"arguments\":\"{\\\"a\\\":1}\"}}"
+        "]},\"finish_reason\":null}]}\n\n"));
+    REQUIRE(mid.size() == 2);
+    REQUIRE(mid[0]["type"] == "tool_delta");
+    REQUIRE(mid[0]["index"] == 1);
+    REQUIRE(mid[0]["arguments"] == "{\"a\":1}");
+
+    // Argument fragments for index 0.
+    const Json last = Json::parse(feed_sse(
+        decoder,
+        "data: {\"choices\":[{\"delta\":{\"tool_calls\":["
+        "{\"index\":0,\"function\":{\"arguments\":\"{\\\"p\\\":\\\"x\\\"}\"}}"
+        "]},\"finish_reason\":\"tool_calls\"}]}\n\n"
+        "data: [DONE]\n\n"));
+    // last chunk: tool_delta + delta + tool_calls_final + done = 4 events.
+    REQUIRE(last.size() == 4);
+    REQUIRE(last[0]["type"] == "tool_delta");
+    REQUIRE(last[0]["index"] == 0);
+    REQUIRE(last[0]["arguments"] == "{\"p\":\"x\"}");
+    REQUIRE(last[2]["type"] == "tool_calls_final");
+    REQUIRE(last[2]["tool_calls"].size() == 2);
+    REQUIRE(last[2]["tool_calls"][0]["function"]["arguments"] ==
+            "{\"p\":\"x\"}");
+    REQUIRE(last[2]["tool_calls"][1]["function"]["arguments"] ==
+            "{\"a\":1}");
+    REQUIRE(last[3]["type"] == "done");
+
+    sao_ai_editor_openai_sse_decoder_destroy(decoder);
+}
+
 TEST_CASE("AI Editor MCP codec incrementally decodes framed and line messages",
           "[plugins][ai_editor][native][mcp]") {
     const std::string message =
@@ -3104,6 +3242,28 @@ Json wait_for_workflow_completion(sao_ai_editor_runtime_t runtime,
     return status;
 }
 
+// Build a canned HTTP response body — helper used by the retry tests
+// below (and the chat.run retry suite further down the file) so the 500
+// / 200 wire framing stays uniform.  Content-Length matters because
+// LocalHttpServer's client parses it to know when a request body is
+// done, and the *response* framing has to match what WinHTTP expects
+// (Content-Length + Connection: close, no chunked encoding).
+std::string canned_http_response(int status_code,
+                                  std::string_view status_text,
+                                  std::string_view body,
+                                  std::string_view extra_headers = {}) {
+    std::string wire = "HTTP/1.1 " + std::to_string(status_code) + " " +
+                       std::string(status_text) + "\r\n";
+    wire += "Content-Type: application/json\r\n";
+    wire += "Content-Length: " + std::to_string(body.size()) + "\r\n";
+    if (!extra_headers.empty()) {
+        wire.append(extra_headers.data(), extra_headers.size());
+    }
+    wire += "Connection: close\r\n\r\n";
+    wire.append(body.data(), body.size());
+    return wire;
+}
+
 }  // namespace
 
 TEST_CASE("AI Editor workflow.list_executions surfaces a completed run "
@@ -3293,6 +3453,295 @@ TEST_CASE("AI Editor workflow.delete_execution removes the persisted "
             SAO_AI_EDITOR_ERR_NOT_FOUND);
 }
 
+TEST_CASE("AI Editor workflow.retry resumes a failed execution from the "
+          "failing step with a fresh provider",
+          "[plugins][ai_editor][native][workflows][history][retry]") {
+    // First provider fails every request; workflow step 0 exhausts the
+    // built-in retry budget (maxAttempts=1 disables in-workflow retries)
+    // and the execution lands in "failed" state on disk.  The retry
+    // dispatch then spins up a new execution against a healthy provider
+    // that serves 200 on every hit, so both steps of review-and-fix
+    // complete.
+    const std::string err_body =
+        R"({"error":{"type":"server_error","message":"boom"}})";
+    LocalHttpServer failing(canned_http_response(500, "Internal Server Error",
+                                                  err_body));
+    const std::string ok_body =
+        R"({"choices":[{"message":{"role":"assistant","content":"recovered"}}]})";
+    LocalHttpServer recovering(
+        "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n"
+        "Content-Length: " +
+        std::to_string(ok_body.size()) +
+        "\r\nConnection: close\r\n\r\n" + ok_body);
+    RuntimeFixture fixture;
+    const Json initial_run = dispatch(
+        fixture.get(), "workflows.run",
+        {{"id", "review-and-fix"},
+         {"provider", {{"id", "retry-fail-fixture"},
+                        {"endpoint", failing.endpoint()},
+                        // maxAttempts=1 short-circuits the transport-level
+                        // retry so the 500 surfaces as a step failure
+                        // instead of triggering three tries per step.
+                        {"retry", {{"maxAttempts", 1}}}}},
+         {"model", "fixture-model"},
+         {"input", "please review"},
+         {"timeoutMs", 5000}});
+    REQUIRE(initial_run.contains("result"));
+    const std::string failed_execution_id = initial_run["result"]["executionId"];
+    const Json failed_terminal =
+        wait_for_workflow_completion(fixture.get(), failed_execution_id,
+                                      15'000);
+    REQUIRE(failed_terminal["status"] == "failed");
+    REQUIRE(failed_terminal["stepResults"].size() >= 1);
+    REQUIRE(failed_terminal["stepResults"][0]["status"] == "failed");
+
+    // Wait until persist() lands the failed record on disk so
+    // workflow.retry can load it.
+    for (int attempt = 0; attempt < 50; ++attempt) {
+        const Json fetch = dispatch(fixture.get(), "workflow.get_execution",
+                                     {{"id", failed_execution_id}});
+        if (fetch.contains("result")) {
+            break;
+        }
+        Sleep(20);
+    }
+
+    const Json retry_response = dispatch(
+        fixture.get(), "workflow.retry",
+        {{"id", failed_execution_id},
+         {"provider", {{"id", "retry-recover-fixture"},
+                        {"endpoint", recovering.endpoint()}}},
+         {"model", "fixture-model"},
+         {"timeoutMs", 5000}});
+    REQUIRE(retry_response.contains("result"));
+    REQUIRE(retry_response["result"]["retryOf"] == failed_execution_id);
+    REQUIRE(retry_response["result"]["fromStep"].get<int64_t>() == 0);
+    REQUIRE(retry_response["result"]["status"] == "running");
+    const std::string retry_execution_id =
+        retry_response["result"]["executionId"];
+    REQUIRE(retry_execution_id != failed_execution_id);
+
+    const Json retry_terminal =
+        wait_for_workflow_completion(fixture.get(), retry_execution_id,
+                                      15'000);
+    REQUIRE(retry_terminal["status"] == "completed");
+    REQUIRE(retry_terminal["variables"]["review"] == "recovered");
+    REQUIRE(retry_terminal["variables"]["fix"] == "recovered");
+    REQUIRE(retry_terminal["stepResults"].size() == 2);
+    // snapshot()/history_record() also carry the retryOf lineage so
+    // consumers viewing the retry run alone can trace back to the origin.
+    REQUIRE(retry_terminal["retryOf"] == failed_execution_id);
+
+    // The persisted retry record picks up the same retryOf marker, so
+    // callers browsing workflow_history can distinguish first-try and
+    // resumed executions without any client-side state.
+    Json persisted_retry;
+    for (int attempt = 0; attempt < 50; ++attempt) {
+        const Json response = dispatch(
+            fixture.get(), "workflow.get_execution",
+            {{"id", retry_execution_id}});
+        if (response.contains("result")) {
+            persisted_retry = response["result"];
+            break;
+        }
+        Sleep(20);
+    }
+    REQUIRE(persisted_retry.value("retryOf", std::string{}) ==
+            failed_execution_id);
+}
+
+TEST_CASE("AI Editor workflow.retry keepVariables=true carries earlier "
+          "successful step outputs into the resumed execution",
+          "[plugins][ai_editor][native][workflows][history][retry]") {
+    // Register a three-step workflow so step 0 and step 1 succeed on the
+    // first provider, then step 2 hits a failing endpoint.  On retry we
+    // want the pre-existing step-0/step-1 variables (and their outputs)
+    // to still be visible so downstream steps can chain against them.
+    RuntimeFixture fixture;
+    const Json workflow_def{
+        {"id", "chain-three"},
+        {"name", "Chain Three"},
+        {"description", "Three-step chain for retry variable inheritance"},
+        {"steps",
+         Json::array({Json{{"agent", "default"},
+                            {"prompt", "step one: {{input}}"},
+                            {"output_var", "s1_out"},
+                            {"label", "First"}},
+                       Json{{"agent", "default"},
+                            {"prompt", "step two: {{s1_out}}"},
+                            {"output_var", "s2_out"},
+                            {"label", "Second"}},
+                       Json{{"agent", "default"},
+                            {"prompt", "step three: {{s2_out}}"},
+                            {"output_var", "s3_out"},
+                            {"label", "Third"}}})}};
+    REQUIRE(dispatch(fixture.get(), "workflows.save_def",
+                     {{"scope", "workspace"},
+                      {"workflow", workflow_def}})
+                .contains("result"));
+
+    // The first provider serves 200 for the first two calls, then 500 on
+    // the third — matches steps [0,1] succeeding and step 2 failing.
+    const std::string ok_step1 =
+        R"({"choices":[{"message":{"role":"assistant","content":"one-done"}}]})";
+    const std::string ok_step2 =
+        R"({"choices":[{"message":{"role":"assistant","content":"two-done"}}]})";
+    const std::string err_body =
+        R"({"error":{"type":"server_error","message":"kaboom"}})";
+    LocalHttpServer chained_fail(std::vector<std::string>{
+        canned_http_response(200, "OK", ok_step1),
+        canned_http_response(200, "OK", ok_step2),
+        canned_http_response(500, "Internal Server Error", err_body),
+    });
+    const Json initial_run = dispatch(
+        fixture.get(), "workflows.run",
+        {{"id", "chain-three"},
+         {"provider", {{"id", "chain-fail-fixture"},
+                        {"endpoint", chained_fail.endpoint()},
+                        {"retry", {{"maxAttempts", 1}}}}},
+         {"model", "fixture-model"},
+         {"input", "seed-value"},
+         {"timeoutMs", 5000}});
+    REQUIRE(initial_run.contains("result"));
+    const std::string failed_execution_id = initial_run["result"]["executionId"];
+    const Json failed_terminal =
+        wait_for_workflow_completion(fixture.get(), failed_execution_id,
+                                      15'000);
+    REQUIRE(failed_terminal["status"] == "failed");
+    // Sanity: variables from the successful earlier steps landed in the
+    // persisted record before the failure.
+    REQUIRE(failed_terminal["variables"]["s1_out"] == "one-done");
+    REQUIRE(failed_terminal["variables"]["s2_out"] == "two-done");
+    // stepResults has 3 entries: two completed + one failed step 2.
+    REQUIRE(failed_terminal["stepResults"].size() == 3);
+    REQUIRE(failed_terminal["stepResults"][2]["status"] == "failed");
+    REQUIRE(failed_terminal["stepResults"][2]["stepIndex"].get<int64_t>()
+            == 2);
+
+    for (int attempt = 0; attempt < 50; ++attempt) {
+        const Json fetch = dispatch(fixture.get(), "workflow.get_execution",
+                                     {{"id", failed_execution_id}});
+        if (fetch.contains("result")) {
+            break;
+        }
+        Sleep(20);
+    }
+
+    // Retry against a healthy provider — only step 2 should fire.
+    const std::string ok_step3 =
+        R"({"choices":[{"message":{"role":"assistant","content":"three-done"}}]})";
+    LocalHttpServer chained_recover(
+        "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n"
+        "Content-Length: " +
+        std::to_string(ok_step3.size()) +
+        "\r\nConnection: close\r\n\r\n" + ok_step3);
+    const Json retry_response = dispatch(
+        fixture.get(), "workflow.retry",
+        {{"id", failed_execution_id},
+         {"provider", {{"id", "chain-recover-fixture"},
+                        {"endpoint", chained_recover.endpoint()}}},
+         {"model", "fixture-model"},
+         {"keepVariables", true},
+         {"timeoutMs", 5000}});
+    REQUIRE(retry_response.contains("result"));
+    REQUIRE(retry_response["result"]["fromStep"].get<int64_t>() == 2);
+    REQUIRE(retry_response["result"]["retryOf"] == failed_execution_id);
+    const std::string retry_execution_id =
+        retry_response["result"]["executionId"];
+
+    const Json retry_terminal =
+        wait_for_workflow_completion(fixture.get(), retry_execution_id,
+                                      15'000);
+    REQUIRE(retry_terminal["status"] == "completed");
+    // keepVariables=true carried the earlier successful outputs into the
+    // resumed run so the retry snapshot still shows every previous
+    // variable in addition to the newly-produced s3_out.
+    REQUIRE(retry_terminal["variables"]["input"] == "seed-value");
+    REQUIRE(retry_terminal["variables"]["s1_out"] == "one-done");
+    REQUIRE(retry_terminal["variables"]["s2_out"] == "two-done");
+    REQUIRE(retry_terminal["variables"]["s3_out"] == "three-done");
+    // Only the third step ran on the recover provider — server_recover
+    // received exactly one request.
+    REQUIRE(chained_recover.wait_for_connections(1, 2'000));
+    REQUIRE(chained_recover.captured_bodies().size() == 1);
+    // stepResults on the retry execution reflect only the resumed steps
+    // (index 2 was the sole invocation), not the previously-completed
+    // ones.  The persisted history therefore stays discoverable via
+    // retryOf rather than being replayed inline.
+    REQUIRE(retry_terminal["stepResults"].size() == 1);
+    REQUIRE(retry_terminal["stepResults"][0]["stepIndex"].get<int64_t>()
+            == 2);
+    REQUIRE(retry_terminal["stepResults"][0]["outputVar"] == "s3_out");
+}
+
+TEST_CASE("AI Editor workflow.retry rejects non-failed executions and "
+          "guards its arguments",
+          "[plugins][ai_editor][native][workflows][history][retry]") {
+    // First run a workflow to completion so we have a "completed" record
+    // to point workflow.retry at — the API contract is retry-of-failed
+    // only, so any other status must surface INVALID_ARGUMENT.
+    const std::string ok_body =
+        R"({"choices":[{"message":{"role":"assistant","content":"already-done"}}]})";
+    LocalHttpServer server(
+        "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n"
+        "Content-Length: " +
+        std::to_string(ok_body.size()) +
+        "\r\nConnection: close\r\n\r\n" + ok_body);
+    RuntimeFixture fixture;
+    const Json run = dispatch(
+        fixture.get(), "workflows.run",
+        {{"id", "review-and-fix"},
+         {"provider", {{"id", "already-done-fixture"},
+                        {"endpoint", server.endpoint()}}},
+         {"model", "fixture-model"},
+         {"input", "review it"},
+         {"timeoutMs", 5000}});
+    REQUIRE(run.contains("result"));
+    const std::string completed_id = run["result"]["executionId"];
+    REQUIRE(wait_for_workflow_completion(fixture.get(), completed_id, 15'000)
+                ["status"] == "completed");
+    for (int attempt = 0; attempt < 50; ++attempt) {
+        const Json fetch = dispatch(fixture.get(), "workflow.get_execution",
+                                     {{"id", completed_id}});
+        if (fetch.contains("result")) {
+            break;
+        }
+        Sleep(20);
+    }
+
+    const Json completed_retry = dispatch(
+        fixture.get(), "workflow.retry",
+        {{"id", completed_id},
+         {"provider", {{"id", "will-not-fire"},
+                        {"endpoint", server.endpoint()}}},
+         {"model", "fixture-model"}});
+    REQUIRE(completed_retry.contains("error"));
+    REQUIRE(completed_retry["error"]["data"]["status"] ==
+            SAO_AI_EDITOR_ERR_INVALID_ARGUMENT);
+
+    // Unknown execution id → NOT_FOUND (mirrors get_execution semantics).
+    const Json missing_retry = dispatch(
+        fixture.get(), "workflow.retry",
+        {{"id", "wf-does-not-exist"},
+         {"provider", {{"id", "will-not-fire"},
+                        {"endpoint", server.endpoint()}}},
+         {"model", "fixture-model"}});
+    REQUIRE(missing_retry.contains("error"));
+    REQUIRE(missing_retry["error"]["data"]["status"] ==
+            SAO_AI_EDITOR_ERR_NOT_FOUND);
+
+    // Empty id → INVALID_ARGUMENT immediately, without any disk lookup.
+    const Json empty_retry = dispatch(
+        fixture.get(), "workflow.retry",
+        {{"id", ""},
+         {"provider", {{"id", "will-not-fire"},
+                        {"endpoint", server.endpoint()}}},
+         {"model", "fixture-model"}});
+    REQUIRE(empty_retry.contains("error"));
+    REQUIRE(empty_retry["error"]["data"]["status"] ==
+            SAO_AI_EDITOR_ERR_INVALID_ARGUMENT);
+}
+
 TEST_CASE("AI Editor conversation.branch forks a new conversation from "
           "messageIndex",
           "[plugins][ai_editor][native][storage][branch]") {
@@ -3403,6 +3852,365 @@ TEST_CASE("AI Editor conversation.branch forks a new conversation from "
                                        {{"id", single_id}})["result"];
     REQUIRE(single_conv["messages"].size() == 1);
     REQUIRE(single_conv["messages"][0]["role"] == "system");
+}
+
+TEST_CASE("AI Editor conversation.merge concatenates three conversations in "
+          "explicit order",
+          "[plugins][ai_editor][native][storage][merge]") {
+    RuntimeFixture fixture;
+    auto runtime = fixture.get();
+    REQUIRE(dispatch(runtime, "runtime.initialize").contains("result"));
+
+    // Build three conversations; note we deliberately create them in the
+    // order a > b > c but savedAt-populate them so alphabetical id ≠
+    // chronological savedAt.  That lets a later assertion prove explicit
+    // ordering honours sourceIds, not on-disk directory scan order.
+    const Json created_a = dispatch(runtime, "conversation.create",
+                                     {{"title", "Alpha"},
+                                      {"model", "gpt-merge"},
+                                      {"scope", "workspace"}});
+    const std::string id_a = created_a["result"]["id"];
+    REQUIRE(dispatch(runtime, "conversation.append",
+                     {{"id", id_a},
+                      {"message", {{"role", "user"},
+                                    {"content", "A1"}}}})
+                .contains("result"));
+    REQUIRE(dispatch(runtime, "conversation.append",
+                     {{"id", id_a},
+                      {"message", {{"role", "assistant"},
+                                    {"content", "A2"}}}})
+                .contains("result"));
+    const Json created_b = dispatch(runtime, "conversation.create",
+                                     {{"title", "Beta"},
+                                      {"model", "gpt-merge"},
+                                      {"scope", "workspace"}});
+    const std::string id_b = created_b["result"]["id"];
+    REQUIRE(dispatch(runtime, "conversation.append",
+                     {{"id", id_b},
+                      {"message", {{"role", "user"},
+                                    {"content", "B1"}}}})
+                .contains("result"));
+    const Json created_c = dispatch(runtime, "conversation.create",
+                                     {{"title", "Gamma"},
+                                      {"model", "gpt-merge"},
+                                      {"scope", "workspace"}});
+    const std::string id_c = created_c["result"]["id"];
+    REQUIRE(dispatch(runtime, "conversation.append",
+                     {{"id", id_c},
+                      {"message", {{"role", "user"},
+                                    {"content", "C1"}}}})
+                .contains("result"));
+    REQUIRE(dispatch(runtime, "conversation.append",
+                     {{"id", id_c},
+                      {"message", {{"role", "assistant"},
+                                    {"content", "C2"}}}})
+                .contains("result"));
+
+    // Bad scope → invalid.
+    const Json bad_scope = dispatch(runtime, "conversation.merge",
+                                     {{"sourceIds", Json::array({id_a})},
+                                      {"scope", "nowhere"}});
+    REQUIRE(bad_scope["error"]["data"]["status"] ==
+            SAO_AI_EDITOR_ERR_INVALID_ARGUMENT);
+
+    // Empty sourceIds → invalid.
+    const Json empty_ids = dispatch(runtime, "conversation.merge",
+                                     {{"sourceIds", Json::array()}});
+    REQUIRE(empty_ids["error"]["data"]["status"] ==
+            SAO_AI_EDITOR_ERR_INVALID_ARGUMENT);
+
+    // Missing source id → propagates NOT_FOUND.
+    const Json missing = dispatch(runtime, "conversation.merge",
+                                   {{"sourceIds", Json::array(
+                                                        {id_a,
+                                                         "conv-nope"})}});
+    REQUIRE(missing.contains("error"));
+
+    // Merge in explicit sourceIds order: A + B + C.
+    const Json merged = dispatch(runtime, "conversation.merge",
+                                  {{"sourceIds", Json::array(
+                                                       {id_a, id_b, id_c})}});
+    REQUIRE(merged.contains("result"));
+    REQUIRE(merged["result"]["messageCount"] == 5);
+    REQUIRE(merged["result"]["title"] == "Alpha (merged)");
+    REQUIRE(merged["result"]["sourcedFrom"].size() == 3);
+    REQUIRE(merged["result"]["sourcedFrom"][0] == id_a);
+    REQUIRE(merged["result"]["sourcedFrom"][1] == id_b);
+    REQUIRE(merged["result"]["sourcedFrom"][2] == id_c);
+    REQUIRE(merged["result"]["mergedAt"].is_number());
+    const std::string merged_id = merged["result"]["id"];
+
+    // Ordered concat: A1, A2, B1, C1, C2 (no separator).
+    const Json merged_conv = dispatch(runtime, "conversation.get",
+                                       {{"id", merged_id}})["result"];
+    REQUIRE(merged_conv["messages"].size() == 5);
+    REQUIRE(merged_conv["messages"][0]["content"] == "A1");
+    REQUIRE(merged_conv["messages"][1]["content"] == "A2");
+    REQUIRE(merged_conv["messages"][2]["content"] == "B1");
+    REQUIRE(merged_conv["messages"][3]["content"] == "C1");
+    REQUIRE(merged_conv["messages"][4]["content"] == "C2");
+    // Inherit model + systemPrompt from first source (A).
+    REQUIRE(merged_conv["model"] == "gpt-merge");
+    REQUIRE(merged_conv["scope"] == "workspace");
+    REQUIRE(merged_conv["pinned"] == false);
+
+    // Original conversations must survive untouched.
+    const Json a_after = dispatch(runtime, "conversation.get",
+                                   {{"id", id_a}})["result"];
+    REQUIRE(a_after["messages"].size() == 2);
+    const Json c_after = dispatch(runtime, "conversation.get",
+                                   {{"id", id_c}})["result"];
+    REQUIRE(c_after["messages"].size() == 2);
+
+    // Custom title + explicit order: C + A (skip B) → 4 messages, C first.
+    const Json custom = dispatch(runtime, "conversation.merge",
+                                  {{"sourceIds", Json::array({id_c, id_a})},
+                                   {"title", "Custom Merge"},
+                                   {"scope", "system"}});
+    REQUIRE(custom.contains("result"));
+    REQUIRE(custom["result"]["title"] == "Custom Merge");
+    REQUIRE(custom["result"]["messageCount"] == 4);
+    const std::string custom_id = custom["result"]["id"];
+    const Json custom_conv = dispatch(runtime, "conversation.get",
+                                       {{"id", custom_id}})["result"];
+    REQUIRE(custom_conv["scope"] == "system");
+    REQUIRE(custom_conv["messages"][0]["content"] == "C1");
+    REQUIRE(custom_conv["messages"][1]["content"] == "C2");
+    REQUIRE(custom_conv["messages"][2]["content"] == "A1");
+    REQUIRE(custom_conv["messages"][3]["content"] == "A2");
+
+    // Single source → concat of one, still emits merged shape.
+    const Json single_src = dispatch(runtime, "conversation.merge",
+                                      {{"sourceIds", Json::array({id_b})}});
+    REQUIRE(single_src.contains("result"));
+    REQUIRE(single_src["result"]["messageCount"] == 1);
+    REQUIRE(single_src["result"]["sourcedFrom"].size() == 1);
+    REQUIRE(single_src["result"]["sourcedFrom"][0] == id_b);
+
+    // Bad orderBy → invalid.
+    const Json bad_order = dispatch(runtime, "conversation.merge",
+                                     {{"sourceIds", Json::array({id_a})},
+                                      {"orderBy", "random"}});
+    REQUIRE(bad_order["error"]["data"]["status"] ==
+            SAO_AI_EDITOR_ERR_INVALID_ARGUMENT);
+}
+
+TEST_CASE("AI Editor conversation.merge inserts separator between sources",
+          "[plugins][ai_editor][native][storage][merge]") {
+    RuntimeFixture fixture;
+    auto runtime = fixture.get();
+    REQUIRE(dispatch(runtime, "runtime.initialize").contains("result"));
+
+    const Json a = dispatch(runtime, "conversation.create",
+                             {{"title", "First"},
+                              {"model", "sep"},
+                              {"scope", "workspace"}});
+    const std::string id_a = a["result"]["id"];
+    REQUIRE(dispatch(runtime, "conversation.append",
+                     {{"id", id_a},
+                      {"message", {{"role", "user"},
+                                    {"content", "Hello A"}}}})
+                .contains("result"));
+    const Json b = dispatch(runtime, "conversation.create",
+                             {{"title", "Second"},
+                              {"model", "sep"},
+                              {"scope", "workspace"}});
+    const std::string id_b = b["result"]["id"];
+    REQUIRE(dispatch(runtime, "conversation.append",
+                     {{"id", id_b},
+                      {"message", {{"role", "user"},
+                                    {"content", "Hello B"}}}})
+                .contains("result"));
+    const Json c = dispatch(runtime, "conversation.create",
+                             {{"title", "Third"},
+                              {"model", "sep"},
+                              {"scope", "workspace"}});
+    const std::string id_c = c["result"]["id"];
+    REQUIRE(dispatch(runtime, "conversation.append",
+                     {{"id", id_c},
+                      {"message", {{"role", "user"},
+                                    {"content", "Hello C"}}}})
+                .contains("result"));
+
+    const Json separator{{"role", "system"},
+                         {"content", "--- next conversation ---"}};
+    const Json merged = dispatch(runtime, "conversation.merge",
+                                  {{"sourceIds", Json::array(
+                                                       {id_a, id_b, id_c})},
+                                   {"separator", separator}});
+    REQUIRE(merged.contains("result"));
+    // 3 real messages + 2 separators (between A|B and B|C).  Never at the
+    // head or tail.
+    REQUIRE(merged["result"]["messageCount"] == 5);
+    const std::string merged_id = merged["result"]["id"];
+    const Json got = dispatch(runtime, "conversation.get",
+                               {{"id", merged_id}})["result"];
+    REQUIRE(got["messages"][0]["content"] == "Hello A");
+    REQUIRE(got["messages"][1] == separator);
+    REQUIRE(got["messages"][2]["content"] == "Hello B");
+    REQUIRE(got["messages"][3] == separator);
+    REQUIRE(got["messages"][4]["content"] == "Hello C");
+
+    // Invalid separator (missing content) is treated as no separator, not
+    // an error.  Callers who omit the field or supply garbage should still
+    // get a valid merge.
+    const Json degenerate = dispatch(runtime, "conversation.merge",
+                                      {{"sourceIds", Json::array(
+                                                           {id_a, id_b})},
+                                       {"separator", {{"role", "system"}}}});
+    REQUIRE(degenerate.contains("result"));
+    REQUIRE(degenerate["result"]["messageCount"] == 2);
+}
+
+TEST_CASE("AI Editor conversation.split cleaves before/after keeping original "
+          "id",
+          "[plugins][ai_editor][native][storage][split]") {
+    RuntimeFixture fixture;
+    auto runtime = fixture.get();
+    REQUIRE(dispatch(runtime, "runtime.initialize").contains("result"));
+
+    const Json created = dispatch(runtime, "conversation.create",
+                                   {{"title", "Split Me"},
+                                    {"model", "gpt-split"},
+                                    {"scope", "workspace"}});
+    const std::string source_id = created["result"]["id"];
+    for (const std::pair<const char*, const char*> message :
+         {std::pair<const char*, const char*>{"user", "msg-0"},
+          std::pair<const char*, const char*>{"assistant", "msg-1"},
+          std::pair<const char*, const char*>{"user", "msg-2"},
+          std::pair<const char*, const char*>{"assistant", "msg-3"},
+          std::pair<const char*, const char*>{"user", "msg-4"}}) {
+        REQUIRE(dispatch(runtime, "conversation.append",
+                         {{"id", source_id},
+                          {"message", {{"role", message.first},
+                                        {"content", message.second}}}})
+                    .contains("result"));
+    }
+
+    // Bad scope → invalid.
+    const Json bad_scope = dispatch(runtime, "conversation.split",
+                                     {{"sourceId", source_id},
+                                      {"messageIndex", 2},
+                                      {"scope", "nowhere"}});
+    REQUIRE(bad_scope["error"]["data"]["status"] ==
+            SAO_AI_EDITOR_ERR_INVALID_ARGUMENT);
+
+    // Missing source → NOT_FOUND (surfaces as error).
+    const Json missing = dispatch(runtime, "conversation.split",
+                                   {{"sourceId", "conv-missing"},
+                                    {"messageIndex", 1}});
+    REQUIRE(missing.contains("error"));
+
+    // Negative messageIndex → invalid.
+    const Json negative = dispatch(runtime, "conversation.split",
+                                    {{"sourceId", source_id},
+                                     {"messageIndex", -1}});
+    REQUIRE(negative["error"]["data"]["status"] ==
+            SAO_AI_EDITOR_ERR_INVALID_ARGUMENT);
+
+    // messageIndex at last slot leaves the "after" half empty → invalid.
+    const Json past_end = dispatch(runtime, "conversation.split",
+                                    {{"sourceId", source_id},
+                                     {"messageIndex", 4}});
+    REQUIRE(past_end["error"]["data"]["status"] ==
+            SAO_AI_EDITOR_ERR_INVALID_ARGUMENT);
+
+    // Split at index=2 → before has msg-0..msg-2 (3 msgs); after has msg-3
+    // and msg-4 (2 msgs).  keepOriginal=false (default) → the source is
+    // rewritten in place with the "before" messages so its id survives.
+    const Json split_result = dispatch(runtime, "conversation.split",
+                                        {{"sourceId", source_id},
+                                         {"messageIndex", 2}});
+    REQUIRE(split_result.contains("result"));
+    REQUIRE(split_result["result"]["original"]["id"] == source_id);
+    REQUIRE(split_result["result"]["original"]["messageCount"] == 3);
+    REQUIRE(split_result["result"]["latter"]["messageCount"] == 2);
+    REQUIRE(split_result["result"]["latter"]["title"] ==
+            "Split Me (after)");
+    REQUIRE(split_result["result"]["splitAt"].is_number());
+    const std::string latter_id = split_result["result"]["latter"]["id"];
+    REQUIRE(!latter_id.empty());
+    REQUIRE(latter_id != source_id);
+
+    // Original id still resolves, now with the "before" half's messages.
+    const Json before = dispatch(runtime, "conversation.get",
+                                  {{"id", source_id}})["result"];
+    REQUIRE(before["messages"].size() == 3);
+    REQUIRE(before["messages"][0]["content"] == "msg-0");
+    REQUIRE(before["messages"][1]["content"] == "msg-1");
+    REQUIRE(before["messages"][2]["content"] == "msg-2");
+
+    // Latter half is a fresh conversation carrying msg-3 + msg-4.
+    const Json after = dispatch(runtime, "conversation.get",
+                                 {{"id", latter_id}})["result"];
+    REQUIRE(after["messages"].size() == 2);
+    REQUIRE(after["messages"][0]["content"] == "msg-3");
+    REQUIRE(after["messages"][1]["content"] == "msg-4");
+    REQUIRE(after["model"] == "gpt-split");
+    REQUIRE(after["scope"] == "workspace");
+    REQUIRE(after["pinned"] == false);
+}
+
+TEST_CASE("AI Editor conversation.split with keepOriginal preserves source and "
+          "mints two fresh conversations",
+          "[plugins][ai_editor][native][storage][split]") {
+    RuntimeFixture fixture;
+    auto runtime = fixture.get();
+    REQUIRE(dispatch(runtime, "runtime.initialize").contains("result"));
+
+    const Json created = dispatch(runtime, "conversation.create",
+                                   {{"title", "Original"},
+                                    {"model", "gpt-keep"},
+                                    {"scope", "workspace"}});
+    const std::string source_id = created["result"]["id"];
+    for (int index = 0; index < 4; ++index) {
+        REQUIRE(dispatch(runtime, "conversation.append",
+                         {{"id", source_id},
+                          {"message", {{"role", "user"},
+                                        {"content", "k" +
+                                                    std::to_string(index)}}}})
+                    .contains("result"));
+    }
+
+    const Json split_result = dispatch(
+        runtime, "conversation.split",
+        {{"sourceId", source_id},
+         {"messageIndex", 1},
+         {"keepOriginal", true},
+         {"titles", Json::array({"Before Half", "After Half"})}});
+    REQUIRE(split_result.contains("result"));
+    const std::string before_id = split_result["result"]["original"]["id"];
+    const std::string after_id = split_result["result"]["latter"]["id"];
+    REQUIRE(before_id != source_id);
+    REQUIRE(after_id != source_id);
+    REQUIRE(before_id != after_id);
+    REQUIRE(split_result["result"]["original"]["messageCount"] == 2);
+    REQUIRE(split_result["result"]["latter"]["messageCount"] == 2);
+    REQUIRE(split_result["result"]["latter"]["title"] == "After Half");
+
+    // Original conversation untouched.
+    const Json source_after = dispatch(runtime, "conversation.get",
+                                        {{"id", source_id}})["result"];
+    REQUIRE(source_after["messages"].size() == 4);
+    REQUIRE(source_after["messages"][0]["content"] == "k0");
+    REQUIRE(source_after["messages"][3]["content"] == "k3");
+    REQUIRE(source_after["title"] == "Original");
+
+    // Freshly minted "before" half carries msg 0..1 with the custom title.
+    const Json before = dispatch(runtime, "conversation.get",
+                                  {{"id", before_id}})["result"];
+    REQUIRE(before["messages"].size() == 2);
+    REQUIRE(before["title"] == "Before Half");
+    REQUIRE(before["messages"][0]["content"] == "k0");
+    REQUIRE(before["messages"][1]["content"] == "k1");
+
+    // Freshly minted "after" half carries msg 2..3.
+    const Json after = dispatch(runtime, "conversation.get",
+                                 {{"id", after_id}})["result"];
+    REQUIRE(after["messages"].size() == 2);
+    REQUIRE(after["messages"][0]["content"] == "k2");
+    REQUIRE(after["messages"][1]["content"] == "k3");
+    REQUIRE(after["model"] == "gpt-keep");
 }
 
 TEST_CASE("AI Editor mcp.* JSON-RPC surface aggregates and forwards", "[plugins]"
@@ -5064,27 +5872,6 @@ TEST_CASE("tools.unregister removes the custom tool and is idempotent-safe",
 }
 
 namespace {
-
-// Build a canned HTTP response body — helper used by the retry tests below
-// so the 500 / 200 wire framing stays uniform.  `content_length` matters
-// because LocalHttpServer's client parses it to know when a request body
-// is done, and the *response* framing has to match what WinHTTP expects
-// (Content-Length + Connection: close, no chunked encoding).
-std::string canned_http_response(int status_code,
-                                  std::string_view status_text,
-                                  std::string_view body,
-                                  std::string_view extra_headers = {}) {
-    std::string wire = "HTTP/1.1 " + std::to_string(status_code) + " " +
-                       std::string(status_text) + "\r\n";
-    wire += "Content-Type: application/json\r\n";
-    wire += "Content-Length: " + std::to_string(body.size()) + "\r\n";
-    if (!extra_headers.empty()) {
-        wire.append(extra_headers.data(), extra_headers.size());
-    }
-    wire += "Connection: close\r\n\r\n";
-    wire.append(body.data(), body.size());
-    return wire;
-}
 
 // Poll run.status until it leaves running/pending or `budget_ms` elapses.
 Json wait_for_run_terminal(sao_ai_editor_runtime_t runtime,
