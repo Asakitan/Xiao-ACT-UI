@@ -67,16 +67,161 @@ struct EntityActionRouteSnapshot {
 };
 
 class EntityActionRouteStore final {
+  private:
+    struct PublishedState {
+        EntityActionRouteSnapshot snapshot;
+        std::unordered_map<std::int32_t, std::size_t> route_by_token;
+    };
+
+    struct StoreState {
+        StoreState(std::int32_t first_token,
+                   std::int32_t last_token_value) noexcept
+            : last_token(last_token_value),
+              next_token(first_token),
+              token_range_valid(first_token >= kFirstDynamicToken &&
+                                first_token <= last_token_value &&
+                                last_token_value <= kLastDynamicToken) {}
+
+        std::int32_t last_token = kLastDynamicToken;
+        std::int64_t next_token = kFirstDynamicToken;
+        bool token_range_valid = true;
+        std::atomic_bool accepting{true};
+        std::mutex publish_mutex;
+        std::atomic<std::shared_ptr<const PublishedState>> published;
+    };
+
   public:
-    EntityActionRouteStore() noexcept = default;
+    class PreparedPublication final {
+      public:
+        PreparedPublication() noexcept = default;
+
+        ~PreparedPublication() noexcept {
+            abort();
+        }
+
+        PreparedPublication(const PreparedPublication&) = delete;
+        PreparedPublication& operator=(const PreparedPublication&) = delete;
+
+        PreparedPublication(PreparedPublication&& other) noexcept {
+            move_from(std::move(other));
+        }
+
+        PreparedPublication& operator=(PreparedPublication&& other) noexcept {
+            if (this != &other) {
+                abort();
+                move_from(std::move(other));
+            }
+            return *this;
+        }
+
+        bool valid() const noexcept {
+            return state_ != nullptr &&
+                   state_->accepting.load(std::memory_order_acquire);
+        }
+
+        bool changed() const noexcept {
+            return valid() && changed_;
+        }
+
+        sao_status_t snapshot(EntityActionRouteSnapshot& out) const noexcept {
+            if (!valid()) {
+                return SAO_STATUS_ERR_INVALID_ARGUMENT;
+            }
+            try {
+                EntityActionRouteSnapshot copy;
+                if (candidate_ != nullptr) {
+                    copy = candidate_->snapshot;
+                }
+                out = std::move(copy);
+                return SAO_STATUS_OK;
+            } catch (...) {
+                return SAO_STATUS_ERR_UNKNOWN;
+            }
+        }
+
+        sao_status_t commit() noexcept {
+            if (state_ == nullptr) {
+                return SAO_STATUS_ERR_INVALID_ARGUMENT;
+            }
+            const auto state = state_;
+            std::lock_guard lock(state->publish_mutex);
+            if (!state->accepting.load(std::memory_order_acquire)) {
+                release();
+                return SAO_STATUS_ERR_INVALID_ARGUMENT;
+            }
+            if (state->published.load(std::memory_order_acquire) != base_ ||
+                state->next_token != base_next_token_) {
+                release();
+                return SAO_STATUS_ERR_CANCELLED;
+            }
+            if (changed_) {
+                state->next_token = candidate_next_token_;
+                state->published.store(candidate_, std::memory_order_release);
+            }
+            release();
+            return SAO_STATUS_OK;
+        }
+
+        void abort() noexcept {
+            release();
+        }
+
+      private:
+        friend class EntityActionRouteStore;
+
+        PreparedPublication(
+                        std::shared_ptr<StoreState> state,
+                        std::shared_ptr<const PublishedState> base,
+            std::shared_ptr<const PublishedState> candidate,
+                        std::int64_t base_next_token,
+            std::int64_t candidate_next_token,
+            bool changed) noexcept
+                        : state_(std::move(state)),
+                            base_(std::move(base)),
+              candidate_(std::move(candidate)),
+                            base_next_token_(base_next_token),
+              candidate_next_token_(candidate_next_token),
+              changed_(changed) {}
+
+        void move_from(PreparedPublication&& other) noexcept {
+            state_ = std::move(other.state_);
+            base_ = std::move(other.base_);
+            candidate_ = std::move(other.candidate_);
+            base_next_token_ = other.base_next_token_;
+            candidate_next_token_ = other.candidate_next_token_;
+            changed_ = std::exchange(other.changed_, false);
+        }
+
+        void release() noexcept {
+            state_.reset();
+            base_.reset();
+            candidate_.reset();
+            base_next_token_ = 0;
+            candidate_next_token_ = 0;
+            changed_ = false;
+        }
+
+        std::shared_ptr<StoreState> state_;
+        std::shared_ptr<const PublishedState> base_;
+        std::shared_ptr<const PublishedState> candidate_;
+        std::int64_t base_next_token_ = 0;
+        std::int64_t candidate_next_token_ = 0;
+        bool changed_ = false;
+    };
+
+    EntityActionRouteStore() noexcept
+        : state_(make_state(kFirstDynamicToken, kLastDynamicToken)) {}
 
     EntityActionRouteStore(std::int32_t first_token,
                            std::int32_t last_token) noexcept
-        : last_token_(last_token),
-          next_token_(first_token),
-          token_range_valid_(first_token >= kFirstDynamicToken &&
-                             first_token <= last_token &&
-                             last_token <= kLastDynamicToken) {}
+        : state_(make_state(first_token, last_token)) {}
+
+    ~EntityActionRouteStore() noexcept {
+        if (state_ != nullptr) {
+            std::lock_guard lock(state_->publish_mutex);
+            state_->accepting.store(false, std::memory_order_release);
+        }
+    }
 
     EntityActionRouteStore(const EntityActionRouteStore&) = delete;
     EntityActionRouteStore& operator=(const EntityActionRouteStore&) = delete;
@@ -84,9 +229,23 @@ class EntityActionRouteStore final {
     EntityActionRouteStore& operator=(EntityActionRouteStore&&) = delete;
 
     sao_status_t publish(const std::vector<EntityActionRouteSpec>& rows) noexcept {
+        PreparedPublication publication;
+        const sao_status_t status = prepare(rows, publication);
+        return status == SAO_STATUS_OK ? publication.commit() : status;
+    }
+
+    sao_status_t prepare(
+        const std::vector<EntityActionRouteSpec>& rows,
+        PreparedPublication& out) noexcept {
+        out.abort();
         try {
-            std::lock_guard lock(publish_mutex_);
-            if (!token_range_valid_) {
+            const auto state = state_;
+            if (state == nullptr) {
+                return SAO_STATUS_ERR_UNKNOWN;
+            }
+            std::lock_guard lock(state->publish_mutex);
+            if (!state->accepting.load(std::memory_order_acquire) ||
+                !state->token_range_valid) {
                 return SAO_STATUS_ERR_INVALID_ARGUMENT;
             }
             const sao_status_t validation_status = validate(rows);
@@ -94,8 +253,11 @@ class EntityActionRouteStore final {
                 return validation_status;
             }
 
-            const auto current = published_.load(std::memory_order_acquire);
+            const auto current = state->published.load(std::memory_order_acquire);
             if (same_semantics(current.get(), rows)) {
+                out = PreparedPublication(state, current, current,
+                                          state->next_token,
+                                          state->next_token, false);
                 return SAO_STATUS_OK;
             }
             if (current != nullptr &&
@@ -119,7 +281,8 @@ class EntityActionRouteStore final {
                 }
             }
             const std::int64_t available =
-                static_cast<std::int64_t>(last_token_) - next_token_ + 1;
+                static_cast<std::int64_t>(state->last_token) -
+                state->next_token + 1;
             if (available < 0 ||
                 new_identity_count > static_cast<std::size_t>(available)) {
                 return SAO_STATUS_ERR_BUFFER_TOO_SMALL;
@@ -131,7 +294,7 @@ class EntityActionRouteStore final {
             next->snapshot.routes.reserve(rows.size());
             next->route_by_token.reserve(rows.size());
 
-            std::int64_t candidate_next_token = next_token_;
+            std::int64_t candidate_next_token = state->next_token;
             for (const auto& row : rows) {
                 std::int32_t token = 0;
                 const auto active = active_tokens.find(identity_of(row));
@@ -146,8 +309,10 @@ class EntityActionRouteStore final {
             }
 
             std::shared_ptr<const PublishedState> immutable = std::move(next);
-            next_token_ = candidate_next_token;
-            published_.store(std::move(immutable), std::memory_order_release);
+            out = PreparedPublication(state, current,
+                                      std::move(immutable),
+                                      state->next_token,
+                                      candidate_next_token, true);
             return SAO_STATUS_OK;
         } catch (...) {
             return SAO_STATUS_ERR_UNKNOWN;
@@ -156,7 +321,11 @@ class EntityActionRouteStore final {
 
     sao_status_t snapshot(EntityActionRouteSnapshot& out) const noexcept {
         try {
-            const auto current = published_.load(std::memory_order_acquire);
+            const auto state = state_;
+            if (state == nullptr) {
+                return SAO_STATUS_ERR_UNKNOWN;
+            }
+            const auto current = state->published.load(std::memory_order_acquire);
             EntityActionRouteSnapshot copy;
             if (current != nullptr) {
                 copy = current->snapshot;
@@ -170,7 +339,11 @@ class EntityActionRouteStore final {
 
     sao_status_t resolve(std::int32_t token,
                          EntityActionRoute& out) const noexcept {
-        const auto current = published_.load(std::memory_order_acquire);
+        const auto state = state_;
+        if (state == nullptr) {
+            return SAO_STATUS_ERR_UNKNOWN;
+        }
+        const auto current = state->published.load(std::memory_order_acquire);
         if (current == nullptr) {
             return SAO_STATUS_ERR_NOT_FOUND;
         }
@@ -188,6 +361,16 @@ class EntityActionRouteStore final {
     }
 
   private:
+    static std::shared_ptr<StoreState> make_state(
+        std::int32_t first_token,
+        std::int32_t last_token) noexcept {
+        try {
+            return std::make_shared<StoreState>(first_token, last_token);
+        } catch (...) {
+            return nullptr;
+        }
+    }
+
     struct IdentityView {
         std::string_view provider_id;
         std::string_view action_id;
@@ -204,11 +387,6 @@ class EntityActionRouteStore final {
                       (result << 6U) + (result >> 2U);
             return result;
         }
-    };
-
-    struct PublishedState {
-        EntityActionRouteSnapshot snapshot;
-        std::unordered_map<std::int32_t, std::size_t> route_by_token;
     };
 
     static bool valid_utf8(std::string_view value) noexcept {
@@ -353,11 +531,7 @@ class EntityActionRouteStore final {
         };
     }
 
-    std::int32_t last_token_ = kLastDynamicToken;
-    std::int64_t next_token_ = kFirstDynamicToken;
-    bool token_range_valid_ = true;
-    mutable std::mutex publish_mutex_;
-    std::atomic<std::shared_ptr<const PublishedState>> published_;
+    std::shared_ptr<StoreState> state_;
 };
 
 } // namespace sao::launcher::entity_action_routes
