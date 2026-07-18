@@ -707,6 +707,74 @@ TEST_CASE("AI Editor chat preserves synchronous response semantics",
     REQUIRE(status["result"]["content"] == "hello");
 }
 
+TEST_CASE("AI Editor agents.list_defs surfaces 5 built-in agents",
+          "[plugins][ai_editor][native][agents]") {
+    RuntimeFixture fixture;
+    const Json defs = dispatch(fixture.get(), "agents.list_defs");
+    REQUIRE(defs.contains("result"));
+    REQUIRE(defs["result"]["total"] >= 5);
+    std::vector<std::string> ids;
+    for (const auto& item : defs["result"]["items"]) {
+        ids.push_back(item.value("id", ""));
+    }
+    for (const auto* required :
+         {"code-reviewer", "explainer", "debugger", "optimizer", "documenter"}) {
+        REQUIRE(std::find(ids.begin(), ids.end(), required) != ids.end());
+    }
+}
+
+TEST_CASE("AI Editor agents.save_def / delete_def CRUD honours builtin lock",
+          "[plugins][ai_editor][native][agents]") {
+    RuntimeFixture fixture;
+    const Json agent_json{
+        {"id", "my-tester"},
+        {"name", "Test Runner"},
+        {"description", "Runs project tests"},
+        {"system_prompt", "You run tests carefully."},
+        {"tools", Json::array({"readFile", "listFiles"})},
+        {"model", "test-model"}};
+    REQUIRE(dispatch(fixture.get(), "agents.save_def",
+                     {{"scope", "workspace"}, {"agent", agent_json}})
+                .contains("result"));
+    const Json fetched =
+        dispatch(fixture.get(), "agents.get_def", {{"id", "my-tester"}})
+            ["result"];
+    REQUIRE(fetched["name"] == "Test Runner");
+    REQUIRE(fetched["tools"].size() == 2);
+    REQUIRE(fetched["builtin"] == false);
+    REQUIRE(dispatch(fixture.get(), "agents.delete_def",
+                     {{"id", "my-tester"}})
+                .contains("result"));
+    REQUIRE(dispatch(fixture.get(), "agents.delete_def",
+                     {{"id", "code-reviewer"}})["error"]["data"]["status"] ==
+            SAO_AI_EDITOR_ERR_PERMISSION_DENIED);
+}
+
+TEST_CASE("AI Editor agents.invoke wraps agent system prompt around "
+          "chat.run",
+          "[plugins][ai_editor][native][agents][integration]") {
+    const std::string body =
+        R"({"choices":[{"message":{"role":"assistant","content":"reviewed"}}]})";
+    LocalHttpServer server(
+        "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n"
+        "Content-Length: " +
+        std::to_string(body.size()) +
+        "\r\nConnection: close\r\n\r\n" + body);
+    RuntimeFixture fixture;
+    const Json invoked = dispatch(
+        fixture.get(), "agents.invoke",
+        {{"id", "code-reviewer"},
+         {"message", "look at foo()"},
+         {"provider", {{"id", "agent-fixture"},
+                        {"endpoint", server.endpoint()}}},
+         {"model", "test-model"},
+         {"timeoutMs", 5000}});
+    REQUIRE(invoked.contains("result"));
+    REQUIRE(invoked["result"]["agentId"] == "code-reviewer");
+    REQUIRE(invoked["result"]["content"] == "reviewed");
+    REQUIRE(server.wait_for_connections(1, 2'000));
+}
+
 namespace {
 
 std::string drain_mcp(int32_t status, uint32_t required,
@@ -935,6 +1003,70 @@ private:
 };
 
 }  // namespace
+
+TEST_CASE("SaoAiEditor.exe --cli --cli-method dispatches JSON-RPC and exits",
+          "[plugins][ai_editor][production_child][cli][integration]") {
+    TemporaryDirectory temporary;
+    const auto workspace = temporary.path() / L"cli-workspace";
+    REQUIRE(std::filesystem::create_directories(workspace));
+
+    STARTUPINFOW startup{};
+    startup.cb = sizeof(startup);
+    SECURITY_ATTRIBUTES security_attributes{};
+    security_attributes.nLength = sizeof(security_attributes);
+    security_attributes.bInheritHandle = TRUE;
+    HANDLE read_end = nullptr;
+    HANDLE write_end = nullptr;
+    REQUIRE(CreatePipe(&read_end, &write_end, &security_attributes,
+                       128 * 1024) != FALSE);
+    REQUIRE(SetHandleInformation(read_end, HANDLE_FLAG_INHERIT, 0) != FALSE);
+    startup.dwFlags = STARTF_USESTDHANDLES;
+    startup.hStdInput = GetStdHandle(STD_INPUT_HANDLE);
+    startup.hStdOutput = write_end;
+    startup.hStdError = write_end;
+
+    const std::string exe_utf8 = SAO_AI_EDITOR_MCP_SERVER_EXECUTABLE;
+    const int wide_len = MultiByteToWideChar(CP_UTF8, 0, exe_utf8.c_str(),
+                                              -1, nullptr, 0);
+    REQUIRE(wide_len > 0);
+    std::wstring executable(static_cast<size_t>(wide_len - 1), L'\0');
+    MultiByteToWideChar(CP_UTF8, 0, exe_utf8.c_str(), -1, executable.data(),
+                        wide_len);
+    std::wstring quoted_workspace = L"\"" + workspace.native() + L"\"";
+    std::wstring command_line = L"\"" + executable + L"\" --cli "
+                                L"--cli-method agents.list_defs "
+                                L"--workspace " + quoted_workspace;
+    std::vector<wchar_t> command_line_buffer(command_line.begin(),
+                                              command_line.end());
+    command_line_buffer.push_back(L'\0');
+    PROCESS_INFORMATION process_information{};
+    REQUIRE(CreateProcessW(nullptr, command_line_buffer.data(), nullptr, nullptr,
+                           TRUE, CREATE_NO_WINDOW, nullptr, nullptr, &startup,
+                           &process_information) != FALSE);
+    CloseHandle(write_end);
+    std::string captured;
+    std::array<char, 4096> buffer{};
+    DWORD read = 0;
+    while (ReadFile(read_end, buffer.data(),
+                    static_cast<DWORD>(buffer.size()), &read, nullptr) &&
+           read > 0) {
+        captured.append(buffer.data(), read);
+    }
+    CloseHandle(read_end);
+    REQUIRE(WaitForSingleObject(process_information.hProcess, 15'000) ==
+            WAIT_OBJECT_0);
+    DWORD exit_code = 1;
+    REQUIRE(GetExitCodeProcess(process_information.hProcess, &exit_code) !=
+            FALSE);
+    CloseHandle(process_information.hProcess);
+    CloseHandle(process_information.hThread);
+    REQUIRE(exit_code == 0);
+    const auto brace = captured.find('{');
+    REQUIRE(brace != std::string::npos);
+    const Json parsed = Json::parse(captured.substr(brace));
+    REQUIRE(parsed.contains("result"));
+    REQUIRE(parsed["result"]["total"] >= 5);
+}
 
 #if defined(SAO_AI_EDITOR_HAS_WEBVIEW) && SAO_AI_EDITOR_HAS_WEBVIEW
 TEST_CASE("WebView2 runtime probe reports Loader availability",

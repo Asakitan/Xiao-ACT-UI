@@ -9,6 +9,7 @@
 #include <unordered_map>
 #include <vector>
 
+#include "agent_registry.h"
 #include "auth_device_flow.h"
 #include "conversation_store.h"
 #include "extension_host.h"
@@ -73,6 +74,9 @@ private:
     int32_t dispatch_extension(std::string_view method,
                                const Json& params,
                                Json& result);
+    int32_t dispatch_agent(std::string_view method,
+                           const Json& params,
+                           Json& result);
     int32_t run_chat_sync(const Json& params, uint32_t timeout_ms,
                           std::string& out_content);
     void execute_chat(const std::shared_ptr<RunState>& run,
@@ -107,6 +111,7 @@ private:
         workflow_executions_;
     std::unique_ptr<AuthDeviceFlow> auth_flow_;
     std::unique_ptr<ExtensionHost> extension_host_;
+    AgentRegistry agent_registry_;
     uint32_t maximum_event_queue_;
 
 public:

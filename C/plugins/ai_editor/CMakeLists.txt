@@ -52,6 +52,7 @@ endif()
 add_library(sao_plugin_ai_editor SHARED
     src/ai_editor_launcher_process.cpp
     src/ai_editor_ipc_win32.cpp
+    src/agent_registry.cpp
     src/ai_editor_native_runtime.cpp
     src/auth_device_flow.cpp
     src/chat_provider_router.cpp
@@ -107,6 +108,12 @@ target_link_libraries(sao_ai_editor PRIVATE
 
 install(TARGETS sao_ai_editor sao_plugin_ai_editor
     RUNTIME DESTINATION "."
+    COMPONENT ship
+)
+
+install(FILES
+    "${CMAKE_CURRENT_SOURCE_DIR}/assets/extension_host_shim.js"
+    DESTINATION "assets/ai_editor"
     COMPONENT ship
 )
 

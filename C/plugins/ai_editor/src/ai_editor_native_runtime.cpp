@@ -501,6 +501,130 @@ int32_t NativeRuntime::invoke(std::string_view method,
     if (method.starts_with("extensions.")) {
         return dispatch_extension(method, params, result);
     }
+    if (method == "agents.list_defs" || method == "agents.get_def" ||
+        method == "agents.save_def" || method == "agents.delete_def" ||
+        method == "agents.invoke") {
+        return dispatch_agent(method, params, result);
+    }
+    return SAO_AI_EDITOR_ERR_NOT_FOUND;
+}
+
+int32_t NativeRuntime::dispatch_agent(std::string_view method,
+                                      const Json& params, Json& result) {
+    if (method == "agents.list_defs") {
+        {
+            std::lock_guard<std::mutex> guard(store_mutex_);
+            agent_registry_.reload(scopes_);
+        }
+        Json items = Json::array();
+        for (const auto& agent : agent_registry_.list()) {
+            items.push_back(agent.to_json());
+        }
+        result = Json{{"items", std::move(items)}};
+        result["total"] = result["items"].size();
+        return SAO_AI_EDITOR_OK;
+    }
+    if (method == "agents.get_def") {
+        if (!params.contains("id") || !params["id"].is_string()) {
+            return SAO_AI_EDITOR_ERR_INVALID_ARGUMENT;
+        }
+        {
+            std::lock_guard<std::mutex> guard(store_mutex_);
+            agent_registry_.reload(scopes_);
+        }
+        AgentDefinition agent;
+        if (!agent_registry_.get(params["id"].get<std::string>(), agent)) {
+            return SAO_AI_EDITOR_ERR_NOT_FOUND;
+        }
+        result = agent.to_json();
+        return SAO_AI_EDITOR_OK;
+    }
+    if (method == "agents.save_def") {
+        if (!params.contains("agent") || !params["agent"].is_object() ||
+            !params.contains("scope") || !params["scope"].is_string()) {
+            return SAO_AI_EDITOR_ERR_INVALID_ARGUMENT;
+        }
+        AgentDefinition agent =
+            AgentDefinition::from_json(params["agent"]);
+        const std::string scope_key = params["scope"].get<std::string>();
+        std::string scope;
+        std::string plugin_id;
+        if (scope_key == "system" || scope_key == "workspace") {
+            scope = scope_key;
+        } else if (scope_key.rfind("plugin:", 0) == 0) {
+            scope = "plugin";
+            plugin_id = scope_key.substr(7);
+            if (!valid_simple_id(plugin_id)) {
+                return SAO_AI_EDITOR_ERR_INVALID_ARGUMENT;
+            }
+        } else {
+            return SAO_AI_EDITOR_ERR_INVALID_ARGUMENT;
+        }
+        std::lock_guard<std::mutex> guard(store_mutex_);
+        const int32_t status = agent_registry_.save(agent, scopes_, scope,
+                                                     plugin_id);
+        if (status != SAO_AI_EDITOR_OK) {
+            return status;
+        }
+        result = agent.to_json();
+        result["scope"] = scope_key;
+        return SAO_AI_EDITOR_OK;
+    }
+    if (method == "agents.delete_def") {
+        if (!params.contains("id") || !params["id"].is_string()) {
+            return SAO_AI_EDITOR_ERR_INVALID_ARGUMENT;
+        }
+        std::lock_guard<std::mutex> guard(store_mutex_);
+        const int32_t status = agent_registry_.remove(
+            params["id"].get<std::string>(), scopes_,
+            params.value("scope", "workspace"), std::string{});
+        if (status != SAO_AI_EDITOR_OK) {
+            return status;
+        }
+        result = Json{{"ok", true}, {"id", params["id"]}};
+        return SAO_AI_EDITOR_OK;
+    }
+    if (method == "agents.invoke") {
+        if (!params.contains("id") || !params["id"].is_string()) {
+            return SAO_AI_EDITOR_ERR_INVALID_ARGUMENT;
+        }
+        const std::string message = params.value("message", std::string{});
+        if (message.empty()) {
+            return SAO_AI_EDITOR_ERR_INVALID_ARGUMENT;
+        }
+        {
+            std::lock_guard<std::mutex> guard(store_mutex_);
+            agent_registry_.reload(scopes_);
+        }
+        AgentDefinition agent;
+        if (!agent_registry_.get(params["id"].get<std::string>(), agent)) {
+            return SAO_AI_EDITOR_ERR_NOT_FOUND;
+        }
+        const Json history = params.value("history", Json::array());
+        Json messages =
+            agent_registry_.build_chat_messages(agent, message, history);
+        const std::string effective_model = params.value(
+            "model", agent.model);
+        Json chat_params = params;
+        chat_params.erase("id");
+        chat_params.erase("message");
+        chat_params.erase("history");
+        chat_params["messages"] = std::move(messages);
+        if (!effective_model.empty()) {
+            chat_params["model"] = effective_model;
+        }
+        const uint32_t timeout_ms = params.value("timeoutMs", 60'000U);
+        std::string content;
+        const int32_t status = run_chat_sync(chat_params, timeout_ms, content);
+        if (status != SAO_AI_EDITOR_OK) {
+            return status;
+        }
+        result = Json{{"agentId", agent.id},
+                      {"agentName", agent.name},
+                      {"content", std::move(content)},
+                      {"model", effective_model}};
+        return SAO_AI_EDITOR_OK;
+    }
     return SAO_AI_EDITOR_ERR_NOT_FOUND;
 }
 
