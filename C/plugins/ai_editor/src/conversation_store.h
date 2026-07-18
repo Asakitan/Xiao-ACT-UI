@@ -37,6 +37,14 @@ public:
                        Json& result) const;
 
     int32_t export_all(std::string_view scope, Json& result) const;
+
+    // Aggregate history counters for the requested `scope` (workspace / system
+    // / all).  Walks every conversation JSON under history_root(scope) and
+    // returns: total, pinned, byScope, byModel, byMonth (UTC YYYY-MM buckets
+    // sorted ascending), totalMessages, averageMessages, oldestSavedAt,
+    // newestSavedAt.  Empty history produces zeroed counters + null timestamps
+    // so callers can render "no data" instead of guessing.
+    int32_t stats(std::string_view scope, Json& result) const;
     int32_t import_conversation(const Json& conversation,
                                 std::string_view scope,
                                 bool overwrite,

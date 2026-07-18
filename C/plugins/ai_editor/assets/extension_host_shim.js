@@ -28,6 +28,14 @@ const state = {
     extensions: new Map(),
     disposables: [],
     initialized: false,
+    // WebView surface: providers register by viewId, panels track by generated id.
+    // Each record keeps the mock webview + emitters so the host can drive
+    // resolveView / postToView from the SAO side (WebView2 bridge is stubbed
+    // out here; real UI wiring lands in a later wave).
+    webviewViewProviders: new Map(),
+    webviewPanels: new Map(),
+    webviewViews: new Map(),
+    nextPanelId: 1,
 };
 
 function encodeFrame(payload) {
@@ -171,6 +179,65 @@ const workspace = {
     },
 };
 
+// ----- webview mock helpers ----------------------------------------------
+//
+// The SAO C++ side (webview_bridge.{h,cpp}) already knows how to spawn a
+// WebView2 window and pump PostWebMessageAsJson/WebMessageReceived, but this
+// shim doesn't try to wire the pipe yet.  The mock objects here just give the
+// extension something to call: html / options are stored, postMessage becomes
+// a `vscode.webview.postMessage` notification to the host (no-op unless the
+// host actually processes it), and `onDidReceiveMessage` is a plain
+// EventEmitter the host can drive via the `webview.postToView` handler below.
+
+function makeMockWebview(target) {
+    // `target` describes how the host should identify this webview when
+    // routing messages: either {panelId} or {viewId}.
+    const messageEmitter = new EventEmitter();
+    const webview = {
+        html: '',
+        options: {},
+        cspSource: 'sao-webview:',
+        async postMessage(message) {
+            notifyHost('vscode.webview.postMessage', Object.assign({}, target, { message }));
+            return true;
+        },
+        onDidReceiveMessage: messageEmitter.event,
+        asWebviewUri(uri) { return uri; },
+    };
+    return { webview, messageEmitter };
+}
+
+function makeMockPanel(panelId, viewType, title, showOptions, options) {
+    const { webview, messageEmitter } = makeMockWebview({ panelId });
+    webview.options = options || {};
+    const disposeEmitter = new EventEmitter();
+    const viewStateEmitter = new EventEmitter();
+    const panel = {
+        viewType,
+        title,
+        webview,
+        active: true,
+        visible: true,
+        viewColumn: (showOptions && showOptions.viewColumn) || vscodeModule.ViewColumn.One,
+        onDidDispose: disposeEmitter.event,
+        onDidChangeViewState: viewStateEmitter.event,
+        reveal(_viewColumn, _preserveFocus) {
+            panel.visible = true;
+            panel.active = true;
+            viewStateEmitter.fire({ webviewPanel: panel });
+        },
+        dispose() {
+            if (!state.webviewPanels.has(panelId)) return;
+            state.webviewPanels.delete(panelId);
+            try { disposeEmitter.fire(); } catch (e) { /* noop */ }
+        },
+    };
+    state.webviewPanels.set(panelId, {
+        panel, webview, messageEmitter, disposeEmitter, viewStateEmitter,
+    });
+    return panel;
+}
+
 const window = {
     activeTextEditor: undefined,
     visibleTextEditors: [],
@@ -231,6 +298,21 @@ const window = {
     onDidChangeActiveTextEditor: new EventEmitter().event,
     onDidChangeVisibleTextEditors: new EventEmitter().event,
     onDidChangeTextEditorSelection: new EventEmitter().event,
+    registerWebviewViewProvider(viewId, provider, options) {
+        const key = String(viewId || '');
+        if (!key) {
+            throw new Error('registerWebviewViewProvider requires a viewId');
+        }
+        state.webviewViewProviders.set(key, { provider, options: options || {} });
+        return disposable(() => {
+            state.webviewViewProviders.delete(key);
+            state.webviewViews.delete(key);
+        });
+    },
+    createWebviewPanel(viewType, title, showOptions, options) {
+        const panelId = 'panel-' + (state.nextPanelId++);
+        return makeMockPanel(panelId, String(viewType || ''), String(title || ''), showOptions, options);
+    },
 };
 
 const commands = {
@@ -444,6 +526,76 @@ state.handlers.set('commands.execute', async (params) => {
         throw new Error(`unknown command: ${commandId}`);
     }
     return await Promise.resolve(handler(...args));
+});
+
+state.handlers.set('webview.resolveView', async (params) => {
+    // Ask a previously registered WebviewViewProvider to populate its view.
+    // Returns whatever html the provider set on webview.html so the host can
+    // hand it off to WebView2 (or just log it while the UI wiring is stubbed).
+    const viewId = String(params && params.viewId || '');
+    const record = state.webviewViewProviders.get(viewId);
+    if (!record) {
+        throw new Error(`unknown webviewViewId: ${viewId}`);
+    }
+    let entry = state.webviewViews.get(viewId);
+    if (!entry) {
+        const { webview, messageEmitter } = makeMockWebview({ viewId });
+        const disposeEmitter = new EventEmitter();
+        const visibilityEmitter = new EventEmitter();
+        const view = {
+            webview,
+            visible: true,
+            onDidDispose: disposeEmitter.event,
+            onDidChangeVisibility: visibilityEmitter.event,
+        };
+        entry = { view, webview, messageEmitter, disposeEmitter, visibilityEmitter };
+        state.webviewViews.set(viewId, entry);
+    }
+    const context = (params && params.webviewViewContext) || {};
+    const tokenSource = { isCancellationRequested: false, onCancellationRequested: new EventEmitter().event };
+    await Promise.resolve(record.provider.resolveWebviewView(entry.view, context, tokenSource));
+    return {
+        ok: true,
+        viewId,
+        html: entry.webview.html || '',
+        options: entry.webview.options || {},
+    };
+});
+
+state.handlers.set('webview.postToView', async (params) => {
+    // Deliver a message from the SAO side back into the mock webview so the
+    // extension's onDidReceiveMessage listener fires.
+    const message = params && params.message;
+    const panelId = params && params.panelId;
+    const viewId = params && params.viewId;
+    if (panelId) {
+        const rec = state.webviewPanels.get(String(panelId));
+        if (!rec) { throw new Error(`unknown panelId: ${panelId}`); }
+        rec.messageEmitter.fire(message);
+        return { ok: true, panelId };
+    }
+    if (viewId) {
+        const rec = state.webviewViews.get(String(viewId));
+        if (!rec) { throw new Error(`unknown viewId: ${viewId}`); }
+        rec.messageEmitter.fire(message);
+        return { ok: true, viewId };
+    }
+    throw new Error('webview.postToView requires panelId or viewId');
+});
+
+state.handlers.set('webview.disposePanel', async (params) => {
+    const panelId = String(params && params.panelId || '');
+    const rec = state.webviewPanels.get(panelId);
+    if (!rec) { return { disposed: false, reason: 'unknown-panel' }; }
+    rec.panel.dispose();
+    return { disposed: true, panelId };
+});
+
+state.handlers.set('webview.listProviders', async () => {
+    return {
+        viewIds: Array.from(state.webviewViewProviders.keys()),
+        panelIds: Array.from(state.webviewPanels.keys()),
+    };
 });
 
 function makeMemento() {

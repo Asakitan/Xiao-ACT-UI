@@ -106,6 +106,26 @@ Json NativeToolRegistry::describe(std::string_view mode) const {
              {"confirmed", {{"type", "boolean"}}}},
             {"path", "content"}),
     });
+    // Append caller-registered tools.  Snapshot under lock so a concurrent
+    // register / unregister cannot mutate the map while we build descriptors,
+    // then release the lock before finalising `permission` (independent of the
+    // registry state).
+    std::vector<Json> custom_snapshot;
+    {
+        std::lock_guard<std::mutex> lock(custom_mutex_);
+        custom_snapshot.reserve(custom_tools_.size());
+        for (const auto& entry : custom_tools_) {
+            Json descriptor{{"name", entry.first},
+                            {"description", entry.second.description},
+                            {"readOnly", entry.second.read_only},
+                            {"parameters", entry.second.parameters},
+                            {"custom", true}};
+            custom_snapshot.push_back(std::move(descriptor));
+        }
+    }
+    for (auto& descriptor : custom_snapshot) {
+        tools.push_back(std::move(descriptor));
+    }
     for (auto& tool : tools) {
         const bool mutating = !tool.value("readOnly", false);
         std::string permission = "allowed";
@@ -146,7 +166,80 @@ int32_t NativeToolRegistry::execute(std::string_view mode,
         }
         return edit_file(arguments, result);
     }
+    // Custom tools: sync passthrough — the runtime hands the arguments back to
+    // the caller so an external handler can carry out the real work.  The
+    // ask/plan gating mirrors the built-in mutating-tool behaviour so a
+    // user-defined "writeSomething" tool cannot slip past permission mode.
+    {
+        std::lock_guard<std::mutex> lock(custom_mutex_);
+        const auto found = custom_tools_.find(std::string(name));
+        if (found != custom_tools_.end()) {
+            const bool read_only = found->second.read_only;
+            if (!read_only && mode == "ask") {
+                return SAO_AI_EDITOR_ERR_PERMISSION_DENIED;
+            }
+            if (!read_only && mode == "plan" &&
+                !arguments.value("confirmed", false)) {
+                result = Json{{"confirmationRequired", true},
+                              {"tool", std::string(name)},
+                              {"custom", true}};
+                return SAO_AI_EDITOR_ERR_CONFIRMATION_REQUIRED;
+            }
+            result = Json{{"custom", true},
+                          {"name", std::string(name)},
+                          {"arguments", arguments}};
+            return SAO_AI_EDITOR_OK;
+        }
+    }
     return SAO_AI_EDITOR_ERR_NOT_FOUND;
+}
+
+int32_t NativeToolRegistry::register_custom(std::string_view name,
+                                            std::string_view description,
+                                            const Json& parameters,
+                                            bool read_only) {
+    if (name.empty() || !valid_utf8(name)) {
+        return SAO_AI_EDITOR_ERR_INVALID_ARGUMENT;
+    }
+    // Shadowing a built-in would produce two entries in describe() and confuse
+    // execute() dispatch (built-ins always win).  Reject early so callers get
+    // an actionable error rather than a silently-hidden custom tool.
+    if (name == "readFile" || name == "listFiles" ||
+        name == "searchFiles" || name == "editFile") {
+        return SAO_AI_EDITOR_ERR_INVALID_ARGUMENT;
+    }
+    // `parameters` is optional — default to an empty object schema so
+    // describe() always emits a valid JSON-schema-ish descriptor.  When the
+    // caller supplies parameters, only accept an object; a stray array/string
+    // would confuse downstream OpenAI-tool converters.
+    Json schema;
+    if (parameters.is_null()) {
+        schema = Json{{"type", "object"}, {"properties", Json::object()}};
+    } else if (parameters.is_object()) {
+        schema = parameters;
+    } else {
+        return SAO_AI_EDITOR_ERR_INVALID_ARGUMENT;
+    }
+    CustomTool tool;
+    tool.description = std::string(description);
+    tool.parameters = std::move(schema);
+    tool.read_only = read_only;
+    std::lock_guard<std::mutex> lock(custom_mutex_);
+    custom_tools_[std::string(name)] = std::move(tool);
+    return SAO_AI_EDITOR_OK;
+}
+
+int32_t NativeToolRegistry::unregister_custom(std::string_view name) {
+    if (name.empty()) {
+        return SAO_AI_EDITOR_ERR_INVALID_ARGUMENT;
+    }
+    std::lock_guard<std::mutex> lock(custom_mutex_);
+    const auto found = custom_tools_.find(std::string(name));
+    if (found == custom_tools_.end()) {
+        return SAO_AI_EDITOR_ERR_NOT_FOUND;
+    }
+    custom_tools_.erase(found);
+    return SAO_AI_EDITOR_OK;
 }
 
 int32_t NativeToolRegistry::read_file(const Json& arguments,

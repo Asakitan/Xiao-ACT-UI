@@ -187,24 +187,17 @@ class LocalHttpServer final {
 public:
     explicit LocalHttpServer(std::string response = {})
         : response_(std::move(response)) {
-        WSADATA data{};
-        REQUIRE(WSAStartup(MAKEWORD(2, 2), &data) == 0);
-        listener_ = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
-        REQUIRE(listener_ != INVALID_SOCKET);
-        sockaddr_in address{};
-        address.sin_family = AF_INET;
-        address.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
-        address.sin_port = 0;
-        REQUIRE(bind(listener_, reinterpret_cast<const sockaddr*>(&address),
-                     sizeof(address)) == 0);
-        REQUIRE(listen(listener_, SOMAXCONN) == 0);
-        int address_size = sizeof(address);
-        REQUIRE(getsockname(listener_, reinterpret_cast<sockaddr*>(&address),
-                            &address_size) == 0);
-        endpoint_ = "http://127.0.0.1:" +
-                    std::to_string(ntohs(address.sin_port)) +
-                    "/v1/chat/completions";
-        worker_ = std::thread([this] { accept_connections(); });
+        init_socket();
+    }
+    // Sequenced constructor: first captured request gets responses[0], the
+    // second gets responses[1], etc.  After the sequence is exhausted the
+    // server falls back to the last entry so tests that request 4x can
+    // still line up sensibly.  Used by the retry tests to script a
+    // 500-500-200 recovery.
+    explicit LocalHttpServer(std::vector<std::string> responses)
+        : responses_(std::move(responses)) {
+        REQUIRE(!responses_.empty());
+        init_socket();
     }
 
     ~LocalHttpServer() {
@@ -246,6 +239,38 @@ public:
     }
 
 private:
+    void init_socket() {
+        WSADATA data{};
+        REQUIRE(WSAStartup(MAKEWORD(2, 2), &data) == 0);
+        listener_ = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
+        REQUIRE(listener_ != INVALID_SOCKET);
+        sockaddr_in address{};
+        address.sin_family = AF_INET;
+        address.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+        address.sin_port = 0;
+        REQUIRE(bind(listener_, reinterpret_cast<const sockaddr*>(&address),
+                     sizeof(address)) == 0);
+        REQUIRE(listen(listener_, SOMAXCONN) == 0);
+        int address_size = sizeof(address);
+        REQUIRE(getsockname(listener_, reinterpret_cast<sockaddr*>(&address),
+                            &address_size) == 0);
+        endpoint_ = "http://127.0.0.1:" +
+                    std::to_string(ntohs(address.sin_port)) +
+                    "/v1/chat/completions";
+        worker_ = std::thread([this] { accept_connections(); });
+    }
+
+    // Pick the response body for the accepted_index-th connection.  The
+    // single-response constructor uses response_ verbatim (may be empty
+    // when tests want the server to hang); the sequenced constructor
+    // walks responses_ and re-uses the tail for extra hits.
+    const std::string& pick_response(size_t index) const noexcept {
+        if (!responses_.empty()) {
+            return responses_[std::min(index, responses_.size() - 1)];
+        }
+        return response_;
+    }
+
     void accept_connections() noexcept {
         while (!stopping_.load(std::memory_order_acquire)) {
             const SOCKET client = accept(listener_, nullptr, nullptr);
@@ -304,17 +329,20 @@ private:
                 closesocket(client);
                 continue;
             }
+            size_t response_index = 0;
             {
                 std::lock_guard<std::mutex> lock(bodies_mutex_);
+                response_index = bodies_.size();
                 bodies_.emplace_back(request.substr(body_begin, content_length));
             }
             accepted_.fetch_add(1, std::memory_order_release);
-            if (!response_.empty()) {
+            const std::string& outgoing = pick_response(response_index);
+            if (!outgoing.empty()) {
                 size_t sent_total = 0;
-                while (sent_total < response_.size()) {
+                while (sent_total < outgoing.size()) {
                     const int sent = send(
-                        client, response_.data() + sent_total,
-                        static_cast<int>(response_.size() - sent_total), 0);
+                        client, outgoing.data() + sent_total,
+                        static_cast<int>(outgoing.size() - sent_total), 0);
                     if (sent == SOCKET_ERROR) {
                         break;
                     }
@@ -339,6 +367,7 @@ private:
     std::thread worker_;
     std::string endpoint_;
     std::string response_;
+    std::vector<std::string> responses_;
 };
 
 }  // namespace
@@ -4364,4 +4393,516 @@ TEST_CASE("conversation.list treats legacy documents missing pinned as unpinned"
     const Json fetched = dispatch(runtime, "conversation.get",
                                    {{"id", id}})["result"];
     REQUIRE(fetched["pinned"] == false);
+}
+
+TEST_CASE("conversation.stats aggregates totals, pinned, model + month buckets",
+          "[plugins][ai_editor][native][storage][stats]") {
+    RuntimeFixture fixture;
+    auto runtime = fixture.get();
+    REQUIRE(dispatch(runtime, "runtime.initialize").contains("result"));
+
+    // Empty history — averageMessages defaults to 0 rather than exploding on
+    // divide-by-zero, and savedAt bounds are null (not epoch zero) so UI can
+    // render "no data".
+    const Json empty = dispatch(runtime, "conversation.stats")["result"];
+    REQUIRE(empty["total"] == 0);
+    REQUIRE(empty["pinned"] == 0);
+    REQUIRE(empty["totalMessages"] == 0);
+    REQUIRE(empty["averageMessages"] == 0.0);
+    REQUIRE(empty["oldestSavedAt"].is_null());
+    REQUIRE(empty["newestSavedAt"].is_null());
+    REQUIRE(empty["byMonth"].is_array());
+    REQUIRE(empty["byMonth"].empty());
+
+    // Seed: 2 workspace convs (one gpt-4o pinned, one claude), 1 system conv
+    // (gpt-4o, unpinned) — totals let us verify byScope + byModel + pinned +
+    // messageCount aggregation.
+    const std::string a = dispatch(runtime, "conversation.create",
+                                    {{"title", "A"},
+                                     {"model", "gpt-4o"},
+                                     {"scope", "workspace"}})
+                              ["result"]["id"];
+    REQUIRE(dispatch(runtime, "conversation.append",
+                     {{"id", a},
+                      {"message", {{"role", "user"},
+                                   {"content", "hi"}}}})
+                .contains("result"));
+    REQUIRE(dispatch(runtime, "conversation.append",
+                     {{"id", a},
+                      {"message", {{"role", "assistant"},
+                                   {"content", "hello"}}}})
+                .contains("result"));
+    REQUIRE(dispatch(runtime, "conversation.pin",
+                     {{"id", a}}).contains("result"));
+
+    const std::string b = dispatch(runtime, "conversation.create",
+                                    {{"title", "B"},
+                                     {"model", "claude-3.5-sonnet"},
+                                     {"scope", "workspace"}})
+                              ["result"]["id"];
+    REQUIRE(dispatch(runtime, "conversation.append",
+                     {{"id", b},
+                      {"message", {{"role", "user"},
+                                   {"content", "q"}}}})
+                .contains("result"));
+
+    const std::string c = dispatch(runtime, "conversation.create",
+                                    {{"title", "C"},
+                                     {"model", "gpt-4o"},
+                                     {"scope", "system"}})
+                              ["result"]["id"];
+    REQUIRE(dispatch(runtime, "conversation.append",
+                     {{"id", c},
+                      {"message", {{"role", "user"},
+                                   {"content", "sys"}}}})
+                .contains("result"));
+    REQUIRE(dispatch(runtime, "conversation.append",
+                     {{"id", c},
+                      {"message", {{"role", "assistant"},
+                                   {"content", "ok"}}}})
+                .contains("result"));
+
+    // scope=all covers both workspace + system.
+    const Json all = dispatch(runtime, "conversation.stats")["result"];
+    REQUIRE(all["total"] == 3);
+    REQUIRE(all["pinned"] == 1);
+    REQUIRE(all["totalMessages"] == 5);
+    REQUIRE(all["byScope"]["workspace"] == 2);
+    REQUIRE(all["byScope"]["system"] == 1);
+    REQUIRE(all["byModel"]["gpt-4o"] == 2);
+    REQUIRE(all["byModel"]["claude-3.5-sonnet"] == 1);
+    // averageMessages is a double (5 / 3) — check with Approx-style tolerance
+    // via delta since Catch2 v3 has removed Approx from the default surface.
+    const double average = all["averageMessages"].get<double>();
+    REQUIRE(average > 1.66);
+    REQUIRE(average < 1.67);
+    REQUIRE(all["oldestSavedAt"].get<int64_t>() > 0);
+    REQUIRE(all["newestSavedAt"].get<int64_t>() >=
+            all["oldestSavedAt"].get<int64_t>());
+    // At least one YYYY-MM bucket exists and the total across buckets equals
+    // "total" — protects against accidental scope-doubling in the accumulator.
+    REQUIRE(!all["byMonth"].empty());
+    uint64_t month_sum = 0;
+    for (const auto& bucket : all["byMonth"]) {
+        REQUIRE(bucket["month"].is_string());
+        const std::string month = bucket["month"].get<std::string>();
+        REQUIRE(month.size() == 7);
+        REQUIRE(month[4] == '-');
+        month_sum += bucket["count"].get<uint64_t>();
+    }
+    REQUIRE(month_sum == 3);
+
+    // Scope-filtered variants: workspace sees a+b, system sees c only.
+    const Json workspace_stats = dispatch(runtime, "conversation.stats",
+                                           {{"scope", "workspace"}})["result"];
+    REQUIRE(workspace_stats["total"] == 2);
+    REQUIRE(workspace_stats["pinned"] == 1);
+    REQUIRE(workspace_stats["totalMessages"] == 3);
+    REQUIRE(workspace_stats["byModel"]["gpt-4o"] == 1);
+    REQUIRE(workspace_stats["byModel"]["claude-3.5-sonnet"] == 1);
+    REQUIRE(!workspace_stats["byScope"].contains("system"));
+
+    const Json system_stats = dispatch(runtime, "conversation.stats",
+                                        {{"scope", "system"}})["result"];
+    REQUIRE(system_stats["total"] == 1);
+    REQUIRE(system_stats["pinned"] == 0);
+    REQUIRE(system_stats["totalMessages"] == 2);
+    REQUIRE(system_stats["byModel"]["gpt-4o"] == 1);
+    REQUIRE(!system_stats["byModel"].contains("claude-3.5-sonnet"));
+
+    // Invalid scope must fail with INVALID_ARGUMENT.
+    const Json bad_scope = dispatch(runtime, "conversation.stats",
+                                     {{"scope", "bogus"}});
+    REQUIRE(bad_scope["error"]["data"]["status"] ==
+            SAO_AI_EDITOR_ERR_INVALID_ARGUMENT);
+}
+
+TEST_CASE("tools.register surfaces custom tools in tools.list and tools.call "
+          "returns the passthrough payload",
+          "[plugins][ai_editor][native][tools][custom]") {
+    RuntimeFixture fixture;
+    auto runtime = fixture.get();
+    REQUIRE(dispatch(runtime, "runtime.initialize").contains("result"));
+
+    // Baseline: four built-in tools before any custom registration.
+    const Json baseline = dispatch(runtime, "tools.list")["result"];
+    REQUIRE(baseline["tools"].is_array());
+    REQUIRE(baseline["tools"].size() == 4);
+
+    // Register a read-only custom tool with a real parameters schema.
+    const Json register_result = dispatch(
+        runtime, "tools.register",
+        {{"name", "translate"},
+         {"description", "Translate text between languages"},
+         {"parameters",
+          {{"type", "object"},
+           {"properties",
+            {{"text", {{"type", "string"}}},
+             {"target", {{"type", "string"}}}}},
+           {"required", Json::array({"text", "target"})}}},
+         {"readOnly", true}});
+    REQUIRE(register_result["result"]["ok"] == true);
+    REQUIRE(register_result["result"]["name"] == "translate");
+
+    // tools.list now surfaces five tools; the custom one carries custom:true
+    // and the readOnly + parameters schema we registered.
+    const Json after_register = dispatch(runtime, "tools.list")["result"];
+    REQUIRE(after_register["tools"].size() == 5);
+    bool found = false;
+    for (const auto& tool : after_register["tools"]) {
+        if (tool["name"] == "translate") {
+            found = true;
+            REQUIRE(tool["custom"] == true);
+            REQUIRE(tool["readOnly"] == true);
+            REQUIRE(tool["description"] == "Translate text between languages");
+            REQUIRE(tool["parameters"]["properties"].contains("text"));
+            // Read-only tools are always "allowed" regardless of mode.
+            REQUIRE(tool["permission"] == "allowed");
+        }
+    }
+    REQUIRE(found);
+
+    // tools.call routes to the custom handler and echoes back the arguments.
+    const Json call_result = dispatch(
+        runtime, "tools.call",
+        {{"mode", "agent"},
+         {"name", "translate"},
+         {"arguments",
+          {{"text", "hello"},
+           {"target", "zh"}}}})["result"];
+    REQUIRE(call_result["custom"] == true);
+    REQUIRE(call_result["name"] == "translate");
+    REQUIRE(call_result["arguments"]["text"] == "hello");
+    REQUIRE(call_result["arguments"]["target"] == "zh");
+
+    // Duplicating a built-in name must be rejected — otherwise the custom
+    // tool would silently hide behind the built-in.
+    const Json shadow = dispatch(runtime, "tools.register",
+                                  {{"name", "readFile"},
+                                   {"description", "override"}});
+    REQUIRE(shadow["error"]["data"]["status"] ==
+            SAO_AI_EDITOR_ERR_INVALID_ARGUMENT);
+}
+
+TEST_CASE("tools.register mutating tool respects ask/plan mode gating",
+          "[plugins][ai_editor][native][tools][custom][mode]") {
+    RuntimeFixture fixture;
+    auto runtime = fixture.get();
+    REQUIRE(dispatch(runtime, "runtime.initialize").contains("result"));
+
+    // Register a mutating (readOnly:false) tool — the runtime must apply the
+    // same ask=deny / plan=confirm gating it applies to editFile.
+    REQUIRE(dispatch(runtime, "tools.register",
+                     {{"name", "writeMemo"},
+                      {"description", "Write a memo"},
+                      {"readOnly", false}})
+                .contains("result"));
+
+    // ask mode blocks the call entirely.
+    const Json ask = dispatch(runtime, "tools.call",
+                              {{"mode", "ask"},
+                               {"name", "writeMemo"},
+                               {"arguments", {{"text", "hi"}}}});
+    REQUIRE(ask["error"]["data"]["status"] ==
+            SAO_AI_EDITOR_ERR_PERMISSION_DENIED);
+
+    // plan mode without confirmed returns CONFIRMATION_REQUIRED.
+    const Json plan = dispatch(runtime, "tools.call",
+                               {{"mode", "plan"},
+                                {"name", "writeMemo"},
+                                {"arguments", {{"text", "hi"}}}});
+    REQUIRE(plan["error"]["data"]["status"] ==
+            SAO_AI_EDITOR_ERR_CONFIRMATION_REQUIRED);
+
+    // plan mode with confirmed=true or agent mode executes normally.
+    const Json confirmed = dispatch(runtime, "tools.call",
+                                     {{"mode", "plan"},
+                                      {"name", "writeMemo"},
+                                      {"arguments",
+                                       {{"text", "hi"},
+                                        {"confirmed", true}}}})["result"];
+    REQUIRE(confirmed["custom"] == true);
+    REQUIRE(confirmed["name"] == "writeMemo");
+
+    const Json agent = dispatch(runtime, "tools.call",
+                                 {{"mode", "agent"},
+                                  {"name", "writeMemo"},
+                                  {"arguments", {{"text", "hi"}}}})["result"];
+    REQUIRE(agent["custom"] == true);
+
+    // tools.list in plan mode surfaces the mutating custom tool as "confirm";
+    // in ask mode as "disabled".
+    const Json plan_list = dispatch(runtime, "tools.list",
+                                     {{"mode", "plan"}})["result"];
+    for (const auto& tool : plan_list["tools"]) {
+        if (tool["name"] == "writeMemo") {
+            REQUIRE(tool["permission"] == "confirm");
+        }
+    }
+    const Json ask_list = dispatch(runtime, "tools.list",
+                                    {{"mode", "ask"}})["result"];
+    for (const auto& tool : ask_list["tools"]) {
+        if (tool["name"] == "writeMemo") {
+            REQUIRE(tool["permission"] == "disabled");
+        }
+    }
+}
+
+TEST_CASE("tools.unregister removes the custom tool and is idempotent-safe",
+          "[plugins][ai_editor][native][tools][custom][unregister]") {
+    RuntimeFixture fixture;
+    auto runtime = fixture.get();
+    REQUIRE(dispatch(runtime, "runtime.initialize").contains("result"));
+
+    REQUIRE(dispatch(runtime, "tools.register",
+                     {{"name", "ephemeral"},
+                      {"description", "temp"}})
+                .contains("result"));
+
+    const Json listed = dispatch(runtime, "tools.list")["result"];
+    REQUIRE(listed["tools"].size() == 5);
+
+    const Json removed = dispatch(runtime, "tools.unregister",
+                                   {{"name", "ephemeral"}})["result"];
+    REQUIRE(removed["ok"] == true);
+    REQUIRE(removed["name"] == "ephemeral");
+
+    const Json after_remove = dispatch(runtime, "tools.list")["result"];
+    REQUIRE(after_remove["tools"].size() == 4);
+    for (const auto& tool : after_remove["tools"]) {
+        REQUIRE(tool["name"] != "ephemeral");
+    }
+
+    // Calling the removed tool must now fall through to ERR_NOT_FOUND.
+    const Json missing_call = dispatch(runtime, "tools.call",
+                                        {{"mode", "agent"},
+                                         {"name", "ephemeral"},
+                                         {"arguments", Json::object()}});
+    REQUIRE(missing_call["error"]["data"]["status"] ==
+            SAO_AI_EDITOR_ERR_NOT_FOUND);
+
+    // Unregistering something that never existed must produce NOT_FOUND so
+    // callers can distinguish that from a bad-payload error.
+    const Json missing_unreg = dispatch(runtime, "tools.unregister",
+                                         {{"name", "never-existed"}});
+    REQUIRE(missing_unreg["error"]["data"]["status"] ==
+            SAO_AI_EDITOR_ERR_NOT_FOUND);
+
+    // Payload validation: empty name / missing name must be INVALID_ARGUMENT.
+    const Json bad_register = dispatch(runtime, "tools.register",
+                                        {{"description", "no name"}});
+    REQUIRE(bad_register["error"]["data"]["status"] ==
+            SAO_AI_EDITOR_ERR_INVALID_ARGUMENT);
+}
+
+namespace {
+
+// Build a canned HTTP response body — helper used by the retry tests below
+// so the 500 / 200 wire framing stays uniform.  `content_length` matters
+// because LocalHttpServer's client parses it to know when a request body
+// is done, and the *response* framing has to match what WinHTTP expects
+// (Content-Length + Connection: close, no chunked encoding).
+std::string canned_http_response(int status_code,
+                                  std::string_view status_text,
+                                  std::string_view body,
+                                  std::string_view extra_headers = {}) {
+    std::string wire = "HTTP/1.1 " + std::to_string(status_code) + " " +
+                       std::string(status_text) + "\r\n";
+    wire += "Content-Type: application/json\r\n";
+    wire += "Content-Length: " + std::to_string(body.size()) + "\r\n";
+    if (!extra_headers.empty()) {
+        wire.append(extra_headers.data(), extra_headers.size());
+    }
+    wire += "Connection: close\r\n\r\n";
+    wire.append(body.data(), body.size());
+    return wire;
+}
+
+// Poll run.status until it leaves running/pending or `budget_ms` elapses.
+Json wait_for_run_terminal(sao_ai_editor_runtime_t runtime,
+                            const std::string& run_id,
+                            uint32_t budget_ms) {
+    Json status;
+    const ULONGLONG started = GetTickCount64();
+    do {
+        status = dispatch(runtime, "run.status", {{"runId", run_id}})
+                     ["result"];
+        const std::string& state = status["status"];
+        if (state != "running" && state != "pending") {
+            return status;
+        }
+        Sleep(20);
+    } while (GetTickCount64() - started < budget_ms);
+    return status;
+}
+
+}  // namespace
+
+TEST_CASE("chat.run retries transient 500s and completes after recovery",
+          "[plugins][ai_editor][native][runs][retry]") {
+    // Sequence the fixture server so the first two hits fail with 500 and
+    // the third succeeds — the retry policy (initialDelayMs=20 keeps the
+    // whole test sub-second) should absorb both errors and surface the
+    // final 200 as a normal completion to the caller.
+    const std::string ok_body =
+        R"({"id":"chat-retry-ok","model":"fixture-model",)"
+        R"("choices":[{"message":{"role":"assistant",)"
+        R"("content":"final"},"finish_reason":"stop"}],)"
+        R"("usage":{"prompt_tokens":1,"completion_tokens":1,)"
+        R"("total_tokens":2}})";
+    const std::string err_body =
+        R"({"error":{"type":"server_error","message":"boom"}})";
+    LocalHttpServer server(std::vector<std::string>{
+        canned_http_response(500, "Internal Server Error", err_body),
+        canned_http_response(500, "Internal Server Error", err_body),
+        canned_http_response(200, "OK", ok_body),
+    });
+    RuntimeFixture fixture;
+    const Json params{
+        {"provider", {{"id", "retry-fixture"},
+                       {"endpoint", server.endpoint()}}},
+        {"model", "fixture-model"},
+        {"messages", Json::array(
+             {{{"role", "user"}, {"content", "hello"}}})},
+        {"stream", false},
+        {"timeoutMs", 5'000},
+        {"retry", {{"maxAttempts", 3},
+                    {"initialDelayMs", 20},
+                    {"maxDelayMs", 200},
+                    {"multiplier", 2.0},
+                    {"jitter", 0.0}}}};
+    const Json started = dispatch(fixture.get(), "chat.run", params);
+    REQUIRE(started.contains("result"));
+    const std::string run_id = started["result"]["runId"];
+    REQUIRE(server.wait_for_connections(3, 5'000));
+    const Json terminal = wait_for_run_terminal(fixture.get(), run_id, 8'000);
+    REQUIRE(terminal["status"] == "completed");
+    REQUIRE(terminal["result"]["content"] == "final");
+    // Server saw exactly three attempts.
+    REQUIRE(server.captured_bodies().size() == 3);
+}
+
+TEST_CASE("chat.run maxAttempts=1 disables retries and surfaces the first "
+          "500 as a failure",
+          "[plugins][ai_editor][native][runs][retry]") {
+    const std::string err_body =
+        R"({"error":{"type":"server_error","message":"kaboom"}})";
+    LocalHttpServer server(canned_http_response(500, "Internal Server Error",
+                                                 err_body));
+    RuntimeFixture fixture;
+    const Json params{
+        {"provider", {{"id", "retry-off-fixture"},
+                       {"endpoint", server.endpoint()}}},
+        {"model", "fixture-model"},
+        {"messages", Json::array(
+             {{{"role", "user"}, {"content", "hi"}}})},
+        {"stream", false},
+        {"timeoutMs", 5'000},
+        {"retry", {{"maxAttempts", 1}}}};
+    const Json started = dispatch(fixture.get(), "chat.run", params);
+    REQUIRE(started.contains("result"));
+    const std::string run_id = started["result"]["runId"];
+    REQUIRE(server.wait_for_connections(1, 2'000));
+    const Json terminal = wait_for_run_terminal(fixture.get(), run_id, 3'000);
+    REQUIRE(terminal["status"] == "failed");
+    // Retries were disabled so we must see exactly one attempt on the wire.
+    Sleep(200);  // guard: give any (bug) extra attempts time to land.
+    REQUIRE(server.captured_bodies().size() == 1);
+    // Failed run.result carries the HTTP transport payload (httpStatus + body)
+    // directly — run_status forwards run->result as-is so the 500 body is
+    // visible to callers who want to render provider error details.
+    REQUIRE(terminal.contains("result"));
+    REQUIRE(terminal["result"].contains("httpStatus"));
+    REQUIRE(terminal["result"]["httpStatus"] == 500);
+}
+
+TEST_CASE("chat.run emits chat.retry events before each backoff sleep",
+          "[plugins][ai_editor][native][runs][retry][events]") {
+    // Two 500s followed by a 200 — we assert one chat.retry event fires
+    // before each of the two retry attempts, then run.completed lands
+    // as usual.  Retry-After: 1 on the first 500 is echoed in the
+    // delayMs of the first chat.retry payload so we exercise the
+    // Retry-After header path end-to-end.
+    const std::string ok_body =
+        R"({"id":"chat-retry-events","model":"fixture-model",)"
+        R"("choices":[{"message":{"role":"assistant",)"
+        R"("content":"final"},"finish_reason":"stop"}]})";
+    const std::string err_body_1 =
+        R"({"error":{"type":"rate_limited","message":"slow down"}})";
+    const std::string err_body_2 =
+        R"({"error":{"type":"server_error","message":"boom"}})";
+    LocalHttpServer server(std::vector<std::string>{
+        canned_http_response(429, "Too Many Requests", err_body_1,
+                              "Retry-After: 1\r\n"),
+        canned_http_response(500, "Internal Server Error", err_body_2),
+        canned_http_response(200, "OK", ok_body),
+    });
+    RuntimeFixture fixture;
+    const Json params{
+        {"provider", {{"id", "retry-events-fixture"},
+                       {"endpoint", server.endpoint()}}},
+        {"model", "fixture-model"},
+        {"messages", Json::array(
+             {{{"role", "user"}, {"content", "trigger"}}})},
+        {"stream", false},
+        {"timeoutMs", 5'000},
+        // Set base delay low so the test finishes fast; Retry-After still
+        // wins on attempt 2 because respectRetryAfter defaults to true.
+        {"retry", {{"maxAttempts", 4},
+                    {"initialDelayMs", 20},
+                    {"maxDelayMs", 2'000},
+                    {"multiplier", 2.0},
+                    {"jitter", 0.0}}}};
+    const Json started = dispatch(fixture.get(), "chat.run", params);
+    REQUIRE(started.contains("result"));
+    const std::string run_id = started["result"]["runId"];
+    REQUIRE(server.wait_for_connections(3, 5'000));
+    const Json terminal = wait_for_run_terminal(fixture.get(), run_id, 8'000);
+    REQUIRE(terminal["status"] == "completed");
+
+    // Drain the event queue and look for chat.retry + run.completed.
+    std::vector<Json> retry_events;
+    bool saw_run_completed = false;
+    for (size_t index = 0; index < 128; ++index) {
+        uint32_t required = 0;
+        const int32_t queried = sao_ai_editor_runtime_next_event(
+            fixture.get(), nullptr, 0, &required);
+        if (queried == SAO_AI_EDITOR_OK && required == 0) {
+            break;
+        }
+        if (queried != SAO_AI_EDITOR_ERR_BUFFER_TOO_SMALL) {
+            break;
+        }
+        std::vector<char> event(static_cast<size_t>(required) + 1);
+        const int32_t drain = sao_ai_editor_runtime_next_event(
+            fixture.get(), event.data(),
+            static_cast<uint32_t>(event.size()), &required);
+        if (drain != SAO_AI_EDITOR_OK) {
+            break;
+        }
+        const Json notification =
+            Json::parse(event.data(), event.data() + required);
+        if (notification.value("method", "") != "sao.event") {
+            continue;
+        }
+        const std::string event_name =
+            notification["params"].value("event", "");
+        if (event_name == "chat.retry") {
+            retry_events.push_back(
+                notification["params"].value("payload", Json::object()));
+        } else if (event_name == "run.completed") {
+            saw_run_completed = true;
+        }
+    }
+    REQUIRE(saw_run_completed);
+    // Two retries (attempt 2 recovers from 429, attempt 3 recovers from 500).
+    REQUIRE(retry_events.size() == 2);
+    REQUIRE(retry_events[0]["runId"] == run_id);
+    REQUIRE(retry_events[0]["attempt"] == 2);
+    REQUIRE(retry_events[0]["maxAttempts"] == 4);
+    REQUIRE(retry_events[0]["reason"] == "429");
+    // Retry-After: 1 → 1000 ms wins over the 20 ms base backoff.
+    REQUIRE(retry_events[0]["delayMs"].get<int64_t>() >= 900);
+    REQUIRE(retry_events[1]["attempt"] == 3);
+    REQUIRE(retry_events[1]["reason"] == "http_5xx");
 }

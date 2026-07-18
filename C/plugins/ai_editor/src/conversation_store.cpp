@@ -7,6 +7,8 @@
 #include <cctype>
 #include <chrono>
 #include <cstdio>
+#include <ctime>
+#include <map>
 #include <string>
 #include <vector>
 
@@ -534,6 +536,138 @@ int32_t ConversationStore::remove(std::string_view conversation_id,
     }
     result = Json{{"ok", removed}, {"id", std::string(conversation_id)}};
     return removed ? SAO_AI_EDITOR_OK : SAO_AI_EDITOR_ERR_NOT_FOUND;
+}
+
+int32_t ConversationStore::stats(std::string_view scope, Json& result) const {
+    if (scope != "all" && scope != "workspace" && scope != "system") {
+        return SAO_AI_EDITOR_ERR_INVALID_ARGUMENT;
+    }
+    const std::vector<std::string_view> selected = scope == "all"
+        ? std::vector<std::string_view>{"workspace", "system"}
+        : std::vector<std::string_view>{scope};
+    uint64_t total = 0;
+    uint64_t pinned = 0;
+    uint64_t total_messages = 0;
+    // savedAt is stored as an unsigned unix millis; use int64 optional so an
+    // empty history returns null rather than 0 (which callers would mistake
+    // for 1970-01-01 UTC).
+    bool has_saved_at = false;
+    int64_t oldest_saved_at = 0;
+    int64_t newest_saved_at = 0;
+    // Deterministic key ordering: nlohmann::json::object() sorts alphabetically
+    // when serialized, so accumulating into a plain object gives stable output
+    // for byScope / byModel across runs (helps snapshot tests + UI diffs).
+    Json by_scope = Json::object();
+    Json by_model = Json::object();
+    // byMonth needs ascending order; keep counts in a std::map and copy into
+    // an array at the end.  YYYY-MM keys are lexicographically sortable so we
+    // do not need a secondary numeric compare.
+    std::map<std::string, uint64_t> by_month;
+    for (const auto selected_scope : selected) {
+        const auto root = scopes_.history_root(selected_scope);
+        std::error_code error;
+        if (!std::filesystem::is_directory(root, error)) {
+            continue;
+        }
+        for (const auto& item :
+             std::filesystem::directory_iterator(root, error)) {
+            if (error) {
+                error.clear();
+                continue;
+            }
+            std::error_code file_error;
+            if (!item.is_regular_file(file_error) ||
+                item.path().extension() != L".json") {
+                continue;
+            }
+            std::string text;
+            if (read_text_file(item.path(), kMaximumJsonBytes, text) !=
+                SAO_AI_EDITOR_OK) {
+                continue;
+            }
+            Json document = Json::parse(text, nullptr, false);
+            if (!document.is_object()) {
+                continue;
+            }
+            ++total;
+            if (document.value("pinned", false)) {
+                ++pinned;
+            }
+            const std::string document_scope =
+                document.value("scope", std::string(selected_scope));
+            by_scope[document_scope] =
+                by_scope.value(document_scope, uint64_t{0}) + 1;
+            const std::string model = document.value("model", std::string{});
+            // Empty model buckets under "" (kept as an explicit key so UI can
+            // decide whether to display "unspecified" — dropping it would hide
+            // conversations that never picked a model).
+            by_model[model] = by_model.value(model, uint64_t{0}) + 1;
+            uint64_t message_count = 0;
+            if (document.contains("messageCount") &&
+                document["messageCount"].is_number()) {
+                const int64_t stored =
+                    document["messageCount"].get<int64_t>();
+                if (stored > 0) {
+                    message_count = static_cast<uint64_t>(stored);
+                }
+            } else if (document.contains("messages") &&
+                       document["messages"].is_array()) {
+                message_count = document["messages"].size();
+            }
+            total_messages += message_count;
+            const int64_t saved_at = document.value("savedAt", int64_t{0});
+            if (saved_at > 0) {
+                if (!has_saved_at) {
+                    oldest_saved_at = saved_at;
+                    newest_saved_at = saved_at;
+                    has_saved_at = true;
+                } else {
+                    if (saved_at < oldest_saved_at) {
+                        oldest_saved_at = saved_at;
+                    }
+                    if (saved_at > newest_saved_at) {
+                        newest_saved_at = saved_at;
+                    }
+                }
+                // Bucket into UTC YYYY-MM.  Using gmtime keeps the buckets
+                // consistent regardless of the runtime host's local timezone,
+                // which matters because savedAt is unix millis (UTC).
+                const std::time_t seconds =
+                    static_cast<std::time_t>(saved_at / 1000);
+                std::tm utc{};
+                if (gmtime_s(&utc, &seconds) == 0) {
+                    char month_key[8]{};
+                    std::snprintf(month_key, sizeof(month_key), "%04d-%02d",
+                                  utc.tm_year + 1900, utc.tm_mon + 1);
+                    ++by_month[month_key];
+                }
+            }
+        }
+    }
+    Json by_month_array = Json::array();
+    for (const auto& entry : by_month) {
+        by_month_array.push_back(Json{{"month", entry.first},
+                                       {"count", entry.second}});
+    }
+    // Avoid divide-by-zero by clamping the denominator to 1; the ratio is
+    // still 0 for empty history because total_messages is 0.
+    const double average_messages =
+        static_cast<double>(total_messages) /
+        static_cast<double>(std::max<uint64_t>(total, 1U));
+    result = Json{{"total", total},
+                  {"pinned", pinned},
+                  {"byScope", std::move(by_scope)},
+                  {"byModel", std::move(by_model)},
+                  {"byMonth", std::move(by_month_array)},
+                  {"totalMessages", total_messages},
+                  {"averageMessages", average_messages},
+                  {"oldestSavedAt", has_saved_at
+                                        ? Json(oldest_saved_at)
+                                        : Json(nullptr)},
+                  {"newestSavedAt", has_saved_at
+                                        ? Json(newest_saved_at)
+                                        : Json(nullptr)}};
+    return SAO_AI_EDITOR_OK;
 }
 
 int32_t ConversationStore::set_pinned(std::string_view conversation_id,

@@ -4,10 +4,20 @@
 
 #include <algorithm>
 #include <array>
+#include <cctype>
+#include <cerrno>
+#include <charconv>
 #include <chrono>
+#include <cmath>
+#include <ctime>
+#include <cwchar>
+#include <limits>
 #include <memory>
 #include <optional>
+#include <random>
+#include <string>
 #include <string_view>
+#include <thread>
 #include <variant>
 
 namespace sao::ai_editor::native {
@@ -238,7 +248,8 @@ int32_t await_winhttp_operation(AsyncRequestHandle& request,
                                 AsyncOperationState& state,
                                 const ChatCancellation& cancellation,
                                 uint32_t timeout_ms,
-                                Operation&& operation) {
+                                Operation&& operation,
+                                bool* client_timeout_flag = nullptr) {
     state.prepare();
     if (!operation()) {
         return map_http_status(cancellation, GetLastError());
@@ -252,6 +263,9 @@ int32_t await_winhttp_operation(AsyncRequestHandle& request,
         const ULONGLONG elapsed = GetTickCount64() - started;
         if (elapsed >= timeout_ms) {
             request.close();
+            if (client_timeout_flag != nullptr) {
+                *client_timeout_flag = true;
+            }
             return SAO_AI_EDITOR_ERR_HTTP;
         }
         const DWORD wait_ms = static_cast<DWORD>(std::min<ULONGLONG>(
@@ -274,7 +288,8 @@ bool append_response(AsyncRequestHandle& request,
                      uint32_t timeout_ms,
                      std::string& response,
                      const std::function<int32_t(std::string_view)>& consume,
-                     int32_t& status) {
+                     int32_t& status,
+                     bool* client_timeout_flag = nullptr) {
     std::array<char, 16U * 1024U> buffer{};
     for (;;) {
         if (cancellation.cancelled()) {
@@ -284,7 +299,8 @@ bool append_response(AsyncRequestHandle& request,
         status = await_winhttp_operation(
             request, operation_state, cancellation, timeout_ms, [&] {
                 return WinHttpQueryDataAvailable(request.get(), nullptr) != FALSE;
-        });
+            },
+            client_timeout_flag);
         if (status != SAO_AI_EDITOR_OK) {
             return false;
         }
@@ -300,7 +316,8 @@ bool append_response(AsyncRequestHandle& request,
                 request, operation_state, cancellation, timeout_ms, [&] {
                     return WinHttpReadData(request.get(), buffer.data(), requested,
                                            nullptr) != FALSE;
-            });
+                },
+                client_timeout_flag);
             if (status != SAO_AI_EDITOR_OK) {
                 return false;
             }
@@ -465,6 +482,20 @@ int32_t perform_openai_chat(const HttpChatRequest& request,
     }
 
     int32_t final_status = SAO_AI_EDITOR_OK;
+    // Latched by await_winhttp_operation when the wait loop hits the caller's
+    // deadline (vs a server-side error).  The retry loop uses this to skip
+    // network-class retries — client timeouts almost never resolve just by
+    // reissuing the request, and they would blow past the timeout budget.
+    bool client_timeout = false;
+    const auto stamp_timeout = [&](int32_t status) -> int32_t {
+        if (status != SAO_AI_EDITOR_OK && client_timeout) {
+            if (!result.is_object()) {
+                result = Json::object();
+            }
+            result["clientTimeout"] = true;
+        }
+        return status;
+    };
     std::wstring authorization_line;
     if (!request.authorization.empty() &&
         valid_utf8(request.authorization)) {
@@ -494,15 +525,17 @@ int32_t perform_openai_chat(const HttpChatRequest& request,
                        WINHTTP_NO_REQUEST_DATA, 0,
                        static_cast<DWORD>(request.request_json.size()),
                        callback_context) != FALSE;
-        });
+        },
+        &client_timeout);
     if (final_status != SAO_AI_EDITOR_OK) {
-        return final_status;
+        return stamp_timeout(final_status);
     }
     size_t written = 0;
     while (written < request.request_json.size()) {
         const ULONGLONG send_elapsed = GetTickCount64() - send_started;
         if (send_elapsed >= timeout_ms) {
-            return SAO_AI_EDITOR_ERR_HTTP;
+            client_timeout = true;
+            return stamp_timeout(SAO_AI_EDITOR_ERR_HTTP);
         }
         const DWORD remaining =
             static_cast<DWORD>(request.request_json.size() - written);
@@ -512,9 +545,10 @@ int32_t perform_openai_chat(const HttpChatRequest& request,
                 return WinHttpWriteData(request_handle.get(),
                                         request.request_json.data() + written,
                                         remaining, nullptr) != FALSE;
-            });
+            },
+            &client_timeout);
         if (final_status != SAO_AI_EDITOR_OK) {
-            return final_status;
+            return stamp_timeout(final_status);
         }
         const DWORD chunk_written =
             operation_state.transferred.load(std::memory_order_acquire);
@@ -526,9 +560,10 @@ int32_t perform_openai_chat(const HttpChatRequest& request,
     final_status = await_winhttp_operation(
         request_handle, operation_state, cancellation, timeout_ms, [&] {
             return WinHttpReceiveResponse(request_handle.get(), nullptr) != FALSE;
-        });
+        },
+        &client_timeout);
     if (final_status != SAO_AI_EDITOR_OK) {
-        return final_status;
+        return stamp_timeout(final_status);
     }
     // Non-stream requests only get one payload from the server, so treat the
     // moment we receive headers as the first-token proxy.  Streaming requests
@@ -600,9 +635,9 @@ int32_t perform_openai_chat(const HttpChatRequest& request,
         : std::function<int32_t(std::string_view)>();
     const bool read_ok = append_response(
         request_handle, operation_state, cancellation, timeout_ms, response,
-        consume, final_status);
+        consume, final_status, &client_timeout);
     if (!read_ok) {
-        return final_status;
+        return stamp_timeout(final_status);
     }
 
     if (http_status < 200 || http_status >= 300) {
@@ -611,6 +646,88 @@ int32_t perform_openai_chat(const HttpChatRequest& request,
                       {"body", error_body.is_discarded()
                                    ? Json(response)
                                    : std::move(error_body)}};
+        // Best-effort Retry-After capture (retry loop honours this so the
+        // sleep respects the server's advertised backoff).  Values may be
+        // either delta-seconds ("30") or an HTTP-date; both are supported.
+        // Anything unparseable is silently ignored.
+        DWORD retry_after_size = 0;
+        WinHttpQueryHeaders(request_handle.get(),
+                            WINHTTP_QUERY_CUSTOM,
+                            L"Retry-After", WINHTTP_NO_OUTPUT_BUFFER,
+                            &retry_after_size, WINHTTP_NO_HEADER_INDEX);
+        if (retry_after_size > 0 &&
+            GetLastError() == ERROR_INSUFFICIENT_BUFFER) {
+            std::wstring header((retry_after_size / sizeof(wchar_t)) + 1,
+                                L'\0');
+            DWORD header_bytes = retry_after_size;
+            if (WinHttpQueryHeaders(request_handle.get(),
+                                    WINHTTP_QUERY_CUSTOM,
+                                    L"Retry-After", header.data(),
+                                    &header_bytes,
+                                    WINHTTP_NO_HEADER_INDEX)) {
+                header.resize(header_bytes / sizeof(wchar_t));
+                // Trim NULs / whitespace on both sides.
+                while (!header.empty() &&
+                       (header.back() == L'\0' || header.back() == L' ')) {
+                    header.pop_back();
+                }
+                size_t start = 0;
+                while (start < header.size() && header[start] == L' ') {
+                    ++start;
+                }
+                header.erase(0, start);
+                if (!header.empty()) {
+                    // Try numeric delta-seconds first (fast path).
+                    bool numeric = !header.empty();
+                    for (const wchar_t ch : header) {
+                        if (ch < L'0' || ch > L'9') {
+                            numeric = false;
+                            break;
+                        }
+                    }
+                    int64_t retry_after_ms = -1;
+                    if (numeric) {
+                        wchar_t* end = nullptr;
+                        errno = 0;
+                        const long long seconds =
+                            std::wcstoll(header.c_str(), &end, 10);
+                        if (errno == 0 && end != nullptr && *end == L'\0' &&
+                            seconds >= 0) {
+                            retry_after_ms =
+                                static_cast<int64_t>(seconds) * 1000;
+                        }
+                    } else {
+                        // HTTP-date via WinHTTP helper (RFC 7231 § 7.1.1.1).
+                        SYSTEMTIME parsed{};
+                        if (WinHttpTimeToSystemTime(header.c_str(), &parsed)) {
+                            FILETIME then_ft{};
+                            FILETIME now_ft{};
+                            SystemTimeToFileTime(&parsed, &then_ft);
+                            GetSystemTimeAsFileTime(&now_ft);
+                            const uint64_t then =
+                                (static_cast<uint64_t>(then_ft.dwHighDateTime)
+                                     << 32) |
+                                then_ft.dwLowDateTime;
+                            const uint64_t now =
+                                (static_cast<uint64_t>(now_ft.dwHighDateTime)
+                                     << 32) |
+                                now_ft.dwLowDateTime;
+                            if (then > now) {
+                                // FILETIME ticks are 100 ns.
+                                retry_after_ms =
+                                    static_cast<int64_t>((then - now) /
+                                                          10'000ULL);
+                            } else {
+                                retry_after_ms = 0;
+                            }
+                        }
+                    }
+                    if (retry_after_ms >= 0) {
+                        result["retryAfterMs"] = retry_after_ms;
+                    }
+                }
+            }
+        }
         return SAO_AI_EDITOR_ERR_HTTP;
     }
     if (request.stream) {
@@ -648,6 +765,284 @@ int32_t perform_openai_chat(const HttpChatRequest& request,
         attach_metrics(result, SteadyClock::now());
     }
     return decode_status;
+}
+
+RetryPolicy RetryPolicy::from_json(const Json& value) {
+    RetryPolicy policy;
+    if (!value.is_object()) {
+        return policy;
+    }
+    const auto pick_u32 = [&](const char* key, uint32_t& out) {
+        const auto it = value.find(key);
+        if (it == value.end()) {
+            return;
+        }
+        if (it->is_number_integer()) {
+            const auto raw = it->get<int64_t>();
+            if (raw >= 0) {
+                out = static_cast<uint32_t>(
+                    std::min<int64_t>(raw, std::numeric_limits<uint32_t>::max()));
+            }
+        } else if (it->is_number()) {
+            const auto raw = it->get<double>();
+            if (raw >= 0.0) {
+                out = static_cast<uint32_t>(
+                    std::min<double>(raw,
+                                     static_cast<double>(
+                                         std::numeric_limits<uint32_t>::max())));
+            }
+        }
+    };
+    const auto pick_bool = [&](const char* key, bool& out) {
+        const auto it = value.find(key);
+        if (it != value.end() && it->is_boolean()) {
+            out = it->get<bool>();
+        }
+    };
+    pick_u32("maxAttempts", policy.max_attempts);
+    pick_u32("initialDelayMs", policy.initial_delay_ms);
+    pick_u32("maxDelayMs", policy.max_delay_ms);
+    if (const auto it = value.find("multiplier");
+        it != value.end() && it->is_number()) {
+        const auto raw = it->get<double>();
+        if (std::isfinite(raw) && raw >= 1.0) {
+            policy.multiplier = raw;
+        }
+    }
+    if (const auto it = value.find("jitter");
+        it != value.end() && it->is_number()) {
+        const auto raw = it->get<double>();
+        if (std::isfinite(raw) && raw >= 0.0 && raw <= 1.0) {
+            policy.jitter = raw;
+        }
+    }
+    if (const auto it = value.find("retryOnStatuses");
+        it != value.end() && it->is_array()) {
+        std::vector<uint32_t> parsed;
+        parsed.reserve(it->size());
+        for (const auto& entry : *it) {
+            if (entry.is_number_integer()) {
+                const auto raw = entry.get<int64_t>();
+                if (raw >= 100 && raw <= 599) {
+                    parsed.push_back(static_cast<uint32_t>(raw));
+                }
+            }
+        }
+        // Empty array = "never retry on status" — respect the caller intent
+        // rather than silently reverting to defaults.
+        policy.retry_on_statuses = std::move(parsed);
+    }
+    pick_bool("retryOnNetwork", policy.retry_on_network);
+    if (const auto it = value.find("idempotencyKey");
+        it != value.end() && it->is_string()) {
+        policy.idempotency_key = it->get<std::string>();
+    }
+    pick_bool("respectRetryAfter", policy.respect_retry_after);
+    // Legacy spelling: `retryAfterHeader` was the schema documented in the
+    // R7 handoff; support both to avoid breaking config that landed early.
+    pick_bool("retryAfterHeader", policy.respect_retry_after);
+    // Cap max_attempts at a safe upper bound so a stray large integer cannot
+    // wedge the runtime in a multi-minute retry loop.
+    if (policy.max_attempts > 10) {
+        policy.max_attempts = 10;
+    }
+    return policy;
+}
+
+bool RetryPolicy::should_retry_status(uint32_t code) const noexcept {
+    return std::find(retry_on_statuses.begin(), retry_on_statuses.end(),
+                     code) != retry_on_statuses.end();
+}
+
+namespace {
+
+// Cancellable sleep — checks the cancellation flag at ~50 ms intervals so
+// callers that Ctrl-C mid-backoff observe the same latency as any other
+// HTTP operation.  Returns true when the full delay elapsed, false when
+// cancellation woke the sleep early.
+bool cancellable_sleep(uint32_t delay_ms,
+                       const ChatCancellation& cancellation) {
+    constexpr uint32_t slice_ms = 50;
+    uint32_t remaining = delay_ms;
+    while (remaining > 0) {
+        if (cancellation.cancelled()) {
+            return false;
+        }
+        const uint32_t slice = std::min(slice_ms, remaining);
+        std::this_thread::sleep_for(std::chrono::milliseconds(slice));
+        remaining -= slice;
+    }
+    return !cancellation.cancelled();
+}
+
+uint32_t compute_backoff_ms(const RetryPolicy& policy, uint32_t attempt,
+                            std::mt19937_64& rng) {
+    // attempt is 1-based (first retry == attempt 1 in this helper's frame).
+    if (policy.initial_delay_ms == 0) {
+        return 0;
+    }
+    double base = static_cast<double>(policy.initial_delay_ms);
+    // Exponential growth: base * multiplier^(attempt-1).  Guarded against
+    // multiplier<=0 upstream via from_json's `raw >= 1.0` gate.
+    for (uint32_t index = 1; index < attempt; ++index) {
+        base *= policy.multiplier;
+        if (base >= static_cast<double>(policy.max_delay_ms)) {
+            base = static_cast<double>(policy.max_delay_ms);
+            break;
+        }
+    }
+    if (base > static_cast<double>(policy.max_delay_ms)) {
+        base = static_cast<double>(policy.max_delay_ms);
+    }
+    if (policy.jitter > 0.0) {
+        std::uniform_real_distribution<double> dist(0.0, 1.0);
+        const double random = dist(rng);
+        const double scale =
+            1.0 - (policy.jitter * 0.5) + (policy.jitter * random);
+        base *= scale;
+    }
+    if (base < 0.0) {
+        base = 0.0;
+    }
+    if (base > static_cast<double>(std::numeric_limits<uint32_t>::max())) {
+        base = static_cast<double>(std::numeric_limits<uint32_t>::max());
+    }
+    return static_cast<uint32_t>(base);
+}
+
+// Distinguish a "server said 4xx/5xx" HTTP failure (result contains
+// httpStatus) from a transport-level failure (no status captured).  Used
+// to route between the retry_on_statuses / retry_on_network branches.
+bool result_has_http_status(const Json& result, uint32_t& out_status) {
+    if (!result.is_object()) {
+        return false;
+    }
+    const auto it = result.find("httpStatus");
+    if (it == result.end() || !it->is_number_integer()) {
+        return false;
+    }
+    const auto raw = it->get<int64_t>();
+    if (raw < 100 || raw > 599) {
+        return false;
+    }
+    out_status = static_cast<uint32_t>(raw);
+    return true;
+}
+
+// True when perform_openai_chat latched the "client timeout" sentinel via
+// stamp_timeout.  Client-side deadline hits almost never recover just by
+// reissuing the request within the same budget, so we exclude them from
+// the network-retry branch even when retry_on_network is enabled.  This
+// keeps workflows.cancel-style tests (which lean on short timeouts to
+// wake a blocked HTTP wait) unaffected by the retry loop.
+bool result_is_client_timeout(const Json& result) {
+    return result.is_object() && result.value("clientTimeout", false);
+}
+
+}  // namespace
+
+int32_t perform_openai_chat_with_retry(
+    const HttpChatRequest& request,
+    ChatCancellation& cancellation,
+    const StreamEventCallback& callback,
+    const RetryNotifyCallback& on_retry,
+    Json& result) {
+    // If the caller injected an idempotency key, splice it into
+    // extra_headers so the transport layer sends the same key on every
+    // retry.  We only append when the caller has not already supplied
+    // the header themselves (case-insensitive check).
+    HttpChatRequest working = request;
+    if (!working.retry.idempotency_key.empty()) {
+        const std::string lower_hdr = [&] {
+            std::string tmp = working.extra_headers;
+            std::transform(tmp.begin(), tmp.end(), tmp.begin(),
+                           [](unsigned char ch) {
+                               return static_cast<char>(std::tolower(ch));
+                           });
+            return tmp;
+        }();
+        if (lower_hdr.find("idempotency-key:") == std::string::npos) {
+            working.extra_headers +=
+                "Idempotency-Key: " + working.retry.idempotency_key + "\r\n";
+        }
+    }
+
+    const uint32_t max_attempts = std::max<uint32_t>(working.retry.max_attempts, 1);
+    std::mt19937_64 rng(static_cast<uint64_t>(
+        std::chrono::steady_clock::now().time_since_epoch().count()));
+
+    int32_t last_status = SAO_AI_EDITOR_OK;
+    Json last_result;
+    for (uint32_t attempt = 1; attempt <= max_attempts; ++attempt) {
+        if (cancellation.cancelled()) {
+            return SAO_AI_EDITOR_ERR_CANCELLED;
+        }
+        Json attempt_result;
+        const int32_t status = perform_openai_chat(
+            working, cancellation, callback, attempt_result);
+        last_status = status;
+        last_result = std::move(attempt_result);
+        if (status == SAO_AI_EDITOR_OK) {
+            result = std::move(last_result);
+            return SAO_AI_EDITOR_OK;
+        }
+        // User-driven cancellation never retries.
+        if (cancellation.cancelled()) {
+            result = std::move(last_result);
+            return SAO_AI_EDITOR_ERR_CANCELLED;
+        }
+        if (attempt >= max_attempts) {
+            break;
+        }
+        std::string reason;
+        bool retryable = false;
+        uint32_t http_status = 0;
+        if (status == SAO_AI_EDITOR_ERR_HTTP &&
+            result_has_http_status(last_result, http_status) &&
+            working.retry.should_retry_status(http_status)) {
+            retryable = true;
+            reason = (http_status == 429) ? "429" : "http_5xx";
+        } else if (working.retry.retry_on_network &&
+                   (status == SAO_AI_EDITOR_ERR_HTTP ||
+                    status == SAO_AI_EDITOR_ERR_CANCELLED) &&
+                   !result_has_http_status(last_result, http_status) &&
+                   !result_is_client_timeout(last_result)) {
+            // Transport-level failure: perform_openai_chat surfaces network
+            // errors via SAO_AI_EDITOR_ERR_HTTP without an httpStatus body,
+            // and it can also route WinHTTP failures through
+            // ERR_CANCELLED (when the flag stays false).  Neither case
+            // populates a result body, so treat both as "network".
+            // Client-side timeouts explicitly opt out — the retry would
+            // just accumulate more latency past the caller's budget.
+            retryable = true;
+            reason = "network";
+        }
+        if (!retryable) {
+            break;
+        }
+        uint32_t delay_ms = compute_backoff_ms(working.retry, attempt, rng);
+        if (working.retry.respect_retry_after && last_result.is_object() &&
+            last_result.contains("retryAfterMs") &&
+            last_result["retryAfterMs"].is_number_integer()) {
+            const int64_t hint = last_result["retryAfterMs"].get<int64_t>();
+            if (hint > 0) {
+                const uint32_t clamped = static_cast<uint32_t>(std::min<int64_t>(
+                    hint, static_cast<int64_t>(working.retry.max_delay_ms)));
+                if (clamped > delay_ms) {
+                    delay_ms = clamped;
+                }
+            }
+        }
+        if (on_retry) {
+            on_retry(attempt + 1, delay_ms, reason);
+        }
+        if (!cancellable_sleep(delay_ms, cancellation)) {
+            result = std::move(last_result);
+            return SAO_AI_EDITOR_ERR_CANCELLED;
+        }
+    }
+    result = std::move(last_result);
+    return last_status;
 }
 
 }  // namespace sao::ai_editor::native

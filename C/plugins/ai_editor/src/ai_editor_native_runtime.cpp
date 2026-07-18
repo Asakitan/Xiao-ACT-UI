@@ -393,6 +393,10 @@ int32_t NativeRuntime::invoke(std::string_view method,
         return conversations_.list(params.value("scope", "all"),
                                    params.value("limit", 100U), result);
     }
+    if (method == "conversation.stats") {
+        std::lock_guard<std::mutex> lock(store_mutex_);
+        return conversations_.stats(params.value("scope", "all"), result);
+    }
     if (method == "conversation.search") {
         if (!params.contains("query") || !params["query"].is_string()) {
             return SAO_AI_EDITOR_ERR_INVALID_ARGUMENT;
@@ -815,6 +819,37 @@ int32_t NativeRuntime::invoke(std::string_view method,
         std::lock_guard<std::mutex> lock(store_mutex_);
         return tools_.execute(mode, params["name"].get<std::string>(),
                               arguments, result);
+    }
+    if (method == "tools.register") {
+        if (!params.contains("name") || !params["name"].is_string()) {
+            return SAO_AI_EDITOR_ERR_INVALID_ARGUMENT;
+        }
+        // description is optional, parameters is optional (defaults to a
+        // {type:"object", properties:{}} schema inside the registry).
+        const std::string description = params.value("description",
+                                                     std::string{});
+        const Json parameters = params.value("parameters", Json(nullptr));
+        // Custom tools are read-only unless the caller opts in — matches
+        // built-in defaults (readFile/listFiles/searchFiles are read-only).
+        const bool read_only = params.value("readOnly", true);
+        const std::string name = params["name"].get<std::string>();
+        const int32_t status = tools_.register_custom(name, description,
+                                                      parameters, read_only);
+        if (status == SAO_AI_EDITOR_OK) {
+            result = Json{{"ok", true}, {"name", name}};
+        }
+        return status;
+    }
+    if (method == "tools.unregister") {
+        if (!params.contains("name") || !params["name"].is_string()) {
+            return SAO_AI_EDITOR_ERR_INVALID_ARGUMENT;
+        }
+        const std::string name = params["name"].get<std::string>();
+        const int32_t status = tools_.unregister_custom(name);
+        if (status == SAO_AI_EDITOR_OK) {
+            result = Json{{"ok", true}, {"name", name}};
+        }
+        return status;
     }
     if (method == "chat.run") {
         // Render an optional `promptId` + `promptArguments` into the
@@ -1577,10 +1612,19 @@ int32_t NativeRuntime::run_chat_sync(const Json& params, uint32_t timeout_ms,
     request.provider_type = route.type;
     request.timeout_ms = timeout_ms;
     request.stream = stream;
+    // Retry policy precedence: chat.run params.retry > provider.retry >
+    // default (max_attempts=3).  run_chat_sync has no runId to attach
+    // chat.retry events to, so retries are silent from the caller's view
+    // but still honour the same backoff / status matrix as start_chat.
+    if (params.contains("retry")) {
+        request.retry = RetryPolicy::from_json(params["retry"]);
+    } else if (provider.contains("retry")) {
+        request.retry = RetryPolicy::from_json(provider["retry"]);
+    }
     ChatCancellation cancellation;
     std::string streamed;
     Json transport_result;
-    const int32_t chat_status = perform_openai_chat(
+    const int32_t chat_status = perform_openai_chat_with_retry(
         request, cancellation,
         [&](const Json& event) {
             if (event.value("type", "") == "delta" &&
@@ -1595,6 +1639,7 @@ int32_t NativeRuntime::run_chat_sync(const Json& params, uint32_t timeout_ms,
                 on_delta(event);
             }
         },
+        RetryNotifyCallback{},  // no runId available at this layer
         transport_result);
     if (chat_status != SAO_AI_EDITOR_OK) {
         return chat_status;
@@ -1933,6 +1978,14 @@ int32_t NativeRuntime::start_chat(const Json& params, Json& result) {
     request.provider_type = route.type;
     request.timeout_ms = params.value("timeoutMs", 60'000U);
     request.stream = stream;
+    // Retry policy precedence: chat.run params.retry > provider.retry >
+    // default (max_attempts=3).  execute_chat picks this up and emits
+    // chat.retry via the RetryNotifyCallback before each backoff sleep.
+    if (params.contains("retry")) {
+        request.retry = RetryPolicy::from_json(params["retry"]);
+    } else if (provider.contains("retry")) {
+        request.retry = RetryPolicy::from_json(provider["retry"]);
+    }
     auto run = std::make_shared<RunState>();
     run->id = new_run_id();
     run->cancellation = std::make_shared<ChatCancellation>();
@@ -1982,7 +2035,8 @@ void NativeRuntime::execute_chat(const std::shared_ptr<RunState>& run,
     try {
     Json transport_result;
     std::string streamed_content;
-    const int32_t status = perform_openai_chat(
+    const uint32_t max_attempts = std::max<uint32_t>(request.retry.max_attempts, 1);
+    const int32_t status = perform_openai_chat_with_retry(
         request, *run->cancellation,
         [&](const Json& event) {
             if (!is_current(run)) {
@@ -1993,6 +2047,21 @@ void NativeRuntime::execute_chat(const std::shared_ptr<RunState>& run,
                 streamed_content += event["content"].get<std::string>();
             }
             emit("chat.delta", event, run->id);
+        },
+        [&](uint32_t attempt, uint32_t delay_ms,
+            std::string_view reason) {
+            // Fire chat.retry *before* the sleep so subscribers can start
+            // their own timers.  Emitting even when the run has been
+            // superseded is safe — is_current() gates chat.delta but the
+            // retry event is a runtime-wide signal and we still want it
+            // visible for observability dashboards.
+            emit("chat.retry",
+                 Json{{"runId", run->id},
+                      {"attempt", attempt},
+                      {"maxAttempts", max_attempts},
+                      {"delayMs", delay_ms},
+                      {"reason", std::string(reason)}},
+                 run->id);
         },
         transport_result);
 
