@@ -237,6 +237,11 @@ public:
         return true;
     }
 
+    std::vector<std::string> captured_bodies() const {
+        std::lock_guard<std::mutex> lock(bodies_mutex_);
+        return bodies_;
+    }
+
 private:
     void accept_connections() noexcept {
         while (!stopping_.load(std::memory_order_acquire)) {
@@ -296,6 +301,10 @@ private:
                 closesocket(client);
                 continue;
             }
+            {
+                std::lock_guard<std::mutex> lock(bodies_mutex_);
+                bodies_.emplace_back(request.substr(body_begin, content_length));
+            }
             accepted_.fetch_add(1, std::memory_order_release);
             if (!response_.empty()) {
                 size_t sent_total = 0;
@@ -322,6 +331,8 @@ private:
     SOCKET listener_ = INVALID_SOCKET;
     std::mutex client_mutex_;
     std::vector<SOCKET> clients_;
+    mutable std::mutex bodies_mutex_;
+    std::vector<std::string> bodies_;
     std::thread worker_;
     std::string endpoint_;
     std::string response_;
@@ -932,6 +943,125 @@ TEST_CASE("AI Editor chat preserves synchronous response semantics",
     REQUIRE(status["result"]["content"] == "hello");
 }
 
+TEST_CASE("AI Editor chat.run_with_mcp omits tools when neither MCP servers "
+          "nor extraTools are supplied",
+          "[plugins][ai_editor][native][runs][mcp]") {
+    const std::string body =
+        R"({"choices":[{"message":{"role":"assistant","content":"ok"}}]})";
+    LocalHttpServer server("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n"
+                           "Content-Length: " +
+                           std::to_string(body.size()) +
+                           "\r\nConnection: close\r\n\r\n" + body);
+    RuntimeFixture fixture;
+    // mcpServers=null and no extraTools → collected tool list is empty, so
+    // the OpenAI request body must not carry a "tools" key (same shape as
+    // plain chat.run without tools).
+    const Json params{{"provider", {{"id", "fixture"},
+                                     {"endpoint", server.endpoint()}}},
+                      {"model", "fixture-model"},
+                      {"messages", Json::array(
+                           {{{"role", "user"}, {"content", "hi"}}})},
+                      {"stream", false},
+                      {"timeoutMs", 2'000}};
+    const Json started =
+        dispatch(fixture.get(), "chat.run_with_mcp", params);
+    REQUIRE(started.contains("result"));
+    REQUIRE(started["result"]["accepted"] == true);
+    REQUIRE(server.wait_for_connections(1, 2'000));
+    const auto bodies = server.captured_bodies();
+    REQUIRE(bodies.size() == 1);
+    const Json body_json = Json::parse(bodies.front());
+    REQUIRE(body_json.contains("model"));
+    REQUIRE(body_json["model"] == "fixture-model");
+    REQUIRE_FALSE(body_json.contains("tools"));
+}
+
+TEST_CASE("AI Editor chat.run_with_mcp forwards extraTools into OpenAI body",
+          "[plugins][ai_editor][native][runs][mcp]") {
+    const std::string body =
+        R"({"choices":[{"message":{"role":"assistant","content":"ok"}}]})";
+    LocalHttpServer server("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n"
+                           "Content-Length: " +
+                           std::to_string(body.size()) +
+                           "\r\nConnection: close\r\n\r\n" + body);
+    RuntimeFixture fixture;
+    const Json extra_tool{
+        {"type", "function"},
+        {"function", {{"name", "search_docs"},
+                      {"description", "search the docs"},
+                      {"parameters",
+                       {{"type", "object"},
+                        {"properties",
+                         {{"query", {{"type", "string"}}}}}}}}}};
+    const Json params{{"provider", {{"id", "fixture"},
+                                     {"endpoint", server.endpoint()}}},
+                      {"model", "fixture-model"},
+                      {"messages", Json::array(
+                           {{{"role", "user"}, {"content", "hi"}}})},
+                      {"stream", false},
+                      {"timeoutMs", 2'000},
+                      {"mcpServers", Json::array()},
+                      {"extraTools", Json::array({extra_tool})}};
+    const Json started =
+        dispatch(fixture.get(), "chat.run_with_mcp", params);
+    REQUIRE(started.contains("result"));
+    REQUIRE(started["result"]["accepted"] == true);
+    REQUIRE(server.wait_for_connections(1, 2'000));
+    const auto bodies = server.captured_bodies();
+    REQUIRE(bodies.size() == 1);
+    const Json body_json = Json::parse(bodies.front());
+    REQUIRE(body_json.contains("tools"));
+    REQUIRE(body_json["tools"].is_array());
+    REQUIRE(body_json["tools"].size() == 1);
+    REQUIRE(body_json["tools"][0]["type"] == "function");
+    REQUIRE(body_json["tools"][0]["function"]["name"] == "search_docs");
+    // Namespaced mcp__ prefix must NOT appear when no MCP tools were folded
+    // in — this proves collect_mcp_openai_tools returned an empty list.
+    const std::string dumped = body_json["tools"].dump();
+    REQUIRE(dumped.find("mcp__") == std::string::npos);
+}
+
+TEST_CASE("AI Editor agents.invoke_with_mcp threads MCP filter through agent "
+          "system prompt path",
+          "[plugins][ai_editor][native][agents][mcp]") {
+    const std::string body =
+        R"({"choices":[{"message":{"role":"assistant","content":"done"}}]})";
+    LocalHttpServer server(
+        "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n"
+        "Content-Length: " +
+        std::to_string(body.size()) +
+        "\r\nConnection: close\r\n\r\n" + body);
+    RuntimeFixture fixture;
+    const Json extra_tool{
+        {"type", "function"},
+        {"function", {{"name", "readFile"},
+                      {"description", "read a workspace file"},
+                      {"parameters",
+                       {{"type", "object"},
+                        {"properties",
+                         {{"path", {{"type", "string"}}}}}}}}}};
+    const Json invoked = dispatch(
+        fixture.get(), "agents.invoke_with_mcp",
+        {{"id", "code-reviewer"},
+         {"message", "look at bar()"},
+         {"provider", {{"id", "agent-fixture"},
+                        {"endpoint", server.endpoint()}}},
+         {"model", "test-model"},
+         {"timeoutMs", 5000},
+         {"mcpServers", Json::array()},
+         {"extraTools", Json::array({extra_tool})}});
+    REQUIRE(invoked.contains("result"));
+    REQUIRE(invoked["result"]["agentId"] == "code-reviewer");
+    REQUIRE(invoked["result"]["content"] == "done");
+    REQUIRE(server.wait_for_connections(1, 2'000));
+    const auto bodies = server.captured_bodies();
+    REQUIRE(bodies.size() == 1);
+    const Json body_json = Json::parse(bodies.front());
+    REQUIRE(body_json.contains("tools"));
+    REQUIRE(body_json["tools"].size() == 1);
+    REQUIRE(body_json["tools"][0]["function"]["name"] == "readFile");
+}
+
 TEST_CASE("AI Editor agents.list_defs surfaces 5 built-in agents",
           "[plugins][ai_editor][native][agents]") {
     RuntimeFixture fixture;
@@ -1224,6 +1354,25 @@ public:
         queue_.push_back(std::move(response));
     }
 
+    // Enqueue a fully-formed HTTP response — used when the test needs to
+    // exercise non-JSON payloads (e.g. text/event-stream MCP replies).
+    void enqueue_raw(std::string full_response) {
+        std::lock_guard<std::mutex> guard(mutex_);
+        queue_.push_back(std::move(full_response));
+    }
+
+    // Pop the oldest recorded raw request.  Tests use this to assert that
+    // callers propagated e.g. Authorization headers across the wire.
+    std::string take_request() {
+        std::lock_guard<std::mutex> guard(mutex_);
+        if (requests_.empty()) {
+            return {};
+        }
+        std::string out = std::move(requests_.front());
+        requests_.pop_front();
+        return out;
+    }
+
     const std::string& base_url() const noexcept { return base_url_; }
 
     size_t handled() const noexcept {
@@ -1273,6 +1422,7 @@ private:
             std::string response;
             {
                 std::lock_guard<std::mutex> guard(mutex_);
+                requests_.push_back(request);
                 if (!queue_.empty()) {
                     response = std::move(queue_.front());
                     queue_.pop_front();
@@ -1297,10 +1447,189 @@ private:
     std::thread worker_;
     std::mutex mutex_;
     std::deque<std::string> queue_;
+    std::deque<std::string> requests_;
     std::string base_url_;
 };
 
 }  // namespace
+
+TEST_CASE("AI Editor MCP client speaks Streamable HTTP transport (JSON reply)",
+          "[plugins][ai_editor][native][mcp][client][http][integration]") {
+    ScriptedHttpServer server;
+    // initialize response
+    server.enqueue(
+        R"({"jsonrpc":"2.0","id":1,"result":{"protocolVersion":"2024-11-05",)"
+        R"("serverInfo":{"name":"http-mock","version":"0.1"},)"
+        R"("capabilities":{"tools":{"listChanged":false}}}})");
+    // notifications/initialized is a fire-and-forget POST — client ignores
+    // whatever comes back, but the scripted server still needs to hand out
+    // *something* so its queue does not underflow into a 500.
+    server.enqueue(R"({"jsonrpc":"2.0"})");
+    // tools/list response
+    server.enqueue(
+        R"({"jsonrpc":"2.0","id":2,"result":{"tools":[)"
+        R"({"name":"echo","description":"Echoes back input",)"
+        R"("inputSchema":{"type":"object"}}]}})");
+    // tools/call response
+    server.enqueue(
+        R"({"jsonrpc":"2.0","id":3,"result":{"content":[)"
+        R"({"type":"text","text":"hello via HTTP"}]}})");
+
+    sao_ai_editor_mcp_client_t client = nullptr;
+    REQUIRE(sao_ai_editor_mcp_client_create(&client) == SAO_AI_EDITOR_OK);
+    REQUIRE(client != nullptr);
+
+    const Json config{
+        {"name", "http-mcp"},
+        {"transport", "http"},
+        {"url", server.base_url() + "/mcp"},
+        {"headers", {{"Authorization", "Bearer test-token"},
+                     {"X-SAO-Test", "yes"}}},
+        {"startupMs", 5000}};
+    const std::string config_dump = config.dump();
+    REQUIRE(sao_ai_editor_mcp_client_register(
+                client, config_dump.data(),
+                static_cast<uint32_t>(config_dump.size())) == SAO_AI_EDITOR_OK);
+
+    // The initialize handshake should have propagated our custom headers.
+    const std::string initialize_request = server.take_request();
+    REQUIRE(initialize_request.find("Authorization: Bearer test-token") !=
+            std::string::npos);
+    REQUIRE(initialize_request.find("X-SAO-Test: yes") != std::string::npos);
+    REQUIRE(initialize_request.find("Accept: application/json") !=
+            std::string::npos);
+    REQUIRE(initialize_request.find("Content-Type: application/json") !=
+            std::string::npos);
+    REQUIRE(initialize_request.find("\"method\":\"initialize\"") !=
+            std::string::npos);
+
+    uint32_t required = 0;
+    const std::string servers_json = drain_mcp(
+        sao_ai_editor_mcp_client_list_servers(client, nullptr, 0, &required),
+        required,
+        [&](char* output, uint32_t capacity, uint32_t* out_length) {
+            return sao_ai_editor_mcp_client_list_servers(client, output,
+                                                          capacity, out_length);
+        });
+    const Json servers = Json::parse(servers_json);
+    REQUIRE(servers.is_array());
+    REQUIRE(servers.size() == 1);
+    REQUIRE(servers[0]["name"] == "http-mcp");
+    REQUIRE(servers[0]["transport"] == "http");
+    REQUIRE(servers[0]["url"] == server.base_url() + "/mcp");
+    REQUIRE(servers[0]["serverInfo"]["name"] == "http-mock");
+    REQUIRE(servers[0]["protocolVersion"] == "2024-11-05");
+
+    required = 0;
+    const std::string tools_json = drain_mcp(
+        sao_ai_editor_mcp_client_list_tools(client, nullptr, 0, &required),
+        required,
+        [&](char* output, uint32_t capacity, uint32_t* out_length) {
+            return sao_ai_editor_mcp_client_list_tools(client, output, capacity,
+                                                        out_length);
+        });
+    const Json tools = Json::parse(tools_json);
+    REQUIRE(tools.is_array());
+    REQUIRE(tools.size() == 1);
+    REQUIRE(tools[0]["name"] == "echo");
+    REQUIRE(tools[0]["server"] == "http-mcp");
+
+    const Json call_request{{"server", "http-mcp"},
+                            {"name", "echo"},
+                            {"arguments", {{"text", "ping"}}}};
+    const std::string call_dump = call_request.dump();
+    required = 0;
+    const std::string call_json = drain_mcp(
+        sao_ai_editor_mcp_client_call_tool(
+            client, call_dump.data(), static_cast<uint32_t>(call_dump.size()),
+            nullptr, 0, &required),
+        required,
+        [&](char* output, uint32_t capacity, uint32_t* out_length) {
+            return sao_ai_editor_mcp_client_call_tool(
+                client, nullptr, 0, output, capacity, out_length);
+        });
+    const Json call = Json::parse(call_json);
+    REQUIRE(call.contains("content"));
+    REQUIRE(call["content"][0]["type"] == "text");
+    REQUIRE(call["content"][0]["text"] == "hello via HTTP");
+    REQUIRE(call["server"] == "http-mcp");
+
+    // A successful register → list_tools → call_tool round trip means the
+    // server handled at least four POSTs (initialize + notification +
+    // tools/list + tools/call).
+    REQUIRE(server.handled() >= 4);
+
+    REQUIRE(sao_ai_editor_mcp_client_close(client, "http-mcp") ==
+            SAO_AI_EDITOR_OK);
+    sao_ai_editor_mcp_client_destroy(client);
+}
+
+TEST_CASE("AI Editor MCP client parses SSE-framed HTTP MCP responses",
+          "[plugins][ai_editor][native][mcp][client][http][sse][integration]") {
+    ScriptedHttpServer server;
+    // initialize response encoded as a single-event text/event-stream body.
+    // Real streamable-HTTP servers may reply this way — the client must
+    // pull the first `data:` payload out and parse it as JSON-RPC.
+    const std::string init_payload =
+        R"({"jsonrpc":"2.0","id":1,"result":{"protocolVersion":"2024-11-05",)"
+        R"("serverInfo":{"name":"sse-mock","version":"0.1"},)"
+        R"("capabilities":{}}})";
+    const std::string init_sse_body =
+        "event: message\r\ndata: " + init_payload + "\r\n\r\n";
+    server.enqueue_raw("HTTP/1.1 200 OK\r\n"
+                       "Content-Type: text/event-stream\r\n"
+                       "Content-Length: " +
+                       std::to_string(init_sse_body.size()) +
+                       "\r\nConnection: close\r\n\r\n" + init_sse_body);
+    // notifications/initialized fire-and-forget reply (contents unused).
+    server.enqueue(R"({"jsonrpc":"2.0"})");
+    // tools/call reply, again as SSE.
+    const std::string call_payload =
+        R"({"jsonrpc":"2.0","id":2,"result":{"content":[)"
+        R"({"type":"text","text":"streamed"}]}})";
+    const std::string call_sse_body =
+        "data: " + call_payload + "\n\n";
+    server.enqueue_raw("HTTP/1.1 200 OK\r\n"
+                       "Content-Type: text/event-stream; charset=utf-8\r\n"
+                       "Content-Length: " +
+                       std::to_string(call_sse_body.size()) +
+                       "\r\nConnection: close\r\n\r\n" + call_sse_body);
+
+    sao_ai_editor_mcp_client_t client = nullptr;
+    REQUIRE(sao_ai_editor_mcp_client_create(&client) == SAO_AI_EDITOR_OK);
+    REQUIRE(client != nullptr);
+
+    const Json config{
+        {"name", "sse-mcp"},
+        {"transport", "http"},
+        {"url", server.base_url() + "/mcp"},
+        {"startupMs", 5000}};
+    const std::string config_dump = config.dump();
+    REQUIRE(sao_ai_editor_mcp_client_register(
+                client, config_dump.data(),
+                static_cast<uint32_t>(config_dump.size())) == SAO_AI_EDITOR_OK);
+
+    const Json call_request{{"server", "sse-mcp"},
+                            {"name", "echo"},
+                            {"arguments", {{"text", "sse"}}}};
+    const std::string call_dump = call_request.dump();
+    uint32_t required = 0;
+    const std::string call_json = drain_mcp(
+        sao_ai_editor_mcp_client_call_tool(
+            client, call_dump.data(), static_cast<uint32_t>(call_dump.size()),
+            nullptr, 0, &required),
+        required,
+        [&](char* output, uint32_t capacity, uint32_t* out_length) {
+            return sao_ai_editor_mcp_client_call_tool(
+                client, nullptr, 0, output, capacity, out_length);
+        });
+    const Json call = Json::parse(call_json);
+    REQUIRE(call.contains("content"));
+    REQUIRE(call["content"][0]["type"] == "text");
+    REQUIRE(call["content"][0]["text"] == "streamed");
+
+    sao_ai_editor_mcp_client_destroy(client);
+}
 
 TEST_CASE("SaoAiEditor.exe --cli --cli-method dispatches JSON-RPC and exits",
           "[plugins][ai_editor][production_child][cli][integration]") {
@@ -2530,4 +2859,209 @@ TEST_CASE("SaoAiEditor.exe --node-executable is only accepted with "
     REQUIRE(exit_code == 2);
     CloseHandle(process_information.hProcess);
     CloseHandle(process_information.hThread);
+}
+
+TEST_CASE("AI Editor agents.invoke with conversationId appends both turns to "
+          "the persisted transcript",
+          "[plugins][ai_editor][native][agents][conversation]") {
+    // Two-turn chat via a fixed reply "reply1" — same body served on each
+    // connection covers the second turn too.
+    const std::string body =
+        R"({"choices":[{"message":{"role":"assistant","content":"reply1"}}]})";
+    LocalHttpServer server(
+        "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n"
+        "Content-Length: " +
+        std::to_string(body.size()) +
+        "\r\nConnection: close\r\n\r\n" + body);
+    RuntimeFixture fixture;
+    auto runtime = fixture.get();
+    REQUIRE(dispatch(runtime, "runtime.initialize").contains("result"));
+
+    const Json created = dispatch(runtime, "conversation.create",
+                                  {{"title", "Agent multi-turn"},
+                                   {"model", "test-model"},
+                                   {"scope", "workspace"}});
+    REQUIRE(created.contains("result"));
+    const std::string conversation_id = created["result"]["id"];
+
+    const Json first = dispatch(
+        runtime, "agents.invoke",
+        {{"id", "code-reviewer"},
+         {"message", "q1"},
+         {"conversationId", conversation_id},
+         {"provider", {{"id", "agent-conv-fixture"},
+                        {"endpoint", server.endpoint()}}},
+         {"model", "test-model"},
+         {"timeoutMs", 5000}});
+    REQUIRE(first.contains("result"));
+    REQUIRE(first["result"]["content"] == "reply1");
+    // conversationId echoed back so the caller can keep threading it in.
+    REQUIRE(first["result"]["conversationId"] == conversation_id);
+    REQUIRE(server.wait_for_connections(1, 2'000));
+
+    const Json snapshot_after_first = dispatch(runtime, "conversation.get",
+                                                {{"id", conversation_id}});
+    REQUIRE(snapshot_after_first.contains("result"));
+    const Json& messages_after_first =
+        snapshot_after_first["result"]["messages"];
+    REQUIRE(messages_after_first.size() == 2);
+    REQUIRE(messages_after_first[0]["role"] == "user");
+    REQUIRE(messages_after_first[0]["content"] == "q1");
+    REQUIRE(messages_after_first[1]["role"] == "assistant");
+    REQUIRE(messages_after_first[1]["content"] == "reply1");
+
+    // Second turn: history is loaded from disk, not from the caller's params,
+    // so the persisted transcript grows to 4 messages.
+    const Json second = dispatch(
+        runtime, "agents.invoke",
+        {{"id", "code-reviewer"},
+         {"message", "q2"},
+         {"conversationId", conversation_id},
+         {"provider", {{"id", "agent-conv-fixture"},
+                        {"endpoint", server.endpoint()}}},
+         {"model", "test-model"},
+         {"timeoutMs", 5000}});
+    REQUIRE(second.contains("result"));
+    REQUIRE(second["result"]["conversationId"] == conversation_id);
+    REQUIRE(server.wait_for_connections(2, 2'000));
+
+    const Json snapshot_after_second = dispatch(runtime, "conversation.get",
+                                                 {{"id", conversation_id}});
+    const Json& messages_after_second =
+        snapshot_after_second["result"]["messages"];
+    REQUIRE(messages_after_second.size() == 4);
+    REQUIRE(messages_after_second[2]["role"] == "user");
+    REQUIRE(messages_after_second[2]["content"] == "q2");
+    REQUIRE(messages_after_second[3]["role"] == "assistant");
+    REQUIRE(messages_after_second[3]["content"] == "reply1");
+}
+
+TEST_CASE("AI Editor agents.invoke createConversation=true lazily seeds a "
+          "workspace conversation and returns its id",
+          "[plugins][ai_editor][native][agents][conversation]") {
+    const std::string body =
+        R"({"choices":[{"message":{"role":"assistant","content":"seeded"}}]})";
+    LocalHttpServer server(
+        "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n"
+        "Content-Length: " +
+        std::to_string(body.size()) +
+        "\r\nConnection: close\r\n\r\n" + body);
+    RuntimeFixture fixture;
+    auto runtime = fixture.get();
+    REQUIRE(dispatch(runtime, "runtime.initialize").contains("result"));
+
+    const Json invoked = dispatch(
+        runtime, "agents.invoke",
+        {{"id", "code-reviewer"},
+         {"message", "seed the transcript"},
+         {"createConversation", true},
+         {"conversationTitle", "Seed"},
+         {"provider", {{"id", "agent-seed-fixture"},
+                        {"endpoint", server.endpoint()}}},
+         {"model", "test-model"},
+         {"timeoutMs", 5000}});
+    REQUIRE(invoked.contains("result"));
+    REQUIRE(invoked["result"]["content"] == "seeded");
+    REQUIRE(invoked["result"].contains("conversationId"));
+    const std::string conversation_id =
+        invoked["result"]["conversationId"].get<std::string>();
+    REQUIRE(!conversation_id.empty());
+
+    const Json fetched = dispatch(runtime, "conversation.get",
+                                   {{"id", conversation_id}});
+    REQUIRE(fetched.contains("result"));
+    REQUIRE(fetched["result"]["title"] == "Seed");
+    const Json& messages = fetched["result"]["messages"];
+    REQUIRE(messages.size() == 2);
+    REQUIRE(messages[0]["content"] == "seed the transcript");
+    REQUIRE(messages[1]["content"] == "seeded");
+}
+
+TEST_CASE("AI Editor workflow.progress emits step_started + step_completed "
+          "boundary events plus a terminal completion event",
+          "[plugins][ai_editor][native][workflows][progress]") {
+    const std::string body =
+        R"({"choices":[{"message":{"role":"assistant","content":"progress-content"}}]})";
+    LocalHttpServer server(
+        "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n"
+        "Content-Length: " +
+        std::to_string(body.size()) +
+        "\r\nConnection: close\r\n\r\n" + body);
+    RuntimeFixture fixture;
+    const Json run = dispatch(
+        fixture.get(), "workflows.run",
+        {{"id", "review-and-fix"},
+         {"provider", {{"id", "workflow-progress-fixture"},
+                       {"endpoint", server.endpoint()}}},
+         {"model", "fixture-model"},
+         {"input", "sample code"},
+         {"timeoutMs", 5000}});
+    REQUIRE(run.contains("result"));
+    const std::string execution_id = run["result"]["executionId"];
+
+    // Wait for the workflow to complete before draining events; keeps the
+    // event queue stable and lets us assert the terminal event too.
+    Json status;
+    const ULONGLONG started = GetTickCount64();
+    do {
+        status = dispatch(fixture.get(), "workflows.status",
+                          {{"executionId", execution_id}})["result"];
+        if (status["status"] != "running" &&
+            status["status"] != "pending") {
+            break;
+        }
+        Sleep(20);
+    } while (GetTickCount64() - started < 15'000);
+    REQUIRE(status["status"] == "completed");
+
+    size_t started_count = 0;
+    size_t completed_count = 0;
+    bool saw_terminal_completed = false;
+    for (size_t index = 0; index < 128; ++index) {
+        uint32_t required = 0;
+        const int32_t queried = sao_ai_editor_runtime_next_event(
+            fixture.get(), nullptr, 0, &required);
+        if (queried == SAO_AI_EDITOR_OK && required == 0) {
+            break;
+        }
+        if (queried != SAO_AI_EDITOR_ERR_BUFFER_TOO_SMALL) {
+            break;
+        }
+        std::vector<char> event(static_cast<size_t>(required) + 1);
+        const int32_t drain = sao_ai_editor_runtime_next_event(
+            fixture.get(), event.data(),
+            static_cast<uint32_t>(event.size()), &required);
+        if (drain != SAO_AI_EDITOR_OK) {
+            break;
+        }
+        const Json notification =
+            Json::parse(event.data(), event.data() + required);
+        if (notification.value("method", "") != "sao.event") {
+            continue;
+        }
+        const Json params = notification.value("params", Json::object());
+        if (params.value("event", "") != "workflow.progress") {
+            continue;
+        }
+        const Json payload = params.value("payload", Json::object());
+        REQUIRE(payload["executionId"] == execution_id);
+        REQUIRE(payload["totalSteps"] == 2);
+        const std::string phase = payload.value("status", std::string{});
+        if (phase == "step_started") {
+            REQUIRE(payload.contains("stepIndex"));
+            REQUIRE(payload.contains("label"));
+            ++started_count;
+        } else if (phase == "step_completed") {
+            REQUIRE(payload.contains("stepIndex"));
+            REQUIRE(payload["content"] == "progress-content");
+            ++completed_count;
+        } else if (phase == "completed") {
+            saw_terminal_completed = true;
+        }
+    }
+    // The two-step "review-and-fix" builtin should produce exactly one
+    // start + one completion per step, plus a single terminal event.
+    REQUIRE(started_count == 2);
+    REQUIRE(completed_count == 2);
+    REQUIRE(saw_terminal_completed);
 }

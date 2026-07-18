@@ -533,12 +533,31 @@ void WorkflowExecution::run_loop(NativeRuntime* runtime, Json provider,
         return;
     }
     const auto& steps = definition_.steps;
+    const size_t total_steps = steps.size();
+    const std::string execution_id = id_;
+    // Consumers subscribed to workflow.progress get a coarse-grained view of
+    // the run (start-of-step + end-of-step + terminal state).  The finer
+    // token-level stream is still workflow.step_delta.
+    auto emit_terminal = [&](std::string_view final_status,
+                              std::string_view error_text) {
+        Json payload{{"executionId", execution_id},
+                     {"status", std::string(final_status)},
+                     {"totalSteps", static_cast<int64_t>(total_steps)}};
+        if (!error_text.empty()) {
+            payload["error"] = std::string(error_text);
+        }
+        runtime->emit_workflow_event("workflow.progress", std::move(payload),
+                                      execution_id);
+    };
     size_t index = 0;
     while (index < steps.size()) {
         if (cancel_requested_.load(std::memory_order_acquire)) {
-            std::lock_guard<std::mutex> guard(mutex_);
-            status_ = "cancelled";
-            completed_at_ms_ = unix_milliseconds();
+            {
+                std::lock_guard<std::mutex> guard(mutex_);
+                status_ = "cancelled";
+                completed_at_ms_ = unix_milliseconds();
+            }
+            emit_terminal("cancelled", {});
             return;
         }
         if (pause_requested_.load(std::memory_order_acquire)) {
@@ -552,6 +571,8 @@ void WorkflowExecution::run_loop(NativeRuntime* runtime, Json provider,
             if (cancel_requested_.load(std::memory_order_acquire)) {
                 status_ = "cancelled";
                 completed_at_ms_ = unix_milliseconds();
+                lock.unlock();
+                emit_terminal("cancelled", {});
                 return;
             }
             paused_ = false;
@@ -580,16 +601,41 @@ void WorkflowExecution::run_loop(NativeRuntime* runtime, Json provider,
                 continue;
             }
             if (!wait_for_confirmation(step)) {
-                std::lock_guard<std::mutex> guard(mutex_);
-                if (cancel_requested_.load(std::memory_order_acquire)) {
-                    status_ = "cancelled";
-                } else {
-                    status_ = "failed";
-                    error_message_ = "user rejected step";
+                std::string terminal_status;
+                {
+                    std::lock_guard<std::mutex> guard(mutex_);
+                    if (cancel_requested_.load(std::memory_order_acquire)) {
+                        status_ = "cancelled";
+                        terminal_status = "cancelled";
+                    } else {
+                        status_ = "failed";
+                        error_message_ = "user rejected step";
+                        terminal_status = "failed";
+                    }
+                    completed_at_ms_ = unix_milliseconds();
                 }
-                completed_at_ms_ = unix_milliseconds();
+                emit_terminal(terminal_status,
+                              terminal_status == "failed"
+                                  ? "user rejected step"
+                                  : "");
                 return;
             }
+        }
+
+        // Emit workflow.progress step_started for every step in the batch
+        // (parallel batches: one event per step, all before execution).
+        for (size_t k = 0; k < batch_size; ++k) {
+            const WorkflowStep& step = steps[index + k];
+            Json payload{{"executionId", execution_id},
+                         {"stepIndex", static_cast<int64_t>(index + k)},
+                         {"totalSteps", static_cast<int64_t>(total_steps)},
+                         {"status", "step_started"},
+                         {"label", step.label},
+                         {"agent", step.agent},
+                         {"outputVar", step.output_var},
+                         {"group", step.group}};
+            runtime->emit_workflow_event("workflow.progress",
+                                          std::move(payload), execution_id);
         }
 
         // Pre-batch snapshot lets parallel steps share a stable variable
@@ -623,38 +669,74 @@ void WorkflowExecution::run_loop(NativeRuntime* runtime, Json provider,
         }
 
         // Commit results in step order; the first failure short-circuits.
-        std::lock_guard<std::mutex> guard(mutex_);
+        bool failed = false;
+        std::string failure_message;
+        {
+            std::lock_guard<std::mutex> guard(mutex_);
+            for (size_t k = 0; k < batch_size; ++k) {
+                const WorkflowStep& step = steps[index + k];
+                Json step_result{{"stepIndex", index + k},
+                                 {"label", step.label},
+                                 {"agent", step.agent},
+                                 {"outputVar", step.output_var},
+                                 {"group", step.group},
+                                 {"status", statuses[k] == SAO_AI_EDITOR_OK
+                                                ? "completed"
+                                                : "failed"},
+                                 {"content", contents[k]}};
+                if (statuses[k] != SAO_AI_EDITOR_OK) {
+                    step_results_.push_back(std::move(step_result));
+                    status_ = "failed";
+                    error_message_ = group_id.empty()
+                        ? "chat step failed"
+                        : "group step failed";
+                    completed_at_ms_ = unix_milliseconds();
+                    failed = true;
+                    failure_message = error_message_;
+                    break;
+                }
+                if (!step.output_var.empty()) {
+                    variables_[step.output_var] = contents[k];
+                }
+                step_results_.push_back(std::move(step_result));
+            }
+        }
+        // Now that mutex is released, emit per-step completion events so
+        // consumers see the same ordering as step_results_.  Failed steps
+        // in a batch still emit their pre-abort completions.
         for (size_t k = 0; k < batch_size; ++k) {
             const WorkflowStep& step = steps[index + k];
-            Json step_result{{"stepIndex", index + k},
-                             {"label", step.label},
-                             {"agent", step.agent},
-                             {"outputVar", step.output_var},
-                             {"group", step.group},
-                             {"status", statuses[k] == SAO_AI_EDITOR_OK
-                                            ? "completed"
-                                            : "failed"},
-                             {"content", contents[k]}};
-            if (statuses[k] != SAO_AI_EDITOR_OK) {
-                step_results_.push_back(std::move(step_result));
-                status_ = "failed";
-                error_message_ = group_id.empty()
-                    ? "chat step failed"
-                    : "group step failed";
-                completed_at_ms_ = unix_milliseconds();
-                return;
+            const bool step_ok = statuses[k] == SAO_AI_EDITOR_OK;
+            Json payload{{"executionId", execution_id},
+                         {"stepIndex", static_cast<int64_t>(index + k)},
+                         {"totalSteps", static_cast<int64_t>(total_steps)},
+                         {"status", step_ok ? "step_completed"
+                                            : "step_failed"},
+                         {"label", step.label},
+                         {"agent", step.agent},
+                         {"outputVar", step.output_var},
+                         {"group", step.group},
+                         {"content", contents[k]}};
+            runtime->emit_workflow_event("workflow.progress",
+                                          std::move(payload), execution_id);
+            if (!step_ok) {
+                // stop at the first failure just like the commit loop
+                break;
             }
-            if (!step.output_var.empty()) {
-                variables_[step.output_var] = contents[k];
-            }
-            step_results_.push_back(std::move(step_result));
+        }
+        if (failed) {
+            emit_terminal("failed", failure_message);
+            return;
         }
         index = batch_end;
     }
-    std::lock_guard<std::mutex> guard(mutex_);
-    status_ = "completed";
-    completed_at_ms_ = unix_milliseconds();
-    current_step_index_ = definition_.steps.size();
+    {
+        std::lock_guard<std::mutex> guard(mutex_);
+        status_ = "completed";
+        completed_at_ms_ = unix_milliseconds();
+        current_step_index_ = definition_.steps.size();
+    }
+    emit_terminal("completed", {});
 }
 
 }  // namespace sao::ai_editor::native

@@ -66,6 +66,17 @@ private:
     int32_t dispatch_mcp(std::string_view method,
                          const Json& params,
                          Json& result);
+    // Aggregate MCP tools filtered by `mcp_server_filter` (JSON array of names;
+    // if empty/absent -> all registered servers) and emit them as OpenAI-shape
+    // `function` tools with `mcp__<server>__<name>` naming.  Returns an empty
+    // array when no MCP client is registered / servers are configured.
+    int32_t collect_mcp_openai_tools(const Json& mcp_server_filter,
+                                     Json& out_tools);
+    // chat.run_with_mcp / agents.invoke_with_mcp — thin wrappers that inject
+    // collected MCP tools into params.tools before delegating to start_chat /
+    // dispatch_agent("agents.invoke").
+    int32_t start_chat_with_mcp(const Json& params, Json& result);
+    int32_t agent_invoke_with_mcp(const Json& params, Json& result);
     int32_t dispatch_workflow(std::string_view method,
                               const Json& params,
                               Json& result);

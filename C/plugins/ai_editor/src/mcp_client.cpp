@@ -2,8 +2,10 @@
 #include "sao/ai_editor/mcp_codec.h"
 
 #include <windows.h>
+#include <winhttp.h>
 
 #include <algorithm>
+#include <array>
 #include <atomic>
 #include <chrono>
 #include <condition_variable>
@@ -156,6 +158,108 @@ struct PendingResponse {
     PendingResponse() : future(promise.get_future()) {}
 };
 
+// Minimal WinHTTP handle wrapper for the streamable-HTTP MCP transport.
+// (The stdio path further below still owns the CreateProcessW path.)
+class InternetHandle {
+public:
+    InternetHandle() = default;
+    explicit InternetHandle(HINTERNET handle) noexcept : handle_(handle) {}
+    ~InternetHandle() { reset(); }
+    InternetHandle(InternetHandle&& other) noexcept
+        : handle_(std::exchange(other.handle_, nullptr)) {}
+    InternetHandle& operator=(InternetHandle&& other) noexcept {
+        if (this != &other) {
+            reset(std::exchange(other.handle_, nullptr));
+        }
+        return *this;
+    }
+    InternetHandle(const InternetHandle&) = delete;
+    InternetHandle& operator=(const InternetHandle&) = delete;
+    void reset(HINTERNET handle = nullptr) noexcept {
+        if (handle_ != nullptr) {
+            WinHttpCloseHandle(handle_);
+        }
+        handle_ = handle;
+    }
+    HINTERNET get() const noexcept { return handle_; }
+    HINTERNET release() noexcept { return std::exchange(handle_, nullptr); }
+    explicit operator bool() const noexcept { return handle_ != nullptr; }
+private:
+    HINTERNET handle_ = nullptr;
+};
+
+// Break `url` into WinHTTP-friendly host / path / port / secure pieces.
+bool crack_http_url(std::string_view url, std::wstring& host,
+                    std::wstring& path, INTERNET_PORT& port, bool& secure) {
+    if (url.empty() || url.size() > 16'384 || !valid_utf8(url)) {
+        return false;
+    }
+    const std::wstring wide = utf8_to_wide(url);
+    URL_COMPONENTS components{};
+    components.dwStructSize = sizeof(components);
+    components.dwHostNameLength = static_cast<DWORD>(-1);
+    components.dwUrlPathLength = static_cast<DWORD>(-1);
+    components.dwExtraInfoLength = static_cast<DWORD>(-1);
+    if (!WinHttpCrackUrl(wide.c_str(), static_cast<DWORD>(wide.size()), 0,
+                         &components)) {
+        return false;
+    }
+    if (components.nScheme != INTERNET_SCHEME_HTTP &&
+        components.nScheme != INTERNET_SCHEME_HTTPS) {
+        return false;
+    }
+    host.assign(components.lpszHostName, components.dwHostNameLength);
+    path.assign(components.lpszUrlPath, components.dwUrlPathLength);
+    if (components.dwExtraInfoLength > 0) {
+        path.append(components.lpszExtraInfo, components.dwExtraInfoLength);
+    }
+    if (path.empty()) {
+        path = L"/";
+    }
+    port = components.nPort;
+    secure = components.nScheme == INTERNET_SCHEME_HTTPS;
+    return !host.empty();
+}
+
+// Read the first SSE event's `data:` payload out of a text/event-stream body.
+// MCP streamable-HTTP servers may hand the initialize/tools/call response
+// back as a single-event SSE stream; we treat everything after the first
+// terminating blank line as noise and return just that first payload.
+std::string extract_first_sse_event(std::string_view body) {
+    std::string data;
+    size_t offset = 0;
+    while (offset < body.size()) {
+        size_t line_end = body.find('\n', offset);
+        std::string_view line = body.substr(
+            offset, line_end == std::string_view::npos ? body.size() - offset
+                                                       : line_end - offset);
+        if (!line.empty() && line.back() == '\r') {
+            line.remove_suffix(1);
+        }
+        if (line.empty()) {
+            if (!data.empty()) {
+                return data;
+            }
+        } else if (line.rfind("data:", 0) == 0) {
+            std::string_view chunk = line.substr(5);
+            if (!chunk.empty() && chunk.front() == ' ') {
+                chunk.remove_prefix(1);
+            }
+            if (!data.empty()) {
+                data.push_back('\n');
+            }
+            data.append(chunk);
+        }
+        // event:/id:/retry: fields are ignored — MCP doesn't rely on them
+        // for the request/response wire.
+        if (line_end == std::string_view::npos) {
+            break;
+        }
+        offset = line_end + 1;
+    }
+    return data;
+}
+
 class McpServer final {
 public:
     McpServer() = default;
@@ -168,6 +272,18 @@ public:
         name_ = config.value("name", "");
         if (name_.empty() || name_.size() > kMaxServerNameBytes ||
             !valid_utf8(name_)) {
+            return SAO_AI_EDITOR_ERR_INVALID_ARGUMENT;
+        }
+        // MCP Streamable HTTP transport (2024-11-05+): registration keeps no
+        // subprocess; every JSON-RPC turn is a self-contained HTTP POST to
+        // a single endpoint that may reply with a plain JSON body or with a
+        // single-event SSE stream.
+        const std::string transport = config.value("transport",
+                                                    std::string{"stdio"});
+        if (transport == "http") {
+            return start_http(config);
+        }
+        if (transport != "stdio") {
             return SAO_AI_EDITOR_ERR_INVALID_ARGUMENT;
         }
         const std::string command = config.value("command", "");
@@ -304,6 +420,60 @@ public:
 
     const std::string& name() const noexcept { return name_; }
 
+    // ---- HTTP transport ----------------------------------------------------
+    // Registration for the streamable-HTTP transport parses the endpoint,
+    // stashes caller-supplied headers, and drives the same initialize
+    // handshake as the stdio path — but every JSON-RPC turn goes over a
+    // fresh WinHTTP POST instead of a subprocess pipe.
+    int32_t start_http(const Json& config) {
+        const std::string url = config.value("url", std::string{});
+        if (url.empty() || !valid_utf8(url)) {
+            return SAO_AI_EDITOR_ERR_INVALID_ARGUMENT;
+        }
+        if (!crack_http_url(url, http_host_, http_path_, http_port_,
+                            http_secure_)) {
+            return SAO_AI_EDITOR_ERR_INVALID_ARGUMENT;
+        }
+        http_url_ = url;
+        if (config.contains("headers")) {
+            if (!config["headers"].is_object()) {
+                return SAO_AI_EDITOR_ERR_INVALID_ARGUMENT;
+            }
+            for (const auto& [key, value] : config["headers"].items()) {
+                if (!value.is_string() || !valid_utf8(key) ||
+                    !valid_utf8(value.get<std::string>())) {
+                    return SAO_AI_EDITOR_ERR_INVALID_ARGUMENT;
+                }
+                // Reject header injection attempts (CR/LF) up front.
+                const std::string& value_str = value.get<std::string>();
+                if (key.find_first_of("\r\n") != std::string::npos ||
+                    value_str.find_first_of("\r\n") != std::string::npos) {
+                    return SAO_AI_EDITOR_ERR_INVALID_ARGUMENT;
+                }
+                http_headers_.emplace_back(key, value_str);
+            }
+        }
+        startup_ms_ = std::clamp<uint32_t>(config.value("startupMs", 0U), 500U,
+                                           120000U);
+        if (startup_ms_ == 0) {
+            startup_ms_ = kDefaultStartupMs;
+        }
+        http_session_ = InternetHandle(WinHttpOpen(
+            L"SAO-AI-Editor-MCP/1.0", WINHTTP_ACCESS_TYPE_AUTOMATIC_PROXY,
+            WINHTTP_NO_PROXY_NAME, WINHTTP_NO_PROXY_BYPASS, 0));
+        if (!http_session_) {
+            return SAO_AI_EDITOR_ERR_HTTP;
+        }
+        http_connection_ = InternetHandle(WinHttpConnect(
+            http_session_.get(), http_host_.c_str(), http_port_, 0));
+        if (!http_connection_) {
+            return SAO_AI_EDITOR_ERR_HTTP;
+        }
+        http_transport_ = true;
+        started_at_ms_ = unix_milliseconds();
+        return handshake();
+    }
+
     int32_t list_tools(Json& result) {
         return call("tools/list", Json::object(), 15000U, result);
     }
@@ -351,6 +521,14 @@ public:
             }
             pending_.clear();
         }
+        if (http_transport_) {
+            // Drop WinHTTP handles under the http_mutex_ so an in-flight POST
+            // wraps up before the connection dies.
+            std::lock_guard<std::mutex> http_guard(http_mutex_);
+            http_connection_.reset();
+            http_session_.reset();
+            return;
+        }
         if (process_) {
             const bool exited =
                 WaitForSingleObject(process_.get(), 0) == WAIT_OBJECT_0;
@@ -384,11 +562,16 @@ public:
 
     Json snapshot() const {
         std::lock_guard<std::mutex> guard(state_mutex_);
-        return Json{{"name", name_},
-                    {"protocolVersion", protocol_version_},
-                    {"serverInfo", server_info_},
-                    {"capabilities", capabilities_},
-                    {"startedAt", started_at_ms_}};
+        Json out{{"name", name_},
+                 {"transport", http_transport_ ? "http" : "stdio"},
+                 {"protocolVersion", protocol_version_},
+                 {"serverInfo", server_info_},
+                 {"capabilities", capabilities_},
+                 {"startedAt", started_at_ms_}};
+        if (http_transport_) {
+            out["url"] = http_url_;
+        }
+        return out;
     }
 
 private:
@@ -401,15 +584,18 @@ private:
             ? kDefaultRequestMs
             : std::clamp<uint32_t>(timeout_ms, 100U, 10U * 60U * 1000U);
         const int64_t id = next_id_.fetch_add(1, std::memory_order_relaxed);
+        Json request{{"jsonrpc", "2.0"},
+                     {"id", id},
+                     {"method", std::string(method)},
+                     {"params", params}};
+        if (http_transport_) {
+            return call_http(id, request, budget, result);
+        }
         auto response = std::make_shared<PendingResponse>();
         {
             std::lock_guard<std::mutex> guard(pending_mutex_);
             pending_[id] = response;
         }
-        Json request{{"jsonrpc", "2.0"},
-                     {"id", id},
-                     {"method", std::string(method)},
-                     {"params", params}};
         const std::string payload = dump_json(request);
         if (!send_framed(payload)) {
             std::lock_guard<std::mutex> guard(pending_mutex_);
@@ -428,6 +614,145 @@ private:
             return SAO_AI_EDITOR_ERR_PROTOCOL;
         }
         result = envelope.value("result", Json::object());
+        return SAO_AI_EDITOR_OK;
+    }
+
+    // Streamable-HTTP transport: POST the JSON-RPC request, accept either
+    // application/json or text/event-stream (first event only), match ids,
+    // surface JSON-RPC errors the same way the stdio path does.
+    int32_t call_http(int64_t id, const Json& request, uint32_t timeout_ms,
+                      Json& result) {
+        const std::string payload = dump_json(request);
+        std::string response_body;
+        std::string response_content_type;
+        DWORD status_code = 0;
+        const int32_t http_status = http_post(payload, timeout_ms, status_code,
+                                              response_content_type,
+                                              response_body);
+        if (http_status != SAO_AI_EDITOR_OK) {
+            return http_status;
+        }
+        if (status_code < 200 || status_code >= 300) {
+            return SAO_AI_EDITOR_ERR_HTTP;
+        }
+        std::string body = response_body;
+        std::string lowered = response_content_type;
+        for (char& c : lowered) {
+            c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+        }
+        if (lowered.find("text/event-stream") != std::string::npos) {
+            body = extract_first_sse_event(response_body);
+            if (body.empty()) {
+                return SAO_AI_EDITOR_ERR_PROTOCOL;
+            }
+        }
+        Json envelope = Json::parse(body, nullptr, false);
+        if (!envelope.is_object()) {
+            return SAO_AI_EDITOR_ERR_PROTOCOL;
+        }
+        // The server MAY echo the request id (it should) — if present, sanity
+        // check it before accepting the response.  Missing id we tolerate to
+        // stay lenient with less-strict servers.
+        if (envelope.contains("id") && envelope["id"].is_number_integer() &&
+            envelope["id"].get<int64_t>() != id) {
+            return SAO_AI_EDITOR_ERR_PROTOCOL;
+        }
+        if (envelope.contains("error")) {
+            result = envelope["error"];
+            return SAO_AI_EDITOR_ERR_PROTOCOL;
+        }
+        result = envelope.value("result", Json::object());
+        return SAO_AI_EDITOR_OK;
+    }
+
+    int32_t http_post(const std::string& body, uint32_t timeout_ms,
+                      DWORD& out_status_code, std::string& out_content_type,
+                      std::string& out_body) {
+        if (!http_connection_) {
+            return SAO_AI_EDITOR_ERR_IPC_CLOSED;
+        }
+        std::lock_guard<std::mutex> guard(http_mutex_);
+        const DWORD flags = http_secure_ ? WINHTTP_FLAG_SECURE : 0;
+        InternetHandle request(WinHttpOpenRequest(
+            http_connection_.get(), L"POST", http_path_.c_str(), nullptr,
+            WINHTTP_NO_REFERER, WINHTTP_DEFAULT_ACCEPT_TYPES, flags));
+        if (!request) {
+            return SAO_AI_EDITOR_ERR_HTTP;
+        }
+        // Set per-request timeouts so a wedged server doesn't wedge the
+        // caller.  WinHttpSetTimeouts takes (resolve, connect, send, receive).
+        const int budget = static_cast<int>(timeout_ms);
+        WinHttpSetTimeouts(request.get(), budget, budget, budget, budget);
+        std::wstring headers =
+            L"Content-Type: application/json\r\n"
+            L"Accept: application/json, text/event-stream\r\n";
+        for (const auto& [key, value] : http_headers_) {
+            headers += utf8_to_wide(key) + L": " + utf8_to_wide(value) +
+                       L"\r\n";
+        }
+        if (!WinHttpSendRequest(
+                request.get(), headers.c_str(),
+                static_cast<DWORD>(headers.size()),
+                const_cast<char*>(body.data()),
+                static_cast<DWORD>(body.size()),
+                static_cast<DWORD>(body.size()), 0)) {
+            return SAO_AI_EDITOR_ERR_HTTP;
+        }
+        if (!WinHttpReceiveResponse(request.get(), nullptr)) {
+            return SAO_AI_EDITOR_ERR_HTTP;
+        }
+        DWORD status_size = sizeof(out_status_code);
+        if (!WinHttpQueryHeaders(request.get(),
+                                 WINHTTP_QUERY_STATUS_CODE |
+                                     WINHTTP_QUERY_FLAG_NUMBER,
+                                 WINHTTP_HEADER_NAME_BY_INDEX,
+                                 &out_status_code, &status_size,
+                                 WINHTTP_NO_HEADER_INDEX)) {
+            return SAO_AI_EDITOR_ERR_HTTP;
+        }
+        // Content-Type is optional in HTTP but MCP servers do send one; treat
+        // "missing" as application/json (the spec's default reply shape).
+        DWORD content_type_size = 0;
+        WinHttpQueryHeaders(request.get(), WINHTTP_QUERY_CONTENT_TYPE,
+                            WINHTTP_HEADER_NAME_BY_INDEX,
+                            WINHTTP_NO_OUTPUT_BUFFER, &content_type_size,
+                            WINHTTP_NO_HEADER_INDEX);
+        if (content_type_size > 0) {
+            std::wstring content_type(content_type_size / sizeof(wchar_t),
+                                      L'\0');
+            if (WinHttpQueryHeaders(request.get(), WINHTTP_QUERY_CONTENT_TYPE,
+                                    WINHTTP_HEADER_NAME_BY_INDEX,
+                                    content_type.data(), &content_type_size,
+                                    WINHTTP_NO_HEADER_INDEX)) {
+                if (!content_type.empty() && content_type.back() == L'\0') {
+                    content_type.pop_back();
+                }
+                out_content_type = wide_to_utf8(content_type);
+            }
+        }
+        std::array<char, 16U * 1024U> buffer{};
+        for (;;) {
+            DWORD available = 0;
+            if (!WinHttpQueryDataAvailable(request.get(), &available) ||
+                available == 0) {
+                break;
+            }
+            while (available > 0) {
+                const DWORD requested = std::min<DWORD>(
+                    available, static_cast<DWORD>(buffer.size()));
+                DWORD read = 0;
+                if (!WinHttpReadData(request.get(), buffer.data(), requested,
+                                     &read) ||
+                    read == 0) {
+                    break;
+                }
+                out_body.append(buffer.data(), read);
+                if (out_body.size() > 8U * 1024U * 1024U) {
+                    return SAO_AI_EDITOR_ERR_PROTOCOL;
+                }
+                available -= read;
+            }
+        }
         return SAO_AI_EDITOR_OK;
     }
 
@@ -453,7 +778,17 @@ private:
         }
         const std::string notification =
             R"({"jsonrpc":"2.0","method":"notifications/initialized","params":{}})";
-        (void)send_framed(notification);
+        if (http_transport_) {
+            // MCP HTTP treats notifications the same as requests — a POST
+            // with the JSON-RPC notification envelope.  We ignore the reply.
+            DWORD status_code = 0;
+            std::string content_type;
+            std::string body;
+            (void)http_post(notification, startup_ms_, status_code, content_type,
+                            body);
+        } else {
+            (void)send_framed(notification);
+        }
         return SAO_AI_EDITOR_OK;
     }
 
@@ -595,6 +930,19 @@ private:
     std::string stderr_tail_;
     std::mutex shutdown_mutex_;
     bool shutdown_started_ = false;
+
+    // HTTP transport state — populated by start_http() and only touched
+    // when http_transport_ == true.
+    bool http_transport_ = false;
+    std::string http_url_;
+    std::wstring http_host_;
+    std::wstring http_path_;
+    INTERNET_PORT http_port_ = 0;
+    bool http_secure_ = false;
+    std::vector<std::pair<std::string, std::string>> http_headers_;
+    InternetHandle http_session_;
+    InternetHandle http_connection_;
+    std::mutex http_mutex_;
 };
 
 }  // namespace

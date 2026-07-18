@@ -614,6 +614,9 @@ int32_t NativeRuntime::invoke(std::string_view method,
     if (method == "chat.run") {
         return start_chat(params, result);
     }
+    if (method == "chat.run_with_mcp") {
+        return start_chat_with_mcp(params, result);
+    }
     if (method == "run.cancel") {
         return cancel_run(params, result);
     }
@@ -636,6 +639,9 @@ int32_t NativeRuntime::invoke(std::string_view method,
         method == "agents.save_def" || method == "agents.delete_def" ||
         method == "agents.invoke") {
         return dispatch_agent(method, params, result);
+    }
+    if (method == "agents.invoke_with_mcp") {
+        return agent_invoke_with_mcp(params, result);
     }
     return SAO_AI_EDITOR_ERR_NOT_FOUND;
 }
@@ -731,7 +737,51 @@ int32_t NativeRuntime::dispatch_agent(std::string_view method,
         if (!agent_registry_.get(params["id"].get<std::string>(), agent)) {
             return SAO_AI_EDITOR_ERR_NOT_FOUND;
         }
-        const Json history = params.value("history", Json::array());
+        // conversationId is authoritative when provided: we load the stored
+        // history from disk and ignore the `history` param.  If it's absent
+        // and createConversation=true, we lazily create a fresh workspace
+        // conversation and return its id so the caller can keep appending.
+        std::string conversation_id = params.value("conversationId",
+                                                    std::string{});
+        const bool create_conversation = params.value("createConversation",
+                                                       false);
+        Json history_from_store = Json::array();
+        if (!conversation_id.empty()) {
+            Json conversation_doc;
+            int32_t get_status = SAO_AI_EDITOR_OK;
+            {
+                std::lock_guard<std::mutex> guard(store_mutex_);
+                get_status = conversations_.get(conversation_id,
+                                                 conversation_doc);
+            }
+            if (get_status != SAO_AI_EDITOR_OK) {
+                return get_status;
+            }
+            history_from_store = conversation_doc.value("messages",
+                                                         Json::array());
+        } else if (create_conversation) {
+            Json created;
+            const std::string title = params.value("conversationTitle",
+                                                    agent.name);
+            const std::string convo_model = params.value(
+                "model", agent.model);
+            int32_t create_status = SAO_AI_EDITOR_OK;
+            {
+                std::lock_guard<std::mutex> guard(store_mutex_);
+                create_status = conversations_.create(
+                    title, convo_model, "workspace", created);
+            }
+            if (create_status != SAO_AI_EDITOR_OK) {
+                return create_status;
+            }
+            conversation_id = created.value("id", std::string{});
+        }
+        // When a conversationId is in play, the persisted history overrides
+        // any caller-supplied `history` array.  Without one, we fall back to
+        // the legacy single-shot behaviour that still respects `history`.
+        const Json history = !conversation_id.empty()
+            ? history_from_store
+            : params.value("history", Json::array());
         Json messages =
             agent_registry_.build_chat_messages(agent, message, history);
         const std::string effective_model = params.value(
@@ -740,6 +790,9 @@ int32_t NativeRuntime::dispatch_agent(std::string_view method,
         chat_params.erase("id");
         chat_params.erase("message");
         chat_params.erase("history");
+        chat_params.erase("conversationId");
+        chat_params.erase("createConversation");
+        chat_params.erase("conversationTitle");
         chat_params["messages"] = std::move(messages);
         if (!effective_model.empty()) {
             chat_params["model"] = effective_model;
@@ -765,10 +818,27 @@ int32_t NativeRuntime::dispatch_agent(std::string_view method,
         if (status != SAO_AI_EDITOR_OK) {
             return status;
         }
+        // Persist both the user turn and the assistant reply so the next
+        // agents.invoke on this conversation sees the full transcript.
+        if (!conversation_id.empty()) {
+            Json append_result;
+            std::lock_guard<std::mutex> guard(store_mutex_);
+            conversations_.append(
+                conversation_id,
+                Json{{"role", "user"}, {"content", message}},
+                append_result);
+            conversations_.append(
+                conversation_id,
+                Json{{"role", "assistant"}, {"content", content}},
+                append_result);
+        }
         result = Json{{"agentId", agent.id},
                       {"agentName", agent.name},
                       {"content", std::move(content)},
                       {"model", effective_model}};
+        if (!conversation_id.empty()) {
+            result["conversationId"] = conversation_id;
+        }
         return SAO_AI_EDITOR_OK;
     }
     return SAO_AI_EDITOR_ERR_NOT_FOUND;
@@ -1780,6 +1850,131 @@ int32_t NativeRuntime::dispatch_mcp(std::string_view method, const Json& params,
         return SAO_AI_EDITOR_OK;
     }
     return SAO_AI_EDITOR_ERR_NOT_FOUND;
+}
+
+int32_t NativeRuntime::collect_mcp_openai_tools(const Json& mcp_server_filter,
+                                                Json& out_tools) {
+    out_tools = Json::array();
+    if (mcp_client_ == nullptr) {
+        // No MCP registry — treat as "no MCP tools available"; callers may
+        // still layer extraTools on top.
+        return SAO_AI_EDITOR_OK;
+    }
+    // Build a normalized filter set.  Empty filter (missing / null / empty
+    // array) means "include tools from every registered server".
+    std::vector<std::string> filter;
+    bool filter_enabled = false;
+    if (mcp_server_filter.is_array()) {
+        for (const auto& entry : mcp_server_filter) {
+            if (entry.is_string()) {
+                const std::string name = entry.get<std::string>();
+                if (!name.empty()) {
+                    filter.push_back(name);
+                    filter_enabled = true;
+                }
+            }
+        }
+    }
+    Json tools_response;
+    const int32_t status = dispatch_mcp("mcp.list_tools", Json::object(),
+                                        tools_response);
+    if (status != SAO_AI_EDITOR_OK) {
+        return status;
+    }
+    if (!tools_response.is_object() || !tools_response.contains("items") ||
+        !tools_response["items"].is_array()) {
+        return SAO_AI_EDITOR_OK;
+    }
+    for (const auto& item : tools_response["items"]) {
+        if (!item.is_object()) {
+            continue;
+        }
+        const std::string server = item.value("server", std::string{});
+        const std::string tool_name = item.value("name", std::string{});
+        if (server.empty() || tool_name.empty()) {
+            continue;
+        }
+        if (filter_enabled) {
+            if (std::find(filter.begin(), filter.end(), server) ==
+                filter.end()) {
+                continue;
+            }
+        }
+        Json function_body{{"name", "mcp__" + server + "__" + tool_name}};
+        if (item.contains("description") &&
+            item["description"].is_string()) {
+            function_body["description"] = item["description"];
+        }
+        Json parameters;
+        if (item.contains("inputSchema") && item["inputSchema"].is_object()) {
+            parameters = item["inputSchema"];
+        } else {
+            parameters = Json{{"type", "object"},
+                              {"properties", Json::object()}};
+        }
+        function_body["parameters"] = std::move(parameters);
+        out_tools.push_back(Json{{"type", "function"},
+                                 {"function", std::move(function_body)}});
+    }
+    return SAO_AI_EDITOR_OK;
+}
+
+int32_t NativeRuntime::start_chat_with_mcp(const Json& params, Json& result) {
+    if (!params.is_object()) {
+        return SAO_AI_EDITOR_ERR_INVALID_ARGUMENT;
+    }
+    Json mcp_tools;
+    const int32_t collect_status = collect_mcp_openai_tools(
+        params.value("mcpServers", Json{}), mcp_tools);
+    if (collect_status != SAO_AI_EDITOR_OK) {
+        return collect_status;
+    }
+    // Build combined tools list: MCP tools first, then user-provided
+    // extraTools.  Empty combined list -> do not set params.tools so the
+    // request body stays identical to chat.run without tools.
+    Json combined_tools = std::move(mcp_tools);
+    if (params.contains("extraTools") && params["extraTools"].is_array()) {
+        for (const auto& tool : params["extraTools"]) {
+            combined_tools.push_back(tool);
+        }
+    }
+    Json forwarded = params;
+    forwarded.erase("mcpServers");
+    forwarded.erase("extraTools");
+    // systemPromptSource is reserved for a future revision that lands
+    // mcp.prompts.get plumbing; drop it silently for now so callers can send
+    // the field without triggering INVALID_ARGUMENT.
+    forwarded.erase("systemPromptSource");
+    if (!combined_tools.empty()) {
+        forwarded["tools"] = std::move(combined_tools);
+    }
+    return start_chat(forwarded, result);
+}
+
+int32_t NativeRuntime::agent_invoke_with_mcp(const Json& params, Json& result) {
+    if (!params.is_object()) {
+        return SAO_AI_EDITOR_ERR_INVALID_ARGUMENT;
+    }
+    Json mcp_tools;
+    const int32_t collect_status = collect_mcp_openai_tools(
+        params.value("mcpServers", Json{}), mcp_tools);
+    if (collect_status != SAO_AI_EDITOR_OK) {
+        return collect_status;
+    }
+    Json combined_tools = std::move(mcp_tools);
+    if (params.contains("extraTools") && params["extraTools"].is_array()) {
+        for (const auto& tool : params["extraTools"]) {
+            combined_tools.push_back(tool);
+        }
+    }
+    Json forwarded = params;
+    forwarded.erase("mcpServers");
+    forwarded.erase("extraTools");
+    forwarded.erase("systemPromptSource");
+    if (!combined_tools.empty()) {
+        forwarded["tools"] = std::move(combined_tools);
+    }
+    return dispatch_agent("agents.invoke", forwarded, result);
 }
 
 int32_t NativeRuntime::run_status(const Json& params, Json& result) {

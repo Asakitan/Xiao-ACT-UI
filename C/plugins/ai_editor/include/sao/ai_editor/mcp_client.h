@@ -29,11 +29,26 @@ SAO_AI_EDITOR_API int32_t SAO_AI_EDITOR_CALL sao_ai_editor_mcp_client_create(
 //
 // config_json fields (UTF-8 JSON object):
 //   name       (string, required)  — display id for this server
+//   transport  (string)            — "stdio" (default) or "http"
+//
+//   Stdio transport fields (used when transport == "stdio"):
 //   command    (string, required)  — executable path
 //   args       (array<string>)     — command-line arguments
 //   env        (object<string,string>) — extra environment variables
 //   cwd        (string)            — working directory (optional)
+//
+//   HTTP transport fields (used when transport == "http"):
+//   url        (string, required)  — Streamable HTTP endpoint (http/https)
+//   headers    (object<string,string>) — extra request headers, e.g.
+//                                        {"Authorization": "Bearer …"}
+//
 //   startupMs  (integer)           — initialize handshake budget, default 15000
+//
+// The HTTP transport speaks the MCP Streamable HTTP protocol (2024-11-05+):
+// every JSON-RPC turn is POSTed to the endpoint, and the server may reply
+// with a single application/json body or a text/event-stream with one
+// SSE event containing the response.  Long-lived GET /events subscriptions
+// and resumability are not implemented here.
 //
 // Returns SAO_AI_EDITOR_OK on successful handshake.
 SAO_AI_EDITOR_API int32_t SAO_AI_EDITOR_CALL
