@@ -1,8 +1,73 @@
 #include "extension_host.h"
 
+#include <windows.h>
+
+#include <filesystem>
 #include <utility>
+#include <vector>
 
 #include "native_runtime_internal.h"
+
+namespace sao::ai_editor::native {
+namespace {
+
+std::filesystem::path module_directory() {
+    HMODULE module_handle = nullptr;
+    if (!GetModuleHandleExW(
+            GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS |
+                GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+            reinterpret_cast<LPCWSTR>(&module_directory),
+            &module_handle) ||
+        module_handle == nullptr) {
+        return {};
+    }
+    std::vector<wchar_t> buffer(MAX_PATH);
+    for (;;) {
+        const DWORD written = GetModuleFileNameW(
+            module_handle, buffer.data(),
+            static_cast<DWORD>(buffer.size()));
+        if (written == 0) {
+            return {};
+        }
+        if (written < buffer.size()) {
+            std::filesystem::path path(buffer.data());
+            return path.parent_path();
+        }
+        buffer.resize(buffer.size() * 2);
+        if (buffer.size() > 32768) {
+            return {};
+        }
+    }
+}
+
+std::string default_shim_path_utf8() {
+    const std::filesystem::path anchor = module_directory();
+    if (anchor.empty()) {
+        return {};
+    }
+    static const wchar_t* kRelativeCandidates[] = {
+        L"assets/ai_editor/extension_host_shim.js",
+        L"../assets/ai_editor/extension_host_shim.js",
+        L"../../assets/ai_editor/extension_host_shim.js",
+        L"../plugins/ai_editor/assets/extension_host_shim.js",
+        L"../../plugins/ai_editor/assets/extension_host_shim.js",
+    };
+    for (const auto* rel : kRelativeCandidates) {
+        std::filesystem::path candidate = anchor / rel;
+        std::error_code error;
+        candidate = std::filesystem::weakly_canonical(candidate, error);
+        if (error) {
+            continue;
+        }
+        if (std::filesystem::exists(candidate, error) && !error) {
+            return wide_to_utf8(candidate.native());
+        }
+    }
+    return {};
+}
+
+}  // namespace
+}  // namespace sao::ai_editor::native
 
 namespace sao::ai_editor::native {
 
@@ -22,15 +87,23 @@ int32_t ExtensionHost::configure(const Json& params) {
     std::lock_guard<std::mutex> guard(mutex_);
     if (!params.is_object() ||
         !params.contains("nodeExecutable") ||
-        !params["nodeExecutable"].is_string() ||
-        !params.contains("entryScript") ||
-        !params["entryScript"].is_string()) {
+        !params["nodeExecutable"].is_string()) {
         return SAO_AI_EDITOR_ERR_INVALID_ARGUMENT;
     }
     boot_options_ = NodeRuntime::BootOptions{};
     boot_options_.node_executable =
         params["nodeExecutable"].get<std::string>();
-    boot_options_.entry_script = params["entryScript"].get<std::string>();
+    if (params.contains("entryScript") &&
+        params["entryScript"].is_string() &&
+        !params["entryScript"].get<std::string>().empty()) {
+        boot_options_.entry_script =
+            params["entryScript"].get<std::string>();
+    } else {
+        boot_options_.entry_script = default_shim_path_utf8();
+        if (boot_options_.entry_script.empty()) {
+            return SAO_AI_EDITOR_ERR_NOT_FOUND;
+        }
+    }
     if (params.contains("nodeArgs") && params["nodeArgs"].is_array()) {
         for (const auto& item : params["nodeArgs"]) {
             if (!item.is_string()) {

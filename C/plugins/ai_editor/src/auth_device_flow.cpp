@@ -282,6 +282,19 @@ int32_t AuthDeviceFlow::persist_token(const std::string& provider_id,
         wrapped["expires_at_unix_ms"] =
             unix_milliseconds() + expires_in_seconds * 1000;
     }
+    // If the caller already merged _sao_flow_config in, keep it — otherwise
+    // fall back to the currently-cached blob so refresh metadata survives
+    // partial responses (e.g. some IdPs omit refresh_token on refresh).
+    if (!wrapped.contains("_sao_flow_config")) {
+        std::string cached;
+        if (store_->get("auth/" + provider_id + "/token", cached) ==
+                SAO_AI_EDITOR_OK) {
+            Json parsed = Json::parse(cached, nullptr, false);
+            if (parsed.is_object() && parsed.contains("_sao_flow_config")) {
+                wrapped["_sao_flow_config"] = parsed["_sao_flow_config"];
+            }
+        }
+    }
     const std::string secret_key =
         "auth/" + provider_id + "/token";
     return store_->set(secret_key, wrapped.dump());
@@ -334,8 +347,13 @@ int32_t AuthDeviceFlow::poll(std::string_view flow_id, Json& out) {
         payload["access_token"].is_string()) {
         state.status = "success";
         const int64_t expires_in = payload.value("expires_in", int64_t{0});
+        Json enriched = payload;
+        enriched["_sao_flow_config"] = Json{
+            {"token_endpoint", state.token_endpoint},
+            {"client_id", state.client_id},
+            {"client_secret", state.client_secret}};
         const int32_t persist_status =
-            persist_token(state.provider_id, payload, expires_in);
+            persist_token(state.provider_id, enriched, expires_in);
         if (persist_status != SAO_AI_EDITOR_OK) {
             state.status = "failed";
             return persist_status;
@@ -433,6 +451,106 @@ int32_t AuthDeviceFlow::load_token(std::string_view provider_id,
     }
     out = std::move(parsed);
     return SAO_AI_EDITOR_OK;
+}
+
+int32_t AuthDeviceFlow::refresh(std::string_view provider_id, Json& out) {
+    if (!valid_simple_id(provider_id)) {
+        return SAO_AI_EDITOR_ERR_INVALID_ARGUMENT;
+    }
+    if (store_ == nullptr) {
+        return SAO_AI_EDITOR_ERR_NOT_INITIALIZED;
+    }
+    Json existing;
+    const int32_t load_status = load_token(provider_id, existing);
+    if (load_status != SAO_AI_EDITOR_OK) {
+        return load_status;
+    }
+    const std::string refresh_token = existing.value("refresh_token",
+                                                      std::string{});
+    if (refresh_token.empty()) {
+        return SAO_AI_EDITOR_ERR_NOT_FOUND;
+    }
+    const Json config = existing.value("_sao_flow_config", Json::object());
+    const std::string token_endpoint = config.value("token_endpoint",
+                                                     std::string{});
+    const std::string client_id = config.value("client_id",
+                                                std::string{});
+    const std::string client_secret = config.value("client_secret",
+                                                    std::string{});
+    if (token_endpoint.empty() || client_id.empty()) {
+        return SAO_AI_EDITOR_ERR_NOT_FOUND;
+    }
+    std::string body = "grant_type=refresh_token";
+    body += "&refresh_token=" + url_encode(refresh_token);
+    body += "&client_id=" + url_encode(client_id);
+    if (!client_secret.empty()) {
+        body += "&client_secret=" + url_encode(client_secret);
+    }
+    HttpResponse response;
+    const int32_t http_status = post_form(token_endpoint, body, response);
+    if (http_status != SAO_AI_EDITOR_OK) {
+        return http_status;
+    }
+    if (response.status_code < 200 || response.status_code >= 300) {
+        return SAO_AI_EDITOR_ERR_HTTP;
+    }
+    Json payload = Json::parse(response.body, nullptr, false);
+    if (!payload.is_object() || !payload.contains("access_token") ||
+        !payload["access_token"].is_string()) {
+        return SAO_AI_EDITOR_ERR_PROTOCOL;
+    }
+    // Some IdPs only return a fresh access_token on refresh; carry the old
+    // refresh_token forward when the response omits it.
+    if (!payload.contains("refresh_token") ||
+        !payload["refresh_token"].is_string()) {
+        payload["refresh_token"] = refresh_token;
+    }
+    Json enriched = payload;
+    enriched["_sao_flow_config"] = config;
+    const int64_t expires_in = payload.value("expires_in", int64_t{0});
+    const int32_t persist_status = persist_token(std::string(provider_id),
+                                                  enriched, expires_in);
+    if (persist_status != SAO_AI_EDITOR_OK) {
+        return persist_status;
+    }
+    (void)load_token(provider_id, out);
+    out["refreshed"] = true;
+    return SAO_AI_EDITOR_OK;
+}
+
+int32_t AuthDeviceFlow::get_access_token(std::string_view provider_id,
+                                         int64_t expiry_leeway_seconds,
+                                         Json& out) {
+    Json existing;
+    const int32_t load_status = load_token(provider_id, existing);
+    if (load_status != SAO_AI_EDITOR_OK) {
+        return load_status;
+    }
+    const int64_t expires_at = existing.value("expires_at_unix_ms",
+                                               int64_t{0});
+    const int64_t leeway_ms = std::max<int64_t>(0, expiry_leeway_seconds) *
+                              1000;
+    const bool needs_refresh = expires_at > 0 &&
+                               unix_milliseconds() + leeway_ms >= expires_at;
+    if (!needs_refresh) {
+        out = std::move(existing);
+        out["refreshed"] = false;
+        return SAO_AI_EDITOR_OK;
+    }
+    const int32_t refresh_status = refresh(provider_id, out);
+    if (refresh_status == SAO_AI_EDITOR_OK) {
+        return SAO_AI_EDITOR_OK;
+    }
+    // Refresh failed but we still have a stored access_token — hand it back
+    // with a hint so the caller can decide whether to accept the risk.
+    if (refresh_status == SAO_AI_EDITOR_ERR_NOT_FOUND ||
+        refresh_status == SAO_AI_EDITOR_ERR_HTTP) {
+        out = std::move(existing);
+        out["refreshed"] = false;
+        out["refreshError"] = refresh_status;
+        return SAO_AI_EDITOR_OK;
+    }
+    return refresh_status;
 }
 
 int32_t AuthDeviceFlow::revoke(std::string_view provider_id, Json& out) {

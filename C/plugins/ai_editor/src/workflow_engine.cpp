@@ -388,7 +388,9 @@ Json WorkflowExecution::snapshot() const {
                 {"completedAt", completed_at_ms_}};
 }
 
-std::string WorkflowExecution::interpolate(std::string_view text) const {
+std::string WorkflowExecution::interpolate_with(
+    std::string_view text,
+    const std::unordered_map<std::string, std::string>& vars) {
     std::string output;
     output.reserve(text.size());
     size_t cursor = 0;
@@ -413,13 +415,18 @@ std::string WorkflowExecution::interpolate(std::string_view text) const {
                                              name.back())) != 0) {
             name.pop_back();
         }
-        const auto found = variables_.find(name);
-        if (found != variables_.end()) {
+        const auto found = vars.find(name);
+        if (found != vars.end()) {
             output.append(found->second);
         }
         cursor = close + 2;
     }
     return output;
+}
+
+std::string WorkflowExecution::interpolate(std::string_view text) const {
+    // Caller holds `mutex_`.
+    return interpolate_with(text, variables_);
 }
 
 bool WorkflowExecution::wait_for_confirmation(const WorkflowStep& step) {
@@ -448,11 +455,24 @@ int32_t WorkflowExecution::execute_step(NativeRuntime& runtime,
                                         const std::string& model,
                                         uint32_t chat_timeout_ms,
                                         std::string& out_content) {
-    std::string prompt;
+    std::unordered_map<std::string, std::string> snapshot;
     {
         std::lock_guard<std::mutex> guard(mutex_);
-        prompt = interpolate(step.prompt);
+        snapshot = variables_;
     }
+    return execute_step_with_snapshot(runtime, step, snapshot, provider, model,
+                                       chat_timeout_ms, out_content);
+}
+
+int32_t WorkflowExecution::execute_step_with_snapshot(
+    NativeRuntime& runtime,
+    const WorkflowStep& step,
+    const std::unordered_map<std::string, std::string>& snapshot,
+    const Json& provider,
+    const std::string& model,
+    uint32_t chat_timeout_ms,
+    std::string& out_content) {
+    const std::string prompt = interpolate_with(step.prompt, snapshot);
     Json chat_params{{"provider", provider},
                      {"model", model},
                      {"stream", false},
@@ -484,7 +504,8 @@ void WorkflowExecution::run_loop(NativeRuntime* runtime, Json provider,
         return;
     }
     const auto& steps = definition_.steps;
-    for (size_t index = 0; index < steps.size(); ++index) {
+    size_t index = 0;
+    while (index < steps.size()) {
         if (cancel_requested_.load(std::memory_order_acquire)) {
             std::lock_guard<std::mutex> guard(mutex_);
             status_ = "cancelled";
@@ -511,8 +532,24 @@ void WorkflowExecution::run_loop(NativeRuntime* runtime, Json provider,
             std::lock_guard<std::mutex> guard(mutex_);
             current_step_index_ = index;
         }
-        const WorkflowStep& step = steps[index];
-        if (step.requires_confirmation) {
+        // Extend the batch across contiguous same-`group` steps (empty
+        // group → single-step batch).
+        size_t batch_end = index + 1;
+        const std::string& group_id = steps[index].group;
+        if (!group_id.empty()) {
+            while (batch_end < steps.size() &&
+                   steps[batch_end].group == group_id) {
+                ++batch_end;
+            }
+        }
+        const size_t batch_size = batch_end - index;
+        // Human confirmation applies before the batch fires; any step in
+        // the batch tagged requires_confirmation gates the whole batch.
+        for (size_t k = 0; k < batch_size; ++k) {
+            const WorkflowStep& step = steps[index + k];
+            if (!step.requires_confirmation) {
+                continue;
+            }
             if (!wait_for_confirmation(step)) {
                 std::lock_guard<std::mutex> guard(mutex_);
                 if (cancel_requested_.load(std::memory_order_acquire)) {
@@ -525,29 +562,65 @@ void WorkflowExecution::run_loop(NativeRuntime* runtime, Json provider,
                 return;
             }
         }
-        std::string content;
-        const int32_t status = execute_step(*runtime, step, provider, model,
-                                             chat_timeout_ms, content);
-        Json step_result{{"stepIndex", index},
-                         {"label", step.label},
-                         {"agent", step.agent},
-                         {"outputVar", step.output_var},
-                         {"status", status == SAO_AI_EDITOR_OK ? "completed"
-                                                              : "failed"},
-                         {"content", content}};
-        if (status != SAO_AI_EDITOR_OK) {
+
+        // Pre-batch snapshot lets parallel steps share a stable variable
+        // set; results merge into `variables_` only after the batch joins.
+        std::unordered_map<std::string, std::string> snapshot;
+        {
             std::lock_guard<std::mutex> guard(mutex_);
-            step_results_.push_back(std::move(step_result));
-            status_ = "failed";
-            error_message_ = "chat step failed";
-            completed_at_ms_ = unix_milliseconds();
-            return;
+            snapshot = variables_;
         }
+        std::vector<std::string> contents(batch_size);
+        std::vector<int32_t> statuses(batch_size, SAO_AI_EDITOR_OK);
+        if (batch_size == 1 || group_id.empty()) {
+            const int32_t status = execute_step_with_snapshot(
+                *runtime, steps[index], snapshot, provider, model,
+                chat_timeout_ms, contents[0]);
+            statuses[0] = status;
+        } else {
+            std::vector<std::thread> workers;
+            workers.reserve(batch_size);
+            for (size_t k = 0; k < batch_size; ++k) {
+                const size_t step_index = index + k;
+                workers.emplace_back([&, k, step_index] {
+                    statuses[k] = execute_step_with_snapshot(
+                        *runtime, steps[step_index], snapshot, provider,
+                        model, chat_timeout_ms, contents[k]);
+                });
+            }
+            for (auto& worker : workers) {
+                worker.join();
+            }
+        }
+
+        // Commit results in step order; the first failure short-circuits.
         std::lock_guard<std::mutex> guard(mutex_);
-        if (!step.output_var.empty()) {
-            variables_[step.output_var] = content;
+        for (size_t k = 0; k < batch_size; ++k) {
+            const WorkflowStep& step = steps[index + k];
+            Json step_result{{"stepIndex", index + k},
+                             {"label", step.label},
+                             {"agent", step.agent},
+                             {"outputVar", step.output_var},
+                             {"group", step.group},
+                             {"status", statuses[k] == SAO_AI_EDITOR_OK
+                                            ? "completed"
+                                            : "failed"},
+                             {"content", contents[k]}};
+            if (statuses[k] != SAO_AI_EDITOR_OK) {
+                step_results_.push_back(std::move(step_result));
+                status_ = "failed";
+                error_message_ = group_id.empty()
+                    ? "chat step failed"
+                    : "group step failed";
+                completed_at_ms_ = unix_milliseconds();
+                return;
+            }
+            if (!step.output_var.empty()) {
+                variables_[step.output_var] = contents[k];
+            }
+            step_results_.push_back(std::move(step_result));
         }
-        step_results_.push_back(std::move(step_result));
+        index = batch_end;
     }
     std::lock_guard<std::mutex> guard(mutex_);
     status_ = "completed";

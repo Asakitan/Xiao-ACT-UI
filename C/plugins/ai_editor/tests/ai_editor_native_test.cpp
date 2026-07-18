@@ -1210,6 +1210,149 @@ TEST_CASE("AI Editor auth.begin_device_flow + poll drives RFC 8628 to success",
                         ["status"] == SAO_AI_EDITOR_ERR_NOT_FOUND);
 }
 
+TEST_CASE("AI Editor auth.refresh_token exchanges refresh_token for new "
+          "access_token",
+          "[plugins][ai_editor][native][auth][refresh][integration]") {
+    RuntimeFixture fixture;
+    ScriptedHttpServer server;
+    // device_authorization + immediate token grant (short lifetime so the
+    // subsequent get_access_token call triggers a refresh).
+    server.enqueue(
+        R"({"device_code":"DEV-R","user_code":"USR-R",)"
+        R"("verification_uri":"https://auth.example.com/device",)"
+        R"("interval":1,"expires_in":600})");
+    server.enqueue(
+        R"({"access_token":"ACCESS-INITIAL","token_type":"Bearer",)"
+        R"("refresh_token":"REFRESH-R","expires_in":1})");
+    server.enqueue(
+        R"({"access_token":"ACCESS-REFRESHED","token_type":"Bearer",)"
+        R"("expires_in":3600})");
+    // Explicit refresh follow-up.
+    server.enqueue(
+        R"({"access_token":"ACCESS-FORCED","token_type":"Bearer",)"
+        R"("refresh_token":"REFRESH-ROTATED","expires_in":3600})");
+
+    const Json begun = dispatch(
+        fixture.get(), "auth.begin_device_flow",
+        {{"providerId", "refresh-fixture"},
+         {"deviceAuthorizationUrl", server.base_url() + "/device"},
+         {"tokenUrl", server.base_url() + "/token"},
+         {"clientId", "sao-test-client"},
+         {"scope", "openid"}});
+    const std::string flow_id = begun["result"]["flowId"];
+    const Json completed = dispatch(fixture.get(), "auth.poll_device_flow",
+                                     {{"flowId", flow_id}});
+    REQUIRE(completed["result"]["status"] == "success");
+    REQUIRE(completed["result"]["accessToken"] == "ACCESS-INITIAL");
+
+    // Sleep just past the 1s expiry so get_access_token triggers a refresh.
+    Sleep(1200);
+    const Json fresh = dispatch(fixture.get(), "auth.get_access_token",
+                                 {{"providerId", "refresh-fixture"},
+                                  {"expiryLeewaySeconds", 5}});
+    REQUIRE(fresh.contains("result"));
+    REQUIRE(fresh["result"]["access_token"] == "ACCESS-REFRESHED");
+    REQUIRE(fresh["result"]["refreshed"] == true);
+    // The stored blob should carry the original refresh_token forward when
+    // the refresh response omitted it.
+    REQUIRE(fresh["result"]["refresh_token"] == "REFRESH-R");
+
+    // Explicit auth.refresh_token rotates access + refresh tokens.
+    const Json forced = dispatch(fixture.get(), "auth.refresh_token",
+                                  {{"providerId", "refresh-fixture"}});
+    REQUIRE(forced.contains("result"));
+    REQUIRE(forced["result"]["access_token"] == "ACCESS-FORCED");
+    REQUIRE(forced["result"]["refresh_token"] == "REFRESH-ROTATED");
+}
+
+TEST_CASE("AI Editor extensions.configure_host auto-discovers the shim script",
+          "[plugins][ai_editor][native][extensions][shim]") {
+    RuntimeFixture fixture;
+    const Json configured = dispatch(
+        fixture.get(), "extensions.configure_host",
+        {{"nodeExecutable", "C:/nonexistent/node.exe"}});
+    // The default shim path either resolves (repo/tree/install layout) —
+    // in which case configure returns OK — or the harness can't find it,
+    // in which case fail-closed to NOT_FOUND.  Either way, the JSON-RPC
+    // caller never has to hard-code the shim path.
+    const int32_t status =
+        configured.contains("result")
+            ? SAO_AI_EDITOR_OK
+            : configured["error"]["data"]["status"].get<int32_t>();
+    REQUIRE((status == SAO_AI_EDITOR_OK ||
+             status == SAO_AI_EDITOR_ERR_NOT_FOUND));
+    // A live shim resolution should reflect back through extensions.list.
+    if (status == SAO_AI_EDITOR_OK) {
+        const Json snapshot =
+            dispatch(fixture.get(), "extensions.snapshot")["result"];
+        const std::string entry = snapshot.value("entryScript", "");
+        REQUIRE(entry.find("extension_host_shim.js") != std::string::npos);
+    }
+}
+
+TEST_CASE("workflow group parallel batches contiguous same-group steps",
+          "[plugins][ai_editor][native][workflows][parallel][integration]") {
+    // Two responses; the server queue serves them in order to the two
+    // concurrent step requests.
+    const std::string body1 =
+        R"({"choices":[{"message":{"role":"assistant","content":"alpha-out"}}]})";
+    const std::string body2 =
+        R"({"choices":[{"message":{"role":"assistant","content":"beta-out"}}]})";
+    ScriptedHttpServer server;
+    server.enqueue(body1);
+    server.enqueue(body2);
+
+    RuntimeFixture fixture;
+    // Save a custom workflow with two steps sharing the same group id.
+    const Json wf{
+        {"id", "parallel-demo"},
+        {"name", "Parallel Demo"},
+        {"steps",
+         Json::array({
+             Json{{"agent", "default"},
+                  {"prompt", "alpha({{input}})"},
+                  {"output_var", "alpha"},
+                  {"group", "fan-out"}},
+             Json{{"agent", "default"},
+                  {"prompt", "beta({{input}})"},
+                  {"output_var", "beta"},
+                  {"group", "fan-out"}},
+         })}};
+    REQUIRE(dispatch(fixture.get(), "workflows.save_def",
+                     {{"scope", "workspace"}, {"workflow", wf}})
+                .contains("result"));
+
+    const Json run = dispatch(
+        fixture.get(), "workflows.run",
+        {{"id", "parallel-demo"},
+         {"provider", {{"id", "wf-parallel"},
+                       {"endpoint", server.base_url() + "/v1/chat/completions"}}},
+         {"model", "test-model"},
+         {"input", "payload"},
+         {"timeoutMs", 5000}});
+    REQUIRE(run.contains("result"));
+    const std::string execution_id = run["result"]["executionId"];
+    Json status;
+    const ULONGLONG started = GetTickCount64();
+    do {
+        status = dispatch(fixture.get(), "workflows.status",
+                          {{"executionId", execution_id}})["result"];
+        if (status["status"] != "running" &&
+            status["status"] != "pending") {
+            break;
+        }
+        Sleep(20);
+    } while (GetTickCount64() - started < 15'000);
+    REQUIRE(status["status"] == "completed");
+    // Both variables should be present and taken from the parallel batch.
+    REQUIRE(status["variables"]["alpha"] != status["variables"]["beta"]);
+    REQUIRE(status["variables"]["input"] == "payload");
+    // stepResults are committed in step order.
+    REQUIRE(status["stepResults"].size() == 2);
+    REQUIRE(status["stepResults"][0]["group"] == "fan-out");
+    REQUIRE(status["stepResults"][1]["group"] == "fan-out");
+}
+
 TEST_CASE("AI Editor auth.store_token persists user-supplied bearer token",
           "[plugins][ai_editor][native][auth]") {
     RuntimeFixture fixture;

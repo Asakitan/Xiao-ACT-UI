@@ -62,6 +62,18 @@ public:
     // Erase any stored token for the provider.
     int32_t revoke(std::string_view provider_id, Json& out);
 
+    // Return the current access token, exchanging the stored refresh_token
+    // for a new one when the current access_token is within
+    // `expiry_leeway_seconds` of expiry (or already expired).  When no
+    // refresh is possible the raw stored blob is returned unmodified.
+    int32_t get_access_token(std::string_view provider_id,
+                             int64_t expiry_leeway_seconds,
+                             Json& out);
+
+    // Force a refresh regardless of expiry — used by explicit
+    // `auth.refresh_token` requests.
+    int32_t refresh(std::string_view provider_id, Json& out);
+
 private:
     struct RefreshOutcome {
         bool refreshed = false;

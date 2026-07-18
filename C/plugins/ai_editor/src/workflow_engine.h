@@ -102,7 +102,18 @@ private:
                          const std::string& model,
                          uint32_t chat_timeout_ms,
                          std::string& out_content);
+    int32_t execute_step_with_snapshot(
+        NativeRuntime& runtime,
+        const WorkflowStep& step,
+        const std::unordered_map<std::string, std::string>& snapshot,
+        const Json& provider,
+        const std::string& model,
+        uint32_t chat_timeout_ms,
+        std::string& out_content);
     std::string interpolate(std::string_view text) const;
+    static std::string interpolate_with(
+        std::string_view text,
+        const std::unordered_map<std::string, std::string>& vars);
     bool wait_for_confirmation(const WorkflowStep& step);
 
     std::string id_;

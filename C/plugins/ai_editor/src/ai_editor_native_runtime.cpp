@@ -905,6 +905,24 @@ int32_t NativeRuntime::dispatch_auth(std::string_view method,
         return auth_flow_->revoke(params["providerId"].get<std::string>(),
                                   result);
     }
+    if (method == "auth.refresh_token") {
+        if (!params.contains("providerId") ||
+            !params["providerId"].is_string()) {
+            return SAO_AI_EDITOR_ERR_INVALID_ARGUMENT;
+        }
+        return auth_flow_->refresh(params["providerId"].get<std::string>(),
+                                   result);
+    }
+    if (method == "auth.get_access_token") {
+        if (!params.contains("providerId") ||
+            !params["providerId"].is_string()) {
+            return SAO_AI_EDITOR_ERR_INVALID_ARGUMENT;
+        }
+        const int64_t leeway = params.value(
+            "expiryLeewaySeconds", int64_t{60});
+        return auth_flow_->get_access_token(
+            params["providerId"].get<std::string>(), leeway, result);
+    }
     return SAO_AI_EDITOR_ERR_NOT_FOUND;
 }
 
