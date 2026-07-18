@@ -134,6 +134,56 @@ SAO_AI_EDITOR_API int32_t SAO_AI_EDITOR_CALL
 sao_ai_editor_mcp_client_close(sao_ai_editor_mcp_client_t handle,
                                const char* server_name);
 
+// ---- Notifications -------------------------------------------------------
+//
+// MCP servers may emit JSON-RPC notifications (messages with a `method` but
+// no `id`) to announce list changes (`notifications/tools/list_changed`,
+// `notifications/prompts/list_changed`, `notifications/resources/list_changed`,
+// `notifications/resources/updated`) or log records (`notifications/message`).
+// This client offers two ways for the runtime to observe them:
+//
+//   1. A push-style forwarder installed via
+//      sao_ai_editor_mcp_client_set_notification_forwarder — every notification
+//      is JSON-serialized (as a single-line UTF-8 string) and handed to the
+//      caller's function pointer immediately from the reader thread.  The
+//      envelope shape is:
+//        {"server":"<name>","notification":{...raw JSON-RPC notification...}}
+//      Passing a null `fn` clears the forwarder (and drops any queued items).
+//      Callback runs on the client's stdio reader thread — keep it fast.
+//
+//   2. A pull-style queue drained via
+//      sao_ai_editor_mcp_client_next_notification (same envelope shape).
+//      Notifications received while no forwarder is installed accumulate in a
+//      bounded queue (older entries are dropped once the cap is reached).
+//
+// The two mechanisms coexist:  installing a forwarder short-circuits queue
+// growth (the forwarder is invoked and nothing lands in the queue), so the
+// pull API is safe to leave idle when the runtime consumes the push feed.
+//
+// The HTTP transport is strictly request/response, so notifications never fire
+// on servers registered with transport="http".
+
+typedef void (SAO_AI_EDITOR_CALL* sao_ai_editor_mcp_notification_fn)(
+    void* user, const char* json_utf8, uint32_t json_len);
+
+SAO_AI_EDITOR_API int32_t SAO_AI_EDITOR_CALL
+sao_ai_editor_mcp_client_set_notification_forwarder(
+    sao_ai_editor_mcp_client_t handle,
+    void* user,
+    sao_ai_editor_mcp_notification_fn fn);
+
+// Drain one pending notification into json_out (NUL-terminated).  Returns
+// SAO_AI_EDITOR_ERR_BUFFER_TOO_SMALL when the caller-provided buffer is too
+// small (writing the required size into *out_len), SAO_AI_EDITOR_ERR_NOT_FOUND
+// when no notification is queued, and SAO_AI_EDITOR_OK on successful drain.
+// Uses the two-call size-then-drain pattern shared by the rest of this API.
+SAO_AI_EDITOR_API int32_t SAO_AI_EDITOR_CALL
+sao_ai_editor_mcp_client_next_notification(
+    sao_ai_editor_mcp_client_t handle,
+    char* json_out,
+    uint32_t json_cap,
+    uint32_t* out_len);
+
 SAO_AI_EDITOR_API void SAO_AI_EDITOR_CALL sao_ai_editor_mcp_client_destroy(
     sao_ai_editor_mcp_client_t handle);
 

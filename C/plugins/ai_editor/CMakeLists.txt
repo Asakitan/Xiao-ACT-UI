@@ -66,6 +66,7 @@ add_library(sao_plugin_ai_editor SHARED
     src/native_utils.cpp
     src/node_runtime.cpp
     src/openai_codec.cpp
+    src/prompt_registry.cpp
     src/scope_store.cpp
     src/winhttp_chat.cpp
     src/workflow_engine.cpp
@@ -127,6 +128,11 @@ install(DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/assets/ai_editor/agents/"
 )
 install(DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/assets/ai_editor/workflows/"
     DESTINATION "assets/ai_editor/workflows"
+    COMPONENT ship
+    FILES_MATCHING PATTERN "*.json"
+)
+install(DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/assets/ai_editor/prompts/"
+    DESTINATION "assets/ai_editor/prompts"
     COMPONENT ship
     FILES_MATCHING PATTERN "*.json"
 )

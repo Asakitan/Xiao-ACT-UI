@@ -32,12 +32,17 @@ std::string next_id() {
 }
 
 Json summary_of(const Json& document) {
+    // `pinned` was added after the initial conversation shape shipped, so we
+    // treat a missing field as false rather than rejecting the document —
+    // otherwise older on-disk conversations would silently disappear from
+    // the sidebar.
     return Json{{"id", document.value("id", "")},
                 {"title", document.value("title", "Untitled")},
                 {"model", document.value("model", "")},
                 {"scope", document.value("scope", "workspace")},
                 {"savedAt", document.value("savedAt", int64_t{0})},
-                {"messageCount", document.value("messageCount", 0U)}};
+                {"messageCount", document.value("messageCount", 0U)},
+                {"pinned", document.value("pinned", false)}};
 }
 
 }  // namespace
@@ -65,6 +70,7 @@ int32_t ConversationStore::create(std::string_view title,
                   {"scope", std::string(scope)},
                   {"savedAt", unix_milliseconds()},
                   {"messageCount", 0},
+                  {"pinned", false},
                   {"messages", Json::array()}};
     const auto path = scopes_.history_root(scope) /
                       (utf8_to_wide(id) + L".json");
@@ -106,9 +112,18 @@ int32_t ConversationStore::get(std::string_view conversation_id,
         return status;
     }
     result = Json::parse(text);
-    return result.is_object() && result.value("id", "") == conversation_id
-        ? SAO_AI_EDITOR_OK
-        : SAO_AI_EDITOR_ERR_INVALID_ARGUMENT;
+    if (!result.is_object() || result.value("id", "") != conversation_id) {
+        return SAO_AI_EDITOR_ERR_INVALID_ARGUMENT;
+    }
+    // Older on-disk conversations predate the `pinned` field.  Surface a
+    // stable false so downstream callers do not have to guard against
+    // missing keys.  Rewriting the file lazily is intentional — reads
+    // stay non-mutating; a subsequent set_pinned or append is what
+    // persists the field.
+    if (!result.contains("pinned") || !result["pinned"].is_boolean()) {
+        result["pinned"] = false;
+    }
+    return SAO_AI_EDITOR_OK;
 }
 
 int32_t ConversationStore::append(std::string_view conversation_id,
@@ -171,6 +186,14 @@ int32_t ConversationStore::list(std::string_view scope,
     }
     std::sort(entries.begin(), entries.end(), [](const Json& left,
                                                   const Json& right) {
+        // Pinned conversations always precede unpinned ones; within a group
+        // savedAt (descending) is the tie-breaker so freshly-updated pinned
+        // entries surface first.
+        const bool left_pinned = left.value("pinned", false);
+        const bool right_pinned = right.value("pinned", false);
+        if (left_pinned != right_pinned) {
+            return left_pinned && !right_pinned;
+        }
         return left.value("savedAt", int64_t{0}) >
                right.value("savedAt", int64_t{0});
     });
@@ -405,6 +428,9 @@ int32_t ConversationStore::import_conversation(const Json& conversation,
     if (!document.contains("savedAt") || !document["savedAt"].is_number()) {
         document["savedAt"] = unix_milliseconds();
     }
+    if (!document.contains("pinned") || !document["pinned"].is_boolean()) {
+        document["pinned"] = false;
+    }
     // Determine existing location (workspace or system).
     std::filesystem::path existing_path;
     const int32_t locate_status = locate(id, existing_path);
@@ -478,6 +504,7 @@ int32_t ConversationStore::branch(std::string_view source_id,
                   {"scope", std::string(scope)},
                   {"savedAt", now},
                   {"messageCount", branched_messages.size()},
+                  {"pinned", false},
                   {"messages", branched_messages}};
     const auto path = scopes_.history_root(scope) /
                       (utf8_to_wide(new_id) + L".json");
@@ -507,6 +534,33 @@ int32_t ConversationStore::remove(std::string_view conversation_id,
     }
     result = Json{{"ok", removed}, {"id", std::string(conversation_id)}};
     return removed ? SAO_AI_EDITOR_OK : SAO_AI_EDITOR_ERR_NOT_FOUND;
+}
+
+int32_t ConversationStore::set_pinned(std::string_view conversation_id,
+                                      bool pinned,
+                                      Json& result) const {
+    std::filesystem::path path;
+    int32_t status = locate(conversation_id, path);
+    if (status != SAO_AI_EDITOR_OK) {
+        return status;
+    }
+    Json document;
+    status = get(conversation_id, document);
+    if (status != SAO_AI_EDITOR_OK) {
+        return status;
+    }
+    document["pinned"] = pinned;
+    // Intentionally leave savedAt untouched here: pinning is metadata and
+    // must not shuffle the "recently edited" ordering used elsewhere in the
+    // UI.  The pinned-first grouping still surfaces the entry at the top of
+    // list() even without bumping savedAt.
+    status = save(path, document);
+    if (status != SAO_AI_EDITOR_OK) {
+        return status;
+    }
+    result = Json{{"id", std::string(conversation_id)},
+                  {"pinned", pinned}};
+    return SAO_AI_EDITOR_OK;
 }
 
 }  // namespace sao::ai_editor::native

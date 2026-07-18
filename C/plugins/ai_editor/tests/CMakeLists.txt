@@ -7,6 +7,14 @@ add_executable(sao_plugin_ai_editor_child_fixture
 )
 target_compile_features(sao_plugin_ai_editor_child_fixture PRIVATE cxx_std_20)
 
+# Fake stdio MCP server used to exercise the notification forwarder end-to-end.
+add_executable(sao_plugin_ai_editor_mcp_notification_fixture
+    ai_editor_mcp_notification_fixture.cpp
+)
+target_compile_features(sao_plugin_ai_editor_mcp_notification_fixture PRIVATE
+    cxx_std_20
+)
+
 add_executable(sao_plugin_ai_editor_wave7_tests
     ai_editor_native_test.cpp
     ai_editor_process_test.cpp
@@ -32,9 +40,11 @@ target_compile_features(sao_plugin_ai_editor_wave7_tests PRIVATE cxx_std_20)
 target_compile_definitions(sao_plugin_ai_editor_wave7_tests PRIVATE
     SAO_AI_EDITOR_CHILD_FIXTURE="$<TARGET_FILE:sao_plugin_ai_editor_child_fixture>"
     SAO_AI_EDITOR_MCP_SERVER_EXECUTABLE="$<TARGET_FILE:sao_ai_editor>"
+    SAO_AI_EDITOR_MCP_NOTIFICATION_FIXTURE="$<TARGET_FILE:sao_plugin_ai_editor_mcp_notification_fixture>"
 )
 add_dependencies(sao_plugin_ai_editor_wave7_tests
     sao_plugin_ai_editor_child_fixture
+    sao_plugin_ai_editor_mcp_notification_fixture
     sao_ai_editor
 )
 

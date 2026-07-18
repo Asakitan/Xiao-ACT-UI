@@ -16,6 +16,7 @@
 #include "extension_host.h"
 #include "native_secret_store.h"
 #include "native_tool_registry.h"
+#include "prompt_registry.h"
 #include "sao/ai_editor/mcp_client.h"
 #include "winhttp_chat.h"
 #include "workflow_engine.h"
@@ -96,6 +97,16 @@ private:
     int32_t dispatch_agent(std::string_view method,
                            const Json& params,
                            Json& result);
+    int32_t dispatch_prompt(std::string_view method,
+                            const Json& params,
+                            Json& result);
+    // Resolve `promptId` + optional `promptArguments` in a chat.run-style
+    // params payload: render the referenced PromptDefinition and prepend it
+    // to `params.messages` either as an extra system message (when the
+    // caller has no system message yet) or as a user turn.  Returns
+    // SAO_AI_EDITOR_OK when the promptId field is absent, empty, or
+    // successfully rendered; propagates registry lookup failures otherwise.
+    int32_t apply_prompt_source(Json& params);
     int32_t run_chat_sync(const Json& params, uint32_t timeout_ms,
                           std::string& out_content,
                           std::function<void(const Json&)> on_delta = nullptr);
@@ -118,6 +129,11 @@ private:
                              Json& provider,
                              std::string& api_key);
     static Json permission_policy(std::string_view mode);
+    // C-callable trampoline that unpacks the MCP notification envelope and
+    // routes it into the runtime's event queue as an "mcp.notification"
+    // sao.event.
+    static void SAO_AI_EDITOR_CALL mcp_notification_trampoline(
+        void* user, const char* json_utf8, uint32_t json_len);
 
     struct McpClientDeleter final {
         void operator()(SaoAiEditorMcpClient* client) const noexcept {
@@ -140,6 +156,7 @@ private:
     std::unique_ptr<AuthDeviceFlow> auth_flow_;
     std::unique_ptr<ExtensionHost> extension_host_;
     AgentRegistry agent_registry_;
+    PromptRegistry prompt_registry_;
     uint32_t maximum_event_queue_;
 
 public:

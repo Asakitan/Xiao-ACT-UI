@@ -11,6 +11,8 @@
 #include <condition_variable>
 #include <cstring>
 #include <cwctype>
+#include <deque>
+#include <functional>
 #include <future>
 #include <memory>
 #include <mutex>
@@ -262,11 +264,26 @@ std::string extract_first_sse_event(std::string_view body) {
 
 class McpServer final {
 public:
+    // Callback fired for every JSON-RPC notification (method + no id) that the
+    // server pushes on the stdio channel.  Runs on the reader thread — keep it
+    // fast.  The `notification` parameter is the raw JSON-RPC envelope.
+    using NotificationCallback =
+        std::function<void(const std::string& server_name,
+                           const Json& notification)>;
+
     McpServer() = default;
     ~McpServer() { shutdown_locked(); }
 
     McpServer(const McpServer&) = delete;
     McpServer& operator=(const McpServer&) = delete;
+
+    // Install (or clear, with an empty function) the notification observer.
+    // Setting a new callback replaces the previous one; there is only one
+    // observer per server.  Safe to call from any thread.
+    void set_notification_callback(NotificationCallback callback) noexcept {
+        std::lock_guard<std::mutex> guard(notification_mutex_);
+        notification_callback_ = std::move(callback);
+    }
 
     int32_t start(const Json& config) {
         name_ = config.value("name", "");
@@ -915,9 +932,25 @@ private:
                 } catch (...) {
                 }
             }
+            return;
         }
-        // Notifications are silently discarded — the AI editor runtime does
-        // not yet surface MCP change notifications to the user.
+        // Notifications (method + no id) get forwarded to the observer so the
+        // AI editor runtime can surface list_changed / message / etc. events.
+        if (message.contains("method") && message["method"].is_string() &&
+            !message.contains("id")) {
+            NotificationCallback callback_snapshot;
+            {
+                std::lock_guard<std::mutex> guard(notification_mutex_);
+                callback_snapshot = notification_callback_;
+            }
+            if (callback_snapshot) {
+                try {
+                    callback_snapshot(name_, message);
+                } catch (...) {
+                    // Callback failures must not tear down the reader loop.
+                }
+            }
+        }
     }
 
     std::string name_;
@@ -942,6 +975,9 @@ private:
     std::string stderr_tail_;
     std::mutex shutdown_mutex_;
     bool shutdown_started_ = false;
+
+    mutable std::mutex notification_mutex_;
+    NotificationCallback notification_callback_;
 
     // HTTP transport state — populated by start_http() and only touched
     // when http_transport_ == true.
@@ -968,6 +1004,18 @@ struct SaoAiEditorMcpClient {
     std::string pending_output;
     std::mutex pending_mutex;
 
+    // Notification distribution.  The forwarder is a raw C function pointer
+    // (plus a user token) so the runtime can hand a lambda-free binding across
+    // the DLL boundary.  When set, notifications bypass the queue entirely and
+    // fire synchronously on the client's stdio reader thread.  When cleared,
+    // pending notifications accumulate in `notification_queue` up to
+    // kMaxQueuedNotifications, oldest-drop.
+    mutable std::mutex notification_state_mutex;
+    sao_ai_editor_mcp_notification_fn notification_forwarder = nullptr;
+    void* notification_forwarder_user = nullptr;
+    std::deque<std::string> notification_queue;
+    static constexpr size_t kMaxQueuedNotifications = 1024;
+
     std::shared_ptr<sao::ai_editor::native::McpServer> find_locked(
         const std::string& name) const {
         const auto found = servers.find(name);
@@ -975,6 +1023,57 @@ struct SaoAiEditorMcpClient {
             return nullptr;
         }
         return found->second;
+    }
+
+    // Package the raw JSON-RPC notification into the envelope shape and
+    // either push it to the installed forwarder (fast path, no queueing) or
+    // append it to the bounded pull queue.  Called from the McpServer reader
+    // thread — must not block.
+    void deliver_notification(const std::string& server_name,
+                              const sao::ai_editor::native::Json& notification) {
+        sao::ai_editor::native::Json envelope{{"server", server_name},
+                                              {"notification", notification}};
+        std::string encoded = sao::ai_editor::native::dump_json(envelope);
+        sao_ai_editor_mcp_notification_fn forwarder = nullptr;
+        void* user = nullptr;
+        {
+            std::lock_guard<std::mutex> guard(notification_state_mutex);
+            forwarder = notification_forwarder;
+            user = notification_forwarder_user;
+        }
+        if (forwarder != nullptr) {
+            try {
+                forwarder(user, encoded.data(),
+                          static_cast<uint32_t>(encoded.size()));
+            } catch (...) {
+                // Forwarder must not tear down the reader thread.
+            }
+            return;
+        }
+        std::lock_guard<std::mutex> guard(notification_state_mutex);
+        if (notification_queue.size() >= kMaxQueuedNotifications) {
+            notification_queue.pop_front();
+        }
+        notification_queue.push_back(std::move(encoded));
+    }
+
+    // Install the callback on the given server so it forwards notifications
+    // back through this client's deliver_notification.  Must be called after
+    // successful start() so `name()` is populated.
+    void attach_notification_callback(
+        const std::shared_ptr<sao::ai_editor::native::McpServer>& server) {
+        std::weak_ptr<sao::ai_editor::native::McpServer> weak_server = server;
+        SaoAiEditorMcpClient* client_self = this;
+        server->set_notification_callback(
+            [client_self, weak_server](
+                const std::string& server_name,
+                const sao::ai_editor::native::Json& notification) {
+                // The weak_ptr guard ensures we do not touch the client
+                // after the server has been shut down mid-callback.
+                if (weak_server.lock()) {
+                    client_self->deliver_notification(server_name, notification);
+                }
+            });
     }
 };
 
@@ -1066,6 +1165,9 @@ sao_ai_editor_mcp_client_register(sao_ai_editor_mcp_client_t handle,
         if (existing) {
             existing->shutdown_locked();
         }
+        // Route notifications straight into the client's forwarder / queue
+        // before the server thread has a chance to emit anything on its own.
+        handle->attach_notification_callback(server);
         handle->servers[name] = std::move(server);
         return SAO_AI_EDITOR_OK;
     } catch (...) {
@@ -1411,10 +1513,91 @@ sao_ai_editor_mcp_client_close(sao_ai_editor_mcp_client_t handle,
     }
 }
 
+extern "C" SAO_AI_EDITOR_API int32_t SAO_AI_EDITOR_CALL
+sao_ai_editor_mcp_client_set_notification_forwarder(
+    sao_ai_editor_mcp_client_t handle,
+    void* user,
+    sao_ai_editor_mcp_notification_fn fn) {
+    try {
+        if (handle == nullptr) {
+            return SAO_AI_EDITOR_ERR_HANDLE_INVALID;
+        }
+        // Swap the queued notifications out while we hold the lock so we can
+        // flush them (or discard them) with the lock released — the forwarder
+        // may call other MCP APIs that would otherwise deadlock on this same
+        // mutex.
+        std::deque<std::string> pending;
+        {
+            std::lock_guard<std::mutex> guard(
+                handle->notification_state_mutex);
+            handle->notification_forwarder = fn;
+            handle->notification_forwarder_user = user;
+            if (fn == nullptr) {
+                handle->notification_queue.clear();
+            } else {
+                pending.swap(handle->notification_queue);
+            }
+        }
+        while (!pending.empty()) {
+            std::string encoded = std::move(pending.front());
+            pending.pop_front();
+            try {
+                fn(user, encoded.data(),
+                   static_cast<uint32_t>(encoded.size()));
+            } catch (...) {
+            }
+        }
+        return SAO_AI_EDITOR_OK;
+    } catch (...) {
+        return SAO_AI_EDITOR_ERR_PROTOCOL;
+    }
+}
+
+extern "C" SAO_AI_EDITOR_API int32_t SAO_AI_EDITOR_CALL
+sao_ai_editor_mcp_client_next_notification(sao_ai_editor_mcp_client_t handle,
+                                           char* json_out,
+                                           uint32_t json_cap,
+                                           uint32_t* out_len) {
+    try {
+        if (handle == nullptr) {
+            return SAO_AI_EDITOR_ERR_HANDLE_INVALID;
+        }
+        if (out_len == nullptr) {
+            return SAO_AI_EDITOR_ERR_INVALID_ARGUMENT;
+        }
+        std::lock_guard<std::mutex> guard(handle->notification_state_mutex);
+        if (handle->notification_queue.empty()) {
+            *out_len = 0;
+            if (json_out != nullptr && json_cap > 0) {
+                json_out[0] = '\0';
+            }
+            return SAO_AI_EDITOR_ERR_NOT_FOUND;
+        }
+        const std::string& front = handle->notification_queue.front();
+        const int32_t status = sao::ai_editor::native::copy_text_to_caller(
+            front, json_out, json_cap, out_len);
+        if (status == SAO_AI_EDITOR_OK) {
+            handle->notification_queue.pop_front();
+        }
+        return status;
+    } catch (...) {
+        return SAO_AI_EDITOR_ERR_PROTOCOL;
+    }
+}
+
 extern "C" SAO_AI_EDITOR_API void SAO_AI_EDITOR_CALL
 sao_ai_editor_mcp_client_destroy(sao_ai_editor_mcp_client_t handle) {
     try {
         if (handle != nullptr) {
+            // Drop the forwarder before we start shutting servers down so no
+            // final reader-thread notification tries to fire against
+            // half-destroyed state.
+            {
+                std::lock_guard<std::mutex> guard(
+                    handle->notification_state_mutex);
+                handle->notification_forwarder = nullptr;
+                handle->notification_forwarder_user = nullptr;
+            }
             sao_ai_editor_mcp_client_close(handle, nullptr);
             delete handle;
         }

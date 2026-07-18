@@ -4,7 +4,9 @@
 
 #include <algorithm>
 #include <array>
+#include <chrono>
 #include <memory>
+#include <optional>
 #include <string_view>
 #include <variant>
 
@@ -12,6 +14,27 @@ namespace sao::ai_editor::native {
 namespace {
 
 constexpr DWORD kWinHttpPollIntervalMs = 50;
+
+// Best-effort extraction of "completion tokens" from provider-shaped usage
+// blocks: OpenAI/OpenAI-compat use `completion_tokens`, Anthropic uses
+// `output_tokens`, Gemini's `usageMetadata` uses `candidatesTokenCount`.
+// Returns std::nullopt when no numeric completion-token field is present.
+std::optional<int64_t> extract_completion_tokens(const Json& usage) {
+    if (!usage.is_object()) {
+        return std::nullopt;
+    }
+    for (const std::string_view field :
+         {"completion_tokens", "output_tokens", "candidatesTokenCount"}) {
+        const auto it = usage.find(std::string(field));
+        if (it != usage.end() && it->is_number_integer()) {
+            return it->get<int64_t>();
+        }
+        if (it != usage.end() && it->is_number()) {
+            return static_cast<int64_t>(it->get<double>());
+        }
+    }
+    return std::nullopt;
+}
 
 class InternetHandle final {
 public:
@@ -336,6 +359,41 @@ int32_t perform_openai_chat(const HttpChatRequest& request,
                             ChatCancellation& cancellation,
                             const StreamEventCallback& callback,
                             Json& result) {
+    using SteadyClock = std::chrono::steady_clock;
+    // Anchor: request assembly starts here.  We record it before URL cracking
+    // so misbehaving arguments still show up as `totalMs` on the error path.
+    const auto request_started_at = SteadyClock::now();
+    std::optional<SteadyClock::time_point> first_token_at;
+    std::optional<int64_t> completion_tokens;
+
+    const auto attach_metrics = [&](Json& target,
+                                    const SteadyClock::time_point& done_at) {
+        const auto total_ms = std::chrono::duration_cast<
+                                  std::chrono::milliseconds>(
+                                  done_at - request_started_at)
+                                  .count();
+        Json metrics{{"totalMs", total_ms}};
+        if (first_token_at) {
+            const auto ttf_ms = std::chrono::duration_cast<
+                                    std::chrono::milliseconds>(
+                                    *first_token_at - request_started_at)
+                                    .count();
+            metrics["ttfMs"] = ttf_ms;
+        }
+        if (completion_tokens) {
+            metrics["completionTokens"] = *completion_tokens;
+            const double seconds = static_cast<double>(total_ms) / 1000.0;
+            if (seconds > 0.0) {
+                metrics["tokensPerSecond"] =
+                    static_cast<double>(*completion_tokens) / seconds;
+            }
+        }
+        metrics["provider_type"] = request.provider_type;
+        if (target.is_object()) {
+            target["metrics"] = std::move(metrics);
+        }
+    };
+
     CrackedUrl url;
     if (!crack_url(request.endpoint, url) || request.request_json.empty() ||
         request.request_json.size() > kMaximumJsonBytes ||
@@ -472,6 +530,12 @@ int32_t perform_openai_chat(const HttpChatRequest& request,
     if (final_status != SAO_AI_EDITOR_OK) {
         return final_status;
     }
+    // Non-stream requests only get one payload from the server, so treat the
+    // moment we receive headers as the first-token proxy.  Streaming requests
+    // overwrite this the first time a `type=="delta"` event is delivered.
+    if (!request.stream) {
+        first_token_at = SteadyClock::now();
+    }
 
     DWORD http_status = 0;
     DWORD status_size = sizeof(http_status);
@@ -501,6 +565,24 @@ int32_t perform_openai_chat(const HttpChatRequest& request,
             [&](auto& codec) -> int32_t { return codec.feed(chunk, events); },
             stream_codec);
     };
+    const auto observe_event_for_metrics = [&](const Json& event) {
+        if (!event.is_object()) {
+            return;
+        }
+        const std::string type = event.value("type", std::string{});
+        if (!first_token_at && type == "delta" && event.contains("content") &&
+            event["content"].is_string() &&
+            !event["content"].get<std::string>().empty()) {
+            first_token_at = SteadyClock::now();
+        }
+        if (event.contains("usage") && event["usage"].is_object()) {
+            const auto maybe_completion =
+                extract_completion_tokens(event["usage"]);
+            if (maybe_completion) {
+                completion_tokens = maybe_completion;
+            }
+        }
+    };
     const auto consume = request.stream
         ? std::function<int32_t(std::string_view)>(
               [&](std::string_view chunk) -> int32_t {
@@ -510,6 +592,7 @@ int32_t perform_openai_chat(const HttpChatRequest& request,
                       return status;
                   }
                   for (const auto& event : events) {
+                      observe_event_for_metrics(event);
                       callback(event);
                   }
                   return SAO_AI_EDITOR_OK;
@@ -537,18 +620,34 @@ int32_t perform_openai_chat(const HttpChatRequest& request,
             return final_status;
         }
         for (const auto& event : trailing) {
+            observe_event_for_metrics(event);
             callback(event);
         }
         result = Json{{"ok", true}, {"stream", true}};
+        attach_metrics(result, SteadyClock::now());
         return SAO_AI_EDITOR_OK;
     }
+    int32_t decode_status = SAO_AI_EDITOR_OK;
     if (request.provider_type == "anthropic" ||
         request.provider_type == "gemini") {
         ProviderRoute route;
         route.type = request.provider_type;
-        return decode_provider_response(route, response, result);
+        decode_status = decode_provider_response(route, response, result);
+    } else {
+        decode_status = decode_openai_response_text(response, result);
     }
-    return decode_openai_response_text(response, result);
+    if (decode_status == SAO_AI_EDITOR_OK) {
+        if (result.is_object() && result.contains("usage") &&
+            result["usage"].is_object()) {
+            const auto maybe_completion =
+                extract_completion_tokens(result["usage"]);
+            if (maybe_completion) {
+                completion_tokens = maybe_completion;
+            }
+        }
+        attach_metrics(result, SteadyClock::now());
+    }
+    return decode_status;
 }
 
 }  // namespace sao::ai_editor::native

@@ -177,9 +177,42 @@ int32_t NativeRuntime::initialize() {
         return SAO_AI_EDITOR_ERR_OS_CALL_FAILED;
     }
     mcp_client_.reset(mcp_raw);
+    // Forward every MCP notification (tools/list_changed, prompts/list_changed,
+    // resources/list_changed, resources/updated, notifications/message, ...)
+    // straight into the runtime event queue so the UI can observe changes as
+    // sao.event / mcp.notification without having to poll the MCP APIs.
+    sao_ai_editor_mcp_client_set_notification_forwarder(
+        mcp_client_.get(), this, &NativeRuntime::mcp_notification_trampoline);
     auth_flow_ = std::make_unique<AuthDeviceFlow>(secrets_.get());
     extension_host_ = std::make_unique<ExtensionHost>(*this);
     return SAO_AI_EDITOR_OK;
+}
+
+void SAO_AI_EDITOR_CALL NativeRuntime::mcp_notification_trampoline(
+    void* user, const char* json_utf8, uint32_t json_len) {
+    if (user == nullptr || json_utf8 == nullptr || json_len == 0) {
+        return;
+    }
+    try {
+        auto* self = static_cast<NativeRuntime*>(user);
+        Json envelope = Json::parse(json_utf8, json_utf8 + json_len, nullptr,
+                                    false);
+        if (envelope.is_discarded() || !envelope.is_object()) {
+            return;
+        }
+        const std::string server_name = envelope.value("server", std::string{});
+        Json notification = envelope.value("notification", Json::object());
+        std::string method = notification.value("method", std::string{});
+        if (method.empty()) {
+            return;
+        }
+        Json payload{{"server", server_name},
+                     {"method", std::move(method)},
+                     {"params", notification.value("params", Json::object())}};
+        self->emit("mcp.notification", payload);
+    } catch (...) {
+        // Never propagate exceptions across the C API boundary.
+    }
 }
 
 Json NativeRuntime::permission_policy(std::string_view mode) {
@@ -377,6 +410,32 @@ int32_t NativeRuntime::invoke(std::string_view method,
         }
         std::lock_guard<std::mutex> lock(store_mutex_);
         return conversations_.remove(params["id"].get<std::string>(), result);
+    }
+    if (method == "conversation.pin" || method == "conversation.unpin" ||
+        method == "conversation.set_pinned") {
+        if (!params.contains("id") || !params["id"].is_string()) {
+            return SAO_AI_EDITOR_ERR_INVALID_ARGUMENT;
+        }
+        // Method-aware pinned resolution:
+        //   * conversation.pin        → pinned defaults to true (payload may
+        //                               still force pinned:false)
+        //   * conversation.unpin      → always pinned:false; ignore payload
+        //   * conversation.set_pinned → payload must supply pinned:bool
+        bool pinned = false;
+        if (method == "conversation.unpin") {
+            pinned = false;
+        } else if (method == "conversation.pin") {
+            pinned = params.value("pinned", true);
+        } else {
+            if (!params.contains("pinned") ||
+                !params["pinned"].is_boolean()) {
+                return SAO_AI_EDITOR_ERR_INVALID_ARGUMENT;
+            }
+            pinned = params["pinned"].get<bool>();
+        }
+        std::lock_guard<std::mutex> lock(store_mutex_);
+        return conversations_.set_pinned(params["id"].get<std::string>(),
+                                          pinned, result);
     }
     if (method == "conversation.branch") {
         if (!params.contains("sourceId") ||
@@ -758,7 +817,18 @@ int32_t NativeRuntime::invoke(std::string_view method,
                               arguments, result);
     }
     if (method == "chat.run") {
-        return start_chat(params, result);
+        // Render an optional `promptId` + `promptArguments` into the
+        // messages array before delegating to start_chat.  Doing it here
+        // (rather than inside start_chat) keeps chat.run_with_mcp free to
+        // apply the prompt exactly once via its own path.
+        Json forwarded = params;
+        const int32_t prompt_status = apply_prompt_source(forwarded);
+        if (prompt_status != SAO_AI_EDITOR_OK) {
+            return prompt_status;
+        }
+        forwarded.erase("promptId");
+        forwarded.erase("promptArguments");
+        return start_chat(forwarded, result);
     }
     if (method == "chat.run_with_mcp") {
         return start_chat_with_mcp(params, result);
@@ -788,6 +858,11 @@ int32_t NativeRuntime::invoke(std::string_view method,
     }
     if (method == "agents.invoke_with_mcp") {
         return agent_invoke_with_mcp(params, result);
+    }
+    if (method == "prompts.list_defs" || method == "prompts.get_def" ||
+        method == "prompts.save_def" || method == "prompts.delete_def" ||
+        method == "prompts.render") {
+        return dispatch_prompt(method, params, result);
     }
     return SAO_AI_EDITOR_ERR_NOT_FOUND;
 }
@@ -943,6 +1018,17 @@ int32_t NativeRuntime::dispatch_agent(std::string_view method,
         if (!effective_model.empty()) {
             chat_params["model"] = effective_model;
         }
+        // Prompt library integration: an agents.invoke_with_prompt caller
+        // passes promptId (+ optional promptArguments) alongside the agent
+        // id.  Render before start_chat sees the payload so the library
+        // prompt lands as a proper message.  Strip the fields afterwards so
+        // downstream code can't double-apply them.
+        const int32_t prompt_status = apply_prompt_source(chat_params);
+        if (prompt_status != SAO_AI_EDITOR_OK) {
+            return prompt_status;
+        }
+        chat_params.erase("promptId");
+        chat_params.erase("promptArguments");
         const uint32_t timeout_ms = params.value("timeoutMs", 60'000U);
         const bool stream_requested = params.value("stream", false);
         std::string content;
@@ -988,6 +1074,154 @@ int32_t NativeRuntime::dispatch_agent(std::string_view method,
         return SAO_AI_EDITOR_OK;
     }
     return SAO_AI_EDITOR_ERR_NOT_FOUND;
+}
+
+int32_t NativeRuntime::dispatch_prompt(std::string_view method,
+                                        const Json& params, Json& result) {
+    if (method == "prompts.list_defs") {
+        {
+            std::lock_guard<std::mutex> guard(store_mutex_);
+            prompt_registry_.reload(scopes_);
+        }
+        Json items = Json::array();
+        for (const auto& prompt : prompt_registry_.list()) {
+            items.push_back(prompt.to_json());
+        }
+        result = Json{{"items", std::move(items)}};
+        result["total"] = result["items"].size();
+        return SAO_AI_EDITOR_OK;
+    }
+    if (method == "prompts.get_def") {
+        if (!params.contains("id") || !params["id"].is_string()) {
+            return SAO_AI_EDITOR_ERR_INVALID_ARGUMENT;
+        }
+        {
+            std::lock_guard<std::mutex> guard(store_mutex_);
+            prompt_registry_.reload(scopes_);
+        }
+        PromptDefinition prompt;
+        if (!prompt_registry_.get(params["id"].get<std::string>(), prompt)) {
+            return SAO_AI_EDITOR_ERR_NOT_FOUND;
+        }
+        result = prompt.to_json();
+        return SAO_AI_EDITOR_OK;
+    }
+    if (method == "prompts.save_def") {
+        if (!params.contains("prompt") || !params["prompt"].is_object() ||
+            !params.contains("scope") || !params["scope"].is_string()) {
+            return SAO_AI_EDITOR_ERR_INVALID_ARGUMENT;
+        }
+        PromptDefinition prompt =
+            PromptDefinition::from_json(params["prompt"]);
+        const std::string scope_key = params["scope"].get<std::string>();
+        std::string scope;
+        std::string plugin_id;
+        if (scope_key == "system" || scope_key == "workspace") {
+            scope = scope_key;
+        } else if (scope_key.rfind("plugin:", 0) == 0) {
+            scope = "plugin";
+            plugin_id = scope_key.substr(7);
+            if (!valid_simple_id(plugin_id)) {
+                return SAO_AI_EDITOR_ERR_INVALID_ARGUMENT;
+            }
+        } else {
+            return SAO_AI_EDITOR_ERR_INVALID_ARGUMENT;
+        }
+        std::lock_guard<std::mutex> guard(store_mutex_);
+        const int32_t status = prompt_registry_.save(prompt, scopes_, scope,
+                                                      plugin_id);
+        if (status != SAO_AI_EDITOR_OK) {
+            return status;
+        }
+        result = prompt.to_json();
+        result["scope"] = scope_key;
+        return SAO_AI_EDITOR_OK;
+    }
+    if (method == "prompts.delete_def") {
+        if (!params.contains("id") || !params["id"].is_string()) {
+            return SAO_AI_EDITOR_ERR_INVALID_ARGUMENT;
+        }
+        std::lock_guard<std::mutex> guard(store_mutex_);
+        const int32_t status = prompt_registry_.remove(
+            params["id"].get<std::string>(), scopes_,
+            params.value("scope", "workspace"), std::string{});
+        if (status != SAO_AI_EDITOR_OK) {
+            return status;
+        }
+        result = Json{{"ok", true}, {"id", params["id"]}};
+        return SAO_AI_EDITOR_OK;
+    }
+    if (method == "prompts.render") {
+        if (!params.contains("id") || !params["id"].is_string()) {
+            return SAO_AI_EDITOR_ERR_INVALID_ARGUMENT;
+        }
+        {
+            std::lock_guard<std::mutex> guard(store_mutex_);
+            prompt_registry_.reload(scopes_);
+        }
+        PromptDefinition prompt;
+        if (!prompt_registry_.get(params["id"].get<std::string>(), prompt)) {
+            return SAO_AI_EDITOR_ERR_NOT_FOUND;
+        }
+        const Json arguments = params.value("arguments", Json::object());
+        if (!arguments.is_object()) {
+            return SAO_AI_EDITOR_ERR_INVALID_ARGUMENT;
+        }
+        result = Json{{"id", prompt.id},
+                      {"content", prompt.render(arguments)}};
+        return SAO_AI_EDITOR_OK;
+    }
+    return SAO_AI_EDITOR_ERR_NOT_FOUND;
+}
+
+int32_t NativeRuntime::apply_prompt_source(Json& params) {
+    if (!params.is_object() || !params.contains("promptId")) {
+        return SAO_AI_EDITOR_OK;
+    }
+    const Json& id_field = params["promptId"];
+    // Absent / null / empty-string promptId is a no-op — callers may send
+    // the field unconditionally.  The runtime still strips it from the
+    // forwarded params in the caller.
+    if (!id_field.is_string() || id_field.get<std::string>().empty()) {
+        return SAO_AI_EDITOR_OK;
+    }
+    const std::string id = id_field.get<std::string>();
+    Json arguments = Json::object();
+    if (params.contains("promptArguments")) {
+        if (!params["promptArguments"].is_object()) {
+            return SAO_AI_EDITOR_ERR_INVALID_ARGUMENT;
+        }
+        arguments = params["promptArguments"];
+    }
+    {
+        std::lock_guard<std::mutex> guard(store_mutex_);
+        prompt_registry_.reload(scopes_);
+    }
+    PromptDefinition prompt;
+    if (!prompt_registry_.get(id, prompt)) {
+        return SAO_AI_EDITOR_ERR_NOT_FOUND;
+    }
+    const std::string rendered = prompt.render(arguments);
+    // Match apply_system_prompt_source: prepend as system when the caller
+    // has no system message yet; otherwise queue as a user turn so the
+    // existing system message stays authoritative.
+    const bool caller_has_system =
+        params.contains("messages") && params["messages"].is_array() &&
+        !params["messages"].empty() &&
+        params["messages"][0].is_object() &&
+        params["messages"][0].value("role", "") == "system";
+    const std::string role = caller_has_system ? "user" : "system";
+    Json prepended = Json::array();
+    prepended.push_back(Json{{"role", role}, {"content", rendered}});
+    Json existing = params.value("messages", Json::array());
+    if (!existing.is_array()) {
+        existing = Json::array();
+    }
+    for (const auto& message : existing) {
+        prepended.push_back(message);
+    }
+    params["messages"] = std::move(prepended);
+    return SAO_AI_EDITOR_OK;
 }
 
 int32_t NativeRuntime::dispatch_extension(std::string_view method,
@@ -1806,6 +2040,17 @@ void NativeRuntime::execute_chat(const std::shared_ptr<RunState>& run,
         }
     }
     if (final_state == "completed") {
+        // Surface latency/token-throughput separately from the completion
+        // payload so callers that only care about metrics (dashboards,
+        // logging) can subscribe to chat.metrics without pulling the full
+        // run.completed body.  Missing metrics (e.g. transport short-circuit)
+        // simply skip the emit — never blocks run.completed.
+        if (run->result.is_object() && run->result.contains("metrics") &&
+            run->result["metrics"].is_object()) {
+            Json metrics_payload = run->result["metrics"];
+            metrics_payload["runId"] = run->id;
+            emit("chat.metrics", metrics_payload, run->id);
+        }
         emit("run.completed", run->result, run->id);
     } else if (final_state == "cancelled") {
         emit("run.cancelled", Json::object(), run->id);
@@ -2235,9 +2480,17 @@ int32_t NativeRuntime::start_chat_with_mcp(const Json& params, Json& result) {
     if (prompt_status != SAO_AI_EDITOR_OK) {
         return prompt_status;
     }
+    // Also honour prompt-library references so callers can compose an MCP
+    // prompt source with a stored template in the same request.
+    const int32_t library_status = apply_prompt_source(forwarded);
+    if (library_status != SAO_AI_EDITOR_OK) {
+        return library_status;
+    }
     forwarded.erase("mcpServers");
     forwarded.erase("extraTools");
     forwarded.erase("systemPromptSource");
+    forwarded.erase("promptId");
+    forwarded.erase("promptArguments");
     if (!combined_tools.empty()) {
         forwarded["tools"] = std::move(combined_tools);
     }

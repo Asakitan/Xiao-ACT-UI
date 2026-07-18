@@ -28,6 +28,14 @@ public:
                    Json& result) const;
     int32_t remove(std::string_view conversation_id, Json& result) const;
 
+    // Toggle the `pinned` flag on a conversation.  Pinned conversations are
+    // sorted ahead of unpinned entries in `list()` (savedAt still tie-breaks
+    // within each group).  Documents missing a `pinned` field are treated as
+    // unpinned to keep older stored conversations backward-compatible.
+    int32_t set_pinned(std::string_view conversation_id,
+                       bool pinned,
+                       Json& result) const;
+
     int32_t export_all(std::string_view scope, Json& result) const;
     int32_t import_conversation(const Json& conversation,
                                 std::string_view scope,

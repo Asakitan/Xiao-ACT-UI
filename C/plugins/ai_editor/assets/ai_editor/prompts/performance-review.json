@@ -1,0 +1,12 @@
+{
+    "id": "performance-review",
+    "name": "Performance Review",
+    "description": "Identify hot paths, algorithmic waste, and I/O bottlenecks",
+    "content": "Analyze the following code for performance issues on target = {{target}}.\n\n{{code}}\n\nFocus areas:\n1. Algorithmic complexity — quantify big-O for the hot loops.\n2. Memory pressure — allocation churn, unnecessary copies, cache locality.\n3. I/O — blocking calls, missing batching, synchronous DB / HTTP round-trips.\n4. Concurrency — GIL contention, lock granularity, false sharing.\n\nFor each finding include: measured or estimated impact, root cause, and a specific rewrite (prefer Cython / native for hot Python loops).",
+    "variables": [
+        {"name": "code", "description": "Source under review"},
+        {"name": "target", "description": "Runtime target (Python 3.11, Node 20, JVM, etc.)", "default": "the current runtime"}
+    ],
+    "tags": ["performance", "profiling", "review"],
+    "icon": "⚡"
+}

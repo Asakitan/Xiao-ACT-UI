@@ -8,6 +8,8 @@
 #include <array>
 #include <atomic>
 #include <charconv>
+#include <chrono>
+#include <condition_variable>
 #include <deque>
 #include <filesystem>
 #include <fstream>
@@ -1665,6 +1667,230 @@ TEST_CASE("AI Editor MCP client parses SSE-framed HTTP MCP responses",
     REQUIRE(call["content"][0]["text"] == "streamed");
 
     sao_ai_editor_mcp_client_destroy(client);
+}
+
+namespace {
+
+// Trampoline used by the notification-forwarder test.  Buffers every payload
+// the client pushes under a mutex so the calling thread can wait for a
+// specific arrival count without racing the reader thread.
+struct NotificationSink final {
+    std::mutex mutex;
+    std::condition_variable ready;
+    std::vector<std::string> payloads;
+
+    static void SAO_AI_EDITOR_CALL callback(void* user, const char* json_utf8,
+                                            uint32_t json_len) {
+        auto* self = static_cast<NotificationSink*>(user);
+        {
+            std::lock_guard<std::mutex> guard(self->mutex);
+            self->payloads.emplace_back(json_utf8,
+                                        static_cast<size_t>(json_len));
+        }
+        self->ready.notify_all();
+    }
+
+    bool wait_for(size_t expected, std::chrono::milliseconds timeout) {
+        std::unique_lock<std::mutex> lock(mutex);
+        return ready.wait_for(lock, timeout, [&] {
+            return payloads.size() >= expected;
+        });
+    }
+};
+
+}  // namespace
+
+TEST_CASE("AI Editor MCP client forwards stdio notifications through the "
+          "installed callback",
+          "[plugins][ai_editor][native][mcp][client][notification]"
+          "[integration]") {
+    sao_ai_editor_mcp_client_t client = nullptr;
+    REQUIRE(sao_ai_editor_mcp_client_create(&client) == SAO_AI_EDITOR_OK);
+    REQUIRE(client != nullptr);
+
+    // Wire the sink up front so notifications observed during initialize (or
+    // right after it — the fake pushes as soon as notifications/initialized
+    // arrives) never fall into the pull queue.
+    NotificationSink sink;
+    REQUIRE(sao_ai_editor_mcp_client_set_notification_forwarder(
+                client, &sink, &NotificationSink::callback) ==
+            SAO_AI_EDITOR_OK);
+
+    const Json config{
+        {"name", "notif-fixture"},
+        {"command", SAO_AI_EDITOR_MCP_NOTIFICATION_FIXTURE},
+        {"args", Json::array({"--notify-count", "2",
+                              "--notify-method",
+                              "notifications/tools/list_changed",
+                              "--hold-open-ms", "1500"})},
+        {"startupMs", 5000}};
+    const std::string config_dump = config.dump();
+    REQUIRE(sao_ai_editor_mcp_client_register(
+                client, config_dump.data(),
+                static_cast<uint32_t>(config_dump.size())) == SAO_AI_EDITOR_OK);
+
+    REQUIRE(sink.wait_for(2, std::chrono::milliseconds(4000)));
+
+    std::vector<std::string> payloads;
+    {
+        std::lock_guard<std::mutex> guard(sink.mutex);
+        payloads = sink.payloads;
+    }
+    REQUIRE(payloads.size() >= 2);
+    for (const auto& raw : payloads) {
+        const Json envelope = Json::parse(raw);
+        REQUIRE(envelope.is_object());
+        REQUIRE(envelope["server"] == "notif-fixture");
+        REQUIRE(envelope.contains("notification"));
+        REQUIRE(envelope["notification"]["method"] ==
+                "notifications/tools/list_changed");
+        REQUIRE(envelope["notification"]["params"].is_object());
+        REQUIRE(envelope["notification"]["params"].contains("sequence"));
+    }
+    // Sequence numbers must appear in monotonically increasing order — the
+    // fixture pushes them tightly and the client's reader thread preserves
+    // wire order.
+    int64_t previous = -1;
+    for (const auto& raw : payloads) {
+        const int64_t sequence = Json::parse(raw)["notification"]["params"]
+                                     .value("sequence", int64_t{-1});
+        REQUIRE(sequence > previous);
+        previous = sequence;
+    }
+
+    // Clearing the forwarder should also detach — subsequent notifications
+    // land in the pull queue instead.  We do not have a way to make the fake
+    // push again, but we can prove the API cleanly rebinds by installing a
+    // null and re-installing the sink without crashing.
+    REQUIRE(sao_ai_editor_mcp_client_set_notification_forwarder(
+                client, nullptr, nullptr) == SAO_AI_EDITOR_OK);
+    REQUIRE(sao_ai_editor_mcp_client_set_notification_forwarder(
+                client, &sink, &NotificationSink::callback) ==
+            SAO_AI_EDITOR_OK);
+
+    REQUIRE(sao_ai_editor_mcp_client_close(client, "notif-fixture") ==
+            SAO_AI_EDITOR_OK);
+    sao_ai_editor_mcp_client_destroy(client);
+}
+
+TEST_CASE("AI Editor MCP client queues notifications for pull consumers when "
+          "no forwarder is installed",
+          "[plugins][ai_editor][native][mcp][client][notification]"
+          "[integration]") {
+    sao_ai_editor_mcp_client_t client = nullptr;
+    REQUIRE(sao_ai_editor_mcp_client_create(&client) == SAO_AI_EDITOR_OK);
+    REQUIRE(client != nullptr);
+
+    // No forwarder installed → notifications must accumulate in the pull
+    // queue and drain out through next_notification.
+    const Json config{
+        {"name", "notif-pull"},
+        {"command", SAO_AI_EDITOR_MCP_NOTIFICATION_FIXTURE},
+        {"args", Json::array({"--notify-count", "3",
+                              "--notify-method",
+                              "notifications/resources/updated",
+                              "--hold-open-ms", "1500"})},
+        {"startupMs", 5000}};
+    const std::string config_dump = config.dump();
+    REQUIRE(sao_ai_editor_mcp_client_register(
+                client, config_dump.data(),
+                static_cast<uint32_t>(config_dump.size())) == SAO_AI_EDITOR_OK);
+
+    // Poll next_notification until we accumulate three payloads or time out.
+    std::vector<std::string> drained;
+    const auto deadline = std::chrono::steady_clock::now() +
+                          std::chrono::milliseconds(4000);
+    while (drained.size() < 3 &&
+           std::chrono::steady_clock::now() < deadline) {
+        uint32_t required = 0;
+        const int32_t queried = sao_ai_editor_mcp_client_next_notification(
+            client, nullptr, 0, &required);
+        if (queried == SAO_AI_EDITOR_ERR_NOT_FOUND) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(25));
+            continue;
+        }
+        REQUIRE(queried == SAO_AI_EDITOR_ERR_BUFFER_TOO_SMALL);
+        std::vector<char> buffer(static_cast<size_t>(required) + 1U, '\0');
+        uint32_t written = 0;
+        REQUIRE(sao_ai_editor_mcp_client_next_notification(
+                    client, buffer.data(),
+                    static_cast<uint32_t>(buffer.size()), &written) ==
+                SAO_AI_EDITOR_OK);
+        drained.emplace_back(buffer.data(), written);
+    }
+    REQUIRE(drained.size() == 3);
+    for (const auto& raw : drained) {
+        const Json envelope = Json::parse(raw);
+        REQUIRE(envelope["server"] == "notif-pull");
+        REQUIRE(envelope["notification"]["method"] ==
+                "notifications/resources/updated");
+    }
+
+    // Empty queue now — next_notification should report NOT_FOUND without
+    // touching *out_len.
+    uint32_t after = 42;
+    REQUIRE(sao_ai_editor_mcp_client_next_notification(
+                client, nullptr, 0, &after) == SAO_AI_EDITOR_ERR_NOT_FOUND);
+    REQUIRE(after == 0);
+
+    sao_ai_editor_mcp_client_destroy(client);
+}
+
+TEST_CASE("AI Editor NativeRuntime surfaces MCP notifications as sao.event "
+          "mcp.notification",
+          "[plugins][ai_editor][native][mcp][dispatch][notification]"
+          "[integration]") {
+    RuntimeFixture fixture;
+    auto runtime = fixture.get();
+    const Json register_result = dispatch(
+        runtime, "mcp.register_server",
+        {{"name", "runtime-notif"},
+         {"command", SAO_AI_EDITOR_MCP_NOTIFICATION_FIXTURE},
+         {"args", Json::array({"--notify-count", "1",
+                                "--notify-method",
+                                "notifications/prompts/list_changed",
+                                "--hold-open-ms", "1500"})}});
+    REQUIRE(register_result.contains("result"));
+
+    // Drain sao.event stream until we see the mcp.notification we expect.
+    bool saw_notification = false;
+    Json seen_payload;
+    const auto deadline = std::chrono::steady_clock::now() +
+                          std::chrono::milliseconds(4000);
+    while (!saw_notification &&
+           std::chrono::steady_clock::now() < deadline) {
+        uint32_t required = 0;
+        const int32_t queried = sao_ai_editor_runtime_next_event(
+            runtime, nullptr, 0, &required);
+        if (queried == SAO_AI_EDITOR_OK && required == 0) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(25));
+            continue;
+        }
+        REQUIRE(queried == SAO_AI_EDITOR_ERR_BUFFER_TOO_SMALL);
+        std::vector<char> event(static_cast<size_t>(required) + 1);
+        REQUIRE(sao_ai_editor_runtime_next_event(
+                    runtime, event.data(),
+                    static_cast<uint32_t>(event.size()), &required) ==
+                SAO_AI_EDITOR_OK);
+        const Json notification =
+            Json::parse(event.data(), event.data() + required);
+        if (notification.value("method", "") != "sao.event") {
+            continue;
+        }
+        const Json params = notification.value("params", Json::object());
+        if (params.value("event", "") != "mcp.notification") {
+            continue;
+        }
+        saw_notification = true;
+        seen_payload = params.value("payload", Json::object());
+    }
+    REQUIRE(saw_notification);
+    REQUIRE(seen_payload["server"] == "runtime-notif");
+    REQUIRE(seen_payload["method"] == "notifications/prompts/list_changed");
+    REQUIRE(seen_payload["params"].is_object());
+
+    REQUIRE(dispatch(runtime, "mcp.close_server",
+                     {{"name", "runtime-notif"}}).contains("result"));
 }
 
 TEST_CASE("SaoAiEditor.exe --cli --cli-method dispatches JSON-RPC and exits",
@@ -3601,4 +3827,541 @@ TEST_CASE("AI Editor workflow.progress emits step_started + step_completed "
     REQUIRE(started_count == 2);
     REQUIRE(completed_count == 2);
     REQUIRE(saw_terminal_completed);
+}
+
+TEST_CASE("AI Editor prompts.list_defs surfaces 3 built-in prompts",
+          "[plugins][ai_editor][native][prompts]") {
+    RuntimeFixture fixture;
+    const Json defs = dispatch(fixture.get(), "prompts.list_defs");
+    REQUIRE(defs.contains("result"));
+    REQUIRE(defs["result"]["total"] >= 3);
+    std::vector<std::string> ids;
+    for (const auto& item : defs["result"]["items"]) {
+        ids.push_back(item.value("id", ""));
+    }
+    for (const auto* required :
+         {"code-review-base", "explain-code", "bug-diagnosis"}) {
+        REQUIRE(std::find(ids.begin(), ids.end(), required) != ids.end());
+    }
+    // Every built-in must round-trip name/content/variables so the UI can
+    // introspect the schema without hitting prompts.get_def separately.
+    for (const auto& item : defs["result"]["items"]) {
+        if (!item.value("builtin", false)) {
+            continue;
+        }
+        REQUIRE_FALSE(item.value("name", std::string{}).empty());
+        REQUIRE_FALSE(item.value("content", std::string{}).empty());
+        REQUIRE(item.contains("variables"));
+        REQUIRE(item["variables"].is_array());
+    }
+}
+
+TEST_CASE("AI Editor prompts.list_defs surfaces market presets when the "
+          "assets/ai_editor/prompts dir is reachable",
+          "[plugins][ai_editor][native][prompts][market]") {
+    RuntimeFixture fixture;
+    const Json defs = dispatch(fixture.get(), "prompts.list_defs");
+    REQUIRE(defs.contains("result"));
+    const auto& items = defs["result"]["items"];
+    std::unordered_map<std::string, Json> by_id;
+    for (const auto& item : items) {
+        by_id.emplace(item.value("id", std::string{}), item);
+    }
+    const std::vector<std::string> market_ids{
+        "sql-audit", "security-checklist", "performance-review",
+        "refactor-plan"};
+    size_t market_hits = 0;
+    for (const auto& id : market_ids) {
+        const auto found = by_id.find(id);
+        if (found == by_id.end()) {
+            continue;
+        }
+        ++market_hits;
+        REQUIRE(found->second.value("scope", std::string{}) == "market");
+        REQUIRE(found->second.value("builtin", true) == false);
+        REQUIRE_FALSE(found->second.value("name", std::string{}).empty());
+    }
+    if (market_hits == 0) {
+        INFO("Market prompt assets/ai_editor/prompts not deployed near the "
+             "test binary; skipping the presence assertions. This is "
+             "expected when assets have not been installed.");
+    } else {
+        // Any preset we actually found must be the full set — partial
+        // deployment would indicate a packaging bug worth surfacing.
+        REQUIRE(market_hits == market_ids.size());
+    }
+}
+
+TEST_CASE("AI Editor prompts.save_def / delete_def CRUD honours builtin lock",
+          "[plugins][ai_editor][native][prompts]") {
+    RuntimeFixture fixture;
+    const Json prompt_json{
+        {"id", "my-review"},
+        {"name", "My Review"},
+        {"description", "Custom review template"},
+        {"content", "Review {{code}} with focus {{focus}}"},
+        {"variables", Json::array({
+            Json{{"name", "code"}, {"description", "The code"}},
+            Json{{"name", "focus"}, {"default", "clarity"}}})},
+        {"tags", Json::array({"custom", "review"})},
+        {"icon", "\xF0\x9F\x93\x9D"}};
+    REQUIRE(dispatch(fixture.get(), "prompts.save_def",
+                     {{"scope", "workspace"}, {"prompt", prompt_json}})
+                .contains("result"));
+    const Json fetched =
+        dispatch(fixture.get(), "prompts.get_def", {{"id", "my-review"}})
+            ["result"];
+    REQUIRE(fetched["name"] == "My Review");
+    REQUIRE(fetched["content"] == "Review {{code}} with focus {{focus}}");
+    REQUIRE(fetched["variables"].size() == 2);
+    REQUIRE(fetched["tags"].size() == 2);
+    REQUIRE(fetched["builtin"] == false);
+    REQUIRE(dispatch(fixture.get(), "prompts.delete_def",
+                     {{"id", "my-review"}})
+                .contains("result"));
+    // Deleting a builtin must fail with permission denied.
+    REQUIRE(dispatch(fixture.get(), "prompts.delete_def",
+                     {{"id", "code-review-base"}})["error"]["data"]["status"] ==
+            SAO_AI_EDITOR_ERR_PERMISSION_DENIED);
+    // Saving a prompt with the id of a builtin must also be rejected.
+    const Json shadowed_builtin{
+        {"id", "code-review-base"},
+        {"name", "Shadowed"},
+        {"content", "override"}};
+    REQUIRE(dispatch(fixture.get(), "prompts.save_def",
+                     {{"scope", "workspace"},
+                      {"prompt", shadowed_builtin}})["error"]["data"]["status"] ==
+            SAO_AI_EDITOR_ERR_PERMISSION_DENIED);
+}
+
+TEST_CASE("AI Editor prompts.render substitutes vars, applies defaults, "
+          "collapses unknowns to empty",
+          "[plugins][ai_editor][native][prompts]") {
+    RuntimeFixture fixture;
+    // Provided arguments win over defaults.
+    const Json rendered_supplied =
+        dispatch(fixture.get(), "prompts.render",
+                 {{"id", "code-review-base"},
+                  {"arguments", {{"focus", "security only"},
+                                  {"code", "SELECT * FROM users"}}}})
+            ["result"];
+    REQUIRE(rendered_supplied["id"] == "code-review-base");
+    const std::string full = rendered_supplied["content"].get<std::string>();
+    REQUIRE(full.find("Focus on: security only") != std::string::npos);
+    REQUIRE(full.find("SELECT * FROM users") != std::string::npos);
+    REQUIRE(full.find("{{") == std::string::npos);
+    // Missing `focus` falls back to the declared default ("correctness and
+    // security"); `code` has no default so it collapses to empty but the
+    // template still renders around it without leaking the placeholder.
+    const Json rendered_default =
+        dispatch(fixture.get(), "prompts.render",
+                 {{"id", "code-review-base"}, {"arguments", Json::object()}})
+            ["result"];
+    const std::string defaulted =
+        rendered_default["content"].get<std::string>();
+    REQUIRE(defaulted.find("Focus on: correctness and security") !=
+            std::string::npos);
+    REQUIRE(defaulted.find("{{code}}") == std::string::npos);
+    REQUIRE(defaulted.find("{{focus}}") == std::string::npos);
+    // Save a workspace prompt that contains an unknown-variable placeholder
+    // and confirm render() collapses it to empty rather than leaking `{{X}}`.
+    const Json bespoke_prompt{
+        {"id", "render-check"},
+        {"name", "Render Check"},
+        {"content", "before/{{unknown}}/after"},
+        {"variables", Json::array()}};
+    REQUIRE(dispatch(fixture.get(), "prompts.save_def",
+                     {{"scope", "workspace"}, {"prompt", bespoke_prompt}})
+                .contains("result"));
+    const Json rendered_unknown =
+        dispatch(fixture.get(), "prompts.render",
+                 {{"id", "render-check"}, {"arguments", Json::object()}})
+            ["result"];
+    REQUIRE(rendered_unknown["content"] == "before//after");
+    // Structured (non-string) argument values are JSON-dumped so callers can
+    // pass tool arguments through unchanged.
+    const Json bespoke_structured{
+        {"id", "render-structured"},
+        {"name", "Render Structured"},
+        {"content", "payload={{payload}}"},
+        {"variables", Json::array()}};
+    REQUIRE(dispatch(fixture.get(), "prompts.save_def",
+                     {{"scope", "workspace"},
+                      {"prompt", bespoke_structured}})
+                .contains("result"));
+    const Json rendered_structured =
+        dispatch(fixture.get(), "prompts.render",
+                 {{"id", "render-structured"},
+                  {"arguments", {{"payload", {{"a", 1}, {"b", 2}}}}}})["result"];
+    REQUIRE(rendered_structured["content"].get<std::string>().find(
+                "\"a\":1") != std::string::npos);
+    // Whitespace inside the placeholder braces is tolerated so JSON editors
+    // that reflow templates don't break substitution.
+    const Json bespoke_spaces{
+        {"id", "render-spaces"},
+        {"name", "Render Spaces"},
+        {"content", "hello {{  name  }}!"},
+        {"variables", Json::array()}};
+    REQUIRE(dispatch(fixture.get(), "prompts.save_def",
+                     {{"scope", "workspace"},
+                      {"prompt", bespoke_spaces}})
+                .contains("result"));
+    const Json rendered_spaces =
+        dispatch(fixture.get(), "prompts.render",
+                 {{"id", "render-spaces"},
+                  {"arguments", {{"name", "world"}}}})["result"];
+    REQUIRE(rendered_spaces["content"] == "hello world!");
+    // Unknown ids must surface as not-found so the UI can distinguish them
+    // from an accidental empty template.
+    REQUIRE(dispatch(fixture.get(), "prompts.render",
+                     {{"id", "no-such-prompt"},
+                      {"arguments", Json::object()}})["error"]["data"]["status"] ==
+            SAO_AI_EDITOR_ERR_NOT_FOUND);
+}
+
+TEST_CASE("AI Editor chat.run with promptId + promptArguments prepends the "
+          "rendered template as a system message before the request body is "
+          "sent",
+          "[plugins][ai_editor][native][prompts][integration]") {
+    const std::string body =
+        R"({"choices":[{"message":{"role":"assistant","content":"ok"}}]})";
+    LocalHttpServer server(
+        "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n"
+        "Content-Length: " +
+        std::to_string(body.size()) +
+        "\r\nConnection: close\r\n\r\n" + body);
+    RuntimeFixture fixture;
+    const Json started = dispatch(
+        fixture.get(), "chat.run",
+        {{"promptId", "code-review-base"},
+         {"promptArguments", {{"focus", "SQL injection"},
+                                {"code", "SELECT * FROM users"}}},
+         {"messages", Json::array({Json{{"role", "user"},
+                                          {"content", "kick it off"}}})},
+         {"stream", false},
+         {"provider", {{"id", "prompt-fixture"},
+                        {"endpoint", server.endpoint()}}},
+         {"model", "test-model"},
+         {"timeoutMs", 5000}});
+    REQUIRE(started.contains("result"));
+    REQUIRE(started["result"]["accepted"] == true);
+    REQUIRE(server.wait_for_connections(1, 2'000));
+    const auto bodies = server.captured_bodies();
+    REQUIRE(bodies.size() == 1);
+    const Json outgoing = Json::parse(bodies.front());
+    // No caller-supplied system message -> rendered template goes in as
+    // the first system message; the caller's user turn survives as-is.
+    REQUIRE(outgoing["messages"].is_array());
+    REQUIRE(outgoing["messages"].size() == 2);
+    REQUIRE(outgoing["messages"][0]["role"] == "system");
+    const std::string prepended =
+        outgoing["messages"][0]["content"].get<std::string>();
+    REQUIRE(prepended.find("Focus on: SQL injection") != std::string::npos);
+    REQUIRE(prepended.find("SELECT * FROM users") != std::string::npos);
+    REQUIRE(prepended.find("{{") == std::string::npos);
+    REQUIRE(outgoing["messages"][1]["role"] == "user");
+    REQUIRE(outgoing["messages"][1]["content"] == "kick it off");
+    // promptId/promptArguments must not leak into the outbound provider
+    // body — they are runtime-only knobs.
+    REQUIRE_FALSE(outgoing.contains("promptId"));
+    REQUIRE_FALSE(outgoing.contains("promptArguments"));
+}
+
+TEST_CASE("AI Editor chat.run with promptId falls back to a user turn when the "
+          "caller already provides a system message",
+          "[plugins][ai_editor][native][prompts][integration]") {
+    const std::string body =
+        R"({"choices":[{"message":{"role":"assistant","content":"ok"}}]})";
+    LocalHttpServer server(
+        "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n"
+        "Content-Length: " +
+        std::to_string(body.size()) +
+        "\r\nConnection: close\r\n\r\n" + body);
+    RuntimeFixture fixture;
+    const Json started = dispatch(
+        fixture.get(), "chat.run",
+        {{"promptId", "explain-code"},
+         {"promptArguments", {{"code", "print(1)"}}},
+         {"messages",
+          Json::array({Json{{"role", "system"},
+                             {"content", "you are the boss"}},
+                        Json{{"role", "user"},
+                             {"content", "go"}}})},
+         {"stream", false},
+         {"provider", {{"id", "prompt-caller-system-fixture"},
+                        {"endpoint", server.endpoint()}}},
+         {"model", "test-model"},
+         {"timeoutMs", 5000}});
+    REQUIRE(started.contains("result"));
+    REQUIRE(server.wait_for_connections(1, 2'000));
+    const auto bodies = server.captured_bodies();
+    REQUIRE(bodies.size() == 1);
+    const Json outgoing = Json::parse(bodies.front());
+    REQUIRE(outgoing["messages"].size() == 3);
+    // Caller-supplied system stays authoritative; the rendered prompt is
+    // queued as a user turn ahead of the original system message so it
+    // still primes the conversation but doesn't shadow the caller intent.
+    REQUIRE(outgoing["messages"][0]["role"] == "user");
+    const std::string prepended =
+        outgoing["messages"][0]["content"].get<std::string>();
+    REQUIRE(prepended.find("Explain this code") != std::string::npos);
+    REQUIRE(prepended.find("print(1)") != std::string::npos);
+    REQUIRE(prepended.find("Depth: detailed") != std::string::npos);
+    REQUIRE(outgoing["messages"][1]["role"] == "system");
+    REQUIRE(outgoing["messages"][1]["content"] == "you are the boss");
+    REQUIRE(outgoing["messages"][2]["role"] == "user");
+    REQUIRE(outgoing["messages"][2]["content"] == "go");
+}
+
+TEST_CASE("chat.run non-stream reports latency metrics on the completed run",
+          "[plugins][ai_editor][native][runs][metrics]") {
+    // Provider replies with a usage block containing completion_tokens so we
+    // can assert the derived tokensPerSecond field lands on the run result.
+    const std::string body =
+        R"({"id":"chat-metrics-1","model":"fixture-model",)"
+        R"("choices":[{"message":{"role":"assistant",)"
+        R"("content":"ok"},"finish_reason":"stop"}],)"
+        R"("usage":{"prompt_tokens":8,"completion_tokens":42,)"
+        R"("total_tokens":50}})";
+    LocalHttpServer server(
+        "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n"
+        "Content-Length: " +
+        std::to_string(body.size()) +
+        "\r\nConnection: close\r\n\r\n" + body);
+    RuntimeFixture fixture;
+    const Json params{{"provider", {{"id", "fixture"},
+                                     {"endpoint", server.endpoint()}}},
+                      {"model", "fixture-model"},
+                      {"messages", Json::array(
+                           {{{"role", "user"}, {"content", "hello"}}})},
+                      {"stream", false},
+                      {"timeoutMs", 5'000}};
+    const Json started = dispatch(fixture.get(), "chat.run", params);
+    const std::string run_id = started["result"]["runId"];
+    REQUIRE(server.wait_for_connections(1, 2'000));
+
+    Json status;
+    const ULONGLONG wait_started = GetTickCount64();
+    do {
+        status = dispatch(fixture.get(), "run.status", {{"runId", run_id}})
+                     ["result"];
+        if (status["status"] != "running") {
+            break;
+        }
+        Sleep(10);
+    } while (GetTickCount64() - wait_started < 5'000);
+    REQUIRE(status["status"] == "completed");
+    REQUIRE(status["result"]["content"] == "ok");
+
+    // Metrics landed on the completed run's result payload.
+    REQUIRE(status["result"].contains("metrics"));
+    const Json metrics = status["result"]["metrics"];
+    REQUIRE(metrics["provider_type"] == "openai");
+    REQUIRE(metrics.contains("totalMs"));
+    REQUIRE(metrics["totalMs"].is_number_integer());
+    REQUIRE(metrics["totalMs"].get<int64_t>() >= 0);
+    REQUIRE(metrics.contains("ttfMs"));
+    REQUIRE(metrics["ttfMs"].is_number_integer());
+    REQUIRE(metrics["ttfMs"].get<int64_t>() >= 0);
+    REQUIRE(metrics["ttfMs"].get<int64_t>() <= metrics["totalMs"].get<int64_t>());
+    // completion_tokens propagated + tokensPerSecond computed.
+    REQUIRE(metrics["completionTokens"].get<int64_t>() == 42);
+    // tokensPerSecond may be absent for zero-duration responses (localhost
+    // typically stays sub-millisecond in tests); assert it only when it
+    // appears so both fast and slow CI shapes stay green.
+    if (metrics.contains("tokensPerSecond")) {
+        REQUIRE(metrics["tokensPerSecond"].is_number());
+        REQUIRE(metrics["tokensPerSecond"].get<double>() > 0.0);
+    }
+
+    // A chat.metrics event fires alongside run.completed carrying the runId.
+    bool saw_chat_metrics = false;
+    bool saw_run_completed = false;
+    for (size_t index = 0; index < 32; ++index) {
+        uint32_t required = 0;
+        const int32_t queried = sao_ai_editor_runtime_next_event(
+            fixture.get(), nullptr, 0, &required);
+        if (queried == SAO_AI_EDITOR_OK && required == 0) {
+            break;
+        }
+        if (queried != SAO_AI_EDITOR_ERR_BUFFER_TOO_SMALL) {
+            break;
+        }
+        std::vector<char> event(static_cast<size_t>(required) + 1);
+        const int32_t drain = sao_ai_editor_runtime_next_event(
+            fixture.get(), event.data(),
+            static_cast<uint32_t>(event.size()), &required);
+        if (drain != SAO_AI_EDITOR_OK) {
+            break;
+        }
+        const Json notification =
+            Json::parse(event.data(), event.data() + required);
+        if (notification.value("method", "") != "sao.event") {
+            continue;
+        }
+        const std::string event_name =
+            notification["params"].value("event", "");
+        if (event_name == "chat.metrics") {
+            saw_chat_metrics = true;
+            const Json payload = notification["params"].value("payload",
+                                                                Json::object());
+            REQUIRE(payload["runId"] == run_id);
+            REQUIRE(payload["provider_type"] == "openai");
+            REQUIRE(payload["completionTokens"].get<int64_t>() == 42);
+            REQUIRE(payload.contains("totalMs"));
+        } else if (event_name == "run.completed") {
+            saw_run_completed = true;
+            // run.completed's payload carries the same metrics block that
+            // chat.metrics splits out, so subscribers who only listen to
+            // completion still get latency info without a second event.
+            REQUIRE(notification["params"]["payload"]["metrics"]
+                                              ["provider_type"] == "openai");
+        }
+    }
+    REQUIRE(saw_chat_metrics);
+    REQUIRE(saw_run_completed);
+}
+
+TEST_CASE("conversation.pin surfaces pinned entries first and get shows pinned",
+          "[plugins][ai_editor][native][storage][pin]") {
+    RuntimeFixture fixture;
+    auto runtime = fixture.get();
+    REQUIRE(dispatch(runtime, "runtime.initialize").contains("result"));
+
+    // Create three conversations with distinct savedAt timestamps (sleep
+    // between creates so the millisecond-resolution clock steps forward).
+    const std::string oldest = dispatch(runtime, "conversation.create",
+                                        {{"title", "Oldest"},
+                                         {"model", "m"},
+                                         {"scope", "workspace"}})
+                                   ["result"]["id"];
+    Sleep(5);
+    const std::string middle = dispatch(runtime, "conversation.create",
+                                        {{"title", "Middle"},
+                                         {"model", "m"},
+                                         {"scope", "workspace"}})
+                                   ["result"]["id"];
+    Sleep(5);
+    const std::string newest = dispatch(runtime, "conversation.create",
+                                        {{"title", "Newest"},
+                                         {"model", "m"},
+                                         {"scope", "workspace"}})
+                                   ["result"]["id"];
+
+    // Baseline: no pins → savedAt descending.
+    Json listing = dispatch(runtime, "conversation.list")["result"];
+    REQUIRE(listing.size() == 3);
+    REQUIRE(listing[0]["id"] == newest);
+    REQUIRE(listing[1]["id"] == middle);
+    REQUIRE(listing[2]["id"] == oldest);
+    for (const auto& entry : listing) {
+        REQUIRE(entry.contains("pinned"));
+        REQUIRE(entry["pinned"] == false);
+    }
+
+    // Pin the oldest conversation → it must move to the front even though
+    // its savedAt is the smallest.
+    const Json pinned = dispatch(runtime, "conversation.pin",
+                                 {{"id", oldest}})["result"];
+    REQUIRE(pinned["id"] == oldest);
+    REQUIRE(pinned["pinned"] == true);
+
+    const Json fetched = dispatch(runtime, "conversation.get",
+                                   {{"id", oldest}})["result"];
+    REQUIRE(fetched["pinned"] == true);
+
+    listing = dispatch(runtime, "conversation.list")["result"];
+    REQUIRE(listing.size() == 3);
+    REQUIRE(listing[0]["id"] == oldest);
+    REQUIRE(listing[0]["pinned"] == true);
+    // Unpinned entries still sort by savedAt within the group.
+    REQUIRE(listing[1]["id"] == newest);
+    REQUIRE(listing[2]["id"] == middle);
+
+    // Unpin restores the natural savedAt ordering.
+    const Json unpinned = dispatch(runtime, "conversation.unpin",
+                                   {{"id", oldest}})["result"];
+    REQUIRE(unpinned["pinned"] == false);
+    listing = dispatch(runtime, "conversation.list")["result"];
+    REQUIRE(listing[0]["id"] == newest);
+    REQUIRE(listing[1]["id"] == middle);
+    REQUIRE(listing[2]["id"] == oldest);
+
+    // Alternate spelling: set_pinned takes an explicit bool.
+    dispatch(runtime, "conversation.set_pinned",
+             {{"id", middle}, {"pinned", true}});
+    listing = dispatch(runtime, "conversation.list")["result"];
+    REQUIRE(listing[0]["id"] == middle);
+    REQUIRE(listing[0]["pinned"] == true);
+
+    dispatch(runtime, "conversation.set_pinned",
+             {{"id", middle}, {"pinned", false}});
+    listing = dispatch(runtime, "conversation.list")["result"];
+    REQUIRE(listing[0]["id"] == newest);
+
+    // set_pinned without a bool payload is invalid.
+    const Json missing_flag = dispatch(runtime, "conversation.set_pinned",
+                                        {{"id", middle}});
+    REQUIRE(missing_flag["error"]["data"]["status"] ==
+            SAO_AI_EDITOR_ERR_INVALID_ARGUMENT);
+}
+
+TEST_CASE("conversation.list treats legacy documents missing pinned as unpinned",
+          "[plugins][ai_editor][native][storage][pin]") {
+    // Older on-disk shape (before the pinned field existed) must still list
+    // cleanly.  We create a valid conversation, then rewrite the JSON on
+    // disk without the pinned key to simulate a pre-existing document.
+    RuntimeFixture fixture;
+    auto runtime = fixture.get();
+    const Json init = dispatch(runtime, "runtime.initialize")["result"];
+    std::string workspace_root_utf8;
+    for (const auto& scope : init["scopes"]) {
+        if (scope.value("scope", "") == "workspace") {
+            workspace_root_utf8 = scope.value("path", "");
+            break;
+        }
+    }
+    REQUIRE(!workspace_root_utf8.empty());
+
+    const std::string id =
+        dispatch(runtime, "conversation.create",
+                 {{"title", "Legacy"},
+                  {"model", "m"},
+                  {"scope", "workspace"}})["result"]["id"];
+    // scope_store.history_root() lands docs under <scope>/chat_history/.
+    const std::filesystem::path history_dir =
+        std::filesystem::path(workspace_root_utf8) / L"chat_history";
+    const std::filesystem::path legacy_path =
+        history_dir / (std::filesystem::path(id + ".json"));
+    REQUIRE(std::filesystem::exists(legacy_path));
+
+    std::string legacy_text;
+    {
+        std::ifstream stream(legacy_path, std::ios::binary);
+        REQUIRE(stream.good());
+        legacy_text.assign(std::istreambuf_iterator<char>{stream},
+                            std::istreambuf_iterator<char>{});
+    }
+    Json legacy_document = Json::parse(legacy_text);
+    legacy_document.erase("pinned");
+    {
+        std::ofstream stream(legacy_path,
+                              std::ios::binary | std::ios::trunc);
+        REQUIRE(stream.good());
+        const std::string rewritten = legacy_document.dump(1);
+        stream.write(rewritten.data(),
+                     static_cast<std::streamsize>(rewritten.size()));
+    }
+
+    // list() must default to pinned:false rather than dropping the entry.
+    const Json listing = dispatch(runtime, "conversation.list")["result"];
+    REQUIRE(listing.size() == 1);
+    REQUIRE(listing[0]["id"] == id);
+    REQUIRE(listing[0]["pinned"] == false);
+
+    // get() normalises pinned to false for legacy documents so downstream
+    // callers can rely on the field being present.
+    const Json fetched = dispatch(runtime, "conversation.get",
+                                   {{"id", id}})["result"];
+    REQUIRE(fetched["pinned"] == false);
 }

@@ -1,0 +1,13 @@
+{
+    "id": "refactor-plan",
+    "name": "Refactor Plan",
+    "description": "Draft a stepwise refactor plan with risk callouts",
+    "content": "Draft a refactor plan for the following code.\n\nGoal: {{goal}}\n\nConstraints: {{constraints}}\n\nCurrent code:\n{{code}}\n\nProduce:\n1. Target design (1-2 sentence summary).\n2. Migration steps in order — each step must be independently mergeable.\n3. Test strategy (what to add before / during / after).\n4. Rollback plan for each step.\n5. Risk callouts and open questions.",
+    "variables": [
+        {"name": "code", "description": "Existing code to refactor"},
+        {"name": "goal", "description": "What the refactor should achieve", "default": "improve readability and testability"},
+        {"name": "constraints", "description": "Must-honour constraints (public API, perf, migration window)", "default": "preserve the existing public API"}
+    ],
+    "tags": ["refactor", "planning"],
+    "icon": "🛠️"
+}

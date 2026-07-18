@@ -1,0 +1,12 @@
+{
+    "id": "security-checklist",
+    "name": "Security Checklist",
+    "description": "Run code through a standardised application-security checklist",
+    "content": "Perform a security review of the following code with threat model = {{threat_model}}.\n\n{{code}}\n\nCheck for:\n1. Injection (SQL, command, LDAP, template).\n2. Authentication / session handling.\n3. Authorization / access control.\n4. Sensitive data exposure (secrets, PII, logs).\n5. SSRF, XXE, and unsafe deserialization.\n6. Insecure defaults and misconfigurations.\n\nFor each finding: severity (Critical / High / Medium / Low), line reference, exploitation sketch, and a minimal fix.",
+    "variables": [
+        {"name": "code", "description": "Snippet, file, or diff to review"},
+        {"name": "threat_model", "description": "Assumed attacker capability", "default": "unauthenticated external attacker"}
+    ],
+    "tags": ["security", "audit", "review"],
+    "icon": "🛡️"
+}

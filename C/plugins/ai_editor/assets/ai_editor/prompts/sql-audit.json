@@ -1,0 +1,13 @@
+{
+    "id": "sql-audit",
+    "name": "SQL Audit",
+    "description": "Audit a SQL statement or schema for correctness, safety, and portability",
+    "content": "Audit the following SQL for {{focus}}:\n\n{{sql}}\n\nDialect: {{dialect}}\n\nProvide:\n1. Correctness findings (join grammar, NULL handling, GROUP BY, type coercion).\n2. Performance risks (missing indexes, non-sargable predicates, N+1).\n3. Portability caveats across MySQL / PostgreSQL / SQLite / SQL Server.\n4. Minimal recommended rewrite with a one-line rationale.",
+    "variables": [
+        {"name": "sql", "description": "SQL statement, migration, or schema fragment to audit"},
+        {"name": "focus", "description": "Primary review lens", "default": "correctness, performance, and portability"},
+        {"name": "dialect", "description": "Target SQL dialect", "default": "unspecified"}
+    ],
+    "tags": ["sql", "database", "review"],
+    "icon": "🗄️"
+}
