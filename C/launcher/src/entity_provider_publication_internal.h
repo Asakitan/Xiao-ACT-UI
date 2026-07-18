@@ -15,10 +15,9 @@ using InvokeProviderFn = std::int32_t(SAO_PLUGINS_CALL*)(const char* provider_id
                                                          std::uint64_t expected_generation,
                                                          const char* action_id_utf8,
                                                          const char* payload_json_utf8);
-using SetChildrenFn = sao_status_t(SAO_UI_CALL*)(sao_ui_entity_shell_handle_t handle,
-                                                 const char* parent_name_utf8,
-                                                 const SaoUiMenuItem* items,
-                                                 std::size_t item_count);
+using SetRootsFn = sao_status_t(SAO_UI_CALL*)(sao_ui_entity_shell_handle_t handle,
+                                              const SaoUiEntityRootItem* roots,
+                                              std::size_t root_count);
 using GetShellSnapshotFn = sao_status_t(SAO_UI_CALL*)(sao_ui_entity_shell_handle_t handle,
                                                       SaoUiEntityShellSnapshot* out_snapshot);
 using HomeFn = sao_status_t(SAO_UI_CALL*)(sao_ui_entity_shell_handle_t handle);
@@ -33,17 +32,19 @@ struct EntityProviderPublicationState {
 
 sao_status_t refresh(sao_ui_entity_shell_handle_t shell,
                      entity_action_routes::EntityActionRouteStore& routes,
-                     EntityProviderPublicationState& state, SnapshotCatalogFn snapshot_fn,
-                     SetChildrenFn set_children_fn) noexcept;
+                     EntityProviderPublicationState& state, bool nervgear_mode,
+                     SnapshotCatalogFn snapshot_fn, SetRootsFn set_roots_fn) noexcept;
 
 sao_status_t poll(sao_ui_entity_shell_handle_t shell,
                   entity_action_routes::EntityActionRouteStore& routes,
                   EntityProviderPublicationState& state, std::uint32_t elapsed_ms,
-                  SnapshotCatalogFn snapshot_fn, SetChildrenFn set_children_fn) noexcept;
+                  bool nervgear_mode, SnapshotCatalogFn snapshot_fn,
+                  SetRootsFn set_roots_fn) noexcept;
 
 sao_status_t clear(sao_ui_entity_shell_handle_t shell,
                    entity_action_routes::EntityActionRouteStore& routes,
-                   EntityProviderPublicationState& state, SetChildrenFn set_children_fn) noexcept;
+                   EntityProviderPublicationState& state, bool nervgear_mode,
+                   SetRootsFn set_roots_fn) noexcept;
 
 sao_status_t invoke(const entity_action_routes::EntityActionRoute& route,
                     sao_ui_entity_shell_handle_t shell, InvokeProviderFn invoke_fn,

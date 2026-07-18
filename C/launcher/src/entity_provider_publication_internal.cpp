@@ -9,8 +9,6 @@
 namespace sao::launcher::entity_provider_publication {
 namespace {
 
-constexpr std::string_view kPluginsRoot = "Plugins";
-
 constexpr std::array<SaoUiMenuItem, 2> kFixedPluginRows{{
     {"插件管理面板 Manage",
      "⚙",
@@ -62,24 +60,111 @@ sao_status_t build_menu_items(const entity_action_routes::EntityActionRouteSnaps
 
 sao_status_t set_route_snapshot(sao_ui_entity_shell_handle_t shell,
                                 const entity_action_routes::EntityActionRouteSnapshot& snapshot,
-                                SetChildrenFn set_children_fn) {
-    std::vector<SaoUiMenuItem> items;
-    const sao_status_t status = build_menu_items(snapshot, items);
+                                bool nervgear_mode, SetRootsFn set_roots_fn) {
+    std::vector<SaoUiMenuItem> plugin_rows;
+    const sao_status_t status = build_menu_items(snapshot, plugin_rows);
     if (status != SAO_STATUS_OK)
         return status;
-    return set_children_fn(shell, kPluginsRoot.data(), items.data(), items.size());
+
+    const std::array<SaoUiMenuItem, 8> control_rows{{
+        {"置顶: OFF", "⬆", SAO_UI_ENTITY_ACTION_TOGGLE_TOPMOST, true, {false, false, false}},
+        {nervgear_mode ? "NervGear: ON" : "NervGear: OFF",
+         "◈",
+         SAO_UI_ENTITY_ACTION_TOGGLE_NERVGEAR,
+         true,
+         {false, false, false}},
+        {"──────────", "─", -1, false, {false, false, false}},
+        {"Streaming Mode: OFF",
+         "◈",
+         SAO_UI_ENTITY_ACTION_TOGGLE_STREAMING_MODE,
+         true,
+         {false, false, false}},
+        {"鱼眼背景: 程序生成",
+         "◆",
+         SAO_UI_ENTITY_ACTION_SET_FISHEYE_PROCEDURAL,
+         true,
+         {false, false, false}},
+        {"鱼眼背景: 实时截屏",
+         "◇",
+         SAO_UI_ENTITY_ACTION_SET_FISHEYE_LIVE,
+         true,
+         {false, false, false}},
+        {"──────────", "─", -1, false, {false, false, false}},
+        {"保存设置", "✓", SAO_UI_ENTITY_ACTION_SAVE_SETTINGS, true, {false, false, false}},
+    }};
+    constexpr std::array<SaoUiMenuItem, 3> kToolRows{{
+        {"AI Editor (LLM)", "✦", SAO_UI_ENTITY_ACTION_OPEN_AI_EDITOR, true, {false, false, false}},
+        {"Workshop", "◇", SAO_UI_ENTITY_ACTION_OPEN_WORKSHOP, true, {false, false, false}},
+        {"Process Selector",
+         "⚙",
+         SAO_UI_ENTITY_ACTION_OPEN_PROCESS_SELECTOR,
+         true,
+         {false, false, false}},
+    }};
+    constexpr std::array<SaoUiMenuItem, 2> kSkinRows{{
+        {"全部 Light", "🎨", SAO_UI_ENTITY_ACTION_SET_ALL_LIGHT, true, {false, false, false}},
+        {"全部 Dark", "🌙", SAO_UI_ENTITY_ACTION_SET_ALL_DARK, true, {false, false, false}},
+    }};
+    const std::array<SaoUiEntityRootItem, 5> roots{{
+        {sizeof(SaoUiEntityRootItem),
+         "Control",
+         "Control",
+         "C",
+         10,
+         true,
+         {0, 0, 0},
+         control_rows.data(),
+         control_rows.size()},
+        {sizeof(SaoUiEntityRootItem),
+         "Tools",
+         "Tools",
+         "T",
+         11,
+         true,
+         {0, 0, 0},
+         kToolRows.data(),
+         kToolRows.size()},
+        {sizeof(SaoUiEntityRootItem),
+         "Plugins",
+         "Plugins",
+         "P",
+         12,
+         true,
+         {0, 0, 0},
+         plugin_rows.data(),
+         plugin_rows.size()},
+        {sizeof(SaoUiEntityRootItem),
+         "Skins",
+         "Skins",
+         "S",
+         13,
+         true,
+         {0, 0, 0},
+         kSkinRows.data(),
+         kSkinRows.size()},
+        {sizeof(SaoUiEntityRootItem),
+         "About",
+         "About",
+         "?",
+         SAO_UI_ENTITY_ACTION_OPEN_ABOUT,
+         true,
+         {0, 0, 0},
+         nullptr,
+         0},
+    }};
+    return set_roots_fn(shell, roots.data(), roots.size());
 }
 
 sao_status_t resync_from_routes(sao_ui_entity_shell_handle_t shell,
                                 entity_action_routes::EntityActionRouteStore& routes,
-                                SetChildrenFn set_children_fn) {
+                                bool nervgear_mode, SetRootsFn set_roots_fn) {
     constexpr std::uint32_t kMaximumResyncAttempts = 3;
     for (std::uint32_t attempt = 0; attempt < kMaximumResyncAttempts; ++attempt) {
         entity_action_routes::EntityActionRouteSnapshot before;
         sao_status_t status = routes.snapshot(before);
         if (status != SAO_STATUS_OK)
             return status;
-        status = set_route_snapshot(shell, before, set_children_fn);
+        status = set_route_snapshot(shell, before, nervgear_mode, set_roots_fn);
         if (status != SAO_STATUS_OK)
             return status;
         entity_action_routes::EntityActionRouteSnapshot after;
@@ -96,7 +181,7 @@ sao_status_t
 publish_routes_transaction(sao_ui_entity_shell_handle_t shell,
                            entity_action_routes::EntityActionRouteStore& routes,
                            const std::vector<entity_action_routes::EntityActionRouteSpec>& rows,
-                           SetChildrenFn set_children_fn) {
+                           bool nervgear_mode, SetRootsFn set_roots_fn) {
     entity_action_routes::EntityActionRouteStore::PreparedPublication publication;
     sao_status_t status = routes.prepare(rows, publication);
     if (status != SAO_STATUS_OK)
@@ -106,14 +191,15 @@ publish_routes_transaction(sao_ui_entity_shell_handle_t shell,
     status = publication.snapshot(candidate);
     if (status != SAO_STATUS_OK)
         return status;
-    status = set_route_snapshot(shell, candidate, set_children_fn);
+    status = set_route_snapshot(shell, candidate, nervgear_mode, set_roots_fn);
     if (status != SAO_STATUS_OK)
         return status;
 
     status = publication.commit();
     if (status == SAO_STATUS_OK)
         return SAO_STATUS_OK;
-    const sao_status_t resync_status = resync_from_routes(shell, routes, set_children_fn);
+    const sao_status_t resync_status =
+        resync_from_routes(shell, routes, nervgear_mode, set_roots_fn);
     return resync_status == SAO_STATUS_OK ? status : resync_status;
 }
 
@@ -134,9 +220,9 @@ sao_status_t close_menu_if_visible(sao_ui_entity_shell_handle_t shell,
 
 sao_status_t refresh(sao_ui_entity_shell_handle_t shell,
                      entity_action_routes::EntityActionRouteStore& routes,
-                     EntityProviderPublicationState& state, SnapshotCatalogFn snapshot_fn,
-                     SetChildrenFn set_children_fn) noexcept {
-    if (shell == nullptr || snapshot_fn == nullptr || set_children_fn == nullptr) {
+                     EntityProviderPublicationState& state, bool nervgear_mode,
+                     SnapshotCatalogFn snapshot_fn, SetRootsFn set_roots_fn) noexcept {
+    if (shell == nullptr || snapshot_fn == nullptr || set_roots_fn == nullptr) {
         return SAO_STATUS_ERR_INVALID_ARGUMENT;
     }
     try {
@@ -148,7 +234,7 @@ sao_status_t refresh(sao_ui_entity_shell_handle_t shell,
         status = entity_provider_catalog::build_routes(catalog, rows);
         if (status != SAO_STATUS_OK)
             return status;
-        status = publish_routes_transaction(shell, routes, rows, set_children_fn);
+        status = publish_routes_transaction(shell, routes, rows, nervgear_mode, set_roots_fn);
         if (status != SAO_STATUS_OK)
             return status;
         state.catalog_revision = catalog.revision;
@@ -162,8 +248,9 @@ sao_status_t refresh(sao_ui_entity_shell_handle_t shell,
 sao_status_t poll(sao_ui_entity_shell_handle_t shell,
                   entity_action_routes::EntityActionRouteStore& routes,
                   EntityProviderPublicationState& state, std::uint32_t elapsed_ms,
-                  SnapshotCatalogFn snapshot_fn, SetChildrenFn set_children_fn) noexcept {
-    if (shell == nullptr || snapshot_fn == nullptr || set_children_fn == nullptr) {
+                  bool nervgear_mode, SnapshotCatalogFn snapshot_fn,
+                  SetRootsFn set_roots_fn) noexcept {
+    if (shell == nullptr || snapshot_fn == nullptr || set_roots_fn == nullptr) {
         return SAO_STATUS_ERR_INVALID_ARGUMENT;
     }
     const auto remaining = std::numeric_limits<std::uint32_t>::max() - state.refresh_elapsed_ms;
@@ -172,17 +259,19 @@ sao_status_t poll(sao_ui_entity_shell_handle_t shell,
         return SAO_STATUS_OK;
     }
     state.refresh_elapsed_ms = 0;
-    return refresh(shell, routes, state, snapshot_fn, set_children_fn);
+    return refresh(shell, routes, state, nervgear_mode, snapshot_fn, set_roots_fn);
 }
 
 sao_status_t clear(sao_ui_entity_shell_handle_t shell,
                    entity_action_routes::EntityActionRouteStore& routes,
-                   EntityProviderPublicationState& state, SetChildrenFn set_children_fn) noexcept {
-    if (shell == nullptr || set_children_fn == nullptr) {
+                   EntityProviderPublicationState& state, bool nervgear_mode,
+                   SetRootsFn set_roots_fn) noexcept {
+    if (shell == nullptr || set_roots_fn == nullptr) {
         return SAO_STATUS_ERR_INVALID_ARGUMENT;
     }
     try {
-        const sao_status_t status = publish_routes_transaction(shell, routes, {}, set_children_fn);
+        const sao_status_t status =
+            publish_routes_transaction(shell, routes, {}, nervgear_mode, set_roots_fn);
         if (status != SAO_STATUS_OK)
             return status;
         state = {};

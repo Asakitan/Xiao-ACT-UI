@@ -933,9 +933,8 @@ sao_status_t teardown_platform_context(sao_platform_ctx* ctx,
     if (ctx->entity_shell) {
 #if defined(SAO_LAUNCHER_ENTITY_PROVIDER_COMPOSITION)
         (void)sao::launcher::entity_provider_publication::clear(
-            ctx->entity_shell, ctx->entity_action_routes,
-            ctx->entity_provider_publication,
-            &sao_ui_entity_shell_set_children);
+            ctx->entity_shell, ctx->entity_action_routes, ctx->entity_provider_publication,
+            ctx->nervgear_mode, &sao_ui_entity_shell_set_roots);
 #endif
         sao_ui_entity_shell_destroy(ctx->entity_shell);
         ctx->entity_shell = nullptr;
@@ -979,10 +978,9 @@ sao_status_t sao_ui_bring_online(sao_platform_ctx* ctx) {
     if (status != SAO_STATUS_OK) return status;
 #if defined(SAO_LAUNCHER_ENTITY_PROVIDER_COMPOSITION)
     status = sao::launcher::entity_provider_publication::refresh(
-        ctx->entity_shell, ctx->entity_action_routes,
-        ctx->entity_provider_publication,
-        &sao::plugins::loader::sao_plugins_entity_provider_snapshot,
-        &sao_ui_entity_shell_set_children);
+        ctx->entity_shell, ctx->entity_action_routes, ctx->entity_provider_publication,
+        ctx->nervgear_mode, &sao::plugins::loader::sao_plugins_entity_provider_snapshot,
+        &sao_ui_entity_shell_set_roots);
     if (status != SAO_STATUS_OK) {
 #if defined(SAO_LAUNCHER_CORE_LOG_PROVIDER)
         (void)sao_core_logf(SAO_LOG_WARN, "launcher.entity_provider",
@@ -995,9 +993,8 @@ sao_status_t sao_ui_bring_online(sao_platform_ctx* ctx) {
     if (!RegisterHotKey(nullptr, kHomeHotkeyId, MOD_NOREPEAT, VK_HOME)) {
 #if defined(SAO_LAUNCHER_ENTITY_PROVIDER_COMPOSITION)
         (void)sao::launcher::entity_provider_publication::clear(
-            ctx->entity_shell, ctx->entity_action_routes,
-            ctx->entity_provider_publication,
-            &sao_ui_entity_shell_set_children);
+            ctx->entity_shell, ctx->entity_action_routes, ctx->entity_provider_publication,
+            ctx->nervgear_mode, &sao_ui_entity_shell_set_roots);
 #endif
         (void)sao_ui_entity_shell_take_offline(ctx->entity_shell);
         return SAO_STATUS_INTERNAL;
@@ -1008,9 +1005,8 @@ sao_status_t sao_ui_bring_online(sao_platform_ctx* ctx) {
         ctx->home_hotkey_registered = false;
 #if defined(SAO_LAUNCHER_ENTITY_PROVIDER_COMPOSITION)
         (void)sao::launcher::entity_provider_publication::clear(
-            ctx->entity_shell, ctx->entity_action_routes,
-            ctx->entity_provider_publication,
-            &sao_ui_entity_shell_set_children);
+            ctx->entity_shell, ctx->entity_action_routes, ctx->entity_provider_publication,
+            ctx->nervgear_mode, &sao_ui_entity_shell_set_roots);
 #endif
         (void)sao_ui_entity_shell_take_offline(ctx->entity_shell);
         return SAO_STATUS_INTERNAL;
@@ -1026,9 +1022,8 @@ sao_status_t sao_ui_take_offline(sao_platform_ctx* ctx) {
     sao_status_t status = SAO_STATUS_OK;
 #if defined(SAO_LAUNCHER_ENTITY_PROVIDER_COMPOSITION)
     status = sao::launcher::entity_provider_publication::clear(
-        ctx->entity_shell, ctx->entity_action_routes,
-        ctx->entity_provider_publication,
-        &sao_ui_entity_shell_set_children);
+        ctx->entity_shell, ctx->entity_action_routes, ctx->entity_provider_publication,
+        ctx->nervgear_mode, &sao_ui_entity_shell_set_roots);
 #endif
     if (ctx->insert_hotkey_registered) {
         if (!UnregisterHotKey(nullptr, kInsertHotkeyId)) {
@@ -1055,12 +1050,10 @@ sao_status_t sao_ui_tick(sao_platform_ctx* ctx, uint32_t elapsed_ms) {
         sao_ui_entity_shell_tick(ctx->entity_shell, elapsed_ms);
     if (tick_status != SAO_STATUS_OK) return tick_status;
 #if defined(SAO_LAUNCHER_ENTITY_PROVIDER_COMPOSITION)
-    const sao_status_t provider_status =
-        sao::launcher::entity_provider_publication::poll(
-        ctx->entity_shell, ctx->entity_action_routes,
-        ctx->entity_provider_publication, elapsed_ms,
-        &sao::plugins::loader::sao_plugins_entity_provider_snapshot,
-        &sao_ui_entity_shell_set_children);
+    const sao_status_t provider_status = sao::launcher::entity_provider_publication::poll(
+        ctx->entity_shell, ctx->entity_action_routes, ctx->entity_provider_publication, elapsed_ms,
+        ctx->nervgear_mode, &sao::plugins::loader::sao_plugins_entity_provider_snapshot,
+        &sao_ui_entity_shell_set_roots);
 #if defined(SAO_LAUNCHER_CORE_LOG_PROVIDER)
     if (provider_status != SAO_STATUS_OK) {
         (void)sao_core_logf(SAO_LOG_WARN, "launcher.entity_provider",
