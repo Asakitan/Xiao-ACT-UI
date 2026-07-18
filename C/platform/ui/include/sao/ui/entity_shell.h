@@ -5,6 +5,7 @@
 
 #include "sao/core/status.h"
 #include "sao/ui/abi.h"
+#include "sao/ui/menu.h"
 #include "sao/ui/nervegear.h"
 #include "sao/ui/overlay_host.h"
 
@@ -90,6 +91,12 @@ SAO_UI_API sao_status_t SAO_UI_CALL sao_ui_entity_shell_take_offline(
 SAO_UI_API sao_status_t SAO_UI_CALL sao_ui_entity_shell_set_nervgear_mode(
     sao_ui_entity_shell_handle_t handle,
     bool enabled);
+
+SAO_UI_API sao_status_t SAO_UI_CALL sao_ui_entity_shell_set_children(
+    sao_ui_entity_shell_handle_t handle,
+    const char* parent_name_utf8,
+    const SaoUiMenuItem* items,
+    size_t item_count);
 
 SAO_UI_API sao_status_t SAO_UI_CALL sao_ui_entity_shell_tick(
     sao_ui_entity_shell_handle_t handle,

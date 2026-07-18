@@ -1116,6 +1116,141 @@ sao::ui::menu_visual::get_snapshot(sao_ui_menu_handle_t handle, Snapshot* out_sn
     }
 }
 
+sao_status_t sao::ui::menu_visual::children_match(
+    sao_ui_menu_handle_t handle, const char* parent_name_utf8,
+    const SaoUiMenuItem* items, size_t item_count, bool* out_match) noexcept {
+    if (handle == nullptr)
+        return SAO_STATUS_ERR_HANDLE_INVALID;
+    if (parent_name_utf8 == nullptr || (items == nullptr && item_count > 0) ||
+        out_match == nullptr) {
+        return SAO_STATUS_ERR_INVALID_ARGUMENT;
+    }
+    std::lock_guard<std::mutex> lock(handle->mtx);
+    if (find_root(handle->items, parent_name_utf8) < 0)
+        return SAO_STATUS_ERR_NOT_FOUND;
+    const auto* child_menu = find_child_menu_locked(handle, parent_name_utf8);
+    if (child_menu == nullptr || child_menu->items.size() != item_count) {
+        *out_match = false;
+        return SAO_STATUS_OK;
+    }
+    for (size_t index = 0; index < item_count; ++index) {
+        const auto& current = child_menu->items[index];
+        const char* name = items[index].name_utf8 == nullptr ? "" : items[index].name_utf8;
+        const char* icon = items[index].icon_utf8 == nullptr ? "" : items[index].icon_utf8;
+        if (current.name != name || current.icon != icon ||
+            current.action_id != items[index].action_id ||
+            current.can_activate != items[index].can_activate) {
+            *out_match = false;
+            return SAO_STATUS_OK;
+        }
+    }
+    *out_match = true;
+    return SAO_STATUS_OK;
+}
+
+sao_status_t sao::ui::menu_visual::get_child_menu_snapshot(
+    sao_ui_menu_handle_t handle, const char* parent_name_utf8,
+    ChildMenuSnapshot* out_snapshot) {
+    if (handle == nullptr)
+        return SAO_STATUS_ERR_HANDLE_INVALID;
+    if (parent_name_utf8 == nullptr || out_snapshot == nullptr)
+        return SAO_STATUS_ERR_INVALID_ARGUMENT;
+    try {
+        ChildMenuSnapshot snapshot{};
+        {
+            std::lock_guard<std::mutex> lock(handle->mtx);
+            if (find_root(handle->items, parent_name_utf8) < 0)
+                return SAO_STATUS_ERR_NOT_FOUND;
+            snapshot.phase = handle->phase;
+            snapshot.phase_elapsed_ms = handle->phase_elapsed_ms;
+            snapshot.displayed_parent_name = handle->displayed_parent_name;
+            snapshot.pending_parent_name = handle->pending_parent_name;
+            snapshot.child_hover_idx = handle->child_hover_idx;
+            snapshot.child_slide_elapsed_ms = handle->child_slide_elapsed_ms;
+            snapshot.child_fade_t = handle->child_fade_t;
+            snapshot.visual_revision = handle->visual_revision;
+            const auto* child_menu = find_child_menu_locked(handle, parent_name_utf8);
+            if (child_menu != nullptr) {
+                snapshot.exists = true;
+                snapshot.rows.reserve(child_menu->items.size());
+                for (size_t index = 0; index < child_menu->items.size(); ++index) {
+                    ChildMenuRowSnapshot row{};
+                    row.name_utf8 = child_menu->items[index].name;
+                    row.icon_utf8 = child_menu->items[index].icon;
+                    row.action_id = child_menu->items[index].action_id;
+                    row.can_activate = child_menu->items[index].can_activate;
+                    row.state = child_menu->items[index].state;
+                    row.visible_width_px = child_menu->visible_widths[index];
+                    row.hover_t = child_menu->hover_values[index];
+                    snapshot.rows.push_back(row);
+                }
+            }
+        }
+        *out_snapshot = std::move(snapshot);
+        return SAO_STATUS_OK;
+    } catch (...) {
+        return SAO_STATUS_ERR_UNKNOWN;
+    }
+}
+
+sao_status_t sao::ui::menu_visual::restore_child_menu_snapshot(
+    sao_ui_menu_handle_t handle, const char* parent_name_utf8,
+    const ChildMenuSnapshot& snapshot) {
+    if (handle == nullptr)
+        return SAO_STATUS_ERR_HANDLE_INVALID;
+    if (parent_name_utf8 == nullptr)
+        return SAO_STATUS_ERR_INVALID_ARGUMENT;
+    try {
+        ChildMenu replacement{};
+        replacement.parent_name = parent_name_utf8;
+        if (snapshot.exists) {
+            replacement.items.reserve(snapshot.rows.size());
+            replacement.visible_widths.reserve(snapshot.rows.size());
+            replacement.hover_values.reserve(snapshot.rows.size());
+            for (const auto& row : snapshot.rows) {
+                MenuItem item{};
+                item.name = row.name_utf8;
+                item.icon = row.icon_utf8;
+                item.action_id = row.action_id;
+                item.can_activate = row.can_activate;
+                item.state = row.state;
+                replacement.items.push_back(std::move(item));
+                replacement.visible_widths.push_back(row.visible_width_px);
+                replacement.hover_values.push_back(row.hover_t);
+            }
+        }
+
+        std::lock_guard<std::mutex> lock(handle->mtx);
+        const int32_t parent_idx = find_root(handle->items, parent_name_utf8);
+        if (parent_idx < 0)
+            return SAO_STATUS_ERR_NOT_FOUND;
+        auto* target = find_child_menu_locked(handle, parent_name_utf8);
+        if (!snapshot.exists) {
+            handle->children.erase(
+                std::remove_if(handle->children.begin(), handle->children.end(),
+                               [parent_name_utf8](const ChildMenu& child_menu) {
+                                   return child_menu.parent_name == parent_name_utf8;
+                               }),
+                handle->children.end());
+        } else if (target == nullptr) {
+            handle->children.push_back(std::move(replacement));
+        } else {
+            *target = std::move(replacement);
+        }
+        handle->phase = snapshot.phase;
+        handle->phase_elapsed_ms = snapshot.phase_elapsed_ms;
+        handle->displayed_parent_name = snapshot.displayed_parent_name;
+        handle->pending_parent_name = snapshot.pending_parent_name;
+        handle->child_hover_idx = snapshot.child_hover_idx;
+        handle->child_slide_elapsed_ms = snapshot.child_slide_elapsed_ms;
+        handle->child_fade_t = snapshot.child_fade_t;
+        handle->visual_revision = snapshot.visual_revision;
+        return SAO_STATUS_OK;
+    } catch (...) {
+        return SAO_STATUS_ERR_UNKNOWN;
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Wave3 helper API (exported for tests + future compose path).
 //
