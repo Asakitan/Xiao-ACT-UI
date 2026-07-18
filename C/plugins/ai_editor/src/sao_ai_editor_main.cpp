@@ -102,11 +102,13 @@ struct Arguments final {
     std::wstring cli_params_inline;
     std::optional<std::filesystem::path> cli_params_file;
     std::optional<std::filesystem::path> workspace;
+    std::optional<std::filesystem::path> node_executable;
     DWORD auto_exit_ms = 0;
     bool headless = false;
     bool hidden_window = false;
     bool ui_smoke_test = false;
     bool mcp_server = false;
+    bool extension_host_mode = false;
     bool webview_mode = false;
     bool cli_mode = false;
     bool show_help = false;
@@ -119,6 +121,8 @@ void print_usage() {
         L"       SaoAiEditor.exe --ui-smoke-test [--workspace <directory>] "
         L"[--hidden] [--auto-exit-ms <milliseconds>]\n"
         L"       SaoAiEditor.exe --mcp-server [--workspace <directory>]\n"
+        L"       SaoAiEditor.exe --extension-host [--workspace <directory>] "
+        L"[--node-executable <path>]\n"
         L"       SaoAiEditor.exe --cli --cli-method <method> "
         L"[--cli-params <json>] [--cli-params-file <path>] "
         L"[--workspace <directory>]\n";
@@ -182,6 +186,13 @@ bool parse_arguments(int argc, wchar_t** argv, Arguments& result) {
             result.mcp_server = true;
             continue;
         }
+        if (argument == L"--extension-host") {
+            if (result.extension_host_mode) {
+                return false;
+            }
+            result.extension_host_mode = true;
+            continue;
+        }
         if (argument == L"--webview") {
             if (result.webview_mode) {
                 return false;
@@ -199,7 +210,8 @@ bool parse_arguments(int argc, wchar_t** argv, Arguments& result) {
         if (argument != L"--sao-ai-editor-pipe" &&
             argument != L"--workspace" && argument != L"--auto-exit-ms" &&
             argument != L"--webview-url" && argument != L"--cli-method" &&
-            argument != L"--cli-params" && argument != L"--cli-params-file") {
+            argument != L"--cli-params" && argument != L"--cli-params-file" &&
+            argument != L"--node-executable") {
             return false;
         }
         if (++index >= argc || argv[index][0] == L'\0') {
@@ -215,6 +227,11 @@ bool parse_arguments(int argc, wchar_t** argv, Arguments& result) {
                 return false;
             }
             result.workspace = std::filesystem::path(argv[index]);
+        } else if (argument == L"--node-executable") {
+            if (result.node_executable.has_value()) {
+                return false;
+            }
+            result.node_executable = std::filesystem::path(argv[index]);
         } else if (argument == L"--webview-url") {
             if (!result.webview_url.empty()) {
                 return false;
@@ -248,11 +265,21 @@ bool parse_arguments(int argc, wchar_t** argv, Arguments& result) {
     if (result.mcp_server) {
         return result.pipe_name.empty() && !result.ui_smoke_test &&
                !result.headless && !result.hidden_window &&
+               !result.extension_host_mode &&
+               !result.node_executable.has_value() &&
                result.auto_exit_ms == 0;
+    }
+    if (result.extension_host_mode) {
+        return result.pipe_name.empty() && !result.ui_smoke_test &&
+               !result.headless && !result.hidden_window &&
+               !result.mcp_server && !result.webview_mode &&
+               !result.cli_mode && result.auto_exit_ms == 0;
     }
     if (result.webview_mode) {
         return result.pipe_name.empty() && !result.ui_smoke_test &&
-               !result.headless && !result.mcp_server && !result.cli_mode;
+               !result.headless && !result.mcp_server && !result.cli_mode &&
+               !result.extension_host_mode &&
+               !result.node_executable.has_value();
     }
     if (result.cli_mode) {
         if (result.cli_method.empty()) {
@@ -260,7 +287,12 @@ bool parse_arguments(int argc, wchar_t** argv, Arguments& result) {
         }
         return result.pipe_name.empty() && !result.ui_smoke_test &&
                !result.headless && !result.mcp_server &&
-               !result.webview_mode;
+               !result.webview_mode && !result.extension_host_mode &&
+               !result.node_executable.has_value();
+    }
+    if (result.node_executable.has_value()) {
+        // --node-executable is only meaningful for --extension-host.
+        return false;
     }
     if (result.ui_smoke_test) {
         return result.pipe_name.empty() && !result.headless;
@@ -1209,6 +1241,16 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int show_command) {
                 return 4;
             }
             return sao::ai_editor::native::run_mcp_server_stdio(*workspace);
+        }
+        if (arguments.extension_host_mode) {
+            const auto workspace = resolve_workspace(arguments.workspace);
+            if (!workspace.has_value()) {
+                return 4;
+            }
+            return sao::ai_editor::native::run_extension_host_stdio(
+                *workspace,
+                arguments.node_executable.value_or(
+                    std::filesystem::path{}));
         }
 #if SAO_AI_EDITOR_HAS_WEBVIEW
         if (arguments.webview_mode) {

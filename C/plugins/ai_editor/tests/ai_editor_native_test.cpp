@@ -463,6 +463,200 @@ TEST_CASE("AI Editor runtime merges scopes and persists history registries",
     REQUIRE(agents["result"]["items"][0]["id"] == "reviewer");
 }
 
+TEST_CASE("AI Editor conversation.export packages a single conversation "
+          "with sao-conversation/1 envelope",
+          "[plugins][ai_editor][native][storage][export]") {
+    RuntimeFixture fixture;
+    auto runtime = fixture.get();
+    REQUIRE(dispatch(runtime, "runtime.initialize").contains("result"));
+
+    const Json created = dispatch(runtime, "conversation.create",
+                                  {{"title", "Exportable"},
+                                   {"model", "gpt-export"},
+                                   {"scope", "workspace"}});
+    const std::string id = created["result"]["id"];
+    REQUIRE(dispatch(runtime, "conversation.append",
+                     {{"id", id},
+                      {"message", {{"role", "user"},
+                                   {"content", "hi export"}}}})
+                .contains("result"));
+    REQUIRE(dispatch(runtime, "conversation.append",
+                     {{"id", id},
+                      {"message", {{"role", "assistant"},
+                                   {"content", "hello back"}}}})
+                .contains("result"));
+
+    // Missing both id and scope → invalid.
+    const Json missing =
+        dispatch(runtime, "conversation.export", Json::object());
+    REQUIRE(missing["error"]["data"]["status"] ==
+            SAO_AI_EDITOR_ERR_INVALID_ARGUMENT);
+
+    // Providing both id and scope → invalid.
+    const Json both = dispatch(runtime, "conversation.export",
+                                {{"id", id}, {"scope", "all"}});
+    REQUIRE(both["error"]["data"]["status"] ==
+            SAO_AI_EDITOR_ERR_INVALID_ARGUMENT);
+
+    const Json exported = dispatch(runtime, "conversation.export",
+                                    {{"id", id}});
+    REQUIRE(exported.contains("result"));
+    REQUIRE(exported["result"]["format"] == "sao-conversation/1");
+    REQUIRE(exported["result"]["exportedAt"].is_number());
+    REQUIRE(exported["result"]["conversation"]["id"] == id);
+    REQUIRE(exported["result"]["conversation"]["title"] == "Exportable");
+    REQUIRE(exported["result"]["conversation"]["messages"].size() == 2);
+    REQUIRE(exported["result"]["conversation"]["messageCount"] == 2);
+
+    // Unknown id → NOT_FOUND propagated as protocol -32601 (compound method).
+    const Json unknown = dispatch(runtime, "conversation.export",
+                                   {{"id", "conv-does-not-exist"}});
+    REQUIRE(unknown.contains("error"));
+}
+
+TEST_CASE("AI Editor conversation.export scope=all returns "
+          "sao-conversations/1 batch",
+          "[plugins][ai_editor][native][storage][export]") {
+    RuntimeFixture fixture;
+    auto runtime = fixture.get();
+    REQUIRE(dispatch(runtime, "runtime.initialize").contains("result"));
+
+    const Json a = dispatch(runtime, "conversation.create",
+                            {{"title", "A"},
+                             {"model", "m"},
+                             {"scope", "workspace"}});
+    const Json b = dispatch(runtime, "conversation.create",
+                            {{"title", "B"},
+                             {"model", "m"},
+                             {"scope", "system"}});
+    REQUIRE(dispatch(runtime, "conversation.append",
+                     {{"id", a["result"]["id"]},
+                      {"message", {{"role", "user"},
+                                   {"content", "content-a"}}}})
+                .contains("result"));
+
+    // Invalid scope value.
+    const Json bad_scope = dispatch(runtime, "conversation.export",
+                                     {{"scope", "everywhere"}});
+    REQUIRE(bad_scope["error"]["data"]["status"] ==
+            SAO_AI_EDITOR_ERR_INVALID_ARGUMENT);
+
+    const Json all = dispatch(runtime, "conversation.export",
+                               {{"scope", "all"}});
+    REQUIRE(all.contains("result"));
+    REQUIRE(all["result"]["format"] == "sao-conversations/1");
+    REQUIRE(all["result"]["count"] == 2);
+    REQUIRE(all["result"]["conversations"].size() == 2);
+    REQUIRE(all["result"]["exportedAt"].is_number());
+
+    // scope=workspace only picks up A.
+    const Json ws = dispatch(runtime, "conversation.export",
+                              {{"scope", "workspace"}});
+    REQUIRE(ws["result"]["count"] == 1);
+    REQUIRE(ws["result"]["conversations"][0]["title"] == "A");
+
+    // scope=system only picks up B.
+    const Json sys = dispatch(runtime, "conversation.export",
+                               {{"scope", "system"}});
+    REQUIRE(sys["result"]["count"] == 1);
+    REQUIRE(sys["result"]["conversations"][0]["title"] == "B");
+}
+
+TEST_CASE("AI Editor conversation.import round-trips with overwrite semantics",
+          "[plugins][ai_editor][native][storage][import]") {
+    RuntimeFixture fixture;
+    auto runtime = fixture.get();
+    REQUIRE(dispatch(runtime, "runtime.initialize").contains("result"));
+
+    const Json seed = dispatch(runtime, "conversation.create",
+                                {{"title", "Seed"},
+                                 {"model", "m"},
+                                 {"scope", "workspace"}});
+    const std::string seed_id = seed["result"]["id"];
+    REQUIRE(dispatch(runtime, "conversation.append",
+                     {{"id", seed_id},
+                      {"message", {{"role", "user"},
+                                   {"content", "original"}}}})
+                .contains("result"));
+    const Json exported = dispatch(runtime, "conversation.export",
+                                    {{"id", seed_id}})["result"];
+    REQUIRE(exported["format"] == "sao-conversation/1");
+
+    // Unknown format → invalid.
+    const Json bogus = dispatch(runtime, "conversation.import",
+                                 {{"payload", {{"format", "totally-fake/9"}}}});
+    REQUIRE(bogus["error"]["data"]["status"] ==
+            SAO_AI_EDITOR_ERR_INVALID_ARGUMENT);
+
+    // Conflict, overwrite=false → imported=0, conflicts=[seed_id], no
+    // modifications.
+    const Json conflict =
+        dispatch(runtime, "conversation.import",
+                 {{"payload", exported},
+                  {"scope", "workspace"},
+                  {"overwrite", false}});
+    REQUIRE(conflict.contains("error"));
+    REQUIRE(conflict["error"]["data"]["status"] ==
+            SAO_AI_EDITOR_ERR_INVALID_ARGUMENT);
+    REQUIRE(conflict["error"]["data"]["details"]["imported"] == 0);
+    REQUIRE(conflict["error"]["data"]["details"]["conflicts"].size() == 1);
+    REQUIRE(conflict["error"]["data"]["details"]["conflicts"][0] == seed_id);
+
+    // Overwrite=true replaces the conv payload; new content wins.
+    Json rewritten = exported;
+    rewritten["conversation"]["title"] = "Rewritten";
+    rewritten["conversation"]["messages"] = Json::array(
+        {{{"role", "user"}, {"content", "brand-new"}}});
+    const Json overwrote = dispatch(runtime, "conversation.import",
+                                     {{"payload", rewritten},
+                                      {"scope", "workspace"},
+                                      {"overwrite", true}});
+    REQUIRE(overwrote.contains("result"));
+    REQUIRE(overwrote["result"]["imported"] == 1);
+    REQUIRE(overwrote["result"]["assignedIds"][0] == seed_id);
+
+    const Json fetched = dispatch(runtime, "conversation.get",
+                                   {{"id", seed_id}});
+    REQUIRE(fetched["result"]["title"] == "Rewritten");
+    REQUIRE(fetched["result"]["messages"].size() == 1);
+    REQUIRE(fetched["result"]["messageCount"] == 1);
+    REQUIRE(fetched["result"]["messages"][0]["content"] == "brand-new");
+
+    // Fresh id (not present in store) → imported without conflict.
+    Json fresh = exported;
+    fresh["conversation"]["id"] = "conv-fresh-import-0001";
+    fresh["conversation"]["title"] = "Fresh";
+    const Json fresh_result =
+        dispatch(runtime, "conversation.import",
+                 {{"payload", fresh}, {"scope", "workspace"}});
+    REQUIRE(fresh_result.contains("result"));
+    REQUIRE(fresh_result["result"]["imported"] == 1);
+    REQUIRE(fresh_result["result"]["conflicts"].empty());
+    REQUIRE(fresh_result["result"]["assignedIds"][0] ==
+            "conv-fresh-import-0001");
+
+    // Batch payload with an existing id + new id, overwrite=false → the whole
+    // batch is rejected because at least one id collides.
+    Json batch;
+    batch["format"] = "sao-conversations/1";
+    batch["conversations"] = Json::array();
+    Json partner = fresh["conversation"];
+    partner["id"] = "conv-fresh-import-0002";
+    partner["title"] = "Partner";
+    batch["conversations"].push_back(fresh["conversation"]);  // collides
+    batch["conversations"].push_back(partner);                // would be new
+    const Json batch_reject =
+        dispatch(runtime, "conversation.import",
+                 {{"payload", batch}, {"scope", "workspace"}});
+    REQUIRE(batch_reject.contains("error"));
+    REQUIRE(batch_reject["error"]["data"]["details"]["imported"] == 0);
+    REQUIRE(batch_reject["error"]["data"]["details"]["conflicts"].size() == 1);
+    // Partner must not have leaked into the store.
+    const Json partner_lookup = dispatch(runtime, "conversation.get",
+                                          {{"id", "conv-fresh-import-0002"}});
+    REQUIRE(partner_lookup.contains("error"));
+}
+
 TEST_CASE("AI Editor file tools enforce mode permissions and workspace bounds",
           "[plugins][ai_editor][native][tools]") {
     RuntimeFixture fixture;
@@ -804,6 +998,79 @@ TEST_CASE("AI Editor agents.invoke wraps agent system prompt around "
     REQUIRE(invoked["result"]["agentId"] == "code-reviewer");
     REQUIRE(invoked["result"]["content"] == "reviewed");
     REQUIRE(server.wait_for_connections(1, 2'000));
+}
+
+TEST_CASE("AI Editor agents.invoke streams delta tokens via sao.event queue "
+          "when stream=true",
+          "[plugins][ai_editor][native][agents][streaming]") {
+    // OpenAI SSE payload: two content deltas + [DONE].
+    const std::string sse_body =
+        "data: {\"id\":\"chat-agent-stream\",\"choices\":[{"
+        "\"delta\":{\"content\":\"hel\"},\"finish_reason\":null}]}\r\n\r\n"
+        "data: {\"id\":\"chat-agent-stream\",\"choices\":[{"
+        "\"delta\":{\"content\":\"lo\"},\"finish_reason\":null}]}\r\n\r\n"
+        "data: [DONE]\r\n\r\n";
+    LocalHttpServer server(
+        "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\n"
+        "Content-Length: " +
+        std::to_string(sse_body.size()) +
+        "\r\nConnection: close\r\n\r\n" + sse_body);
+
+    RuntimeFixture fixture;
+    const Json invoked = dispatch(
+        fixture.get(), "agents.invoke",
+        {{"id", "code-reviewer"},
+         {"message", "explain hi"},
+         {"stream", true},
+         {"provider", {{"id", "agent-stream-fixture"},
+                        {"endpoint", server.endpoint()}}},
+         {"model", "test-model"},
+         {"timeoutMs", 5000}});
+    REQUIRE(invoked.contains("result"));
+    // out_content is the concatenation of streamed content deltas.
+    REQUIRE(invoked["result"]["content"] == "hello");
+    REQUIRE(invoked["result"]["agentId"] == "code-reviewer");
+    REQUIRE(server.wait_for_connections(1, 2'000));
+
+    // Drain the event queue and confirm we received at least one
+    // agent.delta forwarding a content string.
+    std::string aggregated;
+    size_t delta_count = 0;
+    for (size_t index = 0; index < 32; ++index) {
+        uint32_t required = 0;
+        const int32_t queried = sao_ai_editor_runtime_next_event(
+            fixture.get(), nullptr, 0, &required);
+        if (queried == SAO_AI_EDITOR_OK && required == 0) {
+            break;
+        }
+        if (queried != SAO_AI_EDITOR_ERR_BUFFER_TOO_SMALL) {
+            break;
+        }
+        std::vector<char> event(static_cast<size_t>(required) + 1);
+        const int32_t drain = sao_ai_editor_runtime_next_event(
+            fixture.get(), event.data(),
+            static_cast<uint32_t>(event.size()), &required);
+        if (drain != SAO_AI_EDITOR_OK) {
+            break;
+        }
+        const Json notification =
+            Json::parse(event.data(), event.data() + required);
+        if (notification.value("method", "") != "sao.event") {
+            continue;
+        }
+        const Json params = notification.value("params", Json::object());
+        if (params.value("event", "") != "agent.delta") {
+            continue;
+        }
+        const Json payload = params.value("payload", Json::object());
+        REQUIRE(payload["agentId"] == "code-reviewer");
+        if (payload.contains("content") && payload["content"].is_string()) {
+            aggregated += payload["content"].get<std::string>();
+            ++delta_count;
+        }
+    }
+    REQUIRE(delta_count >= 2);
+    REQUIRE(aggregated == "hello");
 }
 
 namespace {
@@ -1990,4 +2257,277 @@ TEST_CASE("AI Editor mcp.* JSON-RPC surface aggregates and forwards", "[plugins]
     REQUIRE(dispatch(runtime, "mcp.close_server", {{"name", "dispatch-mcp"}})
                 .contains("result"));
     REQUIRE(dispatch(runtime, "mcp.list_servers")["result"]["total"] == 0);
+}
+
+TEST_CASE("SaoAiEditor.exe --extension-host serves NativeRuntime JSON-RPC "
+          "over stdio and honours host.shutdown",
+          "[plugins][ai_editor][production_child][extension_host]"
+          "[integration]") {
+    TemporaryDirectory temporary;
+    const auto workspace = temporary.path() / L"ext-host-workspace";
+    REQUIRE(std::filesystem::create_directories(workspace));
+
+    SECURITY_ATTRIBUTES security_attributes{};
+    security_attributes.nLength = sizeof(security_attributes);
+    security_attributes.bInheritHandle = TRUE;
+
+    HANDLE stdin_read = nullptr;
+    HANDLE stdin_write = nullptr;
+    REQUIRE(CreatePipe(&stdin_read, &stdin_write, &security_attributes,
+                       128 * 1024) != FALSE);
+    REQUIRE(SetHandleInformation(stdin_write, HANDLE_FLAG_INHERIT, 0) != FALSE);
+
+    HANDLE stdout_read = nullptr;
+    HANDLE stdout_write = nullptr;
+    REQUIRE(CreatePipe(&stdout_read, &stdout_write, &security_attributes,
+                       128 * 1024) != FALSE);
+    REQUIRE(SetHandleInformation(stdout_read, HANDLE_FLAG_INHERIT, 0) !=
+            FALSE);
+
+    STARTUPINFOW startup{};
+    startup.cb = sizeof(startup);
+    startup.dwFlags = STARTF_USESTDHANDLES;
+    startup.hStdInput = stdin_read;
+    startup.hStdOutput = stdout_write;
+    startup.hStdError = stdout_write;
+
+    const std::string exe_utf8 = SAO_AI_EDITOR_MCP_SERVER_EXECUTABLE;
+    const int wide_len = MultiByteToWideChar(CP_UTF8, 0, exe_utf8.c_str(), -1,
+                                              nullptr, 0);
+    REQUIRE(wide_len > 0);
+    std::wstring executable(static_cast<size_t>(wide_len - 1), L'\0');
+    MultiByteToWideChar(CP_UTF8, 0, exe_utf8.c_str(), -1, executable.data(),
+                        wide_len);
+    const std::wstring quoted_workspace =
+        L"\"" + workspace.native() + L"\"";
+    std::wstring command_line = L"\"" + executable +
+                                L"\" --extension-host --workspace " +
+                                quoted_workspace;
+    std::vector<wchar_t> command_line_buffer(command_line.begin(),
+                                              command_line.end());
+    command_line_buffer.push_back(L'\0');
+
+    PROCESS_INFORMATION process_information{};
+    REQUIRE(CreateProcessW(nullptr, command_line_buffer.data(), nullptr,
+                           nullptr, TRUE, CREATE_NO_WINDOW, nullptr, nullptr,
+                           &startup, &process_information) != FALSE);
+
+    // Close the child ends inside the parent so ReadFile eventually
+    // observes EOF once the child exits.
+    CloseHandle(stdin_read);
+    CloseHandle(stdout_write);
+
+    auto send_frame = [&](const Json& message) {
+        const std::string body = message.dump();
+        const std::string header =
+            "Content-Length: " + std::to_string(body.size()) + "\r\n\r\n";
+        DWORD written = 0;
+        REQUIRE(WriteFile(stdin_write, header.data(),
+                          static_cast<DWORD>(header.size()), &written,
+                          nullptr) != FALSE);
+        REQUIRE(written == header.size());
+        REQUIRE(WriteFile(stdin_write, body.data(),
+                          static_cast<DWORD>(body.size()), &written,
+                          nullptr) != FALSE);
+        REQUIRE(written == body.size());
+    };
+
+    // Simple Content-Length framed reader that pulls until at least one
+    // complete message is decoded.  Uses the shared MCP decoder so we
+    // exercise the same framing the server produces.
+    sao_ai_editor_mcp_decoder_t decoder = nullptr;
+    REQUIRE(sao_ai_editor_mcp_decoder_create(4U * 1024U * 1024U, &decoder) ==
+            SAO_AI_EDITOR_OK);
+    auto read_frame = [&]() -> Json {
+        std::array<char, 4096> buffer{};
+        while (true) {
+            DWORD read = 0;
+            const BOOL ok = ReadFile(stdout_read, buffer.data(),
+                                      static_cast<DWORD>(buffer.size()),
+                                      &read, nullptr);
+            REQUIRE(ok != FALSE);
+            REQUIRE(read > 0);
+            uint32_t required = 0;
+            const int32_t query = sao_ai_editor_mcp_decoder_feed(
+                decoder, buffer.data(), read, nullptr, 0, &required);
+            if (query != SAO_AI_EDITOR_ERR_BUFFER_TOO_SMALL ||
+                required == 0) {
+                continue;
+            }
+            std::vector<char> messages(static_cast<size_t>(required) + 1U);
+            const int32_t drain = sao_ai_editor_mcp_decoder_feed(
+                decoder, nullptr, 0, messages.data(),
+                static_cast<uint32_t>(messages.size()), &required);
+            REQUIRE(drain == SAO_AI_EDITOR_OK);
+            Json parsed =
+                Json::parse(messages.data(), messages.data() + required,
+                             nullptr, false);
+            REQUIRE(parsed.is_array());
+            // Decoder emits the accumulated array on every feed — an
+            // empty array just means the header arrived but the body is
+            // still in flight, so keep pulling from stdout.
+            if (parsed.empty()) {
+                continue;
+            }
+            return parsed[0];
+        }
+    };
+
+    // 1) extensions.list — even without configure_host, the runtime
+    //    exposes an empty registry (total=0) so we can confirm the
+    //    JSON-RPC surface is live.
+    send_frame(Json{{"jsonrpc", "2.0"},
+                    {"id", 1},
+                    {"method", "extensions.list"},
+                    {"params", Json::object()}});
+    const Json list_response = read_frame();
+    REQUIRE(list_response["id"] == 1);
+    REQUIRE(list_response.contains("result"));
+    REQUIRE(list_response["result"]["total"] == 0);
+    REQUIRE(list_response["result"]["nodeAlive"] == false);
+
+    // 2) A representative tools.call round-trip proves the shared
+    //    registry is reachable — write a fixture file first, then read
+    //    it through the extension host stdio bridge.
+    {
+        std::ofstream fixture_file(workspace / L"hello.txt");
+        fixture_file << "hello via extension host\n";
+    }
+    send_frame(Json{{"jsonrpc", "2.0"},
+                    {"id", 2},
+                    {"method", "tools.call"},
+                    {"params",
+                     {{"mode", "agent"},
+                      {"name", "readFile"},
+                      {"arguments", {{"path", "hello.txt"}}}}}});
+    const Json call_response = read_frame();
+    REQUIRE(call_response["id"] == 2);
+    REQUIRE(call_response.contains("result"));
+    REQUIRE(call_response["result"]["content"].get<std::string>().find(
+                "hello via extension host") != std::string::npos);
+
+    // 3) host.shutdown asks the process to exit cleanly.
+    send_frame(Json{{"jsonrpc", "2.0"},
+                    {"id", 3},
+                    {"method", "host.shutdown"},
+                    {"params", Json::object()}});
+    const Json shutdown_response = read_frame();
+    REQUIRE(shutdown_response["id"] == 3);
+    REQUIRE(shutdown_response.contains("result"));
+
+    sao_ai_editor_mcp_decoder_destroy(decoder);
+    CloseHandle(stdin_write);
+    CloseHandle(stdout_read);
+    REQUIRE(WaitForSingleObject(process_information.hProcess, 15'000) ==
+            WAIT_OBJECT_0);
+    DWORD exit_code = 1;
+    REQUIRE(GetExitCodeProcess(process_information.hProcess, &exit_code) !=
+            FALSE);
+    REQUIRE(exit_code == 0);
+    CloseHandle(process_information.hProcess);
+    CloseHandle(process_information.hThread);
+}
+
+TEST_CASE("SaoAiEditor.exe --extension-host exits cleanly on stdin EOF",
+          "[plugins][ai_editor][production_child][extension_host]"
+          "[integration]") {
+    TemporaryDirectory temporary;
+    const auto workspace = temporary.path() / L"ext-host-eof-workspace";
+    REQUIRE(std::filesystem::create_directories(workspace));
+
+    SECURITY_ATTRIBUTES security_attributes{};
+    security_attributes.nLength = sizeof(security_attributes);
+    security_attributes.bInheritHandle = TRUE;
+
+    HANDLE stdin_read = nullptr;
+    HANDLE stdin_write = nullptr;
+    REQUIRE(CreatePipe(&stdin_read, &stdin_write, &security_attributes,
+                       64 * 1024) != FALSE);
+    REQUIRE(SetHandleInformation(stdin_write, HANDLE_FLAG_INHERIT, 0) != FALSE);
+
+    HANDLE stdout_read = nullptr;
+    HANDLE stdout_write = nullptr;
+    REQUIRE(CreatePipe(&stdout_read, &stdout_write, &security_attributes,
+                       64 * 1024) != FALSE);
+    REQUIRE(SetHandleInformation(stdout_read, HANDLE_FLAG_INHERIT, 0) !=
+            FALSE);
+
+    STARTUPINFOW startup{};
+    startup.cb = sizeof(startup);
+    startup.dwFlags = STARTF_USESTDHANDLES;
+    startup.hStdInput = stdin_read;
+    startup.hStdOutput = stdout_write;
+    startup.hStdError = stdout_write;
+
+    const std::string exe_utf8 = SAO_AI_EDITOR_MCP_SERVER_EXECUTABLE;
+    const int wide_len = MultiByteToWideChar(CP_UTF8, 0, exe_utf8.c_str(), -1,
+                                              nullptr, 0);
+    REQUIRE(wide_len > 0);
+    std::wstring executable(static_cast<size_t>(wide_len - 1), L'\0');
+    MultiByteToWideChar(CP_UTF8, 0, exe_utf8.c_str(), -1, executable.data(),
+                        wide_len);
+    const std::wstring quoted_workspace =
+        L"\"" + workspace.native() + L"\"";
+    std::wstring command_line = L"\"" + executable +
+                                L"\" --extension-host --workspace " +
+                                quoted_workspace;
+    std::vector<wchar_t> command_line_buffer(command_line.begin(),
+                                              command_line.end());
+    command_line_buffer.push_back(L'\0');
+
+    PROCESS_INFORMATION process_information{};
+    REQUIRE(CreateProcessW(nullptr, command_line_buffer.data(), nullptr,
+                           nullptr, TRUE, CREATE_NO_WINDOW, nullptr, nullptr,
+                           &startup, &process_information) != FALSE);
+
+    CloseHandle(stdin_read);
+    CloseHandle(stdout_write);
+
+    // Immediately drop stdin — the loop should notice EOF and exit 0
+    // without ever seeing a request.
+    CloseHandle(stdin_write);
+
+    REQUIRE(WaitForSingleObject(process_information.hProcess, 15'000) ==
+            WAIT_OBJECT_0);
+    DWORD exit_code = 1;
+    REQUIRE(GetExitCodeProcess(process_information.hProcess, &exit_code) !=
+            FALSE);
+    REQUIRE(exit_code == 0);
+    CloseHandle(stdout_read);
+    CloseHandle(process_information.hProcess);
+    CloseHandle(process_information.hThread);
+}
+
+TEST_CASE("SaoAiEditor.exe --node-executable is only accepted with "
+          "--extension-host",
+          "[plugins][ai_editor][production_child][extension_host]") {
+    const std::string exe_utf8 = SAO_AI_EDITOR_MCP_SERVER_EXECUTABLE;
+    const int wide_len = MultiByteToWideChar(CP_UTF8, 0, exe_utf8.c_str(), -1,
+                                              nullptr, 0);
+    REQUIRE(wide_len > 0);
+    std::wstring executable(static_cast<size_t>(wide_len - 1), L'\0');
+    MultiByteToWideChar(CP_UTF8, 0, exe_utf8.c_str(), -1, executable.data(),
+                        wide_len);
+    // --node-executable without --extension-host is a parse error.
+    std::wstring command_line = L"\"" + executable +
+                                L"\" --mcp-server --node-executable "
+                                L"C:\\node.exe";
+    std::vector<wchar_t> command_line_buffer(command_line.begin(),
+                                              command_line.end());
+    command_line_buffer.push_back(L'\0');
+    STARTUPINFOW startup{};
+    startup.cb = sizeof(startup);
+    PROCESS_INFORMATION process_information{};
+    REQUIRE(CreateProcessW(nullptr, command_line_buffer.data(), nullptr,
+                           nullptr, FALSE, CREATE_NO_WINDOW, nullptr, nullptr,
+                           &startup, &process_information) != FALSE);
+    REQUIRE(WaitForSingleObject(process_information.hProcess, 10'000) ==
+            WAIT_OBJECT_0);
+    DWORD exit_code = 0;
+    REQUIRE(GetExitCodeProcess(process_information.hProcess, &exit_code) !=
+            FALSE);
+    // parse_arguments returns false -> wWinMain returns 2.
+    REQUIRE(exit_code == 2);
+    CloseHandle(process_information.hProcess);
+    CloseHandle(process_information.hThread);
 }

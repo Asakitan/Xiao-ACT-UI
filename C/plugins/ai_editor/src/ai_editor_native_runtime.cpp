@@ -378,6 +378,126 @@ int32_t NativeRuntime::invoke(std::string_view method,
         std::lock_guard<std::mutex> lock(store_mutex_);
         return conversations_.remove(params["id"].get<std::string>(), result);
     }
+    if (method == "conversation.export") {
+        const bool has_id = params.contains("id");
+        const bool has_scope = params.contains("scope");
+        if (has_id == has_scope) {
+            return SAO_AI_EDITOR_ERR_INVALID_ARGUMENT;
+        }
+        if (has_id) {
+            if (!params["id"].is_string()) {
+                return SAO_AI_EDITOR_ERR_INVALID_ARGUMENT;
+            }
+            Json conversation;
+            std::lock_guard<std::mutex> lock(store_mutex_);
+            const int32_t status = conversations_.get(
+                params["id"].get<std::string>(), conversation);
+            if (status != SAO_AI_EDITOR_OK) {
+                return status;
+            }
+            const int64_t now = std::chrono::duration_cast<
+                                    std::chrono::milliseconds>(
+                                    std::chrono::system_clock::now()
+                                        .time_since_epoch())
+                                    .count();
+            result = Json{{"format", "sao-conversation/1"},
+                          {"conversation", std::move(conversation)},
+                          {"exportedAt", now}};
+            return SAO_AI_EDITOR_OK;
+        }
+        if (!params["scope"].is_string()) {
+            return SAO_AI_EDITOR_ERR_INVALID_ARGUMENT;
+        }
+        std::lock_guard<std::mutex> lock(store_mutex_);
+        return conversations_.export_all(
+            params["scope"].get<std::string>(), result);
+    }
+    if (method == "conversation.import") {
+        if (!params.contains("payload") || !params["payload"].is_object()) {
+            return SAO_AI_EDITOR_ERR_INVALID_ARGUMENT;
+        }
+        const std::string target_scope =
+            params.value("scope", std::string{"workspace"});
+        if (target_scope != "workspace" && target_scope != "system") {
+            return SAO_AI_EDITOR_ERR_INVALID_ARGUMENT;
+        }
+        const bool overwrite = params.value("overwrite", false);
+        const Json& payload = params["payload"];
+        const std::string format = payload.value("format", std::string{});
+        std::vector<Json> incoming;
+        if (format == "sao-conversation/1") {
+            if (!payload.contains("conversation") ||
+                !payload["conversation"].is_object()) {
+                return SAO_AI_EDITOR_ERR_INVALID_ARGUMENT;
+            }
+            incoming.push_back(payload["conversation"]);
+        } else if (format == "sao-conversations/1") {
+            if (!payload.contains("conversations") ||
+                !payload["conversations"].is_array()) {
+                return SAO_AI_EDITOR_ERR_INVALID_ARGUMENT;
+            }
+            for (const auto& item : payload["conversations"]) {
+                if (!item.is_object()) {
+                    return SAO_AI_EDITOR_ERR_INVALID_ARGUMENT;
+                }
+                incoming.push_back(item);
+            }
+        } else {
+            result = Json{{"message", "unknown export format"},
+                          {"format", format}};
+            return SAO_AI_EDITOR_ERR_INVALID_ARGUMENT;
+        }
+        if (incoming.empty()) {
+            return SAO_AI_EDITOR_ERR_INVALID_ARGUMENT;
+        }
+        std::lock_guard<std::mutex> lock(store_mutex_);
+        // Validate ids and detect conflicts up front so overwrite=false can
+        // reject atomically without a partial import.
+        Json conflicts = Json::array();
+        for (const auto& conversation : incoming) {
+            const std::string candidate_id =
+                conversation.value("id", std::string{});
+            if (candidate_id.empty()) {
+                continue;
+            }
+            if (!valid_simple_id(candidate_id)) {
+                result = Json{{"message", "invalid conversation id"},
+                              {"id", candidate_id}};
+                return SAO_AI_EDITOR_ERR_INVALID_ARGUMENT;
+            }
+            Json existing_doc;
+            const int32_t get_status = conversations_.get(
+                candidate_id, existing_doc);
+            if (get_status == SAO_AI_EDITOR_OK) {
+                conflicts.push_back(candidate_id);
+            }
+        }
+        if (!conflicts.empty() && !overwrite) {
+            result = Json{{"imported", 0},
+                          {"conflicts", std::move(conflicts)},
+                          {"assignedIds", Json::array()}};
+            return SAO_AI_EDITOR_ERR_INVALID_ARGUMENT;
+        }
+        Json assigned_ids = Json::array();
+        size_t imported = 0;
+        for (const auto& conversation : incoming) {
+            std::string assigned_id;
+            const int32_t import_status = conversations_.import_conversation(
+                conversation, target_scope, overwrite, assigned_id);
+            if (import_status != SAO_AI_EDITOR_OK) {
+                result = Json{{"imported", imported},
+                              {"conflicts", std::move(conflicts)},
+                              {"assignedIds", std::move(assigned_ids)}};
+                return import_status;
+            }
+            assigned_ids.push_back(assigned_id);
+            ++imported;
+        }
+        result = Json{{"imported", imported},
+                      {"conflicts", std::move(conflicts)},
+                      {"assignedIds", std::move(assigned_ids)}};
+        return SAO_AI_EDITOR_OK;
+    }
     if (method == "agents.list" || method == "workflows.list" ||
         method == "providers.list") {
         const std::string kind(method.substr(0, method.find('.')));
@@ -625,8 +745,23 @@ int32_t NativeRuntime::dispatch_agent(std::string_view method,
             chat_params["model"] = effective_model;
         }
         const uint32_t timeout_ms = params.value("timeoutMs", 60'000U);
+        const bool stream_requested = params.value("stream", false);
         std::string content;
-        const int32_t status = run_chat_sync(chat_params, timeout_ms, content);
+        std::function<void(const Json&)> on_delta;
+        if (stream_requested) {
+            const std::string agent_id = agent.id;
+            on_delta = [this, agent_id](const Json& event) {
+                Json payload{{"agentId", agent_id}, {"event", event}};
+                if (event.value("type", "") == "delta" &&
+                    event.contains("content") &&
+                    event["content"].is_string()) {
+                    payload["content"] = event["content"];
+                }
+                emit("agent.delta", payload);
+            };
+        }
+        const int32_t status = run_chat_sync(chat_params, timeout_ms, content,
+                                             std::move(on_delta));
         if (status != SAO_AI_EDITOR_OK) {
             return status;
         }
@@ -938,7 +1073,8 @@ int32_t NativeRuntime::dispatch_auth(std::string_view method,
 }
 
 int32_t NativeRuntime::run_chat_sync(const Json& params, uint32_t timeout_ms,
-                                     std::string& out_content) {
+                                     std::string& out_content,
+                                     std::function<void(const Json&)> on_delta) {
     Json provider;
     std::string api_key;
     int32_t status = resolve_provider(params, provider, api_key);
@@ -954,7 +1090,11 @@ int32_t NativeRuntime::run_chat_sync(const Json& params, uint32_t timeout_ms,
     if (!messages.is_array() || messages.empty()) {
         return SAO_AI_EDITOR_ERR_INVALID_ARGUMENT;
     }
-    const bool stream = params.value("stream", false);
+    // Force stream=true whenever the caller supplied an on_delta callback so
+    // upper layers (workflow / agents.invoke) can observe intermediate tokens
+    // without having to explicitly set stream in params.
+    const bool stream = params.value("stream", false) ||
+                        static_cast<bool>(on_delta);
     Json body{{"model", model},
               {"messages", std::move(messages)},
               {"stream", stream}};
@@ -996,6 +1136,13 @@ int32_t NativeRuntime::run_chat_sync(const Json& params, uint32_t timeout_ms,
             if (event.value("type", "") == "delta" &&
                 event.contains("content") && event["content"].is_string()) {
                 streamed += event["content"].get<std::string>();
+                if (on_delta) {
+                    on_delta(event);
+                }
+            } else if (on_delta) {
+                // Forward non-delta events (message_delta, tool_delta, done,
+                // etc.) so the caller can observe stream completion / usage.
+                on_delta(event);
             }
         },
         transport_result);

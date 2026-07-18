@@ -2,6 +2,7 @@
 
 #include <condition_variable>
 #include <deque>
+#include <functional>
 #include <memory>
 #include <mutex>
 #include <string>
@@ -78,7 +79,16 @@ private:
                            const Json& params,
                            Json& result);
     int32_t run_chat_sync(const Json& params, uint32_t timeout_ms,
-                          std::string& out_content);
+                          std::string& out_content,
+                          std::function<void(const Json&)> on_delta = nullptr);
+    // Public helper so WorkflowExecution / other friend-classes can push
+    // structured events (e.g. streaming step deltas) to the same queue as
+    // emit().  Delegates to the private emit() method internally.
+    void emit_workflow_event(std::string_view event_name,
+                             const Json& payload,
+                             std::string_view run_id = {}) {
+        emit(event_name, payload, run_id);
+    }
     void execute_chat(const std::shared_ptr<RunState>& run,
                       HttpChatRequest request,
                       std::string conversation_id);

@@ -28,6 +28,12 @@ public:
                    Json& result) const;
     int32_t remove(std::string_view conversation_id, Json& result) const;
 
+    int32_t export_all(std::string_view scope, Json& result) const;
+    int32_t import_conversation(const Json& conversation,
+                                std::string_view scope,
+                                bool overwrite,
+                                std::string& out_id) const;
+
 private:
     int32_t locate(std::string_view conversation_id,
                    std::filesystem::path& path) const;

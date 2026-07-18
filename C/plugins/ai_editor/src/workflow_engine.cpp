@@ -471,15 +471,44 @@ int32_t WorkflowExecution::execute_step_with_snapshot(
     const Json& provider,
     const std::string& model,
     uint32_t chat_timeout_ms,
-    std::string& out_content) {
+    std::string& out_content,
+    size_t step_index) {
     const std::string prompt = interpolate_with(step.prompt, snapshot);
+    // Streaming is opt-in per workflow invocation via
+    // initial_input_["stream"] == true; when set, run_chat_sync will flip
+    // stream=true itself because on_delta is non-null.  Non-streaming
+    // callers (e.g. legacy fixtures returning full JSON bodies) keep the
+    // old blocking semantics with an empty callback that never fires.
+    const bool stream_requested =
+        initial_input_.is_object() && initial_input_.value("stream", false);
     Json chat_params{{"provider", provider},
                      {"model", model},
-                     {"stream", false},
+                     {"stream", stream_requested},
                      {"timeoutMs", chat_timeout_ms},
                      {"messages",
                       Json::array({Json{{"role", "user"}, {"content", prompt}}})}};
-    return runtime.run_chat_sync(chat_params, chat_timeout_ms, out_content);
+    std::function<void(const Json&)> on_delta;
+    if (stream_requested) {
+        const std::string execution_id = id_;
+        const std::string step_label = step.label;
+        const std::string output_var = step.output_var;
+        on_delta = [&runtime, execution_id, step_index, step_label, output_var](
+                       const Json& event) {
+            if (event.value("type", "") != "delta" ||
+                !event.contains("content") || !event["content"].is_string()) {
+                return;
+            }
+            Json payload{{"executionId", execution_id},
+                         {"stepIndex", static_cast<int64_t>(step_index)},
+                         {"label", step_label},
+                         {"outputVar", output_var},
+                         {"content", event["content"]}};
+            runtime.emit_workflow_event(
+                "workflow.step_delta", std::move(payload), execution_id);
+        };
+    }
+    return runtime.run_chat_sync(chat_params, chat_timeout_ms, out_content,
+                                  std::move(on_delta));
 }
 
 void WorkflowExecution::start(NativeRuntime& runtime, Json provider,
@@ -575,7 +604,7 @@ void WorkflowExecution::run_loop(NativeRuntime* runtime, Json provider,
         if (batch_size == 1 || group_id.empty()) {
             const int32_t status = execute_step_with_snapshot(
                 *runtime, steps[index], snapshot, provider, model,
-                chat_timeout_ms, contents[0]);
+                chat_timeout_ms, contents[0], index);
             statuses[0] = status;
         } else {
             std::vector<std::thread> workers;
@@ -585,7 +614,7 @@ void WorkflowExecution::run_loop(NativeRuntime* runtime, Json provider,
                 workers.emplace_back([&, k, step_index] {
                     statuses[k] = execute_step_with_snapshot(
                         *runtime, steps[step_index], snapshot, provider,
-                        model, chat_timeout_ms, contents[k]);
+                        model, chat_timeout_ms, contents[k], step_index);
                 });
             }
             for (auto& worker : workers) {

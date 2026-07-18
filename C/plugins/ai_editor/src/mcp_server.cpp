@@ -370,4 +370,187 @@ int run_mcp_server_stdio(const std::filesystem::path& workspace_root) {
     return exit_code;
 }
 
+namespace {
+
+// Send a raw JSON-RPC response using Content-Length framing.  Empty
+// strings are treated as notifications (no frame emitted) so callers can
+// short-circuit responses for JSON-RPC notification requests.
+bool send_extension_host_frame(HANDLE stdout_handle,
+                               std::string_view payload) {
+    if (payload.empty()) {
+        return true;
+    }
+    const std::string header =
+        "Content-Length: " + std::to_string(payload.size()) + "\r\n\r\n";
+    return write_all(stdout_handle, header.data(), header.size()) &&
+           write_all(stdout_handle, payload.data(), payload.size());
+}
+
+// Best-effort implicit `extensions.configure_host` before entering the
+// request loop.  Failure is non-fatal: the parent can always re-issue an
+// explicit configure_host with its own params.  Returns SAO_AI_EDITOR_OK
+// if the runtime accepted the configuration or the hint was empty.
+int32_t apply_node_executable_hint(sao_ai_editor_runtime_t runtime,
+                                    const std::filesystem::path&
+                                        node_executable_hint) {
+    if (node_executable_hint.empty()) {
+        return SAO_AI_EDITOR_OK;
+    }
+    const std::string node_utf8 = wide_utf8(node_executable_hint.native());
+    if (node_utf8.empty()) {
+        return SAO_AI_EDITOR_ERR_INVALID_ARGUMENT;
+    }
+    const Json request{
+        {"jsonrpc", "2.0"},
+        {"id", 0},
+        {"method", "extensions.configure_host"},
+        {"params", Json{{"nodeExecutable", node_utf8}}}};
+    Json response;
+    return forward_dispatch(runtime, request, response);
+}
+
+// Parse a JSON-RPC method string cheaply — used to detect the
+// `host.shutdown` sentinel that terminates the request loop after a
+// successful reply is written.
+std::string extract_method_name(const Json& message) {
+    if (!message.is_object() || !message.contains("method") ||
+        !message["method"].is_string()) {
+        return {};
+    }
+    return message["method"].get<std::string>();
+}
+
+}  // namespace
+
+int run_extension_host_stdio(
+    const std::filesystem::path& workspace_root,
+    const std::filesystem::path& node_executable_hint) {
+    SaoAiEditorRuntimeConfig config{};
+    config.struct_size = sizeof(config);
+    const std::string workspace_utf8 = wide_utf8(workspace_root.native());
+    if (workspace_utf8.empty()) {
+        return 4;
+    }
+    config.workspace_root_utf8 = workspace_utf8.c_str();
+    sao_ai_editor_runtime_t runtime = nullptr;
+    if (sao_ai_editor_runtime_create(&config, &runtime) != SAO_AI_EDITOR_OK ||
+        runtime == nullptr) {
+        return 7;
+    }
+
+    HANDLE stdin_handle = GetStdHandle(STD_INPUT_HANDLE);
+    HANDLE stdout_handle = GetStdHandle(STD_OUTPUT_HANDLE);
+    if (stdin_handle == INVALID_HANDLE_VALUE ||
+        stdout_handle == INVALID_HANDLE_VALUE) {
+        sao_ai_editor_runtime_destroy(runtime);
+        return 5;
+    }
+
+    // Apply the node executable hint before the request loop opens so the
+    // parent can immediately register/activate extensions without an
+    // explicit configure_host round-trip.  A malformed hint is a
+    // command-line error; a well-formed hint that the runtime rejects
+    // (e.g. shim missing) is not — the parent can retry configure_host.
+    const int32_t hint_status =
+        apply_node_executable_hint(runtime, node_executable_hint);
+    if (hint_status == SAO_AI_EDITOR_ERR_INVALID_ARGUMENT) {
+        sao_ai_editor_runtime_destroy(runtime);
+        return 4;
+    }
+
+    sao_ai_editor_mcp_decoder_t decoder = nullptr;
+    if (sao_ai_editor_mcp_decoder_create(kMaxMessageBytes, &decoder) !=
+        SAO_AI_EDITOR_OK) {
+        sao_ai_editor_runtime_destroy(runtime);
+        return 6;
+    }
+
+    std::vector<char> buffer(kReadChunkBytes);
+    int exit_code = 0;
+    for (;;) {
+        DWORD read = 0;
+        if (!ReadFile(stdin_handle, buffer.data(),
+                      static_cast<DWORD>(buffer.size()), &read, nullptr) ||
+            read == 0) {
+            break;
+        }
+        uint32_t required = 0;
+        int32_t status = sao_ai_editor_mcp_decoder_feed(
+            decoder, buffer.data(), read, nullptr, 0, &required);
+        if (status != SAO_AI_EDITOR_ERR_BUFFER_TOO_SMALL || required == 0) {
+            continue;
+        }
+        std::vector<char> messages(static_cast<size_t>(required) + 1U);
+        status = sao_ai_editor_mcp_decoder_feed(
+            decoder, nullptr, 0, messages.data(),
+            static_cast<uint32_t>(messages.size()), &required);
+        if (status != SAO_AI_EDITOR_OK) {
+            continue;
+        }
+        Json parsed = Json::parse(messages.data(), messages.data() + required,
+                                  nullptr, false);
+        if (!parsed.is_array()) {
+            continue;
+        }
+        bool should_exit = false;
+        for (const auto& message : parsed) {
+            if (!message.is_object()) {
+                continue;
+            }
+            const std::string method = extract_method_name(message);
+            // host.shutdown is our extension host stdio sentinel — reply
+            // OK then break out of the loop so ~NativeRuntime triggers
+            // extension_host teardown (node_runtime -> deactivate all).
+            if (method == "host.shutdown") {
+                const Json ok = Json{
+                    {"jsonrpc", "2.0"},
+                    {"id", message.value("id", Json(nullptr))},
+                    {"result", Json::object()}};
+                (void)send_extension_host_frame(stdout_handle, ok.dump());
+                should_exit = true;
+                break;
+            }
+            // Notifications (no id) get dispatched but never reply — the
+            // NativeRuntime already emits its own error envelope for
+            // unknown methods, but the standard says notifications must
+            // not have responses.
+            const bool is_notification =
+                !message.contains("id") || message["id"].is_null();
+
+            Json response;
+            const int32_t dispatch_status =
+                forward_dispatch(runtime, message, response);
+            if (is_notification) {
+                continue;
+            }
+            std::string payload;
+            if (dispatch_status != SAO_AI_EDITOR_OK) {
+                payload = Json{
+                    {"jsonrpc", "2.0"},
+                    {"id", message.value("id", Json(nullptr))},
+                    {"error",
+                     {{"code", -32000},
+                      {"message", "runtime dispatch failed"},
+                      {"data", {{"status", dispatch_status}}}}}}.dump();
+            } else {
+                payload = response.dump();
+            }
+            if (!send_extension_host_frame(stdout_handle, payload)) {
+                should_exit = true;
+                exit_code = 8;
+                break;
+            }
+        }
+        if (should_exit) {
+            break;
+        }
+    }
+    sao_ai_editor_mcp_decoder_destroy(decoder);
+    // Explicit destroy so the ExtensionHost destructor (which shuts down
+    // the Node.js child and deactivates loaded extensions) runs before
+    // the process exits.
+    sao_ai_editor_runtime_destroy(runtime);
+    return exit_code;
+}
+
 }  // namespace sao::ai_editor::native

@@ -324,6 +324,113 @@ int32_t ConversationStore::search(std::string_view query,
     return SAO_AI_EDITOR_OK;
 }
 
+int32_t ConversationStore::export_all(std::string_view scope,
+                                      Json& result) const {
+    if (scope != "all" && scope != "workspace" && scope != "system") {
+        return SAO_AI_EDITOR_ERR_INVALID_ARGUMENT;
+    }
+    const std::vector<std::string_view> selected = scope == "all"
+        ? std::vector<std::string_view>{"workspace", "system"}
+        : std::vector<std::string_view>{scope};
+    Json conversations = Json::array();
+    for (const auto selected_scope : selected) {
+        const auto root = scopes_.history_root(selected_scope);
+        std::error_code error;
+        if (!std::filesystem::is_directory(root, error)) {
+            continue;
+        }
+        for (const auto& item :
+             std::filesystem::directory_iterator(root, error)) {
+            if (error) {
+                return SAO_AI_EDITOR_ERR_OS_CALL_FAILED;
+            }
+            std::error_code file_error;
+            if (!item.is_regular_file(file_error) ||
+                item.path().extension() != L".json") {
+                continue;
+            }
+            std::string text;
+            if (read_text_file(item.path(), kMaximumJsonBytes, text) !=
+                SAO_AI_EDITOR_OK) {
+                continue;
+            }
+            Json document = Json::parse(text, nullptr, false);
+            if (!document.is_object()) {
+                continue;
+            }
+            conversations.push_back(std::move(document));
+        }
+    }
+    const size_t count = conversations.size();
+    result = Json{{"format", "sao-conversations/1"},
+                  {"conversations", std::move(conversations)},
+                  {"count", count},
+                  {"exportedAt", unix_milliseconds()}};
+    return SAO_AI_EDITOR_OK;
+}
+
+int32_t ConversationStore::import_conversation(const Json& conversation,
+                                               std::string_view scope,
+                                               bool overwrite,
+                                               std::string& out_id) const {
+    if (scope != "workspace" && scope != "system") {
+        return SAO_AI_EDITOR_ERR_INVALID_ARGUMENT;
+    }
+    if (!conversation.is_object()) {
+        return SAO_AI_EDITOR_ERR_INVALID_ARGUMENT;
+    }
+    Json document = conversation;
+    std::string id = document.value("id", std::string{});
+    if (id.empty()) {
+        id = next_id();
+        document["id"] = id;
+    } else if (!valid_simple_id(id)) {
+        return SAO_AI_EDITOR_ERR_INVALID_ARGUMENT;
+    }
+    document["scope"] = std::string(scope);
+    if (!document.contains("title") || !document["title"].is_string()) {
+        document["title"] = "Untitled";
+    }
+    if (!document.contains("systemPrompt") ||
+        !document["systemPrompt"].is_string()) {
+        document["systemPrompt"] = "";
+    }
+    if (!document.contains("model") || !document["model"].is_string()) {
+        document["model"] = "";
+    }
+    if (!document.contains("messages") || !document["messages"].is_array()) {
+        document["messages"] = Json::array();
+    }
+    document["messageCount"] = document["messages"].size();
+    if (!document.contains("savedAt") || !document["savedAt"].is_number()) {
+        document["savedAt"] = unix_milliseconds();
+    }
+    // Determine existing location (workspace or system).
+    std::filesystem::path existing_path;
+    const int32_t locate_status = locate(id, existing_path);
+    if (locate_status == SAO_AI_EDITOR_OK && !overwrite) {
+        return SAO_AI_EDITOR_ERR_INVALID_ARGUMENT;
+    }
+    if (locate_status != SAO_AI_EDITOR_OK &&
+        locate_status != SAO_AI_EDITOR_ERR_NOT_FOUND) {
+        return locate_status;
+    }
+    const auto target_path = scopes_.history_root(scope) /
+                             (utf8_to_wide(id) + L".json");
+    // If overwriting and the existing file lives in a different scope,
+    // remove the stale copy so scope reassignment is honoured.
+    if (locate_status == SAO_AI_EDITOR_OK && overwrite &&
+        existing_path != target_path) {
+        std::error_code remove_error;
+        std::filesystem::remove(existing_path, remove_error);
+    }
+    const int32_t status = save(target_path, document);
+    if (status == SAO_AI_EDITOR_OK) {
+        out_id = std::move(id);
+    }
+    return status;
+}
+
 int32_t ConversationStore::remove(std::string_view conversation_id,
                                   Json& result) const {
     std::filesystem::path path;

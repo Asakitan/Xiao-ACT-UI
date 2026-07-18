@@ -109,7 +109,8 @@ private:
         const Json& provider,
         const std::string& model,
         uint32_t chat_timeout_ms,
-        std::string& out_content);
+        std::string& out_content,
+        size_t step_index = 0);
     std::string interpolate(std::string_view text) const;
     static std::string interpolate_with(
         std::string_view text,
