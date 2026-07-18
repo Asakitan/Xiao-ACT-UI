@@ -20,6 +20,7 @@
 #include <string_view>
 #include <thread>
 #include <unordered_map>
+#include <unordered_set>
 #include <utility>
 #include <vector>
 
@@ -1281,6 +1282,130 @@ TEST_CASE("AI Editor agents.list_defs surfaces market presets when the "
         // deployment would indicate a packaging bug worth surfacing.
         REQUIRE(market_hits == market_ids.size());
     }
+}
+
+TEST_CASE("AI Editor agents.recommend ranks SQL performance query against "
+          "sql-expert / optimizer",
+          "[plugins][ai_editor][native][agents][recommend]") {
+    RuntimeFixture fixture;
+    // Mixed English + Chinese query: the SQL keyword should score sql-expert
+    // (when the market preset is present) or code-reviewer/optimizer (when
+    // it's not) high, and the Chinese "性能" glyphs should let optimizer
+    // score via its when_to_use text.  We assert the top pick's id belongs
+    // to one of a small shortlist rather than pinning a single agent so
+    // the test is robust to whether market presets are deployed.
+    const Json response = dispatch(
+        fixture.get(), "agents.recommend",
+        {{"query", "help me audit this SQL for performance problems 性能"},
+         {"topK", 3},
+         {"boostTags", Json::array({"performance"})}});
+    REQUIRE(response.contains("result"));
+    const auto& payload = response["result"];
+    REQUIRE(payload["query"] == "help me audit this SQL for performance "
+                                 "problems 性能");
+    REQUIRE(payload["recommendations"].is_array());
+    REQUIRE(payload["recommendations"].size() >= 1);
+    REQUIRE(payload["recommendations"].size() <= 3);
+    REQUIRE(payload["total"] == payload["recommendations"].size());
+    // Top pick must be one of the SQL / review / performance-oriented
+    // built-in or market agents.
+    const std::string top_id =
+        payload["recommendations"][0].value("agentId", std::string{});
+    const std::vector<std::string> acceptable{"sql-expert", "code-reviewer",
+                                                "optimizer"};
+    REQUIRE(std::find(acceptable.begin(), acceptable.end(), top_id) !=
+             acceptable.end());
+    // Score must be normalised to the batch max — the top result therefore
+    // must always equal 1.0 (a strict "> 0.999" rather than exact equality
+    // avoids depending on catch_approx.hpp being in the include set).
+    REQUIRE(payload["recommendations"][0]["score"].get<double>() > 0.999);
+    // Reason must mention something matched (either terms or boost tags).
+    REQUIRE_FALSE(
+        payload["recommendations"][0].value("reason", std::string{}).empty());
+    REQUIRE(payload["recommendations"][0]["matches"].is_array());
+}
+
+TEST_CASE("AI Editor agents.recommend honours topK=1 and Chinese-only query "
+          "tokenisation",
+          "[plugins][ai_editor][native][agents][recommend]") {
+    RuntimeFixture fixture;
+    // Pure-CJK query drives the codepoint-level tokeniser; we only assert
+    // shape (topK truncation + non-empty when at least one built-in has
+    // relevant terms).  "调试 错误 性能" spans debugger + optimizer text.
+    const Json response = dispatch(
+        fixture.get(), "agents.recommend",
+        {{"query", "调试 错误 性能 bug"}, {"topK", 1}});
+    REQUIRE(response.contains("result"));
+    const auto& payload = response["result"];
+    // topK=1 must never exceed 1 recommendation, even when the raw scoring
+    // pass produces more candidates.
+    REQUIRE(payload["recommendations"].size() <= 1);
+    REQUIRE(payload["total"] == payload["recommendations"].size());
+    if (!payload["recommendations"].empty()) {
+        // The "bug" ASCII token maps to debugger.description; "调试" is a
+        // CJK bigram in the same when_to_use.  Either match keeps score>0.
+        REQUIRE(payload["recommendations"][0]["score"].get<double>() > 0.0);
+    }
+}
+
+TEST_CASE("AI Editor agents.recommend includeBuiltin=false filters the "
+          "hard-coded five",
+          "[plugins][ai_editor][native][agents][recommend]") {
+    RuntimeFixture fixture;
+    // With includeBuiltin=false, none of the built-in ids (code-reviewer,
+    // explainer, debugger, optimizer, documenter) may appear.  What's left
+    // is entirely market/user scope — an environment that ships the SAO
+    // market bundle will return sql-expert etc., while a bare deployment
+    // returns an empty list.  Either state is legal; both are asserted.
+    const std::unordered_set<std::string> builtin_ids{
+        "code-reviewer", "explainer", "debugger", "optimizer", "documenter"};
+
+    // Bring the workspace scope into play by saving a workspace-only agent
+    // that also mentions "SQL" so we can prove non-builtin recommendations
+    // *do* survive the filter (regardless of whether market presets are
+    // deployed near the test binary).
+    const Json workspace_agent{
+        {"id", "workspace-sql-guru"},
+        {"name", "Workspace SQL Guru"},
+        {"description", "Helps with SQL queries in the current workspace"},
+        {"system_prompt", "You answer SQL questions."},
+        {"tools", Json::array({"readFile"})},
+        {"when_to_use", "When the user asks about SQL in this workspace"}};
+    REQUIRE(dispatch(fixture.get(), "agents.save_def",
+                     {{"scope", "workspace"},
+                      {"agent", workspace_agent}})
+                .contains("result"));
+
+    const Json response = dispatch(
+        fixture.get(), "agents.recommend",
+        {{"query", "SQL performance problem"},
+         {"includeBuiltin", false},
+         {"topK", 5}});
+    REQUIRE(response.contains("result"));
+    const auto& payload = response["result"];
+    REQUIRE(payload["recommendations"].is_array());
+    // Workspace agent must be reachable, and no built-in id may leak.
+    bool workspace_hit = false;
+    for (const auto& item : payload["recommendations"]) {
+        const std::string id = item.value("agentId", std::string{});
+        REQUIRE(builtin_ids.count(id) == 0);
+        if (id == "workspace-sql-guru") {
+            workspace_hit = true;
+        }
+    }
+    REQUIRE(workspace_hit);
+
+    // Belt-and-braces: all three include flags false collapses to an empty
+    // recommendation set even when candidates exist.
+    const Json empty_response = dispatch(
+        fixture.get(), "agents.recommend",
+        {{"query", "SQL"},
+         {"includeBuiltin", false},
+         {"includeMarket", false},
+         {"includeUser", false}});
+    REQUIRE(empty_response.contains("result"));
+    REQUIRE(empty_response["result"]["recommendations"].empty());
+    REQUIRE(empty_response["result"]["total"] == 0);
 }
 
 TEST_CASE("AI Editor agents.save_def / delete_def CRUD honours builtin lock",
@@ -4213,6 +4338,208 @@ TEST_CASE("AI Editor conversation.split with keepOriginal preserves source and "
     REQUIRE(after["model"] == "gpt-keep");
 }
 
+TEST_CASE("AI Editor conversation.compact replace strategy folds early "
+          "messages into a system summary keeping the last N intact",
+          "[plugins][ai_editor][native][storage][compact]") {
+    // Fake OpenAI reply — a fixed summary text so the store rewrite is
+    // deterministic and we can compare summaryLength against strlen().
+    const std::string canned_summary = "Discussed X, Y, Z";
+    const std::string body =
+        std::string(R"({"choices":[{"message":{"role":"assistant","content":")") +
+        canned_summary +
+        R"("}}]})";
+    LocalHttpServer server(
+        "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: " +
+        std::to_string(body.size()) +
+        "\r\nConnection: close\r\n\r\n" + body);
+
+    RuntimeFixture fixture;
+    auto runtime = fixture.get();
+    REQUIRE(dispatch(runtime, "runtime.initialize").contains("result"));
+
+    // Build a conversation with 10 messages so keepLast=3 leaves 7 early
+    // messages to be folded into the summary.
+    const Json created = dispatch(runtime, "conversation.create",
+                                   {{"title", "Long Thread"},
+                                    {"model", "gpt-compact"},
+                                    {"scope", "workspace"}});
+    const std::string conv_id = created["result"]["id"];
+    for (int index = 0; index < 10; ++index) {
+        const std::string role = (index % 2 == 0) ? "user" : "assistant";
+        REQUIRE(dispatch(runtime, "conversation.append",
+                         {{"id", conv_id},
+                          {"message", {{"role", role},
+                                        {"content", "msg" +
+                                                    std::to_string(index)}}}})
+                    .contains("result"));
+    }
+
+    const Json compacted = dispatch(
+        runtime, "conversation.compact",
+        {{"id", conv_id},
+         {"keepLast", 3},
+         {"provider", {{"id", "fixture"},
+                       {"endpoint", server.endpoint()}}},
+         {"model", "gpt-4o-mini"},
+         {"timeoutMs", 5000}});
+    REQUIRE(compacted.contains("result"));
+    REQUIRE(compacted["result"]["id"] == conv_id);
+    REQUIRE(compacted["result"]["originalMessageCount"] == 10);
+    // replace: 1 system summary + 3 tail = 4 total.
+    REQUIRE(compacted["result"]["newMessageCount"] == 4);
+    REQUIRE(compacted["result"]["summary"] == canned_summary);
+    REQUIRE(compacted["result"]["summaryLength"] == canned_summary.size());
+    REQUIRE(compacted["result"]["noop"] == false);
+    REQUIRE(compacted["result"]["compactedAt"].is_number());
+
+    // Server must have been hit exactly once for the summary call.
+    REQUIRE(server.wait_for_connections(1, 2'000));
+
+    // Reload and verify on-disk state matches the returned counts.
+    const Json fetched = dispatch(runtime, "conversation.get",
+                                   {{"id", conv_id}})["result"];
+    REQUIRE(fetched["messages"].size() == 4);
+    REQUIRE(fetched["messages"][0]["role"] == "system");
+    REQUIRE(fetched["messages"][0]["content"] == canned_summary);
+    // Tail 3 == last 3 originals (msg7, msg8, msg9).
+    REQUIRE(fetched["messages"][1]["content"] == "msg7");
+    REQUIRE(fetched["messages"][2]["content"] == "msg8");
+    REQUIRE(fetched["messages"][3]["content"] == "msg9");
+    REQUIRE(fetched["messageCount"] == 4);
+}
+
+TEST_CASE("AI Editor conversation.compact prepend strategy retains all "
+          "originals with summary at the head",
+          "[plugins][ai_editor][native][storage][compact]") {
+    const std::string canned_summary = "Prepended context: A, B, C";
+    const std::string body =
+        std::string(R"({"choices":[{"message":{"role":"assistant","content":")") +
+        canned_summary +
+        R"("}}]})";
+    LocalHttpServer server(
+        "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: " +
+        std::to_string(body.size()) +
+        "\r\nConnection: close\r\n\r\n" + body);
+
+    RuntimeFixture fixture;
+    auto runtime = fixture.get();
+    REQUIRE(dispatch(runtime, "runtime.initialize").contains("result"));
+
+    // 8 messages, keepLast=6 → 2 early messages get summarised.
+    const Json created = dispatch(runtime, "conversation.create",
+                                   {{"title", "Prepend Thread"},
+                                    {"model", "gpt-compact"},
+                                    {"scope", "workspace"}});
+    const std::string conv_id = created["result"]["id"];
+    for (int index = 0; index < 8; ++index) {
+        REQUIRE(dispatch(runtime, "conversation.append",
+                         {{"id", conv_id},
+                          {"message", {{"role", "user"},
+                                        {"content", "p" +
+                                                    std::to_string(index)}}}})
+                    .contains("result"));
+    }
+
+    const Json compacted = dispatch(
+        runtime, "conversation.compact",
+        {{"id", conv_id},
+         {"keepLast", 6},
+         {"compactStrategy", "prepend"},
+         {"provider", {{"id", "fixture"},
+                       {"endpoint", server.endpoint()}}},
+         {"model", "gpt-4o-mini"},
+         {"timeoutMs", 5000}});
+    REQUIRE(compacted.contains("result"));
+    REQUIRE(compacted["result"]["originalMessageCount"] == 8);
+    // prepend keeps everything + 1 summary at the head → 9 total.
+    REQUIRE(compacted["result"]["newMessageCount"] == 9);
+    REQUIRE(compacted["result"]["summary"] == canned_summary);
+    REQUIRE(compacted["result"]["noop"] == false);
+
+    const Json fetched = dispatch(runtime, "conversation.get",
+                                   {{"id", conv_id}})["result"];
+    REQUIRE(fetched["messages"].size() == 9);
+    REQUIRE(fetched["messages"][0]["role"] == "system");
+    REQUIRE(fetched["messages"][0]["content"] == canned_summary);
+    // p0..p7 must all still be present in original order.
+    for (int index = 0; index < 8; ++index) {
+        REQUIRE(fetched["messages"][index + 1]["content"] ==
+                "p" + std::to_string(index));
+    }
+    REQUIRE(fetched["messageCount"] == 9);
+}
+
+TEST_CASE("AI Editor conversation.compact noop when total <= keepLast, "
+          "rejects keepLast<=0 and unknown conversation",
+          "[plugins][ai_editor][native][storage][compact]") {
+    RuntimeFixture fixture;
+    auto runtime = fixture.get();
+    REQUIRE(dispatch(runtime, "runtime.initialize").contains("result"));
+
+    const Json created = dispatch(runtime, "conversation.create",
+                                   {{"title", "Short Thread"},
+                                    {"model", "gpt-compact"},
+                                    {"scope", "workspace"}});
+    const std::string conv_id = created["result"]["id"];
+    // Only 4 messages, keepLast=6 → nothing to compact.  LLM must NOT be
+    // called; we deliberately omit a provider to prove the noop path never
+    // dials out (a real provider would fail with INVALID_ARGUMENT).
+    for (int index = 0; index < 4; ++index) {
+        REQUIRE(dispatch(runtime, "conversation.append",
+                         {{"id", conv_id},
+                          {"message", {{"role", "user"},
+                                        {"content", "s" +
+                                                    std::to_string(index)}}}})
+                    .contains("result"));
+    }
+
+    const Json noop = dispatch(runtime, "conversation.compact",
+                                {{"id", conv_id}, {"keepLast", 6}});
+    REQUIRE(noop.contains("result"));
+    REQUIRE(noop["result"]["noop"] == true);
+    REQUIRE(noop["result"]["originalMessageCount"] == 4);
+    REQUIRE(noop["result"]["newMessageCount"] == 4);
+    REQUIRE(noop["result"]["summary"] == "");
+    REQUIRE(noop["result"]["summaryLength"] == 0);
+
+    // On-disk state must still be the original 4 messages, none replaced.
+    const Json fetched = dispatch(runtime, "conversation.get",
+                                   {{"id", conv_id}})["result"];
+    REQUIRE(fetched["messages"].size() == 4);
+    REQUIRE(fetched["messages"][0]["content"] == "s0");
+    REQUIRE(fetched["messages"][3]["content"] == "s3");
+
+    // keepLast=0 → INVALID_ARGUMENT (bounces before touching storage/LLM).
+    const Json zero = dispatch(runtime, "conversation.compact",
+                                {{"id", conv_id}, {"keepLast", 0}});
+    REQUIRE(zero.contains("error"));
+    REQUIRE(zero["error"]["data"]["status"] ==
+            SAO_AI_EDITOR_ERR_INVALID_ARGUMENT);
+
+    // Negative keepLast → INVALID_ARGUMENT.
+    const Json neg = dispatch(runtime, "conversation.compact",
+                               {{"id", conv_id}, {"keepLast", -2}});
+    REQUIRE(neg.contains("error"));
+    REQUIRE(neg["error"]["data"]["status"] ==
+            SAO_AI_EDITOR_ERR_INVALID_ARGUMENT);
+
+    // Unknown compactStrategy → INVALID_ARGUMENT.
+    const Json bad_strategy = dispatch(runtime, "conversation.compact",
+                                        {{"id", conv_id},
+                                         {"keepLast", 2},
+                                         {"compactStrategy", "sideways"}});
+    REQUIRE(bad_strategy.contains("error"));
+    REQUIRE(bad_strategy["error"]["data"]["status"] ==
+            SAO_AI_EDITOR_ERR_INVALID_ARGUMENT);
+
+    // Unknown conversation id → NOT_FOUND (propagated as error).
+    const Json missing = dispatch(runtime, "conversation.compact",
+                                   {{"id", "conv-nope"}, {"keepLast", 2}});
+    REQUIRE(missing.contains("error"));
+    REQUIRE(missing["error"]["data"]["status"] ==
+            SAO_AI_EDITOR_ERR_NOT_FOUND);
+}
+
 TEST_CASE("AI Editor mcp.* JSON-RPC surface aggregates and forwards", "[plugins]"
           "[ai_editor][native][mcp][dispatch][integration]") {
     RuntimeFixture fixture;
@@ -6249,4 +6576,194 @@ TEST_CASE("mcp.list_resource_templates returns a well-formed empty aggregation",
     REQUIRE(listing["result"]["items"].is_array());
     REQUIRE(listing["result"]["items"].empty());
     REQUIRE(listing["result"]["total"] == 0);
+}
+
+TEST_CASE("chat.dispatch_tool_calls fans out three readFile calls in parallel "
+          "and returns id-tagged results in input order",
+          "[plugins][ai_editor][native][chat][tools][dispatch]") {
+    RuntimeFixture fixture;
+    auto runtime = fixture.get();
+
+    // Stage three files via editFile — mode=agent bypasses the confirmation
+    // gate so we get real content back on the subsequent readFile calls.
+    for (const auto& [path, content] :
+         std::vector<std::pair<std::string, std::string>>{
+             {"alpha.txt", "alpha\n"},
+             {"beta.txt", "beta\n"},
+             {"gamma.txt", "gamma\n"}}) {
+        REQUIRE(dispatch(runtime, "tools.call",
+                         {{"mode", "agent"},
+                          {"name", "editFile"},
+                          {"arguments", {{"path", path},
+                                         {"content", content}}}})
+                    .contains("result"));
+    }
+
+    // Fan out three readFile tool_calls; concurrency=3 so all three run
+    // simultaneously (behaviour tested is not "N wall-clock ms" — timing is
+    // fixture-specific — but that every call resolves independently).
+    const Json invoked = dispatch(
+        runtime, "chat.dispatch_tool_calls",
+        {{"toolCalls",
+          Json::array({
+              Json{{"id", "call_1"}, {"name", "readFile"},
+                   {"arguments", {{"path", "alpha.txt"}}}},
+              Json{{"id", "call_2"}, {"name", "readFile"},
+                   {"arguments", {{"path", "beta.txt"}}}},
+              Json{{"id", "call_3"}, {"name", "readFile"},
+                   {"arguments", {{"path", "gamma.txt"}}}}})},
+         {"mode", "agent"},
+         {"concurrency", 3}});
+    REQUIRE(invoked.contains("result"));
+    const Json& body = invoked["result"];
+    REQUIRE(body["results"].size() == 3);
+    REQUIRE(body["successCount"] == 3);
+    REQUIRE(body["failureCount"] == 0);
+    // Results are ordered by input index regardless of which worker
+    // finished first — this is the whole point of the phase-3 assembly.
+    REQUIRE(body["results"][0]["id"] == "call_1");
+    REQUIRE(body["results"][0]["name"] == "readFile");
+    REQUIRE(body["results"][0]["status"] == "completed");
+    REQUIRE(body["results"][0]["result"]["content"] == "alpha\n");
+    REQUIRE(body["results"][0].contains("durationMs"));
+    REQUIRE(body["results"][1]["id"] == "call_2");
+    REQUIRE(body["results"][1]["result"]["content"] == "beta\n");
+    REQUIRE(body["results"][2]["id"] == "call_3");
+    REQUIRE(body["results"][2]["result"]["content"] == "gamma\n");
+    REQUIRE(body.contains("totalMs"));
+}
+
+TEST_CASE("chat.dispatch_tool_calls records per-call failure without aborting "
+          "peers when one tool has bad arguments",
+          "[plugins][ai_editor][native][chat][tools][dispatch]") {
+    RuntimeFixture fixture;
+    auto runtime = fixture.get();
+
+    // Set up a file so at least one call has real content to return.
+    REQUIRE(dispatch(runtime, "tools.call",
+                     {{"mode", "agent"},
+                      {"name", "editFile"},
+                      {"arguments", {{"path", "notes.txt"},
+                                     {"content", "hello\n"}}}})
+                .contains("result"));
+
+    // Three-way mix: valid readFile, listFiles with schema-satisfying args,
+    // and a searchFiles call missing the required `query` field.  The last
+    // one fails validation but the peers still return their results.
+    const Json invoked = dispatch(
+        runtime, "chat.dispatch_tool_calls",
+        {{"toolCalls",
+          Json::array({
+              Json{{"id", "ok_read"}, {"name", "readFile"},
+                   {"arguments", {{"path", "notes.txt"}}}},
+              Json{{"id", "ok_list"}, {"name", "listFiles"},
+                   {"arguments", {{"path", "."}}}},
+              Json{{"id", "bad_search"}, {"name", "searchFiles"},
+                   {"arguments", Json::object()}}})},
+         {"mode", "agent"}});
+    REQUIRE(invoked.contains("result"));
+    const Json& body = invoked["result"];
+    REQUIRE(body["results"].size() == 3);
+    REQUIRE(body["successCount"] == 2);
+    REQUIRE(body["failureCount"] == 1);
+    REQUIRE(body["results"][0]["status"] == "completed");
+    REQUIRE(body["results"][0]["result"]["content"] == "hello\n");
+    REQUIRE(body["results"][1]["status"] == "completed");
+    REQUIRE(body["results"][1]["result"]["entries"].is_array());
+    REQUIRE(body["results"][2]["status"] == "failed");
+    REQUIRE(body["results"][2]["id"] == "bad_search");
+    REQUIRE(body["results"][2]["name"] == "searchFiles");
+    REQUIRE(body["results"][2]["error"] == "invalid argument");
+    // Structured details from the tool registry (validationErrors) survive
+    // the failure path so LLM UIs can highlight the offending field.
+    REQUIRE(body["results"][2].contains("details"));
+    REQUIRE(body["results"][2]["details"]["validationErrors"][0]["path"] ==
+            "$.query");
+}
+
+TEST_CASE("chat.dispatch_tool_calls accepts arguments as a serialised JSON "
+          "string (LLM tool_call wire format)",
+          "[plugins][ai_editor][native][chat][tools][dispatch]") {
+    RuntimeFixture fixture;
+    auto runtime = fixture.get();
+
+    REQUIRE(dispatch(runtime, "tools.call",
+                     {{"mode", "agent"},
+                      {"name", "editFile"},
+                      {"arguments", {{"path", "readme.md"},
+                                     {"content", "docs\n"}}}})
+                .contains("result"));
+
+    // The OpenAI tool_calls wire format hands the model's arguments back as
+    // a JSON string, not an object.  The dispatcher must eagerly parse the
+    // string on the caller thread (phase 1) so worker threads never race
+    // on Json::parse.  A garbage string on a sibling call fails cleanly
+    // without touching the peer that supplied a valid object.
+    const Json invoked = dispatch(
+        runtime, "chat.dispatch_tool_calls",
+        {{"toolCalls",
+          Json::array({
+              Json{{"id", "str_ok"}, {"name", "readFile"},
+                   {"arguments", R"({"path":"readme.md"})"}},
+              Json{{"id", "str_bad"}, {"name", "readFile"},
+                   {"arguments", R"({"path": broken)"}},
+              Json{{"id", "obj_ok"}, {"name", "listFiles"},
+                   {"arguments", {{"path", "."}}}}})},
+         {"mode", "agent"}});
+    REQUIRE(invoked.contains("result"));
+    const Json& body = invoked["result"];
+    REQUIRE(body["successCount"] == 2);
+    REQUIRE(body["failureCount"] == 1);
+    REQUIRE(body["results"][0]["status"] == "completed");
+    REQUIRE(body["results"][0]["result"]["content"] == "docs\n");
+    REQUIRE(body["results"][1]["status"] == "failed");
+    REQUIRE(body["results"][1]["error"] == "invalid arguments JSON");
+    REQUIRE(body["results"][2]["status"] == "completed");
+}
+
+TEST_CASE("chat.dispatch_tool_calls surfaces permission_denied when mode=ask "
+          "gates a mutating tool and rejects unsupported modes up front",
+          "[plugins][ai_editor][native][chat][tools][dispatch][permissions]") {
+    RuntimeFixture fixture;
+    auto runtime = fixture.get();
+
+    // mode=ask + editFile is denied by NativeToolRegistry.  Batch dispatch
+    // must inherit that gating unchanged — otherwise callers could use the
+    // fan-out API to bypass the built-in permission policy.
+    const Json ask = dispatch(
+        runtime, "chat.dispatch_tool_calls",
+        {{"toolCalls",
+          Json::array({
+              Json{{"id", "denied"}, {"name", "editFile"},
+                   {"arguments", {{"path", "blocked.txt"},
+                                  {"content", "nope"}}}}})},
+         {"mode", "ask"}});
+    REQUIRE(ask.contains("result"));
+    const Json& body = ask["result"];
+    REQUIRE(body["failureCount"] == 1);
+    REQUIRE(body["successCount"] == 0);
+    REQUIRE(body["results"][0]["status"] == "failed");
+    REQUIRE(body["results"][0]["error"] == "permission denied");
+
+    // Empty toolCalls array is a hard INVALID_ARGUMENT on the outer envelope
+    // — nothing to dispatch, nothing to report.
+    const Json empty = dispatch(
+        runtime, "chat.dispatch_tool_calls",
+        {{"toolCalls", Json::array()}, {"mode", "agent"}});
+    REQUIRE(empty.contains("error"));
+    REQUIRE(empty["error"]["data"]["status"] ==
+            SAO_AI_EDITOR_ERR_INVALID_ARGUMENT);
+
+    // Unsupported mode string aborts the whole request instead of silently
+    // downgrading each call to `agent`.
+    const Json bad_mode = dispatch(
+        runtime, "chat.dispatch_tool_calls",
+        {{"toolCalls",
+          Json::array({
+              Json{{"id", "x"}, {"name", "readFile"},
+                   {"arguments", {{"path", "notes.txt"}}}}})},
+         {"mode", "chat"}});
+    REQUIRE(bad_mode.contains("error"));
+    REQUIRE(bad_mode["error"]["data"]["status"] ==
+            SAO_AI_EDITOR_ERR_INVALID_ARGUMENT);
 }

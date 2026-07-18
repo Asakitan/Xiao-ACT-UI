@@ -28,6 +28,17 @@ struct AgentDefinition {
     Json to_json() const;
 };
 
+// Filter bitmask for AgentRegistry::recommend — pass a bitwise-OR of these
+// flags to opt scope categories in or out.  Everything defaults to on.
+enum RecommendScopeFlags : uint32_t {
+    kRecommendIncludeBuiltin = 1U << 0,
+    kRecommendIncludeMarket = 1U << 1,
+    kRecommendIncludeUser = 1U << 2,
+    kRecommendIncludeAll = kRecommendIncludeBuiltin |
+                          kRecommendIncludeMarket |
+                          kRecommendIncludeUser,
+};
+
 class AgentRegistry {
 public:
     // (Re)load built-ins + on-disk agents from every configured scope.
@@ -38,6 +49,19 @@ public:
                  std::string_view scope, std::string_view plugin_id);
     int32_t remove(std::string_view id, const ScopeStore& scopes,
                    std::string_view scope, std::string_view plugin_id);
+
+    // Rule-based agent recommendation for a natural-language query.  See
+    // agent_registry.cpp for the scoring rubric (name > when_to_use >
+    // description > tools, phrase-match bonus, boost tags).  Fills `result`
+    // with { query, recommendations:[{agentId,agentName,score,reason,
+    // matches}], total }.  scope_flags is a bitmask of
+    // RecommendScopeFlags — kRecommendIncludeAll to opt in everything.
+    // top_k <= 0 defaults to 3.
+    int32_t recommend(std::string_view query,
+                      int top_k,
+                      uint32_t scope_flags,
+                      const std::vector<std::string>& boost_tags,
+                      Json& result) const;
 
     // Compose a role/prompt bundle for `chat.run`:
     //   [{"role":"system","content":<agent.system_prompt>},

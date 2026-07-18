@@ -548,6 +548,145 @@ int32_t NativeRuntime::invoke(std::string_view method,
                                      title_before, title_after, scope,
                                      keep_original, result);
     }
+    if (method == "conversation.compact") {
+        // Fold the head of a long transcript into a single summary produced
+        // by an LLM.  Params:
+        //   id           - required conversation id.
+        //   keepLast     - number of tail messages to keep intact (default 6).
+        //   provider     - LLM provider config forwarded verbatim to
+        //                  run_chat_sync (same shape as chat.run).
+        //   model        - model id (defaults resolved by the provider).
+        //   summaryPrompt (optional) - system message driving the summary;
+        //                  a fixed default ships when omitted so callers can
+        //                  cheaply "just compact this thing" without
+        //                  configuring prompts.
+        //   compactStrategy - "replace" (default) drops the early tail and
+        //                     substitutes one system summary + keepLast
+        //                     recent; "prepend" retains everything and only
+        //                     glues the summary at the head.
+        if (!params.contains("id") || !params["id"].is_string()) {
+            return SAO_AI_EDITOR_ERR_INVALID_ARGUMENT;
+        }
+        const std::string conversation_id =
+            params["id"].get<std::string>();
+        // Accept both integer and floating-point keepLast so JS callers
+        // whose JSON serialisers turn `6` into `6.0` still hit the happy
+        // path.  Signed compare catches negatives before the size_t cast.
+        int64_t keep_last_signed = 6;
+        if (params.contains("keepLast")) {
+            if (!params["keepLast"].is_number()) {
+                return SAO_AI_EDITOR_ERR_INVALID_ARGUMENT;
+            }
+            keep_last_signed = params["keepLast"].get<int64_t>();
+        }
+        if (keep_last_signed <= 0) {
+            return SAO_AI_EDITOR_ERR_INVALID_ARGUMENT;
+        }
+        const size_t keep_last =
+            static_cast<size_t>(keep_last_signed);
+        const std::string strategy =
+            params.value("compactStrategy", std::string{"replace"});
+        if (strategy != "replace" && strategy != "prepend") {
+            return SAO_AI_EDITOR_ERR_INVALID_ARGUMENT;
+        }
+        // Load a snapshot of the conversation up front.  We deliberately
+        // release store_mutex_ before the LLM call because run_chat_sync
+        // performs a blocking HTTP round-trip and holding the store lock
+        // through it would starve every other conversation.* method.
+        Json conversation;
+        {
+            std::lock_guard<std::mutex> lock(store_mutex_);
+            const int32_t get_status =
+                conversations_.get(conversation_id, conversation);
+            if (get_status != SAO_AI_EDITOR_OK) {
+                return get_status;
+            }
+        }
+        if (!conversation.contains("messages") ||
+            !conversation["messages"].is_array()) {
+            return SAO_AI_EDITOR_ERR_INVALID_ARGUMENT;
+        }
+        const Json& all_messages = conversation["messages"];
+        const size_t original_count = all_messages.size();
+        // Nothing to summarise - short-circuit the LLM entirely.  We still
+        // route through compact() so the response shape is identical to a
+        // "did work" call; the store's noop path emits summary:"" and the
+        // savedAt is left untouched.
+        if (original_count <= keep_last) {
+            std::lock_guard<std::mutex> lock(store_mutex_);
+            return conversations_.compact(conversation_id, keep_last,
+                                          std::string_view{},
+                                          strategy, result);
+        }
+        const size_t drop_count = original_count - keep_last;
+        // Roll the early messages into a single "transcript" string.  Using
+        // one user turn (rather than replaying the historic roles) keeps
+        // the summary prompt cheap and avoids accidentally letting the
+        // model treat old assistant text as authoritative context.
+        std::string transcript;
+        for (size_t index = 0; index < drop_count; ++index) {
+            const auto& message = all_messages[index];
+            if (!message.is_object()) {
+                continue;
+            }
+            const std::string role =
+                message.value("role", std::string{"user"});
+            std::string content;
+            if (message.contains("content") &&
+                message["content"].is_string()) {
+                content = message["content"].get<std::string>();
+            } else if (message.contains("content")) {
+                // Non-string content (arrays / objects for tool calls) -
+                // dump as JSON so the model still sees something rather
+                // than a silent empty line.
+                content = message["content"].dump();
+            }
+            transcript += role;
+            transcript += ": ";
+            transcript += content;
+            transcript += "\n";
+        }
+        const std::string default_summary_prompt =
+            "Please summarize the following conversation history "
+            "concisely. Preserve important facts, decisions, and open "
+            "questions. Output only the summary paragraph, no preamble.";
+        const std::string summary_prompt = params.value(
+            "summaryPrompt", default_summary_prompt);
+        Json summary_messages = Json::array();
+        summary_messages.push_back(Json{{"role", "system"},
+                                         {"content", summary_prompt}});
+        summary_messages.push_back(Json{{"role", "user"},
+                                         {"content", transcript}});
+        Json chat_params = Json::object();
+        if (params.contains("provider")) {
+            chat_params["provider"] = params["provider"];
+        }
+        if (params.contains("model") && params["model"].is_string()) {
+            chat_params["model"] = params["model"];
+        }
+        chat_params["messages"] = std::move(summary_messages);
+        // Forward the standard timeout/retry knobs so callers can crank
+        // both down when they know the summary should be quick.
+        for (const std::string_view field :
+             {"temperature", "max_tokens", "retry"}) {
+            const std::string key(field);
+            if (params.contains(field)) {
+                chat_params[key] = params[field];
+            }
+        }
+        const uint32_t timeout_ms = params.value("timeoutMs", 60'000U);
+        std::string summary_text;
+        const int32_t chat_status =
+            run_chat_sync(chat_params, timeout_ms, summary_text);
+        if (chat_status != SAO_AI_EDITOR_OK) {
+            // Conversation on disk is untouched - the LLM call happened
+            // *before* the store rewrite, so callers can safely retry.
+            return chat_status;
+        }
+        std::lock_guard<std::mutex> lock(store_mutex_);
+        return conversations_.compact(conversation_id, keep_last,
+                                      summary_text, strategy, result);
+    }
     if (method == "conversation.export") {
         const bool has_id = params.contains("id");
         const bool has_scope = params.contains("scope");
@@ -1269,6 +1408,9 @@ int32_t NativeRuntime::invoke(std::string_view method,
     if (method == "chat.run_with_mcp") {
         return start_chat_with_mcp(params, result);
     }
+    if (method == "chat.dispatch_tool_calls") {
+        return dispatch_tool_calls(params, result);
+    }
     if (method == "run.cancel") {
         return cancel_run(params, result);
     }
@@ -1289,7 +1431,7 @@ int32_t NativeRuntime::invoke(std::string_view method,
     }
     if (method == "agents.list_defs" || method == "agents.get_def" ||
         method == "agents.save_def" || method == "agents.delete_def" ||
-        method == "agents.invoke") {
+        method == "agents.invoke" || method == "agents.recommend") {
         return dispatch_agent(method, params, result);
     }
     if (method == "agents.invoke_with_mcp") {
@@ -1320,6 +1462,54 @@ int32_t NativeRuntime::dispatch_agent(std::string_view method,
         result = Json{{"items", std::move(items)}};
         result["total"] = result["items"].size();
         return SAO_AI_EDITOR_OK;
+    }
+    if (method == "agents.recommend") {
+        // Rule-based recommender.  The registry does the scoring; this branch
+        // just marshals params → typed args, applies the include* filter mask
+        // (an all-false include set short-circuits to an empty response so
+        // we don't rely on the "0 == include everything" fallback), and
+        // reloads the registry so any market presets / on-disk edits land
+        // before we score.
+        if (!params.contains("query") || !params["query"].is_string()) {
+            return SAO_AI_EDITOR_ERR_INVALID_ARGUMENT;
+        }
+        const std::string query = params["query"].get<std::string>();
+        const int top_k = params.value("topK", 3);
+        const bool include_builtin = params.value("includeBuiltin", true);
+        const bool include_market = params.value("includeMarket", true);
+        const bool include_user = params.value("includeUser", true);
+        uint32_t scope_flags = 0U;
+        if (include_builtin) {
+            scope_flags |= kRecommendIncludeBuiltin;
+        }
+        if (include_market) {
+            scope_flags |= kRecommendIncludeMarket;
+        }
+        if (include_user) {
+            scope_flags |= kRecommendIncludeUser;
+        }
+        const bool all_disabled =
+            !include_builtin && !include_market && !include_user;
+        std::vector<std::string> boost_tags;
+        if (params.contains("boostTags") && params["boostTags"].is_array()) {
+            for (const auto& tag : params["boostTags"]) {
+                if (tag.is_string()) {
+                    boost_tags.push_back(tag.get<std::string>());
+                }
+            }
+        }
+        {
+            std::lock_guard<std::mutex> guard(store_mutex_);
+            agent_registry_.reload(scopes_);
+        }
+        if (all_disabled) {
+            result = Json{{"query", query},
+                          {"recommendations", Json::array()},
+                          {"total", 0}};
+            return SAO_AI_EDITOR_OK;
+        }
+        return agent_registry_.recommend(query, top_k, scope_flags, boost_tags,
+                                          result);
     }
     if (method == "agents.get_def") {
         if (!params.contains("id") || !params["id"].is_string()) {
@@ -1760,6 +1950,210 @@ int32_t NativeRuntime::batch_invoke_agents(const Json& params, Json& result) {
     if (!conversation_id.empty()) {
         result["conversationId"] = conversation_id;
     }
+    return SAO_AI_EDITOR_OK;
+}
+
+int32_t NativeRuntime::dispatch_tool_calls(const Json& params, Json& result) {
+    if (!params.contains("toolCalls") || !params["toolCalls"].is_array() ||
+        params["toolCalls"].empty()) {
+        return SAO_AI_EDITOR_ERR_INVALID_ARGUMENT;
+    }
+    // mode is validated up-front: unlike batch_invoke_agents (where each
+    // per-agent slot could conceivably carry its own override), the entire
+    // dispatch shares a single permission policy so a stray "chat" mode
+    // should fail fast instead of silently downgrading every call to agent.
+    const std::string mode = mode_of(params);
+    if (!supported_mode(mode)) {
+        return SAO_AI_EDITOR_ERR_INVALID_ARGUMENT;
+    }
+    const Json& tool_calls = params["toolCalls"];
+    // Concurrency policy mirrors agents.batch_invoke: clamp [1, 16] with a
+    // default of 4.  A tool dispatch batch is usually smaller than an agent
+    // batch (an LLM rarely emits >5 tool_calls in one turn), but the same
+    // upper bound stops a hostile prompt from spawning hundreds of threads.
+    int concurrency = params.value("concurrency", 4);
+    if (concurrency < 1) {
+        concurrency = 1;
+    }
+    if (concurrency > 16) {
+        concurrency = 16;
+    }
+    const size_t total = tool_calls.size();
+    const size_t worker_count = std::min<size_t>(
+        static_cast<size_t>(concurrency), total);
+
+    struct Slot final {
+        std::string id;        // caller-supplied opaque id (echoed back)
+        std::string name;      // tool name (empty on validation failure)
+        Json arguments = Json::object();
+        Json result_payload = Json::object();
+        std::string error;
+        int32_t status = SAO_AI_EDITOR_OK;
+        bool ready = false;    // arguments parsed / name checked OK
+        uint64_t duration_ms = 0;
+    };
+    std::vector<Slot> slots(total);
+
+    // Phase 1 (single-threaded): validate id/name/arguments shape and, when
+    // arguments is a JSON string (as LLMs emit them), parse it eagerly so
+    // worker threads never touch the raw string form.  Any per-call failure
+    // is recorded on the slot and skipped by the worker — peers still run.
+    for (size_t i = 0; i < total; ++i) {
+        Slot& slot = slots[i];
+        const Json& entry = tool_calls[i];
+        if (!entry.is_object()) {
+            slot.status = SAO_AI_EDITOR_ERR_INVALID_ARGUMENT;
+            slot.error = "tool_call entry must be an object";
+            continue;
+        }
+        // id is optional in the OpenAI wire format (`call_...`) but we echo
+        // it back verbatim so callers can correlate the response array with
+        // whichever id scheme the LLM used.  Missing id -> empty string.
+        if (entry.contains("id") && entry["id"].is_string()) {
+            slot.id = entry["id"].get<std::string>();
+        }
+        if (!entry.contains("name") || !entry["name"].is_string() ||
+            entry["name"].get<std::string>().empty()) {
+            slot.status = SAO_AI_EDITOR_ERR_INVALID_ARGUMENT;
+            slot.error = "name missing or not a non-empty string";
+            continue;
+        }
+        slot.name = entry["name"].get<std::string>();
+        // arguments may be:
+        //   - absent  -> default to {}
+        //   - object  -> forwarded as-is
+        //   - string  -> Json::parse'd; failure records "invalid arguments JSON"
+        // Anything else (array/number/etc.) is rejected as malformed.
+        if (!entry.contains("arguments")) {
+            slot.arguments = Json::object();
+        } else {
+            const Json& raw = entry["arguments"];
+            if (raw.is_object()) {
+                slot.arguments = raw;
+            } else if (raw.is_string()) {
+                const std::string text = raw.get<std::string>();
+                if (text.empty()) {
+                    slot.arguments = Json::object();
+                } else {
+                    try {
+                        Json parsed = Json::parse(text);
+                        if (!parsed.is_object()) {
+                            slot.status = SAO_AI_EDITOR_ERR_INVALID_ARGUMENT;
+                            slot.error = "invalid arguments JSON";
+                            continue;
+                        }
+                        slot.arguments = std::move(parsed);
+                    } catch (const std::exception&) {
+                        slot.status = SAO_AI_EDITOR_ERR_INVALID_ARGUMENT;
+                        slot.error = "invalid arguments JSON";
+                        continue;
+                    }
+                }
+            } else {
+                slot.status = SAO_AI_EDITOR_ERR_INVALID_ARGUMENT;
+                slot.error =
+                    "arguments must be an object or JSON string";
+                continue;
+            }
+        }
+        slot.ready = true;
+    }
+
+    // Phase 2: worker pool.  Every worker grabs the next unclaimed slot via
+    // an atomic counter (same lock-free pattern as batch_invoke_agents) and
+    // runs tools_.execute directly.  Unlike the dispatch()-level tools.call
+    // branch, we intentionally do NOT hold store_mutex_ during execution —
+    // NativeToolRegistry::execute is const + self-synchronising, and the
+    // whole point of the batch API is to run calls concurrently.  Holding
+    // store_mutex_ here would serialise every worker back onto one thread
+    // and defeat the concurrency knob.
+    const auto batch_start = std::chrono::steady_clock::now();
+    std::atomic<size_t> next_index{0};
+    std::vector<std::thread> workers;
+    workers.reserve(worker_count);
+    for (size_t w = 0; w < worker_count; ++w) {
+        workers.emplace_back([&] {
+            while (true) {
+                const size_t idx =
+                    next_index.fetch_add(1, std::memory_order_acq_rel);
+                if (idx >= total) {
+                    break;
+                }
+                Slot& slot = slots[idx];
+                if (!slot.ready) {
+                    continue;  // phase 1 already recorded status/error
+                }
+                const auto step_start = std::chrono::steady_clock::now();
+                try {
+                    Json tool_result;
+                    const int32_t status = tools_.execute(
+                        mode, slot.name, slot.arguments, tool_result);
+                    slot.status = status;
+                    if (status == SAO_AI_EDITOR_OK) {
+                        slot.result_payload = std::move(tool_result);
+                    } else {
+                        // Propagate whatever `details` the tool registry
+                        // returned (e.g. validationErrors) into the error
+                        // path so callers still get structured feedback.
+                        slot.result_payload = std::move(tool_result);
+                        slot.error = status_message(status);
+                    }
+                } catch (const std::exception& ex) {
+                    slot.status = SAO_AI_EDITOR_ERR_HTTP;
+                    slot.error = std::string("exception: ") + ex.what();
+                } catch (...) {
+                    slot.status = SAO_AI_EDITOR_ERR_HTTP;
+                    slot.error = "unknown exception";
+                }
+                const auto step_end = std::chrono::steady_clock::now();
+                slot.duration_ms = static_cast<uint64_t>(
+                    std::chrono::duration_cast<std::chrono::milliseconds>(
+                        step_end - step_start).count());
+            }
+        });
+    }
+    for (auto& worker : workers) {
+        worker.join();
+    }
+    const auto batch_end = std::chrono::steady_clock::now();
+    const uint64_t total_ms = static_cast<uint64_t>(
+        std::chrono::duration_cast<std::chrono::milliseconds>(
+            batch_end - batch_start).count());
+
+    // Phase 3: assemble the response in original input order.  Runs on the
+    // caller thread so no synchronisation is needed even though the workers
+    // may have completed out of order.
+    Json results = Json::array();
+    size_t success = 0;
+    size_t failure = 0;
+    for (size_t i = 0; i < total; ++i) {
+        const Slot& slot = slots[i];
+        Json entry_result{{"id", slot.id},
+                          {"name", slot.name},
+                          {"durationMs", slot.duration_ms}};
+        if (slot.status == SAO_AI_EDITOR_OK && slot.ready) {
+            entry_result["status"] = "completed";
+            entry_result["result"] = slot.result_payload;
+            ++success;
+        } else {
+            entry_result["status"] = "failed";
+            entry_result["error"] = slot.error.empty()
+                                        ? status_message(slot.status)
+                                        : slot.error;
+            // Surface tool-registry details (validationErrors etc.) even on
+            // failure so LLM-facing UI can highlight the offending field.
+            if (slot.result_payload.is_object() &&
+                !slot.result_payload.empty()) {
+                entry_result["details"] = slot.result_payload;
+            }
+            ++failure;
+        }
+        results.push_back(std::move(entry_result));
+    }
+    result = Json{{"results", std::move(results)},
+                  {"successCount", success},
+                  {"failureCount", failure},
+                  {"totalMs", total_ms}};
     return SAO_AI_EDITOR_OK;
 }
 

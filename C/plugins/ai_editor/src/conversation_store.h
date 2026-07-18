@@ -80,6 +80,30 @@ public:
                   bool order_by_saved_at,
                   Json& result) const;
 
+    // Compact a long conversation by folding early messages into a single
+    // summary produced by an external LLM (dispatched at the runtime layer)
+    // and keeping the tail `keep_last` messages intact.  The store itself
+    // is agnostic to how the summary was generated — the caller feeds in
+    // the finished summary text so this method can stay purely file-shaped
+    // and does not need to reach into the HTTP/provider layer.  Behaviour:
+    //   * strategy == "replace": early messages (up to size - keep_last)
+    //     are dropped and a single {role:"system", content:summary} entry
+    //     is prepended in their place.  Final message count == keep_last + 1.
+    //   * strategy == "prepend": every original message is kept, and one
+    //     {role:"system", content:summary} entry is prepended at index 0.
+    //     Final message count == original + 1.
+    // If size <= keep_last there is nothing worth compacting, so the
+    // conversation is left untouched and `result.noop == true` is emitted
+    // so callers can distinguish "nothing to do" from "compacted".  Missing
+    // conversations propagate NOT_FOUND; keep_last <= 0 is rejected by the
+    // dispatch layer before we get here.  Emits {id, originalMessageCount,
+    // newMessageCount, summaryLength, summary, compactedAt, noop?}.
+    int32_t compact(std::string_view conversation_id,
+                    size_t keep_last,
+                    std::string_view summary,
+                    std::string_view strategy,
+                    Json& result) const;
+
     // Cleave a single conversation into two halves at `message_index`.
     // Messages [0..message_index] (inclusive) form the "before" half;
     // [message_index + 1..end] form the "after" half.  Both halves need

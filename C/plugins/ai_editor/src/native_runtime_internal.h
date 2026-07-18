@@ -109,6 +109,16 @@ private:
     // to the same conversation in original agent order (post-join, to keep
     // the transcript deterministic under parallelism).
     int32_t batch_invoke_agents(const Json& params, Json& result);
+    // chat.dispatch_tool_calls — fan-out an assistant response's tool_calls
+    // array over a worker pool (throttled by params.concurrency in [1, 16],
+    // default 4).  Each entry runs tools_.execute(mode, name, arguments) so
+    // the built-in permission gating (ask/plan/agent) applies uniformly.
+    // LLM callers usually hand back `arguments` as a serialised JSON string;
+    // both a raw object *and* a string that parses into an object are
+    // accepted (parse failures are recorded per-call, never abort peers).
+    // Results are assembled in input order; each entry carries
+    // {id, name, status, durationMs} plus either result or error.
+    int32_t dispatch_tool_calls(const Json& params, Json& result);
     int32_t dispatch_prompt(std::string_view method,
                             const Json& params,
                             Json& result);

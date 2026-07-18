@@ -3,9 +3,12 @@
 #include <windows.h>
 
 #include <algorithm>
+#include <cstdint>
 #include <filesystem>
+#include <set>
 #include <string>
 #include <system_error>
+#include <unordered_set>
 #include <vector>
 
 #include "scope_store.h"
@@ -227,6 +230,180 @@ const std::vector<AgentDefinition>& builtin_agents() {
     return agents;
 }
 
+// --- Rule-based recommendation helpers --------------------------------------
+// The scorer is intentionally cheap and dependency-free: no jieba, no LLM.
+// It tokenises the query into UTF-8 tokens (ASCII words lowercased, CJK code
+// points kept as single-glyph tokens) and matches them against each agent's
+// searchable fields with per-field weights.
+
+// True if the byte is the start of an ASCII letter/digit — anything else is a
+// token boundary in the ASCII stream.
+bool is_ascii_word_byte(unsigned char byte) noexcept {
+    return (byte >= 'a' && byte <= 'z') ||
+           (byte >= 'A' && byte <= 'Z') ||
+           (byte >= '0' && byte <= '9');
+}
+
+// Decode one UTF-8 code point starting at `text[cursor]`.  On success advances
+// `cursor` past the code point and returns the code point.  On malformed input
+// falls back to reading a single byte and returning U+FFFD (0xFFFD).
+uint32_t decode_utf8_codepoint(std::string_view text, size_t& cursor) noexcept {
+    const size_t remaining = text.size() - cursor;
+    if (remaining == 0) {
+        return 0;
+    }
+    const unsigned char byte = static_cast<unsigned char>(text[cursor]);
+    if (byte < 0x80) {
+        cursor += 1;
+        return byte;
+    }
+    auto continuation = [&](size_t offset, unsigned char& out) {
+        if (offset >= remaining) {
+            return false;
+        }
+        const unsigned char raw =
+            static_cast<unsigned char>(text[cursor + offset]);
+        if ((raw & 0xC0) != 0x80) {
+            return false;
+        }
+        out = raw & 0x3F;
+        return true;
+    };
+    unsigned char c1 = 0;
+    unsigned char c2 = 0;
+    unsigned char c3 = 0;
+    if ((byte & 0xE0) == 0xC0 && remaining >= 2 && continuation(1, c1)) {
+        cursor += 2;
+        return (static_cast<uint32_t>(byte & 0x1F) << 6) | c1;
+    }
+    if ((byte & 0xF0) == 0xE0 && remaining >= 3 && continuation(1, c1) &&
+        continuation(2, c2)) {
+        cursor += 3;
+        return (static_cast<uint32_t>(byte & 0x0F) << 12) |
+               (static_cast<uint32_t>(c1) << 6) | c2;
+    }
+    if ((byte & 0xF8) == 0xF0 && remaining >= 4 && continuation(1, c1) &&
+        continuation(2, c2) && continuation(3, c3)) {
+        cursor += 4;
+        return (static_cast<uint32_t>(byte & 0x07) << 18) |
+               (static_cast<uint32_t>(c1) << 12) |
+               (static_cast<uint32_t>(c2) << 6) | c3;
+    }
+    // Invalid — skip one byte to keep making progress.
+    cursor += 1;
+    return 0xFFFD;
+}
+
+// True for common CJK ranges (Han, Hiragana, Katakana, Hangul).  We treat each
+// such code point as its own token — simple substring-style matching still
+// works because tokens are stored as UTF-8 strings.
+bool is_cjk_codepoint(uint32_t codepoint) noexcept {
+    return (codepoint >= 0x3040 && codepoint <= 0x30FF) ||  // Hiragana+Katakana
+           (codepoint >= 0x3400 && codepoint <= 0x4DBF) ||  // CJK Ext A
+           (codepoint >= 0x4E00 && codepoint <= 0x9FFF) ||  // CJK Unified
+           (codepoint >= 0xAC00 && codepoint <= 0xD7AF) ||  // Hangul syllables
+           (codepoint >= 0xF900 && codepoint <= 0xFAFF) ||  // CJK Compat
+           (codepoint >= 0x20000 && codepoint <= 0x2FFFF);  // CJK Ext B-F
+}
+
+// Encode one code point back into UTF-8, appending to `out`.
+void append_codepoint_utf8(uint32_t codepoint, std::string& out) {
+    if (codepoint < 0x80) {
+        out.push_back(static_cast<char>(codepoint));
+    } else if (codepoint < 0x800) {
+        out.push_back(static_cast<char>(0xC0 | (codepoint >> 6)));
+        out.push_back(static_cast<char>(0x80 | (codepoint & 0x3F)));
+    } else if (codepoint < 0x10000) {
+        out.push_back(static_cast<char>(0xE0 | (codepoint >> 12)));
+        out.push_back(static_cast<char>(0x80 | ((codepoint >> 6) & 0x3F)));
+        out.push_back(static_cast<char>(0x80 | (codepoint & 0x3F)));
+    } else {
+        out.push_back(static_cast<char>(0xF0 | (codepoint >> 18)));
+        out.push_back(static_cast<char>(0x80 | ((codepoint >> 12) & 0x3F)));
+        out.push_back(static_cast<char>(0x80 | ((codepoint >> 6) & 0x3F)));
+        out.push_back(static_cast<char>(0x80 | (codepoint & 0x3F)));
+    }
+}
+
+// Tokenize a UTF-8 string:
+//   * runs of ASCII word bytes become one lowercased token
+//   * each CJK code point becomes its own single-glyph token
+//   * everything else (punctuation, whitespace, symbols) is a token boundary
+// Returns tokens in appearance order (with duplicates preserved so phrase
+// matching can walk bigrams).
+std::vector<std::string> tokenize_utf8(std::string_view text) {
+    std::vector<std::string> tokens;
+    tokens.reserve(text.size() / 4 + 1);
+    size_t cursor = 0;
+    std::string ascii_buffer;
+    auto flush_ascii = [&] {
+        if (!ascii_buffer.empty()) {
+            tokens.push_back(std::move(ascii_buffer));
+            ascii_buffer.clear();
+        }
+    };
+    while (cursor < text.size()) {
+        const size_t before = cursor;
+        const uint32_t codepoint = decode_utf8_codepoint(text, cursor);
+        if (codepoint == 0) {
+            break;
+        }
+        if (codepoint < 0x80) {
+            const unsigned char byte = static_cast<unsigned char>(codepoint);
+            if (is_ascii_word_byte(byte)) {
+                if (byte >= 'A' && byte <= 'Z') {
+                    ascii_buffer.push_back(
+                        static_cast<char>(byte - 'A' + 'a'));
+                } else {
+                    ascii_buffer.push_back(static_cast<char>(byte));
+                }
+            } else {
+                flush_ascii();
+            }
+        } else if (is_cjk_codepoint(codepoint)) {
+            flush_ascii();
+            std::string glyph;
+            append_codepoint_utf8(codepoint, glyph);
+            tokens.push_back(std::move(glyph));
+        } else {
+            // Other non-word code points (Latin-1 punctuation, dingbats, etc.)
+            // are treated as separators.  Advance past them without emitting.
+            (void)before;
+            flush_ascii();
+        }
+    }
+    flush_ascii();
+    return tokens;
+}
+
+// Case-insensitive ASCII lowercase (in place) — used when matching query
+// tokens against agent text.  CJK code points are already normalised because
+// we tokenise the agent text with the same routine.
+std::string ascii_lowercase(std::string_view value) {
+    std::string result(value);
+    for (auto& ch : result) {
+        const unsigned char byte = static_cast<unsigned char>(ch);
+        if (byte >= 'A' && byte <= 'Z') {
+            ch = static_cast<char>(byte - 'A' + 'a');
+        }
+    }
+    return result;
+}
+
+// Detect which bucket an agent falls into for the include* filter flags.
+// Built-ins are the hard-coded five defined in this file.  Market presets
+// come from assets/ai_editor/agents/*.json (scope="market").  Anything else
+// is "user" (workspace / system / plugin scopes saved via agents.save_def).
+uint32_t agent_scope_flag(const AgentDefinition& agent) noexcept {
+    if (agent.builtin) {
+        return kRecommendIncludeBuiltin;
+    }
+    if (agent.scope == "market") {
+        return kRecommendIncludeMarket;
+    }
+    return kRecommendIncludeUser;
+}
+
 }  // namespace
 
 AgentDefinition AgentDefinition::from_json(const Json& value) {
@@ -393,6 +570,289 @@ int32_t AgentRegistry::remove(std::string_view id, const ScopeStore& scopes,
         return SAO_AI_EDITOR_ERR_PERMISSION_DENIED;
     }
     agents_.erase(found);
+    return SAO_AI_EDITOR_OK;
+}
+
+int32_t AgentRegistry::recommend(std::string_view query,
+                                  int top_k,
+                                  uint32_t scope_flags,
+                                  const std::vector<std::string>& boost_tags,
+                                  Json& result) const {
+    // Effective knobs — sanitise caller input up front so downstream logic
+    // can assume sensible defaults.  A zero/negative topK falls back to 3;
+    // an empty scope mask means "everything on".
+    const int effective_top_k = (top_k <= 0) ? 3 : top_k;
+    const uint32_t effective_flags =
+        (scope_flags == 0U) ? kRecommendIncludeAll : scope_flags;
+
+    // Tokenise the query once — we consult the same token list for every
+    // agent so this hot loop stays cheap even with dozens of agents.
+    const std::vector<std::string> query_tokens =
+        tokenize_utf8(query);
+    // Unique tokens drive term-overlap counting; the ordered list drives
+    // phrase (bigram+) matching.
+    std::unordered_set<std::string> query_term_set(query_tokens.begin(),
+                                                    query_tokens.end());
+
+    // Lowercase boostTags once — CJK tokens are already normal, ASCII gets
+    // lowercased so the "boost tag appears in agent text" comparison is
+    // case-insensitive on both sides.
+    std::vector<std::string> normalised_boost_tags;
+    normalised_boost_tags.reserve(boost_tags.size());
+    for (const auto& tag : boost_tags) {
+        if (tag.empty()) {
+            continue;
+        }
+        normalised_boost_tags.push_back(ascii_lowercase(tag));
+    }
+
+    // Snapshot the current agent map under the mutex, then release before we
+    // do the expensive scoring loop so read-only callers don't stall the
+    // save/delete critical section.
+    std::vector<AgentDefinition> agents;
+    {
+        std::lock_guard<std::mutex> guard(mutex_);
+        agents.reserve(agents_.size());
+        for (const auto& [id, agent] : agents_) {
+            (void)id;
+            agents.push_back(agent);
+        }
+    }
+
+    struct Candidate {
+        std::string agent_id;
+        std::string agent_name;
+        double raw_score = 0.0;
+        std::string reason;
+        std::vector<std::string> matches;
+    };
+    std::vector<Candidate> candidates;
+    candidates.reserve(agents.size());
+
+    for (const auto& agent : agents) {
+        // Scope gate first so we don't waste tokenisation work on agents the
+        // caller explicitly opted out of.
+        const uint32_t agent_flag = agent_scope_flag(agent);
+        if ((agent_flag & effective_flags) == 0U) {
+            continue;
+        }
+
+        // Per-field token sets.  Storing each field separately (rather than
+        // concatenating) is what lets us apply different weights.
+        auto tokens_for = [](std::string_view text) {
+            const std::vector<std::string> ordered = tokenize_utf8(text);
+            std::unordered_set<std::string> unique(ordered.begin(),
+                                                    ordered.end());
+            return std::make_pair(std::move(ordered), std::move(unique));
+        };
+        const auto [name_ordered, name_set] = tokens_for(agent.name);
+        const auto [wtu_ordered, wtu_set] =
+            tokens_for(agent.when_to_use);
+        const auto [desc_ordered, desc_set] =
+            tokens_for(agent.description);
+        // Tools are already discrete strings; each becomes its own token
+        // (lowercased for ASCII, CJK untouched).  Nested tokenisation
+        // preserves multi-word tool ids like "readFile" → "readfile".
+        std::unordered_set<std::string> tools_set;
+        std::vector<std::string> tools_ordered;
+        for (const auto& tool : agent.tools) {
+            std::vector<std::string> tool_tokens = tokenize_utf8(tool);
+            for (auto& token : tool_tokens) {
+                tools_set.insert(token);
+                tools_ordered.push_back(std::move(token));
+            }
+        }
+
+        // Combined ordered list for phrase matching — we walk the query in
+        // 2-token windows and look for the same bigram anywhere in the
+        // agent's text.
+        std::vector<std::string> combined_ordered;
+        combined_ordered.reserve(name_ordered.size() + wtu_ordered.size() +
+                                  desc_ordered.size() + tools_ordered.size());
+        combined_ordered.insert(combined_ordered.end(),
+                                 name_ordered.begin(), name_ordered.end());
+        combined_ordered.insert(combined_ordered.end(),
+                                 wtu_ordered.begin(), wtu_ordered.end());
+        combined_ordered.insert(combined_ordered.end(),
+                                 desc_ordered.begin(), desc_ordered.end());
+        combined_ordered.insert(combined_ordered.end(),
+                                 tools_ordered.begin(),
+                                 tools_ordered.end());
+        std::unordered_set<std::string> combined_set;
+        combined_set.insert(name_set.begin(), name_set.end());
+        combined_set.insert(wtu_set.begin(), wtu_set.end());
+        combined_set.insert(desc_set.begin(), desc_set.end());
+        combined_set.insert(tools_set.begin(), tools_set.end());
+
+        Candidate candidate;
+        candidate.agent_id = agent.id;
+        candidate.agent_name = agent.name;
+
+        // Term-overlap scoring.  A term can score in multiple fields (rare
+        // but legitimate — e.g. "SQL" appears in both name and description
+        // for sql-expert); we sum those to reflect the stronger signal.
+        std::set<std::string> matched_ordered;
+        for (const auto& term : query_term_set) {
+            if (term.empty()) {
+                continue;
+            }
+            double term_score = 0.0;
+            bool hit = false;
+            if (name_set.count(term)) {
+                term_score += 3.0;
+                hit = true;
+            }
+            if (wtu_set.count(term)) {
+                term_score += 2.0;
+                hit = true;
+            }
+            if (desc_set.count(term)) {
+                term_score += 1.5;
+                hit = true;
+            }
+            if (tools_set.count(term)) {
+                term_score += 1.0;
+                hit = true;
+            }
+            if (hit) {
+                candidate.raw_score += term_score;
+                matched_ordered.insert(term);
+            }
+        }
+
+        // Phrase bonus: every contiguous query bigram that also appears
+        // adjacent in the agent's ordered text is worth +2.  We only credit
+        // the first occurrence per bigram to avoid inflating scores when a
+        // phrase repeats.
+        std::set<std::string> phrase_bonus_seen;
+        for (size_t i = 0; i + 1 < query_tokens.size(); ++i) {
+            const std::string& a = query_tokens[i];
+            const std::string& b = query_tokens[i + 1];
+            if (a.empty() || b.empty()) {
+                continue;
+            }
+            const std::string phrase = a + "|" + b;
+            if (phrase_bonus_seen.count(phrase)) {
+                continue;
+            }
+            for (size_t j = 0; j + 1 < combined_ordered.size(); ++j) {
+                if (combined_ordered[j] == a &&
+                    combined_ordered[j + 1] == b) {
+                    candidate.raw_score += 2.0;
+                    phrase_bonus_seen.insert(phrase);
+                    break;
+                }
+            }
+        }
+
+        // Boost tags: caller-supplied keywords that should nudge specific
+        // agents up.  We check the agent's combined text so users can e.g.
+        // pass ["performance"] to prefer the optimizer without needing a
+        // dedicated tags field.
+        std::vector<std::string> boost_hits;
+        for (const auto& tag : normalised_boost_tags) {
+            if (combined_set.count(tag)) {
+                candidate.raw_score += 1.0;
+                boost_hits.push_back(tag);
+            }
+        }
+
+        if (candidate.raw_score <= 0.0) {
+            continue;
+        }
+
+        // Human-readable reason string — enumerate up to 3 matched terms and
+        // note the boost tag / phrase bonuses so the caller can display it
+        // in a tooltip.
+        std::vector<std::string> reason_parts;
+        if (!matched_ordered.empty()) {
+            std::string joined = "matched: ";
+            size_t i = 0;
+            for (const auto& term : matched_ordered) {
+                if (i > 0) {
+                    joined += ", ";
+                }
+                joined += "'" + term + "'";
+                if (++i >= 3) {
+                    break;
+                }
+            }
+            if (matched_ordered.size() > 3) {
+                joined += ", +" + std::to_string(matched_ordered.size() - 3);
+            }
+            reason_parts.push_back(std::move(joined));
+        }
+        if (!phrase_bonus_seen.empty()) {
+            reason_parts.push_back(
+                std::to_string(phrase_bonus_seen.size()) +
+                " phrase overlap");
+        }
+        if (!boost_hits.empty()) {
+            std::string boosted = "boost tags: ";
+            for (size_t i = 0; i < boost_hits.size(); ++i) {
+                if (i > 0) {
+                    boosted += ", ";
+                }
+                boosted += boost_hits[i];
+            }
+            reason_parts.push_back(std::move(boosted));
+        }
+        if (reason_parts.empty()) {
+            candidate.reason = "matched search text";
+        } else {
+            for (size_t i = 0; i < reason_parts.size(); ++i) {
+                if (i > 0) {
+                    candidate.reason += "; ";
+                }
+                candidate.reason += reason_parts[i];
+            }
+        }
+        candidate.matches.assign(matched_ordered.begin(),
+                                  matched_ordered.end());
+        candidates.push_back(std::move(candidate));
+    }
+
+    // Normalise scores against the batch max so downstream callers see a
+    // stable 0..1 range regardless of how weight-heavy the query happened to
+    // be.  Avoid division-by-zero when nothing scored.
+    double max_score = 0.0;
+    for (const auto& candidate : candidates) {
+        max_score = std::max(max_score, candidate.raw_score);
+    }
+
+    // Sort by (score desc, id asc) — id acts as the tie-break for
+    // deterministic ordering across runs.
+    std::sort(candidates.begin(), candidates.end(),
+              [](const Candidate& lhs, const Candidate& rhs) {
+                  if (lhs.raw_score != rhs.raw_score) {
+                      return lhs.raw_score > rhs.raw_score;
+                  }
+                  return lhs.agent_id < rhs.agent_id;
+              });
+
+    Json recommendations = Json::array();
+    const size_t take = std::min<size_t>(candidates.size(),
+                                          static_cast<size_t>(
+                                              effective_top_k));
+    for (size_t i = 0; i < take; ++i) {
+        const auto& candidate = candidates[i];
+        const double score = (max_score > 0.0)
+                                 ? candidate.raw_score / max_score
+                                 : 0.0;
+        Json matches = Json::array();
+        for (const auto& term : candidate.matches) {
+            matches.push_back(term);
+        }
+        recommendations.push_back(Json{{"agentId", candidate.agent_id},
+                                        {"agentName", candidate.agent_name},
+                                        {"score", score},
+                                        {"reason", candidate.reason},
+                                        {"matches", std::move(matches)}});
+    }
+
+    result = Json{{"query", std::string(query)},
+                  {"recommendations", std::move(recommendations)},
+                  {"total", static_cast<int64_t>(take)}};
     return SAO_AI_EDITOR_OK;
 }
 

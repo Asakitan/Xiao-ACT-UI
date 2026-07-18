@@ -761,6 +761,87 @@ int32_t ConversationStore::split(std::string_view source_id,
     return SAO_AI_EDITOR_OK;
 }
 
+int32_t ConversationStore::compact(std::string_view conversation_id,
+                                   size_t keep_last,
+                                   std::string_view summary,
+                                   std::string_view strategy,
+                                   Json& result) const {
+    // Strategy validation lives here (not just at the dispatch layer) so
+    // direct C++ callers cannot smuggle an unknown value past the JSON
+    // adapter and quietly get "replace" semantics.
+    if (strategy != "replace" && strategy != "prepend") {
+        return SAO_AI_EDITOR_ERR_INVALID_ARGUMENT;
+    }
+    std::filesystem::path path;
+    int32_t status = locate(conversation_id, path);
+    if (status != SAO_AI_EDITOR_OK) {
+        return status;
+    }
+    Json document;
+    status = get(conversation_id, document);
+    if (status != SAO_AI_EDITOR_OK) {
+        return status;
+    }
+    if (!document.contains("messages") || !document["messages"].is_array()) {
+        return SAO_AI_EDITOR_ERR_INVALID_ARGUMENT;
+    }
+    const Json& messages = document["messages"];
+    const size_t original_count = messages.size();
+    const int64_t now = unix_milliseconds();
+    // Noop path: not enough backlog to warrant compaction.  We deliberately
+    // leave the file untouched (savedAt included) so pinned-first ordering
+    // and "last modified" indicators stay accurate for a "nothing changed"
+    // outcome.  The `noop` flag lets the runtime skip the summary LLM call
+    // entirely on subsequent tries; see dispatch handler for the pre-check.
+    if (original_count <= keep_last) {
+        result = Json{{"id", std::string(conversation_id)},
+                      {"originalMessageCount", original_count},
+                      {"newMessageCount", original_count},
+                      {"summaryLength", size_t{0}},
+                      {"summary", std::string{}},
+                      {"compactedAt", now},
+                      {"noop", true}};
+        return SAO_AI_EDITOR_OK;
+    }
+    Json summary_message = Json{{"role", "system"},
+                                {"content", std::string(summary)}};
+    Json new_messages = Json::array();
+    if (strategy == "prepend") {
+        // Preserve every original message; only prepend the summary so the
+        // model still sees the full transcript but with a lead-in that
+        // primes it on the earlier context.
+        new_messages.push_back(std::move(summary_message));
+        for (const auto& message : messages) {
+            new_messages.push_back(message);
+        }
+    } else {
+        // "replace": drop everything except the tail keep_last messages
+        // and put the summary at the head.  Guaranteed original_count >
+        // keep_last (checked above) so this arithmetic is safe.
+        new_messages.push_back(std::move(summary_message));
+        const size_t drop_count = original_count - keep_last;
+        for (size_t index = drop_count; index < original_count; ++index) {
+            new_messages.push_back(messages[index]);
+        }
+    }
+    const size_t new_count = new_messages.size();
+    document["messages"] = new_messages;
+    document["messageCount"] = new_count;
+    document["savedAt"] = now;
+    status = save(path, document);
+    if (status != SAO_AI_EDITOR_OK) {
+        return status;
+    }
+    result = Json{{"id", std::string(conversation_id)},
+                  {"originalMessageCount", original_count},
+                  {"newMessageCount", new_count},
+                  {"summaryLength", summary.size()},
+                  {"summary", std::string(summary)},
+                  {"compactedAt", now},
+                  {"noop", false}};
+    return SAO_AI_EDITOR_OK;
+}
+
 int32_t ConversationStore::remove(std::string_view conversation_id,
                                   Json& result) const {
     std::filesystem::path path;
