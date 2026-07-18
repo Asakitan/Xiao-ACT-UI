@@ -38,6 +38,7 @@
 #include "sao_plugins/sao_status.h"
 #include "sao/plugins/loader/plugin_registry.h"
 #include "sao/plugins/loader/plugin_manifest.h"
+#include "sao/plugins/loader/entity_provider.h"
 #include "sao/plugins/loader/loader_status.h"
 
 namespace sao::plugins::loader {
@@ -56,6 +57,8 @@ struct native_plugin_descriptor {
     uint32_t capability_count;
     const char* const* capabilities;
     const char* plugin_version;
+    uint32_t entity_provider_count;
+    const native_entity_provider_descriptor* entity_providers;
 };
 
 using native_plugin_query_fn = int32_t(SAO_PLUGINS_CALL*)(
@@ -74,6 +77,8 @@ enum class lifecycle_state : uint8_t {
     unloading,        // unload_plugin 进行中 (等 worker 停车)
     unloaded,         // 完全卸载, 待 GC / 待 refresh
     failed,           // 加载失败 (last_error 非空), 达 max_failures 后自动 disabled
+    enabling,         // on_enable 正在执行，拒绝并发 lifecycle 转换
+    disabling,        // provider rundown / on_disable 正在执行
 };
 
 // 生命周期事件 (对齐 Python 平台通过 event_bus 发布的 "plugin_lifecycle" topic)
@@ -90,6 +95,8 @@ enum class lifecycle_event : uint8_t {
     unloaded,           // unload_plugin 成功
     unload_blocked,     // on_unload 返回 false, 等 worker
     forgotten,          // forget_plugin (从注册表移除)
+    unload_failed,
+    disable_failed,
 };
 
 // 事件回调 (由平台侧订阅, 用于 UI 更新)

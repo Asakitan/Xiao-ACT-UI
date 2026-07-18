@@ -2,6 +2,7 @@
 #include "sao/plugins/loader/plugin_deps.h"
 #include "sao/plugins/loader/plugin_install.h"
 #include "sao/plugins/loader/plugin_registry.h"
+#include "entity_provider_internal.h"
 #include "plugin_internal.h"
 
 #include <algorithm>
@@ -95,6 +96,7 @@ struct plugin_context_s {
     std::vector<json> recent_events;
     std::unordered_map<std::string, void*> engines;
     std::unordered_map<std::string, data_source_record> data_sources;
+    std::vector<std::shared_ptr<entity_provider_state>> entity_providers;
 };
 
 namespace {
@@ -124,6 +126,75 @@ void plugin_context_request_stop(plugin_context_t* ctx) noexcept {
     if (ctx != nullptr) ctx->stop_requested.store(true);
 }
 
+void plugin_context_clear_stop(plugin_context_t* ctx) noexcept {
+    if (ctx != nullptr) ctx->stop_requested.store(false);
+}
+
+bool plugin_context_entity_provider_is_current_thread(
+    plugin_context_t* ctx) noexcept {
+    if (ctx == nullptr) return false;
+    try {
+        std::lock_guard lock(ctx->mutex);
+        return entity_provider_is_current_thread(ctx->entity_providers);
+    } catch (...) {
+        return true;
+    }
+}
+
+int32_t plugin_context_quiesce_entity_providers(plugin_context_t* ctx) noexcept {
+    if (ctx == nullptr) return SAO_OK;
+    try {
+        std::vector<std::shared_ptr<entity_provider_state>> providers;
+        {
+            std::lock_guard lock(ctx->mutex);
+            providers = ctx->entity_providers;
+        }
+        return deactivate_entity_providers(providers);
+    } catch (...) {
+        return SAO_ERR_OS_CALL_FAILED;
+    }
+}
+
+int32_t plugin_context_resume_entity_providers(plugin_context_t* ctx) noexcept {
+    if (ctx == nullptr) return SAO_ERR_INVALID_ARGUMENT;
+    try {
+        std::vector<std::shared_ptr<entity_provider_state>> providers;
+        {
+            std::lock_guard lock(ctx->mutex);
+            providers = ctx->entity_providers;
+        }
+        return activate_entity_providers(providers);
+    } catch (...) {
+        return SAO_ERR_OS_CALL_FAILED;
+    }
+}
+
+int32_t plugin_context_destroy(plugin_context_t* ctx) noexcept {
+    if (ctx == nullptr) return SAO_OK;
+    if (plugin_context_entity_provider_is_current_thread(ctx)) {
+        return SAO_PLUGINS_ERR_BUSY;
+    }
+    try {
+        std::vector<std::shared_ptr<entity_provider_state>> providers;
+        {
+            std::lock_guard lock(ctx->mutex);
+            providers = ctx->entity_providers;
+        }
+        const int32_t status = destroy_entity_providers(providers);
+        if (status != SAO_OK) return status;
+        {
+            std::lock_guard plugin_lock(ctx->plugin_owner->mutex);
+            if (ctx->plugin_owner->context == ctx) {
+                ctx->plugin_owner->context = nullptr;
+            }
+        }
+        delete ctx;
+        return SAO_OK;
+    } catch (...) {
+        return SAO_ERR_OS_CALL_FAILED;
+    }
+}
+
 extern "C" SAO_PLUGINS_API plugin_context_t* SAO_PLUGINS_CALL
 sao_plugins_ctx_create(plugin_handle_t plugin) {
     const auto retained = retain_plugin(plugin);
@@ -143,7 +214,12 @@ sao_plugins_ctx_create(plugin_handle_t plugin) {
 
 extern "C" SAO_PLUGINS_API void SAO_PLUGINS_CALL
 sao_plugins_ctx_destroy(plugin_context_t* ctx) {
-    delete ctx;
+    if (ctx == nullptr) return;
+    {
+        std::lock_guard plugin_lock(ctx->plugin_owner->mutex);
+        if (ctx->plugin_owner->context == ctx) return;
+    }
+    (void)plugin_context_destroy(ctx);
 }
 
 extern "C" SAO_PLUGINS_API const char* SAO_PLUGINS_CALL
@@ -416,6 +492,45 @@ sao_plugins_ctx_register_data_source(plugin_context_t* ctx, const char* source_i
         ctx->data_sources[source_id_utf8] = {start, stop, user_data};
         return SAO_OK;
     } catch (...) {
+        return SAO_ERR_OS_CALL_FAILED;
+    }
+}
+
+int32_t plugin_context_register_entity_providers(
+    plugin_context_t* ctx,
+    const native_entity_provider_descriptor* providers,
+    size_t count) noexcept {
+    if (ctx == nullptr || (count > 0 && providers == nullptr)) {
+        return SAO_ERR_INVALID_ARGUMENT;
+    }
+    constexpr size_t kMaximumProvidersPerPlugin = 256;
+    if (count > kMaximumProvidersPerPlugin) return SAO_ERR_INVALID_ARGUMENT;
+    std::vector<std::shared_ptr<entity_provider_state>> registered;
+    try {
+        registered.reserve(count);
+        for (size_t index = 0; index < count; ++index) {
+            const auto& descriptor = providers[index];
+            if (descriptor.struct_size < sizeof(native_entity_provider_descriptor)) {
+                (void)destroy_entity_providers(registered);
+                return SAO_ERR_INVALID_ARGUMENT;
+            }
+            std::shared_ptr<entity_provider_state> provider;
+            const int32_t status = register_entity_provider(
+                ctx->plugin_owner, ctx->plugin_id,
+                descriptor.provider_id_utf8, descriptor.snapshot,
+                descriptor.action_handler, descriptor.user_data, provider);
+            if (status != SAO_OK) {
+                (void)destroy_entity_providers(registered);
+                return status;
+            }
+            registered.push_back(std::move(provider));
+        }
+        std::lock_guard lock(ctx->mutex);
+        ctx->entity_providers.insert(ctx->entity_providers.end(),
+                                     registered.begin(), registered.end());
+        return SAO_OK;
+    } catch (...) {
+        (void)destroy_entity_providers(registered);
         return SAO_ERR_OS_CALL_FAILED;
     }
 }

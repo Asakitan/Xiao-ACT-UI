@@ -2,6 +2,7 @@
 # 对齐 Python: act_platform/plugins.py 里 PluginManager + 相关辅助。
 
 add_library(sao_plugins_loader STATIC
+    src/entity_provider.cpp
     src/plugin_manifest.cpp
     src/plugin_registry.cpp
     src/plugin_scanner.cpp
@@ -18,7 +19,7 @@ target_include_directories(sao_plugins_loader PUBLIC
     $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/../include>
 )
 
-target_compile_features(sao_plugins_loader PUBLIC cxx_std_17)
+target_compile_features(sao_plugins_loader PUBLIC cxx_std_20)
 target_compile_definitions(sao_plugins_loader PRIVATE SAO_PLUGINS_BUILDING_DLL)
 if (MSVC)
     target_compile_definitions(sao_plugins_loader PRIVATE
