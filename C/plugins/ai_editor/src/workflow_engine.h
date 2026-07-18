@@ -176,6 +176,15 @@ public:
         const std::filesystem::path& history_root,
         std::string_view execution_id);
 
+    // Publicly reusable prompt interpolator — swaps {{name}} against
+    // `vars` in-place using the same rules run_loop applies before
+    // handing prompts to the LLM.  Exposed so workflow.dry_run (and any
+    // future preview surface) can share the exact substitution logic
+    // without duplicating it and drifting.
+    static std::string interpolate_with(
+        std::string_view text,
+        const std::unordered_map<std::string, std::string>& vars);
+
 private:
     struct GroupBatch {
         std::vector<size_t> indices;
@@ -199,9 +208,6 @@ private:
         std::string& out_content,
         size_t step_index = 0);
     std::string interpolate(std::string_view text) const;
-    static std::string interpolate_with(
-        std::string_view text,
-        const std::unordered_map<std::string, std::string>& vars);
     bool wait_for_confirmation(const WorkflowStep& step);
 
     std::string id_;

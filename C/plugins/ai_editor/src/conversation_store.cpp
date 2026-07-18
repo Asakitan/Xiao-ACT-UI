@@ -33,18 +33,69 @@ std::string next_id() {
     return buffer;
 }
 
+// Normalise a stored `tags` value into a de-duplicated string list.  Preserves
+// first-occurrence order so the on-disk array stays stable across reads/writes.
+// Non-string entries are dropped rather than surfaced as an error — legacy
+// documents that never had the field return an empty vector.
+std::vector<std::string> read_tags(const Json& document) {
+    std::vector<std::string> tags;
+    if (!document.contains("tags") || !document["tags"].is_array()) {
+        return tags;
+    }
+    tags.reserve(document["tags"].size());
+    for (const auto& tag : document["tags"]) {
+        if (!tag.is_string()) {
+            continue;
+        }
+        std::string value = tag.get<std::string>();
+        if (value.empty()) {
+            continue;
+        }
+        if (std::find(tags.begin(), tags.end(), value) != tags.end()) {
+            continue;
+        }
+        tags.push_back(std::move(value));
+    }
+    return tags;
+}
+
+Json tags_to_json(const std::vector<std::string>& tags) {
+    Json array = Json::array();
+    for (const auto& tag : tags) {
+        array.push_back(tag);
+    }
+    return array;
+}
+
+// Reject tags that are empty or exceed 128 bytes.  UTF-8 non-empty strings are
+// otherwise accepted verbatim — the docstring on set_tags spells out the
+// permissive char rule (CJK + [A-Za-z0-9_-]) but we lean on "any non-empty
+// UTF-8 string" to keep the surface simple and let the UI layer enforce
+// stricter conventions if it wants to.
+bool tag_string_valid(std::string_view value) {
+    if (value.empty()) {
+        return false;
+    }
+    if (value.size() > 128) {
+        return false;
+    }
+    return true;
+}
+
 Json summary_of(const Json& document) {
     // `pinned` was added after the initial conversation shape shipped, so we
     // treat a missing field as false rather than rejecting the document —
     // otherwise older on-disk conversations would silently disappear from
-    // the sidebar.
+    // the sidebar.  `tags` is likewise a later addition and defaults to an
+    // empty array so callers can rely on the field being present.
     return Json{{"id", document.value("id", "")},
                 {"title", document.value("title", "Untitled")},
                 {"model", document.value("model", "")},
                 {"scope", document.value("scope", "workspace")},
                 {"savedAt", document.value("savedAt", int64_t{0})},
                 {"messageCount", document.value("messageCount", 0U)},
-                {"pinned", document.value("pinned", false)}};
+                {"pinned", document.value("pinned", false)},
+                {"tags", tags_to_json(read_tags(document))}};
 }
 
 }  // namespace
@@ -73,6 +124,7 @@ int32_t ConversationStore::create(std::string_view title,
                   {"savedAt", unix_milliseconds()},
                   {"messageCount", 0},
                   {"pinned", false},
+                  {"tags", Json::array()},
                   {"messages", Json::array()}};
     const auto path = scopes_.history_root(scope) /
                       (utf8_to_wide(id) + L".json");
@@ -125,6 +177,12 @@ int32_t ConversationStore::get(std::string_view conversation_id,
     if (!result.contains("pinned") || !result["pinned"].is_boolean()) {
         result["pinned"] = false;
     }
+    // `tags` was added after the initial shape shipped; legacy documents
+    // surface as an empty array so callers can always index into result["tags"].
+    // We also normalise malformed entries (non-string / duplicate) through
+    // read_tags so external editors that hand-poke the JSON cannot smuggle
+    // garbage into the persisted set on the next save().
+    result["tags"] = tags_to_json(read_tags(result));
     return SAO_AI_EDITOR_OK;
 }
 
@@ -433,6 +491,11 @@ int32_t ConversationStore::import_conversation(const Json& conversation,
     if (!document.contains("pinned") || !document["pinned"].is_boolean()) {
         document["pinned"] = false;
     }
+    // Normalise incoming tags through the same de-duplication path used by
+    // set_tags so hand-crafted export payloads cannot smuggle empty strings
+    // or repeats onto disk.  Missing / non-array `tags` becomes an empty
+    // list so downstream code can always index into the field.
+    document["tags"] = tags_to_json(read_tags(document));
     // Determine existing location (workspace or system).
     std::filesystem::path existing_path;
     const int32_t locate_status = locate(id, existing_path);
@@ -498,6 +561,10 @@ int32_t ConversationStore::branch(std::string_view source_id,
                        " (branch)";
     }
     const int64_t now = unix_milliseconds();
+    // Branched documents inherit tags from the source — users typically want
+    // to filter both halves of a fork under the same tag(s) without having to
+    // re-apply them by hand.  read_tags() collapses duplicates + strips any
+    // legacy junk so the new record starts from a clean set.
     Json document{{"id", new_id},
                   {"title", branch_title},
                   {"systemPrompt",
@@ -507,6 +574,7 @@ int32_t ConversationStore::branch(std::string_view source_id,
                   {"savedAt", now},
                   {"messageCount", branched_messages.size()},
                   {"pinned", false},
+                  {"tags", tags_to_json(read_tags(source))},
                   {"messages", branched_messages}};
     const auto path = scopes_.history_root(scope) /
                       (utf8_to_wide(new_id) + L".json");
@@ -586,6 +654,18 @@ int32_t ConversationStore::merge(const std::vector<std::string>& source_ids,
     const std::string merged_title = title.empty()
                                           ? (first_title + " (merged)")
                                           : std::string(title);
+    // Union tag sets from every source, preserving first-seen order so the
+    // merged conversation surfaces under any category any input belonged to.
+    // Duplicates across sources collapse into a single entry.
+    std::vector<std::string> merged_tags;
+    for (const auto& source : sources) {
+        for (auto& tag : read_tags(source)) {
+            if (std::find(merged_tags.begin(), merged_tags.end(), tag) ==
+                merged_tags.end()) {
+                merged_tags.push_back(std::move(tag));
+            }
+        }
+    }
     const std::string new_id = next_id();
     const int64_t now = unix_milliseconds();
     Json document{{"id", new_id},
@@ -598,6 +678,7 @@ int32_t ConversationStore::merge(const std::vector<std::string>& source_ids,
                   {"savedAt", now},
                   {"messageCount", merged_messages.size()},
                   {"pinned", false},
+                  {"tags", tags_to_json(merged_tags)},
                   {"messages", merged_messages}};
     const auto path = scopes_.history_root(scope) /
                       (utf8_to_wide(new_id) + L".json");
@@ -667,6 +748,10 @@ int32_t ConversationStore::split(std::string_view source_id,
     // inheriting model / systemPrompt from the source so downstream chat
     // continues to work.  We build it first so a save failure short-
     // circuits before we touch the source file.
+    // Both halves inherit tags from the source so filtered views still cover
+    // the entire split — otherwise splitting a "review" conversation would
+    // silently drop the second half from the review filter.
+    const Json inherited_tags = tags_to_json(read_tags(source));
     const std::string after_id = next_id();
     Json after_document{{"id", after_id},
                         {"title", resolved_title_after},
@@ -677,6 +762,7 @@ int32_t ConversationStore::split(std::string_view source_id,
                         {"savedAt", now},
                         {"messageCount", after_messages.size()},
                         {"pinned", false},
+                        {"tags", inherited_tags},
                         {"messages", after_messages}};
     const auto after_path = scopes_.history_root(scope) /
                              (utf8_to_wide(after_id) + L".json");
@@ -702,6 +788,7 @@ int32_t ConversationStore::split(std::string_view source_id,
                              {"savedAt", now},
                              {"messageCount", before_messages.size()},
                              {"pinned", false},
+                             {"tags", inherited_tags},
                              {"messages", before_messages}};
         const auto before_path = scopes_.history_root(scope) /
                                   (utf8_to_wide(before_id) + L".json");
@@ -1014,6 +1101,261 @@ int32_t ConversationStore::set_pinned(std::string_view conversation_id,
     }
     result = Json{{"id", std::string(conversation_id)},
                   {"pinned", pinned}};
+    return SAO_AI_EDITOR_OK;
+}
+
+int32_t ConversationStore::set_tags(
+    std::string_view conversation_id,
+    const std::vector<std::string>& add_tags,
+    const std::vector<std::string>& remove_tags,
+    Json& result) const {
+    // Validate up front so a bad tag never touches disk.  An empty add+remove
+    // is deliberately allowed — the method doubles as a "return current tags"
+    // primitive when both vectors are empty (see docstring).
+    for (const auto& tag : add_tags) {
+        if (!tag_string_valid(tag)) {
+            return SAO_AI_EDITOR_ERR_INVALID_ARGUMENT;
+        }
+    }
+    for (const auto& tag : remove_tags) {
+        if (!tag_string_valid(tag)) {
+            return SAO_AI_EDITOR_ERR_INVALID_ARGUMENT;
+        }
+    }
+    std::filesystem::path path;
+    int32_t status = locate(conversation_id, path);
+    if (status != SAO_AI_EDITOR_OK) {
+        return status;
+    }
+    Json document;
+    status = get(conversation_id, document);
+    if (status != SAO_AI_EDITOR_OK) {
+        return status;
+    }
+    // Start from the normalised in-memory view get() built (already de-dup'd
+    // and legacy-safe), then apply removes before adds so a caller who passes
+    // the same value in both lists still ends up with the tag present.
+    std::vector<std::string> tags = read_tags(document);
+    if (!remove_tags.empty()) {
+        tags.erase(
+            std::remove_if(tags.begin(), tags.end(),
+                           [&remove_tags](const std::string& tag) {
+                               return std::find(remove_tags.begin(),
+                                                remove_tags.end(),
+                                                tag) != remove_tags.end();
+                           }),
+            tags.end());
+    }
+    for (const auto& tag : add_tags) {
+        if (std::find(tags.begin(), tags.end(), tag) == tags.end()) {
+            tags.push_back(tag);
+        }
+    }
+    // Only rewrite the file when tags changed relative to what was on disk;
+    // otherwise the no-op path (both vectors empty, or add == existing) leaves
+    // savedAt / the file mtime untouched to match the set_pinned semantics.
+    const std::vector<std::string> previous = read_tags(document);
+    if (tags != previous) {
+        document["tags"] = tags_to_json(tags);
+        status = save(path, document);
+        if (status != SAO_AI_EDITOR_OK) {
+            return status;
+        }
+    }
+    result = Json{{"id", std::string(conversation_id)},
+                  {"tags", tags_to_json(tags)}};
+    return SAO_AI_EDITOR_OK;
+}
+
+int32_t ConversationStore::find_by_tag(const std::vector<std::string>& tags,
+                                       std::string_view scope,
+                                       uint32_t limit,
+                                       bool match_all,
+                                       Json& result) const {
+    if (scope != "all" && scope != "workspace" && scope != "system") {
+        return SAO_AI_EDITOR_ERR_INVALID_ARGUMENT;
+    }
+    if (tags.empty()) {
+        return SAO_AI_EDITOR_ERR_INVALID_ARGUMENT;
+    }
+    for (const auto& tag : tags) {
+        if (!tag_string_valid(tag)) {
+            return SAO_AI_EDITOR_ERR_INVALID_ARGUMENT;
+        }
+    }
+    limit = std::clamp(limit, 1U, 500U);
+    // De-duplicate the query tags so match_all doesn't require an
+    // impossible "contains X twice" semantic when the caller passes
+    // ["work", "work"].
+    std::vector<std::string> query_tags;
+    query_tags.reserve(tags.size());
+    for (const auto& tag : tags) {
+        if (std::find(query_tags.begin(), query_tags.end(), tag) ==
+            query_tags.end()) {
+            query_tags.push_back(tag);
+        }
+    }
+    struct Hit {
+        Json summary;
+        bool pinned;
+        int64_t saved_at;
+    };
+    std::vector<Hit> hits;
+    const std::vector<std::string_view> selected = scope == "all"
+        ? std::vector<std::string_view>{"workspace", "system"}
+        : std::vector<std::string_view>{scope};
+    for (const auto selected_scope : selected) {
+        const auto root = scopes_.history_root(selected_scope);
+        std::error_code error;
+        if (!std::filesystem::is_directory(root, error)) {
+            continue;
+        }
+        for (const auto& item :
+             std::filesystem::directory_iterator(root, error)) {
+            if (error) {
+                return SAO_AI_EDITOR_ERR_OS_CALL_FAILED;
+            }
+            std::error_code file_error;
+            if (!item.is_regular_file(file_error) ||
+                item.path().extension() != L".json") {
+                continue;
+            }
+            std::string text;
+            if (read_text_file(item.path(), kMaximumJsonBytes, text) !=
+                SAO_AI_EDITOR_OK) {
+                continue;
+            }
+            Json document = Json::parse(text, nullptr, false);
+            if (!document.is_object()) {
+                continue;
+            }
+            const std::vector<std::string> document_tags = read_tags(document);
+            bool matched = false;
+            if (match_all) {
+                matched = std::all_of(
+                    query_tags.begin(), query_tags.end(),
+                    [&document_tags](const std::string& query) {
+                        return std::find(document_tags.begin(),
+                                         document_tags.end(),
+                                         query) != document_tags.end();
+                    });
+            } else {
+                matched = std::any_of(
+                    query_tags.begin(), query_tags.end(),
+                    [&document_tags](const std::string& query) {
+                        return std::find(document_tags.begin(),
+                                         document_tags.end(),
+                                         query) != document_tags.end();
+                    });
+            }
+            if (!matched) {
+                continue;
+            }
+            Hit hit;
+            hit.pinned = document.value("pinned", false);
+            hit.saved_at = document.value("savedAt", int64_t{0});
+            hit.summary = Json{
+                {"id", document.value("id", "")},
+                {"title", document.value("title", "Untitled")},
+                {"tags", tags_to_json(document_tags)},
+                {"pinned", hit.pinned},
+                {"savedAt", hit.saved_at},
+                {"messageCount", document.value("messageCount", 0U)}};
+            hits.push_back(std::move(hit));
+        }
+    }
+    // Sort identically to list(): pinned first, then savedAt descending so
+    // the freshly-edited pinned entries surface at the top.
+    std::sort(hits.begin(), hits.end(),
+              [](const Hit& left, const Hit& right) {
+                  if (left.pinned != right.pinned) {
+                      return left.pinned && !right.pinned;
+                  }
+                  return left.saved_at > right.saved_at;
+              });
+    Json items = Json::array();
+    for (size_t index = 0;
+         index < hits.size() && index < static_cast<size_t>(limit); ++index) {
+        items.push_back(std::move(hits[index].summary));
+    }
+    const size_t total = hits.size();
+    result = Json{{"items", std::move(items)}, {"total", total}};
+    return SAO_AI_EDITOR_OK;
+}
+
+int32_t ConversationStore::list_tags_stats(std::string_view scope,
+                                            Json& result) const {
+    if (scope != "all" && scope != "workspace" && scope != "system") {
+        return SAO_AI_EDITOR_ERR_INVALID_ARGUMENT;
+    }
+    const std::vector<std::string_view> selected = scope == "all"
+        ? std::vector<std::string_view>{"workspace", "system"}
+        : std::vector<std::string_view>{scope};
+    // std::map keeps names sorted ascending which we use as the tie-breaker
+    // after count-descending; we snapshot the ids in insertion order so the
+    // per-tag `conversationIds` list mirrors the on-disk enumeration order.
+    struct Bucket {
+        uint64_t count = 0;
+        std::vector<std::string> conversation_ids;
+    };
+    std::map<std::string, Bucket> buckets;
+    for (const auto selected_scope : selected) {
+        const auto root = scopes_.history_root(selected_scope);
+        std::error_code error;
+        if (!std::filesystem::is_directory(root, error)) {
+            continue;
+        }
+        for (const auto& item :
+             std::filesystem::directory_iterator(root, error)) {
+            if (error) {
+                return SAO_AI_EDITOR_ERR_OS_CALL_FAILED;
+            }
+            std::error_code file_error;
+            if (!item.is_regular_file(file_error) ||
+                item.path().extension() != L".json") {
+                continue;
+            }
+            std::string text;
+            if (read_text_file(item.path(), kMaximumJsonBytes, text) !=
+                SAO_AI_EDITOR_OK) {
+                continue;
+            }
+            Json document = Json::parse(text, nullptr, false);
+            if (!document.is_object()) {
+                continue;
+            }
+            const std::string document_id =
+                document.value("id", std::string{});
+            for (const auto& tag : read_tags(document)) {
+                auto& bucket = buckets[tag];
+                ++bucket.count;
+                if (!document_id.empty()) {
+                    bucket.conversation_ids.push_back(document_id);
+                }
+            }
+        }
+    }
+    // Sort by count descending, name ascending as tie-breaker.  std::map
+    // already gives us ascending name order so we can rely on stable_sort
+    // to preserve that for equal counts.
+    std::vector<std::pair<std::string, Bucket>> ordered(buckets.begin(),
+                                                          buckets.end());
+    std::stable_sort(ordered.begin(), ordered.end(),
+                     [](const auto& left, const auto& right) {
+                         return left.second.count > right.second.count;
+                     });
+    Json tags_array = Json::array();
+    for (const auto& entry : ordered) {
+        Json ids_array = Json::array();
+        for (const auto& id : entry.second.conversation_ids) {
+            ids_array.push_back(id);
+        }
+        tags_array.push_back(Json{{"name", entry.first},
+                                    {"count", entry.second.count},
+                                    {"conversationIds", std::move(ids_array)}});
+    }
+    const size_t total = ordered.size();
+    result = Json{{"tags", std::move(tags_array)}, {"total", total}};
     return SAO_AI_EDITOR_OK;
 }
 

@@ -50,6 +50,34 @@ public:
     int32_t remove(std::string_view id, const ScopeStore& scopes,
                    std::string_view scope, std::string_view plugin_id);
 
+    // Snapshot agent definitions for export.  Mirrors WorkflowRegistry::
+    // export_all so the dispatch layer can use the same envelope pattern.
+    // scope options:
+    //   "workspace" — user agents currently attached to the workspace scope
+    //   "system"    — user agents currently attached to the system scope
+    //   "builtin"   — the compiled-in built-in agents
+    //   "market"    — market-preset agents shipped alongside the plugin
+    //   "all"       — everything the registry knows about (workspace + system
+    //                 + plugin:* + builtin + market).  Only user agents keep
+    //                 their storage scope; built-ins retain scope="builtin"
+    //                 and market presets retain scope="market".
+    // Populates `result` with a sao-agents/1 envelope.
+    int32_t export_all(std::string_view scope, Json& result) const;
+
+    // Import a single agent definition into the target scope.  Mirrors
+    // WorkflowRegistry::import_workflow: honours `overwrite` on conflict,
+    // blocks any attempt to shadow a built-in, and yields the id that was
+    // actually written.  Callers stage two passes for atomicity (see
+    // dispatch_agent) so the store either fully accepts or fully rejects a
+    // batch.
+    int32_t import_agent(const Json& agent, std::string_view scope,
+                         std::string_view plugin_id, bool overwrite,
+                         const ScopeStore& scopes, std::string& out_id);
+
+    // Look up whether an id is currently owned by a built-in; used by the
+    // dispatch layer to fail atomically before any import writes happen.
+    bool is_builtin(std::string_view id) const;
+
     // Rule-based agent recommendation for a natural-language query.  See
     // agent_registry.cpp for the scoring rubric (name > when_to_use >
     // description > tools, phrase-match bonus, boost tags).  Fills `result`

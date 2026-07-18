@@ -3,6 +3,7 @@
 #include <windows.h>
 
 #include <algorithm>
+#include <chrono>
 #include <cstdint>
 #include <filesystem>
 #include <set>
@@ -390,6 +391,15 @@ std::string ascii_lowercase(std::string_view value) {
     return result;
 }
 
+// Wall-clock milliseconds since the Unix epoch — same helper the
+// workflow_engine / conversation_store copies use.  Kept file-local so we
+// don't drag <chrono> into the public header.
+int64_t unix_milliseconds() {
+    return std::chrono::duration_cast<std::chrono::milliseconds>(
+               std::chrono::system_clock::now().time_since_epoch())
+        .count();
+}
+
 // Detect which bucket an agent falls into for the include* filter flags.
 // Built-ins are the hard-coded five defined in this file.  Market presets
 // come from assets/ai_editor/agents/*.json (scope="market").  Anything else
@@ -570,6 +580,94 @@ int32_t AgentRegistry::remove(std::string_view id, const ScopeStore& scopes,
         return SAO_AI_EDITOR_ERR_PERMISSION_DENIED;
     }
     agents_.erase(found);
+    return SAO_AI_EDITOR_OK;
+}
+
+bool AgentRegistry::is_builtin(std::string_view id) const {
+    std::lock_guard<std::mutex> guard(mutex_);
+    const auto found = agents_.find(std::string(id));
+    return found != agents_.end() && found->second.builtin;
+}
+
+int32_t AgentRegistry::export_all(std::string_view scope,
+                                  Json& result) const {
+    if (scope != "workspace" && scope != "system" && scope != "all" &&
+        scope != "builtin" && scope != "market") {
+        return SAO_AI_EDITOR_ERR_INVALID_ARGUMENT;
+    }
+    Json agents = Json::array();
+    {
+        std::lock_guard<std::mutex> guard(mutex_);
+        for (const auto& [id, agent] : agents_) {
+            (void)id;
+            if (scope == "builtin") {
+                if (!agent.builtin) {
+                    continue;
+                }
+            } else if (scope == "market") {
+                // Market presets are stored with builtin=false + scope=="market"
+                // (see reload()).  Exclude everything else.
+                if (agent.builtin || agent.scope != "market") {
+                    continue;
+                }
+            } else if (scope == "workspace" || scope == "system") {
+                if (agent.builtin) {
+                    continue;
+                }
+                // Match the raw scope key stored on the definition; for
+                // plugin-scoped items this is "plugin:<id>" so a plain
+                // "workspace"/"system" export skips them, which mirrors
+                // workflow.export scope semantics.
+                if (agent.scope != scope) {
+                    continue;
+                }
+            }
+            // scope == "all" → include everything (builtin + market + user +
+            // plugin:*).
+            agents.push_back(agent.to_json());
+        }
+    }
+    const size_t count = agents.size();
+    result = Json{{"format", "sao-agents/1"},
+                  {"agents", std::move(agents)},
+                  {"count", count},
+                  {"exportedAt", unix_milliseconds()}};
+    return SAO_AI_EDITOR_OK;
+}
+
+int32_t AgentRegistry::import_agent(const Json& agent, std::string_view scope,
+                                    std::string_view plugin_id, bool overwrite,
+                                    const ScopeStore& scopes,
+                                    std::string& out_id) {
+    if (!agent.is_object()) {
+        return SAO_AI_EDITOR_ERR_INVALID_ARGUMENT;
+    }
+    AgentDefinition definition = AgentDefinition::from_json(agent);
+    if (!valid_simple_id(definition.id) || definition.name.empty()) {
+        return SAO_AI_EDITOR_ERR_INVALID_ARGUMENT;
+    }
+    // Built-in ids are reserved — importing over them would either replace
+    // the compile-time definition on next reload or silently promote a user
+    // copy to look like a built-in.  Refuse both cases regardless of
+    // `overwrite`.
+    {
+        std::lock_guard<std::mutex> guard(mutex_);
+        const auto existing = agents_.find(definition.id);
+        if (existing != agents_.end() && existing->second.builtin) {
+            return SAO_AI_EDITOR_ERR_PERMISSION_DENIED;
+        }
+        if (existing != agents_.end() && !overwrite) {
+            return SAO_AI_EDITOR_ERR_INVALID_ARGUMENT;
+        }
+    }
+    // Drop transient flags so the on-disk payload matches what
+    // AgentRegistry::save produces.
+    definition.builtin = false;
+    const int32_t status = save(definition, scopes, scope, plugin_id);
+    if (status != SAO_AI_EDITOR_OK) {
+        return status;
+    }
+    out_id = definition.id;
     return SAO_AI_EDITOR_OK;
 }
 

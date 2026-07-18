@@ -3550,6 +3550,287 @@ TEST_CASE("AI Editor workflow.import refuses to overwrite built-in workflows",
     REQUIRE(fetched["name"] == "Review & Fix");
 }
 
+TEST_CASE("AI Editor agents.export packages a single agent with sao-agent/1 "
+          "envelope",
+          "[plugins][ai_editor][native][agents][export]") {
+    RuntimeFixture fixture;
+    auto runtime = fixture.get();
+
+    // Seed a workspace-scoped user agent so scope="workspace" has a target
+    // beyond the built-ins to enumerate.
+    const Json agent_json{
+        {"id", "custom-export-agent"},
+        {"name", "Custom Export Agent"},
+        {"description", "Test agent export"},
+        {"system_prompt", "You export agents."},
+        {"tools", Json::array({"readFile", "listFiles"})},
+        {"model", "test-model"},
+        {"icon", "\xF0\x9F\x93\xA6"},
+        {"when_to_use", "When exercising agents.export in tests"}};
+    REQUIRE(dispatch(runtime, "agents.save_def",
+                     {{"scope", "workspace"}, {"agent", agent_json}})
+                .contains("result"));
+
+    // Missing both id and scope → invalid.
+    const Json missing =
+        dispatch(runtime, "agents.export", Json::object());
+    REQUIRE(missing["error"]["data"]["status"] ==
+            SAO_AI_EDITOR_ERR_INVALID_ARGUMENT);
+
+    // Providing both id and scope → invalid (mutually exclusive).
+    const Json both = dispatch(runtime, "agents.export",
+                                {{"id", "custom-export-agent"},
+                                 {"scope", "workspace"}});
+    REQUIRE(both["error"]["data"]["status"] ==
+            SAO_AI_EDITOR_ERR_INVALID_ARGUMENT);
+
+    const Json exported = dispatch(runtime, "agents.export",
+                                    {{"id", "custom-export-agent"}});
+    REQUIRE(exported.contains("result"));
+    REQUIRE(exported["result"]["format"] == "sao-agent/1");
+    REQUIRE(exported["result"]["exportedAt"].is_number());
+    REQUIRE(exported["result"]["agent"]["id"] == "custom-export-agent");
+    REQUIRE(exported["result"]["agent"]["name"] == "Custom Export Agent");
+    REQUIRE(exported["result"]["agent"]["tools"].size() == 2);
+    REQUIRE(exported["result"]["agent"]["system_prompt"] ==
+            "You export agents.");
+    REQUIRE(exported["result"]["agent"]["when_to_use"] ==
+            "When exercising agents.export in tests");
+
+    // Exporting a compile-time built-in id must succeed and preserve the
+    // builtin flag so downstream tooling can distinguish the source.
+    const Json builtin_single =
+        dispatch(runtime, "agents.export", {{"id", "code-reviewer"}});
+    REQUIRE(builtin_single["result"]["format"] == "sao-agent/1");
+    REQUIRE(builtin_single["result"]["agent"]["builtin"] == true);
+    REQUIRE(builtin_single["result"]["agent"]["id"] == "code-reviewer");
+
+    // Unknown id → NOT_FOUND propagated as protocol error.
+    const Json unknown = dispatch(runtime, "agents.export",
+                                   {{"id", "agent-nope-nope"}});
+    REQUIRE(unknown.contains("error"));
+
+    // scope-string of an unsupported value must reject before touching the
+    // store — parity with workflow.export.
+    const Json bad_scope =
+        dispatch(runtime, "agents.export", {{"scope", "no-such-scope"}});
+    REQUIRE(bad_scope["error"]["data"]["status"] ==
+            SAO_AI_EDITOR_ERR_INVALID_ARGUMENT);
+}
+
+TEST_CASE("AI Editor agents.export scope=all returns sao-agents/1 envelope "
+          "and honours scope filters",
+          "[plugins][ai_editor][native][agents][export]") {
+    RuntimeFixture fixture;
+    auto runtime = fixture.get();
+
+    // Seed one workspace-scoped agent so the scope filters have something
+    // observable beyond the built-ins.
+    const Json workspace_agent{
+        {"id", "ws-batch-agent"},
+        {"name", "Workspace Batch Agent"},
+        {"description", "Batch export target"},
+        {"system_prompt", "You batch export."},
+        {"tools", Json::array({"readFile"})}};
+    REQUIRE(dispatch(runtime, "agents.save_def",
+                     {{"scope", "workspace"}, {"agent", workspace_agent}})
+                .contains("result"));
+
+    // scope=all surfaces workspace agents alongside the built-ins.
+    const Json all = dispatch(runtime, "agents.export", {{"scope", "all"}});
+    REQUIRE(all["result"]["format"] == "sao-agents/1");
+    REQUIRE(all["result"]["count"].get<int>() >= 6);  // 5 built-ins + 1 user
+    bool saw_workspace = false;
+    bool saw_builtin = false;
+    for (const auto& item : all["result"]["agents"]) {
+        const std::string id = item.value("id", "");
+        if (id == "ws-batch-agent") {
+            saw_workspace = true;
+            REQUIRE(item["builtin"] == false);
+        } else if (id == "code-reviewer") {
+            saw_builtin = true;
+            REQUIRE(item["builtin"] == true);
+        }
+    }
+    REQUIRE(saw_workspace);
+    REQUIRE(saw_builtin);
+
+    // scope=workspace omits built-ins even though they live in the same
+    // registry map.
+    const Json ws =
+        dispatch(runtime, "agents.export", {{"scope", "workspace"}});
+    REQUIRE(ws["result"]["format"] == "sao-agents/1");
+    REQUIRE(ws["result"]["count"] == 1);
+    REQUIRE(ws["result"]["agents"][0]["id"] == "ws-batch-agent");
+
+    // scope=builtin walks the compile-time list only.
+    const Json builtin_export =
+        dispatch(runtime, "agents.export", {{"scope", "builtin"}});
+    REQUIRE(builtin_export["result"]["format"] == "sao-agents/1");
+    REQUIRE(builtin_export["result"]["count"].get<int>() >= 5);
+    bool saw_code_reviewer = false;
+    for (const auto& item : builtin_export["result"]["agents"]) {
+        if (item.value("id", "") == "code-reviewer") {
+            saw_code_reviewer = true;
+            REQUIRE(item["builtin"] == true);
+        }
+    }
+    REQUIRE(saw_code_reviewer);
+
+    // scope=system has no seed agents in this fixture → count 0 but a
+    // well-formed envelope.
+    const Json sys =
+        dispatch(runtime, "agents.export", {{"scope", "system"}});
+    REQUIRE(sys["result"]["format"] == "sao-agents/1");
+    REQUIRE(sys["result"]["count"] == 0);
+}
+
+TEST_CASE("AI Editor agents.import round-trips with overwrite semantics",
+          "[plugins][ai_editor][native][agents][import]") {
+    RuntimeFixture fixture;
+    auto runtime = fixture.get();
+
+    const Json agent_json{
+        {"id", "custom-import-agent"},
+        {"name", "Custom Import Agent"},
+        {"description", "Seed"},
+        {"system_prompt", "You import."},
+        {"tools", Json::array({"readFile"})}};
+    REQUIRE(dispatch(runtime, "agents.save_def",
+                     {{"scope", "workspace"}, {"agent", agent_json}})
+                .contains("result"));
+
+    const Json exported = dispatch(runtime, "agents.export",
+                                    {{"id", "custom-import-agent"}})["result"];
+    REQUIRE(exported["format"] == "sao-agent/1");
+
+    // Unknown format → invalid.
+    const Json bogus = dispatch(runtime, "agents.import",
+                                 {{"payload", {{"format", "not-real/1"}}}});
+    REQUIRE(bogus["error"]["data"]["status"] ==
+            SAO_AI_EDITOR_ERR_INVALID_ARGUMENT);
+
+    // Conflict with overwrite=false → rejected atomically, imported=0.
+    const Json conflict =
+        dispatch(runtime, "agents.import",
+                 {{"payload", exported},
+                  {"scope", "workspace"},
+                  {"overwrite", false}});
+    REQUIRE(conflict.contains("error"));
+    REQUIRE(conflict["error"]["data"]["status"] ==
+            SAO_AI_EDITOR_ERR_INVALID_ARGUMENT);
+    REQUIRE(conflict["error"]["data"]["details"]["imported"] == 0);
+    REQUIRE(conflict["error"]["data"]["details"]["conflicts"].size() == 1);
+    REQUIRE(conflict["error"]["data"]["details"]["conflicts"][0] ==
+            "custom-import-agent");
+
+    // Overwrite=true replaces the definition; new description wins.
+    Json rewritten = exported;
+    rewritten["agent"]["description"] = "Rewritten!";
+    rewritten["agent"]["system_prompt"] = "You import v2.";
+    rewritten["agent"]["tools"] =
+        Json::array({"readFile", "searchFiles", "editFile"});
+    const Json overwrote = dispatch(runtime, "agents.import",
+                                     {{"payload", rewritten},
+                                      {"scope", "workspace"},
+                                      {"overwrite", true}});
+    REQUIRE(overwrote.contains("result"));
+    REQUIRE(overwrote["result"]["imported"] == 1);
+    REQUIRE(overwrote["result"]["assignedIds"][0] == "custom-import-agent");
+
+    const Json fetched = dispatch(runtime, "agents.get_def",
+                                   {{"id", "custom-import-agent"}});
+    REQUIRE(fetched["result"]["description"] == "Rewritten!");
+    REQUIRE(fetched["result"]["system_prompt"] == "You import v2.");
+    REQUIRE(fetched["result"]["tools"].size() == 3);
+
+    // Fresh id not present in store → imported without conflict.
+    Json fresh = exported;
+    fresh["agent"]["id"] = "custom-import-fresh";
+    fresh["agent"]["name"] = "Fresh Agent";
+    const Json fresh_result =
+        dispatch(runtime, "agents.import",
+                 {{"payload", fresh}, {"scope", "workspace"}});
+    REQUIRE(fresh_result.contains("result"));
+    REQUIRE(fresh_result["result"]["imported"] == 1);
+    REQUIRE(fresh_result["result"]["conflicts"].empty());
+    REQUIRE(fresh_result["result"]["assignedIds"][0] ==
+            "custom-import-fresh");
+
+    // Batch sao-agents/1 envelope carries both agents — verifies list path
+    // and confirms conflicts populate correctly when only some entries hit.
+    Json batch{{"format", "sao-agents/1"},
+                {"agents", Json::array()}};
+    batch["agents"].push_back(fresh["agent"]);  // existing (fresh) → conflict
+    Json brand_new = fresh["agent"];
+    brand_new["id"] = "custom-import-brand-new";
+    brand_new["name"] = "Brand New";
+    batch["agents"].push_back(brand_new);
+    const Json batch_conflict =
+        dispatch(runtime, "agents.import",
+                 {{"payload", batch},
+                  {"scope", "workspace"},
+                  {"overwrite", false}});
+    REQUIRE(batch_conflict.contains("error"));
+    REQUIRE(
+        batch_conflict["error"]["data"]["details"]["conflicts"].size() == 1);
+    REQUIRE(
+        batch_conflict["error"]["data"]["details"]["conflicts"][0] ==
+        "custom-import-fresh");
+
+    // Overwriting both accepts the whole batch atomically.
+    const Json batch_ok = dispatch(runtime, "agents.import",
+                                    {{"payload", batch},
+                                     {"scope", "workspace"},
+                                     {"overwrite", true}});
+    REQUIRE(batch_ok.contains("result"));
+    REQUIRE(batch_ok["result"]["imported"] == 2);
+    REQUIRE(batch_ok["result"]["assignedIds"].size() == 2);
+}
+
+TEST_CASE("AI Editor agents.import refuses to overwrite built-in agents",
+          "[plugins][ai_editor][native][agents][import]") {
+    RuntimeFixture fixture;
+    auto runtime = fixture.get();
+
+    // code-reviewer is a compile-time built-in; even overwrite=true must
+    // not shadow it via the on-disk registry.
+    Json envelope{
+        {"format", "sao-agent/1"},
+        {"agent", Json{{"id", "code-reviewer"},
+                        {"name", "Hijacked"},
+                        {"description", "Attacker payload"},
+                        {"system_prompt", "You are pwned."},
+                        {"tools", Json::array({"attackerTool"})}}}};
+
+    const Json overwrite_false =
+        dispatch(runtime, "agents.import",
+                 {{"payload", envelope},
+                  {"scope", "workspace"},
+                  {"overwrite", false}});
+    REQUIRE(overwrite_false.contains("error"));
+    REQUIRE(overwrite_false["error"]["data"]["status"] ==
+            SAO_AI_EDITOR_ERR_PERMISSION_DENIED);
+    REQUIRE(overwrite_false["error"]["data"]["details"]["imported"] == 0);
+    REQUIRE(overwrite_false["error"]["data"]["details"]["conflicts"][0] ==
+            "code-reviewer");
+
+    const Json overwrite_true =
+        dispatch(runtime, "agents.import",
+                 {{"payload", envelope},
+                  {"scope", "workspace"},
+                  {"overwrite", true}});
+    REQUIRE(overwrite_true.contains("error"));
+    REQUIRE(overwrite_true["error"]["data"]["status"] ==
+            SAO_AI_EDITOR_ERR_PERMISSION_DENIED);
+
+    // The compile-time definition must survive both attempts unchanged.
+    const Json fetched = dispatch(runtime, "agents.get_def",
+                                   {{"id", "code-reviewer"}})["result"];
+    REQUIRE(fetched["builtin"] == true);
+    REQUIRE(fetched["name"] == "Code Reviewer");
+}
+
 namespace {
 
 // Poll workflows.status until the execution reaches a terminal state
@@ -4072,6 +4353,198 @@ TEST_CASE("AI Editor workflow.retry rejects non-failed executions and "
     REQUIRE(empty_retry.contains("error"));
     REQUIRE(empty_retry["error"]["data"]["status"] ==
             SAO_AI_EDITOR_ERR_INVALID_ARGUMENT);
+}
+
+TEST_CASE("AI Editor workflow.dry_run previews review-and-fix steps with "
+          "interpolated prompts",
+          "[plugins][ai_editor][native][workflows][dry_run]") {
+    // No provider config needed — dry_run never touches the network.
+    // Built-in review-and-fix has two sequential steps: prompts reference
+    // {{input}} and {{review}} respectively.
+    RuntimeFixture fixture;
+    const Json response = dispatch(
+        fixture.get(), "workflow.dry_run",
+        {{"id", "review-and-fix"}, {"input", "some code"}});
+    REQUIRE(response.contains("result"));
+    const Json& preview = response["result"];
+    REQUIRE(preview["workflowId"] == "review-and-fix");
+    REQUIRE(preview["workflowName"] == "Review & Fix");
+    REQUIRE(preview["totalSteps"] == 2);
+    REQUIRE(preview["groups"].is_array());
+    REQUIRE(preview["groups"].size() == 2);
+    // Both steps carry empty group → each forms its own single-step batch.
+    REQUIRE(preview["groups"][0]["groupId"] == "");
+    REQUIRE(preview["groups"][0]["startStep"] == 0);
+    REQUIRE(preview["groups"][0]["endStep"] == 0);
+    REQUIRE(preview["groups"][0]["parallel"] == false);
+    REQUIRE(preview["groups"][1]["startStep"] == 1);
+    REQUIRE(preview["groups"][1]["endStep"] == 1);
+    REQUIRE(preview["groups"][1]["parallel"] == false);
+    REQUIRE(preview["preview"].size() == 2);
+    // Step 0 renders {{input}} against the caller-supplied "some code".
+    REQUIRE(preview["preview"][0]["stepIndex"] == 0);
+    REQUIRE(preview["preview"][0]["label"] == "Reviewing code");
+    REQUIRE(preview["preview"][0]["agent"] == "code-reviewer");
+    REQUIRE(preview["preview"][0]["outputVar"] == "review");
+    REQUIRE(preview["preview"][0]["group"] == "");
+    REQUIRE(preview["preview"][0]["requiresConfirmation"] == false);
+    const std::string rendered0 =
+        preview["preview"][0]["renderedPrompt"].get<std::string>();
+    REQUIRE(rendered0.find("some code") != std::string::npos);
+    REQUIRE(rendered0.find("{{input}}") == std::string::npos);
+    REQUIRE(preview["preview"][0]["willBeParallelWith"].is_array());
+    REQUIRE(preview["preview"][0]["willBeParallelWith"].empty());
+    // Step 1 sees a synthetic "<simulated: Reviewing code>" placeholder in
+    // place of {{review}} because no simulateOutputs entry overrides it.
+    const std::string rendered1 =
+        preview["preview"][1]["renderedPrompt"].get<std::string>();
+    REQUIRE(rendered1.find("{{review}}") == std::string::npos);
+    REQUIRE(rendered1.find("<simulated: Reviewing code>") != std::string::npos);
+    REQUIRE(preview["preview"][1]["outputVar"] == "fix");
+    // estimatedVariables lists the initial seed keys first, then output
+    // variables in step order.
+    REQUIRE(preview["estimatedVariables"].is_array());
+    std::vector<std::string> estimated;
+    for (const auto& item : preview["estimatedVariables"]) {
+        estimated.push_back(item.get<std::string>());
+    }
+    REQUIRE(estimated.size() >= 3);
+    REQUIRE(estimated[0] == "input");
+    REQUIRE(std::find(estimated.begin(), estimated.end(), "review") !=
+            estimated.end());
+    REQUIRE(std::find(estimated.begin(), estimated.end(), "fix") !=
+            estimated.end());
+}
+
+TEST_CASE("AI Editor workflow.dry_run simulateOutputs override flows into "
+          "later step prompts",
+          "[plugins][ai_editor][native][workflows][dry_run]") {
+    RuntimeFixture fixture;
+    const Json response = dispatch(
+        fixture.get(), "workflow.dry_run",
+        {{"id", "review-and-fix"},
+         {"input", "the source"},
+         {"simulateOutputs", {{"review", "The code has 3 bugs"}}}});
+    REQUIRE(response.contains("result"));
+    const Json& preview = response["result"];
+    // Step 1 must interpolate the caller's supplied review string, not the
+    // synthetic placeholder — that's the whole point of simulateOutputs.
+    const std::string rendered1 =
+        preview["preview"][1]["renderedPrompt"].get<std::string>();
+    REQUIRE(rendered1.find("The code has 3 bugs") != std::string::npos);
+    REQUIRE(rendered1.find("<simulated:") == std::string::npos);
+    REQUIRE(rendered1.find("{{review}}") == std::string::npos);
+    // Step 0's own {{input}} still resolves normally.
+    const std::string rendered0 =
+        preview["preview"][0]["renderedPrompt"].get<std::string>();
+    REQUIRE(rendered0.find("the source") != std::string::npos);
+
+    // A parallel group should surface willBeParallelWith cross-references
+    // and mark the group parallel=true.  Fresh workflow definition keeps
+    // this test independent from the built-in one above.
+    const Json parallel_wf{
+        {"id", "dry-run-parallel"},
+        {"name", "Dry Run Parallel Demo"},
+        {"steps",
+         Json::array(
+             {Json{{"agent", "default"},
+                    {"prompt", "left({{input}})"},
+                    {"output_var", "left"},
+                    {"group", "fan-out"},
+                    {"label", "Left branch"}},
+              Json{{"agent", "default"},
+                    {"prompt", "right({{input}})"},
+                    {"output_var", "right"},
+                    {"group", "fan-out"},
+                    {"label", "Right branch"},
+                    {"requires_confirmation", true}},
+              Json{{"agent", "default"},
+                    {"prompt", "join({{left}}|{{right}})"},
+                    {"output_var", "final"},
+                    {"label", "Join"}}})}};
+    REQUIRE(dispatch(fixture.get(), "workflows.save_def",
+                     {{"scope", "workspace"}, {"workflow", parallel_wf}})
+                .contains("result"));
+    const Json parallel_response = dispatch(
+        fixture.get(), "workflow.dry_run",
+        {{"id", "dry-run-parallel"}, {"input", "seed"}});
+    REQUIRE(parallel_response.contains("result"));
+    const Json& p = parallel_response["result"];
+    REQUIRE(p["totalSteps"] == 3);
+    REQUIRE(p["groups"].size() == 2);
+    REQUIRE(p["groups"][0]["groupId"] == "fan-out");
+    REQUIRE(p["groups"][0]["startStep"] == 0);
+    REQUIRE(p["groups"][0]["endStep"] == 1);
+    REQUIRE(p["groups"][0]["parallel"] == true);
+    REQUIRE(p["groups"][1]["parallel"] == false);
+    // Both parallel steps see the same pre-batch snapshot → each renders
+    // {{input}} against "seed" and lists its sibling in willBeParallelWith.
+    REQUIRE(p["preview"][0]["willBeParallelWith"].size() == 1);
+    REQUIRE(p["preview"][0]["willBeParallelWith"][0] == 1);
+    REQUIRE(p["preview"][1]["willBeParallelWith"].size() == 1);
+    REQUIRE(p["preview"][1]["willBeParallelWith"][0] == 0);
+    REQUIRE(p["preview"][1]["requiresConfirmation"] == true);
+    const std::string left_rendered =
+        p["preview"][0]["renderedPrompt"].get<std::string>();
+    const std::string right_rendered =
+        p["preview"][1]["renderedPrompt"].get<std::string>();
+    REQUIRE(left_rendered.find("left(seed)") != std::string::npos);
+    REQUIRE(right_rendered.find("right(seed)") != std::string::npos);
+    // Third step's join prompt sees synthetic placeholders for both
+    // parallel outputs — proves the batch committed together.
+    const std::string join_rendered =
+        p["preview"][2]["renderedPrompt"].get<std::string>();
+    REQUIRE(join_rendered.find("<simulated: Left branch>") !=
+            std::string::npos);
+    REQUIRE(join_rendered.find("<simulated: Right branch>") !=
+            std::string::npos);
+}
+
+TEST_CASE("AI Editor workflow.dry_run guards its arguments and reports "
+          "NOT_FOUND for unknown ids",
+          "[plugins][ai_editor][native][workflows][dry_run]") {
+    RuntimeFixture fixture;
+    // Missing id → INVALID_ARGUMENT.
+    const Json missing = dispatch(fixture.get(), "workflow.dry_run",
+                                    Json::object());
+    REQUIRE(missing.contains("error"));
+    REQUIRE(missing["error"]["data"]["status"] ==
+            SAO_AI_EDITOR_ERR_INVALID_ARGUMENT);
+
+    // Non-string id → INVALID_ARGUMENT.
+    const Json bad_id = dispatch(fixture.get(), "workflow.dry_run",
+                                   {{"id", 42}});
+    REQUIRE(bad_id.contains("error"));
+    REQUIRE(bad_id["error"]["data"]["status"] ==
+            SAO_AI_EDITOR_ERR_INVALID_ARGUMENT);
+
+    // Unknown workflow id → NOT_FOUND.
+    const Json unknown = dispatch(fixture.get(), "workflow.dry_run",
+                                    {{"id", "wf-does-not-exist"}});
+    REQUIRE(unknown.contains("error"));
+    REQUIRE(unknown["error"]["data"]["status"] ==
+            SAO_AI_EDITOR_ERR_NOT_FOUND);
+
+    // Empty-steps workflow → returns totalSteps=0 with empty preview.
+    const Json empty_wf{
+        {"id", "dry-run-empty"},
+        {"name", "Dry Run Empty"},
+        {"steps", Json::array()}};
+    REQUIRE(dispatch(fixture.get(), "workflows.save_def",
+                     {{"scope", "workspace"}, {"workflow", empty_wf}})
+                .contains("result"));
+    const Json empty_response = dispatch(fixture.get(), "workflow.dry_run",
+                                          {{"id", "dry-run-empty"},
+                                           {"input", "ignored"}});
+    REQUIRE(empty_response.contains("result"));
+    REQUIRE(empty_response["result"]["totalSteps"] == 0);
+    REQUIRE(empty_response["result"]["preview"].is_array());
+    REQUIRE(empty_response["result"]["preview"].empty());
+    REQUIRE(empty_response["result"]["groups"].is_array());
+    REQUIRE(empty_response["result"]["groups"].empty());
+    // estimatedVariables still surfaces the seed keys ("input" at least).
+    REQUIRE(empty_response["result"]["estimatedVariables"].is_array());
+    REQUIRE(empty_response["result"]["estimatedVariables"][0] == "input");
 }
 
 TEST_CASE("AI Editor conversation.branch forks a new conversation from "
@@ -6436,6 +6909,294 @@ TEST_CASE("conversation.stats aggregates totals, pinned, model + month buckets",
                                      {{"scope", "bogus"}});
     REQUIRE(bad_scope["error"]["data"]["status"] ==
             SAO_AI_EDITOR_ERR_INVALID_ARGUMENT);
+}
+
+TEST_CASE("conversation.tag and untag round-trip tag membership + reject junk",
+          "[plugins][ai_editor][native][storage][tag]") {
+    RuntimeFixture fixture;
+    auto runtime = fixture.get();
+    REQUIRE(dispatch(runtime, "runtime.initialize").contains("result"));
+
+    const std::string id = dispatch(runtime, "conversation.create",
+                                     {{"title", "Tagged"},
+                                      {"model", "m"},
+                                      {"scope", "workspace"}})["result"]["id"];
+
+    // Fresh conversation defaults to an empty tag array.
+    const Json created = dispatch(runtime, "conversation.get",
+                                   {{"id", id}})["result"];
+    REQUIRE(created.contains("tags"));
+    REQUIRE(created["tags"].is_array());
+    REQUIRE(created["tags"].empty());
+
+    // Add two tags — response echoes the full set, get() surfaces them, and
+    // duplicate adds collapse rather than creating repeats.
+    const Json tagged = dispatch(runtime, "conversation.tag",
+                                  {{"id", id},
+                                   {"tags", Json::array({"work", "review"})}})
+                             ["result"];
+    REQUIRE(tagged["id"] == id);
+    REQUIRE(tagged["tags"].is_array());
+    REQUIRE(tagged["tags"].size() == 2);
+    const std::vector<std::string> tag_list = {
+        tagged["tags"][0].get<std::string>(),
+        tagged["tags"][1].get<std::string>()};
+    REQUIRE(std::find(tag_list.begin(), tag_list.end(), "work") !=
+            tag_list.end());
+    REQUIRE(std::find(tag_list.begin(), tag_list.end(), "review") !=
+            tag_list.end());
+
+    // Re-tagging the same values is a no-op (still returns current tags).
+    const Json redundant = dispatch(
+        runtime, "conversation.tag",
+        {{"id", id}, {"tags", Json::array({"work", "work", "review"})}})
+                                  ["result"];
+    REQUIRE(redundant["tags"].size() == 2);
+
+    // get() persists tags across reads.
+    const Json fetched = dispatch(runtime, "conversation.get",
+                                   {{"id", id}})["result"];
+    REQUIRE(fetched["tags"].size() == 2);
+
+    // Untag removes just the entry passed in; the other stays.
+    const Json shrunk = dispatch(runtime, "conversation.untag",
+                                  {{"id", id},
+                                   {"tags", Json::array({"review"})}})
+                              ["result"];
+    REQUIRE(shrunk["tags"].size() == 1);
+    REQUIRE(shrunk["tags"][0] == "work");
+
+    // Untagging a value that is not present is a no-op — no error, current
+    // set is echoed back.
+    const Json noop = dispatch(runtime, "conversation.untag",
+                                {{"id", id},
+                                 {"tags", Json::array({"unknown"})}})
+                            ["result"];
+    REQUIRE(noop["tags"].size() == 1);
+    REQUIRE(noop["tags"][0] == "work");
+
+    // Empty tags array on either method is a no-op that still returns
+    // current tags (per docstring).
+    const Json empty_add = dispatch(runtime, "conversation.tag",
+                                     {{"id", id}, {"tags", Json::array()}})
+                                ["result"];
+    REQUIRE(empty_add["tags"].size() == 1);
+
+    // Missing id → NOT_FOUND, missing tags → INVALID_ARGUMENT.
+    const Json bad_id = dispatch(runtime, "conversation.tag",
+                                  {{"id", "conv-not-real"},
+                                   {"tags", Json::array({"x"})}});
+    REQUIRE(bad_id["error"]["data"]["status"] ==
+            SAO_AI_EDITOR_ERR_NOT_FOUND);
+    const Json missing_tags = dispatch(runtime, "conversation.tag",
+                                        {{"id", id}});
+    REQUIRE(missing_tags["error"]["data"]["status"] ==
+            SAO_AI_EDITOR_ERR_INVALID_ARGUMENT);
+
+    // Empty string / over-length tag values are rejected — the >128 char
+    // ceiling matches the ConversationStore docstring.
+    const std::string huge(200, 'x');
+    const Json too_long = dispatch(runtime, "conversation.tag",
+                                    {{"id", id},
+                                     {"tags", Json::array({huge})}});
+    REQUIRE(too_long["error"]["data"]["status"] ==
+            SAO_AI_EDITOR_ERR_INVALID_ARGUMENT);
+    const Json empty_tag = dispatch(runtime, "conversation.tag",
+                                     {{"id", id},
+                                      {"tags", Json::array({""})}});
+    REQUIRE(empty_tag["error"]["data"]["status"] ==
+            SAO_AI_EDITOR_ERR_INVALID_ARGUMENT);
+}
+
+TEST_CASE("conversation.find_by_tag honours matchAll and pinned-first ordering",
+          "[plugins][ai_editor][native][storage][tag]") {
+    RuntimeFixture fixture;
+    auto runtime = fixture.get();
+    REQUIRE(dispatch(runtime, "runtime.initialize").contains("result"));
+
+    const std::string a = dispatch(runtime, "conversation.create",
+                                    {{"title", "A"},
+                                     {"model", "m"},
+                                     {"scope", "workspace"}})["result"]["id"];
+    Sleep(5);
+    const std::string b = dispatch(runtime, "conversation.create",
+                                    {{"title", "B"},
+                                     {"model", "m"},
+                                     {"scope", "workspace"}})["result"]["id"];
+    Sleep(5);
+    const std::string c = dispatch(runtime, "conversation.create",
+                                    {{"title", "C"},
+                                     {"model", "m"},
+                                     {"scope", "system"}})["result"]["id"];
+
+    // A: {work, review}   B: {work}   C: {review}
+    dispatch(runtime, "conversation.tag",
+             {{"id", a}, {"tags", Json::array({"work", "review"})}});
+    dispatch(runtime, "conversation.tag",
+             {{"id", b}, {"tags", Json::array({"work"})}});
+    dispatch(runtime, "conversation.tag",
+             {{"id", c}, {"tags", Json::array({"review"})}});
+
+    // matchAll=false (OR): {work} matches A + B (both workspace).
+    const Json or_hits = dispatch(
+        runtime, "conversation.find_by_tag",
+        {{"tags", Json::array({"work"})}})["result"];
+    REQUIRE(or_hits["total"] == 2);
+    // savedAt desc within same pinned group: B was created after A.
+    REQUIRE(or_hits["items"][0]["id"] == b);
+    REQUIRE(or_hits["items"][1]["id"] == a);
+    // Summary shape includes tags + pinned + messageCount.
+    REQUIRE(or_hits["items"][0]["tags"].is_array());
+    REQUIRE(or_hits["items"][0]["pinned"] == false);
+    REQUIRE(or_hits["items"][0]["messageCount"] == 0);
+
+    // matchAll=true (AND): {work, review} only matches A.
+    const Json and_hits = dispatch(
+        runtime, "conversation.find_by_tag",
+        {{"tags", Json::array({"work", "review"})}, {"matchAll", true}})
+                                ["result"];
+    REQUIRE(and_hits["total"] == 1);
+    REQUIRE(and_hits["items"][0]["id"] == a);
+
+    // Pinning A pushes it in front of B even though B has a newer savedAt.
+    dispatch(runtime, "conversation.pin", {{"id", a}});
+    const Json pinned_first = dispatch(
+        runtime, "conversation.find_by_tag",
+        {{"tags", Json::array({"work"})}})["result"];
+    REQUIRE(pinned_first["items"][0]["id"] == a);
+    REQUIRE(pinned_first["items"][0]["pinned"] == true);
+    REQUIRE(pinned_first["items"][1]["id"] == b);
+
+    // Scope filter: scope=system matches only C.
+    const Json system_only = dispatch(
+        runtime, "conversation.find_by_tag",
+        {{"tags", Json::array({"review"})}, {"scope", "system"}})["result"];
+    REQUIRE(system_only["total"] == 1);
+    REQUIRE(system_only["items"][0]["id"] == c);
+
+    // Empty tags array is rejected.
+    const Json empty_tags = dispatch(
+        runtime, "conversation.find_by_tag",
+        {{"tags", Json::array()}});
+    REQUIRE(empty_tags["error"]["data"]["status"] ==
+            SAO_AI_EDITOR_ERR_INVALID_ARGUMENT);
+    const Json bad_scope = dispatch(
+        runtime, "conversation.find_by_tag",
+        {{"tags", Json::array({"work"})}, {"scope", "bogus"}});
+    REQUIRE(bad_scope["error"]["data"]["status"] ==
+            SAO_AI_EDITOR_ERR_INVALID_ARGUMENT);
+}
+
+TEST_CASE("conversation.list_tags aggregates counts + is legacy-safe",
+          "[plugins][ai_editor][native][storage][tag]") {
+    RuntimeFixture fixture;
+    auto runtime = fixture.get();
+    const Json init = dispatch(runtime, "runtime.initialize")["result"];
+    std::string workspace_root_utf8;
+    for (const auto& scope : init["scopes"]) {
+        if (scope.value("scope", "") == "workspace") {
+            workspace_root_utf8 = scope.value("path", "");
+            break;
+        }
+    }
+    REQUIRE(!workspace_root_utf8.empty());
+
+    // Empty history → tags:[] and total:0.
+    const Json empty = dispatch(runtime, "conversation.list_tags")["result"];
+    REQUIRE(empty["total"] == 0);
+    REQUIRE(empty["tags"].is_array());
+    REQUIRE(empty["tags"].empty());
+
+    // Seed three conversations with overlapping tag sets so we can verify
+    // the count-desc, name-asc ordering plus per-tag conversationIds lists.
+    const std::string a = dispatch(runtime, "conversation.create",
+                                    {{"title", "A"},
+                                     {"model", "m"},
+                                     {"scope", "workspace"}})["result"]["id"];
+    const std::string b = dispatch(runtime, "conversation.create",
+                                    {{"title", "B"},
+                                     {"model", "m"},
+                                     {"scope", "workspace"}})["result"]["id"];
+    const std::string c = dispatch(runtime, "conversation.create",
+                                    {{"title", "C"},
+                                     {"model", "m"},
+                                     {"scope", "system"}})["result"]["id"];
+
+    dispatch(runtime, "conversation.tag",
+             {{"id", a}, {"tags", Json::array({"work", "review"})}});
+    dispatch(runtime, "conversation.tag",
+             {{"id", b}, {"tags", Json::array({"work"})}});
+    dispatch(runtime, "conversation.tag",
+             {{"id", c}, {"tags", Json::array({"review"})}});
+
+    const Json stats = dispatch(runtime, "conversation.list_tags")["result"];
+    REQUIRE(stats["total"] == 2);
+    // work appears in {a, b} → count 2; review appears in {a, c} → count 2.
+    // Same count → name-ascending tie-break → "review" before "work".
+    REQUIRE(stats["tags"][0]["name"] == "review");
+    REQUIRE(stats["tags"][0]["count"] == 2);
+    REQUIRE(stats["tags"][1]["name"] == "work");
+    REQUIRE(stats["tags"][1]["count"] == 2);
+
+    // Untag "work" from B → work now has count 1, review still 2 → review
+    // wins the top slot outright.
+    dispatch(runtime, "conversation.untag",
+             {{"id", b}, {"tags", Json::array({"work"})}});
+    const Json after = dispatch(runtime, "conversation.list_tags")["result"];
+    REQUIRE(after["tags"][0]["name"] == "review");
+    REQUIRE(after["tags"][0]["count"] == 2);
+    REQUIRE(after["tags"][1]["name"] == "work");
+    REQUIRE(after["tags"][1]["count"] == 1);
+
+    // Scope filter: workspace excludes system's "review" hit on C.
+    const Json workspace_only = dispatch(runtime, "conversation.list_tags",
+                                          {{"scope", "workspace"}})["result"];
+    for (const auto& entry : workspace_only["tags"]) {
+        const std::string name = entry["name"].get<std::string>();
+        if (name == "review") {
+            REQUIRE(entry["count"] == 1);
+        } else if (name == "work") {
+            REQUIRE(entry["count"] == 1);
+        }
+    }
+
+    // Legacy documents missing the `tags` field must not crash the aggregator.
+    // Simulate by stripping the field from A's on-disk JSON.
+    const std::filesystem::path history_dir =
+        std::filesystem::path(workspace_root_utf8) / L"chat_history";
+    const std::filesystem::path legacy_path =
+        history_dir / (std::filesystem::path(a + ".json"));
+    REQUIRE(std::filesystem::exists(legacy_path));
+    std::string legacy_text;
+    {
+        std::ifstream stream(legacy_path, std::ios::binary);
+        REQUIRE(stream.good());
+        legacy_text.assign(std::istreambuf_iterator<char>{stream},
+                            std::istreambuf_iterator<char>{});
+    }
+    Json legacy_document = Json::parse(legacy_text);
+    legacy_document.erase("tags");
+    {
+        std::ofstream stream(legacy_path,
+                              std::ios::binary | std::ios::trunc);
+        REQUIRE(stream.good());
+        const std::string rewritten = legacy_document.dump(1);
+        stream.write(rewritten.data(),
+                     static_cast<std::streamsize>(rewritten.size()));
+    }
+    // get() must still surface `tags: []` for the legacy record.
+    const Json fetched = dispatch(runtime, "conversation.get",
+                                   {{"id", a}})["result"];
+    REQUIRE(fetched["tags"].is_array());
+    REQUIRE(fetched["tags"].empty());
+    // list_tags drops A's contributions because the field is gone; review is
+    // now only on C (system), and work has no members left.
+    const Json post_legacy = dispatch(
+        runtime, "conversation.list_tags")["result"];
+    // At most one bucket ("review" → C) remains.  work vanishes entirely.
+    for (const auto& entry : post_legacy["tags"]) {
+        REQUIRE(entry["name"] != "work");
+    }
 }
 
 TEST_CASE("tools.register surfaces custom tools in tools.list and tools.call "

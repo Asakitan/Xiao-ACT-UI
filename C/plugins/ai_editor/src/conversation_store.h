@@ -37,6 +37,38 @@ public:
                        bool pinned,
                        Json& result) const;
 
+    // Add and/or remove entries from a conversation's `tags` array.  Both
+    // vectors are optional — passing an empty add list only removes, an empty
+    // remove list only adds, and both empty is a no-op that still returns the
+    // current tag set so callers can use the method as a "read tags" primitive.
+    // Individual tag values must be non-empty UTF-8 strings capped at 128 bytes
+    // (INVALID_ARGUMENT otherwise).  Duplicates in either vector are collapsed;
+    // the persisted tag array never contains repeats.  Documents predating the
+    // `tags` field are treated as an empty starting set.  Emits {id, tags}.
+    int32_t set_tags(std::string_view conversation_id,
+                     const std::vector<std::string>& add_tags,
+                     const std::vector<std::string>& remove_tags,
+                     Json& result) const;
+
+    // Enumerate conversations whose tag set intersects (`match_all=false`) or
+    // fully contains (`match_all=true`) the requested tag list.  Sorted the
+    // same way `list()` sorts (pinned first, then savedAt descending).  Empty
+    // tag list is rejected with INVALID_ARGUMENT — callers wanting "all
+    // conversations" should use `list()` instead.  Emits
+    // {items:[{id,title,tags,pinned,savedAt,messageCount}], total}.
+    int32_t find_by_tag(const std::vector<std::string>& tags,
+                        std::string_view scope,
+                        uint32_t limit,
+                        bool match_all,
+                        Json& result) const;
+
+    // Aggregate tag counts across the requested scope.  Missing `tags`
+    // fields on legacy documents are treated as empty and skipped.  Sorted
+    // by count descending, name ascending as tie-breaker so UI can render a
+    // stable "top tags" list.  Emits
+    // {tags:[{name,count,conversationIds:[...]}], total}.
+    int32_t list_tags_stats(std::string_view scope, Json& result) const;
+
     int32_t export_all(std::string_view scope, Json& result) const;
 
     // Aggregate history counters for the requested `scope` (workspace / system

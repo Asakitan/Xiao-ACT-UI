@@ -458,6 +458,59 @@ int32_t NativeRuntime::invoke(std::string_view method,
         return conversations_.set_pinned(params["id"].get<std::string>(),
                                           pinned, result);
     }
+    if (method == "conversation.tag" || method == "conversation.untag") {
+        // Both endpoints funnel into set_tags(add, remove) so we can keep the
+        // "add and subtract in one call" primitive on the store while still
+        // exposing the two verbs the UI wants.  Payload requires id + tags[]
+        // for either method; anything else falls through to INVALID_ARGUMENT.
+        if (!params.contains("id") || !params["id"].is_string()) {
+            return SAO_AI_EDITOR_ERR_INVALID_ARGUMENT;
+        }
+        if (!params.contains("tags") || !params["tags"].is_array()) {
+            return SAO_AI_EDITOR_ERR_INVALID_ARGUMENT;
+        }
+        std::vector<std::string> incoming;
+        incoming.reserve(params["tags"].size());
+        for (const auto& tag : params["tags"]) {
+            if (!tag.is_string()) {
+                return SAO_AI_EDITOR_ERR_INVALID_ARGUMENT;
+            }
+            incoming.push_back(tag.get<std::string>());
+        }
+        const std::vector<std::string> add_tags =
+            method == "conversation.tag" ? incoming
+                                         : std::vector<std::string>{};
+        const std::vector<std::string> remove_tags =
+            method == "conversation.untag" ? incoming
+                                           : std::vector<std::string>{};
+        std::lock_guard<std::mutex> lock(store_mutex_);
+        return conversations_.set_tags(params["id"].get<std::string>(),
+                                        add_tags, remove_tags, result);
+    }
+    if (method == "conversation.find_by_tag") {
+        if (!params.contains("tags") || !params["tags"].is_array()) {
+            return SAO_AI_EDITOR_ERR_INVALID_ARGUMENT;
+        }
+        std::vector<std::string> query_tags;
+        query_tags.reserve(params["tags"].size());
+        for (const auto& tag : params["tags"]) {
+            if (!tag.is_string()) {
+                return SAO_AI_EDITOR_ERR_INVALID_ARGUMENT;
+            }
+            query_tags.push_back(tag.get<std::string>());
+        }
+        const std::string scope = params.value("scope", std::string{"all"});
+        const uint32_t limit = params.value("limit", 50U);
+        const bool match_all = params.value("matchAll", false);
+        std::lock_guard<std::mutex> lock(store_mutex_);
+        return conversations_.find_by_tag(query_tags, scope, limit,
+                                            match_all, result);
+    }
+    if (method == "conversation.list_tags") {
+        const std::string scope = params.value("scope", std::string{"all"});
+        std::lock_guard<std::mutex> lock(store_mutex_);
+        return conversations_.list_tags_stats(scope, result);
+    }
     if (method == "conversation.branch") {
         if (!params.contains("sourceId") ||
             !params["sourceId"].is_string() ||
@@ -1247,6 +1300,195 @@ int32_t NativeRuntime::invoke(std::string_view method,
                       {"status", "running"}};
         return SAO_AI_EDITOR_OK;
     }
+    if (method == "workflow.dry_run") {
+        // Preview each step's interpolated prompt without hitting the LLM.
+        // Reuses WorkflowExecution::interpolate_with so the substitution
+        // rules stay 1:1 with a real workflows.run — callers can rely on
+        // this to eyeball {{var}} bindings, group batching, and
+        // confirmation gates before spending tokens.
+        if (!params.contains("id") || !params["id"].is_string()) {
+            return SAO_AI_EDITOR_ERR_INVALID_ARGUMENT;
+        }
+        {
+            std::lock_guard<std::mutex> guard(store_mutex_);
+            workflow_registry_.reload(scopes_);
+        }
+        WorkflowDefinition definition;
+        if (!workflow_registry_.get(params["id"].get<std::string>(),
+                                    definition)) {
+            return SAO_AI_EDITOR_ERR_NOT_FOUND;
+        }
+        // Seed variables the same way WorkflowExecution's ctor does — start
+        // from `input` (falling back to inputs[input]), fold every key
+        // from `inputs`, then overlay `simulateOutputs` last so the caller
+        // can pretend earlier steps already ran.  Non-string values are
+        // JSON-encoded to match ctor semantics.
+        std::unordered_map<std::string, std::string> variables;
+        auto absorb_object = [&variables](const Json& source) {
+            if (!source.is_object()) {
+                return;
+            }
+            for (const auto& [key, value] : source.items()) {
+                if (value.is_string()) {
+                    variables[key] = value.get<std::string>();
+                } else {
+                    variables[key] = value.dump();
+                }
+            }
+        };
+        if (params.contains("input")) {
+            const Json& input = params["input"];
+            if (input.is_string()) {
+                variables["input"] = input.get<std::string>();
+            } else if (input.is_object()) {
+                absorb_object(input);
+            } else if (!input.is_null()) {
+                variables["input"] = input.dump();
+            }
+        }
+        if (params.contains("inputs")) {
+            absorb_object(params["inputs"]);
+        }
+        if (variables.find("input") == variables.end()) {
+            variables["input"] = "";
+        }
+        if (params.contains("simulateOutputs")) {
+            absorb_object(params["simulateOutputs"]);
+        }
+        // Track the initial variable set separately so the response can
+        // list "estimatedVariables" in the order they'd appear during a
+        // real run: initial seed keys first, then each step's output_var
+        // as it fires.
+        std::vector<std::string> estimated_variables;
+        std::unordered_map<std::string, size_t> estimated_index;
+        auto record_var = [&](const std::string& name) {
+            if (name.empty()) {
+                return;
+            }
+            if (estimated_index.find(name) != estimated_index.end()) {
+                return;
+            }
+            estimated_index.emplace(name, estimated_variables.size());
+            estimated_variables.push_back(name);
+        };
+        // Seed keys are recorded in a stable order — `input` always
+        // first, then everything else sorted for determinism.
+        record_var("input");
+        std::vector<std::string> seed_keys;
+        for (const auto& [key, value] : variables) {
+            (void)value;
+            if (key != "input") {
+                seed_keys.push_back(key);
+            }
+        }
+        std::sort(seed_keys.begin(), seed_keys.end());
+        for (const auto& key : seed_keys) {
+            record_var(key);
+        }
+        // Walk the definition once, collecting per-step preview info and
+        // sliding a window across contiguous same-group runs to identify
+        // parallel batches.
+        const auto& steps = definition.steps;
+        Json preview = Json::array();
+        Json groups = Json::array();
+        std::vector<size_t> batch_end_of(steps.size(), 0);
+        std::vector<size_t> batch_start_of(steps.size(), 0);
+        for (size_t index = 0; index < steps.size();) {
+            size_t batch_end = index + 1;
+            const std::string& group_id = steps[index].group;
+            if (!group_id.empty()) {
+                while (batch_end < steps.size() &&
+                       steps[batch_end].group == group_id) {
+                    ++batch_end;
+                }
+            }
+            const size_t batch_size = batch_end - index;
+            const bool parallel = batch_size > 1;
+            groups.push_back(
+                Json{{"groupId", group_id},
+                     {"startStep", static_cast<int64_t>(index)},
+                     {"endStep", static_cast<int64_t>(batch_end - 1)},
+                     {"parallel", parallel}});
+            for (size_t k = 0; k < batch_size; ++k) {
+                batch_start_of[index + k] = index;
+                batch_end_of[index + k] = batch_end;
+            }
+            index = batch_end;
+        }
+        // Second pass: render each step against the current variables map,
+        // then commit a synthesised output_var so subsequent steps see the
+        // placeholder in {{var}} interpolations.  Parallel batches share
+        // one snapshot for rendering (matching run_loop's pre-batch
+        // snapshot semantics), then commit together at the batch boundary
+        // — otherwise a group's later steps would see earlier steps' fake
+        // output which never happens at runtime.
+        for (size_t index = 0; index < steps.size();) {
+            const size_t batch_start = index;
+            const size_t batch_end = batch_end_of[index];
+            const size_t batch_size = batch_end - batch_start;
+            const std::string& group_id = steps[batch_start].group;
+            const std::unordered_map<std::string, std::string> snapshot =
+                variables;
+            for (size_t k = 0; k < batch_size; ++k) {
+                const size_t step_index = batch_start + k;
+                const WorkflowStep& step = steps[step_index];
+                const std::string rendered =
+                    WorkflowExecution::interpolate_with(step.prompt, snapshot);
+                Json will_parallel = Json::array();
+                for (size_t j = 0; j < batch_size; ++j) {
+                    if (batch_start + j == step_index) {
+                        continue;
+                    }
+                    will_parallel.push_back(
+                        static_cast<int64_t>(batch_start + j));
+                }
+                preview.push_back(
+                    Json{{"stepIndex", static_cast<int64_t>(step_index)},
+                         {"label", step.label},
+                         {"agent", step.agent},
+                         {"outputVar", step.output_var},
+                         {"group", group_id},
+                         {"requiresConfirmation", step.requires_confirmation},
+                         {"renderedPrompt", rendered},
+                         {"willBeParallelWith", std::move(will_parallel)}});
+            }
+            // Commit synthesised outputs after the whole batch renders so
+            // the next batch's snapshot picks them up.  simulateOutputs
+            // wins over the placeholder — the caller's provided value
+            // remains authoritative across the whole preview.
+            for (size_t k = 0; k < batch_size; ++k) {
+                const WorkflowStep& step = steps[batch_start + k];
+                if (step.output_var.empty()) {
+                    continue;
+                }
+                record_var(step.output_var);
+                if (variables.find(step.output_var) != variables.end()) {
+                    // A caller-provided simulateOutputs (or a matching
+                    // inputs key) trumps the synthetic placeholder.  Keep
+                    // whatever's already there so downstream steps see
+                    // that exact value.
+                    continue;
+                }
+                std::string placeholder = "<simulated: ";
+                placeholder += step.label.empty() ? step.output_var : step.label;
+                placeholder += ">";
+                variables[step.output_var] = std::move(placeholder);
+            }
+            index = batch_end;
+        }
+        Json estimated = Json::array();
+        for (const auto& name : estimated_variables) {
+            estimated.push_back(name);
+        }
+        result = Json{
+            {"workflowId", definition.id},
+            {"workflowName", definition.name},
+            {"totalSteps", static_cast<int64_t>(steps.size())},
+            {"groups", std::move(groups)},
+            {"preview", std::move(preview)},
+            {"estimatedVariables", std::move(estimated)}};
+        return SAO_AI_EDITOR_OK;
+    }
     if (method == "agents.list" || method == "workflows.list" ||
         method == "providers.list") {
         const std::string kind(method.substr(0, method.find('.')));
@@ -1581,7 +1823,8 @@ int32_t NativeRuntime::invoke(std::string_view method,
     }
     if (method == "agents.list_defs" || method == "agents.get_def" ||
         method == "agents.save_def" || method == "agents.delete_def" ||
-        method == "agents.invoke" || method == "agents.recommend") {
+        method == "agents.invoke" || method == "agents.recommend" ||
+        method == "agents.export" || method == "agents.import") {
         return dispatch_agent(method, params, result);
     }
     if (method == "agents.invoke_with_mcp") {
@@ -1720,6 +1963,142 @@ int32_t NativeRuntime::dispatch_agent(std::string_view method,
             return status;
         }
         result = Json{{"ok", true}, {"id", params["id"]}};
+        return SAO_AI_EDITOR_OK;
+    }
+    if (method == "agents.export") {
+        // Mirrors workflow.export: `id` and `scope` are mutually exclusive.
+        // Passing neither or both is a caller error rather than a "return
+        // everything" convenience — the client already has agents.list_defs
+        // for browsing.
+        const bool has_id = params.contains("id");
+        const bool has_scope = params.contains("scope");
+        if (has_id == has_scope) {
+            return SAO_AI_EDITOR_ERR_INVALID_ARGUMENT;
+        }
+        {
+            std::lock_guard<std::mutex> guard(store_mutex_);
+            agent_registry_.reload(scopes_);
+        }
+        if (has_id) {
+            if (!params["id"].is_string()) {
+                return SAO_AI_EDITOR_ERR_INVALID_ARGUMENT;
+            }
+            AgentDefinition agent;
+            if (!agent_registry_.get(params["id"].get<std::string>(), agent)) {
+                return SAO_AI_EDITOR_ERR_NOT_FOUND;
+            }
+            const int64_t now = std::chrono::duration_cast<
+                                    std::chrono::milliseconds>(
+                                    std::chrono::system_clock::now()
+                                        .time_since_epoch())
+                                    .count();
+            result = Json{{"format", "sao-agent/1"},
+                          {"agent", agent.to_json()},
+                          {"exportedAt", now}};
+            return SAO_AI_EDITOR_OK;
+        }
+        if (!params["scope"].is_string()) {
+            return SAO_AI_EDITOR_ERR_INVALID_ARGUMENT;
+        }
+        return agent_registry_.export_all(
+            params["scope"].get<std::string>(), result);
+    }
+    if (method == "agents.import") {
+        if (!params.contains("payload") || !params["payload"].is_object()) {
+            return SAO_AI_EDITOR_ERR_INVALID_ARGUMENT;
+        }
+        // Accept the same scope key vocabulary as agents.save_def: bare
+        // "workspace"/"system" or "plugin:<id>".  Default to workspace so
+        // callers that omit `scope` land somewhere reasonable.
+        const std::string scope_key =
+            params.value("scope", std::string{"workspace"});
+        std::string scope;
+        std::string plugin_id;
+        if (!parse_scope_key(scope_key, scope, plugin_id)) {
+            return SAO_AI_EDITOR_ERR_INVALID_ARGUMENT;
+        }
+        const bool overwrite = params.value("overwrite", false);
+        const Json& payload = params["payload"];
+        const std::string format = payload.value("format", std::string{});
+        std::vector<Json> incoming;
+        if (format == "sao-agent/1") {
+            if (!payload.contains("agent") ||
+                !payload["agent"].is_object()) {
+                return SAO_AI_EDITOR_ERR_INVALID_ARGUMENT;
+            }
+            incoming.push_back(payload["agent"]);
+        } else if (format == "sao-agents/1") {
+            if (!payload.contains("agents") ||
+                !payload["agents"].is_array()) {
+                return SAO_AI_EDITOR_ERR_INVALID_ARGUMENT;
+            }
+            for (const auto& item : payload["agents"]) {
+                if (!item.is_object()) {
+                    return SAO_AI_EDITOR_ERR_INVALID_ARGUMENT;
+                }
+                incoming.push_back(item);
+            }
+        } else {
+            result = Json{{"message", "unknown export format"},
+                          {"format", format}};
+            return SAO_AI_EDITOR_ERR_INVALID_ARGUMENT;
+        }
+        if (incoming.empty()) {
+            return SAO_AI_EDITOR_ERR_INVALID_ARGUMENT;
+        }
+        std::lock_guard<std::mutex> lock(store_mutex_);
+        agent_registry_.reload(scopes_);
+        // Two-pass conflict detection so overwrite=false rejects atomically
+        // instead of half-importing a batch.  Built-ins are always fatal —
+        // even with overwrite=true — because letting a user replace a
+        // built-in id would either shadow it after reload or masquerade a
+        // user agent as compile-time.
+        Json conflicts = Json::array();
+        for (const auto& agent : incoming) {
+            const std::string candidate_id =
+                agent.value("id", std::string{});
+            if (candidate_id.empty() || !valid_simple_id(candidate_id)) {
+                result = Json{{"message", "invalid agent id"},
+                              {"id", candidate_id}};
+                return SAO_AI_EDITOR_ERR_INVALID_ARGUMENT;
+            }
+            if (agent_registry_.is_builtin(candidate_id)) {
+                result = Json{{"imported", 0},
+                              {"conflicts", Json::array({candidate_id})},
+                              {"assignedIds", Json::array()},
+                              {"message", "cannot overwrite builtin"}};
+                return SAO_AI_EDITOR_ERR_PERMISSION_DENIED;
+            }
+            AgentDefinition existing;
+            if (agent_registry_.get(candidate_id, existing) &&
+                !existing.builtin) {
+                conflicts.push_back(candidate_id);
+            }
+        }
+        if (!conflicts.empty() && !overwrite) {
+            result = Json{{"imported", 0},
+                          {"conflicts", std::move(conflicts)},
+                          {"assignedIds", Json::array()}};
+            return SAO_AI_EDITOR_ERR_INVALID_ARGUMENT;
+        }
+        Json assigned_ids = Json::array();
+        size_t imported = 0;
+        for (const auto& agent : incoming) {
+            std::string assigned_id;
+            const int32_t import_status = agent_registry_.import_agent(
+                agent, scope, plugin_id, overwrite, scopes_, assigned_id);
+            if (import_status != SAO_AI_EDITOR_OK) {
+                result = Json{{"imported", imported},
+                              {"conflicts", std::move(conflicts)},
+                              {"assignedIds", std::move(assigned_ids)}};
+                return import_status;
+            }
+            assigned_ids.push_back(assigned_id);
+            ++imported;
+        }
+        result = Json{{"imported", imported},
+                      {"conflicts", std::move(conflicts)},
+                      {"assignedIds", std::move(assigned_ids)}};
         return SAO_AI_EDITOR_OK;
     }
     if (method == "agents.invoke") {
