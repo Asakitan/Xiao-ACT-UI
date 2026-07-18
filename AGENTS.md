@@ -34,6 +34,16 @@ Other plugins (`hide_seek_plugin/`, `midi_piano_plugin/`) follow the same SDK pa
 
 **Rule: platform code never imports plugin code.** Plugins register capabilities through the SDK at runtime.
 
+### 死规定 — 双向平台隔离 (Python ↔ C++)
+
+The AI Editor / SaoAiEditor / gpu_hunt stack is written in native C++ (`sao_auto/C/plugins/ai_editor/`). It is a **separate runtime**, not a Python plugin. Bidirectional isolation is mandatory:
+
+1. **C++ side 不 import Python.** No native code under `sao_auto/C/` may pull in `Python.h`, `pybind11`, `cffi`, or reach into the platform Python runtime. The only sanctioned bridge is `plugins/python_host/` (which is a Python-loaded shim, not a C++ import).
+2. **Python 主 UI 不 launcher C++ 二进制.** `sao_auto/python/gui_modules/*`, `sao_gui_*`, and any platform-level Python code MUST NOT `subprocess.Popen` / `os.startfile` / os-exec SaoAiEditor.exe (or any other native binary) to open a C++ panel. That would embed a build-tree assumption into the Python UI and make the "platform never imports plugin" rule leak sideways through file-path knowledge. Do not add "Open GPU Hunt" / "Open AI Editor Native Panel" / etc. buttons in the platform menu that shell out to a native exe.
+3. C++ panels / windows / trays are launched by the **C++ binary itself** — via its own CLI flags, its own tray icon, a Windows shortcut, or (when it acts as a plugin) via the plugin SDK's declarative UI registration path. The Python host is unaware of the C++ binary's on-disk location.
+4. Violation of this rule is a hard revert. If a native panel needs a menu entry inside the Python UI, ship it as a real plugin through the SDK — do not smuggle in a Popen call.
+
+
 ## Before Working
 
 - Check `/memories/repo/` for task-specific notes.
