@@ -591,6 +591,155 @@ Json WorkflowExecution::snapshot() const {
                 {"completedAt", completed_at_ms_}};
 }
 
+Json WorkflowExecution::history_record() const {
+    // Reuse snapshot() so shape stays 1:1 with workflows.status; then
+    // decorate with the derived display fields the history API surfaces.
+    Json record = snapshot();
+    record["workflowName"] = definition_.name;
+    // snapshot() already reports startedAt/completedAt/status/error, but
+    // ensure the schema documented in workflow.list_executions is
+    // stable even if the callee did not observe every field.
+    if (!record.contains("workflowName")) {
+        record["workflowName"] = definition_.name;
+    }
+    return record;
+}
+
+int32_t WorkflowExecution::persist(
+    const std::filesystem::path& history_root) const {
+    if (history_root.empty()) {
+        return SAO_AI_EDITOR_ERR_INVALID_ARGUMENT;
+    }
+    std::error_code error;
+    std::filesystem::create_directories(history_root, error);
+    if (error) {
+        return SAO_AI_EDITOR_ERR_OS_CALL_FAILED;
+    }
+    const Json record = history_record();
+    // Sanitize the filename to a safe hex-ish id — WorkflowExecution ids
+    // are already `wf-<hex>-<counter>` but we defend against future id
+    // schemes leaking path separators.
+    std::string safe_id;
+    safe_id.reserve(id_.size());
+    for (const char character : id_) {
+        const auto unsigned_character = static_cast<unsigned char>(character);
+        const bool safe =
+            (unsigned_character >= '0' && unsigned_character <= '9') ||
+            (unsigned_character >= 'a' && unsigned_character <= 'z') ||
+            (unsigned_character >= 'A' && unsigned_character <= 'Z') ||
+            unsigned_character == '-' || unsigned_character == '_';
+        safe_id.push_back(safe ? static_cast<char>(unsigned_character) : '_');
+    }
+    if (safe_id.empty()) {
+        return SAO_AI_EDITOR_ERR_INVALID_ARGUMENT;
+    }
+    const auto path = history_root / (utf8_to_wide(safe_id) + L".json");
+    return write_text_atomic(path, record.dump(2));
+}
+
+int32_t WorkflowExecution::enumerate_history(
+    const std::filesystem::path& history_root,
+    std::string_view workflow_id_filter,
+    std::vector<Json>& out_summaries) {
+    out_summaries.clear();
+    if (history_root.empty()) {
+        return SAO_AI_EDITOR_OK;
+    }
+    std::error_code error;
+    if (!std::filesystem::is_directory(history_root, error)) {
+        return SAO_AI_EDITOR_OK;
+    }
+    for (const auto& item :
+         std::filesystem::directory_iterator(history_root, error)) {
+        if (error) {
+            error.clear();
+            continue;
+        }
+        std::error_code file_error;
+        if (!item.is_regular_file(file_error) ||
+            item.path().extension() != L".json") {
+            continue;
+        }
+        std::string text;
+        if (read_text_file(item.path(), kMaximumJsonBytes, text) !=
+            SAO_AI_EDITOR_OK) {
+            continue;
+        }
+        Json document = Json::parse(text, nullptr, false);
+        if (document.is_discarded() || !document.is_object()) {
+            continue;
+        }
+        if (!workflow_id_filter.empty()) {
+            const std::string workflow_id =
+                document.value("workflowId", std::string{});
+            if (workflow_id != workflow_id_filter) {
+                continue;
+            }
+        }
+        Json summary{
+            {"id", document.value("id", "")},
+            {"workflowId", document.value("workflowId", "")},
+            {"workflowName", document.value("workflowName", "")},
+            {"status", document.value("status", "")},
+            {"startedAt", document.value("startedAt", int64_t{0})},
+            {"completedAt", document.value("completedAt", int64_t{0})},
+            {"totalSteps", document.value("totalSteps", int64_t{0})},
+            {"error", document.value("error", "")}};
+        out_summaries.push_back(std::move(summary));
+    }
+    std::sort(out_summaries.begin(), out_summaries.end(),
+              [](const Json& left, const Json& right) {
+                  return left.value("completedAt", int64_t{0}) >
+                         right.value("completedAt", int64_t{0});
+              });
+    return SAO_AI_EDITOR_OK;
+}
+
+int32_t WorkflowExecution::load_history_record(
+    const std::filesystem::path& history_root,
+    std::string_view execution_id,
+    Json& out_record) {
+    if (history_root.empty() || execution_id.empty()) {
+        return SAO_AI_EDITOR_ERR_INVALID_ARGUMENT;
+    }
+    const auto path =
+        history_root / (utf8_to_wide(execution_id) + L".json");
+    std::error_code error;
+    if (!std::filesystem::is_regular_file(path, error)) {
+        return SAO_AI_EDITOR_ERR_NOT_FOUND;
+    }
+    std::string text;
+    const int32_t status = read_text_file(path, kMaximumJsonBytes, text);
+    if (status != SAO_AI_EDITOR_OK) {
+        return status;
+    }
+    Json parsed = Json::parse(text, nullptr, false);
+    if (parsed.is_discarded() || !parsed.is_object()) {
+        return SAO_AI_EDITOR_ERR_OS_CALL_FAILED;
+    }
+    out_record = std::move(parsed);
+    return SAO_AI_EDITOR_OK;
+}
+
+int32_t WorkflowExecution::delete_history_record(
+    const std::filesystem::path& history_root,
+    std::string_view execution_id) {
+    if (history_root.empty() || execution_id.empty()) {
+        return SAO_AI_EDITOR_ERR_INVALID_ARGUMENT;
+    }
+    const auto path =
+        history_root / (utf8_to_wide(execution_id) + L".json");
+    std::error_code error;
+    if (!std::filesystem::is_regular_file(path, error)) {
+        return SAO_AI_EDITOR_ERR_NOT_FOUND;
+    }
+    std::filesystem::remove(path, error);
+    if (error) {
+        return SAO_AI_EDITOR_ERR_OS_CALL_FAILED;
+    }
+    return SAO_AI_EDITOR_OK;
+}
+
 std::string WorkflowExecution::interpolate_with(
     std::string_view text,
     const std::unordered_map<std::string, std::string>& vars) {
@@ -716,10 +865,20 @@ int32_t WorkflowExecution::execute_step_with_snapshot(
 
 void WorkflowExecution::start(NativeRuntime& runtime, Json provider,
                               std::string model, uint32_t chat_timeout_ms) {
+    // Legacy overload — persistence disabled.  Kept so unit tests / callers
+    // that only need in-memory execution don't have to manufacture a path.
+    start(runtime, std::move(provider), std::move(model), chat_timeout_ms,
+          std::filesystem::path{});
+}
+
+void WorkflowExecution::start(NativeRuntime& runtime, Json provider,
+                              std::string model, uint32_t chat_timeout_ms,
+                              std::filesystem::path history_root) {
     {
         std::lock_guard<std::mutex> guard(mutex_);
         started_at_ms_ = unix_milliseconds();
         status_ = "running";
+        history_persist_root_ = std::move(history_root);
     }
     worker_ = std::thread(&WorkflowExecution::run_loop, this, &runtime,
                           std::move(provider), std::move(model),
@@ -751,6 +910,27 @@ void WorkflowExecution::run_loop(NativeRuntime* runtime, Json provider,
         }
         runtime->emit_workflow_event("workflow.progress", std::move(payload),
                                       execution_id);
+        // Best-effort disk snapshot — snapshot() already reflects the
+        // terminal state (status_/completed_at_ms_/error_message_ committed
+        // under mutex_ before emit_terminal fires).  Any write failure is
+        // swallowed intentionally: a mid-shutdown IO error must not abort
+        // the run.  Grab the path under lock, then release it before
+        // hitting the disk to avoid stalling snapshot() consumers.
+        std::filesystem::path history_root_copy;
+        {
+            std::lock_guard<std::mutex> guard(mutex_);
+            history_root_copy = history_persist_root_;
+        }
+        if (!history_root_copy.empty()) {
+            const int32_t persist_status = persist(history_root_copy);
+            if (persist_status != SAO_AI_EDITOR_OK) {
+                std::fprintf(
+                    stderr,
+                    "[ai_editor] workflow persist failed: id=%s status=%d\n",
+                    execution_id.c_str(),
+                    static_cast<int>(persist_status));
+            }
+        }
     };
     size_t index = 0;
     while (index < steps.size()) {

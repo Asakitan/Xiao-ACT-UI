@@ -9,10 +9,13 @@
 #include <atomic>
 #include <cctype>
 #include <chrono>
+#include <filesystem>
 #include <functional>
 #include <memory>
 #include <optional>
+#include <string_view>
 #include <utility>
+#include <vector>
 
 namespace sao::ai_editor::native {
 namespace {
@@ -46,6 +49,20 @@ std::string status_message(int32_t status) {
         default:
             return "operation failed";
     }
+}
+
+// Locate the on-disk workflow history directory for a scope.  Anchored to
+// ScopeStore::history_root("<scope>") so we stay in sync with the
+// chat_history layout convention — the sibling directory naming means new
+// scope roots (system_root_ / workspace_scope_root_) get picked up
+// automatically without exposing those private paths.
+std::filesystem::path workflow_history_root(const ScopeStore& scopes,
+                                             std::string_view scope) {
+    const std::filesystem::path chat_history = scopes.history_root(scope);
+    if (chat_history.empty()) {
+        return {};
+    }
+    return chat_history.parent_path() / L"workflow_history";
 }
 
 int rpc_code(int32_t status) {
@@ -707,6 +724,138 @@ int32_t NativeRuntime::invoke(std::string_view method,
                       {"assignedIds", std::move(assigned_ids)}};
         return SAO_AI_EDITOR_OK;
     }
+    if (method == "workflow.list_executions") {
+        const std::string scope_key = params.value("scope", std::string{"all"});
+        if (scope_key != "all" && scope_key != "workspace" &&
+            scope_key != "system") {
+            return SAO_AI_EDITOR_ERR_INVALID_ARGUMENT;
+        }
+        uint32_t limit = params.value("limit", 50U);
+        limit = std::clamp<uint32_t>(limit, 1U, 500U);
+        std::string workflow_filter;
+        if (params.contains("workflowId")) {
+            if (!params["workflowId"].is_string()) {
+                return SAO_AI_EDITOR_ERR_INVALID_ARGUMENT;
+            }
+            workflow_filter = params["workflowId"].get<std::string>();
+        }
+        // Collect from both scopes when scope=="all"; individual scope
+        // requests only search the matching root.  Missing directories are
+        // silently treated as empty by enumerate_history.
+        std::vector<std::string_view> selected;
+        if (scope_key == "all") {
+            selected = {"workspace", "system"};
+        } else {
+            selected = {std::string_view(scope_key)};
+        }
+        std::vector<Json> combined;
+        for (const auto scope_view : selected) {
+            const std::filesystem::path root =
+                workflow_history_root(scopes_, scope_view);
+            std::vector<Json> summaries;
+            const int32_t enumerate_status =
+                WorkflowExecution::enumerate_history(root, workflow_filter,
+                                                      summaries);
+            if (enumerate_status != SAO_AI_EDITOR_OK) {
+                return enumerate_status;
+            }
+            for (auto& summary : summaries) {
+                summary["scope"] = std::string(scope_view);
+                combined.push_back(std::move(summary));
+            }
+        }
+        std::sort(combined.begin(), combined.end(),
+                  [](const Json& left, const Json& right) {
+                      return left.value("completedAt", int64_t{0}) >
+                             right.value("completedAt", int64_t{0});
+                  });
+        Json items = Json::array();
+        for (size_t index = 0;
+             index < combined.size() && index < static_cast<size_t>(limit);
+             ++index) {
+            items.push_back(std::move(combined[index]));
+        }
+        result = Json{{"items", std::move(items)},
+                      {"total", combined.size()}};
+        return SAO_AI_EDITOR_OK;
+    }
+    if (method == "workflow.get_execution") {
+        if (!params.contains("id") || !params["id"].is_string()) {
+            return SAO_AI_EDITOR_ERR_INVALID_ARGUMENT;
+        }
+        const std::string execution_id = params["id"].get<std::string>();
+        if (execution_id.empty()) {
+            return SAO_AI_EDITOR_ERR_INVALID_ARGUMENT;
+        }
+        // Try both roots (workspace first, then system).  Callers can pass
+        // an explicit scope to skip the second lookup, but the default
+        // scans everywhere so the API mirrors conversation.get semantics.
+        const std::string scope_key =
+            params.value("scope", std::string{"all"});
+        if (scope_key != "all" && scope_key != "workspace" &&
+            scope_key != "system") {
+            return SAO_AI_EDITOR_ERR_INVALID_ARGUMENT;
+        }
+        std::vector<std::filesystem::path> candidates;
+        if (scope_key == "workspace" || scope_key == "all") {
+            candidates.push_back(workflow_history_root(scopes_, "workspace"));
+        }
+        if (scope_key == "system" || scope_key == "all") {
+            candidates.push_back(workflow_history_root(scopes_, "system"));
+        }
+        for (const auto& root : candidates) {
+            Json record;
+            const int32_t status = WorkflowExecution::load_history_record(
+                root, execution_id, record);
+            if (status == SAO_AI_EDITOR_OK) {
+                result = std::move(record);
+                return SAO_AI_EDITOR_OK;
+            }
+            if (status != SAO_AI_EDITOR_ERR_NOT_FOUND) {
+                return status;
+            }
+        }
+        return SAO_AI_EDITOR_ERR_NOT_FOUND;
+    }
+    if (method == "workflow.delete_execution") {
+        if (!params.contains("id") || !params["id"].is_string()) {
+            return SAO_AI_EDITOR_ERR_INVALID_ARGUMENT;
+        }
+        const std::string execution_id = params["id"].get<std::string>();
+        if (execution_id.empty()) {
+            return SAO_AI_EDITOR_ERR_INVALID_ARGUMENT;
+        }
+        const std::string scope_key =
+            params.value("scope", std::string{"all"});
+        if (scope_key != "all" && scope_key != "workspace" &&
+            scope_key != "system") {
+            return SAO_AI_EDITOR_ERR_INVALID_ARGUMENT;
+        }
+        std::vector<std::filesystem::path> candidates;
+        if (scope_key == "workspace" || scope_key == "all") {
+            candidates.push_back(workflow_history_root(scopes_, "workspace"));
+        }
+        if (scope_key == "system" || scope_key == "all") {
+            candidates.push_back(workflow_history_root(scopes_, "system"));
+        }
+        bool deleted = false;
+        for (const auto& root : candidates) {
+            const int32_t status = WorkflowExecution::delete_history_record(
+                root, execution_id);
+            if (status == SAO_AI_EDITOR_OK) {
+                deleted = true;
+                continue;
+            }
+            if (status != SAO_AI_EDITOR_ERR_NOT_FOUND) {
+                return status;
+            }
+        }
+        if (!deleted) {
+            return SAO_AI_EDITOR_ERR_NOT_FOUND;
+        }
+        result = Json{{"ok", true}, {"id", execution_id}};
+        return SAO_AI_EDITOR_OK;
+    }
     if (method == "agents.list" || method == "workflows.list" ||
         method == "providers.list") {
         const std::string kind(method.substr(0, method.find('.')));
@@ -893,6 +1042,9 @@ int32_t NativeRuntime::invoke(std::string_view method,
     }
     if (method == "agents.invoke_with_mcp") {
         return agent_invoke_with_mcp(params, result);
+    }
+    if (method == "agents.batch_invoke") {
+        return batch_invoke_agents(params, result);
     }
     if (method == "prompts.list_defs" || method == "prompts.get_def" ||
         method == "prompts.save_def" || method == "prompts.delete_def" ||
@@ -1109,6 +1261,254 @@ int32_t NativeRuntime::dispatch_agent(std::string_view method,
         return SAO_AI_EDITOR_OK;
     }
     return SAO_AI_EDITOR_ERR_NOT_FOUND;
+}
+
+int32_t NativeRuntime::batch_invoke_agents(const Json& params, Json& result) {
+    if (!params.contains("agents") || !params["agents"].is_array() ||
+        params["agents"].empty()) {
+        return SAO_AI_EDITOR_ERR_INVALID_ARGUMENT;
+    }
+    const Json& agents_array = params["agents"];
+    // Default fields let callers avoid repeating provider/model/message
+    // per-agent when a common configuration applies.  Per-agent entries
+    // override these with the usual JSON "value" semantics (empty string ==
+    // missing).
+    const Json default_provider = params.value("provider", Json::object());
+    const Json top_default_provider =
+        params.value("defaultProvider", default_provider);
+    const std::string default_model = params.value(
+        "defaultModel", params.value("model", std::string{}));
+    const std::string default_message = params.value(
+        "defaultMessage", std::string{});
+    const uint32_t default_timeout_ms = params.value("timeoutMs", 60'000U);
+    const std::string conversation_id = params.value("conversationId",
+                                                       std::string{});
+    // concurrency policy: clamp caller value to [1, 16].  Default 4 matches
+    // the doc contract; upper bound 16 keeps the WinHTTP session pool from
+    // exploding under pathological input.
+    int concurrency = params.value("concurrency", 4);
+    if (concurrency < 1) {
+        concurrency = 1;
+    }
+    if (concurrency > 16) {
+        concurrency = 16;
+    }
+    const size_t total = agents_array.size();
+    const size_t worker_count = std::min<size_t>(
+        static_cast<size_t>(concurrency), total);
+
+    // Refresh the registry once up front so every worker sees a consistent
+    // snapshot without re-taking store_mutex_ per agent (registry is otherwise
+    // treated as read-only from worker threads).
+    {
+        std::lock_guard<std::mutex> guard(store_mutex_);
+        agent_registry_.reload(scopes_);
+    }
+
+    struct Slot final {
+        std::string agent_id;
+        std::string agent_name;
+        std::string message;
+        std::string model;
+        std::string content;
+        std::string error;
+        int32_t status = SAO_AI_EDITOR_OK;
+        bool resolved = false;  // agent_id -> definition resolved OK
+        uint64_t duration_ms = 0;
+        Json params_snapshot = Json::object();
+    };
+    std::vector<Slot> slots(total);
+
+    // Phase 1 (single-threaded): resolve every agent's definition and build
+    // the run_chat_sync parameter blob.  Doing this before dispatching
+    // workers keeps the JSON parsing on the caller thread and lets us
+    // surface "agent not found" / "provider missing" as per-slot failures
+    // without touching the WinHTTP path.
+    for (size_t i = 0; i < total; ++i) {
+        Slot& slot = slots[i];
+        const Json& entry = agents_array[i];
+        if (!entry.is_object()) {
+            slot.agent_id = "";
+            slot.status = SAO_AI_EDITOR_ERR_INVALID_ARGUMENT;
+            slot.error = "agent entry must be an object";
+            continue;
+        }
+        slot.agent_id = entry.value("id", std::string{});
+        if (slot.agent_id.empty()) {
+            slot.status = SAO_AI_EDITOR_ERR_INVALID_ARGUMENT;
+            slot.error = "agent id missing";
+            continue;
+        }
+        AgentDefinition agent;
+        if (!agent_registry_.get(slot.agent_id, agent)) {
+            slot.status = SAO_AI_EDITOR_ERR_NOT_FOUND;
+            slot.error = "agent not found";
+            continue;
+        }
+        slot.agent_name = agent.name;
+        // Per-agent message overrides defaultMessage; both empty -> failure.
+        slot.message = entry.value("message", default_message);
+        if (slot.message.empty()) {
+            slot.status = SAO_AI_EDITOR_ERR_INVALID_ARGUMENT;
+            slot.error = "message missing";
+            continue;
+        }
+        // Provider: per-agent > top-level defaultProvider > empty.  Model:
+        // per-agent > defaultModel > agent.model.
+        Json provider = entry.contains("provider") &&
+                                entry["provider"].is_object()
+                            ? entry["provider"]
+                            : top_default_provider;
+        std::string model = entry.value(
+            "model", default_model.empty() ? agent.model : default_model);
+        if ((!provider.is_object() || provider.empty()) && model.empty()) {
+            slot.status = SAO_AI_EDITOR_ERR_INVALID_ARGUMENT;
+            slot.error = "provider or model missing";
+            continue;
+        }
+        slot.model = model;
+        // Build the messages array from the agent's system prompt + user
+        // turn.  Unlike agents.invoke, batch mode never consults conversation
+        // history for the outbound request — every agent gets a clean slate
+        // per its own message.  We still write successful turns back to
+        // conversation storage afterwards for callers that pass
+        // conversationId.
+        Json messages = agent_registry_.build_chat_messages(
+            agent, slot.message, Json::array());
+        Json chat_params = Json::object();
+        if (provider.is_object() && !provider.empty()) {
+            chat_params["provider"] = std::move(provider);
+        }
+        if (!model.empty()) {
+            chat_params["model"] = model;
+        }
+        chat_params["messages"] = std::move(messages);
+        // Forward a small allowlist of chat.run knobs so callers can pass
+        // temperature / max_tokens once via defaults or per-agent overrides.
+        for (const std::string_view field :
+             {"temperature", "max_tokens", "response_format", "stream"}) {
+            const std::string key(field);
+            if (entry.contains(field)) {
+                chat_params[key] = entry[field];
+            } else if (params.contains(field)) {
+                chat_params[key] = params[field];
+            }
+        }
+        slot.params_snapshot = std::move(chat_params);
+        slot.resolved = true;
+    }
+
+    // Phase 2: launch worker threads that only touch their own slot.  Use
+    // an atomic counter as a lock-free work queue so `concurrency` acts as
+    // an in-flight cap without per-task locking.  Slots that failed
+    // resolution in phase 1 are skipped instantly.
+    const auto batch_start = std::chrono::steady_clock::now();
+    std::atomic<size_t> next_index{0};
+    std::vector<std::thread> workers;
+    workers.reserve(worker_count);
+    for (size_t w = 0; w < worker_count; ++w) {
+        workers.emplace_back([&, i_capture = w] {
+            (void)i_capture;
+            while (true) {
+                const size_t idx =
+                    next_index.fetch_add(1, std::memory_order_acq_rel);
+                if (idx >= total) {
+                    break;
+                }
+                Slot& slot = slots[idx];
+                if (!slot.resolved) {
+                    continue;  // phase 1 already recorded status/error
+                }
+                const auto step_start = std::chrono::steady_clock::now();
+                try {
+                    std::string content;
+                    const int32_t status = run_chat_sync(
+                        slot.params_snapshot, default_timeout_ms, content);
+                    slot.status = status;
+                    if (status == SAO_AI_EDITOR_OK) {
+                        slot.content = std::move(content);
+                    } else {
+                        slot.error = status_message(status);
+                    }
+                } catch (const std::exception& ex) {
+                    slot.status = SAO_AI_EDITOR_ERR_HTTP;
+                    slot.error = std::string("exception: ") + ex.what();
+                } catch (...) {
+                    slot.status = SAO_AI_EDITOR_ERR_HTTP;
+                    slot.error = "unknown exception";
+                }
+                const auto step_end = std::chrono::steady_clock::now();
+                slot.duration_ms = static_cast<uint64_t>(
+                    std::chrono::duration_cast<std::chrono::milliseconds>(
+                        step_end - step_start).count());
+            }
+        });
+    }
+    for (auto& worker : workers) {
+        worker.join();
+    }
+    const auto batch_end = std::chrono::steady_clock::now();
+    const uint64_t total_ms = static_cast<uint64_t>(
+        std::chrono::duration_cast<std::chrono::milliseconds>(
+            batch_end - batch_start).count());
+
+    // Phase 3: assemble results in original order.  Conversation appends
+    // happen here (single-threaded) so the transcript ordering is
+    // deterministic regardless of which worker finished first.  Successful
+    // agent replies are prefixed with the agent name so downstream readers
+    // can attribute lines back to their source.
+    Json results = Json::array();
+    size_t success = 0;
+    size_t failure = 0;
+    for (size_t i = 0; i < total; ++i) {
+        const Slot& slot = slots[i];
+        Json entry_result{{"agentId", slot.agent_id},
+                          {"durationMs", slot.duration_ms}};
+        if (!slot.agent_name.empty()) {
+            entry_result["agentName"] = slot.agent_name;
+        }
+        if (!slot.model.empty()) {
+            entry_result["model"] = slot.model;
+        }
+        if (slot.status == SAO_AI_EDITOR_OK && slot.resolved) {
+            entry_result["status"] = "completed";
+            entry_result["content"] = slot.content;
+            ++success;
+            if (!conversation_id.empty()) {
+                std::lock_guard<std::mutex> guard(store_mutex_);
+                Json append_result;
+                conversations_.append(
+                    conversation_id,
+                    Json{{"role", "user"}, {"content", slot.message},
+                         {"agentId", slot.agent_id}},
+                    append_result);
+                const std::string prefix = !slot.agent_name.empty()
+                    ? "[" + slot.agent_name + "] "
+                    : "[" + slot.agent_id + "] ";
+                conversations_.append(
+                    conversation_id,
+                    Json{{"role", "assistant"},
+                         {"content", prefix + slot.content},
+                         {"agentId", slot.agent_id}},
+                    append_result);
+            }
+        } else {
+            entry_result["status"] = "failed";
+            entry_result["error"] = slot.error.empty()
+                                        ? status_message(slot.status)
+                                        : slot.error;
+            ++failure;
+        }
+        results.push_back(std::move(entry_result));
+    }
+    result = Json{{"results", std::move(results)},
+                  {"successCount", success},
+                  {"failureCount", failure},
+                  {"totalMs", total_ms}};
+    if (!conversation_id.empty()) {
+        result["conversationId"] = conversation_id;
+    }
+    return SAO_AI_EDITOR_OK;
 }
 
 int32_t NativeRuntime::dispatch_prompt(std::string_view method,
@@ -1773,7 +2173,16 @@ int32_t NativeRuntime::dispatch_workflow(std::string_view method,
             std::lock_guard<std::mutex> guard(workflow_mutex_);
             workflow_executions_[execution->id()] = execution;
         }
-        execution->start(*this, std::move(provider), model, chat_timeout);
+        // Persist completed runs into the workspace history root, mirroring
+        // the chat_history layout so users get a durable record across
+        // process restarts.  ScopeStore always has a workspace scope
+        // available here (initialize() ran before dispatch), so the empty
+        // path branch that disables persistence is reserved for direct
+        // WorkflowExecution consumers (i.e. unit tests).
+        const std::filesystem::path history_dir =
+            workflow_history_root(scopes_, "workspace");
+        execution->start(*this, std::move(provider), model, chat_timeout,
+                          history_dir);
         result = Json{{"executionId", execution->id()},
                       {"status", "running"}};
         return SAO_AI_EDITOR_OK;
@@ -2205,6 +2614,169 @@ int32_t collect_mcp_output(int32_t query_status,
     return SAO_AI_EDITOR_OK;
 }
 
+// Percent-encode a UTF-8 string for use inside a URI component.  RFC 3986
+// unreserved set is left untouched; every other byte is upper-hex encoded.
+// This matches the "reserved-safe" behaviour required by RFC 6570's simple
+// (`{name}`) template expansion.
+std::string percent_encode_component(std::string_view value) {
+    std::string encoded;
+    encoded.reserve(value.size());
+    for (unsigned char byte : value) {
+        const bool unreserved = (byte >= 'A' && byte <= 'Z') ||
+                                (byte >= 'a' && byte <= 'z') ||
+                                (byte >= '0' && byte <= '9') ||
+                                byte == '-' || byte == '_' || byte == '.' ||
+                                byte == '~';
+        if (unreserved) {
+            encoded.push_back(static_cast<char>(byte));
+        } else {
+            static const char hex[] = "0123456789ABCDEF";
+            encoded.push_back('%');
+            encoded.push_back(hex[(byte >> 4) & 0x0FU]);
+            encoded.push_back(hex[byte & 0x0FU]);
+        }
+    }
+    return encoded;
+}
+
+// RFC 6570 reserved-expansion: keep gen-delims / sub-delims and any existing
+// pct-triplet intact so `{+path}` inside `sao://workspace/{+path}` carries
+// `foo/bar` as literal `foo/bar` rather than `foo%2Fbar`.  Everything outside
+// the "reserved + unreserved + pct-encoded" set is still percent-encoded.
+std::string percent_encode_reserved(std::string_view value) {
+    std::string encoded;
+    encoded.reserve(value.size());
+    for (size_t index = 0; index < value.size(); ++index) {
+        const unsigned char byte = static_cast<unsigned char>(value[index]);
+        const bool unreserved = (byte >= 'A' && byte <= 'Z') ||
+                                (byte >= 'a' && byte <= 'z') ||
+                                (byte >= '0' && byte <= '9') ||
+                                byte == '-' || byte == '_' || byte == '.' ||
+                                byte == '~';
+        // Reserved characters kept literal (RFC 3986 gen-delims + sub-delims).
+        const bool reserved = byte == ':' || byte == '/' || byte == '?' ||
+                              byte == '#' || byte == '[' || byte == ']' ||
+                              byte == '@' || byte == '!' || byte == '$' ||
+                              byte == '&' || byte == '\'' || byte == '(' ||
+                              byte == ')' || byte == '*' || byte == '+' ||
+                              byte == ',' || byte == ';' || byte == '=';
+        // Preserve existing pct-triplets so already-encoded input is not
+        // double-encoded when it round-trips through `{+var}`.
+        if (byte == '%' && index + 2 < value.size() &&
+            std::isxdigit(static_cast<unsigned char>(value[index + 1])) &&
+            std::isxdigit(static_cast<unsigned char>(value[index + 2]))) {
+            encoded.push_back('%');
+            encoded.push_back(value[index + 1]);
+            encoded.push_back(value[index + 2]);
+            index += 2;
+            continue;
+        }
+        if (unreserved || reserved) {
+            encoded.push_back(static_cast<char>(byte));
+        } else {
+            static const char hex[] = "0123456789ABCDEF";
+            encoded.push_back('%');
+            encoded.push_back(hex[(byte >> 4) & 0x0FU]);
+            encoded.push_back(hex[byte & 0x0FU]);
+        }
+    }
+    return encoded;
+}
+
+// Extract the string form of any JSON scalar for URI templating.  Objects /
+// arrays are stringified as JSON so callers get a deterministic (if ugly)
+// value instead of the C++ default "true/false" surprise.
+std::string uri_variable_value(const Json& value) {
+    if (value.is_string()) {
+        return value.get<std::string>();
+    }
+    if (value.is_boolean()) {
+        return value.get<bool>() ? "true" : "false";
+    }
+    if (value.is_number_integer()) {
+        return std::to_string(value.get<int64_t>());
+    }
+    if (value.is_number_unsigned()) {
+        return std::to_string(value.get<uint64_t>());
+    }
+    if (value.is_number_float()) {
+        return std::to_string(value.get<double>());
+    }
+    if (value.is_null()) {
+        return {};
+    }
+    return value.dump();
+}
+
+// Minimal RFC 6570 URI-template renderer.  Supports the simple (`{var}`) and
+// reserved (`{+var}`) operators, which is what MCP resource templates use in
+// practice today.  Anything else (fragment `#`, path-segment `/`, form-style
+// `?`, `.` prefixed, etc.) is left as-is so callers see the raw template and
+// can spot bugs in their schema — better than silently rewriting `{?q}` to
+// an empty string.
+std::string render_uri_template(std::string_view templ, const Json& arguments) {
+    std::string output;
+    output.reserve(templ.size());
+    size_t index = 0;
+    while (index < templ.size()) {
+        const char current = templ[index];
+        if (current != '{') {
+            output.push_back(current);
+            ++index;
+            continue;
+        }
+        const size_t close = templ.find('}', index + 1);
+        if (close == std::string_view::npos) {
+            // Unmatched `{` — preserve the remainder verbatim.
+            output.append(templ.substr(index));
+            break;
+        }
+        std::string_view expr = templ.substr(index + 1, close - index - 1);
+        if (expr.empty()) {
+            output.append(templ.substr(index, close - index + 1));
+            index = close + 1;
+            continue;
+        }
+        bool reserved_expansion = false;
+        if (expr.front() == '+') {
+            reserved_expansion = true;
+            expr.remove_prefix(1);
+        } else if (expr.front() == '#' || expr.front() == '/' ||
+                   expr.front() == '.' || expr.front() == ';' ||
+                   expr.front() == '?' || expr.front() == '&') {
+            // Unsupported operator — preserve verbatim.
+            output.append(templ.substr(index, close - index + 1));
+            index = close + 1;
+            continue;
+        }
+        const std::string name(expr);
+        std::string value;
+        if (arguments.is_object() && arguments.contains(name)) {
+            value = uri_variable_value(arguments[name]);
+        }
+        output.append(reserved_expansion ? percent_encode_reserved(value)
+                                         : percent_encode_component(value));
+        index = close + 1;
+    }
+    return output;
+}
+
+int32_t render_resource_uri(const Json& params, Json& result) {
+    if (!params.contains("template") || !params["template"].is_string()) {
+        return SAO_AI_EDITOR_ERR_INVALID_ARGUMENT;
+    }
+    const std::string templ = params["template"].get<std::string>();
+    // `arguments` is optional — an absent / non-object payload is treated as
+    // "no variables set", which produces the template with `{name}` expanded
+    // to empty strings.  Matches RFC 6570 §3.2.1 behaviour for undefined vars.
+    Json arguments = Json::object();
+    if (params.contains("arguments") && params["arguments"].is_object()) {
+        arguments = params["arguments"];
+    }
+    result = Json{{"uri", render_uri_template(templ, arguments)}};
+    return SAO_AI_EDITOR_OK;
+}
+
 }  // namespace
 
 int32_t NativeRuntime::dispatch_mcp(std::string_view method, const Json& params,
@@ -2311,6 +2883,24 @@ int32_t NativeRuntime::dispatch_mcp(std::string_view method, const Json& params,
         }
         result = Json{{"ok", true}, {"name", name}};
         return SAO_AI_EDITOR_OK;
+    }
+    if (method == "mcp.list_resource_templates") {
+        // MCP `resources/templates/list` aggregation.  The underlying C client
+        // does not yet expose a dedicated primitive for templates — surface a
+        // well-formed but empty response so callers can adopt this dispatch
+        // method today and start receiving real templates once the client
+        // gains the primitive.  Down-stream code should treat an empty array
+        // as "no template metadata available", not "no template exists".
+        (void)raw;
+        result = Json{{"items", Json::array()}, {"total", 0}};
+        return SAO_AI_EDITOR_OK;
+    }
+    if (method == "mcp.render_resource_uri") {
+        // Local-only URI template rendering.  No network / MCP round-trip —
+        // pure string substitution against the caller-supplied `arguments`
+        // map, so an offline UI can pre-compute the URI for `mcp.read_resource`.
+        (void)raw;
+        return render_resource_uri(params, result);
     }
     return SAO_AI_EDITOR_ERR_NOT_FOUND;
 }

@@ -97,6 +97,18 @@ private:
     int32_t dispatch_agent(std::string_view method,
                            const Json& params,
                            Json& result);
+    // agents.batch_invoke — fan-out multiple agents in parallel (one worker
+    // thread per agent, throttled by params.concurrency in [1, 16]).  Each
+    // agent runs the full agents.invoke pipeline (agent lookup +
+    // build_chat_messages + run_chat_sync) with per-agent overrides layered
+    // over the top-level defaults (defaultProvider / defaultModel /
+    // defaultMessage / timeoutMs).  Failures never abort peers; every entry
+    // ends up in `results` with either {status:"completed", content, ...}
+    // or {status:"failed", error, ...}.  If conversationId is supplied,
+    // successful (user, assistant) turn pairs from each agent are appended
+    // to the same conversation in original agent order (post-join, to keep
+    // the transcript deterministic under parallelism).
+    int32_t batch_invoke_agents(const Json& params, Json& result);
     int32_t dispatch_prompt(std::string_view method,
                             const Json& params,
                             Json& result);

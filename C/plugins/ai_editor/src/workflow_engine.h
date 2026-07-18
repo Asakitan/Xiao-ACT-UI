@@ -3,6 +3,7 @@
 #include <atomic>
 #include <condition_variable>
 #include <deque>
+#include <filesystem>
 #include <memory>
 #include <mutex>
 #include <string>
@@ -108,6 +109,15 @@ public:
 
     void start(NativeRuntime& runtime, Json provider, std::string model,
                uint32_t chat_timeout_ms);
+    // Overload that also takes a directory to persist a full history record
+    // into when the run reaches a terminal state.  Empty path disables
+    // persistence (used by legacy tests and callers that don't want the disk
+    // side-effect).  `history_root` must already exist or be creatable — the
+    // executor treats persistence as best-effort and never aborts the run
+    // for a write failure.
+    void start(NativeRuntime& runtime, Json provider, std::string model,
+               uint32_t chat_timeout_ms,
+               std::filesystem::path history_root);
     void request_pause() noexcept;
     void request_resume(const std::string& human_input) noexcept;
     int32_t confirm(std::string_view step_id, bool approved,
@@ -116,6 +126,41 @@ public:
     void join() noexcept;
 
     Json snapshot() const;
+
+    // Extended snapshot that adds workflowName + normalised fields the
+    // history reader expects.  Same content as snapshot() plus the derived
+    // display metadata; safe to call from any thread.
+    Json history_record() const;
+
+    // Best-effort disk persistence: writes `<history_root>/<id>.json` with
+    // the full history_record() payload atomically.  Returns
+    // SAO_AI_EDITOR_OK on success, a specific status on failure but the
+    // run itself is never aborted — callers already treat persistence as
+    // advisory.
+    int32_t persist(const std::filesystem::path& history_root) const;
+
+    // Enumerate persisted execution records under `history_root`.  Fills
+    // `out_summaries` with summary payloads (id/workflowId/workflowName/
+    // status/completedAt/totalSteps) sorted by completedAt descending; the
+    // caller applies the final limit + workflowId filter.  Missing roots
+    // are treated as empty.
+    static int32_t enumerate_history(
+        const std::filesystem::path& history_root,
+        std::string_view workflow_id_filter,
+        std::vector<Json>& out_summaries);
+
+    // Load a full persisted record by id from `history_root`.  Returns
+    // SAO_AI_EDITOR_ERR_NOT_FOUND when the file does not exist.
+    static int32_t load_history_record(
+        const std::filesystem::path& history_root,
+        std::string_view execution_id,
+        Json& out_record);
+
+    // Delete a persisted record by id.  Returns
+    // SAO_AI_EDITOR_ERR_NOT_FOUND when the file did not exist.
+    static int32_t delete_history_record(
+        const std::filesystem::path& history_root,
+        std::string_view execution_id);
 
 private:
     struct GroupBatch {
@@ -166,6 +211,10 @@ private:
     std::unordered_map<std::string, std::string> variables_;
     std::vector<Json> step_results_;
     std::thread worker_;
+    // Empty ↔ persistence disabled.  Populated by the start() overload that
+    // wires up disk history; run_loop() writes to this directory once the
+    // execution reaches a terminal state.
+    std::filesystem::path history_persist_root_;
 };
 
 }  // namespace sao::ai_editor::native

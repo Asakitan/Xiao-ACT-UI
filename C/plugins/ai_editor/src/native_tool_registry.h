@@ -10,6 +10,18 @@
 
 namespace sao::ai_editor::native {
 
+// Best-effort JSON Schema draft-07 subset validator.  Supports type / properties
+// / required / items / enum and skips fields it does not recognise (pattern,
+// format, oneOf/anyOf/allOf/not, $ref, additionalProperties, …) so early
+// adoption never rejects a request the runtime would otherwise accept.  On
+// success returns SAO_AI_EDITOR_OK; on failure returns
+// SAO_AI_EDITOR_ERR_INVALID_ARGUMENT and populates `errors` with an array of
+// `{path, reason}` objects.  `path` uses JSONPath-lite (`$`, `$.field`,
+// `$.arr[0]`) so callers can point at the offending argument.
+int32_t validate_json_against_schema(const Json& arguments,
+                                     const Json& schema,
+                                     Json& errors);
+
 class NativeToolRegistry final {
 public:
     NativeToolRegistry(const ScopeStore& scopes,

@@ -3080,6 +3080,219 @@ TEST_CASE("AI Editor workflow.import refuses to overwrite built-in workflows",
     REQUIRE(fetched["name"] == "Review & Fix");
 }
 
+namespace {
+
+// Poll workflows.status until the execution reaches a terminal state
+// (matches the wait pattern the other workflow tests use).  Fails via
+// REQUIRE when the timeout expires so callers get a clear error instead
+// of a phantom running/pending status.
+Json wait_for_workflow_completion(sao_ai_editor_runtime_t runtime,
+                                   const std::string& execution_id,
+                                   DWORD timeout_ms) {
+    Json status;
+    const ULONGLONG started = GetTickCount64();
+    do {
+        status = dispatch(runtime, "workflows.status",
+                          {{"executionId", execution_id}})["result"];
+        const std::string current = status.value("status", "");
+        if (current != "running" && current != "pending") {
+            return status;
+        }
+        Sleep(20);
+    } while (GetTickCount64() - started < timeout_ms);
+    REQUIRE_FALSE("workflows.status never reached a terminal state");
+    return status;
+}
+
+}  // namespace
+
+TEST_CASE("AI Editor workflow.list_executions surfaces a completed run "
+          "after run_loop persists the record",
+          "[plugins][ai_editor][native][workflows][history]") {
+    const std::string body =
+        R"({"choices":[{"message":{"role":"assistant","content":"listed-content"}}]})";
+    LocalHttpServer server(
+        "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n"
+        "Content-Length: " +
+        std::to_string(body.size()) +
+        "\r\nConnection: close\r\n\r\n" + body);
+    RuntimeFixture fixture;
+    const Json run = dispatch(
+        fixture.get(), "workflows.run",
+        {{"id", "review-and-fix"},
+         {"provider", {{"id", "history-fixture"},
+                       {"endpoint", server.endpoint()}}},
+         {"model", "fixture-model"},
+         {"input", "sample input"},
+         {"timeoutMs", 5000}});
+    REQUIRE(run.contains("result"));
+    const std::string execution_id = run["result"]["executionId"];
+    const Json terminal =
+        wait_for_workflow_completion(fixture.get(), execution_id, 15'000);
+    REQUIRE(terminal["status"] == "completed");
+
+    // Give run_loop's post-emit persist a beat to hit disk — completedAt
+    // is committed under the mutex before emit_terminal fires, but the
+    // write itself happens right after.
+    Json listed;
+    for (int attempt = 0; attempt < 50; ++attempt) {
+        listed = dispatch(fixture.get(), "workflow.list_executions",
+                          {{"scope", "workspace"}, {"limit", 20}})["result"];
+        if (listed.value("total", int64_t{0}) >= 1) {
+            break;
+        }
+        Sleep(20);
+    }
+    REQUIRE(listed["total"].get<int64_t>() >= 1);
+    bool found = false;
+    for (const auto& item : listed["items"]) {
+        if (item.value("id", "") == execution_id) {
+            found = true;
+            REQUIRE(item["workflowId"] == "review-and-fix");
+            REQUIRE(item["workflowName"] == "Review & Fix");
+            REQUIRE(item["status"] == "completed");
+            REQUIRE(item["totalSteps"].get<int64_t>() == 2);
+            REQUIRE(item["completedAt"].get<int64_t>() > 0);
+        }
+    }
+    REQUIRE(found);
+
+    // workflowId filter narrows results to that definition only.
+    const Json filtered = dispatch(
+        fixture.get(), "workflow.list_executions",
+        {{"scope", "workspace"}, {"workflowId", "review-and-fix"}})["result"];
+    REQUIRE(filtered["total"].get<int64_t>() >= 1);
+    const Json missing = dispatch(
+        fixture.get(), "workflow.list_executions",
+        {{"scope", "workspace"},
+         {"workflowId", "no-such-workflow"}})["result"];
+    REQUIRE(missing["total"].get<int64_t>() == 0);
+    REQUIRE(missing["items"].size() == 0);
+}
+
+TEST_CASE("AI Editor workflow.get_execution returns full variables and "
+          "stepResults from the persisted record",
+          "[plugins][ai_editor][native][workflows][history]") {
+    const std::string body =
+        R"({"choices":[{"message":{"role":"assistant","content":"detail-content"}}]})";
+    LocalHttpServer server(
+        "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n"
+        "Content-Length: " +
+        std::to_string(body.size()) +
+        "\r\nConnection: close\r\n\r\n" + body);
+    RuntimeFixture fixture;
+    const Json run = dispatch(
+        fixture.get(), "workflows.run",
+        {{"id", "review-and-fix"},
+         {"provider", {{"id", "detail-fixture"},
+                       {"endpoint", server.endpoint()}}},
+         {"model", "fixture-model"},
+         {"input", "get-me"},
+         {"timeoutMs", 5000}});
+    REQUIRE(run.contains("result"));
+    const std::string execution_id = run["result"]["executionId"];
+    const Json terminal =
+        wait_for_workflow_completion(fixture.get(), execution_id, 15'000);
+    REQUIRE(terminal["status"] == "completed");
+
+    // Give the post-emit disk write a beat before the first read.
+    Json record;
+    for (int attempt = 0; attempt < 50; ++attempt) {
+        const Json response = dispatch(fixture.get(), "workflow.get_execution",
+                                        {{"id", execution_id}});
+        if (response.contains("result")) {
+            record = response["result"];
+            break;
+        }
+        Sleep(20);
+    }
+    REQUIRE(record.contains("id"));
+    REQUIRE(record["id"] == execution_id);
+    REQUIRE(record["workflowId"] == "review-and-fix");
+    REQUIRE(record["workflowName"] == "Review & Fix");
+    REQUIRE(record["status"] == "completed");
+    REQUIRE(record["variables"]["input"] == "get-me");
+    REQUIRE(record["variables"]["review"] == "detail-content");
+    REQUIRE(record["variables"]["fix"] == "detail-content");
+    REQUIRE(record["stepResults"].size() == 2);
+    REQUIRE(record["stepResults"][0]["outputVar"] == "review");
+    REQUIRE(record["stepResults"][1]["outputVar"] == "fix");
+    REQUIRE(record["totalSteps"].get<int64_t>() == 2);
+    REQUIRE(record["startedAt"].get<int64_t>() > 0);
+    REQUIRE(record["completedAt"].get<int64_t>() >= record["startedAt"].get<int64_t>());
+
+    const Json missing = dispatch(fixture.get(), "workflow.get_execution",
+                                   {{"id", "wf-nope-nope"}});
+    REQUIRE(missing.contains("error"));
+    REQUIRE(missing["error"]["data"]["status"] ==
+            SAO_AI_EDITOR_ERR_NOT_FOUND);
+}
+
+TEST_CASE("AI Editor workflow.delete_execution removes the persisted "
+          "history entry from subsequent listings",
+          "[plugins][ai_editor][native][workflows][history]") {
+    const std::string body =
+        R"({"choices":[{"message":{"role":"assistant","content":"delete-content"}}]})";
+    LocalHttpServer server(
+        "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n"
+        "Content-Length: " +
+        std::to_string(body.size()) +
+        "\r\nConnection: close\r\n\r\n" + body);
+    RuntimeFixture fixture;
+    const Json run = dispatch(
+        fixture.get(), "workflows.run",
+        {{"id", "review-and-fix"},
+         {"provider", {{"id", "delete-fixture"},
+                       {"endpoint", server.endpoint()}}},
+         {"model", "fixture-model"},
+         {"input", "delete-me"},
+         {"timeoutMs", 5000}});
+    REQUIRE(run.contains("result"));
+    const std::string execution_id = run["result"]["executionId"];
+    const Json terminal =
+        wait_for_workflow_completion(fixture.get(), execution_id, 15'000);
+    REQUIRE(terminal["status"] == "completed");
+
+    // Confirm the record is on disk before deleting it.
+    Json before;
+    for (int attempt = 0; attempt < 50; ++attempt) {
+        before = dispatch(fixture.get(), "workflow.list_executions",
+                          {{"scope", "workspace"}, {"limit", 20}})["result"];
+        if (before.value("total", int64_t{0}) >= 1) {
+            break;
+        }
+        Sleep(20);
+    }
+    bool present_before = false;
+    for (const auto& item : before["items"]) {
+        if (item.value("id", "") == execution_id) {
+            present_before = true;
+            break;
+        }
+    }
+    REQUIRE(present_before);
+
+    const Json deleted = dispatch(fixture.get(), "workflow.delete_execution",
+                                   {{"id", execution_id}})["result"];
+    REQUIRE(deleted["ok"] == true);
+    REQUIRE(deleted["id"] == execution_id);
+
+    const Json after = dispatch(fixture.get(), "workflow.list_executions",
+                                 {{"scope", "workspace"},
+                                  {"limit", 20}})["result"];
+    for (const auto& item : after["items"]) {
+        REQUIRE(item.value("id", "") != execution_id);
+    }
+
+    // Second delete of the same id must now return NOT_FOUND — the API is
+    // idempotent-safe in the sense that the disk state cannot regress.
+    const Json missing = dispatch(fixture.get(), "workflow.delete_execution",
+                                   {{"id", execution_id}});
+    REQUIRE(missing.contains("error"));
+    REQUIRE(missing["error"]["data"]["status"] ==
+            SAO_AI_EDITOR_ERR_NOT_FOUND);
+}
+
 TEST_CASE("AI Editor conversation.branch forks a new conversation from "
           "messageIndex",
           "[plugins][ai_editor][native][storage][branch]") {
@@ -3767,6 +3980,161 @@ TEST_CASE("AI Editor agents.invoke createConversation=true lazily seeds a "
     REQUIRE(messages.size() == 2);
     REQUIRE(messages[0]["content"] == "seed the transcript");
     REQUIRE(messages[1]["content"] == "seeded");
+}
+
+TEST_CASE("AI Editor agents.batch_invoke fans out three agents in parallel "
+          "and aggregates completed results",
+          "[plugins][ai_editor][native][agents][batch]") {
+    // Same canned reply served on every connection; the LocalHttpServer
+    // spins one accept() per connect() call so three concurrent WinHTTP
+    // sessions each get their own response.
+    const std::string body =
+        R"({"choices":[{"message":{"role":"assistant","content":"batch-reply"}}]})";
+    LocalHttpServer server(
+        "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n"
+        "Content-Length: " +
+        std::to_string(body.size()) +
+        "\r\nConnection: close\r\n\r\n" + body);
+    RuntimeFixture fixture;
+    auto runtime = fixture.get();
+    REQUIRE(dispatch(runtime, "runtime.initialize").contains("result"));
+
+    const Json invoked = dispatch(
+        runtime, "agents.batch_invoke",
+        {{"agents", Json::array({
+             Json{{"id", "code-reviewer"}, {"message", "review this"}},
+             Json{{"id", "explainer"}, {"message", "explain that"}},
+             Json{{"id", "optimizer"}, {"message", "speed it up"}}})},
+         {"defaultProvider", {{"id", "batch-fixture"},
+                               {"endpoint", server.endpoint()}}},
+         {"defaultModel", "test-model"},
+         {"timeoutMs", 5000},
+         {"concurrency", 3}});
+    REQUIRE(invoked.contains("result"));
+    const Json& body_result = invoked["result"];
+    REQUIRE(body_result["results"].size() == 3);
+    REQUIRE(body_result["successCount"] == 3);
+    REQUIRE(body_result["failureCount"] == 0);
+    // Original agent order is preserved regardless of which worker finished
+    // first — the runtime fills the results array by input index, not by
+    // completion order.
+    REQUIRE(body_result["results"][0]["agentId"] == "code-reviewer");
+    REQUIRE(body_result["results"][1]["agentId"] == "explainer");
+    REQUIRE(body_result["results"][2]["agentId"] == "optimizer");
+    for (size_t i = 0; i < 3; ++i) {
+        REQUIRE(body_result["results"][i]["status"] == "completed");
+        REQUIRE(body_result["results"][i]["content"] == "batch-reply");
+        REQUIRE(body_result["results"][i]["model"] == "test-model");
+        REQUIRE(body_result["results"][i].contains("durationMs"));
+    }
+    REQUIRE(server.wait_for_connections(3, 5'000));
+    // totalMs is the wall-clock elapsed across all workers; it should be
+    // no smaller than the slowest individual step but we only assert
+    // "present + non-negative" here because timing is fixture-specific.
+    REQUIRE(body_result.contains("totalMs"));
+}
+
+TEST_CASE("AI Editor agents.batch_invoke reports per-agent failure without "
+          "aborting peers when an id is missing",
+          "[plugins][ai_editor][native][agents][batch]") {
+    const std::string body =
+        R"({"choices":[{"message":{"role":"assistant","content":"ok"}}]})";
+    LocalHttpServer server(
+        "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n"
+        "Content-Length: " +
+        std::to_string(body.size()) +
+        "\r\nConnection: close\r\n\r\n" + body);
+    RuntimeFixture fixture;
+    auto runtime = fixture.get();
+    REQUIRE(dispatch(runtime, "runtime.initialize").contains("result"));
+
+    const Json invoked = dispatch(
+        runtime, "agents.batch_invoke",
+        {{"agents", Json::array({
+             Json{{"id", "code-reviewer"}, {"message", "hello"}},
+             Json{{"id", "does-not-exist"}, {"message", "orphan"}},
+             Json{{"id", "explainer"}, {"message", "hi"}}})},
+         {"defaultProvider", {{"id", "batch-missing-fixture"},
+                               {"endpoint", server.endpoint()}}},
+         {"defaultModel", "test-model"},
+         {"timeoutMs", 5000}});
+    REQUIRE(invoked.contains("result"));
+    const Json& body_result = invoked["result"];
+    REQUIRE(body_result["results"].size() == 3);
+    REQUIRE(body_result["successCount"] == 2);
+    REQUIRE(body_result["failureCount"] == 1);
+    REQUIRE(body_result["results"][0]["status"] == "completed");
+    REQUIRE(body_result["results"][1]["status"] == "failed");
+    REQUIRE(body_result["results"][1]["agentId"] == "does-not-exist");
+    REQUIRE(body_result["results"][1]["error"] == "agent not found");
+    REQUIRE(body_result["results"][2]["status"] == "completed");
+    // The two live agents each burn one HTTP connection; the missing agent
+    // never reaches the transport layer so we should see exactly 2.
+    REQUIRE(server.wait_for_connections(2, 5'000));
+}
+
+TEST_CASE("AI Editor agents.batch_invoke with conversationId appends every "
+          "successful (user, assistant) pair in original agent order",
+          "[plugins][ai_editor][native][agents][batch][conversation]") {
+    const std::string body =
+        R"({"choices":[{"message":{"role":"assistant","content":"convo-reply"}}]})";
+    LocalHttpServer server(
+        "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n"
+        "Content-Length: " +
+        std::to_string(body.size()) +
+        "\r\nConnection: close\r\n\r\n" + body);
+    RuntimeFixture fixture;
+    auto runtime = fixture.get();
+    REQUIRE(dispatch(runtime, "runtime.initialize").contains("result"));
+
+    const Json created = dispatch(runtime, "conversation.create",
+                                   {{"title", "Batch"},
+                                    {"model", "test-model"},
+                                    {"scope", "workspace"}});
+    REQUIRE(created.contains("result"));
+    const std::string conversation_id = created["result"]["id"];
+
+    const Json invoked = dispatch(
+        runtime, "agents.batch_invoke",
+        {{"agents", Json::array({
+             Json{{"id", "code-reviewer"}, {"message", "msg1"}},
+             Json{{"id", "explainer"}, {"message", "msg2"}}})},
+         {"defaultProvider", {{"id", "batch-convo-fixture"},
+                               {"endpoint", server.endpoint()}}},
+         {"defaultModel", "test-model"},
+         {"conversationId", conversation_id},
+         {"timeoutMs", 5000}});
+    REQUIRE(invoked.contains("result"));
+    REQUIRE(invoked["result"]["successCount"] == 2);
+    REQUIRE(invoked["result"]["conversationId"] == conversation_id);
+    REQUIRE(server.wait_for_connections(2, 5'000));
+
+    const Json snapshot = dispatch(runtime, "conversation.get",
+                                    {{"id", conversation_id}});
+    REQUIRE(snapshot.contains("result"));
+    const Json& messages = snapshot["result"]["messages"];
+    // Two agents * (user + assistant) = 4 messages; the assistant reply is
+    // prefixed with the agent name so downstream readers can attribute it
+    // back to its source agent.
+    REQUIRE(messages.size() == 4);
+    REQUIRE(messages[0]["role"] == "user");
+    REQUIRE(messages[0]["content"] == "msg1");
+    REQUIRE(messages[0]["agentId"] == "code-reviewer");
+    REQUIRE(messages[1]["role"] == "assistant");
+    REQUIRE(messages[1]["agentId"] == "code-reviewer");
+    // "[Code Reviewer] convo-reply" — human name comes from builtin agent
+    // definition.
+    REQUIRE(messages[1]["content"].get<std::string>().find(
+                "convo-reply") != std::string::npos);
+    REQUIRE(messages[1]["content"].get<std::string>().rfind(
+                "[Code Reviewer]", 0) == 0);
+    REQUIRE(messages[2]["role"] == "user");
+    REQUIRE(messages[2]["content"] == "msg2");
+    REQUIRE(messages[2]["agentId"] == "explainer");
+    REQUIRE(messages[3]["role"] == "assistant");
+    REQUIRE(messages[3]["agentId"] == "explainer");
+    REQUIRE(messages[3]["content"].get<std::string>().rfind(
+                "[Code Explainer]", 0) == 0);
 }
 
 TEST_CASE("AI Editor workflow.progress emits step_started + step_completed "
@@ -4905,4 +5273,193 @@ TEST_CASE("chat.run emits chat.retry events before each backoff sleep",
     REQUIRE(retry_events[0]["delayMs"].get<int64_t>() >= 900);
     REQUIRE(retry_events[1]["attempt"] == 3);
     REQUIRE(retry_events[1]["reason"] == "http_5xx");
+}
+
+TEST_CASE("tools.call validates arguments against the built-in JSON schema",
+          "[plugins][ai_editor][native][tools][validation]") {
+    RuntimeFixture fixture;
+    auto runtime = fixture.get();
+
+    // Missing required `path` → structured validationErrors block.  The path
+    // is reported as `$.path` (JSONPath-lite) so the UI can highlight the
+    // missing field without regexing the reason string.
+    const Json missing_required =
+        dispatch(runtime, "tools.call",
+                 {{"mode", "agent"},
+                  {"name", "readFile"},
+                  {"arguments", Json::object()}});
+    REQUIRE(missing_required.contains("error"));
+    REQUIRE(missing_required["error"]["data"]["status"] ==
+            SAO_AI_EDITOR_ERR_INVALID_ARGUMENT);
+    const Json missing_details =
+        missing_required["error"]["data"].value("details", Json::object());
+    REQUIRE(missing_details.contains("validationErrors"));
+    REQUIRE(missing_details["validationErrors"].is_array());
+    REQUIRE(missing_details["validationErrors"].size() == 1);
+    REQUIRE(missing_details["validationErrors"][0]["path"] == "$.path");
+    REQUIRE(missing_details["validationErrors"][0]["reason"] ==
+            "missing required field");
+
+    // Wrong type for `path` (number instead of string) — surfaces the type
+    // mismatch with both expected and observed types in the reason.
+    const Json wrong_type =
+        dispatch(runtime, "tools.call",
+                 {{"mode", "agent"},
+                  {"name", "readFile"},
+                  {"arguments", {{"path", 42}}}});
+    REQUIRE(wrong_type["error"]["data"]["status"] ==
+            SAO_AI_EDITOR_ERR_INVALID_ARGUMENT);
+    const Json type_details =
+        wrong_type["error"]["data"].value("details", Json::object());
+    REQUIRE(type_details["validationErrors"].size() == 1);
+    REQUIRE(type_details["validationErrors"][0]["path"] == "$.path");
+    REQUIRE(type_details["validationErrors"][0]["reason"] ==
+            "type expected string, got integer");
+
+    // Wrong type for a non-required numeric field (startLine as string) —
+    // proves validation drills into optional properties, not just required.
+    const Json wrong_optional_type =
+        dispatch(runtime, "tools.call",
+                 {{"mode", "agent"},
+                  {"name", "readFile"},
+                  {"arguments", {{"path", "note.txt"},
+                                  {"startLine", "one"}}}});
+    REQUIRE(wrong_optional_type["error"]["data"]["status"] ==
+            SAO_AI_EDITOR_ERR_INVALID_ARGUMENT);
+    const Json optional_details =
+        wrong_optional_type["error"]["data"].value("details", Json::object());
+    REQUIRE(optional_details["validationErrors"][0]["path"] == "$.startLine");
+    REQUIRE(optional_details["validationErrors"][0]["reason"] ==
+            "type expected integer, got string");
+
+    // Well-formed arguments continue to dispatch normally.  We stage a file
+    // via editFile (mode=agent bypasses the confirmation gate) so the
+    // subsequent readFile has real content to return.
+    REQUIRE(dispatch(runtime, "tools.call",
+                     {{"mode", "agent"},
+                      {"name", "editFile"},
+                      {"arguments", {{"path", "hello.txt"},
+                                     {"content", "hi\n"}}}})
+                .contains("result"));
+    const Json read_ok =
+        dispatch(runtime, "tools.call",
+                 {{"mode", "agent"},
+                  {"name", "readFile"},
+                  {"arguments", {{"path", "hello.txt"}}}});
+    REQUIRE(read_ok.contains("result"));
+    REQUIRE(read_ok["result"]["content"] == "hi\n");
+}
+
+TEST_CASE("tools.call runs custom-tool schema validation before passthrough",
+          "[plugins][ai_editor][native][tools][validation]") {
+    RuntimeFixture fixture;
+    auto runtime = fixture.get();
+
+    // Register a custom tool with a JSON schema requiring `query` (string) and
+    // an optional `limit` integer inside `filters.limit` — enough shape to
+    // exercise nested-object validation on the required + type paths.
+    const Json parameters{
+        {"type", "object"},
+        {"properties",
+         {{"query", {{"type", "string"}}},
+          {"filters",
+           {{"type", "object"},
+            {"properties", {{"limit", {{"type", "integer"}}}}}}}}},
+        {"required", Json::array({"query"})}};
+    REQUIRE(dispatch(runtime, "tools.register",
+                     {{"name", "customSearch"},
+                      {"description", "custom"},
+                      {"parameters", parameters}})
+                .contains("result"));
+
+    // Nested type error at `$.filters.limit` — proves the recursive property
+    // walk reports the exact JSONPath the LLM should fix.
+    const Json invalid =
+        dispatch(runtime, "tools.call",
+                 {{"mode", "agent"},
+                  {"name", "customSearch"},
+                  {"arguments",
+                   {{"query", "hello"},
+                    {"filters", {{"limit", "seven"}}}}}});
+    REQUIRE(invalid["error"]["data"]["status"] ==
+            SAO_AI_EDITOR_ERR_INVALID_ARGUMENT);
+    const Json nested_details =
+        invalid["error"]["data"].value("details", Json::object());
+    REQUIRE(nested_details["validationErrors"][0]["path"] ==
+            "$.filters.limit");
+    REQUIRE(nested_details["validationErrors"][0]["reason"] ==
+            "type expected integer, got string");
+
+    // Valid payload still round-trips through the custom-tool passthrough.
+    const Json valid =
+        dispatch(runtime, "tools.call",
+                 {{"mode", "agent"},
+                  {"name", "customSearch"},
+                  {"arguments",
+                   {{"query", "hello"}, {"filters", {{"limit", 7}}}}}});
+    REQUIRE(valid.contains("result"));
+    REQUIRE(valid["result"]["custom"] == true);
+    REQUIRE(valid["result"]["arguments"]["query"] == "hello");
+}
+
+TEST_CASE("mcp.render_resource_uri expands simple + reserved templates",
+          "[plugins][ai_editor][native][mcp][templates]") {
+    RuntimeFixture fixture;
+    auto runtime = fixture.get();
+
+    // Simple `{path}` expansion percent-encodes the `/` in `docs/README.md`
+    // because the caller wants a component-safe substitution.  Same behaviour
+    // MCP clients get out of RFC 6570 §3.2.2.
+    const Json simple = dispatch(runtime, "mcp.render_resource_uri",
+                                 {{"template", "sao://workspace/{path}"},
+                                  {"arguments", {{"path", "docs/README.md"}}}});
+    REQUIRE(simple.contains("result"));
+    REQUIRE(simple["result"]["uri"] ==
+            "sao://workspace/docs%2FREADME.md");
+
+    // Reserved expansion `{+path}` keeps the `/` literal so path-shaped
+    // template variables round-trip cleanly.
+    const Json reserved = dispatch(runtime, "mcp.render_resource_uri",
+                                   {{"template", "sao://workspace/{+path}"},
+                                    {"arguments", {{"path", "docs/README.md"}}}});
+    REQUIRE(reserved.contains("result"));
+    REQUIRE(reserved["result"]["uri"] ==
+            "sao://workspace/docs/README.md");
+
+    // Missing variable → empty string, mirroring RFC 6570 §3.2.1.  The
+    // scheme + prefix stay verbatim so the caller can still detect the gap
+    // (URI ends in a trailing slash) without a second round-trip.
+    const Json missing =
+        dispatch(runtime, "mcp.render_resource_uri",
+                 {{"template", "sao://workspace/{path}"},
+                  {"arguments", Json::object()}});
+    REQUIRE(missing["result"]["uri"] == "sao://workspace/");
+
+    // Unknown operator `{?query}` is preserved verbatim so callers see
+    // that the template used a form they did not opt into supporting.
+    const Json unsupported =
+        dispatch(runtime, "mcp.render_resource_uri",
+                 {{"template", "sao://search{?query}"},
+                  {"arguments", {{"query", "foo"}}}});
+    REQUIRE(unsupported["result"]["uri"] == "sao://search{?query}");
+
+    // Missing `template` → INVALID_ARGUMENT so callers get an actionable
+    // error rather than an empty URI.
+    const Json missing_template =
+        dispatch(runtime, "mcp.render_resource_uri", Json::object());
+    REQUIRE(missing_template.contains("error"));
+    REQUIRE(missing_template["error"]["data"]["status"] ==
+            SAO_AI_EDITOR_ERR_INVALID_ARGUMENT);
+}
+
+TEST_CASE("mcp.list_resource_templates returns a well-formed empty aggregation",
+          "[plugins][ai_editor][native][mcp][templates]") {
+    RuntimeFixture fixture;
+    auto runtime = fixture.get();
+    const Json listing =
+        dispatch(runtime, "mcp.list_resource_templates", Json::object());
+    REQUIRE(listing.contains("result"));
+    REQUIRE(listing["result"]["items"].is_array());
+    REQUIRE(listing["result"]["items"].empty());
+    REQUIRE(listing["result"]["total"] == 0);
 }

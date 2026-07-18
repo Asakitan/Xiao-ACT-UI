@@ -5,10 +5,167 @@
 #include <filesystem>
 #include <regex>
 #include <sstream>
+#include <string>
 #include <vector>
 
 namespace sao::ai_editor::native {
 namespace {
+
+// True iff the runtime value satisfies a JSON-schema `type` keyword.  The
+// schema draft treats `integer` as a distinct type — an accidental `5.5` for a
+// `type: "integer"` field is rejected here so the tool handler can rely on
+// integer-shaped `startLine` / `endLine` args.
+bool value_matches_type(const Json& value, std::string_view type) {
+    if (type == "string") {
+        return value.is_string();
+    }
+    if (type == "boolean") {
+        return value.is_boolean();
+    }
+    if (type == "integer") {
+        // JSON number that fits an integer.  nlohmann's is_number_integer()
+        // accepts negative + unsigned; is_number_float() carves off floats.
+        return value.is_number_integer();
+    }
+    if (type == "number") {
+        return value.is_number();
+    }
+    if (type == "object") {
+        return value.is_object();
+    }
+    if (type == "array") {
+        return value.is_array();
+    }
+    if (type == "null") {
+        return value.is_null();
+    }
+    // Unknown / unsupported type keyword — treat as pass so schemas produced
+    // by third parties (e.g. draft-04 leftovers) do not break dispatch.
+    return true;
+}
+
+std::string type_name(const Json& value) {
+    if (value.is_string()) return "string";
+    if (value.is_boolean()) return "boolean";
+    if (value.is_number_integer()) return "integer";
+    if (value.is_number_float()) return "number";
+    if (value.is_object()) return "object";
+    if (value.is_array()) return "array";
+    if (value.is_null()) return "null";
+    return "unknown";
+}
+
+void append_error(Json& errors, std::string_view path, std::string_view reason) {
+    errors.push_back(Json{{"path", std::string(path)},
+                          {"reason", std::string(reason)}});
+}
+
+void validate_recursive(const Json& value,
+                        const Json& schema,
+                        const std::string& path,
+                        Json& errors) {
+    if (!schema.is_object()) {
+        // Non-object schema (e.g. `true` / `false`) — best-effort skip so we do
+        // not falsely reject callers that hand us a permissive schema stub.
+        return;
+    }
+
+    // `type` may be a single string or an array of strings ("value must match
+    // at least one of these").  Draft-07 permits both forms; treat other
+    // shapes as a skip.
+    if (schema.contains("type")) {
+        const auto& type_field = schema["type"];
+        if (type_field.is_string()) {
+            const std::string expected = type_field.get<std::string>();
+            if (!value_matches_type(value, expected)) {
+                append_error(errors, path,
+                             "type expected " + expected + ", got " +
+                                 type_name(value));
+                // Continue to surface additional issues; but on hard type
+                // mismatch further per-field checks are meaningless.
+                return;
+            }
+        } else if (type_field.is_array()) {
+            bool matched = false;
+            std::string joined;
+            for (const auto& entry : type_field) {
+                if (!entry.is_string()) continue;
+                if (!joined.empty()) joined += "|";
+                joined += entry.get<std::string>();
+                if (value_matches_type(value, entry.get<std::string>())) {
+                    matched = true;
+                    break;
+                }
+            }
+            if (!matched) {
+                append_error(errors, path,
+                             "type expected " + joined + ", got " +
+                                 type_name(value));
+                return;
+            }
+        }
+    }
+
+    // `enum` — the value must appear in the enum array using nlohmann's ==
+    // (which handles number-vs-string ties correctly).
+    if (schema.contains("enum") && schema["enum"].is_array()) {
+        const auto& allowed = schema["enum"];
+        bool matched = false;
+        for (const auto& candidate : allowed) {
+            if (candidate == value) {
+                matched = true;
+                break;
+            }
+        }
+        if (!matched) {
+            append_error(errors, path, "value not in enum");
+        }
+    }
+
+    // `required` — objects only.  Missing fields are flagged with their child
+    // path so callers see `$.path` rather than the parent's path.
+    if (value.is_object() && schema.contains("required") &&
+        schema["required"].is_array()) {
+        for (const auto& field : schema["required"]) {
+            if (!field.is_string()) continue;
+            const std::string name = field.get<std::string>();
+            if (!value.contains(name)) {
+                const std::string child_path =
+                    path + (path == "$" ? "." : ".") + name;
+                append_error(errors, child_path, "missing required field");
+            }
+        }
+    }
+
+    // `properties` — recurse for each field present in the value.  Unlisted
+    // properties are ignored (no additionalProperties support).
+    if (value.is_object() && schema.contains("properties") &&
+        schema["properties"].is_object()) {
+        for (auto entry = schema["properties"].begin();
+             entry != schema["properties"].end(); ++entry) {
+            const std::string& field = entry.key();
+            if (!value.contains(field)) continue;
+            const std::string child_path =
+                path + (path == "$" ? "." : ".") + field;
+            validate_recursive(value[field], entry.value(), child_path, errors);
+        }
+    }
+
+    // `items` — arrays only.  Draft-07 also allows an array of per-index
+    // schemas; support the common "single schema" form and skip the tuple
+    // form (best-effort).
+    if (value.is_array() && schema.contains("items")) {
+        const auto& items_schema = schema["items"];
+        if (items_schema.is_object()) {
+            for (size_t index = 0; index < value.size(); ++index) {
+                const std::string child_path =
+                    path + "[" + std::to_string(index) + "]";
+                validate_recursive(value[index], items_schema, child_path,
+                                   errors);
+            }
+        }
+    }
+}
 
 Json tool_descriptor(std::string_view name,
                      std::string_view description,
@@ -23,6 +180,46 @@ Json tool_descriptor(std::string_view name,
                 {"description", description},
                 {"readOnly", read_only},
                 {"parameters", std::move(parameters)}};
+}
+
+// Schema for a built-in tool.  Kept in sync with `describe()` — both share a
+// single source (`kBuiltinSchemas`) so a stray "readFile no longer requires
+// path" change would need to touch this table.
+Json builtin_schema_for(std::string_view name) {
+    if (name == "readFile") {
+        return Json{{"type", "object"},
+                    {"properties", {{"path", {{"type", "string"}}},
+                                    {"startLine", {{"type", "integer"}}},
+                                    {"endLine", {{"type", "integer"}}}}},
+                    {"required", Json::array({"path"})}};
+    }
+    if (name == "listFiles") {
+        return Json{{"type", "object"},
+                    {"properties", {{"path", {{"type", "string"}}},
+                                    {"pattern", {{"type", "string"}}},
+                                    {"recursive", {{"type", "boolean"}}},
+                                    {"limit", {{"type", "integer"}}}}}};
+    }
+    if (name == "searchFiles") {
+        return Json{{"type", "object"},
+                    {"properties", {{"query", {{"type", "string"}}},
+                                    {"path", {{"type", "string"}}},
+                                    {"pattern", {{"type", "string"}}},
+                                    {"regex", {{"type", "boolean"}}},
+                                    {"caseSensitive", {{"type", "boolean"}}},
+                                    {"limit", {{"type", "integer"}}}}},
+                    {"required", Json::array({"query"})}};
+    }
+    if (name == "editFile") {
+        return Json{{"type", "object"},
+                    {"properties", {{"path", {{"type", "string"}}},
+                                    {"content", {{"type", "string"}}},
+                                    {"startLine", {{"type", "integer"}}},
+                                    {"endLine", {{"type", "integer"}}},
+                                    {"confirmed", {{"type", "boolean"}}}}},
+                    {"required", Json::array({"path", "content"})}};
+    }
+    return Json{};
 }
 
 bool wildcard_match(std::wstring_view text, std::wstring_view pattern) {
@@ -62,6 +259,23 @@ std::string relative_utf8(const std::filesystem::path& path,
 }
 
 }  // namespace
+
+int32_t validate_json_against_schema(const Json& arguments,
+                                     const Json& schema,
+                                     Json& errors) {
+    errors = Json::array();
+    // A missing / non-object schema is intentionally treated as "no
+    // constraints" so tools registered without a parameters schema still
+    // dispatch.  Only object-shaped schemas participate in validation.
+    if (!schema.is_object() || schema.empty()) {
+        return SAO_AI_EDITOR_OK;
+    }
+    validate_recursive(arguments, schema, "$", errors);
+    if (!errors.empty()) {
+        return SAO_AI_EDITOR_ERR_INVALID_ARGUMENT;
+    }
+    return SAO_AI_EDITOR_OK;
+}
 
 NativeToolRegistry::NativeToolRegistry(const ScopeStore& scopes,
                                        uint32_t maximum_file_bytes,
@@ -146,6 +360,43 @@ int32_t NativeToolRegistry::execute(std::string_view mode,
     if (!arguments.is_object()) {
         return SAO_AI_EDITOR_ERR_INVALID_ARGUMENT;
     }
+    // Resolve the schema for whichever tool this is (built-in or custom).  We
+    // grab a snapshot of the custom tool descriptor while holding the mutex so
+    // a concurrent unregister does not race the schema-vs-handler path.
+    Json schema;
+    bool is_custom = false;
+    bool custom_read_only = true;
+    bool found_tool = false;
+    if (name == "readFile" || name == "listFiles" ||
+        name == "searchFiles" || name == "editFile") {
+        schema = builtin_schema_for(name);
+        found_tool = true;
+    } else {
+        std::lock_guard<std::mutex> lock(custom_mutex_);
+        const auto found = custom_tools_.find(std::string(name));
+        if (found != custom_tools_.end()) {
+            schema = found->second.parameters;
+            custom_read_only = found->second.read_only;
+            is_custom = true;
+            found_tool = true;
+        }
+    }
+    if (!found_tool) {
+        return SAO_AI_EDITOR_ERR_NOT_FOUND;
+    }
+    // JSON-schema pre-flight: run before any handler-specific `path` /
+    // `content` checks so callers get a structured `validationErrors` list
+    // instead of a single generic "invalid argument".  Best-effort — an empty
+    // schema silently passes.
+    {
+        Json validation_errors;
+        const int32_t validation_status =
+            validate_json_against_schema(arguments, schema, validation_errors);
+        if (validation_status != SAO_AI_EDITOR_OK) {
+            result = Json{{"validationErrors", std::move(validation_errors)}};
+            return validation_status;
+        }
+    }
     if (name == "readFile") {
         return read_file(arguments, result);
     }
@@ -170,26 +421,21 @@ int32_t NativeToolRegistry::execute(std::string_view mode,
     // the caller so an external handler can carry out the real work.  The
     // ask/plan gating mirrors the built-in mutating-tool behaviour so a
     // user-defined "writeSomething" tool cannot slip past permission mode.
-    {
-        std::lock_guard<std::mutex> lock(custom_mutex_);
-        const auto found = custom_tools_.find(std::string(name));
-        if (found != custom_tools_.end()) {
-            const bool read_only = found->second.read_only;
-            if (!read_only && mode == "ask") {
-                return SAO_AI_EDITOR_ERR_PERMISSION_DENIED;
-            }
-            if (!read_only && mode == "plan" &&
-                !arguments.value("confirmed", false)) {
-                result = Json{{"confirmationRequired", true},
-                              {"tool", std::string(name)},
-                              {"custom", true}};
-                return SAO_AI_EDITOR_ERR_CONFIRMATION_REQUIRED;
-            }
-            result = Json{{"custom", true},
-                          {"name", std::string(name)},
-                          {"arguments", arguments}};
-            return SAO_AI_EDITOR_OK;
+    if (is_custom) {
+        if (!custom_read_only && mode == "ask") {
+            return SAO_AI_EDITOR_ERR_PERMISSION_DENIED;
         }
+        if (!custom_read_only && mode == "plan" &&
+            !arguments.value("confirmed", false)) {
+            result = Json{{"confirmationRequired", true},
+                          {"tool", std::string(name)},
+                          {"custom", true}};
+            return SAO_AI_EDITOR_ERR_CONFIRMATION_REQUIRED;
+        }
+        result = Json{{"custom", true},
+                      {"name", std::string(name)},
+                      {"arguments", arguments}};
+        return SAO_AI_EDITOR_OK;
     }
     return SAO_AI_EDITOR_ERR_NOT_FOUND;
 }
