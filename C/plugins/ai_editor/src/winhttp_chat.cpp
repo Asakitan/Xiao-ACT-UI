@@ -1,5 +1,7 @@
 #include "winhttp_chat.h"
 
+#include "chat_provider_router.h"
+
 #include <algorithm>
 #include <array>
 #include <memory>
@@ -404,14 +406,26 @@ int32_t perform_openai_chat(const HttpChatRequest& request,
     }
 
     int32_t final_status = SAO_AI_EDITOR_OK;
+    std::wstring authorization_line;
+    if (!request.authorization.empty() &&
+        valid_utf8(request.authorization)) {
+        authorization_line =
+            L"Authorization: " + utf8_to_wide(request.authorization) + L"\r\n";
+    } else if (request.authorization.empty() && !request.api_key.empty() &&
+               request.provider_type != "anthropic" &&
+               request.provider_type != "gemini") {
+        authorization_line =
+            L"Authorization: Bearer " + utf8_to_wide(request.api_key) +
+            L"\r\n";
+    }
+    std::wstring extras;
+    if (!request.extra_headers.empty() && valid_utf8(request.extra_headers)) {
+        extras = utf8_to_wide(request.extra_headers);
+    }
     const std::wstring headers =
         L"Content-Type: application/json\r\nAccept: " +
         std::wstring(request.stream ? L"text/event-stream" : L"application/json") +
-        L"\r\n" +
-        (request.api_key.empty()
-             ? std::wstring()
-             : L"Authorization: Bearer " + utf8_to_wide(request.api_key) +
-                   L"\r\n");
+        L"\r\n" + authorization_line + extras;
     const ULONGLONG send_started = GetTickCount64();
     final_status = await_winhttp_operation(
         request_handle, operation_state, cancellation, timeout_ms, [&] {
@@ -510,6 +524,12 @@ int32_t perform_openai_chat(const HttpChatRequest& request,
         }
         result = Json{{"ok", true}, {"stream", true}};
         return SAO_AI_EDITOR_OK;
+    }
+    if (request.provider_type == "anthropic" ||
+        request.provider_type == "gemini") {
+        ProviderRoute route;
+        route.type = request.provider_type;
+        return decode_provider_response(route, response, result);
     }
     return decode_openai_response_text(response, result);
 }

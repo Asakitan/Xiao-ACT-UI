@@ -8,6 +8,7 @@
 #include <array>
 #include <atomic>
 #include <charconv>
+#include <deque>
 #include <filesystem>
 #include <fstream>
 #include <functional>
@@ -25,6 +26,8 @@
 #include "sao/ai_editor/mcp_client.h"
 #include "sao/ai_editor/mcp_codec.h"
 #include "sao/ai_editor/openai_codec.h"
+
+#include "../src/chat_provider_router.h"
 
 namespace {
 
@@ -805,6 +808,349 @@ TEST_CASE("AI Editor MCP client spawns SaoAiEditor as MCP server, "
     REQUIRE(sao_ai_editor_mcp_client_close(client, "sao-under-test") ==
             SAO_AI_EDITOR_OK);
     sao_ai_editor_mcp_client_destroy(client);
+}
+
+namespace {
+
+class ScriptedHttpServer final {
+public:
+    ScriptedHttpServer() {
+        WSADATA data{};
+        REQUIRE(WSAStartup(MAKEWORD(2, 2), &data) == 0);
+        listener_ = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
+        REQUIRE(listener_ != INVALID_SOCKET);
+        sockaddr_in address{};
+        address.sin_family = AF_INET;
+        address.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+        address.sin_port = 0;
+        REQUIRE(bind(listener_, reinterpret_cast<const sockaddr*>(&address),
+                     sizeof(address)) == 0);
+        REQUIRE(listen(listener_, SOMAXCONN) == 0);
+        int size = sizeof(address);
+        REQUIRE(getsockname(listener_, reinterpret_cast<sockaddr*>(&address),
+                            &size) == 0);
+        base_url_ = "http://127.0.0.1:" +
+                    std::to_string(ntohs(address.sin_port));
+        worker_ = std::thread([this] { serve(); });
+    }
+    ~ScriptedHttpServer() {
+        stopping_.store(true, std::memory_order_release);
+        if (listener_ != INVALID_SOCKET) {
+            closesocket(listener_);
+            listener_ = INVALID_SOCKET;
+        }
+        if (worker_.joinable()) {
+            worker_.join();
+        }
+        WSACleanup();
+    }
+
+    void enqueue(std::string body, int status_code = 200) {
+        std::lock_guard<std::mutex> guard(mutex_);
+        std::string response = "HTTP/1.1 " + std::to_string(status_code) +
+                                " OK\r\nContent-Type: application/json\r\n"
+                                "Content-Length: " +
+                                std::to_string(body.size()) +
+                                "\r\nConnection: close\r\n\r\n" + body;
+        queue_.push_back(std::move(response));
+    }
+
+    const std::string& base_url() const noexcept { return base_url_; }
+
+    size_t handled() const noexcept {
+        return handled_.load(std::memory_order_acquire);
+    }
+
+private:
+    void serve() {
+        while (!stopping_.load(std::memory_order_acquire)) {
+            SOCKET client = accept(listener_, nullptr, nullptr);
+            if (client == INVALID_SOCKET) {
+                return;
+            }
+            std::string request;
+            std::array<char, 4096> buffer{};
+            size_t header_end = std::string::npos;
+            while (header_end == std::string::npos) {
+                const int received = recv(client, buffer.data(),
+                                          static_cast<int>(buffer.size()), 0);
+                if (received <= 0) {
+                    break;
+                }
+                request.append(buffer.data(), static_cast<size_t>(received));
+                header_end = request.find("\r\n\r\n");
+            }
+            if (header_end == std::string::npos) {
+                closesocket(client);
+                continue;
+            }
+            size_t content_length = 0;
+            const size_t length_marker = request.find("Content-Length: ");
+            if (length_marker != std::string::npos) {
+                const char* first = request.data() + length_marker + 16;
+                const char* last =
+                    request.data() + request.find("\r\n", length_marker);
+                std::from_chars(first, last, content_length);
+            }
+            const size_t body_begin = header_end + 4;
+            while (request.size() - body_begin < content_length) {
+                const int received = recv(client, buffer.data(),
+                                          static_cast<int>(buffer.size()), 0);
+                if (received <= 0) {
+                    break;
+                }
+                request.append(buffer.data(), static_cast<size_t>(received));
+            }
+            std::string response;
+            {
+                std::lock_guard<std::mutex> guard(mutex_);
+                if (!queue_.empty()) {
+                    response = std::move(queue_.front());
+                    queue_.pop_front();
+                }
+            }
+            if (response.empty()) {
+                response =
+                    "HTTP/1.1 500 Internal Server Error\r\nContent-Length: "
+                    "0\r\nConnection: close\r\n\r\n";
+            }
+            send(client, response.data(),
+                 static_cast<int>(response.size()), 0);
+            shutdown(client, SD_BOTH);
+            closesocket(client);
+            handled_.fetch_add(1, std::memory_order_release);
+        }
+    }
+
+    SOCKET listener_ = INVALID_SOCKET;
+    std::atomic<bool> stopping_{false};
+    std::atomic<size_t> handled_{0};
+    std::thread worker_;
+    std::mutex mutex_;
+    std::deque<std::string> queue_;
+    std::string base_url_;
+};
+
+}  // namespace
+
+TEST_CASE("AI Editor auth.begin_device_flow + poll drives RFC 8628 to success",
+          "[plugins][ai_editor][native][auth][device_flow][integration]") {
+    RuntimeFixture fixture;
+    ScriptedHttpServer server;
+    // Device authorization response.
+    server.enqueue(
+        R"({"device_code":"DEVICE-01","user_code":"USER-01",)"
+        R"("verification_uri":"https://auth.example.com/device",)"
+        R"("verification_uri_complete":"https://auth.example.com/device?user_code=USER-01",)"
+        R"("interval":1,"expires_in":600})");
+    // First poll: authorization_pending.
+    server.enqueue(
+        R"({"error":"authorization_pending","error_description":"waiting"})",
+        400);
+    // Second poll: success.
+    server.enqueue(
+        R"({"access_token":"TOKEN-ABC","token_type":"Bearer",)"
+        R"("refresh_token":"REFRESH-01","expires_in":3600})");
+
+    const Json begun = dispatch(
+        fixture.get(), "auth.begin_device_flow",
+        {{"providerId", "auth-fixture"},
+         {"deviceAuthorizationUrl", server.base_url() + "/device"},
+         {"tokenUrl", server.base_url() + "/token"},
+         {"clientId", "sao-test-client"},
+         {"scope", "openid email"}});
+    REQUIRE(begun.contains("result"));
+    const std::string flow_id = begun["result"]["flowId"];
+    REQUIRE(begun["result"]["userCode"] == "USER-01");
+    REQUIRE(begun["result"]["verificationUri"] ==
+            "https://auth.example.com/device");
+    REQUIRE(begun["result"]["intervalSeconds"] == 1);
+
+    const Json pending = dispatch(fixture.get(), "auth.poll_device_flow",
+                                   {{"flowId", flow_id}});
+    REQUIRE(pending.contains("result"));
+    REQUIRE(pending["result"]["status"] == "pending");
+    REQUIRE(pending["result"]["oauthError"] == "authorization_pending");
+
+    const Json completed = dispatch(fixture.get(), "auth.poll_device_flow",
+                                     {{"flowId", flow_id}});
+    REQUIRE(completed.contains("result"));
+    REQUIRE(completed["result"]["status"] == "success");
+    REQUIRE(completed["result"]["accessToken"] == "TOKEN-ABC");
+
+    const Json loaded = dispatch(fixture.get(), "auth.load_token",
+                                  {{"providerId", "auth-fixture"}});
+    REQUIRE(loaded.contains("result"));
+    REQUIRE(loaded["result"]["access_token"] == "TOKEN-ABC");
+    REQUIRE(loaded["result"]["refresh_token"] == "REFRESH-01");
+
+    REQUIRE(dispatch(fixture.get(), "auth.revoke_token",
+                     {{"providerId", "auth-fixture"}})
+                .contains("result"));
+    REQUIRE(dispatch(fixture.get(), "auth.load_token",
+                     {{"providerId", "auth-fixture"}})["error"]["data"]
+                        ["status"] == SAO_AI_EDITOR_ERR_NOT_FOUND);
+}
+
+TEST_CASE("AI Editor auth.store_token persists user-supplied bearer token",
+          "[plugins][ai_editor][native][auth]") {
+    RuntimeFixture fixture;
+    const Json token{{"access_token", "USER-TOKEN"},
+                     {"token_type", "Bearer"},
+                     {"expires_in", 1800}};
+    REQUIRE(dispatch(fixture.get(), "auth.store_token",
+                     {{"providerId", "manual-provider"}, {"token", token}})
+                .contains("result"));
+    const Json loaded = dispatch(fixture.get(), "auth.load_token",
+                                  {{"providerId", "manual-provider"}})["result"];
+    REQUIRE(loaded["access_token"] == "USER-TOKEN");
+    REQUIRE(loaded.contains("expires_at_unix_ms"));
+    REQUIRE(dispatch(fixture.get(), "auth.revoke_token",
+                     {{"providerId", "manual-provider"}})
+                .contains("result"));
+}
+
+TEST_CASE("Provider router builds Anthropic native body with system + apiKey",
+          "[plugins][ai_editor][native][providers][anthropic]") {
+    Json openai_body{
+        {"model", "claude-3-5-sonnet"},
+        {"messages",
+         Json::array(
+             {Json{{"role", "system"}, {"content", "You are helpful."}},
+              Json{{"role", "user"}, {"content", "hi"}},
+              Json{{"role", "assistant"}, {"content", "hello"}},
+              Json{{"role", "user"}, {"content", "again"}}})},
+        {"max_tokens", 512},
+        {"temperature", 0.2}};
+    sao::ai_editor::native::ProviderRoute route =
+        sao::ai_editor::native::normalise_provider(
+            Json{{"type", "anthropic"},
+                 {"endpoint", "https://api.anthropic.com"},
+                 {"apiKey", "sk-ant-xyz"}},
+            "claude-3-5-sonnet");
+    sao::ai_editor::native::ProviderRequest request;
+    REQUIRE(sao::ai_editor::native::build_provider_request(route, openai_body,
+                                                            request) ==
+            SAO_AI_EDITOR_OK);
+    REQUIRE(request.endpoint.find("/v1/messages") != std::string::npos);
+    REQUIRE(request.extra_headers.find("x-api-key: sk-ant-xyz") !=
+            std::string::npos);
+    REQUIRE(request.extra_headers.find("anthropic-version: 2023-06-01") !=
+            std::string::npos);
+    REQUIRE(request.authorization.empty());
+    const Json parsed = Json::parse(request.body_json);
+    REQUIRE(parsed["model"] == "claude-3-5-sonnet");
+    REQUIRE(parsed["system"] == "You are helpful.");
+    REQUIRE(parsed["messages"].size() == 3);
+    REQUIRE(parsed["messages"][0]["role"] == "user");
+    REQUIRE(parsed["messages"][0]["content"][0]["type"] == "text");
+    REQUIRE(parsed["messages"][1]["role"] == "assistant");
+    REQUIRE(parsed["temperature"] == 0.2);
+    REQUIRE(parsed["max_tokens"] == 512);
+}
+
+TEST_CASE("Provider router decodes Anthropic response into normalised content",
+          "[plugins][ai_editor][native][providers][anthropic]") {
+    sao::ai_editor::native::ProviderRoute route;
+    route.type = "anthropic";
+    const std::string payload =
+        R"({"content":[{"type":"text","text":"anthropic-hello"}],)"
+        R"("stop_reason":"end_turn","usage":{"input_tokens":5,)"
+        R"("output_tokens":9}})";
+    Json result;
+    REQUIRE(sao::ai_editor::native::decode_provider_response(route, payload,
+                                                              result) ==
+            SAO_AI_EDITOR_OK);
+    REQUIRE(result["ok"] == true);
+    REQUIRE(result["content"] == "anthropic-hello");
+    REQUIRE(result["finish_reason"] == "end_turn");
+    REQUIRE(result["usage"]["output_tokens"] == 9);
+}
+
+TEST_CASE("Provider router builds Gemini contents with parts and api key",
+          "[plugins][ai_editor][native][providers][gemini]") {
+    Json openai_body{
+        {"model", "gemini-2.0-flash"},
+        {"messages",
+         Json::array(
+             {Json{{"role", "system"}, {"content", "System guide"}},
+              Json{{"role", "user"}, {"content", "explain quantum"}}})},
+        {"max_tokens", 128}};
+    sao::ai_editor::native::ProviderRoute route =
+        sao::ai_editor::native::normalise_provider(
+            Json{{"type", "gemini"},
+                 {"endpoint",
+                  "https://generativelanguage.googleapis.com/v1beta/models"},
+                 {"apiKey", "GEM-KEY"}},
+            "gemini-2.0-flash");
+    sao::ai_editor::native::ProviderRequest request;
+    REQUIRE(sao::ai_editor::native::build_provider_request(route, openai_body,
+                                                            request) ==
+            SAO_AI_EDITOR_OK);
+    REQUIRE(request.endpoint.find(":generateContent") != std::string::npos);
+    REQUIRE(request.endpoint.find("key=GEM-KEY") != std::string::npos);
+    REQUIRE(request.authorization.empty());
+    const Json parsed = Json::parse(request.body_json);
+    REQUIRE(parsed["contents"][0]["role"] == "user");
+    REQUIRE(parsed["contents"][0]["parts"][0]["text"] == "explain quantum");
+    REQUIRE(parsed["systemInstruction"]["parts"][0]["text"] == "System guide");
+    REQUIRE(parsed["generationConfig"]["maxOutputTokens"] == 128);
+}
+
+TEST_CASE("Provider router decodes Gemini response into normalised content",
+          "[plugins][ai_editor][native][providers][gemini]") {
+    sao::ai_editor::native::ProviderRoute route;
+    route.type = "gemini";
+    const std::string payload =
+        R"({"candidates":[{"content":{"parts":[{"text":"gemini-hi"}]},)"
+        R"("finishReason":"STOP"}],"usageMetadata":{"totalTokenCount":42}})";
+    Json result;
+    REQUIRE(sao::ai_editor::native::decode_provider_response(route, payload,
+                                                              result) ==
+            SAO_AI_EDITOR_OK);
+    REQUIRE(result["ok"] == true);
+    REQUIRE(result["content"] == "gemini-hi");
+    REQUIRE(result["finish_reason"] == "STOP");
+    REQUIRE(result["usage"]["totalTokenCount"] == 42);
+}
+
+TEST_CASE("chat.run routes Anthropic provider through native /v1/messages",
+          "[plugins][ai_editor][native][providers][anthropic][integration]") {
+    const std::string body =
+        R"({"content":[{"type":"text","text":"claude-native"}],)"
+        R"("stop_reason":"end_turn"})";
+    LocalHttpServer server(
+        "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n"
+        "Content-Length: " +
+        std::to_string(body.size()) +
+        "\r\nConnection: close\r\n\r\n" + body);
+    RuntimeFixture fixture;
+    const Json params{{"provider", {{"id", "anthropic-native"},
+                                     {"type", "anthropic"},
+                                     {"endpoint", server.endpoint()},
+                                     {"apiKey", "sk-ant-fixture"}}},
+                      {"model", "claude-3-5-sonnet"},
+                      {"messages",
+                       Json::array({Json{{"role", "user"},
+                                          {"content", "hi"}}})},
+                      {"stream", false},
+                      {"timeoutMs", 5000}};
+    const Json started = dispatch(fixture.get(), "chat.run", params);
+    REQUIRE(started.contains("result"));
+    const std::string run_id = started["result"]["runId"];
+    REQUIRE(server.wait_for_connections(1, 2'000));
+    Json status;
+    const ULONGLONG wait_started = GetTickCount64();
+    do {
+        status = dispatch(fixture.get(), "run.status", {{"runId", run_id}})
+                     ["result"];
+        if (status["status"] != "running") {
+            break;
+        }
+        Sleep(20);
+    } while (GetTickCount64() - wait_started < 5'000);
+    REQUIRE(status["status"] == "completed");
+    REQUIRE(status["result"]["content"] == "claude-native");
 }
 
 TEST_CASE("AI Editor workflows.list_defs surfaces built-in workflows",

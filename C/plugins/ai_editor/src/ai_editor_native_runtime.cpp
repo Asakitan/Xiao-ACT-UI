@@ -1,5 +1,6 @@
 #include "sao/ai_editor/ai_editor_native.h"
 
+#include "chat_provider_router.h"
 #include "native_runtime_internal.h"
 
 #include <windows.h>
@@ -176,6 +177,7 @@ int32_t NativeRuntime::initialize() {
         return SAO_AI_EDITOR_ERR_OS_CALL_FAILED;
     }
     mcp_client_.reset(mcp_raw);
+    auth_flow_ = std::make_unique<AuthDeviceFlow>(secrets_.get());
     return SAO_AI_EDITOR_OK;
 }
 
@@ -492,6 +494,79 @@ int32_t NativeRuntime::invoke(std::string_view method,
     if (method.starts_with("workflows.")) {
         return dispatch_workflow(method, params, result);
     }
+    if (method.starts_with("auth.")) {
+        return dispatch_auth(method, params, result);
+    }
+    return SAO_AI_EDITOR_ERR_NOT_FOUND;
+}
+
+int32_t NativeRuntime::dispatch_auth(std::string_view method,
+                                     const Json& params, Json& result) {
+    if (auth_flow_ == nullptr) {
+        return SAO_AI_EDITOR_ERR_NOT_INITIALIZED;
+    }
+    if (method == "auth.begin_device_flow") {
+        DeviceFlowState state;
+        const int32_t status = auth_flow_->begin(params, state);
+        if (status != SAO_AI_EDITOR_OK) {
+            return status;
+        }
+        result = Json{{"flowId", state.flow_id},
+                      {"providerId", state.provider_id},
+                      {"userCode", state.user_code},
+                      {"verificationUri", state.verification_uri},
+                      {"verificationUriComplete",
+                       state.verification_uri_complete},
+                      {"intervalSeconds", state.interval_seconds},
+                      {"expiresAtUnixMs", state.expires_at_unix_ms},
+                      {"status", state.status}};
+        return SAO_AI_EDITOR_OK;
+    }
+    if (method == "auth.poll_device_flow") {
+        if (!params.contains("flowId") || !params["flowId"].is_string()) {
+            return SAO_AI_EDITOR_ERR_INVALID_ARGUMENT;
+        }
+        return auth_flow_->poll(params["flowId"].get<std::string>(), result);
+    }
+    if (method == "auth.status_device_flow") {
+        if (!params.contains("flowId") || !params["flowId"].is_string()) {
+            return SAO_AI_EDITOR_ERR_INVALID_ARGUMENT;
+        }
+        return auth_flow_->status(params["flowId"].get<std::string>(),
+                                  result);
+    }
+    if (method == "auth.cancel_device_flow") {
+        if (!params.contains("flowId") || !params["flowId"].is_string()) {
+            return SAO_AI_EDITOR_ERR_INVALID_ARGUMENT;
+        }
+        return auth_flow_->cancel(params["flowId"].get<std::string>(),
+                                  result);
+    }
+    if (method == "auth.store_token") {
+        if (!params.contains("providerId") ||
+            !params["providerId"].is_string() ||
+            !params.contains("token") || !params["token"].is_object()) {
+            return SAO_AI_EDITOR_ERR_INVALID_ARGUMENT;
+        }
+        return auth_flow_->store_token(
+            params["providerId"].get<std::string>(), params["token"], result);
+    }
+    if (method == "auth.load_token") {
+        if (!params.contains("providerId") ||
+            !params["providerId"].is_string()) {
+            return SAO_AI_EDITOR_ERR_INVALID_ARGUMENT;
+        }
+        return auth_flow_->load_token(
+            params["providerId"].get<std::string>(), result);
+    }
+    if (method == "auth.revoke_token") {
+        if (!params.contains("providerId") ||
+            !params["providerId"].is_string()) {
+            return SAO_AI_EDITOR_ERR_INVALID_ARGUMENT;
+        }
+        return auth_flow_->revoke(params["providerId"].get<std::string>(),
+                                  result);
+    }
     return SAO_AI_EDITOR_ERR_NOT_FOUND;
 }
 
@@ -503,10 +578,9 @@ int32_t NativeRuntime::run_chat_sync(const Json& params, uint32_t timeout_ms,
     if (status != SAO_AI_EDITOR_OK) {
         return status;
     }
-    const std::string endpoint = provider.value("endpoint", std::string{});
     const std::string model =
         params.value("model", provider.value("model", std::string{}));
-    if (endpoint.empty() || model.empty()) {
+    if (model.empty()) {
         return SAO_AI_EDITOR_ERR_INVALID_ARGUMENT;
     }
     Json messages = params.value("messages", Json::array());
@@ -523,7 +597,29 @@ int32_t NativeRuntime::run_chat_sync(const Json& params, uint32_t timeout_ms,
             body[std::string(field)] = params[field];
         }
     }
-    HttpChatRequest request{endpoint, api_key, body.dump(), timeout_ms, stream};
+    Json provider_with_key = provider;
+    if (!api_key.empty()) {
+        provider_with_key["apiKey"] = api_key;
+    }
+    ProviderRoute route = normalise_provider(provider_with_key, model);
+    if (route.endpoint.empty() && route.type == "openai") {
+        return SAO_AI_EDITOR_ERR_INVALID_ARGUMENT;
+    }
+    ProviderRequest provider_request;
+    const int32_t build_status =
+        build_provider_request(route, body, provider_request);
+    if (build_status != SAO_AI_EDITOR_OK) {
+        return build_status;
+    }
+    HttpChatRequest request{};
+    request.endpoint = provider_request.endpoint;
+    request.api_key = route.api_key;
+    request.authorization = provider_request.authorization;
+    request.extra_headers = provider_request.extra_headers;
+    request.request_json = provider_request.body_json;
+    request.provider_type = route.type;
+    request.timeout_ms = timeout_ms;
+    request.stream = stream;
     ChatCancellation cancellation;
     std::string streamed;
     Json transport_result;
@@ -850,8 +946,29 @@ int32_t NativeRuntime::start_chat(const Json& params, Json& result) {
             body[std::string(field)] = params[field];
         }
     }
-    HttpChatRequest request{endpoint, api_key, body.dump(),
-                            params.value("timeoutMs", 60'000U), stream};
+    Json provider_with_key = provider;
+    if (!api_key.empty()) {
+        provider_with_key["apiKey"] = api_key;
+    }
+    ProviderRoute route = normalise_provider(provider_with_key, model);
+    if (route.endpoint.empty()) {
+        route.endpoint = endpoint;
+    }
+    ProviderRequest provider_request;
+    const int32_t build_status =
+        build_provider_request(route, body, provider_request);
+    if (build_status != SAO_AI_EDITOR_OK) {
+        return build_status;
+    }
+    HttpChatRequest request{};
+    request.endpoint = provider_request.endpoint;
+    request.api_key = route.api_key;
+    request.authorization = provider_request.authorization;
+    request.extra_headers = provider_request.extra_headers;
+    request.request_json = provider_request.body_json;
+    request.provider_type = route.type;
+    request.timeout_ms = params.value("timeoutMs", 60'000U);
+    request.stream = stream;
     auto run = std::make_shared<RunState>();
     run->id = new_run_id();
     run->cancellation = std::make_shared<ChatCancellation>();

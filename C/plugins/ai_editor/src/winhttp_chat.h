@@ -13,8 +13,11 @@ namespace sao::ai_editor::native {
 
 struct HttpChatRequest final {
     std::string endpoint;
-    std::string api_key;
+    std::string api_key;              // used only when authorization empty
+    std::string authorization;        // full "Bearer ..." / "Basic ..." value
+    std::string extra_headers;        // CRLF-terminated block for provider hdrs
     std::string request_json;
+    std::string provider_type{"openai"};  // "openai" | "anthropic" | "gemini"
     uint32_t timeout_ms = 60'000;
     bool stream = false;
 };

@@ -9,6 +9,7 @@
 #include <unordered_map>
 #include <vector>
 
+#include "auth_device_flow.h"
 #include "conversation_store.h"
 #include "native_secret_store.h"
 #include "native_tool_registry.h"
@@ -65,6 +66,9 @@ private:
     int32_t dispatch_workflow(std::string_view method,
                               const Json& params,
                               Json& result);
+    int32_t dispatch_auth(std::string_view method,
+                          const Json& params,
+                          Json& result);
     int32_t run_chat_sync(const Json& params, uint32_t timeout_ms,
                           std::string& out_content);
     void execute_chat(const std::shared_ptr<RunState>& run,
@@ -97,6 +101,7 @@ private:
     mutable std::mutex workflow_mutex_;
     std::unordered_map<std::string, std::shared_ptr<WorkflowExecution>>
         workflow_executions_;
+    std::unique_ptr<AuthDeviceFlow> auth_flow_;
     uint32_t maximum_event_queue_;
 
     mutable std::mutex store_mutex_;

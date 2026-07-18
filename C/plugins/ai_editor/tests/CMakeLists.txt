@@ -10,6 +10,8 @@ target_compile_features(sao_plugin_ai_editor_child_fixture PRIVATE cxx_std_20)
 add_executable(sao_plugin_ai_editor_wave7_tests
     ai_editor_native_test.cpp
     ai_editor_process_test.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/../src/chat_provider_router.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/../src/native_utils.cpp
 )
 
 target_link_libraries(sao_plugin_ai_editor_wave7_tests PRIVATE
@@ -17,6 +19,9 @@ target_link_libraries(sao_plugin_ai_editor_wave7_tests PRIVATE
     Catch2::Catch2WithMain
     nlohmann_json::nlohmann_json
     ws2_32
+)
+target_include_directories(sao_plugin_ai_editor_wave7_tests PRIVATE
+    ${CMAKE_SOURCE_DIR}/plugins/ai_editor/src
 )
 
 target_compile_features(sao_plugin_ai_editor_wave7_tests PRIVATE cxx_std_20)
