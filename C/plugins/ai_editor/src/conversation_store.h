@@ -22,6 +22,10 @@ public:
     int32_t list(std::string_view scope,
                  uint32_t limit,
                  Json& result) const;
+    int32_t search(std::string_view query,
+                   std::string_view scope,
+                   uint32_t limit,
+                   Json& result) const;
     int32_t remove(std::string_view conversation_id, Json& result) const;
 
 private:

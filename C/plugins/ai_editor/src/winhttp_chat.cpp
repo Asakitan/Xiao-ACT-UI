@@ -6,6 +6,7 @@
 #include <array>
 #include <memory>
 #include <string_view>
+#include <variant>
 
 namespace sao::ai_editor::native {
 namespace {
@@ -483,12 +484,28 @@ int32_t perform_openai_chat(const HttpChatRequest& request,
     }
 
     std::string response;
-    OpenAiSseCodec stream_codec;
+    using StreamCodec = std::variant<OpenAiSseCodec,
+                                     AnthropicSseCodec,
+                                     GeminiSseCodec>;
+    StreamCodec stream_codec = [&]() -> StreamCodec {
+        if (request.provider_type == "anthropic") {
+            return StreamCodec{std::in_place_type<AnthropicSseCodec>};
+        }
+        if (request.provider_type == "gemini") {
+            return StreamCodec{std::in_place_type<GeminiSseCodec>};
+        }
+        return StreamCodec{std::in_place_type<OpenAiSseCodec>};
+    }();
+    const auto feed_codec = [&](std::string_view chunk, Json& events) -> int32_t {
+        return std::visit(
+            [&](auto& codec) -> int32_t { return codec.feed(chunk, events); },
+            stream_codec);
+    };
     const auto consume = request.stream
         ? std::function<int32_t(std::string_view)>(
               [&](std::string_view chunk) -> int32_t {
                   Json events;
-                  const int32_t status = stream_codec.feed(chunk, events);
+                  const int32_t status = feed_codec(chunk, events);
                   if (status != SAO_AI_EDITOR_OK) {
                       return status;
                   }
@@ -515,7 +532,7 @@ int32_t perform_openai_chat(const HttpChatRequest& request,
     }
     if (request.stream) {
         Json trailing;
-        final_status = stream_codec.feed("\n\n", trailing);
+        final_status = feed_codec("\n\n", trailing);
         if (final_status != SAO_AI_EDITOR_OK) {
             return final_status;
         }

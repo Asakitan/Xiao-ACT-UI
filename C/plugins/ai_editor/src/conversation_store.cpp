@@ -4,8 +4,10 @@
 
 #include <algorithm>
 #include <atomic>
+#include <cctype>
 #include <chrono>
 #include <cstdio>
+#include <string>
 #include <vector>
 
 namespace sao::ai_editor::native {
@@ -178,6 +180,147 @@ int32_t ConversationStore::list(std::string_view scope,
          ++index) {
         result.push_back(std::move(entries[index]));
     }
+    return SAO_AI_EDITOR_OK;
+}
+
+namespace {
+
+std::string ascii_lower(std::string_view value) {
+    std::string lowered;
+    lowered.reserve(value.size());
+    for (const char character : value) {
+        lowered.push_back(static_cast<char>(
+            std::tolower(static_cast<unsigned char>(character))));
+    }
+    return lowered;
+}
+
+size_t count_occurrences(const std::string& haystack_lower,
+                         const std::string& needle_lower) {
+    if (needle_lower.empty() || haystack_lower.size() < needle_lower.size()) {
+        return 0;
+    }
+    size_t count = 0;
+    size_t position = 0;
+    while ((position = haystack_lower.find(needle_lower, position)) !=
+           std::string::npos) {
+        ++count;
+        position += needle_lower.size();
+    }
+    return count;
+}
+
+}  // namespace
+
+int32_t ConversationStore::search(std::string_view query,
+                                  std::string_view scope,
+                                  uint32_t limit,
+                                  Json& result) const {
+    if (query.empty()) {
+        return SAO_AI_EDITOR_ERR_INVALID_ARGUMENT;
+    }
+    if (scope != "all" && scope != "workspace" && scope != "system") {
+        return SAO_AI_EDITOR_ERR_INVALID_ARGUMENT;
+    }
+    limit = std::clamp<uint32_t>(limit, 1U, 500U);
+    const std::string needle_lower = ascii_lower(query);
+    struct Hit {
+        Json summary;
+        int64_t saved_at;
+    };
+    std::vector<Hit> hits;
+    const std::vector<std::string_view> selected = scope == "all"
+        ? std::vector<std::string_view>{"workspace", "system"}
+        : std::vector<std::string_view>{scope};
+    for (const auto selected_scope : selected) {
+        const auto root = scopes_.history_root(selected_scope);
+        std::error_code error;
+        if (!std::filesystem::is_directory(root, error)) {
+            continue;
+        }
+        for (const auto& item :
+             std::filesystem::directory_iterator(root, error)) {
+            if (error) {
+                error.clear();
+                continue;
+            }
+            std::error_code file_error;
+            if (!item.is_regular_file(file_error) ||
+                item.path().extension() != L".json") {
+                continue;
+            }
+            std::string text;
+            if (read_text_file(item.path(), kMaximumJsonBytes, text) !=
+                SAO_AI_EDITOR_OK) {
+                continue;
+            }
+            Json document = Json::parse(text, nullptr, false);
+            if (!document.is_object()) {
+                continue;
+            }
+            size_t match_count = 0;
+            Json matched_fields = Json::array();
+            const std::string title_lower = ascii_lower(
+                document.value("title", std::string{}));
+            const size_t title_hits = count_occurrences(title_lower,
+                                                         needle_lower);
+            if (title_hits > 0) {
+                match_count += title_hits;
+                matched_fields.push_back("title");
+            }
+            bool message_field_added = false;
+            if (document.contains("messages") &&
+                document["messages"].is_array()) {
+                for (const auto& message : document["messages"]) {
+                    if (!message.is_object() || !message.contains("content")) {
+                        continue;
+                    }
+                    const auto& content = message["content"];
+                    if (!content.is_string()) {
+                        continue;
+                    }
+                    const std::string content_lower = ascii_lower(
+                        content.get<std::string>());
+                    const size_t content_hits = count_occurrences(
+                        content_lower, needle_lower);
+                    if (content_hits > 0) {
+                        match_count += content_hits;
+                        if (!message_field_added) {
+                            matched_fields.push_back("message");
+                            message_field_added = true;
+                        }
+                    }
+                }
+            }
+            if (match_count == 0) {
+                continue;
+            }
+            const int64_t saved_at = document.value("savedAt", int64_t{0});
+            Hit hit;
+            hit.summary = Json{
+                {"id", document.value("id", "")},
+                {"title", document.value("title", "Untitled")},
+                {"scope", document.value("scope",
+                                        std::string(selected_scope))},
+                {"savedAt", saved_at},
+                {"matchedFields", std::move(matched_fields)},
+                {"matchCount", match_count}};
+            hit.saved_at = saved_at;
+            hits.push_back(std::move(hit));
+        }
+    }
+    std::sort(hits.begin(), hits.end(),
+              [](const Hit& left, const Hit& right) {
+                  return left.saved_at > right.saved_at;
+              });
+    Json results_array = Json::array();
+    for (size_t index = 0;
+         index < hits.size() && index < static_cast<size_t>(limit); ++index) {
+        results_array.push_back(std::move(hits[index].summary));
+    }
+    result = Json{{"query", std::string(query)},
+                  {"results", std::move(results_array)},
+                  {"total", hits.size()}};
     return SAO_AI_EDITOR_OK;
 }
 

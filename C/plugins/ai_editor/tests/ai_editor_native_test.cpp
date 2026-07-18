@@ -422,6 +422,37 @@ TEST_CASE("AI Editor runtime merges scopes and persists history registries",
                 ["result"]["messageCount"] == 1);
     REQUIRE(dispatch(runtime, "conversation.list")["result"].size() == 1);
 
+    // Seed a second conversation covering the search title path.
+    const Json created_ranged = dispatch(
+        runtime, "conversation.create",
+        {{"title", "Refactoring Notes"},
+         {"model", "test"},
+         {"scope", "workspace"}});
+    REQUIRE(dispatch(runtime, "conversation.append",
+                     {{"id", created_ranged["result"]["id"]},
+                      {"message", {{"role", "assistant"},
+                                   {"content", "Rewrite the parser."}}}})
+                .contains("result"));
+
+    const Json search_title = dispatch(runtime, "conversation.search",
+                                        {{"query", "Refactor"},
+                                         {"scope", "workspace"},
+                                         {"limit", 10}});
+    REQUIRE(search_title.contains("result"));
+    REQUIRE(search_title["result"]["total"] == 1);
+    REQUIRE(search_title["result"]["results"][0]["title"] ==
+            "Refactoring Notes");
+
+    const Json search_message = dispatch(runtime, "conversation.search",
+                                          {{"query", "hello"}});
+    REQUIRE(search_message["result"]["total"] == 1);
+    REQUIRE(search_message["result"]["results"][0]["id"] == id);
+
+    const Json empty_query = dispatch(runtime, "conversation.search",
+                                       {{"query", ""}});
+    REQUIRE(empty_query["error"]["data"]["status"] ==
+            SAO_AI_EDITOR_ERR_INVALID_ARGUMENT);
+
     REQUIRE(dispatch(runtime, "agents.save",
                      {{"scope", "plugin:fixture"},
                       {"item", {{"id", "reviewer"},
@@ -1369,6 +1400,290 @@ TEST_CASE("AI Editor auth.store_token persists user-supplied bearer token",
     REQUIRE(dispatch(fixture.get(), "auth.revoke_token",
                      {{"providerId", "manual-provider"}})
                 .contains("result"));
+}
+
+TEST_CASE("Anthropic SSE decoder emits ordered text deltas",
+          "[plugins][ai_editor][native][providers][anthropic][sse]") {
+    sao::ai_editor::native::AnthropicSseCodec codec;
+    Json events;
+    const std::string stream =
+        "event: message_start\r\n"
+        "data: {\"type\":\"message_start\",\"message\":{\"id\":\"msg_1\"}}\r\n"
+        "\r\n"
+        "event: content_block_start\r\n"
+        "data: {\"type\":\"content_block_start\",\"index\":0,"
+        "\"content_block\":{\"type\":\"text\",\"text\":\"\"}}\r\n"
+        "\r\n"
+        "event: content_block_delta\r\n"
+        "data: {\"type\":\"content_block_delta\",\"index\":0,"
+        "\"delta\":{\"type\":\"text_delta\",\"text\":\"hel\"}}\r\n"
+        "\r\n"
+        "event: content_block_delta\r\n"
+        "data: {\"type\":\"content_block_delta\",\"index\":0,"
+        "\"delta\":{\"type\":\"text_delta\",\"text\":\"lo\"}}\r\n"
+        "\r\n"
+        "event: content_block_stop\r\n"
+        "data: {\"type\":\"content_block_stop\",\"index\":0}\r\n"
+        "\r\n"
+        "event: message_delta\r\n"
+        "data: {\"type\":\"message_delta\","
+        "\"delta\":{\"stop_reason\":\"end_turn\"},"
+        "\"usage\":{\"output_tokens\":2}}\r\n"
+        "\r\n"
+        "event: message_stop\r\n"
+        "data: {\"type\":\"message_stop\"}\r\n"
+        "\r\n";
+    REQUIRE(codec.feed(stream, events) == SAO_AI_EDITOR_OK);
+    REQUIRE(events.is_array());
+    REQUIRE(events.size() == 4);
+    REQUIRE(events[0]["type"] == "delta");
+    REQUIRE(events[0]["content"] == "hel");
+    REQUIRE(events[1]["type"] == "delta");
+    REQUIRE(events[1]["content"] == "lo");
+    REQUIRE(events[2]["type"] == "message_delta");
+    REQUIRE(events[2]["delta"]["stop_reason"] == "end_turn");
+    REQUIRE(events[2]["usage"]["output_tokens"] == 2);
+    REQUIRE(events[3]["type"] == "done");
+
+    SECTION("empty feed after construction is a no-op") {
+        sao::ai_editor::native::AnthropicSseCodec fresh;
+        Json fresh_events;
+        REQUIRE(fresh.feed(std::string_view{}, fresh_events) ==
+                SAO_AI_EDITOR_OK);
+        REQUIRE(fresh_events.is_array());
+        REQUIRE(fresh_events.empty());
+    }
+
+    SECTION("non-object payload surfaces protocol error") {
+        sao::ai_editor::native::AnthropicSseCodec bad;
+        Json bad_events;
+        REQUIRE(bad.feed("data: \"not-an-object\"\n\n", bad_events) ==
+                SAO_AI_EDITOR_ERR_PROTOCOL);
+    }
+
+    SECTION("input_json_delta becomes tool_delta") {
+        sao::ai_editor::native::AnthropicSseCodec tool_codec;
+        Json tool_events;
+        const std::string tool_stream =
+            "event: content_block_delta\n"
+            "data: {\"type\":\"content_block_delta\",\"index\":0,"
+            "\"delta\":{\"type\":\"input_json_delta\","
+            "\"partial_json\":\"{\\\"x\\\":\"}}\n"
+            "\n";
+        REQUIRE(tool_codec.feed(tool_stream, tool_events) == SAO_AI_EDITOR_OK);
+        REQUIRE(tool_events.size() == 1);
+        REQUIRE(tool_events[0]["type"] == "tool_delta");
+        REQUIRE(tool_events[0]["content"] == "{\"x\":");
+    }
+
+    SECTION("feed after done rejects non-whitespace input") {
+        Json trailing;
+        REQUIRE(codec.feed(std::string_view{}, trailing) == SAO_AI_EDITOR_OK);
+        REQUIRE(trailing.empty());
+        REQUIRE(codec.feed("\r\n\r\n", trailing) == SAO_AI_EDITOR_OK);
+        REQUIRE(trailing.empty());
+        REQUIRE(codec.feed("data: {\"type\":\"ping\"}\n\n", trailing) ==
+                SAO_AI_EDITOR_ERR_INVALID_ARGUMENT);
+    }
+}
+
+TEST_CASE("Anthropic SSE decoder handles split chunks across feeds",
+          "[plugins][ai_editor][native][providers][anthropic][sse]") {
+    sao::ai_editor::native::AnthropicSseCodec codec;
+    const std::string stream =
+        "event: content_block_delta\n"
+        "data: {\"type\":\"content_block_delta\",\"index\":0,"
+        "\"delta\":{\"type\":\"text_delta\",\"text\":\"hel\"}}\n"
+        "\n"
+        "event: content_block_delta\n"
+        "data: {\"type\":\"content_block_delta\",\"index\":0,"
+        "\"delta\":{\"type\":\"text_delta\",\"text\":\"lo\"}}\n"
+        "\n"
+        "event: message_delta\n"
+        "data: {\"type\":\"message_delta\","
+        "\"delta\":{\"stop_reason\":\"end_turn\"}}\n"
+        "\n"
+        "event: message_stop\n"
+        "data: {\"type\":\"message_stop\"}\n"
+        "\n";
+    // Split partway through the first JSON payload so the codec has to
+    // buffer an incomplete `data:` line across the feed boundary.
+    const size_t cut = stream.find("\"text\":\"hel\"") + 6;
+    REQUIRE(cut > 0);
+    REQUIRE(cut < stream.size());
+    const std::string_view first(stream.data(), cut);
+    const std::string_view second(stream.data() + cut, stream.size() - cut);
+
+    Json first_events;
+    REQUIRE(codec.feed(first, first_events) == SAO_AI_EDITOR_OK);
+    REQUIRE(first_events.is_array());
+    // Nothing has been dispatched yet because the blank-line delimiter
+    // has not been observed.
+    REQUIRE(first_events.empty());
+
+    Json second_events;
+    REQUIRE(codec.feed(second, second_events) == SAO_AI_EDITOR_OK);
+    REQUIRE(second_events.size() == 4);
+    REQUIRE(second_events[0]["type"] == "delta");
+    REQUIRE(second_events[0]["content"] == "hel");
+    REQUIRE(second_events[1]["type"] == "delta");
+    REQUIRE(second_events[1]["content"] == "lo");
+    REQUIRE(second_events[2]["type"] == "message_delta");
+    REQUIRE(second_events[2]["delta"]["stop_reason"] == "end_turn");
+    REQUIRE(second_events[3]["type"] == "done");
+
+    SECTION("single-byte trickle produces the same events") {
+        sao::ai_editor::native::AnthropicSseCodec trickle;
+        Json aggregated = Json::array();
+        for (size_t i = 0; i < stream.size(); ++i) {
+            Json chunk_events;
+            REQUIRE(trickle.feed(std::string_view(stream.data() + i, 1),
+                                  chunk_events) == SAO_AI_EDITOR_OK);
+            for (auto& event : chunk_events) {
+                aggregated.push_back(std::move(event));
+            }
+        }
+        REQUIRE(aggregated.size() == 4);
+        REQUIRE(aggregated[0]["content"] == "hel");
+        REQUIRE(aggregated[1]["content"] == "lo");
+        REQUIRE(aggregated[3]["type"] == "done");
+    }
+}
+
+TEST_CASE("Gemini SSE decoder emits candidate parts as deltas",
+          "[plugins][ai_editor][native][providers][gemini][sse]") {
+    sao::ai_editor::native::GeminiSseCodec codec;
+    Json events;
+    const std::string stream =
+        "data: {\"candidates\":[{\"content\":{\"parts\":"
+        "[{\"text\":\"hel\"}],\"role\":\"model\"}}]}\n"
+        "\n"
+        "data: {\"candidates\":[{\"content\":{\"parts\":"
+        "[{\"text\":\"lo\"}],\"role\":\"model\"},"
+        "\"finishReason\":\"STOP\"}],"
+        "\"usageMetadata\":{\"totalTokenCount\":42}}\n"
+        "\n";
+    REQUIRE(codec.feed(stream, events) == SAO_AI_EDITOR_OK);
+    REQUIRE(events.is_array());
+    REQUIRE(events.size() == 4);
+    REQUIRE(events[0]["type"] == "delta");
+    REQUIRE(events[0]["content"] == "hel");
+    REQUIRE(events[1]["type"] == "delta");
+    REQUIRE(events[1]["content"] == "lo");
+    REQUIRE(events[2]["type"] == "message_delta");
+    REQUIRE(events[2]["finish_reason"] == "STOP");
+    REQUIRE(events[2]["usage"]["totalTokenCount"] == 42);
+    REQUIRE(events[3]["type"] == "done");
+
+    SECTION("empty input yields no events") {
+        sao::ai_editor::native::GeminiSseCodec fresh;
+        Json fresh_events;
+        REQUIRE(fresh.feed(std::string_view{}, fresh_events) ==
+                SAO_AI_EDITOR_OK);
+        REQUIRE(fresh_events.is_array());
+        REQUIRE(fresh_events.empty());
+    }
+
+    SECTION("error payload surfaces as error event") {
+        sao::ai_editor::native::GeminiSseCodec err_codec;
+        Json err_events;
+        REQUIRE(err_codec.feed(
+                    "data: {\"error\":{\"code\":429,\"message\":\"rate\"}}\n\n",
+                    err_events) == SAO_AI_EDITOR_OK);
+        REQUIRE(err_events.size() == 1);
+        REQUIRE(err_events[0]["type"] == "error");
+        REQUIRE(err_events[0]["error"]["code"] == 429);
+        REQUIRE(err_events[0]["error"]["message"] == "rate");
+    }
+
+    SECTION("non-object payload is a protocol error") {
+        sao::ai_editor::native::GeminiSseCodec bad;
+        Json bad_events;
+        REQUIRE(bad.feed("data: 12345\n\n", bad_events) ==
+                SAO_AI_EDITOR_ERR_PROTOCOL);
+    }
+
+    SECTION("FINISH_REASON_UNSPECIFIED does not close the stream") {
+        sao::ai_editor::native::GeminiSseCodec pending;
+        Json pending_events;
+        REQUIRE(pending.feed(
+                    "data: {\"candidates\":[{\"content\":{\"parts\":"
+                    "[{\"text\":\"x\"}]},"
+                    "\"finishReason\":\"FINISH_REASON_UNSPECIFIED\"}]}\n\n",
+                    pending_events) == SAO_AI_EDITOR_OK);
+        REQUIRE(pending_events.size() == 1);
+        REQUIRE(pending_events[0]["type"] == "delta");
+        REQUIRE(pending_events[0]["content"] == "x");
+    }
+
+    SECTION("feed after done rejects non-whitespace input") {
+        Json trailing;
+        REQUIRE(codec.feed("\r\n", trailing) == SAO_AI_EDITOR_OK);
+        REQUIRE(trailing.empty());
+        REQUIRE(codec.feed("data: {}\n\n", trailing) ==
+                SAO_AI_EDITOR_ERR_INVALID_ARGUMENT);
+    }
+}
+
+TEST_CASE("Gemini SSE decoder handles split chunks across feeds",
+          "[plugins][ai_editor][native][providers][gemini][sse]") {
+    sao::ai_editor::native::GeminiSseCodec codec;
+    const std::string stream =
+        "data: {\"candidates\":[{\"content\":{\"parts\":"
+        "[{\"text\":\"hel\"}],\"role\":\"model\"}}]}\n"
+        "\n"
+        "data: {\"candidates\":[{\"content\":{\"parts\":"
+        "[{\"text\":\"lo\"}],\"role\":\"model\"},"
+        "\"finishReason\":\"STOP\"}],"
+        "\"usageMetadata\":{\"totalTokenCount\":42}}\n"
+        "\n";
+    // Split partway through the first payload's JSON body so the buffer
+    // has to survive across two feed calls before the blank line arrives.
+    const size_t cut = stream.find("\"text\":\"hel\"") + 6;
+    REQUIRE(cut > 0);
+    REQUIRE(cut < stream.size());
+    const std::string_view first(stream.data(), cut);
+    const std::string_view second(stream.data() + cut, stream.size() - cut);
+
+    Json first_events;
+    REQUIRE(codec.feed(first, first_events) == SAO_AI_EDITOR_OK);
+    REQUIRE(first_events.is_array());
+    REQUIRE(first_events.empty());
+
+    Json second_events;
+    REQUIRE(codec.feed(second, second_events) == SAO_AI_EDITOR_OK);
+    REQUIRE(second_events.size() == 4);
+    REQUIRE(second_events[0]["type"] == "delta");
+    REQUIRE(second_events[0]["content"] == "hel");
+    REQUIRE(second_events[1]["type"] == "delta");
+    REQUIRE(second_events[1]["content"] == "lo");
+    REQUIRE(second_events[2]["type"] == "message_delta");
+    REQUIRE(second_events[2]["finish_reason"] == "STOP");
+    REQUIRE(second_events[2]["usage"]["totalTokenCount"] == 42);
+    REQUIRE(second_events[3]["type"] == "done");
+
+    SECTION("split at the blank-line boundary between events") {
+        sao::ai_editor::native::GeminiSseCodec codec2;
+        // Include both newlines so the first event has fully dispatched
+        // before the second feed starts.
+        const size_t boundary = stream.find("\n\n") + 2;
+        REQUIRE(boundary > 1);
+        REQUIRE(boundary < stream.size());
+        Json a_events;
+        REQUIRE(codec2.feed(std::string_view(stream.data(), boundary),
+                              a_events) == SAO_AI_EDITOR_OK);
+        REQUIRE(a_events.size() == 1);
+        REQUIRE(a_events[0]["type"] == "delta");
+        REQUIRE(a_events[0]["content"] == "hel");
+        Json b_events;
+        REQUIRE(codec2.feed(std::string_view(stream.data() + boundary,
+                                                stream.size() - boundary),
+                              b_events) == SAO_AI_EDITOR_OK);
+        REQUIRE(b_events.size() == 3);
+        REQUIRE(b_events[0]["content"] == "lo");
+        REQUIRE(b_events[1]["finish_reason"] == "STOP");
+        REQUIRE(b_events[2]["type"] == "done");
+    }
 }
 
 TEST_CASE("Provider router builds Anthropic native body with system + apiKey",

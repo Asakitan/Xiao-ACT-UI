@@ -42,4 +42,29 @@ int32_t decode_provider_response(const ProviderRoute& route,
                                  std::string_view payload,
                                  Json& out_normalised);
 
+// Anthropic /v1/messages `stream: true` event decoder.  Consumes the
+// Anthropic-native `event:` + `data:` chunks and emits the same
+// {type:"delta", content:"..."} / {type:"done"} shape the OpenAI SSE
+// decoder does so downstream callers see one uniform stream.
+class AnthropicSseCodec final {
+public:
+    int32_t feed(std::string_view bytes, Json& events);
+private:
+    int32_t dispatch_event(Json& events);
+    std::string line_buffer_;
+    std::string event_data_;
+    bool done_ = false;
+};
+
+// Gemini `:streamGenerateContent?alt=sse` event decoder.
+class GeminiSseCodec final {
+public:
+    int32_t feed(std::string_view bytes, Json& events);
+private:
+    int32_t dispatch_event(Json& events);
+    std::string line_buffer_;
+    std::string event_data_;
+    bool done_ = false;
+};
+
 }  // namespace sao::ai_editor::native

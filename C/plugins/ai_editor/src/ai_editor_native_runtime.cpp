@@ -360,6 +360,17 @@ int32_t NativeRuntime::invoke(std::string_view method,
         return conversations_.list(params.value("scope", "all"),
                                    params.value("limit", 100U), result);
     }
+    if (method == "conversation.search") {
+        if (!params.contains("query") || !params["query"].is_string()) {
+            return SAO_AI_EDITOR_ERR_INVALID_ARGUMENT;
+        }
+        std::lock_guard<std::mutex> lock(store_mutex_);
+        return conversations_.search(
+            params["query"].get<std::string>(),
+            params.value("scope", "all"),
+            params.value("limit", 20U),
+            result);
+    }
     if (method == "conversation.delete") {
         if (!params.contains("id") || !params["id"].is_string()) {
             return SAO_AI_EDITOR_ERR_INVALID_ARGUMENT;

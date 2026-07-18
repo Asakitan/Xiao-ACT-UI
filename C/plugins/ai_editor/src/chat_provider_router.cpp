@@ -2,6 +2,9 @@
 
 #include <algorithm>
 #include <cctype>
+#include <functional>
+#include <string>
+#include <utility>
 
 namespace sao::ai_editor::native {
 namespace {
@@ -323,6 +326,184 @@ int32_t decode_provider_response(const ProviderRoute& route,
         return SAO_AI_EDITOR_OK;
     }
     return SAO_AI_EDITOR_ERR_INVALID_ARGUMENT;
+}
+
+namespace {
+
+// Shared line-based SSE splitter used by both the Anthropic and Gemini
+// codecs.  Extracts `data:` payloads and empty-line-delimited events; the
+// caller decides how to interpret each event body.
+int32_t drain_sse_lines(std::string& line_buffer, std::string& event_data,
+                        std::function<int32_t()> dispatch) {
+    if (line_buffer.size() > kMaximumJsonBytes) {
+        return SAO_AI_EDITOR_ERR_PROTOCOL;
+    }
+    size_t newline = 0;
+    while ((newline = line_buffer.find('\n')) != std::string::npos) {
+        std::string line = line_buffer.substr(0, newline);
+        line_buffer.erase(0, newline + 1);
+        if (!line.empty() && line.back() == '\r') {
+            line.pop_back();
+        }
+        if (line.empty()) {
+            const int32_t status = dispatch();
+            if (status != SAO_AI_EDITOR_OK) {
+                return status;
+            }
+            continue;
+        }
+        if (line.starts_with("data:")) {
+            std::string_view value(line);
+            value.remove_prefix(5);
+            while (!value.empty() && value.front() == ' ') {
+                value.remove_prefix(1);
+            }
+            if (!event_data.empty()) {
+                event_data.push_back('\n');
+            }
+            event_data.append(value);
+            if (event_data.size() > kMaximumJsonBytes) {
+                return SAO_AI_EDITOR_ERR_PROTOCOL;
+            }
+            continue;
+        }
+        // Ignore `event:` / `id:` / `retry:` lines; the payload's own
+        // `type` field carries the semantic dispatch key.
+    }
+    return SAO_AI_EDITOR_OK;
+}
+
+}  // namespace
+
+int32_t AnthropicSseCodec::dispatch_event(Json& events) {
+    if (event_data_.empty()) {
+        return SAO_AI_EDITOR_OK;
+    }
+    std::string payload = std::move(event_data_);
+    event_data_.clear();
+    Json chunk = Json::parse(payload, nullptr, false);
+    if (!chunk.is_object()) {
+        return SAO_AI_EDITOR_ERR_PROTOCOL;
+    }
+    const std::string type = chunk.value("type", std::string{});
+    if (type == "content_block_delta") {
+        const Json& delta = chunk.contains("delta") ? chunk["delta"]
+                                                     : Json::object();
+        if (delta.is_object() && delta.value("type", "") == "text_delta" &&
+            delta.contains("text") && delta["text"].is_string()) {
+            events.push_back(Json{{"type", "delta"},
+                                    {"content", delta["text"]}});
+        } else if (delta.is_object() &&
+                   delta.value("type", "") == "input_json_delta" &&
+                   delta.contains("partial_json") &&
+                   delta["partial_json"].is_string()) {
+            events.push_back(Json{{"type", "tool_delta"},
+                                    {"content", delta["partial_json"]}});
+        }
+    } else if (type == "message_delta") {
+        Json summary = Json{{"type", "message_delta"}};
+        if (chunk.contains("delta")) {
+            summary["delta"] = chunk["delta"];
+        }
+        if (chunk.contains("usage")) {
+            summary["usage"] = chunk["usage"];
+        }
+        events.push_back(std::move(summary));
+    } else if (type == "message_stop") {
+        done_ = true;
+        events.push_back(Json{{"type", "done"}});
+    } else if (type == "error") {
+        events.push_back(Json{{"type", "error"},
+                                {"error", chunk.value("error",
+                                                       Json::object())}});
+    }
+    // ping/message_start/content_block_start/content_block_stop → discard
+    return SAO_AI_EDITOR_OK;
+}
+
+int32_t AnthropicSseCodec::feed(std::string_view bytes, Json& events) {
+    events = Json::array();
+    if (bytes.size() > kMaximumJsonBytes) {
+        return SAO_AI_EDITOR_ERR_INVALID_ARGUMENT;
+    }
+    if (done_) {
+        return std::all_of(bytes.begin(), bytes.end(),
+                           [](unsigned char value) {
+                               return std::isspace(value) != 0;
+                           })
+            ? SAO_AI_EDITOR_OK
+            : SAO_AI_EDITOR_ERR_INVALID_ARGUMENT;
+    }
+    line_buffer_.append(bytes);
+    return drain_sse_lines(line_buffer_, event_data_,
+                           [&] { return dispatch_event(events); });
+}
+
+int32_t GeminiSseCodec::dispatch_event(Json& events) {
+    if (event_data_.empty()) {
+        return SAO_AI_EDITOR_OK;
+    }
+    std::string payload = std::move(event_data_);
+    event_data_.clear();
+    Json chunk = Json::parse(payload, nullptr, false);
+    if (!chunk.is_object()) {
+        return SAO_AI_EDITOR_ERR_PROTOCOL;
+    }
+    if (chunk.contains("error")) {
+        events.push_back(Json{{"type", "error"},
+                                {"error", chunk["error"]}});
+        return SAO_AI_EDITOR_OK;
+    }
+    if (!chunk.contains("candidates") || !chunk["candidates"].is_array() ||
+        chunk["candidates"].empty()) {
+        return SAO_AI_EDITOR_OK;
+    }
+    const auto& candidate = chunk["candidates"][0];
+    if (!candidate.is_object()) {
+        return SAO_AI_EDITOR_OK;
+    }
+    if (candidate.contains("content") &&
+        candidate["content"].is_object() &&
+        candidate["content"].contains("parts") &&
+        candidate["content"]["parts"].is_array()) {
+        for (const auto& part : candidate["content"]["parts"]) {
+            if (part.is_object() && part.contains("text") &&
+                part["text"].is_string()) {
+                events.push_back(Json{{"type", "delta"},
+                                        {"content", part["text"]}});
+            }
+        }
+    }
+    const std::string finish_reason = candidate.value("finishReason",
+                                                       std::string{});
+    if (!finish_reason.empty() && finish_reason != "FINISH_REASON_UNSPECIFIED") {
+        events.push_back(Json{{"type", "message_delta"},
+                                {"finish_reason", finish_reason}});
+        if (chunk.contains("usageMetadata")) {
+            events.back()["usage"] = chunk["usageMetadata"];
+        }
+        done_ = true;
+        events.push_back(Json{{"type", "done"}});
+    }
+    return SAO_AI_EDITOR_OK;
+}
+
+int32_t GeminiSseCodec::feed(std::string_view bytes, Json& events) {
+    events = Json::array();
+    if (bytes.size() > kMaximumJsonBytes) {
+        return SAO_AI_EDITOR_ERR_INVALID_ARGUMENT;
+    }
+    if (done_) {
+        return std::all_of(bytes.begin(), bytes.end(),
+                           [](unsigned char value) {
+                               return std::isspace(value) != 0;
+                           })
+            ? SAO_AI_EDITOR_OK
+            : SAO_AI_EDITOR_ERR_INVALID_ARGUMENT;
+    }
+    line_buffer_.append(bytes);
+    return drain_sse_lines(line_buffer_, event_data_,
+                           [&] { return dispatch_event(events); });
 }
 
 }  // namespace sao::ai_editor::native
