@@ -48,6 +48,17 @@ struct HttpChatRequest final {
     uint32_t timeout_ms = 60'000;
     bool stream = false;
     RetryPolicy retry{};              // used by perform_openai_chat_with_retry
+    // Optional pricing rule for cost estimation.  When present and shaped as
+    // `{promptPer1K:number, completionPer1K:number}` (either or both fields
+    // optional; missing fields treated as 0) perform_openai_chat computes
+    // `costUsd = prompt_tokens/1000*promptPer1K + completion_tokens/1000*completionPer1K`
+    // and attaches it to `result["metrics"]` alongside `pricingApplied:true`.
+    // Empty / non-object / all-zero rules leave `costUsd = 0` and
+    // `pricingApplied = false`.  The lookup itself is caller-side: the
+    // runtime resolves provider+model against its pricing map and injects
+    // the matched entry here before dispatching the request — winhttp_chat
+    // never sees the pricing map itself.
+    Json pricing_rule{};
 };
 
 class ChatCancellation final {

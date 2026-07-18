@@ -29,6 +29,12 @@ struct PromptDefinition {
     std::string icon;
     bool builtin = false;
     std::string scope{"builtin"};
+    // Pinned prompts float to the top of `list()` / `prompts.list_defs` so
+    // users can promote favourites past the alphabetical / builtin sort.
+    // Only user-scope prompts (workspace / system / plugin) can be pinned —
+    // builtin + market are locked to keep the shipped defaults from being
+    // reorderable across users.
+    bool pinned = false;
 
     static PromptDefinition from_json(const Json& value);
     Json to_json() const;
@@ -65,6 +71,14 @@ public:
                  std::string_view scope, std::string_view plugin_id);
     int32_t remove(std::string_view id, const ScopeStore& scopes,
                    std::string_view scope, std::string_view plugin_id);
+
+    // Toggle the pinned flag for `id`.  Builtin + market prompts are locked
+    // (return PERMISSION_DENIED) so shipped defaults stay in their default
+    // sort position; user prompts (workspace / system / plugin:<id>) get
+    // rewritten to disk with the new flag transparent to callers.  Emits
+    // {id, pinned} on success.  A missing id surfaces NOT_FOUND.
+    int32_t set_pinned(std::string_view id, bool pinned,
+                       const ScopeStore& scopes, Json& result);
 
 private:
     mutable std::mutex mutex_;

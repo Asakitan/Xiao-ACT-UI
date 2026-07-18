@@ -68,6 +68,7 @@ add_library(sao_plugin_ai_editor SHARED
     src/openai_codec.cpp
     src/prompt_registry.cpp
     src/scope_store.cpp
+    src/sha256_helper.cpp
     src/winhttp_chat.cpp
     src/workflow_engine.cpp
 )
@@ -90,6 +91,7 @@ target_compile_definitions(sao_plugin_ai_editor PRIVATE SAO_AI_EDITOR_BUILDING_D
 target_compile_features(sao_plugin_ai_editor PUBLIC cxx_std_20)
 target_link_libraries(sao_plugin_ai_editor PRIVATE
     nlohmann_json::nlohmann_json
+    bcrypt
     crypt32
     shell32
     winhttp

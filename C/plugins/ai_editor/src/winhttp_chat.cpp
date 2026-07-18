@@ -25,25 +25,47 @@ namespace {
 
 constexpr DWORD kWinHttpPollIntervalMs = 50;
 
+// Best-effort extraction of a token field from provider-shaped usage
+// blocks.  Tries each candidate name in order and returns the first one
+// present as a numeric value.  Non-numeric entries are skipped so a bad
+// server payload never fails hard on the caller side.
+std::optional<int64_t> extract_usage_token_field(
+    const Json& usage,
+    std::initializer_list<std::string_view> field_names) {
+    if (!usage.is_object()) {
+        return std::nullopt;
+    }
+    for (const std::string_view field : field_names) {
+        const auto it = usage.find(std::string(field));
+        if (it == usage.end()) {
+            continue;
+        }
+        if (it->is_number_integer()) {
+            return it->get<int64_t>();
+        }
+        if (it->is_number()) {
+            return static_cast<int64_t>(it->get<double>());
+        }
+    }
+    return std::nullopt;
+}
+
 // Best-effort extraction of "completion tokens" from provider-shaped usage
 // blocks: OpenAI/OpenAI-compat use `completion_tokens`, Anthropic uses
 // `output_tokens`, Gemini's `usageMetadata` uses `candidatesTokenCount`.
 // Returns std::nullopt when no numeric completion-token field is present.
 std::optional<int64_t> extract_completion_tokens(const Json& usage) {
-    if (!usage.is_object()) {
-        return std::nullopt;
-    }
-    for (const std::string_view field :
-         {"completion_tokens", "output_tokens", "candidatesTokenCount"}) {
-        const auto it = usage.find(std::string(field));
-        if (it != usage.end() && it->is_number_integer()) {
-            return it->get<int64_t>();
-        }
-        if (it != usage.end() && it->is_number()) {
-            return static_cast<int64_t>(it->get<double>());
-        }
-    }
-    return std::nullopt;
+    return extract_usage_token_field(
+        usage, {"completion_tokens", "output_tokens", "candidatesTokenCount"});
+}
+
+// Companion to extract_completion_tokens for input/prompt tokens.  OpenAI
+// uses `prompt_tokens`, Anthropic uses `input_tokens`, Gemini's
+// `usageMetadata` uses `promptTokenCount`.  Returns std::nullopt when the
+// provider omits the field or reports it non-numeric.
+std::optional<int64_t> extract_prompt_tokens(const Json& usage) {
+    return extract_usage_token_field(
+        usage, {"prompt_tokens", "input_tokens", "promptTokenCount"});
 }
 
 class InternetHandle final {
@@ -382,6 +404,27 @@ int32_t perform_openai_chat(const HttpChatRequest& request,
     const auto request_started_at = SteadyClock::now();
     std::optional<SteadyClock::time_point> first_token_at;
     std::optional<int64_t> completion_tokens;
+    std::optional<int64_t> prompt_tokens;
+
+    // Pull optional `promptPer1K` / `completionPer1K` numbers off the pricing
+    // rule the caller injected.  Missing / non-object rule means no cost
+    // math.  Zero-valued fields still count as "rule applied" so callers
+    // can intentionally publish free-tier pricing without falsely reporting
+    // `pricingApplied:false`.
+    const bool has_pricing_rule =
+        request.pricing_rule.is_object() && !request.pricing_rule.empty();
+    const auto pricing_field = [&](const char* key) -> double {
+        if (!request.pricing_rule.is_object()) {
+            return 0.0;
+        }
+        const auto it = request.pricing_rule.find(key);
+        if (it == request.pricing_rule.end() || !it->is_number()) {
+            return 0.0;
+        }
+        return it->get<double>();
+    };
+    const double prompt_per_1k = pricing_field("promptPer1K");
+    const double completion_per_1k = pricing_field("completionPer1K");
 
     const auto attach_metrics = [&](Json& target,
                                     const SteadyClock::time_point& done_at) {
@@ -397,6 +440,9 @@ int32_t perform_openai_chat(const HttpChatRequest& request,
                                     .count();
             metrics["ttfMs"] = ttf_ms;
         }
+        if (prompt_tokens) {
+            metrics["promptTokens"] = *prompt_tokens;
+        }
         if (completion_tokens) {
             metrics["completionTokens"] = *completion_tokens;
             const double seconds = static_cast<double>(total_ms) / 1000.0;
@@ -404,6 +450,29 @@ int32_t perform_openai_chat(const HttpChatRequest& request,
                 metrics["tokensPerSecond"] =
                     static_cast<double>(*completion_tokens) / seconds;
             }
+        }
+        // Cost math only fires when the caller supplied a pricing rule.
+        // Without a rule we emit `pricingApplied:false` and skip `costUsd`
+        // so the wire contract remains clear: a numeric `costUsd` implies
+        // the caller had a rule (even if the derived cost is 0 because
+        // both fields are zero-valued).  Missing prompt / completion
+        // counts default to 0 in the cost formula rather than dropping the
+        // whole computation — a partial usage block still yields a partial
+        // (lower-bound) cost estimate.
+        metrics["pricingApplied"] = has_pricing_rule;
+        if (has_pricing_rule) {
+            const double prompt_count = prompt_tokens
+                                            ? static_cast<double>(*prompt_tokens)
+                                            : 0.0;
+            const double completion_count =
+                completion_tokens ? static_cast<double>(*completion_tokens)
+                                  : 0.0;
+            const double cost_usd =
+                prompt_count / 1000.0 * prompt_per_1k +
+                completion_count / 1000.0 * completion_per_1k;
+            metrics["costUsd"] = cost_usd;
+        } else {
+            metrics["costUsd"] = 0.0;
         }
         metrics["provider_type"] = request.provider_type;
         if (target.is_object()) {
@@ -616,6 +685,10 @@ int32_t perform_openai_chat(const HttpChatRequest& request,
             if (maybe_completion) {
                 completion_tokens = maybe_completion;
             }
+            const auto maybe_prompt = extract_prompt_tokens(event["usage"]);
+            if (maybe_prompt) {
+                prompt_tokens = maybe_prompt;
+            }
         }
     };
     const auto consume = request.stream
@@ -760,6 +833,10 @@ int32_t perform_openai_chat(const HttpChatRequest& request,
                 extract_completion_tokens(result["usage"]);
             if (maybe_completion) {
                 completion_tokens = maybe_completion;
+            }
+            const auto maybe_prompt = extract_prompt_tokens(result["usage"]);
+            if (maybe_prompt) {
+                prompt_tokens = maybe_prompt;
             }
         }
         attach_metrics(result, SteadyClock::now());

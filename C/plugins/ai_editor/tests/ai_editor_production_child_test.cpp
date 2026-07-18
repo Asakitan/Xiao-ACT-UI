@@ -137,8 +137,7 @@ BOOL CALLBACK inspect_top_level_window(HWND window, LPARAM parameter) {
 
     std::array<wchar_t, 256> title{};
     GetWindowTextW(window, title.data(), static_cast<int>(title.size()));
-    if (std::wstring_view(title.data()).find(L"SAO AI Editor") ==
-        std::wstring_view::npos) {
+    if (std::wstring_view(title.data()) != L"SAO AI Editor") {
         return TRUE;
     }
     snapshot.window = window;

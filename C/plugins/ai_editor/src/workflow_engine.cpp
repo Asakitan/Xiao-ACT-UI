@@ -13,6 +13,7 @@
 
 #include "native_runtime_internal.h"
 #include "scope_store.h"
+#include "sha256_helper.h"
 
 namespace sao::ai_editor::native {
 namespace {
@@ -428,6 +429,10 @@ int32_t WorkflowRegistry::export_all(std::string_view scope,
                   {"workflows", std::move(workflows)},
                   {"count", count},
                   {"exportedAt", unix_milliseconds()}};
+    // See ConversationStore::export_all() for the checksum invariant.
+    // Stamping happens after `result` is fully populated so the digest
+    // covers every stable field the import path will re-hash.
+    result["sha256"] = sha256_envelope_hex(result);
     return SAO_AI_EDITOR_OK;
 }
 
@@ -580,6 +585,81 @@ int32_t WorkflowExecution::confirm(std::string_view step_id, bool approved,
     confirmation_note_ = note;
     cv_.notify_all();
     return SAO_AI_EDITOR_OK;
+}
+
+int32_t WorkflowExecution::request_skip(const std::string& reason) {
+    // Only honour skip when the worker is parked at a confirmation gate
+    // or in a paused state — any other state is either terminal (no step
+    // to skip) or actively firing a request (mid-batch skip would race
+    // execute_step_with_snapshot).  Both legal states are cooperative
+    // suspend points where the worker will observe skip_requested_ on
+    // wake and honour it without further ceremony.
+    std::lock_guard<std::mutex> guard(mutex_);
+    const bool at_confirmation = confirmation_pending_;
+    // paused_ is only set inside run_loop under mutex_, so this read is
+    // authoritative; the atomic pause_requested_ isn't sufficient because
+    // it may be set before the worker actually parks.
+    const bool at_pause = paused_;
+    if (!at_confirmation && !at_pause) {
+        return SAO_AI_EDITOR_ERR_INVALID_ARGUMENT;
+    }
+    // Also refuse when a terminal state has already been latched — belt
+    // and braces in case a caller sneaks a request in the tiny window
+    // between run_loop unlatching paused_ and status_ moving off "paused".
+    if (status_ == "completed" || status_ == "failed" ||
+        status_ == "cancelled") {
+        return SAO_AI_EDITOR_ERR_INVALID_ARGUMENT;
+    }
+    skip_requested_.store(true, std::memory_order_release);
+    skip_step_index_ = current_step_index_;
+    skip_reason_ = reason;
+    if (at_confirmation) {
+        // Fold skip into the confirmation predicate: mark the gate as no
+        // longer pending so cv_.wait wakes, and pass "approved" so
+        // rejection isn't recorded — the skip flag is what run_loop keys
+        // on to decide "skip" vs "execute".
+        confirmation_pending_ = false;
+        confirmation_approved_ = true;
+        confirmation_note_ = reason;
+    }
+    if (at_pause) {
+        // Wake the paused worker without publishing human_resume_input_
+        // — resume input is a distinct signal.  The pause branch will
+        // observe skip_requested_ before it re-enters the batch execution
+        // path.
+        pause_requested_.store(false, std::memory_order_release);
+        paused_ = false;
+    }
+    cv_.notify_all();
+    return SAO_AI_EDITOR_OK;
+}
+
+int32_t WorkflowExecution::set_variable(std::string_view name,
+                                        std::string_view value) {
+    if (!valid_simple_id(name)) {
+        return SAO_AI_EDITOR_ERR_INVALID_ARGUMENT;
+    }
+    std::lock_guard<std::mutex> guard(mutex_);
+    // Reject when the run has already reached a terminal state — mutating
+    // completed/failed/cancelled variables would either drift the on-disk
+    // record from what the worker actually saw or race a still-persisting
+    // finalisation write.  Pending is fine (the worker hasn't started yet
+    // and the ctor's variable map is authoritative).
+    if (status_ == "completed" || status_ == "failed" ||
+        status_ == "cancelled") {
+        return SAO_AI_EDITOR_ERR_INVALID_ARGUMENT;
+    }
+    variables_[std::string(name)] = std::string(value);
+    return SAO_AI_EDITOR_OK;
+}
+
+Json WorkflowExecution::variables_snapshot() const {
+    std::lock_guard<std::mutex> guard(mutex_);
+    Json out = Json::object();
+    for (const auto& [key, value] : variables_) {
+        out[key] = value;
+    }
+    return out;
 }
 
 void WorkflowExecution::request_cancel() noexcept {
@@ -819,7 +899,8 @@ std::string WorkflowExecution::interpolate(std::string_view text) const {
     return interpolate_with(text, variables_);
 }
 
-bool WorkflowExecution::wait_for_confirmation(const WorkflowStep& step) {
+WorkflowExecution::ConfirmationOutcome
+WorkflowExecution::wait_for_confirmation(const WorkflowStep& step) {
     std::unique_lock<std::mutex> lock(mutex_);
     confirmation_pending_ = true;
     confirmation_step_id_ = step.output_var.empty()
@@ -833,10 +914,20 @@ bool WorkflowExecution::wait_for_confirmation(const WorkflowStep& step) {
                cancel_requested_.load(std::memory_order_acquire);
     });
     if (cancel_requested_.load(std::memory_order_acquire)) {
-        return false;
+        return ConfirmationOutcome::Rejected;
     }
     status_ = "running";
-    return confirmation_approved_;
+    // Skip wins over approved/rejected: request_skip() sets both the flag
+    // and confirmation_approved_=true so the wait predicate exits cleanly.
+    // The caller (run_loop) is responsible for consuming skip_requested_
+    // before rolling into the next batch, so we do NOT reset it here —
+    // the batch handler needs to see the flag to route into the skip
+    // branch instead of executing.
+    if (skip_requested_.load(std::memory_order_acquire)) {
+        return ConfirmationOutcome::Skipped;
+    }
+    return confirmation_approved_ ? ConfirmationOutcome::Approved
+                                   : ConfirmationOutcome::Rejected;
 }
 
 int32_t WorkflowExecution::execute_step(NativeRuntime& runtime,
@@ -988,6 +1079,29 @@ void WorkflowExecution::run_loop(NativeRuntime* runtime, Json provider,
             emit_terminal("cancelled", {});
             return;
         }
+        {
+            std::lock_guard<std::mutex> guard(mutex_);
+            current_step_index_ = index;
+        }
+        // Extend the batch across contiguous same-`group` steps (empty
+        // group → single-step batch).  Compute here (before the pause /
+        // confirmation gates) so a skip request while paused knows the
+        // exact batch boundary to advance past.
+        size_t batch_end = index + 1;
+        const std::string& group_id = steps[index].group;
+        if (!group_id.empty()) {
+            while (batch_end < steps.size() &&
+                   steps[batch_end].group == group_id) {
+                ++batch_end;
+            }
+        }
+        const size_t batch_size = batch_end - index;
+        // Track whether this batch should be skipped without hitting the
+        // LLM.  Set by either the pause-side skip check or the
+        // wait_for_confirmation outcome; consumed by the batch-execution
+        // switch further down.
+        bool skip_batch = false;
+        std::string skip_reason_captured;
         if (pause_requested_.load(std::memory_order_acquire)) {
             std::unique_lock<std::mutex> lock(mutex_);
             paused_ = true;
@@ -1005,30 +1119,36 @@ void WorkflowExecution::run_loop(NativeRuntime* runtime, Json provider,
             }
             paused_ = false;
             status_ = "running";
-        }
-        {
-            std::lock_guard<std::mutex> guard(mutex_);
-            current_step_index_ = index;
-        }
-        // Extend the batch across contiguous same-`group` steps (empty
-        // group → single-step batch).
-        size_t batch_end = index + 1;
-        const std::string& group_id = steps[index].group;
-        if (!group_id.empty()) {
-            while (batch_end < steps.size() &&
-                   steps[batch_end].group == group_id) {
-                ++batch_end;
+            // A skip request while paused only affects the current batch
+            // (its step_index was captured at request time; a stale skip
+            // for a batch we already moved past is ignored).
+            if (skip_requested_.load(std::memory_order_acquire) &&
+                skip_step_index_ == index) {
+                skip_batch = true;
+                skip_reason_captured = skip_reason_;
+                skip_requested_.store(false, std::memory_order_release);
+                skip_reason_.clear();
             }
         }
-        const size_t batch_size = batch_end - index;
         // Human confirmation applies before the batch fires; any step in
         // the batch tagged requires_confirmation gates the whole batch.
-        for (size_t k = 0; k < batch_size; ++k) {
+        // Once skip_batch is set we short-circuit remaining confirmations
+        // (the caller already made the intent clear).
+        for (size_t k = 0; k < batch_size && !skip_batch; ++k) {
             const WorkflowStep& step = steps[index + k];
             if (!step.requires_confirmation) {
                 continue;
             }
-            if (!wait_for_confirmation(step)) {
+            const ConfirmationOutcome outcome = wait_for_confirmation(step);
+            if (outcome == ConfirmationOutcome::Skipped) {
+                std::lock_guard<std::mutex> guard(mutex_);
+                skip_batch = true;
+                skip_reason_captured = skip_reason_;
+                skip_requested_.store(false, std::memory_order_release);
+                skip_reason_.clear();
+                break;
+            }
+            if (outcome == ConfirmationOutcome::Rejected) {
                 std::string terminal_status;
                 {
                     std::lock_guard<std::mutex> guard(mutex_);
@@ -1048,6 +1168,66 @@ void WorkflowExecution::run_loop(NativeRuntime* runtime, Json provider,
                                   : "");
                 return;
             }
+        }
+
+        // Skip branch: record each step in the batch as status=="skipped"
+        // with empty content, emit progress events (step_started +
+        // step_skipped so subscribers can render a "step ran but empty"
+        // marker without special-casing missing completion), and advance
+        // past the batch.  No LLM calls, no output_var mutation.
+        if (skip_batch) {
+            for (size_t k = 0; k < batch_size; ++k) {
+                const WorkflowStep& step = steps[index + k];
+                Json start_payload{{"executionId", execution_id},
+                                    {"stepIndex", static_cast<int64_t>(
+                                                       index + k)},
+                                    {"totalSteps", static_cast<int64_t>(
+                                                       total_steps)},
+                                    {"status", "step_started"},
+                                    {"label", step.label},
+                                    {"agent", step.agent},
+                                    {"outputVar", step.output_var},
+                                    {"group", step.group}};
+                runtime->emit_workflow_event(
+                    "workflow.progress", std::move(start_payload),
+                    execution_id);
+            }
+            {
+                std::lock_guard<std::mutex> guard(mutex_);
+                for (size_t k = 0; k < batch_size; ++k) {
+                    const WorkflowStep& step = steps[index + k];
+                    Json step_result{{"stepIndex", index + k},
+                                     {"label", step.label},
+                                     {"agent", step.agent},
+                                     {"outputVar", step.output_var},
+                                     {"group", step.group},
+                                     {"status", "skipped"},
+                                     {"content", ""}};
+                    if (!skip_reason_captured.empty()) {
+                        step_result["skipReason"] = skip_reason_captured;
+                    }
+                    step_results_.push_back(std::move(step_result));
+                }
+            }
+            for (size_t k = 0; k < batch_size; ++k) {
+                const WorkflowStep& step = steps[index + k];
+                Json payload{{"executionId", execution_id},
+                             {"stepIndex", static_cast<int64_t>(index + k)},
+                             {"totalSteps", static_cast<int64_t>(total_steps)},
+                             {"status", "step_skipped"},
+                             {"label", step.label},
+                             {"agent", step.agent},
+                             {"outputVar", step.output_var},
+                             {"group", step.group},
+                             {"content", ""}};
+                if (!skip_reason_captured.empty()) {
+                    payload["skipReason"] = skip_reason_captured;
+                }
+                runtime->emit_workflow_event(
+                    "workflow.progress", std::move(payload), execution_id);
+            }
+            index = batch_end;
+            continue;
         }
 
         // Emit workflow.progress step_started for every step in the batch

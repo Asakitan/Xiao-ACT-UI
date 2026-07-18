@@ -789,6 +789,10 @@ TEST_CASE("AI Editor conversation.import round-trips with overwrite semantics",
     rewritten["conversation"]["title"] = "Rewritten";
     rewritten["conversation"]["messages"] = Json::array(
         {{{"role", "user"}, {"content", "brand-new"}}});
+    // The exported envelope carries a sha256 stamp; drop it so the mutated
+    // payload is treated as a legacy (pre-checksum) import rather than a
+    // tampered one.  See conversation.import for the invariant.
+    rewritten.erase("sha256");
     const Json overwrote = dispatch(runtime, "conversation.import",
                                      {{"payload", rewritten},
                                       {"scope", "workspace"},
@@ -808,6 +812,7 @@ TEST_CASE("AI Editor conversation.import round-trips with overwrite semantics",
     Json fresh = exported;
     fresh["conversation"]["id"] = "conv-fresh-import-0001";
     fresh["conversation"]["title"] = "Fresh";
+    fresh.erase("sha256");  // mutated payload can no longer match the stamp
     const Json fresh_result =
         dispatch(runtime, "conversation.import",
                  {{"payload", fresh}, {"scope", "workspace"}});
@@ -3474,6 +3479,9 @@ TEST_CASE("AI Editor workflow.import round-trips with overwrite semantics",
         {Json{{"agent", "reviewer"},
               {"prompt", "New prompt {{input}}"},
               {"output_var", "verdict"}}});
+    // Strip the envelope sha256 so the mutated payload imports as a
+    // legacy (pre-checksum) shape rather than being rejected as tampered.
+    rewritten.erase("sha256");
     const Json overwrote = dispatch(runtime, "workflow.import",
                                      {{"payload", rewritten},
                                       {"scope", "workspace"},
@@ -3494,6 +3502,7 @@ TEST_CASE("AI Editor workflow.import round-trips with overwrite semantics",
     Json fresh = exported;
     fresh["workflow"]["id"] = "custom-import-fresh";
     fresh["workflow"]["name"] = "Fresh Workflow";
+    fresh.erase("sha256");  // mutated payload can no longer match the stamp
     const Json fresh_result =
         dispatch(runtime, "workflow.import",
                  {{"payload", fresh}, {"scope", "workspace"}});
@@ -3730,6 +3739,9 @@ TEST_CASE("AI Editor agents.import round-trips with overwrite semantics",
     rewritten["agent"]["system_prompt"] = "You import v2.";
     rewritten["agent"]["tools"] =
         Json::array({"readFile", "searchFiles", "editFile"});
+    // Strip the envelope sha256 so the mutated payload imports as a
+    // legacy shape rather than being rejected as tampered.
+    rewritten.erase("sha256");
     const Json overwrote = dispatch(runtime, "agents.import",
                                      {{"payload", rewritten},
                                       {"scope", "workspace"},
@@ -3748,6 +3760,7 @@ TEST_CASE("AI Editor agents.import round-trips with overwrite semantics",
     Json fresh = exported;
     fresh["agent"]["id"] = "custom-import-fresh";
     fresh["agent"]["name"] = "Fresh Agent";
+    fresh.erase("sha256");  // mutated payload can no longer match the stamp
     const Json fresh_result =
         dispatch(runtime, "agents.import",
                  {{"payload", fresh}, {"scope", "workspace"}});
@@ -4545,6 +4558,302 @@ TEST_CASE("AI Editor workflow.dry_run guards its arguments and reports "
     // estimatedVariables still surfaces the seed keys ("input" at least).
     REQUIRE(empty_response["result"]["estimatedVariables"].is_array());
     REQUIRE(empty_response["result"]["estimatedVariables"][0] == "input");
+}
+
+// -- workflow runtime control: skip / replace_variable / snapshot_variables --
+
+// Poll `workflows.status` until the execution reports the requested state
+// (or a terminal state), matching wait_for_workflow_completion's pattern but
+// letting the caller stop early once the gate they care about is reached.
+// Returns the last status observed so failing tests can dump it.
+Json wait_for_workflow_status(sao_ai_editor_runtime_t runtime,
+                               const std::string& execution_id,
+                               std::string_view target_state,
+                               DWORD timeout_ms) {
+    Json status;
+    const ULONGLONG started = GetTickCount64();
+    do {
+        status = dispatch(runtime, "workflows.status",
+                          {{"executionId", execution_id}})["result"];
+        const std::string current = status.value("status", "");
+        if (current == target_state || current == "completed" ||
+            current == "failed" || current == "cancelled") {
+            return status;
+        }
+        Sleep(20);
+    } while (GetTickCount64() - started < timeout_ms);
+    return status;
+}
+
+TEST_CASE("AI Editor workflow.skip_step at waiting_confirmation advances past "
+          "the current batch and lets the next step execute normally",
+          "[plugins][ai_editor][native][workflows][runtime_control]") {
+    // Step 0 gates on requires_confirmation=true so the run parks in
+    // waiting_confirmation.  workflow.skip_step then records step 0 as
+    // "skipped" (empty content, no LLM hit) and step 1 fires against the
+    // fake HTTP fixture — proving that skip advances past the gated batch
+    // without consuming a response slot.  Only one HTTP response is needed
+    // because only step 1 dials the endpoint.
+    const std::string ok_body =
+        R"({"choices":[{"message":{"role":"assistant","content":"step-two"}}]})";
+    LocalHttpServer server(
+        "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n"
+        "Content-Length: " +
+        std::to_string(ok_body.size()) +
+        "\r\nConnection: close\r\n\r\n" + ok_body);
+    RuntimeFixture fixture;
+    // Custom two-step workflow with confirmation on step 0.  Step 1's
+    // prompt intentionally references {{s1}} to prove that skipping step 0
+    // leaves the variable unset (interpolates to empty) rather than
+    // synthesising a placeholder.
+    const Json workflow_def{
+        {"id", "skip-confirm-workflow"},
+        {"name", "Skip Confirm"},
+        {"description", "Skip-step regression fixture"},
+        {"steps",
+         Json::array({Json{{"agent", "default"},
+                            {"prompt", "gated({{input}})"},
+                            {"output_var", "s1"},
+                            {"label", "Gated first"},
+                            {"requires_confirmation", true}},
+                       Json{{"agent", "default"},
+                            {"prompt", "chain({{s1}})"},
+                            {"output_var", "s2"},
+                            {"label", "Chained second"}}})}};
+    REQUIRE(dispatch(fixture.get(), "workflows.save_def",
+                     {{"scope", "workspace"},
+                      {"workflow", workflow_def}})
+                .contains("result"));
+    const Json run = dispatch(
+        fixture.get(), "workflows.run",
+        {{"id", "skip-confirm-workflow"},
+         {"provider", {{"id", "skip-fixture"},
+                        {"endpoint", server.endpoint()}}},
+         {"model", "fixture-model"},
+         {"input", "hello"},
+         {"timeoutMs", 5000}});
+    REQUIRE(run.contains("result"));
+    const std::string execution_id = run["result"]["executionId"];
+
+    // Wait for the run to reach the confirmation gate before firing skip.
+    const Json gate = wait_for_workflow_status(fixture.get(), execution_id,
+                                                "waiting_confirmation", 5'000);
+    REQUIRE(gate["status"] == "waiting_confirmation");
+
+    // Skip out of waiting_confirmation — verifies the confirmation path
+    // routes into the skip branch rather than approve/reject.
+    const Json skip_response = dispatch(
+        fixture.get(), "workflow.skip_step",
+        {{"executionId", execution_id}, {"reason", "gated step optional"}});
+    REQUIRE(skip_response.contains("result"));
+    REQUIRE(skip_response["result"]["ok"] == true);
+    REQUIRE(skip_response["result"]["executionId"] == execution_id);
+    REQUIRE(skip_response["result"]["reason"] == "gated step optional");
+
+    // Run should now proceed through step 1 and complete.
+    const Json terminal =
+        wait_for_workflow_completion(fixture.get(), execution_id, 15'000);
+    REQUIRE(terminal["status"] == "completed");
+    REQUIRE(terminal["stepResults"].size() == 2);
+    REQUIRE(terminal["stepResults"][0]["status"] == "skipped");
+    REQUIRE(terminal["stepResults"][0]["content"] == "");
+    REQUIRE(terminal["stepResults"][0]["skipReason"] == "gated step optional");
+    REQUIRE(terminal["stepResults"][1]["status"] == "completed");
+    REQUIRE(terminal["stepResults"][1]["content"] == "step-two");
+    // s1 stays empty (skip does not fabricate an output) but s2 lands
+    // because step 1 ran normally against the recovering server.
+    REQUIRE(terminal["variables"].contains("s2"));
+    REQUIRE(terminal["variables"]["s2"] == "step-two");
+    // Only one HTTP call fired — step 0 never dialed the endpoint.
+    REQUIRE(server.captured_bodies().size() == 1);
+}
+
+TEST_CASE("AI Editor workflow.replace_variable overrides a variable that a "
+          "later step interpolates against",
+          "[plugins][ai_editor][native][workflows][runtime_control]") {
+    // Two-step workflow with confirmation on step 1 so the run pauses
+    // between: step 0 completes with "raw-output" as the review; the user
+    // then swaps that variable via workflow.replace_variable; step 1's
+    // interpolated prompt uses the new value.  The HTTP fixture inspects
+    // captured request bodies to confirm the substitution happened.
+    const std::string step0_body =
+        R"({"choices":[{"message":{"role":"assistant","content":"raw-output"}}]})";
+    const std::string step1_body =
+        R"({"choices":[{"message":{"role":"assistant","content":"final"}}]})";
+    LocalHttpServer server(std::vector<std::string>{
+        "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n"
+        "Content-Length: " +
+            std::to_string(step0_body.size()) +
+            "\r\nConnection: close\r\n\r\n" + step0_body,
+        "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n"
+        "Content-Length: " +
+            std::to_string(step1_body.size()) +
+            "\r\nConnection: close\r\n\r\n" + step1_body,
+    });
+    RuntimeFixture fixture;
+    const Json workflow_def{
+        {"id", "replace-var-workflow"},
+        {"name", "Replace Variable"},
+        {"description", "Runtime variable-override fixture"},
+        {"steps",
+         Json::array({Json{{"agent", "default"},
+                            {"prompt", "review({{input}})"},
+                            {"output_var", "review"},
+                            {"label", "Reviewer"}},
+                       Json{{"agent", "default"},
+                            {"prompt", "final:{{review}}"},
+                            {"output_var", "outcome"},
+                            {"label", "Finalise"},
+                            {"requires_confirmation", true}}})}};
+    REQUIRE(dispatch(fixture.get(), "workflows.save_def",
+                     {{"scope", "workspace"},
+                      {"workflow", workflow_def}})
+                .contains("result"));
+    const Json run = dispatch(
+        fixture.get(), "workflows.run",
+        {{"id", "replace-var-workflow"},
+         {"provider", {{"id", "replace-fixture"},
+                        {"endpoint", server.endpoint()}}},
+         {"model", "fixture-model"},
+         {"input", "please review"},
+         {"timeoutMs", 5000}});
+    REQUIRE(run.contains("result"));
+    const std::string execution_id = run["result"]["executionId"];
+
+    // Wait for the confirmation gate at step 1 (means step 0 already
+    // stashed its output into variables_).
+    const Json gate = wait_for_workflow_status(fixture.get(), execution_id,
+                                                "waiting_confirmation", 5'000);
+    REQUIRE(gate["status"] == "waiting_confirmation");
+    REQUIRE(gate["variables"]["review"] == "raw-output");
+
+    // Override review with a corrected value before approving.
+    const Json replace_response = dispatch(
+        fixture.get(), "workflow.replace_variable",
+        {{"executionId", execution_id},
+         {"name", "review"},
+         {"value", "corrected-review"}});
+    REQUIRE(replace_response.contains("result"));
+    REQUIRE(replace_response["result"]["ok"] == true);
+    REQUIRE(replace_response["result"]["name"] == "review");
+    REQUIRE(replace_response["result"]["value"] == "corrected-review");
+    REQUIRE(replace_response["result"]["executionId"] == execution_id);
+
+    // Snapshot at the gate reports the new value.
+    const Json snap = dispatch(
+        fixture.get(), "workflow.snapshot_variables",
+        {{"executionId", execution_id}});
+    REQUIRE(snap.contains("result"));
+    REQUIRE(snap["result"]["variables"]["review"] == "corrected-review");
+    REQUIRE(snap["result"]["executionId"] == execution_id);
+
+    // Invalid name -> INVALID_ARGUMENT (defends against a caller writing a
+    // path-traversal-shaped key that would break history serialisation).
+    const Json bad = dispatch(fixture.get(), "workflow.replace_variable",
+                                {{"executionId", execution_id},
+                                 {"name", "../etc"},
+                                 {"value", "no"}});
+    REQUIRE(bad.contains("error"));
+    REQUIRE(bad["error"]["data"]["status"] ==
+            SAO_AI_EDITOR_ERR_INVALID_ARGUMENT);
+
+    // Approve step 1; step 1's rendered prompt must contain the new value.
+    REQUIRE(dispatch(fixture.get(), "workflows.confirm",
+                     {{"executionId", execution_id}, {"approved", true}})
+                .contains("result"));
+    const Json terminal =
+        wait_for_workflow_completion(fixture.get(), execution_id, 15'000);
+    REQUIRE(terminal["status"] == "completed");
+    REQUIRE(terminal["variables"]["outcome"] == "final");
+    // Verify step 1's on-the-wire body used the overridden value.
+    const auto& bodies = server.captured_bodies();
+    REQUIRE(bodies.size() == 2);
+    REQUIRE(bodies[1].find("final:corrected-review") != std::string::npos);
+    REQUIRE(bodies[1].find("raw-output") == std::string::npos);
+}
+
+TEST_CASE("AI Editor workflow.snapshot_variables mirrors the current variable "
+          "map and guards its arguments",
+          "[plugins][ai_editor][native][workflows][runtime_control]") {
+    // Cheap regression on the argument surface — no need to spin up a
+    // workflow to test the guardrails.  The full "snapshot during run"
+    // path is covered by the replace_variable test above.
+    RuntimeFixture fixture;
+    // Missing executionId -> INVALID_ARGUMENT.
+    const Json missing = dispatch(fixture.get(), "workflow.snapshot_variables",
+                                    Json::object());
+    REQUIRE(missing.contains("error"));
+    REQUIRE(missing["error"]["data"]["status"] ==
+            SAO_AI_EDITOR_ERR_INVALID_ARGUMENT);
+    // Non-string executionId -> INVALID_ARGUMENT.
+    const Json bad_id = dispatch(fixture.get(), "workflow.snapshot_variables",
+                                   {{"executionId", 42}});
+    REQUIRE(bad_id.contains("error"));
+    REQUIRE(bad_id["error"]["data"]["status"] ==
+            SAO_AI_EDITOR_ERR_INVALID_ARGUMENT);
+    // Unknown executionId -> NOT_FOUND.
+    const Json unknown = dispatch(fixture.get(), "workflow.snapshot_variables",
+                                    {{"executionId", "wf-does-not-exist"}});
+    REQUIRE(unknown.contains("error"));
+    REQUIRE(unknown["error"]["data"]["status"] ==
+            SAO_AI_EDITOR_ERR_NOT_FOUND);
+
+    // Now spin up a real execution and confirm snapshot reports the ctor
+    // input.  Server never responds so the run parks in step 0 — that's
+    // fine, we only care about the initial variable map.
+    LocalHttpServer stalling;
+    const Json run = dispatch(
+        fixture.get(), "workflows.run",
+        {{"id", "review-and-fix"},
+         {"provider", {{"id", "snapshot-fixture"},
+                        {"endpoint", stalling.endpoint()}}},
+         {"model", "fixture-model"},
+         {"input", "some seed input"},
+         {"timeoutMs", 2000}});
+    REQUIRE(run.contains("result"));
+    const std::string execution_id = run["result"]["executionId"];
+    // Give the worker a chance to spawn.
+    REQUIRE(stalling.wait_for_connections(1, 2'000));
+
+    const Json snap = dispatch(
+        fixture.get(), "workflow.snapshot_variables",
+        {{"executionId", execution_id}});
+    REQUIRE(snap.contains("result"));
+    REQUIRE(snap["result"]["executionId"] == execution_id);
+    REQUIRE(snap["result"]["variables"]["input"] == "some seed input");
+
+    // skip_step and replace_variable should also refuse on unknown ids.
+    const Json missing_skip = dispatch(
+        fixture.get(), "workflow.skip_step",
+        {{"executionId", "wf-does-not-exist"}});
+    REQUIRE(missing_skip.contains("error"));
+    REQUIRE(missing_skip["error"]["data"]["status"] ==
+            SAO_AI_EDITOR_ERR_NOT_FOUND);
+    const Json missing_replace = dispatch(
+        fixture.get(), "workflow.replace_variable",
+        {{"executionId", "wf-does-not-exist"},
+         {"name", "x"},
+         {"value", "y"}});
+    REQUIRE(missing_replace.contains("error"));
+    REQUIRE(missing_replace["error"]["data"]["status"] ==
+            SAO_AI_EDITOR_ERR_NOT_FOUND);
+
+    // skip_step on a running (non-confirming) workflow -> INVALID_ARGUMENT
+    // (worker is neither paused nor waiting for confirmation).
+    const Json skip_running = dispatch(
+        fixture.get(), "workflow.skip_step",
+        {{"executionId", execution_id}});
+    REQUIRE(skip_running.contains("error"));
+    REQUIRE(skip_running["error"]["data"]["status"] ==
+            SAO_AI_EDITOR_ERR_INVALID_ARGUMENT);
+
+    // Cancel to release the stalled worker so the fixture teardown is
+    // clean (the server destructor closes the connection, but the runtime
+    // still owns a live worker thread).
+    REQUIRE(dispatch(fixture.get(), "workflows.cancel",
+                     {{"executionId", execution_id}})
+                .contains("result"));
+    wait_for_workflow_completion(fixture.get(), execution_id, 5'000);
 }
 
 TEST_CASE("AI Editor conversation.branch forks a new conversation from "
@@ -8322,4 +8631,264 @@ TEST_CASE("tools.register_hook error phase fires on failed tools.call and "
         REQUIRE(envelope["params"].value("event", std::string{}) !=
                 "audit.tool.error");
     }
+}
+
+TEST_CASE("AI Editor conversation.export stamps sha256 and import verifies it",
+          "[plugins][ai_editor][native][storage][export][sha256]") {
+    RuntimeFixture fixture;
+    auto runtime = fixture.get();
+    REQUIRE(dispatch(runtime, "runtime.initialize").contains("result"));
+
+    // Seed a workspace conversation so export has content to hash.
+    const Json created = dispatch(runtime, "conversation.create",
+                                  {{"title", "SHA Roundtrip"},
+                                   {"model", "gpt-x"},
+                                   {"scope", "workspace"}});
+    const std::string id = created["result"]["id"];
+    REQUIRE(dispatch(runtime, "conversation.append",
+                     {{"id", id},
+                      {"message", {{"role", "user"},
+                                   {"content", "hash me"}}}})
+                .contains("result"));
+
+    // Single-conversation envelope must carry sha256 in canonical hex form.
+    const Json exported = dispatch(runtime, "conversation.export",
+                                    {{"id", id}})["result"];
+    REQUIRE(exported["format"] == "sao-conversation/1");
+    REQUIRE(exported.contains("sha256"));
+    REQUIRE(exported["sha256"].is_string());
+    const std::string digest = exported["sha256"].get<std::string>();
+    // SHA-256 hex is 64 lower-case chars.
+    REQUIRE(digest.size() == 64);
+    for (const char ch : digest) {
+        const bool is_hex =
+            (ch >= '0' && ch <= '9') || (ch >= 'a' && ch <= 'f');
+        REQUIRE(is_hex);
+    }
+
+    // Round-trip: unchanged payload must import cleanly with overwrite=true.
+    const Json ok = dispatch(runtime, "conversation.import",
+                              {{"payload", exported},
+                               {"scope", "workspace"},
+                               {"overwrite", true}});
+    REQUIRE(ok.contains("result"));
+    REQUIRE(ok["result"]["imported"] == 1);
+
+    // Batch envelope (scope=all) must also carry sha256.
+    const Json all = dispatch(runtime, "conversation.export",
+                               {{"scope", "all"}})["result"];
+    REQUIRE(all["format"] == "sao-conversations/1");
+    REQUIRE(all.contains("sha256"));
+    REQUIRE(all["sha256"].get<std::string>().size() == 64);
+}
+
+TEST_CASE("AI Editor conversation.import rejects a tampered sha256 payload",
+          "[plugins][ai_editor][native][storage][import][sha256]") {
+    RuntimeFixture fixture;
+    auto runtime = fixture.get();
+    REQUIRE(dispatch(runtime, "runtime.initialize").contains("result"));
+
+    const Json created = dispatch(runtime, "conversation.create",
+                                  {{"title", "Tampered"},
+                                   {"model", "m"},
+                                   {"scope", "workspace"}});
+    const std::string id = created["result"]["id"];
+    REQUIRE(dispatch(runtime, "conversation.append",
+                     {{"id", id},
+                      {"message", {{"role", "user"},
+                                   {"content", "genuine"}}}})
+                .contains("result"));
+    const Json exported = dispatch(runtime, "conversation.export",
+                                    {{"id", id}})["result"];
+
+    // Tamper: mutate the conversation content without updating sha256.
+    Json tampered = exported;
+    tampered["conversation"]["messages"][0]["content"] = "malicious";
+    const Json rejected = dispatch(runtime, "conversation.import",
+                                    {{"payload", tampered},
+                                     {"scope", "workspace"},
+                                     {"overwrite", true}});
+    REQUIRE(rejected.contains("error"));
+    REQUIRE(rejected["error"]["data"]["status"] ==
+            SAO_AI_EDITOR_ERR_PROTOCOL);
+
+    // Legacy (pre-checksum) payload must still be importable so pre-R4
+    // consumers keep working after the checksum lands.
+    Json legacy = exported;
+    legacy.erase("sha256");
+    const Json legacy_ok = dispatch(runtime, "conversation.import",
+                                     {{"payload", legacy},
+                                      {"scope", "workspace"},
+                                      {"overwrite", true}});
+    REQUIRE(legacy_ok.contains("result"));
+    REQUIRE(legacy_ok["result"]["imported"] == 1);
+}
+
+TEST_CASE("AI Editor workflow.export stamps sha256 and import verifies it",
+          "[plugins][ai_editor][native][workflow][export][sha256]") {
+    RuntimeFixture fixture;
+    auto runtime = fixture.get();
+    REQUIRE(dispatch(runtime, "runtime.initialize").contains("result"));
+
+    // Single-workflow envelope (built-in id) must carry sha256.
+    const Json single = dispatch(runtime, "workflow.export",
+                                  {{"id", "review-and-fix"}})["result"];
+    REQUIRE(single["format"] == "sao-workflow/1");
+    REQUIRE(single.contains("sha256"));
+    REQUIRE(single["sha256"].get<std::string>().size() == 64);
+
+    // Batch envelope on the builtin scope carries its own stamp too.
+    const Json batch = dispatch(runtime, "workflow.export",
+                                 {{"scope", "builtin"}})["result"];
+    REQUIRE(batch["format"] == "sao-workflows/1");
+    REQUIRE(batch.contains("sha256"));
+    REQUIRE(batch["sha256"].get<std::string>().size() == 64);
+
+    // Tamper the workflow name inside the batch envelope; import must
+    // surface PROTOCOL because the recomputed digest no longer matches.
+    // The sha256 guard runs ahead of the builtin-overwrite check so we
+    // see PROTOCOL rather than PERMISSION_DENIED.
+    Json tampered = batch;
+    tampered["workflows"][0]["name"] = "TAMPERED";
+    const Json rejected = dispatch(runtime, "workflow.import",
+                                    {{"payload", tampered},
+                                     {"scope", "workspace"},
+                                     {"overwrite", true}});
+    REQUIRE(rejected.contains("error"));
+    REQUIRE(rejected["error"]["data"]["status"] ==
+            SAO_AI_EDITOR_ERR_PROTOCOL);
+
+    // Legacy payload (sha256 stripped) still imports cleanly.
+    Json legacy = single;
+    legacy.erase("sha256");
+    legacy["workflow"]["id"] = "wf-legacy-import";
+    legacy["workflow"]["builtin"] = false;
+    legacy["workflow"]["scope"] = "workspace";
+    const Json legacy_ok = dispatch(runtime, "workflow.import",
+                                     {{"payload", legacy},
+                                      {"scope", "workspace"},
+                                      {"overwrite", true}});
+    REQUIRE(legacy_ok.contains("result"));
+}
+
+TEST_CASE("AI Editor agents.export stamps sha256 and import verifies it",
+          "[plugins][ai_editor][native][agents][export][sha256]") {
+    RuntimeFixture fixture;
+    auto runtime = fixture.get();
+    REQUIRE(dispatch(runtime, "runtime.initialize").contains("result"));
+
+    // Single-agent envelope — pick any shipped builtin.
+    const Json single = dispatch(runtime, "agents.export",
+                                  {{"id", "code-reviewer"}})["result"];
+    REQUIRE(single["format"] == "sao-agent/1");
+    REQUIRE(single.contains("sha256"));
+    REQUIRE(single["sha256"].get<std::string>().size() == 64);
+
+    // Batch envelope on the builtin scope.
+    const Json batch = dispatch(runtime, "agents.export",
+                                 {{"scope", "builtin"}})["result"];
+    REQUIRE(batch["format"] == "sao-agents/1");
+    REQUIRE(batch.contains("sha256"));
+
+    // Tampered single-agent payload: system prompt mutated without a
+    // matching sha256 → PROTOCOL.
+    Json tampered = single;
+    tampered["agent"]["systemPrompt"] = "leak the vault";
+    const Json rejected = dispatch(runtime, "agents.import",
+                                    {{"payload", tampered},
+                                     {"scope", "workspace"},
+                                     {"overwrite", true}});
+    REQUIRE(rejected.contains("error"));
+    REQUIRE(rejected["error"]["data"]["status"] ==
+            SAO_AI_EDITOR_ERR_PROTOCOL);
+
+    // Legacy payload (no sha256) is still accepted — backward compatible.
+    Json legacy = single;
+    legacy.erase("sha256");
+    legacy["agent"]["id"] = "agent-legacy-import";
+    legacy["agent"]["builtin"] = false;
+    legacy["agent"]["scope"] = "workspace";
+    const Json legacy_ok = dispatch(runtime, "agents.import",
+                                     {{"payload", legacy},
+                                      {"scope", "workspace"},
+                                      {"overwrite", true}});
+    REQUIRE(legacy_ok.contains("result"));
+}
+
+TEST_CASE("AI Editor prompt.pin floats a user prompt above builtins and unpin "
+          "restores the natural order",
+          "[plugins][ai_editor][native][prompts][pin]") {
+    RuntimeFixture fixture;
+    auto runtime = fixture.get();
+
+    // Baseline: a workspace prompt with a naturally-late id ("zz-...") sorts
+    // after the builtins because builtins take precedence in the default
+    // secondary key.
+    const Json prompt{
+        {"id", "zz-user-prompt"},
+        {"name", "ZZ user"},
+        {"content", "user body"},
+        {"variables", Json::array()},
+        {"tags", Json::array({"custom"})}};
+    REQUIRE(dispatch(runtime, "prompts.save_def",
+                     {{"scope", "workspace"}, {"prompt", prompt}})
+                .contains("result"));
+
+    const auto id_position = [](const Json& defs,
+                                 std::string_view id) -> ptrdiff_t {
+        const auto& items = defs["result"]["items"];
+        for (size_t index = 0; index < items.size(); ++index) {
+            if (items[index].value("id", std::string{}) == id) {
+                return static_cast<ptrdiff_t>(index);
+            }
+        }
+        return -1;
+    };
+
+    const Json before = dispatch(runtime, "prompts.list_defs");
+    const ptrdiff_t before_pos = id_position(before, "zz-user-prompt");
+    REQUIRE(before_pos > 0);  // should sit after at least one entry
+    // None of the entries ahead of it may be pinned — pinned would explain
+    // the position without exercising the natural builtin/id sort we care
+    // about.  Market presets from assets/ai_editor/prompts land as
+    // builtin=false but still sort ahead of "zz-*" through the id
+    // tie-break, so we deliberately do NOT assert builtin==true here.
+    for (ptrdiff_t index = 0; index < before_pos; ++index) {
+        REQUIRE(before["result"]["items"][index].value("pinned", false) ==
+                false);
+    }
+
+    // Pin the user prompt — it must jump to index 0 and pinned=true must
+    // be surfaced on both the pin result and the list entry.
+    const Json pin_result = dispatch(runtime, "prompt.pin",
+                                     {{"id", "zz-user-prompt"}})["result"];
+    REQUIRE(pin_result["id"] == "zz-user-prompt");
+    REQUIRE(pin_result["pinned"] == true);
+    const Json after_pin = dispatch(runtime, "prompts.list_defs");
+    REQUIRE(id_position(after_pin, "zz-user-prompt") == 0);
+    REQUIRE(after_pin["result"]["items"][0].value("pinned", false) == true);
+
+    // Unpin restores the pre-pin position (still after every builtin).
+    const Json unpin_result = dispatch(runtime, "prompt.unpin",
+                                       {{"id", "zz-user-prompt"}})["result"];
+    REQUIRE(unpin_result["pinned"] == false);
+    const Json after_unpin = dispatch(runtime, "prompts.list_defs");
+    const ptrdiff_t after_unpin_pos =
+        id_position(after_unpin, "zz-user-prompt");
+    REQUIRE(after_unpin_pos == before_pos);
+    REQUIRE(after_unpin["result"]["items"][after_unpin_pos]
+                .value("pinned", true) == false);
+
+    // Builtin prompts are locked — pin/unpin must surface PERMISSION_DENIED
+    // so shipped defaults keep their canonical position.
+    const Json builtin_pin = dispatch(runtime, "prompt.pin",
+                                      {{"id", "code-review-base"}});
+    REQUIRE(builtin_pin["error"]["data"]["status"] ==
+            SAO_AI_EDITOR_ERR_PERMISSION_DENIED);
+
+    // Unknown id → NOT_FOUND.
+    const Json missing = dispatch(runtime, "prompt.pin",
+                                   {{"id", "does-not-exist"}});
+    REQUIRE(missing["error"]["data"]["status"] ==
+            SAO_AI_EDITOR_ERR_NOT_FOUND);
 }

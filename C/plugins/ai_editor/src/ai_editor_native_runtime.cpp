@@ -2,6 +2,7 @@
 
 #include "chat_provider_router.h"
 #include "native_runtime_internal.h"
+#include "sha256_helper.h"
 
 #include <windows.h>
 
@@ -765,12 +766,18 @@ int32_t NativeRuntime::invoke(std::string_view method,
             result = Json{{"format", "sao-conversation/1"},
                           {"conversation", std::move(conversation)},
                           {"exportedAt", now}};
+            // Envelope integrity: hash the payload minus the sha256 field
+            // itself.  Import will strip and recompute, so the digest must
+            // be stamped last so it covers every stable field above.
+            result["sha256"] = sha256_envelope_hex(result);
             return SAO_AI_EDITOR_OK;
         }
         if (!params["scope"].is_string()) {
             return SAO_AI_EDITOR_ERR_INVALID_ARGUMENT;
         }
         std::lock_guard<std::mutex> lock(store_mutex_);
+        // conversations_.export_all() stamps its own sha256 — no post-hash
+        // needed here.
         return conversations_.export_all(
             params["scope"].get<std::string>(), result);
     }
@@ -785,6 +792,22 @@ int32_t NativeRuntime::invoke(std::string_view method,
         }
         const bool overwrite = params.value("overwrite", false);
         const Json& payload = params["payload"];
+        // Envelope integrity: if the payload carries a `sha256` field, verify
+        // it against a recomputation over the payload with the field stripped.
+        // Missing digest is permitted for backward compatibility with pre-
+        // checksum exports (R4 shipped without it).
+        if (payload.contains("sha256") && payload["sha256"].is_string()) {
+            const std::string claimed =
+                payload["sha256"].get<std::string>();
+            const std::string recomputed = sha256_envelope_hex(payload);
+            if (claimed.empty() || recomputed.empty() ||
+                claimed != recomputed) {
+                result = Json{{"message", "envelope sha256 mismatch"},
+                              {"expected", claimed},
+                              {"actual", recomputed}};
+                return SAO_AI_EDITOR_ERR_PROTOCOL;
+            }
+        }
         const std::string format = payload.value("format", std::string{});
         std::vector<Json> incoming;
         if (format == "sao-conversation/1") {
@@ -887,11 +910,14 @@ int32_t NativeRuntime::invoke(std::string_view method,
             result = Json{{"format", "sao-workflow/1"},
                           {"workflow", definition.to_json()},
                           {"exportedAt", now}};
+            // Envelope integrity — see conversation.export for the invariant.
+            result["sha256"] = sha256_envelope_hex(result);
             return SAO_AI_EDITOR_OK;
         }
         if (!params["scope"].is_string()) {
             return SAO_AI_EDITOR_ERR_INVALID_ARGUMENT;
         }
+        // workflow_registry_.export_all() stamps its own sha256.
         return workflow_registry_.export_all(
             params["scope"].get<std::string>(), result);
     }
@@ -908,6 +934,22 @@ int32_t NativeRuntime::invoke(std::string_view method,
         }
         const bool overwrite = params.value("overwrite", false);
         const Json& payload = params["payload"];
+        // Envelope integrity guard — see conversation.import for the invariant.
+        // Missing digest is tolerated for backward compatibility with R6-era
+        // exports; a mismatched digest short-circuits with a protocol error
+        // so tampered payloads cannot poison the registry.
+        if (payload.contains("sha256") && payload["sha256"].is_string()) {
+            const std::string claimed =
+                payload["sha256"].get<std::string>();
+            const std::string recomputed = sha256_envelope_hex(payload);
+            if (claimed.empty() || recomputed.empty() ||
+                claimed != recomputed) {
+                result = Json{{"message", "envelope sha256 mismatch"},
+                              {"expected", claimed},
+                              {"actual", recomputed}};
+                return SAO_AI_EDITOR_ERR_PROTOCOL;
+            }
+        }
         const std::string format = payload.value("format", std::string{});
         std::vector<Json> incoming;
         if (format == "sao-workflow/1") {
@@ -1120,6 +1162,74 @@ int32_t NativeRuntime::invoke(std::string_view method,
             return SAO_AI_EDITOR_ERR_NOT_FOUND;
         }
         result = Json{{"ok", true}, {"id", execution_id}};
+        return SAO_AI_EDITOR_OK;
+    }
+    if (method == "workflow.skip_step" ||
+        method == "workflow.replace_variable" ||
+        method == "workflow.snapshot_variables") {
+        // Runtime workflow-control surface — each op resolves the target
+        // execution from workflow_executions_, then delegates to the
+        // matching WorkflowExecution primitive.  A single validation
+        // block handles the shared "executionId" arg so the individual
+        // branches stay focussed on their unique params.  Lives here in
+        // invoke() (not dispatch_workflow) because the "workflow." (no s)
+        // methods route through the top-level dispatcher — the plural
+        // "workflows." prefix is what feeds dispatch_workflow.
+        if (!params.contains("executionId") ||
+            !params["executionId"].is_string()) {
+            return SAO_AI_EDITOR_ERR_INVALID_ARGUMENT;
+        }
+        const std::string execution_id =
+            params["executionId"].get<std::string>();
+        if (execution_id.empty()) {
+            return SAO_AI_EDITOR_ERR_INVALID_ARGUMENT;
+        }
+        std::shared_ptr<WorkflowExecution> execution;
+        {
+            std::lock_guard<std::mutex> guard(workflow_mutex_);
+            const auto found = workflow_executions_.find(execution_id);
+            if (found != workflow_executions_.end()) {
+                execution = found->second;
+            }
+        }
+        if (!execution) {
+            return SAO_AI_EDITOR_ERR_NOT_FOUND;
+        }
+        if (method == "workflow.skip_step") {
+            const std::string reason =
+                params.value("reason", std::string{});
+            const int32_t skip_status = execution->request_skip(reason);
+            if (skip_status != SAO_AI_EDITOR_OK) {
+                return skip_status;
+            }
+            result = Json{{"ok", true}, {"executionId", execution_id}};
+            if (!reason.empty()) {
+                result["reason"] = reason;
+            }
+            return SAO_AI_EDITOR_OK;
+        }
+        if (method == "workflow.replace_variable") {
+            if (!params.contains("name") || !params["name"].is_string()) {
+                return SAO_AI_EDITOR_ERR_INVALID_ARGUMENT;
+            }
+            if (!params.contains("value") || !params["value"].is_string()) {
+                return SAO_AI_EDITOR_ERR_INVALID_ARGUMENT;
+            }
+            const std::string name = params["name"].get<std::string>();
+            const std::string value = params["value"].get<std::string>();
+            const int32_t set_status = execution->set_variable(name, value);
+            if (set_status != SAO_AI_EDITOR_OK) {
+                return set_status;
+            }
+            result = Json{{"ok", true},
+                          {"name", name},
+                          {"value", value},
+                          {"executionId", execution_id}};
+            return SAO_AI_EDITOR_OK;
+        }
+        // workflow.snapshot_variables
+        result = Json{{"executionId", execution_id},
+                      {"variables", execution->variables_snapshot()}};
         return SAO_AI_EDITOR_OK;
     }
     if (method == "workflow.retry") {
@@ -1803,6 +1913,18 @@ int32_t NativeRuntime::invoke(std::string_view method,
     if (method == "chat.dispatch_tool_calls") {
         return dispatch_tool_calls(params, result);
     }
+    if (method == "chat.set_pricing") {
+        return set_pricing(params, result);
+    }
+    if (method == "chat.get_pricing") {
+        return get_pricing(params, result);
+    }
+    if (method == "chat.list_pricing") {
+        return list_pricing(params, result);
+    }
+    if (method == "chat.cost_stats") {
+        return cost_stats(params, result);
+    }
     if (method == "run.cancel") {
         return cancel_run(params, result);
     }
@@ -1836,7 +1958,8 @@ int32_t NativeRuntime::invoke(std::string_view method,
     if (method == "prompts.list_defs" || method == "prompts.get_def" ||
         method == "prompts.save_def" || method == "prompts.delete_def" ||
         method == "prompts.render" || method == "prompts.render_batch" ||
-        method == "prompts.list_tags") {
+        method == "prompts.list_tags" || method == "prompt.pin" ||
+        method == "prompt.unpin") {
         return dispatch_prompt(method, params, result);
     }
     return SAO_AI_EDITOR_ERR_NOT_FOUND;
@@ -1995,11 +2118,14 @@ int32_t NativeRuntime::dispatch_agent(std::string_view method,
             result = Json{{"format", "sao-agent/1"},
                           {"agent", agent.to_json()},
                           {"exportedAt", now}};
+            // Envelope integrity — see conversation.export for the invariant.
+            result["sha256"] = sha256_envelope_hex(result);
             return SAO_AI_EDITOR_OK;
         }
         if (!params["scope"].is_string()) {
             return SAO_AI_EDITOR_ERR_INVALID_ARGUMENT;
         }
+        // agent_registry_.export_all() stamps its own sha256.
         return agent_registry_.export_all(
             params["scope"].get<std::string>(), result);
     }
@@ -2019,6 +2145,21 @@ int32_t NativeRuntime::dispatch_agent(std::string_view method,
         }
         const bool overwrite = params.value("overwrite", false);
         const Json& payload = params["payload"];
+        // Envelope integrity guard — see conversation.import for the invariant.
+        // Older R13-era exports predate the checksum so a missing digest is
+        // silently accepted; a present-but-wrong digest surfaces PROTOCOL.
+        if (payload.contains("sha256") && payload["sha256"].is_string()) {
+            const std::string claimed =
+                payload["sha256"].get<std::string>();
+            const std::string recomputed = sha256_envelope_hex(payload);
+            if (claimed.empty() || recomputed.empty() ||
+                claimed != recomputed) {
+                result = Json{{"message", "envelope sha256 mismatch"},
+                              {"expected", claimed},
+                              {"actual", recomputed}};
+                return SAO_AI_EDITOR_ERR_PROTOCOL;
+            }
+        }
         const std::string format = payload.value("format", std::string{});
         std::vector<Json> incoming;
         if (format == "sao-agent/1") {
@@ -2860,6 +3001,20 @@ int32_t NativeRuntime::dispatch_prompt(std::string_view method,
                       {"content", prompt.render(arguments)}};
         return SAO_AI_EDITOR_OK;
     }
+    if (method == "prompt.pin" || method == "prompt.unpin") {
+        if (!params.contains("id") || !params["id"].is_string()) {
+            return SAO_AI_EDITOR_ERR_INVALID_ARGUMENT;
+        }
+        // Reload before mutating so the registry reflects any external
+        // edits before we consult the entry's scope key.  set_pinned()
+        // is scope-aware and reuses save() to persist the toggled flag,
+        // so no additional bookkeeping is required here.
+        std::lock_guard<std::mutex> guard(store_mutex_);
+        prompt_registry_.reload(scopes_);
+        const bool pinned = (method == "prompt.pin");
+        return prompt_registry_.set_pinned(
+            params["id"].get<std::string>(), pinned, scopes_, result);
+    }
     return SAO_AI_EDITOR_ERR_NOT_FOUND;
 }
 
@@ -3664,9 +3819,17 @@ int32_t NativeRuntime::start_chat(const Json& params, Json& result) {
     } else if (provider.contains("retry")) {
         request.retry = RetryPolicy::from_json(provider["retry"]);
     }
+    // Best-effort pricing lookup: the pricing map is keyed by
+    // (provider_type, model), so we consult it here — winhttp_chat itself
+    // stays free of the pricing map.  Missing entry leaves
+    // `request.pricing_rule` empty which perform_openai_chat interprets as
+    // `pricingApplied:false, costUsd:0`.
+    resolve_pricing_rule(request.provider_type, model, request);
     auto run = std::make_shared<RunState>();
     run->id = new_run_id();
     run->cancellation = std::make_shared<ChatCancellation>();
+    run->provider_type = request.provider_type;
+    run->model = model;
     std::shared_ptr<RunState> stale_run;
     {
         std::lock_guard<std::mutex> lock(state_mutex_);
@@ -3796,6 +3959,11 @@ void NativeRuntime::execute_chat(const std::shared_ptr<RunState>& run,
             run->result["metrics"].is_object()) {
             Json metrics_payload = run->result["metrics"];
             metrics_payload["runId"] = run->id;
+            // Feed the runtime-wide accumulator so chat.cost_stats picks up
+            // this run.  We accumulate regardless of whether a pricing rule
+            // was applied — token counts stay useful even without cost.
+            accumulate_cost_stats(run->provider_type, run->model,
+                                  metrics_payload);
             emit("chat.metrics", metrics_payload, run->id);
         }
         emit("run.completed", run->result, run->id);
@@ -4046,7 +4214,227 @@ int32_t render_resource_uri(const Json& params, Json& result) {
     return SAO_AI_EDITOR_OK;
 }
 
+// Compose the "<provider>|<model>" key used by both pricing_rules_ and
+// cost_stats_.  Anything missing collapses to an empty component (never
+// synthesises a placeholder) so unknown-provider / unknown-model rows
+// stay disambiguated on lookup.
+std::string pricing_key(std::string_view provider, std::string_view model) {
+    std::string key;
+    key.reserve(provider.size() + 1 + model.size());
+    key.append(provider);
+    key.push_back('|');
+    key.append(model);
+    return key;
+}
+
+// Read a number-typed field off a metrics object, falling back to zero on
+// missing / non-numeric so cost_stats accumulation stays defensive
+// against partial provider payloads.
+int64_t metrics_int64(const Json& metrics, const char* key) {
+    const auto it = metrics.find(key);
+    if (it == metrics.end() || !it->is_number()) {
+        return 0;
+    }
+    if (it->is_number_integer()) {
+        return it->get<int64_t>();
+    }
+    return static_cast<int64_t>(it->get<double>());
+}
+
+double metrics_double(const Json& metrics, const char* key) {
+    const auto it = metrics.find(key);
+    if (it == metrics.end() || !it->is_number()) {
+        return 0.0;
+    }
+    return it->get<double>();
+}
+
 }  // namespace
+
+int32_t NativeRuntime::set_pricing(const Json& params, Json& result) {
+    if (!params.is_object()) {
+        return SAO_AI_EDITOR_ERR_INVALID_ARGUMENT;
+    }
+    const std::string provider = params.value("provider", std::string{});
+    const std::string model = params.value("model", std::string{});
+    if (provider.empty() || model.empty()) {
+        return SAO_AI_EDITOR_ERR_INVALID_ARGUMENT;
+    }
+    Json rule = Json::object();
+    // Store the rule as a plain object with the two numeric fields we
+    // recognise.  Extra caller-supplied fields are dropped so downstream
+    // cost math has a stable, minimal shape.  At least one of the two
+    // fields must parse as a number — an empty rule is rejected so
+    // set_pricing never silently registers a no-op entry.
+    bool has_any = false;
+    if (params.contains("promptPer1K") && params["promptPer1K"].is_number()) {
+        rule["promptPer1K"] = params["promptPer1K"].get<double>();
+        has_any = true;
+    }
+    if (params.contains("completionPer1K") &&
+        params["completionPer1K"].is_number()) {
+        rule["completionPer1K"] = params["completionPer1K"].get<double>();
+        has_any = true;
+    }
+    if (!has_any) {
+        return SAO_AI_EDITOR_ERR_INVALID_ARGUMENT;
+    }
+    const std::string key = pricing_key(provider, model);
+    {
+        std::lock_guard<std::mutex> lock(pricing_mutex_);
+        pricing_rules_[key] = rule;
+    }
+    result = Json{{"ok", true},
+                  {"provider", provider},
+                  {"model", model},
+                  {"rule", std::move(rule)}};
+    return SAO_AI_EDITOR_OK;
+}
+
+int32_t NativeRuntime::get_pricing(const Json& params, Json& result) {
+    if (!params.is_object()) {
+        return SAO_AI_EDITOR_ERR_INVALID_ARGUMENT;
+    }
+    const std::string provider = params.value("provider", std::string{});
+    const std::string model = params.value("model", std::string{});
+    if (provider.empty() || model.empty()) {
+        return SAO_AI_EDITOR_ERR_INVALID_ARGUMENT;
+    }
+    const std::string key = pricing_key(provider, model);
+    Json rule;
+    bool found = false;
+    {
+        std::lock_guard<std::mutex> lock(pricing_mutex_);
+        const auto it = pricing_rules_.find(key);
+        if (it != pricing_rules_.end()) {
+            rule = it->second;
+            found = true;
+        }
+    }
+    result = Json{{"provider", provider}, {"model", model}, {"found", found}};
+    if (found) {
+        result["rule"] = std::move(rule);
+    }
+    return SAO_AI_EDITOR_OK;
+}
+
+int32_t NativeRuntime::list_pricing(const Json& /*params*/, Json& result) {
+    Json items = Json::array();
+    {
+        std::lock_guard<std::mutex> lock(pricing_mutex_);
+        for (const auto& [key, rule] : pricing_rules_) {
+            const auto pipe = key.find('|');
+            if (pipe == std::string::npos) {
+                continue;
+            }
+            items.push_back(Json{
+                {"provider", key.substr(0, pipe)},
+                {"model", key.substr(pipe + 1)},
+                {"rule", rule},
+            });
+        }
+    }
+    result = Json{{"items", std::move(items)}};
+    return SAO_AI_EDITOR_OK;
+}
+
+int32_t NativeRuntime::cost_stats(const Json& params, Json& result) {
+    // `days` is accepted for forward compatibility but the current
+    // in-process accumulator has no time bucketing — restarting drops the
+    // history.  We still surface the value on the response so callers can
+    // sanity-check what they asked for.
+    int64_t days = 7;
+    if (params.is_object() && params.contains("days") &&
+        params["days"].is_number_integer()) {
+        days = params["days"].get<int64_t>();
+    }
+    uint64_t total_requests = 0;
+    int64_t total_prompt = 0;
+    int64_t total_completion = 0;
+    double total_cost = 0.0;
+    Json by_model = Json::object();
+    {
+        std::lock_guard<std::mutex> lock(cost_stats_mutex_);
+        for (const auto& [key, row] : cost_stats_) {
+            total_requests += row.requests;
+            total_prompt += row.prompt_tokens;
+            total_completion += row.completion_tokens;
+            total_cost += row.cost_usd;
+            // Public key on the response uses the model name so callers can
+            // slice quickly; the provider is stashed inside so lookups can
+            // still disambiguate identical model names across vendors.
+            Json entry{
+                {"provider", row.provider},
+                {"requests", row.requests},
+                {"promptTokens", row.prompt_tokens},
+                {"completionTokens", row.completion_tokens},
+                {"costUsd", row.cost_usd},
+            };
+            by_model[row.model] = std::move(entry);
+        }
+    }
+    Json average = Json::object();
+    if (total_requests > 0) {
+        average["promptTokens"] =
+            static_cast<int64_t>(total_prompt /
+                                  static_cast<int64_t>(total_requests));
+        average["completionTokens"] =
+            static_cast<int64_t>(total_completion /
+                                  static_cast<int64_t>(total_requests));
+        average["costUsd"] =
+            total_cost / static_cast<double>(total_requests);
+    } else {
+        average["promptTokens"] = 0;
+        average["completionTokens"] = 0;
+        average["costUsd"] = 0.0;
+    }
+    result = Json{
+        {"days", days},
+        {"totalRequestsSampled", total_requests},
+        {"totalPromptTokens", total_prompt},
+        {"totalCompletionTokens", total_completion},
+        {"totalCostUsd", total_cost},
+        {"byModel", std::move(by_model)},
+        {"averagePerRequest", std::move(average)},
+    };
+    return SAO_AI_EDITOR_OK;
+}
+
+void NativeRuntime::resolve_pricing_rule(std::string_view provider_type,
+                                         std::string_view model,
+                                         HttpChatRequest& request) const {
+    if (provider_type.empty() || model.empty()) {
+        return;
+    }
+    const std::string key = pricing_key(provider_type, model);
+    std::lock_guard<std::mutex> lock(pricing_mutex_);
+    const auto it = pricing_rules_.find(key);
+    if (it != pricing_rules_.end()) {
+        request.pricing_rule = it->second;
+    }
+}
+
+void NativeRuntime::accumulate_cost_stats(std::string_view provider_type,
+                                          std::string_view model,
+                                          const Json& metrics) {
+    if (!metrics.is_object()) {
+        return;
+    }
+    const int64_t prompt = metrics_int64(metrics, "promptTokens");
+    const int64_t completion = metrics_int64(metrics, "completionTokens");
+    const double cost = metrics_double(metrics, "costUsd");
+    const std::string key = pricing_key(provider_type, model);
+    std::lock_guard<std::mutex> lock(cost_stats_mutex_);
+    auto& row = cost_stats_[key];
+    if (row.model.empty()) {
+        row.provider.assign(provider_type);
+        row.model.assign(model);
+    }
+    ++row.requests;
+    row.prompt_tokens += prompt;
+    row.completion_tokens += completion;
+    row.cost_usd += cost;
+}
 
 int32_t NativeRuntime::dispatch_mcp(std::string_view method, const Json& params,
                                     Json& result) {

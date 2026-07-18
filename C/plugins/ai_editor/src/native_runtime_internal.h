@@ -56,6 +56,11 @@ private:
         std::thread worker;
         Json result = Json::object();
         std::string error;
+        // Provider type + model captured at run-time so execute_chat can
+        // credit the cost accumulator to the right (provider, model) row
+        // even after the HttpChatRequest is moved out of scope.
+        std::string provider_type;
+        std::string model;
     };
 
     int32_t invoke(std::string_view method,
@@ -64,6 +69,28 @@ private:
     int32_t start_chat(const Json& params, Json& result);
     int32_t cancel_run(const Json& params, Json& result);
     int32_t run_status(const Json& params, Json& result);
+    // chat.set_pricing / chat.get_pricing / chat.list_pricing / chat.cost_stats
+    // — in-process pricing rules and per-model cost accumulation.  Storage is
+    // an unordered_map keyed by "<provider>|<model>" so a caller can look up
+    // rules deterministically; the map lives entirely inside the runtime and
+    // is not persisted across process restarts (documented on the wire).
+    int32_t set_pricing(const Json& params, Json& result);
+    int32_t get_pricing(const Json& params, Json& result);
+    int32_t list_pricing(const Json& params, Json& result);
+    int32_t cost_stats(const Json& params, Json& result);
+    // Resolve the injected pricing rule for a (provider, model) tuple and
+    // fill `HttpChatRequest::pricing_rule` when found.  No-op if either
+    // key component is empty or the map has no entry.
+    void resolve_pricing_rule(std::string_view provider_type,
+                              std::string_view model,
+                              HttpChatRequest& request) const;
+    // Called from execute_chat once the transport reports final metrics so
+    // the in-process cost accumulator picks up prompt / completion / cost
+    // even when the caller ignores chat.metrics.  Runs under
+    // `cost_stats_mutex_`; feeds `chat.cost_stats` responses verbatim.
+    void accumulate_cost_stats(std::string_view provider_type,
+                               std::string_view model,
+                               const Json& metrics);
     int32_t dispatch_mcp(std::string_view method,
                          const Json& params,
                          Json& result);
@@ -198,6 +225,29 @@ public:
     std::condition_variable event_ready_;
     std::deque<std::string> events_;
     bool stopping_ = false;
+
+    // Pricing rules keyed by "<provider>|<model>".  Each value is a JSON
+    // object with promptPer1K / completionPer1K numeric fields (both
+    // optional; missing fields treated as 0 during cost math).  Storage is
+    // in-process only — restarting the runtime drops the map.  Guarded by
+    // `pricing_mutex_`.
+    mutable std::mutex pricing_mutex_;
+    std::unordered_map<std::string, Json> pricing_rules_;
+
+    // Per-model cost accumulator.  Updated once per completed chat run
+    // (called from execute_chat under `cost_stats_mutex_`).  Keyed by the
+    // same "<provider>|<model>" convention as `pricing_rules_` so both
+    // stay lookup-compatible.
+    struct CostStatsRow final {
+        std::string provider;
+        std::string model;
+        uint64_t requests = 0;
+        int64_t prompt_tokens = 0;
+        int64_t completion_tokens = 0;
+        double cost_usd = 0.0;
+    };
+    mutable std::mutex cost_stats_mutex_;
+    std::unordered_map<std::string, CostStatsRow> cost_stats_;
 };
 
 }  // namespace sao::ai_editor::native

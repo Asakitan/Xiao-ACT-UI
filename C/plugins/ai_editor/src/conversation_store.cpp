@@ -12,6 +12,8 @@
 #include <string>
 #include <vector>
 
+#include "sha256_helper.h"
+
 namespace sao::ai_editor::native {
 namespace {
 
@@ -449,6 +451,12 @@ int32_t ConversationStore::export_all(std::string_view scope,
                   {"conversations", std::move(conversations)},
                   {"count", count},
                   {"exportedAt", unix_milliseconds()}};
+    // Stamp the envelope with an SHA-256 of its own body so import can
+    // detect out-of-band tampering.  The digest is computed over the
+    // canonical dump of `result` with the `sha256` field stripped — see
+    // sha256_envelope_hex for the invariant.  Missing digests on import
+    // are silently tolerated so pre-checksum payloads keep loading.
+    result["sha256"] = sha256_envelope_hex(result);
     return SAO_AI_EDITOR_OK;
 }
 

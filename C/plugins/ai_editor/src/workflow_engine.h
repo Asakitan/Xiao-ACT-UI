@@ -136,6 +136,25 @@ public:
     void request_resume(const std::string& human_input) noexcept;
     int32_t confirm(std::string_view step_id, bool approved,
                     const std::string& note);
+    // Skip the current step (batch).  Legal only when the execution is
+    // parked in "waiting_confirmation" or "paused"; any other state returns
+    // INVALID_ARGUMENT.  The skip is honoured cooperatively — the worker
+    // records the affected step(s) as status="skipped" with empty output,
+    // then advances past the batch without hitting the LLM.
+    int32_t request_skip(const std::string& reason);
+    // Mutate a variable while the workflow is live (running / paused /
+    // waiting_confirmation).  Terminal states (completed/failed/cancelled)
+    // reject with INVALID_ARGUMENT — snapshotting is fine but scribbling
+    // over completed runs would confuse history consumers.  Variable names
+    // must match valid_simple_id rules so history_record round-trips
+    // cleanly.  Only affects subsequent batches — the pre-batch snapshot
+    // R2 introduced guarantees an in-flight batch stays consistent.
+    int32_t set_variable(std::string_view name, std::string_view value);
+    // Point-in-time copy of variables_ (thread-safe).  Same shape as the
+    // `variables` field snapshot() emits, exposed separately so callers can
+    // ask "what does this execution's variable map look like right now?"
+    // without pulling the full workflow snapshot.
+    Json variables_snapshot() const;
     void request_cancel() noexcept;
     void join() noexcept;
 
@@ -208,7 +227,15 @@ private:
         std::string& out_content,
         size_t step_index = 0);
     std::string interpolate(std::string_view text) const;
-    bool wait_for_confirmation(const WorkflowStep& step);
+    // Confirmation gate return value.  Skip is folded into the same wait
+    // as approve/reject so run_loop can serve all three outcomes from one
+    // condition-variable predicate instead of racing multiple signals.
+    enum class ConfirmationOutcome {
+        Rejected,  // user declined — run_loop should terminate as "failed"
+        Approved,  // proceed to execute the batch
+        Skipped,   // batch marked "skipped" without hitting the LLM
+    };
+    ConfirmationOutcome wait_for_confirmation(const WorkflowStep& step);
 
     std::string id_;
     WorkflowDefinition definition_;
@@ -217,6 +244,16 @@ private:
     std::condition_variable cv_;
     std::atomic<bool> cancel_requested_{false};
     std::atomic<bool> pause_requested_{false};
+    // Skip request is intentionally atomic so wait_for_confirmation /
+    // pause branch can peek it without taking mutex_ (they still take the
+    // mutex to consume it — the atomic only gates the fast path).  The
+    // step index it targets is captured under mutex_ at request time so a
+    // "skip current step" call names the batch that was live when the
+    // caller decided; a subsequent skip would refuse if the worker has
+    // moved on.
+    std::atomic<bool> skip_requested_{false};
+    size_t skip_step_index_ = 0;
+    std::string skip_reason_;
     bool paused_ = false;
     bool confirmation_pending_ = false;
     std::string confirmation_step_id_;

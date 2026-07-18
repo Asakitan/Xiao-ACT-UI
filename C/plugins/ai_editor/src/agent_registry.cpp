@@ -13,6 +13,7 @@
 #include <vector>
 
 #include "scope_store.h"
+#include "sha256_helper.h"
 
 namespace sao::ai_editor::native {
 namespace {
@@ -632,6 +633,10 @@ int32_t AgentRegistry::export_all(std::string_view scope,
                   {"agents", std::move(agents)},
                   {"count", count},
                   {"exportedAt", unix_milliseconds()}};
+    // See ConversationStore::export_all() for the checksum invariant.
+    // Import validates the digest against `result` with the sha256 field
+    // stripped, so we can stamp it last without invalidating the hash.
+    result["sha256"] = sha256_envelope_hex(result);
     return SAO_AI_EDITOR_OK;
 }
 

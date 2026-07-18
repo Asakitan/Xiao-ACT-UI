@@ -220,6 +220,9 @@ PromptDefinition PromptDefinition::from_json(const Json& value) {
     prompt.icon = value.value("icon", std::string{});
     prompt.builtin = value.value("builtin", false);
     prompt.scope = value.value("scope", std::string{"workspace"});
+    // Older user prompts predate the `pinned` field; missing / non-bool
+    // silently defaults to false so pre-R-current stored JSON stays valid.
+    prompt.pinned = value.value("pinned", false);
     if (value.contains("variables") && value["variables"].is_array()) {
         for (const auto& item : value["variables"]) {
             if (item.is_object()) {
@@ -254,7 +257,8 @@ Json PromptDefinition::to_json() const {
                 {"tags", std::move(tags_json)},
                 {"icon", icon},
                 {"builtin", builtin},
-                {"scope", scope}};
+                {"scope", scope},
+                {"pinned", pinned}};
 }
 
 std::string PromptDefinition::render(const Json& arguments) const {
@@ -380,6 +384,12 @@ std::vector<PromptDefinition> PromptRegistry::list() const {
     }
     std::sort(result.begin(), result.end(),
               [](const PromptDefinition& lhs, const PromptDefinition& rhs) {
+                  // Pinned entries float ahead of everything else so users
+                  // can promote favourites past the builtin/id tie-break
+                  // that would otherwise anchor them lower in the list.
+                  if (lhs.pinned != rhs.pinned) {
+                      return lhs.pinned;
+                  }
                   if (lhs.builtin != rhs.builtin) {
                       return lhs.builtin;
                   }
@@ -422,6 +432,12 @@ std::vector<PromptDefinition> PromptRegistry::list_by_tags(
     }
     std::sort(result.begin(), result.end(),
               [](const PromptDefinition& lhs, const PromptDefinition& rhs) {
+                  // Same tie-break order as list(): pinned wins first,
+                  // builtin second, then alphabetical id.  Kept identical
+                  // so tag-filtered views mirror the untouched list order.
+                  if (lhs.pinned != rhs.pinned) {
+                      return lhs.pinned;
+                  }
                   if (lhs.builtin != rhs.builtin) {
                       return lhs.builtin;
                   }
@@ -522,6 +538,9 @@ int32_t PromptRegistry::save(const PromptDefinition& prompt,
     Json payload = prompt.to_json();
     payload.erase("builtin");
     payload.erase("scope");
+    // `pinned` is deliberately retained in the persisted payload so a
+    // save() round-trip preserves the flag.  set_pinned() reuses this
+    // path — writing the prompt back to disk with the toggled state.
     const int32_t status = scopes.save_registry_item(
         "prompts", scope, plugin_id, prompt.id, payload);
     if (status != SAO_AI_EDITOR_OK) {
@@ -534,6 +553,54 @@ int32_t PromptRegistry::save(const PromptDefinition& prompt,
                    (plugin_id.empty() ? std::string{}
                                       : ":" + std::string(plugin_id));
     prompts_[prompt.id] = std::move(stored);
+    return SAO_AI_EDITOR_OK;
+}
+
+int32_t PromptRegistry::set_pinned(std::string_view id, bool pinned,
+                                   const ScopeStore& scopes, Json& result) {
+    // Look up the current entry under the registry lock so we can capture
+    // its scope + payload before releasing the lock for the disk write.
+    PromptDefinition current;
+    {
+        std::lock_guard<std::mutex> guard(mutex_);
+        const auto found = prompts_.find(std::string(id));
+        if (found == prompts_.end()) {
+            return SAO_AI_EDITOR_ERR_NOT_FOUND;
+        }
+        // Builtin + market prompts are compile-time / install-time defaults
+        // and must stay in their canonical order.  Users who really want
+        // to promote them can save a workspace override with the same id
+        // — that lands as builtin=false and becomes pin-eligible.
+        if (found->second.builtin || found->second.scope == "builtin" ||
+            found->second.scope == "market") {
+            return SAO_AI_EDITOR_ERR_PERMISSION_DENIED;
+        }
+        current = found->second;
+    }
+    // Decode the stored scope key back into (scope, plugin_id).  The value
+    // matches what save() writes: "workspace" / "system" / "plugin:<id>".
+    std::string scope_key = current.scope;
+    std::string scope;
+    std::string plugin_id;
+    if (scope_key == "workspace" || scope_key == "system") {
+        scope = scope_key;
+    } else if (scope_key.rfind("plugin:", 0) == 0) {
+        scope = "plugin";
+        plugin_id = scope_key.substr(7);
+        if (!valid_simple_id(plugin_id)) {
+            return SAO_AI_EDITOR_ERR_INVALID_ARGUMENT;
+        }
+    } else {
+        // Unknown scope key — should never happen for a non-builtin entry,
+        // but propagate as invalid rather than silently mis-writing.
+        return SAO_AI_EDITOR_ERR_INVALID_ARGUMENT;
+    }
+    current.pinned = pinned;
+    const int32_t status = save(current, scopes, scope, plugin_id);
+    if (status != SAO_AI_EDITOR_OK) {
+        return status;
+    }
+    result = Json{{"id", std::string(id)}, {"pinned", pinned}};
     return SAO_AI_EDITOR_OK;
 }
 
