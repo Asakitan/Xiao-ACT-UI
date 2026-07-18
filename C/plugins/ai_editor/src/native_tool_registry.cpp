@@ -320,11 +320,14 @@ Json NativeToolRegistry::describe(std::string_view mode) const {
              {"confirmed", {{"type", "boolean"}}}},
             {"path", "content"}),
     });
-    // Append caller-registered tools.  Snapshot under lock so a concurrent
-    // register / unregister cannot mutate the map while we build descriptors,
-    // then release the lock before finalising `permission` (independent of the
-    // registry state).
+    // Append caller-registered tools + aliases.  Snapshot under lock so a
+    // concurrent register / unregister cannot mutate the maps while we build
+    // descriptors, then release the lock before finalising `permission`
+    // (independent of the registry state).  Aliases inherit their target's
+    // readOnly + description so LLM tool-choice sees consistent metadata for
+    // both names; the extra `aliasOf` field lets debug UIs surface the link.
     std::vector<Json> custom_snapshot;
+    std::vector<Json> alias_snapshot;
     {
         std::lock_guard<std::mutex> lock(custom_mutex_);
         custom_snapshot.reserve(custom_tools_.size());
@@ -336,8 +339,39 @@ Json NativeToolRegistry::describe(std::string_view mode) const {
                             {"custom", true}};
             custom_snapshot.push_back(std::move(descriptor));
         }
+        alias_snapshot.reserve(aliases_.size());
+        for (const auto& entry : aliases_) {
+            const std::string& alias_name = entry.first;
+            const std::string& target_name = entry.second.target;
+            // Inherit the target's descriptor so tool selectors + schema
+            // validators treat the alias identically to the canonical name.
+            Json descriptor{{"name", alias_name},
+                            {"aliasOf", target_name}};
+            if (is_builtin_name(target_name)) {
+                descriptor["description"] =
+                    "Alias of " + target_name;
+                descriptor["readOnly"] = target_name != "editFile";
+                descriptor["parameters"] = builtin_schema_for(target_name);
+            } else {
+                const auto found = custom_tools_.find(target_name);
+                if (found != custom_tools_.end()) {
+                    descriptor["description"] =
+                        "Alias of " + target_name;
+                    descriptor["readOnly"] = found->second.read_only;
+                    descriptor["parameters"] = found->second.parameters;
+                    descriptor["custom"] = true;
+                }
+                // A dangling alias whose target was unregistered simply
+                // surfaces name + aliasOf; execute() will return NOT_FOUND
+                // on any call, which the UI can render as a stale entry.
+            }
+            alias_snapshot.push_back(std::move(descriptor));
+        }
     }
     for (auto& descriptor : custom_snapshot) {
+        tools.push_back(std::move(descriptor));
+    }
+    for (auto& descriptor : alias_snapshot) {
         tools.push_back(std::move(descriptor));
     }
     for (auto& tool : tools) {
@@ -360,30 +394,48 @@ int32_t NativeToolRegistry::execute(std::string_view mode,
     if (!arguments.is_object()) {
         return SAO_AI_EDITOR_ERR_INVALID_ARGUMENT;
     }
-    // Resolve the schema for whichever tool this is (built-in or custom).  We
-    // grab a snapshot of the custom tool descriptor while holding the mutex so
-    // a concurrent unregister does not race the schema-vs-handler path.
+    // Resolve the schema for whichever tool this is (built-in / custom /
+    // alias).  We grab a snapshot of the custom-tool + alias state while
+    // holding the mutex so a concurrent unregister does not race the
+    // schema-vs-handler path.  Aliases are resolved up-front to a canonical
+    // name so the rest of this function operates on the target.
+    std::string resolved_name(name);
     Json schema;
     bool is_custom = false;
     bool custom_read_only = true;
     bool found_tool = false;
-    if (name == "readFile" || name == "listFiles" ||
-        name == "searchFiles" || name == "editFile") {
-        schema = builtin_schema_for(name);
+    if (is_builtin_name(resolved_name)) {
+        schema = builtin_schema_for(resolved_name);
         found_tool = true;
     } else {
         std::lock_guard<std::mutex> lock(custom_mutex_);
-        const auto found = custom_tools_.find(std::string(name));
-        if (found != custom_tools_.end()) {
-            schema = found->second.parameters;
-            custom_read_only = found->second.read_only;
-            is_custom = true;
+        // Alias hop: check aliases_ first so an alias whose target became a
+        // built-in name still routes correctly.  Single-hop is enforced —
+        // register_alias() already rejects target-is-alias so this cannot
+        // loop, but we cap at one hop defensively.
+        const auto alias_found = aliases_.find(resolved_name);
+        if (alias_found != aliases_.end()) {
+            resolved_name = alias_found->second.target;
+        }
+        if (is_builtin_name(resolved_name)) {
+            schema = builtin_schema_for(resolved_name);
             found_tool = true;
+        } else {
+            const auto found = custom_tools_.find(resolved_name);
+            if (found != custom_tools_.end()) {
+                schema = found->second.parameters;
+                custom_read_only = found->second.read_only;
+                is_custom = true;
+                found_tool = true;
+            }
         }
     }
     if (!found_tool) {
         return SAO_AI_EDITOR_ERR_NOT_FOUND;
     }
+    // From this point downstream handlers see the canonical target name.
+    const std::string_view name_v = resolved_name;
+    name = name_v;
     // JSON-schema pre-flight: run before any handler-specific `path` /
     // `content` checks so callers get a structured `validationErrors` list
     // instead of a single generic "invalid argument".  Best-effort — an empty
@@ -440,6 +492,11 @@ int32_t NativeToolRegistry::execute(std::string_view mode,
     return SAO_AI_EDITOR_ERR_NOT_FOUND;
 }
 
+bool NativeToolRegistry::is_builtin_name(std::string_view name) noexcept {
+    return name == "readFile" || name == "listFiles" ||
+           name == "searchFiles" || name == "editFile";
+}
+
 int32_t NativeToolRegistry::register_custom(std::string_view name,
                                             std::string_view description,
                                             const Json& parameters,
@@ -450,8 +507,7 @@ int32_t NativeToolRegistry::register_custom(std::string_view name,
     // Shadowing a built-in would produce two entries in describe() and confuse
     // execute() dispatch (built-ins always win).  Reject early so callers get
     // an actionable error rather than a silently-hidden custom tool.
-    if (name == "readFile" || name == "listFiles" ||
-        name == "searchFiles" || name == "editFile") {
+    if (is_builtin_name(name)) {
         return SAO_AI_EDITOR_ERR_INVALID_ARGUMENT;
     }
     // `parameters` is optional — default to an empty object schema so
@@ -471,6 +527,13 @@ int32_t NativeToolRegistry::register_custom(std::string_view name,
     tool.parameters = std::move(schema);
     tool.read_only = read_only;
     std::lock_guard<std::mutex> lock(custom_mutex_);
+    // Reject a custom-tool registration whose name collides with an existing
+    // alias.  Re-registering an existing custom name still updates the
+    // descriptor in place (that's the documented "update" contract) — only
+    // the alias collision is new.
+    if (aliases_.find(std::string(name)) != aliases_.end()) {
+        return SAO_AI_EDITOR_ERR_INVALID_ARGUMENT;
+    }
     custom_tools_[std::string(name)] = std::move(tool);
     return SAO_AI_EDITOR_OK;
 }
@@ -486,6 +549,128 @@ int32_t NativeToolRegistry::unregister_custom(std::string_view name) {
     }
     custom_tools_.erase(found);
     return SAO_AI_EDITOR_OK;
+}
+
+int32_t NativeToolRegistry::register_alias(std::string_view alias,
+                                           std::string_view target) {
+    if (alias.empty() || !valid_utf8(alias) || target.empty() ||
+        !valid_utf8(target)) {
+        return SAO_AI_EDITOR_ERR_INVALID_ARGUMENT;
+    }
+    if (alias == target) {
+        // A self-alias is meaningless and would silently succeed under any
+        // "unique name" check; reject so misuse is loud.
+        return SAO_AI_EDITOR_ERR_INVALID_ARGUMENT;
+    }
+    std::lock_guard<std::mutex> lock(custom_mutex_);
+    // Collision: alias name must not shadow a built-in / custom / other alias.
+    if (is_builtin_name(alias) ||
+        custom_tools_.find(std::string(alias)) != custom_tools_.end() ||
+        aliases_.find(std::string(alias)) != aliases_.end()) {
+        return SAO_AI_EDITOR_ERR_INVALID_ARGUMENT;
+    }
+    // Target must resolve to something dispatchable *right now*.  Chained
+    // aliasing (alias -> alias -> tool) is rejected because it complicates
+    // resolution + describe() would need cycle detection.
+    const bool target_ok =
+        is_builtin_name(target) ||
+        custom_tools_.find(std::string(target)) != custom_tools_.end();
+    if (!target_ok) {
+        return SAO_AI_EDITOR_ERR_NOT_FOUND;
+    }
+    aliases_[std::string(alias)] = AliasEntry{std::string(target)};
+    return SAO_AI_EDITOR_OK;
+}
+
+int32_t NativeToolRegistry::unregister_alias(std::string_view alias) {
+    if (alias.empty()) {
+        return SAO_AI_EDITOR_ERR_INVALID_ARGUMENT;
+    }
+    std::lock_guard<std::mutex> lock(custom_mutex_);
+    const auto found = aliases_.find(std::string(alias));
+    if (found == aliases_.end()) {
+        return SAO_AI_EDITOR_ERR_NOT_FOUND;
+    }
+    aliases_.erase(found);
+    return SAO_AI_EDITOR_OK;
+}
+
+std::string NativeToolRegistry::resolve_alias(std::string_view name) const {
+    if (name.empty()) {
+        return std::string(name);
+    }
+    std::lock_guard<std::mutex> lock(custom_mutex_);
+    const auto found = aliases_.find(std::string(name));
+    if (found == aliases_.end()) {
+        return std::string(name);
+    }
+    return found->second.target;
+}
+
+int32_t NativeToolRegistry::register_hook(
+    std::string_view id, std::string_view phase,
+    const std::vector<std::string>& tool_filter,
+    std::string_view emit_event) {
+    if (id.empty() || !valid_utf8(id) || emit_event.empty() ||
+        !valid_utf8(emit_event)) {
+        return SAO_AI_EDITOR_ERR_INVALID_ARGUMENT;
+    }
+    if (phase != "before" && phase != "after" && phase != "error") {
+        return SAO_AI_EDITOR_ERR_INVALID_ARGUMENT;
+    }
+    Hook hook;
+    hook.id = std::string(id);
+    hook.phase = std::string(phase);
+    hook.tool_filter = tool_filter;
+    hook.emit_event = std::string(emit_event);
+    std::lock_guard<std::mutex> lock(custom_mutex_);
+    hooks_[hook.id] = std::move(hook);
+    return SAO_AI_EDITOR_OK;
+}
+
+int32_t NativeToolRegistry::unregister_hook(std::string_view id) {
+    if (id.empty()) {
+        return SAO_AI_EDITOR_ERR_INVALID_ARGUMENT;
+    }
+    std::lock_guard<std::mutex> lock(custom_mutex_);
+    const auto found = hooks_.find(std::string(id));
+    if (found == hooks_.end()) {
+        return SAO_AI_EDITOR_ERR_NOT_FOUND;
+    }
+    hooks_.erase(found);
+    return SAO_AI_EDITOR_OK;
+}
+
+std::vector<NativeToolRegistry::HookFire>
+NativeToolRegistry::snapshot_hooks(std::string_view phase,
+                                    std::string_view tool_name) const {
+    std::vector<HookFire> matched;
+    std::lock_guard<std::mutex> lock(custom_mutex_);
+    matched.reserve(hooks_.size());
+    for (const auto& entry : hooks_) {
+        const Hook& hook = entry.second;
+        if (hook.phase != phase) {
+            continue;
+        }
+        // Empty filter = match any tool.  Otherwise the resolved tool name
+        // must appear in the whitelist.  Comparing against the canonical
+        // (post-alias) name means a filter of ["readFile"] fires for both a
+        // direct call and any alias that lands on readFile.
+        if (!hook.tool_filter.empty()) {
+            bool matches = false;
+            for (const auto& allowed : hook.tool_filter) {
+                if (allowed == tool_name) {
+                    matches = true;
+                    break;
+                }
+            }
+            if (!matches) {
+                continue;
+            }
+        }
+        matched.push_back(HookFire{hook.id, hook.emit_event});
+    }
+    return matched;
 }
 
 int32_t NativeToolRegistry::read_file(const Json& arguments,

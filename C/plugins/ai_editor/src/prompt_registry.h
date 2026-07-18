@@ -49,6 +49,17 @@ public:
     // presets fill in, user scopes shadow same-id entries.
     void reload(const ScopeStore& scopes);
     std::vector<PromptDefinition> list() const;
+    // Same shape as list(), but only returns prompts whose `tags` intersect
+    // `tags` (OR semantics: any single match keeps the prompt).  Passing an
+    // empty `tags` vector returns everything — same behaviour as list() so
+    // dispatchers can forward `params.tags` unconditionally.
+    std::vector<PromptDefinition> list_by_tags(
+        const std::vector<std::string>& tags) const;
+    // Aggregate tag distribution across every registered prompt.  Each entry
+    // in the returned JSON is `{name, count, prompts:[id...]}`, sorted by
+    // count desc / name asc so ties are stable.  `result["total"]` mirrors
+    // the number of unique tags.
+    void list_all_tags(Json& result) const;
     bool get(std::string_view id, PromptDefinition& out) const;
     int32_t save(const PromptDefinition& prompt, const ScopeStore& scopes,
                  std::string_view scope, std::string_view plugin_id);

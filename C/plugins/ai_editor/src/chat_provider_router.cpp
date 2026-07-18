@@ -197,6 +197,31 @@ int32_t build_provider_request(const ProviderRoute& route,
             openai_body["temperature"].is_number()) {
             body["temperature"] = openai_body["temperature"];
         }
+        // top_p / top_k share OpenAI-style names on Anthropic's native
+        // /v1/messages API so they can be forwarded verbatim.  OpenAI-only
+        // knobs (frequency_penalty, presence_penalty, seed, logit_bias,
+        // logprobs, top_logprobs, n, user, parallel_tool_calls,
+        // response_format) are deliberately dropped because Anthropic would
+        // 400 on unknown fields.
+        if (openai_body.contains("top_p") &&
+            openai_body["top_p"].is_number()) {
+            body["top_p"] = openai_body["top_p"];
+        }
+        if (openai_body.contains("top_k") &&
+            openai_body["top_k"].is_number_integer()) {
+            body["top_k"] = openai_body["top_k"];
+        }
+        // OpenAI's `stop` becomes `stop_sequences` (Anthropic only accepts
+        // an array).  A lone string is upgraded to a single-element array so
+        // callers don't have to know the wire distinction.
+        if (openai_body.contains("stop")) {
+            const Json& stop_value = openai_body["stop"];
+            if (stop_value.is_string()) {
+                body["stop_sequences"] = Json::array({stop_value});
+            } else if (stop_value.is_array()) {
+                body["stop_sequences"] = stop_value;
+            }
+        }
         if (openai_body.value("stream", false)) {
             body["stream"] = true;
         }
@@ -237,6 +262,45 @@ int32_t build_provider_request(const ProviderRoute& route,
         if (openai_body.contains("max_tokens") &&
             openai_body["max_tokens"].is_number()) {
             generation_config["maxOutputTokens"] = openai_body["max_tokens"];
+        }
+        // Gemini's generationConfig accepts topP / topK / seed under
+        // camelCase names and requires stopSequences as an array.  Every
+        // OpenAI-only knob (frequency_penalty, presence_penalty, logit_bias,
+        // logprobs, top_logprobs, n, user, parallel_tool_calls) is silently
+        // dropped since Gemini would 400 on unknown fields.
+        if (openai_body.contains("top_p") &&
+            openai_body["top_p"].is_number()) {
+            generation_config["topP"] = openai_body["top_p"];
+        }
+        if (openai_body.contains("top_k") &&
+            openai_body["top_k"].is_number_integer()) {
+            generation_config["topK"] = openai_body["top_k"];
+        }
+        if (openai_body.contains("seed") &&
+            openai_body["seed"].is_number_integer()) {
+            generation_config["seed"] = openai_body["seed"];
+        }
+        if (openai_body.contains("stop")) {
+            const Json& stop_value = openai_body["stop"];
+            if (stop_value.is_string()) {
+                generation_config["stopSequences"] =
+                    Json::array({stop_value});
+            } else if (stop_value.is_array()) {
+                generation_config["stopSequences"] = stop_value;
+            }
+        }
+        // response_format=={"type":"json_object"} → the Gemini equivalent is
+        // toggling responseMimeType.  We stay conservative and only convert
+        // the exact json_object shape; any other response_format is dropped
+        // because Gemini would 400 on an unknown structure.
+        if (openai_body.contains("response_format") &&
+            openai_body["response_format"].is_object()) {
+            const auto& response_format = openai_body["response_format"];
+            const std::string format_type =
+                response_format.value("type", std::string{});
+            if (format_type == "json_object") {
+                generation_config["responseMimeType"] = "application/json";
+            }
         }
         if (!generation_config.empty()) {
             body["generationConfig"] = std::move(generation_config);

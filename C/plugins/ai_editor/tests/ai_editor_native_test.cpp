@@ -2979,6 +2979,213 @@ TEST_CASE("chat.run routes Anthropic provider through native /v1/messages",
     REQUIRE(status["result"]["content"] == "claude-native");
 }
 
+TEST_CASE("chat.run forwards OpenAI sampling knobs into the request body",
+          "[plugins][ai_editor][native][providers][openai][sampling]") {
+    // Loop back through the LocalHttpServer so we can peek at the outgoing
+    // request body verbatim.  Every mainstream sampling knob is expected to
+    // land in the body untouched: run_chat_sync's expanded forward list
+    // covers top_p, frequency_penalty, presence_penalty, seed, stop,
+    // logit_bias, logprobs, top_logprobs, n, user, parallel_tool_calls.
+    const std::string body =
+        R"({"choices":[{"message":{"role":"assistant","content":"ok"}}]})";
+    LocalHttpServer server(
+        "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n"
+        "Content-Length: " +
+        std::to_string(body.size()) +
+        "\r\nConnection: close\r\n\r\n" + body);
+    RuntimeFixture fixture;
+    Json params{{"provider", {{"id", "fixture"},
+                              {"endpoint", server.endpoint()}}},
+                {"model", "fixture-model"},
+                {"messages", Json::array({Json{{"role", "user"},
+                                               {"content", "hi"}}})},
+                {"stream", false},
+                {"timeoutMs", 2'000},
+                {"temperature", 0.42},
+                {"max_tokens", 128},
+                {"top_p", 0.9},
+                {"frequency_penalty", 0.5},
+                {"presence_penalty", -0.25},
+                {"seed", 12345},
+                {"stop", Json::array({"END", "###"})},
+                {"logit_bias", Json{{"50256", -100}}},
+                {"logprobs", true},
+                {"top_logprobs", 5},
+                {"n", 2},
+                {"user", "trace-user-1"},
+                {"parallel_tool_calls", false}};
+    const Json started = dispatch(fixture.get(), "chat.run", params);
+    REQUIRE(started.contains("result"));
+    REQUIRE(server.wait_for_connections(1, 2'000));
+    const auto bodies = server.captured_bodies();
+    REQUIRE(bodies.size() == 1);
+    const Json body_json = Json::parse(bodies.front());
+    REQUIRE(body_json["model"] == "fixture-model");
+    REQUIRE(body_json["temperature"] == 0.42);
+    REQUIRE(body_json["max_tokens"] == 128);
+    REQUIRE(body_json["top_p"] == 0.9);
+    REQUIRE(body_json["frequency_penalty"] == 0.5);
+    REQUIRE(body_json["presence_penalty"] == -0.25);
+    REQUIRE(body_json["seed"] == 12345);
+    REQUIRE(body_json["stop"].is_array());
+    REQUIRE(body_json["stop"].size() == 2);
+    REQUIRE(body_json["stop"][0] == "END");
+    REQUIRE(body_json["logit_bias"]["50256"] == -100);
+    REQUIRE(body_json["logprobs"] == true);
+    REQUIRE(body_json["top_logprobs"] == 5);
+    REQUIRE(body_json["n"] == 2);
+    REQUIRE(body_json["user"] == "trace-user-1");
+    REQUIRE(body_json["parallel_tool_calls"] == false);
+    // Fields never set by the caller must not leak into the body.  If they
+    // did, callers with strict OpenAI-compat proxies would see the request
+    // rejected for unknown keys.
+    REQUIRE_FALSE(body_json.contains("top_k"));
+    REQUIRE_FALSE(body_json.contains("tools"));
+    REQUIRE_FALSE(body_json.contains("tool_choice"));
+    REQUIRE_FALSE(body_json.contains("response_format"));
+}
+
+TEST_CASE("Provider router forwards Anthropic top_p / top_k and folds stop "
+          "into stop_sequences",
+          "[plugins][ai_editor][native][providers][anthropic][sampling]") {
+    Json openai_body{
+        {"model", "claude-3-5-sonnet"},
+        {"messages",
+         Json::array({Json{{"role", "user"}, {"content", "hi"}}})},
+        {"max_tokens", 256},
+        {"temperature", 0.3},
+        {"top_p", 0.85},
+        {"top_k", 40},
+        {"stop", "###"},
+        // Every one of these is OpenAI-only.  build_provider_request must
+        // silently drop them from the Anthropic body — the API would 400 on
+        // unknown fields.
+        {"frequency_penalty", 0.4},
+        {"presence_penalty", 0.4},
+        {"seed", 7},
+        {"logit_bias", Json{{"999", -100}}},
+        {"logprobs", true},
+        {"top_logprobs", 3},
+        {"n", 2},
+        {"user", "u"},
+        {"parallel_tool_calls", false},
+        {"response_format", Json{{"type", "json_object"}}}};
+    sao::ai_editor::native::ProviderRoute route =
+        sao::ai_editor::native::normalise_provider(
+            Json{{"type", "anthropic"},
+                 {"endpoint", "https://api.anthropic.com"},
+                 {"apiKey", "sk-ant-xyz"}},
+            "claude-3-5-sonnet");
+    sao::ai_editor::native::ProviderRequest request;
+    REQUIRE(sao::ai_editor::native::build_provider_request(route, openai_body,
+                                                            request) ==
+            SAO_AI_EDITOR_OK);
+    const Json parsed = Json::parse(request.body_json);
+    REQUIRE(parsed["temperature"] == 0.3);
+    REQUIRE(parsed["top_p"] == 0.85);
+    REQUIRE(parsed["top_k"] == 40);
+    REQUIRE(parsed["stop_sequences"].is_array());
+    REQUIRE(parsed["stop_sequences"].size() == 1);
+    REQUIRE(parsed["stop_sequences"][0] == "###");
+    // Passing an already-arrayed stop should be preserved verbatim (no
+    // double-wrapping).
+    openai_body["stop"] = Json::array({"A", "B", "C"});
+    sao::ai_editor::native::ProviderRequest request_array;
+    REQUIRE(sao::ai_editor::native::build_provider_request(
+                route, openai_body, request_array) == SAO_AI_EDITOR_OK);
+    const Json parsed_array = Json::parse(request_array.body_json);
+    REQUIRE(parsed_array["stop_sequences"].size() == 3);
+    REQUIRE(parsed_array["stop_sequences"][2] == "C");
+    // OpenAI-only knobs must not leak into the Anthropic body.
+    for (const char* dropped :
+         {"frequency_penalty", "presence_penalty", "seed", "logit_bias",
+          "logprobs", "top_logprobs", "n", "user", "parallel_tool_calls",
+          "response_format", "stop"}) {
+        REQUIRE_FALSE(parsed.contains(dropped));
+    }
+}
+
+TEST_CASE("Provider router promotes Gemini sampling knobs into "
+          "generationConfig",
+          "[plugins][ai_editor][native][providers][gemini][sampling]") {
+    Json openai_body{
+        {"model", "gemini-2.0-flash"},
+        {"messages",
+         Json::array({Json{{"role", "user"},
+                            {"content", "explain quantum"}}})},
+        {"max_tokens", 128},
+        {"temperature", 0.6},
+        {"top_p", 0.75},
+        {"top_k", 32},
+        {"seed", 99},
+        {"stop", Json::array({"STOP1", "STOP2"})},
+        {"response_format", Json{{"type", "json_object"}}},
+        // OpenAI-only knobs — must be silently dropped.
+        {"frequency_penalty", 0.1},
+        {"presence_penalty", 0.2},
+        {"logit_bias", Json{{"5", -50}}},
+        {"logprobs", true},
+        {"top_logprobs", 3},
+        {"n", 2},
+        {"user", "u"},
+        {"parallel_tool_calls", true}};
+    sao::ai_editor::native::ProviderRoute route =
+        sao::ai_editor::native::normalise_provider(
+            Json{{"type", "gemini"},
+                 {"endpoint",
+                  "https://generativelanguage.googleapis.com/v1beta/models"},
+                 {"apiKey", "GEM-KEY"}},
+            "gemini-2.0-flash");
+    sao::ai_editor::native::ProviderRequest request;
+    REQUIRE(sao::ai_editor::native::build_provider_request(route, openai_body,
+                                                            request) ==
+            SAO_AI_EDITOR_OK);
+    const Json parsed = Json::parse(request.body_json);
+    REQUIRE(parsed.contains("generationConfig"));
+    const Json& config = parsed["generationConfig"];
+    REQUIRE(config["temperature"] == 0.6);
+    REQUIRE(config["maxOutputTokens"] == 128);
+    REQUIRE(config["topP"] == 0.75);
+    REQUIRE(config["topK"] == 32);
+    REQUIRE(config["seed"] == 99);
+    REQUIRE(config["stopSequences"].is_array());
+    REQUIRE(config["stopSequences"].size() == 2);
+    REQUIRE(config["stopSequences"][1] == "STOP2");
+    REQUIRE(config["responseMimeType"] == "application/json");
+    // OpenAI-only knobs must not appear anywhere in the Gemini body — the
+    // API would 400 on unknown generationConfig fields.
+    for (const char* dropped :
+         {"frequencyPenalty", "presencePenalty", "logitBias", "logprobs",
+          "topLogprobs", "n", "user", "parallelToolCalls"}) {
+        REQUIRE_FALSE(config.contains(dropped));
+    }
+    // OpenAI-shaped names also must not have leaked at the top level.
+    for (const char* dropped :
+         {"frequency_penalty", "presence_penalty", "logit_bias", "logprobs",
+          "top_logprobs", "n", "user", "parallel_tool_calls",
+          "response_format", "stop", "top_p", "top_k", "seed"}) {
+        REQUIRE_FALSE(parsed.contains(dropped));
+    }
+    // A stop string (not array) should upgrade to a single-element
+    // stopSequences.
+    openai_body["stop"] = "END";
+    sao::ai_editor::native::ProviderRequest request_single;
+    REQUIRE(sao::ai_editor::native::build_provider_request(
+                route, openai_body, request_single) == SAO_AI_EDITOR_OK);
+    const Json parsed_single = Json::parse(request_single.body_json);
+    REQUIRE(parsed_single["generationConfig"]["stopSequences"].size() == 1);
+    REQUIRE(parsed_single["generationConfig"]["stopSequences"][0] == "END");
+    // response_format with an unrecognised type must be dropped, not
+    // converted to a bogus responseMimeType.
+    openai_body["response_format"] = Json{{"type", "text"}};
+    sao::ai_editor::native::ProviderRequest request_text;
+    REQUIRE(sao::ai_editor::native::build_provider_request(
+                route, openai_body, request_text) == SAO_AI_EDITOR_OK);
+    const Json parsed_text = Json::parse(request_text.body_json);
+    REQUIRE_FALSE(parsed_text["generationConfig"].contains(
+        "responseMimeType"));
+}
+
 TEST_CASE("AI Editor workflows.list_defs surfaces built-in workflows",
           "[plugins][ai_editor][native][workflows]") {
     RuntimeFixture fixture;
@@ -5551,6 +5758,217 @@ TEST_CASE("AI Editor prompts.render substitutes vars, applies defaults, "
             SAO_AI_EDITOR_ERR_NOT_FOUND);
 }
 
+TEST_CASE("AI Editor prompts.render_batch renders every entry and reports "
+          "success/failure counts",
+          "[plugins][ai_editor][native][prompts]") {
+    RuntimeFixture fixture;
+    // Two built-ins with fully populated arguments -> both must succeed
+    // and the aggregated counts must match.
+    const Json response = dispatch(
+        fixture.get(), "prompts.render_batch",
+        {{"items", Json::array({
+                       Json{{"id", "code-review-base"},
+                              {"arguments", {{"focus", "security"},
+                                              {"code", "SELECT 1"}}}},
+                       Json{{"id", "explain-code"},
+                              {"arguments", {{"code", "printf('hi')"},
+                                              {"depth", "overview"}}}}})}});
+    REQUIRE(response.contains("result"));
+    const auto& result = response["result"];
+    REQUIRE(result["successCount"] == 2);
+    REQUIRE(result["failureCount"] == 0);
+    REQUIRE(result["results"].size() == 2);
+    REQUIRE(result["results"][0]["status"] == "ok");
+    REQUIRE(result["results"][0]["id"] == "code-review-base");
+    REQUIRE(result["results"][0]["content"].get<std::string>().find(
+                "Focus on: security") != std::string::npos);
+    REQUIRE(result["results"][1]["status"] == "ok");
+    REQUIRE(result["results"][1]["id"] == "explain-code");
+    REQUIRE(result["results"][1]["content"].get<std::string>().find(
+                "printf('hi')") != std::string::npos);
+    // Empty items must surface as INVALID_ARGUMENT so callers never treat
+    // an empty batch as a silent success.
+    REQUIRE(dispatch(fixture.get(), "prompts.render_batch",
+                     {{"items", Json::array()}})["error"]["data"]["status"] ==
+            SAO_AI_EDITOR_ERR_INVALID_ARGUMENT);
+}
+
+TEST_CASE("AI Editor prompts.render_batch onMissing=skip records not_found "
+          "peers without aborting the batch",
+          "[plugins][ai_editor][native][prompts]") {
+    RuntimeFixture fixture;
+    // Mix a valid id with an unknown id.  With onMissing=skip the unknown
+    // becomes a per-entry not_found; the valid entry still renders.
+    const Json response = dispatch(
+        fixture.get(), "prompts.render_batch",
+        {{"onMissing", "skip"},
+         {"items", Json::array({
+                       Json{{"id", "code-review-base"},
+                              {"arguments", {{"focus", "correctness"},
+                                              {"code", "x = 1"}}}},
+                       Json{{"id", "does-not-exist"},
+                              {"arguments", Json::object()}}})}});
+    REQUIRE(response.contains("result"));
+    const auto& result = response["result"];
+    REQUIRE(result["successCount"] == 1);
+    REQUIRE(result["failureCount"] == 1);
+    REQUIRE(result["results"].size() == 2);
+    REQUIRE(result["results"][0]["status"] == "ok");
+    REQUIRE(result["results"][1]["status"] == "not_found");
+    REQUIRE(result["results"][1]["id"] == "does-not-exist");
+    REQUIRE_FALSE(
+        result["results"][1].value("error", std::string{}).empty());
+    // Same batch with onMissing=fail (the default) must surface
+    // INVALID_ARGUMENT so callers can pick their own recovery strategy.
+    REQUIRE(dispatch(fixture.get(), "prompts.render_batch",
+                     {{"items", Json::array({
+                                    Json{{"id", "does-not-exist"},
+                                           {"arguments", Json::object()}}})}})
+                ["error"]["data"]["status"] ==
+            SAO_AI_EDITOR_ERR_INVALID_ARGUMENT);
+}
+
+TEST_CASE("AI Editor prompts.list_defs with tags filter returns only prompts "
+          "sharing at least one tag",
+          "[plugins][ai_editor][native][prompts]") {
+    RuntimeFixture fixture;
+    // Save one workspace prompt tagged {sql} and one tagged {random}; the
+    // {sql} filter must return the sql one plus any built-in / market
+    // prompt that carries "sql", and the built-in "code-review-base"
+    // (tags {review, code}) with filter {review} must survive too.
+    const Json sql_prompt{
+        {"id", "workspace-sql"},
+        {"name", "Workspace SQL"},
+        {"content", "sql body"},
+        {"variables", Json::array()},
+        {"tags", Json::array({"sql", "workspace"})}};
+    REQUIRE(dispatch(fixture.get(), "prompts.save_def",
+                     {{"scope", "workspace"}, {"prompt", sql_prompt}})
+                .contains("result"));
+    const Json unrelated_prompt{
+        {"id", "workspace-random"},
+        {"name", "Workspace Random"},
+        {"content", "random body"},
+        {"variables", Json::array()},
+        {"tags", Json::array({"random"})}};
+    REQUIRE(dispatch(fixture.get(), "prompts.save_def",
+                     {{"scope", "workspace"}, {"prompt", unrelated_prompt}})
+                .contains("result"));
+    // Filter on {sql}: must include workspace-sql, must NOT include
+    // workspace-random or the two non-sql built-ins.
+    const Json filtered = dispatch(fixture.get(), "prompts.list_defs",
+                                    {{"tags", Json::array({"sql"})}})
+                              ["result"];
+    std::vector<std::string> filtered_ids;
+    for (const auto& item : filtered["items"]) {
+        filtered_ids.push_back(item.value("id", std::string{}));
+    }
+    REQUIRE(std::find(filtered_ids.begin(), filtered_ids.end(),
+                       "workspace-sql") != filtered_ids.end());
+    REQUIRE(std::find(filtered_ids.begin(), filtered_ids.end(),
+                       "workspace-random") == filtered_ids.end());
+    REQUIRE(std::find(filtered_ids.begin(), filtered_ids.end(),
+                       "explain-code") == filtered_ids.end());
+    REQUIRE(std::find(filtered_ids.begin(), filtered_ids.end(),
+                       "bug-diagnosis") == filtered_ids.end());
+    // Filter on {review}: must include the code-review-base builtin
+    // (tags {review, code}); must NOT include workspace-random.
+    const Json review = dispatch(fixture.get(), "prompts.list_defs",
+                                  {{"tags", Json::array({"review"})}})
+                            ["result"];
+    std::vector<std::string> review_ids;
+    for (const auto& item : review["items"]) {
+        review_ids.push_back(item.value("id", std::string{}));
+    }
+    REQUIRE(std::find(review_ids.begin(), review_ids.end(),
+                       "code-review-base") != review_ids.end());
+    REQUIRE(std::find(review_ids.begin(), review_ids.end(),
+                       "workspace-random") == review_ids.end());
+    // OR semantics: {sql, random} must return both workspace prompts even
+    // though neither shares both tags.
+    const Json either = dispatch(
+        fixture.get(), "prompts.list_defs",
+        {{"tags", Json::array({"sql", "random"})}})["result"];
+    std::vector<std::string> either_ids;
+    for (const auto& item : either["items"]) {
+        either_ids.push_back(item.value("id", std::string{}));
+    }
+    REQUIRE(std::find(either_ids.begin(), either_ids.end(),
+                       "workspace-sql") != either_ids.end());
+    REQUIRE(std::find(either_ids.begin(), either_ids.end(),
+                       "workspace-random") != either_ids.end());
+    // Empty tags array: must degrade to list_defs (backward compatible).
+    const Json all_default =
+        dispatch(fixture.get(), "prompts.list_defs")["result"];
+    const Json all_empty = dispatch(fixture.get(), "prompts.list_defs",
+                                     {{"tags", Json::array()}})["result"];
+    REQUIRE(all_default["total"] == all_empty["total"]);
+}
+
+TEST_CASE("AI Editor prompts.list_tags returns tag distribution sorted by "
+          "count desc / name asc",
+          "[plugins][ai_editor][native][prompts]") {
+    RuntimeFixture fixture;
+    // Layer two workspace prompts on top of the built-ins so we can predict
+    // which tags jump ahead in the aggregated ranking.
+    const Json prompt_a{
+        {"id", "wp-a"},
+        {"name", "WP A"},
+        {"content", "a"},
+        {"variables", Json::array()},
+        {"tags", Json::array({"review", "custom"})}};
+    const Json prompt_b{
+        {"id", "wp-b"},
+        {"name", "WP B"},
+        {"content", "b"},
+        {"variables", Json::array()},
+        {"tags", Json::array({"review", "custom"})}};
+    REQUIRE(dispatch(fixture.get(), "prompts.save_def",
+                     {{"scope", "workspace"}, {"prompt", prompt_a}})
+                .contains("result"));
+    REQUIRE(dispatch(fixture.get(), "prompts.save_def",
+                     {{"scope", "workspace"}, {"prompt", prompt_b}})
+                .contains("result"));
+    const Json response = dispatch(fixture.get(), "prompts.list_tags");
+    REQUIRE(response.contains("result"));
+    const auto& result = response["result"];
+    REQUIRE(result.contains("tags"));
+    REQUIRE(result["tags"].is_array());
+    REQUIRE(result["tags"].size() == result["total"]);
+    // Extract to a keyed map so we can assert per-tag content without
+    // relying on the exact market-preset population (which is optional).
+    std::unordered_map<std::string, Json> by_name;
+    std::vector<std::pair<size_t, std::string>> ordering;
+    for (const auto& entry : result["tags"]) {
+        by_name.emplace(entry.value("name", std::string{}), entry);
+        ordering.emplace_back(entry.value("count", size_t{0}),
+                               entry.value("name", std::string{}));
+    }
+    // review: two workspace prompts + code-review-base = at least 3
+    // (market preset sql-audit adds one more when assets present).
+    REQUIRE(by_name.count("review") == 1);
+    REQUIRE(by_name["review"].value("count", size_t{0}) >= 3);
+    // custom: only the two workspace prompts.
+    REQUIRE(by_name.count("custom") == 1);
+    REQUIRE(by_name["custom"].value("count", size_t{0}) == 2);
+    // Prompts list under each tag must contain the ids we saved and
+    // must be alphabetically sorted.
+    const auto& custom_prompts = by_name["custom"]["prompts"];
+    REQUIRE(custom_prompts.size() == 2);
+    REQUIRE(custom_prompts[0] == "wp-a");
+    REQUIRE(custom_prompts[1] == "wp-b");
+    // Sort invariant: entries must be ordered by count desc, then name asc.
+    for (size_t i = 1; i < ordering.size(); ++i) {
+        const auto& prev = ordering[i - 1];
+        const auto& current = ordering[i];
+        if (prev.first == current.first) {
+            REQUIRE(prev.second < current.second);
+        } else {
+            REQUIRE(prev.first > current.first);
+        }
+    }
+}
+
 TEST_CASE("AI Editor chat.run with promptId + promptArguments prepends the "
           "rendered template as a system message before the request body is "
           "sent",
@@ -6766,4 +7184,381 @@ TEST_CASE("chat.dispatch_tool_calls surfaces permission_denied when mode=ask "
     REQUIRE(bad_mode.contains("error"));
     REQUIRE(bad_mode["error"]["data"]["status"] ==
             SAO_AI_EDITOR_ERR_INVALID_ARGUMENT);
+}
+
+namespace {
+
+// Drain up to `budget` events from the runtime queue.  Some sao.event streams
+// (workflow / chat) push events even in tests that never subscribe, so we
+// tolerate an empty poll but never block forever waiting for a specific hook
+// to appear.  Each returned entry is the parsed sao.event envelope.
+std::vector<Json> drain_sao_events(sao_ai_editor_runtime_t runtime,
+                                    size_t budget) {
+    std::vector<Json> events;
+    events.reserve(budget);
+    for (size_t index = 0; index < budget; ++index) {
+        uint32_t required = 0;
+        const int32_t queried = sao_ai_editor_runtime_next_event(
+            runtime, nullptr, 0, &required);
+        if (queried == SAO_AI_EDITOR_OK && required == 0) {
+            break;
+        }
+        if (queried != SAO_AI_EDITOR_ERR_BUFFER_TOO_SMALL) {
+            break;
+        }
+        std::vector<char> event(static_cast<size_t>(required) + 1);
+        if (sao_ai_editor_runtime_next_event(
+                runtime, event.data(),
+                static_cast<uint32_t>(event.size()), &required) !=
+            SAO_AI_EDITOR_OK) {
+            break;
+        }
+        events.push_back(Json::parse(event.data(), event.data() + required));
+    }
+    return events;
+}
+
+}  // namespace
+
+TEST_CASE("tools.register_alias routes tools.call to the target and surfaces "
+          "aliasOf in tools.list",
+          "[plugins][ai_editor][native][tools][alias]") {
+    RuntimeFixture fixture;
+    auto runtime = fixture.get();
+    REQUIRE(dispatch(runtime, "runtime.initialize").contains("result"));
+
+    // Seed a workspace file so the alias-routed readFile call has content to
+    // return, otherwise the test would only prove routing to a NOT_FOUND.
+    {
+        std::ofstream seed(fixture.workspace() / L"alias_note.txt");
+        seed << "aliased-content\n";
+    }
+
+    // Register the alias.  Both alias + target are echoed back in the result
+    // so callers can verify the binding without a follow-up tools.list.
+    const Json register_result = dispatch(
+        runtime, "tools.register_alias",
+        {{"alias", "read_file"}, {"target", "readFile"}});
+    REQUIRE(register_result["result"]["ok"] == true);
+    REQUIRE(register_result["result"]["alias"] == "read_file");
+    REQUIRE(register_result["result"]["target"] == "readFile");
+
+    // tools.list now includes an aliasOf-tagged entry that mirrors readFile's
+    // readOnly + parameters schema.  We keep the built-in count (4) plus one.
+    const Json listed = dispatch(runtime, "tools.list")["result"];
+    REQUIRE(listed["tools"].size() == 5);
+    bool saw_alias = false;
+    for (const auto& tool : listed["tools"]) {
+        if (tool.value("name", std::string{}) == "read_file") {
+            saw_alias = true;
+            REQUIRE(tool["aliasOf"] == "readFile");
+            REQUIRE(tool["readOnly"] == true);
+            REQUIRE(tool["parameters"]["properties"].contains("path"));
+            // Alias inherits the built-in's parameters so permission gating
+            // still lands on "allowed" for the read-only target.
+            REQUIRE(tool["permission"] == "allowed");
+        }
+    }
+    REQUIRE(saw_alias);
+
+    // tools.call read_file dispatches through the alias to the built-in
+    // readFile handler and returns the file contents.
+    const Json call = dispatch(
+        runtime, "tools.call",
+        {{"mode", "agent"},
+         {"name", "read_file"},
+         {"arguments", {{"path", "alias_note.txt"}}}})["result"];
+    REQUIRE(call["content"].get<std::string>().find("aliased-content") !=
+            std::string::npos);
+
+    // Unregistering the alias makes the alias name NOT_FOUND again; the
+    // target continues to work directly.
+    REQUIRE(dispatch(runtime, "tools.unregister_alias",
+                      {{"alias", "read_file"}})["result"]["ok"] == true);
+    const Json gone = dispatch(
+        runtime, "tools.call",
+        {{"mode", "agent"},
+         {"name", "read_file"},
+         {"arguments", {{"path", "alias_note.txt"}}}});
+    REQUIRE(gone["error"]["data"]["status"] ==
+            SAO_AI_EDITOR_ERR_NOT_FOUND);
+    REQUIRE(dispatch(runtime, "tools.call",
+                      {{"mode", "agent"},
+                       {"name", "readFile"},
+                       {"arguments",
+                        {{"path", "alias_note.txt"}}}})["result"]["content"]
+                .get<std::string>()
+                .find("aliased-content") != std::string::npos);
+}
+
+TEST_CASE("tools.register_alias rejects collisions and dangling targets",
+          "[plugins][ai_editor][native][tools][alias][errors]") {
+    RuntimeFixture fixture;
+    auto runtime = fixture.get();
+    REQUIRE(dispatch(runtime, "runtime.initialize").contains("result"));
+
+    // Shadowing a built-in name is INVALID_ARGUMENT — otherwise the alias
+    // would silently override the direct dispatch entry.
+    const Json shadow_builtin = dispatch(
+        runtime, "tools.register_alias",
+        {{"alias", "readFile"}, {"target", "listFiles"}});
+    REQUIRE(shadow_builtin["error"]["data"]["status"] ==
+            SAO_AI_EDITOR_ERR_INVALID_ARGUMENT);
+
+    // Target must resolve to something real; a rubbish target is NOT_FOUND
+    // so the caller can distinguish "typo" from "bad payload".
+    const Json missing_target = dispatch(
+        runtime, "tools.register_alias",
+        {{"alias", "cat"}, {"target", "no_such_tool"}});
+    REQUIRE(missing_target["error"]["data"]["status"] ==
+            SAO_AI_EDITOR_ERR_NOT_FOUND);
+
+    // Register a valid alias, then try to register another with the same
+    // name — must fail with INVALID_ARGUMENT (re-bind requires unregister
+    // first).
+    REQUIRE(dispatch(runtime, "tools.register_alias",
+                      {{"alias", "cat"}, {"target", "readFile"}})
+                ["result"]["ok"] == true);
+    const Json duplicate = dispatch(
+        runtime, "tools.register_alias",
+        {{"alias", "cat"}, {"target", "listFiles"}});
+    REQUIRE(duplicate["error"]["data"]["status"] ==
+            SAO_AI_EDITOR_ERR_INVALID_ARGUMENT);
+
+    // Self-alias is meaningless — reject so the caller notices.
+    const Json self_alias = dispatch(
+        runtime, "tools.register_alias",
+        {{"alias", "readFile"}, {"target", "readFile"}});
+    REQUIRE(self_alias["error"]["data"]["status"] ==
+            SAO_AI_EDITOR_ERR_INVALID_ARGUMENT);
+
+    // Unregistering an unknown alias returns NOT_FOUND, matching the
+    // custom-tool contract.
+    const Json missing_unreg = dispatch(
+        runtime, "tools.unregister_alias", {{"alias", "never-set"}});
+    REQUIRE(missing_unreg["error"]["data"]["status"] ==
+            SAO_AI_EDITOR_ERR_NOT_FOUND);
+}
+
+TEST_CASE("tools.register_hook emits before + after events around tools.call",
+          "[plugins][ai_editor][native][tools][hooks]") {
+    RuntimeFixture fixture;
+    auto runtime = fixture.get();
+    REQUIRE(dispatch(runtime, "runtime.initialize").contains("result"));
+
+    // Seed a workspace file so the editFile call succeeds; the hook events
+    // should observe the arguments + result payloads verbatim.
+    {
+        std::ofstream seed(fixture.workspace() / L"hook_target.txt");
+        seed << "original\n";
+    }
+    // Drain any residual initialize / mcp events so our poll below only
+    // observes hook fires triggered by this test.
+    (void)drain_sao_events(runtime, 32);
+
+    // Register a before + after hook filtered on editFile only.  The hook
+    // ids are echoed back so a downstream audit sink can correlate them.
+    REQUIRE(dispatch(runtime, "tools.register_hook",
+                      {{"id", "audit-before"},
+                       {"phase", "before"},
+                       {"toolFilter", Json::array({"editFile"})},
+                       {"emitEvent", "audit.tool.before"}})
+                ["result"]["ok"] == true);
+    REQUIRE(dispatch(runtime, "tools.register_hook",
+                      {{"id", "audit-after"},
+                       {"phase", "after"},
+                       {"toolFilter", Json::array({"editFile"})},
+                       {"emitEvent", "audit.tool.after"}})
+                ["result"]["ok"] == true);
+
+    const Json call = dispatch(
+        runtime, "tools.call",
+        {{"mode", "agent"},
+         {"name", "editFile"},
+         {"arguments",
+          {{"path", "hook_target.txt"},
+           {"content", "rewrite-via-hook\n"}}}})["result"];
+    REQUIRE(call["ok"] == true);
+
+    // Drain events; expect at least one before + one after with the audit
+    // metadata attached.  Unrelated events (e.g. workflow list refresh) are
+    // ignored — we filter by hookId which is unique to this test.
+    const std::vector<Json> events = drain_sao_events(runtime, 32);
+    bool saw_before = false;
+    bool saw_after = false;
+    for (const Json& envelope : events) {
+        if (envelope.value("method", std::string{}) != "sao.event") {
+            continue;
+        }
+        const Json& params = envelope["params"];
+        const std::string event_name = params.value("event", std::string{});
+        const Json& payload = params.value("payload", Json::object());
+        if (event_name == "audit.tool.before" &&
+            payload.value("hookId", std::string{}) == "audit-before") {
+            saw_before = true;
+            REQUIRE(payload["phase"] == "before");
+            REQUIRE(payload["tool"] == "editFile");
+            REQUIRE(payload["arguments"]["path"] == "hook_target.txt");
+            // No result yet — before-hooks fire ahead of the handler.
+            REQUIRE(!payload.contains("result"));
+        }
+        if (event_name == "audit.tool.after" &&
+            payload.value("hookId", std::string{}) == "audit-after") {
+            saw_after = true;
+            REQUIRE(payload["phase"] == "after");
+            REQUIRE(payload["tool"] == "editFile");
+            REQUIRE(payload["result"]["ok"] == true);
+            REQUIRE(payload["arguments"]["content"] ==
+                    "rewrite-via-hook\n");
+            REQUIRE(payload["durationMs"].is_number());
+        }
+    }
+    REQUIRE(saw_before);
+    REQUIRE(saw_after);
+
+    // Unregister the before hook and issue another call — only the after
+    // event should fire on the next round.  This proves the hook map is
+    // actually consulted per call (not memoised on registration).
+    REQUIRE(dispatch(runtime, "tools.unregister_hook",
+                      {{"id", "audit-before"}})["result"]["ok"] == true);
+    (void)drain_sao_events(runtime, 32);
+    REQUIRE(dispatch(runtime, "tools.call",
+                      {{"mode", "agent"},
+                       {"name", "editFile"},
+                       {"arguments",
+                        {{"path", "hook_target.txt"},
+                         {"content", "second-round\n"}}}})
+                ["result"]["ok"] == true);
+    const std::vector<Json> round2 = drain_sao_events(runtime, 32);
+    bool saw_before_r2 = false;
+    bool saw_after_r2 = false;
+    for (const Json& envelope : round2) {
+        if (envelope.value("method", std::string{}) != "sao.event") {
+            continue;
+        }
+        const std::string event_name =
+            envelope["params"].value("event", std::string{});
+        if (event_name == "audit.tool.before") saw_before_r2 = true;
+        if (event_name == "audit.tool.after") saw_after_r2 = true;
+    }
+    REQUIRE_FALSE(saw_before_r2);
+    REQUIRE(saw_after_r2);
+
+    // Payload validation: missing phase / emitEvent / bad toolFilter shape
+    // must all fail with INVALID_ARGUMENT.
+    const Json bad_phase = dispatch(runtime, "tools.register_hook",
+                                     {{"id", "x"},
+                                      {"phase", "sideways"},
+                                      {"emitEvent", "e"}});
+    REQUIRE(bad_phase["error"]["data"]["status"] ==
+            SAO_AI_EDITOR_ERR_INVALID_ARGUMENT);
+    const Json bad_filter = dispatch(runtime, "tools.register_hook",
+                                      {{"id", "y"},
+                                       {"phase", "before"},
+                                       {"emitEvent", "e"},
+                                       {"toolFilter", "not-an-array"}});
+    REQUIRE(bad_filter["error"]["data"]["status"] ==
+            SAO_AI_EDITOR_ERR_INVALID_ARGUMENT);
+    const Json missing_event = dispatch(runtime, "tools.register_hook",
+                                         {{"id", "z"},
+                                          {"phase", "before"}});
+    REQUIRE(missing_event["error"]["data"]["status"] ==
+            SAO_AI_EDITOR_ERR_INVALID_ARGUMENT);
+}
+
+TEST_CASE("tools.register_hook error phase fires on failed tools.call and "
+          "reports the status code",
+          "[plugins][ai_editor][native][tools][hooks][error]") {
+    RuntimeFixture fixture;
+    auto runtime = fixture.get();
+    REQUIRE(dispatch(runtime, "runtime.initialize").contains("result"));
+
+    // No toolFilter -> match every tool.  Emit event carries the status
+    // integer so an audit sink can classify the failure without also
+    // reading the JSON-RPC error envelope out-of-band.
+    REQUIRE(dispatch(runtime, "tools.register_hook",
+                      {{"id", "audit-error"},
+                       {"phase", "error"},
+                       {"emitEvent", "audit.tool.error"}})
+                ["result"]["ok"] == true);
+    (void)drain_sao_events(runtime, 32);
+
+    // 1) Missing required field -> schema-validation failure with
+    // INVALID_ARGUMENT.  Ensures the error-phase hook fires for validation
+    // failures + not just permission denials.
+    const Json bad = dispatch(runtime, "tools.call",
+                               {{"mode", "agent"},
+                                {"name", "editFile"},
+                                {"arguments",
+                                 {{"path", "no_content.txt"}}}});
+    REQUIRE(bad.contains("error"));
+    REQUIRE(bad["error"]["data"]["status"] ==
+            SAO_AI_EDITOR_ERR_INVALID_ARGUMENT);
+
+    // 2) editFile under ask mode is PERMISSION_DENIED — a second flavour
+    // of failure that must also fire the error hook.
+    const Json denied = dispatch(runtime, "tools.call",
+                                  {{"mode", "ask"},
+                                   {"name", "editFile"},
+                                   {"arguments",
+                                    {{"path", "x.txt"},
+                                     {"content", "hi"}}}});
+    REQUIRE(denied.contains("error"));
+    REQUIRE(denied["error"]["data"]["status"] ==
+            SAO_AI_EDITOR_ERR_PERMISSION_DENIED);
+
+    const std::vector<Json> events = drain_sao_events(runtime, 32);
+    int seen_error_events = 0;
+    bool saw_validation_status = false;
+    bool saw_permission_status = false;
+    for (const Json& envelope : events) {
+        if (envelope.value("method", std::string{}) != "sao.event") {
+            continue;
+        }
+        const Json& params = envelope["params"];
+        if (params.value("event", std::string{}) != "audit.tool.error") {
+            continue;
+        }
+        const Json& payload = params.value("payload", Json::object());
+        if (payload.value("hookId", std::string{}) != "audit-error") {
+            continue;
+        }
+        ++seen_error_events;
+        REQUIRE(payload["phase"] == "error");
+        REQUIRE(payload["tool"] == "editFile");
+        REQUIRE(payload["durationMs"].is_number());
+        const int32_t status = payload.value("status", 0);
+        if (status == SAO_AI_EDITOR_ERR_INVALID_ARGUMENT) {
+            saw_validation_status = true;
+        }
+        if (status == SAO_AI_EDITOR_ERR_PERMISSION_DENIED) {
+            saw_permission_status = true;
+        }
+    }
+    REQUIRE(seen_error_events == 2);
+    REQUIRE(saw_validation_status);
+    REQUIRE(saw_permission_status);
+
+    // Successful calls must NOT fire the error hook — otherwise audit logs
+    // would double-count when after + error hooks are both registered.
+    {
+        std::ofstream seed(fixture.workspace() / L"ok_path.txt");
+        seed << "seed\n";
+    }
+    (void)drain_sao_events(runtime, 32);
+    REQUIRE(dispatch(runtime, "tools.call",
+                      {{"mode", "agent"},
+                       {"name", "readFile"},
+                       {"arguments", {{"path", "ok_path.txt"}}}})
+                ["result"]["content"]
+                .get<std::string>()
+                .find("seed") != std::string::npos);
+    const std::vector<Json> after = drain_sao_events(runtime, 32);
+    for (const Json& envelope : after) {
+        if (envelope.value("method", std::string{}) != "sao.event") {
+            continue;
+        }
+        REQUIRE(envelope["params"].value("event", std::string{}) !=
+                "audit.tool.error");
+    }
 }

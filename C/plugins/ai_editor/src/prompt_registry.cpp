@@ -388,6 +388,113 @@ std::vector<PromptDefinition> PromptRegistry::list() const {
     return result;
 }
 
+std::vector<PromptDefinition> PromptRegistry::list_by_tags(
+    const std::vector<std::string>& tags) const {
+    // Empty filter degenerates to list() so callers can forward an optional
+    // params.tags without a branch.  Copy the set-membership check into a
+    // small unordered_set once per call to keep the intersection O(prompt_tag
+    // count) rather than O(filter x prompt_tag).
+    std::unordered_map<std::string, int> filter;
+    for (const auto& tag : tags) {
+        if (!tag.empty()) {
+            filter[tag] = 1;
+        }
+    }
+    std::lock_guard<std::mutex> guard(mutex_);
+    std::vector<PromptDefinition> result;
+    result.reserve(prompts_.size());
+    for (const auto& [id, prompt] : prompts_) {
+        (void)id;
+        if (filter.empty()) {
+            result.push_back(prompt);
+            continue;
+        }
+        bool matched = false;
+        for (const auto& tag : prompt.tags) {
+            if (filter.count(tag) != 0) {
+                matched = true;
+                break;
+            }
+        }
+        if (matched) {
+            result.push_back(prompt);
+        }
+    }
+    std::sort(result.begin(), result.end(),
+              [](const PromptDefinition& lhs, const PromptDefinition& rhs) {
+                  if (lhs.builtin != rhs.builtin) {
+                      return lhs.builtin;
+                  }
+                  return lhs.id < rhs.id;
+              });
+    return result;
+}
+
+void PromptRegistry::list_all_tags(Json& result) const {
+    // Aggregation: walk every prompt, bucket tag -> {count, sorted prompt
+    // ids}.  Insertion-sort prompt ids as we go so the output is
+    // deterministic without a second pass.  The vector<pair> layout beats
+    // a nested map at this scale (single-digit prompts, low-dozens tags)
+    // and keeps memory tight for the "no tags anywhere" edge case.
+    struct Bucket {
+        std::string name;
+        size_t count = 0;
+        std::vector<std::string> prompt_ids;  // kept sorted
+    };
+    std::unordered_map<std::string, size_t> index;
+    std::vector<Bucket> buckets;
+    {
+        std::lock_guard<std::mutex> guard(mutex_);
+        for (const auto& [id, prompt] : prompts_) {
+            (void)id;
+            for (const auto& tag : prompt.tags) {
+                if (tag.empty()) {
+                    continue;
+                }
+                auto found = index.find(tag);
+                if (found == index.end()) {
+                    Bucket bucket;
+                    bucket.name = tag;
+                    bucket.count = 1;
+                    bucket.prompt_ids.push_back(prompt.id);
+                    index.emplace(tag, buckets.size());
+                    buckets.push_back(std::move(bucket));
+                    continue;
+                }
+                Bucket& bucket = buckets[found->second];
+                ++bucket.count;
+                // Insertion-sort so `prompts` stays deterministic and unique.
+                auto insertion = std::lower_bound(
+                    bucket.prompt_ids.begin(), bucket.prompt_ids.end(),
+                    prompt.id);
+                if (insertion == bucket.prompt_ids.end() ||
+                    *insertion != prompt.id) {
+                    bucket.prompt_ids.insert(insertion, prompt.id);
+                }
+            }
+        }
+    }
+    std::sort(buckets.begin(), buckets.end(),
+              [](const Bucket& lhs, const Bucket& rhs) {
+                  if (lhs.count != rhs.count) {
+                      return lhs.count > rhs.count;  // desc by count
+                  }
+                  return lhs.name < rhs.name;  // asc by name (tie break)
+              });
+    Json tags_array = Json::array();
+    for (const auto& bucket : buckets) {
+        Json ids_json = Json::array();
+        for (const auto& id : bucket.prompt_ids) {
+            ids_json.push_back(id);
+        }
+        tags_array.push_back(Json{{"name", bucket.name},
+                                    {"count", bucket.count},
+                                    {"prompts", std::move(ids_json)}});
+    }
+    result = Json{{"tags", std::move(tags_array)},
+                  {"total", buckets.size()}};
+}
+
 bool PromptRegistry::get(std::string_view id, PromptDefinition& out) const {
     std::lock_guard<std::mutex> guard(mutex_);
     const auto found = prompts_.find(std::string(id));

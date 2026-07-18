@@ -1356,9 +1356,79 @@ int32_t NativeRuntime::invoke(std::string_view method,
             return SAO_AI_EDITOR_ERR_INVALID_ARGUMENT;
         }
         const Json arguments = params.value("arguments", Json::object());
-        std::lock_guard<std::mutex> lock(store_mutex_);
-        return tools_.execute(mode, params["name"].get<std::string>(),
-                              arguments, result);
+        const std::string requested_name = params["name"].get<std::string>();
+        // Resolve aliases *before* firing hooks so the audit payload sees the
+        // canonical tool name (matches the value passed to tool_filter).  The
+        // alias table read is cheap + independent of store_mutex_, so we do it
+        // outside the lock we take for execute().
+        const std::string resolved_name = tools_.resolve_alias(requested_name);
+        // Before-phase hooks fire even when the tool ends up returning
+        // NOT_FOUND — the payload includes the tool name that failed to
+        // dispatch, which is exactly what an audit sink wants to record.
+        const auto before_hooks =
+            tools_.snapshot_hooks("before", resolved_name);
+        for (const auto& hook : before_hooks) {
+            Json payload{{"hookId", hook.id},
+                         {"phase", "before"},
+                         {"tool", resolved_name},
+                         {"arguments", arguments}};
+            if (resolved_name != requested_name) {
+                payload["requestedTool"] = requested_name;
+            }
+            emit(hook.emit_event, payload);
+        }
+        const auto call_start = std::chrono::steady_clock::now();
+        int32_t status;
+        {
+            std::lock_guard<std::mutex> lock(store_mutex_);
+            status = tools_.execute(mode, requested_name, arguments, result);
+        }
+        const auto call_end = std::chrono::steady_clock::now();
+        const auto duration_ms =
+            std::chrono::duration_cast<std::chrono::milliseconds>(
+                call_end - call_start)
+                .count();
+        // After / error hooks reflect the outcome.  We treat every non-OK
+        // status as an error phase so validation failures + permission
+        // denials also surface — audits typically care about *any* non-happy
+        // path.  The result payload is included for after; for error we
+        // include the numeric status code the JSON-RPC caller would see so
+        // downstream sinks do not need to keep a parallel status table.
+        if (status == SAO_AI_EDITOR_OK) {
+            const auto after_hooks =
+                tools_.snapshot_hooks("after", resolved_name);
+            for (const auto& hook : after_hooks) {
+                Json payload{{"hookId", hook.id},
+                             {"phase", "after"},
+                             {"tool", resolved_name},
+                             {"arguments", arguments},
+                             {"result", result},
+                             {"durationMs", duration_ms}};
+                if (resolved_name != requested_name) {
+                    payload["requestedTool"] = requested_name;
+                }
+                emit(hook.emit_event, payload);
+            }
+        } else {
+            const auto error_hooks =
+                tools_.snapshot_hooks("error", resolved_name);
+            for (const auto& hook : error_hooks) {
+                Json payload{{"hookId", hook.id},
+                             {"phase", "error"},
+                             {"tool", resolved_name},
+                             {"arguments", arguments},
+                             {"status", status},
+                             {"durationMs", duration_ms}};
+                if (resolved_name != requested_name) {
+                    payload["requestedTool"] = requested_name;
+                }
+                if (!result.is_null()) {
+                    payload["errorResult"] = result;
+                }
+                emit(hook.emit_event, payload);
+            }
+        }
+        return status;
     }
     if (method == "tools.register") {
         if (!params.contains("name") || !params["name"].is_string()) {
@@ -1388,6 +1458,86 @@ int32_t NativeRuntime::invoke(std::string_view method,
         const int32_t status = tools_.unregister_custom(name);
         if (status == SAO_AI_EDITOR_OK) {
             result = Json{{"ok", true}, {"name", name}};
+        }
+        return status;
+    }
+    if (method == "tools.register_alias") {
+        // alias + target are both required strings.  Anything else is
+        // INVALID_ARGUMENT — the registry itself also validates but rejecting
+        // here keeps the JSON-RPC error boundary crisp.
+        if (!params.contains("alias") || !params["alias"].is_string() ||
+            !params.contains("target") || !params["target"].is_string()) {
+            return SAO_AI_EDITOR_ERR_INVALID_ARGUMENT;
+        }
+        const std::string alias = params["alias"].get<std::string>();
+        const std::string target = params["target"].get<std::string>();
+        const int32_t status = tools_.register_alias(alias, target);
+        if (status == SAO_AI_EDITOR_OK) {
+            result = Json{{"ok", true},
+                          {"alias", alias},
+                          {"target", target}};
+        }
+        return status;
+    }
+    if (method == "tools.unregister_alias") {
+        if (!params.contains("alias") || !params["alias"].is_string()) {
+            return SAO_AI_EDITOR_ERR_INVALID_ARGUMENT;
+        }
+        const std::string alias = params["alias"].get<std::string>();
+        const int32_t status = tools_.unregister_alias(alias);
+        if (status == SAO_AI_EDITOR_OK) {
+            result = Json{{"ok", true}, {"alias", alias}};
+        }
+        return status;
+    }
+    if (method == "tools.register_hook") {
+        // id + phase + emitEvent are required.  `toolFilter` is optional — null
+        // or missing means "match every tool".  When present it must be an
+        // array of strings (mixed / non-string entries are rejected up-front so
+        // downstream matching does not need to filter them out per call).
+        if (!params.contains("id") || !params["id"].is_string() ||
+            !params.contains("phase") || !params["phase"].is_string() ||
+            !params.contains("emitEvent") ||
+            !params["emitEvent"].is_string()) {
+            return SAO_AI_EDITOR_ERR_INVALID_ARGUMENT;
+        }
+        std::vector<std::string> filter;
+        if (params.contains("toolFilter") &&
+            !params["toolFilter"].is_null()) {
+            const auto& raw = params["toolFilter"];
+            if (!raw.is_array()) {
+                return SAO_AI_EDITOR_ERR_INVALID_ARGUMENT;
+            }
+            filter.reserve(raw.size());
+            for (const auto& entry : raw) {
+                if (!entry.is_string()) {
+                    return SAO_AI_EDITOR_ERR_INVALID_ARGUMENT;
+                }
+                filter.push_back(entry.get<std::string>());
+            }
+        }
+        const std::string id = params["id"].get<std::string>();
+        const std::string phase = params["phase"].get<std::string>();
+        const std::string emit_event =
+            params["emitEvent"].get<std::string>();
+        const int32_t status =
+            tools_.register_hook(id, phase, filter, emit_event);
+        if (status == SAO_AI_EDITOR_OK) {
+            result = Json{{"ok", true},
+                          {"id", id},
+                          {"phase", phase},
+                          {"emitEvent", emit_event}};
+        }
+        return status;
+    }
+    if (method == "tools.unregister_hook") {
+        if (!params.contains("id") || !params["id"].is_string()) {
+            return SAO_AI_EDITOR_ERR_INVALID_ARGUMENT;
+        }
+        const std::string id = params["id"].get<std::string>();
+        const int32_t status = tools_.unregister_hook(id);
+        if (status == SAO_AI_EDITOR_OK) {
+            result = Json{{"ok", true}, {"id", id}};
         }
         return status;
     }
@@ -1442,7 +1592,8 @@ int32_t NativeRuntime::invoke(std::string_view method,
     }
     if (method == "prompts.list_defs" || method == "prompts.get_def" ||
         method == "prompts.save_def" || method == "prompts.delete_def" ||
-        method == "prompts.render") {
+        method == "prompts.render" || method == "prompts.render_batch" ||
+        method == "prompts.list_tags") {
         return dispatch_prompt(method, params, result);
     }
     return SAO_AI_EDITOR_ERR_NOT_FOUND;
@@ -2164,12 +2315,90 @@ int32_t NativeRuntime::dispatch_prompt(std::string_view method,
             std::lock_guard<std::mutex> guard(store_mutex_);
             prompt_registry_.reload(scopes_);
         }
+        // Optional tag filter: OR semantics — a prompt survives if it has
+        // at least one tag in `params.tags`.  Missing / empty / non-array
+        // falls back to the full list (backward compatible).
+        std::vector<std::string> tag_filter;
+        if (params.is_object() && params.contains("tags") &&
+            params["tags"].is_array()) {
+            for (const auto& item : params["tags"]) {
+                if (item.is_string()) {
+                    const std::string tag = item.get<std::string>();
+                    if (!tag.empty()) {
+                        tag_filter.push_back(tag);
+                    }
+                }
+            }
+        }
         Json items = Json::array();
-        for (const auto& prompt : prompt_registry_.list()) {
+        const auto prompts = tag_filter.empty()
+                                 ? prompt_registry_.list()
+                                 : prompt_registry_.list_by_tags(tag_filter);
+        for (const auto& prompt : prompts) {
             items.push_back(prompt.to_json());
         }
         result = Json{{"items", std::move(items)}};
         result["total"] = result["items"].size();
+        return SAO_AI_EDITOR_OK;
+    }
+    if (method == "prompts.list_tags") {
+        {
+            std::lock_guard<std::mutex> guard(store_mutex_);
+            prompt_registry_.reload(scopes_);
+        }
+        prompt_registry_.list_all_tags(result);
+        return SAO_AI_EDITOR_OK;
+    }
+    if (method == "prompts.render_batch") {
+        if (!params.is_object() || !params.contains("items") ||
+            !params["items"].is_array() || params["items"].empty()) {
+            return SAO_AI_EDITOR_ERR_INVALID_ARGUMENT;
+        }
+        // onMissing controls whether an unknown prompt id aborts the batch
+        // ("fail" — INVALID_ARGUMENT so callers get a clear surface) or
+        // just records a per-item not_found (skip).  Same shape as MCP
+        // batch tool-call semantics elsewhere in the runtime.
+        const std::string on_missing = params.value("onMissing",
+                                                     std::string{"fail"});
+        if (on_missing != "fail" && on_missing != "skip") {
+            return SAO_AI_EDITOR_ERR_INVALID_ARGUMENT;
+        }
+        {
+            std::lock_guard<std::mutex> guard(store_mutex_);
+            prompt_registry_.reload(scopes_);
+        }
+        Json results = Json::array();
+        size_t success = 0;
+        size_t failure = 0;
+        for (const auto& entry : params["items"]) {
+            if (!entry.is_object() || !entry.contains("id") ||
+                !entry["id"].is_string()) {
+                return SAO_AI_EDITOR_ERR_INVALID_ARGUMENT;
+            }
+            const std::string id = entry["id"].get<std::string>();
+            Json arguments = entry.value("arguments", Json::object());
+            if (!arguments.is_object()) {
+                return SAO_AI_EDITOR_ERR_INVALID_ARGUMENT;
+            }
+            PromptDefinition prompt;
+            if (!prompt_registry_.get(id, prompt)) {
+                if (on_missing == "fail") {
+                    return SAO_AI_EDITOR_ERR_INVALID_ARGUMENT;
+                }
+                results.push_back(Json{{"id", id},
+                                         {"status", "not_found"},
+                                         {"error", "prompt id not found"}});
+                ++failure;
+                continue;
+            }
+            results.push_back(Json{{"id", prompt.id},
+                                     {"content", prompt.render(arguments)},
+                                     {"status", "ok"}});
+            ++success;
+        }
+        result = Json{{"results", std::move(results)},
+                       {"successCount", success},
+                       {"failureCount", failure}};
         return SAO_AI_EDITOR_OK;
     }
     if (method == "prompts.get_def") {
@@ -2629,8 +2858,17 @@ int32_t NativeRuntime::run_chat_sync(const Json& params, uint32_t timeout_ms,
     Json body{{"model", model},
               {"messages", std::move(messages)},
               {"stream", stream}};
-    for (const std::string_view field : {"temperature", "max_tokens", "tools",
-                                          "tool_choice", "response_format"}) {
+    // Forward every mainstream OpenAI-compat sampling knob straight into the
+    // request body.  Missing fields are silently dropped so callers only pay
+    // for what they set; per-provider translation (Anthropic max_tokens,
+    // Gemini generationConfig, etc.) happens inside build_provider_request
+    // so unsupported knobs get pruned rather than smuggled through as
+    // provider-illegal keys.
+    for (const std::string_view field :
+         {"temperature", "max_tokens", "top_p", "top_k", "frequency_penalty",
+          "presence_penalty", "stop", "seed", "logit_bias", "logprobs",
+          "top_logprobs", "n", "user", "tools", "tool_choice",
+          "response_format", "parallel_tool_calls"}) {
         if (params.contains(field)) {
             body[std::string(field)] = params[field];
         }
@@ -3004,8 +3242,14 @@ int32_t NativeRuntime::start_chat(const Json& params, Json& result) {
     const bool stream = params.value("stream", true);
     Json body{{"model", model}, {"messages", std::move(messages)},
               {"stream", stream}};
-    for (const std::string_view field : {"temperature", "max_tokens", "tools",
-                                         "tool_choice", "response_format"}) {
+    // Mirror run_chat_sync's full sampling-knob forward list so streaming
+    // start_chat clients see the same params surface as the sync helper.
+    // build_provider_request handles provider-specific translation/pruning.
+    for (const std::string_view field :
+         {"temperature", "max_tokens", "top_p", "top_k", "frequency_penalty",
+          "presence_penalty", "stop", "seed", "logit_bias", "logprobs",
+          "top_logprobs", "n", "user", "tools", "tool_choice",
+          "response_format", "parallel_tool_calls"}) {
         if (params.contains(field)) {
             body[std::string(field)] = params[field];
         }
