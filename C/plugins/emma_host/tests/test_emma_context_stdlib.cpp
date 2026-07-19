@@ -277,6 +277,11 @@ struct custom_emma_provider_fixture {
     size_t context_bind_calls = 0;
     size_t load_calls = 0;
     size_t unload_calls = 0;
+    size_t log_calls = 0;
+    size_t panel_calls = 0;
+    size_t menu_calls = 0;
+    std::shared_ptr<callable> menu_builder;
+    emma_value menu_result = nullptr;
     int32_t unload_status = SAO_OK;
 
     static int32_t SAO_PLUGINS_CALL load_plugin(void* context, void* runtime, void** out_plugin,
@@ -315,15 +320,53 @@ struct custom_emma_provider_fixture {
         auto context = std::make_shared<emma_dict>();
         auto log = std::make_shared<callable>();
         log->name = "custom.log";
-        log->host_impl = [](std::vector<emma_value>) { return emma_value(nullptr); };
+        log->host_impl = [&fixture](std::vector<emma_value>) {
+            ++fixture.log_calls;
+            return emma_value(nullptr);
+        };
         auto panel = std::make_shared<callable>();
         panel->name = "custom.register_ui_panel";
-        panel->host_impl = [](std::vector<emma_value>) { return emma_value(true); };
+        panel->host_impl = [&fixture](std::vector<emma_value>) {
+            ++fixture.panel_calls;
+            return emma_value(true);
+        };
+        auto menu = std::make_shared<callable>();
+        menu->name = "custom.register_menu_category";
+        menu->host_impl = [&fixture](std::vector<emma_value> arguments) {
+            if (arguments.size() < 3) {
+                return emma_value(false);
+            }
+            const auto* builder = std::get_if<std::shared_ptr<callable>>(&arguments[2]);
+            if (builder == nullptr || *builder == nullptr) {
+                return emma_value(false);
+            }
+            fixture.menu_builder = *builder;
+            ++fixture.menu_calls;
+            return emma_value(std::string("custom-menu"));
+        };
         context->items.emplace("log", std::move(log));
         context->items.emplace("register_ui_panel", std::move(panel));
+        context->items.emplace("register_menu_category", std::move(menu));
         context->items.emplace("custom_provider", true);
         interp->register_global("ctx", std::move(context));
         return SAO_OK;
+    }
+
+    static int32_t SAO_PLUGINS_CALL invoke_menu_builder(interpreter* interp, void* user_data) {
+        if (interp == nullptr || user_data == nullptr) {
+            return SAO_ERR_INVALID_ARGUMENT;
+        }
+        auto& fixture = *static_cast<custom_emma_provider_fixture*>(user_data);
+        if (fixture.menu_builder == nullptr) {
+            return SAO_ERR_NOT_INITIALIZED;
+        }
+        std::string message;
+        emma_error error;
+        fixture.menu_result = interp->call_function(fixture.menu_builder, {}, message, &error);
+        if (error.kind != error_kind::none) {
+            return error.status == SAO_OK ? SAO_ERR_OS_CALL_FAILED : error.status;
+        }
+        return message.empty() ? SAO_OK : SAO_ERR_OS_CALL_FAILED;
     }
 
     sao::plugins::sdk_binding::language_host_adapter_vtable provider() {
@@ -784,20 +827,49 @@ TEST_CASE("Emma preserves custom sdk_binding context providers",
 
     temp_tree tree(L"custom_provider");
     write_text(tree.root / L"entry.emma", R"EMMA(
+fn build_menu()
+    return [{action_id: "native-setting", label: ctx.get_setting("native_label", "fallback")}]
+end
 fn custom_context()
-    return ctx.custom_provider
+    return {provider: ctx.custom_provider, menu: ctx.register_menu_category("Custom", "", build_menu)}
+end
+fn on_load(ctx)
+    ctx.log("custom log")
+    ctx.register_ui_panel("custom", {title: "Custom"}, nil, nil)
+    ctx.register_menu_category("Custom", "", build_menu)
 end
 )EMMA");
     const auto manifest = make_manifest(tree, "emma.context.custom.provider");
     plugin_handle_t loader_plugin = add_plugin(manifest);
     plugin_context_t* context = sao_plugins_ctx_create(loader_plugin);
     REQUIRE(context != nullptr);
+    REQUIRE(sao_plugins_ctx_set_setting(context, "native_label", "\"native-label\"") ==
+            SAO_OK);
     emma_plugin_handle_t plugin = nullptr;
     REQUIRE(sao_plugins_emma_load_script(tree.root.c_str(), "entry.emma",
                                          manifest.plugin_id.c_str(), context, &plugin) == SAO_OK);
+    REQUIRE(sao_plugins_emma_call_on_load(plugin) == SAO_OK);
     CHECK(fixture.load_calls == 1);
     CHECK(fixture.context_bind_calls == 1);
-    CHECK(call_json(plugin, "custom_context") == true);
+    CHECK(fixture.log_calls == 1);
+    CHECK(fixture.panel_calls == 1);
+    CHECK(fixture.menu_calls == 1);
+    CHECK(call_json(plugin, "custom_context") ==
+          json{{"provider", true}, {"menu", "custom-menu"}});
+    REQUIRE(sao_plugins_emma_with_interpreter(plugin,
+                                              custom_emma_provider_fixture::invoke_menu_builder,
+                                              &fixture) == SAO_OK);
+    const auto* menu_rows = std::get_if<std::shared_ptr<emma_list>>(&fixture.menu_result);
+    REQUIRE(menu_rows != nullptr);
+    REQUIRE(*menu_rows != nullptr);
+    REQUIRE((*menu_rows)->items.size() == 1);
+    const auto* menu_row = std::get_if<std::shared_ptr<emma_dict>>(&(*menu_rows)->items[0]);
+    REQUIRE(menu_row != nullptr);
+    REQUIRE(*menu_row != nullptr);
+    const auto label = (*menu_row)->items.find("label");
+    REQUIRE(label != (*menu_row)->items.end());
+    REQUIRE(std::holds_alternative<std::string>(label->second));
+    CHECK(std::get<std::string>(label->second) == "native-label");
     fixture.unload_status = SAO_PLUGINS_ERR_BUSY;
     CHECK(sao_plugins_emma_unload_script(plugin) == SAO_PLUGINS_ERR_BUSY);
     CHECK(fixture.unload_calls == 1);

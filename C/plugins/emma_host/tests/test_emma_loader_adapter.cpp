@@ -211,6 +211,16 @@ std::string context_json(plugin_context_t* context, const char* key) {
     return result;
 }
 
+bool context_setting_equals(plugin_context_t* context, const char* key, const char* expected) {
+    char* value = nullptr;
+    const int32_t status = sao_plugins_ctx_get_setting(context, key, &value);
+    if (status != SAO_OK || value == nullptr)
+        return false;
+    const bool matches = std::string_view(value) == expected;
+    sao_plugins_ctx_free_string(value);
+    return matches;
+}
+
 bool has_panel(const char* plugin_id, const char* panel_id) {
     const auto panels =
         snapshot_extensions(sao_plugins_registry_instance(), extension_kind::ui_panel);
@@ -708,6 +718,123 @@ end
     CHECK(not_actionable.providers[0].revision == 3);
 
     REQUIRE(sao_plugins_lifecycle_unload(plugin) == SAO_OK);
+    remove_plugin(plugin);
+    REQUIRE(sao_plugins_emma_unregister_loader_adapter(owner) == SAO_OK);
+}
+
+TEST_CASE("Emma menu snapshot and action rundown races are quiesced",
+          "[plugins][emma][adapter][menu][concurrency]") {
+    emma_loader_adapter_owner_t owner = nullptr;
+    REQUIRE(sao_plugins_emma_register_loader_adapter(&owner) == SAO_OK);
+
+    temp_tree tree(L"menu_rundown_race");
+    write_text(tree.root / L"nested" / L"plugin.emma", R"EMMA(
+fn gated_action()
+    ctx.set_setting("action_started", true)
+    while not ctx.get_setting("release_action", false)
+        let index = 0
+        while index < 1000
+            index = index + 1
+        end
+    end
+    ctx.set_setting("action_completed", true)
+end
+fn build_menu()
+    ctx.set_setting("snapshot_started", true)
+    while not ctx.get_setting("release_snapshot", false)
+        let index = 0
+        while index < 1000
+            index = index + 1
+        end
+    end
+    return [{action_id: "gated-action", label: "gated", command: gated_action}]
+end
+fn on_load(ctx)
+    ctx.register_menu_category("Rundown", "R", build_menu)
+end
+)EMMA");
+
+    const auto manifest = make_manifest(tree, "emma.menu.rundown.race");
+    plugin_handle_t plugin = add_plugin(manifest);
+    REQUIRE(sao_plugins_lifecycle_load(plugin) == SAO_OK);
+    plugin_context_t* context = nullptr;
+    REQUIRE(sao_plugins_lifecycle_get_context(plugin, &context) == SAO_OK);
+    REQUIRE(sao_plugins_lifecycle_enable(plugin) == SAO_OK);
+
+    set_context_json(context, "release_snapshot", "false");
+    menu_catalog_snapshot gated_snapshot;
+    std::atomic_int snapshot_status{SAO_ERR_OS_CALL_FAILED};
+    std::jthread snapshot_thread([&] {
+        snapshot_status.store(snapshot_menu_catalog(gated_snapshot));
+    });
+    const auto snapshot_deadline = std::chrono::steady_clock::now() + std::chrono::seconds(2);
+    while (!context_setting_equals(context, "snapshot_started", "true") &&
+           std::chrono::steady_clock::now() < snapshot_deadline) {
+        std::this_thread::yield();
+    }
+    REQUIRE(context_setting_equals(context, "snapshot_started", "true"));
+
+    std::atomic_int disable_status{SAO_ERR_OS_CALL_FAILED};
+    std::jthread disable_thread([&] {
+        disable_status.store(sao_plugins_lifecycle_disable(plugin));
+    });
+    const auto disable_deadline = std::chrono::steady_clock::now() + std::chrono::seconds(2);
+    while (sao_plugins_lifecycle_state(plugin) != lifecycle_state::disabling &&
+           std::chrono::steady_clock::now() < disable_deadline) {
+        std::this_thread::yield();
+    }
+    CHECK(sao_plugins_lifecycle_state(plugin) == lifecycle_state::disabling);
+    set_context_json(context, "release_snapshot", "true");
+    snapshot_thread.join();
+    disable_thread.join();
+    CHECK((snapshot_status.load() == SAO_OK ||
+           snapshot_status.load() == SAO_PLUGINS_ERR_BUSY));
+    REQUIRE(disable_status.load() == SAO_OK);
+    menu_catalog_snapshot disabled_catalog;
+    REQUIRE(snapshot_menu_catalog(disabled_catalog) == SAO_OK);
+    CHECK(disabled_catalog.providers.empty());
+
+    REQUIRE(sao_plugins_lifecycle_enable(plugin) == SAO_OK);
+    set_context_json(context, "release_action", "false");
+    menu_catalog_snapshot active_catalog;
+    REQUIRE(snapshot_menu_catalog(active_catalog) == SAO_OK);
+    REQUIRE(active_catalog.providers.size() == 1);
+    const auto provider = active_catalog.providers.front();
+    REQUIRE(provider.rows.size() == 1);
+
+    std::atomic_int action_status{SAO_ERR_OS_CALL_FAILED};
+    std::jthread action_thread([&] {
+        action_status.store(sao_plugins_entity_provider_invoke(
+            provider.provider_id.c_str(), provider.generation, provider.rows[0].action_id.c_str(),
+            "{}"));
+    });
+    const auto action_deadline = std::chrono::steady_clock::now() + std::chrono::seconds(2);
+    while (!context_setting_equals(context, "action_started", "true") &&
+           std::chrono::steady_clock::now() < action_deadline) {
+        std::this_thread::yield();
+    }
+    REQUIRE(context_setting_equals(context, "action_started", "true"));
+
+    std::atomic_int unload_status{SAO_ERR_OS_CALL_FAILED};
+    std::jthread unload_thread([&] {
+        unload_status.store(sao_plugins_lifecycle_unload(plugin));
+    });
+    const auto unload_deadline = std::chrono::steady_clock::now() + std::chrono::seconds(2);
+    while (sao_plugins_lifecycle_state(plugin) != lifecycle_state::unloading &&
+           std::chrono::steady_clock::now() < unload_deadline) {
+        std::this_thread::yield();
+    }
+    CHECK(sao_plugins_lifecycle_state(plugin) == lifecycle_state::unloading);
+    set_context_json(context, "release_action", "true");
+    action_thread.join();
+    REQUIRE(context_json(context, "action_completed") == "true");
+    unload_thread.join();
+    REQUIRE(action_status.load() == SAO_OK);
+    REQUIRE(unload_status.load() == SAO_OK);
+    CHECK(sao_plugins_entity_provider_invoke(provider.provider_id.c_str(), provider.generation,
+                                             provider.rows[0].action_id.c_str(), "{}") ==
+          SAO_ERR_HANDLE_INVALID);
+
     remove_plugin(plugin);
     REQUIRE(sao_plugins_emma_unregister_loader_adapter(owner) == SAO_OK);
 }

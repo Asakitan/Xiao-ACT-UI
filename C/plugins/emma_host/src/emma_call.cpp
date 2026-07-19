@@ -1996,16 +1996,6 @@ emma_value make_native_context(emma_plugin_runtime* runtime) {
     return wrapper;
 }
 
-bool has_callable_member(const emma_value& value, const char* name) {
-    const auto* dictionary = std::get_if<std::shared_ptr<emma_dict>>(&value);
-    if (dictionary == nullptr || !*dictionary)
-        return false;
-    const auto found = (*dictionary)->items.find(name);
-    return found != (*dictionary)->items.end() &&
-           std::holds_alternative<std::shared_ptr<callable>>(found->second) &&
-           std::get<std::shared_ptr<callable>>(found->second) != nullptr;
-}
-
 int32_t install_context(emma_plugin_runtime* plugin, loader_context_t* context) {
     if (plugin == nullptr || context == nullptr)
         return SAO_ERR_INVALID_ARGUMENT;
@@ -2020,20 +2010,10 @@ int32_t install_context(emma_plugin_runtime* plugin, loader_context_t* context) 
     if (binding_status == SAO_OK) {
         const emma_value candidate = plugin->interp->get_global("ctx");
         const auto* dictionary = std::get_if<std::shared_ptr<emma_dict>>(&candidate);
-        if (dictionary != nullptr && *dictionary != nullptr &&
-            has_callable_member(candidate, "log") &&
-            has_callable_member(candidate, "register_ui_panel") &&
-            has_callable_member(candidate, "register_menu_category")) {
-            plugin->context_value = std::make_shared<emma_dict>(**dictionary);
-            plugin->interp->register_global("ctx", plugin->context_value);
-            const auto& installed = *std::get<std::shared_ptr<emma_dict>>(plugin->context_value);
-            plugin->interp->register_global("log", installed.items.at("log"));
-            return SAO_OK;
-        }
+        auto native_dictionary = std::get<std::shared_ptr<emma_dict>>(native_context);
         if (dictionary != nullptr && *dictionary != nullptr) {
-            auto native_dictionary = std::get<std::shared_ptr<emma_dict>>(native_context);
             for (const auto& [name, value] : (*dictionary)->items)
-                native_dictionary->items.try_emplace(name, value);
+                native_dictionary->items.insert_or_assign(name, value);
         }
     }
     plugin->context_value = native_context;
