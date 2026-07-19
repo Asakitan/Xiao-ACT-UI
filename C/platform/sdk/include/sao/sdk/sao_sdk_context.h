@@ -574,7 +574,31 @@ struct SaoSdkGpuHuntTable {
     sao_sdk_status_t(SAO_SDK_CALL* set_runtime_toggles)(
         void* ctx_impl, sao_sdk_gpu_tracker_t tracker,
         uint64_t mask, uint64_t changed_mask);
+
+    // Append-only ABI 1.10 extension: HeapLocator engine profile.
+    //
+    // Mirrors sao::gpu_hunt::HeapLocatorProfile (D3D12Upload=0,
+    // UnitySrp=1, DX11Dynamic=2, VulkanHost=3, Generic=4).  Setting
+    // rebuilds the underlying HeapLocator and drops any live matrix
+    // / bone locks so the next tick re-enumerates against the new
+    // preset - callers can therefore flip Unity/DX11/Vulkan at
+    // runtime from a UI selector without recreating the tracker.
+    sao_sdk_status_t(SAO_SDK_CALL* get_locator_profile)(
+        void* ctx_impl, sao_sdk_gpu_tracker_t tracker,
+        uint32_t* out_profile);
+
+    sao_sdk_status_t(SAO_SDK_CALL* set_locator_profile)(
+        void* ctx_impl, sao_sdk_gpu_tracker_t tracker,
+        uint32_t profile);
 };
+
+// HeapLocatorProfile constants (ABI 1.10).  Append-only; existing
+// values never move.
+#define SAO_SDK_GPU_HUNT_LOCATOR_PROFILE_D3D12_UPLOAD 0u
+#define SAO_SDK_GPU_HUNT_LOCATOR_PROFILE_UNITY_SRP    1u
+#define SAO_SDK_GPU_HUNT_LOCATOR_PROFILE_DX11_DYNAMIC 2u
+#define SAO_SDK_GPU_HUNT_LOCATOR_PROFILE_VULKAN_HOST  3u
+#define SAO_SDK_GPU_HUNT_LOCATOR_PROFILE_GENERIC      4u
 
 // Runtime toggle bit definitions (ABI 1.9).  Append-only; existing
 // bits never move.
