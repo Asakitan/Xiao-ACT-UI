@@ -5,8 +5,15 @@
 #include <windows.h>
 
 #include <array>
+#include <chrono>
+#include <condition_variable>
+#include <cstring>
 #include <cstdint>
+#include <future>
+#include <mutex>
+#include <stdexcept>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 #define sao_core_abi_version sao_legacy_core_abi_version
@@ -29,14 +36,196 @@
 #define sao_core_class_index_get_name sao_legacy_core_class_index_get_name
 #define sao_core_class_index_resolve sao_legacy_core_class_index_resolve
 #define sao_core_class_index_resolve_field_offset sao_legacy_core_class_index_resolve_field_offset
+#define sao_core_class_index_configure_provider                                                \
+    sao_legacy_core_class_index_configure_provider
+#define sao_core_class_index_release sao_legacy_core_class_index_release
+#define SaoCoreClassMetadataProvider SaoLegacyCoreClassMetadataProvider
 #define sao_core_window_create_layered_topmost sao_legacy_core_window_create_layered_topmost
 #define sao_core_window_destroy sao_legacy_core_window_destroy
 #define sao_core_window_enumerate sao_legacy_core_window_enumerate
 #define sao_core_window_get_info sao_legacy_core_window_get_info
 #define SaoCoreWindowInfo SaoLegacyCoreWindowInfo
 
-TEST_CASE("sao_legacy_core_abi_version reports legacy ABI 1.1", "[abi][behavior]") {
-    REQUIRE(sao_core_abi_version() == 0x00010001u);
+namespace {
+
+struct CoreProcess {
+    sao_core_process_handle_t handle = nullptr;
+
+    explicit CoreProcess(uint32_t pid) {
+        REQUIRE(sao_core_process_open(pid, &handle) == SAO_OK);
+        REQUIRE(handle != nullptr);
+    }
+
+    ~CoreProcess() {
+        sao_core_process_close(handle);
+    }
+
+    CoreProcess(const CoreProcess&) = delete;
+    CoreProcess& operator=(const CoreProcess&) = delete;
+};
+
+struct SuspendedProcess {
+    PROCESS_INFORMATION process{};
+
+    SuspendedProcess() {
+        std::array<wchar_t, MAX_PATH> system_directory{};
+        const UINT length = GetSystemDirectoryW(system_directory.data(),
+                                                static_cast<UINT>(system_directory.size()));
+        REQUIRE(length != 0);
+        REQUIRE(length < system_directory.size());
+        std::wstring executable(system_directory.data(), length);
+        executable += L"\\cmd.exe";
+
+        STARTUPINFOW startup{};
+        startup.cb = sizeof(startup);
+        REQUIRE(CreateProcessW(executable.c_str(), nullptr, nullptr, nullptr, FALSE,
+                               CREATE_SUSPENDED | CREATE_NO_WINDOW, nullptr, nullptr, &startup,
+                               &process) != FALSE);
+    }
+
+    ~SuspendedProcess() {
+        if (process.hProcess != nullptr) {
+            (void)TerminateProcess(process.hProcess, 0);
+            (void)WaitForSingleObject(process.hProcess, 5000);
+            CloseHandle(process.hProcess);
+        }
+        if (process.hThread != nullptr) {
+            CloseHandle(process.hThread);
+        }
+    }
+
+    SuspendedProcess(const SuspendedProcess&) = delete;
+    SuspendedProcess& operator=(const SuspendedProcess&) = delete;
+};
+
+struct MetadataFixture {
+    struct ClassLease {
+        sao_core_process_handle_t process = nullptr;
+        std::string class_name;
+    };
+
+    std::mutex mutex;
+    uint64_t next_token = 1000;
+    int retain_calls = 0;
+    int release_attempts = 0;
+    int release_calls = 0;
+    int resolve_calls = 0;
+    int field_calls = 0;
+    int class_release_attempts = 0;
+    int class_release_calls = 0;
+    bool throw_next_release = false;
+    bool throw_next_class_release = false;
+    bool block_field = false;
+    bool field_entered = false;
+    bool allow_field = false;
+    bool reenter_on_class_release = false;
+    int32_t class_release_reentry_status = SAO_OK;
+    std::condition_variable condition;
+    std::unordered_map<uint64_t, ClassLease> classes;
+};
+
+void SAO_LEGACY_CORE_CALL metadata_retain(void* user_data) {
+    auto& fixture = *static_cast<MetadataFixture*>(user_data);
+    std::lock_guard lock(fixture.mutex);
+    ++fixture.retain_calls;
+}
+
+void SAO_LEGACY_CORE_CALL metadata_release(void* user_data) {
+    auto& fixture = *static_cast<MetadataFixture*>(user_data);
+    std::lock_guard lock(fixture.mutex);
+    ++fixture.release_attempts;
+    if (fixture.throw_next_release) {
+        fixture.throw_next_release = false;
+        throw std::runtime_error("metadata owner release fixture");
+    }
+    ++fixture.release_calls;
+}
+
+int32_t SAO_LEGACY_CORE_CALL metadata_resolve_class(
+    void* user_data, sao_core_process_handle_t process, const char* class_name_utf8,
+    uint64_t* out_provider_class_token) {
+    if (process == nullptr || class_name_utf8 == nullptr || out_provider_class_token == nullptr) {
+        return SAO_ERR_INVALID_ARGUMENT;
+    }
+    *out_provider_class_token = 0;
+    auto& fixture = *static_cast<MetadataFixture*>(user_data);
+    std::lock_guard lock(fixture.mutex);
+    ++fixture.resolve_calls;
+    if (std::strcmp(class_name_utf8, "Fixture.Entity") != 0) {
+        return SAO_ERR_NOT_FOUND;
+    }
+    const uint64_t token = ++fixture.next_token;
+    fixture.classes.emplace(token, MetadataFixture::ClassLease{process, class_name_utf8});
+    *out_provider_class_token = token;
+    return SAO_OK;
+}
+
+int32_t SAO_LEGACY_CORE_CALL metadata_resolve_field_offset(
+    void* user_data, sao_core_process_handle_t process, uint64_t provider_class_token,
+    const char* field_name_utf8, uint32_t* out_offset) {
+    if (process == nullptr || provider_class_token == 0 || field_name_utf8 == nullptr ||
+        out_offset == nullptr) {
+        return SAO_ERR_INVALID_ARGUMENT;
+    }
+    *out_offset = 0;
+    auto& fixture = *static_cast<MetadataFixture*>(user_data);
+    std::unique_lock lock(fixture.mutex);
+    ++fixture.field_calls;
+    const auto found = fixture.classes.find(provider_class_token);
+    if (found == fixture.classes.end() || found->second.process != process) {
+        return SAO_ERR_HANDLE_INVALID;
+    }
+    if (std::strcmp(field_name_utf8, "value") != 0) {
+        return SAO_ERR_NOT_FOUND;
+    }
+    if (fixture.block_field) {
+        fixture.field_entered = true;
+        fixture.condition.notify_all();
+        fixture.condition.wait(lock, [&fixture] { return fixture.allow_field; });
+    }
+    *out_offset = 0x28;
+    return SAO_OK;
+}
+
+void SAO_LEGACY_CORE_CALL metadata_release_class(void* user_data,
+                                                 uint64_t provider_class_token) {
+    auto& fixture = *static_cast<MetadataFixture*>(user_data);
+    std::lock_guard lock(fixture.mutex);
+    ++fixture.class_release_attempts;
+    if (fixture.throw_next_class_release) {
+        fixture.throw_next_class_release = false;
+        throw std::runtime_error("metadata class release fixture");
+    }
+    if (fixture.reenter_on_class_release) {
+        fixture.class_release_reentry_status = sao_core_class_index_configure_provider(nullptr);
+    }
+    fixture.classes.erase(provider_class_token);
+    ++fixture.class_release_calls;
+}
+
+SaoCoreClassMetadataProvider metadata_provider(MetadataFixture& fixture) {
+    SaoCoreClassMetadataProvider provider{};
+    provider.struct_size = sizeof(provider);
+    provider.abi_version = SAO_LEGACY_CORE_CLASS_METADATA_PROVIDER_ABI_VERSION;
+    provider.user_data = &fixture;
+    provider.retain = metadata_retain;
+    provider.release = metadata_release;
+    provider.resolve_class = metadata_resolve_class;
+    provider.resolve_field_offset = metadata_resolve_field_offset;
+    provider.release_class = metadata_release_class;
+    return provider;
+}
+
+struct MetadataProviderReset {
+    ~MetadataProviderReset() {
+        (void)sao_core_class_index_configure_provider(nullptr);
+    }
+};
+
+} // namespace
+
+TEST_CASE("sao_legacy_core_abi_version reports legacy ABI 1.2", "[abi][behavior]") {
+    REQUIRE(sao_core_abi_version() == 0x00010002u);
 }
 
 TEST_CASE("process open/close succeeds for the current process", "[process]") {
@@ -211,14 +400,300 @@ TEST_CASE("class registry keeps stable bidirectional indexes", "[class_index][be
     REQUIRE(too_small[0] == '\0');
     REQUIRE(required_size == second.size() + 1);
 
-    uint64_t token = 0;
-    REQUIRE(sao_core_class_index_resolve(nullptr, first.c_str(), &token) == SAO_OK);
-    REQUIRE(token == static_cast<uint64_t>(first_index) + 1);
+    REQUIRE(sao_core_class_index_configure_provider(nullptr) == SAO_OK);
+    CoreProcess process(static_cast<uint32_t>(GetCurrentProcessId()));
+    uint64_t token = 99;
+    REQUIRE(sao_core_class_index_resolve(process.handle, first.c_str(), &token) ==
+            SAO_ERR_NOT_INITIALIZED);
+    REQUIRE(token == 0);
+
+    token = 99;
+    REQUIRE(sao_core_class_index_resolve(nullptr, first.c_str(), &token) ==
+            SAO_ERR_HANDLE_INVALID);
+    REQUIRE(token == 0);
+    uint32_t offset = 99;
+    REQUIRE(sao_core_class_index_resolve_field_offset(nullptr, uint64_t{1} << 63u, "field",
+                                                      &offset) == SAO_ERR_HANDLE_INVALID);
+    REQUIRE(offset == 0);
+}
+
+TEST_CASE("class metadata provider owns process-bound opaque tokens",
+          "[class_index][provider][lifecycle]") {
+    REQUIRE(sao_core_class_index_configure_provider(nullptr) == SAO_OK);
+    MetadataFixture first_fixture;
+    MetadataFixture second_fixture;
+    MetadataProviderReset reset;
+    auto first_provider = metadata_provider(first_fixture);
+    auto second_provider = metadata_provider(second_fixture);
+
+    SuspendedProcess child;
+    CoreProcess current_process(static_cast<uint32_t>(GetCurrentProcessId()));
+    CoreProcess child_process(static_cast<uint32_t>(child.process.dwProcessId));
+
+    REQUIRE(sao_core_class_index_configure_provider(&first_provider) == SAO_OK);
+    CHECK(first_fixture.retain_calls == 1);
+
+    uint64_t missing_token = 99;
+    REQUIRE(sao_core_class_index_resolve(current_process.handle, "Fixture.Missing",
+                                         &missing_token) == SAO_ERR_NOT_FOUND);
+    CHECK(missing_token == 0);
+
+    uint64_t current_token = 0;
+    REQUIRE(sao_core_class_index_resolve(current_process.handle, "Fixture.Entity",
+                                         &current_token) == SAO_OK);
+    REQUIRE(current_token != 0);
+    CHECK((current_token & (uint64_t{1} << 63u)) != 0);
 
     uint32_t field_offset = 99;
-    REQUIRE(sao_core_class_index_resolve_field_offset(nullptr, token, "missing_field",
-                                                      &field_offset) == SAO_ERR_NOT_FOUND);
-    REQUIRE(field_offset == 0);
+    REQUIRE(sao_core_class_index_resolve_field_offset(current_process.handle, current_token,
+                                                      "value", &field_offset) == SAO_OK);
+    CHECK(field_offset == 0x28);
+
+    field_offset = 99;
+    REQUIRE(sao_core_class_index_resolve_field_offset(current_process.handle, current_token,
+                                                      "missing", &field_offset) ==
+            SAO_ERR_NOT_FOUND);
+    CHECK(field_offset == 0);
+
+    const int field_calls_before_foreign_lookup = first_fixture.field_calls;
+    field_offset = 99;
+    REQUIRE(sao_core_class_index_resolve_field_offset(child_process.handle, current_token, "value",
+                                                      &field_offset) == SAO_ERR_HANDLE_INVALID);
+    CHECK(field_offset == 0);
+    CHECK(first_fixture.field_calls == field_calls_before_foreign_lookup);
+
+    uint64_t child_token = 0;
+    REQUIRE(sao_core_class_index_resolve(child_process.handle, "Fixture.Entity", &child_token) ==
+            SAO_OK);
+    REQUIRE(child_token != current_token);
+    field_offset = 0;
+    REQUIRE(sao_core_class_index_resolve_field_offset(child_process.handle, child_token, "value",
+                                                      &field_offset) == SAO_OK);
+    CHECK(field_offset == 0x28);
+
+    REQUIRE(sao_core_class_index_release(current_process.handle, current_token) == SAO_OK);
+    CHECK(first_fixture.class_release_calls == 1);
+    field_offset = 99;
+    REQUIRE(sao_core_class_index_resolve_field_offset(current_process.handle, current_token,
+                                                      "value", &field_offset) ==
+            SAO_ERR_HANDLE_INVALID);
+    CHECK(field_offset == 0);
+    CHECK(sao_core_class_index_release(current_process.handle, current_token) ==
+          SAO_ERR_HANDLE_INVALID);
+
+    REQUIRE(sao_core_class_index_configure_provider(&second_provider) == SAO_OK);
+    CHECK(first_fixture.class_release_calls == 2);
+    CHECK(first_fixture.classes.empty());
+    CHECK(first_fixture.release_calls == 1);
+    CHECK(second_fixture.retain_calls == 1);
+
+    field_offset = 99;
+    REQUIRE(sao_core_class_index_resolve_field_offset(child_process.handle, child_token, "value",
+                                                      &field_offset) == SAO_ERR_HANDLE_INVALID);
+    CHECK(field_offset == 0);
+
+    uint64_t replacement_token = 0;
+    REQUIRE(sao_core_class_index_resolve(current_process.handle, "Fixture.Entity",
+                                         &replacement_token) == SAO_OK);
+    REQUIRE(replacement_token != current_token);
+    REQUIRE(replacement_token != child_token);
+
+    REQUIRE(sao_core_class_index_configure_provider(nullptr) == SAO_OK);
+    CHECK(second_fixture.class_release_calls == 1);
+    CHECK(second_fixture.classes.empty());
+    CHECK(second_fixture.release_calls == 1);
+
+    field_offset = 99;
+    REQUIRE(sao_core_class_index_resolve_field_offset(current_process.handle, replacement_token,
+                                                      "value", &field_offset) ==
+            SAO_ERR_HANDLE_INVALID);
+    CHECK(field_offset == 0);
+    replacement_token = 99;
+    REQUIRE(sao_core_class_index_resolve(current_process.handle, "Fixture.Entity",
+                                         &replacement_token) == SAO_ERR_NOT_INITIALIZED);
+    CHECK(replacement_token == 0);
+}
+
+TEST_CASE("class token release exception preserves quarantined ownership for retry",
+          "[class_index][provider][release][exception][retry]") {
+    REQUIRE(sao_core_class_index_configure_provider(nullptr) == SAO_OK);
+    MetadataFixture fixture;
+    MetadataProviderReset reset;
+    auto provider = metadata_provider(fixture);
+    CoreProcess process(static_cast<uint32_t>(GetCurrentProcessId()));
+
+    REQUIRE(sao_core_class_index_configure_provider(&provider) == SAO_OK);
+    uint64_t token = 0;
+    REQUIRE(sao_core_class_index_resolve(process.handle, "Fixture.Entity", &token) == SAO_OK);
+    REQUIRE(token != 0);
+
+    fixture.throw_next_class_release = true;
+    int32_t release_status = SAO_OK;
+    CHECK_NOTHROW(release_status = sao_core_class_index_release(process.handle, token));
+    CHECK(release_status == SAO_ERR_UNKNOWN);
+    CHECK(fixture.class_release_attempts == 1);
+    CHECK(fixture.class_release_calls == 0);
+    CHECK(fixture.classes.size() == 1);
+    CHECK(fixture.release_calls == 0);
+
+    uint32_t offset = 99;
+    CHECK(sao_core_class_index_resolve_field_offset(process.handle, token, "value", &offset) ==
+          SAO_ERR_HANDLE_INVALID);
+    CHECK(offset == 0);
+
+    fixture.reenter_on_class_release = true;
+    REQUIRE(sao_core_class_index_release(process.handle, token) == SAO_OK);
+    CHECK(fixture.class_release_attempts == 2);
+    CHECK(fixture.class_release_calls == 1);
+    CHECK(fixture.class_release_reentry_status == SAO_ERR_OS_CALL_FAILED);
+    CHECK(fixture.classes.empty());
+    CHECK(fixture.release_calls == 0);
+
+    REQUIRE(sao_core_class_index_configure_provider(nullptr) == SAO_OK);
+    CHECK(fixture.release_attempts == 1);
+    CHECK(fixture.release_calls == 1);
+}
+
+TEST_CASE("provider replacement drains an in-flight metadata callback",
+          "[class_index][provider][replace][concurrency][drain]") {
+    using namespace std::chrono_literals;
+
+    REQUIRE(sao_core_class_index_configure_provider(nullptr) == SAO_OK);
+    MetadataFixture fixture;
+    MetadataProviderReset reset;
+    auto provider = metadata_provider(fixture);
+    CoreProcess process(static_cast<uint32_t>(GetCurrentProcessId()));
+    REQUIRE(sao_core_class_index_configure_provider(&provider) == SAO_OK);
+
+    uint64_t token = 0;
+    REQUIRE(sao_core_class_index_resolve(process.handle, "Fixture.Entity", &token) == SAO_OK);
+    {
+        std::lock_guard lock(fixture.mutex);
+        fixture.block_field = true;
+    }
+    auto field = std::async(std::launch::async, [&] {
+        uint32_t offset = 0;
+        return std::pair{sao_core_class_index_resolve_field_offset(
+                             process.handle, token, "value", &offset),
+                         offset};
+    });
+    {
+        std::unique_lock lock(fixture.mutex);
+        REQUIRE(fixture.condition.wait_for(lock, 2s,
+                                           [&fixture] { return fixture.field_entered; }));
+    }
+
+    auto clear = std::async(std::launch::async,
+                            [] { return sao_core_class_index_configure_provider(nullptr); });
+    CHECK(clear.wait_for(25ms) == std::future_status::timeout);
+    CHECK(fixture.class_release_calls == 0);
+    {
+        std::lock_guard lock(fixture.mutex);
+        fixture.allow_field = true;
+    }
+    fixture.condition.notify_all();
+
+    const auto [field_status, offset] = field.get();
+    CHECK(field_status == SAO_OK);
+    CHECK(offset == 0x28);
+    REQUIRE(clear.get() == SAO_OK);
+    CHECK(fixture.class_release_calls == 1);
+    CHECK(fixture.release_calls == 1);
+}
+
+TEST_CASE("provider replacement retries class cleanup before installing the candidate",
+          "[class_index][provider][replace][release_class][exception][retry]") {
+    REQUIRE(sao_core_class_index_configure_provider(nullptr) == SAO_OK);
+    MetadataFixture original;
+    MetadataFixture replacement;
+    MetadataProviderReset reset;
+    auto original_provider = metadata_provider(original);
+    auto replacement_provider = metadata_provider(replacement);
+    CoreProcess process(static_cast<uint32_t>(GetCurrentProcessId()));
+
+    REQUIRE(sao_core_class_index_configure_provider(&original_provider) == SAO_OK);
+    uint64_t original_token = 0;
+    REQUIRE(sao_core_class_index_resolve(process.handle, "Fixture.Entity", &original_token) ==
+            SAO_OK);
+    original.throw_next_class_release = true;
+
+    int32_t replace_status = SAO_OK;
+    CHECK_NOTHROW(replace_status =
+                      sao_core_class_index_configure_provider(&replacement_provider));
+    CHECK(replace_status == SAO_ERR_UNKNOWN);
+    CHECK(original.class_release_attempts == 1);
+    CHECK(original.class_release_calls == 0);
+    CHECK(original.classes.size() == 1);
+    CHECK(original.release_calls == 0);
+    CHECK(replacement.retain_calls == 1);
+    CHECK(replacement.release_calls == 1);
+
+    uint64_t blocked_token = 99;
+    CHECK(sao_core_class_index_resolve(process.handle, "Fixture.Entity", &blocked_token) ==
+          SAO_ERR_NOT_INITIALIZED);
+    CHECK(blocked_token == 0);
+
+    REQUIRE(sao_core_class_index_configure_provider(&replacement_provider) == SAO_OK);
+    CHECK(original.class_release_attempts == 2);
+    CHECK(original.class_release_calls == 1);
+    CHECK(original.classes.empty());
+    CHECK(original.release_attempts == 1);
+    CHECK(original.release_calls == 1);
+    CHECK(replacement.retain_calls == 2);
+    CHECK(replacement.release_calls == 1);
+
+    uint64_t replacement_token = 0;
+    REQUIRE(sao_core_class_index_resolve(process.handle, "Fixture.Entity", &replacement_token) ==
+            SAO_OK);
+    REQUIRE(replacement_token != original_token);
+    REQUIRE(sao_core_class_index_release(process.handle, replacement_token) == SAO_OK);
+    REQUIRE(sao_core_class_index_configure_provider(nullptr) == SAO_OK);
+    CHECK(replacement.release_attempts == 2);
+    CHECK(replacement.release_calls == 2);
+}
+
+TEST_CASE("provider owner release exception retains the old owner until replacement retry",
+          "[class_index][provider][replace][release][exception][retry]") {
+    REQUIRE(sao_core_class_index_configure_provider(nullptr) == SAO_OK);
+    MetadataFixture original;
+    MetadataFixture replacement;
+    MetadataProviderReset reset;
+    auto original_provider = metadata_provider(original);
+    auto replacement_provider = metadata_provider(replacement);
+    CoreProcess process(static_cast<uint32_t>(GetCurrentProcessId()));
+
+    REQUIRE(sao_core_class_index_configure_provider(&original_provider) == SAO_OK);
+    original.throw_next_release = true;
+
+    int32_t replace_status = SAO_OK;
+    CHECK_NOTHROW(replace_status =
+                      sao_core_class_index_configure_provider(&replacement_provider));
+    CHECK(replace_status == SAO_ERR_UNKNOWN);
+    CHECK(original.release_attempts == 1);
+    CHECK(original.release_calls == 0);
+    CHECK(replacement.retain_calls == 1);
+    CHECK(replacement.release_attempts == 1);
+    CHECK(replacement.release_calls == 1);
+
+    uint64_t blocked_token = 99;
+    CHECK(sao_core_class_index_resolve(process.handle, "Fixture.Entity", &blocked_token) ==
+          SAO_ERR_NOT_INITIALIZED);
+    CHECK(blocked_token == 0);
+
+    REQUIRE(sao_core_class_index_configure_provider(&replacement_provider) == SAO_OK);
+    CHECK(original.release_attempts == 2);
+    CHECK(original.release_calls == 1);
+    CHECK(replacement.retain_calls == 2);
+    CHECK(replacement.release_calls == 1);
+
+    uint64_t replacement_token = 0;
+    REQUIRE(sao_core_class_index_resolve(process.handle, "Fixture.Entity", &replacement_token) ==
+            SAO_OK);
+    REQUIRE(sao_core_class_index_release(process.handle, replacement_token) == SAO_OK);
+    REQUIRE(sao_core_class_index_configure_provider(nullptr) == SAO_OK);
+    CHECK(original.release_calls == 1);
+    CHECK(replacement.release_attempts == 2);
+    CHECK(replacement.release_calls == 2);
 }
 
 TEST_CASE("window creation enumeration and info use real HWNDs", "[window][behavior]") {

@@ -8,6 +8,9 @@
       "generator": "Visual Studio 17 2022",
       "architecture": { "value": "x64", "strategy": "set" },
       "binaryDir": "${sourceDir}/build/${presetName}",
+      "cacheVariables": {
+        "FETCHCONTENT_BASE_DIR": "${sourceDir}/build/_deps_shared"
+      },
       "environment": {
         "SAO_BUILD_ROOT": "${sourceDir}"
       }
