@@ -77,6 +77,30 @@ std::string utf8_path(const std::filesystem::path& path) {
     return result;
 }
 
+std::string node_executable_path() {
+    std::vector<wchar_t> buffer(32768);
+    const DWORD length = SearchPathW(nullptr, L"node.exe", nullptr,
+                                     static_cast<DWORD>(buffer.size()),
+                                     buffer.data(), nullptr);
+    if (length == 0 || length >= buffer.size()) {
+        return {};
+    }
+    return utf8_path(std::filesystem::path(buffer.data()));
+}
+
+std::string extension_host_shim_path() {
+    std::error_code error;
+    const std::filesystem::path source =
+        std::filesystem::weakly_canonical(
+            std::filesystem::path(__FILE__).parent_path().parent_path() /
+                L"assets" / L"extension_host_shim.js",
+            error);
+    if (error || !std::filesystem::exists(source)) {
+        return {};
+    }
+    return utf8_path(source);
+}
+
 std::string decode_openai(std::string_view input) {
     uint32_t required = 0;
     REQUIRE(sao_ai_editor_openai_decode_response(
@@ -10262,4 +10286,181 @@ TEST_CASE("vscode.window.createWebviewPanel supports multiple panels "
     REQUIRE(listed_after["result"]["panels"][0]["htmlLength"].get<int64_t>() ==
             static_cast<int64_t>(html_b.size()));
     REQUIRE(listed_after["result"]["totalCreated"].get<int64_t>() >= 2);
+}
+
+TEST_CASE("ExtensionHost handles reentrant callbacks, malformed frames, "
+          "disposed panels, and restart",
+          "[plugins][ai_editor][native][extensions][node][reentrant]") {
+    const std::string node = node_executable_path();
+    const std::string shim = extension_host_shim_path();
+    REQUIRE_FALSE(node.empty());
+    REQUIRE_FALSE(shim.empty());
+
+    RuntimeFixture fixture;
+    const auto extension = fixture.workspace() / L"reentrant-extension";
+    REQUIRE(std::filesystem::create_directories(extension));
+    {
+        std::ofstream source(extension / L"extension.js");
+        REQUIRE(source.good());
+        source << R"JS('use strict';
+const vscode = require('vscode');
+let deactivateCalls = 0;
+exports.activate = (context) => {
+    context.subscriptions.push(vscode.commands.registerCommand(
+        'sao.test.reentrant', async () => {
+            const languages = await vscode.languages.getLanguages();
+            return { count: languages.length, hasCpp: languages.includes('cpp') };
+        }));
+    context.subscriptions.push(vscode.commands.registerCommand(
+        'sao.test.post', async () => {
+            const panel = vscode.window.createWebviewPanel(
+                'sao.test', 'Test', vscode.ViewColumn.One, {});
+            const delivered = await panel.webview.postMessage({ kind: 'ping' });
+            panel.dispose();
+            const deliveredAfterDispose = await panel.webview.postMessage(
+                { kind: 'after-dispose' });
+            return { delivered, deliveredAfterDispose };
+        }));
+    context.subscriptions.push(vscode.commands.registerCommand(
+        'sao.test.malformed', () => {
+            const body = Buffer.from('{invalid-json', 'utf8');
+            process.stdout.write(Buffer.concat([
+                Buffer.from(`Content-Length: ${body.length}\r\n\r\n`, 'utf8'),
+                body,
+            ]));
+            return new Promise(() => {});
+        }));
+    context.subscriptions.push(vscode.commands.registerCommand(
+        'sao.test.exit', () => process.exit(0)));
+    context.subscriptions.push(vscode.commands.registerCommand(
+        'sao.test.deactivateCalls', () => deactivateCalls));
+    return { ready: true };
+};
+exports.deactivate = () => {
+    deactivateCalls += 1;
+    if (deactivateCalls === 1) {
+        throw new Error('intentional deactivate failure');
+    }
+};
+)JS";
+    }
+
+    auto runtime = fixture.get();
+    const Json configured = dispatch(
+        runtime, "extensions.configure_host",
+        {{"nodeExecutable", node},
+         {"entryScript", shim},
+         {"workingDirectory", utf8_path(extension)},
+         {"startupMs", 5000}});
+    REQUIRE(configured.contains("result"));
+
+    const Json manifest{{"name", "reentrant"},
+                        {"publisher", "sao-test"},
+                        {"version", "1.0.0"},
+                        {"main", "extension.js"}};
+    const std::string extension_id = "sao-test.reentrant";
+    REQUIRE(dispatch(runtime, "extensions.register",
+                     {{"manifest", manifest},
+                      {"extensionPath", utf8_path(extension)}})
+                .contains("result"));
+    REQUIRE(dispatch(runtime, "extensions.activate",
+                     {{"extensionId", extension_id}, {"timeoutMs", 5000}})
+                .contains("result"));
+
+    const Json reentrant = dispatch(
+        runtime, "extensions.execute_command",
+        {{"command", "sao.test.reentrant"},
+         {"arguments", Json::array()},
+         {"timeoutMs", 5000}});
+    REQUIRE(reentrant.contains("result"));
+    REQUIRE(reentrant["result"]["hasCpp"] == true);
+    REQUIRE(reentrant["result"]["count"].get<int64_t>() > 0);
+
+    (void)drain_webview_events(runtime, 16);
+    const Json posted = dispatch(
+        runtime, "extensions.execute_command",
+        {{"command", "sao.test.post"},
+         {"arguments", Json::array()},
+         {"timeoutMs", 5000}});
+    REQUIRE(posted.contains("result"));
+    REQUIRE(posted["result"]["delivered"] == true);
+    REQUIRE(posted["result"]["deliveredAfterDispose"] == false);
+    const std::vector<Json> post_events = drain_webview_events(runtime, 12);
+    REQUIRE(contains_webview_event(post_events,
+                                   "vscode.webview.postMessage"));
+    REQUIRE(contains_webview_event(
+        post_events, "vscode.window.webviewPanel.postFailed"));
+
+    const auto malformed_started = std::chrono::steady_clock::now();
+    const Json malformed = dispatch(
+        runtime, "extensions.execute_command",
+        {{"command", "sao.test.malformed"},
+         {"arguments", Json::array()},
+         {"timeoutMs", 5000}});
+    const auto malformed_elapsed =
+        std::chrono::steady_clock::now() - malformed_started;
+    REQUIRE(malformed.contains("error"));
+    REQUIRE(malformed["error"]["data"]["status"] ==
+            SAO_AI_EDITOR_ERR_PROTOCOL);
+    REQUIRE(malformed_elapsed < std::chrono::seconds(2));
+
+    const Json restarted_after_malformed = dispatch(
+        runtime, "extensions.activate",
+        {{"extensionId", extension_id}, {"timeoutMs", 5000}});
+    INFO("malformed restart response: " <<
+         restarted_after_malformed.dump());
+    REQUIRE(restarted_after_malformed.contains("result"));
+    REQUIRE(dispatch(runtime, "extensions.list")["result"]["nodeAlive"] ==
+            true);
+
+    const Json failed_deactivate = dispatch(
+        runtime, "extensions.deactivate", {{"extensionId", extension_id}});
+    REQUIRE(failed_deactivate.contains("error"));
+    Json listed = dispatch(runtime, "extensions.list")["result"];
+    REQUIRE(listed["total"] == 1);
+    REQUIRE(listed["items"][0]["activated"] == true);
+
+    REQUIRE(dispatch(runtime, "extensions.deactivate",
+                     {{"extensionId", extension_id}})
+                .contains("result"));
+    REQUIRE(dispatch(runtime, "extensions.activate",
+                     {{"extensionId", extension_id}, {"timeoutMs", 5000}})
+                .contains("result"));
+    const Json failed_unregister = dispatch(
+        runtime, "extensions.unregister", {{"extensionId", extension_id}});
+    REQUIRE(failed_unregister.contains("error"));
+    listed = dispatch(runtime, "extensions.list")["result"];
+    REQUIRE(listed["total"] == 1);
+    REQUIRE(listed["items"][0]["activated"] == true);
+
+    const Json exited = dispatch(
+        runtime, "extensions.execute_command",
+        {{"command", "sao.test.exit"},
+         {"arguments", Json::array()},
+         {"timeoutMs", 5000}});
+    REQUIRE(exited.contains("error"));
+    REQUIRE(exited["error"]["data"]["status"] ==
+            SAO_AI_EDITOR_ERR_IPC_CLOSED);
+
+    const auto started = std::chrono::steady_clock::now();
+    const Json closed_deactivate = dispatch(
+        runtime, "extensions.deactivate", {{"extensionId", extension_id}});
+    const auto elapsed = std::chrono::steady_clock::now() - started;
+    REQUIRE(closed_deactivate.contains("error"));
+    REQUIRE(elapsed < std::chrono::seconds(2));
+    const Json closed_unregister = dispatch(
+        runtime, "extensions.unregister", {{"extensionId", extension_id}});
+    REQUIRE(closed_unregister.contains("error"));
+    listed = dispatch(runtime, "extensions.list")["result"];
+    REQUIRE(listed["total"] == 1);
+    REQUIRE(listed["items"][0]["activated"] == true);
+
+    const Json restarted = dispatch(
+        runtime, "extensions.activate",
+        {{"extensionId", extension_id}, {"timeoutMs", 5000}});
+    INFO("restart response: " << restarted.dump());
+    REQUIRE(restarted.contains("result"));
+    listed = dispatch(runtime, "extensions.list")["result"];
+    REQUIRE(listed["nodeAlive"] == true);
+    REQUIRE(listed["items"][0]["activated"] == true);
 }

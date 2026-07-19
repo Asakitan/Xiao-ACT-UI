@@ -1,6 +1,7 @@
 #pragma once
 
 #include <atomic>
+#include <cstdint>
 #include <condition_variable>
 #include <deque>
 #include <future>
@@ -54,6 +55,12 @@ public:
     void shutdown();
 
 private:
+    enum class State : uint8_t {
+        closed,
+        running,
+        protocol_failed,
+    };
+
     struct Pending {
         std::promise<Json> promise;
         std::future<Json> future;
@@ -61,9 +68,12 @@ private:
     };
 
     void reader_loop();
+    void dispatch_loop();
     void stderr_loop();
-    void dispatch_message(Json message);
+    bool dispatch_message(Json message);
     void handle_request_from_node(Json message);
+    void handle_notification_from_node(Json message);
+    void fail_pending(std::string_view message, int32_t status);
     bool send_framed(const std::string& payload);
     bool send_raw(const std::string& data);
 
@@ -74,8 +84,14 @@ private:
     void* thread_ = nullptr;          // HANDLE
 
     std::atomic<bool> stopping_{false};
+    std::atomic<State> state_{State::closed};
     std::thread reader_;
+    std::thread dispatcher_;
     std::thread stderr_reader_;
+
+    std::mutex dispatch_mutex_;
+    std::condition_variable dispatch_ready_;
+    std::deque<Json> dispatch_queue_;
 
     std::mutex write_mutex_;
     mutable std::mutex pending_mutex_;

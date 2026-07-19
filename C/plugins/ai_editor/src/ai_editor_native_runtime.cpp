@@ -198,6 +198,7 @@ NativeRuntime::NativeRuntime(RuntimeOptions options)
 }
 
 NativeRuntime::~NativeRuntime() {
+    extension_host_.reset();
     std::vector<std::shared_ptr<RunState>> runs;
     {
         std::lock_guard<std::mutex> lock(state_mutex_);
@@ -3447,6 +3448,38 @@ int32_t NativeRuntime::dispatch_extension_call(std::string_view method,
         emit("vscode.window.webviewPanel.disposed",
              panel_state_to_json(state));
         result = panel_state_to_json(state);
+        return SAO_AI_EDITOR_OK;
+    }
+    if (method == "vscode.webview.postMessage") {
+        const std::string panel_id =
+            params.value("panelId", std::string{});
+        const std::string view_id =
+            params.value("viewId", std::string{});
+        if (panel_id.empty() && view_id.empty()) {
+            result = Json{{"message", "panelId or viewId is required"}};
+            return SAO_AI_EDITOR_ERR_INVALID_ARGUMENT;
+        }
+        if (!panel_id.empty()) {
+            WebviewPanelState state;
+            const int32_t status =
+                webview_panels_.note_post_message(panel_id, state);
+            if (status != SAO_AI_EDITOR_OK) {
+                emit("vscode.window.webviewPanel.postFailed",
+                     Json{{"panelId", panel_id},
+                          {"status", status},
+                          {"reason", status == SAO_AI_EDITOR_ERR_NOT_FOUND
+                                         ? "unknown panel"
+                                         : "panel disposed"}});
+                result = Json{{"accepted", false},
+                              {"message", "postMessage failed"},
+                              {"panelId", panel_id}};
+                return status;
+            }
+        }
+        emit("vscode.webview.postMessage", params);
+        result = Json{{"accepted", true},
+                      {"panelId", panel_id},
+                      {"viewId", view_id}};
         return SAO_AI_EDITOR_OK;
     }
     if (method == "vscode.window.postMessageToWebview") {

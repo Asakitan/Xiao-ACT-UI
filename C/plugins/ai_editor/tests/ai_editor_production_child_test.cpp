@@ -333,3 +333,36 @@ TEST_CASE("production AI Editor child creates its native Win32 UI",
     REQUIRE(GetExitCodeProcess(process.value, &exit_code));
     REQUIRE(exit_code == 0);
 }
+
+TEST_CASE("production AI Editor child compiles and propagates the WebView "
+          "bridge path",
+          "[plugins][ai_editor][production_child][webview]") {
+    TemporaryDirectory temporary;
+    const auto workspace = temporary.path() / L"webview workspace";
+    REQUIRE(std::filesystem::create_directories(workspace));
+    EnvironmentGuard path_guard(L"PATH", temporary.path());
+
+    const std::filesystem::path executable =
+        SAO_AI_EDITOR_PRODUCTION_EXECUTABLE;
+    REQUIRE(std::filesystem::is_regular_file(executable));
+    REQUIRE_FALSE(std::filesystem::exists(
+        executable.parent_path() / L"WebView2Loader.dll"));
+    std::wstring command_line =
+        L"\"" + executable.native() + L"\" --webview --workspace \"" +
+        workspace.native() + L"\"";
+
+    STARTUPINFOW startup{};
+    startup.cb = sizeof(startup);
+    PROCESS_INFORMATION process_info{};
+    REQUIRE(CreateProcessW(nullptr, command_line.data(), nullptr, nullptr,
+                           FALSE, CREATE_NO_WINDOW, nullptr,
+                           temporary.path().c_str(), &startup,
+                           &process_info));
+    ProcessGuard process{process_info.hProcess};
+    CloseHandle(process_info.hThread);
+
+    REQUIRE(WaitForSingleObject(process.value, 5000) == WAIT_OBJECT_0);
+    DWORD exit_code = 0;
+    REQUIRE(GetExitCodeProcess(process.value, &exit_code));
+    REQUIRE(exit_code == 12);
+}

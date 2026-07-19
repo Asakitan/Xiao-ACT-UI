@@ -35,7 +35,7 @@ struct ExtensionRecord {
 class ExtensionHost final {
 public:
     explicit ExtensionHost(NativeRuntime& runtime) : runtime_(runtime) {}
-    ~ExtensionHost() { deactivate_all(); }
+    ~ExtensionHost();
 
     ExtensionHost(const ExtensionHost&) = delete;
     ExtensionHost& operator=(const ExtensionHost&) = delete;
@@ -53,11 +53,11 @@ public:
 
 private:
     void deactivate_all();
-    int32_t ensure_runtime();
+    int32_t ensure_runtime(std::shared_ptr<NodeRuntime>& runtime);
 
     NativeRuntime& runtime_;
     mutable std::mutex mutex_;
-    std::unique_ptr<NodeRuntime> node_runtime_;
+    std::shared_ptr<NodeRuntime> node_runtime_;
     NodeRuntime::BootOptions boot_options_{};
     std::unordered_map<std::string, ExtensionRecord> extensions_;
 };

@@ -47,8 +47,10 @@ function encodeFrame(payload) {
 function send(payload) {
     try {
         stdout.write(encodeFrame(payload));
+        return true;
     } catch (err) {
         process_.stderr.write(`[shim] send failed: ${err.message}\n`);
+        return false;
     }
 }
 
@@ -56,12 +58,11 @@ function callHost(method, params) {
     const id = state.nextId++;
     return new Promise((resolve, reject) => {
         state.pending.set(id, { resolve, reject });
-        send({ jsonrpc: '2.0', id, method, params: params || {} });
+        if (!send({ jsonrpc: '2.0', id, method, params: params || {} })) {
+            state.pending.delete(id);
+            reject(new Error(`host transport closed while calling ${method}`));
+        }
     });
-}
-
-function notifyHost(method, params) {
-    send({ jsonrpc: '2.0', method, params: params || {} });
 }
 
 // ----- vscode module polyfill --------------------------------------------
@@ -185,8 +186,8 @@ const workspace = {
 // WebView2 window and pump PostWebMessageAsJson/WebMessageReceived, but this
 // shim doesn't try to wire the pipe yet.  The mock objects here just give the
 // extension something to call: html / options are stored, postMessage becomes
-// a `vscode.webview.postMessage` notification to the host (no-op unless the
-// host actually processes it), and `onDidReceiveMessage` is a plain
+// an acknowledged `vscode.webview.postMessage` request to the host, and
+// `onDidReceiveMessage` is a plain
 // EventEmitter the host can drive via the `webview.postToView` handler below.
 
 function makeMockWebview(target) {
@@ -198,8 +199,15 @@ function makeMockWebview(target) {
         options: {},
         cspSource: 'sao-webview:',
         async postMessage(message) {
-            notifyHost('vscode.webview.postMessage', Object.assign({}, target, { message }));
-            return true;
+            try {
+                const result = await callHost(
+                    'vscode.webview.postMessage',
+                    Object.assign({}, target, { message }));
+                return Boolean(result && result.accepted === true);
+            } catch (err) {
+                process_.stderr.write(`[shim] webview.postMessage failed: ${err.message}\n`);
+                return false;
+            }
         },
         onDidReceiveMessage: messageEmitter.event,
         asWebviewUri(uri) { return uri; },
@@ -229,6 +237,11 @@ function makeMockPanel(panelId, viewType, title, showOptions, options) {
         dispose() {
             if (!state.webviewPanels.has(panelId)) return;
             state.webviewPanels.delete(panelId);
+            callHost('vscode.window.disposeWebviewPanel', { panelId })
+                .catch((err) => {
+                    process_.stderr.write(
+                        `[shim] webviewPanel.dispose failed: ${err.message}\n`);
+                });
             try { disposeEmitter.fire(); } catch (e) { /* noop */ }
         },
     };
@@ -311,7 +324,24 @@ const window = {
     },
     createWebviewPanel(viewType, title, showOptions, options) {
         const panelId = 'panel-' + (state.nextPanelId++);
-        return makeMockPanel(panelId, String(viewType || ''), String(title || ''), showOptions, options);
+        const viewTypeValue = String(viewType || '');
+        const titleValue = String(title || '');
+        const panel = makeMockPanel(
+            panelId, viewTypeValue, titleValue, showOptions, options);
+        callHost('vscode.window.createWebviewPanel', {
+            panelId,
+            viewType: viewTypeValue,
+            title: titleValue,
+            options: Object.assign({}, options || {}, {
+                viewColumn: (showOptions && showOptions.viewColumn) ||
+                    vscodeModule.ViewColumn.One,
+            }),
+        }).catch((err) => {
+            state.webviewPanels.delete(panelId);
+            process_.stderr.write(
+                `[shim] createWebviewPanel failed: ${err.message}\n`);
+        });
+        return panel;
     },
 };
 
@@ -497,16 +527,13 @@ state.handlers.set('host.deactivate', async (params) => {
     const extensionId = String(params.extensionId || '');
     const entry = state.extensions.get(extensionId);
     if (!entry) { return { deactivated: false, reason: 'not-activated' }; }
-    try {
-        if (entry.module && typeof entry.module.deactivate === 'function') {
-            await Promise.resolve(entry.module.deactivate());
-        }
-        for (const sub of entry.context.subscriptions.slice().reverse()) {
-            try { sub && sub.dispose && sub.dispose(); } catch (e) { /* noop */ }
-        }
-    } finally {
-        state.extensions.delete(extensionId);
+    if (entry.module && typeof entry.module.deactivate === 'function') {
+        await Promise.resolve(entry.module.deactivate());
     }
+    for (const sub of entry.context.subscriptions.slice().reverse()) {
+        try { sub && sub.dispose && sub.dispose(); } catch (e) { /* noop */ }
+    }
+    state.extensions.delete(extensionId);
     return { deactivated: true, extensionId };
 });
 
@@ -625,7 +652,15 @@ async function dispatchInbound(message) {
     }
     if (message.method !== undefined) {
         const handler = state.handlers.get(message.method);
-        if (handler) { try { await Promise.resolve(handler(message.params || {})); } catch (e) { /* noop */ } }
+        if (!handler) {
+            process_.stderr.write(`[shim] unhandled notification: ${message.method}\n`);
+            return;
+        }
+        try {
+            await Promise.resolve(handler(message.params || {}));
+        } catch (err) {
+            process_.stderr.write(`[shim] notification ${message.method} failed: ${err.stack || err.message}\n`);
+        }
         return;
     }
     if (message.id !== undefined) {

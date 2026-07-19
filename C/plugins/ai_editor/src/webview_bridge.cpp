@@ -8,6 +8,7 @@
 #include <memory>
 #include <mutex>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include <nlohmann/json.hpp>
@@ -45,7 +46,7 @@ public:
         hr_ = CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
     }
     ~ScopedCoInitialize() {
-        if (SUCCEEDED(hr_) || hr_ == RPC_E_CHANGED_MODE) {
+        if (SUCCEEDED(hr_)) {
             CoUninitialize();
         }
     }
@@ -89,15 +90,24 @@ struct WebViewSession {
     EventRegistrationToken web_message_token{};
     std::wstring navigate_url;
     bool bridge_enabled = true;
-    std::atomic<int> exit_code{0};
+    std::atomic<int32_t> status{SAO_AI_EDITOR_OK};
     std::atomic<bool> teardown_requested{false};
+
+    void fail(int32_t failure) noexcept {
+        int32_t expected = SAO_AI_EDITOR_OK;
+        status.compare_exchange_strong(expected, failure,
+                                       std::memory_order_acq_rel);
+        if (window != nullptr) {
+            PostMessageW(window, WM_CLOSE, 0, 0);
+        }
+    }
 };
 
 class EnvironmentReadyHandler
     : public ICoreWebView2CreateCoreWebView2EnvironmentCompletedHandler {
 public:
-    explicit EnvironmentReadyHandler(WebViewSession* session)
-        : session_(session) {}
+    explicit EnvironmentReadyHandler(std::shared_ptr<WebViewSession> session)
+        : session_(std::move(session)) {}
 
     HRESULT STDMETHODCALLTYPE QueryInterface(REFIID iid, void** out) override {
         if (iid == IID_IUnknown ||
@@ -126,14 +136,14 @@ public:
 
 private:
     std::atomic<ULONG> ref_{1};
-    WebViewSession* session_;
+    std::shared_ptr<WebViewSession> session_;
 };
 
 class ControllerReadyHandler
     : public ICoreWebView2CreateCoreWebView2ControllerCompletedHandler {
 public:
-    explicit ControllerReadyHandler(WebViewSession* session)
-        : session_(session) {}
+    explicit ControllerReadyHandler(std::shared_ptr<WebViewSession> session)
+        : session_(std::move(session)) {}
 
     HRESULT STDMETHODCALLTYPE QueryInterface(REFIID iid, void** out) override {
         if (iid == IID_IUnknown ||
@@ -162,14 +172,14 @@ public:
 
 private:
     std::atomic<ULONG> ref_{1};
-    WebViewSession* session_;
+    std::shared_ptr<WebViewSession> session_;
 };
 
 class WebMessageReceivedHandler
     : public ICoreWebView2WebMessageReceivedEventHandler {
 public:
-    explicit WebMessageReceivedHandler(WebViewSession* session)
-        : session_(session) {}
+    explicit WebMessageReceivedHandler(std::shared_ptr<WebViewSession> session)
+        : session_(std::move(session)) {}
 
     HRESULT STDMETHODCALLTYPE QueryInterface(REFIID iid, void** out) override {
         if (iid == IID_IUnknown ||
@@ -199,14 +209,17 @@ public:
 
 private:
     std::atomic<ULONG> ref_{1};
-    WebViewSession* session_;
+    std::shared_ptr<WebViewSession> session_;
 };
 
 HRESULT EnvironmentReadyHandler::Invoke(HRESULT hr,
                                         ICoreWebView2Environment* environment) {
+    if (session_->teardown_requested.load(std::memory_order_acquire)) {
+        return E_ABORT;
+    }
     if (FAILED(hr) || environment == nullptr) {
-        PostMessageW(session_->window, WM_CLOSE, 0, 0);
-        return hr;
+        session_->fail(SAO_AI_EDITOR_ERR_OS_CALL_FAILED);
+        return FAILED(hr) ? hr : E_FAIL;
     }
     environment->AddRef();
     session_->environment = environment;
@@ -215,35 +228,51 @@ HRESULT EnvironmentReadyHandler::Invoke(HRESULT hr,
         session_->window, controller_ready);
     controller_ready->Release();
     if (FAILED(create_hr)) {
-        PostMessageW(session_->window, WM_CLOSE, 0, 0);
+        session_->fail(SAO_AI_EDITOR_ERR_OS_CALL_FAILED);
+        return create_hr;
     }
     return S_OK;
 }
 
 HRESULT ControllerReadyHandler::Invoke(
     HRESULT hr, ICoreWebView2Controller* controller) {
+    if (session_->teardown_requested.load(std::memory_order_acquire)) {
+        return E_ABORT;
+    }
     if (FAILED(hr) || controller == nullptr) {
-        PostMessageW(session_->window, WM_CLOSE, 0, 0);
-        return hr;
+        session_->fail(SAO_AI_EDITOR_ERR_OS_CALL_FAILED);
+        return FAILED(hr) ? hr : E_FAIL;
     }
     controller->AddRef();
     session_->controller = controller;
-    controller->put_IsVisible(TRUE);
+    HRESULT setup_hr = controller->put_IsVisible(TRUE);
+    if (FAILED(setup_hr)) {
+        session_->fail(SAO_AI_EDITOR_ERR_OS_CALL_FAILED);
+        return setup_hr;
+    }
     RECT rect{};
     GetClientRect(session_->window, &rect);
-    controller->put_Bounds(rect);
+    setup_hr = controller->put_Bounds(rect);
+    if (FAILED(setup_hr)) {
+        session_->fail(SAO_AI_EDITOR_ERR_OS_CALL_FAILED);
+        return setup_hr;
+    }
     ICoreWebView2* view = nullptr;
-    controller->get_CoreWebView2(&view);
-    if (view == nullptr) {
-        PostMessageW(session_->window, WM_CLOSE, 0, 0);
-        return E_FAIL;
+    setup_hr = controller->get_CoreWebView2(&view);
+    if (FAILED(setup_hr) || view == nullptr) {
+        session_->fail(SAO_AI_EDITOR_ERR_OS_CALL_FAILED);
+        return FAILED(setup_hr) ? setup_hr : E_FAIL;
     }
     session_->view = view;
     if (session_->bridge_enabled) {
         auto* handler = new WebMessageReceivedHandler(session_);
-        view->add_WebMessageReceived(handler,
-                                     &session_->web_message_token);
+        setup_hr = view->add_WebMessageReceived(
+            handler, &session_->web_message_token);
         handler->Release();
+        if (FAILED(setup_hr)) {
+            session_->fail(SAO_AI_EDITOR_ERR_OS_CALL_FAILED);
+            return setup_hr;
+        }
     }
     // acquireVsCodeApi shim — matches the ambient global the VSCode
     // extension host injects.  Panels get postMessage() + setState() +
@@ -253,6 +282,8 @@ HRESULT ControllerReadyHandler::Invoke(
         L"(function(){\n"
         L"  if (window.__saoVscodeApiRegistered) { return; }\n"
         L"  window.__saoVscodeApiRegistered = true;\n"
+        L"  let nextRequestId = 1;\n"
+        L"  const pending = new Map();\n"
         L"  const stateKey = () => 'sao.webviewPanel.state.' +\n"
         L"      (window.__saoActivePanelId || 'default');\n"
         L"  const bag = () => {\n"
@@ -261,19 +292,44 @@ HRESULT ControllerReadyHandler::Invoke(
         L"      return raw ? JSON.parse(raw) : undefined;\n"
         L"    } catch (e) { return undefined; }\n"
         L"  };\n"
+        L"  if (window.chrome && window.chrome.webview) {\n"
+        L"    window.chrome.webview.addEventListener('message', (event) => {\n"
+        L"      const reply = event.data;\n"
+        L"      if (!reply || reply.method !==\n"
+        L"          'webviewPanel.postMessage.ack') { return; }\n"
+        L"      const waiter = pending.get(reply.id);\n"
+        L"      if (!waiter) { return; }\n"
+        L"      pending.delete(reply.id);\n"
+        L"      if (reply.ok) { waiter.resolve(reply.result); }\n"
+        L"      else { waiter.reject(Object.assign(\n"
+        L"          new Error((reply.error && reply.error.message) ||\n"
+        L"              'native dispatch failed'),\n"
+        L"          { status: reply.status, details: reply.error })); }\n"
+        L"    });\n"
+        L"  }\n"
         L"  window.acquireVsCodeApi = function acquireVsCodeApi() {\n"
         L"    return {\n"
         L"      postMessage(message) {\n"
+        L"        const id = nextRequestId++;\n"
         L"        const envelope = {\n"
         L"          method: 'webviewPanel.postMessage',\n"
+        L"          id,\n"
         L"          panelId: window.__saoActivePanelId || null,\n"
         L"          message,\n"
         L"        };\n"
-        L"        try {\n"
-        L"          if (window.chrome && window.chrome.webview) {\n"
+        L"        return new Promise((resolve, reject) => {\n"
+        L"          try {\n"
+        L"            if (!window.chrome || !window.chrome.webview) {\n"
+        L"              resolve(false);\n"
+        L"              return;\n"
+        L"            }\n"
+        L"            pending.set(id, { resolve, reject });\n"
         L"            window.chrome.webview.postMessage(envelope);\n"
+        L"          } catch (error) {\n"
+        L"            pending.delete(id);\n"
+        L"            reject(error);\n"
         L"          }\n"
-        L"        } catch (e) {}\n"
+        L"        });\n"
         L"      },\n"
         L"      setState(state) {\n"
         L"        try {\n"
@@ -289,11 +345,21 @@ HRESULT ControllerReadyHandler::Invoke(
         L"    window.__saoActivePanelId = id;\n"
         L"  };\n"
         L"})();\n";
-    view->AddScriptToExecuteOnDocumentCreated(kAcquireShim, nullptr);
+    setup_hr = view->AddScriptToExecuteOnDocumentCreated(kAcquireShim,
+                                                          nullptr);
+    if (FAILED(setup_hr)) {
+        session_->fail(SAO_AI_EDITOR_ERR_OS_CALL_FAILED);
+        return setup_hr;
+    }
     if (!session_->navigate_url.empty()) {
-        view->Navigate(session_->navigate_url.c_str());
+        setup_hr = view->Navigate(session_->navigate_url.c_str());
     } else {
-        view->NavigateToString(L"<html><body><h1>SAO AI Editor</h1></body></html>");
+        setup_hr = view->NavigateToString(
+            L"<html><body><h1>SAO AI Editor</h1></body></html>");
+    }
+    if (FAILED(setup_hr)) {
+        session_->fail(SAO_AI_EDITOR_ERR_OS_CALL_FAILED);
+        return setup_hr;
     }
     return S_OK;
 }
@@ -301,63 +367,105 @@ HRESULT ControllerReadyHandler::Invoke(
 HRESULT WebMessageReceivedHandler::Invoke(
     ICoreWebView2* sender,
     ICoreWebView2WebMessageReceivedEventArgs* args) {
-    if (args == nullptr || session_->runtime == nullptr) {
-        return S_OK;
+    if (sender == nullptr || args == nullptr) {
+        return E_POINTER;
     }
+    auto post_reply = [sender](const nlohmann::json& reply) {
+        try {
+            const std::wstring wide_reply = utf8_to_wide(reply.dump());
+            if (wide_reply.empty()) {
+                return E_FAIL;
+            }
+            return sender->PostWebMessageAsJson(wide_reply.c_str());
+        } catch (...) {
+            return E_FAIL;
+        }
+    };
     ScopedCoTaskString payload;
-    if (FAILED(args->TryGetWebMessageAsString(payload.addressof())) ||
+    if (FAILED(args->get_WebMessageAsJson(payload.addressof())) ||
         payload.get() == nullptr) {
-        return S_OK;
+        return E_INVALIDARG;
     }
     const std::string utf8 = wide_to_utf8(payload.get());
     if (utf8.empty()) {
-        return S_OK;
+        return E_INVALIDARG;
     }
+    nlohmann::json request_id(nullptr);
     try {
         auto message = nlohmann::json::parse(utf8, nullptr, false);
+        if (message.is_string()) {
+            message = nlohmann::json::parse(
+                message.get_ref<const std::string&>(), nullptr, false);
+        }
         if (!message.is_object()) {
-            return S_OK;
+            return post_reply(
+                {{"method", "webviewPanel.postMessage.ack"},
+                 {"id", nullptr},
+                 {"ok", false},
+                 {"status", SAO_AI_EDITOR_ERR_PROTOCOL},
+                 {"error", {{"message", "invalid WebView message"}}}});
         }
         const std::string incoming_method =
             message.value("method", std::string{});
+        request_id = message.value("id", nlohmann::json(nullptr));
         // Panel-scoped envelope from acquireVsCodeApi().postMessage(): the
         // shim tags outgoing messages with method="webviewPanel.postMessage"
         // and a panelId; route them through the postMessageToWebview
         // dispatcher so a Node-side onDidReceiveMessage handler observes
-        // the emit.  When no panelId is present we fall through to the
-        // standard dispatch_extension_call path (existing 1:1 modal RPC).
-        if (incoming_method == "webviewPanel.postMessage" &&
-            message.contains("panelId") &&
-            message["panelId"].is_string()) {
-            nlohmann::json params{
-                {"panelId", message["panelId"]},
-                {"message", message.value("message", nlohmann::json())}};
-            nlohmann::json ignored;
-            (void)session_->runtime->dispatch_extension_call(
-                "vscode.window.postMessageToWebview", params, ignored);
-            return S_OK;
+        // the emit. Missing panel ids still receive a correlated error ack.
+        if (incoming_method == "webviewPanel.postMessage") {
+            nlohmann::json result;
+            int32_t status = SAO_AI_EDITOR_ERR_INVALID_ARGUMENT;
+            if (!message.contains("panelId") ||
+                !message["panelId"].is_string() ||
+                message["panelId"].get_ref<const std::string&>().empty()) {
+                result = {{"message", "panelId is required"}};
+            } else if (session_->runtime == nullptr) {
+                status = SAO_AI_EDITOR_ERR_NOT_INITIALIZED;
+                result = {{"message", "native runtime unavailable"}};
+            } else {
+                nlohmann::json params{
+                    {"panelId", message["panelId"]},
+                    {"message", message.value("message", nlohmann::json())}};
+                status = session_->runtime->dispatch_extension_call(
+                    "vscode.window.postMessageToWebview", params, result);
+            }
+            nlohmann::json reply{
+                {"method", "webviewPanel.postMessage.ack"},
+                {"id", request_id},
+                {"ok", status == SAO_AI_EDITOR_OK},
+                {"status", status}};
+            if (status == SAO_AI_EDITOR_OK) {
+                reply["result"] = std::move(result);
+            } else {
+                reply["error"] = std::move(result);
+            }
+            return post_reply(reply);
         }
         const std::string method = incoming_method;
         nlohmann::json params =
             message.value("params", nlohmann::json::object());
         nlohmann::json result;
-        const int32_t status = session_->runtime->dispatch_extension_call(
-            method, params, result);
-        nlohmann::json reply{{"id", message.value("id", nlohmann::json())},
+        const int32_t status = session_->runtime == nullptr
+            ? SAO_AI_EDITOR_ERR_NOT_INITIALIZED
+            : session_->runtime->dispatch_extension_call(
+                  method, params, result);
+        nlohmann::json reply{{"id", request_id},
                               {"status", status}};
         if (status == SAO_AI_EDITOR_OK) {
             reply["result"] = std::move(result);
         } else {
             reply["error"] = std::move(result);
         }
-        const std::wstring wide_reply =
-            utf8_to_wide(reply.dump());
-        if (sender != nullptr && !wide_reply.empty()) {
-            sender->PostWebMessageAsJson(wide_reply.c_str());
-        }
+        return post_reply(reply);
     } catch (...) {
+        return post_reply(
+            {{"method", "webviewPanel.postMessage.ack"},
+             {"id", request_id},
+             {"ok", false},
+             {"status", SAO_AI_EDITOR_ERR_PROTOCOL},
+             {"error", {{"message", "WebView dispatch failed"}}}});
     }
-    return S_OK;
 }
 
 LRESULT CALLBACK webview_wnd_proc(HWND window, UINT message, WPARAM wparam,
@@ -406,7 +514,7 @@ LRESULT CALLBACK webview_wnd_proc(HWND window, UINT message, WPARAM wparam,
                 session->environment = nullptr;
             }
         }
-        PostQuitMessage(session->exit_code.load());
+        PostQuitMessage(0);
         return 0;
     default:
         break;
@@ -476,11 +584,11 @@ int32_t run_webview_bridge(const WebViewConfig& config) {
         return SAO_AI_EDITOR_ERR_OS_CALL_FAILED;
     }
 
-    WebViewSession session;
-    session.runtime = runtime;
-    session.runtime_handle = config.runtime_handle;
-    session.bridge_enabled = config.bridge_native_runtime;
-    session.navigate_url = utf8_to_wide(config.url);
+    auto session = std::make_shared<WebViewSession>();
+    session->runtime = runtime;
+    session->runtime_handle = config.runtime_handle;
+    session->bridge_enabled = config.bridge_native_runtime;
+    session->navigate_url = utf8_to_wide(config.url);
 
     const std::wstring title = config.window_title.empty()
         ? std::wstring(L"SAO AI Editor WebView")
@@ -489,18 +597,18 @@ int32_t run_webview_bridge(const WebViewConfig& config) {
         0, kWindowClassName, title.c_str(), WS_OVERLAPPEDWINDOW,
         CW_USEDEFAULT, CW_USEDEFAULT, std::max(320, config.width),
         std::max(240, config.height), nullptr, nullptr,
-        window_class.hInstance, &session);
+        window_class.hInstance, session.get());
     if (window == nullptr) {
         FreeLibrary(loader);
         return SAO_AI_EDITOR_ERR_OS_CALL_FAILED;
     }
-    session.window = window;
+    session->window = window;
     ShowWindow(window, SW_SHOW);
     UpdateWindow(window);
 
     const std::wstring user_data =
         utf8_to_wide(config.user_data_folder);
-    auto* environment_handler = new EnvironmentReadyHandler(&session);
+    auto* environment_handler = new EnvironmentReadyHandler(session);
     HRESULT hr = create_environment(nullptr, user_data.c_str(), nullptr,
                                      environment_handler);
     environment_handler->Release();
@@ -511,12 +619,20 @@ int32_t run_webview_bridge(const WebViewConfig& config) {
     }
 
     MSG message{};
-    while (GetMessageW(&message, nullptr, 0, 0) > 0) {
+    BOOL message_status = FALSE;
+    while ((message_status = GetMessageW(&message, nullptr, 0, 0)) > 0) {
         TranslateMessage(&message);
         DispatchMessageW(&message);
     }
+    if (message_status == -1) {
+        session->fail(SAO_AI_EDITOR_ERR_OS_CALL_FAILED);
+    }
+    if (IsWindow(window)) {
+        DestroyWindow(window);
+    }
+    const int32_t status = session->status.load(std::memory_order_acquire);
     FreeLibrary(loader);
-    return SAO_AI_EDITOR_OK;
+    return status;
 }
 
 }  // namespace sao::ai_editor::native

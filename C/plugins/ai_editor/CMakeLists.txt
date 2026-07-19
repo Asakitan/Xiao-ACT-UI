@@ -113,6 +113,10 @@ add_executable(sao_ai_editor WIN32
 )
 set_target_properties(sao_ai_editor PROPERTIES OUTPUT_NAME "SaoAiEditor")
 target_compile_features(sao_ai_editor PRIVATE cxx_std_20)
+if (SAO_BUILD_WEBVIEW_BRIDGE)
+    target_compile_definitions(sao_ai_editor PRIVATE
+        SAO_AI_EDITOR_HAS_WEBVIEW=1)
+endif()
 target_link_libraries(sao_ai_editor PRIVATE
     sao::plugin_ai_editor
     comctl32
