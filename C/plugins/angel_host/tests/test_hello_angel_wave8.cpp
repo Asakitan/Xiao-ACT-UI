@@ -3,7 +3,7 @@
 // 5 CASE:
 //   1. engine_init_success
 //   2. load_hello_angel_plugin_success
-//   3. hello_angel_on_load_registers_ui_panel (SDK 记账)
+//   3. hello_angel_lifecycle_hooks_compiled
 //   4. hello_angel_on_tick_ticks_3_times
 //   5. hello_angel_unload_cleanup_no_leak
 //
@@ -11,6 +11,7 @@
 
 #include <catch2/catch_test_macros.hpp>
 
+#include "sao/plugins/angel_host/as_call.h"
 #include "sao/plugins/angel_host/as_host.h"
 #include "sao/plugins/angel_host/as_plugin_lifecycle.h"
 
@@ -21,8 +22,8 @@ using namespace sao::plugins::angel_host;
 
 // 这两条辅助 API 在 as_host.cpp 里定义但 header 未声明 (wave3 内嵌 fwd).
 extern "C" {
-    SAO_PLUGINS_API bool SAO_PLUGINS_CALL sao_plugins_ashost_is_available(void);
-    SAO_PLUGINS_API void SAO_PLUGINS_CALL sao_plugins_ashost_free_string(char* s);
+SAO_PLUGINS_API bool SAO_PLUGINS_CALL sao_plugins_ashost_is_available(void);
+SAO_PLUGINS_API void SAO_PLUGINS_CALL sao_plugins_ashost_free_string(char* s);
 }
 
 // hello_angel plugin.json 绝对路径 (CMake 定义 SAO_HELLO_ANGEL_JSON)
@@ -59,37 +60,26 @@ TEST_CASE("angel_host wave8 :: load_hello_angel_plugin_success", "[plugins][ange
     }
     REQUIRE(g_host != nullptr);
     char* err = nullptr;
-    int32_t rc = sao_plugins_ashost_load_plugin(
-        g_host, SAO_HELLO_ANGEL_JSON, &g_plugin, &err);
+    int32_t rc = sao_plugins_ashost_load_plugin(g_host, SAO_HELLO_ANGEL_JSON, &g_plugin, &err);
     INFO("load rc=" << rc << " err=" << (err ? err : "(null)"));
     REQUIRE(rc == SAO_OK);
     REQUIRE(g_plugin != nullptr);
-    if (err) sao_plugins_ashost_free_string(err);
+    if (err)
+        sao_plugins_ashost_free_string(err);
 }
 
-TEST_CASE("angel_host wave8 :: hello_angel_on_load_registers_ui_panel",
-          "[plugins][angel][wave8]") {
+TEST_CASE("angel_host wave8 :: hello_angel_lifecycle_hooks_compiled", "[plugins][angel][wave8]") {
     if (!sao_plugins_ashost_is_available()) {
         SUCCEED("angel SDK not available");
         return;
     }
     REQUIRE(g_plugin != nullptr);
-    as_sdk_counters c{};
-    int32_t rc = sao_plugins_ashost_get_sdk_counters(g_plugin, &c);
-    REQUIRE(rc == SAO_OK);
-    // on_load 里调了 2 次 log_info, 1 次 register_ui_panel, 1 次 register_hotkey
-    REQUIRE(c.log_info_calls >= 2);
-    REQUIRE(c.register_ui_panel_calls == 1);
-    REQUIRE(c.register_hotkey_calls == 1);
-    // last panel id 是 "AS Hello"
-    REQUIRE(std::string(c.last_panel_id_utf8) == "AS Hello");
-    // last hotkey key 是 "F9"
-    REQUIRE(std::string(c.last_hotkey_key_utf8) == "F9");
-    REQUIRE(std::string(c.last_hotkey_id_utf8) == "greet_hotkey");
+    CHECK(sao_plugins_ashost_has_hook(g_plugin, "on_load"));
+    CHECK(sao_plugins_ashost_has_hook(g_plugin, "on_tick"));
+    CHECK(sao_plugins_ashost_has_hook(g_plugin, "on_unload"));
 }
 
-TEST_CASE("angel_host wave8 :: hello_angel_on_tick_ticks_3_times",
-          "[plugins][angel][wave8]") {
+TEST_CASE("angel_host wave8 :: hello_angel_on_tick_ticks_3_times", "[plugins][angel][wave8]") {
     if (!sao_plugins_ashost_is_available()) {
         SUCCEED("angel SDK not available");
         return;
@@ -100,7 +90,8 @@ TEST_CASE("angel_host wave8 :: hello_angel_on_tick_ticks_3_times",
         int32_t rc = sao_plugins_ashost_tick_plugin(g_plugin, &err);
         INFO("tick " << i << " rc=" << rc << " err=" << (err ? err : "(null)"));
         REQUIRE(rc == SAO_OK);
-        if (err) sao_plugins_ashost_free_string(err);
+        if (err)
+            sao_plugins_ashost_free_string(err);
     }
     // 读全局 tick_count = 3
     int32_t v = 0;
@@ -112,8 +103,7 @@ TEST_CASE("angel_host wave8 :: hello_angel_on_tick_ticks_3_times",
     REQUIRE(v == 3);
 }
 
-TEST_CASE("angel_host wave8 :: hello_angel_unload_cleanup_no_leak",
-          "[plugins][angel][wave8]") {
+TEST_CASE("angel_host wave8 :: hello_angel_unload_cleanup_no_leak", "[plugins][angel][wave8]") {
     if (!sao_plugins_ashost_is_available()) {
         SUCCEED("angel SDK not available");
         return;
@@ -123,7 +113,8 @@ TEST_CASE("angel_host wave8 :: hello_angel_unload_cleanup_no_leak",
     int32_t rc = sao_plugins_ashost_unload_plugin(g_plugin, &err);
     INFO("unload rc=" << rc << " err=" << (err ? err : "(null)"));
     REQUIRE(rc == SAO_OK);
-    if (err) sao_plugins_ashost_free_string(err);
+    if (err)
+        sao_plugins_ashost_free_string(err);
     g_plugin = nullptr;
     // host destroy
     REQUIRE(g_host != nullptr);

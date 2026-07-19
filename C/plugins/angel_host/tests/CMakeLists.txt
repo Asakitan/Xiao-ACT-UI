@@ -21,6 +21,46 @@ if (Catch2_FOUND OR TARGET Catch2::Catch2WithMain)
     endif()
     add_test(NAME plugins_angel_host_wave3 COMMAND test_plugins_angel_host_wave3)
 
+    add_executable(test_plugins_angel_host_bridge_stdlib
+        test_as_bridge_stdlib.cpp)
+    target_link_libraries(test_plugins_angel_host_bridge_stdlib PRIVATE
+        sao_plugins_angel_host
+        Catch2::Catch2WithMain
+    )
+    target_compile_features(test_plugins_angel_host_bridge_stdlib PRIVATE
+        cxx_std_17)
+    target_compile_definitions(test_plugins_angel_host_bridge_stdlib PRIVATE
+        SAO_PLUGINS_BUILDING_DLL)
+    if (_sao_angel_target)
+        target_link_libraries(test_plugins_angel_host_bridge_stdlib PRIVATE
+            ${_sao_angel_target})
+        target_compile_definitions(test_plugins_angel_host_bridge_stdlib PRIVATE
+            SAO_TEST_HAS_ANGELSCRIPT=1)
+    endif()
+    if (_sao_angel_addons_enabled)
+        target_compile_definitions(test_plugins_angel_host_bridge_stdlib PRIVATE
+            SAO_TEST_HAS_ANGELSCRIPT_ADDONS=1)
+    endif()
+    if (SAO_PLUGINS_ANGEL_REQUIRE_RUNTIME)
+        target_compile_definitions(test_plugins_angel_host_bridge_stdlib PRIVATE
+            SAO_TEST_ANGEL_RUNTIME_REQUIRED=1)
+    endif()
+    if (SAO_PLUGINS_ANGEL_FORCE_FALLBACK)
+        target_compile_definitions(test_plugins_angel_host_bridge_stdlib PRIVATE
+            SAO_TEST_ANGEL_FORCE_FALLBACK=1)
+    endif()
+    if (SAO_PLUGINS_ANGEL_MAX_PORTABILITY)
+        target_compile_definitions(test_plugins_angel_host_bridge_stdlib PRIVATE
+            AS_MAX_PORTABILITY=1)
+    endif()
+    if (MSVC)
+        target_compile_options(test_plugins_angel_host_bridge_stdlib PRIVATE /GR)
+    endif()
+    add_test(NAME plugins_angel_host_bridge_stdlib
+             COMMAND test_plugins_angel_host_bridge_stdlib)
+    set_tests_properties(plugins_angel_host_bridge_stdlib
+        PROPERTIES LABELS "plugins;angel;bridge;stdlib")
+
     # Wave 8 / Agent d Phase 8: hello_angel 真加载 + on_load/tick/unload
     add_executable(test_plugins_angel_host_wave8 test_hello_angel_wave8.cpp)
     target_link_libraries(test_plugins_angel_host_wave8 PRIVATE
@@ -66,6 +106,12 @@ if (Catch2_FOUND OR TARGET Catch2::Catch2WithMain)
         cxx_std_20)
     target_compile_definitions(test_plugins_angel_host_loader_adapter PRIVATE
         SAO_PLUGINS_BUILDING_DLL)
+    if (_sao_angel_target)
+        target_link_libraries(test_plugins_angel_host_loader_adapter PRIVATE
+            ${_sao_angel_target})
+        target_compile_definitions(test_plugins_angel_host_loader_adapter PRIVATE
+            SAO_TEST_HAS_ANGELSCRIPT=1)
+    endif()
     if (MSVC)
         target_compile_options(test_plugins_angel_host_loader_adapter PRIVATE /GR)
     endif()

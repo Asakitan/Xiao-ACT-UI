@@ -14,6 +14,7 @@
 // 但底层实现完全不同)。
 #pragma once
 
+#include <cstddef>
 #include <cstdint>
 
 #include "sao_plugins/abi.h"
@@ -32,8 +33,7 @@ struct as_host_config {
     // 是否启用 JIT (asJITCompiler)
     bool enable_jit = false;
     // 消息回调 (编译错误 / warn / info)
-    void (*message_callback)(const char* message, int line, int col,
-                             int severity, void* ud);
+    void (*message_callback)(const char* message, int line, int col, int severity, void* ud);
     void* callback_user_data = nullptr;
 };
 
@@ -49,8 +49,23 @@ sao_plugins_ashost_destroy(as_host_handle_t host);
 extern "C" SAO_PLUGINS_API asIScriptEngine* SAO_PLUGINS_CALL
 sao_plugins_ashost_engine(as_host_handle_t host);
 
+// 复制最后一批结构化 build/message 诊断；输出由
+// sao_plugins_ashost_free_string 释放。
+extern "C" SAO_PLUGINS_API int32_t SAO_PLUGINS_CALL
+sao_plugins_ashost_get_last_error(as_host_handle_t host, char** out_error_utf8);
+
+extern "C" SAO_PLUGINS_API int32_t SAO_PLUGINS_CALL
+sao_plugins_ashost_execute(as_host_handle_t host, const char* source_utf8, size_t source_len,
+                           char** out_result_utf8, char** out_error_utf8);
+
+extern "C" SAO_PLUGINS_API int32_t SAO_PLUGINS_CALL sao_plugins_ashost_call_function_by_name(
+    as_host_handle_t host, const char* fn_name, char** out_result_utf8, char** out_error_utf8);
+
+extern "C" SAO_PLUGINS_API void SAO_PLUGINS_CALL sao_plugins_ashost_free_string(char* value);
+
+extern "C" SAO_PLUGINS_API bool SAO_PLUGINS_CALL sao_plugins_ashost_is_available(void);
+
 // 版本号 (对齐 asGetLibraryVersion)。
-extern "C" SAO_PLUGINS_API const char* SAO_PLUGINS_CALL
-sao_plugins_ashost_version(void);
+extern "C" SAO_PLUGINS_API const char* SAO_PLUGINS_CALL sao_plugins_ashost_version(void);
 
 } // namespace sao::plugins::angel_host

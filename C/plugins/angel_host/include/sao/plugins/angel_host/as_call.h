@@ -17,9 +17,9 @@
 #include <cstddef>
 #include <cstdint>
 
+#include "sao/plugins/angel_host/as_host.h"
 #include "sao_plugins/abi.h"
 #include "sao_plugins/sao_status.h"
-#include "sao/plugins/angel_host/as_host.h"
 
 class asIScriptEngine;
 class asIScriptContext;
@@ -31,22 +31,17 @@ namespace sao::plugins::angel_host {
 
 typedef struct as_plugin_s* as_plugin_handle_t;
 typedef struct as_loader_adapter_owner_s* as_loader_adapter_owner_t;
-typedef struct as_loader_adapter_plugin_lease_s*
-    as_loader_adapter_plugin_lease_t;
+typedef struct as_loader_adapter_plugin_lease_s* as_loader_adapter_plugin_lease_t;
 
 // 加载 .as 脚本 (Build 到 module)。
 // 内部:
-//   1. CScriptBuilder builder
-//   2. builder.StartNewModule(engine, module_name)
-//   3. builder.AddSectionFromFile(entry_relative)
-//   4. builder.BuildModule()
-//   5. 抽 on_load / on_enable / on_disable / on_unload 函数指针
+//   1. 注册 generic bridge/stdlib 并 Build 独立 module
+//   2. 通过 sdk_binding Angel activate 接入 canonical loader context
+//   3. 保存 binding handle，卸载时先 deactivate callbacks 再销毁 module
 extern "C" SAO_PLUGINS_API int32_t SAO_PLUGINS_CALL
-sao_plugins_ashost_load_script(asIScriptEngine* engine,
-                               const wchar_t* plugin_dir,
-                               const char* entry_relative,
-                               const char* plugin_id_utf8,
-                               void* ctx_ptr,       // loader canonical plugin_context_t*
+sao_plugins_ashost_load_script(asIScriptEngine* engine, const wchar_t* plugin_dir,
+                               const char* entry_relative, const char* plugin_id_utf8,
+                               void* ctx_ptr, // loader canonical plugin_context_t*
                                as_plugin_handle_t* out_plugin);
 
 // 生命周期 hook 调用。
@@ -60,15 +55,12 @@ extern "C" SAO_PLUGINS_API int32_t SAO_PLUGINS_CALL
 sao_plugins_ashost_call_on_disable(as_plugin_handle_t plugin);
 
 extern "C" SAO_PLUGINS_API int32_t SAO_PLUGINS_CALL
-sao_plugins_ashost_call_on_unload(as_plugin_handle_t plugin,
-                                  bool* out_allow_unload);
+sao_plugins_ashost_call_on_unload(as_plugin_handle_t plugin, bool* out_allow_unload);
 
 // 通用 hook: args_json 是 hook 参数的 json 数组; 返回 json (归属调用方 free)。
 extern "C" SAO_PLUGINS_API int32_t SAO_PLUGINS_CALL
-sao_plugins_ashost_call_hook(as_plugin_handle_t plugin,
-                             const char* hook_name,
-                             const char* args_json_utf8,
-                             char** out_result_json_utf8);
+sao_plugins_ashost_call_hook(as_plugin_handle_t plugin, const char* hook_name,
+                             const char* args_json_utf8, char** out_result_json_utf8);
 
 // 查该插件是否有指定 hook (module->GetFunctionByName)。
 extern "C" SAO_PLUGINS_API bool SAO_PLUGINS_CALL
@@ -76,20 +68,18 @@ sao_plugins_ashost_has_hook(as_plugin_handle_t plugin, const char* hook_name);
 
 // 调 asIScriptFunction* (由 callback wrap 保存的) 反向 hook。
 extern "C" SAO_PLUGINS_API int32_t SAO_PLUGINS_CALL
-sao_plugins_ashost_call_function(asIScriptEngine* engine,
-                                 asIScriptFunction* fn,
-                                 const char* args_json_utf8,
-                                 char** out_result_json_utf8);
+sao_plugins_ashost_call_function(asIScriptEngine* engine, asIScriptFunction* fn,
+                                 const char* args_json_utf8, char** out_result_json_utf8);
 
-// 卸载 (Release module + context)。
+// 稳定 rundown 后卸载；先 sdk_binding deactivate，再 Release context/module。
 extern "C" SAO_PLUGINS_API int32_t SAO_PLUGINS_CALL
 sao_plugins_ashost_unload_script(as_plugin_handle_t plugin);
 
-// 拿到 module 指针 (给 sdk_binding 用)。
+// 借用 module 指针。调用方必须持有 adapter lease 或自行串行化 unload。
 extern "C" SAO_PLUGINS_API asIScriptModule* SAO_PLUGINS_CALL
 sao_plugins_ashost_get_module(as_plugin_handle_t plugin);
 
-// 拿到插件独占 engine 与 loader canonical context（借用引用）。
+// 拿到 engine 与 loader canonical context（同样遵守上述借用期约束）。
 extern "C" SAO_PLUGINS_API asIScriptEngine* SAO_PLUGINS_CALL
 sao_plugins_ashost_get_engine(as_plugin_handle_t plugin);
 
@@ -98,37 +88,35 @@ sao_plugins_ashost_get_bound_context(as_plugin_handle_t plugin);
 
 // 注册 loader::engine_kind::angelscript 的 generic adapter。每个插件独占
 // engine/module/context/SaoSdkContext；注销前 loader 必须已卸载全部插件。
-extern "C" SAO_PLUGINS_API int32_t SAO_PLUGINS_CALL
-sao_plugins_ashost_register_loader_adapter(
-    const as_host_config* cfg,
-    as_loader_adapter_owner_t* out_owner);
+extern "C" SAO_PLUGINS_API int32_t SAO_PLUGINS_CALL sao_plugins_ashost_register_loader_adapter(
+    const as_host_config* cfg, as_loader_adapter_owner_t* out_owner);
 
 extern "C" SAO_PLUGINS_API int32_t SAO_PLUGINS_CALL
-sao_plugins_ashost_unregister_loader_adapter(
-    as_loader_adapter_owner_t owner);
+sao_plugins_ashost_unregister_loader_adapter(as_loader_adapter_owner_t owner);
 
 extern "C" SAO_PLUGINS_API size_t SAO_PLUGINS_CALL
-sao_plugins_ashost_loader_adapter_plugin_count(
-    as_loader_adapter_owner_t owner);
+sao_plugins_ashost_loader_adapter_plugin_count(as_loader_adapter_owner_t owner);
+
+// 返回 adapter 为该 loader plugin 保留的最后一次 AngelScript 错误。
+// 输出由 sao_plugins_ashost_free_string 释放。
+extern "C" SAO_PLUGINS_API int32_t SAO_PLUGINS_CALL
+sao_plugins_ashost_loader_adapter_get_last_error(as_loader_adapter_owner_t owner,
+                                                 void* loader_plugin_handle, char** out_utf8);
 
 // Adapter 内省 lease。lease 未释放前会阻止对应插件卸载，因此以下两个
 // 指针在 lease 生命周期内保持有效。每次成功 acquire 必须配对 release。
 extern "C" SAO_PLUGINS_API int32_t SAO_PLUGINS_CALL
-sao_plugins_ashost_loader_adapter_acquire_plugin(
-    as_loader_adapter_owner_t owner,
-    void* loader_plugin_handle,
-    as_loader_adapter_plugin_lease_t* out_lease);
+sao_plugins_ashost_loader_adapter_acquire_plugin(as_loader_adapter_owner_t owner,
+                                                 void* loader_plugin_handle,
+                                                 as_loader_adapter_plugin_lease_t* out_lease);
 
 extern "C" SAO_PLUGINS_API as_plugin_handle_t SAO_PLUGINS_CALL
-sao_plugins_ashost_loader_adapter_lease_script(
-    as_loader_adapter_plugin_lease_t lease);
+sao_plugins_ashost_loader_adapter_lease_script(as_loader_adapter_plugin_lease_t lease);
 
 extern "C" SAO_PLUGINS_API SaoSdkContext* SAO_PLUGINS_CALL
-sao_plugins_ashost_loader_adapter_lease_sdk_context(
-    as_loader_adapter_plugin_lease_t lease);
+sao_plugins_ashost_loader_adapter_lease_sdk_context(as_loader_adapter_plugin_lease_t lease);
 
 extern "C" SAO_PLUGINS_API int32_t SAO_PLUGINS_CALL
-sao_plugins_ashost_loader_adapter_release_plugin(
-    as_loader_adapter_plugin_lease_t lease);
+sao_plugins_ashost_loader_adapter_release_plugin(as_loader_adapter_plugin_lease_t lease);
 
 } // namespace sao::plugins::angel_host

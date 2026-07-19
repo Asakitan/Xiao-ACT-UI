@@ -2,9 +2,9 @@
 
 #include "as_plugin_internal.h"
 
-#include "sao_plugins/sao_status.h"
 #include "sao/plugins/loader/loader_status.h"
 #include "sao/plugins/loader/plugin_context.h"
+#include "sao_plugins/sao_status.h"
 
 #include <algorithm>
 #include <cmath>
@@ -34,11 +34,12 @@ using ordered_json = nlohmann::ordered_json;
 using as_string = as_string_value;
 
 class as_string_factory final : public asIStringFactory {
-public:
+  public:
     const void* GetStringConstant(const char* data, asUINT length) override {
         try {
             auto value = std::make_unique<as_string>();
-            if (data != nullptr && length > 0) value->data.assign(data, length);
+            if (data != nullptr && length > 0)
+                value->assign(data, length);
             return value.release();
         } catch (...) {
             return nullptr;
@@ -54,16 +55,16 @@ public:
         }
     }
 
-    int GetRawStringData(const void* value, char* data,
-                         asUINT* length) const override {
+    int GetRawStringData(const void* value, char* data, asUINT* length) const override {
         try {
             const auto* string = static_cast<const as_string*>(value);
-            if (string == nullptr) return asINVALID_ARG;
+            if (string == nullptr)
+                return asINVALID_ARG;
             if (length != nullptr) {
-                *length = static_cast<asUINT>(string->data.size());
+                *length = static_cast<asUINT>(string->size());
             }
-            if (data != nullptr && !string->data.empty()) {
-                std::memcpy(data, string->data.data(), string->data.size());
+            if (data != nullptr && !string->empty()) {
+                std::memcpy(data, string->data(), string->size());
             }
             return asSUCCESS;
         } catch (...) {
@@ -75,8 +76,7 @@ public:
 as_string_factory g_string_factory;
 
 bool registration_ok(int result) {
-    return result >= 0 || result == asALREADY_REGISTERED ||
-           result == asNAME_TAKEN;
+    return result >= 0;
 }
 
 void set_active_exception(const char* message) noexcept {
@@ -95,10 +95,8 @@ void string_construct(asIScriptGeneric* generic) {
 
 void string_copy_construct(asIScriptGeneric* generic) {
     try {
-        const auto* source =
-            static_cast<const as_string*>(generic->GetArgAddress(0));
-        new (generic->GetObject()) as_string(
-            source == nullptr ? as_string{} : *source);
+        const auto* source = static_cast<const as_string*>(generic->GetArgAddress(0));
+        new (generic->GetObject()) as_string(source == nullptr ? as_string{} : *source);
     } catch (...) {
         set_active_exception("string copy construction failed");
     }
@@ -114,10 +112,9 @@ void string_destruct(asIScriptGeneric* generic) {
 void string_assign(asIScriptGeneric* generic) {
     try {
         auto* target = static_cast<as_string*>(generic->GetObject());
-        const auto* source =
-            static_cast<const as_string*>(generic->GetArgAddress(0));
+        const auto* source = static_cast<const as_string*>(generic->GetArgAddress(0));
         if (target != nullptr && source != nullptr) {
-            target->data = source->data;
+            *target = *source;
         }
         generic->SetReturnAddress(target);
     } catch (...) {
@@ -128,10 +125,9 @@ void string_assign(asIScriptGeneric* generic) {
 void string_add_assign(asIScriptGeneric* generic) {
     try {
         auto* target = static_cast<as_string*>(generic->GetObject());
-        const auto* source =
-            static_cast<const as_string*>(generic->GetArgAddress(0));
+        const auto* source = static_cast<const as_string*>(generic->GetArgAddress(0));
         if (target != nullptr && source != nullptr) {
-            target->data += source->data;
+            *target += *source;
         }
         generic->SetReturnAddress(target);
     } catch (...) {
@@ -142,12 +138,8 @@ void string_add_assign(asIScriptGeneric* generic) {
 void string_equals(asIScriptGeneric* generic) {
     try {
         const auto* left = static_cast<const as_string*>(generic->GetObject());
-        const auto* right =
-            static_cast<const as_string*>(generic->GetArgAddress(0));
-        generic->SetReturnByte(left != nullptr && right != nullptr &&
-                                       left->data == right->data
-                                   ? 1
-                                   : 0);
+        const auto* right = static_cast<const as_string*>(generic->GetArgAddress(0));
+        generic->SetReturnByte(left != nullptr && right != nullptr && *left == *right ? 1 : 0);
     } catch (...) {
         generic->SetReturnByte(0);
     }
@@ -156,11 +148,12 @@ void string_equals(asIScriptGeneric* generic) {
 void string_add(asIScriptGeneric* generic) {
     try {
         const auto* left = static_cast<const as_string*>(generic->GetObject());
-        const auto* right =
-            static_cast<const as_string*>(generic->GetArgAddress(0));
+        const auto* right = static_cast<const as_string*>(generic->GetArgAddress(0));
         as_string result;
-        if (left != nullptr) result.data = left->data;
-        if (right != nullptr) result.data += right->data;
+        if (left != nullptr)
+            result = *left;
+        if (right != nullptr)
+            result += *right;
         new (generic->GetAddressOfReturnLocation()) as_string(std::move(result));
     } catch (...) {
         set_active_exception("string return construction failed");
@@ -169,30 +162,29 @@ void string_add(asIScriptGeneric* generic) {
 
 as_plugin_s* active_plugin() {
     auto* context = asGetActiveContext();
-    return context == nullptr
-               ? nullptr
-               : static_cast<as_plugin_s*>(context->GetUserData(
-                     static_cast<asPWORD>(kPluginContextUserDataSlot)));
+    return context == nullptr ? nullptr
+                              : static_cast<as_plugin_s*>(context->GetUserData(
+                                    static_cast<asPWORD>(kPluginContextUserDataSlot)));
 }
 
-void copy_counter_text(char* output, size_t capacity,
-                       const std::string& value) {
-    if (output == nullptr || capacity == 0) return;
+void copy_counter_text(char* output, size_t capacity, const std::string& value) {
+    if (output == nullptr || capacity == 0)
+        return;
     const size_t length = std::min(capacity - 1, value.size());
-    if (length > 0) std::memcpy(output, value.data(), length);
+    if (length > 0)
+        std::memcpy(output, value.data(), length);
     output[length] = '\0';
 }
 
 void global_log_info(asIScriptGeneric* generic) {
     try {
         auto* plugin = active_plugin();
-        const auto* message =
-            static_cast<const as_string*>(generic->GetArgAddress(0));
-        if (plugin == nullptr) return;
+        const auto* message = static_cast<const as_string*>(generic->GetArgAddress(0));
+        if (plugin == nullptr)
+            return;
         ++plugin->counters.log_info_calls;
-        copy_counter_text(plugin->counters.last_log_utf8,
-                          sizeof(plugin->counters.last_log_utf8),
-                          message == nullptr ? std::string{} : message->data);
+        copy_counter_text(plugin->counters.last_log_utf8, sizeof(plugin->counters.last_log_utf8),
+                          message == nullptr ? std::string{} : *message);
     } catch (...) {
     }
 }
@@ -200,13 +192,13 @@ void global_log_info(asIScriptGeneric* generic) {
 void global_register_ui_panel(asIScriptGeneric* generic) {
     try {
         auto* plugin = active_plugin();
-        const auto* panel =
-            static_cast<const as_string*>(generic->GetArgAddress(0));
-        if (plugin == nullptr) return;
+        const auto* panel = static_cast<const as_string*>(generic->GetArgAddress(0));
+        if (plugin == nullptr)
+            return;
         ++plugin->counters.register_ui_panel_calls;
         copy_counter_text(plugin->counters.last_panel_id_utf8,
                           sizeof(plugin->counters.last_panel_id_utf8),
-                          panel == nullptr ? std::string{} : panel->data);
+                          panel == nullptr ? std::string{} : *panel);
     } catch (...) {
     }
 }
@@ -214,30 +206,27 @@ void global_register_ui_panel(asIScriptGeneric* generic) {
 void global_register_hotkey(asIScriptGeneric* generic) {
     try {
         auto* plugin = active_plugin();
-        const auto* hotkey =
-            static_cast<const as_string*>(generic->GetArgAddress(0));
-        const auto* key =
-            static_cast<const as_string*>(generic->GetArgAddress(1));
-        if (plugin == nullptr) return;
+        const auto* hotkey = static_cast<const as_string*>(generic->GetArgAddress(0));
+        const auto* key = static_cast<const as_string*>(generic->GetArgAddress(1));
+        if (plugin == nullptr)
+            return;
         ++plugin->counters.register_hotkey_calls;
         copy_counter_text(plugin->counters.last_hotkey_id_utf8,
                           sizeof(plugin->counters.last_hotkey_id_utf8),
-                          hotkey == nullptr ? std::string{} : hotkey->data);
+                          hotkey == nullptr ? std::string{} : *hotkey);
         copy_counter_text(plugin->counters.last_hotkey_key_utf8,
                           sizeof(plugin->counters.last_hotkey_key_utf8),
-                          key == nullptr ? std::string{} : key->data);
+                          key == nullptr ? std::string{} : *key);
     } catch (...) {
     }
 }
 
 void context_log(asIScriptGeneric* generic) {
     try {
-        auto* context =
-            static_cast<loader::plugin_context_t*>(generic->GetObject());
-        const auto* message =
-            static_cast<const as_string*>(generic->GetArgAddress(0));
+        auto* context = static_cast<loader::plugin_context_t*>(generic->GetObject());
+        const auto* message = static_cast<const as_string*>(generic->GetArgAddress(0));
         if (context != nullptr && message != nullptr) {
-            loader::sao_plugins_ctx_log(context, message->data.c_str());
+            loader::sao_plugins_ctx_log(context, message->c_str());
         }
     } catch (...) {
     }
@@ -245,11 +234,10 @@ void context_log(asIScriptGeneric* generic) {
 
 void context_plugin_id(asIScriptGeneric* generic) {
     try {
-        auto* context =
-            static_cast<loader::plugin_context_t*>(generic->GetObject());
+        auto* context = static_cast<loader::plugin_context_t*>(generic->GetObject());
         as_string result;
         if (context != nullptr) {
-            result.data = loader::sao_plugins_ctx_plugin_id(context);
+            result = loader::sao_plugins_ctx_plugin_id(context);
         }
         new (generic->GetAddressOfReturnLocation()) as_string(std::move(result));
     } catch (...) {
@@ -259,10 +247,8 @@ void context_plugin_id(asIScriptGeneric* generic) {
 
 void context_should_stop(asIScriptGeneric* generic) {
     try {
-        auto* context =
-            static_cast<loader::plugin_context_t*>(generic->GetObject());
-        generic->SetReturnByte(
-            loader::sao_plugins_ctx_should_stop(context) ? 1 : 0);
+        auto* context = static_cast<loader::plugin_context_t*>(generic->GetObject());
+        generic->SetReturnByte(loader::sao_plugins_ctx_should_stop(context) ? 1 : 0);
     } catch (...) {
         generic->SetReturnByte(1);
     }
@@ -273,20 +259,19 @@ bool is_string_type(asIScriptEngine* engine, int type_id) {
     return type != nullptr && std::strcmp(type->GetName(), "string") == 0;
 }
 
-template <typename Integer>
-bool read_integer(const ordered_json& value, Integer& output) {
+template <typename Integer> bool read_integer(const ordered_json& value, Integer& output) {
     static_assert(std::is_integral_v<Integer>);
     if constexpr (std::is_signed_v<Integer>) {
         if (value.is_number_unsigned()) {
             const auto raw = value.get<uint64_t>();
-            if (raw > static_cast<uint64_t>(
-                          std::numeric_limits<Integer>::max())) {
+            if (raw > static_cast<uint64_t>(std::numeric_limits<Integer>::max())) {
                 return false;
             }
             output = static_cast<Integer>(raw);
             return true;
         }
-        if (!value.is_number_integer()) return false;
+        if (!value.is_number_integer())
+            return false;
         const auto raw = value.get<int64_t>();
         if (raw < static_cast<int64_t>(std::numeric_limits<Integer>::min()) ||
             raw > static_cast<int64_t>(std::numeric_limits<Integer>::max())) {
@@ -295,10 +280,10 @@ bool read_integer(const ordered_json& value, Integer& output) {
         output = static_cast<Integer>(raw);
         return true;
     } else {
-        if (!value.is_number_unsigned()) return false;
+        if (!value.is_number_unsigned())
+            return false;
         const auto raw = value.get<uint64_t>();
-        if (raw > static_cast<uint64_t>(
-                      std::numeric_limits<Integer>::max())) {
+        if (raw > static_cast<uint64_t>(std::numeric_limits<Integer>::max())) {
             return false;
         }
         output = static_cast<Integer>(raw);
@@ -306,13 +291,12 @@ bool read_integer(const ordered_json& value, Integer& output) {
     }
 }
 
-template <typename Floating>
-bool read_floating(const ordered_json& value, Floating& output) {
+template <typename Floating> bool read_floating(const ordered_json& value, Floating& output) {
     static_assert(std::is_floating_point_v<Floating>);
-    if (!value.is_number()) return false;
+    if (!value.is_number())
+        return false;
     const double raw = value.get<double>();
-    if (!std::isfinite(raw) ||
-        raw < static_cast<double>(std::numeric_limits<Floating>::lowest()) ||
+    if (!std::isfinite(raw) || raw < static_cast<double>(std::numeric_limits<Floating>::lowest()) ||
         raw > static_cast<double>(std::numeric_limits<Floating>::max())) {
         return false;
     }
@@ -321,8 +305,7 @@ bool read_floating(const ordered_json& value, Floating& output) {
 }
 
 int32_t set_arguments(asIScriptContext* context, asIScriptFunction* function,
-                      const char* args_json_utf8,
-                      std::vector<as_string>& string_arguments) {
+                      const char* args_json_utf8, std::vector<as_string>& string_arguments) {
     ordered_json arguments = ordered_json::array();
     if (args_json_utf8 != nullptr && args_json_utf8[0] != '\0') {
         arguments = ordered_json::parse(args_json_utf8, nullptr, false);
@@ -343,54 +326,63 @@ int32_t set_arguments(asIScriptContext* context, asIScriptFunction* function,
         int result = asINVALID_ARG;
         switch (type_id) {
         case asTYPEID_BOOL:
-            if (!value.is_boolean()) return SAO_ERR_INVALID_ARGUMENT;
+            if (!value.is_boolean())
+                return SAO_ERR_INVALID_ARGUMENT;
             result = context->SetArgByte(index, value.get<bool>() ? 1 : 0);
             break;
         case asTYPEID_INT8: {
             int8_t argument = 0;
-            if (!read_integer(value, argument)) return SAO_ERR_INVALID_ARGUMENT;
+            if (!read_integer(value, argument))
+                return SAO_ERR_INVALID_ARGUMENT;
             result = context->SetArgByte(index, static_cast<asBYTE>(argument));
             break;
         }
         case asTYPEID_UINT8: {
             uint8_t argument = 0;
-            if (!read_integer(value, argument)) return SAO_ERR_INVALID_ARGUMENT;
+            if (!read_integer(value, argument))
+                return SAO_ERR_INVALID_ARGUMENT;
             result = context->SetArgByte(index, argument);
             break;
         }
         case asTYPEID_INT16: {
             int16_t argument = 0;
-            if (!read_integer(value, argument)) return SAO_ERR_INVALID_ARGUMENT;
+            if (!read_integer(value, argument))
+                return SAO_ERR_INVALID_ARGUMENT;
             result = context->SetArgWord(index, static_cast<asWORD>(argument));
             break;
         }
         case asTYPEID_UINT16: {
             uint16_t argument = 0;
-            if (!read_integer(value, argument)) return SAO_ERR_INVALID_ARGUMENT;
+            if (!read_integer(value, argument))
+                return SAO_ERR_INVALID_ARGUMENT;
             result = context->SetArgWord(index, argument);
             break;
         }
         case asTYPEID_INT32: {
             int32_t argument = 0;
-            if (!read_integer(value, argument)) return SAO_ERR_INVALID_ARGUMENT;
+            if (!read_integer(value, argument))
+                return SAO_ERR_INVALID_ARGUMENT;
             result = context->SetArgDWord(index, static_cast<asDWORD>(argument));
             break;
         }
         case asTYPEID_UINT32: {
             uint32_t argument = 0;
-            if (!read_integer(value, argument)) return SAO_ERR_INVALID_ARGUMENT;
+            if (!read_integer(value, argument))
+                return SAO_ERR_INVALID_ARGUMENT;
             result = context->SetArgDWord(index, argument);
             break;
         }
         case asTYPEID_INT64: {
             int64_t argument = 0;
-            if (!read_integer(value, argument)) return SAO_ERR_INVALID_ARGUMENT;
+            if (!read_integer(value, argument))
+                return SAO_ERR_INVALID_ARGUMENT;
             result = context->SetArgQWord(index, static_cast<asQWORD>(argument));
             break;
         }
         case asTYPEID_UINT64: {
             uint64_t argument = 0;
-            if (!read_integer(value, argument)) return SAO_ERR_INVALID_ARGUMENT;
+            if (!read_integer(value, argument))
+                return SAO_ERR_INVALID_ARGUMENT;
             result = context->SetArgQWord(index, argument);
             break;
         }
@@ -411,33 +403,35 @@ int32_t set_arguments(asIScriptContext* context, asIScriptFunction* function,
             break;
         }
         default:
-            if (!is_string_type(context->GetEngine(), type_id) ||
-                !value.is_string()) {
+            if (!is_string_type(context->GetEngine(), type_id) || !value.is_string()) {
                 return loader::SAO_PLUGINS_ERR_UNSUPPORTED;
             }
             string_arguments.push_back({value.get<std::string>()});
             result = context->SetArgObject(index, &string_arguments.back());
             break;
         }
-        if (result < 0) return SAO_ERR_OS_CALL_FAILED;
+        if (result < 0)
+            return SAO_ERR_OS_CALL_FAILED;
     }
     return SAO_OK;
 }
 
 int32_t copy_json_result(const ordered_json& value, char** output) {
-    if (output == nullptr) return SAO_OK;
+    if (output == nullptr)
+        return SAO_OK;
     const std::string text = value.dump();
     auto buffer = std::unique_ptr<char, decltype(&std::free)>(
         static_cast<char*>(std::malloc(text.size() + 1)), &std::free);
-    if (!buffer) return SAO_ERR_OS_CALL_FAILED;
-    if (!text.empty()) std::memcpy(buffer.get(), text.data(), text.size());
+    if (!buffer)
+        return SAO_ERR_OS_CALL_FAILED;
+    if (!text.empty())
+        std::memcpy(buffer.get(), text.data(), text.size());
     buffer.get()[text.size()] = '\0';
     *output = buffer.release();
     return SAO_OK;
 }
 
-int32_t serialize_return(asIScriptContext* context,
-                         asIScriptFunction* function, char** output) {
+int32_t serialize_return(asIScriptContext* context, asIScriptFunction* function, char** output) {
     const int type_id = function->GetReturnTypeId();
     switch (type_id) {
     case asTYPEID_VOID:
@@ -445,14 +439,11 @@ int32_t serialize_return(asIScriptContext* context,
     case asTYPEID_BOOL:
         return copy_json_result(context->GetReturnByte() != 0, output);
     case asTYPEID_INT8:
-        return copy_json_result(
-            static_cast<int8_t>(context->GetReturnByte()), output);
+        return copy_json_result(static_cast<int8_t>(context->GetReturnByte()), output);
     case asTYPEID_INT16:
-        return copy_json_result(
-            static_cast<int16_t>(context->GetReturnWord()), output);
+        return copy_json_result(static_cast<int16_t>(context->GetReturnWord()), output);
     case asTYPEID_INT32:
-        return copy_json_result(static_cast<int32_t>(context->GetReturnDWord()),
-                                output);
+        return copy_json_result(static_cast<int32_t>(context->GetReturnDWord()), output);
     case asTYPEID_UINT8:
         return copy_json_result(context->GetReturnByte(), output);
     case asTYPEID_UINT16:
@@ -460,30 +451,25 @@ int32_t serialize_return(asIScriptContext* context,
     case asTYPEID_UINT32:
         return copy_json_result(context->GetReturnDWord(), output);
     case asTYPEID_INT64:
-        return copy_json_result(static_cast<int64_t>(context->GetReturnQWord()),
-                                output);
+        return copy_json_result(static_cast<int64_t>(context->GetReturnQWord()), output);
     case asTYPEID_UINT64:
         return copy_json_result(context->GetReturnQWord(), output);
     case asTYPEID_FLOAT: {
         const float value = context->GetReturnFloat();
-        return copy_json_result(std::isfinite(value) ? ordered_json(value)
-                                                     : ordered_json(nullptr),
+        return copy_json_result(std::isfinite(value) ? ordered_json(value) : ordered_json(nullptr),
                                 output);
     }
     case asTYPEID_DOUBLE: {
         const double value = context->GetReturnDouble();
-        return copy_json_result(std::isfinite(value) ? ordered_json(value)
-                                                     : ordered_json(nullptr),
+        return copy_json_result(std::isfinite(value) ? ordered_json(value) : ordered_json(nullptr),
                                 output);
     }
     default:
         if (!is_string_type(context->GetEngine(), type_id)) {
             return loader::SAO_PLUGINS_ERR_UNSUPPORTED;
         }
-        const auto* value =
-            static_cast<const as_string*>(context->GetReturnObject());
-        return copy_json_result(value == nullptr ? ordered_json(nullptr)
-                                                : ordered_json(value->data),
+        const auto* value = static_cast<const as_string*>(context->GetReturnObject());
+        return copy_json_result(value == nullptr ? ordered_json(nullptr) : ordered_json(*value),
                                 output);
     }
 }
@@ -491,98 +477,129 @@ int32_t serialize_return(asIScriptContext* context,
 } // namespace
 
 int32_t register_generic_core_bindings(asIScriptEngine* engine) {
-    if (engine == nullptr) return SAO_ERR_INVALID_ARGUMENT;
+    if (engine == nullptr)
+        return SAO_ERR_INVALID_ARGUMENT;
+
+    std::lock_guard engine_lock(engine_execution_mutex());
 
     if (engine->GetTypeInfoByName("string") == nullptr) {
-        int result = engine->RegisterObjectType(
-            "string", sizeof(as_string),
-            asOBJ_VALUE | asOBJ_APP_CLASS_CDAK);
-        if (!registration_ok(result)) return SAO_ERR_OS_CALL_FAILED;
-        result = engine->RegisterObjectBehaviour(
-            "string", asBEHAVE_CONSTRUCT, "void f()",
-            asFUNCTION(string_construct), asCALL_GENERIC);
-        if (!registration_ok(result)) return SAO_ERR_OS_CALL_FAILED;
-        result = engine->RegisterObjectBehaviour(
-            "string", asBEHAVE_CONSTRUCT, "void f(const string &in)",
-            asFUNCTION(string_copy_construct), asCALL_GENERIC);
-        if (!registration_ok(result)) return SAO_ERR_OS_CALL_FAILED;
-        result = engine->RegisterObjectBehaviour(
-            "string", asBEHAVE_DESTRUCT, "void f()",
-            asFUNCTION(string_destruct), asCALL_GENERIC);
-        if (!registration_ok(result)) return SAO_ERR_OS_CALL_FAILED;
+        int result = engine->RegisterObjectType("string", sizeof(as_string),
+                                                asOBJ_VALUE | asOBJ_APP_CLASS_CDAK);
+        if (!registration_ok(result))
+            return SAO_ERR_OS_CALL_FAILED;
+        result = engine->RegisterObjectBehaviour("string", asBEHAVE_CONSTRUCT, "void f()",
+                                                 asFUNCTION(string_construct), asCALL_GENERIC);
+        if (!registration_ok(result))
+            return SAO_ERR_OS_CALL_FAILED;
+        result = engine->RegisterObjectBehaviour("string", asBEHAVE_CONSTRUCT,
+                                                 "void f(const string &in)",
+                                                 asFUNCTION(string_copy_construct), asCALL_GENERIC);
+        if (!registration_ok(result))
+            return SAO_ERR_OS_CALL_FAILED;
+        result = engine->RegisterObjectBehaviour("string", asBEHAVE_DESTRUCT, "void f()",
+                                                 asFUNCTION(string_destruct), asCALL_GENERIC);
+        if (!registration_ok(result))
+            return SAO_ERR_OS_CALL_FAILED;
         result = engine->RegisterStringFactory("string", &g_string_factory);
-        if (!registration_ok(result)) return SAO_ERR_OS_CALL_FAILED;
-        result = engine->RegisterObjectMethod(
-            "string", "string &opAssign(const string &in)",
-            asFUNCTION(string_assign), asCALL_GENERIC);
-        if (!registration_ok(result)) return SAO_ERR_OS_CALL_FAILED;
-        result = engine->RegisterObjectMethod(
-            "string", "string &opAddAssign(const string &in)",
-            asFUNCTION(string_add_assign), asCALL_GENERIC);
-        if (!registration_ok(result)) return SAO_ERR_OS_CALL_FAILED;
-        result = engine->RegisterObjectMethod(
-            "string", "bool opEquals(const string &in) const",
-            asFUNCTION(string_equals), asCALL_GENERIC);
-        if (!registration_ok(result)) return SAO_ERR_OS_CALL_FAILED;
-        result = engine->RegisterObjectMethod(
-            "string", "string opAdd(const string &in) const",
-            asFUNCTION(string_add), asCALL_GENERIC);
-        if (!registration_ok(result)) return SAO_ERR_OS_CALL_FAILED;
+        if (!registration_ok(result))
+            return SAO_ERR_OS_CALL_FAILED;
+        result = engine->RegisterObjectMethod("string", "string &opAssign(const string &in)",
+                                              asFUNCTION(string_assign), asCALL_GENERIC);
+        if (!registration_ok(result))
+            return SAO_ERR_OS_CALL_FAILED;
+        result = engine->RegisterObjectMethod("string", "string &opAddAssign(const string &in)",
+                                              asFUNCTION(string_add_assign), asCALL_GENERIC);
+        if (!registration_ok(result))
+            return SAO_ERR_OS_CALL_FAILED;
+        result = engine->RegisterObjectMethod("string", "bool opEquals(const string &in) const",
+                                              asFUNCTION(string_equals), asCALL_GENERIC);
+        if (!registration_ok(result))
+            return SAO_ERR_OS_CALL_FAILED;
+        result = engine->RegisterObjectMethod("string", "string opAdd(const string &in) const",
+                                              asFUNCTION(string_add), asCALL_GENERIC);
+        if (!registration_ok(result))
+            return SAO_ERR_OS_CALL_FAILED;
     }
 
     if (engine->GetTypeInfoByName("PluginContext") == nullptr) {
-        int result = engine->RegisterObjectType(
-            "PluginContext", 0, asOBJ_REF | asOBJ_NOCOUNT);
-        if (!registration_ok(result)) return SAO_ERR_OS_CALL_FAILED;
-        result = engine->RegisterObjectMethod(
-            "PluginContext", "void log(const string &in)",
-            asFUNCTION(context_log), asCALL_GENERIC);
-        if (!registration_ok(result)) return SAO_ERR_OS_CALL_FAILED;
-        result = engine->RegisterObjectMethod(
-            "PluginContext", "void log_info(const string &in)",
-            asFUNCTION(context_log), asCALL_GENERIC);
-        if (!registration_ok(result)) return SAO_ERR_OS_CALL_FAILED;
-        result = engine->RegisterObjectMethod(
-            "PluginContext", "string get_plugin_id() const property",
-            asFUNCTION(context_plugin_id), asCALL_GENERIC);
-        if (!registration_ok(result)) return SAO_ERR_OS_CALL_FAILED;
-        result = engine->RegisterObjectMethod(
-            "PluginContext", "bool get_should_stop() const property",
-            asFUNCTION(context_should_stop), asCALL_GENERIC);
-        if (!registration_ok(result)) return SAO_ERR_OS_CALL_FAILED;
+        int result = engine->RegisterObjectType("PluginContext", 0, asOBJ_REF | asOBJ_NOCOUNT);
+        if (!registration_ok(result))
+            return SAO_ERR_OS_CALL_FAILED;
+        result = engine->RegisterObjectMethod("PluginContext", "void log(const string &in)",
+                                              asFUNCTION(context_log), asCALL_GENERIC);
+        if (!registration_ok(result))
+            return SAO_ERR_OS_CALL_FAILED;
+        result = engine->RegisterObjectMethod("PluginContext", "void log_info(const string &in)",
+                                              asFUNCTION(context_log), asCALL_GENERIC);
+        if (!registration_ok(result))
+            return SAO_ERR_OS_CALL_FAILED;
+        result =
+            engine->RegisterObjectMethod("PluginContext", "string get_plugin_id() const property",
+                                         asFUNCTION(context_plugin_id), asCALL_GENERIC);
+        if (!registration_ok(result))
+            return SAO_ERR_OS_CALL_FAILED;
+        result =
+            engine->RegisterObjectMethod("PluginContext", "bool get_should_stop() const property",
+                                         asFUNCTION(context_should_stop), asCALL_GENERIC);
+        if (!registration_ok(result))
+            return SAO_ERR_OS_CALL_FAILED;
     }
 
-    int result = engine->RegisterGlobalFunction(
-        "void log_info(const string &in)", asFUNCTION(global_log_info),
-        asCALL_GENERIC);
-    if (!registration_ok(result)) return SAO_ERR_OS_CALL_FAILED;
-    result = engine->RegisterGlobalFunction(
-        "void register_ui_panel(const string &in)",
-        asFUNCTION(global_register_ui_panel), asCALL_GENERIC);
-    if (!registration_ok(result)) return SAO_ERR_OS_CALL_FAILED;
-    result = engine->RegisterGlobalFunction(
-        "void register_hotkey(const string &in, const string &in)",
-        asFUNCTION(global_register_hotkey), asCALL_GENERIC);
-    return registration_ok(result) ? SAO_OK : SAO_ERR_OS_CALL_FAILED;
+    if (engine->GetGlobalFunctionByDecl("void log_info(const string &in)") == nullptr) {
+        const int result = engine->RegisterGlobalFunction(
+            "void log_info(const string &in)", asFUNCTION(global_log_info), asCALL_GENERIC);
+        if (!registration_ok(result))
+            return SAO_ERR_OS_CALL_FAILED;
+    }
+    if (engine->GetGlobalFunctionByDecl("void register_ui_panel(const string &in)") == nullptr) {
+        const int result =
+            engine->RegisterGlobalFunction("void register_ui_panel(const string &in)",
+                                           asFUNCTION(global_register_ui_panel), asCALL_GENERIC);
+        if (!registration_ok(result))
+            return SAO_ERR_OS_CALL_FAILED;
+    }
+    if (engine->GetGlobalFunctionByDecl(
+            "void register_hotkey(const string &in, const string &in)") == nullptr) {
+        const int result = engine->RegisterGlobalFunction(
+            "void register_hotkey(const string &in, const string &in)",
+            asFUNCTION(global_register_hotkey), asCALL_GENERIC);
+        if (!registration_ok(result))
+            return SAO_ERR_OS_CALL_FAILED;
+    }
+    const asITypeInfo* string_type = engine->GetTypeInfoByName("string");
+    const asITypeInfo* context_type = engine->GetTypeInfoByName("PluginContext");
+    return string_type != nullptr &&
+                   string_type->GetMethodByDecl("string opAdd(const string &in) const") !=
+                       nullptr &&
+                   context_type != nullptr &&
+                   context_type->GetMethodByDecl("void log(const string &in)") != nullptr &&
+                   engine->GetGlobalFunctionByDecl("void log_info(const string &in)") != nullptr &&
+                   engine->GetGlobalFunctionByDecl("void register_ui_panel(const string &in)") !=
+                       nullptr &&
+                   engine->GetGlobalFunctionByDecl(
+                       "void register_hotkey(const string &in, const string &in)") != nullptr
+               ? SAO_OK
+               : SAO_ERR_OS_CALL_FAILED;
 }
 
-int32_t invoke_generic_function(asIScriptContext* context,
-                                asIScriptFunction* function,
-                                const char* args_json_utf8,
-                                char** out_result_json_utf8,
+int32_t invoke_generic_function(asIScriptContext* context, asIScriptFunction* function,
+                                const char* args_json_utf8, char** out_result_json_utf8,
                                 void* context_user_data) {
-    if (out_result_json_utf8 != nullptr) *out_result_json_utf8 = nullptr;
+    if (out_result_json_utf8 != nullptr)
+        *out_result_json_utf8 = nullptr;
     if (context == nullptr || function == nullptr) {
         return SAO_ERR_INVALID_ARGUMENT;
     }
     try {
-        if (context->Prepare(function) < 0) return SAO_ERR_OS_CALL_FAILED;
-        context->SetUserData(context_user_data,
-                             kPluginContextUserDataSlot);
+        std::lock_guard engine_lock(engine_execution_mutex());
+        if (context->Prepare(function) < 0)
+            return SAO_ERR_OS_CALL_FAILED;
+        context->SetUserData(context_user_data, kPluginContextUserDataSlot);
         std::vector<as_string> string_arguments;
         const int32_t argument_status =
             set_arguments(context, function, args_json_utf8, string_arguments);
-        if (argument_status != SAO_OK) return argument_status;
+        if (argument_status != SAO_OK)
+            return argument_status;
         if (context->Execute() != asEXECUTION_FINISHED) {
             return SAO_ERR_OS_CALL_FAILED;
         }
@@ -600,8 +617,7 @@ int32_t register_generic_core_bindings(asIScriptEngine*) {
     return SAO_ERR_NOT_IMPLEMENTED;
 }
 
-int32_t invoke_generic_function(asIScriptContext*, asIScriptFunction*,
-                                const char*, char**, void*) {
+int32_t invoke_generic_function(asIScriptContext*, asIScriptFunction*, const char*, char**, void*) {
     return SAO_ERR_NOT_IMPLEMENTED;
 }
 

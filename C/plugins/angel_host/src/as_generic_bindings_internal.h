@@ -1,12 +1,15 @@
 #pragma once
 
 #include <cstdint>
+#include <mutex>
 
 class asIScriptContext;
 class asIScriptEngine;
 class asIScriptFunction;
 
 namespace sao::plugins::angel_host {
+
+std::recursive_mutex& engine_execution_mutex() noexcept;
 
 int32_t register_generic_core_bindings(asIScriptEngine* engine);
 

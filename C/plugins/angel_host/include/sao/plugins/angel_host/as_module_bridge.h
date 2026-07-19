@@ -1,14 +1,8 @@
 // as_module_bridge.h — SDK 类型注册到 AS engine
 //
-// 用 asIScriptEngine::RegisterObjectType + RegisterObjectMethod 把 PluginContext
-// 暴露成 AS class:
-//   class PluginContext {
-//       void log(string message);
-//       int subscribe(string topic, callback @cb);
-//       ...
-//   }
-//
-// 这一层调 sdk_binding/binding_angel 做真的类型注册。
+// 用 generic calling convention 注册当前宿主实际支持的最小 PluginContext:
+// log/log_info、plugin_id、should_stop。注册与 canonical context ownership
+// 经过 sdk_binding Angel provider；尚未注册的完整 SDK 方法不在本头契约内。
 #pragma once
 
 #include <cstdint>
@@ -20,14 +14,15 @@ class asIScriptEngine;
 
 namespace sao::plugins::angel_host {
 
-// 注册 SDK 类型 (在 create engine 后立刻调, engine 生命周期内一次)。
+// 注册最小宿主类型，并确保 sdk_binding Angel provider 已注册。
 extern "C" SAO_PLUGINS_API int32_t SAO_PLUGINS_CALL
 sao_plugins_ashost_register_sdk(asIScriptEngine* engine);
 
-// 每插件绑定一个 ctx 到 AS 全局 (作为 PluginContext@ ctx)。
+// 将 loader canonical context 绑定到指定 module 的 PluginContext@ ctx。
+// 非空绑定同时经过 sdk_binding context_bind；nullptr 仅清空 module slot。
 extern "C" SAO_PLUGINS_API int32_t SAO_PLUGINS_CALL
 sao_plugins_ashost_bind_ctx(asIScriptEngine* engine,
-                            void* ctx_handle,   // sao::plugins::loader::plugin_context_t*
+                            void* ctx_handle, // sao::plugins::loader::plugin_context_t*
                             const char* module_name);
 
 } // namespace sao::plugins::angel_host
