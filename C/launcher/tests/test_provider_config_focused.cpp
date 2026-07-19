@@ -1,9 +1,12 @@
 #include "sao/launcher/init_pipeline.h"
 #include "sao/launcher/provider_config.h"
+#include "sao/plugins/loader/plugin_context.h"
+#include "sao/plugins/loader/plugin_deps.h"
+#include "sao/plugins/loader/plugin_manifest.h"
+#include "sao/plugins/loader/plugin_registry.h"
 #if defined(SAO_LAUNCHER_PROVIDER_HAS_EMMA)
 #include "sao/plugins/loader/loader_status.h"
 #include "sao/plugins/loader/plugin_lifecycle.h"
-#include "sao/plugins/loader/plugin_registry.h"
 #endif
 
 #include <catch2/catch_test_macros.hpp>
@@ -11,15 +14,25 @@
 
 #include <windows.h>
 
+#include <array>
 #include <atomic>
 #include <chrono>
 #include <cstddef>
+#include <condition_variable>
 #include <cstring>
 #include <filesystem>
 #include <fstream>
 #include <string>
 #include <thread>
 #include <vector>
+
+#if defined(SAO_LAUNCHER_PROVIDER_HAS_PYTHON) || defined(SAO_LAUNCHER_PROVIDER_HAS_CSHARP)
+extern "C" size_t sao_launcher_test_platform_timer_count() noexcept;
+extern "C" size_t sao_launcher_test_platform_timer_worker_count() noexcept;
+extern "C" uint64_t sao_launcher_test_platform_timer_unregister_attempt_count() noexcept;
+extern "C" void sao_launcher_test_fire_timer_during_register(bool enabled) noexcept;
+extern "C" void sao_launcher_test_fail_next_timer_unregister(bool enabled) noexcept;
+#endif
 
 namespace {
 
@@ -99,7 +112,385 @@ std::string path_utf8(const fs::path& path) {
     return output;
 }
 
+sao::plugins::loader::plugin_handle_t add_external_plugin(const char* plugin_id,
+                                                           const fs::path& source_path) {
+    sao::plugins::loader::plugin_manifest manifest;
+    manifest.plugin_id = plugin_id;
+    manifest.name = plugin_id;
+    manifest.version = "1.0.0";
+    manifest.entry = "fixture.emma";
+    manifest.language = sao::plugins::loader::engine_kind::emma;
+    manifest.source_path = source_path.string();
+    manifest.abi_version = 2;
+    sao::plugins::loader::plugin_handle_t handle = nullptr;
+    REQUIRE(sao::plugins::loader::sao_plugins_registry_add_plugin(
+                sao::plugins::loader::sao_plugins_registry_instance(), &manifest, &handle) ==
+            SAO_OK);
+    return handle;
+}
+
+void platform_timer_callback(void*) {}
+
+int32_t platform_render_callback(const char*, const char*, char**, void*) {
+    return SAO_OK;
+}
+
+#if defined(SAO_LAUNCHER_PROVIDER_HAS_PYTHON) || defined(SAO_LAUNCHER_PROVIDER_HAS_CSHARP)
+template <typename Predicate>
+bool wait_until(Predicate&& predicate,
+                std::chrono::milliseconds timeout = std::chrono::milliseconds(5000)) {
+    const auto deadline = std::chrono::steady_clock::now() + timeout;
+    while (std::chrono::steady_clock::now() < deadline) {
+        if (predicate())
+            return true;
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+    return predicate();
+}
+
+struct one_shot_probe {
+    sao::plugins::loader::plugin_context_t* context = nullptr;
+    std::array<char, 32> token{};
+    std::atomic_bool token_ready{false};
+    std::atomic_uint32_t callbacks{0};
+    std::atomic_uint32_t callbacks_before_token{0};
+    bool complete_loader_ledger = true;
+    bool block_callback = false;
+    std::mutex mutex;
+    std::condition_variable condition;
+    bool entered = false;
+    bool release = false;
+};
+
+void one_shot_callback(void* user_data) {
+    auto& probe = *static_cast<one_shot_probe*>(user_data);
+    if (!probe.token_ready.load(std::memory_order_acquire)) {
+        probe.callbacks_before_token.fetch_add(1, std::memory_order_relaxed);
+    } else if (probe.complete_loader_ledger) {
+        (void)sao::plugins::loader::sao_plugins_ctx_complete_timer(probe.context,
+                                                                   probe.token.data());
+    }
+    probe.callbacks.fetch_add(1, std::memory_order_relaxed);
+    if (!probe.block_callback)
+        return;
+    std::unique_lock lock(probe.mutex);
+    probe.entered = true;
+    probe.condition.notify_all();
+    probe.condition.wait(lock, [&probe] { return probe.release; });
+}
+
+void publish_timer_token(one_shot_probe& probe, char* token) {
+    REQUIRE(token != nullptr);
+    REQUIRE(token[0] != '\0');
+    REQUIRE(strlen(token) < probe.token.size());
+    strcpy_s(probe.token.data(), probe.token.size(), token);
+    sao::plugins::loader::sao_plugins_ctx_free_string(token);
+    probe.token_ready.store(true, std::memory_order_release);
+}
+
+bool wait_for_blocked_callback(one_shot_probe& probe) {
+    std::unique_lock lock(probe.mutex);
+    return probe.condition.wait_for(lock, std::chrono::seconds(5),
+                                    [&probe] { return probe.entered; });
+}
+
+void release_blocked_callback(one_shot_probe& probe) {
+    {
+        std::lock_guard lock(probe.mutex);
+        probe.release = true;
+    }
+    probe.condition.notify_all();
+}
+#endif
+
 } // namespace
+
+TEST_CASE("launcher owns real platform provider sessions and excludes unwired capabilities",
+          "[launcher][provider][plugins][platform][focused]") {
+    temporary_tree tree("platform_provider");
+    REQUIRE(fs::create_directories(tree.root() / "plugins"));
+    REQUIRE(sao::launcher::loadLauncherProviderConfiguration(tree.root().c_str(), nullptr) ==
+            SAO_STATUS_OK);
+
+    sao_plugins_registry* registry = nullptr;
+    REQUIRE(sao_plugins_discover(nullptr, &registry) == SAO_STATUS_OK);
+    REQUIRE(registry != nullptr);
+
+    const auto handle = add_external_plugin("launcher_platform_provider_probe", tree.root());
+    auto* context = sao::plugins::loader::sao_plugins_ctx_create(handle);
+    REQUIRE(context != nullptr);
+
+    wchar_t* selected_path = reinterpret_cast<wchar_t*>(1);
+    CHECK(sao::plugins::loader::sao_plugins_ctx_open_file(context, "[]", "Pick", L"", 0,
+                                                           &selected_path) ==
+          sao::plugins::loader::SAO_PLUGINS_ERR_UNSUPPORTED);
+    CHECK(selected_path == nullptr);
+    CHECK(sao::plugins::loader::sao_plugins_ctx_open_window(context, "probe", 320, 240) ==
+          sao::plugins::loader::SAO_PLUGINS_ERR_UNSUPPORTED);
+    CHECK(sao::plugins::loader::sao_plugins_ctx_register_hotkey(
+              context, "probe", "F12", "Probe", platform_timer_callback, nullptr) ==
+          sao::plugins::loader::SAO_PLUGINS_ERR_UNSUPPORTED);
+    uint32_t render_token = 0;
+    CHECK(sao::plugins::loader::sao_plugins_ctx_register_render_hook(
+              context, "probe", 0.0F, platform_render_callback, nullptr, &render_token) ==
+          sao::plugins::loader::SAO_PLUGINS_ERR_UNSUPPORTED);
+    CHECK(render_token == 0);
+    CHECK(sao::plugins::loader::sao_plugins_ctx_set_overlay(context, "probe", "{}") ==
+          sao::plugins::loader::SAO_PLUGINS_ERR_UNSUPPORTED);
+    CHECK(sao::plugins::loader::sao_plugins_ctx_request_redraw(context, "probe", "test") ==
+          sao::plugins::loader::SAO_PLUGINS_ERR_UNSUPPORTED);
+    CHECK(sao::plugins::loader::sao_plugins_ctx_create_compositor_layer(
+              context, "probe", 4, 4, 0, 0, 0, true, false, 0) ==
+          sao::plugins::loader::SAO_PLUGINS_ERR_UNSUPPORTED);
+
+#if defined(SAO_LAUNCHER_PROVIDER_HAS_PYTHON) || defined(SAO_LAUNCHER_PROVIDER_HAS_CSHARP)
+    char* timer_token = nullptr;
+    REQUIRE(sao::plugins::loader::sao_plugins_ctx_set_interval(
+                context, platform_timer_callback, 60.0, nullptr, &timer_token) == SAO_OK);
+    REQUIRE(timer_token != nullptr);
+    REQUIRE(sao::plugins::loader::sao_plugins_ctx_clear_timer(context, timer_token) == SAO_OK);
+    sao::plugins::loader::sao_plugins_ctx_free_string(timer_token);
+    REQUIRE(sao::plugins::loader::sao_plugins_ctx_notify(context, "Provider", "Ready", 0.1,
+                                                          "info") == SAO_OK);
+    REQUIRE(sao::plugins::loader::sao_plugins_ctx_dismiss_notify(context) == SAO_OK);
+#else
+    char* timer_token = reinterpret_cast<char*>(1);
+    CHECK(sao::plugins::loader::sao_plugins_ctx_set_interval(
+              context, platform_timer_callback, 60.0, nullptr, &timer_token) ==
+          sao::plugins::loader::SAO_PLUGINS_ERR_UNSUPPORTED);
+    CHECK(timer_token == nullptr);
+    CHECK(sao::plugins::loader::sao_plugins_ctx_notify(context, "Provider", "Ready", 0.1,
+                                                        "info") ==
+          sao::plugins::loader::SAO_PLUGINS_ERR_UNSUPPORTED);
+#endif
+
+    CHECK(sao_plugins_shutdown(registry) != SAO_STATUS_OK);
+    sao::plugins::loader::sao_plugins_ctx_destroy(context);
+    REQUIRE(sao::plugins::loader::sao_plugins_registry_remove(
+                sao::plugins::loader::sao_plugins_registry_instance(), handle) == SAO_OK);
+    REQUIRE(sao_plugins_shutdown(registry) == SAO_STATUS_OK);
+}
+
+#if defined(SAO_LAUNCHER_PROVIDER_HAS_PYTHON) || defined(SAO_LAUNCHER_PROVIDER_HAS_CSHARP)
+TEST_CASE("launcher one-shot timeouts release SDK timers without map or worker growth",
+          "[launcher][provider][plugins][platform][timer][one-shot][focused]") {
+    temporary_tree tree("platform_timeout_stress");
+    REQUIRE(fs::create_directories(tree.root() / "plugins"));
+    REQUIRE(sao::launcher::loadLauncherProviderConfiguration(tree.root().c_str(), nullptr) ==
+            SAO_STATUS_OK);
+
+    sao_plugins_registry* registry = nullptr;
+    REQUIRE(sao_plugins_discover(nullptr, &registry) == SAO_STATUS_OK);
+    const auto handle = add_external_plugin("launcher_timeout_stress", tree.root());
+    auto* context = sao::plugins::loader::sao_plugins_ctx_create(handle);
+    REQUIRE(context != nullptr);
+    REQUIRE(sao_launcher_test_platform_timer_count() == 0);
+    REQUIRE(sao_launcher_test_platform_timer_worker_count() == 0);
+
+    constexpr size_t kBatchSize = 48;
+    for (int batch = 0; batch < 2; ++batch) {
+        std::vector<one_shot_probe> probes(kBatchSize);
+        for (auto& probe : probes) {
+            probe.context = context;
+            char* token = nullptr;
+            REQUIRE(sao::plugins::loader::sao_plugins_ctx_set_timeout(
+                        context, one_shot_callback, 0.1, &probe, &token) == SAO_OK);
+            publish_timer_token(probe, token);
+        }
+        REQUIRE(wait_until([&probes] {
+            return std::all_of(probes.begin(), probes.end(), [](const one_shot_probe& probe) {
+                return probe.callbacks.load(std::memory_order_relaxed) == 1;
+            });
+        }));
+        REQUIRE(wait_until([] { return sao_launcher_test_platform_timer_count() == 0; }));
+        CHECK(std::all_of(probes.begin(), probes.end(), [](const one_shot_probe& probe) {
+            return probe.callbacks_before_token.load(std::memory_order_relaxed) == 0;
+        }));
+        CHECK(sao_launcher_test_platform_timer_worker_count() == 1);
+    }
+
+    sao::plugins::loader::sao_plugins_ctx_destroy(context);
+    REQUIRE(wait_until([] { return sao_launcher_test_platform_timer_worker_count() == 0; }));
+    REQUIRE(sao::plugins::loader::sao_plugins_registry_remove(
+                sao::plugins::loader::sao_plugins_registry_instance(), handle) == SAO_OK);
+    REQUIRE(sao_plugins_shutdown(registry) == SAO_STATUS_OK);
+}
+
+TEST_CASE("launcher defers a synchronous registration callback until timer publication",
+          "[launcher][provider][plugins][platform][timer][registration][focused]") {
+    temporary_tree tree("platform_timeout_sync_register");
+    REQUIRE(fs::create_directories(tree.root() / "plugins"));
+    REQUIRE(sao::launcher::loadLauncherProviderConfiguration(tree.root().c_str(), nullptr) ==
+            SAO_STATUS_OK);
+
+    sao_plugins_registry* registry = nullptr;
+    REQUIRE(sao_plugins_discover(nullptr, &registry) == SAO_STATUS_OK);
+    const auto handle = add_external_plugin("launcher_timeout_sync_register", tree.root());
+    auto* context = sao::plugins::loader::sao_plugins_ctx_create(handle);
+    REQUIRE(context != nullptr);
+
+    one_shot_probe probe;
+    probe.context = context;
+    sao_launcher_test_fire_timer_during_register(true);
+    char* token = nullptr;
+    REQUIRE(sao::plugins::loader::sao_plugins_ctx_set_timeout(
+                context, one_shot_callback, 0.1, &probe, &token) == SAO_OK);
+    CHECK(probe.callbacks.load(std::memory_order_relaxed) == 0);
+    publish_timer_token(probe, token);
+    REQUIRE(wait_until([&probe] {
+        return probe.callbacks.load(std::memory_order_relaxed) == 1;
+    }));
+    REQUIRE(wait_until([] { return sao_launcher_test_platform_timer_count() == 0; }));
+    CHECK(probe.callbacks_before_token.load(std::memory_order_relaxed) == 0);
+
+    sao::plugins::loader::sao_plugins_ctx_destroy(context);
+    REQUIRE(sao::plugins::loader::sao_plugins_registry_remove(
+                sao::plugins::loader::sao_plugins_registry_instance(), handle) == SAO_OK);
+    REQUIRE(sao_plugins_shutdown(registry) == SAO_STATUS_OK);
+}
+
+TEST_CASE("launcher timer clear and shutdown race deferred cleanup idempotently",
+          "[launcher][provider][plugins][platform][timer][concurrency][focused]") {
+    temporary_tree tree("platform_timeout_concurrent_cleanup");
+    REQUIRE(fs::create_directories(tree.root() / "plugins"));
+    REQUIRE(sao::launcher::loadLauncherProviderConfiguration(tree.root().c_str(), nullptr) ==
+            SAO_STATUS_OK);
+
+    sao_plugins_registry* registry = nullptr;
+    REQUIRE(sao_plugins_discover(nullptr, &registry) == SAO_STATUS_OK);
+    const auto handle = add_external_plugin("launcher_timeout_concurrent_cleanup", tree.root());
+    auto* context = sao::plugins::loader::sao_plugins_ctx_create(handle);
+    REQUIRE(context != nullptr);
+
+    one_shot_probe probe;
+    probe.context = context;
+    probe.complete_loader_ledger = false;
+    probe.block_callback = true;
+    char* token = nullptr;
+    REQUIRE(sao::plugins::loader::sao_plugins_ctx_set_timeout(
+                context, one_shot_callback, 0.02, &probe, &token) == SAO_OK);
+    publish_timer_token(probe, token);
+    REQUIRE(wait_for_blocked_callback(probe));
+
+    const auto attempts = sao_launcher_test_platform_timer_unregister_attempt_count();
+    std::atomic_int32_t clear_status{SAO_ERR_NOT_INITIALIZED};
+    std::thread clear_thread([&] {
+        clear_status.store(sao::plugins::loader::sao_plugins_ctx_clear_timer(
+                               context, probe.token.data()),
+                           std::memory_order_release);
+    });
+    REQUIRE(wait_until([attempts] {
+        return sao_launcher_test_platform_timer_unregister_attempt_count() > attempts;
+    }));
+    CHECK(sao_plugins_shutdown(registry) != SAO_STATUS_OK);
+    release_blocked_callback(probe);
+    clear_thread.join();
+    CHECK(clear_status.load(std::memory_order_acquire) == SAO_OK);
+    REQUIRE(wait_until([] { return sao_launcher_test_platform_timer_count() == 0; }));
+
+    sao::plugins::loader::sao_plugins_ctx_destroy(context);
+    REQUIRE(sao::plugins::loader::sao_plugins_registry_remove(
+                sao::plugins::loader::sao_plugins_registry_instance(), handle) == SAO_OK);
+    REQUIRE(sao_plugins_shutdown(registry) == SAO_STATUS_OK);
+}
+
+TEST_CASE("launcher preserves failed one-shot unregister for teardown retry",
+          "[launcher][provider][plugins][platform][timer][retry][focused]") {
+    temporary_tree tree("platform_timeout_unregister_retry");
+    REQUIRE(fs::create_directories(tree.root() / "plugins"));
+    REQUIRE(sao::launcher::loadLauncherProviderConfiguration(tree.root().c_str(), nullptr) ==
+            SAO_STATUS_OK);
+
+    sao_plugins_registry* registry = nullptr;
+    REQUIRE(sao_plugins_discover(nullptr, &registry) == SAO_STATUS_OK);
+    const auto handle = add_external_plugin("launcher_timeout_unregister_retry", tree.root());
+    auto* context = sao::plugins::loader::sao_plugins_ctx_create(handle);
+    REQUIRE(context != nullptr);
+
+    one_shot_probe probe;
+    probe.context = context;
+    char* token = nullptr;
+    REQUIRE(sao::plugins::loader::sao_plugins_ctx_set_timeout(
+                context, one_shot_callback, 0.1, &probe, &token) == SAO_OK);
+    publish_timer_token(probe, token);
+    const auto attempts = sao_launcher_test_platform_timer_unregister_attempt_count();
+    sao_launcher_test_fail_next_timer_unregister(true);
+    REQUIRE(wait_until([&probe] {
+        return probe.callbacks.load(std::memory_order_relaxed) == 1;
+    }));
+    REQUIRE(wait_until([attempts] {
+        return sao_launcher_test_platform_timer_unregister_attempt_count() > attempts;
+    }));
+    CHECK(sao_launcher_test_platform_timer_count() == 1);
+
+    sao::plugins::loader::sao_plugins_ctx_destroy(context);
+    REQUIRE(wait_until([] { return sao_launcher_test_platform_timer_count() == 0; }));
+    REQUIRE(wait_until([] { return sao_launcher_test_platform_timer_worker_count() == 0; }));
+    CHECK(sao_launcher_test_platform_timer_unregister_attempt_count() >= attempts + 2);
+    REQUIRE(sao::plugins::loader::sao_plugins_registry_remove(
+                sao::plugins::loader::sao_plugins_registry_instance(), handle) == SAO_OK);
+    REQUIRE(sao_plugins_shutdown(registry) == SAO_STATUS_OK);
+}
+#endif
+
+TEST_CASE("launcher owns dependency path sessions across shutdown retry",
+          "[launcher][provider][plugins][deps][focused]") {
+    temporary_tree tree("deps_provider");
+    REQUIRE(fs::create_directories(tree.root() / "plugins"));
+    const auto dependency_path = tree.root() / "libs";
+    REQUIRE(fs::create_directories(dependency_path));
+    REQUIRE(sao::launcher::loadLauncherProviderConfiguration(tree.root().c_str(), nullptr) ==
+            SAO_STATUS_OK);
+
+    sao_plugins_registry* registry = nullptr;
+    REQUIRE(sao_plugins_discover(nullptr, &registry) == SAO_STATUS_OK);
+    REQUIRE(registry != nullptr);
+
+    sao::plugins::loader::deps_bootstrap_record record;
+    record.added_paths.push_back(fs::absolute(dependency_path).wstring());
+    sao::plugins::loader::deps_session_t session = nullptr;
+    REQUIRE(sao::plugins::loader::sao_plugins_deps_attach(
+                "launcher_deps_provider_probe", tree.root().c_str(), &record, &session) == SAO_OK);
+    REQUIRE(session != nullptr);
+
+    CHECK(sao_plugins_shutdown(registry) != SAO_STATUS_OK);
+    REQUIRE(sao::plugins::loader::sao_plugins_deps_session_close(session) == SAO_OK);
+    REQUIRE(sao_plugins_shutdown(registry) == SAO_STATUS_OK);
+
+    registry = nullptr;
+    REQUIRE(sao_plugins_discover(nullptr, &registry) == SAO_STATUS_OK);
+    REQUIRE(registry != nullptr);
+    REQUIRE(sao_plugins_shutdown(registry) == SAO_STATUS_OK);
+}
+
+TEST_CASE("failed second discovery preserves the first registry provider owners",
+          "[launcher][provider][plugins][registration][rollback][focused]") {
+    temporary_tree tree("provider_registration_rollback");
+    REQUIRE(fs::create_directories(tree.root() / "plugins"));
+    const auto dependency_path = tree.root() / "libs";
+    REQUIRE(fs::create_directories(dependency_path));
+    REQUIRE(sao::launcher::loadLauncherProviderConfiguration(tree.root().c_str(), nullptr) ==
+            SAO_STATUS_OK);
+
+    sao_plugins_registry* first = nullptr;
+    REQUIRE(sao_plugins_discover(nullptr, &first) == SAO_STATUS_OK);
+    REQUIRE(first != nullptr);
+    sao_plugins_registry* second = nullptr;
+    CHECK(sao_plugins_discover(nullptr, &second) ==
+          sao::plugins::loader::SAO_PLUGINS_ERR_ALREADY_EXISTS);
+    CHECK(second == nullptr);
+
+    sao::plugins::loader::deps_bootstrap_record record;
+    record.added_paths.push_back(fs::absolute(dependency_path).wstring());
+    sao::plugins::loader::deps_session_t session = nullptr;
+    REQUIRE(sao::plugins::loader::sao_plugins_deps_attach(
+                "launcher_provider_registration_probe", tree.root().c_str(), &record, &session) ==
+            SAO_OK);
+    REQUIRE(session != nullptr);
+    CHECK(sao_plugins_shutdown(first) != SAO_STATUS_OK);
+    REQUIRE(sao::plugins::loader::sao_plugins_deps_session_close(session) == SAO_OK);
+    REQUIRE(sao_plugins_shutdown(first) == SAO_STATUS_OK);
+}
 
 TEST_CASE("provider defaults use only existing packaged roots",
           "[launcher][provider][plugins][focused]") {

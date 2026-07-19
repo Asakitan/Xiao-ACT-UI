@@ -534,6 +534,53 @@ sao_status_t retryPendingCleanup() noexcept {
     return SAO_STATUS_OK;
 }
 
+using StreamingModeAcquireFn = sao_status_t (*)(void* user_data);
+using StreamingModeGetFn = bool (*)(void* user_data);
+using StreamingModeSetFn = sao_status_t (*)(bool enabled, void* user_data);
+using StreamingModeReleaseFn = sao_status_t (*)(void* user_data);
+
+sao_status_t applyStreamingModeTransaction(
+    bool enabled, StreamingModeAcquireFn acquire, StreamingModeGetFn get_flow,
+    StreamingModeGetFn get_capture, StreamingModeSetFn set_capture,
+    StreamingModeSetFn set_flow, StreamingModeReleaseFn release, void* user_data) {
+    sao_status_t status = acquire(user_data);
+    if (status != SAO_STATUS_OK) {
+        return status;
+    }
+
+    const bool previous_flow = get_flow(user_data);
+    const bool previous_capture = get_capture(user_data);
+    status = set_capture(enabled, user_data);
+    if (status == SAO_STATUS_OK) {
+        status = set_flow(enabled, user_data);
+    }
+
+    sao_status_t compensation_status = SAO_STATUS_OK;
+    if (status != SAO_STATUS_OK) {
+        compensation_status = set_capture(previous_capture, user_data);
+        const sao_status_t flow_status = set_flow(previous_flow, user_data);
+        if (compensation_status == SAO_STATUS_OK) {
+            compensation_status = flow_status;
+        }
+    }
+
+    const sao_status_t release_status = release(user_data);
+    if (release_status != SAO_STATUS_OK && status == SAO_STATUS_OK) {
+        compensation_status = set_capture(previous_capture, user_data);
+        const sao_status_t flow_status = set_flow(previous_flow, user_data);
+        if (compensation_status == SAO_STATUS_OK) {
+            compensation_status = flow_status;
+        }
+    }
+    if (compensation_status != SAO_STATUS_OK) {
+        return compensation_status;
+    }
+    if (release_status != SAO_STATUS_OK) {
+        return release_status;
+    }
+    return status;
+}
+
 } // namespace
 
 extern "C" sao_status_t sao_launcher_init_pipeline_retry_pending_cleanup(void) {
@@ -685,6 +732,18 @@ sao_launcher_set_composition_test_hooks(const sao_launcher_composition_test_hook
 extern "C" {
 
 #if defined(SAO_LAUNCHER_COMPOSITION_TEST_PROVIDER)
+sao_status_t sao_launcher_init_pipeline_test_apply_streaming_mode_transaction(
+    bool enabled, sao_status_t (*acquire)(void*), bool (*get_flow)(void*),
+    bool (*get_capture)(void*), sao_status_t (*set_capture)(bool, void*),
+    sao_status_t (*set_flow)(bool, void*), sao_status_t (*release)(void*), void* user_data) {
+    if (acquire == nullptr || get_flow == nullptr || get_capture == nullptr ||
+        set_capture == nullptr || set_flow == nullptr || release == nullptr) {
+        return SAO_STATUS_INVALID_ARGUMENT;
+    }
+    return applyStreamingModeTransaction(enabled, acquire, get_flow, get_capture, set_capture,
+                                         set_flow, release, user_data);
+}
+
 sao_status_t sao_platform_bringup(const sao_platform_config* cfg, sao_platform_ctx** ctx_out) {
     if (!g_composition_test_hooks.platform_bringup) {
         return SAO_STATUS_NOT_IMPLEMENTED;
@@ -824,30 +883,24 @@ sao_status_t apply_streaming_mode(bool enabled, void* user_data) {
     if (ctx == nullptr || ctx->overlay_host == nullptr || !ctx->streaming_flow_started) {
         return SAO_STATUS_ERR_NOT_INITIALIZED;
     }
-    sao_status_t status = sao_streaming_flow_mode_lock_acquire(2.0);
-    if (status != SAO_STATUS_OK) {
-        return status;
-    }
-    const bool previous_flow = sao_streaming_flow_get_mode();
-    const bool previous_capture = sao_ui_overlay_host_capture_excluded(ctx->overlay_host);
-    status = sao_ui_overlay_host_set_capture_mode(ctx->overlay_host, enabled);
-    if (status == SAO_STATUS_OK && sao_streaming_flow_set_mode(enabled) == 0) {
-        status = SAO_STATUS_ERR_NOT_INITIALIZED;
-    }
-    sao_status_t compensation_status = SAO_STATUS_OK;
-    if (status != SAO_STATUS_OK) {
-        compensation_status =
-            sao_ui_overlay_host_set_capture_mode(ctx->overlay_host, previous_capture);
-        if (sao_streaming_flow_set_mode(previous_flow) == 0 &&
-            compensation_status == SAO_STATUS_OK) {
-            compensation_status = SAO_STATUS_ERR_NOT_INITIALIZED;
-        }
-    }
-    const sao_status_t release_status = sao_streaming_flow_mode_lock_release();
-    if (compensation_status != SAO_STATUS_OK || release_status != SAO_STATUS_OK) {
-        return SAO_STATUS_ERR_UNKNOWN;
-    }
-    return status;
+    return applyStreamingModeTransaction(
+        enabled,
+        [](void*) { return sao_streaming_flow_mode_lock_acquire(2.0); },
+        [](void*) { return sao_streaming_flow_get_mode(); },
+        [](void* context) {
+            return sao_ui_overlay_host_capture_excluded(
+                static_cast<sao_platform_ctx*>(context)->overlay_host);
+        },
+        [](bool exclude, void* context) {
+            return sao_ui_overlay_host_set_capture_mode(
+                static_cast<sao_platform_ctx*>(context)->overlay_host, exclude);
+        },
+        [](bool exclude, void*) -> sao_status_t {
+            return sao_streaming_flow_set_mode(exclude) == 0
+                       ? SAO_STATUS_ERR_NOT_INITIALIZED
+                       : SAO_STATUS_OK;
+        },
+        [](void*) { return sao_streaming_flow_mode_lock_release(); }, ctx);
 }
 
 sao_status_t persist_streaming_mode(bool enabled, void* user_data) {

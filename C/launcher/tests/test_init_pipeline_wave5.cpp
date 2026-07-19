@@ -38,6 +38,11 @@
 using sao::launcher::SAO_EXIT_ALREADY_RUNNING;
 using sao::launcher::SAO_EXIT_OK;
 
+extern "C" sao_status_t sao_launcher_init_pipeline_test_apply_streaming_mode_transaction(
+    bool enabled, sao_status_t (*acquire)(void*), bool (*get_flow)(void*),
+    bool (*get_capture)(void*), sao_status_t (*set_capture)(bool, void*),
+    sao_status_t (*set_flow)(bool, void*), sao_status_t (*release)(void*), void* user_data);
+
 namespace {
 
 struct TeardownRecorder {
@@ -197,6 +202,48 @@ struct CompositionHookGuard {
     sao_launcher_composition_test_hooks_t hooks{};
 };
 
+struct StreamingModeTransactionRecorder {
+    bool capture_excluded = false;
+    bool flow_excluded = false;
+    bool locked = false;
+    std::vector<std::string> steps;
+
+    static sao_status_t acquire(void* user_data) {
+        auto* self = static_cast<StreamingModeTransactionRecorder*>(user_data);
+        self->steps.emplace_back("acquire");
+        self->locked = true;
+        return SAO_STATUS_OK;
+    }
+
+    static bool getFlow(void* user_data) {
+        return static_cast<StreamingModeTransactionRecorder*>(user_data)->flow_excluded;
+    }
+
+    static bool getCapture(void* user_data) {
+        return static_cast<StreamingModeTransactionRecorder*>(user_data)->capture_excluded;
+    }
+
+    static sao_status_t setCapture(bool enabled, void* user_data) {
+        auto* self = static_cast<StreamingModeTransactionRecorder*>(user_data);
+        self->steps.emplace_back(enabled ? "capture_on" : "capture_off");
+        self->capture_excluded = enabled;
+        return SAO_STATUS_OK;
+    }
+
+    static sao_status_t setFlow(bool enabled, void* user_data) {
+        auto* self = static_cast<StreamingModeTransactionRecorder*>(user_data);
+        self->steps.emplace_back(enabled ? "flow_on" : "flow_off");
+        self->flow_excluded = enabled;
+        return SAO_STATUS_OK;
+    }
+
+    static sao_status_t releaseFailure(void* user_data) {
+        auto* self = static_cast<StreamingModeTransactionRecorder*>(user_data);
+        self->steps.emplace_back("release_failed");
+        return SAO_STATUS_INTERNAL;
+    }
+};
+
 struct ConfigFile {
     explicit ConfigFile(const char* content) {
         wchar_t temp_path[MAX_PATH]{};
@@ -334,6 +381,26 @@ TEST_CASE("launcher_init_pipeline_run_no_deps_returns_ok", "[launcher][init_pipe
     REQUIRE(exit_code == SAO_EXIT_OK);
     // BaseDir must be populated once resolveWorkingDir completes.
     REQUIRE(SaoLauncherBaseDir[0] != L'\0');
+}
+
+TEST_CASE("launcher streaming mode release failure compensates applied state",
+          "[launcher][init_pipeline][streaming][transaction]") {
+    StreamingModeTransactionRecorder recorder;
+
+    CHECK(sao_launcher_init_pipeline_test_apply_streaming_mode_transaction(
+              true, &StreamingModeTransactionRecorder::acquire,
+              &StreamingModeTransactionRecorder::getFlow,
+              &StreamingModeTransactionRecorder::getCapture,
+              &StreamingModeTransactionRecorder::setCapture,
+              &StreamingModeTransactionRecorder::setFlow,
+              &StreamingModeTransactionRecorder::releaseFailure, &recorder) ==
+          SAO_STATUS_INTERNAL);
+    CHECK_FALSE(recorder.capture_excluded);
+    CHECK_FALSE(recorder.flow_excluded);
+    CHECK(recorder.locked);
+    CHECK(recorder.steps == std::vector<std::string>{"acquire", "capture_on", "flow_on",
+                                                     "release_failed", "capture_off",
+                                                     "flow_off"});
 }
 
 TEST_CASE("launcher_init_pipeline_teardown_reverse_order", "[launcher][init_pipeline][wave5]") {
