@@ -50,9 +50,29 @@ struct OwnedEntityProvider {
     bool operator==(const OwnedEntityProvider&) const = default;
 };
 
+struct OwnedEntityRootActionRef {
+    std::string provider_id;
+    std::string action_id;
+
+    bool operator==(const OwnedEntityRootActionRef&) const = default;
+};
+
+struct OwnedEntityRootContribution {
+    std::string owner_plugin_id;
+    std::string contribution_id;
+    std::string root_id;
+    std::string name;
+    std::string icon;
+    double priority = 0.0;
+    std::vector<OwnedEntityRootActionRef> actions;
+
+    bool operator==(const OwnedEntityRootContribution&) const = default;
+};
+
 struct OwnedEntityProviderCatalog {
     std::uint64_t revision = 0;
     std::vector<OwnedEntityProvider> providers;
+    std::vector<OwnedEntityRootContribution> root_contributions;
 
     bool operator==(const OwnedEntityProviderCatalog&) const = default;
 };
@@ -61,6 +81,8 @@ namespace detail {
 
 inline constexpr std::size_t kMaximumCatalogProviders = 4096;
 inline constexpr std::size_t kMaximumCatalogRows = entity_action_routes::kMaximumRows;
+inline constexpr std::size_t kMaximumRootContributions = 59;
+inline constexpr std::size_t kMaximumRootActions = 1024;
 inline constexpr std::size_t kMaximumViewStringBytes = 16 * 1024;
 
 inline bool valid_utf8(std::string_view value) noexcept {
@@ -179,7 +201,9 @@ copy_catalog_callback(const loader::entity_provider_catalog_view* view, void* us
     auto& context = *static_cast<CopyContext*>(user_data);
     try {
         if (view->provider_count > kMaximumCatalogProviders ||
-            (view->provider_count > 0 && view->providers == nullptr)) {
+            (view->provider_count > 0 && view->providers == nullptr) ||
+            view->root_contribution_count > kMaximumRootContributions ||
+            (view->root_contribution_count > 0 && view->root_contributions == nullptr)) {
             return SAO_ERR_INVALID_ARGUMENT;
         }
         OwnedEntityProviderCatalog candidate;
@@ -220,6 +244,50 @@ copy_catalog_callback(const loader::entity_provider_catalog_view* view, void* us
             }
             total_rows += provider.rows.size();
             candidate.providers.push_back(std::move(provider));
+        }
+        std::size_t total_root_actions = 0;
+        candidate.root_contributions.reserve(view->root_contribution_count);
+        for (std::uint32_t root_index = 0; root_index < view->root_contribution_count;
+             ++root_index) {
+            const auto& root_view = view->root_contributions[root_index];
+            if (root_view.struct_size < sizeof(loader::entity_root_contribution_view) ||
+                !std::isfinite(root_view.priority) ||
+                root_view.action_count > kMaximumRootActions - total_root_actions ||
+                (root_view.action_count > 0 && root_view.actions == nullptr)) {
+                return SAO_ERR_INVALID_ARGUMENT;
+            }
+            OwnedEntityRootContribution root;
+            if (!copy_string(root_view.owner_plugin_id_utf8, true, kMaximumViewStringBytes,
+                             total_string_bytes, root.owner_plugin_id) ||
+                !copy_string(root_view.contribution_id_utf8, true, kMaximumViewStringBytes,
+                             total_string_bytes, root.contribution_id) ||
+                !copy_string(root_view.root_id_utf8, true, kMaximumViewStringBytes,
+                             total_string_bytes, root.root_id) ||
+                !copy_string(root_view.name_utf8, true, kMaximumViewStringBytes, total_string_bytes,
+                             root.name) ||
+                !copy_string(root_view.icon_utf8, false, kMaximumViewStringBytes,
+                             total_string_bytes, root.icon)) {
+                return SAO_ERR_INVALID_ARGUMENT;
+            }
+            root.priority = root_view.priority;
+            root.actions.reserve(root_view.action_count);
+            for (std::uint32_t action_index = 0; action_index < root_view.action_count;
+                 ++action_index) {
+                const auto& action_view = root_view.actions[action_index];
+                if (action_view.struct_size < sizeof(loader::entity_root_action_ref_view)) {
+                    return SAO_ERR_INVALID_ARGUMENT;
+                }
+                OwnedEntityRootActionRef action;
+                if (!copy_string(action_view.provider_id_utf8, true, kMaximumViewStringBytes,
+                                 total_string_bytes, action.provider_id) ||
+                    !copy_string(action_view.action_id_utf8, true, kMaximumViewStringBytes,
+                                 total_string_bytes, action.action_id)) {
+                    return SAO_ERR_INVALID_ARGUMENT;
+                }
+                root.actions.push_back(std::move(action));
+            }
+            total_root_actions += root.actions.size();
+            candidate.root_contributions.push_back(std::move(root));
         }
         context.candidate = std::move(candidate);
         return SAO_OK;

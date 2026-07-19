@@ -17,6 +17,7 @@
 # EXEs in the tree are CLI tools or plugin hosts.
 
 set(SAO_LAUNCHER_HEADERS
+    src/entity_builtin_action_internal.h
     src/entity_action_routes_internal.h
     src/settings_codec_internal.h
     src/settings_json_internal.h
@@ -61,6 +62,11 @@ set(SAO_LAUNCHER_SOURCES
     src/launcher_lifecycle.cpp
     src/user_menu.cpp
 )
+
+if (TARGET sao::ui)
+    list(APPEND SAO_LAUNCHER_SOURCES
+        src/entity_builtin_action_internal.cpp)
+endif()
 
 if (TARGET sao::plugins::loader AND TARGET sao::rt_io AND TARGET sao::ui)
     list(APPEND SAO_LAUNCHER_HEADERS
@@ -283,9 +289,9 @@ target_compile_definitions(SaoAuto PRIVATE
 )
 
 set(SAO_LAUNCHER_DOCS_INDEX
-    "${CMAKE_CURRENT_SOURCE_DIR}/../../python/docs/html/index.html")
+    "${CMAKE_CURRENT_SOURCE_DIR}/docs/html/index.html")
 set(SAO_LAUNCHER_DOCS_STYLE
-    "${CMAKE_CURRENT_SOURCE_DIR}/../../python/docs/html/assets/style.css")
+    "${CMAKE_CURRENT_SOURCE_DIR}/docs/html/assets/style.css")
 if (NOT EXISTS "${SAO_LAUNCHER_DOCS_INDEX}" OR
     NOT EXISTS "${SAO_LAUNCHER_DOCS_STYLE}")
     message(FATAL_ERROR

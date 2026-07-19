@@ -8,6 +8,14 @@
 
 namespace sao::launcher::tool_launch {
 
+inline constexpr bool ai_editor_capability_available() noexcept {
+#if defined(SAO_LAUNCHER_HAS_AI_EDITOR_ABI)
+    return true;
+#else
+    return false;
+#endif
+}
+
 enum class AiEditorLaunchPhase : std::uint8_t {
     idle,
     launching,
@@ -26,7 +34,7 @@ struct AiEditorLaunchSnapshot {
 // Asynchronous owner for the native SaoAiEditor subprocess. The dedicated
 // launcher ABI handshake is the readiness authority; a window is optional.
 class AiEditorProcessOwner final {
-public:
+  public:
     struct State;
 
     explicit AiEditorProcessOwner(std::wstring base_dir);
@@ -40,7 +48,7 @@ public:
     sao_status_t open() noexcept;
     sao_status_t snapshot(AiEditorLaunchSnapshot& out) const noexcept;
 
-private:
+  private:
     std::shared_ptr<State> state_;
 };
 

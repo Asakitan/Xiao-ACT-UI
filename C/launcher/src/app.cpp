@@ -7,12 +7,12 @@
 #include "sao/launcher/app.h"
 #include "sao/launcher/args.h"
 #include "sao/launcher/crash_handler.h"
+#include "sao/launcher/dual_run.h"
+#include "sao/launcher/init_pipeline.h"
+#include "sao/launcher/provider_config.h"
+#include "sao/launcher/shutdown.h"
 #include "sao/launcher/single_instance.h"
 #include "sao/launcher/working_dir.h"
-#include "sao/launcher/init_pipeline.h"
-#include "sao/launcher/shutdown.h"
-#include "sao/launcher/dual_run.h"
-#include "sao/launcher/provider_config.h"
 
 #include "launcher_lifecycle.h"
 
@@ -69,12 +69,10 @@ int App::run() {
         completeLauncherLifecycle(lifecycle, exit_code, hint);
         return exit_code;
     };
-    const auto fail = [&](int exit_code, const wchar_t* step,
-                          const char* hint) {
+    const auto fail = [&](int exit_code, const wchar_t* step, const char* hint) {
         int32_t fallback_exit = 0;
-        if (sao_launcher_dual_run_maybe_fallback_to_python(
-                &lifecycle.dual_config, exit_code, step,
-                &fallback_exit)) {
+        if (sao_launcher_dual_run_maybe_fallback_to_python(&lifecycle.dual_config, exit_code, step,
+                                                           &fallback_exit)) {
             shutdown();
             completeLauncherLifecycle(lifecycle, exit_code, hint);
             return fallback_exit;
@@ -93,28 +91,24 @@ int App::run() {
 
         wchar_t inherited_role[64]{};
         const bool is_child_of_dual_run_driver =
-            (GetEnvironmentVariableW(SAO_DUAL_RUN_ENV_VAR_NAME,
-                                      inherited_role, 64) > 0)
-            && inherited_role[0] != L'\0';
+            (GetEnvironmentVariableW(SAO_DUAL_RUN_ENV_VAR_NAME, inherited_role, 64) > 0) &&
+            inherited_role[0] != L'\0';
 
         if (!is_child_of_dual_run_driver) {
-            sao_status_t ms = sao_launcher_dual_run_acquire_driver_mutex(
-                &dual_run_driver_mutex_);
-            if (ms == SAO_STATUS_OK) dual_run_driver_acquired_ = true;
+            sao_status_t ms = sao_launcher_dual_run_acquire_driver_mutex(&dual_run_driver_mutex_);
+            if (ms == SAO_STATUS_OK)
+                dual_run_driver_acquired_ = true;
         }
 
         int32_t should_continue = 1;
         int32_t handoff_exit = 0;
-        sao_status_t zs = sao_launcher_dual_run_step_zero(&dual_cfg,
-                                                           &should_continue,
-                                                           &handoff_exit);
+        sao_status_t zs =
+            sao_launcher_dual_run_step_zero(&dual_cfg, &should_continue, &handoff_exit);
         if (zs == SAO_LAUNCHER_PYTHON_UNAVAILABLE) {
-            return fail(SAO_EXIT_PLATFORM_INIT_FAIL, L"dual_run_step_zero",
-                        "dual_run_step_zero");
+            return fail(SAO_EXIT_PLATFORM_INIT_FAIL, L"dual_run_step_zero", "dual_run_step_zero");
         }
         if (zs != SAO_STATUS_OK) {
-            return fail(SAO_EXIT_PLATFORM_INIT_FAIL, L"dual_run_step_zero",
-                        "dual_run_step_zero");
+            return fail(SAO_EXIT_PLATFORM_INIT_FAIL, L"dual_run_step_zero", "dual_run_step_zero");
         }
         if (should_continue == 0) {
             // Wave 10 harness: parent test observes the exit code (which
@@ -147,11 +141,10 @@ int App::run() {
         return fail(rc, L"working_dir", "working_dir");
     }
 
-    if (loadLauncherProviderConfiguration(
-            state_.base_dir,
-            state_.config_path[0] ? state_.config_path : nullptr) != SAO_STATUS_OK) {
-            return fail(SAO_EXIT_PLATFORM_INIT_FAIL, L"provider_config",
-                    "provider_config");
+    if (loadLauncherProviderConfiguration(state_.base_dir,
+                                          state_.config_path[0] ? state_.config_path : nullptr) !=
+        SAO_STATUS_OK) {
+        return fail(SAO_EXIT_PLATFORM_INIT_FAIL, L"provider_config", "provider_config");
     }
     const auto provider_configuration = launcherProviderConfigurationSnapshot();
 
@@ -231,7 +224,7 @@ int App::run() {
 
 int App::parseCommandLine() {
     bool should_exit = false;
-    int  exit_code   = SAO_EXIT_OK;
+    int exit_code = SAO_EXIT_OK;
     if (!::sao::launcher::parseCommandLine(state_, should_exit, exit_code)) {
         return SAO_EXIT_BAD_ARGS;
     }
@@ -279,6 +272,7 @@ int App::verifyLicense() {
     if (s != SAO_STATUS_OK || !r.valid) {
         return SAO_EXIT_LICENSE_INVALID;
     }
+    state_.streaming_entitled = isPaidLicenseTier(r.tier);
     return SAO_EXIT_OK;
 }
 
@@ -324,14 +318,18 @@ int App::bringUpPlatform() {
 
 int App::discoverPlugins() {
     sao_plugins_registry* reg = nullptr;
-    const sao_status_t status = sao_plugins_discover(
-        static_cast<sao_platform_ctx*>(state_.platform_ctx), &reg);
+    const sao_status_t status =
+        sao_plugins_discover(static_cast<sao_platform_ctx*>(state_.platform_ctx), &reg);
     state_.plugins_registry = reg;
     if (status != SAO_STATUS_OK || reg == nullptr) {
         return SAO_EXIT_PLUGIN_LOAD_FAIL;
     }
 
     if (sao_plugins_activate_autostart(reg) != SAO_STATUS_OK) {
+        return SAO_EXIT_PLUGIN_LOAD_FAIL;
+    }
+    if (sao_platform_bind_plugins(static_cast<sao_platform_ctx*>(state_.platform_ctx), reg) !=
+        SAO_STATUS_OK) {
         return SAO_EXIT_PLUGIN_LOAD_FAIL;
     }
 
@@ -349,8 +347,7 @@ int App::bringUpUi() {
 }
 
 int App::runMessageLoop() {
-    const UINT_PTR timer_id =
-        SetTimer(nullptr, 0, kUiFrameIntervalMs, nullptr);
+    const UINT_PTR timer_id = SetTimer(nullptr, 0, kUiFrameIntervalMs, nullptr);
     if (timer_id == 0) {
         return SAO_EXIT_UI_ONLINE_FAIL;
     }
@@ -361,13 +358,11 @@ int App::runMessageLoop() {
         sao_status_t status = SAO_STATUS_OK;
         if (msg.message == WM_TIMER && msg.wParam == timer_id) {
             handled = 1;
-            status = sao_ui_tick(
-                static_cast<sao_platform_ctx*>(state_.platform_ctx),
-                kUiFrameIntervalMs);
+            status = sao_ui_tick(static_cast<sao_platform_ctx*>(state_.platform_ctx),
+                                 kUiFrameIntervalMs);
         } else {
-            status = sao_ui_handle_message(
-                static_cast<sao_platform_ctx*>(state_.platform_ctx),
-                msg.message, msg.wParam, msg.lParam, &handled);
+            status = sao_ui_handle_message(static_cast<sao_platform_ctx*>(state_.platform_ctx),
+                                           msg.message, msg.wParam, msg.lParam, &handled);
         }
         if (status != SAO_STATUS_OK) {
             KillTimer(nullptr, timer_id);
@@ -379,7 +374,8 @@ int App::runMessageLoop() {
         }
     }
     KillTimer(nullptr, timer_id);
-    if (result < 0) return SAO_EXIT_UI_ONLINE_FAIL;
+    if (result < 0)
+        return SAO_EXIT_UI_ONLINE_FAIL;
     return static_cast<int>(msg.wParam);
 }
 

@@ -27,6 +27,52 @@ using HomeFn = sao_status_t(SAO_UI_CALL*)(sao_ui_entity_shell_handle_t handle);
 
 inline constexpr std::uint32_t kRefreshIntervalMs = 250;
 
+enum class PythonRuntimePublicationStatus : std::uint8_t {
+    not_applicable = 0,
+    ready,
+    degraded_unconfigured,
+    degraded_unavailable,
+    degraded_host_unavailable,
+};
+
+enum class PluginRuntimePublicationStatus : std::uint8_t {
+    not_applicable = 0,
+    ready,
+    degraded_internal,
+};
+
+enum class ControlPublicationStatus : std::uint8_t {
+    ready = 0,
+    degraded_internal,
+};
+
+enum class TopmostPublicationStatus : std::uint8_t {
+    not_applicable = 0,
+    ready,
+    degraded_authority_unavailable,
+};
+
+struct EntityBuiltinAuthorityState {
+    bool publication_available = true;
+    bool topmost = false;
+    bool nervgear = false;
+    bool streaming = false;
+    bool save_settings = false;
+    bool ai_editor = false;
+    bool workshop = false;
+    bool process_selector = false;
+    bool plugin_manager = false;
+    bool reload_plugins = false;
+    bool plugin_status = false;
+    bool fisheye_procedural = false;
+    bool fisheye_live = false;
+    bool theme = false;
+    PythonRuntimePublicationStatus python_runtime = PythonRuntimePublicationStatus::not_applicable;
+    PluginRuntimePublicationStatus plugin_runtime = PluginRuntimePublicationStatus::not_applicable;
+    ControlPublicationStatus controls = ControlPublicationStatus::ready;
+    TopmostPublicationStatus topmost_status = TopmostPublicationStatus::not_applicable;
+};
+
 struct EntityRootContributionActionRef {
     std::string provider_id;
     std::string action_id;
@@ -50,6 +96,10 @@ struct EntityProviderPublicationState {
     std::uint64_t catalog_revision = 0;
     std::uint32_t refresh_elapsed_ms = 0;
     bool has_catalog_revision = false;
+    bool topmost = false;
+    bool streaming_mode = false;
+    EntityBuiltinAuthorityState builtin_authority;
+    entity_provider_catalog::OwnedEntityProviderCatalog published_catalog;
     std::uint64_t root_contribution_revision = 0;
     std::uint64_t published_root_contribution_revision = 0;
     std::vector<EntityRootContributionSpec> root_contributions;

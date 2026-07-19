@@ -18,6 +18,7 @@ set(_sao_launcher_test_sources
     test_single_instance.cpp
     test_working_dir.cpp
     test_init_pipeline_wave5.cpp
+    test_entity_builtin_action_focused.cpp
     test_entity_action_routes_focused.cpp
     test_settings_owner_focused.cpp
     test_tool_launch_focused.cpp
@@ -74,6 +75,7 @@ target_sources(sao_launcher_tests PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/../src/settings_owner.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/../src/tool_launch_internal.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/../src/tool_launch_package_internal.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/../src/entity_builtin_action_internal.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/../src/entity_provider_publication_internal.cpp
 )
 

@@ -6,8 +6,8 @@
 
 #include "sao/launcher/shutdown.h"
 #include "sao/launcher/app.h"
-#include "sao/launcher/single_instance.h"
 #include "sao/launcher/init_pipeline.h"
+#include "sao/launcher/single_instance.h"
 
 namespace sao::launcher {
 
@@ -19,8 +19,13 @@ void takeUiOffline(AppState& state) noexcept {
 
 bool shutdownPlugins(AppState& state) noexcept {
     if (state.plugins_registry) {
-        const sao_status_t status = sao_plugins_shutdown(
-            static_cast<sao_plugins_registry*>(state.plugins_registry));
+        if (state.platform_ctx != nullptr &&
+            sao_platform_bind_plugins(static_cast<sao_platform_ctx*>(state.platform_ctx),
+                                      nullptr) != SAO_STATUS_OK) {
+            return false;
+        }
+        const sao_status_t status =
+            sao_plugins_shutdown(static_cast<sao_plugins_registry*>(state.plugins_registry));
         if (status != SAO_STATUS_OK) {
             return false;
         }
@@ -31,8 +36,7 @@ bool shutdownPlugins(AppState& state) noexcept {
 
 bool tearDownPlatform(AppState& state) noexcept {
     if (state.platform_ctx) {
-        if (sao_platform_teardown(
-                static_cast<sao_platform_ctx*>(state.platform_ctx)) ==
+        if (sao_platform_teardown(static_cast<sao_platform_ctx*>(state.platform_ctx)) ==
             SAO_STATUS_OK) {
             state.platform_ctx = nullptr;
         } else {
@@ -51,7 +55,8 @@ bool shutdownSecurity(bool initialized) noexcept {
 
 bool shutdownShell(AppState& state) noexcept {
     if (state.shell_active) {
-        if (sao_shell_shutdown() != SAO_STATUS_OK) return false;
+        if (sao_shell_shutdown() != SAO_STATUS_OK)
+            return false;
         state.shell_active = false;
     }
     return true;
@@ -59,7 +64,8 @@ bool shutdownShell(AppState& state) noexcept {
 
 bool shutdownLicense(AppState& state) noexcept {
     if (state.license_active) {
-        if (sao_license_shutdown() != SAO_STATUS_OK) return false;
+        if (sao_license_shutdown() != SAO_STATUS_OK)
+            return false;
         state.license_active = false;
     }
     return true;

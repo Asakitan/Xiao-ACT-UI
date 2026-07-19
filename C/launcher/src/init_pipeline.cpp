@@ -13,51 +13,54 @@
 #include "sao/launcher/app.h"
 #include "sao/launcher/args.h"
 #include "sao/launcher/crash_handler.h"
-#include "sao/launcher/single_instance.h"
-#include "sao/launcher/working_dir.h"
-#include "sao/launcher/shutdown.h"
 #include "sao/launcher/dual_run.h"
 #include "sao/launcher/provider_config.h"
+#include "sao/launcher/shutdown.h"
+#include "sao/launcher/single_instance.h"
 #include "sao/launcher/user_menu.h"
+#include "sao/launcher/working_dir.h"
 
 #include "launcher_lifecycle.h"
 
 #ifdef SAO_STATUS_OK
 #undef SAO_STATUS_OK
 #endif
+#include "entity_action_routes_internal.h"
+#include "entity_builtin_action_internal.h"
 #include "settings_owner_internal.h"
 #include "settings_theme_internal.h"
 #include "tool_launch_internal.h"
-#include "entity_action_routes_internal.h"
 
-#if defined(SAO_LAUNCHER_ENTITY_PROVIDER_COMPOSITION) && \
+#if defined(SAO_LAUNCHER_ENTITY_PROVIDER_COMPOSITION) &&                                           \
     !defined(SAO_LAUNCHER_COMPOSITION_TEST_PROVIDER)
 #include "entity_provider_publication_internal.h"
 #include "sao/plugins/loader/entity_provider.h"
 #endif
 
-#include <windows.h>
 #include <cstring>
 #include <cwchar>
 #include <filesystem>
 #include <memory>
+#include <mutex>
 #include <new>
+#include <windows.h>
 
 #if defined(SAO_LAUNCHER_CORE_LOG_PROVIDER)
 #undef SAO_STATUS_OK
 #include "sao/core/logging.h"
 #endif
 
-#if defined(SAO_LAUNCHER_PLATFORM_COMPOSITION_PROVIDER) && \
+#if defined(SAO_LAUNCHER_PLATFORM_COMPOSITION_PROVIDER) &&                                         \
     !defined(SAO_LAUNCHER_COMPOSITION_TEST_PROVIDER)
 #undef SAO_STATUS_OK
 #include "sao/rt_io/proxy.h"
-#include "sao/ui/overlay_host.h"
 #include "sao/ui/entity_shell.h"
+#include "sao/ui/overlay_host.h"
+#include "sao/ui/streaming_flow.h"
 #include "sao/ui/theme.h"
 #endif
 
-#if defined(SAO_LAUNCHER_SECURITY_COMPOSITION_PROVIDER) && \
+#if defined(SAO_LAUNCHER_SECURITY_COMPOSITION_PROVIDER) &&                                         \
     !defined(SAO_LAUNCHER_COMPOSITION_TEST_PROVIDER)
 #include "sao_security/anti_debug/wave8.h"
 #endif
@@ -74,20 +77,24 @@
 // through every C ABI boundary.
 // ---------------------------------------------------------------------------
 
-extern "C" wchar_t SaoLauncherBaseDir[260] = { 0 };
+extern "C" wchar_t SaoLauncherBaseDir[260] = {0};
 
 namespace sao::launcher {
 
-bool buildPlatformConfig(const AppState& state,
-                         sao_platform_config& config,
-                         char* log_level_storage,
-                         std::size_t log_level_capacity) noexcept {
-    if (!log_level_storage || log_level_capacity == 0) return false;
+bool isPaidLicenseTier(const char* tier) noexcept {
+    return tier != nullptr && (_stricmp(tier, "paid") == 0 || _stricmp(tier, "pro") == 0 ||
+                               _stricmp(tier, "team") == 0);
+}
+
+bool buildPlatformConfig(const AppState& state, sao_platform_config& config,
+                         char* log_level_storage, std::size_t log_level_capacity) noexcept {
+    if (!log_level_storage || log_level_capacity == 0)
+        return false;
 
     const wchar_t* source = state.log_level[0] ? state.log_level : L"info";
-    const int converted = WideCharToMultiByte(
-        CP_UTF8, WC_ERR_INVALID_CHARS, source, -1, log_level_storage,
-        static_cast<int>(log_level_capacity), nullptr, nullptr);
+    const int converted =
+        WideCharToMultiByte(CP_UTF8, WC_ERR_INVALID_CHARS, source, -1, log_level_storage,
+                            static_cast<int>(log_level_capacity), nullptr, nullptr);
     if (converted <= 0) {
         log_level_storage[0] = '\0';
         return false;
@@ -122,6 +129,7 @@ bool buildPlatformConfig(const AppState& state,
     config.config_path = state.config_path[0] ? state.config_path : nullptr;
     config.log_level = log_level_storage;
     config.safe_mode = state.safe_mode ? 1 : 0;
+    config.streaming_entitled = state.no_license || state.streaming_entitled ? 1 : 0;
     return true;
 }
 
@@ -133,6 +141,38 @@ constexpr UINT_PTR kUiFrameTimerId = 0x53415549U;
 constexpr int32_t kUiFrameIntervalMs = 16;
 constexpr int32_t kHomeHotkeyId = 0x5341;
 constexpr int32_t kInsertHotkeyId = 0x5342;
+constexpr int kMaximumTeardownAttempts = 3;
+
+struct HeadlessCleanupState {
+    ~HeadlessCleanupState() {
+        if (dual_run_driver_acquired && dual_run_driver_mutex != nullptr) {
+            sao_launcher_dual_run_release_driver_mutex(dual_run_driver_mutex);
+        }
+        if (mutex_acquired && single_instance_mutex != nullptr) {
+            sao::launcher::releaseSingleInstance(single_instance_mutex);
+        }
+        if (crash_installed) {
+            sao::launcher::uninstallCrashHandler();
+        }
+    }
+
+    sao::launcher::AppState state;
+    HANDLE single_instance_mutex = nullptr;
+    HANDLE dual_run_driver_mutex = nullptr;
+    bool crash_installed = false;
+    bool mutex_acquired = false;
+    bool dual_run_driver_acquired = false;
+    bool base_dir_resolved = false;
+    bool license_verified = false;
+    bool shell_verified = false;
+    bool security_initialized = false;
+    bool platform_up = false;
+    bool plugins_discovered = false;
+    bool ui_online = false;
+};
+
+std::mutex g_pending_cleanup_mutex;
+std::unique_ptr<HeadlessCleanupState> g_pending_cleanup;
 
 #if defined(SAO_LAUNCHER_COMPOSITION_TEST_PROVIDER)
 sao_launcher_composition_test_hooks_t g_composition_test_hooks{};
@@ -150,22 +190,12 @@ void notifyStep(const sao_launcher_init_hooks_t* hooks, const char* name) {
 // launcher would emit; ``rc_out`` receives the sao_status_t equivalent
 // so tests can distinguish "pipeline never reached this step" from a
 // provider failure.
-int runPipeline(const sao_launcher_init_hooks_t* hooks,
-                sao::launcher::AppState& state,
-                sao_dual_run_config& dual_cfg,
-                HANDLE& single_instance_mutex,
-                HANDLE& dual_run_driver_mutex,
-                bool& crash_installed,
-                bool& mutex_acquired,
-                bool& dual_run_driver_acquired,
-                bool& base_dir_resolved,
-                bool& license_verified,
-                bool& shell_verified,
-                bool& security_initialized,
-                bool& platform_up,
-                bool& plugins_discovered,
-                bool& ui_online,
-                bool& handed_off_to_python,
+int runPipeline(const sao_launcher_init_hooks_t* hooks, sao::launcher::AppState& state,
+                sao_dual_run_config& dual_cfg, HANDLE& single_instance_mutex,
+                HANDLE& dual_run_driver_mutex, bool& crash_installed, bool& mutex_acquired,
+                bool& dual_run_driver_acquired, bool& base_dir_resolved, bool& license_verified,
+                bool& shell_verified, bool& security_initialized, bool& platform_up,
+                bool& plugins_discovered, bool& ui_online, bool& handed_off_to_python,
                 int& handed_off_exit_code) {
     using namespace sao::launcher;
 
@@ -184,9 +214,8 @@ int runPipeline(const sao_launcher_init_hooks_t* hooks,
     // (not a child that inherited SAO_DUAL_RUN_ROLE) needs to hold it.
     wchar_t inherited_role[64]{};
     const bool is_child_of_dual_run_driver =
-        (GetEnvironmentVariableW(SAO_DUAL_RUN_ENV_VAR_NAME,
-                                  inherited_role, 64) > 0)
-        && inherited_role[0] != L'\0';
+        (GetEnvironmentVariableW(SAO_DUAL_RUN_ENV_VAR_NAME, inherited_role, 64) > 0) &&
+        inherited_role[0] != L'\0';
 
     if (!is_child_of_dual_run_driver) {
         sao_status_t ms = sao_launcher_dual_run_acquire_driver_mutex(&dual_run_driver_mutex);
@@ -201,9 +230,8 @@ int runPipeline(const sao_launcher_init_hooks_t* hooks,
 
     int32_t should_continue = 1;
     int32_t handoff_exit_code = 0;
-    sao_status_t zs = sao_launcher_dual_run_step_zero(&dual_cfg,
-                                                       &should_continue,
-                                                       &handoff_exit_code);
+    sao_status_t zs =
+        sao_launcher_dual_run_step_zero(&dual_cfg, &should_continue, &handoff_exit_code);
     if (zs == SAO_LAUNCHER_PYTHON_UNAVAILABLE) {
         // python_only requested but no Python — return a specific error.
         return SAO_EXIT_PLATFORM_INIT_FAIL;
@@ -255,8 +283,7 @@ int runPipeline(const sao_launcher_init_hooks_t* hooks,
     // optional providers remain disabled.  An explicit malformed config is
     // fatal rather than partially enabling a subsystem.
     if (loadLauncherProviderConfiguration(
-            state.base_dir,
-            state.config_path[0] ? state.config_path : nullptr) != SAO_STATUS_OK) {
+            state.base_dir, state.config_path[0] ? state.config_path : nullptr) != SAO_STATUS_OK) {
         return SAO_EXIT_PLATFORM_INIT_FAIL;
     }
     const auto provider_configuration = launcherProviderConfigurationSnapshot();
@@ -270,6 +297,7 @@ int runPipeline(const sao_launcher_init_hooks_t* hooks,
         if (s != SAO_STATUS_OK || !r.valid) {
             return SAO_EXIT_LICENSE_INVALID;
         } else {
+            state.streaming_entitled = isPaidLicenseTier(r.tier);
             license_verified = true;
         }
     }
@@ -303,8 +331,7 @@ int runPipeline(const sao_launcher_init_hooks_t* hooks,
     {
         char log_level_narrow[32]{};
         sao_platform_config cfg{};
-        if (!buildPlatformConfig(state, cfg, log_level_narrow,
-                                 sizeof(log_level_narrow))) {
+        if (!buildPlatformConfig(state, cfg, log_level_narrow, sizeof(log_level_narrow))) {
             return SAO_EXIT_PLATFORM_INIT_FAIL;
         }
 
@@ -320,8 +347,8 @@ int runPipeline(const sao_launcher_init_hooks_t* hooks,
     // Step 8 — plugin discovery (skipped in safe mode).
     if (!state.safe_mode && provider_configuration.plugins.enabled) {
         sao_plugins_registry* reg = nullptr;
-        sao_status_t s = sao_plugins_discover(
-            static_cast<sao_platform_ctx*>(state.platform_ctx), &reg);
+        sao_status_t s =
+            sao_plugins_discover(static_cast<sao_platform_ctx*>(state.platform_ctx), &reg);
         state.plugins_registry = reg;
         plugins_discovered = reg != nullptr;
         if (s != SAO_STATUS_OK || reg == nullptr) {
@@ -330,13 +357,16 @@ int runPipeline(const sao_launcher_init_hooks_t* hooks,
             if (sao_plugins_activate_autostart(reg) != SAO_STATUS_OK) {
                 return SAO_EXIT_PLUGIN_LOAD_FAIL;
             }
+            if (sao_platform_bind_plugins(static_cast<sao_platform_ctx*>(state.platform_ctx),
+                                          reg) != SAO_STATUS_OK) {
+                return SAO_EXIT_PLUGIN_LOAD_FAIL;
+            }
         }
     }
 
     // Step 9 — UI online.
     {
-        sao_status_t s = sao_ui_bring_online(
-            static_cast<sao_platform_ctx*>(state.platform_ctx));
+        sao_status_t s = sao_ui_bring_online(static_cast<sao_platform_ctx*>(state.platform_ctx));
         if (s != SAO_STATUS_OK) {
             return SAO_EXIT_UI_ONLINE_FAIL;
         }
@@ -351,12 +381,12 @@ int runPipeline(const sao_launcher_init_hooks_t* hooks,
         while (true) {
             MSG msg{};
             while (PeekMessageW(&msg, nullptr, 0, 0, PM_REMOVE)) {
-                if (msg.message == WM_QUIT) return SAO_EXIT_OK;
+                if (msg.message == WM_QUIT)
+                    return SAO_EXIT_OK;
                 int32_t handled = 0;
-                if (sao_ui_handle_message(
-                        static_cast<sao_platform_ctx*>(state.platform_ctx),
-                        msg.message, msg.wParam, msg.lParam,
-                        &handled) != SAO_STATUS_OK) {
+                if (sao_ui_handle_message(static_cast<sao_platform_ctx*>(state.platform_ctx),
+                                          msg.message, msg.wParam, msg.lParam,
+                                          &handled) != SAO_STATUS_OK) {
                     return SAO_EXIT_UI_ONLINE_FAIL;
                 }
                 if (!handled) {
@@ -364,27 +394,25 @@ int runPipeline(const sao_launcher_init_hooks_t* hooks,
                     DispatchMessageW(&msg);
                 }
             }
-            if (sao_ui_tick(
-                    static_cast<sao_platform_ctx*>(state.platform_ctx),
-                    kUiFrameIntervalMs) != SAO_STATUS_OK) {
+            if (sao_ui_tick(static_cast<sao_platform_ctx*>(state.platform_ctx),
+                            kUiFrameIntervalMs) != SAO_STATUS_OK) {
                 return SAO_EXIT_UI_ONLINE_FAIL;
             }
-            if (hooks->poll_should_exit(hooks->user_data) != 0) break;
+            if (hooks->poll_should_exit(hooks->user_data) != 0)
+                break;
             Sleep(0);
         }
     } else {
-        if (SetTimer(nullptr, kUiFrameTimerId, kUiFrameIntervalMs, nullptr) ==
-            0) {
+        if (SetTimer(nullptr, kUiFrameTimerId, kUiFrameIntervalMs, nullptr) == 0) {
             return SAO_EXIT_UI_ONLINE_FAIL;
         }
         MSG msg{};
         BOOL result = 0;
         while ((result = GetMessageW(&msg, nullptr, 0, 0)) > 0) {
             int32_t handled = 0;
-            if (sao_ui_handle_message(
-                    static_cast<sao_platform_ctx*>(state.platform_ctx),
-                    msg.message, msg.wParam, msg.lParam,
-                    &handled) != SAO_STATUS_OK) {
+            if (sao_ui_handle_message(static_cast<sao_platform_ctx*>(state.platform_ctx),
+                                      msg.message, msg.wParam, msg.lParam,
+                                      &handled) != SAO_STATUS_OK) {
                 KillTimer(nullptr, kUiFrameTimerId);
                 return SAO_EXIT_UI_ONLINE_FAIL;
             }
@@ -394,7 +422,8 @@ int runPipeline(const sao_launcher_init_hooks_t* hooks,
             }
         }
         KillTimer(nullptr, kUiFrameTimerId);
-        if (result < 0) return SAO_EXIT_UI_ONLINE_FAIL;
+        if (result < 0)
+            return SAO_EXIT_UI_ONLINE_FAIL;
     }
 
     return SAO_EXIT_OK;
@@ -402,121 +431,170 @@ int runPipeline(const sao_launcher_init_hooks_t* hooks,
 
 // Reverse-order teardown.  Never throws; ``on_teardown_step`` is fired
 // for each step actually rolled back so tests can assert the ordering.
-void teardown(const sao_launcher_init_hooks_t* hooks,
-              sao::launcher::AppState& state,
-              HANDLE& single_instance_mutex,
-              bool crash_installed,
-              bool mutex_acquired,
-              bool /*base_dir_resolved*/,
-              bool /*license_verified*/,
-              bool /*shell_verified*/,
-              bool security_initialized,
-              bool platform_up,
-              bool plugins_discovered,
-              bool ui_online) noexcept {
+bool teardown(const sao_launcher_init_hooks_t* hooks, sao::launcher::AppState& state,
+              HANDLE& single_instance_mutex, bool& crash_installed, bool& mutex_acquired,
+              bool /*base_dir_resolved*/, bool /*license_verified*/, bool /*shell_verified*/,
+              bool& security_initialized, bool& platform_up, bool& plugins_discovered,
+              bool& ui_online) noexcept {
     using namespace sao::launcher;
 
     // Reverse of init order: UI -> plugins -> rt_io/platform -> security ->
     // shell -> license -> single_instance -> crash_handler.
     if (ui_online) {
-        (void)sao_ui_take_offline(static_cast<sao_platform_ctx*>(state.platform_ctx));
+        if (sao_ui_take_offline(static_cast<sao_platform_ctx*>(state.platform_ctx)) !=
+            SAO_STATUS_OK) {
+            notifyStep(hooks, "ui");
+            return false;
+        }
+        ui_online = false;
         notifyStep(hooks, "ui");
     }
     if (plugins_discovered) {
-        if (sao_plugins_shutdown(
-                static_cast<sao_plugins_registry*>(state.plugins_registry)) ==
-            SAO_STATUS_OK) {
-            state.plugins_registry = nullptr;
+        if (state.platform_ctx != nullptr) {
+            if (sao_platform_bind_plugins(static_cast<sao_platform_ctx*>(state.platform_ctx),
+                                          nullptr) != SAO_STATUS_OK) {
+                notifyStep(hooks, "plugins");
+                return false;
+            }
         }
+        if (sao_plugins_shutdown(static_cast<sao_plugins_registry*>(state.plugins_registry)) !=
+            SAO_STATUS_OK) {
+            notifyStep(hooks, "plugins");
+            return false;
+        }
+        state.plugins_registry = nullptr;
+        plugins_discovered = false;
         notifyStep(hooks, "plugins");
     }
     if (platform_up) {
-        if (sao_platform_teardown(
-                static_cast<sao_platform_ctx*>(state.platform_ctx)) ==
+        if (sao_platform_teardown(static_cast<sao_platform_ctx*>(state.platform_ctx)) !=
             SAO_STATUS_OK) {
-            state.platform_ctx = nullptr;
+            notifyStep(hooks, "platform");
+            return false;
         }
+        state.platform_ctx = nullptr;
+        platform_up = false;
         notifyStep(hooks, "platform");
     }
     if (security_initialized) {
-        (void)sao_security_shutdown();
+        if (sao_security_shutdown() != SAO_STATUS_OK) {
+            notifyStep(hooks, "security");
+            return false;
+        }
+        security_initialized = false;
         notifyStep(hooks, "security");
     }
     if (state.shell_active) {
-        (void)sao_shell_shutdown();
+        if (sao_shell_shutdown() != SAO_STATUS_OK) {
+            notifyStep(hooks, "shell");
+            return false;
+        }
         state.shell_active = false;
         notifyStep(hooks, "shell");
     }
     if (state.license_active) {
-        (void)sao_license_shutdown();
+        if (sao_license_shutdown() != SAO_STATUS_OK) {
+            notifyStep(hooks, "license");
+            return false;
+        }
         state.license_active = false;
         notifyStep(hooks, "license");
     }
     if (mutex_acquired && single_instance_mutex) {
         releaseSingleInstance(single_instance_mutex);
         single_instance_mutex = nullptr;
+        mutex_acquired = false;
         notifyStep(hooks, "single_instance");
     }
     if (crash_installed) {
         uninstallCrashHandler();
+        crash_installed = false;
         notifyStep(hooks, "crash_handler");
     }
+    return true;
 }
 
-}  // namespace
+sao_status_t retryPendingCleanup() noexcept {
+    std::lock_guard lock(g_pending_cleanup_mutex);
+    if (!g_pending_cleanup)
+        return SAO_STATUS_OK;
+    auto& cleanup = *g_pending_cleanup;
+    if (!teardown(nullptr, cleanup.state, cleanup.single_instance_mutex, cleanup.crash_installed,
+                  cleanup.mutex_acquired, cleanup.base_dir_resolved, cleanup.license_verified,
+                  cleanup.shell_verified, cleanup.security_initialized, cleanup.platform_up,
+                  cleanup.plugins_discovered, cleanup.ui_online)) {
+        return SAO_STATUS_INTERNAL;
+    }
+    if (cleanup.dual_run_driver_acquired && cleanup.dual_run_driver_mutex != nullptr) {
+        sao_launcher_dual_run_release_driver_mutex(cleanup.dual_run_driver_mutex);
+        cleanup.dual_run_driver_mutex = nullptr;
+        cleanup.dual_run_driver_acquired = false;
+    }
+    g_pending_cleanup.reset();
+    return SAO_STATUS_OK;
+}
 
-extern "C" sao_status_t sao_launcher_init_pipeline_run(
-    int argc, wchar_t** argv,
-    const sao_launcher_init_hooks_t* hooks,
-    int* exit_code_out) {
+} // namespace
+
+extern "C" sao_status_t sao_launcher_init_pipeline_retry_pending_cleanup(void) {
+    return retryPendingCleanup();
+}
+
+extern "C" sao_status_t sao_launcher_init_pipeline_run(int argc, wchar_t** argv,
+                                                       const sao_launcher_init_hooks_t* hooks,
+                                                       int* exit_code_out) {
     using namespace sao::launcher;
 
-    if (exit_code_out) *exit_code_out = SAO_EXIT_OK;
+    if (exit_code_out)
+        *exit_code_out = SAO_EXIT_OK;
 
-    AppState state{};
+    if (retryPendingCleanup() != SAO_STATUS_OK) {
+        if (exit_code_out)
+            *exit_code_out = SAO_EXIT_PLATFORM_INIT_FAIL;
+        return SAO_STATUS_INTERNAL;
+    }
+
+    std::unique_ptr<HeadlessCleanupState> cleanup(new (std::nothrow) HeadlessCleanupState{});
+    if (!cleanup) {
+        if (exit_code_out)
+            *exit_code_out = SAO_EXIT_PLATFORM_INIT_FAIL;
+        return SAO_STATUS_INTERNAL;
+    }
+    auto& state = cleanup->state;
 
     // Command line first — a --help / --version can short-circuit.
     if (argc > 0 && argv != nullptr) {
         bool should_exit = false;
         int rc = SAO_EXIT_OK;
         if (!parseCommandLineFromArgv(argc, argv, state, should_exit, rc)) {
-            if (exit_code_out) *exit_code_out = SAO_EXIT_BAD_ARGS;
+            if (exit_code_out)
+                *exit_code_out = SAO_EXIT_BAD_ARGS;
             return SAO_STATUS_INVALID_ARGUMENT;
         }
         if (should_exit) {
-            if (exit_code_out) *exit_code_out = rc;
+            if (exit_code_out)
+                *exit_code_out = rc;
             return SAO_STATUS_OK;
         }
     }
 
     LauncherLifecycleDecision lifecycle;
     if (prepareLauncherLifecycle(lifecycle) != SAO_STATUS_OK) {
-        if (exit_code_out) *exit_code_out = SAO_EXIT_PLATFORM_INIT_FAIL;
+        if (exit_code_out)
+            *exit_code_out = SAO_EXIT_PLATFORM_INIT_FAIL;
         return SAO_STATUS_INTERNAL;
     }
 
-    HANDLE single_instance_mutex = nullptr;
-    HANDLE dual_run_driver_mutex = nullptr;
-    bool crash_installed = false;
-    bool mutex_acquired = false;
-    bool dual_run_driver_acquired = false;
-    bool base_dir_resolved = false;
-    bool license_verified = false;
-    bool shell_verified = false;
-    bool security_initialized = false;
-    bool platform_up = false;
-    bool plugins_discovered = false;
-    bool ui_online = false;
     bool handed_off_to_python = false;
-    int  handed_off_exit_code = 0;
+    int handed_off_exit_code = 0;
 
-    int rc = runPipeline(hooks, state, lifecycle.dual_config,
-                          single_instance_mutex, dual_run_driver_mutex,
-                          crash_installed, mutex_acquired, dual_run_driver_acquired,
-                          base_dir_resolved, license_verified,
-                          shell_verified, security_initialized, platform_up,
-                          plugins_discovered, ui_online,
-                          handed_off_to_python, handed_off_exit_code);
+    int rc = runPipeline(hooks, state, lifecycle.dual_config, cleanup->single_instance_mutex,
+                         cleanup->dual_run_driver_mutex, cleanup->crash_installed,
+                         cleanup->mutex_acquired, cleanup->dual_run_driver_acquired,
+                         cleanup->base_dir_resolved, cleanup->license_verified,
+                         cleanup->shell_verified, cleanup->security_initialized,
+                         cleanup->platform_up, cleanup->plugins_discovered, cleanup->ui_online,
+                         handed_off_to_python, handed_off_exit_code);
     const int rollout_result = rc;
 
     // CPP_PREFERRED_PYTHON_FALLBACK — if any CPP step failed AFTER step-zero
@@ -525,24 +603,21 @@ extern "C" sao_status_t sao_launcher_init_pipeline_run(
     // when the CPP path actually fails.
     wchar_t inherited_role[64]{};
     const bool is_child_of_dual_run_driver =
-        GetEnvironmentVariableW(SAO_DUAL_RUN_ENV_VAR_NAME,
-                                inherited_role, 64) > 0 &&
+        GetEnvironmentVariableW(SAO_DUAL_RUN_ENV_VAR_NAME, inherited_role, 64) > 0 &&
         inherited_role[0] != L'\0';
-    if (!is_child_of_dual_run_driver
-        && !handed_off_to_python
-        && rc != SAO_EXIT_OK
-        && rc != SAO_EXIT_ALREADY_RUNNING
-        && rc != SAO_EXIT_BAD_ARGS) {
-        if (lifecycle.dual_config.mode ==
-            SAO_DUAL_RUN_MODE_CPP_PREFERRED_PYTHON_FALLBACK) {
+    if (!is_child_of_dual_run_driver && !handed_off_to_python && rc != SAO_EXIT_OK &&
+        rc != SAO_EXIT_ALREADY_RUNNING && rc != SAO_EXIT_BAD_ARGS) {
+        if (lifecycle.dual_config.mode == SAO_DUAL_RUN_MODE_CPP_PREFERRED_PYTHON_FALLBACK) {
             int32_t fbec = 0;
             const wchar_t* step_name = L"cpp_pipeline";
-            if (!platform_up)                step_name = L"platform_bringup";
-            else if (!plugins_discovered && !state.safe_mode) step_name = L"plugins_discover";
-            else if (!ui_online)             step_name = L"ui_bring_online";
-            if (sao_launcher_dual_run_maybe_fallback_to_python(
-                    &lifecycle.dual_config, rc,
-                    step_name, &fbec)) {
+            if (!cleanup->platform_up)
+                step_name = L"platform_bringup";
+            else if (!cleanup->plugins_discovered && !state.safe_mode)
+                step_name = L"plugins_discover";
+            else if (!cleanup->ui_online)
+                step_name = L"ui_bring_online";
+            if (sao_launcher_dual_run_maybe_fallback_to_python(&lifecycle.dual_config, rc,
+                                                               step_name, &fbec)) {
                 handed_off_to_python = true;
                 handed_off_exit_code = fbec;
                 rc = fbec;
@@ -550,36 +625,56 @@ extern "C" sao_status_t sao_launcher_init_pipeline_run(
         }
     }
 
-    teardown(hooks, state, single_instance_mutex,
-             crash_installed, mutex_acquired,
-             base_dir_resolved, license_verified,
-             shell_verified, security_initialized, platform_up,
-             plugins_discovered, ui_online);
+    bool teardown_complete = false;
+    for (int attempt = 0; attempt < kMaximumTeardownAttempts; ++attempt) {
+        if (teardown(hooks, state, cleanup->single_instance_mutex, cleanup->crash_installed,
+                     cleanup->mutex_acquired, cleanup->base_dir_resolved, cleanup->license_verified,
+                     cleanup->shell_verified, cleanup->security_initialized, cleanup->platform_up,
+                     cleanup->plugins_discovered, cleanup->ui_online)) {
+            teardown_complete = true;
+            break;
+        }
+    }
 
-    if (dual_run_driver_acquired && dual_run_driver_mutex) {
-        sao_launcher_dual_run_release_driver_mutex(dual_run_driver_mutex);
+    if (cleanup->dual_run_driver_acquired && cleanup->dual_run_driver_mutex) {
+        sao_launcher_dual_run_release_driver_mutex(cleanup->dual_run_driver_mutex);
+        cleanup->dual_run_driver_mutex = nullptr;
+        cleanup->dual_run_driver_acquired = false;
     }
 
     const char* failure_hint = "init_pipeline";
-    if (!base_dir_resolved) failure_hint = "working_dir";
-    else if (!security_initialized) failure_hint = "security_init";
-    else if (!platform_up) failure_hint = "platform_bringup";
-    else if (!plugins_discovered && !state.safe_mode &&
+    if (!cleanup->base_dir_resolved)
+        failure_hint = "working_dir";
+    else if (!cleanup->security_initialized)
+        failure_hint = "security_init";
+    else if (!cleanup->platform_up)
+        failure_hint = "platform_bringup";
+    else if (!cleanup->plugins_discovered && !state.safe_mode &&
              launcherProviderConfigurationSnapshot().plugins.enabled) {
         failure_hint = "plugins_discover";
-    } else if (!ui_online) failure_hint = "ui_bring_online";
+    } else if (!cleanup->ui_online)
+        failure_hint = "ui_bring_online";
     completeLauncherLifecycle(lifecycle, rollout_result, failure_hint);
 
-    if (exit_code_out) *exit_code_out = rc;
+    if (!teardown_complete && (rc == SAO_EXIT_OK || handed_off_to_python)) {
+        rc = SAO_EXIT_PLATFORM_INIT_FAIL;
+        handed_off_to_python = false;
+    }
+    if (exit_code_out)
+        *exit_code_out = rc;
+    if (!teardown_complete) {
+        std::lock_guard lock(g_pending_cleanup_mutex);
+        g_pending_cleanup = std::move(cleanup);
+        return SAO_STATUS_INTERNAL;
+    }
     if (handed_off_to_python) {
         return SAO_STATUS_OK;
     }
-    return rc == SAO_EXIT_OK ? SAO_STATUS_OK
-                              : SAO_STATUS_INTERNAL;
+    return rc == SAO_EXIT_OK ? SAO_STATUS_OK : SAO_STATUS_INTERNAL;
 }
 
-extern "C" void sao_launcher_set_composition_test_hooks(
-    const sao_launcher_composition_test_hooks_t* hooks) {
+extern "C" void
+sao_launcher_set_composition_test_hooks(const sao_launcher_composition_test_hooks_t* hooks) {
 #if defined(SAO_LAUNCHER_COMPOSITION_TEST_PROVIDER)
     g_composition_test_hooks = hooks ? *hooks : sao_launcher_composition_test_hooks_t{};
 #else
@@ -590,50 +685,49 @@ extern "C" void sao_launcher_set_composition_test_hooks(
 extern "C" {
 
 #if defined(SAO_LAUNCHER_COMPOSITION_TEST_PROVIDER)
-sao_status_t sao_platform_bringup(const sao_platform_config* cfg,
-                                  sao_platform_ctx** ctx_out) {
+sao_status_t sao_platform_bringup(const sao_platform_config* cfg, sao_platform_ctx** ctx_out) {
     if (!g_composition_test_hooks.platform_bringup) {
         return SAO_STATUS_NOT_IMPLEMENTED;
     }
-    return g_composition_test_hooks.platform_bringup(
-        cfg, ctx_out, g_composition_test_hooks.user_data);
+    return g_composition_test_hooks.platform_bringup(cfg, ctx_out,
+                                                     g_composition_test_hooks.user_data);
 }
 sao_status_t sao_platform_teardown(sao_platform_ctx* ctx) {
     if (!g_composition_test_hooks.platform_teardown) {
         return SAO_STATUS_NOT_IMPLEMENTED;
     }
-    return g_composition_test_hooks.platform_teardown(
-        ctx, g_composition_test_hooks.user_data);
+    return g_composition_test_hooks.platform_teardown(ctx, g_composition_test_hooks.user_data);
+}
+sao_status_t sao_platform_bind_plugins(sao_platform_ctx*, sao_plugins_registry*) {
+    return SAO_STATUS_OK;
 }
 sao_status_t sao_ui_bring_online(sao_platform_ctx* ctx) {
     if (!g_composition_test_hooks.ui_bring_online) {
         return SAO_STATUS_NOT_IMPLEMENTED;
     }
-    return g_composition_test_hooks.ui_bring_online(
-        ctx, g_composition_test_hooks.user_data);
+    return g_composition_test_hooks.ui_bring_online(ctx, g_composition_test_hooks.user_data);
 }
 sao_status_t sao_ui_take_offline(sao_platform_ctx* ctx) {
     if (!g_composition_test_hooks.ui_take_offline) {
         return SAO_STATUS_NOT_IMPLEMENTED;
     }
-    return g_composition_test_hooks.ui_take_offline(
-        ctx, g_composition_test_hooks.user_data);
+    return g_composition_test_hooks.ui_take_offline(ctx, g_composition_test_hooks.user_data);
 }
 sao_status_t sao_ui_tick(sao_platform_ctx* ctx, uint32_t elapsed_ms) {
     return g_composition_test_hooks.ui_tick
-        ? g_composition_test_hooks.ui_tick(
-              ctx, elapsed_ms, g_composition_test_hooks.user_data)
-        : SAO_STATUS_OK;
+               ? g_composition_test_hooks.ui_tick(ctx, elapsed_ms,
+                                                  g_composition_test_hooks.user_data)
+               : SAO_STATUS_OK;
 }
-sao_status_t sao_ui_handle_message(sao_platform_ctx* ctx, uint32_t message,
-                                   uintptr_t w_param, intptr_t l_param,
-                                   int32_t* out_handled) {
-    if (out_handled) *out_handled = 0;
+sao_status_t sao_ui_handle_message(sao_platform_ctx* ctx, uint32_t message, uintptr_t w_param,
+                                   intptr_t l_param, int32_t* out_handled) {
+    if (out_handled)
+        *out_handled = 0;
     return g_composition_test_hooks.ui_handle_message
-        ? g_composition_test_hooks.ui_handle_message(
-              ctx, message, w_param, l_param, out_handled,
-              g_composition_test_hooks.user_data)
-        : SAO_STATUS_OK;
+               ? g_composition_test_hooks.ui_handle_message(ctx, message, w_param, l_param,
+                                                            out_handled,
+                                                            g_composition_test_hooks.user_data)
+               : SAO_STATUS_OK;
 }
 #elif defined(SAO_LAUNCHER_PLATFORM_COMPOSITION_PROVIDER)
 struct sao_platform_ctx {
@@ -646,6 +740,9 @@ struct sao_platform_ctx {
     bool restore_theme_on_rollback = false;
     bool settings_save_enabled = false;
     bool nervgear_mode{true};
+    bool streaming_flow_started = false;
+    sao_plugins_registry* plugins_registry = nullptr;
+    sao::launcher::entity_builtin_action::State builtin_action_state;
     sao::launcher::entity_action_routes::EntityActionRouteStore entity_action_routes;
 #if defined(SAO_LAUNCHER_ENTITY_PROVIDER_COMPOSITION)
     sao::launcher::entity_provider_publication::EntityProviderPublicationState
@@ -659,8 +756,7 @@ sao_status_t create_ai_editor_owner(
     const wchar_t* base_dir,
     std::unique_ptr<sao::launcher::tool_launch::AiEditorProcessOwner>& out) noexcept {
     try {
-        out = std::make_unique<sao::launcher::tool_launch::AiEditorProcessOwner>(
-            base_dir);
+        out = std::make_unique<sao::launcher::tool_launch::AiEditorProcessOwner>(base_dir);
         return SAO_STATUS_OK;
     } catch (const std::bad_alloc&) {
         return SAO_STATUS_ERR_UNKNOWN;
@@ -669,14 +765,12 @@ sao_status_t create_ai_editor_owner(
     }
 }
 
-sao_status_t create_settings_owner(
-    const wchar_t* base_dir,
-    std::unique_ptr<sao::launcher::settings_owner::SettingsOwner>& out) noexcept {
+sao_status_t
+create_settings_owner(const wchar_t* base_dir,
+                      std::unique_ptr<sao::launcher::settings_owner::SettingsOwner>& out) noexcept {
     try {
-        const auto settings_path =
-            std::filesystem::path(base_dir) / L"settings.json";
-        return sao::launcher::settings_owner::SettingsOwner::create(
-            settings_path.wstring(), out);
+        const auto settings_path = std::filesystem::path(base_dir) / L"settings.json";
+        return sao::launcher::settings_owner::SettingsOwner::create(settings_path.wstring(), out);
     } catch (const std::bad_alloc&) {
         return SAO_STATUS_ERR_UNKNOWN;
     } catch (...) {
@@ -684,19 +778,15 @@ sao_status_t create_settings_owner(
     }
 }
 
-SaoUiThemeId runtime_theme_id(
-    sao::launcher::settings_theme::PanelTheme theme) noexcept {
-    return theme == sao::launcher::settings_theme::PanelTheme::light
-        ? SAO_UI_THEME_LIGHT
-        : SAO_UI_THEME_DARK;
+SaoUiThemeId runtime_theme_id(sao::launcher::settings_theme::PanelTheme theme) noexcept {
+    return theme == sao::launcher::settings_theme::PanelTheme::light ? SAO_UI_THEME_LIGHT
+                                                                     : SAO_UI_THEME_DARK;
 }
 
-sao_status_t teardown_platform_context(sao_platform_ctx* ctx,
-                                       bool save_settings) noexcept;
+sao_status_t teardown_platform_context(sao_platform_ctx* ctx, bool save_settings) noexcept;
 
-sao_status_t rollback_platform_bringup(sao_platform_ctx* ctx,
-                                        sao_platform_ctx** ctx_out,
-                                        sao_status_t failure_status) noexcept {
+sao_status_t rollback_platform_bringup(sao_platform_ctx* ctx, sao_platform_ctx** ctx_out,
+                                       sao_status_t failure_status) noexcept {
     const SaoUiThemeId previous_theme = ctx->previous_theme;
     const bool restore_theme = ctx->restore_theme_on_rollback;
     const sao_status_t teardown_status = teardown_platform_context(ctx, false);
@@ -711,22 +801,109 @@ sao_status_t rollback_platform_bringup(sao_platform_ctx* ctx,
 
 bool SAO_UI_CALL entity_hit_test(int32_t x, int32_t y, void* user_data) {
     bool hit = false;
-    return sao_ui_entity_shell_hit_test(
-               static_cast<sao_ui_entity_shell_handle_t>(user_data), x, y,
-               &hit) == SAO_STATUS_OK &&
+    return sao_ui_entity_shell_hit_test(static_cast<sao_ui_entity_shell_handle_t>(user_data), x, y,
+                                        &hit) == SAO_STATUS_OK &&
            hit;
 }
 
-void SAO_UI_CALL entity_mouse(uint32_t message, int32_t x, int32_t y,
-                              int32_t button, int32_t wheel_delta,
-                              void* user_data) {
-    (void)sao_ui_entity_shell_handle_mouse(
-        static_cast<sao_ui_entity_shell_handle_t>(user_data), message, x, y,
-        button, wheel_delta);
+void SAO_UI_CALL entity_mouse(uint32_t message, int32_t x, int32_t y, int32_t button,
+                              int32_t wheel_delta, void* user_data) {
+    (void)sao_ui_entity_shell_handle_mouse(static_cast<sao_ui_entity_shell_handle_t>(user_data),
+                                           message, x, y, button, wheel_delta);
 }
 
-sao_status_t SAO_UI_CALL entity_action(SaoUiEntityAction action,
-                                       void* user_data) {
+sao_status_t persist_topmost_mode(bool enabled, void* user_data) {
+    auto* ctx = static_cast<sao_platform_ctx*>(user_data);
+    return ctx == nullptr || !ctx->settings_owner
+               ? SAO_STATUS_ERR_NOT_INITIALIZED
+               : ctx->settings_owner->set_value_and_save("topmost", enabled);
+}
+
+sao_status_t apply_streaming_mode(bool enabled, void* user_data) {
+    auto* ctx = static_cast<sao_platform_ctx*>(user_data);
+    if (ctx == nullptr || ctx->overlay_host == nullptr || !ctx->streaming_flow_started) {
+        return SAO_STATUS_ERR_NOT_INITIALIZED;
+    }
+    sao_status_t status = sao_streaming_flow_mode_lock_acquire(2.0);
+    if (status != SAO_STATUS_OK) {
+        return status;
+    }
+    const bool previous_flow = sao_streaming_flow_get_mode();
+    const bool previous_capture = sao_ui_overlay_host_capture_excluded(ctx->overlay_host);
+    status = sao_ui_overlay_host_set_capture_mode(ctx->overlay_host, enabled);
+    if (status == SAO_STATUS_OK && sao_streaming_flow_set_mode(enabled) == 0) {
+        status = SAO_STATUS_ERR_NOT_INITIALIZED;
+    }
+    sao_status_t compensation_status = SAO_STATUS_OK;
+    if (status != SAO_STATUS_OK) {
+        compensation_status =
+            sao_ui_overlay_host_set_capture_mode(ctx->overlay_host, previous_capture);
+        if (sao_streaming_flow_set_mode(previous_flow) == 0 &&
+            compensation_status == SAO_STATUS_OK) {
+            compensation_status = SAO_STATUS_ERR_NOT_INITIALIZED;
+        }
+    }
+    const sao_status_t release_status = sao_streaming_flow_mode_lock_release();
+    if (compensation_status != SAO_STATUS_OK || release_status != SAO_STATUS_OK) {
+        return SAO_STATUS_ERR_UNKNOWN;
+    }
+    return status;
+}
+
+sao_status_t persist_streaming_mode(bool enabled, void* user_data) {
+    auto* ctx = static_cast<sao_platform_ctx*>(user_data);
+    return ctx == nullptr || !ctx->settings_owner
+               ? SAO_STATUS_ERR_NOT_INITIALIZED
+               : ctx->settings_owner->set_value_and_save("streaming_mode", enabled);
+}
+
+sao_status_t reload_plugins(void* user_data) {
+    auto* ctx = static_cast<sao_platform_ctx*>(user_data);
+    if (ctx == nullptr || ctx->plugins_registry == nullptr) {
+        return SAO_STATUS_ERR_NOT_INITIALIZED;
+    }
+    const sao_status_t status = sao_plugins_reload_all(ctx->plugins_registry);
+#if defined(SAO_LAUNCHER_ENTITY_PROVIDER_COMPOSITION)
+    sao_plugins_status_snapshot_t plugins_status{};
+    plugins_status.struct_size = sizeof(plugins_status);
+    const sao_status_t snapshot_status =
+        sao_plugins_status_snapshot(ctx->plugins_registry, &plugins_status);
+    ctx->entity_provider_publication.builtin_authority.plugin_runtime =
+        snapshot_status == SAO_STATUS_OK &&
+                plugins_status.operational_status == SAO_PLUGINS_OPERATIONAL_READY
+            ? sao::launcher::entity_provider_publication::PluginRuntimePublicationStatus::ready
+            : sao::launcher::entity_provider_publication::PluginRuntimePublicationStatus::
+                  degraded_internal;
+    if (snapshot_status != SAO_STATUS_OK) {
+        return SAO_STATUS_ERR_UNKNOWN;
+    }
+#endif
+    return status;
+}
+
+sao_status_t refresh_entity(void* user_data) {
+    auto* ctx = static_cast<sao_platform_ctx*>(user_data);
+    if (ctx == nullptr || ctx->entity_shell == nullptr) {
+        return SAO_STATUS_ERR_NOT_INITIALIZED;
+    }
+#if defined(SAO_LAUNCHER_ENTITY_PROVIDER_COMPOSITION)
+    ctx->entity_provider_publication.topmost = ctx->builtin_action_state.topmost;
+    ctx->entity_provider_publication.streaming_mode = ctx->builtin_action_state.streaming_mode;
+    ctx->entity_provider_publication.builtin_authority.controls =
+        ctx->builtin_action_state.controls_degraded
+            ? sao::launcher::entity_provider_publication::ControlPublicationStatus::
+                  degraded_internal
+            : sao::launcher::entity_provider_publication::ControlPublicationStatus::ready;
+    return sao::launcher::entity_provider_publication::refresh(
+        ctx->entity_shell, ctx->entity_action_routes, ctx->entity_provider_publication,
+        ctx->nervgear_mode, &sao::plugins::loader::sao_plugins_entity_provider_snapshot,
+        &sao_ui_entity_shell_set_roots);
+#else
+    return SAO_STATUS_ERR_NOT_IMPLEMENTED;
+#endif
+}
+
+sao_status_t SAO_UI_CALL entity_action(SaoUiEntityAction action, void* user_data) {
     const auto action_token = static_cast<std::int32_t>(action);
     if (sao::launcher::entity_action_routes::is_dynamic_token(action_token)) {
         auto* ctx = static_cast<sao_platform_ctx*>(user_data);
@@ -734,22 +911,18 @@ sao_status_t SAO_UI_CALL entity_action(SaoUiEntityAction action,
             return SAO_STATUS_ERR_INVALID_ARGUMENT;
         }
         sao::launcher::entity_action_routes::EntityActionRoute route;
-        const sao_status_t route_status =
-            ctx->entity_action_routes.resolve(action_token, route);
+        const sao_status_t route_status = ctx->entity_action_routes.resolve(action_token, route);
         if (route_status == SAO_STATUS_OK) {
 #if defined(SAO_LAUNCHER_ENTITY_PROVIDER_COMPOSITION)
             return sao::launcher::entity_provider_publication::invoke(
-                route, ctx->entity_shell,
-                &sao::plugins::loader::sao_plugins_entity_provider_invoke,
-                &sao_ui_entity_shell_get_snapshot,
-                &sao_ui_entity_shell_home);
+                route, ctx->entity_shell, &sao::plugins::loader::sao_plugins_entity_provider_invoke,
+                &sao_ui_entity_shell_get_snapshot, &sao_ui_entity_shell_home);
 #else
             return SAO_STATUS_ERR_NOT_IMPLEMENTED;
 #endif
         }
-        return route_status == SAO_STATUS_ERR_NOT_FOUND
-                   ? SAO_STATUS_ERR_INVALID_ARGUMENT
-                   : route_status;
+        return route_status == SAO_STATUS_ERR_NOT_FOUND ? SAO_STATUS_ERR_INVALID_ARGUMENT
+                                                        : route_status;
     }
     switch (action) {
     case SAO_UI_ENTITY_ACTION_OPEN_ABOUT:
@@ -762,23 +935,44 @@ sao_status_t SAO_UI_CALL entity_action(SaoUiEntityAction action,
     case SAO_UI_ENTITY_ACTION_OPEN_PROCESS_SELECTOR:
     case SAO_UI_ENTITY_ACTION_OPEN_PLUGIN_MANAGER:
     case SAO_UI_ENTITY_ACTION_RELOAD_PLUGINS:
-    case SAO_UI_ENTITY_ACTION_PLUGIN_STATUS:
-        return SAO_STATUS_ERR_NOT_IMPLEMENTED;
+    case SAO_UI_ENTITY_ACTION_PLUGIN_STATUS: {
+        auto* ctx = static_cast<sao_platform_ctx*>(user_data);
+        if (ctx == nullptr) {
+            return SAO_STATUS_ERR_NOT_INITIALIZED;
+        }
+        const sao::launcher::entity_builtin_action::Operations operations{
+            nullptr,
+            &persist_topmost_mode,
+            &apply_streaming_mode,
+            &persist_streaming_mode,
+            &reload_plugins,
+            &refresh_entity,
+            ctx,
+        };
+        const sao_status_t status = sao::launcher::entity_builtin_action::dispatch(
+            action, ctx->builtin_action_state, operations);
+#if defined(SAO_LAUNCHER_ENTITY_PROVIDER_COMPOSITION)
+        if (ctx->builtin_action_state.controls_degraded) {
+            ctx->entity_provider_publication.builtin_authority.controls = sao::launcher::
+                entity_provider_publication::ControlPublicationStatus::degraded_internal;
+            (void)refresh_entity(ctx);
+        }
+#endif
+        return status;
+    }
     case SAO_UI_ENTITY_ACTION_TOGGLE_NERVGEAR: {
         auto* ctx = static_cast<sao_platform_ctx*>(user_data);
         if (ctx == nullptr || ctx->entity_shell == nullptr || !ctx->settings_owner) {
             return SAO_STATUS_ERR_NOT_INITIALIZED;
         }
         const bool target = !ctx->nervgear_mode;
-        sao_status_t status =
-            sao_ui_entity_shell_set_nervgear_mode(ctx->entity_shell, target);
+        sao_status_t status = sao_ui_entity_shell_set_nervgear_mode(ctx->entity_shell, target);
         if (status != SAO_STATUS_OK) {
             return status;
         }
         status = ctx->settings_owner->set_value_and_save("nervgear_mode", target);
         if (status != SAO_STATUS_OK) {
-            (void)sao_ui_entity_shell_set_nervgear_mode(
-                ctx->entity_shell, ctx->nervgear_mode);
+            (void)sao_ui_entity_shell_set_nervgear_mode(ctx->entity_shell, ctx->nervgear_mode);
             return status;
         }
         ctx->nervgear_mode = target;
@@ -807,11 +1001,10 @@ sao_status_t SAO_UI_CALL entity_action(SaoUiEntityAction action,
             return SAO_STATUS_ERR_NOT_INITIALIZED;
         }
         const auto theme = action == SAO_UI_ENTITY_ACTION_SET_ALL_LIGHT
-            ? sao::launcher::settings_theme::PanelTheme::light
-            : sao::launcher::settings_theme::PanelTheme::dark;
+                               ? sao::launcher::settings_theme::PanelTheme::light
+                               : sao::launcher::settings_theme::PanelTheme::dark;
         const sao_status_t status =
-            sao::launcher::settings_theme::replace_all_panel_themes(
-                *ctx->settings_owner, theme);
+            sao::launcher::settings_theme::replace_all_panel_themes(*ctx->settings_owner, theme);
         if (status != SAO_STATUS_OK) {
             return status;
         }
@@ -822,24 +1015,25 @@ sao_status_t SAO_UI_CALL entity_action(SaoUiEntityAction action,
     }
     auto* ctx = static_cast<sao_platform_ctx*>(user_data);
     HWND owner = ctx == nullptr || ctx->overlay_host == nullptr
-        ? nullptr
-        : static_cast<HWND>(sao_ui_overlay_host_hwnd(ctx->overlay_host));
+                     ? nullptr
+                     : static_cast<HWND>(sao_ui_overlay_host_hwnd(ctx->overlay_host));
     if (sao::launcher::openUserDocsIndex(SaoLauncherBaseDir, owner)) {
         return SAO_STATUS_OK;
     }
-    MessageBoxW(owner, L"用户指南暂时不可用。请重新安装或修复 SAO Auto 后重试。",
-                L"SAO Auto", MB_OK | MB_ICONERROR | MB_TASKMODAL);
+    MessageBoxW(owner, L"用户指南暂时不可用。请重新安装或修复 SAO Auto 后重试。", L"SAO Auto",
+                MB_OK | MB_ICONERROR | MB_TASKMODAL);
     return SAO_STATUS_ERR_NOT_FOUND;
 }
 
-sao_status_t sao_platform_bringup(const sao_platform_config* cfg,
-                                  sao_platform_ctx** ctx_out) {
-    if (!cfg || !ctx_out || !cfg->base_dir) return SAO_STATUS_INVALID_ARGUMENT;
+sao_status_t sao_platform_bringup(const sao_platform_config* cfg, sao_platform_ctx** ctx_out) {
+    if (!cfg || !ctx_out || !cfg->base_dir)
+        return SAO_STATUS_INVALID_ARGUMENT;
     *ctx_out = nullptr;
 
     (void)SetEnvironmentVariableW(L"SAO_BASE_DIR", cfg->base_dir);
     auto* ctx = new (std::nothrow) sao_platform_ctx{};
-    if (!ctx) return SAO_STATUS_INTERNAL;
+    if (!ctx)
+        return SAO_STATUS_INTERNAL;
 
     sao_status_t status = create_ai_editor_owner(cfg->base_dir, ctx->ai_editor);
     if (status != SAO_STATUS_OK) {
@@ -857,15 +1051,28 @@ sao_status_t sao_platform_bringup(const sao_platform_config* cfg,
         delete ctx;
         return status;
     }
-    status = ctx->settings_owner->get_truthy(
-        "nervgear_mode", true, ctx->nervgear_mode);
+    status = ctx->settings_owner->get_truthy("nervgear_mode", true, ctx->nervgear_mode);
     if (status != SAO_STATUS_OK) {
         delete ctx;
         return status;
     }
+    bool persisted_streaming_mode = false;
+    status = ctx->settings_owner->get_truthy("streaming_mode", false, persisted_streaming_mode);
+    if (status != SAO_STATUS_OK) {
+        delete ctx;
+        return status;
+    }
+    ctx->builtin_action_state.topmost = false;
+    ctx->builtin_action_state.streaming_entitled = cfg->streaming_entitled != 0;
+    ctx->builtin_action_state.streaming_mode =
+        ctx->builtin_action_state.streaming_entitled && persisted_streaming_mode;
+#if defined(SAO_LAUNCHER_ENTITY_PROVIDER_COMPOSITION)
+    ctx->entity_provider_publication.topmost = ctx->builtin_action_state.topmost;
+    ctx->entity_provider_publication.streaming_mode = ctx->builtin_action_state.streaming_mode;
+#endif
     sao::launcher::settings_theme::PanelTheme restored_theme{};
-    status = sao::launcher::settings_theme::read_process_theme(
-        *ctx->settings_owner, restored_theme);
+    status =
+        sao::launcher::settings_theme::read_process_theme(*ctx->settings_owner, restored_theme);
     if (status != SAO_STATUS_OK) {
         return rollback_platform_bringup(ctx, ctx_out, status);
     }
@@ -878,6 +1085,12 @@ sao_status_t sao_platform_bringup(const sao_platform_config* cfg,
     if (status != SAO_STATUS_OK) {
         return rollback_platform_bringup(ctx, ctx_out, status);
     }
+
+    status = sao_streaming_flow_startup(2.0);
+    if (status != SAO_STATUS_OK) {
+        return rollback_platform_bringup(ctx, ctx_out, status);
+    }
+    ctx->streaming_flow_started = true;
 
     SaoRtIoProxyConfig rt_io_cfg{};
     rt_io_cfg.session_name_utf8 = "launcher";
@@ -892,25 +1105,36 @@ sao_status_t sao_platform_bringup(const sao_platform_config* cfg,
     if (status != SAO_STATUS_OK) {
         return rollback_platform_bringup(ctx, ctx_out, status);
     }
-
+    status = apply_streaming_mode(ctx->builtin_action_state.streaming_mode, ctx);
+    if (status != SAO_STATUS_OK) {
+        return rollback_platform_bringup(ctx, ctx_out, status);
+    }
     SaoUiEntityShellConfig entity_cfg{};
     entity_cfg.action_fn = &entity_action;
     entity_cfg.action_user_data = ctx;
-    status = sao_ui_entity_shell_create(
-        ctx->overlay_host, &entity_cfg, &ctx->entity_shell);
+    status = sao_ui_entity_shell_create(ctx->overlay_host, &entity_cfg, &ctx->entity_shell);
     if (status != SAO_STATUS_OK) {
         return rollback_platform_bringup(ctx, ctx_out, status);
     }
-    status = sao_ui_entity_shell_set_nervgear_mode(
-        ctx->entity_shell, ctx->nervgear_mode);
+    status = sao_ui_entity_shell_set_nervgear_mode(ctx->entity_shell, ctx->nervgear_mode);
     if (status != SAO_STATUS_OK) {
         return rollback_platform_bringup(ctx, ctx_out, status);
     }
-    status = sao_ui_overlay_host_set_hit_test(
-        ctx->overlay_host, &entity_hit_test, ctx->entity_shell);
+#if defined(SAO_LAUNCHER_ENTITY_PROVIDER_COMPOSITION)
+    auto& authority = ctx->entity_provider_publication.builtin_authority;
+    authority.topmost = false;
+    authority.topmost_status = sao::launcher::entity_provider_publication::
+        TopmostPublicationStatus::degraded_authority_unavailable;
+    authority.nervgear = true;
+    authority.streaming = ctx->builtin_action_state.streaming_entitled;
+    authority.save_settings = true;
+    authority.ai_editor = sao::launcher::tool_launch::ai_editor_capability_available();
+    authority.theme = true;
+#endif
+    status =
+        sao_ui_overlay_host_set_hit_test(ctx->overlay_host, &entity_hit_test, ctx->entity_shell);
     if (status == SAO_STATUS_OK) {
-        status = sao_ui_overlay_host_set_mouse(
-            ctx->overlay_host, &entity_mouse, ctx->entity_shell);
+        status = sao_ui_overlay_host_set_mouse(ctx->overlay_host, &entity_mouse, ctx->entity_shell);
     }
     if (status != SAO_STATUS_OK) {
         return rollback_platform_bringup(ctx, ctx_out, status);
@@ -922,9 +1146,9 @@ sao_status_t sao_platform_bringup(const sao_platform_config* cfg,
     return SAO_STATUS_OK;
 }
 
-sao_status_t teardown_platform_context(sao_platform_ctx* ctx,
-                                       bool save_settings) noexcept {
-    if (!ctx) return SAO_STATUS_INVALID_ARGUMENT;
+sao_status_t teardown_platform_context(sao_platform_ctx* ctx, bool save_settings) noexcept {
+    if (!ctx)
+        return SAO_STATUS_INVALID_ARGUMENT;
     if (ctx->insert_hotkey_registered) {
         (void)UnregisterHotKey(nullptr, kInsertHotkeyId);
         ctx->insert_hotkey_registered = false;
@@ -932,6 +1156,13 @@ sao_status_t teardown_platform_context(sao_platform_ctx* ctx,
     if (ctx->home_hotkey_registered) {
         (void)UnregisterHotKey(nullptr, kHomeHotkeyId);
         ctx->home_hotkey_registered = false;
+    }
+    if (ctx->streaming_flow_started) {
+        const sao_status_t streaming_status = sao_streaming_flow_teardown(2.0, 2.0);
+        if (streaming_status != SAO_STATUS_OK) {
+            return streaming_status;
+        }
+        ctx->streaming_flow_started = false;
     }
     if (ctx->entity_shell) {
 #if defined(SAO_LAUNCHER_ENTITY_PROVIDER_COMPOSITION)
@@ -969,8 +1200,54 @@ sao_status_t teardown_platform_context(sao_platform_ctx* ctx,
 }
 
 sao_status_t sao_platform_teardown(sao_platform_ctx* ctx) {
-    if (!ctx) return SAO_STATUS_INVALID_ARGUMENT;
+    if (!ctx)
+        return SAO_STATUS_INVALID_ARGUMENT;
     return teardown_platform_context(ctx, ctx->settings_save_enabled);
+}
+
+sao_status_t sao_platform_bind_plugins(sao_platform_ctx* ctx, sao_plugins_registry* registry) {
+    if (ctx == nullptr)
+        return SAO_STATUS_INVALID_ARGUMENT;
+    ctx->plugins_registry = registry;
+#if defined(SAO_LAUNCHER_ENTITY_PROVIDER_COMPOSITION)
+    auto& authority = ctx->entity_provider_publication.builtin_authority;
+    if (registry == nullptr) {
+        authority.reload_plugins = false;
+        authority.plugin_runtime = sao::launcher::entity_provider_publication::
+            PluginRuntimePublicationStatus::not_applicable;
+        authority.python_runtime = sao::launcher::entity_provider_publication::
+            PythonRuntimePublicationStatus::not_applicable;
+        return SAO_STATUS_OK;
+    }
+    sao_plugins_status_snapshot_t plugins_status{};
+    plugins_status.struct_size = sizeof(plugins_status);
+    const sao_status_t status = sao_plugins_status_snapshot(registry, &plugins_status);
+    if (status != SAO_STATUS_OK) {
+        return status;
+    }
+    authority.plugin_runtime =
+        plugins_status.operational_status == SAO_PLUGINS_OPERATIONAL_READY
+            ? sao::launcher::entity_provider_publication::PluginRuntimePublicationStatus::ready
+            : sao::launcher::entity_provider_publication::PluginRuntimePublicationStatus::
+                  degraded_internal;
+    authority.reload_plugins = plugins_status.operational_status == SAO_PLUGINS_OPERATIONAL_READY;
+    using PythonStatus = sao::launcher::entity_provider_publication::PythonRuntimePublicationStatus;
+    switch (plugins_status.python_runtime_status) {
+    case SAO_PLUGINS_PYTHON_RUNTIME_READY:
+        authority.python_runtime = PythonStatus::ready;
+        break;
+    case SAO_PLUGINS_PYTHON_RUNTIME_UNCONFIGURED:
+        authority.python_runtime = PythonStatus::degraded_unconfigured;
+        break;
+    case SAO_PLUGINS_PYTHON_RUNTIME_UNAVAILABLE:
+        authority.python_runtime = PythonStatus::degraded_unavailable;
+        break;
+    default:
+        authority.python_runtime = PythonStatus::degraded_host_unavailable;
+        break;
+    }
+#endif
+    return SAO_STATUS_OK;
 }
 
 sao_status_t sao_ui_bring_online(sao_platform_ctx* ctx) {
@@ -978,7 +1255,8 @@ sao_status_t sao_ui_bring_online(sao_platform_ctx* ctx) {
         return SAO_STATUS_INVALID_ARGUMENT;
     }
     sao_status_t status = sao_ui_entity_shell_bring_online(ctx->entity_shell);
-    if (status != SAO_STATUS_OK) return status;
+    if (status != SAO_STATUS_OK)
+        return status;
 #if defined(SAO_LAUNCHER_ENTITY_PROVIDER_COMPOSITION)
     status = sao::launcher::entity_provider_publication::refresh(
         ctx->entity_shell, ctx->entity_action_routes, ctx->entity_provider_publication,
@@ -987,10 +1265,10 @@ sao_status_t sao_ui_bring_online(sao_platform_ctx* ctx) {
     if (status != SAO_STATUS_OK) {
 #if defined(SAO_LAUNCHER_CORE_LOG_PROVIDER)
         (void)sao_core_logf(SAO_LOG_WARN, "launcher.entity_provider",
-                            "initial catalog publication deferred: status=%d",
-                            status);
+                            "initial catalog publication deferred: status=%d", status);
 #endif
-        status = SAO_STATUS_OK;
+        (void)sao_ui_entity_shell_take_offline(ctx->entity_shell);
+        return status;
     }
 #endif
     if (!RegisterHotKey(nullptr, kHomeHotkeyId, MOD_NOREPEAT, VK_HOME)) {
@@ -1030,28 +1308,30 @@ sao_status_t sao_ui_take_offline(sao_platform_ctx* ctx) {
 #endif
     if (ctx->insert_hotkey_registered) {
         if (!UnregisterHotKey(nullptr, kInsertHotkeyId)) {
-            if (status == SAO_STATUS_OK) status = SAO_STATUS_INTERNAL;
+            if (status == SAO_STATUS_OK)
+                status = SAO_STATUS_INTERNAL;
         } else {
             ctx->insert_hotkey_registered = false;
         }
     }
     if (ctx->home_hotkey_registered) {
         if (!UnregisterHotKey(nullptr, kHomeHotkeyId)) {
-            if (status == SAO_STATUS_OK) status = SAO_STATUS_INTERNAL;
+            if (status == SAO_STATUS_OK)
+                status = SAO_STATUS_INTERNAL;
         } else {
             ctx->home_hotkey_registered = false;
         }
     }
-    const sao_status_t offline_status =
-        sao_ui_entity_shell_take_offline(ctx->entity_shell);
+    const sao_status_t offline_status = sao_ui_entity_shell_take_offline(ctx->entity_shell);
     return status == SAO_STATUS_OK ? offline_status : status;
 }
 
 sao_status_t sao_ui_tick(sao_platform_ctx* ctx, uint32_t elapsed_ms) {
-    if (!ctx || !ctx->entity_shell) return SAO_STATUS_INVALID_ARGUMENT;
-    const sao_status_t tick_status =
-        sao_ui_entity_shell_tick(ctx->entity_shell, elapsed_ms);
-    if (tick_status != SAO_STATUS_OK) return tick_status;
+    if (!ctx || !ctx->entity_shell)
+        return SAO_STATUS_INVALID_ARGUMENT;
+    const sao_status_t tick_status = sao_ui_entity_shell_tick(ctx->entity_shell, elapsed_ms);
+    if (tick_status != SAO_STATUS_OK)
+        return tick_status;
 #if defined(SAO_LAUNCHER_ENTITY_PROVIDER_COMPOSITION)
     const sao_status_t provider_status = sao::launcher::entity_provider_publication::poll(
         ctx->entity_shell, ctx->entity_action_routes, ctx->entity_provider_publication, elapsed_ms,
@@ -1060,19 +1340,17 @@ sao_status_t sao_ui_tick(sao_platform_ctx* ctx, uint32_t elapsed_ms) {
 #if defined(SAO_LAUNCHER_CORE_LOG_PROVIDER)
     if (provider_status != SAO_STATUS_OK) {
         (void)sao_core_logf(SAO_LOG_WARN, "launcher.entity_provider",
-                            "catalog refresh deferred: status=%d",
-                            provider_status);
+                            "catalog refresh deferred: status=%d", provider_status);
     }
 #endif
-    return SAO_STATUS_OK;
+    return provider_status;
 #else
     return SAO_STATUS_OK;
 #endif
 }
 
-sao_status_t sao_ui_handle_message(sao_platform_ctx* ctx, uint32_t message,
-                                   uintptr_t w_param, intptr_t,
-                                   int32_t* out_handled) {
+sao_status_t sao_ui_handle_message(sao_platform_ctx* ctx, uint32_t message, uintptr_t w_param,
+                                   intptr_t, int32_t* out_handled) {
     if (!ctx || !ctx->entity_shell || !out_handled) {
         return SAO_STATUS_INVALID_ARGUMENT;
     }
@@ -1081,7 +1359,8 @@ sao_status_t sao_ui_handle_message(sao_platform_ctx* ctx, uint32_t message,
         *out_handled = 1;
         return sao_ui_tick(ctx, kUiFrameIntervalMs);
     }
-    if (message != WM_HOTKEY) return SAO_STATUS_OK;
+    if (message != WM_HOTKEY)
+        return SAO_STATUS_OK;
     if (w_param == kHomeHotkeyId) {
         *out_handled = 1;
         return sao_ui_entity_shell_home(ctx->entity_shell);
@@ -1099,6 +1378,9 @@ sao_status_t sao_platform_bringup(const sao_platform_config*, sao_platform_ctx**
 sao_status_t sao_platform_teardown(sao_platform_ctx*) {
     return SAO_STATUS_NOT_IMPLEMENTED;
 }
+sao_status_t sao_platform_bind_plugins(sao_platform_ctx*, sao_plugins_registry*) {
+    return SAO_STATUS_NOT_IMPLEMENTED;
+}
 sao_status_t sao_ui_bring_online(sao_platform_ctx*) {
     return SAO_STATUS_NOT_IMPLEMENTED;
 }
@@ -1108,9 +1390,10 @@ sao_status_t sao_ui_take_offline(sao_platform_ctx*) {
 sao_status_t sao_ui_tick(sao_platform_ctx*, uint32_t) {
     return SAO_STATUS_NOT_IMPLEMENTED;
 }
-sao_status_t sao_ui_handle_message(sao_platform_ctx*, uint32_t, uintptr_t,
-                                   intptr_t, int32_t* out_handled) {
-    if (out_handled) *out_handled = 0;
+sao_status_t sao_ui_handle_message(sao_platform_ctx*, uint32_t, uintptr_t, intptr_t,
+                                   int32_t* out_handled) {
+    if (out_handled)
+        *out_handled = 0;
     return SAO_STATUS_NOT_IMPLEMENTED;
 }
 #endif
@@ -1120,24 +1403,25 @@ sao_status_t sao_security_init(const sao_security_config* cfg) {
     if (!g_composition_test_hooks.security_init) {
         return SAO_STATUS_NOT_IMPLEMENTED;
     }
-    return g_composition_test_hooks.security_init(
-        cfg, g_composition_test_hooks.user_data);
+    return g_composition_test_hooks.security_init(cfg, g_composition_test_hooks.user_data);
 }
 sao_status_t sao_security_shutdown(void) {
     if (g_composition_test_hooks.security_shutdown) {
-        g_composition_test_hooks.security_shutdown(
-            g_composition_test_hooks.user_data);
+        g_composition_test_hooks.security_shutdown(g_composition_test_hooks.user_data);
     }
     return SAO_STATUS_OK;
 }
 #elif defined(SAO_LAUNCHER_SECURITY_COMPOSITION_PROVIDER)
 sao_status_t sao_security_init(const sao_security_config* cfg) {
-    if (!cfg) return SAO_STATUS_INVALID_ARGUMENT;
-    if (!cfg->enable_anti_debug) return SAO_STATUS_OK;
+    if (!cfg)
+        return SAO_STATUS_INVALID_ARGUMENT;
+    if (!cfg->enable_anti_debug)
+        return SAO_STATUS_OK;
 
     uint32_t score = 0;
     sao_status_t status = sao_security_anti_debug_wave8_scan_all(&score);
-    if (status != SAO_STATUS_OK) return status;
+    if (status != SAO_STATUS_OK)
+        return status;
     return score == 0 ? SAO_STATUS_OK : SAO_STATUS_PLATFORM_INIT_FAIL;
 }
 sao_status_t sao_security_shutdown(void) {
@@ -1154,21 +1438,21 @@ sao_status_t sao_security_shutdown(void) {
 
 #if defined(SAO_LAUNCHER_COMPOSITION_TEST_PROVIDER)
 sao_status_t sao_shell_verify_integrity(sao_shell_verify_result* out) {
-    if (!g_composition_test_hooks.shell_verify) return SAO_STATUS_NOT_IMPLEMENTED;
-    return g_composition_test_hooks.shell_verify(
-        out, g_composition_test_hooks.user_data);
+    if (!g_composition_test_hooks.shell_verify)
+        return SAO_STATUS_NOT_IMPLEMENTED;
+    return g_composition_test_hooks.shell_verify(out, g_composition_test_hooks.user_data);
 }
 sao_status_t sao_shell_shutdown(void) {
     return g_composition_test_hooks.shell_shutdown
-        ? g_composition_test_hooks.shell_shutdown(g_composition_test_hooks.user_data)
-        : SAO_STATUS_OK;
+               ? g_composition_test_hooks.shell_shutdown(g_composition_test_hooks.user_data)
+               : SAO_STATUS_OK;
 }
 #elif !defined(SAO_LINKED_SHELL)
 sao_status_t sao_shell_verify_integrity(sao_shell_verify_result* out) {
     if (out) {
         out->tampered = 1;
-        strncpy_s(out->reason, sizeof(out->reason),
-                  "shell integrity provider unavailable", _TRUNCATE);
+        strncpy_s(out->reason, sizeof(out->reason), "shell integrity provider unavailable",
+                  _TRUNCATE);
     }
     return SAO_STATUS_NOT_IMPLEMENTED;
 }
@@ -1179,14 +1463,14 @@ sao_status_t sao_shell_shutdown(void) {
 
 #if defined(SAO_LAUNCHER_COMPOSITION_TEST_PROVIDER)
 sao_status_t sao_license_verify(sao_license_result* out) {
-    if (!g_composition_test_hooks.license_verify) return SAO_STATUS_NOT_IMPLEMENTED;
-    return g_composition_test_hooks.license_verify(
-        out, g_composition_test_hooks.user_data);
+    if (!g_composition_test_hooks.license_verify)
+        return SAO_STATUS_NOT_IMPLEMENTED;
+    return g_composition_test_hooks.license_verify(out, g_composition_test_hooks.user_data);
 }
 sao_status_t sao_license_shutdown(void) {
     return g_composition_test_hooks.license_shutdown
-        ? g_composition_test_hooks.license_shutdown(g_composition_test_hooks.user_data)
-        : SAO_STATUS_OK;
+               ? g_composition_test_hooks.license_shutdown(g_composition_test_hooks.user_data)
+               : SAO_STATUS_OK;
 }
 #elif !defined(SAO_LINKED_LICENSE)
 sao_status_t sao_license_verify(sao_license_result* out) {
@@ -1195,8 +1479,8 @@ sao_status_t sao_license_verify(sao_license_result* out) {
         out->expires_utc = 0;
         out->tier[0] = '\0';
         out->hwid_hash[0] = '\0';
-        strncpy_s(out->error_msg, sizeof(out->error_msg),
-                  "license provider unavailable", _TRUNCATE);
+        strncpy_s(out->error_msg, sizeof(out->error_msg), "license provider unavailable",
+                  _TRUNCATE);
     }
     return SAO_STATUS_NOT_IMPLEMENTED;
 }
@@ -1206,33 +1490,51 @@ sao_status_t sao_license_shutdown(void) {
 #endif
 
 #if defined(SAO_LAUNCHER_COMPOSITION_TEST_PROVIDER)
-sao_status_t sao_plugins_discover(sao_platform_ctx* ctx,
-                                  sao_plugins_registry** out) {
+sao_status_t sao_plugins_discover(sao_platform_ctx* ctx, sao_plugins_registry** out) {
     if (!g_composition_test_hooks.plugins_discover) {
-        if (out) *out = nullptr;
+        if (out)
+            *out = nullptr;
         return SAO_STATUS_NOT_IMPLEMENTED;
     }
-    return g_composition_test_hooks.plugins_discover(
-        ctx, out, g_composition_test_hooks.user_data);
+    return g_composition_test_hooks.plugins_discover(ctx, out, g_composition_test_hooks.user_data);
 }
 sao_status_t sao_plugins_activate_autostart(sao_plugins_registry* registry) {
     return g_composition_test_hooks.plugins_activate_autostart
-        ? g_composition_test_hooks.plugins_activate_autostart(
-              registry, g_composition_test_hooks.user_data)
-        : SAO_STATUS_NOT_IMPLEMENTED;
+               ? g_composition_test_hooks.plugins_activate_autostart(
+                     registry, g_composition_test_hooks.user_data)
+               : SAO_STATUS_NOT_IMPLEMENTED;
+}
+sao_status_t sao_plugins_reload_all(sao_plugins_registry*) {
+    return SAO_STATUS_NOT_IMPLEMENTED;
+}
+sao_status_t sao_plugins_status_snapshot(sao_plugins_registry*,
+                                         sao_plugins_status_snapshot_t* out_status) {
+    if (out_status != nullptr)
+        *out_status = {};
+    return SAO_STATUS_NOT_IMPLEMENTED;
 }
 sao_status_t sao_plugins_shutdown(sao_plugins_registry* registry) {
     return g_composition_test_hooks.plugins_shutdown
-        ? g_composition_test_hooks.plugins_shutdown(
-              registry, g_composition_test_hooks.user_data)
-        : SAO_STATUS_NOT_IMPLEMENTED;
+               ? g_composition_test_hooks.plugins_shutdown(registry,
+                                                           g_composition_test_hooks.user_data)
+               : SAO_STATUS_NOT_IMPLEMENTED;
 }
 #elif !defined(SAO_LINKED_PLUGINS)
 sao_status_t sao_plugins_discover(sao_platform_ctx*, sao_plugins_registry** out) {
-    if (out) *out = nullptr;
+    if (out)
+        *out = nullptr;
     return SAO_STATUS_NOT_IMPLEMENTED;
 }
 sao_status_t sao_plugins_activate_autostart(sao_plugins_registry*) {
+    return SAO_STATUS_NOT_IMPLEMENTED;
+}
+sao_status_t sao_plugins_reload_all(sao_plugins_registry*) {
+    return SAO_STATUS_NOT_IMPLEMENTED;
+}
+sao_status_t sao_plugins_status_snapshot(sao_plugins_registry*,
+                                         sao_plugins_status_snapshot_t* out_status) {
+    if (out_status != nullptr)
+        *out_status = {};
     return SAO_STATUS_NOT_IMPLEMENTED;
 }
 sao_status_t sao_plugins_shutdown(sao_plugins_registry*) {

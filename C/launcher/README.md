@@ -38,6 +38,19 @@ Init pipeline order:
 Any failure at steps 1-8 aborts the launcher with a diagnostic dialog and
 non-zero exit code (`SaoLauncherExitCode` enum in `app.h`).
 
+## Dynamic Entity roots
+
+The launcher deep-copies loader provider/root catalog views and projects them
+through the existing owner-scoped D1 registry into one Entity UI ABI 1.5
+complete-tree transaction. Root action references resolve only through the
+launcher-owned `(provider_id, action_id)` route store; referenced rows are
+removed from the built-in Plugins root to avoid duplicate actions.
+
+Publication preserves `prepare -> UI -> commit/resync`: malformed or missing
+root routes fail before the UI sink, a UI failure does not consume route
+tokens, and a commit race resynchronizes the winner snapshot. Script hosts do
+not receive route tokens and never call Entity UI directly.
+
 ## File layout
 
 ```
