@@ -1,8 +1,10 @@
 #include "sao/plugins/csharp_host/cs_loader_adapter.h"
 
 #include "cs_component_internal.h"
+#include "cs_sdk_bridge_internal.h"
 
 #include "sao/plugins/loader/loader_status.h"
+#include "sao/plugins/sdk_binding/binding_csharp.h"
 #include "sao/sdk/sao_sdk.h"
 #include "sao/sdk/sao_sdk_provider.h"
 
@@ -26,6 +28,8 @@ struct adapter_plugin_record {
     managed_component_s* component = nullptr;
     plugin_context_t* context = nullptr;
     SaoSdkContext* sdk_context = nullptr;
+    sao::plugins::sdk_binding::plugin_binding_handle_t binding = nullptr;
+    sdk_bridge_session* sdk_session = nullptr;
     size_t active_calls = 0;
     bool on_load_succeeded = false;
 };
@@ -164,6 +168,55 @@ int32_t invoke_hook(loader_plugin_handle_t plugin, void* host_user_data, managed
     return status;
 }
 
+int32_t SAO_PLUGINS_CALL adapter_unload(loader_plugin_handle_t plugin, void* host_user_data);
+
+int32_t cleanup_failed_load(cs_loader_adapter_owner_s* owner, loader_plugin_handle_t plugin,
+                            plugin_context_t* context, managed_component_s*& component,
+                            SaoSdkContext*& sdk_context,
+                            sao::plugins::sdk_binding::plugin_binding_handle_t& binding,
+                            sdk_bridge_session*& sdk_session, int32_t failure_status) noexcept {
+    if (owner == nullptr)
+        return SAO_ERR_NOT_INITIALIZED;
+    if (component == nullptr) {
+        if (sdk_context != nullptr) {
+            const int32_t status = sao_sdk_context_try_destroy(sdk_context);
+            if (status != SAO_OK)
+                return status;
+            sdk_context = nullptr;
+        }
+        try {
+            std::lock_guard lock(g_adapter_mutex);
+            if (owner == g_adapter_owner)
+                owner->plugins.erase(plugin);
+        } catch (...) {
+            return SAO_ERR_OS_CALL_FAILED;
+        }
+        return failure_status;
+    }
+    try {
+        {
+            std::lock_guard lock(g_adapter_mutex);
+            const auto found = owner->plugins.find(plugin);
+            if (owner != g_adapter_owner || !owner->active || found == owner->plugins.end())
+                return SAO_ERR_HANDLE_INVALID;
+            found->second.component = component;
+            found->second.context = context;
+            found->second.sdk_context = sdk_context;
+            found->second.binding = binding;
+            found->second.sdk_session = sdk_session;
+            found->second.lifecycle = adapter_plugin_record::state::ready;
+        }
+        component = nullptr;
+        sdk_context = nullptr;
+        binding = nullptr;
+        sdk_session = nullptr;
+        const int32_t cleanup_status = adapter_unload(plugin, owner);
+        return cleanup_status == SAO_OK ? failure_status : cleanup_status;
+    } catch (...) {
+        return SAO_ERR_OS_CALL_FAILED;
+    }
+}
+
 int32_t SAO_PLUGINS_CALL adapter_load(loader_plugin_handle_t plugin,
                                       const sao::plugins::loader::plugin_manifest* manifest,
                                       void* host_user_data) {
@@ -171,6 +224,8 @@ int32_t SAO_PLUGINS_CALL adapter_load(loader_plugin_handle_t plugin,
     bool reserved = false;
     managed_component_s* component = nullptr;
     SaoSdkContext* sdk_context = nullptr;
+    sao::plugins::sdk_binding::plugin_binding_handle_t binding = nullptr;
+    sdk_bridge_session* sdk_session = nullptr;
     try {
         {
             std::lock_guard lock(g_adapter_mutex);
@@ -209,20 +264,35 @@ int32_t SAO_PLUGINS_CALL adapter_load(loader_plugin_handle_t plugin,
                 retain_error(owner, plugin, "C# SDK context initialization failed");
         }
         if (status == SAO_OK) {
+            status = cshost_component_attach_contexts(component, sdk_context, context);
+            if (status == SAO_OK)
+                status = cshost_sdk_bridge_prepare(component, context, sdk_context, component);
+            if (status == SAO_OK) {
+                status = sao::plugins::sdk_binding::sao_plugins_binding_csharp_activate(
+                    reinterpret_cast<sao::plugins::sdk_binding::plugin_context_ptr>(context),
+                    reinterpret_cast<sao::plugins::sdk_binding::csharp_domain_ptr>(component),
+                    &binding);
+            }
+            cshost_sdk_bridge_cancel(component);
+            if (status == SAO_OK) {
+                sdk_session = cshost_sdk_session_find(component);
+                status = sdk_session == nullptr
+                             ? SAO_ERR_NOT_INITIALIZED
+                             : cshost_sdk_bridge_set_binding(sdk_session, binding);
+            }
+            if (status != SAO_OK)
+                retain_error(owner, plugin, "C# SDK binding provider activation failed");
+        }
+        if (status == SAO_OK) {
             std::string error;
             status = cshost_component_initialize(component, sdk_context, context, error);
             if (status != SAO_OK)
                 retain_error(owner, plugin, std::move(error));
         }
         if (status != SAO_OK) {
-            if (component != nullptr)
-                cshost_component_abandon(component);
-            if (sdk_context != nullptr)
-                sao_sdk_context_destroy(sdk_context);
-            std::lock_guard lock(g_adapter_mutex);
-            if (owner == g_adapter_owner)
-                owner->plugins.erase(plugin);
-            return status;
+            reserved = false;
+            return cleanup_failed_load(owner, plugin, context, component, sdk_context, binding,
+                                       sdk_session, status);
         }
 
         {
@@ -235,37 +305,27 @@ int32_t SAO_PLUGINS_CALL adapter_load(loader_plugin_handle_t plugin,
                 found->second.component = component;
                 found->second.context = context;
                 found->second.sdk_context = sdk_context;
+                found->second.binding = binding;
+                found->second.sdk_session = sdk_session;
                 found->second.lifecycle = adapter_plugin_record::state::ready;
                 component = nullptr;
                 sdk_context = nullptr;
+                binding = nullptr;
+                sdk_session = nullptr;
                 reserved = false;
             }
         }
-        if (component != nullptr)
-            cshost_component_abandon(component);
-        if (sdk_context != nullptr)
-            sao_sdk_context_destroy(sdk_context);
         if (status != SAO_OK) {
             retain_error(owner, plugin, "managed component load was cancelled");
-            std::lock_guard lock(g_adapter_mutex);
-            if (owner == g_adapter_owner)
-                owner->plugins.erase(plugin);
+            return cleanup_failed_load(owner, plugin, context, component, sdk_context, binding,
+                                       sdk_session, status);
         }
         return status;
     } catch (...) {
-        if (component != nullptr)
-            cshost_component_abandon(component);
-        if (sdk_context != nullptr)
-            sao_sdk_context_destroy(sdk_context);
-        if (reserved && owner != nullptr) {
-            try {
-                std::lock_guard lock(g_adapter_mutex);
-                if (owner == g_adapter_owner)
-                    owner->plugins.erase(plugin);
-            } catch (...) {
-            }
-        }
-        return SAO_ERR_OS_CALL_FAILED;
+        if (!reserved && component == nullptr)
+            return SAO_ERR_OS_CALL_FAILED;
+        return cleanup_failed_load(owner, plugin, nullptr, component, sdk_context, binding,
+                                   sdk_session, SAO_ERR_OS_CALL_FAILED);
     }
 }
 
@@ -397,6 +457,8 @@ int32_t SAO_PLUGINS_CALL adapter_unload(loader_plugin_handle_t plugin, void* hos
         cs_loader_adapter_owner_s* owner = nullptr;
         managed_component_s* component = nullptr;
         SaoSdkContext* sdk_context = nullptr;
+        sao::plugins::sdk_binding::plugin_binding_handle_t binding = nullptr;
+        sdk_bridge_session* sdk_session = nullptr;
         {
             std::lock_guard lock(g_adapter_mutex);
             owner = active_owner(host_user_data);
@@ -413,6 +475,82 @@ int32_t SAO_PLUGINS_CALL adapter_unload(loader_plugin_handle_t plugin, void* hos
             found->second.lifecycle = adapter_plugin_record::state::unloading;
             component = found->second.component;
             sdk_context = found->second.sdk_context;
+            binding = found->second.binding;
+            sdk_session = found->second.sdk_session;
+        }
+        if (sdk_session != nullptr) {
+            const int32_t status = cshost_sdk_session_quiesce(sdk_session);
+            if (status != SAO_OK) {
+                std::lock_guard lock(g_adapter_mutex);
+                const auto found = owner->plugins.find(plugin);
+                if (found != owner->plugins.end() && found->second.component == component)
+                    found->second.lifecycle = adapter_plugin_record::state::ready;
+                if (owner == g_adapter_owner && owner->active)
+                    owner->last_errors[plugin] = "C# managed SDK session quiesce failed";
+                return status;
+            }
+        }
+        if (sdk_context != nullptr) {
+            int32_t status = sao_sdk_context_try_destroy(sdk_context);
+            if (status == SAO_SDK_ERR_BUSY)
+                status = sao::plugins::loader::SAO_PLUGINS_ERR_BUSY;
+            if (status != SAO_OK) {
+                if (sdk_session != nullptr)
+                    (void)cshost_sdk_session_resume(sdk_session);
+                std::lock_guard lock(g_adapter_mutex);
+                const auto found = owner->plugins.find(plugin);
+                if (found != owner->plugins.end() && found->second.component == component)
+                    found->second.lifecycle = adapter_plugin_record::state::ready;
+                if (owner == g_adapter_owner && owner->active)
+                    owner->last_errors[plugin] = "C# SDK context teardown failed";
+                return status;
+            }
+            if (sdk_session != nullptr) {
+                (void)cshost_sdk_session_clear_sdk_context(sdk_session, sdk_context);
+            }
+            std::lock_guard lock(g_adapter_mutex);
+            const auto found = owner->plugins.find(plugin);
+            if (found != owner->plugins.end() && found->second.component == component)
+                found->second.sdk_context = nullptr;
+        }
+        if (binding != nullptr) {
+            int32_t status = cshost_sdk_session_release_callbacks(sdk_session);
+            if (status == SAO_OK) {
+                status = sao::plugins::sdk_binding::sao_plugins_binding_csharp_deactivate(binding);
+            }
+            if (status != SAO_OK) {
+                std::lock_guard lock(g_adapter_mutex);
+                const auto found = owner->plugins.find(plugin);
+                if (found != owner->plugins.end() && found->second.component == component)
+                    found->second.lifecycle = adapter_plugin_record::state::ready;
+                if (owner == g_adapter_owner && owner->active)
+                    owner->last_errors[plugin] = "C# SDK binding provider teardown failed";
+                return status;
+            }
+            (void)cshost_sdk_bridge_set_binding(sdk_session, nullptr);
+            {
+                std::lock_guard lock(g_adapter_mutex);
+                const auto found = owner->plugins.find(plugin);
+                if (found != owner->plugins.end() && found->second.component == component)
+                    found->second.binding = nullptr;
+            }
+        }
+        if (sdk_session != nullptr) {
+            const int32_t status = cshost_sdk_bridge_finish(sdk_session);
+            {
+                std::lock_guard lock(g_adapter_mutex);
+                const auto found = owner->plugins.find(plugin);
+                if (found != owner->plugins.end() && found->second.component == component) {
+                    if (status == SAO_OK)
+                        found->second.sdk_session = nullptr;
+                    else
+                        found->second.lifecycle = adapter_plugin_record::state::ready;
+                }
+                if (status != SAO_OK && owner == g_adapter_owner && owner->active)
+                    owner->last_errors[plugin] = "C# managed callback release failed";
+            }
+            if (status != SAO_OK)
+                return status;
         }
         std::string error;
         const int32_t close_status = cshost_component_close(component, error);
@@ -425,7 +563,6 @@ int32_t SAO_PLUGINS_CALL adapter_unload(loader_plugin_handle_t plugin, void* hos
                 owner->last_errors[plugin] = std::move(error);
             return close_status;
         }
-        sao_sdk_context_destroy(sdk_context);
         std::lock_guard lock(g_adapter_mutex);
         const auto found = owner->plugins.find(plugin);
         if (found != owner->plugins.end() && found->second.component == component) {
@@ -471,10 +608,16 @@ extern "C" SAO_PLUGINS_API int32_t SAO_PLUGINS_CALL sao_plugins_cshost_register_
             }
             return status;
         }
+        status = cshost_register_sdk_binding_provider();
+        if (status != SAO_OK) {
+            (void)sao_plugins_cshost_shutdown(owner->host);
+            return status;
+        }
         const auto table = adapter_vtable(owner.get());
         status = sao::plugins::loader::sao_plugins_lifecycle_register_host_adapter(
             sao::plugins::loader::engine_kind::csharp, &table);
         if (status != SAO_OK) {
+            (void)cshost_unregister_sdk_binding_provider();
             (void)sao_plugins_cshost_shutdown(owner->host);
             return status;
         }
@@ -508,7 +651,7 @@ sao_plugins_cshost_unregister_loader_adapter(cs_loader_adapter_owner_t owner) {
             owner->active = true;
             return status;
         }
-        status = sao_plugins_cshost_shutdown(owner->host);
+        status = cshost_unregister_sdk_binding_provider();
         if (status != SAO_OK) {
             const auto table = adapter_vtable(owner);
             const int32_t restore =
@@ -516,6 +659,17 @@ sao_plugins_cshost_unregister_loader_adapter(cs_loader_adapter_owner_t owner) {
                     sao::plugins::loader::engine_kind::csharp, &table);
             lock.lock();
             owner->active = restore == SAO_OK;
+            return status;
+        }
+        status = sao_plugins_cshost_shutdown(owner->host);
+        if (status != SAO_OK) {
+            const int32_t restore_provider = cshost_register_sdk_binding_provider();
+            const auto table = adapter_vtable(owner);
+            const int32_t restore =
+                sao::plugins::loader::sao_plugins_lifecycle_register_host_adapter(
+                    sao::plugins::loader::engine_kind::csharp, &table);
+            lock.lock();
+            owner->active = restore_provider == SAO_OK && restore == SAO_OK;
             return status;
         }
         lock.lock();

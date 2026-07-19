@@ -329,10 +329,51 @@ struct managed_component_s {
     std::string resident_identity;
     cs_sdk_bridge bridge{};
     cs_managed_plugin_context on_load_context{};
+    void* sdk_context = nullptr;
+    void* loader_context = nullptr;
+    const cs_managed_sdk_table* sdk_table = nullptr;
+    cs_managed_sdk_session_t sdk_session = nullptr;
     bool resident_key_reserved = false;
     bool assembly_process_resident = false;
     bool initialized = false;
 };
+
+int32_t cshost_component_attach_contexts(managed_component_s* component, void* sdk_context,
+                                         void* loader_context) noexcept {
+    if (component == nullptr || sdk_context == nullptr)
+        return SAO_ERR_INVALID_ARGUMENT;
+    if ((component->sdk_context != nullptr && component->sdk_context != sdk_context) ||
+        (loader_context != nullptr && component->loader_context != nullptr &&
+         component->loader_context != loader_context)) {
+        return SAO_ERR_HANDLE_INVALID;
+    }
+    component->sdk_context = sdk_context;
+    component->loader_context = loader_context;
+    return SAO_OK;
+}
+
+int32_t cshost_component_publish_sdk_session(managed_component_s* component,
+                                             const cs_managed_sdk_table* table,
+                                             cs_managed_sdk_session_t session) noexcept {
+    if (component == nullptr || table == nullptr || session == nullptr ||
+        table->struct_size < sizeof(cs_managed_sdk_table) ||
+        table->abi_version != SAO_CSHOST_SDK_TABLE_ABI_VERSION) {
+        return SAO_ERR_INVALID_ARGUMENT;
+    }
+    if (component->sdk_session != nullptr)
+        return sao::plugins::loader::SAO_PLUGINS_ERR_ALREADY_EXISTS;
+    component->sdk_table = table;
+    component->sdk_session = session;
+    return SAO_OK;
+}
+
+void cshost_component_clear_sdk_session(managed_component_s* component,
+                                        cs_managed_sdk_session_t session) noexcept {
+    if (component == nullptr || component->sdk_session != session)
+        return;
+    component->sdk_table = nullptr;
+    component->sdk_session = nullptr;
+}
 
 int32_t cshost_component_load(cs_host_handle_t host,
                               const sao::plugins::loader::plugin_manifest& manifest,
@@ -464,8 +505,10 @@ int32_t cshost_component_load(cs_host_handle_t host,
 int32_t cshost_component_initialize(managed_component_s* component, void* sdk_context,
                                     void* loader_context, std::string& out_error) noexcept {
     out_error.clear();
-    if (component == nullptr || sdk_context == nullptr)
-        return SAO_ERR_INVALID_ARGUMENT;
+    const int32_t attach_status =
+        cshost_component_attach_contexts(component, sdk_context, loader_context);
+    if (attach_status != SAO_OK)
+        return attach_status;
     component->bridge = {
         csharp_sdk_log_info,
         csharp_sdk_register_ui_panel,
@@ -474,12 +517,16 @@ int32_t cshost_component_initialize(managed_component_s* component, void* sdk_co
         SAO_CSHOST_MANAGED_ABI_VERSION,
         sdk_context,
         loader_context,
+        component->sdk_table,
+        component->sdk_session,
     };
     component->on_load_context = {
         static_cast<uint32_t>(sizeof(cs_managed_plugin_context)),
         SAO_CSHOST_MANAGED_ABI_VERSION,
         sdk_context,
         loader_context,
+        component->sdk_table,
+        component->sdk_session,
     };
     if (cshost_component_has_hook(component, managed_hook::init_sdk)) {
         int32_t managed_result = 0;

@@ -35,6 +35,22 @@ if (Catch2_FOUND OR TARGET Catch2::Catch2WithMain)
     set_tests_properties(plugins_csharp_host_contracts PROPERTIES
         LABELS "plugins;csharp;contract;no_runtime")
 
+    add_executable(test_plugins_csharp_sdk_bridge test_cs_sdk_bridge.cpp)
+    target_link_libraries(test_plugins_csharp_sdk_bridge PRIVATE
+        sao_plugins_csharp_host
+        Catch2::Catch2WithMain)
+    target_include_directories(test_plugins_csharp_sdk_bridge PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src)
+    target_compile_features(test_plugins_csharp_sdk_bridge PRIVATE cxx_std_17)
+    target_compile_definitions(test_plugins_csharp_sdk_bridge PRIVATE
+        SAO_PLUGINS_BUILDING_DLL)
+    if (MSVC)
+        target_compile_options(test_plugins_csharp_sdk_bridge PRIVATE /GR /EHsc)
+    endif()
+    add_test(NAME plugins_csharp_sdk_bridge COMMAND test_plugins_csharp_sdk_bridge)
+    set_tests_properties(plugins_csharp_sdk_bridge PROPERTIES
+        LABELS "plugins;csharp;bridge;no_runtime")
+
     add_executable(test_plugins_csharp_host_wave8 test_hello_csharp_wave8.cpp)
     target_link_libraries(test_plugins_csharp_host_wave8 PRIVATE
         sao_plugins_csharp_host

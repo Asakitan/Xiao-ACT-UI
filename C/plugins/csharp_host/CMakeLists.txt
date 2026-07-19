@@ -8,6 +8,8 @@ add_library(sao_plugins_csharp_host STATIC
     src/cs_compile.cpp
     src/cs_call.cpp
     src/cs_module_bridge.cpp
+    src/cs_sdk_bridge.cpp
+    src/cs_sdk_provider.cpp
     src/cs_sandbox.cpp
     src/cs_error.cpp
     src/cs_component.cpp

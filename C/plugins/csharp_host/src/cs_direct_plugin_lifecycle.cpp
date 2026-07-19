@@ -78,6 +78,11 @@ void ensure_direct_legacy_contract(sao::plugins::loader::plugin_manifest& manife
     manifest.managed_type = managed_type;
 }
 
+void try_destroy_sdk_context(SaoSdkContext* context) noexcept {
+    if (context != nullptr)
+        (void)sao_sdk_context_try_destroy(context);
+}
+
 } // namespace
 
 struct cs_plugin_s {
@@ -130,13 +135,16 @@ sao_plugins_cshost_load_plugin(cs_host_handle_t host, const char* plugin_json_pa
         if (status == SAO_OK)
             status = sao_sdk_context_bind_platform_services(sdk_context);
         if (status != SAO_OK) {
-            if (sdk_context != nullptr)
-                sao_sdk_context_destroy(sdk_context);
+            if (sdk_context != nullptr) {
+                const int32_t cleanup_status = sao_sdk_context_try_destroy(sdk_context);
+                if (cleanup_status != SAO_OK)
+                    status = cleanup_status;
+            }
             set_error(out_error_utf8, "C# SDK context initialization failed");
             return status;
         }
         auto sdk_guard = std::unique_ptr<SaoSdkContext, void (*)(SaoSdkContext*)>(
-            sdk_context, sao_sdk_context_destroy);
+            sdk_context, try_destroy_sdk_context);
 
         cshost_reset_sdk_counters();
         status = cshost_component_initialize(component, sdk_context, nullptr, error);
@@ -227,14 +235,22 @@ sao_plugins_cshost_unload_plugin(cs_plugin_handle_t plugin, char** out_error_utf
             }
             plugin->unload_hook_completed = true;
         }
+        if (plugin->sdk_context != nullptr) {
+            int32_t status = sao_sdk_context_try_destroy(plugin->sdk_context);
+            if (status == SAO_SDK_ERR_BUSY)
+                status = sao::plugins::loader::SAO_PLUGINS_ERR_BUSY;
+            if (status != SAO_OK) {
+                set_error(out_error_utf8, "C# SDK context teardown failed");
+                return status;
+            }
+            plugin->sdk_context = nullptr;
+        }
         const int32_t close_status = cshost_component_close(plugin->component, error);
         if (close_status != SAO_OK) {
             set_error(out_error_utf8, error);
             return close_status;
         }
         plugin->component = nullptr;
-        sao_sdk_context_destroy(plugin->sdk_context);
-        plugin->sdk_context = nullptr;
         delete plugin;
         return SAO_OK;
     } catch (...) {

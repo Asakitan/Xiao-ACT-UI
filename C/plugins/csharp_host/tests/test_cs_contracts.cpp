@@ -48,7 +48,7 @@ TEST_CASE("managed bridge and OnLoad context have append-only size contracts",
     STATIC_REQUIRE(std::is_standard_layout_v<cs_managed_plugin_context>);
     STATIC_REQUIRE(offsetof(cs_sdk_bridge, log_info) == 0);
     STATIC_REQUIRE(offsetof(cs_sdk_bridge, struct_size) == sizeof(void*) * 3);
-    STATIC_REQUIRE(sizeof(cs_managed_plugin_context) == sizeof(uint32_t) * 2 + sizeof(void*) * 2);
+    STATIC_REQUIRE(sizeof(cs_managed_plugin_context) == sizeof(uint32_t) * 2 + sizeof(void*) * 4);
 
     int sdk_marker = 0;
     int loader_marker = 0;

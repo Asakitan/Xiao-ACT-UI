@@ -18,6 +18,9 @@ typedef struct cs_plugin_s* cs_plugin_handle_t;
 
 inline constexpr uint32_t SAO_CSHOST_MANAGED_ABI_VERSION = 1;
 
+struct cs_managed_sdk_table;
+using cs_managed_sdk_session_t = void*;
+
 // The first three fields preserve the legacy fixture layout. New managed
 // components must validate struct_size and abi_version before reading appended
 // fields. sdk_context is a SaoSdkContext pointer; loader_context is a distinct
@@ -30,6 +33,8 @@ struct cs_sdk_bridge {
     uint32_t abi_version;
     void* sdk_context;
     void* loader_context;
+    const cs_managed_sdk_table* sdk_table;
+    cs_managed_sdk_session_t sdk_session;
 };
 
 // OnLoad receives a borrowed pointer to this descriptor and exactly
@@ -40,6 +45,8 @@ struct cs_managed_plugin_context {
     uint32_t abi_version;
     void* sdk_context;
     void* loader_context;
+    const cs_managed_sdk_table* sdk_table;
+    cs_managed_sdk_session_t sdk_session;
 };
 
 // SDK 记账 (供 test 校验插件真的调了 SDK)

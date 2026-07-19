@@ -3,8 +3,10 @@
 #include "cs_host_internal.h"
 
 #include "sao/plugins/csharp_host/cs_host.h"
+#include "sao/plugins/csharp_host/cs_module_bridge.h"
 #include "sao/plugins/csharp_host/cs_plugin_lifecycle.h"
 #include "sao/plugins/loader/plugin_manifest.h"
+#include "sao/plugins/sdk_binding/binding_common.h"
 
 #include <cstdint>
 #include <string>
@@ -12,6 +14,7 @@
 namespace sao::plugins::csharp_host {
 
 struct managed_component_s;
+struct sdk_bridge_session;
 
 enum class managed_hook : uint8_t {
     init_sdk,
@@ -29,6 +32,25 @@ int32_t cshost_component_load(cs_host_handle_t host,
 
 int32_t cshost_component_initialize(managed_component_s* component, void* sdk_context,
                                     void* loader_context, std::string& out_error) noexcept;
+
+int32_t cshost_component_attach_contexts(managed_component_s* component, void* sdk_context,
+                                         void* loader_context) noexcept;
+int32_t cshost_component_publish_sdk_session(managed_component_s* component,
+                                             const cs_managed_sdk_table* table,
+                                             cs_managed_sdk_session_t session) noexcept;
+void cshost_component_clear_sdk_session(managed_component_s* component,
+                                        cs_managed_sdk_session_t session) noexcept;
+
+int32_t cshost_sdk_bridge_prepare(void* runtime, void* loader_context, void* sdk_context,
+                                  managed_component_s* component) noexcept;
+void cshost_sdk_bridge_cancel(void* runtime) noexcept;
+int32_t
+cshost_sdk_bridge_set_binding(sdk_bridge_session* session,
+                              sao::plugins::sdk_binding::plugin_binding_handle_t binding) noexcept;
+int32_t cshost_sdk_bridge_finish(sdk_bridge_session* session) noexcept;
+int32_t cshost_sdk_bridge_discard(sdk_bridge_session* session) noexcept;
+int32_t cshost_register_sdk_binding_provider() noexcept;
+int32_t cshost_unregister_sdk_binding_provider() noexcept;
 
 int32_t cshost_component_on_load(managed_component_s* component, int32_t* out_managed_result,
                                  std::string& out_error) noexcept;
