@@ -449,6 +449,28 @@ struct SaoSdkGpuHuntTable {
                                                    uint32_t pid);
 
     sao_sdk_status_t(SAO_SDK_CALL* detach_tracker)(void* ctx_impl, sao_sdk_gpu_tracker_t tracker);
+
+    // Append-only ABI 1.5 extension.  Fetch the current matrix lock's
+    // heap coordinates so callers can persist them across sessions:
+    //   *out_heap_base = 0, *out_heap_size = 0 when not locked.
+    // *out_offset is only valid when *out_locked = 1.  Consumers store
+    // {heap_size, offset} as a hint keyed on the target game and feed
+    // it back via set_prior_lock_hint on the next attach for the same
+    // game so cold-start lock latency drops from ~0.5-2 s full-scan to
+    // "size-matching heap scanned first".
+    sao_sdk_status_t(SAO_SDK_CALL* get_matrix_lock_info)(
+        void* ctx_impl, sao_sdk_gpu_tracker_t tracker,
+        uint64_t* out_heap_base, uint32_t* out_offset,
+        uint64_t* out_heap_size, uint8_t* out_locked);
+
+    // Provide a hint from a previous session.  Takes effect on the
+    // NEXT attach (candidate heaps whose size matches hint_heap_size
+    // scan first).  Passing hint_heap_size = 0 clears any stored hint.
+    // hint_offset is retained verbatim for future extension (per-
+    // offset vote seeding); safe to pass 0 today.
+    sao_sdk_status_t(SAO_SDK_CALL* set_prior_lock_hint)(
+        void* ctx_impl, sao_sdk_gpu_tracker_t tracker,
+        uint64_t hint_heap_size, uint32_t hint_offset);
 };
 
 // The main context struct.  ctx_impl is an opaque pointer to the
