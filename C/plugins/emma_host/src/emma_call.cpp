@@ -11,6 +11,7 @@
 #include "sao/plugins/emma_host/emma_lexer.h"
 #include "sao/plugins/emma_host/emma_parser.h"
 #include "sao/plugins/emma_host/emma_stdlib.h"
+#include "sao/plugins/loader/entity_provider.h"
 #include "sao/plugins/loader/loader_status.h"
 #include "sao/plugins/loader/plugin_context.h"
 #include "sao/plugins/sdk_binding/binding_emma.h"
@@ -20,6 +21,7 @@
 #include <atomic>
 #include <cmath>
 #include <condition_variable>
+#include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <filesystem>
@@ -31,6 +33,7 @@
 #include <string>
 #include <string_view>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 #include <nlohmann/json.hpp>
@@ -39,6 +42,36 @@ namespace sao::plugins::emma_host {
 
 // 外部符号 (定义在 emma_interpreter.cpp)
 std::string emma_value_to_string(const emma_value& v);
+
+struct emma_plugin_runtime;
+
+struct emma_menu_row {
+    std::string label;
+    std::string icon;
+    std::string action_id;
+    std::string payload_json;
+    bool can_activate = false;
+    bool keep_menu_open = false;
+    bool close_menu_before = false;
+
+    bool operator==(const emma_menu_row&) const = default;
+};
+
+struct emma_menu_bridge {
+    emma_plugin_runtime* runtime = nullptr;
+    bool enable_scoped = false;
+    std::atomic_bool closing{false};
+    std::string provider_id;
+    std::string contribution_id;
+    std::string root_id;
+    std::string name;
+    std::string icon;
+    double priority = 0.0;
+    std::uint64_t revision = 0;
+    std::shared_ptr<callable> builder;
+    std::vector<emma_menu_row> rows;
+    std::unordered_map<std::string, std::shared_ptr<callable>> actions;
+};
 
 struct emma_plugin_runtime {
     struct callback_record;
@@ -73,6 +106,7 @@ struct emma_plugin_runtime {
     std::atomic_bool callbacks_accepting{true};
     std::mutex resources_mutex;
     std::vector<owned_resource> resources;
+    std::vector<std::unique_ptr<emma_menu_bridge>> menus;
     uint64_t next_resource_id = 1;
     emma_error last_error;
     std::mutex invocation_mutex;
@@ -671,6 +705,646 @@ std::string serialize_value_or_throw(const emma_value& value) {
     return converted.dump();
 }
 
+constexpr std::size_t kMaximumMenuRows = 4096;
+constexpr std::size_t kMaximumMenuStringBytes = 16U * 1024U;
+constexpr std::size_t kMaximumMenuSnapshotBytes = 8U * 1024U * 1024U;
+constexpr std::size_t kMaximumRememberedActions = 4096;
+
+std::uint64_t stable_hash(std::string_view value) noexcept {
+    std::uint64_t hash = 1469598103934665603ULL;
+    for (const unsigned char byte : value) {
+        hash ^= byte;
+        hash *= 1099511628211ULL;
+    }
+    return hash;
+}
+
+std::string hash_suffix(std::uint64_t hash) {
+    char buffer[17]{};
+    std::snprintf(buffer, sizeof(buffer), "%016llx", static_cast<unsigned long long>(hash));
+    return buffer;
+}
+
+std::string hash_suffix(std::string_view value) {
+    return hash_suffix(stable_hash(value));
+}
+
+void hash_bytes(std::uint64_t& hash, const void* data, std::size_t size) noexcept {
+    const auto* bytes = static_cast<const unsigned char*>(data);
+    for (std::size_t index = 0; index < size; ++index) {
+        hash ^= bytes[index];
+        hash *= 1099511628211ULL;
+    }
+}
+
+void hash_integer(std::uint64_t& hash, std::uint64_t value) noexcept {
+    for (unsigned int shift = 0; shift < 64; shift += 8) {
+        const auto byte = static_cast<unsigned char>((value >> shift) & 0xffU);
+        hash_bytes(hash, &byte, 1);
+    }
+}
+
+void hash_string(std::uint64_t& hash, std::string_view value) noexcept {
+    hash_integer(hash, value.size());
+    hash_bytes(hash, value.data(), value.size());
+}
+
+void hash_ast_node(const ast_pool& pool, node_id id, std::uint64_t& hash,
+                   std::size_t depth = 0) noexcept {
+    if (depth > 1024 || id >= pool.kinds.size() || id >= pool.strings.size() ||
+        id >= pool.ints.size() || id >= pool.floats.size() || id >= pool.children.size()) {
+        hash_integer(hash, std::numeric_limits<std::uint64_t>::max());
+        return;
+    }
+    hash_integer(hash, static_cast<std::uint64_t>(pool.kinds[id]));
+    hash_string(hash, pool.strings[id]);
+    hash_integer(hash, static_cast<std::uint64_t>(pool.ints[id]));
+    std::uint64_t floating_bits = 0;
+    static_assert(sizeof(floating_bits) == sizeof(pool.floats[id]));
+    std::memcpy(&floating_bits, &pool.floats[id], sizeof(floating_bits));
+    hash_integer(hash, floating_bits);
+    hash_integer(hash, pool.children[id].size());
+    for (const node_id child : pool.children[id])
+        hash_ast_node(pool, child, hash, depth + 1);
+}
+
+std::string callable_identity(const emma_plugin_runtime& runtime, const callable& function) {
+    std::uint64_t hash = 1469598103934665603ULL;
+    hash_string(hash, function.name);
+    hash_integer(hash, function.params.size());
+    for (const auto& parameter : function.params)
+        hash_string(hash, parameter);
+    hash_integer(hash, function.body.size());
+    for (const node_id body : function.body) {
+        hash_integer(hash, body);
+        hash_ast_node(runtime.pool, body, hash);
+    }
+    return "emma-callable-" + hash_suffix(hash);
+}
+
+bool valid_utf8(std::string_view value) noexcept {
+    std::size_t offset = 0;
+    while (offset < value.size()) {
+        const auto first = static_cast<unsigned char>(value[offset]);
+        if (first <= 0x7fU) {
+            ++offset;
+            continue;
+        }
+        std::size_t continuation_count = 0;
+        std::uint32_t code_point = 0;
+        if ((first & 0xe0U) == 0xc0U) {
+            continuation_count = 1;
+            code_point = first & 0x1fU;
+        } else if ((first & 0xf0U) == 0xe0U) {
+            continuation_count = 2;
+            code_point = first & 0x0fU;
+        } else if ((first & 0xf8U) == 0xf0U) {
+            continuation_count = 3;
+            code_point = first & 0x07U;
+        } else {
+            return false;
+        }
+        if (offset + continuation_count >= value.size())
+            return false;
+        for (std::size_t index = 1; index <= continuation_count; ++index) {
+            const auto next = static_cast<unsigned char>(value[offset + index]);
+            if ((next & 0xc0U) != 0x80U)
+                return false;
+            code_point = (code_point << 6U) | (next & 0x3fU);
+        }
+        const bool overlong = (continuation_count == 1 && code_point < 0x80U) ||
+                              (continuation_count == 2 && code_point < 0x800U) ||
+                              (continuation_count == 3 && code_point < 0x10000U);
+        if (overlong || code_point > 0x10ffffU ||
+            (code_point >= 0xd800U && code_point <= 0xdfffU)) {
+            return false;
+        }
+        offset += continuation_count + 1;
+    }
+    return true;
+}
+
+bool valid_menu_string(std::string_view value, bool required) noexcept {
+    return (!required || !value.empty()) && value.size() <= kMaximumMenuStringBytes &&
+           value.find('\0') == std::string_view::npos && valid_utf8(value);
+}
+
+void remember_menu_error(emma_plugin_runtime& runtime, int32_t status, std::string message) {
+    runtime.last_error = {};
+    runtime.last_error.kind = error_kind::runtime_error;
+    runtime.last_error.status = status;
+    runtime.last_error.message = std::move(message);
+}
+
+bool menu_string(const emma_dict& dictionary, const char* key, bool required, std::string& output,
+                 std::string& error) {
+    output.clear();
+    const auto found = dictionary.items.find(key);
+    if (found == dictionary.items.end() || std::holds_alternative<std::nullptr_t>(found->second)) {
+        if (required)
+            error = "menu text field is required";
+        return !required;
+    }
+    const auto* value = std::get_if<std::string>(&found->second);
+    if (value == nullptr) {
+        error = "menu text fields must be strings";
+        return false;
+    }
+    if (!valid_menu_string(*value, required)) {
+        error = "menu text field is invalid";
+        return false;
+    }
+    output = *value;
+    return true;
+}
+
+bool menu_flag(const emma_dict& dictionary, const char* key, bool fallback, bool& output,
+               std::string& error) {
+    const auto found = dictionary.items.find(key);
+    if (found == dictionary.items.end() || std::holds_alternative<std::nullptr_t>(found->second)) {
+        output = fallback;
+        return true;
+    }
+    const auto* value = std::get_if<bool>(&found->second);
+    if (value == nullptr) {
+        error = "menu flag fields must be booleans";
+        return false;
+    }
+    output = *value;
+    return true;
+}
+
+bool menu_payload(const emma_dict& dictionary, std::string& output, std::string& error) {
+    const auto encoded = dictionary.items.find("payload_json");
+    if (encoded != dictionary.items.end() &&
+        !std::holds_alternative<std::nullptr_t>(encoded->second)) {
+        const auto* value = std::get_if<std::string>(&encoded->second);
+        if (value == nullptr || !valid_menu_string(*value, false)) {
+            error = "menu payload_json must be a valid text field";
+            return false;
+        }
+        const json parsed = json::parse(*value, nullptr, false);
+        if (parsed.is_discarded()) {
+            error = "menu payload_json must be valid JSON";
+            return false;
+        }
+        output = *value;
+        return true;
+    }
+
+    const auto payload = dictionary.items.find("payload");
+    if (payload == dictionary.items.end() ||
+        std::holds_alternative<std::nullptr_t>(payload->second)) {
+        output = "{}";
+        return true;
+    }
+    json converted;
+    if (!value_to_json(payload->second, converted)) {
+        error = "menu payload cannot be converted to JSON";
+        return false;
+    }
+    output = converted.dump();
+    if (!valid_menu_string(output, false)) {
+        error = "menu payload exceeds its field budget";
+        return false;
+    }
+    return true;
+}
+
+void append_identity_field(std::string& identity, std::string_view value) {
+    identity.append(std::to_string(value.size()));
+    identity.push_back(':');
+    identity.append(value);
+    identity.push_back('\n');
+}
+
+bool add_snapshot_bytes(std::size_t& total, std::size_t amount) noexcept {
+    if (total > kMaximumMenuSnapshotBytes || amount > kMaximumMenuSnapshotBytes - total)
+        return false;
+    total += amount;
+    return true;
+}
+
+bool build_menu_snapshot(emma_menu_bridge& bridge) {
+    auto& runtime = *bridge.runtime;
+    std::string call_message;
+    emma_error call_error;
+    emma_value result =
+        runtime.interp->call_function(bridge.builder, {}, call_message, &call_error);
+    if (call_error.kind != error_kind::none || !call_message.empty()) {
+        if (call_error.kind == error_kind::none) {
+            call_error.kind = error_kind::runtime_error;
+            call_error.status = SAO_ERR_OS_CALL_FAILED;
+            call_error.message = std::move(call_message);
+        }
+        runtime.last_error = std::move(call_error);
+        return false;
+    }
+    const auto* list = std::get_if<std::shared_ptr<emma_list>>(&result);
+    if (list == nullptr || !*list) {
+        remember_menu_error(runtime, SAO_ERR_INVALID_ARGUMENT, "menu builder must return a list");
+        return false;
+    }
+    if ((*list)->items.size() > kMaximumMenuRows) {
+        remember_menu_error(runtime, SAO_ERR_INVALID_ARGUMENT,
+                            "menu builder returned too many rows");
+        return false;
+    }
+
+    std::vector<emma_menu_row> rows;
+    std::unordered_map<std::string, std::shared_ptr<callable>> actions;
+    std::unordered_map<std::string, std::size_t> identity_occurrences;
+    std::unordered_set<std::string> action_ids;
+    rows.reserve((*list)->items.size());
+    actions.reserve((*list)->items.size());
+    identity_occurrences.reserve((*list)->items.size());
+    action_ids.reserve((*list)->items.size());
+    std::size_t total_bytes = 0;
+
+    for (const auto& item : (*list)->items) {
+        const auto* dictionary = std::get_if<std::shared_ptr<emma_dict>>(&item);
+        if (dictionary == nullptr || !*dictionary) {
+            remember_menu_error(runtime, SAO_ERR_INVALID_ARGUMENT,
+                                "menu rows must be dictionaries");
+            return false;
+        }
+        emma_menu_row row;
+        std::string conversion_error;
+        if (!menu_string(**dictionary, "label", true, row.label, conversion_error) ||
+            !menu_string(**dictionary, "icon", false, row.icon, conversion_error) ||
+            !menu_payload(**dictionary, row.payload_json, conversion_error) ||
+            !menu_flag(**dictionary, "keep_menu_open", false, row.keep_menu_open,
+                       conversion_error) ||
+            !menu_flag(**dictionary, "close_menu_before", false, row.close_menu_before,
+                       conversion_error)) {
+            remember_menu_error(runtime, SAO_ERR_INVALID_ARGUMENT, std::move(conversion_error));
+            return false;
+        }
+
+        std::shared_ptr<callable> command;
+        const auto command_value = (*dictionary)->items.find("command");
+        if (command_value != (*dictionary)->items.end() &&
+            !std::holds_alternative<std::nullptr_t>(command_value->second)) {
+            const auto* function = std::get_if<std::shared_ptr<callable>>(&command_value->second);
+            if (function == nullptr || !*function) {
+                remember_menu_error(runtime, SAO_ERR_INVALID_ARGUMENT,
+                                    "menu command must be callable");
+                return false;
+            }
+            command = *function;
+        }
+        bool requested_can_activate = command != nullptr;
+        if (!menu_flag(**dictionary, "can_activate", requested_can_activate, requested_can_activate,
+                       conversion_error)) {
+            remember_menu_error(runtime, SAO_ERR_INVALID_ARGUMENT, std::move(conversion_error));
+            return false;
+        }
+        row.can_activate = command != nullptr && requested_can_activate;
+
+        std::string explicit_identity;
+        const auto explicit_action = (*dictionary)->items.find("action_id");
+        const auto explicit_id = (*dictionary)->items.find("id");
+        if (explicit_action != (*dictionary)->items.end() &&
+            !std::holds_alternative<std::nullptr_t>(explicit_action->second)) {
+            if (!menu_string(**dictionary, "action_id", true, explicit_identity,
+                             conversion_error)) {
+                remember_menu_error(runtime, SAO_ERR_INVALID_ARGUMENT, std::move(conversion_error));
+                return false;
+            }
+        } else if (explicit_id != (*dictionary)->items.end() &&
+                   !std::holds_alternative<std::nullptr_t>(explicit_id->second) &&
+                   !menu_string(**dictionary, "id", true, explicit_identity, conversion_error)) {
+            remember_menu_error(runtime, SAO_ERR_INVALID_ARGUMENT, std::move(conversion_error));
+            return false;
+        }
+
+        std::string identity = explicit_identity;
+        if (identity.empty()) {
+            append_identity_field(identity, command == nullptr
+                                                ? std::string_view{}
+                                                : callable_identity(runtime, *command));
+            append_identity_field(identity, row.label);
+            append_identity_field(identity, row.icon);
+            append_identity_field(identity, row.payload_json);
+            identity.push_back(row.can_activate ? '1' : '0');
+            identity.push_back(row.keep_menu_open ? '1' : '0');
+            identity.push_back(row.close_menu_before ? '1' : '0');
+            const std::size_t occurrence = identity_occurrences[identity]++;
+            identity.push_back('#');
+            identity.append(std::to_string(occurrence));
+        }
+        row.action_id = "menu-action-" + hash_suffix(bridge.contribution_id + "\n" + identity);
+        if (!action_ids.emplace(row.action_id).second) {
+            remember_menu_error(runtime, SAO_ERR_INVALID_ARGUMENT,
+                                "menu action identities must be unique");
+            return false;
+        }
+        if (command != nullptr)
+            actions.emplace(row.action_id, std::move(command));
+
+        const std::size_t row_bytes = row.label.size() + row.icon.size() + row.action_id.size() +
+                                      row.payload_json.size() + bridge.contribution_id.size() +
+                                      bridge.name.size() + bridge.icon.size();
+        if (!add_snapshot_bytes(total_bytes, row_bytes)) {
+            remember_menu_error(runtime, SAO_ERR_INVALID_ARGUMENT,
+                                "menu builder snapshot exceeds its byte budget");
+            return false;
+        }
+        rows.push_back(std::move(row));
+    }
+
+    std::size_t new_action_count = 0;
+    for (const auto& [action_id, _] : actions) {
+        if (!bridge.actions.contains(action_id))
+            ++new_action_count;
+    }
+    if (bridge.actions.size() > kMaximumRememberedActions ||
+        new_action_count > kMaximumRememberedActions - bridge.actions.size()) {
+        remember_menu_error(runtime, SAO_ERR_INVALID_ARGUMENT,
+                            "menu action history exceeds its budget");
+        return false;
+    }
+
+    const bool rows_changed = bridge.revision == 0 || bridge.rows != rows;
+    if (rows_changed && bridge.revision == std::numeric_limits<std::uint64_t>::max()) {
+        remember_menu_error(runtime, SAO_ERR_OS_CALL_FAILED, "menu snapshot revision exhausted");
+        return false;
+    }
+    auto next_actions = bridge.actions;
+    for (auto& [action_id, command] : actions)
+        next_actions.insert_or_assign(action_id, std::move(command));
+    bridge.actions = std::move(next_actions);
+    bridge.rows = std::move(rows);
+    if (rows_changed)
+        ++bridge.revision;
+    runtime.last_error = {};
+    return true;
+}
+
+int32_t SAO_PLUGINS_CALL native_menu_snapshot(sao::plugins::loader::entity_menu_row* rows,
+                                              std::uint32_t capacity, std::uint32_t* out_count,
+                                              std::uint64_t* out_revision, void* user_data) {
+    if (out_count == nullptr || out_revision == nullptr || user_data == nullptr ||
+        (capacity > 0 && rows == nullptr)) {
+        return SAO_ERR_INVALID_ARGUMENT;
+    }
+    auto& bridge = *static_cast<emma_menu_bridge*>(user_data);
+    auto* runtime = bridge.runtime;
+    if (runtime == nullptr || bridge.closing.load(std::memory_order_acquire))
+        return sao::plugins::loader::SAO_PLUGINS_ERR_BUSY;
+    try {
+        runtime_invocation_guard guard(runtime);
+        if (!guard.acquired())
+            return sao::plugins::loader::SAO_PLUGINS_ERR_BUSY;
+        std::unique_lock invocation_lock(runtime->invocation_mutex, std::try_to_lock);
+        if (!invocation_lock.owns_lock() || bridge.closing.load(std::memory_order_acquire))
+            return sao::plugins::loader::SAO_PLUGINS_ERR_BUSY;
+        if (rows == nullptr && !build_menu_snapshot(bridge))
+            return SAO_ERR_OS_CALL_FAILED;
+        *out_count = static_cast<std::uint32_t>(bridge.rows.size());
+        *out_revision = bridge.revision;
+        if (capacity < bridge.rows.size())
+            return SAO_ERR_BUFFER_TOO_SMALL;
+        for (std::size_t index = 0; index < bridge.rows.size(); ++index) {
+            const auto& source = bridge.rows[index];
+            rows[index] = {
+                sizeof(sao::plugins::loader::entity_menu_row),
+                bridge.contribution_id.c_str(),
+                bridge.name.c_str(),
+                bridge.icon.c_str(),
+                bridge.priority,
+                source.label.c_str(),
+                source.icon.c_str(),
+                source.action_id.c_str(),
+                source.payload_json.c_str(),
+                static_cast<std::uint8_t>(source.can_activate),
+                static_cast<std::uint8_t>(source.keep_menu_open),
+                static_cast<std::uint8_t>(source.close_menu_before),
+                {},
+            };
+        }
+        return SAO_OK;
+    } catch (...) {
+        return SAO_ERR_OS_CALL_FAILED;
+    }
+}
+
+int32_t SAO_PLUGINS_CALL native_menu_action(const char* action_id_utf8, const char*,
+                                            void* user_data) {
+    if (action_id_utf8 == nullptr || user_data == nullptr)
+        return SAO_ERR_INVALID_ARGUMENT;
+    auto& bridge = *static_cast<emma_menu_bridge*>(user_data);
+    auto* runtime = bridge.runtime;
+    if (runtime == nullptr || bridge.closing.load(std::memory_order_acquire))
+        return sao::plugins::loader::SAO_PLUGINS_ERR_BUSY;
+    try {
+        runtime_invocation_guard guard(runtime);
+        if (!guard.acquired())
+            return sao::plugins::loader::SAO_PLUGINS_ERR_BUSY;
+        std::unique_lock invocation_lock(runtime->invocation_mutex, std::try_to_lock);
+        if (!invocation_lock.owns_lock() || bridge.closing.load(std::memory_order_acquire))
+            return sao::plugins::loader::SAO_PLUGINS_ERR_BUSY;
+        const auto found = bridge.actions.find(action_id_utf8);
+        if (found == bridge.actions.end() || found->second == nullptr)
+            return SAO_ERR_HANDLE_INVALID;
+        std::string message;
+        emma_error error;
+        (void)runtime->interp->call_function(found->second, {}, message, &error);
+        if (error.kind != error_kind::none || !message.empty()) {
+            if (error.kind == error_kind::none) {
+                error.kind = error_kind::runtime_error;
+                error.status = SAO_ERR_OS_CALL_FAILED;
+                error.message = std::move(message);
+            }
+            runtime->last_error = std::move(error);
+            return SAO_ERR_OS_CALL_FAILED;
+        }
+        runtime->last_error = {};
+        return SAO_OK;
+    } catch (...) {
+        return SAO_ERR_OS_CALL_FAILED;
+    }
+}
+
+int32_t register_menu_provider(emma_plugin_runtime& runtime, emma_menu_bridge& menu) noexcept {
+    if (runtime.context == nullptr)
+        return SAO_ERR_HANDLE_INVALID;
+    try {
+        sao::plugins::loader::entity_root_contribution_descriptor root{};
+        root.struct_size = sizeof(root);
+        root.contribution_id_utf8 = menu.contribution_id.c_str();
+        root.root_id_utf8 = menu.root_id.c_str();
+        root.name_utf8 = menu.name.c_str();
+        root.icon_utf8 = menu.icon.c_str();
+        root.priority = menu.priority;
+
+        sao::plugins::loader::context_entity_provider_descriptor provider{};
+        provider.struct_size = sizeof(provider);
+        provider.provider_id_utf8 = menu.provider_id.c_str();
+        provider.snapshot = native_menu_snapshot;
+        provider.action_handler = native_menu_action;
+        provider.user_data = &menu;
+        provider.root_contribution = &root;
+        return sao::plugins::loader::sao_plugins_ctx_register_entity_provider(runtime.context,
+                                                                              &provider);
+    } catch (...) {
+        return SAO_ERR_OS_CALL_FAILED;
+    }
+}
+
+int32_t unregister_menu_providers(emma_plugin_runtime& runtime,
+                                  const std::vector<emma_menu_bridge*>& menus) noexcept {
+    if (runtime.context == nullptr || menus.empty())
+        return SAO_OK;
+    try {
+        std::vector<std::string> qualified_ids;
+        std::vector<const char*> provider_ids;
+        qualified_ids.reserve(menus.size());
+        provider_ids.reserve(menus.size());
+        for (auto* menu : menus) {
+            if (menu == nullptr)
+                return SAO_ERR_INVALID_ARGUMENT;
+            menu->closing.store(true, std::memory_order_release);
+            qualified_ids.push_back(runtime.plugin_id + "/" + menu->provider_id);
+        }
+        for (const auto& provider_id : qualified_ids)
+            provider_ids.push_back(provider_id.c_str());
+        const int32_t status = sao::plugins::loader::plugin_context_unregister_entity_providers(
+            runtime.context, provider_ids.data(), provider_ids.size());
+        if (status != SAO_OK) {
+            for (auto* menu : menus)
+                menu->closing.store(false, std::memory_order_release);
+        }
+        return status;
+    } catch (...) {
+        for (auto* menu : menus) {
+            if (menu != nullptr)
+                menu->closing.store(false, std::memory_order_release);
+        }
+        return SAO_ERR_OS_CALL_FAILED;
+    }
+}
+
+std::vector<emma_menu_bridge*> menu_range(emma_plugin_runtime& runtime, std::size_t checkpoint) {
+    std::vector<emma_menu_bridge*> result;
+    if (checkpoint >= runtime.menus.size())
+        return result;
+    result.reserve(runtime.menus.size() - checkpoint);
+    for (std::size_t index = checkpoint; index < runtime.menus.size(); ++index)
+        result.push_back(runtime.menus[index].get());
+    return result;
+}
+
+int32_t register_menu_providers(emma_plugin_runtime& runtime) noexcept {
+    try {
+        std::vector<emma_menu_bridge*> registered;
+        registered.reserve(runtime.menus.size());
+        for (const auto& menu : runtime.menus) {
+            const int32_t status = register_menu_provider(runtime, *menu);
+            if (status != SAO_OK) {
+                const int32_t rollback_status = unregister_menu_providers(runtime, registered);
+                return rollback_status == SAO_OK ? status : rollback_status;
+            }
+            registered.push_back(menu.get());
+        }
+        for (const auto& menu : runtime.menus)
+            menu->closing.store(false, std::memory_order_release);
+        return SAO_OK;
+    } catch (...) {
+        return SAO_ERR_OS_CALL_FAILED;
+    }
+}
+
+int32_t quiesce_menu_providers(emma_plugin_runtime& runtime) noexcept {
+    try {
+        return unregister_menu_providers(runtime, menu_range(runtime, 0));
+    } catch (...) {
+        return SAO_ERR_OS_CALL_FAILED;
+    }
+}
+
+int32_t rollback_menus(emma_plugin_runtime& runtime, std::size_t checkpoint) noexcept {
+    if (checkpoint > runtime.menus.size())
+        return SAO_ERR_INVALID_ARGUMENT;
+    try {
+        const int32_t status = unregister_menu_providers(runtime, menu_range(runtime, checkpoint));
+        if (status != SAO_OK)
+            return status;
+        for (std::size_t index = checkpoint; index < runtime.menus.size(); ++index)
+            runtime.menus[index]->runtime = nullptr;
+        runtime.menus.erase(runtime.menus.begin() + static_cast<std::ptrdiff_t>(checkpoint),
+                            runtime.menus.end());
+        return SAO_OK;
+    } catch (...) {
+        return SAO_ERR_OS_CALL_FAILED;
+    }
+}
+
+int32_t commit_enable_menus(emma_plugin_runtime& runtime, std::size_t checkpoint) noexcept {
+    if (checkpoint > runtime.menus.size())
+        return SAO_ERR_INVALID_ARGUMENT;
+    for (std::size_t index = checkpoint; index < runtime.menus.size(); ++index)
+        runtime.menus[index]->enable_scoped = true;
+    return SAO_OK;
+}
+
+int32_t remove_enable_menus(emma_plugin_runtime& runtime) noexcept {
+    try {
+        std::vector<emma_menu_bridge*> selected;
+        for (const auto& menu : runtime.menus) {
+            if (menu->enable_scoped)
+                selected.push_back(menu.get());
+        }
+        const int32_t status = unregister_menu_providers(runtime, selected);
+        if (status != SAO_OK)
+            return status;
+        std::erase_if(runtime.menus, [](const auto& menu) {
+            if (!menu->enable_scoped)
+                return false;
+            menu->runtime = nullptr;
+            return true;
+        });
+        return SAO_OK;
+    } catch (...) {
+        return SAO_ERR_OS_CALL_FAILED;
+    }
+}
+
+emma_value register_menu_category(emma_plugin_runtime& runtime, std::vector<emma_value> arguments) {
+    if (arguments.size() < 3 || arguments.size() > 4)
+        throw_context_status("ctx.register_menu_category", SAO_ERR_INVALID_ARGUMENT);
+    const std::string name = require_string(arguments, 0, "ctx.register_menu_category");
+    const std::string icon = require_string(arguments, 1, "ctx.register_menu_category");
+    auto builder = require_callable(arguments, 2, "ctx.register_menu_category");
+    const double priority =
+        arguments.size() == 4 ? require_number(arguments, 3, "ctx.register_menu_category") : 0.0;
+    if (!valid_menu_string(name, true) || !valid_menu_string(icon, false) ||
+        !std::isfinite(priority)) {
+        throw_context_status("ctx.register_menu_category", SAO_ERR_INVALID_ARGUMENT);
+    }
+    if (runtime.context == nullptr)
+        throw_context_status("ctx.register_menu_category", SAO_ERR_HANDLE_INVALID);
+
+    auto menu = std::make_unique<emma_menu_bridge>();
+    menu->runtime = &runtime;
+    menu->provider_id = "menu-" + hash_suffix(name);
+    menu->contribution_id = menu->provider_id;
+    menu->root_id = "plugin:" + hash_suffix(runtime.plugin_id + "\n" + name);
+    menu->name = name;
+    menu->icon = icon;
+    menu->priority = priority;
+    menu->builder = std::move(builder);
+    const std::string extension_id = menu->provider_id;
+    runtime.menus.push_back(std::move(menu));
+    const int32_t status = register_menu_provider(runtime, *runtime.menus.back());
+    if (status != SAO_OK) {
+        runtime.menus.back()->runtime = nullptr;
+        runtime.menus.pop_back();
+        throw_context_status("ctx.register_menu_category", status);
+    }
+    return extension_id;
+}
+
 emma_value parse_owned_json(int32_t status, char* owned_json, const char* method) {
     std::unique_ptr<char, decltype(&sao::plugins::loader::sao_plugins_ctx_free_string)> value(
         owned_json, &sao::plugins::loader::sao_plugins_ctx_free_string);
@@ -930,6 +1604,12 @@ emma_value make_native_context(emma_plugin_runtime* runtime) {
             }
             return emma_value(true);
         }));
+    wrapper->items.emplace("register_menu_category",
+                           make_host_callable("ctx.register_menu_category",
+                                              [runtime](std::vector<emma_value> arguments) {
+                                                  return register_menu_category(
+                                                      *runtime, std::move(arguments));
+                                              }));
     wrapper->items.emplace(
         "get_setting",
         make_host_callable("ctx.get_setting", [context](std::vector<emma_value> arguments) {
@@ -1336,15 +2016,27 @@ int32_t install_context(emma_plugin_runtime* plugin, loader_context_t* context) 
     const int32_t binding_status = sao::plugins::sdk_binding::sao_plugins_binding_emma_register_ctx(
         reinterpret_cast<sao::plugins::sdk_binding::emma_interpreter_ptr>(plugin->interp.get()),
         reinterpret_cast<sao::plugins::sdk_binding::plugin_context_ptr>(context));
+    const emma_value native_context = make_native_context(plugin);
     if (binding_status == SAO_OK) {
         const emma_value candidate = plugin->interp->get_global("ctx");
-        if (has_callable_member(candidate, "log") &&
-            has_callable_member(candidate, "register_ui_panel")) {
-            plugin->context_value = candidate;
+        const auto* dictionary = std::get_if<std::shared_ptr<emma_dict>>(&candidate);
+        if (dictionary != nullptr && *dictionary != nullptr &&
+            has_callable_member(candidate, "log") &&
+            has_callable_member(candidate, "register_ui_panel") &&
+            has_callable_member(candidate, "register_menu_category")) {
+            plugin->context_value = std::make_shared<emma_dict>(**dictionary);
+            plugin->interp->register_global("ctx", plugin->context_value);
+            const auto& installed = *std::get<std::shared_ptr<emma_dict>>(plugin->context_value);
+            plugin->interp->register_global("log", installed.items.at("log"));
             return SAO_OK;
         }
+        if (dictionary != nullptr && *dictionary != nullptr) {
+            auto native_dictionary = std::get<std::shared_ptr<emma_dict>>(native_context);
+            for (const auto& [name, value] : (*dictionary)->items)
+                native_dictionary->items.try_emplace(name, value);
+        }
     }
-    plugin->context_value = make_native_context(plugin);
+    plugin->context_value = native_context;
     plugin->interp->register_global("ctx", plugin->context_value);
     const auto* dictionary = std::get_if<std::shared_ptr<emma_dict>>(&plugin->context_value);
     if (dictionary != nullptr && *dictionary != nullptr) {
@@ -1405,20 +2097,31 @@ int32_t finish_failed_load(std::unique_ptr<emma_plugin_s> plugin, int32_t failur
         return failure_status;
     auto& runtime = *plugin->runtime;
     runtime.callbacks_accepting.store(false, std::memory_order_release);
-    const int32_t teardown_status = teardown_owned_resources(runtime);
-    const int32_t binding_status =
+    const int32_t menu_status = quiesce_menu_providers(runtime);
+    const int32_t teardown_status =
+        menu_status == SAO_OK ? teardown_owned_resources(runtime) : menu_status;
+    int32_t closing_status =
         teardown_status == SAO_OK ? deactivate_emma_binding(runtime) : teardown_status;
-    if (binding_status == SAO_OK)
+    if (closing_status == SAO_OK) {
+        for (auto& menu : runtime.menus)
+            menu->runtime = nullptr;
+        runtime.menus.clear();
         return failure_status;
+    }
+    if (menu_status == SAO_OK) {
+        const int32_t resume_status = register_menu_providers(runtime);
+        if (resume_status != SAO_OK)
+            closing_status = resume_status;
+    }
 
     if (out_error != nullptr) {
         if (out_error->kind == error_kind::none)
             out_error->kind = error_kind::runtime_error;
-        out_error->status = binding_status;
+        out_error->status = closing_status;
         if (!out_error->message.empty())
             out_error->message += "; ";
         out_error->message += "Emma failed-load rollback is still closing with status " +
-                              std::to_string(binding_status);
+                              std::to_string(closing_status);
     }
 
     plugin->lifecycle = emma_plugin_s::state::closing;
@@ -1433,13 +2136,16 @@ int32_t finish_failed_load(std::unique_ptr<emma_plugin_s> plugin, int32_t failur
     }
     if (out_plugin != nullptr)
         *out_plugin = handle;
-    return binding_status;
+    return closing_status;
 }
 
 } // namespace
 
 emma_plugin_runtime::~emma_plugin_runtime() {
     context_value = nullptr;
+    for (auto& menu : menus)
+        menu->runtime = nullptr;
+    menus.clear();
     interp.reset();
     if (owns_context_lease) {
         sao::plugins::loader::plugin_context_release_host_lease(context);
@@ -1619,7 +2325,12 @@ sao_plugins_emma_call_on_enable(emma_plugin_handle_t plugin) {
         return SAO_ERR_HANDLE_INVALID;
     try {
         return with_direct_plugin(plugin, [](emma_plugin_runtime& runtime) {
-            return call_named(&runtime, "on_enable", {}, nullptr, true);
+            const std::size_t checkpoint = runtime.menus.size();
+            const int32_t status = call_named(&runtime, "on_enable", {}, nullptr, true);
+            if (status == SAO_OK)
+                return commit_enable_menus(runtime, checkpoint);
+            const int32_t rollback_status = rollback_menus(runtime, checkpoint);
+            return rollback_status == SAO_OK ? status : rollback_status;
         });
     } catch (...) {
         return SAO_ERR_OS_CALL_FAILED;
@@ -1632,7 +2343,8 @@ sao_plugins_emma_call_on_disable(emma_plugin_handle_t plugin) {
         return SAO_ERR_HANDLE_INVALID;
     try {
         return with_direct_plugin(plugin, [](emma_plugin_runtime& runtime) {
-            return call_named(&runtime, "on_disable", {}, nullptr, true);
+            const int32_t status = call_named(&runtime, "on_disable", {}, nullptr, true);
+            return status == SAO_OK ? remove_enable_menus(runtime) : status;
         });
     } catch (...) {
         return SAO_ERR_OS_CALL_FAILED;
@@ -1829,27 +2541,44 @@ sao_plugins_emma_unload_script(emma_plugin_handle_t plugin) {
             runtime_to_teardown = found->second->runtime.get();
         }
 
-        const int32_t teardown_status = teardown_owned_resources(*runtime_to_teardown);
-        if (teardown_status != SAO_OK) {
+        const int32_t menu_status = quiesce_menu_providers(*runtime_to_teardown);
+        if (menu_status != SAO_OK) {
             std::lock_guard lock(registry.mutex);
             const auto found = registry.plugins.find(plugin);
             if (found != registry.plugins.end() && found->second != nullptr &&
                 found->second->runtime.get() == runtime_to_teardown) {
                 found->second->lifecycle = emma_plugin_s::state::closing;
             }
-            return teardown_status;
+            return menu_status;
+        }
+
+        const int32_t teardown_status = teardown_owned_resources(*runtime_to_teardown);
+        if (teardown_status != SAO_OK) {
+            const int32_t resume_status = register_menu_providers(*runtime_to_teardown);
+            std::lock_guard lock(registry.mutex);
+            const auto found = registry.plugins.find(plugin);
+            if (found != registry.plugins.end() && found->second != nullptr &&
+                found->second->runtime.get() == runtime_to_teardown) {
+                found->second->lifecycle = emma_plugin_s::state::closing;
+            }
+            return resume_status == SAO_OK ? teardown_status : resume_status;
         }
 
         const int32_t binding_status = deactivate_emma_binding(*runtime_to_teardown);
         if (binding_status != SAO_OK) {
+            const int32_t resume_status = register_menu_providers(*runtime_to_teardown);
             std::lock_guard lock(registry.mutex);
             const auto found = registry.plugins.find(plugin);
             if (found != registry.plugins.end() && found->second != nullptr &&
                 found->second->runtime.get() == runtime_to_teardown) {
                 found->second->lifecycle = emma_plugin_s::state::closing;
             }
-            return binding_status;
+            return resume_status == SAO_OK ? binding_status : resume_status;
         }
+
+        for (auto& menu : runtime_to_teardown->menus)
+            menu->runtime = nullptr;
+        runtime_to_teardown->menus.clear();
 
         std::unique_ptr<emma_plugin_runtime> runtime;
         {

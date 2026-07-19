@@ -3,6 +3,7 @@
 #include "sao/plugins/emma_host/emma_call.h"
 #include "sao/plugins/emma_host/emma_interpreter.h"
 #include "sao/plugins/emma_host/emma_loader_adapter.h"
+#include "sao/plugins/loader/entity_provider.h"
 #include "sao/plugins/loader/loader_status.h"
 #include "sao/plugins/loader/plugin_context.h"
 #include "sao/plugins/loader/plugin_lifecycle.h"
@@ -10,15 +11,18 @@
 
 #include <windows.h>
 
+#include <algorithm>
 #include <atomic>
 #include <barrier>
 #include <chrono>
 #include <condition_variable>
+#include <cstdio>
 #include <filesystem>
 #include <fstream>
 #include <memory>
 #include <mutex>
 #include <string>
+#include <string_view>
 #include <thread>
 #include <utility>
 #include <vector>
@@ -96,6 +100,115 @@ plugin_handle_t add_plugin(const plugin_manifest& manifest) {
 
 void remove_plugin(plugin_handle_t plugin) {
     REQUIRE(sao_plugins_registry_remove(sao_plugins_registry_instance(), plugin) == SAO_OK);
+}
+
+struct menu_row_snapshot {
+    std::string label;
+    std::string icon;
+    std::string action_id;
+    std::string payload;
+    bool can_activate = false;
+    bool keep_menu_open = false;
+    bool close_menu_before = false;
+
+    bool operator==(const menu_row_snapshot&) const = default;
+};
+
+struct menu_provider_snapshot {
+    std::string provider_id;
+    std::string owner_id;
+    std::uint64_t generation = 0;
+    std::uint64_t revision = 0;
+    std::vector<menu_row_snapshot> rows;
+
+    bool operator==(const menu_provider_snapshot&) const = default;
+};
+
+struct menu_root_snapshot {
+    std::string owner_id;
+    std::string contribution_id;
+    std::string root_id;
+    std::string name;
+    std::string icon;
+    double priority = 0.0;
+    std::vector<std::pair<std::string, std::string>> actions;
+
+    bool operator==(const menu_root_snapshot&) const = default;
+};
+
+struct menu_catalog_snapshot {
+    std::vector<menu_provider_snapshot> providers;
+    std::vector<menu_root_snapshot> roots;
+
+    bool operator==(const menu_catalog_snapshot&) const = default;
+};
+
+int32_t SAO_PLUGINS_CALL copy_menu_catalog(const entity_provider_catalog_view* view,
+                                           void* user_data) {
+    if (view == nullptr || user_data == nullptr)
+        return SAO_ERR_INVALID_ARGUMENT;
+    menu_catalog_snapshot candidate;
+    for (std::uint32_t provider_index = 0; provider_index < view->provider_count;
+         ++provider_index) {
+        const auto& source = view->providers[provider_index];
+        menu_provider_snapshot provider;
+        provider.provider_id = source.provider_id_utf8;
+        provider.owner_id = source.owner_plugin_id_utf8;
+        provider.generation = source.generation;
+        provider.revision = source.revision;
+        for (std::uint32_t row_index = 0; row_index < source.row_count; ++row_index) {
+            const auto& row = source.rows[row_index];
+            provider.rows.push_back({row.row_label_utf8, row.row_icon_utf8, row.action_id_utf8,
+                                     row.payload_json_utf8, row.can_activate != 0,
+                                     row.keep_menu_open != 0, row.close_menu_before != 0});
+        }
+        candidate.providers.push_back(std::move(provider));
+    }
+    for (std::uint32_t root_index = 0; root_index < view->root_contribution_count; ++root_index) {
+        const auto& source = view->root_contributions[root_index];
+        menu_root_snapshot root;
+        root.owner_id = source.owner_plugin_id_utf8;
+        root.contribution_id = source.contribution_id_utf8;
+        root.root_id = source.root_id_utf8;
+        root.name = source.name_utf8;
+        root.icon = source.icon_utf8;
+        root.priority = source.priority;
+        for (std::uint32_t action_index = 0; action_index < source.action_count; ++action_index) {
+            root.actions.emplace_back(source.actions[action_index].provider_id_utf8,
+                                      source.actions[action_index].action_id_utf8);
+        }
+        candidate.roots.push_back(std::move(root));
+    }
+    *static_cast<menu_catalog_snapshot*>(user_data) = std::move(candidate);
+    return SAO_OK;
+}
+
+int32_t snapshot_menu_catalog(menu_catalog_snapshot& output) {
+    return sao_plugins_entity_provider_snapshot(copy_menu_catalog, &output);
+}
+
+std::string stable_suffix(std::string_view value) {
+    std::uint64_t hash = 1469598103934665603ULL;
+    for (const unsigned char byte : value) {
+        hash ^= byte;
+        hash *= 1099511628211ULL;
+    }
+    char buffer[17]{};
+    std::snprintf(buffer, sizeof(buffer), "%016llx", static_cast<unsigned long long>(hash));
+    return buffer;
+}
+
+void set_context_json(plugin_context_t* context, const char* key, std::string_view value) {
+    REQUIRE(sao_plugins_ctx_set_setting(context, key, std::string(value).c_str()) == SAO_OK);
+}
+
+std::string context_json(plugin_context_t* context, const char* key) {
+    char* value = nullptr;
+    REQUIRE(sao_plugins_ctx_get_setting(context, key, &value) == SAO_OK);
+    REQUIRE(value != nullptr);
+    std::string result(value);
+    sao_plugins_ctx_free_string(value);
+    return result;
 }
 
 bool has_panel(const char* plugin_id, const char* panel_id) {
@@ -226,6 +339,377 @@ end
 
     sao_plugins_ctx_destroy(context);
     remove_plugin(loader_plugin);
+}
+
+TEST_CASE("Emma menu category adapter preserves canonical identity and lifecycle",
+          "[plugins][emma][adapter][menu]") {
+    temp_tree tree(L"menu_identity");
+    write_text(tree.root / L"nested" / L"plugin.emma", R"EMMA(
+fn shared_command()
+    if ctx.get_setting("fail_action", false)
+        missing_action()
+    end
+    ctx.set_setting("action_invoked", true)
+end
+fn build_menu()
+    let mode = ctx.get_setting("mode", 0)
+    if mode == 0
+        return [
+            {action_id: "explicit", label: "显式", icon: "界", command: shared_command,
+             payload_json: "{\"raw\":true}", keep_menu_open: true},
+            {label: "共享 A", icon: "A", command: shared_command,
+             payload: {slot: "a"}, close_menu_before: true},
+            {label: "共享 A", icon: "A", command: shared_command,
+             payload: {slot: "a"}, close_menu_before: true},
+            {label: "共享 B", icon: "B", command: shared_command,
+             payload: {slot: "b"}, can_activate: false}
+        ]
+    end
+    if mode == 1
+        return [
+            {label: "插入项", icon: "I", command: shared_command},
+            {action_id: "explicit", label: "显式", icon: "界", command: shared_command,
+             payload_json: "{\"raw\":true}", keep_menu_open: true},
+            {label: "共享 A", icon: "A", command: shared_command,
+             payload: {slot: "a"}, close_menu_before: true},
+            {label: "共享 A", icon: "A", command: shared_command,
+             payload: {slot: "a"}, close_menu_before: true},
+            {label: "共享 B", icon: "B", command: shared_command,
+             payload: {slot: "b"}, can_activate: false}
+        ]
+    end
+    if mode == 2
+        return [
+            {label: "共享 B", icon: "B", command: shared_command,
+             payload: {slot: "b"}, can_activate: false},
+            {action_id: "explicit", label: "显式", icon: "界", command: shared_command,
+             payload_json: "{\"raw\":true}", keep_menu_open: true},
+            {label: "共享 A", icon: "A", command: shared_command,
+             payload: {slot: "a"}, close_menu_before: true},
+            {label: "共享 A", icon: "A", command: shared_command,
+             payload: {slot: "a"}, close_menu_before: true}
+        ]
+    end
+    if mode == 3
+        missing_builder()
+    end
+    return []
+end
+fn on_load(ctx)
+    ctx.register_menu_category("工具 α", "⚙", build_menu, 10.5)
+end
+)EMMA");
+
+    emma_loader_adapter_owner_t owner = nullptr;
+    REQUIRE(sao_plugins_emma_register_loader_adapter(&owner) == SAO_OK);
+    const auto manifest = make_manifest(tree, "emma.menu.identity");
+    plugin_handle_t plugin = add_plugin(manifest);
+    REQUIRE(sao_plugins_lifecycle_load(plugin) == SAO_OK);
+    plugin_context_t* context = nullptr;
+    REQUIRE(sao_plugins_lifecycle_get_context(plugin, &context) == SAO_OK);
+
+    menu_catalog_snapshot catalog;
+    REQUIRE(snapshot_menu_catalog(catalog) == SAO_OK);
+    CHECK(catalog.providers.empty());
+    REQUIRE(sao_plugins_lifecycle_enable(plugin) == SAO_OK);
+    std::atomic_int snapshot_status{SAO_ERR_OS_CALL_FAILED};
+    std::jthread worker([&] { snapshot_status = snapshot_menu_catalog(catalog); });
+    worker.join();
+    REQUIRE(snapshot_status.load() == SAO_OK);
+    REQUIRE(catalog.providers.size() == 1);
+    REQUIRE(catalog.roots.size() == 1);
+    const std::string local_id = "menu-" + stable_suffix("工具 α");
+    const auto initial = catalog;
+    const auto& provider = initial.providers.front();
+    CHECK(provider.provider_id == manifest.plugin_id + "/" + local_id);
+    CHECK(provider.owner_id == manifest.plugin_id);
+    CHECK(provider.generation > 0);
+    CHECK(provider.revision == 1);
+    REQUIRE(provider.rows.size() == 4);
+    CHECK(provider.rows[0].payload == "{\"raw\":true}");
+    CHECK(provider.rows[0].keep_menu_open);
+    CHECK(provider.rows[1].close_menu_before);
+    CHECK_FALSE(provider.rows[3].can_activate);
+    CHECK(initial.roots[0].contribution_id == local_id);
+    CHECK(initial.roots[0].root_id == "plugin:" + stable_suffix(manifest.plugin_id + "\n工具 α"));
+    CHECK(initial.roots[0].name == "工具 α");
+    CHECK(initial.roots[0].icon == "⚙");
+    CHECK(initial.roots[0].priority == 10.5);
+    REQUIRE(initial.roots[0].actions.size() == 4);
+
+    const std::string explicit_action = provider.rows[0].action_id;
+    const std::string shared_a0 = provider.rows[1].action_id;
+    const std::string shared_a1 = provider.rows[2].action_id;
+    const std::string shared_b = provider.rows[3].action_id;
+    CHECK(explicit_action == "menu-action-" + stable_suffix(local_id + "\nexplicit"));
+    CHECK(shared_a0 != shared_a1);
+    CHECK(shared_a0 != shared_b);
+    CHECK(sao_plugins_entity_provider_invoke(provider.provider_id.c_str(), provider.generation,
+                                             explicit_action.c_str(),
+                                             provider.rows[0].payload.c_str()) == SAO_OK);
+    CHECK(context_json(context, "action_invoked") == "true");
+    set_context_json(context, "fail_action", "true");
+    CHECK(sao_plugins_entity_provider_invoke(provider.provider_id.c_str(), provider.generation,
+                                             explicit_action.c_str(),
+                                             "{}") == SAO_ERR_OS_CALL_FAILED);
+    set_context_json(context, "fail_action", "false");
+    CHECK(sao_plugins_entity_provider_invoke(provider.provider_id.c_str(), provider.generation,
+                                             "menu-action-0000000000000000",
+                                             "{}") == SAO_ERR_HANDLE_INVALID);
+
+    set_context_json(context, "mode", "1");
+    menu_catalog_snapshot inserted;
+    REQUIRE(snapshot_menu_catalog(inserted) == SAO_OK);
+    REQUIRE(inserted.providers[0].rows.size() == 5);
+    CHECK(inserted.providers[0].revision == 2);
+    CHECK(inserted.providers[0].rows[1].action_id == explicit_action);
+    CHECK(inserted.providers[0].rows[2].action_id == shared_a0);
+    CHECK(inserted.providers[0].rows[3].action_id == shared_a1);
+    CHECK(inserted.providers[0].rows[4].action_id == shared_b);
+    set_context_json(context, "mode", "2");
+    menu_catalog_snapshot reordered;
+    REQUIRE(snapshot_menu_catalog(reordered) == SAO_OK);
+    CHECK(reordered.providers[0].revision == 3);
+    CHECK(reordered.providers[0].rows[0].action_id == shared_b);
+    CHECK(reordered.providers[0].rows[1].action_id == explicit_action);
+    set_context_json(context, "mode", "3");
+    const auto committed = reordered;
+    CHECK(snapshot_menu_catalog(reordered) == SAO_ERR_OS_CALL_FAILED);
+    CHECK(reordered == committed);
+    set_context_json(context, "mode", "2");
+    REQUIRE(snapshot_menu_catalog(reordered) == SAO_OK);
+    CHECK(reordered.providers[0].revision == 3);
+    set_context_json(context, "mode", "4");
+    REQUIRE(snapshot_menu_catalog(catalog) == SAO_OK);
+    CHECK(catalog.providers[0].rows.empty());
+    CHECK(catalog.providers[0].revision == 4);
+    CHECK(sao_plugins_entity_provider_invoke(provider.provider_id.c_str(), provider.generation,
+                                             explicit_action.c_str(), "{}") == SAO_OK);
+
+    REQUIRE(sao_plugins_lifecycle_disable(plugin) == SAO_OK);
+    REQUIRE(snapshot_menu_catalog(catalog) == SAO_OK);
+    CHECK(catalog.providers.empty());
+    CHECK(sao_plugins_entity_provider_invoke(provider.provider_id.c_str(), provider.generation,
+                                             explicit_action.c_str(),
+                                             "{}") == SAO_PLUGINS_ERR_BUSY);
+    REQUIRE(sao_plugins_lifecycle_enable(plugin) == SAO_OK);
+    REQUIRE(snapshot_menu_catalog(catalog) == SAO_OK);
+    CHECK(catalog.providers[0].generation == provider.generation);
+    REQUIRE(sao_plugins_lifecycle_unload(plugin) == SAO_OK);
+    CHECK(sao_plugins_entity_provider_invoke(provider.provider_id.c_str(), provider.generation,
+                                             explicit_action.c_str(),
+                                             "{}") == SAO_ERR_HANDLE_INVALID);
+    remove_plugin(plugin);
+    REQUIRE(sao_plugins_emma_unregister_loader_adapter(owner) == SAO_OK);
+}
+
+TEST_CASE("Emma menu registrations roll back failed lifecycle generations",
+          "[plugins][emma][adapter][menu][rollback]") {
+    emma_loader_adapter_owner_t owner = nullptr;
+    REQUIRE(sao_plugins_emma_register_loader_adapter(&owner) == SAO_OK);
+
+    temp_tree failed_tree(L"menu_failed_load");
+    write_text(failed_tree.root / L"nested" / L"plugin.emma", R"EMMA(
+fn build_menu()
+    return [{label: "failed row", command: fn() return true end}]
+end
+fn on_load(ctx)
+    ctx.register_menu_category("Failed menu", "F", build_menu, 1.0)
+    missing_load()
+end
+)EMMA");
+    const auto failed_manifest = make_manifest(failed_tree, "emma.menu.failed-load");
+    plugin_handle_t failed_plugin = add_plugin(failed_manifest);
+    CHECK(sao_plugins_lifecycle_load(failed_plugin) == SAO_ERR_OS_CALL_FAILED);
+    menu_catalog_snapshot catalog;
+    REQUIRE(snapshot_menu_catalog(catalog) == SAO_OK);
+    CHECK(catalog.providers.empty());
+    CHECK(catalog.roots.empty());
+    CHECK(sao_plugins_emma_loader_adapter_plugin_count(owner) == 0);
+    remove_plugin(failed_plugin);
+
+    temp_tree enable_tree(L"menu_enable_scope");
+    write_text(enable_tree.root / L"nested" / L"plugin.emma", R"EMMA(
+let saved = nil
+fn command()
+    saved.set_setting("enable_action", true)
+end
+fn build_menu()
+    return [{label: "enabled row", command: command}]
+end
+fn on_load(ctx)
+    saved = ctx
+end
+fn on_enable()
+    saved.register_menu_category("Enabled menu", "E", build_menu, 2.0)
+    if saved.get_setting("fail_enable", true)
+        missing_enable()
+    end
+end
+)EMMA");
+    const auto enable_manifest = make_manifest(enable_tree, "emma.menu.enable-scope");
+    plugin_handle_t enable_plugin = add_plugin(enable_manifest);
+    REQUIRE(sao_plugins_lifecycle_load(enable_plugin) == SAO_OK);
+    plugin_context_t* context = nullptr;
+    REQUIRE(sao_plugins_lifecycle_get_context(enable_plugin, &context) == SAO_OK);
+    CHECK(sao_plugins_lifecycle_enable(enable_plugin) == SAO_ERR_OS_CALL_FAILED);
+    CHECK(sao_plugins_lifecycle_state(enable_plugin) == lifecycle_state::loaded_disabled);
+    REQUIRE(snapshot_menu_catalog(catalog) == SAO_OK);
+    CHECK(catalog.providers.empty());
+    CHECK(catalog.roots.empty());
+
+    set_context_json(context, "fail_enable", "false");
+    REQUIRE(sao_plugins_lifecycle_enable(enable_plugin) == SAO_OK);
+    REQUIRE(snapshot_menu_catalog(catalog) == SAO_OK);
+    REQUIRE(catalog.providers.size() == 1);
+    REQUIRE(catalog.providers[0].rows.size() == 1);
+    const auto first_generation = catalog.providers[0];
+    const std::string expected_provider =
+        enable_manifest.plugin_id + "/menu-" + stable_suffix("Enabled menu");
+    CHECK(first_generation.provider_id == expected_provider);
+    CHECK(sao_plugins_entity_provider_invoke(expected_provider.c_str(), first_generation.generation,
+                                             first_generation.rows[0].action_id.c_str(),
+                                             "{}") == SAO_OK);
+    CHECK(context_json(context, "enable_action") == "true");
+
+    REQUIRE(sao_plugins_lifecycle_disable(enable_plugin) == SAO_OK);
+    REQUIRE(snapshot_menu_catalog(catalog) == SAO_OK);
+    CHECK(catalog.providers.empty());
+    CHECK(sao_plugins_entity_provider_invoke(expected_provider.c_str(), first_generation.generation,
+                                             first_generation.rows[0].action_id.c_str(),
+                                             "{}") == SAO_ERR_HANDLE_INVALID);
+    REQUIRE(sao_plugins_lifecycle_enable(enable_plugin) == SAO_OK);
+    REQUIRE(snapshot_menu_catalog(catalog) == SAO_OK);
+    REQUIRE(catalog.providers.size() == 1);
+    CHECK(catalog.providers[0].provider_id == expected_provider);
+    CHECK(catalog.providers[0].generation != first_generation.generation);
+    const auto current_generation = catalog.providers[0];
+    REQUIRE(sao_plugins_lifecycle_unload(enable_plugin) == SAO_OK);
+    CHECK(sao_plugins_entity_provider_invoke(
+              expected_provider.c_str(), current_generation.generation,
+              current_generation.rows[0].action_id.c_str(), "{}") == SAO_ERR_HANDLE_INVALID);
+    remove_plugin(enable_plugin);
+    REQUIRE(sao_plugins_emma_unregister_loader_adapter(owner) == SAO_OK);
+}
+
+TEST_CASE("Emma menu snapshots reject invalid candidates atomically",
+          "[plugins][emma][adapter][menu][budget]") {
+    temp_tree tree(L"menu_budget");
+    write_text(tree.root / L"nested" / L"plugin.emma", R"EMMA(
+fn command()
+    return true
+end
+fn build_menu()
+    let mode = ctx.get_setting("mode", 0)
+    if mode == 0
+        return [{action_id: "baseline", label: "baseline",
+                 payload_json: "{\"raw\":true}"}]
+    end
+    if mode == 1
+        return [{label: ctx.get_setting("oversized", "")}]
+    end
+    if mode == 2
+        return ctx.get_setting("too_many", [])
+    end
+    if mode == 3
+        return ctx.get_setting("oversized_snapshot", [])
+    end
+    if mode == 4
+        return [{label: "flag", keep_menu_open: "false"}]
+    end
+    if mode == 5
+        return [{label: "payload", payload_json: "{invalid"}]
+    end
+    if mode == 6
+        let rows = ctx.get_setting("remembered", [])
+        for row in rows
+            row.command = command
+        end
+        return rows
+    end
+    if mode == 7
+        return [{action_id: "overflow", label: "overflow", command: command}]
+    end
+    if mode == 8
+        return [
+            {action_id: "collision", label: "first"},
+            {action_id: "collision", label: "second"}
+        ]
+    end
+    return [{label: "not actionable", can_activate: true}]
+end
+fn on_load(ctx)
+    ctx.register_menu_category("Budget", "", build_menu)
+end
+)EMMA");
+
+    emma_loader_adapter_owner_t owner = nullptr;
+    REQUIRE(sao_plugins_emma_register_loader_adapter(&owner) == SAO_OK);
+    const auto manifest = make_manifest(tree, "emma.menu.budget");
+    plugin_handle_t plugin = add_plugin(manifest);
+    REQUIRE(sao_plugins_lifecycle_load(plugin) == SAO_OK);
+    plugin_context_t* context = nullptr;
+    REQUIRE(sao_plugins_lifecycle_get_context(plugin, &context) == SAO_OK);
+    REQUIRE(sao_plugins_lifecycle_enable(plugin) == SAO_OK);
+
+    set_context_json(context, "oversized", json(std::string(16385, 'x')).dump());
+    json too_many = json::array();
+    for (std::size_t index = 0; index < 4097; ++index)
+        too_many.push_back({{"label", "row"}});
+    set_context_json(context, "too_many", too_many.dump());
+    json oversized_snapshot = json::array();
+    const std::string large_payload = json(std::string(2046, 'x')).dump();
+    for (std::size_t index = 0; index < 4096; ++index) {
+        oversized_snapshot.push_back({{"action_id", "large-" + std::to_string(index)},
+                                      {"label", "row"},
+                                      {"payload_json", large_payload}});
+    }
+    set_context_json(context, "oversized_snapshot", oversized_snapshot.dump());
+    json remembered = json::array();
+    for (std::size_t index = 0; index < 4096; ++index) {
+        remembered.push_back(
+            {{"action_id", "remembered-" + std::to_string(index)}, {"label", "row"}});
+    }
+    set_context_json(context, "remembered", remembered.dump());
+
+    menu_catalog_snapshot baseline;
+    REQUIRE(snapshot_menu_catalog(baseline) == SAO_OK);
+    REQUIRE(baseline.providers.size() == 1);
+    REQUIRE(baseline.providers[0].rows.size() == 1);
+    CHECK(baseline.providers[0].revision == 1);
+    CHECK(baseline.providers[0].rows[0].payload == "{\"raw\":true}");
+    for (int mode = 1; mode <= 5; ++mode) {
+        set_context_json(context, "mode", std::to_string(mode));
+        menu_catalog_snapshot candidate = baseline;
+        CHECK(snapshot_menu_catalog(candidate) == SAO_ERR_OS_CALL_FAILED);
+        CHECK(candidate == baseline);
+    }
+    set_context_json(context, "mode", "8");
+    menu_catalog_snapshot collision = baseline;
+    CHECK(snapshot_menu_catalog(collision) == SAO_ERR_OS_CALL_FAILED);
+    CHECK(collision == baseline);
+
+    set_context_json(context, "mode", "6");
+    menu_catalog_snapshot at_limit;
+    REQUIRE(snapshot_menu_catalog(at_limit) == SAO_OK);
+    REQUIRE(at_limit.providers.size() == 1);
+    REQUIRE(at_limit.providers[0].rows.size() == 4096);
+    CHECK(at_limit.providers[0].revision == 2);
+    set_context_json(context, "mode", "7");
+    menu_catalog_snapshot overflow = at_limit;
+    CHECK(snapshot_menu_catalog(overflow) == SAO_ERR_OS_CALL_FAILED);
+    CHECK(overflow == at_limit);
+
+    set_context_json(context, "mode", "9");
+    menu_catalog_snapshot not_actionable;
+    REQUIRE(snapshot_menu_catalog(not_actionable) == SAO_OK);
+    REQUIRE(not_actionable.providers[0].rows.size() == 1);
+    CHECK_FALSE(not_actionable.providers[0].rows[0].can_activate);
+    CHECK(not_actionable.providers[0].revision == 3);
+
+    REQUIRE(sao_plugins_lifecycle_unload(plugin) == SAO_OK);
+    remove_plugin(plugin);
+    REQUIRE(sao_plugins_emma_unregister_loader_adapter(owner) == SAO_OK);
 }
 
 TEST_CASE("Emma generic loader adapter closes lifecycle, context and JSON",
