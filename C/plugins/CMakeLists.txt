@@ -23,19 +23,25 @@ option(SAO_PLUGINS_ENABLE_LUA     "构建 Lua 插件宿主 (vcpkg lua)"         
 option(SAO_PLUGINS_ENABLE_ANGEL   "构建 AngelScript 插件宿主 (vcpkg unofficial-angelscript)" OFF)
 option(SAO_PLUGINS_ENABLE_EMMA    "构建 Emma 插件宿主 (零依赖)"                ON)
 option(SAO_PLUGINS_ENABLE_CSHARP  "构建 C# 插件宿主 (需要 .NET 8+ runtime)"    OFF)
+option(SAO_PLUGINS_LEGACY_FACADE_ONLY
+    "只构建 legacy facade、loader 及其本地测试"
+    OFF)
 
 # ── v2 分层模块 ────────────────────────────────────────────────────────
 add_subdirectory(loader)
-add_subdirectory(sdk_binding)
-add_subdirectory(compat)
+set(SAO_PLUGINS_COMPONENT_TARGETS sao_plugins_loader)
 
-set(SAO_PLUGINS_COMPONENT_TARGETS
-    sao_plugins_loader
-    sao_plugins_sdk_binding
-    sao_plugins_compat)
+if (NOT SAO_PLUGINS_LEGACY_FACADE_ONLY)
+    add_subdirectory(sdk_binding)
+    add_subdirectory(compat)
+    list(APPEND SAO_PLUGINS_COMPONENT_TARGETS
+        sao_plugins_sdk_binding
+        sao_plugins_compat)
+endif()
 
 add_library(sao_plugins_legacy_loader_facade_objects OBJECT
-    src/loader.cpp)
+    src/loader.cpp
+    src/logging.cpp)
 target_include_directories(sao_plugins_legacy_loader_facade_objects PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/include
     ${CMAKE_CURRENT_SOURCE_DIR}/loader/include)
@@ -50,30 +56,32 @@ target_compile_definitions(sao_plugins_legacy_loader_facade_objects PRIVATE
 # WebView2/LLM host.  The subdirectory manages its own SAO_BUILD_AI_EDITOR
 # gate (default ON); when disabled the target is skipped and no component
 # target is appended here.  See plugins/ai_editor/CMakeLists.txt notes.
-add_subdirectory(ai_editor)
-if (TARGET sao_plugin_ai_editor)
-    list(APPEND SAO_PLUGINS_COMPONENT_TARGETS sao_plugin_ai_editor)
-endif()
+if (NOT SAO_PLUGINS_LEGACY_FACADE_ONLY)
+    add_subdirectory(ai_editor)
+    if (TARGET sao_plugin_ai_editor)
+        list(APPEND SAO_PLUGINS_COMPONENT_TARGETS sao_plugin_ai_editor)
+    endif()
 
-if (SAO_PLUGINS_ENABLE_PYTHON)
-    add_subdirectory(python_host)
-    list(APPEND SAO_PLUGINS_COMPONENT_TARGETS sao_plugins_python_host)
-endif()
-if (SAO_PLUGINS_ENABLE_EMMA)
-    add_subdirectory(emma_host)
-    list(APPEND SAO_PLUGINS_COMPONENT_TARGETS sao_plugins_emma_host)
-endif()
-if (SAO_PLUGINS_ENABLE_ANGEL)
-    add_subdirectory(angel_host)
-    list(APPEND SAO_PLUGINS_COMPONENT_TARGETS sao_plugins_angel_host)
-endif()
-if (SAO_PLUGINS_ENABLE_LUA)
-    add_subdirectory(lua_host)
-    list(APPEND SAO_PLUGINS_COMPONENT_TARGETS sao_plugins_lua_host)
-endif()
-if (SAO_PLUGINS_ENABLE_CSHARP)
-    add_subdirectory(csharp_host)
-    list(APPEND SAO_PLUGINS_COMPONENT_TARGETS sao_plugins_csharp_host)
+    if (SAO_PLUGINS_ENABLE_PYTHON)
+        add_subdirectory(python_host)
+        list(APPEND SAO_PLUGINS_COMPONENT_TARGETS sao_plugins_python_host)
+    endif()
+    if (SAO_PLUGINS_ENABLE_EMMA)
+        add_subdirectory(emma_host)
+        list(APPEND SAO_PLUGINS_COMPONENT_TARGETS sao_plugins_emma_host)
+    endif()
+    if (SAO_PLUGINS_ENABLE_ANGEL)
+        add_subdirectory(angel_host)
+        list(APPEND SAO_PLUGINS_COMPONENT_TARGETS sao_plugins_angel_host)
+    endif()
+    if (SAO_PLUGINS_ENABLE_LUA)
+        add_subdirectory(lua_host)
+        list(APPEND SAO_PLUGINS_COMPONENT_TARGETS sao_plugins_lua_host)
+    endif()
+    if (SAO_PLUGINS_ENABLE_CSHARP)
+        add_subdirectory(csharp_host)
+        list(APPEND SAO_PLUGINS_COMPONENT_TARGETS sao_plugins_csharp_host)
+    endif()
 endif()
 
 # ── v1 兼容外层 (旧 sao_plugins.dll) ──────────────────────────────────
@@ -132,7 +140,7 @@ target_link_libraries(sao_plugins_runtime INTERFACE ${SAO_PLUGINS_COMPONENT_TARG
 # ── 脚本沙箱共享 STATIC lib ─────────────────────────────────────────
 # 独立 STATIC lib sao_script_sandbox_common_lib, 为 Lua / AS sandbox test
 # 提供共享 utility.  只在 SAO_BUILD_TESTS 时构建 — 无 test 时 lib 不参与出货.
-if (SAO_BUILD_TESTS)
+if (SAO_BUILD_TESTS AND NOT SAO_PLUGINS_LEGACY_FACADE_ONLY)
     add_subdirectory(script_sandbox_common)
 endif()
 
