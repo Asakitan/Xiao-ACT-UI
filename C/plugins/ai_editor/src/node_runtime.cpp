@@ -24,6 +24,10 @@ void join_worker(std::thread& worker) {
         return;
     }
     if (worker.get_id() == std::this_thread::get_id()) {
+        // Every worker owns a shared_ptr<NodeRuntime> captured at boot.  The
+        // only thread that cannot join here is therefore still keeping the
+        // object alive until this lambda returns; detaching is safe for the
+        // thread object and does not expose a dangling `this`.
         worker.detach();
         return;
     }
@@ -257,9 +261,14 @@ int32_t NodeRuntime::boot(const BootOptions& options) {
     }
     stopping_.store(false, std::memory_order_release);
     state_.store(State::running, std::memory_order_release);
-    reader_ = std::thread([this] { reader_loop(); });
-    dispatcher_ = std::thread([this] { dispatch_loop(); });
-    stderr_reader_ = std::thread([this] { stderr_loop(); });
+    const std::shared_ptr<NodeRuntime> lifetime = weak_from_this().lock();
+    if (!lifetime) {
+        shutdown();
+        return SAO_AI_EDITOR_ERR_NOT_INITIALIZED;
+    }
+    reader_ = std::thread([lifetime] { lifetime->reader_loop(); });
+    dispatcher_ = std::thread([lifetime] { lifetime->dispatch_loop(); });
+    stderr_reader_ = std::thread([lifetime] { lifetime->stderr_loop(); });
 
     Json initialize_params{
         {"protocolVersion", "sao-ai-editor/1"},
@@ -297,72 +306,88 @@ bool NodeRuntime::alive() const noexcept {
 
 int32_t NodeRuntime::request(std::string_view method, const Json& params,
                              uint32_t timeout_ms, Json& result) {
-    if (process_ == nullptr) {
-        return SAO_AI_EDITOR_ERR_NOT_INITIALIZED;
-    }
-    const State state = state_.load(std::memory_order_acquire);
-    if (state != State::running) {
-        return state == State::protocol_failed
-                   ? SAO_AI_EDITOR_ERR_PROTOCOL
-                   : SAO_AI_EDITOR_ERR_IPC_CLOSED;
-    }
-    const int64_t id = next_id_.fetch_add(1, std::memory_order_relaxed);
-    auto pending = std::make_shared<Pending>();
-    {
-        std::lock_guard<std::mutex> guard(pending_mutex_);
-        const State pending_state = state_.load(std::memory_order_acquire);
-        if (pending_state != State::running) {
-            return pending_state == State::protocol_failed
+    int64_t id = 0;
+    std::shared_ptr<Pending> pending;
+    try {
+        if (process_ == nullptr) {
+            return SAO_AI_EDITOR_ERR_NOT_INITIALIZED;
+        }
+        const State state = state_.load(std::memory_order_acquire);
+        if (state != State::running) {
+            return state == State::protocol_failed
                        ? SAO_AI_EDITOR_ERR_PROTOCOL
                        : SAO_AI_EDITOR_ERR_IPC_CLOSED;
         }
-        pending_[id] = pending;
-    }
-    Json request{{"jsonrpc", "2.0"},
-                 {"id", id},
-                 {"method", std::string(method)},
-                 {"params", params}};
-    if (!send_framed(request.dump())) {
-        std::lock_guard<std::mutex> guard(pending_mutex_);
-        pending_.erase(id);
-        return SAO_AI_EDITOR_ERR_IPC_CLOSED;
-    }
-    const uint32_t budget = timeout_ms == 0 ? 30000 : timeout_ms;
-    if (pending->future.wait_for(std::chrono::milliseconds(budget)) !=
-        std::future_status::ready) {
-        std::lock_guard<std::mutex> guard(pending_mutex_);
-        pending_.erase(id);
-        return SAO_AI_EDITOR_ERR_TIMEOUT;
-    }
-    Json envelope = pending->future.get();
-    if (envelope.contains("error")) {
-        result = envelope["error"];
-        const Json data = result.value("data", Json::object());
-        if (data.is_object() && data.contains("status") &&
-            data["status"].is_number_integer()) {
-            return data["status"].get<int32_t>();
+        id = next_id_.fetch_add(1, std::memory_order_relaxed);
+        pending = std::make_shared<Pending>();
+        {
+            std::lock_guard<std::mutex> guard(pending_mutex_);
+            const State pending_state = state_.load(std::memory_order_acquire);
+            if (pending_state != State::running) {
+                return pending_state == State::protocol_failed
+                           ? SAO_AI_EDITOR_ERR_PROTOCOL
+                           : SAO_AI_EDITOR_ERR_IPC_CLOSED;
+            }
+            pending_[id] = pending;
         }
+        Json request{{"jsonrpc", "2.0"},
+                     {"id", id},
+                     {"method", std::string(method)},
+                     {"params", params}};
+        if (!send_framed(request.dump())) {
+            std::lock_guard<std::mutex> guard(pending_mutex_);
+            pending_.erase(id);
+            return SAO_AI_EDITOR_ERR_IPC_CLOSED;
+        }
+        const uint32_t budget = timeout_ms == 0 ? 30000 : timeout_ms;
+        if (pending->future.wait_for(std::chrono::milliseconds(budget)) !=
+            std::future_status::ready) {
+            std::lock_guard<std::mutex> guard(pending_mutex_);
+            pending_.erase(id);
+            return SAO_AI_EDITOR_ERR_TIMEOUT;
+        }
+        Json envelope = pending->future.get();
+        if (envelope.contains("error")) {
+            result = envelope.at("error");
+            const Json data = result.value("data", Json::object());
+            if (data.is_object() && data.contains("status") &&
+                data["status"].is_number_integer()) {
+                return data["status"].get<int32_t>();
+            }
+            return SAO_AI_EDITOR_ERR_PROTOCOL;
+        }
+        result = envelope.at("result");
+        return SAO_AI_EDITOR_OK;
+    } catch (...) {
+        if (id != 0) {
+            std::lock_guard<std::mutex> guard(pending_mutex_);
+            pending_.erase(id);
+        }
+        fail_protocol("node runtime request failed");
         return SAO_AI_EDITOR_ERR_PROTOCOL;
     }
-    result = envelope.value("result", Json::object());
-    return SAO_AI_EDITOR_OK;
 }
 
 int32_t NodeRuntime::notify(std::string_view method, const Json& params) {
-    if (process_ == nullptr) {
-        return SAO_AI_EDITOR_ERR_NOT_INITIALIZED;
+    try {
+        if (process_ == nullptr) {
+            return SAO_AI_EDITOR_ERR_NOT_INITIALIZED;
+        }
+        const State state = state_.load(std::memory_order_acquire);
+        if (state != State::running) {
+            return state == State::protocol_failed
+                       ? SAO_AI_EDITOR_ERR_PROTOCOL
+                       : SAO_AI_EDITOR_ERR_IPC_CLOSED;
+        }
+        Json notification{{"jsonrpc", "2.0"},
+                           {"method", std::string(method)},
+                           {"params", params}};
+        return send_framed(notification.dump()) ? SAO_AI_EDITOR_OK
+                                                : SAO_AI_EDITOR_ERR_IPC_CLOSED;
+    } catch (...) {
+        fail_protocol("node runtime notification failed");
+        return SAO_AI_EDITOR_ERR_PROTOCOL;
     }
-    const State state = state_.load(std::memory_order_acquire);
-    if (state != State::running) {
-        return state == State::protocol_failed
-                   ? SAO_AI_EDITOR_ERR_PROTOCOL
-                   : SAO_AI_EDITOR_ERR_IPC_CLOSED;
-    }
-    Json notification{{"jsonrpc", "2.0"},
-                       {"method", std::string(method)},
-                       {"params", params}};
-    return send_framed(notification.dump()) ? SAO_AI_EDITOR_OK
-                                            : SAO_AI_EDITOR_ERR_IPC_CLOSED;
 }
 
 bool NodeRuntime::send_framed(const std::string& payload) {
@@ -407,125 +432,148 @@ bool NodeRuntime::send_raw(const std::string& data) {
 
 void NodeRuntime::reader_loop() {
     sao_ai_editor_mcp_decoder_t decoder = nullptr;
-    if (sao_ai_editor_mcp_decoder_create(kMaxMessageBytes, &decoder) !=
-        SAO_AI_EDITOR_OK) {
-        state_.store(State::closed, std::memory_order_release);
-        stopping_.store(true, std::memory_order_release);
-        fail_pending("node response decoder initialization failed",
-                     SAO_AI_EDITOR_ERR_IPC_CLOSED);
-        dispatch_ready_.notify_all();
-        return;
-    }
-    std::vector<char> buffer(64U * 1024U);
     int32_t close_status = SAO_AI_EDITOR_ERR_IPC_CLOSED;
     std::string close_message = "node runtime output closed";
-    while (!stopping_.load(std::memory_order_acquire)) {
-        DWORD read = 0;
-        if (!ReadFile(stdout_read_, buffer.data(),
-                      static_cast<DWORD>(buffer.size()), &read, nullptr) ||
-            read == 0) {
-            break;
-        }
-        uint32_t required = 0;
-        int32_t status = sao_ai_editor_mcp_decoder_feed(
-            decoder, buffer.data(), read, nullptr, 0, &required);
-        if (status != SAO_AI_EDITOR_ERR_BUFFER_TOO_SMALL || required == 0) {
-            close_status = SAO_AI_EDITOR_ERR_PROTOCOL;
-            close_message = "node runtime protocol framing failed";
-            break;
-        }
-        std::vector<char> messages(static_cast<size_t>(required) + 1U);
-        status = sao_ai_editor_mcp_decoder_feed(
-            decoder, nullptr, 0, messages.data(),
-            static_cast<uint32_t>(messages.size()), &required);
-        if (status != SAO_AI_EDITOR_OK) {
-            close_status = SAO_AI_EDITOR_ERR_PROTOCOL;
-            close_message = "node runtime protocol drain failed";
-            break;
-        }
-        Json parsed = Json::parse(messages.data(), messages.data() + required,
-                                  nullptr, false);
-        if (!parsed.is_array()) {
-            close_status = SAO_AI_EDITOR_ERR_PROTOCOL;
-            close_message = "node runtime returned invalid JSON";
-            break;
-        }
-        for (auto& message : parsed) {
-            if (!message.is_object()) {
-                close_status = SAO_AI_EDITOR_ERR_PROTOCOL;
-                close_message = "node runtime returned an invalid message";
-                break;
+    try {
+        if (sao_ai_editor_mcp_decoder_create(kMaxMessageBytes, &decoder) !=
+            SAO_AI_EDITOR_OK) {
+            close_message = "node response decoder initialization failed";
+        } else {
+            std::vector<char> buffer(64U * 1024U);
+            while (!stopping_.load(std::memory_order_acquire)) {
+                DWORD read = 0;
+                if (!ReadFile(stdout_read_, buffer.data(),
+                              static_cast<DWORD>(buffer.size()), &read,
+                              nullptr) ||
+                    read == 0) {
+                    break;
+                }
+                uint32_t required = 0;
+                int32_t status = sao_ai_editor_mcp_decoder_feed(
+                    decoder, buffer.data(), read, nullptr, 0, &required);
+                if (status != SAO_AI_EDITOR_ERR_BUFFER_TOO_SMALL ||
+                    required == 0) {
+                    close_status = SAO_AI_EDITOR_ERR_PROTOCOL;
+                    close_message = "node runtime protocol framing failed";
+                    break;
+                }
+                std::vector<char> messages(static_cast<size_t>(required) + 1U);
+                status = sao_ai_editor_mcp_decoder_feed(
+                    decoder, nullptr, 0, messages.data(),
+                    static_cast<uint32_t>(messages.size()), &required);
+                if (status != SAO_AI_EDITOR_OK) {
+                    close_status = SAO_AI_EDITOR_ERR_PROTOCOL;
+                    close_message = "node runtime protocol drain failed";
+                    break;
+                }
+                Json parsed = Json::parse(
+                    messages.data(), messages.data() + required, nullptr,
+                    false);
+                if (!parsed.is_array() || parsed.is_discarded()) {
+                    close_status = SAO_AI_EDITOR_ERR_PROTOCOL;
+                    close_message = "node runtime returned invalid JSON";
+                    break;
+                }
+                for (auto& message : parsed) {
+                    if (!message.is_object() ||
+                        !dispatch_message(std::move(message))) {
+                        close_status = SAO_AI_EDITOR_ERR_PROTOCOL;
+                        close_message =
+                            "node runtime returned an invalid JSON-RPC message";
+                        break;
+                    }
+                }
+                if (close_status == SAO_AI_EDITOR_ERR_PROTOCOL) {
+                    break;
+                }
             }
-            if (!dispatch_message(std::move(message))) {
-                close_status = SAO_AI_EDITOR_ERR_PROTOCOL;
-                close_message = "node runtime returned an invalid JSON-RPC message";
-                break;
-            }
         }
-        if (close_status == SAO_AI_EDITOR_ERR_PROTOCOL) {
-            break;
-        }
+    } catch (...) {
+        close_status = SAO_AI_EDITOR_ERR_PROTOCOL;
+        close_message = "node runtime reader failed";
     }
-    sao_ai_editor_mcp_decoder_destroy(decoder);
-    state_.store(close_status == SAO_AI_EDITOR_ERR_PROTOCOL
-                     ? State::protocol_failed
-                     : State::closed,
-                 std::memory_order_release);
+    if (decoder != nullptr) {
+        sao_ai_editor_mcp_decoder_destroy(decoder);
+    }
+    if (close_status == SAO_AI_EDITOR_ERR_PROTOCOL) {
+        state_.store(State::protocol_failed, std::memory_order_release);
+    } else if (state_.load(std::memory_order_acquire) !=
+               State::protocol_failed) {
+        state_.store(State::closed, std::memory_order_release);
+    }
     stopping_.store(true, std::memory_order_release);
     fail_pending(close_message, close_status);
     dispatch_ready_.notify_all();
 }
 
 void NodeRuntime::dispatch_loop() {
-    for (;;) {
-        Json message;
-        {
-            std::unique_lock<std::mutex> lock(dispatch_mutex_);
-            dispatch_ready_.wait(lock, [this] {
-                return stopping_.load(std::memory_order_acquire) ||
-                       !dispatch_queue_.empty();
-            });
-            if (dispatch_queue_.empty()) {
-                return;
+    try {
+        for (;;) {
+            Json message;
+            {
+                std::unique_lock<std::mutex> lock(dispatch_mutex_);
+                dispatch_ready_.wait(lock, [this] {
+                    return stopping_.load(std::memory_order_acquire) ||
+                           !dispatch_queue_.empty();
+                });
+                if (dispatch_queue_.empty()) {
+                    return;
+                }
+                message = std::move(dispatch_queue_.front());
+                dispatch_queue_.pop_front();
             }
-            message = std::move(dispatch_queue_.front());
-            dispatch_queue_.pop_front();
+            if (message.contains("id")) {
+                handle_request_from_node(std::move(message));
+            } else {
+                handle_notification_from_node(std::move(message));
+            }
         }
-        if (message.contains("id")) {
-            handle_request_from_node(std::move(message));
-        } else {
-            handle_notification_from_node(std::move(message));
-        }
+    } catch (...) {
+        fail_protocol("node runtime dispatch failed");
     }
 }
 
 void NodeRuntime::stderr_loop() {
-    std::vector<char> buffer(4096);
-    while (!stopping_.load(std::memory_order_acquire)) {
-        DWORD read = 0;
-        if (!ReadFile(stderr_read_, buffer.data(),
-                      static_cast<DWORD>(buffer.size()), &read, nullptr) ||
-            read == 0) {
-            break;
+    try {
+        std::vector<char> buffer(4096);
+        while (!stopping_.load(std::memory_order_acquire)) {
+            DWORD read = 0;
+            if (!ReadFile(stderr_read_, buffer.data(),
+                          static_cast<DWORD>(buffer.size()), &read, nullptr) ||
+                read == 0) {
+                break;
+            }
+            std::lock_guard<std::mutex> guard(state_mutex_);
+            stderr_tail_.append(buffer.data(), read);
+            if (stderr_tail_.size() > 32U * 1024U) {
+                stderr_tail_.erase(0, stderr_tail_.size() - 32U * 1024U);
+            }
         }
-        std::lock_guard<std::mutex> guard(state_mutex_);
-        stderr_tail_.append(buffer.data(), read);
-        if (stderr_tail_.size() > 32U * 1024U) {
-            stderr_tail_.erase(0, stderr_tail_.size() - 32U * 1024U);
-        }
+    } catch (...) {
+        fail_protocol("node runtime stderr reader failed");
     }
 }
 
 bool NodeRuntime::dispatch_message(Json message) {
-    if (!message.is_object() ||
-        message.value("jsonrpc", std::string{}) != "2.0") {
+    const auto valid_id = [](const Json& value) {
+         return value.is_string() || value.is_number_integer() ||
+             value.is_number_unsigned();
+    };
+    if (!message.is_object() || message.is_discarded() ||
+        !message.contains("jsonrpc") || !message["jsonrpc"].is_string() ||
+        message["jsonrpc"] != "2.0") {
         return false;
     }
-    if (message.contains("method")) {
+    const bool has_method = message.contains("method");
+    const bool has_id = message.contains("id");
+    if (has_method) {
         if (!message["method"].is_string() ||
             message["method"].get_ref<const std::string&>().empty() ||
-            (message.contains("id") &&
-             !message["id"].is_number_integer())) {
+            (has_id && !valid_id(message["id"])) ||
+            (message.contains("params") &&
+             !message["params"].is_object() &&
+             !message["params"].is_array()) ||
+            message.contains("result") || message.contains("error")) {
             return false;
         }
         {
@@ -537,9 +585,23 @@ bool NodeRuntime::dispatch_message(Json message) {
     }
     const bool has_result = message.contains("result");
     const bool has_error = message.contains("error");
-    if (message.contains("id") && message["id"].is_number_integer() &&
-        has_result != has_error) {
-        const int64_t id = message["id"].get<int64_t>();
+    if (!has_id || !valid_id(message["id"]) || has_result == has_error) {
+        return false;
+    }
+    if (has_error &&
+        (!message["error"].is_object() ||
+         !message["error"].contains("code") ||
+         !message["error"]["code"].is_number_integer() ||
+         !message["error"].contains("message") ||
+         !message["error"]["message"].is_string())) {
+        return false;
+    }
+    if (!message["id"].is_number_integer() &&
+        !message["id"].is_number_unsigned()) {
+        return false;
+    }
+    const int64_t id = message["id"].get<int64_t>();
+    {
         std::shared_ptr<Pending> pending;
         {
             std::lock_guard<std::mutex> guard(pending_mutex_);
@@ -549,15 +611,15 @@ bool NodeRuntime::dispatch_message(Json message) {
                 pending_.erase(found);
             }
         }
-        if (pending) {
-            try {
-                pending->promise.set_value(std::move(message));
-            } catch (...) {
-            }
+        if (!pending) {
+            return false;
+        }
+        try {
+            pending->promise.set_value(std::move(message));
+        } catch (...) {
         }
         return true;
     }
-    return false;
 }
 
 void NodeRuntime::handle_request_from_node(Json message) {
@@ -623,6 +685,13 @@ void NodeRuntime::fail_pending(std::string_view message, int32_t status) {
         }
     }
     pending_.clear();
+}
+
+void NodeRuntime::fail_protocol(std::string_view message) {
+    state_.store(State::protocol_failed, std::memory_order_release);
+    stopping_.store(true, std::memory_order_release);
+    fail_pending(message, SAO_AI_EDITOR_ERR_PROTOCOL);
+    dispatch_ready_.notify_all();
 }
 
 void NodeRuntime::shutdown() {

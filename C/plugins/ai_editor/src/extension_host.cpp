@@ -2,6 +2,7 @@
 
 #include <windows.h>
 
+#include <algorithm>
 #include <filesystem>
 #include <utility>
 #include <vector>
@@ -71,6 +72,33 @@ std::string default_shim_path_utf8() {
 
 namespace sao::ai_editor::native {
 
+namespace {
+
+const char* operation_name(ExtensionOperation operation) noexcept {
+    switch (operation) {
+        case ExtensionOperation::activating:
+            return "activating";
+        case ExtensionOperation::deactivating:
+            return "deactivating";
+        case ExtensionOperation::unregistering:
+            return "unregistering";
+        case ExtensionOperation::idle:
+        default:
+            return "idle";
+    }
+}
+
+bool has_inflight_operation_locked(
+    const std::unordered_map<std::string, ExtensionRecord>& extensions) {
+    return std::any_of(
+        extensions.begin(), extensions.end(),
+        [](const auto& entry) {
+            return entry.second.operation != ExtensionOperation::idle;
+        });
+}
+
+}  // namespace
+
 Json ExtensionRecord::to_json() const {
     return Json{{"id", id},
                 {"name", name},
@@ -79,6 +107,9 @@ Json ExtensionRecord::to_json() const {
                 {"extensionPath", extension_path},
                 {"main", main_module},
                 {"activated", activated},
+                {"operation", operation_name(operation)},
+                {"generation", generation},
+                {"operationGeneration", operation_generation},
                 {"manifest", manifest},
                 {"activationResult", activation_result}};
 }
@@ -87,6 +118,9 @@ ExtensionHost::~ExtensionHost() { deactivate_all(); }
 
 int32_t ExtensionHost::configure(const Json& params) {
     std::lock_guard<std::mutex> guard(mutex_);
+    if (has_inflight_operation_locked(extensions_)) {
+        return SAO_AI_EDITOR_ERR_BUSY;
+    }
     if (!params.is_object() ||
         !params.contains("nodeExecutable") ||
         !params["nodeExecutable"].is_string()) {
@@ -140,25 +174,44 @@ int32_t ExtensionHost::configure(const Json& params) {
 
 int32_t ExtensionHost::ensure_runtime(
     std::shared_ptr<NodeRuntime>& runtime) {
+    std::lock_guard<std::mutex> runtime_guard(runtime_mutex_);
     std::shared_ptr<NodeRuntime> stale_runtime;
-    std::lock_guard<std::mutex> guard(mutex_);
-    if (boot_options_.node_executable.empty() ||
-        boot_options_.entry_script.empty()) {
-        return SAO_AI_EDITOR_ERR_NOT_INITIALIZED;
+    NodeRuntime::BootOptions options;
+    {
+        std::lock_guard<std::mutex> guard(mutex_);
+        if (boot_options_.node_executable.empty() ||
+            boot_options_.entry_script.empty()) {
+            return SAO_AI_EDITOR_ERR_NOT_INITIALIZED;
+        }
+        if (node_runtime_ && node_runtime_->alive()) {
+            runtime = node_runtime_;
+            return SAO_AI_EDITOR_OK;
+        }
+        stale_runtime = std::move(node_runtime_);
+        options = boot_options_;
     }
-    if (node_runtime_ && node_runtime_->alive()) {
-        runtime = node_runtime_;
-        return SAO_AI_EDITOR_OK;
+    if (stale_runtime) {
+        stale_runtime->shutdown();
     }
-    stale_runtime = std::move(node_runtime_);
     auto candidate = std::make_shared<NodeRuntime>();
     candidate->set_native_runtime(&runtime_);
-    const int32_t status = candidate->boot(boot_options_);
-    if (status == SAO_AI_EDITOR_OK) {
-        node_runtime_ = candidate;
-        runtime = std::move(candidate);
+    const int32_t status = candidate->boot(options);
+    if (status != SAO_AI_EDITOR_OK) {
+        return status;
     }
-    return status;
+    {
+        std::lock_guard<std::mutex> guard(mutex_);
+        if (node_runtime_ && node_runtime_->alive()) {
+            runtime = node_runtime_;
+        } else {
+            node_runtime_ = candidate;
+            runtime = std::move(candidate);
+        }
+    }
+    if (candidate) {
+        candidate->shutdown();
+    }
+    return SAO_AI_EDITOR_OK;
 }
 
 int32_t ExtensionHost::list_extensions(Json& out) const {
@@ -197,8 +250,16 @@ int32_t ExtensionHost::register_extension(const Json& params, Json& out) {
         return SAO_AI_EDITOR_ERR_INVALID_ARGUMENT;
     }
     std::lock_guard<std::mutex> guard(mutex_);
-    extensions_[record.id] = record;
-    out = record.to_json();
+    const auto existing = extensions_.find(record.id);
+    if (existing != extensions_.end()) {
+        if (existing->second.operation != ExtensionOperation::idle ||
+            existing->second.activated) {
+            return SAO_AI_EDITOR_ERR_BUSY;
+        }
+        record.generation = existing->second.generation + 1;
+    }
+    const auto [inserted, _] = extensions_.insert_or_assign(record.id, record);
+    out = inserted->second.to_json();
     return SAO_AI_EDITOR_OK;
 }
 
@@ -206,40 +267,59 @@ int32_t ExtensionHost::unregister_extension(std::string_view extension_id,
                                             Json& out) {
     const std::string id(extension_id);
     std::shared_ptr<NodeRuntime> node;
-    bool activated = false;
+    uint64_t operation_generation = 0;
     {
         std::lock_guard<std::mutex> guard(mutex_);
         const auto found = extensions_.find(id);
         if (found == extensions_.end()) {
             return SAO_AI_EDITOR_ERR_NOT_FOUND;
         }
-        activated = found->second.activated;
+        if (found->second.operation != ExtensionOperation::idle) {
+            return SAO_AI_EDITOR_ERR_BUSY;
+        }
+        if (!found->second.activated) {
+            extensions_.erase(found);
+            out = Json{{"ok", true}, {"extensionId", id}};
+            return SAO_AI_EDITOR_OK;
+        }
+        found->second.operation = ExtensionOperation::unregistering;
+        operation_generation = ++found->second.generation;
+        found->second.operation_generation = operation_generation;
         node = node_runtime_;
     }
 
-    if (activated) {
-        if (!node || !node->alive()) {
-            out = Json{{"message", "extension host is not running"},
-                       {"extensionId", id}};
-            return SAO_AI_EDITOR_ERR_IPC_CLOSED;
+    if (!node || !node->alive()) {
+        std::lock_guard<std::mutex> guard(mutex_);
+        const auto found = extensions_.find(id);
+        if (found != extensions_.end() &&
+            found->second.operation_generation == operation_generation) {
+            found->second.operation = ExtensionOperation::idle;
         }
-        Json deactivate_result;
-        const int32_t status = node->request(
-            "host.deactivate", Json{{"extensionId", id}}, 5000,
-            deactivate_result);
-        if (status != SAO_AI_EDITOR_OK) {
-            out = std::move(deactivate_result);
-            return status;
+        out = Json{{"message", "extension host is not running"},
+                   {"extensionId", id}};
+        return SAO_AI_EDITOR_ERR_IPC_CLOSED;
+    }
+    Json deactivate_result;
+    const int32_t status = node->request(
+        "host.deactivate", Json{{"extensionId", id}}, 5000,
+        deactivate_result);
+    if (status != SAO_AI_EDITOR_OK) {
+        std::lock_guard<std::mutex> guard(mutex_);
+        const auto found = extensions_.find(id);
+        if (found != extensions_.end() &&
+            found->second.operation_generation == operation_generation) {
+            found->second.operation = ExtensionOperation::idle;
         }
+        out = std::move(deactivate_result);
+        return status;
     }
 
     {
         std::lock_guard<std::mutex> guard(mutex_);
         const auto found = extensions_.find(id);
-        if (found == extensions_.end()) {
-            return SAO_AI_EDITOR_ERR_NOT_FOUND;
-        }
-        if (found->second.activated != activated) {
+        if (found == extensions_.end() ||
+            found->second.operation != ExtensionOperation::unregistering ||
+            found->second.operation_generation != operation_generation) {
             return SAO_AI_EDITOR_ERR_BUSY;
         }
         extensions_.erase(found);
@@ -252,17 +332,34 @@ int32_t ExtensionHost::activate(std::string_view extension_id,
                                 uint32_t timeout_ms, Json& out) {
     const std::string id(extension_id);
     ExtensionRecord record;
+    uint64_t operation_generation = 0;
     {
         std::lock_guard<std::mutex> guard(mutex_);
         const auto found = extensions_.find(id);
         if (found == extensions_.end()) {
             return SAO_AI_EDITOR_ERR_NOT_FOUND;
         }
+        if (found->second.operation != ExtensionOperation::idle) {
+            return SAO_AI_EDITOR_ERR_BUSY;
+        }
+        if (found->second.activated && node_runtime_ &&
+            node_runtime_->alive()) {
+            return SAO_AI_EDITOR_ERR_BUSY;
+        }
+        found->second.operation = ExtensionOperation::activating;
+        operation_generation = ++found->second.generation;
+        found->second.operation_generation = operation_generation;
         record = found->second;
     }
     std::shared_ptr<NodeRuntime> node;
     const int32_t runtime_status = ensure_runtime(node);
     if (runtime_status != SAO_AI_EDITOR_OK) {
+        std::lock_guard<std::mutex> guard(mutex_);
+        const auto found = extensions_.find(id);
+        if (found != extensions_.end() &&
+            found->second.operation_generation == operation_generation) {
+            found->second.operation = ExtensionOperation::idle;
+        }
         return runtime_status;
     }
     Json params{{"extensionId", id},
@@ -273,17 +370,26 @@ int32_t ExtensionHost::activate(std::string_view extension_id,
     const int32_t status = node->request(
         "host.activate", params, timeout_ms == 0 ? 15000 : timeout_ms, result);
     if (status != SAO_AI_EDITOR_OK) {
+        std::lock_guard<std::mutex> guard(mutex_);
+        const auto found = extensions_.find(id);
+        if (found != extensions_.end() &&
+            found->second.operation_generation == operation_generation) {
+            found->second.operation = ExtensionOperation::idle;
+        }
         out = std::move(result);
         return status;
     }
     {
         std::lock_guard<std::mutex> guard(mutex_);
         const auto found = extensions_.find(id);
-        if (found == extensions_.end()) {
-            return SAO_AI_EDITOR_ERR_NOT_FOUND;
+        if (found == extensions_.end() ||
+            found->second.operation != ExtensionOperation::activating ||
+            found->second.operation_generation != operation_generation) {
+            return SAO_AI_EDITOR_ERR_BUSY;
         }
         found->second.activated = true;
         found->second.activation_result = std::move(result);
+        found->second.operation = ExtensionOperation::idle;
         out = found->second.to_json();
     }
     return SAO_AI_EDITOR_OK;
@@ -292,20 +398,33 @@ int32_t ExtensionHost::activate(std::string_view extension_id,
 int32_t ExtensionHost::deactivate(std::string_view extension_id, Json& out) {
     const std::string id(extension_id);
     std::shared_ptr<NodeRuntime> node;
+    uint64_t operation_generation = 0;
     {
         std::lock_guard<std::mutex> guard(mutex_);
         const auto found = extensions_.find(id);
         if (found == extensions_.end()) {
             return SAO_AI_EDITOR_ERR_NOT_FOUND;
         }
+        if (found->second.operation != ExtensionOperation::idle) {
+            return SAO_AI_EDITOR_ERR_BUSY;
+        }
         if (!found->second.activated) {
             out = Json{{"ok", true}, {"already", true}};
             return SAO_AI_EDITOR_OK;
         }
+        found->second.operation = ExtensionOperation::deactivating;
+        operation_generation = ++found->second.generation;
+        found->second.operation_generation = operation_generation;
         node = node_runtime_;
     }
 
     if (!node || !node->alive()) {
+        std::lock_guard<std::mutex> guard(mutex_);
+        const auto found = extensions_.find(id);
+        if (found != extensions_.end() &&
+            found->second.operation_generation == operation_generation) {
+            found->second.operation = ExtensionOperation::idle;
+        }
         out = Json{{"message", "extension host is not running"},
                    {"extensionId", id}};
         return SAO_AI_EDITOR_ERR_IPC_CLOSED;
@@ -315,6 +434,12 @@ int32_t ExtensionHost::deactivate(std::string_view extension_id, Json& out) {
         "host.deactivate", Json{{"extensionId", id}}, 5000,
         deactivate_result);
     if (status != SAO_AI_EDITOR_OK) {
+        std::lock_guard<std::mutex> guard(mutex_);
+        const auto found = extensions_.find(id);
+        if (found != extensions_.end() &&
+            found->second.operation_generation == operation_generation) {
+            found->second.operation = ExtensionOperation::idle;
+        }
         out = std::move(deactivate_result);
         return status;
     }
@@ -322,11 +447,14 @@ int32_t ExtensionHost::deactivate(std::string_view extension_id, Json& out) {
     {
         std::lock_guard<std::mutex> guard(mutex_);
         const auto found = extensions_.find(id);
-        if (found == extensions_.end()) {
-            return SAO_AI_EDITOR_ERR_NOT_FOUND;
+        if (found == extensions_.end() ||
+            found->second.operation != ExtensionOperation::deactivating ||
+            found->second.operation_generation != operation_generation) {
+            return SAO_AI_EDITOR_ERR_BUSY;
         }
         found->second.activated = false;
         found->second.activation_result = Json::object();
+        found->second.operation = ExtensionOperation::idle;
     }
     out = Json{{"ok", true}, {"extensionId", id}};
     return SAO_AI_EDITOR_OK;
@@ -346,6 +474,18 @@ int32_t ExtensionHost::execute_command(std::string_view command_id,
     Json params{{"command", std::string(command_id)}, {"arguments", args}};
     return node->request("commands.execute", params,
                          timeout_ms == 0 ? 15000 : timeout_ms, out);
+}
+
+int32_t ExtensionHost::post_webview_message(const Json& params, Json& out) {
+    std::shared_ptr<NodeRuntime> node;
+    {
+        std::lock_guard<std::mutex> guard(mutex_);
+        node = node_runtime_;
+    }
+    if (!node || !node->alive()) {
+        return SAO_AI_EDITOR_ERR_IPC_CLOSED;
+    }
+    return node->request("webview.postToView", params, 5000, out);
 }
 
 Json ExtensionHost::snapshot() const {
@@ -377,6 +517,7 @@ void ExtensionHost::deactivate_all() {
         for (auto& [id, record] : extensions_) {
             (void)id;
             record.activated = false;
+            record.operation = ExtensionOperation::idle;
         }
     }
 }

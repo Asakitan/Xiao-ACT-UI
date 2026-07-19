@@ -26,7 +26,7 @@ class NativeRuntime;
 // The VS Code extension host loads its Node.js shim via
 // `boot_extension_host`.  The shim is expected to speak the
 // `vscode.*` and `sao.host.*` methods this runtime advertises.
-class NodeRuntime final {
+class NodeRuntime final : public std::enable_shared_from_this<NodeRuntime> {
 public:
     struct BootOptions {
         std::string node_executable;        // absolute path to node.exe
@@ -74,6 +74,7 @@ private:
     void handle_request_from_node(Json message);
     void handle_notification_from_node(Json message);
     void fail_pending(std::string_view message, int32_t status);
+    void fail_protocol(std::string_view message);
     bool send_framed(const std::string& payload);
     bool send_raw(const std::string& data);
 

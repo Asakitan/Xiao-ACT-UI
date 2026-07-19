@@ -15,8 +15,8 @@
 // call routed through the dispatch layer.  It intentionally has *no*
 // WebView2 dependency so the Node side of the extension host can still
 // exercise create/postMessage/dispose semantics on hosts that ship without
-// WebView2Loader.dll (post-message becomes a no-op emit-warning path in
-// that case).  The bridge glue in webview_bridge.cpp reads state from
+// WebView2Loader.dll; post-message then reports an explicit bridge failure.
+// The bridge glue in webview_bridge.cpp reads state from
 // this registry under its own lock so the WebView2 controller thread can
 // react to reveal/dispose deterministically.
 

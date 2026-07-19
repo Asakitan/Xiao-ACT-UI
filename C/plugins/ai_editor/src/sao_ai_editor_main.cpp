@@ -1372,6 +1372,10 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int show_command) {
             sao_ai_editor_runtime_destroy(runtime);
             return status == SAO_AI_EDITOR_OK ? 0 : 12;
         }
+#else
+        if (arguments.webview_mode) {
+            return 12;
+        }
 #endif
         if (arguments.ui_smoke_test) {
             return run_ui_smoke(instance, show_command, arguments);

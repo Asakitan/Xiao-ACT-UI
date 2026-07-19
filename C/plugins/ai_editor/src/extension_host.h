@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cstdint>
 #include <memory>
 #include <mutex>
 #include <string>
@@ -13,6 +14,13 @@
 namespace sao::ai_editor::native {
 
 class NativeRuntime;
+
+enum class ExtensionOperation : uint8_t {
+    idle,
+    activating,
+    deactivating,
+    unregistering,
+};
 
 // One installed extension.  This mirrors a slice of the VS Code
 // `package.json` extension manifest — activated extensions run inside
@@ -28,6 +36,9 @@ struct ExtensionRecord {
     Json manifest;
     bool activated = false;
     Json activation_result;
+    ExtensionOperation operation = ExtensionOperation::idle;
+    uint64_t generation = 0;
+    uint64_t operation_generation = 0;
 
     Json to_json() const;
 };
@@ -49,6 +60,7 @@ public:
     int32_t deactivate(std::string_view extension_id, Json& out);
     int32_t execute_command(std::string_view command_id, const Json& args,
                             uint32_t timeout_ms, Json& out);
+    int32_t post_webview_message(const Json& params, Json& out);
     Json snapshot() const;
 
 private:
@@ -57,6 +69,7 @@ private:
 
     NativeRuntime& runtime_;
     mutable std::mutex mutex_;
+    mutable std::mutex runtime_mutex_;
     std::shared_ptr<NodeRuntime> node_runtime_;
     NodeRuntime::BootOptions boot_options_{};
     std::unordered_map<std::string, ExtensionRecord> extensions_;

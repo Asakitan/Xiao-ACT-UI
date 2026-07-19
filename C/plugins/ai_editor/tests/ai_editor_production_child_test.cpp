@@ -19,6 +19,10 @@
 #define SAO_AI_EDITOR_PRODUCTION_EXECUTABLE ""
 #endif
 
+#ifndef SAO_AI_EDITOR_HAS_WEBVIEW
+#define SAO_AI_EDITOR_HAS_WEBVIEW 0
+#endif
+
 namespace {
 
 using Json = nlohmann::json;
@@ -345,8 +349,10 @@ TEST_CASE("production AI Editor child compiles and propagates the WebView "
     const std::filesystem::path executable =
         SAO_AI_EDITOR_PRODUCTION_EXECUTABLE;
     REQUIRE(std::filesystem::is_regular_file(executable));
+#if SAO_AI_EDITOR_HAS_WEBVIEW
     REQUIRE_FALSE(std::filesystem::exists(
         executable.parent_path() / L"WebView2Loader.dll"));
+#endif
     std::wstring command_line =
         L"\"" + executable.native() + L"\" --webview --workspace \"" +
         workspace.native() + L"\"";

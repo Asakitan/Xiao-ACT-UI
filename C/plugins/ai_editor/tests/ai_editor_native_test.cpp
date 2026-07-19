@@ -10131,7 +10131,7 @@ TEST_CASE("vscode.window.createWebviewPanel mints an id and reveal marks visible
             SAO_AI_EDITOR_ERR_NOT_FOUND);
 }
 
-TEST_CASE("vscode.window.postMessageToWebview round-trips seq and emits event",
+TEST_CASE("vscode.window.postMessageToWebview rejects an unavailable bridge",
           "[plugins][ai_editor][native][extensions][vscode][webview_panel]") {
     RuntimeFixture fixture;
     auto runtime = fixture.get();
@@ -10143,32 +10143,16 @@ TEST_CASE("vscode.window.postMessageToWebview round-trips seq and emits event",
     const std::string panel_id = created["result"]["panelId"];
     (void)drain_webview_events(runtime, 4);
 
-    for (int64_t expected_seq = 1; expected_seq <= 3; ++expected_seq) {
-        const Json message = {{"kind", "hello"}, {"seq", expected_seq}};
-        const Json posted = dispatch(
-            runtime, "vscode.window.postMessageToWebview",
-            {{"panelId", panel_id}, {"message", message}});
-        REQUIRE(posted.contains("result"));
-        REQUIRE(posted["result"]["messageSeq"].get<int64_t>() == expected_seq);
-
-        const std::vector<Json> events = drain_webview_events(runtime, 4);
-        bool saw_post = false;
-        for (const auto& envelope : events) {
-            if (envelope.value("method", std::string{}) != "sao.event") {
-                continue;
-            }
-            const std::string event_name =
-                envelope["params"].value("event", std::string{});
-            if (event_name == "vscode.window.webviewPanel.postMessage") {
-                REQUIRE(envelope["params"]["payload"]["panelId"] == panel_id);
-                REQUIRE(envelope["params"]["payload"]["messageSeq"]
-                            .get<int64_t>() == expected_seq);
-                REQUIRE(envelope["params"]["payload"]["message"] == message);
-                saw_post = true;
-            }
-        }
-        REQUIRE(saw_post);
-    }
+    const Json posted = dispatch(
+        runtime, "vscode.window.postMessageToWebview",
+        {{"panelId", panel_id}, {"message", {{"kind", "hello"}}}});
+    REQUIRE(posted.contains("error"));
+    REQUIRE(posted["error"]["data"]["status"].get<int>() ==
+            SAO_AI_EDITOR_ERR_IPC_CLOSED);
+    REQUIRE(posted["error"]["data"]["details"]["accepted"] == false);
+    const std::vector<Json> events = drain_webview_events(runtime, 4);
+    REQUIRE(contains_webview_event(
+        events, "vscode.window.webviewPanel.postFailed"));
 
     const std::string html = "<html><body><h2>hi</h2></body></html>";
     const Json set_html = dispatch(
@@ -10177,7 +10161,7 @@ TEST_CASE("vscode.window.postMessageToWebview round-trips seq and emits event",
     REQUIRE(set_html.contains("result"));
     REQUIRE(set_html["result"]["htmlLength"].get<int64_t>() ==
             static_cast<int64_t>(html.size()));
-    REQUIRE(set_html["result"]["messageSeq"].get<int64_t>() == 3);
+    REQUIRE(set_html["result"]["messageSeq"].get<int64_t>() == 1);
 }
 
 TEST_CASE("vscode.window.disposeWebviewPanel blocks subsequent postMessage",
@@ -10253,10 +10237,14 @@ TEST_CASE("vscode.window.createWebviewPanel supports multiple panels "
                      {{"panelId", id_b}, {"html", html_b}})
                 .contains("result"));
 
-    REQUIRE(dispatch(runtime, "vscode.window.postMessageToWebview",
-                     {{"panelId", id_b},
-                      {"message", {{"kind", "hello-b"}}}})
-                .contains("result"));
+    const Json rejected_post = dispatch(
+        runtime, "vscode.window.postMessageToWebview",
+        {{"panelId", id_b}, {"message", {{"kind", "hello-b"}}}});
+    REQUIRE(rejected_post.contains("error"));
+    REQUIRE(rejected_post["error"]["data"]["status"].get<int>() ==
+            SAO_AI_EDITOR_ERR_IPC_CLOSED);
+    REQUIRE(rejected_post["error"]["data"]["details"]["accepted"] ==
+            false);
 
     const Json listed = dispatch(runtime, "vscode.window.listWebviewPanels");
     REQUIRE(listed.contains("result"));
@@ -10290,7 +10278,7 @@ TEST_CASE("vscode.window.createWebviewPanel supports multiple panels "
 
 TEST_CASE("ExtensionHost handles reentrant callbacks, malformed frames, "
           "disposed panels, and restart",
-          "[plugins][ai_editor][native][extensions][node][reentrant]") {
+          "[plugins][ai_editor][native][extensions][node][reentrant][protocol]") {
     const std::string node = node_executable_path();
     const std::string shim = extension_host_shim_path();
     REQUIRE_FALSE(node.empty());
@@ -10305,6 +10293,7 @@ TEST_CASE("ExtensionHost handles reentrant callbacks, malformed frames, "
         source << R"JS('use strict';
 const vscode = require('vscode');
 let deactivateCalls = 0;
+const inboundMessages = [];
 exports.activate = (context) => {
     context.subscriptions.push(vscode.commands.registerCommand(
         'sao.test.reentrant', async () => {
@@ -10322,8 +10311,30 @@ exports.activate = (context) => {
             return { delivered, deliveredAfterDispose };
         }));
     context.subscriptions.push(vscode.commands.registerCommand(
+        'sao.test.inboundPanel', async () => {
+            const panel = vscode.window.createWebviewPanel(
+                'sao.test.inbound', 'Inbound', vscode.ViewColumn.One, {});
+            panel.webview.onDidReceiveMessage((message) => {
+                inboundMessages.push(message);
+            });
+            return { panelId: panel.panelId };
+        }));
+    context.subscriptions.push(vscode.commands.registerCommand(
+        'sao.test.inboundMessages', () => inboundMessages.slice()));
+    context.subscriptions.push(vscode.commands.registerCommand(
         'sao.test.malformed', () => {
             const body = Buffer.from('{invalid-json', 'utf8');
+            process.stdout.write(Buffer.concat([
+                Buffer.from(`Content-Length: ${body.length}\r\n\r\n`, 'utf8'),
+                body,
+            ]));
+            return new Promise(() => {});
+        }));
+    context.subscriptions.push(vscode.commands.registerCommand(
+        'sao.test.invalidEnvelope', () => {
+            const body = Buffer.from(JSON.stringify({
+                jsonrpc: '1.0', id: 1, result: { invalid: true },
+            }), 'utf8');
             process.stdout.write(Buffer.concat([
                 Buffer.from(`Content-Length: ${body.length}\r\n\r\n`, 'utf8'),
                 body,
@@ -10383,13 +10394,36 @@ exports.deactivate = () => {
          {"arguments", Json::array()},
          {"timeoutMs", 5000}});
     REQUIRE(posted.contains("result"));
-    REQUIRE(posted["result"]["delivered"] == true);
+    REQUIRE(posted["result"]["delivered"] == false);
     REQUIRE(posted["result"]["deliveredAfterDispose"] == false);
     const std::vector<Json> post_events = drain_webview_events(runtime, 12);
-    REQUIRE(contains_webview_event(post_events,
-                                   "vscode.webview.postMessage"));
     REQUIRE(contains_webview_event(
         post_events, "vscode.window.webviewPanel.postFailed"));
+
+    const Json inbound_panel = dispatch(
+        runtime, "vscode.commands.executeCommand",
+        {{"command", "sao.test.inboundPanel"},
+         {"arguments", Json::array()}});
+    REQUIRE(inbound_panel.contains("result"));
+    const std::string inbound_panel_id =
+        inbound_panel["result"]["panelId"].get<std::string>();
+    const Json inbound_post = dispatch(
+        runtime, "vscode.window.postMessageToWebview",
+        {{"panelId", inbound_panel_id},
+         {"message", {{"kind", "native-to-extension"}, {"value", 42}}}});
+    REQUIRE(inbound_post.contains("result"));
+    REQUIRE(inbound_post["result"]["accepted"] == true);
+    REQUIRE(inbound_post["result"]["messageSeq"] == 1);
+    const Json inbound_messages = dispatch(
+        runtime, "vscode.commands.executeCommand",
+        {{"command", "sao.test.inboundMessages"},
+         {"arguments", Json::array()}});
+    REQUIRE(inbound_messages.contains("result"));
+    REQUIRE(inbound_messages["result"].is_array());
+    REQUIRE(inbound_messages["result"].size() == 1);
+    REQUIRE(inbound_messages["result"][0]["kind"] ==
+            "native-to-extension");
+    REQUIRE(inbound_messages["result"][0]["value"] == 42);
 
     const auto malformed_started = std::chrono::steady_clock::now();
     const Json malformed = dispatch(
@@ -10412,6 +10446,24 @@ exports.deactivate = () => {
     REQUIRE(restarted_after_malformed.contains("result"));
     REQUIRE(dispatch(runtime, "extensions.list")["result"]["nodeAlive"] ==
             true);
+
+    const auto invalid_envelope_started = std::chrono::steady_clock::now();
+    const Json invalid_envelope = dispatch(
+        runtime, "extensions.execute_command",
+        {{"command", "sao.test.invalidEnvelope"},
+         {"arguments", Json::array()},
+         {"timeoutMs", 5000}});
+    const auto invalid_envelope_elapsed =
+        std::chrono::steady_clock::now() - invalid_envelope_started;
+    REQUIRE(invalid_envelope.contains("error"));
+    REQUIRE(invalid_envelope["error"]["data"]["status"] ==
+            SAO_AI_EDITOR_ERR_PROTOCOL);
+    REQUIRE(invalid_envelope_elapsed < std::chrono::seconds(2));
+
+    const Json restarted_after_invalid_envelope = dispatch(
+        runtime, "extensions.activate",
+        {{"extensionId", extension_id}, {"timeoutMs", 5000}});
+    REQUIRE(restarted_after_invalid_envelope.contains("result"));
 
     const Json failed_deactivate = dispatch(
         runtime, "extensions.deactivate", {{"extensionId", extension_id}});

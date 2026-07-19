@@ -22,6 +22,12 @@ const stdout = process_.stdout;
 const state = {
     nextId: 1,
     pending: new Map(),
+    transportClosed: false,
+    transportCloseError: null,
+    transportExitScheduled: false,
+    writeQueue: [],
+    writeBytes: 0,
+    writeActive: false,
     handlers: new Map(),
     commands: new Map(),
     outputChannels: new Map(),
@@ -30,40 +36,131 @@ const state = {
     initialized: false,
     // WebView surface: providers register by viewId, panels track by generated id.
     // Each record keeps the mock webview + emitters so the host can drive
-    // resolveView / postToView from the SAO side (WebView2 bridge is stubbed
-    // out here; real UI wiring lands in a later wave).
+    // resolveView / postToView from the SAO side through the native bridge.
     webviewViewProviders: new Map(),
     webviewPanels: new Map(),
     webviewViews: new Map(),
     nextPanelId: 1,
 };
 
+const kMaximumFrameBytes = 8 * 1024 * 1024;
+const kMaximumQueuedWriteBytes = 8 * 1024 * 1024;
+const kIpcClosedStatus = -112;
+
+function transportError(message, status = kIpcClosedStatus, data = undefined) {
+    const error = new Error(String(message || 'extension host transport closed'));
+    error.status = status;
+    error.data = data && typeof data === 'object'
+        ? Object.assign({}, data) : {};
+    if (!Number.isInteger(error.data.status)) {
+        error.data.status = status;
+    }
+    return error;
+}
+
+function rejectPending(error) {
+    for (const [id, pending] of Array.from(state.pending.entries())) {
+        state.pending.delete(id);
+        try { pending.reject(error); } catch (_) { /* observer owns errors */ }
+    }
+}
+
+function closeTransport(message, status = kIpcClosedStatus, data = undefined) {
+    if (state.transportClosed) return;
+    state.transportClosed = true;
+    state.transportCloseError = transportError(message, status, data);
+    state.writeQueue = [];
+    state.writeBytes = 0;
+    rejectPending(state.transportCloseError);
+    try { stdin.destroy(); } catch (_) { /* transport is already closed */ }
+    if (!state.transportExitScheduled) {
+        state.transportExitScheduled = true;
+        setImmediate(() => process_.exit(1));
+    }
+}
+
 function encodeFrame(payload) {
     const body = Buffer.from(JSON.stringify(payload), 'utf8');
+    if (body.length > kMaximumFrameBytes) {
+        throw transportError('extension host frame exceeds the maximum size',
+            -207);
+    }
     const header = Buffer.from(`Content-Length: ${body.length}\r\n\r\n`, 'utf8');
     return Buffer.concat([header, body]);
 }
 
+function flushWrites() {
+    if (state.transportClosed || state.writeActive) return;
+    const item = state.writeQueue.shift();
+    if (!item) return;
+    state.writeActive = true;
+    try {
+        const accepted = stdout.write(item.frame, (error) => {
+            state.writeActive = false;
+            state.writeBytes = Math.max(0, state.writeBytes - item.frame.length);
+            if (state.transportClosed) return;
+            if (error) {
+                closeTransport(`extension host stdout closed: ${error.message}`);
+                return;
+            }
+            flushWrites();
+        });
+        if (!accepted) {
+            // The write callback is the completion barrier for the queued
+            // chunk; do not start another chunk until it fires.
+        }
+    } catch (err) {
+        state.writeActive = false;
+        state.writeBytes -= item.frame.length;
+        closeTransport(`extension host stdout write failed: ${err.message}`);
+    }
+}
+
 function send(payload) {
     try {
-        stdout.write(encodeFrame(payload));
+        if (state.transportClosed) return false;
+        const frame = encodeFrame(payload);
+        if (state.writeBytes + frame.length > kMaximumQueuedWriteBytes) {
+            closeTransport('extension host stdout backpressure limit exceeded',
+                -207);
+            return false;
+        }
+        state.writeQueue.push({ frame });
+        state.writeBytes += frame.length;
+        flushWrites();
         return true;
     } catch (err) {
-        process_.stderr.write(`[shim] send failed: ${err.message}\n`);
+        closeTransport(`extension host send failed: ${err.message}`,
+            err.status || -207, err.data);
         return false;
     }
 }
 
 function callHost(method, params) {
+    if (state.transportClosed) {
+        return Promise.reject(state.transportCloseError ||
+            transportError(`host transport closed while calling ${method}`));
+    }
     const id = state.nextId++;
     return new Promise((resolve, reject) => {
         state.pending.set(id, { resolve, reject });
         if (!send({ jsonrpc: '2.0', id, method, params: params || {} })) {
-            state.pending.delete(id);
-            reject(new Error(`host transport closed while calling ${method}`));
+            const pending = state.pending.get(id);
+            if (pending) {
+                state.pending.delete(id);
+                reject(state.transportCloseError || transportError(
+                    `host transport closed while calling ${method}`));
+            }
         }
     });
 }
+
+stdout.on('error', (error) => {
+    closeTransport(`extension host stdout error: ${error.message}`);
+});
+stdout.on('close', () => {
+    closeTransport('extension host stdout closed');
+});
 
 // ----- vscode module polyfill --------------------------------------------
 
@@ -182,12 +279,10 @@ const workspace = {
 
 // ----- webview mock helpers ----------------------------------------------
 //
-// The SAO C++ side (webview_bridge.{h,cpp}) already knows how to spawn a
-// WebView2 window and pump PostWebMessageAsJson/WebMessageReceived, but this
-// shim doesn't try to wire the pipe yet.  The mock objects here just give the
-// extension something to call: html / options are stored, postMessage becomes
-// an acknowledged `vscode.webview.postMessage` request to the host, and
-// `onDidReceiveMessage` is a plain
+// The SAO C++ side (webview_bridge.{h,cpp}) spawns a WebView2 window and pumps
+// PostWebMessageAsJson/WebMessageReceived.  The mock objects here give the
+// extension the same host-routed surface: html / options are stored,
+// postMessage waits for the native bridge result, and onDidReceiveMessage is a plain
 // EventEmitter the host can drive via the `webview.postToView` handler below.
 
 function makeMockWebview(target) {
@@ -221,6 +316,7 @@ function makeMockPanel(panelId, viewType, title, showOptions, options) {
     const disposeEmitter = new EventEmitter();
     const viewStateEmitter = new EventEmitter();
     const panel = {
+        panelId,
         viewType,
         title,
         webview,
@@ -635,6 +731,11 @@ function makeMemento() {
 }
 
 async function dispatchInbound(message) {
+    if (message === null || typeof message !== 'object' ||
+        Array.isArray(message)) {
+        throw transportError('extension host JSON-RPC message must be an object',
+            -207);
+    }
     if (message.method !== undefined && message.id !== undefined) {
         const handler = state.handlers.get(message.method);
         const reply = { jsonrpc: '2.0', id: message.id };
@@ -644,10 +745,22 @@ async function dispatchInbound(message) {
             try {
                 reply.result = await Promise.resolve(handler(message.params || {}));
             } catch (err) {
-                reply.error = { code: -32000, message: err.message || String(err), data: { stack: err.stack || null } };
+                const errorData = err && err.data && typeof err.data === 'object'
+                    ? Object.assign({}, err.data) : {};
+                if (err && Number.isInteger(err.status)) {
+                    errorData.status = err.status;
+                }
+                errorData.stack = err && err.stack ? err.stack : null;
+                reply.error = {
+                    code: Number.isInteger(err && err.code) ? err.code : -32000,
+                    message: err && err.message ? err.message : String(err),
+                    data: errorData,
+                };
             }
         }
-        send(reply);
+        if (!send(reply)) {
+            closeTransport('extension host could not send the response');
+        }
         return;
     }
     if (message.method !== undefined) {
@@ -667,7 +780,16 @@ async function dispatchInbound(message) {
         const pending = state.pending.get(message.id);
         if (pending) {
             state.pending.delete(message.id);
-            if (message.error) { pending.reject(new Error(message.error.message || 'call failed')); }
+            if (message.error) {
+                const data = message.error.data && typeof message.error.data === 'object'
+                    ? message.error.data : {};
+                const error = transportError(
+                    message.error.message || 'call failed',
+                    Number.isInteger(data.status) ? data.status : -207,
+                    data);
+                error.code = message.error.code;
+                pending.reject(error);
+            }
             else { pending.resolve(message.result); }
         }
     }
@@ -678,6 +800,12 @@ async function dispatchInbound(message) {
 let buffer = Buffer.alloc(0);
 
 stdin.on('data', (chunk) => {
+    if (state.transportClosed) return;
+    if (buffer.length + chunk.length > kMaximumFrameBytes + 64 * 1024) {
+        closeTransport('extension host stdin frame exceeds the maximum size',
+            -207);
+        return;
+    }
     buffer = Buffer.concat([buffer, chunk]);
     for (;;) {
         const separator = buffer.indexOf('\r\n\r\n');
@@ -685,10 +813,16 @@ stdin.on('data', (chunk) => {
         const header = buffer.slice(0, separator).toString('utf8');
         const match = /Content-Length:\s*(\d+)/i.exec(header);
         if (!match) {
-            buffer = buffer.slice(separator + 4);
-            continue;
+            closeTransport('extension host stdin frame is missing Content-Length',
+                -207);
+            return;
         }
         const size = parseInt(match[1], 10);
+        if (!Number.isSafeInteger(size) || size < 0 ||
+            size > kMaximumFrameBytes) {
+            closeTransport('extension host stdin frame length is invalid', -207);
+            return;
+        }
         if (buffer.length - separator - 4 < size) { return; }
         const body = buffer.slice(separator + 4, separator + 4 + size).toString('utf8');
         buffer = buffer.slice(separator + 4 + size);
@@ -696,14 +830,25 @@ stdin.on('data', (chunk) => {
             const parsed = JSON.parse(body);
             dispatchInbound(parsed).catch((err) => {
                 process_.stderr.write(`[shim] dispatch error: ${err.stack || err.message}\n`);
+                closeTransport(err.message || 'extension host dispatch failed',
+                    Number.isInteger(err.status) ? err.status : -207,
+                    err.data);
             });
         } catch (err) {
             process_.stderr.write(`[shim] parse error: ${err.message}\n`);
+            closeTransport('extension host stdin JSON is invalid', -207);
+            return;
         }
     }
 });
 
-stdin.on('end', () => { process_.exit(0); });
-stdin.on('close', () => { process_.exit(0); });
+stdin.on('end', () => {
+    closeTransport('extension host stdin ended');
+    process_.exit(0);
+});
+stdin.on('close', () => {
+    closeTransport('extension host stdin closed');
+    process_.exit(0);
+});
 
 // Boot: wait for the parent's host.initialize call.

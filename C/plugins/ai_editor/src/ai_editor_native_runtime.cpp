@@ -198,6 +198,7 @@ NativeRuntime::NativeRuntime(RuntimeOptions options)
 }
 
 NativeRuntime::~NativeRuntime() {
+    set_webview_post_message_handler({});
     extension_host_.reset();
     std::vector<std::shared_ptr<RunState>> runs;
     {
@@ -218,6 +219,12 @@ NativeRuntime::~NativeRuntime() {
             run->worker.join();
         }
     }
+}
+
+void NativeRuntime::set_webview_post_message_handler(
+    WebviewPostMessageHandler handler) {
+    std::lock_guard<std::mutex> guard(webview_bridge_mutex_);
+    webview_post_message_handler_ = std::move(handler);
 }
 
 int32_t NativeRuntime::initialize() {
@@ -3475,12 +3482,30 @@ int32_t NativeRuntime::dispatch_extension_call(std::string_view method,
                               {"panelId", panel_id}};
                 return status;
             }
+            Json bridge_params = params;
+            bridge_params["messageSeq"] =
+                static_cast<int64_t>(state.message_seq);
+            const int32_t bridge_status = dispatch_webview_message_to_page(
+                bridge_params, result);
+            if (bridge_status != SAO_AI_EDITOR_OK) {
+                emit("vscode.window.webviewPanel.postFailed",
+                     Json{{"panelId", panel_id},
+                          {"status", bridge_status},
+                          {"reason", "webview bridge is not ready"}});
+                result["accepted"] = false;
+                return bridge_status;
+            }
+            emit("vscode.webview.postMessage", params);
+            result = Json{{"accepted", true},
+                          {"panelId", panel_id},
+                          {"viewId", view_id}};
+            return SAO_AI_EDITOR_OK;
         }
-        emit("vscode.webview.postMessage", params);
-        result = Json{{"accepted", true},
+        result = Json{{"accepted", false},
+                      {"message", "webview panel is not registered"},
                       {"panelId", panel_id},
                       {"viewId", view_id}};
-        return SAO_AI_EDITOR_OK;
+        return SAO_AI_EDITOR_ERR_NOT_FOUND;
     }
     if (method == "vscode.window.postMessageToWebview") {
         const std::string panel_id =
@@ -3503,6 +3528,27 @@ int32_t NativeRuntime::dispatch_extension_call(std::string_view method,
             return status;
         }
         const Json payload = params.value("message", Json());
+        Json bridge_result;
+        const int32_t bridge_status = dispatch_webview_message_to_extension(
+            params, bridge_result);
+        if (bridge_status != SAO_AI_EDITOR_OK) {
+              emit("vscode.window.webviewPanel.postFailed",
+                  Json{{"panelId", panel_id},
+                      {"status", bridge_status},
+                      {"reason", "extension host is not ready"}});
+            result = Json{{"accepted", false},
+                          {"message", "extension host is not ready"},
+                          {"panelId", panel_id},
+                          {"bridgeStatus", bridge_status}};
+            return bridge_status;
+        }
+        if (!bridge_result.value("ok", false)) {
+            result = Json{{"accepted", false},
+                          {"message", "webview message was not delivered"},
+                          {"panelId", panel_id},
+                          {"bridgeResult", bridge_result}};
+            return SAO_AI_EDITOR_ERR_IPC_CLOSED;
+        }
         emit("vscode.window.webviewPanel.postMessage",
              Json{{"panelId", panel_id},
                   {"messageSeq",
@@ -3510,7 +3556,8 @@ int32_t NativeRuntime::dispatch_extension_call(std::string_view method,
                   {"message", payload}});
         result = Json{{"panelId", panel_id},
                       {"messageSeq",
-                       static_cast<int64_t>(state.message_seq)}};
+                       static_cast<int64_t>(state.message_seq)},
+                      {"accepted", true}};
         return SAO_AI_EDITOR_OK;
     }
     if (method == "vscode.window.setWebviewHtml") {
@@ -3593,6 +3640,54 @@ int32_t NativeRuntime::dispatch_extension_call(std::string_view method,
     }
     result = Json{{"message", "unsupported extension method"}};
     return SAO_AI_EDITOR_ERR_NOT_FOUND;
+}
+
+int32_t NativeRuntime::dispatch_webview_message_to_extension(
+    const Json& params, Json& result) {
+    if (extension_host_ == nullptr) {
+        result = Json{{"accepted", false},
+                      {"message", "extension host is not initialized"}};
+        return SAO_AI_EDITOR_ERR_NOT_INITIALIZED;
+    }
+    const int32_t status =
+        extension_host_->post_webview_message(params, result);
+    if (status != SAO_AI_EDITOR_OK) {
+        return status;
+    }
+    return result.value("ok", false) ? SAO_AI_EDITOR_OK
+                                      : SAO_AI_EDITOR_ERR_IPC_CLOSED;
+}
+
+int32_t NativeRuntime::dispatch_webview_message_to_page(
+    const Json& params, Json& result) {
+    const std::string panel_id =
+        params.value("panelId", std::string{});
+    const std::string view_id = params.value("viewId", std::string{});
+    if (panel_id.empty() && view_id.empty()) {
+        result = Json{{"accepted", false},
+                      {"message", "panelId or viewId is required"}};
+        return SAO_AI_EDITOR_ERR_INVALID_ARGUMENT;
+    }
+    WebviewPostMessageHandler handler;
+    {
+        std::lock_guard<std::mutex> guard(webview_bridge_mutex_);
+        handler = webview_post_message_handler_;
+    }
+    if (!handler || panel_id.empty()) {
+        result = Json{{"accepted", false},
+                      {"message", "webview bridge is not ready"},
+                      {"panelId", panel_id},
+                      {"viewId", view_id}};
+        return SAO_AI_EDITOR_ERR_IPC_CLOSED;
+    }
+    const uint64_t message_seq = static_cast<uint64_t>(
+        params.value("messageSeq", int64_t{0}));
+    const bool accepted = handler(
+        panel_id, message_seq, params.value("message", Json()));
+    result = Json{{"accepted", accepted},
+                  {"panelId", panel_id},
+                  {"viewId", view_id}};
+    return accepted ? SAO_AI_EDITOR_OK : SAO_AI_EDITOR_ERR_IPC_CLOSED;
 }
 
 int32_t NativeRuntime::dispatch_auth(std::string_view method,
@@ -5205,13 +5300,36 @@ int32_t NativeRuntime::run_status(const Json& params, Json& result) {
 
 }  // namespace sao::ai_editor::native
 
-struct SaoAiEditorRuntime {
-    std::unique_ptr<sao::ai_editor::native::NativeRuntime> implementation;
-    std::mutex dispatch_mutex;
-    std::mutex event_mutex;
-    std::string pending_dispatch;
-    std::string pending_event;
-};
+namespace sao::ai_editor::native {
+
+RuntimeLease::RuntimeLease(SaoAiEditorRuntime* handle) noexcept
+    : handle_(handle) {
+    if (handle_ == nullptr) {
+        return;
+    }
+    std::lock_guard<std::mutex> guard(handle_->lifetime_mutex);
+    if (handle_->destroying || handle_->implementation == nullptr) {
+        handle_ = nullptr;
+        return;
+    }
+    ++handle_->leases;
+    runtime_ = handle_->implementation.get();
+}
+
+RuntimeLease::~RuntimeLease() {
+    if (handle_ == nullptr) {
+        return;
+    }
+    std::lock_guard<std::mutex> guard(handle_->lifetime_mutex);
+    if (handle_->leases > 0) {
+        --handle_->leases;
+    }
+    if (handle_->destroying && handle_->leases == 0) {
+        handle_->lifetime_ready.notify_all();
+    }
+}
+
+}  // namespace sao::ai_editor::native
 
 namespace {
 
@@ -5326,7 +5444,9 @@ sao_ai_editor_runtime_dispatch(sao_ai_editor_runtime_t handle,
                                uint32_t response_cap,
                                uint32_t* out_len) {
     try {
-        if (handle == nullptr || handle->implementation == nullptr) {
+        sao::ai_editor::native::RuntimeLease lease(handle);
+        auto* runtime = lease.get();
+        if (runtime == nullptr) {
             return SAO_AI_EDITOR_ERR_HANDLE_INVALID;
         }
         if ((request_json == nullptr && request_len != 0) || out_len == nullptr) {
@@ -5345,7 +5465,7 @@ sao_ai_editor_runtime_dispatch(sao_ai_editor_runtime_t handle,
                 sao::ai_editor::native::Json::parse(input);
             sao::ai_editor::native::Json response;
             const int32_t status =
-                handle->implementation->dispatch(request, response);
+                runtime->dispatch(request, response);
             if (status != SAO_AI_EDITOR_OK) {
                 return status;
             }
@@ -5371,7 +5491,9 @@ sao_ai_editor_runtime_next_event(sao_ai_editor_runtime_t handle,
                                  uint32_t event_cap,
                                  uint32_t* out_len) {
     try {
-        if (handle == nullptr || handle->implementation == nullptr) {
+        sao::ai_editor::native::RuntimeLease lease(handle);
+        auto* runtime = lease.get();
+        if (runtime == nullptr) {
             return SAO_AI_EDITOR_ERR_HANDLE_INVALID;
         }
         if (out_len == nullptr) {
@@ -5380,7 +5502,7 @@ sao_ai_editor_runtime_next_event(sao_ai_editor_runtime_t handle,
         std::lock_guard<std::mutex> lock(handle->event_mutex);
         if (handle->pending_event.empty()) {
             const int32_t status =
-                handle->implementation->next_event(0, handle->pending_event);
+                runtime->next_event(0, handle->pending_event);
             if (status == SAO_AI_EDITOR_ERR_TIMEOUT) {
                 *out_len = 0;
                 if (event_out != nullptr && event_cap > 0) {
@@ -5407,7 +5529,9 @@ extern "C" SAO_AI_EDITOR_API int32_t SAO_AI_EDITOR_CALL
 sao_ai_editor_runtime_cancel(sao_ai_editor_runtime_t handle,
                              const char* run_id_utf8) {
     try {
-        if (handle == nullptr || handle->implementation == nullptr) {
+        sao::ai_editor::native::RuntimeLease lease(handle);
+        auto* runtime = lease.get();
+        if (runtime == nullptr) {
             return SAO_AI_EDITOR_ERR_HANDLE_INVALID;
         }
         if (run_id_utf8 == nullptr ||
@@ -5419,7 +5543,7 @@ sao_ai_editor_runtime_cancel(sao_ai_editor_runtime_t handle,
             {"params", {{"runId", run_id_utf8}}}};
         sao::ai_editor::native::Json response;
         const int32_t status =
-            handle->implementation->dispatch(request, response);
+            runtime->dispatch(request, response);
         if (status != SAO_AI_EDITOR_OK) {
             return status;
         }
@@ -5433,6 +5557,16 @@ sao_ai_editor_runtime_cancel(sao_ai_editor_runtime_t handle,
 extern "C" SAO_AI_EDITOR_API void SAO_AI_EDITOR_CALL
 sao_ai_editor_runtime_destroy(sao_ai_editor_runtime_t handle) {
     try {
+        if (handle == nullptr) {
+            return;
+        }
+        {
+            std::unique_lock<std::mutex> lock(handle->lifetime_mutex);
+            handle->destroying = true;
+            handle->lifetime_ready.wait(lock, [handle] {
+                return handle->leases == 0;
+            });
+        }
         delete handle;
     } catch (...) {
     }

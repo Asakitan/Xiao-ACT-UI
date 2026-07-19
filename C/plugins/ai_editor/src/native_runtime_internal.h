@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cstdint>
 #include <condition_variable>
 #include <deque>
 #include <functional>
@@ -40,6 +41,11 @@ class WorkflowExecution;
 
 class NativeRuntime final {
 public:
+    using WebviewPostMessageHandler =
+        std::function<bool(std::string_view panel_id,
+                           uint64_t message_seq,
+                           const Json& message)>;
+
     friend class WorkflowExecution;
     explicit NativeRuntime(RuntimeOptions options);
     ~NativeRuntime();
@@ -231,6 +237,8 @@ private:
     // webview_panel_registry.h.  Unconditionally compiled: even without
     // WebView2 the Node side needs a deterministic id + state surface.
     WebviewPanelRegistry webview_panels_;
+    mutable std::mutex webview_bridge_mutex_;
+    WebviewPostMessageHandler webview_post_message_handler_;
     uint32_t maximum_event_queue_;
 
 public:
@@ -239,6 +247,12 @@ public:
     int32_t dispatch_extension_call(std::string_view method,
                                     const Json& params,
                                     Json& result);
+    int32_t dispatch_webview_message_to_extension(const Json& params,
+                                                  Json& result);
+    int32_t dispatch_webview_message_to_page(const Json& params,
+                                             Json& result);
+    void set_webview_post_message_handler(
+        WebviewPostMessageHandler handler);
 
     mutable std::mutex store_mutex_;
     mutable std::mutex state_mutex_;
@@ -273,6 +287,38 @@ public:
     };
     mutable std::mutex cost_stats_mutex_;
     std::unordered_map<std::string, CostStatsRow> cost_stats_;
+};
+
+}  // namespace sao::ai_editor::native
+
+struct SaoAiEditorRuntime {
+    std::unique_ptr<sao::ai_editor::native::NativeRuntime> implementation;
+    std::mutex dispatch_mutex;
+    std::mutex event_mutex;
+    std::string pending_dispatch;
+    std::string pending_event;
+    std::mutex lifetime_mutex;
+    std::condition_variable lifetime_ready;
+    uint32_t leases = 0;
+    bool destroying = false;
+};
+
+namespace sao::ai_editor::native {
+
+class RuntimeLease final {
+public:
+    explicit RuntimeLease(SaoAiEditorRuntime* handle) noexcept;
+    ~RuntimeLease();
+
+    RuntimeLease(const RuntimeLease&) = delete;
+    RuntimeLease& operator=(const RuntimeLease&) = delete;
+
+    NativeRuntime* get() const noexcept { return runtime_; }
+    explicit operator bool() const noexcept { return runtime_ != nullptr; }
+
+private:
+    SaoAiEditorRuntime* handle_ = nullptr;
+    NativeRuntime* runtime_ = nullptr;
 };
 
 }  // namespace sao::ai_editor::native
