@@ -10,36 +10,29 @@
 namespace sao::plugins::sdk_binding {
 
 namespace detail {
-plugin_binding_handle_t make_binding(void* ctx,
-                                     void* lang_state,
-                                     int lang);
+plugin_binding_handle_t make_binding(void* ctx, void* lang_state, int lang);
 void free_binding(plugin_binding_handle_t plugin);
 } // namespace detail
 
 // 保留旧 stub
 extern "C" SAO_PLUGINS_API int32_t SAO_PLUGINS_CALL
-sao_plugins_binding_csharp_bind_ctx(csharp_domain_ptr domain,
-                                    plugin_context_ptr ctx) {
-    if (domain == nullptr || ctx == nullptr) return SAO_ERR_INVALID_ARGUMENT;
+sao_plugins_binding_csharp_bind_ctx(csharp_domain_ptr domain, plugin_context_ptr ctx) {
+    if (domain == nullptr || ctx == nullptr)
+        return SAO_ERR_INVALID_ARGUMENT;
     language_binding_request request{};
     request.runtime = domain;
     request.context = reinterpret_cast<void*>(ctx);
     return sao_plugins_binding_dispatch_provider(
-        language_host_kind::csharp,
-        language_binding_operation::context_bind,
-        &request);
+        language_host_kind::csharp, language_binding_operation::context_bind, &request);
 }
 
-extern "C" SAO_PLUGINS_API int32_t SAO_PLUGINS_CALL
-sao_plugins_binding_csharp_call_static(csharp_domain_ptr domain,
-                                       const char* assembly_qualified_class,
-                                       const char* method_name,
-                                       const char* args_json_utf8,
-                                       char** out_result_json_utf8) {
-    if (out_result_json_utf8 != nullptr) *out_result_json_utf8 = nullptr;
-    if (domain == nullptr || assembly_qualified_class == nullptr ||
-        method_name == nullptr || args_json_utf8 == nullptr ||
-        out_result_json_utf8 == nullptr) {
+extern "C" SAO_PLUGINS_API int32_t SAO_PLUGINS_CALL sao_plugins_binding_csharp_call_static(
+    csharp_domain_ptr domain, const char* assembly_qualified_class, const char* method_name,
+    const char* args_json_utf8, char** out_result_json_utf8) {
+    if (out_result_json_utf8 != nullptr)
+        *out_result_json_utf8 = nullptr;
+    if (domain == nullptr || assembly_qualified_class == nullptr || method_name == nullptr ||
+        args_json_utf8 == nullptr || out_result_json_utf8 == nullptr) {
         return SAO_ERR_INVALID_ARGUMENT;
     }
     language_binding_request request{};
@@ -49,21 +42,19 @@ sao_plugins_binding_csharp_call_static(csharp_domain_ptr domain,
     request.input = reinterpret_cast<const uint8_t*>(args_json_utf8);
     request.input_size = std::strlen(args_json_utf8);
     request.out_object = reinterpret_cast<void**>(out_result_json_utf8);
-    return sao_plugins_binding_dispatch_provider(
-        language_host_kind::csharp,
-        language_binding_operation::static_call,
-        &request);
+    return sao_plugins_binding_dispatch_provider(language_host_kind::csharp,
+                                                 language_binding_operation::static_call, &request);
 }
 
 extern "C" SAO_PLUGINS_API int32_t SAO_PLUGINS_CALL
-sao_plugins_binding_csharp_wrap_delegate(csharp_domain_ptr domain,
-                                         void* delegate_gc_handle,
-                                         void** out_sdk_callback_ptr,
-                                         void** out_user_data) {
-    if (out_sdk_callback_ptr != nullptr) *out_sdk_callback_ptr = nullptr;
-    if (out_user_data != nullptr) *out_user_data = nullptr;
-    if (domain == nullptr || delegate_gc_handle == nullptr ||
-        out_sdk_callback_ptr == nullptr || out_user_data == nullptr) {
+sao_plugins_binding_csharp_wrap_delegate(csharp_domain_ptr domain, void* delegate_gc_handle,
+                                         void** out_sdk_callback_ptr, void** out_user_data) {
+    if (out_sdk_callback_ptr != nullptr)
+        *out_sdk_callback_ptr = nullptr;
+    if (out_user_data != nullptr)
+        *out_user_data = nullptr;
+    if (domain == nullptr || delegate_gc_handle == nullptr || out_sdk_callback_ptr == nullptr ||
+        out_user_data == nullptr) {
         return SAO_ERR_INVALID_ARGUMENT;
     }
     language_binding_request request{};
@@ -72,32 +63,29 @@ sao_plugins_binding_csharp_wrap_delegate(csharp_domain_ptr domain,
     request.out_callback = out_sdk_callback_ptr;
     request.out_user_data = out_user_data;
     return sao_plugins_binding_dispatch_provider(
-        language_host_kind::csharp,
-        language_binding_operation::callback_wrap,
-        &request);
+        language_host_kind::csharp, language_binding_operation::callback_wrap, &request);
 }
 
 extern "C" SAO_PLUGINS_API void SAO_PLUGINS_CALL
-sao_plugins_binding_csharp_release_delegate(void* /*user_data*/) {
-    // no-op
+sao_plugins_binding_csharp_release_delegate(void* user_data) {
+    sao_plugins_binding_release_callback(language_host_kind::csharp, user_data);
 }
 
 // Wave 4 新增: activate / deactivate (stub — 只记账, 真 domain 集成待 Wave 5)
 
-extern "C" SAO_PLUGINS_API int32_t SAO_PLUGINS_CALL
-sao_plugins_binding_csharp_activate(plugin_context_ptr plugin_ctx,
-                                    csharp_domain_ptr domain,
-                                    plugin_binding_handle_t* out_plugin) {
-    if (out_plugin == nullptr) return SAO_ERR_INVALID_ARGUMENT;
+extern "C" SAO_PLUGINS_API int32_t SAO_PLUGINS_CALL sao_plugins_binding_csharp_activate(
+    plugin_context_ptr plugin_ctx, csharp_domain_ptr domain, plugin_binding_handle_t* out_plugin) {
+    if (out_plugin == nullptr)
+        return SAO_ERR_INVALID_ARGUMENT;
     *out_plugin = nullptr;
-    return sao_plugins_binding_plugin_load(
-        language_host_kind::csharp, reinterpret_cast<void*>(plugin_ctx), domain,
-        out_plugin);
+    return sao_plugins_binding_plugin_load(language_host_kind::csharp,
+                                           reinterpret_cast<void*>(plugin_ctx), domain, out_plugin);
 }
 
 extern "C" SAO_PLUGINS_API int32_t SAO_PLUGINS_CALL
 sao_plugins_binding_csharp_deactivate(plugin_binding_handle_t plugin) {
-    if (plugin == nullptr) return SAO_ERR_INVALID_ARGUMENT;
+    if (plugin == nullptr)
+        return SAO_ERR_INVALID_ARGUMENT;
     return sao_plugins_binding_plugin_unload(plugin);
 }
 

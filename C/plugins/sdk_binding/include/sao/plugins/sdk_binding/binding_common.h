@@ -24,27 +24,27 @@
 #include <variant>
 #include <vector>
 
+#include "sao/plugins/loader/loader_status.h"
 #include "sao_plugins/abi.h"
 #include "sao_plugins/sao_status.h"
-#include "sao/plugins/loader/loader_status.h"
 
 struct SaoSdkContext;
 
 namespace sao::plugins::sdk_binding {
 
 // json 中立类型 (中间格式)
-using json_value = std::variant<
-    std::nullptr_t,      // nil / null / None
-    bool,                // true / false
-    int64_t,             // integer
-    double,              // number
-    std::string,         // utf-8 string
-    std::vector<class json_node>,        // array
-    std::vector<std::pair<std::string, class json_node>> // object (顺序保留)
->;
+using json_value =
+    std::variant<std::nullptr_t,                                      // nil / null / None
+                 bool,                                                // true / false
+                 int64_t,                                             // integer
+                 double,                                              // number
+                 std::string,                                         // utf-8 string
+                 std::vector<class json_node>,                        // array
+                 std::vector<std::pair<std::string, class json_node>> // object (顺序保留)
+                 >;
 
 class json_node {
-public:
+  public:
     json_value value;
 
     json_node() = default;
@@ -86,7 +86,7 @@ enum class sdk_method_id : uint16_t {
 
     // 设置
     method_get_setting,
-    method_setting,           // alias
+    method_setting, // alias
     method_set_setting,
     method_set_defaults,
 
@@ -143,7 +143,7 @@ enum class sdk_method_id : uint16_t {
     method_ensure_requirements,
     method_load_local,
 
-    method_count_,  // sentinel
+    method_count_, // sentinel
 };
 
 enum class language_host_kind : uint8_t {
@@ -192,34 +192,31 @@ struct language_host_adapter_vtable {
     uint32_t abi_version = SAO_LANGUAGE_HOST_PROVIDER_ABI_VERSION;
     uint32_t flags = 0;
     language_host_kind language = language_host_kind::python;
-    bool (SAO_PLUGINS_CALL* available)(void* user_data) = nullptr;
-    int32_t (SAO_PLUGINS_CALL* load_plugin)(
-        void* context, void* runtime, void** out_plugin, void* user_data) = nullptr;
-    int32_t (SAO_PLUGINS_CALL* unload_plugin)(
-        void* plugin, void* user_data) = nullptr;
-    int32_t (SAO_PLUGINS_CALL* invoke)(
-        void* plugin,
-        const char* method_name_utf8,
-        const uint8_t* args_json_utf8,
-        size_t args_size,
-        uint8_t* out_result_json_utf8,
-        size_t out_capacity,
-        size_t* out_required,
-        char* out_error_utf8,
-        size_t error_capacity,
-        void* user_data) = nullptr;
-    int32_t (SAO_PLUGINS_CALL* dispatch)(
-        language_binding_operation operation,
-        language_binding_request* request,
-        void* user_data) = nullptr;
-    void (SAO_PLUGINS_CALL* release_callback)(
-        void* callback_user_data, void* user_data) = nullptr;
+    bool(SAO_PLUGINS_CALL* available)(void* user_data) = nullptr;
+    int32_t(SAO_PLUGINS_CALL* load_plugin)(void* context, void* runtime, void** out_plugin,
+                                           void* user_data) = nullptr;
+    int32_t(SAO_PLUGINS_CALL* unload_plugin)(void* plugin, void* user_data) = nullptr;
+    int32_t(SAO_PLUGINS_CALL* invoke)(void* plugin, const char* method_name_utf8,
+                                      const uint8_t* args_json_utf8, size_t args_size,
+                                      uint8_t* out_result_json_utf8, size_t out_capacity,
+                                      size_t* out_required, char* out_error_utf8,
+                                      size_t error_capacity, void* user_data) = nullptr;
+    int32_t(SAO_PLUGINS_CALL* dispatch)(language_binding_operation operation,
+                                        language_binding_request* request,
+                                        void* user_data) = nullptr;
     void* user_data = nullptr;
+
+    // Optional append-only ABI extension. Providers whose struct_size ends
+    // before this field retain the v1 layout and must use track_callback for
+    // callback ownership.
+    void(SAO_PLUGINS_CALL* release_callback)(void* callback_user_data, void* user_data) = nullptr;
 };
 
+inline constexpr size_t SAO_LANGUAGE_HOST_ADAPTER_V1_SIZE =
+    offsetof(language_host_adapter_vtable, release_callback);
+
 extern "C" SAO_PLUGINS_API int32_t SAO_PLUGINS_CALL
-sao_plugins_binding_register_language_host(
-    const language_host_adapter_vtable* adapter);
+sao_plugins_binding_register_language_host(const language_host_adapter_vtable* adapter);
 
 extern "C" SAO_PLUGINS_API int32_t SAO_PLUGINS_CALL
 sao_plugins_binding_unregister_language_host(language_host_kind language);
@@ -236,32 +233,32 @@ extern "C" SAO_PLUGINS_API sdk_method_id SAO_PLUGINS_CALL
 sao_plugins_binding_method_from_name(const char* name);
 
 // 通用异常屏障: 语言侧回调调用平台 SDK 时用这个包起来。
-using barrier_fn = int32_t (*)(void* user_data);
+using barrier_fn = int32_t(SAO_PLUGINS_CALL*)(void* user_data);
 
 // 执行 fn(user_data), 拦截所有异常 (Win: SEH __try/__except; POSIX: sigaction),
 // 返回 SAO_STATUS。失败时 out_error_utf8 填错误信息 (调用方 free)。
 extern "C" SAO_PLUGINS_API int32_t SAO_PLUGINS_CALL
-sao_plugins_binding_barrier(barrier_fn fn,
-                            void* user_data,
-                            char** out_error_utf8);
+sao_plugins_binding_barrier(barrier_fn fn, void* user_data, char** out_error_utf8);
 
 // 释放屏障返回的错误字符串。
-extern "C" SAO_PLUGINS_API void SAO_PLUGINS_CALL
-sao_plugins_binding_free_error(char* err);
+extern "C" SAO_PLUGINS_API void SAO_PLUGINS_CALL sao_plugins_binding_free_error(char* err);
 
 // 通用 callback 生命周期: 语言侧闭包 wrap 到 native fn ptr + user_data。
 // 释放时调 release_callback 归还语言侧引用 (Py_DECREF / luaL_unref / GC handle
 // free / EmmaCallable release)。
-using release_callback_fn = void (*)(void* user_data);
+using release_callback_fn = void(SAO_PLUGINS_CALL*)(void* user_data);
 
 // 登记一份 wrapped callback (linked list, 每插件独立)。
 extern "C" SAO_PLUGINS_API int32_t SAO_PLUGINS_CALL
-sao_plugins_binding_track_callback(void* user_data,
-                                   release_callback_fn release_fn);
+sao_plugins_binding_track_callback(void* user_data, release_callback_fn release_fn);
+
+// Claims and releases one provider-owned callback exactly once. Unknown,
+// ambiguous, or already-released callback handles are ignored.
+extern "C" SAO_PLUGINS_API void SAO_PLUGINS_CALL
+sao_plugins_binding_release_callback(language_host_kind language, void* callback_user_data);
 
 // 卸载时释放全部登记 (供 unload_plugin 调)。
-extern "C" SAO_PLUGINS_API void SAO_PLUGINS_CALL
-sao_plugins_binding_release_all_callbacks(void);
+extern "C" SAO_PLUGINS_API void SAO_PLUGINS_CALL sao_plugins_binding_release_all_callbacks(void);
 
 // 每个 language activate() 后返回 opaque plugin_binding_handle_t；所有
 // load/unload/invoke 均经过注册 provider 和 common barrier。
@@ -273,61 +270,40 @@ typedef struct plugin_binding_s* plugin_binding_handle_t;
 //   - args_size: json 长度 (0 = 空参数)
 //   - ret_ptr / ret_size: 输出 buffer (可为空表示不需要返回值)
 extern "C" SAO_PLUGINS_API int32_t SAO_PLUGINS_CALL
-sao_plugins_binding_plugin_load(language_host_kind language,
-                                void* plugin_ctx,
-                                void* runtime,
+sao_plugins_binding_plugin_load(language_host_kind language, void* plugin_ctx, void* runtime,
                                 plugin_binding_handle_t* out_plugin);
 
 extern "C" SAO_PLUGINS_API int32_t SAO_PLUGINS_CALL
 sao_plugins_binding_plugin_unload(plugin_binding_handle_t plugin);
 
-extern "C" SAO_PLUGINS_API int32_t SAO_PLUGINS_CALL
-sao_plugins_binding_plugin_invoke(plugin_binding_handle_t plugin,
-                                  const char* method_name_utf8,
-                                  const uint8_t* args_json_utf8,
-                                  size_t args_size,
-                                  uint8_t* out_result_json_utf8,
-                                  size_t out_capacity,
-                                  size_t* out_required);
+extern "C" SAO_PLUGINS_API int32_t SAO_PLUGINS_CALL sao_plugins_binding_plugin_invoke(
+    plugin_binding_handle_t plugin, const char* method_name_utf8, const uint8_t* args_json_utf8,
+    size_t args_size, uint8_t* out_result_json_utf8, size_t out_capacity, size_t* out_required);
 
 extern "C" SAO_PLUGINS_API int32_t SAO_PLUGINS_CALL
-sao_plugins_binding_plugin_last_error(plugin_binding_handle_t plugin,
-                                      char* out_error_utf8,
-                                      size_t out_capacity,
-                                      size_t* out_required);
+sao_plugins_binding_plugin_last_error(plugin_binding_handle_t plugin, char* out_error_utf8,
+                                      size_t out_capacity, size_t* out_required);
+
+extern "C" SAO_PLUGINS_API int32_t SAO_PLUGINS_CALL sao_plugins_binding_dispatch_provider(
+    language_host_kind language, language_binding_operation operation,
+    language_binding_request* request);
 
 extern "C" SAO_PLUGINS_API int32_t SAO_PLUGINS_CALL
-sao_plugins_binding_dispatch_provider(language_host_kind language,
-                                      language_binding_operation operation,
-                                      language_binding_request* request);
+sao_plugins_sdk_bind_call(plugin_binding_handle_t plugin, sdk_method_id method_id,
+                          const char* args_ptr, size_t args_size, char* ret_ptr, size_t ret_size);
 
-extern "C" SAO_PLUGINS_API int32_t SAO_PLUGINS_CALL
-sao_plugins_sdk_bind_call(plugin_binding_handle_t plugin,
-                          sdk_method_id method_id,
-                          const char* args_ptr,
-                          size_t args_size,
-                          char* ret_ptr,
-                          size_t ret_size);
+extern "C" SAO_PLUGINS_API int32_t SAO_PLUGINS_CALL sao_plugins_sdk_bind_call_ex(
+    plugin_binding_handle_t plugin, sdk_method_id method_id, const char* args_ptr, size_t args_size,
+    char* ret_ptr, size_t ret_size, size_t* out_required);
 
-extern "C" SAO_PLUGINS_API int32_t SAO_PLUGINS_CALL
-sao_plugins_sdk_bind_call_ex(plugin_binding_handle_t plugin,
-                                      sdk_method_id method_id,
-                                      const char* args_ptr,
-                                      size_t args_size,
-                                      char* ret_ptr,
-                                      size_t ret_size,
-                                      size_t* out_required);
-
-using sdk_context_event_callback_fn = void (SAO_PLUGINS_CALL*)(
-    const char* topic_utf8, const uint8_t* payload_json_utf8,
-    size_t payload_size, void* user_data);
-using sdk_context_hotkey_callback_fn = void (SAO_PLUGINS_CALL*)(
-    uint64_t hotkey_id, void* user_data);
-using sdk_context_timer_callback_fn = void (SAO_PLUGINS_CALL*)(
-    uint64_t timer_id, void* user_data);
-using sdk_context_panel_action_callback_fn = void (SAO_PLUGINS_CALL*)(
-    const char* action_key_utf8, const uint8_t* action_json_utf8,
-    size_t action_size, void* user_data);
+using sdk_context_event_callback_fn = void(SAO_PLUGINS_CALL*)(const char* topic_utf8,
+                                                              const uint8_t* payload_json_utf8,
+                                                              size_t payload_size, void* user_data);
+using sdk_context_hotkey_callback_fn = void(SAO_PLUGINS_CALL*)(uint64_t hotkey_id, void* user_data);
+using sdk_context_timer_callback_fn = void(SAO_PLUGINS_CALL*)(uint64_t timer_id, void* user_data);
+using sdk_context_panel_action_callback_fn =
+    void(SAO_PLUGINS_CALL*)(const char* action_key_utf8, const uint8_t* action_json_utf8,
+                            size_t action_size, void* user_data);
 
 struct sdk_context_call_request {
     const char* args_json_utf8 = nullptr;
@@ -345,28 +321,21 @@ struct sdk_context_call_request {
 // Dispatches the subset whose semantics are provided directly by a modern
 // SaoSdkContext. Provider-backed calls return UNSUPPORTED when the context has
 // no matching provider slot. Registrations stay owned by SaoSdkContext.
-extern "C" SAO_PLUGINS_API int32_t SAO_PLUGINS_CALL
-sao_plugins_sdk_context_dispatch(
-    const SaoSdkContext* ctx,
-    sdk_method_id method_id,
-    sdk_context_call_request* request);
+extern "C" SAO_PLUGINS_API int32_t SAO_PLUGINS_CALL sao_plugins_sdk_context_dispatch(
+    const SaoSdkContext* ctx, sdk_method_id method_id, sdk_context_call_request* request);
 
 // Side-effect-free capability probe used by compatibility reports.
 extern "C" SAO_PLUGINS_API int32_t SAO_PLUGINS_CALL
-sao_plugins_sdk_context_method_status(
-    const SaoSdkContext* ctx,
-    sdk_method_id method_id);
+sao_plugins_sdk_context_method_status(const SaoSdkContext* ctx, sdk_method_id method_id);
 
 // 测试用: 查询绑定层是否记录了 add_hotkey 注册 (name key)。
 // Wave 4 用来给 test_sdk_bind_wave4 验证 dispatch 命中。
 extern "C" SAO_PLUGINS_API bool SAO_PLUGINS_CALL
-sao_plugins_binding_test_has_hotkey(plugin_binding_handle_t plugin,
-                                    const char* hotkey_id);
+sao_plugins_binding_test_has_hotkey(plugin_binding_handle_t plugin, const char* hotkey_id);
 
 // 测试用: 查询绑定层 publish_event 记录 (topic 命中次数)。
 extern "C" SAO_PLUGINS_API uint32_t SAO_PLUGINS_CALL
-sao_plugins_binding_test_event_count(plugin_binding_handle_t plugin,
-                                     const char* topic);
+sao_plugins_binding_test_event_count(plugin_binding_handle_t plugin, const char* topic);
 
 // 测试用: 查询 log 记录 (最近一条)。
 extern "C" SAO_PLUGINS_API const char* SAO_PLUGINS_CALL
