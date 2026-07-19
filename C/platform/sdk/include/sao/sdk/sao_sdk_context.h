@@ -495,6 +495,27 @@ struct SaoSdkGpuHuntTable {
     sao_sdk_status_t(SAO_SDK_CALL* set_skeleton_fingerprint_hint)(
         void* ctx_impl, sao_sdk_gpu_tracker_t tracker,
         const float* floats, size_t count);
+
+    // Append-only ABI 1.7 extension: multi-cluster access.
+    //
+    // Report how many bone clusters the tracker retained on the last
+    // rescan (primary + top-K secondaries).  Zero when the tracker
+    // has no lock or bone_clusters_snapshot is empty.
+    sao_sdk_status_t(SAO_SDK_CALL* get_bone_cluster_count)(
+        void* ctx_impl, sao_sdk_gpu_tracker_t tracker,
+        size_t* out_count);
+
+    // Copy up to max_bones (xyz triplets) of the cluster at `index`
+    // into out_positions_xyz.  index 0 = primary (matches
+    // get_skeleton_positions), 1..count-1 = secondaries in
+    // descending-score order.  *out_bone_count reports the true
+    // cluster size regardless of copy limit; pass out_positions_xyz
+    // = NULL to query the length only.  Returns SAO_SDK_ERR_
+    // INVALID_ARGUMENT if index is out of range.
+    sao_sdk_status_t(SAO_SDK_CALL* get_bone_cluster_positions)(
+        void* ctx_impl, sao_sdk_gpu_tracker_t tracker,
+        size_t index, float* out_positions_xyz, size_t max_bones,
+        size_t* out_bone_count);
 };
 
 // The main context struct.  ctx_impl is an opaque pointer to the
