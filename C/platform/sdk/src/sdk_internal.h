@@ -17,6 +17,7 @@
 #include <condition_variable>
 #include <cstddef>
 #include <cstdint>
+#include <list>
 #include <memory>
 #include <mutex>
 #include <string>
@@ -35,6 +36,8 @@
 #include "sao/ui/panel_layout.h"
 #include "sao/ui/panel_sdk.h"
 #include "sao/ui/sao_ui_scriptable_canvas.h"
+
+#include "sdk_callback_barrier.h"
 
 namespace sao_sdk_internal {
 
@@ -69,6 +72,7 @@ struct PanelEntry {
     void* legacy_action_user_data = nullptr;
     std::vector<sao_ui_script_canvas_handle_t> canvases;
     std::vector<sao_ui_widget_handle_t> canvas_placeholders;
+    bool unregistering = false;
 };
 
 // Render-hook registration owned by this context.  Fires when the
@@ -88,16 +92,50 @@ struct RenderHookEntry {
 // unsubscribes automatically.  Also wraps the wave5 callback signature
 // so plugins can register `sao_sdk_event_callback_t` (void return).
 //
-// The bus is handed a stable heap pointer as user_data (needed for the
-// bridge lookup); ``heap_owner`` is that pointer, which must be freed
-// with `delete` at unsubscribe or destroy.
-struct EventSubscription {
-    ContextState* owner = nullptr;
-    sao_sdk_subscription_t sdk_token = 0;
-    sao_engine_subscription_t bus_token = 0; // wave5 token
+struct EventSubscriptionOwner {
+    ContextState* context = nullptr;
     sao_sdk_event_callback_t plugin_cb = nullptr;
     void* plugin_ud = nullptr;
-    EventSubscription* heap_owner = nullptr; // matches the wave5 user_data slot
+    CallbackActivity callback_activity;
+};
+
+struct EventSubscription {
+    EventSubscription() = default;
+
+    EventSubscription(EventSubscription&& other) noexcept
+                : sdk_token(other.sdk_token), bus_token(other.bus_token), owner(std::move(other.owner)),
+                    heap_owner(std::exchange(other.heap_owner, nullptr)),
+                    unregistering(other.unregistering) {}
+
+    EventSubscription& operator=(EventSubscription&& other) noexcept {
+        if (this == &other)
+            return *this;
+        retire();
+        sdk_token = other.sdk_token;
+        bus_token = other.bus_token;
+        owner = std::move(other.owner);
+        heap_owner = std::exchange(other.heap_owner, nullptr);
+        unregistering = other.unregistering;
+        return *this;
+    }
+
+    ~EventSubscription() {
+        retire();
+    }
+
+    EventSubscription(const EventSubscription&) = delete;
+    EventSubscription& operator=(const EventSubscription&) = delete;
+
+    void retire() noexcept {
+        if (owner != nullptr)
+            owner->callback_activity.retire_and_wait();
+    }
+
+    sao_sdk_subscription_t sdk_token = 0;
+    sao_engine_subscription_t bus_token = 0; // wave5 token
+    std::shared_ptr<EventSubscriptionOwner> owner;
+    EventSubscription* heap_owner = nullptr; // retained for sdk_context cleanup compatibility
+    bool unregistering = false;
 };
 
 // Hotkey registration.
@@ -168,6 +206,7 @@ struct ContextState {
 
     // Panels registered by this context, keyed by SDK opaque handle.
     std::unordered_map<sao_sdk_ui_panel_t, PanelEntry> panels;
+    std::list<PanelEntry> panel_cleanup_pending;
     std::unordered_map<std::string, sao_sdk_ui_panel_t> overlays;
 
     // Render hooks owned by this context.
@@ -220,11 +259,47 @@ struct ContextState {
     std::atomic_bool destroying = false;
     std::mutex destroy_mutex;
 
+    // Guarded by the process-wide context registry mutex. Public API
+    // entry points pin the state there before touching any context fields.
+    size_t active_api_calls = 0;
+    bool api_accepting = true;
+
     std::mutex mu;
 };
 
 inline thread_local ContextState* g_plugin_callback_owner = nullptr;
 inline thread_local ContextState* g_context_destroy_owner = nullptr;
+inline thread_local ContextState* g_context_api_owner = nullptr;
+
+class ContextApiLease {
+  public:
+    explicit ContextApiLease(const SaoSdkContext* context) noexcept;
+    ~ContextApiLease();
+
+    ContextApiLease(const ContextApiLease&) = delete;
+    ContextApiLease& operator=(const ContextApiLease&) = delete;
+
+    explicit operator bool() const noexcept {
+        return state_ != nullptr;
+    }
+
+    sao_sdk_status_t status() const noexcept {
+        return status_;
+    }
+
+    ContextState* state() const noexcept {
+        return state_;
+    }
+
+    const SaoSdkContext* public_context() const noexcept {
+        return state_ == nullptr ? nullptr : state_->bound_public_ctx;
+    }
+
+  private:
+    ContextState* state_ = nullptr;
+    ContextState* previous_owner_ = nullptr;
+    sao_sdk_status_t status_ = SAO_SDK_ERR_HANDLE_INVALID;
+};
 
 class PluginCallbackLease {
   public:
@@ -266,6 +341,7 @@ class PluginCallbackLease {
 // Vtable factories — declared here, defined in sdk_context.cpp.
 const SaoSdkUiTable* make_ui_table();
 const SaoSdkEventTable* make_event_table();
+void cleanup_event_subscriptions(ContextState* state);
 const SaoSdkHotkeyTable* make_hotkey_table();
 const SaoSdkMemTable* make_mem_table();
 const SaoSdkNetTable* make_net_table();
@@ -278,6 +354,7 @@ bool gpu_callback_reentered(ContextState* owner) noexcept;
 
 void destroy_hotkey_bridge(void* bridge);
 void destroy_widget_for_kind(int32_t kind, sao_ui_widget_handle_t widget);
+sao_sdk_status_t cleanup_ui_panels(ContextState* state);
 
 // Cast helper.
 inline ContextState* cast_ctx(void* ctx_impl) {
@@ -362,9 +439,21 @@ inline bool plugin_callback_reentered(ContextState* state) noexcept {
 inline bool context_destroy_on_current_thread(ContextState* state) noexcept {
     return state != nullptr && g_context_destroy_owner == state;
 }
-sao_sdk_status_t begin_context_shutdown(ContextState* state);
+inline bool context_api_reentered(ContextState* state) noexcept {
+    return state != nullptr && g_context_api_owner == state;
+}
+sao_sdk_status_t begin_context_shutdown(const SaoSdkContext* context, ContextState** out_state);
 void cancel_context_shutdown(ContextState* state) noexcept;
 void quarantine_context(ContextState* state);
 void unquarantine_context(ContextState* state);
+
+enum class ContextApiTestPoint : uint32_t {
+    event_subscribe_registered = 1,
+    event_unsubscribe_unlocked = 2,
+    panel_registered = 3,
+    panel_operation_unlocked = 4,
+};
+
+void pause_context_api_test_point(ContextApiTestPoint point);
 
 } // namespace sao_sdk_internal

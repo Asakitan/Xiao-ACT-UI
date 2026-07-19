@@ -22,9 +22,11 @@
 #include "sdk_callback_barrier.h"
 
 #include <algorithm>
+#include <atomic>
 #include <cstdio>
 #include <cstring>
 #include <mutex>
+#include <new>
 #include <string>
 
 // Include the specific widget headers directly.  The umbrella
@@ -43,6 +45,35 @@ extern "C" void SAO_UI_CALL sao_ui_widget_data_family_destroy(sao_ui_widget_hand
 
 namespace sao_sdk_internal {
 namespace {
+
+std::atomic_bool g_fail_next_panel_state_insertion{false};
+std::atomic<sao_sdk_status_t> g_fail_next_panel_unregister_status{SAO_SDK_OK};
+
+bool valid_widget_kind(int32_t kind) noexcept {
+    switch (kind) {
+    case SAO_SDK_UI_WIDGET_LABEL:
+    case SAO_SDK_UI_WIDGET_BUTTON:
+    case SAO_SDK_UI_WIDGET_PROGRESS_BAR:
+    case SAO_SDK_UI_WIDGET_TABLE:
+    case SAO_SDK_UI_WIDGET_ROUNDED_PANEL:
+    case SAO_SDK_UI_WIDGET_STATUS_BADGE:
+    case SAO_SDK_UI_WIDGET_TEXT_FIELD:
+    case SAO_SDK_UI_WIDGET_CHECKBOX:
+    case SAO_SDK_UI_WIDGET_DIVIDER:
+    case SAO_SDK_UI_WIDGET_ICON:
+        return true;
+    default:
+        return false;
+    }
+}
+
+sao_sdk_status_t unregister_native_panel(sao_ui_panel_handle_t panel) noexcept {
+    const auto injected = g_fail_next_panel_unregister_status.exchange(SAO_SDK_OK);
+    if (injected != SAO_SDK_OK)
+        return injected;
+    return invoke_callback_barrier(
+        [&] { return static_cast<sao_sdk_status_t>(sao_ui_panel_unregister(panel)); });
+}
 
 // ─── Widget instantiation helper ─────────────────────────────────────
 //
@@ -117,6 +148,8 @@ std::string generic_widget_props(const SaoSdkWidgetSpec& spec) {
 }
 
 sao_ui_widget_handle_t create_widget_for_kind(const SaoSdkWidgetSpec& spec) {
+    if (!valid_widget_kind(spec.kind))
+        return nullptr;
     sao_ui_widget_handle_t handle = nullptr;
     int32_t native_kind = SAO_UI_WIDGET_ROUNDED_PANEL;
     switch (spec.kind) {
@@ -148,8 +181,9 @@ sao_ui_widget_handle_t create_widget_for_kind(const SaoSdkWidgetSpec& spec) {
         native_kind = SAO_UI_WIDGET_ICON;
         break;
     case SAO_SDK_UI_WIDGET_ROUNDED_PANEL:
-    default:
         break;
+    default:
+        return nullptr;
     }
     if (sao_ui_widget_create(native_kind, nullptr, &handle) != SAO_STATUS_OK)
         return nullptr;
@@ -179,6 +213,13 @@ void clear_legacy_canvases(PanelEntry& panel) {
         sao_ui_widget_destroy(placeholder);
     }
     panel.canvas_placeholders.clear();
+}
+
+void destroy_panel_resources(PanelEntry& panel) {
+    clear_legacy_canvases(panel);
+    for (const auto& widget : panel.widgets)
+        destroy_widget_for_kind(widget.kind, widget.ui_widget);
+    panel.widgets.clear();
 }
 
 sao_sdk_status_t materialize_legacy_canvas(PanelEntry& panel, const uint8_t* spec_json_utf8,
@@ -327,6 +368,8 @@ sao_sdk_status_t SAO_SDK_CALL ui_set_panel_spec(void* ctx_impl, sao_sdk_ui_panel
         const auto it = state->panels.find(panel);
         if (it == state->panels.end())
             return SAO_SDK_ERR_NOT_FOUND;
+        if (it->second.unregistering)
+            return SAO_SDK_ERR_BUSY;
         body = it->second.ui_body;
     }
     const sao_status_t spec_rc = sao_ui_panel_body_set_spec(body, spec_json_utf8, spec_len);
@@ -336,6 +379,8 @@ sao_sdk_status_t SAO_SDK_CALL ui_set_panel_spec(void* ctx_impl, sao_sdk_ui_panel
     const auto it = state->panels.find(panel);
     if (it == state->panels.end())
         return SAO_SDK_ERR_NOT_FOUND;
+    if (it->second.unregistering)
+        return SAO_SDK_ERR_BUSY;
     clear_legacy_canvases(it->second);
     return materialize_legacy_canvas(it->second, spec_json_utf8, spec_len);
 }
@@ -454,29 +499,72 @@ sao_sdk_status_t SAO_SDK_CALL ui_register_ui_panel(void* ctx_impl,
     full.z_within_class = descriptor->z_within_class;
     full.initial_opacity = descriptor->initial_opacity;
 
+    std::list<PanelEntry>::iterator pending;
+    try {
+        PanelEntry entry;
+        entry.panel_id = descriptor->panel_id_utf8;
+        std::lock_guard<std::mutex> lock(state->mu);
+        state->panel_cleanup_pending.push_back(std::move(entry));
+        pending = std::prev(state->panel_cleanup_pending.end());
+    } catch (...) {
+        return SAO_SDK_ERR_INTERNAL;
+    }
+
     auto& rt = SharedRuntime::instance();
     sao_ui_panel_handle_t ui_panel = nullptr;
     sao_ui_panel_body_handle_t ui_body = nullptr;
-    const sao_status_t rc = sao_ui_panel_register(rt.compositor, &full, &ui_panel, &ui_body);
-    if (rc != SAO_STATUS_OK) {
-        if (rc == SAO_STATUS_ERR_ALREADY_EXISTS) {
+    const auto register_status = invoke_callback_barrier([&]() -> sao_sdk_status_t {
+        return static_cast<sao_sdk_status_t>(
+            sao_ui_panel_register(rt.compositor, &full, &ui_panel, &ui_body));
+    });
+    if (register_status != SAO_SDK_OK) {
+        std::lock_guard<std::mutex> lock(state->mu);
+        state->panel_cleanup_pending.erase(pending);
+        if (register_status == SAO_STATUS_ERR_ALREADY_EXISTS)
             return SAO_SDK_ERR_ALREADY_EXISTS;
-        }
-        if (rc == SAO_STATUS_ERR_INVALID_ARGUMENT) {
+        if (register_status == SAO_STATUS_ERR_INVALID_ARGUMENT)
             return SAO_SDK_ERR_INVALID_ARGUMENT;
+        return register_status;
+    }
+    {
+        std::lock_guard<std::mutex> lock(state->mu);
+        pending->sdk_handle = reinterpret_cast<sao_sdk_ui_panel_t>(ui_panel);
+        pending->ui_panel = ui_panel;
+        pending->ui_body = ui_body;
+    }
+    if (ui_panel == nullptr || ui_body == nullptr) {
+        const auto rollback_status =
+            ui_panel == nullptr ? SAO_SDK_OK : unregister_native_panel(ui_panel);
+        if (rollback_status == SAO_SDK_OK) {
+            std::lock_guard<std::mutex> lock(state->mu);
+            state->panel_cleanup_pending.erase(pending);
         }
-        return static_cast<sao_sdk_status_t>(rc);
+        return SAO_SDK_ERR_HANDLE_INVALID;
     }
 
-    PanelEntry entry;
-    entry.sdk_handle = reinterpret_cast<sao_sdk_ui_panel_t>(ui_panel);
-    entry.ui_panel = ui_panel;
-    entry.ui_body = ui_body;
-    entry.panel_id = descriptor->panel_id_utf8;
-
-    {
+    pause_context_api_test_point(ContextApiTestPoint::panel_registered);
+    sao_sdk_status_t insertion_status = SAO_SDK_OK;
+    try {
+        if (g_fail_next_panel_state_insertion.exchange(false))
+            throw std::bad_alloc{};
         std::lock_guard<std::mutex> lk(state->mu);
-        state->panels.emplace(entry.sdk_handle, std::move(entry));
+        const auto handle = pending->sdk_handle;
+        if (state->panels.find(handle) != state->panels.end()) {
+            insertion_status = SAO_SDK_ERR_ALREADY_EXISTS;
+        } else {
+            state->panels.emplace(handle, *pending);
+            state->panel_cleanup_pending.erase(pending);
+        }
+    } catch (...) {
+        insertion_status = SAO_SDK_ERR_INTERNAL;
+    }
+    if (insertion_status != SAO_SDK_OK) {
+        const auto rollback_status = unregister_native_panel(ui_panel);
+        if (rollback_status == SAO_SDK_OK) {
+            std::lock_guard<std::mutex> lock(state->mu);
+            state->panel_cleanup_pending.erase(pending);
+        }
+        return rollback_status == SAO_SDK_OK ? insertion_status : rollback_status;
     }
     *out_panel = reinterpret_cast<sao_sdk_ui_panel_t>(ui_panel);
     return SAO_SDK_OK;
@@ -489,17 +577,34 @@ sao_sdk_status_t SAO_SDK_CALL ui_unregister_ui_panel(void* ctx_impl, sao_sdk_ui_
     if (panel == nullptr)
         return SAO_SDK_ERR_INVALID_ARGUMENT;
 
-    sao_ui_panel_handle_t ui_panel = nullptr;
+    sao_ui_panel_handle_t native_panel = nullptr;
     {
-        std::lock_guard<std::mutex> lk(state->mu);
+        std::lock_guard<std::mutex> lock(state->mu);
         auto it = state->panels.find(panel);
         if (it == state->panels.end())
             return SAO_SDK_ERR_NOT_FOUND;
-        ui_panel = it->second.ui_panel;
-        clear_legacy_canvases(it->second);
-        for (const auto& widget : it->second.widgets) {
-            destroy_widget_for_kind(widget.kind, widget.ui_widget);
-        }
+        if (it->second.unregistering)
+            return SAO_SDK_ERR_BUSY;
+        it->second.unregistering = true;
+        native_panel = it->second.ui_panel;
+    }
+
+    const auto unregister_status = unregister_native_panel(native_panel);
+    if (unregister_status != SAO_SDK_OK) {
+        std::lock_guard<std::mutex> lock(state->mu);
+        const auto found = state->panels.find(panel);
+        if (found != state->panels.end())
+            found->second.unregistering = false;
+        return unregister_status;
+    }
+
+    PanelEntry retired;
+    {
+        std::lock_guard<std::mutex> lock(state->mu);
+        auto it = state->panels.find(panel);
+        if (it == state->panels.end())
+            return SAO_SDK_ERR_NOT_FOUND;
+        retired = std::move(it->second);
         for (auto overlay = state->overlays.begin(); overlay != state->overlays.end();) {
             if (overlay->second == panel) {
                 overlay = state->overlays.erase(overlay);
@@ -509,9 +614,7 @@ sao_sdk_status_t SAO_SDK_CALL ui_unregister_ui_panel(void* ctx_impl, sao_sdk_ui_
         }
         state->panels.erase(it);
     }
-    if (ui_panel != nullptr) {
-        (void)sao_ui_panel_unregister(ui_panel);
-    }
+    destroy_panel_resources(retired);
     return SAO_SDK_OK;
 }
 
@@ -523,9 +626,9 @@ sao_sdk_status_t SAO_SDK_CALL ui_panel_add_widget(void* ctx_impl, sao_sdk_ui_pan
     auto* state = cast_ctx(ctx_impl);
     if (state == nullptr)
         return SAO_SDK_ERR_HANDLE_INVALID;
-    if (panel == nullptr)
+    if (panel == nullptr || widget_spec == nullptr)
         return SAO_SDK_ERR_INVALID_ARGUMENT;
-    if (widget_spec == nullptr)
+    if (!valid_widget_kind(widget_spec->kind))
         return SAO_SDK_ERR_INVALID_ARGUMENT;
 
     // Create the underlying platform widget outside the lock — some
@@ -534,6 +637,7 @@ sao_sdk_status_t SAO_SDK_CALL ui_panel_add_widget(void* ctx_impl, sao_sdk_ui_pan
     if (ui_widget == nullptr)
         return SAO_SDK_ERR_UNSUPPORTED;
 
+    pause_context_api_test_point(ContextApiTestPoint::panel_operation_unlocked);
     std::lock_guard<std::mutex> lk(state->mu);
     auto it = state->panels.find(panel);
     if (it == state->panels.end()) {
@@ -541,6 +645,10 @@ sao_sdk_status_t SAO_SDK_CALL ui_panel_add_widget(void* ctx_impl, sao_sdk_ui_pan
         return SAO_SDK_ERR_NOT_FOUND;
     }
     PanelEntry& pe = it->second;
+    if (pe.unregistering) {
+        destroy_widget_for_kind(widget_spec->kind, ui_widget);
+        return SAO_SDK_ERR_BUSY;
+    }
 
     // Reject duplicate widget_id inside the same panel.
     if (widget_spec->widget_id_utf8 != nullptr && widget_spec->widget_id_utf8[0] != '\0') {
@@ -610,6 +718,8 @@ sao_sdk_status_t SAO_SDK_CALL ui_panel_update_widget(void* ctx_impl, sao_sdk_ui_
     if (it == state->panels.end())
         return SAO_SDK_ERR_NOT_FOUND;
     PanelEntry& pe = it->second;
+    if (pe.unregistering)
+        return SAO_SDK_ERR_BUSY;
 
     WidgetEntry* target = nullptr;
     for (auto& w : pe.widgets) {
@@ -653,6 +763,8 @@ sao_sdk_status_t SAO_SDK_CALL ui_panel_remove_widget(void* ctx_impl, sao_sdk_ui_
     if (it == state->panels.end())
         return SAO_SDK_ERR_NOT_FOUND;
     PanelEntry& pe = it->second;
+    if (pe.unregistering)
+        return SAO_SDK_ERR_BUSY;
 
     auto pred = [widget](const WidgetEntry& w) { return w.sdk_handle == widget; };
     auto rem = std::find_if(pe.widgets.begin(), pe.widgets.end(), pred);
@@ -694,6 +806,42 @@ void destroy_widget_for_kind(int32_t kind, sao_ui_widget_handle_t widget) {
     sao_ui_widget_destroy(widget);
 }
 
+sao_sdk_status_t cleanup_ui_panels(ContextState* state) {
+    std::list<PanelEntry> pending;
+    {
+        std::lock_guard<std::mutex> lock(state->mu);
+        for (auto& [handle, panel] : state->panels) {
+            (void)handle;
+            pending.push_back(std::move(panel));
+        }
+        state->panels.clear();
+        state->overlays.clear();
+        pending.splice(pending.end(), state->panel_cleanup_pending);
+    }
+
+    sao_sdk_status_t cleanup_status = SAO_SDK_OK;
+    std::list<PanelEntry> failed;
+    for (auto current = pending.begin(); current != pending.end();) {
+        auto candidate = current++;
+        const auto status = candidate->ui_panel == nullptr
+                                ? SAO_SDK_OK
+                                : unregister_native_panel(candidate->ui_panel);
+        if (status != SAO_SDK_OK) {
+            if (cleanup_status == SAO_SDK_OK)
+                cleanup_status = status;
+            failed.splice(failed.end(), pending, candidate);
+            continue;
+        }
+        destroy_panel_resources(*candidate);
+        pending.erase(candidate);
+    }
+    if (!failed.empty()) {
+        std::lock_guard<std::mutex> lock(state->mu);
+        state->panel_cleanup_pending.splice(state->panel_cleanup_pending.end(), failed);
+    }
+    return cleanup_status;
+}
+
 const SaoSdkUiTable* make_ui_table() {
     static const SaoSdkUiTable table = {
         // Legacy JSON path (Wave 6 will populate the JSON normalizer).
@@ -715,6 +863,14 @@ const SaoSdkUiTable* make_ui_table() {
     return &table;
 }
 
+void test_fail_next_panel_state_insertion() noexcept {
+    g_fail_next_panel_state_insertion.store(true);
+}
+
+void test_fail_next_panel_unregister(sao_sdk_status_t status) noexcept {
+    g_fail_next_panel_unregister_status.store(status);
+}
+
 // ─── Public free-function wrappers (Wave 7) ─────────────────────────
 
 } // namespace sao_sdk_internal
@@ -722,98 +878,148 @@ const SaoSdkUiTable* make_ui_table() {
 extern "C" SAO_SDK_API sao_sdk_status_t SAO_SDK_CALL sao_sdk_register_ui_panel(
     const struct SaoSdkContext* ctx, const struct SaoSdkPanelDescriptor* descriptor,
     sao_sdk_ui_panel_t* out_panel) {
-    if (ctx == nullptr || ctx->ui == nullptr || ctx->ui->register_ui_panel == nullptr) {
-        return SAO_SDK_ERR_INVALID_ARGUMENT;
-    }
-    return ctx->ui->register_ui_panel(ctx->ctx_impl, descriptor, out_panel);
+    sao_sdk_internal::ContextApiLease lease(ctx);
+    if (!lease)
+        return lease.status();
+    const auto* public_context = lease.public_context();
+    return sao_sdk_internal::invoke_callback_barrier([&]() -> sao_sdk_status_t {
+        if (public_context->ui == nullptr || public_context->ui->register_ui_panel == nullptr)
+            return SAO_SDK_ERR_INVALID_ARGUMENT;
+        return public_context->ui->register_ui_panel(lease.state(), descriptor, out_panel);
+    });
 }
 
 extern "C" SAO_SDK_API sao_sdk_status_t SAO_SDK_CALL
 sao_sdk_unregister_ui_panel(const struct SaoSdkContext* ctx, sao_sdk_ui_panel_t panel) {
-    if (ctx == nullptr || ctx->ui == nullptr || ctx->ui->unregister_ui_panel == nullptr) {
-        return SAO_SDK_ERR_INVALID_ARGUMENT;
-    }
-    return ctx->ui->unregister_ui_panel(ctx->ctx_impl, panel);
+    sao_sdk_internal::ContextApiLease lease(ctx);
+    if (!lease)
+        return lease.status();
+    const auto* public_context = lease.public_context();
+    return sao_sdk_internal::invoke_callback_barrier([&]() -> sao_sdk_status_t {
+        if (public_context->ui == nullptr || public_context->ui->unregister_ui_panel == nullptr)
+            return SAO_SDK_ERR_INVALID_ARGUMENT;
+        return public_context->ui->unregister_ui_panel(lease.state(), panel);
+    });
 }
 
 extern "C" SAO_SDK_API sao_sdk_status_t SAO_SDK_CALL sao_sdk_panel_add_widget(
     const struct SaoSdkContext* ctx, sao_sdk_ui_panel_t panel,
     const struct SaoSdkWidgetSpec* widget_spec, sao_sdk_ui_widget_t* out_widget) {
-    if (ctx == nullptr)
-        return SAO_SDK_ERR_INVALID_ARGUMENT;
-    return ctx->ui->panel_add_widget(ctx->ctx_impl, panel, widget_spec, out_widget);
+    sao_sdk_internal::ContextApiLease lease(ctx);
+    if (!lease)
+        return lease.status();
+    const auto* public_context = lease.public_context();
+    return sao_sdk_internal::invoke_callback_barrier([&]() -> sao_sdk_status_t {
+        if (public_context->ui == nullptr || public_context->ui->panel_add_widget == nullptr)
+            return SAO_SDK_ERR_INVALID_ARGUMENT;
+        return public_context->ui->panel_add_widget(lease.state(), panel, widget_spec, out_widget);
+    });
 }
 
 extern "C" SAO_SDK_API sao_sdk_status_t SAO_SDK_CALL sao_sdk_panel_update_widget(
     const struct SaoSdkContext* ctx, sao_sdk_ui_panel_t panel, sao_sdk_ui_widget_t widget,
     const struct SaoSdkWidgetSpec* widget_spec) {
-    if (ctx == nullptr)
-        return SAO_SDK_ERR_INVALID_ARGUMENT;
-    return ctx->ui->panel_update_widget(ctx->ctx_impl, panel, widget, widget_spec);
+    sao_sdk_internal::ContextApiLease lease(ctx);
+    if (!lease)
+        return lease.status();
+    const auto* public_context = lease.public_context();
+    return sao_sdk_internal::invoke_callback_barrier([&]() -> sao_sdk_status_t {
+        if (public_context->ui == nullptr || public_context->ui->panel_update_widget == nullptr)
+            return SAO_SDK_ERR_INVALID_ARGUMENT;
+        return public_context->ui->panel_update_widget(lease.state(), panel, widget, widget_spec);
+    });
 }
 
 extern "C" SAO_SDK_API sao_sdk_status_t SAO_SDK_CALL sao_sdk_panel_remove_widget(
     const struct SaoSdkContext* ctx, sao_sdk_ui_panel_t panel, sao_sdk_ui_widget_t widget) {
-    if (ctx == nullptr)
-        return SAO_SDK_ERR_INVALID_ARGUMENT;
-    return ctx->ui->panel_remove_widget(ctx->ctx_impl, panel, widget);
+    sao_sdk_internal::ContextApiLease lease(ctx);
+    if (!lease)
+        return lease.status();
+    const auto* public_context = lease.public_context();
+    return sao_sdk_internal::invoke_callback_barrier([&]() -> sao_sdk_status_t {
+        if (public_context->ui == nullptr || public_context->ui->panel_remove_widget == nullptr)
+            return SAO_SDK_ERR_INVALID_ARGUMENT;
+        return public_context->ui->panel_remove_widget(lease.state(), panel, widget);
+    });
 }
 
 extern "C" SAO_SDK_API sao_sdk_status_t SAO_SDK_CALL sao_sdk_register_render_hook(
     const struct SaoSdkContext* ctx, int32_t hook_point, sao_sdk_render_hook_callback_t callback,
     void* user_data, sao_sdk_hook_token_t* out_hook_handle) {
-    if (ctx == nullptr || ctx->ui == nullptr || ctx->ui->register_render_hook_clock == nullptr) {
-        return SAO_SDK_ERR_INVALID_ARGUMENT;
-    }
-    return ctx->ui->register_render_hook_clock(ctx->ctx_impl, hook_point, callback, user_data,
-                                               out_hook_handle);
+    sao_sdk_internal::ContextApiLease lease(ctx);
+    if (!lease)
+        return lease.status();
+    const auto* public_context = lease.public_context();
+    return sao_sdk_internal::invoke_callback_barrier([&]() -> sao_sdk_status_t {
+        if (public_context->ui == nullptr ||
+            public_context->ui->register_render_hook_clock == nullptr) {
+            return SAO_SDK_ERR_INVALID_ARGUMENT;
+        }
+        return public_context->ui->register_render_hook_clock(
+            lease.state(), hook_point, callback, user_data, out_hook_handle);
+    });
 }
 
 extern "C" SAO_SDK_API sao_sdk_status_t SAO_SDK_CALL sao_sdk_register_render_hook_ex(
     const struct SaoSdkContext* ctx, const struct SaoSdkRenderHookSpec* spec,
     sao_sdk_render_hook_callback_t callback, void* user_data,
     sao_sdk_hook_token_t* out_hook_handle) {
-    if (ctx == nullptr)
-        return SAO_SDK_ERR_INVALID_ARGUMENT;
-    return sao_sdk_internal::provider_render_register_ex(
-        sao_sdk_internal::cast_ctx(ctx->ctx_impl), spec, callback, user_data, out_hook_handle);
+    sao_sdk_internal::ContextApiLease lease(ctx);
+    if (!lease)
+        return lease.status();
+    return sao_sdk_internal::invoke_callback_barrier([&]() -> sao_sdk_status_t {
+        return sao_sdk_internal::provider_render_register_ex(
+            lease.state(), spec, callback, user_data, out_hook_handle);
+    });
 }
 
 extern "C" SAO_SDK_API sao_sdk_status_t SAO_SDK_CALL
 sao_sdk_unregister_render_hook(const struct SaoSdkContext* ctx, sao_sdk_hook_token_t hook_handle) {
-    if (ctx == nullptr)
-        return SAO_SDK_ERR_INVALID_ARGUMENT;
-    auto* state = sao_sdk_internal::cast_ctx(ctx->ctx_impl);
-    if (state == nullptr)
-        return SAO_SDK_ERR_HANDLE_INVALID;
-    return sao_sdk_internal::make_ui_table()->unregister_render_hook(state, hook_handle);
+    sao_sdk_internal::ContextApiLease lease(ctx);
+    if (!lease)
+        return lease.status();
+    return sao_sdk_internal::invoke_callback_barrier([&]() -> sao_sdk_status_t {
+        return sao_sdk_internal::make_ui_table()->unregister_render_hook(lease.state(),
+                                                                         hook_handle);
+    });
 }
 
 extern "C" SAO_SDK_API sao_sdk_status_t SAO_SDK_CALL
 sao_sdk_request_redraw(const struct SaoSdkContext* ctx, sao_sdk_ui_panel_t panel) {
-    if (ctx == nullptr || ctx->ui == nullptr || ctx->ui->request_redraw == nullptr) {
-        return SAO_SDK_ERR_INVALID_ARGUMENT;
-    }
-    auto* state = sao_sdk_internal::cast_ctx(ctx->ctx_impl);
-    if (state == nullptr)
-        return SAO_SDK_ERR_HANDLE_INVALID;
-    std::string surface;
-    if (panel != nullptr) {
-        std::lock_guard<std::mutex> lk(state->mu);
-        const auto found = state->panels.find(panel);
-        if (found == state->panels.end())
-            return SAO_SDK_ERR_NOT_FOUND;
-        surface = found->second.panel_id;
-    }
-    return ctx->ui->request_redraw(ctx->ctx_impl, surface.empty() ? nullptr : surface.c_str());
+    sao_sdk_internal::ContextApiLease lease(ctx);
+    if (!lease)
+        return lease.status();
+    const auto* public_context = lease.public_context();
+    return sao_sdk_internal::invoke_callback_barrier([&]() -> sao_sdk_status_t {
+        if (public_context->ui == nullptr || public_context->ui->request_redraw == nullptr)
+            return SAO_SDK_ERR_INVALID_ARGUMENT;
+        auto* state = lease.state();
+        std::string surface;
+        if (panel != nullptr) {
+            std::lock_guard<std::mutex> lk(state->mu);
+            const auto found = state->panels.find(panel);
+            if (found == state->panels.end())
+                return SAO_SDK_ERR_NOT_FOUND;
+            if (found->second.unregistering)
+                return SAO_SDK_ERR_BUSY;
+            surface = found->second.panel_id;
+        }
+        return public_context->ui->request_redraw(lease.state(),
+                                                  surface.empty() ? nullptr : surface.c_str());
+    });
 }
 
 extern "C" SAO_SDK_API sao_sdk_status_t SAO_SDK_CALL
 sao_sdk_request_redraw_surface(const struct SaoSdkContext* ctx, const char* surface_id_utf8) {
-    if (ctx == nullptr || ctx->ui == nullptr || ctx->ui->request_redraw == nullptr) {
-        return SAO_SDK_ERR_INVALID_ARGUMENT;
-    }
-    return ctx->ui->request_redraw(ctx->ctx_impl, surface_id_utf8);
+    sao_sdk_internal::ContextApiLease lease(ctx);
+    if (!lease)
+        return lease.status();
+    const auto* public_context = lease.public_context();
+    return sao_sdk_internal::invoke_callback_barrier([&]() -> sao_sdk_status_t {
+        if (public_context->ui == nullptr || public_context->ui->request_redraw == nullptr)
+            return SAO_SDK_ERR_INVALID_ARGUMENT;
+        return public_context->ui->request_redraw(lease.state(), surface_id_utf8);
+    });
 }
 
 // ─── Test-only observability hooks ──────────────────────────────────
@@ -822,90 +1028,137 @@ sao_sdk_request_redraw_surface(const struct SaoSdkContext* ctx, const char* surf
 // grubbing through the ctx_impl.  Only linked in tests — production
 // builds strip these via the linker's dead-code elimination.
 
+extern "C" SAO_SDK_API void SAO_SDK_CALL sao_sdk_test_fail_next_panel_state_insertion(void) {
+    sao_sdk_internal::test_fail_next_panel_state_insertion();
+}
+
+extern "C" SAO_SDK_API void SAO_SDK_CALL
+sao_sdk_test_fail_next_panel_unregister(sao_sdk_status_t status) {
+    sao_sdk_internal::test_fail_next_panel_unregister(status);
+}
+
 extern "C" SAO_SDK_API size_t SAO_SDK_CALL
 sao_sdk_test_panel_widget_count(const struct SaoSdkContext* ctx, sao_sdk_ui_panel_t panel) {
-    if (ctx == nullptr || panel == nullptr)
+    try {
+        if (panel == nullptr)
+            return 0;
+        sao_sdk_internal::ContextApiLease lease(ctx);
+        if (!lease)
+            return 0;
+        auto* state = lease.state();
+        std::lock_guard<std::mutex> lk(state->mu);
+        auto it = state->panels.find(panel);
+        if (it == state->panels.end())
+            return 0;
+        return it->second.widgets.size();
+    } catch (...) {
         return 0;
-    auto* state = sao_sdk_internal::cast_ctx(ctx->ctx_impl);
-    if (state == nullptr)
-        return 0;
-    std::lock_guard<std::mutex> lk(state->mu);
-    auto it = state->panels.find(panel);
-    if (it == state->panels.end())
-        return 0;
-    return it->second.widgets.size();
+    }
 }
 
 extern "C" SAO_SDK_API size_t SAO_SDK_CALL
 sao_sdk_test_panel_canvas_count(const struct SaoSdkContext* ctx, sao_sdk_ui_panel_t panel) {
-    if (ctx == nullptr || panel == nullptr)
+    try {
+        if (panel == nullptr)
+            return 0;
+        sao_sdk_internal::ContextApiLease lease(ctx);
+        if (!lease)
+            return 0;
+        auto* state = lease.state();
+        std::lock_guard<std::mutex> lk(state->mu);
+        const auto it = state->panels.find(panel);
+        if (it == state->panels.end())
+            return 0;
+        return it->second.canvases.size();
+    } catch (...) {
         return 0;
-    auto* state = sao_sdk_internal::cast_ctx(ctx->ctx_impl);
-    if (state == nullptr)
-        return 0;
-    std::lock_guard<std::mutex> lk(state->mu);
-    const auto it = state->panels.find(panel);
-    if (it == state->panels.end())
-        return 0;
-    return it->second.canvases.size();
+    }
 }
 
 extern "C" SAO_SDK_API uint64_t SAO_SDK_CALL
 sao_sdk_test_panel_redraw_count(const struct SaoSdkContext* ctx, sao_sdk_ui_panel_t panel) {
-    if (ctx == nullptr || panel == nullptr)
+    try {
+        if (panel == nullptr)
+            return 0;
+        sao_sdk_internal::ContextApiLease lease(ctx);
+        if (!lease)
+            return 0;
+        auto* state = lease.state();
+        std::lock_guard<std::mutex> lk(state->mu);
+        auto it = state->panels.find(panel);
+        if (it == state->panels.end())
+            return 0;
+        return it->second.redraw_count;
+    } catch (...) {
         return 0;
-    auto* state = sao_sdk_internal::cast_ctx(ctx->ctx_impl);
-    if (state == nullptr)
-        return 0;
-    std::lock_guard<std::mutex> lk(state->mu);
-    auto it = state->panels.find(panel);
-    if (it == state->panels.end())
-        return 0;
-    return it->second.redraw_count;
+    }
 }
 
 extern "C" SAO_SDK_API sao_sdk_status_t SAO_SDK_CALL sao_sdk_test_panel_invoke_action(
     const struct SaoSdkContext* ctx, sao_sdk_ui_panel_t panel, const char* action_key_utf8) {
-    if (ctx == nullptr || panel == nullptr || action_key_utf8 == nullptr) {
+    sao_sdk_internal::ContextApiLease lease(ctx);
+    if (!lease)
+        return lease.status();
+    if (panel == nullptr || action_key_utf8 == nullptr)
         return SAO_SDK_ERR_INVALID_ARGUMENT;
-    }
-    auto* state = sao_sdk_internal::cast_ctx(ctx->ctx_impl);
-    if (state == nullptr)
-        return SAO_SDK_ERR_HANDLE_INVALID;
-    sao_sdk_panel_action_callback_t callback = nullptr;
-    void* user_data = nullptr;
-    {
-        std::lock_guard<std::mutex> lk(state->mu);
-        const auto it = state->panels.find(panel);
-        if (it == state->panels.end())
-            return SAO_SDK_ERR_NOT_FOUND;
-        callback = it->second.legacy_action_cb;
-        user_data = it->second.legacy_action_user_data;
-    }
-    if (callback == nullptr)
-        return SAO_SDK_ERR_UNSUPPORTED;
-    sao_sdk_internal::PluginCallbackLease callback_lease(state);
-    if (!callback_lease)
-        return SAO_SDK_ERR_BUSY;
-    return sao_sdk_internal::invoke_void_callback_barrier(
-        [&] { callback(action_key_utf8, nullptr, 0, user_data); });
+    return sao_sdk_internal::invoke_callback_barrier([&]() -> sao_sdk_status_t {
+        if (panel == nullptr || action_key_utf8 == nullptr)
+            return SAO_SDK_ERR_INVALID_ARGUMENT;
+        auto* state = lease.state();
+        sao_sdk_panel_action_callback_t callback = nullptr;
+        void* user_data = nullptr;
+        {
+            std::lock_guard<std::mutex> lk(state->mu);
+            const auto it = state->panels.find(panel);
+            if (it == state->panels.end())
+                return SAO_SDK_ERR_NOT_FOUND;
+            callback = it->second.legacy_action_cb;
+            user_data = it->second.legacy_action_user_data;
+        }
+        if (callback == nullptr)
+            return SAO_SDK_ERR_UNSUPPORTED;
+        sao_sdk_internal::PluginCallbackLease callback_lease(state);
+        if (!callback_lease)
+            return SAO_SDK_ERR_BUSY;
+        return sao_sdk_internal::invoke_void_callback_barrier(
+            [&] { callback(action_key_utf8, nullptr, 0, user_data); });
+    });
 }
 
 extern "C" SAO_SDK_API size_t SAO_SDK_CALL
 sao_sdk_test_render_hook_count(const struct SaoSdkContext* ctx) {
-    if (ctx == nullptr)
+    try {
+        sao_sdk_internal::ContextApiLease lease(ctx);
+        if (!lease)
+            return 0;
+        auto* state = lease.state();
+        std::lock_guard<std::mutex> lk(state->mu);
+        return state->render_hooks.size();
+    } catch (...) {
         return 0;
-    auto* state = sao_sdk_internal::cast_ctx(ctx->ctx_impl);
-    if (state == nullptr)
+    }
+}
+
+extern "C" SAO_SDK_API size_t SAO_SDK_CALL
+sao_sdk_test_panel_cleanup_pending_count(const struct SaoSdkContext* ctx) {
+    try {
+        sao_sdk_internal::ContextApiLease lease(ctx);
+        if (!lease)
+            return 0;
+        std::lock_guard<std::mutex> lock(lease.state()->mu);
+        return lease.state()->panel_cleanup_pending.size();
+    } catch (...) {
         return 0;
-    std::lock_guard<std::mutex> lk(state->mu);
-    return state->render_hooks.size();
+    }
 }
 
 extern "C" SAO_SDK_API void SAO_SDK_CALL
 sao_sdk_test_fire_render_hook(int32_t hook_point, const struct SaoSdkRenderHookPayload* payload) {
-    SaoSdkRenderHookPayload local{};
-    if (payload != nullptr)
-        local = *payload;
-    sao_sdk_internal::fire_render_hook_test(hook_point, local);
+    try {
+        SaoSdkRenderHookPayload local{};
+        if (payload != nullptr)
+            local = *payload;
+        sao_sdk_internal::fire_render_hook_test(hook_point, local);
+    } catch (...) {
+    }
 }

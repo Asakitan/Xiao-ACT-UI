@@ -1,14 +1,39 @@
+#include <atomic>
+#include <chrono>
 #include <cstddef>
 #include <cstdint>
+#include <condition_variable>
+#include <future>
+#include <mutex>
 #include <stdexcept>
 #include <string>
+#include <thread>
 #include <vector>
 
 #include <catch2/catch_test_macros.hpp>
 
 #include "sao/sdk/sao_sdk.h"
 
+extern "C" SAO_SDK_API void* SAO_SDK_CALL sao_sdk_test_event_snapshot_user_data(
+    const SaoSdkContext* ctx, sao_sdk_subscription_t subscription);
+extern "C" SAO_SDK_API void SAO_SDK_CALL
+sao_sdk_test_invoke_event_snapshot(void* snapshot_user_data);
+extern "C" SAO_SDK_API void* SAO_SDK_CALL sao_sdk_test_platform_hotkey_snapshot_user_data(
+    const SaoSdkContext* ctx, sao_sdk_hotkey_id_t hotkey);
+extern "C" SAO_SDK_API void SAO_SDK_CALL
+sao_sdk_test_invoke_platform_hotkey_snapshot(void* snapshot_user_data);
+extern "C" SAO_SDK_API void SAO_SDK_CALL sao_sdk_test_arm_context_api_pause(uint32_t point);
+extern "C" SAO_SDK_API bool SAO_SDK_CALL sao_sdk_test_wait_for_context_api_pause(uint32_t point);
+extern "C" SAO_SDK_API void SAO_SDK_CALL sao_sdk_test_resume_context_api_pause(uint32_t point);
+extern "C" SAO_SDK_API bool SAO_SDK_CALL
+sao_sdk_test_wait_for_context_shutdown(const SaoSdkContext* ctx);
+
 namespace {
+
+constexpr uint32_t kEventSubscribeRegistered = 1;
+constexpr uint32_t kEventUnsubscribeUnlocked = 2;
+constexpr uint32_t kPanelRegistered = 3;
+constexpr uint32_t kPanelOperationUnlocked = 4;
 
 struct CallbackProbe {
     sao_sdk_timer_token_t timer = 0;
@@ -361,6 +386,89 @@ void SAO_SDK_CALL throwing_timer_probe(sao_sdk_timer_token_t, void*) {
     throw std::runtime_error("timer callback fixture");
 }
 
+struct BlockingCallbackProbe {
+    std::mutex mutex;
+    std::condition_variable condition;
+    bool entered = false;
+    bool release = false;
+    std::atomic_int calls{0};
+};
+
+void wait_in_callback(BlockingCallbackProbe* probe) {
+    probe->calls.fetch_add(1, std::memory_order_relaxed);
+    std::unique_lock<std::mutex> lock(probe->mutex);
+    probe->entered = true;
+    probe->condition.notify_all();
+    probe->condition.wait(lock, [probe] { return probe->release; });
+}
+
+void SAO_SDK_CALL blocking_event_probe(const char*, const uint8_t*, size_t, void* user_data) {
+    wait_in_callback(static_cast<BlockingCallbackProbe*>(user_data));
+}
+
+void SAO_SDK_CALL blocking_hotkey_probe(sao_sdk_hotkey_id_t, void* user_data) {
+    wait_in_callback(static_cast<BlockingCallbackProbe*>(user_data));
+}
+
+bool wait_for_callback(BlockingCallbackProbe& probe) {
+    std::unique_lock<std::mutex> lock(probe.mutex);
+    return probe.condition.wait_for(lock, std::chrono::seconds(2),
+                                    [&probe] { return probe.entered; });
+}
+
+void release_callback(BlockingCallbackProbe& probe) {
+    {
+        std::lock_guard<std::mutex> lock(probe.mutex);
+        probe.release = true;
+    }
+    probe.condition.notify_all();
+}
+
+struct EventReentryProbe {
+    SaoSdkContext* context = nullptr;
+    sao_sdk_subscription_t subscription = 0;
+    sao_sdk_status_t status = SAO_SDK_ERR_INTERNAL;
+    sao_sdk_status_t destroy_status = SAO_SDK_ERR_INTERNAL;
+    int calls = 0;
+};
+
+void SAO_SDK_CALL event_reentry_probe(const char*, const uint8_t*, size_t, void* user_data) {
+    auto* probe = static_cast<EventReentryProbe*>(user_data);
+    ++probe->calls;
+    probe->destroy_status = sao_sdk_context_try_destroy(probe->context);
+    probe->status = sao_sdk_unsubscribe_event(probe->context, probe->subscription);
+}
+
+struct HotkeyReentryProbe {
+    SaoSdkContext* context = nullptr;
+    sao_sdk_hotkey_id_t hotkey = 0;
+    sao_sdk_status_t status = SAO_SDK_ERR_INTERNAL;
+    int calls = 0;
+};
+
+void SAO_SDK_CALL hotkey_reentry_probe(sao_sdk_hotkey_id_t, void* user_data) {
+    auto* probe = static_cast<HotkeyReentryProbe*>(user_data);
+    ++probe->calls;
+    probe->status = sao_sdk_unregister_hotkey(probe->context, probe->hotkey);
+}
+
+SaoSdkPanelDescriptor concurrent_panel_descriptor(const char* panel_id) {
+    SaoSdkPanelDescriptor descriptor{};
+    descriptor.panel_id_utf8 = panel_id;
+    descriptor.title_utf8 = "SDK context lease concurrency";
+    descriptor.default_width_px = 320;
+    descriptor.default_height_px = 240;
+    descriptor.min_width_px = 100;
+    descriptor.min_height_px = 80;
+    descriptor.movable = true;
+    descriptor.resizable = true;
+    descriptor.show_titlebar = true;
+    descriptor.show_close_button = true;
+    descriptor.visible = true;
+    descriptor.initial_opacity = 1.0F;
+    return descriptor;
+}
+
 } // namespace
 
 TEST_CASE("SDK context ABI remains stable while provider is versioned", "[sdk][provider][abi]") {
@@ -379,8 +487,26 @@ TEST_CASE("SDK context ABI remains stable while provider is versioned", "[sdk][p
     REQUIRE(sao_sdk_context_bind_provider(&ctx, &bad) == SAO_SDK_ERR_ABI_MISMATCH);
 
     bad.abi_version = SAO_SDK_PROVIDER_ABI_VERSION;
-    bad.struct_size = static_cast<uint32_t>(offsetof(SaoSdkProviderVTable, retain) - 1u);
+    constexpr uint32_t provider_minimum_size = static_cast<uint32_t>(
+        offsetof(SaoSdkProviderVTable, release) +
+        sizeof(static_cast<SaoSdkProviderVTable*>(nullptr)->release));
+    bad.struct_size = provider_minimum_size - 1u;
     REQUIRE(sao_sdk_context_bind_provider(&ctx, &bad) == SAO_SDK_ERR_ABI_MISMATCH);
+
+    ProviderFixture ownership_state;
+    auto ownership = make_provider(&ownership_state);
+    ownership.struct_size = provider_minimum_size;
+    ownership.release = nullptr;
+    REQUIRE(sao_sdk_context_bind_provider(&ctx, &ownership) == SAO_SDK_ERR_INVALID_ARGUMENT);
+    REQUIRE(ownership_state.events.empty());
+    ownership.retain = nullptr;
+    ownership.release = provider_release;
+    REQUIRE(sao_sdk_context_bind_provider(&ctx, &ownership) == SAO_SDK_ERR_INVALID_ARGUMENT);
+    REQUIRE(ownership_state.events.empty());
+    ownership.retain = provider_retain;
+    REQUIRE(sao_sdk_context_bind_provider(&ctx, &ownership) == SAO_SDK_OK);
+    REQUIRE(sao_sdk_context_bind_provider(&ctx, nullptr) == SAO_SDK_OK);
+    REQUIRE(ownership_state.events == std::vector<std::string>{"retain", "release"});
 
     sao_sdk_timer_token_t timer = 0;
     REQUIRE(sao_sdk_timer_register(&ctx, 10, timer_probe, nullptr, &timer) ==
@@ -611,6 +737,236 @@ TEST_CASE("general provider retain release and TTS exceptions stay behind the AB
     provider_state.throw_release = false;
     REQUIRE(sao_sdk_context_try_destroy(&ctx) == SAO_SDK_OK);
     CHECK(ctx.ctx_impl == nullptr);
+}
+
+TEST_CASE("context destroy drains ordinary event and UI API leases",
+          "[sdk][context][api-lease][destroy][concurrency]") {
+    SECTION("subscribe registration") {
+        SaoSdkContext ctx{};
+        REQUIRE(sao_sdk_bind_context("lease.event.subscribe", "1.0", &ctx) == SAO_SDK_OK);
+        BlockingCallbackProbe callback_probe;
+        sao_sdk_subscription_t subscription = 0;
+
+        sao_sdk_test_arm_context_api_pause(kEventSubscribeRegistered);
+        auto api = std::async(std::launch::async, [&] {
+            return sao_sdk_subscribe_event(&ctx, "lease.subscribe", blocking_event_probe,
+                                           &callback_probe, &subscription);
+        });
+        CHECK(sao_sdk_test_wait_for_context_api_pause(kEventSubscribeRegistered));
+        auto destroy =
+            std::async(std::launch::async, [&] { return sao_sdk_context_try_destroy(&ctx); });
+        CHECK(sao_sdk_test_wait_for_context_shutdown(&ctx));
+        CHECK(sao_sdk_publish_event(&ctx, "lease.closed", nullptr, 0) == SAO_SDK_ERR_BUSY);
+        CHECK(destroy.wait_for(std::chrono::milliseconds(0)) == std::future_status::timeout);
+
+        sao_sdk_test_resume_context_api_pause(kEventSubscribeRegistered);
+        CHECK(api.get() == SAO_SDK_OK);
+        CHECK(subscription != 0);
+        CHECK(destroy.get() == SAO_SDK_OK);
+        CHECK(ctx.ctx_impl == nullptr);
+    }
+
+    SECTION("unsubscribe outside the state lock") {
+        SaoSdkContext ctx{};
+        REQUIRE(sao_sdk_bind_context("lease.event.unsubscribe", "1.0", &ctx) == SAO_SDK_OK);
+        BlockingCallbackProbe callback_probe;
+        sao_sdk_subscription_t subscription = 0;
+        REQUIRE(sao_sdk_subscribe_event(&ctx, "lease.unsubscribe", blocking_event_probe,
+                                        &callback_probe, &subscription) == SAO_SDK_OK);
+
+        sao_sdk_test_arm_context_api_pause(kEventUnsubscribeUnlocked);
+        auto api = std::async(std::launch::async,
+                              [&] { return sao_sdk_unsubscribe_event(&ctx, subscription); });
+        CHECK(sao_sdk_test_wait_for_context_api_pause(kEventUnsubscribeUnlocked));
+        auto destroy =
+            std::async(std::launch::async, [&] { return sao_sdk_context_try_destroy(&ctx); });
+        CHECK(sao_sdk_test_wait_for_context_shutdown(&ctx));
+        CHECK(sao_sdk_publish_event(&ctx, "lease.closed", nullptr, 0) == SAO_SDK_ERR_BUSY);
+        CHECK(destroy.wait_for(std::chrono::milliseconds(0)) == std::future_status::timeout);
+
+        sao_sdk_test_resume_context_api_pause(kEventUnsubscribeUnlocked);
+        CHECK(api.get() == SAO_SDK_OK);
+        CHECK(destroy.get() == SAO_SDK_OK);
+        CHECK(ctx.ctx_impl == nullptr);
+    }
+
+    SECTION("panel registration") {
+        SaoSdkContext ctx{};
+        REQUIRE(sao_sdk_bind_context("lease.panel.register", "1.0", &ctx) == SAO_SDK_OK);
+        const auto descriptor = concurrent_panel_descriptor("lease.panel.register.panel");
+        sao_sdk_ui_panel_t panel = nullptr;
+
+        sao_sdk_test_arm_context_api_pause(kPanelRegistered);
+        auto api = std::async(std::launch::async,
+                              [&] { return sao_sdk_register_ui_panel(&ctx, &descriptor, &panel); });
+        CHECK(sao_sdk_test_wait_for_context_api_pause(kPanelRegistered));
+        auto destroy =
+            std::async(std::launch::async, [&] { return sao_sdk_context_try_destroy(&ctx); });
+        CHECK(sao_sdk_test_wait_for_context_shutdown(&ctx));
+        CHECK(sao_sdk_publish_event(&ctx, "lease.closed", nullptr, 0) == SAO_SDK_ERR_BUSY);
+        CHECK(destroy.wait_for(std::chrono::milliseconds(0)) == std::future_status::timeout);
+
+        sao_sdk_test_resume_context_api_pause(kPanelRegistered);
+        CHECK(api.get() == SAO_SDK_OK);
+        CHECK(panel != nullptr);
+        CHECK(destroy.get() == SAO_SDK_OK);
+        CHECK(ctx.ctx_impl == nullptr);
+    }
+
+    SECTION("panel operation") {
+        SaoSdkContext ctx{};
+        REQUIRE(sao_sdk_bind_context("lease.panel.operation", "1.0", &ctx) == SAO_SDK_OK);
+        const auto descriptor = concurrent_panel_descriptor("lease.panel.operation.panel");
+        sao_sdk_ui_panel_t panel = nullptr;
+        REQUIRE(sao_sdk_register_ui_panel(&ctx, &descriptor, &panel) == SAO_SDK_OK);
+        SaoSdkWidgetSpec widget{};
+        widget.kind = SAO_SDK_UI_WIDGET_LABEL;
+        widget.widget_id_utf8 = "lease-widget";
+        widget.text_utf8 = "lease";
+        sao_sdk_ui_widget_t widget_handle = nullptr;
+
+        sao_sdk_test_arm_context_api_pause(kPanelOperationUnlocked);
+        auto api = std::async(std::launch::async, [&] {
+            return sao_sdk_panel_add_widget(&ctx, panel, &widget, &widget_handle);
+        });
+        CHECK(sao_sdk_test_wait_for_context_api_pause(kPanelOperationUnlocked));
+        auto destroy =
+            std::async(std::launch::async, [&] { return sao_sdk_context_try_destroy(&ctx); });
+        CHECK(sao_sdk_test_wait_for_context_shutdown(&ctx));
+        CHECK(sao_sdk_publish_event(&ctx, "lease.closed", nullptr, 0) == SAO_SDK_ERR_BUSY);
+        CHECK(destroy.wait_for(std::chrono::milliseconds(0)) == std::future_status::timeout);
+
+        sao_sdk_test_resume_context_api_pause(kPanelOperationUnlocked);
+        CHECK(api.get() == SAO_SDK_OK);
+        CHECK(widget_handle != nullptr);
+        CHECK(destroy.get() == SAO_SDK_OK);
+        CHECK(ctx.ctx_impl == nullptr);
+    }
+}
+
+TEST_CASE("event subscription drains its own copied callback snapshots",
+          "[sdk][event][snapshot][concurrency][reentry]") {
+    SaoSdkContext ctx{};
+    REQUIRE(sao_sdk_bind_context("event.snapshot.drain", "1.0", &ctx) == SAO_SDK_OK);
+
+    BlockingCallbackProbe probe;
+    sao_sdk_subscription_t subscription = 0;
+    REQUIRE(sao_sdk_subscribe_event(&ctx, "event.snapshot", blocking_event_probe, &probe,
+                                    &subscription) == SAO_SDK_OK);
+    void* snapshot = sao_sdk_test_event_snapshot_user_data(&ctx, subscription);
+    REQUIRE(snapshot != nullptr);
+    std::thread callback_thread([snapshot] { sao_sdk_test_invoke_event_snapshot(snapshot); });
+    REQUIRE(wait_for_callback(probe));
+
+    std::promise<void> unsubscribe_started;
+    auto unsubscribe_started_future = unsubscribe_started.get_future();
+    auto unsubscribe = std::async(std::launch::async, [&] {
+        unsubscribe_started.set_value();
+        return sao_sdk_unsubscribe_event(&ctx, subscription);
+    });
+    unsubscribe_started_future.wait();
+    CHECK(unsubscribe.wait_for(std::chrono::milliseconds(50)) == std::future_status::timeout);
+    release_callback(probe);
+    callback_thread.join();
+    REQUIRE(unsubscribe.get() == SAO_SDK_OK);
+    CHECK(probe.calls.load(std::memory_order_relaxed) == 1);
+
+    sao_sdk_test_invoke_event_snapshot(snapshot);
+    CHECK(probe.calls.load(std::memory_order_relaxed) == 1);
+
+    EventReentryProbe reentry{&ctx};
+    REQUIRE(sao_sdk_subscribe_event(&ctx, "event.reentry", event_reentry_probe, &reentry,
+                                    &reentry.subscription) == SAO_SDK_OK);
+    void* reentry_snapshot =
+        sao_sdk_test_event_snapshot_user_data(&ctx, reentry.subscription);
+    REQUIRE(reentry_snapshot != nullptr);
+    sao_sdk_test_invoke_event_snapshot(reentry_snapshot);
+    CHECK(reentry.calls == 1);
+    CHECK(reentry.destroy_status == SAO_SDK_ERR_BUSY);
+    CHECK(reentry.status == SAO_SDK_ERR_BUSY);
+    REQUIRE(sao_sdk_unsubscribe_event(&ctx, reentry.subscription) == SAO_SDK_OK);
+    REQUIRE(sao_sdk_context_try_destroy(&ctx) == SAO_SDK_OK);
+}
+
+TEST_CASE("context destroy retires event snapshots before releasing subscription state",
+          "[sdk][event][snapshot][destroy][concurrency]") {
+    SaoSdkContext ctx{};
+    REQUIRE(sao_sdk_bind_context("event.snapshot.destroy", "1.0", &ctx) == SAO_SDK_OK);
+
+    BlockingCallbackProbe probe;
+    sao_sdk_subscription_t subscription = 0;
+    REQUIRE(sao_sdk_subscribe_event(&ctx, "event.destroy", blocking_event_probe, &probe,
+                                    &subscription) == SAO_SDK_OK);
+    void* snapshot = sao_sdk_test_event_snapshot_user_data(&ctx, subscription);
+    REQUIRE(snapshot != nullptr);
+    std::thread callback_thread([snapshot] { sao_sdk_test_invoke_event_snapshot(snapshot); });
+    REQUIRE(wait_for_callback(probe));
+
+    std::promise<void> destroy_started;
+    auto destroy_started_future = destroy_started.get_future();
+    auto destroy = std::async(std::launch::async, [&] {
+        destroy_started.set_value();
+        return sao_sdk_context_try_destroy(&ctx);
+    });
+    destroy_started_future.wait();
+    CHECK(destroy.wait_for(std::chrono::milliseconds(50)) == std::future_status::timeout);
+    release_callback(probe);
+    callback_thread.join();
+    REQUIRE(destroy.get() == SAO_SDK_OK);
+    CHECK(probe.calls.load(std::memory_order_relaxed) == 1);
+
+    sao_sdk_test_invoke_event_snapshot(snapshot);
+    CHECK(probe.calls.load(std::memory_order_relaxed) == 1);
+}
+
+TEST_CASE("platform hotkey snapshots keep their bridge alive and drain on unregister",
+          "[sdk][provider][hotkey][snapshot][concurrency][reentry]") {
+    SaoSdkContext ctx{};
+    REQUIRE(sao_sdk_bind_context("hotkey.snapshot.drain", "1.0", &ctx) == SAO_SDK_OK);
+    REQUIRE(sao_sdk_context_bind_platform_services(&ctx) == SAO_SDK_OK);
+
+    SaoSdkHotkeySpec spec{};
+    spec.binding_id_utf8 = "hotkey_snapshot";
+    spec.virtual_key = 0x48;
+    BlockingCallbackProbe probe;
+    sao_sdk_hotkey_id_t hotkey = 0;
+    REQUIRE(sao_sdk_register_hotkey(&ctx, &spec, blocking_hotkey_probe, &probe, &hotkey) ==
+            SAO_SDK_OK);
+    void* snapshot = sao_sdk_test_platform_hotkey_snapshot_user_data(&ctx, hotkey);
+    REQUIRE(snapshot != nullptr);
+    std::thread callback_thread(
+        [snapshot] { sao_sdk_test_invoke_platform_hotkey_snapshot(snapshot); });
+    REQUIRE(wait_for_callback(probe));
+
+    std::promise<void> unregister_started;
+    auto unregister_started_future = unregister_started.get_future();
+    auto unregister = std::async(std::launch::async, [&] {
+        unregister_started.set_value();
+        return sao_sdk_unregister_hotkey(&ctx, hotkey);
+    });
+    unregister_started_future.wait();
+    CHECK(unregister.wait_for(std::chrono::milliseconds(50)) == std::future_status::timeout);
+    release_callback(probe);
+    callback_thread.join();
+    REQUIRE(unregister.get() == SAO_SDK_OK);
+    CHECK(probe.calls.load(std::memory_order_relaxed) == 1);
+
+    sao_sdk_test_invoke_platform_hotkey_snapshot(snapshot);
+    CHECK(probe.calls.load(std::memory_order_relaxed) == 1);
+
+    HotkeyReentryProbe reentry{&ctx};
+    spec.binding_id_utf8 = "hotkey_reentry";
+    spec.virtual_key = 0x52;
+    REQUIRE(sao_sdk_register_hotkey(&ctx, &spec, hotkey_reentry_probe, &reentry,
+                                    &reentry.hotkey) == SAO_SDK_OK);
+    void* reentry_snapshot =
+        sao_sdk_test_platform_hotkey_snapshot_user_data(&ctx, reentry.hotkey);
+    REQUIRE(reentry_snapshot != nullptr);
+    sao_sdk_test_invoke_platform_hotkey_snapshot(reentry_snapshot);
+    CHECK(reentry.calls == 1);
+    CHECK(reentry.status == SAO_SDK_ERR_BUSY);
+    REQUIRE(sao_sdk_unregister_hotkey(&ctx, reentry.hotkey) == SAO_SDK_OK);
+    REQUIRE(sao_sdk_context_try_destroy(&ctx) == SAO_SDK_OK);
 }
 
 TEST_CASE("GPU provider sessions require attach and retain tracker lifetime",

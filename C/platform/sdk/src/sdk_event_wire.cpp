@@ -15,22 +15,38 @@
 #include "sdk_callback_barrier.h"
 
 #include <algorithm>
+#include <memory>
 #include <mutex>
+#include <vector>
 
 namespace sao_sdk_internal {
 namespace {
 
+std::mutex g_event_owner_mutex;
+std::vector<std::shared_ptr<EventSubscriptionOwner>> g_event_owners;
+
+void preserve_event_owner(const std::shared_ptr<EventSubscriptionOwner>& owner) {
+    std::lock_guard<std::mutex> lock(g_event_owner_mutex);
+    g_event_owners.push_back(owner);
+}
+
 // Bridge — invoked by the Wave 5 bus.  user_data is the
-// EventSubscription* stashed at subscribe time; we look up the plugin
-// callback + user data through it.
+// stable owner stashed at subscribe time. Retired owners remain valid
+// because an already-copied bus snapshot may still hold this pointer.
 int SAO_ENGINE_CALL wave5_bridge(const char* topic_utf8, const uint8_t* data_ptr, size_t data_size,
                                  void* user_data) {
-    auto* sub = static_cast<EventSubscription*>(user_data);
-    if (sub != nullptr && sub->plugin_cb != nullptr) {
-        PluginCallbackLease callback_lease(sub->owner);
+    auto* owner = static_cast<EventSubscriptionOwner*>(user_data);
+    if (owner != nullptr) {
+        CallbackActivityLease subscription_lease(&owner->callback_activity);
+        if (!subscription_lease)
+            return SAO_ENGINE_EVENT_CONTINUE;
+        PluginCallbackLease callback_lease(owner->context);
         if (callback_lease) {
-            (void)invoke_void_callback_barrier(
-                [&] { sub->plugin_cb(topic_utf8, data_ptr, data_size, sub->plugin_ud); });
+            const auto callback = owner->plugin_cb;
+            if (callback != nullptr) {
+                (void)invoke_void_callback_barrier(
+                    [&] { callback(topic_utf8, data_ptr, data_size, owner->plugin_ud); });
+            }
         }
     }
     return SAO_ENGINE_EVENT_CONTINUE;
@@ -53,36 +69,40 @@ sao_sdk_status_t SAO_SDK_CALL event_subscribe(void* ctx_impl, const char* topic_
     if (rt.event_bus == nullptr)
         return SAO_SDK_ERR_NOT_INITIALIZED;
 
-    // Heap-allocate the subscription record so the wave5 bus holds a
-    // stable pointer for its lifetime.  The heap pointer is owned by
-    // this context state and freed at unsubscribe / destroy.
-    auto* sub = new (std::nothrow) EventSubscription();
-    sub->owner = state;
-    if (sub == nullptr)
+    std::shared_ptr<EventSubscriptionOwner> owner;
+    try {
+        owner = std::make_shared<EventSubscriptionOwner>();
+        owner->context = state;
+        owner->plugin_cb = callback;
+        owner->plugin_ud = user_data;
+        preserve_event_owner(owner);
+    } catch (...) {
         return SAO_SDK_ERR_NOT_INITIALIZED;
-    sub->plugin_cb = callback;
-    sub->plugin_ud = user_data;
+    }
 
     sao_engine_subscription_t bus_token = 0;
     const sao_status_t rc = sao_engine_event_bus_subscribe_wave5(
-        rt.event_bus, topic_utf8, /*priority=*/0, wave5_bridge, sub, &bus_token);
+        rt.event_bus, topic_utf8, /*priority=*/0, wave5_bridge, owner.get(), &bus_token);
     if (rc != SAO_STATUS_OK) {
-        delete sub;
+        owner->callback_activity.retire_and_wait();
         return static_cast<sao_sdk_status_t>(rc);
     }
-    sub->bus_token = bus_token;
-    sub->heap_owner = sub; // self-referential: the copy stored in
-                           // event_subs carries this pointer so
-                           // unsubscribe/destroy can `delete` it.
 
-    {
+    try {
         std::lock_guard<std::mutex> lk(state->mu);
-        sub->sdk_token = state->next_event_token++;
-        state->event_subs.push_back(*sub);
+        EventSubscription subscription;
+        subscription.sdk_token = state->next_event_token++;
+        subscription.bus_token = bus_token;
+        subscription.owner = owner;
+        state->event_subs.push_back(std::move(subscription));
+        if (out_subscription != nullptr)
+            *out_subscription = state->event_subs.back().sdk_token;
+    } catch (...) {
+        (void)sao_engine_event_bus_unsubscribe(rt.event_bus, bus_token);
+        owner->callback_activity.retire_and_wait();
+        return SAO_SDK_ERR_NOT_INITIALIZED;
     }
-
-    if (out_subscription != nullptr)
-        *out_subscription = sub->sdk_token;
+    pause_context_api_test_point(ContextApiTestPoint::event_subscribe_registered);
     return SAO_SDK_OK;
 }
 
@@ -96,7 +116,7 @@ sao_sdk_status_t SAO_SDK_CALL event_unsubscribe(void* ctx_impl,
 
     auto& rt = SharedRuntime::instance();
     sao_engine_subscription_t bus_token = 0;
-    EventSubscription* heap_owner = nullptr;
+    std::shared_ptr<EventSubscriptionOwner> owner;
     {
         std::lock_guard<std::mutex> lk(state->mu);
         auto it = std::find_if(
@@ -104,27 +124,39 @@ sao_sdk_status_t SAO_SDK_CALL event_unsubscribe(void* ctx_impl,
             [subscription](const EventSubscription& s) { return s.sdk_token == subscription; });
         if (it == state->event_subs.end())
             return SAO_SDK_ERR_NOT_FOUND;
+        if (it->unregistering)
+            return SAO_SDK_ERR_BUSY;
+        it->unregistering = true;
         bus_token = it->bus_token;
-        heap_owner = it->heap_owner;
+        owner = it->owner;
     }
-    // Unsubscribe first so no in-flight publish can grab the heap ptr
-    // after we free it.  The wave5 bus swept subscribers already saw a
-    // consistent snapshot; new publishes won't include this sub.
+    pause_context_api_test_point(ContextApiTestPoint::event_unsubscribe_unlocked);
     const auto status = sao_engine_event_bus_unsubscribe(rt.event_bus, bus_token);
-    if (status != SAO_STATUS_OK && status != SAO_STATUS_ERR_SUBSCRIPTION_GONE)
+    if (status != SAO_STATUS_OK && status != SAO_STATUS_ERR_SUBSCRIPTION_GONE) {
+        std::lock_guard<std::mutex> lk(state->mu);
+        const auto found = std::find_if(
+            state->event_subs.begin(), state->event_subs.end(),
+            [subscription](const EventSubscription& item) {
+                return item.sdk_token == subscription;
+            });
+        if (found != state->event_subs.end())
+            found->unregistering = false;
         return static_cast<sao_sdk_status_t>(status);
-    {
-        std::unique_lock<std::mutex> callback_lock(state->callback_mutex);
-        state->callback_idle.wait(callback_lock,
-                                  [state] { return state->active_plugin_callbacks == 0; });
     }
     {
         std::lock_guard<std::mutex> lk(state->mu);
-        std::erase_if(state->event_subs, [subscription](const EventSubscription& entry) {
-            return entry.sdk_token == subscription;
-        });
+        const auto found = std::find_if(
+            state->event_subs.begin(), state->event_subs.end(),
+            [subscription](const EventSubscription& item) {
+                return item.sdk_token == subscription;
+            });
+        if (found != state->event_subs.end()) {
+            found->owner.reset();
+            state->event_subs.erase(found);
+        }
     }
-    delete heap_owner;
+    if (owner != nullptr)
+        owner->callback_activity.retire_and_wait();
     return SAO_SDK_OK;
 }
 
@@ -157,6 +189,40 @@ const SaoSdkEventTable* make_event_table() {
     return &table;
 }
 
+void cleanup_event_subscriptions(ContextState* state) {
+    std::vector<EventSubscription> subscriptions;
+    {
+        std::lock_guard<std::mutex> lock(state->mu);
+        subscriptions.swap(state->event_subs);
+    }
+    auto& runtime = SharedRuntime::instance();
+    for (auto& subscription : subscriptions) {
+        (void)sao_engine_event_bus_unsubscribe(runtime.event_bus, subscription.bus_token);
+        subscription.retire();
+        delete std::exchange(subscription.heap_owner, nullptr);
+    }
+}
+
+extern "C" SAO_SDK_API void* SAO_SDK_CALL sao_sdk_test_event_snapshot_user_data(
+    const SaoSdkContext* ctx, sao_sdk_subscription_t subscription) {
+    ContextApiLease lease(ctx);
+    if (!lease)
+        return nullptr;
+    auto* state = lease.state();
+    std::lock_guard<std::mutex> lock(state->mu);
+    const auto found = std::find_if(
+        state->event_subs.begin(), state->event_subs.end(),
+        [subscription](const EventSubscription& item) { return item.sdk_token == subscription; });
+    return found == state->event_subs.end() || found->owner == nullptr ? nullptr
+                                                                      : found->owner.get();
+}
+
+extern "C" SAO_SDK_API void SAO_SDK_CALL
+sao_sdk_test_invoke_event_snapshot(void* snapshot_user_data) {
+    static constexpr char kTopic[] = "sdk.test.snapshot";
+    (void)wave5_bridge(kTopic, nullptr, 0, snapshot_user_data);
+}
+
 } // namespace sao_sdk_internal
 
 // ─── Public free-function wrappers ──────────────────────────────────
@@ -164,22 +230,41 @@ const SaoSdkEventTable* make_event_table() {
 extern "C" SAO_SDK_API sao_sdk_status_t SAO_SDK_CALL sao_sdk_subscribe_event(
     const struct SaoSdkContext* ctx, const char* event_type_utf8, sao_sdk_event_callback_t callback,
     void* user_data, sao_sdk_subscription_t* out_handle) {
-    if (ctx == nullptr)
-        return SAO_SDK_ERR_INVALID_ARGUMENT;
-    return ctx->event->subscribe(ctx->ctx_impl, event_type_utf8, callback, user_data, out_handle);
+    sao_sdk_internal::ContextApiLease lease(ctx);
+    if (!lease)
+        return lease.status();
+    const auto* public_context = lease.public_context();
+    return sao_sdk_internal::invoke_callback_barrier([&]() -> sao_sdk_status_t {
+        if (public_context->event == nullptr || public_context->event->subscribe == nullptr)
+            return SAO_SDK_ERR_INVALID_ARGUMENT;
+        return public_context->event->subscribe(lease.state(), event_type_utf8, callback, user_data,
+                                                out_handle);
+    });
 }
 
 extern "C" SAO_SDK_API sao_sdk_status_t SAO_SDK_CALL
 sao_sdk_unsubscribe_event(const struct SaoSdkContext* ctx, sao_sdk_subscription_t handle) {
-    if (ctx == nullptr)
-        return SAO_SDK_ERR_INVALID_ARGUMENT;
-    return ctx->event->unsubscribe(ctx->ctx_impl, handle);
+    sao_sdk_internal::ContextApiLease lease(ctx);
+    if (!lease)
+        return lease.status();
+    const auto* public_context = lease.public_context();
+    return sao_sdk_internal::invoke_callback_barrier([&]() -> sao_sdk_status_t {
+        if (public_context->event == nullptr || public_context->event->unsubscribe == nullptr)
+            return SAO_SDK_ERR_INVALID_ARGUMENT;
+        return public_context->event->unsubscribe(lease.state(), handle);
+    });
 }
 
 extern "C" SAO_SDK_API sao_sdk_status_t SAO_SDK_CALL
 sao_sdk_publish_event(const struct SaoSdkContext* ctx, const char* event_type_utf8,
                       const uint8_t* data_ptr, size_t size) {
-    if (ctx == nullptr)
-        return SAO_SDK_ERR_INVALID_ARGUMENT;
-    return ctx->event->publish(ctx->ctx_impl, event_type_utf8, data_ptr, size);
+    sao_sdk_internal::ContextApiLease lease(ctx);
+    if (!lease)
+        return lease.status();
+    const auto* public_context = lease.public_context();
+    return sao_sdk_internal::invoke_callback_barrier([&]() -> sao_sdk_status_t {
+        if (public_context->event == nullptr || public_context->event->publish == nullptr)
+            return SAO_SDK_ERR_INVALID_ARGUMENT;
+        return public_context->event->publish(lease.state(), event_type_utf8, data_ptr, size);
+    });
 }

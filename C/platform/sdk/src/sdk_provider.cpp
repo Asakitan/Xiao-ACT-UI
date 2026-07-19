@@ -35,7 +35,8 @@ bool memory_callback_reentered(ContextState* state) noexcept {
 namespace {
 
 constexpr uint32_t kProviderMinimumSize =
-    static_cast<uint32_t>(offsetof(SaoSdkProviderVTable, retain));
+    static_cast<uint32_t>(offsetof(SaoSdkProviderVTable, release) +
+                          sizeof(static_cast<SaoSdkProviderVTable*>(nullptr)->release));
 constexpr uint32_t kGpuHuntProviderMinimumSize =
     static_cast<uint32_t>(offsetof(SaoSdkProviderVTable, gpu_hunt_read) +
                           sizeof(static_cast<SaoSdkProviderVTable*>(nullptr)->gpu_hunt_read));
@@ -539,6 +540,7 @@ struct PlatformHotkeyEntry {
     sao_ui_hotkey_binding_t binding = 0;
     sao_sdk_hotkey_callback_t callback = nullptr;
     void* user_data = nullptr;
+    CallbackActivity callback_activity;
 };
 
 struct PlatformDialogEntry {
@@ -596,6 +598,14 @@ struct PlatformProviderState {
 PlatformProviderState& platform_provider_state() {
     static PlatformProviderState state;
     return state;
+}
+
+std::mutex g_platform_hotkey_owner_mutex;
+std::vector<std::shared_ptr<PlatformHotkeyEntry>> g_platform_hotkey_owners;
+
+void preserve_platform_hotkey_owner(const std::shared_ptr<PlatformHotkeyEntry>& entry) {
+    std::lock_guard<std::mutex> lock(g_platform_hotkey_owner_mutex);
+    g_platform_hotkey_owners.push_back(entry);
 }
 
 void SAO_SDK_CALL platform_provider_retain(void*) {}
@@ -945,9 +955,12 @@ sao_sdk_status_t SAO_SDK_CALL platform_timer_unregister(void* user_data, uint64_
 
 void SAO_UI_CALL platform_hotkey_callback(const char*, const SaoUiInputEvent*, void* user_data) {
     auto* entry = static_cast<PlatformHotkeyEntry*>(user_data);
-    if (entry != nullptr && entry->callback != nullptr) {
-        entry->callback(0, entry->user_data);
-    }
+    if (entry == nullptr)
+        return;
+    CallbackActivityLease callback_lease(&entry->callback_activity);
+    if (!callback_lease || entry->callback == nullptr)
+        return;
+    entry->callback(0, entry->user_data);
 }
 
 sao_sdk_status_t SAO_SDK_CALL platform_hotkey_register(void* user_data, const char* plugin_id_utf8,
@@ -970,6 +983,11 @@ sao_sdk_status_t SAO_SDK_CALL platform_hotkey_register(void* user_data, const ch
     auto entry = std::make_shared<PlatformHotkeyEntry>();
     entry->callback = callback;
     entry->user_data = callback_user_data;
+    try {
+        preserve_platform_hotkey_owner(entry);
+    } catch (...) {
+        return SAO_SDK_ERR_NOT_INITIALIZED;
+    }
     SaoUiHotkeyBindingSpec spec{};
     spec.binding_id_utf8 = binding_id_utf8;
     spec.virtual_key = virtual_key;
@@ -982,9 +1000,13 @@ sao_sdk_status_t SAO_SDK_CALL platform_hotkey_register(void* user_data, const ch
                                             platform_hotkey_callback, entry.get(), &entry->binding);
     if (status != SAO_STATUS_OK)
         return static_cast<sao_sdk_status_t>(status);
-    {
+    try {
         std::lock_guard<std::mutex> lock(state->mutex);
         state->hotkeys.emplace(token, entry);
+    } catch (...) {
+        (void)sao_ui_input_router_unregister_hotkey(runtime.input_router, entry->binding);
+        entry->callback_activity.retire_and_wait();
+        return SAO_SDK_ERR_NOT_INITIALIZED;
     }
     *out_provider_token = token;
     return SAO_SDK_OK;
@@ -1004,8 +1026,11 @@ sao_sdk_status_t SAO_SDK_CALL platform_hotkey_unregister(void* user_data, uint64
         SharedRuntime::instance().input_router, entry->binding);
     if (status != SAO_STATUS_OK && status != SAO_STATUS_ERR_NOT_FOUND)
         return static_cast<sao_sdk_status_t>(status);
-    std::lock_guard<std::mutex> lock(state->mutex);
-    state->hotkeys.erase(provider_token);
+    {
+        std::lock_guard<std::mutex> lock(state->mutex);
+        state->hotkeys.erase(provider_token);
+    }
+    entry->callback_activity.retire_and_wait();
     return SAO_SDK_OK;
 }
 
@@ -1198,6 +1223,8 @@ sao_sdk_status_t bind_provider(ContextState* state, const SaoSdkProviderVTable* 
 
     SaoSdkProviderVTable copy{};
     std::memcpy(&copy, provider, std::min<size_t>(provider->struct_size, sizeof(copy)));
+    if ((copy.retain == nullptr) != (copy.release == nullptr))
+        return SAO_SDK_ERR_INVALID_ARGUMENT;
     bool candidate_retained = false;
     if (copy.retain != nullptr) {
         const auto retain_status = invoke_provider_callback(state, [&] {
@@ -1976,6 +2003,41 @@ sao_sdk_status_t retain_gpu_provider(ContextState* state, SaoSdkProviderVTable* 
     *out_provider = provider;
     *out_plugin_id = state->plugin_id;
     return SAO_SDK_OK;
+}
+
+extern "C" SAO_SDK_API void* SAO_SDK_CALL sao_sdk_test_platform_hotkey_snapshot_user_data(
+    const SaoSdkContext* ctx, sao_sdk_hotkey_id_t hotkey) {
+    if (ctx == nullptr)
+        return nullptr;
+    auto* state = cast_ctx(ctx->ctx_impl);
+    if (state == nullptr)
+        return nullptr;
+    uint64_t provider_token = 0;
+    {
+        std::lock_guard<std::mutex> lock(state->mu);
+        const auto found = std::find_if(
+            state->capability_registrations.begin(), state->capability_registrations.end(),
+            [hotkey](const CapabilityRegistration& registration) {
+                return registration.kind == CapabilityKind::hotkey &&
+                       registration.sdk_token == hotkey;
+            });
+        if (found == state->capability_registrations.end() ||
+            state->provider.user_data != &platform_provider_state()) {
+            return nullptr;
+        }
+        provider_token = found->provider_token;
+    }
+    auto& platform_state = platform_provider_state();
+    std::lock_guard<std::mutex> lock(platform_state.mutex);
+    const auto found = platform_state.hotkeys.find(provider_token);
+    return found == platform_state.hotkeys.end() ? nullptr : found->second.get();
+}
+
+extern "C" SAO_SDK_API void SAO_SDK_CALL
+sao_sdk_test_invoke_platform_hotkey_snapshot(void* snapshot_user_data) {
+    SaoUiInputEvent event{};
+    event.kind = SAO_UI_INPUT_KEY_DOWN;
+    platform_hotkey_callback(nullptr, &event, snapshot_user_data);
 }
 
 } // namespace sao_sdk_internal
