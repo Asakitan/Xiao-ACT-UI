@@ -206,11 +206,17 @@ struct StreamingModeTransactionRecorder {
     bool capture_excluded = false;
     bool flow_excluded = false;
     bool locked = false;
+    DWORD acquire_thread_id = 0;
+    std::vector<DWORD> release_thread_ids;
+    size_t release_attempts = 0;
     std::vector<std::string> steps;
 
     static sao_status_t acquire(void* user_data) {
         auto* self = static_cast<StreamingModeTransactionRecorder*>(user_data);
         self->steps.emplace_back("acquire");
+        if (self->locked)
+            return SAO_STATUS_INTERNAL;
+        self->acquire_thread_id = GetCurrentThreadId();
         self->locked = true;
         return SAO_STATUS_OK;
     }
@@ -240,7 +246,22 @@ struct StreamingModeTransactionRecorder {
     static sao_status_t releaseFailure(void* user_data) {
         auto* self = static_cast<StreamingModeTransactionRecorder*>(user_data);
         self->steps.emplace_back("release_failed");
+        ++self->release_attempts;
+        self->release_thread_ids.push_back(GetCurrentThreadId());
         return SAO_STATUS_INTERNAL;
+    }
+
+    static sao_status_t releaseFirstFailureThenSuccess(void* user_data) {
+        auto* self = static_cast<StreamingModeTransactionRecorder*>(user_data);
+        ++self->release_attempts;
+        self->release_thread_ids.push_back(GetCurrentThreadId());
+        if (self->release_attempts == 1) {
+            self->steps.emplace_back("release_failed");
+            return SAO_STATUS_INTERNAL;
+        }
+        self->steps.emplace_back("release_succeeded");
+        self->locked = false;
+        return SAO_STATUS_OK;
     }
 };
 
@@ -398,9 +419,39 @@ TEST_CASE("launcher streaming mode release failure compensates applied state",
     CHECK_FALSE(recorder.capture_excluded);
     CHECK_FALSE(recorder.flow_excluded);
     CHECK(recorder.locked);
+    CHECK(recorder.release_attempts == 2);
     CHECK(recorder.steps == std::vector<std::string>{"acquire", "capture_on", "flow_on",
-                                                     "release_failed", "capture_off",
-                                                     "flow_off"});
+                                                     "release_failed", "release_failed",
+                                                     "capture_off", "flow_off"});
+}
+
+TEST_CASE("launcher streaming mode release retries on the same thread",
+          "[launcher][init_pipeline][streaming][transaction][retry]") {
+    StreamingModeTransactionRecorder recorder;
+
+    REQUIRE(sao_launcher_init_pipeline_test_apply_streaming_mode_transaction(
+                true, &StreamingModeTransactionRecorder::acquire,
+                &StreamingModeTransactionRecorder::getFlow,
+                &StreamingModeTransactionRecorder::getCapture,
+                &StreamingModeTransactionRecorder::setCapture,
+                &StreamingModeTransactionRecorder::setFlow,
+                &StreamingModeTransactionRecorder::releaseFirstFailureThenSuccess, &recorder) ==
+            SAO_STATUS_OK);
+    CHECK(recorder.capture_excluded);
+    CHECK(recorder.flow_excluded);
+    CHECK_FALSE(recorder.locked);
+    REQUIRE(recorder.release_attempts == 2);
+    REQUIRE(recorder.release_thread_ids.size() == 2);
+    CHECK(recorder.release_thread_ids[0] == recorder.acquire_thread_id);
+    CHECK(recorder.release_thread_ids[1] == recorder.acquire_thread_id);
+    CHECK(recorder.steps == std::vector<std::string>{"acquire", "capture_on", "flow_on",
+                                                     "release_failed", "release_succeeded"});
+
+    REQUIRE(StreamingModeTransactionRecorder::acquire(&recorder) == SAO_STATUS_OK);
+    CHECK(recorder.locked);
+    REQUIRE(StreamingModeTransactionRecorder::releaseFirstFailureThenSuccess(&recorder) ==
+            SAO_STATUS_OK);
+    CHECK_FALSE(recorder.locked);
 }
 
 TEST_CASE("launcher_init_pipeline_teardown_reverse_order", "[launcher][init_pipeline][wave5]") {

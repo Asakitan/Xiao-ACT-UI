@@ -8,6 +8,7 @@
 #include <algorithm>
 #include <cstdint>
 #include <limits>
+#include <numeric>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -203,6 +204,35 @@ fake_catalog_snapshot(loader::entity_provider_catalog_callback callback, void* u
     return callback(&g_catalog_fixture->catalog, user_data);
 }
 
+OwnedEntityProviderCatalog make_catalog_sentinel() {
+    OwnedEntityProviderCatalog catalog;
+    catalog.revision = 9001;
+    catalog.providers.resize(1);
+    catalog.providers[0].provider_id = "sentinel-provider";
+    catalog.providers[0].owner_plugin_id = "sentinel-owner";
+    catalog.providers[0].generation = 77;
+    catalog.providers[0].revision = 88;
+    catalog.root_contributions.resize(1);
+    catalog.root_contributions[0].owner_plugin_id = "sentinel-owner";
+    catalog.root_contributions[0].contribution_id = "sentinel-contribution";
+    catalog.root_contributions[0].root_id = "sentinel-root";
+    catalog.root_contributions[0].name = "Sentinel Root";
+    catalog.root_contributions[0].actions.resize(1);
+    catalog.root_contributions[0].actions[0].provider_id = "sentinel-provider";
+    catalog.root_contributions[0].actions[0].action_id = "sentinel-action";
+    return catalog;
+}
+
+void check_catalog_snapshot_rejected_transactionally(CatalogFixture& fixture) {
+    g_catalog_fixture = &fixture;
+    auto catalog = make_catalog_sentinel();
+    const auto before = catalog;
+    CHECK(sao::launcher::entity_provider_catalog::snapshot(&fake_catalog_snapshot, catalog) ==
+          SAO_STATUS_ERR_INVALID_ARGUMENT);
+    CHECK(catalog == before);
+    g_catalog_fixture = nullptr;
+}
+
 struct PublishedMenuRow {
     std::string name;
     std::string icon;
@@ -223,6 +253,7 @@ struct PublishedRoot {
 struct PublicationLog {
     EntityActionRouteStore* competing_store = nullptr;
     EntityActionRouteSpec competing_route;
+    std::vector<std::pair<std::size_t, EntityActionRouteSpec>> competing_publications;
     bool publish_competitor = false;
     sao_status_t publication_status = SAO_STATUS_OK;
     std::vector<sao_status_t> publication_statuses;
@@ -275,6 +306,16 @@ sao_status_t SAO_UI_CALL fake_set_roots(sao_ui_entity_shell_handle_t,
             : g_publication_log->publication_status;
     if (publication_status != SAO_STATUS_OK) {
         return publication_status;
+    }
+    const auto competing_publication =
+        std::find_if(g_publication_log->competing_publications.begin(),
+                     g_publication_log->competing_publications.end(), [&](const auto& item) {
+                         return item.first == g_publication_log->calls.size();
+                     });
+    if (competing_publication != g_publication_log->competing_publications.end() &&
+        g_publication_log->competing_store != nullptr) {
+        REQUIRE(g_publication_log->competing_store->publish({competing_publication->second}) ==
+                SAO_STATUS_OK);
     }
     if (g_publication_log->publish_competitor && g_publication_log->calls.size() == 1 &&
         g_publication_log->competing_store != nullptr) {
@@ -484,6 +525,121 @@ TEST_CASE("Entity provider catalog is deeply copied sorted and collision checked
     g_catalog_fixture = nullptr;
 }
 
+TEST_CASE("Entity provider catalog accepts required output ABI prefixes and future metadata",
+          "[launcher][entity_provider][focused]") {
+    REQUIRE(loader::kEntityProviderCatalogViewRequiredPrefixSize == 48);
+    REQUIRE(loader::kEntityProviderViewRequiredPrefixSize == 56);
+    REQUIRE(loader::kEntityRootContributionViewRequiredPrefixSize == 72);
+    REQUIRE(loader::kEntityRootActionRefViewRequiredPrefixSize == 24);
+    REQUIRE(loader::kEntityMenuRowRequiredPrefixSize == 75);
+
+    CatalogFixture fixture;
+    fixture.reset(1);
+    fixture.set_row(0, "provider", 42, "category", "Category", "C", 3.5, "Row", "R", "action",
+                    R"({"value":1})");
+    fixture.set_root("owner", "contribution", "dynamic:root", "Dynamic Root", "D", 4.5, 0);
+    fixture.finish(123);
+    fixture.catalog.struct_size = loader::kEntityProviderCatalogViewRequiredPrefixSize;
+    fixture.providers[0].struct_size = loader::kEntityProviderViewRequiredPrefixSize;
+    fixture.root.struct_size = loader::kEntityRootContributionViewRequiredPrefixSize;
+    fixture.root_action.struct_size = loader::kEntityRootActionRefViewRequiredPrefixSize;
+    fixture.rows[0].struct_size = 75;
+    g_catalog_fixture = &fixture;
+
+    OwnedEntityProviderCatalog prefix_catalog;
+    REQUIRE(sao::launcher::entity_provider_catalog::snapshot(&fake_catalog_snapshot,
+                                                             prefix_catalog) == SAO_STATUS_OK);
+    REQUIRE(prefix_catalog.providers.size() == 1);
+    REQUIRE(prefix_catalog.providers[0].rows.size() == 1);
+    REQUIRE(prefix_catalog.root_contributions.size() == 1);
+    REQUIRE(prefix_catalog.root_contributions[0].actions.size() == 1);
+    CHECK(prefix_catalog.revision == 123);
+    CHECK(prefix_catalog.providers[0].provider_id == "provider");
+    CHECK(prefix_catalog.providers[0].rows[0].row_label == "Row");
+    CHECK(prefix_catalog.root_contributions[0].name == "Dynamic Root");
+    CHECK(prefix_catalog.root_contributions[0].actions[0].action_id == "action");
+
+    fixture.catalog.struct_size = sizeof(loader::entity_provider_catalog_view) + 64;
+    fixture.providers[0].struct_size = sizeof(loader::entity_provider_view) + 64;
+    fixture.root.struct_size = sizeof(loader::entity_root_contribution_view) + 64;
+    fixture.root_action.struct_size = sizeof(loader::entity_root_action_ref_view) + 64;
+    fixture.rows[0].struct_size = sizeof(loader::entity_menu_row) + 64;
+    OwnedEntityProviderCatalog future_catalog;
+    REQUIRE(sao::launcher::entity_provider_catalog::snapshot(&fake_catalog_snapshot,
+                                                             future_catalog) == SAO_STATUS_OK);
+    fixture.provider_ids[0] = "mutated-provider";
+    fixture.row_labels[0] = "mutated-row";
+    fixture.root_name = "mutated-root";
+    fixture.action_ids[0] = "mutated-action";
+
+    REQUIRE(future_catalog.providers.size() == 1);
+    REQUIRE(future_catalog.providers[0].rows.size() == 1);
+    REQUIRE(future_catalog.root_contributions.size() == 1);
+    REQUIRE(future_catalog.root_contributions[0].actions.size() == 1);
+    CHECK(future_catalog.providers[0].provider_id == "provider");
+    CHECK(future_catalog.providers[0].rows[0].row_label == "Row");
+    CHECK(future_catalog.root_contributions[0].name == "Dynamic Root");
+    CHECK(future_catalog.root_contributions[0].actions[0].action_id == "action");
+    g_catalog_fixture = nullptr;
+}
+
+TEST_CASE("Entity provider catalog rejects truncated output ABI prefixes transactionally",
+          "[launcher][entity_provider][focused]") {
+    CatalogFixture fixture;
+    fixture.reset(1);
+    fixture.set_row(0, "provider", 42, "category", "Category", "C", 3.5, "Row", "R", "action",
+                    "{}");
+    fixture.set_root("owner", "contribution", "dynamic:root", "Dynamic Root", "D", 4.5, 0);
+    fixture.finish(123);
+
+    SECTION("catalog prefix minus one") {
+        fixture.catalog.struct_size = loader::kEntityProviderCatalogViewRequiredPrefixSize - 1;
+        check_catalog_snapshot_rejected_transactionally(fixture);
+    }
+    SECTION("provider prefix minus one") {
+        fixture.providers[0].struct_size = loader::kEntityProviderViewRequiredPrefixSize - 1;
+        check_catalog_snapshot_rejected_transactionally(fixture);
+    }
+    SECTION("root contribution prefix minus one") {
+        fixture.root.struct_size = loader::kEntityRootContributionViewRequiredPrefixSize - 1;
+        check_catalog_snapshot_rejected_transactionally(fixture);
+    }
+    SECTION("root action prefix minus one") {
+        fixture.root_action.struct_size = loader::kEntityRootActionRefViewRequiredPrefixSize - 1;
+        check_catalog_snapshot_rejected_transactionally(fixture);
+    }
+    SECTION("row size 74") {
+        fixture.rows[0].struct_size = 74;
+        check_catalog_snapshot_rejected_transactionally(fixture);
+    }
+}
+
+TEST_CASE("Entity provider catalog keeps wide input until route publication validation",
+          "[launcher][entity_provider][budget][focused]") {
+    CatalogFixture fixture;
+    fixture.reset(1);
+    fixture.set_row(0, "provider", 42, "category", "Category", "C", 3.5,
+                    std::string(sao::launcher::entity_action_routes::kMaximumStringBytes + 1, 'r'),
+                    "R", "action", "{}");
+    fixture.finish(124);
+    g_catalog_fixture = &fixture;
+
+    OwnedEntityProviderCatalog catalog;
+    REQUIRE(sao::launcher::entity_provider_catalog::snapshot(&fake_catalog_snapshot, catalog) ==
+            SAO_STATUS_OK);
+    REQUIRE(catalog.providers.size() == 1);
+    REQUIRE(catalog.providers[0].rows.size() == 1);
+    CHECK(catalog.providers[0].rows[0].row_label.size() ==
+          sao::launcher::entity_action_routes::kMaximumStringBytes + 1);
+
+    std::vector<EntityActionRouteSpec> routes{make_route("sentinel", "sentinel")};
+    const auto before = routes;
+    CHECK(sao::launcher::entity_provider_catalog::build_routes(catalog, routes) ==
+          SAO_STATUS_ERR_INVALID_ARGUMENT);
+    CHECK(routes == before);
+    g_catalog_fixture = nullptr;
+}
+
 TEST_CASE("Entity provider publication resyncs UI when route commit loses",
           "[launcher][entity_provider][focused]") {
     EntityActionRouteStore store;
@@ -541,6 +697,48 @@ TEST_CASE("Entity provider publication resyncs UI when route commit loses",
 
     const auto committed = snapshot(store);
     CHECK(committed.routes.empty());
+    g_publication_log = nullptr;
+    g_catalog_fixture = nullptr;
+}
+
+TEST_CASE("Entity provider fail-closed retries a competing clear publication",
+          "[launcher][entity_provider][transaction][concurrency][focused]") {
+    EntityActionRouteStore store;
+    auto baseline = make_route("baseline-provider", "baseline-action");
+    baseline.provider_generation = 1;
+    baseline.payload_json = "{}";
+    REQUIRE(store.publish({baseline}) == SAO_STATUS_OK);
+
+    CatalogFixture fixture;
+    fixture.reset(1);
+    fixture.set_row(0, "candidate-provider", 9, "candidate-category", "Candidate Category", "C",
+                    1.0, "Candidate", "A", "candidate-action", "{}");
+    fixture.finish(9);
+    g_catalog_fixture = &fixture;
+
+    PublicationLog log;
+    log.competing_store = &store;
+    log.competing_publications = {
+        {1, make_route("first-winner", "first-action")},
+        {3, make_route("second-winner", "second-action")},
+    };
+    g_publication_log = &log;
+    EntityProviderPublicationState state;
+    const auto shell = reinterpret_cast<sao_ui_entity_shell_handle_t>(1);
+
+    CHECK(sao::launcher::entity_provider_publication::refresh(
+              shell, store, state, false, &fake_catalog_snapshot, &fake_set_roots) ==
+          SAO_STATUS_ERR_CANCELLED);
+    REQUIRE(log.calls.size() == 5);
+    const auto& fail_closed = log.calls.back();
+    CHECK(std::none_of(fail_closed.begin(), fail_closed.end(),
+                       [](const auto& root) { return root.can_activate; }));
+    for (const auto& root : fail_closed) {
+        CHECK(std::none_of(root.children.begin(), root.children.end(),
+                           [](const auto& row) { return row.can_activate; }));
+    }
+    CHECK(snapshot(store).routes.empty());
+    CHECK_FALSE(state.has_catalog_revision);
     g_publication_log = nullptr;
     g_catalog_fixture = nullptr;
 }
@@ -1239,6 +1437,99 @@ TEST_CASE("Entity root projection enforces the complete tree child budget",
           SAO_STATUS_ERR_INVALID_ARGUMENT);
     REQUIRE(log.calls.size() == 1);
     CHECK(std::none_of(log.calls[0].begin(), log.calls[0].end(),
+                       [](const auto& root) { return root.can_activate; }));
+    CHECK(snapshot(store).routes.empty());
+    CHECK_FALSE(state.has_catalog_revision);
+    g_publication_log = nullptr;
+    g_catalog_fixture = nullptr;
+}
+
+TEST_CASE("Entity Plugins projection accepts its exact 256-child envelope",
+          "[launcher][entity_provider][budget][focused]") {
+    constexpr std::size_t kRouteCount = 253;
+    CatalogFixture fixture;
+    fixture.reset(kRouteCount);
+    for (std::size_t index = 0; index < kRouteCount; ++index) {
+        fixture.set_row(index, "provider-" + std::to_string(index), index + 1, "category",
+                        "Category", "C", 0.0, "Row " + std::to_string(index), "R",
+                        "action-" + std::to_string(index), "{}");
+    }
+    fixture.finish(34);
+    g_catalog_fixture = &fixture;
+
+    EntityActionRouteStore store;
+    EntityProviderPublicationState state;
+    PublicationLog log;
+    g_publication_log = &log;
+    const auto shell = reinterpret_cast<sao_ui_entity_shell_handle_t>(1);
+    REQUIRE(sao::launcher::entity_provider_publication::refresh(shell, store, state, false,
+                                                                &fake_catalog_snapshot,
+                                                                &fake_set_roots) == SAO_STATUS_OK);
+    REQUIRE(log.calls.size() == 1);
+    CHECK(published_root(log.calls[0], "Plugins").children.size() == 256);
+    CHECK(snapshot(store).routes.size() == kRouteCount);
+    CHECK(state.has_catalog_revision);
+    g_publication_log = nullptr;
+    g_catalog_fixture = nullptr;
+}
+
+TEST_CASE("Entity publication preflights the exact complete-tree child envelope",
+          "[launcher][entity_provider][root_contribution][budget][focused]") {
+    CatalogFixture fixture;
+    EntityProviderPublicationState state;
+    std::uint64_t revision = 40;
+    const auto configure_candidate = [&](std::size_t route_count) {
+        fixture.reset(route_count);
+        std::vector<EntityRootContributionSpec> contributions;
+        contributions.reserve((route_count + 255) / 256);
+        for (std::size_t index = 0; index < route_count; ++index) {
+            fixture.set_row(index, "provider-" + std::to_string(index), index + 1, "category",
+                            "Category", "C", 0.0, "Row " + std::to_string(index), "R",
+                            "action-" + std::to_string(index), "{}");
+            if (index % 256 == 0) {
+                const auto root_index = contributions.size();
+                contributions.push_back({
+                    "owner-" + std::to_string(root_index),
+                    "contribution-" + std::to_string(root_index),
+                    "dynamic:" + std::to_string(root_index),
+                    "Dynamic " + std::to_string(root_index),
+                    "D",
+                    static_cast<double>(root_index),
+                    {},
+                });
+                contributions.back().actions.reserve(256);
+            }
+            contributions.back().actions.push_back(
+                {fixture.provider_ids[index], fixture.action_ids[index]});
+        }
+        fixture.finish(revision++);
+        REQUIRE(sao::launcher::entity_provider_publication::replace_root_contributions(
+                    state, contributions) == SAO_STATUS_OK);
+    };
+
+    configure_candidate(1008);
+    g_catalog_fixture = &fixture;
+    EntityActionRouteStore store;
+    PublicationLog log;
+    g_publication_log = &log;
+    const auto shell = reinterpret_cast<sao_ui_entity_shell_handle_t>(1);
+    REQUIRE(sao::launcher::entity_provider_publication::refresh(shell, store, state, false,
+                                                                &fake_catalog_snapshot,
+                                                                &fake_set_roots) == SAO_STATUS_OK);
+    REQUIRE(log.calls.size() == 1);
+    CHECK(snapshot(store).routes.size() == 1008);
+    CHECK(state.has_catalog_revision);
+    CHECK(std::accumulate(log.calls[0].begin(), log.calls[0].end(), std::size_t{0},
+                          [](std::size_t total, const auto& root) {
+                              return total + root.children.size();
+                          }) == 1024);
+
+    configure_candidate(1009);
+    CHECK(sao::launcher::entity_provider_publication::refresh(
+              shell, store, state, false, &fake_catalog_snapshot, &fake_set_roots) ==
+          SAO_STATUS_ERR_INVALID_ARGUMENT);
+    REQUIRE(log.calls.size() == 2);
+    CHECK(std::none_of(log.calls[1].begin(), log.calls[1].end(),
                        [](const auto& root) { return root.can_activate; }));
     CHECK(snapshot(store).routes.empty());
     CHECK_FALSE(state.has_catalog_revision);

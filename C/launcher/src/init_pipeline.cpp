@@ -62,7 +62,7 @@
 
 #if defined(SAO_LAUNCHER_SECURITY_COMPOSITION_PROVIDER) &&                                         \
     !defined(SAO_LAUNCHER_COMPOSITION_TEST_PROVIDER)
-#include "sao_security/anti_debug/wave8.h"
+#include "sao_security/anti_debug/probes.h"
 #endif
 
 // ---------------------------------------------------------------------------
@@ -142,6 +142,7 @@ constexpr int32_t kUiFrameIntervalMs = 16;
 constexpr int32_t kHomeHotkeyId = 0x5341;
 constexpr int32_t kInsertHotkeyId = 0x5342;
 constexpr int kMaximumTeardownAttempts = 3;
+constexpr int kMaximumStreamingReleaseAttempts = 2;
 
 struct HeadlessCleanupState {
     ~HeadlessCleanupState() {
@@ -539,6 +540,15 @@ using StreamingModeGetFn = bool (*)(void* user_data);
 using StreamingModeSetFn = sao_status_t (*)(bool enabled, void* user_data);
 using StreamingModeReleaseFn = sao_status_t (*)(void* user_data);
 
+sao_status_t releaseStreamingModeWithRetry(StreamingModeReleaseFn release, void* user_data) {
+    sao_status_t status = release(user_data);
+    for (int attempt = 1; status != SAO_STATUS_OK && attempt < kMaximumStreamingReleaseAttempts;
+         ++attempt) {
+        status = release(user_data);
+    }
+    return status;
+}
+
 sao_status_t applyStreamingModeTransaction(
     bool enabled, StreamingModeAcquireFn acquire, StreamingModeGetFn get_flow,
     StreamingModeGetFn get_capture, StreamingModeSetFn set_capture,
@@ -564,7 +574,7 @@ sao_status_t applyStreamingModeTransaction(
         }
     }
 
-    const sao_status_t release_status = release(user_data);
+    const sao_status_t release_status = releaseStreamingModeWithRetry(release, user_data);
     if (release_status != SAO_STATUS_OK && status == SAO_STATUS_OK) {
         compensation_status = set_capture(previous_capture, user_data);
         const sao_status_t flow_status = set_flow(previous_flow, user_data);

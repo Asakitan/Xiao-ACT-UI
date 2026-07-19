@@ -413,8 +413,12 @@ int32_t SAO_PLUGINS_CALL createPlatformSession(
         const char* version = spec->plugin_version_utf8 == nullptr ? "" : spec->plugin_version_utf8;
         int32_t status = mapSdkStatus(
             sao_sdk_bind_context(spec->plugin_id_utf8, version, &session->sdk_context));
-        if (status != SAO_OK)
+        if (status != SAO_OK) {
+            session->sdk_ready = session->sdk_context.ctx_impl != nullptr;
+            if (session->sdk_ready)
+                *out_session = session.release();
             return status;
+        }
         session->sdk_ready = true;
         status = mapSdkStatus(sao_sdk_context_bind_platform_services(&session->sdk_context));
         if (status != SAO_OK) {
@@ -422,6 +426,7 @@ int32_t SAO_PLUGINS_CALL createPlatformSession(
             return status;
         }
     } catch (...) {
+        session->sdk_ready = session->sdk_context.ctx_impl != nullptr;
         if (session->sdk_ready)
             *out_session = session.release();
         return SAO_ERR_OS_CALL_FAILED;

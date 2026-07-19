@@ -8,6 +8,10 @@
 #include "sao/plugins/loader/loader_status.h"
 #include "sao/plugins/loader/plugin_lifecycle.h"
 #endif
+#if defined(SAO_LAUNCHER_PROVIDER_HAS_PYTHON) || defined(SAO_LAUNCHER_PROVIDER_HAS_CSHARP)
+#include "sao/sdk/sao_sdk_mem.h"
+extern "C" SAO_SDK_API size_t SAO_SDK_CALL sao_sdk_test_live_context_count(void);
+#endif
 
 #include <catch2/catch_test_macros.hpp>
 #include <nlohmann/json.hpp>
@@ -134,6 +138,70 @@ void platform_timer_callback(void*) {}
 int32_t platform_render_callback(const char*, const char*, char**, void*) {
     return SAO_OK;
 }
+
+#if defined(SAO_LAUNCHER_PROVIDER_HAS_PYTHON) || defined(SAO_LAUNCHER_PROVIDER_HAS_CSHARP)
+struct FailedSdkBindMemoryProvider {
+    int close_failures = 2;
+    int close_attempts = 0;
+    SaoSdkMemoryProviderVTable provider{};
+
+    FailedSdkBindMemoryProvider() {
+        provider.abi_version = SAO_SDK_MEMORY_PROVIDER_ABI_VERSION;
+        provider.struct_size = sizeof(provider);
+        provider.user_data = this;
+        provider.retain = &retain;
+        provider.release = &release;
+        provider.open_session = &openSession;
+        provider.close_session = &closeSession;
+        provider.attach = &attach;
+        provider.detach = &detach;
+        provider.read = &read;
+        provider.enumerate_modules = &enumerateModules;
+    }
+
+    static void SAO_SDK_CALL retain(void*) {}
+    static void SAO_SDK_CALL release(void*) {}
+
+    static sao_sdk_status_t SAO_SDK_CALL openSession(void* user_data, const char*, void** out) {
+        if (out != nullptr)
+            *out = user_data;
+        return SAO_SDK_ERR_INTERNAL;
+    }
+
+    static sao_sdk_status_t SAO_SDK_CALL closeSession(void* user_data, void*) {
+        auto* self = static_cast<FailedSdkBindMemoryProvider*>(user_data);
+        ++self->close_attempts;
+        if (self->close_failures > 0) {
+            --self->close_failures;
+            return SAO_SDK_ERR_INTERNAL;
+        }
+        return SAO_SDK_OK;
+    }
+
+    static sao_sdk_status_t SAO_SDK_CALL attach(void*, void*,
+                                                const SaoSdkMemoryTargetIdentity*) {
+        return SAO_SDK_OK;
+    }
+
+    static sao_sdk_status_t SAO_SDK_CALL detach(void*, void*) {
+        return SAO_SDK_OK;
+    }
+
+    static sao_sdk_status_t SAO_SDK_CALL read(void*, void*, uint64_t, void*, size_t,
+                                              size_t* out_bytes_read) {
+        if (out_bytes_read != nullptr)
+            *out_bytes_read = 0;
+        return SAO_SDK_ERR_READ_FAULT;
+    }
+
+    static sao_sdk_status_t SAO_SDK_CALL enumerateModules(void*, void*, SaoSdkMemoryModule*,
+                                                          size_t, size_t, size_t* out_count) {
+        if (out_count != nullptr)
+            *out_count = 0;
+        return SAO_SDK_OK;
+    }
+};
+#endif
 
 #if defined(SAO_LAUNCHER_PROVIDER_HAS_PYTHON) || defined(SAO_LAUNCHER_PROVIDER_HAS_CSHARP)
 template <typename Predicate>
@@ -270,6 +338,35 @@ TEST_CASE("launcher owns real platform provider sessions and excludes unwired ca
                 sao::plugins::loader::sao_plugins_registry_instance(), handle) == SAO_OK);
     REQUIRE(sao_plugins_shutdown(registry) == SAO_STATUS_OK);
 }
+
+#if defined(SAO_LAUNCHER_PROVIDER_HAS_PYTHON) || defined(SAO_LAUNCHER_PROVIDER_HAS_CSHARP)
+TEST_CASE("launcher transfers a half-initialized SDK context to loader cleanup",
+          "[launcher][provider][plugins][platform][sdk][cleanup][focused]") {
+    temporary_tree tree("platform_sdk_bind_cleanup");
+    REQUIRE(fs::create_directories(tree.root() / "plugins"));
+    REQUIRE(sao::launcher::loadLauncherProviderConfiguration(tree.root().c_str(), nullptr) ==
+            SAO_STATUS_OK);
+
+    sao_plugins_registry* registry = nullptr;
+    REQUIRE(sao_plugins_discover(nullptr, &registry) == SAO_STATUS_OK);
+    REQUIRE(registry != nullptr);
+    const auto handle = add_external_plugin("launcher_sdk_bind_cleanup", tree.root());
+    const auto live_contexts = sao_sdk_test_live_context_count();
+    FailedSdkBindMemoryProvider provider;
+    REQUIRE(sao_sdk_platform_memory_configure_provider(&provider.provider) == SAO_SDK_OK);
+
+    auto* context = sao::plugins::loader::sao_plugins_ctx_create(handle);
+
+    REQUIRE(sao_sdk_platform_memory_configure_provider(nullptr) == SAO_SDK_OK);
+    CHECK(context == nullptr);
+    CHECK(provider.close_attempts == 3);
+    CHECK(sao_sdk_test_live_context_count() == live_contexts);
+
+    REQUIRE(sao::plugins::loader::sao_plugins_registry_remove(
+                sao::plugins::loader::sao_plugins_registry_instance(), handle) == SAO_OK);
+    REQUIRE(sao_plugins_shutdown(registry) == SAO_STATUS_OK);
+}
+#endif
 
 #if defined(SAO_LAUNCHER_PROVIDER_HAS_PYTHON) || defined(SAO_LAUNCHER_PROVIDER_HAS_CSHARP)
 TEST_CASE("launcher one-shot timeouts release SDK timers without map or worker growth",

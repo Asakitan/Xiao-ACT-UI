@@ -147,7 +147,7 @@ inline bool copy_string(const char* value, bool required, std::size_t maximum_by
 
 inline bool copy_row(const loader::entity_menu_row& view, std::size_t& total_string_bytes,
                      OwnedEntityProviderRow& out) {
-    if (view.struct_size < sizeof(loader::entity_menu_row) ||
+    if (view.struct_size < loader::kEntityMenuRowRequiredPrefixSize ||
         !std::isfinite(view.category_priority)) {
         return false;
     }
@@ -195,7 +195,7 @@ struct CopyContext {
 inline std::int32_t SAO_PLUGINS_CALL
 copy_catalog_callback(const loader::entity_provider_catalog_view* view, void* user_data) noexcept {
     if (view == nullptr || user_data == nullptr ||
-        view->struct_size < sizeof(loader::entity_provider_catalog_view)) {
+        view->struct_size < loader::kEntityProviderCatalogViewRequiredPrefixSize) {
         return SAO_ERR_INVALID_ARGUMENT;
     }
     auto& context = *static_cast<CopyContext*>(user_data);
@@ -216,7 +216,7 @@ copy_catalog_callback(const loader::entity_provider_catalog_view* view, void* us
         for (std::uint32_t provider_index = 0; provider_index < view->provider_count;
              ++provider_index) {
             const auto& provider_view = view->providers[provider_index];
-            if (provider_view.struct_size < sizeof(loader::entity_provider_view) ||
+            if (provider_view.struct_size < loader::kEntityProviderViewRequiredPrefixSize ||
                 provider_view.generation == 0 ||
                 provider_view.row_count > kMaximumCatalogRows - total_rows ||
                 (provider_view.row_count > 0 && provider_view.rows == nullptr)) {
@@ -250,7 +250,7 @@ copy_catalog_callback(const loader::entity_provider_catalog_view* view, void* us
         for (std::uint32_t root_index = 0; root_index < view->root_contribution_count;
              ++root_index) {
             const auto& root_view = view->root_contributions[root_index];
-            if (root_view.struct_size < sizeof(loader::entity_root_contribution_view) ||
+            if (root_view.struct_size < loader::kEntityRootContributionViewRequiredPrefixSize ||
                 !std::isfinite(root_view.priority) ||
                 root_view.action_count > kMaximumRootActions - total_root_actions ||
                 (root_view.action_count > 0 && root_view.actions == nullptr)) {
@@ -274,7 +274,7 @@ copy_catalog_callback(const loader::entity_provider_catalog_view* view, void* us
             for (std::uint32_t action_index = 0; action_index < root_view.action_count;
                  ++action_index) {
                 const auto& action_view = root_view.actions[action_index];
-                if (action_view.struct_size < sizeof(loader::entity_root_action_ref_view)) {
+                if (action_view.struct_size < loader::kEntityRootActionRefViewRequiredPrefixSize) {
                     return SAO_ERR_INVALID_ARGUMENT;
                 }
                 OwnedEntityRootActionRef action;
