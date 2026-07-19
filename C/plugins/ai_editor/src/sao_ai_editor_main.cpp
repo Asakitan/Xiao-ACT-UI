@@ -2,7 +2,6 @@
 
 #include "mcp_server.h"
 #include "gpu_hunt_panel.h"
-#include "gpu_hunt_tool.h"
 #if SAO_AI_EDITOR_HAS_WEBVIEW
 #include "webview_bridge.h"
 #endif
@@ -114,6 +113,7 @@ struct Arguments final {
     bool extension_host_mode = false;
     bool webview_mode = false;
     bool cli_mode = false;
+    bool gpu_hunt_only = false;
     bool show_help = false;
 };
 
@@ -128,7 +128,8 @@ void print_usage() {
         L"[--node-executable <path>]\n"
         L"       SaoAiEditor.exe --cli --cli-method <method> "
         L"[--cli-params <json>] [--cli-params-file <path>] "
-        L"[--workspace <directory>]\n";
+        L"[--workspace <directory>]\n"
+        L"       SaoAiEditor.exe --gpu-hunt\n";
     std::fputws(usage, stderr);
     OutputDebugStringW(usage);
 }
@@ -210,6 +211,13 @@ bool parse_arguments(int argc, wchar_t** argv, Arguments& result) {
             result.cli_mode = true;
             continue;
         }
+        if (argument == L"--gpu-hunt") {
+            if (result.gpu_hunt_only) {
+                return false;
+            }
+            result.gpu_hunt_only = true;
+            continue;
+        }
         if (argument != L"--sao-ai-editor-pipe" &&
             argument != L"--workspace" && argument != L"--auto-exit-ms" &&
             argument != L"--webview-url" && argument != L"--cli-method" &&
@@ -264,6 +272,17 @@ bool parse_arguments(int argc, wchar_t** argv, Arguments& result) {
     }
     if (result.show_help) {
         return true;
+    }
+    if (result.gpu_hunt_only) {
+        // --gpu-hunt is a self-contained pop-up mode driven by the SAO
+        // menu's Tools entry; no pipe / workspace / auto-exit are meaningful.
+        return result.pipe_name.empty() && !result.mcp_server &&
+               !result.extension_host_mode && !result.webview_mode &&
+               !result.cli_mode && !result.ui_smoke_test &&
+               !result.headless && !result.hidden_window &&
+               !result.workspace.has_value() &&
+               !result.node_executable.has_value() &&
+               result.auto_exit_ms == 0;
     }
     if (result.mcp_server) {
         return result.pipe_name.empty() && !result.ui_smoke_test &&
@@ -1266,6 +1285,46 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int show_command) {
                 return 4;
             }
             return sao::ai_editor::native::run_mcp_server_stdio(*workspace);
+        }
+        if (arguments.gpu_hunt_only) {
+            // Standalone GPU Hunt panel mode: no main window, no IPC
+            // handshake, no runtime.  We just register a hidden owner window
+            // so the panel is anchored to a HWND owned by this HINSTANCE,
+            // show the panel, then pump messages until it closes.  The panel
+            // itself already owns its own message loop timer; we just need
+            // the process to stay alive.
+            INITCOMMONCONTROLSEX icce{};
+            icce.dwSize = sizeof(icce);
+            icce.dwICC  = ICC_STANDARD_CLASSES | ICC_BAR_CLASSES;
+            InitCommonControlsEx(&icce);
+            HWND panel = sao::ai_editor::gpu_hunt_panel_show(instance);
+            if (panel == nullptr) {
+                return 15;
+            }
+            MSG msg{};
+            while (true) {
+                BOOL rc = GetMessageW(&msg, nullptr, 0, 0);
+                if (rc == 0 || rc == -1) {
+                    break;
+                }
+                // Once the panel window has been destroyed and its class
+                // singleton cleared, exit the loop.
+                if (!IsWindow(panel)) {
+                    // Drain any remaining posted messages then bail.
+                    while (PeekMessageW(&msg, nullptr, 0, 0, PM_REMOVE)) {
+                        TranslateMessage(&msg);
+                        DispatchMessageW(&msg);
+                    }
+                    break;
+                }
+                TranslateMessage(&msg);
+                DispatchMessageW(&msg);
+            }
+            // The GpuHuntTool singleton owns a background tick thread; its
+            // static destructor stops it during CRT teardown, so we do not
+            // need to explicitly wire that here.  Reaching this point means
+            // the panel window was closed and the message pump drained.
+            return 0;
         }
         if (arguments.extension_host_mode) {
             const auto workspace = resolve_workspace(arguments.workspace);

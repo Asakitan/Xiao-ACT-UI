@@ -73,6 +73,33 @@ add_dependencies(sao_plugin_ai_editor_production_child_tests
     sao_ai_editor
 )
 
+add_executable(sao_plugin_ai_editor_gpu_hunt_tests
+    gpu_hunt_sdk_adapter_test.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/../src/gpu_hunt_panel.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/../src/gpu_hunt_sdk_adapter.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/../src/gpu_hunt_tool.cpp
+)
+target_compile_features(sao_plugin_ai_editor_gpu_hunt_tests PRIVATE
+    cxx_std_20
+)
+target_compile_definitions(sao_plugin_ai_editor_gpu_hunt_tests PRIVATE
+    SAO_AI_EDITOR_BUILDING_DLL
+    SAO_AI_EDITOR_TESTING
+)
+target_include_directories(sao_plugin_ai_editor_gpu_hunt_tests PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/../include
+    ${CMAKE_CURRENT_SOURCE_DIR}/../src
+)
+target_link_libraries(sao_plugin_ai_editor_gpu_hunt_tests PRIVATE
+    Catch2::Catch2WithMain
+    sao::gpu_hunt
+    sao::rt_io
+    sao::sdk
+    comctl32
+    gdi32
+    user32
+)
+
 include(CTest)
 include(Catch)
 catch_discover_tests(sao_plugin_ai_editor_wave7_tests
@@ -82,4 +109,8 @@ catch_discover_tests(sao_plugin_ai_editor_wave7_tests
 catch_discover_tests(sao_plugin_ai_editor_production_child_tests
     TEST_PREFIX "plugins_ai_editor.production_child."
     PROPERTIES LABELS "plugins;ai_editor;integration;production_child"
+)
+catch_discover_tests(sao_plugin_ai_editor_gpu_hunt_tests
+    TEST_PREFIX "plugins_ai_editor.gpu_hunt."
+    PROPERTIES LABELS "plugins;ai_editor;gpu_hunt"
 )

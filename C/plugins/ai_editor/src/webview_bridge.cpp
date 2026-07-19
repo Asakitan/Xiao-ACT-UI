@@ -245,6 +245,51 @@ HRESULT ControllerReadyHandler::Invoke(
                                      &session_->web_message_token);
         handler->Release();
     }
+    // acquireVsCodeApi shim — matches the ambient global the VSCode
+    // extension host injects.  Panels get postMessage() + setState() +
+    // getState() with state persisted in sessionStorage keyed by the
+    // active panelId (which the runtime sets on window before Navigate).
+    static const wchar_t kAcquireShim[] =
+        L"(function(){\n"
+        L"  if (window.__saoVscodeApiRegistered) { return; }\n"
+        L"  window.__saoVscodeApiRegistered = true;\n"
+        L"  const stateKey = () => 'sao.webviewPanel.state.' +\n"
+        L"      (window.__saoActivePanelId || 'default');\n"
+        L"  const bag = () => {\n"
+        L"    try {\n"
+        L"      const raw = window.sessionStorage.getItem(stateKey());\n"
+        L"      return raw ? JSON.parse(raw) : undefined;\n"
+        L"    } catch (e) { return undefined; }\n"
+        L"  };\n"
+        L"  window.acquireVsCodeApi = function acquireVsCodeApi() {\n"
+        L"    return {\n"
+        L"      postMessage(message) {\n"
+        L"        const envelope = {\n"
+        L"          method: 'webviewPanel.postMessage',\n"
+        L"          panelId: window.__saoActivePanelId || null,\n"
+        L"          message,\n"
+        L"        };\n"
+        L"        try {\n"
+        L"          if (window.chrome && window.chrome.webview) {\n"
+        L"            window.chrome.webview.postMessage(envelope);\n"
+        L"          }\n"
+        L"        } catch (e) {}\n"
+        L"      },\n"
+        L"      setState(state) {\n"
+        L"        try {\n"
+        L"          window.sessionStorage.setItem(stateKey(),\n"
+        L"              JSON.stringify(state));\n"
+        L"        } catch (e) {}\n"
+        L"        return state;\n"
+        L"      },\n"
+        L"      getState() { return bag(); },\n"
+        L"    };\n"
+        L"  };\n"
+        L"  window.__saoSetActivePanel = function(id) {\n"
+        L"    window.__saoActivePanelId = id;\n"
+        L"  };\n"
+        L"})();\n";
+    view->AddScriptToExecuteOnDocumentCreated(kAcquireShim, nullptr);
     if (!session_->navigate_url.empty()) {
         view->Navigate(session_->navigate_url.c_str());
     } else {
@@ -273,8 +318,26 @@ HRESULT WebMessageReceivedHandler::Invoke(
         if (!message.is_object()) {
             return S_OK;
         }
-        const std::string method =
+        const std::string incoming_method =
             message.value("method", std::string{});
+        // Panel-scoped envelope from acquireVsCodeApi().postMessage(): the
+        // shim tags outgoing messages with method="webviewPanel.postMessage"
+        // and a panelId; route them through the postMessageToWebview
+        // dispatcher so a Node-side onDidReceiveMessage handler observes
+        // the emit.  When no panelId is present we fall through to the
+        // standard dispatch_extension_call path (existing 1:1 modal RPC).
+        if (incoming_method == "webviewPanel.postMessage" &&
+            message.contains("panelId") &&
+            message["panelId"].is_string()) {
+            nlohmann::json params{
+                {"panelId", message["panelId"]},
+                {"message", message.value("message", nlohmann::json())}};
+            nlohmann::json ignored;
+            (void)session_->runtime->dispatch_extension_call(
+                "vscode.window.postMessageToWebview", params, ignored);
+            return S_OK;
+        }
+        const std::string method = incoming_method;
         nlohmann::json params =
             message.value("params", nlohmann::json::object());
         nlohmann::json result;

@@ -17,8 +17,10 @@
 #include "native_secret_store.h"
 #include "native_tool_registry.h"
 #include "prompt_registry.h"
+#include "tool_execution_monitor.h"
 #include "tool_result_cache.h"
 #include "tool_result_filter.h"
+#include "webview_panel_registry.h"
 #include "sao/ai_editor/mcp_client.h"
 #include "winhttp_chat.h"
 #include "workflow_engine.h"
@@ -202,6 +204,12 @@ private:
     // mutex; safe to call from the dispatch thread without holding
     // store_mutex_.  See tool_result_cache.h for TTL / classification rules.
     ToolResultCache tool_cache_;
+    // Per-tool execution telemetry (invocations, bytes returned, cache hit
+    // ratio, avg duration).  Deliberately independent from tool_cache_ so a
+    // `tools.cache_clear` call preserves the invocation ledger; only
+    // `tools.telemetry_clear` (dispatched separately) wipes these counters.
+    // See tool_execution_monitor.h.
+    ToolExecutionMonitor tool_monitor_;
     // Compression chain applied to tools.execute() output before it hits the
     // JSON-RPC wire.  Populated with the 3 built-in filters
     // (ListFilesFolder / SearchFilesCollapse / ReadFileTruncate) in the
@@ -219,6 +227,10 @@ private:
     std::unique_ptr<ExtensionHost> extension_host_;
     AgentRegistry agent_registry_;
     PromptRegistry prompt_registry_;
+    // Metadata store for vscode.window.createWebviewPanel — see
+    // webview_panel_registry.h.  Unconditionally compiled: even without
+    // WebView2 the Node side needs a deterministic id + state surface.
+    WebviewPanelRegistry webview_panels_;
     uint32_t maximum_event_queue_;
 
 public:

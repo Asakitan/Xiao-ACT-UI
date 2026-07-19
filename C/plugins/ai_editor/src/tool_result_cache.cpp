@@ -97,6 +97,54 @@ CacheClassification ToolResultCache::classify(const std::string& tool_name,
         cls.invalidates_path = extract_path(input);
         return cls;
     }
+    // Side-effect commands: we can't tell from the tool name alone whether
+    // the command touched files inside the workspace or ran fully sandboxed
+    // (e.g. `echo hi` vs `python -c 'open("x").write("y")'`).  VSCode's
+    // IToolResultCache takes the same conservative stance — treat every
+    // command execution as if it may have written somewhere reachable by
+    // readFile/listFiles/searchFiles and flush the whole read-only side.
+    // Costs one repeat scan; avoids stale output when the LLM followed a
+    // build/format step with a file read.  `invalidates_path` stays empty
+    // so the flush is unscoped: listFiles + searchFiles entries are wiped
+    // regardless of which paths they cached.
+    if (tool_name == "runInTerminal" ||
+        tool_name == "executeCommand" ||
+        tool_name == "run_command" ||
+        tool_name == "shell") {
+        cls.cls = CacheClass::None;
+        cls.invalidates_tools = {"readFile", "listFiles", "searchFiles"};
+        return cls;
+    }
+    // File-lifecycle mutations (create / delete / move / rename).  Same
+    // shape as editFile — path-scoped readFile invalidation + wholesale
+    // listFiles / searchFiles flush.  For moves we can only key on the
+    // source path (destination lives under a different field name across
+    // tool variants); wholesale flush of the directory listings picks up
+    // the destination.
+    if (tool_name == "deleteFile" || tool_name == "createFile" ||
+        tool_name == "moveFile" || tool_name == "renameFile") {
+        cls.cls = CacheClass::None;
+        cls.invalidates_tools = {"readFile", "listFiles", "searchFiles"};
+        cls.invalidates_path = extract_path(input);
+        return cls;
+    }
+    // Git write commands invalidate any prior git-status / git-diff cache
+    // entry — the working-tree status the LLM saw a moment ago is no longer
+    // authoritative after a commit / push / add.  Read-only git.status /
+    // git.diff themselves aren't classified as cacheable here yet (no
+    // built-in tool of that name), but this branch means custom-registered
+    // git.commit wrappers correctly invalidate custom-registered git.status
+    // wrappers when both use the conventional dotted names.  Name-only
+    // match, no path scoping — git operations are repository-scoped.
+    if (tool_name == "git.commit" || tool_name == "git.push" ||
+        tool_name == "git.add" || tool_name == "git.reset" ||
+        tool_name == "git.checkout" || tool_name == "git.merge" ||
+        tool_name == "git.rebase" || tool_name == "git.pull") {
+        cls.cls = CacheClass::None;
+        cls.invalidates_tools = {"git.status", "git.diff", "git.log",
+                                 "git.blame", "git.show"};
+        return cls;
+    }
     // Every other tool (custom registrations, alias targets that failed to
     // resolve, unknown names) stays uncached — safer default than a wrong
     // classification silently returning stale output.

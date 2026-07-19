@@ -60,6 +60,7 @@ add_library(sao_plugin_ai_editor SHARED
     src/extension_host.cpp
     src/gpu_hunt_bridge.cpp
     src/gpu_hunt_panel.cpp
+    src/gpu_hunt_sdk_adapter.cpp
     src/gpu_hunt_tool.cpp
     src/mcp_client.cpp
     src/mcp_codec.cpp
@@ -72,8 +73,10 @@ add_library(sao_plugin_ai_editor SHARED
     src/prompt_registry.cpp
     src/scope_store.cpp
     src/sha256_helper.cpp
+    src/tool_execution_monitor.cpp
     src/tool_result_cache.cpp
     src/tool_result_filter.cpp
+    src/webview_panel_registry.cpp
     src/winhttp_chat.cpp
     src/workflow_engine.cpp
 )
@@ -98,6 +101,7 @@ target_link_libraries(sao_plugin_ai_editor PRIVATE
     nlohmann_json::nlohmann_json
     sao::gpu_hunt
     sao::rt_io
+    sao::sdk
     bcrypt
     crypt32
     shell32

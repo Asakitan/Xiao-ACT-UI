@@ -9145,6 +9145,231 @@ TEST_CASE("tool cache: JSON key ordering does not fragment the cache",
     REQUIRE(stats["totalEntries"].get<int64_t>() == 1);
 }
 
+// -------------------------------------------------------------------------
+// Tool execution telemetry (src/tool_execution_monitor.{h,cpp}) — per-tool
+// counters modelled on VSCode outputMonitor.ts's
+// IOutputMonitorTelemetryCounters.  Exposed via `tools.telemetry_stats` and
+// wired into the tools.call path so both cache hits and fresh execute()
+// contribute to the ledger.
+// -------------------------------------------------------------------------
+
+TEST_CASE("tool telemetry: readFile records invocations + bytes + cache hits",
+          "[plugins][ai_editor][native][tools][telemetry]") {
+    RuntimeFixture fixture;
+    auto runtime = fixture.get();
+
+    // Seed a file the read path can serve.
+    REQUIRE(dispatch(runtime, "tools.call",
+                     {{"mode", "agent"},
+                      {"name", "editFile"},
+                      {"arguments", {{"path", "telem.txt"},
+                                     {"content", "hello-telemetry\n"}}}})
+                .contains("result"));
+
+    const Json read_call = {{"mode", "agent"},
+                             {"name", "readFile"},
+                             {"arguments", {{"path", "telem.txt"}}}};
+    // First read -> miss (execute path).  Second read -> cache hit.
+    REQUIRE(dispatch(runtime, "tools.call", read_call).contains("result"));
+    REQUIRE(dispatch(runtime, "tools.call", read_call).contains("result"));
+
+    const Json stats = dispatch(runtime, "tools.telemetry_stats")["result"];
+    REQUIRE(stats.contains("byTool"));
+    REQUIRE(stats.contains("aggregate"));
+    const auto& read_row = stats["byTool"]["readFile"];
+    REQUIRE(read_row["invocations"].get<int64_t>() == 2);
+    REQUIRE(read_row["cacheHits"].get<int64_t>() == 1);
+    REQUIRE(read_row["cacheMisses"].get<int64_t>() == 1);
+    REQUIRE(read_row["totalBytesReturned"].get<int64_t>() > 0);
+    REQUIRE(read_row["errorCount"].get<int64_t>() == 0);
+    // avgDurationMs is a double; on the test path it may be 0 or a small
+    // positive value.  Just assert the field type + non-negativity.
+    REQUIRE(read_row["avgDurationMs"].is_number());
+    REQUIRE(read_row["avgDurationMs"].get<double>() >= 0.0);
+}
+
+TEST_CASE("tool telemetry: aggregate sums across every tool",
+          "[plugins][ai_editor][native][tools][telemetry]") {
+    RuntimeFixture fixture;
+    auto runtime = fixture.get();
+
+    // Fire a mix of tools so the aggregate has something to add up.
+    REQUIRE(dispatch(runtime, "tools.call",
+                     {{"mode", "agent"},
+                      {"name", "editFile"},
+                      {"arguments", {{"path", "one.txt"},
+                                     {"content", "1\n"}}}})
+                .contains("result"));
+    REQUIRE(dispatch(runtime, "tools.call",
+                     {{"mode", "agent"},
+                      {"name", "editFile"},
+                      {"arguments", {{"path", "two.txt"},
+                                     {"content", "2\n"}}}})
+                .contains("result"));
+    REQUIRE(dispatch(runtime, "tools.call",
+                     {{"mode", "agent"},
+                      {"name", "readFile"},
+                      {"arguments", {{"path", "one.txt"}}}})
+                .contains("result"));
+    REQUIRE(dispatch(runtime, "tools.call",
+                     {{"mode", "agent"},
+                      {"name", "listFiles"},
+                      {"arguments", {{"path", "."}}}})
+                .contains("result"));
+
+    const Json stats = dispatch(runtime, "tools.telemetry_stats")["result"];
+    const auto& agg = stats["aggregate"];
+    // 2 editFile + 1 readFile + 1 listFiles = 4 invocations total.
+    REQUIRE(agg["invocations"].get<int64_t>() == 4);
+    REQUIRE(stats["byTool"].contains("editFile"));
+    REQUIRE(stats["byTool"].contains("readFile"));
+    REQUIRE(stats["byTool"].contains("listFiles"));
+    // The sum of per-tool invocations must equal aggregate.invocations.
+    int64_t sum = 0;
+    for (auto it = stats["byTool"].begin(); it != stats["byTool"].end(); ++it) {
+        sum += it.value()["invocations"].get<int64_t>();
+    }
+    REQUIRE(sum == agg["invocations"].get<int64_t>());
+}
+
+TEST_CASE("tool telemetry: byTool buckets are keyed on canonical tool name",
+          "[plugins][ai_editor][native][tools][telemetry]") {
+    RuntimeFixture fixture;
+    auto runtime = fixture.get();
+
+    // Different tools get separate byTool entries; repeated invocations of
+    // the same tool bump the same bucket.
+    REQUIRE(dispatch(runtime, "tools.call",
+                     {{"mode", "agent"},
+                      {"name", "editFile"},
+                      {"arguments", {{"path", "a.txt"},
+                                     {"content", "A\n"}}}})
+                .contains("result"));
+    for (int i = 0; i < 3; ++i) {
+        REQUIRE(dispatch(runtime, "tools.call",
+                         {{"mode", "agent"},
+                          {"name", "readFile"},
+                          {"arguments", {{"path", "a.txt"}}}})
+                    .contains("result"));
+    }
+    for (int i = 0; i < 2; ++i) {
+        REQUIRE(dispatch(runtime, "tools.call",
+                         {{"mode", "agent"},
+                          {"name", "listFiles"},
+                          {"arguments", {{"path", "."}}}})
+                    .contains("result"));
+    }
+
+    const Json stats = dispatch(runtime, "tools.telemetry_stats")["result"];
+    REQUIRE(stats["byTool"]["editFile"]["invocations"].get<int64_t>() == 1);
+    REQUIRE(stats["byTool"]["readFile"]["invocations"].get<int64_t>() == 3);
+    REQUIRE(stats["byTool"]["listFiles"]["invocations"].get<int64_t>() == 2);
+    // 3 readFile calls: first is a miss, next two hit the 30s Fast TTL cache.
+    REQUIRE(stats["byTool"]["readFile"]["cacheMisses"].get<int64_t>() == 1);
+    REQUIRE(stats["byTool"]["readFile"]["cacheHits"].get<int64_t>() == 2);
+}
+
+TEST_CASE("tool telemetry: cache_clear preserves the ledger",
+          "[plugins][ai_editor][native][tools][telemetry]") {
+    RuntimeFixture fixture;
+    auto runtime = fixture.get();
+
+    REQUIRE(dispatch(runtime, "tools.call",
+                     {{"mode", "agent"},
+                      {"name", "editFile"},
+                      {"arguments", {{"path", "keep.txt"},
+                                     {"content", "K\n"}}}})
+                .contains("result"));
+    REQUIRE(dispatch(runtime, "tools.call",
+                     {{"mode", "agent"},
+                      {"name", "readFile"},
+                      {"arguments", {{"path", "keep.txt"}}}})
+                .contains("result"));
+    REQUIRE(dispatch(runtime, "tools.call",
+                     {{"mode", "agent"},
+                      {"name", "readFile"},
+                      {"arguments", {{"path", "keep.txt"}}}})
+                .contains("result"));
+
+    const Json before = dispatch(runtime, "tools.telemetry_stats")["result"];
+    const int64_t reads_before =
+        before["byTool"]["readFile"]["invocations"].get<int64_t>();
+    REQUIRE(reads_before == 2);
+
+    // Flush the dedup cache -- telemetry must survive.
+    REQUIRE(dispatch(runtime, "tools.cache_clear")["result"]["ok"] == true);
+    const Json cache_after = dispatch(runtime, "tools.cache_stats")["result"];
+    REQUIRE(cache_after["totalEntries"].get<int64_t>() == 0);
+    REQUIRE(cache_after["hitCount"].get<int64_t>() == 0);
+
+    const Json after = dispatch(runtime, "tools.telemetry_stats")["result"];
+    REQUIRE(after["byTool"]["readFile"]["invocations"].get<int64_t>() ==
+            reads_before);
+    REQUIRE(after["byTool"]["readFile"]["cacheHits"].get<int64_t>() == 1);
+    REQUIRE(after["byTool"]["readFile"]["cacheMisses"].get<int64_t>() == 1);
+
+    // telemetry_clear zeroes it out.
+    REQUIRE(dispatch(runtime, "tools.telemetry_clear")["result"]["ok"] ==
+            true);
+    const Json cleared =
+        dispatch(runtime, "tools.telemetry_stats")["result"];
+    REQUIRE(cleared["byTool"].empty());
+    REQUIRE(cleared["aggregate"]["invocations"].get<int64_t>() == 0);
+}
+
+TEST_CASE("tool cache: runInTerminal-style side-effect tool flushes readFile",
+          "[plugins][ai_editor][native][tools][cache]") {
+    // R16 cross-tool invalidation: side-effect tools (runInTerminal,
+    // executeCommand, shell) must flush the read-only cache wholesale
+    // because we cannot tell from the tool name alone whether the command
+    // touched files under the workspace.  classify() fires cache
+    // invalidation *before* execute() runs, so the custom registration
+    // exists only to make the tools.call round-trip return OK -- the
+    // invalidation is purely name-based.
+    RuntimeFixture fixture;
+    auto runtime = fixture.get();
+
+    REQUIRE(dispatch(runtime, "tools.register",
+                     {{"name", "runInTerminal"},
+                      {"description", "custom tty pass-through"},
+                      {"readOnly", false}})["result"]["ok"] == true);
+
+    // Warm up read + list caches.
+    REQUIRE(dispatch(runtime, "tools.call",
+                     {{"mode", "agent"},
+                      {"name", "editFile"},
+                      {"arguments", {{"path", "cmd.txt"},
+                                     {"content", "before\n"}}}})
+                .contains("result"));
+    const Json read_call = {{"mode", "agent"},
+                             {"name", "readFile"},
+                             {"arguments", {{"path", "cmd.txt"}}}};
+    const Json list_call = {{"mode", "agent"},
+                             {"name", "listFiles"},
+                             {"arguments", {{"path", "."}}}};
+    REQUIRE(dispatch(runtime, "tools.call", read_call).contains("result"));
+    REQUIRE(dispatch(runtime, "tools.call", list_call).contains("result"));
+    // Confirm they are hot.
+    REQUIRE(dispatch(runtime, "tools.call", read_call)["result"]["cacheHit"]
+            == true);
+    REQUIRE(dispatch(runtime, "tools.call", list_call)["result"]["cacheHit"]
+            == true);
+
+    // Fire the side-effect tool -- invalidation runs even though the tool
+    // itself just echoes its arguments.  Both readFile + listFiles caches
+    // must be flushed after this call.
+    REQUIRE(dispatch(runtime, "tools.call",
+                     {{"mode", "agent"},
+                      {"name", "runInTerminal"},
+                      {"arguments", {{"command", "echo hi"}}}})
+                .contains("result"));
+
+    const Json read_after = dispatch(runtime, "tools.call", read_call);
+    const Json list_after = dispatch(runtime, "tools.call", list_call);
+    REQUIRE_FALSE(read_after["result"].contains("cacheHit"));
+    REQUIRE_FALSE(list_after["result"].contains("cacheHit"));
+}
+
 // -----------------------------------------------------------------------------
 // chat.set_pricing / chat.get_pricing / chat.list_pricing / chat.cost_stats
 //
@@ -9782,4 +10007,259 @@ TEST_CASE("tool result filter: is_protected_from_compression refuses to "
     // structured payloads unchanged even when they are huge.
     REQUIRE(protected_result["content"].get<std::string>() == huge_json);
     REQUIRE_FALSE(protected_result.contains("compressionInfo"));
+}
+
+// --- vscode.window.createWebviewPanel R16 registry coverage ----------------
+// Each case exercises the dispatch path (invoke() forwards vscode.* into
+// dispatch_extension_call) plus the event queue so we can confirm the
+// bridge-facing sao.event notifications fire in the right order.
+
+namespace {
+
+std::vector<Json> drain_webview_events(sao_ai_editor_runtime_t runtime,
+                                       size_t budget) {
+    std::vector<Json> collected;
+    for (size_t index = 0; index < budget; ++index) {
+        uint32_t required = 0;
+        const int32_t queried = sao_ai_editor_runtime_next_event(
+            runtime, nullptr, 0, &required);
+        if (queried == SAO_AI_EDITOR_OK && required == 0) {
+            break;
+        }
+        REQUIRE(queried == SAO_AI_EDITOR_ERR_BUFFER_TOO_SMALL);
+        std::vector<char> event(static_cast<size_t>(required) + 1);
+        REQUIRE(sao_ai_editor_runtime_next_event(
+                    runtime, event.data(),
+                    static_cast<uint32_t>(event.size()), &required) ==
+                SAO_AI_EDITOR_OK);
+        collected.push_back(Json::parse(event.data(),
+                                        event.data() + required));
+    }
+    return collected;
+}
+
+bool contains_webview_event(const std::vector<Json>& events,
+                            std::string_view name) {
+    for (const auto& envelope : events) {
+        if (envelope.value("method", std::string{}) != "sao.event") {
+            continue;
+        }
+        const std::string event_name =
+            envelope["params"].value("event", std::string{});
+        if (event_name == name) {
+            return true;
+        }
+    }
+    return false;
+}
+
+}  // namespace
+
+TEST_CASE("vscode.window.createWebviewPanel mints an id and reveal marks visible",
+          "[plugins][ai_editor][native][extensions][vscode][webview_panel]") {
+    RuntimeFixture fixture;
+    auto runtime = fixture.get();
+    (void)drain_webview_events(runtime, 16);
+
+    const Json created = dispatch(runtime, "vscode.window.createWebviewPanel",
+                                   {{"viewType", "sao.demo"},
+                                    {"title", "Demo Panel"},
+                                    {"options",
+                                     {{"enableScripts", true},
+                                      {"retainContextWhenHidden", true}}}});
+    INFO("createWebviewPanel response: " << created.dump());
+    REQUIRE(created.contains("result"));
+    const Json& create_result = created["result"];
+    REQUIRE(create_result["viewType"] == "sao.demo");
+    REQUIRE(create_result["title"] == "Demo Panel");
+    REQUIRE(create_result["visible"] == true);
+    REQUIRE(create_result["disposed"] == false);
+    const std::string panel_id = create_result["panelId"];
+    REQUIRE(!panel_id.empty());
+    REQUIRE(create_result["options"]["enableScripts"] == true);
+    REQUIRE(create_result["options"]["retainContextWhenHidden"] == true);
+
+    const std::vector<Json> after_create = drain_webview_events(runtime, 4);
+    REQUIRE(contains_webview_event(after_create,
+                                   "vscode.window.webviewPanel.created"));
+
+    Sleep(2);
+    const Json revealed = dispatch(runtime, "vscode.window.revealWebviewPanel",
+                                    {{"panelId", panel_id},
+                                     {"viewColumn", 2},
+                                     {"preserveFocus", true}});
+    REQUIRE(revealed.contains("result"));
+    REQUIRE(revealed["result"]["visible"] == true);
+    REQUIRE(revealed["result"]["options"]["viewColumn"] == 2);
+    REQUIRE(revealed["result"]["options"]["extras"]["preserveFocus"] == true);
+    REQUIRE(revealed["result"]["lastRevealMs"].get<int64_t>() >=
+            create_result["lastRevealMs"].get<int64_t>());
+
+    const std::vector<Json> after_reveal = drain_webview_events(runtime, 4);
+    REQUIRE(contains_webview_event(after_reveal,
+                                   "vscode.window.webviewPanel.revealed"));
+
+    const Json ghost_reveal = dispatch(
+        runtime, "vscode.window.revealWebviewPanel",
+        {{"panelId", "wvp-does-not-exist"}});
+    REQUIRE(ghost_reveal.contains("error"));
+    REQUIRE(ghost_reveal["error"]["data"]["status"].get<int>() ==
+            SAO_AI_EDITOR_ERR_NOT_FOUND);
+}
+
+TEST_CASE("vscode.window.postMessageToWebview round-trips seq and emits event",
+          "[plugins][ai_editor][native][extensions][vscode][webview_panel]") {
+    RuntimeFixture fixture;
+    auto runtime = fixture.get();
+    (void)drain_webview_events(runtime, 16);
+
+    const Json created = dispatch(
+        runtime, "vscode.window.createWebviewPanel",
+        {{"viewType", "sao.chat"}, {"title", "Chat"}});
+    const std::string panel_id = created["result"]["panelId"];
+    (void)drain_webview_events(runtime, 4);
+
+    for (int64_t expected_seq = 1; expected_seq <= 3; ++expected_seq) {
+        const Json message = {{"kind", "hello"}, {"seq", expected_seq}};
+        const Json posted = dispatch(
+            runtime, "vscode.window.postMessageToWebview",
+            {{"panelId", panel_id}, {"message", message}});
+        REQUIRE(posted.contains("result"));
+        REQUIRE(posted["result"]["messageSeq"].get<int64_t>() == expected_seq);
+
+        const std::vector<Json> events = drain_webview_events(runtime, 4);
+        bool saw_post = false;
+        for (const auto& envelope : events) {
+            if (envelope.value("method", std::string{}) != "sao.event") {
+                continue;
+            }
+            const std::string event_name =
+                envelope["params"].value("event", std::string{});
+            if (event_name == "vscode.window.webviewPanel.postMessage") {
+                REQUIRE(envelope["params"]["payload"]["panelId"] == panel_id);
+                REQUIRE(envelope["params"]["payload"]["messageSeq"]
+                            .get<int64_t>() == expected_seq);
+                REQUIRE(envelope["params"]["payload"]["message"] == message);
+                saw_post = true;
+            }
+        }
+        REQUIRE(saw_post);
+    }
+
+    const std::string html = "<html><body><h2>hi</h2></body></html>";
+    const Json set_html = dispatch(
+        runtime, "vscode.window.setWebviewHtml",
+        {{"panelId", panel_id}, {"html", html}});
+    REQUIRE(set_html.contains("result"));
+    REQUIRE(set_html["result"]["htmlLength"].get<int64_t>() ==
+            static_cast<int64_t>(html.size()));
+    REQUIRE(set_html["result"]["messageSeq"].get<int64_t>() == 3);
+}
+
+TEST_CASE("vscode.window.disposeWebviewPanel blocks subsequent postMessage",
+          "[plugins][ai_editor][native][extensions][vscode][webview_panel]") {
+    RuntimeFixture fixture;
+    auto runtime = fixture.get();
+    (void)drain_webview_events(runtime, 16);
+
+    const Json created = dispatch(
+        runtime, "vscode.window.createWebviewPanel",
+        {{"viewType", "sao.status"}, {"title", "Status"}});
+    const std::string panel_id = created["result"]["panelId"];
+    (void)drain_webview_events(runtime, 4);
+
+    const Json disposed = dispatch(
+        runtime, "vscode.window.disposeWebviewPanel",
+        {{"panelId", panel_id}});
+    REQUIRE(disposed.contains("result"));
+    REQUIRE(disposed["result"]["disposed"] == true);
+    REQUIRE(disposed["result"]["visible"] == false);
+    REQUIRE(disposed["result"]["options"]["extras"]["already"] == false);
+
+    const std::vector<Json> after_dispose = drain_webview_events(runtime, 4);
+    REQUIRE(contains_webview_event(after_dispose,
+                                   "vscode.window.webviewPanel.disposed"));
+
+    const Json failed_post = dispatch(
+        runtime, "vscode.window.postMessageToWebview",
+        {{"panelId", panel_id}, {"message", Json::object()}});
+    REQUIRE(failed_post.contains("error"));
+    REQUIRE(failed_post["error"]["data"]["status"].get<int>() ==
+            SAO_AI_EDITOR_ERR_PROTOCOL);
+    const std::vector<Json> post_events = drain_webview_events(runtime, 4);
+    REQUIRE(contains_webview_event(post_events,
+                                   "vscode.window.webviewPanel.postFailed"));
+
+    const Json disposed_again = dispatch(
+        runtime, "vscode.window.disposeWebviewPanel",
+        {{"panelId", panel_id}});
+    REQUIRE(disposed_again.contains("result"));
+    REQUIRE(disposed_again["result"]["options"]["extras"]["already"] == true);
+
+    const Json listing = dispatch(runtime, "vscode.window.listWebviewPanels");
+    REQUIRE(listing.contains("result"));
+    REQUIRE(listing["result"]["panels"].is_array());
+    REQUIRE(listing["result"]["panels"].empty());
+    REQUIRE(listing["result"]["totalCreated"].get<int64_t>() >= 1);
+}
+
+TEST_CASE("vscode.window.createWebviewPanel supports multiple panels "
+          "and setWebviewHtml preserves each panel state",
+          "[plugins][ai_editor][native][extensions][vscode][webview_panel]") {
+    RuntimeFixture fixture;
+    auto runtime = fixture.get();
+    (void)drain_webview_events(runtime, 16);
+
+    const Json panel_a = dispatch(
+        runtime, "vscode.window.createWebviewPanel",
+        {{"viewType", "sao.a"}, {"title", "A"}});
+    const Json panel_b = dispatch(
+        runtime, "vscode.window.createWebviewPanel",
+        {{"viewType", "sao.b"}, {"title", "B"}});
+    const std::string id_a = panel_a["result"]["panelId"];
+    const std::string id_b = panel_b["result"]["panelId"];
+    REQUIRE(id_a != id_b);
+
+    const std::string html_a = "<h1>panel-A</h1>";
+    const std::string html_b = "<h1>panel-B-longer</h1>";
+    REQUIRE(dispatch(runtime, "vscode.window.setWebviewHtml",
+                     {{"panelId", id_a}, {"html", html_a}})
+                .contains("result"));
+    REQUIRE(dispatch(runtime, "vscode.window.setWebviewHtml",
+                     {{"panelId", id_b}, {"html", html_b}})
+                .contains("result"));
+
+    REQUIRE(dispatch(runtime, "vscode.window.postMessageToWebview",
+                     {{"panelId", id_b},
+                      {"message", {{"kind", "hello-b"}}}})
+                .contains("result"));
+
+    const Json listed = dispatch(runtime, "vscode.window.listWebviewPanels");
+    REQUIRE(listed.contains("result"));
+    REQUIRE(listed["result"]["panels"].size() == 2);
+    REQUIRE(listed["result"]["totalCreated"].get<int64_t>() >= 2);
+
+    std::unordered_map<std::string, Json> by_id;
+    for (const auto& panel : listed["result"]["panels"]) {
+        by_id[panel.value("panelId", std::string{})] = panel;
+    }
+    REQUIRE(by_id.count(id_a) == 1);
+    REQUIRE(by_id.count(id_b) == 1);
+    REQUIRE(by_id[id_a]["htmlLength"].get<int64_t>() ==
+            static_cast<int64_t>(html_a.size()));
+    REQUIRE(by_id[id_b]["htmlLength"].get<int64_t>() ==
+            static_cast<int64_t>(html_b.size()));
+    REQUIRE(by_id[id_a]["messageSeq"].get<int64_t>() == 0);
+    REQUIRE(by_id[id_b]["messageSeq"].get<int64_t>() == 1);
+
+    REQUIRE(dispatch(runtime, "vscode.window.disposeWebviewPanel",
+                     {{"panelId", id_a}})
+                .contains("result"));
+    const Json listed_after = dispatch(
+        runtime, "vscode.window.listWebviewPanels");
+    REQUIRE(listed_after["result"]["panels"].size() == 1);
+    REQUIRE(listed_after["result"]["panels"][0]["panelId"] == id_b);
+    REQUIRE(listed_after["result"]["panels"][0]["htmlLength"].get<int64_t>() ==
+            static_cast<int64_t>(html_b.size()));
+    REQUIRE(listed_after["result"]["totalCreated"].get<int64_t>() >= 2);
 }

@@ -151,6 +151,32 @@ bool parse_scope_key(std::string_view key,
     return false;
 }
 
+// Convert a WebviewPanelState into the JSON shape the Node-side extension
+// shim + tests consume.  Kept here rather than on the struct because the
+// registry header intentionally has no nlohmann::json dependency beyond
+// the opaque `Json extras` bag.
+Json panel_state_to_json(const WebviewPanelState& state) {
+    return Json{{"panelId", state.panel_id},
+                {"viewType", state.view_type},
+                {"title", state.title},
+                {"visible", state.visible},
+                {"disposed", state.disposed},
+                {"htmlLength",
+                 static_cast<int64_t>(state.html.size())},
+                {"createdMs", state.created_ms},
+                {"lastRevealMs", state.last_reveal_ms},
+                {"lastPostMs", state.last_post_ms},
+                {"messageSeq",
+                 static_cast<int64_t>(state.message_seq)},
+                {"options",
+                 Json{{"enableScripts", state.options.enable_scripts},
+                      {"retainContextWhenHidden",
+                       state.options.retain_context_when_hidden},
+                      {"viewColumn", state.options.view_column},
+                      {"extras", state.options.extras}}},
+                {"initialState", state.initial_state}};
+}
+
 }  // namespace
 
 NativeRuntime::NativeRuntime(RuntimeOptions options)
@@ -1741,6 +1767,11 @@ int32_t NativeRuntime::invoke(std::string_view method,
             emit(hook.emit_event, payload);
         }
         const auto call_start = std::chrono::steady_clock::now();
+        // Telemetry: every dispatched tools.call counts as an invocation
+        // regardless of cache outcome — matches VSCode's outputMonitor
+        // where the "asked for it" event is what the LLM proxy records.
+        // record_result() below fires on both hit + miss.
+        tool_monitor_.record_invocation(resolved_name);
         // Session-memory dedup: mutation-aware invalidation runs first, then
         // read-only calls try the cache and short-circuit on hit.  observe()
         // is a no-op for read-only tools; lookup() returns nullopt for
@@ -1764,6 +1795,12 @@ int32_t NativeRuntime::invoke(std::string_view method,
                 hit_payload["requestedTool"] = requested_name;
             }
             emit("tools.cache.hit", hit_payload);
+            // Telemetry (cache-hit path): duration is 0 by contract so the
+            // monitor's avg_duration_ms excludes it — cache-hit latency is
+            // essentially "one hash lookup" and folding it into the mean
+            // would hide the true cost of the miss path.
+            tool_monitor_.record_result(resolved_name, result, /*duration_ms=*/0,
+                                        /*cache_hit=*/true);
             // Cache hits still fire the after-phase hook so audit sinks see a
             // canonical (before, after) pair even for served-from-memory calls.
             const auto after_hooks =
@@ -1799,6 +1836,13 @@ int32_t NativeRuntime::invoke(std::string_view method,
         // payload as if it were the ground truth.
         if (status == SAO_AI_EDITOR_OK) {
             tool_cache_.record(resolved_name, arguments, result);
+            tool_monitor_.record_result(resolved_name, result, duration_ms,
+                                        /*cache_hit=*/false);
+        } else {
+            // Error-path telemetry: bump error_count only.  We deliberately
+            // skip record_result here so failed calls do not contaminate the
+            // avg_duration_ms + total_bytes_returned aggregates.
+            tool_monitor_.record_error(resolved_name);
         }
         // After / error hooks reflect the outcome.  We treat every non-OK
         // status as an error phase so validation failures + permission
@@ -1961,8 +2005,26 @@ int32_t NativeRuntime::invoke(std::string_view method,
     }
     if (method == "tools.cache_clear") {
         // Wipe every cached entry + zero the counters.  No parameters — the
-        // cache is per-runtime so scoping is implicit.
+        // cache is per-runtime so scoping is implicit.  We deliberately do
+        // NOT touch tool_monitor_ here — the telemetry ledger is a long-run
+        // view of tool usage that shouldn't reset just because the dedup
+        // cache was flushed.  Use `tools.telemetry_clear` for that.
         tool_cache_.clear();
+        result = Json{{"ok", true}};
+        return SAO_AI_EDITOR_OK;
+    }
+    if (method == "tools.telemetry_stats") {
+        // Per-tool execution counters (invocations, bytes returned, cache
+        // hit ratio, avg duration, error count).  See
+        // tool_execution_monitor.h for the full schema.
+        result = tool_monitor_.stats();
+        return SAO_AI_EDITOR_OK;
+    }
+    if (method == "tools.telemetry_clear") {
+        // Wipe every monitor counter.  Deliberately independent from
+        // tools.cache_clear so ops can zero the cache without losing
+        // invocation history and vice-versa.
+        tool_monitor_.clear();
         result = Json{{"ok", true}};
         return SAO_AI_EDITOR_OK;
     }
@@ -2015,6 +2077,14 @@ int32_t NativeRuntime::invoke(std::string_view method,
     }
     if (method.starts_with("extensions.")) {
         return dispatch_extension(method, params, result);
+    }
+    // vscode.* / sao.host.* — normally surfaced by the Node-side extension
+    // shim invoking back through dispatch_extension_call.  We also expose
+    // them on the JSON-RPC dispatch surface so tests + local tools can
+    // exercise the same handlers without spinning up a Node worker.
+    if (method.starts_with("vscode.") ||
+        method.starts_with("sao.host.")) {
+        return dispatch_extension_call(method, params, result);
     }
     if (method == "agents.list_defs" || method == "agents.get_def" ||
         method == "agents.save_def" || method == "agents.delete_def" ||
@@ -3300,6 +3370,147 @@ int32_t NativeRuntime::dispatch_extension_call(std::string_view method,
              Json{{"channelId", params.value("channelId", std::string{})},
                   {"text", params.value("text", std::string{})}});
         result = Json(nullptr);
+        return SAO_AI_EDITOR_OK;
+    }
+    // vscode.window.createWebviewPanel — register a fresh WebviewPanel
+    // record and emit an event so the host UI (WebView2 bridge or Tk
+    // fallback shim) can materialise a window.  Returns a JSON snapshot
+    // of the new panel; the id is deterministic within a runtime instance.
+    if (method == "vscode.window.createWebviewPanel") {
+        const std::string view_type =
+            params.value("viewType", std::string{});
+        if (view_type.empty()) {
+            result = Json{{"message", "viewType is required"}};
+            return SAO_AI_EDITOR_ERR_INVALID_ARGUMENT;
+        }
+        WebviewPanelOptions options;
+        if (params.contains("options") && params["options"].is_object()) {
+            const Json& opts = params["options"];
+            options.enable_scripts =
+                opts.value("enableScripts", true);
+            options.retain_context_when_hidden =
+                opts.value("retainContextWhenHidden", false);
+            options.view_column = opts.value("viewColumn", 1);
+            options.extras = opts.value("extras", Json::object());
+        }
+        WebviewPanelState state;
+        const int32_t status = webview_panels_.create(
+            params.value("panelId", std::string{}),
+            view_type,
+            params.value("title", std::string{}),
+            options,
+            state);
+        if (status != SAO_AI_EDITOR_OK) {
+            result = Json{{"message", "createWebviewPanel failed"}};
+            return status;
+        }
+        emit("vscode.window.webviewPanel.created",
+             panel_state_to_json(state));
+        result = panel_state_to_json(state);
+        return SAO_AI_EDITOR_OK;
+    }
+    if (method == "vscode.window.revealWebviewPanel") {
+        const std::string panel_id =
+            params.value("panelId", std::string{});
+        if (panel_id.empty()) {
+            return SAO_AI_EDITOR_ERR_INVALID_ARGUMENT;
+        }
+        WebviewPanelState state;
+        const int32_t status = webview_panels_.reveal(
+            panel_id,
+            params.value("viewColumn", 1),
+            params.value("preserveFocus", false),
+            state);
+        if (status != SAO_AI_EDITOR_OK) {
+            result = Json{{"message", "reveal failed"},
+                          {"panelId", panel_id}};
+            return status;
+        }
+        emit("vscode.window.webviewPanel.revealed",
+             panel_state_to_json(state));
+        result = panel_state_to_json(state);
+        return SAO_AI_EDITOR_OK;
+    }
+    if (method == "vscode.window.disposeWebviewPanel") {
+        const std::string panel_id =
+            params.value("panelId", std::string{});
+        if (panel_id.empty()) {
+            return SAO_AI_EDITOR_ERR_INVALID_ARGUMENT;
+        }
+        WebviewPanelState state;
+        const int32_t status = webview_panels_.dispose(panel_id, state);
+        if (status != SAO_AI_EDITOR_OK) {
+            result = Json{{"message", "dispose failed"},
+                          {"panelId", panel_id}};
+            return status;
+        }
+        emit("vscode.window.webviewPanel.disposed",
+             panel_state_to_json(state));
+        result = panel_state_to_json(state);
+        return SAO_AI_EDITOR_OK;
+    }
+    if (method == "vscode.window.postMessageToWebview") {
+        const std::string panel_id =
+            params.value("panelId", std::string{});
+        if (panel_id.empty()) {
+            return SAO_AI_EDITOR_ERR_INVALID_ARGUMENT;
+        }
+        WebviewPanelState state;
+        const int32_t status =
+            webview_panels_.note_post_message(panel_id, state);
+        if (status != SAO_AI_EDITOR_OK) {
+            emit("vscode.window.webviewPanel.postFailed",
+                 Json{{"panelId", panel_id},
+                      {"status", status},
+                      {"reason", status == SAO_AI_EDITOR_ERR_NOT_FOUND
+                                     ? "unknown panel"
+                                     : "panel disposed"}});
+            result = Json{{"message", "postMessage failed"},
+                          {"panelId", panel_id}};
+            return status;
+        }
+        const Json payload = params.value("message", Json());
+        emit("vscode.window.webviewPanel.postMessage",
+             Json{{"panelId", panel_id},
+                  {"messageSeq",
+                   static_cast<int64_t>(state.message_seq)},
+                  {"message", payload}});
+        result = Json{{"panelId", panel_id},
+                      {"messageSeq",
+                       static_cast<int64_t>(state.message_seq)}};
+        return SAO_AI_EDITOR_OK;
+    }
+    if (method == "vscode.window.setWebviewHtml") {
+        const std::string panel_id =
+            params.value("panelId", std::string{});
+        if (panel_id.empty()) {
+            return SAO_AI_EDITOR_ERR_INVALID_ARGUMENT;
+        }
+        WebviewPanelState state;
+        const int32_t status = webview_panels_.set_html(
+            panel_id,
+            params.value("html", std::string{}),
+            state);
+        if (status != SAO_AI_EDITOR_OK) {
+            result = Json{{"message", "setWebviewHtml failed"},
+                          {"panelId", panel_id}};
+            return status;
+        }
+        emit("vscode.window.webviewPanel.htmlChanged",
+             Json{{"panelId", panel_id},
+                  {"htmlLength",
+                   static_cast<int64_t>(state.html.size())}});
+        result = panel_state_to_json(state);
+        return SAO_AI_EDITOR_OK;
+    }
+    if (method == "vscode.window.listWebviewPanels") {
+        Json array = Json::array();
+        for (const auto& panel : webview_panels_.list_alive()) {
+            array.push_back(panel_state_to_json(panel));
+        }
+        result = Json{{"panels", std::move(array)},
+                      {"totalCreated",
+                       static_cast<int64_t>(webview_panels_.total_created())}};
         return SAO_AI_EDITOR_OK;
     }
     // vscode.commands.executeCommand loops back through the extension host
