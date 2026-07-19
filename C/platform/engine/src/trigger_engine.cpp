@@ -369,10 +369,11 @@ bool advanceTimers(Condition& c, uint64_t dt_ms) {
             for (auto& child : c.combo_children) {
                 if (child->kind == SAO_ENGINE_TRIGGER_TIMER
                     || child->kind == SAO_ENGINE_TRIGGER_COMBO) {
-                    if (advanceTimers(*child, dt_ms)) timer_progressed = true;
+                    const bool child_progressed = advanceTimers(*child, dt_ms);
+                    if (child_progressed) timer_progressed = true;
                     // Timer combo membership requires the child to have
                     // just fired *this* tick to count as satisfied.
-                    if (!timer_progressed) all_satisfied = false;
+                    if (!child_progressed) all_satisfied = false;
                 } else {
                     // Non-time-based children — combo can't retroactively
                     // check them here.  Assume unsatisfied unless the

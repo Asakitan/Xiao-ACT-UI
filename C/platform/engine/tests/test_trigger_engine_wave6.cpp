@@ -360,6 +360,45 @@ TEST_CASE("trigger_combo_all_children_must_match",
     sao_engine_trigger_destroy(eng);
 }
 
+TEST_CASE("trigger_combo_timer_children_are_order_independent",
+          "[engine][trigger][wave6][timer][combo]") {
+    sao_engine_trigger_engine_handle_t eng = nullptr;
+    REQUIRE(sao_engine_trigger_create(&eng) == SAO_STATUS_OK);
+
+    const char* slow_then_fast = R"({
+        "conditions": [
+            {"condition_type": 5, "condition_params": {"interval_ms": 200}},
+            {"condition_type": 5, "condition_params": {"interval_ms": 100}}
+        ]
+    })";
+    const char* fast_then_slow = R"({
+        "conditions": [
+            {"condition_type": 5, "condition_params": {"interval_ms": 100}},
+            {"condition_type": 5, "condition_params": {"interval_ms": 200}}
+        ]
+    })";
+    sao_engine_trigger_handle_t slow_first_handle = 0;
+    sao_engine_trigger_handle_t fast_first_handle = 0;
+    auto slow_first = makeSpec(SAO_ENGINE_TRIGGER_COMBO, slow_then_fast, 6101);
+    auto fast_first = makeSpec(SAO_ENGINE_TRIGGER_COMBO, fast_then_slow, 6102);
+    REQUIRE(sao_engine_trigger_register(eng, &slow_first, nullptr, nullptr,
+                                        &slow_first_handle) == SAO_STATUS_OK);
+    REQUIRE(sao_engine_trigger_register(eng, &fast_first, nullptr, nullptr,
+                                        &fast_first_handle) == SAO_STATUS_OK);
+
+    uint64_t actions[4] = {};
+    uint32_t count = 0;
+    REQUIRE(sao_engine_trigger_tick(eng, 100, actions, 4, &count) == SAO_STATUS_OK);
+    REQUIRE(count == 0);
+
+    REQUIRE(sao_engine_trigger_tick(eng, 100, actions, 4, &count) == SAO_STATUS_OK);
+    REQUIRE(count == 2);
+    CHECK(actions[0] == 6101);
+    CHECK(actions[1] == 6102);
+
+    sao_engine_trigger_destroy(eng);
+}
+
 TEST_CASE("trigger_unregister_removes_from_dispatch",
           "[engine][trigger][wave6]") {
     sao_engine_trigger_engine_handle_t eng = nullptr;
